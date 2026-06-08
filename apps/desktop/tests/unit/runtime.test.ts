@@ -34,11 +34,29 @@ describe('RuntimeManager + MockRuntime', () => {
     expect(mgr.activeModelId()).toBe(null)
   })
 
-  it('yields a stub chat stream (full streaming in Phase 3)', async () => {
+  it('streams a mock reply token-by-token that echoes the user message', async () => {
     const runtime = createMockRuntime({ modelId: 'a', modelPath: '/a.gguf', contextTokens: 2048 })
     await runtime.start()
     const chunks: string[] = []
-    for await (const t of runtime.chatStream([{ role: 'user', content: 'hi' }])) chunks.push(t)
-    expect(chunks.join('')).toContain('Phase 3')
+    for await (const t of runtime.chatStream([{ role: 'user', content: 'hello there' }]))
+      chunks.push(t)
+    // Multiple tokens (not one blob), and the reply references the user's text.
+    expect(chunks.length).toBeGreaterThan(1)
+    expect(chunks.join('')).toContain('hello there')
+  })
+
+  it('stops streaming promptly when the signal is aborted', async () => {
+    const runtime = createMockRuntime({ modelId: 'a', modelPath: '/a.gguf', contextTokens: 2048 })
+    await runtime.start()
+    const controller = new AbortController()
+    const chunks: string[] = []
+    for await (const t of runtime.chatStream([{ role: 'user', content: 'hi' }], {
+      signal: controller.signal
+    })) {
+      chunks.push(t)
+      if (chunks.length === 2) controller.abort()
+    }
+    // Aborting after 2 tokens means the stream ends without emitting the whole reply.
+    expect(chunks.length).toBe(2)
   })
 })

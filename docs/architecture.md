@@ -1,6 +1,6 @@
 # Architecture — Private AI Drive Lite
 
-_Last updated: 2026-06-09 (Phase 2)_
+_Last updated: 2026-06-09 (Phase 3)_
 
 ## Overview
 
@@ -71,6 +71,38 @@ the whole DB file is encrypted at rest.
   lands in Phase 10. The factory passed to `RuntimeManager` is the only thing that changes.
 - **IPC** (`ipc/registerModelIpc.ts`): `listModels`, `selectModel`, `startRuntime`, `stopRuntime`.
   The active runtime is stopped on `will-quit`.
+
+## Chat & streaming (Phase 3)
+- **`services/chat.ts`** (spec §7.6) owns conversation/message persistence and prompt
+  assembly: `createConversation`, `listConversations`, `listMessages`, `appendMessage`,
+  `deleteLastAssistantMessage`, `buildSystemPrompt`, `buildChatMessages`, and the streaming
+  orchestrator `generateAssistantMessage`. IDs are UUID v4, timestamps ISO-8601 UTC.
+  Messages order by `created_at ASC, rowid ASC` so equal-millisecond timestamps keep turn
+  order. The **system prompt is built per request and not persisted** — the `messages` table
+  holds only user/assistant turns, so the prompt can evolve (RAG context is appended in
+  Phase 6). `messages.citations_json` stays null until Phase 6.
+- **Streaming contract (LOCKED).** Main → renderer over per-conversation IPC event channels
+  keyed by the conversation id: `chat:token:<id>` (one token per event), `chat:done:<id>`
+  (the final assistant `Message`), `chat:error:<id>` (an error string) — helpers in
+  `src/shared/ipc.ts` `STREAM`. The renderer subscribes via the preload `onToken/onDone/onError`
+  before sending. `sendChatMessage(conversationId, content, options)` *also* resolves with the
+  final assistant `Message`, so a caller can simply `await` it; the event channels drive the
+  incremental UI. The streaming id is the **conversation id** (one active stream per conversation).
+- **Cancellation.** Each in-flight send holds an `AbortController` in a per-conversation map in
+  `ipc/registerChatIpc.ts`; `stopGeneration(conversationId)` aborts it. The runtime's
+  `chatStream` honours `options.signal` and stops emitting; whatever streamed so far is persisted
+  as the (partial) assistant message and a normal `done` is emitted.
+- **`MockRuntime.chatStream`** emits a deterministic reply token-by-token with a small delay so
+  the renderer's streaming + stop path is exercised with zero model files. The real
+  `LlamaRuntime` (Phase 10) swaps in behind the same `ModelRuntime` interface.
+- **Runtime requirement (decision).** `sendChatMessage` does **not** auto-start a runtime: a chat
+  needs a model explicitly started on the Models screen (`RuntimeManager.start()`). With no active
+  runtime the handler throws and the Chat screen shows a "start a model" empty state that links to
+  Models. Rationale: starting the real llama.cpp sidecar is heavy and is an explicit user action;
+  keeping it explicit keeps the service boundary clean and the error path obvious.
+- **IPC** (`ipc/registerChatIpc.ts`): `createConversation`, `listConversations`, `listMessages`,
+  `sendChatMessage` (streaming), `stopGeneration`. Regenerate reuses `sendChatMessage` with
+  `options.regenerate` — it deletes the last assistant message, then re-streams from history.
 
 ## Data flow (RAG, Phases 4–6)
 import → extract text → chunk → embed (local) → store vectors → on question: embed query → cosine

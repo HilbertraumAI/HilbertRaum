@@ -108,6 +108,8 @@ export interface Message {
 export interface ChatOptions {
   mode?: 'fast' | 'balanced' | 'deep'
   useDocuments?: boolean
+  /** Re-answer the last user turn: drop the previous assistant reply, then stream a fresh one. */
+  regenerate?: boolean
 }
 
 // ---- Documents (Phase 4) ----

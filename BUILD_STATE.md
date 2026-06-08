@@ -5,7 +5,7 @@
 > (see "Per-phase ritual" in [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md)).
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
-_Last updated: 2026-06-09 — Phase 2 complete; Phase 3 next_
+_Last updated: 2026-06-09 — Phase 3 complete; Phase 4 next_
 
 ---
 
@@ -16,8 +16,8 @@ _Last updated: 2026-06-09 — Phase 2 complete; Phase 3 next_
 | 0 | Repo skeleton & tooling | 🟢 done |
 | 1 | App shell, workspace & settings | 🟢 done |
 | 2 | Model manifests & runtime contract | 🟢 done |
-| 3 | Basic chat (mock runtime) | 🟡 next |
-| 4 | Document ingestion & chunking | ⚪ not started |
+| 3 | Basic chat (mock runtime) | 🟢 done |
+| 4 | Document ingestion & chunking | 🟡 next |
 | 5 | Embeddings & vector search (mock) | ⚪ not started |
 | 6 | RAG chat with citations | ⚪ not started |
 | 7 | Hardware benchmark & recommendation | ⚪ not started |
@@ -94,8 +94,9 @@ getSettings(): Promise<AppSettings>
 updateSettings(patch: Partial<AppSettings>): Promise<AppSettings>
 ```
 _Status: TypeScript types in `apps/desktop/src/shared/types.ts`; channel names in `src/shared/ipc.ts`.
-Wired so far: core (Phase 1) + `listModels`/`selectModel`/`startRuntime`/`stopRuntime` (Phase 2).
-Chat/docs/benchmark handlers land in their phases._
+Wired so far: core (Phase 1) + `listModels`/`selectModel`/`startRuntime`/`stopRuntime` (Phase 2) +
+`createConversation`/`listConversations`/`listMessages`/`sendChatMessage`/`stopGeneration` (Phase 3).
+Docs/benchmark handlers land in their phases._
 
 ### DB schema
 ✅ Implemented in `src/main/services/db.ts` — all spec §8 tables created idempotently (WAL mode,
@@ -131,40 +132,75 @@ restart on switch) + `MockRuntime` (health ok; `chatStream` stubbed until Phase 
 on `will-quit`. Preload exposes all four. **Models screen** renders states/license/recommend/verify/
 select/start-stop. Hardware profile **stubbed `LITE`** until Phase 7.
 
-### Streaming contract
-TBD in Phase 3 (chosen approach: main → renderer via IPC event channel `chat:token:<requestId>` with `{token}` / `chat:done` / `chat:error`). Preload helper `onToken(requestId, cb)` already stubbed. _Confirm in Phase 3._
+### Chat + streaming (Phase 3 live)
+✅ **`services/chat.ts`** (spec §7.6) — `createConversation`, `listConversations`,
+`getConversation`, `listMessages`, `appendMessage`, `deleteLastAssistantMessage`,
+`maybeSetTitleFromFirstMessage`, `buildSystemPrompt` (verbatim spec §7.6 base prompt, exported as
+`BASE_SYSTEM_PROMPT`), `buildChatMessages`, and the streaming orchestrator
+`generateAssistantMessage(db, runtime, conversationId, { signal, onToken })`. UUID v4 ids,
+ISO-8601 UTC timestamps. **Message order = `created_at ASC, rowid ASC`** (rowid breaks
+equal-ms ties → stable turn order). **System prompt is built per request, NOT persisted**; the
+`messages` table holds only user/assistant turns. `Conversation`/`Message` shapes per
+`shared/types.ts`. `messages.citations_json` stays null until Phase 6.
+✅ **Title:** new conversations are `"New chat"`; first user message sets the title (≤60 chars),
+later messages don't overwrite it. Conversations list newest-updated first.
+
+### Streaming contract (LOCKED — Phase 3)
+Main → renderer over per-conversation IPC event channels keyed by the **conversation id**
+(one active stream per conversation): `chat:token:<id>` (one token/event) / `chat:done:<id>`
+(final assistant `Message`) / `chat:error:<id>` (error string). Helpers in `src/shared/ipc.ts`
+`STREAM`. Preload exposes `onToken/onDone/onError(requestId, cb) → unsubscribe`. In addition,
+`sendChatMessage(conversationId, content, options?)` resolves with the final assistant `Message`,
+so callers can simply `await` it; the event channels drive incremental UI.
+**Cancellation:** `ipc/registerChatIpc.ts` keeps a per-conversation `AbortController` map;
+`stopGeneration(conversationId)` aborts it → `chatStream` stops on `options.signal`, the partial
+reply is persisted, a normal `done` fires.
+**Regenerate:** `sendChatMessage` with `options.regenerate = true` deletes the last assistant
+message and re-streams from existing history (no new user turn).
+**Decision (documented):** `sendChatMessage` does **not** auto-start a runtime — a chat needs a
+model explicitly started on the Models screen. No active runtime → handler throws; Chat screen
+shows a "start a model" empty state linking to Models. (Heavy llama.cpp start in Phase 10 stays an
+explicit user action; keeps the boundary clean.)
+✅ **`MockRuntime.chatStream`** now emits a deterministic reply token-by-token (12 ms/token) that
+echoes the last user message, honouring `options.signal` for prompt cancellation. **Chat screen**
+(`renderer/screens/ChatScreen.tsx`): conversation list, streamed transcript with a live cursor,
+stop, regenerate, per-message copy, and the no-runtime empty state.
 
 ---
 
-## 5. Next actions (do these next) — START OF PHASE 3
+## 5. Next actions (do these next) — START OF PHASE 4
 
-Phase 3 = Basic chat with the mock runtime (spec Milestone 3 / Step 4). Build, in order:
-1. `services/chat.ts` — create conversation, append user/assistant messages, build the system prompt
-   (spec §7.6), persist to `conversations`/`messages`. UUIDs + ISO timestamps (see §7 conventions).
-2. **Streaming** — implement `MockRuntime.chatStream` for real token-by-token emit and wire the
-   main→renderer event channel already locked in §"Streaming contract": `chat:token:<id>` /
-   `chat:done:<id>` / `chat:error:<id>`. Support **stop/cancel** via `AbortSignal` (the
-   `RuntimeChatOptions.signal` field is already on the interface). The active runtime is reachable via
-   `ctx.runtime.active()`.
-3. IPC: `createConversation`, `listConversations`, `listMessages`, `sendChatMessage` (streaming),
-   `stopGeneration`. Channel names already exist in `shared/ipc.ts`. Add preload methods.
-4. Chat screen — conversation list, streamed message view, stop, regenerate, copy. Guard with a
-   "select & start a model first" empty-state (Models screen already selects/starts the runtime).
-5. Tests: conversation persistence, message ordering, stop cancels the stream.
-6. **Ritual:** update `docs/architecture.md` (chat/runtime) + this file's streaming contract; commit.
+Phase 4 = Document ingestion & chunking (spec Milestone 4 / Step 6). Build, in order:
+1. `services/ingestion/parsers/*` behind a `DocumentParser` interface (spec §9.2): `TxtParser`,
+   `MarkdownParser`, `PdfParser` (`pdfjs-dist`), `DocxParser` (`mammoth`), `CsvParser`
+   (`papaparse`). Pure-JS libs only — no native deps (consistent with the SQLite choice). These
+   are **new dependencies**; install with `NODE_OPTIONS=--use-system-ca npm install` (R6 proxy).
+2. `services/ingestion/chunker.ts` — ~500-token chunks / ~80-token overlap, max 1000 chunks/file
+   (spec §7.7 "Chunking defaults" follow `### 7.7` in the MVP spec). Token counting can be an
+   approximation for the mock phase.
+3. Ingestion job tracking with the §7.7 statuses (`queued→extracting→chunking→embedding→indexed`,
+   plus `failed`/`deleted`). Persist to `documents` + `chunks` tables (already in the schema).
+   Embeddings happen in Phase 5 — leave the `embedding` step as a no-op/pass-through for now.
+4. Documents screen — import (file picker), per-file status, error surfacing, delete/re-index.
+   IPC: `importDocuments`, `getImportJob`, `listDocuments`, `deleteDocument` (channel names already
+   in `shared/ipc.ts`; add preload methods + `ipc/registerDocsIpc.ts` wired into `initBackend()`).
+5. Tests: each parser on fixtures, chunker boundaries/overlap, graceful handling of a corrupt file.
+6. **Ritual:** update `docs/rag-design.md` (ingestion) + sample-data README + this file; commit.
 
-Notes / gotchas for Phase 3:
-- `MockRuntime.chatStream` currently yields one stub string — replace with chunked emit + delay so the
-  UI streaming path is exercised without a real model.
-- A chat request needs a running runtime; `RuntimeManager.start()` must have been called (Models
-  screen "Start runtime"). Decide whether `sendChatMessage` auto-starts the selected model.
-- `messages.citations_json` exists in the schema but stays null until Phase 6 (RAG).
+Notes / gotchas for Phase 4:
+- Parser libs are pure-JS but `pdfjs-dist` can be finicky under the Electron/Vite SSR main bundle —
+  validate it bundles + runs in the main process (R3). Have a fallback plan if a worker is needed.
+- `DocumentInfo`/`ImportJob`/`ImportJobStatus`/`IngestionStatus` shapes already exist in
+  `shared/types.ts` — fill the handlers to match.
+- Reuse the chat streaming/event pattern only if a progress stream is wanted; otherwise poll
+  `getImportJob`.
 
-Phase 2 is DONE: typecheck clean, **47/47 tests pass** (added manifest validate, checksum verify,
-model-state computation, recommendation mapping, manifest discovery/dupe/recurse, manifests-dir
-resolution, selectModel persistence, runtime manager/mock). `npm run build` green (main bundle now
-244.71 kB — `yaml` is bundled into main). Models screen lists/verifies/selects/starts models against
-the Phase 0 manifests. (Live `npm run dev` window smoke = manual.)
+Phase 3 is DONE: typecheck clean, **58/58 tests pass** (added: chat conversation persistence +
+ordering + scoping, title-from-first-message, system-prompt assembly, streaming persists full
+reply, **stop cancels stream + persists partial**, regenerate; plus updated mock-runtime stream +
+abort tests). `npm run build` green (main bundle 253.62 kB). Chat screen streams the mock reply
+token-by-token with stop/regenerate/copy and a no-runtime empty state. (Live `npm run dev` window
+smoke = manual.)
 
 ---
 

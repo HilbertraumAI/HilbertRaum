@@ -4,6 +4,7 @@ import { PlaceholderScreen } from './screens/PlaceholderScreen'
 import { DiagnosticsScreen } from './screens/DiagnosticsScreen'
 import { SettingsScreen } from './screens/SettingsScreen'
 import { ModelsScreen } from './screens/ModelsScreen'
+import { ChatScreen } from './screens/ChatScreen'
 
 type ScreenId =
   | 'home'
@@ -63,9 +64,7 @@ export function App(): JSX.Element {
 
       <main className="content">
         {screen === 'home' && <HomeScreen onNavigate={(s) => setScreen(s as ScreenId)} />}
-        {screen === 'chat' && (
-          <PlaceholderScreen title="Chat" phase="Phase 3" />
-        )}
+        {screen === 'chat' && <ChatScreen onNavigate={(s) => setScreen(s as ScreenId)} />}
         {screen === 'documents' && (
           <PlaceholderScreen title="Documents" phase="Phase 4" />
         )}

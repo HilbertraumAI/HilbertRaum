@@ -6,6 +6,7 @@ import { seedSettings } from './services/settings'
 import { initLogging, log } from './services/logging'
 import { registerCoreIpc } from './ipc/registerCoreIpc'
 import { registerModelIpc } from './ipc/registerModelIpc'
+import { registerChatIpc } from './ipc/registerChatIpc'
 import { RuntimeManager } from './services/runtime'
 import { createMockRuntime } from './services/runtime/mock'
 import { resolveManifestsDir } from './services/models'
@@ -43,6 +44,7 @@ function initBackend(): void {
   ctx = { paths, db, runtime, manifestsDir }
   registerCoreIpc(ctx)
   registerModelIpc(ctx)
+  registerChatIpc(ctx)
 }
 
 function createWindow(): void {
