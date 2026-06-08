@@ -107,3 +107,32 @@ h2 { font-size: 15px; margin: 0 0 12px; }
 
 .toggle { display: flex; align-items: center; gap: 10px; font-size: 13px; cursor: pointer; }
 .toggle input { width: 16px; height: 16px; accent-color: var(--accent); }
+
+/* Models screen */
+.model-card { display: flex; flex-direction: column; gap: 10px; }
+.model-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.model-title { font-size: 15px; font-weight: 600; }
+.model-sub { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.model-meta { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 4px 14px; font-size: 12px; color: var(--muted); }
+.model-meta b { color: var(--text); font-weight: 500; }
+.model-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.btn.sm { padding: 5px 11px; font-size: 12px; }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn:disabled:hover { border-color: var(--border); }
+
+.badges { display: flex; gap: 6px; flex-wrap: wrap; }
+.badge {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  white-space: nowrap;
+}
+.badge.installed { color: var(--good); border-color: var(--good); }
+.badge.running { color: #fff; background: var(--accent); border-color: var(--accent); }
+.badge.missing { color: var(--muted); }
+.badge.checksum_failed, .badge.unsupported { color: #ff6b6b; border-color: #ff6b6b; }
+.badge.recommended { color: var(--accent); border-color: var(--accent); }
+.badge.active { color: var(--good); border-color: var(--good); }
+.section-title { font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; margin: 24px 0 4px; }

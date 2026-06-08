@@ -5,7 +5,7 @@
 > (see "Per-phase ritual" in [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md)).
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
-_Last updated: 2026-06-09 — Phase 1 complete; Phase 2 next_
+_Last updated: 2026-06-09 — Phase 2 complete; Phase 3 next_
 
 ---
 
@@ -15,8 +15,8 @@ _Last updated: 2026-06-09 — Phase 1 complete; Phase 2 next_
 |---|---|---|
 | 0 | Repo skeleton & tooling | 🟢 done |
 | 1 | App shell, workspace & settings | 🟢 done |
-| 2 | Model manifests & runtime contract | 🟡 next |
-| 3 | Basic chat (mock runtime) | ⚪ not started |
+| 2 | Model manifests & runtime contract | 🟢 done |
+| 3 | Basic chat (mock runtime) | 🟡 next |
 | 4 | Document ingestion & chunking | ⚪ not started |
 | 5 | Embeddings & vector search (mock) | ⚪ not started |
 | 6 | RAG chat with citations | ⚪ not started |
@@ -59,6 +59,13 @@ Repo root: `f:\_coding\ai_drive`.
 - **Mock-first:** `MockRuntime` + `MockEmbedder` so the app runs with zero model files. Real llama.cpp/embeddings deferred to Phase 10, behind the same interfaces.
 - **Vector search = cosine over SQLite-stored vectors** for MVP.
 - **Plaintext dev workspace allowed in dev**; encrypted is the commercial default (Phase 9).
+- **YAML parsing = `yaml` npm package** (Phase 2 decision). Pure JS, no native deps, MIT, offline.
+  Chosen over hand-rolling for reliability; parsing happens in the main process only. Validation is a
+  hand-written pure function in `shared/manifest.ts` so it is shared with the renderer and unit-tested
+  without I/O.
+- **Manifest `local_path` is relative to the drive root** (existing Phase 0 manifests already include
+  the `models/` prefix), so weight files resolve to `<root>/models/...`. Recommendation is data-driven
+  via an optional `recommended_profiles` list on each manifest.
 
 ---
 
@@ -86,8 +93,9 @@ deleteDocument(documentId: string): Promise<void>
 getSettings(): Promise<AppSettings>
 updateSettings(patch: Partial<AppSettings>): Promise<AppSettings>
 ```
-_Status: TypeScript types implemented in `apps/desktop/src/shared/types.ts`; channel names in
-`src/shared/ipc.ts`. Handlers not yet wired (Phase 1)._
+_Status: TypeScript types in `apps/desktop/src/shared/types.ts`; channel names in `src/shared/ipc.ts`.
+Wired so far: core (Phase 1) + `listModels`/`selectModel`/`startRuntime`/`stopRuntime` (Phase 2).
+Chat/docs/benchmark handlers land in their phases._
 
 ### DB schema
 ✅ Implemented in `src/main/services/db.ts` — all spec §8 tables created idempotently (WAL mode,
@@ -108,34 +116,55 @@ foreign keys on). `Db` type = `InstanceType<typeof DatabaseSync>`. Loaded via `c
 ✅ `getAppStatus`, `getDriveStatus`, `getSettings`, `updateSettings` registered in
 `src/main/ipc/registerCoreIpc.ts`, invoked from `initBackend()` in `main/index.ts`.
 
+### Models + runtime (Phase 2 live)
+✅ **Manifest** schema/validator in `src/shared/manifest.ts` (`ModelManifest`, `validateManifest`,
+`isRealSha256`). YAML files under `model-manifests/` (chat: Qwen3 1.7B/4B/8B Q4; embeddings: E5 small).
+✅ **`services/models.ts`** — `resolveManifestsDir`, `discoverManifests`, `sha256File`,
+`verifyChecksum`, `computeInstallState`, `recommendModelId`, `buildModelList`, `selectModel`.
+States: `unsupported→missing→checksum_failed→installed` (+`running` overlay). `ModelInfo` shape per
+`shared/types.ts`. `local_path` resolved against the **drive root**.
+✅ **`services/runtime/`** — `ModelRuntime` interface + `RuntimeManager` (single active runtime,
+restart on switch) + `MockRuntime` (health ok; `chatStream` stubbed until Phase 3). Factory swap →
+`LlamaRuntime` in Phase 10. `RuntimeStatus` shape per `shared/types.ts`.
+✅ **IPC** `src/main/ipc/registerModelIpc.ts` — `listModels`, `selectModel`, `startRuntime`,
+`stopRuntime`; wired in `initBackend()`. `ctx` now carries `runtime` + `manifestsDir`. Runtime stopped
+on `will-quit`. Preload exposes all four. **Models screen** renders states/license/recommend/verify/
+select/start-stop. Hardware profile **stubbed `LITE`** until Phase 7.
+
 ### Streaming contract
 TBD in Phase 3 (chosen approach: main → renderer via IPC event channel `chat:token:<requestId>` with `{token}` / `chat:done` / `chat:error`). Preload helper `onToken(requestId, cb)` already stubbed. _Confirm in Phase 3._
 
 ---
 
-## 5. Next actions (do these next) — START OF PHASE 2
+## 5. Next actions (do these next) — START OF PHASE 3
 
-Phase 2 = Model manifests & runtime launcher contract (spec Milestone 2 / Step 3). Build, in order:
-1. `shared/manifest.ts` — manifest type + a small validator (no heavy deps; parse YAML with a tiny
-   parser or add `yaml` dep — prefer a minimal dependency). Fields per `docs/model-policy.md`.
-2. `services/models.ts` — discover manifests under `model-manifests/`, validate, compute `ModelState`
-   (installed/missing/checksum_failed/...), SHA-256 verify against `models/<local_path>`, recommend
-   by hardware profile (stub profile=LITE until Phase 7), select active model (persist to settings).
-3. `services/runtime/index.ts` — `ModelRuntime` interface (start/stop/health/chat_stream).
-   `services/runtime/mock.ts` — health returns ok; chat_stream stubbed (full streaming in Phase 3).
-4. `ipc/registerModelIpc.ts` — `listModels`, `selectModel`, `startRuntime`, `stopRuntime`.
-5. Models screen — installed/missing/recommended, license, checksum verify button, select.
-6. Tests: manifest parse/validate, checksum verify (hash a temp file), model-state computation,
-   recommendation mapping.
-7. **Ritual:** update `docs/model-policy.md` + `model-manifests/README.md` + `docs/architecture.md`;
-   update this file; commit.
+Phase 3 = Basic chat with the mock runtime (spec Milestone 3 / Step 4). Build, in order:
+1. `services/chat.ts` — create conversation, append user/assistant messages, build the system prompt
+   (spec §7.6), persist to `conversations`/`messages`. UUIDs + ISO timestamps (see §7 conventions).
+2. **Streaming** — implement `MockRuntime.chatStream` for real token-by-token emit and wire the
+   main→renderer event channel already locked in §"Streaming contract": `chat:token:<id>` /
+   `chat:done:<id>` / `chat:error:<id>`. Support **stop/cancel** via `AbortSignal` (the
+   `RuntimeChatOptions.signal` field is already on the interface). The active runtime is reachable via
+   `ctx.runtime.active()`.
+3. IPC: `createConversation`, `listConversations`, `listMessages`, `sendChatMessage` (streaming),
+   `stopGeneration`. Channel names already exist in `shared/ipc.ts`. Add preload methods.
+4. Chat screen — conversation list, streamed message view, stop, regenerate, copy. Guard with a
+   "select & start a model first" empty-state (Models screen already selects/starts the runtime).
+5. Tests: conversation persistence, message ordering, stop cancels the stream.
+6. **Ritual:** update `docs/architecture.md` (chat/runtime) + this file's streaming contract; commit.
 
-Decision needed in Phase 2: YAML parsing — add the `yaml` npm package (small, pure JS) vs hand-roll.
-Lean toward adding `yaml` (boring, reliable). Record the choice here.
+Notes / gotchas for Phase 3:
+- `MockRuntime.chatStream` currently yields one stub string — replace with chunked emit + delay so the
+  UI streaming path is exercised without a real model.
+- A chat request needs a running runtime; `RuntimeManager.start()` must have been called (Models
+  screen "Start runtime"). Decide whether `sendChatMessage` auto-starts the selected model.
+- `messages.citations_json` exists in the schema but stays null until Phase 6 (RAG).
 
-Phase 1 is DONE: typecheck clean, 11/11 tests pass (workspace resolution, DB migration creates all
-§8 tables, settings round-trip, full init sequence), `npm run build` green (main bundle 9.21kB).
-Home/Diagnostics/Settings screens use real IPC data. (Live `npm run dev` window smoke = manual.)
+Phase 2 is DONE: typecheck clean, **47/47 tests pass** (added manifest validate, checksum verify,
+model-state computation, recommendation mapping, manifest discovery/dupe/recurse, manifests-dir
+resolution, selectModel persistence, runtime manager/mock). `npm run build` green (main bundle now
+244.71 kB — `yaml` is bundled into main). Models screen lists/verifies/selects/starts models against
+the Phase 0 manifests. (Live `npm run dev` window smoke = manual.)
 
 ---
 

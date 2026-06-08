@@ -1,6 +1,6 @@
 # Architecture — Private AI Drive Lite
 
-_Last updated: 2026-06-09 (Phase 1)_
+_Last updated: 2026-06-09 (Phase 2)_
 
 ## Overview
 
@@ -52,6 +52,25 @@ a future move to Tauri/Rust is a localized swap.
 package. One SQLite DB per workspace (`workspace/paid.sqlite`) holds the spec §8 tables (settings,
 conversations, messages, documents, chunks, embeddings, runtime_events). In encrypted mode (Phase 9)
 the whole DB file is encrypted at rest.
+
+## Models & runtime (Phase 2)
+- **Manifests** are local YAML under `model-manifests/` (committed; weights are not). The schema +
+  validator live in `src/shared/manifest.ts` so renderer and main share one definition. YAML is
+  parsed with the pure-JS `yaml` package in the main process only.
+- **`services/models.ts`** discovers manifests (recursively), validates them, and computes each
+  model's state (`unsupported → missing → checksum_failed → installed`, with `running` overlaid for
+  the active runtime). `local_path` is resolved **relative to the drive root**, so weights live at
+  `<root>/models/...`. SHA-256 is streamed (large GGUFs never fully buffer). Placeholder hashes are
+  treated as installed only in developer mode; otherwise they fail the §7.4 verification gate.
+- **Recommendation** is data-driven: each manifest lists `recommended_profiles`; the picker returns
+  the first chat/embedding model matching the current hardware profile (stubbed `LITE` until the
+  Phase 7 benchmark).
+- **`services/runtime/`** defines the `ModelRuntime` interface and a `RuntimeManager` that owns the
+  single active runtime and restarts it on model switch. `MockRuntime` returns healthy immediately;
+  its `chatStream` is a stub until Phase 3, and the real `LlamaRuntime` (localhost-only sidecar)
+  lands in Phase 10. The factory passed to `RuntimeManager` is the only thing that changes.
+- **IPC** (`ipc/registerModelIpc.ts`): `listModels`, `selectModel`, `startRuntime`, `stopRuntime`.
+  The active runtime is stopped on `will-quit`.
 
 ## Data flow (RAG, Phases 4–6)
 import → extract text → chunk → embed (local) → store vectors → on question: embed query → cosine

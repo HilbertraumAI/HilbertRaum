@@ -1,6 +1,6 @@
 # Model Policy — Private AI Drive Lite
 
-_Last updated: 2026-06-09_
+_Last updated: 2026-06-09 (Phase 2)_
 
 ## Principles
 - **No model weights in git.** Weights live under `models/` on the drive (git-ignored).
@@ -19,10 +19,30 @@ _Last updated: 2026-06-09_
 | Chat better | Qwen3 8B Instruct Q4 | 16 GB+ (BALANCED/PRO) |
 | Embeddings | small multilingual model | Local document search |
 
+## Manifest format & parsing
+Manifests are **YAML**, parsed with the pure-JS [`yaml`](https://www.npmjs.com/package/yaml) package
+(added in Phase 2 — boring, reliable, no native deps, works fully offline). The schema and a
+hand-written validator live in `apps/desktop/src/shared/manifest.ts` (one source of truth shared by
+main + renderer). Validation collects **all** errors per file and is pure (no I/O) for easy testing.
+
 ## Manifest fields (required)
 `id, display_name, family, role, format, runtime, license, size_on_disk_gb,
 recommended_min_ram_gb, recommended_ram_gb, recommended_context_tokens, local_path, sha256` plus a
-`license_review` block.
+`license_review` block. Optional: `recommended_profiles` (a list of hardware profiles this model is
+recommended for — drives the §7.3 picker). Unknown extra keys (e.g. `supports_tools`, `dimensions`,
+`download_url`) are ignored by the validator.
+
+- **`local_path`** is resolved **relative to the drive root**, so a value of
+  `models/chat/foo.gguf` points at `<drive-root>/models/chat/foo.gguf`.
+- **`sha256`** is lower-case hex (64 chars). A non-hex placeholder (e.g. `REPLACE_WITH_REAL_HASH`)
+  marks a model whose hash is not yet known; such a file is only usable in developer mode.
+- **`runtime`/`format`**: currently `llama_cpp` + `gguf` are supported; anything else yields the
+  `unsupported` state.
+
+## Model states (spec §7.4)
+Computed by `services/models.ts` with this precedence:
+`unsupported` → `missing` (file absent) → `checksum_failed` (hash mismatch, or placeholder hash
+outside developer mode) → `installed`. The active running model is shown as `running`.
 
 ## License review gate
 ```yaml

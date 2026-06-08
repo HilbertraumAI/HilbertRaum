@@ -15,6 +15,8 @@ local_path: models/chat/qwen3-1.7b-instruct-q4.gguf
 sha256: REPLACE_WITH_REAL_HASH
 download_url: null
 bundled_on_preconfigured_drive: true
+# Hardware profiles this model is recommended for (drives the §7.3 picker).
+recommended_profiles: [TINY, UNKNOWN]
 license_review:
   status: pending
   reviewed_by: null

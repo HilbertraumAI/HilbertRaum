@@ -3,6 +3,7 @@ import { HomeScreen } from './screens/HomeScreen'
 import { PlaceholderScreen } from './screens/PlaceholderScreen'
 import { DiagnosticsScreen } from './screens/DiagnosticsScreen'
 import { SettingsScreen } from './screens/SettingsScreen'
+import { ModelsScreen } from './screens/ModelsScreen'
 
 type ScreenId =
   | 'home'
@@ -68,9 +69,7 @@ export function App(): JSX.Element {
         {screen === 'documents' && (
           <PlaceholderScreen title="Documents" phase="Phase 4" />
         )}
-        {screen === 'models' && (
-          <PlaceholderScreen title="Models" phase="Phase 2" />
-        )}
+        {screen === 'models' && <ModelsScreen />}
         {screen === 'privacy' && (
           <PlaceholderScreen title="Privacy & Offline Mode" phase="Phase 8" />
         )}

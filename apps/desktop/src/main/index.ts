@@ -5,6 +5,10 @@ import { openDatabase } from './services/db'
 import { seedSettings } from './services/settings'
 import { initLogging, log } from './services/logging'
 import { registerCoreIpc } from './ipc/registerCoreIpc'
+import { registerModelIpc } from './ipc/registerModelIpc'
+import { RuntimeManager } from './services/runtime'
+import { createMockRuntime } from './services/runtime/mock'
+import { resolveManifestsDir } from './services/models'
 import type { AppContext } from './services/context'
 
 // Private AI Drive Lite — Electron main process (the "backend").
@@ -31,8 +35,14 @@ function initBackend(): void {
   seedSettings(db)
   log.info('Database ready', { path: paths.dbPath })
 
-  ctx = { paths, db }
+  // Mock runtime for now; swapped for the real llama.cpp factory in Phase 10.
+  const runtime = new RuntimeManager(createMockRuntime)
+  const manifestsDir = resolveManifestsDir(app.getAppPath(), process.env.PAID_MANIFESTS_DIR)
+  log.info('Model manifests directory', { manifestsDir })
+
+  ctx = { paths, db, runtime, manifestsDir }
   registerCoreIpc(ctx)
+  registerModelIpc(ctx)
 }
 
 function createWindow(): void {
@@ -87,7 +97,11 @@ app.whenReady().then(() => {
   })
 })
 
+app.on('will-quit', () => {
+  // Stop the active runtime (real llama.cpp sidecar in Phase 10) before quitting.
+  void ctx?.runtime.stop()
+})
+
 app.on('window-all-closed', () => {
-  // Phase 10: stop the llama.cpp sidecar here before quitting.
   if (process.platform !== 'darwin') app.quit()
 })

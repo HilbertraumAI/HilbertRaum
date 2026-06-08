@@ -15,6 +15,8 @@ local_path: models/chat/qwen3-4b-instruct-q4.gguf
 sha256: REPLACE_WITH_REAL_HASH
 download_url: null
 bundled_on_preconfigured_drive: true
+# Target default; recommended for LITE hardware (spec §7.3).
+recommended_profiles: [LITE]
 license_review:
   status: pending
   reviewed_by: null

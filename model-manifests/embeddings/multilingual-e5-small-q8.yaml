@@ -14,6 +14,8 @@ local_path: models/embeddings/multilingual-e5-small-q8.gguf
 sha256: REPLACE_WITH_REAL_HASH
 download_url: null
 bundled_on_preconfigured_drive: true
+# The default embedding model for every profile.
+recommended_profiles: [TINY, LITE, BALANCED, PRO, UNKNOWN]
 license_review:
   status: pending
   reviewed_by: null
