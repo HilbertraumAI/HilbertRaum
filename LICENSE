@@ -1,0 +1,27 @@
+                                 Apache License
+                           Version 2.0, January 2004
+                        http://www.apache.org/licenses/
+
+   Copyright 2026 Private AI Drive Lite contributors
+
+   Licensed under the Apache License, Version 2.0 (the "License");
+   you may not use this file except in compliance with the License.
+   You may obtain a copy of the License at
+
+       http://www.apache.org/licenses/LICENSE-2.0
+
+   Unless required by applicable law or agreed to in writing, software
+   distributed under the License is distributed on an "AS IS" BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+   See the License for the specific language governing permissions and
+   limitations under the License.
+
+   ---------------------------------------------------------------------------
+
+   NOTE: This LICENSE applies to the SOFTWARE in this repository only.
+   AI model weights are NOT part of this repository and are NOT covered by
+   this license. Each model carries its own upstream license; see
+   docs/model-policy.md and the per-model manifest files under model-manifests/.
+
+   The full Apache 2.0 license text should be included verbatim before any
+   public release. This header is a placeholder for the MVP skeleton.

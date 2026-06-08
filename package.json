@@ -1,0 +1,20 @@
+{
+  "name": "private-ai-drive-lite",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Open-source offline AI workspace that runs local models from a portable drive. No cloud, no telemetry.",
+  "license": "Apache-2.0",
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspace apps/desktop",
+    "build": "npm run build --workspace apps/desktop",
+    "typecheck": "npm run typecheck --workspace apps/desktop",
+    "test": "npm run test --workspace apps/desktop",
+    "lint": "npm run lint --workspace apps/desktop"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

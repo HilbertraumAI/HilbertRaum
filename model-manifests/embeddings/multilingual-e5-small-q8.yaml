@@ -1,0 +1,21 @@
+id: multilingual-e5-small-q8
+display_name: Multilingual E5 Small (Q8)
+family: e5
+role: embeddings
+format: gguf
+runtime: llama_cpp
+license: mit
+size_on_disk_gb: 0.5
+recommended_min_ram_gb: 4
+recommended_ram_gb: 8
+recommended_context_tokens: 512
+dimensions: 384
+local_path: models/embeddings/multilingual-e5-small-q8.gguf
+sha256: REPLACE_WITH_REAL_HASH
+download_url: null
+bundled_on_preconfigured_drive: true
+license_review:
+  status: pending
+  reviewed_by: null
+  reviewed_at: null
+  notes: "CPU-friendly multilingual embeddings for local document search."

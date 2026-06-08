@@ -1,0 +1,19 @@
+Acme Remote Work Policy (Sample)
+
+1. Eligibility
+Full-time employees who have completed their probation period may request remote work.
+
+2. Working Hours
+Remote employees are expected to be available during core hours of 10:00 to 16:00 local time.
+
+3. Equipment
+The company provides a laptop. Employees are responsible for a secure internet connection.
+
+4. Data Security
+Confidential documents must be stored only on company-approved, encrypted storage.
+Remote employees must not use public computers to access company systems.
+
+5. Termination of Remote Arrangement
+Either the employee or the company may end the remote work arrangement with two weeks' notice.
+Repeated failure to meet availability or security requirements may result in immediate termination
+of the remote arrangement.

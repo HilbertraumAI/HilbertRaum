@@ -1,0 +1,34 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+out/
+*.tsbuildinfo
+
+# Model weights — NEVER commit (spec rule 0.1.8 / 0.2)
+models/
+*.gguf
+*.onnx
+*.safetensors
+*.bin
+
+# User data / workspace — stays local, never committed
+workspace/
+*.sqlite
+*.sqlite-journal
+*.db
+*.db-journal
+
+# Logs
+logs/
+*.log
+
+# Drive runtime binaries (sidecars)
+runtime/
+
+# Env / OS
+.env
+.env.*
+.DS_Store
+Thumbs.db

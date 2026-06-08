@@ -1,0 +1,22 @@
+id: qwen3-1.7b-instruct-q4
+display_name: Qwen3 1.7B Instruct Q4
+family: qwen3
+role: chat
+format: gguf
+runtime: llama_cpp
+license: apache-2.0
+size_on_disk_gb: 1.2
+recommended_min_ram_gb: 6
+recommended_ram_gb: 8
+recommended_context_tokens: 2048
+supports_thinking_mode: true
+supports_tools: false
+local_path: models/chat/qwen3-1.7b-instruct-q4.gguf
+sha256: REPLACE_WITH_REAL_HASH
+download_url: null
+bundled_on_preconfigured_drive: true
+license_review:
+  status: pending
+  reviewed_by: null
+  reviewed_at: null
+  notes: "Safe fallback for TINY/UNKNOWN hardware profiles."
