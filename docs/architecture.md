@@ -1,6 +1,6 @@
 # Architecture — Private AI Drive Lite
 
-_Last updated: 2026-06-09 (Phase 0)_
+_Last updated: 2026-06-09 (Phase 1)_
 
 ## Overview
 
@@ -46,9 +46,12 @@ a future move to Tauri/Rust is a localized swap.
 - `VectorIndex` — cosine over SQLite-stored vectors (Phase 5) → `sqlite-vec`/HNSW later.
 
 ## Storage
-`node:sqlite` (built into Node 24). One SQLite DB per workspace holding the spec §8 tables
-(settings, conversations, messages, documents, chunks, embeddings, runtime_events). In encrypted
-mode (Phase 9) the whole DB file is encrypted at rest.
+`node:sqlite` — built into the Node bundled by **Electron 37** (Node 22.21). It is loaded via
+`createRequire` in `services/db.ts` because the experimental module is absent from
+`module.builtinModules`, which otherwise makes bundlers try to resolve a non-existent `sqlite`
+package. One SQLite DB per workspace (`workspace/paid.sqlite`) holds the spec §8 tables (settings,
+conversations, messages, documents, chunks, embeddings, runtime_events). In encrypted mode (Phase 9)
+the whole DB file is encrypted at rest.
 
 ## Data flow (RAG, Phases 4–6)
 import → extract text → chunk → embed (local) → store vectors → on question: embed query → cosine

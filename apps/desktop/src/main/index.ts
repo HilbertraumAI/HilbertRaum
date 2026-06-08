@@ -1,5 +1,11 @@
 import { app, BrowserWindow, shell } from 'electron'
 import { join } from 'node:path'
+import { resolvePaths, ensureWorkspaceDirs } from './services/workspace'
+import { openDatabase } from './services/db'
+import { seedSettings } from './services/settings'
+import { initLogging, log } from './services/logging'
+import { registerCoreIpc } from './ipc/registerCoreIpc'
+import type { AppContext } from './services/context'
 
 // Private AI Drive Lite — Electron main process (the "backend").
 // Security posture (spec §3.5): context isolation on, node integration off,
@@ -8,6 +14,26 @@ import { join } from 'node:path'
 const isDev = !app.isPackaged
 
 let mainWindow: BrowserWindow | null = null
+let ctx: AppContext | null = null
+
+// Resolve the workspace/drive layout, open the database, and register IPC.
+// Runs once at startup, before the window loads.
+function initBackend(): void {
+  const paths = resolvePaths({
+    envRoot: process.env.PAID_DRIVE_ROOT,
+    fallbackRoot: app.getPath('userData')
+  })
+  ensureWorkspaceDirs(paths)
+  initLogging(paths.logsPath)
+  log.info('Workspace resolved', { root: paths.rootPath, preparedDrive: paths.isPreparedDrive })
+
+  const db = openDatabase(paths.dbPath)
+  seedSettings(db)
+  log.info('Database ready', { path: paths.dbPath })
+
+  ctx = { paths, db }
+  registerCoreIpc(ctx)
+}
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
@@ -49,8 +75,11 @@ function createWindow(): void {
 }
 
 app.whenReady().then(() => {
-  // IPC handlers are registered here as phases land.
-  // Phase 1 will call registerCoreIpc() etc.
+  try {
+    initBackend()
+  } catch (err) {
+    log.error('Backend initialization failed', String(err))
+  }
   createWindow()
 
   app.on('activate', () => {

@@ -14,6 +14,20 @@ export function DiagnosticsScreen(): JSX.Element {
       <p className="lead">Local-only diagnostics. Nothing here is ever uploaded.</p>
 
       <div className="card">
+        <h2>System</h2>
+        {drive ? (
+          <dl className="kv">
+            <dt>OS / platform</dt>
+            <dd>{drive.platform} ({drive.arch})</dd>
+            <dt>Free space</dt>
+            <dd>{drive.freeBytes != null ? `${(drive.freeBytes / 1e9).toFixed(1)} GB` : 'unknown'}</dd>
+          </dl>
+        ) : (
+          <p className="hint">System detection lands in Phase 1.</p>
+        )}
+      </div>
+
+      <div className="card">
         <h2>Paths</h2>
         {drive ? (
           <dl className="kv">

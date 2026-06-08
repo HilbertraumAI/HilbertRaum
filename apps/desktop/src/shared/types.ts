@@ -27,6 +27,8 @@ export interface DriveStatus {
   isPreparedDrive: boolean
   writable: boolean
   freeBytes: number | null
+  platform: string
+  arch: string
 }
 
 export interface AppSettings {

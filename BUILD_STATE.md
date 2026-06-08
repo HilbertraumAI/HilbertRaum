@@ -5,7 +5,7 @@
 > (see "Per-phase ritual" in [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md)).
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
-_Last updated: 2026-06-09 — Phase 0 complete; Phase 1 next_
+_Last updated: 2026-06-09 — Phase 1 complete; Phase 2 next_
 
 ---
 
@@ -14,8 +14,8 @@ _Last updated: 2026-06-09 — Phase 0 complete; Phase 1 next_
 | Phase | Name | Status |
 |---|---|---|
 | 0 | Repo skeleton & tooling | 🟢 done |
-| 1 | App shell, workspace & settings | 🟡 next |
-| 2 | Model manifests & runtime contract | ⚪ not started |
+| 1 | App shell, workspace & settings | 🟢 done |
+| 2 | Model manifests & runtime contract | 🟡 next |
 | 3 | Basic chat (mock runtime) | ⚪ not started |
 | 4 | Document ingestion & chunking | ⚪ not started |
 | 5 | Embeddings & vector search (mock) | ⚪ not started |
@@ -51,7 +51,11 @@ Repo root: `f:\_coding\ai_drive`.
 
 - **Stack = Electron + React + TS + Vite** (user choice; Rust not installed). Spec §4 permits Electron fallback.
 - **Package manager = npm** with workspaces.
-- **SQLite = `node:sqlite`** (Node 24 built-in) → fallback `sql.js` (WASM) if unstable. Avoid native `better-sqlite3` (no Node 24 prebuilts). _To be validated in Phase 1._
+- **SQLite = `node:sqlite`** → fallback `sql.js` (WASM) if unstable. Avoid native `better-sqlite3`.
+  ⚠️ **`node:sqlite` lives in the bundled Node of *Electron's main process*, not the system Node.**
+  It needs Node ≥ 22.5. Electron 33 bundles Node 20 (no `node:sqlite`), so **Electron is pinned to
+  `^37` (Node 22.x)**. Validate `node:sqlite` *inside Electron* at the start of Phase 1, not against
+  system Node.
 - **Mock-first:** `MockRuntime` + `MockEmbedder` so the app runs with zero model files. Real llama.cpp/embeddings deferred to Phase 10, behind the same interfaces.
 - **Vector search = cosine over SQLite-stored vectors** for MVP.
 - **Plaintext dev workspace allowed in dev**; encrypted is the commercial default (Phase 9).
@@ -86,33 +90,60 @@ _Status: TypeScript types implemented in `apps/desktop/src/shared/types.ts`; cha
 `src/shared/ipc.ts`. Handlers not yet wired (Phase 1)._
 
 ### DB schema
-Spec §8 (settings, conversations, messages, documents, chunks, embeddings, runtime_events). _Not yet created — Phase 1._
+✅ Implemented in `src/main/services/db.ts` — all spec §8 tables created idempotently (WAL mode,
+foreign keys on). `Db` type = `InstanceType<typeof DatabaseSync>`. Loaded via `createRequire`
+(see Decision log). Helpers: `openDatabase(path)`, `listTables(db)`.
+
+### Settings storage
+✅ `src/main/services/settings.ts` — key/value rows; `getSettings` merges over `DEFAULT_SETTINGS`;
+`updateSettings(patch)` upserts; `seedSettings` seeds on first run. Default `allowNetwork:false`,
+`workspaceMode:'plaintext_dev'`, `contextTokens:4096`.
+
+### Workspace/paths
+✅ `src/main/services/workspace.ts` — `resolvePaths({envRoot,fallbackRoot})` → `ResolvedPaths`
+(rootPath, workspacePath, modelsPath, logsPath, configPath, dbPath, isPreparedDrive).
+`ensureWorkspaceDirs`, `buildDriveStatus` (adds platform/arch/free/writable). See `docs/drive-layout.md`.
+
+### Core IPC (Phase 1 live)
+✅ `getAppStatus`, `getDriveStatus`, `getSettings`, `updateSettings` registered in
+`src/main/ipc/registerCoreIpc.ts`, invoked from `initBackend()` in `main/index.ts`.
 
 ### Streaming contract
-TBD in Phase 3 (chosen approach: main → renderer via IPC event channel `chat:token:<requestId>` with `{token}` / `chat:done` / `chat:error`). _Placeholder; confirm in Phase 3._
+TBD in Phase 3 (chosen approach: main → renderer via IPC event channel `chat:token:<requestId>` with `{token}` / `chat:done` / `chat:error`). Preload helper `onToken(requestId, cb)` already stubbed. _Confirm in Phase 3._
 
 ---
 
-## 5. Next actions (do these next) — START OF PHASE 1
+## 5. Next actions (do these next) — START OF PHASE 2
 
-Phase 1 = App shell, workspace & settings (spec Milestone 1). Build, in order:
-1. `services/logging.ts` — local rotating logger writing to `<workspace>/logs/` (no upload).
-2. `services/workspace.ts` — resolve root path (priority: `PAID_DRIVE_ROOT` env → prepared-drive layout detection via `config/drive.json` → app-data fallback `app.getPath('userData')`). Create `workspace/`, `logs/`, `models/` dirs; detect writability + free space (`fs.statfs`); build `DriveStatus`.
-3. `services/db.ts` — open `node:sqlite` DB at `<workspace>/paid.sqlite`; run migrations creating all spec §8 tables; expose typed helpers.
-4. `services/settings.ts` — get/update settings backed by `settings` table; seed `DEFAULT_SETTINGS`.
-5. `ipc/registerCoreIpc.ts` — wire `getAppStatus`, `getDriveStatus`, `getSettings`, `updateSettings`; call from `main/index.ts` `app.whenReady`.
-6. Flesh out Home + Diagnostics + a basic Settings screen using real data.
-7. Tests: path resolution, settings round-trip, migration creates tables, drive-status shape.
-8. **Ritual:** update `docs/drive-layout.md` + `docs/architecture.md`; update this file; commit.
+Phase 2 = Model manifests & runtime launcher contract (spec Milestone 2 / Step 3). Build, in order:
+1. `shared/manifest.ts` — manifest type + a small validator (no heavy deps; parse YAML with a tiny
+   parser or add `yaml` dep — prefer a minimal dependency). Fields per `docs/model-policy.md`.
+2. `services/models.ts` — discover manifests under `model-manifests/`, validate, compute `ModelState`
+   (installed/missing/checksum_failed/...), SHA-256 verify against `models/<local_path>`, recommend
+   by hardware profile (stub profile=LITE until Phase 7), select active model (persist to settings).
+3. `services/runtime/index.ts` — `ModelRuntime` interface (start/stop/health/chat_stream).
+   `services/runtime/mock.ts` — health returns ok; chat_stream stubbed (full streaming in Phase 3).
+4. `ipc/registerModelIpc.ts` — `listModels`, `selectModel`, `startRuntime`, `stopRuntime`.
+5. Models screen — installed/missing/recommended, license, checksum verify button, select.
+6. Tests: manifest parse/validate, checksum verify (hash a temp file), model-state computation,
+   recommendation mapping.
+7. **Ritual:** update `docs/model-policy.md` + `model-manifests/README.md` + `docs/architecture.md`;
+   update this file; commit.
 
-Phase 0 is DONE: typecheck clean, 2/2 tests pass, `npm run build` produces main/preload/renderer
-bundles. (Live `npm run dev` window smoke is recommended manually by the user.)
+Decision needed in Phase 2: YAML parsing — add the `yaml` npm package (small, pure JS) vs hand-roll.
+Lean toward adding `yaml` (boring, reliable). Record the choice here.
+
+Phase 1 is DONE: typecheck clean, 11/11 tests pass (workspace resolution, DB migration creates all
+§8 tables, settings round-trip, full init sequence), `npm run build` green (main bundle 9.21kB).
+Home/Diagnostics/Settings screens use real IPC data. (Live `npm run dev` window smoke = manual.)
 
 ---
 
 ## 6. Open issues / risks
 
-- **R1 `node:sqlite` stability on Node 24** — may print experimental warning or need a flag. Mitigation: `sql.js` WASM fallback. Validate Phase 1.
+- **R1 `node:sqlite` ✅ RESOLVED** — works in Electron 37 (Node 22.21) main process and in vitest
+  (system Node 24). Only an experimental warning (harmless). Bundler resolution fixed via
+  `createRequire` in `db.ts`. `sql.js` fallback not needed.
 - **R2 Electron binary download** — `npm i electron` pulls a ~100MB binary; needs dev-time internet. The *app* stays offline; only dev install needs network.
 - **R3 PDF/DOCX parsers** — pick pure-JS libs (`pdfjs-dist`, `mammoth`) to avoid native deps. Validate Phase 4.
 - **R4 Argon2id** — native `argon2` may not build on Node 24; fallback to `node:crypto` `scrypt` documented in Phase 9.

@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { HomeScreen } from './screens/HomeScreen'
 import { PlaceholderScreen } from './screens/PlaceholderScreen'
 import { DiagnosticsScreen } from './screens/DiagnosticsScreen'
+import { SettingsScreen } from './screens/SettingsScreen'
 
 type ScreenId =
   | 'home'
@@ -74,9 +75,7 @@ export function App(): JSX.Element {
           <PlaceholderScreen title="Privacy & Offline Mode" phase="Phase 8" />
         )}
         {screen === 'diagnostics' && <DiagnosticsScreen />}
-        {screen === 'settings' && (
-          <PlaceholderScreen title="Settings" phase="Phase 1 / 8" />
-        )}
+        {screen === 'settings' && <SettingsScreen />}
       </main>
     </div>
   )
