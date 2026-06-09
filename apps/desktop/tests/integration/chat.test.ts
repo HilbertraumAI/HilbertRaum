@@ -16,6 +16,7 @@ import {
 } from '../../src/main/services/chat'
 import { createMockRuntime } from '../../src/main/services/runtime/mock'
 import type { Db } from '../../src/main/services/db'
+import type { ModelRuntime } from '../../src/main/services/runtime'
 
 function freshDb(): Db {
   const dir = mkdtempSync(join(tmpdir(), 'paid-chat-'))
@@ -155,6 +156,40 @@ describe('generateAssistantMessage (streaming)', () => {
     appendMessage(db, { conversationId: conv2.id, role: 'user', content: 'ping' })
     const full = await generateAssistantMessage(db, runtime(), conv2.id, {})
     expect(msg.content.length).toBeLessThan(full.content.length)
+  })
+
+  it('persists the partial reply when a real-style runtime throws AbortError on stop', async () => {
+    // The mock returns cleanly on abort, but a real fetch-backed runtime REJECTS the
+    // in-flight request with an AbortError. generateAssistantMessage must treat that as a
+    // normal end (persist the partial) rather than letting it propagate (C1 regression).
+    const db = freshDb()
+    const conv = createConversation(db, {})
+    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'ping' })
+
+    const controller = new AbortController()
+    const throwingRuntime: ModelRuntime = {
+      modelId: 'real-ish',
+      start: async () => {},
+      stop: async () => {},
+      health: async () => ({ healthy: true, message: 'ok', port: 1 }),
+      // eslint-disable-next-line require-yield
+      chatStream: async function* () {
+        yield 'Partial '
+        yield 'answer'
+        controller.abort()
+        const err = new Error('The operation was aborted')
+        err.name = 'AbortError'
+        throw err
+      }
+    }
+
+    const tokens: string[] = []
+    const msg = await generateAssistantMessage(db, throwingRuntime, conv.id, {
+      signal: controller.signal,
+      onToken: (t) => tokens.push(t)
+    })
+    expect(msg.content).toBe('Partial answer')
+    expect(listMessages(db, conv.id).at(-1)?.content).toBe('Partial answer')
   })
 
   it('regenerate drops the last assistant message before re-streaming', async () => {

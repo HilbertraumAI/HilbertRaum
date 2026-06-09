@@ -72,6 +72,10 @@ Key config points:
   (`electron` is pinned `^37`). A downgraded/stripped runtime would lose it — do not downgrade.
 - **Production `dependencies` ship inside `app.asar`** (`pdfjs-dist` / `mammoth` / `papaparse` /
   `yaml`), so the lazy `require()`s in the parsers + manifest loader resolve at runtime.
+  `electron-builder.yml` sets `includeSubNodeModules: true` (so hoisted/nested trees — e.g. mammoth's
+  transitive deps — are collected) and `npmRebuild: false` (no native addons). **These are
+  externalized, so a missing one only fails at RUNTIME, not in the green gate — after packaging,
+  smoke-test importing a PDF, a DOCX, and a CSV from the produced `.exe`.**
 - **`model-manifests/` ship as `extraResources`** (beside `app.asar`). The packaged main process
   finds them via `resolveManifestsDir(app.getAppPath())`, which walks up to `resources/model-manifests`;
   `PAID_MANIFESTS_DIR` overrides. Weights + sidecar binaries are **never** bundled — they live on

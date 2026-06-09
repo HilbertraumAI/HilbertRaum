@@ -46,7 +46,7 @@ apps/desktop/
 │   │   │   ├── chat.ts          # §7.6 chat service
 │   │   │   ├── ingestion/       # §7.7 parsers + chunker
 │   │   │   ├── embeddings/      # §6 Embedder interface + MockEmbedder + real
-│   │   │   ├── rag.ts           # §7.8 retrieval + grounded prompt + citations
+│   │   │   ├── rag/             # §7.8 retrieval + grounded prompt + citations (index.ts)
 │   │   │   ├── benchmark.ts     # §7.3 hardware benchmark + profiles
 │   │   │   ├── policy.ts        # §3.5/§3.6 offline/network policy
 │   │   │   └── logging.ts       # §7.11 local rotating logs
@@ -112,7 +112,7 @@ Each phase is a vertical slice that leaves the app runnable. Phases map to spec 
 
 ### Phase 6 — RAG chat with citations  *(Milestone 6 / Step 8)*
 - **Goal:** Ask questions over documents; inject retrieved chunks; answer cites sources; snippets shown in UI.
-- **Deliverables:** `rag.ts` (retrieve top_k_initial 12 → final 6, dedup, build grounded prompt from spec §7.8 template, source labels `[S1]...`), citation parsing + storage (`messages.citations_json`), Chat "Ask Documents" mode + source snippet panel. IPC: `askDocuments`.
+- **Deliverables:** `rag/index.ts` (retrieve top_k_initial 12 → final 6, dedup, build grounded prompt from spec §7.8 template, source labels `[S1]...`), citation parsing + storage (`messages.citations_json`), Chat "Ask Documents" mode + source snippet panel. IPC: `askDocuments`.
 - **Acceptance:** spec Milestone 6 — relevant chunks injected, answer cites sources, snippets visible. Citation-uncertainty copy used when retrieval is weak.
 - **Tests:** grounded prompt assembly, citation formatting/parsing, dedup by document/page.
 - **Docs:** `docs/rag-design.md` (full pipeline + citation format).
@@ -122,7 +122,7 @@ Each phase is a vertical slice that leaves the app runnable. Phases map to spec 
 - **Deliverables:** `benchmark.ts` (os/`process` + `node:os` for RAM/cpu; temp-file disk speed test; optional short model run when a real runtime exists), profile classification (TINY/LITE/BALANCED/PRO/UNKNOWN per spec §7.3/§11), recommendation table, Diagnostics + Onboarding integration, user-facing language per spec §11.4/§18.2. IPC: `runBenchmark`.
 - **Acceptance:** spec Milestone 7 — RAM/OS/CPU detected, drive speed checked, profile assigned, recommended model shown, weak-hardware warning (non-blocking).
 - **Tests:** classification thresholds, profile→model mapping, drive-speed warning logic.
-- **Docs:** `docs/benchmark-plan.md`.
+- **Docs:** `docs/benchmark.md` (shipped under this name; the spec §5 called it `benchmark-plan.md`).
 
 ### Phase 8 — Privacy & offline hardening  *(Milestone 8 / Step 10)*
 - **Goal:** Visible offline mode; network disabled by default; privacy page complete; logs local only; plaintext dev mode clearly separated.

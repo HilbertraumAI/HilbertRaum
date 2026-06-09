@@ -70,10 +70,21 @@ export function registerChatIpc(ctx: AppContext): void {
         throw new Error('No model is running. Select and start a model on the Models screen first.')
       }
 
+      // One active stream per conversation. The renderer guards this too, but a second
+      // window / reload / non-UI caller must not clobber the in-flight canceller (which
+      // would orphan the first stream and corrupt the transcript).
+      if (inFlight.has(conversationId)) {
+        throw new Error('A response is already being generated for this conversation.')
+      }
+
       const regenerate = options?.regenerate === true
       if (regenerate) {
         // Re-answer the last user turn: drop the previous assistant reply, keep history.
-        deleteLastAssistantMessage(ctx.db, conversationId)
+        // With no prior assistant reply there is nothing to regenerate — bail rather than
+        // re-prompting on stale context.
+        if (!deleteLastAssistantMessage(ctx.db, conversationId)) {
+          throw new Error('Nothing to regenerate yet.')
+        }
       } else {
         const text = content.trim()
         if (!text) throw new Error('Cannot send an empty message.')
@@ -104,7 +115,8 @@ export function registerChatIpc(ctx: AppContext): void {
         }
         throw err
       } finally {
-        inFlight.delete(conversationId)
+        // Only clear our own entry — a later stream may already own this key.
+        if (inFlight.get(conversationId) === controller) inFlight.delete(conversationId)
       }
     }
   )

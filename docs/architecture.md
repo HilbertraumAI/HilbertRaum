@@ -65,8 +65,9 @@ the whole DB file is encrypted at rest.
   `<root>/models/...`. SHA-256 is streamed (large GGUFs never fully buffer). Placeholder hashes are
   treated as installed only in developer mode; otherwise they fail the §7.4 verification gate.
 - **Recommendation** is data-driven: each manifest lists `recommended_profiles`; the picker returns
-  the first chat/embedding model matching the current hardware profile (stubbed `LITE` until the
-  Phase 7 benchmark).
+  the first chat/embedding model matching the current hardware profile. The profile comes from the
+  persisted Phase-7 benchmark (`lastBenchmark?.profile`), defaulting to `UNKNOWN` until the user runs
+  a benchmark.
 - **`services/runtime/`** defines the `ModelRuntime` interface and a `RuntimeManager` that owns the
   single active runtime and restarts it on model switch. `MockRuntime` returns healthy immediately;
   its `chatStream` is a stub until Phase 3, and the real `LlamaRuntime` (localhost-only sidecar)
@@ -214,7 +215,7 @@ render snippets.
 | `services/chat.ts` | 7.6 chat service |
 | `services/ingestion/` | 7.7 ingestion |
 | `services/embeddings/` | §6 embeddings |
-| `services/rag.ts` | 7.8 RAG |
+| `services/rag/index.ts` | 7.8 RAG |
 | `services/benchmark.ts` | 7.3 benchmarker |
 | `services/policy.ts` | 7.10 privacy/offline |
 | `services/logging.ts` | 7.11 diagnostics/logs |

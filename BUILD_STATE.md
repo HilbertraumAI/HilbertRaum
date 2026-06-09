@@ -5,7 +5,8 @@
 > (see "Per-phase ritual" in [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md)).
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
-_Last updated: 2026-06-09 — Phase 11 complete; MVP feature-complete (manual acceptance remains)_
+_Last updated: 2026-06-09 — Phase 11 complete; MVP feature-complete (manual acceptance remains).
+Multi-persona audit remediation applied (see §8)._
 
 ---
 
@@ -176,7 +177,8 @@ Repo root: `f:\_coding\ai_drive`.
   (`session.webRequest.onHeadersReceived`) on top of the `index.html` meta tag. **Prod:**
   `default-src 'self'`, `connect-src 'self'`, `object-src 'none'`, `base-uri 'none'`,
   `frame-ancestors 'none'`. **Dev:** relaxes `connect-src` to `ws://localhost:* http://localhost:*`
-  + `'unsafe-inline'`/`'unsafe-eval'` for Vite HMR (a strict policy breaks `npm run dev`).
+  and adds `'unsafe-inline'`/`'unsafe-eval'` to **`script-src`** (+ `'unsafe-inline'` on `style-src`)
+  for Vite HMR (a strict policy breaks `npm run dev`).
 - **Logs-local guarantee (Phase 8):** confirmed `services/logging.ts` is the only log writer
   (rotating `app.log` under `logsPath`); nothing writes logs/crash data off-device. Stated as fact
   on the Privacy screen + PRIVACY.md.
@@ -246,7 +248,10 @@ Repo root: `f:\_coding\ai_drive`.
   Rationale: a drive must be preparable on a **fresh machine with no Node/npm** (and no TS runner is
   installed — tsx/ts-node absent), and tests must run in CI without PowerShell/bash. `drive.ts` is the
   documented source of truth; the small drift surface (dir list + JSON shapes) is cross-checked (the
-  PS + bash + TS all emit byte-identical config in smoke tests).
+  PS + bash + TS emit **semantically-equivalent** config — valid JSON the app parses identically).
+  ⚠️ Not literally byte-identical: timestamps differ per run, and `ConvertTo-Json` whitespace differs
+  from the bash here-docs. The PS scripts now write **UTF-8 without a BOM** (`Set-Content -Encoding
+  UTF8` on PS 5.1 would emit a BOM that breaks Node's `JSON.parse`) — audit fix.
 - **Drive-layout naming reconciliation (LOCKED, Phase 11):** the prepared-drive dirs follow the
   **code**, not the spec's prose. Sidecar OS sub-dirs are **`win`/`mac`/`linux`** (`sidecar.ts`
   `llamaOsDir`), and manifests live in a **top-level `model-manifests/`** (`models.ts`
@@ -671,7 +676,7 @@ full layout + config + weight destinations + would-overwrite flag; `verifyDriveM
 placeholder/verified/mismatch/unsupported honestly; `buildChecksumsJson` captures real hashes for present
 weights + null for absent). `NODE_OPTIONS=--use-system-ca npm run build` green (**main bundle 95.56 kB**,
 unchanged — `drive.ts` is a tested helper, not in the runtime path). New dev dep **`electron-builder
-^26.15.2`**. Both `.ps1` + `.sh` script families smoke-tested on Windows + bash (byte-identical config
+^26.15.2`**. Both `.ps1` + `.sh` script families smoke-tested on Windows + bash (semantically-equivalent config
 output; SHA-256 agreement across PowerShell/bash/TS). (Live `.exe` + USB-drive demo = manual, R2/R5.)
 
 Phase 10 (prior): typecheck clean, **190/190 tests pass** (161 prior + 29 new: **sidecar** [binary
@@ -745,3 +750,47 @@ wedge HMR.)
 - IDs: UUID v4 (`crypto.randomUUID()`). Timestamps: ISO-8601 UTC.
 - No network in core path. No telemetry. Models/workspace/logs are git-ignored.
 - Every service hides behind an interface from spec §9.2 to keep the Tauri/Rust swap open.
+
+---
+
+## 8. Post-MVP audit remediation (2026-06-09)
+
+A five-persona audit (security/privacy · spec-compliance · code bug-hunt · docs · build/packaging)
+found no architectural defects but a cluster of real-runtime / crash-window edge cases that the
+mock-first build had masked. All fixed; **typecheck clean, build green (main 100.16 kB), 205/205 tests
+pass** (was 198 — 3 e5 tests re-framed + new regression tests for C1/H4/S1/M5/M7 + weightPath).
+
+**Critical / High (correctness):**
+- **C1** — Stop on a *real* runtime threw `AbortError` out of the stream → lost the partial reply +
+  error toast. `generateAssistantMessage`/`generateGroundedAnswer` now treat an abort as a normal end
+  (persist the partial, emit `done`) via `isAbortError` (`chat.ts`). Mock was unaffected; this only bit
+  the fetch-backed `LlamaRuntime`.
+- **H1** — Encrypted vault left a **plaintext `paid.sqlite` on disk after a crash** (lock-on-quit
+  skipped). `WorkspaceController.init()` now shreds a stray plaintext DB + WAL/SHM on startup
+  (`shredStalePlaintext`); `unlockEncryptedVault` cleans stale sidecars before decrypt (avoids replay
+  corruption); `uncaughtException` locks the vault best-effort.
+- **H2** — `will-quit` fire-and-forgot the sidecar kills → **orphaned `llama-server`**. Now
+  `preventDefault()` → `await Promise.allSettled([runtime.stop(), embedder.stop()])` → lock →
+  `app.exit(0)`, re-entry-guarded.
+- **H3** — Concurrent streams on one conversation clobbered the in-flight canceller. Both IPC handlers
+  reject when `inFlight.has(id)` and delete only their own entry.
+- **H4** — `E5Embedder` stored 0/short-dim vectors silently (unsearchable). Now asserts each vector
+  width === declared `dimensions` → the document fails visibly instead.
+- **H5** — packaging: `includeSubNodeModules: true` + `npmRebuild: false` for the hoisted-workspace
+  parser libs. **Still requires the manual PDF/DOCX/CSV import smoke-test on the produced `.exe`** (R2).
+
+**Medium:** M1 PS scripts now write UTF-8 **no-BOM** (a BOM broke `JSON.parse`); "byte-identical"
+claim corrected to "semantically equivalent". M2 `verify-models.sh` dropped `mapfile`/`sort -z` (macOS
+Bash 3.2 safe). M3 offline guard installed in **all** builds + honest "logged, not blocked" wording.
+M4 `shell.openExternal` http(s)-only allowlist. M5 startup reconcile of documents stuck mid-ingestion
+by a prior run. M6 import/reindex/list/delete guard against a locked workspace. M7 `DocumentInfo.staleEmbeddings`
+flags a corpus indexed under a different embedder + a Documents-screen re-index prompt.
+
+**Low:** SSE final-line flush (`readChatSSE`); per-probe `/health` timeout + undrained child stdout
+fixed (`['ignore','ignore','inherit']`); `weightPath` rejects `..`/absolute escapes; 8-char min vault
+password; `engines.node >= 22.5`; doc fixes (stale `LITE`, dead `benchmark-plan.md` ref, `rag.ts`→`rag/`,
+dev-CSP `script-src` wording).
+
+**Deferred (intentional):** offline guard remains detection-only (blocking `net.Socket` app-wide risks
+loopback IPC); scrypt N left at 2^15 (descriptor supports an Argon2id upgrade without format change);
+single tsconfig keeps `DOM` lib in the main process (latent, non-breaking).

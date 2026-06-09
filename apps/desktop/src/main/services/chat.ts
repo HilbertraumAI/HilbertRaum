@@ -30,6 +30,17 @@ function nowIso(): string {
   return new Date().toISOString()
 }
 
+/**
+ * True when a streaming error is the result of a user Stop (an aborted signal)
+ * rather than a real failure. The mock runtime returns cleanly on abort, but a real
+ * `fetch`-backed runtime rejects the in-flight request with an `AbortError` — both
+ * must be treated as a normal end so the partial reply is still persisted.
+ */
+export function isAbortError(err: unknown, signal?: AbortSignal): boolean {
+  if (signal?.aborted) return true
+  return err instanceof Error && err.name === 'AbortError'
+}
+
 interface ConversationRow {
   id: string
   title: string
@@ -223,9 +234,15 @@ export async function generateAssistantMessage(
     signal: opts.signal,
     ...opts.runtimeOptions
   })
-  for await (const token of stream) {
-    content += token
-    opts.onToken?.(token)
+  try {
+    for await (const token of stream) {
+      content += token
+      opts.onToken?.(token)
+    }
+  } catch (err) {
+    // A user Stop aborts the stream; persist the partial text and return normally.
+    // Any other error is a real failure and propagates to the IPC layer.
+    if (!isAbortError(err, opts.signal)) throw err
   }
   // Persist whatever was produced — on a stop, that is the partial text so far.
   return appendMessage(db, { conversationId, role: 'assistant', content })

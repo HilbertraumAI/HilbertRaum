@@ -26,6 +26,22 @@ interface ChatCompletionChunk {
   choices?: Array<{ delta?: { content?: string } }>
 }
 
+/** Parse one SSE `data:` line → a delta to yield, a `[DONE]` sentinel, or nothing. */
+function parseSseLine(line: string): { delta?: string; done?: boolean } {
+  const t = line.trim()
+  if (!t.startsWith('data:')) return {}
+  const data = t.slice(5).trim()
+  if (data === '[DONE]') return { done: true }
+  try {
+    const json = JSON.parse(data) as ChatCompletionChunk
+    const delta = json.choices?.[0]?.delta?.content
+    if (typeof delta === 'string' && delta.length > 0) return { delta }
+  } catch {
+    // Ignore non-JSON keep-alives / partial frames; the next read completes them.
+  }
+  return {}
+}
+
 /**
  * Parse a Server-Sent-Events stream of OpenAI chat-completion chunks, yielding each
  * text delta. Handles partial lines across reads, ignores keep-alive/comment lines,
@@ -47,20 +63,17 @@ export async function* readChatSSE(
       buffer += decoder.decode(value, { stream: true })
       let nl: number
       while ((nl = buffer.indexOf('\n')) >= 0) {
-        const line = buffer.slice(0, nl).trim()
+        const line = buffer.slice(0, nl)
         buffer = buffer.slice(nl + 1)
-        if (!line.startsWith('data:')) continue
-        const data = line.slice(5).trim()
-        if (data === '[DONE]') return
-        try {
-          const json = JSON.parse(data) as ChatCompletionChunk
-          const delta = json.choices?.[0]?.delta?.content
-          if (typeof delta === 'string' && delta.length > 0) yield delta
-        } catch {
-          // Ignore non-JSON keep-alives / partial frames; the next read completes them.
-        }
+        const r = parseSseLine(line)
+        if (r.done) return
+        if (r.delta) yield r.delta
       }
     }
+    // Flush any final line the server sent without a trailing newline before closing.
+    buffer += decoder.decode()
+    const r = parseSseLine(buffer)
+    if (r.delta) yield r.delta
   } finally {
     try {
       await reader.cancel()

@@ -112,6 +112,9 @@ export function assertOfflinePosture(deps: AssertOfflinePostureDeps): () => void
   return installOfflineNetworkGuard({
     offline: true,
     onViolation: (host) =>
-      deps.warn('Offline posture: blocked-by-design remote connection attempt detected', { host })
+      // Detection-only: the connect is LOGGED, not blocked (blocking net.Socket app-wide
+      // could break loopback IPC / the sidecar). The core path makes no remote calls, so
+      // this firing at all indicates a regression worth investigating.
+      deps.warn('Offline posture: remote connection attempt detected (logged, not blocked)', { host })
   })
 }

@@ -45,7 +45,9 @@ describe('E5Embedder', () => {
     binPath: '/bin/llama-server',
     modelPath: '/models/e5.gguf',
     findPort: async () => 52000,
-    healthIntervalMs: 1
+    healthIntervalMs: 1,
+    // The fake server returns 2-dim vectors; declare that so the width guard accepts them.
+    dimensions: 2
   }
 
   it('embeds via the loopback server and L2-normalizes the result', async () => {
@@ -99,6 +101,20 @@ describe('E5Embedder', () => {
     const { spawn } = fakeSpawn()
     const embedder = new E5Embedder({ ...base, spawn, fetchImpl: embedFetch([[1, 0]]) })
     await expect(embedder.embed(['a', 'b'])).rejects.toThrow(/count mismatch/)
+    await embedder.stop()
+  })
+
+  it('throws on a wrong-width vector instead of storing a 0/short-dim embedding', async () => {
+    const { spawn } = fakeSpawn()
+    // Declares 384 dims but the server returns a 2-dim (or empty) vector → reject, so the
+    // document fails rather than persisting an un-searchable row (H4).
+    const embedder = new E5Embedder({
+      ...base,
+      dimensions: 384,
+      spawn,
+      fetchImpl: embedFetch([[1, 0]])
+    })
+    await expect(embedder.embed(['a'])).rejects.toThrow(/dimension mismatch/)
     await embedder.stop()
   })
 })

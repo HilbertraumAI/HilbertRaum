@@ -117,6 +117,8 @@ export interface LlamaServerOptions {
 
 const DEFAULT_HEALTH_TIMEOUT_MS = 60_000
 const DEFAULT_HEALTH_INTERVAL_MS = 250
+/** Per-probe timeout so a hung (accepts-but-never-responds) server can't stall the poll. */
+const HEALTH_PROBE_TIMEOUT_MS = 3_000
 
 /**
  * Owns one `llama-server` child process bound to loopback. Spawns it, waits for the
@@ -182,8 +184,12 @@ export class LlamaServer {
     this.exited = false
     this.port = await this.findPort(this.host)
 
+    // stdin ignored; stdout discarded; stderr inherited. We never READ the child's pipes
+    // (health/chat go over HTTP), and a piped-but-undrained stdout would fill the OS pipe
+    // buffer and BLOCK a chatty `llama-server`. `inherit` lets the OS drain stderr and
+    // keeps its logs visible in a dev console.
     const child = this.spawn(this.opts.binPath, this.buildArgs(this.port), {
-      stdio: ['ignore', 'pipe', 'pipe']
+      stdio: ['ignore', 'ignore', 'inherit']
     })
     this.child = child
     child.once('error', (err: unknown) => {
@@ -222,7 +228,12 @@ export class LlamaServer {
   async health(): Promise<HealthStatus> {
     if (this.port == null) return { healthy: false, message: 'Not started', port: null }
     try {
-      const res = await this.fetch('/health', { method: 'GET' })
+      // Bound each probe: a server that accepts the socket but never responds would
+      // otherwise hang the await and the deadline check below would never be reached.
+      const res = await this.fetch('/health', {
+        method: 'GET',
+        signal: AbortSignal.timeout(HEALTH_PROBE_TIMEOUT_MS)
+      })
       const healthy = res.ok
       return {
         healthy,

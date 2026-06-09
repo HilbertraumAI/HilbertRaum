@@ -13,7 +13,8 @@ import {
   recommendModelId,
   discoverManifests,
   selectModel,
-  resolveManifestsDir
+  resolveManifestsDir,
+  weightPath
 } from '../../src/main/services/models'
 import { validateManifest, type ModelManifest } from '../../src/shared/manifest'
 
@@ -76,6 +77,19 @@ describe('checksum verification', () => {
     const res = await verifyChecksum(file, 'REPLACE_WITH_REAL_HASH')
     expect(res.matched).toBe(null)
     expect(res.exists).toBe(true)
+  })
+})
+
+describe('weightPath', () => {
+  it('resolves a normal relative local_path under the drive root', () => {
+    const p = weightPath('/drive', asManifest())
+    expect(p).toBe(join('/drive', 'models/chat/qwen3-4b-instruct-q4.gguf'))
+  })
+
+  it('rejects a local_path that escapes the drive root', () => {
+    expect(() => weightPath('/drive', asManifest({ local_path: '../../etc/passwd' }))).toThrow(
+      /escapes the drive root/
+    )
   })
 })
 

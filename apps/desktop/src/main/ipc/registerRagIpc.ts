@@ -37,6 +37,11 @@ export function registerRagIpc(ctx: AppContext): void {
         throw new Error('No model is running. Select and start a model on the Models screen first.')
       }
 
+      // One active stream per conversation (shared registry with plain chat).
+      if (inFlightStreams.has(conversationId)) {
+        throw new Error('A response is already being generated for this conversation.')
+      }
+
       const text = question.trim()
       if (!text) throw new Error('Cannot send an empty question.')
       appendMessage(ctx.db, { conversationId, role: 'user', content: text })
@@ -74,7 +79,8 @@ export function registerRagIpc(ctx: AppContext): void {
         }
         throw err
       } finally {
-        inFlightStreams.delete(conversationId)
+        // Only clear our own entry — a later stream may already own this key.
+        if (inFlightStreams.get(conversationId) === controller) inFlightStreams.delete(conversationId)
       }
     }
   )

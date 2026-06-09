@@ -234,6 +234,13 @@ export interface DocumentInfo {
   status: IngestionStatus
   errorMessage: string | null
   chunkCount: number
+  /**
+   * True when the document is indexed but its vectors were produced by a DIFFERENT
+   * embedding model than the active one, so document search (scoped to the active model)
+   * can no longer find it. Re-indexing re-embeds it with the active model. Undefined when
+   * not evaluated (no active embedder context).
+   */
+  staleEmbeddings?: boolean
   createdAt: string
   updatedAt: string
 }

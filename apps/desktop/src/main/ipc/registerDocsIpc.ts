@@ -10,6 +10,7 @@ import {
   expandPaths,
   listDocuments,
   processDocument,
+  reconcileStuckDocuments,
   reindexDocument
 } from '../services/ingestion'
 import { supportedExtensions } from '../services/ingestion/parsers'
@@ -30,6 +31,18 @@ export function registerDocsIpc(ctx: AppContext): void {
   const storeDir = documentsDir(ctx.paths.workspacePath)
   // Ephemeral per-import aggregates, keyed by job id.
   const jobs = new Map<string, ImportJobStatus>()
+  // Captured once: rows left non-terminal from before this moment belong to a previous
+  // run, so they can be safely reconciled to `failed` (see reconcileStuckDocuments).
+  const processStartedAt = new Date().toISOString()
+  let reconciled = false
+
+  // DB-backed handlers require an unlocked workspace; surface a clean message instead of
+  // the raw "Workspace is locked" the `ctx.db` getter would throw mid-operation.
+  const requireUnlocked = (): void => {
+    if (!ctx.workspace.isUnlocked()) {
+      throw new Error('Workspace is locked. Unlock it to manage documents.')
+    }
+  }
 
   // Embedding dependencies for the ingestion pipeline (Phase 5). The active embedding
   // model id (settings) tags each vector; it falls back to the embedder's own id.
@@ -65,6 +78,7 @@ export function registerDocsIpc(ctx: AppContext): void {
   })
 
   ipcMain.handle(IPC.importDocuments, (_e, paths: string[]): ImportJob => {
+    requireUnlocked()
     const files = expandPaths(paths ?? [])
     const documentIds = files.map((f) => createQueuedDocument(ctx.db, f).id)
 
@@ -105,14 +119,27 @@ export function registerDocsIpc(ctx: AppContext): void {
     return { jobId, total: 0, completed: 0, failed: 0, done: true }
   })
 
-  ipcMain.handle(IPC.listDocuments, (): DocumentInfo[] => listDocuments(ctx.db))
+  ipcMain.handle(IPC.listDocuments, (): DocumentInfo[] => {
+    requireUnlocked()
+    // First list after unlock: clear out any documents stuck mid-ingestion by a prior run.
+    if (!reconciled) {
+      reconciled = true
+      const n = reconcileStuckDocuments(ctx.db, processStartedAt)
+      if (n > 0) log.warn('Reconciled interrupted document ingestions', { count: n })
+    }
+    // Flag docs whose vectors were produced by a different embedder than the active one
+    // (search is scoped to `ctx.embedder.id`), so the UI can prompt a re-index.
+    return listDocuments(ctx.db, ctx.embedder.id)
+  })
 
   ipcMain.handle(IPC.deleteDocument, (_e, documentId: string): void => {
+    requireUnlocked()
     log.info('Delete document', { documentId })
     deleteDocument(ctx.db, documentId)
   })
 
   ipcMain.handle(IPC.reindexDocument, (_e, documentId: string): Promise<DocumentInfo> => {
+    requireUnlocked()
     log.info('Re-index document', { documentId })
     return reindexDocument(ctx.db, storeDir, documentId, embeddingDeps())
   })

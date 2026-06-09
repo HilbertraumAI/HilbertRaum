@@ -74,6 +74,14 @@ describe('readChatSSE', () => {
     expect(out.join('')).toBe('Hello world!')
   })
 
+  it('flushes a final data: line that has no trailing newline before close', async () => {
+    // Server closes the stream right after the last delta with no terminating "\n".
+    const stream = sseStream([chatChunk('Hello'), 'data: {"choices":[{"delta":{"content":" end"}}]}'])
+    const out: string[] = []
+    for await (const t of readChatSSE(stream)) out.push(t)
+    expect(out.join('')).toBe('Hello end')
+  })
+
   it('stops promptly when the signal is aborted', async () => {
     const controller = new AbortController()
     const stream = sseStream([chatChunk('a'), chatChunk('b'), chatChunk('c')])

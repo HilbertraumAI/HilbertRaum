@@ -17,6 +17,6 @@
     "lint": "npm run lint --workspace apps/desktop"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=22.5"
   }
 }

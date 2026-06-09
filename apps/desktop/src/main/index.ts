@@ -120,7 +120,9 @@ function initBackend(): void {
 
   // Phase 8: log the offline posture and install a defensive tripwire that flags any
   // attempt to reach a REMOTE host while offline (loopback is exempt — dev renderer +
-  // future llama.cpp sidecar bind 127.0.0.1). The guard only logs; it never blocks.
+  // llama.cpp sidecar bind 127.0.0.1). The guard only logs; it never blocks. It is
+  // installed in ALL builds when offline (not just dev) so a production regression that
+  // tried to phone home would still be recorded in the local log.
   // When the workspace is locked the allowNetwork setting is unreadable → treat as off.
   const unlocked = workspace.isUnlocked()
   const status = buildPolicyStatus(
@@ -130,7 +132,7 @@ function initBackend(): void {
   )
   assertOfflinePosture({
     posture: { offline: status.offlineMode, networkAllowed: status.networkAllowed },
-    installGuard: isDev || (unlocked && getSettings(ctx.db).developerMode),
+    installGuard: true,
     log: (m, meta) => log.info(m, meta),
     warn: (m, meta) => log.warn(m, meta)
   })
@@ -176,9 +178,16 @@ function createWindow(): void {
 
   mainWindow.once('ready-to-show', () => mainWindow?.show())
 
-  // Open external links in the OS browser, never inside the app window.
+  // Open external links in the OS browser, never inside the app window — but only safe
+  // web schemes. Handing an arbitrary renderer-supplied URL (e.g. file://, smb://) to the
+  // OS handler is a known Electron pitfall, so anything other than http(s) is dropped.
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    void shell.openExternal(url)
+    try {
+      const { protocol } = new URL(url)
+      if (protocol === 'https:' || protocol === 'http:') void shell.openExternal(url)
+    } catch {
+      /* malformed URL → ignore */
+    }
     return { action: 'deny' }
   })
 
@@ -208,18 +217,55 @@ app.whenReady().then(() => {
   })
 })
 
-app.on('will-quit', () => {
-  // Stop the active runtime + embedder sidecars (real llama.cpp servers in Phase 10)
-  // before quitting so no orphaned `llama-server` process survives.
-  void ctx?.runtime.stop()
-  void ctx?.embedder.stop?.()
-  // Phase 9: re-encrypt + shred the plaintext working DB on exit (encrypted vault only;
-  // a no-op for plaintext_dev). Synchronous so it completes before the process exits.
+let isShuttingDown = false
+
+/**
+ * Graceful shutdown: stop the runtime + embedder sidecars (real llama.cpp servers in
+ * Phase 10) and AWAIT their exit so no orphaned `llama-server` process survives, then
+ * re-encrypt + shred the plaintext working DB (encrypted vault only). `runtime.stop()`
+ * waits up to a couple of seconds for the child to die, so this MUST be awaited — a
+ * fire-and-forget would let Electron tear down mid-kill and orphan the children.
+ */
+async function shutdown(): Promise<void> {
+  try {
+    await Promise.allSettled([
+      ctx?.runtime.stop() ?? Promise.resolve(),
+      ctx?.embedder.stop?.() ?? Promise.resolve()
+    ])
+  } catch (err) {
+    log.error('Error stopping sidecars on quit', String(err))
+  }
+  // Phase 9: lock (re-encrypt + shred) the plaintext working DB. No-op for plaintext_dev.
   try {
     ctx?.workspace.lock()
   } catch (err) {
     log.error('Failed to lock workspace on quit', String(err))
   }
+}
+
+app.on('will-quit', (event) => {
+  if (isShuttingDown) return // cleanup already ran → let the real quit proceed
+  event.preventDefault()
+  isShuttingDown = true
+  void shutdown().finally(() => app.exit(0))
+})
+
+// Last-resort crash safety: a hard `uncaughtException` skips `will-quit`, so try to lock the
+// vault (re-encrypt + shred the plaintext working DB) before the process dies. Best-effort
+// and synchronous; the startup crash-recovery shred is the robust backstop on next launch.
+process.on('uncaughtException', (err) => {
+  try {
+    log.error('Uncaught exception', String(err))
+    ctx?.workspace.lock()
+  } catch {
+    /* best-effort */
+  }
+  process.exit(1)
+})
+// An unhandled rejection is usually NOT fatal (e.g. a stray `void promise()`), so only log
+// it — force-exiting here would turn a benign rejection into an app crash.
+process.on('unhandledRejection', (reason) => {
+  log.warn('Unhandled rejection', { reason: String(reason) })
 })
 
 app.on('window-all-closed', () => {

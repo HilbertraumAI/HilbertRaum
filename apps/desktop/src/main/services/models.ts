@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { createReadStream, existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve, sep } from 'node:path'
 import { parse as parseYaml } from 'yaml'
 import {
   isRealSha256,
@@ -126,9 +126,20 @@ export async function verifyChecksum(filePath: string, expected: string): Promis
   return { exists: true, matched: actual === expected, actual }
 }
 
-/** Absolute path of a manifest's weight file. `local_path` is relative to the drive root. */
+/**
+ * Absolute path of a manifest's weight file. `local_path` is relative to the drive root.
+ * A manifest on a prepared drive lives in a user-writable location, so we reject a
+ * `local_path` that escapes the drive root (`..`/absolute) before it could become a
+ * `llama-server --model` argument pointing at an arbitrary file.
+ */
 export function weightPath(rootPath: string, manifest: ModelManifest): string {
-  return join(rootPath, manifest.localPath)
+  const full = join(rootPath, manifest.localPath)
+  const base = resolve(rootPath)
+  const resolved = resolve(full)
+  if (resolved !== base && !resolved.startsWith(base + sep)) {
+    throw new Error(`Manifest local_path escapes the drive root: ${manifest.localPath}`)
+  }
+  return full
 }
 
 export interface InstallStateOptions {

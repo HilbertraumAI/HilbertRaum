@@ -164,6 +164,18 @@ export function cleanSidecars(dbPath: string): void {
   }
 }
 
+/**
+ * Crash recovery for an encrypted vault: shred a leftover plaintext working DB and its
+ * WAL/SHM sidecars. For an encrypted vault the working file is transient (the `.enc` is
+ * the source of truth), so a `paid.sqlite` found at rest means a previous run was killed
+ * before lock-on-quit — the decrypted database must not linger. MUST NOT be called for
+ * `plaintext_dev`, where the working file IS the database.
+ */
+export function shredStalePlaintext(vaultPaths: VaultPaths): void {
+  shredFile(vaultPaths.dbPath)
+  cleanSidecars(vaultPaths.dbPath)
+}
+
 // ---- create / unlock / lock ------------------------------------------------------
 
 /**
@@ -219,7 +231,9 @@ export function unlockEncryptedVault(vaultPaths: VaultPaths, password: string): 
   if (!verifyKey(key, blobFromJson(descriptor.verifier))) {
     throw new WrongPasswordError()
   }
-  // Verified: decrypt to the working file and open it.
+  // Verified: clean any stale WAL/SHM from a crash first (otherwise SQLite would replay
+  // them onto the freshly-decrypted snapshot and corrupt it), then decrypt + open.
+  cleanSidecars(vaultPaths.dbPath)
   decryptFile(vaultPaths.encPath, vaultPaths.dbPath, key)
   const db = openDatabase(vaultPaths.dbPath)
   seedSettings(db)
@@ -312,7 +326,13 @@ export class WorkspaceController {
    * descriptor → open plaintext if permitted (dev), else UNINITIALIZED (await onboarding).
    */
   init(): void {
-    if (this.descriptor?.mode === 'encrypted') return // locked; await unlock
+    if (this.descriptor?.mode === 'encrypted') {
+      // Crash recovery: an encrypted vault must have NO plaintext working file at rest.
+      // If a previous run was killed before lock-on-quit ran, shred the leftover so the
+      // decrypted database (+ WAL/SHM) never lingers on disk. Safe — see shredStalePlaintext.
+      shredStalePlaintext(this.vaultPaths)
+      return // locked; await unlock
+    }
     if (this.allowPlaintext()) this.openPlaintext()
     // else uninitialized → onboarding will create an encrypted workspace
   }

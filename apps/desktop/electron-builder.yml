@@ -24,10 +24,17 @@ directories:
 
 # What goes inside app.asar. electron-builder ships production `dependencies`
 # automatically (pdfjs-dist / mammoth / papaparse / yaml — the externalized parser libs),
-# so the lazy require()s resolve at runtime.
+# so the lazy require()s resolve at runtime. In this npm workspace those packages are
+# HOISTED to the repo-root node_modules; `includeSubNodeModules: true` makes the collector
+# follow hoisted/nested trees so mammoth's transitive deps come along too. ALWAYS smoke-test
+# a PDF/DOCX/CSV import from the produced .exe — a missing externalized dep only surfaces at
+# runtime, not in the green gate (see docs/packaging.md + BUILD_STATE R2).
 files:
   - out/**/*
   - package.json
+includeSubNodeModules: true
+# No native addons (node:sqlite is built into Electron; parsers are pure-JS) → skip rebuild.
+npmRebuild: false
 
 # Model manifests are the ONLY model metadata in git. Ship them beside app.asar so the
 # packaged main process finds them: resolveManifestsDir(app.getAppPath()) walks up from

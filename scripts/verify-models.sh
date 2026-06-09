@@ -45,7 +45,13 @@ field() { sed -n "s/^[[:space:]]*$2[[:space:]]*:[[:space:]]*//p" "$1" | head -n1
 is_real_sha() { [[ "$1" =~ ^[a-f0-9]{64}$ ]]; }
 
 had_mismatch=0
-mapfile -t MANIFEST_FILES < <(find "$MANIFESTS_DIR" \( -name '*.yaml' -o -name '*.yml' \) -type f | sort)
+# Collect manifest paths WITHOUT `mapfile` (a Bash 4+ builtin absent from macOS's stock
+# Bash 3.2) and WITHOUT `sort -z` (not on BSD/macOS sort). Newline-delimited read is
+# portable; manifest filenames are controlled and contain no newlines.
+MANIFEST_FILES=()
+while IFS= read -r mf; do
+  [ -n "$mf" ] && MANIFEST_FILES+=("$mf")
+done < <(find "$MANIFESTS_DIR" \( -name '*.yaml' -o -name '*.yml' \) -type f | sort)
 
 for mf in "${MANIFEST_FILES[@]}"; do
   id="$(field "$mf" id)"

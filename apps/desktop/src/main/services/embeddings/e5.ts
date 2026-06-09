@@ -106,7 +106,18 @@ export class E5Embedder implements Embedder {
     }
     // Order by `index` so the result lines up with the input batch.
     const ordered = [...data].sort((a, b) => (a.index ?? 0) - (b.index ?? 0))
-    return ordered.map((d) => l2normalize(Float32Array.from(d.embedding ?? [])))
+    return ordered.map((d) => {
+      // Reject a missing/short vector rather than storing a 0/short-dim row: such a row
+      // is silently un-searchable (the VectorIndex dimension guard skips it) and the
+      // document would still report `indexed`. Failing here surfaces it as a doc error.
+      const raw = d.embedding ?? []
+      if (raw.length !== this.dimensions) {
+        throw new Error(
+          `Embedding dimension mismatch: expected ${this.dimensions}, got ${raw.length}`
+        )
+      }
+      return l2normalize(Float32Array.from(raw))
+    })
   }
 
   /** Kill the embeddings sidecar (no-op if it was never started). */

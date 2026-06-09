@@ -148,7 +148,12 @@ function Write-JsonFile([string]$relPath, $obj) {
     Write-Host "  skip $relPath (exists; use -Force to overwrite)" -ForegroundColor Yellow
     return
   }
-  Set-Content -Path $full -Value $json -Encoding UTF8
+  # Write UTF-8 WITHOUT a BOM: Windows PowerShell 5.1 `Set-Content -Encoding UTF8` prepends
+  # a BOM, which makes Node's `JSON.parse` (in the app's policy/drive loaders) throw. The
+  # .NET writer with UTF8Encoding($false) emits clean UTF-8 the app parses identically to
+  # the bash-prepared files.
+  $utf8NoBom = New-Object System.Text.UTF8Encoding $false
+  [System.IO.File]::WriteAllText($full, $json, $utf8NoBom)
   Write-Host "  wrote $relPath"
 }
 

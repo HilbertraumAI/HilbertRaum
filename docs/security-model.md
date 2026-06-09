@@ -41,8 +41,8 @@ the `index.html` meta tag (defence in depth).
   connect-src 'self'; img-src 'self' data:; font-src 'self'; object-src 'none'; base-uri 'none';
   frame-ancestors 'none'`. No remote origins are reachable from the renderer.
 - **Development** (HMR-compatible): relaxes `connect-src` to allow `ws://localhost:*` /
-  `http://localhost:*` and permits `'unsafe-inline'`/`'unsafe-eval'` for Vite hot-reload. Without
-  this split, `npm run dev` would break.
+  `http://localhost:*`, and adds `'unsafe-inline'`/`'unsafe-eval'` to `script-src` (and
+  `'unsafe-inline'` to `style-src`) for Vite hot-reload. Without this split, `npm run dev` would break.
 
 ## Offline posture (spec §3.6)
 
@@ -75,9 +75,10 @@ The renderer distinguishes "off by choice" from "disabled by policy" via `Policy
 (`getPolicy()` IPC) and shows it on the **Privacy & Offline** screen and the sidebar badge.
 
 ### 2. Startup self-check (`services/offlineGuard.ts`)
-At startup (`initBackend()`), `assertOfflinePosture()` logs the offline posture and, in
-dev/developer mode, installs a defensive tripwire over `net.Socket.prototype.connect`. While
-offline, any connection to a **remote** host is logged as a violation.
+At startup (`initBackend()`), `assertOfflinePosture()` logs the offline posture and, while offline,
+installs a defensive tripwire over `net.Socket.prototype.connect` in **all builds** (so a production
+regression that tried to phone home would still be recorded locally). While offline, any connection to
+a **remote** host is logged as a violation.
 
 **Loopback is not "network".** `127.0.0.0/8`, `::1`, and `localhost` are explicitly exempt — the dev
 renderer loads from `http://localhost` today and the Phase-10 `llama.cpp` sidecar binds `127.0.0.1`.

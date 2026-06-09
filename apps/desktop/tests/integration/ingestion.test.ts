@@ -9,9 +9,11 @@ import {
   reindexDocument,
   deleteDocument,
   listDocuments,
+  reconcileStuckDocuments,
   expandPaths,
   documentsDir
 } from '../../src/main/services/ingestion'
+import { createMockEmbedder } from '../../src/main/services/embeddings/mock'
 import { selectParser } from '../../src/main/services/ingestion/parsers'
 import { TxtParser } from '../../src/main/services/ingestion/parsers/txt'
 import { MarkdownParser } from '../../src/main/services/ingestion/parsers/markdown'
@@ -211,6 +213,47 @@ describe('ingestion pipeline', () => {
       n: number
     }
     expect(n.n).toBe(0)
+  })
+})
+
+describe('reconcileStuckDocuments', () => {
+  it('fails documents left non-terminal by a previous run, sparing live ones', () => {
+    const db = freshDb()
+    const status = (id: string): string =>
+      (db.prepare('SELECT status FROM documents WHERE id = ?').get(id) as { status: string }).status
+
+    const stuck = createQueuedDocument(db, write('s.txt', 'x'))
+    // Simulate a crash mid-ingestion in a PREVIOUS run: non-terminal + an old timestamp.
+    db.prepare("UPDATE documents SET status = 'extracting', updated_at = ? WHERE id = ?").run(
+      '2000-01-01T00:00:00.000Z',
+      stuck.id
+    )
+    // A live row from THIS run keeps its fresh (now) timestamp.
+    const live = createQueuedDocument(db, write('l.txt', 'y'))
+    db.prepare("UPDATE documents SET status = 'embedding' WHERE id = ?").run(live.id)
+
+    const n = reconcileStuckDocuments(db, '2020-01-01T00:00:00.000Z')
+    expect(n).toBe(1)
+    expect(status(stuck.id)).toBe('failed')
+    expect(status(live.id)).toBe('embedding') // spared (updated after the cutoff)
+  })
+})
+
+describe('listDocuments stale-embedding flag', () => {
+  it('flags indexed docs whose vectors were produced by a different embedder', async () => {
+    const db = freshDb()
+    const storeDir = store()
+    const embedder = createMockEmbedder()
+    const src = write('e.txt', 'alpha beta gamma delta epsilon zeta')
+    const q = createQueuedDocument(db, src)
+    await processDocument(db, storeDir, q.id, { embedder, embeddingModelId: embedder.id })
+
+    // Active model matches the vectors → not stale.
+    expect(listDocuments(db, embedder.id)[0].staleEmbeddings).toBe(false)
+    // Active model differs → stale (search is scoped by model id, so it can't find it).
+    expect(listDocuments(db, 'some-other-model')[0].staleEmbeddings).toBe(true)
+    // No active-model context → not evaluated.
+    expect(listDocuments(db)[0].staleEmbeddings).toBeUndefined()
   })
 })
 

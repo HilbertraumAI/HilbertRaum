@@ -43,7 +43,10 @@ Private AI Drive Lite is a **local-first, offline** application. Full details li
   labelled, and is not the commercial default.
 - **A decrypted working copy of the database exists on disk while the app is unlocked.**
   `node:sqlite` requires a real file, so the encrypted workspace is decrypted to `paid.sqlite` on the
-  drive while running and re-encrypted (and the plaintext shredded) on lock/quit.
+  drive while running and re-encrypted (and the plaintext shredded) on lock/quit. A hard crash or
+  power loss can leave that plaintext file behind; the app shreds any such stray plaintext DB (and its
+  WAL/SHM) on the next startup before re-unlocking, and attempts a best-effort lock on an uncaught
+  fatal error. (Secure erase is still best-effort on SSDs — see below.)
 - **Secure erase is best-effort.** Shredding overwrites then deletes the plaintext copy, but on SSDs
   wear-levelling may leave the original blocks recoverable.
 - **No password recovery.** The workspace password is never stored; if it is lost, the encrypted

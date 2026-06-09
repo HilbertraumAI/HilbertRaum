@@ -126,7 +126,9 @@ if ($Generate) {
   $configDir = Join-Path $Target 'config'
   New-Item -ItemType Directory -Force -Path $configDir | Out-Null
   $dst = Join-Path $configDir 'checksums.json'
-  Set-Content -Path $dst -Value ($checksums | ConvertTo-Json -Depth 6) -Encoding UTF8
+  # UTF-8 without a BOM (PS 5.1 `-Encoding UTF8` would prepend one, which breaks JSON.parse).
+  $utf8NoBom = New-Object System.Text.UTF8Encoding $false
+  [System.IO.File]::WriteAllText($dst, ($checksums | ConvertTo-Json -Depth 6), $utf8NoBom)
   Write-Host "Wrote $dst" -ForegroundColor Cyan
 }
 

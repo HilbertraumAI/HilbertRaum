@@ -109,9 +109,9 @@ export function DocumentsScreen(): JSX.Element {
     <div className="screen">
       <h1>Documents</h1>
       <p className="lead">
-        Import documents to chat over them. Files are parsed, split into overlapping chunks, and
-        copied into your workspace — everything stays local. Embeddings &amp; document Q&amp;A arrive
-        in the next phases.
+        Import documents to chat over them. Files are parsed, split into overlapping chunks,
+        embedded, and copied into your workspace — everything stays local. Ask questions about them
+        from the Chat screen&apos;s &quot;Ask documents&quot; mode.
       </p>
 
       <div className="actions">
@@ -161,6 +161,11 @@ export function DocumentsScreen(): JSX.Element {
           </div>
           {d.status === 'failed' && d.errorMessage && (
             <div className="doc-error">⚠ {d.errorMessage}</div>
+          )}
+          {d.staleEmbeddings && (
+            <div className="doc-error">
+              ⚠ Indexed with a different embedding model — re-index so document search can find it.
+            </div>
           )}
           <div className="doc-actions">
             <button

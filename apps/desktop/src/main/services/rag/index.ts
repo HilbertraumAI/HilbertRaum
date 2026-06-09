@@ -3,7 +3,7 @@ import type { AppSettings, Citation, Message } from '../../../shared/types'
 import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../runtime'
 import { type Embedder, VectorIndex } from '../embeddings'
 import { approxTokenCount } from '../ingestion/chunker'
-import { appendMessage, BASE_SYSTEM_PROMPT, listMessages } from '../chat'
+import { appendMessage, BASE_SYSTEM_PROMPT, isAbortError, listMessages } from '../chat'
 
 // RAG service (spec §7.8). Turns a question into a grounded, cited answer:
 //
@@ -253,9 +253,15 @@ export async function generateGroundedAnswer(
   const messages = buildGroundedChatMessages(db, conversationId, grounded)
   let content = ''
   const stream = runtime.chatStream(messages, { signal: opts.signal, ...opts.runtimeOptions })
-  for await (const token of stream) {
-    content += token
-    opts.onToken?.(token)
+  try {
+    for await (const token of stream) {
+      content += token
+      opts.onToken?.(token)
+    }
+  } catch (err) {
+    // A user Stop aborts the stream; persist the partial answer (still cited) and
+    // return normally. Any other error is a real failure and propagates.
+    if (!isAbortError(err, opts.signal)) throw err
   }
   // Persist the assistant turn with the computed citations (source of truth = retrieval).
   return appendMessage(db, { conversationId, role: 'assistant', content, citations })

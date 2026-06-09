@@ -92,7 +92,7 @@ function toStatus(value: string): IngestionStatus {
   return (VALID_STATUSES.has(value) ? value : 'failed') as IngestionStatus
 }
 
-function rowToInfo(row: DocumentRow, chunkCount: number): DocumentInfo {
+function rowToInfo(row: DocumentRow, chunkCount: number, staleEmbeddings?: boolean): DocumentInfo {
   return {
     id: row.id,
     title: row.title,
@@ -102,9 +102,25 @@ function rowToInfo(row: DocumentRow, chunkCount: number): DocumentInfo {
     status: toStatus(row.status),
     errorMessage: row.error_message,
     chunkCount,
+    staleEmbeddings,
     createdAt: row.created_at,
     updatedAt: row.updated_at
   }
+}
+
+/**
+ * Count a document's chunks that carry a vector under `modelId`. Used to detect an
+ * embedding-model mismatch: an indexed document with chunks but zero vectors under the
+ * active model is unreachable by search until re-indexed.
+ */
+function chunksEmbeddedUnder(db: Db, documentId: string, modelId: string): number {
+  const r = db
+    .prepare(
+      `SELECT COUNT(*) AS n FROM embeddings e JOIN chunks c ON e.chunk_id = c.id
+       WHERE c.document_id = ? AND e.embedding_model_id = ?`
+    )
+    .get(documentId, modelId) as unknown as { n: number }
+  return r.n
 }
 
 function getRow(db: Db, id: string): DocumentRow | null {
@@ -279,12 +295,41 @@ export async function reindexDocument(
   return processDocument(db, storeDir, documentId, deps)
 }
 
-/** List all non-deleted documents, newest first, with their chunk counts. */
-export function listDocuments(db: Db): DocumentInfo[] {
+/**
+ * Reset documents left in a non-terminal status by a previous run (the app was killed
+ * mid-ingestion) to `failed`, so the UI never shows a perpetual "in progress" with no
+ * running job. Only rows last touched BEFORE `beforeIso` are affected — a live in-session
+ * job continuously bumps `updated_at` past process start, so its rows are protected.
+ * Returns the number reset.
+ */
+export function reconcileStuckDocuments(db: Db, beforeIso: string): number {
+  const res = db
+    .prepare(
+      `UPDATE documents SET status = 'failed', error_message = ?, updated_at = ?
+       WHERE status IN ('queued','extracting','chunking','embedding') AND updated_at < ?`
+    )
+    .run('Ingestion was interrupted before it finished. Re-index to try again.', nowIso(), beforeIso)
+  return Number(res.changes ?? 0)
+}
+
+/**
+ * List all non-deleted documents, newest first, with their chunk counts. When
+ * `activeEmbeddingModelId` is provided, each indexed document is flagged `staleEmbeddings`
+ * if it has chunks but none embedded under the active model (an embedder switch left it
+ * unsearchable until re-indexed).
+ */
+export function listDocuments(db: Db, activeEmbeddingModelId?: string | null): DocumentInfo[] {
   const rows = db
     .prepare("SELECT * FROM documents WHERE status != 'deleted' ORDER BY created_at DESC, rowid DESC")
     .all() as unknown as DocumentRow[]
-  return rows.map((r) => rowToInfo(r, chunkCountFor(db, r.id)))
+  return rows.map((r) => {
+    const chunkCount = chunkCountFor(db, r.id)
+    let stale: boolean | undefined
+    if (activeEmbeddingModelId && r.status === 'indexed' && chunkCount > 0) {
+      stale = chunksEmbeddedUnder(db, r.id, activeEmbeddingModelId) === 0
+    }
+    return rowToInfo(r, chunkCount, stale)
+  })
 }
 
 export function getDocument(db: Db, id: string): DocumentInfo | null {
