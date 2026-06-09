@@ -59,7 +59,13 @@ manifests:
 |---|---|
 | TINY / UNKNOWN | `qwen3-1.7b-instruct-q4` |
 | LITE | `qwen3-4b-instruct-q4` |
-| BALANCED / PRO | `qwen3-8b-instruct-q4` |
+| BALANCED | `qwen3-8b-instruct-q4` |
+| PRO | `qwen3-14b-instruct-q4` (spec §7.3 "8B or 14B") |
+
+The larger `qwen3-30b-a3b-q4` (MoE) carries an **empty** `recommended_profiles`, so it is never
+auto-recommended — it stays selectable on the Models screen as a deliberate opt-in (it needs ~20 GB
+RAM but runs near-3B speed). Each profile is claimed by exactly one chat model, so the first-match
+`recommendModelId` is unambiguous.
 
 ## Warnings (spec §11.3 + §11.4)
 

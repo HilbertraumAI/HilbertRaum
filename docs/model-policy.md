@@ -12,15 +12,22 @@ _Last updated: 2026-06-09 (Phase 13 — added the model catalog sizes/RAM + the 
 ## Default model family
 **Qwen3 dense instruct**, quantized **GGUF**, run via `llama.cpp`. Apache-2.0 for many variants.
 
-| Role | Candidate | Size | Min RAM | License | Purpose |
+| Role | Candidate | Size | Min RAM | Auto-tier | Purpose |
 |---|---|---|---|---|---|
-| Chat small | Qwen3 1.7B Instruct Q4 | ~1.2 GB | 6 GB | Apache-2.0 | Weak laptops (TINY) |
-| Chat balanced | Qwen3 4B Instruct Q4 | ~2.7 GB | 8 GB | Apache-2.0 | Default (LITE) |
-| Chat better | Qwen3 8B Instruct Q4 | ~5.0 GB | 16 GB | Apache-2.0 | 16 GB+ (BALANCED/PRO) |
-| Embeddings | Multilingual E5 Small (Q8) | ~0.5 GB | 4 GB | MIT | Local document search (needed for Q&A) |
+| Chat small | Qwen3 1.7B Instruct Q4 | ~1.2 GB | 6 GB | TINY / UNKNOWN | Weak laptops, safe fallback |
+| Chat balanced | Qwen3 4B Instruct Q4 | ~2.7 GB | 8 GB | LITE | Lite default |
+| Chat better | Qwen3 8B Instruct Q4 | ~5.0 GB | 16 GB | BALANCED | 16 GB+ laptops |
+| Chat best dense | Qwen3 14B Instruct Q4 | ~9.3 GB | 16 GB | PRO | 32 GB+; the spec §7.3 PRO model — slower on CPU |
+| Chat MoE | Qwen3 30B-A3B (MoE) Q4 | ~18.6 GB | 24 GB | — (opt-in) | ~30B quality at ~3.3B *active*/token → near-3B speed; needs ~20 GB RAM |
+| Embeddings | Multilingual E5 Small (Q8) | ~0.5 GB | 4 GB | all | Local document search (needed for Q&A) |
 
-Sizes/RAM come from each manifest (`size_on_disk_gb` / `recommended_min_ram_gb`); download URLs live
-in the manifests' `download.url` (see the catalog with source links in the [README](../README.md)).
+All models are **Apache-2.0** (Qwen3) / **MIT** (E5). Sizes/RAM come from each manifest
+(`size_on_disk_gb` / `recommended_min_ram_gb`); download URLs live in the manifests' `download.url`
+(catalog with source links in the [README](../README.md)). **Auto-tier** is the hardware profile the
+benchmark auto-recommends the model for (`recommended_profiles`); the **30B-A3B MoE** has an empty
+list — it is selectable on the Models screen but never auto-recommended, since its download + RAM cost
+should be a deliberate choice. Adding a model is **manifest-only** (no code change): drop a YAML in
+`model-manifests/chat/` with a `download` block + a `recommended_profiles` list.
 
 ## Manifest format & parsing
 Manifests are **YAML**, parsed with the pure-JS [`yaml`](https://www.npmjs.com/package/yaml) package

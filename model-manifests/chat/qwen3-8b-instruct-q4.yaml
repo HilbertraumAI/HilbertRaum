@@ -20,8 +20,9 @@ download:
   size_bytes: 5000000000
   license_url: https://huggingface.co/Qwen/Qwen3-8B-GGUF/blob/main/LICENSE
 bundled_on_preconfigured_drive: false
-# Better answers on 16 GB+ machines or with a useful GPU (spec §7.3).
-recommended_profiles: [BALANCED, PRO]
+# Better answers on 16 GB+ machines (spec §7.3 BALANCED). PRO auto-recommends the 14B; the
+# 8B stays fully selectable (it is faster than the 14B if you prefer speed on a PRO laptop).
+recommended_profiles: [BALANCED]
 license_review:
   status: pending
   reviewed_by: null

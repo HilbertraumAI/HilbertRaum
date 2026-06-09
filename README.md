@@ -31,10 +31,11 @@ Current phase and progress are tracked in [`BUILD_STATE.md`](BUILD_STATE.md).
 ## What you need (DIY)
 
 - **A computer:** Windows (first-class), macOS, or Linux.
-- **RAM decides which model you can run** (see the table below): ~8 GB → the 1.7B model,
-  16 GB → 4B, 32 GB → 8B. The app benchmarks your machine and recommends one.
+- **RAM decides which model you can run** (the app benchmarks your machine and recommends one):
+  ~8 GB → 1.7B · 16 GB → 4B · 32 GB → 8B · 32 GB+ → 14B (or the 30B-A3B MoE for the best quality).
 - **Disk space:** ~**2 GB** for the smallest usable setup (one chat model + the embeddings model),
-  up to ~**6 GB** with the 8B model. A **USB-3 SSD** is recommended if you run from a portable drive.
+  up to ~**10 GB** for the 14B or ~**19 GB** for the 30B-A3B MoE. A **USB-3 SSD** is recommended for
+  a portable drive.
 - **To build from source:** **Node.js ≥ 22** (24 recommended) + **Git**.
 - **The AI itself** = a **GGUF model file** *plus* the **`llama.cpp` `llama-server` binary**. Neither
   ships in this repo (licensing + size); the steps below download and verify them, or you add them by
@@ -114,10 +115,16 @@ Downloaded by the scripts above (or add your own via a manifest). Weights are **
 | Qwen3 1.7B Instruct Q4 | Chat (small / weak laptops) | ~1.2 GB | 6 GB | Apache-2.0 | [Qwen/Qwen3-1.7B-GGUF](https://huggingface.co/Qwen/Qwen3-1.7B-GGUF) |
 | Qwen3 4B Instruct Q4 | Chat (balanced default) | ~2.7 GB | 8 GB | Apache-2.0 | [Qwen/Qwen3-4B-GGUF](https://huggingface.co/Qwen/Qwen3-4B-GGUF) |
 | Qwen3 8B Instruct Q4 | Chat (16 GB+ laptops) | ~5.0 GB | 16 GB | Apache-2.0 | [Qwen/Qwen3-8B-GGUF](https://huggingface.co/Qwen/Qwen3-8B-GGUF) |
+| Qwen3 14B Instruct Q4 | Chat (best dense, 32 GB+) | ~9.3 GB | 16 GB | Apache-2.0 | [Qwen/Qwen3-14B-GGUF](https://huggingface.co/Qwen/Qwen3-14B-GGUF) |
+| Qwen3 30B-A3B (MoE) Q4 | Chat (≈30B quality, ≈3B speed) | ~18.6 GB | 24 GB | Apache-2.0 | [Qwen/Qwen3-30B-A3B-GGUF](https://huggingface.co/Qwen/Qwen3-30B-A3B-GGUF) |
 | Multilingual E5 Small Q8 | Embeddings (document search) | ~0.5 GB | 4 GB | MIT | GGUF: [ChristianAzinn/…-gguf](https://huggingface.co/ChristianAzinn/multilingual-e5-small-gguf) · orig: [intfloat/…](https://huggingface.co/intfloat/multilingual-e5-small) |
 
-Document Q&A needs the **embeddings** model; chat needs **one** of the Qwen3 models. The full schema
-+ license policy is in **[`docs/model-policy.md`](docs/model-policy.md)**; per-model details live in
+Document Q&A needs the **embeddings** model; chat needs **one** of the Qwen3 models. The benchmark
+auto-recommends per hardware tier (TINY→1.7B, LITE→4B, BALANCED→8B, **PRO→14B**); the **30B-A3B MoE**
+is opt-in — it has ~30B-class quality but only ~3.3B *active* parameters per token, so it runs near
+small-model speed on CPU **if** its full ~18.6 GB fits in RAM (32 GB machines). Bigger **dense**
+models are smarter but slower on CPU — pick by your RAM. The full schema + license policy is in
+**[`docs/model-policy.md`](docs/model-policy.md)**; per-model details live in
 [`model-manifests/`](model-manifests).
 
 ## Two distribution paths

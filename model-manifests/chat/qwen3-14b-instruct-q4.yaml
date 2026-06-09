@@ -1,0 +1,31 @@
+id: qwen3-14b-instruct-q4
+display_name: Qwen3 14B Instruct Q4
+family: qwen3
+role: chat
+format: gguf
+runtime: llama_cpp
+license: apache-2.0
+size_on_disk_gb: 9.3
+recommended_min_ram_gb: 16
+recommended_ram_gb: 32
+recommended_context_tokens: 8192
+supports_thinking_mode: true
+supports_tools: false
+local_path: models/chat/qwen3-14b-instruct-q4.gguf
+sha256: REPLACE_WITH_REAL_HASH
+# Phase 12: where `fetch-models` downloads the weight from + what to verify it against.
+download:
+  url: https://huggingface.co/Qwen/Qwen3-14B-GGUF/resolve/main/Qwen3-14B-Q4_K_M.gguf?download=true
+  sha256: REPLACE_WITH_REAL_HASH
+  size_bytes: 9300000000
+  license_url: https://huggingface.co/Qwen/Qwen3-14B-GGUF/blob/main/LICENSE
+bundled_on_preconfigured_drive: false
+# The spec §7.3 PRO model ("Qwen3 8B or 14B"). A clear quality step up for 32 GB+ laptops;
+# noticeably slower than 8B on CPU (~3-5 tok/s), so it is the PRO auto-recommendation, not a
+# Lite default. The benchmark surfaces the honest "may run slowly" warning.
+recommended_profiles: [PRO]
+license_review:
+  status: pending
+  reviewed_by: null
+  reviewed_at: null
+  notes: "Qwen3 14B is Apache-2.0 upstream; confirm the specific quantization source before bundling."

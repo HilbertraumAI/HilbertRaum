@@ -1,0 +1,34 @@
+id: qwen3-30b-a3b-q4
+display_name: Qwen3 30B-A3B (MoE) Q4
+family: qwen3
+role: chat
+format: gguf
+runtime: llama_cpp
+license: apache-2.0
+size_on_disk_gb: 18.6
+recommended_min_ram_gb: 24
+recommended_ram_gb: 32
+recommended_context_tokens: 8192
+supports_thinking_mode: true
+supports_tools: false
+local_path: models/chat/qwen3-30b-a3b-q4.gguf
+sha256: REPLACE_WITH_REAL_HASH
+# Phase 12: where `fetch-models` downloads the weight from + what to verify it against.
+download:
+  url: https://huggingface.co/Qwen/Qwen3-30B-A3B-GGUF/resolve/main/Qwen3-30B-A3B-Q4_K_M.gguf?download=true
+  sha256: REPLACE_WITH_REAL_HASH
+  size_bytes: 18600000000
+  license_url: https://huggingface.co/Qwen/Qwen3-30B-A3B-GGUF/blob/main/LICENSE
+bundled_on_preconfigured_drive: false
+# Mixture-of-Experts: ~30B total params but only ~3.3B ACTIVE per token (8 of 128 experts),
+# so it runs at near-small-model speed on CPU while answering much better than the 8B/14B
+# dense models. The catch is the footprint: the whole ~18.6 GB must fit in RAM, so it needs a
+# 32 GB machine. OPT-IN (no recommended_profiles) — selectable on the Models screen, never
+# auto-recommended, since the download/RAM cost should be a deliberate choice. Best manual
+# upgrade for a strong (PRO) laptop.
+recommended_profiles: []
+license_review:
+  status: pending
+  reviewed_by: null
+  reviewed_at: null
+  notes: "Qwen3 30B-A3B is Apache-2.0 upstream; confirm the specific quantization source before bundling."
