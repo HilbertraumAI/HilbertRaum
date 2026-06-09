@@ -13,6 +13,7 @@ import type {
   Message,
   ModelInfo,
   PolicyStatus,
+  PreflightResult,
   RuntimeStatus,
   WorkspaceActionResult,
   WorkspaceMode,
@@ -58,6 +59,10 @@ const api = {
   // ---- Hardware benchmark (Phase 7) ----
   /** Detect hardware + measure drive speed, persist + return the result. Strictly local. */
   runBenchmark: (): Promise<BenchmarkResult> => ipcRenderer.invoke(IPC.runBenchmark),
+
+  // ---- Launch preflight (Phase 13) ----
+  /** Friendly, non-blocking first-run drive check (writable / free space / slow drive). */
+  runPreflight: (): Promise<PreflightResult> => ipcRenderer.invoke(IPC.runPreflight),
 
   // ---- Chat (Phase 3) ----
   createConversation: (opts?: { title?: string; mode?: 'chat' | 'documents' }): Promise<Conversation> =>

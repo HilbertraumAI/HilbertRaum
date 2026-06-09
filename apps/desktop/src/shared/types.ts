@@ -109,6 +109,20 @@ export interface DriveStatus {
   arch: string
 }
 
+/**
+ * Launch preflight (Phase 13, spec §11.4). A friendly, NON-BLOCKING first-run check on a
+ * (commercial) drive: writable? free space? known-slow drive? Surfaced on Home; never blocks.
+ */
+export interface PreflightResult {
+  rootPath: string
+  writable: boolean
+  freeBytes: number | null
+  /** Friendly slow-drive note (spec §11.4 tone), or null. */
+  slowDriveWarning: string | null
+  /** Issues worth showing (read-only / very low space). Empty on a healthy drive. */
+  problems: string[]
+}
+
 export interface AppSettings {
   /** Default false — no network in the core path (spec §3.6). */
   allowNetwork: boolean

@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  macOS hardened-runtime entitlements (Phase 13). Required for notarization of the
+  Electron .app. Electron's JIT needs the JIT/unsigned-executable-memory entitlements;
+  everything else stays at the secure default. This grants NO network/server entitlement
+  beyond what Electron needs locally — the app's offline guarantee is enforced in-process
+  (deny-by-default policy + loopback-only sidecar), not here.
+-->
+<plist version="1.0">
+  <dict>
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+  </dict>
+</plist>

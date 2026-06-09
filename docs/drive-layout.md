@@ -1,6 +1,6 @@
 # Drive & Workspace Layout
 
-_Last updated: 2026-06-09 (Phase 12)_
+_Last updated: 2026-06-09 (Phase 13)_
 
 ## How the app finds its data
 
@@ -35,16 +35,29 @@ laptops (spec success criterion #10).
 
 ```
 PRIVATE_AI_DRIVE/
-├── PrivateAIDriveLite-<version>-portable.exe   # the portable build (Phase 11)
+├── Start Private AI Drive.cmd                  # Windows launcher (Phase 13) ── DOUBLE-CLICK THIS
+├── Start Private AI Drive.command              # macOS launcher (Phase 13)
+├── start-private-ai-drive.sh                   # Linux launcher (Phase 13)
+├── READ ME FIRST.txt                           # friendly first-run + SmartScreen note (Phase 13)
+├── PrivateAIDriveLite-<version>-portable.exe   # the portable build (Phase 11) — signed for commercial
 ├── runtime/llama.cpp/{win,mac,linux}/          # sidecars (Phase 10)
 ├── models/{chat,embeddings}/                   # GGUF weights (git-ignored)
 ├── model-manifests/{chat,embeddings}/          # committed YAML (the only model metadata in git)
 │   └── runtime-sources.yaml                     # sidecar download manifest (Phase 12)
-├── workspace/                                  # paid.sqlite (encrypted or plaintext)
+├── workspace/                                  # paid.sqlite (encrypted or plaintext) — EMPTY on a sold drive
 ├── logs/
 ├── docs/                                       # user guide, privacy, troubleshooting
 └── config/{drive.json,policy.json,checksums.json}
 ```
+
+> **Launchers (Phase 13).** The `Start Private AI Drive.*` files sit at the drive root beside the
+> portable app and set `PAID_DRIVE_ROOT` from **their own location** every launch — never a hardcoded
+> drive letter — so the same drive continues the same encrypted workspace on any laptop (success
+> criterion #10). The canonical resolver is `services/launcher.ts` `resolveDriveRootFromLauncher`.
+> A **commercial (sellable) drive** ships `policy.json` in the commercial posture (encryption required,
+> plaintext off, models must verify, network denied) and contains **no user data** — built + asserted
+> by `scripts/build-commercial-drive.{ps1,sh}` (canonical: `services/commercial-drive.ts`). See
+> [`packaging.md`](packaging.md).
 
 > **Naming reconciliation (Phase 11).** This layout reflects what the **code actually reads**,
 > which is the source of truth:

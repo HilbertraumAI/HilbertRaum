@@ -71,11 +71,12 @@ export function WorkspaceGate({ state, onUnlocked }: Props): JSX.Element {
 
         {creating ? (
           <>
-            <h1>Set a workspace password</h1>
+            <h1>Create your password</h1>
             <p className="hint">
-              Your documents, chats, and index are encrypted on this drive with a key
-              derived from this password. The password is never stored, and there is no
-              recovery — choose something you will remember.
+              Welcome! This is your private workspace. Everything you do — your documents,
+              chats, and notes — is locked on this drive with this password. Nobody else can
+              open it, and nothing is ever sent online. We can’t reset it for you, so please
+              pick something you’ll remember.
             </p>
 
             {state.plaintextAllowed && (

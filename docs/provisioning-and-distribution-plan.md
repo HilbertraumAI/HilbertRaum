@@ -1,6 +1,7 @@
 # Provisioning & Distribution Plan — DIY asset loader + plug-and-play drive
 
-_Last updated: 2026-06-09 — **Phase 12 DONE** (DIY asset loader shipped); Phase 13 still PLAN._
+_Last updated: 2026-06-09 — **Phase 12 + Phase 13 DONE** (DIY asset loader + plug-and-play commercial
+drive shipped). Remaining = manual acceptance: a real signed/notarized build + a USB §17 demo._
 
 This plan covers the two pieces of "polish" that turn the feature-complete MVP into something
 others can actually obtain and run:
@@ -176,10 +177,23 @@ A nice-to-have for the DIY path so a user who launched with no chat model can fe
 
 ---
 
-## Phase 13 — Plug-and-play distribution (commercial drive)
+## Phase 13 — Plug-and-play distribution (commercial drive) — ✅ DONE
 
 **Goal:** a non-technical buyer plugs in the drive, double-clicks one icon, and is chatting with
 their documents — offline, no install, no terminal, on Windows or macOS.
+
+> **Status (2026-06-09): implemented + committed.** Shipped: the per-OS launcher templates
+> (`launchers/Start Private AI Drive.{cmd,command}` + `start-private-ai-drive.sh` + `READ ME
+> FIRST.txt`) with the canonical, unit-tested root resolver `services/launcher.ts`
+> `resolveDriveRootFromLauncher`; the `electron-builder.yml` signing/notarization hooks
+> (`win.signtoolOptions`, `mac.notarize`/`hardenedRuntime` + `build/entitlements.mac.plist`,
+> env-driven, secrets git-ignored); the `scripts/build-commercial-drive.{ps1,sh}` master pipeline +
+> the canonical `services/commercial-drive.ts` (`planCommercialDrive`/`formatPlan` +
+> `assertCommercialDrive`); and the non-technical first-run polish (`services/preflight.ts`
+> `runPreflight` surfaced on Home via the `preflight:run` IPC, tightened `WorkspaceGate` copy).
+> **Manual acceptance remains (R5/R7):** a real signed Windows build + signed & notarized macOS
+> build, and a USB-drive §17 demo on a fresh laptop with Wi-Fi off + the second-laptop continuity
+> check. The green gate stays green with zero certs/binaries present.
 
 ### 13.1 The launcher (per-OS, sets `PAID_DRIVE_ROOT`)
 

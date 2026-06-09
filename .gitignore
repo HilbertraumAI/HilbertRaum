@@ -30,6 +30,16 @@ logs/
 # apps/desktop/src/main/services/runtime/ (that bug silently un-tracked the runtime service).
 /runtime/
 
+# Code-signing secrets (Phase 13) — NEVER commit certs/keys/credentials.
+# Signing is driven by env vars / a local, git-ignored secrets file on the build machine.
+*.pfx
+*.p12
+*.cer
+*.key
+*.keychain
+signing.env
+*.provisionprofile
+
 # Env / OS
 .env
 .env.*

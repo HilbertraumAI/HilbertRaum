@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { AppStatus } from '@shared/types'
+import type { AppStatus, PreflightResult } from '@shared/types'
 
 interface Props {
   onNavigate: (screen: string) => void
@@ -8,6 +8,7 @@ interface Props {
 export function HomeScreen({ onNavigate }: Props): JSX.Element {
   const [status, setStatus] = useState<AppStatus | null>(null)
   const [loading, setLoading] = useState(true)
+  const [preflight, setPreflight] = useState<PreflightResult | null>(null)
 
   useEffect(() => {
     let active = true
@@ -17,10 +18,19 @@ export function HomeScreen({ onNavigate }: Props): JSX.Element {
       .then((s) => active && setStatus(s))
       .catch(() => active && setStatus(null))
       .finally(() => active && setLoading(false))
+    // Phase 13: friendly, non-blocking launch preflight (drive writable / space / speed).
+    window.api
+      ?.runPreflight?.()
+      .then((p) => active && setPreflight(p))
+      .catch(() => active && setPreflight(null))
     return () => {
       active = false
     }
   }, [])
+
+  const preflightNotes = preflight
+    ? [...preflight.problems, ...(preflight.slowDriveWarning ? [preflight.slowDriveWarning] : [])]
+    : []
 
   return (
     <div className="screen">
@@ -29,6 +39,20 @@ export function HomeScreen({ onNavigate }: Props): JSX.Element {
         A private, offline AI workspace. Your prompts, documents, embeddings, and chat history
         stay on this device.
       </p>
+
+      {preflightNotes.length > 0 && (
+        <div className="card" style={{ marginBottom: 16 }} role="status">
+          {preflightNotes.map((note, i) => (
+            <p key={i} className="hint warn" style={{ margin: i === 0 ? 0 : '6px 0 0' }}>
+              {note}
+            </p>
+          ))}
+          <p className="hint" style={{ margin: '6px 0 0' }}>
+            You can still continue. If the app doesn’t open, see the troubleshooting guide in the
+            drive’s <strong>docs</strong> folder.
+          </p>
+        </div>
+      )}
 
       <div className="status-grid">
         <Stat label="Offline Mode" value={status?.offlineMode === false ? 'Network allowed' : 'ON'} good />

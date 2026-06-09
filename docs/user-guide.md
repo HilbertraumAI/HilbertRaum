@@ -1,6 +1,6 @@
 # Private AI Drive Lite — User Guide
 
-_Last updated: 2026-06-09 (Phase 11)_
+_Last updated: 2026-06-09 (Phase 13)_
 
 Private AI Drive Lite is a private AI workspace that runs **entirely on your laptop**, from
 a portable drive. Your prompts, documents, embeddings, and chat history stay local. There is
@@ -22,16 +22,24 @@ You do **not** need an internet connection to use the app.
 
 ### From a prepared drive
 1. Plug the drive into your laptop.
-2. Open the drive and double-click **Private AI Drive Lite** (`PrivateAIDriveLite-…-portable.exe`
-   on Windows).
-3. The app opens its own window. The first launch may take a few extra seconds while the
-   workspace is prepared.
+2. Open the drive and **double-click the launcher** at the top level:
+   - **Windows:** `Start Private AI Drive`
+   - **macOS:** `Start Private AI Drive.command`
+   - **Linux:** `start-private-ai-drive.sh`
+3. **First-time security warning?** The very first time you run an app from a USB drive, your
+   computer may show a warning ("Windows protected your PC" / "macOS cannot open the app"). This is
+   normal. On Windows click **More info → Run anyway**; on macOS **right-click the app → Open**. You
+   usually only do this once. (On a signed commercial drive it won't appear.)
+4. The app opens its own window. The first launch may take a few extra seconds. If the drive is
+   read-only, low on space, or slow, Home shows a friendly note — it won't stop you.
+
+You do **not** need to install anything, and you don't need admin rights.
 
 ### From a normal install
 Launch the app from your Start menu / Applications folder as usual.
 
-> The app reads its data from the drive it was started from. Technically it follows the
-> `PAID_DRIVE_ROOT` location set by the drive's launcher; you don't need to configure this.
+> The launcher finds the drive **from its own location** every time, so the same drive works no
+> matter which drive letter it gets. It sets `PAID_DRIVE_ROOT` for you — nothing to configure.
 
 ---
 

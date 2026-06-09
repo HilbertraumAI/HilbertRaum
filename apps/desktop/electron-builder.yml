@@ -47,9 +47,28 @@ extraResources:
 # Asar keeps the app a single archive; node:sqlite + the parser libs work from it.
 asar: true
 
+# CODE SIGNING (Phase 13). Signing turns a scary OS gatekeeper dialog into a clean launch
+# for a non-technical buyer; it is the single most important non-code task for the
+# commercial drive. ALL signing secrets are supplied by ENV VARS on the build/CI machine
+# and NEVER committed (CLAUDE.md hard rule). The green gate (typecheck/test/build) does NOT
+# invoke electron-builder, so none of this runs in CI by default — it is a documented
+# manual/CI build step (see docs/packaging.md). The unsigned DIY fallback ("Run anyway" /
+# right-click Open) is documented in docs/troubleshooting.md.
+
 win:
   target:
     - portable
+  # signtoolOptions are read from env on the build machine:
+  #   WIN_CSC_LINK              path/URL to the OV/EV .pfx (or base64) — NEVER in the repo
+  #   WIN_CSC_KEY_PASSWORD      the .pfx password
+  # An EV cert (hardware token / cloud HSM) builds SmartScreen reputation fastest. The
+  # launcher (Start Private AI Drive.cmd) is a script and is not itself signed; the portable
+  # .exe it spawns IS signed, which is what SmartScreen evaluates.
+  signtoolOptions:
+    signingHashAlgorithms:
+      - sha256
+    # certificateSubjectName / certificateSha1 can be set here for an EV token; left unset
+    # so a .pfx supplied via WIN_CSC_LINK/WIN_CSC_KEY_PASSWORD is used.
 
 # A single self-contained .exe — copy it onto the drive root next to the prepared layout
 # and launch it with PAID_DRIVE_ROOT pointing at the drive (see docs/packaging.md).
@@ -60,6 +79,17 @@ mac:
   target:
     - dir
   category: public.app-category.productivity
+  # macOS signing + notarization. Without notarization a USB-launched .app is quarantined
+  # ("can't be opened / damaged"). Supplied via env on the build machine:
+  #   CSC_LINK / CSC_KEY_PASSWORD          the "Developer ID Application" cert (.p12)
+  #   APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID   notarization credentials
+  # hardenedRuntime + the entitlements file are required for notarization to pass.
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  # notarize: electron-builder auto-notarizes when the APPLE_* env vars are present and this
+  # is not explicitly false. Set to false for an unsigned local/dev build.
 
 linux:
   target:

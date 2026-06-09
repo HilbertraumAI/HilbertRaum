@@ -1,9 +1,45 @@
 # Private AI Drive Lite — Troubleshooting
 
-_Last updated: 2026-06-09 (Phase 11)_
+_Last updated: 2026-06-09 (Phase 13)_
 
 Quick answers to common situations. Everything here is normal, local, and offline — none of
 these steps require the internet.
+
+---
+
+## Starting the app
+
+Open the drive and **double-click the launcher** at the top level:
+
+- **Windows:** `Start Private AI Drive`
+- **macOS:** `Start Private AI Drive.command`
+- **Linux:** `start-private-ai-drive.sh`
+
+You do **not** need to install anything. The launcher finds the drive automatically, wherever it is
+plugged in, so the same drive works on any computer.
+
+---
+
+## "Windows protected your PC" / "macOS cannot open the app"
+
+The first time you run an app from a USB drive, your computer shows a security warning. **This is
+normal for any new app** and does not mean anything is wrong — it appears because the app is new to
+*this* computer, not because it is unsafe.
+
+**Windows (SmartScreen) — blue window "Windows protected your PC":**
+1. Click **More info** (small link in the dialog).
+2. Click **Run anyway**.
+
+**macOS (Gatekeeper) — "cannot be opened because it is from an unidentified developer":**
+1. **Right-click** (or Control-click) the launcher / app, then choose **Open**.
+2. Click **Open** again in the dialog.
+
+You usually only have to do this **once** per computer. On a signed commercial drive these dialogs
+should not appear at all.
+
+> For a drive builder: signed (Windows) + signed & notarized (macOS) builds avoid these dialogs
+> entirely — see the signing section of [`packaging.md`](packaging.md). The steps above are the
+> fallback for an **unsigned** (DIY) build.
 
 ---
 
@@ -94,9 +130,13 @@ Other files in the same import still succeed.
 
 ## The app won't start from the drive
 
-- Make sure you launched the app **from the drive** (so it uses the drive's workspace).
+- Use the **launcher** at the drive root (`Start Private AI Drive`) rather than opening the
+  `.exe`/`.app` directly — the launcher points the app at the drive's workspace.
+- If you saw a security warning, follow **"Windows protected your PC" / "macOS cannot open the app"**
+  above.
 - On Windows, the portable `.exe` may take a few seconds on first launch — wait for the window.
-- Check that the drive has free space and is writable (the **Diagnostics** screen reports both).
+- Check that the drive has free space and is writable. The app shows a friendly note on the Home
+  screen if the drive is read-only, low on space, or slow (none of these block you).
 - If the drive was just prepared, confirm `config/drive.json` exists at the drive root.
 
 ---

@@ -4,8 +4,9 @@ import type { AppContext } from '../services/context'
 import { buildDriveStatus } from '../services/workspace'
 import { getSettings, updateSettings } from '../services/settings'
 import { buildPolicyStatus } from '../services/policy'
+import { runPreflight } from '../services/preflight'
 import { log } from '../services/logging'
-import type { AppSettings, AppStatus, PolicyStatus } from '../../shared/types'
+import type { AppSettings, AppStatus, PolicyStatus, PreflightResult } from '../../shared/types'
 
 // Phase 1 IPC: app/drive status + settings (spec §9.1). Phase 8 adds the privacy
 // policy surface (`getPolicy`) and makes `offlineMode` policy-aware (spec §3.6).
@@ -38,6 +39,13 @@ export function registerCoreIpc(ctx: AppContext): void {
   })
 
   ipcMain.handle(IPC.getDriveStatus, () => buildDriveStatus(ctx.paths))
+
+  // Phase 13: the friendly, non-blocking launch preflight (spec §11.4). Reuses the drive
+  // status + benchmark probe; surfaced on Home for a non-technical first run.
+  ipcMain.handle(
+    IPC.runPreflight,
+    (): Promise<PreflightResult> => runPreflight({ rootPath: ctx.paths.rootPath })
+  )
 
   ipcMain.handle(IPC.getPolicy, (): PolicyStatus =>
     buildPolicyStatus(ctx.paths.configPath, allowNetworkSetting(), (m) => log.warn(m))

@@ -5,9 +5,10 @@
 > (see "Per-phase ritual" in [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md)).
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
-_Last updated: 2026-06-09 — Phase 12 complete (DIY asset loader: `fetch-models`/`fetch-runtime` +
-`prepare-drive --with-assets`). MVP feature-complete; Phases 0–11 + 12 done. Multi-persona audit
-remediation applied (see §8/§9)._
+_Last updated: 2026-06-09 — Phase 13 complete (plug-and-play distribution: per-OS launcher +
+`build-commercial-drive` pipeline + signing hooks + launch preflight). MVP feature-complete;
+Phases 0–13 done — this is the **last planned phase**. Multi-persona audit remediation applied
+(see §8/§9)._
 
 ---
 
@@ -28,11 +29,14 @@ remediation applied (see §8/§9)._
 | 10 | Real llama.cpp runtime & embeddings | 🟢 done |
 | 11 | Drive layout, scripts & packaging | 🟢 done |
 | 12 | DIY asset loader (`fetch-assets`) | 🟢 done |
+| 13 | Plug-and-play distribution (commercial drive) | 🟢 done |
 
 Legend: ⚪ not started · 🟡 in progress · 🟢 done · 🔴 blocked
 
-> Phase 12 is the first **post-MVP** phase. Phase 13 (plug-and-play distribution) is still PLAN —
-> see [`docs/provisioning-and-distribution-plan.md`](docs/provisioning-and-distribution-plan.md).
+> Phases 12–13 are the **post-MVP** distribution phases (the last planned work). Phase 13
+> (plug-and-play distribution) is DONE — see
+> [`docs/provisioning-and-distribution-plan.md`](docs/provisioning-and-distribution-plan.md).
+> Remaining = **manual acceptance only**: a real signed/notarized build + a USB §17 demo (R5/R7).
 
 ---
 
@@ -327,6 +331,48 @@ Repo root: `f:\_coding\ai_drive`.
   **pure ASCII** (Windows PowerShell 5.1 reads non-BOM scripts in the ANSI codepage; a UTF-8 em-dash's
   `0x94` byte decodes to `"` and breaks a double-quoted string — same class of bug as the Phase-11
   BOM issue).
+- **Launcher resolves the drive root from its OWN location (LOCKED, Phase 13):** the per-OS launcher
+  (`Start Private AI Drive.{cmd,command}` / `start-private-ai-drive.sh`) sets `PAID_DRIVE_ROOT` from
+  where it sits (`%~dp0` / `dirname "$0"`), **never** a hardcoded drive letter — drive letters/mounts
+  change per machine, and the same drive must continue the **same encrypted workspace** on a second
+  laptop (success criterion #10; `resolvePaths` already redirects all state onto the drive). Canonical,
+  unit-tested resolver = `services/launcher.ts` `resolveDriveRootFromLauncher(launcherPath, flavor?)`
+  (handles Windows drive-letter + POSIX paths, rejects empty/relative). The launcher scripts mirror it.
+  **Autorun is dead** (Windows disabled `autorun.inf` from removable drives) — the app cannot
+  auto-launch on plug-in and must not try; the drive opens a window and the buyer double-clicks the
+  well-named launcher (+ a root `READ ME FIRST.txt`).
+- **Signing/notarization is a documented MANUAL step; the green gate never signs (LOCKED, Phase 13):**
+  `electron-builder.yml` wires `win.signtoolOptions` + `mac.notarize`/`hardenedRuntime` +
+  `build/entitlements.mac.plist`, but ALL secrets come from **env vars / a git-ignored secrets file on
+  the build machine** (`WIN_CSC_LINK`/`WIN_CSC_KEY_PASSWORD`; `CSC_LINK`/`APPLE_ID`/
+  `APPLE_APP_SPECIFIC_PASSWORD`/`APPLE_TEAM_ID`) and **never enter the repo** (`.gitignore` excludes
+  `*.pfx`/`*.p12`/`*.cer`/`*.key`/`signing.env`/`*.provisionprofile`). The green gate
+  (`typecheck`/`test`/`build`) does not invoke electron-builder, so signing is off the critical path
+  (like the R2 Electron download). EV (Windows) builds SmartScreen reputation fastest; macOS without
+  notarization is quarantined. The unsigned DIY "Run anyway" / right-click→Open fallback stays in
+  `docs/troubleshooting.md`. New procurement risk **R7** (cert cost/lead-time) blocks only the
+  *commercial* acceptance.
+- **`build-commercial-drive` = plan + final posture assertion, mirrored by scripts (LOCKED, Phase 13):**
+  `services/commercial-drive.ts` is the canonical, unit-tested reference (like `drive.ts`/`assets.ts`):
+  `planCommercialDrive(opts) → CommercialStep[]` + `formatPlan` (the ordered steps: prepare → fetch-
+  models → fetch-runtime → **package/sign [manual]** → copy launcher+app+docs → verify-models --generate
+  → assert) and `assertCommercialDrive(root, manifests) → { ok, problems[], checks, modelResults }`
+  which **reuses `loadPolicy` + `verifyDriveModels`** to assert the **commercial posture** (encryption
+  required, plaintext off, models must verify, **network denied**) + **every weight VERIFIED** + **no
+  user data present** (spec §12.2 — fails loudly otherwise). `scripts/build-commercial-drive.{ps1,sh}`
+  orchestrate the existing Phase-11/12 scripts (NOT re-implementing them) + a native cross-check of the
+  same invariants. ⚠️ PS gotcha fixed: invoke sibling scripts via **hashtable** splatting
+  (`& $path @{Target=…}`), not array splatting (array splat binds positionally → `-Target` is rejected);
+  reset `$global:LASTEXITCODE = 0` before each call so a stale code isn't misread.
+- **Launch preflight reuses the benchmark; non-blocking (LOCKED, Phase 13):** `services/preflight.ts`
+  `runPreflight({ rootPath, measureSpeed?, minFreeBytes? }) → PreflightResult` reuses
+  `buildDriveStatus` (writable + free space) + `measureDriveSpeed`/`buildWarnings` (the spec §11.4
+  slow-drive copy) — it does NOT add a second drive probe. Friendly + **non-blocking** (read-only / low
+  space → `problems[]`, slow drive → `slowDriveWarning`; never "bad hardware", never blocks). The
+  drive-speed fn is **injected** in tests (deterministic, no real I/O, no network). Surfaced on Home via
+  the `preflight:run` IPC (`registerCoreIpc`, preload `api.runPreflight`). **Encrypted-by-default kept:**
+  the commercial first-run still lands on the existing `WorkspaceGate` (no plaintext offered when the
+  policy forbids it); only the copy was softened for zero-technical-knowledge users.
 
 ---
 
@@ -701,6 +747,43 @@ stop, regenerate, per-message copy, and the no-runtime empty state.
   policy/`allowNetwork` gates are documented for when it lands). **Real downloads + USB-drive launch =
   manual (R5).**
 
+### Plug-and-play distribution (Phase 13 live)
+✅ **`services/launcher.ts`** — `resolveDriveRootFromLauncher(launcherPath, flavor?: 'win32'|'posix'|
+  'auto')` → the drive root (the launcher's own directory; pure path math, no fs). Handles Windows
+  drive-letter + POSIX/macOS paths; throws on empty/relative. **No hardcoded path** — the canonical
+  reference the launcher scripts mirror.
+✅ **`launchers/`** (repo templates copied to the drive root by the pipeline) — `Start Private AI
+  Drive.cmd` (`%~dp0` → set `PAID_DRIVE_ROOT` → spawn `PrivateAIDriveLite-*-portable.exe`), `Start
+  Private AI Drive.command` (macOS, exec the `.app` binary with the env exported), `start-private-ai-
+  drive.sh` (Linux, next to the AppImage), `READ ME FIRST.txt` (friendly first-run + SmartScreen/
+  Gatekeeper "Run anyway" copy).
+✅ **`services/preflight.ts`** — `runPreflight({ rootPath, measureSpeed?, minFreeBytes? }) →
+  PreflightResult { rootPath, writable, freeBytes, slowDriveWarning, problems[] }` (spec §11.4 tone;
+  non-blocking). Reuses `buildDriveStatus` + `measureDriveSpeed`/`buildWarnings`. `LOW_FREE_SPACE_BYTES
+  = 2 GB`. `PreflightResult` lives in `shared/types.ts`. IPC `runPreflight` (`preflight:run`) in
+  `registerCoreIpc` → preload `api.runPreflight`; **HomeScreen** shows a non-blocking note.
+✅ **`services/commercial-drive.ts`** — `planCommercialDrive({ target, os?, acceptLicense? }) →
+  CommercialStep[] { id, title, command, manual, description }` (ordered: prepare → fetch-models →
+  fetch-runtime → **package [manual]** → copy-app → verify → assert) + `formatPlan`; and
+  `assertCommercialDrive(rootPath, manifests) → CommercialAssertion { ok, problems[], checks{
+  policyCommercial, networkDenied, weightsVerified, noUserData }, modelResults }` (reuses `loadPolicy`
+  + `verifyDriveModels`; flags network-allowed / plaintext / unverified-or-mismatch weights / present
+  user data — `workspace/paid.sqlite[.enc]`, `config/workspace.json`, non-empty `workspace/documents/`).
+✅ **`scripts/build-commercial-drive.{ps1,sh}`** — self-contained dual-shell master pipeline mirroring
+  the plan; `-Target`/`--target` (req), `-AcceptLicense`/`--accept-license`, `-AppArtifact`/
+  `--app-artifact` (a pre-built signed app to copy), `-SkipPackage`/`--skip-package`, `-DryRun`/
+  `--dry-run`. Orchestrates prepare-drive (`-Force`) → fetch-models → fetch-runtime → (package =
+  manual) → copy launchers+docs → verify-models `--generate` → native posture cross-check (exit 1 if
+  not sellable). PS uses **hashtable** splatting for named params. Both dry-run-smoke-tested.
+✅ **Packaging/signing** — `electron-builder.yml` `win.signtoolOptions` + `mac.notarize`/
+  `hardenedRuntime`/`gatekeeperAssess:false`/`entitlements: build/entitlements.mac.plist`; secrets are
+  env-driven + git-ignored. The green gate does NOT sign (it never runs electron-builder).
+✅ **Tests** — `tests/integration/launcher.test.ts` (11: `resolveDriveRootFromLauncher` Win/POSIX/auto/
+  empty/relative; `runPreflight` ok/slow/read-only/low-space/unmeasurable with an injected speed fn) +
+  `tests/integration/commercial-drive.test.ts` (8: ordered plan + manual package + `--accept-license`
+  threading + `formatPlan`; `assertCommercialDrive` passes verified-commercial, fails network/plaintext/
+  placeholder-weight/user-data). **Signing + notarization + the real USB launch = manual (R5/R7).**
+
 ### MVP Definition of Done (§4 / spec §22) — checklist
 | Criterion | Status |
 |---|---|
@@ -730,14 +813,16 @@ CI are unaffected.
 
 ## 5. Next actions (do these next) — POST-MVP
 
-**Phases 0–12 are complete. The MVP is feature-complete + the DIY asset loader ships; the remaining
-items are MANUAL acceptance (R2/R5) and Phase 13 (plug-and-play distribution).** In rough priority:
+**Phases 0–13 are complete — this was the LAST planned phase. The MVP is feature-complete, the DIY
+asset loader ships, and the plug-and-play commercial drive is built + asserted.** The remaining items
+are **MANUAL acceptance only** (R2/R5/R7). In rough priority:
 
-1. **Phase 13 — plug-and-play distribution (the next build phase):** the per-OS launcher
-   (`Start Private AI Drive.*` setting `PAID_DRIVE_ROOT` from its own location), code signing +
-   notarization (the make-or-break non-code task), and the `build-commercial-drive` master pipeline
-   (prepare-drive → fetch-models → fetch-runtime → package → sign → verify). See
-   `docs/provisioning-and-distribution-plan.md` Phase 13 (§13.1–§13.5).
+1. **Commercial-drive manual acceptance (needs certs + a real USB run, R5/R7):** obtain the code-
+   signing certs (Windows OV/EV + Apple Developer ID), produce a **signed** Windows portable `.exe` +
+   a **signed & notarized** macOS `.app`, run `build-commercial-drive` end-to-end onto a real drive
+   (`-AppArtifact` the signed build), then do the spec §17 demo on a **fresh laptop with Wi-Fi off** +
+   the **second-laptop continuity** check (same encrypted workspace, different drive letter). The
+   `electron-builder.yml` hooks + the pipeline are wired; only the secrets + hardware are missing.
 2. **Manual acceptance (needs hardware/artifacts not in the repo, R2/R5):**
    - Provision a real drive end-to-end: `prepare-drive -WithAssets -AcceptLicense` (now downloads +
      verifies the weights + sidecar) → `verify-models -Generate` to capture the real hashes and promote
@@ -748,7 +833,14 @@ items are MANUAL acceptance (R2/R5) and Phase 13 (plug-and-play distribution).**
    deny-by-default, reusing `assets.ts` `fetchAndVerify`); an icon/`buildResources` for
    electron-builder; ANN vector index (sqlite-vec/HNSW) upgrade.
 
-Phase 12 is DONE: typecheck clean, **287/287 tests pass** (was 247 — +40: manifest `download`-block
+Phase 13 is DONE: typecheck clean, **306/306 tests pass** (was 287 — +19: `launcher.test.ts` [11] +
+`commercial-drive.test.ts` [8]), `NODE_OPTIONS=--use-system-ca npm run build` green (main bundle
+**104.75 kB** — preflight IPC is now in the runtime path; the launcher/commercial-drive modules are
+tested helpers). **No new runtime deps.** Both `build-commercial-drive.{ps1,sh}` dry-run-smoke-tested
+on Windows PowerShell + bash (PS hashtable-splat fix verified). New manual risk **R7** (code-signing
+certs). Real signed/notarized build + USB §17 demo = manual (R5/R7).
+
+Phase 12 (prior) is DONE: typecheck clean, **287/287 tests pass** (was 247 — +40: manifest `download`-block
 validation [present/absent/malformed/size/license/real-hash-equality], `validateRuntimeSources`
 [8 tests], and `assets.test.ts` (28): `planModelDownloads` [no-block excluded, missing→download,
 license blocked-vs-accepted-vs-approved, present-verified/unverified/mismatch, `--only`],
@@ -836,6 +928,15 @@ wedge HMR.)
   `verify-models --generate` captures real hashes) — but the artifacts themselves are still not in the
   repo, so the live §17 demo from a real drive remains the one manual acceptance step.
 - **R6 TLS-intercepting proxy on this machine** — `npm install` fails with `UNABLE_TO_VERIFY_LEAF_SIGNATURE` (corporate root CA). Workaround: `NODE_OPTIONS=--use-system-ca npm install` (Node 24 reads the Windows cert store). If that fails, `npm config set strict-ssl false` (dev-only, less secure) or set `NODE_EXTRA_CA_CERTS`. Affects dev installs only; the app stays offline.
+- **R7 Code-signing certificates (Phase 13) — PROCUREMENT, blocks only the *commercial* acceptance.**
+  An unsigned `.exe`/`.app` launched from USB trips Windows SmartScreen / macOS Gatekeeper, which a
+  non-technical buyer cannot get past. The `electron-builder.yml` hooks are wired
+  (`win.signtoolOptions`, `mac.notarize` + `hardenedRuntime` + `build/entitlements.mac.plist`) and
+  driven by env vars / a git-ignored secrets file — but the actual **OV/EV Windows cert** + **Apple
+  Developer ID + notarization creds** cost money + lead time and are not on this machine. The green
+  gate does NOT sign, the DIY path uses the unsigned "Run anyway" fallback (`docs/troubleshooting.md`),
+  and the same-drive-on-a-second-laptop continuity already works (`resolvePaths`). So R7 blocks only
+  the signed commercial build + the live USB §17 demo, not the repo's green gate or the DIY drive.
 
 ---
 

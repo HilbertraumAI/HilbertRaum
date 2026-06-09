@@ -1,0 +1,49 @@
+==============================================================================
+  Private AI Drive Lite  -  READ ME FIRST
+==============================================================================
+
+Welcome! This drive is your own private AI workspace. It runs entirely on your
+computer - there is no internet connection, no account, and no cloud. Your
+documents, chats, and everything you type stay on this drive.
+
+
+HOW TO START
+------------------------------------------------------------------------------
+
+  Windows :  Double-click   "Start Private AI Drive"
+  Mac     :  Double-click   "Start Private AI Drive.command"
+  Linux   :  Run            "start-private-ai-drive.sh"
+
+The first time you open it, you will be asked to create a password for your
+workspace. This password encrypts everything on the drive. Choose something you
+will remember - there is no way to recover it if you forget it.
+
+
+"WINDOWS PROTECTED YOUR PC"  /  "CANNOT BE OPENED"
+------------------------------------------------------------------------------
+
+The first time you run an app from a USB drive, your computer may show a blue
+or grey warning. This is normal for any new app and does not mean anything is
+wrong. To continue:
+
+  Windows :  Click  "More info"  then  "Run anyway".
+  Mac     :  Right-click the app, choose "Open", then "Open" again.
+
+You usually only have to do this once.
+
+
+IF IT DOES NOT OPEN
+------------------------------------------------------------------------------
+
+Open the "docs" folder on this drive and read "troubleshooting.md", or the
+friendly walkthrough in "user-guide.md".
+
+
+YOUR PRIVACY
+------------------------------------------------------------------------------
+
+Nothing on this drive is ever sent anywhere. See "docs/PRIVACY.md" for the full
+statement. You can unplug the drive and move it to another computer at any time
+- your encrypted workspace travels with it.
+
+==============================================================================

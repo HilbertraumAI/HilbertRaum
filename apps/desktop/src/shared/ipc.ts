@@ -27,6 +27,8 @@ export const IPC = {
   askDocuments: 'rag:ask',
   // Phase 7
   runBenchmark: 'benchmark:run',
+  // Phase 13 — non-technical first-run launch preflight
+  runPreflight: 'preflight:run',
   // Phase 9 — encrypted workspace lifecycle
   getWorkspaceState: 'workspace:getState',
   unlockWorkspace: 'workspace:unlock',
