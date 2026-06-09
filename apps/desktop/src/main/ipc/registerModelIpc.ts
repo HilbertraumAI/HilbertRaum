@@ -7,8 +7,8 @@ import { getSettings } from '../services/settings'
 import { log } from '../services/logging'
 
 // Phase 2 IPC: model discovery/selection + runtime start/stop (spec §9.1).
-// Hardware profile is stubbed to LITE until the Phase 7 benchmark lands.
-const STUB_PROFILE = 'LITE' as const
+// The hardware profile comes from the persisted Phase-7 benchmark (`lastBenchmark`),
+// falling back to UNKNOWN until the user runs the benchmark for the first time.
 
 export function registerModelIpc(ctx: AppContext): void {
   ipcMain.handle(IPC.listModels, async (): Promise<ModelInfo[]> => {
@@ -20,7 +20,7 @@ export function registerModelIpc(ctx: AppContext): void {
     const { models, manifestErrors } = await buildModelList({
       manifestsDir: ctx.manifestsDir,
       rootPath: ctx.paths.rootPath,
-      profile: STUB_PROFILE,
+      profile: s.lastBenchmark?.profile ?? 'UNKNOWN',
       developerMode: s.developerMode,
       runningModelId: ctx.runtime.activeModelId()
     })

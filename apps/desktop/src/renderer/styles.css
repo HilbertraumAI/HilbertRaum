@@ -285,3 +285,13 @@ h2 { font-size: 15px; margin: 0 0 12px; }
 .badge.doc-indexed { color: var(--good); border-color: var(--good); }
 .badge.doc-failed { color: #ff6b6b; border-color: #ff6b6b; }
 .badge.doc-queued, .badge.doc-extracting, .badge.doc-chunking, .badge.doc-embedding { color: var(--accent); border-color: var(--accent); }
+
+/* Benchmark / diagnostics (Phase 7) */
+.hint.error { color: #ff6b6b; }
+.benchmark-warnings { list-style: none; padding: 0; margin: 12px 0 0; display: flex; flex-direction: column; gap: 8px; }
+.benchmark-warnings li {
+  border-left: 3px solid var(--accent);
+  background: var(--panel-2);
+  padding: 8px 12px;
+  border-radius: 6px;
+}

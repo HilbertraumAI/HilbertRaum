@@ -49,6 +49,12 @@ export interface AppSettings {
   ragMaxContextTokens: number
   /** Drop hits below this cosine similarity (0 = keep all non-negative hits). */
   ragMinSimilarity: number
+  // ---- Benchmark (Phase 7) ----
+  /**
+   * Last hardware benchmark result, or null if never run. The persisted profile
+   * (`lastBenchmark.profile`) drives model recommendation + `AppStatus.hardwareProfile`.
+   */
+  lastBenchmark: BenchmarkResult | null
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -61,7 +67,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   ragTopKInitial: 12,
   ragTopKFinal: 6,
   ragMaxContextTokens: 2500,
-  ragMinSimilarity: 0
+  ragMinSimilarity: 0,
+  lastBenchmark: null
 }
 
 // ---- Models (Phase 2) ----

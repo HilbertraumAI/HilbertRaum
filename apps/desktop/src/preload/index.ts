@@ -3,6 +3,7 @@ import { IPC, STREAM } from '../shared/ipc'
 import type {
   AppSettings,
   AppStatus,
+  BenchmarkResult,
   ChatOptions,
   Conversation,
   DocumentInfo,
@@ -32,6 +33,10 @@ const api = {
   startRuntime: (modelId: string): Promise<RuntimeStatus> =>
     ipcRenderer.invoke(IPC.startRuntime, modelId),
   stopRuntime: (): Promise<void> => ipcRenderer.invoke(IPC.stopRuntime),
+
+  // ---- Hardware benchmark (Phase 7) ----
+  /** Detect hardware + measure drive speed, persist + return the result. Strictly local. */
+  runBenchmark: (): Promise<BenchmarkResult> => ipcRenderer.invoke(IPC.runBenchmark),
 
   // ---- Chat (Phase 3) ----
   createConversation: (opts?: { title?: string; mode?: 'chat' | 'documents' }): Promise<Conversation> =>

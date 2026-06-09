@@ -15,7 +15,8 @@ export function registerCoreIpc(ctx: AppContext): void {
       appVersion: app.getVersion(),
       offlineMode: !s.allowNetwork,
       activeModelId: s.activeModelId,
-      hardwareProfile: 'UNKNOWN', // populated by the benchmark in Phase 7
+      // Real, persisted profile from the Phase-7 benchmark; UNKNOWN until first run.
+      hardwareProfile: s.lastBenchmark?.profile ?? 'UNKNOWN',
       workspaceMode: s.workspaceMode,
       workspaceReady: true
     }

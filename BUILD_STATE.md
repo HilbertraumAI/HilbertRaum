@@ -5,7 +5,7 @@
 > (see "Per-phase ritual" in [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md)).
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
-_Last updated: 2026-06-09 — Phase 6 complete; Phase 7 next_
+_Last updated: 2026-06-09 — Phase 7 complete; Phase 8 next_
 
 ---
 
@@ -20,8 +20,8 @@ _Last updated: 2026-06-09 — Phase 6 complete; Phase 7 next_
 | 4 | Document ingestion & chunking | 🟢 done |
 | 5 | Embeddings & vector search (mock) | 🟢 done |
 | 6 | RAG chat with citations | 🟢 done |
-| 7 | Hardware benchmark & recommendation | 🟡 next |
-| 8 | Privacy & offline hardening | ⚪ not started |
+| 7 | Hardware benchmark & recommendation | 🟢 done |
+| 8 | Privacy & offline hardening | 🟡 next |
 | 9 | Encrypted workspace | ⚪ not started |
 | 10 | Real llama.cpp runtime & embeddings | ⚪ not started |
 | 11 | Drive layout, scripts & packaging | ⚪ not started |
@@ -125,6 +125,30 @@ Repo root: `f:\_coding\ai_drive`.
   `BASE_SYSTEM_PROMPT`. The DB keeps the raw question (transcript/title).
 - **Shared in-flight registry (`ipc/inflight.ts`):** chat + RAG share one
   `Map<conversationId, AbortController>` so the existing `stopGeneration` cancels either path.
+- **Benchmark is strictly local (Phase 7):** `services/benchmark.ts` uses only `node:os` +
+  `node:fs` + `node:crypto` — no `child_process`, no remote/GPU probes, no telemetry. A
+  no-network assertion guards the whole path. Every probe is independently resilient: a
+  failure yields a `null` value + a friendly warning, never a throw (a machine where
+  everything fails still yields a valid `UNKNOWN` result).
+- **Profile thresholds (spec §11.3, LOCKED):** RAM in **GiB** (`totalmem()/1024³`, rounded
+  0.1); `≤8 → TINY`, `≤16 → LITE`, `≤32 → BALANCED`, else `PRO`; invalid RAM → `UNKNOWN`.
+  **Downgrade rule:** `tokensPerSecond < VERY_LOW_TOKENS_PER_SECOND (3)` drops one step (never
+  below TINY). **GPU rule:** a useful GPU bumps one step toward PRO (capped) — but GPU
+  detection is **best-effort `null`** for now (no safe cross-platform/offline/native-free
+  probe), so this branch is dormant until Phase 10.
+- **Drive-test bounds:** writes `DRIVE_PROBE_BYTES = 8 MB` of random bytes **inside the
+  workspace**, times write (`fsync`) then read → MB/s; **always cleaned up** (`try/finally`);
+  failure → `null` Mbps + `error`. **Slow-drive warning** at `< SLOW_DRIVE_MBPS (30)` MB/s —
+  warn, never block.
+- **Tokens/sec is optional in the mock era:** measured only when a runtime is active (prompt
+  *"Write one sentence about privacy."*, up to 64 tokens); `null` otherwise. Real numbers land
+  in Phase 10.
+- **Benchmark persistence:** spec §8 has **no `benchmarks` table**, so the last result lives in
+  the settings store as `AppSettings.lastBenchmark` (JSON `BenchmarkResult`, default `null`).
+  **"Never benchmarked yet" default = `UNKNOWN`.** Both former stubs now read
+  `lastBenchmark?.profile ?? 'UNKNOWN'`: `getAppStatus().hardwareProfile` and
+  `buildModelList`'s `profile` (the `LITE` stub is gone). User-facing copy follows spec §11.4
+  (never "your hardware is bad").
 
 ---
 
@@ -156,7 +180,7 @@ _Status: TypeScript types in `apps/desktop/src/shared/types.ts`; channel names i
 Wired so far: core (Phase 1) + `listModels`/`selectModel`/`startRuntime`/`stopRuntime` (Phase 2) +
 `createConversation`/`listConversations`/`listMessages`/`sendChatMessage`/`stopGeneration` (Phase 3) +
 `pickDocuments`/`importDocuments`/`getImportJob`/`listDocuments`/`deleteDocument`/`reindexDocument`
-(Phase 4) + `askDocuments` (Phase 6). The benchmark handler lands in Phase 7. (`pickDocuments` +
+(Phase 4) + `askDocuments` (Phase 6) + `runBenchmark` (Phase 7). (`pickDocuments` +
 `reindexDocument` are Phase-4 additions to the `IPC` registry beyond the spec §9.1 list — picker +
 re-index UX.) `createConversation` now also accepts an optional `mode` ('chat' | 'documents')._
 
@@ -168,7 +192,8 @@ foreign keys on). `Db` type = `InstanceType<typeof DatabaseSync>`. Loaded via `c
 ### Settings storage
 ✅ `src/main/services/settings.ts` — key/value rows; `getSettings` merges over `DEFAULT_SETTINGS`;
 `updateSettings(patch)` upserts; `seedSettings` seeds on first run. Default `allowNetwork:false`,
-`workspaceMode:'plaintext_dev'`, `contextTokens:4096`.
+`workspaceMode:'plaintext_dev'`, `contextTokens:4096`. **Phase 7 added `lastBenchmark`**
+(JSON `BenchmarkResult | null`, default `null`) — the persisted hardware profile lives here.
 
 ### Workspace/paths
 ✅ `src/main/services/workspace.ts` — `resolvePaths({envRoot,fallbackRoot})` → `ResolvedPaths`
@@ -192,7 +217,8 @@ restart on switch) + `MockRuntime` (health ok; `chatStream` stubbed until Phase 
 ✅ **IPC** `src/main/ipc/registerModelIpc.ts` — `listModels`, `selectModel`, `startRuntime`,
 `stopRuntime`; wired in `initBackend()`. `ctx` now carries `runtime` + `manifestsDir`. Runtime stopped
 on `will-quit`. Preload exposes all four. **Models screen** renders states/license/recommend/verify/
-select/start-stop. Hardware profile **stubbed `LITE`** until Phase 7.
+select/start-stop. Hardware profile now comes from the **persisted Phase-7 benchmark**
+(`lastBenchmark?.profile ?? 'UNKNOWN'`); the old `LITE` stub is gone.
 
 ### Chat + streaming (Phase 3 live)
 ✅ **`services/chat.ts`** (spec §7.6) — `createConversation`, `listConversations`,
@@ -310,43 +336,61 @@ stop, regenerate, per-message copy, and the no-runtime empty state.
   `ChatScreen` Chat/Ask-Documents toggle (mode is per-conversation), `askDocuments` path, and
   a per-message **Sources** panel with expandable cited snippets.
 
+### Hardware benchmark + recommendation (Phase 7 live)
+✅ **`services/benchmark.ts`** (spec §7.3, §11). Full detail in [`docs/benchmark.md`](docs/benchmark.md).
+- **`detectSystem()`** (`node:os`) → `{ os, arch, cpuModel, cpuCores, ramGb, gpu }`; never
+  throws (failed probe → `''`/`0`); **`gpu` is best-effort `null`**.
+- **`classifyProfile(ramGb, { tokensPerSecond?, gpu? })`** — pure; spec §11.3 thresholds +
+  GPU bump + low-tok/sec downgrade; invalid RAM → `UNKNOWN`.
+- **`measureDriveSpeed(workspacePath)`** → `{ readMbps, writeMbps, error? }`; 8 MB temp file
+  written **inside the workspace**, timed write(`fsync`)+read, **always cleaned up**, failure
+  → `null` + `error`.
+- **`measureTokensPerSecond(runtime)`** → number | `null` (only when a runtime is active;
+  prompt + ≤64 tokens). Mock now, real in Phase 10.
+- **`buildWarnings(...)`** — spec §11.4 friendly copy (weak hardware / slow drive /
+  un-measurable drive); slow drive warns, never blocks.
+- **`runBenchmark(deps)`** → `BenchmarkResult` (the existing `shared/types.ts` shape):
+  detection + drive + optional tokens/sec + `classifyProfile` + `recommendModelId` + warnings.
+- **`ipc/registerBenchmarkIpc.ts`** — `runBenchmark()` (`benchmark:run`); runs it, persists to
+  `settings.lastBenchmark`, returns the result. Registered in `initBackend()`; exposed on
+  preload `api.runBenchmark` + `PreloadApi`.
+- **Renderer:** `DiagnosticsScreen` Run-benchmark button → RAM / CPU / OS-arch / drive
+  read-write / tokens-sec / profile / recommended model + warnings; re-loads `lastBenchmark`
+  on mount. `HomeScreen` profile reflects the persisted value via `getAppStatus`.
+
 ---
 
-## 5. Next actions (do these next) — START OF PHASE 7
+## 5. Next actions (do these next) — START OF PHASE 8
 
-Phase 7 = Hardware benchmark & model recommendation (spec Milestone 7 / Step 9). Build, in order:
-1. **Benchmark service** (`services/benchmark.ts`) — detect RAM / OS / CPU (model, cores) via
-   `node:os`, measure drive read/write speed (write+read a temp file in the workspace), and
-   (best-effort) a tokens/sec estimate. **No network.** Return the `BenchmarkResult` shape that
-   already exists in `shared/types.ts`.
-2. **Profile assignment** — map detected hardware → `HardwareProfile`
-   (`TINY`/`LITE`/`BALANCED`/`PRO`) and surface a recommended model id (reuse
-   `recommendModelId` / the manifest `recommended_profiles`). Replace the **stubbed `LITE`**
-   profile (Models screen + `getAppStatus.hardwareProfile`) with the real one. Add warnings for
-   weak hardware (spec Milestone 7).
-3. **`runBenchmark()` IPC** — channel name `benchmark:run` already exists in `shared/ipc.ts`;
-   add the handler + register in `initBackend()`, expose via preload.
-4. **Renderer** — a benchmark/diagnostics view that runs it and shows RAM/CPU/drive/profile +
-   the recommended model + weak-hardware warnings.
-5. Tests: detection shape, profile thresholds, recommendation selection, warning conditions,
-   and a **no-network assertion** across the benchmark path. Keep all green.
-6. **Ritual:** docs (a `docs/benchmark.md` or extend an existing doc) + this file; commit.
+Phase 8 = Privacy & offline hardening (spec Milestone 8 / Step 10). Build, in order:
+1. **Policy** (`policy.ts`) — load `policy.json`/`drive.json`; `allow_network` default **false**.
+   A startup self-check that asserts no outbound network in the core path.
+2. **Visible offline mode everywhere** — wire the offline indicator (already on `AppStatus`),
+   the settings checkbox "Allow internet access for model downloads and updates" (default off),
+   and make the no-network guarantee user-visible.
+3. **Privacy & Offline screen** — flesh out the `PlaceholderScreen` (spec §7.10/§18.1 copy):
+   what stays local, where data lives, logs local-only, plaintext-dev-mode separation.
+4. **Audit** — CSP / no-network sweep; logs local only; ensure plaintext developer mode is
+   clearly separated from the (future) encrypted default.
+5. Tests: policy default-off, the offline self-check, settings toggle behaviour. Keep all green.
+6. **Ritual:** docs (`docs/privacy.md` or extend) + this file; commit.
 
-Notes / gotchas for Phase 7:
-- Drive-speed measurement must write inside the workspace (writable) and clean up after itself;
-  keep it quick and bounded so it never hangs the UI. Still no network/telemetry.
-- The recommendation logic already exists (`recommendModelId`, `recommended_profiles`); Phase 7
-  feeds it a *real* profile instead of the `LITE` stub.
+Notes / gotchas for Phase 8:
+- The benchmark (Phase 7) is the most "systems-y" code so far and is already guarded by a
+  no-network assertion; reuse that test pattern for the Phase-8 startup self-check.
+- `allowNetwork` already exists on `AppSettings` (default false) + drives
+  `AppStatus.offlineMode`; Phase 8 makes it authoritative + visible, it does not invent it.
 
-Phase 6 is DONE: typecheck clean, **102/102 tests pass** (92 prior + 10 new: grounded-prompt
-template shape + source-context format + meta fallback + trailing `Answer:`; retrieval returns the
-right chunk with resolved citations + snippet; sequential `[Sn]` labelling; **dedup by
-document/page**; **topKFinal + maxContextTokens** trim; min-similarity filter;
-`generateGroundedAnswer` streams + **persists citations to `citations_json`** (round-trips on
-reload); **empty-corpus path returns the fixed answer without calling the runtime**; **no-network
-assertion** across ingestion + retrieval + grounded answer). `NODE_OPTIONS=--use-system-ca npm run
-build` green (**main bundle 57.28 kB**). No new dependencies. (Live `npm run dev` window smoke =
-manual.)
+Phase 7 is DONE: typecheck clean, **119/119 tests pass** (102 prior + 17 new: system-detection
+shape; profile thresholds at 8/16/32 boundaries; low-tok/sec downgrade; GPU bump;
+`UNKNOWN` on invalid RAM; recommendation per profile from the real manifests
+(TINY→1.7b, LITE→4b, BALANCED/PRO→8b, UNKNOWN→1.7b); **drive probe writes inside the workspace
+and cleans up** + null/error on un-writable; tokens/sec null without a runtime + positive with
+the mock; warning conditions (weak-hardware §11.4 copy, slow drive, un-measurable drive, empty
+for healthy); `runBenchmark` assembles a full result + **persists to `lastBenchmark`** so
+`getAppStatus`/`buildModelList` read the real profile; **no-network assertion** across the whole
+benchmark path). `NODE_OPTIONS=--use-system-ca npm run build` green (**main bundle 63.25 kB**).
+No new dependencies. (Live `npm run dev` window smoke = manual.)
 
 ---
 
