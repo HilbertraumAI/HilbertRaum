@@ -74,6 +74,27 @@ export interface PolicyStatus {
   telemetryAllowed: boolean
 }
 
+// ---- Workspace vault / encryption (Phase 9, spec §3.5/§7.9) ----
+
+/** Lifecycle state of the workspace as seen by the app shell / unlock gate. */
+export type WorkspaceStateName = 'uninitialized' | 'locked' | 'unlocked'
+
+/** What `getWorkspaceState()` returns — drives the onboarding/unlock gate. */
+export interface WorkspaceStateInfo {
+  state: WorkspaceStateName
+  /** Active/declared mode; null only when uninitialized with no choice yet made. */
+  mode: WorkspaceMode | null
+  /** Whether choosing a plaintext (developer) workspace is permitted by policy + env. */
+  plaintextAllowed: boolean
+  /** Policy requires encryption — onboarding may not offer plaintext. */
+  encryptionRequired: boolean
+}
+
+/** Result of an unlock/create action (a wrong password is a normal, non-throwing result). */
+export type WorkspaceActionResult =
+  | { ok: true; state: WorkspaceStateInfo }
+  | { ok: false; reason: 'wrong_password' | 'refused' | 'error'; message: string }
+
 export interface DriveStatus {
   /** Root directory that holds models + workspace (drive root or app-data fallback). */
   rootPath: string

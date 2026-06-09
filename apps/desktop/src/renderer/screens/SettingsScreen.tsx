@@ -68,7 +68,11 @@ export function SettingsScreen(): JSX.Element {
           <dt>Context tokens</dt>
           <dd>{settings.contextTokens}</dd>
         </dl>
-        <p className="hint">Encrypted workspace arrives in Phase 9.</p>
+        <p className="hint">
+          {settings.workspaceMode === 'encrypted'
+            ? 'This workspace is encrypted at rest. Use “Lock now” in the sidebar to re-encrypt and lock it; it also locks automatically on quit.'
+            : 'Plaintext developer workspace — data is stored unencrypted. The encrypted mode is the commercial default.'}
+        </p>
       </div>
 
       {saving && <p className="hint">Saving…</p>}

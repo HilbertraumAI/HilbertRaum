@@ -6,6 +6,8 @@ import { SettingsScreen } from './screens/SettingsScreen'
 import { ModelsScreen } from './screens/ModelsScreen'
 import { ChatScreen } from './screens/ChatScreen'
 import { DocumentsScreen } from './screens/DocumentsScreen'
+import { WorkspaceGate } from './screens/WorkspaceGate'
+import type { WorkspaceStateInfo } from '@shared/types'
 
 type ScreenId =
   | 'home'
@@ -34,12 +36,29 @@ const NAV: NavItem[] = [
 
 export function App(): JSX.Element {
   const [screen, setScreen] = useState<ScreenId>('home')
+  // Phase 9: the workspace lifecycle gate. Null = still loading; not 'unlocked' = show
+  // the create-password / unlock gate before the normal app shell.
+  const [workspace, setWorkspace] = useState<WorkspaceStateInfo | null>(null)
   // Live offline state for the sidebar badge (spec §3.6). Re-checked when the
   // Privacy/Settings screens are visited (network toggle may have changed).
   const [offline, setOffline] = useState(true)
   const [disabledByPolicy, setDisabledByPolicy] = useState(false)
 
   useEffect(() => {
+    let active = true
+    window.api
+      ?.getWorkspaceState()
+      .then((s) => active && setWorkspace(s))
+      .catch(() => active && setWorkspace({ state: 'unlocked', mode: null, plaintextAllowed: true, encryptionRequired: false }))
+    return () => {
+      active = false
+    }
+  }, [])
+
+  const unlocked = workspace?.state === 'unlocked'
+
+  useEffect(() => {
+    if (!unlocked) return
     let active = true
     window.api
       ?.getPolicy()
@@ -52,7 +71,24 @@ export function App(): JSX.Element {
     return () => {
       active = false
     }
-  }, [screen])
+  }, [screen, unlocked])
+
+  async function lockNow(): Promise<void> {
+    const next = await window.api.lockWorkspace()
+    setWorkspace(next)
+    setScreen('home')
+  }
+
+  if (workspace && !unlocked) {
+    return <WorkspaceGate state={workspace} onUnlocked={setWorkspace} />
+  }
+  if (!workspace) {
+    return (
+      <div className="gate-shell">
+        <p className="hint">Loading workspace…</p>
+      </div>
+    )
+  }
 
   const badgeText = disabledByPolicy
     ? '● Disabled by policy'
@@ -83,6 +119,11 @@ export function App(): JSX.Element {
             </li>
           ))}
         </ul>
+        {workspace.mode === 'encrypted' && (
+          <button className="btn sm lock-btn" title="Re-encrypt and lock the workspace" onClick={() => void lockNow()}>
+            🔒 Lock now
+          </button>
+        )}
         <button
           className={`offline-badge ${offline ? '' : 'network-on'}`}
           title="No prompts or files leave this device"

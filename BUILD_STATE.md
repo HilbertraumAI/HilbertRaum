@@ -5,7 +5,7 @@
 > (see "Per-phase ritual" in [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md)).
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
-_Last updated: 2026-06-09 — Phase 8 complete; Phase 9 next_
+_Last updated: 2026-06-09 — Phase 9 complete; Phase 10 next_
 
 ---
 
@@ -22,8 +22,8 @@ _Last updated: 2026-06-09 — Phase 8 complete; Phase 9 next_
 | 6 | RAG chat with citations | 🟢 done |
 | 7 | Hardware benchmark & recommendation | 🟢 done |
 | 8 | Privacy & offline hardening | 🟢 done |
-| 9 | Encrypted workspace | 🟡 next |
-| 10 | Real llama.cpp runtime & embeddings | ⚪ not started |
+| 9 | Encrypted workspace | 🟢 done |
+| 10 | Real llama.cpp runtime & embeddings | 🟡 next |
 | 11 | Drive layout, scripts & packaging | ⚪ not started |
 
 Legend: ⚪ not started · 🟡 in progress · 🟢 done · 🔴 blocked
@@ -180,6 +180,36 @@ Repo root: `f:\_coding\ai_drive`.
 - **Logs-local guarantee (Phase 8):** confirmed `services/logging.ts` is the only log writer
   (rotating `app.log` under `logsPath`); nothing writes logs/crash data off-device. Stated as fact
   on the Privacy screen + PRIVACY.md.
+- **KDF = `scrypt` (`node:crypto`), not native Argon2id (Phase 9, R4):** Argon2id is the stronger
+  default in principle but native `argon2` is a fragile build on Node 24, so we ship the built-in,
+  memory-hard `scrypt` as the portable primary. Params `N=2^15, r=8, p=1, keyLen=32` (≈32 MiB;
+  `maxmem` raised). The vault descriptor records `algo` + params so unlock is deterministic AND an
+  `argon2id` path can be added later **without changing the on-disk format**. No new deps.
+- **Whole-DB-FILE encryption-at-rest (Phase 9, plan §4b):** `node:sqlite` has no SQLCipher, so the
+  whole file is encrypted (AES-256-GCM, fresh 12-byte IV/encryption, 16-byte tag) — **the spec §8
+  schema is identical in both modes**. At-rest artifact = `paid.sqlite.enc` (framed
+  `MAGIC|iv|tag|ciphertext`). **On unlock:** verify password against an authenticated verifier (no
+  DB touched) → decrypt `.enc` → `paid.sqlite` **on the drive** → `openDatabase`. **On lock/quit:**
+  `PRAGMA wal_checkpoint(TRUNCATE)` + close → re-encrypt → `.enc` → **shred** the plaintext working
+  file + `-wal`/`-shm`. The plaintext working copy on disk while unlocked is a **documented
+  limitation**; secure-erase is **best-effort** on SSDs (wear-levelling).
+- **Vault descriptor = unencrypted `config/workspace.json` (Phase 9):** settings (incl.
+  `workspaceMode`) live INSIDE the encrypted DB, so the app can't read them pre-unlock. The
+  descriptor `{ version, mode:'encrypted', kdf{algo,N,r,p,keyLen}, saltB64, verifier{iv,tag,ct} }` is
+  the **only** pre-unlock artifact; it holds salt + KDF params + an AES-GCM **verifier** (known
+  plaintext under the key) — **never** the password or key (both memory-only). Tests scan the
+  descriptor + `.enc` and assert the password is absent.
+- **Plaintext gating now ENFORCED (Phase 9):** `plaintextAllowed(policy, {isDev, developerMode})` —
+  `workspace.encryptionRequired` is an absolute veto; `allowPlaintextDevMode` must be true; AND the
+  caller must be a developer (dev build / developer mode). Pre-unlock `developerMode` is unreadable
+  (in the encrypted DB) so `isDev` is the proxy. ⇒ a commercial build (not dev, encryptionRequired
+  or no policy file) **defaults to encrypted** and onboarding never offers plaintext.
+- **Lock-on-quit + Lock-now (Phase 9):** `WorkspaceController.lock()` runs on `will-quit` (alongside
+  `runtime.stop()`) and from a sidebar **Lock now** button. `lock()` is a **no-op for plaintext_dev**
+  (nothing to protect; closing it would wedge the app back into onboarding) — the plaintext DB just
+  stays open until process exit. `db` on `AppContext` is a **getter** over the controller
+  (`requireDb()` throws while locked), so all existing `ctx.db` call sites are unchanged and track
+  unlock/lock at call time.
 
 ---
 
@@ -211,10 +241,12 @@ _Status: TypeScript types in `apps/desktop/src/shared/types.ts`; channel names i
 Wired so far: core (Phase 1) + `listModels`/`selectModel`/`startRuntime`/`stopRuntime` (Phase 2) +
 `createConversation`/`listConversations`/`listMessages`/`sendChatMessage`/`stopGeneration` (Phase 3) +
 `pickDocuments`/`importDocuments`/`getImportJob`/`listDocuments`/`deleteDocument`/`reindexDocument`
-(Phase 4) + `askDocuments` (Phase 6) + `runBenchmark` (Phase 7) + `getPolicy` (Phase 8).
+(Phase 4) + `askDocuments` (Phase 6) + `runBenchmark` (Phase 7) + `getPolicy` (Phase 8) +
+`getWorkspaceState`/`unlockWorkspace`/`createWorkspace`/`lockWorkspace` (Phase 9).
 (`pickDocuments` + `reindexDocument` are Phase-4 additions to the `IPC` registry beyond the spec
-§9.1 list — picker + re-index UX; `getPolicy` is a Phase-8 addition.) `createConversation` now also
-accepts an optional `mode` ('chat' | 'documents')._
+§9.1 list — picker + re-index UX; `getPolicy` is a Phase-8 addition; the four `workspace:*` channels
+are Phase-9 additions.) `createConversation` now also accepts an optional `mode`
+('chat' | 'documents')._
 
 ### DB schema
 ✅ Implemented in `src/main/services/db.ts` — all spec §8 tables created idempotently (WAL mode,
@@ -226,6 +258,9 @@ foreign keys on). `Db` type = `InstanceType<typeof DatabaseSync>`. Loaded via `c
 `updateSettings(patch)` upserts; `seedSettings` seeds on first run. Default `allowNetwork:false`,
 `workspaceMode:'plaintext_dev'`, `contextTokens:4096`. **Phase 7 added `lastBenchmark`**
 (JSON `BenchmarkResult | null`, default `null`) — the persisted hardware profile lives here.
+⚠️ **Settings live INSIDE the (possibly encrypted) DB** — unreadable before unlock (Phase 9). The
+unencrypted `config/workspace.json` vault descriptor is the only pre-unlock artifact;
+`workspaceMode` is set to the active mode by the `WorkspaceController` on open.
 
 ### Workspace/paths
 ✅ `src/main/services/workspace.ts` — `resolvePaths({envRoot,fallbackRoot})` → `ResolvedPaths`
@@ -417,49 +452,97 @@ stop, regenerate, per-message copy, and the no-runtime empty state.
   disabled by policy), plaintext-dev-mode caveat, logs-local guarantee. Sidebar `offline-badge` is a
   live button (reads `getPolicy`, links to Privacy).
 
+### Encrypted workspace (Phase 9 live)
+✅ **`services/security/crypto.ts`** (spec §3.5) — pure KDF + AEAD, no I/O.
+- **KDF:** `deriveKey(password, salt, params)` → 32-byte key via `scrypt`. `KdfParams =
+  { algo:'scrypt', N, r, p, keyLen }`, `DEFAULT_KDF = { scrypt, 32768, 8, 1, 32 }`. `generateSalt()`
+  → 16 random bytes. Deterministic for the same password+salt+params.
+- **AEAD:** `encrypt(key, plaintext) → { iv(12), tag(16), ciphertext }` (AES-256-GCM, fresh IV),
+  `decrypt(key, blob)` (throws on wrong key/tamper). `serializeBlob`/`deserializeBlob`
+  (`MAGIC(8)|iv|tag|ct` on-disk frame). `makeVerifier(key)`/`verifyKey(key, verifier)` (password
+  check via a known-plaintext GCM blob — never touches the DB).
+✅ **`services/workspace-vault.ts`** (spec §7.9) — the lock/unlock lifecycle.
+- **Descriptor:** `VaultDescriptor { version, mode:'encrypted', kdf, saltB64, verifier }` at
+  **`config/workspace.json`** (unencrypted; the only pre-unlock artifact).
+  `readVaultDescriptor`/`writeVaultDescriptor` (atomic). `vaultPathsFrom({configPath,dbPath})` →
+  `VaultPaths { descriptorPath, encPath = <dbPath>.enc, dbPath }`.
+- **File crypto + hygiene:** `encryptFile`/`decryptFile` (atomic temp+rename), `shredFile`
+  (overwrite-random + unlink, best-effort), `cleanSidecars` (shred `-wal`/`-shm`).
+- **Lifecycle:** `createEncryptedVaultOnDisk(vaultPaths, password, kdf?)` (writes descriptor + seeds
+  an initial DB + encrypts → `.enc` + shreds, leaving it LOCKED); `unlockEncryptedVault(vaultPaths,
+  password) → { db, key, descriptor }` (verify → decrypt → open; throws **`WrongPasswordError`**);
+  `lockEncryptedVault(vaultPaths, db, key)` (checkpoint+close → re-encrypt → shred).
+  `plaintextAllowed(policy, {isDev, developerMode})` gates plaintext (now **enforced**).
+- **`WorkspaceController`** (stateful, on `AppContext`): `init()` (startup: plaintext opens
+  immediately, encrypted stays locked, else uninitialized), `getState() → WorkspaceStateInfo`,
+  `requireDb()` (throws while locked), `isUnlocked()`, `unlock(password)`, `create(password, mode)`,
+  `lock()` (no-op for plaintext).
+✅ **IPC** `ipc/registerWorkspaceIpc.ts` — `getWorkspaceState` (`workspace:getState`) →
+  `WorkspaceStateInfo`; `unlockWorkspace(password)` / `createWorkspace(password, mode)` →
+  **`WorkspaceActionResult`** (`{ok:true,state}` | `{ok:false, reason:'wrong_password'|'refused'|
+  'error', message}` — a wrong password / policy refusal is a normal result, not a throw);
+  `lockWorkspace` → `WorkspaceStateInfo`. Registered in `initBackend()`; exposed on preload `api` +
+  `PreloadApi`.
+- **Types** (`shared/types.ts`): `WorkspaceStateName` (`uninitialized|locked|unlocked`),
+  `WorkspaceStateInfo { state, mode, plaintextAllowed, encryptionRequired }`, `WorkspaceActionResult`.
+✅ **`AppContext.db` is now a getter** over `workspace.requireDb()` (throws while locked) +
+  `AppContext.workspace: WorkspaceController`. `main/index.ts` builds the controller from
+  `loadPolicy(...).policy` + `isDev`, calls `init()`, and locks on `will-quit`. `registerCoreIpc`'s
+  `getAppStatus` now derives `workspaceReady = workspace.isUnlocked()` and `workspaceMode` from the
+  controller (reads settings only when unlocked); `getPolicy`/status default `allowNetwork=false`
+  while locked (offline ceiling stays intact pre-unlock).
+✅ **Renderer:** `screens/WorkspaceGate.tsx` — the pre-app create-password / unlock gate (encrypted
+  vs plaintext choice when policy allows, confirm + strength hint, wrong-password error). `App.tsx`
+  fetches `getWorkspaceState()` on mount and renders the gate until `unlocked`; sidebar **Lock now**
+  button (encrypted only) calls `lockWorkspace`. The Settings workspace card reflects the real mode.
+
 ---
 
-## 5. Next actions (do these next) — START OF PHASE 9
+## 5. Next actions (do these next) — START OF PHASE 10
 
-Phase 9 = Encrypted workspace (spec Milestone 9). Build, in order:
-1. **`services/security/crypto.ts`** — Argon2id KDF (native `argon2`), with a documented
-   `node:crypto` `scrypt` **fallback** if the native build fails on Node 24 (R4). AES-256-GCM for the
-   workspace DB file. Password **never stored**; persist only salt + KDF params (in `config/` or a
-   small unencrypted header, NOT in the encrypted DB). Pure + unit-testable (round-trip, wrong
-   password fails, KDF determinism with stored params).
-2. **Workspace lock/unlock flow** — whole-DB-file encryption-at-rest (no SQLCipher under
-   `node:sqlite`, see plan §4b): on unlock, decrypt to a working file **on the drive** (not a temp
-   cloud dir); on lock/quit, re-encrypt + shred the plaintext working copy. Wire into
-   `main/index.ts` lifecycle (`will-quit` already stops the runtime — add re-lock).
-3. **Mode separation** — honour `workspaceMode` (`encrypted` vs `plaintext_dev`) + the Phase-8
-   policy (`workspace.encryptionRequired` / `allowPlaintextDevMode`). The Privacy screen already
-   labels plaintext mode; Phase 9 makes the policy *enforce* it (refuse plaintext when the policy
-   forbids it).
-4. **Onboarding password step** — create/enter the workspace password (commercial default =
-   encrypted).
-5. Tests: KDF determinism with stored params, encrypt/decrypt round-trip, wrong-password failure,
-   **no plaintext password persisted**. Keep all green + reuse `freshDb`/spy patterns.
-6. **Ritual:** docs (`docs/security-model.md` encryption section, `SECURITY.md`) + this file; commit.
+Phase 10 = **Real llama.cpp runtime & real embeddings** (spec Step 5 real / §3.2). Build, in order:
+1. **`LlamaRuntime`** behind the existing `ModelRuntime` interface (swap the `createMockRuntime`
+   factory in `main/index.ts` / `RuntimeManager`). Spawn the platform `llama.cpp` server sidecar
+   bound to **`127.0.0.1` only** (loopback is exempt from the Phase-8 offline guard — keep it that
+   way; a remote bind would trip the tripwire). Stream tokens through the **locked Phase-3 streaming
+   contract** (`chat:token/done/error:<id>`) and honour `options.signal` for cancellation.
+2. **Real embedder** (E5-small GGUF) behind the `Embedder` interface, replacing `MockEmbedder` on
+   `AppContext.embedder`. Keep **`dimensions = 384`** + the locked Float32 BLOB encoding so existing
+   `embeddings` rows + `VectorIndex` are drop-in. Re-embedding on a model change is a migration to
+   consider.
+3. **Graceful fallback:** when sidecar binaries / GGUF weights are absent, fall back to the mock (or
+   a clear "model missing" state) so the app still launches offline with zero model files — the
+   Phase 2 model-state machine (`missing`/`checksum_failed`/`installed`) already models this.
+4. **Real tokens/sec** in `measureTokensPerSecond` (Phase 7 left it mock); the benchmark + profile
+   downgrade rule and the GPU bump become live.
+5. Tests: keep all green; the runtime/embedder swaps are behind interfaces so service tests stay
+   valid. Live llama.cpp inference is a **manual** acceptance step (R5 — needs platform binaries +
+   a GGUF model not in the repo).
+6. **Ritual:** docs (runtime/embedder design) + this file; commit.
 
-Notes / gotchas for Phase 9:
-- **R4:** native `argon2` may not build on Node 24 — implement the `scrypt` fallback behind the same
-  interface and document which is active. Install deps with `NODE_OPTIONS=--use-system-ca npm install`
-  (R6).
-- The Phase-8 `WorkspacePolicy` block (`encryptionRequired`, `allowPlaintextDevMode`) is **loaded +
-  exposed but not yet enforced** — Phase 9 is where it gates the workspace mode.
-- Keep the same spec §8 schema for both modes (encryption wraps the file, not the rows).
+Notes / gotchas for Phase 10:
+- **R5:** real llama.cpp needs platform sidecar binaries + a GGUF model not in the repo → live test
+  is manual. Install any deps with `NODE_OPTIONS=--use-system-ca npm install` (R6).
+- **Keep the sidecar on 127.0.0.1.** The offline guard exempts loopback precisely for this; never
+  bind a routable interface. The no-network assertions assume loopback-only.
+- **Encrypted workspace is transparent to runtimes.** Phase 9 is storage-at-rest; the runtime/
+  embedder read/write the DB through the same `AppContext.db` getter whether the workspace is
+  encrypted or plaintext.
 
-Phase 8 is DONE: typecheck clean, **137/137 tests pass** (119 prior + 18 new: policy parse [valid
-commercial file, malformed → defaults + warn, non-boolean fields keep defaults], `loadPolicy`
-[missing files → defaults, both files present, malformed drive.json → defaults + warn],
-**deny-by-default** [no file → network off even with the setting on], effective-permission matrix
-[policy forbids ⇒ off; permits + on ⇒ on; permits + off ⇒ off], `buildPolicyStatus` derivation +
-telemetry-always-off, offline self-check [loopback/localhost/::1/unspecified exempt; remote flagged
-only while offline; `installOfflineNetworkGuard` logs a remote attempt + allows loopback + no-op
-when online; `assertOfflinePosture` logs + returns an uninstaller], and a **no-network assertion**
-across the core path [settings + policy load + status make zero http/https/net/Socket/fetch calls]).
-`NODE_OPTIONS=--use-system-ca npm run build` green (**main bundle 70.15 kB**). No new dependencies.
-(Live `npm run dev` window smoke = manual; CSP dev split keeps HMR working.)
+Phase 9 is DONE: typecheck clean, **161/161 tests pass** (137 prior + 24 new: **crypto** [scrypt KDF
+determinism with stored params, different passwords/salts diverge, unsupported algo throws;
+AES-256-GCM round-trip, fresh-IV-per-encryption, wrong-key fails, ciphertext+tag tamper detection;
+framed serialize/deserialize round-trip + foreign-header reject; verifier accepts right / rejects
+wrong key without the DB] + **vault** [creates LOCKED on disk (descriptor+`.enc`, no working file);
+lock→encrypt→unlock round-trip reads rows back, plaintext working file + `-wal`/`-shm` shredded after
+lock; wrong password throws `WrongPasswordError` + writes no plaintext file; **no plaintext password
+persisted** (descriptor + `.enc` scanned); plaintext-gating matrix (encryptionRequired ⇒ refused,
+allowPlaintextDevMode:false ⇒ refused, non-dev ⇒ refused); `WorkspaceController`
+uninitialized→unlocked→locked→unlocked + plaintext-opens-in-dev + existing-vault-starts-locked +
+plaintext-create-refused; **no-network assertion** across create+unlock+lock]).
+`NODE_OPTIONS=--use-system-ca npm run build` green (**main bundle 81.64 kB**). No new dependencies.
+(Live `npm run dev` window smoke = manual; the unlock gate renders before the sidebar and does not
+wedge HMR.)
 
 ---
 
@@ -474,7 +557,9 @@ across the core path [settings + policy load + status make zero http/https/net/S
   `mammoth`/`papaparse` are pure-JS too. All three marked **external** (`externalizeDepsPlugin`) so
   pdfjs's large ESM bundle is required at runtime, not bundled. Only a harmless `standardFontDataUrl`
   warning (rendering-only). Ambient typings for the legacy path in `parsers/pdfjs.d.ts`.
-- **R4 Argon2id** — native `argon2` may not build on Node 24; fallback to `node:crypto` `scrypt` documented in Phase 9.
+- **R4 Argon2id ✅ RESOLVED (Phase 9)** — shipped `node:crypto` `scrypt` as the portable primary KDF
+  (no native `argon2`); the vault descriptor records `algo` + params so an Argon2id path can be added
+  later without changing the on-disk format. No native dep, no build risk on Node 24.
 - **R5 Real llama.cpp** — needs platform sidecar binaries + a GGUF model not in repo; Phase 10 live test is manual.
 - **R6 TLS-intercepting proxy on this machine** — `npm install` fails with `UNABLE_TO_VERIFY_LEAF_SIGNATURE` (corporate root CA). Workaround: `NODE_OPTIONS=--use-system-ca npm install` (Node 24 reads the Windows cert store). If that fails, `npm config set strict-ssl false` (dev-only, less secure) or set `NODE_EXTRA_CA_CERTS`. Affects dev installs only; the app stays offline.
 

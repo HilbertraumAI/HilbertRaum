@@ -1,12 +1,13 @@
 import { app, BrowserWindow, shell } from 'electron'
 import { join } from 'node:path'
 import { resolvePaths, ensureWorkspaceDirs } from './services/workspace'
-import { openDatabase } from './services/db'
-import { seedSettings, getSettings } from './services/settings'
-import { buildPolicyStatus } from './services/policy'
+import { getSettings } from './services/settings'
+import { loadPolicy, buildPolicyStatus } from './services/policy'
+import { vaultPathsFrom, WorkspaceController } from './services/workspace-vault'
 import { assertOfflinePosture } from './services/offlineGuard'
 import { initLogging, log } from './services/logging'
 import { registerCoreIpc } from './ipc/registerCoreIpc'
+import { registerWorkspaceIpc } from './ipc/registerWorkspaceIpc'
 import { registerModelIpc } from './ipc/registerModelIpc'
 import { registerChatIpc } from './ipc/registerChatIpc'
 import { registerDocsIpc } from './ipc/registerDocsIpc'
@@ -38,9 +39,17 @@ function initBackend(): void {
   initLogging(paths.logsPath)
   log.info('Workspace resolved', { root: paths.rootPath, preparedDrive: paths.isPreparedDrive })
 
-  const db = openDatabase(paths.dbPath)
-  seedSettings(db)
-  log.info('Database ready', { path: paths.dbPath })
+  // Phase 9: the workspace controller owns the DB lifecycle. In plaintext_dev mode the DB
+  // opens immediately (current dev behavior); in encrypted mode it stays locked until the
+  // unlock gate provides a password (the DB + key live only in memory while unlocked).
+  const { policy } = loadPolicy(paths.configPath, (m) => log.warn(m))
+  const workspace = new WorkspaceController(
+    vaultPathsFrom({ configPath: paths.configPath, dbPath: paths.dbPath }),
+    policy,
+    isDev
+  )
+  workspace.init()
+  log.info('Workspace state', workspace.getState())
 
   // Mock runtime + mock embedder for now; swapped for the real llama.cpp / E5 backends
   // in Phase 10, behind the same interfaces.
@@ -49,8 +58,20 @@ function initBackend(): void {
   const manifestsDir = resolveManifestsDir(app.getAppPath(), process.env.PAID_MANIFESTS_DIR)
   log.info('Model manifests directory', { manifestsDir })
 
-  ctx = { paths, db, runtime, embedder, manifestsDir }
+  // `db` is a getter over the controller: it throws while locked. DB-backed IPC is only
+  // reachable after the renderer's unlock gate reports the workspace ready.
+  ctx = {
+    paths,
+    get db() {
+      return workspace.requireDb()
+    },
+    workspace,
+    runtime,
+    embedder,
+    manifestsDir
+  }
   registerCoreIpc(ctx)
+  registerWorkspaceIpc(ctx)
   registerModelIpc(ctx)
   registerChatIpc(ctx)
   registerDocsIpc(ctx)
@@ -60,10 +81,16 @@ function initBackend(): void {
   // Phase 8: log the offline posture and install a defensive tripwire that flags any
   // attempt to reach a REMOTE host while offline (loopback is exempt — dev renderer +
   // future llama.cpp sidecar bind 127.0.0.1). The guard only logs; it never blocks.
-  const policy = buildPolicyStatus(paths.configPath, getSettings(db).allowNetwork, (m) => log.warn(m))
+  // When the workspace is locked the allowNetwork setting is unreadable → treat as off.
+  const unlocked = workspace.isUnlocked()
+  const status = buildPolicyStatus(
+    paths.configPath,
+    unlocked ? getSettings(ctx.db).allowNetwork : false,
+    (m) => log.warn(m)
+  )
   assertOfflinePosture({
-    posture: { offline: policy.offlineMode, networkAllowed: policy.networkAllowed },
-    installGuard: isDev || getSettings(db).developerMode,
+    posture: { offline: status.offlineMode, networkAllowed: status.networkAllowed },
+    installGuard: isDev || (unlocked && getSettings(ctx.db).developerMode),
     log: (m, meta) => log.info(m, meta),
     warn: (m, meta) => log.warn(m, meta)
   })
@@ -144,6 +171,13 @@ app.whenReady().then(() => {
 app.on('will-quit', () => {
   // Stop the active runtime (real llama.cpp sidecar in Phase 10) before quitting.
   void ctx?.runtime.stop()
+  // Phase 9: re-encrypt + shred the plaintext working DB on exit (encrypted vault only;
+  // a no-op for plaintext_dev). Synchronous so it completes before the process exits.
+  try {
+    ctx?.workspace.lock()
+  } catch (err) {
+    log.error('Failed to lock workspace on quit', String(err))
+  }
 })
 
 app.on('window-all-closed', () => {

@@ -26,7 +26,12 @@ export const IPC = {
   reindexDocument: 'docs:reindex',
   askDocuments: 'rag:ask',
   // Phase 7
-  runBenchmark: 'benchmark:run'
+  runBenchmark: 'benchmark:run',
+  // Phase 9 — encrypted workspace lifecycle
+  getWorkspaceState: 'workspace:getState',
+  unlockWorkspace: 'workspace:unlock',
+  createWorkspace: 'workspace:create',
+  lockWorkspace: 'workspace:lock'
 } as const
 
 // Renderer-bound streaming event channels (main -> renderer).

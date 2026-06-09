@@ -13,7 +13,10 @@ import type {
   Message,
   ModelInfo,
   PolicyStatus,
-  RuntimeStatus
+  RuntimeStatus,
+  WorkspaceActionResult,
+  WorkspaceMode,
+  WorkspaceStateInfo
 } from '../shared/types'
 
 // The single, typed bridge between renderer and main. The renderer has no
@@ -28,6 +31,19 @@ const api = {
   // ---- Privacy / offline policy (Phase 8) ----
   /** Effective privacy policy + derived network flags (policy ∧ setting). */
   getPolicy: (): Promise<PolicyStatus> => ipcRenderer.invoke(IPC.getPolicy),
+
+  // ---- Encrypted workspace lifecycle (Phase 9) ----
+  /** Current workspace state (uninitialized | locked | unlocked) for the unlock gate. */
+  getWorkspaceState: (): Promise<WorkspaceStateInfo> =>
+    ipcRenderer.invoke(IPC.getWorkspaceState),
+  /** Unlock an existing encrypted workspace; a wrong password is a normal failure result. */
+  unlockWorkspace: (password: string): Promise<WorkspaceActionResult> =>
+    ipcRenderer.invoke(IPC.unlockWorkspace, password),
+  /** First-run create of an encrypted (or gated plaintext) workspace. */
+  createWorkspace: (password: string, mode: WorkspaceMode): Promise<WorkspaceActionResult> =>
+    ipcRenderer.invoke(IPC.createWorkspace, password, mode),
+  /** Re-encrypt + shred the working DB and return to the locked state. */
+  lockWorkspace: (): Promise<WorkspaceStateInfo> => ipcRenderer.invoke(IPC.lockWorkspace),
 
   // ---- Models + runtime (Phase 2) ----
   listModels: (): Promise<ModelInfo[]> => ipcRenderer.invoke(IPC.listModels),

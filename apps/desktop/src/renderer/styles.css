@@ -72,6 +72,32 @@ body {
 .offline-badge:hover { border-color: var(--accent); }
 .offline-badge.network-on { color: var(--accent); }
 
+.lock-btn { margin-top: 12px; width: 100%; text-align: left; }
+
+/* Workspace unlock / onboarding gate (Phase 9) */
+.gate-shell {
+  height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg);
+  padding: 24px;
+}
+.gate-card { width: 100%; max-width: 420px; margin-top: 0; }
+.gate-card h1 { margin-bottom: 10px; }
+.gate-fields { display: flex; flex-direction: column; gap: 10px; margin: 16px 0; }
+.gate-input {
+  width: 100%;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 10px 12px;
+  border-radius: 8px;
+  font-size: 14px;
+}
+.gate-input:focus { outline: none; border-color: var(--accent); }
+.gate-card .btn.primary { width: 100%; margin-top: 8px; }
+
 /* Privacy & Offline screen (Phase 8) */
 .offline-statement { font-size: 15px; margin-bottom: 10px; }
 .offline-statement.on strong { color: var(--good); }
