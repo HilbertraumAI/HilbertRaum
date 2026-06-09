@@ -4,6 +4,7 @@ node_modules/
 # Build output
 dist/
 out/
+release/
 *.tsbuildinfo
 
 # Model weights — NEVER commit (spec rule 0.1.8 / 0.2)

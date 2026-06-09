@@ -1,0 +1,111 @@
+# Private AI Drive Lite — Troubleshooting
+
+_Last updated: 2026-06-09 (Phase 11)_
+
+Quick answers to common situations. Everything here is normal, local, and offline — none of
+these steps require the internet.
+
+---
+
+## "Offline Mode is ON — is something wrong?"
+
+**No. That is the intended state.** Private AI Drive Lite runs the AI model on your laptop and
+keeps your data local. It does not need the internet and network access is off by default. You
+can confirm this on the **Privacy** screen.
+
+---
+
+## The answers look like placeholders / "echo" replies
+
+The app is running its built-in **mock** model because no real model file was found on the
+drive. The mock lets you explore the interface, but it does not produce real AI answers.
+
+**Fix:** add a real model file:
+1. On the **Models** screen, note the model marked *Recommended*.
+2. Put the matching `.gguf` weight file into `models/chat/` on the drive (and the embeddings
+   model into `models/embeddings/`). File names come from the model's manifest (`local_path`).
+3. Put the `llama-server` program for your system into `runtime/llama.cpp/win` (Windows),
+   `runtime/llama.cpp/mac` (macOS), or `runtime/llama.cpp/linux` (Linux).
+4. Restart the app and **Start** the model again.
+
+If you have the repo, a drive builder can do steps 2–3 with the prepare-drive + verify-models
+scripts (see [`packaging.md`](packaging.md)).
+
+---
+
+## "The selected model is not installed on this drive."
+
+The model's weight file is missing from the `models/` folder. Add the file (above), or choose
+a model shown as **Installed**. The app never downloads models for you — that keeps it offline.
+
+---
+
+## A model shows "checksum failed"
+
+The model file on the drive doesn't match the expected fingerprint in its manifest. The file
+may be incomplete or corrupted. Re-copy the weight file, then run the verifier:
+
+```powershell
+.\scripts\verify-models.ps1 -Target E:\         # Windows
+```
+```bash
+scripts/verify-models.sh --target /Volumes/PRIVATE_AI_DRIVE   # macOS/Linux
+```
+
+On a developer drive, unverified models are allowed; a commercial drive requires a matching
+checksum.
+
+---
+
+## I forgot my workspace password
+
+Encrypted workspaces are protected by your password, which is **never stored**. If you forget
+it, the data **cannot be recovered** — this is by design. Create a new workspace to start over
+(your old encrypted data remains on the drive but unreadable).
+
+---
+
+## The app feels slow
+
+- **Slow drive:** running from a slow USB stick makes model loading and indexing sluggish. Use
+  a fast USB 3 / SSD drive, or copy the drive's contents to your computer. The **Diagnostics**
+  screen reports your drive's read/write speed and warns if it's slow.
+- **Heavy model for your laptop:** pick the **Recommended** model on the Models screen. The
+  benchmark suggests a model that suits your RAM/CPU. Larger models are more capable but slower.
+- **First start of a model** is always slower (it loads into memory); later prompts are faster.
+
+---
+
+## Importing a PDF didn't extract any text
+
+Some PDFs are scanned images with no embedded text. OCR (reading text from images) is **not**
+included in this Lite version, so those files can't be indexed. Use a text-based PDF, or paste
+the text into a `.txt`/`.md` file and import that.
+
+---
+
+## A document failed to import
+
+Open **Documents** to see the per-file error. Common causes: an unsupported file type, a
+corrupted file, or a password-protected document. Supported types: txt, md, pdf, docx, csv.
+Other files in the same import still succeed.
+
+---
+
+## The app won't start from the drive
+
+- Make sure you launched the app **from the drive** (so it uses the drive's workspace).
+- On Windows, the portable `.exe` may take a few seconds on first launch — wait for the window.
+- Check that the drive has free space and is writable (the **Diagnostics** screen reports both).
+- If the drive was just prepared, confirm `config/drive.json` exists at the drive root.
+
+---
+
+## Where are my data and logs?
+
+Everything is on the drive:
+- `workspace/` — your encrypted/plaintext database (chats, documents, embeddings).
+- `logs/app.log` — local logs only; never uploaded.
+- `models/` — model weights. `config/` — drive settings/policy.
+
+See [`drive-layout.md`](drive-layout.md) for the full layout.

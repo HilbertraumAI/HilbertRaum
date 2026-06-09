@@ -5,7 +5,7 @@
 > (see "Per-phase ritual" in [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md)).
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
-_Last updated: 2026-06-09 — Phase 10 complete; Phase 11 next_
+_Last updated: 2026-06-09 — Phase 11 complete; MVP feature-complete (manual acceptance remains)_
 
 ---
 
@@ -24,7 +24,7 @@ _Last updated: 2026-06-09 — Phase 10 complete; Phase 11 next_
 | 8 | Privacy & offline hardening | 🟢 done |
 | 9 | Encrypted workspace | 🟢 done |
 | 10 | Real llama.cpp runtime & embeddings | 🟢 done |
-| 11 | Drive layout, scripts & packaging | 🟡 next |
+| 11 | Drive layout, scripts & packaging | 🟢 done |
 
 Legend: ⚪ not started · 🟡 in progress · 🟢 done · 🔴 blocked
 
@@ -240,6 +240,38 @@ Repo root: `f:\_coding\ai_drive`.
   Chosen over a forced reindex-on-switch (cheaper, no re-embed pass; a reindex still re-embeds with the
   active model). Default (no id) scans all rows ⇒ existing callers/tests unchanged. A test proves a
   mock↔real switch can't blend vector spaces.
+- **Script logic in a tested TS module + self-contained shell scripts (Phase 11):** the canonical
+  layout/config/checksum logic lives in `services/drive.ts` and is unit-tested by vitest; the
+  `scripts/*.{ps1,sh}` **re-implement the same plan natively** rather than shelling out to Node.
+  Rationale: a drive must be preparable on a **fresh machine with no Node/npm** (and no TS runner is
+  installed — tsx/ts-node absent), and tests must run in CI without PowerShell/bash. `drive.ts` is the
+  documented source of truth; the small drift surface (dir list + JSON shapes) is cross-checked (the
+  PS + bash + TS all emit byte-identical config in smoke tests).
+- **Drive-layout naming reconciliation (LOCKED, Phase 11):** the prepared-drive dirs follow the
+  **code**, not the spec's prose. Sidecar OS sub-dirs are **`win`/`mac`/`linux`** (`sidecar.ts`
+  `llamaOsDir`), and manifests live in a **top-level `model-manifests/`** (`models.ts`
+  `resolveManifestsDir`) — NOT `windows/macos/linux` or `models/manifests/`. `drive.ts`
+  `DRIVE_LAYOUT_DIRS` is canonical; `docs/drive-layout.md` was corrected to match.
+- **Config-generator defaults (Phase 11):** `prepare-drive` writes `config/drive.json` (the
+  prepared-drive marker `resolvePaths` keys off) + `config/policy.json`. **Network is ALWAYS
+  deny-by-default** (the offline guarantee — `resolveNetwork` is policy ∧ user setting). The default
+  posture is **commercial** (spec §6 example: encryption required, no plaintext, models must verify);
+  a `-Dev`/`--dev` flag flips to a developer-friendly drive (plaintext + unverified allowed) but
+  **still denies network**. JSON shapes are exactly what `parsePolicy`/`mergePolicyObject` accept
+  (snake_case booleans). Files are written onto the **drive**, never committed.
+- **checksums.json shape (Phase 11):** `{ drive_format_version, generated_at, algorithm:'sha256',
+  entries:[{ id, local_path, sha256|null, size_bytes|null, present }] }`. Written by `verify-models
+  --generate` from the weights present on the drive. **Informational** — the app still verifies
+  against the manifest `sha256`; checksums.json records what a drive builder captured. Placeholder
+  manifest hashes report **UNVERIFIED** (not pass, not fail), mirroring `computeInstallState`'s
+  developer-mode gate (R5 checksum honesty).
+- **Portable Windows target via electron-builder (Phase 11):** `electron-builder.yml` defines a
+  `portable` Windows `.exe` (launch-from-drive) + `mac`(dir)/`linux`(AppImage) for parity.
+  `model-manifests/` ship as `extraResources` (found via `resolveManifestsDir(app.getAppPath())` →
+  `resources/model-manifests`; `PAID_MANIFESTS_DIR` overrides); prod deps (the externalized parser
+  libs) ship inside `app.asar`; Electron stays **≥37** so `node:sqlite` exists. `npm run package` /
+  `package:win` wired. **Building the real artifact is a MANUAL step** (R2 Electron download; npm
+  workspace dep-hoisting may need attention) — it is NOT part of the green gate.
 - **Graceful-fallback rule (LOCKED, Phase 10):** the real backends are **opt-in by availability**.
   `createSelectingRuntimeFactory` (per `start()`, when the model path is known) and
   `createSelectedEmbedder` return the real `LlamaRuntime`/`E5Embedder` **only when BOTH** the
@@ -561,36 +593,88 @@ stop, regenerate, per-message copy, and the no-runtime empty state.
   **R5: live inference is manual** (binaries + GGUF not in repo); everything else is tested with a mocked
   child process / mocked loopback `fetch`.
 
+### Drive layout, scripts & packaging (Phase 11 live)
+✅ **`services/drive.ts`** — the canonical, unit-tested reference for drive prep (the scripts mirror it):
+- `DRIVE_OS_DIRS = ['win','mac','linux']`, `DRIVE_LAYOUT_DIRS` (workspace, models/{chat,embeddings},
+  model-manifests, runtime/llama.cpp/{win,mac,linux}, logs, config, docs), `driveLayoutDirs(root)`.
+- `buildDriveJson(opts) → DriveJson` (the `config/drive.json` marker, spec §6 shape);
+  `buildPolicyJson({dev?}) → PolicyJson` (snake_case; network always denied; commercial vs dev posture).
+- `verifyDriveModels(root, manifests) → ModelVerifyResult[]` (status `verified|unverified_placeholder|
+  mismatch|missing|unsupported`, reusing `models.ts` `verifyChecksum`/`isRealSha256`);
+  `buildChecksumsJson(root, manifests) → ChecksumsJson` (generate-mode capture of present-weight hashes).
+- `planPrepareDrive(root, manifests, opts) → PreparePlan` (dirs + config files + manifest copies +
+  weight destinations + `configWouldOverwrite`) + `formatPlan` (the dry-run report).
+✅ **`scripts/`** (repo root, self-contained; no Node/npm needed to prep a drive):
+- `prepare-drive.{ps1,sh}` — `-Target`/`--target` (required), `-DryRun`/`--dry-run`, `-Force`/`--force`,
+  `-Dev`/`--dev`. Creates the layout, copies `model-manifests/` + user docs onto the drive, writes
+  `config/{drive,policy}.json`. Idempotent; config only (re)written with `--force`.
+- `verify-models.{ps1,sh}` — `-Target`/`--target`, `-Generate`/`--generate`. Flat-YAML line-parses the
+  manifests, SHA-256s present weights, prints `VERIFIED/UNVERIFIED/MISMATCH/MISSING/UNSUPPORTED`,
+  **exit 1 on a real-hash mismatch**; `--generate` writes `config/checksums.json`.
+- `setup-dev.{ps1,sh}` — `NODE_OPTIONS=--use-system-ca npm install` (R6) + build + test smoke.
+✅ **Packaging** — `apps/desktop/electron-builder.yml` (portable Windows + mac/linux parity;
+  `model-manifests/` as `extraResources`; asar; Electron ≥37). `npm run package` / `package:win`
+  (root + workspace). New dev dep **`electron-builder ^26.15.2`**. Output → `apps/desktop/release/`
+  (git-ignored, added to `.gitignore` alongside the existing `models/`/`*.gguf`/`/runtime/` ignores).
+✅ **Docs** — `docs/user-guide.md` (non-technical §17 path) + `docs/troubleshooting.md` (§18) added;
+  `docs/packaging.md` + `docs/drive-layout.md` extended (portable build, the scripts, win/mac/linux
+  reconciliation). prepare-drive copies user-guide/troubleshooting + `PRIVACY.md` onto the drive.
+
+### MVP Definition of Done (§4 / spec §22) — checklist
+| Criterion | Status |
+|---|---|
+| App builds on ≥1 OS | ✅ `npm run build` green (Windows) |
+| Architecture supports Win/macOS/Linux | ✅ path/OS abstractions + 3 sidecar dirs + 3 builder targets |
+| Local model chat works | ✅ mock now; real `LlamaRuntime` wired (live = manual, R5) |
+| Local doc Q&A works | ✅ ingestion + embeddings + RAG (mock + real backends) |
+| Citations work | ✅ Phase 6 (`citations_json`, source panel) |
+| Manifests work | ✅ discover/validate/verify/recommend/select |
+| Drive layout works | ✅ `prepare-drive` (dry-run tested); `resolvePaths` marker |
+| User data local | ✅ no network in core path; loopback-only sidecars |
+| Privacy docs exist | ✅ PRIVACY.md, Privacy screen, security-model |
+| Setup script exists | ✅ `scripts/setup-dev.{ps1,sh}` |
+| Benchmark recommendation exists | ✅ Phase 7 |
+| Non-technical demo possible | ✅ documented end-to-end (user-guide.md); live run = manual (R5) |
+| No cloud API | ✅ enforced (offline guard, CSP, deny-by-default policy) |
+| No model weights in git | ✅ `.gitignore` (`models/`, `*.gguf`, `/runtime/`, `release/`) |
+| README explains DIY | ✅ (+ user-guide + packaging + drive-layout) |
+| Commercial drive layout documented | ✅ drive-layout.md + packaging.md |
+
+**Remaining = MANUAL acceptance only (R2/R5):** producing the real portable `.exe` (Electron binary
+download R2; npm-workspace dep hoisting may need a tweak) and a live USB-drive run with real weights +
+sidecar binaries (not in repo). The selectors fall back to mocks when those files are absent, so dev +
+CI are unaffected.
+
 ---
 
-## 5. Next actions (do these next) — START OF PHASE 11
+## 5. Next actions (do these next) — POST-MVP
 
-Phase 11 = **Drive layout, prepare-drive scripts & packaging** (Milestone 10 / §6 / §12). Build, in order:
-1. **prepare-drive scripts** (`scripts/prepare-drive.ps1` + `.sh`): lay out the spec §6 drive
-   (`runtime/llama.cpp/<os>/`, `models/{chat,embeddings}/`, `model-manifests/`, `workspace/`, `config/`,
-   `logs/`) and generate `config/{drive,policy,checksums}.json`. Dry-run creates the layout; this is
-   where the real `llama-server` binaries + GGUF weights land on a drive (both git-ignored).
-2. **verify-models scripts** (`verify-models.ps1` + `.sh`): hash each weight against its manifest
-   `sha256` (replace the `REPLACE_WITH_REAL_HASH` placeholders with real hashes when real weights exist).
-   `services/models.ts` `verifyChecksum`/`computeInstallState` already gate on this.
-3. **setup-dev scripts** (`setup-dev.ps1` + `.sh`): `NODE_OPTIONS=--use-system-ca npm install` (R6) etc.
-4. **`electron-builder` packaging config**: a **portable** Windows build runnable from an external
-   drive (`PAID_DRIVE_ROOT` resolution + `isPreparedDrive` already exist); ensure manifests ship under
-   resources and `PAID_MANIFESTS_DIR` is set.
-5. **User docs**: a user guide + troubleshooting; complete the spec §17 non-technical demo path.
-6. Tests: prepare-drive **dry-run** creates the layout; checksum generation/verification. **Ritual:**
-   docs (`packaging.md`, `drive-layout.md`, user guide) + this file; commit.
+**Phases 0–11 are complete. The MVP is feature-complete; the remaining items are MANUAL acceptance
+(R2/R5) and post-MVP polish.** In rough priority:
 
-Notes / gotchas for Phase 11:
-- **R5 stays:** the real `llama-server` binaries + GGUF weights are **not** in the repo, so a live
-  end-to-end demo from a real USB drive is a **manual** acceptance step. The Phase-10 selectors already
-  fall back to mocks when those files are absent, so packaging + scripts are fully testable without them.
-- **Keep everything offline.** Packaging must not introduce a network dependency at runtime; the
-  sidecars stay on `127.0.0.1` (Phase 10). Install-time network (Electron binary, R2) is dev-only.
-- **Git-ignored artifacts:** `runtime/`, `models/`, `*.gguf` are already ignored — prepare-drive writes
-  them onto the drive, never into the repo (see [`docs/packaging.md`](docs/packaging.md)).
+1. **Manual acceptance (needs hardware/artifacts not in the repo):**
+   - Build the real portable `.exe` (`npm run package:win`). Watch for npm-workspace dep hoisting —
+     electron-builder collects prod deps; if the hoisted `node_modules` confuses it, build from
+     `apps/desktop` or set `nohoist`/`node-linker`. Needs dev-time network for the Electron binary (R2).
+   - Provision a real drive: `prepare-drive` → drop real GGUF weights + a `llama-server` build →
+     `verify-models -Generate` (capture real hashes; replace the manifest `REPLACE_WITH_REAL_HASH`
+     placeholders) → launch the `.exe` from the drive → run the spec §17 demo with Wi-Fi off.
+2. **Post-MVP polish (optional):** real model hashes committed into manifests once weights exist; an
+   icon/`buildResources` for electron-builder; a one-click drive launcher that sets `PAID_DRIVE_ROOT`;
+   ANN vector index (sqlite-vec/HNSW) upgrade; Argon2id KDF path (the descriptor already supports it).
 
-Phase 10 is DONE: typecheck clean, **190/190 tests pass** (161 prior + 29 new: **sidecar** [binary
+Phase 11 is DONE: typecheck clean, **198/198 tests pass** (190 prior + 8 new in `tests/integration/
+drive.test.ts`: drive-layout dirs use **win/mac/linux** (not windows/macos/linux); `drive.json` is a
+valid prepared-drive marker `resolvePaths` detects; `policy.json` commercial + dev variants are accepted
+by `parsePolicy`/`mergePolicyObject` and **always deny network**; `planPrepareDrive` dry-run produces the
+full layout + config + weight destinations + would-overwrite flag; `verifyDriveModels` reports missing/
+placeholder/verified/mismatch/unsupported honestly; `buildChecksumsJson` captures real hashes for present
+weights + null for absent). `NODE_OPTIONS=--use-system-ca npm run build` green (**main bundle 95.56 kB**,
+unchanged — `drive.ts` is a tested helper, not in the runtime path). New dev dep **`electron-builder
+^26.15.2`**. Both `.ps1` + `.sh` script families smoke-tested on Windows + bash (byte-identical config
+output; SHA-256 agreement across PowerShell/bash/TS). (Live `.exe` + USB-drive demo = manual, R2/R5.)
+
+Phase 10 (prior): typecheck clean, **190/190 tests pass** (161 prior + 29 new: **sidecar** [binary
 discovery present/absent/env-override, os-dir/exe-name mapping, `findFreePort`, `defaultThreadCount`;
 `LlamaServer` spawns **127.0.0.1-only** never `0.0.0.0`, becomes healthy on `/health` ok with the bound
 port, **health-timeout throws + kills the child** (no hang/orphan), child-exit-before-healthy throws,
@@ -628,7 +712,12 @@ wedge HMR.)
 - **R1 `node:sqlite` ✅ RESOLVED** — works in Electron 37 (Node 22.21) main process and in vitest
   (system Node 24). Only an experimental warning (harmless). Bundler resolution fixed via
   `createRequire` in `db.ts`. `sql.js` fallback not needed.
-- **R2 Electron binary download** — `npm i electron` pulls a ~100MB binary; needs dev-time internet. The *app* stays offline; only dev install needs network.
+- **R2 Electron binary download** — `npm i electron` pulls a ~100MB binary; needs dev-time internet.
+  The *app* stays offline; only dev install needs network. **Phase 11:** `electron-builder` may also
+  fetch the platform Electron at package time — building the real portable `.exe` is therefore a manual,
+  network-touching step (the green gate `typecheck`/`test`/`build` does NOT invoke electron-builder).
+  ⚠️ **npm-workspace hoisting:** prod deps live in the **root** `node_modules`; if electron-builder
+  can't collect them, build from `apps/desktop` or adjust hoisting.
 - **R3 PDF/DOCX parsers ✅ RESOLVED** — `pdfjs-dist` (legacy build, `pdfjs-dist/legacy/build/pdf.mjs`)
   extracts text in the Node main process with **no Web Worker / no DOM** (validated Phase 4);
   `mammoth`/`papaparse` are pure-JS too. All three marked **external** (`externalizeDepsPlugin`) so
@@ -643,7 +732,10 @@ wedge HMR.)
   **implemented + unit-tested** with a mocked child process / mocked loopback fetch. What remains
   **manual**: a live real-model answer, because the platform `llama-server` binaries + the GGUF weights
   are **not** in the repo (Phase 11 prepare-drive provisions them). The selectors fall back to mocks
-  when those files are absent, so dev + CI are unaffected.
+  when those files are absent, so dev + CI are unaffected. **Phase 11** adds the scripted provisioning
+  path (`prepare-drive` lays out the tree; the builder drops weights + a `llama-server` build into it;
+  `verify-models --generate` captures real hashes) — but the artifacts themselves are still not in the
+  repo, so the live §17 demo from a real drive remains the one manual acceptance step.
 - **R6 TLS-intercepting proxy on this machine** — `npm install` fails with `UNABLE_TO_VERIFY_LEAF_SIGNATURE` (corporate root CA). Workaround: `NODE_OPTIONS=--use-system-ca npm install` (Node 24 reads the Windows cert store). If that fails, `npm config set strict-ssl false` (dev-only, less secure) or set `NODE_EXTRA_CA_CERTS`. Affects dev installs only; the app stays offline.
 
 ---

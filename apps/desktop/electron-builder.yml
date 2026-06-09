@@ -1,0 +1,60 @@
+# electron-builder configuration — Private AI Drive Lite (Phase 11, spec §12).
+#
+# Goal: a PORTABLE Windows build that launches from an external drive. macOS/Linux
+# targets are defined for architecture parity (spec rule: keep all three supported),
+# even though only Windows is produced on this dev machine.
+#
+# OFFLINE GUARANTEE: packaging adds NO runtime network dependency. The real backends
+# spawn `llama-server` on 127.0.0.1 only (Phase 10). The only network is dev-time
+# (Electron binary download R2, npm install R6).
+#
+# node:sqlite REQUIREMENT: the packaged main process needs Electron >= 37 (Node 22.x);
+# `electron` is pinned to ^37 in devDependencies, so the bundled runtime has node:sqlite.
+# A stripped/older runtime would lose it — do not downgrade Electron.
+#
+# Producing the actual artifact is a MANUAL step (R2/R5): see docs/packaging.md.
+
+appId: org.privateaidrive.lite
+productName: Private AI Drive Lite
+
+directories:
+  # buildResources holds icons etc. (optional; defaults are used if absent).
+  buildResources: build
+  output: release
+
+# What goes inside app.asar. electron-builder ships production `dependencies`
+# automatically (pdfjs-dist / mammoth / papaparse / yaml — the externalized parser libs),
+# so the lazy require()s resolve at runtime.
+files:
+  - out/**/*
+  - package.json
+
+# Model manifests are the ONLY model metadata in git. Ship them beside app.asar so the
+# packaged main process finds them: resolveManifestsDir(app.getAppPath()) walks up from
+# resources/app.asar and matches resources/model-manifests. PAID_MANIFESTS_DIR overrides.
+# Weights + sidecar binaries are NEVER bundled — they live on the prepared drive.
+extraResources:
+  - from: ../../model-manifests
+    to: model-manifests
+
+# Asar keeps the app a single archive; node:sqlite + the parser libs work from it.
+asar: true
+
+win:
+  target:
+    - portable
+
+# A single self-contained .exe — copy it onto the drive root next to the prepared layout
+# and launch it with PAID_DRIVE_ROOT pointing at the drive (see docs/packaging.md).
+portable:
+  artifactName: PrivateAIDriveLite-${version}-portable.exe
+
+mac:
+  target:
+    - dir
+  category: public.app-category.productivity
+
+linux:
+  target:
+    - AppImage
+  category: Utility

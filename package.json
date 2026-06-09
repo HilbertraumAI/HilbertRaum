@@ -12,6 +12,8 @@
     "build": "npm run build --workspace apps/desktop",
     "typecheck": "npm run typecheck --workspace apps/desktop",
     "test": "npm run test --workspace apps/desktop",
+    "package": "npm run package --workspace apps/desktop",
+    "package:win": "npm run package:win --workspace apps/desktop",
     "lint": "npm run lint --workspace apps/desktop"
   },
   "engines": {
