@@ -4,11 +4,12 @@
 # The master pipeline that ties Phase 11 + Phase 12 + signing together. Runs, in order:
 #   1. prepare-drive  --force            # commercial policy (encrypted, network denied)
 #   2. fetch-models   --accept-license   # verified weights
-#   3. fetch-runtime                     # verified llama.cpp sidecar
+#   3. fetch-runtime  --os win|mac|linux # verified llama.cpp sidecar for EVERY shipped OS
 #   4. package + sign + notarize         # MANUAL (secrets never in the repo)
 #   5. copy launcher + portable app + user docs onto the drive root
 #   6. verify-models  --generate         # capture real hashes -> config/checksums.json
-#   7. final check: commercial posture + all weights VERIFIED + no user data
+#   7. final check: commercial posture + verify-models --strict (all weights VERIFIED)
+#      + no user data -- exits 1 unless the drive is actually sellable
 #
 # Mirrors apps/desktop/src/main/services/commercial-drive.ts (planCommercialDrive +
 # assertCommercialDrive) -- that TS module is the CANONICAL, unit-tested reference. This
@@ -68,11 +69,15 @@ MODELS=(--target "$TARGET")
 [[ $DRY_RUN -eq 1 ]] && MODELS+=(--dry-run)
 bash "$SCRIPT_DIR/fetch-models.sh" "${MODELS[@]}"
 
-# --- 3. Download + verify the llama.cpp sidecar ------------------------------------
-step 3 "Download + verify the llama.cpp sidecar"
-RUNTIME=(--target "$TARGET")
-[[ $DRY_RUN -eq 1 ]] && RUNTIME+=(--dry-run)
-bash "$SCRIPT_DIR/fetch-runtime.sh" "${RUNTIME[@]}"
+# --- 3. Download + verify the llama.cpp sidecar for EVERY shipped OS ----------------
+# A sold drive must run on every OS the launchers support (win/mac/linux); fetching only
+# the build-host's OS would ship a drive whose other sidecar dirs are empty.
+step 3 "Download + verify the llama.cpp sidecar (every shipped OS)"
+for os_name in win mac linux; do
+  RUNTIME=(--target "$TARGET" --os "$os_name")
+  [[ $DRY_RUN -eq 1 ]] && RUNTIME+=(--dry-run)
+  bash "$SCRIPT_DIR/fetch-runtime.sh" "${RUNTIME[@]}"
+done
 
 # --- 4. Package + sign + notarize (MANUAL) -----------------------------------------
 step 4 "Package + sign the app (MANUAL -- secrets never in the repo)"
@@ -131,16 +136,21 @@ done
 if [[ -d "$TARGET/workspace/documents" ]] && [[ -n "$(ls -A "$TARGET/workspace/documents" 2>/dev/null)" ]]; then
   PROBLEMS+=("user data present: workspace/documents/*")
 fi
+# Weight gate (assertCommercialDrive parity): every weight VERIFIED, automated — not a
+# manual "confirm it yourself" instruction. UNVERIFIED/MISSING/MISMATCH all fail here.
+if [[ $DRY_RUN -eq 0 ]]; then
+  if ! bash "$SCRIPT_DIR/verify-models.sh" --target "$TARGET" --strict; then
+    PROBLEMS+=("weights: not every weight is VERIFIED (strict verify failed)")
+  fi
+fi
 if [[ $DRY_RUN -eq 1 ]]; then
-  echo "  (dry run: posture check skipped)"
+  echo "  (dry run: posture + weight checks skipped)"
 elif [[ ${#PROBLEMS[@]} -gt 0 ]]; then
   echo "  NOT SELLABLE:"
   for p in "${PROBLEMS[@]}"; do echo "    - $p"; done
-  echo "  (verify-models above also enforces weight hashes; fix all before shipping.)"
   exit 1
 else
-  echo "  Posture OK (encrypted, network denied, no user data)."
-  echo "  Confirm verify-models reported every weight VERIFIED (not UNVERIFIED/MISMATCH)."
+  echo "  SELLABLE: posture OK (encrypted, network denied, no user data) + all weights VERIFIED."
 fi
 
 echo

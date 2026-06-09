@@ -2,12 +2,13 @@ import {
   readFileSync,
   writeFileSync,
   existsSync,
+  readdirSync,
   rmSync,
   renameSync,
   statSync
 } from 'node:fs'
 import { randomBytes } from 'node:crypto'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import type { Db } from './db'
 import { openDatabase } from './db'
 import { seedSettings, updateSettings } from './settings'
@@ -114,6 +115,16 @@ export function readVaultDescriptor(descriptorPath: string): VaultDescriptor | n
   }
 }
 
+/**
+ * True when a descriptor FILE exists but cannot be parsed/validated. This must be kept
+ * distinct from "no vault yet": a corrupt 200-byte JSON file must NOT make the app
+ * report `uninitialized` and offer the create flow, which would overwrite the intact
+ * `.enc` (all user data) with a fresh empty vault.
+ */
+export function isDescriptorUnreadable(descriptorPath: string): boolean {
+  return existsSync(descriptorPath) && readVaultDescriptor(descriptorPath) === null
+}
+
 /** Persist the descriptor atomically (write temp + rename). */
 export function writeVaultDescriptor(descriptorPath: string, d: VaultDescriptor): void {
   const tmp = `${descriptorPath}.tmp`
@@ -165,15 +176,46 @@ export function cleanSidecars(dbPath: string): void {
 }
 
 /**
- * Crash recovery for an encrypted vault: shred a leftover plaintext working DB and its
- * WAL/SHM sidecars. For an encrypted vault the working file is transient (the `.enc` is
- * the source of truth), so a `paid.sqlite` found at rest means a previous run was killed
- * before lock-on-quit — the decrypted database must not linger. MUST NOT be called for
- * `plaintext_dev`, where the working file IS the database.
+ * Crash recovery for an encrypted vault: shred every leftover plaintext artifact a
+ * killed run can leave behind — the working DB, its WAL/SHM sidecars, the atomic-write
+ * `.tmp` files of encrypt/decryptFile, and transient decrypted document copies
+ * (`*.parse*` under `workspace/documents/`, used while re-indexing an encrypted copy).
+ * For an encrypted vault these are all derived from the `.enc` artifacts (the source of
+ * truth), so shredding loses nothing. MUST NOT be called for `plaintext_dev`, where the
+ * working file IS the database.
  */
 export function shredStalePlaintext(vaultPaths: VaultPaths): void {
   shredFile(vaultPaths.dbPath)
+  // decryptFile writes the FULL plaintext to `<dbPath>.tmp` before its atomic rename —
+  // a crash inside that window leaves the entire decrypted database under this name.
+  shredFile(`${vaultPaths.dbPath}.tmp`)
   cleanSidecars(vaultPaths.dbPath)
+  // Transient plaintext document copies (encrypted-mode re-index decrypts the stored
+  // `.enc` to `<id>.parse<ext>` while parsing). Never touches the stored copies
+  // themselves — only the clearly-transient `.parse`/`.tmp` names.
+  const docsDir = join(dirname(vaultPaths.dbPath), 'documents')
+  try {
+    for (const name of readdirSync(docsDir)) {
+      if (name.includes('.parse') || name.endsWith('.tmp')) shredFile(join(docsDir, name))
+    }
+  } catch {
+    /* no documents dir yet */
+  }
+}
+
+// ---- encrypted document cache ------------------------------------------------------
+
+/**
+ * File-level encrypt/decrypt bound to the unlocked vault key. Used by the ingestion
+ * service so imported document COPIES rest encrypted too (spec §3.5 requires encrypting
+ * the "workspace database AND document cache" — the DB alone is not enough: the raw
+ * bytes of every imported file would otherwise stay readable on a lost drive).
+ */
+export interface DocumentCipher {
+  /** Encrypt the plaintext file at `srcPath` → framed ciphertext at `destPath`. */
+  encryptFile(srcPath: string, destPath: string): void
+  /** Decrypt the framed ciphertext at `srcPath` → plaintext at `destPath`. */
+  decryptFile(srcPath: string, destPath: string): void
 }
 
 // ---- create / unlock / lock ------------------------------------------------------
@@ -189,6 +231,16 @@ export function createEncryptedVaultOnDisk(
   password: string,
   kdf: KdfParams = DEFAULT_KDF
 ): void {
+  // Refuse to overwrite an existing vault — `.enc` IS the user's data (chats, documents,
+  // settings), and re-creating would irreversibly replace it with an empty database. A
+  // corrupt/missing descriptor is recoverable; a wiped `.enc` is not.
+  if (existsSync(vaultPaths.encPath)) {
+    throw new Error(
+      'An encrypted workspace already exists here — refusing to overwrite it. ' +
+        'Unlock it with its password instead. To really start fresh, move or delete ' +
+        `"${vaultPaths.encPath}" (and config/workspace.json) first.`
+    )
+  }
   const salt = generateSalt()
   const key = deriveKey(password, salt, kdf)
   const descriptor: VaultDescriptor = {
@@ -225,7 +277,16 @@ export interface UnlockedVault {
  */
 export function unlockEncryptedVault(vaultPaths: VaultPaths, password: string): UnlockedVault {
   const descriptor = readVaultDescriptor(vaultPaths.descriptorPath)
-  if (!descriptor) throw new Error('No encrypted workspace to unlock')
+  if (!descriptor) {
+    if (existsSync(vaultPaths.encPath)) {
+      throw new Error(
+        'The workspace descriptor (config/workspace.json) is missing or unreadable, so ' +
+          'the encrypted workspace cannot be unlocked. Restore config/workspace.json ' +
+          'from a backup — do NOT create a new workspace, or the existing data is lost.'
+      )
+    }
+    throw new Error('No encrypted workspace to unlock')
+  }
   const salt = Buffer.from(descriptor.saltB64, 'base64')
   const key = deriveKey(password, salt, descriptor.kdf)
   if (!verifyKey(key, blobFromJson(descriptor.verifier))) {
@@ -313,6 +374,20 @@ export class WorkspaceController {
     return plaintextAllowed(this.policy, { isDev: this.isDev, developerMode: this.isDev })
   }
 
+  /**
+   * A vault exists on disk when there is a valid encrypted descriptor, OR the encrypted
+   * database itself is present, OR a descriptor file exists but is unreadable (corrupt).
+   * In every one of those cases the create flow must be refused — it would overwrite
+   * the user's data with an empty vault.
+   */
+  private vaultExistsOnDisk(): boolean {
+    return (
+      this.descriptor?.mode === 'encrypted' ||
+      existsSync(this.vaultPaths.encPath) ||
+      isDescriptorUnreadable(this.vaultPaths.descriptorPath)
+    )
+  }
+
   private openPlaintext(): void {
     const db = openDatabase(this.vaultPaths.dbPath)
     seedSettings(db)
@@ -333,19 +408,22 @@ export class WorkspaceController {
       shredStalePlaintext(this.vaultPaths)
       return // locked; await unlock
     }
+    if (this.vaultExistsOnDisk()) {
+      // An encrypted vault exists but its descriptor is missing/corrupt. Stay LOCKED:
+      // do not open a plaintext DB over it, and (via getState/create) never offer the
+      // create flow that would overwrite it. NOTE: do not shred here either — a stale
+      // plaintext working file may be the only recoverable copy of the data.
+      return
+    }
     if (this.allowPlaintext()) this.openPlaintext()
     // else uninitialized → onboarding will create an encrypted workspace
   }
 
   getState(): WorkspaceStateInfo {
-    const state = this.isUnlocked()
-      ? 'unlocked'
-      : this.descriptor?.mode === 'encrypted'
-        ? 'locked'
-        : 'uninitialized'
+    const state = this.isUnlocked() ? 'unlocked' : this.vaultExistsOnDisk() ? 'locked' : 'uninitialized'
     return {
       state,
-      mode: this._mode ?? this.descriptor?.mode ?? null,
+      mode: this._mode ?? this.descriptor?.mode ?? (this.vaultExistsOnDisk() ? 'encrypted' : null),
       plaintextAllowed: this.allowPlaintext(),
       encryptionRequired: this.policy.workspace.encryptionRequired
     }
@@ -365,6 +443,14 @@ export class WorkspaceController {
   /** First-run create. `encrypted` builds a vault; `plaintext_dev` is gated by policy. */
   create(password: string, mode: WorkspaceMode): WorkspaceStateInfo {
     if (this.isUnlocked()) throw new Error('Workspace is already initialized.')
+    if (this.vaultExistsOnDisk()) {
+      // Reachable when a caller invokes createWorkspace while state is `locked`, or when
+      // the descriptor is corrupt. Creating would wipe the existing `.enc` — refuse.
+      throw new Error(
+        'A workspace already exists on this drive — unlock it with its password instead ' +
+          'of creating a new one.'
+      )
+    }
     if (mode === 'plaintext_dev') {
       if (!this.allowPlaintext()) {
         throw new Error('Plaintext workspace is not permitted by policy.')
@@ -379,6 +465,20 @@ export class WorkspaceController {
       this._mode = 'encrypted'
     }
     return this.getState()
+  }
+
+  /**
+   * A `DocumentCipher` bound to the unlocked vault key, or null in plaintext mode /
+   * while locked. Ingestion uses it to keep the imported-document cache encrypted at
+   * rest (the cipher captures the key; it stops working only at process exit).
+   */
+  documentCipher(): DocumentCipher | null {
+    const key = this.key
+    if (!key || this._mode !== 'encrypted') return null
+    return {
+      encryptFile: (src, dest) => encryptFile(src, dest, key),
+      decryptFile: (src, dest) => decryptFile(src, dest, key)
+    }
   }
 
   /**

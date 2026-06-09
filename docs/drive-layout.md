@@ -17,11 +17,13 @@ From the root, these paths are derived and created (idempotently) on first run:
 ```
 <root>/
 ├── workspace/
-│   └── paid.sqlite        # all app data (spec §8 tables)
+│   ├── paid.sqlite        # all app data (spec §8 tables) — paid.sqlite.enc at rest in
+│   │                      # encrypted mode (decrypted to paid.sqlite only while unlocked)
+│   └── documents/         # stored copies of imported files (<id><ext>.enc in encrypted mode)
 ├── models/                # GGUF weights (git-ignored, never committed)
 ├── logs/
-│   └── app.log            # local rotating logs (never uploaded)
-└── config/                # drive.json / policy.json / checksums.json (Phase 8/11)
+│   └── app.log            # local rotating logs (never uploaded; not encrypted)
+└── config/                # drive.json / policy.json / checksums.json / workspace.json (vault descriptor)
 ```
 
 `buildDriveStatus()` reports root/workspace/models/logs paths, prepared-drive flag, writability,

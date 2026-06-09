@@ -11,7 +11,8 @@ import {
   listDocuments,
   processDocument,
   reconcileStuckDocuments,
-  reindexDocument
+  reindexDocument,
+  type IngestionDeps
 } from '../services/ingestion'
 import { supportedExtensions } from '../services/ingestion/parsers'
 import { getSettings } from '../services/settings'
@@ -44,11 +45,13 @@ export function registerDocsIpc(ctx: AppContext): void {
     }
   }
 
-  // Embedding dependencies for the ingestion pipeline (Phase 5). The active embedding
-  // model id (settings) tags each vector; it falls back to the embedder's own id.
-  const embeddingDeps = (): { embedder: typeof ctx.embedder; embeddingModelId: string | null } => ({
+  // Ingestion dependencies (Phase 5 + H1). The active embedding model id (settings) tags
+  // each vector; the document cipher (non-null only for an UNLOCKED encrypted workspace)
+  // makes the stored document copies rest encrypted, per spec §3.5.
+  const ingestionDeps = (): IngestionDeps => ({
     embedder: ctx.embedder,
-    embeddingModelId: getSettings(ctx.db).activeEmbeddingModelId
+    embeddingModelId: getSettings(ctx.db).activeEmbeddingModelId,
+    cipher: ctx.workspace.documentCipher()
   })
 
   // Open the OS file/folder picker in the main process (renderer has no dialog access).
@@ -97,7 +100,7 @@ export function registerDocsIpc(ctx: AppContext): void {
     void (async () => {
       for (const id of documentIds) {
         try {
-          const info = await processDocument(ctx.db, storeDir, id, embeddingDeps())
+          const info = await processDocument(ctx.db, storeDir, id, ingestionDeps())
           if (info.status === 'failed') status.failed += 1
           else status.completed += 1
         } catch (err) {
@@ -141,6 +144,6 @@ export function registerDocsIpc(ctx: AppContext): void {
   ipcMain.handle(IPC.reindexDocument, (_e, documentId: string): Promise<DocumentInfo> => {
     requireUnlocked()
     log.info('Re-index document', { documentId })
-    return reindexDocument(ctx.db, storeDir, documentId, embeddingDeps())
+    return reindexDocument(ctx.db, storeDir, documentId, ingestionDeps())
   })
 }

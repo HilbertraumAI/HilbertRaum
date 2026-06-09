@@ -49,9 +49,10 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
         log.info('Workspace created', { mode })
         return { ok: true, state }
       } catch (err) {
-        // Plaintext refused by policy is the expected non-throwing failure.
+        // Plaintext refused by policy, and create-over-an-existing-vault (H4: would wipe
+        // the user's data), are expected refusals — surface the real message.
         const message = err instanceof Error ? err.message : String(err)
-        if (/not permitted/i.test(message)) {
+        if (/not permitted|already exists/i.test(message)) {
           return { ok: false, reason: 'refused', message }
         }
         log.error('Workspace create failed', message)

@@ -82,6 +82,60 @@ describe('encrypted vault lifecycle', () => {
     expect(() => unlockEncryptedVault(vp, 'wrong-password')).toThrow(WrongPasswordError)
     expect(existsSync(vp.dbPath)).toBe(false)
   })
+
+  // H4 (audit round 4): `.enc` IS the user's data; creating over it would irreversibly
+  // replace chats/documents/settings with an empty vault.
+  it('refuses to create over an existing .enc (the data must never be wiped)', () => {
+    const vp = freshVault()
+    createEncryptedVaultOnDisk(vp, 'pw', FAST_KDF)
+    const encBefore = readFileSync(vp.encPath)
+    expect(() => createEncryptedVaultOnDisk(vp, 'other-pw', FAST_KDF)).toThrow(/already exists/)
+    // The original encrypted database is untouched.
+    expect(readFileSync(vp.encPath).equals(encBefore)).toBe(true)
+    const opened = unlockEncryptedVault(vp, 'pw')
+    opened.db.close()
+  })
+
+  it('a corrupt descriptor with an intact .enc gives a restore hint, not "no workspace"', () => {
+    const vp = freshVault()
+    createEncryptedVaultOnDisk(vp, 'pw', FAST_KDF)
+    writeFileSync(vp.descriptorPath, '{ not json', 'utf8')
+    expect(() => unlockEncryptedVault(vp, 'pw')).toThrow(/missing or unreadable/)
+  })
+})
+
+// ---- H4: the controller must never offer a vault-wiping create flow ---------------
+
+describe('WorkspaceController — create-over-existing-vault guard (H4)', () => {
+  it('reports LOCKED (not uninitialized) when the descriptor is corrupt but .enc exists', () => {
+    const vp = freshVault()
+    createEncryptedVaultOnDisk(vp, 'pw', FAST_KDF)
+    writeFileSync(vp.descriptorPath, '{ corrupted-not-json', 'utf8')
+
+    const ctl = new WorkspaceController(vp, DEFAULT_POLICY, true)
+    ctl.init()
+    // A corrupt descriptor used to surface `uninitialized`, putting the CREATE flow in
+    // front of the user — one click away from wiping the intact .enc.
+    expect(ctl.getState().state).toBe('locked')
+    // init() must not have opened a plaintext DB over the vault either (dev policy).
+    expect(ctl.isUnlocked()).toBe(false)
+  })
+
+  it('refuses create while a vault exists (locked state), keeping the data intact', () => {
+    const vp = freshVault()
+    createEncryptedVaultOnDisk(vp, 'pw', FAST_KDF)
+    const ctl = new WorkspaceController(vp, DEFAULT_POLICY, true)
+    ctl.init()
+    expect(ctl.getState().state).toBe('locked')
+
+    expect(() => ctl.create('new-password', 'encrypted')).toThrow(/already exists/)
+    expect(() => ctl.create('', 'plaintext_dev')).toThrow(/already exists/)
+
+    // The original vault still unlocks with its original password.
+    const state = ctl.unlock('pw')
+    expect(state.state).toBe('unlocked')
+    ctl.lock()
+  })
 })
 
 // ---- password is never persisted ------------------------------------------------

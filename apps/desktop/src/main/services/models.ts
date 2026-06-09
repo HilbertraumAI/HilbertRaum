@@ -127,10 +127,45 @@ export interface ChecksumResult {
   actual: string | null
 }
 
-/** Verify a weight file against its expected SHA-256. */
+// ---- checksum cache (H5, audit round 4) -------------------------------------------
+// `listModels` runs on every Models-screen visit AND every Chat-screen mount. Without a
+// cache that re-hashed every multi-GB GGUF on the drive each time — minutes of USB I/O
+// per navigation. Hash once per (path, size, mtime); a changed/replaced file re-hashes.
+// Limitation (accepted): a same-size, mtime-preserving in-place tamper is not re-detected
+// within a session — the ship-time gates (verify-models --strict / assertCommercialDrive)
+// always hash fully, and mtime can be forged by an attacker anyway.
+
+interface CachedHash {
+  size: number
+  mtimeMs: number
+  actual: string
+}
+
+const hashCache = new Map<string, CachedHash>()
+
+/** Test visibility: how many full-file hashes were actually computed. */
+export const checksumCacheStats = { computed: 0 }
+
+/** Drop all cached hashes (tests / an explicit re-verify). */
+export function clearChecksumCache(): void {
+  hashCache.clear()
+}
+
+/** SHA-256 of a file, cached by (path, size, mtimeMs). */
+async function sha256FileCached(filePath: string): Promise<string> {
+  const st = statSync(filePath)
+  const hit = hashCache.get(filePath)
+  if (hit && hit.size === st.size && hit.mtimeMs === st.mtimeMs) return hit.actual
+  const actual = await sha256File(filePath)
+  checksumCacheStats.computed += 1
+  hashCache.set(filePath, { size: st.size, mtimeMs: st.mtimeMs, actual })
+  return actual
+}
+
+/** Verify a weight file against its expected SHA-256 (cached by size+mtime). */
 export async function verifyChecksum(filePath: string, expected: string): Promise<ChecksumResult> {
   if (!existsSync(filePath)) return { exists: false, matched: null, actual: null }
-  const actual = await sha256File(filePath)
+  const actual = await sha256FileCached(filePath)
   if (!isRealSha256(expected)) return { exists: true, matched: null, actual }
   return { exists: true, matched: actual === expected, actual }
 }
@@ -171,13 +206,16 @@ export async function computeInstallState(
   const path = weightPath(rootPath, manifest)
   if (!existsSync(path)) return 'missing'
 
+  // A placeholder hash can never verify, so hashing the (multi-GB) file would be pure
+  // wasted I/O — decide from the manifest alone. Outside developer mode an unverifiable
+  // file is treated as a checksum failure (spec §7.4 gate); in developer mode it counts
+  // as installed.
+  if (!isRealSha256(manifest.sha256)) {
+    return opts.developerMode ? 'installed' : 'checksum_failed'
+  }
+
   const check = await verifyChecksum(path, manifest.sha256)
   if (check.matched === false) return 'checksum_failed'
-  // matched === null means a placeholder hash (cannot verify). Outside developer
-  // mode, an unverifiable file is treated as a checksum failure (spec §7.4 gate).
-  if (check.matched === null && !isRealSha256(manifest.sha256) && !opts.developerMode) {
-    return 'checksum_failed'
-  }
   return 'installed'
 }
 

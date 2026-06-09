@@ -50,6 +50,8 @@ export class E5Embedder implements Embedder {
   readonly dimensions: number
   private server: LlamaServer | null = null
   private starting: Promise<void> | null = null
+  /** Set by `stop()`; a racing lazy start must not resurrect the sidecar after quit. */
+  private stopped = false
 
   constructor(private readonly opts: E5EmbedderOptions) {
     this.id = opts.id
@@ -58,6 +60,7 @@ export class E5Embedder implements Embedder {
 
   /** Lazily spawn the embeddings sidecar (once). Concurrent callers share one start. */
   private async ensureStarted(): Promise<LlamaServer> {
+    if (this.stopped) throw new Error('Embedder is stopped (app is shutting down)')
     if (this.server) return this.server
     if (!this.starting) {
       const server = new LlamaServer({
@@ -122,6 +125,14 @@ export class E5Embedder implements Embedder {
 
   /** Kill the embeddings sidecar (no-op if it was never started). */
   async stop(): Promise<void> {
+    this.stopped = true
+    // A lazy start may be IN FLIGHT (first embed() racing app quit): `this.server` is
+    // only assigned after start() resolves, so returning here would let the spawned
+    // child outlive the app as an orphan. Wait for the start to settle, then stop
+    // whatever it produced.
+    if (this.starting) {
+      await this.starting.catch(() => undefined)
+    }
     const server = this.server
     this.server = null
     if (server) await server.stop()

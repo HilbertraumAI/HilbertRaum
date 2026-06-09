@@ -27,7 +27,7 @@ This app does not send your data to cloud AI providers.
 All of the following are stored **locally**, inside your workspace (on the drive or in your app-data
 folder):
 
-- Imported documents (or references to them, depending on your setting)
+- Imported documents (a full copy of each imported file is stored in your workspace)
 - Extracted text and document chunks
 - Embeddings / the local vector index
 - Chat history (conversations and messages)
@@ -66,5 +66,16 @@ export/delete controls are planned.
 ## Encryption
 
 An encrypted workspace option protects your data at rest with a password you choose. The password is
-**never stored**; only a salt and key-derivation parameters are kept. See
-[`docs/security-model.md`](docs/security-model.md).
+**never stored**; only a salt and key-derivation parameters are kept.
+
+**What is encrypted** (encrypted workspace mode): the workspace database — chat history, extracted
+text, chunks, embeddings, settings — and the **stored copies of your imported documents**
+(`workspace/documents/`, encrypted with the same vault key).
+
+**What is not encrypted:** the AI model files (public weights, not your data), the app itself, and
+the local log file (`logs/app.log`). Logs never contain document contents or chat text, but may
+contain file names or paths. While the workspace is **unlocked**, a decrypted working copy of the
+database exists on disk (and a transient decrypted copy of a document exists briefly during
+re-indexing); both are shredded on lock/quit, and any crash leftovers are shredded at next startup.
+Documents imported **before** encryption support existed (or into a plaintext workspace) remain
+plaintext until re-indexed. See [`docs/security-model.md`](docs/security-model.md).

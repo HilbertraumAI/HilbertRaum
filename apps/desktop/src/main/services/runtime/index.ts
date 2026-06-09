@@ -49,12 +49,38 @@ export type RuntimeFactory = (opts: RuntimeStartOptions) => ModelRuntime
 export class RuntimeManager {
   private current: ModelRuntime | null = null
   private last: HealthStatus | null = null
+  /**
+   * Serializes every start/stop. A real GGUF start can take up to the health timeout;
+   * without this, a second `start()` in that window saw `current == null`, skipped the
+   * stop, and spawned a SECOND llama-server the manager never stopped (an orphan), and
+   * a `stop()` during an in-flight start was a no-op the start then overrode. Queueing
+   * makes those calls wait for the in-flight operation and act on its committed result.
+   */
+  private op: Promise<unknown> = Promise.resolve()
 
   constructor(private readonly factory: RuntimeFactory) {}
 
+  /** Run `task` after every previously queued start/stop, success or failure. */
+  private enqueue<T>(task: () => Promise<T>): Promise<T> {
+    const run = this.op.then(task, task)
+    this.op = run.then(
+      () => undefined,
+      () => undefined
+    )
+    return run
+  }
+
   async start(opts: RuntimeStartOptions): Promise<RuntimeStatus> {
+    return this.enqueue(() => this.doStart(opts))
+  }
+
+  async stop(): Promise<void> {
+    return this.enqueue(() => this.doStop())
+  }
+
+  private async doStart(opts: RuntimeStartOptions): Promise<RuntimeStatus> {
     // Restart cleanly on a model switch (spec §7.5).
-    if (this.current) await this.stop()
+    if (this.current) await this.doStop()
     // Commit to `this.current`/`this.last` only on a FULLY successful start. A failed
     // start (e.g. the real sidecar's health timeout) must not leave a half-started
     // runtime as "active" — callers gate chat/RAG on `active() != null`, so a stale
@@ -78,11 +104,12 @@ export class RuntimeManager {
     return this.status()
   }
 
-  async stop(): Promise<void> {
+  private async doStop(): Promise<void> {
     if (!this.current) return
-    await this.current.stop()
+    const stopping = this.current
     this.current = null
     this.last = null
+    await stopping.stop()
   }
 
   activeModelId(): string | null {

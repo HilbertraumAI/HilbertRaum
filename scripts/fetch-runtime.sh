@@ -43,7 +43,11 @@ SOURCES_FILE="$TARGET/model-manifests/runtime-sources.yaml"
 [[ -f "$SOURCES_FILE" ]] || SOURCES_FILE="$REPO_ROOT/model-manifests/runtime-sources.yaml"
 [[ -f "$SOURCES_FILE" ]] || { echo "No runtime-sources.yaml found under '$TARGET' or repo root." >&2; exit 2; }
 
-# Host detection.
+# Host detection. When --os is explicitly overridden but --arch is not, we are
+# cross-provisioning another OS's dir — the host arch is meaningless there, so the
+# selection below takes that OS's first build instead.
+OS_EXPLICIT=0; [[ -n "$OS" ]] && OS_EXPLICIT=1
+ARCH_EXPLICIT=0; [[ -n "$ARCH" ]] && ARCH_EXPLICIT=1
 if [[ -z "$OS" ]]; then
   case "$(uname -s)" in
     Darwin) OS="mac" ;;
@@ -80,7 +84,7 @@ while IFS= read -r raw; do
     B_OS[$idx]="$(echo "${BASH_REMATCH[1]}" | tr -d '"'"'"'' | sed 's/[[:space:]]*$//')"
     continue
   fi
-  if [[ $idx -ge 0 && "$line" =~ ^[[:space:]]+([A-Za-z_]+)[[:space:]]*:[[:space:]]*(.+)$ ]]; then
+  if [[ $idx -ge 0 && "$line" =~ ^[[:space:]]+([A-Za-z0-9_]+)[[:space:]]*:[[:space:]]*(.+)$ ]]; then
     key="${BASH_REMATCH[1]}"
     val="$(echo "${BASH_REMATCH[2]}" | tr -d '"'"'"'' | sed 's/[[:space:]]*$//')"
     case "$key" in
@@ -95,10 +99,14 @@ done < "$SOURCES_FILE"
 
 [[ -z "$VERSION" ]] && { echo "runtime-sources.yaml: missing llama_cpp.version" >&2; exit 2; }
 
-# --- Select the build (os + arch [+ backend]); default = first os/arch match (CPU) ---
+# --- Select the build (os + arch [+ backend]); default = first os/arch match (CPU).
+# Explicit --os without --arch = cross-provisioning: take that OS's first build (any arch).
 SEL=-1
 for i in $(seq 0 $idx); do
-  [[ "${B_OS[$i]}" == "$OS" && "${B_ARCH[$i]}" == "$ARCH" ]] || continue
+  [[ "${B_OS[$i]}" == "$OS" ]] || continue
+  if [[ $OS_EXPLICIT -eq 0 || $ARCH_EXPLICIT -eq 1 ]]; then
+    [[ "${B_ARCH[$i]}" == "$ARCH" ]] || continue
+  fi
   [[ -n "$BACKEND" && "${B_BACKEND[$i]}" != "$BACKEND" ]] && continue
   SEL=$i; break
 done
@@ -107,11 +115,25 @@ if [[ $SEL -lt 0 ]]; then
   exit 2
 fi
 
+# A selected build must carry every field the plan needs; a silent miss here would
+# disable verification forever (the audited C1 bug), so fail loudly instead.
+for required in url sha256 extract_to; do
+  case "$required" in
+    url) v="${B_URL[$SEL]:-}" ;;
+    sha256) v="${B_SHA[$SEL]:-}" ;;
+    extract_to) v="${B_EXTRACT[$SEL]:-}" ;;
+  esac
+  if [[ -z "$v" ]]; then
+    echo "runtime-sources.yaml: selected build ($OS/$ARCH) is missing '$required'." >&2
+    exit 2
+  fi
+done
+
 EXTRACT_TO="$TARGET/${B_EXTRACT[$SEL]}"
 BIN_NAME="llama-server"; [[ "${B_OS[$SEL]}" == "win" ]] && BIN_NAME="llama-server.exe"
 BIN_PATH="$EXTRACT_TO/$BIN_NAME"
 URL="${B_URL[$SEL]}"
-SHA="${B_SHA[$SEL]:-}"
+SHA="${B_SHA[$SEL]}"
 
 echo "Fetch runtime -> $TARGET"
 echo "  build: ${B_OS[$SEL]}/${B_ARCH[$SEL]} ${B_BACKEND[$SEL]} @ $VERSION"
@@ -119,8 +141,9 @@ echo "  url:   $URL"
 echo "  into:  $EXTRACT_TO"
 [[ $DRY_RUN -eq 1 ]] && { echo "(dry run — nothing will be downloaded)"; exit 0; }
 
-# Idempotent skip (only meaningful when the host OS matches the selected build).
-if [[ -f "$BIN_PATH" && "${B_OS[$SEL]}" == "$OS" ]]; then
+# Idempotent skip: the binary name is derived from the selected build's OS, so
+# presence is a valid skip signal even when cross-provisioning another OS's dir.
+if [[ -f "$BIN_PATH" ]]; then
   echo "  skip ($BIN_NAME already extracted)"; exit 0
 fi
 

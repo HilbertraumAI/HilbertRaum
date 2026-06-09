@@ -52,9 +52,11 @@ npm install        # one-time; downloads the Electron binary (needs internet onc
 npm run dev        # launches the app
 ```
 
-The app starts immediately on a **built-in mock model** so you can explore the whole interface
-(chat, document import, Q&A with citations, benchmark, privacy). **Mock answers are placeholders**
-(they echo your input) — they are *not* real AI. Add a real model (step 2) for genuine answers.
+With no model files present you can still explore the whole interface: open **Models** and click
+**Start mock runtime** on a chat model (offered in developer mode, the dev default) — then chat,
+document import, Q&A with citations, benchmark and privacy all work on the built-in mock.
+**Mock answers are placeholders** (they echo your input) — they are *not* real AI. Add a real
+model (step 2) for genuine answers.
 
 > The dependency install is the **only** step that touches the network. The app itself makes **no**
 > network calls in its core path.

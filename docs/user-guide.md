@@ -54,9 +54,11 @@ Launch the app from your Start menu / Applications folder as usual.
 
 On first launch you'll set up your **workspace**:
 
-- **Encrypted (recommended / commercial default):** choose a password. Your data is encrypted
-  at rest; the password is **never stored** anywhere. You'll enter it each time you unlock the
-  drive. If you forget it, the data cannot be recovered — that's the point.
+- **Encrypted (recommended / commercial default):** choose a password. Your chats, settings,
+  and the stored copies of your imported documents are encrypted at rest; the password is
+  **never stored** anywhere. (Model files and local logs are not encrypted — they contain no
+  document contents.) You'll enter the password each time you unlock the drive. If you forget
+  it, the data cannot be recovered — that's the point.
 - **Plaintext (developer mode):** no password, data stored unencrypted. Only available on
   developer drives.
 
@@ -83,12 +85,13 @@ If no model is started yet, Home will point you to the **Models** screen.
    - **Installed** — ready to use.
    - **Recommended** — best match for your laptop (based on the hardware benchmark).
    - **Missing** — the model file isn't on the drive (see Troubleshooting).
-3. Click a model, then **Start**. The first start of a model can take a little while as it
-   loads into memory.
+3. Click a model, then **Start runtime**. The first start of a model can take a little while
+   as it loads into memory.
 
-> **No model installed?** The app still works using a built-in **mock** model so you can try
-> the interface. Mock answers are placeholders, not real AI responses — add a real model file
-> for genuine answers (see Troubleshooting).
+> **No model installed?** You can still try the interface: a model without a weight file shows
+> a **Start mock runtime** button (in developer mode) that runs a built-in mock model. Mock
+> answers are placeholders, not real AI responses — add a real model file for genuine answers
+> (see Troubleshooting).
 
 ---
 

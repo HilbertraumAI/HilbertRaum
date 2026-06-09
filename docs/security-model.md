@@ -98,7 +98,8 @@ The workspace has two modes, owned by `services/workspace-vault.ts` (`WorkspaceC
   labelled** on the Privacy screen and Settings. Permitted **only** when policy allows it AND the
   build is a dev build / developer mode (see *Plaintext gating* below). Not the commercial default.
 - `encrypted` — the commercial default. A password-derived key encrypts the whole database **file**
-  at rest. Password is **never stored**.
+  at rest **and every stored imported-document copy** (see *Encrypted document cache* below).
+  Password is **never stored**.
 
 ### Key derivation (KDF)
 `services/security/crypto.ts` derives a 32-byte AES key from the password + a random 16-byte salt.
@@ -134,6 +135,27 @@ individual rows — the spec §8 schema is identical in both modes.
   They are checkpointed before encryption and shredded after, so the encrypted snapshot is complete
   and no plaintext leaks in a sidecar.
 
+### Encrypted document cache (spec §3.5: "database AND document cache")
+Imports copy each file into `workspace/documents/` so the drive is self-contained. In an encrypted
+workspace those copies rest **encrypted** too — encrypting only the DB would leave the raw bytes of
+every imported document readable on a lost drive.
+
+- **At rest:** the stored copy is `<id><ext>.enc` (same `MAGIC | iv | tag | ciphertext` framing,
+  same vault key, fresh IV per file). `sha256`/`size_bytes` on the document row describe the
+  plaintext content in both modes.
+- **Import:** the original file (still on disk at import time) is parsed directly; only the
+  encrypted copy is written to the workspace — no plaintext copy ever lands there.
+- **Re-index:** the stored `.enc` is decrypted to a **transient** working file
+  (`<id>.parse<ext>`) for the parser and **shredded** when parsing finishes (success or failure).
+- **Crash recovery:** `shredStalePlaintext` (startup, encrypted vaults) also sweeps stray
+  `*.parse*`/`*.tmp` transients under `workspace/documents/` and the DB's `.tmp` write-temp.
+- **Legacy migration:** a document imported before this existed (or in plaintext mode) keeps its
+  plaintext stored copy until **re-indexed**, which upgrades it to `.enc` in place and shreds the
+  plaintext.
+- The wiring: ingestion receives a `DocumentCipher` from `WorkspaceController.documentCipher()` —
+  non-null only for an unlocked encrypted workspace (`plaintext_dev` keeps plaintext copies, as
+  labelled).
+
 ### Vault descriptor (the only pre-unlock artifact)
 Settings — including `workspaceMode` — live **inside** the encrypted DB, so the app cannot read them
 before unlocking. A small **unencrypted** descriptor at **`config/workspace.json`** is the only thing
@@ -167,7 +189,10 @@ The renderer shows the create-password / unlock gate (`WorkspaceGate`) until `wo
 ### Threat notes / known limitations
 - **A decrypted working copy exists on disk while unlocked.** `node:sqlite` needs a real file, so the
   DB is plaintext on the drive while the app runs (re-encrypted + shredded on lock/quit). Documented
-  limitation (plan §4b).
+  limitation (plan §4b). Re-indexing an encrypted document similarly uses a transient decrypted
+  file, shredded after parsing; startup sweeps any crash leftovers (`.parse*`, `.tmp`, WAL/SHM).
+- **Logs are not encrypted.** `logs/app.log` never contains document contents or chat text, but may
+  contain file names/paths and model ids.
 - **Secure erase is best-effort.** Shredding overwrites then unlinks, but on SSDs wear-levelling may
   leave original blocks recoverable. We do not over-promise this.
 - **No password recovery.** The password is never stored and the key is unrecoverable without it —

@@ -70,6 +70,9 @@ export function ModelsScreen(): JSX.Element {
   function card(m: ModelInfo): JSX.Element {
     const active = isActive(m)
     const installed = m.state === 'installed' || m.state === 'running' || m.state === 'ready'
+    // Zero-weights first run (developer mode): a MISSING chat model may still be started —
+    // the runtime factory falls back to the built-in mock so the whole app is explorable.
+    const canMockStart = m.state === 'missing' && m.role === 'chat' && Boolean(settings?.developerMode)
     return (
       <div className="card model-card" key={m.id}>
         <div className="model-head">
@@ -131,11 +134,17 @@ export function ModelsScreen(): JSX.Element {
           ) : (
             <button
               className="btn sm"
-              disabled={!installed || busy !== null}
+              disabled={(!installed && !canMockStart) || busy !== null}
               onClick={() => run(`start-${m.id}`, () => window.api.startRuntime(m.id))}
-              title={installed ? 'Start the runtime (mock until Phase 10)' : 'Model file not present'}
+              title={
+                installed
+                  ? 'Start the local runtime for this model'
+                  : canMockStart
+                    ? 'No weights present — starts the built-in mock runtime so you can try the app'
+                    : 'Model file not present'
+              }
             >
-              Start runtime
+              {installed ? 'Start runtime' : canMockStart ? 'Start mock runtime' : 'Start runtime'}
             </button>
           )}
         </div>

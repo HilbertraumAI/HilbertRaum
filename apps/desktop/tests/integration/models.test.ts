@@ -10,6 +10,8 @@ import {
   sha256File,
   verifyChecksum,
   computeInstallState,
+  clearChecksumCache,
+  checksumCacheStats,
   recommendModelId,
   discoverManifests,
   selectModel,
@@ -80,6 +82,43 @@ describe('checksum verification', () => {
   })
 })
 
+// H5 (audit round 4): listModels runs on every Models/Chat screen mount; without a cache
+// every visit re-hashed every multi-GB GGUF on the drive (minutes of USB I/O per
+// navigation). Hash once per (path, size, mtime); a changed file re-hashes.
+describe('checksum cache (H5)', () => {
+  it('hashes a file once and serves repeat verifications from the cache', async () => {
+    clearChecksumCache()
+    const dir = tempDir('paid-hash-')
+    const file = join(dir, 'weight.bin')
+    writeFileSync(file, 'big model weights')
+    const expected = createHash('sha256').update('big model weights').digest('hex')
+
+    const before = checksumCacheStats.computed
+    expect((await verifyChecksum(file, expected)).matched).toBe(true)
+    expect(checksumCacheStats.computed).toBe(before + 1)
+
+    // Second + third verification: cache hit, no re-hash, same result.
+    expect((await verifyChecksum(file, expected)).matched).toBe(true)
+    expect((await verifyChecksum(file, expected)).matched).toBe(true)
+    expect(checksumCacheStats.computed).toBe(before + 1)
+  })
+
+  it('re-hashes when the file changes, so a swapped weight is still detected', async () => {
+    clearChecksumCache()
+    const dir = tempDir('paid-hash-')
+    const file = join(dir, 'weight.bin')
+    writeFileSync(file, 'original')
+    const originalHash = createHash('sha256').update('original').digest('hex')
+    expect((await verifyChecksum(file, originalHash)).matched).toBe(true)
+
+    const before = checksumCacheStats.computed
+    writeFileSync(file, 'tampered-or-updated') // different size → cache invalid
+    const res = await verifyChecksum(file, originalHash)
+    expect(res.matched).toBe(false)
+    expect(checksumCacheStats.computed).toBe(before + 1)
+  })
+})
+
 describe('weightPath', () => {
   it('resolves a normal relative local_path under the drive root', () => {
     const p = weightPath('/drive', asManifest())
@@ -134,6 +173,15 @@ describe('computeInstallState', () => {
     const root = rootWithWeight('weights')
     const state = await computeInstallState(asManifest(), root, { developerMode: false })
     expect(state).toBe('checksum_failed')
+  })
+
+  it('never hashes a placeholder-hash weight (H5: pure wasted I/O on a multi-GB file)', async () => {
+    clearChecksumCache()
+    const root = rootWithWeight('weights')
+    const before = checksumCacheStats.computed
+    await computeInstallState(asManifest(), root, { developerMode: true })
+    await computeInstallState(asManifest(), root, { developerMode: false })
+    expect(checksumCacheStats.computed).toBe(before)
   })
 
   it('is unsupported for an unknown runtime/format', async () => {

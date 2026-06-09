@@ -7,8 +7,10 @@
 
 _Last updated: 2026-06-09 — Phase 13 complete (plug-and-play distribution: per-OS launcher +
 `build-commercial-drive` pipeline + signing hooks + launch preflight) + a full post-Phase-13 code/docs
-audit remediation (see §10). MVP feature-complete; Phases 0–13 done — this is the **last planned
-phase**. Earlier multi-persona audit remediation in §8/§9._
+audit remediation (see §10) + **audit round 4 Critical/High remediation (see §11)** — all C/H findings
+from [`docs/audit-2026-06-09-multi-persona.md`](docs/audit-2026-06-09-multi-persona.md) fixed,
+incl. the encrypted document cache (spec §3.5). MVP feature-complete; Phases 0–13 done — this is the
+**last planned phase**. Earlier multi-persona audit remediation in §8/§9._
 
 ---
 
@@ -1065,3 +1067,71 @@ type-guard stored JSON (privacy-safe — the network path is double-gated by the
 follows directory symlinks; `resolveDriveRootFromLauncher` is a canonical reference module not in the
 runtime path (same pattern as `drive.ts`/`assets.ts`). Pervasive "Phase 10 (future)" comment tense left
 as-is (describes *where* a swap lives; not worth the churn).
+
+---
+
+## 11. Audit round 4 — Critical/High remediation (2026-06-09)
+
+A fourth five-persona audit (security/privacy · spec-compliance · bug-hunt · docs-vs-code ·
+release/build engineering; full report = [`docs/audit-2026-06-09-multi-persona.md`](docs/audit-2026-06-09-multi-persona.md))
+found 2 Critical + 7 High findings. **All 9 are FIXED.** Gate: typecheck clean, **343/343 tests pass**
+(was 323 — +20 regression tests), build green (main bundle **110.63 kB**). No new dependencies.
+
+**Critical (script↔TS drift in the commercial pipeline):**
+- **C1** — `fetch-runtime.{ps1,sh}` key regex was `[A-Za-z_]+` (no digits) → the `sha256:` line never
+  parsed → runtime-zip verification was structurally dead (would stay UNVERIFIED even with a real
+  committed hash). Fixed (`[A-Za-z0-9_]+`) + the selected build now FAILS LOUDLY if `url`/`sha256`/
+  `extract_to` is missing. Verified end-to-end (real hash → VERIFIED; tampered → delete + exit 1).
+- **C2** — `build-commercial-drive.{ps1,sh}` step 7 checked posture/user-data but left weights to a
+  *manual* instruction (`verify-models` exits 1 only on MISMATCH; MISSING/UNVERIFIED passed) → a
+  placeholder-hash drive shipped with exit 0. New **`verify-models -Strict/--strict`** (every weight
+  VERIFIED + ≥1 weight, mirroring `assertCommercialDrive.weightsVerified`) is now invoked by step 7;
+  any non-VERIFIED weight makes the pipeline exit 1.
+
+**High:**
+- **H1 (spec §3.5 hard rule) — encrypted document cache.** Imported document copies used to rest in
+  PLAINTEXT under `workspace/documents/` even in an encrypted workspace. Now: ingestion takes an
+  optional `DocumentCipher` (`WorkspaceController.documentCipher()`, non-null only for an unlocked
+  encrypted vault) → stored copies are `<id><ext>.enc` (same AES-GCM framing/key as the DB); import
+  parses the original directly (no plaintext ever lands in the store); re-index decrypts to a
+  transient `<id>.parse<ext>` shredded after parsing; a legacy plaintext copy is migrated to `.enc`
+  on re-index. `shredStalePlaintext` now also sweeps `*.parse*`/`*.tmp` transients + the DB `.tmp`
+  (closing audit M9 too). Docs corrected (READ ME FIRST "encrypts everything" over-promise,
+  PRIVACY/SECURITY/security-model/user-guide/drive-layout now state exactly what is/isn't encrypted;
+  SECURITY.md's stale scrypt-primary wording → Argon2id default).
+- **H2** — `RuntimeManager` start/stop now **serialized** through an internal op queue: a second
+  `start()` during a slow GGUF load waits and stops the committed runtime first (no second, orphaned
+  `llama-server`); `stop()` during an in-flight start stops what the start commits; quit-during-start
+  can no longer leak the child.
+- **H3** — `E5Embedder.stop()` now awaits an IN-FLIGHT lazy start and stops whatever it produced, and
+  a `stopped` flag prevents a racing `embed()` from resurrecting the sidecar after quit.
+- **H4** — vault-wipe guard: `createEncryptedVaultOnDisk` refuses when `.enc` exists;
+  `WorkspaceController.create()` refuses while ANY vault artifact exists (valid descriptor, `.enc`,
+  or a CORRUPT descriptor — which now reports state **locked**, not `uninitialized`, so the gate
+  never offers the create flow that would overwrite the data); `unlock` with a corrupt descriptor +
+  intact `.enc` throws a restore-the-descriptor hint. IPC maps the refusal to `{ok:false,
+  reason:'refused'}` with the real message.
+- **H5** — checksum work no longer thrashes the drive: placeholder-hash weights are decided from the
+  manifest alone (NO hashing), and real-hash verification is cached by `(path, size, mtimeMs)`
+  (`clearChecksumCache` for tests; ship gates still always hash fully). Models/Chat screen mounts no
+  longer re-read multi-GB GGUFs.
+- **H6** — the documented zero-weights first-run journey now works: `startRuntime` enforces the spec
+  §7.4 gate in the MAIN process (role must be `chat`; state must be `installed`) with ONE exception —
+  a `missing` model in developer mode starts the mock via the selecting factory. The Models screen
+  shows **Start mock runtime** on missing chat models (dev mode); README/user-guide/troubleshooting
+  updated to match (and the embeddings-model-as-chat-runtime hole, audit M8, is closed by the role
+  gate).
+- **H7** — a commercial drive now ships sidecars for ALL OSes: `build-commercial-drive.{ps1,sh}` loop
+  `fetch-runtime` over win/mac/linux (and `planCommercialDrive`'s step says so); `fetch-runtime.ps1`
+  derives the binary name from the SELECTED build's OS (was hardcoded `llama-server.exe`) and its
+  idempotent skip works cross-OS; an explicit `--os` without `--arch` selects that OS's first build
+  (cross-provisioning from any host).
+
+**New regression tests (+20):** runtime-manager serialization (2), e5 stop-during-start (1), vault
+create-over-existing/corrupt-descriptor (4), checksum cache + placeholder-no-hash (3),
+startRuntime gate (3), encrypted document cache (7, new `encrypted-documents.test.ts`).
+
+**Remaining from the audit (NOT in this round, by scope):** the Medium/Low findings — see the report's
+§5/§6 and prioritized list (§8). Top of that list: chat regenerate/conversation-switch races (M1/M2),
+ingestion concurrency guards (M3/M4), >2 GiB vault streaming (M5), DOCX segment packing (M6), E5
+context sizing (M7), license-review ship gate (M11), BUILD_STATE/architecture doc-drift sweep (M25–M31).

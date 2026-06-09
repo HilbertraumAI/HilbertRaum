@@ -2,7 +2,13 @@ import { ipcMain } from 'electron'
 import { IPC } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
 import type { ModelInfo, RuntimeStatus } from '../../shared/types'
-import { buildModelList, discoverManifests, selectModel, weightPath } from '../services/models'
+import {
+  buildModelList,
+  computeInstallState,
+  discoverManifests,
+  selectModel,
+  weightPath
+} from '../services/models'
 import { getSettings } from '../services/settings'
 import { log } from '../services/logging'
 
@@ -41,9 +47,26 @@ export function registerModelIpc(ctx: AppContext): void {
     const { manifests } = discoverManifests(ctx.manifestsDir)
     const found = manifests.find((m) => m.manifest.id === modelId)
     if (!found) throw new Error(`Unknown model id: ${modelId}`)
+    // The chat runtime loads chat models only; an embeddings model here would start
+    // llama-server in chat mode over a 384-dim embedder and produce garbage.
+    if (found.manifest.role !== 'chat') {
+      throw new Error(`Model "${modelId}" is a ${found.manifest.role} model, not a chat model.`)
+    }
 
     const s = getSettings(ctx.db)
-    log.info('Start runtime', { modelId })
+    // Enforce the spec §7.4 gate in the MAIN process (not just a disabled button): only
+    // an installed (verified) model may start. One exception keeps the zero-weights
+    // first-run journey alive — in developer mode a MISSING model may start, because the
+    // selecting runtime factory then falls back to the built-in mock runtime.
+    const state = await computeInstallState(found.manifest, ctx.paths.rootPath, {
+      developerMode: s.developerMode
+    })
+    const mockFallback = state === 'missing' && s.developerMode
+    if (state !== 'installed' && !mockFallback) {
+      throw new Error(`Model "${modelId}" cannot be started (state: ${state}).`)
+    }
+
+    log.info('Start runtime', { modelId, state })
     return ctx.runtime.start({
       modelId,
       modelPath: weightPath(ctx.paths.rootPath, found.manifest),

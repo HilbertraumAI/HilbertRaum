@@ -8,11 +8,12 @@
 
     1. prepare-drive  -Force          # commercial policy (encrypted, network denied)
     2. fetch-models   -AcceptLicense  # verified weights
-    3. fetch-runtime                  # verified llama.cpp sidecar
+    3. fetch-runtime  -Os win|mac|linux  # verified llama.cpp sidecar for EVERY shipped OS
     4. package + sign + notarize      # MANUAL (secrets never in the repo) -- see below
     5. copy launcher + portable app + user docs onto the drive root
     6. verify-models  -Generate       # capture real hashes -> config/checksums.json
-    7. final check: commercial posture + all weights VERIFIED + no user data
+    7. final check: commercial posture + verify-models -Strict (all weights VERIFIED)
+       + no user data -- exits 1 unless the drive is actually sellable
 
   Mirrors apps/desktop/src/main/services/commercial-drive.ts (planCommercialDrive +
   assertCommercialDrive) -- that TS module is the CANONICAL, unit-tested reference. This
@@ -82,11 +83,15 @@ if ($AcceptLicense) { $models.AcceptLicense = $true }
 if ($DryRun) { $models.DryRun = $true }
 Run 'fetch-models.ps1' $models
 
-# --- 3. Download + verify the llama.cpp sidecar ------------------------------------
-Step 3 'Download + verify the llama.cpp sidecar'
-$runtime = @{ Target = $Target }
-if ($DryRun) { $runtime.DryRun = $true }
-Run 'fetch-runtime.ps1' $runtime
+# --- 3. Download + verify the llama.cpp sidecar for EVERY shipped OS ----------------
+# A sold drive must run on every OS the launchers support (win/mac/linux); fetching only
+# the build-host's OS would ship a drive whose mac/linux sidecar dirs are empty.
+Step 3 'Download + verify the llama.cpp sidecar (every shipped OS)'
+foreach ($osName in @('win', 'mac', 'linux')) {
+  $runtime = @{ Target = $Target; Os = $osName }
+  if ($DryRun) { $runtime.DryRun = $true }
+  Run 'fetch-runtime.ps1' $runtime
+}
 
 # --- 4. Package + sign + notarize (MANUAL) -----------------------------------------
 Step 4 'Package + sign the portable app (MANUAL -- secrets never in the repo)'
@@ -147,16 +152,21 @@ $docsDir = Join-Path $Target 'workspace/documents'
 if ((Test-Path $docsDir) -and (Get-ChildItem -Force $docsDir -ErrorAction SilentlyContinue | Select-Object -First 1)) {
   $problems += 'user data present: workspace/documents/*'
 }
+# Weight gate (assertCommercialDrive parity): every weight VERIFIED, automated -- not a
+# manual "confirm it yourself" instruction. UNVERIFIED/MISSING/MISMATCH all fail here.
+if (-not $DryRun) {
+  $global:LASTEXITCODE = 0
+  & (Join-Path $PSScriptRoot 'verify-models.ps1') -Target $Target -Strict
+  if ($LASTEXITCODE -ne 0) { $problems += 'weights: not every weight is VERIFIED (strict verify failed)' }
+}
 if ($DryRun) {
-  Write-Host '  (dry run: posture check skipped)'
+  Write-Host '  (dry run: posture + weight checks skipped)'
 } elseif ($problems.Count -gt 0) {
   Write-Host '  NOT SELLABLE:' -ForegroundColor Red
   foreach ($p in $problems) { Write-Host "    - $p" -ForegroundColor Red }
-  Write-Host '  (verify-models above also enforces weight hashes; fix all before shipping.)'
   exit 1
 } else {
-  Write-Host '  Posture OK (encrypted, network denied, no user data).' -ForegroundColor Green
-  Write-Host '  Confirm verify-models reported every weight VERIFIED (not UNVERIFIED/MISMATCH).'
+  Write-Host '  SELLABLE: posture OK (encrypted, network denied, no user data) + all weights VERIFIED.' -ForegroundColor Green
 }
 
 Write-Host "`nDone. Test the drive on a clean laptop with Wi-Fi OFF (spec section 17 demo)." -ForegroundColor Green

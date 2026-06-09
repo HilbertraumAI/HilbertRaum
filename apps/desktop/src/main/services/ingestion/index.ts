@@ -12,6 +12,7 @@ import type { Db } from '../db'
 import type { DocumentInfo, IngestionStatus } from '../../../shared/types'
 import { sha256File } from '../models'
 import { type Embedder, encodeVector } from '../embeddings'
+import { shredFile, type DocumentCipher } from '../workspace-vault'
 import { selectParser, supportedExtensions } from './parsers'
 import { chunkSegments } from './chunker'
 
@@ -28,13 +29,23 @@ import { chunkSegments } from './chunker'
 // pass-through (a document still reaches `indexed` with chunks but no vectors), which keeps
 // the Phase-4 callers/tests valid and lets the real embedder swap in unchanged (Phase 10).
 
-/** Optional dependencies for the embedding step (Phase 5). */
+/** Optional dependencies for the embedding step (Phase 5) + encrypted storage (H1). */
 export interface IngestionDeps {
   /** Embedder used to vectorize chunks. Omit to skip the embedding step. */
   embedder?: Embedder
   /** Model id tag for `embeddings.embedding_model_id`; falls back to `embedder.id`. */
   embeddingModelId?: string | null
+  /**
+   * When present (encrypted workspace), the stored document copy is written ENCRYPTED
+   * (`<id><ext>.enc`, vault-key AES-GCM) instead of a plaintext copy — spec §3.5
+   * requires the document cache to be encrypted, not just the database. Re-indexing
+   * decrypts to a transient working file and shreds it afterwards.
+   */
+  cipher?: DocumentCipher | null
 }
+
+/** Suffix marking an encrypted stored document copy. */
+export const ENCRYPTED_DOC_SUFFIX = '.enc'
 
 const MIME_BY_EXT: Record<string, string> = {
   '.txt': 'text/plain',
@@ -178,26 +189,65 @@ export async function processDocument(
   const row = getRow(db, documentId)
   if (!row) throw new Error(`Unknown document: ${documentId}`)
 
+  // Transient PLAINTEXT files created below (decrypted working copies in an encrypted
+  // workspace). Always shredded on the way out — success or failure — so no decrypted
+  // document content lingers on the drive.
+  const transients: string[] = []
+
   try {
     setStatus(db, documentId, 'extracting')
 
-    // Ensure a self-contained workspace copy exists (`stored_path`).
+    const ext = extname(row.title).toLowerCase()
+    const cipher = deps.cipher ?? null
+
+    // Ensure a self-contained workspace copy exists (`stored_path`). In an encrypted
+    // workspace the copy rests ENCRYPTED (`<id><ext>.enc`); `sha256`/`size_bytes`
+    // describe the plaintext content in both modes.
     let storedPath = row.stored_path
+    /** The plaintext file the parser reads. */
+    let parseSource: string
+
     if (!storedPath || !existsSync(storedPath)) {
       const origin = row.original_path
       if (!origin || !existsSync(origin)) {
         throw new Error('Source file not found on disk.')
       }
-      storedPath = join(storeDir, documentId + extname(row.title).toLowerCase())
-      copyFileSync(origin, storedPath)
-      const sha = await sha256File(storedPath)
-      const size = statSync(storedPath).size
+      const sha = await sha256File(origin)
+      const size = statSync(origin).size
+      if (cipher) {
+        storedPath = join(storeDir, documentId + ext + ENCRYPTED_DOC_SUFFIX)
+        cipher.encryptFile(origin, storedPath)
+        // Parse the original directly (it is still on disk) — no decrypt round-trip.
+        parseSource = origin
+      } else {
+        storedPath = join(storeDir, documentId + ext)
+        copyFileSync(origin, storedPath)
+        parseSource = storedPath
+      }
       db.prepare('UPDATE documents SET stored_path = ?, sha256 = ?, size_bytes = ? WHERE id = ?').run(
         storedPath,
         sha,
         size,
         documentId
       )
+    } else if (cipher && !storedPath.endsWith(ENCRYPTED_DOC_SUFFIX)) {
+      // Legacy migration: this document was imported before the encrypted document cache
+      // existed (or in plaintext mode). Re-indexing in an encrypted workspace upgrades
+      // the stored copy: encrypt it, point the row at the `.enc`, parse the old
+      // plaintext one last time, then shred it.
+      const encPath = `${storedPath}${ENCRYPTED_DOC_SUFFIX}`
+      cipher.encryptFile(storedPath, encPath)
+      db.prepare('UPDATE documents SET stored_path = ? WHERE id = ?').run(encPath, documentId)
+      parseSource = storedPath
+      transients.push(storedPath)
+      storedPath = encPath
+    } else if (cipher) {
+      // Encrypted stored copy: decrypt to a transient working file for the parser.
+      parseSource = join(storeDir, `${documentId}.parse${ext}`)
+      cipher.decryptFile(storedPath, parseSource)
+      transients.push(parseSource)
+    } else {
+      parseSource = storedPath
     }
 
     const parser = selectParser(row.title)
@@ -206,7 +256,7 @@ export async function processDocument(
     }
     db.prepare('UPDATE documents SET mime_type = ? WHERE id = ?').run(parser.mimeType, documentId)
 
-    const parsed = await parser.parse(storedPath)
+    const parsed = await parser.parse(parseSource)
 
     setStatus(db, documentId, 'chunking')
     const chunks = chunkSegments(parsed.segments)
@@ -250,6 +300,9 @@ export async function processDocument(
     const message = err instanceof Error ? err.message : String(err)
     setStatus(db, documentId, 'failed', message)
     return rowToInfo(getRow(db, documentId) as DocumentRow, chunkCountFor(db, documentId))
+  } finally {
+    // Shred transient decrypted copies whether the pipeline succeeded or failed.
+    for (const t of transients) shredFile(t)
   }
 }
 

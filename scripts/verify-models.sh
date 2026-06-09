@@ -8,18 +8,22 @@
 #   file absent                               -> MISSING
 #
 # --generate writes <target>/config/checksums.json from the present weights.
+# --strict   ship gate: exit 1 unless every manifest weight is VERIFIED (and >= 1
+#            exists) — mirrors commercial-drive.ts assertCommercialDrive.
 #
 # Usage:
-#   scripts/verify-models.sh --target /Volumes/PRIVATE_AI_DRIVE [--generate]
+#   scripts/verify-models.sh --target /Volumes/PRIVATE_AI_DRIVE [--generate] [--strict]
 set -euo pipefail
 
 TARGET=""
 GENERATE=0
+STRICT=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --target) TARGET="${2:-}"; shift 2 ;;
     --target=*) TARGET="${1#*=}"; shift ;;
     --generate) GENERATE=1; shift ;;
+    --strict) STRICT=1; shift ;;
     -h|--help) grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; exit 2 ;;
   esac
@@ -45,6 +49,8 @@ field() { sed -n "s/^[[:space:]]*$2[[:space:]]*:[[:space:]]*//p" "$1" | head -n1
 is_real_sha() { [[ "$1" =~ ^[a-f0-9]{64}$ ]]; }
 
 had_mismatch=0
+total_weights=0
+verified_weights=0
 # Collect manifest paths WITHOUT `mapfile` (a Bash 4+ builtin absent from macOS's stock
 # Bash 3.2) and WITHOUT `sort -z` (not on BSD/macOS sort). Newline-delimited read is
 # portable; manifest filenames are controlled and contain no newlines.
@@ -71,6 +77,11 @@ for mf in "${MANIFEST_FILES[@]}"; do
     if ! is_real_sha "$sha"; then status="UNVERIFIED"
     elif [[ "$actual" == "$sha" ]]; then status="VERIFIED"
     else status="MISMATCH"; had_mismatch=1; fi
+  fi
+  total_weights=$((total_weights + 1))
+  if [[ "$status" == "VERIFIED" ]]; then verified_weights=$((verified_weights + 1)); fi
+  if [[ $STRICT -eq 1 && "$status" != "VERIFIED" ]]; then
+    echo "STRICT: $id is $status (must be VERIFIED)" >&2
   fi
   printf '  %-12s %s\n' "$status" "$id"
 done
@@ -114,5 +125,19 @@ fi
 if [[ $had_mismatch -eq 1 ]]; then
   echo "One or more weights FAILED checksum verification." >&2
   exit 1
+fi
+
+# --strict = the sellable posture (assertCommercialDrive parity): every weight must
+# be VERIFIED against a REAL manifest hash, and there must be at least one weight.
+if [[ $STRICT -eq 1 ]]; then
+  if [[ $total_weights -eq 0 ]]; then
+    echo "STRICT: no model manifests with a local_path found — nothing to verify." >&2
+    exit 1
+  fi
+  if [[ $verified_weights -ne $total_weights ]]; then
+    echo "STRICT: drive is not sellable — every weight must be VERIFIED against a real manifest sha256." >&2
+    exit 1
+  fi
+  echo "STRICT: all $total_weights weight(s) VERIFIED."
 fi
 exit 0

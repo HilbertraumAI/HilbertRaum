@@ -117,6 +117,63 @@ describe('RuntimeManager.start() — B2 reset on failed start', () => {
     expect(mgr.active()).toBeNull()
   })
 
+  // H2 (audit round 4): start/stop must be SERIALIZED. A real GGUF start can take up
+  // to the health timeout; in that window a second start() used to skip the stop
+  // (current was still null) and spawn a second, never-stopped llama-server (orphan),
+  // and a stop() used to be a silent no-op the in-flight start then overrode.
+  it('serializes concurrent starts — the first runtime is stopped, never orphaned', async () => {
+    const events: string[] = []
+    const gate: { release: (() => void) | null } = { release: null }
+    let n = 0
+    const mgr = new RuntimeManager(() => {
+      const id = `r${++n}`
+      const slow = id === 'r1'
+      return runtime({
+        modelId: id,
+        start: async () => {
+          events.push(`start:${id}`)
+          if (slow) await new Promise<void>((resolve) => (gate.release = resolve))
+        },
+        onStop: () => events.push(`stop:${id}`)
+      })
+    })
+
+    const p1 = mgr.start(opts)
+    const p2 = mgr.start(opts) // issued while r1 is still loading
+    // Let r1 finish loading; p2 must then stop r1 before starting r2.
+    await new Promise((r) => setTimeout(r, 0))
+    gate.release?.()
+    await Promise.all([p1, p2])
+
+    expect(events).toEqual(['start:r1', 'stop:r1', 'start:r2'])
+    expect(mgr.activeModelId()).toBe('r2')
+  })
+
+  it('stop() during an in-flight start stops the runtime that start committed', async () => {
+    const events: string[] = []
+    const gate: { release: (() => void) | null } = { release: null }
+    const mgr = new RuntimeManager(() =>
+      runtime({
+        modelId: 'r1',
+        start: async () => {
+          events.push('start:r1')
+          await new Promise<void>((resolve) => (gate.release = resolve))
+        },
+        onStop: () => events.push('stop:r1')
+      })
+    )
+
+    const p1 = mgr.start(opts)
+    const pStop = mgr.stop() // user clicks Stop (or the app quits) mid-load
+    await new Promise((r) => setTimeout(r, 0))
+    gate.release?.()
+    await Promise.all([p1, pStop])
+
+    expect(events).toEqual(['start:r1', 'stop:r1'])
+    expect(mgr.active()).toBeNull()
+    expect(mgr.status().running).toBe(false)
+  })
+
   it('a later successful start works after an earlier failed one', async () => {
     let mode: 'fail' | 'ok' = 'fail'
     const mgr = new RuntimeManager(() =>

@@ -55,6 +55,10 @@ if (-not (Test-Path $SourcesFile)) {
 }
 
 # Host detection (PS 5.1 is always Windows; $IsWindows exists only on PS Core).
+# When -Os is explicitly overridden but -Arch is not, we are cross-provisioning another
+# OS's dir — the host arch is meaningless there, so we take that OS's first build instead.
+$OsExplicit = [bool]$Os
+$ArchExplicit = [bool]$Arch
 if (-not $Os) {
   if ($PSVersionTable.PSVersion.Major -ge 6) {
     $Os = if ($IsWindows) { 'win' } elseif ($IsMacOS) { 'mac' } else { 'linux' }
@@ -81,7 +85,7 @@ foreach ($raw in $lines) {
     $current = [ordered]@{ os = $Matches[1].Trim().Trim('"').Trim("'") }
     continue
   }
-  if ($current -and $line -match '^\s+([A-Za-z_]+)\s*:\s*(.+?)\s*$') {
+  if ($current -and $line -match '^\s+([A-Za-z0-9_]+)\s*:\s*(.+?)\s*$') {
     $current[$Matches[1].Trim()] = $Matches[2].Trim().Trim('"').Trim("'")
   }
 }
@@ -89,8 +93,13 @@ if ($current) { $builds += $current }
 
 if (-not $version) { Write-Error 'runtime-sources.yaml: missing llama_cpp.version'; exit 2 }
 
-# --- Select the build (os + arch [+ backend]); default = first os/arch match (CPU) ---
-$candidates = $builds | Where-Object { $_.os -eq $Os -and $_.arch -eq $Arch }
+# --- Select the build (os + arch [+ backend]); default = first os/arch match (CPU).
+# Explicit -Os without -Arch = cross-provisioning: take that OS's first build (any arch).
+if ($OsExplicit -and -not $ArchExplicit) {
+  $candidates = $builds | Where-Object { $_.os -eq $Os }
+} else {
+  $candidates = $builds | Where-Object { $_.os -eq $Os -and $_.arch -eq $Arch }
+}
 if ($Backend) { $candidates = $candidates | Where-Object { $_.backend -eq $Backend } }
 $build = $candidates | Select-Object -First 1
 
@@ -99,11 +108,22 @@ if (-not $build) {
   exit 2
 }
 
+# A selected build must carry every field the plan needs; a silent miss here would
+# disable verification forever (the audited C1 bug), so fail loudly instead.
+foreach ($required in @('url', 'sha256', 'extract_to')) {
+  if (-not $build[$required]) {
+    Write-Error "runtime-sources.yaml: selected build ($Os/$Arch) is missing '$required'."
+    exit 2
+  }
+}
+
 $IsRealSha = { param($h) $h -match '^[a-f0-9]{64}$' }
 $extractTo = Join-Path $Target ($build.extract_to -replace '/', [IO.Path]::DirectorySeparatorChar)
-$binaryName = 'llama-server.exe'   # only the win build runs on this Windows host
+# Binary name follows the SELECTED build's OS (we may be provisioning the mac/linux
+# dir from a Windows build machine), mirroring assets.ts runtimeBinaryName(os).
+$binaryName = if ($build.os -eq 'win') { 'llama-server.exe' } else { 'llama-server' }
 $binaryPath = Join-Path $extractTo $binaryName
-$sha = if ($build.sha256) { ([string]$build.sha256).ToLower() } else { '' }
+$sha = ([string]$build.sha256).ToLower()
 
 Write-Host "Fetch runtime -> $Target" -ForegroundColor Cyan
 Write-Host ("  build: {0}/{1} {2} @ {3}" -f $build.os, $build.arch, $build.backend, $version)
@@ -111,9 +131,10 @@ Write-Host ("  url:   {0}" -f $build.url)
 Write-Host ("  into:  {0}" -f $extractTo)
 if ($DryRun) { Write-Host '(dry run -- nothing will be downloaded)' -ForegroundColor Yellow; exit 0 }
 
-# Idempotent skip (only meaningful when the host OS matches the selected build).
-if ((Test-Path $binaryPath) -and $Os -eq 'win') {
-  Write-Host "  skip (llama-server.exe already extracted)" -ForegroundColor Green
+# Idempotent skip: the binary name is derived from the selected build's OS, so
+# presence is a valid skip signal even when cross-provisioning another OS's dir.
+if (Test-Path $binaryPath) {
+  Write-Host "  skip ($binaryName already extracted)" -ForegroundColor Green
   exit 0
 }
 
@@ -144,8 +165,11 @@ Expand-Archive -Path $zip -DestinationPath $extractTo -Force
 Remove-Item -Force -Path $zip -ErrorAction SilentlyContinue
 
 if (Test-Path $binaryPath) {
-  Write-Host "  extracted llama-server.exe" -ForegroundColor Green
+  Write-Host "  extracted $binaryName" -ForegroundColor Green
+  if ($build.os -ne 'win') {
+    Write-Host "  NOTE: exec bit for $binaryName cannot be set from Windows; exFAT mounts are typically all-executable, otherwise chmod +x it on the target OS." -ForegroundColor Yellow
+  }
 } else {
-  Write-Host "  NOTE: llama-server.exe not at $extractTo root -- the release zip may nest binaries in a subfolder; flatten them into $extractTo." -ForegroundColor Yellow
+  Write-Host "  NOTE: $binaryName not at $extractTo root -- the release zip may nest binaries in a subfolder; flatten them into $extractTo." -ForegroundColor Yellow
 }
 exit 0

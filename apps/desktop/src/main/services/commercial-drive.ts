@@ -112,12 +112,13 @@ export function planCommercialDrive(opts: PlanCommercialDriveOptions): Commercia
     },
     {
       id: 'fetch-runtime',
-      title: 'Download + verify the llama.cpp sidecar',
-      command: `fetch-runtime --target ${target}`,
+      title: 'Download + verify the llama.cpp sidecar for every shipped OS',
+      command: `fetch-runtime --target ${target} --os win|mac|linux (one run per shipped OS)`,
       manual: false,
       description:
-        'Fetch the llama-server build matching each shipped OS from runtime-sources.yaml ' +
-        '(default CPU backend), verify the zip, extract into runtime/llama.cpp/<os>/.'
+        'Fetch the llama-server build for EACH shipped OS (win, mac, linux) from ' +
+        'runtime-sources.yaml (default CPU backend), verify each zip, extract into ' +
+        'runtime/llama.cpp/<os>/ — a sold drive must run on every OS the launcher supports.'
     },
     packageStep(os),
     {

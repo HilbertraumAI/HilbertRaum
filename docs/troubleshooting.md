@@ -53,8 +53,10 @@ can confirm this on the **Privacy** screen.
 
 ## The answers look like placeholders / "echo" replies
 
-The app is running its built-in **mock** model because no real model file was found on the
-drive. The mock lets you explore the interface, but it does not produce real AI answers.
+The app is running its built-in **mock** runtime — started via **Start mock runtime** on the
+Models screen, or selected automatically when the model's weight file or the `llama-server`
+binary is missing at start time. The mock lets you explore the interface, but it does not
+produce real AI answers.
 
 **Fix:** add a real model file:
 1. On the **Models** screen, note the model marked *Recommended*.

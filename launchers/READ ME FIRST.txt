@@ -15,8 +15,10 @@ HOW TO START
   Linux   :  Run            "start-private-ai-drive.sh"
 
 The first time you open it, you will be asked to create a password for your
-workspace. This password encrypts everything on the drive. Choose something you
-will remember - there is no way to recover it if you forget it.
+workspace. The password encrypts your workspace: your chats, your settings, and
+the copies of documents you import. (The AI model files and the app itself are
+not secret and stay as normal files.) Choose something you will remember -
+there is no way to recover it if you forget it.
 
 
 "WINDOWS PROTECTED YOUR PC"  /  "CANNOT BE OPENED"

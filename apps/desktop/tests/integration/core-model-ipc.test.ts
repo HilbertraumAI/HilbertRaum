@@ -20,7 +20,7 @@ import { registerCoreIpc } from '../../src/main/ipc/registerCoreIpc'
 import { registerModelIpc } from '../../src/main/ipc/registerModelIpc'
 import { IPC } from '../../src/shared/ipc'
 import { openDatabase, type Db } from '../../src/main/services/db'
-import { seedSettings } from '../../src/main/services/settings'
+import { seedSettings, updateSettings } from '../../src/main/services/settings'
 import type { AppStatus, ModelInfo, WorkspaceStateInfo } from '../../src/shared/types'
 import type { AppContext } from '../../src/main/services/context'
 import { invoke, type IpcHandlers } from '../helpers/ipc'
@@ -101,6 +101,56 @@ describe('registerModelIpc', () => {
     registerModelIpc(ctx)
     await expect(invoke(handlers, IPC.startRuntime, 'definitely-not-a-real-model')).rejects.toThrow(
       /Unknown model id/
+    )
+  })
+
+  // H6 (audit round 4): the zero-weights first-run journey — a MISSING chat model may be
+  // started in developer mode (the selecting factory then yields the mock runtime), so a
+  // fresh clone can actually chat. Everything else is now gated in the MAIN process.
+  it('startRuntime allows a missing chat model in developer mode (mock fallback)', async () => {
+    let startedWith: unknown = null
+    const ctx = {
+      db: seededDb(), // developerMode defaults to true
+      manifestsDir: REPO_MANIFESTS,
+      paths: { rootPath: join(tmpdir(), 'paid-no-weights') },
+      runtime: {
+        start: async (o: unknown) => {
+          startedWith = o
+          return { running: true, modelId: 'qwen3-4b-instruct-q4', port: null, healthy: true, message: 'ok' }
+        },
+        activeModelId: () => null
+      }
+    } as unknown as AppContext
+    registerModelIpc(ctx)
+    await invoke(handlers, IPC.startRuntime, 'qwen3-4b-instruct-q4')
+    expect(startedWith).not.toBeNull()
+  })
+
+  it('startRuntime refuses a missing model OUTSIDE developer mode', async () => {
+    const db = seededDb()
+    updateSettings(db, { developerMode: false })
+    const ctx = {
+      db,
+      manifestsDir: REPO_MANIFESTS,
+      paths: { rootPath: join(tmpdir(), 'paid-no-weights') },
+      runtime: { start: async () => ({}), activeModelId: () => null }
+    } as unknown as AppContext
+    registerModelIpc(ctx)
+    await expect(invoke(handlers, IPC.startRuntime, 'qwen3-4b-instruct-q4')).rejects.toThrow(
+      /cannot be started/
+    )
+  })
+
+  it('startRuntime rejects an embeddings model (the chat runtime loads chat models only)', async () => {
+    const ctx = {
+      db: seededDb(),
+      manifestsDir: REPO_MANIFESTS,
+      paths: { rootPath: join(tmpdir(), 'paid-no-weights') },
+      runtime: { start: async () => ({}), activeModelId: () => null }
+    } as unknown as AppContext
+    registerModelIpc(ctx)
+    await expect(invoke(handlers, IPC.startRuntime, 'multilingual-e5-small-q8')).rejects.toThrow(
+      /not a chat model/
     )
   })
 })

@@ -24,14 +24,21 @@
 .PARAMETER Generate
   Write config/checksums.json from the weights present on the drive.
 
+.PARAMETER Strict
+  Ship gate: exit 1 unless every manifest weight is VERIFIED (MISSING/UNVERIFIED/
+  MISMATCH/UNSUPPORTED all fail) and at least one weight exists. Mirrors
+  services/commercial-drive.ts assertCommercialDrive's weightsVerified check.
+
 .EXAMPLE
   .\scripts\verify-models.ps1 -Target E:\
   .\scripts\verify-models.ps1 -Target E:\ -Generate
+  .\scripts\verify-models.ps1 -Target E:\ -Strict
 #>
 [CmdletBinding()]
 param(
   [Parameter(Mandatory = $true)] [string] $Target,
-  [switch] $Generate
+  [switch] $Generate,
+  [switch] $Strict
 )
 
 $ErrorActionPreference = 'Stop'
@@ -135,5 +142,24 @@ if ($Generate) {
 if ($hadMismatch) {
   Write-Host 'One or more weights FAILED checksum verification.' -ForegroundColor Red
   exit 1
+}
+
+# -Strict = the sellable posture (assertCommercialDrive parity): every weight must be
+# VERIFIED against a REAL manifest hash, and there must be at least one weight.
+if ($Strict) {
+  $resultsArr = @($results)
+  $notVerified = @($resultsArr | Where-Object { $_.status -ne 'VERIFIED' })
+  if ($resultsArr.Count -eq 0) {
+    Write-Host 'STRICT: no model manifests with a local_path found - nothing to verify.' -ForegroundColor Red
+    exit 1
+  }
+  if ($notVerified.Count -gt 0) {
+    foreach ($r in $notVerified) {
+      Write-Host ("STRICT: {0} is {1} (must be VERIFIED)" -f $r.id, $r.status) -ForegroundColor Red
+    }
+    Write-Host 'STRICT: drive is not sellable - every weight must be VERIFIED against a real manifest sha256.' -ForegroundColor Red
+    exit 1
+  }
+  Write-Host ("STRICT: all {0} weight(s) VERIFIED." -f $resultsArr.Count) -ForegroundColor Green
 }
 exit 0

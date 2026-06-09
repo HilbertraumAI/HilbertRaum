@@ -104,6 +104,45 @@ describe('E5Embedder', () => {
     await embedder.stop()
   })
 
+  // H3 (audit round 4): `this.server` is only assigned after the lazy start resolves,
+  // so a stop() racing the first embed() used to see `server == null`, return, and let
+  // the just-spawned sidecar outlive the app as an orphan. stop() must await the
+  // in-flight start and kill whatever it produced — and block any later restart.
+  it('stop() during the in-flight lazy start kills the sidecar (no orphan)', async () => {
+    const { spawn, child } = fakeSpawn()
+    const health: { release: (() => void) | null } = { release: null }
+    const gatedFetch = (async (url: string | URL) => {
+      const u = String(url)
+      if (u.endsWith('/health')) {
+        // Hold the health poll so the start stays in flight until the test releases it.
+        await new Promise<void>((resolve) => (health.release = resolve))
+        return { ok: true, status: 200 } as Response
+      }
+      if (u.endsWith('/v1/embeddings')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ data: [{ embedding: [1, 0], index: 0 }] })
+        } as Response
+      }
+      throw new Error(`unexpected url ${u}`)
+    }) as typeof fetch
+
+    const embedder = new E5Embedder({ ...base, spawn, fetchImpl: gatedFetch })
+    const embedPromise = embedder.embed(['a'])
+    // Wait until the lazy start has spawned the child and is polling /health.
+    while (!health.release) await new Promise((r) => setTimeout(r, 1))
+
+    const stopPromise = embedder.stop() // app quits while the sidecar is still starting
+    health.release()
+    await stopPromise
+    await embedPromise.catch(() => undefined) // the embed may fail; no-orphan is the point
+
+    expect(child.killed).toBe(true)
+    // The stopped flag must also block a later embed from resurrecting the sidecar.
+    await expect(embedder.embed(['b'])).rejects.toThrow(/stopped/)
+  })
+
   it('throws on a wrong-width vector instead of storing a 0/short-dim embedding', async () => {
     const { spawn } = fakeSpawn()
     // Declares 384 dims but the server returns a 2-dim (or empty) vector → reject, so the
