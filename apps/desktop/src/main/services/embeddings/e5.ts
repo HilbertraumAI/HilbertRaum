@@ -14,6 +14,17 @@ import { LlamaServer, type LlamaServerOptions } from '../runtime/sidecar'
 
 const DEFAULT_DIMENSIONS = 384
 const DEFAULT_CONTEXT_TOKENS = 512
+/**
+ * M7 (audit round 4): chunks are sized in whitespace WORDS (~500), but the embedding
+ * sidecar context is real BPE tokens (E5-small caps at 512) — 500 English words is
+ * 650+ tokens, so unmodified chunks routinely overflowed the context and failed the
+ * whole document. Inputs are truncated to fit with a safety margin (≈1.4 tokens/word).
+ */
+const TOKENS_PER_WORD_ESTIMATE = 1.4
+/** Embed in bounded batches instead of one giant request (up to 1000 chunks). */
+const DEFAULT_EMBED_BATCH_SIZE = 32
+/** Per-request bound so a wedged sidecar fails the document instead of hanging it. */
+const DEFAULT_REQUEST_TIMEOUT_MS = 120_000
 
 export type E5EmbedderDeps = Pick<
   LlamaServerOptions,
@@ -28,6 +39,10 @@ export interface E5EmbedderOptions extends E5EmbedderDeps {
   modelPath: string
   contextTokens?: number
   dimensions?: number
+  /** Texts per `/v1/embeddings` request (default 32). */
+  batchSize?: number
+  /** Per-request timeout in ms (default 120 000). */
+  requestTimeoutMs?: number
 }
 
 interface EmbeddingResponse {
@@ -92,35 +107,63 @@ export class E5Embedder implements Embedder {
     return this.server
   }
 
-  /** Embed a batch of texts → L2-normalized `Float32Array`s, one per input, in order. */
+  /** Most whitespace words that safely fit the sidecar's real-token context window. */
+  private maxInputWords(): number {
+    const ctx = this.opts.contextTokens ?? DEFAULT_CONTEXT_TOKENS
+    return Math.max(16, Math.floor(ctx / TOKENS_PER_WORD_ESTIMATE))
+  }
+
+  /** Truncate an input to the context budget (the vector covers the chunk's head). */
+  private truncateForContext(text: string): string {
+    const words = text.split(/\s+/).filter((w) => w.length > 0)
+    const max = this.maxInputWords()
+    return words.length <= max ? text : words.slice(0, max).join(' ')
+  }
+
+  /**
+   * Embed texts → L2-normalized `Float32Array`s, one per input, in order. Inputs are
+   * truncated to the sidecar context (see TOKENS_PER_WORD_ESTIMATE), sent in bounded
+   * batches, and each request carries a timeout so a wedged sidecar cannot park a
+   * document in `embedding` forever (M7).
+   */
   async embed(texts: string[]): Promise<Float32Array[]> {
     if (texts.length === 0) return []
     const server = await this.ensureStarted()
-    const res = await server.fetch('/v1/embeddings', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ model: this.id, input: texts })
-    })
-    if (!res.ok) throw new Error(`Embedding request failed: HTTP ${res.status}`)
-    const json = (await res.json()) as EmbeddingResponse
-    const data = json.data ?? []
-    if (data.length !== texts.length) {
-      throw new Error(`Embedding count mismatch: expected ${texts.length}, got ${data.length}`)
-    }
-    // Order by `index` so the result lines up with the input batch.
-    const ordered = [...data].sort((a, b) => (a.index ?? 0) - (b.index ?? 0))
-    return ordered.map((d) => {
-      // Reject a missing/short vector rather than storing a 0/short-dim row: such a row
-      // is silently un-searchable (the VectorIndex dimension guard skips it) and the
-      // document would still report `indexed`. Failing here surfaces it as a doc error.
-      const raw = d.embedding ?? []
-      if (raw.length !== this.dimensions) {
-        throw new Error(
-          `Embedding dimension mismatch: expected ${this.dimensions}, got ${raw.length}`
-        )
+    const prepared = texts.map((t) => this.truncateForContext(t))
+    const batchSize = Math.max(1, this.opts.batchSize ?? DEFAULT_EMBED_BATCH_SIZE)
+    const timeoutMs = this.opts.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
+
+    const out: Float32Array[] = []
+    for (let start = 0; start < prepared.length; start += batchSize) {
+      const batch = prepared.slice(start, start + batchSize)
+      const res = await server.fetch('/v1/embeddings', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ model: this.id, input: batch }),
+        signal: AbortSignal.timeout(timeoutMs)
+      })
+      if (!res.ok) throw new Error(`Embedding request failed: HTTP ${res.status}`)
+      const json = (await res.json()) as EmbeddingResponse
+      const data = json.data ?? []
+      if (data.length !== batch.length) {
+        throw new Error(`Embedding count mismatch: expected ${batch.length}, got ${data.length}`)
       }
-      return l2normalize(Float32Array.from(raw))
-    })
+      // Order by `index` so the result lines up with the input batch.
+      const ordered = [...data].sort((a, b) => (a.index ?? 0) - (b.index ?? 0))
+      for (const d of ordered) {
+        // Reject a missing/short vector rather than storing a 0/short-dim row: such a row
+        // is silently un-searchable (the VectorIndex dimension guard skips it) and the
+        // document would still report `indexed`. Failing here surfaces it as a doc error.
+        const raw = d.embedding ?? []
+        if (raw.length !== this.dimensions) {
+          throw new Error(
+            `Embedding dimension mismatch: expected ${this.dimensions}, got ${raw.length}`
+          )
+        }
+        out.push(l2normalize(Float32Array.from(raw)))
+      }
+    }
+    return out
   }
 
   /** Kill the embeddings sidecar (no-op if it was never started). */

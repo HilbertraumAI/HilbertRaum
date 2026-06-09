@@ -173,15 +173,23 @@ export function appendMessage(db: Db, input: AppendMessageInput): Message {
   return msg
 }
 
-/** Remove the most recent assistant message (used by "regenerate"). Returns true if one was deleted. */
+/**
+ * Remove the conversation's last message IF it is an assistant turn (used by
+ * "regenerate"). Returns true if one was deleted.
+ *
+ * Deliberately scoped to the LAST message, not the last *assistant* message (M1): after
+ * a failed generation the conversation ends in a user turn — deleting the most recent
+ * assistant message would then permanently destroy the answer to a *previous* question.
+ * In that case regenerate just re-streams from history without deleting anything.
+ */
 export function deleteLastAssistantMessage(db: Db, conversationId: string): boolean {
   const row = db
     .prepare(
-      `SELECT id FROM messages WHERE conversation_id = ? AND role = 'assistant'
+      `SELECT id, role FROM messages WHERE conversation_id = ?
        ORDER BY created_at DESC, rowid DESC LIMIT 1`
     )
-    .get(conversationId) as unknown as { id: string } | undefined
-  if (!row) return false
+    .get(conversationId) as unknown as { id: string; role: string } | undefined
+  if (!row || row.role !== 'assistant') return false
   db.prepare('DELETE FROM messages WHERE id = ?').run(row.id)
   return true
 }

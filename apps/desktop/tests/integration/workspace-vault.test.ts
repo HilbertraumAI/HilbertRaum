@@ -15,11 +15,21 @@ import {
   lockEncryptedVault,
   plaintextAllowed,
   shredStalePlaintext,
+  encryptFile,
+  decryptFile,
+  shredFile,
   WorkspaceController,
   WrongPasswordError,
   type VaultPaths
 } from '../../src/main/services/workspace-vault'
-import type { KdfParams } from '../../src/main/services/security/crypto'
+import { randomBytes } from 'node:crypto'
+import {
+  encrypt,
+  decrypt,
+  serializeBlob,
+  deserializeBlob,
+  type KdfParams
+} from '../../src/main/services/security/crypto'
 
 // Fast KDF so the suite stays quick — unlock reads the params back from the descriptor,
 // so creating with cheap params keeps the round-trip honest while shaving scrypt cost.
@@ -101,6 +111,59 @@ describe('encrypted vault lifecycle', () => {
     createEncryptedVaultOnDisk(vp, 'pw', FAST_KDF)
     writeFileSync(vp.descriptorPath, '{ not json', 'utf8')
     expect(() => unlockEncryptedVault(vp, 'pw')).toThrow(/missing or unreadable/)
+  })
+})
+
+// ---- M5: streaming file crypto stays byte-compatible with the framed blob format ---
+
+describe('streaming file crypto (M5)', () => {
+  function tmpFile(name: string, data: Buffer | string): string {
+    const dir = mkdtempSync(join(tmpdir(), 'paid-stream-'))
+    const p = join(dir, name)
+    writeFileSync(p, data)
+    return p
+  }
+
+  it('streamed encryptFile output decrypts via the in-memory blob path (same frame)', () => {
+    const key = randomBytes(32)
+    const plaintext = randomBytes(3 * 1024 * 1024 + 17) // > one chunk boundary, odd size
+    const src = tmpFile('plain.bin', plaintext)
+    const enc = `${src}.enc`
+    encryptFile(src, enc, key)
+
+    const decrypted = decrypt(key, deserializeBlob(readFileSync(enc)))
+    expect(decrypted.equals(plaintext)).toBe(true)
+  })
+
+  it('an in-memory serializeBlob file decrypts via the streamed decryptFile (old vaults)', () => {
+    const key = randomBytes(32)
+    const plaintext = randomBytes(1024 * 1024 + 3)
+    const enc = tmpFile('old.enc', serializeBlob(encrypt(key, plaintext)))
+    const out = `${enc}.plain`
+    decryptFile(enc, out, key)
+    expect(readFileSync(out).equals(plaintext)).toBe(true)
+  })
+
+  it('a tampered .enc fails decryption and leaves no plaintext output behind', () => {
+    const key = randomBytes(32)
+    const src = tmpFile('plain.bin', randomBytes(256 * 1024))
+    const enc = `${src}.enc`
+    encryptFile(src, enc, key)
+    // Flip a ciphertext byte (past the 36-byte header) → GCM auth must fail.
+    const blob = readFileSync(enc)
+    blob[100] ^= 0xff
+    writeFileSync(enc, blob)
+
+    const out = `${enc}.plain`
+    expect(() => decryptFile(enc, out, key)).toThrow()
+    expect(existsSync(out)).toBe(false)
+    expect(existsSync(`${out}.tmp`)).toBe(false) // the partial output was shredded
+  })
+
+  it('shredFile unlinks even large-ish files via chunked overwrite', () => {
+    const p = tmpFile('shred-me.bin', randomBytes(1024 * 1024))
+    shredFile(p)
+    expect(existsSync(p)).toBe(false)
   })
 })
 

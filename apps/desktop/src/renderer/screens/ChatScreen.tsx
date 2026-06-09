@@ -24,9 +24,18 @@ export function ChatScreen({ onNavigate }: Props): JSX.Element {
   const [input, setInput] = useState('')
   const [streaming, setStreaming] = useState(false)
   const [streamText, setStreamText] = useState('')
+  /** Which conversation the live stream belongs to (M2): the bubble renders, and the
+   *  completion refresh applies, only when this still matches the visible conversation. */
+  const [streamConvId, setStreamConvId] = useState<string | null>(null)
   const [runtimeRunning, setRuntimeRunning] = useState<boolean | null>(null)
   const [error, setError] = useState<string | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
+  // The currently-visible conversation, readable from inside async stream completions
+  // (the `activeId` captured by the closure goes stale when the user switches).
+  const activeIdRef = useRef<string | null>(null)
+  useEffect(() => {
+    activeIdRef.current = activeId
+  }, [activeId])
 
   const refreshConversations = useCallback(async (): Promise<void> => {
     setConversations(await window.api.listConversations())
@@ -70,10 +79,19 @@ export function ChatScreen({ onNavigate }: Props): JSX.Element {
   async function stream(convId: string, content: string, regenerate: boolean): Promise<void> {
     setError(null)
     setStreaming(true)
+    setStreamConvId(convId)
     setStreamText('')
     const unsubscribe = window.api.onToken(convId, (token) => {
       setStreamText((prev) => prev + token)
     })
+    // Only update the visible transcript if the user is still looking at THIS
+    // conversation — replacing another conversation's view with this one's messages
+    // was the M2 corruption.
+    const refreshIfVisible = async (): Promise<void> => {
+      if (activeIdRef.current === convId) {
+        setMessages(await window.api.listMessages(convId))
+      }
+    }
     try {
       if (mode === 'documents') {
         await window.api.askDocuments(convId, content)
@@ -81,16 +99,17 @@ export function ChatScreen({ onNavigate }: Props): JSX.Element {
         await window.api.sendChatMessage(convId, content, regenerate ? { regenerate: true } : undefined)
       }
       // Re-read the persisted history (includes the user turn + final assistant reply).
-      setMessages(await window.api.listMessages(convId))
+      await refreshIfVisible()
       await refreshConversations()
     } catch (e) {
-      setError(String(e instanceof Error ? e.message : e))
+      if (activeIdRef.current === convId) setError(String(e instanceof Error ? e.message : e))
       // Refresh so a partial (stopped) reply that was persisted still shows.
-      setMessages(await window.api.listMessages(convId))
-      await checkRuntime()
+      await refreshIfVisible().catch(() => undefined)
+      await checkRuntime().catch(() => undefined)
     } finally {
       unsubscribe()
       setStreaming(false)
+      setStreamConvId(null)
       setStreamText('')
     }
   }
@@ -110,12 +129,12 @@ export function ChatScreen({ onNavigate }: Props): JSX.Element {
 
   async function onRegenerate(): Promise<void> {
     if (!activeId || streaming || mode === 'documents') return
-    // Drop the last assistant message from the view; the backend re-streams it.
+    // Drop the LAST message from the view only if it is an assistant turn — mirroring
+    // the backend (M1): after a failed generation the conversation ends in a user turn,
+    // and regenerate must not touch the answer to an earlier question.
     setMessages((prev) => {
-      const lastAssistant = [...prev].reverse().findIndex((m) => m.role === 'assistant')
-      if (lastAssistant === -1) return prev
-      const idx = prev.length - 1 - lastAssistant
-      return prev.slice(0, idx)
+      const last = prev[prev.length - 1]
+      return last && last.role === 'assistant' ? prev.slice(0, -1) : prev
     })
     await stream(activeId, '', true)
   }
@@ -179,7 +198,9 @@ export function ChatScreen({ onNavigate }: Props): JSX.Element {
   return (
     <div className="chat-layout">
       <aside className="chat-sidebar">
-        <button className="btn sm primary chat-new" onClick={() => void onNewChat()}>
+        {/* Switching conversations mid-stream is disabled (M2): the stream belongs to one
+            conversation, and hopping away used to corrupt the other transcript's view. */}
+        <button className="btn sm primary chat-new" disabled={streaming} onClick={() => void onNewChat()}>
           + New {mode === 'documents' ? 'document Q&A' : 'chat'}
         </button>
         <div className="chat-conv-list">
@@ -188,6 +209,7 @@ export function ChatScreen({ onNavigate }: Props): JSX.Element {
             <button
               key={c.id}
               className={`chat-conv ${c.id === activeId ? 'active' : ''}`}
+              disabled={streaming && c.id !== activeId}
               onClick={() => onSelectConversation(c)}
               title={c.title}
             >
@@ -221,13 +243,13 @@ export function ChatScreen({ onNavigate }: Props): JSX.Element {
             <p className="hint chat-empty">
               {mode === 'documents'
                 ? 'Ask a question about your imported documents. Answers cite their sources.'
-                : 'Send a message to start. Replies stream from the local mock runtime.'}
+                : 'Send a message to start. Replies stream from the local model.'}
             </p>
           )}
           {messages.map((m) => (
             <MessageBubble key={m.id} message={m} />
           ))}
-          {streaming && (
+          {streaming && streamConvId === activeId && (
             <div className="msg assistant">
               <div className="msg-role">assistant</div>
               <div className="msg-content">

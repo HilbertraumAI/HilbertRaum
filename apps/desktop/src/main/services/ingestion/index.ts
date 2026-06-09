@@ -295,14 +295,37 @@ export async function processDocument(
     }
 
     setStatus(db, documentId, 'indexed')
-    return rowToInfo(getRow(db, documentId) as DocumentRow, chunkCountFor(db, documentId))
+    return infoOrDeleted(db, documentId)
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     setStatus(db, documentId, 'failed', message)
-    return rowToInfo(getRow(db, documentId) as DocumentRow, chunkCountFor(db, documentId))
+    return infoOrDeleted(db, documentId)
   } finally {
     // Shred transient decrypted copies whether the pipeline succeeded or failed.
     for (const t of transients) shredFile(t)
+  }
+}
+
+/**
+ * Resolve the final DocumentInfo, tolerating a row that vanished mid-pipeline (e.g. the
+ * document was deleted while processing). `processDocument` promises to never throw, so
+ * a missing row yields a synthetic `deleted` info instead of a TypeError (M3).
+ */
+function infoOrDeleted(db: Db, documentId: string): DocumentInfo {
+  const row = getRow(db, documentId)
+  if (row) return rowToInfo(row, chunkCountFor(db, documentId))
+  const now = nowIso()
+  return {
+    id: documentId,
+    title: '(deleted)',
+    originalPath: null,
+    mimeType: null,
+    sizeBytes: null,
+    status: 'deleted',
+    errorMessage: null,
+    chunkCount: 0,
+    createdAt: now,
+    updatedAt: now
   }
 }
 

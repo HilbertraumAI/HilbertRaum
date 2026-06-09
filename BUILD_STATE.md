@@ -1132,6 +1132,64 @@ create-over-existing/corrupt-descriptor (4), checksum cache + placeholder-no-has
 startRuntime gate (3), encrypted document cache (7, new `encrypted-documents.test.ts`).
 
 **Remaining from the audit (NOT in this round, by scope):** the Medium/Low findings — see the report's
-§5/§6 and prioritized list (§8). Top of that list: chat regenerate/conversation-switch races (M1/M2),
-ingestion concurrency guards (M3/M4), >2 GiB vault streaming (M5), DOCX segment packing (M6), E5
-context sizing (M7), license-review ship gate (M11), BUILD_STATE/architecture doc-drift sweep (M25–M31).
+§5/§6 and prioritized list (§8). _(Update: the Medium correctness cluster was fixed in §12 below.)_
+
+---
+
+## 12. Audit round 4 — Medium remediation (2026-06-09)
+
+Follow-up to §11: the audit's Medium correctness cluster (M1–M7, M10, M11; M8/M9 were closed with
+§11). Gate: typecheck clean, **355/355 tests pass** (was 343 — +12 regression tests), build green
+(main bundle **113.71 kB**). No new dependencies. Both pipeline scripts dry-run-smoke-tested; the
+new license-gate parsing validated against the committed manifests in BOTH shells.
+
+- **M1 — regenerate deletes the wrong message.** `deleteLastAssistantMessage` now deletes the
+  conversation's LAST message only if it is an assistant turn (after a failed generation the last
+  turn is the user's — deleting the most recent assistant message destroyed the answer to a
+  *previous* question). The ChatScreen optimistic slice mirrors this.
+- **M2 — conversation switch mid-stream corrupted the transcript.** ChatScreen now tracks the
+  stream's conversation id: the live bubble renders, and the completion/error refresh applies, only
+  when it matches the visible conversation; sidebar + New-chat are disabled while streaming.
+- **M3 — per-document concurrency guard.** `registerDocsIpc` keeps a `processing` set: delete/
+  re-index are refused while the import loop (or another re-index) is processing that document —
+  no more FK violations, duplicate chunk sets, or Windows EBUSY on the stored copy. The
+  "never throws" promise of `processDocument` now holds even when the row vanished mid-pipeline
+  (`infoOrDeleted` returns a synthetic `deleted` info instead of a TypeError).
+- **M4 — lock-while-importing wedge.** The import loop stops cleanly when the vault locks mid-job,
+  and the one-shot reconcile flag is gone: `listDocuments` reconciles rows stuck in an active
+  status whenever nothing is actually running (no live job, empty `processing` set) — so a
+  lock→unlock mid-import leaves re-indexable `failed` rows, not perpetually-disabled "in progress".
+- **M5 — vault file crypto >2 GiB.** `encryptFile`/`decryptFile` now STREAM (8 MiB chunks, GCM tag
+  patched into the reserved header slot after the stream; same `MAGIC|iv|tag|ct` frame — existing
+  vaults unlock unchanged, verified by cross-format tests both directions). `shredFile` overwrites
+  in bounded chunks and ALWAYS unlinks (the old `randomBytes(size)` threw past 2 GiB and skipped
+  the unlink, leaving the plaintext DB behind). A failed decrypt shreds its partial output.
+- **M6 — DOCX confetti chunks.** The chunker pre-coalesces consecutive segments with identical
+  `(pageNumber, sectionLabel)` before windowing — DOCX paragraphs now pack into full ~500-token
+  chunks (instead of one tiny chunk per paragraph silently hitting the 1000-chunk cap), while PDF
+  pages and Markdown sections are untouched (the never-cross-a-boundary invariant holds).
+- **M7 — real-E5 context overflow + giant batch + no timeout.** `E5Embedder` truncates each input
+  to the sidecar context budget (≈1.4 BPE tokens/word safety ratio; E5-small caps at 512 real
+  tokens vs our 500-WORD chunks), embeds in batches of 32, and bounds every request with
+  `AbortSignal.timeout(120 s)` — a wedged sidecar fails the document instead of parking it in
+  `embedding` forever.
+- **M10 — verification gate hardening.** `DEFAULT_SETTINGS.developerMode` is now **false**; a dev
+  build (`AppContext.isDev` = `!app.isPackaged`) counts as developer. The drive policy is now
+  ENFORCED in-app: `registerModelIpc` computes leniency as
+  `(toggle ∨ devBuild) ∧ allow_unverified_models ∧ ¬require_sha256_match` — on a commercial drive
+  unverified weights are rejected (and the mock fallback disabled) regardless of the toggle. The
+  Models screen's mock affordance now comes from the main process (`ModelInfo.startableAsMock`).
+- **M11 — license-review ship gate.** `assertCommercialDrive` gained `checks.licensesApproved`:
+  every shipped model's `license_review.status` must be `approved` (spec §13) — NOT overridable by
+  `--accept-license` (that is download-time acceptance, not a redistribution review). Both
+  `build-commercial-drive.{ps1,sh}` step-7 cross-checks mirror it (flat-parse `status:` from the
+  drive manifests; `runtime-sources.yaml` skipped via the no-`local_path` guard). ⇒ With today's
+  `pending` manifests a commercial build correctly reports NOT SELLABLE until reviews are done.
+
+**New regression tests (+12):** regenerate-after-failure (1), packing + label-isolation (2), E5
+truncation + batching (2), streaming-crypto format compatibility + tamper + shred (4), startRuntime
+dev/isDev/policy-veto matrix (3 net), license-gate fail (1), startableAsMock off for non-devs
+(folded into the listing test).
+
+**Still open from the audit:** the docs-drift sweep (M25–M31) + the Low findings — tracked in the
+report §5/§6.

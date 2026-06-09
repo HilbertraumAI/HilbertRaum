@@ -12,6 +12,13 @@ import type { ExtractedSegment } from './parsers'
 // Chunking is done WITHIN each segment, so a chunk never straddles a page or section
 // boundary — every chunk inherits exactly one `pageNumber`/`sectionLabel` from its
 // source segment (spec §7.7 chunk metadata). Overlap is applied within a segment only.
+//
+// PACKING (M6, audit round 4): consecutive segments with the SAME (pageNumber,
+// sectionLabel) are coalesced before windowing. Parsers like DOCX emit one segment per
+// paragraph (no labels at all); without packing, every paragraph became its own tiny
+// chunk — retrieval quality collapsed and a >1000-paragraph document silently hit the
+// maxChunks cap. Coalescing preserves the never-cross-a-boundary invariant exactly,
+// because only label-identical neighbours are merged.
 
 export interface ChunkDefaults {
   chunkSizeTokens: number
@@ -51,6 +58,24 @@ function clampInt(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, Math.floor(value)))
 }
 
+/** Merge consecutive segments that share the same page/section labels (see module note). */
+function coalesceSegments(segments: ExtractedSegment[]): ExtractedSegment[] {
+  const out: ExtractedSegment[] = []
+  for (const segment of segments) {
+    const prev = out[out.length - 1]
+    if (
+      prev &&
+      (prev.pageNumber ?? null) === (segment.pageNumber ?? null) &&
+      (prev.sectionLabel ?? null) === (segment.sectionLabel ?? null)
+    ) {
+      prev.text = `${prev.text}\n\n${segment.text}`
+    } else {
+      out.push({ ...segment })
+    }
+  }
+  return out
+}
+
 /**
  * Chunk extracted segments into overlapping windows. Each window is at most
  * `chunkSizeTokens` tokens; consecutive windows overlap by `chunkOverlapTokens`.
@@ -70,7 +95,7 @@ export function chunkSegments(
   const chunks: DocumentChunk[] = []
   let index = 0
 
-  for (const segment of segments) {
+  for (const segment of coalesceSegments(segments)) {
     const tokens = tokenize(segment.text)
     if (tokens.length === 0) continue
     const pageNumber = segment.pageNumber ?? null

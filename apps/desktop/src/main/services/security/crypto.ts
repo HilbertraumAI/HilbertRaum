@@ -133,6 +133,12 @@ export function decrypt(key: Buffer, blob: EncryptedBlob): Buffer {
 
 const MAGIC = Buffer.from('PAIDENC1') // 8 bytes: format magic + version
 
+/** Frame layout constants, exported for the STREAMING file crypto in workspace-vault.ts
+ *  (which must read/write the exact same `MAGIC | iv | tag | ciphertext` format). */
+export const BLOB_MAGIC: Buffer = MAGIC
+export const BLOB_IV_BYTES = IV_BYTES
+export const BLOB_TAG_BYTES = TAG_BYTES
+
 /**
  * Serialize an encrypted blob to a single self-describing buffer:
  * `MAGIC(8) | iv(12) | tag(16) | ciphertext(...)`. Written to `paid.sqlite.enc`.

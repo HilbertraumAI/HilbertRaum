@@ -1,7 +1,7 @@
 import { ipcMain } from 'electron'
 import { IPC } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
-import type { ModelInfo, RuntimeStatus } from '../../shared/types'
+import type { AppSettings, ModelInfo, RuntimeStatus } from '../../shared/types'
 import {
   buildModelList,
   computeInstallState,
@@ -10,6 +10,7 @@ import {
   weightPath
 } from '../services/models'
 import { getSettings } from '../services/settings'
+import { loadPolicy } from '../services/policy'
 import { log } from '../services/logging'
 
 // Phase 2 IPC: model discovery/selection + runtime start/stop (spec §9.1).
@@ -17,6 +18,18 @@ import { log } from '../services/logging'
 // falling back to UNKNOWN until the user runs the benchmark for the first time.
 
 export function registerModelIpc(ctx: AppContext): void {
+  /**
+   * Effective checksum leniency (M10): "developer" is the user toggle OR a dev build —
+   * but the drive POLICY is authoritative and can only restrict. On a commercial drive
+   * (`require_sha256_match: true` / `allow_unverified_models: false`) unverified weights
+   * are rejected no matter what the toggle says; this also disables the mock fallback.
+   */
+  const developerLeniency = (s: AppSettings): boolean => {
+    const { policy } = loadPolicy(ctx.paths.configPath)
+    const developer = s.developerMode || ctx.isDev
+    return developer && policy.models.allowUnverifiedModels && !policy.models.requireSha256Match
+  }
+
   ipcMain.handle(IPC.listModels, async (): Promise<ModelInfo[]> => {
     if (!ctx.manifestsDir) {
       log.warn('No model-manifests directory found; returning empty model list')
@@ -27,7 +40,7 @@ export function registerModelIpc(ctx: AppContext): void {
       manifestsDir: ctx.manifestsDir,
       rootPath: ctx.paths.rootPath,
       profile: s.lastBenchmark?.profile ?? 'UNKNOWN',
-      developerMode: s.developerMode,
+      developerMode: developerLeniency(s),
       runningModelId: ctx.runtime.activeModelId()
     })
     if (manifestErrors.length > 0) {
@@ -56,12 +69,14 @@ export function registerModelIpc(ctx: AppContext): void {
     const s = getSettings(ctx.db)
     // Enforce the spec §7.4 gate in the MAIN process (not just a disabled button): only
     // an installed (verified) model may start. One exception keeps the zero-weights
-    // first-run journey alive — in developer mode a MISSING model may start, because the
-    // selecting runtime factory then falls back to the built-in mock runtime.
+    // first-run journey alive — for a developer (toggle or dev build, when the drive
+    // policy permits unverified models) a MISSING model may start, because the selecting
+    // runtime factory then falls back to the built-in mock runtime.
+    const lenient = developerLeniency(s)
     const state = await computeInstallState(found.manifest, ctx.paths.rootPath, {
-      developerMode: s.developerMode
+      developerMode: lenient
     })
-    const mockFallback = state === 'missing' && s.developerMode
+    const mockFallback = state === 'missing' && lenient
     if (state !== 'installed' && !mockFallback) {
       throw new Error(`Model "${modelId}" cannot be started (state: ${state}).`)
     }

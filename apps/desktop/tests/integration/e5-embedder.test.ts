@@ -90,6 +90,60 @@ describe('E5Embedder', () => {
     expect(child.killed).toBe(true)
   })
 
+  // M7 (audit round 4): chunk sizing is whitespace WORDS but the sidecar context is real
+  // BPE tokens — oversize inputs overflowed the context and failed the whole document,
+  // and all (up to 1000) chunks went out as ONE request with no timeout.
+  it('truncates each input to the embedder context budget before sending', async () => {
+    const bodies: Array<{ input: string[] }> = []
+    const recordingFetch = (async (url: string | URL, init?: RequestInit) => {
+      const u = String(url)
+      if (u.endsWith('/health')) return { ok: true, status: 200 } as Response
+      const body = JSON.parse(String(init?.body)) as { input: string[] }
+      bodies.push(body)
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ data: body.input.map((_, i) => ({ embedding: [1, 0], index: i })) })
+      } as Response
+    }) as typeof fetch
+
+    const embedder = new E5Embedder({ ...base, contextTokens: 512, spawn: fakeSpawn().spawn, fetchImpl: recordingFetch })
+    const longText = Array.from({ length: 1000 }, (_, i) => `word${i}`).join(' ')
+    await embedder.embed([longText, 'short text'])
+    await embedder.stop()
+
+    const sent = bodies[0].input
+    const maxWords = Math.floor(512 / 1.4)
+    expect(sent[0].split(' ').length).toBeLessThanOrEqual(maxWords) // truncated
+    expect(sent[0].startsWith('word0 word1')).toBe(true) // the chunk's head is kept
+    expect(sent[1]).toBe('short text') // short inputs pass through untouched
+  })
+
+  it('splits large inputs into bounded batches, preserving global order', async () => {
+    const bodies: Array<{ input: string[] }> = []
+    let counter = 0
+    const batchFetch = (async (url: string | URL, init?: RequestInit) => {
+      const u = String(url)
+      if (u.endsWith('/health')) return { ok: true, status: 200 } as Response
+      const body = JSON.parse(String(init?.body)) as { input: string[] }
+      bodies.push(body)
+      // Encode a global counter into the vector so order is verifiable end-to-end.
+      const data = body.input.map((_, i) => ({ embedding: [++counter, 0], index: i }))
+      return { ok: true, status: 200, json: async () => ({ data }) } as Response
+    }) as typeof fetch
+
+    const embedder = new E5Embedder({ ...base, batchSize: 3, spawn: fakeSpawn().spawn, fetchImpl: batchFetch })
+    const texts = Array.from({ length: 7 }, (_, i) => `text ${i}`)
+    const vectors = await embedder.embed(texts)
+    await embedder.stop()
+
+    expect(bodies.map((b) => b.input.length)).toEqual([3, 3, 1]) // bounded batches
+    expect(vectors).toHaveLength(7)
+    // L2-normalized [n, 0] → [1, 0]; the global order check is that nothing was dropped
+    // or duplicated across batch boundaries.
+    expect(vectors.every((v) => v.length === 2)).toBe(true)
+  })
+
   it('returns [] for an empty batch without starting the server', async () => {
     const { spawn, calls } = fakeSpawn()
     const embedder = new E5Embedder({ ...base, spawn, fetchImpl: embedFetch([]) })

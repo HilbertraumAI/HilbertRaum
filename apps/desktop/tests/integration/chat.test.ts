@@ -233,4 +233,22 @@ describe('generateAssistantMessage (streaming)', () => {
     expect(history.at(-1)?.id).toBe(second.id)
     expect(history.at(-1)?.id).not.toBe(first.id)
   })
+
+  // M1 (audit round 4): after a FAILED generation the conversation ends in a user turn.
+  // Regenerate used to delete the most recent assistant message anywhere in history —
+  // permanently destroying the answer to a *previous* question.
+  it('regenerate never deletes an earlier answer when the last turn is a user message', () => {
+    const db = freshDb()
+    const conv = createConversation(db, {})
+    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'first question' })
+    const answer = appendMessage(db, { conversationId: conv.id, role: 'assistant', content: 'first answer' })
+    // A second question whose generation failed → no assistant turn follows it.
+    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'second question' })
+
+    const deleted = deleteLastAssistantMessage(db, conv.id)
+    expect(deleted).toBe(false) // last turn is a user message — nothing to delete
+    const history = listMessages(db, conv.id)
+    expect(history).toHaveLength(3)
+    expect(history.some((m) => m.id === answer.id)).toBe(true) // the earlier answer survives
+  })
 })

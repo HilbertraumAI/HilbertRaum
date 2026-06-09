@@ -12,7 +12,8 @@
     4. package + sign + notarize      # MANUAL (secrets never in the repo) -- see below
     5. copy launcher + portable app + user docs onto the drive root
     6. verify-models  -Generate       # capture real hashes -> config/checksums.json
-    7. final check: commercial posture + verify-models -Strict (all weights VERIFIED)
+    7. final check: commercial posture + license reviews APPROVED (spec 13; not
+       overridable by -AcceptLicense) + verify-models -Strict (all weights VERIFIED)
        + no user data -- exits 1 unless the drive is actually sellable
 
   Mirrors apps/desktop/src/main/services/commercial-drive.ts (planCommercialDrive +
@@ -151,6 +152,29 @@ foreach ($ud in @('workspace/paid.sqlite', 'workspace/paid.sqlite.enc', 'workspa
 $docsDir = Join-Path $Target 'workspace/documents'
 if ((Test-Path $docsDir) -and (Get-ChildItem -Force $docsDir -ErrorAction SilentlyContinue | Select-Object -First 1)) {
   $problems += 'user data present: workspace/documents/*'
+}
+# License gate (assertCommercialDrive parity, spec 13): every shipped model's
+# license_review.status must be 'approved'. -AcceptLicense is download-time acceptance,
+# NEVER a substitute for the redistribution review a sold drive needs.
+if (-not $DryRun) {
+  $driveManifests = Join-Path $Target 'model-manifests'
+  if (Test-Path $driveManifests) {
+    $mfFiles = Get-ChildItem -Path $driveManifests -Recurse -Include *.yaml, *.yml
+    foreach ($mf in $mfFiles) {
+      $text = Get-Content -Path $mf.FullName -Raw
+      # Only model manifests (runtime-sources.yaml has no local_path).
+      if ($text -notmatch '(?m)^\s*local_path\s*:') { continue }
+      $reviewStatus = $null
+      if ($text -match '(?m)^\s*status\s*:\s*(.+?)\s*$') {
+        $reviewStatus = $Matches[1].Trim().Trim('"').Trim("'")
+      }
+      if ($reviewStatus -ne 'approved') {
+        $problems += "license_review not approved: $($mf.BaseName) (status: $(if ($reviewStatus) { $reviewStatus } else { 'missing' }))"
+      }
+    }
+  } else {
+    $problems += 'model-manifests missing on the drive'
+  }
 }
 # Weight gate (assertCommercialDrive parity): every weight VERIFIED, automated -- not a
 # manual "confirm it yourself" instruction. UNVERIFIED/MISSING/MISMATCH all fail here.

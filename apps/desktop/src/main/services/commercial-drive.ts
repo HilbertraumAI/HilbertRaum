@@ -146,7 +146,8 @@ export function planCommercialDrive(opts: PlanCommercialDriveOptions): Commercia
       manual: false,
       description:
         'Automated gate: commercial policy (encryption required, plaintext off, models must ' +
-        'verify, network denied), all weights VERIFIED, and NO user data present.'
+        'verify, network denied), all weights VERIFIED, every license_review APPROVED ' +
+        '(spec §13 — not overridable by --accept-license), and NO user data present.'
     }
   ]
 }
@@ -178,6 +179,12 @@ export interface CommercialAssertion {
     networkDenied: boolean
     /** Every shipped weight is present + SHA-256 VERIFIED (no placeholder/mismatch/missing). */
     weightsVerified: boolean
+    /**
+     * Every shipped model's `license_review.status` is `approved` (spec §13). NOT
+     * overridable by `--accept-license` — that flag is a user's license acceptance at
+     * download time, not a substitute for the redistribution review a SOLD drive needs.
+     */
+    licensesApproved: boolean
     /** No user data present (a sold drive ships empty — spec §12.2). */
     noUserData: boolean
   }
@@ -267,6 +274,20 @@ export async function assertCommercialDrive(
     problems.push('no model weights to verify (a sold drive ships weights pre-loaded)')
   }
 
+  // --- License reviews all APPROVED (spec §13 — M11) ---
+  // `--accept-license` lets a builder download a weight; it must never count as the
+  // redistribution review. A sold drive ships only models whose review is `approved`.
+  const licensesApproved =
+    manifests.length > 0 && manifests.every((m) => m.licenseReview.status === 'approved')
+  for (const m of manifests) {
+    if (m.licenseReview.status !== 'approved') {
+      problems.push(
+        `model "${m.id}" license_review.status is "${m.licenseReview.status}" — a sold drive ` +
+          'requires an approved review (spec §13); --accept-license does not override this'
+      )
+    }
+  }
+
   // --- No user data (spec §12.2) ---
   const userData = userDataArtifacts(rootPath)
   const noUserData = userData.length === 0
@@ -277,7 +298,7 @@ export async function assertCommercialDrive(
   return {
     ok: problems.length === 0,
     problems,
-    checks: { policyCommercial, networkDenied, weightsVerified, noUserData },
+    checks: { policyCommercial, networkDenied, weightsVerified, licensesApproved, noUserData },
     modelResults
   }
 }

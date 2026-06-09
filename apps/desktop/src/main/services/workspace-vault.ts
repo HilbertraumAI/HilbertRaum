@@ -5,9 +5,14 @@ import {
   readdirSync,
   rmSync,
   renameSync,
-  statSync
+  statSync,
+  openSync,
+  readSync,
+  writeSync,
+  closeSync,
+  fsyncSync
 } from 'node:fs'
-import { randomBytes } from 'node:crypto'
+import { randomBytes, createCipheriv, createDecipheriv } from 'node:crypto'
 import { dirname, join } from 'node:path'
 import type { Db } from './db'
 import { openDatabase } from './db'
@@ -18,13 +23,12 @@ import {
   type KdfParams,
   DEFAULT_KDF,
   deriveKey,
-  encrypt,
-  decrypt,
-  serializeBlob,
-  deserializeBlob,
   generateSalt,
   makeVerifier,
-  verifyKey
+  verifyKey,
+  BLOB_MAGIC,
+  BLOB_IV_BYTES,
+  BLOB_TAG_BYTES
 } from './security/crypto'
 
 // Workspace vault: the lock/unlock lifecycle for the encrypted workspace (spec §7.9).
@@ -133,35 +137,151 @@ export function writeVaultDescriptor(descriptorPath: string, d: VaultDescriptor)
 }
 
 // ---- file-level crypto + hygiene -------------------------------------------------
+//
+// STREAMING (M5, audit round 4): the previous implementations read the whole file into
+// one Buffer, which hit Node's ~2 GiB Buffer/IO ceilings — a workspace DB past that
+// size could no longer be locked (shutdown would silently leave plaintext on disk) or
+// re-opened. These versions stream in bounded chunks and write the EXACT same on-disk
+// frame (`MAGIC | iv | tag | ciphertext`), so existing vaults are unaffected.
 
-/** Encrypt `srcPath` → `destPath` (atomic) with `key`. */
+/** Chunk size for streaming crypto + shredding. Bounds memory regardless of file size. */
+const FILE_CHUNK_BYTES = 8 * 1024 * 1024
+
+/** Encrypt `srcPath` → `destPath` (atomic) with `key`. Streams; constant memory. */
 export function encryptFile(srcPath: string, destPath: string, key: Buffer): void {
-  const plaintext = readFileSync(srcPath)
-  const blob = serializeBlob(encrypt(key, plaintext))
   const tmp = `${destPath}.tmp`
-  writeFileSync(tmp, blob)
-  renameSync(tmp, destPath)
-}
+  const iv = randomBytes(BLOB_IV_BYTES)
+  const cipher = createCipheriv('aes-256-gcm', key, iv)
+  const src = openSync(srcPath, 'r')
+  let out: number | null = null
+  try {
+    out = openSync(tmp, 'w')
+    // Header: MAGIC | iv | tag placeholder. GCM's tag is only known after the whole
+    // stream is processed, so reserve its slot and patch it in at the end.
+    writeSync(out, BLOB_MAGIC)
+    writeSync(out, iv)
+    const tagPos = BLOB_MAGIC.length + BLOB_IV_BYTES
+    writeSync(out, Buffer.alloc(BLOB_TAG_BYTES))
 
-/** Decrypt `srcPath` → `destPath` (atomic) with `key`. Throws on a wrong key/tamper. */
-export function decryptFile(srcPath: string, destPath: string, key: Buffer): void {
-  const blob = deserializeBlob(readFileSync(srcPath))
-  const plaintext = decrypt(key, blob)
-  const tmp = `${destPath}.tmp`
-  writeFileSync(tmp, plaintext)
-  renameSync(tmp, destPath)
+    const buf = Buffer.alloc(FILE_CHUNK_BYTES)
+    let bytes: number
+    while ((bytes = readSync(src, buf, 0, buf.length, null)) > 0) {
+      const ct = cipher.update(buf.subarray(0, bytes))
+      if (ct.length > 0) writeSync(out, ct)
+    }
+    const fin = cipher.final()
+    if (fin.length > 0) writeSync(out, fin)
+    const tag = cipher.getAuthTag()
+    writeSync(out, tag, 0, tag.length, tagPos)
+    closeSync(out)
+    out = null
+    renameSync(tmp, destPath)
+  } catch (err) {
+    if (out !== null) {
+      try {
+        closeSync(out)
+      } catch {
+        /* already closed */
+      }
+      out = null
+    }
+    rmSync(tmp, { force: true })
+    throw err
+  } finally {
+    try {
+      closeSync(src)
+    } catch {
+      /* already closed */
+    }
+    if (out !== null) closeSync(out)
+  }
 }
 
 /**
- * Best-effort secure delete: overwrite the file with random bytes, then unlink. On SSDs
- * wear-levelling means the original blocks may survive — this is documented in
- * SECURITY.md and not over-promised.
+ * Decrypt `srcPath` → `destPath` (atomic) with `key`. Streams; constant memory. Throws
+ * on a wrong key/tamper (GCM auth failure in `final()`); on failure the partial output
+ * is shredded — note that callers verify the password against the descriptor verifier
+ * BEFORE decrypting, so a wrong-key decrypt of the DB never happens in normal flow.
+ */
+export function decryptFile(srcPath: string, destPath: string, key: Buffer): void {
+  const tmp = `${destPath}.tmp`
+  const src = openSync(srcPath, 'r')
+  let out: number | null = null
+  try {
+    const headerLen = BLOB_MAGIC.length + BLOB_IV_BYTES + BLOB_TAG_BYTES
+    const header = Buffer.alloc(headerLen)
+    const got = readSync(src, header, 0, headerLen, null)
+    if (got < headerLen) throw new Error('Encrypted blob is too short or corrupt')
+    if (!header.subarray(0, BLOB_MAGIC.length).equals(BLOB_MAGIC)) {
+      throw new Error('Encrypted blob has an unrecognised header')
+    }
+    const iv = header.subarray(BLOB_MAGIC.length, BLOB_MAGIC.length + BLOB_IV_BYTES)
+    const tag = header.subarray(BLOB_MAGIC.length + BLOB_IV_BYTES, headerLen)
+    const decipher = createDecipheriv('aes-256-gcm', key, iv)
+    decipher.setAuthTag(tag)
+
+    out = openSync(tmp, 'w')
+    const buf = Buffer.alloc(FILE_CHUNK_BYTES)
+    let bytes: number
+    while ((bytes = readSync(src, buf, 0, buf.length, null)) > 0) {
+      const pt = decipher.update(buf.subarray(0, bytes))
+      if (pt.length > 0) writeSync(out, pt)
+    }
+    const fin = decipher.final() // throws here on wrong key / tampered ciphertext
+    if (fin.length > 0) writeSync(out, fin)
+    closeSync(out)
+    out = null
+    renameSync(tmp, destPath)
+  } catch (err) {
+    if (out !== null) {
+      try {
+        closeSync(out)
+      } catch {
+        /* already closed */
+      }
+      out = null
+    }
+    shredFile(tmp) // unauthenticated partial plaintext must not linger
+    throw err
+  } finally {
+    try {
+      closeSync(src)
+    } catch {
+      /* already closed */
+    }
+    if (out !== null) closeSync(out)
+  }
+}
+
+/**
+ * Best-effort secure delete: overwrite the file with random bytes (in bounded chunks —
+ * a single `randomBytes(size)` throws past 2 GiB, which used to skip the unlink too),
+ * then unlink. The unlink runs even if the overwrite fails. On SSDs wear-levelling means
+ * the original blocks may survive — documented in SECURITY.md and not over-promised.
  */
 export function shredFile(path: string): void {
   try {
     if (!existsSync(path)) return
     const size = statSync(path).size
-    if (size > 0) writeFileSync(path, randomBytes(size))
+    if (size > 0) {
+      const fd = openSync(path, 'r+')
+      try {
+        const chunk = randomBytes(Math.min(size, FILE_CHUNK_BYTES))
+        let pos = 0
+        while (pos < size) {
+          const n = Math.min(chunk.length, size - pos)
+          writeSync(fd, chunk, 0, n, pos)
+          pos += n
+        }
+        fsyncSync(fd)
+      } finally {
+        closeSync(fd)
+      }
+    }
+  } catch {
+    /* best-effort overwrite; still unlink below */
+  }
+  try {
     rmSync(path, { force: true })
   } catch {
     /* best-effort */

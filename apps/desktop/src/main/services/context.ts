@@ -21,4 +21,9 @@ export interface AppContext {
   embedder: Embedder
   /** Directory holding model-manifests, or null if it could not be located. */
   manifestsDir: string | null
+  /**
+   * True for a dev build (`!app.isPackaged`). Treated as "developer" alongside the
+   * user-toggleable `developerMode` setting (which defaults OFF on shipped builds, M10).
+   */
+  isDev: boolean
 }

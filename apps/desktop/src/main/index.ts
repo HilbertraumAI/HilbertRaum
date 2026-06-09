@@ -108,7 +108,8 @@ function initBackend(): void {
     workspace,
     runtime,
     embedder,
-    manifestsDir
+    manifestsDir,
+    isDev
   }
   registerCoreIpc(ctx)
   registerWorkspaceIpc(ctx)

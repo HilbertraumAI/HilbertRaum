@@ -8,7 +8,8 @@
 #   4. package + sign + notarize         # MANUAL (secrets never in the repo)
 #   5. copy launcher + portable app + user docs onto the drive root
 #   6. verify-models  --generate         # capture real hashes -> config/checksums.json
-#   7. final check: commercial posture + verify-models --strict (all weights VERIFIED)
+#   7. final check: commercial posture + license reviews APPROVED (spec 13; not
+#      overridable by --accept-license) + verify-models --strict (all weights VERIFIED)
 #      + no user data -- exits 1 unless the drive is actually sellable
 #
 # Mirrors apps/desktop/src/main/services/commercial-drive.ts (planCommercialDrive +
@@ -135,6 +136,25 @@ for ud in workspace/paid.sqlite workspace/paid.sqlite.enc workspace/paid.sqlite-
 done
 if [[ -d "$TARGET/workspace/documents" ]] && [[ -n "$(ls -A "$TARGET/workspace/documents" 2>/dev/null)" ]]; then
   PROBLEMS+=("user data present: workspace/documents/*")
+fi
+# License gate (assertCommercialDrive parity, spec 13): every shipped model's
+# license_review.status must be 'approved'. --accept-license is download-time acceptance,
+# NEVER a substitute for the redistribution review a sold drive needs.
+if [[ $DRY_RUN -eq 0 ]]; then
+  DRIVE_MANIFESTS="$TARGET/model-manifests"
+  if [[ -d "$DRIVE_MANIFESTS" ]]; then
+    while IFS= read -r mf; do
+      [[ -n "$mf" ]] || continue
+      # Only model manifests (runtime-sources.yaml has no local_path).
+      grep -q '^[[:space:]]*local_path[[:space:]]*:' "$mf" || continue
+      review_status="$(sed -n 's/^[[:space:]]*status[[:space:]]*:[[:space:]]*//p' "$mf" | head -n1 | tr -d '"'"'"'' | sed 's/[[:space:]]*$//')"
+      if [[ "$review_status" != "approved" ]]; then
+        PROBLEMS+=("license_review not approved: $(basename "$mf") (status: ${review_status:-missing})")
+      fi
+    done < <(find "$DRIVE_MANIFESTS" \( -name '*.yaml' -o -name '*.yml' \) -type f | sort)
+  else
+    PROBLEMS+=("model-manifests missing on the drive")
+  fi
 fi
 # Weight gate (assertCommercialDrive parity): every weight VERIFIED, automated — not a
 # manual "confirm it yourself" instruction. UNVERIFIED/MISSING/MISMATCH all fail here.

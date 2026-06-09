@@ -229,7 +229,12 @@ export function recommendModelId(
   return match?.id ?? null
 }
 
-function toModelInfo(manifest: ModelManifest, state: ModelState, recommended: boolean): ModelInfo {
+function toModelInfo(
+  manifest: ModelManifest,
+  state: ModelState,
+  recommended: boolean,
+  startableAsMock: boolean
+): ModelInfo {
   return {
     id: manifest.id,
     displayName: manifest.displayName,
@@ -244,7 +249,8 @@ function toModelInfo(manifest: ModelManifest, state: ModelState, recommended: bo
     recommendedContextTokens: manifest.recommendedContextTokens,
     localPath: manifest.localPath,
     state,
-    recommended
+    recommended,
+    startableAsMock
   }
 }
 
@@ -282,7 +288,12 @@ export async function buildModelList(opts: BuildModelListOptions): Promise<Model
     }
     const recommended =
       manifest.id === recommendedChat || manifest.id === recommendedEmbed
-    models.push(toModelInfo(manifest, state, recommended))
+    // Zero-weights first run (H6/M10): a missing CHAT model may start the built-in mock
+    // when the caller's (policy-gated) developer leniency is on. Computed here so the
+    // renderer renders an affordance the MAIN process actually allows.
+    const startableAsMock =
+      state === 'missing' && manifest.role === 'chat' && opts.developerMode
+    models.push(toModelInfo(manifest, state, recommended, startableAsMock))
   }
   return { models, manifestErrors: errors }
 }

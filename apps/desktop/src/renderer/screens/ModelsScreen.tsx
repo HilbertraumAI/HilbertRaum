@@ -70,9 +70,9 @@ export function ModelsScreen(): JSX.Element {
   function card(m: ModelInfo): JSX.Element {
     const active = isActive(m)
     const installed = m.state === 'installed' || m.state === 'running' || m.state === 'ready'
-    // Zero-weights first run (developer mode): a MISSING chat model may still be started —
-    // the runtime factory falls back to the built-in mock so the whole app is explorable.
-    const canMockStart = m.state === 'missing' && m.role === 'chat' && Boolean(settings?.developerMode)
+    // Zero-weights first run: the MAIN process computes whether this (missing, chat)
+    // model may start the built-in mock (developer + policy gates, H6/M10).
+    const canMockStart = Boolean(m.startableAsMock)
     return (
       <div className="card model-card" key={m.id}>
         <div className="model-head">

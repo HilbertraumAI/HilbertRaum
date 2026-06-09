@@ -154,7 +154,10 @@ export const DEFAULT_SETTINGS: AppSettings = {
   workspaceMode: 'plaintext_dev',
   activeModelId: null,
   activeEmbeddingModelId: null,
-  developerMode: true,
+  // Default OFF (M10): developer affordances (unverified models, plaintext) must be an
+  // explicit opt-in on a shipped build. A dev build (`!app.isPackaged`) is treated as a
+  // developer regardless of this setting (`AppContext.isDev`).
+  developerMode: false,
   contextTokens: 4096,
   ragTopKInitial: 12,
   ragTopKFinal: 6,
@@ -188,6 +191,12 @@ export interface ModelInfo {
   localPath: string
   state: ModelState
   recommended: boolean
+  /**
+   * True when this (missing, chat) model may be started anyway, falling back to the
+   * built-in mock runtime — the zero-weights first-run journey. Computed in the main
+   * process from developer mode AND the drive policy (H6/M10).
+   */
+  startableAsMock?: boolean
 }
 
 // ---- Chat (Phase 3) ----

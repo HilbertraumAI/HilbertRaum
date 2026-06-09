@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { mkdtempSync } from 'node:fs'
+import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -69,6 +69,13 @@ describe('registerCoreIpc', () => {
 })
 
 describe('registerModelIpc', () => {
+  // Model handlers resolve the drive policy from `paths.configPath` (M10); a missing
+  // config dir means "no policy file" → developer-friendly defaults.
+  const noWeightPaths = (): { rootPath: string; configPath: string } => ({
+    rootPath: join(tmpdir(), 'paid-no-weights'),
+    configPath: bogusConfigDir()
+  })
+
   it('returns an empty model list when no manifests directory is configured', async () => {
     const ctx = { db: seededDb(), manifestsDir: null } as unknown as AppContext
     registerModelIpc(ctx)
@@ -80,22 +87,26 @@ describe('registerModelIpc', () => {
     const ctx = {
       db: seededDb(),
       manifestsDir: REPO_MANIFESTS,
-      paths: { rootPath: join(tmpdir(), 'paid-no-weights') },
+      paths: noWeightPaths(),
+      isDev: false,
       runtime: { activeModelId: () => null }
     } as unknown as AppContext
     registerModelIpc(ctx)
     const { result } = await invoke(handlers, IPC.listModels)
     const models = result as ModelInfo[]
-    // The four committed manifests are discovered; with no weights on disk they are 'missing'.
+    // The committed manifests are discovered; with no weights on disk they are 'missing'.
     expect(models.length).toBeGreaterThanOrEqual(4)
     expect(models.every((m) => typeof m.id === 'string')).toBe(true)
+    // Not a developer (toggle off, packaged build) → no mock-start affordance (M10).
+    expect(models.every((m) => m.startableAsMock !== true)).toBe(true)
   })
 
   it('startRuntime throws on an unknown model id', async () => {
     const ctx = {
       db: seededDb(),
       manifestsDir: REPO_MANIFESTS,
-      paths: { rootPath: join(tmpdir(), 'paid-no-weights') },
+      paths: noWeightPaths(),
+      isDev: false,
       runtime: { start: async () => ({}), activeModelId: () => null }
     } as unknown as AppContext
     registerModelIpc(ctx)
@@ -105,14 +116,17 @@ describe('registerModelIpc', () => {
   })
 
   // H6 (audit round 4): the zero-weights first-run journey — a MISSING chat model may be
-  // started in developer mode (the selecting factory then yields the mock runtime), so a
-  // fresh clone can actually chat. Everything else is now gated in the MAIN process.
-  it('startRuntime allows a missing chat model in developer mode (mock fallback)', async () => {
+  // started by a developer (toggle or dev build; the selecting factory then yields the
+  // mock runtime), so a fresh clone can actually chat. Everything else is gated in MAIN.
+  it('startRuntime allows a missing chat model for a developer (mock fallback)', async () => {
     let startedWith: unknown = null
+    const db = seededDb()
+    updateSettings(db, { developerMode: true }) // explicit opt-in (default is now false, M10)
     const ctx = {
-      db: seededDb(), // developerMode defaults to true
+      db,
       manifestsDir: REPO_MANIFESTS,
-      paths: { rootPath: join(tmpdir(), 'paid-no-weights') },
+      paths: noWeightPaths(),
+      isDev: false,
       runtime: {
         start: async (o: unknown) => {
           startedWith = o
@@ -126,13 +140,58 @@ describe('registerModelIpc', () => {
     expect(startedWith).not.toBeNull()
   })
 
-  it('startRuntime refuses a missing model OUTSIDE developer mode', async () => {
+  it('a dev build counts as developer even with the toggle off (isDev)', async () => {
+    let started = false
+    const ctx = {
+      db: seededDb(), // developerMode defaults to FALSE (M10)
+      manifestsDir: REPO_MANIFESTS,
+      paths: noWeightPaths(),
+      isDev: true,
+      runtime: {
+        start: async () => {
+          started = true
+          return { running: true, modelId: 'qwen3-4b-instruct-q4', port: null, healthy: true, message: 'ok' }
+        },
+        activeModelId: () => null
+      }
+    } as unknown as AppContext
+    registerModelIpc(ctx)
+    await invoke(handlers, IPC.startRuntime, 'qwen3-4b-instruct-q4')
+    expect(started).toBe(true)
+  })
+
+  it('startRuntime refuses a missing model for a non-developer', async () => {
+    const ctx = {
+      db: seededDb(), // developerMode defaults to false
+      manifestsDir: REPO_MANIFESTS,
+      paths: noWeightPaths(),
+      isDev: false,
+      runtime: { start: async () => ({}), activeModelId: () => null }
+    } as unknown as AppContext
+    registerModelIpc(ctx)
+    await expect(invoke(handlers, IPC.startRuntime, 'qwen3-4b-instruct-q4')).rejects.toThrow(
+      /cannot be started/
+    )
+  })
+
+  // M10: the drive POLICY is authoritative — a commercial policy.json disables developer
+  // leniency (and thus the mock fallback) even when the toggle/dev build says developer.
+  it('a commercial policy vetoes developer leniency (no mock fallback)', async () => {
+    const configPath = mkdtempSync(join(tmpdir(), 'paid-policy-'))
+    writeFileSync(
+      join(configPath, 'policy.json'),
+      JSON.stringify({
+        models: { allow_unverified_models: false, require_sha256_match: true }
+      }),
+      'utf8'
+    )
     const db = seededDb()
-    updateSettings(db, { developerMode: false })
+    updateSettings(db, { developerMode: true })
     const ctx = {
       db,
       manifestsDir: REPO_MANIFESTS,
-      paths: { rootPath: join(tmpdir(), 'paid-no-weights') },
+      paths: { rootPath: join(tmpdir(), 'paid-no-weights'), configPath },
+      isDev: true,
       runtime: { start: async () => ({}), activeModelId: () => null }
     } as unknown as AppContext
     registerModelIpc(ctx)
@@ -145,7 +204,8 @@ describe('registerModelIpc', () => {
     const ctx = {
       db: seededDb(),
       manifestsDir: REPO_MANIFESTS,
-      paths: { rootPath: join(tmpdir(), 'paid-no-weights') },
+      paths: noWeightPaths(),
+      isDev: true,
       runtime: { start: async () => ({}), activeModelId: () => null }
     } as unknown as AppContext
     registerModelIpc(ctx)

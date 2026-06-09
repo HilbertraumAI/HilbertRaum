@@ -58,6 +58,11 @@ export function SettingsScreen(): JSX.Element {
           />
           <span>Developer mode (allows plaintext workspace, unverified models)</span>
         </label>
+        <p className="hint">
+          Off by default. Dev builds always count as developer. The drive policy is
+          authoritative: on a commercial drive, unverified models stay rejected regardless of
+          this setting.
+        </p>
       </div>
 
       <div className="card">

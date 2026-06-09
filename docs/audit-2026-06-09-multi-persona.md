@@ -5,7 +5,12 @@ _Date: 2026-06-09 · Scope: full repo at Phases 0–13 complete ("MVP feature-co
 > **REMEDIATION STATUS (2026-06-09, same day):** all **Critical and High** findings — C1, C2,
 > H1–H7 — are **FIXED** (plus M9 and M8, closed alongside H1/H6). See BUILD_STATE §11 for the
 > remediation record. Gate after fixes: typecheck clean, **343/343 tests** (+20 regression tests),
-> build green. The Medium/Low findings below (except M8/M9) remain open and prioritized in §8.
+> build green.
+>
+> **ROUND 2 (same day):** the **Medium correctness cluster** — M1, M2, M3, M4, M5, M6, M7, M10,
+> M11 — is also **FIXED** (BUILD_STATE §12; 355/355 tests, +12). Still open: the doc-drift sweep
+> (M12–M31 where not code-fixed above, notably M12–M17 spec gaps and M25–M31 doc staleness) and
+> the Low findings in §6.
 
 ## 1. Methodology
 

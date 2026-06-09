@@ -32,16 +32,22 @@ export function registerDocsIpc(ctx: AppContext): void {
   const storeDir = documentsDir(ctx.paths.workspacePath)
   // Ephemeral per-import aggregates, keyed by job id.
   const jobs = new Map<string, ImportJobStatus>()
-  // Captured once: rows left non-terminal from before this moment belong to a previous
-  // run, so they can be safely reconciled to `failed` (see reconcileStuckDocuments).
-  const processStartedAt = new Date().toISOString()
-  let reconciled = false
+  // Documents currently being processed (import loop or re-index). Guards delete/re-index
+  // against racing an in-flight ingestion of the SAME document (M3): interleaving used to
+  // produce FK violations, duplicate chunk sets, and EBUSY on the stored copy.
+  const processing = new Set<string>()
 
   // DB-backed handlers require an unlocked workspace; surface a clean message instead of
   // the raw "Workspace is locked" the `ctx.db` getter would throw mid-operation.
   const requireUnlocked = (): void => {
     if (!ctx.workspace.isUnlocked()) {
       throw new Error('Workspace is locked. Unlock it to manage documents.')
+    }
+  }
+
+  const requireNotProcessing = (documentId: string): void => {
+    if (processing.has(documentId)) {
+      throw new Error('This document is still being processed. Wait for the import to finish.')
     }
   }
 
@@ -99,6 +105,14 @@ export function registerDocsIpc(ctx: AppContext): void {
     // Process sequentially in the background; do not block the invoke return.
     void (async () => {
       for (const id of documentIds) {
+        // Lock-while-importing (M4): the vault can close mid-job ("Lock now"). Stop the
+        // loop cleanly — the remaining rows stay non-terminal inside the encrypted
+        // snapshot and are reconciled to `failed` (re-indexable) after the next unlock.
+        if (!ctx.workspace.isUnlocked()) {
+          log.warn('Import stopped: workspace locked mid-job', { jobId })
+          break
+        }
+        processing.add(id)
         try {
           const info = await processDocument(ctx.db, storeDir, id, ingestionDeps())
           if (info.status === 'failed') status.failed += 1
@@ -106,6 +120,8 @@ export function registerDocsIpc(ctx: AppContext): void {
         } catch (err) {
           status.failed += 1
           log.error('Document ingestion crashed', { id, error: String(err) })
+        } finally {
+          processing.delete(id)
         }
       }
       status.done = true
@@ -124,10 +140,14 @@ export function registerDocsIpc(ctx: AppContext): void {
 
   ipcMain.handle(IPC.listDocuments, (): DocumentInfo[] => {
     requireUnlocked()
-    // First list after unlock: clear out any documents stuck mid-ingestion by a prior run.
-    if (!reconciled) {
-      reconciled = true
-      const n = reconcileStuckDocuments(ctx.db, processStartedAt)
+    // Reconcile stuck rows whenever NOTHING is actually running (M4): a row left in an
+    // active status (queued/extracting/…) with no live job/re-index belongs to a killed
+    // run or a lock-interrupted import — reset it to `failed` so the UI offers Re-index
+    // instead of a perpetual, button-disabling "in progress". The previous one-shot flag
+    // never re-ran after a mid-session lock → unlock, wedging those documents.
+    const importActive = [...jobs.values()].some((j) => !j.done)
+    if (!importActive && processing.size === 0) {
+      const n = reconcileStuckDocuments(ctx.db, new Date().toISOString())
       if (n > 0) log.warn('Reconciled interrupted document ingestions', { count: n })
     }
     // Flag docs whose vectors were produced by a different embedder than the active one
@@ -137,13 +157,20 @@ export function registerDocsIpc(ctx: AppContext): void {
 
   ipcMain.handle(IPC.deleteDocument, (_e, documentId: string): void => {
     requireUnlocked()
+    requireNotProcessing(documentId)
     log.info('Delete document', { documentId })
     deleteDocument(ctx.db, documentId)
   })
 
-  ipcMain.handle(IPC.reindexDocument, (_e, documentId: string): Promise<DocumentInfo> => {
+  ipcMain.handle(IPC.reindexDocument, async (_e, documentId: string): Promise<DocumentInfo> => {
     requireUnlocked()
+    requireNotProcessing(documentId)
     log.info('Re-index document', { documentId })
-    return reindexDocument(ctx.db, storeDir, documentId, ingestionDeps())
+    processing.add(documentId)
+    try {
+      return await reindexDocument(ctx.db, storeDir, documentId, ingestionDeps())
+    } finally {
+      processing.delete(documentId)
+    }
   })
 }

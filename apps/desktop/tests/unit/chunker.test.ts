@@ -92,4 +92,33 @@ describe('chunkSegments boundaries + overlap', () => {
   it('exposes the spec §7.7 defaults', () => {
     expect(CHUNK_DEFAULTS).toEqual({ chunkSizeTokens: 500, chunkOverlapTokens: 80, maxChunks: 1000 })
   })
+
+  // M6 (audit round 4): DOCX emits one segment per paragraph (no labels). Without
+  // packing, every paragraph became its own tiny chunk — and a >maxChunks-paragraph
+  // document silently lost its tail. Same-label neighbours must merge into full windows.
+  it('packs consecutive same-label segments into full-size windows (DOCX paragraphs)', () => {
+    // 60 paragraphs × 10 words = 600 tokens, all label-less → one logical stream.
+    const paragraphs: ExtractedSegment[] = Array.from({ length: 60 }, () => ({ text: words(10) }))
+    const chunks = chunkSegments(paragraphs, { chunkSizeTokens: 100, chunkOverlapTokens: 0 })
+    // Packed: 600/100 = 6 chunks — NOT 60 one-paragraph confetti chunks.
+    expect(chunks).toHaveLength(6)
+    expect(chunks.every((c) => c.tokenCount === 100)).toBe(true)
+  })
+
+  it('never merges segments with different page/section labels', () => {
+    const segments: ExtractedSegment[] = [
+      { text: words(10), pageNumber: 1 },
+      { text: words(10), pageNumber: 2 }, // different page → own chunk
+      { text: words(10), sectionLabel: 'A' },
+      { text: words(10), sectionLabel: 'B' } // different section → own chunk
+    ]
+    const chunks = chunkSegments(segments, { chunkSizeTokens: 100, chunkOverlapTokens: 0 })
+    expect(chunks).toHaveLength(4)
+    expect(chunks.map((c) => [c.pageNumber, c.sectionLabel])).toEqual([
+      [1, null],
+      [2, null],
+      [null, 'A'],
+      [null, 'B']
+    ])
+  })
 })

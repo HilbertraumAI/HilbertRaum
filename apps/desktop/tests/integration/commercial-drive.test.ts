@@ -119,8 +119,29 @@ describe('assertCommercialDrive', () => {
       policyCommercial: true,
       networkDenied: true,
       weightsVerified: true,
+      licensesApproved: true,
       noUserData: true
     })
+  })
+
+  // M11 (audit round 4): a sold drive requires every license_review APPROVED (spec §13).
+  // --accept-license is download-time acceptance, never a substitute for the review.
+  it('fails when a model license_review is not approved', async () => {
+    const root = tempDir('paid-commercial-license-')
+    writePolicy(root, buildPolicyJson())
+    const pendingReview = writeVerifiedWeight(root, 'chat', 'models/chat/qwen.gguf', 'chat-weights')
+    const notApproved = asManifest({
+      id: pendingReview.id,
+      local_path: pendingReview.localPath,
+      sha256: pendingReview.sha256,
+      license_review: { status: 'pending', reviewed_by: null, reviewed_at: null, notes: '' }
+    })
+
+    const res = await assertCommercialDrive(root, [notApproved])
+    expect(res.ok).toBe(false)
+    expect(res.checks.licensesApproved).toBe(false)
+    expect(res.checks.weightsVerified).toBe(true) // ONLY the license gate failed
+    expect(res.problems.some((p) => /license_review/.test(p))).toBe(true)
   })
 
   it('fails when the policy allows network', async () => {
