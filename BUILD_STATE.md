@@ -5,7 +5,7 @@
 > (see "Per-phase ritual" in [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md)).
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
-_Last updated: 2026-06-09 — Phase 7 complete; Phase 8 next_
+_Last updated: 2026-06-09 — Phase 8 complete; Phase 9 next_
 
 ---
 
@@ -21,8 +21,8 @@ _Last updated: 2026-06-09 — Phase 7 complete; Phase 8 next_
 | 5 | Embeddings & vector search (mock) | 🟢 done |
 | 6 | RAG chat with citations | 🟢 done |
 | 7 | Hardware benchmark & recommendation | 🟢 done |
-| 8 | Privacy & offline hardening | 🟡 next |
-| 9 | Encrypted workspace | ⚪ not started |
+| 8 | Privacy & offline hardening | 🟢 done |
+| 9 | Encrypted workspace | 🟡 next |
 | 10 | Real llama.cpp runtime & embeddings | ⚪ not started |
 | 11 | Drive layout, scripts & packaging | ⚪ not started |
 
@@ -149,6 +149,37 @@ Repo root: `f:\_coding\ai_drive`.
   `lastBenchmark?.profile ?? 'UNKNOWN'`: `getAppStatus().hardwareProfile` and
   `buildModelList`'s `profile` (the `LITE` stub is gone). User-facing copy follows spec §11.4
   (never "your hardware is bad").
+- **Policy shape + deny-by-default (Phase 8):** `services/policy.ts` models the spec §6
+  `network`/`workspace`/`models` blocks as a camelCase `PrivacyPolicy`. `DEFAULT_POLICY` is
+  **deny-by-default for network + telemetry** (both off); workspace/model defaults are
+  developer-friendly (plaintext dev + unverified models allowed) since encryption enforcement is
+  Phase 9 and model verification already gates on the `developerMode` setting. `config/policy.json`
+  + `config/drive.json` are **optional**; missing/malformed → safe defaults **+ a warning, never a
+  throw** (`bool()` only accepts real booleans, so junk fields can't weaken the policy).
+- **Effective-network rule (LOCKED, Phase 8):** `networkAllowedByPolicy =
+  allowModelDownloads || allowUpdateChecks`; `networkAllowed = networkAllowedByPolicy ∧
+  user.allowNetwork`; `offlineMode = !networkAllowed`. A (future signed) policy is **authoritative**
+  — it can only **restrict**, never expand, the user toggle. With no policy file the deny-by-default
+  ceiling keeps the app offline even if `allowNetwork` is on (no network features ship before
+  Phase 11 anyway). **Telemetry is always off** (no toggle, hardcoded `telemetryAllowed: false`).
+- **`AppStatus.offlineMode` is now policy-aware** (was `!allowNetwork`); added
+  `AppStatus.networkAllowed`. New `getPolicy` IPC (`policy:get`) returns `PolicyStatus` (effective
+  policy + derived flags) so the UI distinguishes "off by choice" from "disabled by policy"
+  (spec §3.6).
+- **Loopback exception (LOCKED, Phase 8):** the offline self-check treats `127.0.0.0/8`, `::1`, and
+  `localhost`/`*.localhost` as **not** network (dev renderer now; llama.cpp sidecar on 127.0.0.1 in
+  Phase 10). Only remote origins are violations. `services/offlineGuard.ts`
+  `installOfflineNetworkGuard` wraps `net.Socket.prototype.connect` and **only logs** a remote
+  attempt — it never blocks or throws (a wrong host guess must not break local IPC/sidecar). The
+  guard install is gated to dev/`developerMode`; `assertOfflinePosture()` always logs the posture.
+- **CSP dev-vs-prod split (Phase 8):** strict CSP applied as a response header
+  (`session.webRequest.onHeadersReceived`) on top of the `index.html` meta tag. **Prod:**
+  `default-src 'self'`, `connect-src 'self'`, `object-src 'none'`, `base-uri 'none'`,
+  `frame-ancestors 'none'`. **Dev:** relaxes `connect-src` to `ws://localhost:* http://localhost:*`
+  + `'unsafe-inline'`/`'unsafe-eval'` for Vite HMR (a strict policy breaks `npm run dev`).
+- **Logs-local guarantee (Phase 8):** confirmed `services/logging.ts` is the only log writer
+  (rotating `app.log` under `logsPath`); nothing writes logs/crash data off-device. Stated as fact
+  on the Privacy screen + PRIVACY.md.
 
 ---
 
@@ -180,9 +211,10 @@ _Status: TypeScript types in `apps/desktop/src/shared/types.ts`; channel names i
 Wired so far: core (Phase 1) + `listModels`/`selectModel`/`startRuntime`/`stopRuntime` (Phase 2) +
 `createConversation`/`listConversations`/`listMessages`/`sendChatMessage`/`stopGeneration` (Phase 3) +
 `pickDocuments`/`importDocuments`/`getImportJob`/`listDocuments`/`deleteDocument`/`reindexDocument`
-(Phase 4) + `askDocuments` (Phase 6) + `runBenchmark` (Phase 7). (`pickDocuments` +
-`reindexDocument` are Phase-4 additions to the `IPC` registry beyond the spec §9.1 list — picker +
-re-index UX.) `createConversation` now also accepts an optional `mode` ('chat' | 'documents')._
+(Phase 4) + `askDocuments` (Phase 6) + `runBenchmark` (Phase 7) + `getPolicy` (Phase 8).
+(`pickDocuments` + `reindexDocument` are Phase-4 additions to the `IPC` registry beyond the spec
+§9.1 list — picker + re-index UX; `getPolicy` is a Phase-8 addition.) `createConversation` now also
+accepts an optional `mode` ('chat' | 'documents')._
 
 ### DB schema
 ✅ Implemented in `src/main/services/db.ts` — all spec §8 tables created idempotently (WAL mode,
@@ -358,39 +390,76 @@ stop, regenerate, per-message copy, and the no-runtime empty state.
   read-write / tokens-sec / profile / recommended model + warnings; re-loads `lastBenchmark`
   on mount. `HomeScreen` profile reflects the persisted value via `getAppStatus`.
 
+### Privacy & offline policy (Phase 8 live)
+✅ **`services/policy.ts`** (spec §3.5/§3.6/§6). Pure + resilient; never throws.
+- **Types** (in `shared/types.ts`): `PrivacyPolicy` (`network`/`workspace`/`models`),
+  `NetworkPolicy`/`WorkspacePolicy`/`ModelsPolicy`, `PolicyStatus`. `DEFAULT_POLICY` lives in
+  `policy.ts` (main-only).
+- **`parsePolicy(contents, onWarn?)`** → `PrivacyPolicy` merged over `DEFAULT_POLICY`; malformed JSON
+  → defaults + warn. **`mergePolicyObject(base, raw)`** maps snake_case JSON → camelCase, taking a
+  field only when it is a real boolean. **`loadPolicy(configDir, onWarn?)`** → `{ policy,
+  policyFilePresent, driveFilePresent, allowNetworkByDefault }` (reads optional `policy.json` +
+  `drive.json`).
+- **`resolveNetwork(policy, allowNetworkSetting)`** → `{ networkAllowedByPolicy, networkAllowed,
+  offlineMode }` (effective = policy ∧ setting). **`buildPolicyStatus(configDir, allowNetworkSetting,
+  onWarn?)`** → `PolicyStatus` (the `getPolicy()` IPC shape; `telemetryAllowed` hardcoded false).
+✅ **`services/offlineGuard.ts`** — `isLoopbackHost(host)` (127.0.0.0/8, ::1, localhost exempt),
+  `checkOutboundHost(host, offline)` → `{ host, violation }`, `installOfflineNetworkGuard({ offline,
+  onViolation })` (wraps `net.Socket.prototype.connect`, logs remote attempts, **never blocks**,
+  returns an uninstaller; no-op when not offline), `assertOfflinePosture({ posture, installGuard,
+  log, warn })` (startup self-check; logs posture, installs guard in dev/developerMode).
+✅ **IPC** `registerCoreIpc.ts`: `getPolicy` (`policy:get`) returns `buildPolicyStatus(...)`;
+  `getAppStatus.offlineMode`/`networkAllowed` now come from the policy resolution. Preload exposes
+  `api.getPolicy` + `PreloadApi`. `main/index.ts` calls `assertOfflinePosture()` in `initBackend()`
+  and applies the dev/prod CSP response header in `createWindow()`.
+✅ **Renderer:** `PrivacyScreen.tsx` (spec §7.10/§18.1 copy) replaces the placeholder — offline
+  statement, "where your data lives" (`getDriveStatus`), live network state (off by default /
+  disabled by policy), plaintext-dev-mode caveat, logs-local guarantee. Sidebar `offline-badge` is a
+  live button (reads `getPolicy`, links to Privacy).
+
 ---
 
-## 5. Next actions (do these next) — START OF PHASE 8
+## 5. Next actions (do these next) — START OF PHASE 9
 
-Phase 8 = Privacy & offline hardening (spec Milestone 8 / Step 10). Build, in order:
-1. **Policy** (`policy.ts`) — load `policy.json`/`drive.json`; `allow_network` default **false**.
-   A startup self-check that asserts no outbound network in the core path.
-2. **Visible offline mode everywhere** — wire the offline indicator (already on `AppStatus`),
-   the settings checkbox "Allow internet access for model downloads and updates" (default off),
-   and make the no-network guarantee user-visible.
-3. **Privacy & Offline screen** — flesh out the `PlaceholderScreen` (spec §7.10/§18.1 copy):
-   what stays local, where data lives, logs local-only, plaintext-dev-mode separation.
-4. **Audit** — CSP / no-network sweep; logs local only; ensure plaintext developer mode is
-   clearly separated from the (future) encrypted default.
-5. Tests: policy default-off, the offline self-check, settings toggle behaviour. Keep all green.
-6. **Ritual:** docs (`docs/privacy.md` or extend) + this file; commit.
+Phase 9 = Encrypted workspace (spec Milestone 9). Build, in order:
+1. **`services/security/crypto.ts`** — Argon2id KDF (native `argon2`), with a documented
+   `node:crypto` `scrypt` **fallback** if the native build fails on Node 24 (R4). AES-256-GCM for the
+   workspace DB file. Password **never stored**; persist only salt + KDF params (in `config/` or a
+   small unencrypted header, NOT in the encrypted DB). Pure + unit-testable (round-trip, wrong
+   password fails, KDF determinism with stored params).
+2. **Workspace lock/unlock flow** — whole-DB-file encryption-at-rest (no SQLCipher under
+   `node:sqlite`, see plan §4b): on unlock, decrypt to a working file **on the drive** (not a temp
+   cloud dir); on lock/quit, re-encrypt + shred the plaintext working copy. Wire into
+   `main/index.ts` lifecycle (`will-quit` already stops the runtime — add re-lock).
+3. **Mode separation** — honour `workspaceMode` (`encrypted` vs `plaintext_dev`) + the Phase-8
+   policy (`workspace.encryptionRequired` / `allowPlaintextDevMode`). The Privacy screen already
+   labels plaintext mode; Phase 9 makes the policy *enforce* it (refuse plaintext when the policy
+   forbids it).
+4. **Onboarding password step** — create/enter the workspace password (commercial default =
+   encrypted).
+5. Tests: KDF determinism with stored params, encrypt/decrypt round-trip, wrong-password failure,
+   **no plaintext password persisted**. Keep all green + reuse `freshDb`/spy patterns.
+6. **Ritual:** docs (`docs/security-model.md` encryption section, `SECURITY.md`) + this file; commit.
 
-Notes / gotchas for Phase 8:
-- The benchmark (Phase 7) is the most "systems-y" code so far and is already guarded by a
-  no-network assertion; reuse that test pattern for the Phase-8 startup self-check.
-- `allowNetwork` already exists on `AppSettings` (default false) + drives
-  `AppStatus.offlineMode`; Phase 8 makes it authoritative + visible, it does not invent it.
+Notes / gotchas for Phase 9:
+- **R4:** native `argon2` may not build on Node 24 — implement the `scrypt` fallback behind the same
+  interface and document which is active. Install deps with `NODE_OPTIONS=--use-system-ca npm install`
+  (R6).
+- The Phase-8 `WorkspacePolicy` block (`encryptionRequired`, `allowPlaintextDevMode`) is **loaded +
+  exposed but not yet enforced** — Phase 9 is where it gates the workspace mode.
+- Keep the same spec §8 schema for both modes (encryption wraps the file, not the rows).
 
-Phase 7 is DONE: typecheck clean, **119/119 tests pass** (102 prior + 17 new: system-detection
-shape; profile thresholds at 8/16/32 boundaries; low-tok/sec downgrade; GPU bump;
-`UNKNOWN` on invalid RAM; recommendation per profile from the real manifests
-(TINY→1.7b, LITE→4b, BALANCED/PRO→8b, UNKNOWN→1.7b); **drive probe writes inside the workspace
-and cleans up** + null/error on un-writable; tokens/sec null without a runtime + positive with
-the mock; warning conditions (weak-hardware §11.4 copy, slow drive, un-measurable drive, empty
-for healthy); `runBenchmark` assembles a full result + **persists to `lastBenchmark`** so
-`getAppStatus`/`buildModelList` read the real profile; **no-network assertion** across the whole
-benchmark path). `NODE_OPTIONS=--use-system-ca npm run build` green (**main bundle 63.25 kB**).
-No new dependencies. (Live `npm run dev` window smoke = manual.)
+Phase 8 is DONE: typecheck clean, **137/137 tests pass** (119 prior + 18 new: policy parse [valid
+commercial file, malformed → defaults + warn, non-boolean fields keep defaults], `loadPolicy`
+[missing files → defaults, both files present, malformed drive.json → defaults + warn],
+**deny-by-default** [no file → network off even with the setting on], effective-permission matrix
+[policy forbids ⇒ off; permits + on ⇒ on; permits + off ⇒ off], `buildPolicyStatus` derivation +
+telemetry-always-off, offline self-check [loopback/localhost/::1/unspecified exempt; remote flagged
+only while offline; `installOfflineNetworkGuard` logs a remote attempt + allows loopback + no-op
+when online; `assertOfflinePosture` logs + returns an uninstaller], and a **no-network assertion**
+across the core path [settings + policy load + status make zero http/https/net/Socket/fetch calls]).
+`NODE_OPTIONS=--use-system-ca npm run build` green (**main bundle 70.15 kB**). No new dependencies.
+(Live `npm run dev` window smoke = manual; CSP dev split keeps HMR working.)
 
 ---
 

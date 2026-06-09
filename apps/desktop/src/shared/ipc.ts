@@ -4,6 +4,8 @@ export const IPC = {
   getDriveStatus: 'app:getDriveStatus',
   getSettings: 'settings:get',
   updateSettings: 'settings:update',
+  // Phase 8 — privacy/offline policy
+  getPolicy: 'policy:get',
   // Phase 2+
   listModels: 'models:list',
   selectModel: 'models:select',

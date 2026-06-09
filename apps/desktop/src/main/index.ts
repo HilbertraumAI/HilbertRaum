@@ -2,7 +2,9 @@ import { app, BrowserWindow, shell } from 'electron'
 import { join } from 'node:path'
 import { resolvePaths, ensureWorkspaceDirs } from './services/workspace'
 import { openDatabase } from './services/db'
-import { seedSettings } from './services/settings'
+import { seedSettings, getSettings } from './services/settings'
+import { buildPolicyStatus } from './services/policy'
+import { assertOfflinePosture } from './services/offlineGuard'
 import { initLogging, log } from './services/logging'
 import { registerCoreIpc } from './ipc/registerCoreIpc'
 import { registerModelIpc } from './ipc/registerModelIpc'
@@ -54,6 +56,17 @@ function initBackend(): void {
   registerDocsIpc(ctx)
   registerRagIpc(ctx)
   registerBenchmarkIpc(ctx)
+
+  // Phase 8: log the offline posture and install a defensive tripwire that flags any
+  // attempt to reach a REMOTE host while offline (loopback is exempt — dev renderer +
+  // future llama.cpp sidecar bind 127.0.0.1). The guard only logs; it never blocks.
+  const policy = buildPolicyStatus(paths.configPath, getSettings(db).allowNetwork, (m) => log.warn(m))
+  assertOfflinePosture({
+    posture: { offline: policy.offlineMode, networkAllowed: policy.networkAllowed },
+    installGuard: isDev || getSettings(db).developerMode,
+    log: (m, meta) => log.info(m, meta),
+    warn: (m, meta) => log.warn(m, meta)
+  })
 }
 
 function createWindow(): void {
@@ -72,6 +85,26 @@ function createWindow(): void {
       sandbox: true,
       webSecurity: true
     }
+  })
+
+  // Content-Security-Policy as a response header (defence in depth on top of the
+  // index.html meta tag, spec §3.5). Production is strict: same-origin only, no remote
+  // connect/img/script — the renderer cannot reach any cloud service. Dev relaxes
+  // connect-src for Vite HMR over ws://localhost (otherwise `npm run dev` breaks).
+  const csp = isDev
+    ? "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; " +
+      "style-src 'self' 'unsafe-inline'; connect-src 'self' ws://localhost:* http://localhost:*; " +
+      "img-src 'self' data:; font-src 'self'"
+    : "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; " +
+      "connect-src 'self'; img-src 'self' data:; font-src 'self'; object-src 'none'; " +
+      "base-uri 'none'; frame-ancestors 'none'"
+  mainWindow.webContents.session.webRequest.onHeadersReceived((details, callback) => {
+    callback({
+      responseHeaders: {
+        ...details.responseHeaders,
+        'Content-Security-Policy': [csp]
+      }
+    })
   })
 
   mainWindow.once('ready-to-show', () => mainWindow?.show())

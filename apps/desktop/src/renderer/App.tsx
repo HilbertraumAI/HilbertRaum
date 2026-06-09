@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { HomeScreen } from './screens/HomeScreen'
-import { PlaceholderScreen } from './screens/PlaceholderScreen'
+import { PrivacyScreen } from './screens/PrivacyScreen'
 import { DiagnosticsScreen } from './screens/DiagnosticsScreen'
 import { SettingsScreen } from './screens/SettingsScreen'
 import { ModelsScreen } from './screens/ModelsScreen'
@@ -34,6 +34,31 @@ const NAV: NavItem[] = [
 
 export function App(): JSX.Element {
   const [screen, setScreen] = useState<ScreenId>('home')
+  // Live offline state for the sidebar badge (spec §3.6). Re-checked when the
+  // Privacy/Settings screens are visited (network toggle may have changed).
+  const [offline, setOffline] = useState(true)
+  const [disabledByPolicy, setDisabledByPolicy] = useState(false)
+
+  useEffect(() => {
+    let active = true
+    window.api
+      ?.getPolicy()
+      .then((p) => {
+        if (!active) return
+        setOffline(p.offlineMode)
+        setDisabledByPolicy(!p.networkAllowedByPolicy)
+      })
+      .catch(() => active && setOffline(true))
+    return () => {
+      active = false
+    }
+  }, [screen])
+
+  const badgeText = disabledByPolicy
+    ? '● Disabled by policy'
+    : offline
+      ? '● Offline Mode'
+      : '○ Network allowed'
 
   return (
     <div className="app-shell">
@@ -58,9 +83,13 @@ export function App(): JSX.Element {
             </li>
           ))}
         </ul>
-        <div className="offline-badge" title="No prompts or files leave this device">
-          ● Offline Mode
-        </div>
+        <button
+          className={`offline-badge ${offline ? '' : 'network-on'}`}
+          title="No prompts or files leave this device"
+          onClick={() => setScreen('privacy')}
+        >
+          {badgeText}
+        </button>
       </nav>
 
       <main className="content">
@@ -68,9 +97,7 @@ export function App(): JSX.Element {
         {screen === 'chat' && <ChatScreen onNavigate={(s) => setScreen(s as ScreenId)} />}
         {screen === 'documents' && <DocumentsScreen />}
         {screen === 'models' && <ModelsScreen />}
-        {screen === 'privacy' && (
-          <PlaceholderScreen title="Privacy & Offline Mode" phase="Phase 8" />
-        )}
+        {screen === 'privacy' && <PrivacyScreen />}
         {screen === 'diagnostics' && <DiagnosticsScreen />}
         {screen === 'settings' && <SettingsScreen />}
       </main>

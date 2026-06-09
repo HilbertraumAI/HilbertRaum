@@ -12,6 +12,7 @@ import type {
   ImportJobStatus,
   Message,
   ModelInfo,
+  PolicyStatus,
   RuntimeStatus
 } from '../shared/types'
 
@@ -23,6 +24,10 @@ const api = {
   getSettings: (): Promise<AppSettings> => ipcRenderer.invoke(IPC.getSettings),
   updateSettings: (patch: Partial<AppSettings>): Promise<AppSettings> =>
     ipcRenderer.invoke(IPC.updateSettings, patch),
+
+  // ---- Privacy / offline policy (Phase 8) ----
+  /** Effective privacy policy + derived network flags (policy ∧ setting). */
+  getPolicy: (): Promise<PolicyStatus> => ipcRenderer.invoke(IPC.getPolicy),
 
   // ---- Models + runtime (Phase 2) ----
   listModels: (): Promise<ModelInfo[]> => ipcRenderer.invoke(IPC.listModels),

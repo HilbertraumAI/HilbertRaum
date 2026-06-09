@@ -9,12 +9,69 @@ export type WorkspaceMode = 'encrypted' | 'plaintext_dev'
 export interface AppStatus {
   appName: string
   appVersion: string
-  /** True until any opt-in network feature is enabled by the user. */
+  /**
+   * Effective offline state: true unless policy permits network AND the user has
+   * opted in (`offlineMode = !networkAllowed`). See `PolicyStatus` (spec §3.6).
+   */
   offlineMode: boolean
+  /** Effective network permission = policy ceiling ∧ user setting. */
+  networkAllowed: boolean
   activeModelId: string | null
   hardwareProfile: HardwareProfile
   workspaceMode: WorkspaceMode
   workspaceReady: boolean
+}
+
+// ---- Privacy / offline policy (Phase 8, spec §6 config/policy.json + §3.5/§3.6) ----
+
+/** Network permissions (spec §6 policy.json `network` block). Deny-by-default. */
+export interface NetworkPolicy {
+  allowModelDownloads: boolean
+  allowUpdateChecks: boolean
+  /** Always treated as off; the app has no telemetry and no toggle for it. */
+  allowTelemetry: boolean
+}
+
+/** Workspace policy (spec §6 `workspace` block). Encryption itself lands in Phase 9. */
+export interface WorkspacePolicy {
+  encryptionRequired: boolean
+  allowPlaintextDevMode: boolean
+}
+
+/** Model-verification policy (spec §6 `models` block). */
+export interface ModelsPolicy {
+  allowUnverifiedModels: boolean
+  requireManifest: boolean
+  requireSha256Match: boolean
+}
+
+/** The merged, effective privacy policy (spec §6). */
+export interface PrivacyPolicy {
+  network: NetworkPolicy
+  workspace: WorkspacePolicy
+  models: ModelsPolicy
+}
+
+/**
+ * What `getPolicy()` returns: the effective policy plus the derived network flags
+ * the UI needs to distinguish "off by choice" from "disabled by policy" (spec §3.6).
+ */
+export interface PolicyStatus {
+  policy: PrivacyPolicy
+  /** A `config/policy.json` was found + parsed. */
+  policyFilePresent: boolean
+  /** A `config/drive.json` was found + parsed. */
+  driveFilePresent: boolean
+  /** The user's `allowNetwork` setting (the Settings toggle). */
+  allowNetworkSetting: boolean
+  /** Policy ceiling: does the policy permit any network at all? */
+  networkAllowedByPolicy: boolean
+  /** Effective permission = policy ceiling ∧ user setting. */
+  networkAllowed: boolean
+  /** `!networkAllowed`. */
+  offlineMode: boolean
+  /** Always false — telemetry is never enabled and has no toggle. */
+  telemetryAllowed: boolean
 }
 
 export interface DriveStatus {

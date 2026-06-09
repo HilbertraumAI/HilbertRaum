@@ -1,6 +1,6 @@
 # Architecture — Private AI Drive Lite
 
-_Last updated: 2026-06-09 (Phase 4)_
+_Last updated: 2026-06-09 (Phase 8)_
 
 ## Overview
 
@@ -37,7 +37,9 @@ a future move to Tauri/Rust is a localized swap.
   the preload bridge.
 - **Preload**: exposes a single typed `window.api` object (see `src/preload/index.ts`).
 - **Main**: owns all file I/O, the database, the model runtime, and (later) the llama.cpp sidecar.
-- **CSP**: same-origin only; no remote origins (see `src/renderer/index.html`). Hardened in Phase 8.
+- **CSP**: same-origin only; no remote origins. Applied as both an `index.html` meta tag and a
+  response header (`session.webRequest.onHeadersReceived`) — strict in production, HMR-compatible in
+  dev. See [`security-model.md`](security-model.md).
 
 ## Swappable interfaces (spec §9.2)
 - `ModelRuntime` — `MockRuntime` (now) → `LlamaRuntime` (Phase 10).
@@ -126,6 +128,23 @@ the whole DB file is encrypted at rest.
 - **IPC** (`ipc/registerDocsIpc.ts`): `pickDocuments`, `importDocuments`, `getImportJob`,
   `listDocuments`, `deleteDocument`, `reindexDocument`. Full pipeline detail lives in
   [`rag-design.md`](rag-design.md).
+
+## Privacy & offline (Phase 8)
+- **`services/policy.ts`** (spec §3.5/§3.6/§6) loads optional `config/policy.json` + `config/drive.json`,
+  merges them over a **deny-by-default** `DEFAULT_POLICY` (network + telemetry off), and resolves the
+  **effective** network permission as `policyCeiling ∧ userSetting`. A signed policy can only
+  restrict, never expand, the user toggle. `buildPolicyStatus()` produces the `getPolicy()` IPC shape
+  (`PolicyStatus`) the UI uses to distinguish "off by choice" from "disabled by policy".
+- **`AppStatus.offlineMode`** is now policy-aware (`= !networkAllowed`), with an added
+  `networkAllowed` flag. `getPolicy` is exposed on the preload bridge.
+- **`services/offlineGuard.ts`** — `assertOfflinePosture()` runs at startup: logs the posture and (in
+  dev/developer mode) installs a defensive tripwire over `net.Socket.prototype.connect` that **logs**
+  any remote connection while offline. **Loopback (`127.0.0.1`/`localhost`/`::1`) is exempt** (dev
+  renderer + Phase-10 sidecar). The guard never blocks or throws.
+- **UI**: `PrivacyScreen.tsx` (spec §7.10/§18.1) renders the offline statement, where data lives, the
+  live network state, the plaintext-dev-mode caveat, and the logs-are-local guarantee. The sidebar
+  badge reflects the live `getPolicy()` state.
+- Full detail in [`security-model.md`](security-model.md).
 
 ## Data flow (RAG, Phases 4–6)
 import → extract text → chunk → embed (local) → store vectors → on question: embed query → cosine

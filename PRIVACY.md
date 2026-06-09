@@ -1,14 +1,16 @@
 # Privacy Notice — Private AI Drive Lite
 
-_Last updated: 2026-06-09_
+_Last updated: 2026-06-09 (Phase 8)_
 
 Private AI Drive Lite runs AI models **locally** on your laptop. This document explains, in plain
 language, what the app does and does not do with your data.
 
 ## The short version
 
-> Your prompts, documents, embeddings, and chat history stay on this device/drive unless you
-> explicitly export them. This app does not send your data to cloud AI providers.
+> Offline Mode is on. Private AI Drive Lite runs the AI model on your laptop.
+> Your prompts, documents, embeddings, and chat history stay local.
+
+This app does not send your data to cloud AI providers.
 
 ## No telemetry, no cloud
 
@@ -36,12 +38,19 @@ folder):
 ## Offline mode
 
 By default the app makes **no network calls** in its core path. There is a visible **Offline Mode**
-indicator. The only optional network feature is downloading/updating models, which is **off by
-default** and must be explicitly enabled in Settings:
+indicator (the sidebar badge and the **Privacy & Offline** screen). The only optional network
+feature is downloading/updating models, which is **off by default** and must be explicitly enabled
+in Settings:
 
 ```
 [ ] Allow internet access for model downloads and updates
 ```
+
+Even with that setting on, network access is only used if a drive **policy** permits it. A signed
+`config/policy.json` can disable network entirely — it can only restrict, never expand, what the
+toggle allows. The effective state is `policy AND your setting`. Telemetry is **always off** and has
+no toggle. A startup self-check logs the offline posture and flags (logs, never sends) any attempt
+to reach a remote host while offline; local-only connections (`127.0.0.1`/`localhost`) are exempt.
 
 ## Model downloads / updates caveat
 
