@@ -158,15 +158,17 @@ describe('generateAssistantMessage (streaming)', () => {
     expect(msg.content.length).toBeLessThan(full.content.length)
   })
 
-  it('persists the partial reply when a real-style runtime throws AbortError on stop', async () => {
+  it('persists the partial reply when a real-style runtime throws AbortError', async () => {
     // The mock returns cleanly on abort, but a real fetch-backed runtime REJECTS the
     // in-flight request with an AbortError. generateAssistantMessage must treat that as a
     // normal end (persist the partial) rather than letting it propagate (C1 regression).
+    // NOTE: no signal is passed and the controller is NOT aborted, so this exercises the
+    // `err.name === 'AbortError'` branch of isAbortError specifically — deleting that branch
+    // must fail this test.
     const db = freshDb()
     const conv = createConversation(db, {})
     appendMessage(db, { conversationId: conv.id, role: 'user', content: 'ping' })
 
-    const controller = new AbortController()
     const throwingRuntime: ModelRuntime = {
       modelId: 'real-ish',
       start: async () => {},
@@ -176,7 +178,6 @@ describe('generateAssistantMessage (streaming)', () => {
       chatStream: async function* () {
         yield 'Partial '
         yield 'answer'
-        controller.abort()
         const err = new Error('The operation was aborted')
         err.name = 'AbortError'
         throw err
@@ -185,11 +186,34 @@ describe('generateAssistantMessage (streaming)', () => {
 
     const tokens: string[] = []
     const msg = await generateAssistantMessage(db, throwingRuntime, conv.id, {
-      signal: controller.signal,
       onToken: (t) => tokens.push(t)
     })
     expect(msg.content).toBe('Partial answer')
     expect(listMessages(db, conv.id).at(-1)?.content).toBe('Partial answer')
+  })
+
+  it('propagates a NON-abort runtime error instead of swallowing it', async () => {
+    // Only aborts are treated as a normal end; a real failure must reject so the IPC layer
+    // emits chat:error (guards against isAbortError being too permissive).
+    const db = freshDb()
+    const conv = createConversation(db, {})
+    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'ping' })
+
+    const failingRuntime: ModelRuntime = {
+      modelId: 'real-ish',
+      start: async () => {},
+      stop: async () => {},
+      health: async () => ({ healthy: true, message: 'ok', port: 1 }),
+      // eslint-disable-next-line require-yield
+      chatStream: async function* () {
+        yield 'partial'
+        throw new Error('Chat request failed: HTTP 500')
+      }
+    }
+
+    await expect(generateAssistantMessage(db, failingRuntime, conv.id, {})).rejects.toThrow(/HTTP 500/)
+    // Nothing partial was persisted on a real failure.
+    expect(listMessages(db, conv.id).filter((m) => m.role === 'assistant')).toHaveLength(0)
   })
 
   it('regenerate drops the last assistant message before re-streaming', async () => {

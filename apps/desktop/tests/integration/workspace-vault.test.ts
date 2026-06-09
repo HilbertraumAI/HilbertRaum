@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { mkdtempSync, mkdirSync, existsSync, readFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import http from 'node:http'
@@ -14,6 +14,7 @@ import {
   unlockEncryptedVault,
   lockEncryptedVault,
   plaintextAllowed,
+  shredStalePlaintext,
   WorkspaceController,
   WrongPasswordError,
   type VaultPaths
@@ -180,6 +181,42 @@ describe('WorkspaceController', () => {
     ctrl.init()
     expect(ctrl.getState().state).toBe('locked')
     expect(ctrl.getState().mode).toBe('encrypted')
+  })
+
+  it('shreds a leftover plaintext DB from a crash on startup, staying LOCKED (H1)', () => {
+    const vp = freshVault()
+    createEncryptedVaultOnDisk(vp, 'pw', FAST_KDF)
+    // Simulate a hard crash before lock-on-quit: a decrypted working file + WAL/SHM are
+    // left next to the .enc.
+    writeFileSync(vp.dbPath, 'leftover plaintext database bytes')
+    writeFileSync(`${vp.dbPath}-wal`, 'wal')
+    writeFileSync(`${vp.dbPath}-shm`, 'shm')
+
+    const ctrl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctrl.init()
+
+    // The stray plaintext (+ sidecars) must be gone; the encrypted artifact is untouched;
+    // the workspace stays locked until the user provides the password.
+    expect(existsSync(vp.dbPath)).toBe(false)
+    expect(existsSync(`${vp.dbPath}-wal`)).toBe(false)
+    expect(existsSync(`${vp.dbPath}-shm`)).toBe(false)
+    expect(existsSync(vp.encPath)).toBe(true)
+    expect(ctrl.getState().state).toBe('locked')
+    // And it still unlocks correctly afterwards.
+    const u = ctrl.unlock('pw')
+    expect(u.state).toBe('unlocked')
+    ctrl.lock()
+  })
+
+  it('shredStalePlaintext removes the working file + WAL/SHM', () => {
+    const vp = freshVault()
+    writeFileSync(vp.dbPath, 'x')
+    writeFileSync(`${vp.dbPath}-wal`, 'x')
+    writeFileSync(`${vp.dbPath}-shm`, 'x')
+    shredStalePlaintext(vp)
+    expect(existsSync(vp.dbPath)).toBe(false)
+    expect(existsSync(`${vp.dbPath}-wal`)).toBe(false)
+    expect(existsSync(`${vp.dbPath}-shm`)).toBe(false)
   })
 })
 

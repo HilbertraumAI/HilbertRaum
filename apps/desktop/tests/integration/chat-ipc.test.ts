@@ -1,0 +1,162 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+
+// IPC-layer tests for registerChatIpc — the handler glue that the service-level chat
+// tests don't reach: the in-flight concurrency guard (H3), the abort→done streaming
+// mapping (C1), the regenerate-with-nothing guard, and the no-runtime/empty-message
+// errors. Only the Electron IPC transport is faked (see tests/helpers/ipc.ts); the real
+// chat service + a real temp DB run underneath.
+
+const ipcState = vi.hoisted(() => ({ handlers: new Map<string, unknown>() }))
+vi.mock('electron', () => ({
+  ipcMain: {
+    handle: (channel: string, fn: unknown) => ipcState.handlers.set(channel, fn),
+    removeHandler: (channel: string) => ipcState.handlers.delete(channel)
+  }
+}))
+
+import { registerChatIpc } from '../../src/main/ipc/registerChatIpc'
+import { inFlightStreams } from '../../src/main/ipc/inflight'
+import { IPC, STREAM } from '../../src/shared/ipc'
+import { openDatabase, type Db } from '../../src/main/services/db'
+import { createConversation, listMessages, appendMessage } from '../../src/main/services/chat'
+import type { ModelRuntime, RuntimeChatOptions, ChatMessage } from '../../src/main/services/runtime'
+import type { AppContext } from '../../src/main/services/context'
+import { invoke, invokeWithEvent, makeEvent, type IpcHandlers } from '../helpers/ipc'
+
+const handlers = ipcState.handlers as unknown as IpcHandlers
+
+/** A runtime whose chatStream parks on a released-by-the-test promise, so a stream can be
+ *  held open while a second request races it. */
+function gatedRuntime(): { runtime: ModelRuntime; release: () => void; started: Promise<void> } {
+  let release!: () => void
+  const gate = new Promise<void>((r) => (release = r))
+  let signalStarted!: () => void
+  const started = new Promise<void>((r) => (signalStarted = r))
+  const runtime: ModelRuntime = {
+    modelId: 'gated',
+    start: async () => {},
+    stop: async () => {},
+    health: async () => ({ healthy: true, message: 'ok', port: 1 }),
+    async *chatStream(_m: ChatMessage[], opts?: RuntimeChatOptions) {
+      yield 'first '
+      signalStarted()
+      await gate
+      if (opts?.signal?.aborted) return
+      yield 'second'
+    }
+  }
+  return { runtime, release, started }
+}
+
+function makeCtx(db: Db, runtime: ModelRuntime | null): AppContext {
+  return {
+    db,
+    runtime: { active: () => runtime, activeModelId: () => runtime?.modelId ?? null }
+  } as unknown as AppContext
+}
+
+function freshDb(): Db {
+  return openDatabase(join(mkdtempSync(join(tmpdir(), 'paid-chatipc-')), 'test.sqlite'))
+}
+
+beforeEach(() => {
+  ipcState.handlers.clear()
+  inFlightStreams.clear()
+})
+
+describe('registerChatIpc', () => {
+  it('throws a clear error when no model runtime is active', async () => {
+    const db = freshDb()
+    const conv = createConversation(db, {})
+    registerChatIpc(makeCtx(db, null))
+    await expect(invoke(handlers, IPC.sendChatMessage, conv.id, 'hi')).rejects.toThrow(/No model is running/)
+  })
+
+  it('rejects an empty message and an unknown conversation', async () => {
+    const db = freshDb()
+    const { runtime } = gatedRuntime()
+    const conv = createConversation(db, {})
+    registerChatIpc(makeCtx(db, runtime))
+    await expect(invoke(handlers, IPC.sendChatMessage, conv.id, '   ')).rejects.toThrow(/empty message/)
+    await expect(invoke(handlers, IPC.sendChatMessage, 'nope', 'hi')).rejects.toThrow(/Unknown conversation/)
+  })
+
+  it('streams tokens over the per-conversation channel and resolves with the persisted reply', async () => {
+    const db = freshDb()
+    const { runtime, release } = gatedRuntime()
+    const conv = createConversation(db, {})
+    registerChatIpc(makeCtx(db, runtime))
+
+    const event = makeEvent()
+    const p = invokeWithEvent(handlers, IPC.sendChatMessage, event, conv.id, 'hi') as Promise<unknown>
+    release()
+    const msg = (await p) as { role: string; content: string }
+
+    expect(msg.role).toBe('assistant')
+    expect(msg.content).toBe('first second')
+    // A token channel carried the deltas and a done channel carried the final message.
+    expect(event.sender.send).toHaveBeenCalledWith(STREAM.token(conv.id), 'first ')
+    expect(event.sender.send).toHaveBeenCalledWith(STREAM.done(conv.id), expect.objectContaining({ role: 'assistant' }))
+    // The user turn + the assistant reply are persisted; nothing left in the in-flight map.
+    expect(listMessages(db, conv.id).map((m) => m.role)).toEqual(['user', 'assistant'])
+    expect(inFlightStreams.has(conv.id)).toBe(false)
+  })
+
+  it('rejects a second concurrent stream on the same conversation without clobbering the first (H3)', async () => {
+    const db = freshDb()
+    const { runtime, release, started } = gatedRuntime()
+    const conv = createConversation(db, {})
+    registerChatIpc(makeCtx(db, runtime))
+
+    // First stream is parked mid-generation (its controller is in the in-flight map).
+    const first = invoke(handlers, IPC.sendChatMessage, conv.id, 'one')
+    await started
+    expect(inFlightStreams.has(conv.id)).toBe(true)
+    const firstController = inFlightStreams.get(conv.id)
+
+    // A second concurrent send for the same conversation is refused…
+    await expect(invoke(handlers, IPC.sendChatMessage, conv.id, 'two')).rejects.toThrow(/already being generated/)
+    // …and it did NOT overwrite the first stream's canceller.
+    expect(inFlightStreams.get(conv.id)).toBe(firstController)
+
+    release()
+    await first
+    // Only ONE assistant reply exists; the transcript is not corrupted by interleaving.
+    expect(listMessages(db, conv.id).filter((m) => m.role === 'assistant')).toHaveLength(1)
+    expect(inFlightStreams.has(conv.id)).toBe(false)
+  })
+
+  it('stopGeneration aborts the stream and the invoke resolves via done, not error (C1)', async () => {
+    const db = freshDb()
+    const { runtime, release, started } = gatedRuntime()
+    const conv = createConversation(db, {})
+    registerChatIpc(makeCtx(db, runtime))
+
+    const event = makeEvent()
+    const p = invokeWithEvent(handlers, IPC.sendChatMessage, event, conv.id, 'hi') as Promise<unknown>
+    await started
+    invokeWithEvent(handlers, IPC.stopGeneration, makeEvent(), conv.id)
+    release()
+    const msg = (await p) as { content: string }
+
+    // Aborted after the first token → partial persisted, resolves normally.
+    expect(msg.content).toBe('first ')
+    const channels = event.sender.send.mock.calls.map((c) => String(c[0]))
+    expect(channels).toContain(STREAM.done(conv.id))
+    expect(channels).not.toContain(STREAM.error(conv.id))
+  })
+
+  it('refuses to regenerate when there is no prior assistant message', async () => {
+    const db = freshDb()
+    const { runtime } = gatedRuntime()
+    const conv = createConversation(db, {})
+    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'hi' })
+    registerChatIpc(makeCtx(db, runtime))
+    await expect(
+      invoke(handlers, IPC.sendChatMessage, conv.id, '', { regenerate: true })
+    ).rejects.toThrow(/Nothing to regenerate/)
+  })
+})
