@@ -6,6 +6,8 @@ Each YAML file here describes one model. Manifests are committed to git; **model
 
 - `chat/` — chat/instruct models (Qwen3 1.7B / 4B / 8B Q4 examples)
 - `embeddings/` — embedding models (Multilingual E5 Small example)
+- `runtime-sources.yaml` — the `llama-server` sidecar download manifest (Phase 12). **Not a model
+  manifest** (it is excluded from model discovery); validated by `shared/runtime-sources.ts`.
 
 Manifests are **YAML**, discovered recursively and validated at startup (invalid files are skipped
 and logged, not fatal). See [`../docs/model-policy.md`](../docs/model-policy.md) for the field
@@ -19,3 +21,6 @@ Key points when authoring a manifest:
 - `recommended_profiles` (optional) lists the hardware profiles the model is recommended for
   (`TINY`/`LITE`/`BALANCED`/`PRO`/`UNKNOWN`) and drives the recommendation badge on the Models
   screen. `id` must be unique across all manifests.
+- `download` (optional, Phase 12) — `{ url, sha256, size_bytes?, license_url? }`. When present, the
+  `fetch-models` scripts download + SHA-256-verify the weight. A real `download.sha256` must equal a
+  real top-level `sha256`. See [`../docs/model-policy.md`](../docs/model-policy.md).

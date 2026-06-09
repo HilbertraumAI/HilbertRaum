@@ -84,6 +84,73 @@ describe('validateManifest', () => {
   })
 })
 
+describe('validateManifest — optional download block (Phase 12)', () => {
+  const downloadBlock = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
+    url: 'https://huggingface.co/Qwen/Qwen3-4B-GGUF/resolve/main/Qwen3-4B-Q4_K_M.gguf?download=true',
+    sha256: 'REPLACE_WITH_REAL_HASH',
+    size_bytes: 2700000000,
+    license_url: 'https://huggingface.co/Qwen/Qwen3-4B-GGUF/blob/main/LICENSE',
+    ...overrides
+  })
+
+  it('stays valid when the download block is absent (existing manifests)', () => {
+    const res = validateManifest(rawManifest())
+    expect(res.ok).toBe(true)
+    expect(res.manifest?.download).toBeUndefined()
+  })
+
+  it('accepts a well-formed download block and camelCases its fields', () => {
+    const res = validateManifest(rawManifest({ download: downloadBlock() }))
+    expect(res.ok).toBe(true)
+    expect(res.manifest?.download?.url).toContain('Qwen3-4B-Q4_K_M.gguf')
+    expect(res.manifest?.download?.sha256).toBe('replace_with_real_hash')
+    expect(res.manifest?.download?.sizeBytes).toBe(2700000000)
+    expect(res.manifest?.download?.licenseUrl).toContain('LICENSE')
+  })
+
+  it('treats size_bytes + license_url as optional within the block', () => {
+    const res = validateManifest(
+      rawManifest({ download: downloadBlock({ size_bytes: undefined, license_url: undefined }) })
+    )
+    expect(res.ok).toBe(true)
+    expect(res.manifest?.download?.sizeBytes).toBeNull()
+    expect(res.manifest?.download?.licenseUrl).toBeNull()
+  })
+
+  it('rejects a download block missing a url', () => {
+    const res = validateManifest(rawManifest({ download: downloadBlock({ url: '' }) }))
+    expect(res.ok).toBe(false)
+    expect(res.errors.some((e) => e.includes('download.url'))).toBe(true)
+  })
+
+  it('rejects a non-mapping download block', () => {
+    const res = validateManifest(rawManifest({ download: 'http://x' }))
+    expect(res.ok).toBe(false)
+    expect(res.errors.some((e) => e.includes('"download"'))).toBe(true)
+  })
+
+  it('rejects a negative size_bytes', () => {
+    const res = validateManifest(rawManifest({ download: downloadBlock({ size_bytes: -5 }) }))
+    expect(res.ok).toBe(false)
+    expect(res.errors.some((e) => e.includes('download.size_bytes'))).toBe(true)
+  })
+
+  it('rejects a real download.sha256 that differs from a real top-level sha256', () => {
+    const res = validateManifest(
+      rawManifest({ sha256: 'a'.repeat(64), download: downloadBlock({ sha256: 'b'.repeat(64) }) })
+    )
+    expect(res.ok).toBe(false)
+    expect(res.errors.some((e) => e.includes('download.sha256'))).toBe(true)
+  })
+
+  it('accepts matching real hashes on both levels', () => {
+    const hash = 'c'.repeat(64)
+    const res = validateManifest(rawManifest({ sha256: hash, download: downloadBlock({ sha256: hash }) }))
+    expect(res.ok).toBe(true)
+    expect(res.manifest?.download?.sha256).toBe(hash)
+  })
+})
+
 describe('isRealSha256', () => {
   it('accepts a 64-char lower-case hex string', () => {
     expect(isRealSha256('a'.repeat(64))).toBe(true)

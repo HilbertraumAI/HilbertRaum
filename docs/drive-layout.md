@@ -1,6 +1,6 @@
 # Drive & Workspace Layout
 
-_Last updated: 2026-06-09 (Phase 11)_
+_Last updated: 2026-06-09 (Phase 12)_
 
 ## How the app finds its data
 
@@ -39,6 +39,7 @@ PRIVATE_AI_DRIVE/
 ├── runtime/llama.cpp/{win,mac,linux}/          # sidecars (Phase 10)
 ├── models/{chat,embeddings}/                   # GGUF weights (git-ignored)
 ├── model-manifests/{chat,embeddings}/          # committed YAML (the only model metadata in git)
+│   └── runtime-sources.yaml                     # sidecar download manifest (Phase 12)
 ├── workspace/                                  # paid.sqlite (encrypted or plaintext)
 ├── logs/
 ├── docs/                                       # user guide, privacy, troubleshooting
@@ -63,25 +64,31 @@ The `scripts/` directory lays out and verifies a drive. The scripts are **self-c
 
 ```powershell
 # Windows
-.\scripts\prepare-drive.ps1 -Target E:\ -DryRun   # print the plan, create nothing
-.\scripts\prepare-drive.ps1 -Target E:\           # create dirs + manifests + config
-.\scripts\verify-models.ps1  -Target E:\          # checksum the weights
-.\scripts\verify-models.ps1  -Target E:\ -Generate  # write config/checksums.json
+.\scripts\prepare-drive.ps1 -Target E:\ -DryRun                 # print the plan, create nothing
+.\scripts\prepare-drive.ps1 -Target E:\                         # create dirs + manifests + config
+.\scripts\prepare-drive.ps1 -Target E:\ -WithAssets -AcceptLicense  # + download & verify assets (Phase 12)
+.\scripts\verify-models.ps1  -Target E:\ -Generate              # checksum + write config/checksums.json
 ```
 ```bash
 # macOS / Linux
 scripts/prepare-drive.sh --target /Volumes/PRIVATE_AI_DRIVE --dry-run
 scripts/prepare-drive.sh --target /Volumes/PRIVATE_AI_DRIVE
-scripts/verify-models.sh  --target /Volumes/PRIVATE_AI_DRIVE
+scripts/prepare-drive.sh --target /Volumes/PRIVATE_AI_DRIVE --with-assets --accept-license
 scripts/verify-models.sh  --target /Volumes/PRIVATE_AI_DRIVE --generate
 ```
 
 `prepare-drive` creates the directory tree, copies the committed manifests + user docs onto the
 drive, and generates `config/drive.json` (the prepared-drive marker) + `config/policy.json`
-(deny-by-default offline posture; `--dev`/`-Dev` for a plaintext developer drive). It **never**
-downloads weights or sidecar binaries — those are git-ignored and dropped in manually (R5).
-`verify-models` SHA-256s each present weight against its manifest hash (placeholder hashes report
-*UNVERIFIED*, not a pass/fail), and `--generate` captures real hashes into `config/checksums.json`.
+(deny-by-default offline posture; `--dev`/`-Dev` for a plaintext developer drive).
+
+By default it does **not** download artifacts. **Phase 12** adds `--with-assets`/`-WithAssets`, which
+then runs `fetch-models` (weights) + `fetch-runtime` (the `llama-server` sidecar) — each download is
+**resumable** and **SHA-256-verified before it counts as installed** (mismatch → delete partial +
+exit 1; placeholder hash → *UNVERIFIED*). You can still drop artifacts in by hand (R5). `verify-models`
+SHA-256s each present weight against its manifest hash, and `--generate` captures real hashes into
+`config/checksums.json`. The asset logic mirrors the unit-tested `services/assets.ts`; the sidecar
+build comes from `model-manifests/runtime-sources.yaml` (default CPU backend). See
+[`packaging.md`](packaging.md) + [`model-policy.md`](model-policy.md) for the full flow + license gate.
 
 ## Portability notes
 - No hardcoded absolute paths; everything derives from the resolved root (spec rule).

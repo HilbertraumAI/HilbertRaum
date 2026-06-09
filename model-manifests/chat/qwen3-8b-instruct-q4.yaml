@@ -13,7 +13,12 @@ supports_thinking_mode: true
 supports_tools: false
 local_path: models/chat/qwen3-8b-instruct-q4.gguf
 sha256: REPLACE_WITH_REAL_HASH
-download_url: null
+# Phase 12: where `fetch-models` downloads the weight from + what to verify it against.
+download:
+  url: https://huggingface.co/Qwen/Qwen3-8B-GGUF/resolve/main/Qwen3-8B-Q4_K_M.gguf?download=true
+  sha256: REPLACE_WITH_REAL_HASH
+  size_bytes: 5000000000
+  license_url: https://huggingface.co/Qwen/Qwen3-8B-GGUF/blob/main/LICENSE
 bundled_on_preconfigured_drive: false
 # Better answers on 16 GB+ machines or with a useful GPU (spec §7.3).
 recommended_profiles: [BALANCED, PRO]

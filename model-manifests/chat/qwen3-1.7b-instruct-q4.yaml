@@ -13,7 +13,12 @@ supports_thinking_mode: true
 supports_tools: false
 local_path: models/chat/qwen3-1.7b-instruct-q4.gguf
 sha256: REPLACE_WITH_REAL_HASH
-download_url: null
+# Phase 12: where `fetch-models` downloads the weight from + what to verify it against.
+download:
+  url: https://huggingface.co/Qwen/Qwen3-1.7B-GGUF/resolve/main/Qwen3-1.7B-Q4_K_M.gguf?download=true
+  sha256: REPLACE_WITH_REAL_HASH
+  size_bytes: 1100000000
+  license_url: https://huggingface.co/Qwen/Qwen3-1.7B-GGUF/blob/main/LICENSE
 bundled_on_preconfigured_drive: true
 # Hardware profiles this model is recommended for (drives the §7.3 picker).
 recommended_profiles: [TINY, UNKNOWN]

@@ -13,7 +13,14 @@ supports_thinking_mode: true
 supports_tools: false
 local_path: models/chat/qwen3-4b-instruct-q4.gguf
 sha256: REPLACE_WITH_REAL_HASH
-download_url: null
+# Phase 12: where `fetch-models` downloads the weight from + what to verify it against.
+# sha256 stays a placeholder until a real drive is built; capture it with
+# `verify-models --generate` after the first fetch, then promote it to the real hash.
+download:
+  url: https://huggingface.co/Qwen/Qwen3-4B-GGUF/resolve/main/Qwen3-4B-Q4_K_M.gguf?download=true
+  sha256: REPLACE_WITH_REAL_HASH
+  size_bytes: 2700000000
+  license_url: https://huggingface.co/Qwen/Qwen3-4B-GGUF/blob/main/LICENSE
 bundled_on_preconfigured_drive: true
 # Target default; recommended for LITE hardware (spec §7.3).
 recommended_profiles: [LITE]

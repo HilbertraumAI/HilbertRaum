@@ -1,0 +1,43 @@
+# Runtime sources — prebuilt llama.cpp sidecar binaries (Phase 12).
+#
+# The `llama-server` sidecar is NOT a model, so it lives here rather than in a model
+# manifest. `fetch-runtime` reads this file, picks the build matching the host
+# OS/arch (or --os/--arch/--backend overrides), downloads + SHA-256-verifies the release
+# zip, and extracts it into runtime/llama.cpp/<os>/ (the dirs services/runtime/sidecar.ts
+# `llamaOsDir` resolves: win / mac / linux).
+#
+# DEFAULT BACKEND = CPU. CPU builds run on any laptop with zero driver assumptions —
+# the right default for a portable drive that must boot on unknown hardware. GPU builds
+# (CUDA/Vulkan) are an opt-in `--backend` override, never the default (a mismatched GPU
+# build fails or runs worse than CPU).
+#
+# Schema (validated by apps/desktop/src/shared/runtime-sources.ts validateRuntimeSources):
+#   llama_cpp:
+#     version: <pinned ggml-org/llama.cpp release tag>
+#     builds:
+#       - { os, arch, backend, url, sha256, extract_to }
+#
+# sha256 stays a placeholder until a real drive is built; capture the real hash of the
+# downloaded zip and promote it here as part of a deliberate, reviewed version bump.
+
+llama_cpp:
+  version: b9196
+  builds:
+    - os: win
+      arch: x64
+      backend: cpu-avx2
+      url: https://github.com/ggml-org/llama.cpp/releases/download/b9196/llama-b9196-bin-win-avx2-x64.zip
+      sha256: REPLACE_WITH_REAL_HASH
+      extract_to: runtime/llama.cpp/win
+    - os: mac
+      arch: arm64
+      backend: metal
+      url: https://github.com/ggml-org/llama.cpp/releases/download/b9196/llama-b9196-bin-macos-arm64.zip
+      sha256: REPLACE_WITH_REAL_HASH
+      extract_to: runtime/llama.cpp/mac
+    - os: linux
+      arch: x64
+      backend: cpu
+      url: https://github.com/ggml-org/llama.cpp/releases/download/b9196/llama-b9196-bin-ubuntu-x64.zip
+      sha256: REPLACE_WITH_REAL_HASH
+      extract_to: runtime/llama.cpp/linux

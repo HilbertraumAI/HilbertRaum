@@ -5,8 +5,9 @@
 > (see "Per-phase ritual" in [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md)).
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
-_Last updated: 2026-06-09 — Phase 11 complete; MVP feature-complete (manual acceptance remains).
-Multi-persona audit remediation applied (see §8)._
+_Last updated: 2026-06-09 — Phase 12 complete (DIY asset loader: `fetch-models`/`fetch-runtime` +
+`prepare-drive --with-assets`). MVP feature-complete; Phases 0–11 + 12 done. Multi-persona audit
+remediation applied (see §8/§9)._
 
 ---
 
@@ -26,8 +27,12 @@ Multi-persona audit remediation applied (see §8)._
 | 9 | Encrypted workspace | 🟢 done |
 | 10 | Real llama.cpp runtime & embeddings | 🟢 done |
 | 11 | Drive layout, scripts & packaging | 🟢 done |
+| 12 | DIY asset loader (`fetch-assets`) | 🟢 done |
 
 Legend: ⚪ not started · 🟡 in progress · 🟢 done · 🔴 blocked
+
+> Phase 12 is the first **post-MVP** phase. Phase 13 (plug-and-play distribution) is still PLAN —
+> see [`docs/provisioning-and-distribution-plan.md`](docs/provisioning-and-distribution-plan.md).
 
 ---
 
@@ -286,6 +291,42 @@ Repo root: `f:\_coding\ai_drive`.
   `llama-server` binary **and** the GGUF weights exist; else the mock. ⇒ the app launches and the whole
   suite passes with **zero model files** (the repo/CI default). The embedder reads its model from the
   **manifest** (settings live in the possibly-encrypted DB, unreadable pre-unlock).
+- **Optional manifest `download` block (Phase 12, additive):** `shared/manifest.ts` gained an
+  **optional** `download: { url, sha256, size_bytes?, license_url? }` validated **only when present**,
+  so every existing manifest stays valid. A **real** `download.sha256` must equal a **real** top-level
+  `sha256` (same file); placeholders pass through. The four committed model manifests now carry real
+  upstream URLs (Qwen3 GGUF + multilingual-E5) with `sha256` left as the `REPLACE_WITH_REAL_HASH`
+  placeholder (a placeholder = "fetch then capture via `verify-models --generate`"). The legacy
+  `download_url: null` field was removed.
+- **`runtime-sources.yaml` (Phase 12):** the `llama-server` sidecar is NOT a model, so it gets a
+  committed `model-manifests/runtime-sources.yaml` (`llama_cpp: { version, builds:[{os,arch,backend,
+  url,sha256,extract_to}] }`) validated by `shared/runtime-sources.ts` (`validateRuntimeSources`,
+  mirroring `validateManifest`). **Excluded from model discovery** via `RESERVED_MANIFEST_FILES` in
+  `models.ts` (it would fail `validateManifest`). **Default backend = CPU** (AVX2 win/x64, Metal
+  mac/arm64, plain CPU linux/x64) — broadest-compatible for an unknown laptop; GPU is an opt-in
+  `--backend` override. `selectRuntimeBuild` returns the **first** os/arch match when no backend is
+  given (the CPU build is listed first per OS).
+- **Build-time network ≠ runtime network (LOCKED, Phase 12):** the `fetch-*` scripts make the
+  project's first deliberate network access, but run on the **drive-builder's online machine at build
+  time, NOT in the app at runtime**. The app stays 100% offline by default; the optional in-app
+  downloader (plan §12.3) stays policy-gated (`network.allow_model_downloads`, deny-by-default) **and**
+  behind the user `allowNetwork` setting. The offline guarantee is unchanged. The in-app downloader
+  was **DEFERRED** (not required for the DIY acceptance criteria).
+- **Verify-before-trust + license gate (LOCKED, Phase 12):** every downloaded artifact is
+  SHA-256-verified **before** it counts as installed — a real-hash mismatch deletes the partial and
+  exits non-zero; a **placeholder** expected hash downloads but reports *UNVERIFIED* (never a silent
+  pass). The license gate refuses to plan/fetch a model whose `license_review.status != approved`
+  unless `--accept-license`/`-AcceptLicense` is set (license + `license_url` printed first). Downloads
+  are **resumable** (`curl -C -` / `aria2c`) and **idempotent** (present + verified → skip fast).
+- **`services/assets.ts` is the canonical asset-loader logic (Phase 12):** mirrors `drive.ts` — the
+  scripts re-implement the same plan natively (self-contained, no Node/npm). Pure/testable:
+  `planModelDownloads` (fs reads, NO network), `selectRuntimeBuild`, `planRuntimeDownload`
+  (escape-guarded paths reusing `weightPath` semantics), `verifyDownloadedFile`, and an injected-fetch
+  `downloadToFile`/`fetchAndVerify` seam (the network seam a future §12.3 downloader reuses; tests
+  drive it with a fake `fetch` so the **no-network assertion holds**). The scripts' `.ps1` files are
+  **pure ASCII** (Windows PowerShell 5.1 reads non-BOM scripts in the ANSI codepage; a UTF-8 em-dash's
+  `0x94` byte decodes to `"` and breaks a double-quoted string — same class of bug as the Phase-11
+  BOM issue).
 
 ---
 
@@ -628,6 +669,38 @@ stop, regenerate, per-message copy, and the no-runtime empty state.
   `docs/packaging.md` + `docs/drive-layout.md` extended (portable build, the scripts, win/mac/linux
   reconciliation). prepare-drive copies user-guide/troubleshooting + `PRIVACY.md` onto the drive.
 
+### Provisioning / asset loader (Phase 12 live)
+✅ **Schema** — `shared/manifest.ts` `DownloadSpec` + optional `ModelManifest.download` (validated only
+  when present; real `download.sha256` must equal a real top-level `sha256`). `shared/runtime-sources.ts`
+  `RuntimeBuild`/`RuntimeSources` + `validateRuntimeSources` (mirror `validateManifest`). The 4 committed
+  model manifests carry real upstream URLs + placeholder hashes; `model-manifests/runtime-sources.yaml`
+  pins `ggml-org/llama.cpp@b9196`, one CPU build per OS. `models.ts` `RESERVED_MANIFEST_FILES` excludes
+  `runtime-sources.yaml` from model discovery.
+✅ **`services/assets.ts`** — the canonical, unit-tested asset logic (mirrors `drive.ts`; NO real network):
+- `planModelDownloads(root, manifests, {only?, acceptLicense?}) → ModelDownloadTask[]` — only manifests
+  with a `download` block; reads fs to mark `present-verified`/`present-unverified`/`download`/
+  `license-blocked` (license gate ∧ `acceptLicense`); reuses `weightPath`/`verifyChecksum`.
+- `selectRuntimeBuild(sources, {os, arch, backend?}) → RuntimeBuild | null` (default = first os/arch
+  match = the CPU build) · `planRuntimeDownload(root, build, version) → {url, zipDest, extractTo,
+  binaryPath, sha256, ...}` (escape-guarded) · `runtimeBinaryName(os)`.
+- `verifyDownloadedFile(path, expected) → {ok, actual, reason}` (placeholder/missing/mismatch are NOT a
+  pass) · `downloadToFile(url, dest, {fetchImpl?, onProgress?})` + `fetchAndVerify(task, deps)` (injected
+  fetch; mismatch deletes the partial + throws) · `formatAssetPlan(modelTasks, runtimePlan)`.
+✅ **`scripts/`** (self-contained, dual `.ps1`/`.sh`, OS-native downloader; `.ps1` pure ASCII):
+- `fetch-models.{ps1,sh}` — `-Target`/`--target` (req), `-Only`/`--only`, `-AcceptLicense`/
+  `--accept-license`, `-DryRun`/`--dry-run`. Per `download`-block manifest: download (resume via
+  `curl -C -`/`aria2c`) → SHA-256-verify vs the manifest → mismatch deletes partial + **exit 1**;
+  placeholder → *UNVERIFIED*; present+verified → skip. License gate before the first fetch.
+- `fetch-runtime.{ps1,sh}` — `-Target`/`--target` (req), `-Os/-Arch/-Backend` overrides, `-DryRun`.
+  Reads `runtime-sources.yaml`, picks the host build (default CPU), downloads + verifies the zip,
+  `Expand-Archive`/`unzip`/`ditto` into `runtime/llama.cpp/<os>/`, `chmod +x` on mac/linux. Idempotent.
+- `prepare-drive.{ps1,sh}` gained `-WithAssets`/`--with-assets` (+ forwards `-AcceptLicense`): after the
+  layout, runs `fetch-models` + `fetch-runtime` so one command yields a launch-ready drive. Without the
+  flag, behaviour is unchanged. Then points the user at `verify-models --generate`.
+✅ **In-app downloader (plan §12.3) = DEFERRED** (not required for DIY acceptance; deny-by-default + the
+  policy/`allowNetwork` gates are documented for when it lands). **Real downloads + USB-drive launch =
+  manual (R5).**
+
 ### MVP Definition of Done (§4 / spec §22) — checklist
 | Criterion | Status |
 |---|---|
@@ -657,19 +730,35 @@ CI are unaffected.
 
 ## 5. Next actions (do these next) — POST-MVP
 
-**Phases 0–11 are complete. The MVP is feature-complete; the remaining items are MANUAL acceptance
-(R2/R5) and post-MVP polish.** In rough priority:
+**Phases 0–12 are complete. The MVP is feature-complete + the DIY asset loader ships; the remaining
+items are MANUAL acceptance (R2/R5) and Phase 13 (plug-and-play distribution).** In rough priority:
 
-1. **Manual acceptance (needs hardware/artifacts not in the repo):**
-   - Build the real portable `.exe` (`npm run package:win`). Watch for npm-workspace dep hoisting —
-     electron-builder collects prod deps; if the hoisted `node_modules` confuses it, build from
-     `apps/desktop` or set `nohoist`/`node-linker`. Needs dev-time network for the Electron binary (R2).
-   - Provision a real drive: `prepare-drive` → drop real GGUF weights + a `llama-server` build →
-     `verify-models -Generate` (capture real hashes; replace the manifest `REPLACE_WITH_REAL_HASH`
-     placeholders) → launch the `.exe` from the drive → run the spec §17 demo with Wi-Fi off.
-2. **Post-MVP polish (optional):** real model hashes committed into manifests once weights exist; an
-   icon/`buildResources` for electron-builder; a one-click drive launcher that sets `PAID_DRIVE_ROOT`;
-   ANN vector index (sqlite-vec/HNSW) upgrade; Argon2id KDF path (the descriptor already supports it).
+1. **Phase 13 — plug-and-play distribution (the next build phase):** the per-OS launcher
+   (`Start Private AI Drive.*` setting `PAID_DRIVE_ROOT` from its own location), code signing +
+   notarization (the make-or-break non-code task), and the `build-commercial-drive` master pipeline
+   (prepare-drive → fetch-models → fetch-runtime → package → sign → verify). See
+   `docs/provisioning-and-distribution-plan.md` Phase 13 (§13.1–§13.5).
+2. **Manual acceptance (needs hardware/artifacts not in the repo, R2/R5):**
+   - Provision a real drive end-to-end: `prepare-drive -WithAssets -AcceptLicense` (now downloads +
+     verifies the weights + sidecar) → `verify-models -Generate` to capture the real hashes and promote
+     the manifest `REPLACE_WITH_REAL_HASH` placeholders → build the portable `.exe`
+     (`npm run package:win`; watch npm-workspace dep hoisting) → launch from the drive → spec §17 demo
+     with Wi-Fi off. The real GGUF download + the live run are the one manual step.
+3. **Post-MVP polish (optional):** the in-app model downloader (plan §12.3, deferred — policy-gated +
+   deny-by-default, reusing `assets.ts` `fetchAndVerify`); an icon/`buildResources` for
+   electron-builder; ANN vector index (sqlite-vec/HNSW) upgrade.
+
+Phase 12 is DONE: typecheck clean, **287/287 tests pass** (was 247 — +40: manifest `download`-block
+validation [present/absent/malformed/size/license/real-hash-equality], `validateRuntimeSources`
+[8 tests], and `assets.test.ts` (28): `planModelDownloads` [no-block excluded, missing→download,
+license blocked-vs-accepted-vs-approved, present-verified/unverified/mismatch, `--only`],
+`selectRuntimeBuild` [default-CPU/backend-override/no-match], `planRuntimeDownload` [paths +
+escape-guard + binary name], `verifyDownloadedFile` [ok/mismatch/placeholder/missing],
+`downloadToFile`/`fetchAndVerify` with an **injected fetch** [streams to disk, non-OK throws, verify
+pass, mismatch deletes+throws], `formatAssetPlan`). `NODE_OPTIONS=--use-system-ca npm run build` green
+(main bundle **103.34 kB** — `assets.ts` is a tested helper, not yet in the runtime path). **No new
+deps.** Both script families dry-run-smoke-tested on Windows PowerShell + bash. (Real downloads +
+USB-drive demo = manual, R5.)
 
 Phase 11 is DONE: typecheck clean, **198/198 tests pass** (190 prior + 8 new in `tests/integration/
 drive.test.ts`: drive-layout dirs use **win/mac/linux** (not windows/macos/linux); `drive.json` is a

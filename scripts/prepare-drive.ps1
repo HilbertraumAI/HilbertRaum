@@ -29,16 +29,28 @@
   allowed). Default is the commercial posture (encryption required, models must verify).
   Network is OFF either way (deny-by-default offline guarantee).
 
+.PARAMETER WithAssets
+  After laying out the tree, download + verify the model weights and the llama.cpp sidecar
+  (invokes fetch-models.ps1 + fetch-runtime.ps1) so one command yields a launch-ready
+  drive. Build-time network only — the app itself stays offline. Without this flag the
+  behaviour is unchanged (layout + config; you drop artifacts in by hand).
+
+.PARAMETER AcceptLicense
+  Forwarded to fetch-models.ps1 (accept the model licenses) when -WithAssets is used.
+
 .EXAMPLE
   .\scripts\prepare-drive.ps1 -Target E:\ -DryRun
   .\scripts\prepare-drive.ps1 -Target E:\
+  .\scripts\prepare-drive.ps1 -Target E:\ -WithAssets -AcceptLicense
 #>
 [CmdletBinding()]
 param(
   [Parameter(Mandatory = $true)] [string] $Target,
   [switch] $DryRun,
   [switch] $Force,
-  [switch] $Dev
+  [switch] $Dev,
+  [switch] $WithAssets,
+  [switch] $AcceptLicense
 )
 
 $ErrorActionPreference = 'Stop'
@@ -162,11 +174,31 @@ Write-JsonFile 'config/drive.json' $DriveJson
 Write-JsonFile 'config/policy.json' $PolicyJson
 Write-Host ''
 
-# --- What you must add manually (R5) ------------------------------------------------
-Write-Host 'Next steps (artifacts NOT provisioned by this script):' -ForegroundColor Cyan
-Write-Host '  1. Drop GGUF weights into models/chat/ and models/embeddings/ (see manifest local_path).'
-Write-Host '  2. Drop llama-server binaries into runtime/llama.cpp/{win,mac,linux}/.'
-Write-Host "  3. Run scripts\verify-models.ps1 -Target '$Target' to verify checksums."
+# --- Optional: download + verify the assets (Phase 12) ------------------------------
+if ($WithAssets) {
+  Write-Host ''
+  Write-Host 'Fetching assets (build-time network; the app itself stays offline):' -ForegroundColor Cyan
+  $fetchModels = Join-Path $PSScriptRoot 'fetch-models.ps1'
+  $fetchRuntime = Join-Path $PSScriptRoot 'fetch-runtime.ps1'
+  $modelArgs = @('-Target', $Target)
+  if ($AcceptLicense) { $modelArgs += '-AcceptLicense' }
+  if ($DryRun) { $modelArgs += '-DryRun' }
+  & $fetchModels @modelArgs
+  if ($LASTEXITCODE -ne 0) { Write-Error 'fetch-models failed.'; exit 1 }
+  $runtimeArgs = @('-Target', $Target)
+  if ($DryRun) { $runtimeArgs += '-DryRun' }
+  & $fetchRuntime @runtimeArgs
+  if ($LASTEXITCODE -ne 0) { Write-Error 'fetch-runtime failed.'; exit 1 }
+  Write-Host ''
+  Write-Host "Now capture real hashes: scripts\verify-models.ps1 -Target '$Target' -Generate" -ForegroundColor Cyan
+} else {
+  # --- What you must add manually (R5) ----------------------------------------------
+  Write-Host 'Next steps (artifacts NOT provisioned without -WithAssets):' -ForegroundColor Cyan
+  Write-Host '  1. Drop GGUF weights into models/chat/ and models/embeddings/ (see manifest local_path),'
+  Write-Host "     or re-run with -WithAssets to download + verify them (scripts\fetch-models.ps1)."
+  Write-Host '  2. Drop llama-server binaries into runtime/llama.cpp/{win,mac,linux}/ (or -WithAssets).'
+  Write-Host "  3. Run scripts\verify-models.ps1 -Target '$Target' to verify checksums."
+}
 Write-Host ''
 Write-Host 'Launch from the drive with PAID_DRIVE_ROOT set to the drive root:' -ForegroundColor Cyan
 Write-Host "  `$env:PAID_DRIVE_ROOT = '$Target'"

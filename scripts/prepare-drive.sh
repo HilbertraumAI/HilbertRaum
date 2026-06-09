@@ -8,14 +8,20 @@
 #
 # Canonical, unit-tested reference: apps/desktop/src/main/services/drive.ts — keep in sync.
 #
+# --with-assets downloads + verifies the model weights + llama.cpp sidecar (Phase 12), so
+# one command yields a launch-ready drive (build-time network; the app stays offline).
+#
 # Usage:
-#   scripts/prepare-drive.sh --target /Volumes/PRIVATE_AI_DRIVE [--dry-run] [--force] [--dev]
+#   scripts/prepare-drive.sh --target /Volumes/PRIVATE_AI_DRIVE [--dry-run] [--force] \
+#       [--dev] [--with-assets] [--accept-license]
 set -euo pipefail
 
 TARGET=""
 DRY_RUN=0
 FORCE=0
 DEV=0
+WITH_ASSETS=0
+ACCEPT_LICENSE=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -24,6 +30,8 @@ while [[ $# -gt 0 ]]; do
     --dry-run) DRY_RUN=1; shift ;;
     --force) FORCE=1; shift ;;
     --dev) DEV=1; shift ;;
+    --with-assets) WITH_ASSETS=1; shift ;;
+    --accept-license) ACCEPT_LICENSE=1; shift ;;
     -h|--help) grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; exit 2 ;;
   esac
@@ -147,10 +155,24 @@ write_json "config/drive.json" "$DRIVE_JSON"
 write_json "config/policy.json" "$POLICY_JSON"
 echo
 
-echo "Next steps (artifacts NOT provisioned by this script, R5):"
-echo "  1. Drop GGUF weights into models/chat/ and models/embeddings/ (see manifest local_path)."
-echo "  2. Drop llama-server binaries into runtime/llama.cpp/{win,mac,linux}/."
-echo "  3. Run scripts/verify-models.sh --target \"$TARGET\" to verify checksums."
+if [[ $WITH_ASSETS -eq 1 ]]; then
+  echo "Fetching assets (build-time network; the app itself stays offline):"
+  MODEL_ARGS=(--target "$TARGET")
+  [[ $ACCEPT_LICENSE -eq 1 ]] && MODEL_ARGS+=(--accept-license)
+  [[ $DRY_RUN -eq 1 ]] && MODEL_ARGS+=(--dry-run)
+  bash "$SCRIPT_DIR/fetch-models.sh" "${MODEL_ARGS[@]}"
+  RUNTIME_ARGS=(--target "$TARGET")
+  [[ $DRY_RUN -eq 1 ]] && RUNTIME_ARGS+=(--dry-run)
+  bash "$SCRIPT_DIR/fetch-runtime.sh" "${RUNTIME_ARGS[@]}"
+  echo
+  echo "Now capture real hashes: scripts/verify-models.sh --target \"$TARGET\" --generate"
+else
+  echo "Next steps (artifacts NOT provisioned without --with-assets):"
+  echo "  1. Drop GGUF weights into models/chat/ and models/embeddings/ (see manifest local_path),"
+  echo "     or re-run with --with-assets to download + verify them (scripts/fetch-models.sh)."
+  echo "  2. Drop llama-server binaries into runtime/llama.cpp/{win,mac,linux}/ (or --with-assets)."
+  echo "  3. Run scripts/verify-models.sh --target \"$TARGET\" to verify checksums."
+fi
 echo
 echo "Launch from the drive with PAID_DRIVE_ROOT set to the drive root:"
 echo "  export PAID_DRIVE_ROOT=\"$TARGET\""

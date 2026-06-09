@@ -1,11 +1,12 @@
 # Packaging — portable build, sidecars & model weights
 
-_Last updated: 2026-06-09 (Phase 11)_
+_Last updated: 2026-06-09 (Phase 12)_
 
 This documents **how the app is packaged into a portable build**, **where the runtime binaries and
 model weights live on the drive**, and that those artifacts are **not** in the git repository.
-Phase 10 introduced the runtime-side layout; Phase 11 adds the `electron-builder` portable build +
-the `prepare-drive`/`verify-models` scripts.
+Phase 10 introduced the runtime-side layout; Phase 11 added the `electron-builder` portable build +
+the `prepare-drive`/`verify-models` scripts; Phase 12 adds the scripted **asset loader**
+(`fetch-models` / `fetch-runtime`) that downloads + verifies the weights and sidecar.
 
 ## Hard rules (recap)
 - **Never commit** model weights, sidecar binaries, user data, embeddings, logs, or generated files
@@ -47,13 +48,14 @@ the `prepare-drive`/`verify-models` scripts.
   (`/v1/chat/completions` streaming for chat, `/v1/embeddings` for the embedder). The processes are
   killed on `stop()` and on `will-quit` (no orphaned `llama-server`).
 
-## Acquiring the binaries / weights (manual, R5)
-Phase 10's live path needs artifacts **not in the repo**:
-- a `llama.cpp` `llama-server` build for your OS (place under `runtime/llama.cpp/<os>/`), and
-- the GGUF weights named by the manifests (place under `models/...`).
+## Acquiring the binaries / weights — scripted (Phase 12) or manual (R5)
+The live path needs artifacts **not in the repo**:
+- a `llama.cpp` `llama-server` build for your OS (under `runtime/llama.cpp/<os>/`), and
+- the GGUF weights named by the manifests (under `models/...`).
 
-With those present, start a chat model on the Models screen to get real on-device inference and real
-tokens/sec in the benchmark.
+**Phase 12 automates this** with the `fetch-*` scripts (below) — `prepare-drive --with-assets`
+downloads + SHA-256-verifies both in one command. You can still drop them in by hand. With either,
+start a chat model on the Models screen to get real on-device inference and real tokens/sec.
 
 ## Portable build (electron-builder, Phase 11)
 
@@ -103,18 +105,32 @@ out on a fresh machine with no Node/npm); their layout + config shapes mirror th
 
 | Script | Purpose |
 |---|---|
-| `prepare-drive.{ps1,sh}` | Create the directory tree, copy manifests + user docs, generate `config/{drive,policy}.json`. `-DryRun`/`--dry-run` prints the plan. `-Dev`/`--dev` → a plaintext developer drive. |
+| `prepare-drive.{ps1,sh}` | Create the directory tree, copy manifests + user docs, generate `config/{drive,policy}.json`. `-DryRun`/`--dry-run` prints the plan. `-Dev`/`--dev` → a plaintext developer drive. **`-WithAssets`/`--with-assets`** (Phase 12) then runs `fetch-models` + `fetch-runtime` (forwarding `-AcceptLicense`/`--accept-license`) for a launch-ready drive. |
+| `fetch-models.{ps1,sh}` | (Phase 12) Download + **resume** + **SHA-256-verify** each weight with a `download:` block to its `models/...` path. `-Only <id>`/`--only` for one model; `-AcceptLicense`/`--accept-license` for the license gate; `-DryRun`/`--dry-run`. Real-hash mismatch → delete partial + exit 1. Idempotent (present + verified → skip). |
+| `fetch-runtime.{ps1,sh}` | (Phase 12) Read `runtime-sources.yaml`, pick the host build (`-Os/-Arch/-Backend` overrides; default CPU), download + verify the zip, extract into `runtime/llama.cpp/<os>/` (`chmod +x` on mac/linux). Idempotent; `-DryRun`/`--dry-run`. |
 | `verify-models.{ps1,sh}` | SHA-256 each present weight vs its manifest hash (placeholder → *UNVERIFIED*; real mismatch → fail/exit 1). `-Generate`/`--generate` writes `config/checksums.json`. |
 | `setup-dev.{ps1,sh}` | Dev bootstrap: `NODE_OPTIONS=--use-system-ca npm install` (R6) + build + test smoke. |
 
-End-to-end (Windows example):
+The asset-planning + verify logic is mirrored from the unit-tested
+`apps/desktop/src/main/services/assets.ts` (the canonical reference — keep in sync), exactly as
+`prepare-drive` mirrors `drive.ts`. The scripts use the **OS-native downloader** (`curl` /
+`Invoke-WebRequest`, preferring `aria2c` if installed) — no new npm/script deps.
+
+End-to-end (Windows example — one command provisions everything):
 ```powershell
-.\scripts\prepare-drive.ps1 -Target E:\          # lay out the drive
-# ... drop GGUF weights into E:\models\... and llama-server into E:\runtime\llama.cpp\win\ ...
-.\scripts\verify-models.ps1 -Target E:\ -Generate  # verify + record real hashes
-npm run package:win                               # build the portable .exe
-copy .\apps\desktop\release\*.exe E:\             # place the launcher on the drive
+.\scripts\prepare-drive.ps1 -Target E:\ -WithAssets -AcceptLicense   # layout + download + verify
+.\scripts\verify-models.ps1 -Target E:\ -Generate                    # record real hashes
+npm run package:win                                                  # build the portable .exe
+copy .\apps\desktop\release\*.exe E:\                                 # place the launcher on the drive
 ```
+
+Or the older manual flow (no download): `prepare-drive` (no `-WithAssets`) → drop GGUF weights into
+`E:\models\…` + `llama-server` into `E:\runtime\llama.cpp\win\` by hand → `verify-models -Generate`.
+
+> **Build-time network ≠ runtime network.** The `fetch-*` scripts make the project's first
+> deliberate network access, but they run on the **builder's** machine at build time. The app stays
+> 100% offline by default; the optional in-app downloader (plan §12.3, deferred) is policy-gated +
+> deny-by-default. This does not weaken the offline guarantee.
 
 These artifacts (weights, sidecar binaries, the workspace DB, logs, the portable `.exe`) are all
 **git-ignored** — they live on the drive, never in the repo.

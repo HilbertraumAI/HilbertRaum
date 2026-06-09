@@ -19,6 +19,27 @@ export interface LicenseReview {
   notes: string
 }
 
+/**
+ * Optional download metadata (Phase 12). When present, the `fetch-models` script (and
+ * the canonical `services/assets.ts`) know where to fetch the weight from and what to
+ * verify it against. Validated only when the `download` block is present, so every
+ * existing manifest stays valid without it.
+ */
+export interface DownloadSpec {
+  /** Upstream URL for the weight (e.g. a Hugging Face `?download=true` link). */
+  url: string
+  /**
+   * Expected SHA-256 (lower-case hex) of the downloaded file. May be a placeholder
+   * until a real drive is built; when it is a real hash it MUST equal the top-level
+   * `sha256` (they describe the same file).
+   */
+  sha256: string
+  /** Expected size in bytes (informational; for progress + a sanity check). */
+  sizeBytes: number | null
+  /** URL of the model license, shown at the license-acceptance prompt. */
+  licenseUrl: string | null
+}
+
 /** A fully-validated manifest. Field names are camelCased from the YAML snake_case. */
 export interface ModelManifest {
   id: string
@@ -39,6 +60,8 @@ export interface ModelManifest {
   /** Hardware profiles this model is recommended for (drives §7.3 recommendation). */
   recommendedProfiles: HardwareProfile[]
   licenseReview: LicenseReview
+  /** Optional download metadata (Phase 12). Absent on manifests with no upstream source. */
+  download?: DownloadSpec
 }
 
 export interface ValidationResult {
@@ -143,6 +166,49 @@ export function validateManifest(raw: unknown): ValidationResult {
     }
   }
 
+  // Optional download block (Phase 12). Validated only when present, so existing
+  // manifests with no `download:` stay valid. Sub-fields are checked individually.
+  let download: DownloadSpec | undefined
+  const dl = raw['download']
+  if (dl !== undefined) {
+    if (!isObject(dl)) {
+      errors.push('"download" must be a mapping (url/sha256/size_bytes/license_url)')
+    } else {
+      const url = dl['url']
+      if (typeof url !== 'string' || url.trim() === '') {
+        errors.push('"download.url" is required and must be a non-empty string')
+      }
+      const dlShaRaw = dl['sha256']
+      if (typeof dlShaRaw !== 'string' || dlShaRaw.trim() === '') {
+        errors.push('"download.sha256" is required and must be a string (hash or placeholder)')
+      }
+      const dlSha = typeof dlShaRaw === 'string' ? dlShaRaw.trim().toLowerCase() : ''
+      // A real download hash must equal the real top-level hash (same file).
+      if (isRealSha256(dlSha) && isRealSha256(sha256) && dlSha !== sha256) {
+        errors.push('"download.sha256" must equal the top-level "sha256" when both are real hashes')
+      }
+      const sizeRaw = dl['size_bytes']
+      let sizeBytes: number | null = null
+      if (sizeRaw !== undefined && sizeRaw !== null) {
+        if (typeof sizeRaw !== 'number' || !Number.isFinite(sizeRaw) || sizeRaw < 0) {
+          errors.push('"download.size_bytes" must be a non-negative number when present')
+        } else {
+          sizeBytes = sizeRaw
+        }
+      }
+      const licenseUrlRaw = dl['license_url']
+      if (licenseUrlRaw !== undefined && licenseUrlRaw !== null && typeof licenseUrlRaw !== 'string') {
+        errors.push('"download.license_url" must be a string when present')
+      }
+      download = {
+        url: typeof url === 'string' ? url.trim() : '',
+        sha256: dlSha,
+        sizeBytes,
+        licenseUrl: typeof licenseUrlRaw === 'string' ? licenseUrlRaw.trim() : null
+      }
+    }
+  }
+
   if (errors.length > 0) {
     return { ok: false, errors }
   }
@@ -165,7 +231,8 @@ export function validateManifest(raw: unknown): ValidationResult {
       localPath,
       sha256,
       recommendedProfiles,
-      licenseReview
+      licenseReview,
+      ...(download ? { download } : {})
     }
   }
 }

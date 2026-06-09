@@ -19,6 +19,12 @@ import { getSettings, updateSettings } from './settings'
 const SUPPORTED_RUNTIMES = new Set(['llama_cpp', 'llama.cpp'])
 const SUPPORTED_FORMATS = new Set(['gguf'])
 const MANIFEST_EXTENSIONS = new Set(['.yaml', '.yml'])
+/**
+ * Reserved filenames under `model-manifests/` that are NOT model manifests (Phase 12).
+ * `runtime-sources.yaml` describes the llama.cpp sidecar builds, not a model, and would
+ * fail `validateManifest` — skip it during model discovery (it has its own validator).
+ */
+const RESERVED_MANIFEST_FILES = new Set(['runtime-sources.yaml', 'runtime-sources.yml'])
 
 export interface DiscoveredManifest {
   manifest: ModelManifest
@@ -58,7 +64,10 @@ function collectManifestFiles(dir: string): string[] {
     const full = join(dir, entry.name)
     if (entry.isDirectory()) {
       out.push(...collectManifestFiles(full))
-    } else if (MANIFEST_EXTENSIONS.has(extname(entry.name))) {
+    } else if (
+      MANIFEST_EXTENSIONS.has(extname(entry.name)) &&
+      !RESERVED_MANIFEST_FILES.has(entry.name.toLowerCase())
+    ) {
       out.push(full)
     }
   }

@@ -1,6 +1,6 @@
 # Provisioning & Distribution Plan — DIY asset loader + plug-and-play drive
 
-_Last updated: 2026-06-09 — proposed (Phases 12–13). Status: PLAN, not yet implemented._
+_Last updated: 2026-06-09 — **Phase 12 DONE** (DIY asset loader shipped); Phase 13 still PLAN._
 
 This plan covers the two pieces of "polish" that turn the feature-complete MVP into something
 others can actually obtain and run:
@@ -60,11 +60,20 @@ portable — **does not apply to us**, because `resolvePaths()` already redirect
 
 ---
 
-## Phase 12 — DIY asset loader (`fetch-assets`)
+## Phase 12 — DIY asset loader (`fetch-assets`) — ✅ DONE
 
 **Goal:** a technical user with a fresh clone and an internet connection can run a single command
 and end up with a drive that has verified weights + the right `llama-server` binary in the right
 places, ready to launch. This closes the R5 "artifacts not in the repo" gap for the DIY path.
+
+> **Status (2026-06-09): implemented + committed.** Shipped: the optional manifest `download` block
+> (`shared/manifest.ts`), `model-manifests/runtime-sources.yaml` + its validator
+> (`shared/runtime-sources.ts`), the canonical `services/assets.ts` (download planning, runtime-build
+> selection, verify + injected-fetch download helpers — all unit-tested with **no real network**),
+> the self-contained `scripts/fetch-models.{ps1,sh}` + `scripts/fetch-runtime.{ps1,sh}`, and the
+> `prepare-drive --with-assets`/`-WithAssets` flag. The optional **in-app downloader (§12.3) was
+> deferred** (not required for the DIY acceptance criteria). Real downloads + a USB-drive launch
+> remain the manual acceptance step (R5). See `BUILD_STATE.md` §"Provisioning / asset loader".
 
 ### 12.1 Source of truth: extend the manifests, add a runtime-sources file
 
