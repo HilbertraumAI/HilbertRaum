@@ -182,7 +182,11 @@ export function weightPath(rootPath: string, manifest: ModelManifest): string {
   const full = join(rootPath, manifest.localPath)
   const base = resolve(rootPath)
   const resolved = resolve(full)
-  if (resolved !== base && !resolved.startsWith(base + sep)) {
+  // A bare drive root (e.g. `D:\`) already ends in the separator, so `base + sep` would
+  // double it (`D:\\`) and reject every legitimate path. Only append a separator when the
+  // base does not already end in one.
+  const prefix = base.endsWith(sep) ? base : base + sep
+  if (resolved !== base && !resolved.startsWith(prefix)) {
     throw new Error(`Manifest local_path escapes the drive root: ${manifest.localPath}`)
   }
   return full

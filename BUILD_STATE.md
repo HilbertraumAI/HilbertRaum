@@ -1341,3 +1341,30 @@ but failed at the asset-fetch step with `PositionalParameterNotFound` for `-Acce
 quick drive test prefer per-model fetches: `fetch-models.ps1 -Target D:\ -Only qwen3-4b-instruct-q4`
 then `fetch-runtime.ps1 -Target D:\`. This is part of the still-open manual-acceptance path (§14):
 fetch weights → `verify-models --generate` → live smoke test.
+
+### Follow-on: weight-path containment false-positive at a bare drive root (`D:\`)
+
+First `npm run dev` against the prepared `D:\` drive created the encrypted workspace + benchmarked
+fine, then every `models:list` threw `Manifest local_path escapes the drive root`.
+
+- **Root cause:** `weightPath` (and the twin `resolveWithinRoot` in `assets.ts`) guarded against
+  `..`/absolute escapes with `resolved.startsWith(base + sep)`. For a **bare drive root** `resolve('D:\')`
+  keeps the trailing separator, so `base + sep` doubled it (`D:\\`) and rejected every legitimate weight.
+  Latent because the app-data fallback root (`C:\Users\…\AppData`) has no trailing separator — only an
+  actual drive-root launch (the real portable-drive case) hits it. Tests used `/drive`, so they missed it.
+- **Fix:** [`models.ts`](apps/desktop/src/main/services/models.ts) + [`assets.ts`](apps/desktop/src/main/services/assets.ts)
+  now compute `prefix = base.endsWith(sep) ? base : base + sep`. Added a regression test in
+  `tests/integration/models.test.ts` using `parse(process.cwd()).root` (a real trailing-sep root,
+  cross-platform).
+- **Gate:** typecheck clean, **362/362 tests** (+1).
+
+### Promoting the model hash on the test drive
+
+Drive was prepared with the **commercial posture** (`require_sha256_match: true`,
+`allow_unverified_models: false`), which is authoritative and overrides dev-build leniency
+(`registerModelIpc.ts developerLeniency`). So the placeholder-hash weight was rejected
+(`computeInstallState → checksum_failed`). Note `verify-models --generate` only writes
+`config/checksums.json` — it does NOT rewrite the manifest `sha256`. To run the real model on the
+commercial drive the real hash must be promoted into the manifest's top-level `sha256`. Done on the
+**drive copy** of `model-manifests/chat/qwen3-4b-instruct-q4.yaml` (repo manifests intentionally keep
+the placeholder per §14); model then shows VERIFIED.

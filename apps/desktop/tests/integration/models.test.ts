@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { createHash } from 'node:crypto'
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, parse } from 'node:path'
 import { stringify } from 'yaml'
 import { openDatabase } from '../../src/main/services/db'
 import { seedSettings, getSettings } from '../../src/main/services/settings'
@@ -129,6 +129,15 @@ describe('weightPath', () => {
     expect(() => weightPath('/drive', asManifest({ local_path: '../../etc/passwd' }))).toThrow(
       /escapes the drive root/
     )
+  })
+
+  it('accepts a bare drive/filesystem root that already ends in a separator', () => {
+    // A portable drive is launched from a bare root (e.g. `D:\`). resolve() keeps the
+    // trailing separator there, so a naive `base + sep` containment check would double it
+    // (`D:\\`) and wrongly reject every weight. Regression for the D:\ launch bug.
+    const root = parse(process.cwd()).root // `C:\` on Windows, `/` on POSIX
+    expect(() => weightPath(root, asManifest())).not.toThrow()
+    expect(weightPath(root, asManifest())).toBe(join(root, 'models/chat/qwen3-4b-instruct-q4.gguf'))
   })
 })
 
