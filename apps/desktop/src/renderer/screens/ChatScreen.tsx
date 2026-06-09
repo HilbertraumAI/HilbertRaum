@@ -1,11 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { Conversation, Message } from '@shared/types'
+import type { Citation, Conversation, Message } from '@shared/types'
 
-// Chat screen (spec §7.6 / Milestone 3). Conversation list on the left, a streamed
-// message view on the right. Tokens arrive over the preload `onToken(convId)`
-// channel; `sendChatMessage` resolves with the final persisted assistant message.
-// A chat needs a running model — when none is running we show an empty state that
-// points at the Models screen (sendChatMessage will otherwise reject).
+// Chat screen (spec §7.6 / §7.8 — Milestones 3 & 6). Conversation list on the left, a
+// streamed message view on the right. Two modes share the same streaming contract:
+//   • "Chat"          → sendChatMessage (plain assistant)
+//   • "Ask Documents" → askDocuments    (RAG: grounded answer + [Sn] citations)
+// Tokens arrive over the preload `onToken(convId)` channel; both calls resolve with the
+// final persisted assistant message. A mode is fixed per conversation (its `mode` field);
+// the toggle picks the mode for the NEXT new conversation. Both need a running model — when
+// none is running we show an empty state pointing at the Models screen.
+
+type Mode = 'chat' | 'documents'
 
 interface Props {
   onNavigate: (screen: string) => void
@@ -15,6 +20,7 @@ export function ChatScreen({ onNavigate }: Props): JSX.Element {
   const [conversations, setConversations] = useState<Conversation[]>([])
   const [activeId, setActiveId] = useState<string | null>(null)
   const [messages, setMessages] = useState<Message[]>([])
+  const [mode, setMode] = useState<Mode>('chat')
   const [input, setInput] = useState('')
   const [streaming, setStreaming] = useState(false)
   const [streamText, setStreamText] = useState('')
@@ -55,7 +61,7 @@ export function ChatScreen({ onNavigate }: Props): JSX.Element {
 
   async function ensureConversation(): Promise<string> {
     if (activeId) return activeId
-    const conv = await window.api.createConversation()
+    const conv = await window.api.createConversation({ mode })
     setActiveId(conv.id)
     await refreshConversations()
     return conv.id
@@ -69,7 +75,11 @@ export function ChatScreen({ onNavigate }: Props): JSX.Element {
       setStreamText((prev) => prev + token)
     })
     try {
-      await window.api.sendChatMessage(convId, content, regenerate ? { regenerate: true } : undefined)
+      if (mode === 'documents') {
+        await window.api.askDocuments(convId, content)
+      } else {
+        await window.api.sendChatMessage(convId, content, regenerate ? { regenerate: true } : undefined)
+      }
       // Re-read the persisted history (includes the user turn + final assistant reply).
       setMessages(await window.api.listMessages(convId))
       await refreshConversations()
@@ -99,7 +109,7 @@ export function ChatScreen({ onNavigate }: Props): JSX.Element {
   }
 
   async function onRegenerate(): Promise<void> {
-    if (!activeId || streaming) return
+    if (!activeId || streaming || mode === 'documents') return
     // Drop the last assistant message from the view; the backend re-streams it.
     setMessages((prev) => {
       const lastAssistant = [...prev].reverse().findIndex((m) => m.role === 'assistant')
@@ -115,13 +125,31 @@ export function ChatScreen({ onNavigate }: Props): JSX.Element {
   }
 
   async function onNewChat(): Promise<void> {
-    const conv = await window.api.createConversation()
+    const conv = await window.api.createConversation({ mode })
     await refreshConversations()
     setActiveId(conv.id)
     setMessages([])
   }
 
-  const canRegenerate = !streaming && messages.some((m) => m.role === 'assistant')
+  // Selecting a conversation also syncs the composer mode to that conversation's mode.
+  function onSelectConversation(c: Conversation): void {
+    setActiveId(c.id)
+    setMode(c.mode)
+  }
+
+  // Switching mode starts a fresh composition: if the active conversation is in a
+  // different mode, deselect it so the next send creates a conversation in the new mode.
+  function onSelectMode(next: Mode): void {
+    if (streaming) return
+    setMode(next)
+    const active = conversations.find((c) => c.id === activeId)
+    if (active && active.mode !== next) {
+      setActiveId(null)
+      setMessages([])
+    }
+  }
+
+  const canRegenerate = !streaming && mode === 'chat' && messages.some((m) => m.role === 'assistant')
 
   // --- Empty state: no model running ------------------------------------------
   if (runtimeRunning === false) {
@@ -131,9 +159,9 @@ export function ChatScreen({ onNavigate }: Props): JSX.Element {
         <div className="card">
           <h2>No model is running</h2>
           <p className="hint">
-            Chat needs a model loaded into the runtime. Open the Models screen, pick a model, then
-            choose <b>Start runtime</b>. Everything stays local — nothing is downloaded or sent
-            anywhere.
+            Chat and document Q&amp;A need a model loaded into the runtime. Open the Models screen,
+            pick a model, then choose <b>Start runtime</b>. Everything stays local — nothing is
+            downloaded or sent anywhere.
           </p>
           <div className="actions" style={{ marginTop: 12 }}>
             <button className="btn primary" onClick={() => onNavigate('models')}>
@@ -152,7 +180,7 @@ export function ChatScreen({ onNavigate }: Props): JSX.Element {
     <div className="chat-layout">
       <aside className="chat-sidebar">
         <button className="btn sm primary chat-new" onClick={() => void onNewChat()}>
-          + New chat
+          + New {mode === 'documents' ? 'document Q&A' : 'chat'}
         </button>
         <div className="chat-conv-list">
           {conversations.length === 0 && <p className="hint">No conversations yet.</p>}
@@ -160,9 +188,10 @@ export function ChatScreen({ onNavigate }: Props): JSX.Element {
             <button
               key={c.id}
               className={`chat-conv ${c.id === activeId ? 'active' : ''}`}
-              onClick={() => setActiveId(c.id)}
+              onClick={() => onSelectConversation(c)}
               title={c.title}
             >
+              {c.mode === 'documents' && <span className="chat-conv-badge">DOC</span>}
               {c.title}
             </button>
           ))}
@@ -170,10 +199,29 @@ export function ChatScreen({ onNavigate }: Props): JSX.Element {
       </aside>
 
       <section className="chat-main">
+        <div className="chat-mode-tabs">
+          <button
+            className={`chat-mode-tab ${mode === 'chat' ? 'active' : ''}`}
+            disabled={streaming}
+            onClick={() => onSelectMode('chat')}
+          >
+            Chat
+          </button>
+          <button
+            className={`chat-mode-tab ${mode === 'documents' ? 'active' : ''}`}
+            disabled={streaming}
+            onClick={() => onSelectMode('documents')}
+          >
+            Ask Documents
+          </button>
+        </div>
+
         <div className="chat-transcript" ref={scrollRef}>
           {messages.length === 0 && !streaming && (
             <p className="hint chat-empty">
-              Send a message to start. Replies stream from the local mock runtime.
+              {mode === 'documents'
+                ? 'Ask a question about your imported documents. Answers cite their sources.'
+                : 'Send a message to start. Replies stream from the local mock runtime.'}
             </p>
           )}
           {messages.map((m) => (
@@ -195,7 +243,11 @@ export function ChatScreen({ onNavigate }: Props): JSX.Element {
         <div className="chat-input-row">
           <textarea
             className="chat-input"
-            placeholder="Message Private AI Drive Lite…"
+            placeholder={
+              mode === 'documents'
+                ? 'Ask about your documents…'
+                : 'Message Private AI Drive Lite…'
+            }
             value={input}
             disabled={streaming}
             onChange={(e) => setInput(e.target.value)}
@@ -213,12 +265,14 @@ export function ChatScreen({ onNavigate }: Props): JSX.Element {
               </button>
             ) : (
               <button className="btn primary" disabled={!input.trim()} onClick={() => void onSend()}>
-                Send
+                {mode === 'documents' ? 'Ask' : 'Send'}
               </button>
             )}
-            <button className="btn sm" disabled={!canRegenerate} onClick={() => void onRegenerate()}>
-              Regenerate
-            </button>
+            {mode === 'chat' && (
+              <button className="btn sm" disabled={!canRegenerate} onClick={() => void onRegenerate()}>
+                Regenerate
+              </button>
+            )}
           </div>
         </div>
       </section>
@@ -243,6 +297,42 @@ function MessageBubble({ message }: { message: Message }): JSX.Element {
         </button>
       </div>
       <div className="msg-content">{message.content}</div>
+      {message.citations && message.citations.length > 0 && <SourcePanel citations={message.citations} />}
+    </div>
+  )
+}
+
+// Source-snippet panel (spec §7.8 / Milestone 6): lists the cited sources for a grounded
+// answer and lets the user expand each one to read the chunk text that was cited.
+function SourcePanel({ citations }: { citations: Citation[] }): JSX.Element {
+  const [openLabel, setOpenLabel] = useState<string | null>(null)
+  return (
+    <div className="msg-sources">
+      <div className="msg-sources-title">Sources</div>
+      {citations.map((c) => {
+        const open = openLabel === c.label
+        return (
+          <div key={c.label} className="cite">
+            <button
+              className="cite-head"
+              onClick={() => setOpenLabel(open ? null : c.label)}
+              disabled={!c.snippet}
+              title={c.snippet ? 'Show cited text' : undefined}
+            >
+              <span className="cite-label">[{c.label}]</span>
+              <span className="cite-src">
+                {c.sourceTitle}
+                {c.pageNumber != null
+                  ? ` · Page ${c.pageNumber}`
+                  : c.section
+                    ? ` · ${c.section}`
+                    : ''}
+              </span>
+            </button>
+            {open && c.snippet && <div className="cite-snippet">{c.snippet}</div>}
+          </div>
+        )
+      })}
     </div>
   )
 }

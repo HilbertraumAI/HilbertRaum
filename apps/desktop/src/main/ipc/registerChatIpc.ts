@@ -13,6 +13,7 @@ import {
   maybeSetTitleFromFirstMessage
 } from '../services/chat'
 import { log } from '../services/logging'
+import { inFlightStreams } from './inflight'
 
 // Phase 3 IPC: conversation CRUD + streaming chat (spec §9.1, §7.6).
 //
@@ -30,17 +31,21 @@ import { log } from '../services/logging'
 // explicit user action — keeping it explicit keeps the service boundary clean.
 
 export function registerChatIpc(ctx: AppContext): void {
-  // Active stream cancellers, keyed by conversation id.
-  const inFlight = new Map<string, AbortController>()
+  // Active stream cancellers (shared with the RAG path so stopGeneration cancels either).
+  const inFlight = inFlightStreams
 
-  ipcMain.handle(IPC.createConversation, (_e, opts?: { title?: string }): Conversation => {
-    const conv = createConversation(ctx.db, {
-      title: opts?.title,
-      modelId: ctx.runtime.activeModelId()
-    })
-    log.info('Conversation created', { id: conv.id })
-    return conv
-  })
+  ipcMain.handle(
+    IPC.createConversation,
+    (_e, opts?: { title?: string; mode?: 'chat' | 'documents' }): Conversation => {
+      const conv = createConversation(ctx.db, {
+        title: opts?.title,
+        mode: opts?.mode,
+        modelId: ctx.runtime.activeModelId()
+      })
+      log.info('Conversation created', { id: conv.id, mode: conv.mode })
+      return conv
+    }
+  )
 
   ipcMain.handle(IPC.listConversations, (): Conversation[] => listConversations(ctx.db))
 

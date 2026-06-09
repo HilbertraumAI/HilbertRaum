@@ -162,6 +162,31 @@ h2 { font-size: 15px; margin: 0 0 12px; }
 }
 .chat-conv:hover { color: var(--text); }
 .chat-conv.active { color: var(--text); border-color: var(--accent); }
+.chat-conv-badge {
+  display: inline-block;
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  background: var(--accent);
+  color: #0f1115;
+  border-radius: 4px;
+  padding: 1px 4px;
+  margin-right: 6px;
+  vertical-align: middle;
+}
+
+.chat-mode-tabs { display: flex; gap: 6px; }
+.chat-mode-tab {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  padding: 6px 12px;
+  border-radius: 8px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.chat-mode-tab:hover:not(:disabled) { color: var(--text); }
+.chat-mode-tab.active { color: var(--text); border-color: var(--accent); }
+.chat-mode-tab:disabled { cursor: default; opacity: 0.6; }
 
 .chat-main { display: flex; flex-direction: column; min-height: 0; gap: 12px; }
 .chat-transcript {
@@ -192,6 +217,45 @@ h2 { font-size: 15px; margin: 0 0 12px; }
 .msg-copy:hover { color: var(--text); }
 .cursor { color: var(--accent); animation: blink 1s steps(2, start) infinite; }
 @keyframes blink { to { visibility: hidden; } }
+
+/* RAG source-snippet panel (Phase 6) */
+.msg-sources { margin-top: 10px; border-top: 1px solid var(--border); padding-top: 8px; }
+.msg-sources-title {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+.cite { margin-bottom: 4px; }
+.cite-head {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  padding: 2px 0;
+  width: 100%;
+}
+.cite-head:disabled { cursor: default; }
+.cite-label { color: var(--accent); font-weight: 600; }
+.cite-src { color: var(--muted); }
+.cite-snippet {
+  margin: 4px 0 8px 18px;
+  padding: 8px 10px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--muted);
+}
 
 .chat-error { color: #ff6b6b; font-size: 13px; }
 .chat-input-row { display: flex; flex-direction: column; gap: 8px; }

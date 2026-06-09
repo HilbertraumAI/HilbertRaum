@@ -34,7 +34,7 @@ const api = {
   stopRuntime: (): Promise<void> => ipcRenderer.invoke(IPC.stopRuntime),
 
   // ---- Chat (Phase 3) ----
-  createConversation: (opts?: { title?: string }): Promise<Conversation> =>
+  createConversation: (opts?: { title?: string; mode?: 'chat' | 'documents' }): Promise<Conversation> =>
     ipcRenderer.invoke(IPC.createConversation, opts),
   listConversations: (): Promise<Conversation[]> => ipcRenderer.invoke(IPC.listConversations),
   listMessages: (conversationId: string): Promise<Message[]> =>
@@ -47,6 +47,12 @@ const api = {
   ): Promise<Message> => ipcRenderer.invoke(IPC.sendChatMessage, conversationId, content, options),
   stopGeneration: (conversationId: string): Promise<void> =>
     ipcRenderer.invoke(IPC.stopGeneration, conversationId),
+
+  // ---- RAG / document Q&A (Phase 6) ----
+  /** Stream a document-grounded answer; resolves with the final assistant message
+   *  (which carries `citations`). Tokens arrive via onToken, like sendChatMessage. */
+  askDocuments: (conversationId: string, question: string): Promise<Message> =>
+    ipcRenderer.invoke(IPC.askDocuments, conversationId, question),
 
   // ---- Documents (Phase 4) ----
   /** Open the OS picker for files (default) or a folder; returns selected paths. */

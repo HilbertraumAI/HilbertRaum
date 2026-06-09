@@ -8,6 +8,7 @@ import { registerCoreIpc } from './ipc/registerCoreIpc'
 import { registerModelIpc } from './ipc/registerModelIpc'
 import { registerChatIpc } from './ipc/registerChatIpc'
 import { registerDocsIpc } from './ipc/registerDocsIpc'
+import { registerRagIpc } from './ipc/registerRagIpc'
 import { RuntimeManager } from './services/runtime'
 import { createMockRuntime } from './services/runtime/mock'
 import { createMockEmbedder } from './services/embeddings'
@@ -50,6 +51,7 @@ function initBackend(): void {
   registerModelIpc(ctx)
   registerChatIpc(ctx)
   registerDocsIpc(ctx)
+  registerRagIpc(ctx)
 }
 
 function createWindow(): void {

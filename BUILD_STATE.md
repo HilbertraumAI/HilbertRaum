@@ -5,7 +5,7 @@
 > (see "Per-phase ritual" in [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md)).
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
-_Last updated: 2026-06-09 — Phase 5 complete; Phase 6 next_
+_Last updated: 2026-06-09 — Phase 6 complete; Phase 7 next_
 
 ---
 
@@ -19,8 +19,8 @@ _Last updated: 2026-06-09 — Phase 5 complete; Phase 6 next_
 | 3 | Basic chat (mock runtime) | 🟢 done |
 | 4 | Document ingestion & chunking | 🟢 done |
 | 5 | Embeddings & vector search (mock) | 🟢 done |
-| 6 | RAG chat with citations | 🟡 next |
-| 7 | Hardware benchmark & recommendation | ⚪ not started |
+| 6 | RAG chat with citations | 🟢 done |
+| 7 | Hardware benchmark & recommendation | 🟡 next |
 | 8 | Privacy & offline hardening | ⚪ not started |
 | 9 | Encrypted workspace | ⚪ not started |
 | 10 | Real llama.cpp runtime & embeddings | ⚪ not started |
@@ -97,6 +97,34 @@ Repo root: `f:\_coding\ai_drive`.
   with an ANN (sqlite-vec/HNSW) upgrade path behind the same `search` signature.
 - **MockEmbedder = feature hashing** (SHA-256 tokens → signed buckets → L2-normalize),
   deterministic + fully offline (uses only `node:crypto`).
+- **RAG service placement (Phase 6):** `services/rag/` (separate from `chat.ts`) holds the
+  whole grounded path — `retrieve`, `buildGroundedPrompt`, `buildGroundedChatMessages`,
+  `generateGroundedAnswer`, and the retrieval-settings mapper — reusing chat helpers
+  (`appendMessage`/`listMessages`/`BASE_SYSTEM_PROMPT`) so the Phase-3 chat path is
+  untouched. `askDocuments` is its own IPC module (`registerRagIpc.ts`).
+- **Retrieval defaults (spec §7.8, LOCKED on `AppSettings`):** `ragTopKInitial = 12`,
+  `ragTopKFinal = 6`, `ragMaxContextTokens = 2500`, `ragMinSimilarity = 0`. Read per request
+  via `ragSettingsFrom(settings)`.
+- **Dedup strategy:** dedup retrieved chunks by `(document_id, page_number)`, keeping the
+  highest-scoring chunk per page. Page-less chunks (txt/md) are keyed by chunk id so they are
+  **not** collapsed (page dedup would otherwise drop all but one window of a text file). The
+  token budget always includes the single top chunk before enforcing `maxContextTokens`.
+- **`[Sn]` labels assigned per query, never stored** (confirmed). Only the resolved
+  `Citation[]` is persisted in `messages.citations_json`. **Retrieval is the source of truth
+  for citations** — the mock runtime's echo has no real `[Sn]` markers, so computed citations
+  are persisted directly (a real model emitting inline `[Sn]` still resolves against them).
+- **`Citation.snippet` (additive):** `Citation` gained an optional `snippet` (truncated chunk
+  text, ≤ `SNIPPET_MAX_CHARS` = 600) so the renderer's source panel shows the cited text and
+  it survives reload via `citations_json`. Additive + optional → old rows are unaffected.
+- **Grounding / empty-corpus copy:** when retrieval finds no usable chunks, the runtime is
+  **not called**; a fixed `NO_DOCUMENT_CONTEXT_ANSWER` ("I couldn't find anything about that
+  in your documents…") is persisted with no citations. Makes the no-hallucination guarantee
+  deterministic + testable.
+- **Grounded-prompt placement:** the grounded template (rules + question + numbered excerpts)
+  replaces the **last user turn** sent to the runtime; the system message stays
+  `BASE_SYSTEM_PROMPT`. The DB keeps the raw question (transcript/title).
+- **Shared in-flight registry (`ipc/inflight.ts`):** chat + RAG share one
+  `Map<conversationId, AbortController>` so the existing `stopGeneration` cancels either path.
 
 ---
 
@@ -128,8 +156,9 @@ _Status: TypeScript types in `apps/desktop/src/shared/types.ts`; channel names i
 Wired so far: core (Phase 1) + `listModels`/`selectModel`/`startRuntime`/`stopRuntime` (Phase 2) +
 `createConversation`/`listConversations`/`listMessages`/`sendChatMessage`/`stopGeneration` (Phase 3) +
 `pickDocuments`/`importDocuments`/`getImportJob`/`listDocuments`/`deleteDocument`/`reindexDocument`
-(Phase 4). `askDocuments`/benchmark handlers land in their phases. (`pickDocuments` + `reindexDocument`
-are Phase-4 additions to the `IPC` registry beyond the spec §9.1 list — picker + re-index UX.)_
+(Phase 4) + `askDocuments` (Phase 6). The benchmark handler lands in Phase 7. (`pickDocuments` +
+`reindexDocument` are Phase-4 additions to the `IPC` registry beyond the spec §9.1 list — picker +
+re-index UX.) `createConversation` now also accepts an optional `mode` ('chat' | 'documents')._
 
 ### DB schema
 ✅ Implemented in `src/main/services/db.ts` — all spec §8 tables created idempotently (WAL mode,
@@ -256,47 +285,68 @@ stop, regenerate, per-message copy, and the no-runtime empty state.
 - **`embeddings` table** (spec §8, already existed): `chunk_id` PK, `embedding_model_id`,
   `vector_blob` (raw Float32 bytes), `dimensions`, `created_at`. No new IPC (askDocuments = Phase 6).
 
+### RAG chat with citations (Phase 6 live)
+✅ **`services/rag/index.ts`** (spec §7.6, §7.8). Full detail in [`docs/rag-design.md`](docs/rag-design.md) §8.
+- **`retrieve(db, embedder, question, settings)`** → `{ chunks: RetrievedChunk[], citations:
+  Citation[] }`. Embeds the question, `VectorIndex.searchText(topKInitial)`, joins hits →
+  `chunks`, drops `< minSimilarity`, **dedups by `(document_id, page_number)`** (page-less
+  chunks keyed by chunk id), trims to `topKFinal` under `maxContextTokens` (chunker's
+  `approxTokenCount`; top chunk always kept), assigns `[S1]…` labels **per query (not
+  stored)**.
+- **`buildGroundedPrompt(question, chunks)`** — pure; spec §7.8 template verbatim (rules +
+  `Question:` + numbered `Document excerpts:` as `[Sn] File: X | Page: 4` / `| Section: Y` +
+  quoted text + trailing `Answer:`). `buildGroundedChatMessages` replaces the **last user
+  turn** with the grounded prompt; system stays `BASE_SYSTEM_PROMPT`.
+- **`generateGroundedAnswer(...)`** — streams via the runtime and persists the assistant turn
+  **with `Citation[]`** (→ `citations_json`). **Empty corpus / weak retrieval → runtime NOT
+  called**; persists `NO_DOCUMENT_CONTEXT_ANSWER`, no citations.
+- **`ipc/registerRagIpc.ts`** — `askDocuments(conversationId, question)`; **reuses the locked
+  Phase-3 streaming contract** (`chat:token/done/error:<id>`) + the **shared in-flight
+  registry** (`ipc/inflight.ts`) so `stopGeneration` cancels it. Requires a running runtime
+  (same error as chat). Registered in `initBackend()`.
+- **Settings:** `ragTopKInitial`/`ragTopKFinal`/`ragMaxContextTokens`/`ragMinSimilarity` on
+  `AppSettings` + `DEFAULT_SETTINGS` (spec §7.8 defaults), read via `ragSettingsFrom`.
+- **`Citation`** gained optional `snippet` (truncated chunk text, ≤ 600). **Renderer**:
+  `ChatScreen` Chat/Ask-Documents toggle (mode is per-conversation), `askDocuments` path, and
+  a per-message **Sources** panel with expandable cited snippets.
+
 ---
 
-## 5. Next actions (do these next) — START OF PHASE 6
+## 5. Next actions (do these next) — START OF PHASE 7
 
-Phase 6 = RAG chat with citations (spec Milestone 6 / Step 8). Build, in order:
-1. **Retrieval → grounded prompt.** Use `VectorIndex.searchText(question, topK)` to fetch top-k
-   chunks (top-k from settings, default per spec §7.8), join back to `chunks`/`documents` for text +
-   `source_label`/`page_number`/`section_label`, and assign `[S1] [S2] …` labels per query (labels
-   are **not** stored — assigned at retrieval time). Build the grounded system prompt (spec §7.6/§7.8)
-   that instructs the model to answer **only** from the labelled sources and cite them inline.
-2. **`askDocuments(conversationId, question)` IPC** — stream the answer like `sendChatMessage`
-   (reuse the LOCKED Phase-3 streaming contract: `chat:token/done/error:<id>`), but for a
-   `mode:'documents'` conversation. Persist the assistant turn **with citations** to
-   `messages.citations_json` (the `Citation[]` type already exists in `shared/types.ts`; column
-   already in schema). Register in `initBackend()`.
-3. **Citations surface.** Resolve `[Sn]` labels → `Citation { label, sourceTitle, pageNumber,
-   section }`; return on the final `Message`. Renderer shows the cited sources + lets the user
-   inspect the snippet. Decide the empty-corpus / no-hits UX (answer "not found in your documents"
-   rather than hallucinate — spec §7.8 grounding rule).
-4. **Settings.** Wire retrieval knobs (top-k, min score?) — extend `AppSettings` if needed.
-5. Tests: retrieval returns the right chunk for a question; `[Sn]` labelling + citation resolution;
-   grounded prompt shape; askDocuments streams + persists citations; empty-corpus path. Keep all
-   green.
-6. **Ritual:** update `docs/rag-design.md` (§6→ add the grounded-prompt/citation section) + this
-   file; commit.
+Phase 7 = Hardware benchmark & model recommendation (spec Milestone 7 / Step 9). Build, in order:
+1. **Benchmark service** (`services/benchmark.ts`) — detect RAM / OS / CPU (model, cores) via
+   `node:os`, measure drive read/write speed (write+read a temp file in the workspace), and
+   (best-effort) a tokens/sec estimate. **No network.** Return the `BenchmarkResult` shape that
+   already exists in `shared/types.ts`.
+2. **Profile assignment** — map detected hardware → `HardwareProfile`
+   (`TINY`/`LITE`/`BALANCED`/`PRO`) and surface a recommended model id (reuse
+   `recommendModelId` / the manifest `recommended_profiles`). Replace the **stubbed `LITE`**
+   profile (Models screen + `getAppStatus.hardwareProfile`) with the real one. Add warnings for
+   weak hardware (spec Milestone 7).
+3. **`runBenchmark()` IPC** — channel name `benchmark:run` already exists in `shared/ipc.ts`;
+   add the handler + register in `initBackend()`, expose via preload.
+4. **Renderer** — a benchmark/diagnostics view that runs it and shows RAM/CPU/drive/profile +
+   the recommended model + weak-hardware warnings.
+5. Tests: detection shape, profile thresholds, recommendation selection, warning conditions,
+   and a **no-network assertion** across the benchmark path. Keep all green.
+6. **Ritual:** docs (a `docs/benchmark.md` or extend an existing doc) + this file; commit.
 
-Notes / gotchas for Phase 6:
-- `VectorIndex` + `Embedder` (Phase 5) are the retrieval primitives — reuse `ctx.embedder` and
-  construct `VectorIndex` per request (or once). The query is embedded with the **same** embedder.
-- Don't break the Phase-3 chat path; `mode:'documents'` is the RAG variant of the same streaming
-  contract.
-- Keep grounding strict (answer only from sources). Still no network/telemetry.
+Notes / gotchas for Phase 7:
+- Drive-speed measurement must write inside the workspace (writable) and clean up after itself;
+  keep it quick and bounded so it never hangs the UI. Still no network/telemetry.
+- The recommendation logic already exists (`recommendModelId`, `recommended_profiles`); Phase 7
+  feeds it a *real* profile instead of the `LITE` stub.
 
-Phase 5 is DONE: typecheck clean, **92/92 tests pass** (80 prior + 12 new: MockEmbedder determinism;
-L2-norm + 384 width; distinct-text cosine < 1 + empty-text all-zero/cosine-0; **BLOB round-trip incl.
-unaligned offset**; VectorIndex self-match ranks first + sorted desc + topK + dimension-mismatch
-skip; ingestion writes one tagged vector/chunk with correct dims; `embedder.id` fallback when no
-active model; pass-through when no embedder; **no-network assertion** spying http/https/net/Socket/
-fetch across embed+ingestion+search). `NODE_OPTIONS=--use-system-ca npm run build` green (**main
-bundle 49.23 kB**). No new dependencies (hash vectors via `node:crypto`). (Live `npm run dev` window
-smoke = manual.)
+Phase 6 is DONE: typecheck clean, **102/102 tests pass** (92 prior + 10 new: grounded-prompt
+template shape + source-context format + meta fallback + trailing `Answer:`; retrieval returns the
+right chunk with resolved citations + snippet; sequential `[Sn]` labelling; **dedup by
+document/page**; **topKFinal + maxContextTokens** trim; min-similarity filter;
+`generateGroundedAnswer` streams + **persists citations to `citations_json`** (round-trips on
+reload); **empty-corpus path returns the fixed answer without calling the runtime**; **no-network
+assertion** across ingestion + retrieval + grounded answer). `NODE_OPTIONS=--use-system-ca npm run
+build` green (**main bundle 57.28 kB**). No new dependencies. (Live `npm run dev` window smoke =
+manual.)
 
 ---
 

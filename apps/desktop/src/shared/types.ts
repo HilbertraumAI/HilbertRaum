@@ -40,6 +40,15 @@ export interface AppSettings {
   developerMode: boolean
   /** Retrieval + chat tuning, with safe defaults. */
   contextTokens: number
+  // ---- RAG retrieval knobs (Phase 6, spec §7.8 defaults) ----
+  /** How many chunks to pull from the vector index before dedup/trim. */
+  ragTopKInitial: number
+  /** How many chunks to keep in the grounded prompt after dedup + budget. */
+  ragTopKFinal: number
+  /** Token budget for the packed source excerpts (approximate token counter). */
+  ragMaxContextTokens: number
+  /** Drop hits below this cosine similarity (0 = keep all non-negative hits). */
+  ragMinSimilarity: number
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -48,7 +57,11 @@ export const DEFAULT_SETTINGS: AppSettings = {
   activeModelId: null,
   activeEmbeddingModelId: null,
   developerMode: true,
-  contextTokens: 4096
+  contextTokens: 4096,
+  ragTopKInitial: 12,
+  ragTopKFinal: 6,
+  ragMaxContextTokens: 2500,
+  ragMinSimilarity: 0
 }
 
 // ---- Models (Phase 2) ----
@@ -93,6 +106,11 @@ export interface Citation {
   sourceTitle: string
   pageNumber?: number | null
   section?: string | null
+  /**
+   * The cited chunk text (Phase 6), truncated for storage, so the renderer's
+   * source-snippet panel can show what was cited without a second lookup.
+   */
+  snippet?: string | null
 }
 
 export interface Message {

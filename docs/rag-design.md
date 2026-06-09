@@ -1,13 +1,13 @@
 # RAG design — Private AI Drive Lite
 
-_Last updated: 2026-06-09 (Phase 5 — embeddings & vector search)_
+_Last updated: 2026-06-09 (Phase 6 — grounded RAG chat with citations)_
 
 This document describes the local document → retrieval-augmented-generation pipeline.
 It is built up phase by phase:
 
 - **Phase 4:** ingestion — parse, chunk, store metadata, track status. ✅
-- **Phase 5 (this doc):** embeddings & cosine vector search (mock embedder first). ✅
-- **Phase 6:** grounded RAG chat with `[S1]…` citations. ⚪
+- **Phase 5:** embeddings & cosine vector search (mock embedder first). ✅
+- **Phase 6 (this doc):** grounded RAG chat with `[S1]…` citations. ✅
 
 Everything runs **locally and offline** (spec §3.6). No file content, embedding, or query
 ever leaves the device.
@@ -268,3 +268,109 @@ a query equal to a chunk's text scores ≈ 1.0 and ranks first. **Upgrade path:*
 - **Offline guarantee (spec Milestone 5):** spying on `http`/`https`/`net.connect`/
   `Socket.prototype.connect`/`fetch` shows **zero** network calls across embed + full
   ingestion + search.
+
+---
+
+## 8. Grounded RAG chat with citations (Phase 6) — spec §7.6, §7.8, Milestone 6
+
+`services/rag/` turns a question into a **grounded, cited answer**. It reuses the Phase-5
+retrieval primitives (`Embedder` + `VectorIndex`) and the Phase-3 chat plumbing
+(`appendMessage`, the streaming contract) — nothing new touches the network.
+
+```
+question → retrieve() → buildGroundedPrompt() → runtime.chatStream() → answer + Citation[]
+```
+
+### Retrieval (`retrieve`)
+
+`retrieve(db, embedder, question, settings)`:
+
+1. embeds the question and runs `VectorIndex.searchText(question, topKInitial)` (default
+   **top_k_initial = 12**),
+2. joins each hit back to its `chunks` row for `text` / `source_label` (= title) /
+   `page_number` / `section_label`,
+3. drops hits below **min_similarity_threshold** (`ragMinSimilarity`, default 0),
+4. **dedups by document/page** — keeps the best-scoring chunk per `(document_id, page)`.
+   Page-less chunks (txt/md windows) are keyed by chunk id, so they are never collapsed,
+5. trims to **top_k_final = 6** while respecting **max_context_tokens = 2500** (the
+   chunker's `approxTokenCount`). The single most relevant chunk is always included so an
+   over-budget top chunk never produces an empty context,
+6. assigns `[S1] [S2] …` labels **per query** (never stored) and resolves a `Citation[]`.
+
+Returns both the labelled `RetrievedChunk[]` (for the prompt) and the `Citation[]` (for
+persistence + UI). Each `Citation` carries a truncated `snippet` (≤ `SNIPPET_MAX_CHARS`,
+600) of the chunk text so the renderer's source-snippet panel can show what was cited
+without a second lookup.
+
+### Grounded prompt (`buildGroundedPrompt`)
+
+A pure function emitting the spec §7.8 template verbatim — the rules, the `Question:`, then
+the numbered `Document excerpts:` in the spec's source-context format:
+
+```text
+[S1] File: Contract.pdf | Page: 4
+"...chunk text..."
+
+[S2] File: Terms.docx | Section: Liability
+"...chunk text..."
+```
+
+The meta line is `| Page: N` when the chunk has a page, else `| Section: X`, else nothing.
+`buildGroundedChatMessages` then assembles the runtime message list: the base system prompt
+(spec §7.6), prior conversation history, and the **last user turn replaced by the grounded
+prompt**. The DB keeps the raw question for the transcript/title; only the model sees the
+grounded form.
+
+### Answer generation (`generateGroundedAnswer`) + `askDocuments` IPC
+
+`generateGroundedAnswer` retrieves context, streams the answer from the runtime, and
+persists the assistant turn **with its `Citation[]`** (→ `messages.citations_json`).
+Retrieval is the **source of truth for citations** — the mock runtime's echo contains no
+real `[Sn]` markers, so we persist the computed citations directly (a real model that emits
+`[Sn]` inline still renders against this same list).
+
+`ipc/registerRagIpc.ts` exposes `askDocuments(conversationId, question)`. It is the
+document-grounded sibling of `sendChatMessage` and **reuses the locked Phase-3 streaming
+contract** (`chat:token/done/error:<conversationId>`), so the renderer subscribes
+identically. It requires a running runtime (same "start a model" error as chat), appends
+the user turn, sets the title from the first message, then calls `generateGroundedAnswer`.
+Cancellation uses a **shared in-flight registry** (`ipc/inflight.ts`) so the existing
+`stopGeneration(conversationId)` cancels a document answer too.
+
+### Grounding rule — empty corpus / weak retrieval (spec §7.8)
+
+When retrieval yields **no usable chunks** (no documents indexed, or every hit below the
+threshold), the model is **not called** — `generateGroundedAnswer` persists a fixed answer
+(`NO_DOCUMENT_CONTEXT_ANSWER`: *"I couldn't find anything about that in your documents…"*)
+with no citations. This makes the no-hallucination guarantee deterministic and testable
+rather than relying on the model to refuse.
+
+### Settings (spec §7.8 defaults)
+
+Retrieval knobs live on `AppSettings` / `DEFAULT_SETTINGS` and are read per request via
+`ragSettingsFrom`: `ragTopKInitial` (12), `ragTopKFinal` (6), `ragMaxContextTokens` (2500),
+`ragMinSimilarity` (0).
+
+### Renderer
+
+`ChatScreen` gains a **Chat / Ask Documents** mode toggle. The mode is fixed per
+conversation (its `mode` field); the toggle picks the mode for the next new conversation and
+syncs when a conversation is selected. Document answers call `askDocuments`; each assistant
+message renders a **Sources** panel listing its citations (`[Sn] File · Page/Section`) with
+an expandable snippet of the cited chunk text. The plain chat path is unchanged.
+
+---
+
+## 9. Tested behaviour (Phase 6)
+
+- **Grounded prompt:** spec §7.8 template shape (rules, `Question:`, numbered excerpts), the
+  `[Sn] File: X | Page: 4` / `| Section: Y` source format, the page→section→none meta
+  fallback, and the trailing `Answer:`.
+- **Retrieval:** returns the matching chunk for a question (`MockEmbedder`) with resolved
+  citations + snippet; sequential `[Sn]` labelling in score order; **dedup by
+  document/page**; **top_k_final + max_context_tokens** trimming; min-similarity filtering.
+- **Answer generation:** streams tokens and **persists citations to `citations_json`**
+  (round-trips on reload); the **empty-corpus path** returns the fixed "not found" answer
+  **without calling the runtime**.
+- **Offline guarantee:** spying `http`/`https`/`net.connect`/`Socket.prototype.connect`/
+  `fetch` shows **zero** network calls across ingestion + retrieval + grounded answer.
