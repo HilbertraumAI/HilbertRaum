@@ -14,7 +14,10 @@ files in code (`apps/desktop/tests/helpers/fixtures.ts`) so coverage stays fully
 
 ## Try it
 
-1. Start a model on the **Models** screen (mock runtime is fine).
-2. Open **Documents** → **Import files**, pick one or more files above.
-3. Watch each file move through `queued → extracting → chunking → embedding → indexed`.
-   (Embeddings are a pass-through until Phase 5; documents reach `indexed` without vectors.)
+1. Open **Documents** → **Import files**, pick one or more files above (no model needs to be
+   running to import).
+2. Watch each file move through `queued → extracting → chunking → embedding → indexed`.
+   (Vectors are written by the active embedder — the deterministic mock when no real embedding
+   model is installed, the real E5 when it is.)
+3. To ask questions about them, start a chat model on the **Models** screen first (with no
+   weights present, **Start mock runtime** works in developer mode).

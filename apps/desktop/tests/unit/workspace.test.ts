@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { resolvePaths } from '../../src/main/services/workspace'
+import { findPreparedDriveRoot, resolvePaths } from '../../src/main/services/workspace'
 
 describe('resolvePaths', () => {
   it('uses the fallback root when no env override is set', () => {
@@ -32,5 +32,28 @@ describe('resolvePaths', () => {
     const root = mkdtempSync(join(tmpdir(), 'paid-plain-'))
     const r = resolvePaths({ envRoot: root, fallbackRoot: join(tmpdir(), 'appdata') })
     expect(r.isPreparedDrive).toBe(false)
+  })
+})
+
+// M16 (audit round 4): a buyer who double-clicks the portable .exe / .app directly
+// (no launcher → no PAID_DRIVE_ROOT) must still land on the DRIVE workspace.
+describe('findPreparedDriveRoot', () => {
+  it('finds the marker by walking up from a nested app location', () => {
+    const root = mkdtempSync(join(tmpdir(), 'paid-exe-drive-'))
+    mkdirSync(join(root, 'config'), { recursive: true })
+    writeFileSync(join(root, 'config', 'drive.json'), '{}')
+    // macOS-style nesting: <drive>/Private AI Drive Lite.app/Contents/MacOS/
+    const deep = join(root, 'Private AI Drive Lite.app', 'Contents', 'MacOS')
+    mkdirSync(deep, { recursive: true })
+    expect(findPreparedDriveRoot(deep)).toBe(root)
+    // The exe directly at the drive root (Windows portable) also resolves.
+    expect(findPreparedDriveRoot(root)).toBe(root)
+  })
+
+  it('returns null without a marker — an exe in Downloads must not create a workspace there', () => {
+    const downloads = mkdtempSync(join(tmpdir(), 'paid-downloads-'))
+    expect(findPreparedDriveRoot(downloads)).toBeNull()
+    expect(findPreparedDriveRoot(undefined)).toBeNull()
+    expect(findPreparedDriveRoot('')).toBeNull()
   })
 })

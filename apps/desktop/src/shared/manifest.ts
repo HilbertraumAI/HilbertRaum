@@ -53,7 +53,7 @@ export interface ModelManifest {
   recommendedMinRamGb: number
   recommendedRamGb: number
   recommendedContextTokens: number
-  /** Path of the weight file relative to the `models/` directory. */
+  /** Path of the weight file relative to the DRIVE ROOT (e.g. `models/chat/x.gguf`). */
   localPath: string
   /** Expected SHA-256 (lower-case hex). May be a placeholder until a real drive is built. */
   sha256: string

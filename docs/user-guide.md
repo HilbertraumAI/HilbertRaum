@@ -84,7 +84,7 @@ If no model is started yet, Home will point you to the **Models** screen.
 2. You'll see the models on your drive with a status:
    - **Installed** — ready to use.
    - **Recommended** — best match for your laptop (based on the hardware benchmark).
-   - **Missing** — the model file isn't on the drive (see Troubleshooting).
+   - **Not downloaded** — the model file isn't on the drive (see Troubleshooting).
 3. Click a model, then **Start runtime**. The first start of a model can take a little while
    as it loads into memory.
 

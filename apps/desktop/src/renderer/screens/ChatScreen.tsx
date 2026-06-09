@@ -29,6 +29,7 @@ export function ChatScreen({ onNavigate }: Props): JSX.Element {
   const [streamConvId, setStreamConvId] = useState<string | null>(null)
   const [runtimeRunning, setRuntimeRunning] = useState<boolean | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   // The currently-visible conversation, readable from inside async stream completions
   // (the `activeId` captured by the closure goes stale when the user switches).
@@ -141,6 +142,19 @@ export function ChatScreen({ onNavigate }: Props): JSX.Element {
 
   function onStop(): void {
     if (activeId) void window.api.stopGeneration(activeId)
+  }
+
+  // Export the transcript to a user-chosen local file (spec §7.6 — M13). Saving is an
+  // explicit user action via the OS save dialog; nothing leaves the device otherwise.
+  async function onExport(): Promise<void> {
+    if (!activeId) return
+    setNotice(null)
+    try {
+      const saved = await window.api.exportConversation(activeId)
+      if (saved) setNotice(`Transcript saved to ${saved}`)
+    } catch (e) {
+      setError(String(e instanceof Error ? e.message : e))
+    }
   }
 
   async function onNewChat(): Promise<void> {
@@ -261,6 +275,7 @@ export function ChatScreen({ onNavigate }: Props): JSX.Element {
         </div>
 
         {error && <div className="chat-error">⚠ {error}</div>}
+        {notice && <div className="hint chat-notice">{notice}</div>}
 
         <div className="chat-input-row">
           <textarea
@@ -295,6 +310,14 @@ export function ChatScreen({ onNavigate }: Props): JSX.Element {
                 Regenerate
               </button>
             )}
+            <button
+              className="btn sm"
+              disabled={!activeId || messages.length === 0 || streaming}
+              title="Save this conversation as a Markdown file (stays local)"
+              onClick={() => void onExport()}
+            >
+              Export
+            </button>
           </div>
         </div>
       </section>

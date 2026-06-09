@@ -3,7 +3,13 @@ import type { AppSettings, Citation, Message } from '../../../shared/types'
 import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../runtime'
 import { type Embedder, VectorIndex } from '../embeddings'
 import { approxTokenCount } from '../ingestion/chunker'
-import { appendMessage, BASE_SYSTEM_PROMPT, isAbortError, listMessages } from '../chat'
+import {
+  appendMessage,
+  BASE_SYSTEM_PROMPT,
+  emptyAssistantMessage,
+  isAbortError,
+  listMessages
+} from '../chat'
 
 // RAG service (spec §7.8). Turns a question into a grounded, cited answer:
 //
@@ -263,6 +269,8 @@ export async function generateGroundedAnswer(
     // return normally. Any other error is a real failure and propagates.
     if (!isAbortError(err, opts.signal)) throw err
   }
+  // A stop before the first token produced nothing — persist nothing (L2).
+  if (content === '') return emptyAssistantMessage(conversationId)
   // Persist the assistant turn with the computed citations (source of truth = retrieval).
   return appendMessage(db, { conversationId, role: 'assistant', content, citations })
 }

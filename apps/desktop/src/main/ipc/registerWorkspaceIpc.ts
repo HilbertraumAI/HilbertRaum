@@ -2,6 +2,7 @@ import { ipcMain } from 'electron'
 import { IPC } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
 import { WrongPasswordError } from '../services/workspace-vault'
+import { maybeRunFirstBenchmark } from './registerBenchmarkIpc'
 import { log } from '../services/logging'
 import type {
   WorkspaceActionResult,
@@ -24,6 +25,8 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
     try {
       const state = ctx.workspace.unlock(password)
       log.info('Workspace unlocked')
+      // First unlock of a never-benchmarked workspace → background benchmark (M12).
+      maybeRunFirstBenchmark(ctx)
       return { ok: true, state }
     } catch (err) {
       if (err instanceof WrongPasswordError) {
@@ -47,6 +50,8 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
       try {
         const state = ctx.workspace.create(password, mode)
         log.info('Workspace created', { mode })
+        // A fresh workspace has never been benchmarked → background benchmark (M12).
+        maybeRunFirstBenchmark(ctx)
         return { ok: true, state }
       } catch (err) {
         // Plaintext refused by policy, and create-over-an-existing-vault (H4: would wipe

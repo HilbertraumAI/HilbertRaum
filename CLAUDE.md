@@ -36,4 +36,5 @@ npm run dev        # launch the app
 npm run build      # production build
 npm test           # unit + integration tests
 npm run typecheck  # TypeScript checking
+npm run package    # portable build via electron-builder (manual, network-touching — R2)
 ```

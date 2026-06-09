@@ -93,4 +93,7 @@ export function registerModelIpc(ctx: AppContext): void {
     log.info('Stop runtime')
     await ctx.runtime.stop()
   })
+
+  // Read-only runtime state for the Diagnostics screen (spec §7.11 — audit M14).
+  ipcMain.handle(IPC.getRuntimeStatus, (): RuntimeStatus => ctx.runtime.status())
 }

@@ -18,6 +18,8 @@ models/
 workspace/
 *.sqlite
 *.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
 *.db
 *.db-journal
 

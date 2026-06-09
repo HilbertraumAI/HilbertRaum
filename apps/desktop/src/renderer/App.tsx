@@ -43,13 +43,16 @@ export function App(): JSX.Element {
   // Privacy/Settings screens are visited (network toggle may have changed).
   const [offline, setOffline] = useState(true)
   const [disabledByPolicy, setDisabledByPolicy] = useState(false)
+  // Set when the backend never came up (getWorkspaceState rejected). Faking 'unlocked'
+  // here used to render the full shell with every screen surfacing raw IPC errors (L5).
+  const [fatalError, setFatalError] = useState<string | null>(null)
 
   useEffect(() => {
     let active = true
     window.api
       ?.getWorkspaceState()
       .then((s) => active && setWorkspace(s))
-      .catch(() => active && setWorkspace({ state: 'unlocked', mode: null, plaintextAllowed: true, encryptionRequired: false }))
+      .catch((e) => active && setFatalError(String(e instanceof Error ? e.message : e)))
     return () => {
       active = false
     }
@@ -79,6 +82,23 @@ export function App(): JSX.Element {
     setScreen('home')
   }
 
+  if (fatalError) {
+    return (
+      <div className="gate-shell">
+        <div className="card">
+          <h2>The app could not start</h2>
+          <p className="hint">
+            The local backend did not come up, so nothing can be loaded. Restart the app; if
+            this keeps happening, check <code>logs/app.log</code> on your drive and see
+            docs/troubleshooting.md.
+          </p>
+          <p className="hint">
+            <code>{fatalError}</code>
+          </p>
+        </div>
+      </div>
+    )
+  }
   if (workspace && !unlocked) {
     return <WorkspaceGate state={workspace} onUnlocked={setWorkspace} />
   }

@@ -54,8 +54,11 @@ to reach a remote host while offline; local-only connections (`127.0.0.1`/`local
 
 ## Model downloads / updates caveat
 
-If — and only if — you enable the setting above, the app may contact a model source you choose to
-download model files. Even then, your prompts and documents are never transmitted.
+Today the app ships **no downloader at all** — the setting above is a forward-looking gate and
+enabling it changes nothing in the current version (models are added with the offline
+`fetch-models`/`prepare-drive` scripts on a separate machine). If an in-app downloader ships
+later, it will run only when that setting AND the drive policy permit it, and even then your
+prompts and documents are never transmitted.
 
 ## Deleting your data
 

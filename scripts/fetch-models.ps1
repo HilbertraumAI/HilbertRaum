@@ -48,6 +48,11 @@ param(
 $ErrorActionPreference = 'Stop'
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 
+# Normalize -Target to a full path: .NET IO and curl.exe resolve relative paths against
+# the PROCESS working directory, which does not follow Set-Location (audit M22).
+if (-not [System.IO.Path]::IsPathRooted($Target)) { $Target = Join-Path (Get-Location).Path $Target }
+$Target = [System.IO.Path]::GetFullPath($Target)
+
 $ManifestsDir = Join-Path $Target 'model-manifests'
 if (-not (Test-Path $ManifestsDir)) { $ManifestsDir = Join-Path $RepoRoot 'model-manifests' }
 if (-not (Test-Path $ManifestsDir)) {
@@ -61,7 +66,8 @@ if (-not (Test-Path $ManifestsDir)) {
 function Get-ManifestField([string]$text, [string]$key) {
   foreach ($line in $text -split "`n") {
     if ($line -match "^\s*$([Regex]::Escape($key))\s*:\s*(.+?)\s*$") {
-      return $Matches[1].Trim().Trim('"').Trim("'")
+      # Strip an inline YAML comment (whitespace + '#' + rest) before unquoting (M17).
+      return ($Matches[1] -replace '\s+#.*$', '').Trim().Trim('"').Trim("'")
     }
   }
   return $null
@@ -173,6 +179,8 @@ foreach ($mf in $manifestFiles) {
     } else {
       Write-Host ("  FAIL   {0}: checksum mismatch (expected {1}, got {2}) -- deleting partial" -f $id, $sha, $actual) -ForegroundColor Red
       Remove-Item -Force -Path $dest -ErrorAction SilentlyContinue
+      # A stale aria2 control file would corrupt the next resume of the re-download.
+      Remove-Item -Force -Path "$dest.aria2" -ErrorAction SilentlyContinue
       $hadFailure = $true
     }
   } else {

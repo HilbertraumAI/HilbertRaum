@@ -142,7 +142,10 @@ export class E5Embedder implements Embedder {
         body: JSON.stringify({ model: this.id, input: batch }),
         signal: AbortSignal.timeout(timeoutMs)
       })
-      if (!res.ok) throw new Error(`Embedding request failed: HTTP ${res.status}`)
+      if (!res.ok) {
+        void res.body?.cancel().catch(() => undefined) // release the connection (L1)
+        throw new Error(`Embedding request failed: HTTP ${res.status}`)
+      }
       const json = (await res.json()) as EmbeddingResponse
       const data = json.data ?? []
       if (data.length !== batch.length) {

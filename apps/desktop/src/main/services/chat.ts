@@ -205,6 +205,38 @@ export function maybeSetTitleFromFirstMessage(db: Db, conversationId: string, co
   db.prepare('UPDATE conversations SET title = ? WHERE id = ?').run(title, conversationId)
 }
 
+/**
+ * Render a conversation as a Markdown transcript for export (spec §7.6 "export chat
+ * transcript" — audit M13). Pure string assembly; the IPC layer handles the save dialog.
+ */
+export function exportTranscript(db: Db, conversationId: string): { title: string; markdown: string } {
+  const conv = getConversation(db, conversationId)
+  if (!conv) throw new Error(`Unknown conversation: ${conversationId}`)
+  const messages = listMessages(db, conversationId)
+
+  const lines: string[] = []
+  lines.push(`# ${conv.title}`)
+  lines.push('')
+  lines.push(`_Exported from Private AI Drive Lite on ${nowIso()} — local transcript, never uploaded._`)
+  lines.push('')
+  for (const m of messages) {
+    lines.push(`## ${m.role === 'user' ? 'You' : 'Assistant'} (${m.createdAt})`)
+    lines.push('')
+    lines.push(m.content)
+    if (m.citations && m.citations.length > 0) {
+      lines.push('')
+      lines.push('Sources:')
+      for (const c of m.citations) {
+        const where =
+          c.pageNumber != null ? `, p. ${c.pageNumber}` : c.section ? `, ${c.section}` : ''
+        lines.push(`- [${c.label}] ${c.sourceTitle}${where}`)
+      }
+    }
+    lines.push('')
+  }
+  return { title: conv.title, markdown: lines.join('\n') }
+}
+
 /** Build the runtime message list: system prompt + persisted history in order. */
 export function buildChatMessages(db: Db, conversationId: string): ChatMessage[] {
   const history = listMessages(db, conversationId)
@@ -252,6 +284,22 @@ export async function generateAssistantMessage(
     // Any other error is a real failure and propagates to the IPC layer.
     if (!isAbortError(err, opts.signal)) throw err
   }
-  // Persist whatever was produced — on a stop, that is the partial text so far.
+  // Persist whatever was produced — on a stop, that is the partial text so far. A stop
+  // BEFORE the first token produced nothing: persist nothing (a permanent empty
+  // assistant bubble in the transcript otherwise) and return an unpersisted, empty
+  // message to keep the resolve contract (L2, audit round 4).
+  if (content === '') return emptyAssistantMessage(conversationId)
   return appendMessage(db, { conversationId, role: 'assistant', content })
+}
+
+/** An UNPERSISTED empty assistant message (the zero-token-stop case — see above). */
+export function emptyAssistantMessage(conversationId: string): Message {
+  return {
+    id: randomUUID(),
+    conversationId,
+    role: 'assistant',
+    content: '',
+    createdAt: nowIso(),
+    tokenCount: null
+  }
 }

@@ -13,6 +13,8 @@ setlocal enableextensions
 
 rem %~dp0 = this script's directory, with a trailing backslash = the drive root.
 set "PAID_DRIVE_ROOT=%~dp0"
+rem One source of truth: the app reads the SAME manifests the drive scripts verified.
+set "PAID_MANIFESTS_DIR=%~dp0model-manifests"
 
 rem Find the portable app (the version is part of its name). Take the FIRST match, to
 rem match the first-match behaviour of the macOS/Linux launchers (consistent selection

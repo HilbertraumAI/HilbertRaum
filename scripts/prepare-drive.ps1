@@ -55,6 +55,13 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+# Normalize -Target to a full path: the config files below are written via .NET
+# ([System.IO.File]::WriteAllText), which resolves relative paths against the PROCESS
+# working directory — that does not follow Set-Location, so a relative -Target used to
+# split dirs and config across two locations (audit M22).
+if (-not [System.IO.Path]::IsPathRooted($Target)) { $Target = Join-Path (Get-Location).Path $Target }
+$Target = [System.IO.Path]::GetFullPath($Target)
+
 # Repo root = parent of this script's directory.
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 

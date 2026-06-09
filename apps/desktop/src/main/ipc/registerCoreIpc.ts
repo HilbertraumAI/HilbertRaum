@@ -5,7 +5,7 @@ import { buildDriveStatus } from '../services/workspace'
 import { getSettings, updateSettings } from '../services/settings'
 import { buildPolicyStatus } from '../services/policy'
 import { runPreflight } from '../services/preflight'
-import { log } from '../services/logging'
+import { log, readLogTail } from '../services/logging'
 import type { AppSettings, AppStatus, PolicyStatus, PreflightResult } from '../../shared/types'
 
 // Phase 1 IPC: app/drive status + settings (spec §9.1). Phase 8 adds the privacy
@@ -50,6 +50,9 @@ export function registerCoreIpc(ctx: AppContext): void {
   ipcMain.handle(IPC.getPolicy, (): PolicyStatus =>
     buildPolicyStatus(ctx.paths.configPath, allowNetworkSetting(), (m) => log.warn(m))
   )
+
+  // Spec §7.11 "show recent local logs" (audit M14) — read-only, local, never uploaded.
+  ipcMain.handle(IPC.getLogTail, (): string[] => readLogTail())
 
   ipcMain.handle(IPC.getSettings, () => getSettings(ctx.db))
 

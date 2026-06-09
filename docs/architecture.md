@@ -1,6 +1,6 @@
 # Architecture — Private AI Drive Lite
 
-_Last updated: 2026-06-09 (Phase 10)_
+_Last updated: 2026-06-09 (Phases 11–13 + audit rounds — see the new sections below)_
 
 ## Overview
 
@@ -138,10 +138,12 @@ the whole DB file is encrypted at rest.
   (`PolicyStatus`) the UI uses to distinguish "off by choice" from "disabled by policy".
 - **`AppStatus.offlineMode`** is now policy-aware (`= !networkAllowed`), with an added
   `networkAllowed` flag. `getPolicy` is exposed on the preload bridge.
-- **`services/offlineGuard.ts`** — `assertOfflinePosture()` runs at startup: logs the posture and (in
-  dev/developer mode) installs a defensive tripwire over `net.Socket.prototype.connect` that **logs**
-  any remote connection while offline. **Loopback (`127.0.0.1`/`localhost`/`::1`) is exempt** (dev
-  renderer + Phase-10 sidecar). The guard never blocks or throws.
+- **`services/offlineGuard.ts`** — `assertOfflinePosture()` runs at startup: logs the posture and
+  installs (in **all** builds, when offline — audit §8 M3) a defensive tripwire over
+  `net.Socket.prototype.connect` that **logs** any remote connection while offline. **Loopback
+  (`127.0.0.1`/`localhost`/`::1`) is exempt** (dev renderer + Phase-10 sidecar). The guard never
+  blocks or throws. Boundary note: it covers Node sockets (http/https/fetch via undici); renderer
+  traffic is blocked by the CSP; `electron.net` is not used in the core path.
 - **UI**: `PrivacyScreen.tsx` (spec §7.10/§18.1) renders the offline statement, where data lives, the
   live network state, the plaintext-dev-mode caveat, and the logs-are-local guarantee. The sidebar
   badge reflects the live `getPolicy()` state.
@@ -200,6 +202,34 @@ files**.
   binding, process cleanup, health-timeout, SSE parsing, the embedder mechanics, the mismatch filter)
   is covered by tests with a mocked child process / mocked loopback `fetch`.
 
+## Encrypted workspace (Phase 9 + audit rounds)
+- **`services/security/crypto.ts`** — KDF (Argon2id default, scrypt legacy; descriptor-supplied
+  params are bounds-checked) + AES-256-GCM primitives and the framed blob format.
+- **`services/workspace-vault.ts`** — the vault lifecycle (`WorkspaceController`): create/unlock/
+  lock, STREAMING whole-file encrypt/decrypt (constant memory; >2 GiB safe), chunked `shredFile`,
+  crash-recovery sweep (`shredStalePlaintext` incl. `.tmp`/`.parse*` transients), the encrypted
+  **document cache** (`DocumentCipher` for `workspace/documents/*.enc`), and the create-over-existing
+  vault guard. Full design in [`security-model.md`](security-model.md).
+
+## Drive tooling & distribution (Phases 11–13)
+Canonical, unit-tested TS modules that the self-contained `scripts/*.{ps1,sh}` mirror natively:
+- **`services/drive.ts`** — drive layout (`DRIVE_LAYOUT_DIRS`), `drive.json`/`policy.json`
+  generators, `verifyDriveModels`, `buildChecksumsJson`, the prepare-drive plan.
+- **`services/assets.ts`** — the DIY asset loader logic: `planModelDownloads`, runtime-build
+  selection, `verifyDownloadedFile`, injected-fetch download seam.
+- **`services/launcher.ts`** — `resolveDriveRootFromLauncher` (the per-OS launchers mirror it).
+- **`services/preflight.ts`** — the friendly, non-blocking first-run drive check (`runPreflight` IPC).
+- **`services/commercial-drive.ts`** — `planCommercialDrive` + `assertCommercialDrive`, the "is this
+  drive sellable?" gate (commercial policy, weights VERIFIED, license reviews APPROVED, no user data).
+- Drive detection without the launcher: `workspace.ts findPreparedDriveRoot` walks up from the app's
+  own location (`PORTABLE_EXECUTABLE_DIR` / exe path) to the `config/drive.json` marker (audit M16).
+
+## Diagnostics & transcript export (audit round)
+- `getRuntimeStatus` (read-only runtime health), `getLogTail` (tail of the local `app.log`), and
+  `exportConversation` (spec §7.6 transcript export via the OS save dialog) round out spec §7.11/§7.6.
+- A never-benchmarked workspace is benchmarked **automatically in the background** after it becomes
+  usable (spec §2.1 first-run benchmark; `maybeRunFirstBenchmark`).
+
 ## Data flow (RAG, Phases 4–6)
 import → extract text → chunk → embed (local) → store vectors → on question: embed query → cosine
 top-k → build grounded prompt with `[S1]…` source labels → local LLM → answer with citations →
@@ -219,4 +249,7 @@ render snippets.
 | `services/benchmark.ts` | 7.3 benchmarker |
 | `services/policy.ts` | 7.10 privacy/offline |
 | `services/logging.ts` | 7.11 diagnostics/logs |
-| `services/security/` | 3.5 encryption |
+| `services/security/` + `services/workspace-vault.ts` | 3.5 encryption, 7.9 workspace modes |
+| `services/drive.ts` + `services/assets.ts` | §6 drive layout, §12 packaging |
+| `services/launcher.ts` + `services/preflight.ts` | §6 launchers, §11.4 first-run check |
+| `services/commercial-drive.ts` | §12.2 sellable-drive gate, §13 license reviews |

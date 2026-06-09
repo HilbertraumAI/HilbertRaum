@@ -1,4 +1,4 @@
-import { appendFileSync, mkdirSync, statSync, renameSync, existsSync } from 'node:fs'
+import { appendFileSync, mkdirSync, statSync, renameSync, existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 // Local-only rotating logger (spec §7.11 — diagnostics logs stay on device, never uploaded).
@@ -57,4 +57,19 @@ export const log = {
   info: (m: string, meta?: unknown) => write('info', m, meta),
   warn: (m: string, meta?: unknown) => write('warn', m, meta),
   error: (m: string, meta?: unknown) => write('error', m, meta)
+}
+
+/**
+ * The last `maxLines` lines of the local log, for the Diagnostics screen (spec §7.11
+ * "show recent local logs" — audit M14). Read-only, local-only, never uploaded.
+ */
+export function readLogTail(maxLines = 200): string[] {
+  if (!logFile || !existsSync(logFile)) return []
+  try {
+    const lines = readFileSync(logFile, 'utf8').split(/\r?\n/)
+    while (lines.length > 0 && lines[lines.length - 1] === '') lines.pop()
+    return lines.slice(-maxLines)
+  } catch {
+    return []
+  }
 }

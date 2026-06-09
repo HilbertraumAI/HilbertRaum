@@ -70,9 +70,9 @@ Each phase is a vertical slice that leaves the app runnable. Phases map to spec 
 
 ### Phase 0 — Repo skeleton & tooling  *(spec Milestone 0 / Step 1)*
 - **Goal:** A buildable Electron+React+TS app with placeholder UI; all planning/doc infrastructure in place.
-- **Deliverables:** root `package.json` (workspaces), `apps/desktop` `electron-vite` scaffold, TS configs, ESLint/Prettier, `.gitignore` (excludes models/workspace/logs/node_modules), this plan, `BUILD_STATE.md`, core docs (README, CLAUDE.md, LICENSE, PRIVACY.md, SECURITY.md, CONTRIBUTING.md).
+- **Deliverables:** root `package.json` (workspaces), `apps/desktop` `electron-vite` scaffold, TS configs, `.gitignore` (excludes models/workspace/logs/node_modules), this plan, `BUILD_STATE.md`, core docs (README, CLAUDE.md, LICENSE, PRIVACY.md, SECURITY.md, CONTRIBUTING.md). _(ESLint/Prettier were planned but never installed; the `lint` scripts were removed in audit round 4 — `typecheck` is the static gate.)_
 - **Acceptance:** `npm run dev` opens a window with a placeholder screen; `npm run build` succeeds; no model runtime yet.
-- **Tests:** lint passes; a trivial unit test runner (vitest) runs green.
+- **Tests:** typecheck passes; a trivial unit test runner (vitest) runs green.
 - **Docs to update:** `docs/architecture.md` (initial), README run instructions.
 
 ### Phase 1 — App shell, workspace & settings  *(Milestone 1 / Step 2)*

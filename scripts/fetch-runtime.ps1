@@ -47,6 +47,11 @@ param(
 $ErrorActionPreference = 'Stop'
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 
+# Normalize -Target to a full path: curl.exe resolves relative paths against the PROCESS
+# working directory, which does not follow Set-Location (audit M22).
+if (-not [System.IO.Path]::IsPathRooted($Target)) { $Target = Join-Path (Get-Location).Path $Target }
+$Target = [System.IO.Path]::GetFullPath($Target)
+
 $SourcesFile = Join-Path $Target 'model-manifests/runtime-sources.yaml'
 if (-not (Test-Path $SourcesFile)) { $SourcesFile = Join-Path $RepoRoot 'model-manifests/runtime-sources.yaml' }
 if (-not (Test-Path $SourcesFile)) {
@@ -65,7 +70,10 @@ if (-not $Os) {
   } else { $Os = 'win' }
 }
 if (-not $Arch) {
-  $procArch = $env:PROCESSOR_ARCHITECTURE
+  # PROCESSOR_ARCHITECTURE reports the (possibly emulated) PROCESS arch — an x64
+  # PowerShell on ARM64 Windows says AMD64. PROCESSOR_ARCHITEW6432 reveals the real OS
+  # arch under WOW emulation.
+  $procArch = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
   $Arch = if ($procArch -match 'ARM64') { 'arm64' } else { 'x64' }
 }
 
@@ -77,16 +85,18 @@ $current = $null
 foreach ($raw in $lines) {
   $line = $raw.TrimEnd()
   if ($line -match '^\s*#') { continue }
+  # Strip inline YAML comments (whitespace + '#' + rest) before unquoting (M17) — the
+  # committed `version: b9196   # PLACEHOLDER …` used to leak the comment into the value.
   if (-not $version -and $line -match '^\s*version\s*:\s*(.+?)\s*$') {
-    $version = $Matches[1].Trim().Trim('"').Trim("'"); continue
+    $version = ($Matches[1] -replace '\s+#.*$', '').Trim().Trim('"').Trim("'"); continue
   }
   if ($line -match '^\s*-\s*os\s*:\s*(.+?)\s*$') {
     if ($current) { $builds += $current }
-    $current = [ordered]@{ os = $Matches[1].Trim().Trim('"').Trim("'") }
+    $current = [ordered]@{ os = ($Matches[1] -replace '\s+#.*$', '').Trim().Trim('"').Trim("'") }
     continue
   }
   if ($current -and $line -match '^\s+([A-Za-z0-9_]+)\s*:\s*(.+?)\s*$') {
-    $current[$Matches[1].Trim()] = $Matches[2].Trim().Trim('"').Trim("'")
+    $current[$Matches[1].Trim()] = ($Matches[2] -replace '\s+#.*$', '').Trim().Trim('"').Trim("'")
   }
 }
 if ($current) { $builds += $current }
@@ -115,6 +125,14 @@ foreach ($required in @('url', 'sha256', 'extract_to')) {
     Write-Error "runtime-sources.yaml: selected build ($Os/$Arch) is missing '$required'."
     exit 2
   }
+}
+
+# Escape guard (M18): runtime-sources.yaml on the DRIVE is user-writable; a tampered
+# extract_to must not be able to write outside the drive root (TS planRuntimeDownload
+# already rejects this — mirror it).
+if ($build.extract_to -match '\.\.' -or $build.extract_to -match '^[/\\]' -or $build.extract_to -match '^[A-Za-z]:') {
+  Write-Error "runtime-sources.yaml: extract_to escapes the drive root: $($build.extract_to)"
+  exit 2
 }
 
 $IsRealSha = { param($h) $h -match '^[a-f0-9]{64}$' }

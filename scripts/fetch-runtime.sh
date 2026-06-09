@@ -73,20 +73,23 @@ sha256_of() {
 VERSION=""
 declare -a B_OS B_ARCH B_BACKEND B_URL B_SHA B_EXTRACT
 idx=-1
+# Strip an inline YAML comment (whitespace + '#' + rest) before unquoting (M17) — the
+# committed `version: b9196   # PLACEHOLDER …` used to leak the comment into the value.
+strip_value() { echo "$1" | sed 's/[[:space:]][[:space:]]*#.*$//' | tr -d '"'"'"'' | sed 's/[[:space:]]*$//'; }
+
 while IFS= read -r raw; do
   line="${raw%$'\r'}"
-  case "$line" in \#*|*' #'*) ;; esac
   if [[ -z "$VERSION" && "$line" =~ ^[[:space:]]*version[[:space:]]*:[[:space:]]*(.+)$ ]]; then
-    VERSION="$(echo "${BASH_REMATCH[1]}" | tr -d '"'"'"'' | sed 's/[[:space:]]*$//')"; continue
+    VERSION="$(strip_value "${BASH_REMATCH[1]}")"; continue
   fi
   if [[ "$line" =~ ^[[:space:]]*-[[:space:]]*os[[:space:]]*:[[:space:]]*(.+)$ ]]; then
     idx=$((idx + 1))
-    B_OS[$idx]="$(echo "${BASH_REMATCH[1]}" | tr -d '"'"'"'' | sed 's/[[:space:]]*$//')"
+    B_OS[$idx]="$(strip_value "${BASH_REMATCH[1]}")"
     continue
   fi
   if [[ $idx -ge 0 && "$line" =~ ^[[:space:]]+([A-Za-z0-9_]+)[[:space:]]*:[[:space:]]*(.+)$ ]]; then
     key="${BASH_REMATCH[1]}"
-    val="$(echo "${BASH_REMATCH[2]}" | tr -d '"'"'"'' | sed 's/[[:space:]]*$//')"
+    val="$(strip_value "${BASH_REMATCH[2]}")"
     case "$key" in
       arch) B_ARCH[$idx]="$val" ;;
       backend) B_BACKEND[$idx]="$val" ;;
@@ -128,6 +131,15 @@ for required in url sha256 extract_to; do
     exit 2
   fi
 done
+
+# Escape guard (M18): runtime-sources.yaml on the DRIVE is user-writable; a tampered
+# extract_to must not be able to write outside the drive root (mirrors TS planRuntimeDownload).
+case "${B_EXTRACT[$SEL]}" in
+  *..*|/*|[A-Za-z]:*)
+    echo "runtime-sources.yaml: extract_to escapes the drive root: ${B_EXTRACT[$SEL]}" >&2
+    exit 2
+    ;;
+esac
 
 EXTRACT_TO="$TARGET/${B_EXTRACT[$SEL]}"
 BIN_NAME="llama-server"; [[ "${B_OS[$SEL]}" == "win" ]] && BIN_NAME="llama-server.exe"

@@ -12,6 +12,8 @@ set -e
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
 export PAID_DRIVE_ROOT="$DIR"
+# One source of truth: the app reads the SAME manifests the drive scripts verified.
+export PAID_MANIFESTS_DIR="$DIR/model-manifests"
 
 # Find the AppImage on the drive.
 APP=""

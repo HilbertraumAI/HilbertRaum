@@ -68,6 +68,20 @@ describe('deriveKey', () => {
     expect(() => deriveKey('pw', salt, { algo: 'argon2id', keyLen: 32 })).toThrow(/argon2id parameters/)
     expect(() => deriveKey('pw', salt, { algo: 'scrypt', keyLen: 32 })).toThrow(/scrypt parameters/)
   })
+
+  // SEC-B (audit round 4): the descriptor is unencrypted + attacker-writable. Unbounded
+  // params would make every unlock attempt a multi-GB allocation (vault DoS); a foreign
+  // keyLen silently changes the AES key size. Both must fail loudly instead.
+  it('rejects out-of-bounds params from a tampered descriptor', () => {
+    const salt = generateSalt()
+    expect(() =>
+      deriveKey('pw', salt, { algo: 'argon2id', m: 2_000_000_000, t: 2, p: 1, keyLen: 32 })
+    ).toThrow(/out of bounds/)
+    expect(() =>
+      deriveKey('pw', salt, { algo: 'scrypt', N: 1000, r: 8, p: 1, keyLen: 32 }) // not a power of two
+    ).toThrow(/out of bounds/)
+    expect(() => deriveKey('pw', salt, { ...FAST_SCRYPT, keyLen: 64 })).toThrow(/keyLen/)
+  })
 })
 
 describe('AES-256-GCM encrypt/decrypt', () => {

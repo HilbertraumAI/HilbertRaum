@@ -44,6 +44,12 @@ param(
 $ErrorActionPreference = 'Stop'
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 
+# Normalize -Target to a full path: .NET IO ([System.IO.File]::WriteAllText below)
+# resolves relative paths against the PROCESS working directory, which does not follow
+# Set-Location (audit M22).
+if (-not [System.IO.Path]::IsPathRooted($Target)) { $Target = Join-Path (Get-Location).Path $Target }
+$Target = [System.IO.Path]::GetFullPath($Target)
+
 # Prefer the drive's own manifests; fall back to the repo's committed ones.
 $ManifestsDir = Join-Path $Target 'model-manifests'
 if (-not (Test-Path $ManifestsDir)) { $ManifestsDir = Join-Path $RepoRoot 'model-manifests' }
@@ -57,7 +63,8 @@ if (-not (Test-Path $ManifestsDir)) {
 function Get-ManifestField([string]$text, [string]$key) {
   foreach ($line in $text -split "`n") {
     if ($line -match "^\s*$([Regex]::Escape($key))\s*:\s*(.+?)\s*$") {
-      return $Matches[1].Trim().Trim('"').Trim("'")
+      # Strip an inline YAML comment (whitespace + '#' + rest) before unquoting (M17).
+      return ($Matches[1] -replace '\s+#.*$', '').Trim().Trim('"').Trim("'")
     }
   }
   return $null
@@ -65,7 +72,11 @@ function Get-ManifestField([string]$text, [string]$key) {
 
 $IsRealSha = { param($h) $h -match '^[a-f0-9]{64}$' }
 
-$manifestFiles = Get-ChildItem -Path $ManifestsDir -Recurse -Include *.yaml, *.yml
+# Exclude the runtime-sources manifest (it describes the sidecar, not a model). It has
+# no local_path today, but mirroring fetch-models' explicit exclusion removes the
+# fragility if it ever gains one.
+$manifestFiles = Get-ChildItem -Path $ManifestsDir -Recurse -Include *.yaml, *.yml |
+  Where-Object { $_.Name -notin @('runtime-sources.yaml', 'runtime-sources.yml') }
 $results = @()
 $hadMismatch = $false
 

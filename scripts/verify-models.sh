@@ -43,8 +43,9 @@ sha256_of() {
   else shasum -a 256 "$1" | awk '{print $1}'; fi
 }
 
-# Flat-YAML line parse for a single key.
-field() { sed -n "s/^[[:space:]]*$2[[:space:]]*:[[:space:]]*//p" "$1" | head -n1 | tr -d '"'"'"'' | sed 's/[[:space:]]*$//'; }
+# Flat-YAML line parse for a single key. Inline YAML comments (whitespace + '#' + rest)
+# are stripped before unquoting (M17).
+field() { sed -n "s/^[[:space:]]*$2[[:space:]]*:[[:space:]]*//p" "$1" | head -n1 | sed 's/[[:space:]][[:space:]]*#.*$//' | tr -d '"'"'"'' | sed 's/[[:space:]]*$//'; }
 
 is_real_sha() { [[ "$1" =~ ^[a-f0-9]{64}$ ]]; }
 
@@ -57,7 +58,15 @@ verified_weights=0
 MANIFEST_FILES=()
 while IFS= read -r mf; do
   [ -n "$mf" ] && MANIFEST_FILES+=("$mf")
-done < <(find "$MANIFESTS_DIR" \( -name '*.yaml' -o -name '*.yml' \) -type f | sort)
+done < <(find "$MANIFESTS_DIR" \( -name '*.yaml' -o -name '*.yml' \) -type f \
+         ! -name 'runtime-sources.yaml' ! -name 'runtime-sources.yml' | sort)
+
+# Bash 3.2 + `set -u`: expanding an EMPTY array aborts with "unbound variable" (M23).
+if [[ ${#MANIFEST_FILES[@]} -eq 0 ]]; then
+  echo "No model manifests found under $MANIFESTS_DIR — nothing to verify." >&2
+  if [[ $STRICT -eq 1 ]]; then exit 1; fi
+  exit 0
+fi
 
 for mf in "${MANIFEST_FILES[@]}"; do
   id="$(field "$mf" id)"

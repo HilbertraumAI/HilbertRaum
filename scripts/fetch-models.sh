@@ -51,7 +51,8 @@ sha256_of() {
 }
 
 # Flat-YAML line parse — first match wins (top-level sha256 over the nested download one).
-field() { sed -n "s/^[[:space:]]*$2[[:space:]]*:[[:space:]]*//p" "$1" | head -n1 | tr -d '"'"'"'' | sed 's/[[:space:]]*$//'; }
+# Inline YAML comments (whitespace + '#' + rest) are stripped before unquoting (M17).
+field() { sed -n "s/^[[:space:]]*$2[[:space:]]*:[[:space:]]*//p" "$1" | head -n1 | sed 's/[[:space:]][[:space:]]*#.*$//' | tr -d '"'"'"'' | sed 's/[[:space:]]*$//'; }
 
 is_real_sha() { [[ "$1" =~ ^[a-f0-9]{64}$ ]]; }
 
@@ -84,6 +85,12 @@ planned=0; fetched=0; skipped=0; had_failure=0
 echo "Fetch models -> $TARGET"
 [[ $DRY_RUN -eq 1 ]] && echo "(dry run — nothing will be downloaded)"
 echo
+
+# Bash 3.2 + `set -u`: expanding an EMPTY array aborts with "unbound variable" (M23).
+if [[ ${#MANIFEST_FILES[@]} -eq 0 ]]; then
+  echo "No model manifests found under $MANIFESTS_DIR — nothing to fetch."
+  exit 0
+fi
 
 for mf in "${MANIFEST_FILES[@]}"; do
   id="$(field "$mf" id)"
@@ -138,7 +145,8 @@ for mf in "${MANIFEST_FILES[@]}"; do
       printf '  ok     %s (VERIFIED)\n' "$id"; fetched=$((fetched + 1))
     else
       printf '  FAIL   %s: checksum mismatch (expected %s, got %s) — deleting partial\n' "$id" "$sha" "$actual" >&2
-      rm -f "$dest"; had_failure=1
+      # Also drop a stale aria2 control file, which would corrupt the next resume.
+      rm -f "$dest" "$dest.aria2"; had_failure=1
     fi
   else
     printf '  ok     %s (UNVERIFIED — placeholder hash; run verify-models --generate)\n' "$id"

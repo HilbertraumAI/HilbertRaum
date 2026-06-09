@@ -67,9 +67,27 @@ PRIVATE_AI_DRIVE/
 >   `llamaOsDir`), **not** the spec's prose `windows/macos/linux`.
 > - Model manifests live in a **top-level `model-manifests/`** dir (discovered by
 >   `services/models.ts` `resolveManifestsDir`), **not** `models/manifests/`.
+> - The spec §6 sketch also shows `updates/{incoming,applied}/`, `workspace/{encrypted,
+>   plaintext-dev,backups}/`, and `runtime/embeddings/` — **not shipped**: there is no update
+>   mechanism yet (see *Updating a drive* below), the workspace is a single flat dir whose DB is
+>   `paid.sqlite` or `paid.sqlite.enc` (mode is an attribute, not a directory), and the embeddings
+>   sidecar reuses the same `runtime/llama.cpp/<os>/` binary.
 >
 > The `apps/desktop/src/main/services/drive.ts` module (`DRIVE_LAYOUT_DIRS`) is the canonical,
 > unit-tested list of these directories; the `prepare-drive` scripts create exactly that set.
+
+## Updating a drive (manual — spec §12.3)
+
+There is **no in-app updater** (by design: the app makes no network calls). Updating a prepared
+drive is the same flow as building it, run again from a machine with the repo:
+
+1. `prepare-drive --target <drive> --force` refreshes `model-manifests/` + the bundled docs +
+   `config/{drive,policy}.json` (the workspace and weights are untouched).
+2. `fetch-models` / `fetch-runtime` download anything new (present + verified files are skipped).
+3. Replace the portable app/launchers at the drive root with the new build.
+4. `verify-models --target <drive> --strict` confirms every weight still verifies.
+
+The user's `workspace/` (and its encrypted data) is never modified by an update.
 
 ## Preparing a drive (Phase 11 scripts)
 

@@ -1,6 +1,13 @@
 # Normalize line endings: store text as LF in the repo, check out native on Windows.
 * text=auto eol=lf
 
+# Windows batch launchers MUST be CRLF — cmd.exe parsing of LF-only batch files is
+# unsupported and has documented multi-line-block edge cases; these files ship verbatim
+# to customer drives (audit M20). READ* covers "READ ME FIRST.txt" (patterns with spaces
+# are not portable in .gitattributes).
+launchers/*.cmd text eol=crlf
+launchers/READ* text eol=crlf
+
 # Binary/lock files left untouched
 package-lock.json text eol=lf
 *.gguf binary

@@ -1,4 +1,5 @@
-import { ipcMain, type IpcMainInvokeEvent } from 'electron'
+import { BrowserWindow, dialog, ipcMain, type IpcMainInvokeEvent } from 'electron'
+import { writeFileSync } from 'node:fs'
 import { IPC, STREAM } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
 import type { ChatOptions, Conversation, Message } from '../../shared/types'
@@ -6,6 +7,7 @@ import {
   appendMessage,
   createConversation,
   deleteLastAssistantMessage,
+  exportTranscript,
   generateAssistantMessage,
   getConversation,
   listConversations,
@@ -127,5 +129,27 @@ export function registerChatIpc(ctx: AppContext): void {
       log.info('Stop generation', { conversationId })
       controller.abort()
     }
+  })
+
+  // Export a transcript to a user-chosen file (spec §7.6 — audit M13). The save dialog
+  // runs in MAIN (the renderer has no fs/dialog access); returns the saved path, or
+  // null when the user cancelled.
+  ipcMain.handle(IPC.exportConversation, async (_e, conversationId: string): Promise<string | null> => {
+    const { title, markdown } = exportTranscript(ctx.db, conversationId)
+    const safeName = title.replace(/[^\p{L}\p{N} _-]/gu, '').trim().slice(0, 60) || 'chat'
+    const win = BrowserWindow.getFocusedWindow()
+    const options = {
+      title: 'Export chat transcript',
+      defaultPath: `${safeName}.md`,
+      filters: [
+        { name: 'Markdown', extensions: ['md'] },
+        { name: 'Text', extensions: ['txt'] }
+      ]
+    }
+    const result = win ? await dialog.showSaveDialog(win, options) : await dialog.showSaveDialog(options)
+    if (result.canceled || !result.filePath) return null
+    writeFileSync(result.filePath, markdown, 'utf8')
+    log.info('Transcript exported', { conversationId })
+    return result.filePath
   })
 }

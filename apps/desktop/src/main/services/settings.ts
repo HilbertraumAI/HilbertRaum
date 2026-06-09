@@ -29,6 +29,12 @@ export function updateSettings(db: Db, patch: Partial<AppSettings>): AppSettings
   )
   for (const [key, value] of Object.entries(patch)) {
     if (value === undefined) continue
+    // The patch crosses the IPC boundary from the renderer: persist only KNOWN settings
+    // keys, and only when the value's primitive type matches the default's (nullable
+    // fields accept null). Unknown/mistyped entries are dropped (audit SEC-F).
+    if (!(key in DEFAULT_SETTINGS)) continue
+    const def = (DEFAULT_SETTINGS as unknown as Record<string, unknown>)[key]
+    if (def !== null && value !== null && typeof value !== typeof def) continue
     upsert.run(key, JSON.stringify(value), now)
   }
   return getSettings(db)

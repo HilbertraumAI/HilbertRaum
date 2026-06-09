@@ -56,6 +56,10 @@ param(
 $ErrorActionPreference = 'Stop'
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 
+# Normalize -Target to a full path before passing it to the child scripts (audit M22).
+if (-not [System.IO.Path]::IsPathRooted($Target)) { $Target = Join-Path (Get-Location).Path $Target }
+$Target = [System.IO.Path]::GetFullPath($Target)
+
 function Step([int]$n, [string]$msg) { Write-Host "`n[$n] $msg" -ForegroundColor Cyan }
 # Invoke a sibling script with NAMED parameters. Hashtable splatting (not array splatting)
 # is required so -Target is bound by name, not positionally. Reset $LASTEXITCODE first so a
@@ -166,7 +170,7 @@ if (-not $DryRun) {
       if ($text -notmatch '(?m)^\s*local_path\s*:') { continue }
       $reviewStatus = $null
       if ($text -match '(?m)^\s*status\s*:\s*(.+?)\s*$') {
-        $reviewStatus = $Matches[1].Trim().Trim('"').Trim("'")
+        $reviewStatus = ($Matches[1] -replace '\s+#.*$', '').Trim().Trim('"').Trim("'")
       }
       if ($reviewStatus -ne 'approved') {
         $problems += "license_review not approved: $($mf.BaseName) (status: $(if ($reviewStatus) { $reviewStatus } else { 'missing' }))"

@@ -139,6 +139,9 @@ export class LlamaRuntime implements ModelRuntime {
       signal: options?.signal
     })
     if (!res.ok || !res.body) {
+      // Cancel the body so undici releases the connection instead of holding it until
+      // GC (L1, audit round 4).
+      void res.body?.cancel().catch(() => undefined)
       throw new Error(`Chat request failed: HTTP ${res.status}`)
     }
     yield* readChatSSE(res.body, options?.signal)

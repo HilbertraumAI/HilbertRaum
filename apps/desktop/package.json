@@ -13,8 +13,10 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "package": "electron-vite build && electron-builder",
-    "package:win": "electron-vite build && electron-builder --win portable",
-    "lint": "eslint . --ext .ts,.tsx"
+    "package:win": "electron-vite build && electron-builder --win portable"
+  },
+  "engines": {
+    "node": ">=22.5"
   },
   "dependencies": {
     "@noble/hashes": "^2.2.0",

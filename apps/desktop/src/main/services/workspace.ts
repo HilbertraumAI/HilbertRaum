@@ -1,6 +1,6 @@
 import { mkdirSync, writeFileSync, rmSync, existsSync } from 'node:fs'
 import { statfs } from 'node:fs/promises'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import type { DriveStatus } from '../../shared/types'
 
 // Workspace / drive manager (spec §7.2 drive detector + §7.9 workspace manager).
@@ -8,6 +8,30 @@ import type { DriveStatus } from '../../shared/types'
 //   1. Prepared external drive (a `config/drive.json` marker at the root)
 //   2. Explicit override via the PAID_DRIVE_ROOT environment variable
 //   3. App-data fallback (normal install / dev)
+// Detection order in main: PAID_DRIVE_ROOT (the launchers) → walk-up from the app's own
+// location (`findPreparedDriveRoot`, M16 — a buyer who double-clicks the portable .exe /
+// .app directly, bypassing the launcher, must still land on the DRIVE workspace, not a
+// silent fresh app-data one) → app-data fallback.
+
+/**
+ * Walk up from `startDir` looking for the prepared-drive marker (`config/drive.json`).
+ * Returns the drive root, or null. Used when the app is launched WITHOUT the launcher:
+ * the Windows portable exe exposes its real location via PORTABLE_EXECUTABLE_DIR (the
+ * exe itself extracts to a temp dir), and a macOS .app/Linux AppImage on the drive is
+ * found by walking up from the executable. Only a marker hit counts — an exe sitting in
+ * Downloads must NOT turn Downloads into a workspace root.
+ */
+export function findPreparedDriveRoot(startDir: string | undefined, maxLevels = 6): string | null {
+  let dir = startDir?.trim()
+  if (!dir) return null
+  for (let i = 0; i < maxLevels; i++) {
+    if (existsSync(join(dir, 'config', 'drive.json'))) return dir
+    const parent = dirname(dir)
+    if (parent === dir) break
+    dir = parent
+  }
+  return null
+}
 
 export interface ResolvedPaths {
   rootPath: string

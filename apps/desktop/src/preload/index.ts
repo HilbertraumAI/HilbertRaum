@@ -55,6 +55,8 @@ const api = {
   startRuntime: (modelId: string): Promise<RuntimeStatus> =>
     ipcRenderer.invoke(IPC.startRuntime, modelId),
   stopRuntime: (): Promise<void> => ipcRenderer.invoke(IPC.stopRuntime),
+  /** Read-only runtime health/state (Diagnostics, spec §7.11). */
+  getRuntimeStatus: (): Promise<RuntimeStatus> => ipcRenderer.invoke(IPC.getRuntimeStatus),
 
   // ---- Hardware benchmark (Phase 7) ----
   /** Detect hardware + measure drive speed, persist + return the result. Strictly local. */
@@ -78,6 +80,11 @@ const api = {
   ): Promise<Message> => ipcRenderer.invoke(IPC.sendChatMessage, conversationId, content, options),
   stopGeneration: (conversationId: string): Promise<void> =>
     ipcRenderer.invoke(IPC.stopGeneration, conversationId),
+  /** Save a transcript to a user-chosen file; resolves with the path, or null on cancel. */
+  exportConversation: (conversationId: string): Promise<string | null> =>
+    ipcRenderer.invoke(IPC.exportConversation, conversationId),
+  /** Tail of the local log file (Diagnostics, spec §7.11). Local-only. */
+  getLogTail: (): Promise<string[]> => ipcRenderer.invoke(IPC.getLogTail),
 
   // ---- RAG / document Q&A (Phase 6) ----
   /** Stream a document-grounded answer; resolves with the final assistant message

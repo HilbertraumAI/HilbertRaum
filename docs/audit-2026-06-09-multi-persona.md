@@ -8,9 +8,14 @@ _Date: 2026-06-09 · Scope: full repo at Phases 0–13 complete ("MVP feature-co
 > build green.
 >
 > **ROUND 2 (same day):** the **Medium correctness cluster** — M1, M2, M3, M4, M5, M6, M7, M10,
-> M11 — is also **FIXED** (BUILD_STATE §12; 355/355 tests, +12). Still open: the doc-drift sweep
-> (M12–M31 where not code-fixed above, notably M12–M17 spec gaps and M25–M31 doc staleness) and
-> the Low findings in §6.
+> M11 — is also **FIXED** (BUILD_STATE §12; 355/355 tests, +12).
+>
+> **ROUND 3 (same day):** everything else — M12–M24 (spec features + script fixes), the docs
+> sweep M15/M25–M31, and the SEC/code Lows (KDF bounds, key zeroing, settings allowlist, L1, L2,
+> L5) — is **FIXED** (BUILD_STATE §13; 360/360 tests, build green). Remaining open items are the
+> consciously-accepted ones listed in BUILD_STATE §13's "Still open" note (no Onboarding wizard,
+> dead Fast/Balanced/Deep plumbing, `runtime_events` unwritten, picker-only import hardening,
+> detection-only offline guard, drive-copied doc link rot).
 
 ## 1. Methodology
 

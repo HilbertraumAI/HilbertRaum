@@ -14,6 +14,8 @@ set -e
 # The directory this script sits in = the drive root.
 DIR="$(cd "$(dirname "$0")" && pwd)"
 export PAID_DRIVE_ROOT="$DIR"
+# One source of truth: the app reads the SAME manifests the drive scripts verified.
+export PAID_MANIFESTS_DIR="$DIR/model-manifests"
 
 # Find the packaged app bundle.
 APP=""
@@ -37,6 +39,12 @@ BIN="$APP/Contents/MacOS/$(basename "$APP" .app)"
 if [ -x "$BIN" ]; then
   exec "$BIN"
 else
-  # Fallback: open the bundle (env may not propagate on very old macOS).
-  open "$APP"
+  # `open` would NOT propagate PAID_DRIVE_ROOT (launchd strips the env) — the app would
+  # silently use a non-drive workspace. Fail with a message instead.
+  echo
+  echo "  Could not start the app binary inside '$APP'."
+  echo "  Try right-clicking the .app and choosing 'Open' once (Gatekeeper), then use"
+  echo "  this launcher again. See docs/troubleshooting.md for help."
+  echo
+  exit 1
 fi

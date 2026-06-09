@@ -1,6 +1,6 @@
 import { app, BrowserWindow, shell } from 'electron'
-import { join } from 'node:path'
-import { resolvePaths, ensureWorkspaceDirs } from './services/workspace'
+import { dirname, join } from 'node:path'
+import { resolvePaths, ensureWorkspaceDirs, findPreparedDriveRoot } from './services/workspace'
 import { getSettings } from './services/settings'
 import { loadPolicy, buildPolicyStatus } from './services/policy'
 import { vaultPathsFrom, WorkspaceController } from './services/workspace-vault'
@@ -12,7 +12,7 @@ import { registerModelIpc } from './ipc/registerModelIpc'
 import { registerChatIpc } from './ipc/registerChatIpc'
 import { registerDocsIpc } from './ipc/registerDocsIpc'
 import { registerRagIpc } from './ipc/registerRagIpc'
-import { registerBenchmarkIpc } from './ipc/registerBenchmarkIpc'
+import { registerBenchmarkIpc, maybeRunFirstBenchmark } from './ipc/registerBenchmarkIpc'
 import { RuntimeManager } from './services/runtime'
 import { createSelectingRuntimeFactory } from './services/runtime/factory'
 import { createSelectedEmbedder, type EmbeddingModelInfo } from './services/embeddings/factory'
@@ -54,13 +54,25 @@ function resolveEmbeddingModel(manifestsDir: string | null, rootPath: string): E
 // Resolve the workspace/drive layout, open the database, and register IPC.
 // Runs once at startup, before the window loads.
 function initBackend(): void {
+  // M16: a buyer who double-clicks the portable .exe / .app DIRECTLY (bypassing the
+  // launcher) gets no PAID_DRIVE_ROOT — detect the drive from the app's own location so
+  // they still land on the drive's (possibly encrypted) workspace, not a silent fresh
+  // app-data one. PORTABLE_EXECUTABLE_DIR is set by the electron-builder portable target
+  // (the exe extracts itself to a temp dir, so execPath alone would miss the drive).
+  const exeDriveRoot =
+    findPreparedDriveRoot(process.env.PORTABLE_EXECUTABLE_DIR) ??
+    findPreparedDriveRoot(dirname(app.getPath('exe')))
   const paths = resolvePaths({
-    envRoot: process.env.PAID_DRIVE_ROOT,
+    envRoot: process.env.PAID_DRIVE_ROOT ?? exeDriveRoot ?? undefined,
     fallbackRoot: app.getPath('userData')
   })
   ensureWorkspaceDirs(paths)
   initLogging(paths.logsPath)
-  log.info('Workspace resolved', { root: paths.rootPath, preparedDrive: paths.isPreparedDrive })
+  log.info('Workspace resolved', {
+    root: paths.rootPath,
+    preparedDrive: paths.isPreparedDrive,
+    detectedFromAppLocation: !process.env.PAID_DRIVE_ROOT && exeDriveRoot != null
+  })
 
   // Phase 9: the workspace controller owns the DB lifecycle. In plaintext_dev mode the DB
   // opens immediately (current dev behavior); in encrypted mode it stays locked until the
@@ -118,6 +130,11 @@ function initBackend(): void {
   registerDocsIpc(ctx)
   registerRagIpc(ctx)
   registerBenchmarkIpc(ctx)
+
+  // Spec §2.1 first-run benchmark (M12): a plaintext-dev workspace is already open at
+  // startup — benchmark it in the background if it never was. Encrypted workspaces get
+  // the same treatment after unlock/create (registerWorkspaceIpc).
+  maybeRunFirstBenchmark(ctx)
 
   // Phase 8: log the offline posture and install a defensive tripwire that flags any
   // attempt to reach a REMOTE host while offline (loopback is exempt — dev renderer +

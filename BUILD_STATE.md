@@ -183,7 +183,8 @@ Repo root: `f:\_coding\ai_drive`.
   Phase 10). Only remote origins are violations. `services/offlineGuard.ts`
   `installOfflineNetworkGuard` wraps `net.Socket.prototype.connect` and **only logs** a remote
   attempt — it never blocks or throws (a wrong host guess must not break local IPC/sidecar). The
-  guard install is gated to dev/`developerMode`; `assertOfflinePosture()` always logs the posture.
+  guard is installed in ALL builds when offline (audit §8 M3 superseded the original
+  dev-only gating); `assertOfflinePosture()` always logs the posture.
 - **CSP dev-vs-prod split (Phase 8):** strict CSP applied as a response header
   (`session.webRequest.onHeadersReceived`) on top of the `index.html` meta tag. **Prod:**
   `default-src 'self'`, `connect-src 'self'`, `object-src 'none'`, `base-uri 'none'`,
@@ -407,7 +408,9 @@ Wired so far: core (Phase 1) + `listModels`/`selectModel`/`startRuntime`/`stopRu
 `createConversation`/`listConversations`/`listMessages`/`sendChatMessage`/`stopGeneration` (Phase 3) +
 `pickDocuments`/`importDocuments`/`getImportJob`/`listDocuments`/`deleteDocument`/`reindexDocument`
 (Phase 4) + `askDocuments` (Phase 6) + `runBenchmark` (Phase 7) + `getPolicy` (Phase 8) +
-`getWorkspaceState`/`unlockWorkspace`/`createWorkspace`/`lockWorkspace` (Phase 9).
+`getWorkspaceState`/`unlockWorkspace`/`createWorkspace`/`lockWorkspace` (Phase 9) +
+`runPreflight` (Phase 13) + `getRuntimeStatus`/`exportConversation`/`getLogTail` (audit round 4 —
+spec §7.6 export + §7.11 Diagnostics).
 (`pickDocuments` + `reindexDocument` are Phase-4 additions to the `IPC` registry beyond the spec
 §9.1 list — picker + re-index UX; `getPolicy` is a Phase-8 addition; the four `workspace:*` channels
 are Phase-9 additions.) `createConversation` now also accepts an optional `mode`
@@ -438,7 +441,8 @@ unencrypted `config/workspace.json` vault descriptor is the only pre-unlock arti
 
 ### Models + runtime (Phase 2 live)
 ✅ **Manifest** schema/validator in `src/shared/manifest.ts` (`ModelManifest`, `validateManifest`,
-`isRealSha256`). YAML files under `model-manifests/` (chat: Qwen3 1.7B/4B/8B Q4; embeddings: E5 small).
+`isRealSha256`). YAML files under `model-manifests/` (chat: Qwen3 1.7B/4B/8B/14B Q4 + 30B-A3B MoE;
+embeddings: E5 small — six manifests total).
 ✅ **`services/models.ts`** — `resolveManifestsDir`, `discoverManifests`, `sha256File`,
 `verifyChecksum`, `computeInstallState`, `recommendModelId`, `buildModelList`, `selectModel`.
 States: `unsupported→missing→checksum_failed→installed` (+`running` overlay). `ModelInfo` shape per
@@ -607,7 +611,7 @@ stop, regenerate, per-message copy, and the no-runtime empty state.
   `checkOutboundHost(host, offline)` → `{ host, violation }`, `installOfflineNetworkGuard({ offline,
   onViolation })` (wraps `net.Socket.prototype.connect`, logs remote attempts, **never blocks**,
   returns an uninstaller; no-op when not offline), `assertOfflinePosture({ posture, installGuard,
-  log, warn })` (startup self-check; logs posture, installs guard in dev/developerMode).
+  log, warn })` (startup self-check; logs posture, installs the guard in ALL builds when offline).
 ✅ **IPC** `registerCoreIpc.ts`: `getPolicy` (`policy:get`) returns `buildPolicyStatus(...)`;
   `getAppStatus.offlineMode`/`networkAllowed` now come from the policy resolution. Preload exposes
   `api.getPolicy` + `PreloadApi`. `main/index.ts` calls `assertOfflinePosture()` in `initBackend()`
@@ -720,10 +724,11 @@ stop, regenerate, per-message copy, and the no-runtime empty state.
 ### Provisioning / asset loader (Phase 12 live)
 ✅ **Schema** — `shared/manifest.ts` `DownloadSpec` + optional `ModelManifest.download` (validated only
   when present; real `download.sha256` must equal a real top-level `sha256`). `shared/runtime-sources.ts`
-  `RuntimeBuild`/`RuntimeSources` + `validateRuntimeSources` (mirror `validateManifest`). The 4 committed
-  model manifests carry real upstream URLs + placeholder hashes; `model-manifests/runtime-sources.yaml`
-  pins `ggml-org/llama.cpp@b9196`, one CPU build per OS. `models.ts` `RESERVED_MANIFEST_FILES` excludes
-  `runtime-sources.yaml` from model discovery.
+  `RuntimeBuild`/`RuntimeSources` + `validateRuntimeSources` (mirror `validateManifest`). The committed
+  model manifests (six, incl. the later 14B/30B-A3B) carry real upstream URLs + placeholder hashes;
+  `model-manifests/runtime-sources.yaml` references `ggml-org/llama.cpp@b9196` — a **PLACEHOLDER**
+  version/URLs/hashes to be replaced with a real release before any fetch — one CPU build per OS.
+  `models.ts` `RESERVED_MANIFEST_FILES` excludes `runtime-sources.yaml` from model discovery.
 ✅ **`services/assets.ts`** — the canonical, unit-tested asset logic (mirrors `drive.ts`; NO real network):
 - `planModelDownloads(root, manifests, {only?, acceptLicense?}) → ModelDownloadTask[]` — only manifests
   with a `download` block; reads fs to mark `present-verified`/`present-unverified`/`download`/
@@ -1192,4 +1197,75 @@ dev/isDev/policy-veto matrix (3 net), license-gate fail (1), startableAsMock off
 (folded into the listing test).
 
 **Still open from the audit:** the docs-drift sweep (M25–M31) + the Low findings — tracked in the
-report §5/§6.
+report §5/§6. _(Update: closed in §13 below.)_
+
+---
+
+## 13. Audit round 4 — remaining Mediums, Lows & docs sweep (2026-06-09)
+
+The final remediation round: everything still open from the audit. Gate: typecheck clean,
+**360/360 tests pass** (was 355 — +5), build green (main bundle **118.87 kB**). No new deps.
+
+**Scripts/packaging (M17–M24 + script Lows):**
+- **M17** — all flat-YAML parsers (fetch-models/verify-models/fetch-runtime ×2 shells + the
+  license gates) strip inline `# comments` before unquoting (the committed
+  `version: b9196  # PLACEHOLDER` no longer leaks into values/filenames).
+- **M18** — `fetch-runtime.{ps1,sh}` reject an `extract_to` that escapes the drive root
+  (`..`/absolute/drive-letter), mirroring TS `planRuntimeDownload`.
+- **M19** — `setup-dev.{ps1,sh}` PROBE `--use-system-ca` before using it (unknown-flag abort on
+  Node 22.5–22.14) and APPEND to a pre-existing `NODE_OPTIONS`; `engines` added to
+  `apps/desktop/package.json`.
+- **M20** — `.gitattributes`: `launchers/*.cmd` + `READ*` are **CRLF** (LF-only batch parsing is
+  unsupported cmd.exe territory; these ship verbatim to customer drives). Renormalized.
+- **M21** — ONE manifest source of truth: all three launchers export
+  `PAID_MANIFESTS_DIR=<drive>/model-manifests` (what the scripts verified is what the app loads);
+  `resolveManifestsDir` falls back to the walk-up when an override path is missing. The
+  `.command` `open`-fallback (which dropped the env → silent non-drive workspace) now fails with
+  a friendly message instead.
+- **M22** — every PS script normalizes a relative `-Target` to a full path up front (.NET IO +
+  curl.exe resolve against the PROCESS cwd, which ignores `Set-Location`).
+- **M23** — bash 3.2 + `set -u`: empty `MANIFEST_FILES` arrays are guarded (an empty
+  `model-manifests/` no longer crashes; `verify-models --strict` still exits 1).
+- **M24** — the bash posture greps tolerate arbitrary whitespace + note policy.json is
+  machine-generated. Lows: stale `.aria2` control files removed on mismatch; `verify-models`
+  excludes `runtime-sources.yaml`; Windows-on-ARM arch via `PROCESSOR_ARCHITEW6432`; `.gitignore`
+  gains `*.sqlite-wal`/`-shm`.
+- **M30** — the broken `lint` scripts (eslint was never installed) removed from both
+  package.json files; plan doc corrected (`typecheck` is the static gate).
+
+**App (M12–M16 + SEC/code Lows):**
+- **M12** — spec §2.1 "first-run hardware benchmark": a never-benchmarked workspace is
+  benchmarked automatically in the background once it becomes usable (plaintext open at startup,
+  or unlock/create) — `maybeRunFirstBenchmark` in `registerBenchmarkIpc.ts`.
+- **M13** — spec §7.6 "export chat transcript": `exportTranscript` (Markdown, incl. citations) +
+  `exportConversation` IPC (OS save dialog in main) + an Export button on the Chat screen.
+- **M14** — spec §7.11 Diagnostics completed: app name/version, selected model, hardware profile,
+  live runtime status (`getRuntimeStatus` IPC), and a local-log viewer (`getLogTail` IPC, tail of
+  `app.log`).
+- **M16** — drive detection WITHOUT the launcher: `findPreparedDriveRoot` walks up from the app's
+  own location (`PORTABLE_EXECUTABLE_DIR` for the Windows portable target, else the exe dir) to
+  the `config/drive.json` marker — a buyer who double-clicks the app directly still lands on the
+  drive workspace (an exe in Downloads does NOT create a workspace there: marker required).
+- **SEC-B** — descriptor-supplied KDF params are bounds-checked (`keyLen === 32`; argon2id
+  `m ≤ 2 GiB`, scrypt power-of-two `N ≤ 2^22`…): a tampered descriptor can no longer turn every
+  unlock into a multi-GB allocation. **SEC-C** — the vault key is zeroed (`fill(0)`) on lock.
+  **SEC-F** — `updateSettings` persists only known `AppSettings` keys with type-matching values.
+- **L1** — non-OK sidecar responses cancel the body (undici connection released). **L2** — a stop
+  before the first token persists nothing (no permanent empty assistant bubble); shared
+  `emptyAssistantMessage` in chat + RAG. **L5** — a failed backend init shows a fatal-error screen
+  instead of faking `unlocked` and surfacing raw IPC errors everywhere.
+
+**Docs sweep (M15, M25–M31 + doc Lows):** offline-guard gating described correctly everywhere
+(M27); `architecture.md` updated for Phases 9/11–13 modules, the new IPC, and the module↔spec map
+(M28); BUILD_STATE §3/§4 stale "four manifests"/IPC list/runtime-sources-pin claims corrected
+(M29); `rag-design.md` embedder mechanism (M31); drive-layout.md documents the spec §6
+`updates/`/`backups/`/`runtime/embeddings` divergences + a manual **"Updating a drive"** section
+(M15/spec §12.3); README Node version, `manifest.ts` `local_path` comment, user-guide status
+label, CLAUDE.md `package` command, PRIVACY.md no-downloader-ships-today caveat, sample-data +
+model-manifests READMEs.
+
+**Still open (accepted/architectural):** the spec-gap items that are conscious product decisions —
+no full Onboarding wizard (the WorkspaceGate + auto-benchmark + Home cover the §17 flow),
+`ChatOptions.mode` Fast/Balanced/Deep stays dead plumbing, `runtime_events` unwritten, no
+`sample-contract.pdf` fixture, importDocuments accepts caller paths (picker-only hardening
+deferred), and the offline guard remains detection-only. All tracked in the audit report.

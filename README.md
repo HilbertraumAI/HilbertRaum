@@ -36,7 +36,8 @@ Current phase and progress are tracked in [`BUILD_STATE.md`](BUILD_STATE.md).
 - **Disk space:** ~**2 GB** for the smallest usable setup (one chat model + the embeddings model),
   up to ~**10 GB** for the 14B or ~**19 GB** for the 30B-A3B MoE. A **USB-3 SSD** is recommended for
   a portable drive.
-- **To build from source:** **Node.js ≥ 22** (24 recommended) + **Git**.
+- **To build from source:** **Node.js ≥ 22.5** (24 recommended; 22.15+ enables the
+  `--use-system-ca` corporate-proxy workaround) + **Git**.
 - **The AI itself** = a **GGUF model file** *plus* the **`llama.cpp` `llama-server` binary**. Neither
   ships in this repo (licensing + size); the steps below download and verify them, or you add them by
   hand.

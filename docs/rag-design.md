@@ -178,9 +178,10 @@ retrieval time in Phase 6.
 ## 6. Embeddings & vector search (Phase 5) — spec §6, §7.8, §9.2
 
 `services/embeddings/` owns vectorization + retrieval, behind the same kind of swappable
-interface as `ModelRuntime`. Everything runs **locally and offline**: the embedder uses only
-`node:crypto`, and search is an in-process linear scan over SQLite rows — no remote vector
-service, no network.
+interface as `ModelRuntime`. Everything runs **locally and offline**: the mock embedder uses only
+`node:crypto` (feature hashing), the real `E5Embedder` (Phase 10) talks to a loopback-only
+`llama-server --embedding` sidecar, and search is an in-process linear scan over SQLite rows —
+no remote vector service, no network.
 
 ### `Embedder` interface (spec §9.2)
 

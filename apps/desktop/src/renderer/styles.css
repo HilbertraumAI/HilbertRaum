@@ -333,3 +333,22 @@ h2 { font-size: 15px; margin: 0 0 12px; }
   padding: 8px 12px;
   border-radius: 6px;
 }
+
+/* Diagnostics: local log tail (M14) */
+.log-tail {
+  margin-top: 10px;
+  max-height: 320px;
+  overflow: auto;
+  font-size: 11px;
+  line-height: 1.5;
+  background: rgba(0, 0, 0, 0.25);
+  border-radius: 6px;
+  padding: 10px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* Chat: non-error notice (e.g. transcript export confirmation, M13) */
+.chat-notice {
+  padding: 4px 16px;
+}

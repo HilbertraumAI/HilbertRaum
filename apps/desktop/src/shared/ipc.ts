@@ -11,12 +11,18 @@ export const IPC = {
   selectModel: 'models:select',
   startRuntime: 'runtime:start',
   stopRuntime: 'runtime:stop',
+  /** Read-only runtime health/state for Diagnostics (spec §7.11 — audit M14). */
+  getRuntimeStatus: 'runtime:status',
   // Phase 3+
   createConversation: 'chat:createConversation',
   listConversations: 'chat:listConversations',
   listMessages: 'chat:listMessages',
   sendChatMessage: 'chat:send',
   stopGeneration: 'chat:stop',
+  /** Save a conversation transcript to a user-chosen file (spec §7.6 — audit M13). */
+  exportConversation: 'chat:export',
+  /** Tail of the local log for Diagnostics (spec §7.11 — audit M14). Never uploaded. */
+  getLogTail: 'logs:tail',
   // Phase 4+
   pickDocuments: 'docs:pick',
   importDocuments: 'docs:import',

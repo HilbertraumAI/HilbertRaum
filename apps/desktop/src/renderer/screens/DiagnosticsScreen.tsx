@@ -1,11 +1,24 @@
-import { useEffect, useState } from 'react'
-import type { BenchmarkResult, DriveStatus } from '@shared/types'
+import { useCallback, useEffect, useState } from 'react'
+import type { AppStatus, BenchmarkResult, DriveStatus, RuntimeStatus } from '@shared/types'
 
 export function DiagnosticsScreen(): JSX.Element {
   const [drive, setDrive] = useState<DriveStatus | null>(null)
   const [bench, setBench] = useState<BenchmarkResult | null>(null)
+  const [app, setApp] = useState<AppStatus | null>(null)
+  const [runtime, setRuntime] = useState<RuntimeStatus | null>(null)
+  const [logTail, setLogTail] = useState<string[] | null>(null)
+  const [showLogs, setShowLogs] = useState(false)
   const [running, setRunning] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  const refreshStatus = useCallback(async (): Promise<void> => {
+    window.api?.getAppStatus().then(setApp).catch(() => setApp(null))
+    window.api?.getRuntimeStatus().then(setRuntime).catch(() => setRuntime(null))
+  }, [])
+
+  const refreshLogs = useCallback(async (): Promise<void> => {
+    window.api?.getLogTail().then(setLogTail).catch(() => setLogTail([]))
+  }, [])
 
   useEffect(() => {
     window.api?.getDriveStatus().then(setDrive).catch(() => setDrive(null))
@@ -14,7 +27,8 @@ export function DiagnosticsScreen(): JSX.Element {
       ?.getSettings()
       .then((s) => setBench(s.lastBenchmark))
       .catch(() => setBench(null))
-  }, [])
+    void refreshStatus()
+  }, [refreshStatus])
 
   async function runBenchmark(): Promise<void> {
     setRunning(true)
@@ -33,6 +47,31 @@ export function DiagnosticsScreen(): JSX.Element {
     <div className="screen">
       <h1>Diagnostics</h1>
       <p className="lead">Local-only diagnostics. Nothing here is ever uploaded.</p>
+
+      <div className="card">
+        <h2>App &amp; runtime</h2>
+        <dl className="kv">
+          <dt>App version</dt>
+          <dd>{app ? `${app.appName} ${app.appVersion}` : 'unknown'}</dd>
+          <dt>Selected model</dt>
+          <dd>{app?.activeModelId ?? 'none selected'}</dd>
+          <dt>Hardware profile</dt>
+          <dd>{app?.hardwareProfile ?? 'UNKNOWN'}</dd>
+          <dt>Runtime</dt>
+          <dd>
+            {runtime
+              ? runtime.running
+                ? `Running — ${runtime.modelId ?? 'unknown model'}${
+                    runtime.port != null ? ` on 127.0.0.1:${runtime.port}` : ''
+                  } (${runtime.healthy ? 'healthy' : 'unhealthy'})`
+              : 'Stopped'
+              : 'unknown'}
+          </dd>
+        </dl>
+        <button className="btn sm" onClick={() => void refreshStatus()}>
+          Refresh
+        </button>
+      </div>
 
       <div className="card">
         <h2>Hardware benchmark</h2>
@@ -127,6 +166,35 @@ export function DiagnosticsScreen(): JSX.Element {
           </dl>
         ) : (
           <p className="hint">Drive/workspace detection lands in Phase 1.</p>
+        )}
+      </div>
+
+      <div className="card">
+        <h2>Recent logs</h2>
+        <p className="hint">
+          The tail of <code>logs/app.log</code> on this device. Logs are local-only and never
+          uploaded; they contain no document contents or chat text.
+        </p>
+        <div className="actions">
+          <button
+            className="btn sm"
+            onClick={() => {
+              setShowLogs((v) => !v)
+              if (!showLogs) void refreshLogs()
+            }}
+          >
+            {showLogs ? 'Hide logs' : 'Show logs'}
+          </button>
+          {showLogs && (
+            <button className="btn sm" onClick={() => void refreshLogs()}>
+              Refresh
+            </button>
+          )}
+        </div>
+        {showLogs && (
+          <pre className="log-tail">
+            {logTail == null ? 'Loading…' : logTail.length === 0 ? '(log is empty)' : logTail.join('\n')}
+          </pre>
         )}
       </div>
     </div>

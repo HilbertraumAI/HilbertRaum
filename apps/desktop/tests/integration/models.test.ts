@@ -259,6 +259,12 @@ describe('resolveManifestsDir', () => {
     const dir = tempDir('paid-manifests-')
     expect(resolveManifestsDir('/somewhere', dir)).toBe(dir)
   })
+  it('falls back to the walk-up when the override path is missing (M21)', () => {
+    const root = tempDir('paid-up-fallback-')
+    const mdir = join(root, 'model-manifests')
+    mkdirSync(mdir, { recursive: true })
+    expect(resolveManifestsDir(root, join(root, 'no-such-dir'))).toBe(mdir)
+  })
   it('finds model-manifests by walking up', () => {
     const root = tempDir('paid-up-')
     const mdir = join(root, 'model-manifests')

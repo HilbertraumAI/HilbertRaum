@@ -39,12 +39,14 @@ export interface DiscoveryResult {
 
 /**
  * Find the `model-manifests/` directory by walking up from a starting dir.
- * Manifests are committed to git, so they sit at the repo/app root. Packaging
- * (Phase 11) will place them under resources and set PAID_MANIFESTS_DIR.
+ * Manifests are committed to git, so they sit at the repo/app root. Packaging places
+ * them under resources; the drive launchers set PAID_MANIFESTS_DIR to the drive's copy
+ * (one source of truth with the verify/fetch scripts, M21). A set-but-missing override
+ * falls back to the walk-up instead of blanking the model list.
  */
 export function resolveManifestsDir(startDir: string, override?: string): string | null {
   const env = override?.trim()
-  if (env) return existsSync(env) ? env : null
+  if (env && existsSync(env)) return env
 
   let dir = startDir
   for (let i = 0; i < 8; i++) {

@@ -75,6 +75,31 @@ export function generateSalt(): Buffer {
 }
 
 /**
+ * Bounds for descriptor-supplied KDF params. The descriptor (`config/workspace.json`)
+ * is UNENCRYPTED and attacker-writable on a removable drive: unbounded params (e.g.
+ * argon2id `m: 2e9` KiB) would make every unlock attempt a multi-GB allocation — a
+ * denial-of-service on the vault (audit SEC-B). Tampering cannot disclose data (a wrong
+ * key still fails the verifier); these bounds just keep the failure mode sane.
+ */
+function validateKdfBounds(params: KdfParams): void {
+  if (params.keyLen !== 32) {
+    throw new Error(`KDF keyLen must be 32 (AES-256), got ${String(params.keyLen)}`)
+  }
+  if (params.algo === 'scrypt') {
+    const { N, r, p } = params
+    if (!N || !r || !p || N < 1024 || N > 2 ** 22 || (N & (N - 1)) !== 0 || r < 1 || r > 32 || p < 1 || p > 16) {
+      throw new Error('scrypt parameters out of bounds (descriptor may be corrupt or tampered)')
+    }
+  }
+  if (params.algo === 'argon2id') {
+    const { m, t, p } = params
+    if (!m || !t || !p || m < 8 || m > 2 ** 21 || t < 1 || t > 64 || p < 1 || p > 16) {
+      throw new Error('argon2id parameters out of bounds (descriptor may be corrupt or tampered)')
+    }
+  }
+}
+
+/**
  * Derive a key from a password + salt using the recorded params. Deterministic: the
  * same password + salt + params always yield the same key (so unlock matches encrypt).
  */
@@ -83,6 +108,7 @@ export function deriveKey(password: string, salt: Buffer, params: KdfParams = DE
     if (params.N == null || params.r == null || params.p == null) {
       throw new Error('scrypt parameters (N, r, p) are required')
     }
+    validateKdfBounds(params)
     // 128 * N * r bytes of memory; give scrypt headroom over the 32 MiB default cap.
     const maxmem = 256 * 1024 * 1024
     return scryptSync(password, salt, params.keyLen, {
@@ -96,6 +122,7 @@ export function deriveKey(password: string, salt: Buffer, params: KdfParams = DE
     if (params.m == null || params.t == null || params.p == null) {
       throw new Error('argon2id parameters (m, t, p) are required')
     }
+    validateKdfBounds(params)
     // Pure-JS, audited @noble/hashes — no native build. m = memory (KiB), t = iterations.
     const out = argon2id(password, salt, { m: params.m, t: params.t, p: params.p, dkLen: params.keyLen })
     return Buffer.from(out)

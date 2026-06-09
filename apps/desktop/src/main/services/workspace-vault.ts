@@ -609,6 +609,9 @@ export class WorkspaceController {
   lock(): WorkspaceStateInfo {
     if (this._db && this.key && this.descriptor?.mode === 'encrypted') {
       lockEncryptedVault(this.vaultPaths, this._db, this.key)
+      // Zero the key bytes before dropping the reference — otherwise the 32-byte key
+      // lingers in the heap until GC and could surface in a dump/swap (audit SEC-C).
+      this.key.fill(0)
       this._db = null
       this.key = null
     }

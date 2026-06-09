@@ -20,7 +20,14 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$REPO_ROOT"
 
 # R6: read the system cert store so a corporate TLS proxy doesn't break the install.
-export NODE_OPTIONS=--use-system-ca
+# --use-system-ca only exists from Node 22.15 / 23.8 — probe first (an unknown flag in
+# NODE_OPTIONS aborts EVERY node/npm invocation), and APPEND so a pre-existing
+# NODE_OPTIONS is preserved (audit M19).
+if node --use-system-ca -e 0 >/dev/null 2>&1; then
+  export NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--use-system-ca"
+else
+  echo 'Note: this Node does not support --use-system-ca (needs >= 22.15); continuing without it.'
+fi
 
 echo '==> npm install (downloads the Electron binary on first run, R2)'
 if ! npm install; then

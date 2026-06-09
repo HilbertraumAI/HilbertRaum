@@ -234,6 +234,19 @@ describe('generateAssistantMessage (streaming)', () => {
     expect(history.at(-1)?.id).not.toBe(first.id)
   })
 
+  // L2 (audit round 4): a stop BEFORE the first token used to persist an empty assistant
+  // message — a permanent blank bubble in the transcript.
+  it('a stop before the first token persists nothing', async () => {
+    const db = freshDb()
+    const conv = createConversation(db, {})
+    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'q' })
+    const ac = new AbortController()
+    ac.abort() // aborted before any token can stream
+    const msg = await generateAssistantMessage(db, runtime(), conv.id, { signal: ac.signal })
+    expect(msg.content).toBe('')
+    expect(listMessages(db, conv.id)).toHaveLength(1) // only the user turn
+  })
+
   // M1 (audit round 4): after a FAILED generation the conversation ends in a user turn.
   // Regenerate used to delete the most recent assistant message anywhere in history —
   // permanently destroying the answer to a *previous* question.
