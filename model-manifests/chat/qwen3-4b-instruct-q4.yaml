@@ -12,18 +12,21 @@ recommended_context_tokens: 4096
 supports_thinking_mode: true
 supports_tools: false
 local_path: models/chat/qwen3-4b-instruct-q4.gguf
-sha256: REPLACE_WITH_REAL_HASH
+sha256: 7485fe6f11af29433bc51cab58009521f205840f5b4ae3a32fa7f92e8534fdf5
 # Phase 12: where `fetch-models` downloads the weight from + what to verify it against.
-# sha256 stays a placeholder until a real drive is built; capture it with
-# `verify-models --generate` after the first fetch, then promote it to the real hash.
+# Real hash promoted 2026-06-10 from the first real fetch (Qwen/Qwen3-4B-GGUF, official Qwen
+# org GGUF, apache-2.0). Captured via `verify-models --generate` -> config/checksums.json.
 download:
   url: https://huggingface.co/Qwen/Qwen3-4B-GGUF/resolve/main/Qwen3-4B-Q4_K_M.gguf?download=true
-  sha256: REPLACE_WITH_REAL_HASH
+  sha256: 7485fe6f11af29433bc51cab58009521f205840f5b4ae3a32fa7f92e8534fdf5
   size_bytes: 2700000000
   license_url: https://huggingface.co/Qwen/Qwen3-4B-GGUF/blob/main/LICENSE
 bundled_on_preconfigured_drive: true
-# Target default; recommended for LITE hardware (spec §7.3).
-recommended_profiles: [LITE]
+# Target default; recommended for LITE hardware (spec §7.3). Also covers TINY + UNKNOWN
+# since the official Qwen3-1.7B repo ships no Q4_K_M (1.7B dropped 2026-06-10); 4B is the
+# smallest bundled chat model. NOTE: 4B wants ~8 GB RAM, so a <8 GB TINY machine should run
+# it via Fast Mode / a smaller context.
+recommended_profiles: [TINY, LITE, UNKNOWN]
 license_review:
   status: approved
   reviewed_by: "project maintainer (Claude-assisted review, HF API verification)"

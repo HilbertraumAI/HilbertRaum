@@ -94,14 +94,15 @@ describe('classifyProfile', () => {
 describe('recommendation per profile', () => {
   it('selects the right chat model from the committed manifests', () => {
     const manifests = realManifests()
-    // Mapping table (spec §7.3): TINY→1.7b, LITE→4b, BALANCED→8b, PRO→14b, UNKNOWN→1.7b.
-    // Each profile is claimed by exactly ONE chat model, so the first-match recommendation
-    // is unambiguous regardless of manifest discovery order.
-    expect(pick(manifests, 'TINY')).toBe('qwen3-1.7b-instruct-q4')
+    // Mapping table (spec §7.3): TINY→4b, LITE→4b, BALANCED→8b, PRO→14b, UNKNOWN→4b.
+    // 1.7b was dropped 2026-06-10 (no official Q4_K_M), so 4b — the smallest bundled chat
+    // model — now also covers TINY + UNKNOWN. Each profile is still claimed by exactly one
+    // chat model, so the first-match recommendation is unambiguous.
+    expect(pick(manifests, 'TINY')).toBe('qwen3-4b-instruct-q4')
     expect(pick(manifests, 'LITE')).toBe('qwen3-4b-instruct-q4')
     expect(pick(manifests, 'BALANCED')).toBe('qwen3-8b-instruct-q4')
     expect(pick(manifests, 'PRO')).toBe('qwen3-14b-instruct-q4')
-    expect(pick(manifests, 'UNKNOWN')).toBe('qwen3-1.7b-instruct-q4')
+    expect(pick(manifests, 'UNKNOWN')).toBe('qwen3-4b-instruct-q4')
   })
 
   it('does not auto-recommend the 30B-A3B MoE model for any profile (opt-in only)', () => {
