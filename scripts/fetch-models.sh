@@ -65,7 +65,11 @@ download() {
     aria2c --continue=true --max-connection-per-server=8 --split=8 \
       --dir "$dir" --out "$(basename "$dest")" "$url"
   elif command -v curl >/dev/null 2>&1; then
-    curl -L --fail --retry 3 -C - -o "$dest" "$url"
+    # Schannel curl (Windows/git-bash): best-effort revocation only on that backend;
+    # integrity is enforced by the SHA-256 verification after download.
+    local curl_extra=""
+    curl --version 2>/dev/null | head -n1 | grep -qi schannel && curl_extra="--ssl-revoke-best-effort"
+    curl -L --fail --retry 3 $curl_extra -C - -o "$dest" "$url"
   elif command -v wget >/dev/null 2>&1; then
     wget -c -O "$dest" "$url"
   else

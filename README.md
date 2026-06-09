@@ -84,11 +84,11 @@ interrupted and re-running **skips** what's already there. You can also fetch pi
 (`fetch-models` / `fetch-runtime`, with `--only <id>` for a single model) or drop the files into
 `models/` and `runtime/llama.cpp/<os>/` **by hand** — see **[`docs/packaging.md`](docs/packaging.md)**.
 
-> ⚠️ **Before `fetch-runtime` works, pin a real `llama.cpp` release.** The committed
-> [`model-manifests/runtime-sources.yaml`](model-manifests/runtime-sources.yaml) ships **placeholder**
-> version/URLs (they 404) and placeholder checksums. Set a real
-> [ggml-org/llama.cpp release](https://github.com/ggml-org/llama.cpp/releases) tag + the matching
-> per-OS asset names first. Model weight URLs are real (Hugging Face). See
+> ✅ **`runtime-sources.yaml` is pinned to a real release** (`llama.cpp` **b9585**, real per-OS
+> URLs + SHA-256 checksums computed from the actual assets) — `fetch-runtime` downloads, verifies,
+> extracts (zip and tar.gz), and flattens the binaries for all three OSes from any host. Model
+> weight URLs are real Hugging Face links; their `sha256` stays `REPLACE_WITH_REAL_HASH` until a
+> drive build captures the hashes (`verify-models --generate`). To bump the runtime later, see
 > **[`docs/model-policy.md`](docs/model-policy.md)**.
 
 ### 3. Point the app at your models

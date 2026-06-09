@@ -22,7 +22,14 @@ bundled_on_preconfigured_drive: true
 # The default embedding model for every profile.
 recommended_profiles: [TINY, LITE, BALANCED, PRO, UNKNOWN]
 license_review:
-  status: pending
-  reviewed_by: null
-  reviewed_at: null
-  notes: "CPU-friendly multilingual embeddings for local document search."
+  status: approved
+  reviewed_by: "project maintainer (Claude-assisted review, HF API verification)"
+  reviewed_at: "2026-06-10"
+  notes: "APPROVED 2026-06-10: the BASE model (intfloat/multilingual-e5-small) is MIT
+    (verified via the Hugging Face API) — commercial redistribution permitted with the
+    copyright/license notice. CAVEAT: the GGUF quantization repo
+    (ChristianAzinn/multilingual-e5-small-gguf) declares no separate license field; the
+    file is a mechanical quantization of the MIT model and is treated as distributed
+    under the base MIT terms. If stricter provenance is wanted before selling drives,
+    re-quantize the MIT base model in-house (llama.cpp convert script) or switch to a
+    quant repo with an explicit license, and update download.url + hashes."

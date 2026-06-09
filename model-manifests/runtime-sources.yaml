@@ -3,13 +3,16 @@
 # The `llama-server` sidecar is NOT a model, so it lives here rather than in a model
 # manifest. `fetch-runtime` reads this file, picks the build matching the host
 # OS/arch (or --os/--arch/--backend overrides), downloads + SHA-256-verifies the release
-# zip, and extracts it into runtime/llama.cpp/<os>/ (the dirs services/runtime/sidecar.ts
-# `llamaOsDir` resolves: win / mac / linux).
+# archive (.zip or .tar.gz), and extracts it into runtime/llama.cpp/<os>/ (the dirs
+# services/runtime/sidecar.ts `llamaOsDir` resolves: win / mac / linux). Archives that
+# nest their binaries in a subfolder (the macOS/Linux tarballs) are flattened so
+# llama-server lands at the extract_to root.
 #
 # DEFAULT BACKEND = CPU. CPU builds run on any laptop with zero driver assumptions —
 # the right default for a portable drive that must boot on unknown hardware. GPU builds
 # (CUDA/Vulkan) are an opt-in `--backend` override, never the default (a mismatched GPU
-# build fails or runs worse than CPU).
+# build fails or runs worse than CPU). The macOS arm64 build ships with Metal enabled
+# by default upstream.
 #
 # Schema (validated by apps/desktop/src/shared/runtime-sources.ts validateRuntimeSources):
 #   llama_cpp:
@@ -17,35 +20,31 @@
 #     builds:
 #       - { os, arch, backend, url, sha256, extract_to }
 #
-# ⚠️ PLACEHOLDERS — the committed `version`, every `url`, and every `sha256` below are
-#    PLACEHOLDERS, not a real release. `fetch-runtime` will 404 until you set a REAL
-#    ggml-org/llama.cpp release:
-#      1. Pick a release tag from https://github.com/ggml-org/llama.cpp/releases
-#      2. Set `version` to that tag and each `url` to the matching per-OS asset name
-#         (asset names vary by release, e.g. llama-<tag>-bin-win-cpu-x64.zip).
-#      3. Run fetch-runtime, then promote the downloaded zip's real SHA-256 into `sha256`
-#         here as part of a deliberate, reviewed version bump.
-#    (Model weight URLs in the chat/embeddings manifests ARE real Hugging Face links; only
-#    this sidecar file needs a real release pinned.)
+# PINNED RELEASE: b9585 (2026-06-09). The sha256 values below were computed from the
+# actual downloaded release assets. To bump: pick a new tag from
+# https://github.com/ggml-org/llama.cpp/releases, update version + per-OS asset URLs
+# (asset names vary by release), download each asset, and promote its real SHA-256 here
+# as part of a deliberate, reviewed version bump. fetch-runtime refuses to silently
+# skip verification: a real-hash mismatch deletes the archive and fails the run.
 
 llama_cpp:
-  version: b9196   # PLACEHOLDER — replace with a real release tag (see warning above)
+  version: b9585
   builds:
     - os: win
       arch: x64
-      backend: cpu-avx2
-      url: https://github.com/ggml-org/llama.cpp/releases/download/b9196/llama-b9196-bin-win-avx2-x64.zip
-      sha256: REPLACE_WITH_REAL_HASH
+      backend: cpu
+      url: https://github.com/ggml-org/llama.cpp/releases/download/b9585/llama-b9585-bin-win-cpu-x64.zip
+      sha256: 23c0e329e2228f7cbcc83884f42c7787f1a3133e5548ea99e89d60202e1fd89c
       extract_to: runtime/llama.cpp/win
     - os: mac
       arch: arm64
       backend: metal
-      url: https://github.com/ggml-org/llama.cpp/releases/download/b9196/llama-b9196-bin-macos-arm64.zip
-      sha256: REPLACE_WITH_REAL_HASH
+      url: https://github.com/ggml-org/llama.cpp/releases/download/b9585/llama-b9585-bin-macos-arm64.tar.gz
+      sha256: e88f05f82c8c0c0f5a861ff7822f096ad6641128e6f64c666eee743f46730db6
       extract_to: runtime/llama.cpp/mac
     - os: linux
       arch: x64
       backend: cpu
-      url: https://github.com/ggml-org/llama.cpp/releases/download/b9196/llama-b9196-bin-ubuntu-x64.zip
-      sha256: REPLACE_WITH_REAL_HASH
+      url: https://github.com/ggml-org/llama.cpp/releases/download/b9585/llama-b9585-bin-ubuntu-x64.tar.gz
+      sha256: be111dd28e6228fc4cb6a6ec41f03a67947ab61f315a3d22d0e68ac7372a58ab
       extract_to: runtime/llama.cpp/linux

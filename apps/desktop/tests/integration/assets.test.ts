@@ -191,8 +191,31 @@ describe('planRuntimeDownload', () => {
     const plan = planRuntimeDownload(root, build, 'b9196')
     expect(plan.extractTo).toBe(join(root, 'runtime', 'llama.cpp', 'win'))
     expect(plan.binaryPath).toBe(join(root, 'runtime', 'llama.cpp', 'win', 'llama-server.exe'))
-    expect(plan.zipDest).toContain('llama-b9196-win-x64.zip')
+    // The archive name follows the URL basename (fixture url ends win-avx2.zip).
+    expect(plan.zipDest).toContain('win-avx2.zip')
     expect(plan.placeholderHash).toBe(true)
+  })
+
+  it('keeps a .tar.gz archive name from the URL (macOS/Linux release assets)', () => {
+    const root = tempDir('paid-rt-')
+    const build = selectRuntimeBuild(
+      {
+        version: 'b9585',
+        builds: [
+          {
+            os: 'linux',
+            arch: 'x64',
+            backend: 'cpu',
+            url: 'https://example.test/llama-b9585-bin-ubuntu-x64.tar.gz',
+            sha256: 'REPLACE_WITH_REAL_HASH',
+            extractTo: 'runtime/llama.cpp/linux'
+          }
+        ]
+      },
+      { os: 'linux', arch: 'x64' }
+    )!
+    const plan = planRuntimeDownload(root, build, 'b9585')
+    expect(plan.zipDest.endsWith('llama-b9585-bin-ubuntu-x64.tar.gz')).toBe(true)
   })
 
   it('rejects an extract_to that escapes the drive root', () => {

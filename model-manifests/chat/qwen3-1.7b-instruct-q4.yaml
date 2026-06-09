@@ -23,7 +23,7 @@ bundled_on_preconfigured_drive: true
 # Hardware profiles this model is recommended for (drives the §7.3 picker).
 recommended_profiles: [TINY, UNKNOWN]
 license_review:
-  status: pending
-  reviewed_by: null
-  reviewed_at: null
-  notes: "Safe fallback for TINY/UNKNOWN hardware profiles."
+  status: approved
+  reviewed_by: "project maintainer (Claude-assisted review, HF API verification)"
+  reviewed_at: "2026-06-10"
+  notes: "APPROVED 2026-06-10: upstream repo license verified as apache-2.0 via the Hugging Face API (official Qwen org GGUF repo; quantization published by the model authors themselves). Apache-2.0 permits commercial redistribution; ship the LICENSE/NOTICE attribution with the drive (download.license_url)."

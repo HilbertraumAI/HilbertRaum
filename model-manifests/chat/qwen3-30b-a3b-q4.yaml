@@ -28,7 +28,7 @@ bundled_on_preconfigured_drive: false
 # upgrade for a strong (PRO) laptop.
 recommended_profiles: []
 license_review:
-  status: pending
-  reviewed_by: null
-  reviewed_at: null
-  notes: "Qwen3 30B-A3B is Apache-2.0 upstream; confirm the specific quantization source before bundling."
+  status: approved
+  reviewed_by: "project maintainer (Claude-assisted review, HF API verification)"
+  reviewed_at: "2026-06-10"
+  notes: "APPROVED 2026-06-10: upstream repo license verified as apache-2.0 via the Hugging Face API (official Qwen org GGUF repo; quantization published by the model authors themselves). Apache-2.0 permits commercial redistribution; ship the LICENSE/NOTICE attribution with the drive (download.license_url)."

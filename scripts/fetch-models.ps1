@@ -92,7 +92,9 @@ function Invoke-Download([string]$url, [string]$dest) {
       --dir "$dir" --out (Split-Path -Leaf $dest) "$url"
     if ($LASTEXITCODE -ne 0) { throw "aria2c failed (exit $LASTEXITCODE)" }
   } elseif ($Curl) {
-    & curl.exe -L --fail --retry 3 -C - -o "$dest" "$url"
+    # --ssl-revoke-best-effort: see fetch-runtime.ps1 — corporate proxies block CRL/OCSP;
+    # integrity is enforced by the SHA-256 verification after download.
+    & curl.exe -L --fail --retry 3 --ssl-revoke-best-effort -C - -o "$dest" "$url"
     if ($LASTEXITCODE -ne 0) { throw "curl failed (exit $LASTEXITCODE)" }
   } else {
     # Last resort: Invoke-WebRequest (no resume; restarts the file).

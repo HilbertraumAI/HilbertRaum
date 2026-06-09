@@ -137,7 +137,7 @@ export interface RuntimeDownloadPlan {
   arch: string
   backend: string
   url: string
-  /** Absolute path to download the release zip to (deleted after extraction). */
+  /** Absolute path to download the release archive (.zip/.tar.gz) to; deleted after extraction. */
   zipDest: string
   /** Absolute dir to extract into (`runtime/llama.cpp/<os>`). */
   extractTo: string
@@ -175,7 +175,11 @@ export function planRuntimeDownload(
   version: string
 ): RuntimeDownloadPlan {
   const extractTo = resolveWithinRoot(rootPath, build.extractTo)
-  const zipDest = join(extractTo, `llama-${version}-${build.os}-${build.arch}.zip`)
+  // Name the downloaded archive after the URL's basename so a .tar.gz (the format the
+  // macOS/Linux release assets use in current llama.cpp releases) is not saved — and
+  // mis-extracted — as a .zip. Synthetic fallback for URLs without a usable basename.
+  const urlBase = build.url.split('/').pop()?.split('?')[0]?.trim()
+  const zipDest = join(extractTo, urlBase || `llama-${version}-${build.os}-${build.arch}.zip`)
   const binaryPath = join(extractTo, runtimeBinaryName(build.os))
   return {
     version,

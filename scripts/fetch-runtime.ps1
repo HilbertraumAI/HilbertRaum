@@ -157,37 +157,103 @@ if (Test-Path $binaryPath) {
 }
 
 New-Item -ItemType Directory -Force -Path $extractTo | Out-Null
-$zip = Join-Path $extractTo ("llama-{0}-{1}-{2}.zip" -f $version, $build.os, $build.arch)
+# Archive name from the URL basename so a .tar.gz (the macOS/Linux release format) is
+# not saved -- and mis-extracted -- as a .zip.
+$archiveName = [System.IO.Path]::GetFileName(([uri]$build.url).AbsolutePath)
+if (-not $archiveName) { $archiveName = "llama-{0}-{1}-{2}.zip" -f $version, $build.os, $build.arch }
+$archive = Join-Path $extractTo $archiveName
 
 $Curl = (Get-Command curl.exe -ErrorAction SilentlyContinue)
 if ($Curl) {
-  & curl.exe -L --fail --retry 3 -C - -o "$zip" "$($build.url)"
+  # --ssl-revoke-best-effort: corporate TLS proxies often block the CRL/OCSP endpoints,
+  # making schannel fail with CRYPT_E_NO_REVOCATION_CHECK. Best-effort still checks
+  # revocation when reachable; artifact integrity is enforced by the SHA-256 pin below.
+  & curl.exe -L --fail --retry 3 --ssl-revoke-best-effort -C - -o "$archive" "$($build.url)"
   if ($LASTEXITCODE -ne 0) { Write-Error "curl failed (exit $LASTEXITCODE)"; exit 1 }
 } else {
-  Invoke-WebRequest -Uri $build.url -OutFile $zip -UseBasicParsing
+  Invoke-WebRequest -Uri $build.url -OutFile $archive -UseBasicParsing
 }
 
 if (& $IsRealSha $sha) {
-  $actual = (Get-FileHash -Path $zip -Algorithm SHA256).Hash.ToLower()
+  $actual = (Get-FileHash -Path $archive -Algorithm SHA256).Hash.ToLower()
   if ($actual -ne $sha) {
-    Write-Host ("  FAIL: zip checksum mismatch (expected {0}, got {1}) -- deleting" -f $sha, $actual) -ForegroundColor Red
-    Remove-Item -Force -Path $zip -ErrorAction SilentlyContinue
+    Write-Host ("  FAIL: archive checksum mismatch (expected {0}, got {1}) -- deleting" -f $sha, $actual) -ForegroundColor Red
+    Remove-Item -Force -Path $archive -ErrorAction SilentlyContinue
     exit 1
   }
-  Write-Host "  zip VERIFIED" -ForegroundColor Green
+  Write-Host "  archive VERIFIED" -ForegroundColor Green
 } else {
-  Write-Host "  zip UNVERIFIED (placeholder hash) -- verify after a real release bump" -ForegroundColor Yellow
+  Write-Host "  archive UNVERIFIED (placeholder hash) -- verify after a real release bump" -ForegroundColor Yellow
 }
 
-Expand-Archive -Path $zip -DestinationPath $extractTo -Force
-Remove-Item -Force -Path $zip -ErrorAction SilentlyContinue
+if ($archiveName -match '\.(tar\.gz|tgz)$') {
+  # bsdtar (tar.exe) ships with Windows 10 1803+ and handles .tar.gz natively.
+  # NOTE: EAP must be Continue around native stderr redirects (PS 5.1 wraps redirected
+  # stderr in error records, which would terminate under 'Stop').
+  $prevEap = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  & tar -xzf "$archive" -C "$extractTo" 2>$null
+  $tarExit = $LASTEXITCODE
+  $listing = & tar -tvzf "$archive" 2>$null
+  $ErrorActionPreference = $prevEap
+
+  # The llama.cpp tarballs contain version SYMLINKS (lib*.so -> lib*.so.X.Y.Z), which
+  # cannot be created on Windows (or on an exFAT drive at all). Materialize each missing
+  # link as a COPY of its target -- the dynamic loader only needs the name to exist.
+  # Multi-pass, because links can chain (libllama.so -> libllama.so.0 -> ...0.14.0).
+  $links = @()
+  foreach ($line in @($listing)) {
+    if ($line -match '^l' -and $line -match '\s(\S+)\s->\s(\S+)\s*$') {
+      $links += , @($Matches[1], $Matches[2])
+    }
+  }
+  $unresolved = 0
+  for ($pass = 0; $pass -lt 4; $pass++) {
+    $unresolved = 0
+    foreach ($l in $links) {
+      $lnkPath = Join-Path $extractTo ($l[0] -replace '/', [IO.Path]::DirectorySeparatorChar)
+      if (Test-Path $lnkPath) { continue }
+      $srcPath = Join-Path (Split-Path -Parent $lnkPath) $l[1]
+      if (Test-Path $srcPath) { Copy-Item -Force -Path $srcPath -Destination $lnkPath }
+      else { $unresolved++ }
+    }
+    if ($unresolved -eq 0) { break }
+  }
+  if ($tarExit -ne 0 -and $unresolved -gt 0) {
+    Write-Error "tar extraction failed (exit $tarExit; $unresolved unresolved entries)"
+    exit 1
+  }
+} else {
+  Expand-Archive -Path $archive -DestinationPath $extractTo -Force
+}
+Remove-Item -Force -Path $archive -ErrorAction SilentlyContinue
+
+# Flatten: the macOS/Linux tarballs nest everything under llama-<tag>/ -- move the
+# binary's directory contents up so llama-server sits at the extract_to root, where
+# services/runtime/sidecar.ts resolves it.
+if (-not (Test-Path $binaryPath)) {
+  $rootFull = [System.IO.Path]::GetFullPath($extractTo).TrimEnd('\', '/')
+  $found = Get-ChildItem -Path $extractTo -Recurse -File -Filter $binaryName -ErrorAction SilentlyContinue |
+    Select-Object -First 1
+  if ($found) {
+    $srcFull = [System.IO.Path]::GetFullPath($found.DirectoryName).TrimEnd('\', '/')
+    if ($srcFull -ne $rootFull) {
+      Get-ChildItem -Path $found.DirectoryName -Force | Move-Item -Destination $extractTo -Force
+      # Clean up the now-empty nesting dirs (deepest first).
+      Get-ChildItem -Path $extractTo -Recurse -Directory -ErrorAction SilentlyContinue |
+        Sort-Object FullName -Descending |
+        Where-Object { -not (Get-ChildItem -Path $_.FullName -Force -ErrorAction SilentlyContinue) } |
+        Remove-Item -Force -ErrorAction SilentlyContinue
+    }
+  }
+}
 
 if (Test-Path $binaryPath) {
   Write-Host "  extracted $binaryName" -ForegroundColor Green
   if ($build.os -ne 'win') {
     Write-Host "  NOTE: exec bit for $binaryName cannot be set from Windows; exFAT mounts are typically all-executable, otherwise chmod +x it on the target OS." -ForegroundColor Yellow
   }
-} else {
-  Write-Host "  NOTE: $binaryName not at $extractTo root -- the release zip may nest binaries in a subfolder; flatten them into $extractTo." -ForegroundColor Yellow
+  exit 0
 }
-exit 0
+Write-Host "  FAIL: $binaryName not found under $extractTo after extraction -- the release archive layout may have changed." -ForegroundColor Red
+exit 1

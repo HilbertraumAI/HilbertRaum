@@ -160,41 +160,97 @@ if [[ -f "$BIN_PATH" ]]; then
 fi
 
 mkdir -p "$EXTRACT_TO"
-ZIP="$EXTRACT_TO/llama-$VERSION-${B_OS[$SEL]}-${B_ARCH[$SEL]}.zip"
+# Archive name from the URL basename so a .tar.gz (the macOS/Linux release format) is
+# not saved — and mis-extracted — as a .zip.
+ARCHIVE_NAME="$(basename "$URL")"
+[[ -z "$ARCHIVE_NAME" ]] && ARCHIVE_NAME="llama-$VERSION-${B_OS[$SEL]}-${B_ARCH[$SEL]}.zip"
+ARCHIVE="$EXTRACT_TO/$ARCHIVE_NAME"
 
 if command -v curl >/dev/null 2>&1; then
-  curl -L --fail --retry 3 -C - -o "$ZIP" "$URL"
+  # Schannel curl (Windows/git-bash): corporate proxies often block CRL/OCSP, failing
+  # with CRYPT_E_NO_REVOCATION_CHECK. Best-effort revocation only on that backend;
+  # artifact integrity is enforced by the SHA-256 pin below.
+  CURL_EXTRA=""
+  curl --version 2>/dev/null | head -n1 | grep -qi schannel && CURL_EXTRA="--ssl-revoke-best-effort"
+  curl -L --fail --retry 3 $CURL_EXTRA -C - -o "$ARCHIVE" "$URL"
 elif command -v wget >/dev/null 2>&1; then
-  wget -c -O "$ZIP" "$URL"
+  wget -c -O "$ARCHIVE" "$URL"
 else
   echo "No downloader found (need curl or wget)." >&2; exit 3
 fi
 
 if is_real_sha "$SHA"; then
-  ACTUAL="$(sha256_of "$ZIP")"
+  ACTUAL="$(sha256_of "$ARCHIVE")"
   if [[ "$ACTUAL" != "$SHA" ]]; then
-    echo "  FAIL: zip checksum mismatch (expected $SHA, got $ACTUAL) — deleting" >&2
-    rm -f "$ZIP"; exit 1
+    echo "  FAIL: archive checksum mismatch (expected $SHA, got $ACTUAL) — deleting" >&2
+    rm -f "$ARCHIVE"; exit 1
   fi
-  echo "  zip VERIFIED"
+  echo "  archive VERIFIED"
 else
-  echo "  zip UNVERIFIED (placeholder hash) — verify after a real release bump"
+  echo "  archive UNVERIFIED (placeholder hash) — verify after a real release bump"
 fi
 
-# Extract (unzip on linux; ditto/unzip on macOS).
-if command -v unzip >/dev/null 2>&1; then
-  unzip -o -q "$ZIP" -d "$EXTRACT_TO"
-elif command -v ditto >/dev/null 2>&1; then
-  ditto -x -k "$ZIP" "$EXTRACT_TO"
-else
-  echo "No unzip tool found (need unzip or ditto)." >&2; exit 3
+# Extract: tar.gz via tar; zip via unzip (linux) / ditto (macOS).
+case "$ARCHIVE_NAME" in
+  *.tar.gz|*.tgz)
+    TAR_EXIT=0
+    tar -xzf "$ARCHIVE" -C "$EXTRACT_TO" 2>/dev/null || TAR_EXIT=$?
+    # The llama.cpp tarballs contain version SYMLINKS (lib*.so -> lib*.so.X.Y.Z), which
+    # an exFAT/FAT32 drive cannot hold. Materialize each missing link as a COPY of its
+    # target — the dynamic loader only needs the name to exist. Multi-pass, because
+    # links can chain (libllama.so -> libllama.so.0 -> ...0.14.0).
+    LINK_PAIRS=()
+    while IFS= read -r pair; do
+      [[ -n "$pair" ]] && LINK_PAIRS+=("$pair")
+    done < <(tar -tvzf "$ARCHIVE" 2>/dev/null | sed -n 's/^l.*[[:space:]]\([^[:space:]]*\)[[:space:]]->[[:space:]]\([^[:space:]]*\)$/\1|\2/p')
+    UNRESOLVED=0
+    if [[ ${#LINK_PAIRS[@]} -gt 0 ]]; then
+      for _pass in 1 2 3 4; do
+        UNRESOLVED=0
+        for pair in "${LINK_PAIRS[@]}"; do
+          lnk="${pair%%|*}"; tgt="${pair#*|}"
+          [[ -e "$EXTRACT_TO/$lnk" ]] && continue
+          src="$EXTRACT_TO/$(dirname "$lnk")/$tgt"
+          if [[ -f "$src" ]]; then cp -f "$src" "$EXTRACT_TO/$lnk"; else UNRESOLVED=$((UNRESOLVED + 1)); fi
+        done
+        [[ $UNRESOLVED -eq 0 ]] && break
+      done
+    fi
+    if [[ $TAR_EXIT -ne 0 && $UNRESOLVED -gt 0 ]]; then
+      echo "tar extraction failed (exit $TAR_EXIT; $UNRESOLVED unresolved entries)" >&2
+      exit 1
+    fi
+    ;;
+  *)
+    if command -v unzip >/dev/null 2>&1; then
+      unzip -o -q "$ARCHIVE" -d "$EXTRACT_TO"
+    elif command -v ditto >/dev/null 2>&1; then
+      ditto -x -k "$ARCHIVE" "$EXTRACT_TO"
+    else
+      echo "No unzip tool found (need unzip or ditto)." >&2; exit 3
+    fi
+    ;;
+esac
+rm -f "$ARCHIVE"
+
+# Flatten: the macOS/Linux tarballs nest everything under llama-<tag>/ — move the
+# binary's directory contents up so llama-server sits at the extract_to root, where
+# services/runtime/sidecar.ts resolves it.
+if [[ ! -f "$BIN_PATH" ]]; then
+  FOUND="$(find "$EXTRACT_TO" -type f -name "$BIN_NAME" | head -n1)"
+  if [[ -n "$FOUND" ]]; then
+    SRC_DIR="$(dirname "$FOUND")"
+    if [[ "$SRC_DIR" != "$EXTRACT_TO" ]]; then
+      find "$SRC_DIR" -mindepth 1 -maxdepth 1 -exec mv -f {} "$EXTRACT_TO"/ \;
+      find "$EXTRACT_TO" -mindepth 1 -type d -empty -delete 2>/dev/null || true
+    fi
+  fi
 fi
-rm -f "$ZIP"
 
 if [[ -f "$BIN_PATH" ]]; then
   chmod +x "$BIN_PATH" 2>/dev/null || true
   echo "  extracted + chmod +x $BIN_NAME"
-else
-  echo "  NOTE: $BIN_NAME not at $EXTRACT_TO root — the release zip may nest binaries in a subfolder; flatten them into $EXTRACT_TO (and chmod +x)."
+  exit 0
 fi
-exit 0
+echo "  FAIL: $BIN_NAME not found under $EXTRACT_TO after extraction — the release archive layout may have changed." >&2
+exit 1

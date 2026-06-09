@@ -1264,6 +1264,46 @@ The final remediation round: everything still open from the audit. Gate: typeche
 label, CLAUDE.md `package` command, PRIVACY.md no-downloader-ships-today caveat, sample-data +
 model-manifests READMEs.
 
+---
+
+## 14. Manual-acceptance prep: real llama.cpp pin + license reviews (2026-06-10)
+
+The in-repo half of the manual-acceptance path (BUILD_STATE §5 / audit next-steps 1.1 + 1.4):
+
+- **`runtime-sources.yaml` is PINNED to a REAL release: `ggml-org/llama.cpp@b9585`**, with real
+  per-OS asset URLs and SHA-256 checksums computed from the actually-downloaded assets
+  (win/x64 cpu zip · mac/arm64 metal tar.gz · linux/x64 cpu tar.gz). R5's "fetch-runtime 404s"
+  blocker is gone.
+- **Current-release format handled:** the macOS/Linux assets are now `.tar.gz` (not `.zip`) and
+  nest everything under `llama-<tag>/`, with `lib*.so`/`.dylib` **version symlinks** inside.
+  `fetch-runtime.{ps1,sh}` now: name the archive from the URL basename; extract tar.gz via
+  tar (bsdtar on Windows); **flatten** nested layouts so `llama-server[.exe]` lands at
+  `runtime/llama.cpp/<os>/`; **materialize symlinks as copies, multi-pass for chains**
+  (Windows hosts and exFAT drives cannot hold symlinks); and **exit 1 if the binary is not
+  present after extraction** (was a warning). `assets.ts planRuntimeDownload` names the
+  archive from the URL too (+ tar.gz test).
+- **Corporate-proxy fix:** schannel curl fails CRL/OCSP behind TLS-intercepting proxies
+  (`CRYPT_E_NO_REVOCATION_CHECK`); the fetch scripts pass `--ssl-revoke-best-effort`
+  (Windows curl always; bash only when `curl --version` reports schannel). Integrity remains
+  enforced by the SHA-256 pins.
+- **Verified END-TO-END on this machine, both shells:** real download → `archive VERIFIED`
+  (hash match) → extraction → flatten → `llama-server[.exe]` at the extract root for **all
+  three OSes** from a Windows host; idempotent re-run skips. A tampered hash deletes + fails.
+- **License reviews COMPLETED (spec §13, audit M11):** all six manifests are now
+  `license_review.status: approved` (reviewed 2026-06-10, Claude-assisted, upstream licenses
+  verified via the Hugging Face API): the five Qwen3 GGUF repos are **apache-2.0** (official
+  Qwen org quantizations); multilingual-E5's **base model is MIT**. ⚠️ Caveat recorded in the
+  E5 manifest notes: the GGUF quant repo (ChristianAzinn) declares no separate license field —
+  treated as MIT via the base model (mechanical quantization); re-quantize in-house or switch
+  quant source if stricter provenance is wanted before selling. `fetch-models` no longer needs
+  `--accept-license`; the commercial license gate now passes.
+- Docs updated (README + model-policy placeholder warnings → pinned-release notes).
+- Gate: typecheck clean, **361/361 tests**, build green.
+
+**Remaining manual acceptance:** fetch the weights onto the user's prepared drive + promote the
+weight hashes (`verify-models --generate`), the live real-model smoke test, `npm run package:win`
++ post-package smoke, certs (R7) + `build-commercial-drive` + the spec §17 USB demo.
+
 **Still open (accepted/architectural):** the spec-gap items that are conscious product decisions —
 no full Onboarding wizard (the WorkspaceGate + auto-benchmark + Home cover the §17 flow),
 `ChatOptions.mode` Fast/Balanced/Deep stays dead plumbing, `runtime_events` unwritten, no

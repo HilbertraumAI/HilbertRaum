@@ -112,15 +112,21 @@ printed first). The DIY path pulls from the **upstream source**, which sidesteps
 ### `runtime-sources.yaml` (the sidecar, not a model)
 `model-manifests/runtime-sources.yaml` pins one `ggml-org/llama.cpp` release and lists one prebuilt
 build per OS/arch/backend (`os`, `arch`, `backend`, `url`, `sha256`, `extract_to`). The **default
-backend is CPU** (AVX2 on Windows x64, Metal on mac arm64, plain CPU on Linux x64) — the
+backend is CPU** (CPU x64 on Windows, Metal on mac arm64, plain CPU on Linux x64) — the
 broadest-compatible choice for an unknown laptop; GPU builds are an opt-in `--backend` override. It
 is validated by `shared/runtime-sources.ts` and is **excluded from model discovery** (it is not a
 model manifest).
 
-> ⚠️ **The committed `runtime-sources.yaml` ships PLACEHOLDER values.** Its `version`, every `url`,
-> and every `sha256` are placeholders (the real artifacts aren't in the repo, spec §0) — so
-> `fetch-runtime` **will 404 until you pin a real release**: pick a tag from the
-> [ggml-org/llama.cpp releases](https://github.com/ggml-org/llama.cpp/releases), set `version` + the
-> matching per-OS `url`s (asset names vary per release, e.g. `llama-<tag>-bin-win-cpu-x64.zip`), fetch,
-> then promote the downloaded zip's real SHA-256 into `sha256`. The chat/embeddings **model** URLs are
-> already real Hugging Face links; only this sidecar file needs a real release pinned.
+> ✅ **Pinned to a real release: `b9585`** (2026-06-10), with real per-OS URLs and SHA-256
+> checksums computed from the downloaded assets — `fetch-runtime` verifies before extracting.
+> Notes on the current release format:
+> - The **Windows** asset is a `.zip` with the binaries at the archive root; **macOS/Linux** assets
+>   are `.tar.gz` nested under `llama-<tag>/`. `fetch-runtime` handles both, **flattens** nested
+>   layouts so `llama-server[.exe]` lands at `runtime/llama.cpp/<os>/`, and **materializes the
+>   `lib*.so`/`.dylib` version symlinks as copies** (exFAT drives and Windows hosts cannot hold
+>   symlinks).
+> - **To bump the release:** pick a new tag from the
+>   [ggml-org/llama.cpp releases](https://github.com/ggml-org/llama.cpp/releases), update `version`
+>   + the per-OS asset `url`s (asset names vary per release), download each asset, and promote its
+>   real SHA-256 into `sha256` as a deliberate, reviewed change. A real-hash mismatch makes
+>   `fetch-runtime` delete the archive and fail.
