@@ -1,6 +1,6 @@
 # Model Policy — Private AI Drive Lite
 
-_Last updated: 2026-06-09 (Phase 12)_
+_Last updated: 2026-06-09 (Phase 13 — added the model catalog sizes/RAM + the runtime-sources placeholder caveat)_
 
 ## Principles
 - **No model weights in git.** Weights live under `models/` on the drive (git-ignored).
@@ -12,12 +12,15 @@ _Last updated: 2026-06-09 (Phase 12)_
 ## Default model family
 **Qwen3 dense instruct**, quantized **GGUF**, run via `llama.cpp`. Apache-2.0 for many variants.
 
-| Role | Candidate | Purpose |
-|---|---|---|
-| Chat small | Qwen3 1.7B Instruct Q4 | Weak laptops (TINY) |
-| Chat balanced | Qwen3 4B Instruct Q4 | Default (LITE) |
-| Chat better | Qwen3 8B Instruct Q4 | 16 GB+ (BALANCED/PRO) |
-| Embeddings | small multilingual model | Local document search |
+| Role | Candidate | Size | Min RAM | License | Purpose |
+|---|---|---|---|---|---|
+| Chat small | Qwen3 1.7B Instruct Q4 | ~1.2 GB | 6 GB | Apache-2.0 | Weak laptops (TINY) |
+| Chat balanced | Qwen3 4B Instruct Q4 | ~2.7 GB | 8 GB | Apache-2.0 | Default (LITE) |
+| Chat better | Qwen3 8B Instruct Q4 | ~5.0 GB | 16 GB | Apache-2.0 | 16 GB+ (BALANCED/PRO) |
+| Embeddings | Multilingual E5 Small (Q8) | ~0.5 GB | 4 GB | MIT | Local document search (needed for Q&A) |
+
+Sizes/RAM come from each manifest (`size_on_disk_gb` / `recommended_min_ram_gb`); download URLs live
+in the manifests' `download.url` (see the catalog with source links in the [README](../README.md)).
 
 ## Manifest format & parsing
 Manifests are **YAML**, parsed with the pure-JS [`yaml`](https://www.npmjs.com/package/yaml) package
@@ -106,3 +109,11 @@ backend is CPU** (AVX2 on Windows x64, Metal on mac arm64, plain CPU on Linux x6
 broadest-compatible choice for an unknown laptop; GPU builds are an opt-in `--backend` override. It
 is validated by `shared/runtime-sources.ts` and is **excluded from model discovery** (it is not a
 model manifest).
+
+> ⚠️ **The committed `runtime-sources.yaml` ships PLACEHOLDER values.** Its `version`, every `url`,
+> and every `sha256` are placeholders (the real artifacts aren't in the repo, spec §0) — so
+> `fetch-runtime` **will 404 until you pin a real release**: pick a tag from the
+> [ggml-org/llama.cpp releases](https://github.com/ggml-org/llama.cpp/releases), set `version` + the
+> matching per-OS `url`s (asset names vary per release, e.g. `llama-<tag>-bin-win-cpu-x64.zip`), fetch,
+> then promote the downloaded zip's real SHA-256 into `sha256`. The chat/embeddings **model** URLs are
+> already real Hugging Face links; only this sidecar file needs a real release pinned.

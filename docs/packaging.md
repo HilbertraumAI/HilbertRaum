@@ -126,6 +126,13 @@ npm run package:win                                                  # build the
 copy .\apps\desktop\release\*.exe E:\                                 # place the launcher on the drive
 ```
 
+> ⚠️ **Pin a real `llama.cpp` release before `fetch-runtime`/`-WithAssets`.** The committed
+> `model-manifests/runtime-sources.yaml` ships **placeholder** `version`/`url`/`sha256` values, so the
+> sidecar download **404s** until you set a real [ggml-org/llama.cpp
+> release](https://github.com/ggml-org/llama.cpp/releases) tag + the matching per-OS asset names. The
+> chat/embeddings **model** URLs are already real Hugging Face links. See
+> [`model-policy.md`](model-policy.md).
+
 Or the older manual flow (no download): `prepare-drive` (no `-WithAssets`) → drop GGUF weights into
 `E:\models\…` + `llama-server` into `E:\runtime\llama.cpp\win\` by hand → `verify-models -Generate`.
 

@@ -20,9 +20,29 @@ portable USB-C SSD. Your prompts, documents, embeddings, and chat history never 
 The build proceeds in phases (mock-first, so it runs with **no model files and no network**).
 Current phase and progress are tracked in [`BUILD_STATE.md`](BUILD_STATE.md).
 
-## DIY setup (advanced users)
+## Which path are you on?
 
-Requirements: **Node.js ≥ 22** (Node 24 recommended). Git.
+- **You bought a preconfigured drive** → you don't need this repo. Plug it in, double-click
+  **Start Private AI Drive**, and follow **[`docs/user-guide.md`](docs/user-guide.md)**. Models are
+  already on the drive.
+- **You're setting it up yourself (DIY / from source)** → keep reading. You'll run the app, then
+  download the models, then point the app at them.
+
+## What you need (DIY)
+
+- **A computer:** Windows (first-class), macOS, or Linux.
+- **RAM decides which model you can run** (see the table below): ~8 GB → the 1.7B model,
+  16 GB → 4B, 32 GB → 8B. The app benchmarks your machine and recommends one.
+- **Disk space:** ~**2 GB** for the smallest usable setup (one chat model + the embeddings model),
+  up to ~**6 GB** with the 8B model. A **USB-3 SSD** is recommended if you run from a portable drive.
+- **To build from source:** **Node.js ≥ 22** (24 recommended) + **Git**.
+- **The AI itself** = a **GGUF model file** *plus* the **`llama.cpp` `llama-server` binary**. Neither
+  ships in this repo (licensing + size); the steps below download and verify them, or you add them by
+  hand.
+
+## Getting started (DIY / from source)
+
+### 1. Run the app — no models needed yet
 
 ```bash
 git clone <this-repo>
@@ -31,41 +51,84 @@ npm install        # one-time; downloads the Electron binary (needs internet onc
 npm run dev        # launches the app
 ```
 
-Run tests:
+The app starts immediately on a **built-in mock model** so you can explore the whole interface
+(chat, document import, Q&A with citations, benchmark, privacy). **Mock answers are placeholders**
+(they echo your input) — they are *not* real AI. Add a real model (step 2) for genuine answers.
 
-```bash
-npm test
-npm run typecheck
-```
+> The dependency install is the **only** step that touches the network. The app itself makes **no**
+> network calls in its core path.
 
-> The dependency install is the **only** step that touches the network. The application itself
-> makes no network calls in its core path.
+### 2. Download the models (the real AI)
 
-### Prepare a portable drive
-
-`scripts/` lays out and verifies a drive (Windows PowerShell + macOS/Linux bash siblings):
+The app reads model weights + the `llama-server` binary from a **drive root** — any folder (an
+external drive, or a folder on your disk). Lay one out and download everything in one command:
 
 ```powershell
-.\scripts\setup-dev.ps1                  # install + build + test (handles the TLS-proxy case)
-.\scripts\prepare-drive.ps1 -Target E:\  # create the drive layout + config (-DryRun to preview)
-.\scripts\verify-models.ps1  -Target E:\ # checksum the model weights you added
-npm run package:win                      # build the portable .exe (manual; needs network once)
+# Windows
+.\scripts\prepare-drive.ps1 -Target E:\ -WithAssets -AcceptLicense   # layout + download + verify
+.\scripts\verify-models.ps1  -Target E:\ -Generate                   # record the real hashes
 ```
 ```bash
-scripts/prepare-drive.sh --target /Volumes/PRIVATE_AI_DRIVE
-scripts/verify-models.sh  --target /Volumes/PRIVATE_AI_DRIVE
+# macOS / Linux
+scripts/prepare-drive.sh --target /Volumes/PAID --with-assets --accept-license
+scripts/verify-models.sh  --target /Volumes/PAID --generate
 ```
 
-Model weights + the `llama-server` binary are **not** in the repo — drop them into the drive's
-`models/` and `runtime/llama.cpp/<os>/` folders (the scripts tell you where). See
-**[`docs/packaging.md`](docs/packaging.md)** and **[`docs/drive-layout.md`](docs/drive-layout.md)**.
-End users: **[`docs/user-guide.md`](docs/user-guide.md)** + **[`docs/troubleshooting.md`](docs/troubleshooting.md)**.
+This downloads each model weight from its source (Hugging Face) **and** the `llama.cpp` sidecar,
+**SHA-256-verifies** them, and copies the manifests/config onto the drive. Downloads **resume** if
+interrupted and re-running **skips** what's already there. You can also fetch piecemeal
+(`fetch-models` / `fetch-runtime`, with `--only <id>` for a single model) or drop the files into
+`models/` and `runtime/llama.cpp/<os>/` **by hand** — see **[`docs/packaging.md`](docs/packaging.md)**.
+
+> ⚠️ **Before `fetch-runtime` works, pin a real `llama.cpp` release.** The committed
+> [`model-manifests/runtime-sources.yaml`](model-manifests/runtime-sources.yaml) ships **placeholder**
+> version/URLs (they 404) and placeholder checksums. Set a real
+> [ggml-org/llama.cpp release](https://github.com/ggml-org/llama.cpp/releases) tag + the matching
+> per-OS asset names first. Model weight URLs are real (Hugging Face). See
+> **[`docs/model-policy.md`](docs/model-policy.md)**.
+
+### 3. Point the app at your models
+
+The app uses whatever folder **`PAID_DRIVE_ROOT`** names (a prepared folder contains
+`config/drive.json`). On a preconfigured drive the launcher sets this automatically; from source you
+set it yourself, then launch:
+
+```powershell
+$env:PAID_DRIVE_ROOT = 'E:\'; npm run dev    # Windows
+```
+```bash
+PAID_DRIVE_ROOT=/Volumes/PAID npm run dev    # macOS / Linux
+```
+
+Open **Models**, press **Start** on the recommended model, and chat for real. To ship a portable
+build instead of `npm run dev`, see `npm run package:win` in **[`docs/packaging.md`](docs/packaging.md)**.
+
+Run tests / type-check: `npm test`, `npm run typecheck`.
+
+## Supported models
+
+Downloaded by the scripts above (or add your own via a manifest). Weights are **never** in the repo.
+
+| Model | Role | Size | Min RAM | License | Source |
+|---|---|---|---|---|---|
+| Qwen3 1.7B Instruct Q4 | Chat (small / weak laptops) | ~1.2 GB | 6 GB | Apache-2.0 | [Qwen/Qwen3-1.7B-GGUF](https://huggingface.co/Qwen/Qwen3-1.7B-GGUF) |
+| Qwen3 4B Instruct Q4 | Chat (balanced default) | ~2.7 GB | 8 GB | Apache-2.0 | [Qwen/Qwen3-4B-GGUF](https://huggingface.co/Qwen/Qwen3-4B-GGUF) |
+| Qwen3 8B Instruct Q4 | Chat (16 GB+ laptops) | ~5.0 GB | 16 GB | Apache-2.0 | [Qwen/Qwen3-8B-GGUF](https://huggingface.co/Qwen/Qwen3-8B-GGUF) |
+| Multilingual E5 Small Q8 | Embeddings (document search) | ~0.5 GB | 4 GB | MIT | GGUF: [ChristianAzinn/…-gguf](https://huggingface.co/ChristianAzinn/multilingual-e5-small-gguf) · orig: [intfloat/…](https://huggingface.co/intfloat/multilingual-e5-small) |
+
+Document Q&A needs the **embeddings** model; chat needs **one** of the Qwen3 models. The full schema
++ license policy is in **[`docs/model-policy.md`](docs/model-policy.md)**; per-model details live in
+[`model-manifests/`](model-manifests).
 
 ## Two distribution paths
 
-- **Open-source DIY toolkit** — clone this repo, prepare your own drive, download supported models.
-- **Preconfigured drive** *(commercial, later)* — a prepared SSD with tested hardware, signed
-  installers, preloaded models, and polished onboarding. The software core stays open source.
+- **Open-source DIY toolkit** — clone this repo, prepare your own drive, download supported models
+  (the path above).
+- **Preconfigured drive** *(commercial)* — a prepared SSD with tested hardware, a signed/notarized
+  app, preloaded + verified models, and double-click onboarding (built by
+  `scripts/build-commercial-drive.*`; see
+  [`docs/provisioning-and-distribution-plan.md`](docs/provisioning-and-distribution-plan.md)). The
+  software core stays open source.
 
 ## Privacy
 

@@ -10,11 +10,18 @@ a portable drive. Your prompts, documents, embeddings, and chat history stay loc
 
 ## 1. What you need
 
-- The Private AI Drive (a USB/SSD drive prepared with the app + a model), **or** the app
-  installed on your computer with a model added.
-- A laptop running Windows (macOS/Linux also supported).
+- **The Private AI Drive** — a USB/SSD drive that already has the app **and** the AI models on it.
+  Everything is preloaded; you don't download or install anything.
+- **A laptop** running Windows (macOS and Linux also work). No admin rights needed.
+- **Enough memory (RAM):** about **8 GB** runs the standard model well; **16 GB or more** lets you
+  use the larger, more capable model. The app checks your laptop and picks the best fit for you.
+- **A free USB port** — ideally **USB-3** (the blue port) for the best speed.
 
-You do **not** need an internet connection to use the app.
+You do **not** need an internet connection, an account, or a credit card to use the app. Nothing you
+type or import ever leaves the drive.
+
+> Setting it up yourself from the source code instead? That's the **DIY** path — see the project
+> [README](../README.md), which covers downloading the models and pointing the app at them.
 
 ---
 

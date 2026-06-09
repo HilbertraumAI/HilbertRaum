@@ -17,11 +17,19 @@
 #     builds:
 #       - { os, arch, backend, url, sha256, extract_to }
 #
-# sha256 stays a placeholder until a real drive is built; capture the real hash of the
-# downloaded zip and promote it here as part of a deliberate, reviewed version bump.
+# ⚠️ PLACEHOLDERS — the committed `version`, every `url`, and every `sha256` below are
+#    PLACEHOLDERS, not a real release. `fetch-runtime` will 404 until you set a REAL
+#    ggml-org/llama.cpp release:
+#      1. Pick a release tag from https://github.com/ggml-org/llama.cpp/releases
+#      2. Set `version` to that tag and each `url` to the matching per-OS asset name
+#         (asset names vary by release, e.g. llama-<tag>-bin-win-cpu-x64.zip).
+#      3. Run fetch-runtime, then promote the downloaded zip's real SHA-256 into `sha256`
+#         here as part of a deliberate, reviewed version bump.
+#    (Model weight URLs in the chat/embeddings manifests ARE real Hugging Face links; only
+#    this sidecar file needs a real release pinned.)
 
 llama_cpp:
-  version: b9196
+  version: b9196   # PLACEHOLDER — replace with a real release tag (see warning above)
   builds:
     - os: win
       arch: x64
