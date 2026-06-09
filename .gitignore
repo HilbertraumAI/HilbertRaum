@@ -24,8 +24,10 @@ workspace/
 logs/
 *.log
 
-# Drive runtime binaries (sidecars)
-runtime/
+# Drive runtime binaries (sidecars) — the DRIVE's runtime/ dir only.
+# Anchored to the repo root so it does NOT match the source tree's
+# apps/desktop/src/main/services/runtime/ (that bug silently un-tracked the runtime service).
+/runtime/
 
 # Env / OS
 .env

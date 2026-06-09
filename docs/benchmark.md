@@ -1,6 +1,6 @@
 # Hardware benchmark & model recommendation (Phase 7)
 
-_Last updated: 2026-06-09 — Phase 7 complete._
+_Last updated: 2026-06-09 — Phase 7 (updated Phase 10: real tokens/sec)._
 
 The benchmark answers the spec §11.1 questions — *can this machine run a model, which
 model, what context is safe, is the drive fast enough* — using **only local signals**. It
@@ -27,8 +27,10 @@ IPC: `runBenchmark()` (`benchmark:run`) in
    returns `null` Mbps + an `error` string instead of throwing.
 4. **Tokens/sec** (`measureTokensPerSecond`): **optional**. Only runs when a runtime is
    active — it streams the prompt *"Write one sentence about privacy."* and times up to 64
-   tokens. With the mock runtime this is a simulated figure; it is `null` when no runtime is
-   running. Real measurement arrives with the Phase 10 llama.cpp runtime.
+   tokens. It is `null` when no runtime is running. **Phase 10:** because `measureTokensPerSecond`
+   drives off `runtime.chatStream`, this is now a **real** figure whenever the real `LlamaRuntime`
+   is streaming (it remains a simulated figure under the mock runtime). The low-tokens/sec profile
+   **downgrade** and the GPU **bump** therefore become live with real local inference.
 
 ## Profile classification (spec §11.3)
 

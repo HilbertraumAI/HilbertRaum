@@ -5,7 +5,7 @@
 > (see "Per-phase ritual" in [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md)).
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
-_Last updated: 2026-06-09 — Phase 9 complete; Phase 10 next_
+_Last updated: 2026-06-09 — Phase 10 complete; Phase 11 next_
 
 ---
 
@@ -23,8 +23,8 @@ _Last updated: 2026-06-09 — Phase 9 complete; Phase 10 next_
 | 7 | Hardware benchmark & recommendation | 🟢 done |
 | 8 | Privacy & offline hardening | 🟢 done |
 | 9 | Encrypted workspace | 🟢 done |
-| 10 | Real llama.cpp runtime & embeddings | 🟡 next |
-| 11 | Drive layout, scripts & packaging | ⚪ not started |
+| 10 | Real llama.cpp runtime & embeddings | 🟢 done |
+| 11 | Drive layout, scripts & packaging | 🟡 next |
 
 Legend: ⚪ not started · 🟡 in progress · 🟢 done · 🔴 blocked
 
@@ -210,6 +210,42 @@ Repo root: `f:\_coding\ai_drive`.
   stays open until process exit. `db` on `AppContext` is a **getter** over the controller
   (`requireDb()` throws while locked), so all existing `ctx.db` call sites are unchanged and track
   unlock/lock at call time.
+- **Sidecar discovery + env override (Phase 10):** `resolveLlamaServerPath(rootPath, platform, env)`
+  finds `runtime/llama.cpp/<os>/llama-server[.exe]` (`win`/`mac`/`linux` sub-dirs, spec §6); a
+  `PAID_LLAMA_BIN` env var overrides for dev. Pure `existsSync` — the "binary present?" check has no
+  I/O surprises. `findFreePort()` picks a free **loopback** port (listen `127.0.0.1:0` → read → close;
+  an inbound bind, not the outbound `connect` the offline guard watches).
+- **Localhost-only binding (LOCKED, Phase 10):** every sidecar is spawned with `--host 127.0.0.1` and
+  every fetch targets `http://127.0.0.1:<port>`. **Never** `0.0.0.0`/a routable interface. The Phase-8
+  offline guard exempts loopback for exactly this; the no-network assertions assume loopback-only. A
+  unit test asserts the spawn args + fetch URLs are `127.0.0.1`, never `0.0.0.0`.
+- **OpenAI-compatible streaming endpoint (Phase 10):** `LlamaRuntime.chatStream` POSTs to
+  `/v1/chat/completions` with `stream:true`, sending `messages` as plain role/content (**the server
+  applies the model's chat template** — we never hand-roll Qwen's prompt format) and mapping
+  `maxTokens`/`temperature`. `readChatSSE` parses `data:` frames (partial-line buffering, ignore
+  keep-alives, stop on `[DONE]`), `yield`s each delta, honours `options.signal`. Feeds the **locked
+  Phase-3 streaming contract** unchanged ⇒ `measureTokensPerSecond` reports **real** tokens/sec once a
+  real runtime streams.
+- **Real-embedder backend = `llama-server --embedding` (Phase 10, R6):** `E5Embedder` composes the
+  **same** prebuilt `llama-server` binary (`--embedding --pooling mean`) over loopback `/v1/embeddings`.
+  Chosen over ONNX (onnxruntime-node + tokenizer = a heavier **native** add) because it adds **zero new
+  npm deps** and no fragile native build — consistent with the `node:sqlite`/pure-JS theme. **Lazy-
+  started on first `embed()`** and reused; an additive optional `Embedder.stop()` kills it (wired into
+  `will-quit`). Same **id (manifest) + 384 dims + L2-normalized** output ⇒ drop-in behind the
+  `Embedder` interface; the locked Float32 BLOB encoding + `VectorIndex` are unchanged.
+- **Embedding-model-mismatch handling = filter by id (LOCKED, Phase 10):** mock (`mock-embedder`) and
+  real E5 vectors are **both 384-dim**, so the dimension guard can't separate them — mixing them
+  silently corrupts ranking. `VectorIndex` takes an optional `{ embeddingModelId }` that scopes the
+  cosine scan to `WHERE embedding_model_id = ?`; `rag.retrieve` passes the **active embedder's id**.
+  Chosen over a forced reindex-on-switch (cheaper, no re-embed pass; a reindex still re-embeds with the
+  active model). Default (no id) scans all rows ⇒ existing callers/tests unchanged. A test proves a
+  mock↔real switch can't blend vector spaces.
+- **Graceful-fallback rule (LOCKED, Phase 10):** the real backends are **opt-in by availability**.
+  `createSelectingRuntimeFactory` (per `start()`, when the model path is known) and
+  `createSelectedEmbedder` return the real `LlamaRuntime`/`E5Embedder` **only when BOTH** the
+  `llama-server` binary **and** the GGUF weights exist; else the mock. ⇒ the app launches and the whole
+  suite passes with **zero model files** (the repo/CI default). The embedder reads its model from the
+  **manifest** (settings live in the possibly-encrypted DB, unreadable pre-unlock).
 
 ---
 
@@ -496,40 +532,81 @@ stop, regenerate, per-message copy, and the no-runtime empty state.
   fetches `getWorkspaceState()` on mount and renders the gate until `unlocked`; sidebar **Lock now**
   button (encrypted only) calls `lockWorkspace`. The Settings workspace card reflects the real mode.
 
+### Real runtime + embedder (Phase 10 live)
+✅ **`services/runtime/sidecar.ts`** — discovery + `LlamaServer` lifecycle.
+- `resolveLlamaServerPath(rootPath, platform, env)` → binary path | null (`runtime/llama.cpp/<os>/`,
+  `PAID_LLAMA_BIN` override); `llamaServerDir`/`llamaServerBinaryName`/`llamaOsDir`; `findFreePort()`;
+  `defaultThreadCount()`; `LOOPBACK_HOST = '127.0.0.1'`.
+- **`LlamaServer`** owns one child process: `start()` (spawn `--host 127.0.0.1 --port <random> --model
+  --ctx-size --threads` + `extraArgs`, then poll `/health` with a **timeout** → throw on crash/timeout),
+  `health() → HealthStatus`, `fetch(path, init)` (loopback), `stop()` (kill **and wait for exit**).
+  Test seams: injectable `spawn` / `fetchImpl` / `findPort` (+ `ChildProcessLike`/`SpawnFn`/`FetchFn`).
+✅ **`services/runtime/llama.ts`** — `LlamaRuntime implements ModelRuntime` (composes `LlamaServer`);
+  `chatStream` → OpenAI-compatible `/v1/chat/completions` (`stream:true`, role/content, `max_tokens`/
+  `temperature`), `readChatSSE(body, signal)` exported (SSE delta parser). `createLlamaRuntime(opts, deps)`.
+✅ **`services/runtime/factory.ts`** — `createSelectingRuntimeFactory({ rootPath, resolveBin?,
+  modelExists?, makeLlama?, makeMock?, onSelect? }) → RuntimeFactory` (real iff binary + weights present,
+  per `start()`; else mock). Used by `RuntimeManager` in `main/index.ts`.
+✅ **`services/embeddings/e5.ts`** — `E5Embedder implements Embedder` (id = manifest id, 384 dims,
+  L2-normalized; lazy `llama-server --embedding --pooling mean` sidecar; additive `stop()`).
+  `createE5Embedder(opts)`. **`Embedder` gained optional `stop?(): Promise<void>`** (mock omits it).
+✅ **`services/embeddings/factory.ts`** — `createSelectedEmbedder({ rootPath, model, … }) → Embedder`
+  (real `E5Embedder` iff binary + E5 weights present; else `MockEmbedder`). `EmbeddingModelInfo {
+  id, modelPath, dimensions?, contextTokens? }`.
+✅ **`VectorIndex`** — optional 3rd ctor arg `{ embeddingModelId? }`: a non-empty id scopes the cosine
+  scan to `WHERE embedding_model_id = ?` (mismatch guard); default scans all rows. **`rag.retrieve`**
+  passes `{ embeddingModelId: embedder.id }`.
+✅ **`main/index.ts`** — builds the selecting runtime factory + selected embedder; `resolveEmbeddingModel`
+  reads the embeddings manifest pre-unlock; `will-quit` now also calls `ctx.embedder.stop?.()`.
+  **R5: live inference is manual** (binaries + GGUF not in repo); everything else is tested with a mocked
+  child process / mocked loopback `fetch`.
+
 ---
 
-## 5. Next actions (do these next) — START OF PHASE 10
+## 5. Next actions (do these next) — START OF PHASE 11
 
-Phase 10 = **Real llama.cpp runtime & real embeddings** (spec Step 5 real / §3.2). Build, in order:
-1. **`LlamaRuntime`** behind the existing `ModelRuntime` interface (swap the `createMockRuntime`
-   factory in `main/index.ts` / `RuntimeManager`). Spawn the platform `llama.cpp` server sidecar
-   bound to **`127.0.0.1` only** (loopback is exempt from the Phase-8 offline guard — keep it that
-   way; a remote bind would trip the tripwire). Stream tokens through the **locked Phase-3 streaming
-   contract** (`chat:token/done/error:<id>`) and honour `options.signal` for cancellation.
-2. **Real embedder** (E5-small GGUF) behind the `Embedder` interface, replacing `MockEmbedder` on
-   `AppContext.embedder`. Keep **`dimensions = 384`** + the locked Float32 BLOB encoding so existing
-   `embeddings` rows + `VectorIndex` are drop-in. Re-embedding on a model change is a migration to
-   consider.
-3. **Graceful fallback:** when sidecar binaries / GGUF weights are absent, fall back to the mock (or
-   a clear "model missing" state) so the app still launches offline with zero model files — the
-   Phase 2 model-state machine (`missing`/`checksum_failed`/`installed`) already models this.
-4. **Real tokens/sec** in `measureTokensPerSecond` (Phase 7 left it mock); the benchmark + profile
-   downgrade rule and the GPU bump become live.
-5. Tests: keep all green; the runtime/embedder swaps are behind interfaces so service tests stay
-   valid. Live llama.cpp inference is a **manual** acceptance step (R5 — needs platform binaries +
-   a GGUF model not in the repo).
-6. **Ritual:** docs (runtime/embedder design) + this file; commit.
+Phase 11 = **Drive layout, prepare-drive scripts & packaging** (Milestone 10 / §6 / §12). Build, in order:
+1. **prepare-drive scripts** (`scripts/prepare-drive.ps1` + `.sh`): lay out the spec §6 drive
+   (`runtime/llama.cpp/<os>/`, `models/{chat,embeddings}/`, `model-manifests/`, `workspace/`, `config/`,
+   `logs/`) and generate `config/{drive,policy,checksums}.json`. Dry-run creates the layout; this is
+   where the real `llama-server` binaries + GGUF weights land on a drive (both git-ignored).
+2. **verify-models scripts** (`verify-models.ps1` + `.sh`): hash each weight against its manifest
+   `sha256` (replace the `REPLACE_WITH_REAL_HASH` placeholders with real hashes when real weights exist).
+   `services/models.ts` `verifyChecksum`/`computeInstallState` already gate on this.
+3. **setup-dev scripts** (`setup-dev.ps1` + `.sh`): `NODE_OPTIONS=--use-system-ca npm install` (R6) etc.
+4. **`electron-builder` packaging config**: a **portable** Windows build runnable from an external
+   drive (`PAID_DRIVE_ROOT` resolution + `isPreparedDrive` already exist); ensure manifests ship under
+   resources and `PAID_MANIFESTS_DIR` is set.
+5. **User docs**: a user guide + troubleshooting; complete the spec §17 non-technical demo path.
+6. Tests: prepare-drive **dry-run** creates the layout; checksum generation/verification. **Ritual:**
+   docs (`packaging.md`, `drive-layout.md`, user guide) + this file; commit.
 
-Notes / gotchas for Phase 10:
-- **R5:** real llama.cpp needs platform sidecar binaries + a GGUF model not in the repo → live test
-  is manual. Install any deps with `NODE_OPTIONS=--use-system-ca npm install` (R6).
-- **Keep the sidecar on 127.0.0.1.** The offline guard exempts loopback precisely for this; never
-  bind a routable interface. The no-network assertions assume loopback-only.
-- **Encrypted workspace is transparent to runtimes.** Phase 9 is storage-at-rest; the runtime/
-  embedder read/write the DB through the same `AppContext.db` getter whether the workspace is
-  encrypted or plaintext.
+Notes / gotchas for Phase 11:
+- **R5 stays:** the real `llama-server` binaries + GGUF weights are **not** in the repo, so a live
+  end-to-end demo from a real USB drive is a **manual** acceptance step. The Phase-10 selectors already
+  fall back to mocks when those files are absent, so packaging + scripts are fully testable without them.
+- **Keep everything offline.** Packaging must not introduce a network dependency at runtime; the
+  sidecars stay on `127.0.0.1` (Phase 10). Install-time network (Electron binary, R2) is dev-only.
+- **Git-ignored artifacts:** `runtime/`, `models/`, `*.gguf` are already ignored — prepare-drive writes
+  them onto the drive, never into the repo (see [`docs/packaging.md`](docs/packaging.md)).
 
-Phase 9 is DONE: typecheck clean, **161/161 tests pass** (137 prior + 24 new: **crypto** [scrypt KDF
+Phase 10 is DONE: typecheck clean, **190/190 tests pass** (161 prior + 29 new: **sidecar** [binary
+discovery present/absent/env-override, os-dir/exe-name mapping, `findFreePort`, `defaultThreadCount`;
+`LlamaServer` spawns **127.0.0.1-only** never `0.0.0.0`, becomes healthy on `/health` ok with the bound
+port, **health-timeout throws + kills the child** (no hang/orphan), child-exit-before-healthy throws,
+`stop()` kills the child, **zero non-loopback sockets** across start/health/stop] + **llama runtime**
+[`readChatSSE` yields deltas across split reads + stops on `[DONE]` + aborts on signal; `LlamaRuntime`
+streams from `/v1/chat/completions`, spawn binds loopback + chat URL is `127.0.0.1`, messages sent as
+role/content, options map to `max_tokens`/`stream`, non-ok HTTP throws; factory selects mock when
+binary/weights absent, llama only when both present] + **e5 embedder** [embeds via loopback +
+L2-normalizes, preserves input order under shuffled indices, lazy single-spawn with `--embedding` +
+reuse, empty batch no-ops, count-mismatch throws; `createSelectedEmbedder` falls back to mock without
+binary/weights/model, picks E5 when both present] + **embedding-mismatch** [both 384-dim blend without a
+filter; id-filter scopes search so mock↔real can't blend; empty id disables the filter]).
+`NODE_OPTIONS=--use-system-ca npm run build` green (**main bundle 95.56 kB**). **No new dependencies.**
+(Live `npm run dev` + real-model smoke = manual, R5: needs platform binaries + a GGUF not in the repo.)
+
+Phase 9 (prior): typecheck clean, **161/161 tests pass** (137 prior + 24 new: **crypto** [scrypt KDF
 determinism with stored params, different passwords/salts diverge, unsupported algo throws;
 AES-256-GCM round-trip, fresh-IV-per-encryption, wrong-key fails, ciphertext+tag tamper detection;
 framed serialize/deserialize round-trip + foreign-header reject; verifier accepts right / rejects
@@ -560,7 +637,13 @@ wedge HMR.)
 - **R4 Argon2id ✅ RESOLVED (Phase 9)** — shipped `node:crypto` `scrypt` as the portable primary KDF
   (no native `argon2`); the vault descriptor records `algo` + params so an Argon2id path can be added
   later without changing the on-disk format. No native dep, no build risk on Node 24.
-- **R5 Real llama.cpp** — needs platform sidecar binaries + a GGUF model not in repo; Phase 10 live test is manual.
+- **R5 Real llama.cpp ⚠️ PARTIALLY RESOLVED (Phase 10)** — the mechanics (sidecar discovery + env
+  override, localhost-only binding, OpenAI-compatible streaming, health-timeout, process cleanup, the
+  real `E5Embedder`, the availability-aware fallback, the embedding-model-mismatch filter) are all
+  **implemented + unit-tested** with a mocked child process / mocked loopback fetch. What remains
+  **manual**: a live real-model answer, because the platform `llama-server` binaries + the GGUF weights
+  are **not** in the repo (Phase 11 prepare-drive provisions them). The selectors fall back to mocks
+  when those files are absent, so dev + CI are unaffected.
 - **R6 TLS-intercepting proxy on this machine** — `npm install` fails with `UNABLE_TO_VERIFY_LEAF_SIGNATURE` (corporate root CA). Workaround: `NODE_OPTIONS=--use-system-ca npm install` (Node 24 reads the Windows cert store). If that fails, `npm config set strict-ssl false` (dev-only, less secure) or set `NODE_EXTRA_CA_CERTS`. Affects dev installs only; the app stays offline.
 
 ---

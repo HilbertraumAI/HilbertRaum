@@ -20,6 +20,11 @@ export interface Embedder {
   readonly dimensions: number
   /** Embed a batch of texts into L2-normalized vectors (one per input, in order). */
   embed(texts: string[]): Promise<Float32Array[]>
+  /**
+   * Release any backing resources (e.g. the real embedder's loopback sidecar). Optional
+   * — the mock embedder holds nothing. Called on `will-quit`.
+   */
+  stop?(): Promise<void>
 }
 
 export interface VectorSearchHit {
@@ -71,18 +76,40 @@ interface EmbeddingRow {
  * bounds the work). Upgrade path: an ANN index (sqlite-vec / HNSW) behind this
  * same `search` signature when corpora grow.
  */
+export interface VectorIndexOptions {
+  /**
+   * When set, the search only scans vectors tagged with this `embedding_model_id`.
+   * Phase-10 mismatch guard: mock vectors (`mock-embedder`) and real E5 vectors are
+   * BOTH 384-dim, so the dimension guard alone cannot separate them — mixing them
+   * silently corrupts ranking. Filtering by the active model id keeps a corpus indexed
+   * under one embedder from polluting search under another (e.g. after a mock→real
+   * switch, until a reindex re-embeds everything).
+   */
+  embeddingModelId?: string | null
+}
+
 export class VectorIndex {
+  private readonly embeddingModelId: string | null
+
   constructor(
     private readonly db: Db,
-    private readonly embedder: Embedder
-  ) {}
+    private readonly embedder: Embedder,
+    options?: VectorIndexOptions
+  ) {
+    const id = options?.embeddingModelId
+    this.embeddingModelId = id && id.length > 0 ? id : null
+  }
 
   /** Rank stored chunks by cosine similarity to `queryVector`; return the top `topK`. */
   search(queryVector: Float32Array, topK: number): VectorSearchHit[] {
     if (topK <= 0) return []
-    const rows = this.db
-      .prepare('SELECT chunk_id, vector_blob, dimensions FROM embeddings')
-      .all() as unknown as EmbeddingRow[]
+    const rows = (
+      this.embeddingModelId
+        ? this.db
+            .prepare('SELECT chunk_id, vector_blob, dimensions FROM embeddings WHERE embedding_model_id = ?')
+            .all(this.embeddingModelId)
+        : this.db.prepare('SELECT chunk_id, vector_blob, dimensions FROM embeddings').all()
+    ) as unknown as EmbeddingRow[]
     const hits: VectorSearchHit[] = []
     for (const row of rows) {
       // Skip vectors from a different model/dimensionality (e.g. mid-migration).
@@ -102,3 +129,5 @@ export class VectorIndex {
 }
 
 export { MockEmbedder, createMockEmbedder, MOCK_EMBEDDING_DIMENSIONS, MOCK_EMBEDDING_MODEL_ID } from './mock'
+export { E5Embedder, createE5Embedder } from './e5'
+export type { E5EmbedderOptions } from './e5'

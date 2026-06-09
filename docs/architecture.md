@@ -1,6 +1,6 @@
 # Architecture — Private AI Drive Lite
 
-_Last updated: 2026-06-09 (Phase 8)_
+_Last updated: 2026-06-09 (Phase 10)_
 
 ## Overview
 
@@ -42,8 +42,8 @@ a future move to Tauri/Rust is a localized swap.
   dev. See [`security-model.md`](security-model.md).
 
 ## Swappable interfaces (spec §9.2)
-- `ModelRuntime` — `MockRuntime` (now) → `LlamaRuntime` (Phase 10).
-- `Embedder` — `MockEmbedder` (now) → real local embedder (Phase 10).
+- `ModelRuntime` — `MockRuntime` **or** `LlamaRuntime`, chosen per `start()` by availability (Phase 10).
+- `Embedder` — `MockEmbedder` **or** `E5Embedder`, chosen by availability (Phase 10).
 - `DocumentParser` — txt/md/pdf/docx/csv adapters (Phase 4).
 - `VectorIndex` — cosine over SQLite-stored vectors (Phase 5) → `sqlite-vec`/HNSW later.
 
@@ -145,6 +145,59 @@ the whole DB file is encrypted at rest.
   live network state, the plaintext-dev-mode caveat, and the logs-are-local guarantee. The sidebar
   badge reflects the live `getPolicy()` state.
 - Full detail in [`security-model.md`](security-model.md).
+
+## Real local inference (Phase 10)
+Real on-device inference drops in **behind the unchanged `ModelRuntime`/`Embedder` interfaces** — no
+caller changes. Both backends are **opt-in by availability** (graceful-fallback rule): the real one
+is used only when BOTH the platform `llama-server` binary AND the model's GGUF weights are present;
+otherwise the mock is used, so the app launches and the whole test suite passes with **zero model
+files**.
+
+- **`services/runtime/sidecar.ts`** — sidecar discovery + lifecycle.
+  - `resolveLlamaServerPath(rootPath, platform, env)` finds `runtime/llama.cpp/<os>/llama-server[.exe]`
+    (spec §6 drive layout; `win`/`mac`/`linux` sub-dirs). A `PAID_LLAMA_BIN` env var overrides it for
+    dev. Pure `existsSync` check — no surprises in the "binary present?" decision.
+  - `findFreePort()` asks the OS for a free **loopback** port (listen on `127.0.0.1:0`, read it, close).
+  - **`LlamaServer`** owns one child process: spawns `llama-server` **bound to `127.0.0.1` only**
+    (`--host 127.0.0.1 --port <random> --model <gguf> --ctx-size <n> --threads <n>` + optional extra
+    args), polls `/health` with a **timeout** before reporting ready (never hangs on a wedged server),
+    exposes a loopback `fetch`, and `stop()` kills the child **and waits for exit** so no orphan
+    survives. A child that crashes or never gets healthy makes `start()` throw a clear error.
+- **`services/runtime/llama.ts`** — `LlamaRuntime implements ModelRuntime`, composing a `LlamaServer`.
+  `chatStream` POSTs to the server's **OpenAI-compatible** `/v1/chat/completions` with `stream: true`,
+  sending `messages` as plain role/content (the server applies the model's chat template — we never
+  hand-roll Qwen's prompt format) and mapping `maxTokens`/`temperature`. `readChatSSE` parses the SSE
+  `data:` frames (buffering partial lines, ignoring keep-alives, stopping on `[DONE]`) and `yield`s
+  each delta, honouring `options.signal`. This feeds the **locked Phase-3 streaming contract**
+  unchanged, so `measureTokensPerSecond` (Phase 7) now reports **real tokens/sec** the moment a real
+  runtime streams.
+- **`services/runtime/factory.ts`** — `createSelectingRuntimeFactory({ rootPath, … })` returns a
+  `RuntimeFactory` that picks `LlamaRuntime` vs `MockRuntime` per `start()` (when the concrete model
+  path is known), behind the unchanged `RuntimeManager`. `main/index.ts` uses it in place of the bare
+  `createMockRuntime`.
+- **`services/embeddings/e5.ts`** — `E5Embedder implements Embedder`, the real backend behind the same
+  interface with the **manifest id + 384 dims**. It composes a `LlamaServer` started with `--embedding
+  --pooling mean` (the **same** prebuilt binary — **zero new npm deps**, no fragile native build), is
+  **lazy-started on first `embed()`** and reused, POSTs to `/v1/embeddings`, re-orders the response by
+  `index`, and **L2-normalizes** each vector (interface contract). An additive `stop()` kills the
+  sidecar (wired into `will-quit`). `services/embeddings/factory.ts`
+  `createSelectedEmbedder({ rootPath, model, … })` picks `E5Embedder` vs `MockEmbedder` by availability
+  (the embeddings model is read from the **manifest**, since settings live in the possibly-encrypted DB
+  and are unreadable before unlock).
+- **Embedding-model-mismatch guard.** Mock vectors (`mock-embedder`) and real E5 vectors are **both
+  384-dim**, so `VectorIndex`'s dimension guard cannot separate them — mixing them silently corrupts
+  ranking. `VectorIndex` takes an optional `{ embeddingModelId }` that scopes the cosine scan to one
+  model's vectors (`WHERE embedding_model_id = ?`); `rag.retrieve` passes the **active embedder's id**,
+  so a corpus indexed under the mock can't pollute search under real E5 (and vice-versa) until a
+  reindex re-embeds everything. The default (no id) still scans all rows, so existing callers/tests are
+  unchanged.
+- **Localhost-only is non-negotiable.** Every bind/spawn/fetch targets `127.0.0.1`. The Phase-8 offline
+  guard exempts loopback precisely for this sidecar; a routable bind would expose local inference to the
+  LAN and violate the spec. The no-network test assertions assume loopback-only.
+- **R5 — live inference is manual.** Platform sidecar binaries + a GGUF model are **not** in the repo,
+  so a real-model answer is a manual acceptance step. Everything else (discovery, fallback, localhost
+  binding, process cleanup, health-timeout, SSE parsing, the embedder mechanics, the mismatch filter)
+  is covered by tests with a mocked child process / mocked loopback `fetch`.
 
 ## Data flow (RAG, Phases 4–6)
 import → extract text → chunk → embed (local) → store vectors → on question: embed query → cosine

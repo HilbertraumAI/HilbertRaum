@@ -88,7 +88,11 @@ export async function retrieve(
   question: string,
   settings: RagRetrievalSettings
 ): Promise<RetrievalResult> {
-  const index = new VectorIndex(db, embedder)
+  // Phase-10 mismatch guard: only search vectors tagged with the active embedder's id.
+  // Mock and real E5 vectors are both 384-dim, so the dimension guard cannot separate
+  // them; scoping by model id stops a corpus indexed under one embedder from polluting
+  // search under another (until a reindex re-embeds everything with the active model).
+  const index = new VectorIndex(db, embedder, { embeddingModelId: embedder.id })
   const hits = await index.searchText(question, settings.topKInitial)
   const getChunk = db.prepare(
     'SELECT id, document_id, text, source_label, page_number, section_label FROM chunks WHERE id = ?'

@@ -14,9 +14,9 @@ import { registerDocsIpc } from './ipc/registerDocsIpc'
 import { registerRagIpc } from './ipc/registerRagIpc'
 import { registerBenchmarkIpc } from './ipc/registerBenchmarkIpc'
 import { RuntimeManager } from './services/runtime'
-import { createMockRuntime } from './services/runtime/mock'
-import { createMockEmbedder } from './services/embeddings'
-import { resolveManifestsDir } from './services/models'
+import { createSelectingRuntimeFactory } from './services/runtime/factory'
+import { createSelectedEmbedder, type EmbeddingModelInfo } from './services/embeddings/factory'
+import { discoverManifests, resolveManifestsDir, weightPath } from './services/models'
 import type { AppContext } from './services/context'
 
 // Private AI Drive Lite — Electron main process (the "backend").
@@ -27,6 +27,29 @@ const isDev = !app.isPackaged
 
 let mainWindow: BrowserWindow | null = null
 let ctx: AppContext | null = null
+
+/**
+ * Resolve the embeddings model (id + GGUF weight path) from the manifests so the real
+ * E5 embedder can be selected when its weights are present. Settings live inside the
+ * (possibly encrypted) DB and are unreadable before unlock, so we use the manifest's
+ * default embeddings model rather than `activeEmbeddingModelId`. Returns null when no
+ * embeddings manifest is found (→ the selector falls back to the mock embedder).
+ */
+function resolveEmbeddingModel(manifestsDir: string | null, rootPath: string): EmbeddingModelInfo | null {
+  if (!manifestsDir) return null
+  try {
+    const { manifests } = discoverManifests(manifestsDir)
+    const found = manifests.find((m) => m.manifest.role === 'embeddings')
+    if (!found) return null
+    return {
+      id: found.manifest.id,
+      modelPath: weightPath(rootPath, found.manifest),
+      contextTokens: found.manifest.recommendedContextTokens
+    }
+  } catch {
+    return null
+  }
+}
 
 // Resolve the workspace/drive layout, open the database, and register IPC.
 // Runs once at startup, before the window loads.
@@ -51,12 +74,29 @@ function initBackend(): void {
   workspace.init()
   log.info('Workspace state', workspace.getState())
 
-  // Mock runtime + mock embedder for now; swapped for the real llama.cpp / E5 backends
-  // in Phase 10, behind the same interfaces.
-  const runtime = new RuntimeManager(createMockRuntime)
-  const embedder = createMockEmbedder()
   const manifestsDir = resolveManifestsDir(app.getAppPath(), process.env.PAID_MANIFESTS_DIR)
   log.info('Model manifests directory', { manifestsDir })
+
+  // Phase 10: real llama.cpp runtime + real E5 embedder, behind the SAME interfaces.
+  // Both are opt-in by availability — the selectors return the real backend only when
+  // the platform `llama-server` binary AND the GGUF weights are present, else the mock,
+  // so the app launches + tests pass with zero model files (graceful-fallback rule).
+  // The runtime backend is picked per `start()` (when the model path is known); the
+  // embedder is picked here from the embeddings manifest (settings are unreadable until
+  // the workspace unlocks, so we use the manifest's default E5 model).
+  const runtime = new RuntimeManager(
+    createSelectingRuntimeFactory({
+      rootPath: paths.rootPath,
+      onSelect: (kind, opts, reason) =>
+        log.info('Runtime backend selected', { kind, modelId: opts.modelId, reason })
+    })
+  )
+  const embeddingModel = resolveEmbeddingModel(manifestsDir, paths.rootPath)
+  const embedder = createSelectedEmbedder({
+    rootPath: paths.rootPath,
+    model: embeddingModel,
+    onSelect: (kind, reason) => log.info('Embedder backend selected', { kind, reason })
+  })
 
   // `db` is a getter over the controller: it throws while locked. DB-backed IPC is only
   // reachable after the renderer's unlock gate reports the workspace ready.
@@ -169,8 +209,10 @@ app.whenReady().then(() => {
 })
 
 app.on('will-quit', () => {
-  // Stop the active runtime (real llama.cpp sidecar in Phase 10) before quitting.
+  // Stop the active runtime + embedder sidecars (real llama.cpp servers in Phase 10)
+  // before quitting so no orphaned `llama-server` process survives.
   void ctx?.runtime.stop()
+  void ctx?.embedder.stop?.()
   // Phase 9: re-encrypt + shred the plaintext working DB on exit (encrypted vault only;
   // a no-op for plaintext_dev). Synchronous so it completes before the process exits.
   try {
