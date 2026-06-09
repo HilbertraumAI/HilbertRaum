@@ -152,6 +152,14 @@ Each phase is a vertical slice that leaves the app runnable. Phases map to spec 
 - **Tests:** prepare-drive dry-run creates layout, checksum generation/verification.
 - **Docs:** `docs/packaging.md`, `docs/drive-layout.md`, user guide.
 
+### Phases 12–13 — Provisioning & distribution *(post-MVP polish)*
+- **Goal:** (12) a DIY `fetch-assets` script that downloads + SHA-256-verifies model weights and
+  the `llama.cpp` sidecar onto a drive; (13) a plug-and-play commercial drive — portable bundled
+  app + per-OS launcher + code-signing/notarization + a one-command "build a sellable drive"
+  pipeline. Decision: **portable bundled app, not Docker and not a system installer.**
+- **Full plan:** [`provisioning-and-distribution-plan.md`](provisioning-and-distribution-plan.md)
+  (research, Docker comparison, per-phase acceptance criteria, data contracts, risks).
+
 ---
 
 ## 3. Per-phase ritual (MANDATORY)
