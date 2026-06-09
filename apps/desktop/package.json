@@ -9,7 +9,7 @@
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "start": "electron-vite preview",
-    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.node.json --composite false && tsc --noEmit -p tsconfig.web.json --composite false",
     "test": "vitest run",
     "test:watch": "vitest",
     "package": "electron-vite build && electron-builder",
@@ -17,6 +17,7 @@
     "lint": "eslint . --ext .ts,.tsx"
   },
   "dependencies": {
+    "@noble/hashes": "^2.2.0",
     "mammoth": "^1.12.0",
     "papaparse": "^5.5.3",
     "pdfjs-dist": "^6.0.227",
@@ -25,6 +26,10 @@
     "yaml": "^2.9.0"
   },
   "devDependencies": {
+    "@testing-library/dom": "^10.4.1",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.1",
     "@types/node": "^22.5.0",
     "@types/papaparse": "^5.5.2",
     "@types/react": "^18.3.5",
@@ -33,6 +38,7 @@
     "electron": "^37.0.0",
     "electron-builder": "^26.15.2",
     "electron-vite": "^2.3.0",
+    "jsdom": "^29.1.1",
     "typescript": "^5.5.4",
     "vite": "^5.4.0",
     "vitest": "^2.1.0"

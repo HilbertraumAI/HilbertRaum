@@ -82,10 +82,17 @@ const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms
 
 // ---- Injectable seams (so the server can be unit-tested with no real binary) -----
 
+/** A readable stream surface — just enough to drain + capture the child's stderr. */
+export interface ReadableLike {
+  on(event: 'data', listener: (chunk: unknown) => void): unknown
+}
+
 /** Minimal child-process surface we depend on (real `ChildProcess` satisfies it). */
 export interface ChildProcessLike {
   readonly pid?: number
   readonly killed: boolean
+  /** Present when spawned with a piped stderr; absent in tests' fake children. */
+  readonly stderr?: ReadableLike | null
   kill(signal?: NodeJS.Signals | number): boolean
   on(event: string, listener: (...args: unknown[]) => void): unknown
   once(event: string, listener: (...args: unknown[]) => void): unknown
@@ -127,11 +134,17 @@ const HEALTH_PROBE_TIMEOUT_MS = 3_000
  * (waiting for exit so no orphan survives). Both `LlamaRuntime` and `E5Embedder`
  * compose this; neither re-implements process hygiene.
  */
+/** Keep only the last N chars of captured stderr (enough to show the failing reason). */
+const STDERR_TAIL_MAX = 4000
+
 export class LlamaServer {
   port: number | null = null
   private child: ChildProcessLike | null = null
   private spawnError: Error | null = null
   private exited = false
+  private exitCode: number | null = null
+  private exitSignal: string | null = null
+  private stderrTail = ''
 
   private readonly host: string
   private readonly spawn: SpawnFn
@@ -182,24 +195,39 @@ export class LlamaServer {
     if (this.child) return
     this.spawnError = null
     this.exited = false
+    this.exitCode = null
+    this.exitSignal = null
+    this.stderrTail = ''
     this.port = await this.findPort(this.host)
 
-    // stdin ignored; stdout discarded; stderr inherited. We never READ the child's pipes
-    // (health/chat go over HTTP), and a piped-but-undrained stdout would fill the OS pipe
-    // buffer and BLOCK a chatty `llama-server`. `inherit` lets the OS drain stderr and
-    // keeps its logs visible in a dev console.
+    // stdin/stdout ignored; stderr PIPED. We never read stdout (health/chat go over HTTP),
+    // so it is discarded — a piped-but-undrained stdout would fill the OS pipe buffer and
+    // block a chatty `llama-server`. stderr is piped AND drained (below): draining prevents
+    // the same deadlock, and the captured tail explains a failed start (e.g. a port
+    // conflict's "bind: address already in use").
     const child = this.spawn(this.opts.binPath, this.buildArgs(this.port), {
-      stdio: ['ignore', 'ignore', 'inherit']
+      stdio: ['ignore', 'ignore', 'pipe']
     })
     this.child = child
+    child.stderr?.on('data', (chunk: unknown) => {
+      this.stderrTail = (this.stderrTail + String(chunk)).slice(-STDERR_TAIL_MAX)
+    })
     child.once('error', (err: unknown) => {
       this.spawnError = err instanceof Error ? err : new Error(String(err))
     })
-    child.once('exit', () => {
+    child.once('exit', (code: unknown, signal: unknown) => {
       this.exited = true
+      this.exitCode = typeof code === 'number' ? code : null
+      this.exitSignal = typeof signal === 'string' ? signal : null
     })
 
     await this.waitForHealthy()
+  }
+
+  /** A ` — last output: …` suffix from the captured stderr tail, or '' if none. */
+  private stderrSuffix(): string {
+    const tail = this.stderrTail.trim()
+    return tail ? ` — last output: ${tail}` : ''
   }
 
   private async waitForHealthy(): Promise<void> {
@@ -212,13 +240,18 @@ export class LlamaServer {
       }
       if (this.exited) {
         this.child = null
-        throw new Error('llama-server exited before becoming healthy')
+        const code = this.exitCode != null ? `code ${this.exitCode}` : `signal ${this.exitSignal}`
+        // A port conflict or bad model makes llama-server exit immediately — the stderr
+        // tail (e.g. "bind: address already in use") explains which.
+        throw new Error(`llama-server exited before becoming healthy (${code})${this.stderrSuffix()}`)
       }
       const h = await this.health()
       if (h.healthy) return
       if (Date.now() >= deadline) {
         await this.stop()
-        throw new Error(`llama-server did not become healthy within ${this.healthTimeoutMs}ms`)
+        throw new Error(
+          `llama-server did not become healthy within ${this.healthTimeoutMs}ms${this.stderrSuffix()}`
+        )
       }
       await delay(this.healthIntervalMs)
     }

@@ -182,11 +182,14 @@ Repo root: `f:\_coding\ai_drive`.
 - **Logs-local guarantee (Phase 8):** confirmed `services/logging.ts` is the only log writer
   (rotating `app.log` under `logsPath`); nothing writes logs/crash data off-device. Stated as fact
   on the Privacy screen + PRIVACY.md.
-- **KDF = `scrypt` (`node:crypto`), not native Argon2id (Phase 9, R4):** Argon2id is the stronger
-  default in principle but native `argon2` is a fragile build on Node 24, so we ship the built-in,
-  memory-hard `scrypt` as the portable primary. Params `N=2^15, r=8, p=1, keyLen=32` (≈32 MiB;
-  `maxmem` raised). The vault descriptor records `algo` + params so unlock is deterministic AND an
-  `argon2id` path can be added later **without changing the on-disk format**. No new deps.
+- **KDF = Argon2id (default for new vaults), scrypt still supported (Phase 9 → audit round 2, R4):**
+  NEW vaults derive the key with **Argon2id** (OWASP-recommended) via the pure-JS, audited
+  **`@noble/hashes`** — no fragile native `argon2` build (the original R4 blocker). Default params
+  `m=19456 KiB (19 MiB), t=2, p=1, keyLen=32` (~0.5 s/unlock). `node:crypto` **`scrypt`** is fully
+  supported still (`SCRYPT_KDF` = `N=2^15, r=8, p=1`) so any vault created under the earlier scrypt
+  default unlocks unchanged: the descriptor records `algo` + params and `deriveKey` dispatches on them
+  — **no on-disk format change**. `KdfParams` fields are per-algo (`scrypt: N/r/p` · `argon2id: m/t/p`),
+  validated in `deriveKey`. New dep: `@noble/hashes` (pure-JS, externalized like the parser libs).
 - **Whole-DB-FILE encryption-at-rest (Phase 9, plan §4b):** `node:sqlite` has no SQLCipher, so the
   whole file is encrypted (AES-256-GCM, fresh 12-byte IV/encryption, 16-byte tag) — **the spec §8
   schema is identical in both modes**. At-rest artifact = `paid.sqlite.enc` (framed
@@ -728,9 +731,11 @@ wedge HMR.)
   `mammoth`/`papaparse` are pure-JS too. All three marked **external** (`externalizeDepsPlugin`) so
   pdfjs's large ESM bundle is required at runtime, not bundled. Only a harmless `standardFontDataUrl`
   warning (rendering-only). Ambient typings for the legacy path in `parsers/pdfjs.d.ts`.
-- **R4 Argon2id ✅ RESOLVED (Phase 9)** — shipped `node:crypto` `scrypt` as the portable primary KDF
-  (no native `argon2`); the vault descriptor records `algo` + params so an Argon2id path can be added
-  later without changing the on-disk format. No native dep, no build risk on Node 24.
+- **R4 Argon2id ✅ FULLY RESOLVED (audit round 2)** — new vaults now default to **Argon2id** via the
+  pure-JS `@noble/hashes` (no native `argon2`, no build risk on Node 24). `scrypt` stays supported for
+  existing vaults; the descriptor's `algo` + params make unlock deterministic across both. See the KDF
+  decision in §3. (Phase 9 originally shipped `scrypt` as the portable primary; the pure-JS Argon2id
+  removes the only reason that was a compromise.)
 - **R5 Real llama.cpp ⚠️ PARTIALLY RESOLVED (Phase 10)** — the mechanics (sidecar discovery + env
   override, localhost-only binding, OpenAI-compatible streaming, health-timeout, process cleanup, the
   real `E5Embedder`, the availability-aware fallback, the embedding-model-mismatch filter) are all
@@ -787,10 +792,39 @@ by a prior run. M6 import/reindex/list/delete guard against a locked workspace. 
 flags a corpus indexed under a different embedder + a Documents-screen re-index prompt.
 
 **Low:** SSE final-line flush (`readChatSSE`); per-probe `/health` timeout + undrained child stdout
-fixed (`['ignore','ignore','inherit']`); `weightPath` rejects `..`/absolute escapes; 8-char min vault
+fixed (stdio refined again in §9); `weightPath` rejects `..`/absolute escapes; 8-char min vault
 password; `engines.node >= 22.5`; doc fixes (stale `LITE`, dead `benchmark-plan.md` ref, `rag.ts`→`rag/`,
 dev-CSP `script-src` wording).
 
 **Deferred (intentional):** offline guard remains detection-only (blocking `net.Socket` app-wide risks
-loopback IPC); scrypt N left at 2^15 (descriptor supports an Argon2id upgrade without format change);
-single tsconfig keeps `DOM` lib in the main process (latent, non-breaking).
+loopback IPC). _(The scrypt-N and single-tsconfig items below were resolved in §9.)_
+
+---
+
+## 9. Post-MVP hardening round 2 (2026-06-09)
+
+Follow-up to §8, taking the deferred-but-valuable items plus a renderer test harness. All
+in-repo, no hardware needed. **Typecheck clean (both projects), build green, 247/247 tests pass**
+(was 226 — +21: argon2id, sidecar stderr, jsdom/RTL renderer tests).
+
+- **Argon2id KDF (was deferred).** New vaults default to Argon2id via pure-JS `@noble/hashes` (OWASP
+  params, ~0.5 s/unlock); scrypt still unlocks older vaults. New dep `@noble/hashes` (externalized →
+  `require("@noble/hashes/argon2.js")` in the main bundle, like the parser libs; **add it to the
+  post-package smoke-test** — it's loaded at unlock, R2). See §3 KDF decision + R4.
+- **tsconfig node/web split (was deferred).** `tsconfig.base.json` + `tsconfig.node.json` (main/preload,
+  **no DOM lib**) + `tsconfig.web.json` (renderer + tests, DOM). Root `tsconfig.json` references both;
+  `typecheck` runs each with `--composite false --noEmit`. A browser global leaking into the main
+  process is now a type error.
+- **Sidecar failure diagnostics (S3/S5).** `LlamaServer` pipes + **drains** stderr (prevents the
+  pipe-buffer deadlock) and surfaces the **exit code + stderr tail** in the start error, so a port
+  conflict (`bind: address already in use`) is diagnosable instead of a blank health timeout. New
+  `ReadableLike` on `ChildProcessLike` (optional; fake children omit it).
+- **Renderer test harness (jsdom + RTL).** Added `jsdom`, `@testing-library/react`/`dom`/`jest-dom`/
+  `user-event`. vitest stays node by default; renderer tests opt in via a `// @vitest-environment jsdom`
+  docblock. `tests/setup.ts` registers jest-dom matchers; `tests/helpers/renderer.ts` stubs `window.api`
+  (a Proxy that auto-`vi.fn()`s un-supplied methods). Coverage: **WorkspaceGate** (password floor +
+  confirm, create/unlock branches, plaintext toggle, `{ok:false}` error mapping) and **DocumentsScreen**
+  (list/status, the M7 stale-embedding banner, failed-doc error, empty state, delete+refresh).
+- **Still untested (accepted):** `main/index.ts` top-level wiring (needs a full Electron mock — better
+  for e2e) and the remaining screens (Chat/Models/Settings/Diagnostics/Privacy/Home) — the harness now
+  exists to add them incrementally.

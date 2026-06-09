@@ -31,7 +31,7 @@ posture (spec §3.6), how the privacy policy is loaded and enforced, and the **e
 | **Content-Security-Policy** (meta tag + response header) | `renderer/index.html`, `main/index.ts` |
 | **No network in the core path** + startup self-check tripwire | `services/offlineGuard.ts` |
 | No model weights / user data in version control | `.gitignore` |
-| **Encrypted workspace** (AES-256-GCM at rest, scrypt KDF, password never stored) | `services/security/crypto.ts`, `services/workspace-vault.ts` |
+| **Encrypted workspace** (AES-256-GCM at rest, Argon2id KDF — scrypt still supported, password never stored) | `services/security/crypto.ts`, `services/workspace-vault.ts` |
 
 ### Content-Security-Policy (dev vs prod)
 A strict CSP is applied as a response header via `session.webRequest.onHeadersReceived`, on top of
@@ -103,13 +103,15 @@ The workspace has two modes, owned by `services/workspace-vault.ts` (`WorkspaceC
 ### Key derivation (KDF)
 `services/security/crypto.ts` derives a 32-byte AES key from the password + a random 16-byte salt.
 
-- **Algorithm: `scrypt` (`node:crypto`).** scrypt is built in, memory-hard, and needs no native
-  module — so we ship it as the portable primary. Argon2id is the stronger default in principle, but
-  native `argon2` is a fragile build on Node 24 (R4); the descriptor's `algo` field is left open so
-  an `argon2id` path can be added later without changing the on-disk format.
-- **Parameters (recorded in the descriptor):** `N = 2^15 (32768)`, `r = 8`, `p = 1`, `keyLen = 32`
-  (≈ 32 MiB of memory; `maxmem` is raised so scrypt accepts the work). Because the params are stored
-  alongside the salt, unlock derives **exactly** the same key — derivation is deterministic.
+- **Algorithm: Argon2id (default), scrypt supported.** New vaults derive the key with **Argon2id**,
+  the OWASP-recommended password KDF, via the pure-JS, audited **`@noble/hashes`** — so there is **no
+  fragile native `argon2` build** (the original R4 blocker). `node:crypto` **`scrypt`** remains fully
+  supported, so a vault created under the earlier scrypt default unlocks unchanged: `deriveKey`
+  dispatches on the descriptor's recorded `algo`.
+- **Parameters (recorded in the descriptor):** Argon2id `m = 19456 KiB (≈ 19 MiB)`, `t = 2`, `p = 1`,
+  `keyLen = 32` (~0.5 s/unlock — a deliberate one-time cost); legacy scrypt `N = 2^15`, `r = 8`,
+  `p = 1`. Because the params are stored alongside the salt, unlock derives **exactly** the same key —
+  derivation is deterministic. The params are tunable without changing the on-disk format.
 
 ### AEAD (encryption at rest)
 - **AES-256-GCM.** Every encryption uses a fresh random 12-byte IV; the 16-byte auth tag is stored
@@ -139,7 +141,7 @@ read pre-unlock:
 
 ```jsonc
 { "version": 1, "mode": "encrypted",
-  "kdf": { "algo": "scrypt", "N": 32768, "r": 8, "p": 1, "keyLen": 32 },
+  "kdf": { "algo": "argon2id", "m": 19456, "t": 2, "p": 1, "keyLen": 32 },
   "saltB64": "…", "verifier": { "ivB64": "…", "tagB64": "…", "ciphertextB64": "…" } }
 ```
 

@@ -1,0 +1,10 @@
+{
+  // Main + preload (Node/Electron context). NO DOM lib — a browser global (document,
+  // localStorage, …) leaking into the main process is a type error here.
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "composite": true,
+    "lib": ["ES2022"]
+  },
+  "include": ["src/main", "src/preload", "electron.vite.config.ts", "vitest.config.ts"]
+}

@@ -197,6 +197,30 @@ describe('LlamaServer', () => {
     await expect(server.start()).rejects.toThrow(/exited before becoming healthy/)
   })
 
+  it('surfaces the stderr tail + exit code when the child fails to bind (port conflict)', async () => {
+    const child = new FakeChild() as FakeChild & { stderr: EventEmitter }
+    child.stderr = new EventEmitter()
+    const spawn = (_c: string, _args: string[]): ChildProcessLike => {
+      queueMicrotask(() => {
+        child.stderr.emit('data', Buffer.from('error: bind: address already in use\n'))
+        child.emit('exit', 1, null)
+      })
+      return child
+    }
+    const fetchImpl = (async () => ({ ok: false, status: 503 }) as Response) as typeof fetch
+    const server = new LlamaServer({
+      binPath: '/bin/s',
+      modelPath: '/m.gguf',
+      contextTokens: 2048,
+      spawn,
+      fetchImpl,
+      findPort: async () => 50010,
+      healthIntervalMs: 1
+    })
+    // The thrown error explains WHY (the captured stderr) and that it exited (code 1).
+    await expect(server.start()).rejects.toThrow(/address already in use/)
+  })
+
   it('kills the child on stop() so no orphan survives', async () => {
     const { spawn, child } = fakeSpawn()
     const { fetchImpl } = healthFetch(0)

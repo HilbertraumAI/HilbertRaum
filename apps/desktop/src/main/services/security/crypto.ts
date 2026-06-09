@@ -5,6 +5,7 @@ import {
   createDecipheriv,
   timingSafeEqual
 } from 'node:crypto'
+import { argon2id } from '@noble/hashes/argon2.js'
 
 // KDF + AEAD primitives for the encrypted workspace (spec §3.5, Phase 9).
 //
@@ -14,32 +15,49 @@ import {
 //   2. AEAD — AES-256-GCM encrypt/decrypt of a Buffer (random 12-byte IV, 16-byte auth
 //      tag stored alongside). A wrong key or tampered ciphertext makes `decrypt` throw.
 //
-// KDF choice (LOCKED for the MVP): **scrypt from `node:crypto`**. Argon2id is the
-// stronger default but native `argon2` is a fragile build on Node 24 (R4); scrypt is
-// built in, memory-hard, and needs no native module — so we ship it as the portable
-// primary and keep the descriptor's `algo` field open so an `argon2id` path can be
-// added later without changing the on-disk format.
+// KDF: NEW vaults default to **Argon2id** (the OWASP-recommended password KDF), provided
+// by the pure-JS, audited `@noble/hashes` — so there is NO fragile native `argon2` build
+// (the original blocker, R4). `scrypt` from `node:crypto` is still fully supported so any
+// vault created under the earlier default unlocks unchanged: the descriptor records the
+// `algo` + params, and `deriveKey` dispatches on them. No on-disk format change.
 
 export type KdfAlgo = 'scrypt' | 'argon2id'
 
-/** Recorded KDF parameters — persisted in the vault descriptor so unlock matches encrypt. */
+/**
+ * Recorded KDF parameters — persisted in the vault descriptor so unlock matches encrypt.
+ * Fields are per-algorithm (scrypt: N/r/p; argon2id: m/t/p) and validated in `deriveKey`.
+ */
 export interface KdfParams {
   algo: KdfAlgo
-  /** scrypt cost (CPU/memory). Memory ≈ 128 * N * r bytes. */
-  N: number
-  /** scrypt block size. */
-  r: number
-  /** scrypt parallelization. */
-  p: number
   /** Derived key length in bytes (32 for AES-256). */
   keyLen: number
+  /** scrypt CPU/memory cost (memory ≈ 128 * N * r bytes). */
+  N?: number
+  /** scrypt block size. */
+  r?: number
+  /** scrypt parallelization / argon2id parallelism (lanes). */
+  p?: number
+  /** argon2id memory cost in KiB. */
+  m?: number
+  /** argon2id time cost (iterations). */
+  t?: number
 }
 
 /**
- * Default scrypt parameters. N=2^15, r=8, p=1 → ~32 MiB of memory, a sensible
- * interactive cost. `maxmem` is raised below so scrypt does not refuse the work.
+ * Default KDF for NEW vaults: Argon2id at the OWASP "interactive" minimum
+ * (m = 19 MiB, t = 2, p = 1) → ~0.5 s on a laptop, a deliberate one-time unlock cost.
+ * Tunable via the descriptor without changing the on-disk format.
  */
 export const DEFAULT_KDF: KdfParams = {
+  algo: 'argon2id',
+  m: 19456,
+  t: 2,
+  p: 1,
+  keyLen: 32
+}
+
+/** Legacy scrypt parameters (still supported for unlocking older vaults). */
+export const SCRYPT_KDF: KdfParams = {
   algo: 'scrypt',
   N: 32768,
   r: 8,
@@ -62,6 +80,9 @@ export function generateSalt(): Buffer {
  */
 export function deriveKey(password: string, salt: Buffer, params: KdfParams = DEFAULT_KDF): Buffer {
   if (params.algo === 'scrypt') {
+    if (params.N == null || params.r == null || params.p == null) {
+      throw new Error('scrypt parameters (N, r, p) are required')
+    }
     // 128 * N * r bytes of memory; give scrypt headroom over the 32 MiB default cap.
     const maxmem = 256 * 1024 * 1024
     return scryptSync(password, salt, params.keyLen, {
@@ -71,7 +92,15 @@ export function deriveKey(password: string, salt: Buffer, params: KdfParams = DE
       maxmem
     })
   }
-  throw new Error(`Unsupported KDF algorithm: ${params.algo}`)
+  if (params.algo === 'argon2id') {
+    if (params.m == null || params.t == null || params.p == null) {
+      throw new Error('argon2id parameters (m, t, p) are required')
+    }
+    // Pure-JS, audited @noble/hashes — no native build. m = memory (KiB), t = iterations.
+    const out = argon2id(password, salt, { m: params.m, t: params.t, p: params.p, dkLen: params.keyLen })
+    return Buffer.from(out)
+  }
+  throw new Error(`Unsupported KDF algorithm: ${String(params.algo)}`)
 }
 
 /** An AES-256-GCM ciphertext + its IV and auth tag. */
