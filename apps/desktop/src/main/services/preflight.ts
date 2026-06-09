@@ -43,8 +43,10 @@ export async function runPreflight(deps: PreflightDeps): Promise<PreflightResult
   const paths = resolvePaths({ envRoot: deps.rootPath, fallbackRoot: deps.rootPath })
   const status = await buildDriveStatus(paths)
 
-  // Reuse the Phase-7 drive-speed probe + warning copy. A neutral profile means
-  // `buildWarnings` returns ONLY drive-related notes (no hardware judgement here).
+  // Reuse the Phase-7 drive-speed probe + warning copy. Passing the neutral 'BALANCED'
+  // profile skips `buildWarnings`' TINY/UNKNOWN (hardware) branches, so it can only emit a
+  // drive note — which is therefore the single element it returns here. (If 'BALANCED' ever
+  // became a warned profile, this index-0 assumption would break; today it cannot.)
   const speed = await measure(paths.workspacePath)
   const driveWarnings = buildWarnings({
     profile: 'BALANCED',

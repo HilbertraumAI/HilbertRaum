@@ -201,10 +201,11 @@ The portable build already exists ([`packaging.md`](packaging.md)); what's missi
 **one obvious thing to double-click** that sets `PAID_DRIVE_ROOT` to the drive root and starts the
 portable app (spec §6 drive layout names these `Start Private AI Drive.*`).
 
-- **Windows** — `Start Private AI Drive.exe`: a tiny launcher (or a code-signed `.cmd`→exe shim)
-  that resolves its own drive letter at runtime, sets `PAID_DRIVE_ROOT`, and spawns the portable
-  `.exe`. Drive letters change per machine, so the launcher must derive the root from **its own
-  location**, never hardcode `E:\` (spec rule: no hardcoded paths).
+- **Windows** — `Start Private AI Drive.cmd` (as shipped; the §13.2 design also allowed a
+  code-signed `.cmd`→exe shim): a tiny launcher that resolves its own drive letter at runtime via
+  `%~dp0`, sets `PAID_DRIVE_ROOT`, and spawns the portable `.exe`. Drive letters change per machine,
+  so the launcher must derive the root from **its own location**, never hardcode `E:\` (spec rule:
+  no hardcoded paths).
 - **macOS** — `Start Private AI Drive.command` (or a `.app` wrapper) that `cd`s to its directory,
   exports `PAID_DRIVE_ROOT`, and opens the bundled `.app`.
 - **Linux** — `start-private-ai-drive.sh` next to the AppImage.

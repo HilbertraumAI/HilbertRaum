@@ -180,7 +180,12 @@ export const BENCHMARK_TOKEN_TARGET = 64
 /**
  * Estimate tokens/sec by running a short prompt through the active runtime
  * (spec §11.2 step 7). Returns null when no runtime is running, so it is fully
- * optional in the mock era (real numbers land in Phase 10). Never throws.
+ * optional in the mock era. Never throws.
+ *
+ * APPROXIMATION: this counts **stream chunks**, not true tokens — one `chatStream`
+ * yield is one mock word-fragment or one real SSE delta (which may be sub- or
+ * multi-token), so the number is a coarse "throughput", not an exact token rate. It feeds
+ * the `VERY_LOW_TOKENS_PER_SECOND` downgrade, which only needs an order-of-magnitude signal.
  */
 export async function measureTokensPerSecond(
   runtime: ModelRuntime | null | undefined,

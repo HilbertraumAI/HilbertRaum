@@ -120,10 +120,13 @@ export interface LlamaServerOptions {
   spawn?: SpawnFn
   fetchImpl?: FetchFn
   findPort?: (host: string) => Promise<number>
+  /** Grace period after SIGTERM before escalating to SIGKILL on stop() (default 2000ms). */
+  killGraceMs?: number
 }
 
 const DEFAULT_HEALTH_TIMEOUT_MS = 60_000
 const DEFAULT_HEALTH_INTERVAL_MS = 250
+const DEFAULT_KILL_GRACE_MS = 2_000
 /** Per-probe timeout so a hung (accepts-but-never-responds) server can't stall the poll. */
 const HEALTH_PROBE_TIMEOUT_MS = 3_000
 
@@ -152,6 +155,7 @@ export class LlamaServer {
   private readonly findPort: (host: string) => Promise<number>
   private readonly healthTimeoutMs: number
   private readonly healthIntervalMs: number
+  private readonly killGraceMs: number
 
   constructor(private readonly opts: LlamaServerOptions) {
     this.host = opts.host ?? LOOPBACK_HOST
@@ -160,6 +164,7 @@ export class LlamaServer {
     this.findPort = opts.findPort ?? findFreePort
     this.healthTimeoutMs = opts.healthTimeoutMs ?? DEFAULT_HEALTH_TIMEOUT_MS
     this.healthIntervalMs = opts.healthIntervalMs ?? DEFAULT_HEALTH_INTERVAL_MS
+    this.killGraceMs = opts.killGraceMs ?? DEFAULT_KILL_GRACE_MS
   }
 
   /** The CLI args used to launch the server. LOCALHOST-ONLY: `--host 127.0.0.1`. */
@@ -299,8 +304,12 @@ export class LlamaServer {
       return
     }
     // Force-kill if it ignores the polite signal, but never hang the quit path.
-    await Promise.race([exited, delay(2000)])
-    if (!child.killed) {
+    // NB: gate on `this.exited` (set by the 'exit' listener), NOT `child.killed` —
+    // `child.killed` becomes true the moment a signal is *sent* (line above), so it is
+    // always true here and would skip the escalation entirely, leaving an orphan on a
+    // process that ignored SIGTERM (mac/Linux; Windows kill() is already forceful).
+    await Promise.race([exited, delay(this.killGraceMs)])
+    if (!this.exited) {
       try {
         child.kill('SIGKILL')
       } catch {

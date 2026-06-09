@@ -35,6 +35,18 @@ describe('resolveDriveRootFromLauncher', () => {
   it('auto-detects Windows vs POSIX grammar from the path', () => {
     expect(resolveDriveRootFromLauncher('E:\\Start Private AI Drive.cmd')).toBe('E:\\')
     expect(resolveDriveRootFromLauncher('/media/usb/start-private-ai-drive.sh')).toBe('/media/usb')
+    // Mixed separators still resolve (auto picks win32 on a backslash).
+    expect(resolveDriveRootFromLauncher('E:/PRIVATE_AI\\Start Private AI Drive.cmd')).toBe(
+      'E:\\PRIVATE_AI'
+    )
+  })
+
+  it('resolves a Windows UNC launcher to its share root (absolute)', () => {
+    const root = resolveDriveRootFromLauncher(
+      '\\\\SERVER\\share\\Start Private AI Drive.cmd',
+      'win32'
+    )
+    expect(root.startsWith('\\\\SERVER\\share')).toBe(true)
   })
 
   it('rejects an empty path', () => {
@@ -102,6 +114,19 @@ describe('runPreflight', () => {
 
     expect(res.freeBytes).not.toBeNull()
     expect(res.problems.some((p) => /low on free space/i.test(p))).toBe(true)
+  })
+
+  it('does not report low space when free space is unmeasurable (freeBytes == null)', async () => {
+    // A non-existent root → statfs throws → freeBytes is null; the low-space branch must
+    // be skipped (guarded by `!= null`) even with an impossibly high floor.
+    const root = join(tempDir('paid-preflight-noroot-'), 'does-not-exist')
+    const res = await runPreflight({
+      rootPath: root,
+      measureSpeed: async () => fastSpeed,
+      minFreeBytes: Number.MAX_SAFE_INTEGER
+    })
+    expect(res.freeBytes).toBeNull()
+    expect(res.problems.some((p) => /low on free space/i.test(p))).toBe(false)
   })
 
   it('degrades to "could not measure" when the drive probe errors (no throw)', async () => {

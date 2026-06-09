@@ -48,7 +48,7 @@ a future move to Tauri/Rust is a localized swap.
 - `VectorIndex` — cosine over SQLite-stored vectors (Phase 5) → `sqlite-vec`/HNSW later.
 
 ## Storage
-`node:sqlite` — built into the Node bundled by **Electron 37** (Node 22.21). It is loaded via
+`node:sqlite` — built into the Node bundled by **Electron ^37** (Node 22.x). It is loaded via
 `createRequire` in `services/db.ts` because the experimental module is absent from
 `module.builtinModules`, which otherwise makes bundlers try to resolve a non-existent `sqlite`
 package. One SQLite DB per workspace (`workspace/paid.sqlite`) holds the spec §8 tables (settings,

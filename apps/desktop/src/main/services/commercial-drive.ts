@@ -189,10 +189,15 @@ function userDataArtifacts(rootPath: string): string[] {
   const found: string[] = []
   const ws = join(rootPath, 'workspace')
   // A created workspace leaves a SQLite DB (plaintext) or its encrypted form + the vault
-  // descriptor. Any of these means the drive was already initialised — not factory-fresh.
+  // descriptor — and a crash can leave the WAL/SHM sidecars (plaintext DB pages) that
+  // `cleanSidecars` normally shreds. Any of these means the drive was already initialised
+  // — not factory-fresh. (We check the sidecars too so this final ship gate doesn't rely
+  // on shredStalePlaintext having run.)
   for (const rel of [
     join('workspace', 'paid.sqlite'),
     join('workspace', 'paid.sqlite.enc'),
+    join('workspace', 'paid.sqlite-wal'),
+    join('workspace', 'paid.sqlite-shm'),
     join('config', 'workspace.json')
   ]) {
     if (existsSync(join(rootPath, rel))) found.push(rel.replace(/\\/g, '/'))

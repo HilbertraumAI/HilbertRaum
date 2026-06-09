@@ -55,9 +55,26 @@ export class RuntimeManager {
   async start(opts: RuntimeStartOptions): Promise<RuntimeStatus> {
     // Restart cleanly on a model switch (spec §7.5).
     if (this.current) await this.stop()
-    this.current = this.factory(opts)
-    await this.current.start()
-    this.last = await this.current.health()
+    // Commit to `this.current`/`this.last` only on a FULLY successful start. A failed
+    // start (e.g. the real sidecar's health timeout) must not leave a half-started
+    // runtime as "active" — callers gate chat/RAG on `active() != null`, so a stale
+    // `current` would route requests to a server that never came up. Clean up + reset.
+    const next = this.factory(opts)
+    try {
+      await next.start()
+      const health = await next.health()
+      this.current = next
+      this.last = health
+    } catch (err) {
+      try {
+        await next.stop()
+      } catch {
+        /* best-effort cleanup; the start error is what matters */
+      }
+      this.current = null
+      this.last = null
+      throw err
+    }
     return this.status()
   }
 

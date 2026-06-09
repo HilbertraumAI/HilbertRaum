@@ -1,7 +1,8 @@
 import { createRequire } from 'node:module'
 
 // SQLite storage via Node's built-in driver (no native compilation).
-// Requires the bundled Node >= 22.5 (Electron >= 35); see BUILD_STATE.md §3.
+// Requires the bundled Node >= 22.5; Electron is pinned ^37 (Node 22.x) so the packaged
+// main process has node:sqlite (Electron 33 bundles Node 20 and lacks it). See BUILD_STATE.md §3.
 // Encrypted-at-rest mode (Phase 9) wraps this same file/schema.
 //
 // node:sqlite is experimental and not listed in module.builtinModules, which

@@ -133,13 +133,19 @@ if (Test-Path $policyPath) {
   if (-not $policy.workspace.encryption_required) { $problems += 'policy: encryption not required' }
   if ($policy.workspace.allow_plaintext_dev_mode) { $problems += 'policy: plaintext allowed' }
   if ($policy.network.allow_model_downloads -or $policy.network.allow_update_checks) { $problems += 'policy: network allowed' }
+  if ($policy.network.allow_telemetry) { $problems += 'policy: telemetry allowed' }
   if (-not $policy.models.require_sha256_match) { $problems += 'policy: sha256 match not required' }
 } else {
   $problems += 'config/policy.json missing'
 }
-# No user data on a drive meant to ship empty (spec 12.2).
-foreach ($ud in @('workspace/paid.sqlite', 'workspace/paid.sqlite.enc', 'config/workspace.json')) {
+# No user data on a drive meant to ship empty (spec 12.2). Mirror assertCommercialDrive:
+# flat DB/descriptor files + the WAL/SHM sidecars + a non-empty documents dir.
+foreach ($ud in @('workspace/paid.sqlite', 'workspace/paid.sqlite.enc', 'workspace/paid.sqlite-wal', 'workspace/paid.sqlite-shm', 'config/workspace.json')) {
   if (Test-Path (Join-Path $Target $ud)) { $problems += "user data present: $ud" }
+}
+$docsDir = Join-Path $Target 'workspace/documents'
+if ((Test-Path $docsDir) -and (Get-ChildItem -Force $docsDir -ErrorAction SilentlyContinue | Select-Object -First 1)) {
+  $problems += 'user data present: workspace/documents/*'
 }
 if ($DryRun) {
   Write-Host '  (dry run: posture check skipped)'

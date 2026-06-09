@@ -119,13 +119,18 @@ if [[ -f "$POLICY" ]]; then
   grep -q '"allow_plaintext_dev_mode": *true' "$POLICY" && PROBLEMS+=("policy: plaintext allowed")
   grep -q '"allow_model_downloads": *true' "$POLICY" && PROBLEMS+=("policy: model downloads allowed")
   grep -q '"allow_update_checks": *true'  "$POLICY" && PROBLEMS+=("policy: update checks allowed")
+  grep -q '"allow_telemetry": *true'      "$POLICY" && PROBLEMS+=("policy: telemetry allowed")
   grep -q '"require_sha256_match": *true' "$POLICY" || PROBLEMS+=("policy: sha256 match not required")
 else
   PROBLEMS+=("config/policy.json missing")
 fi
-for ud in workspace/paid.sqlite workspace/paid.sqlite.enc config/workspace.json; do
+# Mirror assertCommercialDrive: flat DB/descriptor files + WAL/SHM sidecars + documents dir.
+for ud in workspace/paid.sqlite workspace/paid.sqlite.enc workspace/paid.sqlite-wal workspace/paid.sqlite-shm config/workspace.json; do
   [[ -e "$TARGET/$ud" ]] && PROBLEMS+=("user data present: $ud")
 done
+if [[ -d "$TARGET/workspace/documents" ]] && [[ -n "$(ls -A "$TARGET/workspace/documents" 2>/dev/null)" ]]; then
+  PROBLEMS+=("user data present: workspace/documents/*")
+fi
 if [[ $DRY_RUN -eq 1 ]]; then
   echo "  (dry run: posture check skipped)"
 elif [[ ${#PROBLEMS[@]} -gt 0 ]]; then

@@ -84,10 +84,23 @@ describe('planCommercialDrive', () => {
     expect(mac.find((s) => s.id === 'package')!.description).toMatch(/notarize/i)
   })
 
-  it('formatPlan renders ordered, numbered steps and marks the manual step', () => {
+  it('targets the Linux AppImage when os=linux', () => {
+    const linux = planCommercialDrive({ target: '/mnt/usb', os: 'linux' })
+    const pkg = linux.find((s) => s.id === 'package')!
+    expect(pkg.title).toMatch(/Linux AppImage/i)
+    expect(pkg.command).toContain('--linux')
+    expect(pkg.manual).toBe(true)
+  })
+
+  it('formatPlan renders ordered steps and marks the PACKAGE step (not another) manual', () => {
     const text = formatPlan(planCommercialDrive({ target: 'E:\\' }))
     expect(text).toMatch(/1\. Lay out the drive/)
-    expect(text).toMatch(/\[MANUAL/)
+    // The MANUAL tag must land on the package/sign line specifically.
+    const manualLine = text.split('\n').find((l) => l.includes('[MANUAL'))!
+    expect(manualLine).toMatch(/sign/i)
+    // Non-manual steps are not tagged.
+    expect(text).toMatch(/Lay out the drive[^\n]*$/m)
+    expect(text.split('\n').find((l) => l.includes('Lay out the drive'))).not.toContain('[MANUAL')
   })
 })
 
@@ -134,7 +147,7 @@ describe('assertCommercialDrive', () => {
     expect(res.problems.some((p) => /plaintext/i.test(p))).toBe(true)
   })
 
-  it('fails when a weight is a placeholder or mismatched (not VERIFIED)', async () => {
+  it('fails when a weight is a placeholder (cannot verify)', async () => {
     const root = tempDir('paid-commercial-weight-')
     writePolicy(root, buildPolicyJson())
     // Present file but the manifest carries the placeholder hash → unverified_placeholder.
@@ -149,6 +162,30 @@ describe('assertCommercialDrive', () => {
     expect(res.problems.some((p) => /not VERIFIED/i.test(p))).toBe(true)
   })
 
+  it('fails when a weight has a real but MISMATCHED hash', async () => {
+    const root = tempDir('paid-commercial-mismatch-')
+    writePolicy(root, buildPolicyJson())
+    const dest = join(root, 'models', 'chat', 'mm.gguf')
+    mkdirSync(join(dest, '..'), { recursive: true })
+    writeFileSync(dest, 'actual-content')
+    // A real (64-hex) hash that does NOT match the file content → mismatch.
+    const mismatch = asManifest({ id: 'mm', local_path: 'models/chat/mm.gguf', sha256: 'a'.repeat(64) })
+
+    const res = await assertCommercialDrive(root, [mismatch])
+    expect(res.ok).toBe(false)
+    expect(res.checks.weightsVerified).toBe(false)
+    expect(res.modelResults[0].status).toBe('mismatch')
+  })
+
+  it('fails when there are no weights to verify (a sold drive ships weights pre-loaded)', async () => {
+    const root = tempDir('paid-commercial-noweights-')
+    writePolicy(root, buildPolicyJson())
+    const res = await assertCommercialDrive(root, [])
+    expect(res.ok).toBe(false)
+    expect(res.checks.weightsVerified).toBe(false)
+    expect(res.problems.some((p) => /no model weights/i.test(p))).toBe(true)
+  })
+
   it('fails when user data is present (a sold drive must ship empty)', async () => {
     const root = tempDir('paid-commercial-userdata-')
     writePolicy(root, buildPolicyJson())
@@ -161,5 +198,47 @@ describe('assertCommercialDrive', () => {
     expect(res.ok).toBe(false)
     expect(res.checks.noUserData).toBe(false)
     expect(res.problems.some((p) => /user data/i.test(p))).toBe(true)
+  })
+
+  // Each user-data artifact independently flips noUserData (matrix), incl. the WAL/SHM
+  // sidecars a crash can leave behind (the P1 fix) and a non-empty documents dir.
+  it.each([
+    ['plaintext DB', 'workspace/paid.sqlite'],
+    ['vault descriptor', 'config/workspace.json'],
+    ['WAL sidecar', 'workspace/paid.sqlite-wal'],
+    ['SHM sidecar', 'workspace/paid.sqlite-shm']
+  ])('flags a %s as user data', async (_label, rel) => {
+    const root = tempDir('paid-commercial-ud-')
+    writePolicy(root, buildPolicyJson())
+    const chat = writeVerifiedWeight(root, 'chat', 'models/chat/qwen.gguf', 'chat-weights')
+    const dest = join(root, ...rel.split('/'))
+    mkdirSync(join(dest, '..'), { recursive: true })
+    writeFileSync(dest, 'x')
+
+    const res = await assertCommercialDrive(root, [chat])
+    expect(res.checks.noUserData).toBe(false)
+    expect(res.problems.some((p) => p.includes(rel))).toBe(true)
+  })
+
+  it('flags a non-empty workspace/documents/ directory as user data', async () => {
+    const root = tempDir('paid-commercial-docs-')
+    writePolicy(root, buildPolicyJson())
+    const chat = writeVerifiedWeight(root, 'chat', 'models/chat/qwen.gguf', 'chat-weights')
+    mkdirSync(join(root, 'workspace', 'documents'), { recursive: true })
+    writeFileSync(join(root, 'workspace', 'documents', 'contract.pdf'), 'imported')
+
+    const res = await assertCommercialDrive(root, [chat])
+    expect(res.checks.noUserData).toBe(false)
+    expect(res.problems.some((p) => /documents/i.test(p))).toBe(true)
+  })
+
+  it('an EMPTY workspace/documents/ directory is NOT user data', async () => {
+    const root = tempDir('paid-commercial-emptydocs-')
+    writePolicy(root, buildPolicyJson())
+    const chat = writeVerifiedWeight(root, 'chat', 'models/chat/qwen.gguf', 'chat-weights')
+    mkdirSync(join(root, 'workspace', 'documents'), { recursive: true }) // empty
+    const res = await assertCommercialDrive(root, [chat])
+    expect(res.ok).toBe(true)
+    expect(res.checks.noUserData).toBe(true)
   })
 })

@@ -14,9 +14,11 @@ setlocal enableextensions
 rem %~dp0 = this script's directory, with a trailing backslash = the drive root.
 set "PAID_DRIVE_ROOT=%~dp0"
 
-rem Find the portable app (the version is part of its name).
+rem Find the portable app (the version is part of its name). Take the FIRST match, to
+rem match the first-match behaviour of the macOS/Linux launchers (consistent selection
+rem if more than one version is ever left on the drive).
 set "APP="
-for %%f in ("%~dp0PrivateAIDriveLite-*-portable.exe") do set "APP=%%f"
+for %%f in ("%~dp0PrivateAIDriveLite-*-portable.exe") do if not defined APP set "APP=%%f"
 
 if not defined APP (
   echo.

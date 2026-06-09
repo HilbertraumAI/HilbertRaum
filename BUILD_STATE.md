@@ -6,9 +6,9 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 _Last updated: 2026-06-09 — Phase 13 complete (plug-and-play distribution: per-OS launcher +
-`build-commercial-drive` pipeline + signing hooks + launch preflight). MVP feature-complete;
-Phases 0–13 done — this is the **last planned phase**. Multi-persona audit remediation applied
-(see §8/§9)._
+`build-commercial-drive` pipeline + signing hooks + launch preflight) + a full post-Phase-13 code/docs
+audit remediation (see §10). MVP feature-complete; Phases 0–13 done — this is the **last planned
+phase**. Earlier multi-persona audit remediation in §8/§9._
 
 ---
 
@@ -1018,3 +1018,50 @@ in-repo, no hardware needed. **Typecheck clean (both projects), build green, 247
 - **Still untested (accepted):** `main/index.ts` top-level wiring (needs a full Electron mock — better
   for e2e) and the remaining screens (Chat/Models/Settings/Diagnostics/Privacy/Home) — the harness now
   exists to add them incrementally.
+
+---
+
+## 10. Post-Phase-13 code/docs audit remediation (2026-06-09)
+
+A full code + docs audit (three parallel reviewers: docs-vs-code, Phase-13 modules, broader
+services/IPC) ran after Phase 13. Docs were found unusually well-synced. Findings fixed in-repo, no
+hardware needed. **Typecheck clean, build green (main 104.75 kB), 322/322 tests pass** (was 306 —
++16: `runtime-manager.test.ts` [5] + new Phase-13 coverage in `commercial-drive`/`launcher` tests [11]).
+
+**Real bugs (pre-existing, found by the broad sweep):**
+- **B1 (sidecar orphan)** — `LlamaServer.stop()` escalated to `SIGKILL` behind `if (!child.killed)`,
+  but `child.killed` is `true` the moment a signal is *sent*, so the escalation was dead code → a
+  `llama-server` that ignores `SIGTERM` (mac/Linux) survived the grace window. Now gated on
+  `this.exited` (actual exit). Added an injectable `killGraceMs` test seam; regression tests assert
+  SIGKILL-on-ignore and no-escalation-on-polite-exit (`runtime-manager.test.ts`).
+- **B2 (stale runtime after a failed start)** — `RuntimeManager.start()` left `this.current` pointing
+  at a half-started runtime when `start()`/`health()` threw; chat/RAG gate on `active() != null`, so
+  requests routed to a server that never came up. Now commits `current`/`last` only on full success,
+  stops + resets on failure, and rethrows. Tested (start-throw, health-throw, recover-on-next-start).
+
+**Phase-13 hardening:**
+- **P1** — `assertCommercialDrive` user-data check now also rejects `paid.sqlite-wal`/`-shm` (a crash
+  can leave plaintext DB pages `cleanSidecars` normally shreds) so the final ship gate doesn't rely on
+  `shredStalePlaintext` having run.
+- **P2** — the `build-commercial-drive.{ps1,sh}` native posture cross-check was missing the
+  `allow_telemetry` check + the `workspace/documents/` and WAL/SHM checks that the canonical TS gate
+  enforces; both scripts now mirror `assertCommercialDrive` exactly.
+- **P3** — the Windows `.cmd` launcher picked the *last* matching portable `.exe` (no `break`); now
+  takes the FIRST match, matching the macOS/Linux launchers' selection.
+
+**Comment/doc accuracy:** `measureTokensPerSecond` now documents it counts *stream chunks* (≈ tokens),
+not exact tokens; `preflight.ts` documents the `driveWarnings[0]` coupling to the neutral-profile
+branch; `db.ts` "Electron >= 35" → the actual `^37` pin; provisioning-plan §13.1 `.exe` launcher note
+→ the shipped `.cmd`; `architecture.md` over-specific "Node 22.21" → "Node 22.x".
+
+**New test coverage added (closing audited gaps):** the `os:'linux'` package step + `formatPlan`
+manual-tag-on-package; `assertCommercialDrive` empty-manifests + real-hash *mismatch* + the full
+user-data matrix (plaintext DB / descriptor / WAL / SHM / non-empty + empty `documents/`); `runPreflight`
+`freeBytes == null`; `resolveDriveRootFromLauncher` UNC + mixed-separator inputs.
+
+**Noted, intentionally NOT changed (low risk / by design):** `runtime_events` table is spec-reserved
+but unwritten; the per-import `jobs` Map isn't pruned (tiny, ephemeral); `settings.getSettings` doesn't
+type-guard stored JSON (privacy-safe — the network path is double-gated by the policy AND); `expandPaths`
+follows directory symlinks; `resolveDriveRootFromLauncher` is a canonical reference module not in the
+runtime path (same pattern as `drive.ts`/`assets.ts`). Pervasive "Phase 10 (future)" comment tense left
+as-is (describes *where* a swap lives; not worth the churn).
