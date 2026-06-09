@@ -187,13 +187,17 @@ if ($WithAssets) {
   Write-Host 'Fetching assets (build-time network; the app itself stays offline):' -ForegroundColor Cyan
   $fetchModels = Join-Path $PSScriptRoot 'fetch-models.ps1'
   $fetchRuntime = Join-Path $PSScriptRoot 'fetch-runtime.ps1'
-  $modelArgs = @('-Target', $Target)
-  if ($AcceptLicense) { $modelArgs += '-AcceptLicense' }
-  if ($DryRun) { $modelArgs += '-DryRun' }
+  # Use HASHTABLE splatting (named params), not array splatting: array elements are bound
+  # positionally and '-AcceptLicense'/'-DryRun' strings are NOT recognised as switch names,
+  # which fails param binding (PositionalParameterNotFound), especially with a rooted
+  # -Target like 'D:\'.
+  $modelArgs = @{ Target = $Target }
+  if ($AcceptLicense) { $modelArgs.AcceptLicense = $true }
+  if ($DryRun) { $modelArgs.DryRun = $true }
   & $fetchModels @modelArgs
   if ($LASTEXITCODE -ne 0) { Write-Error 'fetch-models failed.'; exit 1 }
-  $runtimeArgs = @('-Target', $Target)
-  if ($DryRun) { $runtimeArgs += '-DryRun' }
+  $runtimeArgs = @{ Target = $Target }
+  if ($DryRun) { $runtimeArgs.DryRun = $true }
   & $fetchRuntime @runtimeArgs
   if ($LASTEXITCODE -ne 0) { Write-Error 'fetch-runtime failed.'; exit 1 }
   Write-Host ''

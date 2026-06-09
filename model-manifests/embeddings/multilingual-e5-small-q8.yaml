@@ -1,22 +1,28 @@
 id: multilingual-e5-small-q8
-display_name: Multilingual E5 Small (Q8)
+# NOTE: the file is now F16, not Q8 (see license_review notes — q8_0 GGUFs of this model
+# crash llama.cpp b9585 with `binary_op: unsupported types ... q8_0`). The `-q8` id/local_path
+# are kept stable because they tag stored vectors + are referenced across tests/docs; only an
+# opaque identifier, not a quant claim. display_name reflects the real quant.
+display_name: Multilingual E5 Small (F16)
 family: e5
 role: embeddings
 format: gguf
 runtime: llama_cpp
 license: mit
-size_on_disk_gb: 0.5
+size_on_disk_gb: 0.25
 recommended_min_ram_gb: 4
 recommended_ram_gb: 8
 recommended_context_tokens: 512
 dimensions: 384
 local_path: models/embeddings/multilingual-e5-small-q8.gguf
-sha256: REPLACE_WITH_REAL_HASH
+sha256: 3c3569e72acd821a30f1c586f4d39862407da7da3f08fc7068798e5982b5f6db
 # Phase 12: where `fetch-models` downloads the weight from + what to verify it against.
+# Real hash promoted 2026-06-10 from a test-loaded F16 weight (loads + returns 384-dim
+# embeddings on llama-server b9585).
 download:
-  url: https://huggingface.co/ChristianAzinn/multilingual-e5-small-gguf/resolve/main/multilingual-e5-small-q8_0.gguf?download=true
-  sha256: REPLACE_WITH_REAL_HASH
-  size_bytes: 135000000
+  url: https://huggingface.co/keisuke-miyako/multilingual-e5-small-gguf-f16/resolve/main/multilingual-e5-small-F16.gguf?download=true
+  sha256: 3c3569e72acd821a30f1c586f4d39862407da7da3f08fc7068798e5982b5f6db
+  size_bytes: 241873728
   license_url: https://huggingface.co/intfloat/multilingual-e5-small
 bundled_on_preconfigured_drive: true
 # The default embedding model for every profile.
@@ -27,9 +33,14 @@ license_review:
   reviewed_at: "2026-06-10"
   notes: "APPROVED 2026-06-10: the BASE model (intfloat/multilingual-e5-small) is MIT
     (verified via the Hugging Face API) — commercial redistribution permitted with the
-    copyright/license notice. CAVEAT: the GGUF quantization repo
-    (ChristianAzinn/multilingual-e5-small-gguf) declares no separate license field; the
-    file is a mechanical quantization of the MIT model and is treated as distributed
-    under the base MIT terms. If stricter provenance is wanted before selling drives,
-    re-quantize the MIT base model in-house (llama.cpp convert script) or switch to a
-    quant repo with an explicit license, and update download.url + hashes."
+    copyright/license notice. SOURCE CHANGED 2026-06-10 (twice): the original quant repo
+    (ChristianAzinn/multilingual-e5-small-gguf) went private/gated (HTTP 401); its mirror
+    cstr/multilingual-e5-small-GGUF loaded but its q8_0 GGUF lacks the token_type_count
+    metadata AND crashes llama.cpp b9585 during warmup (`binary_op: unsupported types: dst
+    f32, src1 q8_0` — a q8_0 tensor used in an f32 op). Repointed to
+    keisuke-miyako/multilingual-e5-small-gguf-f16 (F16 build), which test-loads on b9585 and
+    returns 384-dim embeddings. CAVEAT: this quant repo declares no separate license field;
+    the file is a mechanical F16 conversion of the MIT base model and treated as distributed
+    under the base MIT terms. For stricter provenance, re-convert the MIT base model in-house
+    (llama.cpp convert_hf_to_gguf.py, keep F16 — avoid q8_0 for this BERT/XLM-R embedder) and
+    update download.url + hashes."

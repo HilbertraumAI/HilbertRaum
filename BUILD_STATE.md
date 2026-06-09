@@ -7,9 +7,10 @@
 
 _Last updated: 2026-06-10 — **MVP feature-complete: Phases 0–13 done** (Phase 13, plug-and-play
 distribution, was the last planned phase). Four post-MVP audit rounds are fully remediated and the
-llama.cpp runtime pin + license reviews are complete — summarized in §8. Remaining work = **manual
-release acceptance only** (§5). Consciously-accepted gaps live in
-[`docs/known-limitations.md`](docs/known-limitations.md)._
+llama.cpp runtime pin + license reviews are complete — summarized in §8. The first real Windows `D:\`
+portable-drive bring-up surfaced + fixed a cluster of provisioning, drive-root path, manifest-source
+and RAG/embedding bugs — see **§9**. Remaining work = **manual release acceptance only** (§5).
+Consciously-accepted gaps live in [`docs/known-limitations.md`](docs/known-limitations.md)._
 
 ---
 
@@ -939,3 +940,120 @@ Final gate: typecheck clean, **361/361 tests**, build green, no new runtime deps
 Fast/Balanced/Deep plumbing, `runtime_events` unwritten, picker-only import hardening deferred,
 detection-only offline guard, …) are documented in
 [`docs/known-limitations.md`](docs/known-limitations.md).
+
+---
+
+## 9. Windows D:\ drive setup, provisioning & RAG/embedding fixes (2026-06-10)
+
+Found during the first real Windows SSD (`D:\`) provisioning test:
+`prepare-drive.ps1 -Target D:\ -WithAssets -AcceptLicense` laid out the tree + config fine
+but failed at the asset-fetch step with `PositionalParameterNotFound` for `-AcceptLicense`
+(misleadingly attributed to `prepare-drive.ps1`).
+
+- **Root cause:** the `-WithAssets` block forwarded args to `fetch-models.ps1`/`fetch-runtime.ps1`
+  via **array splatting** (`$a = @('-Target', $Target, '-AcceptLicense'); & $script @a`). PowerShell
+  array splatting binds elements **positionally** and does NOT treat `-`-prefixed strings as parameter
+  names, so `-AcceptLicense` was handed in as a positional value the child script has no slot for. A
+  rooted `-Target` like `D:\` made it surface. Calling `fetch-models.ps1 -AcceptLicense` directly always
+  worked — only the wrapper was broken.
+- **Fix:** switched both call sites in [`scripts/prepare-drive.ps1`](scripts/prepare-drive.ps1) to
+  **hashtable** splatting (`$a = @{ Target = $Target }; if ($AcceptLicense) { $a.AcceptLicense = $true }`).
+  This is the **same convention already documented in §3** and already used by
+  `build-commercial-drive.ps1` (§3, line ~367); `prepare-drive.ps1`'s `-WithAssets` block (added in
+  Phase 12) had simply never been brought into line. The bash path is unaffected (positional args).
+- **Verified:** `prepare-drive.ps1 -Target D:\ -WithAssets -AcceptLicense -DryRun` now runs cleanly
+  through both `fetch-models` and `fetch-runtime`. Layout/config from the earlier non-dry run already
+  succeeded on `D:\`.
+
+**Note for the operator:** the six current manifests fetch many GB (incl. Qwen3-14B + 30B). For a
+quick drive test prefer per-model fetches: `fetch-models.ps1 -Target D:\ -Only qwen3-4b-instruct-q4`
+then `fetch-runtime.ps1 -Target D:\`. This is part of the still-open manual-acceptance path (§8):
+fetch weights → `verify-models --generate` → live smoke test.
+
+### Follow-on: weight-path containment false-positive at a bare drive root (`D:\`)
+
+First `npm run dev` against the prepared `D:\` drive created the encrypted workspace + benchmarked
+fine, then every `models:list` threw `Manifest local_path escapes the drive root`.
+
+- **Root cause:** `weightPath` (and the twin `resolveWithinRoot` in `assets.ts`) guarded against
+  `..`/absolute escapes with `resolved.startsWith(base + sep)`. For a **bare drive root** `resolve('D:\')`
+  keeps the trailing separator, so `base + sep` doubled it (`D:\\`) and rejected every legitimate weight.
+  Latent because the app-data fallback root (`C:\Users\…\AppData`) has no trailing separator — only an
+  actual drive-root launch (the real portable-drive case) hits it. Tests used `/drive`, so they missed it.
+- **Fix:** [`models.ts`](apps/desktop/src/main/services/models.ts) + [`assets.ts`](apps/desktop/src/main/services/assets.ts)
+  now compute `prefix = base.endsWith(sep) ? base : base + sep`. Added a regression test in
+  `tests/integration/models.test.ts` using `parse(process.cwd()).root` (a real trailing-sep root,
+  cross-platform).
+- **Gate:** typecheck clean, **362/362 tests** (+1).
+
+### Promoting the model hash on the test drive
+
+Drive was prepared with the **commercial posture** (`require_sha256_match: true`,
+`allow_unverified_models: false`), which is authoritative and overrides dev-build leniency
+(`registerModelIpc.ts developerLeniency`). So the placeholder-hash weight was rejected
+(`computeInstallState → checksum_failed`). Note `verify-models --generate` only writes
+`config/checksums.json` — it does NOT rewrite the manifest `sha256`. To run the real model on the
+commercial drive the real hash must be promoted into the manifest's top-level `sha256`. Also note a
+manifest re-copy (any `prepare-drive` re-run) overwrites a drive-only edit, so the **durable** place
+to promote is the repo manifest. **Decision (operator):** promote real hashes into the **repo**
+manifests. `qwen3-4b-instruct-q4` real hash
+(`7485fe6f…34fdf5`) promoted in both repo + drive; shows VERIFIED. The remaining downloaded weights
+(8b/14b/30b/embeddings) still need promotion (`verify-models --generate` → copy each into the repo
+manifest → re-sync to drive → `verify-models -Strict`).
+
+### Broken model sources found during the drive fetch (2026-06-10)
+
+A full `fetch-models` against `D:\` surfaced two dead upstream sources (the others — 4b/8b/14b/30b —
+return 200 and download fine):
+
+- **`qwen3-1.7b-instruct-q4` → 404 (`EntryNotFound`).** The official `Qwen/Qwen3-1.7B-GGUF` repo ships
+  **only `Qwen3-1.7B-Q8_0.gguf`** — there is no Q4_K_M. **Decision (operator): drop 1.7b from the
+  set.** Deleted the manifest (repo + drive). It was the spec §7.3 recommendation for the **TINY** and
+  **UNKNOWN** profiles, so `qwen3-4b-instruct-q4` (the smallest remaining chat model) now also claims
+  `recommended_profiles: [TINY, LITE, UNKNOWN]`. ⚠️ **Tradeoff:** 4b wants ~8 GB RAM, so a sub-8 GB TINY
+  machine should run it via Fast Mode / smaller context. `benchmark.test.ts` recommendation mapping
+  updated accordingly (TINY→4b, UNKNOWN→4b).
+- **`multilingual-e5-small-q8` → 401 (gated/removed).** The quant repo
+  `ChristianAzinn/multilingual-e5-small-gguf` now returns 401 on both the file and the HF API. **Decision
+  (operator): switch to the `cstr/multilingual-e5-small-GGUF` mirror** (identical `multilingual-e5-small-q8_0.gguf`,
+  131 MB; base model intfloat/e5-small is MIT). Updated `download.url` + `size_bytes` (135 MB→131624960)
+  + the §8 license-review note (provenance change recorded) in repo + drive manifests.
+
+Gate after these changes: typecheck clean, **362/362 tests**. Still TODO on the drive: re-run
+`fetch-models` (skips the 3 present big weights, fetches 8b + embeddings), then promote the remaining
+hashes as above.
+
+### RAG failure on the drive: plain-chat mode + a broken embeddings GGUF (2026-06-10)
+
+First end-to-end RAG attempt: uploaded a PDF, asked about it, got a **fully hallucinated** answer
+(invented invoice). Detailed analysis:
+
+- **Primary cause (the hallucination): wrong chat mode.** `ChatScreen` has two tabs — **Chat**
+  (`sendChatMessage` → plain LLM, NO retrieval) and **Ask Documents** (`askDocuments` →
+  `generateGroundedAnswer`). The question was asked in plain Chat, so the model only saw the filename
+  and confabulated. The RAG path itself is sound — it has a hard grounding guard (`rag/index.ts`
+  returns a fixed "not found in your documents" answer when retrieval is empty, never calling the
+  model). NOT a RAG-engine bug. (Possible UX hardening, deferred: the `staleEmbeddings` flag is gated
+  on `activeEmbeddingModelId`, which stays null, so the Documents screen never warns a doc was indexed
+  under a different embedder.)
+- **The embedder was the mock, not E5 — same drive-root `weightPath` bug.** At startup
+  `resolveEmbeddingModel` (`index.ts`) calls `weightPath('D:\', …)`; the pre-fix version threw
+  "escapes the drive root", was caught, and returned null → mock embedder. Fixed by the §9 `weightPath`
+  fix; on restart the E5 embedder is selected (no checksum gate on the embedder, so it loads even
+  unverified). Consequence: a doc ingested under the mock is tagged `embedding_model_id='mock-embedder'`
+  and is invisible to E5 retrieval (scoped by `embedder.id`) — **the document must be re-uploaded** under
+  the real embedder.
+- **The E5 GGUF itself was broken (TWICE).** With E5 finally selected, `llama-server --embedding`
+  failed: first the q8_0 lacks `token_type_count` (BERT/XLM-R metadata) → `bert model needs to define
+  token type count`; the same is true of the original quant family. Even a q8_0 that HAS the key crashes
+  llama.cpp b9585 during warmup (`binary_op: unsupported types: dst f32, src1 q8_0`). **Resolution:**
+  switched to an **F16** build — `keisuke-miyako/multilingual-e5-small-gguf-f16` (`multilingual-e5-small-F16.gguf`,
+  242 MB). Test-loaded directly with the drive's `llama-server.exe`: loads, `server is listening`,
+  returns **384-dim** embeddings. Real hash `3c3569e7…b5f6db` promoted into repo + drive manifests
+  (embeddings now **VERIFIED**). The `-q8` id/local_path are kept (opaque vector tag, referenced by
+  tests/docs); `display_name` → "Multilingual E5 Small (F16)". **Lesson: prefer F16 (not q8_0) for this
+  BERT/XLM-R embedder on llama.cpp b9585.**
+
+Gate: typecheck clean, **362/362 tests**. Drive: 4b + embeddings VERIFIED; 8b/14b/30b present but
+UNVERIFIED (hashes still to promote). Remaining to validate RAG end-to-end: restart the app (E5 selected),
+re-upload the PDF (re-embed under E5), ask in the **Ask Documents** tab.
