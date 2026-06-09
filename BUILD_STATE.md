@@ -5,7 +5,7 @@
 > (see "Per-phase ritual" in [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md)).
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
-_Last updated: 2026-06-09 — Phase 3 complete; Phase 4 next_
+_Last updated: 2026-06-09 — Phase 4 complete; Phase 5 next_
 
 ---
 
@@ -17,8 +17,8 @@ _Last updated: 2026-06-09 — Phase 3 complete; Phase 4 next_
 | 1 | App shell, workspace & settings | 🟢 done |
 | 2 | Model manifests & runtime contract | 🟢 done |
 | 3 | Basic chat (mock runtime) | 🟢 done |
-| 4 | Document ingestion & chunking | 🟡 next |
-| 5 | Embeddings & vector search (mock) | ⚪ not started |
+| 4 | Document ingestion & chunking | 🟢 done |
+| 5 | Embeddings & vector search (mock) | 🟡 next |
 | 6 | RAG chat with citations | ⚪ not started |
 | 7 | Hardware benchmark & recommendation | ⚪ not started |
 | 8 | Privacy & offline hardening | ⚪ not started |
@@ -66,6 +66,20 @@ Repo root: `f:\_coding\ai_drive`.
 - **Manifest `local_path` is relative to the drive root** (existing Phase 0 manifests already include
   the `models/` prefix), so weight files resolve to `<root>/models/...`. Recommendation is data-driven
   via an optional `recommended_profiles` list on each manifest.
+- **Ingestion parser libs (Phase 4): pure-JS, lazy-imported, externalized.** `pdfjs-dist` (PDF),
+  `mammoth` (DOCX), `papaparse` (CSV) — no native deps, consistent with the `node:sqlite` choice.
+  Imported lazily inside `parse()`. Marked **external** via `externalizeDepsPlugin` in
+  `electron.vite.config.ts` (also externalizes `yaml`) so the large pdfjs ESM bundle is
+  `require`/`import`-ed from `node_modules` instead of bundled (resolves R3). Main bundle shrank
+  253 kB → 47 kB as a result.
+- **PDF parsing approach (Phase 4):** use pdfjs-dist's **legacy** build
+  (`pdfjs-dist/legacy/build/pdf.mjs`), which runs in the Node main process with **no Web Worker /
+  no DOM** (validated). The `standardFontDataUrl` warning is harmless (rendering-only). Minimal
+  ambient typings in `parsers/pdfjs.d.ts` (pdfjs ships no `exports` map for the legacy path).
+- **Imported files are copied into the workspace** (`workspace/documents/`, `stored_path`), keeping
+  `original_path` too → self-contained, re-indexable drive (spec privacy ethos). See Phase-4 contract.
+- **Import = async with polling** (not the chat stream): documents table is per-file truth, job
+  aggregate is in-memory via `getImportJob`. See Phase-4 contract for rationale.
 
 ---
 
@@ -95,8 +109,10 @@ updateSettings(patch: Partial<AppSettings>): Promise<AppSettings>
 ```
 _Status: TypeScript types in `apps/desktop/src/shared/types.ts`; channel names in `src/shared/ipc.ts`.
 Wired so far: core (Phase 1) + `listModels`/`selectModel`/`startRuntime`/`stopRuntime` (Phase 2) +
-`createConversation`/`listConversations`/`listMessages`/`sendChatMessage`/`stopGeneration` (Phase 3).
-Docs/benchmark handlers land in their phases._
+`createConversation`/`listConversations`/`listMessages`/`sendChatMessage`/`stopGeneration` (Phase 3) +
+`pickDocuments`/`importDocuments`/`getImportJob`/`listDocuments`/`deleteDocument`/`reindexDocument`
+(Phase 4). `askDocuments`/benchmark handlers land in their phases. (`pickDocuments` + `reindexDocument`
+are Phase-4 additions to the `IPC` registry beyond the spec §9.1 list — picker + re-index UX.)_
 
 ### DB schema
 ✅ Implemented in `src/main/services/db.ts` — all spec §8 tables created idempotently (WAL mode,
@@ -166,41 +182,87 @@ echoes the last user message, honouring `options.signal` for prompt cancellation
 (`renderer/screens/ChatScreen.tsx`): conversation list, streamed transcript with a live cursor,
 stop, regenerate, per-message copy, and the no-runtime empty state.
 
+### Document ingestion (Phase 4 live)
+✅ **`services/ingestion/`** (spec §7.7). Full detail in [`docs/rag-design.md`](docs/rag-design.md).
+- **`parsers/`** — `DocumentParser` interface (`{ segments: ExtractedSegment[], mimeType }`) +
+  registry (`selectParser`, `supportedExtensions`). Adapters: `TxtParser` (.txt/.text/.log),
+  `MarkdownParser` (.md/.markdown/.mdown; segment per ATX heading, `sectionLabel`), `PdfParser`
+  (.pdf; pdfjs-dist **legacy** build, no worker; segment per page, `pageNumber`), `DocxParser`
+  (.docx; mammoth raw text; segment per paragraph), `CsvParser` (.csv/.tsv; papaparse; rows →
+  `header: value` lines). Pure-JS, **lazy-imported** inside `parse()`.
+- **`chunker.ts`** — `chunkSegments(segments, opts?)` → `DocumentChunk[]`. `CHUNK_DEFAULTS =
+  { chunkSizeTokens: 500, chunkOverlapTokens: 80, maxChunks: 1000 }`. **Token counting is an
+  approximation** (1 whitespace word ≈ 1 token; `tokenize`/`approxTokenCount`). Windows step by
+  `size − overlap`, overlap clamped `< size`, no chunk crosses a segment boundary (so each chunk
+  has exactly one `pageNumber`/`sectionLabel`), global cap at `maxChunks`.
+- **`index.ts`** — lifecycle + persistence. `createQueuedDocument`, `processDocument` (never
+  throws: failures → `failed` + `error_message`), `reindexDocument`, `listDocuments`,
+  `getDocument`, `deleteDocument`, `expandPaths`, `documentsDir`. Statuses
+  `queued→extracting→chunking→embedding→indexed` (+`failed`/`deleted`); **`embedding` is a
+  pass-through** until Phase 5 (no vectors written yet).
+- **DB:** `documents` (status, `original_path`, `stored_path`, `sha256`, `mime_type`,
+  `size_bytes`) + `chunks` (`chunk_index`, `text`, `source_label` = document title,
+  `page_number`, `section_label`, `token_count`). `chunkCount` is computed per `listDocuments`.
+- **Types:** `DocumentInfo`, `ImportJob`, `ImportJobStatus`, `IngestionStatus` (already in
+  `shared/types.ts`) filled to match.
+
+### Document storage + import model (LOCKED — Phase 4)
+- **Stored copy.** Imports are **copied into `workspace/documents/<id><ext>`** (`stored_path`);
+  `original_path` is also kept. Self-contained drive: re-index re-parses the stored copy; delete
+  removes the stored copy + chunks + embeddings + row (never the original).
+- **Async-with-polling.** `importDocuments(paths)` expands the selection, inserts `queued` rows,
+  returns `{ jobId, documentIds }`, then ingests **sequentially in the background**. The
+  `documents` table is the per-file source of truth (survives restart); the `ImportJobStatus`
+  aggregate is **in-memory** in `registerDocsIpc.ts`, read via `getImportJob(jobId)` (unknown job
+  → `done:true` so pollers stop). The **Documents screen** polls `getImportJob` + `listDocuments`
+  every 400 ms while a job runs. No streaming channel is used (ingestion progress is coarse).
+- **Picker.** `pickDocuments('files' | 'folder')` opens the OS dialog in **main**
+  (renderer has no dialog access); Windows can't mix file+dir selection, hence the mode.
+- **Documents screen** (`renderer/screens/DocumentsScreen.tsx`): import files/folder, per-file
+  status badge + chunk count + size, error surfacing, delete + re-index.
+
 ---
 
-## 5. Next actions (do these next) — START OF PHASE 4
+## 5. Next actions (do these next) — START OF PHASE 5
 
-Phase 4 = Document ingestion & chunking (spec Milestone 4 / Step 6). Build, in order:
-1. `services/ingestion/parsers/*` behind a `DocumentParser` interface (spec §9.2): `TxtParser`,
-   `MarkdownParser`, `PdfParser` (`pdfjs-dist`), `DocxParser` (`mammoth`), `CsvParser`
-   (`papaparse`). Pure-JS libs only — no native deps (consistent with the SQLite choice). These
-   are **new dependencies**; install with `NODE_OPTIONS=--use-system-ca npm install` (R6 proxy).
-2. `services/ingestion/chunker.ts` — ~500-token chunks / ~80-token overlap, max 1000 chunks/file
-   (spec §7.7 "Chunking defaults" follow `### 7.7` in the MVP spec). Token counting can be an
-   approximation for the mock phase.
-3. Ingestion job tracking with the §7.7 statuses (`queued→extracting→chunking→embedding→indexed`,
-   plus `failed`/`deleted`). Persist to `documents` + `chunks` tables (already in the schema).
-   Embeddings happen in Phase 5 — leave the `embedding` step as a no-op/pass-through for now.
-4. Documents screen — import (file picker), per-file status, error surfacing, delete/re-index.
-   IPC: `importDocuments`, `getImportJob`, `listDocuments`, `deleteDocument` (channel names already
-   in `shared/ipc.ts`; add preload methods + `ipc/registerDocsIpc.ts` wired into `initBackend()`).
-5. Tests: each parser on fixtures, chunker boundaries/overlap, graceful handling of a corrupt file.
-6. **Ritual:** update `docs/rag-design.md` (ingestion) + sample-data README + this file; commit.
+Phase 5 = Embeddings & vector search (mock embedder) (spec Milestone 5 / Step 7). Build, in order:
+1. `services/embeddings/index.ts` — `Embedder` interface (spec §9.2): `embed(texts: string[]) =>
+   number[][]`, fixed `dimensions`, an `id` (the embedding-model id tag). `services/embeddings/mock.ts`
+   — `MockEmbedder`: **deterministic** hash-based vectors (e.g. hash tokens → fixed-dim float array,
+   L2-normalized), zero network, fully offline. Swap to a real local embedder in Phase 10 behind the
+   same interface.
+2. **Wire embeddings into ingestion's `embedding` step** (currently a pass-through in
+   `services/ingestion/index.ts`): after chunks are inserted, embed each chunk's `text` and write to
+   the **`embeddings` table** (`chunk_id`, `embedding_model_id`, `vector_blob` (Float32 → BLOB),
+   `dimensions`, `created_at`). Tag rows with the active embedding model id
+   (`settings.activeEmbeddingModelId`). Re-embed on embedding-model change (re-index path already
+   deletes+rewrites chunks/embeddings).
+3. `VectorIndex` cosine search over the stored vectors: `search(queryVector, topK)` →
+   `{ chunkId, score }[]`. Decode `vector_blob` → Float32Array; cosine over all chunk vectors (MVP:
+   linear scan; upgrade to sqlite-vec/HNSW later). Embed the query with the same `MockEmbedder`.
+4. Decide the embedder placement in `AppContext` (add an `embedder` like `runtime`), and how the
+   active embedding model selects dimensions. `MockEmbedder` dims should match the E5-small manifest
+   (e.g. 384) so a later real swap is drop-in.
+5. Tests: determinism (same text → same vector), cosine ranking sanity (a query ranks its own chunk
+   first), embeddings tagged with the model id, and a **no-network assertion** across the embed path
+   (spec Milestone 5). Keep all 80 existing tests green.
+6. **Ritual:** update `docs/rag-design.md` (embeddings/vector store section) + this file; commit.
 
-Notes / gotchas for Phase 4:
-- Parser libs are pure-JS but `pdfjs-dist` can be finicky under the Electron/Vite SSR main bundle —
-  validate it bundles + runs in the main process (R3). Have a fallback plan if a worker is needed.
-- `DocumentInfo`/`ImportJob`/`ImportJobStatus`/`IngestionStatus` shapes already exist in
-  `shared/types.ts` — fill the handlers to match.
-- Reuse the chat streaming/event pattern only if a progress stream is wanted; otherwise poll
-  `getImportJob`.
+Notes / gotchas for Phase 5:
+- The `embeddings` table already exists (spec §8). `chunks` already carry `token_count` + metadata.
+- Keep the embedder behind the interface so Phase 10's real local embedder is a localized swap.
+- Phase 6 (RAG chat with citations) consumes `VectorIndex.search` + the `[S1]…` grounded prompt;
+  don't build the prompt/citation layer yet — just retrieval primitives.
 
-Phase 3 is DONE: typecheck clean, **58/58 tests pass** (added: chat conversation persistence +
-ordering + scoping, title-from-first-message, system-prompt assembly, streaming persists full
-reply, **stop cancels stream + persists partial**, regenerate; plus updated mock-runtime stream +
-abort tests). `npm run build` green (main bundle 253.62 kB). Chat screen streams the mock reply
-token-by-token with stop/regenerate/copy and a no-runtime empty state. (Live `npm run dev` window
-smoke = manual.)
+Phase 4 is DONE: typecheck clean, **80/80 tests pass** (58 prior + 22 new: parser registry routing;
+TxtParser/MarkdownParser/CsvParser on fixtures; **real synthesised PDF + DOCX** parsed; chunker
+boundaries/overlap/no-redundant-tail/per-segment-metadata/1000-cap/overlap-clamp; pipeline
+txt→indexed with workspace copy + sha256 + chunks; PDF page numbers on chunks; **corrupt PDF →
+failed with error_message, no crash**; unsupported type → failed; re-index replaces chunks; delete
+removes everything; `expandPaths` folder walk). `npm run build` green (**main bundle 46.92 kB** —
+deps externalized). Documents screen does import (files/folder), live status polling, delete +
+re-index. R3 validated: pdfjs legacy build extracts text in plain Node, no worker. (Live `npm run
+dev` window smoke = manual.)
 
 ---
 
@@ -210,7 +272,11 @@ smoke = manual.)
   (system Node 24). Only an experimental warning (harmless). Bundler resolution fixed via
   `createRequire` in `db.ts`. `sql.js` fallback not needed.
 - **R2 Electron binary download** — `npm i electron` pulls a ~100MB binary; needs dev-time internet. The *app* stays offline; only dev install needs network.
-- **R3 PDF/DOCX parsers** — pick pure-JS libs (`pdfjs-dist`, `mammoth`) to avoid native deps. Validate Phase 4.
+- **R3 PDF/DOCX parsers ✅ RESOLVED** — `pdfjs-dist` (legacy build, `pdfjs-dist/legacy/build/pdf.mjs`)
+  extracts text in the Node main process with **no Web Worker / no DOM** (validated Phase 4);
+  `mammoth`/`papaparse` are pure-JS too. All three marked **external** (`externalizeDepsPlugin`) so
+  pdfjs's large ESM bundle is required at runtime, not bundled. Only a harmless `standardFontDataUrl`
+  warning (rendering-only). Ambient typings for the legacy path in `parsers/pdfjs.d.ts`.
 - **R4 Argon2id** — native `argon2` may not build on Node 24; fallback to `node:crypto` `scrypt` documented in Phase 9.
 - **R5 Real llama.cpp** — needs platform sidecar binaries + a GGUF model not in repo; Phase 10 live test is manual.
 - **R6 TLS-intercepting proxy on this machine** — `npm install` fails with `UNABLE_TO_VERIFY_LEAF_SIGNATURE` (corporate root CA). Workaround: `NODE_OPTIONS=--use-system-ca npm install` (Node 24 reads the Windows cert store). If that fails, `npm config set strict-ssl false` (dev-only, less secure) or set `NODE_EXTRA_CA_CERTS`. Affects dev installs only; the app stays offline.

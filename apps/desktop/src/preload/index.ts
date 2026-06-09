@@ -5,7 +5,10 @@ import type {
   AppStatus,
   ChatOptions,
   Conversation,
+  DocumentInfo,
   DriveStatus,
+  ImportJob,
+  ImportJobStatus,
   Message,
   ModelInfo,
   RuntimeStatus
@@ -44,6 +47,20 @@ const api = {
   ): Promise<Message> => ipcRenderer.invoke(IPC.sendChatMessage, conversationId, content, options),
   stopGeneration: (conversationId: string): Promise<void> =>
     ipcRenderer.invoke(IPC.stopGeneration, conversationId),
+
+  // ---- Documents (Phase 4) ----
+  /** Open the OS picker for files (default) or a folder; returns selected paths. */
+  pickDocuments: (mode?: 'files' | 'folder'): Promise<string[]> =>
+    ipcRenderer.invoke(IPC.pickDocuments, mode),
+  importDocuments: (paths: string[]): Promise<ImportJob> =>
+    ipcRenderer.invoke(IPC.importDocuments, paths),
+  getImportJob: (jobId: string): Promise<ImportJobStatus> =>
+    ipcRenderer.invoke(IPC.getImportJob, jobId),
+  listDocuments: (): Promise<DocumentInfo[]> => ipcRenderer.invoke(IPC.listDocuments),
+  deleteDocument: (documentId: string): Promise<void> =>
+    ipcRenderer.invoke(IPC.deleteDocument, documentId),
+  reindexDocument: (documentId: string): Promise<DocumentInfo> =>
+    ipcRenderer.invoke(IPC.reindexDocument, documentId),
 
   /** Subscribe to streamed tokens for a request (= conversation id); returns an unsubscribe fn. */
   onToken: (requestId: string, cb: (token: string) => void): (() => void) => {

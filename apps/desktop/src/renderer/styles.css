@@ -209,3 +209,15 @@ h2 { font-size: 15px; margin: 0 0 12px; }
 }
 .chat-input:focus { outline: none; border-color: var(--accent); }
 .chat-input-actions { display: flex; gap: 8px; align-items: center; }
+
+/* Documents screen */
+.doc-card { display: flex; flex-direction: column; gap: 10px; }
+.doc-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.doc-title { font-size: 15px; font-weight: 600; word-break: break-all; }
+.doc-meta { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 4px 14px; font-size: 12px; color: var(--muted); }
+.doc-meta b { color: var(--text); font-weight: 500; }
+.doc-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.doc-error { color: #ff6b6b; font-size: 12px; word-break: break-word; }
+.badge.doc-indexed { color: var(--good); border-color: var(--good); }
+.badge.doc-failed { color: #ff6b6b; border-color: #ff6b6b; }
+.badge.doc-queued, .badge.doc-extracting, .badge.doc-chunking, .badge.doc-embedding { color: var(--accent); border-color: var(--accent); }

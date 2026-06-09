@@ -1,6 +1,6 @@
 # Architecture — Private AI Drive Lite
 
-_Last updated: 2026-06-09 (Phase 3)_
+_Last updated: 2026-06-09 (Phase 4)_
 
 ## Overview
 
@@ -103,6 +103,29 @@ the whole DB file is encrypted at rest.
 - **IPC** (`ipc/registerChatIpc.ts`): `createConversation`, `listConversations`, `listMessages`,
   `sendChatMessage` (streaming), `stopGeneration`. Regenerate reuses `sendChatMessage` with
   `options.regenerate` — it deletes the last assistant message, then re-streams from history.
+
+## Document ingestion (Phase 4)
+- **`services/ingestion/`** (spec §7.7). `parsers/` implements the `DocumentParser` interface
+  (spec §9.2) with pure-JS adapters — `TxtParser`, `MarkdownParser`, `PdfParser` (pdfjs-dist
+  legacy build, no worker), `DocxParser` (mammoth), `CsvParser` (papaparse) — each returning
+  ordered text **segments** with optional `pageNumber`/`sectionLabel`. `chunker.ts` splits
+  segments into overlapping ~500-token windows (overlap 80, cap 1000) without crossing
+  segment boundaries, so each chunk inherits one page/section. `index.ts` orchestrates the
+  status lifecycle (`queued → extracting → chunking → embedding → indexed`, `failed` on error)
+  and persists to the `documents` + `chunks` tables. The `embedding` step is a pass-through
+  until Phase 5.
+- **File storage decision.** Imported files are **copied into the workspace**
+  (`workspace/documents/<id><ext>` → `stored_path`); `original_path` is also recorded. The
+  drive stays self-contained and re-indexable; delete removes the workspace copy + chunks +
+  row (never the original).
+- **Import model (decision).** Async with polling: `importDocuments` queues rows and processes
+  in the background; the `documents` table is the per-file source of truth; the job aggregate
+  is in-memory via `getImportJob`. The renderer (Documents screen) polls while a job runs.
+- **Parser libs are external** (`externalizeDepsPlugin` in `electron.vite.config.ts`) so the
+  large pdfjs ESM bundle is `require`/`import`-ed from `node_modules`, not bundled (R3).
+- **IPC** (`ipc/registerDocsIpc.ts`): `pickDocuments`, `importDocuments`, `getImportJob`,
+  `listDocuments`, `deleteDocument`, `reindexDocument`. Full pipeline detail lives in
+  [`rag-design.md`](rag-design.md).
 
 ## Data flow (RAG, Phases 4–6)
 import → extract text → chunk → embed (local) → store vectors → on question: embed query → cosine

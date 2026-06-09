@@ -16,10 +16,12 @@ export const IPC = {
   sendChatMessage: 'chat:send',
   stopGeneration: 'chat:stop',
   // Phase 4+
+  pickDocuments: 'docs:pick',
   importDocuments: 'docs:import',
   getImportJob: 'docs:getImportJob',
   listDocuments: 'docs:list',
   deleteDocument: 'docs:delete',
+  reindexDocument: 'docs:reindex',
   askDocuments: 'rag:ask',
   // Phase 7
   runBenchmark: 'benchmark:run'

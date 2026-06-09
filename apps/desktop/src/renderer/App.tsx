@@ -5,6 +5,7 @@ import { DiagnosticsScreen } from './screens/DiagnosticsScreen'
 import { SettingsScreen } from './screens/SettingsScreen'
 import { ModelsScreen } from './screens/ModelsScreen'
 import { ChatScreen } from './screens/ChatScreen'
+import { DocumentsScreen } from './screens/DocumentsScreen'
 
 type ScreenId =
   | 'home'
@@ -65,9 +66,7 @@ export function App(): JSX.Element {
       <main className="content">
         {screen === 'home' && <HomeScreen onNavigate={(s) => setScreen(s as ScreenId)} />}
         {screen === 'chat' && <ChatScreen onNavigate={(s) => setScreen(s as ScreenId)} />}
-        {screen === 'documents' && (
-          <PlaceholderScreen title="Documents" phase="Phase 4" />
-        )}
+        {screen === 'documents' && <DocumentsScreen />}
         {screen === 'models' && <ModelsScreen />}
         {screen === 'privacy' && (
           <PlaceholderScreen title="Privacy & Offline Mode" phase="Phase 8" />

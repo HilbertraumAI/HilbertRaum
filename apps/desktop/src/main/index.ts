@@ -7,6 +7,7 @@ import { initLogging, log } from './services/logging'
 import { registerCoreIpc } from './ipc/registerCoreIpc'
 import { registerModelIpc } from './ipc/registerModelIpc'
 import { registerChatIpc } from './ipc/registerChatIpc'
+import { registerDocsIpc } from './ipc/registerDocsIpc'
 import { RuntimeManager } from './services/runtime'
 import { createMockRuntime } from './services/runtime/mock'
 import { resolveManifestsDir } from './services/models'
@@ -45,6 +46,7 @@ function initBackend(): void {
   registerCoreIpc(ctx)
   registerModelIpc(ctx)
   registerChatIpc(ctx)
+  registerDocsIpc(ctx)
 }
 
 function createWindow(): void {
