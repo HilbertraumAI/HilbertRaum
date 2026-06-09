@@ -11,17 +11,30 @@ import { basename, extname, join } from 'node:path'
 import type { Db } from '../db'
 import type { DocumentInfo, IngestionStatus } from '../../../shared/types'
 import { sha256File } from '../models'
+import { type Embedder, encodeVector } from '../embeddings'
 import { selectParser, supportedExtensions } from './parsers'
 import { chunkSegments } from './chunker'
 
 // Ingestion service (spec §7.7). Owns the document lifecycle:
 //   queued → extracting → chunking → embedding → indexed   (failed on error)
-// Persists to the `documents` and `chunks` tables (spec §8). Embeddings are written in
-// Phase 5 — the `embedding` step is a pass-through here, so a document reaches `indexed`
-// without vectors. Each file is COPIED into the workspace (`workspace/documents/`) so the
-// drive is self-contained; both the workspace copy (`stored_path`) and the user's
-// original location (`original_path`) are recorded. A failed file never crashes the run —
-// it lands in `failed` with an `error_message`.
+// Persists to the `documents`, `chunks`, and `embeddings` tables (spec §8). Each file is
+// COPIED into the workspace (`workspace/documents/`) so the drive is self-contained; both
+// the workspace copy (`stored_path`) and the user's original location (`original_path`)
+// are recorded. A failed file never crashes the run — it lands in `failed` with an
+// `error_message`.
+//
+// The `embedding` step writes one vector per chunk into the `embeddings` table when an
+// `Embedder` is supplied (Phase 5). It is optional: with no embedder the step is a
+// pass-through (a document still reaches `indexed` with chunks but no vectors), which keeps
+// the Phase-4 callers/tests valid and lets the real embedder swap in unchanged (Phase 10).
+
+/** Optional dependencies for the embedding step (Phase 5). */
+export interface IngestionDeps {
+  /** Embedder used to vectorize chunks. Omit to skip the embedding step. */
+  embedder?: Embedder
+  /** Model id tag for `embeddings.embedding_model_id`; falls back to `embedder.id`. */
+  embeddingModelId?: string | null
+}
 
 const MIME_BY_EXT: Record<string, string> = {
   '.txt': 'text/plain',
@@ -143,7 +156,8 @@ export function createQueuedDocument(db: Db, filePath: string): DocumentInfo {
 export async function processDocument(
   db: Db,
   storeDir: string,
-  documentId: string
+  documentId: string,
+  deps: IngestionDeps = {}
 ): Promise<DocumentInfo> {
   const row = getRow(db, documentId)
   if (!row) throw new Error(`Unknown document: ${documentId}`)
@@ -207,8 +221,12 @@ export async function processDocument(
       )
     }
 
-    // Embedding step is a pass-through in Phase 4; vectors are written in Phase 5.
+    // Embedding step: vectorize each chunk and persist to `embeddings` (Phase 5).
+    // The DELETE above already cleared stale vectors, so re-index re-embeds cleanly.
     setStatus(db, documentId, 'embedding')
+    if (deps.embedder) {
+      await embedChunks(db, documentId, deps.embedder, deps.embeddingModelId ?? deps.embedder.id)
+    }
 
     setStatus(db, documentId, 'indexed')
     return rowToInfo(getRow(db, documentId) as DocumentRow, chunkCountFor(db, documentId))
@@ -219,16 +237,46 @@ export async function processDocument(
   }
 }
 
+/**
+ * Embed every chunk of a document and persist the vectors. Chunks are embedded as a
+ * single batch (the 1000-chunk-per-file cap bounds the work); the BLOB holds the raw
+ * Float32 bytes (`encodeVector`). Tagged with `embeddingModelId` so re-embedding on a
+ * model change is detectable. Assumes prior vectors for the document were already deleted.
+ */
+async function embedChunks(
+  db: Db,
+  documentId: string,
+  embedder: Embedder,
+  embeddingModelId: string
+): Promise<void> {
+  const rows = db
+    .prepare('SELECT id, text FROM chunks WHERE document_id = ? ORDER BY chunk_index')
+    .all(documentId) as unknown as Array<{ id: string; text: string }>
+  if (rows.length === 0) return
+
+  const vectors = await embedder.embed(rows.map((r) => r.text))
+  const insert = db.prepare(
+    `INSERT INTO embeddings (chunk_id, embedding_model_id, vector_blob, dimensions, created_at)
+     VALUES (?, ?, ?, ?, ?)`
+  )
+  const created = nowIso()
+  for (let i = 0; i < rows.length; i++) {
+    const vec = vectors[i]
+    insert.run(rows[i].id, embeddingModelId, encodeVector(vec), vec.length, created)
+  }
+}
+
 /** Re-run ingestion for an existing document (re-parse the stored copy). */
 export async function reindexDocument(
   db: Db,
   storeDir: string,
-  documentId: string
+  documentId: string,
+  deps: IngestionDeps = {}
 ): Promise<DocumentInfo> {
   const row = getRow(db, documentId)
   if (!row) throw new Error(`Unknown document: ${documentId}`)
   setStatus(db, documentId, 'queued')
-  return processDocument(db, storeDir, documentId)
+  return processDocument(db, storeDir, documentId, deps)
 }
 
 /** List all non-deleted documents, newest first, with their chunk counts. */

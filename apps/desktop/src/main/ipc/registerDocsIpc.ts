@@ -13,6 +13,7 @@ import {
   reindexDocument
 } from '../services/ingestion'
 import { supportedExtensions } from '../services/ingestion/parsers'
+import { getSettings } from '../services/settings'
 import { log } from '../services/logging'
 
 // Phase 4 IPC: document import + ingestion status (spec §9.1, §7.7).
@@ -29,6 +30,13 @@ export function registerDocsIpc(ctx: AppContext): void {
   const storeDir = documentsDir(ctx.paths.workspacePath)
   // Ephemeral per-import aggregates, keyed by job id.
   const jobs = new Map<string, ImportJobStatus>()
+
+  // Embedding dependencies for the ingestion pipeline (Phase 5). The active embedding
+  // model id (settings) tags each vector; it falls back to the embedder's own id.
+  const embeddingDeps = (): { embedder: typeof ctx.embedder; embeddingModelId: string | null } => ({
+    embedder: ctx.embedder,
+    embeddingModelId: getSettings(ctx.db).activeEmbeddingModelId
+  })
 
   // Open the OS file/folder picker in the main process (renderer has no dialog access).
   // Windows cannot mix file + directory selection in one dialog, so the caller chooses a
@@ -75,7 +83,7 @@ export function registerDocsIpc(ctx: AppContext): void {
     void (async () => {
       for (const id of documentIds) {
         try {
-          const info = await processDocument(ctx.db, storeDir, id)
+          const info = await processDocument(ctx.db, storeDir, id, embeddingDeps())
           if (info.status === 'failed') status.failed += 1
           else status.completed += 1
         } catch (err) {
@@ -106,6 +114,6 @@ export function registerDocsIpc(ctx: AppContext): void {
 
   ipcMain.handle(IPC.reindexDocument, (_e, documentId: string): Promise<DocumentInfo> => {
     log.info('Re-index document', { documentId })
-    return reindexDocument(ctx.db, storeDir, documentId)
+    return reindexDocument(ctx.db, storeDir, documentId, embeddingDeps())
   })
 }

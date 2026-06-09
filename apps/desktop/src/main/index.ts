@@ -10,6 +10,7 @@ import { registerChatIpc } from './ipc/registerChatIpc'
 import { registerDocsIpc } from './ipc/registerDocsIpc'
 import { RuntimeManager } from './services/runtime'
 import { createMockRuntime } from './services/runtime/mock'
+import { createMockEmbedder } from './services/embeddings'
 import { resolveManifestsDir } from './services/models'
 import type { AppContext } from './services/context'
 
@@ -37,12 +38,14 @@ function initBackend(): void {
   seedSettings(db)
   log.info('Database ready', { path: paths.dbPath })
 
-  // Mock runtime for now; swapped for the real llama.cpp factory in Phase 10.
+  // Mock runtime + mock embedder for now; swapped for the real llama.cpp / E5 backends
+  // in Phase 10, behind the same interfaces.
   const runtime = new RuntimeManager(createMockRuntime)
+  const embedder = createMockEmbedder()
   const manifestsDir = resolveManifestsDir(app.getAppPath(), process.env.PAID_MANIFESTS_DIR)
   log.info('Model manifests directory', { manifestsDir })
 
-  ctx = { paths, db, runtime, manifestsDir }
+  ctx = { paths, db, runtime, embedder, manifestsDir }
   registerCoreIpc(ctx)
   registerModelIpc(ctx)
   registerChatIpc(ctx)

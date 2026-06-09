@@ -1,19 +1,19 @@
 # RAG design — Private AI Drive Lite
 
-_Last updated: 2026-06-09 (Phase 4 — ingestion & chunking)_
+_Last updated: 2026-06-09 (Phase 5 — embeddings & vector search)_
 
 This document describes the local document → retrieval-augmented-generation pipeline.
 It is built up phase by phase:
 
-- **Phase 4 (this doc):** ingestion — parse, chunk, store metadata, track status. ✅
-- **Phase 5:** embeddings & cosine vector search (mock embedder first). ⚪
+- **Phase 4:** ingestion — parse, chunk, store metadata, track status. ✅
+- **Phase 5 (this doc):** embeddings & cosine vector search (mock embedder first). ✅
 - **Phase 6:** grounded RAG chat with `[S1]…` citations. ⚪
 
 Everything runs **locally and offline** (spec §3.6). No file content, embedding, or query
 ever leaves the device.
 
 ```
-import → extract text → chunk → [embed → store vectors] → on question: embed query →
+import → extract text → chunk → embed → store vectors → on question: embed query →
 cosine top-k → grounded prompt with [S1]… labels → local LLM → cited answer → snippets
          └────────── Phase 4 ──────────┘ └────────── Phase 5 ──────────┘ └─ Phase 6 ─┘
 ```
@@ -30,8 +30,10 @@ queued → extracting → chunking → embedding → indexed
                                    (failed on any error; deleted on removal)
 ```
 
-`embedding` is a **pass-through in Phase 4** — a document reaches `indexed` with chunks but
-no vectors. Phase 5 fills in the `embeddings` table during that step.
+As of **Phase 5** the `embedding` step writes one vector per chunk into the `embeddings`
+table (see §6). It is still a **pass-through when no embedder is supplied** — a document
+then reaches `indexed` with chunks but no vectors — which keeps the Phase-4 callers/tests
+valid and lets the real embedder swap in unchanged (Phase 10).
 
 ### Steps
 
@@ -44,8 +46,9 @@ no vectors. Phase 5 fills in the `embeddings` table during that step.
    (`workspace/documents/<id><ext>` → `stored_path`), records `sha256` + `size_bytes`,
    selects a `DocumentParser` by extension, and extracts ordered text **segments**.
 4. **Chunk.** `chunkSegments()` splits each segment into overlapping token windows.
-5. **Persist.** Old chunks (if re-indexing) are removed, new chunks inserted into `chunks`.
-6. **Embed.** No-op in Phase 4 (Phase 5 writes vectors here).
+5. **Persist.** Old chunks + embeddings (if re-indexing) are removed, new chunks inserted
+   into `chunks`.
+6. **Embed.** Each chunk's text is embedded and the vector written to `embeddings` (§6).
 7. **Indexed.** Final status.
 
 Errors never crash the run: `processDocument` catches anything, writes `failed` +
@@ -136,7 +139,7 @@ Spec §7.7 chunk metadata maps onto the `chunks` table (spec §8) like so:
 | `section` | `section_label` | from the segment (Markdown); null otherwise |
 | `text` | `text` | chunk text |
 | `token_count` | `token_count` | approximate (see above) |
-| `embedding_model_id` | (Phase 5, `embeddings` table) | not written yet |
+| `embedding_model_id` | `embeddings.embedding_model_id` | written in Phase 5 (see §6) |
 | `created_at` | `created_at` | ISO-8601 UTC |
 
 The `[S1] [S2] …` retrieval labels are **not** stored here — they are assigned per query at
@@ -169,3 +172,99 @@ retrieval time in Phase 6.
   chunks; **corrupt PDF → `failed` with `error_message` (no crash)**; unsupported type →
   `failed`; re-index replaces chunks without duplication; delete removes everything.
 - `expandPaths` folder walking + explicit-file inclusion.
+
+---
+
+## 6. Embeddings & vector search (Phase 5) — spec §6, §7.8, §9.2
+
+`services/embeddings/` owns vectorization + retrieval, behind the same kind of swappable
+interface as `ModelRuntime`. Everything runs **locally and offline**: the embedder uses only
+`node:crypto`, and search is an in-process linear scan over SQLite rows — no remote vector
+service, no network.
+
+### `Embedder` interface (spec §9.2)
+
+```ts
+interface Embedder {
+  readonly id: string          // model-id tag → embeddings.embedding_model_id
+  readonly dimensions: number  // fixed output width (384, matches E5-small)
+  embed(texts: string[]): Promise<Float32Array[]>  // L2-normalized, one per input, in order
+}
+```
+
+Vectors are **`Float32Array`** (chosen over `number[][]` so encoding to the BLOB is a direct
+byte view and the real GGUF embedder can fill typed arrays without conversion).
+
+### `MockEmbedder` (`mock.ts`)
+
+Deterministic, **hash-based** vectors with zero network and zero model files
+(spec mock-first decision). For each text: lowercase + split into alphanumeric word tokens;
+SHA-256 each token and scatter it across several **signed buckets** (4 bytes → bucket index
+`mod dimensions`, 1 byte → sign) of a fixed-width float array; sum across tokens; finally
+**L2-normalize** (so cosine == dot product; empty text → all-zero vector → cosine 0, never
+`NaN`). Identical text → byte-identical vector; texts sharing tokens get a higher cosine, which
+is enough for ranking sanity in the mock phase. Default width **384** matches the E5-small
+manifest (`multilingual-e5-small-q8`, `dimensions: 384`) so the Phase-10 real embedder is a
+drop-in swap behind this interface.
+
+### Embedding during ingestion
+
+The ingestion `embedding` step (`processDocument`) takes optional deps
+`{ embedder?, embeddingModelId? }`. When an embedder is present it embeds every chunk's text
+as a **single batch** (the 1000-chunk-per-file cap bounds the work) and inserts one
+`embeddings` row per chunk. The re-index path deletes a document's chunks **and** embeddings
+first, so re-embedding (e.g. after an embedding-model change) is clean. Rows are tagged with
+the active embedding model id (`settings.activeEmbeddingModelId`), falling back to
+`embedder.id` when no model is selected — so a model change is always detectable.
+
+### `embeddings` table (spec §8) + BLOB encoding (LOCKED)
+
+| Column | Notes |
+|---|---|
+| `chunk_id` | PK, FK → `chunks.id` |
+| `embedding_model_id` | active embedding model id, else `embedder.id` |
+| `vector_blob` | raw little-endian **Float32 bytes** of the vector |
+| `dimensions` | vector width (e.g. 384) |
+| `created_at` | ISO-8601 UTC |
+
+- **Encode:** `encodeVector(f32)` = `Buffer.from(f32.buffer, f32.byteOffset, f32.byteLength)`.
+- **Decode:** `decodeVector(blob, dims)` **copies** the bytes into a fresh, 4-byte-aligned
+  buffer before viewing them as `Float32Array` — SQLite blobs can land on an unaligned byte
+  offset, which would otherwise throw a `RangeError` (this is tested).
+
+### `VectorIndex` — cosine search
+
+```ts
+class VectorIndex {
+  search(queryVector: Float32Array, topK): { chunkId, score }[]  // cosine, sorted desc
+  searchText(query: string, topK): Promise<{ chunkId, score }[]> // embed query, then search
+}
+```
+
+MVP = **linear scan**: decode every `embeddings` row, compute cosine similarity to the query
+vector, sort descending, take `topK`. Rows whose `dimensions` differ from the query (e.g.
+mid-migration) are skipped, not compared. The query is embedded with the **same** embedder, so
+a query equal to a chunk's text scores ≈ 1.0 and ranks first. **Upgrade path:** an ANN index
+(sqlite-vec / HNSW) behind this same `search` signature when corpora grow.
+
+> Phase 6 consumes `VectorIndex.search` to build the `[S1]…` grounded prompt + citations
+> (`askDocuments`). Phase 5 ships retrieval primitives only — no prompt/citation layer yet.
+
+---
+
+## 7. Tested behaviour (Phase 5)
+
+- **Determinism:** same text → byte-identical vector.
+- **Vector shape:** width 384 (matches E5-small) and L2 norm ≈ 1; empty text → all-zero
+  vector with cosine 0 (no `NaN`); distinct texts have cosine < 1.
+- **BLOB round-trip:** Float32 → BLOB → Float32 is exact, **including from an unaligned blob
+  offset**.
+- **Ranking sanity:** a query equal to a chunk's text ranks that chunk first (score ≈ 1),
+  results are sorted descending, `topK` is honoured, and mismatched-dimension vectors are
+  ignored.
+- **Ingestion:** `processDocument` writes one embedding per chunk tagged with the active
+  model id (or `embedder.id` fallback) with correct `dimensions`; with no embedder the step is
+  a pass-through (no vectors).
+- **Offline guarantee (spec Milestone 5):** spying on `http`/`https`/`net.connect`/
+  `Socket.prototype.connect`/`fetch` shows **zero** network calls across embed + full
+  ingestion + search.

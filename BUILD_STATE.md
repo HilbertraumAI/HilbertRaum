@@ -5,7 +5,7 @@
 > (see "Per-phase ritual" in [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md)).
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
-_Last updated: 2026-06-09 — Phase 4 complete; Phase 5 next_
+_Last updated: 2026-06-09 — Phase 5 complete; Phase 6 next_
 
 ---
 
@@ -18,8 +18,8 @@ _Last updated: 2026-06-09 — Phase 4 complete; Phase 5 next_
 | 2 | Model manifests & runtime contract | 🟢 done |
 | 3 | Basic chat (mock runtime) | 🟢 done |
 | 4 | Document ingestion & chunking | 🟢 done |
-| 5 | Embeddings & vector search (mock) | 🟡 next |
-| 6 | RAG chat with citations | ⚪ not started |
+| 5 | Embeddings & vector search (mock) | 🟢 done |
+| 6 | RAG chat with citations | 🟡 next |
 | 7 | Hardware benchmark & recommendation | ⚪ not started |
 | 8 | Privacy & offline hardening | ⚪ not started |
 | 9 | Encrypted workspace | ⚪ not started |
@@ -80,6 +80,23 @@ Repo root: `f:\_coding\ai_drive`.
   `original_path` too → self-contained, re-indexable drive (spec privacy ethos). See Phase-4 contract.
 - **Import = async with polling** (not the chat stream): documents table is per-file truth, job
   aggregate is in-memory via `getImportJob`. See Phase-4 contract for rationale.
+- **Embedder placement (Phase 5):** `services/embeddings/` behind an `Embedder` interface
+  (spec §9.2), mirroring `ModelRuntime`. A single `embedder` lives on `AppContext` (created in
+  `main/index.ts` as `createMockEmbedder()`); the real E5/llama.cpp embedder is a localized
+  Phase-10 swap. Ingestion takes the embedder as **optional deps** (`{ embedder?,
+  embeddingModelId? }`) so Phase-4 callers/tests stay valid (no embedder → pass-through).
+- **Vectors = `Float32Array`** (not `number[][]`) so BLOB encoding is a direct byte view and the
+  real GGUF embedder fills typed arrays without conversion. **Dimensions = 384**, matching the
+  E5-small manifest (`multilingual-e5-small-q8`) so the real swap is drop-in.
+- **Embedding BLOB encoding (LOCKED):** `vector_blob` = raw little-endian Float32 bytes
+  (`Buffer.from(f32.buffer, f32.byteOffset, f32.byteLength)`). Decode **copies** into a fresh
+  4-byte-aligned buffer first (SQLite blobs can be unaligned → `Float32Array` view would
+  otherwise `RangeError`). Tagged with `settings.activeEmbeddingModelId`, falling back to
+  `embedder.id`.
+- **Vector search = linear scan cosine** over the `embeddings` table for MVP (`VectorIndex`),
+  with an ANN (sqlite-vec/HNSW) upgrade path behind the same `search` signature.
+- **MockEmbedder = feature hashing** (SHA-256 tokens → signed buckets → L2-normalize),
+  deterministic + fully offline (uses only `node:crypto`).
 
 ---
 
@@ -221,48 +238,65 @@ stop, regenerate, per-message copy, and the no-runtime empty state.
 - **Documents screen** (`renderer/screens/DocumentsScreen.tsx`): import files/folder, per-file
   status badge + chunk count + size, error surfacing, delete + re-index.
 
+### Embeddings + vector search (Phase 5 live)
+✅ **`services/embeddings/`** (spec §6, §7.8, §9.2). Full detail in [`docs/rag-design.md`](docs/rag-design.md) §6.
+- **`index.ts`** — `Embedder` interface (`id`, `dimensions`, `embed(texts) =>
+  Promise<Float32Array[]>` — L2-normalized, one per input); `encodeVector`/`decodeVector`
+  (Float32 ↔ BLOB; decode copies to a 4-byte-aligned buffer); `cosineSimilarity`; and the
+  `VectorIndex` class (`search(queryVector, topK)` linear-scan cosine → `{ chunkId, score }[]`
+  sorted desc, dimension-mismatched rows skipped; `searchText(query, topK)` embeds then searches).
+- **`mock.ts`** — `MockEmbedder` (`createMockEmbedder`): deterministic feature-hashing vectors
+  (SHA-256 tokens → signed buckets → L2-normalize), zero network. `MOCK_EMBEDDING_DIMENSIONS =
+  384`, `MOCK_EMBEDDING_MODEL_ID = 'mock-embedder'`.
+- **Ingestion wiring:** `processDocument`/`reindexDocument` accept `IngestionDeps
+  { embedder?, embeddingModelId? }`; the `embedding` step embeds all chunks in one batch and
+  inserts `embeddings` rows. `registerDocsIpc` passes `ctx.embedder` +
+  `getSettings(db).activeEmbeddingModelId`. **`AppContext` now carries `embedder`** (created in
+  `main/index.ts`).
+- **`embeddings` table** (spec §8, already existed): `chunk_id` PK, `embedding_model_id`,
+  `vector_blob` (raw Float32 bytes), `dimensions`, `created_at`. No new IPC (askDocuments = Phase 6).
+
 ---
 
-## 5. Next actions (do these next) — START OF PHASE 5
+## 5. Next actions (do these next) — START OF PHASE 6
 
-Phase 5 = Embeddings & vector search (mock embedder) (spec Milestone 5 / Step 7). Build, in order:
-1. `services/embeddings/index.ts` — `Embedder` interface (spec §9.2): `embed(texts: string[]) =>
-   number[][]`, fixed `dimensions`, an `id` (the embedding-model id tag). `services/embeddings/mock.ts`
-   — `MockEmbedder`: **deterministic** hash-based vectors (e.g. hash tokens → fixed-dim float array,
-   L2-normalized), zero network, fully offline. Swap to a real local embedder in Phase 10 behind the
-   same interface.
-2. **Wire embeddings into ingestion's `embedding` step** (currently a pass-through in
-   `services/ingestion/index.ts`): after chunks are inserted, embed each chunk's `text` and write to
-   the **`embeddings` table** (`chunk_id`, `embedding_model_id`, `vector_blob` (Float32 → BLOB),
-   `dimensions`, `created_at`). Tag rows with the active embedding model id
-   (`settings.activeEmbeddingModelId`). Re-embed on embedding-model change (re-index path already
-   deletes+rewrites chunks/embeddings).
-3. `VectorIndex` cosine search over the stored vectors: `search(queryVector, topK)` →
-   `{ chunkId, score }[]`. Decode `vector_blob` → Float32Array; cosine over all chunk vectors (MVP:
-   linear scan; upgrade to sqlite-vec/HNSW later). Embed the query with the same `MockEmbedder`.
-4. Decide the embedder placement in `AppContext` (add an `embedder` like `runtime`), and how the
-   active embedding model selects dimensions. `MockEmbedder` dims should match the E5-small manifest
-   (e.g. 384) so a later real swap is drop-in.
-5. Tests: determinism (same text → same vector), cosine ranking sanity (a query ranks its own chunk
-   first), embeddings tagged with the model id, and a **no-network assertion** across the embed path
-   (spec Milestone 5). Keep all 80 existing tests green.
-6. **Ritual:** update `docs/rag-design.md` (embeddings/vector store section) + this file; commit.
+Phase 6 = RAG chat with citations (spec Milestone 6 / Step 8). Build, in order:
+1. **Retrieval → grounded prompt.** Use `VectorIndex.searchText(question, topK)` to fetch top-k
+   chunks (top-k from settings, default per spec §7.8), join back to `chunks`/`documents` for text +
+   `source_label`/`page_number`/`section_label`, and assign `[S1] [S2] …` labels per query (labels
+   are **not** stored — assigned at retrieval time). Build the grounded system prompt (spec §7.6/§7.8)
+   that instructs the model to answer **only** from the labelled sources and cite them inline.
+2. **`askDocuments(conversationId, question)` IPC** — stream the answer like `sendChatMessage`
+   (reuse the LOCKED Phase-3 streaming contract: `chat:token/done/error:<id>`), but for a
+   `mode:'documents'` conversation. Persist the assistant turn **with citations** to
+   `messages.citations_json` (the `Citation[]` type already exists in `shared/types.ts`; column
+   already in schema). Register in `initBackend()`.
+3. **Citations surface.** Resolve `[Sn]` labels → `Citation { label, sourceTitle, pageNumber,
+   section }`; return on the final `Message`. Renderer shows the cited sources + lets the user
+   inspect the snippet. Decide the empty-corpus / no-hits UX (answer "not found in your documents"
+   rather than hallucinate — spec §7.8 grounding rule).
+4. **Settings.** Wire retrieval knobs (top-k, min score?) — extend `AppSettings` if needed.
+5. Tests: retrieval returns the right chunk for a question; `[Sn]` labelling + citation resolution;
+   grounded prompt shape; askDocuments streams + persists citations; empty-corpus path. Keep all
+   green.
+6. **Ritual:** update `docs/rag-design.md` (§6→ add the grounded-prompt/citation section) + this
+   file; commit.
 
-Notes / gotchas for Phase 5:
-- The `embeddings` table already exists (spec §8). `chunks` already carry `token_count` + metadata.
-- Keep the embedder behind the interface so Phase 10's real local embedder is a localized swap.
-- Phase 6 (RAG chat with citations) consumes `VectorIndex.search` + the `[S1]…` grounded prompt;
-  don't build the prompt/citation layer yet — just retrieval primitives.
+Notes / gotchas for Phase 6:
+- `VectorIndex` + `Embedder` (Phase 5) are the retrieval primitives — reuse `ctx.embedder` and
+  construct `VectorIndex` per request (or once). The query is embedded with the **same** embedder.
+- Don't break the Phase-3 chat path; `mode:'documents'` is the RAG variant of the same streaming
+  contract.
+- Keep grounding strict (answer only from sources). Still no network/telemetry.
 
-Phase 4 is DONE: typecheck clean, **80/80 tests pass** (58 prior + 22 new: parser registry routing;
-TxtParser/MarkdownParser/CsvParser on fixtures; **real synthesised PDF + DOCX** parsed; chunker
-boundaries/overlap/no-redundant-tail/per-segment-metadata/1000-cap/overlap-clamp; pipeline
-txt→indexed with workspace copy + sha256 + chunks; PDF page numbers on chunks; **corrupt PDF →
-failed with error_message, no crash**; unsupported type → failed; re-index replaces chunks; delete
-removes everything; `expandPaths` folder walk). `npm run build` green (**main bundle 46.92 kB** —
-deps externalized). Documents screen does import (files/folder), live status polling, delete +
-re-index. R3 validated: pdfjs legacy build extracts text in plain Node, no worker. (Live `npm run
-dev` window smoke = manual.)
+Phase 5 is DONE: typecheck clean, **92/92 tests pass** (80 prior + 12 new: MockEmbedder determinism;
+L2-norm + 384 width; distinct-text cosine < 1 + empty-text all-zero/cosine-0; **BLOB round-trip incl.
+unaligned offset**; VectorIndex self-match ranks first + sorted desc + topK + dimension-mismatch
+skip; ingestion writes one tagged vector/chunk with correct dims; `embedder.id` fallback when no
+active model; pass-through when no embedder; **no-network assertion** spying http/https/net/Socket/
+fetch across embed+ingestion+search). `NODE_OPTIONS=--use-system-ca npm run build` green (**main
+bundle 49.23 kB**). No new dependencies (hash vectors via `node:crypto`). (Live `npm run dev` window
+smoke = manual.)
 
 ---
 
