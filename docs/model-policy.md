@@ -1,6 +1,6 @@
 # Model Policy — Private AI Drive Lite
 
-_Last updated: 2026-06-09 (Phase 13 — added the model catalog sizes/RAM + the runtime-sources placeholder caveat)_
+_Last updated: 2026-06-10 (runtime pinned to llama.cpp b9585; all license reviews approved)_
 
 ## Principles
 - **No model weights in git.** Weights live under `models/` on the drive (git-ignored).

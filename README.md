@@ -12,13 +12,17 @@ portable USB-C SSD. Your prompts, documents, embeddings, and chat history never 
 - 🧳 **Portable** — keep models + an encrypted workspace on an external drive; move between laptops.
 - 🪟 **Cross-platform architecture** — Windows-first, with macOS/Linux supported in the design.
 
-> This is an MVP under active construction. See **[`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md)**
-> for the phased roadmap and **[`BUILD_STATE.md`](BUILD_STATE.md)** for current status.
+> The MVP is **feature-complete** (Phases 0–13). See **[`BUILD_STATE.md`](BUILD_STATE.md)** for
+> current status and **[`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md)** for the
+> original phased plan.
 
 ## Status
 
-The build proceeds in phases (mock-first, so it runs with **no model files and no network**).
-Current phase and progress are tracked in [`BUILD_STATE.md`](BUILD_STATE.md).
+Feature-complete, mock-first MVP: the app runs with **no model files and no network**, and real
+`llama.cpp` inference engages automatically once the binaries + weights are present (step 2 below).
+Remaining work is **manual release acceptance** (signed builds, a live USB demo) — tracked in
+[`BUILD_STATE.md`](BUILD_STATE.md). Consciously-accepted gaps are listed in
+[`docs/known-limitations.md`](docs/known-limitations.md).
 
 ## Which path are you on?
 

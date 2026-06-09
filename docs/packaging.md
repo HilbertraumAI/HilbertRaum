@@ -1,6 +1,6 @@
 # Packaging — portable build, sidecars & model weights
 
-_Last updated: 2026-06-09 (Phase 13)_
+_Last updated: 2026-06-10_
 
 This documents **how the app is packaged into a portable build**, **where the runtime binaries and
 model weights live on the drive**, and that those artifacts are **not** in the git repository.
@@ -126,12 +126,12 @@ npm run package:win                                                  # build the
 copy .\apps\desktop\release\*.exe E:\                                 # place the launcher on the drive
 ```
 
-> ⚠️ **Pin a real `llama.cpp` release before `fetch-runtime`/`-WithAssets`.** The committed
-> `model-manifests/runtime-sources.yaml` ships **placeholder** `version`/`url`/`sha256` values, so the
-> sidecar download **404s** until you set a real [ggml-org/llama.cpp
-> release](https://github.com/ggml-org/llama.cpp/releases) tag + the matching per-OS asset names. The
-> chat/embeddings **model** URLs are already real Hugging Face links. See
-> [`model-policy.md`](model-policy.md).
+> ✅ **`runtime-sources.yaml` is pinned to a real release** (`ggml-org/llama.cpp` **b9585**, real
+> per-OS URLs + SHA-256 checksums computed from the actual assets) — `fetch-runtime` downloads,
+> verifies, extracts (zip and tar.gz) and flattens the binaries for all three OSes from any host.
+> The chat/embeddings **model** URLs are real Hugging Face links; their manifest `sha256` stays
+> `REPLACE_WITH_REAL_HASH` until a drive build captures the hashes (`verify-models --generate`).
+> To bump the runtime pin later, see [`model-policy.md`](model-policy.md).
 
 Or the older manual flow (no download): `prepare-drive` (no `-WithAssets`) → drop GGUF weights into
 `E:\models\…` + `llama-server` into `E:\runtime\llama.cpp\win\` by hand → `verify-models -Generate`.
@@ -225,3 +225,23 @@ that **no user data is present** (spec §12.2) — the canonical gate is `assert
 scripts add a native cross-check of the same invariants. **Remaining manual acceptance (R5/R7):** a
 real signed build + notarization + a USB-drive §17 demo on a fresh laptop with Wi-Fi off, and the
 second-laptop continuity check.
+
+## Manual pre-ship checklist (real hardware — not covered by CI)
+
+The green gate (`typecheck`/`test`/`build`) runs on mocks with zero weight files, so real-runtime /
+real-drive behaviour never shows up in CI. Before any drive ships (commercial or a DIY hand-off),
+run one real-model session covering:
+
+1. **Post-package smoke on the produced `.exe`:** import a PDF, a DOCX, and a CSV; create + unlock
+   an encrypted workspace (exercises the externalized parser libs and `@noble/hashes` argon2id,
+   which only fail at runtime if packaging missed them).
+2. **Switch models mid-load and quit mid-load** — confirm no orphaned `llama-server` process
+   survives (Task Manager / `ps`).
+3. **Import a 50+-page DOCX**, and **lock the workspace during an import** — confirm the import
+   stops cleanly and the stuck rows are re-indexable after unlock.
+4. **A > 2 GiB workspace:** lock/unlock round-trip (exercises the streaming file crypto + chunked
+   shred).
+5. **Models / Chat screen latency** with real multi-GB GGUFs on the drive (exercises the checksum
+   cache — screens must not re-hash weights per navigation).
+6. **The spec §17 USB demo** on a fresh laptop with Wi-Fi off, plus the **second-laptop
+   continuity check** (same encrypted workspace under a different drive letter/mount).

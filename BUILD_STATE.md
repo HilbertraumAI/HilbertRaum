@@ -5,12 +5,11 @@
 > (see "Per-phase ritual" in [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md)).
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
-_Last updated: 2026-06-09 — Phase 13 complete (plug-and-play distribution: per-OS launcher +
-`build-commercial-drive` pipeline + signing hooks + launch preflight) + a full post-Phase-13 code/docs
-audit remediation (see §10) + **audit round 4 Critical/High remediation (see §11)** — all C/H findings
-from [`docs/audit-2026-06-09-multi-persona.md`](docs/audit-2026-06-09-multi-persona.md) fixed,
-incl. the encrypted document cache (spec §3.5). MVP feature-complete; Phases 0–13 done — this is the
-**last planned phase**. Earlier multi-persona audit remediation in §8/§9._
+_Last updated: 2026-06-10 — **MVP feature-complete: Phases 0–13 done** (Phase 13, plug-and-play
+distribution, was the last planned phase). Four post-MVP audit rounds are fully remediated and the
+llama.cpp runtime pin + license reviews are complete — summarized in §8. Remaining work = **manual
+release acceptance only** (§5). Consciously-accepted gaps live in
+[`docs/known-limitations.md`](docs/known-limitations.md)._
 
 ---
 
@@ -183,7 +182,7 @@ Repo root: `f:\_coding\ai_drive`.
   Phase 10). Only remote origins are violations. `services/offlineGuard.ts`
   `installOfflineNetworkGuard` wraps `net.Socket.prototype.connect` and **only logs** a remote
   attempt — it never blocks or throws (a wrong host guess must not break local IPC/sidecar). The
-  guard is installed in ALL builds when offline (audit §8 M3 superseded the original
+  guard is installed in ALL builds when offline (an audit-round fix superseded the original
   dev-only gating); `assertOfflinePosture()` always logs the posture.
 - **CSP dev-vs-prod split (Phase 8):** strict CSP applied as a response header
   (`session.webRequest.onHeadersReceived`) on top of the `index.html` meta tag. **Prod:**
@@ -840,66 +839,8 @@ are **MANUAL acceptance only** (R2/R5/R7). In rough priority:
    deny-by-default, reusing `assets.ts` `fetchAndVerify`); an icon/`buildResources` for
    electron-builder; ANN vector index (sqlite-vec/HNSW) upgrade.
 
-Phase 13 is DONE: typecheck clean, **306/306 tests pass** (was 287 — +19: `launcher.test.ts` [11] +
-`commercial-drive.test.ts` [8]), `NODE_OPTIONS=--use-system-ca npm run build` green (main bundle
-**104.75 kB** — preflight IPC is now in the runtime path; the launcher/commercial-drive modules are
-tested helpers). **No new runtime deps.** Both `build-commercial-drive.{ps1,sh}` dry-run-smoke-tested
-on Windows PowerShell + bash (PS hashtable-splat fix verified). New manual risk **R7** (code-signing
-certs). Real signed/notarized build + USB §17 demo = manual (R5/R7).
-
-Phase 12 (prior) is DONE: typecheck clean, **287/287 tests pass** (was 247 — +40: manifest `download`-block
-validation [present/absent/malformed/size/license/real-hash-equality], `validateRuntimeSources`
-[8 tests], and `assets.test.ts` (28): `planModelDownloads` [no-block excluded, missing→download,
-license blocked-vs-accepted-vs-approved, present-verified/unverified/mismatch, `--only`],
-`selectRuntimeBuild` [default-CPU/backend-override/no-match], `planRuntimeDownload` [paths +
-escape-guard + binary name], `verifyDownloadedFile` [ok/mismatch/placeholder/missing],
-`downloadToFile`/`fetchAndVerify` with an **injected fetch** [streams to disk, non-OK throws, verify
-pass, mismatch deletes+throws], `formatAssetPlan`). `NODE_OPTIONS=--use-system-ca npm run build` green
-(main bundle **103.34 kB** — `assets.ts` is a tested helper, not yet in the runtime path). **No new
-deps.** Both script families dry-run-smoke-tested on Windows PowerShell + bash. (Real downloads +
-USB-drive demo = manual, R5.)
-
-Phase 11 is DONE: typecheck clean, **198/198 tests pass** (190 prior + 8 new in `tests/integration/
-drive.test.ts`: drive-layout dirs use **win/mac/linux** (not windows/macos/linux); `drive.json` is a
-valid prepared-drive marker `resolvePaths` detects; `policy.json` commercial + dev variants are accepted
-by `parsePolicy`/`mergePolicyObject` and **always deny network**; `planPrepareDrive` dry-run produces the
-full layout + config + weight destinations + would-overwrite flag; `verifyDriveModels` reports missing/
-placeholder/verified/mismatch/unsupported honestly; `buildChecksumsJson` captures real hashes for present
-weights + null for absent). `NODE_OPTIONS=--use-system-ca npm run build` green (**main bundle 95.56 kB**,
-unchanged — `drive.ts` is a tested helper, not in the runtime path). New dev dep **`electron-builder
-^26.15.2`**. Both `.ps1` + `.sh` script families smoke-tested on Windows + bash (semantically-equivalent config
-output; SHA-256 agreement across PowerShell/bash/TS). (Live `.exe` + USB-drive demo = manual, R2/R5.)
-
-Phase 10 (prior): typecheck clean, **190/190 tests pass** (161 prior + 29 new: **sidecar** [binary
-discovery present/absent/env-override, os-dir/exe-name mapping, `findFreePort`, `defaultThreadCount`;
-`LlamaServer` spawns **127.0.0.1-only** never `0.0.0.0`, becomes healthy on `/health` ok with the bound
-port, **health-timeout throws + kills the child** (no hang/orphan), child-exit-before-healthy throws,
-`stop()` kills the child, **zero non-loopback sockets** across start/health/stop] + **llama runtime**
-[`readChatSSE` yields deltas across split reads + stops on `[DONE]` + aborts on signal; `LlamaRuntime`
-streams from `/v1/chat/completions`, spawn binds loopback + chat URL is `127.0.0.1`, messages sent as
-role/content, options map to `max_tokens`/`stream`, non-ok HTTP throws; factory selects mock when
-binary/weights absent, llama only when both present] + **e5 embedder** [embeds via loopback +
-L2-normalizes, preserves input order under shuffled indices, lazy single-spawn with `--embedding` +
-reuse, empty batch no-ops, count-mismatch throws; `createSelectedEmbedder` falls back to mock without
-binary/weights/model, picks E5 when both present] + **embedding-mismatch** [both 384-dim blend without a
-filter; id-filter scopes search so mock↔real can't blend; empty id disables the filter]).
-`NODE_OPTIONS=--use-system-ca npm run build` green (**main bundle 95.56 kB**). **No new dependencies.**
-(Live `npm run dev` + real-model smoke = manual, R5: needs platform binaries + a GGUF not in the repo.)
-
-Phase 9 (prior): typecheck clean, **161/161 tests pass** (137 prior + 24 new: **crypto** [scrypt KDF
-determinism with stored params, different passwords/salts diverge, unsupported algo throws;
-AES-256-GCM round-trip, fresh-IV-per-encryption, wrong-key fails, ciphertext+tag tamper detection;
-framed serialize/deserialize round-trip + foreign-header reject; verifier accepts right / rejects
-wrong key without the DB] + **vault** [creates LOCKED on disk (descriptor+`.enc`, no working file);
-lock→encrypt→unlock round-trip reads rows back, plaintext working file + `-wal`/`-shm` shredded after
-lock; wrong password throws `WrongPasswordError` + writes no plaintext file; **no plaintext password
-persisted** (descriptor + `.enc` scanned); plaintext-gating matrix (encryptionRequired ⇒ refused,
-allowPlaintextDevMode:false ⇒ refused, non-dev ⇒ refused); `WorkspaceController`
-uninitialized→unlocked→locked→unlocked + plaintext-opens-in-dev + existing-vault-starts-locked +
-plaintext-create-refused; **no-network assertion** across create+unlock+lock]).
-`NODE_OPTIONS=--use-system-ca npm run build` green (**main bundle 81.64 kB**). No new dependencies.
-(Live `npm run dev` window smoke = manual; the unlock gate renders before the sidebar and does not
-wedge HMR.)
+**Current gate (2026-06-10): typecheck clean, 361/361 tests pass, `npm run build` green.** The
+per-phase gate history (test counts, bundle sizes, per-phase test inventories) lives in git history.
 
 ---
 
@@ -955,357 +896,46 @@ wedge HMR.)
 
 ---
 
-## 8. Post-MVP audit remediation (2026-06-09)
+## 8. Post-MVP audits & hardening (2026-06-09 → 2026-06-10) — ALL REMEDIATED
 
-A five-persona audit (security/privacy · spec-compliance · code bug-hunt · docs · build/packaging)
-found no architectural defects but a cluster of real-runtime / crash-window edge cases that the
-mock-first build had masked. All fixed; **typecheck clean, build green (main 100.16 kB), 205/205 tests
-pass** (was 198 — 3 e5 tests re-framed + new regression tests for C1/H4/S1/M5/M7 + weightPath).
+After Phase 13, four multi-persona audit rounds (security/privacy · spec-compliance · bug-hunt ·
+docs-vs-code · release/build engineering) reviewed the full repo. **Every Critical, High, and Medium
+finding plus the actionable Lows were fixed** across six remediation waves. The detailed
+per-finding records and the final audit report were removed in the 2026-06-10 docs cleanup — they
+live in git history (`docs/audit-2026-06-09-multi-persona.md` and BUILD_STATE §8–§14 before this
+commit). Highlights of what was fixed:
 
-**Critical / High (correctness):**
-- **C1** — Stop on a *real* runtime threw `AbortError` out of the stream → lost the partial reply +
-  error toast. `generateAssistantMessage`/`generateGroundedAnswer` now treat an abort as a normal end
-  (persist the partial, emit `done`) via `isAbortError` (`chat.ts`). Mock was unaffected; this only bit
-  the fetch-backed `LlamaRuntime`.
-- **H1** — Encrypted vault left a **plaintext `paid.sqlite` on disk after a crash** (lock-on-quit
-  skipped). `WorkspaceController.init()` now shreds a stray plaintext DB + WAL/SHM on startup
-  (`shredStalePlaintext`); `unlockEncryptedVault` cleans stale sidecars before decrypt (avoids replay
-  corruption); `uncaughtException` locks the vault best-effort.
-- **H2** — `will-quit` fire-and-forgot the sidecar kills → **orphaned `llama-server`**. Now
-  `preventDefault()` → `await Promise.allSettled([runtime.stop(), embedder.stop()])` → lock →
-  `app.exit(0)`, re-entry-guarded.
-- **H3** — Concurrent streams on one conversation clobbered the in-flight canceller. Both IPC handlers
-  reject when `inFlight.has(id)` and delete only their own entry.
-- **H4** — `E5Embedder` stored 0/short-dim vectors silently (unsearchable). Now asserts each vector
-  width === declared `dimensions` → the document fails visibly instead.
-- **H5** — packaging: `includeSubNodeModules: true` + `npmRebuild: false` for the hoisted-workspace
-  parser libs. **Still requires the manual PDF/DOCX/CSV import smoke-test on the produced `.exe`** (R2).
+- **Security / data-loss:** encrypted document cache (spec §3.5 — stored copies are `.enc` in an
+  encrypted workspace, with transient decrypts shredded after parsing); vault-wipe guards (`create`
+  refuses over any existing vault artifact; a corrupt descriptor reports `locked`, never
+  `uninitialized`); streaming file crypto + chunked shred (> 2 GiB safe); KDF param bounds-checking;
+  key zeroing on lock; startup sweep of crash leftovers (`.tmp`/`.parse*`/WAL/SHM).
+- **Process lifecycle:** `RuntimeManager` start/stop serialized through an op queue;
+  `E5Embedder.stop()` awaits an in-flight lazy start; SIGKILL escalation gated on actual exit;
+  awaited `will-quit` stops — every orphaned-`llama-server` path closed.
+- **Commercial pipeline:** `fetch-runtime` sha256 parsing fixed (the key regex was structurally
+  dead in both shells); `verify-models --strict` weight gate wired into `build-commercial-drive`
+  step 7 (a placeholder-hash drive now exits 1); per-OS sidecar loop (one drive ships win+mac+linux);
+  license-review ship gate (`checks.licensesApproved`, NOT overridable by `--accept-license`).
+- **Correctness cluster:** regenerate-after-failure, conversation-switch-mid-stream,
+  per-document concurrency, and lock-while-importing races; DOCX chunk packing (coalesce
+  same-label segments); E5 context truncation + batching + request timeouts; checksum verification
+  cached on `(path, size, mtimeMs)` (no more multi-GB re-hashing per screen mount); the spec §7.4
+  model gate enforced in the MAIN process (role + install state + policy); `developerMode` defaults
+  to **false**.
+- **Spec completions:** automatic first-run benchmark (§2.1); chat transcript export (§7.6); full
+  Diagnostics incl. local log viewer (§7.11); drive detection without the launcher
+  (`config/drive.json` marker walk-up from the exe location, §7.2).
+- **Manual-acceptance prep (2026-06-10):** `runtime-sources.yaml` pinned to the REAL release
+  **`ggml-org/llama.cpp@b9585`** (real per-OS URLs + SHA-256 checksums, verified end-to-end from a
+  Windows host for all three OSes; tar.gz + symlink-materialization + flatten handling in
+  `fetch-runtime`; schannel `--ssl-revoke-best-effort` proxy fix). **License reviews COMPLETED**
+  (spec §13): all six manifests are `license_review.status: approved` (Qwen3 GGUFs = apache-2.0;
+  E5 = MIT via the base model, caveat recorded in the manifest notes).
 
-**Medium:** M1 PS scripts now write UTF-8 **no-BOM** (a BOM broke `JSON.parse`); "byte-identical"
-claim corrected to "semantically equivalent". M2 `verify-models.sh` dropped `mapfile`/`sort -z` (macOS
-Bash 3.2 safe). M3 offline guard installed in **all** builds + honest "logged, not blocked" wording.
-M4 `shell.openExternal` http(s)-only allowlist. M5 startup reconcile of documents stuck mid-ingestion
-by a prior run. M6 import/reindex/list/delete guard against a locked workspace. M7 `DocumentInfo.staleEmbeddings`
-flags a corpus indexed under a different embedder + a Documents-screen re-index prompt.
+Final gate: typecheck clean, **361/361 tests**, build green, no new runtime deps.
 
-**Low:** SSE final-line flush (`readChatSSE`); per-probe `/health` timeout + undrained child stdout
-fixed (stdio refined again in §9); `weightPath` rejects `..`/absolute escapes; 8-char min vault
-password; `engines.node >= 22.5`; doc fixes (stale `LITE`, dead `benchmark-plan.md` ref, `rag.ts`→`rag/`,
-dev-CSP `script-src` wording).
-
-**Deferred (intentional):** offline guard remains detection-only (blocking `net.Socket` app-wide risks
-loopback IPC). _(The scrypt-N and single-tsconfig items below were resolved in §9.)_
-
----
-
-## 9. Post-MVP hardening round 2 (2026-06-09)
-
-Follow-up to §8, taking the deferred-but-valuable items plus a renderer test harness. All
-in-repo, no hardware needed. **Typecheck clean (both projects), build green, 247/247 tests pass**
-(was 226 — +21: argon2id, sidecar stderr, jsdom/RTL renderer tests).
-
-- **Argon2id KDF (was deferred).** New vaults default to Argon2id via pure-JS `@noble/hashes` (OWASP
-  params, ~0.5 s/unlock); scrypt still unlocks older vaults. New dep `@noble/hashes` (externalized →
-  `require("@noble/hashes/argon2.js")` in the main bundle, like the parser libs; **add it to the
-  post-package smoke-test** — it's loaded at unlock, R2). See §3 KDF decision + R4.
-- **tsconfig node/web split (was deferred).** `tsconfig.base.json` + `tsconfig.node.json` (main/preload,
-  **no DOM lib**) + `tsconfig.web.json` (renderer + tests, DOM). Root `tsconfig.json` references both;
-  `typecheck` runs each with `--composite false --noEmit`. A browser global leaking into the main
-  process is now a type error.
-- **Sidecar failure diagnostics (S3/S5).** `LlamaServer` pipes + **drains** stderr (prevents the
-  pipe-buffer deadlock) and surfaces the **exit code + stderr tail** in the start error, so a port
-  conflict (`bind: address already in use`) is diagnosable instead of a blank health timeout. New
-  `ReadableLike` on `ChildProcessLike` (optional; fake children omit it).
-- **Renderer test harness (jsdom + RTL).** Added `jsdom`, `@testing-library/react`/`dom`/`jest-dom`/
-  `user-event`. vitest stays node by default; renderer tests opt in via a `// @vitest-environment jsdom`
-  docblock. `tests/setup.ts` registers jest-dom matchers; `tests/helpers/renderer.ts` stubs `window.api`
-  (a Proxy that auto-`vi.fn()`s un-supplied methods). Coverage: **WorkspaceGate** (password floor +
-  confirm, create/unlock branches, plaintext toggle, `{ok:false}` error mapping) and **DocumentsScreen**
-  (list/status, the M7 stale-embedding banner, failed-doc error, empty state, delete+refresh).
-- **Still untested (accepted):** `main/index.ts` top-level wiring (needs a full Electron mock — better
-  for e2e) and the remaining screens (Chat/Models/Settings/Diagnostics/Privacy/Home) — the harness now
-  exists to add them incrementally.
-
----
-
-## 10. Post-Phase-13 code/docs audit remediation (2026-06-09)
-
-A full code + docs audit (three parallel reviewers: docs-vs-code, Phase-13 modules, broader
-services/IPC) ran after Phase 13. Docs were found unusually well-synced. Findings fixed in-repo, no
-hardware needed. **Typecheck clean, build green (main 104.75 kB), 322/322 tests pass** (was 306 —
-+16: `runtime-manager.test.ts` [5] + new Phase-13 coverage in `commercial-drive`/`launcher` tests [11]).
-
-**Real bugs (pre-existing, found by the broad sweep):**
-- **B1 (sidecar orphan)** — `LlamaServer.stop()` escalated to `SIGKILL` behind `if (!child.killed)`,
-  but `child.killed` is `true` the moment a signal is *sent*, so the escalation was dead code → a
-  `llama-server` that ignores `SIGTERM` (mac/Linux) survived the grace window. Now gated on
-  `this.exited` (actual exit). Added an injectable `killGraceMs` test seam; regression tests assert
-  SIGKILL-on-ignore and no-escalation-on-polite-exit (`runtime-manager.test.ts`).
-- **B2 (stale runtime after a failed start)** — `RuntimeManager.start()` left `this.current` pointing
-  at a half-started runtime when `start()`/`health()` threw; chat/RAG gate on `active() != null`, so
-  requests routed to a server that never came up. Now commits `current`/`last` only on full success,
-  stops + resets on failure, and rethrows. Tested (start-throw, health-throw, recover-on-next-start).
-
-**Phase-13 hardening:**
-- **P1** — `assertCommercialDrive` user-data check now also rejects `paid.sqlite-wal`/`-shm` (a crash
-  can leave plaintext DB pages `cleanSidecars` normally shreds) so the final ship gate doesn't rely on
-  `shredStalePlaintext` having run.
-- **P2** — the `build-commercial-drive.{ps1,sh}` native posture cross-check was missing the
-  `allow_telemetry` check + the `workspace/documents/` and WAL/SHM checks that the canonical TS gate
-  enforces; both scripts now mirror `assertCommercialDrive` exactly.
-- **P3** — the Windows `.cmd` launcher picked the *last* matching portable `.exe` (no `break`); now
-  takes the FIRST match, matching the macOS/Linux launchers' selection.
-
-**Comment/doc accuracy:** `measureTokensPerSecond` now documents it counts *stream chunks* (≈ tokens),
-not exact tokens; `preflight.ts` documents the `driveWarnings[0]` coupling to the neutral-profile
-branch; `db.ts` "Electron >= 35" → the actual `^37` pin; provisioning-plan §13.1 `.exe` launcher note
-→ the shipped `.cmd`; `architecture.md` over-specific "Node 22.21" → "Node 22.x".
-
-**New test coverage added (closing audited gaps):** the `os:'linux'` package step + `formatPlan`
-manual-tag-on-package; `assertCommercialDrive` empty-manifests + real-hash *mismatch* + the full
-user-data matrix (plaintext DB / descriptor / WAL / SHM / non-empty + empty `documents/`); `runPreflight`
-`freeBytes == null`; `resolveDriveRootFromLauncher` UNC + mixed-separator inputs.
-
-**Noted, intentionally NOT changed (low risk / by design):** `runtime_events` table is spec-reserved
-but unwritten; the per-import `jobs` Map isn't pruned (tiny, ephemeral); `settings.getSettings` doesn't
-type-guard stored JSON (privacy-safe — the network path is double-gated by the policy AND); `expandPaths`
-follows directory symlinks; `resolveDriveRootFromLauncher` is a canonical reference module not in the
-runtime path (same pattern as `drive.ts`/`assets.ts`). Pervasive "Phase 10 (future)" comment tense left
-as-is (describes *where* a swap lives; not worth the churn).
-
----
-
-## 11. Audit round 4 — Critical/High remediation (2026-06-09)
-
-A fourth five-persona audit (security/privacy · spec-compliance · bug-hunt · docs-vs-code ·
-release/build engineering; full report = [`docs/audit-2026-06-09-multi-persona.md`](docs/audit-2026-06-09-multi-persona.md))
-found 2 Critical + 7 High findings. **All 9 are FIXED.** Gate: typecheck clean, **343/343 tests pass**
-(was 323 — +20 regression tests), build green (main bundle **110.63 kB**). No new dependencies.
-
-**Critical (script↔TS drift in the commercial pipeline):**
-- **C1** — `fetch-runtime.{ps1,sh}` key regex was `[A-Za-z_]+` (no digits) → the `sha256:` line never
-  parsed → runtime-zip verification was structurally dead (would stay UNVERIFIED even with a real
-  committed hash). Fixed (`[A-Za-z0-9_]+`) + the selected build now FAILS LOUDLY if `url`/`sha256`/
-  `extract_to` is missing. Verified end-to-end (real hash → VERIFIED; tampered → delete + exit 1).
-- **C2** — `build-commercial-drive.{ps1,sh}` step 7 checked posture/user-data but left weights to a
-  *manual* instruction (`verify-models` exits 1 only on MISMATCH; MISSING/UNVERIFIED passed) → a
-  placeholder-hash drive shipped with exit 0. New **`verify-models -Strict/--strict`** (every weight
-  VERIFIED + ≥1 weight, mirroring `assertCommercialDrive.weightsVerified`) is now invoked by step 7;
-  any non-VERIFIED weight makes the pipeline exit 1.
-
-**High:**
-- **H1 (spec §3.5 hard rule) — encrypted document cache.** Imported document copies used to rest in
-  PLAINTEXT under `workspace/documents/` even in an encrypted workspace. Now: ingestion takes an
-  optional `DocumentCipher` (`WorkspaceController.documentCipher()`, non-null only for an unlocked
-  encrypted vault) → stored copies are `<id><ext>.enc` (same AES-GCM framing/key as the DB); import
-  parses the original directly (no plaintext ever lands in the store); re-index decrypts to a
-  transient `<id>.parse<ext>` shredded after parsing; a legacy plaintext copy is migrated to `.enc`
-  on re-index. `shredStalePlaintext` now also sweeps `*.parse*`/`*.tmp` transients + the DB `.tmp`
-  (closing audit M9 too). Docs corrected (READ ME FIRST "encrypts everything" over-promise,
-  PRIVACY/SECURITY/security-model/user-guide/drive-layout now state exactly what is/isn't encrypted;
-  SECURITY.md's stale scrypt-primary wording → Argon2id default).
-- **H2** — `RuntimeManager` start/stop now **serialized** through an internal op queue: a second
-  `start()` during a slow GGUF load waits and stops the committed runtime first (no second, orphaned
-  `llama-server`); `stop()` during an in-flight start stops what the start commits; quit-during-start
-  can no longer leak the child.
-- **H3** — `E5Embedder.stop()` now awaits an IN-FLIGHT lazy start and stops whatever it produced, and
-  a `stopped` flag prevents a racing `embed()` from resurrecting the sidecar after quit.
-- **H4** — vault-wipe guard: `createEncryptedVaultOnDisk` refuses when `.enc` exists;
-  `WorkspaceController.create()` refuses while ANY vault artifact exists (valid descriptor, `.enc`,
-  or a CORRUPT descriptor — which now reports state **locked**, not `uninitialized`, so the gate
-  never offers the create flow that would overwrite the data); `unlock` with a corrupt descriptor +
-  intact `.enc` throws a restore-the-descriptor hint. IPC maps the refusal to `{ok:false,
-  reason:'refused'}` with the real message.
-- **H5** — checksum work no longer thrashes the drive: placeholder-hash weights are decided from the
-  manifest alone (NO hashing), and real-hash verification is cached by `(path, size, mtimeMs)`
-  (`clearChecksumCache` for tests; ship gates still always hash fully). Models/Chat screen mounts no
-  longer re-read multi-GB GGUFs.
-- **H6** — the documented zero-weights first-run journey now works: `startRuntime` enforces the spec
-  §7.4 gate in the MAIN process (role must be `chat`; state must be `installed`) with ONE exception —
-  a `missing` model in developer mode starts the mock via the selecting factory. The Models screen
-  shows **Start mock runtime** on missing chat models (dev mode); README/user-guide/troubleshooting
-  updated to match (and the embeddings-model-as-chat-runtime hole, audit M8, is closed by the role
-  gate).
-- **H7** — a commercial drive now ships sidecars for ALL OSes: `build-commercial-drive.{ps1,sh}` loop
-  `fetch-runtime` over win/mac/linux (and `planCommercialDrive`'s step says so); `fetch-runtime.ps1`
-  derives the binary name from the SELECTED build's OS (was hardcoded `llama-server.exe`) and its
-  idempotent skip works cross-OS; an explicit `--os` without `--arch` selects that OS's first build
-  (cross-provisioning from any host).
-
-**New regression tests (+20):** runtime-manager serialization (2), e5 stop-during-start (1), vault
-create-over-existing/corrupt-descriptor (4), checksum cache + placeholder-no-hash (3),
-startRuntime gate (3), encrypted document cache (7, new `encrypted-documents.test.ts`).
-
-**Remaining from the audit (NOT in this round, by scope):** the Medium/Low findings — see the report's
-§5/§6 and prioritized list (§8). _(Update: the Medium correctness cluster was fixed in §12 below.)_
-
----
-
-## 12. Audit round 4 — Medium remediation (2026-06-09)
-
-Follow-up to §11: the audit's Medium correctness cluster (M1–M7, M10, M11; M8/M9 were closed with
-§11). Gate: typecheck clean, **355/355 tests pass** (was 343 — +12 regression tests), build green
-(main bundle **113.71 kB**). No new dependencies. Both pipeline scripts dry-run-smoke-tested; the
-new license-gate parsing validated against the committed manifests in BOTH shells.
-
-- **M1 — regenerate deletes the wrong message.** `deleteLastAssistantMessage` now deletes the
-  conversation's LAST message only if it is an assistant turn (after a failed generation the last
-  turn is the user's — deleting the most recent assistant message destroyed the answer to a
-  *previous* question). The ChatScreen optimistic slice mirrors this.
-- **M2 — conversation switch mid-stream corrupted the transcript.** ChatScreen now tracks the
-  stream's conversation id: the live bubble renders, and the completion/error refresh applies, only
-  when it matches the visible conversation; sidebar + New-chat are disabled while streaming.
-- **M3 — per-document concurrency guard.** `registerDocsIpc` keeps a `processing` set: delete/
-  re-index are refused while the import loop (or another re-index) is processing that document —
-  no more FK violations, duplicate chunk sets, or Windows EBUSY on the stored copy. The
-  "never throws" promise of `processDocument` now holds even when the row vanished mid-pipeline
-  (`infoOrDeleted` returns a synthetic `deleted` info instead of a TypeError).
-- **M4 — lock-while-importing wedge.** The import loop stops cleanly when the vault locks mid-job,
-  and the one-shot reconcile flag is gone: `listDocuments` reconciles rows stuck in an active
-  status whenever nothing is actually running (no live job, empty `processing` set) — so a
-  lock→unlock mid-import leaves re-indexable `failed` rows, not perpetually-disabled "in progress".
-- **M5 — vault file crypto >2 GiB.** `encryptFile`/`decryptFile` now STREAM (8 MiB chunks, GCM tag
-  patched into the reserved header slot after the stream; same `MAGIC|iv|tag|ct` frame — existing
-  vaults unlock unchanged, verified by cross-format tests both directions). `shredFile` overwrites
-  in bounded chunks and ALWAYS unlinks (the old `randomBytes(size)` threw past 2 GiB and skipped
-  the unlink, leaving the plaintext DB behind). A failed decrypt shreds its partial output.
-- **M6 — DOCX confetti chunks.** The chunker pre-coalesces consecutive segments with identical
-  `(pageNumber, sectionLabel)` before windowing — DOCX paragraphs now pack into full ~500-token
-  chunks (instead of one tiny chunk per paragraph silently hitting the 1000-chunk cap), while PDF
-  pages and Markdown sections are untouched (the never-cross-a-boundary invariant holds).
-- **M7 — real-E5 context overflow + giant batch + no timeout.** `E5Embedder` truncates each input
-  to the sidecar context budget (≈1.4 BPE tokens/word safety ratio; E5-small caps at 512 real
-  tokens vs our 500-WORD chunks), embeds in batches of 32, and bounds every request with
-  `AbortSignal.timeout(120 s)` — a wedged sidecar fails the document instead of parking it in
-  `embedding` forever.
-- **M10 — verification gate hardening.** `DEFAULT_SETTINGS.developerMode` is now **false**; a dev
-  build (`AppContext.isDev` = `!app.isPackaged`) counts as developer. The drive policy is now
-  ENFORCED in-app: `registerModelIpc` computes leniency as
-  `(toggle ∨ devBuild) ∧ allow_unverified_models ∧ ¬require_sha256_match` — on a commercial drive
-  unverified weights are rejected (and the mock fallback disabled) regardless of the toggle. The
-  Models screen's mock affordance now comes from the main process (`ModelInfo.startableAsMock`).
-- **M11 — license-review ship gate.** `assertCommercialDrive` gained `checks.licensesApproved`:
-  every shipped model's `license_review.status` must be `approved` (spec §13) — NOT overridable by
-  `--accept-license` (that is download-time acceptance, not a redistribution review). Both
-  `build-commercial-drive.{ps1,sh}` step-7 cross-checks mirror it (flat-parse `status:` from the
-  drive manifests; `runtime-sources.yaml` skipped via the no-`local_path` guard). ⇒ With today's
-  `pending` manifests a commercial build correctly reports NOT SELLABLE until reviews are done.
-
-**New regression tests (+12):** regenerate-after-failure (1), packing + label-isolation (2), E5
-truncation + batching (2), streaming-crypto format compatibility + tamper + shred (4), startRuntime
-dev/isDev/policy-veto matrix (3 net), license-gate fail (1), startableAsMock off for non-devs
-(folded into the listing test).
-
-**Still open from the audit:** the docs-drift sweep (M25–M31) + the Low findings — tracked in the
-report §5/§6. _(Update: closed in §13 below.)_
-
----
-
-## 13. Audit round 4 — remaining Mediums, Lows & docs sweep (2026-06-09)
-
-The final remediation round: everything still open from the audit. Gate: typecheck clean,
-**360/360 tests pass** (was 355 — +5), build green (main bundle **118.87 kB**). No new deps.
-
-**Scripts/packaging (M17–M24 + script Lows):**
-- **M17** — all flat-YAML parsers (fetch-models/verify-models/fetch-runtime ×2 shells + the
-  license gates) strip inline `# comments` before unquoting (the committed
-  `version: b9196  # PLACEHOLDER` no longer leaks into values/filenames).
-- **M18** — `fetch-runtime.{ps1,sh}` reject an `extract_to` that escapes the drive root
-  (`..`/absolute/drive-letter), mirroring TS `planRuntimeDownload`.
-- **M19** — `setup-dev.{ps1,sh}` PROBE `--use-system-ca` before using it (unknown-flag abort on
-  Node 22.5–22.14) and APPEND to a pre-existing `NODE_OPTIONS`; `engines` added to
-  `apps/desktop/package.json`.
-- **M20** — `.gitattributes`: `launchers/*.cmd` + `READ*` are **CRLF** (LF-only batch parsing is
-  unsupported cmd.exe territory; these ship verbatim to customer drives). Renormalized.
-- **M21** — ONE manifest source of truth: all three launchers export
-  `PAID_MANIFESTS_DIR=<drive>/model-manifests` (what the scripts verified is what the app loads);
-  `resolveManifestsDir` falls back to the walk-up when an override path is missing. The
-  `.command` `open`-fallback (which dropped the env → silent non-drive workspace) now fails with
-  a friendly message instead.
-- **M22** — every PS script normalizes a relative `-Target` to a full path up front (.NET IO +
-  curl.exe resolve against the PROCESS cwd, which ignores `Set-Location`).
-- **M23** — bash 3.2 + `set -u`: empty `MANIFEST_FILES` arrays are guarded (an empty
-  `model-manifests/` no longer crashes; `verify-models --strict` still exits 1).
-- **M24** — the bash posture greps tolerate arbitrary whitespace + note policy.json is
-  machine-generated. Lows: stale `.aria2` control files removed on mismatch; `verify-models`
-  excludes `runtime-sources.yaml`; Windows-on-ARM arch via `PROCESSOR_ARCHITEW6432`; `.gitignore`
-  gains `*.sqlite-wal`/`-shm`.
-- **M30** — the broken `lint` scripts (eslint was never installed) removed from both
-  package.json files; plan doc corrected (`typecheck` is the static gate).
-
-**App (M12–M16 + SEC/code Lows):**
-- **M12** — spec §2.1 "first-run hardware benchmark": a never-benchmarked workspace is
-  benchmarked automatically in the background once it becomes usable (plaintext open at startup,
-  or unlock/create) — `maybeRunFirstBenchmark` in `registerBenchmarkIpc.ts`.
-- **M13** — spec §7.6 "export chat transcript": `exportTranscript` (Markdown, incl. citations) +
-  `exportConversation` IPC (OS save dialog in main) + an Export button on the Chat screen.
-- **M14** — spec §7.11 Diagnostics completed: app name/version, selected model, hardware profile,
-  live runtime status (`getRuntimeStatus` IPC), and a local-log viewer (`getLogTail` IPC, tail of
-  `app.log`).
-- **M16** — drive detection WITHOUT the launcher: `findPreparedDriveRoot` walks up from the app's
-  own location (`PORTABLE_EXECUTABLE_DIR` for the Windows portable target, else the exe dir) to
-  the `config/drive.json` marker — a buyer who double-clicks the app directly still lands on the
-  drive workspace (an exe in Downloads does NOT create a workspace there: marker required).
-- **SEC-B** — descriptor-supplied KDF params are bounds-checked (`keyLen === 32`; argon2id
-  `m ≤ 2 GiB`, scrypt power-of-two `N ≤ 2^22`…): a tampered descriptor can no longer turn every
-  unlock into a multi-GB allocation. **SEC-C** — the vault key is zeroed (`fill(0)`) on lock.
-  **SEC-F** — `updateSettings` persists only known `AppSettings` keys with type-matching values.
-- **L1** — non-OK sidecar responses cancel the body (undici connection released). **L2** — a stop
-  before the first token persists nothing (no permanent empty assistant bubble); shared
-  `emptyAssistantMessage` in chat + RAG. **L5** — a failed backend init shows a fatal-error screen
-  instead of faking `unlocked` and surfacing raw IPC errors everywhere.
-
-**Docs sweep (M15, M25–M31 + doc Lows):** offline-guard gating described correctly everywhere
-(M27); `architecture.md` updated for Phases 9/11–13 modules, the new IPC, and the module↔spec map
-(M28); BUILD_STATE §3/§4 stale "four manifests"/IPC list/runtime-sources-pin claims corrected
-(M29); `rag-design.md` embedder mechanism (M31); drive-layout.md documents the spec §6
-`updates/`/`backups/`/`runtime/embeddings` divergences + a manual **"Updating a drive"** section
-(M15/spec §12.3); README Node version, `manifest.ts` `local_path` comment, user-guide status
-label, CLAUDE.md `package` command, PRIVACY.md no-downloader-ships-today caveat, sample-data +
-model-manifests READMEs.
-
----
-
-## 14. Manual-acceptance prep: real llama.cpp pin + license reviews (2026-06-10)
-
-The in-repo half of the manual-acceptance path (BUILD_STATE §5 / audit next-steps 1.1 + 1.4):
-
-- **`runtime-sources.yaml` is PINNED to a REAL release: `ggml-org/llama.cpp@b9585`**, with real
-  per-OS asset URLs and SHA-256 checksums computed from the actually-downloaded assets
-  (win/x64 cpu zip · mac/arm64 metal tar.gz · linux/x64 cpu tar.gz). R5's "fetch-runtime 404s"
-  blocker is gone.
-- **Current-release format handled:** the macOS/Linux assets are now `.tar.gz` (not `.zip`) and
-  nest everything under `llama-<tag>/`, with `lib*.so`/`.dylib` **version symlinks** inside.
-  `fetch-runtime.{ps1,sh}` now: name the archive from the URL basename; extract tar.gz via
-  tar (bsdtar on Windows); **flatten** nested layouts so `llama-server[.exe]` lands at
-  `runtime/llama.cpp/<os>/`; **materialize symlinks as copies, multi-pass for chains**
-  (Windows hosts and exFAT drives cannot hold symlinks); and **exit 1 if the binary is not
-  present after extraction** (was a warning). `assets.ts planRuntimeDownload` names the
-  archive from the URL too (+ tar.gz test).
-- **Corporate-proxy fix:** schannel curl fails CRL/OCSP behind TLS-intercepting proxies
-  (`CRYPT_E_NO_REVOCATION_CHECK`); the fetch scripts pass `--ssl-revoke-best-effort`
-  (Windows curl always; bash only when `curl --version` reports schannel). Integrity remains
-  enforced by the SHA-256 pins.
-- **Verified END-TO-END on this machine, both shells:** real download → `archive VERIFIED`
-  (hash match) → extraction → flatten → `llama-server[.exe]` at the extract root for **all
-  three OSes** from a Windows host; idempotent re-run skips. A tampered hash deletes + fails.
-- **License reviews COMPLETED (spec §13, audit M11):** all six manifests are now
-  `license_review.status: approved` (reviewed 2026-06-10, Claude-assisted, upstream licenses
-  verified via the Hugging Face API): the five Qwen3 GGUF repos are **apache-2.0** (official
-  Qwen org quantizations); multilingual-E5's **base model is MIT**. ⚠️ Caveat recorded in the
-  E5 manifest notes: the GGUF quant repo (ChristianAzinn) declares no separate license field —
-  treated as MIT via the base model (mechanical quantization); re-quantize in-house or switch
-  quant source if stricter provenance is wanted before selling. `fetch-models` no longer needs
-  `--accept-license`; the commercial license gate now passes.
-- Docs updated (README + model-policy placeholder warnings → pinned-release notes).
-- Gate: typecheck clean, **361/361 tests**, build green.
-
-**Remaining manual acceptance:** fetch the weights onto the user's prepared drive + promote the
-weight hashes (`verify-models --generate`), the live real-model smoke test, `npm run package:win`
-+ post-package smoke, certs (R7) + `build-commercial-drive` + the spec §17 USB demo.
-
-**Still open (accepted/architectural):** the spec-gap items that are conscious product decisions —
-no full Onboarding wizard (the WorkspaceGate + auto-benchmark + Home cover the §17 flow),
-`ChatOptions.mode` Fast/Balanced/Deep stays dead plumbing, `runtime_events` unwritten, no
-`sample-contract.pdf` fixture, importDocuments accepts caller paths (picker-only hardening
-deferred), and the offline guard remains detection-only. All tracked in the audit report.
+**Still open by choice:** the consciously-accepted items (no onboarding wizard, dead
+Fast/Balanced/Deep plumbing, `runtime_events` unwritten, picker-only import hardening deferred,
+detection-only offline guard, …) are documented in
+[`docs/known-limitations.md`](docs/known-limitations.md).

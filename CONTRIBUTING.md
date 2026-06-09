@@ -27,3 +27,10 @@ npm test
 - TypeScript, strict mode. Prefer small, well-named modules.
 - Each backend service hides behind an interface (see spec §9.2) so it stays swappable.
 - Match the surrounding code's style and comment density.
+
+## Scripts mirror canonical TypeScript modules
+The self-contained shell scripts (`scripts/*.{ps1,sh}`) re-implement logic whose canonical,
+unit-tested source lives in `apps/desktop/src/main/services/` (`drive.ts`, `assets.ts`,
+`commercial-drive.ts`, `launcher.ts`). **When you change one side, change the other in the same
+PR.** Script↔TS drift in safety-critical paths (hash verification, the commercial ship gate) was
+the root cause of both Critical findings in the post-MVP audits — treat any divergence as a bug.
