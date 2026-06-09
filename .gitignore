@@ -1,6 +1,9 @@
 # Dependencies
 node_modules/
 
+# External SSD Volume Data
+System Volume Information/
+
 # Build output
 dist/
 out/
