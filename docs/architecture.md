@@ -64,6 +64,12 @@ the whole DB file is encrypted at rest.
   the active runtime). `local_path` is resolved **relative to the drive root**, so weights live at
   `<root>/models/...`. SHA-256 is streamed (large GGUFs never fully buffer). Placeholder hashes are
   treated as installed only in developer mode; otherwise they fail the §7.4 verification gate.
+- **Checksum cache (two tiers).** Hashing a multi-GB GGUF takes minutes of USB I/O, so verified
+  hashes are cached by `(path, size, mtime)`: an in-memory map (L1) plus the persisted
+  `AppSettings.checksumCache` (L2, injected as a `HashStore`), so an unchanged weight file is hashed
+  **once ever**, not once per session. A size/mtime change re-hashes; the Models screen's
+  **Verify checksum** button calls the `verifyModel` IPC, which drops the cache entry and re-hashes
+  for real. The ship-time gates (`verify-models --strict`, `assertCommercialDrive`) always hash fully.
 - **Recommendation** is data-driven: each manifest lists `recommended_profiles`; the picker returns
   the first chat/embedding model matching the current hardware profile. The profile comes from the
   persisted Phase-7 benchmark (`lastBenchmark?.profile`), defaulting to `UNKNOWN` until the user runs
@@ -72,8 +78,13 @@ the whole DB file is encrypted at rest.
   single active runtime and restarts it on model switch. `MockRuntime` returns healthy immediately;
   its `chatStream` is a stub until Phase 3, and the real `LlamaRuntime` (localhost-only sidecar)
   lands in Phase 10. The factory passed to `RuntimeManager` is the only thing that changes.
-- **IPC** (`ipc/registerModelIpc.ts`): `listModels`, `selectModel`, `startRuntime`, `stopRuntime`.
-  The active runtime is stopped on `will-quit`.
+- **IPC** (`ipc/registerModelIpc.ts`): `listModels`, `selectModel`, `verifyModel`, `startRuntime`,
+  `stopRuntime`. The active runtime is stopped on `will-quit`.
+- **Auto-start (post-MVP).** `maybeAutoStartActiveModel` starts the persisted `activeModelId` in the
+  background once the workspace is usable (app launch for plaintext dev; unlock/create for
+  encrypted), so a restarted app matches what Home shows. Same §7.4 install gate as the manual
+  `startRuntime`; fire-and-forget like `maybeRunFirstBenchmark` (failures are logged, manual start
+  still works). Opt-out via `AppSettings.autoStartActiveModel` (Settings toggle, default ON).
 
 ## Chat & streaming (Phase 3)
 - **`services/chat.ts`** (spec §7.6) owns conversation/message persistence and prompt
@@ -99,13 +110,18 @@ the whole DB file is encrypted at rest.
   the renderer's streaming + stop path is exercised with zero model files. The real
   `LlamaRuntime` (Phase 10) swaps in behind the same `ModelRuntime` interface.
 - **Runtime requirement (decision).** `sendChatMessage` does **not** auto-start a runtime: a chat
-  needs a model explicitly started on the Models screen (`RuntimeManager.start()`). With no active
-  runtime the handler throws and the Chat screen shows a "start a model" empty state that links to
-  Models. Rationale: starting the real llama.cpp sidecar is heavy and is an explicit user action;
-  keeping it explicit keeps the service boundary clean and the error path obvious.
+  needs a started model (`RuntimeManager.start()`). With no active runtime the handler throws and
+  the Chat screen shows a "start a model" empty state that links to Models (and polls
+  `getRuntimeStatus` so it flips to the composer by itself once the background auto-start — see the
+  Models section — finishes loading). Rationale: starting the real llama.cpp sidecar mid-request is
+  heavy and surprising; the startup auto-start is a deliberate, bounded exception that reuses the
+  same gated start path.
 - **IPC** (`ipc/registerChatIpc.ts`): `createConversation`, `listConversations`, `listMessages`,
-  `sendChatMessage` (streaming), `stopGeneration`. Regenerate reuses `sendChatMessage` with
-  `options.regenerate` — it deletes the last assistant message, then re-streams from history.
+  `sendChatMessage` (streaming), `stopGeneration`, `deleteConversation`. Regenerate reuses
+  `sendChatMessage` with `options.regenerate` — it deletes the last assistant message, then
+  re-streams from history. `deleteConversation` removes a conversation (chat or document Q&A) and
+  its messages; it refuses while a stream is in flight for that conversation (the persisted
+  assistant turn would otherwise resurrect/violate the FK after the delete).
 
 ## Document ingestion (Phase 4)
 - **`services/ingestion/`** (spec §7.7). `parsers/` implements the `DocumentParser` interface

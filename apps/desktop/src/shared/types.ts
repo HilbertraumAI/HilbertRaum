@@ -163,6 +163,27 @@ export interface AppSettings {
   gpuLastError: string | null
   /** Cached `--list-devices` probe result (feeds Diagnostics + classifyProfile). */
   gpuProbe: GpuProbeResult | null
+  // ---- Startup & verification polish (post-MVP) ----
+  /**
+   * Start the runtime for the selected (active) chat model automatically when the
+   * workspace becomes usable (app launch / unlock). Default ON — a restarted app
+   * showing an "active" model that silently was not running confused users.
+   */
+  autoStartActiveModel: boolean
+  /**
+   * Persisted SHA-256 cache for model weight files, keyed by absolute path. An entry
+   * is trusted only while the file's size AND mtime still match; a replaced/changed
+   * file is re-hashed. Lives in settings (like `lastBenchmark` — spec §8 defines no
+   * extra table), so on an encrypted workspace it is encrypted at rest with the DB.
+   */
+  checksumCache: Record<string, ChecksumCacheEntry>
+}
+
+/** One persisted weight-file hash (see `AppSettings.checksumCache`). */
+export interface ChecksumCacheEntry {
+  size: number
+  mtimeMs: number
+  sha256: string
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -185,7 +206,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   gpuMode: 'auto',
   gpuAutoDisabled: false,
   gpuLastError: null,
-  gpuProbe: null
+  gpuProbe: null,
+  autoStartActiveModel: true,
+  checksumCache: {}
 }
 
 // ---- GPU probe (Phase 15) ----

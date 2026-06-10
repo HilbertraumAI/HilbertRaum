@@ -3,6 +3,7 @@ import { IPC } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
 import { WrongPasswordError } from '../services/workspace-vault'
 import { maybeRunFirstBenchmark } from './registerBenchmarkIpc'
+import { maybeAutoStartActiveModel } from './registerModelIpc'
 import { log } from '../services/logging'
 import type {
   WorkspaceActionResult,
@@ -27,6 +28,8 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
       log.info('Workspace unlocked')
       // First unlock of a never-benchmarked workspace → background benchmark (M12).
       maybeRunFirstBenchmark(ctx)
+      // Bring the selected model's runtime back up in the background (post-MVP polish).
+      maybeAutoStartActiveModel(ctx)
       return { ok: true, state }
     } catch (err) {
       if (err instanceof WrongPasswordError) {
@@ -52,6 +55,9 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
         log.info('Workspace created', { mode })
         // A fresh workspace has never been benchmarked → background benchmark (M12).
         maybeRunFirstBenchmark(ctx)
+        // A fresh workspace has no active model yet; this is a no-op then, but covers
+        // re-created vaults that restored settings.
+        maybeAutoStartActiveModel(ctx)
         return { ok: true, state }
       } catch (err) {
         // Plaintext refused by policy, and create-over-an-existing-vault (H4: would wipe

@@ -71,7 +71,7 @@ export function HomeScreen({ onNavigate }: Props): JSX.Element {
         <button className="btn" onClick={() => onNavigate('documents')}>
           Import Documents
         </button>
-        <button className="btn" onClick={() => onNavigate('documents')}>
+        <button className="btn" onClick={() => onNavigate('ask-documents')}>
           Ask My Documents
         </button>
       </div>

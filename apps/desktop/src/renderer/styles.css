@@ -185,6 +185,20 @@ h2 { font-size: 15px; margin: 0 0 12px; }
 .chat-sidebar { display: flex; flex-direction: column; gap: 10px; min-height: 0; }
 .chat-new { align-self: stretch; }
 .chat-conv-list { display: flex; flex-direction: column; gap: 4px; overflow-y: auto; min-height: 0; }
+.chat-conv-row { display: flex; gap: 4px; align-items: stretch; min-width: 0; }
+.chat-conv-row .chat-conv { flex: 1; min-width: 0; }
+.chat-conv-delete {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  border-radius: 8px;
+  font-size: 11px;
+  cursor: pointer;
+  padding: 0 8px;
+  flex-shrink: 0;
+}
+.chat-conv-delete:hover:not(:disabled) { color: #f87171; border-color: #f87171; }
+.chat-conv-delete:disabled { opacity: 0.5; cursor: default; }
 .chat-conv {
   text-align: left;
   background: var(--panel);
@@ -255,6 +269,20 @@ h2 { font-size: 15px; margin: 0 0 12px; }
 .msg-copy:hover { color: var(--text); }
 .cursor { color: var(--accent); animation: blink 1s steps(2, start) infinite; }
 @keyframes blink { to { visibility: hidden; } }
+
+/* Small inline loading spinner (Models checksum check, runtime warm-up hints). */
+.spinner {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  vertical-align: -2px;
+  margin-right: 4px;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
 
 /* RAG source-snippet panel (Phase 6) */
 .msg-sources { margin-top: 10px; border-top: 1px solid var(--border); padding-top: 8px; }

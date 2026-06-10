@@ -14,13 +14,15 @@ type Mode = 'chat' | 'documents'
 
 interface Props {
   onNavigate: (screen: string) => void
+  /** Composer mode to open with — Home's "Ask My Documents" passes 'documents'. */
+  initialMode?: Mode
 }
 
-export function ChatScreen({ onNavigate }: Props): JSX.Element {
+export function ChatScreen({ onNavigate, initialMode }: Props): JSX.Element {
   const [conversations, setConversations] = useState<Conversation[]>([])
   const [activeId, setActiveId] = useState<string | null>(null)
   const [messages, setMessages] = useState<Message[]>([])
-  const [mode, setMode] = useState<Mode>('chat')
+  const [mode, setMode] = useState<Mode>(initialMode ?? 'chat')
   const [input, setInput] = useState('')
   const [streaming, setStreaming] = useState(false)
   const [streamText, setStreamText] = useState('')
@@ -43,14 +45,25 @@ export function ChatScreen({ onNavigate }: Props): JSX.Element {
   }, [])
 
   const checkRuntime = useCallback(async (): Promise<void> => {
-    const models = await window.api.listModels()
-    setRuntimeRunning(models.some((m) => m.state === 'running'))
+    const status = await window.api.getRuntimeStatus()
+    setRuntimeRunning(status.running)
   }, [])
 
   useEffect(() => {
     void refreshConversations()
     void checkRuntime().catch(() => setRuntimeRunning(false))
   }, [refreshConversations, checkRuntime])
+
+  // While no runtime is up, poll: the app may still be auto-starting the selected model
+  // in the background (it can take a while to load a large GGUF), and the screen should
+  // flip to the composer on its own instead of demanding a manual "Re-check".
+  useEffect(() => {
+    if (runtimeRunning !== false) return
+    const timer = setInterval(() => {
+      void checkRuntime().catch(() => undefined)
+    }, 2500)
+    return () => clearInterval(timer)
+  }, [runtimeRunning, checkRuntime])
 
   // Load history when the active conversation changes.
   useEffect(() => {
@@ -170,6 +183,24 @@ export function ChatScreen({ onNavigate }: Props): JSX.Element {
     setMode(c.mode)
   }
 
+  // Delete a conversation (chat or document Q&A) and its messages — permanent.
+  async function onDeleteConversation(c: Conversation): Promise<void> {
+    if (streaming) return
+    if (!window.confirm(`Delete "${c.title}"? This permanently removes the conversation and its messages.`)) {
+      return
+    }
+    try {
+      await window.api.deleteConversation(c.id)
+      if (activeId === c.id) {
+        setActiveId(null)
+        setMessages([])
+      }
+      await refreshConversations()
+    } catch (e) {
+      setError(String(e instanceof Error ? e.message : e))
+    }
+  }
+
   // Switching mode starts a fresh composition: if the active conversation is in a
   // different mode, deselect it so the next send creates a conversation in the new mode.
   function onSelectMode(next: Mode): void {
@@ -196,6 +227,10 @@ export function ChatScreen({ onNavigate }: Props): JSX.Element {
             pick a model, then choose <b>Start runtime</b>. Everything stays local — nothing is
             downloaded or sent anywhere.
           </p>
+          <p className="hint">
+            <span className="spinner" /> If you just opened the app, your selected model may still
+            be loading — this screen continues automatically once it is ready.
+          </p>
           <div className="actions" style={{ marginTop: 12 }}>
             <button className="btn primary" onClick={() => onNavigate('models')}>
               Go to Models
@@ -220,16 +255,26 @@ export function ChatScreen({ onNavigate }: Props): JSX.Element {
         <div className="chat-conv-list">
           {conversations.length === 0 && <p className="hint">No conversations yet.</p>}
           {conversations.map((c) => (
-            <button
-              key={c.id}
-              className={`chat-conv ${c.id === activeId ? 'active' : ''}`}
-              disabled={streaming && c.id !== activeId}
-              onClick={() => onSelectConversation(c)}
-              title={c.title}
-            >
-              {c.mode === 'documents' && <span className="chat-conv-badge">DOC</span>}
-              {c.title}
-            </button>
+            <div key={c.id} className="chat-conv-row">
+              <button
+                className={`chat-conv ${c.id === activeId ? 'active' : ''}`}
+                disabled={streaming && c.id !== activeId}
+                onClick={() => onSelectConversation(c)}
+                title={c.title}
+              >
+                {c.mode === 'documents' && <span className="chat-conv-badge">DOC</span>}
+                {c.title}
+              </button>
+              <button
+                className="chat-conv-delete"
+                disabled={streaming}
+                title="Delete conversation"
+                aria-label={`Delete conversation "${c.title}"`}
+                onClick={() => void onDeleteConversation(c)}
+              >
+                ✕
+              </button>
+            </div>
           ))}
         </div>
       </aside>

@@ -36,6 +36,9 @@ const NAV: NavItem[] = [
 
 export function App(): JSX.Element {
   const [screen, setScreen] = useState<ScreenId>('home')
+  // Which composer mode the Chat screen opens with. Home's "Ask My Documents" jumps
+  // straight into a document-Q&A chat; plain "Chat" navigation resets to chat mode.
+  const [chatMode, setChatMode] = useState<'chat' | 'documents'>('chat')
   // Phase 9: the workspace lifecycle gate. Null = still loading; not 'unlocked' = show
   // the create-password / unlock gate before the normal app shell.
   const [workspace, setWorkspace] = useState<WorkspaceStateInfo | null>(null)
@@ -83,6 +86,18 @@ export function App(): JSX.Element {
       active = false
     }
   }, [screen, unlocked])
+
+  // Central navigation: 'ask-documents' is a virtual target meaning "Chat screen in
+  // documents mode" (Home's Ask My Documents used to land on the import screen).
+  function navigate(target: string): void {
+    if (target === 'ask-documents') {
+      setChatMode('documents')
+      setScreen('chat')
+      return
+    }
+    if (target === 'chat') setChatMode('chat')
+    setScreen(target as ScreenId)
+  }
 
   async function lockNow(): Promise<void> {
     const next = await window.api.lockWorkspace()
@@ -139,7 +154,7 @@ export function App(): JSX.Element {
             <li key={item.id}>
               <button
                 className={`nav-item ${screen === item.id ? 'active' : ''}`}
-                onClick={() => setScreen(item.id)}
+                onClick={() => navigate(item.id)}
               >
                 <span className="nav-icon">{item.icon}</span>
                 {item.label}
@@ -172,8 +187,8 @@ export function App(): JSX.Element {
             </p>
           </div>
         )}
-        {screen === 'home' && <HomeScreen onNavigate={(s) => setScreen(s as ScreenId)} />}
-        {screen === 'chat' && <ChatScreen onNavigate={(s) => setScreen(s as ScreenId)} />}
+        {screen === 'home' && <HomeScreen onNavigate={navigate} />}
+        {screen === 'chat' && <ChatScreen onNavigate={navigate} initialMode={chatMode} />}
         {screen === 'documents' && <DocumentsScreen />}
         {screen === 'models' && <ModelsScreen />}
         {screen === 'privacy' && <PrivacyScreen />}

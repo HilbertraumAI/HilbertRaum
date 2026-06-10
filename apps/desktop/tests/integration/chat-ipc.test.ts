@@ -21,7 +21,7 @@ import { registerChatIpc } from '../../src/main/ipc/registerChatIpc'
 import { inFlightStreams } from '../../src/main/ipc/inflight'
 import { IPC, STREAM } from '../../src/shared/ipc'
 import { openDatabase, type Db } from '../../src/main/services/db'
-import { createConversation, listMessages, appendMessage } from '../../src/main/services/chat'
+import { createConversation, listConversations, listMessages, appendMessage } from '../../src/main/services/chat'
 import type { ModelRuntime, RuntimeChatOptions, ChatMessage } from '../../src/main/services/runtime'
 import type { AppContext } from '../../src/main/services/context'
 import { invoke, invokeWithEvent, makeEvent, type IpcHandlers } from '../helpers/ipc'
@@ -158,5 +158,42 @@ describe('registerChatIpc', () => {
     await expect(
       invoke(handlers, IPC.sendChatMessage, conv.id, '', { regenerate: true })
     ).rejects.toThrow(/Nothing to regenerate/)
+  })
+
+  it('deletes a conversation and its messages (chat and documents mode alike)', async () => {
+    const db = freshDb()
+    registerChatIpc(makeCtx(db, null))
+    const chat = createConversation(db, {})
+    const docs = createConversation(db, { mode: 'documents' })
+    appendMessage(db, { conversationId: chat.id, role: 'user', content: 'hi' })
+    appendMessage(db, { conversationId: chat.id, role: 'assistant', content: 'hello' })
+    appendMessage(db, { conversationId: docs.id, role: 'user', content: 'what does it say?' })
+
+    await invoke(handlers, IPC.deleteConversation, chat.id)
+    expect(listConversations(db).map((c) => c.id)).toEqual([docs.id])
+    expect(listMessages(db, chat.id)).toHaveLength(0)
+    // The other conversation is untouched.
+    expect(listMessages(db, docs.id)).toHaveLength(1)
+
+    await invoke(handlers, IPC.deleteConversation, docs.id)
+    expect(listConversations(db)).toHaveLength(0)
+  })
+
+  it('refuses to delete a conversation while a response is streaming into it', async () => {
+    const db = freshDb()
+    const { runtime, release, started } = gatedRuntime()
+    const conv = createConversation(db, {})
+    registerChatIpc(makeCtx(db, runtime))
+
+    const p = invoke(handlers, IPC.sendChatMessage, conv.id, 'hi')
+    await started
+    await expect(invoke(handlers, IPC.deleteConversation, conv.id)).rejects.toThrow(
+      /still being generated/
+    )
+    release()
+    await p
+    // After the stream finishes the delete goes through.
+    await invoke(handlers, IPC.deleteConversation, conv.id)
+    expect(listConversations(db)).toHaveLength(0)
   })
 })

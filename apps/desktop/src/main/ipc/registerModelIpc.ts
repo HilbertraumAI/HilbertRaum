@@ -1,13 +1,15 @@
 import { ipcMain } from 'electron'
 import { IPC } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
-import type { AppSettings, ModelInfo, RuntimeInstallInfo, RuntimeStatus } from '../../shared/types'
+import type { AppSettings, ModelInfo, ModelState, RuntimeInstallInfo, RuntimeStatus } from '../../shared/types'
 import { readRuntimeMarker } from '../services/assets'
 import { llamaServerDir } from '../services/runtime/sidecar'
 import {
   buildModelList,
   computeInstallState,
+  createSettingsHashStore,
   discoverManifests,
+  invalidateChecksum,
   selectModel,
   weightPath
 } from '../services/models'
@@ -19,18 +21,87 @@ import { log } from '../services/logging'
 // The hardware profile comes from the persisted Phase-7 benchmark (`lastBenchmark`),
 // falling back to UNKNOWN until the user runs the benchmark for the first time.
 
-export function registerModelIpc(ctx: AppContext): void {
-  /**
-   * Effective checksum leniency (M10): "developer" is the user toggle OR a dev build —
-   * but the drive POLICY is authoritative and can only restrict. On a commercial drive
-   * (`require_sha256_match: true` / `allow_unverified_models: false`) unverified weights
-   * are rejected no matter what the toggle says; this also disables the mock fallback.
-   */
-  const developerLeniency = (s: AppSettings): boolean => {
-    const { policy } = loadPolicy(ctx.paths.configPath)
-    const developer = s.developerMode || ctx.isDev
-    return developer && policy.models.allowUnverifiedModels && !policy.models.requireSha256Match
+/**
+ * Effective checksum leniency (M10): "developer" is the user toggle OR a dev build —
+ * but the drive POLICY is authoritative and can only restrict. On a commercial drive
+ * (`require_sha256_match: true` / `allow_unverified_models: false`) unverified weights
+ * are rejected no matter what the toggle says; this also disables the mock fallback.
+ */
+function developerLeniency(ctx: AppContext, s: AppSettings): boolean {
+  const { policy } = loadPolicy(ctx.paths.configPath)
+  const developer = s.developerMode || ctx.isDev
+  return developer && policy.models.allowUnverifiedModels && !policy.models.requireSha256Match
+}
+
+/**
+ * Start the runtime for a chat model, enforcing the spec §7.4 install gate (shared by
+ * the `startRuntime` IPC handler and the startup auto-start). Throws on any refusal.
+ */
+export async function startModelRuntime(ctx: AppContext, modelId: string): Promise<RuntimeStatus> {
+  if (!ctx.manifestsDir) throw new Error('No model-manifests directory found')
+  const { manifests } = discoverManifests(ctx.manifestsDir)
+  const found = manifests.find((m) => m.manifest.id === modelId)
+  if (!found) throw new Error(`Unknown model id: ${modelId}`)
+  // The chat runtime loads chat models only; an embeddings model here would start
+  // llama-server in chat mode over a 384-dim embedder and produce garbage.
+  if (found.manifest.role !== 'chat') {
+    throw new Error(`Model "${modelId}" is a ${found.manifest.role} model, not a chat model.`)
   }
+
+  const s = getSettings(ctx.db)
+  // Enforce the spec §7.4 gate in the MAIN process (not just a disabled button): only
+  // an installed (verified) model may start. One exception keeps the zero-weights
+  // first-run journey alive — for a developer (toggle or dev build, when the drive
+  // policy permits unverified models) a MISSING model may start, because the selecting
+  // runtime factory then falls back to the built-in mock runtime.
+  const lenient = developerLeniency(ctx, s)
+  const state = await computeInstallState(found.manifest, ctx.paths.rootPath, {
+    developerMode: lenient,
+    hashStore: createSettingsHashStore(ctx.db)
+  })
+  const mockFallback = state === 'missing' && lenient
+  if (state !== 'installed' && !mockFallback) {
+    throw new Error(`Model "${modelId}" cannot be started (state: ${state}).`)
+  }
+
+  log.info('Start runtime', { modelId, state })
+  return ctx.runtime.start({
+    modelId,
+    modelPath: weightPath(ctx.paths.rootPath, found.manifest),
+    contextTokens: found.manifest.recommendedContextTokens || s.contextTokens
+  })
+}
+
+/**
+ * Auto-start the selected (active) chat model in the background once the workspace is
+ * usable (app launch for plaintext_dev; unlock/create for encrypted) — a restarted app
+ * used to show an "active" model whose runtime silently was not running until the user
+ * visited Models and pressed Start. Mirrors `maybeRunFirstBenchmark`: never throws,
+ * never blocks; a failure is logged and the manual start path still works.
+ */
+export function maybeAutoStartActiveModel(ctx: AppContext): void {
+  let modelId: string | null = null
+  try {
+    if (!ctx.workspace.isUnlocked()) return
+    const s = getSettings(ctx.db)
+    if (!s.autoStartActiveModel) return
+    modelId = s.activeModelId
+    if (!modelId) return
+    if (ctx.runtime.activeModelId()) return // something is already running — keep it
+  } catch {
+    return // settings unreadable (e.g. just locked again) — manual start still works
+  }
+  if (!modelId) return
+  log.info('Auto-starting the active model runtime in the background', { modelId })
+  void startModelRuntime(ctx, modelId).catch((err) =>
+    log.warn('Auto-start of the active model failed (start it from the Models screen)', {
+      modelId,
+      error: String(err)
+    })
+  )
+}
+
+export function registerModelIpc(ctx: AppContext): void {
 
   ipcMain.handle(IPC.listModels, async (): Promise<ModelInfo[]> => {
     if (!ctx.manifestsDir) {
@@ -42,8 +113,9 @@ export function registerModelIpc(ctx: AppContext): void {
       manifestsDir: ctx.manifestsDir,
       rootPath: ctx.paths.rootPath,
       profile: s.lastBenchmark?.profile ?? 'UNKNOWN',
-      developerMode: developerLeniency(s),
-      runningModelId: ctx.runtime.activeModelId()
+      developerMode: developerLeniency(ctx, s),
+      runningModelId: ctx.runtime.activeModelId(),
+      hashStore: createSettingsHashStore(ctx.db)
     })
     if (manifestErrors.length > 0) {
       log.warn('Invalid model manifests skipped', manifestErrors)
@@ -57,39 +129,27 @@ export function registerModelIpc(ctx: AppContext): void {
     return selectModel(ctx.db, ctx.manifestsDir, modelId)
   })
 
-  ipcMain.handle(IPC.startRuntime, async (_e, modelId: string): Promise<RuntimeStatus> => {
+  // Forced re-verify (the "Verify checksum" button): drop the cached hash for this
+  // model's weight file and re-hash it for real. `listModels` alone would read the
+  // cache back and confirm nothing.
+  ipcMain.handle(IPC.verifyModel, async (_e, modelId: string): Promise<ModelState> => {
     if (!ctx.manifestsDir) throw new Error('No model-manifests directory found')
     const { manifests } = discoverManifests(ctx.manifestsDir)
     const found = manifests.find((m) => m.manifest.id === modelId)
     if (!found) throw new Error(`Unknown model id: ${modelId}`)
-    // The chat runtime loads chat models only; an embeddings model here would start
-    // llama-server in chat mode over a 384-dim embedder and produce garbage.
-    if (found.manifest.role !== 'chat') {
-      throw new Error(`Model "${modelId}" is a ${found.manifest.role} model, not a chat model.`)
-    }
-
-    const s = getSettings(ctx.db)
-    // Enforce the spec §7.4 gate in the MAIN process (not just a disabled button): only
-    // an installed (verified) model may start. One exception keeps the zero-weights
-    // first-run journey alive — for a developer (toggle or dev build, when the drive
-    // policy permits unverified models) a MISSING model may start, because the selecting
-    // runtime factory then falls back to the built-in mock runtime.
-    const lenient = developerLeniency(s)
+    const store = createSettingsHashStore(ctx.db)
+    invalidateChecksum(weightPath(ctx.paths.rootPath, found.manifest), store)
     const state = await computeInstallState(found.manifest, ctx.paths.rootPath, {
-      developerMode: lenient
+      developerMode: developerLeniency(ctx, getSettings(ctx.db)),
+      hashStore: store
     })
-    const mockFallback = state === 'missing' && lenient
-    if (state !== 'installed' && !mockFallback) {
-      throw new Error(`Model "${modelId}" cannot be started (state: ${state}).`)
-    }
-
-    log.info('Start runtime', { modelId, state })
-    return ctx.runtime.start({
-      modelId,
-      modelPath: weightPath(ctx.paths.rootPath, found.manifest),
-      contextTokens: found.manifest.recommendedContextTokens || s.contextTokens
-    })
+    log.info('Model re-verified', { modelId, state })
+    return state
   })
+
+  ipcMain.handle(IPC.startRuntime, (_e, modelId: string): Promise<RuntimeStatus> =>
+    startModelRuntime(ctx, modelId)
+  )
 
   ipcMain.handle(IPC.stopRuntime, async (): Promise<void> => {
     log.info('Stop runtime')

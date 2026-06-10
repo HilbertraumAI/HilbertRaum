@@ -25,6 +25,13 @@ logs, best-effort shredding on SSDs, no password recovery — are documented in
 - **Archive extraction trusts verified archives.** `fetch-runtime` rejects `extract_to` escapes,
   and archives are SHA-256-verified before extraction — but member paths inside an archive are only
   as trustworthy as the pinned hash in `runtime-sources.yaml`.
+- **The persisted checksum cache trusts size+mtime.** Model weights are SHA-256-hashed once and the
+  result is cached (in memory and in `AppSettings.checksumCache`) keyed by `(path, size, mtime)` —
+  re-hashing multi-GB GGUFs on every visit/launch cost minutes of USB I/O. A same-size,
+  mtime-preserving in-place tamper is therefore not re-detected by the app's routine checks (mtime
+  is attacker-forgeable anyway). Mitigations: the Models screen's **Verify checksum** forces a real
+  re-hash, and the ship-time gates (`verify-models --strict`, `assertCommercialDrive`) always hash
+  fully.
 
 ## Spec features intentionally not built (MVP scope)
 

@@ -129,18 +129,28 @@ export interface ChecksumResult {
   actual: string | null
 }
 
-// ---- checksum cache (H5, audit round 4) -------------------------------------------
+// ---- checksum cache (H5, audit round 4; persisted post-MVP) -----------------------
 // `listModels` runs on every Models-screen visit AND every Chat-screen mount. Without a
 // cache that re-hashed every multi-GB GGUF on the drive each time — minutes of USB I/O
 // per navigation. Hash once per (path, size, mtime); a changed/replaced file re-hashes.
+// Two tiers: an in-memory map (L1) plus an optional injected persistent store (L2,
+// `AppSettings.checksumCache`) so a restarted app does not re-hash unchanged weights.
 // Limitation (accepted): a same-size, mtime-preserving in-place tamper is not re-detected
-// within a session — the ship-time gates (verify-models --strict / assertCommercialDrive)
-// always hash fully, and mtime can be forged by an attacker anyway.
+// while the cache entry lives — the Models screen's "Verify checksum" forces a real
+// re-hash, the ship-time gates (verify-models --strict / assertCommercialDrive) always
+// hash fully, and mtime can be forged by an attacker anyway.
 
-interface CachedHash {
+export interface CachedHash {
   size: number
   mtimeMs: number
   actual: string
+}
+
+/** Persistent (L2) hash cache. `createSettingsHashStore` is the production impl. */
+export interface HashStore {
+  get(path: string): CachedHash | null
+  set(path: string, entry: CachedHash): void
+  delete(path: string): void
 }
 
 const hashCache = new Map<string, CachedHash>()
@@ -148,26 +158,65 @@ const hashCache = new Map<string, CachedHash>()
 /** Test visibility: how many full-file hashes were actually computed. */
 export const checksumCacheStats = { computed: 0 }
 
-/** Drop all cached hashes (tests / an explicit re-verify). */
+/** Drop all in-memory cached hashes (tests / an explicit re-verify). */
 export function clearChecksumCache(): void {
   hashCache.clear()
 }
 
-/** SHA-256 of a file, cached by (path, size, mtimeMs). */
-async function sha256FileCached(filePath: string): Promise<string> {
+/** Drop one file's cached hash everywhere — the "Verify checksum" forced re-hash. */
+export function invalidateChecksum(filePath: string, store?: HashStore): void {
+  hashCache.delete(filePath)
+  store?.delete(filePath)
+}
+
+/** HashStore over `AppSettings.checksumCache` (settings rows live inside the DB). */
+export function createSettingsHashStore(db: Db): HashStore {
+  return {
+    get(path) {
+      const entry = getSettings(db).checksumCache[path]
+      return entry ? { size: entry.size, mtimeMs: entry.mtimeMs, actual: entry.sha256 } : null
+    },
+    set(path, entry) {
+      const cache = { ...getSettings(db).checksumCache }
+      cache[path] = { size: entry.size, mtimeMs: entry.mtimeMs, sha256: entry.actual }
+      updateSettings(db, { checksumCache: cache })
+    },
+    delete(path) {
+      const cache = { ...getSettings(db).checksumCache }
+      if (path in cache) {
+        delete cache[path]
+        updateSettings(db, { checksumCache: cache })
+      }
+    }
+  }
+}
+
+/** SHA-256 of a file, cached by (path, size, mtimeMs) — memory first, then `store`. */
+async function sha256FileCached(filePath: string, store?: HashStore): Promise<string> {
   const st = statSync(filePath)
   const hit = hashCache.get(filePath)
   if (hit && hit.size === st.size && hit.mtimeMs === st.mtimeMs) return hit.actual
+  const persisted = store?.get(filePath)
+  if (persisted && persisted.size === st.size && persisted.mtimeMs === st.mtimeMs) {
+    hashCache.set(filePath, persisted)
+    return persisted.actual
+  }
   const actual = await sha256File(filePath)
   checksumCacheStats.computed += 1
-  hashCache.set(filePath, { size: st.size, mtimeMs: st.mtimeMs, actual })
+  const entry: CachedHash = { size: st.size, mtimeMs: st.mtimeMs, actual }
+  hashCache.set(filePath, entry)
+  store?.set(filePath, entry)
   return actual
 }
 
 /** Verify a weight file against its expected SHA-256 (cached by size+mtime). */
-export async function verifyChecksum(filePath: string, expected: string): Promise<ChecksumResult> {
+export async function verifyChecksum(
+  filePath: string,
+  expected: string,
+  store?: HashStore
+): Promise<ChecksumResult> {
   if (!existsSync(filePath)) return { exists: false, matched: null, actual: null }
-  const actual = await sha256FileCached(filePath)
+  const actual = await sha256FileCached(filePath, store)
   if (!isRealSha256(expected)) return { exists: true, matched: null, actual }
   return { exists: true, matched: actual === expected, actual }
 }
@@ -195,6 +244,8 @@ export function weightPath(rootPath: string, manifest: ModelManifest): string {
 export interface InstallStateOptions {
   /** When true, skip checksum verification for placeholder/dev hashes. */
   developerMode: boolean
+  /** Optional persistent hash cache (L2) so unchanged weights are hashed once ever. */
+  hashStore?: HashStore
 }
 
 /**
@@ -220,7 +271,7 @@ export async function computeInstallState(
     return opts.developerMode ? 'installed' : 'checksum_failed'
   }
 
-  const check = await verifyChecksum(path, manifest.sha256)
+  const check = await verifyChecksum(path, manifest.sha256, opts.hashStore)
   if (check.matched === false) return 'checksum_failed'
   return 'installed'
 }
@@ -267,6 +318,8 @@ export interface BuildModelListOptions {
   developerMode: boolean
   /** Model id currently loaded in a running runtime, if any. */
   runningModelId?: string | null
+  /** Optional persistent hash cache (L2) so unchanged weights are hashed once ever. */
+  hashStore?: HashStore
 }
 
 export interface ModelListResult {
@@ -287,7 +340,8 @@ export async function buildModelList(opts: BuildModelListOptions): Promise<Model
   const models: ModelInfo[] = []
   for (const { manifest } of manifests) {
     let state = await computeInstallState(manifest, opts.rootPath, {
-      developerMode: opts.developerMode
+      developerMode: opts.developerMode,
+      hashStore: opts.hashStore
     })
     if (opts.runningModelId && manifest.id === opts.runningModelId && state === 'installed') {
       state = 'running'

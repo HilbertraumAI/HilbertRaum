@@ -17,7 +17,7 @@ vi.mock('electron', () => ({
 }))
 
 import { registerCoreIpc } from '../../src/main/ipc/registerCoreIpc'
-import { registerModelIpc } from '../../src/main/ipc/registerModelIpc'
+import { maybeAutoStartActiveModel, registerModelIpc } from '../../src/main/ipc/registerModelIpc'
 import { IPC } from '../../src/shared/ipc'
 import { openDatabase, type Db } from '../../src/main/services/db'
 import { seedSettings, updateSettings } from '../../src/main/services/settings'
@@ -212,5 +212,83 @@ describe('registerModelIpc', () => {
     await expect(invoke(handlers, IPC.startRuntime, 'multilingual-e5-small-q8')).rejects.toThrow(
       /not a chat model/
     )
+  })
+
+  it('verifyModel reports the fresh install state and throws on an unknown id', async () => {
+    const ctx = {
+      db: seededDb(),
+      manifestsDir: REPO_MANIFESTS,
+      paths: noWeightPaths(),
+      isDev: true,
+      runtime: { activeModelId: () => null }
+    } as unknown as AppContext
+    registerModelIpc(ctx)
+    const { result } = await invoke(handlers, IPC.verifyModel, 'qwen3-4b-instruct-q4')
+    expect(result).toBe('missing') // no weights on disk in this fixture
+    await expect(invoke(handlers, IPC.verifyModel, 'nope')).rejects.toThrow(/Unknown model id/)
+  })
+})
+
+// Post-MVP: a restarted app showed an "active" model whose runtime was not running until
+// the user manually pressed Start on the Models screen. maybeAutoStartActiveModel brings
+// it up in the background once the workspace is usable — and must never throw/block.
+describe('maybeAutoStartActiveModel', () => {
+  function autoStartCtx(opts: {
+    db: Db
+    unlocked?: boolean
+    runningModelId?: string | null
+    onStart?: () => void
+  }): AppContext {
+    return {
+      db: opts.db,
+      manifestsDir: REPO_MANIFESTS,
+      paths: { rootPath: join(tmpdir(), 'paid-no-weights'), configPath: bogusConfigDir() },
+      isDev: true, // developer leniency → the missing-weights model may start (mock fallback)
+      workspace: { isUnlocked: () => opts.unlocked !== false },
+      runtime: {
+        start: async () => {
+          opts.onStart?.()
+          return { running: true, modelId: 'x', port: null, healthy: true, message: 'ok' }
+        },
+        activeModelId: () => opts.runningModelId ?? null
+      }
+    } as unknown as AppContext
+  }
+
+  it('starts the persisted active model in the background', async () => {
+    const db = seededDb()
+    updateSettings(db, { activeModelId: 'qwen3-4b-instruct-q4' })
+    let resolveStarted!: () => void
+    const started = new Promise<void>((r) => (resolveStarted = r))
+    maybeAutoStartActiveModel(autoStartCtx({ db, onStart: resolveStarted }))
+    await started // resolves only if the runtime start was actually invoked
+  })
+
+  it('does nothing without an active model, when disabled, when locked, or when already running', async () => {
+    let starts = 0
+    const onStart = (): void => {
+      starts += 1
+    }
+
+    // No active model selected.
+    maybeAutoStartActiveModel(autoStartCtx({ db: seededDb(), onStart }))
+
+    // Toggle off.
+    const dbOff = seededDb()
+    updateSettings(dbOff, { activeModelId: 'qwen3-4b-instruct-q4', autoStartActiveModel: false })
+    maybeAutoStartActiveModel(autoStartCtx({ db: dbOff, onStart }))
+
+    // Workspace locked.
+    const dbLocked = seededDb()
+    updateSettings(dbLocked, { activeModelId: 'qwen3-4b-instruct-q4' })
+    maybeAutoStartActiveModel(autoStartCtx({ db: dbLocked, unlocked: false, onStart }))
+
+    // A runtime is already up — keep it.
+    const dbRunning = seededDb()
+    updateSettings(dbRunning, { activeModelId: 'qwen3-4b-instruct-q4' })
+    maybeAutoStartActiveModel(autoStartCtx({ db: dbRunning, runningModelId: 'other', onStart }))
+
+    await new Promise((r) => setTimeout(r, 50)) // let any stray background start land
+    expect(starts).toBe(0)
   })
 })

@@ -6,6 +6,7 @@ import type { ChatOptions, Conversation, Message } from '../../shared/types'
 import {
   appendMessage,
   createConversation,
+  deleteConversation,
   deleteLastAssistantMessage,
   exportTranscript,
   generateAssistantMessage,
@@ -122,6 +123,17 @@ export function registerChatIpc(ctx: AppContext): void {
       }
     }
   )
+
+  ipcMain.handle(IPC.deleteConversation, (_e, conversationId: string): void => {
+    // A stream writing into this conversation would persist its assistant turn after
+    // the delete (FK violation / resurrection) — refuse while one is in flight; the
+    // renderer disables Delete during streaming, this guards other windows/callers.
+    if (inFlight.has(conversationId)) {
+      throw new Error('A response is still being generated for this conversation. Stop it first.')
+    }
+    deleteConversation(ctx.db, conversationId)
+    log.info('Conversation deleted', { conversationId })
+  })
 
   ipcMain.handle(IPC.stopGeneration, (_e, conversationId: string): void => {
     const controller = inFlight.get(conversationId)

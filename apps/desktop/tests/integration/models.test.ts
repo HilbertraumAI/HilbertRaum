@@ -12,6 +12,8 @@ import {
   computeInstallState,
   clearChecksumCache,
   checksumCacheStats,
+  createSettingsHashStore,
+  invalidateChecksum,
   recommendModelId,
   discoverManifests,
   selectModel,
@@ -115,6 +117,67 @@ describe('checksum cache (H5)', () => {
     writeFileSync(file, 'tampered-or-updated') // different size → cache invalid
     const res = await verifyChecksum(file, originalHash)
     expect(res.matched).toBe(false)
+    expect(checksumCacheStats.computed).toBe(before + 1)
+  })
+})
+
+// Post-MVP: the in-memory cache dies with the session, so the FIRST Models/Chat visit
+// after every app start still re-hashed multi-GB weights. The settings-backed store
+// persists (path, size, mtime, sha256) inside the DB so an unchanged file is hashed
+// once EVER; size/mtime changes and the explicit "Verify checksum" force a real re-hash.
+describe('persistent checksum cache (settings hash store)', () => {
+  function makeStore(): { store: ReturnType<typeof createSettingsHashStore>; db: ReturnType<typeof openDatabase> } {
+    const db = openDatabase(join(tempDir('paid-db-'), 'cache.sqlite'))
+    seedSettings(db)
+    return { store: createSettingsHashStore(db), db }
+  }
+
+  it('serves the hash from the DB after a simulated restart (no re-hash)', async () => {
+    clearChecksumCache()
+    const { store, db } = makeStore()
+    const file = join(tempDir('paid-hash-'), 'weight.bin')
+    writeFileSync(file, 'persisted weights')
+    const expected = createHash('sha256').update('persisted weights').digest('hex')
+
+    const before = checksumCacheStats.computed
+    expect((await verifyChecksum(file, expected, store)).matched).toBe(true)
+    expect(checksumCacheStats.computed).toBe(before + 1)
+    expect(getSettings(db).checksumCache[file]?.sha256).toBe(expected)
+
+    clearChecksumCache() // simulate an app restart (in-memory L1 gone, DB survives)
+    expect((await verifyChecksum(file, expected, store)).matched).toBe(true)
+    expect(checksumCacheStats.computed).toBe(before + 1) // served from the store
+  })
+
+  it('re-hashes when the file content/size changed since the persisted entry', async () => {
+    clearChecksumCache()
+    const { store } = makeStore()
+    const file = join(tempDir('paid-hash-'), 'weight.bin')
+    writeFileSync(file, 'original')
+    const originalHash = createHash('sha256').update('original').digest('hex')
+    expect((await verifyChecksum(file, originalHash, store)).matched).toBe(true)
+
+    clearChecksumCache()
+    writeFileSync(file, 'replaced with another model') // different size → entry invalid
+    const before = checksumCacheStats.computed
+    const res = await verifyChecksum(file, originalHash, store)
+    expect(res.matched).toBe(false)
+    expect(checksumCacheStats.computed).toBe(before + 1)
+  })
+
+  it('invalidateChecksum drops memory + store so the next verify truly re-hashes', async () => {
+    clearChecksumCache()
+    const { store, db } = makeStore()
+    const file = join(tempDir('paid-hash-'), 'weight.bin')
+    writeFileSync(file, 'weights')
+    const expected = createHash('sha256').update('weights').digest('hex')
+    await verifyChecksum(file, expected, store)
+    expect(getSettings(db).checksumCache[file]).toBeDefined()
+
+    invalidateChecksum(file, store)
+    expect(getSettings(db).checksumCache[file]).toBeUndefined()
+    const before = checksumCacheStats.computed
+    expect((await verifyChecksum(file, expected, store)).matched).toBe(true)
     expect(checksumCacheStats.computed).toBe(before + 1)
   })
 })

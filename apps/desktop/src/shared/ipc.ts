@@ -9,6 +9,12 @@ export const IPC = {
   // Phase 2+
   listModels: 'models:list',
   selectModel: 'models:select',
+  /**
+   * Force a REAL re-hash of one model's weight file (drops the persisted checksum
+   * cache entry first) — the Models screen's "Verify checksum" button. `listModels`
+   * itself reads through the cache and never re-hashes an unchanged file.
+   */
+  verifyModel: 'models:verify',
   startRuntime: 'runtime:start',
   stopRuntime: 'runtime:stop',
   /** Read-only runtime health/state for Diagnostics (spec §7.11 — audit M14). */
@@ -21,6 +27,8 @@ export const IPC = {
   listMessages: 'chat:listMessages',
   sendChatMessage: 'chat:send',
   stopGeneration: 'chat:stop',
+  /** Delete a conversation (chat or document Q&A) and all of its messages. */
+  deleteConversation: 'chat:deleteConversation',
   /** Save a conversation transcript to a user-chosen file (spec §7.6 — audit M13). */
   exportConversation: 'chat:export',
   /** Tail of the local log for Diagnostics (spec §7.11 — audit M14). Never uploaded. */

@@ -62,6 +62,18 @@ export function SettingsScreen(): JSX.Element {
           Uses your graphics card to speed up responses when available. Turn off only if you
           notice stability problems — everything keeps working either way.
         </p>
+        <label className="toggle">
+          <input
+            type="checkbox"
+            checked={settings.autoStartActiveModel}
+            onChange={(e) => patch({ autoStartActiveModel: e.target.checked })}
+          />
+          <span>Load the selected model automatically when the app starts</span>
+        </label>
+        <p className="hint">
+          On by default. The model selected on the Models screen is loaded in the background at
+          launch (after unlock on encrypted workspaces) so Chat is ready without extra clicks.
+        </p>
       </div>
 
       <div className="card">

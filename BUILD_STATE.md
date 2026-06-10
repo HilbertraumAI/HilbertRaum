@@ -12,9 +12,12 @@ acceleration feature (Phases 14–16: Vulkan-default distribution → probe + fa
 **GPU-feature audit round (2026-06-10, post-Phase-16 — see the §3 entry)** are fully
 remediated and the llama.cpp runtime pin + license reviews are complete — summarized in §8. The
 first real Windows `D:\` portable-drive bring-up surfaced + fixed a cluster of provisioning,
-drive-root path, manifest-source and RAG/embedding bugs — see **§9**. Remaining work = **manual
-release acceptance only** (§5, now incl. the GPU hardware matrix, item 1b). Consciously-accepted
-gaps live in [`docs/known-limitations.md`](docs/known-limitations.md)._
+drive-root path, manifest-source and RAG/embedding bugs — see **§9**. A **post-MVP UX polish
+round (2026-06-10)** added conversation deletion, a persisted checksum cache (+ real
+verify/loading UX), startup auto-start of the active model, and the Home → documents-chat
+navigation fix — see the §3 entry. Remaining work = **manual release acceptance only** (§5, now
+incl. the GPU hardware matrix, item 1b). Consciously-accepted gaps live in
+[`docs/known-limitations.md`](docs/known-limitations.md)._
 
 ---
 
@@ -484,6 +487,36 @@ Repo root: `f:\_coding\ai_drive`.
      "Intel(R) Arc(TM) Graphics" — discrete Arc "A###"-series still bumps. Fixture-tested.
   7. Small: `gpuMode` is enum-guarded in `updateSettings`; `fetch-runtime.ps1` is pure ASCII
      again; stale "(CPU) default" docstrings fixed.
+- **Post-MVP UX polish round (2026-06-10)** — four user-reported issues, all behind existing
+  contracts (tests in `chat-ipc`, `core-model-ipc`, `models`, `tests/renderer/ChatHomeNav`):
+  1. **Conversation deletion:** `deleteConversation` (`chat:deleteConversation`) removes a
+     conversation — chat AND documents mode — plus its messages (messages first; the FK has no
+     CASCADE). Refused while a stream is in flight for that conversation (the persisted assistant
+     turn would resurrect/FK-violate after the delete). UI: a ✕ per sidebar row with a confirm.
+  2. **Persisted checksum cache:** the H5 in-memory cache died with the session, so the FIRST
+     Models/Chat visit after every launch still re-hashed multi-GB GGUFs with no feedback. New
+     `AppSettings.checksumCache` (`path → {size, mtimeMs, sha256}`, default `{}`) is the L2
+     behind the in-memory L1 — `HashStore` is injected (`createSettingsHashStore(db)`) through
+     `verifyChecksum`/`computeInstallState`/`buildModelList`, so an unchanged weight is hashed
+     **once ever**; size/mtime changes re-hash. Living in settings (lastBenchmark precedent — no
+     schema change) it is encrypted at rest on encrypted workspaces. **"Verify checksum" is now a
+     true re-verify** via the new `verifyModel` IPC (`models:verify`): `invalidateChecksum`
+     (memory + store) then a fresh `computeInstallState`. Models screen got a spinner +
+     first-check copy; the accepted same-size/mtime-tamper limitation is recorded in
+     `docs/known-limitations.md`.
+  3. **Active-model auto-start:** a restarted app showed an "active" model whose runtime wasn't
+     running. The `startRuntime` handler's §7.4 gate logic moved to an exported
+     `startModelRuntime(ctx, modelId)`; new `maybeAutoStartActiveModel(ctx)` (mirrors
+     `maybeRunFirstBenchmark` — background, never throws/blocks) fires at startup (plaintext dev)
+     and after unlock/create (encrypted). Opt-out: `AppSettings.autoStartActiveModel` (default
+     `true`) + a Settings toggle. ChatScreen's "no model" empty state now polls
+     `getRuntimeStatus` every 2.5 s (and says the model may still be loading) so it flips to the
+     composer by itself; its runtime check uses `getRuntimeStatus` instead of `listModels`
+     (cheaper, no hashing).
+  4. **Home navigation fix:** "Ask My Documents" used to land on the import screen. App.tsx now
+     has a central `navigate()` with a virtual `'ask-documents'` target → Chat screen with
+     `initialMode='documents'` (new optional `ChatScreen` prop); sidebar "Chat" resets to chat
+     mode.
 - **Doc lifecycle: finished plans become design records (2026-06-10):** implemented plan docs
   are condensed to short design records (decisions + load-bearing facts + the design as built)
   or deleted, with the full original in git history — finished plans otherwise drift and
@@ -529,7 +562,9 @@ Wired so far: core (Phase 1) + `listModels`/`selectModel`/`startRuntime`/`stopRu
 `runPreflight` (Phase 13) + `getRuntimeStatus`/`exportConversation`/`getLogTail` (audit round 4 —
 spec §7.6 export + §7.11 Diagnostics) + `getRuntimeInstall` (`runtime:install`, Phase 16) +
 `tryGpuAgain` (`gpu:try-again`, GPU audit round) + the `runtime:notice` main→renderer event
-channel (Phase 15, `EVENTS.runtimeNotice`, preload `onRuntimeNotice`).
+channel (Phase 15, `EVENTS.runtimeNotice`, preload `onRuntimeNotice`) +
+`deleteConversation` (`chat:deleteConversation`) and `verifyModel` (`models:verify`) from the
+post-MVP UX polish round.
 (`pickDocuments` + `reindexDocument` are Phase-4 additions to the `IPC` registry beyond the spec
 §9.1 list — picker + re-index UX; `getPolicy` is a Phase-8 addition; the four `workspace:*` channels
 are Phase-9 additions.) `createConversation` now also accepts an optional `mode`
@@ -545,6 +580,9 @@ foreign keys on). `Db` type = `InstanceType<typeof DatabaseSync>`. Loaded via `c
 `updateSettings(patch)` upserts; `seedSettings` seeds on first run. Default `allowNetwork:false`,
 `workspaceMode:'plaintext_dev'`, `contextTokens:4096`. **Phase 7 added `lastBenchmark`**
 (JSON `BenchmarkResult | null`, default `null`) — the persisted hardware profile lives here.
+**The post-MVP UX round added `autoStartActiveModel`** (boolean, default `true`) **and
+`checksumCache`** (`Record<path, {size, mtimeMs, sha256}>`, default `{}` — the persisted L2 of
+the weight-file hash cache).
 ⚠️ **Settings live INSIDE the (possibly encrypted) DB** — unreadable before unlock (Phase 9). The
 unencrypted `config/workspace.json` vault descriptor is the only pre-unlock artifact;
 `workspaceMode` is set to the active mode by the `WorkspaceController` on open.

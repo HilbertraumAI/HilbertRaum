@@ -53,7 +53,11 @@ export function ModelsScreen(): JSX.Element {
     return (
       <div className="screen">
         <h1>Models</h1>
-        <p className="hint">Loading models…</p>
+        <p className="hint">
+          <span className="spinner" /> Checking model files… The first check after adding or
+          updating a model verifies its checksum and can take a few minutes for large files;
+          after that the result is cached and this is instant.
+        </p>
       </div>
     )
   }
@@ -118,10 +122,16 @@ export function ModelsScreen(): JSX.Element {
           <button
             className="btn sm"
             disabled={busy !== null}
-            onClick={() => run(`verify-${m.id}`, () => window.api.listModels())}
-            title="Re-check the file on disk against its SHA-256"
+            onClick={() => run(`verify-${m.id}`, () => window.api.verifyModel(m.id))}
+            title="Re-hash the file on disk and check it against its SHA-256 (bypasses the cache)"
           >
-            Verify checksum
+            {busy === `verify-${m.id}` ? (
+              <>
+                <span className="spinner" /> Verifying…
+              </>
+            ) : (
+              'Verify checksum'
+            )}
           </button>
           {m.state === 'running' ? (
             <button

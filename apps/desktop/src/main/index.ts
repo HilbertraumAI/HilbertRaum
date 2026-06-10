@@ -8,7 +8,7 @@ import { assertOfflinePosture } from './services/offlineGuard'
 import { initLogging, log } from './services/logging'
 import { registerCoreIpc } from './ipc/registerCoreIpc'
 import { registerWorkspaceIpc } from './ipc/registerWorkspaceIpc'
-import { registerModelIpc } from './ipc/registerModelIpc'
+import { maybeAutoStartActiveModel, registerModelIpc } from './ipc/registerModelIpc'
 import { registerChatIpc } from './ipc/registerChatIpc'
 import { registerDocsIpc } from './ipc/registerDocsIpc'
 import { registerRagIpc } from './ipc/registerRagIpc'
@@ -186,6 +186,10 @@ function initBackend(): void {
   // startup — benchmark it in the background if it never was. Encrypted workspaces get
   // the same treatment after unlock/create (registerWorkspaceIpc).
   maybeRunFirstBenchmark(ctx)
+  // Post-MVP polish: bring the selected model's runtime back up in the background so a
+  // restarted app matches what the Home screen shows. Encrypted workspaces do this
+  // after unlock/create (registerWorkspaceIpc) — settings are unreadable until then.
+  maybeAutoStartActiveModel(ctx)
 
   // Phase 8: log the offline posture and install a defensive tripwire that flags any
   // attempt to reach a REMOTE host while offline (loopback is exempt — dev renderer +

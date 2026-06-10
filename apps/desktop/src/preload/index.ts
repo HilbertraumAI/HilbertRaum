@@ -12,6 +12,7 @@ import type {
   ImportJobStatus,
   Message,
   ModelInfo,
+  ModelState,
   PolicyStatus,
   PreflightResult,
   RuntimeInstallInfo,
@@ -53,6 +54,9 @@ const api = {
     modelId: string
   ): Promise<{ activeModelId: string | null; activeEmbeddingModelId: string | null }> =>
     ipcRenderer.invoke(IPC.selectModel, modelId),
+  /** Force a real re-hash of one model's weight file; resolves with the fresh state. */
+  verifyModel: (modelId: string): Promise<ModelState> =>
+    ipcRenderer.invoke(IPC.verifyModel, modelId),
   startRuntime: (modelId: string): Promise<RuntimeStatus> =>
     ipcRenderer.invoke(IPC.startRuntime, modelId),
   stopRuntime: (): Promise<void> => ipcRenderer.invoke(IPC.stopRuntime),
@@ -86,6 +90,9 @@ const api = {
   ): Promise<Message> => ipcRenderer.invoke(IPC.sendChatMessage, conversationId, content, options),
   stopGeneration: (conversationId: string): Promise<void> =>
     ipcRenderer.invoke(IPC.stopGeneration, conversationId),
+  /** Delete a conversation (chat or document Q&A) and all of its messages. */
+  deleteConversation: (conversationId: string): Promise<void> =>
+    ipcRenderer.invoke(IPC.deleteConversation, conversationId),
   /** Save a transcript to a user-chosen file; resolves with the path, or null on cancel. */
   exportConversation: (conversationId: string): Promise<string | null> =>
     ipcRenderer.invoke(IPC.exportConversation, conversationId),

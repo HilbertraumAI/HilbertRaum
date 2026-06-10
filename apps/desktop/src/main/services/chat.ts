@@ -195,6 +195,18 @@ export function deleteLastAssistantMessage(db: Db, conversationId: string): bool
 }
 
 /**
+ * Delete a conversation and all of its messages (chat and document Q&A alike — a
+ * documents conversation only references documents via persisted citations, so the
+ * documents/chunks/embeddings tables are untouched). Messages go first: the FK has
+ * no ON DELETE CASCADE and foreign_keys is ON. Returns true when a row was deleted.
+ */
+export function deleteConversation(db: Db, conversationId: string): boolean {
+  db.prepare('DELETE FROM messages WHERE conversation_id = ?').run(conversationId)
+  const result = db.prepare('DELETE FROM conversations WHERE id = ?').run(conversationId)
+  return Number(result.changes) > 0
+}
+
+/**
  * Set the conversation title from its first user message when it is still the
  * default. Keeps the sidebar readable without a separate "rename" step.
  */

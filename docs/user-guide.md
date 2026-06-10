@@ -85,8 +85,16 @@ If no model is started yet, Home will point you to the **Models** screen.
    - **Installed** — ready to use.
    - **Recommended** — best match for your laptop (based on the hardware benchmark).
    - **Not downloaded** — the model file isn't on the drive (see Troubleshooting).
-3. Click a model, then **Start runtime**. The first start of a model can take a little while
-   as it loads into memory.
+3. Click a model, then **Select** and **Start runtime**. The first start of a model can take a
+   little while as it loads into memory.
+
+Once a model is **selected**, the app loads it again automatically every time you start the
+app (after unlocking, on encrypted drives) — you don't have to come back to this screen. You
+can turn this off under **Settings → Load the selected model automatically**.
+
+> **First visit can take a few minutes:** the app verifies each model file's checksum the
+> first time it sees it. The result is remembered, so later visits are instant. The
+> **Verify checksum** button re-checks a file from scratch whenever you want.
 
 > **No model installed?** You can still try the interface: a model without a weight file shows
 > a **Start mock runtime** button (in developer mode) that runs a built-in mock model. Mock
@@ -114,6 +122,8 @@ words per second" and "faster than you can read". There is nothing to install or
 1. Open **Chat** and click **New chat**.
 2. Type a message and press Enter. The answer streams in word by word.
 3. Use **Stop** to cancel, **Regenerate** to retry, or the copy button to copy a reply.
+4. To remove a conversation, click the **✕** next to it in the sidebar (works for document
+   Q&A conversations too). This permanently deletes the conversation and its messages.
 
 Everything you type and everything the model replies stays on your device.
 
@@ -124,7 +134,8 @@ Everything you type and everything the model replies stays on your device.
 1. Open **Documents** and **Import** files (txt, md, pdf, docx, csv) or a folder.
 2. Each file shows a status as it is indexed locally (extract → chunk → embed → indexed).
    Imported files are **copied into your workspace**, so the drive stays self-contained.
-3. Go to **Chat**, switch to **Ask Documents** mode, and ask a question, e.g.
+3. Go to **Chat** and switch to **Ask Documents** mode (or click **Ask My Documents** on the
+   Home screen), then ask a question, e.g.
    *"What are the termination rights in this contract?"*
 4. The answer includes **citations** — the source file, page/section, and a snippet you can
    expand. If the documents don't contain the answer, the app says so rather than guessing.
