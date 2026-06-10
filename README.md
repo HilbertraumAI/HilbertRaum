@@ -36,8 +36,8 @@ Remaining work is **manual release acceptance** (signed builds, a live USB demo)
 
 - **A computer:** Windows (first-class), macOS, or Linux.
 - **RAM decides which model you can run** (the app benchmarks your machine and recommends one):
-  ~8 GB → 1.7B · 16 GB → 4B · 32 GB → 8B · 32 GB+ → 14B (or the 30B-A3B MoE for the best quality).
-- **Disk space:** ~**2 GB** for the smallest usable setup (one chat model + the embeddings model),
+  ≤16 GB → 4B · ~32 GB → 8B · 32 GB+ → 14B (or the 30B-A3B MoE for the best quality).
+- **Disk space:** ~**3 GB** for the smallest usable setup (the 4B chat model + the embeddings model),
   up to ~**10 GB** for the 14B or ~**19 GB** for the 30B-A3B MoE. A **USB-3 SSD** is recommended for
   a portable drive.
 - **To build from source:** **Node.js ≥ 22.5** (24 recommended; 22.15+ enables the
@@ -91,8 +91,9 @@ interrupted and re-running **skips** what's already there. You can also fetch pi
 > ✅ **`runtime-sources.yaml` is pinned to a real release** (`llama.cpp` **b9585**, real per-OS
 > URLs + SHA-256 checksums computed from the actual assets) — `fetch-runtime` downloads, verifies,
 > extracts (zip and tar.gz), and flattens the binaries for all three OSes from any host. Model
-> weight URLs are real Hugging Face links; their `sha256` stays `REPLACE_WITH_REAL_HASH` until a
-> drive build captures the hashes (`verify-models --generate`). To bump the runtime later, see
+> weight URLs are real Hugging Face links, and the bundled manifests now carry **real pinned
+> SHA-256 hashes** (captured from verified downloads with `verify-models --generate`), so
+> `fetch-models` checks every weight against them. To bump the runtime later, see
 > **[`docs/model-policy.md`](docs/model-policy.md)**.
 
 ### 3. Point the app at your models
@@ -119,15 +120,14 @@ Downloaded by the scripts above (or add your own via a manifest). Weights are **
 
 | Model | Role | Size | Min RAM | License | Source |
 |---|---|---|---|---|---|
-| Qwen3 1.7B Instruct Q4 | Chat (small / weak laptops) | ~1.2 GB | 6 GB | Apache-2.0 | [Qwen/Qwen3-1.7B-GGUF](https://huggingface.co/Qwen/Qwen3-1.7B-GGUF) |
-| Qwen3 4B Instruct Q4 | Chat (balanced default) | ~2.7 GB | 8 GB | Apache-2.0 | [Qwen/Qwen3-4B-GGUF](https://huggingface.co/Qwen/Qwen3-4B-GGUF) |
+| Qwen3 4B Instruct Q4 | Chat (smallest / balanced default) | ~2.7 GB | 8 GB | Apache-2.0 | [Qwen/Qwen3-4B-GGUF](https://huggingface.co/Qwen/Qwen3-4B-GGUF) |
 | Qwen3 8B Instruct Q4 | Chat (16 GB+ laptops) | ~5.0 GB | 16 GB | Apache-2.0 | [Qwen/Qwen3-8B-GGUF](https://huggingface.co/Qwen/Qwen3-8B-GGUF) |
 | Qwen3 14B Instruct Q4 | Chat (best dense, 32 GB+) | ~9.3 GB | 16 GB | Apache-2.0 | [Qwen/Qwen3-14B-GGUF](https://huggingface.co/Qwen/Qwen3-14B-GGUF) |
 | Qwen3 30B-A3B (MoE) Q4 | Chat (≈30B quality, ≈3B speed) | ~18.6 GB | 24 GB | Apache-2.0 | [Qwen/Qwen3-30B-A3B-GGUF](https://huggingface.co/Qwen/Qwen3-30B-A3B-GGUF) |
-| Multilingual E5 Small Q8 | Embeddings (document search) | ~0.5 GB | 4 GB | MIT | GGUF: [ChristianAzinn/…-gguf](https://huggingface.co/ChristianAzinn/multilingual-e5-small-gguf) · orig: [intfloat/…](https://huggingface.co/intfloat/multilingual-e5-small) |
+| Multilingual E5 Small (F16) | Embeddings (document search) | ~0.24 GB | 4 GB | MIT | GGUF: [keisuke-miyako/…-f16](https://huggingface.co/keisuke-miyako/multilingual-e5-small-gguf-f16) · orig: [intfloat/…](https://huggingface.co/intfloat/multilingual-e5-small) |
 
 Document Q&A needs the **embeddings** model; chat needs **one** of the Qwen3 models. The benchmark
-auto-recommends per hardware tier (TINY→1.7B, LITE→4B, BALANCED→8B, **PRO→14B**); the **30B-A3B MoE**
+auto-recommends per hardware tier (TINY/LITE→4B, BALANCED→8B, **PRO→14B**); the **30B-A3B MoE**
 is opt-in — it has ~30B-class quality but only ~3.3B *active* parameters per token, so it runs near
 small-model speed on CPU **if** its full ~18.6 GB fits in RAM (32 GB machines). Bigger **dense**
 models are smarter but slower on CPU — pick by your RAM. The full schema + license policy is in

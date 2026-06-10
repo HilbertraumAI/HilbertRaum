@@ -25,7 +25,7 @@ master pipeline** that produces a finished, sellable drive (see the last section
       mac/    llama-server
       linux/  llama-server
   models/
-    chat/        qwen3-1.7b-instruct-q4.gguf  …
+    chat/        qwen3-4b-instruct-q4.gguf  …
     embeddings/  multilingual-e5-small-q8.gguf
   model-manifests/   (committed YAML — the only model metadata in git)
   workspace/   config/   logs/
@@ -37,8 +37,9 @@ master pipeline** that produces a finished, sellable drive (see the last section
   `services/runtime/sidecar.ts`. A `PAID_LLAMA_BIN` env var overrides the path for dev.
 - **Model weights** — GGUF files under `models/`, resolved from each manifest's `local_path` (relative
   to the drive root) via `weightPath(rootPath, manifest)`. They are **git-ignored**; a real drive is
-  built by Phase 11's prepare-drive scripts (and verified against the manifest `sha256`, which is a
-  `REPLACE_WITH_REAL_HASH` placeholder until real weights are produced).
+  built by Phase 11's prepare-drive scripts (and verified against the manifest `sha256`). The bundled
+  Qwen3 + E5 manifests now carry **real pinned hashes**; a model you add yourself starts as a
+  `REPLACE_WITH_REAL_HASH` placeholder until you capture it with `verify-models --generate`.
 
 ## How the app uses them at runtime (Phase 10)
 - The **runtime factory** (`createSelectingRuntimeFactory`) and the **embedder factory**
@@ -129,8 +130,9 @@ copy .\apps\desktop\release\*.exe E:\                                 # place th
 > ✅ **`runtime-sources.yaml` is pinned to a real release** (`ggml-org/llama.cpp` **b9585**, real
 > per-OS URLs + SHA-256 checksums computed from the actual assets) — `fetch-runtime` downloads,
 > verifies, extracts (zip and tar.gz) and flattens the binaries for all three OSes from any host.
-> The chat/embeddings **model** URLs are real Hugging Face links; their manifest `sha256` stays
-> `REPLACE_WITH_REAL_HASH` until a drive build captures the hashes (`verify-models --generate`).
+> The chat/embeddings **model** URLs are real Hugging Face links and the bundled manifests now carry
+> **real pinned `sha256` hashes** (captured from verified downloads via `verify-models --generate`);
+> a model you add yourself stays `REPLACE_WITH_REAL_HASH` until you capture its hash the same way.
 > To bump the runtime pin later, see [`model-policy.md`](model-policy.md).
 
 Or the older manual flow (no download): `prepare-drive` (no `-WithAssets`) → drop GGUF weights into

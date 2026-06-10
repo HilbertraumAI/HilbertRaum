@@ -57,10 +57,13 @@ manifests:
 
 | Profile | Chat model |
 |---|---|
-| TINY / UNKNOWN | `qwen3-1.7b-instruct-q4` |
-| LITE | `qwen3-4b-instruct-q4` |
+| TINY / LITE / UNKNOWN | `qwen3-4b-instruct-q4` |
 | BALANCED | `qwen3-8b-instruct-q4` |
 | PRO | `qwen3-14b-instruct-q4` (spec §7.3 "8B or 14B") |
+
+(`qwen3-1.7b-instruct-q4` was the TINY/UNKNOWN model in the original spec §7.3 table, but it was
+dropped — the official `Qwen/Qwen3-1.7B-GGUF` repo ships no Q4_K_M — so `qwen3-4b-instruct-q4`,
+the smallest bundled chat model, now also covers TINY + UNKNOWN. See BUILD_STATE §9.)
 
 The larger `qwen3-30b-a3b-q4` (MoE) carries an **empty** `recommended_profiles`, so it is never
 auto-recommended — it stays selectable on the Models screen as a deliberate opt-in (it needs ~20 GB

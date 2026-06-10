@@ -4,8 +4,8 @@ Each YAML file here describes one model. Manifests are committed to git; **model
 (weights live under `models/` on the drive). The app reads these manifests to discover, verify
 (SHA-256), recommend, and select models without code changes.
 
-- `chat/` — chat/instruct models (Qwen3 1.7B / 4B / 8B / 14B Q4 + 30B-A3B MoE)
-- `embeddings/` — embedding models (Multilingual E5 Small example)
+- `chat/` — chat/instruct models (Qwen3 4B / 8B / 14B Q4 + 30B-A3B MoE)
+- `embeddings/` — embedding models (Multilingual E5 Small, F16)
 - `runtime-sources.yaml` — the `llama-server` sidecar download manifest (Phase 12). **Not a model
   manifest** (it is excluded from model discovery); validated by `shared/runtime-sources.ts`.
 
