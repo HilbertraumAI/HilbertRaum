@@ -1,6 +1,6 @@
 {
   "name": "@private-ai-drive/desktop",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "private": true,
   "description": "Private AI Drive Lite desktop app (Electron).",
   "author": "Private AI Drive Lite contributors",
