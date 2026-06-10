@@ -198,8 +198,9 @@ describe('createSelectingRuntimeFactory', () => {
     expect(factory(opts).modelId).toBe('mock')
   })
 
-  it('selects the real llama runtime only when binary AND weights are present', () => {
+  it('selects the real llama runtime only when binary AND weights are present', async () => {
     let binSeenPath = ''
+    let llamaMade = false
     const factory = createSelectingRuntimeFactory({
       rootPath: '/root',
       resolveBin: () => '/bin/llama-server',
@@ -208,9 +209,22 @@ describe('createSelectingRuntimeFactory', () => {
         return true
       },
       makeMock: mkMock,
-      makeLlama: mkLlama
+      makeLlama: () => {
+        llamaMade = true
+        return mkLlama()
+      },
+      // Keep this Phase-10 selection test GPU-free (the ladder is covered in
+      // tests/unit/runtime-ladder.test.ts); the probe seam avoids a real spawn.
+      gpu: { probeDevices: async () => [] }
     })
-    expect(factory(opts).modelId).toBe('llama')
+    // Since Phase 15 the factory returns the LADDER runtime (the caller's modelId);
+    // the real llama runtime is built lazily inside start().
+    const runtime = factory(opts)
+    expect(runtime.modelId).toBe('m')
     expect(binSeenPath).toBe('/w.gguf')
+    expect(llamaMade).toBe(false)
+    await runtime.start()
+    expect(llamaMade).toBe(true)
+    await runtime.stop()
   })
 })

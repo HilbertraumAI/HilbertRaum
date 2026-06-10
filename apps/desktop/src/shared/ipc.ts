@@ -48,3 +48,12 @@ export const STREAM = {
   done: (requestId: string) => `chat:done:${requestId}`,
   error: (requestId: string) => `chat:error:${requestId}`
 } as const
+
+// One-off main -> renderer notices (not tied to a request).
+export const EVENTS = {
+  /**
+   * A friendly one-line runtime notice (Phase 15: the GPU crash auto-fallback's
+   * "switched to compatibility mode" message — spec §11.4 tone, never alarming).
+   */
+  runtimeNotice: 'runtime:notice'
+} as const

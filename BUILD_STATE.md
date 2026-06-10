@@ -35,7 +35,7 @@ Phases 15–16** + manual release acceptance (§5). Consciously-accepted gaps li
 | 12 | DIY asset loader (`fetch-assets`) | 🟢 done |
 | 13 | Plug-and-play distribution (commercial drive) | 🟢 done |
 | 14 | GPU distribution (Vulkan default + CPU safety net) | 🟢 done |
-| 15 | GPU runtime (probe, fallback ladder, embedder pin) | ⚪ not started |
+| 15 | GPU runtime (probe, fallback ladder, embedder pin) | 🟢 done |
 | 16 | GPU surface (Settings/Diagnostics/benchmark/docs) | ⚪ not started |
 
 Legend: ⚪ not started · 🟡 in progress · 🟢 done · 🔴 blocked
@@ -404,6 +404,34 @@ Repo root: `f:\_coding\ai_drive`.
   builds per win/linux (default + `-Backend cpu`) and cross-check the five markers natively in step 7.
   The fetch scripts' flatten step now **excludes the `cpu/` subdir** from the binary search (the
   safety net must not be mistaken for the freshly extracted nested default binary).
+- **GPU start ladder + probe (LOCKED, Phase 15 — gpu-support-plan §5):** the selecting factory now
+  returns a **ladder runtime** when binary + weights exist: rung 1 = default binary, default args
+  (b9585 `-ngl auto` + `--fit on` auto-offload — **we never pass `-ngl`**; on a GPU-less machine
+  rung 1 IS CPU mode) → rung 2 = same binary + **`--device none`** (the only CPU-forcing mechanism)
+  → rung 3 = `runtime/llama.cpp/<os>/cpu/` safety net (`resolveCpuFallbackServerPath`) → rung 4 =
+  MockRuntime (existing graceful-fallback rule — never stuck). `gpuMode:'off'`/`gpuAutoDisabled`
+  skip rung 1; a rung-1 failure persists `gpuAutoDisabled` + `gpuLastError` (no repeated 60 s GPU
+  timeouts). `services/runtime/gpu.ts`: `probeGpuDevices` (subprocess `--list-devices`, 3 s
+  kill-timeout, never throws → `[]`), pure `parseListDevices`, `looksIntegrated` heuristic,
+  `createCachedGpuProbe` (once per binary per session). The probe only LABELS the backend
+  (`RuntimeStatus.backend: 'gpu'|'cpu'|'mock'` + `gpuName`); the ladder is the guarantee. GPU deps
+  are injected callbacks (never DB reads inside the factory); `main/index.ts` wires them with
+  locked-DB-safe guards (sidecars only start post-unlock anyway).
+- **Mid-generation crash auto-fallback (Phase 15, §5.3):** `LlamaServer.onUnexpectedExit` fires
+  only for a HEALTHY server dying outside `stop()` (start failures still throw; stop exits are
+  expected). When the active backend was GPU, `createGpuCrashAutoFallback` (re-entrancy-guarded)
+  persists the flags, restarts the same model ONCE at CPU via the manager, and broadcasts the
+  friendly notice over the new **`runtime:notice` event channel** (preload `api.onRuntimeNotice`):
+  `COMPATIBILITY_MODE_NOTICE` — §11.4 tone, never "GPU failed". CPU-backend crashes keep today's
+  behavior. **E5 embedder pinned to CPU** (`--device none` appended to its extraArgs, §7).
+- **New `AppSettings` keys (Phase 15):** `gpuMode: 'auto'|'off'` (default `'auto'` — GPU is always
+  the default, decision Q2), `gpuAutoDisabled: boolean`, `gpuLastError: string|null`,
+  `gpuProbe: GpuProbeResult|null` (cached devices + timestamp; persisted by the Phase-16 benchmark
+  path). `GpuDevice`/`GpuProbeResult` live in `shared/types.ts`.
+- **Manual GPU smoke harness:** `tests/manual/gpu-smoke.test.ts` — skipped unless `PAID_GPU_SMOKE`
+  points at a provisioned drive root (CI stays zero-GPU/zero-binary). On the dev box it exercises
+  the real probe, a real rung-1 GPU start + streamed tokens, `gpuMode:'off'`, and a stubbed rung-1
+  failure landing on the real rung-3 safety net.
 
 ---
 
@@ -852,15 +880,17 @@ CI are unaffected.
 asset loader ships, and the plug-and-play commercial drive is built + asserted.** The remaining items
 are **MANUAL acceptance only** (R2/R5/R7) **plus the newly-accepted GPU work**. In rough priority:
 
-0. **GPU acceleration (Phases 15–16 remaining; Phase 14 DONE 2026-06-10):** see
-   [`docs/gpu-support-plan.md`](docs/gpu-support-plan.md). **Phase 14 (distribution) is complete**:
-   vulkan-first `runtime-sources.yaml` (verified hashes), `<os>/cpu/` safety net, `.paid-runtime.json`
-   install markers + marker-based idempotency, validator dup-check, commercial-pipeline updates —
-   smoke-tested on a scratch dir (vulkan + cpu fetched/verified/markers; stale-marker re-fetch; the
-   extracted Vulkan build enumerates the dev box's RTX 3080 Ti, the cpu build enumerates nothing).
-   Next: **Phase 15** (probe `gpu.ts`, 4-rung start ladder, `gpuMode`/`gpuAutoDisabled` settings,
-   crash auto-fallback, E5 `--device none`) then **Phase 16** (Settings toggle, Diagnostics line,
-   benchmark probe injection, `classifyProfile` bump, friendly copy + docs). All §13 review
+0. **GPU acceleration (Phase 16 remaining; Phases 14–15 DONE 2026-06-10):** see
+   [`docs/gpu-support-plan.md`](docs/gpu-support-plan.md). **Phase 14 (distribution)**: vulkan-first
+   `runtime-sources.yaml` (verified hashes), `<os>/cpu/` safety net, `.paid-runtime.json` install
+   markers + marker-based idempotency, validator dup-check, commercial-pipeline updates — smoke-tested
+   on a scratch dir. **Phase 15 (runtime)**: `gpu.ts` probe (`parseListDevices`/`looksIntegrated`/
+   cached `probeGpuDevices`), the 4-rung start ladder in the factory, `gpuMode`/`gpuAutoDisabled`/
+   `gpuLastError`/`gpuProbe` settings, mid-generation crash auto-fallback (one CPU restart +
+   `runtime:notice` broadcast), E5 pinned to CPU — smoke-tested for real on the dev box's RTX 3080 Ti
+   (`tests/manual/gpu-smoke.test.ts` with `PAID_GPU_SMOKE`). Next: **Phase 16** (Settings toggle,
+   Diagnostics acceleration line + "Try GPU again", benchmark probe injection, `classifyProfile`
+   bump, friendly copy + troubleshooting/known-limitations/user-guide docs). All §13 review
    decisions are FINAL; per-phase ritual applies.
 1. **Commercial-drive manual acceptance (needs certs + a real USB run, R5/R7):** obtain the code-
    signing certs (Windows OV/EV + Apple Developer ID), produce a **signed** Windows portable `.exe` +

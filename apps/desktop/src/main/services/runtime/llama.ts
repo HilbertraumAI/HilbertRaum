@@ -17,7 +17,17 @@ import { LlamaServer, type LlamaServerOptions } from './sidecar'
 /** Per-runtime overrides; mostly test seams forwarded to `LlamaServer`. */
 export type LlamaRuntimeDeps = Pick<
   LlamaServerOptions,
-  'spawn' | 'fetchImpl' | 'findPort' | 'threads' | 'healthTimeoutMs' | 'healthIntervalMs' | 'host'
+  | 'spawn'
+  | 'fetchImpl'
+  | 'findPort'
+  | 'threads'
+  | 'healthTimeoutMs'
+  | 'healthIntervalMs'
+  | 'host'
+  // Phase 15 (GPU ladder): the ladder forces CPU via `extraArgs: ['--device','none']`
+  // (NEVER `-ngl` — locked decision) and hooks mid-session crashes.
+  | 'extraArgs'
+  | 'onUnexpectedExit'
 > & {
   binPath: string
 }
@@ -93,6 +103,8 @@ export class LlamaRuntime implements ModelRuntime {
       binPath: deps.binPath,
       modelPath: opts.modelPath,
       contextTokens: opts.contextTokens,
+      extraArgs: deps.extraArgs,
+      onUnexpectedExit: deps.onUnexpectedExit,
       spawn: deps.spawn,
       fetchImpl: deps.fetchImpl,
       findPort: deps.findPort,

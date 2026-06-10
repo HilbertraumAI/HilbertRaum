@@ -30,9 +30,16 @@ export interface HealthStatus {
   port: number | null
 }
 
+/** Which inference backend a runtime landed on (Phase 15 fallback ladder). */
+export type RuntimeBackend = 'gpu' | 'cpu' | 'mock'
+
 /** The contract every inference backend implements (spec §9.2). */
 export interface ModelRuntime {
   readonly modelId: string
+  /** Backend label after start() (ladder/probe-derived); optional for bare runtimes. */
+  readonly backend?: RuntimeBackend
+  /** Probed GPU name when backend === 'gpu'. */
+  readonly gpuName?: string | null
   start(): Promise<void>
   stop(): Promise<void>
   health(): Promise<HealthStatus>
@@ -130,7 +137,11 @@ export class RuntimeManager {
       modelId: this.current.modelId,
       port: this.last?.port ?? null,
       healthy: this.last?.healthy ?? false,
-      message: this.last?.message ?? 'Running'
+      message: this.last?.message ?? 'Running',
+      // Runtimes without a backend label (bare LlamaRuntime in tests) read as 'cpu' —
+      // the production factory always returns a ladder runtime or the mock.
+      backend: this.current.backend ?? 'cpu',
+      gpuName: this.current.gpuName ?? null
     }
   }
 }

@@ -147,6 +147,22 @@ export interface AppSettings {
    * (`lastBenchmark.profile`) drives model recommendation + `AppStatus.hardwareProfile`.
    */
   lastBenchmark: BenchmarkResult | null
+  // ---- GPU acceleration (Phase 15, docs/gpu-support-plan.md §5.4) ----
+  /**
+   * User intent: 'auto' (default — GPU when it works, the fallback ladder handles the
+   * rest) or 'off' (the Settings "Use GPU acceleration" toggle, an explicit choice).
+   */
+  gpuMode: 'auto' | 'off'
+  /**
+   * Set by the fallback ladder after a failed GPU start or a mid-generation crash so
+   * subsequent starts skip straight to CPU (no repeated health timeouts). Cleared by
+   * Diagnostics' "Try GPU again" (e.g. after a driver update). Never a shipped default.
+   */
+  gpuAutoDisabled: boolean
+  /** Timestamped reason (stderr tail) for the last GPU failure, for Diagnostics. */
+  gpuLastError: string | null
+  /** Cached `--list-devices` probe result (feeds Diagnostics + classifyProfile). */
+  gpuProbe: GpuProbeResult | null
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -163,7 +179,27 @@ export const DEFAULT_SETTINGS: AppSettings = {
   ragTopKFinal: 6,
   ragMaxContextTokens: 2500,
   ragMinSimilarity: 0,
-  lastBenchmark: null
+  lastBenchmark: null,
+  // GPU is ALWAYS the default ('auto'); only a detected problem or the explicit Settings
+  // toggle moves a machine to CPU (gpu-support-plan review decision Q2 — FINAL).
+  gpuMode: 'auto',
+  gpuAutoDisabled: false,
+  gpuLastError: null,
+  gpuProbe: null
+}
+
+// ---- GPU probe (Phase 15) ----
+/** One device as enumerated by `llama-server --list-devices` (e.g. "Vulkan0"). */
+export interface GpuDevice {
+  id: string
+  name: string
+  totalMb: number
+  freeMb: number
+}
+
+export interface GpuProbeResult {
+  devices: GpuDevice[]
+  probedAt: string
 }
 
 // ---- Models (Phase 2) ----
@@ -304,4 +340,12 @@ export interface RuntimeStatus {
   port: number | null
   healthy: boolean
   message: string
+  /**
+   * Which backend the active runtime landed on (Phase 15 fallback ladder): 'gpu' (the
+   * default build with a usable GPU), 'cpu' (the same build GPU-less or forced via
+   * `--device none`, or the safety-net build), 'mock'. Absent when not running.
+   */
+  backend?: 'gpu' | 'cpu' | 'mock'
+  /** The probed GPU name when backend === 'gpu' (e.g. for the Diagnostics line). */
+  gpuName?: string | null
 }

@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import { IPC, STREAM } from '../shared/ipc'
+import { EVENTS, IPC, STREAM } from '../shared/ipc'
 import type {
   AppSettings,
   AppStatus,
@@ -126,6 +126,12 @@ const api = {
     const handler = (_e: unknown, message: string) => cb(message)
     ipcRenderer.on(ch, handler)
     return () => ipcRenderer.removeListener(ch, handler)
+  },
+  /** Subscribe to one-line runtime notices (Phase 15: compatibility-mode fallback). */
+  onRuntimeNotice: (cb: (message: string) => void): (() => void) => {
+    const handler = (_e: unknown, message: string) => cb(message)
+    ipcRenderer.on(EVENTS.runtimeNotice, handler)
+    return () => ipcRenderer.removeListener(EVENTS.runtimeNotice, handler)
   }
 }
 
