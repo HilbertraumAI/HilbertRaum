@@ -81,4 +81,32 @@ describe('validateRuntimeSources', () => {
     expect(res.ok).toBe(true)
     expect(res.sources?.builds.map((b) => b.os)).toEqual(['win', 'mac', 'linux'])
   })
+
+  // Phase 14: "first match wins" selection makes a duplicate (os, arch, backend) triple
+  // ambiguous — it must be rejected, not silently shadowed.
+  it('rejects duplicate (os, arch, backend) triples', () => {
+    const res = validateRuntimeSources(
+      sources({
+        builds: [
+          build({ backend: 'vulkan' }),
+          build({ backend: 'vulkan', url: 'https://example.test/other.zip' })
+        ]
+      })
+    )
+    expect(res.ok).toBe(false)
+    expect(res.errors.some((e) => e.includes('duplicate') && e.includes('win/x64/vulkan'))).toBe(true)
+  })
+
+  it('accepts the same os/arch with DIFFERENT backends (vulkan default + cpu safety net)', () => {
+    const res = validateRuntimeSources(
+      sources({
+        builds: [
+          build({ backend: 'vulkan', extract_to: 'runtime/llama.cpp/win' }),
+          build({ backend: 'cpu', extract_to: 'runtime/llama.cpp/win/cpu' })
+        ]
+      })
+    )
+    expect(res.ok).toBe(true)
+    expect(res.sources?.builds.map((b) => b.backend)).toEqual(['vulkan', 'cpu'])
+  })
 })

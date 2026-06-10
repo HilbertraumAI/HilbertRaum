@@ -5,12 +5,14 @@
 > (see "Per-phase ritual" in [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md)).
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
-_Last updated: 2026-06-10 — **MVP feature-complete: Phases 0–13 done** (Phase 13, plug-and-play
-distribution, was the last planned phase). Four post-MVP audit rounds are fully remediated and the
-llama.cpp runtime pin + license reviews are complete — summarized in §8. The first real Windows `D:\`
-portable-drive bring-up surfaced + fixed a cluster of provisioning, drive-root path, manifest-source
-and RAG/embedding bugs — see **§9**. Remaining work = **manual release acceptance only** (§5).
-Consciously-accepted gaps live in [`docs/known-limitations.md`](docs/known-limitations.md)._
+_Last updated: 2026-06-10 — **MVP feature-complete: Phases 0–13 done**, plus **Phase 14 (GPU
+distribution: Vulkan-default sidecar builds + CPU safety net + install markers)** of the accepted
+GPU plan ([`docs/gpu-support-plan.md`](docs/gpu-support-plan.md)). Four post-MVP audit rounds are
+fully remediated and the llama.cpp runtime pin + license reviews are complete — summarized in §8.
+The first real Windows `D:\` portable-drive bring-up surfaced + fixed a cluster of provisioning,
+drive-root path, manifest-source and RAG/embedding bugs — see **§9**. Remaining work = **GPU
+Phases 15–16** + manual release acceptance (§5). Consciously-accepted gaps live in
+[`docs/known-limitations.md`](docs/known-limitations.md)._
 
 ---
 
@@ -32,6 +34,9 @@ Consciously-accepted gaps live in [`docs/known-limitations.md`](docs/known-limit
 | 11 | Drive layout, scripts & packaging | 🟢 done |
 | 12 | DIY asset loader (`fetch-assets`) | 🟢 done |
 | 13 | Plug-and-play distribution (commercial drive) | 🟢 done |
+| 14 | GPU distribution (Vulkan default + CPU safety net) | 🟢 done |
+| 15 | GPU runtime (probe, fallback ladder, embedder pin) | ⚪ not started |
+| 16 | GPU surface (Settings/Diagnostics/benchmark/docs) | ⚪ not started |
 
 Legend: ⚪ not started · 🟡 in progress · 🟢 done · 🔴 blocked
 
@@ -376,6 +381,29 @@ Repo root: `f:\_coding\ai_drive`.
   the `preflight:run` IPC (`registerCoreIpc`, preload `api.runPreflight`). **Encrypted-by-default kept:**
   the commercial first-run still lands on the existing `WorkspaceGate` (no plaintext offered when the
   policy forbids it); only the copy was softened for zero-technical-knowledge users.
+
+- **Vulkan-first runtime distribution (LOCKED, Phase 14 — gpu-support-plan §13 decisions are FINAL):**
+  `runtime-sources.yaml` now lists the **Vulkan full build first** per win/linux (b9585 vulkan assets,
+  hashes re-verified from fresh downloads on 2026-06-10) extracting to `runtime/llama.cpp/<os>/`, plus
+  the **pure-CPU safety net** (the former defaults) at `runtime/llama.cpp/<os>/cpu/`; mac stays
+  Metal-only. Safe-as-default because the upstream Vulkan archives are **standalone full builds**
+  carrying every CPU backend variant (GGML_BACKEND_DL) — on a GPU-less machine the same binary runs on
+  its bundled CPU backends. `selectRuntimeBuild`'s "first match wins" is unchanged (now vulkan-first);
+  new `selectRuntimeBuilds` (plural) returns every build an OS ships for the commercial pipeline.
+  `validateRuntimeSources` rejects duplicate `(os, arch, backend)` triples. **No new licenses**: both
+  vulkan archives build from the same MIT llama.cpp tag already approved (the Vulkan loader is NOT
+  redistributed — it ships with the user's GPU driver).
+- **Runtime install marker `.paid-runtime.json` (LOCKED, Phase 14):** after a verified extraction,
+  `fetch-runtime.{ps1,sh}` write `{ version, backend, os, arch }` (flat single-line JSON, UTF-8 no BOM)
+  into the build's extract dir. **Idempotent skips are marker-based** (version + backend must match) —
+  mere binary presence is no longer trusted, fixing the upgrade hole where a CPU-era drive would
+  silently keep its CPU build after the default moved to vulkan. Canonical logic in `assets.ts`
+  (`RUNTIME_MARKER_FILE`, `read/writeRuntimeMarker`, `runtimeInstallCurrent`); the scripts mirror it.
+  `assertCommercialDrive` gained an optional `runtimeSources` param + `checks.runtimeCurrent` (each
+  pinned build's marker must match version + backend); `build-commercial-drive.{ps1,sh}` fetch BOTH
+  builds per win/linux (default + `-Backend cpu`) and cross-check the five markers natively in step 7.
+  The fetch scripts' flatten step now **excludes the `cpu/` subdir** from the binary search (the
+  safety net must not be mistaken for the freshly extracted nested default binary).
 
 ---
 
@@ -824,10 +852,16 @@ CI are unaffected.
 asset loader ships, and the plug-and-play commercial drive is built + asserted.** The remaining items
 are **MANUAL acceptance only** (R2/R5/R7) **plus the newly-accepted GPU work**. In rough priority:
 
-0. **GPU acceleration (Phases 14–16) — plan ACCEPTED 2026-06-10, ready to implement:** see
-   [`docs/gpu-support-plan.md`](docs/gpu-support-plan.md) (Vulkan-default sidecar build + CPU safety
-   net + `--device none` fallback ladder + probe/Settings/Diagnostics surfacing). All review
-   decisions are resolved in its §13; implement §12 phase by phase under the per-phase ritual.
+0. **GPU acceleration (Phases 15–16 remaining; Phase 14 DONE 2026-06-10):** see
+   [`docs/gpu-support-plan.md`](docs/gpu-support-plan.md). **Phase 14 (distribution) is complete**:
+   vulkan-first `runtime-sources.yaml` (verified hashes), `<os>/cpu/` safety net, `.paid-runtime.json`
+   install markers + marker-based idempotency, validator dup-check, commercial-pipeline updates —
+   smoke-tested on a scratch dir (vulkan + cpu fetched/verified/markers; stale-marker re-fetch; the
+   extracted Vulkan build enumerates the dev box's RTX 3080 Ti, the cpu build enumerates nothing).
+   Next: **Phase 15** (probe `gpu.ts`, 4-rung start ladder, `gpuMode`/`gpuAutoDisabled` settings,
+   crash auto-fallback, E5 `--device none`) then **Phase 16** (Settings toggle, Diagnostics line,
+   benchmark probe injection, `classifyProfile` bump, friendly copy + docs). All §13 review
+   decisions are FINAL; per-phase ritual applies.
 1. **Commercial-drive manual acceptance (needs certs + a real USB run, R5/R7):** obtain the code-
    signing certs (Windows OV/EV + Apple Developer ID), produce a **signed** Windows portable `.exe` +
    a **signed & notarized** macOS `.app`, run `build-commercial-drive` end-to-end onto a real drive
@@ -844,8 +878,9 @@ are **MANUAL acceptance only** (R2/R5/R7) **plus the newly-accepted GPU work**. 
    deny-by-default, reusing `assets.ts` `fetchAndVerify`); an icon/`buildResources` for
    electron-builder; ANN vector index (sqlite-vec/HNSW) upgrade.
 
-**Current gate (2026-06-10): typecheck clean, 361/361 tests pass, `npm run build` green.** The
-per-phase gate history (test counts, bundle sizes, per-phase test inventories) lives in git history.
+**Current gate (2026-06-10, post-Phase-14): typecheck clean, 382/382 tests pass, `npm run build`
+green.** The per-phase gate history (test counts, bundle sizes, per-phase test inventories) lives in
+git history.
 
 ---
 

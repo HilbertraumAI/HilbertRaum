@@ -115,11 +115,21 @@ printed first). The DIY path pulls from the **upstream source**, which sidesteps
 
 ### `runtime-sources.yaml` (the sidecar, not a model)
 `model-manifests/runtime-sources.yaml` pins one `ggml-org/llama.cpp` release and lists one prebuilt
-build per OS/arch/backend (`os`, `arch`, `backend`, `url`, `sha256`, `extract_to`). The **default
-backend is CPU** (CPU x64 on Windows, Metal on mac arm64, plain CPU on Linux x64) — the
-broadest-compatible choice for an unknown laptop; GPU builds are an opt-in `--backend` override. It
-is validated by `shared/runtime-sources.ts` and is **excluded from model discovery** (it is not a
-model manifest).
+build per OS/arch/backend (`os`, `arch`, `backend`, `url`, `sha256`, `extract_to`). Since Phase 14
+the ordering is **vulkan-first**: the default build on win/linux is the **Vulkan full build**
+(extracted to `runtime/llama.cpp/<os>/`), which is safe as a default because the upstream Vulkan
+release archives are standalone full builds carrying every CPU backend variant — on a GPU-less
+machine the same binary simply runs on its bundled CPU backends (verified against b9585; this
+supersedes the Phase-12 "a GPU build fails or runs worse on a non-GPU machine" assumption, which is
+false for Vulkan-the-archive). A **pure-CPU safety net** is additionally pinned per win/linux,
+extracted to `runtime/llama.cpp/<os>/cpu/` (`--backend cpu`); mac arm64 stays Metal-only. Licensing
+is unchanged: both Vulkan archives are built from the same MIT-licensed llama.cpp source at the
+already-approved pinned tag, and the Vulkan *loader* is not redistributed (it comes with the user's
+GPU driver) — no new licenses enter the product. The file is validated by
+`shared/runtime-sources.ts` (duplicate `(os, arch, backend)` triples are rejected) and is
+**excluded from model discovery** (it is not a model manifest). After each verified extraction
+`fetch-runtime` writes a `.paid-runtime.json` install marker; skips are marker-based
+(version + backend), never mere binary presence.
 
 > ✅ **Pinned to a real release: `b9585`** (2026-06-10), with real per-OS URLs and SHA-256
 > checksums computed from the downloaded assets — `fetch-runtime` verifies before extracting.

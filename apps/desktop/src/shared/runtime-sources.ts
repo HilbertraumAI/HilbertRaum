@@ -124,6 +124,17 @@ export function validateRuntimeSources(raw: unknown): RuntimeSourcesResult {
     })
   }
 
+  // A duplicate (os, arch, backend) triple would make "first match wins" ambiguous and
+  // could silently shadow a deliberate pin — reject it (Phase 14, gpu-support-plan §9).
+  const seen = new Set<string>()
+  for (const b of builds) {
+    const key = `${b.os}/${b.arch}/${b.backend}`
+    if (seen.has(key)) {
+      errors.push(`duplicate build for (${key}) — (os, arch, backend) must be unique`)
+    }
+    seen.add(key)
+  }
+
   if (errors.length > 0) {
     return { ok: false, errors }
   }

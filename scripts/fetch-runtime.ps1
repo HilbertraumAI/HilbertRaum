@@ -6,15 +6,23 @@
 .DESCRIPTION
   Reads model-manifests/runtime-sources.yaml (on the drive, falling back to the repo),
   picks the build matching the host OS/arch (or -Os/-Arch/-Backend overrides), downloads
-  the release zip, SHA-256-verifies it, and extracts it into runtime/llama.cpp/<os>/
-  (the dirs services/runtime/sidecar.ts resolves: win/mac/linux).
+  the release zip, SHA-256-verifies it, and extracts it into the build's extract_to dir
+  (runtime/llama.cpp/<os>/ for the default build; runtime/llama.cpp/<os>/cpu/ for the
+  pure-CPU safety net). After extraction a .paid-runtime.json install marker
+  ({ version, backend, os, arch }) is written next to the binary.
 
-  Mirrors apps/desktop/src/main/services/assets.ts (selectRuntimeBuild / planRuntimeDownload).
-  Self-contained: needs no Node/npm. Default backend = CPU (the broadest-compatible build).
+  Mirrors apps/desktop/src/main/services/assets.ts (selectRuntimeBuild /
+  planRuntimeDownload / runtimeInstallCurrent). Self-contained: needs no Node/npm.
+  DEFAULT BACKEND = the FIRST build listed per OS in runtime-sources.yaml — since
+  Phase 14 that is the Vulkan full build on win/linux (contains every CPU backend;
+  degrades to CPU on GPU-less machines) and Metal on mac. -Backend cpu fetches the
+  pure-CPU safety net into <os>/cpu/.
 
   Verify-before-trust: a real-hash MISMATCH deletes the zip and exits non-zero. A
-  placeholder zip hash extracts but reports UNVERIFIED. Idempotent: an already-extracted
-  llama-server[.exe] is skipped.
+  placeholder zip hash extracts but reports UNVERIFIED. Idempotent via the MARKER, not
+  mere binary presence: a present llama-server[.exe] whose .paid-runtime.json matches the
+  selected version + backend is skipped; a missing/stale marker re-fetches (so upgrading
+  a CPU-era drive to the Vulkan default actually replaces the build).
 
 .PARAMETER Target
   The prepared drive root (e.g. E:\). Required.
@@ -26,7 +34,9 @@
   Override the host arch (x64/arm64).
 
 .PARAMETER Backend
-  Override the backend (e.g. cpu-avx2, metal, cuda) -- default is the first CPU build.
+  Override the backend (e.g. cpu, vulkan, metal) -- default is the first build listed
+  for the os/arch (vulkan on win/linux, metal on mac). -Backend cpu fetches the pure-CPU
+  safety net into runtime/llama.cpp/<os>/cpu/.
 
 .PARAMETER DryRun
   Print the plan and download nothing.
@@ -141,6 +151,7 @@ $extractTo = Join-Path $Target ($build.extract_to -replace '/', [IO.Path]::Direc
 # dir from a Windows build machine), mirroring assets.ts runtimeBinaryName(os).
 $binaryName = if ($build.os -eq 'win') { 'llama-server.exe' } else { 'llama-server' }
 $binaryPath = Join-Path $extractTo $binaryName
+$markerPath = Join-Path $extractTo '.paid-runtime.json'
 $sha = ([string]$build.sha256).ToLower()
 
 Write-Host "Fetch runtime -> $Target" -ForegroundColor Cyan
@@ -149,11 +160,22 @@ Write-Host ("  url:   {0}" -f $build.url)
 Write-Host ("  into:  {0}" -f $extractTo)
 if ($DryRun) { Write-Host '(dry run -- nothing will be downloaded)' -ForegroundColor Yellow; exit 0 }
 
-# Idempotent skip: the binary name is derived from the selected build's OS, so
-# presence is a valid skip signal even when cross-provisioning another OS's dir.
+# Idempotent skip is MARKER-based (Phase 14, mirrors assets.ts runtimeInstallCurrent):
+# "binary exists" alone would silently keep a CPU-era build in place after the default
+# became vulkan. Skip only when .paid-runtime.json matches the selected version+backend.
 if (Test-Path $binaryPath) {
-  Write-Host "  skip ($binaryName already extracted)" -ForegroundColor Green
-  exit 0
+  $skip = $false
+  if (Test-Path $markerPath) {
+    try {
+      $marker = Get-Content -Path $markerPath -Raw | ConvertFrom-Json
+      if ($marker.version -eq $version -and $marker.backend -eq $build.backend) { $skip = $true }
+    } catch { $skip = $false }
+  }
+  if ($skip) {
+    Write-Host "  skip ($binaryName already installed: $version/$($build.backend) per .paid-runtime.json)" -ForegroundColor Green
+    exit 0
+  }
+  Write-Host "  $binaryName present but install marker is missing or differs -- re-fetching $version/$($build.backend)" -ForegroundColor Yellow
 }
 
 New-Item -ItemType Directory -Force -Path $extractTo | Out-Null
@@ -233,7 +255,12 @@ Remove-Item -Force -Path $archive -ErrorAction SilentlyContinue
 # services/runtime/sidecar.ts resolves it.
 if (-not (Test-Path $binaryPath)) {
   $rootFull = [System.IO.Path]::GetFullPath($extractTo).TrimEnd('\', '/')
+  # Exclude the cpu/ safety-net subdir from the search: when the DEFAULT build is being
+  # (re)fetched into <os>/ and <os>/cpu/ already holds its own llama-server, the flatten
+  # must not mistake the safety net for the freshly extracted nested binary.
+  $cpuSubdir = Join-Path $rootFull 'cpu'
   $found = Get-ChildItem -Path $extractTo -Recurse -File -Filter $binaryName -ErrorAction SilentlyContinue |
+    Where-Object { -not $_.FullName.StartsWith($cpuSubdir + [IO.Path]::DirectorySeparatorChar) } |
     Select-Object -First 1
   if ($found) {
     $srcFull = [System.IO.Path]::GetFullPath($found.DirectoryName).TrimEnd('\', '/')
@@ -249,7 +276,12 @@ if (-not (Test-Path $binaryPath)) {
 }
 
 if (Test-Path $binaryPath) {
-  Write-Host "  extracted $binaryName" -ForegroundColor Green
+  # Record exactly which build is installed (UTF-8 without BOM -- PS 5.1 Set-Content
+  # would prepend one and break Node's JSON.parse). Mirrors assets.ts writeRuntimeMarker.
+  $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+  $markerJson = '{"version":"' + $version + '","backend":"' + $build.backend + '","os":"' + $build.os + '","arch":"' + $build.arch + '"}'
+  [System.IO.File]::WriteAllText($markerPath, $markerJson, $utf8NoBom)
+  Write-Host "  extracted $binaryName (+ .paid-runtime.json install marker)" -ForegroundColor Green
   if ($build.os -ne 'win') {
     Write-Host "  NOTE: exec bit for $binaryName cannot be set from Windows; exFAT mounts are typically all-executable, otherwise chmod +x it on the target OS." -ForegroundColor Yellow
   }

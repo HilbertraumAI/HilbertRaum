@@ -42,7 +42,9 @@ PRIVATE_AI_DRIVE/
 ├── start-private-ai-drive.sh                   # Linux launcher (Phase 13)
 ├── READ ME FIRST.txt                           # friendly first-run + SmartScreen note (Phase 13)
 ├── PrivateAIDriveLite-<version>-portable.exe   # the portable build (Phase 11) — signed for commercial
-├── runtime/llama.cpp/{win,mac,linux}/          # sidecars (Phase 10)
+├── runtime/llama.cpp/{win,mac,linux}/          # default sidecar build (Phase 10; Vulkan on win/linux since Phase 14)
+│   ├── .paid-runtime.json                       # install marker: { version, backend, os, arch } (Phase 14)
+│   └── cpu/                                     # pure-CPU safety-net build + its own marker (win/linux only, Phase 14)
 ├── models/{chat,embeddings}/                   # GGUF weights (git-ignored)
 ├── model-manifests/{chat,embeddings}/          # committed YAML (the only model metadata in git)
 │   └── runtime-sources.yaml                     # sidecar download manifest (Phase 12)
@@ -120,8 +122,29 @@ then runs `fetch-models` (weights) + `fetch-runtime` (the `llama-server` sidecar
 exit 1; placeholder hash → *UNVERIFIED*). You can still drop artifacts in by hand (R5). `verify-models`
 SHA-256s each present weight against its manifest hash, and `--generate` captures real hashes into
 `config/checksums.json`. The asset logic mirrors the unit-tested `services/assets.ts`; the sidecar
-build comes from `model-manifests/runtime-sources.yaml` (default CPU backend). See
+build comes from `model-manifests/runtime-sources.yaml`. See
 [`packaging.md`](packaging.md) + [`model-policy.md`](model-policy.md) for the full flow + license gate.
+
+### Sidecar builds: Vulkan default + CPU safety net (Phase 14)
+
+Since Phase 14 (see [`gpu-support-plan.md`](gpu-support-plan.md)) `runtime-sources.yaml` is
+**vulkan-first** on Windows/Linux:
+
+- **`runtime/llama.cpp/<os>/`** holds the **Vulkan full build** — it ships every CPU backend
+  variant alongside the Vulkan one (dynamic backend loading), so on a machine with no usable GPU
+  it *is* the CPU build. This is the binary `services/runtime/sidecar.ts` resolves, unchanged.
+- **`runtime/llama.cpp/<os>/cpu/`** (win/linux only) holds the **pure-CPU safety net** — used only
+  if the default binary itself cannot start (the app's fallback ladder rung 3). Fetch it with
+  `fetch-runtime --backend cpu`.
+- **mac is unchanged**: the arm64 Metal build, no `cpu/` subdir.
+- Each extraction dir carries a **`.paid-runtime.json` install marker**
+  (`{ version, backend, os, arch }`), written by `fetch-runtime` after a verified extraction.
+  Re-runs skip only when the marker matches the pinned version + backend — so bumping the pin or
+  switching a CPU-era drive to the Vulkan default actually re-fetches (mere binary presence is not
+  trusted). Canonical logic: `services/assets.ts` (`runtimeInstallCurrent`, `readRuntimeMarker`).
+
+Existing DIY drives keep working untouched: their flat `<os>/` dir holds a CPU build that resolves
+exactly as before (it just re-fetches as the Vulkan default on the next `fetch-runtime` run).
 
 ## Portability notes
 - No hardcoded absolute paths; everything derives from the resolved root (spec rule).
