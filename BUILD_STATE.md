@@ -822,8 +822,12 @@ CI are unaffected.
 
 **Phases 0–13 are complete — this was the LAST planned phase. The MVP is feature-complete, the DIY
 asset loader ships, and the plug-and-play commercial drive is built + asserted.** The remaining items
-are **MANUAL acceptance only** (R2/R5/R7). In rough priority:
+are **MANUAL acceptance only** (R2/R5/R7) **plus the newly-accepted GPU work**. In rough priority:
 
+0. **GPU acceleration (Phases 14–16) — plan ACCEPTED 2026-06-10, ready to implement:** see
+   [`docs/gpu-support-plan.md`](docs/gpu-support-plan.md) (Vulkan-default sidecar build + CPU safety
+   net + `--device none` fallback ladder + probe/Settings/Diagnostics surfacing). All review
+   decisions are resolved in its §13; implement §12 phase by phase under the per-phase ritual.
 1. **Commercial-drive manual acceptance (needs certs + a real USB run, R5/R7):** obtain the code-
    signing certs (Windows OV/EV + Apple Developer ID), produce a **signed** Windows portable `.exe` +
    a **signed & notarized** macOS `.app`, run `build-commercial-drive` end-to-end onto a real drive

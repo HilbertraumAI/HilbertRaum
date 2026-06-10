@@ -1,9 +1,9 @@
 # GPU Support Plan — llama.cpp sidecar acceleration
 
-_Status: **DRAFT v2 — review round 1 incorporated (2026-06-10); nothing implemented.** Written
-against the pinned llama.cpp **b9585** and the Phase-13-complete codebase. This document is the
-deliverable of a planning session; implementation starts only after sign-off. The §13 questions
-are now **decided** — see that section._
+_Status: **ACCEPTED 2026-06-10 — ready to implement (Phases 14–16, §12); nothing implemented
+yet.** Written against the pinned llama.cpp **b9585** and the Phase-13-complete codebase. All
+§13 review questions are **decided**; do not re-litigate them during implementation — note
+deviations in §13 and BUILD_STATE if reality forces a change._
 
 ---
 
