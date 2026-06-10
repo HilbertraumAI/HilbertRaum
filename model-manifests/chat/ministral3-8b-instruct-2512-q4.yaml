@@ -1,0 +1,36 @@
+id: ministral3-8b-instruct-2512-q4
+display_name: Ministral 3 8B Instruct (2512) Q4
+family: ministral3
+role: chat
+format: gguf
+runtime: llama_cpp
+license: apache-2.0
+size_on_disk_gb: 5.2
+recommended_min_ram_gb: 16
+recommended_ram_gb: 16
+recommended_context_tokens: 8192
+supports_thinking_mode: false
+supports_tools: false
+local_path: models/chat/ministral3-8b-instruct-2512-q4.gguf
+sha256: REPLACE_WITH_REAL_HASH
+# Phase 28 (model-catalog-expansion-plan D16): where `fetch-models` downloads the weight
+# from + what to verify it against. Filename + byte size verified against the HF repo file
+# listing 2026-06-10; hash promoted via `verify-models --generate` after the first fetch.
+download:
+  url: https://huggingface.co/mistralai/Ministral-3-8B-Instruct-2512-GGUF/resolve/main/Ministral-3-8B-Instruct-2512-Q4_K_M.gguf?download=true
+  sha256: REPLACE_WITH_REAL_HASH
+  size_bytes: 5198911904
+  license_url: https://www.apache.org/licenses/LICENSE-2.0
+bundled_on_preconfigured_drive: false
+# CHALLENGER (Phase 28, D17): selectable on the Models screen, never auto-recommended —
+# it must earn `recommended_profiles` via the Phase-29 benchmark first. Mid-tier (Qwen3 8B
+# class), 256k native context, strong German. TEXT-ONLY USE: the upstream repo also ships a
+# BF16 mmproj vision file — we deliberately do not download or reference it (no vision
+# pipeline in this app). Instruct-only: no hybrid thinking, so Deep mode behaves like
+# Balanced (plan §4.1).
+recommended_profiles: []
+license_review:
+  status: approved
+  reviewed_by: "project maintainer (Claude-assisted review, HF API verification)"
+  reviewed_at: "2026-06-10"
+  notes: "APPROVED 2026-06-10: license verified as apache-2.0 via the Hugging Face API card tag on the OFFICIAL Mistral org GGUF repo (https://huggingface.co/mistralai/Ministral-3-8B-Instruct-2512-GGUF; family announcement https://mistral.ai/news/mistral-3/). Quantization published by the model vendor itself (official mistralai GGUF — not a third-party requant). Apache-2.0 permits commercial redistribution; ship the LICENSE/NOTICE attribution with the drive (download.license_url points at the canonical Apache-2.0 text; the repo publishes no LICENSE blob, the card tag is the declaration). WARNING (name-twin trap, plan section 3.3): the Oct-2024 'Ministral-8B-Instruct-2410' is NON-COMMERCIAL (Mistral Research License) — this manifest pins the exact -2512 URL; never substitute a -2410 artifact."

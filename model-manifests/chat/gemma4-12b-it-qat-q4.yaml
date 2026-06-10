@@ -1,0 +1,40 @@
+id: gemma4-12b-it-qat-q4
+display_name: Gemma 4 12B Instruct QAT Q4
+family: gemma4
+role: chat
+format: gguf
+runtime: llama_cpp
+license: apache-2.0
+size_on_disk_gb: 7.0
+recommended_min_ram_gb: 16
+recommended_ram_gb: 32
+recommended_context_tokens: 8192
+supports_thinking_mode: false
+supports_tools: false
+local_path: models/chat/gemma4-12b-it-qat-q4.gguf
+sha256: REPLACE_WITH_REAL_HASH
+# Phase 28 (model-catalog-expansion-plan D16): where `fetch-models` downloads the weight
+# from + what to verify it against. Filename + byte size verified against the HF repo file
+# listing 2026-06-10 (the file name is lower-case `gemma-4-12b-...` while the repo id keeps
+# `12B`); hash promoted via `verify-models --generate` after the first fetch.
+download:
+  url: https://huggingface.co/google/gemma-4-12B-it-qat-q4_0-gguf/resolve/main/gemma-4-12b-it-qat-q4_0.gguf?download=true
+  sha256: REPLACE_WITH_REAL_HASH
+  size_bytes: 6975877728
+  license_url: https://www.apache.org/licenses/LICENSE-2.0
+bundled_on_preconfigured_drive: false
+# CHALLENGER (Phase 28, D17): selectable on the Models screen, never auto-recommended —
+# it must earn `recommended_profiles` via the Phase-29 benchmark first. High tier (Qwen3
+# 14B class), 140+ languages. Vendor QAT **Q4_0** quantization, not Q4_K_M — quantization-
+# aware trained, so higher quality than a naive Q4 at similar size (`format: gguf` is all
+# the validator checks). Needs llama.cpp ~b8607+; our pinned b9585 (2026-06-09) covers it
+# (plan §3.1). TEXT-ONLY USE: the upstream repo also ships an mmproj vision file — we
+# deliberately do not download or reference it. Instruct-only: no hybrid thinking, so Deep
+# mode behaves like Balanced. RAM numbers mirror Qwen3 14B pending the Phase-29 §5.2
+# memory runs.
+recommended_profiles: []
+license_review:
+  status: approved
+  reviewed_by: "project maintainer (Claude-assisted review, HF API verification)"
+  reviewed_at: "2026-06-10"
+  notes: "APPROVED 2026-06-10: license verified as apache-2.0 via the Hugging Face API card tag on the OFFICIAL Google org GGUF repo (https://huggingface.co/google/gemma-4-12B-it-qat-q4_0-gguf) — Gemma 4 is the first Gemma generation under Apache-2.0 (announcements: https://blog.google/innovation-and-ai/technology/developers-tools/gemma-4/ and https://opensource.googleblog.com/2026/03/gemma-4-expanding-the-gemmaverse-with-apache-20.html; Gemma 3 and earlier keep the custom Gemma Terms and stay disqualified). Quantization published by the model vendor itself (official Google QAT GGUF — not a third-party requant). Apache-2.0 permits commercial redistribution; ship the LICENSE/NOTICE attribution with the drive (download.license_url points at the canonical Apache-2.0 text; the repo publishes no LICENSE blob, the card tag is the declaration)."

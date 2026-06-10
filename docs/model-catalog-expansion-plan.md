@@ -1,6 +1,7 @@
 # Model Catalog Expansion & Benchmarking — plan (Phases 28–30)
 
-_Status: **WORKING PAPER — NOT IMPLEMENTED.** Created 2026-06-10 from an external model-candidate
+_Status: **WORKING PAPER — Phase 28 manifests landed 2026-06-10 (hashes + bring-up pending, see
+§4.6); Phases 29–30 not started.** Created 2026-06-10 from an external model-candidate
 research report (Claude web research, verified spot-checks below) + the planning discussion in
 session. Per the CLAUDE.md doc lifecycle rule this plan gets condensed into a design record (or
 folded into [`model-policy.md`](model-policy.md) / a new `docs/model-benchmarks.md`) once
@@ -152,6 +153,30 @@ established-quantizer rule and say so in the review.
 Tests green (no code changed → suite proves manifests validate), the 3–4 new models install +
 pass §4.3 on at least one machine, `docs/model-policy.md`'s catalog table gains the challengers
 (marked "challenger — not auto-recommended"), README catalog updated, BUILD_STATE updated.
+
+### 4.6 As-implemented deviations (manifest authoring, 2026-06-10)
+
+1. **D18 executed — the 2507 manifest exists, via the fallback:** the Qwen org publishes **no
+   official GGUF** for `Qwen3-4B-Instruct-2507` (HF API checked 2026-06-10), so per §4.4 the
+   manifest pins the established quantizer **unsloth**
+   (`unsloth/Qwen3-4B-Instruct-2507-GGUF`, Q4_K_M — card tag apache-2.0, the most-downloaded
+   2507 GGUF source). Recorded as third-party-requant provenance in its license review.
+2. **`license_url` deviation:** only the Qwen 2507 *base* repo publishes a LICENSE blob (used as
+   that manifest's `license_url`). The three vendor GGUF repos (mistralai / ibm-granite /
+   google) declare apache-2.0 via the HF card tag only — their `license_url` points at the
+   canonical Apache-2.0 text (<https://www.apache.org/licenses/LICENSE-2.0>) with the card URLs
+   recorded in the `license_review.notes`.
+3. **Exact byte sizes** from the HF tree API were baked into `download.size_bytes` instead of
+   the round estimates the existing manifests use: Ministral 5 198 911 904 · Granite
+   5 347 914 400 · Gemma 6 975 877 728 · Qwen-2507 2 497 281 120. Gemma's *file* name is
+   lower-case (`gemma-4-12b-it-qat-q4_0.gguf`) while the repo id keeps `12B`.
+4. **Context tokens** (unspecified in §4.1): Ministral/Granite/Gemma mirror the 8B/14B
+   convention (`recommended_context_tokens: 8192`); the 2507 mirrors the original 4B (4096).
+5. **No validator-level changes were needed** — all four manifests pass `validateManifest`
+   as-is; the suite's committed-manifests discovery test covers them (669/669 green).
+6. **Status at authoring close:** §4.3 bring-up + hash promotion NOT yet run (weights are
+   ~20 GB total; downloads are user-gated). `sha256` fields stay `REPLACE_WITH_REAL_HASH`
+   until `verify-models --generate` after the first fetch.
 
 ---
 
