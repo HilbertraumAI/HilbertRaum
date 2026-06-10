@@ -122,6 +122,18 @@ reranker is lazy, CPU-pinned, and opt-in by provisioning (never bundled; manifes
 `recommended_min_ram_gb: 6`, profiles LITE/BALANCED/PRO). CPU latency bounded by the
 candidate cap (≤ 2×topKInitial) + word truncation.
 
+**End-to-end quality validation 2026-06-10 (`PAID_RAG_QUALITY`, all three real backends on
+a 4-doc corpus — `tests/manual/rag-quality.test.ts`):** the evidence the reranker EARNS its
+cost. For "What is the cap on liability in our agreement with Acme?" the hybrid (vector+RRF)
+order put the true *Limitation of liability* clause only **#3 (cosine 0.848)** — behind two
+unrelated chunks (an invoice 0.875; an encryption clause 0.870), the exact prefix-less-E5
+compression §1.3 found. With the reranker ON the liability clause jumped to **#1 (logit
+−1.88)** and all four contract clauses took the top 4 with a clean gap; the grounded 4B
+answer was correct + cited ("one million United States dollars … [S1]" → the MSA). A
+keyword-exact query (`INV-2024-001`) surfaced the exact invoice chunk at #1 via FTS5. ⇒ on
+this prefix-less-E5 setup the reranker is not marginal polish — it rescued the correct answer
+from #3-behind-distractors to #1; the ~25 s worst-case cost buys real correctness.
+
 **Measured 2026-06-10 (`PAID_RERANK_SMOKE`, real F16 GGUF on b9585, Intel i7-1185G7,
 `--device none`, 4 threads):** the F16 GGUF LOADS clean (no q8_0 XLM-R warmup crash);
 relevance is correct (relevant invoice line **+8.82** vs irrelevant **−11.01**); **worst-case

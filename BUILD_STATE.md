@@ -1506,14 +1506,23 @@ items are **MANUAL acceptance only** (R2/R5/R7 + the GPU hardware matrix). In ro
    0.879–0.935 vs irrelevant 0.866–0.907 — E5 runs without query:/passage: prefixes, so all
    cosines compress into ~0.87–0.94), so no positive floor separates them without dropping real
    hits; relevance separation is the reranker's job (D12 confirmed empirically). **Both Phase-21
-   manual items are now DONE** — no Phase-21 acceptance work remains. Smaller
+   manual items are now DONE** — no Phase-21 acceptance work remains. **End-to-end quality
+   validated 2026-06-10 (`tests/manual/rag-quality.test.ts`, `PAID_RAG_QUALITY`, all three real
+   backends on a 4-doc corpus):** for a liability-cap question the hybrid order put the true
+   clause only #3 (cosine 0.848) BEHIND an invoice (0.875) + an encryption clause (0.870) — the
+   prefix-less-E5 compression in action — while the reranker promoted it to #1 (logit −1.88) with
+   all four contract clauses on top; the grounded 4B answer was correct + cited (1M USD → the MSA),
+   and a keyword-exact `INV-2024-001` query surfaced the exact chunk at #1 via FTS5. This is the
+   concrete justification for the reranker's ~25 s worst-case cost — it rescued the right answer
+   from #3-behind-distractors to #1. Smaller
    leftovers: an icon/`buildResources` for electron-builder; ANN vector index only if a real
    corpus outgrows the linear scan (plan §9 item 4 / D15 — explicitly not built).
 
-**Current gate (2026-06-10, post-Phase-21): typecheck clean, 601/601 tests pass (+7 manual
+**Current gate (2026-06-10, post-Phase-21): typecheck clean, 601/601 tests pass (+8 manual
 tests — 4 GPU smoke behind `PAID_GPU_SMOKE`, 1 thinking smoke behind `PAID_THINKING_SMOKE`,
 1 rerank smoke behind `PAID_RERANK_SMOKE`, 1 ragMinSimilarity measurement behind
-`PAID_MINSIM_MEASURE` — skipped in CI), `npm run build` green.** The
+`PAID_MINSIM_MEASURE`, 1 end-to-end RAG quality check behind `PAID_RAG_QUALITY` — skipped in
+CI), `npm run build` green.** The
 per-phase gate history (test counts, bundle sizes, per-phase test inventories) lives in git
 history.
 
