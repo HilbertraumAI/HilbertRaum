@@ -89,6 +89,13 @@ describe('LlamaReranker', () => {
     // CPU pin, same rationale as the E5 embedder (gpu-support-plan §7).
     expect(args).toContain('--device none')
     expect(args).not.toContain('-ngl')
+    // Physical batch sized to the context: in --rerank/embedding mode llama-server forces
+    // n_batch = n_ubatch and defaults them to 512, but a query+document rerank input runs
+    // ~670 tokens — the 512 default 500s the whole request on real-length chunks (found by
+    // PAID_RERANK_SMOKE; retrieval-plan §1.1 deviation). Must match --ctx-size.
+    expect(args).toContain('--batch-size 2048')
+    expect(args).toContain('--ubatch-size 2048')
+    expect(args).toContain('--ctx-size 2048')
     // CHAT_SERVER_ARGS are chat-only (Phase 20) and must NOT leak to this sidecar.
     expect(args).not.toContain('--jinja')
     expect(args).not.toContain('--reasoning-format')

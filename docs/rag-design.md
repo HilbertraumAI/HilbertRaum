@@ -487,6 +487,10 @@ the recorded E5 lesson) behind the `Reranker` interface. `LlamaReranker` is the 
 args never reach it), lazy start on first `rerank()`, `/v1/rerank` Jina shape
 (`{ query, documents }` → `results: [{ index, relevance_score }]`, mapped back by
 `index`). Inputs are word-truncated (query ≤ 160, doc ≤ 320) to bound CPU latency.
+The sidecar also passes `--batch-size`/`--ubatch-size` = the context (2048): in
+`--rerank`/embedding mode llama-server forces `n_batch = n_ubatch` and defaults them to
+**512**, but a query+document rerank input runs ~670 tokens and would otherwise HTTP-500
+the whole request on real-length chunks (found by `PAID_RERANK_SMOKE`; retrieval-plan §1.1).
 Selection is availability-driven (`createSelectedReranker` → real iff binary + GGUF,
 else **null**; no mock — null = today's ordering). Failure modes: a failed START latches
 for the session (fail-fast, no 60 s health stall per question); a failed CALL logs and
@@ -505,5 +509,7 @@ truncation, failed-start latch, stop/suspend, selector), `hybrid-search.test.ts`
 (migration + backfill + trigger sync, MATCH sanitization, visibility + scope, RRF,
 retrieve() e2e with a fake reranker, both grounding-guard variants),
 `e5-embedder.test.ts` (suspend), `drive.test.ts` (`models/reranker`). Manual:
-`tests/manual/rerank-smoke.test.ts` behind `PAID_RERANK_SMOKE` (real F16 load on b9585,
-relevance sanity, the §7 latency measurement).
+`tests/manual/rerank-smoke.test.ts` behind `PAID_RERANK_SMOKE` — **run 2026-06-10** on the
+real F16 GGUF + b9585: loads clean, ranks the relevant doc first (+8.82 vs −11.01), and the
+worst-case 12-candidate batch took **≈ 24.7 s** on a CPU-pinned i7-1185G7 (the §7 number;
+also the regression that surfaced the n_ubatch=512 fix above).

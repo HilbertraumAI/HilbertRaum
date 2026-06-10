@@ -13,13 +13,13 @@ recommended_context_tokens: 2048
 # during warmup (`binary_op: unsupported types: dst f32, src1 q8_0` — the recorded E5
 # embedder lesson, BUILD_STATE §9). F16 is the variant proven to load for this family.
 local_path: models/reranker/bge-reranker-v2-m3-f16.gguf
-sha256: REPLACE_WITH_REAL_HASH
+sha256: 5df93be121c09c43432102ad2b9569d369ccb85c209ca7583e8ccd28f0e41b88
 # Phase 21: where `fetch-models` (or the in-app downloader) fetches the weight from.
-# Size verified via the Hugging Face API 2026-06-10; the sha256 placeholder is promoted
-# after the first real fetch (`verify-models --generate`), the established pattern.
+# sha256 promoted 2026-06-10 from a real fetch onto the D:\ test drive
+# (`fetch-models` -> `verify-models --generate`); size matches the HF-API value.
 download:
   url: https://huggingface.co/gpustack/bge-reranker-v2-m3-GGUF/resolve/main/bge-reranker-v2-m3-FP16.gguf?download=true
-  sha256: REPLACE_WITH_REAL_HASH
+  sha256: 5df93be121c09c43432102ad2b9569d369ccb85c209ca7583e8ccd28f0e41b88
   size_bytes: 1159776896
   license_url: https://huggingface.co/BAAI/bge-reranker-v2-m3
 # Optional quality add-on: NOT bundled by default — it costs ~1.3 GB RSS when active,

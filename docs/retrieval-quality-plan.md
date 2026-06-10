@@ -29,6 +29,15 @@ Shipped: wave-1 record §9 items 1–3 ([`post-mvp-functionality-plan.md`](post-
 - **Prompting** (`server-common.cpp` L1540–1582): a GGUF-embedded `rerank` chat template
   if present, else **`BOS query EOS SEP document EOS`** — the BERT-style default path
   bge-reranker-v2-m3 uses (no template needed).
+- **DEVIATION found by `PAID_RERANK_SMOKE` (2026-06-10):** in `--rerank`/embedding mode
+  the server **forces `n_batch = n_ubatch`** and they default to **512** ("embeddings
+  enabled with n_batch (2048) > n_ubatch (512) … setting n_batch = n_ubatch = 512"). A
+  rerank input is query+document in ONE sequence — at the §7 word caps ≈ 670 real tokens —
+  so the 512 default makes the server **HTTP 500 the whole request** ("input (… tokens) is
+  too large to process. increase the physical batch size"), which would silently drop every
+  rerank pass back to the fused order on real-length chunks. **Fix:** the reranker sidecar
+  now passes `--batch-size`/`--ubatch-size` = the context (2048) so any in-context input
+  decodes in one ubatch (`services/reranker/llama.ts`; locked by `reranker.test.ts`).
 - **Response** (`server-common.cpp` L1213–1258; per-task `server-task.cpp` L1867–1873):
   `{ model, object: "list", usage, results: [{ index, relevance_score }] }` sorted by
   score **desc**, truncated to `top_n`; results map to inputs by `index`, not order.
@@ -95,8 +104,16 @@ Reranker ≈ **1.3 GB RSS** when active (F16 1.08 GiB + ctx 2048); worst case al
 4B chat (~2.6 GB) + E5 (~0.35 GB) + Electron (~1 GB) ≈ 5.3 GB — workable because the
 reranker is lazy, CPU-pinned, and opt-in by provisioning (never bundled; manifest
 `recommended_min_ram_gb: 6`, profiles LITE/BALANCED/PRO). CPU latency bounded by the
-candidate cap (≤ 2×topKInitial) + word truncation; **the real number comes from
-`PAID_RERANK_SMOKE`** (tests/manual/rerank-smoke.test.ts) and is still pending.
+candidate cap (≤ 2×topKInitial) + word truncation.
+
+**Measured 2026-06-10 (`PAID_RERANK_SMOKE`, real F16 GGUF on b9585, Intel i7-1185G7,
+`--device none`, 4 threads):** the F16 GGUF LOADS clean (no q8_0 XLM-R warmup crash);
+relevance is correct (relevant invoice line **+8.82** vs irrelevant **−11.01**); **worst-case
+latency ≈ 24.7 s** for a 12-candidate batch at the full truncation budget (160-word query +
+320-word docs, ~670 tokens/input). That worst case is ~2 s/candidate — significant on a
+CPU pin, so reranking visibly lengthens a documents query on a low-end laptop; the candidate
+cap (≤ 2×topKInitial) keeps it bounded, and it stays opt-in by provisioning. Tightening
+`MAX_DOC_WORDS` / the candidate cap is the lever if the latency proves too high in use.
 
 ## 8. Testing (as held)
 

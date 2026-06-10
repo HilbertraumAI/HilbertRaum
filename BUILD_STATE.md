@@ -39,7 +39,11 @@ runtimes), an FTS5 keyword pass + RRF fusion now hybridizes `retrieve()`, and an
 CPU-pinned `bge-reranker-v2-m3` sidecar reorders candidates behind a `Reranker` interface
 whose absent default keeps retrieval byte-identical (§3 entry; working paper
 [`docs/retrieval-quality-plan.md`](docs/retrieval-quality-plan.md), decisions D8–D15; design
-record `docs/rag-design.md` §11). Release-wise, remaining work =
+record `docs/rag-design.md` §11). **Verified on real hardware (2026-06-10, `PAID_RERANK_SMOKE`
+on `D:\`): F16 loads on b9585, relevance correct, worst-case batch ≈ 24.7 s CPU — and the
+smoke run caught + fixed a real HTTP-500 (rerank mode forces n_ubatch=512 < a ~670-token
+input; now sizes `--batch-size`/`--ubatch-size` to the 2048 context — §3 entry item 6).**
+Release-wise, remaining work =
 **manual release acceptance only** (§5, incl. the GPU
 hardware matrix, item 1b). Consciously-accepted gaps live in
 [`docs/known-limitations.md`](docs/known-limitations.md)._
@@ -851,6 +855,24 @@ Repo root: `f:\_coding\ai_drive`.
      whose latch is PERMANENT — every post-lock/unlock embed failed with "Embedder is stopped".
      New optional `Embedder.suspend()`/`Reranker.suspend()` (teardown WITHOUT the latch) is what
      the lock path calls now; `stop()` stays permanent for `will-quit` (orphan protection).
+  6. **Real-drive verification (2026-06-10, `PAID_RERANK_SMOKE` on `D:\`) — DONE, and it
+     caught a real bug.** Fetched the F16 GGUF to the drive, captured + promoted the real
+     sha256 (`5df93be1…f0e41b88`) into the manifest (both top-level + `download.sha256`). The
+     smoke test then surfaced a **deviation from R1's source read**: in `--rerank`/embedding
+     mode b9585 **forces `n_batch = n_ubatch` and defaults them to 512** ("embeddings enabled
+     with n_batch (2048) > n_ubatch (512) … setting n_batch = n_ubatch = 512"). A rerank input
+     is query+document in ONE sequence (~670 tokens at the §7 word caps), so the 512 default
+     made the server **HTTP-500 the whole request** — which the query-time fallback would have
+     silently swallowed into the fused order on real-length chunks. **Fix:** the reranker now
+     passes `--batch-size`/`--ubatch-size` = the context (2048) so any in-context input decodes
+     in one ubatch (`services/reranker/llama.ts`; locked by a `reranker.test.ts` assertion). The
+     smoke test was also corrected to drive the FULL truncation budget with realistic
+     ~1-token-per-word text (the old `fillerNwordM` filler was ~5 tokens/word → unrealistic
+     latency AND it overflowed even the resized batch). **Re-run is green:** loads clean (no
+     q8_0 warmup crash), relevant +8.82 vs irrelevant −11.01, **worst-case 12-candidate batch
+     ≈ 24.7 s** on a CPU-pinned i7-1185G7 (the §7 number — ~2 s/candidate, so reranking visibly
+     lengthens a documents query on a low-end laptop; bounded by the candidate cap, opt-in by
+     provisioning). `ragMinSimilarity` measurement (R3) is still the one remaining §5 item.
   Tests (+29 → 601): `reranker.test.ts` (10: spawn args incl. NO chat args + CPU pin, index
   mapping, truncation, failed-start latch, stop/suspend, selector), `hybrid-search.test.ts`
   (18: migration + backfill-once + trigger sync, MATCH sanitization, visibility + scope, RRF,
@@ -1458,13 +1480,14 @@ items are **MANUAL acceptance only** (R2/R5/R7 + the GPU hardware matrix). In ro
    Activity-panel eyeball on the same drive (events appear; export saves); **a real
    Deep-mode answer with visible thinking from Qwen3 4B on the test drive**
    (`tests/manual/thinking-smoke.test.ts` with `PAID_THINKING_SMOKE=<drive root>` covers the
-   mechanism; the eyeball covers the UI). **NEW manual items from Phase 21:** fetch the
-   reranker GGUF onto the test drive (`fetch-models -Only bge-reranker-v2-m3-f16`), promote
-   its real sha256 into the repo manifest, then run
-   `tests/manual/rerank-smoke.test.ts` (`PAID_RERANK_SMOKE=<drive root>`) — it proves the F16
-   load on b9585, relevance sanity, and the CPU latency number the plan §7 budget awaits; and
-   **measure the `ragMinSimilarity` floor** (relevant + irrelevant query batches on a real
-   E5-indexed corpus → promote a measured default; semantics already locked, D12). Smaller
+   mechanism; the eyeball covers the UI). **Phase 21 manual items — reranker smoke DONE
+   (2026-06-10):** fetched the GGUF to `D:\`, promoted the real sha256 into the manifest, ran
+   `tests/manual/rerank-smoke.test.ts` (`PAID_RERANK_SMOKE=D:\`) — F16 loads on b9585, relevance
+   correct (+8.82 vs −11.01), worst-case 12-candidate batch ≈ 24.7 s on a CPU-pinned i7-1185G7
+   (§7). It **caught a real bug** (rerank-mode forces n_ubatch=512 < the ~670-token input →
+   HTTP 500) now fixed by sizing `--batch-size`/`--ubatch-size` to the context (§3 entry item 6).
+   STILL OPEN: **measure the `ragMinSimilarity` floor** (relevant + irrelevant query batches on a
+   real E5-indexed corpus → promote a measured default; semantics already locked, D12). Smaller
    leftovers: an icon/`buildResources` for electron-builder; ANN vector index only if a real
    corpus outgrows the linear scan (plan §9 item 4 / D15 — explicitly not built).
 

@@ -24,9 +24,10 @@ const DEFAULT_CONTEXT_TOKENS = 2048
 const TOKENS_PER_WORD_ESTIMATE = 1.4
 /**
  * Word caps per rerank input (retrieval-plan §7): each rerank task is ONE
- * query+document pair, so (160 + 320) × 1.4 + specials ≈ 700 tokens ≪ the 2048-token
- * context. The doc cap chiefly bounds CPU latency per candidate (the reranker is
- * CPU-pinned); tune after PAID_RERANK_SMOKE produces real numbers.
+ * query+document pair, so (160 + 320) × 1.4 + specials ≈ 700 real tokens. The doc cap
+ * chiefly bounds CPU latency per candidate (the reranker is CPU-pinned); tune after
+ * PAID_RERANK_SMOKE produces real numbers. NOTE: ~700 tokens exceeds llama-server's
+ * DEFAULT physical batch of 512 in embedding mode — see RERANK_BATCH_TOKENS below.
  */
 const MAX_QUERY_WORDS = 160
 const MAX_DOC_WORDS = 320
@@ -81,16 +82,37 @@ export class LlamaReranker implements Reranker {
     if (this.startFailed) throw this.startFailed
     if (this.server) return this.server
     if (!this.starting) {
+      const contextTokens = this.opts.contextTokens ?? DEFAULT_CONTEXT_TOKENS
       const server = new LlamaServer({
         binPath: this.opts.binPath,
         modelPath: this.opts.modelPath,
-        contextTokens: this.opts.contextTokens ?? DEFAULT_CONTEXT_TOKENS,
+        contextTokens,
         // `--rerank` switches llama-server to embedding mode + RANK pooling and enables
         // /v1/rerank (b9585 common/arg.cpp L2964–2971 — the one flag is the whole
         // switch). `--device none` PINS the reranker to CPU, exactly like the E5
         // embedder (gpu-support-plan §7): a sub-1B scorer gains little from a GPU and
         // must never contend for VRAM with the chat model.
-        extraArgs: ['--rerank', '--device', 'none'],
+        //
+        // `--batch-size`/`--ubatch-size` = the context (retrieval-plan §1.1 deviation,
+        // found by PAID_RERANK_SMOKE): in embedding/rerank mode llama-server FORCES
+        // n_batch = n_ubatch and defaults them to 512 (b9585 logs "embeddings enabled
+        // with n_batch (2048) > n_ubatch (512) ... setting n_batch = n_ubatch = 512").
+        // A rerank input is query+document in ONE sequence — up to
+        // (MAX_QUERY_WORDS + MAX_DOC_WORDS) words ≈ 670 real tokens — so the 512 default
+        // makes the server 500 the WHOLE request ("input (… tokens) is too large to
+        // process. increase the physical batch size"), which would silently drop every
+        // rerank pass back to the fused order on real-length chunks. Sizing the physical
+        // batch to the context guarantees any in-context input decodes in one ubatch (a
+        // single rerank input cannot exceed n_ctx anyway).
+        extraArgs: [
+          '--rerank',
+          '--device',
+          'none',
+          '--batch-size',
+          String(contextTokens),
+          '--ubatch-size',
+          String(contextTokens)
+        ],
         spawn: this.opts.spawn,
         fetchImpl: this.opts.fetchImpl,
         findPort: this.opts.findPort,
