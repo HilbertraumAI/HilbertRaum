@@ -109,6 +109,21 @@ the whole DB file is encrypted at rest.
   before sending. `sendChatMessage(conversationId, content, options)` *also* resolves with the
   final assistant `Message`, so a caller can simply `await` it; the event channels drive the
   incremental UI. The streaming id is the **conversation id** (one active stream per conversation).
+  **Phase 20 added one ADDITIVE channel:** `chat:reasoning:<id>` (preload `onReasoning`) carries
+  Deep-mode thinking deltas; token events still carry only answer text, and reasoning is a
+  live-display affordance that is never persisted.
+- **Answer-depth modes (Phase 20, spec §10.3).** `ChatOptions.mode` (`fast|balanced|deep`,
+  per message, sticky per conversation in the renderer) threads through
+  `generateAssistantMessage` → `RuntimeChatOptions.mode`. The mapping to request parameters
+  lives in ONE place, `runtime/llama.ts` `requestParamsForMode` (D4): fast = thinking off +
+  temp 0.7 + 1024-token cap; balanced (and omitted) = thinking off, server defaults; deep =
+  thinking on + temp 0.6. Thinking is toggled per request via
+  `chat_template_kwargs.enable_thinking` (D5, verified against the pinned llama.cpp b9585);
+  every chat sidecar is spawned with `--jinja --reasoning-format deepseek`
+  (`CHAT_SERVER_ARGS`) so the kwarg acts and reasoning streams as separate
+  `delta.reasoning_content` frames. `stripThinkBlocks` (services/chat.ts) scrubs any inline
+  `<think>` block from persisted replies AND from assistant turns replayed as history (D6).
+  Document answers (`rag/`) never pass a mode — grounded answers always run balanced.
 - **Cancellation.** Each in-flight send holds an `AbortController` in a per-conversation map in
   `ipc/registerChatIpc.ts`; `stopGeneration(conversationId)` aborts it. The runtime's
   `chatStream` honours `options.signal` and stops emitting; whatever streamed so far is persisted

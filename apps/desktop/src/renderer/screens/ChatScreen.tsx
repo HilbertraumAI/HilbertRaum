@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import type { Citation, Conversation, DocumentInfo, Message } from '@shared/types'
+import type { ChatDepthMode, Citation, Conversation, DocumentInfo, Message } from '@shared/types'
 
 // Chat screen (spec §7.6 / §7.8 — Milestones 3 & 6). Conversation list on the left, a
 // streamed message view on the right. Two modes share the same streaming contract:
@@ -16,8 +16,25 @@ import type { Citation, Conversation, DocumentInfo, Message } from '@shared/type
 // documents" notice while indexed documents exist (the wrong-tab hallucination guard),
 // and documents mode carries an optional "ask selected documents" scope — chips above
 // the composer, persisted per conversation (`scopeDocumentIds`).
+//
+// Phase 20 (spec §10.3): the composer carries an answer-depth selector
+// (Fast / Balanced / Deep), sticky per conversation for this session and sent
+// per-message (`ChatOptions.mode`). Deep is offered only when the running model's
+// manifest declares thinking support (`RuntimeStatus.supportsThinkingMode`); its
+// reasoning streams into a collapsed "Thinking…" block on the live bubble only —
+// the persisted reply never includes it. Document answers always run Balanced.
 
 type Mode = 'chat' | 'documents'
+
+const DEPTHS: Array<{ value: ChatDepthMode; label: string; hint: string }> = [
+  { value: 'fast', label: 'Fast', hint: 'Quick, to-the-point answers' },
+  { value: 'balanced', label: 'Balanced', hint: 'The everyday default' },
+  {
+    value: 'deep',
+    label: 'Deep',
+    hint: 'The model thinks a problem through before answering — best for tricky questions, takes longer'
+  }
+]
 
 interface Props {
   onNavigate: (screen: string) => void
@@ -35,10 +52,17 @@ export function ChatScreen({ onNavigate, initialMode, initialScopeDocumentIds }:
   const [input, setInput] = useState('')
   const [streaming, setStreaming] = useState(false)
   const [streamText, setStreamText] = useState('')
+  /** Live Deep-mode reasoning (Phase 20) — rendered as the collapsed "Thinking…" block
+   *  on the streaming bubble only; it is never persisted, so it vanishes on refresh. */
+  const [streamThinking, setStreamThinking] = useState('')
   /** Which conversation the live stream belongs to (M2): the bubble renders, and the
    *  completion refresh applies, only when this still matches the visible conversation. */
   const [streamConvId, setStreamConvId] = useState<string | null>(null)
   const [runtimeRunning, setRuntimeRunning] = useState<boolean | null>(null)
+  /** Whether the RUNNING model's manifest declares thinking support — gates Deep. */
+  const [supportsThinking, setSupportsThinking] = useState(false)
+  /** Per-conversation answer depth for this session ('new' = no conversation yet). */
+  const [depths, setDepths] = useState<Record<string, ChatDepthMode>>({})
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   // Imported documents — drives the plain-chat awareness notice and the scope chips'
@@ -64,6 +88,7 @@ export function ChatScreen({ onNavigate, initialMode, initialScopeDocumentIds }:
   const checkRuntime = useCallback(async (): Promise<void> => {
     const status = await window.api.getRuntimeStatus()
     setRuntimeRunning(status.running)
+    setSupportsThinking(status.supportsThinkingMode === true)
   }, [])
 
   useEffect(() => {
@@ -104,7 +129,7 @@ export function ChatScreen({ onNavigate, initialMode, initialScopeDocumentIds }:
   // Keep the transcript scrolled to the newest content.
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight })
-  }, [messages, streamText])
+  }, [messages, streamText, streamThinking])
 
   // Create a conversation in the current mode. A documents conversation takes the
   // pending "ask selected documents" scope (which it then owns — the handoff clears).
@@ -123,13 +148,40 @@ export function ChatScreen({ onNavigate, initialMode, initialScopeDocumentIds }:
     return conv.id
   }
 
-  async function stream(convId: string, content: string, regenerate: boolean): Promise<void> {
+  // ---- Phase 20: answer depth (Fast / Balanced / Deep) -------------------------
+  /** The depth selected for a conversation key, coerced to Balanced when the running
+   *  model cannot think (a sticky Deep choice must not silently send 'deep'). */
+  function depthFor(key: string): ChatDepthMode {
+    const selected = depths[key] ?? 'balanced'
+    return selected === 'deep' && !supportsThinking ? 'balanced' : selected
+  }
+
+  const depthKey = activeId ?? 'new'
+  const currentDepth = depthFor(depthKey)
+
+  function selectDepth(d: ChatDepthMode): void {
+    if (streaming) return
+    setDepths((prev) => ({ ...prev, [depthKey]: d }))
+  }
+
+  async function stream(
+    convId: string,
+    content: string,
+    regenerate: boolean,
+    depth: ChatDepthMode
+  ): Promise<void> {
     setError(null)
     setStreaming(true)
     setStreamConvId(convId)
     setStreamText('')
+    setStreamThinking('')
     const unsubscribe = window.api.onToken(convId, (token) => {
       setStreamText((prev) => prev + token)
+    })
+    // Deep-mode reasoning deltas (Phase 20) feed the live "Thinking…" block. They are
+    // a separate channel from answer tokens and are never part of the persisted reply.
+    const unsubscribeReasoning = window.api.onReasoning(convId, (delta) => {
+      setStreamThinking((prev) => prev + delta)
     })
     // Only update the visible transcript if the user is still looking at THIS
     // conversation — replacing another conversation's view with this one's messages
@@ -143,7 +195,10 @@ export function ChatScreen({ onNavigate, initialMode, initialScopeDocumentIds }:
       if (mode === 'documents') {
         await window.api.askDocuments(convId, content)
       } else {
-        await window.api.sendChatMessage(convId, content, regenerate ? { regenerate: true } : undefined)
+        await window.api.sendChatMessage(convId, content, {
+          mode: depth,
+          ...(regenerate ? { regenerate: true } : {})
+        })
       }
       // Re-read the persisted history (includes the user turn + final assistant reply).
       await refreshIfVisible()
@@ -155,9 +210,11 @@ export function ChatScreen({ onNavigate, initialMode, initialScopeDocumentIds }:
       await checkRuntime().catch(() => undefined)
     } finally {
       unsubscribe()
+      unsubscribeReasoning()
       setStreaming(false)
       setStreamConvId(null)
       setStreamText('')
+      setStreamThinking('')
     }
   }
 
@@ -166,9 +223,12 @@ export function ChatScreen({ onNavigate, initialMode, initialScopeDocumentIds }:
     if (!text || streaming) return
     setInput('')
     try {
+      // The 'new'-composer depth selection sticks to the conversation that gets created.
+      const depth = depthFor(depthKey)
       const convId = await ensureConversation()
+      setDepths((prev) => ({ ...prev, [convId]: depth }))
       setMessages((prev) => [...prev, optimisticUser(convId, text)])
-      await stream(convId, text, false)
+      await stream(convId, text, false, depth)
     } catch (e) {
       setError(String(e instanceof Error ? e.message : e))
     }
@@ -183,7 +243,7 @@ export function ChatScreen({ onNavigate, initialMode, initialScopeDocumentIds }:
       const last = prev[prev.length - 1]
       return last && last.role === 'assistant' ? prev.slice(0, -1) : prev
     })
-    await stream(activeId, '', true)
+    await stream(activeId, '', true, depthFor(activeId))
   }
 
   function onStop(): void {
@@ -411,6 +471,14 @@ export function ChatScreen({ onNavigate, initialMode, initialScopeDocumentIds }:
           {streaming && streamConvId === activeId && (
             <div className="msg assistant">
               <div className="msg-role">assistant</div>
+              {/* Deep mode (Phase 20): live reasoning, collapsed by default. Display-only —
+                  it is not persisted (D6), so it disappears once the final reply lands. */}
+              {streamThinking !== '' && (
+                <details className="msg-thinking">
+                  <summary>Thinking…</summary>
+                  <div className="msg-thinking-text">{streamThinking}</div>
+                </details>
+              )}
               <div className="msg-content md">
                 <AssistantMarkdown text={streamText} />
                 <span className="cursor">▋</span>
@@ -440,6 +508,23 @@ export function ChatScreen({ onNavigate, initialMode, initialScopeDocumentIds }:
                   ✕
                 </button>
               </span>
+            ))}
+          </div>
+        )}
+
+        {mode === 'chat' && (
+          <div className="chat-depth-row" role="group" aria-label="Answer depth">
+            <span className="chat-depth-label">Answer depth:</span>
+            {DEPTHS.filter((d) => d.value !== 'deep' || supportsThinking).map((d) => (
+              <button
+                key={d.value}
+                className={`chat-depth-btn ${currentDepth === d.value ? 'active' : ''}`}
+                disabled={streaming}
+                title={d.hint}
+                onClick={() => selectDepth(d.value)}
+              >
+                {d.label}
+              </button>
             ))}
           </div>
         )}

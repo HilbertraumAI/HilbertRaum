@@ -258,6 +258,45 @@ describe('registerModelIpc', () => {
     )
   })
 
+  // Phase 20: getRuntimeStatus enriches the running model with its manifest's
+  // supports_thinking_mode flag (the renderer gates the Deep answer mode on it).
+  it('getRuntimeStatus reports supportsThinkingMode for the running model', async () => {
+    const status = {
+      running: true,
+      modelId: 'qwen3-4b-instruct-q4',
+      port: 1234,
+      healthy: true,
+      message: 'ok'
+    }
+    const ctx = {
+      db: seededDb(),
+      manifestsDir: REPO_MANIFESTS,
+      paths: noWeightPaths(),
+      isDev: true,
+      runtime: { status: () => ({ ...status }), activeModelId: () => status.modelId }
+    } as unknown as AppContext
+    registerModelIpc(ctx)
+
+    const { result } = await invoke(handlers, IPC.getRuntimeStatus)
+    // All four bundled Qwen3 chat manifests declare supports_thinking_mode: true.
+    expect(result).toMatchObject({ running: true, supportsThinkingMode: true })
+  })
+
+  it('getRuntimeStatus leaves the thinking flag absent when stopped or unknown', async () => {
+    const stopped = { running: false, modelId: null, port: null, healthy: false, message: 'Stopped' }
+    const ctx = {
+      db: seededDb(),
+      manifestsDir: REPO_MANIFESTS,
+      paths: noWeightPaths(),
+      isDev: true,
+      runtime: { status: () => ({ ...stopped }), activeModelId: () => null }
+    } as unknown as AppContext
+    registerModelIpc(ctx)
+
+    const { result } = await invoke(handlers, IPC.getRuntimeStatus)
+    expect((result as { supportsThinkingMode?: boolean }).supportsThinkingMode).toBeUndefined()
+  })
+
   it('verifyModel reports the fresh install state and throws on an unknown id', async () => {
     const ctx = {
       db: seededDb(),

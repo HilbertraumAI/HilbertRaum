@@ -25,8 +25,13 @@ Range resume, async-with-polling IPC (§3 entry; plan §6 "as implemented"). **P
 log on `runtime_events`) is DONE** — never-throws recorder with locked-vault buffering,
 hard privacy rule (ids/filenames/counts, never content — sentinel-grep-tested), 5 000-row
 prune-on-insert retention, shallow IPC-layer wiring incl. the Phase-18 download events, and
-the Diagnostics Activity panel + export (§3 entry; plan §7.1 "as implemented"). Phase 20 is
-next. Release-wise, remaining work = **manual release acceptance only** (§5, incl. the GPU
+the Diagnostics Activity panel + export (§3 entry; plan §7.1 "as implemented"). **Phase 20
+(answer-depth modes Fast/Balanced/Deep) is DONE — wave 1 is complete**: the composer depth
+selector wires Qwen3's native thinking via per-request `chat_template_kwargs.enable_thinking`
+(verified against the pinned b9585), Deep streams a collapsed live "Thinking…" block over the
+ADDITIVE `chat:reasoning:<id>` channel, and reasoning is stripped from persistence + replayed
+history (§3 entry; plan §8.1 / decisions D4+D5 resolved). Release-wise, remaining work =
+**manual release acceptance only** (§5, incl. the GPU
 hardware matrix, item 1b). Consciously-accepted gaps live in
 [`docs/known-limitations.md`](docs/known-limitations.md)._
 
@@ -56,7 +61,7 @@ hardware matrix, item 1b). Consciously-accepted gaps live in
 | 17 | RAG trust & document-scoped asking | 🟢 done |
 | 18 | In-app model downloader | 🟢 done |
 | 19 | Audit log (`runtime_events`) | 🟢 done |
-| 20 | Answer-depth modes (Fast/Balanced/Deep) | ⚪ not started |
+| 20 | Answer-depth modes (Fast/Balanced/Deep) | 🟢 done |
 
 Legend: ⚪ not started · 🟡 in progress · 🟢 done · 🔴 blocked
 
@@ -65,11 +70,12 @@ Legend: ⚪ not started · 🟡 in progress · 🟢 done · 🔴 blocked
 > [`docs/provisioning-and-distribution-plan.md`](docs/provisioning-and-distribution-plan.md).
 > Remaining for *release* = **manual acceptance only**: a real signed/notarized build + a USB §17
 > demo (R5/R7) + the GPU hardware matrix (§5 item 1b).
-> **Phases 17–20 are the functionality wave toward the Office edition** — see
+> **Phases 17–20 are the functionality wave toward the Office edition — ALL DONE** — see
 > [`docs/post-mvp-functionality-plan.md`](docs/post-mvp-functionality-plan.md). Phase 17 is DONE
 > (plan §5, deviations in §5.5; design record in `docs/rag-design.md` §10). Phase 18 is DONE
 > (plan §6, "as implemented" note in §6.5). Phase 19 is DONE (plan §7, "as implemented" note
-> in §7.1; data class in `docs/security-model.md`).
+> in §7.1; data class in `docs/security-model.md`). Phase 20 is DONE (plan §8, "as implemented"
+> note in §8.1; decisions D4/D5 resolved in §13; mechanism doc in `docs/architecture.md`).
 
 ---
 
@@ -700,6 +706,84 @@ Repo root: `f:\_coding\ai_drive`.
   round-trip on a real encrypted vault, IPC paging, export/cancel) +
   `tests/renderer/DiagnosticsActivity.test.tsx` (4). Gate: typecheck clean, 542 tests,
   build green.
+- **Phase 20 — answer-depth modes Fast/Balanced/Deep (2026-06-10, plan
+  [`docs/post-mvp-functionality-plan.md`](docs/post-mvp-functionality-plan.md) §8, "as
+  implemented" in §8.1; mechanism doc in `docs/architecture.md`):** the dead
+  `ChatOptions.mode` plumbing and the manifest `supports_thinking_mode` flag are now live —
+  the spec §10.3 selector exists. The whole mechanism is request-side per-call state; nothing
+  about it persists to the DB (no schema change) and the MockRuntime ignores it.
+  1. **D5 RESOLVED (a) — per-request `chat_template_kwargs: { enable_thinking: <bool> }`,
+     verified against the PINNED llama.cpp b9585 SOURCE** (not docs): the server merges the
+     request kwarg over its CLI default and accepts JSON booleans
+     (`tools/server/server-common.cpp` L1074–1088); the kwarg only acts in the **jinja**
+     template path, and `use_jinja = true` is the b9585 server default (`common/common.h`
+     L609); default `--reasoning-format` is deepseek-style, which extracts thinking into
+     SEPARATE `delta.reasoning_content` streaming frames (`common/common.h` L612,
+     `tools/server/server-chat.cpp` L550–557). The Qwen3 `/think`·`/no_think` soft-switch
+     fallback is NOT needed and NOT used (it would leak into transcripts).
+     **Found while verifying: at b9585 `--reasoning auto` (default) turns thinking ON for
+     any capable template** (`server-context.cpp` L1237–1239) — all four bundled Qwen3
+     models were already thinking on every reply and our SSE parser silently DROPPED those
+     deltas (pure latency, no output; the gpu-smoke's `/no_think` workaround was the tell).
+     So `enable_thinking` is now ALWAYS sent explicitly — `false` unless deep.
+  2. **`CHAT_SERVER_ARGS` (LOCKED): every CHAT sidecar spawns with `--jinja
+     --reasoning-format deepseek`** (`llama.ts`, prepended before ladder extraArgs) — pins
+     the two preconditions of D5 in code instead of assuming upstream defaults. The E5
+     embedder composes `LlamaServer` directly and does NOT get these. Consequence: a
+     `PAID_LLAMA_BIN` override must point at a build new enough for both flags (the pinned
+     b9585 qualifies; so do all builds the drives ship).
+  3. **D4 RESOLVED — mode → request mapping (one place: `requestParamsForMode` in
+     `llama.ts`):** `fast` → thinking off + `temperature 0.7` + `max_tokens 1024`;
+     `balanced` AND omitted mode → thinking off, no sampling overrides (server/model
+     defaults — today's intended behavior, now explicit); `deep` → thinking ON +
+     `temperature 0.6` (Qwen3's documented thinking-mode sampling), uncapped. Explicit
+     `RuntimeChatOptions.maxTokens`/`temperature` always win over mode-derived values.
+     (The plan wanted release-matrix tok/s to inform this; the matrix hasn't run — values
+     come from Qwen3's model-card guidance and can be tuned when it lands.)
+  4. **Streaming contract untouched; ONE additive channel:** Deep-mode reasoning deltas go
+     out on **`chat:reasoning:<id>`** (preload `onReasoning`); `chat:token:<id>` still
+     carries answer tokens only. Inside the runtime, `RuntimeChatOptions` gained
+     `mode` + `onReasoning(delta)` — the chatStream generator still yields answer strings
+     only, so every existing consumer (RAG, benchmark tok/s) is unchanged.
+  5. **D6 enforced (strip everywhere):** new `stripThinkBlocks` (services/chat.ts) removes
+     `<think>…</think>` (and an unclosed trailing block from a mid-thought Stop) — applied
+     to assistant content BEFORE persisting (chat AND grounded paths; an all-think aborted
+     reply persists nothing, like the L2 zero-token stop) and to assistant turns replayed
+     as history (`buildChatMessages` + `buildGroundedChatMessages`; Qwen guidance: never
+     feed think blocks back). Normal Phase-20 output never contains inline tags (deepseek
+     format separates them) — the strip is defense-in-depth + legacy-row hygiene. The
+     collapsed live "Thinking…" `<details>` block on the streaming bubble is the ONLY place
+     reasoning is visible; it vanishes when the persisted reply replaces the live bubble.
+  6. **Deep is capability-gated by the manifest:** `supports_thinking_mode` is now parsed
+     into `ModelManifest.supportsThinkingMode` (optional boolean, default false, type-checked)
+     and the `getRuntimeStatus` handler enriches `RuntimeStatus.supportsThinkingMode` for the
+     RUNNING model (manifest reads only while running — the ChatScreen's not-running poll
+     stays I/O-free). The composer offers Deep only when true; a sticky Deep choice on a
+     model without support coerces to Balanced at send time. The four bundled Qwen3 chat
+     manifests are original hybrid-thinking releases — `true` is correct for all of them
+     (`model-policy.md` records the 2507-Instruct caveat).
+  7. **Renderer:** composer "Answer depth" pill row (chat mode only — `askDocuments` always
+     runs balanced this wave, plan §8), sticky per conversation for the session
+     (per-message over IPC, enum-guarded in the handler like `gpuMode`). The depth choice is
+     NOT persisted to the DB (accepted edge in `known-limitations.md`).
+  8. **Phase-19 interplay:** NO new audit events (a mode choice is chat-adjacent state;
+     recording it would add noise, and reasoning content could never be recorded anyway —
+     privacy rule). The sentinel-grep test surface is unchanged.
+  Tests (+30, all through existing harnesses — fake spawn/fetch, temp DBs, fake ipcMain):
+  `llama-runtime.test.ts` (D4 table, kwargs/sampling per mode, explicit-overrides-win,
+  reasoning→callback never→yield, CHAT_SERVER_ARGS + ladder-args composition),
+  `chat.test.ts` (stripThinkBlocks cases; persist-strip; only-thinking persists nothing;
+  history scrub assistant-only; mode/onReasoning forwarding), `rag.test.ts` (grounded
+  answers send NO mode; grounded persist-strip; grounded history scrub), `chat-ipc.test.ts`
+  (reasoning channel separation end-to-end, junk-mode enum guard), `manifest.test.ts`
+  (supports_thinking_mode parse/default/type-error), `core-model-ipc.test.ts`
+  (RuntimeStatus enrichment running/stopped), `tests/renderer/ChatDepth.test.tsx` (6: Deep
+  gating, selector hidden in documents mode, depth sent + balanced default, per-conversation
+  stickiness, collapsed-block live rendering + disappearance after persist). NEW manual
+  harness `tests/manual/thinking-smoke.test.ts` (`PAID_THINKING_SMOKE=<drive root>`,
+  gpu-smoke pattern): real b9585 + real Qwen3 — deep streams separate reasoning + clean
+  answer, balanced streams zero reasoning deltas. CI stays zero-network/zero-model.
+  Gate: typecheck clean, 572 tests, build green.
 
 ---
 
@@ -808,13 +892,16 @@ equal-ms ties → stable turn order). **System prompt is built per request, NOT 
 ✅ **Title:** new conversations are `"New chat"`; first user message sets the title (≤60 chars),
 later messages don't overwrite it. Conversations list newest-updated first.
 
-### Streaming contract (LOCKED — Phase 3)
+### Streaming contract (LOCKED — Phase 3; one ADDITIVE channel in Phase 20)
 Main → renderer over per-conversation IPC event channels keyed by the **conversation id**
 (one active stream per conversation): `chat:token:<id>` (one token/event) / `chat:done:<id>`
 (final assistant `Message`) / `chat:error:<id>` (error string). Helpers in `src/shared/ipc.ts`
 `STREAM`. Preload exposes `onToken/onDone/onError(requestId, cb) → unsubscribe`. In addition,
 `sendChatMessage(conversationId, content, options?)` resolves with the final assistant `Message`,
 so callers can simply `await` it; the event channels drive incremental UI.
+**Phase 20 (additive):** `chat:reasoning:<id>` (preload `onReasoning`) carries Deep-mode
+thinking deltas; token events still carry ONLY answer text. Reasoning is never persisted and
+never replayed (D6) — see "Answer-depth modes" below.
 **Cancellation:** `ipc/registerChatIpc.ts` keeps a per-conversation `AbortController` map;
 `stopGeneration(conversationId)` aborts it → `chatStream` stops on `options.signal`, the partial
 reply is persisted, a normal `done` fires.
@@ -828,6 +915,30 @@ explicit user action; keeps the boundary clean.)
 echoes the last user message, honouring `options.signal` for prompt cancellation. **Chat screen**
 (`renderer/screens/ChatScreen.tsx`): conversation list, streamed transcript with a live cursor,
 stop, regenerate, per-message copy, and the no-runtime empty state.
+
+### Answer-depth modes (Phase 20 live)
+✅ `ChatOptions.mode` (`'fast' | 'balanced' | 'deep'` = `ChatDepthMode`) is **read** now:
+per message over IPC (enum-guarded in `registerChatIpc`), sticky per conversation in the
+renderer for the session (NOT persisted — no schema change). Threads
+`generateAssistantMessage` → `RuntimeChatOptions.mode`; the single mapping site is
+`runtime/llama.ts` `requestParamsForMode` (D4): fast = thinking off + temp 0.7 + 1024-token
+cap · balanced/omitted = thinking off, server defaults · deep = thinking on + temp 0.6.
+Explicit `maxTokens`/`temperature` win over mode-derived values.
+✅ **Thinking switch (D5):** per-request `chat_template_kwargs: { enable_thinking }` on
+`/v1/chat/completions`, ALWAYS sent explicitly (the b9585 default is thinking ON for capable
+templates). Chat sidecars spawn with **`CHAT_SERVER_ARGS` = `--jinja --reasoning-format
+deepseek`** (pins the mechanism's preconditions; embedder excluded). Reasoning streams as
+separate `delta.reasoning_content` frames → `RuntimeChatOptions.onReasoning(delta)` →
+`chat:reasoning:<id>`; the generator yields answer text only.
+✅ **D6:** `stripThinkBlocks` (services/chat.ts) scrubs `<think>…</think>` (incl. an unclosed
+trailing block) from persisted assistant content (chat + grounded) and from assistant turns
+replayed as history. The collapsed live "Thinking…" block in the streaming bubble is the only
+reasoning surface, and it disappears once the persisted reply lands.
+✅ **Deep gating:** manifest `supports_thinking_mode` → `ModelManifest.supportsThinkingMode`
+(optional boolean, default false) → `RuntimeStatus.supportsThinkingMode` (enriched by the
+`getRuntimeStatus` handler for the running model only) → the composer offers Deep only when
+true (stale Deep choices coerce to Balanced at send). `askDocuments` never passes a mode —
+document answers always run balanced (deep-grounded = wave 2).
 
 ### Document ingestion (Phase 4 live)
 ✅ **`services/ingestion/`** (spec §7.7). Full detail in [`docs/rag-design.md`](docs/rag-design.md).
@@ -1249,21 +1360,25 @@ items are **MANUAL acceptance only** (R2/R5/R7 + the GPU hardware matrix). In ro
      the manifest `REPLACE_WITH_REAL_HASH` placeholders → build the portable `.exe`
      (`npm run package:win`; watch npm-workspace dep hoisting) → launch from the drive → spec §17 demo
      with Wi-Fi off. The real GGUF download + the live run are the one manual step.
-3. **New functionality (planned):** see
-   [`docs/post-mvp-functionality-plan.md`](docs/post-mvp-functionality-plan.md) — Phases 17–20
-   toward the Office/Knowledge edition, with wave-2 outlines (reranker/hybrid retrieval, signed
-   offline update bundles). **Phases 17 (RAG trust & scoped asking), 18 (in-app model
-   downloader) and 19 (audit log, incl. the Phase-18 `model_download_*` events) are DONE**
-   (see §3); next up is **Phase 20 (Fast/Balanced/Deep answer-depth modes**, open decisions
-   D4/D5 to resolve at start). Manual-acceptance items from this wave: a real in-app download
-   of the 4B on the `D:\` test drive incl. a mid-download cancel → resume (plan §11), and a
-   quick Activity-panel eyeball on the same drive (events appear; export saves). Smaller
-   leftovers: an icon/`buildResources` for electron-builder; ANN vector index only if a real
-   corpus outgrows the linear scan (plan §9 item 4).
+3. **New functionality:** see
+   [`docs/post-mvp-functionality-plan.md`](docs/post-mvp-functionality-plan.md) — **wave 1
+   (Phases 17–20) toward the Office/Knowledge edition is COMPLETE**: 17 (RAG trust & scoped
+   asking), 18 (in-app model downloader), 19 (audit log, incl. the Phase-18
+   `model_download_*` events), 20 (Fast/Balanced/Deep answer-depth modes — D4/D5 resolved,
+   see §3). Wave-2 outlines remain (reranker/hybrid retrieval, signed offline update
+   bundles). Manual-acceptance items from this wave (plan §11): a real in-app download of
+   the 4B on the `D:\` test drive incl. a mid-download cancel → resume; a quick
+   Activity-panel eyeball on the same drive (events appear; export saves); **a real
+   Deep-mode answer with visible thinking from Qwen3 4B on the test drive**
+   (`tests/manual/thinking-smoke.test.ts` with `PAID_THINKING_SMOKE=<drive root>` covers the
+   mechanism; the eyeball covers the UI). Smaller leftovers: an icon/`buildResources` for
+   electron-builder; ANN vector index only if a real corpus outgrows the linear scan
+   (plan §9 item 4).
 
-**Current gate (2026-06-10, post-Phase-19): typecheck clean, 542/542 tests pass (+4 manual GPU
-smoke tests, skipped unless `PAID_GPU_SMOKE` is set), `npm run build` green.** The per-phase gate
-history (test counts, bundle sizes, per-phase test inventories) lives in git history.
+**Current gate (2026-06-10, post-Phase-20): typecheck clean, 572/572 tests pass (+5 manual
+tests — 4 GPU smoke behind `PAID_GPU_SMOKE`, 1 thinking smoke behind `PAID_THINKING_SMOKE` —
+skipped in CI), `npm run build` green.** The per-phase gate history (test counts, bundle
+sizes, per-phase test inventories) lives in git history.
 
 ---
 

@@ -27,6 +27,8 @@ import { inFlightStreams } from './inflight'
 // `sendChatMessage` invoke also resolves with the final assistant Message so a
 // caller can simply await it. Cancellation: stopGeneration(id) aborts the in-flight
 // AbortController; the partial reply is persisted and a normal `done` is emitted.
+// Phase 20 (ADDITIVE): Deep-mode reasoning deltas go out on chat:reasoning:<id> —
+// a separate channel, so token events still carry only answer text.
 //
 // Decision (documented): sendChatMessage does NOT auto-start a runtime. A chat
 // needs an explicitly-started model (Models screen → "Start runtime"); with no
@@ -118,14 +120,27 @@ export function registerChatIpc(ctx: AppContext): void {
         maybeSetTitleFromFirstMessage(ctx.db, conversationId, text)
       }
 
+      // Answer-depth mode (Phase 20): enum-guarded like gpuMode — junk from a non-UI
+      // caller degrades to the balanced default instead of reaching the runtime.
+      const mode =
+        options?.mode === 'fast' || options?.mode === 'balanced' || options?.mode === 'deep'
+          ? options.mode
+          : undefined
+
       const controller = new AbortController()
       inFlight.set(conversationId, controller)
       try {
         const assistant = await generateAssistantMessage(ctx.db, runtime, conversationId, {
           signal: controller.signal,
+          mode,
           onToken: (token) => {
             if (!event.sender.isDestroyed()) {
               event.sender.send(STREAM.token(conversationId), token)
+            }
+          },
+          onReasoning: (delta) => {
+            if (!event.sender.isDestroyed()) {
+              event.sender.send(STREAM.reasoning(conversationId), delta)
             }
           }
         })

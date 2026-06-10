@@ -1,3 +1,4 @@
+import type { ChatDepthMode } from '../../../shared/types'
 import type {
   ChatMessage,
   HealthStatus,
@@ -13,6 +14,20 @@ import { LlamaServer, type LlamaServerOptions } from './sidecar'
 // OpenAI-compatible `/v1/chat/completions` endpoint. The server applies the model's
 // chat template, so we send plain role/content messages — we never hand-roll Qwen's
 // prompt format. Fully offline: the only socket is loopback to the sidecar.
+
+/**
+ * Args every CHAT sidecar gets (Phase 20, plan §13 D5 — verified against the pinned
+ * llama.cpp b9585 source):
+ *   --jinja                      the kwargs-driven thinking switch only acts in the
+ *                                jinja template path (b9585 default is already jinja;
+ *                                pinned explicitly so the mechanism's precondition is
+ *                                stated in code, not assumed from upstream defaults)
+ *   --reasoning-format deepseek  thinking output streams as separate
+ *                                `delta.reasoning_content` frames — never inline
+ *                                `<think>` tags in `delta.content`
+ * The E5 embedder composes `LlamaServer` directly and does not get these.
+ */
+export const CHAT_SERVER_ARGS = ['--jinja', '--reasoning-format', 'deepseek'] as const
 
 /** Per-runtime overrides; mostly test seams forwarded to `LlamaServer`. */
 export type LlamaRuntimeDeps = Pick<
@@ -32,20 +47,62 @@ export type LlamaRuntimeDeps = Pick<
   binPath: string
 }
 
-interface ChatCompletionChunk {
-  choices?: Array<{ delta?: { content?: string } }>
+/**
+ * What an answer-depth mode means for the chat request (plan §13 D4, LOCKED at
+ * Phase 20 start):
+ *
+ *   fast      thinking off + temperature 0.7 + a modest token cap — quick answers
+ *   balanced  thinking off, the server/model sampling defaults — the default mode,
+ *             also used whenever `mode` is omitted (document answers, old callers)
+ *   deep      thinking ON + temperature 0.6 (Qwen3's documented thinking-mode
+ *             sampling), uncapped
+ *
+ * `enableThinking` is ALWAYS explicit: at the pinned b9585 the server defaults to
+ * `--reasoning auto`, which turns thinking ON for any template that supports it
+ * (all four bundled Qwen3 models) — omitting the kwarg would make every mode think.
+ * Explicit `RuntimeChatOptions.maxTokens`/`temperature` win over these values.
+ */
+export interface ModeRequestParams {
+  enableThinking: boolean
+  temperature?: number
+  maxTokens?: number
 }
 
-/** Parse one SSE `data:` line → a delta to yield, a `[DONE]` sentinel, or nothing. */
-function parseSseLine(line: string): { delta?: string; done?: boolean } {
+export const FAST_TEMPERATURE = 0.7
+export const FAST_MAX_TOKENS = 1024
+export const DEEP_TEMPERATURE = 0.6
+
+/** Map an answer-depth mode to request parameters. Omitted/unknown = 'balanced'. */
+export function requestParamsForMode(mode?: ChatDepthMode): ModeRequestParams {
+  switch (mode) {
+    case 'fast':
+      return { enableThinking: false, temperature: FAST_TEMPERATURE, maxTokens: FAST_MAX_TOKENS }
+    case 'deep':
+      return { enableThinking: true, temperature: DEEP_TEMPERATURE }
+    default:
+      return { enableThinking: false }
+  }
+}
+
+interface ChatCompletionChunk {
+  choices?: Array<{ delta?: { content?: string; reasoning_content?: string } }>
+}
+
+/** Parse one SSE `data:` line → content/reasoning deltas, a `[DONE]` sentinel, or nothing. */
+function parseSseLine(line: string): { delta?: string; reasoning?: string; done?: boolean } {
   const t = line.trim()
   if (!t.startsWith('data:')) return {}
   const data = t.slice(5).trim()
   if (data === '[DONE]') return { done: true }
   try {
     const json = JSON.parse(data) as ChatCompletionChunk
-    const delta = json.choices?.[0]?.delta?.content
-    if (typeof delta === 'string' && delta.length > 0) return { delta }
+    const d = json.choices?.[0]?.delta
+    const out: { delta?: string; reasoning?: string } = {}
+    if (typeof d?.content === 'string' && d.content.length > 0) out.delta = d.content
+    if (typeof d?.reasoning_content === 'string' && d.reasoning_content.length > 0) {
+      out.reasoning = d.reasoning_content
+    }
+    return out
   } catch {
     // Ignore non-JSON keep-alives / partial frames; the next read completes them.
   }
@@ -54,13 +111,17 @@ function parseSseLine(line: string): { delta?: string; done?: boolean } {
 
 /**
  * Parse a Server-Sent-Events stream of OpenAI chat-completion chunks, yielding each
- * text delta. Handles partial lines across reads, ignores keep-alive/comment lines,
- * and stops on the `[DONE]` sentinel. Honours `signal` so an aborted request stops
- * promptly and cancels the underlying reader.
+ * answer-text delta. Reasoning deltas (`delta.reasoning_content`, Phase 20 Deep mode)
+ * are reported through `onReasoning` and are NEVER yielded — the yielded stream stays
+ * answer-only, so the locked Phase-3 token contract is untouched. Handles partial
+ * lines across reads, ignores keep-alive/comment lines, and stops on the `[DONE]`
+ * sentinel. Honours `signal` so an aborted request stops promptly and cancels the
+ * underlying reader.
  */
 export async function* readChatSSE(
   body: ReadableStream<Uint8Array>,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  onReasoning?: (delta: string) => void
 ): AsyncGenerator<string, void, unknown> {
   const reader = body.getReader()
   const decoder = new TextDecoder()
@@ -77,12 +138,14 @@ export async function* readChatSSE(
         buffer = buffer.slice(nl + 1)
         const r = parseSseLine(line)
         if (r.done) return
+        if (r.reasoning) onReasoning?.(r.reasoning)
         if (r.delta) yield r.delta
       }
     }
     // Flush any final line the server sent without a trailing newline before closing.
     buffer += decoder.decode()
     const r = parseSseLine(buffer)
+    if (r.reasoning) onReasoning?.(r.reasoning)
     if (r.delta) yield r.delta
   } finally {
     try {
@@ -103,7 +166,7 @@ export class LlamaRuntime implements ModelRuntime {
       binPath: deps.binPath,
       modelPath: opts.modelPath,
       contextTokens: opts.contextTokens,
-      extraArgs: deps.extraArgs,
+      extraArgs: [...CHAT_SERVER_ARGS, ...(deps.extraArgs ?? [])],
       onUnexpectedExit: deps.onUnexpectedExit,
       spawn: deps.spawn,
       fetchImpl: deps.fetchImpl,
@@ -130,18 +193,26 @@ export class LlamaRuntime implements ModelRuntime {
   /**
    * Stream assistant tokens from the OpenAI-compatible endpoint. `messages` map
    * directly to role/content; `maxTokens`/`temperature` map to `max_tokens`/
-   * `temperature`. Aborts the fetch + generator on `options.signal`.
+   * `temperature` (explicit values win over the mode mapping). The answer-depth
+   * `mode` (Phase 20) maps to `chat_template_kwargs.enable_thinking` — verified
+   * per-request support at the pinned b9585 — plus the D4 sampling defaults; with
+   * thinking on, reasoning deltas surface via `options.onReasoning`, never in the
+   * yielded answer stream. Aborts the fetch + generator on `options.signal`.
    */
   async *chatStream(
     messages: ChatMessage[],
     options?: RuntimeChatOptions
   ): AsyncGenerator<string, void, unknown> {
+    const mode = requestParamsForMode(options?.mode)
+    const maxTokens = options?.maxTokens ?? mode.maxTokens
+    const temperature = options?.temperature ?? mode.temperature
     const body = JSON.stringify({
       model: this.modelId,
       messages: messages.map((m) => ({ role: m.role, content: m.content })),
       stream: true,
-      ...(options?.maxTokens != null ? { max_tokens: options.maxTokens } : {}),
-      ...(options?.temperature != null ? { temperature: options.temperature } : {})
+      chat_template_kwargs: { enable_thinking: mode.enableThinking },
+      ...(maxTokens != null ? { max_tokens: maxTokens } : {}),
+      ...(temperature != null ? { temperature } : {})
     })
 
     const res = await this.server.fetch('/v1/chat/completions', {
@@ -156,7 +227,7 @@ export class LlamaRuntime implements ModelRuntime {
       void res.body?.cancel().catch(() => undefined)
       throw new Error(`Chat request failed: HTTP ${res.status}`)
     }
-    yield* readChatSSE(res.body, options?.signal)
+    yield* readChatSSE(res.body, options?.signal, options?.onReasoning)
   }
 }
 

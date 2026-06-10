@@ -175,6 +175,14 @@ const api = {
     ipcRenderer.on(ch, handler)
     return () => ipcRenderer.removeListener(ch, handler)
   },
+  /** Subscribe to Deep-mode reasoning deltas (Phase 20) — separate from answer tokens,
+   *  shown live as the collapsed "Thinking…" block and never persisted. */
+  onReasoning: (requestId: string, cb: (delta: string) => void): (() => void) => {
+    const ch = STREAM.reasoning(requestId)
+    const handler = (_e: unknown, delta: string) => cb(delta)
+    ipcRenderer.on(ch, handler)
+    return () => ipcRenderer.removeListener(ch, handler)
+  },
   /** Subscribe to one-line runtime notices (Phase 15: compatibility-mode fallback). */
   onRuntimeNotice: (cb: (message: string) => void): (() => void) => {
     const handler = (_e: unknown, message: string) => cb(message)

@@ -12,11 +12,12 @@ import {
   generateAssistantMessage,
   listConversations,
   listMessages,
-  maybeSetTitleFromFirstMessage
+  maybeSetTitleFromFirstMessage,
+  stripThinkBlocks
 } from '../../src/main/services/chat'
 import { createMockRuntime } from '../../src/main/services/runtime/mock'
 import type { Db } from '../../src/main/services/db'
-import type { ModelRuntime } from '../../src/main/services/runtime'
+import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../../src/main/services/runtime'
 
 function freshDb(): Db {
   const dir = mkdtempSync(join(tmpdir(), 'paid-chat-'))
@@ -263,5 +264,106 @@ describe('generateAssistantMessage (streaming)', () => {
     const history = listMessages(db, conv.id)
     expect(history).toHaveLength(3)
     expect(history.some((m) => m.id === answer.id)).toBe(true) // the earlier answer survives
+  })
+})
+
+// ---- Answer-depth modes: think-block hygiene + option threading (Phase 20) --------
+
+describe('stripThinkBlocks (plan §13 D6)', () => {
+  it('removes closed think blocks and trims the seams', () => {
+    expect(stripThinkBlocks('<think>\nstep 1\nstep 2\n</think>\n\nThe answer.')).toBe('The answer.')
+    expect(stripThinkBlocks('a <think>x</think> b <think>y</think> c')).toBe('a  b  c')
+  })
+
+  it('removes an unclosed trailing block (stream stopped mid-thought)', () => {
+    expect(stripThinkBlocks('Partial answer.\n<think>half a thou')).toBe('Partial answer.')
+    expect(stripThinkBlocks('<think>only thinking, no answer yet')).toBe('')
+  })
+
+  it('returns untouched text as-is (no trimming of normal replies)', () => {
+    expect(stripThinkBlocks('  plain reply with spaces  ')).toBe('  plain reply with spaces  ')
+    expect(stripThinkBlocks('')).toBe('')
+  })
+})
+
+describe('answer-depth threading + persistence hygiene (Phase 20)', () => {
+  /** A runtime that captures chatStream options and emits reasoning + inline think text. */
+  function capturingRuntime(reply: string[]): {
+    runtime: ModelRuntime
+    seen: { options?: RuntimeChatOptions }
+  } {
+    const seen: { options?: RuntimeChatOptions } = {}
+    const runtime: ModelRuntime = {
+      modelId: 'capture',
+      start: async () => {},
+      stop: async () => {},
+      health: async () => ({ healthy: true, message: 'ok', port: 1 }),
+      async *chatStream(_m: ChatMessage[], options?: RuntimeChatOptions) {
+        seen.options = options
+        options?.onReasoning?.('thinking about it…')
+        for (const t of reply) yield t
+      }
+    }
+    return { runtime, seen }
+  }
+
+  it('forwards mode + onReasoning to the runtime and keeps reasoning out of the persisted reply', async () => {
+    const db = freshDb()
+    const conv = createConversation(db, {})
+    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'q' })
+
+    const { runtime: r, seen } = capturingRuntime(['The answer.'])
+    const reasoning: string[] = []
+    const msg = await generateAssistantMessage(db, r, conv.id, {
+      mode: 'deep',
+      onReasoning: (d) => reasoning.push(d)
+    })
+
+    expect(seen.options?.mode).toBe('deep')
+    expect(reasoning).toEqual(['thinking about it…'])
+    expect(msg.content).toBe('The answer.')
+    expect(listMessages(db, conv.id).at(-1)?.content).toBe('The answer.')
+  })
+
+  it('strips inline think blocks before persisting (defense-in-depth, D6)', async () => {
+    const db = freshDb()
+    const conv = createConversation(db, {})
+    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'q' })
+
+    const { runtime: r } = capturingRuntime(['<think>secret reasoning</think>\n\n', 'Clean answer.'])
+    const msg = await generateAssistantMessage(db, r, conv.id, {})
+    expect(msg.content).toBe('Clean answer.')
+    const persisted = listMessages(db, conv.id).at(-1)
+    expect(persisted?.content).toBe('Clean answer.')
+    expect(persisted?.content).not.toContain('<think>')
+  })
+
+  it('a reply that was ONLY thinking persists nothing (like the zero-token stop)', async () => {
+    const db = freshDb()
+    const conv = createConversation(db, {})
+    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'q' })
+
+    const { runtime: r } = capturingRuntime(['<think>aborted before the answer'])
+    const msg = await generateAssistantMessage(db, r, conv.id, {})
+    expect(msg.content).toBe('')
+    expect(listMessages(db, conv.id)).toHaveLength(1) // only the user turn
+  })
+
+  it('buildChatMessages scrubs think blocks from replayed assistant turns only', () => {
+    const db = freshDb()
+    const conv = createConversation(db, {})
+    appendMessage(db, {
+      conversationId: conv.id,
+      role: 'user',
+      content: 'literal <think>user text</think> stays'
+    })
+    appendMessage(db, {
+      conversationId: conv.id,
+      role: 'assistant',
+      content: '<think>legacy persisted reasoning</think>\n\nVisible answer'
+    })
+    const built = buildChatMessages(db, conv.id)
+    expect(built[1].content).toBe('literal <think>user text</think> stays')
+    expect(built[2].content).toBe('Visible answer')
   })
 })

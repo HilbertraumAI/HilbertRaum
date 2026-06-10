@@ -1,6 +1,14 @@
 import { describe, it, expect } from 'vitest'
 import { EventEmitter } from 'node:events'
-import { LlamaRuntime, readChatSSE } from '../../src/main/services/runtime/llama'
+import {
+  CHAT_SERVER_ARGS,
+  DEEP_TEMPERATURE,
+  FAST_MAX_TOKENS,
+  FAST_TEMPERATURE,
+  LlamaRuntime,
+  readChatSSE,
+  requestParamsForMode
+} from '../../src/main/services/runtime/llama'
 import { createSelectingRuntimeFactory } from '../../src/main/services/runtime/factory'
 import type { ChildProcessLike } from '../../src/main/services/runtime/sidecar'
 import type { ModelRuntime, RuntimeStartOptions } from '../../src/main/services/runtime'
@@ -28,6 +36,11 @@ function sseStream(frames: string[]): ReadableStream<Uint8Array> {
 
 function chatChunk(content: string): string {
   return `data: ${JSON.stringify({ choices: [{ delta: { content } }] })}\n\n`
+}
+
+/** A `--reasoning-format deepseek` thinking delta (Phase 20 Deep mode). */
+function reasoningChunk(reasoning_content: string): string {
+  return `data: ${JSON.stringify({ choices: [{ delta: { reasoning_content } }] })}\n\n`
 }
 
 /** A fetch stub that routes /health (ok) and /v1/chat/completions (an SSE body). */
@@ -157,6 +170,151 @@ describe('LlamaRuntime', () => {
     await expect(async () => {
       for await (const _t of runtime.chatStream([{ role: 'user', content: 'hi' }])) void _t
     }).rejects.toThrow(/HTTP 500/)
+    await runtime.stop()
+  })
+})
+
+// ---- Answer-depth modes (Phase 20, plan §8 / §13 D4+D5) ---------------------------
+
+describe('answer-depth mode → request mapping (D4)', () => {
+  it('maps fast / balanced / deep / omitted per the locked D4 table', () => {
+    expect(requestParamsForMode('fast')).toEqual({
+      enableThinking: false,
+      temperature: FAST_TEMPERATURE,
+      maxTokens: FAST_MAX_TOKENS
+    })
+    expect(requestParamsForMode('balanced')).toEqual({ enableThinking: false })
+    expect(requestParamsForMode('deep')).toEqual({
+      enableThinking: true,
+      temperature: DEEP_TEMPERATURE
+    })
+    // Omitted = balanced: thinking must be EXPLICITLY off (the b9585 server default
+    // is thinking ON for any capable template — omitting the kwarg would think).
+    expect(requestParamsForMode(undefined)).toEqual({ enableThinking: false })
+  })
+
+  const startOpts: RuntimeStartOptions = {
+    modelId: 'qwen3-4b-instruct-q4',
+    modelPath: '/models/x.gguf',
+    contextTokens: 4096
+  }
+
+  async function captureBody(opts?: Parameters<LlamaRuntime['chatStream']>[1]): Promise<{
+    body: Record<string, unknown>
+    args: string[]
+  }> {
+    const { spawn, calls } = fakeSpawn()
+    let chatBody: Record<string, unknown> = {}
+    const runtime = new LlamaRuntime(startOpts, {
+      binPath: '/bin/llama-server',
+      spawn,
+      fetchImpl: chatFetch({
+        frames: ['data: [DONE]\n\n'],
+        onChat: (_url, init) => {
+          chatBody = JSON.parse(String(init?.body)) as Record<string, unknown>
+        }
+      }),
+      findPort: async () => 51002,
+      healthIntervalMs: 1
+    })
+    await runtime.start()
+    for await (const _t of runtime.chatStream([{ role: 'user', content: 'q' }], opts)) void _t
+    await runtime.stop()
+    return { body: chatBody, args: calls[0].args }
+  }
+
+  it('sends chat_template_kwargs.enable_thinking=false with NO sampling overrides when mode is omitted (balanced)', async () => {
+    const { body, args } = await captureBody()
+    expect(body.chat_template_kwargs).toEqual({ enable_thinking: false })
+    expect(body).not.toHaveProperty('temperature')
+    expect(body).not.toHaveProperty('max_tokens')
+    // The D5 mechanism's preconditions are pinned in the spawn args: jinja templating
+    // (kwargs only act there) + deepseek reasoning extraction (separate deltas).
+    expect(args.join(' ')).toContain('--jinja')
+    expect(args.join(' ')).toContain('--reasoning-format deepseek')
+  })
+
+  it('fast → thinking off + temperature 0.7 + modest max_tokens', async () => {
+    const { body } = await captureBody({ mode: 'fast' })
+    expect(body.chat_template_kwargs).toEqual({ enable_thinking: false })
+    expect(body.temperature).toBe(FAST_TEMPERATURE)
+    expect(body.max_tokens).toBe(FAST_MAX_TOKENS)
+  })
+
+  it('deep → thinking ON + the Qwen3 thinking-mode temperature, uncapped', async () => {
+    const { body } = await captureBody({ mode: 'deep' })
+    expect(body.chat_template_kwargs).toEqual({ enable_thinking: true })
+    expect(body.temperature).toBe(DEEP_TEMPERATURE)
+    expect(body).not.toHaveProperty('max_tokens')
+  })
+
+  it('explicit maxTokens/temperature win over the mode mapping', async () => {
+    const { body } = await captureBody({ mode: 'fast', maxTokens: 64, temperature: 0.2 })
+    expect(body.max_tokens).toBe(64)
+    expect(body.temperature).toBe(0.2)
+    expect(body.chat_template_kwargs).toEqual({ enable_thinking: false })
+  })
+
+  it('routes reasoning deltas to onReasoning and never into the yielded answer', async () => {
+    const { spawn } = fakeSpawn()
+    const runtime = new LlamaRuntime(startOpts, {
+      binPath: '/bin/llama-server',
+      spawn,
+      fetchImpl: chatFetch({
+        frames: [
+          reasoningChunk('Let me'),
+          reasoningChunk(' think.'),
+          // A single chunk may carry BOTH keys (diffs batched into one delta).
+          `data: ${JSON.stringify({ choices: [{ delta: { reasoning_content: ' Done.', content: 'The' } }] })}\n\n`,
+          chatChunk(' answer.'),
+          'data: [DONE]\n\n'
+        ]
+      }),
+      findPort: async () => 51003,
+      healthIntervalMs: 1
+    })
+    await runtime.start()
+    const reasoning: string[] = []
+    const out: string[] = []
+    for await (const t of runtime.chatStream([{ role: 'user', content: 'q' }], {
+      mode: 'deep',
+      onReasoning: (d) => reasoning.push(d)
+    })) {
+      out.push(t)
+    }
+    expect(reasoning.join('')).toBe('Let me think. Done.')
+    expect(out.join('')).toBe('The answer.')
+    await runtime.stop()
+  })
+
+  it('readChatSSE reports reasoning via the callback without breaking [DONE]/abort semantics', async () => {
+    const stream = sseStream([
+      reasoningChunk('r1'),
+      chatChunk('c1'),
+      'data: [DONE]\n\n',
+      reasoningChunk('IGNORED AFTER DONE')
+    ])
+    const reasoning: string[] = []
+    const out: string[] = []
+    for await (const t of readChatSSE(stream, undefined, (d) => reasoning.push(d))) out.push(t)
+    expect(reasoning).toEqual(['r1'])
+    expect(out).toEqual(['c1'])
+  })
+
+  it('CHAT_SERVER_ARGS precede ladder extraArgs (a rung can still force --device none)', async () => {
+    const { spawn, calls } = fakeSpawn()
+    const runtime = new LlamaRuntime(startOpts, {
+      binPath: '/bin/llama-server',
+      spawn,
+      fetchImpl: chatFetch({ frames: ['data: [DONE]\n\n'] }),
+      findPort: async () => 51004,
+      healthIntervalMs: 1,
+      extraArgs: ['--device', 'none']
+    })
+    await runtime.start()
+    const joined = calls[0].args.join(' ')
+    for (const a of CHAT_SERVER_ARGS) expect(calls[0].args).toContain(a)
+    expect(joined).toContain('--device none')
     await runtime.stop()
   })
 })

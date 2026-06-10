@@ -1,7 +1,7 @@
 # Post-MVP Functionality Plan — toward the Office/Knowledge edition
 
-_Status: **IN PROGRESS** — **Phases 17 + 18 + 19 IMPLEMENTED** (2026-06-10, deviations in
-§5.5 / §6.5 / §7.1); Phase 20 not started. Drafted 2026-06-10 from the gap analysis of spec §19 editions
+_Status: **WAVE 1 IMPLEMENTED** — **Phases 17 + 18 + 19 + 20 ALL IMPLEMENTED** (2026-06-10,
+deviations/notes in §5.5 / §6.5 / §7.1 / §8.1). Drafted 2026-06-10 from the gap analysis of spec §19 editions
 vs. the feature-complete Lite MVP (Phases 0–16). Working paper per the CLAUDE.md doc lifecycle
 rule: once implemented, condense to a design record. Section numbers are intended to stay
 stable so code comments can cite them._
@@ -334,6 +334,43 @@ selector finally exists.
 - RAG interaction: `askDocuments` stays `balanced` in this phase (grounded answers should be
   fast + literal; deep-grounded is a wave-2 question).
 
+### 8.1 As implemented (2026-06-10) — notes/deviations from the plan above
+
+Phase 20 shipped per §8 (gate: typecheck clean, 572 tests, build green; BUILD_STATE §3 has
+the full entry; mechanism documented in `architecture.md`, user copy in `user-guide.md` §6,
+manifest flag in `model-policy.md`). Notes:
+
+1. **D5 resolved (a) — kwargs, verified against the pinned b9585 SOURCE** (server-common.cpp
+   L1074–1088; jinja default-on, common.h L609; deepseek-format streaming `reasoning_content`
+   deltas, server-chat.cpp L550–557). The soft-switch fallback was not needed. **Research
+   finding that shaped the mapping:** b9585's default `--reasoning auto` turns thinking ON
+   for every capable template — the bundled Qwen3 models were already thinking on every
+   reply and the app silently dropped those deltas (pure latency). `enable_thinking` is
+   therefore ALWAYS sent explicitly; `balanced`/omitted = `false`.
+2. **Chat sidecars now spawn with `CHAT_SERVER_ARGS = ['--jinja', '--reasoning-format',
+   'deepseek']`** — both are b9585 defaults, pinned in code so the D5 mechanism's
+   preconditions don't silently drift on a future runtime re-pin. The E5 embedder is
+   excluded.
+3. **D4 resolved without the release-matrix tok/s** (the matrix is still pending release
+   acceptance): values come from Qwen3's model-card sampling guidance — fast = off + 0.7 +
+   1024 cap, balanced = off + defaults, deep = ON + 0.6 uncapped; explicit options win.
+   Mapping lives in ONE exported function (`requestParamsForMode`, `runtime/llama.ts`).
+4. **Reasoning transport is an additive side-channel**, not a yielded-stream change:
+   `RuntimeChatOptions.onReasoning(delta)` + the new `chat:reasoning:<id>` event channel
+   (preload `onReasoning`). The locked Phase-3 token contract is byte-identical.
+5. **D6 enforced in both directions:** `stripThinkBlocks` runs before persisting (chat AND
+   grounded; an all-think aborted reply persists nothing) and on assistant turns replayed as
+   history. With the deepseek format the strip is defense-in-depth — normal output never
+   contains inline tags.
+6. **Deep gating** rides `RuntimeStatus.supportsThinkingMode` (manifest flag, enriched by
+   `getRuntimeStatus` for the running model) rather than a `ModelInfo` change — the Chat
+   screen already polls runtime status and `listModels` hashing stays off that path. The
+   depth choice is per-conversation per-SESSION (not persisted; recorded in
+   `known-limitations.md`).
+7. **No new audit events** (Phase-19 privacy rule untouched); a NEW manual harness
+   `tests/manual/thinking-smoke.test.ts` (`PAID_THINKING_SMOKE`, gpu-smoke pattern) proves
+   the mechanism live; CI stays zero-network/zero-model.
+
 ---
 
 ## 9. Phase 21 (wave 2, outline) — Retrieval quality: reranker + hybrid search
@@ -398,7 +435,7 @@ copy), `model-policy.md` (`supports_thinking_mode` now load-bearing).
 | D1 | Unify chat into one auto-RAG mode? | **RESOLVED (a):** keep two modes + the plain-chat document-awareness notice for wave 1; revisit unified auto-RAG with Phase-21 quality data |
 | D2 | Scope persistence | **RESOLVED (a):** additive nullable `conversations.scope_json` column (guarded `ALTER TABLE`) — survives reload |
 | D3 | Downloads policy semantics (was blocking Phase 18) | **RESOLVED (a):** flip `DEFAULT_POLICY.network.allowModelDownloads` to true so the spec §3.6 user toggle is the sole gate when no policy file restricts; commercial `prepare-drive` posture keeps writing deny. Preserves "policy only restricts" |
-| D4 | Fast/Balanced/Deep parameter mapping | **OPEN** — decide at Phase 20 start with measured tok/s from the release matrix |
-| D5 | Thinking-mode mechanism | **OPEN** — verify b9585 `chat_template_kwargs` support at Phase 20 start; kwargs preferred (soft switches leak into transcripts) |
+| D4 | Fast/Balanced/Deep parameter mapping | **RESOLVED (2026-06-10, Phase 20):** fast → thinking off + temp 0.7 + max_tokens 1024 · balanced/omitted → thinking off + server defaults · deep → thinking ON + temp 0.6 uncapped (Qwen3 model-card sampling; release-matrix tok/s pending — tune then if needed). Explicit options win. Single mapping site: `requestParamsForMode` (`runtime/llama.ts`) |
+| D5 | Thinking-mode mechanism | **RESOLVED (a) (2026-06-10, Phase 20):** per-request `chat_template_kwargs: { enable_thinking }` — support verified in the pinned b9585 SOURCE (server-common.cpp L1074–1088). Requires jinja (b9585 default, pinned via `CHAT_SERVER_ARGS`); reasoning arrives as separate `delta.reasoning_content` frames (`--reasoning-format deepseek`). Soft switches rejected (transcript leakage). NB: b9585 defaults to thinking ON for capable templates → the kwarg is ALWAYS sent |
 | D6 | Persist reasoning text? | **RESOLVED (a):** strip before persisting; the collapsed "Thinking…" block is a live-stream affordance only |
 | D7 | Audit retention default | **RESOLVED:** fixed 5 000 rows for wave 1; configurability is Office-edition admin surface |

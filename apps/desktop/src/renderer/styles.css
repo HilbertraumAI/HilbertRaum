@@ -320,6 +320,34 @@ h2 { font-size: 15px; margin: 0 0 12px; }
 
 .msg { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; }
 .msg.user { border-color: var(--accent); }
+
+/* Answer-depth selector (Phase 20, spec §10.3) */
+.chat-depth-row { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+.chat-depth-label { color: var(--muted); }
+.chat-depth-btn {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.chat-depth-btn:hover:not(:disabled) { color: var(--text); }
+.chat-depth-btn.active { color: var(--text); border-color: var(--accent); }
+.chat-depth-btn:disabled { cursor: default; opacity: 0.6; }
+
+/* Live Deep-mode reasoning, collapsed by default (Phase 20; never persisted) */
+.msg-thinking {
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  padding: 6px 10px;
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.msg-thinking summary { cursor: pointer; user-select: none; }
+.msg-thinking-text { white-space: pre-wrap; word-break: break-word; margin-top: 6px; line-height: 1.45; }
 .msg-role {
   display: flex;
   align-items: center;

@@ -82,6 +82,19 @@ describe('validateManifest', () => {
     expect(res.ok).toBe(true)
     expect(res.manifest?.recommendedProfiles).toEqual([])
   })
+
+  // Phase 20: supports_thinking_mode is now load-bearing (it gates the Deep answer mode).
+  it('parses supports_thinking_mode, defaulting to false when omitted', () => {
+    expect(validateManifest(rawManifest({ supports_thinking_mode: true })).manifest?.supportsThinkingMode).toBe(true)
+    expect(validateManifest(rawManifest({ supports_thinking_mode: false })).manifest?.supportsThinkingMode).toBe(false)
+    expect(validateManifest(rawManifest()).manifest?.supportsThinkingMode).toBe(false)
+  })
+
+  it('rejects a non-boolean supports_thinking_mode', () => {
+    const res = validateManifest(rawManifest({ supports_thinking_mode: 'yes' }))
+    expect(res.ok).toBe(false)
+    expect(res.errors.some((e) => e.includes('supports_thinking_mode'))).toBe(true)
+  })
 })
 
 describe('validateManifest — optional download block (Phase 12)', () => {

@@ -1,4 +1,4 @@
-import type { RuntimeStatus } from '../../../shared/types'
+import type { ChatDepthMode, RuntimeStatus } from '../../../shared/types'
 
 // Runtime manager (spec §7.5). Defines the swappable ModelRuntime interface so the
 // mock runtime (Phase 2/3) and the real llama.cpp sidecar (Phase 10) are
@@ -11,9 +11,23 @@ export interface ChatMessage {
 }
 
 export interface RuntimeChatOptions {
+  /** Explicit caps/sampling; when set they WIN over anything `mode` would derive. */
   maxTokens?: number
   temperature?: number
   signal?: AbortSignal
+  /**
+   * Answer-depth mode (spec §10.3, Phase 20). Real runtimes map it to the model's
+   * thinking switch + sampling (see `requestParamsForMode` in `llama.ts`); the mock
+   * runtime ignores it. Omitted = 'balanced'.
+   */
+  mode?: ChatDepthMode
+  /**
+   * Receives reasoning ("thinking") deltas, which stream SEPARATELY from the answer
+   * tokens the generator yields (llama-server `--reasoning-format deepseek` puts them
+   * in `delta.reasoning_content`). Live-display affordance only — reasoning is never
+   * part of the yielded content and is never persisted (plan §13 D6).
+   */
+  onReasoning?: (delta: string) => void
 }
 
 export interface RuntimeStartOptions {

@@ -8,7 +8,8 @@ import {
   BASE_SYSTEM_PROMPT,
   emptyAssistantMessage,
   isAbortError,
-  listMessages
+  listMessages,
+  stripThinkBlocks
 } from '../chat'
 
 // RAG service (spec §7.8). Turns a question into a grounded, cited answer:
@@ -258,7 +259,11 @@ export function buildGroundedChatMessages(
     if (isLast && m.role === 'user') {
       messages.push({ role: 'user', content: groundedUserContent })
     } else {
-      messages.push({ role: m.role, content: m.content })
+      // Assistant turns are scrubbed of think blocks before being replayed (Phase 20, D6).
+      messages.push({
+        role: m.role,
+        content: m.role === 'assistant' ? stripThinkBlocks(m.content) : m.content
+      })
     }
   }
   return messages
@@ -311,6 +316,8 @@ export async function generateGroundedAnswer(
   const grounded = buildGroundedPrompt(question, chunks)
   const messages = buildGroundedChatMessages(db, conversationId, grounded)
   let content = ''
+  // No `mode` is passed: document answers always run 'balanced' (Phase 20 — grounded
+  // answers should be fast + literal; a deep-grounded mode is a wave-2 question).
   const stream = runtime.chatStream(messages, { signal: opts.signal, ...opts.runtimeOptions })
   try {
     for await (const token of stream) {
@@ -322,6 +329,8 @@ export async function generateGroundedAnswer(
     // return normally. Any other error is a real failure and propagates.
     if (!isAbortError(err, opts.signal)) throw err
   }
+  // Reasoning never reaches the DB (D6) — same defense-in-depth strip as plain chat.
+  content = stripThinkBlocks(content)
   // A stop before the first token produced nothing — persist nothing (L2).
   if (content === '') return emptyAssistantMessage(conversationId)
   // Persist the assistant turn with the computed citations (source of truth = retrieval).

@@ -388,8 +388,16 @@ export interface Message {
   citations?: Citation[]
 }
 
+/**
+ * Answer-depth mode (spec §10.3, Phase 20): how much work the model puts into one
+ * answer. 'fast' = direct + capped, 'balanced' = direct with the model's defaults
+ * (the default everywhere, including document answers), 'deep' = the model's native
+ * thinking mode (only offered when the active manifest has `supports_thinking_mode`).
+ */
+export type ChatDepthMode = 'fast' | 'balanced' | 'deep'
+
 export interface ChatOptions {
-  mode?: 'fast' | 'balanced' | 'deep'
+  mode?: ChatDepthMode
   useDocuments?: boolean
   /** Re-answer the last user turn: drop the previous assistant reply, then stream a fresh one. */
   regenerate?: boolean
@@ -510,4 +518,10 @@ export interface RuntimeStatus {
   backend?: 'gpu' | 'cpu' | 'mock'
   /** The probed GPU name when backend === 'gpu' (e.g. for the Diagnostics line). */
   gpuName?: string | null
+  /**
+   * Whether the ACTIVE model's manifest declares `supports_thinking_mode` (Phase 20):
+   * the renderer offers the Deep answer mode only when true. Enriched by the
+   * `getRuntimeStatus` IPC handler from the manifest; absent when not running.
+   */
+  supportsThinkingMode?: boolean
 }

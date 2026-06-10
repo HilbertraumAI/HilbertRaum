@@ -181,7 +181,23 @@ export function registerModelIpc(ctx: AppContext): void {
   })
 
   // Read-only runtime state for the Diagnostics screen (spec §7.11 — audit M14).
-  ipcMain.handle(IPC.getRuntimeStatus, (): RuntimeStatus => ctx.runtime.status())
+  // Phase 20: enriched with the active model's `supports_thinking_mode` manifest flag
+  // so the Chat composer knows whether to offer the Deep answer mode. Manifest reads
+  // happen only while a runtime is actually running (the ChatScreen's not-running
+  // poll stays I/O-free), and a read failure just leaves the flag absent.
+  ipcMain.handle(IPC.getRuntimeStatus, (): RuntimeStatus => {
+    const status = ctx.runtime.status()
+    if (status.running && status.modelId && ctx.manifestsDir) {
+      try {
+        const { manifests } = discoverManifests(ctx.manifestsDir)
+        const found = manifests.find((m) => m.manifest.id === status.modelId)
+        if (found) status.supportsThinkingMode = found.manifest.supportsThinkingMode
+      } catch {
+        /* Diagnostics/Chat still get the plain status */
+      }
+    }
+    return status
+  })
 
   // Which sidecar build the drive carries (the Phase-14 .paid-runtime.json marker) —
   // the Diagnostics "runtime build" line (Phase 16). Null on unmarked/DIY drives.

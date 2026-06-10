@@ -53,6 +53,13 @@ export interface ModelManifest {
   recommendedMinRamGb: number
   recommendedRamGb: number
   recommendedContextTokens: number
+  /**
+   * Whether the model has a native thinking/reasoning mode the runtime can toggle per
+   * request (Phase 20: gates the Deep answer mode in the UI). Optional in YAML
+   * (`supports_thinking_mode`), defaulting to false — Deep is never offered for a
+   * model that did not declare it.
+   */
+  supportsThinkingMode: boolean
   /** Path of the weight file relative to the DRIVE ROOT (e.g. `models/chat/x.gguf`). */
   localPath: string
   /** Expected SHA-256 (lower-case hex). May be a placeholder until a real drive is built. */
@@ -129,6 +136,17 @@ export function validateManifest(raw: unknown): ValidationResult {
   const recommendedContextTokens = num('recommended_context_tokens')
   const localPath = str('localPath', 'local_path')
   const sha256 = str('sha256', 'sha256').toLowerCase()
+
+  // Optional capability flag (Phase 20): must be a boolean when present.
+  let supportsThinkingMode = false
+  const stm = raw['supports_thinking_mode']
+  if (stm !== undefined) {
+    if (typeof stm !== 'boolean') {
+      errors.push('"supports_thinking_mode" must be a boolean when present')
+    } else {
+      supportsThinkingMode = stm
+    }
+  }
 
   // Optional: which hardware profiles this model targets.
   let recommendedProfiles: HardwareProfile[] = []
@@ -228,6 +246,7 @@ export function validateManifest(raw: unknown): ValidationResult {
       recommendedMinRamGb,
       recommendedRamGb,
       recommendedContextTokens,
+      supportsThinkingMode,
       localPath,
       sha256,
       recommendedProfiles,

@@ -9,6 +9,7 @@ import net from 'node:net'
 import { openDatabase, type Db } from '../../src/main/services/db'
 import { MockEmbedder, encodeVector } from '../../src/main/services/embeddings'
 import {
+  buildGroundedChatMessages,
   buildGroundedPrompt,
   generateGroundedAnswer,
   ragSettingsFrom,
@@ -272,6 +273,61 @@ describe('generateGroundedAnswer', () => {
     expect(msg.content).toBe(NO_DOCUMENT_CONTEXT_ANSWER)
     expect(msg.citations).toBeUndefined()
     expect(chatSpy).not.toHaveBeenCalled()
+  })
+
+  // Phase 20: document answers always run 'balanced' — no mode is sent to the runtime
+  // (chatStream's omitted-mode default IS balanced), and persisted grounded answers
+  // get the same think-block hygiene as plain chat (D6).
+  it('passes NO answer-depth mode to the runtime (documents stay balanced)', async () => {
+    const db = freshDb()
+    const embedder = new MockEmbedder()
+    await seedDocument(db, embedder, 'a.txt', [{ text: 'grounded answers stay balanced here' }])
+    const conv = createConversation(db, { mode: 'documents' })
+    const q = 'grounded answers stay balanced here'
+    appendMessage(db, { conversationId: conv.id, role: 'user', content: q })
+
+    const rt = runtime()
+    const chatSpy = vi.spyOn(rt, 'chatStream')
+    await generateGroundedAnswer(db, rt, embedder, conv.id, q, SETTINGS)
+
+    expect(chatSpy).toHaveBeenCalledTimes(1)
+    const options = chatSpy.mock.calls[0][1]
+    expect(options?.mode).toBeUndefined()
+  })
+
+  it('strips inline think blocks from the persisted grounded answer (D6)', async () => {
+    const db = freshDb()
+    const embedder = new MockEmbedder()
+    await seedDocument(db, embedder, 'b.txt', [{ text: 'thinking hygiene applies to grounded answers' }])
+    const conv = createConversation(db, { mode: 'documents' })
+    const q = 'thinking hygiene applies to grounded answers'
+    appendMessage(db, { conversationId: conv.id, role: 'user', content: q })
+
+    const rt = runtime()
+    vi.spyOn(rt, 'chatStream').mockImplementation(async function* () {
+      yield '<think>retrieval reasoning</think>'
+      yield 'Cited answer [S1].'
+    })
+    const msg = await generateGroundedAnswer(db, rt, embedder, conv.id, q, SETTINGS)
+    expect(msg.content).toBe('Cited answer [S1].')
+    expect(listMessages(db, conv.id).at(-1)?.content).not.toContain('<think>')
+  })
+
+  it('buildGroundedChatMessages scrubs think blocks from replayed assistant turns', () => {
+    const db = freshDb()
+    const conv = createConversation(db, { mode: 'documents' })
+    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'q1' })
+    appendMessage(db, {
+      conversationId: conv.id,
+      role: 'assistant',
+      content: '<think>old reasoning</think>Earlier cited answer [S1].'
+    })
+    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'q2' })
+
+    const messages = buildGroundedChatMessages(db, conv.id, 'GROUNDED PROMPT')
+    expect(messages.at(-1)?.content).toBe('GROUNDED PROMPT')
+    const assistantTurn = messages.find((m) => m.role === 'assistant')
+    expect(assistantTurn?.content).toBe('Earlier cited answer [S1].')
   })
 })
 

@@ -44,9 +44,9 @@ main + renderer). Validation collects **all** errors per file and is pure (no I/
 `id, display_name, family, role, format, runtime, license, size_on_disk_gb,
 recommended_min_ram_gb, recommended_ram_gb, recommended_context_tokens, local_path, sha256` plus a
 `license_review` block. Optional: `recommended_profiles` (a list of hardware profiles this model is
-recommended for — drives the §7.3 picker) and a `download` block (Phase 12, below). Unknown extra
-keys (e.g. `supports_tools`, `dimensions`, `bundled_on_preconfigured_drive`) are ignored by the
-validator.
+recommended for — drives the §7.3 picker), `supports_thinking_mode` (below), and a `download`
+block (Phase 12, below). Unknown extra keys (e.g. `supports_tools`, `dimensions`,
+`bundled_on_preconfigured_drive`) are ignored by the validator.
 
 - **`local_path`** is resolved **relative to the drive root**, so a value of
   `models/chat/foo.gguf` points at `<drive-root>/models/chat/foo.gguf`.
@@ -54,6 +54,15 @@ validator.
   marks a model whose hash is not yet known; such a file is only usable in developer mode.
 - **`runtime`/`format`**: currently `llama_cpp` + `gguf` are supported; anything else yields the
   `unsupported` state.
+- **`supports_thinking_mode`** (optional boolean, default `false`) is **load-bearing since
+  Phase 20**: it declares that the model's chat template implements the `enable_thinking`
+  switch (Qwen3-style native reasoning). The chat UI offers the **Deep** answer mode only for
+  a running model whose manifest sets it `true` (surfaced via `RuntimeStatus.supportsThinkingMode`).
+  Setting it on a model whose template ignores `enable_thinking` is harmless at the request
+  level (the kwarg is inert) but misleading — Deep would behave exactly like Balanced.
+  All four bundled Qwen3 chat models are the ORIGINAL hybrid-thinking releases (`Qwen/Qwen3-*-GGUF`)
+  and correctly declare `true`; note the later "Qwen3 …-2507 Instruct" variants dropped thinking
+  and must declare `false` if ever bundled.
 
 ## Model states (spec §7.4)
 Computed by `services/models.ts` with this precedence:

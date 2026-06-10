@@ -151,6 +151,24 @@ words per second" and "faster than you can read". There is nothing to install or
 
 Everything you type and everything the model replies stays on your device.
 
+### Answer depth (Fast / Balanced / Deep)
+
+Above the message box you can choose how much work the model puts into each answer:
+
+- **Fast** — quick, to-the-point answers. Great for simple questions and follow-ups.
+- **Balanced** — the everyday default. A direct answer with the model's normal care.
+- **Deep** — the model **thinks the problem through first**, then answers. Best for tricky
+  questions: comparisons, multi-step reasoning, careful writing. Deep answers take noticeably
+  longer — that extra time *is* the feature.
+
+While a Deep answer is being worked out, a collapsed **"Thinking…"** section appears above
+the reply — click it if you're curious how the model is reasoning. It is a live view only:
+the saved conversation keeps just the answer, and exports never include the thinking text.
+
+The choice sticks per conversation, and **Deep is only offered when the active model supports
+it** (all chat models that ship with the drive do). Document answers (**Ask Documents**)
+always use Balanced — they are meant to be quick and literal about your files.
+
 ---
 
 ## 7. Ask your documents (RAG)

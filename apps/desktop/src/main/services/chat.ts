@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { Db } from './db'
-import type { Citation, Conversation, Message } from '../../shared/types'
+import type { ChatDepthMode, Citation, Conversation, Message } from '../../shared/types'
 import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from './runtime'
 
 // Chat service (spec §7.6): create conversations, append user/assistant messages,
@@ -24,6 +24,22 @@ For document answers, include citations using the provided source labels.`
 /** Build the system prompt for a request. RAG context is appended in Phase 6. */
 export function buildSystemPrompt(): string {
   return BASE_SYSTEM_PROMPT
+}
+
+/**
+ * Remove `<think>…</think>` reasoning blocks (including an unclosed trailing block
+ * from a stream stopped mid-thought) from assistant text — Phase 20, plan §13 D6.
+ *
+ * Reasoning must never persist and must never be fed back as history (Qwen guidance:
+ * think blocks confuse the model when replayed). The normal Phase-20 path already
+ * separates reasoning out of the answer stream (`--reasoning-format deepseek` →
+ * `delta.reasoning_content`), so this is defense-in-depth: it catches inline tags
+ * from a differently configured server and scrubs any legacy persisted rows.
+ * Untouched text returns as-is; when blocks were removed the seams are trimmed.
+ */
+export function stripThinkBlocks(text: string): string {
+  const stripped = text.replace(/<think>[\s\S]*?<\/think>/g, '').replace(/<think>[\s\S]*$/, '')
+  return stripped === text ? text : stripped.trim()
 }
 
 function nowIso(): string {
@@ -314,7 +330,11 @@ export function buildChatMessages(db: Db, conversationId: string): ChatMessage[]
   const messages: ChatMessage[] = [{ role: 'system', content: buildSystemPrompt() }]
   for (const m of history) {
     if (m.role === 'user' || m.role === 'assistant') {
-      messages.push({ role: m.role, content: m.content })
+      // Assistant turns are scrubbed of think blocks before being replayed (D6).
+      messages.push({
+        role: m.role,
+        content: m.role === 'assistant' ? stripThinkBlocks(m.content) : m.content
+      })
     }
   }
   return messages
@@ -324,6 +344,10 @@ export interface GenerateOptions {
   signal?: AbortSignal
   /** Called with each streamed token so the IPC layer can forward it to the renderer. */
   onToken?: (token: string) => void
+  /** Answer-depth mode (Phase 20), forwarded to the runtime. Omitted = 'balanced'. */
+  mode?: ChatDepthMode
+  /** Called with each reasoning delta (Deep mode) — live display only, never persisted. */
+  onReasoning?: (delta: string) => void
   runtimeOptions?: Pick<RuntimeChatOptions, 'maxTokens' | 'temperature'>
 }
 
@@ -343,6 +367,8 @@ export async function generateAssistantMessage(
   let content = ''
   const stream = runtime.chatStream(messages, {
     signal: opts.signal,
+    mode: opts.mode,
+    onReasoning: opts.onReasoning,
     ...opts.runtimeOptions
   })
   try {
@@ -355,6 +381,9 @@ export async function generateAssistantMessage(
     // Any other error is a real failure and propagates to the IPC layer.
     if (!isAbortError(err, opts.signal)) throw err
   }
+  // Reasoning never reaches the DB (D6): the runtime already streams it separately,
+  // and any inline think block that slipped into the answer is stripped here.
+  content = stripThinkBlocks(content)
   // Persist whatever was produced — on a stop, that is the partial text so far. A stop
   // BEFORE the first token produced nothing: persist nothing (a permanent empty
   // assistant bubble in the transcript otherwise) and return an unpersisted, empty

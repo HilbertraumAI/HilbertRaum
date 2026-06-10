@@ -37,9 +37,14 @@ logs, best-effort shredding on SSDs, no password recovery — are documented in
 
 - **No dedicated Onboarding wizard (spec §7.1).** The `WorkspaceGate` (create-password / unlock),
   the automatic first-run benchmark, and the Home screen together cover the spec §17 first-run flow.
-- **`ChatOptions.mode` (Fast/Balanced/Deep) is dead plumbing** — accepted over IPC, read by
-  nothing; there is no "Fast Mode" UI concept.
-- **`runtime_events` table (spec §8) is created but never written.**
+- ~~`ChatOptions.mode` (Fast/Balanced/Deep) is dead plumbing~~ **Shipped in Phase 20**
+  (post-mvp-functionality-plan §8): the composer's answer-depth selector maps to Qwen3's
+  native thinking switch (`chat_template_kwargs.enable_thinking` at the pinned b9585) with
+  live collapsed reasoning in Deep mode. Accepted edges: the depth choice is
+  per-conversation **per session** (not persisted to the DB), and document answers always
+  run Balanced (deep-grounded is a wave-2 question).
+- ~~`runtime_events` table (spec §8) is created but never written~~ **Shipped in Phase 19**:
+  it now holds the local audit log (Diagnostics → Activity), pruned to 5 000 rows on insert.
 - **Model states `ready` / `not_recommended` are declared but never produced.**
 - ~~GPU detection is permanently `null`~~ **Superseded by Phases 14–16:** the drive's own
   `llama-server --list-devices` is the offline, native-free probe, and the benchmark's GPU
@@ -51,9 +56,10 @@ logs, best-effort shredding on SSDs, no password recovery — are documented in
 - **Settings lacks the spec §10.6 Models/Performance/About sections** (Models has its own screen;
   Diagnostics shows version/runtime/model info).
 - **No `sample-contract.pdf` fixture** for the canonical spec §17 demo script.
-- **Manifest fields `supports_thinking_mode` / `supports_tools` / `bundled_on_preconfigured_drive`
-  are parsed but unused.** In particular the bundled flag's intent (don't preload the big models on
-  a commercial drive) is unimplemented — the pipeline fetches all six weights (~37 GB); curate with
+- **Manifest fields `supports_tools` / `bundled_on_preconfigured_drive` are unused**
+  (`supports_thinking_mode` became load-bearing in Phase 20 — it gates the Deep answer mode).
+  In particular the bundled flag's intent (don't preload the big models on a commercial drive) is
+  unimplemented — the pipeline fetches all six weights (~37 GB); curate with
   `fetch-models --only <id>`.
 - ~~No in-app model downloader (plan §12.3, deferred)~~ **Shipped in Phase 18**
   (post-mvp-functionality-plan §6): policy ∧ Settings-toggle ∧ per-download confirmation, `.part`
@@ -65,7 +71,8 @@ logs, best-effort shredding on SSDs, no password recovery — are documented in
   - **Download progress display is per-renderer-session.** The job itself runs in the main
     process and survives navigation; after an app restart the progress card is gone but the kept
     `.part` resumes on the next Download click.
-  - No audit-log records yet (`download_started/verified/failed` land with Phase 19).
+  - ~~No audit-log records yet~~ `model_download_started/verified/failed` are recorded since
+    Phase 19.
 - **Drive updates are manual.** There is no spec §12.3 update mechanism; the `updates/` and
   `workspace/backups/` directories are not created. The manual procedure is documented in
   [`drive-layout.md`](drive-layout.md) ("Updating a drive").

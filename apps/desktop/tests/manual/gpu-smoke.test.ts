@@ -79,8 +79,9 @@ describe.skipIf(!enabled)('GPU smoke (manual, real binaries + real model + real 
     expect(runtime.backend).toBe('gpu')
     console.log('rung-1 backend:', runtime.backend, '| gpu:', runtime.gpuName)
     const out: string[] = []
-    // Qwen3 is a thinking model: without /no_think a small max_tokens budget is consumed
-    // entirely by reasoning_content deltas and the visible content stays empty.
+    // Qwen3 is a thinking model. Since Phase 20 the omitted-mode default (balanced)
+    // already sends enable_thinking:false; the /no_think soft switch stays as belt and
+    // braces so this smoke also passes against older/unpinned server builds.
     for await (const t of runtime.chatStream(
       [{ role: 'user', content: 'Say "hello" and nothing else. /no_think' }],
       { maxTokens: 64 }

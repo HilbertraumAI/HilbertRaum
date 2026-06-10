@@ -74,10 +74,14 @@ export const IPC = {
 } as const
 
 // Renderer-bound streaming event channels (main -> renderer).
+// token/done/error are the LOCKED Phase-3 contract (one answer-token string per
+// event); `reasoning` is the ADDITIVE Phase-20 channel carrying the model's thinking
+// deltas for Deep mode — answer tokens never travel on it and vice versa.
 export const STREAM = {
   token: (requestId: string) => `chat:token:${requestId}`,
   done: (requestId: string) => `chat:done:${requestId}`,
-  error: (requestId: string) => `chat:error:${requestId}`
+  error: (requestId: string) => `chat:error:${requestId}`,
+  reasoning: (requestId: string) => `chat:reasoning:${requestId}`
 } as const
 
 // One-off main -> renderer notices (not tied to a request).

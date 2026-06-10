@@ -226,4 +226,60 @@ describe('registerChatIpc', () => {
       /Unknown conversation/
     )
   })
+
+  // ---- Answer-depth modes (Phase 20, plan §8) ------------------------------------
+
+  /** A runtime that records chatStream options and emits reasoning then answer text. */
+  function depthRuntime(): { runtime: ModelRuntime; seen: { options?: RuntimeChatOptions } } {
+    const seen: { options?: RuntimeChatOptions } = {}
+    const runtime: ModelRuntime = {
+      modelId: 'depth',
+      start: async () => {},
+      stop: async () => {},
+      health: async () => ({ healthy: true, message: 'ok', port: 1 }),
+      async *chatStream(_m: ChatMessage[], options?: RuntimeChatOptions) {
+        seen.options = options
+        options?.onReasoning?.('pondering ')
+        options?.onReasoning?.('deeply')
+        yield '<think>leaked inline reasoning</think>'
+        yield 'The answer.'
+      }
+    }
+    return { runtime, seen }
+  }
+
+  it('forwards the mode and streams reasoning on chat:reasoning:<id>, never on the token channel', async () => {
+    const db = freshDb()
+    const { runtime, seen } = depthRuntime()
+    const conv = createConversation(db, {})
+    registerChatIpc(makeCtx(db, runtime))
+
+    const event = makeEvent()
+    const msg = (await invokeWithEvent(handlers, IPC.sendChatMessage, event, conv.id, 'hi', {
+      mode: 'deep'
+    })) as { content: string }
+
+    expect(seen.options?.mode).toBe('deep')
+    // Reasoning deltas travel ONLY on the additive reasoning channel; the locked
+    // Phase-3 token channel carries answer tokens only.
+    expect(event.sender.send).toHaveBeenCalledWith(STREAM.reasoning(conv.id), 'pondering ')
+    expect(event.sender.send).toHaveBeenCalledWith(STREAM.reasoning(conv.id), 'deeply')
+    const tokenPayloads = event.sender.send.mock.calls
+      .filter((c) => String(c[0]) === STREAM.token(conv.id))
+      .map((c) => String(c[1]))
+    expect(tokenPayloads.join('')).not.toContain('pondering')
+    // The persisted reply is stripped of any inline think block (D6).
+    expect(msg.content).toBe('The answer.')
+    expect(listMessages(db, conv.id).at(-1)?.content).toBe('The answer.')
+  })
+
+  it('degrades a junk mode from a non-UI caller to the balanced default', async () => {
+    const db = freshDb()
+    const { runtime, seen } = depthRuntime()
+    const conv = createConversation(db, {})
+    registerChatIpc(makeCtx(db, runtime))
+
+    await invoke(handlers, IPC.sendChatMessage, conv.id, 'hi', { mode: 'TURBO' })
+    expect(seen.options?.mode).toBeUndefined()
+  })
 })
