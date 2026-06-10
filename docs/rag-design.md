@@ -500,7 +500,11 @@ restart allowed — the same fix gave the E5 embedder a working post-lock restar
 No new `AppSettings` keys, no UI surface (D14 — the embedder precedent); the manifest
 (`model-manifests/reranker/bge-reranker-v2-m3.yaml`) carries a `download` block, so the
 Phase-18 in-app downloader covers it. `ragMinSimilarity` keeps its meaning (cosine,
-pre-rerank); its measured default is still pending a real corpus (plan §1.3).
+pre-rerank); its default is **measured and stays 0** — on the real drive the relevant and
+irrelevant best-chunk cosine distributions OVERLAP (E5 runs without query:/passage: prefixes
+→ everything lands in a narrow ~0.87–0.94 band), so no positive floor separates them without
+dropping real hits (plan §1.3; `tests/manual/minsim-measure.test.ts`). Relevance separation
+is the reranker's job, not the floor's.
 
 ### Tested behaviour (Phase 21)
 

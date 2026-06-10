@@ -42,7 +42,9 @@ whose absent default keeps retrieval byte-identical (§3 entry; working paper
 record `docs/rag-design.md` §11). **Verified on real hardware (2026-06-10, `PAID_RERANK_SMOKE`
 on `D:\`): F16 loads on b9585, relevance correct, worst-case batch ≈ 24.7 s CPU — and the
 smoke run caught + fixed a real HTTP-500 (rerank mode forces n_ubatch=512 < a ~670-token
-input; now sizes `--batch-size`/`--ubatch-size` to the 2048 context — §3 entry item 6).**
+input; now sizes `--batch-size`/`--ubatch-size` to the 2048 context — §3 entry item 6).
+`ragMinSimilarity` measured on the same drive and confirmed = 0 (relevant/irrelevant cosines
+overlap under prefix-less E5 — §3 entry item 6). Both Phase-21 manual items are now DONE.**
 Release-wise, remaining work =
 **manual release acceptance only** (§5, incl. the GPU
 hardware matrix, item 1b). Consciously-accepted gaps live in
@@ -872,7 +874,14 @@ Repo root: `f:\_coding\ai_drive`.
      q8_0 warmup crash), relevant +8.82 vs irrelevant −11.01, **worst-case 12-candidate batch
      ≈ 24.7 s** on a CPU-pinned i7-1185G7 (the §7 number — ~2 s/candidate, so reranking visibly
      lengthens a documents query on a low-end laptop; bounded by the candidate cap, opt-in by
-     provisioning). `ragMinSimilarity` measurement (R3) is still the one remaining §5 item.
+     provisioning). **`ragMinSimilarity` (R3/D12) also measured + resolved on the same drive
+     (`tests/manual/minsim-measure.test.ts`, `PAID_MINSIM_MEASURE`):** a 12-passage corpus with
+     12 relevant + 12 irrelevant queries through the exact production path shows the best-chunk
+     cosines OVERLAP (relevant 0.879–0.935 mean 0.903; irrelevant 0.866–0.907 mean 0.891) — E5
+     runs WITHOUT query:/passage: prefixes, so everything compresses into ~0.87–0.94 and no
+     positive floor separates the classes without dropping real hits. **Floor stays 0** (now
+     empirically confirmed, not deferred); relevance separation is the reranker's job. Both
+     Phase-21 manual items are DONE; no Phase-21 acceptance work remains.
   Tests (+29 → 601): `reranker.test.ts` (10: spawn args incl. NO chat args + CPU pin, index
   mapping, truncation, failed-start latch, stop/suspend, selector), `hybrid-search.test.ts`
   (18: migration + backfill-once + trigger sync, MATCH sanitization, visibility + scope, RRF,
@@ -1486,14 +1495,19 @@ items are **MANUAL acceptance only** (R2/R5/R7 + the GPU hardware matrix). In ro
    correct (+8.82 vs −11.01), worst-case 12-candidate batch ≈ 24.7 s on a CPU-pinned i7-1185G7
    (§7). It **caught a real bug** (rerank-mode forces n_ubatch=512 < the ~670-token input →
    HTTP 500) now fixed by sizing `--batch-size`/`--ubatch-size` to the context (§3 entry item 6).
-   STILL OPEN: **measure the `ragMinSimilarity` floor** (relevant + irrelevant query batches on a
-   real E5-indexed corpus → promote a measured default; semantics already locked, D12). Smaller
+   **`ragMinSimilarity` floor — MEASURED 2026-06-10, stays 0** (`tests/manual/minsim-measure.test.ts`,
+   `PAID_MINSIM_MEASURE=D:\`): relevant vs irrelevant best-chunk cosines OVERLAP (relevant
+   0.879–0.935 vs irrelevant 0.866–0.907 — E5 runs without query:/passage: prefixes, so all
+   cosines compress into ~0.87–0.94), so no positive floor separates them without dropping real
+   hits; relevance separation is the reranker's job (D12 confirmed empirically). **Both Phase-21
+   manual items are now DONE** — no Phase-21 acceptance work remains. Smaller
    leftovers: an icon/`buildResources` for electron-builder; ANN vector index only if a real
    corpus outgrows the linear scan (plan §9 item 4 / D15 — explicitly not built).
 
-**Current gate (2026-06-10, post-Phase-21): typecheck clean, 601/601 tests pass (+6 manual
+**Current gate (2026-06-10, post-Phase-21): typecheck clean, 601/601 tests pass (+7 manual
 tests — 4 GPU smoke behind `PAID_GPU_SMOKE`, 1 thinking smoke behind `PAID_THINKING_SMOKE`,
-1 rerank smoke behind `PAID_RERANK_SMOKE` — skipped in CI), `npm run build` green.** The
+1 rerank smoke behind `PAID_RERANK_SMOKE`, 1 ragMinSimilarity measurement behind
+`PAID_MINSIM_MEASURE` — skipped in CI), `npm run build` green.** The
 per-phase gate history (test counts, bundle sizes, per-phase test inventories) lives in git
 history.
 

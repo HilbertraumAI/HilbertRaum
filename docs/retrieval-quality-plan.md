@@ -50,13 +50,29 @@ Probed 2026-06-10 in BOTH runtimes that matter: **Electron 37.10.3 main process*
 24.13.0** (what vitest runs under). Both: SQLite **3.50.4** with `ENABLE_FTS5`;
 virtual table + `MATCH` + `bm25()` all work. No native dependency, no descope.
 
-### 1.3 R3 — similarity floor (PENDING)
+### 1.3 R3 — similarity floor (MEASURED 2026-06-10 → keep 0)
 
-The provisioned `D:\` test drive was not attached ⇒ no real E5 score distributions.
-**`ragMinSimilarity` keeps its locked default 0**; the measurement (relevant +
-irrelevant query batches on a real E5-indexed corpus → promote a measured default) is a
-BUILD_STATE §5 manual item. The floor's *semantics* under reranking are decided (D12),
-so the value drops in later without redesign.
+Measured on the real `D:\` drive (`tests/manual/minsim-measure.test.ts`,
+`PAID_MINSIM_MEASURE`): a topically-diverse 12-passage corpus, 12 RELEVANT queries
+(answerable) vs 12 IRRELEVANT ones (absent topics), embedded through the EXACT production
+path (real multilingual-E5, no `query:`/`passage:` prefix, the same `cosineSimilarity`
+`VectorIndex` uses). Best-chunk cosine per query:
+
+| class | min | median | mean | max |
+|---|---|---|---|---|
+| relevant (n=12) | 0.8790 | 0.9018 | 0.9033 | 0.9352 |
+| irrelevant (n=12) | 0.8658 | 0.8937 | 0.8909 | 0.9065 |
+
+The classes **OVERLAP by 0.0276** (irrelevant.max 0.9065 > relevant.min 0.8790). Because
+E5 is run WITHOUT its prefixes, every cosine compresses into a narrow ~0.87–0.94 band, so
+**no positive floor separates relevant from irrelevant without dropping real hits** (a 0.89
+floor would discard 4/12 relevant queries yet still admit most irrelevant ones — strictly
+harmful: a dropped real hit means an empty/"not in your documents" answer, the worst
+failure). **Decision: `ragMinSimilarity` stays 0** — now empirically confirmed, not merely
+deferred. Relevance separation is delegated to the reranker (clean +8.82 vs −11.01, §7) and
+RRF, not the cosine floor. *Latent improvement (not done — it would require re-embedding the
+whole corpus): adding the E5 `query:`/`passage:` prefixes would likely spread the
+distribution and make a floor meaningful; revisit only if a prefix migration is undertaken.*
 
 ## 2. Hard rules inherited
 
