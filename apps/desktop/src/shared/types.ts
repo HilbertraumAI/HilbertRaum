@@ -179,7 +179,18 @@ export interface AppSettings {
    * extra table), so on an encrypted workspace it is encrypted at rest with the DB.
    */
   checksumCache: Record<string, ChecksumCacheEntry>
+  // ---- Appearance (Phase 23, design-guidelines §5 / plan decision D-UI2) ----
+  /**
+   * Theme preference. 'system' (default) follows the OS via
+   * `prefers-color-scheme` and resolves to light when the OS reports nothing.
+   * The pre-unlock gate cannot read settings (encrypted DB) — it always follows
+   * the OS theme.
+   */
+  theme: ThemeSetting
 }
+
+/** Appearance setting (see `AppSettings.theme`). */
+export type ThemeSetting = 'system' | 'light' | 'dark'
 
 /** One persisted weight-file hash (see `AppSettings.checksumCache`). */
 export interface ChecksumCacheEntry {
@@ -210,7 +221,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   gpuLastError: null,
   gpuProbe: null,
   autoStartActiveModel: true,
-  checksumCache: {}
+  checksumCache: {},
+  theme: 'system'
 }
 
 // ---- GPU probe (Phase 15) ----

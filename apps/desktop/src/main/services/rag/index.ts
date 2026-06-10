@@ -80,9 +80,11 @@ export const SNIPPET_MAX_CHARS = 600
  * the similarity threshold, we do NOT call the model — we return this fixed answer so the
  * assistant can never hallucinate sources it does not have.
  */
+// Phase 27 copy sweep (guidelines §7): this answer is PERSISTED into conversations, so
+// rewording it only affects future answers — old rows keep the text they were saved with.
 export const NO_DOCUMENT_CONTEXT_ANSWER =
-  "I couldn't find anything about that in your documents. Try importing relevant files on " +
-  'the Documents screen, or rephrasing your question.'
+  "I couldn't find this in your documents. Try rephrasing your question, or check which " +
+  "documents you're asking about."
 
 /**
  * The actionable variant (Phase 17, plan §5.2): documents ARE indexed, but none of their

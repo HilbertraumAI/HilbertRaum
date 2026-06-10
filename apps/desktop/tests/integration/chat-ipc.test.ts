@@ -72,7 +72,7 @@ describe('registerChatIpc', () => {
     const db = freshDb()
     const conv = createConversation(db, {})
     registerChatIpc(makeCtx(db, null))
-    await expect(invoke(handlers, IPC.sendChatMessage, conv.id, 'hi')).rejects.toThrow(/No model is running/)
+    await expect(invoke(handlers, IPC.sendChatMessage, conv.id, 'hi')).rejects.toThrow(/No AI model is running/)
   })
 
   it('rejects an empty message and an unknown conversation', async () => {

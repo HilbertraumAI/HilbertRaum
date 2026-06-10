@@ -6,10 +6,13 @@ import { ChatScreen } from '../../src/renderer/screens/ChatScreen'
 import type { Conversation, Message, RuntimeStatus } from '../../src/shared/types'
 import { stubApi } from '../helpers/renderer'
 
-// Phase 20 renderer tests (plan §8/§11): the composer's answer-depth selector —
-// Deep offered only when the running model declares thinking support, the selected
-// depth travels with sendChatMessage and sticks per conversation, and Deep-mode
-// reasoning renders as a collapsed "Thinking…" block on the live bubble only.
+// Answer-depth tests (Phase 20 contracts under the Phase 25 UI): the composer-footer
+// "Answer detail" dropdown — labels are Quick/Balanced/Thorough (decision D-UI4) while
+// the ids sent over IPC stay fast|balanced|deep; Thorough is offered only when the
+// running model declares thinking support; the selection travels with sendChatMessage
+// and sticks per conversation; and Deep-mode reasoning renders as a collapsed
+// "Thinking…" line on the live bubble only (never persisted), auto-collapsing when the
+// first answer token streams.
 
 function conv(over: Partial<Conversation> = {}): Conversation {
   return {
@@ -50,42 +53,52 @@ beforeAll(() => {
 afterEach(() => {
   cleanup()
   vi.restoreAllMocks()
+  window.localStorage.clear()
 })
 
-describe('ChatScreen — answer-depth selector (Phase 20)', () => {
-  it('offers Deep only when the running model supports thinking', async () => {
+/** The composer-footer dropdown trigger, e.g. "Answer detail: Balanced ▾". */
+function depthTrigger(): HTMLElement {
+  return screen.getByRole('button', { name: /answer detail/i })
+}
+
+describe('ChatScreen — "Answer detail" dropdown (Phase 20 / D-UI4)', () => {
+  it('offers Thorough only when the running model supports thinking', async () => {
+    const user = userEvent.setup()
     stubApi({
       listConversations: vi.fn(async () => [conv()]),
       getRuntimeStatus: vi.fn(async () => status({ supportsThinkingMode: true }))
     })
-    render(<ChatScreen onNavigate={() => {}} />)
-    expect(await screen.findByRole('button', { name: 'Deep' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Fast' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Balanced' })).toBeInTheDocument()
-  })
+    const { unmount } = render(<ChatScreen onNavigate={() => {}} />)
+    await screen.findByText('Depth chat')
+    await user.click(depthTrigger())
+    expect(await screen.findByRole('menuitemradio', { name: /quick/i })).toBeInTheDocument()
+    expect(screen.getByRole('menuitemradio', { name: /balanced/i })).toBeInTheDocument()
+    expect(screen.getByRole('menuitemradio', { name: /thorough/i })).toBeInTheDocument()
+    await user.keyboard('{Escape}')
+    unmount()
 
-  it('hides Deep when the manifest does not declare thinking support', async () => {
     stubApi({
       listConversations: vi.fn(async () => [conv()]),
       getRuntimeStatus: vi.fn(async () => status()) // no supportsThinkingMode flag
     })
     render(<ChatScreen onNavigate={() => {}} />)
-    await screen.findByRole('button', { name: 'Fast' })
-    expect(screen.queryByRole('button', { name: 'Deep' })).not.toBeInTheDocument()
+    await screen.findByText('Depth chat')
+    await user.click(depthTrigger())
+    expect(await screen.findByRole('menuitemradio', { name: /quick/i })).toBeInTheDocument()
+    expect(screen.queryByRole('menuitemradio', { name: /thorough/i })).not.toBeInTheDocument()
   })
 
-  it('hides the selector in Ask Documents mode (document answers stay balanced)', async () => {
+  it('hides the dropdown in Ask-my-documents mode (document answers stay balanced)', async () => {
     stubApi({
       listConversations: vi.fn(async () => []),
       getRuntimeStatus: vi.fn(async () => status({ supportsThinkingMode: true }))
     })
     render(<ChatScreen onNavigate={() => {}} initialMode="documents" />)
-    // The tab's accessible name includes its subtitle — match loosely.
-    await screen.findByRole('button', { name: /Ask Documents/ })
-    expect(screen.queryByText('Answer depth:')).not.toBeInTheDocument()
+    await screen.findByPlaceholderText(/ask about your documents/i)
+    expect(screen.queryByRole('button', { name: /answer detail/i })).not.toBeInTheDocument()
   })
 
-  it('sends the selected depth with the message and defaults to balanced', async () => {
+  it('sends the selected depth id with the message and defaults to balanced', async () => {
     const user = userEvent.setup()
     const sendChatMessage = vi.fn(async () => assistantMsg('ok'))
     stubApi({
@@ -100,15 +113,17 @@ describe('ChatScreen — answer-depth selector (Phase 20)', () => {
     await user.click(await screen.findByText('Depth chat'))
 
     // Default: balanced.
-    await user.type(screen.getByPlaceholderText(/Message Private AI Drive/), 'first')
+    await user.type(screen.getByPlaceholderText("Message…"), 'first')
     await user.click(screen.getByRole('button', { name: 'Send' }))
     await waitFor(() =>
       expect(sendChatMessage).toHaveBeenCalledWith('c1', 'first', { mode: 'balanced' })
     )
 
-    // Selecting Fast sticks for this conversation's next message.
-    await user.click(screen.getByRole('button', { name: 'Fast' }))
-    await user.type(screen.getByPlaceholderText(/Message Private AI Drive/), 'second')
+    // Selecting Quick (UI label) sends the 'fast' id and sticks for the next message.
+    await user.click(depthTrigger())
+    await user.click(await screen.findByRole('menuitemradio', { name: /quick/i }))
+    expect(depthTrigger()).toHaveTextContent('Answer detail: Quick')
+    await user.type(screen.getByPlaceholderText("Message…"), 'second')
     await user.click(screen.getByRole('button', { name: 'Send' }))
     await waitFor(() =>
       expect(sendChatMessage).toHaveBeenCalledWith('c1', 'second', { mode: 'fast' })
@@ -125,19 +140,20 @@ describe('ChatScreen — answer-depth selector (Phase 20)', () => {
     render(<ChatScreen onNavigate={() => {}} />)
 
     await user.click(await screen.findByText('Depth chat'))
-    await user.click(screen.getByRole('button', { name: 'Fast' }))
-    expect(screen.getByRole('button', { name: 'Fast' }).className).toContain('active')
+    await user.click(depthTrigger())
+    await user.click(await screen.findByRole('menuitemradio', { name: /quick/i }))
+    expect(depthTrigger()).toHaveTextContent('Answer detail: Quick')
 
     // The other conversation starts on the balanced default…
     await user.click(screen.getByText('Other chat'))
-    expect(screen.getByRole('button', { name: 'Balanced' }).className).toContain('active')
+    expect(depthTrigger()).toHaveTextContent('Answer detail: Balanced')
 
     // …and coming back restores this conversation's choice.
     await user.click(screen.getByText('Depth chat'))
-    expect(screen.getByRole('button', { name: 'Fast' }).className).toContain('active')
+    expect(depthTrigger()).toHaveTextContent('Answer detail: Quick')
   })
 
-  it('renders streamed reasoning as a collapsed Thinking… block that is not persisted', async () => {
+  it('renders streamed reasoning as a collapsed Thinking… line that auto-collapses and is not persisted', async () => {
     const user = userEvent.setup()
     let tokenCb: ((t: string) => void) | undefined
     let reasoningCb: ((d: string) => void) | undefined
@@ -164,12 +180,13 @@ describe('ChatScreen — answer-depth selector (Phase 20)', () => {
     })
     render(<ChatScreen onNavigate={() => {}} />)
     await user.click(await screen.findByText('Depth chat'))
-    await user.click(screen.getByRole('button', { name: 'Deep' }))
-    await user.type(screen.getByPlaceholderText(/Message Private AI Drive/), 'why?')
+    await user.click(depthTrigger())
+    await user.click(await screen.findByRole('menuitemradio', { name: /thorough/i }))
+    await user.type(screen.getByPlaceholderText("Message…"), 'why?')
     await user.click(screen.getByRole('button', { name: 'Send' }))
     await waitFor(() => expect(reasoningCb).toBeDefined())
 
-    // Reasoning deltas appear inside a collapsed <details> block on the live bubble.
+    // Reasoning deltas (buffered) appear inside a collapsed <details> on the live bubble.
     act(() => {
       reasoningCb?.('step one, ')
       reasoningCb?.('step two')
@@ -178,11 +195,16 @@ describe('ChatScreen — answer-depth selector (Phase 20)', () => {
     const details = summary.closest('details')
     expect(details).not.toBeNull()
     expect(details?.open).toBe(false) // collapsed by default
-    expect(screen.getByText('step one, step two')).toBeInTheDocument()
+    expect(await screen.findByText('step one, step two')).toBeInTheDocument()
+
+    // Expanding, then receiving the first answer token, auto-collapses the line (§3).
+    await user.click(summary)
+    await waitFor(() => expect(details?.open).toBe(true))
     act(() => tokenCb?.('The answer.'))
+    await waitFor(() => expect(details?.open).toBe(false))
 
     // Stream completes → the transcript re-reads persisted history, which carries the
-    // answer only (D6) — the live Thinking block is gone.
+    // answer only (D6) — the live Thinking line is gone.
     listMessages.mockResolvedValue([assistantMsg('The answer.')])
     act(() => resolveSend(assistantMsg('The answer.')))
     await waitFor(() => expect(screen.queryByText('Thinking…')).not.toBeInTheDocument())

@@ -224,14 +224,14 @@ export interface WarningInputs {
 
 /**
  * Build the user-facing warnings (spec §11.3 + §11.4). Always encouraging, never
- * judgmental — weak hardware is framed as "best suited for Fast Mode", never
+ * judgmental — weak hardware is framed as "best suited for the smallest, quickest model", never
  * "your hardware is bad". Slow drives warn but do not block.
  */
 export function buildWarnings(input: WarningInputs): string[] {
   const warnings: string[] = []
 
   if (input.profile === 'TINY') {
-    warnings.push('This device is best suited for Fast Mode. Larger models may run slowly.')
+    warnings.push('This device is best suited for the smallest, quickest model. Larger models may run slowly.')
   } else if (input.profile === 'UNKNOWN') {
     warnings.push(
       'We could not fully detect this hardware, so we picked a safe, lightweight model. ' +

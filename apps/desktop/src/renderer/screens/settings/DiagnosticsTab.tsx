@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { Banner, Button, useToast } from '../../components'
 import type {
   AppSettings,
   AppStatus,
@@ -9,6 +10,12 @@ import type {
   RuntimeInstallInfo,
   RuntimeStatus
 } from '@shared/types'
+
+// "Diagnostics (advanced)" tab of the Settings screen (Phase 26 — the former
+// DiagnosticsScreen). Still the home of every technical detail: the Activity panel
+// (Phase 19), the log tail, the Acceleration line + "Try GPU again" (Phase 16), and
+// the hardware benchmark. Visually quieter than a destination screen — it is a
+// support surface, not an everyday one (guidelines §2).
 
 /** How many activity entries each page load fetches. */
 const ACTIVITY_PAGE_SIZE = 50
@@ -58,7 +65,7 @@ function accelerationLabel(runtime: RuntimeStatus | null, settings: AppSettings 
   return 'CPU'
 }
 
-export function DiagnosticsScreen(): JSX.Element {
+export function DiagnosticsTab(): JSX.Element {
   const [drive, setDrive] = useState<DriveStatus | null>(null)
   const [bench, setBench] = useState<BenchmarkResult | null>(null)
   const [app, setApp] = useState<AppStatus | null>(null)
@@ -74,7 +81,8 @@ export function DiagnosticsScreen(): JSX.Element {
   const [events, setEvents] = useState<AuditEvent[] | null>(null)
   const [moreAvailable, setMoreAvailable] = useState(false)
   const [typeFilter, setTypeFilter] = useState<string>('all')
-  const [exportedTo, setExportedTo] = useState<string | null>(null)
+  // "Saved" confirmations are transient toasts (Phase 24, guidelines §6).
+  const toast = useToast()
 
   const refreshStatus = useCallback(async (): Promise<void> => {
     window.api?.getAppStatus().then(setApp).catch(() => setApp(null))
@@ -112,9 +120,9 @@ export function DiagnosticsScreen(): JSX.Element {
   async function exportActivity(): Promise<void> {
     try {
       const path = await window.api.exportAuditLog()
-      if (path) setExportedTo(path)
+      if (path) toast(`Activity log saved to ${path}`)
     } catch {
-      setExportedTo(null)
+      // Export is cancellable from the OS dialog; a failure simply shows no toast.
     }
   }
 
@@ -155,9 +163,8 @@ export function DiagnosticsScreen(): JSX.Element {
   }
 
   return (
-    <div className="screen">
-      <h1>Diagnostics</h1>
-      <p className="lead">Local-only diagnostics. Nothing here is ever uploaded.</p>
+    <>
+      <p className="hint">Local-only diagnostics. Nothing here is ever uploaded.</p>
 
       <div className="card">
         <h2>App &amp; runtime</h2>
@@ -188,24 +195,26 @@ export function DiagnosticsScreen(): JSX.Element {
           </dd>
         </dl>
         {settings?.gpuAutoDisabled && (
-          <div className="hint" style={{ marginTop: 8 }}>
-            <p className="hint">
-              Running in compatibility mode: responses use the CPU, which works on every
-              machine.{' '}
-              {settings.gpuMode === 'auto'
-                ? 'If you have updated your graphics driver, you can try the graphics card again.'
-                : 'GPU acceleration is turned off in Settings — turn it back on there to use the graphics card again.'}
-            </p>
-            {settings.gpuMode === 'auto' && (
-              <button className="btn sm" onClick={() => void tryGpuAgain()}>
-                Try GPU again
-              </button>
-            )}
-          </div>
+          <Banner
+            tone="info"
+            action={
+              settings.gpuMode === 'auto' ? (
+                <Button size="sm" onClick={() => void tryGpuAgain()}>
+                  Try GPU again
+                </Button>
+              ) : undefined
+            }
+          >
+            Running in compatibility mode: responses use the CPU, which works on every
+            machine.{' '}
+            {settings.gpuMode === 'auto'
+              ? 'If you have updated your graphics driver, you can try the graphics card again.'
+              : 'GPU acceleration is turned off in Settings — turn it back on there to use the graphics card again.'}
+          </Banner>
         )}
-        <button className="btn sm" onClick={() => void refreshStatus()}>
+        <Button size="sm" onClick={() => void refreshStatus()}>
           Refresh
-        </button>
+        </Button>
       </div>
 
       <div className="card">
@@ -214,10 +223,10 @@ export function DiagnosticsScreen(): JSX.Element {
           Measures RAM, CPU, and drive speed on this device to recommend a model. Runs entirely
           offline — no data leaves your machine.
         </p>
-        <button className="btn primary" onClick={runBenchmark} disabled={running}>
+        <Button variant="primary" onClick={() => void runBenchmark()} disabled={running}>
           {running ? 'Running…' : bench ? 'Re-run benchmark' : 'Run benchmark'}
-        </button>
-        {error && <p className="hint error">Benchmark failed: {error}</p>}
+        </Button>
+        {error && <Banner tone="error">Benchmark failed: {error}</Banner>}
 
         {bench && (
           <>
@@ -312,27 +321,26 @@ export function DiagnosticsScreen(): JSX.Element {
           and is never uploaded. It never contains chat text or document contents.
         </p>
         <div className="actions">
-          <button
-            className="btn sm"
+          <Button
+            size="sm"
             onClick={() => {
               setShowActivity((v) => !v)
               if (!showActivity) void loadActivity()
             }}
           >
             {showActivity ? 'Hide activity' : 'Show activity'}
-          </button>
+          </Button>
           {showActivity && (
             <>
-              <button className="btn sm" onClick={() => void loadActivity()}>
+              <Button size="sm" onClick={() => void loadActivity()}>
                 Refresh
-              </button>
-              <button className="btn sm" onClick={() => void exportActivity()}>
+              </Button>
+              <Button size="sm" onClick={() => void exportActivity()}>
                 Export to file…
-              </button>
+              </Button>
             </>
           )}
         </div>
-        {exportedTo && <p className="hint">Activity log saved to {exportedTo}</p>}
         {showActivity && (
           <>
             {events != null && events.length > 0 && (
@@ -367,9 +375,9 @@ export function DiagnosticsScreen(): JSX.Element {
               </ul>
             )}
             {moreAvailable && (
-              <button className="btn sm" onClick={() => void loadMoreActivity()}>
+              <Button size="sm" onClick={() => void loadMoreActivity()}>
                 Show earlier activity
-              </button>
+              </Button>
             )}
           </>
         )}
@@ -382,19 +390,19 @@ export function DiagnosticsScreen(): JSX.Element {
           uploaded; they contain no document contents or chat text.
         </p>
         <div className="actions">
-          <button
-            className="btn sm"
+          <Button
+            size="sm"
             onClick={() => {
               setShowLogs((v) => !v)
               if (!showLogs) void refreshLogs()
             }}
           >
             {showLogs ? 'Hide logs' : 'Show logs'}
-          </button>
+          </Button>
           {showLogs && (
-            <button className="btn sm" onClick={() => void refreshLogs()}>
+            <Button size="sm" onClick={() => void refreshLogs()}>
               Refresh
-            </button>
+            </Button>
           )}
         </div>
         {showLogs && (
@@ -403,6 +411,6 @@ export function DiagnosticsScreen(): JSX.Element {
           </pre>
         )}
       </div>
-    </div>
+    </>
   )
 }

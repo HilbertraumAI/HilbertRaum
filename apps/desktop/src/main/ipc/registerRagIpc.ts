@@ -22,7 +22,7 @@ import { inFlightStreams } from './inflight'
 // in-flight registry, so `stopGeneration(conversationId)` cancels a document answer too.
 //
 // Like sendChatMessage, this does NOT auto-start a runtime — a model must be started on
-// the Models screen first; with none active the handler throws so the renderer can show
+// the AI Model screen first; with none active the handler throws so the renderer can show
 // the "start a model" empty state.
 
 export function registerRagIpc(ctx: AppContext): void {
@@ -34,7 +34,7 @@ export function registerRagIpc(ctx: AppContext): void {
 
       const runtime = ctx.runtime.active()
       if (!runtime) {
-        throw new Error('No model is running. Select and start a model on the Models screen first.')
+        throw new Error('No AI model is running. Open the AI Model screen and start one first.')
       }
 
       // One active stream per conversation (shared registry with plain chat).

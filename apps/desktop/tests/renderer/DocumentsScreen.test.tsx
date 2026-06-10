@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { render, screen, cleanup, waitFor } from '@testing-library/react'
+import { render, screen, cleanup, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { DocumentsScreen } from '../../src/renderer/screens/DocumentsScreen'
 import type { DocumentInfo } from '../../src/shared/types'
@@ -33,21 +33,21 @@ describe('DocumentsScreen', () => {
     stubApi({ listDocuments: vi.fn(async () => [doc({})]) })
     render(<DocumentsScreen />)
     expect(await screen.findByText('contract.pdf')).toBeInTheDocument()
-    expect(screen.getByText('Indexed')).toBeInTheDocument()
+    expect(screen.getByText('Ready')).toBeInTheDocument()
     expect(screen.getByText('7')).toBeInTheDocument()
   })
 
   it('shows the re-index banner for a document with stale embeddings (M7)', async () => {
     stubApi({ listDocuments: vi.fn(async () => [doc({ staleEmbeddings: true })]) })
     render(<DocumentsScreen />)
-    expect(await screen.findByText(/different embedding model/i)).toBeInTheDocument()
+    expect(await screen.findByText(/different search model/i)).toBeInTheDocument()
   })
 
   it('does NOT show the re-index banner when embeddings are current', async () => {
     stubApi({ listDocuments: vi.fn(async () => [doc({ staleEmbeddings: false })]) })
     render(<DocumentsScreen />)
     await screen.findByText('contract.pdf')
-    expect(screen.queryByText(/different embedding model/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/different search model/i)).not.toBeInTheDocument()
   })
 
   it('surfaces the error message for a failed document', async () => {
@@ -67,7 +67,7 @@ describe('DocumentsScreen', () => {
     expect(await screen.findByText(/No documents yet/i)).toBeInTheDocument()
   })
 
-  it('deletes a document and refreshes the list', async () => {
+  it('deletes a document after the ConfirmDialog confirms, and refreshes the list', async () => {
     const user = userEvent.setup()
     const listDocuments = vi
       .fn<() => Promise<DocumentInfo[]>>()
@@ -78,10 +78,31 @@ describe('DocumentsScreen', () => {
     render(<DocumentsScreen />)
 
     await screen.findByText('contract.pdf')
+    // Phase 24: destructive delete goes through a ConfirmDialog, never straight through.
     await user.click(screen.getByRole('button', { name: /^delete$/i }))
+    expect(deleteDocument).not.toHaveBeenCalled()
 
-    expect(deleteDocument).toHaveBeenCalledWith('d1')
+    const dialog = await screen.findByRole('dialog')
+    expect(dialog).toHaveTextContent(/Delete "contract.pdf"\?/)
+    await user.click(within(dialog).getByRole('button', { name: /^delete$/i }))
+
+    await waitFor(() => expect(deleteDocument).toHaveBeenCalledWith('d1'))
     await waitFor(() => expect(screen.queryByText('contract.pdf')).not.toBeInTheDocument())
+  })
+
+  it('does not delete when the ConfirmDialog is cancelled', async () => {
+    const user = userEvent.setup()
+    const deleteDocument = vi.fn(async () => {})
+    stubApi({ listDocuments: vi.fn(async () => [doc({})]), deleteDocument })
+    render(<DocumentsScreen />)
+
+    await screen.findByText('contract.pdf')
+    await user.click(screen.getByRole('button', { name: /^delete$/i }))
+    await user.click(within(await screen.findByRole('dialog')).getByRole('button', { name: /cancel/i }))
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    expect(deleteDocument).not.toHaveBeenCalled()
+    expect(screen.getByText('contract.pdf')).toBeInTheDocument()
   })
 
   it('opens the read-only preview modal with the extracted text and closes it', async () => {

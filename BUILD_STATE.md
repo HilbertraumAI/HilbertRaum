@@ -45,8 +45,40 @@ smoke run caught + fixed a real HTTP-500 (rerank mode forces n_ubatch=512 < a ~6
 input; now sizes `--batch-size`/`--ubatch-size` to the 2048 context — §3 entry item 6).
 `ragMinSimilarity` measured on the same drive and confirmed = 0 (relevant/irrelevant cosines
 overlap under prefix-less E5 — §3 entry item 6). Both Phase-21 manual items are now DONE.**
-Release-wise, remaining work =
-**manual release acceptance only** (§5, incl. the GPU
+**The UI polish wave (Phases 23–27) is COMPLETE** (developed on branch
+`ui-phase-23-tokens-theming`, merged to master 2026-06-10); the rollout plan was condensed to
+the design record
+[`docs/ui-ux-redesign-plan.md`](docs/ui-ux-redesign-plan.md) per the doc lifecycle rule.
+**Phase 23 (design-token foundation + light/dark theming) is DONE**
+— tokens.css per the adopted guidelines §4, the full styles.css role-token
+restyle with the AA primary-button fix, the global a11y baseline, and the additive
+`AppSettings.theme` setting with the Settings Appearance card (§3 entry). **Phase 24 (shared
+component layer) is DONE** on the same branch — D-UI1 executed (the four Radix primitives
+pinned + license-reviewed), `renderer/components/` (Button/Badge/Banner/Toast/ConfirmDialog/
+Modal/SegmentedControl/Switch/Chip/EmptyState/Progress per guidelines §6), every non-chat
+screen + the WorkspaceGate migrated onto them, and "Saved" feedback moved to polite-live-region
+toasts (§3 entry). **Phase 25 (chat screen restructure — the wave's priority) is DONE** on the
+same branch — ChatScreen split into `renderer/chat/` per guidelines §3 exactly: collapsible
+date-grouped conversation list (hover "⋯" menu + ConfirmDialog deletes — the last browser
+`confirm()` is gone), centered 720px transcript with per-message Try again/Copy/Save actions
+and the inline "▸ Sources (N)" disclosure, header SegmentedControl + "⋯" overflow, the
+composer-footer "Answer detail" dropdown (Quick/Balanced/Thorough labels per D-UI4) and the
+documents-scope popover, the teaching empty state (doc-hint banner deleted), and buffered
+streaming with the auto-collapsing Thinking… line (§3 entry). **Phase 26 (information
+architecture regroup) is DONE** on the same branch — nav 7→5 (Home · Chat · Documents ·
+**AI Model** ‖ Settings), Privacy + Diagnostics folded into Settings tabs ("Privacy & data" /
+"Diagnostics (advanced)"), `navigate()` virtual `settings:*` targets with the legacy
+`privacy`/`diagnostics` aliases kept working, Home rebuilt as the readiness hub (D-UI3
+RESOLVED: Home stays), and the AI Model screen's per-card "Technical details" disclosure
+(§3 entry). **Phase 27 (microcopy + ambient trust signal + first-run — the wave's LAST
+phase) is DONE** on the same branch — the guidelines-§7 copy sweep across renderer AND
+user-facing main-process strings, the quiet "Local · Offline" indicator (sidebar + chat
+header, Radix Tooltip, honest downloads-allowed variant), the 3-step first-run create flow
+(welcome → password with hand-rolled strength hint/show-toggle/paste support → optional
+starter step), and the final WCAG 2.2 AA sweep (`--border-strong` token fix +
+forced-colors rules; accepted items in `docs/known-limitations.md`) (§3 entry).
+Release-wise,
+remaining work = **manual release acceptance only** (§5, incl. the GPU
 hardware matrix, item 1b). Consciously-accepted gaps live in
 [`docs/known-limitations.md`](docs/known-limitations.md)._
 
@@ -78,6 +110,12 @@ hardware matrix, item 1b). Consciously-accepted gaps live in
 | 19 | Audit log (`runtime_events`) | 🟢 done |
 | 20 | Answer-depth modes (Fast/Balanced/Deep) | 🟢 done |
 | 21 | Retrieval quality (reranker + hybrid FTS5 search) | 🟢 done |
+| 22 | Signed offline update bundles | 🔴 blocked (key-management design) |
+| 23 | UI design tokens + light/dark theming | 🟢 done (merged to master 2026-06-10) |
+| 24 | UI shared component layer (Radix + components/) | 🟢 done (merged to master 2026-06-10) |
+| 25 | UI chat screen restructure (guidelines §3) | 🟢 done (merged to master 2026-06-10) |
+| 26 | UI information architecture regroup (guidelines §2) | 🟢 done (merged to master 2026-06-10) |
+| 27 | UI microcopy, ambient trust signal, first-run (guidelines §7/§2/§9) | 🟢 done (merged to master 2026-06-10) — **UI polish wave COMPLETE** |
 
 Legend: ⚪ not started · 🟡 in progress · 🟢 done · 🔴 blocked
 
@@ -890,6 +928,318 @@ Repo root: `f:\_coding\ai_drive`.
   `tests/manual/rerank-smoke.test.ts` (`PAID_RERANK_SMOKE=<drive root>`): real F16 load on
   b9585 + relevance sanity + the §7 latency measurement. No new audit events (sentinel surface
   unchanged). Gate: typecheck clean, 601 tests, build green.
+- **Phase 23 — UI design tokens + light/dark theming (2026-06-10, plan
+  [`docs/ui-ux-redesign-plan.md`](docs/ui-ux-redesign-plan.md) Phase 23; design source
+  [`docs/design-guidelines.md`](docs/design-guidelines.md) §4/§5/§9; built on branch
+  `ui-phase-23-tokens-theming`, since merged to master 2026-06-10):**
+  1. **`renderer/tokens.css` is the single styling source** (imported before `styles.css`):
+     the §4 ramps (neutral/accent/semantic, theme-constant), role tokens (`:root` = LIGHT —
+     the new default-resolving theme; `[data-theme="dark"]` overrides role tokens only —
+     today's palette lightly tuned per §4.3), type scale (size+line pairs), spacing, radii,
+     shadows, motion + `--ease`, offline system font stacks. Beyond the guidelines table,
+     three role aliases keep styles.css theme-blind: `--accent` (accent-600 light /
+     accent-500 dark — borders/icons/selected states), `--success`/`--error`/`--warning`
+     (the per-theme AA ramp steps), plus `--surface-hover` and `--code-bg` (light needs
+     tonal steps where dark used translucent black).
+  2. **`styles.css` fully on role tokens; the 8 legacy vars are gone.** AA fixes: filled
+     controls (`.btn.primary`, `.badge.running`, `.chat-conv-badge`) use **`--accent-600`
+     (#2f6fed, white text 4.55:1) in BOTH themes** — the old `#4f8cff` fill (3.22:1) is
+     banned as a fill and survives only as dark-theme accent/link/focus. Inputs moved to
+     `--border-strong` (§6).
+  3. **A11y baseline (§9):** global `:focus-visible` 2px `--focus` **outline** + 2px offset
+     (outline, not box-shadow — Windows High Contrast keeps it; the old `outline: none` on
+     inputs is gone), a `prefers-reduced-motion` kill-switch, `button { min-width/height:
+     24px }` + `.toggle { min-height: 24px }` (checkboxes stay 16px visually — the
+     clickable label supplies the ≥24px target).
+  4. **Theme plumbing (decision D-UI2 as planned):** additive `AppSettings.theme:
+     'system'|'light'|'dark'` (default `'system'`), enum-guarded in `updateSettings` like
+     `gpuMode`. `renderer/theme.ts` owns `data-theme` on `<html>`: `initTheme()` runs
+     before first render (OS theme via `matchMedia('(prefers-color-scheme: dark)')` + live
+     change listener; no matchMedia ⇒ light); `setThemeSetting()` is called by App.tsx when
+     settings load post-unlock (and re-checked alongside the policy fetch), by the Settings
+     screen on change, and with `'system'` on **Lock now** — the pre-unlock gate can't read
+     the (encrypted) settings, so it always follows the OS. The BrowserWindow pre-paint
+     `backgroundColor` now follows `nativeTheme.shouldUseDarkColors` (flash fix only; not
+     an IPC change).
+  5. **Settings → Appearance card:** System / Light / Dark button group (`aria-pressed`,
+     non-color-only selected state), applies immediately.
+  Tests (+7 → 608): settings-guard (junk `theme` never persisted, default `'system'`) in
+  `db-settings.test.ts`; `tests/renderer/Theme.test.tsx` (resolver, OS-follow + live flip,
+  explicit-choice-overrides-OS, Settings card persists + flips `data-theme`). Eyeballed
+  every screen + the gate + the lock flow in BOTH themes via a scripted Electron/Playwright
+  walk (screenshots reviewed; light badge/banner states checked). Gate: typecheck clean,
+  608 tests, build green.
+- **Phase 24 — UI shared component layer (2026-06-10, plan
+  [`docs/ui-ux-redesign-plan.md`](docs/ui-ux-redesign-plan.md) Phase 24; design source
+  [`docs/design-guidelines.md`](docs/design-guidelines.md) §6/§9; built on branch
+  `ui-phase-23-tokens-theming`, since merged to master 2026-06-10):**
+  1. **Radix primitives adopted (decision D-UI1 executed) — four RENDERER deps, pinned
+     exact:** `@radix-ui/react-dialog@1.1.16`, `@radix-ui/react-popover@1.1.16`,
+     `@radix-ui/react-dropdown-menu@2.1.17`, `@radix-ui/react-tooltip@1.2.9`.
+     **License/transitive review (2026-06-10):** the install added 42 lockfile packages
+     (Radix internals, `@floating-ui/*` positioning, the `react-remove-scroll` family,
+     `aria-hidden`, `get-nonce`, `detect-node-es`) — **every one MIT, pure JS, zero
+     install scripts, no native code, no runtime network**; Vite-bundled into the renderer
+     like `react-markdown` (NOT main-process/externalized). Phase 24 uses only Dialog;
+     popover/dropdown-menu/tooltip are staged for the Phase-25 chat restructure.
+  2. **New `renderer/components/` (guidelines §6 exactly):** `Button` (three levels —
+     primary/secondary/ghost, `type="button"` default, 36px md / ≥24px sm), `Badge`
+     (status pill, ALWAYS icon + word — never color-only), `Banner` (semantic left border
+     + icon + optional action/dismiss; `role="alert"` for errors, else `status`),
+     `Toast`/`ToastProvider`/`useToast` (single host in App.tsx; polite always-mounted
+     live region; 4 s auto-dismiss; **no-op default context** so provider-less unit
+     renders never crash), `Modal` + `ConfirmDialog` on Radix Dialog (focus trap, Esc,
+     **explicit focus-return via captured `document.activeElement`** — Radix's default
+     targets its own Trigger, which controlled dialogs don't render, so without this fix
+     focus fell to `<body>`; primary on the RIGHT; 480/640/760px widths),
+     `SegmentedControl` (hand-rolled radiogroup, roving tabindex, arrow/Home/End keys
+     move focus AND selection, wraps + skips disabled), `Switch` (real
+     `<input type="checkbox" role="switch">` under a styled track — native keyboard +
+     label association kept; track `--accent-600` when on), `Chip` (remove ✕ on
+     hover/focus only; also a button-form for example-prompt chips), `EmptyState`,
+     `Progress` (always-labelled bar; indeterminate without totals). All styled in
+     styles.css with Phase-23 tokens only (no new raw hex); old `.badge`/`.modal-backdrop`
+     CSS deleted (`.pill`/`.dialog-*` replace them).
+  3. **Non-chat screens migrated** (Home, Documents, Models, Settings, Privacy,
+     Diagnostics, WorkspaceGate + the App shell — ChatScreen untouched, Phase 25):
+     Settings' Phase-23 Appearance button group → `SegmentedControl`; the four binary
+     settings checkboxes + the gate's plaintext toggle → `Switch` (§6: switch for binary
+     settings; the Models license acknowledgement deliberately STAYS a checkbox —
+     consent ≠ setting); the **Documents Delete now goes through `ConfirmDialog`** (it
+     was an unconfirmed destructive action; the only browser `confirm()` lives in
+     ChatScreen and is Phase-25 scope); Documents preview + the Phase-18 download
+     confirmation → Radix `Modal`/`ConfirmDialog`; doc/model status spans → `Badge`
+     maps (icon + word per state); ad-hoc warn/error hints + the App-shell runtime
+     notice → `Banner`; Documents/Models zero states → `EmptyState` (the empty
+     Documents screen hides the top action row so the EmptyState button is THE
+     primary); download progress → `Progress`. "Saved" feedback → toasts: Settings
+     patches toast "Saved", Diagnostics' activity export toasts the saved path
+     (was a static hint line).
+  4. **Renderer-only, contracts untouched:** no IPC/schema/main-process changes; both
+     themes keep working via role tokens only (components never theme-check). One
+     stale-copy casualty: the Privacy screen's plaintext warning said encryption
+     "arrives in Phase 9" — rewritten minimally while converting to Banner (Phase 9
+     shipped long ago); the full §7 copy sweep stays Phase 27.
+  Tests (+12 → 620): `tests/renderer/Components.test.tsx` (ConfirmDialog focus trap +
+  primary-right + Esc/focus-return + confirmDisabled; SegmentedControl semantics/roving
+  tabindex/arrows/click; Toast live-region + 3–5 s auto-dismiss + provider-less no-op;
+  Switch keyboard + label toggling). Existing suites updated where the DOM changed,
+  assertions kept equal-or-stronger: gate plaintext toggle queried as `switch`, Documents
+  delete asserts dialog-confirm flow (+ a new cancel-path test), Theme tests query
+  `radio`/`aria-checked`, Diagnostics export asserts the toast text under ToastProvider.
+  Eyeballed via the scripted Playwright walk (memory recipe): gate create/unlock + all
+  seven screens in BOTH themes, preview + delete dialogs (light AND dark), Saved toast,
+  segmented control, switches, badge/banner/empty states on light especially. Gate:
+  typecheck clean, 620 tests, build green.
+- **Phase 25 — chat screen restructure (2026-06-10, plan
+  [`docs/ui-ux-redesign-plan.md`](docs/ui-ux-redesign-plan.md) Phase 25; design source
+  [`docs/design-guidelines.md`](docs/design-guidelines.md) §3 exactly (+§6/§9); built on
+  branch `ui-phase-23-tokens-theming`, since merged to master 2026-06-10). Renderer-only: the
+  `chat:*`/`rag:*` IPC, depth ids, and `chat:reasoning` mechanisms are untouched
+  underneath.**
+  1. **ChatScreen split into `renderer/chat/`:** `ConversationList` (collapsible second
+     column; date-grouped Today/Yesterday/Last 7 days/Earlier via the pure
+     `groupConversations()`; per-row hover/focus "⋯" Radix DropdownMenu — also opened by
+     right-click — whose Delete goes through `ConfirmDialog`, retiring the app's LAST
+     browser `confirm()` and the permanent per-row ✕ buttons; collapse state in
+     localStorage `paid.chat.listCollapsed` — a UI preference, deliberately NOT user
+     data, so it lives outside the encrypted workspace), `Transcript` (centered,
+     max-width 720px, `--text-md` body; owns autoscroll), `MessageActions` (hover/focus
+     row on assistant answers: ↺ Try again [last answer, chat mode only] · Copy · Save —
+     buttons stay focusable while CSS-hidden so keyboard focus reveals them),
+     `Composer` (auto-grow textarea capped at 220px, ONE Send/Stop button, Enter sends /
+     Shift+Enter newline, footer row), `SourcesDisclosure` ("▸ Sources (N)" inline
+     disclosure → name + page/section + snippet cards, replacing the always-open
+     SourcePanel), `DepthMenu`, `ScopePopover`.
+  2. **Header (guidelines §3):** SegmentedControl "Chat | Ask my documents" replaces the
+     mode tabs; a "⋯" overflow DropdownMenu holds **Save this conversation** (the old
+     Export); an empty `data-slot="local-indicator"` span marks where the Phase-27
+     ambient indicator lands. "Copied"/"Saved (path)" confirmations go through the
+     Phase-24 toast host — the old label-mutating Copy button and the `.chat-notice`
+     export line are gone; errors stay inline (`Banner tone="error"`, dismissible).
+  3. **Composer footer:** "Answer detail ▾" Radix DropdownMenu radio group labelled
+     **Quick · Balanced · Thorough per D-UI4 — ids stay `fast|balanced|deep`** in
+     code/IPC/persistence (no migration; tests assert label↔id mapping). Thorough hidden
+     without manifest thinking support; sticky-depth + coerce-to-balanced behavior
+     preserved. Documents mode instead shows **"📄 Using N documents ▾"** (Radix Popover):
+     scoped docs as Phase-24 Chips (✕ removes), "+ title" chips add from the indexed
+     corpus, "Use all documents" resets to null scope — replacing the permanent
+     scope-chip row; same `updateConversationScope`/pendingScope semantics underneath.
+  4. **Teaching empty state** (EmptyState + Chip): friendly line + 3 example-prompt chips
+     that fill the composer + an "Add documents to ask about them" nudge (via the
+     existing `onNavigate`) only when no indexed documents exist. The dismissible
+     plain-chat doc-awareness hint banner is **deleted** (its §5.1 job is now done by the
+     always-visible mode control + empty state — the Phase-17 wrong-tab guard rationale
+     is satisfied structurally).
+  5. **Streaming:** token + reasoning deltas now buffer in refs and flush on a 40 ms
+     timer (one re-render per flush, not per token — layout-thrash guard); the live
+     bubble's text is a `role="log"` polite ARIA live region; the "Thinking…" line is a
+     controlled `<details>` that the FIRST answer token auto-collapses (expand stays
+     one click; the Phase-20 never-persisted contract is unchanged — reasoning state
+     clears with the stream and history re-reads carry answers only). Stop remains a
+     real button (keyboard-reachable single Send/Stop swap).
+  Tests (+8 → 628; chat suites REWRITTEN against the new DOM, proofs kept equal-or-
+  stronger): `ChatHomeNav` (delete via ⋯ menu + ConfirmDialog confirm/cancel, markdown
+  trio, documents-mode entry, scope popover remove/add/reset/handoff/whole-corpus
+  label), `ChatDepth` (Thorough-gating, label↔id send, stickiness, Thinking collapse →
+  expand → auto-collapse → not persisted), new `ChatRestructure` (empty-state chips fill
+  composer, docs nudge, mode radiogroup, collapse persistence across remount via
+  localStorage, per-message Copy/Save/Try-again + toasts, header overflow save,
+  `groupConversations` buckets). `tests/setup.ts` gained jsdom-guarded ResizeObserver/
+  pointer-capture stubs for Radix's positioned primitives. Eyeballed via the scripted
+  Playwright walk in BOTH themes (24 scenes: teaching empty state, chip fill, streamed
+  answer with the Thinking line collapsed AND expanded — reasoning injected from the
+  main process on the real `chat:reasoning:<id>` channel since the mock runtime never
+  emits it, hover actions, Copied/Saved toasts incl. a patched save dialog, answer-detail
+  menu, row ⋯ menu + delete confirm, sources disclosure expanded, scope popover
+  all/scoped, collapsed list; walk gotcha recorded in project memory: Electron userData
+  localStorage persists across walk runs). Gate: typecheck clean, 628 tests, build green.
+- **Phase 26 — information architecture regroup (2026-06-10, plan
+  [`docs/ui-ux-redesign-plan.md`](docs/ui-ux-redesign-plan.md) Phase 26; design source
+  [`docs/design-guidelines.md`](docs/design-guidelines.md) §2 (+§6/§9); same branch
+  `ui-phase-23-tokens-theming`, since merged to master 2026-06-10). Renderer-only; no IPC/schema/main-process
+  changes and no new deps (the Settings tabs reuse the hand-rolled SegmentedControl —
+  Radix Tabs was deliberately NOT added).**
+  1. **Nav 7 → 5 (`App.tsx`):** top group Home · Chat · Documents · **AI Model** (renamed
+     from "Models"; internal `ScreenId` stays `'models'` so existing
+     `onNavigate('models')` callers are untouched) + a separated bottom utility group
+     holding Settings. Privacy and Diagnostics are no longer destinations. Navigation
+     resolution is the pure, unit-tested `renderer/navigation.ts`
+     `resolveNavTarget()`: virtual targets `'settings:privacy'`/`'settings:diagnostics'`
+     pick the Settings tab, and the **legacy `'privacy'`/`'diagnostics'` targets stay
+     working as aliases**; unknown targets fail safe to Home. Entry points re-pointed:
+     the sidebar offline badge → `settings:privacy`; the App-shell `runtime:notice`
+     banner gained a "Details" action → `settings:diagnostics`; ChatScreen's no-model
+     empty state keeps target `'models'` (label now "Open AI Model").
+  2. **SettingsScreen is tabbed:** General (all previous settings cards, unchanged
+     behavior) / **Privacy & data** (absorbs the former `PrivacyScreen` verbatim —
+     §18.1 offline statement, network state, data paths, logs-local, workspace
+     protection) / **Diagnostics (advanced)** (absorbs the former `DiagnosticsScreen`,
+     visually quieter — h1 dropped, lead demoted to a hint — but still the home of ALL
+     technical detail: Acceleration + "Try GPU again", runtime-build line, benchmark,
+     Activity panel + export, log tail). Tab components live in
+     `renderer/screens/settings/{PrivacyTab,DiagnosticsTab}.tsx`; the old screen files
+     are deleted. The open tab is owned by `App.tsx` (controlled prop) so navigation can
+     land on a tab from anywhere; standalone renders fall back to internal state.
+  3. **Home = readiness hub (D-UI3 re-evaluated → RESOLVED: Home STAYS):** three
+     readiness rows (Workspace protection · AI model running/loading/none-selected with
+     remediation buttons · indexed-document count with an Add-documents nudge), ONE
+     primary "Start chatting", quiet preflight warnings (existing
+     `runPreflight`/`getAppStatus`/`getRuntimeStatus`/`listDocuments` IPC only — no new
+     channels; the model row polls `getRuntimeStatus` every 2.5 s, the ChatScreen
+     precedent, so auto-start flips it to Running by itself). **D-UI3 rationale** (also
+     in the plan's decisions table): Home does NOT duplicate the Chat empty state —
+     Chat teaches *what to ask*, Home answers *is the system ready* and carries the
+     warnings/remediation that must not sit on the conversation canvas (guidelines §3).
+  4. **Models → "AI Model" (guidelines §2 singular mental model):** the active model
+     leads under "Your AI model" with a plain-language size/speed hint
+     (`plainHint()`: small-and-quick / balanced / large tiers; embeddings = "prepares
+     your documents"), the rest are the picker ("Other models" / "Choose your AI
+     model"); checksums, quantization-bearing model ids, paths, RAM/context numbers,
+     and the **Verify checksum** action moved into a per-card native
+     `<details class="tech-details">` **"Technical details" disclosure, closed by
+     default**. Select/Start/Stop/mock-start/RAM-gate/download flows are byte-identical
+     underneath (same IPC calls, same gate copy).
+  Tests (+16 → 644, vitest from `apps/desktop`; suites re-pointed at the new IA without
+  weakening proofs): `GpuSurface` + `DiagnosticsActivity` now render
+  `<SettingsScreen tab="diagnostics" />` (same Try-GPU-again/Activity assertions),
+  `ChatHomeNav`'s Home block rewritten for the readiness hub (start-chatting /
+  ask-documents / choose-a-model / no-docs-nudge routes + running/loading/none states +
+  preflight banner), `ModelsScreen` gained the disclosure-closed-by-default +
+  active-model-first tests, and the new `InformationArchitecture` suite covers the
+  `resolveNavTarget` table (incl. legacy aliases), the 5-item nav (and absence of
+  Privacy/Diagnostics items), the offline-badge → Privacy-tab route, and tab switching
+  (controlled + uncontrolled). Eyeballed via the scripted Playwright walk in BOTH themes
+  (17 scenes: 5-item nav, Home with/without a running model — mock start/stop via the
+  real UI/IPC, all three Settings tabs, offline-badge route asserted on
+  `aria-checked`, AI Model disclosure closed/open). Docs: `user-guide.md` (nav
+  overview, Home, AI Model, GPU + Activity pointers now "Settings → Diagnostics
+  (advanced)", Privacy → "Settings → Privacy & data"), `architecture.md` (screen list +
+  PrivacyTab pointer). Gate: typecheck clean, 644 tests, build green.
+- **Phase 27 — microcopy, ambient trust signal, first-run (2026-06-10) — the UI polish
+  wave's LAST phase; the wave is COMPLETE** (same branch; plan condensed to the design
+  record [`docs/ui-ux-redesign-plan.md`](docs/ui-ux-redesign-plan.md) per the doc
+  lifecycle rule — full original = `git show d2ecf5a:docs/ui-ux-redesign-plan.md`).
+  Renderer-only EXCEPT user-facing main-process **string literals** (the one phase where
+  that was in scope; no logic/IPC/schema changes — one targeted exception below). As built:
+  1. **Copy sweep (guidelines §7):** main process — the stale "Models screen" no-model
+     errors in `registerChatIpc`/`registerRagIpc` → "No AI model is running. Open the AI
+     Model screen and start one first."; `NO_DOCUMENT_CONTEXT_ANSWER` reworded to the §7
+     row (it is PERSISTED into conversations — future answers only, old rows keep their
+     text); wrong-password → "That password didn't unlock your workspace. Check it and
+     try again."; `startModelRuntime` refusals lose the raw state code
+     (checksum_failed → "we couldn't verify its file… try downloading it again");
+     manifests-dir-missing + benchmark "Fast Mode" leftovers humanized. Renderer —
+     composer placeholder → "Message…" (§3 wireframe), Documents lead/status pills
+     (Waiting/Reading/Preparing/**Ready** — stage jargon gone), stale-embeddings banner,
+     "Chunks"→"Sections", ModelsScreen "Can't verify" badge + verify/loading copy,
+     "Embeddings" section → "Document search", PrivacyTab telemetry row → "Nothing
+     leaves this drive — there's no tracking to turn off." Error codes stay only in
+     Diagnostics. NEW `tests/unit/copy-tone.test.ts`: tone pins on the exported
+     constants + a source scan failing if stale phrases reappear in string literals.
+  2. **Ambient indicator (guidelines §7):** `renderer/components/LocalIndicator.tsx` —
+     the sidebar offline badge EVOLVED into the quiet "🔒 Local · Offline" signal
+     (neutral `--text-muted`, Radix **Tooltip** — the 4th D-UI1 primitive, now used);
+     hover/focus = "Everything stays on this drive. No internet connection is used.";
+     click = `navigate('settings:privacy')` (the Phase-26 route survives; the
+     InformationArchitecture badge-route test updated honestly, not deleted). Honest
+     variant when downloads are enabled: "Local · Downloads allowed" / "Downloads
+     allowed — chats and documents stay local." Two placements: sidebar (state passed
+     live by App, which re-checks the policy per screen change) and the chat header
+     (fills the Phase-25 `data-slot="local-indicator"` placeholder; self-fetching on
+     mount). "Disabled by policy" wording moved entirely to the Privacy & data tab.
+  3. **First-run (WorkspaceGate, CREATE path only — guidelines §2):** 3 full-window
+     steps, no nav rail. (1) Welcome/trust framing ("Everything stays on this drive. No
+     internet, no account, no tracking."); (2) Create password — show-password toggle,
+     **hand-rolled** advisory strength meter (`passwordStrength()`: length-weighted +
+     variety bonus, 4 segments + word, `role="status"`; a HINT — only the 8-char floor +
+     confirm match gate submission), the ONE honest "can't be recovered" line, paste +
+     password managers verified working (no onPaste interception; `autocomplete`
+     new-password/current-password — WCAG 3.3.8), plaintext-dev Switch unchanged;
+     (3) optional starter step that **only renders when no chat model is installed** —
+     the check runs AFTER create succeeds (listModels needs an unlocked workspace, D-UI2)
+     behind a skippable "Setting things up…" phase (first hash of a large GGUF can take
+     minutes); the step only ROUTES (Choose your AI model → `models`, Add documents →
+     `documents`, Skip → `chat`) so every download gate stays where it lives (policy ∧
+     setting ∧ per-download confirmation on the AI Model screen). `onUnlocked(state,
+     landOn?)` (renderer-only) lets App land on the picked screen; first-run ends on
+     Chat. The unlock path stays a single calm screen (+ Show toggle).
+  4. **WCAG 2.2 AA sweep (guidelines §9):** every role-token pairing contrast-computed
+     in BOTH themes. One real failure fixed — `--border-strong` (the ONLY input boundary
+     on light: input fill = card fill = white) was 2.54:1 light / 2.18:1 dark → now
+     `var(--n-500)` in both themes (4.77:1 / 3.65:1; ramp value, no new hex — the
+     guidelines §4.3 table values were below their own §9 rule). Windows High Contrast:
+     focus already outline-based; added `forced-colors: active` rules for the two
+     custom-drawn controls (Switch track/thumb, strength-meter segments) — words carry
+     the meaning regardless (1.4.1). Reduced-motion kill-switch verified via the walk.
+     Consciously-accepted items recorded in `known-limitations.md` §Accessibility
+     (hairline borders, fatal-screen raw error, 15px doc checkbox via the 2.5.8 spacing
+     exception).
+  5. **Bug found by the eyeball walk (the targeted main-process exception):** in the
+     production rollup bundle, a second tree-shaken copy of `workspace-vault`
+     (`WrongPasswordError2`) made the handler's `instanceof` check fail
+     nondeterministically per build → the friendly wrong-password message degraded to
+     "Could not open the workspace." in the BUILT app only (vitest runs unbundled and
+     can never catch it). `registerWorkspaceIpc` now also matches
+     `err.name === 'WrongPasswordError'`; the bundler quirk is recorded in
+     `known-limitations.md`.
+  Tests (+25 → 669, vitest from `apps/desktop`): `WorkspaceGate.test.tsx` rewritten for
+  the 3-step flow keeping every old proof (floor/match gating, create/unlock,
+  wrong-password, refusal-clears-fields, plaintext gating + create) and adding step
+  navigation/back, paste, show/hide, strength-never-blocks, installed-model skip,
+  starter-step routing, skip-to-chat, and check-failure-never-traps; new
+  `LocalIndicator.test.tsx` (both states, pure copy helpers, self-fetch flip, focus
+  tooltip, settings:privacy click) + `copy-tone.test.ts`; honest pin updates
+  (placeholder "Message…", "Ready" status, /No AI model is running/, /can't be
+  started/, "different search model", the badge-route test). GpuSurface's friendly-copy
+  pins stayed green untouched. Eyeballed via `walk-phase27.mjs` (22 scenes, BOTH themes:
+  all 3 first-run steps incl. weak/strong meter + Show, starter step, post-setup Chat
+  landing, indicator + tooltip in BOTH states by flipping allowNetwork under a
+  downloads-allowing policy, reduced-motion, lock → unlock → wrong-password → unlock).
+  Docs: `user-guide.md` (first-run §3 rewritten, indicator §4/§8, status labels),
+  `PRIVACY.md` (indicator wording), `troubleshooting.md`/`known-limitations.md`/
+  `benchmark.md`/`model-policy.md`/`packaging.md`/`security-model.md` ("AI Model
+  screen"). Gate: typecheck clean, 669 tests, build green.
 
 ---
 
@@ -1520,14 +1870,37 @@ items are **MANUAL acceptance only** (R2/R5/R7 + the GPU hardware matrix). In ro
    from #3-behind-distractors to #1. Smaller
    leftovers: an icon/`buildResources` for electron-builder; ANN vector index only if a real
    corpus outgrows the linear scan (plan §9 item 4 / D15 — explicitly not built).
+4. **UI/UX polish wave (Phases 23–27) — ✅ COMPLETE 2026-06-10** on branch
+   `ui-phase-23-tokens-theming`, merged to master 2026-06-10 — see the §3 entries:
+   Phase 23 = tokens.css, full role-token restyle + AA fixes, a11y baseline,
+   `AppSettings.theme` + Appearance card; Phase 24 = the four pinned Radix primitives
+   [D-UI1 executed, license-reviewed], `renderer/components/` per guidelines §6, all
+   non-chat screens + gate migrated, Saved-feedback toasts; Phase 25 = the chat
+   restructure per guidelines §3 — `renderer/chat/` split, collapsible conversation
+   list, 720px transcript, per-message actions, sources disclosure, depth dropdown
+   [D-UI4 labels] + scope popover, teaching empty state, buffered streaming; Phase 26 =
+   the IA regroup per guidelines §2 — 5-item nav with "AI Model", Settings tabs
+   absorbing Privacy/Diagnostics, `resolveNavTarget` virtual targets + legacy aliases,
+   Home readiness hub, Technical-details disclosure; Phase 27 = the §7 copy sweep
+   [renderer + user-facing main-process strings], the ambient "Local · Offline"
+   indicator with the honest downloads-allowed variant, the 3-step first-run create
+   flow, and the final WCAG 2.2 AA sweep; all phases eyeballed in both themes). Wave
+   docs: [`docs/design-guidelines.md`](docs/design-guidelines.md) (ADOPTED — the durable
+   design reference) + [`docs/ui-ux-redesign-plan.md`](docs/ui-ux-redesign-plan.md)
+   (now the **condensed design record** per the doc lifecycle rule; full original in git
+   history). All four decisions resolved: D-UI1 executed (all four primitives now in
+   use), D-UI2 as planned, **D-UI3: Home stays as the readiness hub** (re-confirmed
+   after Phase 27 — the first-run starter step only routes, it does not absorb Home's
+   remediation), D-UI4 executed. Remaining UI work =
+   the usual manual release eyeball on real drives.
 
-**Current gate (2026-06-10, post-Phase-21): typecheck clean, 601/601 tests pass (+8 manual
+**Current gate (2026-06-10, post-merge of the UI polish wave into master — Phase 21
+verification + Phases 23–27 combined): typecheck clean, 669/669 tests pass (+8 manual
 tests — 4 GPU smoke behind `PAID_GPU_SMOKE`, 1 thinking smoke behind `PAID_THINKING_SMOKE`,
 1 rerank smoke behind `PAID_RERANK_SMOKE`, 1 ragMinSimilarity measurement behind
 `PAID_MINSIM_MEASURE`, 1 end-to-end RAG quality check behind `PAID_RAG_QUALITY` — skipped in
-CI), `npm run build` green.** The
-per-phase gate history (test counts, bundle sizes, per-phase test inventories) lives in git
-history.
+CI), `npm run build` green.** The per-phase gate history (test counts, bundle sizes,
+per-phase test inventories) lives in git history.
 
 ---
 

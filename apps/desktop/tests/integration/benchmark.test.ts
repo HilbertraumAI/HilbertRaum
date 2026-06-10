@@ -233,7 +233,7 @@ describe('measureTokensPerSecond', () => {
 describe('buildWarnings', () => {
   it('uses encouraging language for weak hardware (never "your hardware is bad")', () => {
     const w = buildWarnings({ profile: 'TINY', driveReadMbps: 500, driveWriteMbps: 500 })
-    expect(w.join(' ')).toContain('Fast Mode')
+    expect(w.join(' ')).toContain('smallest, quickest model')
     expect(w.join(' ').toLowerCase()).not.toContain('bad')
   })
 

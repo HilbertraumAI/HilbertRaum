@@ -54,7 +54,7 @@ can confirm this on the **Privacy** screen.
 ## The answers look like placeholders / "echo" replies
 
 The app is running its built-in **mock** runtime — started via **Start mock runtime** on the
-Models screen, or selected automatically when the model's weight file or the `llama-server`
+AI Model screen, or selected automatically when the model's weight file or the `llama-server`
 binary is missing at start time. The mock lets you explore the interface, but it does not
 produce real AI answers.
 
@@ -108,7 +108,7 @@ it, the data **cannot be recovered** — this is by design. Create a new workspa
 - **Slow drive:** running from a slow USB stick makes model loading and indexing sluggish. Use
   a fast USB 3 / SSD drive, or copy the drive's contents to your computer. The **Diagnostics**
   screen reports your drive's read/write speed and warns if it's slow.
-- **Heavy model for your laptop:** pick the **Recommended** model on the Models screen. The
+- **Heavy model for your laptop:** pick the **Recommended** model on the AI Model screen. The
   benchmark suggests a model that suits your RAM/CPU. Larger models are more capable but slower.
 - **First start of a model** is always slower (it loads into memory); later prompts are faster.
 - **Graphics acceleration:** on most computers with a graphics card, responses are

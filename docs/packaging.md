@@ -61,7 +61,7 @@ The live path needs artifacts **not in the repo**:
 
 **Phase 12 automates this** with the `fetch-*` scripts (below) — `prepare-drive --with-assets`
 downloads + SHA-256-verifies both in one command. You can still drop them in by hand. With either,
-start a chat model on the Models screen to get real on-device inference and real tokens/sec.
+start a chat model on the AI Model screen to get real on-device inference and real tokens/sec.
 
 ## Portable build (electron-builder, Phase 11)
 

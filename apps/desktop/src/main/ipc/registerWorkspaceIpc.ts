@@ -37,9 +37,19 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
       maybeAutoStartActiveModel(ctx)
       return { ok: true, state }
     } catch (err) {
-      if (err instanceof WrongPasswordError) {
+      // instanceof PLUS the name: the production rollup bundle can contain a second,
+      // tree-shaken copy of workspace-vault (module-id quirk), and the class thrown by
+      // the vault is then not the class this file imported — instanceof alone made the
+      // friendly wrong-password message unreachable in the built app (found by the
+      // Phase-27 eyeball walk; vitest runs unbundled and never sees it).
+      if (err instanceof WrongPasswordError || (err instanceof Error && err.name === 'WrongPasswordError')) {
         ctx.audit?.('workspace_unlock_failed', 'Workspace unlock failed (wrong password)')
-        return { ok: false, reason: 'wrong_password', message: 'Incorrect password. Try again.' }
+        // §7 voice: describe the problem and the next step, no jargon.
+        return {
+          ok: false,
+          reason: 'wrong_password',
+          message: "That password didn't unlock your workspace. Check it and try again."
+        }
       }
       log.error('Workspace unlock failed', String(err))
       ctx.audit?.('workspace_unlock_failed', 'Workspace unlock failed')

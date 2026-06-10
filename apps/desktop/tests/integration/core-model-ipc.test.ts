@@ -171,7 +171,7 @@ describe('registerModelIpc', () => {
     } as unknown as AppContext
     registerModelIpc(ctx)
     await expect(invoke(handlers, IPC.startRuntime, 'qwen3-4b-instruct-q4')).rejects.toThrow(
-      /cannot be started/
+      /can't be started/
     )
   })
 
@@ -197,7 +197,7 @@ describe('registerModelIpc', () => {
     } as unknown as AppContext
     registerModelIpc(ctx)
     await expect(invoke(handlers, IPC.startRuntime, 'qwen3-4b-instruct-q4')).rejects.toThrow(
-      /cannot be started/
+      /can't be started/
     )
   })
 

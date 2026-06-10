@@ -31,7 +31,7 @@ import { inFlightStreams } from './inflight'
 // a separate channel, so token events still carry only answer text.
 //
 // Decision (documented): sendChatMessage does NOT auto-start a runtime. A chat
-// needs an explicitly-started model (Models screen → "Start runtime"); with no
+// needs an explicitly-started model (AI Model screen → "Start runtime"); with no
 // active runtime it throws so the renderer can show the "start a model" empty state.
 // Rationale: starting the real llama.cpp sidecar (Phase 10) is heavy and is an
 // explicit user action — keeping it explicit keeps the service boundary clean.
@@ -95,7 +95,7 @@ export function registerChatIpc(ctx: AppContext): void {
       const runtime = ctx.runtime.active()
       if (!runtime) {
         // No model loaded — surface a clear, recoverable error to the renderer.
-        throw new Error('No model is running. Select and start a model on the Models screen first.')
+        throw new Error('No AI model is running. Open the AI Model screen and start one first.')
       }
 
       // One active stream per conversation. The renderer guards this too, but a second
@@ -177,7 +177,7 @@ export function registerChatIpc(ctx: AppContext): void {
   ipcMain.handle(IPC.stopGeneration, (_e, conversationId: string): void => {
     const controller = inFlight.get(conversationId)
     if (controller) {
-      log.info('Stop generation', { conversationId })
+      log.info('Generation stop requested', { conversationId })
       controller.abort()
     }
   })

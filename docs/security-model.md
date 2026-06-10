@@ -81,7 +81,7 @@ Consequences:
 
 The renderer distinguishes "off by choice" from "disabled by policy" via `PolicyStatus`
 (`getPolicy()` IPC) and shows it on the **Privacy & Offline** screen and the sidebar badge; the
-Models screen uses the same distinction to explain why downloads are unavailable.
+AI Model screen uses the same distinction to explain why downloads are unavailable.
 
 ### 2. Startup self-check (`services/offlineGuard.ts`)
 At startup (`initBackend()`), `assertOfflinePosture()` logs the offline posture and, while offline,

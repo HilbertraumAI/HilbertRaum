@@ -1,0 +1,130 @@
+/*
+ * Design tokens — the single source of styling truth (docs/design-guidelines.md §4).
+ * Imported BEFORE styles.css so every rule there can consume these.
+ *
+ * Structure: the neutral/accent/semantic RAMPS are theme-constant; only the ROLE tokens
+ * change per theme. `:root` is the LIGHT theme (the default-resolving theme, §5);
+ * `[data-theme="dark"]` overrides role tokens only — the renderer sets `data-theme` on
+ * <html> from the resolved Appearance setting (system | light | dark).
+ *
+ * Fully offline: system font stacks only, no web fonts (§4.4).
+ */
+
+:root {
+  /* ---- §4.1 Neutral ramp (shared) ---- */
+  --n-0: #ffffff;
+  --n-50: #f7f8fa;
+  --n-100: #eef0f4;
+  --n-200: #e2e5ea;
+  --n-300: #d7dce3;
+  --n-400: #9aa3b2;
+  --n-500: #6b7383;
+  --n-600: #4d5563;
+  --n-700: #353b46;
+  --n-800: #232830;
+  --n-850: #1b1f27;
+  --n-900: #171a21;
+  --n-950: #0f1115;
+
+  /* ---- §4.2 Accent + semantic ramps (shared) ---- */
+  --accent-700: #2257c9; /* link text on light; pressed fill */
+  --accent-600: #2f6fed; /* primary button fill (white text = 4.55:1 AA) */
+  --accent-500: #4f8cff; /* accent/link on dark; focus ring — NEVER a filled-button bg */
+  --accent-300: #8fb4ff; /* subtle accent backgrounds */
+  --success-600: #1a7f4b; /* success text on light (5.0:1) */
+  --success-500: #3fbf7f; /* success on dark (8.1:1) */
+  --error-600: #c0362c; /* error text on light (5.5:1) */
+  --error-500: #ff6b6b; /* error on dark (6.8:1) */
+  --warning-700: #8a5a00; /* warning text on light (5.9:1) */
+  --warning-500: #e0b341; /* warning on dark (9.6:1) */
+
+  /* ---- §4.3 Role tokens — LIGHT theme ---- */
+  color-scheme: light;
+  --bg: #f7f8fa;
+  --surface: #ffffff;
+  --surface-2: #ffffff; /* pair with --shadow-1 on light; tonal step on dark */
+  --border: #e2e5ea; /* hairline */
+  /* Phase-27 AA sweep: the guidelines table's #9aa3b2 is 2.54:1 against the white
+     surface — under the 3:1 non-text minimum (WCAG 1.4.11), and on light the border is
+     the ONLY input boundary (input fill = card fill). n-500 = 4.77:1. */
+  --border-strong: var(--n-500); /* inputs / secondary-button outlines */
+  --text: #1b1f27; /* 16.5:1 */
+  --text-muted: #5c6675; /* 5.8:1 */
+  --link: #2257c9; /* 6.4:1 */
+  --focus: #2f6fed;
+  /* Semantic + accent role aliases: each theme picks its AA-passing ramp step (§4.2),
+     so styles.css never hardcodes a ramp step for text/border accents. Filled controls
+     keep --accent-600 explicitly in both themes (the only fill with AA white text). */
+  --accent: var(--accent-600);
+  --success: var(--success-600);
+  --error: var(--error-600);
+  --warning: var(--warning-700);
+  /* Hover/selected tint for flat rows (nav items, list rows). */
+  --surface-hover: var(--n-100);
+  /* Subdued technical surfaces (code blocks, log tails) inside cards. */
+  --code-bg: var(--n-100);
+
+  /* ---- §4.4 Typography (offline-safe system stacks; nothing below 12px) ---- */
+  --font-sans: -apple-system, 'Segoe UI Variable', 'Segoe UI', system-ui,
+    Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-mono: 'Cascadia Code', 'SF Mono', Consolas, 'Liberation Mono', monospace;
+  /* Type scale: size + line-height pairs (weights noted in the guidelines table). */
+  --text-xs: 12px;   --line-xs: 16px;   /* metadata, captions, badges (500) */
+  --text-sm: 13px;   --line-sm: 18px;   /* secondary UI, table cells (400) */
+  --text-base: 15px; --line-base: 24px; /* default UI text (400) */
+  --text-md: 16px;   --line-md: 26px;   /* chat body / document reading (400) */
+  --text-lg: 18px;   --line-lg: 26px;   /* card titles, section heads (600) */
+  --text-xl: 22px;   --line-xl: 30px;   /* screen titles (600) */
+  --text-2xl: 28px;  --line-2xl: 36px;  /* first-run / hero (700) */
+
+  /* ---- §4.5 Spacing (4px base) ---- */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+  --space-8: 64px;
+
+  /* ---- §4.5 Radius ---- */
+  --radius-sm: 6px; /* inputs / chips / badges */
+  --radius-md: 10px; /* buttons / cards */
+  --radius-lg: 14px; /* modals */
+  --radius-full: 999px; /* status pills */
+
+  /* ---- §4.5 Elevation (soft depth, never blur behind text) ---- */
+  --shadow-1: 0 1px 2px rgba(15, 17, 21, 0.06), 0 1px 1px rgba(15, 17, 21, 0.04); /* cards */
+  --shadow-2: 0 4px 12px rgba(15, 17, 21, 0.1); /* popovers */
+  --shadow-3: 0 16px 40px rgba(15, 17, 21, 0.18); /* modals */
+
+  /* ---- §4.5 Motion ---- */
+  --dur-fast: 120ms; /* hovers */
+  --dur-base: 200ms; /* dropdowns */
+  --dur-slow: 320ms; /* modals */
+  --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+/* ---- §4.3 Role tokens — DARK theme (today's palette, lightly tuned). Ramps,
+   type, spacing, radii, shadows and motion stay constant; in dark, depth leans on
+   --surface-2 lightening + borders (shadows read weakly on dark). ---- */
+[data-theme='dark'] {
+  color-scheme: dark;
+  --bg: #0f1115;
+  --surface: #171a21;
+  --surface-2: #1d212a;
+  --border: #2a2f3a;
+  /* Phase-27 AA sweep: the table's #4a515f is 2.18:1 against --surface (< 3:1,
+     WCAG 1.4.11). n-500 reads 3.65:1 on dark — same ramp step as light. */
+  --border-strong: var(--n-500);
+  --text: #e6e8ec; /* 15.4:1 */
+  --text-muted: #9aa3b2; /* 7.4:1 */
+  --link: #4f8cff; /* 5.9:1 */
+  --focus: #4f8cff;
+  --accent: var(--accent-500);
+  --success: var(--success-500);
+  --error: var(--error-500);
+  --warning: var(--warning-500);
+  --surface-hover: var(--surface-2);
+  --code-bg: rgba(0, 0, 0, 0.3);
+}
