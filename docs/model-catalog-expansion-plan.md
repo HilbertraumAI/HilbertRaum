@@ -1,6 +1,7 @@
 # Model Catalog Expansion & Benchmarking — plan (Phases 28–30)
 
-_Status: **WORKING PAPER — Phase 28 manifests landed 2026-06-10 (hashes + bring-up pending, see
+_Status: **WORKING PAPER — Phase 28 manifests landed 2026-06-10; hashes promoted + all weights
+verified on a Windows `D:\` drive 2026-06-10; §4.3 chat/RAG bring-up smokes still pending (see
 §4.6); Phases 29–30 not started.** Created 2026-06-10 from an external model-candidate
 research report (Claude web research, verified spot-checks below) + the planning discussion in
 session. Per the CLAUDE.md doc lifecycle rule this plan gets condensed into a design record (or
@@ -174,9 +175,15 @@ pass §4.3 on at least one machine, `docs/model-policy.md`'s catalog table gains
    convention (`recommended_context_tokens: 8192`); the 2507 mirrors the original 4B (4096).
 5. **No validator-level changes were needed** — all four manifests pass `validateManifest`
    as-is; the suite's committed-manifests discovery test covers them (669/669 green).
-6. **Status at authoring close:** §4.3 bring-up + hash promotion NOT yet run (weights are
-   ~20 GB total; downloads are user-gated). `sha256` fields stay `REPLACE_WITH_REAL_HASH`
-   until `verify-models --generate` after the first fetch.
+6. **Hashes promoted + drive re-synced (2026-06-10, after the first fetch):** all four
+   challenger weights were fetched to a Windows `D:\` drive; the real `sha256` (top-level +
+   `download.sha256`) were promoted into the four manifests and the drive's stale
+   `model-manifests/` was mirrored from the repo (it predated the challengers + used the old
+   flat layout). `verify-models -Target D:\` then reports **all 10 catalog weights VERIFIED**
+   (8 chat + e5 + reranker). Hashes: ministral `33e7a72c…`, granite `ed902ac9…`, gemma4
+   `faff1a63…`, qwen3-2507 `3605803b…`. **Still pending:** the §4.3 chat/RAG/depth bring-up
+   smokes (need the app run against the drive) — until those pass on ≥1 machine, Phase 28 is
+   not closed.
 
 ---
 

@@ -80,8 +80,11 @@ forced-colors rules; accepted items in `docs/known-limitations.md`) (§3 entry).
 **Phase 28 (model catalog wave 1) is 🟡 IN PROGRESS** — all four challenger manifests
 (Ministral 3 8B 2512, Granite 4.1 8B, Gemma 4 12B QAT, Qwen3-4B-2507) landed 2026-06-10,
 validated + license-reviewed per
-[`docs/model-catalog-expansion-plan.md`](docs/model-catalog-expansion-plan.md) D16–D18/D22;
-weight fetch + hash promotion + bring-up remain (§3 entry; §5 item 5).
+[`docs/model-catalog-expansion-plan.md`](docs/model-catalog-expansion-plan.md) D16–D18/D22.
+**Weights fetched + real `sha256` promoted into all four manifests 2026-06-10**; the test
+`D:\` drive's `model-manifests/` was re-mirrored from the repo (it predated the challengers)
+and `verify-models -Target D:\` now reports **all 10 catalog weights VERIFIED**. Only the
+§4.3 chat/RAG/depth-mode bring-up smokes remain before Phase 28 closes (§3 entry; §5 item 5).
 Release-wise,
 remaining work = **manual release acceptance only** (§5, incl. the GPU
 hardware matrix, item 1b). Consciously-accepted gaps live in
@@ -121,7 +124,7 @@ hardware matrix, item 1b). Consciously-accepted gaps live in
 | 25 | UI chat screen restructure (guidelines §3) | 🟢 done (merged to master 2026-06-10) |
 | 26 | UI information architecture regroup (guidelines §2) | 🟢 done (merged to master 2026-06-10) |
 | 27 | UI microcopy, ambient trust signal, first-run (guidelines §7/§2/§9) | 🟢 done (merged to master 2026-06-10) — **UI polish wave COMPLETE** |
-| 28 | Model catalog wave 1 (challenger manifests, D16–D18) | 🟡 in progress — manifests + docs landed, validated, gate green; weight fetch + hash promotion + §4.3 bring-up pending (needs ~20 GB of downloads, user go-ahead) |
+| 28 | Model catalog wave 1 (challenger manifests, D16–D18) | 🟡 in progress — manifests + docs landed, validated, gate green; weights fetched + hashes promoted (all 10 weights VERIFIED on the `D:\` drive); only the §4.3 chat/RAG bring-up smokes remain |
 
 Legend: ⚪ not started · 🟡 in progress · 🟢 done · 🔴 blocked
 

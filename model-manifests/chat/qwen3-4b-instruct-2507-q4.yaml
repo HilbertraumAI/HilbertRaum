@@ -12,7 +12,7 @@ recommended_context_tokens: 4096
 supports_thinking_mode: false
 supports_tools: false
 local_path: models/chat/qwen3-4b-instruct-2507-q4.gguf
-sha256: REPLACE_WITH_REAL_HASH
+sha256: 3605803b982cb64aead44f6c1b2ae36e3acdb41d8e46c8a94c6533bc4c67e597
 # Phase 28 (model-catalog-expansion-plan D18): where `fetch-models` downloads the weight
 # from + what to verify it against. The Qwen org publishes NO official GGUF for the 2507
 # refresh (checked 2026-06-10), so this uses the established-quantizer fallback (plan
@@ -21,7 +21,7 @@ sha256: REPLACE_WITH_REAL_HASH
 # after the first fetch.
 download:
   url: https://huggingface.co/unsloth/Qwen3-4B-Instruct-2507-GGUF/resolve/main/Qwen3-4B-Instruct-2507-Q4_K_M.gguf?download=true
-  sha256: REPLACE_WITH_REAL_HASH
+  sha256: 3605803b982cb64aead44f6c1b2ae36e3acdb41d8e46c8a94c6533bc4c67e597
   size_bytes: 2497281120
   license_url: https://huggingface.co/Qwen/Qwen3-4B-Instruct-2507/blob/main/LICENSE
 bundled_on_preconfigured_drive: false

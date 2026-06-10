@@ -12,13 +12,13 @@ recommended_context_tokens: 8192
 supports_thinking_mode: false
 supports_tools: false
 local_path: models/chat/granite-4.1-8b-q4.gguf
-sha256: REPLACE_WITH_REAL_HASH
+sha256: ed902ac9eb6adce5a90c6a08c8ea201b50e23fdc5976d1cd0362006afac5309e
 # Phase 28 (model-catalog-expansion-plan D16): where `fetch-models` downloads the weight
 # from + what to verify it against. Filename + byte size verified against the HF repo file
 # listing 2026-06-10; hash promoted via `verify-models --generate` after the first fetch.
 download:
   url: https://huggingface.co/ibm-granite/granite-4.1-8b-GGUF/resolve/main/granite-4.1-8b-Q4_K_M.gguf?download=true
-  sha256: REPLACE_WITH_REAL_HASH
+  sha256: ed902ac9eb6adce5a90c6a08c8ea201b50e23fdc5976d1cd0362006afac5309e
   size_bytes: 5347914400
   license_url: https://www.apache.org/licenses/LICENSE-2.0
 bundled_on_preconfigured_drive: false

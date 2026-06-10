@@ -12,13 +12,13 @@ recommended_context_tokens: 8192
 supports_thinking_mode: false
 supports_tools: false
 local_path: models/chat/ministral3-8b-instruct-2512-q4.gguf
-sha256: REPLACE_WITH_REAL_HASH
+sha256: 33e7a72cf5e6e2cfc2f2847075acc013d68bba023e35310cef86b5cf8fdca761
 # Phase 28 (model-catalog-expansion-plan D16): where `fetch-models` downloads the weight
 # from + what to verify it against. Filename + byte size verified against the HF repo file
 # listing 2026-06-10; hash promoted via `verify-models --generate` after the first fetch.
 download:
   url: https://huggingface.co/mistralai/Ministral-3-8B-Instruct-2512-GGUF/resolve/main/Ministral-3-8B-Instruct-2512-Q4_K_M.gguf?download=true
-  sha256: REPLACE_WITH_REAL_HASH
+  sha256: 33e7a72cf5e6e2cfc2f2847075acc013d68bba023e35310cef86b5cf8fdca761
   size_bytes: 5198911904
   license_url: https://www.apache.org/licenses/LICENSE-2.0
 bundled_on_preconfigured_drive: false
