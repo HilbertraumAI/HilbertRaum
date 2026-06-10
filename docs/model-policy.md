@@ -14,12 +14,16 @@ _Last updated: 2026-06-10 (runtime pinned to llama.cpp b9585; all license review
 
 | Role | Candidate | Size | Min RAM | Auto-tier | Purpose |
 |---|---|---|---|---|---|
-| Chat small | Qwen3 1.7B Instruct Q4 | ~1.2 GB | 6 GB | TINY / UNKNOWN | Weak laptops, safe fallback |
-| Chat balanced | Qwen3 4B Instruct Q4 | ~2.7 GB | 8 GB | LITE | Lite default |
+| Chat default | Qwen3 4B Instruct Q4 | ~2.7 GB | 8 GB | TINY / LITE / UNKNOWN | Smallest bundled chat model; default + weak-laptop fallback |
 | Chat better | Qwen3 8B Instruct Q4 | ~5.0 GB | 16 GB | BALANCED | 16 GB+ laptops |
 | Chat best dense | Qwen3 14B Instruct Q4 | ~9.3 GB | 16 GB | PRO | 32 GB+; the spec §7.3 PRO model — slower on CPU |
 | Chat MoE | Qwen3 30B-A3B (MoE) Q4 | ~18.6 GB | 24 GB | — (opt-in) | ~30B quality at ~3.3B *active*/token → near-3B speed; needs ~20 GB RAM |
-| Embeddings | Multilingual E5 Small (Q8) | ~0.5 GB | 4 GB | all | Local document search (needed for Q&A) |
+| Embeddings | Multilingual E5 Small (F16) | ~0.24 GB | 4 GB | all | Local document search (needed for Q&A) |
+
+> Qwen3 **1.7B** was in the original spec §7.3 (the TINY/UNKNOWN "small" model) but was **dropped**:
+> the official `Qwen/Qwen3-1.7B-GGUF` repo publishes no Q4_K_M. 4B now covers TINY/UNKNOWN too.
+> The embeddings model uses an **F16** GGUF, not Q8 — the q8_0 conversions of this BERT/XLM-R model
+> crash llama.cpp b9585 (`binary_op: unsupported types … q8_0`). See BUILD_STATE §9.
 
 All models are **Apache-2.0** (Qwen3) / **MIT** (E5). Sizes/RAM come from each manifest
 (`size_on_disk_gb` / `recommended_min_ram_gb`); download URLs live in the manifests' `download.url`

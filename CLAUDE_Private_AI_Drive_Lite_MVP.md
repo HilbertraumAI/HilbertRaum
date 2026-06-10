@@ -291,6 +291,13 @@ Target models for Lite:
 | Embeddings | small multilingual embedding model | Local document search |
 | Reranker | optional, not required for v0.1 | Better citations later |
 
+> **Deviations from this spec as built (2026-06-10, see [`BUILD_STATE.md`](BUILD_STATE.md) §9):**
+> The **Qwen3 1.7B** "chat small" model was **dropped** — the official `Qwen/Qwen3-1.7B-GGUF` repo
+> publishes no Q4_K_M build. **Qwen3 4B** (the smallest bundled chat model) now also covers the TINY
+> and UNKNOWN hardware tiers (overriding the §7.3 table rows below that map them to 1.7B). The
+> embeddings model is shipped as **F16**, not Q8 — q8_0 GGUFs of this BERT/XLM-R model fail to load on
+> the pinned llama.cpp (b9585). This note is the source of truth where it conflicts with the tables.
+
 The app must support model manifests so models can be changed without code changes.
 
 Example manifest:

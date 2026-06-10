@@ -441,8 +441,8 @@ unencrypted `config/workspace.json` vault descriptor is the only pre-unlock arti
 
 ### Models + runtime (Phase 2 live)
 ✅ **Manifest** schema/validator in `src/shared/manifest.ts` (`ModelManifest`, `validateManifest`,
-`isRealSha256`). YAML files under `model-manifests/` (chat: Qwen3 1.7B/4B/8B/14B Q4 + 30B-A3B MoE;
-embeddings: E5 small — six manifests total).
+`isRealSha256`). YAML files under `model-manifests/` (chat: Qwen3 4B/8B/14B Q4 + 30B-A3B MoE;
+embeddings: E5 small F16 — five manifests total; 1.7B dropped, see §9).
 ✅ **`services/models.ts`** — `resolveManifestsDir`, `discoverManifests`, `sha256File`,
 `verifyChecksum`, `computeInstallState`, `recommendModelId`, `buildModelList`, `selectModel`.
 States: `unsupported→missing→checksum_failed→installed` (+`running` overlay). `ModelInfo` shape per
