@@ -1063,9 +1063,14 @@ items are **MANUAL acceptance only** (R2/R5/R7 + the GPU hardware matrix). In ro
      the manifest `REPLACE_WITH_REAL_HASH` placeholders → build the portable `.exe`
      (`npm run package:win`; watch npm-workspace dep hoisting) → launch from the drive → spec §17 demo
      with Wi-Fi off. The real GGUF download + the live run are the one manual step.
-3. **Post-MVP polish (optional):** the in-app model downloader (plan §12.3, deferred — policy-gated +
-   deny-by-default, reusing `assets.ts` `fetchAndVerify`); an icon/`buildResources` for
-   electron-builder; ANN vector index (sqlite-vec/HNSW) upgrade.
+3. **New functionality (planned):** see
+   [`docs/post-mvp-functionality-plan.md`](docs/post-mvp-functionality-plan.md) — Phases 17–20
+   toward the Office/Knowledge edition (RAG trust & document-scoped asking → in-app model
+   downloader (the revived plan §12.3) → audit log on `runtime_events` → Fast/Balanced/Deep
+   answer-depth modes), with wave-2 outlines (reranker/hybrid retrieval, signed offline update
+   bundles). Phase 18 is blocked on its decision D3 (downloads policy semantics). Smaller
+   leftovers: an icon/`buildResources` for electron-builder; ANN vector index only if a real
+   corpus outgrows the linear scan (plan §9 item 4).
 
 **Current gate (2026-06-10, post-Phase-16): typecheck clean, 434/434 tests pass (+4 manual GPU
 smoke tests, skipped unless `PAID_GPU_SMOKE` is set), `npm run build` green.** The per-phase gate
