@@ -1,15 +1,12 @@
-# Post-MVP Functionality Plan — toward the Office/Knowledge edition
+# Post-MVP Functionality — wave 1 design record (Phases 17–20) + wave 2 outlines
 
-_Status: **WAVE 1 IMPLEMENTED** — **Phases 17 + 18 + 19 + 20 ALL IMPLEMENTED** (2026-06-10,
-deviations/notes in §5.5 / §6.5 / §7.1 / §8.1). Drafted 2026-06-10 from the gap analysis of spec §19 editions
-vs. the feature-complete Lite MVP (Phases 0–16). Working paper per the CLAUDE.md doc lifecycle
-rule: once implemented, condense to a design record. Section numbers are intended to stay
-stable so code comments can cite them._
-
-This plan covers **functionality wave 1** (Phases 17–20, fully specified) and sketches
-**wave 2** (Phases 21–22). It deliberately does NOT cover release acceptance — signing certs,
-the live USB §17 demo, and the GPU hardware matrix stay tracked in BUILD_STATE §5 and gate the
-*release*, not this work.
+_Status: **WAVE 1 IMPLEMENTED** (Phases 17 + 18 + 19 + 20, all 2026-06-10). This is the
+**condensed design record** per the CLAUDE.md doc lifecycle rule: the decisions, the facts
+they rest on, and the design as built — the full original working paper (gap analysis,
+change inventories, phase ordering rationale, pre-implementation state) lives in git history:
+`git show 2a46ca3:docs/post-mvp-functionality-plan.md`. Section numbers are stable; code
+comments cite them (plan §5.1–§5.3, §6.1–§6.2, §7, §8, §13 D1–D7). Wave 2 (§9–§10) is
+outline-only and NOT implemented._
 
 ---
 
@@ -17,359 +14,226 @@ the live USB §17 demo, and the GPU hardware matrix stay tracked in BUILD_STATE 
 
 | Decision | Choice | Why (short) |
 |---|---|---|
-| Direction | Climb toward **Office/Knowledge Drive** (spec §19.1), not Pro/Studio/Enterprise | Its features have existing hooks in the code; it serves the same target user as Lite |
-| Phase 17 | **RAG trust & document-scoped asking** first | The first real-drive test produced a hallucinated answer via the plain-Chat tab (BUILD_STATE §9) — the killer feature fails silently for exactly our target user |
-| Chat modes | **Keep** the per-conversation `chat`/`documents` modes (locked DB/IPC contract); add ambient document-awareness + scoping. Unified auto-RAG chat is deferred to the Office edition proper (§13 D1) | Auto-grounding without a reranker/quality floor degrades plain chat; the contract change is big |
-| Phase 18 | **In-app model downloader** (revives deferred plan §12.3) | All infrastructure exists (`assets.ts` plan/verify seams, policy + user gates); buyers currently have no path to more models |
-| Phase 19 | **Audit log** on the existing `runtime_events` table | Table exists unwritten; first concrete Office/Enterprise compliance feature; cheap |
-| Phase 20 | **Answer-depth modes** (Fast/Balanced/Deep) wiring Qwen3 thinking mode | `ChatOptions.mode` + manifest `supports_thinking_mode` are dead plumbing today; spec §10.3 promises the selector |
+| Direction | Climb toward **Office/Knowledge Drive** (spec §19.1), not Pro/Studio/Enterprise | Its features had existing hooks in the code; it serves the same target user as Lite |
+| Phase 17 | **RAG trust & document-scoped asking** first | The first real-drive test produced a hallucinated answer via the plain-Chat tab (BUILD_STATE §9) — the killer feature failed silently for exactly our target user |
+| Chat modes | **Keep** the per-conversation `chat`/`documents` modes (locked DB/IPC contract); add ambient document-awareness + scoping. Unified auto-RAG chat deferred (§13 D1) | Auto-grounding without a reranker/quality floor degrades plain chat; the contract change is big |
+| Phase 18 | **In-app model downloader** (revived provisioning-plan §12.3) | All infrastructure existed (`assets.ts` plan/verify seams, policy + user gates); buyers had no path to more models |
+| Phase 19 | **Audit log** on the existing `runtime_events` table | Table existed unwritten; first concrete Office/Enterprise compliance feature; cheap |
+| Phase 20 | **Answer-depth modes** (Fast/Balanced/Deep) wiring Qwen3 thinking mode | `ChatOptions.mode` + manifest `supports_thinking_mode` were dead plumbing; spec §10.3 promises the selector |
 | Phase 21 (wave 2) | Retrieval quality: **reranker** (+ optional hybrid FTS), ANN only if measured | Needs model-licensing research + a llama.cpp rerank endpoint check first |
 | Phase 22 (wave 2) | **Signed offline update bundles** (spec §12.3) | Commercial model monetizes updates; two broken upstream GGUFs already proved the need. Needs a key-management decision |
-| New npm deps | **None planned** for Phases 17–20 | Downloads use injected `fetch` (existing seam); audit uses the existing DB; thinking mode is prompt/template control |
+| New npm deps | **None added** in Phases 17–20 | Downloads use the injected-`fetch` seam; audit uses the existing DB; thinking mode is request/template control |
 
-**Not in any wave:** OCR (open question #15 — Pro), coding assistant / tool execution (Pro),
-image generation (Studio), enterprise policy signing/admin console (Enterprise), cloud
-anything (never).
+**Not in any wave:** OCR (Pro), coding assistant / tool execution (Pro), image generation
+(Studio), enterprise policy signing/admin console (Enterprise), cloud anything (never).
 
-## 2. Hard rules (restated — these bound every choice below)
+## 2. Hard rules (these bound every choice)
 
-- **Offline by default, forever.** The downloader (Phase 18) is the app's first sanctioned
-  network feature: it must be double-gated (policy ceiling ∧ explicit user opt-in ∧ per-download
-  confirmation), default-off, and its absence must change nothing — the app stays 100 % usable
-  with no internet, no downloads, no update checks.
-- **No telemetry.** The audit log (Phase 19) is *for the user*, stays local (inside the
-  possibly-encrypted DB), and must never record message content or document text — ids and
-  event types only.
+- **Offline by default, forever.** The downloader is the app's first sanctioned network
+  feature: triple-gated (policy ceiling ∧ explicit user opt-in ∧ per-download confirmation),
+  default-off, and its absence changes nothing — the app stays 100 % usable with no internet.
+- **No telemetry.** The audit log is *for the user*, stays local (inside the
+  possibly-encrypted DB), and never records message content or document text — ids and event
+  types only.
 - **Graceful-fallback rule intact.** App launches and the full suite passes with zero models,
   zero binaries, zero network (CI default). Verify-before-trust for every downloaded byte.
 - **Locked contracts stay locked:** the Phase-3 streaming contract, the Float32 BLOB encoding,
   per-conversation `mode`, `[Sn]`-labels-per-query-never-stored, localhost-only sidecars.
 - **Friendly copy (spec §11.4).** Never "wrong mode", "stale index", "your hardware is bad".
-- **Per-phase ritual (CLAUDE.md)** applies to each phase: tests green → build → docs →
-  BUILD_STATE → commit.
 
-## 3. Current-state facts this plan builds on (verified in code, 2026-06-10)
+## 3. Facts the wave-1 design rests on
 
-- `rag/index.ts` `retrieve()` already threads `RagRetrievalSettings` and constructs
-  `VectorIndex` with `VectorIndexOptions { embeddingModelId }` — adding a second scoping
-  option is a localized change. The grounding guard (`NO_DOCUMENT_CONTEXT_ANSWER`, model not
-  called on empty retrieval) is the no-hallucination anchor and must survive every change.
-- `ChatScreen.tsx` fixes mode per conversation (`conversations.mode`), toggle picks the mode
-  for the *next* conversation. The hallucination incident happened because nothing tells a
-  plain-Chat user that the model cannot see their documents.
-- `settings.activeEmbeddingModelId` **stays `null` in practice** (BUILD_STATE §9): the real
-  embedder is chosen by availability at startup, and nothing persists its id — which is why
-  the Documents screen never warns about mock-indexed (invisible-to-E5) documents.
-- `assets.ts` exposes the full downloader logic with an **injected fetch** seam:
-  `planModelDownloads` (license gate, present-verified/unverified states), `downloadToFile`
-  (`DownloadDeps { fetchImpl, onProgress }`), `fetchAndVerify` (hash mismatch deletes the
-  partial + throws). Tests already drive it with a fake fetch — the no-network assertion holds.
-- **Policy ceiling today blocks any downloader everywhere:** `DEFAULT_POLICY` denies network,
-  `prepare-drive` writes deny in BOTH commercial and dev postures, and effective network =
-  policy ∧ user setting. With no policy file, even `allowNetwork: true` does nothing. Phase 18
-  cannot ship without resolving §13 D3.
-- `runtime_events` table (spec §8) exists since Phase 1: `(id, event_type, message,
-  metadata_json, created_at)` — created idempotently, written by nothing.
-- `ChatOptions.mode` (`'fast' | 'balanced' | 'deep'`) is accepted over IPC and read by
-  nothing; manifest `supports_thinking_mode` is parsed and unused. All four bundled Qwen3 chat
-  models declare `supports_thinking_mode: true`.
-- The offline guard is installed only when `offlineMode` is true, so a sanctioned download
-  session (policy ∧ user allow ⇒ `offlineMode: false`) does not fight it. The Privacy screen
-  already renders live network state.
+(As-built; the pre-implementation gap list is in the git-history original.)
+
+- The grounding guard is the no-hallucination anchor: when retrieval yields no usable chunks
+  the model is **not called** — a fixed answer is persisted (`NO_DOCUMENT_CONTEXT_ANSWER`,
+  or `REINDEX_NEEDED_ANSWER` when the corpus is invisible to the active embedder).
+- Retrieval is scoped to the **active embedder's id**; ingestion tags vectors with the id of
+  the embedder that actually produced them (Phase 17 vector-tag rule — tag and search scope
+  come from the same place).
+- Effective network = policy ceiling ∧ user setting; a policy can only restrict. Since
+  Phase 18, `DEFAULT_POLICY.network.allowModelDownloads = true` so the spec §3.6 Settings
+  toggle (default OFF) is the gate when no policy file restricts; `prepare-drive` still
+  writes deny in both postures (§13 D3).
+- `runtime_events` (spec §8 schema, created since Phase 1) is the audit table — no schema
+  change was needed for Phase 19.
+- The chat runtime is the pinned **llama.cpp b9585** `llama-server` over loopback; Phase-20
+  facts verified against that tag's source are recorded in §8 and BUILD_STATE §3.
 
 ## 4. Phase ordering rationale
 
-17 before 18: the downloader makes models easier to get, but RAG trust is what the product *is*
-(spec §23: "ask questions about private documents"). 19 is independent and small — it slots
-third because 17/18 generate the most interesting events to record (download started/verified,
-reindex, scope changes). 20 is cosmetically independent but benefits from 17's ChatScreen
-refactor landing first. Each phase is shippable alone; none blocks release acceptance.
+Historical — see the git-history original. (Short: trust before reach; 19 slots third because
+17/18 generate the most interesting events; 20 benefits from 17's ChatScreen refactor.)
 
 ---
 
-## 5. Phase 17 — RAG trust & document-scoped asking
+## 5. Phase 17 — RAG trust & document-scoped asking (IMPLEMENTED)
 
 **Goal:** a non-technical user can no longer silently get an ungrounded answer about their
-documents, never unknowingly searches a corpus their embedder cannot see, and can ask a
-question against a chosen subset of documents (spec §10.4, deferred at MVP).
+documents, never unknowingly searches a corpus their embedder cannot see, and can ask against
+a chosen subset of documents (spec §10.4). **The fuller design record lives in
+[`rag-design.md`](rag-design.md) §10**; the stable anchors below are what code comments cite.
 
 ### 5.1 Document-awareness in plain Chat
 
-When the workspace has ≥ 1 `indexed` document and the conversation is in `chat` mode, the
-transcript shows a dismissible, per-conversation inline notice:
-
-> *"This is a plain chat — answers don't use your imported documents. Switch to **Ask
-> Documents** to get cited answers from them."* — with a one-click switch that starts a new
-> `documents` conversation pre-filled with the composer text.
-
-Renderer-only (one `listDocuments` call on mount, cached); no IPC change. The mode tabs also
-gain one-line subtitles ("General assistant" / "Answers from your files, with sources").
+With ≥ 1 indexed document, a `chat`-mode conversation shows a dismissible per-conversation
+notice ("This is a plain chat — answers don't use your imported documents…") with a one-click
+switch to Ask Documents; the mode tabs carry subtitles. Renderer-only.
 
 ### 5.2 Embedder-visibility honesty (the mock→E5 trap)
 
-1. **Persist the active embedder id at startup:** when `createSelectedEmbedder` resolves,
-   write its `id` to `settings.activeEmbeddingModelId` post-unlock (mirroring
-   `maybeAutoStartActiveModel` — background, never throws). This finally activates the
-   existing-but-dormant stale-embeddings gate.
-2. **Per-document visibility flag:** `listDocuments` gains `embeddingModelId` (the distinct
-   `embeddings.embedding_model_id` for the doc's chunks) and a derived
-   `needsReindex: boolean` (≠ active embedder id). Documents screen badges affected rows
-   ("Indexed for a different search model") + offers **Re-index all** (sequential
-   `reindexDocument` loop, reusing the import-job polling UX).
-3. **Ask-Documents preflight:** if every indexed document is invisible to the active embedder,
-   the grounded path's empty-corpus answer gets a more actionable variant ("Your documents
-   need a quick re-index before they can be searched — open the Documents screen").
+Per-document `staleEmbeddings` badge + **Re-index all** (sequential `reindexDocument` loop)
+on the Documents screen; `corpusNeedsReindex` drives the actionable
+`REINDEX_NEEDED_ANSWER` empty-corpus variant ("re-index", not "rephrase") — the model is
+still never called without context. The vector-tag rule (§3 above) is the underlying fix.
 
 ### 5.3 Ask selected documents (spec §10.4)
 
-- `VectorIndexOptions` gains `documentIds?: string[]` → the cosine scan adds
-  `AND chunk_id IN (SELECT id FROM chunks WHERE document_id IN (…))` (prepared with the right
-  arity; empty array = unscoped). Same `search` signature, ANN-upgrade path unaffected.
-- `rag.retrieve` accepts an optional scope and threads it through; `askDocuments` IPC gains an
-  optional `documentIds` argument (additive — old callers unchanged).
-- **Scope persistence (§13 D2):** additive nullable `scope_json` column on `conversations`
-  (idempotent `ALTER TABLE` guarded by a pragma check, like existing schema creation). A
-  `documents`-mode conversation created from a selection stores it; the ChatScreen shows
-  removable scope chips above the composer; reload restores them.
-- Documents screen: row checkboxes + an **Ask these documents** action → navigates to Chat in
-  `documents` mode with the scope applied (extends the existing `navigate()` /
-  `initialMode` plumbing from the UX-polish round).
-- Empty-scope retrieval (scoped docs deleted later) falls back to the fixed grounded-path
-  answer — the model is still never called without context.
+`VectorIndexOptions.documentIds` scopes the cosine scan (placeholder SQL, composes with the
+embedder-id filter); the scope **persists on the conversation** (`conversations.scope_json`,
+additive nullable column, guarded `ALTER TABLE` — §13 D2; malformed JSON reads back null).
+`createConversation` accepts a scope; `updateConversationScope` (`chat:updateScope`)
+replaces/clears it; `askDocuments` reads it from the conversation. UI: Documents-screen
+checkboxes → "Ask these documents (N)" → Chat with removable scope chips; empty-scope
+retrieval falls back to the fixed grounded-path answer.
 
-### 5.4 Change inventory (Phase 17)
+### 5.5 As-implemented deviations (2026-06-10)
 
-| File | Change |
-|---|---|
-| `services/embeddings/index.ts` | `VectorIndexOptions.documentIds`, scoped SQL |
-| `services/rag/index.ts` | scope threading in `retrieve`/`generateGroundedAnswer`; actionable empty-corpus variant |
-| `services/ingestion/index.ts` | `listDocuments` embedder-id join + `needsReindex` |
-| `services/db.ts` | guarded additive `conversations.scope_json` migration |
-| `services/chat.ts` | `createConversation` optional scope; scope read helper |
-| `main/index.ts` | persist `activeEmbeddingModelId` post-unlock |
-| `ipc/registerRagIpc.ts` / `registerChatIpc.ts` / `registerDocsIpc.ts` | additive args |
-| `preload` + `shared/types.ts` + `shared/ipc.ts` | additive API/type surface |
-| `renderer/screens/ChatScreen.tsx` | plain-chat notice, scope chips, mode subtitles |
-| `renderer/screens/DocumentsScreen.tsx` | needs-reindex badge, Re-index all, selection + Ask |
-| `docs/rag-design.md`, `user-guide.md`, `known-limitations.md` | update (remove the §10.4 gap) |
-
-### 5.5 As implemented (2026-06-10) — deviations from the plan above
-
-Phase 17 shipped per §5.1–§5.4 with three deviations (full detail in
-[`rag-design.md`](rag-design.md) §10; gate: typecheck clean, 499 tests, build green):
-
-1. **§5.2 items 1–2 were partly pre-empted by an earlier polish round** (the
-   `staleEmbeddings` flag, the per-document badge, and `listDocuments` scoped to
-   `ctx.embedder.id` already existed). Phase 17 added **Re-index all**, the
-   `REINDEX_NEEDED_ANSWER` empty-corpus variant, and a **stronger fix than persisting
-   `activeEmbeddingModelId`**: ingestion now tags vectors with the id of the embedder that
-   actually produced them (`embedder.id` fallback; the settings selection no longer feeds
-   the tag). The old tag could stamp mock-produced vectors with the E5 manifest id —
-   invisible to mock-scoped search now, poisonous to E5-scoped search later.
-2. **`askDocuments` gained no per-call `documentIds` argument** — once the scope persists
-   on the conversation (D2a), a per-call arg is redundant; the handler reads
-   `conv.scopeDocumentIds`. Scope edits go through the new `updateConversationScope` IPC
-   (`chat:updateScope`) instead.
-3. The §5.2-3 "actionable empty-scope" copy was folded into the single
-   `REINDEX_NEEDED_ANSWER` (the only empty case with a distinct user action).
+(1) Ingestion tags vectors with the **producing** embedder's id — stronger than the planned
+"persist `activeEmbeddingModelId`" (a wrong settings tag could poison E5-scoped search).
+(2) `askDocuments` gained **no per-call `documentIds` arg** — redundant once the scope
+persists on the conversation; edits go through `updateConversationScope`. (3) The
+"actionable empty-scope" copy folded into the single `REINDEX_NEEDED_ANSWER`. Gate at ship:
+499 tests.
 
 ---
 
-## 6. Phase 18 — In-app model downloader (plan §12.3 revived)
+## 6. Phase 18 — In-app model downloader (IMPLEMENTED; provisioning-plan §12.3 revived)
 
-**Goal:** a user with a missing model (e.g. the 8B on a 16 GB machine) can fetch it from the
-Models screen — explicit, verified, resumable-ish, and impossible to trigger silently.
+**Goal:** a user with a missing model can fetch it from the Models screen — explicit,
+verified, resumable-ish, impossible to trigger silently.
 
-### 6.1 Gates (all must hold, in order)
+### 6.1 Gates (all enforced in MAIN, re-checked per call)
 
-1. `policy.network.allowModelDownloads` (the authoritative ceiling — see §13 D3, **blocking
-   decision**: today every generated policy denies this, so the feature would be dead code).
-2. `settings.allowNetwork` (the spec §3.6 checkbox, default off).
-3. A per-download confirmation dialog showing: model name, size, license + `license_url`,
-   the upstream URL, and — when `license_review.status != approved` — an explicit license
-   acknowledgement (the in-app mirror of `--accept-license`).
+1. `policy.network.allowModelDownloads` — the authoritative ceiling (§13 D3 resolved (a):
+   default-policy true; `prepare-drive` writes deny in both postures, so prepared drives stay
+   download-disabled unless the builder edits `config/policy.json`).
+2. `settings.allowNetwork` — the spec §3.6 checkbox, default off; a locked workspace reads
+   as off.
+3. A per-download confirmation: model name, size, license + `license_url`, upstream URL, and
+   an explicit license acknowledgement when `license_review.status != approved` (the in-app
+   `--accept-license`). The renderer dialog is UX; enforcement is main-side.
 
-When gate 1 or 2 fails, the Models screen shows *why* ("Downloads are disabled by this
-drive's policy" vs. a link to the Settings toggle) — reusing the `PolicyStatus` distinction
-the Privacy screen already makes.
+When gate 1 or 2 fails the Models screen says *why* (policy vs. Settings toggle), reusing the
+`PolicyStatus` distinction.
 
-### 6.2 Mechanics
+### 6.2 Mechanics (as built)
 
-- New `ipc/registerDownloadIpc.ts`: `downloadModel(modelId)` → `{ jobId }`,
-  `getDownloadJob(jobId)` → `{ status: queued|downloading|verifying|done|failed|cancelled,
-  receivedBytes, totalBytes, error? }`, `cancelDownload(jobId)`. **Async-with-polling**, the
-  Phase-4 import precedent — no new event channels.
-- Implementation reuses `assets.ts` wholesale: `planModelDownloads` (single-id filter) →
-  `downloadToFile` with the real `fetch` injected in main + `onProgress` updating the job →
-  `verifyDownloadedFile`. Hash mismatch deletes the partial and fails the job (existing
-  semantics); placeholder expected hash → job ends `done` but the model stays *UNVERIFIED*
-  (checksum honesty, R5) with copy pointing at `verify-models --generate`.
-- Download to `<weightPath>.part`, rename into place only after verification — a crashed
-  download never leaves a half-weight where `computeInstallState` can see it. Resume via a
-  `Range` header when a `.part` exists (best-effort; server without ranges → restart).
-- One download at a time (multi-GB on USB; a queue is pointless contention).
-- On success: invalidate the checksum cache entry for that path and refresh install state.
-- Audit events (once Phase 19 lands): `download_started/verified/failed`.
+`services/downloads.ts` `DownloadManager` — a job state machine over the REUSED `assets.ts`
+seams (`planModelDownloads` + optional `hashStore`, `downloadToFile`, `verifyDownloadedFile`):
+bytes land in `<weightPath>.part`, renamed into place ONLY after the hash verifies; a mismatch
+deletes the partial and fails the job; a placeholder expected hash completes `unverified`
+(checksum honesty, R5). Cancel keeps the `.part`; the next start resumes via a `Range` header
+(append iff the server answered 206). One download at a time; jobs are in-memory
+(async-with-polling IPC `downloads:start/get/cancel` — the Phase-4 import precedent, no new
+event channels). On success the checksum-cache entry is invalidated. Audit events
+`model_download_started/verified/failed` flow through an injected `DownloadManagerDeps.audit`
+hook (Phase 19); a placeholder-hash completion records NO "verified".
 
-### 6.3 What this does NOT change
+No update checks, no catalog (only manifests already on the drive), no background anything;
+a sanctioned download session is by definition not `offlineMode`.
 
-No update checks, no model browsing/catalog (only manifests already on the drive), no runtime
-fetching (the sidecar ships at drive-build time), no background anything. The offline guard,
-CSP, and `assertOfflinePosture` behavior are unchanged — a sanctioned download session is by
-definition not `offlineMode`.
+### 6.5 As-implemented deviations (2026-06-10)
 
-### 6.4 Change inventory (Phase 18)
-
-| File | Change |
-|---|---|
-| `services/policy.ts` + generated configs | §13 D3 resolution (semantics of the downloads ceiling) |
-| `services/downloads.ts` (new) | job state machine over `assets.ts` seams; `.part` + rename; Range resume |
-| `ipc/registerDownloadIpc.ts` (new) + preload + shared types/ipc | the three commands |
-| `renderer/screens/ModelsScreen.tsx` | Download button + progress + cancel + gate explanations + license confirm |
-| `renderer/screens/SettingsScreen.tsx` | surface the §3.6 checkbox copy verbatim |
-| `docs/model-policy.md`, `security-model.md`, `PRIVACY.md`, `known-limitations.md` | document the gates; remove the "no in-app downloader" gap |
-
-### 6.5 As implemented (2026-06-10) — deviations from the plan above
-
-Phase 18 shipped per §6.1–§6.4 (gate: typecheck clean, 525 tests, build green; BUILD_STATE §3
-has the full entry). Deviations/refinements:
-
-1. **D3 (a) landed exactly as resolved:** `DEFAULT_POLICY.network.allowModelDownloads = true`;
-   `prepare-drive` keeps writing deny in **both** its postures (not just commercial) — a dev
-   drive's builder lifts it by editing `config/policy.json`, while repo/DIY runs with no policy
-   file get the Settings-toggle gate.
-2. **`downloadToFile` was extended rather than wrapped** (additive `signal`/`headers`/`append`/
-   `onResponse` + a `{status, received, contentLength}` return): resume needs the append
-   decision to depend on the server's 206-vs-200 answer, which only the streaming site knows.
-   `fetchAndVerify` is not used by the downloader (it has no `.part` staging); the downloader
-   composes `downloadToFile` + `verifyDownloadedFile` and replicates mismatch-deletes-partial
-   on the `.part`.
-3. **`ModelInfo` gained an optional `download` block** (`url`, `sizeBytes`, `licenseUrl`,
-   `licenseApproved`) so the confirmation dialog needs no fourth IPC command; the IPC surface
-   stayed exactly `downloadModel`/`getDownloadJob`/`cancelDownload`.
-4. **`planModelDownloads` gained an optional `hashStore`** so a present-but-mismatched weight
-   re-check reads the persisted checksum cache instead of re-hashing multi-GB files.
-5. Audit events (§6.2 last bullet) remain for Phase 19, as planned. Accepted cosmetic edge
-   recorded in `known-limitations.md`: the startup-installed (detection-only) offline tripwire
-   is not re-evaluated mid-session, so a download sanctioned in the same session logs a
-   remote-connection notice.
+(1) D3 landed exactly as resolved. (2) `downloadToFile` was **extended, not wrapped**
+(additive `signal`/`headers`/`append`/`onResponse` + a result object) — resume needs the
+append decision at the streaming site. (3) `ModelInfo` gained an optional `download` block so
+the confirmation needs no fourth IPC. (4) `planModelDownloads` reads the persisted checksum
+cache via an optional `hashStore`. (5) Accepted cosmetic edge in `known-limitations.md`: the
+startup offline tripwire isn't re-evaluated mid-session. Gate at ship: 525 tests.
 
 ---
 
-## 7. Phase 19 — Audit log (`runtime_events` finally written)
+## 7. Phase 19 — Audit log on `runtime_events` (IMPLEMENTED)
 
 **Goal:** the user can answer "what did this app do, when" without reading `app.log` — the
-first Office/Enterprise (§19.1/§19.4) compliance feature.
+first Office/Enterprise (§19.1/§19.4) compliance feature. **For the user, not telemetry**:
+lives in the workspace DB (encrypted at rest on encrypted workspaces), never uploaded.
 
-- New `services/audit.ts`: `recordEvent(db, type, message, metadata?)` (never throws — an
-  audit failure must never break the operation it records) + a typed `AuditEventType` union:
-  `runtime_started/stopped/crashed/fallback`, `model_selected/verified/download_*`,
-  `document_imported/reindexed/deleted`, `conversation_deleted/exported`,
-  `workspace_created/unlocked/locked/unlock_failed`, `settings_changed` (privacy-relevant
-  keys only: `allowNetwork`, `gpuMode`, `developerMode`), `policy_warning`,
-  `offline_guard_violation`.
-- **Privacy rule (hard):** `message`/`metadata_json` carry ids, model ids, filenames, and
-  counts — never chat content, document text, or passwords. A unit test greps recorded
-  fixtures for seeded sentinel content.
-- Retention: prune to the newest `AUDIT_MAX_ROWS` (default 5 000) on insert — bounded table,
-  no vacuum ceremony. Lives in the workspace DB ⇒ encrypted at rest on encrypted workspaces,
-  exactly like chats.
-- Surface: Diagnostics gains an **Activity** panel (`getAuditEvents(limit, beforeId?)` IPC,
-  newest-first, type filter) + an export-to-file action via the existing save-dialog pattern.
-  Nothing uploads anywhere (spec §7.11).
-- Wiring is deliberately shallow: call sites in the IPC layer + `RuntimeManager`/ladder +
-  `WorkspaceController`, not deep inside services — keeps services pure/testable.
+- `services/audit.ts`: `recordEvent(db, type, message, metadata?)` **never throws**; typed
+  `AuditEventType` union (`shared/types.ts`); `listAuditEvents` (newest-first, `beforeId`
+  cursor); retention = prune-on-insert to `AUDIT_MAX_ROWS` = 5 000 (§13 D7).
+- **Privacy rule (hard, sentinel-grep-tested):** rows carry ids, model ids, filenames,
+  counts — NEVER chat content, document text, or passwords. `conversation_exported` records
+  the id only (the filename derives from the title = chat content); `settings_changed` fires
+  only for privacy-relevant keys (`allowNetwork`, `gpuMode`, `developerMode`).
+- Wiring is **shallow** (IPC layer + `main/index.ts`; services stay pure). Surface:
+  Diagnostics **Activity** panel (type filter, `beforeId` paging) + JSON export via the
+  save-dialog pattern (`audit:list` / `audit:export`).
 
-### 7.1 As implemented (2026-06-10) — deviations from the plan above
+### 7.1 As-implemented refinements (2026-06-10)
 
-Phase 19 shipped per §7 (gate: typecheck clean, 542 tests, build green; BUILD_STATE §3 has
-the full entry; data class in `security-model.md`). Deviations/refinements:
-
-1. **The recorder absorbs the locked-workspace case by buffering, not dropping:**
-   `createAuditRecorder(getDb)` (→ optional `AppContext.audit`) buffers events in memory
-   (bounded at 100) while `ctx.db` throws and flushes them — original timestamps kept — on
-   the next successful write. Without this, `workspace_unlock_failed` (which by definition
-   happens while the DB is locked) could never reach the log.
-2. **Download events go through an injected `DownloadManagerDeps.audit` hook** wired in
-   `registerDownloadIpc`, because verified/failed happen in the manager's background run —
-   the service stays DB-free. Names are `model_download_started/verified/failed` (the §7
-   union's `model_…download_*` expansion). Checksum honesty extends to the log: a
-   placeholder-hash completion records NO `model_download_verified`.
-3. **`conversation_exported` records the conversation id only** — even the chosen filename
-   is excluded, because the save dialog's default name derives from the conversation title
-   (chat content). `settings_changed` fires only when a privacy-relevant key is in the
-   patch and records those keys' post-validation values (booleans/enums).
-4. **`runtime_crashed`/`runtime_fallback` wire in `main/index.ts`** (the GPU crash-fallback
-   and ladder-failure callbacks Phase 15 already routed there), not `RuntimeManager` itself;
-   `policy_warning` records the startup `loadPolicy` warnings (per-call IPC re-reads stay
-   log-only to avoid spam); `offline_guard_violation` uses a new optional
-   `assertOfflinePosture.onViolation` hook.
-5. Surface shipped as planned: Diagnostics **Activity** panel (on-demand load, client-side
-   type filter, `beforeId` paging) + JSON export via the save-dialog pattern; IPC channels
-   `audit:list` / `audit:export`.
+(1) `createAuditRecorder(getDb)` → optional `AppContext.audit`: **buffers (bounded 100) while
+the vault is locked** and flushes with original timestamps — how `workspace_unlock_failed`
+ever reaches the encrypted log. (2) Download events go through the injected manager hook
+(service stays DB-free). (3) `runtime_crashed`/`runtime_fallback` wire in `main/index.ts`
+(the Phase-15 callbacks); `policy_warning` records startup `loadPolicy` warnings;
+`offline_guard_violation` uses the additive `assertOfflinePosture.onViolation` hook.
+Gate at ship: 542 tests. Data classification lives in [`security-model.md`](security-model.md).
 
 ---
 
-## 8. Phase 20 — Answer-depth modes (Fast / Balanced / Deep)
+## 8. Phase 20 — Answer-depth modes Fast / Balanced / Deep (IMPLEMENTED)
 
 **Goal:** wire the dead `ChatOptions.mode` plumbing into something real: Qwen3's native
-thinking mode for **Deep**, a snappier configuration for **Fast**. The spec §10.3 mode
-selector finally exists.
+thinking mode for **Deep**, a snappier configuration for **Fast**. The spec §10.3 selector
+exists. Mechanism doc: [`architecture.md`](architecture.md) "Answer-depth modes"; user copy:
+[`user-guide.md`](user-guide.md) §6; manifest flag: [`model-policy.md`](model-policy.md).
 
-- **Mapping (proposed, §13 D4):** `fast` → thinking off + `temperature 0.7`, modest
-  `maxTokens`; `balanced` (default) → thinking off, current defaults; `deep` → thinking ON —
-  only offered when the active model's manifest has `supports_thinking_mode: true`.
-- **Mechanism (research-then-build, §13 D5):** preferred = `chat_template_kwargs:
-  { enable_thinking }` on the `/v1/chat/completions` request, **verify b9585 supports it**;
-  fallback = Qwen3's documented `/think` · `/no_think` soft switches appended to the user
-  turn. Either way the change is localized to `LlamaRuntime.chatStream` request building +
-  `RuntimeChatOptions`.
-- **Reasoning display:** thinking output (separate `reasoning_content` deltas or inline
-  `<think>…</think>` depending on `--reasoning-format`) renders as a collapsed "Thinking…"
-  block in the assistant bubble, is **stripped when building history messages** (Qwen
-  guidance: never feed think blocks back), and §13 D6 decides whether it persists to the DB.
-- Mode selector lives in the composer, per-conversation-sticky like `mode`
-  (`ChatOptions.mode` is already per-message over IPC — no contract change). MockRuntime
-  ignores it (already true).
-- RAG interaction: `askDocuments` stays `balanced` in this phase (grounded answers should be
-  fast + literal; deep-grounded is a wave-2 question).
+- **Mapping (§13 D4, one site — `requestParamsForMode` in `runtime/llama.ts`):**
+  `fast` → thinking off + temperature 0.7 + `max_tokens` 1024 · `balanced` AND omitted →
+  thinking off, server/model defaults · `deep` → thinking ON + temperature 0.6, uncapped.
+  Explicit `RuntimeChatOptions.maxTokens`/`temperature` win over mode-derived values.
+- **Mechanism (§13 D5, verified against the pinned b9585 SOURCE):** per-request
+  `chat_template_kwargs: { enable_thinking: <bool> }` on `/v1/chat/completions`
+  (server-common.cpp L1074–1088). It only acts in the jinja template path — the b9585 server
+  default — and reasoning is extracted into SEPARATE `delta.reasoning_content` streaming
+  frames (deepseek reasoning format, the default). Both preconditions are pinned in code:
+  every CHAT sidecar spawns with `CHAT_SERVER_ARGS = ['--jinja', '--reasoning-format',
+  'deepseek']` (E5 embedder excluded). The Qwen3 `/think`·`/no_think` soft switches were NOT
+  needed (they leak into transcripts).
+- **Reasoning display:** `RuntimeChatOptions.onReasoning(delta)` → the ADDITIVE
+  `chat:reasoning:<id>` event channel (preload `onReasoning`) → a collapsed live "Thinking…"
+  `<details>` block on the streaming bubble. The locked Phase-3 token contract is untouched
+  (token events carry answer text only); MockRuntime ignores mode + onReasoning.
+- **D6 (strip everywhere):** `stripThinkBlocks` (`services/chat.ts`) scrubs
+  `<think>…</think>` (incl. an unclosed trailing block from a mid-thought Stop) from
+  assistant content before persisting — chat AND grounded paths; an all-think aborted reply
+  persists nothing — and from assistant turns replayed as history (never feed think blocks
+  back). Defense-in-depth: the deepseek format keeps normal output tag-free.
+- **Deep gating:** manifest `supports_thinking_mode` → `ModelManifest.supportsThinkingMode`
+  (optional boolean, default false) → `RuntimeStatus.supportsThinkingMode` (enriched by
+  `getRuntimeStatus` for the RUNNING model only) → the composer offers Deep only when true.
+  Selector lives in the composer, chat mode only, sticky per conversation per session
+  (per-message over IPC, enum-guarded in the handler; NOT persisted to the DB).
+- **RAG interaction:** `askDocuments` never passes a mode — document answers always run
+  balanced (deep-grounded is a wave-2 question).
 
-### 8.1 As implemented (2026-06-10) — notes/deviations from the plan above
+### 8.1 As implemented (2026-06-10) — notes
 
-Phase 20 shipped per §8 (gate: typecheck clean, 572 tests, build green; BUILD_STATE §3 has
-the full entry; mechanism documented in `architecture.md`, user copy in `user-guide.md` §6,
-manifest flag in `model-policy.md`). Notes:
-
-1. **D5 resolved (a) — kwargs, verified against the pinned b9585 SOURCE** (server-common.cpp
-   L1074–1088; jinja default-on, common.h L609; deepseek-format streaming `reasoning_content`
-   deltas, server-chat.cpp L550–557). The soft-switch fallback was not needed. **Research
-   finding that shaped the mapping:** b9585's default `--reasoning auto` turns thinking ON
-   for every capable template — the bundled Qwen3 models were already thinking on every
-   reply and the app silently dropped those deltas (pure latency). `enable_thinking` is
-   therefore ALWAYS sent explicitly; `balanced`/omitted = `false`.
-2. **Chat sidecars now spawn with `CHAT_SERVER_ARGS = ['--jinja', '--reasoning-format',
-   'deepseek']`** — both are b9585 defaults, pinned in code so the D5 mechanism's
-   preconditions don't silently drift on a future runtime re-pin. The E5 embedder is
-   excluded.
-3. **D4 resolved without the release-matrix tok/s** (the matrix is still pending release
-   acceptance): values come from Qwen3's model-card sampling guidance — fast = off + 0.7 +
-   1024 cap, balanced = off + defaults, deep = ON + 0.6 uncapped; explicit options win.
-   Mapping lives in ONE exported function (`requestParamsForMode`, `runtime/llama.ts`).
-4. **Reasoning transport is an additive side-channel**, not a yielded-stream change:
-   `RuntimeChatOptions.onReasoning(delta)` + the new `chat:reasoning:<id>` event channel
-   (preload `onReasoning`). The locked Phase-3 token contract is byte-identical.
-5. **D6 enforced in both directions:** `stripThinkBlocks` runs before persisting (chat AND
-   grounded; an all-think aborted reply persists nothing) and on assistant turns replayed as
-   history. With the deepseek format the strip is defense-in-depth — normal output never
-   contains inline tags.
-6. **Deep gating** rides `RuntimeStatus.supportsThinkingMode` (manifest flag, enriched by
-   `getRuntimeStatus` for the running model) rather than a `ModelInfo` change — the Chat
-   screen already polls runtime status and `listModels` hashing stays off that path. The
-   depth choice is per-conversation per-SESSION (not persisted; recorded in
-   `known-limitations.md`).
-7. **No new audit events** (Phase-19 privacy rule untouched); a NEW manual harness
-   `tests/manual/thinking-smoke.test.ts` (`PAID_THINKING_SMOKE`, gpu-smoke pattern) proves
-   the mechanism live; CI stays zero-network/zero-model.
+1. **Research finding that shaped D4/D5:** at b9585, `--reasoning auto` (the default) turns
+   thinking ON for every capable template (server-context.cpp L1237–1239) — the bundled
+   Qwen3 models were ALREADY thinking on every reply and the app silently dropped those
+   deltas (pure latency; the gpu-smoke's `/no_think` workaround was the tell). So
+   `enable_thinking` is ALWAYS sent explicitly; `balanced`/omitted = `false`.
+2. **D4 was resolved without the release-matrix tok/s** (matrix still pending release
+   acceptance): values come from Qwen3's model-card sampling guidance; tune when it lands.
+3. Deep gating rides `RuntimeStatus` rather than `ModelInfo` — the Chat screen already polls
+   runtime status, and `listModels` hashing stays off that path.
+4. **No new audit events** (a mode choice is chat-adjacent state; the Phase-19 privacy
+   surface is unchanged). NEW manual harness `tests/manual/thinking-smoke.test.ts`
+   (`PAID_THINKING_SMOKE=<drive root>`, gpu-smoke pattern) proves the mechanism live; CI
+   stays zero-network/zero-model. Gate at ship: 572 tests, typecheck clean, build green.
 
 ---
 
@@ -403,32 +267,24 @@ bundles", spec §1.3) makes this the first post-wave-1 priority once drives actu
 
 ---
 
-## 11. Testing strategy
+## 11. Testing posture (wave 1, as held)
 
-- **CI stays zero-network/zero-model/zero-GPU.** Downloader tests drive `downloads.ts` with
-  the existing fake-`fetch` seam (progress, mismatch-deletes-partial, cancel, `.part` rename,
-  gate refusals); the no-network assertion is extended to prove `downloadModel` refuses when
-  either gate is closed.
-- **Unit:** scoped `VectorIndex` SQL (in-memory DB), scope threading through `retrieve`,
-  `needsReindex` derivation, audit privacy grep + retention pruning, mode→request mapping
-  (`chat_template_kwargs` / soft-switch fallback), think-block stripping from history.
-- **Renderer (vitest, `apps/desktop` workspace):** plain-chat notice appears/dismisses, scope
-  chips render + remove, Models download button gate states, Deep hidden when
-  `supports_thinking_mode` is false.
-- **Manual acceptance (appended to BUILD_STATE §5 per phase):** real download of the 4B on
-  the `D:\` drive incl. a mid-download cancel + resume; the §5.2 mock→E5 re-index flow on the
-  existing test drive; a real Deep-mode answer with visible thinking from Qwen3 4B; an
-  Ask-selected run against two PDFs where only one contains the answer.
+**CI stays zero-network/zero-model/zero-GPU** — every wave-1 feature is driven through the
+existing harnesses (fake `fetch`, fake spawn + mocked loopback SSE, temp DBs, fake `ipcMain`,
+jsdom + stubbed preload api). Manual harnesses behind env vars: `PAID_GPU_SMOKE`,
+`PAID_THINKING_SMOKE`. **Manual acceptance still owed (tracked in BUILD_STATE §5 item 3):**
+a real in-app download of the 4B on the `D:\` drive incl. mid-download cancel → resume; the
+mock→E5 re-index flow; a real Deep-mode answer with visible thinking from Qwen3 4B; an
+Ask-selected run against two PDFs where only one contains the answer.
 
-## 12. Docs impact per phase
+## 12. Docs impact
 
-17: `rag-design.md`, `user-guide.md` (Ask-selected walkthrough), `known-limitations.md`
-(remove §10.4 + stale-embeddings gaps). 18: `model-policy.md`, `PRIVACY.md`,
-`security-model.md` (new network surface + gates), `user-guide.md`. 19: `security-model.md`
-(audit data class), `architecture.md`. 20: `user-guide.md` (mode explanations, §11.4-tone
-copy), `model-policy.md` (`supports_thinking_mode` now load-bearing).
+Applied per phase (historical detail in the git-history original). Durable homes now:
+`rag-design.md` §10 (17) · `model-policy.md` + `security-model.md` + `PRIVACY.md` (18) ·
+`security-model.md` + `architecture.md` (19) · `architecture.md` + `user-guide.md` §6 +
+`model-policy.md` (20) · `known-limitations.md` (accepted edges, all phases).
 
-## 13. Decisions (review round 1 — resolved 2026-06-10, operator approved the recommendations)
+## 13. Decisions (review round 1 resolved 2026-06-10; D4/D5 resolved at Phase 20 start)
 
 | # | Decision | Resolution |
 |---|---|---|
@@ -437,5 +293,14 @@ copy), `model-policy.md` (`supports_thinking_mode` now load-bearing).
 | D3 | Downloads policy semantics (was blocking Phase 18) | **RESOLVED (a):** flip `DEFAULT_POLICY.network.allowModelDownloads` to true so the spec §3.6 user toggle is the sole gate when no policy file restricts; commercial `prepare-drive` posture keeps writing deny. Preserves "policy only restricts" |
 | D4 | Fast/Balanced/Deep parameter mapping | **RESOLVED (2026-06-10, Phase 20):** fast → thinking off + temp 0.7 + max_tokens 1024 · balanced/omitted → thinking off + server defaults · deep → thinking ON + temp 0.6 uncapped (Qwen3 model-card sampling; release-matrix tok/s pending — tune then if needed). Explicit options win. Single mapping site: `requestParamsForMode` (`runtime/llama.ts`) |
 | D5 | Thinking-mode mechanism | **RESOLVED (a) (2026-06-10, Phase 20):** per-request `chat_template_kwargs: { enable_thinking }` — support verified in the pinned b9585 SOURCE (server-common.cpp L1074–1088). Requires jinja (b9585 default, pinned via `CHAT_SERVER_ARGS`); reasoning arrives as separate `delta.reasoning_content` frames (`--reasoning-format deepseek`). Soft switches rejected (transcript leakage). NB: b9585 defaults to thinking ON for capable templates → the kwarg is ALWAYS sent |
-| D6 | Persist reasoning text? | **RESOLVED (a):** strip before persisting; the collapsed "Thinking…" block is a live-stream affordance only |
+| D6 | Persist reasoning text? | **RESOLVED (a):** strip before persisting; the collapsed "Thinking…" block is a live-stream affordance only. Enforced by `stripThinkBlocks` on persist AND on replayed history |
 | D7 | Audit retention default | **RESOLVED:** fixed 5 000 rows for wave 1; configurability is Office-edition admin surface |
+
+---
+
+## History
+
+- Full original working paper (drafted 2026-06-10; gap analysis, change inventories, §4
+  ordering rationale, per-phase specs as written before implementation):
+  `git show 2a46ca3:docs/post-mvp-functionality-plan.md`.
+- Phase commits: 17 `ef4c08d` · 18 `7782e4d` · 19 `f1e7b92` · 20 `2a46ca3`.

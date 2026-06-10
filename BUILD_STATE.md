@@ -15,8 +15,10 @@ first real Windows `D:\` portable-drive bring-up surfaced + fixed a cluster of p
 drive-root path, manifest-source and RAG/embedding bugs — see **§9**. A **post-MVP UX polish
 round (2026-06-10)** added conversation deletion, a persisted checksum cache (+ real
 verify/loading UX), startup auto-start of the active model, and the Home → documents-chat
-navigation fix — see the §3 entry. **The Office-edition functionality wave has started**
-([`docs/post-mvp-functionality-plan.md`](docs/post-mvp-functionality-plan.md)): **Phase 17 (RAG
+navigation fix — see the §3 entry. **The Office-edition functionality wave 1 (Phases 17–20) is COMPLETE** — the plan was
+condensed to a design record per the doc lifecycle rule
+([`docs/post-mvp-functionality-plan.md`](docs/post-mvp-functionality-plan.md); cited §-anchors
+unchanged, full original via `git show 2a46ca3:docs/post-mvp-functionality-plan.md`): **Phase 17 (RAG
 trust & document-scoped asking) is DONE** — ask-selected-documents scope, the plain-chat
 document-awareness notice, the vector-tag fix, and the reindex-needed answer (§3 entry; design
 record `docs/rag-design.md` §10). **Phase 18 (in-app model downloader) is DONE** — triple-gated
@@ -70,12 +72,15 @@ Legend: ⚪ not started · 🟡 in progress · 🟢 done · 🔴 blocked
 > [`docs/provisioning-and-distribution-plan.md`](docs/provisioning-and-distribution-plan.md).
 > Remaining for *release* = **manual acceptance only**: a real signed/notarized build + a USB §17
 > demo (R5/R7) + the GPU hardware matrix (§5 item 1b).
-> **Phases 17–20 are the functionality wave toward the Office edition — ALL DONE** — see
-> [`docs/post-mvp-functionality-plan.md`](docs/post-mvp-functionality-plan.md). Phase 17 is DONE
-> (plan §5, deviations in §5.5; design record in `docs/rag-design.md` §10). Phase 18 is DONE
-> (plan §6, "as implemented" note in §6.5). Phase 19 is DONE (plan §7, "as implemented" note
-> in §7.1; data class in `docs/security-model.md`). Phase 20 is DONE (plan §8, "as implemented"
-> note in §8.1; decisions D4/D5 resolved in §13; mechanism doc in `docs/architecture.md`).
+> **Phases 17–20 are the functionality wave toward the Office edition — ALL DONE**, and the
+> plan is now the **condensed wave-1 design record**
+> [`docs/post-mvp-functionality-plan.md`](docs/post-mvp-functionality-plan.md) (doc lifecycle
+> rule; §-anchors stable, wave-2 outlines §9–§10 + decisions §13 kept; full original =
+> `git show 2a46ca3:docs/post-mvp-functionality-plan.md`). Phase 17 is DONE
+> (record §5/§5.5; fuller record in `docs/rag-design.md` §10). Phase 18 is DONE (record
+> §6/§6.5). Phase 19 is DONE (record §7/§7.1; data class in `docs/security-model.md`).
+> Phase 20 is DONE (record §8/§8.1; D4/D5 resolved in §13; mechanism doc in
+> `docs/architecture.md`).
 
 ---
 
@@ -584,7 +589,11 @@ Repo root: `f:\_coding\ai_drive`.
   Phase-0 `PlaceholderScreen.tsx` went with it); `docs/gpu-support-plan.md` and
   `docs/provisioning-and-distribution-plan.md` **condensed** with their cited section anchors
   kept stable (gpu §1–§8; provisioning §0/§12/§12.3/§13). Rule recorded in CLAUDE.md
-  ("Doc lifecycle rule"). Full originals: `git show 4549934:docs/<file>`.
+  ("Doc lifecycle rule"). Full originals: `git show 4549934:docs/<file>`. **Also applied at
+  wave-1 closeout (2026-06-10): `docs/post-mvp-functionality-plan.md` condensed** to the
+  wave-1 design record — implemented §5–§8 shrunk to as-built records (sub-anchors §5.5/§6.5/
+  §7.1/§8.1 kept), wave-2 outlines §9–§10 + decisions table §13 kept verbatim; full original:
+  `git show 2a46ca3:docs/post-mvp-functionality-plan.md`.
 - **Phase 17 — RAG trust & document-scoped asking (2026-06-10, plan
   [`docs/post-mvp-functionality-plan.md`](docs/post-mvp-functionality-plan.md) §5; design
   record in `docs/rag-design.md` §10):**
