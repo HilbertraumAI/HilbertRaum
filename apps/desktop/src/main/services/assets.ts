@@ -135,7 +135,7 @@ export function selectRuntimeBuild(
 
 /**
  * Select EVERY build a shipped drive needs for one OS — the default (vulkan/metal)
- * build plus the pure-CPU safety net where one exists (Phase 14, gpu-support-plan §9).
+ * build plus the pure-CPU safety net where one exists (Phase 14, gpu-support-plan §6).
  * Used by the commercial pipeline, which must provision all of them; yaml order is
  * preserved (default first). With no arch the OS's builds are taken as listed
  * (cross-provisioning another OS's dir from the build host).

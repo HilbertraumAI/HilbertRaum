@@ -5,8 +5,16 @@ portable drive. No cloud, no telemetry, all user data local.
 
 ## Read these first, in order
 1. [`BUILD_STATE.md`](BUILD_STATE.md) — the live handoff/state file. **Always read first.** It says what is done, current decisions, data contracts, and the next actions.
-2. [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md) — the phased build plan + analysis.
-3. [`CLAUDE_Private_AI_Drive_Lite_MVP.md`](CLAUDE_Private_AI_Drive_Lite_MVP.md) — the original product/architecture spec (source of truth for *what* to build).
+2. [`CLAUDE_Private_AI_Drive_Lite_MVP.md`](CLAUDE_Private_AI_Drive_Lite_MVP.md) — the original product/architecture spec (source of truth for *what* to build).
+3. Topic docs under [`docs/`](docs/) (architecture, drive layout, packaging, model policy, …) as the task requires.
+
+## Doc lifecycle rule
+Implementation **plan** documents are working papers: once a plan is fully implemented, condense
+it into a short **design record** (decisions + the facts they rest on + the design as built) or
+fold its durable content into the topic docs and delete it — the full original stays in git
+history. Don't let finished plans linger; they drift and contradict the code. (The original
+phased MVP plan, `docs/IMPLEMENTATION_PLAN.md`, was removed this way — see git history;
+`docs/gpu-support-plan.md` is the template for a condensed design record.)
 
 ## Hard rules (from spec §0)
 - **No cloud dependencies. No telemetry. No analytics. No remote crash reporting.**

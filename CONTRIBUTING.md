@@ -10,7 +10,7 @@ Thanks for your interest! This project values **privacy, portability, and boring
 - Keep service boundaries clean so runtimes can be swapped.
 
 ## Workflow
-1. Read [`BUILD_STATE.md`](BUILD_STATE.md) and [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md).
+1. Read [`BUILD_STATE.md`](BUILD_STATE.md) and [`CLAUDE.md`](CLAUDE.md) (hard rules + the per-phase ritual).
 2. Work one **phase / vertical slice** at a time.
 3. Add tests for new logic (`npm test`); keep `npm run typecheck` clean.
 4. **Update docs and `BUILD_STATE.md` at the end of each phase** (mandatory ritual).

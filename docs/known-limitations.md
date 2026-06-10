@@ -76,9 +76,9 @@ logs, best-effort shredding on SSDs, no password recovery — are documented in
   the driver is stable, but the hardware-profile bump deliberately ignores them so the model
   recommendation stays RAM-based.
 - **Vulkan slower than CPU is possible** on weak-iGPU + fast-CPU machines. v1 does **not**
-  auto-benchmark CPU vs GPU and pick a winner (decided, plan §13 Q3); the Settings
+  auto-benchmark CPU vs GPU and pick a winner (decided, gpu-support-plan §1); the Settings
   "Use GPU acceleration" toggle covers that case.
-- **`win/arm64` and `mac/x64` ship no sidecar build** (decided, plan §13 Q4). mac/x64 = Intel
+- **`win/arm64` and `mac/x64` ship no sidecar build** (decided, gpu-support-plan §1). mac/x64 = Intel
   Macs: upstream builds them with Metal **off** and macOS has no Vulkan, so GPU acceleration is
   impossible there regardless; Apple discontinued the line in 2023.
 - **Intel Macs are not supported by prepared drives at all** (pre-existing gap surfaced while

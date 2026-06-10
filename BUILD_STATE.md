@@ -2,7 +2,7 @@
 
 > **This is the handoff/transport file between build steps and sessions.**
 > Read this FIRST at the start of every session. Update it at the END of every phase
-> (see "Per-phase ritual" in [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md)).
+> (see "Per-phase ritual" in [`CLAUDE.md`](CLAUDE.md)).
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 _Last updated: 2026-06-10 — **MVP feature-complete: Phases 0–13 done**, plus the full **GPU
@@ -13,7 +13,7 @@ acceleration feature (Phases 14–16: Vulkan-default distribution → probe + fa
 remediated and the llama.cpp runtime pin + license reviews are complete — summarized in §8. The
 first real Windows `D:\` portable-drive bring-up surfaced + fixed a cluster of provisioning,
 drive-root path, manifest-source and RAG/embedding bugs — see **§9**. Remaining work = **manual
-release acceptance only** (§5, now incl. the GPU §11.2 hardware matrix). Consciously-accepted
+release acceptance only** (§5, now incl. the GPU hardware matrix, item 1b). Consciously-accepted
 gaps live in [`docs/known-limitations.md`](docs/known-limitations.md)._
 
 ---
@@ -46,7 +46,7 @@ Legend: ⚪ not started · 🟡 in progress · 🟢 done · 🔴 blocked
 > top (see [`docs/gpu-support-plan.md`](docs/gpu-support-plan.md)). All are DONE — see
 > [`docs/provisioning-and-distribution-plan.md`](docs/provisioning-and-distribution-plan.md).
 > Remaining = **manual acceptance only**: a real signed/notarized build + a USB §17 demo (R5/R7)
-> + the GPU §11.2 hardware matrix (§5).
+> + the GPU hardware matrix (§5 item 1b).
 
 ---
 
@@ -386,7 +386,7 @@ Repo root: `f:\_coding\ai_drive`.
   the commercial first-run still lands on the existing `WorkspaceGate` (no plaintext offered when the
   policy forbids it); only the copy was softened for zero-technical-knowledge users.
 
-- **Vulkan-first runtime distribution (LOCKED, Phase 14 — gpu-support-plan §13 decisions are FINAL):**
+- **Vulkan-first runtime distribution (LOCKED, Phase 14 — gpu-support-plan §1 decisions are FINAL):**
   `runtime-sources.yaml` now lists the **Vulkan full build first** per win/linux (b9585 vulkan assets,
   hashes re-verified from fresh downloads on 2026-06-10) extracting to `runtime/llama.cpp/<os>/`, plus
   the **pure-CPU safety net** (the former defaults) at `runtime/llama.cpp/<os>/cpu/`; mac stays
@@ -458,8 +458,7 @@ Repo root: `f:\_coding\ai_drive`.
   (clears `gpuAutoDisabled`+`gpuLastError` — does NOT touch the
   toggle). `App.tsx` shows the dismissible `runtime:notice` banner (the §5.3 compatibility-mode
   copy). All copy follows spec §11.4 — "compatibility mode", never "GPU failed".
-- **GPU audit round (2026-06-10, post-Phase-16 — all findings remediated; see also
-  gpu-support-plan §13):**
+- **GPU audit round (2026-06-10, post-Phase-16 — all findings remediated; commit `4549934`):**
   1. **fetch-runtime upgrade bug (HIGH):** re-fetching over an existing install (the exact
      cpu→vulkan upgrade path the Phase-14 marker exists for) never re-flattened the nesting
      mac/linux tarballs — the OLD root binary survived while the fresh marker claimed vulkan.
@@ -485,6 +484,15 @@ Repo root: `f:\_coding\ai_drive`.
      "Intel(R) Arc(TM) Graphics" — discrete Arc "A###"-series still bumps. Fixture-tested.
   7. Small: `gpuMode` is enum-guarded in `updateSettings`; `fetch-runtime.ps1` is pure ASCII
      again; stale "(CPU) default" docstrings fixed.
+- **Doc lifecycle: finished plans become design records (2026-06-10):** implemented plan docs
+  are condensed to short design records (decisions + load-bearing facts + the design as built)
+  or deleted, with the full original in git history — finished plans otherwise drift and
+  contradict code (the GPU audit proved it). Applied: `docs/IMPLEMENTATION_PLAN.md` **deleted**
+  (per-phase ritual lives in CLAUDE.md; spec-§22 Definition of Done folded into §5; the dead
+  Phase-0 `PlaceholderScreen.tsx` went with it); `docs/gpu-support-plan.md` and
+  `docs/provisioning-and-distribution-plan.md` **condensed** with their cited section anchors
+  kept stable (gpu §1–§8; provisioning §0/§12/§12.3/§13). Rule recorded in CLAUDE.md
+  ("Doc lifecycle rule"). Full originals: `git show 4549934:docs/<file>`.
 
 ---
 
@@ -935,9 +943,16 @@ CI are unaffected.
 
 ## 5. Next actions (do these next) — POST-MVP
 
-**Phases 0–13 are complete — this was the LAST planned phase. The MVP is feature-complete, the DIY
-asset loader ships, and the plug-and-play commercial drive is built + asserted.** The remaining items
-are **MANUAL acceptance only** (R2/R5/R7) **plus the newly-accepted GPU work**. In rough priority:
+**Phases 0–16 are complete. The MVP is feature-complete, the DIY asset loader ships, the
+plug-and-play commercial drive is built + asserted, and GPU acceleration is in.** The remaining
+items are **MANUAL acceptance only** (R2/R5/R7 + the GPU hardware matrix). In rough priority:
+
+> **Definition of Done (MVP, spec §22 — folded in from the retired `docs/IMPLEMENTATION_PLAN.md`):**
+> app builds on ≥1 OS; architecture supports Win/macOS/Linux; local model chat works; local doc
+> Q&A with citations works; manifests work; drive layout works; user data local; privacy docs
+> exist; setup scripts exist; benchmark recommendation exists; non-technical demo possible; no
+> cloud API; no model weights in git; README explains DIY; commercial drive layout documented.
+> All code-verifiable items are ✅; the demo items are the manual acceptance below.
 
 0. **GPU acceleration (Phases 14–16) — ✅ IMPLEMENTED 2026-06-10:** see
    [`docs/gpu-support-plan.md`](docs/gpu-support-plan.md) (status flipped to IMPLEMENTED;
@@ -949,18 +964,18 @@ are **MANUAL acceptance only** (R2/R5/R7) **plus the newly-accepted GPU work**. 
    (`tests/manual/gpu-smoke.test.ts` with `PAID_GPU_SMOKE`: real GPU start + streamed completion).
    **Phase 16 (surface)**: Settings toggle, Diagnostics Acceleration/runtime-build lines +
    "Try GPU again", benchmark probe injection + conservative `classifyProfile` bump, friendly
-   copy + docs. **Remaining for the GPU feature = release acceptance only:** the plan §11.2
-   manual hardware matrix (see the release checklist addition below).
+   copy + docs. **Remaining for the GPU feature = release acceptance only:** the manual
+   hardware matrix (item 1b below — the canonical list).
 1. **Commercial-drive manual acceptance (needs certs + a real USB run, R5/R7):** obtain the code-
    signing certs (Windows OV/EV + Apple Developer ID), produce a **signed** Windows portable `.exe` +
    a **signed & notarized** macOS `.app`, run `build-commercial-drive` end-to-end onto a real drive
    (`-AppArtifact` the signed build), then do the spec §17 demo on a **fresh laptop with Wi-Fi off** +
    the **second-laptop continuity** check (same encrypted workspace, different drive letter). The
    `electron-builder.yml` hooks + the pipeline are wired; only the secrets + hardware are missing.
-   **GPU additions to this checklist (gpu-support-plan §10.4):** a SmartScreen sanity re-check (the
+   **GPU additions to this checklist:** a SmartScreen sanity re-check (the
    Vulkan build adds one more unsigned DLL of the same class) and re-running `build-commercial-drive`
    end-to-end with the two-build fetch.
-1b. **GPU manual hardware matrix (gpu-support-plan §11.2 — release acceptance, cannot be CI'd):**
+1b. **GPU manual hardware matrix (THIS list is canonical — release acceptance, cannot be CI'd):**
    ① Win11 + discrete NVIDIA (dev box RTX 3080 Ti — ✅ done via the Phase-15 smoke; capture tok/s
    for release notes) · ② Win + discrete AMD (Adrenalin) · ③ Win laptop, Intel Iris Xe only
    (modest gain; profile does NOT bump) · ④ Win with no GPU / Server VM / RDP session (empty probe

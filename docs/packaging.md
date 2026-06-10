@@ -255,7 +255,7 @@ run one real-model session covering:
    cache — screens must not re-hash weights per navigation).
 6. **The spec §17 USB demo** on a fresh laptop with Wi-Fi off, plus the **second-laptop
    continuity check** (same encrypted workspace under a different drive letter/mount).
-7. **The GPU hardware matrix** (gpu-support-plan §11.2, tracked in BUILD_STATE §5): discrete
+7. **The GPU hardware matrix** (canonical list in BUILD_STATE §5): discrete
    NVIDIA/AMD happy paths, Iris-Xe-only laptop (no profile bump), no-GPU/RDP silent CPU,
    pre-Vulkan-1.2 degradation, the mid-generation driver-crash auto-fallback, and the
    machine-move re-probe (1↔4). Measured tok/s feed the release notes.

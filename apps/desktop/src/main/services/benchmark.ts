@@ -256,7 +256,7 @@ export function buildWarnings(input: WarningInputs): string[] {
   return warnings
 }
 
-/** The GPU probe summary INJECTED into the benchmark (Phase 16, gpu-support-plan §9). */
+/** The GPU probe summary INJECTED into the benchmark (Phase 16, gpu-support-plan §5.1/§8). */
 export interface GpuBenchmarkInput {
   /** Display name of the primary probed device (→ `BenchmarkResult.gpu`). */
   name: string | null

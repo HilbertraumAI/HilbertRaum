@@ -12,9 +12,9 @@ portable USB-C SSD. Your prompts, documents, embeddings, and chat history never 
 - 🧳 **Portable** — keep models + an encrypted workspace on an external drive; move between laptops.
 - 🪟 **Cross-platform architecture** — Windows-first, with macOS/Linux supported in the design.
 
-> The MVP is **feature-complete** (Phases 0–13). See **[`BUILD_STATE.md`](BUILD_STATE.md)** for
-> current status and **[`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md)** for the
-> original phased plan.
+> The MVP is **feature-complete** (Phases 0–16, including GPU acceleration). See
+> **[`BUILD_STATE.md`](BUILD_STATE.md)** for current status; the original phased plan
+> (`docs/IMPLEMENTATION_PLAN.md`) was retired after completion and lives in git history.
 
 ## Status
 

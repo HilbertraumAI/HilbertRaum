@@ -13,7 +13,7 @@ import {
 } from '../../src/main/services/runtime/sidecar'
 import type { RuntimeStartOptions } from '../../src/main/services/runtime'
 
-// MANUAL GPU smoke (Phase 15 green gate, gpu-support-plan §12) — NOT part of CI.
+// MANUAL GPU smoke (Phase 15 green gate; gpu-support-plan "Release acceptance") — NOT part of CI.
 //
 // The CI suite must stay green with zero binaries, zero models, and zero GPUs, so this
 // whole file is skipped unless PAID_GPU_SMOKE points at a provisioned drive root:
