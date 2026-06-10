@@ -1525,8 +1525,10 @@ items are **MANUAL acceptance only** (R2/R5/R7 + the GPU hardware matrix). In ro
    23 tokens/theming ✅ → 24 component layer → 25 chat restructure [the priority] → 26 IA
    regroup → 27 microcopy/ambient-trust/first-run). Renderer-only except the additive
    `AppSettings.theme` key (now shipped) + the OS-following pre-paint window color.
-   D-UI2 is resolved as planned; open decisions D-UI1/D-UI3 (Radix primitives, Home's
-   fate) live in the plan; **D-UI1 needs confirming before Phase 24.**
+   D-UI2 is resolved as planned; **D-UI1 is APPROVED (2026-06-10, user-confirmed): all
+   four Radix primitives (`@radix-ui/react-dialog`/`react-popover`/`react-dropdown-menu`/
+   `react-tooltip`) go into Phase 24** with the usual pin + license/transitive review,
+   recorded in §3 at adoption. D-UI3 (Home's fate) stays open until after Phase 26.
 
 **Current gate (2026-06-10, post-Phase-23 on `ui-phase-23-tokens-theming`): typecheck clean,
 608/608 tests pass (+6 manual tests — 4 GPU smoke behind `PAID_GPU_SMOKE`, 1 thinking smoke
