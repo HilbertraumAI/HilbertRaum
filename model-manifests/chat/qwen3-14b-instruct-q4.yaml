@@ -12,11 +12,11 @@ recommended_context_tokens: 8192
 supports_thinking_mode: true
 supports_tools: false
 local_path: models/chat/qwen3-14b-instruct-q4.gguf
-sha256: REPLACE_WITH_REAL_HASH
+sha256: 500a8806e85ee9c83f3ae08420295592451379b4f8cf2d0f41c15dffeb6b81f0
 # Phase 12: where `fetch-models` downloads the weight from + what to verify it against.
 download:
   url: https://huggingface.co/Qwen/Qwen3-14B-GGUF/resolve/main/Qwen3-14B-Q4_K_M.gguf?download=true
-  sha256: REPLACE_WITH_REAL_HASH
+  sha256: 500a8806e85ee9c83f3ae08420295592451379b4f8cf2d0f41c15dffeb6b81f0
   size_bytes: 9300000000
   license_url: https://huggingface.co/Qwen/Qwen3-14B-GGUF/blob/main/LICENSE
 bundled_on_preconfigured_drive: false
