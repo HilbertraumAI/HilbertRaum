@@ -43,7 +43,9 @@ export function SettingsScreen(): JSX.Element {
           <span>Allow internet access for model downloads and updates</span>
         </label>
         <p className="hint">
-          Off by default. When off, the app makes no network calls. Your prompts and documents never
+          Off by default. When off, the app makes no network calls. Turning it on only enables
+          model downloads from the Models screen — each one asks for confirmation first, and a
+          drive policy can keep downloads disabled entirely. Your prompts and documents never
           leave this device regardless of this setting.
         </p>
       </div>

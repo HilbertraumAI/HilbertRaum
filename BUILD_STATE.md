@@ -19,9 +19,12 @@ navigation fix — see the §3 entry. **The Office-edition functionality wave ha
 ([`docs/post-mvp-functionality-plan.md`](docs/post-mvp-functionality-plan.md)): **Phase 17 (RAG
 trust & document-scoped asking) is DONE** — ask-selected-documents scope, the plain-chat
 document-awareness notice, the vector-tag fix, and the reindex-needed answer (§3 entry; design
-record `docs/rag-design.md` §10). Phases 18–20 are next. Release-wise, remaining work = **manual
-release acceptance only** (§5, incl. the GPU hardware matrix, item 1b). Consciously-accepted
-gaps live in [`docs/known-limitations.md`](docs/known-limitations.md)._
+record `docs/rag-design.md` §10). **Phase 18 (in-app model downloader) is DONE** — triple-gated
+(policy ∧ default-off setting ∧ per-download confirmation), `.part` + verify-before-rename,
+Range resume, async-with-polling IPC (§3 entry; plan §6 "as implemented"). Phases 19–20 are
+next. Release-wise, remaining work = **manual release acceptance only** (§5, incl. the GPU
+hardware matrix, item 1b). Consciously-accepted gaps live in
+[`docs/known-limitations.md`](docs/known-limitations.md)._
 
 ---
 
@@ -47,7 +50,7 @@ gaps live in [`docs/known-limitations.md`](docs/known-limitations.md)._
 | 15 | GPU runtime (probe, fallback ladder, embedder pin) | 🟢 done |
 | 16 | GPU surface (Settings/Diagnostics/benchmark/docs) | 🟢 done |
 | 17 | RAG trust & document-scoped asking | 🟢 done |
-| 18 | In-app model downloader | ⚪ not started |
+| 18 | In-app model downloader | 🟢 done |
 | 19 | Audit log (`runtime_events`) | ⚪ not started |
 | 20 | Answer-depth modes (Fast/Balanced/Deep) | ⚪ not started |
 
@@ -60,7 +63,8 @@ Legend: ⚪ not started · 🟡 in progress · 🟢 done · 🔴 blocked
 > demo (R5/R7) + the GPU hardware matrix (§5 item 1b).
 > **Phases 17–20 are the functionality wave toward the Office edition** — see
 > [`docs/post-mvp-functionality-plan.md`](docs/post-mvp-functionality-plan.md). Phase 17 is DONE
-> (plan §5, deviations in §5.5; design record in `docs/rag-design.md` §10).
+> (plan §5, deviations in §5.5; design record in `docs/rag-design.md` §10). Phase 18 is DONE
+> (plan §6, "as implemented" note in §6.5).
 
 ---
 
@@ -598,6 +602,52 @@ Repo root: `f:\_coding\ai_drive`.
   Tests: `tests/integration/rag-scope.test.ts` (incl. the pre-Phase-17 column migration) +
   chat-ipc + renderer (ChatHomeNav, DocumentsScreen). Gate: typecheck clean, 499 tests, build
   green.
+- **Phase 18 — in-app model downloader (2026-06-10, plan
+  [`docs/post-mvp-functionality-plan.md`](docs/post-mvp-functionality-plan.md) §6; the revived
+  plan §12.3):**
+  1. **D3 RESOLVED (a) — `DEFAULT_POLICY.network.allowModelDownloads` is now `true`:** with no
+     policy file, the spec §3.6 user Settings toggle ("Allow internet access for model
+     downloads…", **default OFF**) is the effective downloads gate. Update checks + telemetry
+     stay denied with no toggle. `prepare-drive` keeps writing `allow_model_downloads: false`
+     in BOTH postures, so prepared drives stay download-disabled unless the builder edits
+     `config/policy.json` — the "policy only restricts, never expands" rule is preserved
+     verbatim (the default is the ceiling when no file restricts it).
+  2. **Triple gate, enforced in MAIN (plan §6.1):** policy ceiling ∧ `settings.allowNetwork`
+     (locked workspace ⇒ treated as off) ∧ a per-download confirmation (size, license +
+     `license_url`, upstream URL, and an explicit license-acknowledgement checkbox when
+     `license_review.status != approved` — the in-app `--accept-license`). `downloadModel`
+     re-checks gates 1–2 on every call; the renderer dialog is UX, not enforcement. The Models
+     screen explains WHY downloads are unavailable (policy vs. Settings) via the existing
+     `PolicyStatus` distinction.
+  3. **`services/downloads.ts` `DownloadManager`** — a job state machine over the REUSED
+     `assets.ts` seams (`planModelDownloads` with a new optional `hashStore`, `downloadToFile`,
+     `verifyDownloadedFile`): bytes land in `<weightPath>.part`, renamed into place ONLY after
+     the hash verifies; a mismatch deletes the partial + fails the job; a placeholder expected
+     hash completes but flags the job `unverified` (checksum honesty, R5). Cancel keeps the
+     `.part`; the next start resumes via a `Range` header (206 appends, a 200 restarts cleanly
+     — `downloadToFile` only appends when the server actually honoured the Range). On success
+     the path's checksum-cache entry is invalidated. **One download at a time.** Jobs are
+     in-memory (the Phase-4 import-job precedent).
+  4. **`downloadToFile` seam extended (additive):** `DownloadDeps` gained `signal`, `headers`,
+     `append` (append iff 206), `onResponse({status, contentLength})`; it now returns
+     `{ status, received, contentLength }`. On a stream error the write side is `end()`ed (not
+     destroyed) so the received prefix flushes — it IS the resume prefix. Existing callers
+     (`fetchAndVerify`, scripts' planning) are unchanged.
+  5. **IPC = async-with-polling, no new event channels:** `downloadModel(modelId,
+     {licenseAccepted?})` → `DownloadJob`, `getDownloadJob(jobId)`, `cancelDownload(jobId)`
+     (`downloads:start/get/cancel`) in `ipc/registerDownloadIpc.ts`; production injects the
+     global `fetch`, tests inject a fake (CI stays zero-network — the gate tests prove a closed
+     gate never reaches the fetch seam). `ModelInfo` gained an optional `download`
+     (`ModelDownloadInfo { url, sizeBytes, licenseUrl, licenseApproved }`) so the renderer can
+     populate the confirmation without a fourth IPC.
+  6. **Offline guarantee unchanged:** no update checks, no catalog, no background anything; a
+     sanctioned download session is by definition not `offlineMode`, so the offline guard/CSP
+     posture stays as-is (accepted cosmetic edge in `known-limitations.md`: the startup-installed
+     detection-only tripwire logs a notice if the toggle is flipped and a download runs in the
+     same session).
+  Tests: `tests/integration/downloads.test.ts` (14) + `download-ipc.test.ts` (6) +
+  `tests/renderer/ModelsScreen.test.tsx` (6) + updated `policy.test.ts` for the new default.
+  Gate: typecheck clean, 525 tests, build green.
 
 ---
 
@@ -638,7 +688,9 @@ channel (Phase 15, `EVENTS.runtimeNotice`, preload `onRuntimeNotice`) +
 `deleteConversation` (`chat:deleteConversation`), `verifyModel` (`models:verify`) and
 `previewDocument` (`docs:preview`) from the post-MVP UX polish rounds +
 `updateConversationScope` (`chat:updateScope`, Phase 17 — replace/clear a documents
-conversation's "ask selected documents" scope).
+conversation's "ask selected documents" scope) +
+`downloadModel`/`getDownloadJob`/`cancelDownload` (`downloads:start/get/cancel`, Phase 18 —
+the in-app model downloader, async-with-polling).
 (`pickDocuments` + `reindexDocument` are Phase-4 additions to the `IPC` registry beyond the spec
 §9.1 list — picker + re-index UX; `getPolicy` is a Phase-8 addition; the four `workspace:*` channels
 are Phase-9 additions.) `createConversation` now also accepts an optional `mode`
@@ -987,9 +1039,29 @@ stop, regenerate, per-message copy, and the no-runtime empty state.
 - `prepare-drive.{ps1,sh}` gained `-WithAssets`/`--with-assets` (+ forwards `-AcceptLicense`): after the
   layout, runs `fetch-models` + `fetch-runtime` so one command yields a launch-ready drive. Without the
   flag, behaviour is unchanged. Then points the user at `verify-models --generate`.
-✅ **In-app downloader (plan §12.3) = DEFERRED** (not required for DIY acceptance; deny-by-default + the
-  policy/`allowNetwork` gates are documented for when it lands). **Real downloads + USB-drive launch =
-  manual (R5).**
+✅ **In-app downloader (plan §12.3)** — ~~deferred~~ **shipped in Phase 18** (see the contract
+  section below). **Real downloads + USB-drive launch = manual (R5).**
+
+### In-app model downloader (Phase 18 live)
+✅ **Types** (`shared/types.ts`): `DownloadJobStatus = 'queued'|'downloading'|'verifying'|'done'|
+  'failed'|'cancelled'`; `DownloadJob { jobId, modelId, status, receivedBytes, totalBytes,
+  unverified, error }` (`unverified` = placeholder-hash download, the model stays UNVERIFIED);
+  `ModelInfo.download?: ModelDownloadInfo { url, sizeBytes, licenseUrl, licenseApproved }`.
+✅ **`services/downloads.ts`** — `DownloadGates { policyAllows, settingAllows }`,
+  `assertDownloadAllowed(gates)` (friendly, cause-specific refusals: policy vs. Settings),
+  `partPath(dest)`, `DownloadManager({ fetchImpl?, log? })` with `start({rootPath, manifest,
+  gates, licenseAccepted?, hashStore?}) → Promise<DownloadJob>`, `get(jobId)`, `cancel(jobId)`
+  (keeps the `.part`), `activeJob()`. One live job at a time; `.part` → verify → rename;
+  mismatch deletes the partial; success invalidates the checksum-cache entry.
+✅ **`assets.ts` seam (additive):** `DownloadDeps += { signal?, headers?, append?, onResponse? }`,
+  `downloadToFile → DownloadToFileResult { status, received, contentLength }` (append only on a
+  real 206); `PlanModelOptions += { hashStore? }` (present multi-GB weights are not re-hashed).
+✅ **IPC** `ipc/registerDownloadIpc.ts` — `downloadModel(modelId, {licenseAccepted?})`,
+  `getDownloadJob(jobId)`, `cancelDownload(jobId)`; gates re-read per call (policy from disk,
+  setting from the possibly-locked DB ⇒ off). Preload exposes all three. **Renderer:**
+  ModelsScreen Download button (missing/checksum_failed models with a manifest `download`
+  block), gate explanations, the confirmation modal (size/license/URL + license-ack checkbox),
+  progress + cancel via 1 s polling; SettingsScreen hint updated.
 
 ### Plug-and-play distribution (Phase 13 live)
 ✅ **`services/launcher.ts`** — `resolveDriveRootFromLauncher(launcherPath, flavor?: 'win32'|'posix'|
@@ -1108,16 +1180,17 @@ items are **MANUAL acceptance only** (R2/R5/R7 + the GPU hardware matrix). In ro
      with Wi-Fi off. The real GGUF download + the live run are the one manual step.
 3. **New functionality (planned):** see
    [`docs/post-mvp-functionality-plan.md`](docs/post-mvp-functionality-plan.md) — Phases 17–20
-   toward the Office/Knowledge edition (RAG trust & document-scoped asking → in-app model
-   downloader (the revived plan §12.3) → audit log on `runtime_events` → Fast/Balanced/Deep
-   answer-depth modes), with wave-2 outlines (reranker/hybrid retrieval, signed offline update
-   bundles). **Phase 17 is DONE** (see §3); next up is **Phase 18 (in-app model downloader)**,
-   whose D3 decision (downloads policy semantics) is now RESOLVED in the plan — flip
-   `DEFAULT_POLICY.network.allowModelDownloads` to true, commercial drives keep deny. Smaller
-   leftovers: an icon/`buildResources` for electron-builder; ANN vector index only if a real
-   corpus outgrows the linear scan (plan §9 item 4).
+   toward the Office/Knowledge edition, with wave-2 outlines (reranker/hybrid retrieval, signed
+   offline update bundles). **Phases 17 (RAG trust & scoped asking) and 18 (in-app model
+   downloader) are DONE** (see §3); next up is **Phase 19 (audit log on `runtime_events`)** —
+   which also wires the Phase-18 `download_started/verified/failed` events — then **Phase 20
+   (Fast/Balanced/Deep answer-depth modes**, open decisions D4/D5 to resolve at start). New
+   manual-acceptance item from Phase 18: a real in-app download of the 4B on the `D:\` test
+   drive incl. a mid-download cancel → resume (plan §11). Smaller leftovers: an
+   icon/`buildResources` for electron-builder; ANN vector index only if a real corpus outgrows
+   the linear scan (plan §9 item 4).
 
-**Current gate (2026-06-10, post-Phase-17): typecheck clean, 499/499 tests pass (+4 manual GPU
+**Current gate (2026-06-10, post-Phase-18): typecheck clean, 525/525 tests pass (+4 manual GPU
 smoke tests, skipped unless `PAID_GPU_SMOKE` is set), `npm run build` green.** The per-phase gate
 history (test counts, bundle sizes, per-phase test inventories) lives in git history.
 

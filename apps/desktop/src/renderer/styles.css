@@ -154,6 +154,10 @@ h2 { font-size: 15px; margin: 0 0 12px; }
 .model-meta { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 4px 14px; font-size: 12px; color: var(--muted); }
 .model-meta b { color: var(--text); font-weight: 500; }
 .model-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+/* In-app model download progress (Phase 18). */
+.download-progress { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+.download-progress progress { flex: 1 1 160px; min-width: 120px; accent-color: var(--accent); }
+.download-progress .hint { margin: 0; flex-basis: 100%; }
 .btn.sm { padding: 5px 11px; font-size: 12px; }
 .btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .btn:disabled:hover { border-color: var(--border); }

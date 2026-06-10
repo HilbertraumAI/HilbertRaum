@@ -9,7 +9,7 @@ import {
   type ModelManifest,
   type ModelRole
 } from '../../shared/manifest'
-import type { HardwareProfile, ModelInfo, ModelState } from '../../shared/types'
+import type { HardwareProfile, ModelDownloadInfo, ModelInfo, ModelState } from '../../shared/types'
 import type { Db } from './db'
 import { getSettings, updateSettings } from './settings'
 
@@ -329,6 +329,17 @@ function toModelInfo(
   startableAsMock: boolean,
   insufficientRam: boolean
 ): ModelInfo {
+  // Surface the manifest's optional download block (Phase 18): the renderer's
+  // per-download confirmation needs size, URL, license link, and whether an explicit
+  // license acknowledgement is required (license_review not approved).
+  const download: ModelDownloadInfo | undefined = manifest.download
+    ? {
+        url: manifest.download.url,
+        sizeBytes: manifest.download.sizeBytes,
+        licenseUrl: manifest.download.licenseUrl,
+        licenseApproved: manifest.licenseReview.status === 'approved'
+      }
+    : undefined
   return {
     id: manifest.id,
     displayName: manifest.displayName,
@@ -345,7 +356,8 @@ function toModelInfo(
     state,
     recommended,
     startableAsMock,
-    insufficientRam
+    insufficientRam,
+    ...(download ? { download } : {})
   }
 }
 

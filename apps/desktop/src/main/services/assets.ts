@@ -5,7 +5,7 @@ import { dirname, join, resolve, sep } from 'node:path'
 import { Readable } from 'node:stream'
 import { isRealSha256, type ModelManifest } from '../../shared/manifest'
 import type { RuntimeBuild, RuntimeOs, RuntimeSources } from '../../shared/runtime-sources'
-import { sha256File, verifyChecksum, weightPath } from './models'
+import { sha256File, verifyChecksum, weightPath, type HashStore } from './models'
 
 // Asset loader — the CANONICAL, unit-tested reference for the DIY `fetch-*` scripts
 // (Phase 12; see docs/provisioning-and-distribution-plan.md §12 + packaging.md).
@@ -15,11 +15,12 @@ import { sha256File, verifyChecksum, weightPath } from './models'
 // {ps1,sh}` re-implement the SAME plan natively so a drive can be provisioned on a fresh
 // machine with no Node/npm. Keep the two in sync; this file is the source of truth.
 //
-// BUILD-TIME NETWORK, NOT RUNTIME: the actual download runs on the drive-builder's
-// online machine (in the scripts, or via the injected `fetchImpl` below). The app itself
-// never auto-downloads — the optional in-app path (§12.3) stays policy-gated +
-// deny-by-default. Planning/selection/verify here are network-free (only fs + hashing),
-// so the vitest suite makes ZERO network calls.
+// NETWORK IS EXPLICIT, NEVER AUTOMATIC: the scripts run on the drive-builder's online
+// machine at build time, and the in-app downloader (`downloads.ts`, Phase 18) drives the
+// injected-`fetchImpl` seam below only after its gates pass (policy ceiling ∧ the
+// default-off user setting ∧ a per-download confirmation). The app never auto-downloads.
+// Planning/selection/verify here are network-free (only fs + hashing), so the vitest
+// suite makes ZERO network calls.
 
 // ---- Model download planning -------------------------------------------------------
 
@@ -52,6 +53,8 @@ export interface PlanModelOptions {
   only?: string
   /** Override the license-review gate (the `--accept-license` flag). */
   acceptLicense?: boolean
+  /** Optional persistent hash cache so a present multi-GB weight is not re-hashed. */
+  hashStore?: HashStore
 }
 
 /**
@@ -77,7 +80,7 @@ export async function planModelDownloads(
     const licenseApproved = manifest.licenseReview.status === 'approved'
 
     // Is the weight already present + verifiable?
-    const check = await verifyChecksum(dest, expectedSha256)
+    const check = await verifyChecksum(dest, expectedSha256, opts.hashStore)
     let status: ModelTaskStatus
     if (check.exists && check.matched === true) {
       status = 'present-verified'
@@ -248,31 +251,64 @@ export type FetchFn = typeof fetch
 export interface DownloadDeps {
   /** Injected fetch — tests supply a fake; production passes the global `fetch`. */
   fetchImpl?: FetchFn
-  /** Progress callback (bytes received so far). */
+  /** Progress callback (bytes received so far BY THIS CALL — excludes a resumed prefix). */
   onProgress?: (received: number) => void
+  /** Abort signal — cancels the request + stream (Phase 18 in-app cancel). */
+  signal?: AbortSignal
+  /** Extra request headers (Phase 18 `Range` resume). */
+  headers?: Record<string, string>
+  /**
+   * Resume mode (Phase 18): when true AND the server answered 206 Partial Content, the
+   * response is APPENDED to `dest`; a 200 (server ignored the Range header) truncates
+   * and restarts. Default false = always truncate (the original Phase-12 behaviour).
+   */
+  append?: boolean
+  /** Called once with the response metadata before any body bytes stream. */
+  onResponse?: (info: { status: number; contentLength: number | null }) => void
+}
+
+export interface DownloadToFileResult {
+  /** HTTP status (206 = the server honoured a `Range` request). */
+  status: number
+  /** Bytes written by THIS call (excludes a resumed `.part` prefix). */
+  received: number
+  /** The response's Content-Length (bytes in THIS response), or null when absent. */
+  contentLength: number | null
 }
 
 /**
  * Stream a URL to a destination file (creating parent dirs). This is the network seam;
- * the DIY scripts use the OS-native downloader instead, but a future in-app downloader
- * (§12.3) and the tests drive this with an injected `fetchImpl`. Throws on a non-OK HTTP
- * status. NOTE: this overwrites — resume is handled by the native scripts (`curl -C -`).
+ * the DIY scripts use the OS-native downloader instead, while the in-app downloader
+ * (`downloads.ts`, Phase 18) and the tests drive this with an injected `fetchImpl`.
+ * Throws on a non-OK HTTP status. Overwrites by default; see `DownloadDeps.append` for
+ * the Range-resume mode (the native scripts resume via `curl -C -` instead).
  */
 export async function downloadToFile(
   url: string,
   dest: string,
   deps: DownloadDeps = {}
-): Promise<void> {
+): Promise<DownloadToFileResult> {
   const doFetch = deps.fetchImpl ?? fetch
-  const res = await doFetch(url)
+  const res = await doFetch(url, {
+    ...(deps.headers ? { headers: deps.headers } : {}),
+    ...(deps.signal ? { signal: deps.signal } : {})
+  })
   if (!res.ok) {
     throw new Error(`Download failed: HTTP ${res.status} for ${url}`)
   }
   if (!res.body) {
     throw new Error(`Download failed: empty response body for ${url}`)
   }
+  const lengthHeader = res.headers?.get?.('content-length')
+  const contentLength = lengthHeader != null && /^\d+$/.test(lengthHeader)
+    ? Number(lengthHeader)
+    : null
+  deps.onResponse?.({ status: res.status, contentLength })
   await mkdir(dirname(dest), { recursive: true })
-  const out = createWriteStream(dest)
+  // Append only when the caller asked to resume AND the server actually honoured the
+  // Range request — appending a full 200 body onto a partial file would corrupt it.
+  const append = deps.append === true && res.status === 206
+  const out = createWriteStream(dest, { flags: append ? 'a' : 'w' })
   let received = 0
   const nodeStream = Readable.fromWeb(res.body as Parameters<typeof Readable.fromWeb>[0])
   await new Promise<void>((resolvePromise, reject) => {
@@ -280,11 +316,23 @@ export async function downloadToFile(
       received += chunk.length
       deps.onProgress?.(received)
     })
-    nodeStream.on('error', reject)
-    out.on('error', reject)
+    // On either side failing (incl. an abort), close BOTH streams so no fd stays open
+    // on the partial file — a later resume/rename must not contend with a stale handle.
+    // `end()` (not `destroy()`) flushes the bytes that DID arrive: they are the resume
+    // prefix. The reject below settles the promise first, so the eventual 'finish' from
+    // end() is a no-op.
+    nodeStream.on('error', (err) => {
+      out.end()
+      reject(err)
+    })
+    out.on('error', (err) => {
+      nodeStream.destroy()
+      reject(err)
+    })
     out.on('finish', resolvePromise)
     nodeStream.pipe(out)
   })
+  return { status: res.status, received, contentLength }
 }
 
 /**

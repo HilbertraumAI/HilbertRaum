@@ -1,7 +1,7 @@
 # Post-MVP Functionality Plan — toward the Office/Knowledge edition
 
-_Status: **IN PROGRESS** — **Phase 17 IMPLEMENTED** (2026-06-10, deviations in §5.5);
-Phases 18–20 not started. Drafted 2026-06-10 from the gap analysis of spec §19 editions
+_Status: **IN PROGRESS** — **Phases 17 + 18 IMPLEMENTED** (2026-06-10, deviations in §5.5 /
+§6.5); Phases 19–20 not started. Drafted 2026-06-10 from the gap analysis of spec §19 editions
 vs. the feature-complete Lite MVP (Phases 0–16). Working paper per the CLAUDE.md doc lifecycle
 rule: once implemented, condense to a design record. Section numbers are intended to stay
 stable so code comments can cite them._
@@ -228,6 +228,31 @@ definition not `offlineMode`.
 | `renderer/screens/ModelsScreen.tsx` | Download button + progress + cancel + gate explanations + license confirm |
 | `renderer/screens/SettingsScreen.tsx` | surface the §3.6 checkbox copy verbatim |
 | `docs/model-policy.md`, `security-model.md`, `PRIVACY.md`, `known-limitations.md` | document the gates; remove the "no in-app downloader" gap |
+
+### 6.5 As implemented (2026-06-10) — deviations from the plan above
+
+Phase 18 shipped per §6.1–§6.4 (gate: typecheck clean, 525 tests, build green; BUILD_STATE §3
+has the full entry). Deviations/refinements:
+
+1. **D3 (a) landed exactly as resolved:** `DEFAULT_POLICY.network.allowModelDownloads = true`;
+   `prepare-drive` keeps writing deny in **both** its postures (not just commercial) — a dev
+   drive's builder lifts it by editing `config/policy.json`, while repo/DIY runs with no policy
+   file get the Settings-toggle gate.
+2. **`downloadToFile` was extended rather than wrapped** (additive `signal`/`headers`/`append`/
+   `onResponse` + a `{status, received, contentLength}` return): resume needs the append
+   decision to depend on the server's 206-vs-200 answer, which only the streaming site knows.
+   `fetchAndVerify` is not used by the downloader (it has no `.part` staging); the downloader
+   composes `downloadToFile` + `verifyDownloadedFile` and replicates mismatch-deletes-partial
+   on the `.part`.
+3. **`ModelInfo` gained an optional `download` block** (`url`, `sizeBytes`, `licenseUrl`,
+   `licenseApproved`) so the confirmation dialog needs no fourth IPC command; the IPC surface
+   stayed exactly `downloadModel`/`getDownloadJob`/`cancelDownload`.
+4. **`planModelDownloads` gained an optional `hashStore`** so a present-but-mismatched weight
+   re-check reads the persisted checksum cache instead of re-hashing multi-GB files.
+5. Audit events (§6.2 last bullet) remain for Phase 19, as planned. Accepted cosmetic edge
+   recorded in `known-limitations.md`: the startup-installed (detection-only) offline tripwire
+   is not re-evaluated mid-session, so a download sanctioned in the same session logs a
+   remote-connection notice.
 
 ---
 

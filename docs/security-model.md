@@ -1,6 +1,6 @@
 # Security model — Private AI Drive Lite
 
-_Last updated: 2026-06-09 (Phase 9)_
+_Last updated: 2026-06-10 (Phase 18 — the in-app downloader network surface)_
 
 This document describes the local threat model, the security baseline (spec §3.5), the offline
 posture (spec §3.6), how the privacy policy is loaded and enforced, and the **encrypted workspace**
@@ -51,11 +51,15 @@ firewall. Two layers make it visible and defensible:
 
 ### 1. Policy precedence (`services/policy.ts`)
 `config/policy.json` and `config/drive.json` are **optional** (developer runs fall back to defaults)
-and are merged over a **deny-by-default** `DEFAULT_POLICY` where **network and telemetry are off**.
-The policy models the spec §6 shape (`network` / `workspace` / `models` blocks).
+and are merged over `DEFAULT_POLICY`, where **update checks and telemetry are off** (no toggle
+exists for either) and — since Phase 18 (plan §13 D3, resolved (a)) — `allow_model_downloads` is
+**permitted**, so that with no policy file the spec §3.6 user toggle is the effective downloads
+gate. The policy models the spec §6 shape (`network` / `workspace` / `models` blocks).
 
 A (future signed) `policy.json` is **authoritative**: it can only **restrict**, never expand, what
-the user setting permits. The effective network permission is therefore:
+the user setting permits — `prepare-drive` keeps writing `allow_model_downloads: false` in both its
+postures, so prepared drives deny downloads unless the drive builder deliberately changes that. The
+effective network permission is:
 
 ```
 networkAllowedByPolicy = policy.network.allowModelDownloads || policy.network.allowUpdateChecks
@@ -64,15 +68,20 @@ offlineMode            = !networkAllowed
 ```
 
 Consequences:
-- **No config files → offline.** The deny-by-default policy keeps the app offline even if the user
-  toggles `allowNetwork` on (there is no policy granting network).
+- **The shipped default is offline.** `allowNetwork` defaults OFF, so a fresh install/drive makes no
+  network calls; while the workspace is locked the setting is unreadable and treated as off.
 - **Policy forbids → offline**, regardless of the user toggle ("Network access disabled by policy").
-- **Policy permits + user opts in → network allowed** (the only path to any network use, today only
-  the future model-download feature).
+- **Policy permits + user opts in → network allowed** — used exclusively by the Phase-18 in-app
+  model downloader, which additionally requires a per-download confirmation (and an explicit
+  license acknowledgement for manifests whose `license_review` is not approved). The gates are
+  re-checked in the **main process** on every `downloadModel` call; the renderer dialog is UX, not
+  the enforcement layer. See [`model-policy.md`](model-policy.md) for the full flow
+  (`.part` staging, verify-before-rename, mismatch-deletes-partial, one download at a time).
 - **Telemetry is always off** — there is no toggle and the app emits none.
 
 The renderer distinguishes "off by choice" from "disabled by policy" via `PolicyStatus`
-(`getPolicy()` IPC) and shows it on the **Privacy & Offline** screen and the sidebar badge.
+(`getPolicy()` IPC) and shows it on the **Privacy & Offline** screen and the sidebar badge; the
+Models screen uses the same distinction to explain why downloads are unavailable.
 
 ### 2. Startup self-check (`services/offlineGuard.ts`)
 At startup (`initBackend()`), `assertOfflinePosture()` logs the offline posture and, while offline,

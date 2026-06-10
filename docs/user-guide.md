@@ -1,6 +1,6 @@
 # Private AI Drive Lite — User Guide
 
-_Last updated: 2026-06-09 (Phase 13)_
+_Last updated: 2026-06-10 (Phase 18)_
 
 Private AI Drive Lite is a private AI workspace that runs **entirely on your laptop**, from
 a portable drive. Your prompts, documents, embeddings, and chat history stay local. There is
@@ -102,6 +102,27 @@ can turn this off under **Settings → Load the selected model automatically**.
 > a **Start mock runtime** button (in developer mode) that runs a built-in mock model. Mock
 > answers are placeholders, not real AI responses — add a real model file for genuine answers
 > (see Troubleshooting).
+
+### Downloading a model (optional, off by default)
+
+A model marked **Not downloaded** can be fetched from inside the app — for example the larger
+8B model after you upgrade to a 16 GB laptop. This is the **only** thing the app ever uses the
+internet for, and it never happens by itself:
+
+1. Open **Settings** and turn on **Allow internet access for model downloads and updates**
+   (it is off by default; the app is fully usable without it).
+2. On **Models**, click **Download** on the model you want. A confirmation shows the size,
+   the license (with a link), and the address the file comes from. If the model's license
+   hasn't been pre-reviewed, you'll also tick a box accepting it.
+3. The download shows its progress on the model's card; you can **Cancel** any time. A
+   cancelled or interrupted download **resumes where it stopped** when you start it again.
+4. The file is checksum-verified before the app will use it — a corrupted download is
+   discarded automatically, never silently kept.
+
+One model downloads at a time (they are large). If the Download button is greyed out, the
+screen tells you why: either the Settings toggle is off, or this drive's policy has downloads
+disabled (common on preconfigured commercial drives — use the drive's update path instead).
+Nothing about you or your documents is ever sent; the app only fetches the file.
 
 ### Speed: graphics-card acceleration (automatic)
 

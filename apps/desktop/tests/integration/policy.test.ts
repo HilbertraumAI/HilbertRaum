@@ -71,9 +71,12 @@ describe('parsePolicy', () => {
   })
 
   it('keeps base defaults for any field the file omits or sets to a non-boolean', () => {
-    const p = parsePolicy(JSON.stringify({ network: { allow_model_downloads: 'yes' } }))
-    // "yes" is not a boolean → default (false) survives.
-    expect(p.network.allowModelDownloads).toBe(false)
+    const p = parsePolicy(
+      JSON.stringify({ network: { allow_model_downloads: 'yes', allow_update_checks: 'yes' } })
+    )
+    // "yes" is not a boolean → the defaults survive (junk can never weaken the policy).
+    expect(p.network.allowModelDownloads).toBe(DEFAULT_POLICY.network.allowModelDownloads)
+    expect(p.network.allowUpdateChecks).toBe(false)
     expect(p.models.requireManifest).toBe(DEFAULT_POLICY.models.requireManifest)
   })
 })
@@ -110,11 +113,20 @@ describe('loadPolicy', () => {
 // ---- deny-by-default + effective permission -------------------------------------
 
 describe('resolveNetwork (effective = policy ∧ setting)', () => {
-  it('deny-by-default: with no policy file, network is off even if the user setting is on', () => {
-    const net = resolveNetwork(DEFAULT_POLICY, true)
-    expect(net.networkAllowedByPolicy).toBe(false)
-    expect(net.networkAllowed).toBe(false)
-    expect(net.offlineMode).toBe(true)
+  it('with no policy file, the default-off user setting is the gate (Phase 18, D3a)', () => {
+    // DEFAULT_POLICY permits model downloads since Phase 18 (plan §13 D3 resolved (a)):
+    // the spec §3.6 Settings toggle is the effective gate when no policy file restricts.
+    // Update checks + telemetry stay denied with no toggle at all, and the app still
+    // ships offline because the SETTING defaults to off.
+    expect(DEFAULT_POLICY.network.allowUpdateChecks).toBe(false)
+    expect(DEFAULT_POLICY.network.allowTelemetry).toBe(false)
+    const off = resolveNetwork(DEFAULT_POLICY, false) // the shipped default
+    expect(off.networkAllowed).toBe(false)
+    expect(off.offlineMode).toBe(true)
+    const on = resolveNetwork(DEFAULT_POLICY, true) // explicit user opt-in
+    expect(on.networkAllowedByPolicy).toBe(true)
+    expect(on.networkAllowed).toBe(true)
+    expect(on.offlineMode).toBe(false)
   })
 
   it('policy forbids ⇒ off even when the user setting is on', () => {

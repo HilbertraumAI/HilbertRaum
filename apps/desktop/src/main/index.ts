@@ -11,6 +11,7 @@ import { registerWorkspaceIpc } from './ipc/registerWorkspaceIpc'
 import { maybeAutoStartActiveModel, registerModelIpc } from './ipc/registerModelIpc'
 import { registerChatIpc } from './ipc/registerChatIpc'
 import { registerDocsIpc } from './ipc/registerDocsIpc'
+import { registerDownloadIpc } from './ipc/registerDownloadIpc'
 import { registerRagIpc } from './ipc/registerRagIpc'
 import { registerBenchmarkIpc, maybeRunFirstBenchmark } from './ipc/registerBenchmarkIpc'
 import { RuntimeManager } from './services/runtime'
@@ -179,6 +180,7 @@ function initBackend(): void {
   registerModelIpc(ctx)
   registerChatIpc(ctx)
   registerDocsIpc(ctx)
+  registerDownloadIpc(ctx)
   registerRagIpc(ctx)
   registerBenchmarkIpc(ctx)
 

@@ -8,6 +8,7 @@ import type {
   Conversation,
   DocumentInfo,
   DocumentPreview,
+  DownloadJob,
   DriveStatus,
   ImportJob,
   ImportJobStatus,
@@ -66,6 +67,18 @@ const api = {
   /** The drive's installed sidecar build (.paid-runtime.json), or null (Phase 16). */
   getRuntimeInstall: (): Promise<RuntimeInstallInfo | null> =>
     ipcRenderer.invoke(IPC.getRuntimeInstall),
+
+  // ---- In-app model downloader (Phase 18) ----
+  /** Start downloading one model's weights. Gated in the main process (policy ∧ setting);
+   *  `licenseAccepted` carries the confirmation dialog's explicit license acknowledgement. */
+  downloadModel: (modelId: string, opts?: { licenseAccepted?: boolean }): Promise<DownloadJob> =>
+    ipcRenderer.invoke(IPC.downloadModel, modelId, opts),
+  /** Poll one download job's progress/status (async-with-polling, like imports). */
+  getDownloadJob: (jobId: string): Promise<DownloadJob> =>
+    ipcRenderer.invoke(IPC.getDownloadJob, jobId),
+  /** Cancel an in-flight download; the partial file is kept for a future resume. */
+  cancelDownload: (jobId: string): Promise<DownloadJob> =>
+    ipcRenderer.invoke(IPC.cancelDownload, jobId),
 
   // ---- Hardware benchmark (Phase 7) ----
   /** Detect hardware + measure drive speed, persist + return the result. Strictly local. */

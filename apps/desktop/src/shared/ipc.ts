@@ -45,6 +45,13 @@ export const IPC = {
   /** Read-only in-app preview: re-extract the stored copy's text (post-MVP). */
   previewDocument: 'docs:preview',
   askDocuments: 'rag:ask',
+  // Phase 18 — in-app model downloader (async with polling, the Phase-4 import precedent)
+  /** Start downloading one model's weights (gated: policy ∧ setting ∧ confirmation). */
+  downloadModel: 'downloads:start',
+  /** Poll one download job's progress/status. */
+  getDownloadJob: 'downloads:get',
+  /** Cancel an in-flight download (the `.part` file is kept for a future resume). */
+  cancelDownload: 'downloads:cancel',
   // Phase 7
   runBenchmark: 'benchmark:run',
   /**

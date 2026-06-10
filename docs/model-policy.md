@@ -1,6 +1,7 @@
 # Model Policy — Private AI Drive Lite
 
-_Last updated: 2026-06-10 (runtime pinned to llama.cpp b9585; all license reviews approved)_
+_Last updated: 2026-06-10 (Phase 18: in-app model downloader; runtime pinned to llama.cpp b9585;
+all license reviews approved)_
 
 ## Principles
 - **No model weights in git.** Weights live under `models/` on the drive (git-ignored).
@@ -108,10 +109,39 @@ not `approved` unless `--accept-license`/`-AcceptLicense` is passed (the license
 printed first). The DIY path pulls from the **upstream source**, which sidesteps redistribution; a
 *sold* drive still needs a redistribution-permitting license recorded as `approved`.
 
-> **Build-time network, not runtime.** The `fetch-*` scripts run on the drive-**builder's** online
-> machine. The app itself never auto-downloads — the optional in-app downloader (plan §12.3,
-> deferred) stays policy-gated (`network.allow_model_downloads`, deny-by-default) **and** behind the
-> user `allowNetwork` setting. The offline guarantee is unchanged.
+> **Network is explicit, never automatic.** The `fetch-*` scripts run on the drive-**builder's**
+> online machine. The app itself never auto-downloads — the in-app downloader below runs only when
+> every gate passes, per explicit user click.
+
+### The in-app downloader (Phase 18 — plan §12.3 revived)
+
+A model that is **missing** (or failed its checksum) and whose manifest carries a `download` block
+can be fetched from the **Models screen**. Three gates, ALL required, re-checked in the main
+process on every start (post-mvp-functionality-plan §6.1):
+
+1. **Policy ceiling** — `policy.network.allow_model_downloads`. Since Phase 18 the **default**
+   (no `policy.json`) permits downloads (plan §13 D3, resolved (a)) so the user toggle below is the
+   effective gate on DIY/developer setups; `prepare-drive` keeps writing **deny** in both its
+   postures, so prepared drives stay download-disabled unless the drive builder edits
+   `config/policy.json`. Policy only restricts, never expands.
+2. **User setting** — the spec §3.6 Settings checkbox ("Allow internet access for model
+   downloads and updates"), **default OFF**. While the workspace is locked the setting is
+   unreadable and treated as off.
+3. **Per-download confirmation** — a dialog showing size, license (+ `license_url` link), and the
+   upstream URL. When `license_review.status != approved`, an explicit license-acknowledgement
+   checkbox is additionally required (the in-app mirror of `--accept-license`).
+
+When gate 1 or 2 fails, the Models screen says **why** (disabled by the drive's policy vs. the
+Settings toggle). Mechanics (`services/downloads.ts`, reusing the `assets.ts` seams):
+async-with-polling job (`downloadModel`/`getDownloadJob`/`cancelDownload` IPC), **one download at a
+time**, bytes land in `<weight>.part` and are renamed into place **only after the SHA-256
+verifies**; a mismatch deletes the partial and fails the job; a placeholder manifest hash completes
+the download but leaves the model **UNVERIFIED** (checksum honesty — capture a real hash with
+`verify-models --generate`). Cancel keeps the `.part`; the next attempt resumes with a `Range`
+header (best-effort — a server without range support restarts cleanly). On success the persisted
+checksum-cache entry for that path is invalidated so the fresh file is re-hashed. The offline
+guarantee is unchanged: no update checks, no catalog/browsing (only manifests already on the
+drive), no background anything.
 
 ### `runtime-sources.yaml` (the sidecar, not a model)
 `model-manifests/runtime-sources.yaml` pins one `ggml-org/llama.cpp` release and lists one prebuilt

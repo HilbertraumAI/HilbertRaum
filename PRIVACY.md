@@ -1,6 +1,6 @@
 # Privacy Notice — Private AI Drive Lite
 
-_Last updated: 2026-06-09 (Phase 8)_
+_Last updated: 2026-06-10 (Phase 18 — in-app model downloader)_
 
 Private AI Drive Lite runs AI models **locally** on your laptop. This document explains, in plain
 language, what the app does and does not do with your data.
@@ -46,19 +46,27 @@ in Settings:
 [ ] Allow internet access for model downloads and updates
 ```
 
-Even with that setting on, network access is only used if a drive **policy** permits it. A signed
+Even with that setting on, network access is only used if a drive **policy** permits it. A
 `config/policy.json` can disable network entirely — it can only restrict, never expand, what the
 toggle allows. The effective state is `policy AND your setting`. Telemetry is **always off** and has
 no toggle. A startup self-check logs the offline posture and flags (logs, never sends) any attempt
 to reach a remote host while offline; local-only connections (`127.0.0.1`/`localhost`) are exempt.
 
-## Model downloads / updates caveat
+## Model downloads — the app's only network feature
 
-Today the app ships **no downloader at all** — the setting above is a forward-looking gate and
-enabling it changes nothing in the current version (models are added with the offline
-`fetch-models`/`prepare-drive` scripts on a separate machine). If an in-app downloader ships
-later, it will run only when that setting AND the drive policy permit it, and even then your
-prompts and documents are never transmitted.
+The **only** thing the app can use the internet for is fetching a model file you ask for, from the
+**Models** screen. Three things must all be true before a single byte moves:
+
+1. The drive's policy permits model downloads (prepared commercial drives ship with this **off**).
+2. You turned on the Settings checkbox above (it is **off** by default).
+3. You confirmed that specific download in a dialog showing its size, license, and source address —
+   including explicitly accepting the model's license when it hasn't been pre-reviewed.
+
+The request goes only to the address printed in the model's local manifest; nothing about you, your
+prompts, or your documents is sent. There are **no update checks, no model catalog, and no
+background downloads** — with the checkbox off (or no internet at all) the app is fully usable and
+makes no network calls. Every downloaded file is checked against its expected checksum before the
+app will use it.
 
 ## Deleting your data
 

@@ -55,9 +55,17 @@ logs, best-effort shredding on SSDs, no password recovery — are documented in
   are parsed but unused.** In particular the bundled flag's intent (don't preload the big models on
   a commercial drive) is unimplemented — the pipeline fetches all six weights (~37 GB); curate with
   `fetch-models --only <id>`.
-- **No in-app model downloader** (plan §12.3, deferred). Provisioning is script-time on the
-  builder's machine; the policy (`network.allow_model_downloads`, deny-by-default) and the user
-  `allowNetwork` gate are already in place for when it lands.
+- ~~No in-app model downloader (plan §12.3, deferred)~~ **Shipped in Phase 18**
+  (post-mvp-functionality-plan §6): policy ∧ Settings-toggle ∧ per-download confirmation, `.part`
+  staging with verify-before-rename, Range resume, one download at a time. Accepted edges:
+  - **The startup offline tripwire is not re-evaluated mid-session.** Toggling `allowNetwork` on
+    and downloading in the same session leaves the (detection-only, never-blocking) guard
+    installed, so the sanctioned download is logged as a remote-connection notice. Cosmetic;
+    a restart re-derives the posture.
+  - **Download progress display is per-renderer-session.** The job itself runs in the main
+    process and survives navigation; after an app restart the progress card is gone but the kept
+    `.part` resumes on the next Download click.
+  - No audit-log records yet (`download_started/verified/failed` land with Phase 19).
 - **Drive updates are manual.** There is no spec §12.3 update mechanism; the `updates/` and
   `workspace/backups/` directories are not created. The manual procedure is documented in
   [`drive-layout.md`](drive-layout.md) ("Updating a drive").

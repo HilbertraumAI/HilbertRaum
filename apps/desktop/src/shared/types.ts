@@ -275,6 +275,57 @@ export interface ModelInfo {
    * the main process refuses to start installed weights that don't fit (post-MVP).
    */
   insufficientRam?: boolean
+  /**
+   * Upstream download metadata (the manifest's optional `download` block), present when
+   * the model CAN be fetched by the in-app downloader (Phase 18). The renderer needs it
+   * for the per-download confirmation (size, license link, URL, license acknowledgement).
+   */
+  download?: ModelDownloadInfo
+}
+
+/** What the per-download confirmation shows (from the manifest `download` block). */
+export interface ModelDownloadInfo {
+  url: string
+  sizeBytes: number | null
+  licenseUrl: string | null
+  /**
+   * `license_review.status === 'approved'`. When false, the confirmation dialog must
+   * collect an explicit license acknowledgement before the download may start (the
+   * in-app mirror of the fetch scripts' `--accept-license`).
+   */
+  licenseApproved: boolean
+}
+
+// ---- In-app model downloader (Phase 18, post-mvp-functionality-plan §6) ----
+
+export type DownloadJobStatus =
+  | 'queued'
+  | 'downloading'
+  | 'verifying'
+  | 'done'
+  | 'failed'
+  | 'cancelled'
+
+/**
+ * One in-app model download (async-with-polling, the Phase-4 import precedent): the
+ * renderer polls `getDownloadJob` to drive progress UI. One download runs at a time.
+ */
+export interface DownloadJob {
+  jobId: string
+  modelId: string
+  status: DownloadJobStatus
+  /** Bytes on disk so far (includes a resumed `.part` prefix). */
+  receivedBytes: number
+  /** Expected total bytes (manifest `size_bytes` or the server's Content-Length), or null. */
+  totalBytes: number | null
+  /**
+   * True when the job finished but the manifest hash is still a placeholder — the file
+   * is in place but the model stays UNVERIFIED (checksum honesty, R5): capture the real
+   * hash with `verify-models --generate`.
+   */
+  unverified: boolean
+  /** Friendly failure reason when status === 'failed'. */
+  error: string | null
 }
 
 // ---- Document preview (post-MVP) ----
