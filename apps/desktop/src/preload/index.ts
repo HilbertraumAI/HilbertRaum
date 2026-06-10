@@ -3,6 +3,7 @@ import { EVENTS, IPC, STREAM } from '../shared/ipc'
 import type {
   AppSettings,
   AppStatus,
+  AuditEvent,
   BenchmarkResult,
   ChatOptions,
   Conversation,
@@ -122,6 +123,13 @@ const api = {
     ipcRenderer.invoke(IPC.exportConversation, conversationId),
   /** Tail of the local log file (Diagnostics, spec §7.11). Local-only. */
   getLogTail: (): Promise<string[]> => ipcRenderer.invoke(IPC.getLogTail),
+
+  // ---- Audit log (Phase 19) ----
+  /** Page through the local activity log, newest-first (`beforeId` = "load more" cursor). */
+  getAuditEvents: (limit?: number, beforeId?: string | null): Promise<AuditEvent[]> =>
+    ipcRenderer.invoke(IPC.getAuditEvents, limit, beforeId),
+  /** Save the activity log to a user-chosen file; resolves with the path, or null on cancel. */
+  exportAuditLog: (): Promise<string | null> => ipcRenderer.invoke(IPC.exportAuditLog),
 
   // ---- RAG / document Q&A (Phase 6) ----
   /** Stream a document-grounded answer; resolves with the final assistant message

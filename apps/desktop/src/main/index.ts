@@ -14,6 +14,8 @@ import { registerDocsIpc } from './ipc/registerDocsIpc'
 import { registerDownloadIpc } from './ipc/registerDownloadIpc'
 import { registerRagIpc } from './ipc/registerRagIpc'
 import { registerBenchmarkIpc, maybeRunFirstBenchmark } from './ipc/registerBenchmarkIpc'
+import { registerAuditIpc } from './ipc/registerAuditIpc'
+import { createAuditRecorder } from './services/audit'
 import { RuntimeManager } from './services/runtime'
 import { createGpuCrashAutoFallback, createSelectingRuntimeFactory } from './services/runtime/factory'
 import { createCachedGpuProbe } from './services/runtime/gpu'
@@ -80,7 +82,11 @@ function initBackend(): void {
   // Phase 9: the workspace controller owns the DB lifecycle. In plaintext_dev mode the DB
   // opens immediately (current dev behavior); in encrypted mode it stays locked until the
   // unlock gate provides a password (the DB + key live only in memory while unlocked).
-  const { policy } = loadPolicy(paths.configPath, (m) => log.warn(m))
+  const policyWarnings: string[] = []
+  const { policy } = loadPolicy(paths.configPath, (m) => {
+    log.warn(m)
+    policyWarnings.push(m)
+  })
   const workspace = new WorkspaceController(
     vaultPathsFrom({ configPath: paths.configPath, dbPath: paths.dbPath }),
     policy,
@@ -88,6 +94,13 @@ function initBackend(): void {
   )
   workspace.init()
   log.info('Workspace state', workspace.getState())
+
+  // Phase 19: the app-wide audit recorder (services/audit.ts). Backed by the workspace
+  // DB getter — while the vault is locked, events buffer in memory and flush after the
+  // next unlock (which is how `workspace_unlock_failed` survives at all). Startup policy
+  // warnings are the first thing on the record.
+  const audit = createAuditRecorder(() => workspace.requireDb())
+  for (const warning of policyWarnings) audit('policy_warning', warning)
 
   const manifestsDir = resolveManifestsDir(app.getAppPath(), process.env.PAID_MANIFESTS_DIR)
   log.info('Model manifests directory', { manifestsDir })
@@ -117,6 +130,10 @@ function initBackend(): void {
       log.warn('Could not persist GPU fallback state', { error: String(err) })
     }
     log.warn('GPU start/run failed — continuing in compatibility (CPU) mode', { reason })
+    // Audit (Phase 19): the reason is sidecar stderr/health output, never user content.
+    audit('runtime_fallback', 'Switched to compatibility (CPU) mode', {
+      reason: reason.slice(0, 500)
+    })
   }
   const notifyRenderer = (message: string): void => {
     for (const win of BrowserWindow.getAllWindows()) {
@@ -129,7 +146,14 @@ function initBackend(): void {
   let runtimeRef: RuntimeManager | null = null
   const gpuCrashFallback = createGpuCrashAutoFallback({
     restart: (opts) => runtimeRef?.start(opts) ?? Promise.resolve(),
-    persistFailure: persistGpuFailure,
+    persistFailure: (reason) => {
+      // A mid-session crash is its own audit event; persistGpuFailure then records the
+      // compatibility-mode fallback it triggers.
+      audit('runtime_crashed', 'Model runtime stopped unexpectedly', {
+        reason: reason.slice(0, 500)
+      })
+      persistGpuFailure(reason)
+    },
     notify: notifyRenderer
   })
   const readGpuSetting = <T>(pick: (s: ReturnType<typeof getSettings>) => T, fallback: T): T => {
@@ -173,7 +197,8 @@ function initBackend(): void {
     embedder,
     manifestsDir,
     probeGpu: gpuProbe,
-    isDev
+    isDev,
+    audit
   }
   registerCoreIpc(ctx)
   registerWorkspaceIpc(ctx)
@@ -183,6 +208,7 @@ function initBackend(): void {
   registerDownloadIpc(ctx)
   registerRagIpc(ctx)
   registerBenchmarkIpc(ctx)
+  registerAuditIpc(ctx)
 
   // Spec §2.1 first-run benchmark (M12): a plaintext-dev workspace is already open at
   // startup — benchmark it in the background if it never was. Encrypted workspaces get
@@ -209,7 +235,12 @@ function initBackend(): void {
     posture: { offline: status.offlineMode, networkAllowed: status.networkAllowed },
     installGuard: true,
     log: (m, meta) => log.info(m, meta),
-    warn: (m, meta) => log.warn(m, meta)
+    warn: (m, meta) => log.warn(m, meta),
+    // Audit (Phase 19): a tripped offline guard goes on the user's local record too.
+    onViolation: (host) =>
+      audit('offline_guard_violation', 'A remote connection attempt was detected while offline', {
+        host
+      })
   })
 }
 

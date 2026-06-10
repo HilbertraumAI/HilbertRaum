@@ -76,11 +76,16 @@ export async function startModelRuntime(ctx: AppContext, modelId: string): Promi
   }
 
   log.info('Start runtime', { modelId, state })
-  return ctx.runtime.start({
+  const status = await ctx.runtime.start({
     modelId,
     modelPath: weightPath(ctx.paths.rootPath, found.manifest),
     contextTokens: found.manifest.recommendedContextTokens || s.contextTokens
   })
+  ctx.audit?.('runtime_started', `Model runtime started: ${modelId}`, {
+    modelId,
+    backend: status.backend ?? null
+  })
+  return status
 }
 
 /**
@@ -138,7 +143,9 @@ export function registerModelIpc(ctx: AppContext): void {
   ipcMain.handle(IPC.selectModel, (_e, modelId: string) => {
     if (!ctx.manifestsDir) throw new Error('No model-manifests directory found')
     log.info('Select model', { modelId })
-    return selectModel(ctx.db, ctx.manifestsDir, modelId)
+    const result = selectModel(ctx.db, ctx.manifestsDir, modelId)
+    ctx.audit?.('model_selected', `Model selected: ${modelId}`, { modelId })
+    return result
   })
 
   // Forced re-verify (the "Verify checksum" button): drop the cached hash for this
@@ -156,6 +163,7 @@ export function registerModelIpc(ctx: AppContext): void {
       hashStore: store
     })
     log.info('Model re-verified', { modelId, state })
+    ctx.audit?.('model_verified', `Model checksum re-verified: ${modelId}`, { modelId, state })
     return state
   })
 
@@ -165,7 +173,11 @@ export function registerModelIpc(ctx: AppContext): void {
 
   ipcMain.handle(IPC.stopRuntime, async (): Promise<void> => {
     log.info('Stop runtime')
+    const modelId = ctx.runtime.activeModelId()
     await ctx.runtime.stop()
+    if (modelId) {
+      ctx.audit?.('runtime_stopped', `Model runtime stopped: ${modelId}`, { modelId })
+    }
   })
 
   // Read-only runtime state for the Diagnostics screen (spec §7.11 — audit M14).

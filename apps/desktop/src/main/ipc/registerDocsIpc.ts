@@ -121,6 +121,12 @@ export function registerDocsIpc(ctx: AppContext): void {
           const info = await processDocument(ctx.db, storeDir, id, ingestionDeps())
           if (info.status === 'failed') status.failed += 1
           else status.completed += 1
+          // Audit (Phase 19): filename + counts only — never the document's text.
+          ctx.audit?.('document_imported', `Document imported: ${info.title}`, {
+            documentId: id,
+            status: info.status,
+            chunkCount: info.chunkCount
+          })
         } catch (err) {
           status.failed += 1
           log.error('Document ingestion crashed', { id, error: String(err) })
@@ -164,6 +170,7 @@ export function registerDocsIpc(ctx: AppContext): void {
     requireNotProcessing(documentId)
     log.info('Delete document', { documentId })
     deleteDocument(ctx.db, documentId)
+    ctx.audit?.('document_deleted', 'Document deleted', { documentId })
   })
 
   // Read-only in-app preview (post-MVP): re-extracts the stored copy's text. Guarded
@@ -185,7 +192,12 @@ export function registerDocsIpc(ctx: AppContext): void {
     log.info('Re-index document', { documentId })
     processing.add(documentId)
     try {
-      return await reindexDocument(ctx.db, storeDir, documentId, ingestionDeps())
+      const info = await reindexDocument(ctx.db, storeDir, documentId, ingestionDeps())
+      ctx.audit?.('document_reindexed', `Document re-indexed: ${info.title}`, {
+        documentId,
+        status: info.status
+      })
+      return info
     } finally {
       processing.delete(documentId)
     }

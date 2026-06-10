@@ -83,6 +83,12 @@ logs, best-effort shredding on SSDs, no password recovery — are documented in
   not code generation — see the rule in [`../CONTRIBUTING.md`](../CONTRIBUTING.md).
 - Docs copied onto a prepared drive (user-guide, troubleshooting) contain repo-relative links that
   do not resolve when read from the drive.
+- **Audit log (Phase 19) accepted edges:** events recorded while the vault is locked are
+  buffered in memory only — quitting the app before the next unlock drops them (bounded buffer,
+  oldest dropped past 100). Lock-on-**quit** and the implicit stop during a model *switch* are
+  not audited (only the explicit "Lock now" / stop actions are). A download that completes
+  against a placeholder manifest hash records no `model_download_verified` event (checksum
+  honesty — the Models screen shows UNVERIFIED).
 
 ## GPU acceleration (Phases 14–16, [`gpu-support-plan.md`](gpu-support-plan.md))
 

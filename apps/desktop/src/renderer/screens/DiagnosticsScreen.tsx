@@ -2,11 +2,45 @@ import { useCallback, useEffect, useState } from 'react'
 import type {
   AppSettings,
   AppStatus,
+  AuditEvent,
+  AuditEventType,
   BenchmarkResult,
   DriveStatus,
   RuntimeInstallInfo,
   RuntimeStatus
 } from '@shared/types'
+
+/** How many activity entries each page load fetches. */
+const ACTIVITY_PAGE_SIZE = 50
+
+/** Friendly labels for the Activity panel's entries + type filter (§11.4 tone). */
+const AUDIT_TYPE_LABELS: Record<AuditEventType, string> = {
+  runtime_started: 'Model started',
+  runtime_stopped: 'Model stopped',
+  runtime_crashed: 'Model stopped unexpectedly',
+  runtime_fallback: 'Compatibility mode',
+  model_selected: 'Model selected',
+  model_verified: 'Model checksum checked',
+  model_download_started: 'Download started',
+  model_download_verified: 'Download verified',
+  model_download_failed: 'Download failed',
+  document_imported: 'Document imported',
+  document_reindexed: 'Document re-indexed',
+  document_deleted: 'Document deleted',
+  conversation_deleted: 'Conversation deleted',
+  conversation_exported: 'Conversation exported',
+  workspace_created: 'Workspace created',
+  workspace_unlocked: 'Workspace unlocked',
+  workspace_locked: 'Workspace locked',
+  workspace_unlock_failed: 'Unlock attempt failed',
+  settings_changed: 'Settings changed',
+  policy_warning: 'Policy notice',
+  offline_guard_violation: 'Network attempt noticed'
+}
+
+function auditLabel(type: AuditEventType): string {
+  return AUDIT_TYPE_LABELS[type] ?? type
+}
 
 /**
  * The "Acceleration" line (Phase 16, gpu-support-plan §8): the live backend when a
@@ -35,6 +69,12 @@ export function DiagnosticsScreen(): JSX.Element {
   const [showLogs, setShowLogs] = useState(false)
   const [running, setRunning] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // Activity panel (Phase 19): loaded on demand, paged via the beforeId cursor.
+  const [showActivity, setShowActivity] = useState(false)
+  const [events, setEvents] = useState<AuditEvent[] | null>(null)
+  const [moreAvailable, setMoreAvailable] = useState(false)
+  const [typeFilter, setTypeFilter] = useState<string>('all')
+  const [exportedTo, setExportedTo] = useState<string | null>(null)
 
   const refreshStatus = useCallback(async (): Promise<void> => {
     window.api?.getAppStatus().then(setApp).catch(() => setApp(null))
@@ -45,6 +85,38 @@ export function DiagnosticsScreen(): JSX.Element {
   const refreshLogs = useCallback(async (): Promise<void> => {
     window.api?.getLogTail().then(setLogTail).catch(() => setLogTail([]))
   }, [])
+
+  const loadActivity = useCallback(async (): Promise<void> => {
+    try {
+      const page = (await window.api?.getAuditEvents(ACTIVITY_PAGE_SIZE)) ?? []
+      setEvents(page)
+      setMoreAvailable(page.length === ACTIVITY_PAGE_SIZE)
+    } catch {
+      setEvents([])
+      setMoreAvailable(false)
+    }
+  }, [])
+
+  const loadMoreActivity = useCallback(async (): Promise<void> => {
+    const last = events?.[events.length - 1]
+    if (!last) return
+    try {
+      const page = (await window.api?.getAuditEvents(ACTIVITY_PAGE_SIZE, last.id)) ?? []
+      setEvents((prev) => [...(prev ?? []), ...page])
+      setMoreAvailable(page.length === ACTIVITY_PAGE_SIZE)
+    } catch {
+      setMoreAvailable(false)
+    }
+  }, [events])
+
+  async function exportActivity(): Promise<void> {
+    try {
+      const path = await window.api.exportAuditLog()
+      if (path) setExportedTo(path)
+    } catch {
+      setExportedTo(null)
+    }
+  }
 
   useEffect(() => {
     window.api?.getDriveStatus().then(setDrive).catch(() => setDrive(null))
@@ -229,6 +301,77 @@ export function DiagnosticsScreen(): JSX.Element {
           </dl>
         ) : (
           <p className="hint">Drive/workspace detection lands in Phase 1.</p>
+        )}
+      </div>
+
+      <div className="card">
+        <h2>Activity</h2>
+        <p className="hint">
+          A local record of what the app did — model starts, downloads, document imports,
+          workspace events. It stays in your workspace (encrypted when the workspace is)
+          and is never uploaded. It never contains chat text or document contents.
+        </p>
+        <div className="actions">
+          <button
+            className="btn sm"
+            onClick={() => {
+              setShowActivity((v) => !v)
+              if (!showActivity) void loadActivity()
+            }}
+          >
+            {showActivity ? 'Hide activity' : 'Show activity'}
+          </button>
+          {showActivity && (
+            <>
+              <button className="btn sm" onClick={() => void loadActivity()}>
+                Refresh
+              </button>
+              <button className="btn sm" onClick={() => void exportActivity()}>
+                Export to file…
+              </button>
+            </>
+          )}
+        </div>
+        {exportedTo && <p className="hint">Activity log saved to {exportedTo}</p>}
+        {showActivity && (
+          <>
+            {events != null && events.length > 0 && (
+              <label className="hint" style={{ display: 'block', marginTop: 8 }}>
+                Show{' '}
+                <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}>
+                  <option value="all">All activity</option>
+                  {[...new Set(events.map((ev) => ev.type))].map((t) => (
+                    <option key={t} value={t}>
+                      {auditLabel(t)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+            {events == null ? (
+              <p className="hint">Loading…</p>
+            ) : events.length === 0 ? (
+              <p className="hint">Nothing recorded yet — activity appears here as you use the app.</p>
+            ) : (
+              <ul className="activity-list">
+                {events
+                  .filter((ev) => typeFilter === 'all' || ev.type === typeFilter)
+                  .map((ev) => (
+                    <li key={ev.id} className="hint">
+                      <span className="activity-time">
+                        {new Date(ev.createdAt).toLocaleString()}
+                      </span>{' '}
+                      — <strong>{auditLabel(ev.type)}</strong>: {ev.message}
+                    </li>
+                  ))}
+              </ul>
+            )}
+            {moreAvailable && (
+              <button className="btn sm" onClick={() => void loadMoreActivity()}>
+                Show earlier activity
+              </button>
+            )}
+          </>
         )}
       </div>
 

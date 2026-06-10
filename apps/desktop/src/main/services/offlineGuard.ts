@@ -94,6 +94,8 @@ export interface AssertOfflinePostureDeps {
   installGuard: boolean
   log: (msg: string, meta?: unknown) => void
   warn: (msg: string, meta?: unknown) => void
+  /** Extra per-violation hook (Phase 19: the audit log) — called alongside `warn`. */
+  onViolation?: (host: string) => void
 }
 
 /**
@@ -111,10 +113,12 @@ export function assertOfflinePosture(deps: AssertOfflinePostureDeps): () => void
   if (!deps.installGuard) return () => {}
   return installOfflineNetworkGuard({
     offline: true,
-    onViolation: (host) =>
+    onViolation: (host) => {
       // Detection-only: the connect is LOGGED, not blocked (blocking net.Socket app-wide
       // could break loopback IPC / the sidecar). The core path makes no remote calls, so
       // this firing at all indicates a regression worth investigating.
       deps.warn('Offline posture: remote connection attempt detected (logged, not blocked)', { host })
+      deps.onViolation?.(host)
+    }
   })
 }

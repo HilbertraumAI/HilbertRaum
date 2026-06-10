@@ -99,6 +99,31 @@ wrong host guess can never break local IPC or the future sidecar. Real runtimes 
 `services/logging.ts` writes a rotating `app.log` under the workspace `logs/` directory and never
 uploads. Diagnostics surfaces local data only; it transmits nothing off-device.
 
+## Audit log data class (Phase 19)
+
+`services/audit.ts` records app activity (model starts/stops, downloads, document
+imports/deletes, workspace lock/unlock, privacy-relevant settings changes, policy warnings,
+offline-guard detections) into the spec §8 `runtime_events` table. Its data class is defined by
+a **hard privacy rule**:
+
+- Events carry **ids, model ids, filenames, and counts only** — NEVER chat content, document
+  text, or passwords. A chat transcript export records only the conversation id (even the
+  chosen filename is excluded — it derives from the conversation title, which is chat
+  content); `settings_changed` records the **privacy-relevant keys** (`allowNetwork`,
+  `gpuMode`, `developerMode`) and their boolean/enum values, never any other setting's value.
+  Enforced by a sentinel-grep test (`tests/integration/audit-ipc.test.ts`) that pushes secret
+  strings through the wired flows and proves their absence from every recorded row.
+- The log lives **inside the workspace DB** ⇒ on an encrypted workspace it is encrypted at
+  rest exactly like chats. It is FOR THE USER (spec §7.11): local only, surfaced on the
+  Diagnostics **Activity** panel, exported only by an explicit user save-dialog action.
+  This is not telemetry — nothing uploads anywhere.
+- Recording **never throws** (`recordEvent` swallows failures; the `ctx.audit` recorder
+  buffers in memory while the vault is locked, bounded at 100 events, and flushes after the
+  next unlock — which is how `workspace_unlock_failed` reaches the log at all). An audit
+  failure can never break the operation it records.
+- Retention: pruned to the **newest 5 000 rows on every insert** (`AUDIT_MAX_ROWS`, plan
+  §13 D7 — fixed for wave 1; configurability is Office-edition admin surface).
+
 ## Workspace modes (Phase 9)
 
 The workspace has two modes, owned by `services/workspace-vault.ts` (`WorkspaceController`):

@@ -21,7 +21,11 @@ trust & document-scoped asking) is DONE** — ask-selected-documents scope, the 
 document-awareness notice, the vector-tag fix, and the reindex-needed answer (§3 entry; design
 record `docs/rag-design.md` §10). **Phase 18 (in-app model downloader) is DONE** — triple-gated
 (policy ∧ default-off setting ∧ per-download confirmation), `.part` + verify-before-rename,
-Range resume, async-with-polling IPC (§3 entry; plan §6 "as implemented"). Phases 19–20 are
+Range resume, async-with-polling IPC (§3 entry; plan §6 "as implemented"). **Phase 19 (audit
+log on `runtime_events`) is DONE** — never-throws recorder with locked-vault buffering,
+hard privacy rule (ids/filenames/counts, never content — sentinel-grep-tested), 5 000-row
+prune-on-insert retention, shallow IPC-layer wiring incl. the Phase-18 download events, and
+the Diagnostics Activity panel + export (§3 entry; plan §7.1 "as implemented"). Phase 20 is
 next. Release-wise, remaining work = **manual release acceptance only** (§5, incl. the GPU
 hardware matrix, item 1b). Consciously-accepted gaps live in
 [`docs/known-limitations.md`](docs/known-limitations.md)._
@@ -51,7 +55,7 @@ hardware matrix, item 1b). Consciously-accepted gaps live in
 | 16 | GPU surface (Settings/Diagnostics/benchmark/docs) | 🟢 done |
 | 17 | RAG trust & document-scoped asking | 🟢 done |
 | 18 | In-app model downloader | 🟢 done |
-| 19 | Audit log (`runtime_events`) | ⚪ not started |
+| 19 | Audit log (`runtime_events`) | 🟢 done |
 | 20 | Answer-depth modes (Fast/Balanced/Deep) | ⚪ not started |
 
 Legend: ⚪ not started · 🟡 in progress · 🟢 done · 🔴 blocked
@@ -64,7 +68,8 @@ Legend: ⚪ not started · 🟡 in progress · 🟢 done · 🔴 blocked
 > **Phases 17–20 are the functionality wave toward the Office edition** — see
 > [`docs/post-mvp-functionality-plan.md`](docs/post-mvp-functionality-plan.md). Phase 17 is DONE
 > (plan §5, deviations in §5.5; design record in `docs/rag-design.md` §10). Phase 18 is DONE
-> (plan §6, "as implemented" note in §6.5).
+> (plan §6, "as implemented" note in §6.5). Phase 19 is DONE (plan §7, "as implemented" note
+> in §7.1; data class in `docs/security-model.md`).
 
 ---
 
@@ -648,6 +653,53 @@ Repo root: `f:\_coding\ai_drive`.
   Tests: `tests/integration/downloads.test.ts` (14) + `download-ipc.test.ts` (6) +
   `tests/renderer/ModelsScreen.test.tsx` (6) + updated `policy.test.ts` for the new default.
   Gate: typecheck clean, 525 tests, build green.
+- **Phase 19 — audit log on `runtime_events` (2026-06-10, plan
+  [`docs/post-mvp-functionality-plan.md`](docs/post-mvp-functionality-plan.md) §7, deviations
+  in §7.1; data class in `docs/security-model.md`):** the spec §8 table (created in Phase 1,
+  written by nothing) finally gets its writer — the first Office/Enterprise compliance
+  feature. **FOR THE USER, not telemetry**: lives in the workspace DB (encrypted at rest on
+  encrypted workspaces), local only, nothing uploads (spec §7.11). No schema change.
+  1. **`services/audit.ts`:** `recordEvent(db, type, message, metadata?)` **never throws**
+     (returns false on any failure); typed `AuditEventType` union in `shared/types.ts`
+     (runtime_started/stopped/crashed/fallback, model_selected/verified,
+     model_download_started/verified/failed, document_imported/reindexed/deleted,
+     conversation_deleted/exported, workspace_created/unlocked/locked/unlock_failed,
+     settings_changed, policy_warning, offline_guard_violation); `listAuditEvents`
+     (newest-first by `created_at DESC, rowid DESC`, `beforeId` cursor); **retention =
+     prune-on-insert to `AUDIT_MAX_ROWS` = 5 000** (decision D7 RESOLVED: fixed for wave 1).
+     `createAuditRecorder(getDb)` → optional **`AppContext.audit`** (`ctx.audit?.(…)`):
+     buffers events in memory (bounded 100) while `ctx.db` throws (locked vault) and flushes
+     them, original timestamps kept, on the next successful write — how
+     `workspace_unlock_failed` ever reaches the encrypted log.
+  2. **PRIVACY RULE (hard, sentinel-grep-tested):** rows carry ids, model ids, filenames,
+     counts — NEVER chat content, document text, or passwords. `conversation_exported`
+     records the id only (the export filename derives from the title = chat content);
+     `settings_changed` fires only for privacy-relevant keys (`allowNetwork`, `gpuMode`,
+     `developerMode`) and records those keys' post-validation values, never other settings'
+     values. `tests/integration/audit-ipc.test.ts` seeds sentinels through the wired
+     chat/docs/settings/password flows and greps every recorded row for absence.
+  3. **Wiring is shallow (IPC layer + main/index.ts, services stay pure):** registerCoreIpc
+     (settings_changed), registerModelIpc (model_selected/verified,
+     runtime_started/stopped — auto-start included via `startModelRuntime`), registerChatIpc
+     (conversation_deleted/exported), registerDocsIpc (document_imported/reindexed/deleted),
+     registerWorkspaceIpc (workspace_created/unlocked/locked/unlock_failed),
+     registerDownloadIpc → **injected `DownloadManagerDeps.audit` hook** (the manager's
+     background verify/fail outcomes reach the log without the service touching the DB;
+     placeholder-hash completion records NO "verified" — checksum honesty). `main/index.ts`:
+     runtime_fallback (`persistGpuFailure`), runtime_crashed (the §5.3 crash wrapper),
+     policy_warning (startup `loadPolicy` warnings, recorded post-ctx via the buffer),
+     offline_guard_violation (new optional `assertOfflinePosture.onViolation` hook).
+  4. **Surface:** Diagnostics **Activity** panel — on-demand load, client-side type filter,
+     "Show earlier activity" (`beforeId` paging), **Export to file…** (JSON via the
+     exportConversation save-dialog pattern). New IPC `getAuditEvents(limit, beforeId?)`
+     (`audit:list`) + `exportAuditLog()` (`audit:export`) in `ipc/registerAuditIpc.ts`;
+     preload exposes both. §11.4 copy ("A local record of what the app did…").
+  Tests: `tests/integration/audit.test.ts` (8: never-throws, paging/tie-break, D7 retention
+  at the real 5 000 ceiling, recorder buffering) + `audit-ipc.test.ts` (5: the sentinel
+  grep across all wired flows incl. a real fake-fetch download, locked→flush workspace
+  round-trip on a real encrypted vault, IPC paging, export/cancel) +
+  `tests/renderer/DiagnosticsActivity.test.tsx` (4). Gate: typecheck clean, 542 tests,
+  build green.
 
 ---
 
@@ -690,7 +742,9 @@ channel (Phase 15, `EVENTS.runtimeNotice`, preload `onRuntimeNotice`) +
 `updateConversationScope` (`chat:updateScope`, Phase 17 — replace/clear a documents
 conversation's "ask selected documents" scope) +
 `downloadModel`/`getDownloadJob`/`cancelDownload` (`downloads:start/get/cancel`, Phase 18 —
-the in-app model downloader, async-with-polling).
+the in-app model downloader, async-with-polling) +
+`getAuditEvents(limit?, beforeId?)`/`exportAuditLog` (`audit:list`/`audit:export`, Phase 19 —
+the Diagnostics Activity panel, newest-first paging + save-dialog export).
 (`pickDocuments` + `reindexDocument` are Phase-4 additions to the `IPC` registry beyond the spec
 §9.1 list — picker + re-index UX; `getPolicy` is a Phase-8 addition; the four `workspace:*` channels
 are Phase-9 additions.) `createConversation` now also accepts an optional `mode`
@@ -1063,6 +1117,23 @@ stop, regenerate, per-message copy, and the no-runtime empty state.
   block), gate explanations, the confirmation modal (size/license/URL + license-ack checkbox),
   progress + cancel via 1 s polling; SettingsScreen hint updated.
 
+### Audit log (Phase 19 live)
+✅ **Types** (`shared/types.ts`): `AuditEventType` (the 21-value union, §3 Phase-19 entry);
+  `AuditEvent { id, type, message, metadata: Record<string,unknown> | null, createdAt }`.
+✅ **`services/audit.ts`** — `AUDIT_MAX_ROWS = 5000`, `recordEvent(db, type, message, metadata?,
+  createdAt?)` (never throws; prunes on insert), `pruneAuditEvents(db, maxRows?)`,
+  `listAuditEvents(db, { limit?, beforeId? })` (newest-first; unknown cursor reads from the top),
+  `createAuditRecorder(getDb) → AuditRecorder` (locked-vault memory buffer, bounded 100,
+  flush-in-order with original timestamps). **`AppContext.audit?: AuditRecorder`** — optional, so
+  partial test contexts stay valid; every call site is `ctx.audit?.(…)`.
+✅ **`services/downloads.ts` seam (additive):** `DownloadManagerDeps.audit?` (`DownloadAuditType` =
+  the three `model_download_*` values) — injected by `registerDownloadIpc` in production.
+✅ **`services/offlineGuard.ts` seam (additive):** `AssertOfflinePostureDeps.onViolation?(host)`.
+✅ **IPC** `ipc/registerAuditIpc.ts` — `getAuditEvents`, `exportAuditLog` (JSON, save-dialog
+  pattern). **Renderer:** Diagnostics Activity card (on-demand, type filter, paging, export).
+⚠️ The privacy rule (ids/filenames/counts, never content) is a CONTRACT for every future call
+  site — extend the sentinel test when adding events.
+
 ### Plug-and-play distribution (Phase 13 live)
 ✅ **`services/launcher.ts`** — `resolveDriveRootFromLauncher(launcherPath, flavor?: 'win32'|'posix'|
   'auto')` → the drive root (the launcher's own directory; pure path math, no fs). Handles Windows
@@ -1181,16 +1252,16 @@ items are **MANUAL acceptance only** (R2/R5/R7 + the GPU hardware matrix). In ro
 3. **New functionality (planned):** see
    [`docs/post-mvp-functionality-plan.md`](docs/post-mvp-functionality-plan.md) — Phases 17–20
    toward the Office/Knowledge edition, with wave-2 outlines (reranker/hybrid retrieval, signed
-   offline update bundles). **Phases 17 (RAG trust & scoped asking) and 18 (in-app model
-   downloader) are DONE** (see §3); next up is **Phase 19 (audit log on `runtime_events`)** —
-   which also wires the Phase-18 `download_started/verified/failed` events — then **Phase 20
-   (Fast/Balanced/Deep answer-depth modes**, open decisions D4/D5 to resolve at start). New
-   manual-acceptance item from Phase 18: a real in-app download of the 4B on the `D:\` test
-   drive incl. a mid-download cancel → resume (plan §11). Smaller leftovers: an
-   icon/`buildResources` for electron-builder; ANN vector index only if a real corpus outgrows
-   the linear scan (plan §9 item 4).
+   offline update bundles). **Phases 17 (RAG trust & scoped asking), 18 (in-app model
+   downloader) and 19 (audit log, incl. the Phase-18 `model_download_*` events) are DONE**
+   (see §3); next up is **Phase 20 (Fast/Balanced/Deep answer-depth modes**, open decisions
+   D4/D5 to resolve at start). Manual-acceptance items from this wave: a real in-app download
+   of the 4B on the `D:\` test drive incl. a mid-download cancel → resume (plan §11), and a
+   quick Activity-panel eyeball on the same drive (events appear; export saves). Smaller
+   leftovers: an icon/`buildResources` for electron-builder; ANN vector index only if a real
+   corpus outgrows the linear scan (plan §9 item 4).
 
-**Current gate (2026-06-10, post-Phase-18): typecheck clean, 525/525 tests pass (+4 manual GPU
+**Current gate (2026-06-10, post-Phase-19): typecheck clean, 542/542 tests pass (+4 manual GPU
 smoke tests, skipped unless `PAID_GPU_SMOKE` is set), `npm run build` green.** The per-phase gate
 history (test counts, bundle sizes, per-phase test inventories) lives in git history.
 

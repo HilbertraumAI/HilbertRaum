@@ -19,9 +19,16 @@ import { log } from '../services/logging'
 
 export function registerDownloadIpc(ctx: AppContext, manager?: DownloadManager): void {
   // Production injects the global fetch; tests pass a manager with a fake (CI is
-  // zero-network — nothing in the suite ever constructs the default).
+  // zero-network — nothing in the suite ever constructs the default). The audit hook
+  // routes the manager's background started/verified/failed outcomes to the app
+  // recorder (Phase 19) without the service touching the DB.
   const downloads =
-    manager ?? new DownloadManager({ fetchImpl: fetch, log: (m, meta) => log.info(m, meta) })
+    manager ??
+    new DownloadManager({
+      fetchImpl: fetch,
+      log: (m, meta) => log.info(m, meta),
+      audit: (type, message, metadata) => ctx.audit?.(type, message, metadata)
+    })
 
   // Both gates read at call time: the policy from disk (authoritative ceiling), the
   // setting from the (possibly locked → treated as off) workspace DB.

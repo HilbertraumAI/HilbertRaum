@@ -156,6 +156,7 @@ export function registerChatIpc(ctx: AppContext): void {
     }
     deleteConversation(ctx.db, conversationId)
     log.info('Conversation deleted', { conversationId })
+    ctx.audit?.('conversation_deleted', 'Conversation deleted', { conversationId })
   })
 
   ipcMain.handle(IPC.stopGeneration, (_e, conversationId: string): void => {
@@ -185,6 +186,11 @@ export function registerChatIpc(ctx: AppContext): void {
     if (result.canceled || !result.filePath) return null
     writeFileSync(result.filePath, markdown, 'utf8')
     log.info('Transcript exported', { conversationId })
+    // Audit (Phase 19, privacy rule): the id only — the chosen path/default filename
+    // derives from the conversation TITLE, which is chat content.
+    ctx.audit?.('conversation_exported', 'Conversation transcript exported to a file', {
+      conversationId
+    })
     return result.filePath
   })
 }

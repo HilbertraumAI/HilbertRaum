@@ -534,6 +534,25 @@ h2 { font-size: 15px; margin: 0 0 12px; }
   word-break: break-all;
 }
 
+/* Diagnostics: audit-log Activity panel (Phase 19) */
+.activity-list {
+  list-style: none;
+  padding: 0;
+  margin: 10px 0;
+  max-height: 320px;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.activity-list li {
+  border-left: 3px solid var(--panel-2);
+  background: rgba(0, 0, 0, 0.15);
+  padding: 6px 10px;
+  border-radius: 6px;
+}
+.activity-time { opacity: 0.7; font-variant-numeric: tabular-nums; }
+
 /* Chat: non-error notice (e.g. transcript export confirmation, M13) */
 .chat-notice {
   padding: 4px 16px;

@@ -193,6 +193,17 @@ stored **locally** on the drive and never uploaded.
 
 See [`PRIVACY.md`](../PRIVACY.md) for the full statement.
 
+### The Activity panel (what did the app do?)
+
+**Diagnostics → Activity** shows a local record of what the app did and when — models
+started and stopped, downloads, document imports, workspace lock/unlock, and changes to
+privacy-relevant settings. Use the dropdown to focus on one kind of activity, **Show
+earlier activity** to page back, and **Export to file…** to save the record.
+
+The record stays in your workspace (so it is encrypted whenever your workspace is) and is
+never uploaded anywhere. It never contains your chat text, your document contents, or your
+password — only names, ids, and counts. It keeps the most recent 5,000 entries.
+
 ---
 
 ## 9. Lock / quit

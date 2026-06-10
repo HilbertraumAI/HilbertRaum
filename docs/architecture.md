@@ -319,6 +319,33 @@ Canonical, unit-tested TS modules that the self-contained `scripts/*.{ps1,sh}` m
 - A never-benchmarked workspace is benchmarked **automatically in the background** after it becomes
   usable (spec §2.1 first-run benchmark; `maybeRunFirstBenchmark`).
 
+## Audit log (Phase 19, plan §7)
+
+`services/audit.ts` finally writes the spec §8 `runtime_events` table (created in Phase 1,
+unwritten until now): `recordEvent(db, type, message, metadata?)` (NEVER throws), a typed
+`AuditEventType` union (`shared/types.ts`), `listAuditEvents` (newest-first, `beforeId`
+cursor), and prune-on-insert retention to `AUDIT_MAX_ROWS = 5000`. The app-wide recorder
+(`createAuditRecorder` → `AppContext.audit`, optional so partial test contexts stay valid) is
+built over the workspace DB *getter* — while the vault is locked it buffers events in memory
+(bounded) and flushes them after the next unlock.
+
+**Wiring is deliberately shallow** — call sites live in the IPC layer, not inside services
+(keeps services pure/testable): `registerCoreIpc` (`settings_changed`, privacy-relevant keys
+only), `registerModelIpc` (`model_selected/verified`, `runtime_started/stopped`),
+`registerChatIpc` (`conversation_deleted/exported`), `registerDocsIpc`
+(`document_imported/reindexed/deleted`), `registerWorkspaceIpc`
+(`workspace_created/unlocked/locked/unlock_failed`), `registerDownloadIpc` → an injected
+`DownloadManagerDeps.audit` hook (`model_download_started/verified/failed` — the Phase-18
+follow-up), plus `main/index.ts` for `runtime_crashed`/`runtime_fallback` (the GPU
+crash-fallback/ladder callbacks), `policy_warning` (startup `loadPolicy`), and
+`offline_guard_violation` (a new `assertOfflinePosture.onViolation` hook).
+
+Surface: the Diagnostics **Activity** panel (`getAuditEvents(limit, beforeId?)` IPC
+`audit:list`, client-side type filter, "Show earlier activity" paging) and an
+export-to-file action (`exportAuditLog` IPC `audit:export`, the `exportConversation`
+save-dialog precedent, JSON output). Data class + privacy rule:
+[`security-model.md`](security-model.md) §"Audit log data class".
+
 ## Data flow (RAG, Phases 4–6)
 import → extract text → chunk → embed (local) → store vectors → on question: embed query → cosine
 top-k → build grounded prompt with `[S1]…` source labels → local LLM → answer with citations →
@@ -338,6 +365,7 @@ render snippets.
 | `services/benchmark.ts` | 7.3 benchmarker |
 | `services/policy.ts` | 7.10 privacy/offline |
 | `services/logging.ts` | 7.11 diagnostics/logs |
+| `services/audit.ts` | §8 `runtime_events`, 7.11 local-only activity record |
 | `services/security/` + `services/workspace-vault.ts` | 3.5 encryption, 7.9 workspace modes |
 | `services/drive.ts` + `services/assets.ts` | §6 drive layout, §12 packaging |
 | `services/launcher.ts` + `services/preflight.ts` | §6 launchers, §11.4 first-run check |

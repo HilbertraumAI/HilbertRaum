@@ -4,6 +4,7 @@ import type { WorkspaceController } from './workspace-vault'
 import type { RuntimeManager } from './runtime'
 import type { Embedder } from './embeddings'
 import type { CachedGpuProbe } from './runtime/gpu'
+import type { AuditRecorder } from './audit'
 
 // Shared application context assembled at startup and passed to IPC handlers.
 // As later phases land, add: models registry, ingestion queue, etc.
@@ -34,4 +35,10 @@ export interface AppContext {
    * user-toggleable `developerMode` setting (which defaults OFF on shipped builds, M10).
    */
   isDev: boolean
+  /**
+   * Audit-log recorder (Phase 19): fire-and-forget, NEVER throws — an audit failure
+   * (incl. a locked workspace) must never break the operation it records. Optional so
+   * partial test contexts stay valid; call sites use `ctx.audit?.(…)`.
+   */
+  audit?: AuditRecorder
 }

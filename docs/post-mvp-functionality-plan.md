@@ -1,7 +1,7 @@
 # Post-MVP Functionality Plan — toward the Office/Knowledge edition
 
-_Status: **IN PROGRESS** — **Phases 17 + 18 IMPLEMENTED** (2026-06-10, deviations in §5.5 /
-§6.5); Phases 19–20 not started. Drafted 2026-06-10 from the gap analysis of spec §19 editions
+_Status: **IN PROGRESS** — **Phases 17 + 18 + 19 IMPLEMENTED** (2026-06-10, deviations in
+§5.5 / §6.5 / §7.1); Phase 20 not started. Drafted 2026-06-10 from the gap analysis of spec §19 editions
 vs. the feature-complete Lite MVP (Phases 0–16). Working paper per the CLAUDE.md doc lifecycle
 rule: once implemented, condense to a design record. Section numbers are intended to stay
 stable so code comments can cite them._
@@ -279,6 +279,34 @@ first Office/Enterprise (§19.1/§19.4) compliance feature.
   Nothing uploads anywhere (spec §7.11).
 - Wiring is deliberately shallow: call sites in the IPC layer + `RuntimeManager`/ladder +
   `WorkspaceController`, not deep inside services — keeps services pure/testable.
+
+### 7.1 As implemented (2026-06-10) — deviations from the plan above
+
+Phase 19 shipped per §7 (gate: typecheck clean, 542 tests, build green; BUILD_STATE §3 has
+the full entry; data class in `security-model.md`). Deviations/refinements:
+
+1. **The recorder absorbs the locked-workspace case by buffering, not dropping:**
+   `createAuditRecorder(getDb)` (→ optional `AppContext.audit`) buffers events in memory
+   (bounded at 100) while `ctx.db` throws and flushes them — original timestamps kept — on
+   the next successful write. Without this, `workspace_unlock_failed` (which by definition
+   happens while the DB is locked) could never reach the log.
+2. **Download events go through an injected `DownloadManagerDeps.audit` hook** wired in
+   `registerDownloadIpc`, because verified/failed happen in the manager's background run —
+   the service stays DB-free. Names are `model_download_started/verified/failed` (the §7
+   union's `model_…download_*` expansion). Checksum honesty extends to the log: a
+   placeholder-hash completion records NO `model_download_verified`.
+3. **`conversation_exported` records the conversation id only** — even the chosen filename
+   is excluded, because the save dialog's default name derives from the conversation title
+   (chat content). `settings_changed` fires only when a privacy-relevant key is in the
+   patch and records those keys' post-validation values (booleans/enums).
+4. **`runtime_crashed`/`runtime_fallback` wire in `main/index.ts`** (the GPU crash-fallback
+   and ladder-failure callbacks Phase 15 already routed there), not `RuntimeManager` itself;
+   `policy_warning` records the startup `loadPolicy` warnings (per-call IPC re-reads stay
+   log-only to avoid spam); `offline_guard_violation` uses a new optional
+   `assertOfflinePosture.onViolation` hook.
+5. Surface shipped as planned: Diagnostics **Activity** panel (on-demand load, client-side
+   type filter, `beforeId` paging) + JSON export via the save-dialog pattern; IPC channels
+   `audit:list` / `audit:export`.
 
 ---
 

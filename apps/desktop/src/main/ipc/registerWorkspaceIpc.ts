@@ -27,6 +27,10 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
     try {
       const state = ctx.workspace.unlock(password)
       log.info('Workspace unlocked')
+      // Audit (Phase 19): writing this also flushes events buffered while locked —
+      // which is how the unlock_failed events below ever reach the log. NEVER the
+      // password, in any branch.
+      ctx.audit?.('workspace_unlocked', 'Workspace unlocked')
       // First unlock of a never-benchmarked workspace → background benchmark (M12).
       maybeRunFirstBenchmark(ctx)
       // Bring the selected model's runtime back up in the background (post-MVP polish).
@@ -34,9 +38,11 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
       return { ok: true, state }
     } catch (err) {
       if (err instanceof WrongPasswordError) {
+        ctx.audit?.('workspace_unlock_failed', 'Workspace unlock failed (wrong password)')
         return { ok: false, reason: 'wrong_password', message: 'Incorrect password. Try again.' }
       }
       log.error('Workspace unlock failed', String(err))
+      ctx.audit?.('workspace_unlock_failed', 'Workspace unlock failed')
       return { ok: false, reason: 'error', message: 'Could not open the workspace.' }
     }
   })
@@ -54,6 +60,7 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
       try {
         const state = ctx.workspace.create(password, mode)
         log.info('Workspace created', { mode })
+        ctx.audit?.('workspace_created', 'Workspace created', { mode })
         // A fresh workspace has never been benchmarked → background benchmark (M12).
         maybeRunFirstBenchmark(ctx)
         // A fresh workspace has no active model yet; this is a no-op then, but covers
@@ -84,6 +91,8 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
       ctx.runtime.stop(),
       ctx.embedder.stop?.() ?? Promise.resolve()
     ])
+    // Recorded BEFORE the vault closes — afterwards the DB is unreachable.
+    ctx.audit?.('workspace_locked', 'Workspace locked')
     const state = ctx.workspace.lock()
     log.info('Workspace locked (sidecars stopped)')
     return state

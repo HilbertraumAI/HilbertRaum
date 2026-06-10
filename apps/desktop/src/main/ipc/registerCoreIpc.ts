@@ -60,6 +60,19 @@ export function registerCoreIpc(ctx: AppContext): void {
 
   ipcMain.handle(IPC.updateSettings, (_e, patch: Partial<AppSettings>) => {
     log.info('Settings updated', Object.keys(patch))
-    return updateSettings(ctx.db, patch)
+    const result = updateSettings(ctx.db, patch)
+    // Audit (Phase 19, privacy rule): record ONLY the privacy-relevant keys — and their
+    // post-validation values, which are booleans/enums — never any other setting's value.
+    const privacyKeys = (['allowNetwork', 'gpuMode', 'developerMode'] as const).filter(
+      (k) => k in patch
+    )
+    if (privacyKeys.length > 0) {
+      ctx.audit?.(
+        'settings_changed',
+        `Privacy-relevant settings changed: ${privacyKeys.join(', ')}`,
+        Object.fromEntries(privacyKeys.map((k) => [k, result[k]]))
+      )
+    }
+    return result
   })
 }

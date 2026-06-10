@@ -73,10 +73,22 @@ export interface StartDownloadOptions {
   hashStore?: HashStore
 }
 
+/** The download-lifecycle audit events this service can emit (Phase 19, plan §6.2). */
+export type DownloadAuditType =
+  | 'model_download_started'
+  | 'model_download_verified'
+  | 'model_download_failed'
+
 export interface DownloadManagerDeps {
   /** Injected fetch — production passes the global `fetch`; tests pass a fake. */
   fetchImpl?: FetchFn
   log?: (msg: string, meta?: unknown) => void
+  /**
+   * Audit hook (Phase 19): the IPC layer injects the app recorder so the background
+   * verify/fail outcomes reach the audit log without this service knowing about the
+   * DB. Carries the model id and counts — never file contents. Must never throw.
+   */
+  audit?: (type: DownloadAuditType, message: string, metadata: Record<string, unknown>) => void
 }
 
 /** The `.part` staging path for a weight destination. */
@@ -150,6 +162,11 @@ export class DownloadManager {
     const controller = new AbortController()
     this.active = { jobId: job.jobId, controller }
     this.deps.log?.('Model download started', { modelId: task.id, jobId: job.jobId })
+    this.deps.audit?.('model_download_started', `Model download started: ${task.id}`, {
+      modelId: task.id,
+      jobId: job.jobId,
+      sizeBytes: task.sizeBytes
+    })
 
     // Background run — the invoke returns immediately (Phase-4 import precedent).
     void this.run(job, task, controller, opts.hashStore).finally(() => {
@@ -247,11 +264,21 @@ export class DownloadManager {
           expected: task.expectedSha256,
           actual: verify.actual
         })
+        this.deps.audit?.('model_download_failed', `Model download failed: ${job.modelId}`, {
+          modelId: job.modelId,
+          jobId: job.jobId,
+          reason: 'checksum mismatch — file discarded'
+        })
         return
       }
       if (verify.reason === 'missing') {
         job.status = 'failed'
         job.error = 'The downloaded file went missing before it could be verified.'
+        this.deps.audit?.('model_download_failed', `Model download failed: ${job.modelId}`, {
+          modelId: job.modelId,
+          jobId: job.jobId,
+          reason: 'file missing before verification'
+        })
         return
       }
 
@@ -265,6 +292,16 @@ export class DownloadManager {
         modelId: job.modelId,
         verified: !job.unverified
       })
+      // Checksum honesty extends to the audit log: only a REAL hash match records
+      // "verified" (a placeholder-hash completion stays unrecorded — the model itself
+      // reports UNVERIFIED on the Models screen).
+      if (!job.unverified) {
+        this.deps.audit?.('model_download_verified', `Model download verified: ${job.modelId}`, {
+          modelId: job.modelId,
+          jobId: job.jobId,
+          bytes: job.receivedBytes
+        })
+      }
     } catch (err) {
       if (job.status === 'cancelled') {
         // The abort we asked for — the kept `.part` resumes next time.
@@ -276,6 +313,11 @@ export class DownloadManager {
       job.status = 'failed'
       job.error = friendlyDownloadError(err)
       this.deps.log?.('Model download failed', { modelId: job.modelId, error: String(err) })
+      this.deps.audit?.('model_download_failed', `Model download failed: ${job.modelId}`, {
+        modelId: job.modelId,
+        jobId: job.jobId,
+        reason: String(err).slice(0, 300)
+      })
     }
   }
 }

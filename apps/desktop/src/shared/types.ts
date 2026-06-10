@@ -455,6 +455,47 @@ export interface BenchmarkResult {
   ranAt: string
 }
 
+// ---- Audit log (Phase 19, post-mvp-functionality-plan §7) ----
+/**
+ * What the app records to the `runtime_events` audit log — FOR THE USER, local only
+ * (spec §7.11): the log lives in the workspace DB (encrypted at rest on encrypted
+ * workspaces) and is never uploaded anywhere. Privacy rule (hard): events carry ids,
+ * model ids, filenames, and counts — NEVER chat content, document text, or passwords.
+ */
+export type AuditEventType =
+  | 'runtime_started'
+  | 'runtime_stopped'
+  | 'runtime_crashed'
+  | 'runtime_fallback'
+  | 'model_selected'
+  | 'model_verified'
+  | 'model_download_started'
+  | 'model_download_verified'
+  | 'model_download_failed'
+  | 'document_imported'
+  | 'document_reindexed'
+  | 'document_deleted'
+  | 'conversation_deleted'
+  | 'conversation_exported'
+  | 'workspace_created'
+  | 'workspace_unlocked'
+  | 'workspace_locked'
+  | 'workspace_unlock_failed'
+  | 'settings_changed'
+  | 'policy_warning'
+  | 'offline_guard_violation'
+
+/** One audit-log entry (a `runtime_events` row), newest-first over the IPC surface. */
+export interface AuditEvent {
+  id: string
+  type: AuditEventType
+  /** Human-readable summary (ids/filenames/counts only — never content). */
+  message: string
+  /** Structured details (parsed `metadata_json`), or null. */
+  metadata: Record<string, unknown> | null
+  createdAt: string
+}
+
 export interface RuntimeStatus {
   running: boolean
   modelId: string | null

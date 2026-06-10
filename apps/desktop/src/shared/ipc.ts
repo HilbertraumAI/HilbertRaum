@@ -61,6 +61,11 @@ export const IPC = {
   tryGpuAgain: 'gpu:try-again',
   // Phase 13 — non-technical first-run launch preflight
   runPreflight: 'preflight:run',
+  // Phase 19 — audit log (the Diagnostics Activity panel; spec §7.11, local-only)
+  /** Page through audit events, newest-first (`limit`, optional `beforeId` cursor). */
+  getAuditEvents: 'audit:list',
+  /** Save the activity log to a user-chosen file (the exportConversation pattern). */
+  exportAuditLog: 'audit:export',
   // Phase 9 — encrypted workspace lifecycle
   getWorkspaceState: 'workspace:getState',
   unlockWorkspace: 'workspace:unlock',
