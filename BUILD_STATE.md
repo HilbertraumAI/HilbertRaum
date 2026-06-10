@@ -1488,16 +1488,17 @@ items are **MANUAL acceptance only** (R2/R5/R7 + the GPU hardware matrix). In ro
    see §3). **Wave 2: Phase 21 (retrieval quality — reranker + hybrid FTS5 search) is DONE**
    (§3 entry; [`docs/retrieval-quality-plan.md`](docs/retrieval-quality-plan.md) D8–D15);
    Phase 22 (signed offline update bundles, plan §10) remains — blocked on its key-management
-   design doc. Manual-acceptance items from wave 1 (plan §11): **in-app model download — ✅
-   user-confirmed working in the live app 2026-06-10 (D:\); the explicit mid-download cancel →
-   resume path still to be exercised**; a quick Activity-panel eyeball on the same drive (events
-   appear; export saves) — STILL PENDING; **a real
+   design doc. Manual-acceptance items from wave 1 (plan §11): **in-app model download incl. the
+   mid-download cancel → resume path — ✅ user-confirmed working in the live app 2026-06-10
+   (D:\)**; a quick Activity-panel eyeball on the same drive (events appear; export saves) —
+   STILL PENDING (the last live-UI item); **a real
    Deep-mode answer with visible thinking from Qwen3 4B on the test drive**
    (`tests/manual/thinking-smoke.test.ts` with `PAID_THINKING_SMOKE=<drive root>` covers the
    mechanism — **✅ run 2026-06-10 on `D:\` (4B): deep streamed 1749 reasoning chars + a clean
    answer with no `<think>` tags; balanced streamed zero reasoning deltas, both answers correct**;
    **the in-app UI eyeball is now ✅ user-confirmed 2026-06-10: the collapsed Thinking… block
-   renders, and citations + the source panel work in the live app**). **Phase 21 manual items — reranker smoke DONE
+   renders, and citations + the source panel work in the live app; the app was also confirmed
+   working fully offline with Wi-Fi OFF (the offline guarantee)**). **Phase 21 manual items — reranker smoke DONE
    (2026-06-10):** fetched the GGUF to `D:\`, promoted the real sha256 into the manifest, ran
    `tests/manual/rerank-smoke.test.ts` (`PAID_RERANK_SMOKE=D:\`) — F16 loads on b9585, relevance
    correct (+8.82 vs −11.01), worst-case 12-candidate batch ≈ 24.7 s on a CPU-pinned i7-1185G7
