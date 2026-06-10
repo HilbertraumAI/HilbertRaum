@@ -2,7 +2,9 @@
 
 _Status: **WORKING PAPER — Phase 28 manifests landed 2026-06-10; hashes promoted + all weights
 verified on a Windows `D:\` drive 2026-06-10; §4.3 chat/RAG bring-up smokes still pending (see
-§4.6); Phases 29–30 not started.** Created 2026-06-10 from an external model-candidate
+§4.6); **Phase 29 tooling + eval data landed 2026-06-10 (scorer + harness + protocol +
+`eval/*.jsonl`, see §5.6) — the multi-machine RUNS + promotions are pending**; Phase 30 not
+started.** Created 2026-06-10 from an external model-candidate
 research report (Claude web research, verified spot-checks below) + the planning discussion in
 session. Per the CLAUDE.md doc lifecycle rule this plan gets condensed into a design record (or
 folded into [`model-policy.md`](model-policy.md) / a new `docs/model-benchmarks.md`) once
@@ -252,6 +254,43 @@ Protocol doc exists and has been executed once on ≥ 2 machines (the dev box ±
 Iris-Xe laptop are the natural pair) covering all incumbents + wave-1 challengers; results CSVs
 committed; D17 promotions decided and applied to `recommended_profiles` + the model-policy
 table; BUILD_STATE updated. This plan then condenses per the doc lifecycle rule.
+
+### 5.6 As-implemented (tooling + eval data, 2026-06-10 — RUNS still pending)
+
+The protocol, scorer, harness, eval set, and memory helper are built and committed; the actual
+multi-machine ranking runs (and the promotions that depend on their numbers) are the remaining
+work. What landed:
+
+1. **Protocol doc = [`docs/model-benchmarks.md`](model-benchmarks.md)** — offline (Wi-Fi off),
+   judge-free, with Part A (quality harness), Part B (`llama-bench` speed), Part C (peak-RSS →
+   `recommended_min_ram_gb`), the combined CSV schema, and the §5.4 decision rule (incl. the
+   D18 default-model question + the Gemma flag).
+2. **Quality = a deterministic, dependency-free scorer** `apps/desktop/tests/eval/score.ts`
+   (24 CI unit tests in `score.test.ts`): German-aware normalization with **umlauts/ß kept**
+   (folding them would hide the D18 German delta), containment-EM + token-F1 over multiple
+   accepted gold spans, citation-correct / grounding, and a curated DE/EN refusal-phrase
+   **abstention heuristic** (every raw answer is dumped for audit since it's heuristic — §7 risk
+   row). Aggregates split DE vs EN so the per-model language gap is directly readable.
+3. **Real RAG path harness** `apps/desktop/tests/manual/model-eval.test.ts` (env-gated on
+   `PAID_MODEL_EVAL`): corpus embedded **once** with E5 + reranked once ⇒ retrieval is identical
+   across chat models, so cross-model deltas isolate the chat model. Each `models/chat/*.gguf`
+   answers all items via `generateGroundedAnswer` at `temperature 0`; outputs
+   `eval/results/<machine>-<backend>-quality.csv` + a per-item audit JSONL.
+4. **Eval data authored by us → license-clean.** `eval/build.mjs` is the source of truth and
+   **self-validates** (every answerable gold span must be present in its `gold_doc`); it emits
+   `eval/corpus_de_en.jsonl` (60 passages / 16 docs, office + civic/everyday, with distractors)
+   and `eval/rag_de_en.jsonl` — **100 items: 60 DE / 40 EN, 40 parallel DE/EN pairs + 20
+   German-only, 15 unanswerable** (the §5 "~50–100, ~15% unanswerable" target, the larger end +
+   parallel-pair design chosen with the user for the cleanest D18 signal).
+5. **Memory** = `scripts/measure-peak-rss.ps1` (mirrors the real chat-server args
+   `--jinja --reasoning-format deepseek --ctx-size 8192`), prints peak RSS + a suggested
+   `recommended_min_ram_gb` (peak + 3 GiB headroom). Speed/memory stay a documented manual
+   protocol (D20).
+6. **Placement:** repo-root `eval/` holds DATA + RESULTS only (no code, per the plan); the
+   scoring CODE + its CI test live under `apps/desktop/tests/eval/` so vitest covers them.
+7. **PENDING to close the phase:** run the protocol on ≥ 2 machines, commit `eval/results/*.csv`,
+   apply §5.4 promotions to `recommended_profiles` + [`model-policy.md`](model-policy.md), decide
+   D18 + the Gemma flag, replace the §4.1 RAM estimates with measured peak-RSS, then condense.
 
 ---
 

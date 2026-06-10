@@ -89,6 +89,16 @@ and `verify-models -Target D:\` now reports **all 10 catalog weights VERIFIED**.
 leak; finding — Gemma 4 honours `enable_thinking`, kept `supports_thinking_mode: false`
 pending Phase 29). Only the §4.3 Models-screen-UI + RAG-citation smokes remain before
 Phase 28 closes (§3 entry; §5 item 5).
+**Phase 28 (model catalog wave 1) is 🟡 IN PROGRESS** and **Phase 29 (benchmark protocol +
+first comparison run) is 🟡 IN PROGRESS — tooling + eval data landed 2026-06-10**: the
+judge-free quality benchmark is built and CI-covered (`docs/model-benchmarks.md`; the
+dependency-free scorer `apps/desktop/tests/eval/score.ts` + 24 CI tests; the real-RAG-path
+harness `tests/manual/model-eval.test.ts`; `eval/{corpus,rag}_de_en.jsonl` = 100 license-clean
+German/English grounded-QA items, 60 DE / 40 EN, 15% unanswerable, self-validated by
+`eval/build.mjs`; the peak-RSS helper `scripts/measure-peak-rss.ps1`). The multi-machine RUNS
+and the §5.4 catalog promotions (incl. the D18 default-model question + the Gemma
+`supports_thinking_mode` flip + measured `recommended_min_ram_gb`) are PENDING — executed on
+real hardware (§3 Phase-29 entry).
 Release-wise,
 remaining work = **manual release acceptance only** (§5, incl. the GPU
 hardware matrix, item 1b). Consciously-accepted gaps live in
@@ -129,6 +139,7 @@ hardware matrix, item 1b). Consciously-accepted gaps live in
 | 26 | UI information architecture regroup (guidelines §2) | 🟢 done (merged to master 2026-06-10) |
 | 27 | UI microcopy, ambient trust signal, first-run (guidelines §7/§2/§9) | 🟢 done (merged to master 2026-06-10) — **UI polish wave COMPLETE** |
 | 28 | Model catalog wave 1 (challenger manifests, D16–D18) | 🟡 in progress — manifests + docs landed, validated, gate green; weights fetched + hashes promoted (all 10 weights VERIFIED on the `D:\` drive); §4.3 chat + depth smokes PASS for all four challengers; only the Models-screen-UI + RAG-citation smokes remain |
+| 29 | Benchmark protocol + first comparison run (D19/D20) | 🟡 in progress — **protocol + tooling + eval data landed** (`docs/model-benchmarks.md`, the judge-free scorer + 24 CI tests, the real-RAG-path harness, `eval/{corpus,rag}_de_en.jsonl` = 100 items, the peak-RSS script); the multi-machine RUNS + §5.4 promotions are pending (executed on real hardware) |
 
 Legend: ⚪ not started · 🟡 in progress · 🟢 done · 🔴 blocked
 
@@ -1287,6 +1298,40 @@ Repo root: `f:\_coding\ai_drive`.
   committed-manifests discovery test covers the new files), build green. REMAINING for phase
   close: fetch the four weights (~20 GB — user go-ahead required), promote real hashes, run the
   §4.3 per-model bring-up.
+
+- **Phase 29 — benchmark protocol + tooling (plan D19/D20; tooling + eval data landed
+  2026-06-10, the multi-machine RUNS are pending):** the judge-free quality benchmark is built
+  and CI-covered; the actual ranking runs happen on real hardware (dev box + the i7-1185G7
+  Iris-Xe laptop) and are NOT part of the green gate. Pieces:
+  1. **Deterministic scorer = a dependency-free module** `apps/desktop/tests/eval/score.ts`
+     (NO db/runtime/rag imports → its unit test runs in CI without a model or `node:sqlite`):
+     German-aware normalization (NFC + lowercase + strip punctuation, **umlauts/ß KEPT** — folding
+     them would hide the D18 German-quality delta), containment-EM + token-F1 over multiple
+     accepted gold spans, a curated DE/EN refusal-phrase **abstention heuristic** (the no-context
+     sentinel is caught by "couldn t find"), and an aggregate split by language (`em_rate_de` vs
+     `em_rate_en`). 24 CI tests (`score.test.ts`). No cloud judge (hard rule).
+  2. **The harness runs the REAL RAG path** (`tests/manual/model-eval.test.ts`, env-gated on
+     `PAID_MODEL_EVAL` like the other manual smokes): corpus embedded **once** with E5 + reranked
+     once (so retrieval is identical across chat models → every delta is the chat model following
+     the grounded prompt), each `models/chat/*.gguf` answers all 100 items via
+     `generateGroundedAnswer` at `temperature 0`. Writes `eval/results/<machine>-<backend>-
+     quality.csv` (QA columns) + a per-item audit JSONL (every raw answer, since abstention is
+     heuristic).
+  3. **Eval data = ours → license-clean** (`eval/build.mjs` is the authoring source of truth;
+     `eval/corpus_de_en.jsonl` + `eval/rag_de_en.jsonl` are GENERATED + self-validated — every
+     answerable gold span must be present in its `gold_doc` or the build fails). 100 items:
+     **60 DE / 40 EN**, 40 parallel DE/EN pairs (the language-gap anchor) + 20 German-only
+     civic/everyday, **15 unanswerable** (gold = abstain). 60 passages across 16 docs (office +
+     civic/everyday), with deliberate distractors.
+  4. **Placement decision:** repo-root `eval/` holds DATA + RESULTS only (per plan); the scoring
+     CODE + its test live under `apps/desktop/tests/eval/` so vitest (`include: tests/**`) covers
+     it. Speed (`llama-bench`) + peak-RSS (`scripts/measure-peak-rss.ps1`, mirrors the real chat
+     server args) stay a documented manual protocol (D20 — doc-first, minimal automation).
+  5. **Protocol doc** `docs/model-benchmarks.md` (offline, Wi-Fi off; combined CSV schema;
+     the §5.4 decision rule incl. D18 default-model question + the Gemma `supports_thinking_mode`
+     flip). Gate: 693/693 tests (+24), no `src/` change → build/typecheck surface unchanged.
+     PENDING: the runs on ≥2 machines, then apply promotions to `recommended_profiles` +
+     `model-policy.md` and replace the §4.1 RAM estimates with measured peak-RSS values.
 
 ---
 

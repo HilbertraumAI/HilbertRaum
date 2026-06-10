@@ -1,0 +1,60 @@
+{"doc":"Acme Master Services Agreement.pdf","lang":"en","index":0,"text":"Acme shall invoice the Client monthly. Undisputed invoices are due net thirty days from the invoice date; overdue amounts accrue interest at one percent per month."}
+{"doc":"Acme Master Services Agreement.pdf","lang":"en","index":1,"text":"Except for breaches of confidentiality, each party's total aggregate liability under this Agreement shall not exceed one million US dollars."}
+{"doc":"Acme Master Services Agreement.pdf","lang":"en","index":2,"text":"Either party may terminate this Agreement for convenience upon sixty days written notice, or immediately for an uncured material breach."}
+{"doc":"Acme Master Services Agreement.pdf","lang":"en","index":3,"text":"This Agreement is governed by the laws of the State of Delaware, without regard to its conflict-of-laws principles."}
+{"doc":"Acme Rahmenvertrag.pdf","lang":"de","index":0,"text":"Acme stellt dem Kunden monatlich eine Rechnung. Unbestrittene Rechnungen sind innerhalb von dreißig Tagen ab Rechnungsdatum zur Zahlung fällig; überfällige Beträge werden mit einem Prozent pro Monat verzinst."}
+{"doc":"Acme Rahmenvertrag.pdf","lang":"de","index":1,"text":"Mit Ausnahme von Verletzungen der Vertraulichkeit ist die gesamte Haftung jeder Partei aus diesem Vertrag auf eine Million US-Dollar begrenzt."}
+{"doc":"Acme Rahmenvertrag.pdf","lang":"de","index":2,"text":"Jede Partei kann diesen Vertrag mit einer Frist von sechzig Tagen schriftlich ordentlich kündigen oder bei einer nicht behobenen wesentlichen Vertragsverletzung fristlos."}
+{"doc":"Acme Rahmenvertrag.pdf","lang":"de","index":3,"text":"Dieser Vertrag unterliegt dem Recht des Bundesstaates Delaware, ohne Berücksichtigung seiner Kollisionsnormen."}
+{"doc":"Globex Invoice INV-2024-001.pdf","lang":"en","index":0,"text":"Invoice number INV-2024-001 was issued on 12 March 2024 by Globex Corporation to the Client for consulting services rendered in February 2024."}
+{"doc":"Globex Invoice INV-2024-001.pdf","lang":"en","index":1,"text":"The total amount due is 940 euro, payable within 30 days by bank transfer to the account listed in the footer. A late fee of 2 percent applies after the due date."}
+{"doc":"Globex Invoice INV-2024-001.pdf","lang":"en","index":2,"text":"VAT at 19 percent is included in the total. The purchase order reference is PO-7785."}
+{"doc":"Globex Rechnung RE-2024-001.pdf","lang":"de","index":0,"text":"Die Rechnung mit der Nummer RE-2024-001 wurde am 12. März 2024 von der Globex Corporation an den Kunden für im Februar 2024 erbrachte Beratungsleistungen ausgestellt."}
+{"doc":"Globex Rechnung RE-2024-001.pdf","lang":"de","index":1,"text":"Der fällige Gesamtbetrag beträgt 940 Euro und ist innerhalb von 30 Tagen per Banküberweisung auf das im Fußbereich genannte Konto zu zahlen. Nach Fälligkeit fällt eine Mahngebühr von 2 Prozent an."}
+{"doc":"Globex Rechnung RE-2024-001.pdf","lang":"de","index":2,"text":"Im Gesamtbetrag sind 19 Prozent Mehrwertsteuer enthalten. Die Bestellreferenz lautet PO-7785."}
+{"doc":"Employee Handbook.docx","lang":"en","index":0,"text":"Full-time employees accrue twenty paid vacation days per year, accruing monthly and carrying over up to five days into the next year."}
+{"doc":"Employee Handbook.docx","lang":"en","index":1,"text":"Employees may work remotely up to three days per week with manager approval; core collaboration hours are 10:00 to 15:00 local time."}
+{"doc":"Employee Handbook.docx","lang":"en","index":2,"text":"Submit receipts within thirty days; travel and client-meal expenses are reimbursed at actual cost with manager approval."}
+{"doc":"Employee Handbook.docx","lang":"en","index":3,"text":"The probationary period for new employees is six months, during which the notice period is two weeks."}
+{"doc":"Mitarbeiterhandbuch.docx","lang":"de","index":0,"text":"Vollzeitbeschäftigte erwerben zwanzig bezahlte Urlaubstage pro Jahr; der Anspruch entsteht monatlich und bis zu fünf Tage können ins Folgejahr übertragen werden."}
+{"doc":"Mitarbeiterhandbuch.docx","lang":"de","index":1,"text":"Mitarbeitende dürfen mit Zustimmung der Führungskraft bis zu drei Tage pro Woche im Homeoffice arbeiten; die Kernarbeitszeit liegt zwischen 10:00 und 15:00 Uhr Ortszeit."}
+{"doc":"Mitarbeiterhandbuch.docx","lang":"de","index":2,"text":"Belege sind innerhalb von dreißig Tagen einzureichen; Reise- und Bewirtungskosten werden mit Zustimmung der Führungskraft zum tatsächlichen Betrag erstattet."}
+{"doc":"Mitarbeiterhandbuch.docx","lang":"de","index":3,"text":"Die Probezeit für neue Mitarbeitende beträgt sechs Monate; während dieser Zeit beträgt die Kündigungsfrist zwei Wochen."}
+{"doc":"Security Whitepaper.pdf","lang":"en","index":0,"text":"All customer data is encrypted at rest with AES-256 and in transit with TLS 1.3; encryption keys are rotated annually and stored in a hardware security module."}
+{"doc":"Security Whitepaper.pdf","lang":"en","index":1,"text":"Data residency: customer data is stored exclusively in the customer-selected region and is never replicated outside it without explicit written consent."}
+{"doc":"Security Whitepaper.pdf","lang":"en","index":2,"text":"Backups are taken every 24 hours and retained for 90 days. The recovery point objective is one hour."}
+{"doc":"Security Whitepaper.pdf","lang":"en","index":3,"text":"Access requires multi-factor authentication; administrative sessions time out after 15 minutes of inactivity."}
+{"doc":"Sicherheits-Whitepaper.pdf","lang":"de","index":0,"text":"Alle Kundendaten werden im Ruhezustand mit AES-256 und bei der Übertragung mit TLS 1.3 verschlüsselt; die Schlüssel werden jährlich rotiert und in einem Hardware-Sicherheitsmodul gespeichert."}
+{"doc":"Sicherheits-Whitepaper.pdf","lang":"de","index":1,"text":"Datenresidenz: Kundendaten werden ausschließlich in der vom Kunden gewählten Region gespeichert und ohne ausdrückliche schriftliche Zustimmung niemals außerhalb repliziert."}
+{"doc":"Sicherheits-Whitepaper.pdf","lang":"de","index":2,"text":"Sicherungen werden alle 24 Stunden erstellt und 90 Tage aufbewahrt. Das Recovery Point Objective beträgt eine Stunde."}
+{"doc":"Sicherheits-Whitepaper.pdf","lang":"de","index":3,"text":"Der Zugriff erfordert eine Mehr-Faktor-Authentifizierung; administrative Sitzungen werden nach 15 Minuten Inaktivität automatisch beendet."}
+{"doc":"Waste Collection Notice.pdf","lang":"en","index":0,"text":"Residual waste is collected every two weeks on Wednesdays. Please place bins at the curb by 6:00 a.m."}
+{"doc":"Waste Collection Notice.pdf","lang":"en","index":1,"text":"Paper and cardboard are collected on the first Monday of each month. Glass must be taken to the public recycling points on Maple Street."}
+{"doc":"Waste Collection Notice.pdf","lang":"en","index":2,"text":"Bulky-waste pickup can be booked by phone at least five working days in advance; up to three items are collected free of charge per year."}
+{"doc":"Müllabfuhr Hinweisblatt.pdf","lang":"de","index":0,"text":"Der Restmüll wird alle zwei Wochen mittwochs abgeholt. Bitte stellen Sie die Tonnen bis 6:00 Uhr an den Straßenrand."}
+{"doc":"Müllabfuhr Hinweisblatt.pdf","lang":"de","index":1,"text":"Papier und Karton werden am ersten Montag jedes Monats abgeholt. Glas ist zu den öffentlichen Sammelstellen in der Ahornstraße zu bringen."}
+{"doc":"Müllabfuhr Hinweisblatt.pdf","lang":"de","index":2,"text":"Die Sperrmüllabholung kann telefonisch mit einer Frist von mindestens fünf Werktagen angemeldet werden; bis zu drei Gegenstände werden pro Jahr kostenlos abgeholt."}
+{"doc":"Coffee Machine User Manual.pdf","lang":"en","index":0,"text":"Descale the machine every two months using the supplied descaling solution. Run two full water cycles afterwards."}
+{"doc":"Coffee Machine User Manual.pdf","lang":"en","index":1,"text":"The water tank holds 1.8 liters. Use filtered water to reduce limescale."}
+{"doc":"Coffee Machine User Manual.pdf","lang":"en","index":2,"text":"If the red light blinks, the drip tray is full; empty it and reinsert. The machine switches off automatically after 20 minutes of inactivity."}
+{"doc":"Coffee Machine User Manual.pdf","lang":"en","index":3,"text":"The warranty covers manufacturing defects for two years from the date of purchase."}
+{"doc":"Kaffeemaschine Bedienungsanleitung.pdf","lang":"de","index":0,"text":"Entkalken Sie die Maschine alle zwei Monate mit der mitgelieferten Entkalkerlösung. Lassen Sie anschließend zwei volle Wasserdurchläufe laufen."}
+{"doc":"Kaffeemaschine Bedienungsanleitung.pdf","lang":"de","index":1,"text":"Der Wassertank fasst 1,8 Liter. Verwenden Sie gefiltertes Wasser, um Kalkablagerungen zu verringern."}
+{"doc":"Kaffeemaschine Bedienungsanleitung.pdf","lang":"de","index":2,"text":"Wenn die rote Leuchte blinkt, ist die Abtropfschale voll; leeren Sie sie und setzen Sie sie wieder ein. Die Maschine schaltet sich nach 20 Minuten Inaktivität automatisch ab."}
+{"doc":"Kaffeemaschine Bedienungsanleitung.pdf","lang":"de","index":3,"text":"Die Garantie deckt Herstellungsfehler für zwei Jahre ab Kaufdatum ab."}
+{"doc":"Travel Insurance Terms.pdf","lang":"en","index":0,"text":"Coverage begins on the departure date and ends on the return date stated in the policy. The maximum trip length is 90 days."}
+{"doc":"Travel Insurance Terms.pdf","lang":"en","index":1,"text":"Medical expenses are covered up to 100,000 euro. The deductible per claim is 50 euro."}
+{"doc":"Travel Insurance Terms.pdf","lang":"en","index":2,"text":"Claims must be reported within 14 days of the incident. Lost-baggage claims require a written report from the carrier."}
+{"doc":"Travel Insurance Terms.pdf","lang":"en","index":3,"text":"Cancellation due to illness is reimbursed at 80 percent of the prepaid trip cost."}
+{"doc":"Reiseversicherung Bedingungen.pdf","lang":"de","index":0,"text":"Der Versicherungsschutz beginnt am Abreisetag und endet am in der Police genannten Rückreisetag. Die maximale Reisedauer beträgt 90 Tage."}
+{"doc":"Reiseversicherung Bedingungen.pdf","lang":"de","index":1,"text":"Heilbehandlungskosten sind bis zu 100.000 Euro abgedeckt. Der Selbstbehalt pro Schadensfall beträgt 50 Euro."}
+{"doc":"Reiseversicherung Bedingungen.pdf","lang":"de","index":2,"text":"Schäden sind innerhalb von 14 Tagen nach dem Ereignis zu melden. Bei Gepäckverlust ist eine schriftliche Bescheinigung des Beförderers erforderlich."}
+{"doc":"Reiseversicherung Bedingungen.pdf","lang":"de","index":3,"text":"Eine Stornierung wegen Krankheit wird mit 80 Prozent der vorausbezahlten Reisekosten erstattet."}
+{"doc":"Hausordnung.pdf","lang":"de","index":0,"text":"Die Nachtruhe gilt von 22:00 bis 6:00 Uhr. In dieser Zeit sind Lärm und laute Musik zu vermeiden."}
+{"doc":"Hausordnung.pdf","lang":"de","index":1,"text":"Das Treppenhaus ist aus Brandschutzgründen freizuhalten; Fahrräder gehören in den Fahrradkeller."}
+{"doc":"Hausordnung.pdf","lang":"de","index":2,"text":"Die Waschküche darf werktags von 7:00 bis 20:00 Uhr genutzt werden; sonntags ist sie geschlossen."}
+{"doc":"Hausordnung.pdf","lang":"de","index":3,"text":"Mülltonnen sind am Abend vor der Abholung bereitzustellen. Sondermüll darf nicht in den Hausmüll."}
+{"doc":"Volkshochschule Kursprogramm.pdf","lang":"de","index":0,"text":"Der Kurs \"Italienisch für Anfänger\" beginnt am 15. September 2024 und umfasst zwölf Termine. Die Gebühr beträgt 96 Euro."}
+{"doc":"Volkshochschule Kursprogramm.pdf","lang":"de","index":1,"text":"Die Anmeldung ist bis spätestens eine Woche vor Kursbeginn online oder im Büro möglich. Eine Ermäßigung von 50 Prozent gilt für Studierende."}
+{"doc":"Volkshochschule Kursprogramm.pdf","lang":"de","index":2,"text":"Der Unterricht findet dienstags von 18:30 bis 20:00 Uhr in Raum 204 statt. Bitte bringen Sie das Lehrbuch zur ersten Stunde mit."}
+{"doc":"Volkshochschule Kursprogramm.pdf","lang":"de","index":3,"text":"Bei weniger als sechs Anmeldungen kann der Kurs abgesagt werden; die Gebühr wird in diesem Fall vollständig erstattet."}
