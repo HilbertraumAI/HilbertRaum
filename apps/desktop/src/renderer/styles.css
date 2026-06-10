@@ -194,30 +194,48 @@ code, pre, kbd { font-family: var(--font-mono); }
 .badges { display: flex; gap: 6px; flex-wrap: wrap; }
 .section-title { font-size: 13px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.06em; margin: 24px 0 4px; }
 
-/* Chat screen */
+/* ---- Chat screen (Phase 25, guidelines §3): collapsible conversation column,
+   centered 720px transcript, composer with quiet footer affordances. ---- */
 .chat-layout {
   display: grid;
-  grid-template-columns: 220px 1fr;
+  grid-template-columns: 240px 1fr;
   gap: 16px;
   height: calc(100vh - 64px);
 }
+.chat-layout.list-collapsed { grid-template-columns: 1fr; }
 .chat-sidebar { display: flex; flex-direction: column; gap: 10px; min-height: 0; }
-.chat-new { align-self: stretch; }
+.chat-sidebar-head { display: flex; gap: 6px; align-items: center; }
+.chat-new { flex: 1; }
 .chat-conv-list { display: flex; flex-direction: column; gap: 4px; overflow-y: auto; min-height: 0; }
+.chat-conv-group { display: flex; flex-direction: column; gap: 4px; }
+.chat-conv-group-label {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin: 10px 4px 2px;
+}
+.chat-conv-group:first-child .chat-conv-group-label { margin-top: 0; }
 .chat-conv-row { display: flex; gap: 4px; align-items: stretch; min-width: 0; }
 .chat-conv-row .chat-conv { flex: 1; min-width: 0; }
-.chat-conv-delete {
-  background: var(--surface);
-  border: 1px solid var(--border);
+/* Row actions reveal on hover/focus (guidelines §6) — the button stays focusable. */
+.chat-conv-menu-btn {
+  background: transparent;
+  border: 1px solid transparent;
   color: var(--text-muted);
-  border-radius: 8px;
-  font-size: 11px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
   cursor: pointer;
-  padding: 0 8px;
+  padding: 0 6px;
   flex-shrink: 0;
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease);
 }
-.chat-conv-delete:hover:not(:disabled) { color: var(--error); border-color: var(--error); }
-.chat-conv-delete:disabled { opacity: 0.5; cursor: default; }
+.chat-conv-row:hover .chat-conv-menu-btn,
+.chat-conv-menu-btn:focus-visible,
+.chat-conv-menu-btn[data-state='open'] { opacity: 1; }
+.chat-conv-menu-btn:hover:not(:disabled) { color: var(--text); border-color: var(--border); }
+.chat-conv-menu-btn:disabled { cursor: default; }
 .chat-conv {
   text-align: left;
   background: var(--surface);
@@ -245,111 +263,120 @@ code, pre, kbd { font-family: var(--font-mono); }
   vertical-align: middle;
 }
 
-.chat-mode-tabs { display: flex; gap: 6px; }
-.chat-mode-tab {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  color: var(--text-muted);
-  padding: 6px 12px;
-  border-radius: 8px;
-  font-size: 12px;
-  cursor: pointer;
-}
-.chat-mode-tab:hover:not(:disabled) { color: var(--text); }
-.chat-mode-tab.active { color: var(--text); border-color: var(--accent); }
-.chat-mode-tab:disabled { cursor: default; opacity: 0.6; }
-.chat-mode-sub { display: block; font-size: 10px; color: var(--text-muted); margin-top: 2px; }
-
-/* Plain-chat document-awareness notice (Phase 17 §5.1) */
-.chat-doc-hint {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-left: 3px solid var(--accent);
-  border-radius: 8px;
-  padding: 8px 12px;
-  font-size: 12px;
-  color: var(--text-muted);
-}
-.chat-doc-hint b { color: var(--text); font-weight: 600; }
-.chat-doc-hint-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
-.chat-doc-hint-dismiss {
+/* Chat header: segmented mode control + overflow menu (+ the Phase-27 indicator slot). */
+.chat-header { display: flex; align-items: center; gap: 10px; }
+.chat-header-spacer { flex: 1; }
+.chat-overflow-btn {
   background: transparent;
-  border: none;
+  border: 1px solid var(--border);
   color: var(--text-muted);
-  font-size: 12px;
+  border-radius: var(--radius-sm);
+  font-size: 15px;
+  line-height: 1;
   cursor: pointer;
-  padding: 4px 6px;
+  padding: 4px 10px;
+  min-height: 28px;
 }
-.chat-doc-hint-dismiss:hover { color: var(--text); }
+.chat-overflow-btn:hover, .chat-overflow-btn[data-state='open'] { color: var(--text); border-color: var(--border-strong); }
 
-/* "Ask selected documents" scope chips (Phase 17 §5.3, spec §10.4) */
-.scope-chips {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 6px;
-  font-size: 12px;
-}
-.scope-chips-label { color: var(--text-muted); }
-.scope-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
+/* Dropdown menus (Radix DropdownMenu content, guidelines §4.5: --shadow-2). */
+.menu {
   background: var(--surface);
-  border: 1px solid var(--accent);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-2);
+  padding: 4px;
+  min-width: 200px;
+  z-index: 60;
+}
+.menu-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
+  line-height: var(--line-sm);
   color: var(--text);
-  border-radius: var(--radius-full);
-  padding: 3px 6px 3px 10px;
-  max-width: 220px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.scope-chip-remove {
-  background: transparent;
-  border: none;
-  color: var(--text-muted);
-  font-size: 11px;
   cursor: pointer;
-  padding: 1px 4px;
+  user-select: none;
+  outline: none;
 }
-.scope-chip-remove:hover:not(:disabled) { color: var(--text); }
-.scope-chip-remove:disabled { cursor: default; opacity: 0.6; }
+.menu-item[data-highlighted] { background: var(--surface-hover); }
+.menu-item[data-disabled] { opacity: 0.5; cursor: default; }
+.menu-item.danger { color: var(--error); }
+.menu-item-hint { display: block; font-size: var(--text-xs); line-height: var(--line-xs); color: var(--text-muted); }
+.menu-radio-mark { width: 12px; flex-shrink: 0; color: var(--accent); font-size: 9px; line-height: var(--line-sm); }
+
+/* Popovers (Radix Popover content — the documents-scope picker). */
+.popover {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-2);
+  padding: 12px;
+  max-width: 360px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 60;
+}
+.popover-line { margin: 0; font-size: var(--text-sm); line-height: var(--line-sm); color: var(--text-muted); }
+.popover-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.popover-reset { align-self: flex-start; }
 
 .chat-main { display: flex; flex-direction: column; min-height: 0; gap: 12px; }
 .chat-transcript {
   flex: 1;
   overflow-y: auto;
   min-height: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
   padding-right: 6px;
 }
-.chat-empty { margin: auto; }
+/* The conversation is the canvas: centered column, max-width 720px (§3). */
+.chat-transcript-inner {
+  max-width: 720px;
+  margin: 0 auto;
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.chat-empty { margin: auto; width: 100%; }
+.chat-empty .empty-state { border: none; background: transparent; }
 
+.msg-block { display: flex; flex-direction: column; gap: 2px; margin-bottom: 8px; }
 .msg { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 12px 14px; box-shadow: var(--shadow-1); }
 .msg.user { border-color: var(--accent); }
 
-/* Answer-depth selector (Phase 20, spec §10.3) */
-.chat-depth-row { display: flex; align-items: center; gap: 6px; font-size: 12px; }
-.chat-depth-label { color: var(--text-muted); }
-.chat-depth-btn {
-  background: var(--surface);
-  border: 1px solid var(--border);
+/* Per-message action row (§3): revealed on hover or keyboard focus, never permanent. */
+.msg-actions { display: flex; gap: 2px; align-items: center; opacity: 0; transition: opacity var(--dur-fast) var(--ease); }
+.msg-block:hover .msg-actions,
+.msg-actions:focus-within { opacity: 1; }
+.msg-action {
+  background: transparent;
+  border: 1px solid transparent;
   color: var(--text-muted);
-  padding: 3px 10px;
-  border-radius: var(--radius-full);
-  font-size: 12px;
+  border-radius: var(--radius-sm);
+  font-size: var(--text-xs);
   cursor: pointer;
+  padding: 3px 8px;
 }
-.chat-depth-btn:hover:not(:disabled) { color: var(--text); }
-.chat-depth-btn.active { color: var(--text); border-color: var(--accent); }
-.chat-depth-btn:disabled { cursor: default; opacity: 0.6; }
+.msg-action:hover:not(:disabled) { color: var(--text); background: var(--surface-hover); }
+.msg-action:disabled { opacity: 0.5; cursor: default; }
+
+/* Composer footer affordances: quiet text-style menu/popover triggers. */
+.footer-menu-btn {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-muted);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
+  cursor: pointer;
+  padding: 3px 8px;
+}
+.footer-menu-btn:hover:not(:disabled), .footer-menu-btn[data-state='open'] { color: var(--text); background: var(--surface-hover); }
+.footer-menu-btn:disabled { opacity: 0.5; cursor: default; }
 
 /* Live Deep-mode reasoning, collapsed by default (Phase 20; never persisted) */
 .msg-thinking {
@@ -372,7 +399,8 @@ code, pre, kbd { font-family: var(--font-mono); }
   color: var(--text-muted);
   margin-bottom: 6px;
 }
-.msg-content { white-space: pre-wrap; word-break: break-word; font-size: 14px; line-height: 1.5; }
+/* Chat body reads at --text-md (guidelines §4.4: chat/document reading size). */
+.msg-content { white-space: pre-wrap; word-break: break-word; font-size: var(--text-md); line-height: var(--line-md); }
 
 /* Markdown-rendered assistant replies: markdown supplies its own block spacing, so
    pre-wrap (which would double every blank line) is turned off. */
@@ -424,8 +452,6 @@ code, pre, kbd { font-family: var(--font-mono); }
 .msg-content.md a { color: var(--link); }
 .msg-content.md hr { border: none; border-top: 1px solid var(--border); margin: 12px 0; }
 .msg-content.md img { max-width: 100%; }
-.msg-copy { background: transparent; border: none; color: var(--text-muted); font-size: 11px; cursor: pointer; padding: 0; }
-.msg-copy:hover { color: var(--text); }
 .cursor { color: var(--accent); animation: blink 1s steps(2, start) infinite; }
 @keyframes blink { to { visibility: hidden; } }
 
@@ -493,61 +519,57 @@ code, pre, kbd { font-family: var(--font-mono); }
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 
-/* RAG source-snippet panel (Phase 6) */
-.msg-sources { margin-top: 10px; border-top: 1px solid var(--border); padding-top: 8px; }
-.msg-sources-title {
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--text-muted);
-  margin-bottom: 6px;
-}
-.cite { margin-bottom: 4px; }
-.cite-head {
-  display: flex;
-  gap: 6px;
-  align-items: baseline;
+/* Inline "▸ Sources (N)" disclosure on grounded answers (Phase 25, guidelines §3). */
+.sources { margin-top: 10px; border-top: 1px solid var(--border); padding-top: 6px; }
+.sources-toggle {
   background: transparent;
   border: none;
-  color: var(--text);
-  font-size: 12px;
-  text-align: left;
+  color: var(--link);
+  font-size: var(--text-sm);
   cursor: pointer;
   padding: 2px 0;
-  width: 100%;
 }
-.cite-head:disabled { cursor: default; }
-.cite-label { color: var(--link); font-weight: 600; }
-.cite-src { color: var(--text-muted); }
-.cite-snippet {
-  margin: 4px 0 8px 18px;
-  padding: 8px 10px;
+.sources-cards { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
+.source-card {
   background: var(--surface-2);
   border: 1px solid var(--border);
-  border-radius: 8px;
-  font-size: 12px;
-  line-height: 1.5;
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  font-size: var(--text-sm);
+  line-height: var(--line-sm);
+}
+.source-card-head { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.cite-label { color: var(--link); font-weight: 600; }
+.source-card-title { font-weight: 500; word-break: break-all; }
+.source-card-where { color: var(--text-muted); }
+.source-card-snippet {
+  margin-top: 6px;
   white-space: pre-wrap;
   word-break: break-word;
   color: var(--text-muted);
 }
 
-.chat-error { color: var(--error); font-size: 13px; }
-.chat-input-row { display: flex; flex-direction: column; gap: 8px; }
+/* Composer (guidelines §3/§6): centered with the transcript; auto-grow input,
+   one Send/Stop button, quiet footer row. */
+.composer { display: flex; flex-direction: column; gap: 6px; max-width: 720px; width: 100%; margin: 0 auto; }
+.composer-row { display: flex; gap: 8px; align-items: flex-end; }
 .chat-input {
+  flex: 1;
   width: 100%;
   resize: none;
-  min-height: 64px;
+  min-height: 44px;
+  max-height: 220px;
   background: var(--surface-2);
   border: 1px solid var(--border-strong);
   color: var(--text);
   border-radius: var(--radius-sm);
   padding: 10px 12px;
   font-family: inherit;
-  font-size: 14px;
+  font-size: var(--text-base);
+  line-height: var(--line-base);
 }
 .chat-input:focus { border-color: var(--focus); }
-.chat-input-actions { display: flex; gap: 8px; align-items: center; }
+.composer-footer { display: flex; gap: 12px; align-items: center; min-height: 26px; }
 
 /* Documents screen */
 .doc-card { display: flex; flex-direction: column; gap: 10px; }
@@ -602,11 +624,6 @@ code, pre, kbd { font-family: var(--font-mono); }
   border-radius: var(--radius-sm);
 }
 .activity-time { opacity: 0.7; font-variant-numeric: tabular-nums; }
-
-/* Chat: non-error notice (e.g. transcript export confirmation, M13) */
-.chat-notice {
-  padding: 4px 16px;
-}
 
 /* ---- Shared component layer (Phase 24, guidelines §6) ---------------------------- */
 

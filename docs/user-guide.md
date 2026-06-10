@@ -1,6 +1,6 @@
 # Private AI Drive Lite — User Guide
 
-_Last updated: 2026-06-10 (Phase 18)_
+_Last updated: 2026-06-10 (Phase 25)_
 
 Private AI Drive Lite is a private AI workspace that runs **entirely on your laptop**, from
 a portable drive. Your prompts, documents, embeddings, and chat history stay local. There is
@@ -142,32 +142,54 @@ words per second" and "faster than you can read". There is nothing to install or
 
 ## 6. Chat
 
-1. Open **Chat** and click **New chat**.
-2. Type a message and press Enter. The answer streams in word by word, with formatting
+The Chat screen is built around the conversation itself: your conversations on the left
+(grouped by day), the transcript in the middle, and the message box at the bottom. At the
+top, one switch — **Chat | Ask my documents** — picks what your next conversation does:
+plain Chat is a general assistant; *Ask my documents* answers from your imported files,
+with sources (see §7).
+
+1. Open **Chat**, type a message, and press **Enter** to send (**Shift+Enter** makes a new
+   line). The box grows as you type. The answer streams in word by word, with formatting
    (bold, lists, tables, code blocks) rendered as the model writes it.
-3. Use **Stop** to cancel, **Regenerate** to retry, or the copy button to copy a reply.
-4. To remove a conversation, click the **✕** next to it in the sidebar (works for document
-   Q&A conversations too). This permanently deletes the conversation and its messages.
+2. While an answer is streaming, the send button becomes **Stop** — click it (or tab to it)
+   to cancel.
+3. Hover over (or tab to) any answer for its actions: **Try again** regenerates the latest
+   answer, **Copy** copies it, and **Save** saves the conversation to a file of your choice.
+   A small "Copied" / "Saved" note confirms each one.
+4. **Save this conversation** is also in the **⋯** menu at the top right of the chat. The
+   file is written wherever you choose — nothing leaves the device otherwise.
+5. To remove a conversation, hover over it in the list and open its **⋯** menu (or
+   right-click the row), then choose **Delete conversation** and confirm. This permanently
+   deletes the conversation and its messages — document Q&A conversations too.
+6. Need more room? The **«** button hides the conversation list; **»** brings it back. The
+   app remembers your choice.
+
+Starting fresh? The empty chat suggests a few example questions — click one to put it in
+the message box — and, if you haven't imported anything yet, offers **Add documents to ask
+about them**.
 
 Everything you type and everything the model replies stays on your device.
 
-### Answer depth (Fast / Balanced / Deep)
+### Answer detail (Quick / Balanced / Thorough)
 
-Above the message box you can choose how much work the model puts into each answer:
+**Answer detail**, just under the message box, chooses how much work the model puts into
+each answer:
 
-- **Fast** — quick, to-the-point answers. Great for simple questions and follow-ups.
+- **Quick** — short, to-the-point answers. Great for simple questions and follow-ups.
 - **Balanced** — the everyday default. A direct answer with the model's normal care.
-- **Deep** — the model **thinks the problem through first**, then answers. Best for tricky
-  questions: comparisons, multi-step reasoning, careful writing. Deep answers take noticeably
-  longer — that extra time *is* the feature.
+- **Thorough** — the model **thinks the problem through first**, then answers. Best for
+  tricky questions: comparisons, multi-step reasoning, careful writing. Thorough answers
+  take noticeably longer — that extra time *is* the feature.
 
-While a Deep answer is being worked out, a collapsed **"Thinking…"** section appears above
-the reply — click it if you're curious how the model is reasoning. It is a live view only:
-the saved conversation keeps just the answer, and exports never include the thinking text.
+While a Thorough answer is being worked out, a collapsed **"Thinking…"** line appears above
+the reply — click it if you're curious how the model is reasoning; it tucks itself away
+when the answer starts. It is a live view only: the saved conversation keeps just the
+answer, and saved files never include the thinking text.
 
-The choice sticks per conversation, and **Deep is only offered when the active model supports
-it** (all chat models that ship with the drive do). Document answers (**Ask Documents**)
-always use Balanced — they are meant to be quick and literal about your files.
+The choice sticks per conversation, and **Thorough is only offered when the active model
+supports it** (all chat models that ship with the drive do). Document answers
+(**Ask my documents**) always use Balanced — they are meant to be quick and literal about
+your files.
 
 ---
 
@@ -180,20 +202,21 @@ always use Balanced — they are meant to be quick and literal about your files.
    document search and answers are based on. (It shows text, not the original layout: on
    an encrypted drive the original file stays encrypted and is never handed to another
    program.)
-3. Go to **Chat** and switch to **Ask Documents** mode (or click **Ask My Documents** on the
+3. Go to **Chat** and switch to **Ask my documents** (or click **Ask My Documents** on the
    Home screen), then ask a question, e.g.
    *"What are the termination rights in this contract?"*
-4. The answer includes **citations** — the source file, page/section, and a snippet you can
-   expand. If the documents don't contain the answer, the app says so rather than guessing.
+4. Each answer carries **▸ Sources (N)** — click it to see the cited files, with
+   page/section and the exact passage each citation came from. If the documents don't
+   contain the answer, the app says so rather than guessing.
 
-**Ask only chosen documents.** On the **Documents** screen, tick the checkboxes next to the
-files you care about and click **Ask these documents**. The chat opens with those files shown
-as small chips above the message box — answers then come only from them. Remove a chip to
-widen the search again (no chips = all your documents).
+**Ask only chosen documents.** Under the message box, **📄 Using N documents** shows which
+files answers come from — click it to narrow the question to specific documents, add more,
+or go back to **Use all documents**. You can also start from the **Documents** screen: tick
+the checkboxes next to the files you care about and click **Ask these documents**.
 
-**Chat vs. Ask Documents.** Plain **Chat** does *not* read your files — it is a general
-assistant. When you have documents imported, the Chat tab reminds you of this and offers a
-one-click switch, so you never mistake a confident general answer for a document answer.
+**Chat vs. Ask my documents.** Plain **Chat** does *not* read your files — it is a general
+assistant. The switch at the top of the chat keeps the two modes one click apart, so you
+never mistake a confident general answer for a document answer.
 
 If the app tells you your documents *"need a quick re-index"*, open **Documents** and use
 **Re-index** (or **Re-index all**) — this happens when files were indexed with a different

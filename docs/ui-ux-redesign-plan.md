@@ -23,7 +23,7 @@ matchers).
 | D-UI1 | **Adopt Radix primitives, narrowly scoped:** `@radix-ui/react-dialog`, `react-popover`, `react-dropdown-menu`, `react-tooltip` only (focus traps, dismissal, positioning are easy to get wrong by hand). Pure JS, MIT, renderer-bundled — same class as `react-markdown`. Segmented control, switch, chips, badges, banners stay hand-rolled. | **APPROVED 2026-06-10; EXECUTED in Phase 24** — pinned exact (`react-dialog@1.1.16`, `react-popover@1.1.16`, `react-dropdown-menu@2.1.17`, `react-tooltip@1.2.9`), 42 transitive packages reviewed (all MIT/pure-JS/no install scripts), recorded in BUILD_STATE §3. Phase 24 uses Dialog only; the rest are staged for Phase 25. |
 | D-UI2 | **Theme setting `'system' \| 'light' \| 'dark'`, default `'system'`** (resolves to light when the OS reports nothing). The pre-unlock gate cannot read settings (encrypted DB) → the gate always follows the OS theme. | **RESOLVED — implemented as written in Phase 23** (BUILD_STATE §3 entry) |
 | D-UI3 | **Home stays**, rebuilt as a readiness hub ("is everything ready?" at a glance). Re-evaluate after Phase 26: if it duplicates the Chat empty state, fold it in. | PROPOSED |
-| D-UI4 | **Depth-mode ids stay `fast\|balanced\|deep`** everywhere in code/IPC/persistence; only UI labels change to Quick/Balanced/Thorough. No data migration. | LOCKED (cheap, zero risk) |
+| D-UI4 | **Depth-mode ids stay `fast\|balanced\|deep`** everywhere in code/IPC/persistence; only UI labels change to Quick/Balanced/Thorough. No data migration. | LOCKED — **EXECUTED in Phase 25** (DepthMenu labels; tests assert the label↔id mapping) |
 
 ---
 

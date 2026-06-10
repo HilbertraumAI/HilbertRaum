@@ -7,10 +7,11 @@ import { HomeScreen } from '../../src/renderer/screens/HomeScreen'
 import type { Conversation, Message, RuntimeStatus } from '../../src/shared/types'
 import { stubApi } from '../helpers/renderer'
 
-// Renderer tests for the post-MVP polish round: deleting conversations from the chat
-// sidebar (with confirm), opening the Chat screen directly in documents mode, and the
-// Home screen's "Ask My Documents" navigating to the document-Q&A chat instead of the
-// import screen (the original bug: both buttons went to 'documents').
+// Renderer tests for the chat screen's structural behaviors (Phase 25 layout, same
+// contracts underneath): deleting conversations through the row "⋯" menu + ConfirmDialog
+// (the last browser confirm() is gone), markdown rendering, opening the Chat screen
+// directly in documents mode, the documents-scope popover (replaces the scope-chip row),
+// and the Home screen's "Ask My Documents" navigating to the document-Q&A chat.
 
 function conv(over: Partial<Conversation>): Conversation {
   return {
@@ -46,12 +47,19 @@ beforeAll(() => {
 afterEach(() => {
   cleanup()
   vi.restoreAllMocks()
+  window.localStorage.clear()
 })
 
-describe('ChatScreen — delete conversation', () => {
-  it('deletes after confirm and refreshes the sidebar', async () => {
+/** Open conversation-row "⋯" menu → "Delete conversation" → the confirm dialog. */
+async function openDeleteConfirm(user: ReturnType<typeof userEvent.setup>, title: string): Promise<void> {
+  await user.click(screen.getByRole('button', { name: `Options for conversation "${title}"` }))
+  await user.click(await screen.findByRole('menuitem', { name: /delete conversation/i }))
+  await screen.findByRole('dialog')
+}
+
+describe('ChatScreen — delete conversation (⋯ menu + ConfirmDialog)', () => {
+  it('deletes after confirming in the dialog and refreshes the sidebar', async () => {
     const user = userEvent.setup()
-    vi.spyOn(window, 'confirm').mockReturnValue(true)
     const listConversations = vi
       .fn<() => Promise<Conversation[]>>()
       .mockResolvedValueOnce([conv({})]) // initial mount
@@ -65,15 +73,15 @@ describe('ChatScreen — delete conversation', () => {
     render(<ChatScreen onNavigate={() => {}} />)
 
     await screen.findByText('My first chat')
-    await user.click(screen.getByRole('button', { name: /delete conversation "My first chat"/i }))
+    await openDeleteConfirm(user, 'My first chat')
+    await user.click(screen.getByRole('button', { name: 'Delete' }))
 
     await waitFor(() => expect(deleteConversation).toHaveBeenCalledWith('c1'))
     await waitFor(() => expect(screen.queryByText('My first chat')).not.toBeInTheDocument())
   })
 
-  it('does nothing when the confirm dialog is declined', async () => {
+  it('does nothing when the dialog is cancelled', async () => {
     const user = userEvent.setup()
-    vi.spyOn(window, 'confirm').mockReturnValue(false)
     const deleteConversation = vi.fn(async () => {})
     stubApi({
       listConversations: vi.fn(async () => [conv({})]),
@@ -83,7 +91,9 @@ describe('ChatScreen — delete conversation', () => {
     render(<ChatScreen onNavigate={() => {}} />)
 
     await screen.findByText('My first chat')
-    await user.click(screen.getByRole('button', { name: /delete conversation/i }))
+    await openDeleteConfirm(user, 'My first chat')
+    await user.click(screen.getByRole('button', { name: 'Cancel' }))
+
     expect(deleteConversation).not.toHaveBeenCalled()
     expect(screen.getByText('My first chat')).toBeInTheDocument()
   })
@@ -166,7 +176,7 @@ describe('ChatScreen — initial mode', () => {
   })
 })
 
-// ---- Phase 17: plain-chat document awareness + "ask selected documents" ----------
+// ---- Documents-scope popover (Phase 25 §3; scope semantics from Phase 17 §5.3) ----
 
 function indexedDoc(id: string, title: string) {
   return {
@@ -183,63 +193,8 @@ function indexedDoc(id: string, title: string) {
   }
 }
 
-describe('ChatScreen — plain-chat document awareness (§5.1)', () => {
-  it('shows the notice in chat mode when indexed documents exist, and not in documents mode', async () => {
-    stubApi({
-      listConversations: vi.fn(async () => []),
-      getRuntimeStatus: vi.fn(async () => runningStatus),
-      listDocuments: vi.fn(async () => [indexedDoc('d1', 'contract.pdf')])
-    })
-    const { unmount } = render(<ChatScreen onNavigate={() => {}} />)
-    expect(await screen.findByText(/don't use your imported documents/i)).toBeInTheDocument()
-    unmount()
-
-    stubApi({
-      listConversations: vi.fn(async () => []),
-      getRuntimeStatus: vi.fn(async () => runningStatus),
-      listDocuments: vi.fn(async () => [indexedDoc('d1', 'contract.pdf')])
-    })
-    render(<ChatScreen onNavigate={() => {}} initialMode="documents" />)
-    await screen.findByPlaceholderText(/ask about your documents/i)
-    expect(screen.queryByText(/don't use your imported documents/i)).not.toBeInTheDocument()
-  })
-
-  it('stays hidden with no indexed documents', async () => {
-    stubApi({
-      listConversations: vi.fn(async () => []),
-      getRuntimeStatus: vi.fn(async () => runningStatus),
-      listDocuments: vi.fn(async () => [])
-    })
-    render(<ChatScreen onNavigate={() => {}} />)
-    await screen.findByPlaceholderText(/message private ai drive/i)
-    expect(screen.queryByText(/don't use your imported documents/i)).not.toBeInTheDocument()
-  })
-
-  it('"Ask Documents instead" switches the composer to documents mode; dismiss hides it', async () => {
-    const user = userEvent.setup()
-    stubApi({
-      listConversations: vi.fn(async () => []),
-      getRuntimeStatus: vi.fn(async () => runningStatus),
-      listDocuments: vi.fn(async () => [indexedDoc('d1', 'contract.pdf')])
-    })
-    const { unmount } = render(<ChatScreen onNavigate={() => {}} />)
-    await user.click(await screen.findByRole('button', { name: /ask documents instead/i }))
-    expect(screen.getByPlaceholderText(/ask about your documents/i)).toBeInTheDocument()
-    unmount()
-
-    stubApi({
-      listConversations: vi.fn(async () => []),
-      getRuntimeStatus: vi.fn(async () => runningStatus),
-      listDocuments: vi.fn(async () => [indexedDoc('d1', 'contract.pdf')])
-    })
-    render(<ChatScreen onNavigate={() => {}} />)
-    await user.click(await screen.findByRole('button', { name: /dismiss documents hint/i }))
-    expect(screen.queryByText(/don't use your imported documents/i)).not.toBeInTheDocument()
-  })
-})
-
-describe('ChatScreen — "ask selected documents" scope chips (§5.3)', () => {
-  it('renders a persisted conversation scope as titled chips and removes one via updateConversationScope', async () => {
+describe('ChatScreen — documents-scope popover', () => {
+  it('shows a persisted conversation scope and removes one document via updateConversationScope', async () => {
     const user = userEvent.setup()
     const scoped = conv({ id: 'c9', title: 'Doc Q&A', mode: 'documents', scopeDocumentIds: ['d1', 'd2'] })
     const updateConversationScope = vi.fn(async () => ({ ...scoped, scopeDocumentIds: ['d2'] }))
@@ -257,13 +212,48 @@ describe('ChatScreen — "ask selected documents" scope chips (§5.3)', () => {
     render(<ChatScreen onNavigate={() => {}} />)
 
     await user.click(await screen.findByText('Doc Q&A'))
-    expect(await screen.findByText(/asking 2 selected documents/i)).toBeInTheDocument()
-    expect(screen.getByText('contract.pdf')).toBeInTheDocument()
+    await user.click(await screen.findByRole('button', { name: /using 2 documents/i }))
+    expect(await screen.findByText('contract.pdf')).toBeInTheDocument()
     expect(screen.getByText('terms.docx')).toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: /stop asking contract.pdf/i }))
     await waitFor(() => expect(updateConversationScope).toHaveBeenCalledWith('c9', ['d2']))
-    await waitFor(() => expect(screen.queryByText('contract.pdf')).not.toBeInTheDocument())
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /using 1 document/i })).toBeInTheDocument()
+    )
+  })
+
+  it('adds a document to the scope and resets to all documents', async () => {
+    const user = userEvent.setup()
+    const scoped = conv({ id: 'c9', title: 'Doc Q&A', mode: 'documents', scopeDocumentIds: ['d1'] })
+    const updateConversationScope = vi.fn(async (_id: string, next: string[] | null) => ({
+      ...scoped,
+      scopeDocumentIds: next
+    }))
+    const listConversations = vi
+      .fn<() => Promise<Conversation[]>>()
+      .mockResolvedValueOnce([scoped])
+      .mockResolvedValueOnce([{ ...scoped, scopeDocumentIds: ['d1', 'd2'] }])
+      .mockResolvedValue([{ ...scoped, scopeDocumentIds: null }])
+    stubApi({
+      listConversations,
+      getRuntimeStatus: vi.fn(async () => runningStatus),
+      listMessages: vi.fn(async () => []),
+      listDocuments: vi.fn(async () => [indexedDoc('d1', 'contract.pdf'), indexedDoc('d2', 'terms.docx')]),
+      updateConversationScope
+    })
+    render(<ChatScreen onNavigate={() => {}} />)
+
+    await user.click(await screen.findByText('Doc Q&A'))
+    await user.click(await screen.findByRole('button', { name: /using 1 document/i }))
+    // Documents outside the scope are offered as "+ add" chips.
+    await user.click(await screen.findByRole('button', { name: /\+ terms.docx/i }))
+    await waitFor(() => expect(updateConversationScope).toHaveBeenCalledWith('c9', ['d1', 'd2']))
+    // The trigger label tracks the refreshed scope while the popover stays open.
+    expect(await screen.findByRole('button', { name: /using 2 documents/i })).toBeInTheDocument()
+
+    await user.click(await screen.findByRole('button', { name: /use all documents/i }))
+    await waitFor(() => expect(updateConversationScope).toHaveBeenCalledWith('c9', null))
   })
 
   it('applies the pending handoff scope to the next documents conversation', async () => {
@@ -281,13 +271,23 @@ describe('ChatScreen — "ask selected documents" scope chips (§5.3)', () => {
       <ChatScreen onNavigate={() => {}} initialMode="documents" initialScopeDocumentIds={['d1']} />
     )
 
-    // The handoff renders as chips before any conversation exists…
-    expect(await screen.findByText(/asking 1 selected document/i)).toBeInTheDocument()
+    // The handoff shows in the footer affordance before any conversation exists…
+    expect(await screen.findByRole('button', { name: /using 1 document/i })).toBeInTheDocument()
     // …and the next conversation is created WITH the scope.
     await user.click(screen.getByRole('button', { name: /new document q&a/i }))
     await waitFor(() =>
       expect(createConversation).toHaveBeenCalledWith({ mode: 'documents', scopeDocumentIds: ['d1'] })
     )
+  })
+
+  it('labels the whole corpus honestly when no scope is set', async () => {
+    stubApi({
+      listConversations: vi.fn(async () => []),
+      getRuntimeStatus: vi.fn(async () => runningStatus),
+      listDocuments: vi.fn(async () => [indexedDoc('d1', 'contract.pdf'), indexedDoc('d2', 'terms.docx')])
+    })
+    render(<ChatScreen onNavigate={() => {}} initialMode="documents" />)
+    expect(await screen.findByRole('button', { name: /using all 2 documents/i })).toBeInTheDocument()
   })
 })
 

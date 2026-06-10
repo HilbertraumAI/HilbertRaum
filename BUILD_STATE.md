@@ -48,7 +48,14 @@ component layer) is DONE** on the same branch — D-UI1 executed (the four Radix
 pinned + license-reviewed), `renderer/components/` (Button/Badge/Banner/Toast/ConfirmDialog/
 Modal/SegmentedControl/Switch/Chip/EmptyState/Progress per guidelines §6), every non-chat
 screen + the WorkspaceGate migrated onto them, and "Saved" feedback moved to polite-live-region
-toasts (§3 entry). Release-wise,
+toasts (§3 entry). **Phase 25 (chat screen restructure — the wave's priority) is DONE** on the
+same branch — ChatScreen split into `renderer/chat/` per guidelines §3 exactly: collapsible
+date-grouped conversation list (hover "⋯" menu + ConfirmDialog deletes — the last browser
+`confirm()` is gone), centered 720px transcript with per-message Try again/Copy/Save actions
+and the inline "▸ Sources (N)" disclosure, header SegmentedControl + "⋯" overflow, the
+composer-footer "Answer detail" dropdown (Quick/Balanced/Thorough labels per D-UI4) and the
+documents-scope popover, the teaching empty state (doc-hint banner deleted), and buffered
+streaming with the auto-collapsing Thinking… line (§3 entry). Release-wise,
 remaining work = **manual release acceptance only** (§5, incl. the GPU
 hardware matrix, item 1b). Consciously-accepted gaps live in
 [`docs/known-limitations.md`](docs/known-limitations.md)._
@@ -84,6 +91,7 @@ hardware matrix, item 1b). Consciously-accepted gaps live in
 | 22 | Signed offline update bundles | 🔴 blocked (key-management design) |
 | 23 | UI design tokens + light/dark theming | 🟢 done (branch `ui-phase-23-tokens-theming`, not merged) |
 | 24 | UI shared component layer (Radix + components/) | 🟢 done (same branch, not merged) |
+| 25 | UI chat screen restructure (guidelines §3) | 🟢 done (same branch, not merged) |
 
 Legend: ⚪ not started · 🟡 in progress · 🟢 done · 🔴 blocked
 
@@ -974,6 +982,69 @@ Repo root: `f:\_coding\ai_drive`.
   seven screens in BOTH themes, preview + delete dialogs (light AND dark), Saved toast,
   segmented control, switches, badge/banner/empty states on light especially. Gate:
   typecheck clean, 620 tests, build green.
+- **Phase 25 — chat screen restructure (2026-06-10, plan
+  [`docs/ui-ux-redesign-plan.md`](docs/ui-ux-redesign-plan.md) Phase 25; design source
+  [`docs/design-guidelines.md`](docs/design-guidelines.md) §3 exactly (+§6/§9); built on
+  branch `ui-phase-23-tokens-theming` — NOT merged to master). Renderer-only: the
+  `chat:*`/`rag:*` IPC, depth ids, and `chat:reasoning` mechanisms are untouched
+  underneath.**
+  1. **ChatScreen split into `renderer/chat/`:** `ConversationList` (collapsible second
+     column; date-grouped Today/Yesterday/Last 7 days/Earlier via the pure
+     `groupConversations()`; per-row hover/focus "⋯" Radix DropdownMenu — also opened by
+     right-click — whose Delete goes through `ConfirmDialog`, retiring the app's LAST
+     browser `confirm()` and the permanent per-row ✕ buttons; collapse state in
+     localStorage `paid.chat.listCollapsed` — a UI preference, deliberately NOT user
+     data, so it lives outside the encrypted workspace), `Transcript` (centered,
+     max-width 720px, `--text-md` body; owns autoscroll), `MessageActions` (hover/focus
+     row on assistant answers: ↺ Try again [last answer, chat mode only] · Copy · Save —
+     buttons stay focusable while CSS-hidden so keyboard focus reveals them),
+     `Composer` (auto-grow textarea capped at 220px, ONE Send/Stop button, Enter sends /
+     Shift+Enter newline, footer row), `SourcesDisclosure` ("▸ Sources (N)" inline
+     disclosure → name + page/section + snippet cards, replacing the always-open
+     SourcePanel), `DepthMenu`, `ScopePopover`.
+  2. **Header (guidelines §3):** SegmentedControl "Chat | Ask my documents" replaces the
+     mode tabs; a "⋯" overflow DropdownMenu holds **Save this conversation** (the old
+     Export); an empty `data-slot="local-indicator"` span marks where the Phase-27
+     ambient indicator lands. "Copied"/"Saved (path)" confirmations go through the
+     Phase-24 toast host — the old label-mutating Copy button and the `.chat-notice`
+     export line are gone; errors stay inline (`Banner tone="error"`, dismissible).
+  3. **Composer footer:** "Answer detail ▾" Radix DropdownMenu radio group labelled
+     **Quick · Balanced · Thorough per D-UI4 — ids stay `fast|balanced|deep`** in
+     code/IPC/persistence (no migration; tests assert label↔id mapping). Thorough hidden
+     without manifest thinking support; sticky-depth + coerce-to-balanced behavior
+     preserved. Documents mode instead shows **"📄 Using N documents ▾"** (Radix Popover):
+     scoped docs as Phase-24 Chips (✕ removes), "+ title" chips add from the indexed
+     corpus, "Use all documents" resets to null scope — replacing the permanent
+     scope-chip row; same `updateConversationScope`/pendingScope semantics underneath.
+  4. **Teaching empty state** (EmptyState + Chip): friendly line + 3 example-prompt chips
+     that fill the composer + an "Add documents to ask about them" nudge (via the
+     existing `onNavigate`) only when no indexed documents exist. The dismissible
+     plain-chat doc-awareness hint banner is **deleted** (its §5.1 job is now done by the
+     always-visible mode control + empty state — the Phase-17 wrong-tab guard rationale
+     is satisfied structurally).
+  5. **Streaming:** token + reasoning deltas now buffer in refs and flush on a 40 ms
+     timer (one re-render per flush, not per token — layout-thrash guard); the live
+     bubble's text is a `role="log"` polite ARIA live region; the "Thinking…" line is a
+     controlled `<details>` that the FIRST answer token auto-collapses (expand stays
+     one click; the Phase-20 never-persisted contract is unchanged — reasoning state
+     clears with the stream and history re-reads carry answers only). Stop remains a
+     real button (keyboard-reachable single Send/Stop swap).
+  Tests (+8 → 628; chat suites REWRITTEN against the new DOM, proofs kept equal-or-
+  stronger): `ChatHomeNav` (delete via ⋯ menu + ConfirmDialog confirm/cancel, markdown
+  trio, documents-mode entry, scope popover remove/add/reset/handoff/whole-corpus
+  label), `ChatDepth` (Thorough-gating, label↔id send, stickiness, Thinking collapse →
+  expand → auto-collapse → not persisted), new `ChatRestructure` (empty-state chips fill
+  composer, docs nudge, mode radiogroup, collapse persistence across remount via
+  localStorage, per-message Copy/Save/Try-again + toasts, header overflow save,
+  `groupConversations` buckets). `tests/setup.ts` gained jsdom-guarded ResizeObserver/
+  pointer-capture stubs for Radix's positioned primitives. Eyeballed via the scripted
+  Playwright walk in BOTH themes (24 scenes: teaching empty state, chip fill, streamed
+  answer with the Thinking line collapsed AND expanded — reasoning injected from the
+  main process on the real `chat:reasoning:<id>` channel since the mock runtime never
+  emits it, hover actions, Copied/Saved toasts incl. a patched save dialog, answer-detail
+  menu, row ⋯ menu + delete confirm, sources disclosure expanded, scope popover
+  all/scoped, collapsed list; walk gotcha recorded in project memory: Electron userData
+  localStorage persists across walk runs). Gate: typecheck clean, 628 tests, build green.
 
 ---
 
@@ -1582,26 +1653,29 @@ items are **MANUAL acceptance only** (R2/R5/R7 + the GPU hardware matrix). In ro
    E5-indexed corpus → promote a measured default; semantics already locked, D12). Smaller
    leftovers: an icon/`buildResources` for electron-builder; ANN vector index only if a real
    corpus outgrows the linear scan (plan §9 item 4 / D15 — explicitly not built).
-4. **UI/UX polish wave (Phases 23–27) — IN PROGRESS: Phases 23 + 24 DONE 2026-06-10** on
-   branch `ui-phase-23-tokens-theming` (not merged — see the §3 entries: Phase 23 =
+4. **UI/UX polish wave (Phases 23–27) — IN PROGRESS: Phases 23 + 24 + 25 DONE 2026-06-10**
+   on branch `ui-phase-23-tokens-theming` (not merged — see the §3 entries: Phase 23 =
    tokens.css, full role-token restyle + AA fixes, a11y baseline, `AppSettings.theme` +
    Appearance card; Phase 24 = the four pinned Radix primitives [D-UI1 executed,
    license-reviewed], `renderer/components/` per guidelines §6, all non-chat screens +
-   gate migrated, Saved-feedback toasts; both phases eyeballed on every screen in both
+   gate migrated, Saved-feedback toasts; Phase 25 = the chat restructure per guidelines
+   §3 — `renderer/chat/` split, collapsible conversation list, 720px transcript,
+   per-message actions, sources disclosure, depth dropdown [D-UI4 labels] + scope
+   popover, teaching empty state, buffered streaming; all phases eyeballed in both
    themes). Wave docs:
    [`docs/design-guidelines.md`](docs/design-guidelines.md) (ADOPTED — tokens, light/dark
    themes, chat-screen layout, IA regroup 7→5 nav, components, microcopy, WCAG 2.2 AA;
    distilled from an external design-research round) +
    [`docs/ui-ux-redesign-plan.md`](docs/ui-ux-redesign-plan.md) (working paper sequencing
-   23 tokens/theming ✅ → 24 component layer ✅ → 25 chat restructure [the priority,
-   next] → 26 IA regroup → 27 microcopy/ambient-trust/first-run). Renderer-only except
+   23 tokens/theming ✅ → 24 component layer ✅ → 25 chat restructure ✅ [the priority] →
+   26 IA regroup [next] → 27 microcopy/ambient-trust/first-run). Renderer-only except
    the additive `AppSettings.theme` key (shipped in 23) + the OS-following pre-paint
-   window color. D-UI2 resolved as planned; D-UI1 executed in Phase 24 (popover/
-   dropdown-menu/tooltip staged for Phase 25). D-UI3 (Home's fate) stays open until
-   after Phase 26.
+   window color. D-UI2 resolved as planned; D-UI1 executed in Phase 24; D-UI4 executed
+   in Phase 25 (UI labels Quick/Balanced/Thorough, ids unchanged). D-UI3 (Home's fate)
+   stays open until after Phase 26.
 
-**Current gate (2026-06-10, post-Phase-24 on `ui-phase-23-tokens-theming`): typecheck clean,
-620/620 tests pass (+6 manual tests — 4 GPU smoke behind `PAID_GPU_SMOKE`, 1 thinking smoke
+**Current gate (2026-06-10, post-Phase-25 on `ui-phase-23-tokens-theming`): typecheck clean,
+628/628 tests pass (+6 manual tests — 4 GPU smoke behind `PAID_GPU_SMOKE`, 1 thinking smoke
 behind `PAID_THINKING_SMOKE`, 1 rerank smoke behind `PAID_RERANK_SMOKE` — skipped in CI),
 `npm run build` green.** The per-phase gate history (test counts, bundle sizes, per-phase
 test inventories) lives in git history.

@@ -1,39 +1,42 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import Markdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
-import type { ChatDepthMode, Citation, Conversation, DocumentInfo, Message } from '@shared/types'
+import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
+import type { ChatDepthMode, Conversation, DocumentInfo, Message } from '@shared/types'
+import { Banner, Button, Chip, EmptyState, SegmentedControl, useToast } from '../components'
+import { Composer, ConversationList, DepthMenu, ScopePopover, Transcript } from '../chat'
 
-// Chat screen (spec §7.6 / §7.8 — Milestones 3 & 6). Conversation list on the left, a
-// streamed message view on the right. Two modes share the same streaming contract:
-//   • "Chat"          → sendChatMessage (plain assistant)
-//   • "Ask Documents" → askDocuments    (RAG: grounded answer + [Sn] citations)
-// Tokens arrive over the preload `onToken(convId)` channel; both calls resolve with the
-// final persisted assistant message. A mode is fixed per conversation (its `mode` field);
-// the toggle picks the mode for the NEXT new conversation. Both need a running model — when
-// none is running we show an empty state pointing at the Models screen.
+// Chat screen (spec §7.6 / §7.8; layout per design-guidelines §3, Phase 25). The
+// conversation is the canvas: a collapsible conversation list, a centered transcript,
+// and a composer whose footer carries the quiet affordances (answer detail, document
+// scope). Two modes share the same streaming contract:
+//   • "Chat"             → sendChatMessage (plain assistant)
+//   • "Ask my documents" → askDocuments    (RAG: grounded answer + [Sn] citations)
+// Tokens arrive over the preload `onToken(convId)` channel (buffered here against
+// layout thrash); both calls resolve with the final persisted assistant message. A mode
+// is fixed per conversation (its `mode` field); the header segmented control picks the
+// mode for the NEXT new conversation. Both need a running model — when none is running
+// we show an empty state pointing at the Models screen.
 //
-// Phase 17 (plan §5.1/§5.3): plain Chat shows a dismissible "answers don't use your
-// documents" notice while indexed documents exist (the wrong-tab hallucination guard),
-// and documents mode carries an optional "ask selected documents" scope — chips above
-// the composer, persisted per conversation (`scopeDocumentIds`).
-//
-// Phase 20 (spec §10.3): the composer carries an answer-depth selector
-// (Fast / Balanced / Deep), sticky per conversation for this session and sent
-// per-message (`ChatOptions.mode`). Deep is offered only when the running model's
-// manifest declares thinking support (`RuntimeStatus.supportsThinkingMode`); its
-// reasoning streams into a collapsed "Thinking…" block on the live bubble only —
-// the persisted reply never includes it. Document answers always run Balanced.
+// Phase 20 (spec §10.3): the composer footer carries the answer-detail dropdown
+// (Quick / Balanced / Thorough — ids stay fast|balanced|deep per D-UI4), sticky per
+// conversation for this session and sent per-message (`ChatOptions.mode`). Thorough is
+// offered only when the running model's manifest declares thinking support
+// (`RuntimeStatus.supportsThinkingMode`); its reasoning streams into a collapsed
+// "Thinking…" line on the live bubble only — the persisted reply never includes it.
+// Document answers always run Balanced.
 
 type Mode = 'chat' | 'documents'
 
-const DEPTHS: Array<{ value: ChatDepthMode; label: string; hint: string }> = [
-  { value: 'fast', label: 'Fast', hint: 'Quick, to-the-point answers' },
-  { value: 'balanced', label: 'Balanced', hint: 'The everyday default' },
-  {
-    value: 'deep',
-    label: 'Deep',
-    hint: 'The model thinks a problem through before answering — best for tricky questions, takes longer'
-  }
+/** localStorage key for the conversation-list collapse (a UI preference, not user data). */
+export const LIST_COLLAPSED_KEY = 'paid.chat.listCollapsed'
+
+/** Streamed tokens are batched and flushed on this cadence instead of per-token. */
+const STREAM_FLUSH_MS = 40
+
+/** Teaching empty state (guidelines §3): example prompts that fill the composer. */
+const EXAMPLE_PROMPTS = [
+  'Summarize this contract',
+  'What are the payment terms?',
+  "Find every mention of 'indemnity'"
 ]
 
 interface Props {
@@ -52,34 +55,75 @@ export function ChatScreen({ onNavigate, initialMode, initialScopeDocumentIds }:
   const [input, setInput] = useState('')
   const [streaming, setStreaming] = useState(false)
   const [streamText, setStreamText] = useState('')
-  /** Live Deep-mode reasoning (Phase 20) — rendered as the collapsed "Thinking…" block
+  /** Live Deep-mode reasoning (Phase 20) — rendered as the collapsed "Thinking…" line
    *  on the streaming bubble only; it is never persisted, so it vanishes on refresh. */
   const [streamThinking, setStreamThinking] = useState('')
+  /** Expand state of the Thinking… line — auto-collapses on the first answer token. */
+  const [thinkingOpen, setThinkingOpen] = useState(false)
   /** Which conversation the live stream belongs to (M2): the bubble renders, and the
    *  completion refresh applies, only when this still matches the visible conversation. */
   const [streamConvId, setStreamConvId] = useState<string | null>(null)
   const [runtimeRunning, setRuntimeRunning] = useState<boolean | null>(null)
-  /** Whether the RUNNING model's manifest declares thinking support — gates Deep. */
+  /** Whether the RUNNING model's manifest declares thinking support — gates Thorough. */
   const [supportsThinking, setSupportsThinking] = useState(false)
   /** Per-conversation answer depth for this session ('new' = no conversation yet). */
   const [depths, setDepths] = useState<Record<string, ChatDepthMode>>({})
   const [error, setError] = useState<string | null>(null)
-  const [notice, setNotice] = useState<string | null>(null)
-  // Imported documents — drives the plain-chat awareness notice and the scope chips'
-  // titles. Best-effort: a failed load just hides both affordances.
+  // Imported documents — drives the scope popover's titles and the empty-state nudge.
+  // Best-effort: a failed load just hides both affordances.
   const [docs, setDocs] = useState<DocumentInfo[]>([])
   // Scope for the NEXT documents conversation (from "Ask these documents"); once a
   // conversation is created it owns the scope (`scopeDocumentIds`) and this clears.
   const [pendingScope, setPendingScope] = useState<string[] | null>(initialScopeDocumentIds ?? null)
-  // Plain-chat notice dismissals, keyed by conversation id ('new' = no conversation yet).
-  const [dismissedHints, setDismissedHints] = useState<ReadonlySet<string>>(new Set())
-  const scrollRef = useRef<HTMLDivElement>(null)
+  // Conversation-list collapse, remembered across sessions (localStorage — a UI
+  // preference, NOT user data, so it may live outside the encrypted workspace).
+  const [listCollapsed, setListCollapsed] = useState<boolean>(() => {
+    try {
+      return window.localStorage.getItem(LIST_COLLAPSED_KEY) === '1'
+    } catch {
+      return false
+    }
+  })
+  const showToast = useToast()
+  const composerRef = useRef<HTMLTextAreaElement>(null)
   // The currently-visible conversation, readable from inside async stream completions
   // (the `activeId` captured by the closure goes stale when the user switches).
   const activeIdRef = useRef<string | null>(null)
   useEffect(() => {
     activeIdRef.current = activeId
   }, [activeId])
+
+  // Token buffering (guidelines §3): deltas accumulate in refs and flush to state on a
+  // timer, so a fast model doesn't force a re-render + reflow per token.
+  const pendingTokens = useRef('')
+  const pendingThinking = useRef('')
+  const answerStarted = useRef(false)
+  const flushTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const flushStream = useCallback((): void => {
+    flushTimer.current = null
+    if (pendingTokens.current !== '') {
+      const chunk = pendingTokens.current
+      pendingTokens.current = ''
+      setStreamText((prev) => prev + chunk)
+    }
+    if (pendingThinking.current !== '') {
+      const chunk = pendingThinking.current
+      pendingThinking.current = ''
+      setStreamThinking((prev) => prev + chunk)
+    }
+  }, [])
+
+  const scheduleFlush = useCallback((): void => {
+    if (flushTimer.current == null) flushTimer.current = setTimeout(flushStream, STREAM_FLUSH_MS)
+  }, [flushStream])
+
+  function clearStreamBuffers(): void {
+    if (flushTimer.current != null) clearTimeout(flushTimer.current)
+    flushTimer.current = null
+    pendingTokens.current = ''
+    pendingThinking.current = ''
+  }
 
   const refreshConversations = useCallback(async (): Promise<void> => {
     setConversations(await window.api.listConversations())
@@ -126,10 +170,14 @@ export function ChatScreen({ onNavigate, initialMode, initialScopeDocumentIds }:
       .catch((e) => setError(String(e)))
   }, [activeId])
 
-  // Keep the transcript scrolled to the newest content.
-  useEffect(() => {
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight })
-  }, [messages, streamText, streamThinking])
+  function setListCollapsedPersistent(collapsed: boolean): void {
+    setListCollapsed(collapsed)
+    try {
+      window.localStorage.setItem(LIST_COLLAPSED_KEY, collapsed ? '1' : '0')
+    } catch {
+      // Remembering the preference is best-effort.
+    }
+  }
 
   // Create a conversation in the current mode. A documents conversation takes the
   // pending "ask selected documents" scope (which it then owns — the handoff clears).
@@ -148,9 +196,9 @@ export function ChatScreen({ onNavigate, initialMode, initialScopeDocumentIds }:
     return conv.id
   }
 
-  // ---- Phase 20: answer depth (Fast / Balanced / Deep) -------------------------
+  // ---- Phase 20: answer depth (Quick / Balanced / Thorough; ids per D-UI4) -----
   /** The depth selected for a conversation key, coerced to Balanced when the running
-   *  model cannot think (a sticky Deep choice must not silently send 'deep'). */
+   *  model cannot think (a sticky Thorough choice must not silently send 'deep'). */
   function depthFor(key: string): ChatDepthMode {
     const selected = depths[key] ?? 'balanced'
     return selected === 'deep' && !supportsThinking ? 'balanced' : selected
@@ -175,13 +223,22 @@ export function ChatScreen({ onNavigate, initialMode, initialScopeDocumentIds }:
     setStreamConvId(convId)
     setStreamText('')
     setStreamThinking('')
+    setThinkingOpen(false)
+    answerStarted.current = false
     const unsubscribe = window.api.onToken(convId, (token) => {
-      setStreamText((prev) => prev + token)
+      // The first answer token auto-collapses an expanded Thinking… line (§3).
+      if (!answerStarted.current) {
+        answerStarted.current = true
+        setThinkingOpen(false)
+      }
+      pendingTokens.current += token
+      scheduleFlush()
     })
-    // Deep-mode reasoning deltas (Phase 20) feed the live "Thinking…" block. They are
+    // Deep-mode reasoning deltas (Phase 20) feed the live "Thinking…" line. They are
     // a separate channel from answer tokens and are never part of the persisted reply.
     const unsubscribeReasoning = window.api.onReasoning(convId, (delta) => {
-      setStreamThinking((prev) => prev + delta)
+      pendingThinking.current += delta
+      scheduleFlush()
     })
     // Only update the visible transcript if the user is still looking at THIS
     // conversation — replacing another conversation's view with this one's messages
@@ -211,6 +268,7 @@ export function ChatScreen({ onNavigate, initialMode, initialScopeDocumentIds }:
     } finally {
       unsubscribe()
       unsubscribeReasoning()
+      clearStreamBuffers()
       setStreaming(false)
       setStreamConvId(null)
       setStreamText('')
@@ -234,7 +292,7 @@ export function ChatScreen({ onNavigate, initialMode, initialScopeDocumentIds }:
     }
   }
 
-  async function onRegenerate(): Promise<void> {
+  async function onTryAgain(): Promise<void> {
     if (!activeId || streaming || mode === 'documents') return
     // Drop the LAST message from the view only if it is an assistant turn — mirroring
     // the backend (M1): after a failed generation the conversation ends in a user turn,
@@ -250,17 +308,21 @@ export function ChatScreen({ onNavigate, initialMode, initialScopeDocumentIds }:
     if (activeId) void window.api.stopGeneration(activeId)
   }
 
-  // Export the transcript to a user-chosen local file (spec §7.6 — M13). Saving is an
+  // Save the transcript to a user-chosen local file (spec §7.6 — M13). Saving is an
   // explicit user action via the OS save dialog; nothing leaves the device otherwise.
-  async function onExport(): Promise<void> {
+  // Confirmation goes through the toast host (guidelines §6) — never inline notices.
+  async function onSaveConversation(): Promise<void> {
     if (!activeId) return
-    setNotice(null)
     try {
       const saved = await window.api.exportConversation(activeId)
-      if (saved) setNotice(`Transcript saved to ${saved}`)
+      if (saved) showToast(`Saved to ${saved}`)
     } catch (e) {
       setError(String(e instanceof Error ? e.message : e))
     }
+  }
+
+  function onCopyMessage(content: string): void {
+    void navigator.clipboard.writeText(content).then(() => showToast('Copied'))
   }
 
   async function onNewChat(): Promise<void> {
@@ -276,12 +338,10 @@ export function ChatScreen({ onNavigate, initialMode, initialScopeDocumentIds }:
     setMode(c.mode)
   }
 
-  // Delete a conversation (chat or document Q&A) and its messages — permanent.
+  // Delete a conversation (chat or document Q&A) and its messages — permanent. The
+  // ConfirmDialog lives in ConversationList; this runs after the user confirmed.
   async function onDeleteConversation(c: Conversation): Promise<void> {
     if (streaming) return
-    if (!window.confirm(`Delete "${c.title}"? This permanently removes the conversation and its messages.`)) {
-      return
-    }
     try {
       await window.api.deleteConversation(c.id)
       if (activeId === c.id) {
@@ -306,14 +366,10 @@ export function ChatScreen({ onNavigate, initialMode, initialScopeDocumentIds }:
     }
   }
 
-  const canRegenerate = !streaming && mode === 'chat' && messages.some((m) => m.role === 'assistant')
-
-  // ---- Phase 17: plain-chat document awareness + the documents scope -----------
+  const canTryAgain = !streaming && mode === 'chat' && messages.some((m) => m.role === 'assistant')
   const indexedDocCount = docs.filter((d) => d.status === 'indexed').length
-  const hintKey = activeId ?? 'new'
-  const showDocHint = mode === 'chat' && indexedDocCount > 0 && !dismissedHints.has(hintKey)
 
-  /** The scope shown as chips: the active conversation's, or the pending handoff. */
+  /** The active retrieval scope: the conversation's own, or the pending handoff. */
   const scopeIds: string[] | null =
     mode === 'documents'
       ? activeId
@@ -321,34 +377,25 @@ export function ChatScreen({ onNavigate, initialMode, initialScopeDocumentIds }:
         : pendingScope
       : null
 
-  function docTitle(id: string): string {
-    return docs.find((d) => d.id === id)?.title ?? 'Removed document'
-  }
-
-  // Remove one chip. An existing conversation persists the change; with no conversation
-  // yet, only the pending handoff shrinks. Empty scope = back to the whole corpus.
-  async function removeScopeId(id: string): Promise<void> {
-    const next = (scopeIds ?? []).filter((x) => x !== id)
+  // Scope changes from the popover. An existing conversation persists the change; with
+  // no conversation yet, only the pending handoff updates. Null = the whole corpus.
+  async function onChangeScope(next: string[] | null): Promise<void> {
     if (activeId) {
       try {
-        await window.api.updateConversationScope(activeId, next.length > 0 ? next : null)
+        await window.api.updateConversationScope(activeId, next)
         await refreshConversations()
       } catch (e) {
         setError(String(e instanceof Error ? e.message : e))
       }
     } else {
-      setPendingScope(next.length > 0 ? next : null)
+      setPendingScope(next)
     }
   }
 
-  function dismissDocHint(): void {
-    setDismissedHints((prev) => new Set(prev).add(hintKey))
-  }
-
-  // "Ask Documents instead": switch the composer to documents mode, keeping the typed
-  // text. onSelectMode already deselects a conversation whose mode doesn't match.
-  function switchToAskDocuments(): void {
-    onSelectMode('documents')
+  // Example-prompt chips fill the composer (the user still presses Send).
+  function fillComposer(prompt: string): void {
+    setInput(prompt)
+    composerRef.current?.focus()
   }
 
   // --- Empty state: no model running ------------------------------------------
@@ -368,299 +415,161 @@ export function ChatScreen({ onNavigate, initialMode, initialScopeDocumentIds }:
             be loading — this screen continues automatically once it is ready.
           </p>
           <div className="actions" style={{ marginTop: 12 }}>
-            <button className="btn primary" onClick={() => onNavigate('models')}>
+            <Button variant="primary" onClick={() => onNavigate('models')}>
               Go to Models
-            </button>
-            <button className="btn" onClick={() => void checkRuntime()}>
-              Re-check
-            </button>
+            </Button>
+            <Button onClick={() => void checkRuntime()}>Re-check</Button>
           </div>
         </div>
       </div>
     )
   }
 
+  // Teaching empty state (guidelines §3): a friendly line, example prompts that fill
+  // the composer, and — when nothing is imported yet — a nudge toward Documents.
+  const emptyState = (
+    <div className="chat-empty">
+      <EmptyState
+        title="Ask a question, or ask about your documents."
+        line={
+          mode === 'documents'
+            ? 'Answers come from your documents and cite their sources.'
+            : 'Replies stream from the model on this drive — nothing leaves it.'
+        }
+        action={
+          <>
+            {EXAMPLE_PROMPTS.map((p) => (
+              <Chip key={p} onClick={() => fillComposer(p)} title="Fill the message box">
+                {p}
+              </Chip>
+            ))}
+            {indexedDocCount === 0 && (
+              <Button size="sm" onClick={() => onNavigate('documents')}>
+                Add documents to ask about them
+              </Button>
+            )}
+          </>
+        }
+      />
+    </div>
+  )
+
   return (
-    <div className="chat-layout">
-      <aside className="chat-sidebar">
-        {/* Switching conversations mid-stream is disabled (M2): the stream belongs to one
-            conversation, and hopping away used to corrupt the other transcript's view. */}
-        <button className="btn sm primary chat-new" disabled={streaming} onClick={() => void onNewChat()}>
-          + New {mode === 'documents' ? 'document Q&A' : 'chat'}
-        </button>
-        <div className="chat-conv-list">
-          {conversations.length === 0 && <p className="hint">No conversations yet.</p>}
-          {conversations.map((c) => (
-            <div key={c.id} className="chat-conv-row">
-              <button
-                className={`chat-conv ${c.id === activeId ? 'active' : ''}`}
-                disabled={streaming && c.id !== activeId}
-                onClick={() => onSelectConversation(c)}
-                title={c.title}
-              >
-                {c.mode === 'documents' && <span className="chat-conv-badge">DOC</span>}
-                {c.title}
-              </button>
-              <button
-                className="chat-conv-delete"
-                disabled={streaming}
-                title="Delete conversation"
-                aria-label={`Delete conversation "${c.title}"`}
-                onClick={() => void onDeleteConversation(c)}
-              >
-                ✕
-              </button>
-            </div>
-          ))}
-        </div>
-      </aside>
+    <div className={`chat-layout ${listCollapsed ? 'list-collapsed' : ''}`}>
+      {!listCollapsed && (
+        <ConversationList
+          conversations={conversations}
+          activeId={activeId}
+          streaming={streaming}
+          mode={mode}
+          onSelect={onSelectConversation}
+          onNew={() => void onNewChat()}
+          onDelete={(c) => void onDeleteConversation(c)}
+          onCollapse={() => setListCollapsedPersistent(true)}
+        />
+      )}
 
       <section className="chat-main">
-        <div className="chat-mode-tabs">
-          <button
-            className={`chat-mode-tab ${mode === 'chat' ? 'active' : ''}`}
-            disabled={streaming}
-            onClick={() => onSelectMode('chat')}
-          >
-            Chat
-            <span className="chat-mode-sub">General assistant</span>
-          </button>
-          <button
-            className={`chat-mode-tab ${mode === 'documents' ? 'active' : ''}`}
-            disabled={streaming}
-            onClick={() => onSelectMode('documents')}
-          >
-            Ask Documents
-            <span className="chat-mode-sub">Answers from your files, with sources</span>
-          </button>
-        </div>
-
-        {showDocHint && (
-          <div className="chat-doc-hint" role="note">
-            <span>
-              This is a plain chat — answers don&apos;t use your imported documents. Switch to{' '}
-              <b>Ask Documents</b> to get cited answers from them.
-            </span>
-            <span className="chat-doc-hint-actions">
-              <button className="btn sm" disabled={streaming} onClick={switchToAskDocuments}>
-                Ask Documents instead
-              </button>
-              <button
-                className="chat-doc-hint-dismiss"
-                title="Dismiss for this conversation"
-                aria-label="Dismiss documents hint"
-                onClick={dismissDocHint}
-              >
-                ✕
-              </button>
-            </span>
-          </div>
-        )}
-
-        <div className="chat-transcript" ref={scrollRef}>
-          {messages.length === 0 && !streaming && (
-            <p className="hint chat-empty">
-              {mode === 'documents'
-                ? 'Ask a question about your imported documents. Answers cite their sources.'
-                : 'Send a message to start. Replies stream from the local model.'}
-            </p>
+        <div className="chat-header">
+          {listCollapsed && (
+            <Button
+              size="sm"
+              variant="ghost"
+              aria-label="Show conversation list"
+              title="Show conversation list"
+              onClick={() => setListCollapsedPersistent(false)}
+            >
+              »
+            </Button>
           )}
-          {messages.map((m) => (
-            <MessageBubble key={m.id} message={m} />
-          ))}
-          {streaming && streamConvId === activeId && (
-            <div className="msg assistant">
-              <div className="msg-role">assistant</div>
-              {/* Deep mode (Phase 20): live reasoning, collapsed by default. Display-only —
-                  it is not persisted (D6), so it disappears once the final reply lands. */}
-              {streamThinking !== '' && (
-                <details className="msg-thinking">
-                  <summary>Thinking…</summary>
-                  <div className="msg-thinking-text">{streamThinking}</div>
-                </details>
-              )}
-              <div className="msg-content md">
-                <AssistantMarkdown text={streamText} />
-                <span className="cursor">▋</span>
-              </div>
-            </div>
-          )}
-        </div>
-
-        {error && <div className="chat-error">⚠ {error}</div>}
-        {notice && <div className="hint chat-notice">{notice}</div>}
-
-        {mode === 'documents' && scopeIds && scopeIds.length > 0 && (
-          <div className="scope-chips" role="group" aria-label="Selected documents">
-            <span className="scope-chips-label">
-              Asking {scopeIds.length} selected {scopeIds.length === 1 ? 'document' : 'documents'}:
-            </span>
-            {scopeIds.map((id) => (
-              <span key={id} className="scope-chip" title={docTitle(id)}>
-                {docTitle(id)}
-                <button
-                  className="scope-chip-remove"
-                  disabled={streaming}
-                  title="Remove from this question's scope"
-                  aria-label={`Stop asking ${docTitle(id)}`}
-                  onClick={() => void removeScopeId(id)}
-                >
-                  ✕
-                </button>
-              </span>
-            ))}
-          </div>
-        )}
-
-        {mode === 'chat' && (
-          <div className="chat-depth-row" role="group" aria-label="Answer depth">
-            <span className="chat-depth-label">Answer depth:</span>
-            {DEPTHS.filter((d) => d.value !== 'deep' || supportsThinking).map((d) => (
-              <button
-                key={d.value}
-                className={`chat-depth-btn ${currentDepth === d.value ? 'active' : ''}`}
-                disabled={streaming}
-                title={d.hint}
-                onClick={() => selectDepth(d.value)}
-              >
-                {d.label}
-              </button>
-            ))}
-          </div>
-        )}
-
-        <div className="chat-input-row">
-          <textarea
-            className="chat-input"
-            placeholder={
-              mode === 'documents'
-                ? 'Ask about your documents…'
-                : 'Message Private AI Drive Lite…'
-            }
-            value={input}
+          <SegmentedControl
+            ariaLabel="Chat mode"
+            options={[
+              { value: 'chat', label: 'Chat' },
+              { value: 'documents', label: 'Ask my documents' }
+            ]}
+            value={mode}
+            onChange={onSelectMode}
             disabled={streaming}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault()
-                void onSend()
-              }
-            }}
           />
-          <div className="chat-input-actions">
-            {streaming ? (
-              <button className="btn" onClick={onStop}>
-                Stop
+          <div className="chat-header-spacer" />
+          {/* Ambient "Local · Offline" indicator lands here in Phase 27. */}
+          <span className="chat-header-slot" data-slot="local-indicator" />
+          <DropdownMenu.Root>
+            <DropdownMenu.Trigger asChild>
+              <button
+                type="button"
+                className="chat-overflow-btn"
+                aria-label="Conversation options"
+                title="Conversation options"
+              >
+                ⋯
               </button>
+            </DropdownMenu.Trigger>
+            <DropdownMenu.Portal>
+              <DropdownMenu.Content className="menu" align="end" sideOffset={4}>
+                <DropdownMenu.Item
+                  className="menu-item"
+                  disabled={!activeId || messages.length === 0 || streaming}
+                  onSelect={() => void onSaveConversation()}
+                >
+                  Save this conversation
+                </DropdownMenu.Item>
+              </DropdownMenu.Content>
+            </DropdownMenu.Portal>
+          </DropdownMenu.Root>
+        </div>
+
+        <Transcript
+          messages={messages}
+          streamingHere={streaming && streamConvId === activeId}
+          streamText={streamText}
+          streamThinking={streamThinking}
+          thinkingOpen={thinkingOpen}
+          onThinkingOpenChange={setThinkingOpen}
+          emptyState={emptyState}
+          onTryAgain={canTryAgain ? () => void onTryAgain() : undefined}
+          onCopy={onCopyMessage}
+          onSave={() => void onSaveConversation()}
+          actionsDisabled={streaming}
+        />
+
+        {error && (
+          <Banner tone="error" onDismiss={() => setError(null)}>
+            {error}
+          </Banner>
+        )}
+
+        <Composer
+          value={input}
+          onChange={setInput}
+          onSend={() => void onSend()}
+          onStop={onStop}
+          streaming={streaming}
+          placeholder={
+            mode === 'documents' ? 'Ask about your documents…' : 'Message Private AI Drive Lite…'
+          }
+          sendLabel={mode === 'documents' ? 'Ask' : 'Send'}
+          inputRef={composerRef}
+          footer={
+            mode === 'documents' ? (
+              <ScopePopover
+                docs={docs}
+                scopeIds={scopeIds}
+                disabled={streaming}
+                onChangeScope={(next) => void onChangeScope(next)}
+              />
             ) : (
-              <button className="btn primary" disabled={!input.trim()} onClick={() => void onSend()}>
-                {mode === 'documents' ? 'Ask' : 'Send'}
-              </button>
-            )}
-            {mode === 'chat' && (
-              <button className="btn sm" disabled={!canRegenerate} onClick={() => void onRegenerate()}>
-                Regenerate
-              </button>
-            )}
-            <button
-              className="btn sm"
-              disabled={!activeId || messages.length === 0 || streaming}
-              title="Save this conversation as a Markdown file (stays local)"
-              onClick={() => void onExport()}
-            >
-              Export
-            </button>
-          </div>
-        </div>
+              <DepthMenu
+                value={currentDepth}
+                onChange={selectDepth}
+                supportsThinking={supportsThinking}
+                disabled={streaming}
+              />
+            )
+          }
+        />
       </section>
-    </div>
-  )
-}
-
-/**
- * Assistant replies render as Markdown (GFM: bold, lists, tables, code, …) — local
- * models emit Markdown and showing the raw `**asterisks**` reads as broken output.
- * react-markdown builds React elements (no innerHTML), and raw HTML in model output is
- * rendered as literal text, so the strict CSP / no-injection posture is unchanged.
- * Links open in the OS browser via `target="_blank"` (the main process's window-open
- * handler allows http(s) only); user turns stay plain text — they are not Markdown.
- */
-function AssistantMarkdown({ text }: { text: string }): JSX.Element {
-  return (
-    <Markdown
-      remarkPlugins={[remarkGfm]}
-      components={{
-        a: ({ href, children }) => (
-          <a href={href} target="_blank" rel="noreferrer">
-            {children}
-          </a>
-        )
-      }}
-    >
-      {text}
-    </Markdown>
-  )
-}
-
-function MessageBubble({ message }: { message: Message }): JSX.Element {
-  const [copied, setCopied] = useState(false)
-  function copy(): void {
-    void navigator.clipboard.writeText(message.content).then(() => {
-      setCopied(true)
-      setTimeout(() => setCopied(false), 1200)
-    })
-  }
-  return (
-    <div className={`msg ${message.role}`}>
-      <div className="msg-role">
-        {message.role}
-        <button className="msg-copy" onClick={copy} title="Copy message">
-          {copied ? 'Copied' : 'Copy'}
-        </button>
-      </div>
-      {message.role === 'assistant' ? (
-        <div className="msg-content md">
-          <AssistantMarkdown text={message.content} />
-        </div>
-      ) : (
-        <div className="msg-content">{message.content}</div>
-      )}
-      {message.citations && message.citations.length > 0 && <SourcePanel citations={message.citations} />}
-    </div>
-  )
-}
-
-// Source-snippet panel (spec §7.8 / Milestone 6): lists the cited sources for a grounded
-// answer and lets the user expand each one to read the chunk text that was cited.
-function SourcePanel({ citations }: { citations: Citation[] }): JSX.Element {
-  const [openLabel, setOpenLabel] = useState<string | null>(null)
-  return (
-    <div className="msg-sources">
-      <div className="msg-sources-title">Sources</div>
-      {citations.map((c) => {
-        const open = openLabel === c.label
-        return (
-          <div key={c.label} className="cite">
-            <button
-              className="cite-head"
-              onClick={() => setOpenLabel(open ? null : c.label)}
-              disabled={!c.snippet}
-              title={c.snippet ? 'Show cited text' : undefined}
-            >
-              <span className="cite-label">[{c.label}]</span>
-              <span className="cite-src">
-                {c.sourceTitle}
-                {c.pageNumber != null
-                  ? ` · Page ${c.pageNumber}`
-                  : c.section
-                    ? ` · ${c.section}`
-                    : ''}
-              </span>
-            </button>
-            {open && c.snippet && <div className="cite-snippet">{c.snippet}</div>}
-          </div>
-        )
-      })}
     </div>
   )
 }
