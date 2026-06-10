@@ -19,7 +19,7 @@ deviations in §13 and BUILD_STATE if reality forces a change._
 | GPU detection | **Both**: an upfront `llama-server --list-devices` probe (Diagnostics + profile) **and** try-GPU-then-health-check-fallback at start (the actual guarantee) | The probe can't prove inference works; the fallback ladder can't name the GPU for the UI |
 | Fallback mechanism | Start normally → on failure restart with `--device none` → on failure use `<os>/cpu/` build → mock (existing rule) | Worst case is exactly today's behavior; the app can never be *stuck* |
 | macOS | **No change.** arm64 already runs Metal with auto-offload; Intel-x64 Macs stay CPU (upstream disables Metal there) | Verified: mac arm64 build has Metal; `-ngl` defaults to auto |
-| Embedder (E5) | **Forced CPU** (`--device none`) | 384-dim/~0.5 GB model gains little; keeps ingestion immune to GPU flakiness and VRAM contention — see §7 |
+| Embedder (E5) | **Forced CPU** (`--device none`) | 384-dim/~0.24 GB model gains little; keeps ingestion immune to GPU flakiness and VRAM contention — see §7 |
 | New npm deps | **None.** Probe + fallback use `node:child_process` on our own shipped binary | Project theme: no native/fragile deps |
 
 **Size delta per drive:** Windows +56 MB download / +166 MB on disk; Linux +58 MB / +185 MB;
@@ -265,9 +265,10 @@ rung 1 is Metal.
 `E5Embedder` composes the same `LlamaServer`, so with the Vulkan build it would *also*
 auto-offload. We explicitly **pin it to CPU** by adding `--device none` to its `extraArgs`:
 
-- The model is multilingual-E5-small Q8: ~0.5 GB, 384 dims, 512-token context. CPU embeds
-  hundreds of chunks/second; ingestion is dominated by parsing, not embedding. GPU upside ≈
-  seconds on a large import.
+- The model is multilingual-E5-small (**F16 since 2026-06-10** — the q8_0 GGUF crashes
+  llama-server b9585 at warmup, see the manifest's `license_review.notes`): ~242 MB, 384 dims,
+  512-token context, same manifest id/`local_path`. CPU embeds hundreds of chunks/second;
+  ingestion is dominated by parsing, not embedding. GPU upside ≈ seconds on a large import.
 - Downside of GPU for it: a *second* GPU context competing for VRAM with the chat model, and a
   second process exposed to driver flakiness — during **ingestion**, where a crash fails a whole
   document (M7 history).
