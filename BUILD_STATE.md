@@ -1467,6 +1467,15 @@ items are **MANUAL acceptance only** (R2/R5/R7 + the GPU hardware matrix). In ro
    E5-indexed corpus → promote a measured default; semantics already locked, D12). Smaller
    leftovers: an icon/`buildResources` for electron-builder; ANN vector index only if a real
    corpus outgrows the linear scan (plan §9 item 4 / D15 — explicitly not built).
+4. **UI/UX polish wave (Phases 23–27) — PLANNED 2026-06-10, not started:**
+   [`docs/design-guidelines.md`](docs/design-guidelines.md) (ADOPTED — tokens, light/dark
+   themes, chat-screen layout, IA regroup 7→5 nav, components, microcopy, WCAG 2.2 AA;
+   distilled from an external design-research round) +
+   [`docs/ui-ux-redesign-plan.md`](docs/ui-ux-redesign-plan.md) (working paper sequencing
+   23 tokens/theming → 24 component layer → 25 chat restructure [the priority] → 26 IA
+   regroup → 27 microcopy/ambient-trust/first-run). Renderer-only except the additive
+   `AppSettings.theme` key. Open decisions D-UI1–D-UI3 (Radix primitives, theme default,
+   Home's fate) live in the plan; D-UI1 needs confirming before Phase 24.
 
 **Current gate (2026-06-10, post-Phase-21): typecheck clean, 601/601 tests pass (+6 manual
 tests — 4 GPU smoke behind `PAID_GPU_SMOKE`, 1 thinking smoke behind `PAID_THINKING_SMOKE`,
