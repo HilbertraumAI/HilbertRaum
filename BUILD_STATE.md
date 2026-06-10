@@ -517,6 +517,20 @@ Repo root: `f:\_coding\ai_drive`.
      has a central `navigate()` with a virtual `'ask-documents'` target → Chat screen with
      `initialMode='documents'` (new optional `ChatScreen` prop); sidebar "Chat" resets to chat
      mode.
+- **Post-MVP UX polish round 2 (2026-06-10):**
+  1. **Chat output renders Markdown:** assistant replies (persisted AND the live streaming
+     bubble) render GFM via **`react-markdown` + `remark-gfm`** (new RENDERER deps — pure JS,
+     MIT, bundled by Vite into the renderer; NOT main-process/externalized). Safe by
+     construction: react-markdown builds React elements (no `innerHTML`) and raw HTML in model
+     output renders as **literal text** (renderer test proves no `<img>` injection). Links get
+     `target="_blank"` → the existing window-open handler (http/https → OS browser, else deny).
+     **User turns stay plain text** (`.msg-content` pre-wrap); assistant bubbles use
+     `.msg-content.md` (white-space normal + scoped element styles in styles.css).
+  2. **"Lock now" stops the sidecars:** `lockWorkspace` now aborts all in-flight generations
+     (`inFlightStreams`), `Promise.allSettled`-stops the chat runtime AND the E5 embedder (a
+     llama-server holds recent prompts in its KV cache), THEN `workspace.lock()` — a wedged
+     sidecar never blocks the re-encrypt. Unlock restarts the chat runtime via the existing
+     `maybeAutoStartActiveModel`; the embedder restarts lazily on next `embed()`.
 - **Doc lifecycle: finished plans become design records (2026-06-10):** implemented plan docs
   are condensed to short design records (decisions + load-bearing facts + the design as built)
   or deleted, with the full original in git history — finished plans otherwise drift and

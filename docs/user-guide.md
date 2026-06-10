@@ -120,7 +120,8 @@ words per second" and "faster than you can read". There is nothing to install or
 ## 6. Chat
 
 1. Open **Chat** and click **New chat**.
-2. Type a message and press Enter. The answer streams in word by word.
+2. Type a message and press Enter. The answer streams in word by word, with formatting
+   (bold, lists, tables, code blocks) rendered as the model writes it.
 3. Use **Stop** to cancel, **Regenerate** to retry, or the copy button to copy a reply.
 4. To remove a conversation, click the **✕** next to it in the sidebar (works for document
    Q&A conversations too). This permanently deletes the conversation and its messages.
@@ -156,7 +157,9 @@ See [`PRIVACY.md`](../PRIVACY.md) for the full statement.
 
 ## 9. Lock / quit
 
-- **Lock now** (encrypted workspaces) re-locks your data without quitting.
+- **Lock now** (encrypted workspaces) re-locks your data without quitting. It also shuts down
+  the AI model so nothing you typed stays in memory; after unlocking, your selected model loads
+  again automatically.
 - Closing the app stops the local model and, for encrypted workspaces, re-locks and protects
   your data automatically.
 

@@ -4,7 +4,7 @@ import { render, screen, cleanup, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { ChatScreen } from '../../src/renderer/screens/ChatScreen'
 import { HomeScreen } from '../../src/renderer/screens/HomeScreen'
-import type { Conversation, RuntimeStatus } from '../../src/shared/types'
+import type { Conversation, Message, RuntimeStatus } from '../../src/shared/types'
 import { stubApi } from '../helpers/renderer'
 
 // Renderer tests for the post-MVP polish round: deleting conversations from the chat
@@ -85,6 +85,63 @@ describe('ChatScreen — delete conversation', () => {
     await user.click(screen.getByRole('button', { name: /delete conversation/i }))
     expect(deleteConversation).not.toHaveBeenCalled()
     expect(screen.getByText('My first chat')).toBeInTheDocument()
+  })
+})
+
+describe('ChatScreen — markdown rendering', () => {
+  function msg(over: Partial<Message>): Message {
+    return {
+      id: 'm1',
+      conversationId: 'c1',
+      role: 'assistant',
+      content: '',
+      createdAt: '2026-01-01T00:00:00Z',
+      tokenCount: null,
+      ...over
+    }
+  }
+
+  it('renders assistant markdown (e.g. **bold**) as formatting, not raw asterisks', async () => {
+    const user = userEvent.setup()
+    stubApi({
+      listConversations: vi.fn(async () => [conv({})]),
+      getRuntimeStatus: vi.fn(async () => runningStatus),
+      listMessages: vi.fn(async () => [
+        msg({ content: 'Total for **Invoice 42** is due.\n\n- item one\n- item two' })
+      ])
+    })
+    render(<ChatScreen onNavigate={() => {}} />)
+    await user.click(await screen.findByText('My first chat'))
+
+    const bold = await screen.findByText('Invoice 42')
+    expect(bold.tagName).toBe('STRONG')
+    expect(screen.getByRole('list')).toBeInTheDocument() // the markdown bullet list
+    expect(screen.queryByText(/\*\*/)).not.toBeInTheDocument()
+  })
+
+  it('renders raw HTML in model output as literal text (no injection)', async () => {
+    const user = userEvent.setup()
+    stubApi({
+      listConversations: vi.fn(async () => [conv({})]),
+      getRuntimeStatus: vi.fn(async () => runningStatus),
+      listMessages: vi.fn(async () => [msg({ content: 'hi <img src=x onerror=alert(1)> there' })])
+    })
+    render(<ChatScreen onNavigate={() => {}} />)
+    await user.click(await screen.findByText('My first chat'))
+    await screen.findByText(/hi/)
+    expect(document.querySelector('.msg-content img')).toBeNull()
+  })
+
+  it('leaves user messages as plain text (asterisks intact)', async () => {
+    const user = userEvent.setup()
+    stubApi({
+      listConversations: vi.fn(async () => [conv({})]),
+      getRuntimeStatus: vi.fn(async () => runningStatus),
+      listMessages: vi.fn(async () => [msg({ id: 'u1', role: 'user', content: 'what is **this**?' })])
+    })
+    render(<ChatScreen onNavigate={() => {}} />)
+    await user.click(await screen.findByText('My first chat'))
+    expect(await screen.findByText('what is **this**?')).toBeInTheDocument()
   })
 })
 

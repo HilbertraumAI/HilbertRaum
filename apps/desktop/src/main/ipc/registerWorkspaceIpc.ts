@@ -4,6 +4,7 @@ import type { AppContext } from '../services/context'
 import { WrongPasswordError } from '../services/workspace-vault'
 import { maybeRunFirstBenchmark } from './registerBenchmarkIpc'
 import { maybeAutoStartActiveModel } from './registerModelIpc'
+import { inFlightStreams } from './inflight'
 import { log } from '../services/logging'
 import type {
   WorkspaceActionResult,
@@ -72,9 +73,19 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
     }
   )
 
-  ipcMain.handle(IPC.lockWorkspace, (): WorkspaceStateInfo => {
+  ipcMain.handle(IPC.lockWorkspace, async (): Promise<WorkspaceStateInfo> => {
+    // "Lock now" must leave nothing user-derived running: a llama-server sidecar keeps
+    // recent prompts in its in-memory KV cache, so both sidecars are stopped BEFORE the
+    // vault re-encrypts. In-flight generations are aborted first (their partial replies
+    // persist while the DB is still open); the E5 embedder restarts lazily on the next
+    // embed, and the chat runtime comes back via the unlock auto-start.
+    for (const controller of inFlightStreams.values()) controller.abort()
+    await Promise.allSettled([
+      ctx.runtime.stop(),
+      ctx.embedder.stop?.() ?? Promise.resolve()
+    ])
     const state = ctx.workspace.lock()
-    log.info('Workspace locked')
+    log.info('Workspace locked (sidecars stopped)')
     return state
   })
 }

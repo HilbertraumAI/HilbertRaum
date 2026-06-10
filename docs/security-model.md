@@ -183,8 +183,11 @@ does not offer plaintext.
 `WorkspaceController.init()` runs at startup: an encrypted descriptor → stay **locked** until unlock;
 no descriptor + plaintext permitted → open plaintext (dev); otherwise **uninitialized** → onboarding.
 The renderer shows the create-password / unlock gate (`WorkspaceGate`) until `workspaceReady`
-(`getWorkspaceState()` IPC). A **Lock now** control re-encrypts on demand, and `will-quit` locks
-(re-encrypt + shred) alongside stopping the runtime.
+(`getWorkspaceState()` IPC). A **Lock now** control re-encrypts on demand — it first aborts any
+in-flight generations and stops BOTH sidecars (chat runtime + E5 embedder; a llama-server keeps
+recent prompts in its in-memory KV cache), then locks. Unlock restarts the chat runtime in the
+background (the active-model auto-start); the embedder restarts lazily on the next embed.
+`will-quit` likewise locks (re-encrypt + shred) alongside stopping the sidecars.
 
 ### Threat notes / known limitations
 - **A decrypted working copy exists on disk while unlocked.** `node:sqlite` needs a real file, so the

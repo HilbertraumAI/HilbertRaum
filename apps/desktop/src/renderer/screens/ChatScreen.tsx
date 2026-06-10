@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import Markdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import type { Citation, Conversation, Message } from '@shared/types'
 
 // Chat screen (spec §7.6 / §7.8 — Milestones 3 & 6). Conversation list on the left, a
@@ -311,8 +313,8 @@ export function ChatScreen({ onNavigate, initialMode }: Props): JSX.Element {
           {streaming && streamConvId === activeId && (
             <div className="msg assistant">
               <div className="msg-role">assistant</div>
-              <div className="msg-content">
-                {streamText}
+              <div className="msg-content md">
+                <AssistantMarkdown text={streamText} />
                 <span className="cursor">▋</span>
               </div>
             </div>
@@ -370,6 +372,31 @@ export function ChatScreen({ onNavigate, initialMode }: Props): JSX.Element {
   )
 }
 
+/**
+ * Assistant replies render as Markdown (GFM: bold, lists, tables, code, …) — local
+ * models emit Markdown and showing the raw `**asterisks**` reads as broken output.
+ * react-markdown builds React elements (no innerHTML), and raw HTML in model output is
+ * rendered as literal text, so the strict CSP / no-injection posture is unchanged.
+ * Links open in the OS browser via `target="_blank"` (the main process's window-open
+ * handler allows http(s) only); user turns stay plain text — they are not Markdown.
+ */
+function AssistantMarkdown({ text }: { text: string }): JSX.Element {
+  return (
+    <Markdown
+      remarkPlugins={[remarkGfm]}
+      components={{
+        a: ({ href, children }) => (
+          <a href={href} target="_blank" rel="noreferrer">
+            {children}
+          </a>
+        )
+      }}
+    >
+      {text}
+    </Markdown>
+  )
+}
+
 function MessageBubble({ message }: { message: Message }): JSX.Element {
   const [copied, setCopied] = useState(false)
   function copy(): void {
@@ -386,7 +413,13 @@ function MessageBubble({ message }: { message: Message }): JSX.Element {
           {copied ? 'Copied' : 'Copy'}
         </button>
       </div>
-      <div className="msg-content">{message.content}</div>
+      {message.role === 'assistant' ? (
+        <div className="msg-content md">
+          <AssistantMarkdown text={message.content} />
+        </div>
+      ) : (
+        <div className="msg-content">{message.content}</div>
+      )}
       {message.citations && message.citations.length > 0 && <SourcePanel citations={message.citations} />}
     </div>
   )

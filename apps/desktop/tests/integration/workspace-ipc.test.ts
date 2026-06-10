@@ -43,8 +43,15 @@ function freshVault(): VaultPaths {
   return vaultPathsFrom({ configPath: join(root, 'config'), dbPath: join(root, 'workspace', 'paid.sqlite') })
 }
 
-function ctxWith(ctrl: WorkspaceController): AppContext {
-  return { workspace: ctrl } as unknown as AppContext
+function ctxWith(
+  ctrl: WorkspaceController,
+  sidecars?: { stopRuntime?: () => Promise<void>; stopEmbedder?: () => Promise<void> }
+): AppContext {
+  return {
+    workspace: ctrl,
+    runtime: { stop: sidecars?.stopRuntime ?? (async () => {}), activeModelId: () => null },
+    embedder: { stop: sidecars?.stopEmbedder ?? (async () => {}) }
+  } as unknown as AppContext
 }
 
 beforeEach(() => ipcState.handlers.clear())
@@ -101,5 +108,47 @@ describe('registerWorkspaceIpc', () => {
     registerWorkspaceIpc(ctxWith(ctrl))
     const { result } = await invoke(handlers, IPC.getWorkspaceState)
     expect(result).toMatchObject({ state: 'unlocked', mode: 'plaintext_dev' })
+  })
+
+  it('lockWorkspace stops both sidecars before re-encrypting (Lock now)', async () => {
+    const vp = freshVault()
+    createEncryptedVaultOnDisk(vp, 'right-password', FAST_KDF)
+    const ctrl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctrl.init()
+    ctrl.unlock('right-password')
+    const order: string[] = []
+    const stopRuntime = vi.fn(async () => {
+      order.push('runtime')
+    })
+    const stopEmbedder = vi.fn(async () => {
+      order.push('embedder')
+    })
+    registerWorkspaceIpc(ctxWith(ctrl, { stopRuntime, stopEmbedder }))
+
+    const { result } = await invoke(handlers, IPC.lockWorkspace)
+    expect(result).toMatchObject({ state: 'locked' })
+    expect(ctrl.isUnlocked()).toBe(false)
+    expect(stopRuntime).toHaveBeenCalledTimes(1)
+    expect(stopEmbedder).toHaveBeenCalledTimes(1)
+    // Both sidecars were stopped (order between them doesn't matter, but both ran).
+    expect(order.sort()).toEqual(['embedder', 'runtime'])
+  })
+
+  it('lockWorkspace still locks when a sidecar stop fails (allSettled)', async () => {
+    const vp = freshVault()
+    createEncryptedVaultOnDisk(vp, 'right-password', FAST_KDF)
+    const ctrl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctrl.init()
+    ctrl.unlock('right-password')
+    registerWorkspaceIpc(
+      ctxWith(ctrl, {
+        stopRuntime: async () => {
+          throw new Error('sidecar wedged')
+        }
+      })
+    )
+    const { result } = await invoke(handlers, IPC.lockWorkspace)
+    expect(result).toMatchObject({ state: 'locked' })
+    expect(ctrl.isUnlocked()).toBe(false)
   })
 })

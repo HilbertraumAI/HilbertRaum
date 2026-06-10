@@ -109,6 +109,13 @@ the whole DB file is encrypted at rest.
 - **`MockRuntime.chatStream`** emits a deterministic reply token-by-token with a small delay so
   the renderer's streaming + stop path is exercised with zero model files. The real
   `LlamaRuntime` (Phase 10) swaps in behind the same `ModelRuntime` interface.
+- **Markdown rendering (post-MVP).** Assistant replies (persisted and streaming) render as
+  GitHub-flavored Markdown via `react-markdown` + `remark-gfm` — local models emit Markdown, and
+  raw `**asterisks**` read as broken output. react-markdown builds React elements (no
+  `innerHTML`); raw HTML in model output renders as literal text, so the strict CSP /
+  no-injection posture is unchanged. Links get `target="_blank"` so the main process's
+  window-open handler routes http(s) to the OS browser and denies everything else. **User turns
+  stay plain text** — they are not Markdown and must not be reinterpreted.
 - **Runtime requirement (decision).** `sendChatMessage` does **not** auto-start a runtime: a chat
   needs a started model (`RuntimeManager.start()`). With no active runtime the handler throws and
   the Chat screen shows a "start a model" empty state that links to Models (and polls

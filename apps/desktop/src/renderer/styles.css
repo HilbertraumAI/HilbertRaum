@@ -265,6 +265,57 @@ h2 { font-size: 15px; margin: 0 0 12px; }
   margin-bottom: 6px;
 }
 .msg-content { white-space: pre-wrap; word-break: break-word; font-size: 14px; line-height: 1.5; }
+
+/* Markdown-rendered assistant replies: markdown supplies its own block spacing, so
+   pre-wrap (which would double every blank line) is turned off. */
+.msg-content.md { white-space: normal; }
+.msg-content.md > :first-child { margin-top: 0; }
+.msg-content.md > :last-child { margin-bottom: 0; }
+.msg-content.md p { margin: 0 0 10px; }
+.msg-content.md h1, .msg-content.md h2, .msg-content.md h3,
+.msg-content.md h4, .msg-content.md h5, .msg-content.md h6 {
+  margin: 14px 0 8px;
+  line-height: 1.3;
+}
+.msg-content.md h1 { font-size: 18px; }
+.msg-content.md h2 { font-size: 16px; }
+.msg-content.md h3 { font-size: 15px; }
+.msg-content.md h4, .msg-content.md h5, .msg-content.md h6 { font-size: 14px; }
+.msg-content.md ul, .msg-content.md ol { margin: 0 0 10px; padding-left: 22px; }
+.msg-content.md li { margin: 3px 0; }
+.msg-content.md li > p { margin: 0; }
+.msg-content.md code {
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-size: 13px;
+}
+.msg-content.md pre {
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin: 0 0 10px;
+  overflow-x: auto;
+}
+.msg-content.md pre code { background: transparent; border: none; padding: 0; }
+.msg-content.md blockquote {
+  border-left: 3px solid var(--border);
+  margin: 0 0 10px;
+  padding: 2px 0 2px 12px;
+  color: var(--muted);
+}
+.msg-content.md table { border-collapse: collapse; margin: 0 0 10px; max-width: 100%; }
+.msg-content.md th, .msg-content.md td {
+  border: 1px solid var(--border);
+  padding: 4px 10px;
+  text-align: left;
+}
+.msg-content.md th { background: rgba(0, 0, 0, 0.2); }
+.msg-content.md a { color: var(--accent); }
+.msg-content.md hr { border: none; border-top: 1px solid var(--border); margin: 12px 0; }
+.msg-content.md img { max-width: 100%; }
 .msg-copy { background: transparent; border: none; color: var(--muted); font-size: 11px; cursor: pointer; padding: 0; }
 .msg-copy:hover { color: var(--text); }
 .cursor { color: var(--accent); animation: blink 1s steps(2, start) infinite; }
