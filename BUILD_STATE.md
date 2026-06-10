@@ -1948,6 +1948,18 @@ items are **MANUAL acceptance only** (R2/R5/R7 + the GPU hardware matrix). In ro
    Qwen3 30B-A3B) + the embeddings question (Granite Embedding R2 small is the only 384-dim
    near-drop-in). Key verified fact: our pinned llama.cpp **b9585 is the 2026-06-09 release**,
    so Gemma 4 (needs ~b8607) runs on the runtime we already ship — no runtime bump needed.
+6. **Functionality wave 3 (Phases 31–38) — PLANNED, not started:** see the working paper
+   [`docs/functionality-wave-3-plan.md`](docs/functionality-wave-3-plan.md) (decisions
+   D23–D34, research gates R-S1/R-T1–2/R-W1–4/R-O1–3). Eight user-selected features in
+   dependency order: 31 conversation search (messages FTS5, mirrors D13) → 32 vault password
+   change (D24: envelope descriptor v2 recommended — the vault key is currently derived
+   DIRECTLY from the password, so naive change = re-encrypt everything) → 33 document-task
+   service + one-click summary → 34 translation (materialized corpus document) → 35 compare
+   two documents (vector-paired sections) → 36 audio transcription ingestion (**new
+   whisper.cpp sidecar family** — research-gated like the GPU plan) → 37 voice dictation →
+   38 scanned-PDF/photo OCR (tesseract.js WASM, vendored offline assets; step 0 =
+   image-only-PDF detection notice, can ship early). Decisions are OPEN — run a review
+   round per phase before code (D1–D7 precedent).
 
 **Current gate (2026-06-10, post-merge of the UI polish wave into master — Phase 21
 verification + Phases 23–27 combined): typecheck clean, 669/669 tests pass (+8 manual
