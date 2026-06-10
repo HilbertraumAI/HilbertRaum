@@ -239,7 +239,11 @@ exists. Mechanism doc: [`architecture.md`](architecture.md) "Answer-depth modes"
 
 ## 9. Phase 21 (wave 2, outline) — Retrieval quality: reranker + hybrid search
 
-Not specified yet; gated on research the same way the GPU plan gated on b9585 facts:
+**IMPLEMENTED 2026-06-10** — the research gates resolved and the design + as-built record
+live in [`retrieval-quality-plan.md`](retrieval-quality-plan.md) (decisions D8–D15) and
+[`rag-design.md`](rag-design.md) §11. Items 1–3 below shipped (item 3 as a pending
+measurement: the floor's semantics are decided, the value awaits a real corpus); item 4
+(ANN) was explicitly NOT built (D15). The original outline, as the research was gated:
 
 1. **Reranker** (Office §19.1; spec §3.3 reserved the manifest role): verify the pinned
    llama.cpp b9585 `llama-server --rerank` + `/v1/rerank` endpoint works with a candidate

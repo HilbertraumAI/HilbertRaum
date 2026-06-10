@@ -82,14 +82,19 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
 
   ipcMain.handle(IPC.lockWorkspace, async (): Promise<WorkspaceStateInfo> => {
     // "Lock now" must leave nothing user-derived running: a llama-server sidecar keeps
-    // recent prompts in its in-memory KV cache, so both sidecars are stopped BEFORE the
-    // vault re-encrypts. In-flight generations are aborted first (their partial replies
-    // persist while the DB is still open); the E5 embedder restarts lazily on the next
-    // embed, and the chat runtime comes back via the unlock auto-start.
+    // recent prompts in its in-memory KV cache (the reranker additionally saw recent
+    // questions + chunk text), so ALL sidecars are stopped BEFORE the vault re-encrypts.
+    // In-flight generations are aborted first (their partial replies persist while the
+    // DB is still open); the E5 embedder + reranker restart lazily on next use, and the
+    // chat runtime comes back via the unlock auto-start.
     for (const controller of inFlightStreams.values()) controller.abort()
+    // `suspend()` (not `stop()`, Phase 21 fix): the sidecars must come back lazily
+    // after unlock — `stop()` latches permanently for the will-quit path and used to
+    // leave every post-lock/unlock embed failing with "Embedder is stopped".
     await Promise.allSettled([
       ctx.runtime.stop(),
-      ctx.embedder.stop?.() ?? Promise.resolve()
+      ctx.embedder.suspend?.() ?? ctx.embedder.stop?.() ?? Promise.resolve(),
+      ctx.reranker?.suspend?.() ?? Promise.resolve()
     ])
     // Recorded BEFORE the vault closes — afterwards the DB is unreachable.
     ctx.audit?.('workspace_locked', 'Workspace locked')

@@ -2,7 +2,10 @@ import type { Db } from '../db'
 import type { AppSettings, Citation, Message } from '../../../shared/types'
 import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../runtime'
 import { type Embedder, VectorIndex } from '../embeddings'
+import type { Reranker } from '../reranker'
+import { keywordSearchChunks, rrfFuse } from './hybrid'
 import { approxTokenCount } from '../ingestion/chunker'
+import { log } from '../logging'
 import {
   appendMessage,
   BASE_SYSTEM_PROMPT,
@@ -12,15 +15,20 @@ import {
   stripThinkBlocks
 } from '../chat'
 
-// RAG service (spec §7.8). Turns a question into a grounded, cited answer:
+// RAG service (spec §7.8; hybrid + rerank stages Phase 21, retrieval-plan §3). Turns a
+// question into a grounded, cited answer:
 //
-//   embed query → cosine top-k → dedup by document/page → trim to a token budget →
-//   assign [S1]… labels → build the grounded prompt → stream the local LLM → cited answer
+//   embed query → cosine top-k ──┐
+//   FTS5 keyword top-k ──────────┴→ RRF fusion → (rerank when available) →
+//   dedup by document/page → trim to a token budget → assign [S1]… labels →
+//   build the grounded prompt → stream the local LLM → cited answer
 //
 // Everything is local + offline: retrieval is a linear scan over SQLite vectors
-// (`VectorIndex`, Phase 5) and the query is embedded with the SAME embedder used for
-// chunks. The `[S1] [S2] …` labels are assigned PER QUERY at retrieval time and are
-// never stored; only the resolved `Citation[]` is persisted (in `messages.citations_json`).
+// (`VectorIndex`, Phase 5) plus an in-process FTS5 keyword scan (Phase 21), the query
+// is embedded with the SAME embedder used for chunks, and the optional reranker is a
+// loopback llama-server sidecar. The `[S1] [S2] …` labels are assigned PER QUERY at
+// retrieval time and are never stored; only the resolved `Citation[]` is persisted
+// (in `messages.citations_json` — citations never persist scores).
 
 /** Retrieval knobs, resolved from `AppSettings` (spec §7.8 defaults). */
 export interface RagRetrievalSettings {
@@ -49,6 +57,13 @@ export interface RetrievedChunk {
   sourceTitle: string
   pageNumber: number | null
   sectionLabel: string | null
+  /**
+   * Per-query ranking score; its MEANING depends on how the chunk won its place
+   * (Phase 21, retrieval-plan §3): the embedder's cosine similarity for vector hits,
+   * the RRF fusion score for keyword-only hits, or the reranker's relevance score
+   * (an unbounded logit) once a reranker reordered the candidates. Internal only —
+   * citations never persist scores.
+   */
   score: number
 }
 
@@ -117,15 +132,25 @@ interface ChunkRow {
 }
 
 /**
- * Retrieve grounded context for `question`:
+ * Retrieve grounded context for `question` (pipeline per retrieval-plan §3):
  *  1. embed the question and cosine-search the vector index (`topKInitial`),
- *  2. join hits back to `chunks` for text + source label + page/section,
- *  3. drop hits below `minSimilarity`,
- *  4. dedup by document/page (keep the best-scoring chunk per page),
- *  5. trim to `topKFinal` while respecting `maxContextTokens` (approx token counter),
- *  6. assign `[S1] [S2] …` labels and resolve `Citation[]`.
+ *  2. drop vector hits below `minSimilarity` (the cosine floor — PRE-fusion/PRE-rerank,
+ *     decision D12; rerank scores are a different scale and never meet this floor),
+ *  3. FTS5 keyword-search the corpus (`topKInitial`, embedder-visibility-scoped),
+ *  4. fuse the two ranked lists by reciprocal rank (RRF, hybrid.ts),
+ *  5. join candidates back to `chunks` for text + source label + page/section,
+ *  6. rerank the candidates when a reranker is available (reorder by relevance;
+ *     a rerank failure falls back to the fused order — never breaks asking),
+ *  7. dedup by document/page (keep the best-ranked chunk per page),
+ *  8. trim to `topKFinal` while respecting `maxContextTokens` (approx token counter),
+ *  9. assign `[S1] [S2] …` labels and resolve `Citation[]`.
  *
  * Labels are assigned here, per query, and are never stored.
+ *
+ * Pass-through guarantee (D9): with no reranker and no keyword hits, steps 3/4/6 are
+ * inert and the result — ordering AND scores — is byte-identical to the pre-Phase-21
+ * pipeline (RRF over a single list is monotone in rank; vector candidates keep their
+ * cosine as `score` until a reranker actually rescores them).
  *
  * `scopeDocumentIds` (Phase 17, spec §10.4): when non-empty, retrieval only searches
  * those documents — the conversation's "ask selected documents" scope.
@@ -135,7 +160,8 @@ export async function retrieve(
   embedder: Embedder,
   question: string,
   settings: RagRetrievalSettings,
-  scopeDocumentIds?: string[] | null
+  scopeDocumentIds?: string[] | null,
+  reranker?: Reranker | null
 ): Promise<RetrievalResult> {
   // Phase-10 mismatch guard: only search vectors tagged with the active embedder's id.
   // Mock and real E5 vectors are both 384-dim, so the dimension guard cannot separate
@@ -145,16 +171,29 @@ export async function retrieve(
     embeddingModelId: embedder.id,
     documentIds: scopeDocumentIds ?? null
   })
-  const hits = await index.searchText(question, settings.topKInitial)
+  const vectorHits = (await index.searchText(question, settings.topKInitial)).filter(
+    (hit) => hit.score >= settings.minSimilarity
+  )
+  // Hybrid keyword path (Phase 21, retrieval-plan §5): exact terms embeddings miss.
+  // Scoped to chunks VISIBLE to the active embedder (§5.4) so the keyword path can
+  // never surface a document vector search couldn't — the re-index honesty story
+  // (staleEmbeddings / corpusNeedsReindex / REINDEX_NEEDED_ANSWER) is unchanged.
+  const keywordHits = keywordSearchChunks(db, question, settings.topKInitial, {
+    embeddingModelId: embedder.id,
+    documentIds: scopeDocumentIds ?? null
+  })
+  const fused = rrfFuse(vectorHits, keywordHits)
+
   const getChunk = db.prepare(
     'SELECT id, document_id, text, source_label, page_number, section_label FROM chunks WHERE id = ?'
   )
 
-  // Join hits → chunk rows, keeping the search order (already sorted by score desc).
-  const candidates: Array<Omit<RetrievedChunk, 'label'>> = []
-  for (const hit of hits) {
-    if (hit.score < settings.minSimilarity) continue
-    const row = getChunk.get(hit.chunkId) as unknown as ChunkRow | undefined
+  // Join fused candidates → chunk rows, keeping the fused order (best first). A vector
+  // candidate keeps its cosine as `score` (pass-through guarantee); a keyword-only
+  // candidate carries its RRF score (no cosine exists for it).
+  let candidates: Array<Omit<RetrievedChunk, 'label'>> = []
+  for (const cand of fused) {
+    const row = getChunk.get(cand.chunkId) as unknown as ChunkRow | undefined
     if (!row) continue
     candidates.push({
       chunkId: row.id,
@@ -163,8 +202,31 @@ export async function retrieve(
       sourceTitle: row.source_label ?? 'Untitled',
       pageNumber: row.page_number,
       sectionLabel: row.section_label,
-      score: hit.score
+      score: cand.cosine ?? cand.rrfScore
     })
+  }
+
+  // Rerank between fusion and dedup (retrieval-plan §3 step 6, decision D11): the
+  // cross-encoder rescoring decides which chunk represents a page BEFORE the dedup
+  // collapse. A failing reranker logs and keeps the fused order — a quality pass must
+  // never turn into an error for the user (spec §11.4).
+  if (reranker && candidates.length > 0) {
+    try {
+      const scores = new Map(
+        (await reranker.rerank(question, candidates.map((c) => c.text))).map((h) => [
+          h.index,
+          h.score
+        ])
+      )
+      candidates = candidates
+        .map((c, i) => ({ ...c, score: scores.get(i) ?? c.score, fusedRank: i }))
+        .sort((a, b) => b.score - a.score || a.fusedRank - b.fusedRank)
+        .map(({ fusedRank: _unused, ...c }) => c)
+    } catch (err) {
+      log.warn('Reranker unavailable for this question — using fused order', {
+        error: err instanceof Error ? err.message : String(err)
+      })
+    }
   }
 
   // Dedup by document/page (spec §7.8). Only chunks that share a real page number
@@ -275,6 +337,8 @@ export interface GroundedAnswerOptions {
   runtimeOptions?: Pick<RuntimeChatOptions, 'maxTokens' | 'temperature'>
   /** "Ask selected documents" scope for retrieval (Phase 17). Null = whole corpus. */
   scopeDocumentIds?: string[] | null
+  /** Optional retrieval reranker (Phase 21). Null/absent = today's ordering. */
+  reranker?: Reranker | null
 }
 
 /**
@@ -296,7 +360,14 @@ export async function generateGroundedAnswer(
   settings: RagRetrievalSettings,
   opts: GroundedAnswerOptions = {}
 ): Promise<Message> {
-  const { chunks, citations } = await retrieve(db, embedder, question, settings, opts.scopeDocumentIds)
+  const { chunks, citations } = await retrieve(
+    db,
+    embedder,
+    question,
+    settings,
+    opts.scopeDocumentIds,
+    opts.reranker
+  )
 
   if (chunks.length === 0) {
     // Distinguish "nothing relevant" from "the whole corpus is invisible to the active

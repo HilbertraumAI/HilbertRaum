@@ -63,6 +63,9 @@ export function registerRagIpc(ctx: AppContext): void {
             // "Ask selected documents" (Phase 17): the conversation's persisted scope
             // restricts retrieval; null scope = whole corpus (unchanged behavior).
             scopeDocumentIds: conv.scopeDocumentIds,
+            // Retrieval reranker (Phase 21): null when no reranker is provisioned —
+            // retrieval then keeps the pre-Phase-21 ordering byte-identical.
+            reranker: ctx.reranker,
             onToken: (token) => {
               if (!event.sender.isDestroyed()) {
                 event.sender.send(STREAM.token(conversationId), token)

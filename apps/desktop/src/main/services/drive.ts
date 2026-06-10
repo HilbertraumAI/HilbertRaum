@@ -36,6 +36,7 @@ export const DRIVE_LAYOUT_DIRS: readonly string[] = [
   'workspace',
   'models/chat',
   'models/embeddings',
+  'models/reranker',
   'model-manifests',
   ...DRIVE_OS_DIRS.map((os) => `runtime/llama.cpp/${os}`),
   'logs',

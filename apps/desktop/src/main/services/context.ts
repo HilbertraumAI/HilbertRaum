@@ -3,6 +3,7 @@ import type { ResolvedPaths } from './workspace'
 import type { WorkspaceController } from './workspace-vault'
 import type { RuntimeManager } from './runtime'
 import type { Embedder } from './embeddings'
+import type { Reranker } from './reranker'
 import type { CachedGpuProbe } from './runtime/gpu'
 import type { AuditRecorder } from './audit'
 
@@ -21,6 +22,12 @@ export interface AppContext {
   runtime: RuntimeManager
   /** Embedder used for document ingestion + retrieval (mock now, real in Phase 10). */
   embedder: Embedder
+  /**
+   * Retrieval reranker (Phase 21): a third loopback sidecar, selected only when the
+   * binary + the reranker GGUF exist. Null/absent = retrieval keeps today's ordering
+   * (graceful-fallback rule — there is deliberately no mock reranker).
+   */
+  reranker?: Reranker | null
   /** Directory holding model-manifests, or null if it could not be located. */
   manifestsDir: string | null
   /**

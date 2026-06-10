@@ -1,0 +1,41 @@
+id: bge-reranker-v2-m3-f16
+display_name: BGE Reranker v2 M3 (F16)
+family: bge
+role: reranker
+format: gguf
+runtime: llama_cpp
+license: apache-2.0
+size_on_disk_gb: 1.08
+recommended_min_ram_gb: 6
+recommended_ram_gb: 8
+recommended_context_tokens: 2048
+# F16, not q8_0 (deliberate): q8_0 quants of the XLM-R family crash llama.cpp b9585
+# during warmup (`binary_op: unsupported types: dst f32, src1 q8_0` — the recorded E5
+# embedder lesson, BUILD_STATE §9). F16 is the variant proven to load for this family.
+local_path: models/reranker/bge-reranker-v2-m3-f16.gguf
+sha256: REPLACE_WITH_REAL_HASH
+# Phase 21: where `fetch-models` (or the in-app downloader) fetches the weight from.
+# Size verified via the Hugging Face API 2026-06-10; the sha256 placeholder is promoted
+# after the first real fetch (`verify-models --generate`), the established pattern.
+download:
+  url: https://huggingface.co/gpustack/bge-reranker-v2-m3-GGUF/resolve/main/bge-reranker-v2-m3-FP16.gguf?download=true
+  sha256: REPLACE_WITH_REAL_HASH
+  size_bytes: 1159776896
+  license_url: https://huggingface.co/BAAI/bge-reranker-v2-m3
+# Optional quality add-on: NOT bundled by default — it costs ~1.3 GB RSS when active,
+# so TINY (8 GB) drives should not ship it (retrieval-quality plan §7). Retrieval works
+# fully without it (the reranker selector falls back to the fused/cosine ordering).
+bundled_on_preconfigured_drive: false
+recommended_profiles: [LITE, BALANCED, PRO]
+license_review:
+  status: approved
+  reviewed_by: "project maintainer (Claude-assisted review, HF API verification)"
+  reviewed_at: "2026-06-10"
+  notes: "APPROVED 2026-06-10: the BASE model (BAAI/bge-reranker-v2-m3) declares
+    apache-2.0 (verified via the Hugging Face API) — commercial redistribution permitted
+    with the license/notice. The GGUF repo (gpustack/bge-reranker-v2-m3-GGUF) also
+    declares apache-2.0 and is a mechanical conversion of the base model; treated as
+    distributed under the base Apache-2.0 terms (same provenance posture as the E5
+    embedder entry). For stricter provenance, re-convert the base model in-house
+    (llama.cpp convert_hf_to_gguf.py, keep F16 — avoid q8_0 for XLM-R-family models on
+    b9585) and update download.url + hashes."

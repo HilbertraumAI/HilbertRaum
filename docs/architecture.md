@@ -44,8 +44,12 @@ a future move to Tauri/Rust is a localized swap.
 ## Swappable interfaces (spec §9.2)
 - `ModelRuntime` — `MockRuntime` **or** `LlamaRuntime`, chosen per `start()` by availability (Phase 10).
 - `Embedder` — `MockEmbedder` **or** `E5Embedder`, chosen by availability (Phase 10).
+- `Reranker` — `LlamaReranker` **or null**, chosen by availability (Phase 21). Deliberately no mock:
+  a mock reranker would invent an ordering; null keeps retrieval byte-identical to the
+  vector-only pipeline.
 - `DocumentParser` — txt/md/pdf/docx/csv adapters (Phase 4).
-- `VectorIndex` — cosine over SQLite-stored vectors (Phase 5) → `sqlite-vec`/HNSW later.
+- `VectorIndex` — cosine over SQLite-stored vectors (Phase 5) → `sqlite-vec`/HNSW later;
+  hybridized with an FTS5 keyword pass + RRF in `rag.retrieve` (Phase 21).
 
 ## Storage
 `node:sqlite` — built into the Node bundled by **Electron ^37** (Node 22.x). It is loaded via
@@ -298,6 +302,20 @@ adds is the safety machinery:
   so a corpus indexed under the mock can't pollute search under real E5 (and vice-versa) until a
   reindex re-embeds everything. The default (no id) still scans all rows, so existing callers/tests are
   unchanged.
+- **`services/reranker/` (Phase 21, [`rag-design.md`](rag-design.md) §11)** — `LlamaReranker
+  implements Reranker`, the THIRD `LlamaServer` composition: the same b9585 binary spawned with
+  `--rerank --device none` (CPU-pinned like the embedder; `CHAT_SERVER_ARGS` never reach it),
+  lazy-started on the first documents question, POSTs `/v1/rerank` and maps
+  `results[].{index, relevance_score}` back by index. `createSelectedReranker` returns it only
+  when binary + reranker GGUF exist, else **null** (no mock — pass-through is the contract). A
+  failed start latches for the session (no health-timeout stall per question); a query-time
+  failure logs and keeps the fused order. Stopped on `will-quit`; **suspended** (stop + lazy
+  restart allowed) on workspace lock — `suspend()` also fixed the embedder's post-lock latch.
+- **Hybrid keyword retrieval (Phase 21)** — `chunks_fts` (FTS5, `text` + `chunk_id UNINDEXED`,
+  trigger-synced from `chunks`, guarded migration + backfill in `db.ts`) gives `rag.retrieve` a
+  BM25 keyword pass fused with the cosine pass by reciprocal rank (k = 60, `rag/hybrid.ts`).
+  Keyword hits are restricted to chunks with a vector under the active embedder, so hybrid
+  search never widens what vector search could see (the Phase-17 re-index honesty story).
 - **Localhost-only is non-negotiable.** Every bind/spawn/fetch targets `127.0.0.1`. The Phase-8 offline
   guard exempts loopback precisely for this sidecar; a routable bind would expose local inference to the
   LAN and violate the spec. The no-network test assertions assume loopback-only.

@@ -1,21 +1,23 @@
 # RAG design — Private AI Drive Lite
 
-_Last updated: 2026-06-09 (Phase 6 — grounded RAG chat with citations)_
+_Last updated: 2026-06-10 (Phase 21 — hybrid keyword retrieval + reranker, §11)_
 
 This document describes the local document → retrieval-augmented-generation pipeline.
 It is built up phase by phase:
 
 - **Phase 4:** ingestion — parse, chunk, store metadata, track status. ✅
 - **Phase 5:** embeddings & cosine vector search (mock embedder first). ✅
-- **Phase 6 (this doc):** grounded RAG chat with `[S1]…` citations. ✅
+- **Phase 6:** grounded RAG chat with `[S1]…` citations. ✅
+- **Phase 17 (§10):** document-scoped asking + embedder-visibility honesty. ✅
+- **Phase 21 (§11):** hybrid keyword + vector retrieval, cross-encoder reranker. ✅
 
 Everything runs **locally and offline** (spec §3.6). No file content, embedding, or query
 ever leaves the device.
 
 ```
 import → extract text → chunk → embed → store vectors → on question: embed query →
-cosine top-k → grounded prompt with [S1]… labels → local LLM → cited answer → snippets
-         └────────── Phase 4 ──────────┘ └────────── Phase 5 ──────────┘ └─ Phase 6 ─┘
+cosine top-k ⊕ FTS5 keyword top-k (RRF fusion, §11) → optional rerank (§11) →
+grounded prompt with [S1]… labels → local LLM → cited answer → snippets
 ```
 
 ---
@@ -431,3 +433,77 @@ files, with sources"). Renderer-only; dismissals are per-conversation, in-memory
 variant, scope persistence + the pre-Phase-17 column migration), `chat-ipc.test.ts` (scope
 over IPC), `tests/renderer/ChatHomeNav.test.tsx` (notice, chips, pending-scope handoff),
 `tests/renderer/DocumentsScreen.test.tsx` (selection → `onAskSelected`, Re-index all).
+
+---
+
+## 11. Hybrid retrieval + reranker (Phase 21)
+
+Working paper / decisions D8–D15: [`retrieval-quality-plan.md`](retrieval-quality-plan.md)
+(research-gated like the GPU plan: the rerank endpoint shapes were verified against the
+pinned llama.cpp b9585 SOURCE, FTS5 availability was probed in BOTH runtimes). The
+grounding guard is untouched: empty retrieval still never calls the model.
+
+### The pipeline as rebuilt (`retrieve()`, plan §3)
+
+```
+1. embed question → cosine topKInitial      (scoped: embedder id + documentIds)
+2. drop vector hits < minSimilarity         (cosine floor, PRE-fusion/PRE-rerank — D12)
+3. FTS5 keyword search topKInitial          (scoped: documentIds + visibility join, §5.4)
+4. RRF fusion (k = 60)                      (rank-based; scales never mix)
+5. join → chunks rows
+6. rerank when a reranker is active         (reorder by relevance_score; failure ⇒ fused order)
+7. dedup by (document_id, page)             (unchanged)
+8. topKFinal + maxContextTokens             (unchanged)
+9. [S1]… labels per query                   (unchanged, never stored)
+```
+
+**Pass-through guarantee:** no reranker + no keyword hits ⇒ byte-identical to the
+pre-Phase-21 result (ordering and scores). `RetrievedChunk.score` is stage-dependent:
+cosine for vector candidates, RRF score for keyword-only candidates, the reranker's
+relevance logit after a rerank. Citations never persist scores (locked).
+
+### Keyword index (`chunks_fts`, plan §5)
+
+Self-contained FTS5 table `fts5(text, chunk_id UNINDEXED)` — NOT external-content on
+`chunks`' implicit rowid (VACUUM may renumber implicit rowids and would silently desync
+the index; the duplicated text lives in the same workspace DB, encrypted at rest with
+it). Synced by three triggers on `chunks` (insert/delete/update-of-text), so
+ingest/re-index/delete can never miss it; created + backfilled by a guarded additive
+migration in `openDatabase` (the `scope_json` precedent). Questions are sanitized into
+`MATCH` queries in JS (quoted phrase tokens OR-ed, capped at 32 — FTS5 operator syntax
+in user text never reaches MATCH raw); ranking is `bm25()`.
+
+**Embedder-visibility rule (the §10 honesty story, reconciled):** keyword hits are
+restricted to chunks that have a vector under the ACTIVE embedder. Hybrid search can
+never see more documents than vector search could, so an invisible corpus still yields
+empty retrieval ⇒ `REINDEX_NEEDED_ANSWER` (tested, incl. a lexically-matching invisible
+corpus).
+
+### Reranker (`services/reranker/`, plan §4)
+
+`bge-reranker-v2-m3` (Apache-2.0; F16 GGUF — q8_0 of the XLM-R family crashes b9585,
+the recorded E5 lesson) behind the `Reranker` interface. `LlamaReranker` is the third
+`LlamaServer` composition: same b9585 binary, `--rerank --device none` (CPU pin; chat
+args never reach it), lazy start on first `rerank()`, `/v1/rerank` Jina shape
+(`{ query, documents }` → `results: [{ index, relevance_score }]`, mapped back by
+`index`). Inputs are word-truncated (query ≤ 160, doc ≤ 320) to bound CPU latency.
+Selection is availability-driven (`createSelectedReranker` → real iff binary + GGUF,
+else **null**; no mock — null = today's ordering). Failure modes: a failed START latches
+for the session (fail-fast, no 60 s health stall per question); a failed CALL logs and
+keeps the fused order. Stopped on `will-quit`; `suspend()`ed on workspace lock (lazy
+restart allowed — the same fix gave the E5 embedder a working post-lock restart).
+
+No new `AppSettings` keys, no UI surface (D14 — the embedder precedent); the manifest
+(`model-manifests/reranker/bge-reranker-v2-m3.yaml`) carries a `download` block, so the
+Phase-18 in-app downloader covers it. `ragMinSimilarity` keeps its meaning (cosine,
+pre-rerank); its measured default is still pending a real corpus (plan §1.3).
+
+### Tested behaviour (Phase 21)
+
+`tests/integration/reranker.test.ts` (spawn args incl. no-chat-args, index mapping,
+truncation, failed-start latch, stop/suspend, selector), `hybrid-search.test.ts`
+(migration + backfill + trigger sync, MATCH sanitization, visibility + scope, RRF,
+retrieve() e2e with a fake reranker, both grounding-guard variants),
+`e5-embedder.test.ts` (suspend), `drive.test.ts` (`models/reranker`). Manual:
+`tests/manual/rerank-smoke.test.ts` behind `PAID_RERANK_SMOKE` (real F16 load on b9585,
+relevance sanity, the §7 latency measurement).

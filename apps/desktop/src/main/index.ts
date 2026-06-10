@@ -21,6 +21,7 @@ import { createGpuCrashAutoFallback, createSelectingRuntimeFactory } from './ser
 import { createCachedGpuProbe } from './services/runtime/gpu'
 import { EVENTS } from '../shared/ipc'
 import { createSelectedEmbedder, type EmbeddingModelInfo } from './services/embeddings/factory'
+import { createSelectedReranker, type RerankerModelInfo } from './services/reranker'
 import { discoverManifests, resolveManifestsDir, weightPath } from './services/models'
 import type { AppContext } from './services/context'
 
@@ -45,6 +46,27 @@ function resolveEmbeddingModel(manifestsDir: string | null, rootPath: string): E
   try {
     const { manifests } = discoverManifests(manifestsDir)
     const found = manifests.find((m) => m.manifest.role === 'embeddings')
+    if (!found) return null
+    return {
+      id: found.manifest.id,
+      modelPath: weightPath(rootPath, found.manifest),
+      contextTokens: found.manifest.recommendedContextTokens
+    }
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Resolve the reranker model from the manifests (Phase 21) — same manifest-driven,
+ * pre-unlock-safe pattern as `resolveEmbeddingModel`. Returns null when no `reranker`
+ * manifest exists (→ no reranker is selected; retrieval keeps today's ordering).
+ */
+function resolveRerankerModel(manifestsDir: string | null, rootPath: string): RerankerModelInfo | null {
+  if (!manifestsDir) return null
+  try {
+    const { manifests } = discoverManifests(manifestsDir)
+    const found = manifests.find((m) => m.manifest.role === 'reranker')
     if (!found) return null
     return {
       id: found.manifest.id,
@@ -184,6 +206,13 @@ function initBackend(): void {
     model: embeddingModel,
     onSelect: (kind, reason) => log.info('Embedder backend selected', { kind, reason })
   })
+  // Phase 21: the retrieval reranker — the third sidecar, selected only when binary +
+  // reranker GGUF exist (null otherwise; retrieval then keeps today's ordering).
+  const reranker = createSelectedReranker({
+    rootPath: paths.rootPath,
+    model: resolveRerankerModel(manifestsDir, paths.rootPath),
+    onSelect: (kind, reason) => log.info('Reranker backend selected', { kind, reason })
+  })
 
   // `db` is a getter over the controller: it throws while locked. DB-backed IPC is only
   // reachable after the renderer's unlock gate reports the workspace ready.
@@ -195,6 +224,7 @@ function initBackend(): void {
     workspace,
     runtime,
     embedder,
+    reranker,
     manifestsDir,
     probeGpu: gpuProbe,
     isDev,
@@ -336,7 +366,8 @@ async function shutdown(): Promise<void> {
   try {
     await Promise.allSettled([
       ctx?.runtime.stop() ?? Promise.resolve(),
-      ctx?.embedder.stop?.() ?? Promise.resolve()
+      ctx?.embedder.stop?.() ?? Promise.resolve(),
+      ctx?.reranker?.stop?.() ?? Promise.resolve()
     ])
   } catch (err) {
     log.error('Error stopping sidecars on quit', String(err))

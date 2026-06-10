@@ -1,6 +1,6 @@
 # Model Policy — Private AI Drive Lite
 
-_Last updated: 2026-06-10 (Phase 18: in-app model downloader; runtime pinned to llama.cpp b9585;
+_Last updated: 2026-06-10 (Phase 21: reranker manifest added; runtime pinned to llama.cpp b9585;
 all license reviews approved)_
 
 ## Principles
@@ -20,13 +20,19 @@ all license reviews approved)_
 | Chat best dense | Qwen3 14B Instruct Q4 | ~9.3 GB | 16 GB | PRO | 32 GB+; the spec §7.3 PRO model — slower on CPU |
 | Chat MoE | Qwen3 30B-A3B (MoE) Q4 | ~18.6 GB | 24 GB | — (opt-in) | ~30B quality at ~3.3B *active*/token → near-3B speed; needs ~20 GB RAM |
 | Embeddings | Multilingual E5 Small (F16) | ~0.24 GB | 4 GB | all | Local document search (needed for Q&A) |
+| Reranker (optional) | BGE Reranker v2 M3 (F16) | ~1.08 GB | 6 GB | LITE+ (never bundled by default) | Retrieval-quality pass over document search (Phase 21) — search works fully without it |
 
 > Qwen3 **1.7B** was in the original spec §7.3 (the TINY/UNKNOWN "small" model) but was **dropped**:
 > the official `Qwen/Qwen3-1.7B-GGUF` repo publishes no Q4_K_M. 4B now covers TINY/UNKNOWN too.
 > The embeddings model uses an **F16** GGUF, not Q8 — the q8_0 conversions of this BERT/XLM-R model
-> crash llama.cpp b9585 (`binary_op: unsupported types … q8_0`). See BUILD_STATE §9.
+> crash llama.cpp b9585 (`binary_op: unsupported types … q8_0`). See BUILD_STATE §9. The
+> **reranker** (also XLM-R family) is pinned to **F16 for the same reason**; its live load on b9585
+> is verified by the `PAID_RERANK_SMOKE` manual harness. License review (recorded in its manifest):
+> base model `BAAI/bge-reranker-v2-m3` = Apache-2.0 (HF API, 2026-06-10); GGUF from
+> `gpustack/bge-reranker-v2-m3-GGUF` (also Apache-2.0, mechanical conversion — same provenance
+> posture as the E5 entry). `Qwen3-Reranker-0.6B` was rejected: no official GGUF.
 
-All models are **Apache-2.0** (Qwen3) / **MIT** (E5). Sizes/RAM come from each manifest
+All models are **Apache-2.0** (Qwen3, BGE reranker) / **MIT** (E5). Sizes/RAM come from each manifest
 (`size_on_disk_gb` / `recommended_min_ram_gb`); download URLs live in the manifests' `download.url`
 (catalog with source links in the [README](../README.md)). **Auto-tier** is the hardware profile the
 benchmark auto-recommends the model for (`recommended_profiles`); the **30B-A3B MoE** has an empty

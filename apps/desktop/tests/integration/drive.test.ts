@@ -62,6 +62,7 @@ describe('drive layout', () => {
     expect(rels).toContain('workspace')
     expect(rels).toContain('models/chat')
     expect(rels).toContain('models/embeddings')
+    expect(rels).toContain('models/reranker') // Phase 21
     expect(rels).toContain('model-manifests')
     expect(rels).toContain('logs')
     expect(rels).toContain('config')

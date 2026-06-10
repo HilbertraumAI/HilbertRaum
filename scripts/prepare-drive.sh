@@ -50,6 +50,7 @@ DIRS=(
   workspace
   models/chat
   models/embeddings
+  models/reranker
   model-manifests
   runtime/llama.cpp/win
   runtime/llama.cpp/mac

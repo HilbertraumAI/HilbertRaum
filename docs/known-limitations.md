@@ -97,6 +97,25 @@ logs, best-effort shredding on SSDs, no password recovery — are documented in
   against a placeholder manifest hash records no `model_download_verified` event (checksum
   honesty — the Models screen shows UNVERIFIED).
 
+## Retrieval quality (Phase 21, [`rag-design.md`](rag-design.md) §11)
+
+- **`ragMinSimilarity` still defaults to 0 (unmeasured).** The research gate (retrieval-plan §1.3)
+  required real E5 score distributions from an indexed corpus; the provisioned test drive was not
+  attached, so the floor keeps its locked default. Pending manual item: relevant + irrelevant query
+  batches on the `D:\` test drive, then promote a measured default (the floor's semantics under
+  reranking — cosine, pre-rerank — are already decided, D12).
+- **Reranker latency on CPU is estimated, not measured.** The reranker is pinned to CPU and scores
+  up to 2×`topKInitial` truncated candidates per question (estimate: single-digit seconds on a
+  mid-range CPU). `PAID_RERANK_SMOKE` reports the real number; the candidate cap + word-truncation
+  budgets are the tuning levers. Until measured, the reranker stays an opt-in (provision-the-GGUF)
+  feature and is never bundled by default.
+- **The FTS5 index duplicates chunk text inside the workspace DB** (a self-contained table was
+  chosen over external-content on `chunks`' implicit rowid, which VACUUM may renumber). Bounded by
+  the 1 000-chunk/file cap; encrypted at rest with the same DB file.
+- **Keyword search is embedder-visibility-scoped by design**: a document whose vectors were
+  produced by a different embedder is not keyword-searchable either, until re-indexed — that is
+  the Phase-17 honesty rule, not a gap (`REINDEX_NEEDED_ANSWER` tells the user what to do).
+
 ## GPU acceleration (Phases 14–16, [`gpu-support-plan.md`](gpu-support-plan.md))
 
 - **Integrated GPUs (Intel Iris Xe / UHD, AMD APU "Radeon Graphics") gain little.** They share

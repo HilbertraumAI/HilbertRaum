@@ -32,7 +32,14 @@ the Diagnostics Activity panel + export (§3 entry; plan §7.1 "as implemented")
 selector wires Qwen3's native thinking via per-request `chat_template_kwargs.enable_thinking`
 (verified against the pinned b9585), Deep streams a collapsed live "Thinking…" block over the
 ADDITIVE `chat:reasoning:<id>` channel, and reasoning is stripped from persistence + replayed
-history (§3 entry; plan §8.1 / decisions D4+D5 resolved). Release-wise, remaining work =
+history (§3 entry; plan §8.1 / decisions D4+D5 resolved). **Phase 21 (retrieval quality:
+reranker + hybrid keyword search — the first wave-2 phase) is DONE**: research-gated like the
+GPU plan (rerank endpoint verified against the pinned b9585 SOURCE; FTS5 probed in BOTH
+runtimes), an FTS5 keyword pass + RRF fusion now hybridizes `retrieve()`, and an optional
+CPU-pinned `bge-reranker-v2-m3` sidecar reorders candidates behind a `Reranker` interface
+whose absent default keeps retrieval byte-identical (§3 entry; working paper
+[`docs/retrieval-quality-plan.md`](docs/retrieval-quality-plan.md), decisions D8–D15; design
+record `docs/rag-design.md` §11). Release-wise, remaining work =
 **manual release acceptance only** (§5, incl. the GPU
 hardware matrix, item 1b). Consciously-accepted gaps live in
 [`docs/known-limitations.md`](docs/known-limitations.md)._
@@ -64,6 +71,7 @@ hardware matrix, item 1b). Consciously-accepted gaps live in
 | 18 | In-app model downloader | 🟢 done |
 | 19 | Audit log (`runtime_events`) | 🟢 done |
 | 20 | Answer-depth modes (Fast/Balanced/Deep) | 🟢 done |
+| 21 | Retrieval quality (reranker + hybrid FTS5 search) | 🟢 done |
 
 Legend: ⚪ not started · 🟡 in progress · 🟢 done · 🔴 blocked
 
@@ -793,6 +801,64 @@ Repo root: `f:\_coding\ai_drive`.
   gpu-smoke pattern): real b9585 + real Qwen3 — deep streams separate reasoning + clean
   answer, balanced streams zero reasoning deltas. CI stays zero-network/zero-model.
   Gate: typecheck clean, 572 tests, build green.
+- **Phase 21 — retrieval quality: reranker + hybrid keyword search (2026-06-10, the first
+  wave-2 phase; working paper [`docs/retrieval-quality-plan.md`](docs/retrieval-quality-plan.md)
+  with decisions D8–D15; design record `docs/rag-design.md` §11):** research-gated like the GPU
+  plan — all three gates resolved BEFORE design (plan §1):
+  **R1** the b9585 `llama-server` rerank endpoint verified from the pinned tag's SOURCE
+  (`/v1/rerank` + 3 aliases, server.cpp L201–204; `--rerank` = embedding mode + RANK pooling,
+  arg.cpp L2964–2971; request `{query, documents, top_n?}` → Jina `results:[{index,
+  relevance_score}]` sorted desc, mapped back by `index`; `relevance_score` is an UNBOUNDED
+  logit, never a cosine). **R2** FTS5 present in BOTH runtimes (Electron 37.10.3 / Node 22.21.1
+  probed INSIDE Electron + system Node 24.13.0; SQLite 3.50.4, `ENABLE_FTS5`) → hybrid is GO,
+  zero new deps. **R3** the `D:\` test drive was NOT attached ⇒ `ragMinSimilarity` stays 0;
+  the measurement is a pending manual item (§5).
+  1. **Reranker model (D8): `bge-reranker-v2-m3` F16** (Apache-2.0 base verified via HF API;
+     GGUF `gpustack/bge-reranker-v2-m3-GGUF`, 1 159 776 896 B; **F16 because q8_0 XLM-R quants
+     crash b9585** — the §9 E5 lesson; Qwen3-Reranker-0.6B rejected: no official GGUF). New
+     manifest `model-manifests/reranker/bge-reranker-v2-m3.yaml` (the spec-§3.3 reserved role
+     finally used): download block + approved license_review + placeholder sha256 (promote on
+     first real fetch); `bundled_on_preconfigured_drive: false` (~1.3 GB RSS — opt-in add-on).
+     The Phase-18 in-app downloader covers it with zero new code.
+  2. **`services/reranker/` (D9):** `Reranker` interface + `LlamaReranker` — the THIRD
+     `LlamaServer` composition (E5 pattern): `--rerank --device none` (CPU pin), lazy start,
+     word-truncated inputs (query ≤ 160 / doc ≤ 320), `/v1/rerank`, one-hit-per-input
+     validation. **Failed-start latch** (a broken GGUF fails fast per session, no 60 s health
+     stall per question); a query-time failure logs + keeps the fused order.
+     `createSelectedReranker` → real iff binary + weights, else **null — deliberately NO mock**
+     (a mock would invent an ordering); null ⇒ retrieval byte-identical to pre-Phase-21
+     (ordering AND scores — tested). Wired: optional `AppContext.reranker`, `registerRagIpc` →
+     `generateGroundedAnswer` opts, stop on `will-quit`.
+  3. **Hybrid FTS5 search (D13):** guarded additive migration in `db.ts` (scope_json
+     precedent) creates `chunks_fts` = `fts5(text, chunk_id UNINDEXED)` — self-contained, NOT
+     external-content on chunks' implicit rowid (VACUUM renumbering foot-gun) — plus THREE
+     triggers (insert/delete/update-of-text: ingest/reindex/delete can never miss the sync) and
+     a one-time backfill (pre-Phase-21 workspaces become keyword-searchable on first open).
+     `rag/hybrid.ts`: sanitized MATCH queries (quoted phrase tokens OR-ed, cap 32 — FTS5
+     operators in user text never reach MATCH), `bm25()` ranking, **RRF fusion k=60**
+     (rank-based; cosine and BM25 scales never mix). **Embedder-visibility rule:** keyword hits
+     require a vector under the ACTIVE embedder ⇒ hybrid never sees more than vector search
+     could; `REINDEX_NEEDED_ANSWER` semantics intact (tested incl. a lexically-matching
+     invisible corpus). The grounding guard is UNCHANGED — empty retrieval never calls the model.
+  4. **`retrieve()` pipeline (D11/D12):** vector topKInitial → cosine `minSimilarity` floor
+     (PRE-fusion/PRE-rerank — D12; rerank logits never meet the floor) → keyword topKInitial →
+     RRF fuse → chunk join → **rerank between fusion and dedup** (D11; topKInitial does NOT
+     rise — CPU latency is linear in candidates) → dedup → budget → labels.
+     `RetrievedChunk.score` is now stage-dependent (cosine / RRF / rerank logit — documented);
+     citations still never persist scores. **No new AppSettings keys, no UI surface (D14** —
+     availability-driven, the embedder precedent); ANN explicitly NOT built (D15).
+  5. **Found + fixed while wiring:** `lockWorkspace` stopped the E5 embedder via `stop()`,
+     whose latch is PERMANENT — every post-lock/unlock embed failed with "Embedder is stopped".
+     New optional `Embedder.suspend()`/`Reranker.suspend()` (teardown WITHOUT the latch) is what
+     the lock path calls now; `stop()` stays permanent for `will-quit` (orphan protection).
+  Tests (+29 → 601): `reranker.test.ts` (10: spawn args incl. NO chat args + CPU pin, index
+  mapping, truncation, failed-start latch, stop/suspend, selector), `hybrid-search.test.ts`
+  (18: migration + backfill-once + trigger sync, MATCH sanitization, visibility + scope, RRF,
+  retrieve() e2e with a fake reranker — ordering applied / failure fallback / byte-identical
+  pass-through / both grounding-guard variants), e5 suspend, drive layout. NEW manual harness
+  `tests/manual/rerank-smoke.test.ts` (`PAID_RERANK_SMOKE=<drive root>`): real F16 load on
+  b9585 + relevance sanity + the §7 latency measurement. No new audit events (sentinel surface
+  unchanged). Gate: typecheck clean, 601 tests, build green.
 
 ---
 
@@ -1030,6 +1096,16 @@ document answers always run balanced (deep-grounded = wave 2).
 - **`Citation`** gained optional `snippet` (truncated chunk text, ≤ 600). **Renderer**:
   `ChatScreen` Chat/Ask-Documents toggle (mode is per-conversation), `askDocuments` path, and
   a per-message **Sources** panel with expandable cited snippets.
+- **Phase 21 (hybrid + rerank — see the §3 entry / `docs/rag-design.md` §11):** `retrieve()`
+  gained a keyword pass (`rag/hybrid.ts` over the trigger-synced `chunks_fts` FTS5 table) fused
+  by RRF (k=60), and an optional trailing `reranker?: Reranker | null` param (also on
+  `GroundedAnswerOptions.reranker`) that reorders candidates between fusion and dedup. Absent
+  reranker + no keyword hits ⇒ byte-identical to the Phase-6 pipeline. `RetrievedChunk.score`
+  is stage-dependent (cosine / RRF / rerank logit); `minSimilarity` stays a PRE-rerank cosine
+  floor; citations still persist NO scores. `Reranker` lives in `services/reranker/`
+  (`AppContext.reranker`, availability-selected, null default). `Embedder`/`Reranker` gained
+  optional **`suspend()`** — the workspace-lock teardown that allows a lazy restart (`stop()`
+  stays permanent for will-quit).
 
 ### Hardware benchmark + recommendation (Phase 7 live)
 ✅ **`services/benchmark.ts`** (spec §7.3, §11). Full detail in [`docs/benchmark.md`](docs/benchmark.md).
@@ -1374,20 +1450,29 @@ items are **MANUAL acceptance only** (R2/R5/R7 + the GPU hardware matrix). In ro
    (Phases 17–20) toward the Office/Knowledge edition is COMPLETE**: 17 (RAG trust & scoped
    asking), 18 (in-app model downloader), 19 (audit log, incl. the Phase-18
    `model_download_*` events), 20 (Fast/Balanced/Deep answer-depth modes — D4/D5 resolved,
-   see §3). Wave-2 outlines remain (reranker/hybrid retrieval, signed offline update
-   bundles). Manual-acceptance items from this wave (plan §11): a real in-app download of
+   see §3). **Wave 2: Phase 21 (retrieval quality — reranker + hybrid FTS5 search) is DONE**
+   (§3 entry; [`docs/retrieval-quality-plan.md`](docs/retrieval-quality-plan.md) D8–D15);
+   Phase 22 (signed offline update bundles, plan §10) remains — blocked on its key-management
+   design doc. Manual-acceptance items from wave 1 (plan §11): a real in-app download of
    the 4B on the `D:\` test drive incl. a mid-download cancel → resume; a quick
    Activity-panel eyeball on the same drive (events appear; export saves); **a real
    Deep-mode answer with visible thinking from Qwen3 4B on the test drive**
    (`tests/manual/thinking-smoke.test.ts` with `PAID_THINKING_SMOKE=<drive root>` covers the
-   mechanism; the eyeball covers the UI). Smaller leftovers: an icon/`buildResources` for
-   electron-builder; ANN vector index only if a real corpus outgrows the linear scan
-   (plan §9 item 4).
+   mechanism; the eyeball covers the UI). **NEW manual items from Phase 21:** fetch the
+   reranker GGUF onto the test drive (`fetch-models -Only bge-reranker-v2-m3-f16`), promote
+   its real sha256 into the repo manifest, then run
+   `tests/manual/rerank-smoke.test.ts` (`PAID_RERANK_SMOKE=<drive root>`) — it proves the F16
+   load on b9585, relevance sanity, and the CPU latency number the plan §7 budget awaits; and
+   **measure the `ragMinSimilarity` floor** (relevant + irrelevant query batches on a real
+   E5-indexed corpus → promote a measured default; semantics already locked, D12). Smaller
+   leftovers: an icon/`buildResources` for electron-builder; ANN vector index only if a real
+   corpus outgrows the linear scan (plan §9 item 4 / D15 — explicitly not built).
 
-**Current gate (2026-06-10, post-Phase-20): typecheck clean, 572/572 tests pass (+5 manual
-tests — 4 GPU smoke behind `PAID_GPU_SMOKE`, 1 thinking smoke behind `PAID_THINKING_SMOKE` —
-skipped in CI), `npm run build` green.** The per-phase gate history (test counts, bundle
-sizes, per-phase test inventories) lives in git history.
+**Current gate (2026-06-10, post-Phase-21): typecheck clean, 601/601 tests pass (+6 manual
+tests — 4 GPU smoke behind `PAID_GPU_SMOKE`, 1 thinking smoke behind `PAID_THINKING_SMOKE`,
+1 rerank smoke behind `PAID_RERANK_SMOKE` — skipped in CI), `npm run build` green.** The
+per-phase gate history (test counts, bundle sizes, per-phase test inventories) lives in git
+history.
 
 ---
 

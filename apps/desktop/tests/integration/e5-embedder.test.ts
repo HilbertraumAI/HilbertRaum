@@ -202,6 +202,28 @@ describe('E5Embedder', () => {
     await expect(embedder.embed(['b'])).rejects.toThrow(/stopped/)
   })
 
+  // Phase 21 fix: lockWorkspace used to call stop(), whose latch is permanent — every
+  // post-lock/unlock embed then failed with "Embedder is stopped". The lock path now
+  // suspends instead: the sidecar dies (its memory held chunk text) but restarts lazily.
+  it('suspend() stops the sidecar but allows a lazy restart (workspace-lock path)', async () => {
+    const calls: Array<{ args: string[] }> = []
+    const children: FakeChild[] = []
+    const spawn = (_c: string, args: string[]): ChildProcessLike => {
+      calls.push({ args })
+      const child = new FakeChild()
+      children.push(child)
+      return child
+    }
+    const embedder = new E5Embedder({ ...base, spawn, fetchImpl: embedFetch([[1, 0]]) })
+    await embedder.embed(['a'])
+    await embedder.suspend()
+    expect(children[0].killed).toBe(true)
+    const vectors = await embedder.embed(['b']) // lazily restarts a fresh sidecar
+    expect(vectors).toHaveLength(1)
+    expect(calls.length).toBe(2)
+    await embedder.stop()
+  })
+
   it('throws on a wrong-width vector instead of storing a 0/short-dim embedding', async () => {
     const { spawn } = fakeSpawn()
     // Declares 384 dims but the server returns a 2-dim (or empty) vector → reject, so the

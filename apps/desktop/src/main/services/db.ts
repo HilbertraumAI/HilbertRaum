@@ -101,6 +101,40 @@ function ensureColumn(db: Db, table: string, column: string, ddl: string): void 
   }
 }
 
+// Phase 21 (retrieval-plan §5): the FTS5 keyword index over chunk text, used by hybrid
+// retrieval. SELF-CONTAINED (text + chunk_id UNINDEXED), deliberately NOT an
+// external-content table keyed on chunks' implicit rowid — `chunks.id` is a TEXT PK, so
+// the table has only an implicit rowid, and VACUUM is documented to renumber those,
+// which would silently desync an external-content index. Sync is via triggers so no
+// ingest/reindex/delete code path can ever miss it; the one-time backfill makes a
+// pre-Phase-21 workspace searchable on first open after upgrade (guarded additive
+// migration — the scope_json precedent). FTS5 availability in BOTH runtimes (Electron's
+// bundled Node + system Node) was verified for this phase (retrieval-plan §1.2).
+function ensureChunksFts(db: Db): void {
+  const exists = db
+    .prepare("SELECT name FROM sqlite_master WHERE name = 'chunks_fts'")
+    .get() as unknown as { name: string } | undefined
+  if (exists) return
+  db.exec(`
+CREATE VIRTUAL TABLE chunks_fts USING fts5(text, chunk_id UNINDEXED);
+
+CREATE TRIGGER chunks_fts_ai AFTER INSERT ON chunks BEGIN
+  INSERT INTO chunks_fts(text, chunk_id) VALUES (new.text, new.id);
+END;
+
+CREATE TRIGGER chunks_fts_ad AFTER DELETE ON chunks BEGIN
+  DELETE FROM chunks_fts WHERE chunk_id = old.id;
+END;
+
+CREATE TRIGGER chunks_fts_au AFTER UPDATE OF text ON chunks BEGIN
+  DELETE FROM chunks_fts WHERE chunk_id = old.id;
+  INSERT INTO chunks_fts(text, chunk_id) VALUES (new.text, new.id);
+END;
+
+INSERT INTO chunks_fts(text, chunk_id) SELECT text, id FROM chunks;
+`)
+}
+
 /** Open (or create) the database at `path` and run migrations. */
 export function openDatabase(path: string): Db {
   const db = new DatabaseSync(path)
@@ -108,6 +142,7 @@ export function openDatabase(path: string): Db {
   db.exec('PRAGMA foreign_keys = ON;')
   db.exec(SCHEMA)
   ensureColumn(db, 'conversations', 'scope_json', 'scope_json TEXT')
+  ensureChunksFts(db)
   return db
 }
 

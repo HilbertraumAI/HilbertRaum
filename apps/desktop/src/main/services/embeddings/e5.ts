@@ -172,9 +172,26 @@ export class E5Embedder implements Embedder {
     return out
   }
 
-  /** Kill the embeddings sidecar (no-op if it was never started). */
+  /**
+   * Kill the embeddings sidecar (no-op if it was never started). PERMANENT — used on
+   * `will-quit`, where a racing lazy start must not resurrect the child as an orphan.
+   */
   async stop(): Promise<void> {
     this.stopped = true
+    await this.teardown()
+  }
+
+  /**
+   * Kill the sidecar but allow a lazy restart on the next `embed()` (Phase 21 fix).
+   * Used on workspace LOCK: the in-memory chunk text must go, but the app keeps
+   * running — the permanent `stop()` latch here used to make every post-lock/unlock
+   * import fail with "Embedder is stopped".
+   */
+  async suspend(): Promise<void> {
+    await this.teardown()
+  }
+
+  private async teardown(): Promise<void> {
     // A lazy start may be IN FLIGHT (first embed() racing app quit): `this.server` is
     // only assigned after start() resolves, so returning here would let the spawned
     // child outlive the app as an orphan. Wait for the start to settle, then stop

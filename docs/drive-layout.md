@@ -45,8 +45,8 @@ PRIVATE_AI_DRIVE/
 ├── runtime/llama.cpp/{win,mac,linux}/          # default sidecar build (Phase 10; Vulkan on win/linux since Phase 14)
 │   ├── .paid-runtime.json                       # install marker: { version, backend, os, arch } (Phase 14)
 │   └── cpu/                                     # pure-CPU safety-net build + its own marker (win/linux only, Phase 14)
-├── models/{chat,embeddings}/                   # GGUF weights (git-ignored)
-├── model-manifests/{chat,embeddings}/          # committed YAML (the only model metadata in git)
+├── models/{chat,embeddings,reranker}/          # GGUF weights (git-ignored; reranker/ is an optional Phase-21 quality add-on)
+├── model-manifests/{chat,embeddings,reranker}/ # committed YAML (the only model metadata in git)
 │   └── runtime-sources.yaml                     # sidecar download manifest (Phase 12)
 ├── workspace/                                  # paid.sqlite (encrypted or plaintext) — EMPTY on a sold drive
 ├── logs/

@@ -22,9 +22,17 @@ export interface Embedder {
   embed(texts: string[]): Promise<Float32Array[]>
   /**
    * Release any backing resources (e.g. the real embedder's loopback sidecar). Optional
-   * — the mock embedder holds nothing. Called on `will-quit`.
+   * — the mock embedder holds nothing. Called on `will-quit`; PERMANENT (a racing lazy
+   * start must not resurrect the sidecar as an orphan after quit).
    */
   stop?(): Promise<void>
+  /**
+   * Stop the backing sidecar but allow a lazy restart on next use (Phase 21 fix).
+   * Called on workspace LOCK: the sidecar's memory (recent chunk text) must be purged,
+   * but the app keeps running and the next import must work. Without this, the
+   * permanent `stop()` latch made every post-lock/unlock embed fail.
+   */
+  suspend?(): Promise<void>
 }
 
 export interface VectorSearchHit {
