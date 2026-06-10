@@ -147,6 +147,19 @@ Everything you type and everything the model replies stays on your device.
 4. The answer includes **citations** — the source file, page/section, and a snippet you can
    expand. If the documents don't contain the answer, the app says so rather than guessing.
 
+**Ask only chosen documents.** On the **Documents** screen, tick the checkboxes next to the
+files you care about and click **Ask these documents**. The chat opens with those files shown
+as small chips above the message box — answers then come only from them. Remove a chip to
+widen the search again (no chips = all your documents).
+
+**Chat vs. Ask Documents.** Plain **Chat** does *not* read your files — it is a general
+assistant. When you have documents imported, the Chat tab reminds you of this and offers a
+one-click switch, so you never mistake a confident general answer for a document answer.
+
+If the app tells you your documents *"need a quick re-index"*, open **Documents** and use
+**Re-index** (or **Re-index all**) — this happens when files were indexed with a different
+search model than the one currently active, and takes a moment per file.
+
 > Scanned/image-only PDFs may not extract text (OCR is not included in this Lite version).
 
 ---

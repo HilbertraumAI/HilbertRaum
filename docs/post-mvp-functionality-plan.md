@@ -1,6 +1,7 @@
 # Post-MVP Functionality Plan — toward the Office/Knowledge edition
 
-_Status: **PLAN** (not started). Drafted 2026-06-10 from the gap analysis of spec §19 editions
+_Status: **IN PROGRESS** — **Phase 17 IMPLEMENTED** (2026-06-10, deviations in §5.5);
+Phases 18–20 not started. Drafted 2026-06-10 from the gap analysis of spec §19 editions
 vs. the feature-complete Lite MVP (Phases 0–16). Working paper per the CLAUDE.md doc lifecycle
 rule: once implemented, condense to a design record. Section numbers are intended to stay
 stable so code comments can cite them._
@@ -151,6 +152,26 @@ gain one-line subtitles ("General assistant" / "Answers from your files, with so
 | `renderer/screens/ChatScreen.tsx` | plain-chat notice, scope chips, mode subtitles |
 | `renderer/screens/DocumentsScreen.tsx` | needs-reindex badge, Re-index all, selection + Ask |
 | `docs/rag-design.md`, `user-guide.md`, `known-limitations.md` | update (remove the §10.4 gap) |
+
+### 5.5 As implemented (2026-06-10) — deviations from the plan above
+
+Phase 17 shipped per §5.1–§5.4 with three deviations (full detail in
+[`rag-design.md`](rag-design.md) §10; gate: typecheck clean, 499 tests, build green):
+
+1. **§5.2 items 1–2 were partly pre-empted by an earlier polish round** (the
+   `staleEmbeddings` flag, the per-document badge, and `listDocuments` scoped to
+   `ctx.embedder.id` already existed). Phase 17 added **Re-index all**, the
+   `REINDEX_NEEDED_ANSWER` empty-corpus variant, and a **stronger fix than persisting
+   `activeEmbeddingModelId`**: ingestion now tags vectors with the id of the embedder that
+   actually produced them (`embedder.id` fallback; the settings selection no longer feeds
+   the tag). The old tag could stamp mock-produced vectors with the E5 manifest id —
+   invisible to mock-scoped search now, poisonous to E5-scoped search later.
+2. **`askDocuments` gained no per-call `documentIds` argument** — once the scope persists
+   on the conversation (D2a), a per-call arg is redundant; the handler reads
+   `conv.scopeDocumentIds`. Scope edits go through the new `updateConversationScope` IPC
+   (`chat:updateScope`) instead.
+3. The §5.2-3 "actionable empty-scope" copy was folded into the single
+   `REINDEX_NEEDED_ANSWER` (the only empty case with a distinct user action).
 
 ---
 

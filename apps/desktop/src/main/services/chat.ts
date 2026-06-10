@@ -48,6 +48,29 @@ interface ConversationRow {
   updated_at: string
   model_id: string | null
   mode: string
+  scope_json: string | null
+}
+
+/** Parse a stored scope: a JSON array of document-id strings, else null (whole corpus). */
+function parseScope(json: string | null): string[] | null {
+  if (!json) return null
+  try {
+    const v = JSON.parse(json) as unknown
+    if (Array.isArray(v)) {
+      const ids = v.filter((x): x is string => typeof x === 'string' && x.length > 0)
+      return ids.length > 0 ? ids : null
+    }
+  } catch {
+    // Malformed scope must never break a conversation — fall through to unscoped.
+  }
+  return null
+}
+
+/** Normalize a caller-supplied scope: empty/non-string-bearing arrays become null. */
+function normalizeScope(ids: string[] | null | undefined): string[] | null {
+  if (!ids) return null
+  const clean = ids.filter((x) => typeof x === 'string' && x.length > 0)
+  return clean.length > 0 ? clean : null
 }
 
 function rowToConversation(r: ConversationRow): Conversation {
@@ -57,7 +80,8 @@ function rowToConversation(r: ConversationRow): Conversation {
     createdAt: r.created_at,
     updatedAt: r.updated_at,
     modelId: r.model_id,
-    mode: r.mode === 'documents' ? 'documents' : 'chat'
+    mode: r.mode === 'documents' ? 'documents' : 'chat',
+    scopeDocumentIds: parseScope(r.scope_json)
   }
 }
 
@@ -95,24 +119,59 @@ export interface CreateConversationOptions {
   title?: string
   modelId?: string | null
   mode?: 'chat' | 'documents'
+  /**
+   * "Ask selected documents" scope (spec §10.4, Phase 17): retrieval for this
+   * conversation only searches these documents. Null/empty = the whole corpus.
+   * Only meaningful for `mode: 'documents'`.
+   */
+  scopeDocumentIds?: string[] | null
 }
 
 /** Create a new conversation and persist it. */
 export function createConversation(db: Db, opts: CreateConversationOptions = {}): Conversation {
   const now = nowIso()
+  const scope = normalizeScope(opts.scopeDocumentIds)
   const conv: Conversation = {
     id: randomUUID(),
     title: opts.title?.trim() || DEFAULT_TITLE,
     createdAt: now,
     updatedAt: now,
     modelId: opts.modelId ?? null,
-    mode: opts.mode ?? 'chat'
+    mode: opts.mode ?? 'chat',
+    scopeDocumentIds: scope
   }
   db.prepare(
-    `INSERT INTO conversations (id, title, created_at, updated_at, model_id, mode)
-     VALUES (?, ?, ?, ?, ?, ?)`
-  ).run(conv.id, conv.title, conv.createdAt, conv.updatedAt, conv.modelId, conv.mode)
+    `INSERT INTO conversations (id, title, created_at, updated_at, model_id, mode, scope_json)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    conv.id,
+    conv.title,
+    conv.createdAt,
+    conv.updatedAt,
+    conv.modelId,
+    conv.mode,
+    scope ? JSON.stringify(scope) : null
+  )
   return conv
+}
+
+/**
+ * Replace a conversation's document scope (chip removal in the UI). Null/empty clears
+ * the scope back to "whole corpus". Returns the updated conversation.
+ */
+export function updateConversationScope(
+  db: Db,
+  conversationId: string,
+  documentIds: string[] | null
+): Conversation {
+  const conv = getConversation(db, conversationId)
+  if (!conv) throw new Error(`Unknown conversation: ${conversationId}`)
+  const scope = normalizeScope(documentIds)
+  db.prepare('UPDATE conversations SET scope_json = ? WHERE id = ?').run(
+    scope ? JSON.stringify(scope) : null,
+    conversationId
+  )
+  return { ...conv, scopeDocumentIds: scope }
 }
 
 /** List conversations, most recently updated first. */

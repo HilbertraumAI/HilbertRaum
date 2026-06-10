@@ -125,4 +125,52 @@ describe('DocumentsScreen', () => {
     expect(await screen.findByText(/no longer on disk/)).toBeInTheDocument()
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   })
+
+  // ---- "Ask these documents" + Re-index all (Phase 17) ---------------------------
+
+  it('selecting indexed documents enables "Ask these documents" with the selected ids', async () => {
+    const user = userEvent.setup()
+    const onAskSelected = vi.fn()
+    stubApi({
+      listDocuments: vi.fn(async () => [
+        doc({}),
+        doc({ id: 'd2', title: 'terms.docx' }),
+        doc({ id: 'd3', title: 'broken.xyz', status: 'failed', chunkCount: 0 })
+      ])
+    })
+    render(<DocumentsScreen onAskSelected={onAskSelected} />)
+    await screen.findByText('contract.pdf')
+
+    // Failed documents get no checkbox; nothing selected → no Ask button yet.
+    expect(screen.getAllByRole('checkbox')).toHaveLength(2)
+    expect(screen.queryByRole('button', { name: /ask these documents/i })).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('checkbox', { name: /select contract.pdf/i }))
+    await user.click(screen.getByRole('checkbox', { name: /select terms.docx/i }))
+    await user.click(screen.getByRole('button', { name: /ask these documents \(2\)/i }))
+    expect(onAskSelected).toHaveBeenCalledWith(expect.arrayContaining(['d1', 'd2']))
+  })
+
+  it('"Re-index all" re-indexes every stale document', async () => {
+    const user = userEvent.setup()
+    const stale = [
+      doc({ id: 'd1', staleEmbeddings: true }),
+      doc({ id: 'd2', title: 'terms.docx', staleEmbeddings: true })
+    ]
+    const listDocuments = vi
+      .fn<() => Promise<DocumentInfo[]>>()
+      .mockResolvedValueOnce(stale)
+      .mockResolvedValue(stale.map((d) => ({ ...d, staleEmbeddings: false })))
+    const reindexDocument = vi.fn(async (id: string) => doc({ id, staleEmbeddings: false }))
+    stubApi({ listDocuments, reindexDocument })
+    render(<DocumentsScreen />)
+
+    await user.click(await screen.findByRole('button', { name: /re-index all \(2\)/i }))
+    await waitFor(() => expect(reindexDocument).toHaveBeenCalledTimes(2))
+    expect(reindexDocument).toHaveBeenCalledWith('d1')
+    expect(reindexDocument).toHaveBeenCalledWith('d2')
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: /re-index all/i })).not.toBeInTheDocument()
+    )
+  })
 })

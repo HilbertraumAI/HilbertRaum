@@ -60,6 +60,9 @@ export function registerRagIpc(ctx: AppContext): void {
           settings,
           {
             signal: controller.signal,
+            // "Ask selected documents" (Phase 17): the conversation's persisted scope
+            // restricts retrieval; null scope = whole corpus (unchanged behavior).
+            scopeDocumentIds: conv.scopeDocumentIds,
             onToken: (token) => {
               if (!event.sender.isDestroyed()) {
                 event.sender.send(STREAM.token(conversationId), token)

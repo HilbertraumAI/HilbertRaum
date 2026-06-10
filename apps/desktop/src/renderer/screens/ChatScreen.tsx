@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import type { Citation, Conversation, Message } from '@shared/types'
+import type { Citation, Conversation, DocumentInfo, Message } from '@shared/types'
 
 // Chat screen (spec §7.6 / §7.8 — Milestones 3 & 6). Conversation list on the left, a
 // streamed message view on the right. Two modes share the same streaming contract:
@@ -11,6 +11,11 @@ import type { Citation, Conversation, Message } from '@shared/types'
 // final persisted assistant message. A mode is fixed per conversation (its `mode` field);
 // the toggle picks the mode for the NEXT new conversation. Both need a running model — when
 // none is running we show an empty state pointing at the Models screen.
+//
+// Phase 17 (plan §5.1/§5.3): plain Chat shows a dismissible "answers don't use your
+// documents" notice while indexed documents exist (the wrong-tab hallucination guard),
+// and documents mode carries an optional "ask selected documents" scope — chips above
+// the composer, persisted per conversation (`scopeDocumentIds`).
 
 type Mode = 'chat' | 'documents'
 
@@ -18,9 +23,11 @@ interface Props {
   onNavigate: (screen: string) => void
   /** Composer mode to open with — Home's "Ask My Documents" passes 'documents'. */
   initialMode?: Mode
+  /** Retrieval scope for the NEXT documents conversation ("Ask these documents"). */
+  initialScopeDocumentIds?: string[] | null
 }
 
-export function ChatScreen({ onNavigate, initialMode }: Props): JSX.Element {
+export function ChatScreen({ onNavigate, initialMode, initialScopeDocumentIds }: Props): JSX.Element {
   const [conversations, setConversations] = useState<Conversation[]>([])
   const [activeId, setActiveId] = useState<string | null>(null)
   const [messages, setMessages] = useState<Message[]>([])
@@ -34,6 +41,14 @@ export function ChatScreen({ onNavigate, initialMode }: Props): JSX.Element {
   const [runtimeRunning, setRuntimeRunning] = useState<boolean | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
+  // Imported documents — drives the plain-chat awareness notice and the scope chips'
+  // titles. Best-effort: a failed load just hides both affordances.
+  const [docs, setDocs] = useState<DocumentInfo[]>([])
+  // Scope for the NEXT documents conversation (from "Ask these documents"); once a
+  // conversation is created it owns the scope (`scopeDocumentIds`) and this clears.
+  const [pendingScope, setPendingScope] = useState<string[] | null>(initialScopeDocumentIds ?? null)
+  // Plain-chat notice dismissals, keyed by conversation id ('new' = no conversation yet).
+  const [dismissedHints, setDismissedHints] = useState<ReadonlySet<string>>(new Set())
   const scrollRef = useRef<HTMLDivElement>(null)
   // The currently-visible conversation, readable from inside async stream completions
   // (the `activeId` captured by the closure goes stale when the user switches).
@@ -54,6 +69,13 @@ export function ChatScreen({ onNavigate, initialMode }: Props): JSX.Element {
   useEffect(() => {
     void refreshConversations()
     void checkRuntime().catch(() => setRuntimeRunning(false))
+    void (async () => {
+      try {
+        setDocs((await window.api.listDocuments()) ?? [])
+      } catch {
+        setDocs([])
+      }
+    })()
   }, [refreshConversations, checkRuntime])
 
   // While no runtime is up, poll: the app may still be auto-starting the selected model
@@ -84,9 +106,18 @@ export function ChatScreen({ onNavigate, initialMode }: Props): JSX.Element {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight })
   }, [messages, streamText])
 
+  // Create a conversation in the current mode. A documents conversation takes the
+  // pending "ask selected documents" scope (which it then owns — the handoff clears).
+  async function createConversationInMode(): Promise<Conversation> {
+    const scope = mode === 'documents' ? pendingScope : undefined
+    const conv = await window.api.createConversation({ mode, scopeDocumentIds: scope })
+    if (scope) setPendingScope(null)
+    return conv
+  }
+
   async function ensureConversation(): Promise<string> {
     if (activeId) return activeId
-    const conv = await window.api.createConversation({ mode })
+    const conv = await createConversationInMode()
     setActiveId(conv.id)
     await refreshConversations()
     return conv.id
@@ -173,7 +204,7 @@ export function ChatScreen({ onNavigate, initialMode }: Props): JSX.Element {
   }
 
   async function onNewChat(): Promise<void> {
-    const conv = await window.api.createConversation({ mode })
+    const conv = await createConversationInMode()
     await refreshConversations()
     setActiveId(conv.id)
     setMessages([])
@@ -216,6 +247,49 @@ export function ChatScreen({ onNavigate, initialMode }: Props): JSX.Element {
   }
 
   const canRegenerate = !streaming && mode === 'chat' && messages.some((m) => m.role === 'assistant')
+
+  // ---- Phase 17: plain-chat document awareness + the documents scope -----------
+  const indexedDocCount = docs.filter((d) => d.status === 'indexed').length
+  const hintKey = activeId ?? 'new'
+  const showDocHint = mode === 'chat' && indexedDocCount > 0 && !dismissedHints.has(hintKey)
+
+  /** The scope shown as chips: the active conversation's, or the pending handoff. */
+  const scopeIds: string[] | null =
+    mode === 'documents'
+      ? activeId
+        ? (conversations.find((c) => c.id === activeId)?.scopeDocumentIds ?? null)
+        : pendingScope
+      : null
+
+  function docTitle(id: string): string {
+    return docs.find((d) => d.id === id)?.title ?? 'Removed document'
+  }
+
+  // Remove one chip. An existing conversation persists the change; with no conversation
+  // yet, only the pending handoff shrinks. Empty scope = back to the whole corpus.
+  async function removeScopeId(id: string): Promise<void> {
+    const next = (scopeIds ?? []).filter((x) => x !== id)
+    if (activeId) {
+      try {
+        await window.api.updateConversationScope(activeId, next.length > 0 ? next : null)
+        await refreshConversations()
+      } catch (e) {
+        setError(String(e instanceof Error ? e.message : e))
+      }
+    } else {
+      setPendingScope(next.length > 0 ? next : null)
+    }
+  }
+
+  function dismissDocHint(): void {
+    setDismissedHints((prev) => new Set(prev).add(hintKey))
+  }
+
+  // "Ask Documents instead": switch the composer to documents mode, keeping the typed
+  // text. onSelectMode already deselects a conversation whose mode doesn't match.
+  function switchToAskDocuments(): void {
+    onSelectMode('documents')
+  }
 
   // --- Empty state: no model running ------------------------------------------
   if (runtimeRunning === false) {
@@ -289,6 +363,7 @@ export function ChatScreen({ onNavigate, initialMode }: Props): JSX.Element {
             onClick={() => onSelectMode('chat')}
           >
             Chat
+            <span className="chat-mode-sub">General assistant</span>
           </button>
           <button
             className={`chat-mode-tab ${mode === 'documents' ? 'active' : ''}`}
@@ -296,8 +371,31 @@ export function ChatScreen({ onNavigate, initialMode }: Props): JSX.Element {
             onClick={() => onSelectMode('documents')}
           >
             Ask Documents
+            <span className="chat-mode-sub">Answers from your files, with sources</span>
           </button>
         </div>
+
+        {showDocHint && (
+          <div className="chat-doc-hint" role="note">
+            <span>
+              This is a plain chat — answers don&apos;t use your imported documents. Switch to{' '}
+              <b>Ask Documents</b> to get cited answers from them.
+            </span>
+            <span className="chat-doc-hint-actions">
+              <button className="btn sm" disabled={streaming} onClick={switchToAskDocuments}>
+                Ask Documents instead
+              </button>
+              <button
+                className="chat-doc-hint-dismiss"
+                title="Dismiss for this conversation"
+                aria-label="Dismiss documents hint"
+                onClick={dismissDocHint}
+              >
+                ✕
+              </button>
+            </span>
+          </div>
+        )}
 
         <div className="chat-transcript" ref={scrollRef}>
           {messages.length === 0 && !streaming && (
@@ -323,6 +421,28 @@ export function ChatScreen({ onNavigate, initialMode }: Props): JSX.Element {
 
         {error && <div className="chat-error">⚠ {error}</div>}
         {notice && <div className="hint chat-notice">{notice}</div>}
+
+        {mode === 'documents' && scopeIds && scopeIds.length > 0 && (
+          <div className="scope-chips" role="group" aria-label="Selected documents">
+            <span className="scope-chips-label">
+              Asking {scopeIds.length} selected {scopeIds.length === 1 ? 'document' : 'documents'}:
+            </span>
+            {scopeIds.map((id) => (
+              <span key={id} className="scope-chip" title={docTitle(id)}>
+                {docTitle(id)}
+                <button
+                  className="scope-chip-remove"
+                  disabled={streaming}
+                  title="Remove from this question's scope"
+                  aria-label={`Stop asking ${docTitle(id)}`}
+                  onClick={() => void removeScopeId(id)}
+                >
+                  ✕
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
 
         <div className="chat-input-row">
           <textarea

@@ -86,10 +86,17 @@ export interface VectorIndexOptions {
    * switch, until a reindex re-embeds everything).
    */
   embeddingModelId?: string | null
+  /**
+   * When set and non-empty, the search only scans vectors whose chunk belongs to one of
+   * these documents — "ask selected documents" (spec §10.4, plan §5.3). Empty/absent
+   * means the whole corpus, so existing callers are unchanged.
+   */
+  documentIds?: string[] | null
 }
 
 export class VectorIndex {
   private readonly embeddingModelId: string | null
+  private readonly documentIds: string[] | null
 
   constructor(
     private readonly db: Db,
@@ -98,18 +105,31 @@ export class VectorIndex {
   ) {
     const id = options?.embeddingModelId
     this.embeddingModelId = id && id.length > 0 ? id : null
+    const docs = options?.documentIds
+    this.documentIds = docs && docs.length > 0 ? docs : null
   }
 
   /** Rank stored chunks by cosine similarity to `queryVector`; return the top `topK`. */
   search(queryVector: Float32Array, topK: number): VectorSearchHit[] {
     if (topK <= 0) return []
-    const rows = (
-      this.embeddingModelId
-        ? this.db
-            .prepare('SELECT chunk_id, vector_blob, dimensions FROM embeddings WHERE embedding_model_id = ?')
-            .all(this.embeddingModelId)
-        : this.db.prepare('SELECT chunk_id, vector_blob, dimensions FROM embeddings').all()
-    ) as unknown as EmbeddingRow[]
+    // Compose the scan filters: model-id scoping (Phase 10) and/or document scoping
+    // (plan §5.3). Placeholders only — ids are never interpolated into the SQL.
+    const where: string[] = []
+    const params: string[] = []
+    if (this.embeddingModelId) {
+      where.push('embedding_model_id = ?')
+      params.push(this.embeddingModelId)
+    }
+    if (this.documentIds) {
+      where.push(
+        `chunk_id IN (SELECT id FROM chunks WHERE document_id IN (${this.documentIds.map(() => '?').join(', ')}))`
+      )
+      params.push(...this.documentIds)
+    }
+    const sql =
+      'SELECT chunk_id, vector_blob, dimensions FROM embeddings' +
+      (where.length > 0 ? ` WHERE ${where.join(' AND ')}` : '')
+    const rows = this.db.prepare(sql).all(...params) as unknown as EmbeddingRow[]
     const hits: VectorSearchHit[] = []
     for (const row of rows) {
       // Skip vectors from a different model/dimensionality (e.g. mid-migration).

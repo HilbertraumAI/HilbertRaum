@@ -89,12 +89,25 @@ CREATE TABLE IF NOT EXISTS runtime_events (
 );
 `
 
+// Additive column migrations on top of the spec §8 base schema. `CREATE TABLE IF NOT
+// EXISTS` never alters an existing table, so columns added after a workspace was created
+// must be ALTERed in — guarded by a pragma check to stay idempotent.
+//   conversations.scope_json — Phase 17 (plan §5.3, decision D2): the optional
+//   "ask selected documents" scope, a JSON array of document ids (NULL = whole corpus).
+function ensureColumn(db: Db, table: string, column: string, ddl: string): void {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>
+  if (!cols.some((c) => c.name === column)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`)
+  }
+}
+
 /** Open (or create) the database at `path` and run migrations. */
 export function openDatabase(path: string): Db {
   const db = new DatabaseSync(path)
   db.exec('PRAGMA journal_mode = WAL;')
   db.exec('PRAGMA foreign_keys = ON;')
   db.exec(SCHEMA)
+  ensureColumn(db, 'conversations', 'scope_json', 'scope_json TEXT')
   return db
 }
 

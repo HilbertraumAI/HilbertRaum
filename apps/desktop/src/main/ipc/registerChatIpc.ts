@@ -13,7 +13,8 @@ import {
   getConversation,
   listConversations,
   listMessages,
-  maybeSetTitleFromFirstMessage
+  maybeSetTitleFromFirstMessage,
+  updateConversationScope
 } from '../services/chat'
 import { log } from '../services/logging'
 import { inFlightStreams } from './inflight'
@@ -39,13 +40,35 @@ export function registerChatIpc(ctx: AppContext): void {
 
   ipcMain.handle(
     IPC.createConversation,
-    (_e, opts?: { title?: string; mode?: 'chat' | 'documents' }): Conversation => {
+    (
+      _e,
+      opts?: { title?: string; mode?: 'chat' | 'documents'; scopeDocumentIds?: string[] | null }
+    ): Conversation => {
       const conv = createConversation(ctx.db, {
         title: opts?.title,
         mode: opts?.mode,
-        modelId: ctx.runtime.activeModelId()
+        modelId: ctx.runtime.activeModelId(),
+        scopeDocumentIds: opts?.scopeDocumentIds
       })
-      log.info('Conversation created', { id: conv.id, mode: conv.mode })
+      log.info('Conversation created', {
+        id: conv.id,
+        mode: conv.mode,
+        scopedDocuments: conv.scopeDocumentIds?.length ?? 0
+      })
+      return conv
+    }
+  )
+
+  // Replace the "ask selected documents" scope (Phase 17, spec §10.4) — chip removal
+  // in the UI. Null/empty clears back to whole-corpus retrieval.
+  ipcMain.handle(
+    IPC.updateConversationScope,
+    (_e, conversationId: string, documentIds: string[] | null): Conversation => {
+      const conv = updateConversationScope(ctx.db, conversationId, documentIds)
+      log.info('Conversation scope updated', {
+        conversationId,
+        scopedDocuments: conv.scopeDocumentIds?.length ?? 0
+      })
       return conv
     }
   )

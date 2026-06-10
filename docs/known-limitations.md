@@ -45,8 +45,9 @@ logs, best-effort shredding on SSDs, no password recovery — are documented in
   `llama-server --list-devices` is the offline, native-free probe, and the benchmark's GPU
   profile bump is live (conservatively gated — see the GPU section below and
   [`benchmark.md`](benchmark.md)).
-- **No per-document "ask selected documents" scope (spec §10.4)** — Ask Documents always searches
-  the whole corpus.
+- ~~No per-document "ask selected documents" scope (spec §10.4)~~ **Shipped in Phase 17**
+  (post-mvp-functionality-plan §5.3): Documents-screen selection → scoped document Q&A with
+  removable chips; the scope persists on the conversation.
 - **Settings lacks the spec §10.6 Models/Performance/About sections** (Models has its own screen;
   Diagnostics shows version/runtime/model info).
 - **No `sample-contract.pdf` fixture** for the canonical spec §17 demo script.

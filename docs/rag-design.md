@@ -344,7 +344,8 @@ When retrieval yields **no usable chunks** (no documents indexed, or every hit b
 threshold), the model is **not called** — `generateGroundedAnswer` persists a fixed answer
 (`NO_DOCUMENT_CONTEXT_ANSWER`: *"I couldn't find anything about that in your documents…"*)
 with no citations. This makes the no-hallucination guarantee deterministic and testable
-rather than relying on the model to refuse.
+rather than relying on the model to refuse. Phase 17 adds an actionable variant
+(`REINDEX_NEEDED_ANSWER`) when the whole corpus is invisible to the active embedder — see §10.
 
 ### Settings (spec §7.8 defaults)
 
@@ -375,3 +376,58 @@ an expandable snippet of the cited chunk text. The plain chat path is unchanged.
   **without calling the runtime**.
 - **Offline guarantee:** spying `http`/`https`/`net.connect`/`Socket.prototype.connect`/
   `fetch` shows **zero** network calls across ingestion + retrieval + grounded answer.
+
+---
+
+## 10. Document-scoped asking & embedder-visibility honesty (Phase 17)
+
+Plan: [`post-mvp-functionality-plan.md`](post-mvp-functionality-plan.md) §5. Adds three
+RAG-trust features on top of the Phase-6 design; the grounded path's no-hallucination
+guarantee (model never called without context) is unchanged.
+
+### "Ask selected documents" (spec §10.4)
+
+- **`VectorIndexOptions.documentIds`** — when non-empty, the cosine scan is restricted to
+  vectors whose chunk belongs to those documents (`chunk_id IN (SELECT id FROM chunks WHERE
+  document_id IN (…))`, placeholders only). Composes with the Phase-10 `embeddingModelId`
+  filter; empty/absent = whole corpus (existing callers unchanged).
+- **Scope lives on the conversation** — additive nullable `conversations.scope_json` column
+  (a JSON array of document ids; guarded `ALTER TABLE` migration in `db.ts`, decision D2).
+  `Conversation.scopeDocumentIds` round-trips it; `createConversation` accepts it;
+  `updateConversationScope` (IPC `chat:updateScope`) replaces/clears it. Malformed stored
+  JSON reads back as null (unscoped), never throws.
+- **Threading:** `retrieve(db, embedder, question, settings, scopeDocumentIds?)`;
+  `generateGroundedAnswer` takes `opts.scopeDocumentIds`; `askDocuments` reads the
+  conversation's persisted scope — callers pass nothing per-request.
+- **Renderer:** Documents screen gets per-row checkboxes (indexed docs only) + **Ask these
+  documents (N)** → Chat opens in documents mode with the selection as the next
+  conversation's scope; removable **scope chips** above the composer show the active scope
+  (existing conversations persist chip removal via `updateConversationScope`).
+
+### Plain-chat document awareness (plan §5.1)
+
+While ≥ 1 indexed document exists, plain Chat shows a dismissible per-conversation notice
+("answers don't use your imported documents") with a one-click **Ask Documents instead**
+switch — the guard against the wrong-tab hallucination found in the first real-drive test
+(BUILD_STATE §9). The mode tabs carry subtitles ("General assistant" / "Answers from your
+files, with sources"). Renderer-only; dismissals are per-conversation, in-memory.
+
+### Embedder-visibility honesty (plan §5.2)
+
+- **Vectors are tagged with the id of the embedder that produced them.** `registerDocsIpc`
+  no longer passes `settings.activeEmbeddingModelId` into ingestion — with the E5 manifest
+  selected but the mock embedder active (no binary), that tag stamped mock vectors with the
+  E5 id, hiding them from mock-scoped search now and poisoning E5-scoped search later. Tag
+  and search scope both come from `embedder.id`.
+- **`REINDEX_NEEDED_ANSWER`** — when retrieval is empty AND `corpusNeedsReindex` (some
+  indexed document has chunks but no document has any vector under the active embedder),
+  the fixed answer tells the user to re-index instead of to rephrase. Still no model call.
+- **Re-index all** — the Documents screen offers a one-click sequential re-index of every
+  stale document (the per-document stale badge shipped in the earlier polish round).
+
+### Tested behaviour (Phase 17)
+
+`tests/integration/rag-scope.test.ts` (scoped index/retrieve/answer, the reindex-needed
+variant, scope persistence + the pre-Phase-17 column migration), `chat-ipc.test.ts` (scope
+over IPC), `tests/renderer/ChatHomeNav.test.tsx` (notice, chips, pending-scope handoff),
+`tests/renderer/DocumentsScreen.test.tsx` (selection → `onAskSelected`, Re-index all).

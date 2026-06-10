@@ -68,6 +68,44 @@ export const NO_DOCUMENT_CONTEXT_ANSWER =
   "I couldn't find anything about that in your documents. Try importing relevant files on " +
   'the Documents screen, or rephrasing your question.'
 
+/**
+ * The actionable variant (Phase 17, plan §5.2): documents ARE indexed, but none of their
+ * vectors were produced by the active embedding model, so retrieval cannot see them at
+ * all (search is scoped to the active embedder's id). Telling the user to rephrase would
+ * be wrong — only a re-index fixes it.
+ */
+export const REINDEX_NEEDED_ANSWER =
+  'Your documents need a quick re-index before they can be searched — they were indexed ' +
+  'with a different search model. Open the Documents screen and choose Re-index.'
+
+/**
+ * True when the corpus is invisible to `embeddingModelId`: at least one indexed document
+ * has chunks, but not a single one of those documents has any vector under the active
+ * model. Drives the `REINDEX_NEEDED_ANSWER` variant — a per-document partial mismatch
+ * still retrieves from the visible documents and stays on the normal path.
+ */
+export function corpusNeedsReindex(db: Db, embeddingModelId: string): boolean {
+  const indexed = db
+    .prepare(
+      `SELECT COUNT(*) AS n FROM documents d
+       WHERE d.status = 'indexed'
+         AND EXISTS (SELECT 1 FROM chunks c WHERE c.document_id = d.id)`
+    )
+    .get() as unknown as { n: number }
+  if (indexed.n === 0) return false
+  const visible = db
+    .prepare(
+      `SELECT COUNT(*) AS n FROM documents d
+       WHERE d.status = 'indexed'
+         AND EXISTS (
+           SELECT 1 FROM embeddings e JOIN chunks c ON e.chunk_id = c.id
+           WHERE c.document_id = d.id AND e.embedding_model_id = ?
+         )`
+    )
+    .get(embeddingModelId) as unknown as { n: number }
+  return visible.n === 0
+}
+
 interface ChunkRow {
   id: string
   document_id: string
@@ -87,18 +125,25 @@ interface ChunkRow {
  *  6. assign `[S1] [S2] …` labels and resolve `Citation[]`.
  *
  * Labels are assigned here, per query, and are never stored.
+ *
+ * `scopeDocumentIds` (Phase 17, spec §10.4): when non-empty, retrieval only searches
+ * those documents — the conversation's "ask selected documents" scope.
  */
 export async function retrieve(
   db: Db,
   embedder: Embedder,
   question: string,
-  settings: RagRetrievalSettings
+  settings: RagRetrievalSettings,
+  scopeDocumentIds?: string[] | null
 ): Promise<RetrievalResult> {
   // Phase-10 mismatch guard: only search vectors tagged with the active embedder's id.
   // Mock and real E5 vectors are both 384-dim, so the dimension guard cannot separate
   // them; scoping by model id stops a corpus indexed under one embedder from polluting
   // search under another (until a reindex re-embeds everything with the active model).
-  const index = new VectorIndex(db, embedder, { embeddingModelId: embedder.id })
+  const index = new VectorIndex(db, embedder, {
+    embeddingModelId: embedder.id,
+    documentIds: scopeDocumentIds ?? null
+  })
   const hits = await index.searchText(question, settings.topKInitial)
   const getChunk = db.prepare(
     'SELECT id, document_id, text, source_label, page_number, section_label FROM chunks WHERE id = ?'
@@ -223,6 +268,8 @@ export interface GroundedAnswerOptions {
   signal?: AbortSignal
   onToken?: (token: string) => void
   runtimeOptions?: Pick<RuntimeChatOptions, 'maxTokens' | 'temperature'>
+  /** "Ask selected documents" scope for retrieval (Phase 17). Null = whole corpus. */
+  scopeDocumentIds?: string[] | null
 }
 
 /**
@@ -244,14 +291,20 @@ export async function generateGroundedAnswer(
   settings: RagRetrievalSettings,
   opts: GroundedAnswerOptions = {}
 ): Promise<Message> {
-  const { chunks, citations } = await retrieve(db, embedder, question, settings)
+  const { chunks, citations } = await retrieve(db, embedder, question, settings, opts.scopeDocumentIds)
 
   if (chunks.length === 0) {
-    opts.onToken?.(NO_DOCUMENT_CONTEXT_ANSWER)
+    // Distinguish "nothing relevant" from "the whole corpus is invisible to the active
+    // embedder" (Phase 17): the latter needs a re-index, not a rephrase. Either way the
+    // model is never called without context (grounding rule).
+    const answer = corpusNeedsReindex(db, embedder.id)
+      ? REINDEX_NEEDED_ANSWER
+      : NO_DOCUMENT_CONTEXT_ANSWER
+    opts.onToken?.(answer)
     return appendMessage(db, {
       conversationId,
       role: 'assistant',
-      content: NO_DOCUMENT_CONTEXT_ANSWER
+      content: answer
     })
   }
 

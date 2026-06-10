@@ -307,6 +307,12 @@ export interface Conversation {
   updatedAt: string
   modelId: string | null
   mode: 'chat' | 'documents'
+  /**
+   * "Ask selected documents" scope (spec §10.4, Phase 17): when non-null, document
+   * answers in this conversation retrieve ONLY from these documents. Null = whole
+   * corpus. Only meaningful for `mode: 'documents'`.
+   */
+  scopeDocumentIds: string[] | null
 }
 
 export interface Citation {

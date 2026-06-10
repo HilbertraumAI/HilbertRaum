@@ -20,6 +20,7 @@ function conv(over: Partial<Conversation>): Conversation {
     updatedAt: '2026-01-01T00:00:00Z',
     modelId: null,
     mode: 'chat',
+    scopeDocumentIds: null,
     ...over
   }
 }
@@ -162,6 +163,131 @@ describe('ChatScreen — initial mode', () => {
     })
     render(<ChatScreen onNavigate={() => {}} />)
     expect(await screen.findByPlaceholderText(/message private ai drive/i)).toBeInTheDocument()
+  })
+})
+
+// ---- Phase 17: plain-chat document awareness + "ask selected documents" ----------
+
+function indexedDoc(id: string, title: string) {
+  return {
+    id,
+    title,
+    originalPath: null,
+    mimeType: 'text/plain',
+    sizeBytes: 10,
+    status: 'indexed' as const,
+    errorMessage: null,
+    chunkCount: 1,
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-01T00:00:00Z'
+  }
+}
+
+describe('ChatScreen — plain-chat document awareness (§5.1)', () => {
+  it('shows the notice in chat mode when indexed documents exist, and not in documents mode', async () => {
+    stubApi({
+      listConversations: vi.fn(async () => []),
+      getRuntimeStatus: vi.fn(async () => runningStatus),
+      listDocuments: vi.fn(async () => [indexedDoc('d1', 'contract.pdf')])
+    })
+    const { unmount } = render(<ChatScreen onNavigate={() => {}} />)
+    expect(await screen.findByText(/don't use your imported documents/i)).toBeInTheDocument()
+    unmount()
+
+    stubApi({
+      listConversations: vi.fn(async () => []),
+      getRuntimeStatus: vi.fn(async () => runningStatus),
+      listDocuments: vi.fn(async () => [indexedDoc('d1', 'contract.pdf')])
+    })
+    render(<ChatScreen onNavigate={() => {}} initialMode="documents" />)
+    await screen.findByPlaceholderText(/ask about your documents/i)
+    expect(screen.queryByText(/don't use your imported documents/i)).not.toBeInTheDocument()
+  })
+
+  it('stays hidden with no indexed documents', async () => {
+    stubApi({
+      listConversations: vi.fn(async () => []),
+      getRuntimeStatus: vi.fn(async () => runningStatus),
+      listDocuments: vi.fn(async () => [])
+    })
+    render(<ChatScreen onNavigate={() => {}} />)
+    await screen.findByPlaceholderText(/message private ai drive/i)
+    expect(screen.queryByText(/don't use your imported documents/i)).not.toBeInTheDocument()
+  })
+
+  it('"Ask Documents instead" switches the composer to documents mode; dismiss hides it', async () => {
+    const user = userEvent.setup()
+    stubApi({
+      listConversations: vi.fn(async () => []),
+      getRuntimeStatus: vi.fn(async () => runningStatus),
+      listDocuments: vi.fn(async () => [indexedDoc('d1', 'contract.pdf')])
+    })
+    const { unmount } = render(<ChatScreen onNavigate={() => {}} />)
+    await user.click(await screen.findByRole('button', { name: /ask documents instead/i }))
+    expect(screen.getByPlaceholderText(/ask about your documents/i)).toBeInTheDocument()
+    unmount()
+
+    stubApi({
+      listConversations: vi.fn(async () => []),
+      getRuntimeStatus: vi.fn(async () => runningStatus),
+      listDocuments: vi.fn(async () => [indexedDoc('d1', 'contract.pdf')])
+    })
+    render(<ChatScreen onNavigate={() => {}} />)
+    await user.click(await screen.findByRole('button', { name: /dismiss documents hint/i }))
+    expect(screen.queryByText(/don't use your imported documents/i)).not.toBeInTheDocument()
+  })
+})
+
+describe('ChatScreen — "ask selected documents" scope chips (§5.3)', () => {
+  it('renders a persisted conversation scope as titled chips and removes one via updateConversationScope', async () => {
+    const user = userEvent.setup()
+    const scoped = conv({ id: 'c9', title: 'Doc Q&A', mode: 'documents', scopeDocumentIds: ['d1', 'd2'] })
+    const updateConversationScope = vi.fn(async () => ({ ...scoped, scopeDocumentIds: ['d2'] }))
+    const listConversations = vi
+      .fn<() => Promise<Conversation[]>>()
+      .mockResolvedValueOnce([scoped])
+      .mockResolvedValue([{ ...scoped, scopeDocumentIds: ['d2'] }])
+    stubApi({
+      listConversations,
+      getRuntimeStatus: vi.fn(async () => runningStatus),
+      listMessages: vi.fn(async () => []),
+      listDocuments: vi.fn(async () => [indexedDoc('d1', 'contract.pdf'), indexedDoc('d2', 'terms.docx')]),
+      updateConversationScope
+    })
+    render(<ChatScreen onNavigate={() => {}} />)
+
+    await user.click(await screen.findByText('Doc Q&A'))
+    expect(await screen.findByText(/asking 2 selected documents/i)).toBeInTheDocument()
+    expect(screen.getByText('contract.pdf')).toBeInTheDocument()
+    expect(screen.getByText('terms.docx')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /stop asking contract.pdf/i }))
+    await waitFor(() => expect(updateConversationScope).toHaveBeenCalledWith('c9', ['d2']))
+    await waitFor(() => expect(screen.queryByText('contract.pdf')).not.toBeInTheDocument())
+  })
+
+  it('applies the pending handoff scope to the next documents conversation', async () => {
+    const user = userEvent.setup()
+    const created = conv({ id: 'c2', title: 'New chat', mode: 'documents', scopeDocumentIds: ['d1'] })
+    const createConversation = vi.fn(async () => created)
+    stubApi({
+      listConversations: vi.fn(async () => []),
+      getRuntimeStatus: vi.fn(async () => runningStatus),
+      listMessages: vi.fn(async () => []),
+      listDocuments: vi.fn(async () => [indexedDoc('d1', 'contract.pdf')]),
+      createConversation
+    })
+    render(
+      <ChatScreen onNavigate={() => {}} initialMode="documents" initialScopeDocumentIds={['d1']} />
+    )
+
+    // The handoff renders as chips before any conversation exists…
+    expect(await screen.findByText(/asking 1 selected document/i)).toBeInTheDocument()
+    // …and the next conversation is created WITH the scope.
+    await user.click(screen.getByRole('button', { name: /new document q&a/i }))
+    await waitFor(() =>
+      expect(createConversation).toHaveBeenCalledWith({ mode: 'documents', scopeDocumentIds: ['d1'] })
+    )
   })
 })
 

@@ -39,6 +39,9 @@ export function App(): JSX.Element {
   // Which composer mode the Chat screen opens with. Home's "Ask My Documents" jumps
   // straight into a document-Q&A chat; plain "Chat" navigation resets to chat mode.
   const [chatMode, setChatMode] = useState<'chat' | 'documents'>('chat')
+  // "Ask selected documents" handoff (Phase 17): the Documents screen's selection,
+  // applied to the next documents conversation the Chat screen creates.
+  const [chatScope, setChatScope] = useState<string[] | null>(null)
   // Phase 9: the workspace lifecycle gate. Null = still loading; not 'unlocked' = show
   // the create-password / unlock gate before the normal app shell.
   const [workspace, setWorkspace] = useState<WorkspaceStateInfo | null>(null)
@@ -92,11 +95,23 @@ export function App(): JSX.Element {
   function navigate(target: string): void {
     if (target === 'ask-documents') {
       setChatMode('documents')
+      setChatScope(null)
       setScreen('chat')
       return
     }
-    if (target === 'chat') setChatMode('chat')
+    if (target === 'chat') {
+      setChatMode('chat')
+      setChatScope(null)
+    }
     setScreen(target as ScreenId)
+  }
+
+  // Documents screen → "Ask these documents" (Phase 17, spec §10.4): open Chat in
+  // documents mode with the selection as the next conversation's retrieval scope.
+  function askSelectedDocuments(documentIds: string[]): void {
+    setChatMode('documents')
+    setChatScope(documentIds.length > 0 ? documentIds : null)
+    setScreen('chat')
   }
 
   async function lockNow(): Promise<void> {
@@ -188,8 +203,10 @@ export function App(): JSX.Element {
           </div>
         )}
         {screen === 'home' && <HomeScreen onNavigate={navigate} />}
-        {screen === 'chat' && <ChatScreen onNavigate={navigate} initialMode={chatMode} />}
-        {screen === 'documents' && <DocumentsScreen />}
+        {screen === 'chat' && (
+          <ChatScreen onNavigate={navigate} initialMode={chatMode} initialScopeDocumentIds={chatScope} />
+        )}
+        {screen === 'documents' && <DocumentsScreen onAskSelected={askSelectedDocuments} />}
         {screen === 'models' && <ModelsScreen />}
         {screen === 'privacy' && <PrivacyScreen />}
         {screen === 'diagnostics' && <DiagnosticsScreen />}

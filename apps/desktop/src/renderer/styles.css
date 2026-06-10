@@ -240,6 +240,67 @@ h2 { font-size: 15px; margin: 0 0 12px; }
 .chat-mode-tab:hover:not(:disabled) { color: var(--text); }
 .chat-mode-tab.active { color: var(--text); border-color: var(--accent); }
 .chat-mode-tab:disabled { cursor: default; opacity: 0.6; }
+.chat-mode-sub { display: block; font-size: 10px; color: var(--muted); margin-top: 2px; }
+
+/* Plain-chat document-awareness notice (Phase 17 §5.1) */
+.chat-doc-hint {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.chat-doc-hint b { color: var(--text); font-weight: 600; }
+.chat-doc-hint-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.chat-doc-hint-dismiss {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 4px 6px;
+}
+.chat-doc-hint-dismiss:hover { color: var(--text); }
+
+/* "Ask selected documents" scope chips (Phase 17 §5.3, spec §10.4) */
+.scope-chips {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 12px;
+}
+.scope-chips-label { color: var(--muted); }
+.scope-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--panel);
+  border: 1px solid var(--accent);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 3px 6px 3px 10px;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.scope-chip-remove {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  font-size: 11px;
+  cursor: pointer;
+  padding: 1px 4px;
+}
+.scope-chip-remove:hover:not(:disabled) { color: var(--text); }
+.scope-chip-remove:disabled { cursor: default; opacity: 0.6; }
 
 .chat-main { display: flex; flex-direction: column; min-height: 0; gap: 12px; }
 .chat-transcript {
@@ -435,7 +496,8 @@ h2 { font-size: 15px; margin: 0 0 12px; }
 /* Documents screen */
 .doc-card { display: flex; flex-direction: column; gap: 10px; }
 .doc-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
-.doc-title { font-size: 15px; font-weight: 600; word-break: break-all; }
+.doc-select { width: 15px; height: 15px; accent-color: var(--accent); align-self: center; flex-shrink: 0; }
+.doc-title { font-size: 15px; font-weight: 600; word-break: break-all; flex: 1; }
 .doc-meta { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 4px 14px; font-size: 12px; color: var(--muted); }
 .doc-meta b { color: var(--text); font-weight: 500; }
 .doc-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }

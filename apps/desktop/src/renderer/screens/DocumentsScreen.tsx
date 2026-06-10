@@ -30,16 +30,30 @@ function formatSize(bytes: number | null): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
-export function DocumentsScreen(): JSX.Element {
+interface Props {
+  /** "Ask these documents" (Phase 17, spec §10.4): open Chat scoped to the selection. */
+  onAskSelected?: (documentIds: string[]) => void
+}
+
+export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
   const [docs, setDocs] = useState<DocumentInfo[] | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [preview, setPreview] = useState<DocumentPreview | null>(null)
   const [previewLoading, setPreviewLoading] = useState(false)
+  // "Ask these documents" selection (indexed documents only).
+  const [selected, setSelected] = useState<ReadonlySet<string>>(new Set())
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   const refresh = useCallback(async (): Promise<void> => {
-    setDocs(await window.api.listDocuments())
+    const next = await window.api.listDocuments()
+    setDocs(next)
+    // Drop selected ids that no longer exist or are no longer indexed.
+    setSelected((prev) => {
+      const valid = new Set(next.filter((d) => d.status === 'indexed').map((d) => d.id))
+      const kept = [...prev].filter((id) => valid.has(id))
+      return kept.length === prev.size ? prev : new Set(kept)
+    })
   }, [])
 
   useEffect(() => {
@@ -120,6 +134,34 @@ export function DocumentsScreen(): JSX.Element {
   }
 
   const anyActive = docs?.some((d) => ACTIVE_STATUSES.has(d.status)) ?? false
+  const staleDocs = docs?.filter((d) => d.staleEmbeddings) ?? []
+
+  function toggleSelected(id: string): void {
+    setSelected((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  // Re-index every stale document sequentially (plan §5.2): same per-document call as
+  // the row button, one at a time — multi-document re-embedding contends on the embedder.
+  async function onReindexAllStale(): Promise<void> {
+    setBusy('reindex-all')
+    setError(null)
+    try {
+      for (const d of staleDocs) {
+        await window.api.reindexDocument(d.id)
+        await refresh()
+      }
+    } catch (e) {
+      setError(String(e instanceof Error ? e.message : e))
+    } finally {
+      setBusy(null)
+      await refresh().catch(() => undefined)
+    }
+  }
 
   return (
     <div className="screen">
@@ -144,6 +186,26 @@ export function DocumentsScreen(): JSX.Element {
         <button className="btn sm" disabled={busy !== null} onClick={() => void refresh()}>
           Refresh
         </button>
+        {onAskSelected && selected.size > 0 && (
+          <button
+            className="btn primary"
+            disabled={busy !== null}
+            title="Open a document Q&A scoped to the selected documents"
+            onClick={() => onAskSelected([...selected])}
+          >
+            Ask these documents ({selected.size})
+          </button>
+        )}
+        {staleDocs.length > 1 && (
+          <button
+            className="btn"
+            disabled={busy !== null || anyActive}
+            title="Re-index every document that was indexed with a different search model"
+            onClick={() => void onReindexAllStale()}
+          >
+            {busy === 'reindex-all' ? 'Re-indexing…' : `Re-index all (${staleDocs.length})`}
+          </button>
+        )}
       </div>
 
       <p className="hint" style={{ marginTop: 10 }}>
@@ -159,6 +221,16 @@ export function DocumentsScreen(): JSX.Element {
       {docs?.map((d) => (
         <div className="card doc-card" key={d.id}>
           <div className="doc-head">
+            {onAskSelected && d.status === 'indexed' && (
+              <input
+                type="checkbox"
+                className="doc-select"
+                checked={selected.has(d.id)}
+                aria-label={`Select ${d.title} for asking`}
+                title="Select to ask only chosen documents"
+                onChange={() => toggleSelected(d.id)}
+              />
+            )}
             <div className="doc-title" title={d.originalPath ?? d.title}>
               {d.title}
             </div>

@@ -196,4 +196,34 @@ describe('registerChatIpc', () => {
     await invoke(handlers, IPC.deleteConversation, conv.id)
     expect(listConversations(db)).toHaveLength(0)
   })
+
+  // ---- "Ask selected documents" scope (Phase 17, plan §5.3) ----------------------
+
+  it('createConversation accepts a documents scope and updateConversationScope edits it', async () => {
+    const db = freshDb()
+    registerChatIpc(makeCtx(db, null))
+
+    const conv = (
+      await invoke(handlers, IPC.createConversation, {
+        mode: 'documents',
+        scopeDocumentIds: ['d1', 'd2']
+      })
+    ).result as { id: string; scopeDocumentIds: string[] | null }
+    expect(conv.scopeDocumentIds).toEqual(['d1', 'd2'])
+
+    // Chip removal: replace with a subset, then clear back to the whole corpus.
+    const narrowed = (await invoke(handlers, IPC.updateConversationScope, conv.id, ['d2'])).result as {
+      scopeDocumentIds: string[] | null
+    }
+    expect(narrowed.scopeDocumentIds).toEqual(['d2'])
+    const cleared = (await invoke(handlers, IPC.updateConversationScope, conv.id, null)).result as {
+      scopeDocumentIds: string[] | null
+    }
+    expect(cleared.scopeDocumentIds).toBeNull()
+    expect(listConversations(db)[0].scopeDocumentIds).toBeNull()
+
+    await expect(invoke(handlers, IPC.updateConversationScope, 'nope', ['d1'])).rejects.toThrow(
+      /Unknown conversation/
+    )
+  })
 })

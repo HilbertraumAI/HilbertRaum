@@ -16,7 +16,6 @@ import {
   type IngestionDeps
 } from '../services/ingestion'
 import { supportedExtensions } from '../services/ingestion/parsers'
-import { getSettings } from '../services/settings'
 import { log } from '../services/logging'
 
 // Phase 4 IPC: document import + ingestion status (spec §9.1, §7.7).
@@ -52,12 +51,16 @@ export function registerDocsIpc(ctx: AppContext): void {
     }
   }
 
-  // Ingestion dependencies (Phase 5 + H1). The active embedding model id (settings) tags
-  // each vector; the document cipher (non-null only for an UNLOCKED encrypted workspace)
-  // makes the stored document copies rest encrypted, per spec §3.5.
+  // Ingestion dependencies (Phase 5 + H1). Vectors are tagged with the id of the embedder
+  // that ACTUALLY produced them (`embedder.id`, the embedChunks fallback) — never the
+  // settings selection (Phase 17 fix): with the E5 manifest selected but the mock embedder
+  // active (no binary), the old settings tag stamped mock vectors with the E5 id, hiding
+  // them from search now AND poisoning the E5-scoped search later. Search scopes by
+  // `ctx.embedder.id`, so tag and scope must come from the same place. The document cipher
+  // (non-null only for an UNLOCKED encrypted workspace) keeps stored copies encrypted at
+  // rest, per spec §3.5.
   const ingestionDeps = (): IngestionDeps => ({
     embedder: ctx.embedder,
-    embeddingModelId: getSettings(ctx.db).activeEmbeddingModelId,
     cipher: ctx.workspace.documentCipher()
   })
 

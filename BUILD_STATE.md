@@ -15,9 +15,13 @@ first real Windows `D:\` portable-drive bring-up surfaced + fixed a cluster of p
 drive-root path, manifest-source and RAG/embedding bugs — see **§9**. A **post-MVP UX polish
 round (2026-06-10)** added conversation deletion, a persisted checksum cache (+ real
 verify/loading UX), startup auto-start of the active model, and the Home → documents-chat
-navigation fix — see the §3 entry. Remaining work = **manual release acceptance only** (§5, now
-incl. the GPU hardware matrix, item 1b). Consciously-accepted gaps live in
-[`docs/known-limitations.md`](docs/known-limitations.md)._
+navigation fix — see the §3 entry. **The Office-edition functionality wave has started**
+([`docs/post-mvp-functionality-plan.md`](docs/post-mvp-functionality-plan.md)): **Phase 17 (RAG
+trust & document-scoped asking) is DONE** — ask-selected-documents scope, the plain-chat
+document-awareness notice, the vector-tag fix, and the reindex-needed answer (§3 entry; design
+record `docs/rag-design.md` §10). Phases 18–20 are next. Release-wise, remaining work = **manual
+release acceptance only** (§5, incl. the GPU hardware matrix, item 1b). Consciously-accepted
+gaps live in [`docs/known-limitations.md`](docs/known-limitations.md)._
 
 ---
 
@@ -42,14 +46,21 @@ incl. the GPU hardware matrix, item 1b). Consciously-accepted gaps live in
 | 14 | GPU distribution (Vulkan default + CPU safety net) | 🟢 done |
 | 15 | GPU runtime (probe, fallback ladder, embedder pin) | 🟢 done |
 | 16 | GPU surface (Settings/Diagnostics/benchmark/docs) | 🟢 done |
+| 17 | RAG trust & document-scoped asking | 🟢 done |
+| 18 | In-app model downloader | ⚪ not started |
+| 19 | Audit log (`runtime_events`) | ⚪ not started |
+| 20 | Answer-depth modes (Fast/Balanced/Deep) | ⚪ not started |
 
 Legend: ⚪ not started · 🟡 in progress · 🟢 done · 🔴 blocked
 
 > Phases 12–13 are the **post-MVP** distribution phases; Phases 14–16 added GPU acceleration on
 > top (see [`docs/gpu-support-plan.md`](docs/gpu-support-plan.md)). All are DONE — see
 > [`docs/provisioning-and-distribution-plan.md`](docs/provisioning-and-distribution-plan.md).
-> Remaining = **manual acceptance only**: a real signed/notarized build + a USB §17 demo (R5/R7)
-> + the GPU hardware matrix (§5 item 1b).
+> Remaining for *release* = **manual acceptance only**: a real signed/notarized build + a USB §17
+> demo (R5/R7) + the GPU hardware matrix (§5 item 1b).
+> **Phases 17–20 are the functionality wave toward the Office edition** — see
+> [`docs/post-mvp-functionality-plan.md`](docs/post-mvp-functionality-plan.md). Phase 17 is DONE
+> (plan §5, deviations in §5.5; design record in `docs/rag-design.md` §10).
 
 ---
 
@@ -559,6 +570,34 @@ Repo root: `f:\_coding\ai_drive`.
   `docs/provisioning-and-distribution-plan.md` **condensed** with their cited section anchors
   kept stable (gpu §1–§8; provisioning §0/§12/§12.3/§13). Rule recorded in CLAUDE.md
   ("Doc lifecycle rule"). Full originals: `git show 4549934:docs/<file>`.
+- **Phase 17 — RAG trust & document-scoped asking (2026-06-10, plan
+  [`docs/post-mvp-functionality-plan.md`](docs/post-mvp-functionality-plan.md) §5; design
+  record in `docs/rag-design.md` §10):**
+  1. **"Ask selected documents" (spec §10.4):** `VectorIndexOptions.documentIds` scopes the
+     cosine scan (placeholder SQL, composes with the Phase-10 model-id filter); the scope
+     **persists on the conversation** (additive nullable `conversations.scope_json`, guarded
+     `ALTER TABLE` in `db.ts` — decision D2a; malformed JSON reads back null, never throws).
+     `createConversation` accepts it, `updateConversationScope` (`chat:updateScope`)
+     replaces/clears it, `askDocuments` reads it from the conversation (**deviation:** no
+     per-call `documentIds` arg — redundant once persisted). UI: Documents-screen checkboxes
+     (indexed only) + "Ask these documents (N)" → Chat with removable scope chips; the
+     pending handoff applies to the next documents conversation created.
+  2. **Plain-chat document awareness (§5.1):** with ≥1 indexed document, plain Chat shows a
+     dismissible per-conversation notice + one-click "Ask Documents instead" (the wrong-tab
+     hallucination guard from the §9 drive test); mode tabs gained subtitles. Renderer-only.
+  3. **Vector-tag rule (LOCKED):** ingestion tags vectors with the id of the embedder that
+     ACTUALLY produced them (`embedder.id` fallback; `registerDocsIpc` no longer passes
+     `settings.activeEmbeddingModelId`). The old tag could stamp mock-produced vectors with
+     the E5 manifest id — invisible to mock-scoped search now, poisoning E5-scoped search
+     later. Tag and search scope must come from the same place. (Stronger fix than the
+     plan's "persist `activeEmbeddingModelId`"; plan §5.5 deviation 1.)
+  4. **`REINDEX_NEEDED_ANSWER` (§5.2):** when retrieval is empty AND `corpusNeedsReindex`
+     (indexed chunks exist but no document has vectors under the active embedder), the fixed
+     answer says "re-index", not "rephrase" — still never calls the model. Documents screen
+     gained **Re-index all** (sequential) next to the existing per-doc stale badge.
+  Tests: `tests/integration/rag-scope.test.ts` (incl. the pre-Phase-17 column migration) +
+  chat-ipc + renderer (ChatHomeNav, DocumentsScreen). Gate: typecheck clean, 499 tests, build
+  green.
 
 ---
 
@@ -597,11 +636,15 @@ spec §7.6 export + §7.11 Diagnostics) + `getRuntimeInstall` (`runtime:install`
 `tryGpuAgain` (`gpu:try-again`, GPU audit round) + the `runtime:notice` main→renderer event
 channel (Phase 15, `EVENTS.runtimeNotice`, preload `onRuntimeNotice`) +
 `deleteConversation` (`chat:deleteConversation`), `verifyModel` (`models:verify`) and
-`previewDocument` (`docs:preview`) from the post-MVP UX polish rounds.
+`previewDocument` (`docs:preview`) from the post-MVP UX polish rounds +
+`updateConversationScope` (`chat:updateScope`, Phase 17 — replace/clear a documents
+conversation's "ask selected documents" scope).
 (`pickDocuments` + `reindexDocument` are Phase-4 additions to the `IPC` registry beyond the spec
 §9.1 list — picker + re-index UX; `getPolicy` is a Phase-8 addition; the four `workspace:*` channels
 are Phase-9 additions.) `createConversation` now also accepts an optional `mode`
-('chat' | 'documents')._
+('chat' | 'documents') and an optional `scopeDocumentIds` (Phase 17); `Conversation` carries
+`scopeDocumentIds: string[] | null` (additive `conversations.scope_json` column, guarded
+ALTER-TABLE migration in `db.ts`)._
 
 ### DB schema
 ✅ Implemented in `src/main/services/db.ts` — all spec §8 tables created idempotently (WAL mode,
@@ -1068,11 +1111,13 @@ items are **MANUAL acceptance only** (R2/R5/R7 + the GPU hardware matrix). In ro
    toward the Office/Knowledge edition (RAG trust & document-scoped asking → in-app model
    downloader (the revived plan §12.3) → audit log on `runtime_events` → Fast/Balanced/Deep
    answer-depth modes), with wave-2 outlines (reranker/hybrid retrieval, signed offline update
-   bundles). Phase 18 is blocked on its decision D3 (downloads policy semantics). Smaller
+   bundles). **Phase 17 is DONE** (see §3); next up is **Phase 18 (in-app model downloader)**,
+   whose D3 decision (downloads policy semantics) is now RESOLVED in the plan — flip
+   `DEFAULT_POLICY.network.allowModelDownloads` to true, commercial drives keep deny. Smaller
    leftovers: an icon/`buildResources` for electron-builder; ANN vector index only if a real
    corpus outgrows the linear scan (plan §9 item 4).
 
-**Current gate (2026-06-10, post-Phase-16): typecheck clean, 434/434 tests pass (+4 manual GPU
+**Current gate (2026-06-10, post-Phase-17): typecheck clean, 499/499 tests pass (+4 manual GPU
 smoke tests, skipped unless `PAID_GPU_SMOKE` is set), `npm run build` green.** The per-phase gate
 history (test counts, bundle sizes, per-phase test inventories) lives in git history.
 

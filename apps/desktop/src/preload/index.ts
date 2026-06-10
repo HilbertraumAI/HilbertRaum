@@ -78,8 +78,18 @@ const api = {
   runPreflight: (): Promise<PreflightResult> => ipcRenderer.invoke(IPC.runPreflight),
 
   // ---- Chat (Phase 3) ----
-  createConversation: (opts?: { title?: string; mode?: 'chat' | 'documents' }): Promise<Conversation> =>
-    ipcRenderer.invoke(IPC.createConversation, opts),
+  createConversation: (opts?: {
+    title?: string
+    mode?: 'chat' | 'documents'
+    /** "Ask selected documents" scope (Phase 17); only meaningful for documents mode. */
+    scopeDocumentIds?: string[] | null
+  }): Promise<Conversation> => ipcRenderer.invoke(IPC.createConversation, opts),
+  /** Replace a conversation's "ask selected documents" scope; null = whole corpus. */
+  updateConversationScope: (
+    conversationId: string,
+    documentIds: string[] | null
+  ): Promise<Conversation> =>
+    ipcRenderer.invoke(IPC.updateConversationScope, conversationId, documentIds),
   listConversations: (): Promise<Conversation[]> => ipcRenderer.invoke(IPC.listConversations),
   listMessages: (conversationId: string): Promise<Message[]> =>
     ipcRenderer.invoke(IPC.listMessages, conversationId),
