@@ -1,7 +1,5 @@
 import { useEffect, useState } from 'react'
 import { HomeScreen } from './screens/HomeScreen'
-import { PrivacyScreen } from './screens/PrivacyScreen'
-import { DiagnosticsScreen } from './screens/DiagnosticsScreen'
 import { SettingsScreen } from './screens/SettingsScreen'
 import { ModelsScreen } from './screens/ModelsScreen'
 import { ChatScreen } from './screens/ChatScreen'
@@ -9,16 +7,8 @@ import { DocumentsScreen } from './screens/DocumentsScreen'
 import { WorkspaceGate } from './screens/WorkspaceGate'
 import { Banner, Button, ToastProvider } from './components'
 import { setThemeSetting } from './theme'
+import { resolveNavTarget, type ScreenId, type SettingsTab } from './navigation'
 import type { WorkspaceStateInfo } from '@shared/types'
-
-type ScreenId =
-  | 'home'
-  | 'chat'
-  | 'documents'
-  | 'models'
-  | 'settings'
-  | 'privacy'
-  | 'diagnostics'
 
 interface NavItem {
   id: ScreenId
@@ -26,19 +16,24 @@ interface NavItem {
   icon: string
 }
 
-const NAV: NavItem[] = [
+// Information architecture (Phase 26, guidelines §2): 4 everyday destinations on top,
+// Settings as the single bottom utility. Privacy and Diagnostics live INSIDE Settings
+// as tabs — they are no longer nav destinations.
+const NAV_TOP: NavItem[] = [
   { id: 'home', label: 'Home', icon: '🏠' },
   { id: 'chat', label: 'Chat', icon: '💬' },
   { id: 'documents', label: 'Documents', icon: '📄' },
-  { id: 'models', label: 'Models', icon: '🧠' },
-  { id: 'privacy', label: 'Privacy & Offline', icon: '🔒' },
-  { id: 'diagnostics', label: 'Diagnostics', icon: '🩺' },
-  { id: 'settings', label: 'Settings', icon: '⚙️' }
+  { id: 'models', label: 'AI Model', icon: '🧠' }
 ]
+
+const NAV_BOTTOM: NavItem[] = [{ id: 'settings', label: 'Settings', icon: '⚙️' }]
 
 export function App(): JSX.Element {
   const [screen, setScreen] = useState<ScreenId>('home')
-  // Which composer mode the Chat screen opens with. Home's "Ask My Documents" jumps
+  // Which Settings tab is open (Phase 26): driven by navigate() so virtual targets
+  // like 'settings:privacy' (and the legacy 'privacy' alias) land on the right tab.
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>('general')
+  // Which composer mode the Chat screen opens with. Home's "Ask my documents" jumps
   // straight into a document-Q&A chat; plain "Chat" navigation resets to chat mode.
   const [chatMode, setChatMode] = useState<'chat' | 'documents'>('chat')
   // "Ask selected documents" handoff (Phase 17): the Documents screen's selection,
@@ -48,7 +43,7 @@ export function App(): JSX.Element {
   // the create-password / unlock gate before the normal app shell.
   const [workspace, setWorkspace] = useState<WorkspaceStateInfo | null>(null)
   // Live offline state for the sidebar badge (spec §3.6). Re-checked when the
-  // Privacy/Settings screens are visited (network toggle may have changed).
+  // Settings screen is visited (network toggle may have changed).
   const [offline, setOffline] = useState(true)
   const [disabledByPolicy, setDisabledByPolicy] = useState(false)
   // Set when the backend never came up (getWorkspaceState rejected). Faking 'unlocked'
@@ -99,20 +94,16 @@ export function App(): JSX.Element {
     }
   }, [screen, unlocked])
 
-  // Central navigation: 'ask-documents' is a virtual target meaning "Chat screen in
-  // documents mode" (Home's Ask My Documents used to land on the import screen).
+  // Central navigation: screens hand any target (real, virtual, or legacy alias) to
+  // resolveNavTarget — see navigation.ts for the table.
   function navigate(target: string): void {
-    if (target === 'ask-documents') {
-      setChatMode('documents')
-      setChatScope(null)
-      setScreen('chat')
-      return
-    }
-    if (target === 'chat') {
-      setChatMode('chat')
+    const next = resolveNavTarget(target)
+    if (next.chatMode) {
+      setChatMode(next.chatMode)
       setChatScope(null)
     }
-    setScreen(target as ScreenId)
+    if (next.settingsTab) setSettingsTab(next.settingsTab)
+    setScreen(next.screen)
   }
 
   // Documents screen → "Ask these documents" (Phase 17, spec §10.4): open Chat in
@@ -165,6 +156,20 @@ export function App(): JSX.Element {
       ? '● Offline Mode'
       : '○ Network allowed'
 
+  function navButton(item: NavItem): JSX.Element {
+    return (
+      <li key={item.id}>
+        <button
+          className={`nav-item ${screen === item.id ? 'active' : ''}`}
+          onClick={() => navigate(item.id)}
+        >
+          <span className="nav-icon">{item.icon}</span>
+          {item.label}
+        </button>
+      </li>
+    )
+  }
+
   return (
     // The single toast host (Phase 24): screens fire "Saved"-style confirmations via
     // useToast(); the polite live region lives once, here.
@@ -178,19 +183,8 @@ export function App(): JSX.Element {
             <div className="brand-edition">Lite</div>
           </div>
         </div>
-        <ul className="nav-list">
-          {NAV.map((item) => (
-            <li key={item.id}>
-              <button
-                className={`nav-item ${screen === item.id ? 'active' : ''}`}
-                onClick={() => navigate(item.id)}
-              >
-                <span className="nav-icon">{item.icon}</span>
-                {item.label}
-              </button>
-            </li>
-          ))}
-        </ul>
+        <ul className="nav-list">{NAV_TOP.map(navButton)}</ul>
+        <ul className="nav-list nav-bottom">{NAV_BOTTOM.map(navButton)}</ul>
         {workspace.mode === 'encrypted' && (
           <Button size="sm" className="lock-btn" title="Re-encrypt and lock the workspace" onClick={() => void lockNow()}>
             🔒 Lock now
@@ -199,7 +193,7 @@ export function App(): JSX.Element {
         <button
           className={`offline-badge ${offline ? '' : 'network-on'}`}
           title="No prompts or files leave this device"
-          onClick={() => setScreen('privacy')}
+          onClick={() => navigate('settings:privacy')}
         >
           {badgeText}
         </button>
@@ -207,7 +201,15 @@ export function App(): JSX.Element {
 
       <main className="content">
         {notice && (
-          <Banner tone="info" onDismiss={() => setNotice(null)}>
+          <Banner
+            tone="info"
+            onDismiss={() => setNotice(null)}
+            action={
+              <Button size="sm" onClick={() => navigate('settings:diagnostics')}>
+                Details
+              </Button>
+            }
+          >
             {notice}
           </Banner>
         )}
@@ -217,9 +219,7 @@ export function App(): JSX.Element {
         )}
         {screen === 'documents' && <DocumentsScreen onAskSelected={askSelectedDocuments} />}
         {screen === 'models' && <ModelsScreen />}
-        {screen === 'privacy' && <PrivacyScreen />}
-        {screen === 'diagnostics' && <DiagnosticsScreen />}
-        {screen === 'settings' && <SettingsScreen />}
+        {screen === 'settings' && <SettingsScreen tab={settingsTab} onTabChange={setSettingsTab} />}
       </main>
     </div>
     </ToastProvider>

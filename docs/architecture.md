@@ -11,8 +11,8 @@ a future move to Tauri/Rust is a localized swap.
 ```
 ┌──────────────────────────────────────────────────────────────┐
 │ Renderer (React, sandboxed)                                    │
-│  Screens: Onboarding · Home · Chat · Documents · Models ·      │
-│           Privacy & Offline · Diagnostics · Settings           │
+│  Screens: Onboarding · Home · Chat · Documents · AI Model ·    │
+│           Settings (General / Privacy & data / Diagnostics)    │
 │  No Node / no network access — only window.api (typed bridge)  │
 └───────────────▲───────────────────────────────┬──────────────┘
                 │ contextBridge (preload)        │ IPC events (streams)
@@ -71,7 +71,7 @@ the whole DB file is encrypted at rest.
 - **Checksum cache (two tiers).** Hashing a multi-GB GGUF takes minutes of USB I/O, so verified
   hashes are cached by `(path, size, mtime)`: an in-memory map (L1) plus the persisted
   `AppSettings.checksumCache` (L2, injected as a `HashStore`), so an unchanged weight file is hashed
-  **once ever**, not once per session. A size/mtime change re-hashes; the Models screen's
+  **once ever**, not once per session. A size/mtime change re-hashes; the AI Model screen's
   **Verify checksum** button calls the `verifyModel` IPC, which drops the cache entry and re-hashes
   for real. The ship-time gates (`verify-models --strict`, `assertCommercialDrive`) always hash fully.
 - **Recommendation is RAM-best-fit (post-MVP).** `recommendModelIdByRam(manifests, ramGb)` picks the
@@ -81,7 +81,7 @@ the whole DB file is encrypted at rest.
   surfaces always agree). The legacy `recommended_profiles` lookup remains the fallback when RAM is
   unknown.
 - **RAM gate (post-MVP).** `buildModelList` flags `insufficientRam` on models whose
-  `recommended_min_ram_gb` exceeds the machine RAM; the Models screen disables Select/Start and
+  `recommended_min_ram_gb` exceeds the machine RAM; the AI Model screen disables Select/Start and
   shows a "Needs ≥N GB RAM" badge, and `startModelRuntime` refuses to load installed weights that
   don't fit (friendly §11.4 copy — the zero-weights mock fallback is not gated). Rounding is
   `Math.round`, so a "16 GB" machine reporting 15.9 GiB still counts as 16.
@@ -200,9 +200,10 @@ the whole DB file is encrypted at rest.
   (`127.0.0.1`/`localhost`/`::1`) is exempt** (dev renderer + Phase-10 sidecar). The guard never
   blocks or throws. Boundary note: it covers Node sockets (http/https/fetch via undici); renderer
   traffic is blocked by the CSP; `electron.net` is not used in the core path.
-- **UI**: `PrivacyScreen.tsx` (spec §7.10/§18.1) renders the offline statement, where data lives, the
-  live network state, the plaintext-dev-mode caveat, and the logs-are-local guarantee. The sidebar
-  badge reflects the live `getPolicy()` state.
+- **UI**: the Settings "Privacy & data" tab (`screens/settings/PrivacyTab.tsx`, spec §7.10/§18.1 —
+  a standalone Privacy screen until the Phase-26 IA regroup) renders the offline statement, where
+  data lives, the live network state, the plaintext-dev-mode caveat, and the logs-are-local
+  guarantee. The sidebar badge reflects the live `getPolicy()` state and opens that tab.
 - Full detail in [`security-model.md`](security-model.md).
 
 ## Real local inference (Phase 10)
@@ -258,7 +259,7 @@ adds is the safety machinery:
   (`runtime/llama.cpp/<os>/cpu/`, when shipped) → rung 4 = `MockRuntime` (the existing
   graceful-fallback rule; the app can never be stuck). `gpuMode: 'off'` (Settings) or a persisted
   `gpuAutoDisabled` skip rung 1. A rung-1 failure persists `gpuAutoDisabled` + `gpuLastError`
-  (no repeated GPU health timeouts on later starts); Diagnostics' "Try GPU again" clears it.
+  (no repeated GPU health timeouts on later starts); the Diagnostics tab's "Try GPU again" clears it.
   `RuntimeStatus` now carries `backend: 'gpu' | 'cpu' | 'mock'` + `gpuName`.
 - **Mid-generation crash auto-fallback** (§5.3): `LlamaServer` gained an `onUnexpectedExit` hook
   (fires only for a *healthy* server dying outside `stop()`). When the active backend was GPU,
@@ -275,7 +276,7 @@ adds is the safety machinery:
   `SpawnFn`/fetch seams; a real-GPU smoke lives in `tests/manual/gpu-smoke.test.ts`, **skipped
   unless `PAID_GPU_SMOKE` points at a provisioned drive**.
 - **The Phase-16 surface** on top of the ladder: Settings' "Use GPU acceleration" toggle binds
-  `gpuMode 'auto' | 'off'` (default ON). Diagnostics shows the **Acceleration** line (live
+  `gpuMode 'auto' | 'off'` (default ON). The Settings "Diagnostics (advanced)" tab shows the **Acceleration** line (live
   `RuntimeStatus.backend`/`gpuName` while running, else the persisted `settings.gpuProbe`), the
   **runtime build** line (`getRuntimeInstall` IPC `runtime:install` → the `.paid-runtime.json`
   marker), and the compatibility-mode notice with **"Try GPU again"** — a dedicated IPC
@@ -373,7 +374,7 @@ follow-up), plus `main/index.ts` for `runtime_crashed`/`runtime_fallback` (the G
 crash-fallback/ladder callbacks), `policy_warning` (startup `loadPolicy`), and
 `offline_guard_violation` (a new `assertOfflinePosture.onViolation` hook).
 
-Surface: the Diagnostics **Activity** panel (`getAuditEvents(limit, beforeId?)` IPC
+Surface: the **Activity** panel on the Settings Diagnostics tab (`getAuditEvents(limit, beforeId?)` IPC
 `audit:list`, client-side type filter, "Show earlier activity" paging) and an
 export-to-file action (`exportAuditLog` IPC `audit:export`, the `exportConversation`
 save-dialog precedent, JSON output). Data class + privacy rule:

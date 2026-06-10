@@ -291,45 +291,109 @@ describe('ChatScreen — documents-scope popover', () => {
   })
 })
 
-describe('HomeScreen — quick actions', () => {
-  function renderHome(onNavigate: (s: string) => void): void {
+describe('HomeScreen — readiness hub (Phase 26)', () => {
+  function renderHome(
+    onNavigate: (s: string) => void,
+    opts: {
+      activeModelId?: string | null
+      running?: boolean
+      docCount?: number
+      problems?: string[]
+    } = {}
+  ): void {
+    const docCount = opts.docCount ?? 2
     stubApi({
       getAppStatus: vi.fn(async () => ({
         appName: 'x',
         appVersion: '0',
         offlineMode: true,
         networkAllowed: false,
-        activeModelId: null,
+        activeModelId: opts.activeModelId ?? null,
         hardwareProfile: 'UNKNOWN' as const,
         workspaceMode: 'plaintext_dev' as const,
         workspaceReady: true,
         machineRamGb: 16
       })),
+      getRuntimeStatus: vi.fn(async () => ({
+        running: opts.running ?? false,
+        modelId: opts.running ? (opts.activeModelId ?? 'm1') : null,
+        port: null,
+        healthy: opts.running ?? false,
+        message: ''
+      })),
+      listDocuments: vi.fn(async () =>
+        Array.from({ length: docCount }, (_, i) => indexedDoc(`d${i + 1}`, `doc-${i + 1}.pdf`))
+      ),
       runPreflight: vi.fn(async () => ({
-        ok: true,
+        ok: (opts.problems ?? []).length === 0,
         rootPath: '/drive',
         writable: true,
         freeBytes: 1024 * 1024 * 1024,
         slowDriveWarning: null,
-        problems: []
+        problems: opts.problems ?? []
       }))
     })
     render(<HomeScreen onNavigate={onNavigate} />)
   }
 
-  it('"Ask My Documents" opens the documents chat, not the import screen', async () => {
+  it('"Start chatting" is the primary action and opens Chat', async () => {
     const user = userEvent.setup()
     const onNavigate = vi.fn()
     renderHome(onNavigate)
-    await user.click(screen.getByRole('button', { name: /ask my documents/i }))
+    await user.click(screen.getByRole('button', { name: /start chatting/i }))
+    expect(onNavigate).toHaveBeenCalledWith('chat')
+  })
+
+  it('"Ask my documents" opens the documents chat, not the import screen', async () => {
+    const user = userEvent.setup()
+    const onNavigate = vi.fn()
+    renderHome(onNavigate)
+    await user.click(await screen.findByRole('button', { name: /ask my documents/i }))
     expect(onNavigate).toHaveBeenCalledWith('ask-documents')
   })
 
-  it('"Import Documents" still opens the documents screen', async () => {
+  it('reads ready when the model runs, with the model name and document count', async () => {
+    const onNavigate = vi.fn()
+    renderHome(onNavigate, { activeModelId: 'qwen3-4b-instruct-q4', running: true, docCount: 2 })
+    expect(await screen.findByText('Ready to chat.')).toBeInTheDocument()
+    expect(
+      await screen.findByText(/qwen3-4b-instruct-q4 is running on this device/)
+    ).toBeInTheDocument()
+    expect(await screen.findByText(/2 documents ready to ask about/)).toBeInTheDocument()
+  })
+
+  it('says the selected model may still be loading while the runtime is down', async () => {
+    const onNavigate = vi.fn()
+    renderHome(onNavigate, { activeModelId: 'qwen3-4b-instruct-q4', running: false })
+    expect(await screen.findByText('Getting ready…')).toBeInTheDocument()
+    expect(
+      await screen.findByText(/qwen3-4b-instruct-q4 is selected — it may still be loading/)
+    ).toBeInTheDocument()
+  })
+
+  it('points at the AI Model screen when no model is selected', async () => {
     const user = userEvent.setup()
     const onNavigate = vi.fn()
-    renderHome(onNavigate)
-    await user.click(screen.getByRole('button', { name: /import documents/i }))
+    renderHome(onNavigate, { activeModelId: null })
+    expect(await screen.findByText('No model selected yet')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /choose a model/i }))
+    expect(onNavigate).toHaveBeenCalledWith('models')
+  })
+
+  it('nudges toward Documents when none are imported (and hides "Ask my documents")', async () => {
+    const user = userEvent.setup()
+    const onNavigate = vi.fn()
+    renderHome(onNavigate, { docCount: 0 })
+    expect(await screen.findByText(/No documents yet/)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /ask my documents/i })).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /add documents/i }))
     expect(onNavigate).toHaveBeenCalledWith('documents')
+  })
+
+  it('shows preflight problems as a quiet warning', async () => {
+    renderHome(vi.fn(), { problems: ['The drive has very little free space left.'] })
+    expect(
+      await screen.findByText('The drive has very little free space left.')
+    ).toBeInTheDocument()
   })
 })

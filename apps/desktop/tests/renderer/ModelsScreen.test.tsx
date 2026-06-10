@@ -68,12 +68,13 @@ const appStatus = { machineRamGb: 32 } as unknown as AppStatus
 function stub(opts: {
   models?: ModelInfo[]
   policy?: PolicyStatus
+  activeModelId?: string | null
   downloadModel?: ReturnType<typeof vi.fn>
   getDownloadJob?: ReturnType<typeof vi.fn>
 }): void {
   stubApi({
     listModels: vi.fn(async () => opts.models ?? [model()]),
-    getSettings: vi.fn(async () => DEFAULT_SETTINGS),
+    getSettings: vi.fn(async () => ({ ...DEFAULT_SETTINGS, activeModelId: opts.activeModelId ?? null })),
     getPolicy: vi.fn(async () => opts.policy ?? policyStatus({ downloadsAllowed: true, settingOn: true })),
     getAppStatus: vi.fn(async () => appStatus),
     downloadModel: (opts.downloadModel ?? vi.fn()) as never,
@@ -116,6 +117,48 @@ describe('ModelsScreen — download gates (plan §6.1: explain WHY, policy vs Se
     render(<ModelsScreen />)
     await screen.findByText('Qwen3 4B Instruct')
     expect(screen.queryByRole('button', { name: 'Download' })).not.toBeInTheDocument()
+  })
+})
+
+describe('ModelsScreen — "AI Model" reframe (Phase 26, guidelines §2)', () => {
+  it('keeps checksums/paths/internals behind a closed-by-default "Technical details" disclosure', async () => {
+    const user = userEvent.setup()
+    stub({ models: [model({ state: 'installed' })] })
+    render(<ModelsScreen />)
+    await screen.findByText('Qwen3 4B Instruct')
+
+    // The plain-language hint is the everyday copy (2.7 GB → the "balanced" tier).
+    expect(screen.getByText(/Balanced — works well on most laptops/)).toBeInTheDocument()
+
+    // Closed by default: the technical content exists but is not shown.
+    const details = document.querySelector('details.tech-details') as HTMLDetailsElement
+    expect(details).not.toBeNull()
+    expect(details.open).toBe(false)
+    expect(screen.getByText('models/chat/qwen3-4b-instruct-q4.gguf')).not.toBeVisible()
+    expect(screen.getByRole('button', { name: /verify checksum/i })).not.toBeVisible()
+
+    // Opening the disclosure reveals path + checksum re-verify.
+    await user.click(screen.getByText('Technical details'))
+    expect(screen.getByText('models/chat/qwen3-4b-instruct-q4.gguf')).toBeVisible()
+    expect(screen.getByRole('button', { name: /verify checksum/i })).toBeVisible()
+  })
+
+  it('puts the active model first under "Your AI model"', async () => {
+    stub({
+      models: [
+        model({ id: 'other-model', displayName: 'Other Model', state: 'installed' }),
+        model({ id: 'active-model', displayName: 'Active Model', state: 'running' })
+      ],
+      activeModelId: 'active-model'
+    })
+    render(<ModelsScreen />)
+    await screen.findByText('Active Model')
+
+    expect(screen.getByText('Your AI model')).toBeInTheDocument()
+    expect(screen.getByText('Other models')).toBeInTheDocument()
+    // DOM order: the active model's card precedes the picker.
+    const titles = [...document.querySelectorAll('.model-title')].map((el) => el.textContent)
+    expect(titles).toEqual(['Active Model', 'Other Model'])
   })
 })
 

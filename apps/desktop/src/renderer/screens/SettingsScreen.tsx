@@ -1,7 +1,23 @@
 import { useEffect, useState } from 'react'
 import { SegmentedControl, Switch, useToast } from '../components'
 import { setThemeSetting } from '../theme'
+import { PrivacyTab } from './settings/PrivacyTab'
+import { DiagnosticsTab } from './settings/DiagnosticsTab'
+import type { SettingsTab } from '../navigation'
 import type { AppSettings, ThemeSetting } from '@shared/types'
+
+// Settings (Phase 26, guidelines §2): one utility destination with three tabs.
+// "General" = the everyday settings; "Privacy & data" absorbs the former Privacy
+// screen; "Diagnostics (advanced)" absorbs the former Diagnostics screen. The tab
+// switcher reuses SegmentedControl (roving tabindex + arrow keys, guidelines §6).
+// The open tab is owned by App.tsx so navigate('settings:privacy') etc. can land on
+// the right tab from anywhere; standalone use (tests) falls back to internal state.
+
+const TAB_CHOICES: Array<{ value: SettingsTab; label: string }> = [
+  { value: 'general', label: 'General' },
+  { value: 'privacy', label: 'Privacy & data' },
+  { value: 'diagnostics', label: 'Diagnostics (advanced)' }
+]
 
 const THEME_CHOICES: Array<{ value: ThemeSetting; label: string }> = [
   { value: 'system', label: 'System' },
@@ -9,7 +25,42 @@ const THEME_CHOICES: Array<{ value: ThemeSetting; label: string }> = [
   { value: 'dark', label: 'Dark' }
 ]
 
-export function SettingsScreen(): JSX.Element {
+export interface SettingsScreenProps {
+  /** Controlled tab (App.tsx). Omitted → uncontrolled, starting on General. */
+  tab?: SettingsTab
+  onTabChange?: (tab: SettingsTab) => void
+}
+
+export function SettingsScreen({ tab, onTabChange }: SettingsScreenProps): JSX.Element {
+  const [internalTab, setInternalTab] = useState<SettingsTab>('general')
+  const activeTab = tab ?? internalTab
+
+  function selectTab(next: SettingsTab): void {
+    onTabChange?.(next)
+    if (tab === undefined) setInternalTab(next)
+  }
+
+  return (
+    <div className="screen">
+      <h1>Settings</h1>
+      <div className="settings-tabs">
+        <SegmentedControl
+          options={TAB_CHOICES}
+          value={activeTab}
+          onChange={selectTab}
+          ariaLabel="Settings sections"
+        />
+      </div>
+      {activeTab === 'general' && <GeneralTab />}
+      {activeTab === 'privacy' && <PrivacyTab />}
+      {activeTab === 'diagnostics' && <DiagnosticsTab />}
+    </div>
+  )
+}
+
+// The "General" tab — today's settings, unchanged behavior (network toggle, Appearance,
+// Performance, Developer, Workspace facts).
+function GeneralTab(): JSX.Element {
   const [settings, setSettings] = useState<AppSettings | null>(null)
   const toast = useToast()
 
@@ -26,18 +77,11 @@ export function SettingsScreen(): JSX.Element {
   }
 
   if (!settings) {
-    return (
-      <div className="screen">
-        <h1>Settings</h1>
-        <p className="hint">Loading settings…</p>
-      </div>
-    )
+    return <p className="hint">Loading settings…</p>
   }
 
   return (
-    <div className="screen">
-      <h1>Settings</h1>
-
+    <>
       <div className="card">
         <h2>Privacy &amp; Offline Mode</h2>
         <Switch
@@ -47,7 +91,7 @@ export function SettingsScreen(): JSX.Element {
         />
         <p className="hint">
           Off by default. When off, the app makes no network calls. Turning it on only enables
-          model downloads from the Models screen — each one asks for confirmation first, and a
+          model downloads from the AI Model screen — each one asks for confirmation first, and a
           drive policy can keep downloads disabled entirely. Your prompts and documents never
           leave this device regardless of this setting.
         </p>
@@ -84,7 +128,7 @@ export function SettingsScreen(): JSX.Element {
           label="Load the selected model automatically when the app starts"
         />
         <p className="hint">
-          On by default. The model selected on the Models screen is loaded in the background at
+          On by default. The model selected on the AI Model screen is loaded in the background at
           launch (after unlock on encrypted workspaces) so Chat is ready without extra clicks.
         </p>
       </div>
@@ -117,6 +161,6 @@ export function SettingsScreen(): JSX.Element {
             : 'Plaintext developer workspace — data is stored unencrypted. The encrypted mode is the commercial default.'}
         </p>
       </div>
-    </div>
+    </>
   )
 }

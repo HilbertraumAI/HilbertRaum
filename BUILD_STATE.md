@@ -55,7 +55,13 @@ date-grouped conversation list (hover "⋯" menu + ConfirmDialog deletes — the
 and the inline "▸ Sources (N)" disclosure, header SegmentedControl + "⋯" overflow, the
 composer-footer "Answer detail" dropdown (Quick/Balanced/Thorough labels per D-UI4) and the
 documents-scope popover, the teaching empty state (doc-hint banner deleted), and buffered
-streaming with the auto-collapsing Thinking… line (§3 entry). Release-wise,
+streaming with the auto-collapsing Thinking… line (§3 entry). **Phase 26 (information
+architecture regroup) is DONE** on the same branch — nav 7→5 (Home · Chat · Documents ·
+**AI Model** ‖ Settings), Privacy + Diagnostics folded into Settings tabs ("Privacy & data" /
+"Diagnostics (advanced)"), `navigate()` virtual `settings:*` targets with the legacy
+`privacy`/`diagnostics` aliases kept working, Home rebuilt as the readiness hub (D-UI3
+RESOLVED: Home stays), and the AI Model screen's per-card "Technical details" disclosure
+(§3 entry). Release-wise,
 remaining work = **manual release acceptance only** (§5, incl. the GPU
 hardware matrix, item 1b). Consciously-accepted gaps live in
 [`docs/known-limitations.md`](docs/known-limitations.md)._
@@ -92,6 +98,7 @@ hardware matrix, item 1b). Consciously-accepted gaps live in
 | 23 | UI design tokens + light/dark theming | 🟢 done (branch `ui-phase-23-tokens-theming`, not merged) |
 | 24 | UI shared component layer (Radix + components/) | 🟢 done (same branch, not merged) |
 | 25 | UI chat screen restructure (guidelines §3) | 🟢 done (same branch, not merged) |
+| 26 | UI information architecture regroup (guidelines §2) | 🟢 done (same branch, not merged) |
 
 Legend: ⚪ not started · 🟡 in progress · 🟢 done · 🔴 blocked
 
@@ -1045,6 +1052,68 @@ Repo root: `f:\_coding\ai_drive`.
   menu, row ⋯ menu + delete confirm, sources disclosure expanded, scope popover
   all/scoped, collapsed list; walk gotcha recorded in project memory: Electron userData
   localStorage persists across walk runs). Gate: typecheck clean, 628 tests, build green.
+- **Phase 26 — information architecture regroup (2026-06-10, plan
+  [`docs/ui-ux-redesign-plan.md`](docs/ui-ux-redesign-plan.md) Phase 26; design source
+  [`docs/design-guidelines.md`](docs/design-guidelines.md) §2 (+§6/§9); same branch
+  `ui-phase-23-tokens-theming` — NOT merged). Renderer-only; no IPC/schema/main-process
+  changes and no new deps (the Settings tabs reuse the hand-rolled SegmentedControl —
+  Radix Tabs was deliberately NOT added).**
+  1. **Nav 7 → 5 (`App.tsx`):** top group Home · Chat · Documents · **AI Model** (renamed
+     from "Models"; internal `ScreenId` stays `'models'` so existing
+     `onNavigate('models')` callers are untouched) + a separated bottom utility group
+     holding Settings. Privacy and Diagnostics are no longer destinations. Navigation
+     resolution is the pure, unit-tested `renderer/navigation.ts`
+     `resolveNavTarget()`: virtual targets `'settings:privacy'`/`'settings:diagnostics'`
+     pick the Settings tab, and the **legacy `'privacy'`/`'diagnostics'` targets stay
+     working as aliases**; unknown targets fail safe to Home. Entry points re-pointed:
+     the sidebar offline badge → `settings:privacy`; the App-shell `runtime:notice`
+     banner gained a "Details" action → `settings:diagnostics`; ChatScreen's no-model
+     empty state keeps target `'models'` (label now "Open AI Model").
+  2. **SettingsScreen is tabbed:** General (all previous settings cards, unchanged
+     behavior) / **Privacy & data** (absorbs the former `PrivacyScreen` verbatim —
+     §18.1 offline statement, network state, data paths, logs-local, workspace
+     protection) / **Diagnostics (advanced)** (absorbs the former `DiagnosticsScreen`,
+     visually quieter — h1 dropped, lead demoted to a hint — but still the home of ALL
+     technical detail: Acceleration + "Try GPU again", runtime-build line, benchmark,
+     Activity panel + export, log tail). Tab components live in
+     `renderer/screens/settings/{PrivacyTab,DiagnosticsTab}.tsx`; the old screen files
+     are deleted. The open tab is owned by `App.tsx` (controlled prop) so navigation can
+     land on a tab from anywhere; standalone renders fall back to internal state.
+  3. **Home = readiness hub (D-UI3 re-evaluated → RESOLVED: Home STAYS):** three
+     readiness rows (Workspace protection · AI model running/loading/none-selected with
+     remediation buttons · indexed-document count with an Add-documents nudge), ONE
+     primary "Start chatting", quiet preflight warnings (existing
+     `runPreflight`/`getAppStatus`/`getRuntimeStatus`/`listDocuments` IPC only — no new
+     channels; the model row polls `getRuntimeStatus` every 2.5 s, the ChatScreen
+     precedent, so auto-start flips it to Running by itself). **D-UI3 rationale** (also
+     in the plan's decisions table): Home does NOT duplicate the Chat empty state —
+     Chat teaches *what to ask*, Home answers *is the system ready* and carries the
+     warnings/remediation that must not sit on the conversation canvas (guidelines §3).
+  4. **Models → "AI Model" (guidelines §2 singular mental model):** the active model
+     leads under "Your AI model" with a plain-language size/speed hint
+     (`plainHint()`: small-and-quick / balanced / large tiers; embeddings = "prepares
+     your documents"), the rest are the picker ("Other models" / "Choose your AI
+     model"); checksums, quantization-bearing model ids, paths, RAM/context numbers,
+     and the **Verify checksum** action moved into a per-card native
+     `<details class="tech-details">` **"Technical details" disclosure, closed by
+     default**. Select/Start/Stop/mock-start/RAM-gate/download flows are byte-identical
+     underneath (same IPC calls, same gate copy).
+  Tests (+16 → 644, vitest from `apps/desktop`; suites re-pointed at the new IA without
+  weakening proofs): `GpuSurface` + `DiagnosticsActivity` now render
+  `<SettingsScreen tab="diagnostics" />` (same Try-GPU-again/Activity assertions),
+  `ChatHomeNav`'s Home block rewritten for the readiness hub (start-chatting /
+  ask-documents / choose-a-model / no-docs-nudge routes + running/loading/none states +
+  preflight banner), `ModelsScreen` gained the disclosure-closed-by-default +
+  active-model-first tests, and the new `InformationArchitecture` suite covers the
+  `resolveNavTarget` table (incl. legacy aliases), the 5-item nav (and absence of
+  Privacy/Diagnostics items), the offline-badge → Privacy-tab route, and tab switching
+  (controlled + uncontrolled). Eyeballed via the scripted Playwright walk in BOTH themes
+  (17 scenes: 5-item nav, Home with/without a running model — mock start/stop via the
+  real UI/IPC, all three Settings tabs, offline-badge route asserted on
+  `aria-checked`, AI Model disclosure closed/open). Docs: `user-guide.md` (nav
+  overview, Home, AI Model, GPU + Activity pointers now "Settings → Diagnostics
+  (advanced)", Privacy → "Settings → Privacy & data"), `architecture.md` (screen list +
+  PrivacyTab pointer). Gate: typecheck clean, 644 tests, build green.
 
 ---
 
@@ -1653,29 +1722,35 @@ items are **MANUAL acceptance only** (R2/R5/R7 + the GPU hardware matrix). In ro
    E5-indexed corpus → promote a measured default; semantics already locked, D12). Smaller
    leftovers: an icon/`buildResources` for electron-builder; ANN vector index only if a real
    corpus outgrows the linear scan (plan §9 item 4 / D15 — explicitly not built).
-4. **UI/UX polish wave (Phases 23–27) — IN PROGRESS: Phases 23 + 24 + 25 DONE 2026-06-10**
-   on branch `ui-phase-23-tokens-theming` (not merged — see the §3 entries: Phase 23 =
-   tokens.css, full role-token restyle + AA fixes, a11y baseline, `AppSettings.theme` +
-   Appearance card; Phase 24 = the four pinned Radix primitives [D-UI1 executed,
-   license-reviewed], `renderer/components/` per guidelines §6, all non-chat screens +
-   gate migrated, Saved-feedback toasts; Phase 25 = the chat restructure per guidelines
-   §3 — `renderer/chat/` split, collapsible conversation list, 720px transcript,
-   per-message actions, sources disclosure, depth dropdown [D-UI4 labels] + scope
-   popover, teaching empty state, buffered streaming; all phases eyeballed in both
+4. **UI/UX polish wave (Phases 23–27) — IN PROGRESS: Phases 23 + 24 + 25 + 26 DONE
+   2026-06-10** on branch `ui-phase-23-tokens-theming` (not merged — see the §3 entries:
+   Phase 23 = tokens.css, full role-token restyle + AA fixes, a11y baseline,
+   `AppSettings.theme` + Appearance card; Phase 24 = the four pinned Radix primitives
+   [D-UI1 executed, license-reviewed], `renderer/components/` per guidelines §6, all
+   non-chat screens + gate migrated, Saved-feedback toasts; Phase 25 = the chat
+   restructure per guidelines §3 — `renderer/chat/` split, collapsible conversation
+   list, 720px transcript, per-message actions, sources disclosure, depth dropdown
+   [D-UI4 labels] + scope popover, teaching empty state, buffered streaming; Phase 26 =
+   the IA regroup per guidelines §2 — 5-item nav with "AI Model", Settings tabs
+   absorbing Privacy/Diagnostics, `resolveNavTarget` virtual targets + legacy aliases,
+   Home readiness hub, Technical-details disclosure; all phases eyeballed in both
    themes). Wave docs:
    [`docs/design-guidelines.md`](docs/design-guidelines.md) (ADOPTED — tokens, light/dark
    themes, chat-screen layout, IA regroup 7→5 nav, components, microcopy, WCAG 2.2 AA;
    distilled from an external design-research round) +
    [`docs/ui-ux-redesign-plan.md`](docs/ui-ux-redesign-plan.md) (working paper sequencing
    23 tokens/theming ✅ → 24 component layer ✅ → 25 chat restructure ✅ [the priority] →
-   26 IA regroup [next] → 27 microcopy/ambient-trust/first-run). Renderer-only except
-   the additive `AppSettings.theme` key (shipped in 23) + the OS-following pre-paint
-   window color. D-UI2 resolved as planned; D-UI1 executed in Phase 24; D-UI4 executed
-   in Phase 25 (UI labels Quick/Balanced/Thorough, ids unchanged). D-UI3 (Home's fate)
-   stays open until after Phase 26.
+   26 IA regroup ✅ → 27 microcopy/ambient-trust/first-run [next, the wave's last
+   phase — then condense the plan to a design record per the doc lifecycle rule]).
+   Renderer-only except the additive `AppSettings.theme` key (shipped in 23) + the
+   OS-following pre-paint window color. D-UI2 resolved as planned; D-UI1 executed in
+   Phase 24; D-UI4 executed in Phase 25 (UI labels Quick/Balanced/Thorough, ids
+   unchanged); **D-UI3 RESOLVED in Phase 26: Home stays as the readiness hub** (it
+   answers "is the system ready", which must not move onto the chat canvas — full
+   rationale in the plan's decisions table + the §3 entry).
 
-**Current gate (2026-06-10, post-Phase-25 on `ui-phase-23-tokens-theming`): typecheck clean,
-628/628 tests pass (+6 manual tests — 4 GPU smoke behind `PAID_GPU_SMOKE`, 1 thinking smoke
+**Current gate (2026-06-10, post-Phase-26 on `ui-phase-23-tokens-theming`): typecheck clean,
+644/644 tests pass (+6 manual tests — 4 GPU smoke behind `PAID_GPU_SMOKE`, 1 thinking smoke
 behind `PAID_THINKING_SMOKE`, 1 rerank smoke behind `PAID_RERANK_SMOKE` — skipped in CI),
 `npm run build` green.** The per-phase gate history (test counts, bundle sizes, per-phase
 test inventories) lives in git history.

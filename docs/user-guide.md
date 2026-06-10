@@ -1,6 +1,6 @@
 # Private AI Drive Lite — User Guide
 
-_Last updated: 2026-06-10 (Phase 25)_
+_Last updated: 2026-06-10 (Phase 26)_
 
 Private AI Drive Lite is a private AI workspace that runs **entirely on your laptop**, from
 a portable drive. Your prompts, documents, embeddings, and chat history stay local. There is
@@ -66,21 +66,36 @@ After unlocking, you land on the **Home** screen.
 
 ---
 
-## 4. The Home screen
+## 4. Finding your way around
 
-Home shows your status at a glance:
+The sidebar has four everyday destinations — **Home**, **Chat**, **Documents**, and
+**AI Model** — plus **Settings** at the bottom. Privacy and Diagnostics live inside
+Settings as tabs (see §8); the **● Offline Mode** badge at the bottom of the sidebar opens
+the privacy details directly.
 
-- **Offline Mode: ON** — the app is not using the internet.
-- **Active model** — the AI model currently selected (e.g. *Qwen3 4B*).
-- **Workspace** — Encrypted or Plaintext.
+### The Home screen
 
-If no model is started yet, Home will point you to the **Models** screen.
+Home answers "is everything ready?" at a glance:
+
+- **Workspace** — Encrypted (protected by your password) or Plaintext (developer mode).
+- **AI model** — whether a model is running, still loading, or not chosen yet. If none is
+  selected, a **Choose a model** button takes you to the AI Model screen; once your model
+  is up, the row flips to **Running** by itself.
+- **Documents** — how many files are ready to ask about, with an **Add documents** shortcut
+  when there are none.
+
+**Start chatting** is the one big button — everything else is a quiet shortcut. If the
+drive is read-only, low on space, or slow, a friendly note appears here too; it never
+blocks you.
 
 ---
 
 ## 5. Pick and start a model
 
-1. Open **Models**.
+1. Open **AI Model**. Your current model (if one is selected) is shown first; the rest are
+   below as alternatives, each with a plain-language note on its size and speed. The file
+   paths, checksums, and other internals are tucked behind each card's **Technical
+   details** — you never need them for everyday use.
 2. You'll see the models on your drive with a status:
    - **Installed** — ready to use.
    - **Recommended** — the largest model that runs comfortably in this computer's memory.
@@ -96,7 +111,8 @@ can turn this off under **Settings → Load the selected model automatically**.
 
 > **First visit can take a few minutes:** the app verifies each model file's checksum the
 > first time it sees it. The result is remembered, so later visits are instant. The
-> **Verify checksum** button re-checks a file from scratch whenever you want.
+> **Verify checksum** button (under a card's **Technical details**) re-checks a file from
+> scratch whenever you want.
 
 > **No model installed?** You can still try the interface: a model without a weight file shows
 > a **Start mock runtime** button (in developer mode) that runs a built-in mock model. Mock
@@ -111,7 +127,7 @@ internet for, and it never happens by itself:
 
 1. Open **Settings** and turn on **Allow internet access for model downloads and updates**
    (it is off by default; the app is fully usable without it).
-2. On **Models**, click **Download** on the model you want. A confirmation shows the size,
+2. On **AI Model**, click **Download** on the model you want. A confirmation shows the size,
    the license (with a link), and the address the file comes from. If the model's license
    hasn't been pre-reviewed, you'll also tick a box accepting it.
 3. The download shows its progress on the model's card; you can **Cancel** any time. A
@@ -130,10 +146,11 @@ If your computer has a graphics card (NVIDIA, AMD, or Intel), the app uses it au
 make responses much faster — on a typical gaming laptop that's the difference between "a few
 words per second" and "faster than you can read". There is nothing to install or configure:
 
-- **Diagnostics → Acceleration** shows whether your graphics card is being used.
+- **Settings → Diagnostics (advanced) → Acceleration** shows whether your graphics card is
+  being used.
 - If the graphics driver ever causes trouble, the app switches itself to **compatibility mode**
   (processor only — works on every machine) and tells you with a one-line note. After a driver
-  update, **Diagnostics → Try GPU again** re-enables the graphics card.
+  update, **Try GPU again** on the same Diagnostics tab re-enables the graphics card.
 - You can turn acceleration off under **Settings → Use GPU acceleration** if you prefer.
 - Small built-in graphics chips (e.g. Intel Iris Xe) give only a modest boost — that's normal;
   big speedups come from dedicated graphics cards.
@@ -202,7 +219,7 @@ your files.
    document search and answers are based on. (It shows text, not the original layout: on
    an encrypted drive the original file stays encrypted and is never handed to another
    program.)
-3. Go to **Chat** and switch to **Ask my documents** (or click **Ask My Documents** on the
+3. Go to **Chat** and switch to **Ask my documents** (or click **Ask my documents** on the
    Home screen), then ask a question, e.g.
    *"What are the termination rights in this contract?"*
 4. Each answer carries **▸ Sources (N)** — click it to see the cited files, with
@@ -228,15 +245,16 @@ search model than the one currently active, and takes a moment per file.
 
 ## 8. Privacy & offline
 
-Open the **Privacy** screen to see where your data lives and confirm the app is offline.
-Network access is **off by default** and the app is fully usable with no internet. Logs are
-stored **locally** on the drive and never uploaded.
+Open **Settings → Privacy & data** (or click the **● Offline Mode** badge at the bottom of
+the sidebar) to see where your data lives and confirm the app is offline. Network access is
+**off by default** and the app is fully usable with no internet. Logs are stored
+**locally** on the drive and never uploaded.
 
 See [`PRIVACY.md`](../PRIVACY.md) for the full statement.
 
 ### The Activity panel (what did the app do?)
 
-**Diagnostics → Activity** shows a local record of what the app did and when — models
+**Settings → Diagnostics (advanced) → Activity** shows a local record of what the app did and when — models
 started and stopped, downloads, document imports, workspace lock/unlock, and changes to
 privacy-relevant settings. Use the dropdown to focus on one kind of activity, **Show
 earlier activity** to page back, and **Export to file…** to save the record.

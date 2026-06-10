@@ -1,12 +1,14 @@
 import { useEffect, useState } from 'react'
-import { Banner } from '../components'
+import { Banner } from '../../components'
 import type { AppSettings, DriveStatus, PolicyStatus } from '@shared/types'
 
-// Privacy & Offline Mode screen (spec §7.10 + §18.1). Renders the offline statement
-// verbatim, shows where data lives, the live network state (off by default / disabled
-// by policy), the plaintext-dev-mode caveat, and the logs-are-local guarantee.
+// "Privacy & data" tab of the Settings screen (Phase 26 — the former PrivacyScreen,
+// spec §7.10 + §18.1). Renders the offline statement verbatim, shows where data lives,
+// the live network state (off by default / disabled by policy), the plaintext-dev-mode
+// caveat, and the logs-are-local guarantee. Privacy is a posture expressed everywhere;
+// this tab is the place that spells it out (guidelines §2).
 
-export function PrivacyScreen(): JSX.Element {
+export function PrivacyTab(): JSX.Element {
   const [policy, setPolicy] = useState<PolicyStatus | null>(null)
   const [drive, setDrive] = useState<DriveStatus | null>(null)
   const [settings, setSettings] = useState<AppSettings | null>(null)
@@ -28,9 +30,7 @@ export function PrivacyScreen(): JSX.Element {
         : 'Internet access is enabled for model downloads and updates.'
 
   return (
-    <div className="screen">
-      <h1>Privacy &amp; Offline Mode</h1>
-
+    <>
       <div className="card">
         <div className={`offline-statement ${offline ? 'on' : 'off'}`}>
           <strong>{offline ? '● Offline Mode: ON' : '○ Network access enabled'}</strong>
@@ -69,8 +69,8 @@ export function PrivacyScreen(): JSX.Element {
         </dl>
         <p className="hint">
           The app warns before any network action. The only optional network feature is downloading
-          or updating models, which is off by default and must be enabled in Settings. A drive policy
-          can disable it entirely.
+          or updating models, which is off by default and must be enabled on the General tab. A
+          drive policy can disable it entirely.
         </p>
       </div>
 
@@ -123,6 +123,6 @@ export function PrivacyScreen(): JSX.Element {
           </>
         )}
       </div>
-    </div>
+    </>
   )
 }

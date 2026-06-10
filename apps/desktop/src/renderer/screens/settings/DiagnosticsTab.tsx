@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Banner, Button, useToast } from '../components'
+import { Banner, Button, useToast } from '../../components'
 import type {
   AppSettings,
   AppStatus,
@@ -10,6 +10,12 @@ import type {
   RuntimeInstallInfo,
   RuntimeStatus
 } from '@shared/types'
+
+// "Diagnostics (advanced)" tab of the Settings screen (Phase 26 — the former
+// DiagnosticsScreen). Still the home of every technical detail: the Activity panel
+// (Phase 19), the log tail, the Acceleration line + "Try GPU again" (Phase 16), and
+// the hardware benchmark. Visually quieter than a destination screen — it is a
+// support surface, not an everyday one (guidelines §2).
 
 /** How many activity entries each page load fetches. */
 const ACTIVITY_PAGE_SIZE = 50
@@ -59,7 +65,7 @@ function accelerationLabel(runtime: RuntimeStatus | null, settings: AppSettings 
   return 'CPU'
 }
 
-export function DiagnosticsScreen(): JSX.Element {
+export function DiagnosticsTab(): JSX.Element {
   const [drive, setDrive] = useState<DriveStatus | null>(null)
   const [bench, setBench] = useState<BenchmarkResult | null>(null)
   const [app, setApp] = useState<AppStatus | null>(null)
@@ -157,9 +163,8 @@ export function DiagnosticsScreen(): JSX.Element {
   }
 
   return (
-    <div className="screen">
-      <h1>Diagnostics</h1>
-      <p className="lead">Local-only diagnostics. Nothing here is ever uploaded.</p>
+    <>
+      <p className="hint">Local-only diagnostics. Nothing here is ever uploaded.</p>
 
       <div className="card">
         <h2>App &amp; runtime</h2>
@@ -406,6 +411,6 @@ export function DiagnosticsScreen(): JSX.Element {
           </pre>
         )}
       </div>
-    </div>
+    </>
   )
 }

@@ -2,14 +2,15 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, cleanup, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { DiagnosticsScreen } from '../../src/renderer/screens/DiagnosticsScreen'
+import { SettingsScreen } from '../../src/renderer/screens/SettingsScreen'
 import { ToastProvider } from '../../src/renderer/components'
 import { DEFAULT_SETTINGS, type AuditEvent, type RuntimeStatus } from '../../src/shared/types'
 import { stubApi } from '../helpers/renderer'
 
-// Phase 19: the Diagnostics "Activity" panel over the audit log — on-demand load,
-// the client-side type filter, the load-more cursor, and the export action. Friendly
-// §11.4 copy; the panel itself states the local-only guarantee.
+// Phase 19: the "Activity" panel over the audit log — on-demand load, the client-side
+// type filter, the load-more cursor, and the export action. Friendly §11.4 copy; the
+// panel itself states the local-only guarantee. Since Phase 26 it lives on
+// Settings → "Diagnostics (advanced)".
 
 const runtimeStatus: RuntimeStatus = {
   running: false,
@@ -42,7 +43,7 @@ function stubDiagnostics(overrides: Record<string, ReturnType<typeof vi.fn>>): v
 
 afterEach(cleanup)
 
-describe('DiagnosticsScreen — Activity panel (Phase 19)', () => {
+describe('Settings → Diagnostics (advanced) — Activity panel (Phase 19)', () => {
   it('loads activity on demand and filters by type', async () => {
     const events = [
       event(2, 'document_imported', 'Document imported: meeting-notes'),
@@ -50,7 +51,7 @@ describe('DiagnosticsScreen — Activity panel (Phase 19)', () => {
     ]
     const getAuditEvents = vi.fn(async () => events)
     stubDiagnostics({ getAuditEvents })
-    render(<DiagnosticsScreen />)
+    render(<SettingsScreen tab="diagnostics" />)
 
     // Friendly local-only copy is always visible on the card.
     expect(screen.getByText(/never contains chat text or document contents/i)).toBeInTheDocument()
@@ -69,7 +70,7 @@ describe('DiagnosticsScreen — Activity panel (Phase 19)', () => {
 
   it('shows a friendly empty state when nothing is recorded yet', async () => {
     stubDiagnostics({ getAuditEvents: vi.fn(async () => []) })
-    render(<DiagnosticsScreen />)
+    render(<SettingsScreen tab="diagnostics" />)
     await userEvent.click(screen.getByRole('button', { name: /show activity/i }))
     expect(await screen.findByText(/Nothing recorded yet/i)).toBeInTheDocument()
   })
@@ -85,7 +86,7 @@ describe('DiagnosticsScreen — Activity panel (Phase 19)', () => {
       .mockResolvedValueOnce(fullPage)
       .mockResolvedValueOnce(olderPage)
     stubDiagnostics({ getAuditEvents })
-    render(<DiagnosticsScreen />)
+    render(<SettingsScreen tab="diagnostics" />)
 
     await userEvent.click(screen.getByRole('button', { name: /show activity/i }))
     const more = await screen.findByRole('button', { name: /show earlier activity/i })
@@ -105,7 +106,7 @@ describe('DiagnosticsScreen — Activity panel (Phase 19)', () => {
     // The toast host lives in App.tsx; tests supply it via the provider.
     render(
       <ToastProvider>
-        <DiagnosticsScreen />
+        <SettingsScreen tab="diagnostics" />
       </ToastProvider>
     )
 

@@ -1,24 +1,35 @@
 import { useEffect, useState } from 'react'
-import { Banner, Button } from '../components'
-import type { AppStatus, PreflightResult } from '@shared/types'
+import { Badge, Banner, Button } from '../components'
+import type { AppStatus, DocumentInfo, PreflightResult, RuntimeStatus } from '@shared/types'
 
 interface Props {
   onNavigate: (screen: string) => void
 }
 
+// Home as a readiness hub (Phase 26, guidelines §2): answers "is everything ready?"
+// at a glance — workspace state, model running?, document count — with ONE primary
+// action ("Start chatting") and quiet preflight warnings. Reuses existing IPC only
+// (getAppStatus / getRuntimeStatus / listDocuments / runPreflight).
+
+/** Matches the ChatScreen no-model poll: Home flips to "ready" by itself. */
+const RUNTIME_POLL_MS = 2500
+
 export function HomeScreen({ onNavigate }: Props): JSX.Element {
   const [status, setStatus] = useState<AppStatus | null>(null)
-  const [loading, setLoading] = useState(true)
+  const [runtime, setRuntime] = useState<RuntimeStatus | null>(null)
+  const [docs, setDocs] = useState<DocumentInfo[] | null>(null)
   const [preflight, setPreflight] = useState<PreflightResult | null>(null)
 
   useEffect(() => {
     let active = true
-    // getAppStatus has no handler until Phase 1; fail gracefully.
     window.api
       ?.getAppStatus()
       .then((s) => active && setStatus(s))
       .catch(() => active && setStatus(null))
-      .finally(() => active && setLoading(false))
+    window.api
+      ?.listDocuments()
+      .then((d) => active && setDocs(d ?? []))
+      .catch(() => active && setDocs([]))
     // Phase 13: friendly, non-blocking launch preflight (drive writable / space / speed).
     window.api
       ?.runPreflight?.()
@@ -29,16 +40,136 @@ export function HomeScreen({ onNavigate }: Props): JSX.Element {
     }
   }, [])
 
+  // The selected model auto-starts in the background at launch — poll so the model
+  // row flips to "running" without a manual refresh (the ChatScreen precedent).
+  useEffect(() => {
+    let active = true
+    const check = (): void => {
+      window.api
+        ?.getRuntimeStatus()
+        .then((r) => active && setRuntime(r))
+        .catch(() => active && setRuntime(null))
+    }
+    check()
+    const timer = setInterval(check, RUNTIME_POLL_MS)
+    return () => {
+      active = false
+      clearInterval(timer)
+    }
+  }, [])
+
   const preflightNotes = preflight
     ? [...preflight.problems, ...(preflight.slowDriveWarning ? [preflight.slowDriveWarning] : [])]
     : []
 
+  const modelRunning = runtime?.running === true
+  const indexedCount = docs?.filter((d) => d.status === 'indexed').length ?? null
+
+  const headline = modelRunning
+    ? 'Ready to chat.'
+    : status?.activeModelId
+      ? 'Getting ready…'
+      : 'Almost set up.'
+
+  // ---- Readiness rows ----------------------------------------------------------
+
+  const workspaceRow: ReadinessRowProps = {
+    icon: '🗄',
+    label: 'Workspace',
+    value:
+      status == null
+        ? 'Checking…'
+        : status.workspaceMode === 'encrypted'
+          ? 'Encrypted — locked with your password when the app is closed'
+          : 'Plaintext (developer mode)',
+    badge:
+      status == null ? null : status.workspaceMode === 'encrypted' ? (
+        <Badge tone="success" icon="✓">
+          Protected
+        </Badge>
+      ) : (
+        <Badge tone="neutral" icon="○">
+          Developer
+        </Badge>
+      )
+  }
+
+  const modelRow: ReadinessRowProps = modelRunning
+    ? {
+        icon: '🧠',
+        label: 'AI model',
+        value: `${runtime?.modelId ?? 'Your model'} is running on this device`,
+        badge: (
+          <Badge tone="success" icon="▶">
+            Running
+          </Badge>
+        )
+      }
+    : status?.activeModelId
+      ? {
+          icon: '🧠',
+          label: 'AI model',
+          value: `${status.activeModelId} is selected — it may still be loading`,
+          badge: (
+            <Badge tone="neutral" icon="○">
+              Starting
+            </Badge>
+          ),
+          action: (
+            <Button size="sm" onClick={() => onNavigate('models')}>
+              Open AI Model
+            </Button>
+          )
+        }
+      : {
+          icon: '🧠',
+          label: 'AI model',
+          value: 'No model selected yet',
+          badge: (
+            <Badge tone="warning" icon="⚠">
+              Needs a model
+            </Badge>
+          ),
+          action: (
+            <Button size="sm" onClick={() => onNavigate('models')}>
+              Choose a model
+            </Button>
+          )
+        }
+
+  const docsRow: ReadinessRowProps = {
+    icon: '📄',
+    label: 'Documents',
+    value:
+      indexedCount == null
+        ? 'Checking…'
+        : indexedCount === 0
+          ? 'No documents yet — add some to ask about them'
+          : `${indexedCount} ${indexedCount === 1 ? 'document' : 'documents'} ready to ask about`,
+    badge:
+      indexedCount == null ? null : indexedCount > 0 ? (
+        <Badge tone="success" icon="✓">
+          Ready
+        </Badge>
+      ) : (
+        <Badge tone="neutral" icon="○">
+          None yet
+        </Badge>
+      ),
+    action:
+      indexedCount === 0 ? (
+        <Button size="sm" onClick={() => onNavigate('documents')}>
+          Add documents
+        </Button>
+      ) : undefined
+  }
+
   return (
     <div className="screen">
-      <h1>Private AI Drive Lite is ready.</h1>
+      <h1>{headline}</h1>
       <p className="lead">
-        A private, offline AI workspace. Your prompts, documents, embeddings, and chat history
-        stay on this device.
+        A private, offline AI workspace. Your prompts, documents, and chat history stay on
+        this device.
       </p>
 
       {preflightNotes.length > 0 && (
@@ -53,39 +184,45 @@ export function HomeScreen({ onNavigate }: Props): JSX.Element {
         </Banner>
       )}
 
-      <div className="status-grid">
-        <Stat label="Offline Mode" value={status?.offlineMode === false ? 'Network allowed' : 'ON'} good />
-        <Stat label="Active model" value={status?.activeModelId ?? 'Not selected'} />
-        <Stat label="Hardware profile" value={status?.hardwareProfile ?? (loading ? '…' : 'Unknown')} />
-        <Stat
-          label="Workspace"
-          value={status?.workspaceMode === 'encrypted' ? 'Encrypted' : 'Plaintext (dev)'}
-        />
+      <div className="card readiness-card">
+        <ReadinessRow {...workspaceRow} />
+        <ReadinessRow {...modelRow} />
+        <ReadinessRow {...docsRow} />
       </div>
 
       <div className="actions">
         <Button variant="primary" onClick={() => onNavigate('chat')}>
-          Start Chat
+          Start chatting
         </Button>
-        <Button onClick={() => onNavigate('documents')}>Import Documents</Button>
-        <Button onClick={() => onNavigate('ask-documents')}>Ask My Documents</Button>
+        {indexedCount !== 0 && (
+          <Button onClick={() => onNavigate('ask-documents')}>Ask my documents</Button>
+        )}
+        {indexedCount !== 0 && <Button onClick={() => onNavigate('documents')}>Add documents</Button>}
       </div>
-
-      {!status && !loading && (
-        <p className="hint">
-          Backend services land in Phase 1 — status will populate once the workspace + settings
-          layer is wired.
-        </p>
-      )}
     </div>
   )
 }
 
-function Stat({ label, value, good }: { label: string; value: string; good?: boolean }): JSX.Element {
+interface ReadinessRowProps {
+  icon: string
+  label: string
+  value: string
+  badge?: JSX.Element | null
+  action?: JSX.Element
+}
+
+function ReadinessRow({ icon, label, value, badge, action }: ReadinessRowProps): JSX.Element {
   return (
-    <div className="stat">
-      <div className="stat-label">{label}</div>
-      <div className={`stat-value ${good ? 'good' : ''}`}>{value}</div>
+    <div className="readiness-row">
+      <span className="readiness-icon" aria-hidden="true">
+        {icon}
+      </span>
+      <div className="readiness-text">
+        <div className="readiness-label">{label}</div>
+        <div className="readiness-value">{value}</div>
+      </div>
+      {badge}
+      {action != null && <div className="readiness-action">{action}</div>}
     </div>
   )
 }

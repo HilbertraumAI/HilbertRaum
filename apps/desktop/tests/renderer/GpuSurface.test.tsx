@@ -2,7 +2,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, cleanup } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { DiagnosticsScreen } from '../../src/renderer/screens/DiagnosticsScreen'
 import { SettingsScreen } from '../../src/renderer/screens/SettingsScreen'
 import {
   DEFAULT_SETTINGS,
@@ -13,9 +12,11 @@ import {
 } from '../../src/shared/types'
 import { stubApi } from '../helpers/renderer'
 
-// Phase 16 GPU surface (gpu-support-plan §8): the Diagnostics "Acceleration" line +
-// "Try GPU again", the runtime-build line, and the Settings "Use GPU acceleration"
-// toggle. Friendly copy only — these tests also pin that no scary words leak in.
+// Phase 16 GPU surface (gpu-support-plan §8), re-homed by Phase 26: the Diagnostics
+// surfaces live on Settings → "Diagnostics (advanced)", the GPU toggle on Settings →
+// General. Same proofs as before the IA regroup: the "Acceleration" line, "Try GPU
+// again" (the dedicated IPC, never a raw settings write), the runtime-build line, and
+// the toggle. Friendly copy only — these tests also pin that no scary words leak in.
 
 const RTX = { id: 'Vulkan0', name: 'NVIDIA GeForce RTX 3080 Ti', totalMb: 12300, freeMb: 11511 }
 
@@ -68,9 +69,14 @@ function stubDiagnostics(opts: {
   })
 }
 
+/** The Diagnostics surfaces now live on the Settings "Diagnostics (advanced)" tab. */
+function renderDiagnostics(): void {
+  render(<SettingsScreen tab="diagnostics" />)
+}
+
 afterEach(cleanup)
 
-describe('DiagnosticsScreen — Acceleration (Phase 16)', () => {
+describe('Settings → Diagnostics (advanced) — Acceleration (Phase 16)', () => {
   it('shows the GPU name while a model runs on the GPU backend', async () => {
     stubDiagnostics({
       runtime: runtimeStatus({
@@ -81,7 +87,7 @@ describe('DiagnosticsScreen — Acceleration (Phase 16)', () => {
         gpuName: 'NVIDIA GeForce RTX 3080 Ti'
       })
     })
-    render(<DiagnosticsScreen />)
+    renderDiagnostics()
     expect(await screen.findByText('NVIDIA GeForce RTX 3080 Ti (GPU)')).toBeInTheDocument()
   })
 
@@ -89,7 +95,7 @@ describe('DiagnosticsScreen — Acceleration (Phase 16)', () => {
     stubDiagnostics({
       settings: settings({ gpuProbe: { devices: [RTX], probedAt: '2026-06-10T00:00:00Z' } })
     })
-    render(<DiagnosticsScreen />)
+    renderDiagnostics()
     expect(
       await screen.findByText('NVIDIA GeForce RTX 3080 Ti (GPU available)')
     ).toBeInTheDocument()
@@ -99,14 +105,14 @@ describe('DiagnosticsScreen — Acceleration (Phase 16)', () => {
     stubDiagnostics({
       settings: settings({ gpuProbe: { devices: [], probedAt: '2026-06-10T00:00:00Z' } })
     })
-    render(<DiagnosticsScreen />)
+    renderDiagnostics()
     expect(await screen.findByText('CPU')).toBeInTheDocument()
     expect(screen.queryByText(/fail|broken|bad/i)).not.toBeInTheDocument()
   })
 
   it('shows the installed runtime build from the .paid-runtime.json marker', async () => {
     stubDiagnostics({ install: { version: 'b9585', backend: 'vulkan', os: 'win', arch: 'x64' } })
-    render(<DiagnosticsScreen />)
+    renderDiagnostics()
     expect(await screen.findByText('llama.cpp b9585 (vulkan)')).toBeInTheDocument()
   })
 
@@ -120,7 +126,7 @@ describe('DiagnosticsScreen — Acceleration (Phase 16)', () => {
       updateSettings: update,
       tryGpuAgain: tryAgain
     })
-    render(<DiagnosticsScreen />)
+    renderDiagnostics()
     expect(await screen.findByText(/compatibility mode/i)).toBeInTheDocument()
 
     await userEvent.click(screen.getByRole('button', { name: /try gpu again/i }))
@@ -135,7 +141,7 @@ describe('DiagnosticsScreen — Acceleration (Phase 16)', () => {
     // Audit fix: with gpuMode 'off' the button would silently do nothing (rung 1 stays
     // skipped) — show where to re-enable instead.
     stubDiagnostics({ settings: settings({ gpuAutoDisabled: true, gpuMode: 'off' }) })
-    render(<DiagnosticsScreen />)
+    renderDiagnostics()
     expect(await screen.findByText(/compatibility mode/i)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /try gpu again/i })).not.toBeInTheDocument()
     expect(screen.getByText(/turned off in settings/i)).toBeInTheDocument()
@@ -143,13 +149,13 @@ describe('DiagnosticsScreen — Acceleration (Phase 16)', () => {
 
   it('shows no compatibility-mode note when GPU is fine', async () => {
     stubDiagnostics({})
-    render(<DiagnosticsScreen />)
-    await screen.findByText('Diagnostics')
+    renderDiagnostics()
+    await screen.findByText(/local-only diagnostics/i)
     expect(screen.queryByRole('button', { name: /try gpu again/i })).not.toBeInTheDocument()
   })
 })
 
-describe('SettingsScreen — Use GPU acceleration (Phase 16)', () => {
+describe('Settings → General — Use GPU acceleration (Phase 16)', () => {
   it('renders ON by default (gpuMode auto) and patches gpuMode off when unchecked', async () => {
     const update = vi.fn(async (p: Partial<AppSettings>) => settings(p))
     stubApi({

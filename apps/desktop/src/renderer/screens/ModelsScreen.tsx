@@ -2,6 +2,12 @@ import { useEffect, useRef, useState } from 'react'
 import { Badge, Banner, Button, ConfirmDialog, EmptyState, Progress, type BadgeTone } from '../components'
 import type { AppSettings, DownloadJob, ModelInfo, ModelState, PolicyStatus } from '@shared/types'
 
+// "AI Model" screen (Phase 26, guidelines §2/§3 principle: singular mental model).
+// The active model leads with a plain-language size/speed hint; the rest is a friendly
+// picker. Checksums, quantization ids, paths, and runtime details sit behind a
+// per-card "Technical details" disclosure (closed by default). The verify / download /
+// RAM-gate / mock-start flows underneath are unchanged from Phases 7/18+.
+
 const UNKNOWN_RAM = null
 
 // Status pills: icon + word, never color-only (guidelines §6).
@@ -19,6 +25,19 @@ const STATE_BADGE: Record<ModelState, { label: string; tone: BadgeTone; icon: st
 function fmtGb(bytes: number | null, fallbackGb: number): string {
   const gb = bytes != null ? bytes / 1024 ** 3 : fallbackGb
   return `${gb >= 10 ? Math.round(gb) : Math.round(gb * 10) / 10} GB`
+}
+
+/**
+ * Plain-language size/speed hint (guidelines §7 spirit: "Balanced — works well on most
+ * laptops" instead of quantization labels). Derived from what the manifest already
+ * carries; the technical numbers live in the disclosure.
+ */
+function plainHint(m: ModelInfo): string {
+  if (m.role === 'embeddings') return 'Prepares your documents so you can ask about them.'
+  if (m.role === 'reranker') return 'Improves which document passages are used for answers.'
+  if (m.sizeOnDiskGb <= 1.5) return 'Small and quick — fast answers on nearly any machine.'
+  if (m.sizeOnDiskGb <= 6) return 'Balanced — works well on most laptops.'
+  return 'Large — strongest answers; needs a powerful machine.'
 }
 
 // The in-flight download survives leaving + re-entering the screen (the job itself
@@ -109,7 +128,7 @@ export function ModelsScreen(): JSX.Element {
   if (error && !models) {
     return (
       <div className="screen">
-        <h1>Models</h1>
+        <h1>AI Model</h1>
         <p className="hint">Could not load models: {error}</p>
       </div>
     )
@@ -118,7 +137,7 @@ export function ModelsScreen(): JSX.Element {
   if (!models || !settings) {
     return (
       <div className="screen">
-        <h1>Models</h1>
+        <h1>AI Model</h1>
         <p className="hint">
           <span className="spinner" /> Checking model files… The first check after adding or
           updating a model verifies its checksum and can take a few minutes for large files;
@@ -128,13 +147,22 @@ export function ModelsScreen(): JSX.Element {
     )
   }
 
+  const isActive = (m: ModelInfo): boolean =>
+    m.role === 'embeddings'
+      ? settings.activeEmbeddingModelId === m.id
+      : settings.activeModelId === m.id
+
   const chat = models.filter((m) => m.role === 'chat')
   const embeddings = models.filter((m) => m.role === 'embeddings')
   const others = models.filter((m) => m.role !== 'chat' && m.role !== 'embeddings')
 
+  // The active chat model leads the screen (guidelines §2); the rest are the picker.
+  const activeChat = chat.find(isActive) ?? null
+  const otherChat = chat.filter((m) => m !== activeChat)
+
   // Phase 18 gates (plan §6.1): the drive policy is the ceiling, the Settings toggle the
   // switch. The copy distinguishes the two — "disabled by policy" vs. "turn it on in
-  // Settings" — reusing the PolicyStatus distinction the Privacy screen makes.
+  // Settings" — reusing the PolicyStatus distinction the Privacy & data tab makes.
   const downloadsAllowedByPolicy = policy?.policy.network.allowModelDownloads ?? false
   const downloadsEnabled = downloadsAllowedByPolicy && (policy?.allowNetworkSetting ?? false)
   const downloadsBlockedReason = !downloadsAllowedByPolicy
@@ -145,11 +173,6 @@ export function ModelsScreen(): JSX.Element {
   const anyDownloadable = models.some(
     (m) => m.download && (m.state === 'missing' || m.state === 'checksum_failed')
   )
-
-  const isActive = (m: ModelInfo): boolean =>
-    m.role === 'embeddings'
-      ? settings.activeEmbeddingModelId === m.id
-      : settings.activeModelId === m.id
 
   function downloadSection(m: ModelInfo): JSX.Element | null {
     if (!m.download) return null
@@ -238,7 +261,7 @@ export function ModelsScreen(): JSX.Element {
           <div>
             <div className="model-title">{m.displayName}</div>
             <div className="model-sub">
-              {m.family} · {m.format} · {m.runtime} · {m.license}
+              {plainHint(m)} Uses {fmtGb(null, m.sizeOnDiskGb)} of drive space.
             </div>
           </div>
           <div className="badges">
@@ -263,24 +286,6 @@ export function ModelsScreen(): JSX.Element {
           </div>
         </div>
 
-        <div className="model-meta">
-          <span>
-            Size <b>{m.sizeOnDiskGb} GB</b>
-          </span>
-          <span>
-            Min RAM <b>{m.recommendedMinRamGb} GB</b>
-          </span>
-          <span>
-            Rec. RAM <b>{m.recommendedRamGb} GB</b>
-          </span>
-          <span>
-            Context <b>{m.recommendedContextTokens}</b>
-          </span>
-        </div>
-        <div className="model-sub">
-          <code>{m.localPath}</code>
-        </div>
-
         {ramTooLow && <Banner tone="warning">{ramHint}</Banner>}
 
         <div className="model-actions">
@@ -292,20 +297,6 @@ export function ModelsScreen(): JSX.Element {
             onClick={() => run(`select-${m.id}`, () => window.api.selectModel(m.id))}
           >
             {active ? 'Selected' : 'Select'}
-          </Button>
-          <Button
-            size="sm"
-            disabled={busy !== null}
-            onClick={() => run(`verify-${m.id}`, () => window.api.verifyModel(m.id))}
-            title="Re-hash the file on disk and check it against its SHA-256 (bypasses the cache)"
-          >
-            {busy === `verify-${m.id}` ? (
-              <>
-                <span className="spinner" /> Verifying…
-              </>
-            ) : (
-              'Verify checksum'
-            )}
           </Button>
           {m.state === 'running' ? (
             <Button size="sm" disabled={busy !== null} onClick={() => run('stop', () => window.api.stopRuntime())}>
@@ -332,6 +323,54 @@ export function ModelsScreen(): JSX.Element {
         </div>
 
         {downloadSection(m)}
+
+        {/* Checksums / quantization ids / paths / runtime internals live here, closed
+            by default (guidelines §2/§3 principle 3 — never in the everyday path). */}
+        <details className="tech-details">
+          <summary>Technical details</summary>
+          <div className="tech-details-body">
+            <dl className="kv">
+              <dt>Model id</dt>
+              <dd>
+                <code>{m.id}</code>
+              </dd>
+              <dt>Family</dt>
+              <dd>{m.family}</dd>
+              <dt>Format</dt>
+              <dd>{m.format}</dd>
+              <dt>Runtime</dt>
+              <dd>{m.runtime}</dd>
+              <dt>License</dt>
+              <dd>{m.license}</dd>
+              <dt>Size on disk</dt>
+              <dd>{m.sizeOnDiskGb} GB</dd>
+              <dt>Minimum RAM</dt>
+              <dd>{m.recommendedMinRamGb} GB</dd>
+              <dt>Recommended RAM</dt>
+              <dd>{m.recommendedRamGb} GB</dd>
+              <dt>Context window</dt>
+              <dd>{m.recommendedContextTokens} tokens</dd>
+              <dt>File</dt>
+              <dd>
+                <code>{m.localPath}</code>
+              </dd>
+            </dl>
+            <Button
+              size="sm"
+              disabled={busy !== null}
+              onClick={() => run(`verify-${m.id}`, () => window.api.verifyModel(m.id))}
+              title="Re-hash the file on disk and check it against its SHA-256 (bypasses the cache)"
+            >
+              {busy === `verify-${m.id}` ? (
+                <>
+                  <span className="spinner" /> Verifying…
+                </>
+              ) : (
+                'Verify checksum'
+              )}
+            </Button>
+          </div>
+        </details>
       </div>
     )
   }
@@ -392,11 +431,10 @@ export function ModelsScreen(): JSX.Element {
 
   return (
     <div className="screen">
-      <h1>Models</h1>
+      <h1>AI Model</h1>
       <p className="lead">
-        Models are described by local manifests. Weights live under <code>models/</code> on the
-        drive and are verified by SHA-256 before use. Nothing is downloaded without your
-        explicit confirmation.
+        The AI model answers your questions, entirely on this device. Everything is verified
+        before use, and nothing is downloaded without your explicit confirmation.
       </p>
 
       {anyDownloadable && downloadsBlockedReason && <Banner tone="info">{downloadsBlockedReason}</Banner>}
@@ -412,8 +450,17 @@ export function ModelsScreen(): JSX.Element {
         />
       )}
 
-      {chat.length > 0 && <div className="section-title">Chat</div>}
-      {chat.map(card)}
+      {activeChat && (
+        <>
+          <div className="section-title">Your AI model</div>
+          {card(activeChat)}
+        </>
+      )}
+
+      {otherChat.length > 0 && (
+        <div className="section-title">{activeChat ? 'Other models' : 'Choose your AI model'}</div>
+      )}
+      {otherChat.map(card)}
 
       {embeddings.length > 0 && <div className="section-title">Embeddings</div>}
       {embeddings.map(card)}

@@ -60,6 +60,9 @@ button { min-width: 24px; min-height: 24px; }
 .brand-edition { font-size: 11px; color: var(--text-muted); letter-spacing: 0.08em; text-transform: uppercase; }
 
 .nav-list { list-style: none; padding: 0; margin: 0; flex: 1; display: flex; flex-direction: column; gap: 2px; }
+/* Bottom utility group (Phase 26, guidelines §2): Settings sits apart from the
+   everyday destinations, above the lock button / offline badge. */
+.nav-list.nav-bottom { flex: 0 0 auto; border-top: 1px solid var(--border); padding-top: 8px; margin-top: 8px; }
 .nav-item {
   width: 100%;
   display: flex;
@@ -175,7 +178,26 @@ code, pre, kbd { font-family: var(--font-mono); }
 .toggle { display: flex; align-items: center; gap: 10px; font-size: 13px; cursor: pointer; min-height: 24px; }
 .toggle input { width: 16px; height: 16px; accent-color: var(--accent-600); }
 
-/* Models screen */
+/* Home readiness hub (Phase 26, guidelines §2): icon + label/value rows ≥40px. */
+.readiness-card { display: flex; flex-direction: column; gap: 4px; }
+.readiness-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 44px;
+  padding: 6px 4px;
+}
+.readiness-row + .readiness-row { border-top: 1px solid var(--border); }
+.readiness-icon { width: 22px; text-align: center; flex-shrink: 0; }
+.readiness-text { flex: 1; min-width: 0; }
+.readiness-label { font-size: var(--text-xs); line-height: var(--line-xs); color: var(--text-muted); }
+.readiness-value { font-size: var(--text-base); line-height: var(--line-base); }
+.readiness-action { flex-shrink: 0; }
+
+/* Settings tabs (Phase 26): the segmented switcher between the three sections. */
+.settings-tabs { margin: 12px 0 4px; }
+
+/* AI Model screen */
 .model-card { display: flex; flex-direction: column; gap: 10px; }
 .model-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
 .model-title { font-size: 15px; font-weight: 600; }
@@ -188,6 +210,30 @@ code, pre, kbd { font-family: var(--font-mono); }
 .download-progress progress { flex: 1 1 160px; min-width: 120px; accent-color: var(--accent-600); }
 .download-progress .hint { margin: 0; flex-basis: 100%; }
 .btn.sm { padding: 5px 11px; font-size: 12px; min-height: 24px; }
+/* "Technical details" disclosure (Phase 26, guidelines §2/§3): checksums, paths, and
+   runtime internals stay one click away, closed by default. */
+.tech-details { margin-top: 2px; }
+.tech-details summary {
+  cursor: pointer;
+  user-select: none;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  line-height: var(--line-sm);
+  padding: 4px 0;
+  width: fit-content;
+}
+.tech-details summary:hover { color: var(--text); }
+.tech-details-body {
+  margin-top: 8px;
+  padding: 10px 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  align-items: flex-start;
+}
 .btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .btn:disabled:hover { border-color: var(--border-strong); }
 

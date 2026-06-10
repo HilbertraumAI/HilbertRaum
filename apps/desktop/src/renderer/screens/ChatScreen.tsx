@@ -406,9 +406,9 @@ export function ChatScreen({ onNavigate, initialMode, initialScopeDocumentIds }:
         <div className="card">
           <h2>No model is running</h2>
           <p className="hint">
-            Chat and document Q&amp;A need a model loaded into the runtime. Open the Models screen,
-            pick a model, then choose <b>Start runtime</b>. Everything stays local — nothing is
-            downloaded or sent anywhere.
+            Chat and document Q&amp;A need a model loaded into the runtime. Open the AI Model
+            screen, pick a model, then choose <b>Start runtime</b>. Everything stays local —
+            nothing is downloaded or sent anywhere.
           </p>
           <p className="hint">
             <span className="spinner" /> If you just opened the app, your selected model may still
@@ -416,7 +416,7 @@ export function ChatScreen({ onNavigate, initialMode, initialScopeDocumentIds }:
           </p>
           <div className="actions" style={{ marginTop: 12 }}>
             <Button variant="primary" onClick={() => onNavigate('models')}>
-              Go to Models
+              Open AI Model
             </Button>
             <Button onClick={() => void checkRuntime()}>Re-check</Button>
           </div>
