@@ -109,7 +109,8 @@ describe('WorkspaceGate — create (first run)', () => {
     stubApi({ createWorkspace })
     render(<WorkspaceGate state={{ ...UNINITIALIZED, plaintextAllowed: true }} onUnlocked={vi.fn()} />)
 
-    await user.click(screen.getByRole('checkbox'))
+    // Phase 24: the plaintext toggle is a Switch (binary setting, guidelines §6).
+    await user.click(screen.getByRole('switch'))
     await user.click(screen.getByRole('button', { name: /create workspace/i }))
     expect(createWorkspace).toHaveBeenCalledWith('', 'plaintext_dev')
   })

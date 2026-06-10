@@ -43,7 +43,12 @@ record `docs/rag-design.md` §11). **The UI polish wave (Phases 23–27) is unde
 (design-token foundation + light/dark theming) is DONE** on branch `ui-phase-23-tokens-theming`
 (not merged) — tokens.css per the adopted guidelines §4, the full styles.css role-token
 restyle with the AA primary-button fix, the global a11y baseline, and the additive
-`AppSettings.theme` setting with the Settings Appearance card (§3 entry). Release-wise,
+`AppSettings.theme` setting with the Settings Appearance card (§3 entry). **Phase 24 (shared
+component layer) is DONE** on the same branch — D-UI1 executed (the four Radix primitives
+pinned + license-reviewed), `renderer/components/` (Button/Badge/Banner/Toast/ConfirmDialog/
+Modal/SegmentedControl/Switch/Chip/EmptyState/Progress per guidelines §6), every non-chat
+screen + the WorkspaceGate migrated onto them, and "Saved" feedback moved to polite-live-region
+toasts (§3 entry). Release-wise,
 remaining work = **manual release acceptance only** (§5, incl. the GPU
 hardware matrix, item 1b). Consciously-accepted gaps live in
 [`docs/known-limitations.md`](docs/known-limitations.md)._
@@ -78,6 +83,7 @@ hardware matrix, item 1b). Consciously-accepted gaps live in
 | 21 | Retrieval quality (reranker + hybrid FTS5 search) | 🟢 done |
 | 22 | Signed offline update bundles | 🔴 blocked (key-management design) |
 | 23 | UI design tokens + light/dark theming | 🟢 done (branch `ui-phase-23-tokens-theming`, not merged) |
+| 24 | UI shared component layer (Radix + components/) | 🟢 done (same branch, not merged) |
 
 Legend: ⚪ not started · 🟡 in progress · 🟢 done · 🔴 blocked
 
@@ -906,6 +912,68 @@ Repo root: `f:\_coding\ai_drive`.
   every screen + the gate + the lock flow in BOTH themes via a scripted Electron/Playwright
   walk (screenshots reviewed; light badge/banner states checked). Gate: typecheck clean,
   608 tests, build green.
+- **Phase 24 — UI shared component layer (2026-06-10, plan
+  [`docs/ui-ux-redesign-plan.md`](docs/ui-ux-redesign-plan.md) Phase 24; design source
+  [`docs/design-guidelines.md`](docs/design-guidelines.md) §6/§9; built on branch
+  `ui-phase-23-tokens-theming` — NOT merged to master):**
+  1. **Radix primitives adopted (decision D-UI1 executed) — four RENDERER deps, pinned
+     exact:** `@radix-ui/react-dialog@1.1.16`, `@radix-ui/react-popover@1.1.16`,
+     `@radix-ui/react-dropdown-menu@2.1.17`, `@radix-ui/react-tooltip@1.2.9`.
+     **License/transitive review (2026-06-10):** the install added 42 lockfile packages
+     (Radix internals, `@floating-ui/*` positioning, the `react-remove-scroll` family,
+     `aria-hidden`, `get-nonce`, `detect-node-es`) — **every one MIT, pure JS, zero
+     install scripts, no native code, no runtime network**; Vite-bundled into the renderer
+     like `react-markdown` (NOT main-process/externalized). Phase 24 uses only Dialog;
+     popover/dropdown-menu/tooltip are staged for the Phase-25 chat restructure.
+  2. **New `renderer/components/` (guidelines §6 exactly):** `Button` (three levels —
+     primary/secondary/ghost, `type="button"` default, 36px md / ≥24px sm), `Badge`
+     (status pill, ALWAYS icon + word — never color-only), `Banner` (semantic left border
+     + icon + optional action/dismiss; `role="alert"` for errors, else `status`),
+     `Toast`/`ToastProvider`/`useToast` (single host in App.tsx; polite always-mounted
+     live region; 4 s auto-dismiss; **no-op default context** so provider-less unit
+     renders never crash), `Modal` + `ConfirmDialog` on Radix Dialog (focus trap, Esc,
+     **explicit focus-return via captured `document.activeElement`** — Radix's default
+     targets its own Trigger, which controlled dialogs don't render, so without this fix
+     focus fell to `<body>`; primary on the RIGHT; 480/640/760px widths),
+     `SegmentedControl` (hand-rolled radiogroup, roving tabindex, arrow/Home/End keys
+     move focus AND selection, wraps + skips disabled), `Switch` (real
+     `<input type="checkbox" role="switch">` under a styled track — native keyboard +
+     label association kept; track `--accent-600` when on), `Chip` (remove ✕ on
+     hover/focus only; also a button-form for example-prompt chips), `EmptyState`,
+     `Progress` (always-labelled bar; indeterminate without totals). All styled in
+     styles.css with Phase-23 tokens only (no new raw hex); old `.badge`/`.modal-backdrop`
+     CSS deleted (`.pill`/`.dialog-*` replace them).
+  3. **Non-chat screens migrated** (Home, Documents, Models, Settings, Privacy,
+     Diagnostics, WorkspaceGate + the App shell — ChatScreen untouched, Phase 25):
+     Settings' Phase-23 Appearance button group → `SegmentedControl`; the four binary
+     settings checkboxes + the gate's plaintext toggle → `Switch` (§6: switch for binary
+     settings; the Models license acknowledgement deliberately STAYS a checkbox —
+     consent ≠ setting); the **Documents Delete now goes through `ConfirmDialog`** (it
+     was an unconfirmed destructive action; the only browser `confirm()` lives in
+     ChatScreen and is Phase-25 scope); Documents preview + the Phase-18 download
+     confirmation → Radix `Modal`/`ConfirmDialog`; doc/model status spans → `Badge`
+     maps (icon + word per state); ad-hoc warn/error hints + the App-shell runtime
+     notice → `Banner`; Documents/Models zero states → `EmptyState` (the empty
+     Documents screen hides the top action row so the EmptyState button is THE
+     primary); download progress → `Progress`. "Saved" feedback → toasts: Settings
+     patches toast "Saved", Diagnostics' activity export toasts the saved path
+     (was a static hint line).
+  4. **Renderer-only, contracts untouched:** no IPC/schema/main-process changes; both
+     themes keep working via role tokens only (components never theme-check). One
+     stale-copy casualty: the Privacy screen's plaintext warning said encryption
+     "arrives in Phase 9" — rewritten minimally while converting to Banner (Phase 9
+     shipped long ago); the full §7 copy sweep stays Phase 27.
+  Tests (+12 → 620): `tests/renderer/Components.test.tsx` (ConfirmDialog focus trap +
+  primary-right + Esc/focus-return + confirmDisabled; SegmentedControl semantics/roving
+  tabindex/arrows/click; Toast live-region + 3–5 s auto-dismiss + provider-less no-op;
+  Switch keyboard + label toggling). Existing suites updated where the DOM changed,
+  assertions kept equal-or-stronger: gate plaintext toggle queried as `switch`, Documents
+  delete asserts dialog-confirm flow (+ a new cancel-path test), Theme tests query
+  `radio`/`aria-checked`, Diagnostics export asserts the toast text under ToastProvider.
+  Eyeballed via the scripted Playwright walk (memory recipe): gate create/unlock + all
+  seven screens in BOTH themes, preview + delete dialogs (light AND dark), Saved toast,
+  segmented control, switches, badge/banner/empty states on light especially. Gate:
+  typecheck clean, 620 tests, build green.
 
 ---
 
@@ -1514,24 +1582,26 @@ items are **MANUAL acceptance only** (R2/R5/R7 + the GPU hardware matrix). In ro
    E5-indexed corpus → promote a measured default; semantics already locked, D12). Smaller
    leftovers: an icon/`buildResources` for electron-builder; ANN vector index only if a real
    corpus outgrows the linear scan (plan §9 item 4 / D15 — explicitly not built).
-4. **UI/UX polish wave (Phases 23–27) — IN PROGRESS: Phase 23 DONE 2026-06-10** on branch
-   `ui-phase-23-tokens-theming` (not merged — see the §3 entry: tokens.css, full role-token
-   restyle + AA fixes, a11y baseline, `AppSettings.theme` + Appearance card, both themes
-   eyeballed on every screen). Wave docs:
+4. **UI/UX polish wave (Phases 23–27) — IN PROGRESS: Phases 23 + 24 DONE 2026-06-10** on
+   branch `ui-phase-23-tokens-theming` (not merged — see the §3 entries: Phase 23 =
+   tokens.css, full role-token restyle + AA fixes, a11y baseline, `AppSettings.theme` +
+   Appearance card; Phase 24 = the four pinned Radix primitives [D-UI1 executed,
+   license-reviewed], `renderer/components/` per guidelines §6, all non-chat screens +
+   gate migrated, Saved-feedback toasts; both phases eyeballed on every screen in both
+   themes). Wave docs:
    [`docs/design-guidelines.md`](docs/design-guidelines.md) (ADOPTED — tokens, light/dark
    themes, chat-screen layout, IA regroup 7→5 nav, components, microcopy, WCAG 2.2 AA;
    distilled from an external design-research round) +
    [`docs/ui-ux-redesign-plan.md`](docs/ui-ux-redesign-plan.md) (working paper sequencing
-   23 tokens/theming ✅ → 24 component layer → 25 chat restructure [the priority] → 26 IA
-   regroup → 27 microcopy/ambient-trust/first-run). Renderer-only except the additive
-   `AppSettings.theme` key (now shipped) + the OS-following pre-paint window color.
-   D-UI2 is resolved as planned; **D-UI1 is APPROVED (2026-06-10, user-confirmed): all
-   four Radix primitives (`@radix-ui/react-dialog`/`react-popover`/`react-dropdown-menu`/
-   `react-tooltip`) go into Phase 24** with the usual pin + license/transitive review,
-   recorded in §3 at adoption. D-UI3 (Home's fate) stays open until after Phase 26.
+   23 tokens/theming ✅ → 24 component layer ✅ → 25 chat restructure [the priority,
+   next] → 26 IA regroup → 27 microcopy/ambient-trust/first-run). Renderer-only except
+   the additive `AppSettings.theme` key (shipped in 23) + the OS-following pre-paint
+   window color. D-UI2 resolved as planned; D-UI1 executed in Phase 24 (popover/
+   dropdown-menu/tooltip staged for Phase 25). D-UI3 (Home's fate) stays open until
+   after Phase 26.
 
-**Current gate (2026-06-10, post-Phase-23 on `ui-phase-23-tokens-theming`): typecheck clean,
-608/608 tests pass (+6 manual tests — 4 GPU smoke behind `PAID_GPU_SMOKE`, 1 thinking smoke
+**Current gate (2026-06-10, post-Phase-24 on `ui-phase-23-tokens-theming`): typecheck clean,
+620/620 tests pass (+6 manual tests — 4 GPU smoke behind `PAID_GPU_SMOKE`, 1 thinking smoke
 behind `PAID_THINKING_SMOKE`, 1 rerank smoke behind `PAID_RERANK_SMOKE` — skipped in CI),
 `npm run build` green.** The per-phase gate history (test counts, bundle sizes, per-phase
 test inventories) lives in git history.

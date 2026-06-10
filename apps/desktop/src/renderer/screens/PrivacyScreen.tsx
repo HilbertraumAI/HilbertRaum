@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { Banner } from '../components'
 import type { AppSettings, DriveStatus, PolicyStatus } from '@shared/types'
 
 // Privacy & Offline Mode screen (spec §7.10 + §18.1). Renders the offline statement
@@ -114,11 +115,11 @@ export function PrivacyScreen(): JSX.Element {
               Your workspace is in <strong>plaintext developer mode</strong>. Files are stored
               unencrypted on the drive for development speed.
             </p>
-            <p className="hint warn">
-              ⚠ Plaintext developer mode is not the commercial default. An encrypted workspace —
-              password-derived key, nothing stored in plaintext — arrives in Phase 9. Until then, do
-              not store sensitive documents in plaintext mode on a shared or removable drive.
-            </p>
+            <Banner tone="warning">
+              Plaintext developer mode is not the commercial default. The encrypted mode —
+              password-derived key, nothing stored in plaintext — is what commercial drives use.
+              Do not store sensitive documents in plaintext mode on a shared or removable drive.
+            </Banner>
           </>
         )}
       </div>

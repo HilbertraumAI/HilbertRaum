@@ -3,6 +3,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, cleanup, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { DiagnosticsScreen } from '../../src/renderer/screens/DiagnosticsScreen'
+import { ToastProvider } from '../../src/renderer/components'
 import { DEFAULT_SETTINGS, type AuditEvent, type RuntimeStatus } from '../../src/shared/types'
 import { stubApi } from '../helpers/renderer'
 
@@ -95,17 +96,24 @@ describe('DiagnosticsScreen — Activity panel (Phase 19)', () => {
     expect(await screen.findByText(/the very first event/)).toBeInTheDocument()
   })
 
-  it('exports the log and confirms where it was saved', async () => {
+  it('exports the log and confirms where it was saved (Phase 24: as a toast)', async () => {
     const exportAuditLog = vi.fn(async () => 'D:\\exports\\activity-log.json')
     stubDiagnostics({
       getAuditEvents: vi.fn(async () => [event(1, 'workspace_unlocked', 'Workspace unlocked')]),
       exportAuditLog
     })
-    render(<DiagnosticsScreen />)
+    // The toast host lives in App.tsx; tests supply it via the provider.
+    render(
+      <ToastProvider>
+        <DiagnosticsScreen />
+      </ToastProvider>
+    )
 
     await userEvent.click(screen.getByRole('button', { name: /show activity/i }))
     await userEvent.click(await screen.findByRole('button', { name: /export to file/i }))
     expect(exportAuditLog).toHaveBeenCalled()
-    expect(await screen.findByText(/Activity log saved to/)).toBeInTheDocument()
+    expect(
+      await screen.findByText(/Activity log saved to D:\\exports\\activity-log\.json/)
+    ).toBeInTheDocument()
   })
 })

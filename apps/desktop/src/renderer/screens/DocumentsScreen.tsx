@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { Badge, Banner, Button, ConfirmDialog, EmptyState, Modal, type BadgeTone } from '../components'
 import type { DocumentInfo, DocumentPreview, IngestionStatus } from '@shared/types'
 
 // Documents screen (spec §7.7 / Milestone 4). Import files or a folder via the OS picker
@@ -6,14 +7,15 @@ import type { DocumentInfo, DocumentPreview, IngestionStatus } from '@shared/typ
 // delete / re-index documents. Import runs async in the backend; this screen polls
 // getImportJob + listDocuments while a job is in flight (BUILD_STATE: async-with-polling).
 
-const STATUS_LABEL: Record<IngestionStatus, string> = {
-  queued: 'Queued',
-  extracting: 'Extracting',
-  chunking: 'Chunking',
-  embedding: 'Embedding',
-  indexed: 'Indexed',
-  failed: 'Failed',
-  deleted: 'Deleted'
+// Status pills: icon + word, never color-only (guidelines §6).
+const STATUS_BADGE: Record<IngestionStatus, { label: string; tone: BadgeTone; icon: string }> = {
+  queued: { label: 'Queued', tone: 'accent', icon: '…' },
+  extracting: { label: 'Extracting', tone: 'accent', icon: '⟳' },
+  chunking: { label: 'Chunking', tone: 'accent', icon: '⟳' },
+  embedding: { label: 'Embedding', tone: 'accent', icon: '⟳' },
+  indexed: { label: 'Indexed', tone: 'success', icon: '✓' },
+  failed: { label: 'Failed', tone: 'error', icon: '⚠' },
+  deleted: { label: 'Deleted', tone: 'neutral', icon: '—' }
 }
 
 const ACTIVE_STATUSES: ReadonlySet<IngestionStatus> = new Set([
@@ -41,6 +43,8 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
   const [error, setError] = useState<string | null>(null)
   const [preview, setPreview] = useState<DocumentPreview | null>(null)
   const [previewLoading, setPreviewLoading] = useState(false)
+  // Destructive delete goes through a ConfirmDialog (guidelines §6), not browser confirm.
+  const [confirmDelete, setConfirmDelete] = useState<DocumentInfo | null>(null)
   // "Ask these documents" selection (indexed documents only).
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set())
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -135,6 +139,7 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
 
   const anyActive = docs?.some((d) => ACTIVE_STATUSES.has(d.status)) ?? false
   const staleDocs = docs?.filter((d) => d.staleEmbeddings) ?? []
+  const empty = docs != null && docs.length === 0
 
   function toggleSelected(id: string): void {
     setSelected((prev) => {
@@ -172,50 +177,61 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
         from the Chat screen&apos;s &quot;Ask documents&quot; mode.
       </p>
 
-      <div className="actions">
-        <button
-          className="btn primary"
-          disabled={busy === 'import'}
-          onClick={() => void onImport('files')}
-        >
-          {busy === 'import' ? 'Importing…' : 'Import files'}
-        </button>
-        <button className="btn" disabled={busy === 'import'} onClick={() => void onImport('folder')}>
-          Import folder
-        </button>
-        <button className="btn sm" disabled={busy !== null} onClick={() => void refresh()}>
-          Refresh
-        </button>
-        {onAskSelected && selected.size > 0 && (
-          <button
-            className="btn primary"
-            disabled={busy !== null}
-            title="Open a document Q&A scoped to the selected documents"
-            onClick={() => onAskSelected([...selected])}
-          >
-            Ask these documents ({selected.size})
-          </button>
-        )}
-        {staleDocs.length > 1 && (
-          <button
-            className="btn"
-            disabled={busy !== null || anyActive}
-            title="Re-index every document that was indexed with a different search model"
-            onClick={() => void onReindexAllStale()}
-          >
-            {busy === 'reindex-all' ? 'Re-indexing…' : `Re-index all (${staleDocs.length})`}
-          </button>
-        )}
-      </div>
+      {/* When the list is empty the EmptyState below carries the primary action. */}
+      {!empty && (
+        <div className="actions">
+          <Button variant="primary" disabled={busy === 'import'} onClick={() => void onImport('files')}>
+            {busy === 'import' ? 'Importing…' : 'Import files'}
+          </Button>
+          <Button disabled={busy === 'import'} onClick={() => void onImport('folder')}>
+            Import folder
+          </Button>
+          <Button size="sm" disabled={busy !== null} onClick={() => void refresh()}>
+            Refresh
+          </Button>
+          {onAskSelected && selected.size > 0 && (
+            <Button
+              variant="primary"
+              disabled={busy !== null}
+              title="Open a document Q&A scoped to the selected documents"
+              onClick={() => onAskSelected([...selected])}
+            >
+              Ask these documents ({selected.size})
+            </Button>
+          )}
+          {staleDocs.length > 1 && (
+            <Button
+              disabled={busy !== null || anyActive}
+              title="Re-index every document that was indexed with a different search model"
+              onClick={() => void onReindexAllStale()}
+            >
+              {busy === 'reindex-all' ? 'Re-indexing…' : `Re-index all (${staleDocs.length})`}
+            </Button>
+          )}
+        </div>
+      )}
 
       <p className="hint" style={{ marginTop: 10 }}>
         Supported: TXT, Markdown, PDF, DOCX, CSV. {anyActive && 'Ingestion in progress…'}
       </p>
 
-      {error && <p className="hint">⚠ {error}</p>}
+      {error && <Banner tone="error">{error}</Banner>}
 
-      {docs && docs.length === 0 && (
-        <div className="card muted">No documents yet. Import files to get started.</div>
+      {empty && (
+        <EmptyState
+          title="No documents yet"
+          line="Import files to ask questions about them — everything stays on this drive."
+          action={
+            <>
+              <Button variant="primary" disabled={busy === 'import'} onClick={() => void onImport('files')}>
+                {busy === 'import' ? 'Importing…' : 'Import files'}
+              </Button>
+              <Button disabled={busy === 'import'} onClick={() => void onImport('folder')}>
+                Import folder
+              </Button>
+            </>
+          }
+        />
       )}
 
       {docs?.map((d) => (
@@ -234,7 +250,9 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
             <div className="doc-title" title={d.originalPath ?? d.title}>
               {d.title}
             </div>
-            <span className={`badge doc-${d.status}`}>{STATUS_LABEL[d.status]}</span>
+            <Badge tone={STATUS_BADGE[d.status].tone} icon={STATUS_BADGE[d.status].icon}>
+              {STATUS_BADGE[d.status].label}
+            </Badge>
           </div>
           <div className="doc-meta">
             <span>
@@ -247,41 +265,56 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
               Type <b>{d.mimeType ?? '—'}</b>
             </span>
           </div>
-          {d.status === 'failed' && d.errorMessage && (
-            <div className="doc-error">⚠ {d.errorMessage}</div>
-          )}
+          {d.status === 'failed' && d.errorMessage && <Banner tone="error">{d.errorMessage}</Banner>}
           {d.staleEmbeddings && (
-            <div className="doc-error">
-              ⚠ Indexed with a different embedding model — re-index so document search can find it.
-            </div>
+            <Banner tone="warning">
+              Indexed with a different embedding model — re-index so document search can find it.
+            </Banner>
           )}
           <div className="doc-actions">
-            <button
-              className="btn sm"
+            <Button
+              size="sm"
               disabled={busy !== null || previewLoading || ACTIVE_STATUSES.has(d.status)}
               onClick={() => void onPreview(d)}
               title="Read the extracted text (read-only; nothing leaves the app)"
             >
               {previewLoading ? 'Opening…' : 'Preview'}
-            </button>
-            <button
-              className="btn sm"
+            </Button>
+            <Button
+              size="sm"
               disabled={busy !== null || ACTIVE_STATUSES.has(d.status)}
               onClick={() => void run(`reindex-${d.id}`, () => window.api.reindexDocument(d.id))}
               title="Re-parse and re-chunk the stored copy"
             >
               {busy === `reindex-${d.id}` ? 'Re-indexing…' : 'Re-index'}
-            </button>
-            <button
-              className="btn sm"
+            </Button>
+            <Button
+              size="sm"
               disabled={busy !== null || ACTIVE_STATUSES.has(d.status)}
-              onClick={() => void run(`delete-${d.id}`, () => window.api.deleteDocument(d.id))}
+              onClick={() => setConfirmDelete(d)}
             >
               Delete
-            </button>
+            </Button>
           </div>
         </div>
       ))}
+
+      <ConfirmDialog
+        open={confirmDelete != null}
+        title={`Delete "${confirmDelete?.title ?? ''}"?`}
+        confirmLabel="Delete"
+        onConfirm={() => {
+          const d = confirmDelete
+          setConfirmDelete(null)
+          if (d) void run(`delete-${d.id}`, () => window.api.deleteDocument(d.id))
+        }}
+        onCancel={() => setConfirmDelete(null)}
+      >
+        <p className="hint">
+          This permanently removes the document, its extracted text, and its search index from
+          your workspace. The original file outside the workspace is not touched.
+        </p>
+      </ConfirmDialog>
 
       {preview && <PreviewModal preview={preview} onClose={() => setPreview(null)} />}
     </div>
@@ -295,35 +328,25 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
  */
 function PreviewModal({ preview, onClose }: { preview: DocumentPreview; onClose: () => void }): JSX.Element {
   return (
-    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label={`Preview of ${preview.title}`} onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <div className="modal-head">
-          <div className="modal-title" title={preview.title}>
-            {preview.title}
+    <Modal open title={preview.title} ariaLabel={`Preview of ${preview.title}`} width="wide" onClose={onClose}>
+      <p className="hint" style={{ margin: '0 0 8px' }}>
+        Read-only extracted text — this is what document search and answers are based on.
+      </p>
+      <div className="modal-body">
+        {preview.segments.length === 0 && (
+          <p className="hint">No text could be extracted from this document.</p>
+        )}
+        {preview.segments.map((s, i) => (
+          <div key={i} className="preview-segment">
+            {(s.pageNumber != null || s.sectionLabel) && (
+              <div className="preview-label">
+                {s.pageNumber != null ? `Page ${s.pageNumber}` : s.sectionLabel}
+              </div>
+            )}
+            <div className="preview-text">{s.text}</div>
           </div>
-          <button className="btn sm" onClick={onClose}>
-            Close
-          </button>
-        </div>
-        <p className="hint" style={{ margin: '0 0 8px' }}>
-          Read-only extracted text — this is what document search and answers are based on.
-        </p>
-        <div className="modal-body">
-          {preview.segments.length === 0 && (
-            <p className="hint">No text could be extracted from this document.</p>
-          )}
-          {preview.segments.map((s, i) => (
-            <div key={i} className="preview-segment">
-              {(s.pageNumber != null || s.sectionLabel) && (
-                <div className="preview-label">
-                  {s.pageNumber != null ? `Page ${s.pageNumber}` : s.sectionLabel}
-                </div>
-              )}
-              <div className="preview-text">{s.text}</div>
-            </div>
-          ))}
-        </div>
+        ))}
       </div>
-    </div>
+    </Modal>
   )
 }

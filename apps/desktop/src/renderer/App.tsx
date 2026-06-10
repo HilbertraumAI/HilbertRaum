@@ -7,6 +7,7 @@ import { ModelsScreen } from './screens/ModelsScreen'
 import { ChatScreen } from './screens/ChatScreen'
 import { DocumentsScreen } from './screens/DocumentsScreen'
 import { WorkspaceGate } from './screens/WorkspaceGate'
+import { Banner, Button, ToastProvider } from './components'
 import { setThemeSetting } from './theme'
 import type { WorkspaceStateInfo } from '@shared/types'
 
@@ -165,6 +166,9 @@ export function App(): JSX.Element {
       : '○ Network allowed'
 
   return (
+    // The single toast host (Phase 24): screens fire "Saved"-style confirmations via
+    // useToast(); the polite live region lives once, here.
+    <ToastProvider>
     <div className="app-shell">
       <nav className="sidebar">
         <div className="brand">
@@ -188,9 +192,9 @@ export function App(): JSX.Element {
           ))}
         </ul>
         {workspace.mode === 'encrypted' && (
-          <button className="btn sm lock-btn" title="Re-encrypt and lock the workspace" onClick={() => void lockNow()}>
+          <Button size="sm" className="lock-btn" title="Re-encrypt and lock the workspace" onClick={() => void lockNow()}>
             🔒 Lock now
-          </button>
+          </Button>
         )}
         <button
           className={`offline-badge ${offline ? '' : 'network-on'}`}
@@ -203,14 +207,9 @@ export function App(): JSX.Element {
 
       <main className="content">
         {notice && (
-          <div className="card" role="status" style={{ marginBottom: 12 }}>
-            <p className="hint" style={{ margin: 0 }}>
-              {notice}{' '}
-              <button className="btn sm" onClick={() => setNotice(null)}>
-                OK
-              </button>
-            </p>
-          </div>
+          <Banner tone="info" onDismiss={() => setNotice(null)}>
+            {notice}
+          </Banner>
         )}
         {screen === 'home' && <HomeScreen onNavigate={navigate} />}
         {screen === 'chat' && (
@@ -223,5 +222,6 @@ export function App(): JSX.Element {
         {screen === 'settings' && <SettingsScreen />}
       </main>
     </div>
+    </ToastProvider>
   )
 }

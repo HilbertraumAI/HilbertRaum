@@ -1,16 +1,18 @@
 import { useEffect, useRef, useState } from 'react'
+import { Badge, Banner, Button, ConfirmDialog, EmptyState, Progress, type BadgeTone } from '../components'
 import type { AppSettings, DownloadJob, ModelInfo, ModelState, PolicyStatus } from '@shared/types'
 
 const UNKNOWN_RAM = null
 
-const STATE_LABEL: Record<ModelState, string> = {
-  installed: 'Installed',
-  missing: 'Not downloaded',
-  checksum_failed: 'Checksum failed',
-  unsupported: 'Unsupported',
-  not_recommended: 'Not recommended',
-  ready: 'Ready',
-  running: 'Running'
+// Status pills: icon + word, never color-only (guidelines §6).
+const STATE_BADGE: Record<ModelState, { label: string; tone: BadgeTone; icon: string }> = {
+  installed: { label: 'Installed', tone: 'success', icon: '✓' },
+  missing: { label: 'Not downloaded', tone: 'neutral', icon: '○' },
+  checksum_failed: { label: 'Checksum failed', tone: 'error', icon: '⚠' },
+  unsupported: { label: 'Unsupported', tone: 'error', icon: '⚠' },
+  not_recommended: { label: 'Not recommended', tone: 'warning', icon: '⚠' },
+  ready: { label: 'Ready', tone: 'success', icon: '✓' },
+  running: { label: 'Running', tone: 'accent', icon: '▶' }
 }
 
 /** Bytes → a friendly GB string for the confirmation dialog. */
@@ -160,41 +162,42 @@ export function ModelsScreen(): JSX.Element {
           : null
       return (
         <div className="download-progress">
-          <p className="hint">
-            <span className="spinner" />{' '}
-            {mine.status === 'verifying'
-              ? 'Verifying the downloaded file…'
-              : pct != null
-                ? `Downloading… ${pct} % (${fmtGb(mine.receivedBytes, 0)} of ${fmtGb(mine.totalBytes, m.sizeOnDiskGb)})`
-                : `Downloading… ${fmtGb(mine.receivedBytes, 0)} so far`}
-          </p>
-          {pct != null && (
-            <progress value={mine.receivedBytes} max={mine.totalBytes ?? undefined} />
-          )}
-          <button
-            className="btn sm"
+          <Progress
+            label={
+              mine.status === 'verifying'
+                ? 'Verifying the downloaded file…'
+                : pct != null
+                  ? `Downloading… ${pct} % (${fmtGb(mine.receivedBytes, 0)} of ${fmtGb(mine.totalBytes, m.sizeOnDiskGb)})`
+                  : `Downloading… ${fmtGb(mine.receivedBytes, 0)} so far`
+            }
+            value={pct != null ? mine.receivedBytes : undefined}
+            max={pct != null ? (mine.totalBytes ?? undefined) : undefined}
+          />
+          <Button
+            size="sm"
             disabled={mine.status === 'verifying'}
             onClick={() => window.api.cancelDownload(mine.jobId).then(setJob)}
           >
             Cancel download
-          </button>
+          </Button>
         </div>
       )
     }
     return (
       <div className="download-progress">
-        {mine?.status === 'failed' && <p className="hint warn">⚠ {mine.error}</p>}
+        {mine?.status === 'failed' && <Banner tone="error">{mine.error}</Banner>}
         {mine?.status === 'cancelled' && (
           <p className="hint">Download cancelled — starting it again resumes where it stopped.</p>
         )}
         {mine?.status === 'done' && mine.unverified && (
-          <p className="hint warn">
+          <Banner tone="warning">
             Downloaded, but this model’s manifest has no real checksum yet so the file stays
             unverified. Capture one with <code>verify-models --generate</code>.
-          </p>
+          </Banner>
         )}
-        <button
-          className="btn sm primary"
+        <Button
+          size="sm"
+          variant="primary"
           disabled={!downloadsEnabled || (job != null && JOB_LIVE.has(job.status))}
           title={
             downloadsBlockedReason ??
@@ -210,7 +213,7 @@ export function ModelsScreen(): JSX.Element {
           {mine?.status === 'cancelled' || mine?.status === 'failed'
             ? 'Resume download'
             : 'Download'}
-        </button>
+        </Button>
       </div>
     )
   }
@@ -239,14 +242,24 @@ export function ModelsScreen(): JSX.Element {
             </div>
           </div>
           <div className="badges">
-            {active && <span className="badge active">● Active</span>}
-            {m.recommended && <span className="badge recommended">Recommended</span>}
-            {ramTooLow && (
-              <span className="badge ram-low" title={ramHint}>
-                Needs ≥{m.recommendedMinRamGb} GB RAM
-              </span>
+            {active && (
+              <Badge tone="success" icon="●">
+                Active
+              </Badge>
             )}
-            <span className={`badge ${m.state}`}>{STATE_LABEL[m.state]}</span>
+            {m.recommended && (
+              <Badge tone="accent" icon="★">
+                Recommended
+              </Badge>
+            )}
+            {ramTooLow && (
+              <Badge tone="warning" icon="⚠" title={ramHint}>
+                Needs ≥{m.recommendedMinRamGb} GB RAM
+              </Badge>
+            )}
+            <Badge tone={STATE_BADGE[m.state].tone} icon={STATE_BADGE[m.state].icon}>
+              {STATE_BADGE[m.state].label}
+            </Badge>
           </div>
         </div>
 
@@ -268,19 +281,20 @@ export function ModelsScreen(): JSX.Element {
           <code>{m.localPath}</code>
         </div>
 
-        {ramTooLow && <p className="hint warn">{ramHint}</p>}
+        {ramTooLow && <Banner tone="warning">{ramHint}</Banner>}
 
         <div className="model-actions">
-          <button
-            className="btn sm primary"
+          <Button
+            size="sm"
+            variant="primary"
             disabled={!installed || active || ramTooLow || busy !== null}
             title={ramHint}
             onClick={() => run(`select-${m.id}`, () => window.api.selectModel(m.id))}
           >
             {active ? 'Selected' : 'Select'}
-          </button>
-          <button
-            className="btn sm"
+          </Button>
+          <Button
+            size="sm"
             disabled={busy !== null}
             onClick={() => run(`verify-${m.id}`, () => window.api.verifyModel(m.id))}
             title="Re-hash the file on disk and check it against its SHA-256 (bypasses the cache)"
@@ -292,18 +306,14 @@ export function ModelsScreen(): JSX.Element {
             ) : (
               'Verify checksum'
             )}
-          </button>
+          </Button>
           {m.state === 'running' ? (
-            <button
-              className="btn sm"
-              disabled={busy !== null}
-              onClick={() => run('stop', () => window.api.stopRuntime())}
-            >
+            <Button size="sm" disabled={busy !== null} onClick={() => run('stop', () => window.api.stopRuntime())}>
               Stop runtime
-            </button>
+            </Button>
           ) : (
-            <button
-              className="btn sm"
+            <Button
+              size="sm"
               disabled={(!installed && !canMockStart) || (installed && ramTooLow) || busy !== null}
               onClick={() => run(`start-${m.id}`, () => window.api.startRuntime(m.id))}
               title={
@@ -317,7 +327,7 @@ export function ModelsScreen(): JSX.Element {
               }
             >
               {installed ? 'Start runtime' : canMockStart ? 'Start mock runtime' : 'Start runtime'}
-            </button>
+            </Button>
           )}
         </div>
 
@@ -329,71 +339,54 @@ export function ModelsScreen(): JSX.Element {
   function confirmDialog(m: ModelInfo): JSX.Element | null {
     if (!m.download) return null
     const needsAck = !m.download.licenseApproved
+    const close = (): void => {
+      setConfirming(null)
+      setLicenseAck(false)
+    }
     return (
-      <div
-        className="modal-backdrop"
-        role="dialog"
-        aria-modal="true"
-        aria-label={`Download ${m.displayName}`}
-        onClick={() => setConfirming(null)}
+      <ConfirmDialog
+        open
+        title={`Download ${m.displayName}?`}
+        confirmLabel="Start download"
+        confirmDisabled={needsAck && !licenseAck}
+        onConfirm={() => void startDownload(m)}
+        onCancel={close}
       >
-        <div className="modal" onClick={(e) => e.stopPropagation()}>
-          <div className="modal-head">
-            <div className="modal-title">Download {m.displayName}?</div>
-            <button className="btn sm" onClick={() => setConfirming(null)}>
-              ✕
-            </button>
-          </div>
-          <div className="modal-body">
-            <dl className="kv">
-              <dt>Size</dt>
-              <dd>{fmtGb(m.download.sizeBytes, m.sizeOnDiskGb)}</dd>
-              <dt>License</dt>
-              <dd>
-                {m.license}
-                {m.download.licenseUrl && (
-                  <>
-                    {' — '}
-                    <a href={m.download.licenseUrl} target="_blank" rel="noreferrer">
-                      read the license
-                    </a>
-                  </>
-                )}
-              </dd>
-              <dt>From</dt>
-              <dd>
-                <code>{m.download.url}</code>
-              </dd>
-            </dl>
-            <p className="hint">
-              The file is checked against its expected checksum before it is used. This is the
-              only network request the app makes — nothing about you or your documents is sent.
-            </p>
-            {needsAck && (
-              <label className="toggle">
-                <input
-                  type="checkbox"
-                  checked={licenseAck}
-                  onChange={(e) => setLicenseAck(e.target.checked)}
-                />
-                <span>I have read and accept this model’s license terms</span>
-              </label>
+        <dl className="kv">
+          <dt>Size</dt>
+          <dd>{fmtGb(m.download.sizeBytes, m.sizeOnDiskGb)}</dd>
+          <dt>License</dt>
+          <dd>
+            {m.license}
+            {m.download.licenseUrl && (
+              <>
+                {' — '}
+                <a href={m.download.licenseUrl} target="_blank" rel="noreferrer">
+                  read the license
+                </a>
+              </>
             )}
-            <div className="model-actions">
-              <button
-                className="btn sm primary"
-                disabled={needsAck && !licenseAck}
-                onClick={() => void startDownload(m)}
-              >
-                Start download
-              </button>
-              <button className="btn sm" onClick={() => setConfirming(null)}>
-                Cancel
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
+          </dd>
+          <dt>From</dt>
+          <dd>
+            <code>{m.download.url}</code>
+          </dd>
+        </dl>
+        <p className="hint">
+          The file is checked against its expected checksum before it is used. This is the
+          only network request the app makes — nothing about you or your documents is sent.
+        </p>
+        {needsAck && (
+          <label className="toggle">
+            <input
+              type="checkbox"
+              checked={licenseAck}
+              onChange={(e) => setLicenseAck(e.target.checked)}
+            />
+            <span>I have read and accept this model’s license terms</span>
+          </label>
+        )}
+      </ConfirmDialog>
     )
   }
 
@@ -406,14 +399,17 @@ export function ModelsScreen(): JSX.Element {
         explicit confirmation.
       </p>
 
-      {anyDownloadable && downloadsBlockedReason && (
-        <p className="hint">{downloadsBlockedReason}</p>
-      )}
+      {anyDownloadable && downloadsBlockedReason && <Banner tone="info">{downloadsBlockedReason}</Banner>}
 
       {models.length === 0 && (
-        <p className="hint">
-          No model manifests found. Add YAML manifests under <code>model-manifests/</code>.
-        </p>
+        <EmptyState
+          title="No model manifests found"
+          line={
+            <>
+              Add YAML manifests under <code>model-manifests/</code> on the drive.
+            </>
+          }
+        />
       )}
 
       {chat.length > 0 && <div className="section-title">Chat</div>}
@@ -425,7 +421,7 @@ export function ModelsScreen(): JSX.Element {
       {others.length > 0 && <div className="section-title">Other</div>}
       {others.map(card)}
 
-      {error && <p className="hint">⚠ {error}</p>}
+      {error && <Banner tone="error">{error}</Banner>}
 
       {confirming && confirmDialog(confirming)}
     </div>

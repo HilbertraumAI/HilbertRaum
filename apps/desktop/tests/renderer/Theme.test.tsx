@@ -89,15 +89,16 @@ describe('Settings Appearance card', () => {
     return { updateSettings }
   }
 
+  // Phase 24: the Appearance choice is a SegmentedControl (radio-group semantics).
   it('persists the choice and applies data-theme immediately', async () => {
     const { updateSettings } = stubSettings({ ...DEFAULT_SETTINGS, theme: 'system' })
     render(<SettingsScreen />)
-    const dark = await screen.findByRole('button', { name: 'Dark' })
+    const dark = await screen.findByRole('radio', { name: 'Dark' })
     await userEvent.click(dark)
     expect(updateSettings).toHaveBeenCalledWith({ theme: 'dark' })
     expect(document.documentElement.dataset.theme).toBe('dark')
 
-    await userEvent.click(screen.getByRole('button', { name: 'Light' }))
+    await userEvent.click(screen.getByRole('radio', { name: 'Light' }))
     expect(updateSettings).toHaveBeenCalledWith({ theme: 'light' })
     expect(document.documentElement.dataset.theme).toBe('light')
   })
@@ -105,8 +106,8 @@ describe('Settings Appearance card', () => {
   it('marks the saved choice as selected', async () => {
     stubSettings({ ...DEFAULT_SETTINGS, theme: 'dark' })
     render(<SettingsScreen />)
-    const dark = await screen.findByRole('button', { name: 'Dark' })
-    expect(dark).toHaveAttribute('aria-pressed', 'true')
-    expect(screen.getByRole('button', { name: 'System' })).toHaveAttribute('aria-pressed', 'false')
+    const dark = await screen.findByRole('radio', { name: 'Dark' })
+    expect(dark).toHaveAttribute('aria-checked', 'true')
+    expect(screen.getByRole('radio', { name: 'System' })).toHaveAttribute('aria-checked', 'false')
   })
 })

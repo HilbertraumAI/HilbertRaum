@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Banner, Button, Switch } from '../components'
 import type { WorkspaceStateInfo } from '@shared/types'
 
 // The pre-app gate (spec §7.1 "show onboarding if first run" + unlock). Rendered before
@@ -80,14 +81,11 @@ export function WorkspaceGate({ state, onUnlocked }: Props): JSX.Element {
             </p>
 
             {state.plaintextAllowed && (
-              <label className="toggle" style={{ marginTop: 6 }}>
-                <input
-                  type="checkbox"
-                  checked={mode === 'plaintext_dev'}
-                  onChange={(e) => setMode(e.target.checked ? 'plaintext_dev' : 'encrypted')}
-                />
-                <span>Use a plaintext developer workspace (no encryption)</span>
-              </label>
+              <Switch
+                checked={mode === 'plaintext_dev'}
+                onChange={(on) => setMode(on ? 'plaintext_dev' : 'encrypted')}
+                label="Use a plaintext developer workspace (no encryption)"
+              />
             )}
           </>
         ) : (
@@ -129,15 +127,15 @@ export function WorkspaceGate({ state, onUnlocked }: Props): JSX.Element {
         )}
 
         {creating && mode === 'plaintext_dev' && (
-          <p className="hint warn">
+          <Banner tone="warning">
             Plaintext mode stores your data unencrypted on this drive. Use it only for
             development.
-          </p>
+          </Banner>
         )}
 
-        {error && <p className="hint warn">{error}</p>}
+        {error && <Banner tone="error">{error}</Banner>}
 
-        <button type="submit" className="btn primary" disabled={!canSubmit || busy}>
+        <Button type="submit" variant="primary" disabled={!canSubmit || busy}>
           {busy
             ? creating
               ? 'Creating…'
@@ -145,7 +143,7 @@ export function WorkspaceGate({ state, onUnlocked }: Props): JSX.Element {
             : creating
               ? 'Create workspace'
               : 'Unlock'}
-        </button>
+        </Button>
       </form>
     </div>
   )

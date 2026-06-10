@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { Banner, Button } from '../components'
 import type { AppStatus, PreflightResult } from '@shared/types'
 
 interface Props {
@@ -41,17 +42,15 @@ export function HomeScreen({ onNavigate }: Props): JSX.Element {
       </p>
 
       {preflightNotes.length > 0 && (
-        <div className="card" style={{ marginBottom: 16 }} role="status">
+        <Banner tone="warning">
           {preflightNotes.map((note, i) => (
-            <p key={i} className="hint warn" style={{ margin: i === 0 ? 0 : '6px 0 0' }}>
-              {note}
-            </p>
+            <p key={i}>{note}</p>
           ))}
-          <p className="hint" style={{ margin: '6px 0 0' }}>
+          <p>
             You can still continue. If the app doesn’t open, see the troubleshooting guide in the
             drive’s <strong>docs</strong> folder.
           </p>
-        </div>
+        </Banner>
       )}
 
       <div className="status-grid">
@@ -65,15 +64,11 @@ export function HomeScreen({ onNavigate }: Props): JSX.Element {
       </div>
 
       <div className="actions">
-        <button className="btn primary" onClick={() => onNavigate('chat')}>
+        <Button variant="primary" onClick={() => onNavigate('chat')}>
           Start Chat
-        </button>
-        <button className="btn" onClick={() => onNavigate('documents')}>
-          Import Documents
-        </button>
-        <button className="btn" onClick={() => onNavigate('ask-documents')}>
-          Ask My Documents
-        </button>
+        </Button>
+        <Button onClick={() => onNavigate('documents')}>Import Documents</Button>
+        <Button onClick={() => onNavigate('ask-documents')}>Ask My Documents</Button>
       </div>
 
       {!status && !loading && (

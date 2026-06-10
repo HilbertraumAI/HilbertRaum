@@ -143,21 +143,25 @@ h2 { font-size: 15px; margin: 0 0 12px; }
 .stat-value.good { color: var(--success); }
 
 .actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 8px; }
+/* Buttons (guidelines §6): three levels — .btn = Secondary (default), .btn.primary,
+   .btn.ghost. Screens use the Button component (components/Button.tsx). */
 .btn {
   background: var(--surface-2);
   border: 1px solid var(--border-strong);
   color: var(--text);
-  padding: 9px 16px;
-  border-radius: 8px;
+  padding: 7px 16px;
+  border-radius: var(--radius-md);
   font-size: 13px;
+  min-height: 36px;
   cursor: pointer;
 }
 .btn:hover { border-color: var(--accent); }
 /* AA fix (guidelines §4.2): the filled primary button uses --accent-600 (#2f6fed,
    white text 4.55:1) in BOTH themes — never the old #4f8cff (3.22:1, fails). */
 .btn.primary { background: var(--accent-600); border-color: var(--accent-600); color: #fff; }
-/* Selected choice in a button group (e.g. Settings Appearance) — never color-only. */
-.btn.selected { border-color: var(--accent); color: var(--text); font-weight: 600; }
+/* Ghost: text only; hover/focus reveal a quiet surface. */
+.btn.ghost { background: transparent; border-color: transparent; }
+.btn.ghost:hover:not(:disabled) { background: var(--surface-hover); border-color: transparent; }
 
 .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 18px; margin-top: 16px; box-shadow: var(--shadow-1); }
 .card.muted { color: var(--text-muted); }
@@ -183,26 +187,11 @@ code, pre, kbd { font-family: var(--font-mono); }
 .download-progress { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
 .download-progress progress { flex: 1 1 160px; min-width: 120px; accent-color: var(--accent-600); }
 .download-progress .hint { margin: 0; flex-basis: 100%; }
-.btn.sm { padding: 5px 11px; font-size: 12px; }
+.btn.sm { padding: 5px 11px; font-size: 12px; min-height: 24px; }
 .btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .btn:disabled:hover { border-color: var(--border-strong); }
 
 .badges { display: flex; gap: 6px; flex-wrap: wrap; }
-.badge {
-  font-size: 11px;
-  padding: 2px 8px;
-  border-radius: var(--radius-full);
-  border: 1px solid var(--border);
-  color: var(--text-muted);
-  white-space: nowrap;
-}
-.badge.installed { color: var(--success); border-color: var(--success); }
-.badge.running { color: #fff; background: var(--accent-600); border-color: var(--accent-600); }
-.badge.missing { color: var(--text-muted); }
-.badge.checksum_failed, .badge.unsupported { color: var(--error); border-color: var(--error); }
-.badge.recommended { color: var(--accent); border-color: var(--accent); }
-.badge.active { color: var(--success); border-color: var(--success); }
-.badge.ram-low { color: var(--warning); border-color: var(--warning); }
 .section-title { font-size: 13px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.06em; margin: 24px 0 4px; }
 
 /* Chat screen */
@@ -440,36 +429,45 @@ code, pre, kbd { font-family: var(--font-mono); }
 .cursor { color: var(--accent); animation: blink 1s steps(2, start) infinite; }
 @keyframes blink { to { visibility: hidden; } }
 
-/* Read-only document preview modal (Documents screen, post-MVP). */
-.modal-backdrop {
+/* Modal dialogs (Phase 24, guidelines §6): Radix Dialog renders overlay + content as
+   portal siblings — the content centers itself. --shadow-3, --radius-lg; widths per §6
+   (~480px confirm / 640px content / 760px reading). */
+.dialog-overlay {
   position: fixed;
   inset: 0;
   background: rgba(15, 17, 21, 0.55);
-  display: flex;
-  align-items: center;
-  justify-content: center;
   z-index: 50;
 }
-.modal {
+.dialog {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 51;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  width: min(760px, calc(100vw - 64px));
+  width: min(640px, calc(100vw - 64px));
   max-height: calc(100vh - 96px);
   display: flex;
   flex-direction: column;
   padding: 16px 18px;
-  gap: 4px;
+  gap: 8px;
   box-shadow: var(--shadow-3);
 }
+.dialog-wide { width: min(760px, calc(100vw - 64px)); }
+.dialog-confirm { width: min(480px, calc(100vw - 64px)); }
 .modal-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .modal-title {
   font-weight: 600;
   font-size: 15px;
+  margin: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* Dialog button row: primary action on the RIGHT (guidelines §1.6/§6). */
+.modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 8px; }
 .modal-body { overflow-y: auto; min-height: 0; padding-right: 6px; }
 .preview-segment { margin-bottom: 12px; }
 .preview-label {
@@ -560,9 +558,6 @@ code, pre, kbd { font-family: var(--font-mono); }
 .doc-meta b { color: var(--text); font-weight: 500; }
 .doc-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 .doc-error { color: var(--error); font-size: 12px; word-break: break-word; }
-.badge.doc-indexed { color: var(--success); border-color: var(--success); }
-.badge.doc-failed { color: var(--error); border-color: var(--error); }
-.badge.doc-queued, .badge.doc-extracting, .badge.doc-chunking, .badge.doc-embedding { color: var(--accent); border-color: var(--accent); }
 
 /* Benchmark / diagnostics (Phase 7) */
 .hint.error { color: var(--error); }
@@ -612,3 +607,214 @@ code, pre, kbd { font-family: var(--font-mono); }
 .chat-notice {
   padding: 4px 16px;
 }
+
+/* ---- Shared component layer (Phase 24, guidelines §6) ---------------------------- */
+
+/* Badge — status pill: icon + word, never color-only (WCAG 1.4.1). */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: var(--text-xs);
+  line-height: var(--line-xs);
+  font-weight: 500;
+  padding: 2px 10px;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.pill-success { color: var(--success); border-color: var(--success); }
+.pill-warning { color: var(--warning); border-color: var(--warning); }
+.pill-error { color: var(--error); border-color: var(--error); }
+.pill-accent { color: var(--accent); border-color: var(--accent); }
+
+/* Banner — persistent in-context notice: semantic left border + icon + text. */
+.banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  font-size: var(--text-sm);
+  line-height: var(--line-sm);
+  color: var(--text);
+  margin: 10px 0;
+}
+.banner-icon { flex-shrink: 0; }
+.banner-info { border-left-color: var(--accent); }
+.banner-info .banner-icon { color: var(--accent); }
+.banner-success { border-left-color: var(--success); }
+.banner-success .banner-icon { color: var(--success); }
+.banner-warning { border-left-color: var(--warning); }
+.banner-warning .banner-icon { color: var(--warning); }
+.banner-error { border-left-color: var(--error); }
+.banner-error .banner-icon { color: var(--error); }
+.banner-text { flex: 1; min-width: 0; }
+.banner-text p { margin: 0 0 6px; }
+.banner-text p:last-child { margin-bottom: 0; }
+.banner-action { flex-shrink: 0; }
+.banner-dismiss {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 2px 6px;
+  font-size: var(--text-sm);
+  border-radius: var(--radius-sm);
+}
+.banner-dismiss:hover { color: var(--text); }
+
+/* Toast — transient confirmation over a polite live region (host in App.tsx). */
+.toast-host {
+  position: fixed;
+  bottom: var(--space-5);
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  z-index: 100;
+  pointer-events: none;
+}
+.toast {
+  background: var(--surface-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-2);
+  padding: 8px 16px;
+  font-size: var(--text-sm);
+  line-height: var(--line-sm);
+  max-width: min(480px, calc(100vw - 48px));
+}
+
+/* SegmentedControl — pill track; the selected segment gets surface + shadow + weight. */
+.seg {
+  display: inline-flex;
+  gap: 2px;
+  background: var(--surface-hover);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  padding: 3px;
+}
+.seg-btn {
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  padding: 4px 14px;
+  border-radius: var(--radius-full);
+  cursor: pointer;
+}
+.seg-btn:hover:not(:disabled) { color: var(--text); }
+.seg-btn.selected {
+  background: var(--surface);
+  border-color: var(--border);
+  box-shadow: var(--shadow-1);
+  color: var(--text);
+  font-weight: 600;
+}
+.seg-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* Switch — binary settings. The real checkbox input is visually hidden but keeps
+   native keyboard/label behavior; the track mirrors :checked/:focus-visible. */
+.switch {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  cursor: pointer;
+  min-height: 24px;
+  position: relative;
+}
+.switch-input {
+  position: absolute;
+  opacity: 0;
+  width: 36px;
+  height: 20px;
+  margin: 0;
+  cursor: pointer;
+}
+.switch-track {
+  flex-shrink: 0;
+  width: 36px;
+  height: 20px;
+  border-radius: var(--radius-full);
+  background: var(--border-strong);
+  position: relative;
+  transition: background var(--dur-fast) var(--ease);
+}
+.switch-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: var(--radius-full);
+  background: var(--n-0);
+  box-shadow: var(--shadow-1);
+  transition: transform var(--dur-fast) var(--ease);
+}
+.switch-input:checked + .switch-track { background: var(--accent-600); }
+.switch-input:checked + .switch-track .switch-thumb { transform: translateX(16px); }
+.switch-input:disabled + .switch-track { opacity: 0.5; }
+.switch-input:disabled ~ .switch-label { opacity: 0.5; }
+.switch-input:focus-visible + .switch-track { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+/* Chip — --radius-sm, --text-sm; the remove ✕ reveals on hover/focus only. */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  color: var(--text);
+  border-radius: var(--radius-sm);
+  padding: 3px 10px;
+  font-size: var(--text-sm);
+  max-width: 240px;
+}
+.chip-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chip-action { cursor: pointer; }
+.chip-action:hover:not(:disabled) { border-color: var(--accent); }
+.chip-action:disabled { opacity: 0.5; cursor: not-allowed; }
+.chip-remove {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  cursor: pointer;
+  padding: 2px 4px;
+  opacity: 0;
+}
+.chip:hover .chip-remove,
+.chip:focus-within .chip-remove,
+.chip-remove:focus-visible { opacity: 1; }
+.chip-remove:hover:not(:disabled) { color: var(--text); }
+
+/* EmptyState — friendly headline + one line + one primary action. */
+.empty-state {
+  background: var(--surface);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-md);
+  padding: var(--space-6) var(--space-5);
+  margin-top: 16px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+.empty-state-title { font-size: var(--text-lg); line-height: var(--line-lg); font-weight: 600; margin: 0; }
+.empty-state-line { color: var(--text-muted); font-size: var(--text-base); line-height: var(--line-base); margin: 0; }
+.empty-state-action { margin-top: 8px; display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
+
+/* Progress — determinate bar with an always-visible plain label. */
+.progress { display: flex; flex-direction: column; gap: 6px; flex: 1 1 220px; min-width: 160px; }
+.progress-label { font-size: var(--text-sm); line-height: var(--line-sm); color: var(--text-muted); }
+.progress progress { width: 100%; accent-color: var(--accent-600); }

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { SegmentedControl, Switch, useToast } from '../components'
 import { setThemeSetting } from '../theme'
 import type { AppSettings, ThemeSetting } from '@shared/types'
 
@@ -10,22 +11,18 @@ const THEME_CHOICES: Array<{ value: ThemeSetting; label: string }> = [
 
 export function SettingsScreen(): JSX.Element {
   const [settings, setSettings] = useState<AppSettings | null>(null)
-  const [saving, setSaving] = useState(false)
+  const toast = useToast()
 
   useEffect(() => {
     window.api?.getSettings().then(setSettings).catch(() => setSettings(null))
   }, [])
 
   async function patch(p: Partial<AppSettings>): Promise<void> {
-    setSaving(true)
-    try {
-      const next = await window.api.updateSettings(p)
-      setSettings(next)
-      // Appearance applies immediately (Phase 23) — the saved value, not the request.
-      if (p.theme !== undefined) setThemeSetting(next.theme)
-    } finally {
-      setSaving(false)
-    }
+    const next = await window.api.updateSettings(p)
+    setSettings(next)
+    // Appearance applies immediately (Phase 23) — the saved value, not the request.
+    if (p.theme !== undefined) setThemeSetting(next.theme)
+    toast('Saved')
   }
 
   if (!settings) {
@@ -43,14 +40,11 @@ export function SettingsScreen(): JSX.Element {
 
       <div className="card">
         <h2>Privacy &amp; Offline Mode</h2>
-        <label className="toggle">
-          <input
-            type="checkbox"
-            checked={settings.allowNetwork}
-            onChange={(e) => patch({ allowNetwork: e.target.checked })}
-          />
-          <span>Allow internet access for model downloads and updates</span>
-        </label>
+        <Switch
+          checked={settings.allowNetwork}
+          onChange={(on) => void patch({ allowNetwork: on })}
+          label="Allow internet access for model downloads and updates"
+        />
         <p className="hint">
           Off by default. When off, the app makes no network calls. Turning it on only enables
           model downloads from the Models screen — each one asks for confirmation first, and a
@@ -61,18 +55,12 @@ export function SettingsScreen(): JSX.Element {
 
       <div className="card">
         <h2>Appearance</h2>
-        <div className="actions" role="group" aria-label="Theme">
-          {THEME_CHOICES.map((choice) => (
-            <button
-              key={choice.value}
-              className={`btn sm ${settings.theme === choice.value ? 'selected' : ''}`}
-              aria-pressed={settings.theme === choice.value}
-              onClick={() => patch({ theme: choice.value })}
-            >
-              {choice.label}
-            </button>
-          ))}
-        </div>
+        <SegmentedControl
+          options={THEME_CHOICES}
+          value={settings.theme}
+          onChange={(theme) => void patch({ theme })}
+          ariaLabel="Theme"
+        />
         <p className="hint">
           “System” follows your operating system’s light/dark preference. The lock screen
           always follows the system theme.
@@ -81,26 +69,20 @@ export function SettingsScreen(): JSX.Element {
 
       <div className="card">
         <h2>Performance</h2>
-        <label className="toggle">
-          <input
-            type="checkbox"
-            checked={settings.gpuMode === 'auto'}
-            onChange={(e) => patch({ gpuMode: e.target.checked ? 'auto' : 'off' })}
-          />
-          <span>Use GPU acceleration</span>
-        </label>
+        <Switch
+          checked={settings.gpuMode === 'auto'}
+          onChange={(on) => void patch({ gpuMode: on ? 'auto' : 'off' })}
+          label="Use GPU acceleration"
+        />
         <p className="hint">
           Uses your graphics card to speed up responses when available. Turn off only if you
           notice stability problems — everything keeps working either way.
         </p>
-        <label className="toggle">
-          <input
-            type="checkbox"
-            checked={settings.autoStartActiveModel}
-            onChange={(e) => patch({ autoStartActiveModel: e.target.checked })}
-          />
-          <span>Load the selected model automatically when the app starts</span>
-        </label>
+        <Switch
+          checked={settings.autoStartActiveModel}
+          onChange={(on) => void patch({ autoStartActiveModel: on })}
+          label="Load the selected model automatically when the app starts"
+        />
         <p className="hint">
           On by default. The model selected on the Models screen is loaded in the background at
           launch (after unlock on encrypted workspaces) so Chat is ready without extra clicks.
@@ -109,14 +91,11 @@ export function SettingsScreen(): JSX.Element {
 
       <div className="card">
         <h2>Developer</h2>
-        <label className="toggle">
-          <input
-            type="checkbox"
-            checked={settings.developerMode}
-            onChange={(e) => patch({ developerMode: e.target.checked })}
-          />
-          <span>Developer mode (allows plaintext workspace, unverified models)</span>
-        </label>
+        <Switch
+          checked={settings.developerMode}
+          onChange={(on) => void patch({ developerMode: on })}
+          label="Developer mode (allows plaintext workspace, unverified models)"
+        />
         <p className="hint">
           Off by default. Dev builds always count as developer. The drive policy is
           authoritative: on a commercial drive, unverified models stay rejected regardless of
@@ -138,8 +117,6 @@ export function SettingsScreen(): JSX.Element {
             : 'Plaintext developer workspace — data is stored unencrypted. The encrypted mode is the commercial default.'}
         </p>
       </div>
-
-      {saving && <p className="hint">Saving…</p>}
     </div>
   )
 }
