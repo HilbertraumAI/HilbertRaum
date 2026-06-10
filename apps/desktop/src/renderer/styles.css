@@ -173,6 +173,7 @@ h2 { font-size: 15px; margin: 0 0 12px; }
 .badge.checksum_failed, .badge.unsupported { color: #ff6b6b; border-color: #ff6b6b; }
 .badge.recommended { color: var(--accent); border-color: var(--accent); }
 .badge.active { color: var(--good); border-color: var(--good); }
+.badge.ram-low { color: #f0a35e; border-color: #f0a35e; }
 .section-title { font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; margin: 24px 0 4px; }
 
 /* Chat screen */
@@ -320,6 +321,46 @@ h2 { font-size: 15px; margin: 0 0 12px; }
 .msg-copy:hover { color: var(--text); }
 .cursor { color: var(--accent); animation: blink 1s steps(2, start) infinite; }
 @keyframes blink { to { visibility: hidden; } }
+
+/* Read-only document preview modal (Documents screen, post-MVP). */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+}
+.modal {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  width: min(760px, calc(100vw - 64px));
+  max-height: calc(100vh - 96px);
+  display: flex;
+  flex-direction: column;
+  padding: 16px 18px;
+  gap: 4px;
+}
+.modal-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.modal-title {
+  font-weight: 600;
+  font-size: 15px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.modal-body { overflow-y: auto; min-height: 0; padding-right: 6px; }
+.preview-segment { margin-bottom: 12px; }
+.preview-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+.preview-text { white-space: pre-wrap; word-break: break-word; font-size: 13px; line-height: 1.55; }
 
 /* Small inline loading spinner (Models checksum check, runtime warm-up hints). */
 .spinner {

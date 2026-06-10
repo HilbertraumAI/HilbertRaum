@@ -83,4 +83,46 @@ describe('DocumentsScreen', () => {
     expect(deleteDocument).toHaveBeenCalledWith('d1')
     await waitFor(() => expect(screen.queryByText('contract.pdf')).not.toBeInTheDocument())
   })
+
+  it('opens the read-only preview modal with the extracted text and closes it', async () => {
+    const user = userEvent.setup()
+    const previewDocument = vi.fn(async () => ({
+      id: 'd1',
+      title: 'contract.pdf',
+      mimeType: 'application/pdf',
+      segments: [
+        { text: 'Clause 7: severance terms apply.', pageNumber: 3, sectionLabel: null },
+        { text: 'Appendix text.', pageNumber: null, sectionLabel: 'Appendix' }
+      ]
+    }))
+    stubApi({ listDocuments: vi.fn(async () => [doc({})]), previewDocument })
+    render(<DocumentsScreen />)
+
+    await screen.findByText('contract.pdf')
+    await user.click(screen.getByRole('button', { name: /preview/i }))
+
+    expect(previewDocument).toHaveBeenCalledWith('d1')
+    expect(await screen.findByText(/Clause 7: severance terms apply/)).toBeInTheDocument()
+    expect(screen.getByText('Page 3')).toBeInTheDocument()
+    expect(screen.getByText('Appendix')).toBeInTheDocument()
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /close/i }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+  })
+
+  it('surfaces a preview failure as the screen error', async () => {
+    const user = userEvent.setup()
+    stubApi({
+      listDocuments: vi.fn(async () => [doc({})]),
+      previewDocument: vi.fn(async () => {
+        throw new Error('The document file is no longer on disk. Re-import it to preview.')
+      })
+    })
+    render(<DocumentsScreen />)
+    await screen.findByText('contract.pdf')
+    await user.click(screen.getByRole('button', { name: /preview/i }))
+    expect(await screen.findByText(/no longer on disk/)).toBeInTheDocument()
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
 })

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { DocumentInfo, IngestionStatus } from '@shared/types'
+import type { DocumentInfo, DocumentPreview, IngestionStatus } from '@shared/types'
 
 // Documents screen (spec §7.7 / Milestone 4). Import files or a folder via the OS picker
 // (opened in the main process), watch each file move through the ingestion statuses, and
@@ -34,6 +34,8 @@ export function DocumentsScreen(): JSX.Element {
   const [docs, setDocs] = useState<DocumentInfo[] | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [preview, setPreview] = useState<DocumentPreview | null>(null)
+  const [previewLoading, setPreviewLoading] = useState(false)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   const refresh = useCallback(async (): Promise<void> => {
@@ -100,6 +102,20 @@ export function DocumentsScreen(): JSX.Element {
       setError(String(e instanceof Error ? e.message : e))
     } finally {
       setBusy(null)
+    }
+  }
+
+  // Read-only in-app preview: the extracted text, never the raw file in an external
+  // viewer (in encrypted workspaces the stored copy must stay encrypted on disk).
+  async function onPreview(d: DocumentInfo): Promise<void> {
+    setError(null)
+    setPreviewLoading(true)
+    try {
+      setPreview(await window.api.previewDocument(d.id))
+    } catch (e) {
+      setError(String(e instanceof Error ? e.message : e))
+    } finally {
+      setPreviewLoading(false)
     }
   }
 
@@ -170,6 +186,14 @@ export function DocumentsScreen(): JSX.Element {
           <div className="doc-actions">
             <button
               className="btn sm"
+              disabled={busy !== null || previewLoading || ACTIVE_STATUSES.has(d.status)}
+              onClick={() => void onPreview(d)}
+              title="Read the extracted text (read-only; nothing leaves the app)"
+            >
+              {previewLoading ? 'Opening…' : 'Preview'}
+            </button>
+            <button
+              className="btn sm"
               disabled={busy !== null || ACTIVE_STATUSES.has(d.status)}
               onClick={() => void run(`reindex-${d.id}`, () => window.api.reindexDocument(d.id))}
               title="Re-parse and re-chunk the stored copy"
@@ -186,6 +210,48 @@ export function DocumentsScreen(): JSX.Element {
           </div>
         </div>
       ))}
+
+      {preview && <PreviewModal preview={preview} onClose={() => setPreview(null)} />}
+    </div>
+  )
+}
+
+/**
+ * Read-only document preview: the parser's extracted text segments, grouped under their
+ * page/section labels. Shows extracted TEXT (what the AI reads), not the original
+ * layout — in encrypted workspaces the original bytes never leave the vault.
+ */
+function PreviewModal({ preview, onClose }: { preview: DocumentPreview; onClose: () => void }): JSX.Element {
+  return (
+    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label={`Preview of ${preview.title}`} onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-head">
+          <div className="modal-title" title={preview.title}>
+            {preview.title}
+          </div>
+          <button className="btn sm" onClick={onClose}>
+            Close
+          </button>
+        </div>
+        <p className="hint" style={{ margin: '0 0 8px' }}>
+          Read-only extracted text — this is what document search and answers are based on.
+        </p>
+        <div className="modal-body">
+          {preview.segments.length === 0 && (
+            <p className="hint">No text could be extracted from this document.</p>
+          )}
+          {preview.segments.map((s, i) => (
+            <div key={i} className="preview-segment">
+              {(s.pageNumber != null || s.sectionLabel) && (
+                <div className="preview-label">
+                  {s.pageNumber != null ? `Page ${s.pageNumber}` : s.sectionLabel}
+                </div>
+              )}
+              <div className="preview-text">{s.text}</div>
+            </div>
+          ))}
+        </div>
+      </div>
     </div>
   )
 }

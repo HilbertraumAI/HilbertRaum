@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readdirSync, readFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readdirSync, readFileSync, rmSync } from 'node:fs'
 import { randomBytes } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -10,6 +10,7 @@ import {
   reindexDocument,
   deleteDocument,
   documentsDir,
+  extractDocumentPreview,
   ENCRYPTED_DOC_SUFFIX
 } from '../../src/main/services/ingestion'
 import {
@@ -113,6 +114,29 @@ describe('encrypted document cache (H1)', () => {
     expect(stored).toHaveLength(1)
     expect(stored[0].endsWith(ENCRYPTED_DOC_SUFFIX)).toBe(true)
     expect(plaintextLeaks(store)).toEqual([])
+  })
+
+  it('previews from the encrypted copy without leaving plaintext behind (post-MVP)', async () => {
+    const db = freshDb()
+    const store = freshStore()
+    const cipher = testCipher()
+    const file = writeSource('contract.txt', SECRET_TEXT)
+
+    const doc = createQueuedDocument(db, file)
+    await processDocument(db, store, doc.id, { cipher })
+    rmSync(file) // original gone — preview must come from the self-contained .enc copy
+
+    const preview = await extractDocumentPreview(db, store, doc.id, { cipher })
+    expect(preview.segments.map((s) => s.text).join('\n')).toContain('severance of unicorns')
+
+    // Only the .enc remains; the transient decrypted working file was shredded.
+    const stored = readdirSync(store)
+    expect(stored).toHaveLength(1)
+    expect(stored[0].endsWith(ENCRYPTED_DOC_SUFFIX)).toBe(true)
+    expect(plaintextLeaks(store)).toEqual([])
+
+    // Without the cipher (locked/plaintext context) the .enc is refused, not garbled.
+    await expect(extractDocumentPreview(db, store, doc.id, {})).rejects.toThrow(/encrypted/)
   })
 
   it('migrates a legacy plaintext stored copy to .enc on re-index', async () => {

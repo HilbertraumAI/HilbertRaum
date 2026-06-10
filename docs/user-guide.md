@@ -83,8 +83,10 @@ If no model is started yet, Home will point you to the **Models** screen.
 1. Open **Models**.
 2. You'll see the models on your drive with a status:
    - **Installed** — ready to use.
-   - **Recommended** — best match for your laptop (based on the hardware benchmark).
+   - **Recommended** — the largest model that runs comfortably in this computer's memory.
    - **Not downloaded** — the model file isn't on the drive (see Troubleshooting).
+   - **Needs ≥N GB RAM** — this computer has less memory than the model's minimum, so it
+     can't be selected or started here. Pick a smaller model — quality stays great.
 3. Click a model, then **Select** and **Start runtime**. The first start of a model can take a
    little while as it loads into memory.
 
@@ -135,6 +137,10 @@ Everything you type and everything the model replies stays on your device.
 1. Open **Documents** and **Import** files (txt, md, pdf, docx, csv) or a folder.
 2. Each file shows a status as it is indexed locally (extract → chunk → embed → indexed).
    Imported files are **copied into your workspace**, so the drive stays self-contained.
+   **Preview** opens a read-only view of a document's extracted text — exactly what
+   document search and answers are based on. (It shows text, not the original layout: on
+   an encrypted drive the original file stays encrypted and is never handed to another
+   program.)
 3. Go to **Chat** and switch to **Ask Documents** mode (or click **Ask My Documents** on the
    Home screen), then ask a question, e.g.
    *"What are the termination rights in this contract?"*

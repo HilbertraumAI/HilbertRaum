@@ -13,7 +13,7 @@ import { randomFillSync } from 'node:crypto'
 import type { ModelManifest } from '../../shared/manifest'
 import type { BenchmarkResult, HardwareProfile } from '../../shared/types'
 import type { ModelRuntime } from './runtime'
-import { recommendModelId } from './models'
+import { recommendModelId, recommendModelIdByRam } from './models'
 
 // Hardware benchmarker (spec §7.3, §11). Detects RAM/CPU/OS, measures drive
 // read/write speed with a small temp file in the workspace, optionally estimates
@@ -297,7 +297,13 @@ export async function runBenchmark(deps: RunBenchmarkDeps): Promise<BenchmarkRes
     tokensPerSecond,
     gpuUseful: deps.gpu?.useful ?? false
   })
-  const recommendedModelId = recommendModelId(deps.manifests, profile, 'chat')
+  // RAM-best-fit first — rounded to whole GB, the SAME rounding the Models screen's
+  // gate uses (`machineRamGb`), so the two surfaces can never disagree at boundary
+  // values like 15.7 GiB. The profile-table lookup remains the fallback when RAM
+  // could not be detected.
+  const recommendedModelId =
+    recommendModelIdByRam(deps.manifests, Math.round(sys.ramGb), 'chat') ??
+    recommendModelId(deps.manifests, profile, 'chat')
   const warnings = buildWarnings({
     profile,
     driveReadMbps: drive.readMbps,

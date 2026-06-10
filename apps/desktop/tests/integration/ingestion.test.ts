@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { mkdtempSync, writeFileSync, existsSync, mkdirSync } from 'node:fs'
+import { mkdtempSync, writeFileSync, existsSync, mkdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { openDatabase, type Db } from '../../src/main/services/db'
@@ -8,6 +8,7 @@ import {
   processDocument,
   reindexDocument,
   deleteDocument,
+  extractDocumentPreview,
   listDocuments,
   reconcileStuckDocuments,
   expandPaths,
@@ -254,6 +255,41 @@ describe('listDocuments stale-embedding flag', () => {
     expect(listDocuments(db, 'some-other-model')[0].staleEmbeddings).toBe(true)
     // No active-model context → not evaluated.
     expect(listDocuments(db)[0].staleEmbeddings).toBeUndefined()
+  })
+})
+
+// Post-MVP: the read-only in-app preview re-parses the stored copy (chunks overlap, so
+// concatenating them would duplicate text at every boundary).
+describe('extractDocumentPreview', () => {
+  it('returns the parsed segments from the stored copy with page/section labels', async () => {
+    const db = freshDb()
+    const storeDir = store()
+    const src = write('notes.md', '# Intro\nalpha beta\n\n# Details\ngamma delta')
+    const q = createQueuedDocument(db, src)
+    await processDocument(db, storeDir, q.id)
+
+    const preview = await extractDocumentPreview(db, storeDir, q.id)
+    expect(preview.title).toBe('notes.md')
+    expect(preview.segments.length).toBeGreaterThanOrEqual(2)
+    expect(preview.segments.map((s) => s.sectionLabel)).toContain('Details')
+    expect(preview.segments.map((s) => s.text).join('\n')).toContain('gamma delta')
+  })
+
+  it('falls back to the original file when the stored copy is gone, and errors when both are', async () => {
+    const db = freshDb()
+    const storeDir = store()
+    const src = write('plain.txt', 'still here')
+    const q = createQueuedDocument(db, src)
+    // Never processed → no stored copy yet; preview reads the original.
+    const preview = await extractDocumentPreview(db, storeDir, q.id)
+    expect(preview.segments[0].text).toContain('still here')
+
+    rmSync(src)
+    await expect(extractDocumentPreview(db, storeDir, q.id)).rejects.toThrow(/no longer on disk/)
+  })
+
+  it('throws on an unknown document id', async () => {
+    await expect(extractDocumentPreview(freshDb(), store(), 'nope')).rejects.toThrow(/Unknown document/)
   })
 })
 

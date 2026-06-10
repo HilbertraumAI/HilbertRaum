@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import type { AppSettings, ModelInfo, ModelState } from '@shared/types'
 
+const UNKNOWN_RAM = null
+
 const STATE_LABEL: Record<ModelState, string> = {
   installed: 'Installed',
   missing: 'Not downloaded',
@@ -14,6 +16,7 @@ const STATE_LABEL: Record<ModelState, string> = {
 export function ModelsScreen(): JSX.Element {
   const [models, setModels] = useState<ModelInfo[] | null>(null)
   const [settings, setSettings] = useState<AppSettings | null>(null)
+  const [machineRam, setMachineRam] = useState<number | null>(UNKNOWN_RAM)
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
 
@@ -21,6 +24,11 @@ export function ModelsScreen(): JSX.Element {
     const [m, s] = await Promise.all([window.api.listModels(), window.api.getSettings()])
     setModels(m)
     setSettings(s)
+    // Machine RAM feeds the "needs more memory" flag copy; best-effort.
+    window.api
+      .getAppStatus()
+      .then((st) => setMachineRam(st.machineRamGb))
+      .catch(() => setMachineRam(UNKNOWN_RAM))
   }
 
   useEffect(() => {
@@ -77,6 +85,14 @@ export function ModelsScreen(): JSX.Element {
     // Zero-weights first run: the MAIN process computes whether this (missing, chat)
     // model may start the built-in mock (developer + policy gates, H6/M10).
     const canMockStart = Boolean(m.startableAsMock)
+    // RAM gate: this machine has less memory than the model's minimum. Select/Start are
+    // disabled (the main process refuses installed weights too); copy stays friendly.
+    const ramTooLow = m.insufficientRam === true
+    const ramHint = ramTooLow
+      ? `Needs at least ${m.recommendedMinRamGb} GB RAM` +
+        (machineRam != null ? ` — this computer has about ${machineRam} GB` : '') +
+        '. Pick a smaller model — quality stays great.'
+      : undefined
     return (
       <div className="card model-card" key={m.id}>
         <div className="model-head">
@@ -89,6 +105,11 @@ export function ModelsScreen(): JSX.Element {
           <div className="badges">
             {active && <span className="badge active">● Active</span>}
             {m.recommended && <span className="badge recommended">Recommended</span>}
+            {ramTooLow && (
+              <span className="badge ram-low" title={ramHint}>
+                Needs ≥{m.recommendedMinRamGb} GB RAM
+              </span>
+            )}
             <span className={`badge ${m.state}`}>{STATE_LABEL[m.state]}</span>
           </div>
         </div>
@@ -111,10 +132,13 @@ export function ModelsScreen(): JSX.Element {
           <code>{m.localPath}</code>
         </div>
 
+        {ramTooLow && <p className="hint warn">{ramHint}</p>}
+
         <div className="model-actions">
           <button
             className="btn sm primary"
-            disabled={!installed || active || busy !== null}
+            disabled={!installed || active || ramTooLow || busy !== null}
+            title={ramHint}
             onClick={() => run(`select-${m.id}`, () => window.api.selectModel(m.id))}
           >
             {active ? 'Selected' : 'Select'}
@@ -144,14 +168,16 @@ export function ModelsScreen(): JSX.Element {
           ) : (
             <button
               className="btn sm"
-              disabled={(!installed && !canMockStart) || busy !== null}
+              disabled={(!installed && !canMockStart) || (installed && ramTooLow) || busy !== null}
               onClick={() => run(`start-${m.id}`, () => window.api.startRuntime(m.id))}
               title={
-                installed
-                  ? 'Start the local runtime for this model'
-                  : canMockStart
-                    ? 'No weights present — starts the built-in mock runtime so you can try the app'
-                    : 'Model file not present'
+                installed && ramTooLow
+                  ? ramHint
+                  : installed
+                    ? 'Start the local runtime for this model'
+                    : canMockStart
+                      ? 'No weights present — starts the built-in mock runtime so you can try the app'
+                      : 'Model file not present'
               }
             >
               {installed ? 'Start runtime' : canMockStart ? 'Start mock runtime' : 'Start runtime'}

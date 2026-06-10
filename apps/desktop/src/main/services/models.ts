@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import { createReadStream, existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
+import { totalmem } from 'node:os'
 import { dirname, join, resolve, sep } from 'node:path'
 import { parse as parseYaml } from 'yaml'
 import {
@@ -286,11 +287,47 @@ export function recommendModelId(
   return match?.id ?? null
 }
 
+/**
+ * Total RAM of this machine in whole GB. Rounded (not floored) so a "16 GB" machine
+ * reporting 15.9 GiB usable still counts as 16 — a min-RAM-16 model must not be flagged
+ * unusable on the exact hardware it was sized for.
+ */
+export function machineRamGb(): number {
+  return Math.round(totalmem() / 1024 ** 3)
+}
+
+/**
+ * RAM-best-fit recommendation (post-MVP): the LARGEST model whose comfortable RAM
+ * (`recommended_ram_gb`) fits this machine; if nothing fits comfortably, the lightest
+ * model that at least meets its minimum (`recommended_min_ram_gb`); else null. Replaces
+ * the profile-table lookup as the primary recommendation — "which model?" is a RAM
+ * question first, and this can never recommend a model the RAM gate disables.
+ */
+export function recommendModelIdByRam(
+  manifests: ModelManifest[],
+  ramGb: number,
+  role: ModelRole = 'chat'
+): string | null {
+  if (!Number.isFinite(ramGb) || ramGb <= 0) return null
+  const candidates = manifests.filter((m) => m.role === role)
+
+  const comfortable = candidates
+    .filter((m) => m.recommendedRamGb <= ramGb)
+    .sort((a, b) => b.recommendedRamGb - a.recommendedRamGb || b.sizeOnDiskGb - a.sizeOnDiskGb)
+  if (comfortable.length > 0) return comfortable[0].id
+
+  const runnable = candidates
+    .filter((m) => m.recommendedMinRamGb <= ramGb)
+    .sort((a, b) => a.recommendedMinRamGb - b.recommendedMinRamGb || a.sizeOnDiskGb - b.sizeOnDiskGb)
+  return runnable[0]?.id ?? null
+}
+
 function toModelInfo(
   manifest: ModelManifest,
   state: ModelState,
   recommended: boolean,
-  startableAsMock: boolean
+  startableAsMock: boolean,
+  insufficientRam: boolean
 ): ModelInfo {
   return {
     id: manifest.id,
@@ -307,7 +344,8 @@ function toModelInfo(
     localPath: manifest.localPath,
     state,
     recommended,
-    startableAsMock
+    startableAsMock,
+    insufficientRam
   }
 }
 
@@ -320,6 +358,13 @@ export interface BuildModelListOptions {
   runningModelId?: string | null
   /** Optional persistent hash cache (L2) so unchanged weights are hashed once ever. */
   hashStore?: HashStore
+  /**
+   * This machine's total RAM in whole GB. When provided, models whose
+   * `recommended_min_ram_gb` exceeds it are flagged `insufficientRam`, and the
+   * recommendation becomes RAM-best-fit (`recommendModelIdByRam`) instead of the
+   * profile-table lookup. Omitted (tests/legacy callers) → old behavior unchanged.
+   */
+  machineRamGb?: number
 }
 
 export interface ModelListResult {
@@ -330,12 +375,18 @@ export interface ModelListResult {
 /** Discover manifests and compute the full ModelInfo[] for the Models screen. */
 export async function buildModelList(opts: BuildModelListOptions): Promise<ModelListResult> {
   const { manifests, errors } = discoverManifests(opts.manifestsDir)
-  const recommendedChat = recommendModelId(manifests.map((m) => m.manifest), opts.profile, 'chat')
-  const recommendedEmbed = recommendModelId(
-    manifests.map((m) => m.manifest),
-    opts.profile,
-    'embeddings'
-  )
+  const all = manifests.map((m) => m.manifest)
+  const ram = opts.machineRamGb
+  // RAM-best-fit recommendation when the machine RAM is known (it can never point at a
+  // RAM-gated model); the profile-table lookup remains the legacy/no-RAM path.
+  const recommendedChat =
+    ram != null
+      ? recommendModelIdByRam(all, ram, 'chat')
+      : recommendModelId(all, opts.profile, 'chat')
+  const recommendedEmbed =
+    ram != null
+      ? recommendModelIdByRam(all, ram, 'embeddings')
+      : recommendModelId(all, opts.profile, 'embeddings')
 
   const models: ModelInfo[] = []
   for (const { manifest } of manifests) {
@@ -353,7 +404,8 @@ export async function buildModelList(opts: BuildModelListOptions): Promise<Model
     // renderer renders an affordance the MAIN process actually allows.
     const startableAsMock =
       state === 'missing' && manifest.role === 'chat' && opts.developerMode
-    models.push(toModelInfo(manifest, state, recommended, startableAsMock))
+    const insufficientRam = ram != null && manifest.recommendedMinRamGb > ram
+    models.push(toModelInfo(manifest, state, recommended, startableAsMock, insufficientRam))
   }
   return { models, manifestErrors: errors }
 }

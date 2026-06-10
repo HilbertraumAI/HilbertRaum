@@ -7,6 +7,7 @@ import type {
   ChatOptions,
   Conversation,
   DocumentInfo,
+  DocumentPreview,
   DriveStatus,
   ImportJob,
   ImportJobStatus,
@@ -118,6 +119,9 @@ const api = {
     ipcRenderer.invoke(IPC.deleteDocument, documentId),
   reindexDocument: (documentId: string): Promise<DocumentInfo> =>
     ipcRenderer.invoke(IPC.reindexDocument, documentId),
+  /** Read-only in-app preview: the document's extracted text segments. */
+  previewDocument: (documentId: string): Promise<DocumentPreview> =>
+    ipcRenderer.invoke(IPC.previewDocument, documentId),
 
   /** Subscribe to streamed tokens for a request (= conversation id); returns an unsubscribe fn. */
   onToken: (requestId: string, cb: (token: string) => void): (() => void) => {

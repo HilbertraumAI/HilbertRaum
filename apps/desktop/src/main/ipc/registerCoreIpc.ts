@@ -5,6 +5,7 @@ import { buildDriveStatus } from '../services/workspace'
 import { getSettings, updateSettings } from '../services/settings'
 import { buildPolicyStatus } from '../services/policy'
 import { runPreflight } from '../services/preflight'
+import { machineRamGb } from '../services/models'
 import { log, readLogTail } from '../services/logging'
 import type { AppSettings, AppStatus, PolicyStatus, PreflightResult } from '../../shared/types'
 
@@ -34,7 +35,8 @@ export function registerCoreIpc(ctx: AppContext): void {
       // Real, persisted profile from the Phase-7 benchmark; UNKNOWN until first run.
       hardwareProfile: s?.lastBenchmark?.profile ?? 'UNKNOWN',
       workspaceMode: ws.mode ?? 'plaintext_dev',
-      workspaceReady: unlocked
+      workspaceReady: unlocked,
+      machineRamGb: machineRamGb()
     }
   })
 

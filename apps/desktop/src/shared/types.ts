@@ -20,6 +20,8 @@ export interface AppStatus {
   hardwareProfile: HardwareProfile
   workspaceMode: WorkspaceMode
   workspaceReady: boolean
+  /** Total RAM of THIS machine, rounded to whole GB (drives the Models RAM gate copy). */
+  machineRamGb: number
 }
 
 // ---- Privacy / offline policy (Phase 8, spec §6 config/policy.json + §3.5/§3.6) ----
@@ -267,6 +269,34 @@ export interface ModelInfo {
    * process from developer mode AND the drive policy (H6/M10).
    */
   startableAsMock?: boolean
+  /**
+   * True when this machine's RAM is below the model's `recommendedMinRamGb` — the
+   * model cannot run usefully here. The UI disables Select/Start and shows a flag;
+   * the main process refuses to start installed weights that don't fit (post-MVP).
+   */
+  insufficientRam?: boolean
+}
+
+// ---- Document preview (post-MVP) ----
+/**
+ * Read-only, in-app preview of an imported document: the parser's extracted text
+ * segments (with page/section labels), re-extracted on demand from the stored copy.
+ * Deliberately NOT the original bytes — in an encrypted workspace the stored copy
+ * rests encrypted and must never be handed to an external viewer in plaintext.
+ */
+export interface DocumentPreview {
+  id: string
+  title: string
+  mimeType: string | null
+  segments: DocumentPreviewSegment[]
+}
+
+export interface DocumentPreviewSegment {
+  text: string
+  /** 1-based page number when the format has pages (PDF); null otherwise. */
+  pageNumber: number | null
+  /** Section/heading label when the format exposes one (Markdown); null otherwise. */
+  sectionLabel: string | null
 }
 
 // ---- Chat (Phase 3) ----

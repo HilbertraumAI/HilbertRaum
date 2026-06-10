@@ -40,6 +40,8 @@ export const IPC = {
   listDocuments: 'docs:list',
   deleteDocument: 'docs:delete',
   reindexDocument: 'docs:reindex',
+  /** Read-only in-app preview: re-extract the stored copy's text (post-MVP). */
+  previewDocument: 'docs:preview',
   askDocuments: 'rag:ask',
   // Phase 7
   runBenchmark: 'benchmark:run',

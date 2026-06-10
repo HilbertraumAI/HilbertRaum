@@ -10,6 +10,7 @@ import {
   createSettingsHashStore,
   discoverManifests,
   invalidateChecksum,
+  machineRamGb,
   selectModel,
   weightPath
 } from '../services/models'
@@ -64,6 +65,16 @@ export async function startModelRuntime(ctx: AppContext, modelId: string): Promi
     throw new Error(`Model "${modelId}" cannot be started (state: ${state}).`)
   }
 
+  // RAM gate (post-MVP): loading real weights that exceed this machine's memory would
+  // thrash or OOM mid-chat — refuse with a friendly, spec §11.4-toned message. Only
+  // real weights are gated; the zero-weights mock fallback uses no real memory.
+  if (state === 'installed' && found.manifest.recommendedMinRamGb > machineRamGb()) {
+    throw new Error(
+      `"${found.manifest.displayName}" needs at least ${found.manifest.recommendedMinRamGb} GB RAM; ` +
+        `this computer has about ${machineRamGb()} GB. Pick a smaller model — quality stays great.`
+    )
+  }
+
   log.info('Start runtime', { modelId, state })
   return ctx.runtime.start({
     modelId,
@@ -115,7 +126,8 @@ export function registerModelIpc(ctx: AppContext): void {
       profile: s.lastBenchmark?.profile ?? 'UNKNOWN',
       developerMode: developerLeniency(ctx, s),
       runningModelId: ctx.runtime.activeModelId(),
-      hashStore: createSettingsHashStore(ctx.db)
+      hashStore: createSettingsHashStore(ctx.db),
+      machineRamGb: machineRamGb()
     })
     if (manifestErrors.length > 0) {
       log.warn('Invalid model manifests skipped', manifestErrors)

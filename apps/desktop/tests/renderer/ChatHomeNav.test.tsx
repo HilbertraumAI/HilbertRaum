@@ -176,7 +176,8 @@ describe('HomeScreen — quick actions', () => {
         activeModelId: null,
         hardwareProfile: 'UNKNOWN' as const,
         workspaceMode: 'plaintext_dev' as const,
-        workspaceReady: true
+        workspaceReady: true,
+        machineRamGb: 16
       })),
       runPreflight: vi.fn(async () => ({
         ok: true,

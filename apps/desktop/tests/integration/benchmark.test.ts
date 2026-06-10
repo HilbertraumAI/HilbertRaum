@@ -292,13 +292,16 @@ describe('runBenchmark', () => {
     const persistedProfile = getSettings(db).lastBenchmark?.profile ?? 'UNKNOWN'
     expect(persistedProfile).toBe(result.profile)
 
-    // buildModelList consumes the same persisted profile (no electron needed).
+    // buildModelList consumes the same persisted profile + machine RAM, exactly like
+    // the production listModels wiring — the RAM-best-fit recommendation must agree
+    // with the benchmark's (same rule, same whole-GB rounding).
     const dir = resolveManifestsDir(process.cwd())!
     const { models } = await buildModelList({
       manifestsDir: dir,
       rootPath: workspace(),
       profile: persistedProfile,
-      developerMode: true
+      developerMode: true,
+      machineRamGb: Math.round(result.ramGb)
     })
     const recommended = models.filter((m) => m.recommended).map((m) => m.id)
     if (result.recommendedModelId) {

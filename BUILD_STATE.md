@@ -531,6 +531,25 @@ Repo root: `f:\_coding\ai_drive`.
      llama-server holds recent prompts in its KV cache), THEN `workspace.lock()` — a wedged
      sidecar never blocks the re-encrypt. Unlock restarts the chat runtime via the existing
      `maybeAutoStartActiveModel`; the embedder restarts lazily on next `embed()`.
+- **Post-MVP UX polish round 3 (2026-06-10):**
+  1. **RAM gate + RAM-best-fit recommendation:** `machineRamGb()` (totalmem, **whole-GB
+     `Math.round`** so a "16 GB" machine reading 15.9 GiB still counts as 16) feeds
+     `buildModelList` → new `ModelInfo.insufficientRam` (min RAM > machine RAM). UI: a
+     "Needs ≥N GB RAM" badge + disabled Select/Start (§11.4 copy: "pick a smaller model —
+     quality stays great"); MAIN gate: `startModelRuntime` refuses to load INSTALLED weights
+     that don't fit (mock fallback ungated — uses no real RAM). **Recommendation is now
+     RAM-best-fit** (`recommendModelIdByRam`): largest model whose `recommended_ram_gb` fits,
+     else lightest meeting its minimum, else none — used by `listModels` AND the benchmark
+     (same whole-GB rounding ⇒ the surfaces can never disagree); profile-table lookup stays
+     as the no-RAM fallback. `AppStatus.machineRamGb` added (badge copy).
+  2. **Read-only in-app document preview:** new `extractDocumentPreview` + `previewDocument`
+     IPC (`docs:preview`) + a Documents-screen modal. RE-PARSES the stored copy (chunks
+     overlap ~80 tokens — concatenating them duplicates boundary text); falls back to the
+     original file if the copy is gone. Encrypted workspaces decrypt to a transient
+     `.parse-preview` file shredded on the way out (the `.parse` infix keeps it under the
+     startup crash sweep); without a cipher an `.enc` copy is refused. Deliberately TEXT-only
+     (never `shell.openPath`): the original bytes must never reach an external viewer in
+     plaintext. Tested: ingestion + encrypted-leak tests + renderer modal tests.
 - **Doc lifecycle: finished plans become design records (2026-06-10):** implemented plan docs
   are condensed to short design records (decisions + load-bearing facts + the design as built)
   or deleted, with the full original in git history — finished plans otherwise drift and
@@ -577,8 +596,8 @@ Wired so far: core (Phase 1) + `listModels`/`selectModel`/`startRuntime`/`stopRu
 spec §7.6 export + §7.11 Diagnostics) + `getRuntimeInstall` (`runtime:install`, Phase 16) +
 `tryGpuAgain` (`gpu:try-again`, GPU audit round) + the `runtime:notice` main→renderer event
 channel (Phase 15, `EVENTS.runtimeNotice`, preload `onRuntimeNotice`) +
-`deleteConversation` (`chat:deleteConversation`) and `verifyModel` (`models:verify`) from the
-post-MVP UX polish round.
+`deleteConversation` (`chat:deleteConversation`), `verifyModel` (`models:verify`) and
+`previewDocument` (`docs:preview`) from the post-MVP UX polish rounds.
 (`pickDocuments` + `reindexDocument` are Phase-4 additions to the `IPC` registry beyond the spec
 §9.1 list — picker + re-index UX; `getPolicy` is a Phase-8 addition; the four `workspace:*` channels
 are Phase-9 additions.) `createConversation` now also accepts an optional `mode`

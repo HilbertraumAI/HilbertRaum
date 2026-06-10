@@ -70,10 +70,17 @@ the whole DB file is encrypted at rest.
   **once ever**, not once per session. A size/mtime change re-hashes; the Models screen's
   **Verify checksum** button calls the `verifyModel` IPC, which drops the cache entry and re-hashes
   for real. The ship-time gates (`verify-models --strict`, `assertCommercialDrive`) always hash fully.
-- **Recommendation** is data-driven: each manifest lists `recommended_profiles`; the picker returns
-  the first chat/embedding model matching the current hardware profile. The profile comes from the
-  persisted Phase-7 benchmark (`lastBenchmark?.profile`), defaulting to `UNKNOWN` until the user runs
-  a benchmark.
+- **Recommendation is RAM-best-fit (post-MVP).** `recommendModelIdByRam(manifests, ramGb)` picks the
+  LARGEST model whose comfortable RAM (`recommended_ram_gb`) fits this machine; if nothing fits
+  comfortably, the lightest model meeting its minimum; else none. Used by `listModels` (live
+  `machineRamGb()` = `totalmem` rounded to whole GB) and by the benchmark (same rounding, so the two
+  surfaces always agree). The legacy `recommended_profiles` lookup remains the fallback when RAM is
+  unknown.
+- **RAM gate (post-MVP).** `buildModelList` flags `insufficientRam` on models whose
+  `recommended_min_ram_gb` exceeds the machine RAM; the Models screen disables Select/Start and
+  shows a "Needs ≥N GB RAM" badge, and `startModelRuntime` refuses to load installed weights that
+  don't fit (friendly §11.4 copy — the zero-weights mock fallback is not gated). Rounding is
+  `Math.round`, so a "16 GB" machine reporting 15.9 GiB still counts as 16.
 - **`services/runtime/`** defines the `ModelRuntime` interface and a `RuntimeManager` that owns the
   single active runtime and restarts it on model switch. `MockRuntime` returns healthy immediately;
   its `chatStream` is a stub until Phase 3, and the real `LlamaRuntime` (localhost-only sidecar)
@@ -149,6 +156,13 @@ the whole DB file is encrypted at rest.
   is in-memory via `getImportJob`. The renderer (Documents screen) polls while a job runs.
 - **Parser libs are external** (`externalizeDepsPlugin` in `electron.vite.config.ts`) so the
   large pdfjs ESM bundle is `require`/`import`-ed from `node_modules`, not bundled (R3).
+- **Read-only preview (post-MVP).** `extractDocumentPreview` re-parses the stored copy on demand and
+  returns the parser's text segments (page/section labels intact) for an in-app modal. It re-parses
+  rather than reading `chunks` because chunks OVERLAP (~80 tokens) — concatenation would duplicate
+  text at every boundary. In an encrypted workspace the `.enc` copy is decrypted to a transient
+  `.parse-preview` working file and shredded on the way out (covered by the startup `.parse*` crash
+  sweep); the original bytes are never handed to an external viewer, which is why this is an in-app
+  TEXT preview and not a `shell.openPath`.
 - **IPC** (`ipc/registerDocsIpc.ts`): `pickDocuments`, `importDocuments`, `getImportJob`,
   `listDocuments`, `deleteDocument`, `reindexDocument`. Full pipeline detail lives in
   [`rag-design.md`](rag-design.md).

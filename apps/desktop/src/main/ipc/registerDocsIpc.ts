@@ -2,12 +2,13 @@ import { randomUUID } from 'node:crypto'
 import { BrowserWindow, dialog, ipcMain } from 'electron'
 import { IPC } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
-import type { DocumentInfo, ImportJob, ImportJobStatus } from '../../shared/types'
+import type { DocumentInfo, DocumentPreview, ImportJob, ImportJobStatus } from '../../shared/types'
 import {
   createQueuedDocument,
   deleteDocument,
   documentsDir,
   expandPaths,
+  extractDocumentPreview,
   listDocuments,
   processDocument,
   reconcileStuckDocuments,
@@ -160,6 +161,19 @@ export function registerDocsIpc(ctx: AppContext): void {
     requireNotProcessing(documentId)
     log.info('Delete document', { documentId })
     deleteDocument(ctx.db, documentId)
+  })
+
+  // Read-only in-app preview (post-MVP): re-extracts the stored copy's text. Guarded
+  // against racing an in-flight ingestion of the same document (it rewrites the stored
+  // copy); in an encrypted workspace the transient decrypted file is shredded inside
+  // the service. Nothing is written to the DB and no external viewer ever sees bytes.
+  ipcMain.handle(IPC.previewDocument, async (_e, documentId: string): Promise<DocumentPreview> => {
+    requireUnlocked()
+    requireNotProcessing(documentId)
+    log.info('Preview document', { documentId })
+    return extractDocumentPreview(ctx.db, storeDir, documentId, {
+      cipher: ctx.workspace.documentCipher()
+    })
   })
 
   ipcMain.handle(IPC.reindexDocument, async (_e, documentId: string): Promise<DocumentInfo> => {

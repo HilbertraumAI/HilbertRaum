@@ -10,11 +10,13 @@ import {
   sha256File,
   verifyChecksum,
   computeInstallState,
+  buildModelList,
   clearChecksumCache,
   checksumCacheStats,
   createSettingsHashStore,
   invalidateChecksum,
   recommendModelId,
+  recommendModelIdByRam,
   discoverManifests,
   selectModel,
   resolveManifestsDir,
@@ -287,6 +289,97 @@ describe('recommendModelId', () => {
   })
   it('returns null when nothing matches', () => {
     expect(recommendModelId(all, 'BALANCED', 'chat')).toBe(null)
+  })
+})
+
+// Post-MVP: "which model do we recommend?" is a RAM question first. Best fit = the
+// LARGEST model that runs comfortably (recommended_ram_gb fits); if nothing fits
+// comfortably, the lightest model that at least meets its minimum; else null.
+describe('recommendModelIdByRam', () => {
+  const small = asManifest({
+    id: 'small',
+    size_on_disk_gb: 2.7,
+    recommended_min_ram_gb: 8,
+    recommended_ram_gb: 16
+  })
+  const medium = asManifest({
+    id: 'medium',
+    size_on_disk_gb: 5.5,
+    recommended_min_ram_gb: 16,
+    recommended_ram_gb: 32
+  })
+  const large = asManifest({
+    id: 'large',
+    size_on_disk_gb: 9.5,
+    recommended_min_ram_gb: 32,
+    recommended_ram_gb: 64
+  })
+  const embed = asManifest({
+    id: 'embed',
+    role: 'embeddings',
+    recommended_min_ram_gb: 4,
+    recommended_ram_gb: 8
+  })
+  const all = [small, medium, large, embed]
+
+  it('picks the largest model that fits comfortably', () => {
+    expect(recommendModelIdByRam(all, 64)).toBe('large')
+    expect(recommendModelIdByRam(all, 32)).toBe('medium')
+    expect(recommendModelIdByRam(all, 16)).toBe('small')
+  })
+
+  it('falls back to the lightest runnable model when nothing fits comfortably', () => {
+    // 8 GB: no chat model has recommended_ram_gb <= 8, but small's minimum (8) is met.
+    expect(recommendModelIdByRam(all, 8)).toBe('small')
+  })
+
+  it('returns null when not even the minimum fits, or RAM is unknown', () => {
+    expect(recommendModelIdByRam(all, 4)).toBe(null)
+    expect(recommendModelIdByRam(all, 0)).toBe(null)
+    expect(recommendModelIdByRam(all, Number.NaN)).toBe(null)
+  })
+
+  it('scopes to the requested role', () => {
+    expect(recommendModelIdByRam(all, 64, 'embeddings')).toBe('embed')
+  })
+})
+
+describe('buildModelList — RAM gate', () => {
+  function manifestsDirWith(...objs: Array<Record<string, unknown>>): string {
+    const dir = tempDir('paid-manifests-')
+    for (const [i, o] of objs.entries()) writeFileSync(join(dir, `m${i}.yaml`), stringify(o))
+    return dir
+  }
+
+  it('flags models above the machine RAM and recommends the best RAM fit', async () => {
+    const dir = manifestsDirWith(
+      manifestObj({ id: 'fits', recommended_min_ram_gb: 8, recommended_ram_gb: 16 }),
+      manifestObj({ id: 'too-big', recommended_min_ram_gb: 64, recommended_ram_gb: 128 })
+    )
+    const { models } = await buildModelList({
+      manifestsDir: dir,
+      rootPath: tempDir('paid-root-'),
+      profile: 'UNKNOWN',
+      developerMode: true,
+      machineRamGb: 16
+    })
+    const byId = Object.fromEntries(models.map((m) => [m.id, m]))
+    expect(byId['fits'].insufficientRam).toBe(false)
+    expect(byId['fits'].recommended).toBe(true) // RAM best fit, despite UNKNOWN profile
+    expect(byId['too-big'].insufficientRam).toBe(true)
+    expect(byId['too-big'].recommended).toBe(false)
+  })
+
+  it('keeps the legacy profile-based behavior when machine RAM is not provided', async () => {
+    const dir = manifestsDirWith(manifestObj({ id: 'lite-model', recommended_profiles: ['LITE'] }))
+    const { models } = await buildModelList({
+      manifestsDir: dir,
+      rootPath: tempDir('paid-root-'),
+      profile: 'LITE',
+      developerMode: true
+    })
+    expect(models[0].recommended).toBe(true)
+    expect(models[0].insufficientRam).toBe(false)
   })
 })
 

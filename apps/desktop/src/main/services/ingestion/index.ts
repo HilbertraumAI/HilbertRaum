@@ -9,7 +9,7 @@ import {
 } from 'node:fs'
 import { basename, extname, join } from 'node:path'
 import type { Db } from '../db'
-import type { DocumentInfo, IngestionStatus } from '../../../shared/types'
+import type { DocumentInfo, DocumentPreview, IngestionStatus } from '../../../shared/types'
 import { sha256File } from '../models'
 import { type Embedder, encodeVector } from '../embeddings'
 import { shredFile, type DocumentCipher } from '../workspace-vault'
@@ -355,6 +355,66 @@ async function embedChunks(
   for (let i = 0; i < rows.length; i++) {
     const vec = vectors[i]
     insert.run(rows[i].id, embeddingModelId, encodeVector(vec), vec.length, created)
+  }
+}
+
+/**
+ * Read-only in-app preview (post-MVP): re-extract the document's text segments from the
+ * self-contained stored copy (falling back to the original file if the copy is gone).
+ * Re-parses instead of reading the `chunks` table because chunks OVERLAP (~80 tokens) —
+ * concatenating them would duplicate text at every boundary. In an encrypted workspace
+ * the stored `.enc` copy is decrypted to a transient working file that is shredded on
+ * the way out (same pattern as re-indexing; the `.parse` infix keeps it covered by the
+ * startup `shredStalePlaintext` crash sweep). Never writes to the DB; the plaintext
+ * never leaves the main process except as extracted text over IPC.
+ */
+export async function extractDocumentPreview(
+  db: Db,
+  storeDir: string,
+  documentId: string,
+  deps: Pick<IngestionDeps, 'cipher'> = {}
+): Promise<DocumentPreview> {
+  const row = getRow(db, documentId)
+  if (!row) throw new Error(`Unknown document: ${documentId}`)
+  const parser = selectParser(row.title)
+  if (!parser) {
+    throw new Error(`Unsupported file type: ${extname(row.title) || '(none)'}`)
+  }
+
+  const cipher = deps.cipher ?? null
+  const transients: string[] = []
+  try {
+    let parseSource: string
+    if (row.stored_path && existsSync(row.stored_path)) {
+      if (cipher && row.stored_path.endsWith(ENCRYPTED_DOC_SUFFIX)) {
+        const ext = extname(row.title).toLowerCase()
+        parseSource = join(storeDir, `${documentId}.parse-preview${ext}`)
+        cipher.decryptFile(row.stored_path, parseSource)
+        transients.push(parseSource)
+      } else if (!cipher && row.stored_path.endsWith(ENCRYPTED_DOC_SUFFIX)) {
+        throw new Error('This document is encrypted; unlock the workspace to preview it.')
+      } else {
+        parseSource = row.stored_path
+      }
+    } else if (row.original_path && existsSync(row.original_path)) {
+      parseSource = row.original_path
+    } else {
+      throw new Error('The document file is no longer on disk. Re-import it to preview.')
+    }
+
+    const parsed = await parser.parse(parseSource)
+    return {
+      id: row.id,
+      title: row.title,
+      mimeType: row.mime_type,
+      segments: parsed.segments.map((s) => ({
+        text: s.text,
+        pageNumber: s.pageNumber ?? null,
+        sectionLabel: s.sectionLabel ?? null
+      }))
+    }
+  } finally {
+    for (const t of transients) shredFile(t)
   }
 }
 

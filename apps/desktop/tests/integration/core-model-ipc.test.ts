@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { stringify } from 'yaml'
 
 // IPC-layer tests for registerCoreIpc + registerModelIpc: the locked-workspace network
 // fallback (the offline ceiling must hold pre-unlock, when allowNetwork is unreadable) and
@@ -211,6 +212,49 @@ describe('registerModelIpc', () => {
     registerModelIpc(ctx)
     await expect(invoke(handlers, IPC.startRuntime, 'multilingual-e5-small-q8')).rejects.toThrow(
       /not a chat model/
+    )
+  })
+
+  // Post-MVP RAM gate: installed weights that exceed this machine's memory are refused
+  // with a friendly error (the UI also disables the buttons; this guards auto-start and
+  // non-UI callers). The mock fallback (missing weights) is NOT gated — it uses no RAM.
+  it('startRuntime refuses installed weights that need more RAM than this machine has', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'paid-ramgate-'))
+    const manifestsDir = join(root, 'model-manifests')
+    mkdirSync(manifestsDir, { recursive: true })
+    writeFileSync(
+      join(manifestsDir, 'huge.yaml'),
+      stringify({
+        id: 'huge-model',
+        display_name: 'Huge Model',
+        family: 'qwen3',
+        role: 'chat',
+        format: 'gguf',
+        runtime: 'llama_cpp',
+        license: 'apache-2.0',
+        size_on_disk_gb: 999,
+        recommended_min_ram_gb: 9999, // no real machine passes
+        recommended_ram_gb: 9999,
+        recommended_context_tokens: 4096,
+        local_path: 'models/chat/huge.gguf',
+        sha256: 'REPLACE_WITH_REAL_HASH',
+        recommended_profiles: ['PRO'],
+        license_review: { status: 'pending', reviewed_by: null, reviewed_at: null, notes: '' }
+      })
+    )
+    mkdirSync(join(root, 'models', 'chat'), { recursive: true })
+    writeFileSync(join(root, 'models', 'chat', 'huge.gguf'), 'weights') // present → installed (dev leniency)
+
+    const ctx = {
+      db: seededDb(),
+      manifestsDir,
+      paths: { rootPath: root, configPath: bogusConfigDir() },
+      isDev: true,
+      runtime: { start: async () => ({}), activeModelId: () => null }
+    } as unknown as AppContext
+    registerModelIpc(ctx)
+    await expect(invoke(handlers, IPC.startRuntime, 'huge-model')).rejects.toThrow(
+      /needs at least 9999 GB RAM/
     )
   })
 
