@@ -35,6 +35,10 @@ export function updateSettings(db: Db, patch: Partial<AppSettings>): AppSettings
     if (!(key in DEFAULT_SETTINGS)) continue
     const def = (DEFAULT_SETTINGS as unknown as Record<string, unknown>)[key]
     if (def !== null && value !== null && typeof value !== typeof def) continue
+    // Enum-valued keys get an exact-value check (a renderer bug must not persist junk
+    // like `gpuMode: 'banana'` — readers treat anything !== 'auto' as off, which fails
+    // safe, but junk must not be stored either).
+    if (key === 'gpuMode' && value !== 'auto' && value !== 'off') continue
     upsert.run(key, JSON.stringify(value), now)
   }
   return getSettings(db)

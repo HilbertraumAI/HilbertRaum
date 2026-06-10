@@ -13,7 +13,7 @@
 
   Mirrors apps/desktop/src/main/services/assets.ts (selectRuntimeBuild /
   planRuntimeDownload / runtimeInstallCurrent). Self-contained: needs no Node/npm.
-  DEFAULT BACKEND = the FIRST build listed per OS in runtime-sources.yaml — since
+  DEFAULT BACKEND = the FIRST build listed per OS in runtime-sources.yaml -- since
   Phase 14 that is the Vulkan full build on win/linux (contains every CPU backend;
   degrades to CPU on GPU-less machines) and Metal on mac. -Backend cpu fetches the
   pure-CPU safety net into <os>/cpu/.
@@ -71,7 +71,7 @@ if (-not (Test-Path $SourcesFile)) {
 
 # Host detection (PS 5.1 is always Windows; $IsWindows exists only on PS Core).
 # When -Os is explicitly overridden but -Arch is not, we are cross-provisioning another
-# OS's dir — the host arch is meaningless there, so we take that OS's first build instead.
+# OS's dir -- the host arch is meaningless there, so we take that OS's first build instead.
 $OsExplicit = [bool]$Os
 $ArchExplicit = [bool]$Arch
 if (-not $Os) {
@@ -80,7 +80,7 @@ if (-not $Os) {
   } else { $Os = 'win' }
 }
 if (-not $Arch) {
-  # PROCESSOR_ARCHITECTURE reports the (possibly emulated) PROCESS arch — an x64
+  # PROCESSOR_ARCHITECTURE reports the (possibly emulated) PROCESS arch -- an x64
   # PowerShell on ARM64 Windows says AMD64. PROCESSOR_ARCHITEW6432 reveals the real OS
   # arch under WOW emulation.
   $procArch = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
@@ -95,8 +95,8 @@ $current = $null
 foreach ($raw in $lines) {
   $line = $raw.TrimEnd()
   if ($line -match '^\s*#') { continue }
-  # Strip inline YAML comments (whitespace + '#' + rest) before unquoting (M17) — the
-  # committed `version: b9196   # PLACEHOLDER …` used to leak the comment into the value.
+  # Strip inline YAML comments (whitespace + '#' + rest) before unquoting (M17) -- the
+  # committed `version: b9196   # PLACEHOLDER ...` used to leak the comment into the value.
   if (-not $version -and $line -match '^\s*version\s*:\s*(.+?)\s*$') {
     $version = ($Matches[1] -replace '\s+#.*$', '').Trim().Trim('"').Trim("'"); continue
   }
@@ -113,7 +113,8 @@ if ($current) { $builds += $current }
 
 if (-not $version) { Write-Error 'runtime-sources.yaml: missing llama_cpp.version'; exit 2 }
 
-# --- Select the build (os + arch [+ backend]); default = first os/arch match (CPU).
+# --- Select the build (os + arch [+ backend]); default = first os/arch match
+# (vulkan on win/linux, metal on mac since Phase 14).
 # Explicit -Os without -Arch = cross-provisioning: take that OS's first build (any arch).
 if ($OsExplicit -and -not $ArchExplicit) {
   $candidates = $builds | Where-Object { $_.os -eq $Os }
@@ -139,7 +140,7 @@ foreach ($required in @('url', 'sha256', 'extract_to')) {
 
 # Escape guard (M18): runtime-sources.yaml on the DRIVE is user-writable; a tampered
 # extract_to must not be able to write outside the drive root (TS planRuntimeDownload
-# already rejects this — mirror it).
+# already rejects this -- mirror it).
 if ($build.extract_to -match '\.\.' -or $build.extract_to -match '^[/\\]' -or $build.extract_to -match '^[A-Za-z]:') {
   Write-Error "runtime-sources.yaml: extract_to escapes the drive root: $($build.extract_to)"
   exit 2
@@ -208,6 +209,16 @@ if (& $IsRealSha $sha) {
   Write-Host "  archive UNVERIFIED (placeholder hash) -- verify after a real release bump" -ForegroundColor Yellow
 }
 
+# Remove the previous install (if any) BEFORE extracting. Extraction over an existing
+# build must never mix files from two builds -- and on the nesting mac/linux tarballs a
+# stale root llama-server would satisfy the flatten guard below, leaving the OLD binary
+# in place while a fresh marker claims the new build (audit fix: the cpu->vulkan upgrade
+# path). The cpu/ safety net and the just-downloaded archive survive; the stale marker
+# dies with the old build, so a failed extraction cannot leave a lying marker behind.
+Get-ChildItem -Path $extractTo -Force |
+  Where-Object { $_.Name -ne $archiveName -and $_.Name -ne 'cpu' } |
+  Remove-Item -Recurse -Force
+
 if ($archiveName -match '\.(tar\.gz|tgz)$') {
   # bsdtar (tar.exe) ships with Windows 10 1803+ and handles .tar.gz natively.
   # NOTE: EAP must be Continue around native stderr redirects (PS 5.1 wraps redirected
@@ -260,7 +271,7 @@ if (-not (Test-Path $binaryPath)) {
   # must not mistake the safety net for the freshly extracted nested binary.
   $cpuSubdir = Join-Path $rootFull 'cpu'
   $found = Get-ChildItem -Path $extractTo -Recurse -File -Filter $binaryName -ErrorAction SilentlyContinue |
-    Where-Object { -not $_.FullName.StartsWith($cpuSubdir + [IO.Path]::DirectorySeparatorChar) } |
+    Where-Object { -not $_.FullName.StartsWith($cpuSubdir + [IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase) } |
     Select-Object -First 1
   if ($found) {
     $srcFull = [System.IO.Path]::GetFullPath($found.DirectoryName).TrimEnd('\', '/')

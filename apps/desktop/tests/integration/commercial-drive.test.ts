@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { createHash } from 'node:crypto'
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -297,18 +297,24 @@ describe('assertCommercialDrive', () => {
       return res.sources
     }
 
-    function writeMarkers(root: string): void {
-      const win = join(root, 'runtime', 'llama.cpp', 'win')
-      mkdirSync(join(win, 'cpu'), { recursive: true })
-      writeRuntimeMarker(win, { version: 'b9585', backend: 'vulkan', os: 'win', arch: 'x64' })
-      writeRuntimeMarker(join(win, 'cpu'), { version: 'b9585', backend: 'cpu', os: 'win', arch: 'x64' })
+    /** A marker alone is not an install (audit fix): write the binary too. */
+    function writeInstall(dir: string, marker: Parameters<typeof writeRuntimeMarker>[1]): void {
+      mkdirSync(dir, { recursive: true })
+      writeFileSync(join(dir, 'llama-server.exe'), 'fake-binary')
+      writeRuntimeMarker(dir, marker)
     }
 
-    it('passes when every pinned build has a matching marker', async () => {
+    function writeInstalls(root: string): void {
+      const win = join(root, 'runtime', 'llama.cpp', 'win')
+      writeInstall(win, { version: 'b9585', backend: 'vulkan', os: 'win', arch: 'x64' })
+      writeInstall(join(win, 'cpu'), { version: 'b9585', backend: 'cpu', os: 'win', arch: 'x64' })
+    }
+
+    it('passes when every pinned build has a binary + matching marker', async () => {
       const root = tempDir('paid-commercial-rt-ok-')
       writePolicy(root, buildPolicyJson())
       const chat = writeVerifiedWeight(root, 'chat', 'models/chat/qwen.gguf', 'chat-weights')
-      writeMarkers(root)
+      writeInstalls(root)
       const res = await assertCommercialDrive(root, [chat], sources())
       expect(res.ok).toBe(true)
       expect(res.checks.runtimeCurrent).toBe(true)
@@ -318,21 +324,32 @@ describe('assertCommercialDrive', () => {
       const root = tempDir('paid-commercial-rt-missing-')
       writePolicy(root, buildPolicyJson())
       const chat = writeVerifiedWeight(root, 'chat', 'models/chat/qwen.gguf', 'chat-weights')
-      // Only the win default marker, no cpu safety-net marker.
-      const win = join(root, 'runtime', 'llama.cpp', 'win')
-      mkdirSync(win, { recursive: true })
-      writeRuntimeMarker(win, { version: 'b9585', backend: 'vulkan', os: 'win', arch: 'x64' })
+      // Both binaries present, but only the win default has a marker.
+      writeInstalls(root)
+      rmSync(join(root, 'runtime', 'llama.cpp', 'win', 'cpu', '.paid-runtime.json'))
       const res = await assertCommercialDrive(root, [chat], sources())
       expect(res.ok).toBe(false)
       expect(res.checks.runtimeCurrent).toBe(false)
       expect(res.problems.some((p) => /\.paid-runtime\.json/.test(p))).toBe(true)
     })
 
+    it('fails when a marker exists but the binary is missing (half-deleted install)', async () => {
+      const root = tempDir('paid-commercial-rt-nobin-')
+      writePolicy(root, buildPolicyJson())
+      const chat = writeVerifiedWeight(root, 'chat', 'models/chat/qwen.gguf', 'chat-weights')
+      writeInstalls(root)
+      rmSync(join(root, 'runtime', 'llama.cpp', 'win', 'llama-server.exe'))
+      const res = await assertCommercialDrive(root, [chat], sources())
+      expect(res.ok).toBe(false)
+      expect(res.checks.runtimeCurrent).toBe(false)
+      expect(res.problems.some((p) => /binary missing/.test(p))).toBe(true)
+    })
+
     it('fails when a marker is STALE (CPU-era build under the vulkan pin)', async () => {
       const root = tempDir('paid-commercial-rt-stale-')
       writePolicy(root, buildPolicyJson())
       const chat = writeVerifiedWeight(root, 'chat', 'models/chat/qwen.gguf', 'chat-weights')
-      writeMarkers(root)
+      writeInstalls(root)
       // Overwrite the win default marker with a cpu-era install.
       writeRuntimeMarker(join(root, 'runtime', 'llama.cpp', 'win'), {
         version: 'b9585',

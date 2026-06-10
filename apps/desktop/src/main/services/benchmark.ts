@@ -78,9 +78,9 @@ export function detectSystem(): SystemInfo {
   } catch {
     /* keep default */
   }
-  // GPU detection is best-effort. A reliable, cross-platform, network-free and
-  // native-dep-free probe does not exist, so we report null (a missing GPU must
-  // never throw and never blocks a benchmark). Real probing can land with Phase 10.
+  // GPU detection stays out of this module (zero `child_process` — see header): the
+  // real probe (`runtime/gpu.ts` `--list-devices`, Phase 16) runs in the IPC layer and
+  // is INJECTED via `RunBenchmarkDeps.gpu`; detectSystem itself always reports null.
   return { os, arch, cpuModel, cpuCores, ramGb, gpu: null }
 }
 

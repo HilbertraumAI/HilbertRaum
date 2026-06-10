@@ -1,7 +1,7 @@
 import { ipcMain } from 'electron'
 import { IPC } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
-import type { BenchmarkResult, GpuDevice } from '../../shared/types'
+import type { AppSettings, BenchmarkResult, GpuDevice } from '../../shared/types'
 import { runBenchmark, type GpuBenchmarkInput } from '../services/benchmark'
 import { gpuUsefulForProfile } from '../services/runtime/gpu'
 import { resolveLlamaServerPath } from '../services/runtime/sidecar'
@@ -72,7 +72,14 @@ export async function runAndPersistBenchmark(ctx: AppContext): Promise<Benchmark
 export function maybeRunFirstBenchmark(ctx: AppContext): void {
   try {
     if (!ctx.workspace.isUnlocked()) return
-    if (getSettings(ctx.db).lastBenchmark !== null) return
+    if (getSettings(ctx.db).lastBenchmark !== null) {
+      // Already benchmarked — still refresh the persisted GPU probe for THIS
+      // machine/session in the background (audit fix: a drive moved between machines
+      // kept showing the previous machine's GPU in Diagnostics until a manual
+      // re-benchmark; pre-GPU-era workspaces never got `gpuProbe` populated at all).
+      void probeAndPersistGpu(ctx)
+      return
+    }
   } catch {
     return // settings unreadable (e.g. just locked again) — a manual run still works
   }
@@ -82,6 +89,20 @@ export function maybeRunFirstBenchmark(ctx: AppContext): void {
   )
 }
 
+/**
+ * "Try GPU again" (Diagnostics, audit fix): clearing the flags alone is not enough —
+ * a probe that timed out once (cold/wedged driver) stays cached for the session and
+ * would keep labeling a now-working GPU machine as CPU. Invalidate the cache, clear
+ * the flags, re-probe + persist, and hand the renderer the fresh settings.
+ */
+export async function tryGpuAgain(ctx: AppContext): Promise<AppSettings> {
+  ctx.probeGpu?.invalidate?.()
+  updateSettings(ctx.db, { gpuAutoDisabled: false, gpuLastError: null })
+  await probeAndPersistGpu(ctx)
+  return getSettings(ctx.db)
+}
+
 export function registerBenchmarkIpc(ctx: AppContext): void {
   ipcMain.handle(IPC.runBenchmark, (): Promise<BenchmarkResult> => runAndPersistBenchmark(ctx))
+  ipcMain.handle(IPC.tryGpuAgain, (): Promise<AppSettings> => tryGpuAgain(ctx))
 }

@@ -35,6 +35,11 @@ export const IPC = {
   askDocuments: 'rag:ask',
   // Phase 7
   runBenchmark: 'benchmark:run',
+  /**
+   * "Try GPU again" (Phase 16 + audit fix): clears `gpuAutoDisabled`/`gpuLastError`,
+   * invalidates the session probe cache, re-probes + persists, returns fresh settings.
+   */
+  tryGpuAgain: 'gpu:try-again',
   // Phase 13 — non-technical first-run launch preflight
   runPreflight: 'preflight:run',
   // Phase 9 — encrypted workspace lifecycle

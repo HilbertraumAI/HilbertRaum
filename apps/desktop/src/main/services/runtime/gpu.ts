@@ -53,7 +53,18 @@ export function parseListDevices(stdout: string): GpuDevice[] {
  * positive only costs a too-small recommendation, never a too-big one.
  */
 export function looksIntegrated(name: string): boolean {
-  return /iris|uhd|intel\(r\) (hd|arc.*integrated)|radeon.*graphics$|vega \d+$/i.test(name)
+  // Patterns cover the names real Vulkan drivers report (audit fix — the original
+  // plan-§8 regex missed Linux/RADV APUs and Meteor-Lake Intel):
+  //   - "Intel(R) Iris(R) Xe Graphics", "Intel(R) UHD Graphics 770", "Intel(R) HD ..."
+  //   - "Intel(R) Arc(TM) Graphics"          (Meteor/Lunar-Lake iGPU — NO model number;
+  //     discrete is "Arc(TM) A770 Graphics" and must NOT match)
+  //   - "AMD Radeon(TM) Graphics" / "AMD Radeon Graphics (RADV REMBRANDT)"  (APUs)
+  //   - "AMD Radeon(TM) 780M Graphics" and other "...Graphics"-suffixed APU names
+  //   - "AMD Radeon Vega 8 Graphics", "Vega 11" APUs (also catches old discrete
+  //     RX Vega 56/64 — an accepted false positive; see the bias note above)
+  return /iris|uhd|intel\(r\) (hd|arc.*integrated)|arc\(tm\) graphics|radeon(\(tm\))? graphics|radeon.*graphics$|vega \d+/i.test(
+    name
+  )
 }
 
 /** Minimum dedicated VRAM (MiB) before a GPU may bump the hardware profile (§8). */
@@ -114,22 +125,34 @@ export function probeGpuDevices(binPath: string, deps: GpuProbeDeps = {}): Promi
       stdout += String(chunk)
     })
     child.once('error', () => finish([]))
-    child.once('exit', (code: unknown) => {
+    // Resolve on 'close', not 'exit': 'exit' can fire while probe output is still
+    // buffered in the pipe (Node delivers it afterwards), which would truncate the
+    // parse into a false-empty device list. 'close' fires only after stdio drained.
+    child.once('close', (code: unknown) => {
       finish(code === 0 ? parseListDevices(stdout) : [])
     })
   })
 }
 
+/** The session probe cache: callable like `probeGpuDevices`, plus invalidation. */
+export interface CachedGpuProbe {
+  (binPath: string): Promise<GpuDevice[]>
+  /**
+   * Drop every cached result so the next call re-probes. Wired to "Try GPU again"
+   * (audit fix): a probe that timed out once (cold/wedged driver) must not stay
+   * cached as "no GPU" after the user explicitly asks for a retry.
+   */
+  invalidate(): void
+}
+
 /**
  * Session-cached probe: at most one real `--list-devices` subprocess per binary per app
- * session (§5.1 "cached"). The same cached fn feeds the start ladder, Diagnostics, and
- * the benchmark injection so they never disagree within a session.
+ * session (§5.1 "cached"), until `invalidate()`. The same cached fn feeds the start
+ * ladder, Diagnostics, and the benchmark injection so they never disagree in-session.
  */
-export function createCachedGpuProbe(
-  deps: GpuProbeDeps = {}
-): (binPath: string) => Promise<GpuDevice[]> {
+export function createCachedGpuProbe(deps: GpuProbeDeps = {}): CachedGpuProbe {
   const cache = new Map<string, Promise<GpuDevice[]>>()
-  return (binPath: string) => {
+  const probe = (binPath: string): Promise<GpuDevice[]> => {
     let pending = cache.get(binPath)
     if (!pending) {
       pending = probeGpuDevices(binPath, deps)
@@ -137,4 +160,5 @@ export function createCachedGpuProbe(
     }
     return pending
   }
+  return Object.assign(probe, { invalidate: () => cache.clear() })
 }

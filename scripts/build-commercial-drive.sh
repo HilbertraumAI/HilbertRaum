@@ -167,21 +167,36 @@ if [[ $DRY_RUN -eq 0 ]]; then
   fi
 fi
 # Runtime-marker gate (assertCommercialDrive parity, Phase 14): every pinned sidecar
-# build must carry a .paid-runtime.json whose version matches runtime-sources.yaml — a
-# missing/stale marker means the drive ships the wrong build (e.g. a CPU-era binary
-# after the default moved to vulkan).
+# build must be PRESENT (binary) and carry a .paid-runtime.json whose version AND
+# backend match runtime-sources.yaml — a missing binary or a missing/stale marker means
+# the drive ships the wrong build (e.g. a CPU-era binary after the default moved to
+# vulkan, or a half-deleted install). The dir|backend list mirrors the committed yaml
+# pin; keep them in sync.
 if [[ $DRY_RUN -eq 0 ]]; then
   RT_SOURCES="$TARGET/model-manifests/runtime-sources.yaml"
   if [[ -f "$RT_SOURCES" ]]; then
     RT_VERSION="$(grep -v '^[[:space:]]*#' "$RT_SOURCES" | sed -n 's/^[[:space:]]*version[[:space:]]*:[[:space:]]*//p' | head -n1 | sed 's/[[:space:]][[:space:]]*#.*$//' | tr -d '"'"'"'' | sed 's/[[:space:]]*$//')"
-    for rt_dir in runtime/llama.cpp/win runtime/llama.cpp/win/cpu runtime/llama.cpp/mac runtime/llama.cpp/linux runtime/llama.cpp/linux/cpu; do
+    for rt_entry in \
+      "runtime/llama.cpp/win|vulkan|llama-server.exe" \
+      "runtime/llama.cpp/win/cpu|cpu|llama-server.exe" \
+      "runtime/llama.cpp/mac|metal|llama-server" \
+      "runtime/llama.cpp/linux|vulkan|llama-server" \
+      "runtime/llama.cpp/linux/cpu|cpu|llama-server"; do
+      rt_dir="${rt_entry%%|*}"
+      rt_rest="${rt_entry#*|}"
+      rt_backend="${rt_rest%%|*}"
+      rt_bin="${rt_rest#*|}"
       marker_file="$TARGET/$rt_dir/.paid-runtime.json"
-      if [[ ! -f "$marker_file" ]]; then
+      bin_file="$TARGET/$rt_dir/$rt_bin"
+      if [[ ! -f "$bin_file" ]]; then
+        PROBLEMS+=("runtime: $rt_bin missing under $rt_dir (re-run fetch-runtime)")
+      elif [[ ! -f "$marker_file" ]]; then
         PROBLEMS+=("runtime: no .paid-runtime.json install marker under $rt_dir (re-run fetch-runtime)")
-      elif [[ -n "$RT_VERSION" ]]; then
+      else
         m_version="$(sed -n 's/.*"version":"\([^"]*\)".*/\1/p' "$marker_file")"
-        if [[ "$m_version" != "$RT_VERSION" ]]; then
-          PROBLEMS+=("runtime: $rt_dir marker does not match the pinned version $RT_VERSION (re-run fetch-runtime)")
+        m_backend="$(sed -n 's/.*"backend":"\([^"]*\)".*/\1/p' "$marker_file")"
+        if [[ (-n "$RT_VERSION" && "$m_version" != "$RT_VERSION") || "$m_backend" != "$rt_backend" ]]; then
+          PROBLEMS+=("runtime: $rt_dir marker does not match the pinned $RT_VERSION/$rt_backend (re-run fetch-runtime)")
         fi
       fi
     done

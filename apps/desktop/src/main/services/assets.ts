@@ -111,7 +111,7 @@ export async function planModelDownloads(
 export interface RuntimeSelector {
   os: RuntimeOs
   arch: string
-  /** Optional backend override; default = the first (CPU) build for the os/arch. */
+  /** Optional backend override; default = the first build listed for the os/arch (vulkan/metal since Phase 14). */
   backend?: string
 }
 

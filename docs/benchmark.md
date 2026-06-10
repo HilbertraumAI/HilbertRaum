@@ -1,6 +1,7 @@
 # Hardware benchmark & model recommendation (Phase 7)
 
-_Last updated: 2026-06-09 — Phase 7 (updated Phase 10: real tokens/sec)._
+_Last updated: 2026-06-10 — Phase 7 (updated Phase 10: real tokens/sec; Phase 16 + GPU audit
+round: injected GPU probe, conservative profile bump, per-session probe refresh)._
 
 The benchmark answers the spec §11.1 questions — *can this machine run a model, which
 model, what context is safe, is the drive fast enough* — using **only local signals**. It
@@ -23,7 +24,10 @@ IPC: `runBenchmark()` (`benchmark:run`) in
    **injects** the summary into `runBenchmark` (`RunBenchmarkDeps.gpu: { name, useful }`).
    `benchmark.ts` itself keeps its **zero-`child_process` purity** — it never probes. The probe
    result is also persisted to `settings.gpuProbe` for Diagnostics. With no binary / no devices /
-   a failed probe, `gpu` stays `null` and nothing blocks.
+   a failed probe, `gpu` stays `null` and nothing blocks. The persisted probe is additionally
+   refreshed **once per session** in the background (even when a benchmark already exists), so a
+   drive moved to another machine re-labels itself; Diagnostics' "Try GPU again"
+   (`gpu:try-again` IPC) invalidates the session cache and re-probes immediately.
 3. **Drive speed** (`measureDriveSpeed`): writes a small temp file
    (`DRIVE_PROBE_BYTES = 8 MB` of random bytes) **inside the workspace**, times a sequential
    write (with `fsync`) then a read, and reports MB/s. The temp file is **always removed**

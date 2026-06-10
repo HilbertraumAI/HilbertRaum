@@ -189,9 +189,11 @@ if (-not $DryRun) {
   }
 }
 # Runtime-marker gate (assertCommercialDrive parity, Phase 14): every pinned sidecar
-# build must carry a .paid-runtime.json whose version matches runtime-sources.yaml --
-# a missing/stale marker means the drive ships the wrong build (e.g. a CPU-era binary
-# after the default moved to vulkan).
+# build must be PRESENT (binary) and carry a .paid-runtime.json whose version AND
+# backend match runtime-sources.yaml -- a missing binary or a missing/stale marker
+# means the drive ships the wrong build (e.g. a CPU-era binary after the default moved
+# to vulkan, or a half-deleted install). The dir/backend list mirrors the committed
+# yaml pin; keep them in sync.
 if (-not $DryRun) {
   $rtSources = Join-Path $Target 'model-manifests/runtime-sources.yaml'
   if (Test-Path $rtSources) {
@@ -202,15 +204,25 @@ if (-not $DryRun) {
         $rtVersion = ($Matches[1] -replace '\s+#.*$', '').Trim().Trim('"').Trim("'"); break
       }
     }
-    foreach ($rtDir in @('runtime/llama.cpp/win', 'runtime/llama.cpp/win/cpu', 'runtime/llama.cpp/mac', 'runtime/llama.cpp/linux', 'runtime/llama.cpp/linux/cpu')) {
+    foreach ($rt in @(
+      @{ dir = 'runtime/llama.cpp/win';       backend = 'vulkan'; bin = 'llama-server.exe' },
+      @{ dir = 'runtime/llama.cpp/win/cpu';   backend = 'cpu';    bin = 'llama-server.exe' },
+      @{ dir = 'runtime/llama.cpp/mac';       backend = 'metal';  bin = 'llama-server' },
+      @{ dir = 'runtime/llama.cpp/linux';     backend = 'vulkan'; bin = 'llama-server' },
+      @{ dir = 'runtime/llama.cpp/linux/cpu'; backend = 'cpu';    bin = 'llama-server' }
+    )) {
+      $rtDir = $rt.dir
       $markerFile = Join-Path $Target "$rtDir/.paid-runtime.json"
-      if (-not (Test-Path $markerFile)) {
+      $binFile = Join-Path $Target "$rtDir/$($rt.bin)"
+      if (-not (Test-Path $binFile)) {
+        $problems += "runtime: $($rt.bin) missing under $rtDir (re-run fetch-runtime)"
+      } elseif (-not (Test-Path $markerFile)) {
         $problems += "runtime: no .paid-runtime.json install marker under $rtDir (re-run fetch-runtime)"
-      } elseif ($rtVersion) {
+      } else {
         $marker = $null
         try { $marker = Get-Content -Path $markerFile -Raw | ConvertFrom-Json } catch {}
-        if (-not $marker -or $marker.version -ne $rtVersion) {
-          $problems += "runtime: $rtDir marker does not match the pinned version $rtVersion (re-run fetch-runtime)"
+        if (-not $marker -or ($rtVersion -and $marker.version -ne $rtVersion) -or $marker.backend -ne $rt.backend) {
+          $problems += "runtime: $rtDir marker does not match the pinned $rtVersion/$($rt.backend) (re-run fetch-runtime)"
         }
       }
     }

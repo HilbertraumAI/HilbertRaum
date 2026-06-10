@@ -58,9 +58,11 @@ export function DiagnosticsScreen(): JSX.Element {
   }, [refreshStatus])
 
   // "Try GPU again" (gpu-support-plan §8): clears the automatic compatibility-mode flag
-  // (e.g. after a graphics-driver update) WITHOUT touching the Settings toggle.
+  // (e.g. after a graphics-driver update) WITHOUT touching the Settings toggle. The
+  // dedicated IPC also invalidates the session probe cache + re-probes (audit fix —
+  // a plain settings write would keep a stale "no GPU" probe for the whole session).
   async function tryGpuAgain(): Promise<void> {
-    const next = await window.api.updateSettings({ gpuAutoDisabled: false, gpuLastError: null })
+    const next = await window.api.tryGpuAgain()
     setSettings(next)
   }
 
@@ -70,6 +72,9 @@ export function DiagnosticsScreen(): JSX.Element {
     try {
       const result = await window.api.runBenchmark()
       setBench(result)
+      // The benchmark re-probes + persists the GPU info — refresh so the
+      // Acceleration line reflects it without a manual "Refresh".
+      void refreshStatus()
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -114,12 +119,16 @@ export function DiagnosticsScreen(): JSX.Element {
           <div className="hint" style={{ marginTop: 8 }}>
             <p className="hint">
               Running in compatibility mode: responses use the CPU, which works on every
-              machine. If you have updated your graphics driver, you can try the graphics
-              card again.
+              machine.{' '}
+              {settings.gpuMode === 'auto'
+                ? 'If you have updated your graphics driver, you can try the graphics card again.'
+                : 'GPU acceleration is turned off in Settings — turn it back on there to use the graphics card again.'}
             </p>
-            <button className="btn sm" onClick={() => void tryGpuAgain()}>
-              Try GPU again
-            </button>
+            {settings.gpuMode === 'auto' && (
+              <button className="btn sm" onClick={() => void tryGpuAgain()}>
+                Try GPU again
+              </button>
+            )}
           </div>
         )}
         <button className="btn sm" onClick={() => void refreshStatus()}>

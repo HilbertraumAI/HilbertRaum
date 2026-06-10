@@ -3,7 +3,7 @@ import type { ResolvedPaths } from './workspace'
 import type { WorkspaceController } from './workspace-vault'
 import type { RuntimeManager } from './runtime'
 import type { Embedder } from './embeddings'
-import type { GpuDevice } from '../../shared/types'
+import type { CachedGpuProbe } from './runtime/gpu'
 
 // Shared application context assembled at startup and passed to IPC handlers.
 // As later phases land, add: models registry, ingestion queue, etc.
@@ -25,9 +25,10 @@ export interface AppContext {
   /**
    * Session-cached GPU probe (Phase 16): `--list-devices` on a drive-local binary,
    * shared between the start ladder, Diagnostics, and the benchmark so they never
-   * disagree within a session. Optional — absent in most test contexts.
+   * disagree within a session. `invalidate()` is wired to "Try GPU again" so an
+   * explicit retry re-probes. Optional — absent in most test contexts.
    */
-  probeGpu?: (binPath: string) => Promise<GpuDevice[]>
+  probeGpu?: CachedGpuProbe
   /**
    * True for a dev build (`!app.isPackaged`). Treated as "developer" alongside the
    * user-toggleable `developerMode` setting (which defaults OFF on shipped builds, M10).

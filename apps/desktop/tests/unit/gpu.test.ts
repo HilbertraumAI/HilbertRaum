@@ -71,10 +71,18 @@ describe('looksIntegrated', () => {
     ['Intel(R) HD Graphics 520', true],
     ['AMD Radeon(TM) Graphics', true],
     ['AMD Radeon Vega 8', true],
+    // Audit fix: names real Linux/RADV + Meteor-Lake drivers report (these used to
+    // slip through and could bump the profile on shared-memory APUs).
+    ['AMD Radeon Graphics (RADV REMBRANDT)', true],
+    ['AMD Radeon(TM) 780M Graphics', true],
+    ['AMD Radeon Vega 8 Graphics (RADV RAVEN)', true],
+    ['Intel(R) Arc(TM) Graphics', true],
     // Discrete → false (eligible for the bump)
     ['NVIDIA GeForce RTX 3080 Ti', false],
     ['AMD Radeon RX 6700 XT', false],
-    ['NVIDIA GeForce GTX 1660', false]
+    ['NVIDIA GeForce GTX 1660', false],
+    ['AMD Radeon RX 7800 XT (RADV NAVI32)', false],
+    ['Intel(R) Arc(TM) A770 Graphics', false]
   ])('%s → %s', (name, integrated) => {
     expect(looksIntegrated(name)).toBe(integrated)
   })
@@ -110,7 +118,7 @@ describe('probeGpuDevices', () => {
   it('parses devices from a successful probe and passes --list-devices', async () => {
     const { spawn, calls } = probeSpawn((child) => {
       child.stdout.emit('data', RTX_3080TI_OUTPUT)
-      child.emit('exit', 0, null)
+      child.emit('close', 0, null)
     })
     const devices = await probeGpuDevices('/bin/llama-server', { spawn })
     expect(devices).toHaveLength(1)
@@ -118,10 +126,23 @@ describe('probeGpuDevices', () => {
     expect(calls[0].args).toEqual(['--list-devices'])
   })
 
+  it('waits for stdout drained after exit ("close"), so late data is not truncated', async () => {
+    // Audit fix regression: Node can fire 'exit' BEFORE pending stdout data is
+    // delivered. Resolving there would parse a truncated (often empty) device list.
+    const { spawn } = probeSpawn((child) => {
+      child.emit('exit', 0, null) // process gone, pipe not drained yet
+      child.stdout.emit('data', RTX_3080TI_OUTPUT) // late-delivered output
+      child.emit('close', 0, null) // stdio drained — only NOW may we parse
+    })
+    const devices = await probeGpuDevices('/bin/llama-server', { spawn })
+    expect(devices).toHaveLength(1)
+    expect(devices[0].name).toBe('NVIDIA GeForce RTX 3080 Ti')
+  })
+
   it('resolves [] on a non-zero exit', async () => {
     const { spawn } = probeSpawn((child) => {
       child.stdout.emit('data', 'some error-ish output')
-      child.emit('exit', 1, null)
+      child.emit('close', 1, null)
     })
     expect(await probeGpuDevices('/bin/llama-server', { spawn })).toEqual([])
   })
@@ -153,24 +174,39 @@ describe('probeGpuDevices', () => {
 })
 
 describe('createCachedGpuProbe', () => {
-  it('probes once per binary per session and caches the promise', async () => {
+  function countingSpawn(): { spawn: SpawnFn; count: () => number } {
     let spawned = 0
     const spawn: SpawnFn = () => {
       spawned += 1
       const child = new FakeProbeChild()
       queueMicrotask(() => {
         child.stdout.emit('data', RTX_3080TI_OUTPUT)
-        child.emit('exit', 0, null)
+        child.emit('close', 0, null)
       })
       return child
     }
+    return { spawn, count: () => spawned }
+  }
+
+  it('probes once per binary per session and caches the promise', async () => {
+    const { spawn, count } = countingSpawn()
     const probe = createCachedGpuProbe({ spawn })
     const [a, b] = await Promise.all([probe('/bin/x'), probe('/bin/x')])
     await probe('/bin/x')
-    expect(spawned).toBe(1)
+    expect(count()).toBe(1)
     expect(a).toEqual(b)
     // A different binary is its own cache entry.
     await probe('/bin/y')
-    expect(spawned).toBe(2)
+    expect(count()).toBe(2)
+  })
+
+  it('invalidate() drops the cache so the next call re-probes (Try GPU again)', async () => {
+    const { spawn, count } = countingSpawn()
+    const probe = createCachedGpuProbe({ spawn })
+    await probe('/bin/x')
+    expect(count()).toBe(1)
+    probe.invalidate()
+    await probe('/bin/x')
+    expect(count()).toBe(2)
   })
 })

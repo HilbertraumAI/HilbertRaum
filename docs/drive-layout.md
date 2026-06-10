@@ -1,6 +1,6 @@
 # Drive & Workspace Layout
 
-_Last updated: 2026-06-09 (Phase 13)_
+_Last updated: 2026-06-10 (Phase 14: Vulkan-default runtime + `<os>/cpu/` safety net + `.paid-runtime.json` markers)_
 
 ## How the app finds its data
 

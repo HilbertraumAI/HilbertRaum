@@ -110,7 +110,8 @@ done < "$SOURCES_FILE"
 
 [[ -z "$VERSION" ]] && { echo "runtime-sources.yaml: missing llama_cpp.version" >&2; exit 2; }
 
-# --- Select the build (os + arch [+ backend]); default = first os/arch match (CPU).
+# --- Select the build (os + arch [+ backend]); default = first os/arch match
+# (vulkan on win/linux, metal on mac since Phase 14).
 # Explicit --os without --arch = cross-provisioning: take that OS's first build (any arch).
 SEL=-1
 for i in $(seq 0 $idx); do
@@ -209,6 +210,15 @@ if is_real_sha "$SHA"; then
 else
   echo "  archive UNVERIFIED (placeholder hash) — verify after a real release bump"
 fi
+
+# Remove the previous install (if any) BEFORE extracting. Extraction over an existing
+# build must never mix files from two builds — and on the nesting mac/linux tarballs a
+# stale root llama-server would satisfy the flatten guard below, leaving the OLD binary
+# in place while a fresh marker claims the new build (audit fix: the cpu->vulkan upgrade
+# path). The cpu/ safety net and the just-downloaded archive survive; the stale marker
+# dies with the old build, so a failed extraction cannot leave a lying marker behind.
+find "$EXTRACT_TO" -mindepth 1 -maxdepth 1 \
+  ! -name "$ARCHIVE_NAME" ! -name cpu -exec rm -rf {} +
 
 # Extract: tar.gz via tar; zip via unzip (linux) / ditto (macOS).
 case "$ARCHIVE_NAME" in

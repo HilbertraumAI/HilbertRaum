@@ -65,6 +65,8 @@ const api = {
   // ---- Hardware benchmark (Phase 7) ----
   /** Detect hardware + measure drive speed, persist + return the result. Strictly local. */
   runBenchmark: (): Promise<BenchmarkResult> => ipcRenderer.invoke(IPC.runBenchmark),
+  /** "Try GPU again": clears the compatibility-mode flag, re-probes, returns fresh settings. */
+  tryGpuAgain: (): Promise<AppSettings> => ipcRenderer.invoke(IPC.tryGpuAgain),
 
   // ---- Launch preflight (Phase 13) ----
   /** Friendly, non-blocking first-run drive check (writable / free space / slow drive). */

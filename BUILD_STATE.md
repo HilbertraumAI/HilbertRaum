@@ -8,7 +8,8 @@
 _Last updated: 2026-06-10 — **MVP feature-complete: Phases 0–13 done**, plus the full **GPU
 acceleration feature (Phases 14–16: Vulkan-default distribution → probe + fallback-ladder runtime
 → Settings/Diagnostics/benchmark surface)** per the IMPLEMENTED
-[`docs/gpu-support-plan.md`](docs/gpu-support-plan.md). Four post-MVP audit rounds are fully
+[`docs/gpu-support-plan.md`](docs/gpu-support-plan.md). Four post-MVP audit rounds plus a
+**GPU-feature audit round (2026-06-10, post-Phase-16 — see the §3 entry)** are fully
 remediated and the llama.cpp runtime pin + license reviews are complete — summarized in §8. The
 first real Windows `D:\` portable-drive bring-up surfaced + fixed a cluster of provisioning,
 drive-root path, manifest-source and RAG/embedding bugs — see **§9**. Remaining work = **manual
@@ -41,10 +42,11 @@ gaps live in [`docs/known-limitations.md`](docs/known-limitations.md)._
 
 Legend: ⚪ not started · 🟡 in progress · 🟢 done · 🔴 blocked
 
-> Phases 12–13 are the **post-MVP** distribution phases (the last planned work). Phase 13
-> (plug-and-play distribution) is DONE — see
+> Phases 12–13 are the **post-MVP** distribution phases; Phases 14–16 added GPU acceleration on
+> top (see [`docs/gpu-support-plan.md`](docs/gpu-support-plan.md)). All are DONE — see
 > [`docs/provisioning-and-distribution-plan.md`](docs/provisioning-and-distribution-plan.md).
-> Remaining = **manual acceptance only**: a real signed/notarized build + a USB §17 demo (R5/R7).
+> Remaining = **manual acceptance only**: a real signed/notarized build + a USB §17 demo (R5/R7)
+> + the GPU §11.2 hardware matrix (§5).
 
 ---
 
@@ -151,9 +153,10 @@ Repo root: `f:\_coding\ai_drive`.
 - **Profile thresholds (spec §11.3, LOCKED):** RAM in **GiB** (`totalmem()/1024³`, rounded
   0.1); `≤8 → TINY`, `≤16 → LITE`, `≤32 → BALANCED`, else `PRO`; invalid RAM → `UNKNOWN`.
   **Downgrade rule:** `tokensPerSecond < VERY_LOW_TOKENS_PER_SECOND (3)` drops one step (never
-  below TINY). **GPU rule:** a useful GPU bumps one step toward PRO (capped) — but GPU
-  detection is **best-effort `null`** for now (no safe cross-platform/offline/native-free
-  probe), so this branch is dormant until Phase 10.
+  below TINY). **GPU rule:** a useful GPU bumps one step toward PRO (capped) — ~~GPU
+  detection is best-effort `null` for now, dormant~~ **superseded by Phase 16**: the
+  `--list-devices` probe feeds a precomputed `gpuUseful` hint (≥ 6144 MiB AND not
+  integrated — `gpuUsefulForProfile`); `benchmark.ts` itself still never probes.
 - **Drive-test bounds:** writes `DRIVE_PROBE_BYTES = 8 MB` of random bytes **inside the
   workspace**, times write (`fsync`) then read → MB/s; **always cleaned up** (`try/finally`);
   failure → `null` Mbps + `error`. **Slow-drive warning** at `< SLOW_DRIVE_MBPS (30)` MB/s —
@@ -412,12 +415,16 @@ Repo root: `f:\_coding\ai_drive`.
   → rung 3 = `runtime/llama.cpp/<os>/cpu/` safety net (`resolveCpuFallbackServerPath`) → rung 4 =
   MockRuntime (existing graceful-fallback rule — never stuck). `gpuMode:'off'`/`gpuAutoDisabled`
   skip rung 1; a rung-1 failure persists `gpuAutoDisabled` + `gpuLastError` (no repeated 60 s GPU
-  timeouts). `services/runtime/gpu.ts`: `probeGpuDevices` (subprocess `--list-devices`, 3 s
-  kill-timeout, never throws → `[]`), pure `parseListDevices`, `looksIntegrated` heuristic,
-  `createCachedGpuProbe` (once per binary per session). The probe only LABELS the backend
-  (`RuntimeStatus.backend: 'gpu'|'cpu'|'mock'` + `gpuName`); the ladder is the guarantee. GPU deps
-  are injected callbacks (never DB reads inside the factory); `main/index.ts` wires them with
-  locked-DB-safe guards (sidecars only start post-unlock anyway).
+  timeouts). `services/runtime/gpu.ts`: `probeGpuDevices` (subprocess `--list-devices`, **10 s**
+  kill-timeout — the plan's 3 s sketch was raised after a cold Vulkan init exceeded it, see plan
+  §13 deviation 1; resolves on the child's **`close`** event so late-buffered stdout is never
+  truncated; never throws → `[]`), pure `parseListDevices`, `looksIntegrated` heuristic,
+  `createCachedGpuProbe` (once per binary per session; `invalidate()` re-probes — wired to
+  "Try GPU again"). The probe runs CONCURRENTLY with the rung-1 server start (never serially
+  after it) and only LABELS the backend (`RuntimeStatus.backend: 'gpu'|'cpu'|'mock'` +
+  `gpuName`); the ladder is the guarantee. GPU deps are injected callbacks (never DB reads
+  inside the factory); `main/index.ts` wires them with locked-DB-safe guards (sidecars only
+  start post-unlock anyway).
 - **Mid-generation crash auto-fallback (Phase 15, §5.3):** `LlamaServer.onUnexpectedExit` fires
   only for a HEALTHY server dying outside `stop()` (start failures still throw; stop exits are
   expected). When the active backend was GPU, `createGpuCrashAutoFallback` (re-entrancy-guarded)
@@ -448,9 +455,36 @@ Repo root: `f:\_coding\ai_drive`.
   "Built-in demo runtime"), the **runtime build** line (new `getRuntimeInstall` IPC
   `runtime:install` → the Phase-14 `.paid-runtime.json` marker via `readRuntimeMarker`; null on
   manually provisioned drives), and the `gpuAutoDisabled` notice + **"Try GPU again"** button
-  (clears `gpuAutoDisabled`+`gpuLastError` via plain `updateSettings` — does NOT touch the
+  (clears `gpuAutoDisabled`+`gpuLastError` — does NOT touch the
   toggle). `App.tsx` shows the dismissible `runtime:notice` banner (the §5.3 compatibility-mode
   copy). All copy follows spec §11.4 — "compatibility mode", never "GPU failed".
+- **GPU audit round (2026-06-10, post-Phase-16 — all findings remediated; see also
+  gpu-support-plan §13):**
+  1. **fetch-runtime upgrade bug (HIGH):** re-fetching over an existing install (the exact
+     cpu→vulkan upgrade path the Phase-14 marker exists for) never re-flattened the nesting
+     mac/linux tarballs — the OLD root binary survived while the fresh marker claimed vulkan.
+     Both scripts now **pre-clean the extract dir before extraction** (everything except the
+     just-downloaded archive + the `cpu/` safety net); a stale marker dies with the old build.
+  2. **Sell gate hardened:** `assertCommercialDrive` + the native step-7 checks now require the
+     **binary** (not just a marker), the native checks verify **backend** (not only version),
+     and `extract_to` is escape-guarded via `planRuntimeDownload`.
+  3. **Probe correctness:** resolves on the child's `close` (not `exit` — a truncated-stdout
+     race could yield a false-empty device list); `createCachedGpuProbe` gained `invalidate()`;
+     the rung-1 probe runs **concurrently** with the server start (no serial 10 s stall on a
+     cold cache, smaller crash-mislabel window).
+  4. **"Try GPU again" is a dedicated IPC (`gpu:try-again`)**: clears the flags AND invalidates
+     the session probe cache AND re-probes + persists — a plain settings write kept a stale
+     "no GPU" probe cached for the whole session. Diagnostics hides the button when the
+     Settings toggle is OFF (it would silently do nothing) and points at Settings instead;
+     "Run benchmark" now refreshes the Acceleration line.
+  5. **`gpuProbe` persistence is per-session**, not benchmark-only: `maybeRunFirstBenchmark`
+     refreshes it in the background even when a benchmark exists (a drive moved between
+     machines kept showing the previous machine's GPU; pre-GPU workspaces never got one).
+  6. **`looksIntegrated` broadened** for real driver strings: RADV APUs ("AMD Radeon Graphics
+     (RADV REMBRANDT)"), Windows APU names ("AMD Radeon(TM) 780M Graphics"), Meteor-Lake
+     "Intel(R) Arc(TM) Graphics" — discrete Arc "A###"-series still bumps. Fixture-tested.
+  7. Small: `gpuMode` is enum-guarded in `updateSettings`; `fetch-runtime.ps1` is pure ASCII
+     again; stale "(CPU) default" docstrings fixed.
 
 ---
 
@@ -485,7 +519,9 @@ Wired so far: core (Phase 1) + `listModels`/`selectModel`/`startRuntime`/`stopRu
 (Phase 4) + `askDocuments` (Phase 6) + `runBenchmark` (Phase 7) + `getPolicy` (Phase 8) +
 `getWorkspaceState`/`unlockWorkspace`/`createWorkspace`/`lockWorkspace` (Phase 9) +
 `runPreflight` (Phase 13) + `getRuntimeStatus`/`exportConversation`/`getLogTail` (audit round 4 —
-spec §7.6 export + §7.11 Diagnostics).
+spec §7.6 export + §7.11 Diagnostics) + `getRuntimeInstall` (`runtime:install`, Phase 16) +
+`tryGpuAgain` (`gpu:try-again`, GPU audit round) + the `runtime:notice` main→renderer event
+channel (Phase 15, `EVENTS.runtimeNotice`, preload `onRuntimeNotice`).
 (`pickDocuments` + `reindexDocument` are Phase-4 additions to the `IPC` registry beyond the spec
 §9.1 list — picker + re-index UX; `getPolicy` is a Phase-8 addition; the four `workspace:*` channels
 are Phase-9 additions.) `createConversation` now also accepts an optional `mode`
@@ -650,9 +686,13 @@ stop, regenerate, per-message copy, and the no-runtime empty state.
 ### Hardware benchmark + recommendation (Phase 7 live)
 ✅ **`services/benchmark.ts`** (spec §7.3, §11). Full detail in [`docs/benchmark.md`](docs/benchmark.md).
 - **`detectSystem()`** (`node:os`) → `{ os, arch, cpuModel, cpuCores, ramGb, gpu }`; never
-  throws (failed probe → `''`/`0`); **`gpu` is best-effort `null`**.
-- **`classifyProfile(ramGb, { tokensPerSecond?, gpu? })`** — pure; spec §11.3 thresholds +
-  GPU bump + low-tok/sec downgrade; invalid RAM → `UNKNOWN`.
+  throws (failed probe → `''`/`0`); `detectSystem` itself always reports `gpu: null` — the
+  REAL probe lives in `runtime/gpu.ts` and is **injected** by the IPC layer (Phase 16:
+  `RunBenchmarkDeps.gpu: { name, useful }`), keeping this module `child_process`-free.
+- **`classifyProfile(ramGb, { tokensPerSecond?, gpuUseful? })`** — pure; spec §11.3
+  thresholds + the conservative Phase-16 GPU bump (`gpuUseful` is precomputed by
+  `gpuUsefulForProfile`: ≥ 6144 MiB AND not integrated) + low-tok/sec downgrade; invalid
+  RAM → `UNKNOWN`.
 - **`measureDriveSpeed(workspacePath)`** → `{ readMbps, writeMbps, error? }`; 8 MB temp file
   written **inside the workspace**, timed write(`fsync`)+read, **always cleaned up**, failure
   → `null` + `error`.

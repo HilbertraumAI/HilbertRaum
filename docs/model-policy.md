@@ -129,7 +129,22 @@ GPU driver) — no new licenses enter the product. The file is validated by
 `shared/runtime-sources.ts` (duplicate `(os, arch, backend)` triples are rejected) and is
 **excluded from model discovery** (it is not a model manifest). After each verified extraction
 `fetch-runtime` writes a `.paid-runtime.json` install marker; skips are marker-based
-(version + backend), never mere binary presence.
+(version + backend), never mere binary presence. Re-fetches **pre-clean the previous install**
+(everything except the downloaded archive + the `cpu/` safety net) so an upgrade can never mix
+two builds or keep a stale binary under a fresh marker (GPU audit round).
+
+**License-review record — llama.cpp b9585 runtime assets (extends the original b9585 review,
+commit `8bdeb2e`; status: approved, reviewed 2026-06-10):** all five pinned assets build from
+the same MIT-licensed `ggml-org/llama.cpp` source at tag `b9585`. The two assets added by
+Phase 14 are explicitly part of this record:
+
+| Asset | SHA-256 | Notes |
+|---|---|---|
+| `llama-b9585-bin-win-vulkan-x64.zip` | `af6b1b94377b9f78dbb2285b878fb696d36766391499d65e055ecd622b69018a` | MIT; ships `libomp140.x86_64.dll` (MS OpenMP redistributable — same file as the win-cpu zip, no new artifact class); embedded SPIR-V shaders compiled from llama.cpp source (MIT) |
+| `llama-b9585-bin-ubuntu-vulkan-x64.tar.gz` | `5f5467e5d9827b27eda17ee39b35fd2b7c8aa298f144e8836491ccec76160fdf` | MIT; no Vulkan SDK/loader content redistributed (the loader ships with the user's GPU driver) |
+
+The win-cpu / ubuntu-cpu / macos-arm64 assets keep their hashes from the original b9585 review
+(unchanged in `runtime-sources.yaml`). **No new licenses enter the product.**
 
 > ✅ **Pinned to a real release: `b9585`** (2026-06-10), with real per-OS URLs and SHA-256
 > checksums computed from the downloaded assets — `fetch-runtime` verifies before extracting.

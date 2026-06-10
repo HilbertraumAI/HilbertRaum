@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import type { ModelManifest } from '../../shared/manifest'
 import type { RuntimeSources } from '../../shared/runtime-sources'
 import { loadPolicy } from './policy'
-import { readRuntimeMarker } from './assets'
+import { planRuntimeDownload, readRuntimeMarker, runtimeBinaryPresent } from './assets'
 import { verifyDriveModels, type ModelVerifyResult } from './drive'
 
 // Commercial-drive pipeline + final posture assertion (spec §12.2 / Phase 13).
@@ -317,18 +317,39 @@ export async function assertCommercialDrive(
   let runtimeCurrent = true
   if (runtimeSources) {
     for (const build of runtimeSources.builds) {
-      const extractTo = join(rootPath, ...build.extractTo.split('/'))
+      const label = `runtime build ${build.os}/${build.arch} ${build.backend}`
+      // planRuntimeDownload escape-guards extract_to (the yaml on the DRIVE is
+      // user-writable) — a tampered path is a failed check, not a crash.
+      let binaryOk = false
+      let extractTo: string
+      try {
+        const plan = planRuntimeDownload(rootPath, build, runtimeSources.version)
+        extractTo = plan.extractTo
+        binaryOk = runtimeBinaryPresent(plan)
+      } catch (err) {
+        runtimeCurrent = false
+        problems.push(`${label}: ${err instanceof Error ? err.message : String(err)}`)
+        continue
+      }
       const marker = readRuntimeMarker(extractTo)
-      if (!marker) {
+      // A marker alone is not an install: the binary must exist too (mirrors
+      // runtimeInstallCurrent — a half-deleted install must fail the sell gate).
+      if (!binaryOk) {
         runtimeCurrent = false
         problems.push(
-          `runtime build ${build.os}/${build.arch} ${build.backend}: no .paid-runtime.json ` +
+          `${label}: llama-server binary missing under ${build.extractTo} — ` +
+            'run fetch-runtime for this build'
+        )
+      } else if (!marker) {
+        runtimeCurrent = false
+        problems.push(
+          `${label}: no .paid-runtime.json ` +
             `install marker under ${build.extractTo} — run fetch-runtime for this build`
         )
       } else if (marker.version !== runtimeSources.version || marker.backend !== build.backend) {
         runtimeCurrent = false
         problems.push(
-          `runtime build ${build.os}/${build.arch} ${build.backend}: installed ` +
+          `${label}: installed ` +
             `${marker.version}/${marker.backend} does not match the pinned ` +
             `${runtimeSources.version}/${build.backend} — re-run fetch-runtime`
         )

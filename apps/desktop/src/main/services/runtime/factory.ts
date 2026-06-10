@@ -116,6 +116,15 @@ class LadderRuntime implements ModelRuntime {
   async start(): Promise<void> {
     let lastError: unknown = null
     for (const rung of this.rungs) {
+      // Kick the (cached) probe off BEFORE the server start so the two run
+      // concurrently — the model load dominates, so by the time the server is healthy
+      // the backend label is normally already known (audit fix: a cold probe used to
+      // stall the first start by up to its 10 s bound AFTER the server was healthy,
+      // and a crash inside that window was mislabeled 'cpu').
+      const probe = this.deps.gpu.probeDevices ?? ((bin: string) => probeGpuDevices(bin))
+      const probePromise = rung.gpuAttempt
+        ? probe(rung.binPath).catch(() => [] as GpuDevice[])
+        : null
       const runtime = this.deps.makeLlama(this.opts, rung.binPath, {
         extraArgs: rung.extraArgs,
         // Only a crash of a runtime that actually landed on the GPU triggers the
@@ -142,11 +151,10 @@ class LadderRuntime implements ModelRuntime {
       }
 
       this.inner = runtime
-      if (rung.gpuAttempt) {
+      if (probePromise) {
         // The rung-1 binary auto-offloads when a device exists; the (cached) probe is
         // what names the backend for the UI. Empty probe ⇒ this start IS CPU mode.
-        const probe = this.deps.gpu.probeDevices ?? ((bin: string) => probeGpuDevices(bin))
-        const devices = await probe(rung.binPath).catch(() => [] as GpuDevice[])
+        const devices = await probePromise
         this.backend = devices.length > 0 ? 'gpu' : 'cpu'
         this.gpuName = devices[0]?.name ?? null
       } else {

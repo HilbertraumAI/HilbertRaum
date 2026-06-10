@@ -51,6 +51,7 @@ function stubDiagnostics(opts: {
   runtime?: RuntimeStatus
   install?: { version: string; backend: string; os: string; arch: string } | null
   updateSettings?: ReturnType<typeof vi.fn>
+  tryGpuAgain?: ReturnType<typeof vi.fn>
 }): void {
   stubApi({
     getAppStatus: vi.fn(async () => appStatus),
@@ -60,6 +61,8 @@ function stubDiagnostics(opts: {
     getSettings: vi.fn(async () => opts.settings ?? settings()),
     updateSettings: (opts.updateSettings ??
       vi.fn(async (p: Partial<AppSettings>) => settings(p))) as never,
+    tryGpuAgain: (opts.tryGpuAgain ??
+      vi.fn(async () => settings({ gpuAutoDisabled: false, gpuLastError: null }))) as never,
     getLogTail: vi.fn(async () => []),
     runBenchmark: vi.fn()
   })
@@ -107,16 +110,35 @@ describe('DiagnosticsScreen — Acceleration (Phase 16)', () => {
     expect(await screen.findByText('llama.cpp b9585 (vulkan)')).toBeInTheDocument()
   })
 
-  it('offers "Try GPU again" when gpuAutoDisabled, clearing the flag (not the toggle)', async () => {
+  it('offers "Try GPU again" when gpuAutoDisabled, calling the dedicated IPC (not the toggle)', async () => {
+    // Audit fix: the button calls the tryGpuAgain IPC (which also invalidates the
+    // session probe cache + re-probes in the main process) — NOT a raw settings write.
     const update = vi.fn(async (p: Partial<AppSettings>) => settings(p))
-    stubDiagnostics({ settings: settings({ gpuAutoDisabled: true }), updateSettings: update })
+    const tryAgain = vi.fn(async () => settings({ gpuAutoDisabled: false, gpuLastError: null }))
+    stubDiagnostics({
+      settings: settings({ gpuAutoDisabled: true }),
+      updateSettings: update,
+      tryGpuAgain: tryAgain
+    })
     render(<DiagnosticsScreen />)
     expect(await screen.findByText(/compatibility mode/i)).toBeInTheDocument()
 
     await userEvent.click(screen.getByRole('button', { name: /try gpu again/i }))
-    expect(update).toHaveBeenCalledWith({ gpuAutoDisabled: false, gpuLastError: null })
-    // The user's gpuMode toggle is NOT touched.
-    expect(update.mock.calls[0][0]).not.toHaveProperty('gpuMode')
+    expect(tryAgain).toHaveBeenCalledTimes(1)
+    // The user's gpuMode toggle is NOT touched (no raw settings write at all).
+    expect(update).not.toHaveBeenCalled()
+    // The notice disappears once the returned settings clear the flag.
+    expect(screen.queryByRole('button', { name: /try gpu again/i })).not.toBeInTheDocument()
+  })
+
+  it('points to Settings instead of the button when the toggle is OFF', async () => {
+    // Audit fix: with gpuMode 'off' the button would silently do nothing (rung 1 stays
+    // skipped) — show where to re-enable instead.
+    stubDiagnostics({ settings: settings({ gpuAutoDisabled: true, gpuMode: 'off' }) })
+    render(<DiagnosticsScreen />)
+    expect(await screen.findByText(/compatibility mode/i)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /try gpu again/i })).not.toBeInTheDocument()
+    expect(screen.getByText(/turned off in settings/i)).toBeInTheDocument()
   })
 
   it('shows no compatibility-mode note when GPU is fine', async () => {

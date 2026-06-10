@@ -16,14 +16,17 @@ master pipeline** that produces a finished, sellable drive (see the last section
 - The app stays **fully usable offline**. Sidecars bind **`127.0.0.1` only** (loopback); nothing the
   app spawns listens on a routable interface.
 
-## Drive layout (spec §6)
+## Drive layout (spec §6, updated Phase 14)
 ```
 <drive root>/
   runtime/
     llama.cpp/
-      win/    llama-server.exe   (+ DLLs)
-      mac/    llama-server
-      linux/  llama-server
+      win/    llama-server.exe  (+ DLLs — Vulkan full build, incl. all CPU backends)
+              .paid-runtime.json            (install marker: version/backend/os/arch)
+        cpu/  llama-server.exe  (+ DLLs — pure-CPU safety net) + .paid-runtime.json
+      mac/    llama-server      (Metal build) + .paid-runtime.json
+      linux/  llama-server      (Vulkan full build) + .paid-runtime.json
+        cpu/  llama-server      (pure-CPU safety net) + .paid-runtime.json
   models/
     chat/        qwen3-4b-instruct-q4.gguf  …
     embeddings/  multilingual-e5-small-q8.gguf
@@ -252,3 +255,7 @@ run one real-model session covering:
    cache — screens must not re-hash weights per navigation).
 6. **The spec §17 USB demo** on a fresh laptop with Wi-Fi off, plus the **second-laptop
    continuity check** (same encrypted workspace under a different drive letter/mount).
+7. **The GPU hardware matrix** (gpu-support-plan §11.2, tracked in BUILD_STATE §5): discrete
+   NVIDIA/AMD happy paths, Iris-Xe-only laptop (no profile bump), no-GPU/RDP silent CPU,
+   pre-Vulkan-1.2 degradation, the mid-generation driver-crash auto-fallback, and the
+   machine-move re-probe (1↔4). Measured tok/s feed the release notes.

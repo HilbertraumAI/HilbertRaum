@@ -555,3 +555,33 @@ a state of the repo that doesn't exist yet.
    with `/no_think`. The §11.2 matrix machine ① (dev box, RTX 3080 Ti) passed end-to-end:
    probe → real rung-1 GPU start → streamed completion; forced `gpuMode:'off'`; stubbed rung-1
    failure landing on the real rung-3 safety net.
+
+**GPU audit round (2026-06-10, after Phases 14–16 landed — all findings remediated; full list
+in BUILD_STATE §3 "GPU audit round"):**
+
+6. **fetch-runtime pre-cleans the extract dir before extraction.** The §9 sketch (and the first
+   implementation) gated the flatten step on "no binary at the root", which silently kept the
+   OLD binary when upgrading an existing flattened install (the nesting mac/linux tarballs) —
+   while writing a marker that claimed the new build. Both scripts now delete everything except
+   the downloaded archive and the `cpu/` safety net before extracting.
+7. **The sell gate checks more than markers:** `assertCommercialDrive` + the scripts' native
+   step-7 cross-check require the binary to exist and the marker to match version **and
+   backend** (the scripts originally checked version only).
+8. **Probe hardening:** `probeGpuDevices` resolves on the child's `close` event (not `exit`,
+   which races late-buffered stdout into a false-empty list); the cached probe exposes
+   `invalidate()`; the rung-1 probe runs concurrently with the server start instead of after it.
+9. **"Try GPU again" became a dedicated IPC (`gpu:try-again`)** that clears the flags,
+   invalidates the session probe cache, re-probes and persists — the §8 sketch (a plain
+   settings write) left a once-timed-out probe cached as "no GPU" for the whole session, which
+   is exactly the scenario the button exists for. The button is hidden (with a pointer to
+   Settings) while the toggle is OFF.
+10. **`settings.gpuProbe` is refreshed once per session** (background, post-unlock), not only
+    by the benchmark path — §5.4's "persisted" otherwise went stale when a drive moved between
+    machines (§11.2 matrix #9) and stayed empty on workspaces benchmarked before Phase 16.
+11. **The §8 `looksIntegrated` regex was broadened** with real driver strings (RADV APU names
+    like "AMD Radeon Graphics (RADV REMBRANDT)", Windows APU "AMD Radeon(TM) 780M Graphics",
+    Meteor-Lake "Intel(R) Arc(TM) Graphics"); discrete Arc "A###"-series still qualifies for
+    the bump. The §8 text's regex is superseded by the fixture-tested one in `runtime/gpu.ts`.
+12. **§9's "`services/settings.ts` — defaults for the new keys" landed in
+    `shared/types.ts` `DEFAULT_SETTINGS` instead** (the existing home of all settings
+    defaults); `settings.ts` additionally enum-guards `gpuMode` writes.

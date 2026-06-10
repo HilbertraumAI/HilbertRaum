@@ -188,10 +188,13 @@ args** (b9585: `-ngl auto` + `--fit on` — we **never pass `-ngl`**, locked dec
 adds is the safety machinery:
 
 - **`services/runtime/gpu.ts`** — `probeGpuDevices(binPath)` spawns the drive's own
-  `llama-server --list-devices` (offline, no model, sub-second, kill-timeout-bounded; never throws —
-  any failure → `[]`) and `parseListDevices` parses it (pure, fixture-tested).
-  `looksIntegrated(name)` is the conservative iGPU heuristic for the Phase-16 profile bump.
-  `createCachedGpuProbe()` memoizes per binary per session. The probe labels the backend for the
+  `llama-server --list-devices` (offline, no model, sub-second, kill-timeout-bounded (10 s);
+  resolves on the child's `close` event so late-buffered stdout is never truncated; never
+  throws — any failure → `[]`) and `parseListDevices` parses it (pure, fixture-tested).
+  `looksIntegrated(name)` is the conservative iGPU heuristic for the Phase-16 profile bump
+  (covers Windows + RADV APU names and Meteor-Lake Arc). `createCachedGpuProbe()` memoizes per
+  binary per session and exposes `invalidate()` (wired to "Try GPU again"). The ladder kicks
+  the probe off concurrently with the rung-1 server start. The probe labels the backend for the
   UI; it can't prove stable inference — the ladder is the actual guarantee.
 - **The start ladder** (`factory.ts`, §5.2): rung 1 = default binary, default args (GPU
   auto-offload; on a GPU-less machine this *is* CPU mode) → rung 2 = same binary, **`--device
@@ -215,6 +218,18 @@ adds is the safety machinery:
 - CI never touches a GPU/binary: the probe + ladder are covered through the existing
   `SpawnFn`/fetch seams; a real-GPU smoke lives in `tests/manual/gpu-smoke.test.ts`, **skipped
   unless `PAID_GPU_SMOKE` points at a provisioned drive**.
+- **The Phase-16 surface** on top of the ladder: Settings' "Use GPU acceleration" toggle binds
+  `gpuMode 'auto' | 'off'` (default ON). Diagnostics shows the **Acceleration** line (live
+  `RuntimeStatus.backend`/`gpuName` while running, else the persisted `settings.gpuProbe`), the
+  **runtime build** line (`getRuntimeInstall` IPC `runtime:install` → the `.paid-runtime.json`
+  marker), and the compatibility-mode notice with **"Try GPU again"** — a dedicated IPC
+  (`gpu:try-again`) that clears `gpuAutoDisabled`/`gpuLastError`, invalidates the session probe
+  cache, and re-probes + persists (hidden while the toggle is OFF, where it would do nothing).
+  The benchmark path injects the probe as `RunBenchmarkDeps.gpu: { name, useful }`
+  (`gpuUsefulForProfile`: ≥ 6144 MiB AND not integrated → the conservative `classifyProfile`
+  bump); `benchmark.ts` itself keeps **zero `child_process`**. `maybeRunFirstBenchmark`
+  additionally refreshes `settings.gpuProbe` once per session even when a benchmark already
+  exists, so a drive moved between machines re-labels itself.
 - **`services/embeddings/e5.ts`** — `E5Embedder implements Embedder`, the real backend behind the same
   interface with the **manifest id + 384 dims**. It composes a `LlamaServer` started with `--embedding
   --pooling mean` (the **same** prebuilt binary — **zero new npm deps**, no fragile native build), is
