@@ -33,21 +33,21 @@ describe('DocumentsScreen', () => {
     stubApi({ listDocuments: vi.fn(async () => [doc({})]) })
     render(<DocumentsScreen />)
     expect(await screen.findByText('contract.pdf')).toBeInTheDocument()
-    expect(screen.getByText('Indexed')).toBeInTheDocument()
+    expect(screen.getByText('Ready')).toBeInTheDocument()
     expect(screen.getByText('7')).toBeInTheDocument()
   })
 
   it('shows the re-index banner for a document with stale embeddings (M7)', async () => {
     stubApi({ listDocuments: vi.fn(async () => [doc({ staleEmbeddings: true })]) })
     render(<DocumentsScreen />)
-    expect(await screen.findByText(/different embedding model/i)).toBeInTheDocument()
+    expect(await screen.findByText(/different search model/i)).toBeInTheDocument()
   })
 
   it('does NOT show the re-index banner when embeddings are current', async () => {
     stubApi({ listDocuments: vi.fn(async () => [doc({ staleEmbeddings: false })]) })
     render(<DocumentsScreen />)
     await screen.findByText('contract.pdf')
-    expect(screen.queryByText(/different embedding model/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/different search model/i)).not.toBeInTheDocument()
   })
 
   it('surfaces the error message for a failed document', async () => {

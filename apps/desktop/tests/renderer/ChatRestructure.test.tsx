@@ -89,7 +89,7 @@ describe('ChatScreen — teaching empty state (guidelines §3)', () => {
       await screen.findByText('Ask a question, or ask about your documents.')
     ).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Summarize this contract' }))
-    expect(screen.getByPlaceholderText(/message private ai drive/i)).toHaveValue(
+    expect(screen.getByPlaceholderText("Message…")).toHaveValue(
       'Summarize this contract'
     )
   })
@@ -142,7 +142,7 @@ describe('ChatScreen — header mode segmented control', () => {
     expect(screen.getByRole('radio', { name: 'Ask my documents' })).toBeChecked()
 
     await user.click(screen.getByRole('radio', { name: 'Chat' }))
-    expect(screen.getByPlaceholderText(/message private ai drive/i)).toBeInTheDocument()
+    expect(screen.getByPlaceholderText("Message…")).toBeInTheDocument()
   })
 })
 

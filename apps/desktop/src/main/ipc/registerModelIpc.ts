@@ -39,7 +39,7 @@ function developerLeniency(ctx: AppContext, s: AppSettings): boolean {
  * the `startRuntime` IPC handler and the startup auto-start). Throws on any refusal.
  */
 export async function startModelRuntime(ctx: AppContext, modelId: string): Promise<RuntimeStatus> {
-  if (!ctx.manifestsDir) throw new Error('No model-manifests directory found')
+  if (!ctx.manifestsDir) throw new Error('No model list was found on this drive — the model-manifests folder is missing.')
   const { manifests } = discoverManifests(ctx.manifestsDir)
   const found = manifests.find((m) => m.manifest.id === modelId)
   if (!found) throw new Error(`Unknown model id: ${modelId}`)
@@ -62,7 +62,14 @@ export async function startModelRuntime(ctx: AppContext, modelId: string): Promi
   })
   const mockFallback = state === 'missing' && lenient
   if (state !== 'installed' && !mockFallback) {
-    throw new Error(`Model "${modelId}" cannot be started (state: ${state}).`)
+    // §7 voice: the problem and the next step; the raw state code stays in Diagnostics/logs.
+    throw new Error(
+      state === 'checksum_failed'
+        ? `"${found.manifest.displayName}" can't be started — we couldn't verify its file. ` +
+          'It may be incomplete; try downloading it again.'
+        : `"${found.manifest.displayName}" can't be started — its model file isn't installed ` +
+          'on this drive yet.'
+    )
   }
 
   // RAM gate (post-MVP): loading real weights that exceed this machine's memory would
@@ -110,7 +117,7 @@ export function maybeAutoStartActiveModel(ctx: AppContext): void {
   if (!modelId) return
   log.info('Auto-starting the active model runtime in the background', { modelId })
   void startModelRuntime(ctx, modelId).catch((err) =>
-    log.warn('Auto-start of the active model failed (start it from the Models screen)', {
+    log.warn('Auto-start of the active model failed (start it from the AI Model screen)', {
       modelId,
       error: String(err)
     })
@@ -141,7 +148,7 @@ export function registerModelIpc(ctx: AppContext): void {
   })
 
   ipcMain.handle(IPC.selectModel, (_e, modelId: string) => {
-    if (!ctx.manifestsDir) throw new Error('No model-manifests directory found')
+    if (!ctx.manifestsDir) throw new Error('No model list was found on this drive — the model-manifests folder is missing.')
     log.info('Select model', { modelId })
     const result = selectModel(ctx.db, ctx.manifestsDir, modelId)
     ctx.audit?.('model_selected', `Model selected: ${modelId}`, { modelId })
@@ -152,7 +159,7 @@ export function registerModelIpc(ctx: AppContext): void {
   // model's weight file and re-hash it for real. `listModels` alone would read the
   // cache back and confirm nothing.
   ipcMain.handle(IPC.verifyModel, async (_e, modelId: string): Promise<ModelState> => {
-    if (!ctx.manifestsDir) throw new Error('No model-manifests directory found')
+    if (!ctx.manifestsDir) throw new Error('No model list was found on this drive — the model-manifests folder is missing.')
     const { manifests } = discoverManifests(ctx.manifestsDir)
     const found = manifests.find((m) => m.manifest.id === modelId)
     if (!found) throw new Error(`Unknown model id: ${modelId}`)

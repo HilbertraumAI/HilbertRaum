@@ -7,13 +7,15 @@ import type { DocumentInfo, DocumentPreview, IngestionStatus } from '@shared/typ
 // delete / re-index documents. Import runs async in the backend; this screen polls
 // getImportJob + listDocuments while a job is in flight (BUILD_STATE: async-with-polling).
 
-// Status pills: icon + word, never color-only (guidelines §6).
+// Status pills: icon + word, never color-only (guidelines §6). Labels speak human
+// (§7) — the pipeline stages (extract/chunk/embed) read as "Reading"/"Preparing";
+// the raw stage names stay in logs/Diagnostics.
 const STATUS_BADGE: Record<IngestionStatus, { label: string; tone: BadgeTone; icon: string }> = {
-  queued: { label: 'Queued', tone: 'accent', icon: '…' },
-  extracting: { label: 'Extracting', tone: 'accent', icon: '⟳' },
-  chunking: { label: 'Chunking', tone: 'accent', icon: '⟳' },
-  embedding: { label: 'Embedding', tone: 'accent', icon: '⟳' },
-  indexed: { label: 'Indexed', tone: 'success', icon: '✓' },
+  queued: { label: 'Waiting', tone: 'accent', icon: '…' },
+  extracting: { label: 'Reading', tone: 'accent', icon: '⟳' },
+  chunking: { label: 'Preparing', tone: 'accent', icon: '⟳' },
+  embedding: { label: 'Preparing', tone: 'accent', icon: '⟳' },
+  indexed: { label: 'Ready', tone: 'success', icon: '✓' },
   failed: { label: 'Failed', tone: 'error', icon: '⚠' },
   deleted: { label: 'Deleted', tone: 'neutral', icon: '—' }
 }
@@ -172,9 +174,9 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
     <div className="screen">
       <h1>Documents</h1>
       <p className="lead">
-        Import documents to chat over them. Files are parsed, split into overlapping chunks,
-        embedded, and copied into your workspace — everything stays local. Ask questions about them
-        from the Chat screen&apos;s &quot;Ask documents&quot; mode.
+        Import documents to ask questions about them. Each file is copied into your workspace
+        and prepared for search — everything stays on this drive. Ask from the Chat
+        screen&apos;s &quot;Ask my documents&quot; mode.
       </p>
 
       {/* When the list is empty the EmptyState below carries the primary action. */}
@@ -212,7 +214,8 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
       )}
 
       <p className="hint" style={{ marginTop: 10 }}>
-        Supported: TXT, Markdown, PDF, DOCX, CSV. {anyActive && 'Ingestion in progress…'}
+        Supported: TXT, Markdown, PDF, DOCX, CSV.{' '}
+        {anyActive && 'Preparing your documents so you can ask about them…'}
       </p>
 
       {error && <Banner tone="error">{error}</Banner>}
@@ -259,7 +262,7 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
               Size <b>{formatSize(d.sizeBytes)}</b>
             </span>
             <span>
-              Chunks <b>{d.chunkCount}</b>
+              Sections <b>{d.chunkCount}</b>
             </span>
             <span>
               Type <b>{d.mimeType ?? '—'}</b>
@@ -268,7 +271,8 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
           {d.status === 'failed' && d.errorMessage && <Banner tone="error">{d.errorMessage}</Banner>}
           {d.staleEmbeddings && (
             <Banner tone="warning">
-              Indexed with a different embedding model — re-index so document search can find it.
+              This document was prepared with a different search model — re-index it so answers
+              can find it.
             </Banner>
           )}
           <div className="doc-actions">
@@ -284,7 +288,7 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
               size="sm"
               disabled={busy !== null || ACTIVE_STATUSES.has(d.status)}
               onClick={() => void run(`reindex-${d.id}`, () => window.api.reindexDocument(d.id))}
-              title="Re-parse and re-chunk the stored copy"
+              title="Read and prepare the stored copy again"
             >
               {busy === `reindex-${d.id}` ? 'Re-indexing…' : 'Re-index'}
             </Button>

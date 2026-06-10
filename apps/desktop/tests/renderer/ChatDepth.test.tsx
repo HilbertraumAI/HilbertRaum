@@ -113,7 +113,7 @@ describe('ChatScreen — "Answer detail" dropdown (Phase 20 / D-UI4)', () => {
     await user.click(await screen.findByText('Depth chat'))
 
     // Default: balanced.
-    await user.type(screen.getByPlaceholderText(/Message Private AI Drive/), 'first')
+    await user.type(screen.getByPlaceholderText("Message…"), 'first')
     await user.click(screen.getByRole('button', { name: 'Send' }))
     await waitFor(() =>
       expect(sendChatMessage).toHaveBeenCalledWith('c1', 'first', { mode: 'balanced' })
@@ -123,7 +123,7 @@ describe('ChatScreen — "Answer detail" dropdown (Phase 20 / D-UI4)', () => {
     await user.click(depthTrigger())
     await user.click(await screen.findByRole('menuitemradio', { name: /quick/i }))
     expect(depthTrigger()).toHaveTextContent('Answer detail: Quick')
-    await user.type(screen.getByPlaceholderText(/Message Private AI Drive/), 'second')
+    await user.type(screen.getByPlaceholderText("Message…"), 'second')
     await user.click(screen.getByRole('button', { name: 'Send' }))
     await waitFor(() =>
       expect(sendChatMessage).toHaveBeenCalledWith('c1', 'second', { mode: 'fast' })
@@ -182,7 +182,7 @@ describe('ChatScreen — "Answer detail" dropdown (Phase 20 / D-UI4)', () => {
     await user.click(await screen.findByText('Depth chat'))
     await user.click(depthTrigger())
     await user.click(await screen.findByRole('menuitemradio', { name: /thorough/i }))
-    await user.type(screen.getByPlaceholderText(/Message Private AI Drive/), 'why?')
+    await user.type(screen.getByPlaceholderText("Message…"), 'why?')
     await user.click(screen.getByRole('button', { name: 'Send' }))
     await waitFor(() => expect(reasoningCb).toBeDefined())
 

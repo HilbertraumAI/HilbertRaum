@@ -14,7 +14,7 @@ const UNKNOWN_RAM = null
 const STATE_BADGE: Record<ModelState, { label: string; tone: BadgeTone; icon: string }> = {
   installed: { label: 'Installed', tone: 'success', icon: '✓' },
   missing: { label: 'Not downloaded', tone: 'neutral', icon: '○' },
-  checksum_failed: { label: 'Checksum failed', tone: 'error', icon: '⚠' },
+  checksum_failed: { label: 'Can’t verify', tone: 'error', icon: '⚠' },
   unsupported: { label: 'Unsupported', tone: 'error', icon: '⚠' },
   not_recommended: { label: 'Not recommended', tone: 'warning', icon: '⚠' },
   ready: { label: 'Ready', tone: 'success', icon: '✓' },
@@ -140,8 +140,8 @@ export function ModelsScreen(): JSX.Element {
         <h1>AI Model</h1>
         <p className="hint">
           <span className="spinner" /> Checking model files… The first check after adding or
-          updating a model verifies its checksum and can take a few minutes for large files;
-          after that the result is cached and this is instant.
+          updating a model can take a few minutes for large files; after that the result is
+          remembered and this is instant.
         </p>
       </div>
     )
@@ -412,8 +412,8 @@ export function ModelsScreen(): JSX.Element {
           </dd>
         </dl>
         <p className="hint">
-          The file is checked against its expected checksum before it is used. This is the
-          only network request the app makes — nothing about you or your documents is sent.
+          The downloaded file is verified before it is used. This is the only network request
+          the app makes — nothing about you or your documents is sent.
         </p>
         {needsAck && (
           <label className="toggle">
@@ -462,7 +462,7 @@ export function ModelsScreen(): JSX.Element {
       )}
       {otherChat.map(card)}
 
-      {embeddings.length > 0 && <div className="section-title">Embeddings</div>}
+      {embeddings.length > 0 && <div className="section-title">Document search</div>}
       {embeddings.map(card)}
 
       {others.length > 0 && <div className="section-title">Other</div>}

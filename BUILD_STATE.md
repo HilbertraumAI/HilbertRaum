@@ -39,9 +39,11 @@ runtimes), an FTS5 keyword pass + RRF fusion now hybridizes `retrieve()`, and an
 CPU-pinned `bge-reranker-v2-m3` sidecar reorders candidates behind a `Reranker` interface
 whose absent default keeps retrieval byte-identical (§3 entry; working paper
 [`docs/retrieval-quality-plan.md`](docs/retrieval-quality-plan.md), decisions D8–D15; design
-record `docs/rag-design.md` §11). **The UI polish wave (Phases 23–27) is underway: Phase 23
-(design-token foundation + light/dark theming) is DONE** on branch `ui-phase-23-tokens-theming`
-(not merged) — tokens.css per the adopted guidelines §4, the full styles.css role-token
+record `docs/rag-design.md` §11). **The UI polish wave (Phases 23–27) is COMPLETE** on branch
+`ui-phase-23-tokens-theming` (not merged); the rollout plan was condensed to the design record
+[`docs/ui-ux-redesign-plan.md`](docs/ui-ux-redesign-plan.md) per the doc lifecycle rule.
+**Phase 23 (design-token foundation + light/dark theming) is DONE**
+— tokens.css per the adopted guidelines §4, the full styles.css role-token
 restyle with the AA primary-button fix, the global a11y baseline, and the additive
 `AppSettings.theme` setting with the Settings Appearance card (§3 entry). **Phase 24 (shared
 component layer) is DONE** on the same branch — D-UI1 executed (the four Radix primitives
@@ -61,7 +63,14 @@ architecture regroup) is DONE** on the same branch — nav 7→5 (Home · Chat �
 "Diagnostics (advanced)"), `navigate()` virtual `settings:*` targets with the legacy
 `privacy`/`diagnostics` aliases kept working, Home rebuilt as the readiness hub (D-UI3
 RESOLVED: Home stays), and the AI Model screen's per-card "Technical details" disclosure
-(§3 entry). Release-wise,
+(§3 entry). **Phase 27 (microcopy + ambient trust signal + first-run — the wave's LAST
+phase) is DONE** on the same branch — the guidelines-§7 copy sweep across renderer AND
+user-facing main-process strings, the quiet "Local · Offline" indicator (sidebar + chat
+header, Radix Tooltip, honest downloads-allowed variant), the 3-step first-run create flow
+(welcome → password with hand-rolled strength hint/show-toggle/paste support → optional
+starter step), and the final WCAG 2.2 AA sweep (`--border-strong` token fix +
+forced-colors rules; accepted items in `docs/known-limitations.md`) (§3 entry).
+Release-wise,
 remaining work = **manual release acceptance only** (§5, incl. the GPU
 hardware matrix, item 1b). Consciously-accepted gaps live in
 [`docs/known-limitations.md`](docs/known-limitations.md)._
@@ -99,6 +108,7 @@ hardware matrix, item 1b). Consciously-accepted gaps live in
 | 24 | UI shared component layer (Radix + components/) | 🟢 done (same branch, not merged) |
 | 25 | UI chat screen restructure (guidelines §3) | 🟢 done (same branch, not merged) |
 | 26 | UI information architecture regroup (guidelines §2) | 🟢 done (same branch, not merged) |
+| 27 | UI microcopy, ambient trust signal, first-run (guidelines §7/§2/§9) | 🟢 done (same branch, not merged) — **UI polish wave COMPLETE** |
 
 Legend: ⚪ not started · 🟡 in progress · 🟢 done · 🔴 blocked
 
@@ -1114,6 +1124,90 @@ Repo root: `f:\_coding\ai_drive`.
   overview, Home, AI Model, GPU + Activity pointers now "Settings → Diagnostics
   (advanced)", Privacy → "Settings → Privacy & data"), `architecture.md` (screen list +
   PrivacyTab pointer). Gate: typecheck clean, 644 tests, build green.
+- **Phase 27 — microcopy, ambient trust signal, first-run (2026-06-10) — the UI polish
+  wave's LAST phase; the wave is COMPLETE** (same branch; plan condensed to the design
+  record [`docs/ui-ux-redesign-plan.md`](docs/ui-ux-redesign-plan.md) per the doc
+  lifecycle rule — full original = `git show d2ecf5a:docs/ui-ux-redesign-plan.md`).
+  Renderer-only EXCEPT user-facing main-process **string literals** (the one phase where
+  that was in scope; no logic/IPC/schema changes — one targeted exception below). As built:
+  1. **Copy sweep (guidelines §7):** main process — the stale "Models screen" no-model
+     errors in `registerChatIpc`/`registerRagIpc` → "No AI model is running. Open the AI
+     Model screen and start one first."; `NO_DOCUMENT_CONTEXT_ANSWER` reworded to the §7
+     row (it is PERSISTED into conversations — future answers only, old rows keep their
+     text); wrong-password → "That password didn't unlock your workspace. Check it and
+     try again."; `startModelRuntime` refusals lose the raw state code
+     (checksum_failed → "we couldn't verify its file… try downloading it again");
+     manifests-dir-missing + benchmark "Fast Mode" leftovers humanized. Renderer —
+     composer placeholder → "Message…" (§3 wireframe), Documents lead/status pills
+     (Waiting/Reading/Preparing/**Ready** — stage jargon gone), stale-embeddings banner,
+     "Chunks"→"Sections", ModelsScreen "Can't verify" badge + verify/loading copy,
+     "Embeddings" section → "Document search", PrivacyTab telemetry row → "Nothing
+     leaves this drive — there's no tracking to turn off." Error codes stay only in
+     Diagnostics. NEW `tests/unit/copy-tone.test.ts`: tone pins on the exported
+     constants + a source scan failing if stale phrases reappear in string literals.
+  2. **Ambient indicator (guidelines §7):** `renderer/components/LocalIndicator.tsx` —
+     the sidebar offline badge EVOLVED into the quiet "🔒 Local · Offline" signal
+     (neutral `--text-muted`, Radix **Tooltip** — the 4th D-UI1 primitive, now used);
+     hover/focus = "Everything stays on this drive. No internet connection is used.";
+     click = `navigate('settings:privacy')` (the Phase-26 route survives; the
+     InformationArchitecture badge-route test updated honestly, not deleted). Honest
+     variant when downloads are enabled: "Local · Downloads allowed" / "Downloads
+     allowed — chats and documents stay local." Two placements: sidebar (state passed
+     live by App, which re-checks the policy per screen change) and the chat header
+     (fills the Phase-25 `data-slot="local-indicator"` placeholder; self-fetching on
+     mount). "Disabled by policy" wording moved entirely to the Privacy & data tab.
+  3. **First-run (WorkspaceGate, CREATE path only — guidelines §2):** 3 full-window
+     steps, no nav rail. (1) Welcome/trust framing ("Everything stays on this drive. No
+     internet, no account, no tracking."); (2) Create password — show-password toggle,
+     **hand-rolled** advisory strength meter (`passwordStrength()`: length-weighted +
+     variety bonus, 4 segments + word, `role="status"`; a HINT — only the 8-char floor +
+     confirm match gate submission), the ONE honest "can't be recovered" line, paste +
+     password managers verified working (no onPaste interception; `autocomplete`
+     new-password/current-password — WCAG 3.3.8), plaintext-dev Switch unchanged;
+     (3) optional starter step that **only renders when no chat model is installed** —
+     the check runs AFTER create succeeds (listModels needs an unlocked workspace, D-UI2)
+     behind a skippable "Setting things up…" phase (first hash of a large GGUF can take
+     minutes); the step only ROUTES (Choose your AI model → `models`, Add documents →
+     `documents`, Skip → `chat`) so every download gate stays where it lives (policy ∧
+     setting ∧ per-download confirmation on the AI Model screen). `onUnlocked(state,
+     landOn?)` (renderer-only) lets App land on the picked screen; first-run ends on
+     Chat. The unlock path stays a single calm screen (+ Show toggle).
+  4. **WCAG 2.2 AA sweep (guidelines §9):** every role-token pairing contrast-computed
+     in BOTH themes. One real failure fixed — `--border-strong` (the ONLY input boundary
+     on light: input fill = card fill = white) was 2.54:1 light / 2.18:1 dark → now
+     `var(--n-500)` in both themes (4.77:1 / 3.65:1; ramp value, no new hex — the
+     guidelines §4.3 table values were below their own §9 rule). Windows High Contrast:
+     focus already outline-based; added `forced-colors: active` rules for the two
+     custom-drawn controls (Switch track/thumb, strength-meter segments) — words carry
+     the meaning regardless (1.4.1). Reduced-motion kill-switch verified via the walk.
+     Consciously-accepted items recorded in `known-limitations.md` §Accessibility
+     (hairline borders, fatal-screen raw error, 15px doc checkbox via the 2.5.8 spacing
+     exception).
+  5. **Bug found by the eyeball walk (the targeted main-process exception):** in the
+     production rollup bundle, a second tree-shaken copy of `workspace-vault`
+     (`WrongPasswordError2`) made the handler's `instanceof` check fail
+     nondeterministically per build → the friendly wrong-password message degraded to
+     "Could not open the workspace." in the BUILT app only (vitest runs unbundled and
+     can never catch it). `registerWorkspaceIpc` now also matches
+     `err.name === 'WrongPasswordError'`; the bundler quirk is recorded in
+     `known-limitations.md`.
+  Tests (+25 → 669, vitest from `apps/desktop`): `WorkspaceGate.test.tsx` rewritten for
+  the 3-step flow keeping every old proof (floor/match gating, create/unlock,
+  wrong-password, refusal-clears-fields, plaintext gating + create) and adding step
+  navigation/back, paste, show/hide, strength-never-blocks, installed-model skip,
+  starter-step routing, skip-to-chat, and check-failure-never-traps; new
+  `LocalIndicator.test.tsx` (both states, pure copy helpers, self-fetch flip, focus
+  tooltip, settings:privacy click) + `copy-tone.test.ts`; honest pin updates
+  (placeholder "Message…", "Ready" status, /No AI model is running/, /can't be
+  started/, "different search model", the badge-route test). GpuSurface's friendly-copy
+  pins stayed green untouched. Eyeballed via `walk-phase27.mjs` (22 scenes, BOTH themes:
+  all 3 first-run steps incl. weak/strong meter + Show, starter step, post-setup Chat
+  landing, indicator + tooltip in BOTH states by flipping allowNetwork under a
+  downloads-allowing policy, reduced-motion, lock → unlock → wrong-password → unlock).
+  Docs: `user-guide.md` (first-run §3 rewritten, indicator §4/§8, status labels),
+  `PRIVACY.md` (indicator wording), `troubleshooting.md`/`known-limitations.md`/
+  `benchmark.md`/`model-policy.md`/`packaging.md`/`security-model.md` ("AI Model
+  screen"). Gate: typecheck clean, 669 tests, build green.
 
 ---
 
@@ -1722,8 +1816,8 @@ items are **MANUAL acceptance only** (R2/R5/R7 + the GPU hardware matrix). In ro
    E5-indexed corpus → promote a measured default; semantics already locked, D12). Smaller
    leftovers: an icon/`buildResources` for electron-builder; ANN vector index only if a real
    corpus outgrows the linear scan (plan §9 item 4 / D15 — explicitly not built).
-4. **UI/UX polish wave (Phases 23–27) — IN PROGRESS: Phases 23 + 24 + 25 + 26 DONE
-   2026-06-10** on branch `ui-phase-23-tokens-theming` (not merged — see the §3 entries:
+4. **UI/UX polish wave (Phases 23–27) — ✅ COMPLETE 2026-06-10** on branch
+   `ui-phase-23-tokens-theming` (not merged — see the §3 entries:
    Phase 23 = tokens.css, full role-token restyle + AA fixes, a11y baseline,
    `AppSettings.theme` + Appearance card; Phase 24 = the four pinned Radix primitives
    [D-UI1 executed, license-reviewed], `renderer/components/` per guidelines §6, all
@@ -1733,27 +1827,24 @@ items are **MANUAL acceptance only** (R2/R5/R7 + the GPU hardware matrix). In ro
    [D-UI4 labels] + scope popover, teaching empty state, buffered streaming; Phase 26 =
    the IA regroup per guidelines §2 — 5-item nav with "AI Model", Settings tabs
    absorbing Privacy/Diagnostics, `resolveNavTarget` virtual targets + legacy aliases,
-   Home readiness hub, Technical-details disclosure; all phases eyeballed in both
-   themes). Wave docs:
-   [`docs/design-guidelines.md`](docs/design-guidelines.md) (ADOPTED — tokens, light/dark
-   themes, chat-screen layout, IA regroup 7→5 nav, components, microcopy, WCAG 2.2 AA;
-   distilled from an external design-research round) +
-   [`docs/ui-ux-redesign-plan.md`](docs/ui-ux-redesign-plan.md) (working paper sequencing
-   23 tokens/theming ✅ → 24 component layer ✅ → 25 chat restructure ✅ [the priority] →
-   26 IA regroup ✅ → 27 microcopy/ambient-trust/first-run [next, the wave's last
-   phase — then condense the plan to a design record per the doc lifecycle rule]).
-   Renderer-only except the additive `AppSettings.theme` key (shipped in 23) + the
-   OS-following pre-paint window color. D-UI2 resolved as planned; D-UI1 executed in
-   Phase 24; D-UI4 executed in Phase 25 (UI labels Quick/Balanced/Thorough, ids
-   unchanged); **D-UI3 RESOLVED in Phase 26: Home stays as the readiness hub** (it
-   answers "is the system ready", which must not move onto the chat canvas — full
-   rationale in the plan's decisions table + the §3 entry).
+   Home readiness hub, Technical-details disclosure; Phase 27 = the §7 copy sweep
+   [renderer + user-facing main-process strings], the ambient "Local · Offline"
+   indicator with the honest downloads-allowed variant, the 3-step first-run create
+   flow, and the final WCAG 2.2 AA sweep; all phases eyeballed in both themes). Wave
+   docs: [`docs/design-guidelines.md`](docs/design-guidelines.md) (ADOPTED — the durable
+   design reference) + [`docs/ui-ux-redesign-plan.md`](docs/ui-ux-redesign-plan.md)
+   (now the **condensed design record** per the doc lifecycle rule; full original in git
+   history). All four decisions resolved: D-UI1 executed (all four primitives now in
+   use), D-UI2 as planned, **D-UI3: Home stays as the readiness hub** (re-confirmed
+   after Phase 27 — the first-run starter step only routes, it does not absorb Home's
+   remediation), D-UI4 executed. Remaining UI work = merging the branch when the user
+   says so + the usual manual release eyeball on real drives.
 
-**Current gate (2026-06-10, post-Phase-26 on `ui-phase-23-tokens-theming`): typecheck clean,
-644/644 tests pass (+6 manual tests — 4 GPU smoke behind `PAID_GPU_SMOKE`, 1 thinking smoke
-behind `PAID_THINKING_SMOKE`, 1 rerank smoke behind `PAID_RERANK_SMOKE` — skipped in CI),
-`npm run build` green.** The per-phase gate history (test counts, bundle sizes, per-phase
-test inventories) lives in git history.
+**Current gate (2026-06-10, post-Phase-27 / wave-complete on `ui-phase-23-tokens-theming`):
+typecheck clean, 669/669 tests pass (+6 manual tests — 4 GPU smoke behind `PAID_GPU_SMOKE`,
+1 thinking smoke behind `PAID_THINKING_SMOKE`, 1 rerank smoke behind `PAID_RERANK_SMOKE` —
+skipped in CI), `npm run build` green.** The per-phase gate history (test counts, bundle
+sizes, per-phase test inventories) lives in git history.
 
 ---
 

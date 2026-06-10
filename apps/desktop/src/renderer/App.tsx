@@ -5,7 +5,7 @@ import { ModelsScreen } from './screens/ModelsScreen'
 import { ChatScreen } from './screens/ChatScreen'
 import { DocumentsScreen } from './screens/DocumentsScreen'
 import { WorkspaceGate } from './screens/WorkspaceGate'
-import { Banner, Button, ToastProvider } from './components'
+import { Banner, Button, LocalIndicator, ToastProvider } from './components'
 import { setThemeSetting } from './theme'
 import { resolveNavTarget, type ScreenId, type SettingsTab } from './navigation'
 import type { WorkspaceStateInfo } from '@shared/types'
@@ -42,10 +42,11 @@ export function App(): JSX.Element {
   // Phase 9: the workspace lifecycle gate. Null = still loading; not 'unlocked' = show
   // the create-password / unlock gate before the normal app shell.
   const [workspace, setWorkspace] = useState<WorkspaceStateInfo | null>(null)
-  // Live offline state for the sidebar badge (spec §3.6). Re-checked when the
-  // Settings screen is visited (network toggle may have changed).
+  // Live offline state for the sidebar's ambient "Local · Offline" indicator
+  // (spec §3.6). Re-checked when the Settings screen is visited (network toggle
+  // may have changed). Policy detail ("disabled by policy" vs. off by choice)
+  // lives on the Privacy & data tab the indicator opens.
   const [offline, setOffline] = useState(true)
-  const [disabledByPolicy, setDisabledByPolicy] = useState(false)
   // Set when the backend never came up (getWorkspaceState rejected). Faking 'unlocked'
   // here used to render the full shell with every screen surfacing raw IPC errors (L5).
   const [fatalError, setFatalError] = useState<string | null>(null)
@@ -76,11 +77,7 @@ export function App(): JSX.Element {
     let active = true
     window.api
       ?.getPolicy()
-      .then((p) => {
-        if (!active) return
-        setOffline(p.offlineMode)
-        setDisabledByPolicy(!p.networkAllowedByPolicy)
-      })
+      .then((p) => active && setOffline(p.offlineMode))
       .catch(() => active && setOffline(true))
     // Apply the persisted Appearance setting (Phase 23). Settings are only readable
     // post-unlock; re-checked alongside the policy so a Settings-screen change made
@@ -140,7 +137,17 @@ export function App(): JSX.Element {
     )
   }
   if (workspace && !unlocked) {
-    return <WorkspaceGate state={workspace} onUnlocked={setWorkspace} />
+    return (
+      <WorkspaceGate
+        state={workspace}
+        onUnlocked={(next, landOn) => {
+          setWorkspace(next)
+          // First-run create ends on the teaching Chat empty state (or the screen the
+          // optional starter step picked); a plain unlock keeps the current screen.
+          if (landOn) navigate(landOn)
+        }}
+      />
+    )
   }
   if (!workspace) {
     return (
@@ -149,12 +156,6 @@ export function App(): JSX.Element {
       </div>
     )
   }
-
-  const badgeText = disabledByPolicy
-    ? '● Disabled by policy'
-    : offline
-      ? '● Offline Mode'
-      : '○ Network allowed'
 
   function navButton(item: NavItem): JSX.Element {
     return (
@@ -190,13 +191,7 @@ export function App(): JSX.Element {
             🔒 Lock now
           </Button>
         )}
-        <button
-          className={`offline-badge ${offline ? '' : 'network-on'}`}
-          title="No prompts or files leave this device"
-          onClick={() => navigate('settings:privacy')}
-        >
-          {badgeText}
-        </button>
+        <LocalIndicator variant="sidebar" offline={offline} onNavigate={navigate} />
       </nav>
 
       <main className="content">

@@ -28,6 +28,17 @@ body {
    stay 16px visually — their clickable <label> supplies the ≥24px target. */
 button { min-width: 24px; min-height: 24px; }
 
+/* Windows High Contrast Mode (forced colors): focus already survives because it is an
+   `outline`. The two custom-drawn controls whose meaning lives in background colors get
+   system-color borders so they stay visible; the words next to them carry the meaning
+   (WCAG 1.4.1 — never color alone). */
+@media (forced-colors: active) {
+  .switch-track { border: 1px solid ButtonText; }
+  .switch-thumb { border: 1px solid ButtonText; background: ButtonText; }
+  .strength-seg { border: 1px solid CanvasText; }
+  .strength-seg.on { background: Highlight; }
+}
+
 /* Non-essential motion off under prefers-reduced-motion (guidelines §4.5/§9). */
 @media (prefers-reduced-motion: reduce) {
   *,
@@ -80,20 +91,49 @@ button { min-width: 24px; min-height: 24px; }
 .nav-item:hover, .nav-item.active { background: var(--surface-hover); color: var(--text); }
 .nav-icon { width: 18px; text-align: center; }
 
-.offline-badge {
+/* Ambient "Local · Offline" signal (Phase 27, guidelines §7): quiet glyph + words in a
+   neutral color — reassurance, not an alert. Hover/focus shows the tooltip; click opens
+   Settings → Privacy & data. */
+.local-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  line-height: var(--line-xs);
+  border-radius: var(--radius-full);
+  padding: 4px 10px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.local-indicator:hover { color: var(--text); border-color: var(--border); }
+/* Sidebar variant (the old offline badge's spot, bottom of the nav rail). Its own
+   class name — `.sidebar` is the nav rail itself. */
+.local-indicator-sidebar {
   margin-top: 12px;
   width: 100%;
-  text-align: left;
-  font-size: 12px;
-  color: var(--success);
-  background: transparent;
-  padding: 8px 10px;
-  border: 1px solid var(--border);
+  justify-content: flex-start;
+  border-color: var(--border);
   border-radius: 8px;
-  cursor: pointer;
+  padding: 8px 10px;
 }
-.offline-badge:hover { border-color: var(--accent); }
-.offline-badge.network-on { color: var(--accent); }
+.local-indicator-sidebar:hover { border-color: var(--border-strong); }
+
+/* Tooltip (Radix Tooltip content — the indicator's reassurance line). */
+.tooltip {
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-2);
+  padding: 8px 12px;
+  font-size: var(--text-sm);
+  line-height: var(--line-sm);
+  max-width: 280px;
+  z-index: 70;
+}
 
 .lock-btn { margin-top: 12px; width: 100%; text-align: left; }
 
@@ -120,6 +160,31 @@ button { min-width: 24px; min-height: 24px; }
 }
 .gate-input:focus { border-color: var(--focus); }
 .gate-card .btn.primary { width: 100%; margin-top: 8px; }
+
+/* First-run flow (Phase 27, guidelines §2): hero title, Back|Create action row
+   (primary on the RIGHT, §6), show-password toggle, strength meter. */
+.gate-hero { font-size: var(--text-2xl); line-height: var(--line-2xl); font-weight: 700; }
+.gate-actions { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-top: 8px; }
+.gate-actions .btn.primary { width: auto; margin-top: 0; }
+.gate-actions-main { display: flex; gap: 10px; align-items: center; }
+.gate-pw-row { display: flex; gap: 6px; align-items: center; }
+.gate-pw-row .gate-input { flex: 1; }
+.gate-pw-toggle { flex-shrink: 0; }
+
+/* Password-strength meter: 4 segments + a word — never color alone (WCAG 1.4.1).
+   Advisory only; it never disables the Create button. */
+.strength { display: flex; align-items: center; gap: 10px; min-height: 16px; }
+.strength-bar { display: inline-flex; gap: 4px; }
+.strength-seg {
+  width: 36px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--border);
+}
+.strength-seg.on { background: var(--warning); }
+.strength-seg.on.s1 { background: var(--error); }
+.strength-seg.on.s3, .strength-seg.on.s4 { background: var(--success); }
+.strength-label { font-size: var(--text-xs); line-height: var(--line-xs); color: var(--text-muted); }
 
 /* Privacy & Offline screen (Phase 8) */
 .offline-statement { font-size: 15px; margin-bottom: 10px; }

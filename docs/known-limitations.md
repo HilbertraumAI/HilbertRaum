@@ -29,7 +29,7 @@ logs, best-effort shredding on SSDs, no password recovery — are documented in
   result is cached (in memory and in `AppSettings.checksumCache`) keyed by `(path, size, mtime)` —
   re-hashing multi-GB GGUFs on every visit/launch cost minutes of USB I/O. A same-size,
   mtime-preserving in-place tamper is therefore not re-detected by the app's routine checks (mtime
-  is attacker-forgeable anyway). Mitigations: the Models screen's **Verify checksum** forces a real
+  is attacker-forgeable anyway). Mitigations: the AI Model screen's **Verify checksum** forces a real
   re-hash, and the ship-time gates (`verify-models --strict`, `assertCommercialDrive`) always hash
   fully.
 
@@ -95,7 +95,7 @@ logs, best-effort shredding on SSDs, no password recovery — are documented in
   oldest dropped past 100). Lock-on-**quit** and the implicit stop during a model *switch* are
   not audited (only the explicit "Lock now" / stop actions are). A download that completes
   against a placeholder manifest hash records no `model_download_verified` event (checksum
-  honesty — the Models screen shows UNVERIFIED).
+  honesty — the AI Model screen shows UNVERIFIED).
 
 ## Retrieval quality (Phase 21, [`rag-design.md`](rag-design.md) §11)
 
@@ -142,3 +142,26 @@ logs, best-effort shredding on SSDs, no password recovery — are documented in
   inference — a driver can enumerate fine and crash on the first compute submit. That case is
   handled by the crash auto-fallback (one CPU restart + a friendly notice); the in-flight reply
   is lost, same as today's crash handling.
+
+## Accessibility (Phase-27 WCAG 2.2 AA sweep — consciously accepted)
+
+The Phase-27 sweep contrast-audited every role-token pairing in both themes (fix applied:
+`--border-strong` → `--n-500`, the only sub-3:1 non-text boundary that was the SOLE component
+identifier), added forced-colors (Windows High Contrast) rules for the two custom-drawn
+controls (Switch, strength meter), and verified the reduced-motion kill-switch. Accepted
+as-is, with reasons:
+
+- **Hairline `--border` separators are ~1.3:1.** They are decorative row/card separators,
+  never the sole identifier of a component (cards pair them with surface fill + shadow;
+  inputs use `--border-strong`). WCAG 1.4.11 applies to required boundaries only.
+- **The fatal "app could not start" screen shows the raw error string.** §7 keeps error
+  codes inside Diagnostics, but when the backend never came up Diagnostics is unreachable —
+  the raw string (plus the log pointer) is the only diagnostic the user can relay.
+- **The Documents screen's per-row selection checkbox is 15px.** Under the 24px target
+  minimum, but WCAG 2.5.8 is satisfied via the spacing exception: the row is ≥40px tall and
+  no other target falls within the 24px circle around it.
+- **The bundled main process can contain a duplicated, tree-shaken copy of a module**
+  (observed: `workspace-vault`'s `WrongPasswordError`/`shredFile`), which breaks cross-copy
+  `instanceof`. The wrong-password mapping now also matches `err.name`; other duplications
+  are benign (pure functions). Root cause in electron-vite/rollup module ids — not chased
+  in this phase.

@@ -65,7 +65,7 @@ export function PrivacyTab(): JSX.Element {
               : '…'}
           </dd>
           <dt>Telemetry</dt>
-          <dd>Always off (no toggle)</dd>
+          <dd>Nothing leaves this drive — there’s no tracking to turn off</dd>
         </dl>
         <p className="hint">
           The app warns before any network action. The only optional network feature is downloading

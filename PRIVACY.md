@@ -37,10 +37,11 @@ folder):
 
 ## Offline mode
 
-By default the app makes **no network calls** in its core path. There is a visible **Offline Mode**
-indicator (the sidebar badge and the **Privacy & Offline** screen). The only optional network
-feature is downloading/updating models, which is **off by default** and must be explicitly enabled
-in Settings:
+By default the app makes **no network calls** in its core path. There is a visible, persistent
+**Local · Offline** indicator (in the sidebar and the chat header; clicking it opens Settings →
+**Privacy & data**), and while downloads are enabled it says so honestly: "Downloads allowed —
+chats and documents stay local." The only optional network feature is downloading/updating
+models, which is **off by default** and must be explicitly enabled in Settings:
 
 ```
 [ ] Allow internet access for model downloads and updates

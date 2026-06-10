@@ -1,147 +1,100 @@
-# UI/UX Redesign Plan — Phases 23–27 (the UI polish wave)
+# UI polish wave (Phases 23–27) — design record
 
-**Status:** working paper (doc lifecycle rule: condense to a design record when implemented).
-**Source of truth for the design itself:** [`design-guidelines.md`](design-guidelines.md)
-(adopted 2026-06-10). This plan only sequences the work.
-
-**Scope:** renderer-only. No IPC contract, schema, or main-process behavior changes except
-the additive `AppSettings.theme` key (Phase 23) and user-facing string updates (Phase 27).
-All hard rules hold: fully offline (no web fonts/CDNs), no telemetry, Windows first-class.
-
-**Numbering:** Phases 21 (retrieval quality, DONE) and 22 (signed update bundles, blocked on
-its key-management design) belong to the functionality wave — this UI wave starts at 23.
-
-**Test note:** run vitest from the `apps/desktop` workspace (repo-root runs break renderer
-matchers).
+_Status: **IMPLEMENTED** (Phases 23–27, 2026-06-10, branch `ui-phase-23-tokens-theming`).
+This is the **condensed design record** per the doc lifecycle rule: the decisions, the facts
+they rest on, and the UI as built. The durable design reference — tokens, layout, components,
+voice, accessibility — is [`design-guidelines.md`](design-guidelines.md) (ADOPTED); this
+record only captures the rollout decisions and as-built deviations. The full original phased
+plan lives in git history — see "History" at the end._
 
 ---
 
-## Decisions
+## 1. Decisions (all resolved)
 
-| ID | Decision | Status |
+| ID | Decision | Outcome |
 |---|---|---|
-| D-UI1 | **Adopt Radix primitives, narrowly scoped:** `@radix-ui/react-dialog`, `react-popover`, `react-dropdown-menu`, `react-tooltip` only (focus traps, dismissal, positioning are easy to get wrong by hand). Pure JS, MIT, renderer-bundled — same class as `react-markdown`. Segmented control, switch, chips, badges, banners stay hand-rolled. | **APPROVED 2026-06-10; EXECUTED in Phase 24** — pinned exact (`react-dialog@1.1.16`, `react-popover@1.1.16`, `react-dropdown-menu@2.1.17`, `react-tooltip@1.2.9`), 42 transitive packages reviewed (all MIT/pure-JS/no install scripts), recorded in BUILD_STATE §3. Phase 24 uses Dialog only; the rest are staged for Phase 25. |
-| D-UI2 | **Theme setting `'system' \| 'light' \| 'dark'`, default `'system'`** (resolves to light when the OS reports nothing). The pre-unlock gate cannot read settings (encrypted DB) → the gate always follows the OS theme. | **RESOLVED — implemented as written in Phase 23** (BUILD_STATE §3 entry) |
-| D-UI3 | **Home stays**, rebuilt as a readiness hub ("is everything ready?" at a glance). Re-evaluate after Phase 26: if it duplicates the Chat empty state, fold it in. | **RESOLVED 2026-06-10 (Phase 26): Home STAYS.** Built as the readiness hub and re-evaluated: it does NOT duplicate the Chat empty state. Chat's empty state teaches *what to ask* (example chips, mode); Home answers *is the system ready* — workspace protection, model running/loading/missing with remediation buttons, document count, and the non-blocking preflight warnings. Folding those into Chat would put system warnings and setup remediation on the conversation canvas (against guidelines §3 "the canvas is the conversation" + §3 errors-inline-and-rare). Revisit only if the Phase-27 first-run flow absorbs the remediation duties. |
-| D-UI4 | **Depth-mode ids stay `fast\|balanced\|deep`** everywhere in code/IPC/persistence; only UI labels change to Quick/Balanced/Thorough. No data migration. | LOCKED — **EXECUTED in Phase 25** (DepthMenu labels; tests assert the label↔id mapping) |
+| D-UI1 | **Radix primitives, narrowly scoped** — `react-dialog@1.1.16`, `react-popover@1.1.16`, `react-dropdown-menu@2.1.17`, `react-tooltip@1.2.9`, pinned exact; 42 transitive packages license-reviewed (all MIT/pure-JS/no install scripts). Segmented control, switch, chips, badges, banners stay hand-rolled. | **EXECUTED** — Dialog (Phase 24), Popover + DropdownMenu (Phase 25), Tooltip (Phase 27, the ambient indicator). |
+| D-UI2 | Theme setting `'system' \| 'light' \| 'dark'`, default `'system'`. The pre-unlock gate cannot read settings (encrypted DB) → **the gate always follows the OS theme**. | **IMPLEMENTED** as written (Phase 23; `renderer/theme.ts`). |
+| D-UI3 | **Home stays**, rebuilt as the readiness hub. Re-evaluated after Phase 26: it does NOT duplicate the Chat empty state (Chat teaches *what to ask*; Home answers *is the system ready*), and the Phase-27 first-run flow did not absorb its remediation duties (the starter step only routes; Home keeps live status + preflight). | **RESOLVED — Home stays.** |
+| D-UI4 | Depth-mode ids stay `fast\|balanced\|deep` in code/IPC/persistence; only UI labels are Quick/Balanced/Thorough. No data migration. | **EXECUTED** (Phase 25 `DepthMenu`; tests pin the label↔id mapping). |
 
----
+## 2. Facts the wave rests on
 
-## Phase 23 — Token foundation + light/dark theming
+- **Renderer-only, with two scoped exceptions:** the additive `AppSettings.theme` key
+  (Phase 23) and user-facing main-process **string literals** (Phase 27 copy sweep — error
+  messages/notices only, no logic/IPC/schema changes). All hard rules held: fully offline
+  (no web fonts/CDNs — system font stacks per guidelines §4.4), no telemetry, Windows
+  first-class.
+- **Run vitest from `apps/desktop`** — repo-root runs break the renderer matchers.
+- The old accent `#4f8cff` as a filled-button background fails AA (3.22:1); filled controls
+  use `--accent-600 #2f6fed` (4.55:1) in both themes (guidelines §4.2).
+- `listModels` needs an unlocked workspace, so the first-run "is a model installed?" check
+  runs **after** create succeeds, before handing off to the shell.
 
-The mechanical base everything else builds on. App looks near-identical in dark; light
-theme appears for the first time.
+## 3. As built, per phase
 
-1. **Tokens:** new `apps/desktop/src/renderer/tokens.css` (imported before `styles.css`):
-   neutral/accent/semantic ramps, role tokens (`:root` = light, `[data-theme="dark"]` =
-   dark overrides), type scale, spacing, radii, shadows, motion durations + `--ease`,
-   font stacks — exactly guidelines §4.
-2. **Restyle `styles.css` onto role tokens.** Replace the 8 legacy vars (`--bg`, `--panel`,
-   `--panel-2`, `--border`, `--text`, `--muted`, `--accent`, `--good`) with role tokens;
-   delete the legacy block. Fix the AA failure: `.btn.primary` fill → `--accent-600`.
-3. **Global a11y baseline in CSS:** `:focus-visible` ring (outline, not box-shadow only),
-   `@media (prefers-reduced-motion: reduce)` kill-switch, minimum hit-target sizes on
-   buttons/toggles.
-4. **Theme plumbing:** additive `AppSettings.theme` (default `'system'`, enum-guarded in
-   `updateSettings` like `gpuMode`). Renderer sets `data-theme` on `<html>` from the
-   resolved setting + a `matchMedia('(prefers-color-scheme: dark)')` listener.
-   `WorkspaceGate` (pre-unlock) follows the OS only.
-5. **Settings UI:** "Appearance" card — System / Light / Dark segmented control.
+- **Phase 23 — tokens + theming.** `renderer/tokens.css` (ramps theme-constant; role tokens
+  per theme: `:root` = light, `[data-theme="dark"]` = dark), full `styles.css` restyle onto
+  role tokens, global a11y baseline (`:focus-visible` outline ring, reduced-motion
+  kill-switch, ≥24px hit targets), additive enum-guarded `AppSettings.theme` + the Settings
+  Appearance card. Components never theme-check.
+- **Phase 24 — shared components.** `renderer/components/`: Button / Badge / Banner /
+  Toast(+host) / Modal / ConfirmDialog / SegmentedControl / Switch / Chip / EmptyState /
+  Progress per guidelines §6; every non-chat screen + the WorkspaceGate migrated; "Saved"
+  feedback via polite-live-region toasts; last browser `confirm()` removed.
+- **Phase 25 — chat restructure (the priority).** `ChatScreen` split into `renderer/chat/`
+  per guidelines §3: collapsible date-grouped ConversationList (hover "⋯" + ConfirmDialog),
+  centered 720px Transcript with per-message Try again · Copy · Save and the inline
+  "▸ Sources (N)" disclosure, header SegmentedControl + "⋯" overflow, composer-footer
+  "Answer detail" dropdown + documents-scope popover, teaching empty state, buffered
+  streaming with the auto-collapsing Thinking… line.
+- **Phase 26 — IA regroup.** Nav 7→5 (Home · Chat · Documents · **AI Model** ‖ Settings);
+  Privacy + Diagnostics became Settings tabs; `renderer/navigation.ts` `resolveNavTarget`
+  with virtual `settings:*` targets + legacy `privacy`/`diagnostics` aliases; Home rebuilt
+  as the readiness hub; AI Model screen with per-card "Technical details" disclosure.
+- **Phase 27 — microcopy, ambient signal, first-run (closed the wave).**
+  - *Copy sweep* (guidelines §7) across renderer + user-facing main-process strings: the
+    stale "Models screen" errors, `NO_DOCUMENT_CONTEXT_ANSWER` (persisted — reword affects
+    future answers only), the wrong-password message ("That password didn't unlock your
+    workspace…"), start-refusal messages (checksum state code → "we couldn't verify its
+    file"), Documents ingestion labels (Waiting/Reading/Preparing/Ready), benchmark
+    "Fast Mode" leftover. A `tests/unit/copy-tone.test.ts` guard pins the tone and scans
+    string literals for stale phrases.
+  - *Ambient indicator:* `components/LocalIndicator.tsx` (Radix **Tooltip**) — quiet
+    "🔒 Local · Offline" in the sidebar (replacing the offline badge; state passed live by
+    App) and the chat header (self-fetching). Hover/focus = reassurance line; click =
+    `settings:privacy`. Honest variant while downloads are enabled: "Local · Downloads
+    allowed" / "Downloads allowed — chats and documents stay local."
+  - *First-run (create path only):* 3 full-window steps in `WorkspaceGate` — welcome/trust
+    framing → create password (hand-rolled advisory strength meter that never blocks; only
+    the 8-char floor + confirm-match gate submission; Show/Hide toggle; paste + password
+    managers work, WCAG 3.3.8; the one honest "can't be recovered" line) → optional starter
+    step rendered only when no chat model is installed (it **routes** to AI Model /
+    Documents — every download gate lives unchanged on the AI Model screen). Skippable;
+    ends on Chat. `onUnlocked(state, landOn?)` lets App land on chat/models/documents;
+    plain unlock stays a single calm screen and keeps the current screen.
+  - *WCAG 2.2 AA sweep:* every role-token pairing contrast-computed in both themes — one
+    real failure fixed (`--border-strong` 2.5:1/2.2:1 → `--n-500`, 4.77:1 light / 3.65:1
+    dark; ramp value, no new hex); forced-colors (Windows High Contrast) rules for the
+    Switch + strength meter; reduced-motion verified. Accepted items recorded in
+    [`known-limitations.md`](known-limitations.md) §Accessibility.
+  - *Found by the eyeball walk:* in the production rollup bundle a second tree-shaken copy
+    of `workspace-vault` made `instanceof WrongPasswordError` fail, so the friendly
+    wrong-password message was unreachable in the built app (vitest runs unbundled and
+    never saw it). The handler now also matches `err.name`; the bundler quirk is recorded
+    in `known-limitations.md`.
 
-**Tests:** settings-guard unit test (`theme` rejects junk), renderer test that `data-theme`
-flips with the setting. **Manual:** every screen eyeballed in both themes.
-**Docs:** `user-guide.md` (appearance setting).
+## 4. Verification pattern (kept for future UI work)
 
-## Phase 24 — Shared component layer
+Each phase: `npm run typecheck` + full vitest from `apps/desktop` + `npm run build`, plus a
+scripted Playwright `_electron` screenshot walk of every touched screen in BOTH themes
+(workspace `%TEMP%\paid-eyeball`, per-phase `walk-phaseNN.mjs`; strip `ELECTRON_RUN_AS_NODE`,
+clear localStorage after the first window, `emulateMedia` for theme/reduced-motion; write a
+`config/policy.json` with `encryption_required: true` to exercise the gate). Suite grew
+644 → 669 tests (+6 manual skips) over the wave.
 
-1. Resolve **D-UI1**; if Radix approved, add the four packages (dev-time install only —
-   record in the license-review habit like prior dep adds).
-2. New `apps/desktop/src/renderer/components/`: `Button`, `Badge` (status pill),
-   `Banner`, `Toast` (+ a tiny toast host in `App.tsx`), `ConfirmDialog`,
-   `SegmentedControl`, `Switch`, `Chip`, `EmptyState`, `Progress`. States/behavior per
-   guidelines §6 (focus, ARIA, 24×24 targets, primary-on-the-right dialogs).
-3. Migrate the **non-chat** screens (Home, Documents, Models, Settings, Privacy,
-   Diagnostics, WorkspaceGate) off ad-hoc markup onto these components. Existing browser
-   `confirm()` calls (e.g. conversation delete) → `ConfirmDialog`.
-4. "Copied"/"Saved" feedback → toasts.
+## History
 
-**Tests:** component unit tests (focus trap, Esc, roving tabindex on SegmentedControl);
-existing renderer tests stay green. **Docs:** none beyond guidelines (already adopted).
-
-## Phase 25 — Chat screen restructure ⟵ the priority
-
-Implements guidelines §3 exactly. Renderer-only; chat/RAG IPC untouched.
-
-1. **Split `ChatScreen.tsx` (676 lines)** into `chat/` components: `ConversationList`
-   (collapsible, date-grouped, hover "⋯" menu with delete → ConfirmDialog),
-   `Transcript` (centered, max-width 720px, `--text-md` body), `MessageActions`
-   (hover/focus row: Try again · Copy · Save), `Composer` (auto-grow textarea, single
-   Send/Stop button, footer row), `SourcesDisclosure` (from `SourcePanel`).
-2. **Header:** SegmentedControl "Chat | Ask my documents" + "⋯" overflow (Save this
-   conversation = the old Export) + the ambient local indicator placeholder (filled in
-   Phase 27).
-3. **Composer footer:** "Answer detail ▾" dropdown (Quick/Balanced/Thorough; Deep/Thorough
-   hidden when the model lacks thinking support — current behavior preserved) and, in
-   documents mode, "📄 Using N documents ▾" popover replacing the scope-chip row.
-4. **Remove** the dismissible doc-hint banner; **add** the teaching empty state (example
-   prompt chips; "Add documents to ask about them" nudge via the existing `navigate()`).
-5. **Streaming:** collapsed inline "Thinking…" line (expand → reasoning; auto-collapse on
-   first answer token), token buffering against layout thrash, ARIA live region, Stop
-   reachable by keyboard.
-6. Conversation-list collapse state remembered (localStorage — UI preference, not user
-   data).
-
-**Tests:** update `tests/renderer/ChatHomeNav` + chat renderer tests; new tests for empty
-state, scope popover, per-message actions, mode segmented control. **Docs:**
-`user-guide.md` chat section rewrite.
-
-## Phase 26 — Information architecture regroup
-
-1. **Nav 7 → 5** in `App.tsx`: Home · Chat · Documents · AI Model ‖ Settings.
-   `SettingsScreen` becomes tabbed: General / Privacy & data (absorbs `PrivacyScreen`) /
-   Diagnostics (absorbs `DiagnosticsScreen`, visually quieter). `navigate()` gains virtual
-   targets (`'settings:privacy'`, `'settings:diagnostics'`) so existing entry points
-   (offline badge, banners) keep working.
-2. **Home rebuild:** readiness hub — workspace state, model running?, document count, one
-   primary "Start chatting", quiet preflight warnings. (D-UI3 re-evaluation point.)
-3. **Models → "AI Model":** active model first with plain-language size/speed hint,
-   friendly picker, checksums/quantization/paths behind a "Technical details" disclosure;
-   verify/download flows unchanged underneath.
-
-**Tests:** nav/renderer tests updated; settings-tab routing test. **Docs:**
-`user-guide.md`, `architecture.md` (screen list).
-
-## Phase 27 — Microcopy, ambient trust signal, first-run
-
-1. **Copy sweep** per guidelines §7 across renderer + user-facing main-process strings
-   (error paths, runtime notices; `COMPATIBILITY_MODE_NOTICE` already matches the tone).
-   Error codes stay visible only inside Diagnostics.
-2. **Ambient indicator:** evolve the sidebar offline badge into the header "Local ·
-   Offline" signal with the reassurance popover; honest variant while downloads are
-   enabled ("Downloads allowed — chats and documents stay local").
-3. **First-run (WorkspaceGate, create path only):** 3 steps — welcome/trust framing →
-   create password (add show-password toggle + strength meter; paste/password managers
-   must work — verify nothing blocks them) → optional "first model/documents" step that
-   only renders when no model is installed and keeps every existing download gate
-   (policy ∧ setting ∧ per-download confirmation). Unlock path stays a single calm screen.
-4. **Final WCAG 2.2 AA sweep** (guidelines §9): contrast audit of every token use,
-   full-keyboard pass, Windows High Contrast Mode check, reduced-motion check.
-
-**Tests:** gate renderer tests (steps, paste, strength hint), copy-string tests where
-asserted today. **Docs:** `user-guide.md` first-run section; close this plan out into a
-design record per the doc lifecycle rule.
-
----
-
-## Risks
-
-- **No visual regression harness** — restyling 587 lines of CSS can silently break a
-  screen. Mitigation: per-phase manual eyeball of all screens in both themes (the per-phase
-  "app still launches" ritual, widened), keep phases small.
-- **Renderer test churn** in Phase 23 — the chat tests assert today's DOM. Budget time to
-  rewrite them against the new structure, not to patch selectors.
-- **Radix dep (D-UI1)** — four new renderer deps need the usual license/offline review;
-  if rejected, ConfirmDialog/popovers are hand-rolled in Phase 22 (+ ~1 phase of effort
-  and a11y risk).
-- **Light theme is net-new surface** — semantic colors (badges, warnings) have only ever
-  been seen on dark; Phase 21's manual pass must check every badge/banner state on light.
+The full original plan (per-phase work lists, risks, test plans) is in git history:
+`git log --follow docs/ui-ux-redesign-plan.md`; last full version before condensation:
+`git show d2ecf5a:docs/ui-ux-redesign-plan.md`.

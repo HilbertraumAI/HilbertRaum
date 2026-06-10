@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import type { ChatDepthMode, Conversation, DocumentInfo, Message } from '@shared/types'
-import { Banner, Button, Chip, EmptyState, SegmentedControl, useToast } from '../components'
+import { Banner, Button, Chip, EmptyState, LocalIndicator, SegmentedControl, useToast } from '../components'
 import { Composer, ConversationList, DepthMenu, ScopePopover, Transcript } from '../chat'
 
 // Chat screen (spec §7.6 / §7.8; layout per design-guidelines §3, Phase 25). The
@@ -14,7 +14,7 @@ import { Composer, ConversationList, DepthMenu, ScopePopover, Transcript } from 
 // layout thrash); both calls resolve with the final persisted assistant message. A mode
 // is fixed per conversation (its `mode` field); the header segmented control picks the
 // mode for the NEXT new conversation. Both need a running model — when none is running
-// we show an empty state pointing at the Models screen.
+// we show an empty state pointing at the AI Model screen.
 //
 // Phase 20 (spec §10.3): the composer footer carries the answer-detail dropdown
 // (Quick / Balanced / Thorough — ids stay fast|balanced|deep per D-UI4), sticky per
@@ -493,8 +493,8 @@ export function ChatScreen({ onNavigate, initialMode, initialScopeDocumentIds }:
             disabled={streaming}
           />
           <div className="chat-header-spacer" />
-          {/* Ambient "Local · Offline" indicator lands here in Phase 27. */}
-          <span className="chat-header-slot" data-slot="local-indicator" />
+          {/* Ambient "Local · Offline" signal (Phase 27, guidelines §7). */}
+          <LocalIndicator onNavigate={onNavigate} />
           <DropdownMenu.Root>
             <DropdownMenu.Trigger asChild>
               <button
@@ -546,9 +546,7 @@ export function ChatScreen({ onNavigate, initialMode, initialScopeDocumentIds }:
           onSend={() => void onSend()}
           onStop={onStop}
           streaming={streaming}
-          placeholder={
-            mode === 'documents' ? 'Ask about your documents…' : 'Message Private AI Drive Lite…'
-          }
+          placeholder={mode === 'documents' ? 'Ask about your documents…' : 'Message…'}
           sendLabel={mode === 'documents' ? 'Ask' : 'Send'}
           inputRef={composerRef}
           footer={

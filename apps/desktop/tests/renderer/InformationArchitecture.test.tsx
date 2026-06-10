@@ -127,11 +127,12 @@ describe('App shell — 5-item nav (Phase 26)', () => {
     expect(within(nav).queryByText(/diagnostics/i)).not.toBeInTheDocument()
   })
 
-  it('routes the sidebar offline badge to Settings → Privacy & data', async () => {
+  it('routes the sidebar "Local · Offline" indicator to Settings → Privacy & data', async () => {
+    // Phase 27: the offline badge evolved into the ambient indicator — same route.
     const user = userEvent.setup()
     stubAppShell()
     render(<App />)
-    await user.click(await screen.findByRole('button', { name: /offline mode/i }))
+    await user.click(await screen.findByRole('button', { name: 'Local · Offline' }))
 
     // The Settings screen opens with the Privacy & data tab selected…
     expect(await screen.findByRole('heading', { name: 'Settings' })).toBeInTheDocument()

@@ -11,3 +11,9 @@ export { Switch, type SwitchProps } from './Switch'
 export { Chip, type ChipProps } from './Chip'
 export { EmptyState, type EmptyStateProps } from './EmptyState'
 export { Progress, type ProgressProps } from './Progress'
+export {
+  LocalIndicator,
+  localIndicatorLabel,
+  localIndicatorDetail,
+  type LocalIndicatorProps
+} from './LocalIndicator'

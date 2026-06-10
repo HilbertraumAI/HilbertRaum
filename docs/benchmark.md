@@ -80,7 +80,7 @@ dropped — the official `Qwen/Qwen3-1.7B-GGUF` repo ships no Q4_K_M — so `qwe
 the smallest bundled chat model, now also covers TINY + UNKNOWN. See BUILD_STATE §9.)
 
 The larger `qwen3-30b-a3b-q4` (MoE) carries an **empty** `recommended_profiles`, so it is never
-auto-recommended — it stays selectable on the Models screen as a deliberate opt-in (it needs ~20 GB
+auto-recommended — it stays selectable on the AI Model screen as a deliberate opt-in (it needs ~20 GB
 RAM but runs near-3B speed). Each profile is claimed by exactly one chat model, so the first-match
 `recommendModelId` is unambiguous.
 
@@ -104,7 +104,7 @@ store** as `AppSettings.lastBenchmark` (a JSON `BenchmarkResult`, default `null`
 falling back to **`UNKNOWN`** until the user runs the benchmark for the first time:
 
 - `getAppStatus().hardwareProfile` (Home screen).
-- `buildModelList({ profile, … })` (Models screen `recommended` flag).
+- `buildModelList({ profile, … })` (AI Model screen `recommended` flag).
 
 The Diagnostics screen surfaces a **Run benchmark** button and renders RAM / CPU / OS-arch /
 drive read-write / tokens-sec / assigned profile / recommended model + the warnings, and

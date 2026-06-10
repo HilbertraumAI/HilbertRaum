@@ -36,7 +36,7 @@ All models are **Apache-2.0** (Qwen3, BGE reranker) / **MIT** (E5). Sizes/RAM co
 (`size_on_disk_gb` / `recommended_min_ram_gb`); download URLs live in the manifests' `download.url`
 (catalog with source links in the [README](../README.md)). **Auto-tier** is the hardware profile the
 benchmark auto-recommends the model for (`recommended_profiles`); the **30B-A3B MoE** has an empty
-list — it is selectable on the Models screen but never auto-recommended, since its download + RAM cost
+list — it is selectable on the AI Model screen but never auto-recommended, since its download + RAM cost
 should be a deliberate choice. Adding a model is **manifest-only** (no code change): drop a YAML in
 `model-manifests/chat/` with a `download` block + a `recommended_profiles` list.
 
@@ -131,7 +131,7 @@ printed first). The DIY path pulls from the **upstream source**, which sidesteps
 ### The in-app downloader (Phase 18 — plan §12.3 revived)
 
 A model that is **missing** (or failed its checksum) and whose manifest carries a `download` block
-can be fetched from the **Models screen**. Three gates, ALL required, re-checked in the main
+can be fetched from the **AI Model screen**. Three gates, ALL required, re-checked in the main
 process on every start (post-mvp-functionality-plan §6.1):
 
 1. **Policy ceiling** — `policy.network.allow_model_downloads`. Since Phase 18 the **default**
@@ -146,7 +146,7 @@ process on every start (post-mvp-functionality-plan §6.1):
    upstream URL. When `license_review.status != approved`, an explicit license-acknowledgement
    checkbox is additionally required (the in-app mirror of `--accept-license`).
 
-When gate 1 or 2 fails, the Models screen says **why** (disabled by the drive's policy vs. the
+When gate 1 or 2 fails, the AI Model screen says **why** (disabled by the drive's policy vs. the
 Settings toggle). Mechanics (`services/downloads.ts`, reusing the `assets.ts` seams):
 async-with-polling job (`downloadModel`/`getDownloadJob`/`cancelDownload` IPC), **one download at a
 time**, bytes land in `<weight>.part` and are renamed into place **only after the SHA-256

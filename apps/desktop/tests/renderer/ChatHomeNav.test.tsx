@@ -172,7 +172,7 @@ describe('ChatScreen — initial mode', () => {
       getRuntimeStatus: vi.fn(async () => runningStatus)
     })
     render(<ChatScreen onNavigate={() => {}} />)
-    expect(await screen.findByPlaceholderText(/message private ai drive/i)).toBeInTheDocument()
+    expect(await screen.findByPlaceholderText("Message…")).toBeInTheDocument()
   })
 })
 

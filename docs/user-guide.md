@@ -1,6 +1,6 @@
 # Private AI Drive Lite — User Guide
 
-_Last updated: 2026-06-10 (Phase 26)_
+_Last updated: 2026-06-10 (Phase 27)_
 
 Private AI Drive Lite is a private AI workspace that runs **entirely on your laptop**, from
 a portable drive. Your prompts, documents, embeddings, and chat history stay local. There is
@@ -50,19 +50,28 @@ Launch the app from your Start menu / Applications folder as usual.
 
 ---
 
-## 3. First run — your workspace
+## 3. First run — guided setup
 
-On first launch you'll set up your **workspace**:
+The first launch walks you through a short, full-window setup:
 
-- **Encrypted (recommended / commercial default):** choose a password. Your chats, settings,
-  and the stored copies of your imported documents are encrypted at rest; the password is
-  **never stored** anywhere. (Model files and local logs are not encrypted — they contain no
-  document contents.) You'll enter the password each time you unlock the drive. If you forget
-  it, the data cannot be recovered — that's the point.
-- **Plaintext (developer mode):** no password, data stored unencrypted. Only available on
-  developer drives.
+1. **Welcome.** A quick orientation: everything stays on this drive — no internet, no
+   account, no tracking. Click **Get started**.
+2. **Create your password.** This password locks everything in your workspace — chats,
+   settings, and the stored copies of your imported documents — on the drive. (Model files
+   and local logs are not encrypted — they contain no document contents.) The password is
+   **never stored** anywhere, and if you forget it the data cannot be recovered — that's
+   the point. While you type, a small strength meter offers honest advice (longer is
+   stronger); it never blocks you. **Show** reveals what you typed, and pasting from a
+   password manager works normally. On developer drives a toggle offers a **plaintext
+   workspace** (no password, unencrypted) instead.
+3. **One last thing (only if no AI model is on the drive yet).** Commercial drives come
+   with a model preinstalled, so most people never see this step. If your drive has none,
+   you can jump straight to choosing a model or adding documents — or **Skip for now** and
+   do it later. Downloading a model stays optional and always asks for your confirmation
+   first (see §5).
 
-After unlocking, you land on the **Home** screen.
+Setup ends in **Chat**, ready for your first question. On every later launch you just
+enter your password on a single unlock screen.
 
 ---
 
@@ -70,8 +79,13 @@ After unlocking, you land on the **Home** screen.
 
 The sidebar has four everyday destinations — **Home**, **Chat**, **Documents**, and
 **AI Model** — plus **Settings** at the bottom. Privacy and Diagnostics live inside
-Settings as tabs (see §8); the **● Offline Mode** badge at the bottom of the sidebar opens
-the privacy details directly.
+Settings as tabs (see §8).
+
+A quiet **🔒 Local · Offline** status sits at the bottom of the sidebar and in the chat
+header. Hover it for the short version — *"Everything stays on this drive. No internet
+connection is used."* — or click it to open the full privacy details. If you have enabled
+internet access for model downloads, it says so honestly: **Local · Downloads allowed**
+(your chats and documents stay local either way).
 
 ### The Home screen
 
@@ -213,7 +227,8 @@ your files.
 ## 7. Ask your documents (RAG)
 
 1. Open **Documents** and **Import** files (txt, md, pdf, docx, csv) or a folder.
-2. Each file shows a status as it is indexed locally (extract → chunk → embed → indexed).
+2. Each file shows a friendly status while it is prepared locally (Waiting → Reading →
+   Preparing → **Ready**).
    Imported files are **copied into your workspace**, so the drive stays self-contained.
    **Preview** opens a read-only view of a document's extracted text — exactly what
    document search and answers are based on. (It shows text, not the original layout: on
@@ -245,8 +260,8 @@ search model than the one currently active, and takes a moment per file.
 
 ## 8. Privacy & offline
 
-Open **Settings → Privacy & data** (or click the **● Offline Mode** badge at the bottom of
-the sidebar) to see where your data lives and confirm the app is offline. Network access is
+Open **Settings → Privacy & data** (or click the **🔒 Local · Offline** status at the bottom
+of the sidebar) to see where your data lives and confirm the app is offline. Network access is
 **off by default** and the app is fully usable with no internet. Logs are stored
 **locally** on the drive and never uploaded.
 
