@@ -52,4 +52,15 @@ describe('settings persistence', () => {
     expect(reread.activeModelId).toBe('qwen3-4b-instruct-q4')
     expect(reread.contextTokens).toBe(4096) // default preserved
   })
+
+  it('theme defaults to system, accepts the enum, and drops junk values (Phase 23)', () => {
+    const db = freshDb()
+    seedSettings(db)
+    expect(getSettings(db).theme).toBe('system')
+    expect(updateSettings(db, { theme: 'dark' }).theme).toBe('dark')
+    expect(updateSettings(db, { theme: 'light' }).theme).toBe('light')
+    // Junk from a buggy/hostile renderer is never persisted (same guard as gpuMode).
+    expect(updateSettings(db, { theme: 'banana' as never }).theme).toBe('light')
+    expect(updateSettings(db, { theme: 'system' }).theme).toBe('system')
+  })
 })

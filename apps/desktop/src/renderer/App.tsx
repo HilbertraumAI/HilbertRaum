@@ -7,6 +7,7 @@ import { ModelsScreen } from './screens/ModelsScreen'
 import { ChatScreen } from './screens/ChatScreen'
 import { DocumentsScreen } from './screens/DocumentsScreen'
 import { WorkspaceGate } from './screens/WorkspaceGate'
+import { setThemeSetting } from './theme'
 import type { WorkspaceStateInfo } from '@shared/types'
 
 type ScreenId =
@@ -85,6 +86,13 @@ export function App(): JSX.Element {
         setDisabledByPolicy(!p.networkAllowedByPolicy)
       })
       .catch(() => active && setOffline(true))
+    // Apply the persisted Appearance setting (Phase 23). Settings are only readable
+    // post-unlock; re-checked alongside the policy so a Settings-screen change made
+    // this session is also picked up after navigation.
+    window.api
+      ?.getSettings()
+      .then((s) => active && setThemeSetting(s.theme))
+      .catch(() => {})
     return () => {
       active = false
     }
@@ -118,6 +126,8 @@ export function App(): JSX.Element {
     const next = await window.api.lockWorkspace()
     setWorkspace(next)
     setScreen('home')
+    // The locked gate cannot read settings — back to following the OS theme.
+    setThemeSetting('system')
   }
 
   if (fatalError) {

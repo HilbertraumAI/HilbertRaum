@@ -39,6 +39,7 @@ export function updateSettings(db: Db, patch: Partial<AppSettings>): AppSettings
     // like `gpuMode: 'banana'` — readers treat anything !== 'auto' as off, which fails
     // safe, but junk must not be stored either).
     if (key === 'gpuMode' && value !== 'auto' && value !== 'off') continue
+    if (key === 'theme' && value !== 'system' && value !== 'light' && value !== 'dark') continue
     upsert.run(key, JSON.stringify(value), now)
   }
   return getSettings(db)

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, shell } from 'electron'
+import { app, BrowserWindow, nativeTheme, shell } from 'electron'
 import { dirname, join } from 'node:path'
 import { resolvePaths, ensureWorkspaceDirs, findPreparedDriveRoot } from './services/workspace'
 import { getSettings, updateSettings } from './services/settings'
@@ -282,7 +282,10 @@ function createWindow(): void {
     minHeight: 600,
     show: false,
     title: 'Private AI Drive Lite',
-    backgroundColor: '#0f1115',
+    // Pre-paint window color: follow the OS theme (the renderer applies the real
+    // theme tokens — --bg light/dark — before first paint; this only avoids a
+    // mismatched flash while the window comes up). Phase 23.
+    backgroundColor: nativeTheme.shouldUseDarkColors ? '#0f1115' : '#f7f8fa',
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,

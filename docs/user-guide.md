@@ -224,7 +224,18 @@ password — only names, ids, and counts. It keeps the most recent 5,000 entries
 
 ---
 
-## 9. Lock / quit
+## 9. Appearance (light and dark)
+
+The app follows your operating system's light/dark preference by default. To pick one
+explicitly, open **Settings → Appearance** and choose **System**, **Light**, or **Dark** —
+the change applies immediately and is remembered on the drive.
+
+One small exception: the lock screen always follows the system theme. Your settings live
+inside the encrypted workspace, so before you unlock it the app can't know your choice yet.
+
+---
+
+## 10. Lock / quit
 
 - **Lock now** (encrypted workspaces) re-locks your data without quitting. It also shuts down
   the AI model so nothing you typed stays in memory; after unlocking, your selected model loads
@@ -234,7 +245,7 @@ password — only names, ids, and counts. It keeps the most recent 5,000 entries
 
 ---
 
-## 10. Move between laptops
+## 11. Move between laptops
 
 Because everything lives on the drive, you can unplug it and plug it into another laptop —
 your models, documents, and chat history come with you. Eject the drive safely before

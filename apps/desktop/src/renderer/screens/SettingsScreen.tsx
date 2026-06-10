@@ -1,5 +1,12 @@
 import { useEffect, useState } from 'react'
-import type { AppSettings } from '@shared/types'
+import { setThemeSetting } from '../theme'
+import type { AppSettings, ThemeSetting } from '@shared/types'
+
+const THEME_CHOICES: Array<{ value: ThemeSetting; label: string }> = [
+  { value: 'system', label: 'System' },
+  { value: 'light', label: 'Light' },
+  { value: 'dark', label: 'Dark' }
+]
 
 export function SettingsScreen(): JSX.Element {
   const [settings, setSettings] = useState<AppSettings | null>(null)
@@ -14,6 +21,8 @@ export function SettingsScreen(): JSX.Element {
     try {
       const next = await window.api.updateSettings(p)
       setSettings(next)
+      // Appearance applies immediately (Phase 23) — the saved value, not the request.
+      if (p.theme !== undefined) setThemeSetting(next.theme)
     } finally {
       setSaving(false)
     }
@@ -47,6 +56,26 @@ export function SettingsScreen(): JSX.Element {
           model downloads from the Models screen — each one asks for confirmation first, and a
           drive policy can keep downloads disabled entirely. Your prompts and documents never
           leave this device regardless of this setting.
+        </p>
+      </div>
+
+      <div className="card">
+        <h2>Appearance</h2>
+        <div className="actions" role="group" aria-label="Theme">
+          {THEME_CHOICES.map((choice) => (
+            <button
+              key={choice.value}
+              className={`btn sm ${settings.theme === choice.value ? 'selected' : ''}`}
+              aria-pressed={settings.theme === choice.value}
+              onClick={() => patch({ theme: choice.value })}
+            >
+              {choice.label}
+            </button>
+          ))}
+        </div>
+        <p className="hint">
+          “System” follows your operating system’s light/dark preference. The lock screen
+          always follows the system theme.
         </p>
       </div>
 

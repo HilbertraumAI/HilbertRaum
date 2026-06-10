@@ -39,8 +39,12 @@ runtimes), an FTS5 keyword pass + RRF fusion now hybridizes `retrieve()`, and an
 CPU-pinned `bge-reranker-v2-m3` sidecar reorders candidates behind a `Reranker` interface
 whose absent default keeps retrieval byte-identical (§3 entry; working paper
 [`docs/retrieval-quality-plan.md`](docs/retrieval-quality-plan.md), decisions D8–D15; design
-record `docs/rag-design.md` §11). Release-wise, remaining work =
-**manual release acceptance only** (§5, incl. the GPU
+record `docs/rag-design.md` §11). **The UI polish wave (Phases 23–27) is underway: Phase 23
+(design-token foundation + light/dark theming) is DONE** on branch `ui-phase-23-tokens-theming`
+(not merged) — tokens.css per the adopted guidelines §4, the full styles.css role-token
+restyle with the AA primary-button fix, the global a11y baseline, and the additive
+`AppSettings.theme` setting with the Settings Appearance card (§3 entry). Release-wise,
+remaining work = **manual release acceptance only** (§5, incl. the GPU
 hardware matrix, item 1b). Consciously-accepted gaps live in
 [`docs/known-limitations.md`](docs/known-limitations.md)._
 
@@ -72,6 +76,8 @@ hardware matrix, item 1b). Consciously-accepted gaps live in
 | 19 | Audit log (`runtime_events`) | 🟢 done |
 | 20 | Answer-depth modes (Fast/Balanced/Deep) | 🟢 done |
 | 21 | Retrieval quality (reranker + hybrid FTS5 search) | 🟢 done |
+| 22 | Signed offline update bundles | 🔴 blocked (key-management design) |
+| 23 | UI design tokens + light/dark theming | 🟢 done (branch `ui-phase-23-tokens-theming`, not merged) |
 
 Legend: ⚪ not started · 🟡 in progress · 🟢 done · 🔴 blocked
 
@@ -859,6 +865,47 @@ Repo root: `f:\_coding\ai_drive`.
   `tests/manual/rerank-smoke.test.ts` (`PAID_RERANK_SMOKE=<drive root>`): real F16 load on
   b9585 + relevance sanity + the §7 latency measurement. No new audit events (sentinel surface
   unchanged). Gate: typecheck clean, 601 tests, build green.
+- **Phase 23 — UI design tokens + light/dark theming (2026-06-10, plan
+  [`docs/ui-ux-redesign-plan.md`](docs/ui-ux-redesign-plan.md) Phase 23; design source
+  [`docs/design-guidelines.md`](docs/design-guidelines.md) §4/§5/§9; built on branch
+  `ui-phase-23-tokens-theming` — NOT merged to master):**
+  1. **`renderer/tokens.css` is the single styling source** (imported before `styles.css`):
+     the §4 ramps (neutral/accent/semantic, theme-constant), role tokens (`:root` = LIGHT —
+     the new default-resolving theme; `[data-theme="dark"]` overrides role tokens only —
+     today's palette lightly tuned per §4.3), type scale (size+line pairs), spacing, radii,
+     shadows, motion + `--ease`, offline system font stacks. Beyond the guidelines table,
+     three role aliases keep styles.css theme-blind: `--accent` (accent-600 light /
+     accent-500 dark — borders/icons/selected states), `--success`/`--error`/`--warning`
+     (the per-theme AA ramp steps), plus `--surface-hover` and `--code-bg` (light needs
+     tonal steps where dark used translucent black).
+  2. **`styles.css` fully on role tokens; the 8 legacy vars are gone.** AA fixes: filled
+     controls (`.btn.primary`, `.badge.running`, `.chat-conv-badge`) use **`--accent-600`
+     (#2f6fed, white text 4.55:1) in BOTH themes** — the old `#4f8cff` fill (3.22:1) is
+     banned as a fill and survives only as dark-theme accent/link/focus. Inputs moved to
+     `--border-strong` (§6).
+  3. **A11y baseline (§9):** global `:focus-visible` 2px `--focus` **outline** + 2px offset
+     (outline, not box-shadow — Windows High Contrast keeps it; the old `outline: none` on
+     inputs is gone), a `prefers-reduced-motion` kill-switch, `button { min-width/height:
+     24px }` + `.toggle { min-height: 24px }` (checkboxes stay 16px visually — the
+     clickable label supplies the ≥24px target).
+  4. **Theme plumbing (decision D-UI2 as planned):** additive `AppSettings.theme:
+     'system'|'light'|'dark'` (default `'system'`), enum-guarded in `updateSettings` like
+     `gpuMode`. `renderer/theme.ts` owns `data-theme` on `<html>`: `initTheme()` runs
+     before first render (OS theme via `matchMedia('(prefers-color-scheme: dark)')` + live
+     change listener; no matchMedia ⇒ light); `setThemeSetting()` is called by App.tsx when
+     settings load post-unlock (and re-checked alongside the policy fetch), by the Settings
+     screen on change, and with `'system'` on **Lock now** — the pre-unlock gate can't read
+     the (encrypted) settings, so it always follows the OS. The BrowserWindow pre-paint
+     `backgroundColor` now follows `nativeTheme.shouldUseDarkColors` (flash fix only; not
+     an IPC change).
+  5. **Settings → Appearance card:** System / Light / Dark button group (`aria-pressed`,
+     non-color-only selected state), applies immediately.
+  Tests (+7 → 608): settings-guard (junk `theme` never persisted, default `'system'`) in
+  `db-settings.test.ts`; `tests/renderer/Theme.test.tsx` (resolver, OS-follow + live flip,
+  explicit-choice-overrides-OS, Settings card persists + flips `data-theme`). Eyeballed
+  every screen + the gate + the lock flow in BOTH themes via a scripted Electron/Playwright
+  walk (screenshots reviewed; light badge/banner states checked). Gate: typecheck clean,
+  608 tests, build green.
 
 ---
 
@@ -1467,21 +1514,25 @@ items are **MANUAL acceptance only** (R2/R5/R7 + the GPU hardware matrix). In ro
    E5-indexed corpus → promote a measured default; semantics already locked, D12). Smaller
    leftovers: an icon/`buildResources` for electron-builder; ANN vector index only if a real
    corpus outgrows the linear scan (plan §9 item 4 / D15 — explicitly not built).
-4. **UI/UX polish wave (Phases 23–27) — PLANNED 2026-06-10, not started:**
+4. **UI/UX polish wave (Phases 23–27) — IN PROGRESS: Phase 23 DONE 2026-06-10** on branch
+   `ui-phase-23-tokens-theming` (not merged — see the §3 entry: tokens.css, full role-token
+   restyle + AA fixes, a11y baseline, `AppSettings.theme` + Appearance card, both themes
+   eyeballed on every screen). Wave docs:
    [`docs/design-guidelines.md`](docs/design-guidelines.md) (ADOPTED — tokens, light/dark
    themes, chat-screen layout, IA regroup 7→5 nav, components, microcopy, WCAG 2.2 AA;
    distilled from an external design-research round) +
    [`docs/ui-ux-redesign-plan.md`](docs/ui-ux-redesign-plan.md) (working paper sequencing
-   23 tokens/theming → 24 component layer → 25 chat restructure [the priority] → 26 IA
+   23 tokens/theming ✅ → 24 component layer → 25 chat restructure [the priority] → 26 IA
    regroup → 27 microcopy/ambient-trust/first-run). Renderer-only except the additive
-   `AppSettings.theme` key. Open decisions D-UI1–D-UI3 (Radix primitives, theme default,
-   Home's fate) live in the plan; D-UI1 needs confirming before Phase 24.
+   `AppSettings.theme` key (now shipped) + the OS-following pre-paint window color.
+   D-UI2 is resolved as planned; open decisions D-UI1/D-UI3 (Radix primitives, Home's
+   fate) live in the plan; **D-UI1 needs confirming before Phase 24.**
 
-**Current gate (2026-06-10, post-Phase-21): typecheck clean, 601/601 tests pass (+6 manual
-tests — 4 GPU smoke behind `PAID_GPU_SMOKE`, 1 thinking smoke behind `PAID_THINKING_SMOKE`,
-1 rerank smoke behind `PAID_RERANK_SMOKE` — skipped in CI), `npm run build` green.** The
-per-phase gate history (test counts, bundle sizes, per-phase test inventories) lives in git
-history.
+**Current gate (2026-06-10, post-Phase-23 on `ui-phase-23-tokens-theming`): typecheck clean,
+608/608 tests pass (+6 manual tests — 4 GPU smoke behind `PAID_GPU_SMOKE`, 1 thinking smoke
+behind `PAID_THINKING_SMOKE`, 1 rerank smoke behind `PAID_RERANK_SMOKE` — skipped in CI),
+`npm run build` green.** The per-phase gate history (test counts, bundle sizes, per-phase
+test inventories) lives in git history.
 
 ---
 
