@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { existsSync, readdirSync } from 'node:fs'
+import { existsSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import {
   createSelectingRuntimeFactory,
@@ -47,8 +47,19 @@ const patientMakeLlama = (
 function firstChatModel(root: string): string | null {
   const dir = join(root, 'models', 'chat')
   if (!existsSync(dir)) return null
-  const gguf = readdirSync(dir).find((f) => f.endsWith('.gguf'))
-  return gguf ? join(dir, gguf) : null
+  // PAID_SMOKE_MODEL pins an explicit filename; otherwise prefer the SMALLEST chat model
+  // so the smoke runs on modest laptops (e.g. a 16 GB Iris Xe box), not just the dev
+  // workstation — the ladder/GPU mechanics don't depend on model size.
+  const override = process.env.PAID_SMOKE_MODEL?.trim()
+  if (override) {
+    const p = join(dir, override)
+    return existsSync(p) ? p : null
+  }
+  const ggufs = readdirSync(dir)
+    .filter((f) => f.endsWith('.gguf'))
+    .map((f) => ({ path: join(dir, f), size: statSync(join(dir, f)).size }))
+    .sort((a, b) => a.size - b.size)
+  return ggufs.length ? ggufs[0].path : null
 }
 
 describe.skipIf(!enabled)('GPU smoke (manual, real binaries + real model + real GPU)', () => {

@@ -1462,8 +1462,12 @@ items are **MANUAL acceptance only** (R2/R5/R7 + the GPU hardware matrix). In ro
 1b. **GPU manual hardware matrix (THIS list is canonical — release acceptance, cannot be CI'd):**
    ① Win11 + discrete NVIDIA (dev box RTX 3080 Ti — ✅ done via the Phase-15 smoke; capture tok/s
    for release notes) · ② Win + discrete AMD (Adrenalin) · ③ Win laptop, Intel Iris Xe only
-   (modest gain; profile does NOT bump) · ④ Win with no GPU / Server VM / RDP session (empty probe
-   → silent CPU, no scary UI) · ⑤ Win with a pre-Vulkan-1.2 GPU (clean rung-1 degradation) ·
+   (modest gain; profile does NOT bump) — **✅ done 2026-06-10 (i7-1185G7 + Iris Xe, `PAID_GPU_SMOKE`
+   on `D:\`): probe sees "Intel(R) Iris(R) Xe Graphics" (8108 MiB), rung-1 starts as backend=gpu and
+   streams, `gpuMode:off`→cpu, simulated rung-1 failure lands on the rung-3 CPU safety net; Iris Xe is
+   integrated so `gpuUsefulForProfile` keeps the profile from bumping (unit-tested)** · ④ Win with no
+   GPU / Server VM / RDP session (empty probe → silent CPU, no scary UI) · ⑤ Win with a pre-Vulkan-1.2
+   GPU (clean rung-1 degradation) ·
    ⑥ Linux + NVIDIA and/or AMD (symlink-materialized libs load from exFAT) · ⑦ mac arm64
    regression (Metal unchanged) · ⑧ any GPU box: kill the driver mid-generation
    (`dxcap -forcetdr`) → §5.3 auto-fallback + friendly notice + next-message-works · ⑨ a
@@ -1489,7 +1493,9 @@ items are **MANUAL acceptance only** (R2/R5/R7 + the GPU hardware matrix). In ro
    Activity-panel eyeball on the same drive (events appear; export saves); **a real
    Deep-mode answer with visible thinking from Qwen3 4B on the test drive**
    (`tests/manual/thinking-smoke.test.ts` with `PAID_THINKING_SMOKE=<drive root>` covers the
-   mechanism; the eyeball covers the UI). **Phase 21 manual items — reranker smoke DONE
+   mechanism — **✅ run 2026-06-10 on `D:\` (4B): deep streamed 1749 reasoning chars + a clean
+   answer with no `<think>` tags; balanced streamed zero reasoning deltas, both answers correct**;
+   the in-app UI eyeball of the collapsed Thinking… block still pending the live run). **Phase 21 manual items — reranker smoke DONE
    (2026-06-10):** fetched the GGUF to `D:\`, promoted the real sha256 into the manifest, ran
    `tests/manual/rerank-smoke.test.ts` (`PAID_RERANK_SMOKE=D:\`) — F16 loads on b9585, relevance
    correct (+8.82 vs −11.01), worst-case 12-candidate batch ≈ 24.7 s on a CPU-pinned i7-1185G7
