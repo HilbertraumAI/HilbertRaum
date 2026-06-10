@@ -1958,8 +1958,20 @@ items are **MANUAL acceptance only** (R2/R5/R7 + the GPU hardware matrix). In ro
    two documents (vector-paired sections) → 36 audio transcription ingestion (**new
    whisper.cpp sidecar family** — research-gated like the GPU plan) → 37 voice dictation →
    38 scanned-PDF/photo OCR (tesseract.js WASM, vendored offline assets; step 0 =
-   image-only-PDF detection notice, can ship early). Decisions are OPEN — run a review
-   round per phase before code (D1–D7 precedent).
+   image-only-PDF detection notice, can ship early). **Review round 1 resolved 2026-06-11:
+   D23–D30 + D33 locked** — envelope descriptor v2 for password change (migrate on first
+   change); strict one-at-a-time doc-task/chat concurrency (R-T1 demoted to informational);
+   translation + compare results materialize as corpus documents with `origin_json`
+   provenance; OCR never automatic for PDFs (explicit "Make searchable" task). D31/D32/D34
+   stay open by design — they resolve with research gates R-O1/R-O2/R-W1. **Plan audit
+   2026-06-11 (same day):** all plan §2 code-facts re-verified against the source; one
+   correction (NO `setPermissionRequestHandler` exists and Electron default-GRANTS
+   permission requests — Phase 37/D30 now installs a deny-by-default handler, flagged as an
+   early hardening win), one naming fix (`models/transcriber/`, role convention), one new
+   decision (D35: audio originals must be kept — the re-index contract forces it; re-index
+   = re-transcription), staleness/visibility guards added to Phases 34/35, and the additive
+   `whisper_cpp` block's forward-compatibility verified in `shared/runtime-sources.ts`.
+   **Phase 31 (conversation search) is ready to start.**
 
 **Current gate (2026-06-10, post-merge of the UI polish wave into master — Phase 21
 verification + Phases 23–27 combined): typecheck clean, 669/669 tests pass (+8 manual

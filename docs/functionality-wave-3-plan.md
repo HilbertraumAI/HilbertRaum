@@ -1,18 +1,24 @@
 # Post-MVP Functionality — wave 3 working paper (Phases 31–38)
 
-_Status: **WORKING PAPER — NOT IMPLEMENTED** (drafted 2026-06-10). Per the CLAUDE.md doc
-lifecycle rule this is a plan document: once a phase is implemented its section condenses
-into a design record and the durable content moves to the topic docs. Phases 29–30 are
-reserved by [`model-catalog-expansion-plan.md`](model-catalog-expansion-plan.md); this wave
-starts at **Phase 31**. Decisions continue the project-wide numbering at **D23** (D1–D7
-wave 1 · D8–D15 retrieval · D16–D22 catalog · D-UI1–4 UI wave)._
+_Status: **WORKING PAPER — NOT IMPLEMENTED** (drafted 2026-06-10; **review round 1 resolved
+2026-06-11**: D23–D30 + D33 locked, see §13; D31/D32/D34 stay open by design — they resolve
+with research gates R-O1/R-O2/R-W1. **Plan audit 2026-06-11:** every §2 fact re-verified
+against the code; findings folded in — the mic-permission posture correction in §10 (no
+handler exists; Electron default-ALLOWS), the `models/transcriber/` naming fix, the D35
+audio-storage decision flagged by the re-index contract, staleness guards in §7/§8, and the
+verified forward-compatibility of an additive `whisper_cpp` block in §9). Per the CLAUDE.md doc lifecycle rule this is a plan
+document: once a phase is implemented its section condenses into a design record and the
+durable content moves to the topic docs. Phases 29–30 are reserved by
+[`model-catalog-expansion-plan.md`](model-catalog-expansion-plan.md); this wave starts at
+**Phase 31**. Decisions continue the project-wide numbering at **D23** (D1–D7 wave 1 ·
+D8–D15 retrieval · D16–D22 catalog · D-UI1–4 UI wave)._
 
 The eight features (user-selected 2026-06-10):
 
 | Phase | Feature | Size | Hard dependency | New deps / sidecars |
 |---|---|---|---|---|
 | 31 | Conversation search | S | none | none (FTS5 already proven) |
-| 32 | Vault password change | S–M | none | none (`@noble/hashes` already shipped) |
+| 32 | Vault password change | M | none | none (`@noble/hashes` already shipped) |
 | 33 | Document tasks foundation + one-click summary | M | none | none |
 | 34 | Document translation workflow | S–M | Phase 33 (task machinery) | none |
 | 35 | Compare two documents | M | Phase 33 (task machinery) | none |
@@ -45,7 +51,7 @@ distribution + new asset classes — the long poles).
 - **No new native npm deps.** tesseract.js is WASM (pure-JS theme); whisper.cpp is a prebuilt
   sidecar like llama.cpp, not an npm dep.
 
-## 2. Facts the plan rests on (verified in code, 2026-06-10)
+## 2. Facts the plan rests on (verified in code 2026-06-10; independently re-verified by the 2026-06-11 audit)
 
 1. **FTS5 is proven in both runtimes** (retrieval-plan §1.2: Electron 37 main process AND
    system Node 24, SQLite 3.50.4 `ENABLE_FTS5`). `chunks_fts` exists as a self-contained
@@ -88,7 +94,8 @@ distribution + new asset classes — the long poles).
 8. **Generation concurrency is per-conversation:** the in-flight registry is
    `Map<conversationId, AbortController>` shared by chat + RAG. Document tasks (summary/
    translation/compare) are NOT conversations — they need their own abort + busy semantics
-   (→ D26). The llama-server slot count (default parallelism) needs a probe (R-T1).
+   (→ D26, resolved: strict one-at-a-time). The llama-server slot count (default
+   parallelism) gets an informational probe (R-T1).
 9. **`updateSettings` whitelists keys against `DEFAULT_SETTINGS`** — every new settings key
    is an explicit, validated addition.
 10. **Renderer media capture is available:** Electron's renderer has `getUserMedia`/
@@ -111,10 +118,10 @@ distribution + new asset classes — the long poles).
 - **31 first:** smallest feature, highest utility-per-effort, zero research gates, and it
   exercises the exact FTS5 pattern (migration + triggers + backfill) Phase 21 locked —
   a warm-up that hardens a second instance of a known-good design.
-- **32 second:** small surface but security-critical; D24 (envelope vs re-encrypt) deserves
-  its own review round before code, like the Phase-22 key-management precedent. No other
-  phase depends on it; do it early because vault code changes want maximal soak time before
-  a release.
+- **32 second:** small surface but security-critical; D24 (envelope vs re-encrypt) got its
+  own review before code (resolved round 1, §13), like the Phase-22 key-management
+  precedent. No other phase depends on it; do it early because vault code changes want
+  maximal soak time before a release.
 - **33 before 34/35:** summary, translation, and compare are all "run the local model over
   stored chunks, persist/export a result" — one **document-task service** (job state machine
   on the import/download polling precedent, model-busy semantics, cancel) is built ONCE in
@@ -136,8 +143,10 @@ cap last week?" — local, instant, encrypted at rest like everything else in th
 
 **Design sketch.** Mirror the D13 index shape: `messages_fts = fts5(content, message_id
 UNINDEXED)` — self-contained (NOT external-content; same VACUUM rationale), three sync
-triggers on `messages` (insert / delete / update-of-content), guarded migration + one-time
-backfill in `openDatabase`. Reuse `buildFtsMatchQuery` for sanitization (export it from
+triggers on `messages` (insert / delete / update-of-content — message content is never
+UPDATEd by current code; the third trigger is cheap defense-in-depth, mirroring
+`chunks_fts`), guarded migration + one-time backfill in `openDatabase` (the
+`ensureChunksFts` shape at `db.ts:113` verbatim, incl. the `sqlite_master` existence guard). Reuse `buildFtsMatchQuery` for sanitization (export it from
 `hybrid.ts` or lift to a shared module). New `searchMessages(db, query, limit)` in
 `services/chat.ts` joining hits → `messages` → `conversations`, returning
 `{ conversationId, conversationTitle, messageId, role, snippet, createdAt, bm25 }` grouped
@@ -187,12 +196,13 @@ key directly, so there are exactly two designs:
   re-encrypting everything ONCE under the new data key — the same machinery (a) needs
   anyway), plus a permanent two-key concept in `security/crypto.ts`.
 
-**Recommendation: (b), migrate-on-password-change** (not on unlock — don't touch working
-vaults that never change their password). (b) is also the prerequisite for every future
-key feature (multiple unlock passwords, recovery codes, Phase-22-adjacent rotation), and it
-makes the *recurring* operation trivially atomic instead of making *every* change a bulk
-re-encryption. The one-time v1→v2 bulk re-encrypt reuses (a)'s journaled swap as the
-migration step.
+**RESOLVED (review round 1, 2026-06-11): (b), migrate-on-first-password-change** (not on
+unlock — don't touch working vaults that never change their password). (b) is also the
+prerequisite for every future key feature (multiple unlock passwords, recovery codes,
+Phase-22-adjacent rotation), and it makes the *recurring* operation trivially atomic instead
+of making *every* change a bulk re-encryption. The one-time v1→v2 bulk re-encrypt reuses
+(a)'s journaled swap as the migration step. Sizing note (audit): that journaled-migration
+machinery + its crash tests make this phase a solid M, not S.
 
 **Mechanics regardless of D24:** must run UNLOCKED (key in memory); verify current password
 via the existing verifier first; `WorkspaceController` gains `changePassword(current, next)`;
@@ -231,7 +241,9 @@ documentIds, params }) → { jobId }`, `getDocTask(jobId)` → `{ state, progres
 §2.8). Tasks call the ACTIVE chat runtime via `chatStream` with explicit
 `maxTokens`/`temperature` (no depth modes); runtime not running → friendly "start a model
 first" failure, never an auto-start surprise (consistent with `autoStartActiveModel`
-semantics — D26 refines this).
+semantics). Concurrency per **D26 (RESOLVED): strict one-at-a-time** — a task refuses to
+start while a chat answer streams, and a chat message sent during a task gets friendly
+copy with a cancel option.
 
 **Summary algorithm.** Inputs are the document's stored CHUNKS (no re-parse). Budget-driven
 two-level map-reduce: (1) if total chunk tokens ≤ a single-pass budget (derived from
@@ -254,8 +266,10 @@ via the polling pattern; busy state visible on the row.
 **Where to look in detail:**
 - R-T1: llama-server request concurrency at b9585 defaults — what happens to an in-flight
   chat stream when a task POSTs a second `/v1/chat/completions` (queued? parallel slot?
-  rejected?). Decides whether D26 must serialize tasks against chat or only against other
-  tasks. Probe against the real pinned binary (the §1.1 source-verification precedent).
+  rejected?). D26 is resolved (strict one-at-a-time, app-side guard), so this is now
+  **informational**: it confirms the guard is airtight (the server never sees two requests
+  from us) and banks the facts for a future parallelism revisit. Probe against the real
+  pinned binary (the retrieval-plan §1.1 source-verification precedent).
 - `services/ingestion` chunk retrieval by document + `chunker.ts` token estimates — the
   map-window math reuses the same word≈token approximation; verify it against real chunk
   rows so windows don't overflow the context.
@@ -276,7 +290,7 @@ multilingual; Qwen3-class chat models handle DE↔EN).
 **Design sketch.** A `translation` document task: map over chunks **in order** (translation
 is embarrassingly parallel but runs serialized on the one runtime), translating window-wise
 with a strict instruction template (translate, don't summarize; preserve structure; keep
-numbers/names verbatim), concatenate. **Output (D27): a NEW document in the corpus** —
+numbers/names verbatim), concatenate. **Output (D27, RESOLVED review round 1): a NEW document in the corpus** —
 materialize as Markdown, write into `workspace/documents/` via the normal import path
 (`createQueuedDocument` + `processDocument` ⇒ it gets chunked, embedded, searchable, citable
 like any import; encrypted via `DocumentCipher` automatically), titled
@@ -288,7 +302,9 @@ free-text language field invites silent quality failures.
 **Honesty requirements:** the §11.4 attribution line ("Machine-translated by <model> — may
 contain errors") prepended to the materialized document; `truncated`/`failed-window`
 handling must be visible, not silent (a window the model refuses/garbles marks the output,
-not drops it).
+not drops it). **Staleness (audit finding):** the `origin_json` link is provenance, not
+sync — re-importing or re-indexing the SOURCE does not update an existing translation;
+the user re-runs the task. Record as an accepted edge in `known-limitations.md`.
 
 **Where to look in detail:**
 - Per-window failure modes on the real 4B (R-T2, manual smoke): refusal phrases, language
@@ -318,9 +334,12 @@ already there — this is the embeddings-leverage feature, no new index.
 
 **Output:** a comparison REPORT persisted like a summary (`compare` task, result in a
 `document_compare_results` table or — simpler — materialized as a Markdown document via the
-Phase-34 path, titled "Comparison: A vs B", `origin_json` recording both source ids; D28
-picks). Materializing as a document is recommended: it inherits persistence, search (Phase
-31!), citations-adjacent preview, export — and avoids a new result surface.
+Phase-34 path, titled "Comparison: A vs B", `origin_json` recording both source ids).
+**D28 (RESOLVED review round 1): materialized document** — it inherits persistence, search
+(Phase 31!), citations-adjacent preview, export — and avoids a new result surface.
+**Embedder-visibility guard (audit finding):** mode (b)'s section pairing reads vectors, so
+BOTH documents must be visible to the active embedder — a `staleEmbeddings` doc gets the
+Phase-17-style actionable answer ("re-index first"), never a silently empty pairing.
 
 **UI:** Documents screen already has multi-select (Phase 17 "Ask these documents") — add
 "Compare (2)" enabled at exactly two selections; result opens like a document preview.
@@ -345,15 +364,29 @@ searchable, citable — citations showing time ranges ("Ask your meetings").
 
 **Distribution (the long pole — mirrors Phases 12/14 exactly):**
 - `runtime-sources.yaml` gains an additive top-level `whisper_cpp:` block (same
-  `{ version, builds[] }` shape); `validateRuntimeSources` extended; extract to
+  `{ version, builds[] }` shape); `validateRuntimeSources` extended. **Verified (audit
+  2026-06-11):** the current validator reads ONLY the `llama_cpp` key and ignores unknown
+  siblings (`shared/runtime-sources.ts:61`), so the new block is genuinely additive — an
+  older app on a newer drive parses the file unchanged. Extract to
   `runtime/whisper.cpp/<os>/`; `.paid-runtime.json` marker reused as-is;
   `fetch-runtime.{ps1,sh}` + `drive.ts` layout + `assertCommercialDrive` +
   `build-commercial-drive` all gain the second family. **CPU-only builds first** (E5/reranker
   precedent: ASR is a batch job; GPU whisper is a later opt-in, not a default risk).
 - Whisper model weights = a normal manifest with `role: transcriber` + `download` block
   (license: MIT — review per `model-policy.md` like every model) ⇒ Phase-18 in-app
-  downloader covers it with zero new code (D14 precedent). Candidate sizes: `base`/`small`
-  multilingual (DE+EN) — R-W3 picks via a German-audio smoke.
+  downloader covers it with zero new code (D14 precedent); weights live in
+  `models/transcriber/` (the role-named `models/reranker` convention, NOT `models/whisper` —
+  audit naming fix). Candidate sizes: `base`/`small` multilingual (DE+EN) — R-W3 picks via a
+  German-audio smoke.
+
+**Storage + re-index reality (D35, flagged by the audit):** the locked Phase-4 contract
+copies every import into `workspace/documents/` AND `reindexDocument` re-parses the stored
+file — so the audio copy must be KEPT (transcript-only storage would break re-index), it is
+encrypted on encrypted workspaces (a multi-hundred-MB recording costs real encrypt/shred
+time and drive space), and **a re-index of an audio document = a full re-transcription**.
+v1 answer: keep the copy, add a size-aware import confirmation for large audio, honest
+"Transcribing…" progress on re-index, and a `known-limitations.md` entry; a sha256-keyed
+transcript cache (checksumCache precedent) only if re-index proves common.
 
 **Runtime service** (`services/transcriber/`): `Transcriber` interface with availability
 selection (`createSelectedTranscriber` → real iff binary + weights, else **null**, no mock —
@@ -405,19 +438,28 @@ text appears in the input for review (never auto-sent).
 **Design sketch (D30).** Renderer: `getUserMedia` audio → `MediaRecorder` (webm/opus) →
 decode + resample to 16 kHz mono PCM via `OfflineAudioContext` → encode WAV in JS (pure
 renderer, no new deps) → hand the bytes to main over a new IPC `dictation:transcribe`
-(bytes, not a user path) → main writes a transient temp WAV (shredded after), runs the
+(bytes, not a user path) → main writes a transient temp WAV using the **`.parse` infix
+convention** (so the startup `shredStalePlaintext` crash sweep covers it — the
+documented ingestion-temp pattern, `ingestion/index.ts:367`), shredded after → runs the
 Phase-36 transcriber, returns text. Composer inserts at cursor. Feature visible only when
-the transcriber is available (availability-driven, D14 precedent). Electron needs a
-`setPermissionRequestHandler` decision for the mic prompt (allow `media` from our own
-renderer only — verify current handler posture, it may deny-by-default today).
+the transcriber is available (availability-driven, D14 precedent).
+
+**Permission posture (AUDIT CORRECTION 2026-06-11):** the codebase has **no
+`setPermissionRequestHandler` at all**, and Electron's default with no handler is to
+**GRANT** permission requests — the opposite of the drafted assumption. Phase 37 must
+install a **deny-by-default** handler with a single `media` (audio) exception for our own
+renderer. That handler is an independent hardening win (it closes geolocation/
+notifications/etc. for any renderer content) — small enough to land with whatever wave-3
+phase ships first rather than waiting for Phase 37.
 
 **Privacy:** the recording exists only as a transient temp file, shredded
 (`shredFile` exists); no audit event (content-adjacent); mic indicator is the OS's own.
 Locked workspace: composer doesn't exist pre-unlock — no special handling.
 
 **Where to look in detail:**
-- The session/permission setup in `main/index.ts` (where CSP is installed) — what
-  permission handler exists today; adding `media` allow must not loosen anything else.
+- The session setup in `main/index.ts` (where CSP is installed) — the right install site
+  for the deny-by-default permission handler; the `media` allow must not loosen anything
+  else (audited: no handler exists today, see above).
 - Whether the transcriber accepts stdin/bytes or only file paths (R-W1 output) — decides
   the temp-file shape.
 - Composer focus/undo behavior on insert (`renderer/chat/Composer.tsx`).
@@ -493,8 +535,11 @@ manual smoke behind `PAID_OCR_SMOKE` with a real scan fixture on the test drive.
 - **IPC:** `chat:search`, `workspace:changePassword`, `doctasks:start/get/cancel`,
   `dictation:transcribe` (+ preload mirrors). All follow existing patterns (request/response
   or async-with-polling; no new event channels).
-- **Drive layout:** `runtime/whisper.cpp/<os>/`, `models/whisper/` (manifest-driven),
-  `ocr/` assets — `drive.ts` `DRIVE_LAYOUT_DIRS` + both script families + `drive-layout.md`.
+- **Session hardening (audit):** the deny-by-default `setPermissionRequestHandler` (§10) —
+  ship with the first wave-3 phase that lands; `security-model.md` documents it.
+- **Drive layout:** `runtime/whisper.cpp/<os>/`, `models/transcriber/` (manifest-driven,
+  role-named like `models/reranker`), `ocr/` assets — `drive.ts` `DRIVE_LAYOUT_DIRS` + both
+  script families + `drive-layout.md`.
 - **Commercial pipeline:** `assertCommercialDrive` + `build-commercial-drive` learn the
   whisper family (markers, backend checks) and the OCR asset set; `verify-models --generate`
   covers whisper weights via the normal manifest path.
@@ -505,29 +550,30 @@ manual smoke behind `PAID_OCR_SMOKE` with a real scan fixture on the test drive.
   `known-limitations.md` (m4a descope, OCR speed, summary ceiling), `PRIVACY.md` (mic use,
   all-local OCR/ASR), BUILD_STATE §1/§3/§5.
 
-## 13. Decisions (OPEN — resolve in a review round before each phase, D1–D7 precedent)
+## 13. Decisions (review round 1 resolved 2026-06-11; D31/D32/D34 resolve with their research gates; D35 added by the same-day audit)
 
-| # | Decision | Options / recommendation |
+| # | Decision | Resolution |
 |---|---|---|
-| D23 | Search ranking | bm25 only vs bm25 × recency blend. **Rec:** bm25 with newest-first tie-break; revisit with use |
-| D24 | Password-change mechanism | (a) direct journaled re-encrypt vs (b) envelope descriptor v2, migrate-on-first-change. **Rec: (b)** — O(1) recurring change, atomic commit point, unlocks future key features; v1 vaults untouched until they opt in |
-| D25 | Summary persistence + long-doc strategy | `documents.summary_json` + budgeted map-reduce with hard ceiling + honest `truncated` flag. Alternatives (summary-as-conversation, unbounded map-reduce) rejected: surface sprawl / CPU latency |
-| D26 | Doc-task concurrency vs chat | Serialize tasks among themselves (one queue). Whether a task may run DURING a chat stream depends on R-T1 (server slots). **Rec:** v1 = refuse with friendly copy while a chat stream is in flight (simplest honest behavior) |
-| D27 | Translation output form | Materialized corpus document (searchable/citable/exportable, encrypted for free) vs export-only file. **Rec:** materialized document + `origin_json` provenance |
-| D28 | Compare result form + big-doc strategy | Materialized "Comparison: A vs B" document; auto mode-switch full-stuff vs section-matched (vector-paired) by token math. **Rec:** as stated; no new result tables |
-| D29 | Timestamp representation | whisper segments → `sectionLabel: "mm:ss–mm:ss"` (existing `Citation.section` surfaces it). No schema change. **Rec:** as stated |
-| D30 | Dictation capture pipeline | Renderer MediaRecorder → OfflineAudioContext resample → WAV bytes → main temp file → transcriber; mic via scoped `setPermissionRequestHandler`. **Rec:** as stated; streaming ASR explicitly out of scope |
-| D31 | OCR execution context | Hidden renderer/worker vs `utilityProcess` + OffscreenCanvas (R-O1 decides); photos possibly main-side directly. BLOCKING for Phase 38 implementation |
-| D32 | OCR asset distribution | Extend `runtime-sources.yaml` (new asset class) vs dedicated `fetch-ocr` script entry. Resolve with R-O2's asset inventory |
-| D33 | OCR trigger | **Rec:** never automatic for PDFs — detection notice + explicit "Make searchable (OCR)" task; photos OCR on import |
-| D34 | Whisper invocation mode | whisper-server (loopback, LlamaServer-style) vs per-file CLI. R-W1 decides; **lean server** if the pinned release ships it per-OS (lifecycle reuse), CLI otherwise |
+| D23 | Search ranking | **RESOLVED (round 1):** bm25 with newest-first tie-break; revisit with use |
+| D24 | Password-change mechanism | **RESOLVED (round 1): (b) envelope descriptor v2, migrate-on-first-change** — a random data key wrapped by the password-derived KEK; first change pays the one-time v1→v2 bulk re-encrypt (journaled swap), every later change is an atomic single-file re-wrap. O(1) recurring change, atomic commit point, unlocks future key features (recovery codes, rotation); v1 vaults untouched until they opt in. Direct re-encrypt and migrate-on-unlock rejected |
+| D25 | Summary persistence + long-doc strategy | **RESOLVED (round 1):** `documents.summary_json` + budgeted map-reduce with hard ceiling + honest `truncated` flag. Alternatives (summary-as-conversation, unbounded map-reduce) rejected: surface sprawl / CPU latency |
+| D26 | Doc-task concurrency vs chat | **RESOLVED (round 1): strict one-at-a-time** — tasks serialize among themselves (one queue), a task refuses to start while a chat answer is streaming, and a chat message sent while a task runs gets friendly copy ("A document task is running — you can cancel it"). Tasks are cancellable so the user is never stuck. R-T1 demoted to informational (see §14); revisit parallelism only with evidence |
+| D27 | Translation output form | **RESOLVED (round 1): materialized corpus document** ("<original> (Deutsch)") + `origin_json` provenance — searchable/citable/exportable, encrypted for free. Export-only and a dedicated results panel rejected (results leave the workspace / a whole new surface) |
+| D28 | Compare result form + big-doc strategy | **RESOLVED (round 1): materialized "Comparison: A vs B" document** (same principle as D27, `origin_json` records both source ids); auto mode-switch full-stuff vs section-matched (vector-paired) by token math. No new result tables |
+| D29 | Timestamp representation | **RESOLVED (round 1):** whisper segments → `sectionLabel: "mm:ss–mm:ss"` (existing `Citation.section` surfaces it). No schema change |
+| D30 | Dictation capture pipeline | **RESOLVED (round 1):** renderer MediaRecorder → OfflineAudioContext resample → WAV bytes → main temp file (shredded) → transcriber; mic via scoped `setPermissionRequestHandler`. Streaming ASR explicitly out of scope |
+| D31 | OCR execution context | **OPEN (by design):** hidden renderer/worker vs `utilityProcess` + OffscreenCanvas — R-O1 decides; photos possibly main-side directly. BLOCKING for Phase 38 implementation |
+| D32 | OCR asset distribution | **OPEN (by design):** extend `runtime-sources.yaml` (new asset class) vs dedicated `fetch-ocr` script entry. Resolve with R-O2's asset inventory |
+| D33 | OCR trigger | **RESOLVED (round 1): never automatic for PDFs** — detection notice + explicit "Make searchable (OCR)" cancellable task with progress; photos OCR on import (small, fast). Auto-on-import and a settings toggle rejected (silent slow imports / a key + two code paths before the feature exists) |
+| D34 | Whisper invocation mode | **OPEN (by design):** whisper-server (loopback, LlamaServer-style) vs per-file CLI. R-W1 decides; lean server if the pinned release ships it per-OS (lifecycle reuse), CLI otherwise |
+| D35 | Audio originals on the drive | **OPEN (flagged by the 2026-06-11 audit; resolve in the Phase-36 review):** the locked Phase-4 copy-into-workspace contract + `reindexDocument` re-parsing the stored file force KEEPING the audio copy (transcript-only breaks re-index), and re-index = full re-transcription. **Rec:** keep the copy + size-aware import confirm + `known-limitations.md` entry; sha256-keyed transcript cache only on evidence (§9) |
 
 ## 14. Research gates (consolidated — do these BEFORE the affected phase)
 
 | Gate | Question | Method | Blocks |
 |---|---|---|---|
 | R-S1 | FTS5 `snippet()`/`highlight()` present in both runtimes? | The §1.2 two-runtime probe script | 31 (fallback exists) |
-| R-T1 | llama-server b9585 concurrent-request behavior (slots/queue/reject)? | Probe the REAL pinned binary; check `--parallel` defaults in the pinned source | 33 (D26) |
+| R-T1 | llama-server b9585 concurrent-request behavior (slots/queue/reject)? | Probe the REAL pinned binary; check `--parallel` defaults in the pinned source | nothing (informational since D26 resolved strict one-at-a-time; do alongside 33) |
 | R-T2 | 4B-class quality: long-input translation drift; comparison-format adherence | Manual smoke on the test drive (existing `PAID_*` pattern) | 34, 35 (prompt design) |
 | R-W1 | Pinned whisper.cpp release: binaries per OS, server vs CLI, JSON timestamp output, license, archive shapes + hashes | Inspect the release's real assets (b9585 discipline) | 36 (D34) |
 | R-W2 | Decodable input formats of the pinned binary (mp3? flac? m4a?) | Feed real files to the real binary | 36 (format promise) |
