@@ -29,9 +29,13 @@ bundled_on_preconfigured_drive: false
 # aware trained, so higher quality than a naive Q4 at similar size (`format: gguf` is all
 # the validator checks). Needs llama.cpp ~b8607+; our pinned b9585 (2026-06-09) covers it
 # (plan §3.1). TEXT-ONLY USE: the upstream repo also ships an mmproj vision file — we
-# deliberately do not download or reference it. Instruct-only: no hybrid thinking, so Deep
-# mode behaves like Balanced. RAM numbers mirror Qwen3 14B pending the Phase-29 §5.2
-# memory runs.
+# deliberately do not download or reference it. THINKING (Phase-28 bring-up finding
+# 2026-06-10): unlike the other three challengers, Gemma 4's chat template DOES honour
+# `enable_thinking` — Deep mode streams a real chain-of-thought as `reasoning_content`
+# (~950 chars in the smoke) before answering. `supports_thinking_mode` is kept **false**
+# for now so the composer keeps "Thorough" gated off until Phase-29 evaluates thinking
+# quality; flipping it to true is a Phase-29 product decision, not a bring-up change. RAM
+# numbers mirror Qwen3 14B pending the Phase-29 §5.2 memory runs.
 recommended_profiles: []
 license_review:
   status: approved

@@ -181,9 +181,22 @@ pass §4.3 on at least one machine, `docs/model-policy.md`'s catalog table gains
    `model-manifests/` was mirrored from the repo (it predated the challengers + used the old
    flat layout). `verify-models -Target D:\` then reports **all 10 catalog weights VERIFIED**
    (8 chat + e5 + reranker). Hashes: ministral `33e7a72c…`, granite `ed902ac9…`, gemma4
-   `faff1a63…`, qwen3-2507 `3605803b…`. **Still pending:** the §4.3 chat/RAG/depth bring-up
-   smokes (need the app run against the drive) — until those pass on ≥1 machine, Phase 28 is
-   not closed.
+   `faff1a63…`, qwen3-2507 `3605803b…`.
+7. **§4.3 chat + depth bring-up PASSED on the dev box (2026-06-10), via a new manual harness**
+   `apps/desktop/tests/manual/bringup-smoke.test.ts` (gated on `PAID_BRINGUP_SMOKE`, same
+   pattern as the thinking/rerank/gpu smokes). Against the real pinned b9585 (Vulkan) all four
+   challengers: load + `/health` ready (chat template renders through `--jinja` — no runtime
+   bump, the §3.1 claim confirmed live), stream tokens, answer the German test prompt **in
+   German** with no chat-template artifacts leaking. Quality note (for Phase 29, not a blocker):
+   Ministral / Granite / Gemma answered "Wien … Donau" correctly; **Qwen3-4B-2507 was factually
+   wobbly** (waffled on the river) though fluent German. **FINDING — Gemma 4 has a working
+   thinking mode:** unlike the other three (which ignore `enable_thinking` → zero reasoning),
+   Gemma 4's template honours it and Deep streamed ~950 chars of `reasoning_content` before
+   answering. `supports_thinking_mode` stays **false** for now (composer keeps "Thorough" gated
+   off) — flipping it is a Phase-29 decision; recorded in the Gemma manifest comment + §4.1.
+   **Still pending to CLOSE Phase 28:** §4.3 steps 1–2 (Models-screen install/RAM/select+start)
+   and step 4 (RAG grounded-answer + citations + abstention) — both need the GUI/retrieval path,
+   exercised by running the app against the drive (in progress).
 
 ---
 
