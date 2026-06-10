@@ -1,7 +1,8 @@
 # Model Policy — Private AI Drive Lite
 
-_Last updated: 2026-06-10 (Phase 21: reranker manifest added; runtime pinned to llama.cpp b9585;
-all license reviews approved)_
+_Last updated: 2026-06-10 (Phase 28: catalog wave 1 — four challenger manifests added per
+[`model-catalog-expansion-plan.md`](model-catalog-expansion-plan.md) D16–D18; previously Phase 21:
+reranker manifest added; runtime pinned to llama.cpp b9585; all license reviews approved)_
 
 ## Principles
 - **No model weights in git.** Weights live under `models/` on the drive (git-ignored).
@@ -19,6 +20,10 @@ all license reviews approved)_
 | Chat better | Qwen3 8B Instruct Q4 | ~5.0 GB | 16 GB | BALANCED | 16 GB+ laptops |
 | Chat best dense | Qwen3 14B Instruct Q4 | ~9.3 GB | 16 GB | PRO | 32 GB+; the spec §7.3 PRO model — slower on CPU |
 | Chat MoE | Qwen3 30B-A3B (MoE) Q4 | ~18.6 GB | 24 GB | — (opt-in) | ~30B quality at ~3.3B *active*/token → near-3B speed; needs ~20 GB RAM |
+| Chat challenger | Ministral 3 8B Instruct (2512) Q4 | ~5.2 GB | 16 GB | — (challenger — not auto-recommended) | Phase-28 mid-tier challenger (vendor GGUF, 256k ctx, strong German); must earn promotion via the Phase-29 benchmark |
+| Chat challenger | Granite 4.1 8B Q4 | ~5.3 GB | 16 GB | — (challenger — not auto-recommended) | Phase-28 mid-tier challenger (IBM vendor GGUF — strongest provenance story; German is officially supported) |
+| Chat challenger | Gemma 4 12B Instruct QAT Q4_0 | ~7.0 GB | 16 GB | — (challenger — not auto-recommended) | Phase-28 high-tier challenger (Google vendor QAT GGUF, 140+ languages; first Apache-2.0 Gemma) |
+| Chat challenger | Qwen3 4B Instruct 2507 Q4 | ~2.5 GB | 8 GB | — (challenger — not auto-recommended) | Phase-28 incumbent-refresh challenger (D18); instruct-only — NO thinking mode, unlike the original 4B default |
 | Embeddings | Multilingual E5 Small (F16) | ~0.24 GB | 4 GB | all | Local document search (needed for Q&A) |
 | Reranker (optional) | BGE Reranker v2 M3 (F16) | ~1.08 GB | 6 GB | LITE+ (never bundled by default) | Retrieval-quality pass over document search (Phase 21) — search works fully without it |
 
@@ -32,12 +37,16 @@ all license reviews approved)_
 > `gpustack/bge-reranker-v2-m3-GGUF` (also Apache-2.0, mechanical conversion — same provenance
 > posture as the E5 entry). `Qwen3-Reranker-0.6B` was rejected: no official GGUF.
 
-All models are **Apache-2.0** (Qwen3, BGE reranker) / **MIT** (E5). Sizes/RAM come from each manifest
+All models are **Apache-2.0** (Qwen3, the Phase-28 challengers, BGE reranker) / **MIT** (E5).
+Sizes/RAM come from each manifest
 (`size_on_disk_gb` / `recommended_min_ram_gb`); download URLs live in the manifests' `download.url`
 (catalog with source links in the [README](../README.md)). **Auto-tier** is the hardware profile the
-benchmark auto-recommends the model for (`recommended_profiles`); the **30B-A3B MoE** has an empty
-list — it is selectable on the AI Model screen but never auto-recommended, since its download + RAM cost
-should be a deliberate choice. Adding a model is **manifest-only** (no code change): drop a YAML in
+benchmark auto-recommends the model for (`recommended_profiles`); the **30B-A3B MoE** and all
+**Phase-28 challengers** have an empty list — selectable on the AI Model screen but never
+auto-recommended. The MoE's download + RAM cost should be a deliberate choice; a challenger must
+**earn** its `recommended_profiles` through the Phase-29 benchmark first
+([`model-catalog-expansion-plan.md`](model-catalog-expansion-plan.md) D17). Adding a model is
+**manifest-only** (no code change): drop a YAML in
 `model-manifests/chat/` with a `download` block + a `recommended_profiles` list.
 
 ## Manifest format & parsing
@@ -66,9 +75,10 @@ block (Phase 12, below). Unknown extra keys (e.g. `supports_tools`, `dimensions`
   a running model whose manifest sets it `true` (surfaced via `RuntimeStatus.supportsThinkingMode`).
   Setting it on a model whose template ignores `enable_thinking` is harmless at the request
   level (the kwarg is inert) but misleading — Deep would behave exactly like Balanced.
-  All four bundled Qwen3 chat models are the ORIGINAL hybrid-thinking releases (`Qwen/Qwen3-*-GGUF`)
-  and correctly declare `true`; note the later "Qwen3 …-2507 Instruct" variants dropped thinking
-  and must declare `false` if ever bundled.
+  The four original Qwen3 chat models are the hybrid-thinking releases (`Qwen/Qwen3-*-GGUF`)
+  and correctly declare `true`. The Phase-28 challengers (Ministral 3, Granite 4.1, Gemma 4, and
+  the "Qwen3 4B Instruct **2507**" refresh — which dropped hybrid thinking) are all instruct-only
+  and declare `false`: Deep behaves like Balanced on them, by design.
 
 ## Model states (spec §7.4)
 Computed by `services/models.ts` with this precedence:

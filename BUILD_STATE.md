@@ -77,6 +77,11 @@ header, Radix Tooltip, honest downloads-allowed variant), the 3-step first-run c
 (welcome → password with hand-rolled strength hint/show-toggle/paste support → optional
 starter step), and the final WCAG 2.2 AA sweep (`--border-strong` token fix +
 forced-colors rules; accepted items in `docs/known-limitations.md`) (§3 entry).
+**Phase 28 (model catalog wave 1) is 🟡 IN PROGRESS** — all four challenger manifests
+(Ministral 3 8B 2512, Granite 4.1 8B, Gemma 4 12B QAT, Qwen3-4B-2507) landed 2026-06-10,
+validated + license-reviewed per
+[`docs/model-catalog-expansion-plan.md`](docs/model-catalog-expansion-plan.md) D16–D18/D22;
+weight fetch + hash promotion + bring-up remain (§3 entry; §5 item 5).
 Release-wise,
 remaining work = **manual release acceptance only** (§5, incl. the GPU
 hardware matrix, item 1b). Consciously-accepted gaps live in
@@ -116,6 +121,7 @@ hardware matrix, item 1b). Consciously-accepted gaps live in
 | 25 | UI chat screen restructure (guidelines §3) | 🟢 done (merged to master 2026-06-10) |
 | 26 | UI information architecture regroup (guidelines §2) | 🟢 done (merged to master 2026-06-10) |
 | 27 | UI microcopy, ambient trust signal, first-run (guidelines §7/§2/§9) | 🟢 done (merged to master 2026-06-10) — **UI polish wave COMPLETE** |
+| 28 | Model catalog wave 1 (challenger manifests, D16–D18) | 🟡 in progress — manifests + docs landed, validated, gate green; weight fetch + hash promotion + §4.3 bring-up pending (needs ~20 GB of downloads, user go-ahead) |
 
 Legend: ⚪ not started · 🟡 in progress · 🟢 done · 🔴 blocked
 
@@ -1241,6 +1247,40 @@ Repo root: `f:\_coding\ai_drive`.
   `benchmark.md`/`model-policy.md`/`packaging.md`/`security-model.md` ("AI Model
   screen"). Gate: typecheck clean, 669 tests, build green.
 
+- **Phase 28 — model catalog wave 1 (manifest-only, plan D16/D17/D18/D22; manifests landed
+  2026-06-10):** four challenger manifests under `model-manifests/chat/`, **zero code changes**
+  (the existing validator covers every field; all four run clean through `validateManifest`).
+  Per **D17** all ship `recommended_profiles: []` (selectable, never auto-recommended — must earn
+  promotion via the Phase-29 benchmark) + `supports_thinking_mode: false` (instruct-only; Deep
+  behaves like Balanced) + `bundled_on_preconfigured_drive: false` + `sha256:
+  REPLACE_WITH_REAL_HASH` (promotion via `verify-models --generate` after first fetch).
+  Filenames/byte sizes verified against the HF tree API 2026-06-10; **exact** byte counts baked
+  into `download.size_bytes` (not round estimates):
+  1. `ministral3-8b-instruct-2512-q4` — official `mistralai/Ministral-3-8B-Instruct-2512-GGUF`
+     Q4_K_M, 5 198 911 904 B. TEXT-ONLY: the repo's BF16 mmproj vision file is deliberately not
+     referenced. License review names the `-2410` non-commercial name-twin trap (plan §3.3).
+  2. `granite-4.1-8b-q4` — official `ibm-granite/granite-4.1-8b-GGUF` Q4_K_M, 5 347 914 400 B
+     (repo name has no `-instruct`; it IS the instruct model).
+  3. `gemma4-12b-it-qat-q4` — official `google/gemma-4-12B-it-qat-q4_0-gguf` vendor QAT **Q4_0**,
+     6 975 877 728 B (file name is lower-case `gemma-4-12b-…`); RAM mirrors the 14B (16/32)
+     pending Phase-29 §5.2 memory runs.
+  4. `qwen3-4b-instruct-2507-q4` (**D18 executed**) — the Qwen org publishes **no official 2507
+     GGUF** (HF API checked 2026-06-10), so the plan-§4.4 fallback applies: pinned to the
+     established quantizer **unsloth** (`unsloth/Qwen3-4B-Instruct-2507-GGUF` Q4_K_M,
+     2 497 281 120 B, card tag apache-2.0, the most-used 2507 GGUF source) — a third-party
+     requant of apache-2.0 weights, recorded as such in the license review. The original
+     `qwen3-4b-instruct-q4` manifest is untouched and stays the default.
+  **D22 license reviews:** all four land `approved` with notes citing the plan-§3 source URLs,
+  redistribution status, attribution obligation, and quantization provenance. `license_url`
+  deviation: only the Qwen 2507 base repo publishes a LICENSE blob; the three vendor GGUF repos
+  declare apache-2.0 via the HF card tag only, so their `license_url` points at the canonical
+  Apache-2.0 text (card URLs recorded in the review notes). Docs: `model-policy.md` catalog
+  table + README catalog gained the challengers ("challenger — not auto-recommended"); plan
+  §4.6 records the as-implemented deviations. Gate: typecheck clean, 669/669 tests (the
+  committed-manifests discovery test covers the new files), build green. REMAINING for phase
+  close: fetch the four weights (~20 GB — user go-ahead required), promote real hashes, run the
+  §4.3 per-model bring-up.
+
 ---
 
 ## 4. Shared data contracts (the actual "transported data")
@@ -1893,6 +1933,21 @@ items are **MANUAL acceptance only** (R2/R5/R7 + the GPU hardware matrix). In ro
    after Phase 27 — the first-run starter step only routes, it does not absorb Home's
    remediation), D-UI4 executed. Remaining UI work =
    the usual manual release eyeball on real drives.
+5. **Model catalog expansion + benchmarking (Phases 28–30):** see
+   [`docs/model-catalog-expansion-plan.md`](docs/model-catalog-expansion-plan.md) (decisions
+   D16–D22). **Phase 28 — 🟡 manifests landed 2026-06-10 (see the §3 entry):** all four
+   challenger manifests authored + validated (Ministral 3 8B 2512, Granite 4.1 8B, Gemma 4 12B
+   QAT — vendor GGUFs; Qwen3-4B-2507 via the unsloth fallback, D18), licenses reviewed/approved
+   (D22), docs + README updated, gate green. **Remaining:** fetch the four weights (~20 GB,
+   user go-ahead), promote real hashes via `verify-models --generate`, run the §4.3 per-model
+   bring-up checklist, then mark the phase done. All ship with **empty
+   `recommended_profiles`** so nothing is auto-recommended before it earns it (D17). Phase 29 =
+   the offline benchmark protocol (llama-bench speed + peak-RSS memory + a judge-free
+   German/English grounded-QA eval set `eval/rag_de_en.jsonl`) + the first comparison run and
+   promotion decisions. Phase 30 (outline only) = the opt-in big slot (Gemma 4 26B-A4B vs
+   Qwen3 30B-A3B) + the embeddings question (Granite Embedding R2 small is the only 384-dim
+   near-drop-in). Key verified fact: our pinned llama.cpp **b9585 is the 2026-06-09 release**,
+   so Gemma 4 (needs ~b8607) runs on the runtime we already ship — no runtime bump needed.
 
 **Current gate (2026-06-10, post-merge of the UI polish wave into master — Phase 21
 verification + Phases 23–27 combined): typecheck clean, 669/669 tests pass (+8 manual

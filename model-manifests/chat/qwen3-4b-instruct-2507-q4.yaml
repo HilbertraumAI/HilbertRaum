@@ -1,0 +1,39 @@
+id: qwen3-4b-instruct-2507-q4
+display_name: Qwen3 4B Instruct 2507 Q4
+family: qwen3
+role: chat
+format: gguf
+runtime: llama_cpp
+license: apache-2.0
+size_on_disk_gb: 2.5
+recommended_min_ram_gb: 8
+recommended_ram_gb: 16
+recommended_context_tokens: 4096
+supports_thinking_mode: false
+supports_tools: false
+local_path: models/chat/qwen3-4b-instruct-2507-q4.gguf
+sha256: REPLACE_WITH_REAL_HASH
+# Phase 28 (model-catalog-expansion-plan D18): where `fetch-models` downloads the weight
+# from + what to verify it against. The Qwen org publishes NO official GGUF for the 2507
+# refresh (checked 2026-06-10), so this uses the established-quantizer fallback (plan
+# §4.4) — unsloth's repo, the most-used 2507 GGUF source. Filename + byte size verified
+# against the HF repo file listing 2026-06-10; hash promoted via `verify-models --generate`
+# after the first fetch.
+download:
+  url: https://huggingface.co/unsloth/Qwen3-4B-Instruct-2507-GGUF/resolve/main/Qwen3-4B-Instruct-2507-Q4_K_M.gguf?download=true
+  sha256: REPLACE_WITH_REAL_HASH
+  size_bytes: 2497281120
+  license_url: https://huggingface.co/Qwen/Qwen3-4B-Instruct-2507/blob/main/LICENSE
+bundled_on_preconfigured_drive: false
+# CHALLENGER (Phase 28, D18): the 2507 refresh of our default 4B, added as a FOURTH
+# challenger — the original `qwen3-4b-instruct-q4` STAYS the default until Phase-29
+# numbers exist. Report data: the 2507 4B beats the ORIGINAL 8B on most axes (MMLU-Pro
+# 69.6 vs 58.0 etc., plan §3.5). ⚠️ Instruct-only: unlike the original Qwen3 4B it has NO
+# hybrid thinking (`supports_thinking_mode: false`) — promoting it to default would make
+# Deep mode a no-op on the default model; that is a Phase-29 product decision, not a bug.
+recommended_profiles: []
+license_review:
+  status: approved
+  reviewed_by: "project maintainer (Claude-assisted review, HF API verification)"
+  reviewed_at: "2026-06-10"
+  notes: "APPROVED 2026-06-10: base model Qwen/Qwen3-4B-Instruct-2507 is apache-2.0 (LICENSE blob in the base repo = download.license_url). QUANTIZATION PROVENANCE (plan section 4.4 fallback): the Qwen org publishes no official GGUF for the 2507 refresh, so this manifest pins the established quantizer unsloth (https://huggingface.co/unsloth/Qwen3-4B-Instruct-2507-GGUF, card tag apache-2.0, verified via the HF API 2026-06-10) — a third-party requant of apache-2.0 weights, NOT a vendor GGUF. Apache-2.0 permits commercial redistribution; ship the LICENSE/NOTICE attribution with the drive."
