@@ -73,9 +73,19 @@ logs, best-effort shredding on SSDs, no password recovery — are documented in
     `.part` resumes on the next Download click.
   - ~~No audit-log records yet~~ `model_download_started/verified/failed` are recorded since
     Phase 19.
-- **Drive updates are manual.** There is no spec §12.3 update mechanism; the `updates/` and
-  `workspace/backups/` directories are not created. The manual procedure is documented in
-  [`drive-layout.md`](drive-layout.md) ("Updating a drive").
+- **Drive updates are manual — Phase 22 (signed offline update bundles, spec §12.3) is still
+  OPEN.** There is no update mechanism yet; the `updates/` and `workspace/backups/` directories
+  are not created. The manual procedure is documented in [`drive-layout.md`](drive-layout.md)
+  ("Updating a drive"). **Blocker: the key-management design** — who holds the signing key and
+  where it lives (dev-machine key vs. an offline-born production key; HSM/hardware-token class
+  questions), what public key drives trust (and whether DIY drives trust a repo key or generate
+  their own), offline key rotation/continuity, and rollback protection. Deliberately **not yet
+  decided** (discussed 2026-06-10, decision deferred); Phase 22 needs its own short design doc
+  (`docs/update-bundles-plan.md`, outline in
+  [`post-mvp-functionality-plan.md`](post-mvp-functionality-plan.md) §10) before any code.
+  One constraint already understood from that discussion: a trust anchor cannot be
+  retroactively strengthened, so whatever key signs during development must never anchor
+  commercial drives — the production key would be a different, offline-generated key.
 
 ## Engineering trade-offs (noted, intentionally unchanged)
 
