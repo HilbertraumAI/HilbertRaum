@@ -1,7 +1,9 @@
 import { ipcMain } from 'electron'
 import { IPC } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
-import type { AppSettings, ModelInfo, RuntimeStatus } from '../../shared/types'
+import type { AppSettings, ModelInfo, RuntimeInstallInfo, RuntimeStatus } from '../../shared/types'
+import { readRuntimeMarker } from '../services/assets'
+import { llamaServerDir } from '../services/runtime/sidecar'
 import {
   buildModelList,
   computeInstallState,
@@ -96,4 +98,11 @@ export function registerModelIpc(ctx: AppContext): void {
 
   // Read-only runtime state for the Diagnostics screen (spec §7.11 — audit M14).
   ipcMain.handle(IPC.getRuntimeStatus, (): RuntimeStatus => ctx.runtime.status())
+
+  // Which sidecar build the drive carries (the Phase-14 .paid-runtime.json marker) —
+  // the Diagnostics "runtime build" line (Phase 16). Null on unmarked/DIY drives.
+  ipcMain.handle(
+    IPC.getRuntimeInstall,
+    (): RuntimeInstallInfo | null => readRuntimeMarker(llamaServerDir(ctx.paths.rootPath))
+  )
 }

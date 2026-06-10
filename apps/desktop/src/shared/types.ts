@@ -202,6 +202,17 @@ export interface GpuProbeResult {
   probedAt: string
 }
 
+/**
+ * Which sidecar build this drive carries — the `.paid-runtime.json` install marker
+ * written by `fetch-runtime` (Phase 14). Surfaced on Diagnostics ("runtime build").
+ */
+export interface RuntimeInstallInfo {
+  version: string
+  backend: string
+  os: string
+  arch: string
+}
+
 // ---- Models (Phase 2) ----
 export type ModelState =
   | 'installed'

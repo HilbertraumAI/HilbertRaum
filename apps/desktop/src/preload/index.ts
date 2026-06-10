@@ -14,6 +14,7 @@ import type {
   ModelInfo,
   PolicyStatus,
   PreflightResult,
+  RuntimeInstallInfo,
   RuntimeStatus,
   WorkspaceActionResult,
   WorkspaceMode,
@@ -57,6 +58,9 @@ const api = {
   stopRuntime: (): Promise<void> => ipcRenderer.invoke(IPC.stopRuntime),
   /** Read-only runtime health/state (Diagnostics, spec §7.11). */
   getRuntimeStatus: (): Promise<RuntimeStatus> => ipcRenderer.invoke(IPC.getRuntimeStatus),
+  /** The drive's installed sidecar build (.paid-runtime.json), or null (Phase 16). */
+  getRuntimeInstall: (): Promise<RuntimeInstallInfo | null> =>
+    ipcRenderer.invoke(IPC.getRuntimeInstall),
 
   // ---- Hardware benchmark (Phase 7) ----
   /** Detect hardware + measure drive speed, persist + return the result. Strictly local. */

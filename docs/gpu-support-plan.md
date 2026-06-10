@@ -1,9 +1,10 @@
 # GPU Support Plan — llama.cpp sidecar acceleration
 
-_Status: **ACCEPTED 2026-06-10 — ready to implement (Phases 14–16, §12); nothing implemented
-yet.** Written against the pinned llama.cpp **b9585** and the Phase-13-complete codebase. All
-§13 review questions are **decided**; do not re-litigate them during implementation — note
-deviations in §13 and BUILD_STATE if reality forces a change._
+_Status: **IMPLEMENTED 2026-06-10 (Phases 14–16 complete, one phase per commit, per-phase
+ritual applied).** Written against the pinned llama.cpp **b9585** and the Phase-13-complete
+codebase. All §13 review questions were **decided** before implementation; the small
+implementation deviations are recorded at the end of §13. Remaining work = the §11.2 manual
+hardware matrix (release acceptance — tracked in BUILD_STATE §5)._
 
 ---
 
@@ -530,3 +531,27 @@ updates (`drive-layout.md`, `packaging.md`, `model-policy.md`, `benchmark.md`,
 `troubleshooting.md`, `known-limitations.md`, user guide, `BUILD_STATE.md`) happen inside
 Phases 14–16 per the per-phase ritual, as inventoried in §9 — updating them now would describe
 a state of the repo that doesn't exist yet.
+
+---
+
+**Implementation deviations (recorded 2026-06-10, after Phases 14–16 landed):**
+
+1. **Probe kill-timeout is 10 s, not the §5.1 sketch's 3 s.** A *cold* Vulkan driver
+   initialization under disk load was measured exceeding 3 s on the dev box (RTX 3080 Ti), and a
+   false-empty probe mislabels a working GPU machine as CPU in the UI. Still once per session,
+   off the start's critical path, and a genuinely wedged driver is still killed.
+2. **§8/§9 "decide at implementation" choice:** `classifyProfile` takes a pre-computed
+   `gpuUseful: boolean` hint; the ≥ 6 GiB + `!looksIntegrated` gate lives in
+   `gpuUsefulForProfile` (`runtime/gpu.ts`, fixture-tested) and is computed in the IPC layer.
+   `RunBenchmarkDeps.gpu` is `{ name, useful }` rather than a bare string.
+3. **`assertCommercialDrive`'s runtime-marker check is an opt-in third parameter**
+   (`runtimeSources?`) so existing callers/tests are untouched; the
+   `build-commercial-drive.{ps1,sh}` step-7 native cross-checks always run it.
+4. **The fetch scripts' flatten step excludes the `cpu/` subdir** from the nested-binary search —
+   an implementation detail §9 didn't anticipate (without it, re-fetching the default build could
+   mistake the already-present safety net for the freshly extracted nested binary).
+5. **Smoke-test wrinkle, not a product change:** Qwen3 is a thinking model — a tiny `max_tokens`
+   budget is consumed entirely by `reasoning_content` deltas, so the manual GPU smoke prompts
+   with `/no_think`. The §11.2 matrix machine ① (dev box, RTX 3080 Ti) passed end-to-end:
+   probe → real rung-1 GPU start → streamed completion; forced `gpuMode:'off'`; stubbed rung-1
+   failure landing on the real rung-3 safety net.

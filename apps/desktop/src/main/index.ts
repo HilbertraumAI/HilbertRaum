@@ -171,6 +171,7 @@ function initBackend(): void {
     runtime,
     embedder,
     manifestsDir,
+    probeGpu: gpuProbe,
     isDev
   }
   registerCoreIpc(ctx)

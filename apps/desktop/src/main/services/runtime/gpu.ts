@@ -56,6 +56,19 @@ export function looksIntegrated(name: string): boolean {
   return /iris|uhd|intel\(r\) (hd|arc.*integrated)|radeon.*graphics$|vega \d+$/i.test(name)
 }
 
+/** Minimum dedicated VRAM (MiB) before a GPU may bump the hardware profile (§8). */
+export const GPU_BUMP_MIN_VRAM_MB = 6144
+
+/**
+ * The conservative profile-bump gate (Phase 16, §8): bump only when some probed device
+ * has ≥ 6 GiB AND does not look integrated. An iGPU reporting 16 GB of *shared* RAM
+ * must never push a laptop a profile step up; a false negative only costs a too-small
+ * model recommendation, never a too-big one.
+ */
+export function gpuUsefulForProfile(devices: GpuDevice[]): boolean {
+  return devices.some((d) => d.totalMb >= GPU_BUMP_MIN_VRAM_MB && !looksIntegrated(d.name))
+}
+
 export interface GpuProbeDeps {
   /** Injected spawn (the same `SpawnFn` seam the sidecar uses) — tests fake it. */
   spawn?: SpawnFn

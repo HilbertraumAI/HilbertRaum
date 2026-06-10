@@ -111,6 +111,25 @@ it, the data **cannot be recovered** — this is by design. Create a new workspa
 - **Heavy model for your laptop:** pick the **Recommended** model on the Models screen. The
   benchmark suggests a model that suits your RAM/CPU. Larger models are more capable but slower.
 - **First start of a model** is always slower (it loads into memory); later prompts are faster.
+- **Graphics acceleration:** on most computers with a graphics card, responses are
+  automatically accelerated — nothing to configure. The **Diagnostics** screen's
+  *Acceleration* line shows whether your graphics card is being used.
+
+---
+
+## "Switched to compatibility mode" — what does that mean?
+
+Nothing is broken. The app tried to use your graphics card to speed up responses, hit a
+stability issue (often an outdated graphics driver), and automatically switched to
+**compatibility mode** — responses now run on your processor, which works on every machine.
+Everything keeps working; responses may just be a bit slower.
+
+- You don't have to do anything. The app remembers this choice so it doesn't retry on every
+  start.
+- If you update your graphics driver later, open **Diagnostics → Try GPU again** to let the
+  app use the graphics card again.
+- You can also turn acceleration off yourself under **Settings → Use GPU acceleration**
+  (it is on by default).
 
 ---
 

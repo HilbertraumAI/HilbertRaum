@@ -3,6 +3,7 @@ import type { ResolvedPaths } from './workspace'
 import type { WorkspaceController } from './workspace-vault'
 import type { RuntimeManager } from './runtime'
 import type { Embedder } from './embeddings'
+import type { GpuDevice } from '../../shared/types'
 
 // Shared application context assembled at startup and passed to IPC handlers.
 // As later phases land, add: models registry, ingestion queue, etc.
@@ -21,6 +22,12 @@ export interface AppContext {
   embedder: Embedder
   /** Directory holding model-manifests, or null if it could not be located. */
   manifestsDir: string | null
+  /**
+   * Session-cached GPU probe (Phase 16): `--list-devices` on a drive-local binary,
+   * shared between the start ladder, Diagnostics, and the benchmark so they never
+   * disagree within a session. Optional — absent in most test contexts.
+   */
+  probeGpu?: (binPath: string) => Promise<GpuDevice[]>
   /**
    * True for a dev build (`!app.isPackaged`). Treated as "developer" alongside the
    * user-toggleable `developerMode` setting (which defaults OFF on shipped builds, M10).

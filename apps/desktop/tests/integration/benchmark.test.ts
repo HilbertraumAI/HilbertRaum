@@ -20,6 +20,8 @@ import {
   VERY_LOW_TOKENS_PER_SECOND,
   SLOW_DRIVE_MBPS
 } from '../../src/main/services/benchmark'
+import { gpuUsefulForProfile } from '../../src/main/services/runtime/gpu'
+import type { GpuDevice } from '../../src/shared/types'
 
 function freshDb(): Db {
   return openDatabase(join(mkdtempSync(join(tmpdir(), 'paid-bench-')), 'test.sqlite'))
@@ -77,15 +79,82 @@ describe('classifyProfile', () => {
     expect(classifyProfile(16, { tokensPerSecond: 80 })).toBe('LITE')
   })
 
-  it('bumps one step toward PRO when a useful GPU is present (capped at PRO)', () => {
-    expect(classifyProfile(8, { gpu: 'NVIDIA RTX' })).toBe('LITE')
-    expect(classifyProfile(64, { gpu: 'NVIDIA RTX' })).toBe('PRO')
+  // Phase 16 (gpu-support-plan §8): the bump fires only on a PRE-QUALIFIED gpuUseful
+  // hint (≥ 6 GiB dedicated + not integrated-looking — computed by gpuUsefulForProfile),
+  // never on a merely truthy GPU name.
+  it('bumps one step toward PRO when the GPU is pre-qualified useful (capped at PRO)', () => {
+    expect(classifyProfile(8, { gpuUseful: true })).toBe('LITE')
+    expect(classifyProfile(64, { gpuUseful: true })).toBe('PRO')
+    expect(classifyProfile(8, { gpuUseful: false })).toBe('TINY')
+    expect(classifyProfile(8, {})).toBe('TINY')
   })
 
   it('returns UNKNOWN when RAM detection failed (invalid value)', () => {
     expect(classifyProfile(0)).toBe('UNKNOWN')
     expect(classifyProfile(Number.NaN)).toBe('UNKNOWN')
     expect(classifyProfile(-4)).toBe('UNKNOWN')
+  })
+})
+
+// ---- GPU profile-bump gate (Phase 16, gpu-support-plan §8/§11.1) -----------------
+
+describe('gpuUsefulForProfile', () => {
+  const dev = (name: string, totalMb: number): GpuDevice => ({ id: 'Vulkan0', name, totalMb, freeMb: totalMb })
+
+  it('qualifies a discrete GPU with ≥ 6 GiB', () => {
+    expect(gpuUsefulForProfile([dev('NVIDIA GeForce RTX 3080 Ti', 12300)])).toBe(true)
+    expect(gpuUsefulForProfile([dev('AMD Radeon RX 6700 XT', 12272)])).toBe(true)
+  })
+
+  it('an iGPU reporting 16 GB of SHARED memory does NOT qualify (the §8 case)', () => {
+    expect(gpuUsefulForProfile([dev('Intel(R) Iris(R) Xe Graphics', 16000)])).toBe(false)
+    expect(gpuUsefulForProfile([dev('AMD Radeon(TM) Graphics', 16000)])).toBe(false)
+  })
+
+  it('a small discrete GPU (< 6 GiB) does not qualify', () => {
+    expect(gpuUsefulForProfile([dev('NVIDIA GeForce GTX 1650', 4096)])).toBe(false)
+  })
+
+  it('no devices → not useful', () => {
+    expect(gpuUsefulForProfile([])).toBe(false)
+  })
+
+  it('any one qualifying device among several is enough', () => {
+    expect(
+      gpuUsefulForProfile([
+        dev('Intel(R) UHD Graphics 630', 16000),
+        dev('NVIDIA GeForce RTX 3080 Ti', 12300)
+      ])
+    ).toBe(true)
+  })
+})
+
+describe('runBenchmark GPU injection (Phase 16)', () => {
+  it('carries the injected probe summary into the result + profile', async () => {
+    const ws = workspace()
+    const result = await runBenchmark({
+      workspacePath: ws,
+      manifests: [],
+      gpu: { name: 'NVIDIA GeForce RTX 3080 Ti', useful: true }
+    })
+    expect(result.gpu).toBe('NVIDIA GeForce RTX 3080 Ti')
+    // The profile is one step above the pure-RAM classification (capped at PRO).
+    const ramOnly = classifyProfile(result.ramGb)
+    const steps = ['TINY', 'LITE', 'BALANCED', 'PRO']
+    expect(steps.indexOf(result.profile)).toBe(Math.min(steps.indexOf(ramOnly) + 1, 3))
+  })
+
+  it('an un-useful (or absent) GPU changes nothing', async () => {
+    const ws = workspace()
+    const withIgpu = await runBenchmark({
+      workspacePath: ws,
+      manifests: [],
+      gpu: { name: 'Intel(R) Iris(R) Xe Graphics', useful: false }
+    })
+    const without = await runBenchmark({ workspacePath: ws, manifests: [] })
+    expect(withIgpu.profile).toBe(without.profile)
+    expect(withIgpu.gpu).toBe('Intel(R) Iris(R) Xe Graphics') // name still surfaces
+    expect(without.gpu).toBeNull()
   })
 })
 

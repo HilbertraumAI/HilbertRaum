@@ -13,6 +13,8 @@ export const IPC = {
   stopRuntime: 'runtime:stop',
   /** Read-only runtime health/state for Diagnostics (spec §7.11 — audit M14). */
   getRuntimeStatus: 'runtime:status',
+  /** The drive's installed sidecar build (.paid-runtime.json marker — Phase 16). */
+  getRuntimeInstall: 'runtime:install',
   // Phase 3+
   createConversation: 'chat:createConversation',
   listConversations: 'chat:listConversations',
