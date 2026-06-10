@@ -1,18 +1,29 @@
-# Runtime sources — prebuilt llama.cpp sidecar binaries (Phase 12).
+# Runtime sources — prebuilt llama.cpp sidecar binaries (Phase 12; GPU defaults Phase 14).
 #
 # The `llama-server` sidecar is NOT a model, so it lives here rather than in a model
 # manifest. `fetch-runtime` reads this file, picks the build matching the host
 # OS/arch (or --os/--arch/--backend overrides), downloads + SHA-256-verifies the release
-# archive (.zip or .tar.gz), and extracts it into runtime/llama.cpp/<os>/ (the dirs
-# services/runtime/sidecar.ts `llamaOsDir` resolves: win / mac / linux). Archives that
-# nest their binaries in a subfolder (the macOS/Linux tarballs) are flattened so
-# llama-server lands at the extract_to root.
+# archive (.zip or .tar.gz), and extracts it into the build's extract_to dir. Archives
+# that nest their binaries in a subfolder (the macOS/Linux tarballs) are flattened so
+# llama-server lands at the extract_to root. After extraction a `.paid-runtime.json`
+# install marker ({ version, backend, os, arch }) is written next to the binary so
+# re-runs can skip idempotently — and so a version/backend change actually re-fetches.
 #
-# DEFAULT BACKEND = CPU. CPU builds run on any laptop with zero driver assumptions —
-# the right default for a portable drive that must boot on unknown hardware. GPU builds
-# (CUDA/Vulkan) are an opt-in `--backend` override, never the default (a mismatched GPU
-# build fails or runs worse than CPU). The macOS arm64 build ships with Metal enabled
-# by default upstream.
+# DEFAULT BACKEND = VULKAN-FIRST (Phase 14, docs/gpu-support-plan.md). The win/linux
+# Vulkan release archives are STANDALONE FULL BUILDS: they ship llama-server + every
+# ggml-cpu-* variant library + the Vulkan backend, loaded dynamically (GGML_BACKEND_DL).
+# On a machine with no usable Vulkan device the same binary simply runs on its bundled
+# CPU backends — so the Vulkan build degrades to exactly the old CPU behavior on
+# GPU-less machines, which is why it is safe as the default for an unknown laptop.
+# (The Phase-12 assumption "a GPU build fails or runs worse on a non-GPU machine" was
+# verified FALSE for Vulkan-the-archive against b9585.) The pure-CPU builds remain as a
+# last-resort safety net, extracted to runtime/llama.cpp/<os>/cpu/ (the app's fallback
+# ladder rung 3 — used only if the default binary itself cannot start). The macOS arm64
+# build ships with Metal enabled by default upstream (already GPU; no cpu/ net needed).
+#
+# Ordering matters: with no --backend override, fetch-runtime and selectRuntimeBuild
+# take the FIRST os/arch match — list the default (vulkan/metal) build first per OS.
+# (os, arch, backend) triples must be unique (validated).
 #
 # Schema (validated by apps/desktop/src/shared/runtime-sources.ts validateRuntimeSources):
 #   llama_cpp:
@@ -21,7 +32,8 @@
 #       - { os, arch, backend, url, sha256, extract_to }
 #
 # PINNED RELEASE: b9585 (2026-06-09). The sha256 values below were computed from the
-# actual downloaded release assets. To bump: pick a new tag from
+# actual downloaded release assets (the vulkan hashes re-verified from fresh downloads
+# on 2026-06-10). To bump: pick a new tag from
 # https://github.com/ggml-org/llama.cpp/releases, update version + per-OS asset URLs
 # (asset names vary by release), download each asset, and promote its real SHA-256 here
 # as part of a deliberate, reviewed version bump. fetch-runtime refuses to silently
@@ -32,10 +44,16 @@ llama_cpp:
   builds:
     - os: win
       arch: x64
+      backend: vulkan
+      url: https://github.com/ggml-org/llama.cpp/releases/download/b9585/llama-b9585-bin-win-vulkan-x64.zip
+      sha256: af6b1b94377b9f78dbb2285b878fb696d36766391499d65e055ecd622b69018a
+      extract_to: runtime/llama.cpp/win
+    - os: win
+      arch: x64
       backend: cpu
       url: https://github.com/ggml-org/llama.cpp/releases/download/b9585/llama-b9585-bin-win-cpu-x64.zip
       sha256: 23c0e329e2228f7cbcc83884f42c7787f1a3133e5548ea99e89d60202e1fd89c
-      extract_to: runtime/llama.cpp/win
+      extract_to: runtime/llama.cpp/win/cpu
     - os: mac
       arch: arm64
       backend: metal
@@ -44,7 +62,13 @@ llama_cpp:
       extract_to: runtime/llama.cpp/mac
     - os: linux
       arch: x64
+      backend: vulkan
+      url: https://github.com/ggml-org/llama.cpp/releases/download/b9585/llama-b9585-bin-ubuntu-vulkan-x64.tar.gz
+      sha256: 5f5467e5d9827b27eda17ee39b35fd2b7c8aa298f144e8836491ccec76160fdf
+      extract_to: runtime/llama.cpp/linux
+    - os: linux
+      arch: x64
       backend: cpu
       url: https://github.com/ggml-org/llama.cpp/releases/download/b9585/llama-b9585-bin-ubuntu-x64.tar.gz
       sha256: be111dd28e6228fc4cb6a6ec41f03a67947ab61f315a3d22d0e68ac7372a58ab
-      extract_to: runtime/llama.cpp/linux
+      extract_to: runtime/llama.cpp/linux/cpu

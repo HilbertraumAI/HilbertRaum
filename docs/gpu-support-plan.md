@@ -1,9 +1,10 @@
 # GPU Support Plan — llama.cpp sidecar acceleration
 
-_Status: **DRAFT v2 — review round 1 incorporated (2026-06-10); nothing implemented.** Written
-against the pinned llama.cpp **b9585** and the Phase-13-complete codebase. This document is the
-deliverable of a planning session; implementation starts only after sign-off. The §13 questions
-are now **decided** — see that section._
+_Status: **IMPLEMENTED 2026-06-10 (Phases 14–16 complete, one phase per commit, per-phase
+ritual applied).** Written against the pinned llama.cpp **b9585** and the Phase-13-complete
+codebase. All §13 review questions were **decided** before implementation; the small
+implementation deviations are recorded at the end of §13. Remaining work = the §11.2 manual
+hardware matrix (release acceptance — tracked in BUILD_STATE §5)._
 
 ---
 
@@ -19,7 +20,7 @@ are now **decided** — see that section._
 | GPU detection | **Both**: an upfront `llama-server --list-devices` probe (Diagnostics + profile) **and** try-GPU-then-health-check-fallback at start (the actual guarantee) | The probe can't prove inference works; the fallback ladder can't name the GPU for the UI |
 | Fallback mechanism | Start normally → on failure restart with `--device none` → on failure use `<os>/cpu/` build → mock (existing rule) | Worst case is exactly today's behavior; the app can never be *stuck* |
 | macOS | **No change.** arm64 already runs Metal with auto-offload; Intel-x64 Macs stay CPU (upstream disables Metal there) | Verified: mac arm64 build has Metal; `-ngl` defaults to auto |
-| Embedder (E5) | **Forced CPU** (`--device none`) | 384-dim/~0.5 GB model gains little; keeps ingestion immune to GPU flakiness and VRAM contention — see §7 |
+| Embedder (E5) | **Forced CPU** (`--device none`) | 384-dim/~0.24 GB model gains little; keeps ingestion immune to GPU flakiness and VRAM contention — see §7 |
 | New npm deps | **None.** Probe + fallback use `node:child_process` on our own shipped binary | Project theme: no native/fragile deps |
 
 **Size delta per drive:** Windows +56 MB download / +166 MB on disk; Linux +58 MB / +185 MB;
@@ -265,9 +266,10 @@ rung 1 is Metal.
 `E5Embedder` composes the same `LlamaServer`, so with the Vulkan build it would *also*
 auto-offload. We explicitly **pin it to CPU** by adding `--device none` to its `extraArgs`:
 
-- The model is multilingual-E5-small Q8: ~0.5 GB, 384 dims, 512-token context. CPU embeds
-  hundreds of chunks/second; ingestion is dominated by parsing, not embedding. GPU upside ≈
-  seconds on a large import.
+- The model is multilingual-E5-small (**F16 since 2026-06-10** — the q8_0 GGUF crashes
+  llama-server b9585 at warmup, see the manifest's `license_review.notes`): ~242 MB, 384 dims,
+  512-token context, same manifest id/`local_path`. CPU embeds hundreds of chunks/second;
+  ingestion is dominated by parsing, not embedding. GPU upside ≈ seconds on a large import.
 - Downside of GPU for it: a *second* GPU context competing for VRAM with the chat model, and a
   second process exposed to driver flakiness — during **ingestion**, where a crash fails a whole
   document (M7 history).
@@ -529,3 +531,27 @@ updates (`drive-layout.md`, `packaging.md`, `model-policy.md`, `benchmark.md`,
 `troubleshooting.md`, `known-limitations.md`, user guide, `BUILD_STATE.md`) happen inside
 Phases 14–16 per the per-phase ritual, as inventoried in §9 — updating them now would describe
 a state of the repo that doesn't exist yet.
+
+---
+
+**Implementation deviations (recorded 2026-06-10, after Phases 14–16 landed):**
+
+1. **Probe kill-timeout is 10 s, not the §5.1 sketch's 3 s.** A *cold* Vulkan driver
+   initialization under disk load was measured exceeding 3 s on the dev box (RTX 3080 Ti), and a
+   false-empty probe mislabels a working GPU machine as CPU in the UI. Still once per session,
+   off the start's critical path, and a genuinely wedged driver is still killed.
+2. **§8/§9 "decide at implementation" choice:** `classifyProfile` takes a pre-computed
+   `gpuUseful: boolean` hint; the ≥ 6 GiB + `!looksIntegrated` gate lives in
+   `gpuUsefulForProfile` (`runtime/gpu.ts`, fixture-tested) and is computed in the IPC layer.
+   `RunBenchmarkDeps.gpu` is `{ name, useful }` rather than a bare string.
+3. **`assertCommercialDrive`'s runtime-marker check is an opt-in third parameter**
+   (`runtimeSources?`) so existing callers/tests are untouched; the
+   `build-commercial-drive.{ps1,sh}` step-7 native cross-checks always run it.
+4. **The fetch scripts' flatten step excludes the `cpu/` subdir** from the nested-binary search —
+   an implementation detail §9 didn't anticipate (without it, re-fetching the default build could
+   mistake the already-present safety net for the freshly extracted nested binary).
+5. **Smoke-test wrinkle, not a product change:** Qwen3 is a thinking model — a tiny `max_tokens`
+   budget is consumed entirely by `reasoning_content` deltas, so the manual GPU smoke prompts
+   with `/no_think`. The §11.2 matrix machine ① (dev box, RTX 3080 Ti) passed end-to-end:
+   probe → real rung-1 GPU start → streamed completion; forced `gpuMode:'off'`; stubbed rung-1
+   failure landing on the real rung-3 safety net.

@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { createWriteStream, existsSync, statSync } from 'node:fs'
+import { createWriteStream, existsSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { mkdir, rm } from 'node:fs/promises'
 import { dirname, join, resolve, sep } from 'node:path'
 import { Readable } from 'node:stream'
@@ -118,7 +118,9 @@ export interface RuntimeSelector {
 /**
  * Select the `llama-server` build matching the host OS/arch (and optional backend
  * override). With no backend override the FIRST os/arch match wins — runtime-sources.yaml
- * lists the broadest-compatible CPU build first per OS, so the default is always CPU.
+ * lists the DEFAULT build first per OS (since Phase 14 that is the Vulkan full build on
+ * win/linux, which contains every CPU backend and degrades to CPU on GPU-less machines;
+ * Metal on mac). `--backend cpu` selects the pure-CPU safety-net build (`<os>/cpu/`).
  */
 export function selectRuntimeBuild(
   sources: RuntimeSources,
@@ -129,6 +131,22 @@ export function selectRuntimeBuild(
     .filter((b) => b.arch === sel.arch)
     .filter((b) => (sel.backend ? b.backend === sel.backend : true))
   return candidates[0] ?? null
+}
+
+/**
+ * Select EVERY build a shipped drive needs for one OS — the default (vulkan/metal)
+ * build plus the pure-CPU safety net where one exists (Phase 14, gpu-support-plan §9).
+ * Used by the commercial pipeline, which must provision all of them; yaml order is
+ * preserved (default first). With no arch the OS's builds are taken as listed
+ * (cross-provisioning another OS's dir from the build host).
+ */
+export function selectRuntimeBuilds(
+  sources: RuntimeSources,
+  sel: { os: RuntimeOs; arch?: string }
+): RuntimeBuild[] {
+  return sources.builds
+    .filter((b) => b.os === sel.os)
+    .filter((b) => (sel.arch ? b.arch === sel.arch : true))
 }
 
 export interface RuntimeDownloadPlan {
@@ -342,4 +360,67 @@ export function formatAssetPlan(
 /** True when a runtime binary is already extracted at the planned path (idempotent skip). */
 export function runtimeBinaryPresent(plan: RuntimeDownloadPlan): boolean {
   return existsSync(plan.binaryPath) && statSync(plan.binaryPath).isFile()
+}
+
+// ---- Runtime install marker (.paid-runtime.json) ------------------------------------
+//
+// "Binary exists" alone is a broken idempotency signal: upgrading a drive from the old
+// CPU default to the Vulkan default would silently keep the CPU build (the binary name
+// is identical). After extraction the fetchers write a marker recording exactly which
+// build is installed; the skip decision requires the marker to MATCH (version + backend).
+// The marker also tells the app/Diagnostics which build a drive carries (Phase 16).
+// The fetch-runtime scripts mirror this logic natively — keep them in sync.
+
+export const RUNTIME_MARKER_FILE = '.paid-runtime.json'
+
+export interface RuntimeInstallMarker {
+  version: string
+  backend: string
+  os: RuntimeOs
+  arch: string
+}
+
+/** Path of the install marker inside a build's extraction dir. */
+export function runtimeMarkerPath(extractTo: string): string {
+  return join(extractTo, RUNTIME_MARKER_FILE)
+}
+
+/** Read + parse an install marker. Never throws: missing/malformed → null. */
+export function readRuntimeMarker(extractTo: string): RuntimeInstallMarker | null {
+  const path = runtimeMarkerPath(extractTo)
+  try {
+    const raw = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>
+    if (
+      typeof raw.version === 'string' &&
+      typeof raw.backend === 'string' &&
+      typeof raw.os === 'string' &&
+      typeof raw.arch === 'string'
+    ) {
+      return {
+        version: raw.version,
+        backend: raw.backend,
+        os: raw.os as RuntimeOs,
+        arch: raw.arch
+      }
+    }
+    return null
+  } catch {
+    return null
+  }
+}
+
+/** Write the install marker after a successful extraction (UTF-8, single line). */
+export function writeRuntimeMarker(extractTo: string, marker: RuntimeInstallMarker): void {
+  writeFileSync(runtimeMarkerPath(extractTo), JSON.stringify(marker), 'utf8')
+}
+
+/**
+ * Marker-based idempotency: true only when the binary is present AND the install marker
+ * records the SAME version + backend as the plan. A present binary with no/stale marker
+ * (e.g. a CPU-era drive being upgraded to the Vulkan default) must be re-fetched.
+ */
+export function runtimeInstallCurrent(plan: RuntimeDownloadPlan): boolean {
+  if (!runtimeBinaryPresent(plan)) return false
+  const marker = readRuntimeMarker(plan.extractTo)
+  return marker !== null && marker.version === plan.version && marker.backend === plan.backend
 }

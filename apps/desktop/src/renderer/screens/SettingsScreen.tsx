@@ -49,6 +49,22 @@ export function SettingsScreen(): JSX.Element {
       </div>
 
       <div className="card">
+        <h2>Performance</h2>
+        <label className="toggle">
+          <input
+            type="checkbox"
+            checked={settings.gpuMode === 'auto'}
+            onChange={(e) => patch({ gpuMode: e.target.checked ? 'auto' : 'off' })}
+          />
+          <span>Use GPU acceleration</span>
+        </label>
+        <p className="hint">
+          Uses your graphics card to speed up responses when available. Turn off only if you
+          notice stability problems — everything keeps working either way.
+        </p>
+      </div>
+
+      <div className="card">
         <h2>Developer</h2>
         <label className="toggle">
           <input

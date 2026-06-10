@@ -1,8 +1,10 @@
 import { ipcMain } from 'electron'
 import { IPC } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
-import type { BenchmarkResult } from '../../shared/types'
-import { runBenchmark } from '../services/benchmark'
+import type { BenchmarkResult, GpuDevice } from '../../shared/types'
+import { runBenchmark, type GpuBenchmarkInput } from '../services/benchmark'
+import { gpuUsefulForProfile } from '../services/runtime/gpu'
+import { resolveLlamaServerPath } from '../services/runtime/sidecar'
 import { discoverManifests } from '../services/models'
 import { getSettings, updateSettings } from '../services/settings'
 import { log } from '../services/logging'
@@ -15,16 +17,39 @@ import { log } from '../services/logging'
 // to settings (`lastBenchmark`) so the recommendation pipeline (registerModelIpc) and
 // `getAppStatus().hardwareProfile` read the real, detected profile instead of a stub.
 
+/**
+ * Run the (session-cached) GPU probe on the drive's own `llama-server` and persist the
+ * result to `settings.gpuProbe` (Phase 16, gpu-support-plan §5.4) — so Diagnostics +
+ * profile classification have device info without re-probing every launch. The probe
+ * stays OUT of benchmark.ts (which keeps zero `child_process`); the summary is injected.
+ * Never throws: no binary / no devices / probe failure → a null-name, not-useful input.
+ */
+async function probeAndPersistGpu(ctx: AppContext): Promise<GpuBenchmarkInput> {
+  let devices: GpuDevice[] = []
+  try {
+    const binPath = resolveLlamaServerPath(ctx.paths.rootPath)
+    if (binPath && ctx.probeGpu) {
+      devices = await ctx.probeGpu(binPath)
+      updateSettings(ctx.db, { gpuProbe: { devices, probedAt: new Date().toISOString() } })
+    }
+  } catch (err) {
+    log.warn('GPU probe failed (benchmark continues without it)', String(err))
+  }
+  return { name: devices[0]?.name ?? null, useful: gpuUsefulForProfile(devices) }
+}
+
 /** Run the benchmark and persist the result (the shared core of IPC + first-run). */
 export async function runAndPersistBenchmark(ctx: AppContext): Promise<BenchmarkResult> {
   const manifests = ctx.manifestsDir
     ? discoverManifests(ctx.manifestsDir).manifests.map((m) => m.manifest)
     : []
+  const gpu = await probeAndPersistGpu(ctx)
 
   const result = await runBenchmark({
     workspacePath: ctx.paths.workspacePath,
     manifests,
-    runtime: ctx.runtime.active()
+    runtime: ctx.runtime.active(),
+    gpu
   })
 
   // Persist the last result via the settings store (spec §8 defines no benchmarks table).

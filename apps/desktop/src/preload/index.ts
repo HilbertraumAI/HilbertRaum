@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import { IPC, STREAM } from '../shared/ipc'
+import { EVENTS, IPC, STREAM } from '../shared/ipc'
 import type {
   AppSettings,
   AppStatus,
@@ -14,6 +14,7 @@ import type {
   ModelInfo,
   PolicyStatus,
   PreflightResult,
+  RuntimeInstallInfo,
   RuntimeStatus,
   WorkspaceActionResult,
   WorkspaceMode,
@@ -57,6 +58,9 @@ const api = {
   stopRuntime: (): Promise<void> => ipcRenderer.invoke(IPC.stopRuntime),
   /** Read-only runtime health/state (Diagnostics, spec §7.11). */
   getRuntimeStatus: (): Promise<RuntimeStatus> => ipcRenderer.invoke(IPC.getRuntimeStatus),
+  /** The drive's installed sidecar build (.paid-runtime.json), or null (Phase 16). */
+  getRuntimeInstall: (): Promise<RuntimeInstallInfo | null> =>
+    ipcRenderer.invoke(IPC.getRuntimeInstall),
 
   // ---- Hardware benchmark (Phase 7) ----
   /** Detect hardware + measure drive speed, persist + return the result. Strictly local. */
@@ -126,6 +130,12 @@ const api = {
     const handler = (_e: unknown, message: string) => cb(message)
     ipcRenderer.on(ch, handler)
     return () => ipcRenderer.removeListener(ch, handler)
+  },
+  /** Subscribe to one-line runtime notices (Phase 15: compatibility-mode fallback). */
+  onRuntimeNotice: (cb: (message: string) => void): (() => void) => {
+    const handler = (_e: unknown, message: string) => cb(message)
+    ipcRenderer.on(EVENTS.runtimeNotice, handler)
+    return () => ipcRenderer.removeListener(EVENTS.runtimeNotice, handler)
   }
 }
 

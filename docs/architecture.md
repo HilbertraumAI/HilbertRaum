@@ -177,7 +177,44 @@ files**.
 - **`services/runtime/factory.ts`** — `createSelectingRuntimeFactory({ rootPath, … })` returns a
   `RuntimeFactory` that picks `LlamaRuntime` vs `MockRuntime` per `start()` (when the concrete model
   path is known), behind the unchanged `RuntimeManager`. `main/index.ts` uses it in place of the bare
-  `createMockRuntime`.
+  `createMockRuntime`. **Phase 15:** when binary + weights are present the factory returns the **GPU
+  start ladder** (see below) instead of a bare `LlamaRuntime`.
+
+### GPU acceleration: probe + start ladder (Phase 15, [`gpu-support-plan.md`](gpu-support-plan.md))
+
+The Phase-14 drive ships the **Vulkan full build** as the default `llama-server` (it contains every
+CPU backend and degrades to CPU on GPU-less machines), so GPU offload happens with **default spawn
+args** (b9585: `-ngl auto` + `--fit on` — we **never pass `-ngl`**, locked decision). What Phase 15
+adds is the safety machinery:
+
+- **`services/runtime/gpu.ts`** — `probeGpuDevices(binPath)` spawns the drive's own
+  `llama-server --list-devices` (offline, no model, sub-second, kill-timeout-bounded; never throws —
+  any failure → `[]`) and `parseListDevices` parses it (pure, fixture-tested).
+  `looksIntegrated(name)` is the conservative iGPU heuristic for the Phase-16 profile bump.
+  `createCachedGpuProbe()` memoizes per binary per session. The probe labels the backend for the
+  UI; it can't prove stable inference — the ladder is the actual guarantee.
+- **The start ladder** (`factory.ts`, §5.2): rung 1 = default binary, default args (GPU
+  auto-offload; on a GPU-less machine this *is* CPU mode) → rung 2 = same binary, **`--device
+  none`** (the only way we force CPU) → rung 3 = the pure-CPU safety-net build
+  (`runtime/llama.cpp/<os>/cpu/`, when shipped) → rung 4 = `MockRuntime` (the existing
+  graceful-fallback rule; the app can never be stuck). `gpuMode: 'off'` (Settings) or a persisted
+  `gpuAutoDisabled` skip rung 1. A rung-1 failure persists `gpuAutoDisabled` + `gpuLastError`
+  (no repeated GPU health timeouts on later starts); Diagnostics' "Try GPU again" clears it.
+  `RuntimeStatus` now carries `backend: 'gpu' | 'cpu' | 'mock'` + `gpuName`.
+- **Mid-generation crash auto-fallback** (§5.3): `LlamaServer` gained an `onUnexpectedExit` hook
+  (fires only for a *healthy* server dying outside `stop()`). When the active backend was GPU,
+  `createGpuCrashAutoFallback` persists the flags, **restarts the same model once at CPU**, and
+  broadcasts the friendly §11.4 notice (`runtime:notice` event → preload `onRuntimeNotice`):
+  *"Switched to compatibility mode for stability…"* — never "GPU failed".
+- **The E5 embedder is pinned to CPU** (`--device none` in its `extraArgs`, §7 — decided): the
+  384-dim model gains little from a GPU, and the pin keeps ingestion immune to driver flakiness
+  and VRAM contention with the chat model.
+- GPU settings (`gpuMode`, `gpuAutoDisabled`, `gpuLastError`, `gpuProbe`) live in `AppSettings`
+  (the possibly-encrypted DB) — fine, because sidecars only ever start post-unlock; every read in
+  `main/index.ts` is still guarded (locked → safe defaults).
+- CI never touches a GPU/binary: the probe + ladder are covered through the existing
+  `SpawnFn`/fetch seams; a real-GPU smoke lives in `tests/manual/gpu-smoke.test.ts`, **skipped
+  unless `PAID_GPU_SMOKE` points at a provisioned drive**.
 - **`services/embeddings/e5.ts`** — `E5Embedder implements Embedder`, the real backend behind the same
   interface with the **manifest id + 384 dims**. It composes a `LlamaServer` started with `--embedding
   --pooling mean` (the **same** prebuilt binary — **zero new npm deps**, no fragile native build), is

@@ -46,6 +46,14 @@ export function App(): JSX.Element {
   // Set when the backend never came up (getWorkspaceState rejected). Faking 'unlocked'
   // here used to render the full shell with every screen surfacing raw IPC errors (L5).
   const [fatalError, setFatalError] = useState<string | null>(null)
+  // One-line, dismissible runtime notice (Phase 16): currently the GPU crash
+  // auto-fallback's friendly "switched to compatibility mode" message (§11.4 tone).
+  const [notice, setNotice] = useState<string | null>(null)
+
+  useEffect(() => {
+    const unsubscribe = window.api?.onRuntimeNotice?.((message) => setNotice(message))
+    return () => unsubscribe?.()
+  }, [])
 
   useEffect(() => {
     let active = true
@@ -154,6 +162,16 @@ export function App(): JSX.Element {
       </nav>
 
       <main className="content">
+        {notice && (
+          <div className="card" role="status" style={{ marginBottom: 12 }}>
+            <p className="hint" style={{ margin: 0 }}>
+              {notice}{' '}
+              <button className="btn sm" onClick={() => setNotice(null)}>
+                OK
+              </button>
+            </p>
+          </div>
+        )}
         {screen === 'home' && <HomeScreen onNavigate={(s) => setScreen(s as ScreenId)} />}
         {screen === 'chat' && <ChatScreen onNavigate={(s) => setScreen(s as ScreenId)} />}
         {screen === 'documents' && <DocumentsScreen />}

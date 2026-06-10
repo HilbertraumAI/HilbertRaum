@@ -50,6 +50,20 @@ export function resolveLlamaServerPath(
   return existsSync(candidate) ? candidate : null
 }
 
+/**
+ * Resolve the pure-CPU safety-net binary at `runtime/llama.cpp/<os>/cpu/` (Phase 14
+ * ships it on win/linux), or `null` when absent — the fallback ladder's rung 3
+ * (gpu-support-plan §5.2). Deliberately ignores `PAID_LLAMA_BIN`: the override points
+ * at one explicit binary and has no implied sibling.
+ */
+export function resolveCpuFallbackServerPath(
+  rootPath: string,
+  platform: NodeJS.Platform = process.platform
+): string | null {
+  const candidate = join(llamaServerDir(rootPath, platform), 'cpu', llamaServerBinaryName(platform))
+  return existsSync(candidate) ? candidate : null
+}
+
 /** A sane default thread count: half the logical cores, at least 1. */
 export function defaultThreadCount(): number {
   let count = 0
@@ -91,6 +105,8 @@ export interface ReadableLike {
 export interface ChildProcessLike {
   readonly pid?: number
   readonly killed: boolean
+  /** Present when spawned with a piped stdout (the GPU probe); absent otherwise. */
+  readonly stdout?: ReadableLike | null
   /** Present when spawned with a piped stderr; absent in tests' fake children. */
   readonly stderr?: ReadableLike | null
   kill(signal?: NodeJS.Signals | number): boolean
@@ -102,6 +118,13 @@ export type SpawnFn = (command: string, args: string[], options: SpawnOptions) =
 export type FetchFn = typeof fetch
 
 const realSpawn: SpawnFn = (command, args, options) => nodeSpawn(command, args, options)
+
+/** What a server that died on its own (not via `stop()`) left behind (Phase 15 §5.3). */
+export interface UnexpectedExitInfo {
+  exitCode: number | null
+  exitSignal: string | null
+  stderrTail: string
+}
 
 export interface LlamaServerOptions {
   binPath: string
@@ -116,6 +139,13 @@ export interface LlamaServerOptions {
   /** Poll interval while waiting for health. */
   healthIntervalMs?: number
   host?: string
+  /**
+   * Fired when the child exits AFTER having become healthy, outside `stop()` — i.e. a
+   * mid-session crash (driver crash, VRAM exhaustion). Start-time failures are NOT
+   * reported here (they already throw from `start()`); the GPU crash auto-fallback
+   * (gpu-support-plan §5.3) hangs off this hook.
+   */
+  onUnexpectedExit?: (info: UnexpectedExitInfo) => void
   // Test seams:
   spawn?: SpawnFn
   fetchImpl?: FetchFn
@@ -148,6 +178,10 @@ export class LlamaServer {
   private exitCode: number | null = null
   private exitSignal: string | null = null
   private stderrTail = ''
+  /** True once /health reported ready — gates the unexpected-exit hook. */
+  private ready = false
+  /** True while stop() is tearing the child down — an exit then is EXPECTED. */
+  private stopping = false
 
   private readonly host: string
   private readonly spawn: SpawnFn
@@ -203,6 +237,8 @@ export class LlamaServer {
     this.exitCode = null
     this.exitSignal = null
     this.stderrTail = ''
+    this.ready = false
+    this.stopping = false
     this.port = await this.findPort(this.host)
 
     // stdin/stdout ignored; stderr PIPED. We never read stdout (health/chat go over HTTP),
@@ -224,9 +260,20 @@ export class LlamaServer {
       this.exited = true
       this.exitCode = typeof code === 'number' ? code : null
       this.exitSignal = typeof signal === 'string' ? signal : null
+      // A crash AFTER the server was healthy (and not during stop()) is the
+      // mid-generation failure path — report it so the GPU auto-fallback can react.
+      // Exits before health are start failures and already throw from waitForHealthy.
+      if (this.ready && !this.stopping) {
+        this.opts.onUnexpectedExit?.({
+          exitCode: this.exitCode,
+          exitSignal: this.exitSignal,
+          stderrTail: this.stderrTail
+        })
+      }
     })
 
     await this.waitForHealthy()
+    this.ready = true
   }
 
   /** A ` — last output: …` suffix from the captured stderr tail, or '' if none. */
@@ -291,6 +338,8 @@ export class LlamaServer {
 
   /** Kill the child and wait for it to exit so no orphaned process survives. */
   async stop(): Promise<void> {
+    this.stopping = true
+    this.ready = false
     const child = this.child
     this.child = null
     this.port = null

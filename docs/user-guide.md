@@ -93,6 +93,20 @@ If no model is started yet, Home will point you to the **Models** screen.
 > answers are placeholders, not real AI responses — add a real model file for genuine answers
 > (see Troubleshooting).
 
+### Speed: graphics-card acceleration (automatic)
+
+If your computer has a graphics card (NVIDIA, AMD, or Intel), the app uses it automatically to
+make responses much faster — on a typical gaming laptop that's the difference between "a few
+words per second" and "faster than you can read". There is nothing to install or configure:
+
+- **Diagnostics → Acceleration** shows whether your graphics card is being used.
+- If the graphics driver ever causes trouble, the app switches itself to **compatibility mode**
+  (processor only — works on every machine) and tells you with a one-line note. After a driver
+  update, **Diagnostics → Try GPU again** re-enables the graphics card.
+- You can turn acceleration off under **Settings → Use GPU acceleration** if you prefer.
+- Small built-in graphics chips (e.g. Intel Iris Xe) give only a modest boost — that's normal;
+  big speedups come from dedicated graphics cards.
+
 ---
 
 ## 6. Chat

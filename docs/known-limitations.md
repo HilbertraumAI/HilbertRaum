@@ -34,8 +34,10 @@ logs, best-effort shredding on SSDs, no password recovery — are documented in
   nothing; there is no "Fast Mode" UI concept.
 - **`runtime_events` table (spec §8) is created but never written.**
 - **Model states `ready` / `not_recommended` are declared but never produced.**
-- **GPU detection is permanently `null`** — there is no safe cross-platform, offline, native-free
-  probe; the benchmark's GPU profile bump stays dormant.
+- ~~GPU detection is permanently `null`~~ **Superseded by Phases 14–16:** the drive's own
+  `llama-server --list-devices` is the offline, native-free probe, and the benchmark's GPU
+  profile bump is live (conservatively gated — see the GPU section below and
+  [`benchmark.md`](benchmark.md)).
 - **No per-document "ask selected documents" scope (spec §10.4)** — Ask Documents always searches
   the whole corpus.
 - **Settings lacks the spec §10.6 Models/Performance/About sections** (Models has its own screen;
@@ -65,3 +67,30 @@ logs, best-effort shredding on SSDs, no password recovery — are documented in
   not code generation — see the rule in [`../CONTRIBUTING.md`](../CONTRIBUTING.md).
 - Docs copied onto a prepared drive (user-guide, troubleshooting) contain repo-relative links that
   do not resolve when read from the drive.
+
+## GPU acceleration (Phases 14–16, [`gpu-support-plan.md`](gpu-support-plan.md))
+
+- **Integrated GPUs (Intel Iris Xe / UHD, AMD APU "Radeon Graphics") gain little.** They share
+  system RAM, so token generation is often near CPU speed (~1–2×); prompt processing improves
+  more (2–4×). This is honest physics, not a bug — the app still uses them automatically when
+  the driver is stable, but the hardware-profile bump deliberately ignores them so the model
+  recommendation stays RAM-based.
+- **Vulkan slower than CPU is possible** on weak-iGPU + fast-CPU machines. v1 does **not**
+  auto-benchmark CPU vs GPU and pick a winner (decided, plan §13 Q3); the Settings
+  "Use GPU acceleration" toggle covers that case.
+- **`win/arm64` and `mac/x64` ship no sidecar build** (decided, plan §13 Q4). mac/x64 = Intel
+  Macs: upstream builds them with Metal **off** and macOS has no Vulkan, so GPU acceleration is
+  impossible there regardless; Apple discontinued the line in 2023.
+- **Intel Macs are not supported by prepared drives at all** (pre-existing gap surfaced while
+  planning the GPU work, not introduced by it): a drive's `mac/` dir holds an **arm64** binary
+  that exists but cannot execute on x64, so the runtime selector picks the real backend and
+  `start()` fails with a spawn error instead of falling back to the mock — and the fallback
+  ladder's rungs 2–3 reuse the same wrong-arch binary. A DIY Intel-Mac user could drop a
+  self-built x64 `llama-server` into `runtime/llama.cpp/mac/`; prepared drives do not.
+- **A failed first GPU start auto-disables GPU persistently** (`gpuAutoDisabled`) even when the
+  underlying cause was not the GPU (e.g. a corrupt model file failing rung 1). Harmless — the
+  CPU rungs still run and Diagnostics → "Try GPU again" clears the flag in one click.
+- **The probe labels; the ladder guarantees.** `--list-devices` proves enumeration, not stable
+  inference — a driver can enumerate fine and crash on the first compute submit. That case is
+  handled by the crash auto-fallback (one CPU restart + a friendly notice); the in-flight reply
+  is lost, same as today's crash handling.

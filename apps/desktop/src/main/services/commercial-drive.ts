@@ -1,7 +1,9 @@
 import { existsSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import type { ModelManifest } from '../../shared/manifest'
+import type { RuntimeSources } from '../../shared/runtime-sources'
 import { loadPolicy } from './policy'
+import { readRuntimeMarker } from './assets'
 import { verifyDriveModels, type ModelVerifyResult } from './drive'
 
 // Commercial-drive pipeline + final posture assertion (spec §12.2 / Phase 13).
@@ -112,13 +114,17 @@ export function planCommercialDrive(opts: PlanCommercialDriveOptions): Commercia
     },
     {
       id: 'fetch-runtime',
-      title: 'Download + verify the llama.cpp sidecar for every shipped OS',
-      command: `fetch-runtime --target ${target} --os win|mac|linux (one run per shipped OS)`,
+      title: 'Download + verify the llama.cpp sidecar builds for every shipped OS',
+      command:
+        `fetch-runtime --target ${target} --os win|mac|linux ` +
+        `(+ --backend cpu safety net on win/linux; one run per build)`,
       manual: false,
       description:
-        'Fetch the llama-server build for EACH shipped OS (win, mac, linux) from ' +
-        'runtime-sources.yaml (default CPU backend), verify each zip, extract into ' +
-        'runtime/llama.cpp/<os>/ — a sold drive must run on every OS the launcher supports.'
+        'Fetch EVERY llama-server build each shipped OS needs from runtime-sources.yaml: ' +
+        'the default build (Vulkan full build on win/linux — degrades to CPU on GPU-less ' +
+        'machines; Metal on mac) into runtime/llama.cpp/<os>/ PLUS the pure-CPU safety net ' +
+        'into runtime/llama.cpp/<os>/cpu/ where one is pinned. Each archive is verified and ' +
+        'leaves a .paid-runtime.json install marker.'
     },
     packageStep(os),
     {
@@ -187,6 +193,12 @@ export interface CommercialAssertion {
     licensesApproved: boolean
     /** No user data present (a sold drive ships empty — spec §12.2). */
     noUserData: boolean
+    /**
+     * Every pinned runtime build's install marker matches the runtime-sources.yaml pin
+     * (version + backend) — Phase 14. True when no `runtimeSources` were passed (the
+     * check is opt-in; the native scripts cross-check it too).
+     */
+    runtimeCurrent: boolean
   }
   /** The per-weight verification detail (for surfacing which weight failed). */
   modelResults: ModelVerifyResult[]
@@ -225,12 +237,15 @@ function userDataArtifacts(rootPath: string): string[] {
 /**
  * Assert that a prepared drive is actually SELLABLE (spec §12.2). Reuses `loadPolicy`
  * (the commercial posture) + `verifyDriveModels` (all weights VERIFIED) and checks the
- * drive carries no user data. Returns a structured result; never throws. Fails loudly:
- * any violated invariant adds a `problems[]` entry and flips `ok` to false.
+ * drive carries no user data. When `runtimeSources` (the yaml pin) is passed, each pinned
+ * build's `.paid-runtime.json` install marker must also match (version + backend) —
+ * Phase 14. Returns a structured result; never throws. Fails loudly: any violated
+ * invariant adds a `problems[]` entry and flips `ok` to false.
  */
 export async function assertCommercialDrive(
   rootPath: string,
-  manifests: ModelManifest[]
+  manifests: ModelManifest[],
+  runtimeSources?: RuntimeSources | null
 ): Promise<CommercialAssertion> {
   const problems: string[] = []
 
@@ -295,10 +310,43 @@ export async function assertCommercialDrive(
     problems.push(`user data present on a drive meant to ship empty: ${path}`)
   }
 
+  // --- Runtime install markers match the yaml pin (Phase 14, opt-in) ---
+  // The marker is what fetch-runtime writes after a verified extraction; a missing or
+  // stale marker means the drive carries the wrong sidecar build (e.g. a CPU-era build
+  // after the default moved to vulkan) and must be re-provisioned.
+  let runtimeCurrent = true
+  if (runtimeSources) {
+    for (const build of runtimeSources.builds) {
+      const extractTo = join(rootPath, ...build.extractTo.split('/'))
+      const marker = readRuntimeMarker(extractTo)
+      if (!marker) {
+        runtimeCurrent = false
+        problems.push(
+          `runtime build ${build.os}/${build.arch} ${build.backend}: no .paid-runtime.json ` +
+            `install marker under ${build.extractTo} — run fetch-runtime for this build`
+        )
+      } else if (marker.version !== runtimeSources.version || marker.backend !== build.backend) {
+        runtimeCurrent = false
+        problems.push(
+          `runtime build ${build.os}/${build.arch} ${build.backend}: installed ` +
+            `${marker.version}/${marker.backend} does not match the pinned ` +
+            `${runtimeSources.version}/${build.backend} — re-run fetch-runtime`
+        )
+      }
+    }
+  }
+
   return {
     ok: problems.length === 0,
     problems,
-    checks: { policyCommercial, networkDenied, weightsVerified, licensesApproved, noUserData },
+    checks: {
+      policyCommercial,
+      networkDenied,
+      weightsVerified,
+      licensesApproved,
+      noUserData,
+      runtimeCurrent
+    },
     modelResults
   }
 }

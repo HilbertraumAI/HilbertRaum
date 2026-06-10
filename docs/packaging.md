@@ -110,7 +110,7 @@ out on a fresh machine with no Node/npm); their layout + config shapes mirror th
 |---|---|
 | `prepare-drive.{ps1,sh}` | Create the directory tree, copy manifests + user docs, generate `config/{drive,policy}.json`. `-DryRun`/`--dry-run` prints the plan. `-Dev`/`--dev` → a plaintext developer drive. **`-WithAssets`/`--with-assets`** (Phase 12) then runs `fetch-models` + `fetch-runtime` (forwarding `-AcceptLicense`/`--accept-license`) for a launch-ready drive. |
 | `fetch-models.{ps1,sh}` | (Phase 12) Download + **resume** + **SHA-256-verify** each weight with a `download:` block to its `models/...` path. `-Only <id>`/`--only` for one model; `-AcceptLicense`/`--accept-license` for the license gate; `-DryRun`/`--dry-run`. Real-hash mismatch → delete partial + exit 1. Idempotent (present + verified → skip). |
-| `fetch-runtime.{ps1,sh}` | (Phase 12) Read `runtime-sources.yaml`, pick the host build (`-Os/-Arch/-Backend` overrides; default CPU), download + verify the zip, extract into `runtime/llama.cpp/<os>/` (`chmod +x` on mac/linux). Idempotent; `-DryRun`/`--dry-run`. |
+| `fetch-runtime.{ps1,sh}` | (Phase 12; GPU defaults Phase 14) Read `runtime-sources.yaml`, pick the host build (`-Os/-Arch/-Backend` overrides; **default = the first listed build: Vulkan on win/linux, Metal on mac**; `-Backend cpu` fetches the pure-CPU safety net into `runtime/llama.cpp/<os>/cpu/`), download + verify the archive, extract into the build's `extract_to` (`chmod +x` on mac/linux), and write a `.paid-runtime.json` install marker. Idempotent **via the marker** (version + backend must match — a missing/stale marker re-fetches, so a CPU-era drive actually upgrades); `-DryRun`/`--dry-run`. |
 | `verify-models.{ps1,sh}` | SHA-256 each present weight vs its manifest hash (placeholder → *UNVERIFIED*; real mismatch → fail/exit 1). `-Generate`/`--generate` writes `config/checksums.json`. |
 | `setup-dev.{ps1,sh}` | Dev bootstrap: `NODE_OPTIONS=--use-system-ca npm install` (R6) + build + test smoke. |
 
@@ -130,6 +130,9 @@ copy .\apps\desktop\release\*.exe E:\                                 # place th
 > ✅ **`runtime-sources.yaml` is pinned to a real release** (`ggml-org/llama.cpp` **b9585**, real
 > per-OS URLs + SHA-256 checksums computed from the actual assets) — `fetch-runtime` downloads,
 > verifies, extracts (zip and tar.gz) and flattens the binaries for all three OSes from any host.
+> Since **Phase 14** the win/linux default is the **Vulkan full build** (GPU acceleration with
+> built-in CPU degradation) plus a pure-CPU safety net at `runtime/llama.cpp/<os>/cpu/` — see
+> [`drive-layout.md`](drive-layout.md) and [`gpu-support-plan.md`](gpu-support-plan.md).
 > The chat/embeddings **model** URLs are real Hugging Face links and the bundled manifests now carry
 > **real pinned `sha256` hashes** (captured from verified downloads via `verify-models --generate`);
 > a model you add yourself stays `REPLACE_WITH_REAL_HASH` until you capture its hash the same way.
@@ -204,11 +207,13 @@ steps. Its plan + the final "is this sellable?" assertion are mirrored from the 
 ```
 prepare-drive  --force            # commercial policy (encrypted, plaintext off, network denied)
 fetch-models   --accept-license   # verified weights (a SOLD drive needs an approved, redistributable license — spec §13)
-fetch-runtime                     # verified llama.cpp sidecar
+fetch-runtime                     # verified llama.cpp sidecar builds: per OS the default (Vulkan/Metal)
+                                  # + the pure-CPU safety net on win/linux (Phase 14)
 package + sign + notarize         # MANUAL — secrets never in the repo (pass --app-artifact / --skip-package)
 copy launcher + portable app + user docs -> drive root
 verify-models  --generate         # capture real hashes -> config/checksums.json
-final check: commercial posture (encrypted, network denied) + all weights VERIFIED + no user data
+final check: commercial posture (encrypted, network denied) + all weights VERIFIED
+             + runtime install markers match the pin (Phase 14) + no user data
 ```
 
 ```powershell

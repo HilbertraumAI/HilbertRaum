@@ -88,14 +88,22 @@ if ($AcceptLicense) { $models.AcceptLicense = $true }
 if ($DryRun) { $models.DryRun = $true }
 Run 'fetch-models.ps1' $models
 
-# --- 3. Download + verify the llama.cpp sidecar for EVERY shipped OS ----------------
+# --- 3. Download + verify the llama.cpp sidecar builds for EVERY shipped OS ---------
 # A sold drive must run on every OS the launchers support (win/mac/linux); fetching only
-# the build-host's OS would ship a drive whose mac/linux sidecar dirs are empty.
-Step 3 'Download + verify the llama.cpp sidecar (every shipped OS)'
+# the build-host's OS would ship a drive whose mac/linux sidecar dirs are empty. Since
+# Phase 14 win/linux ship TWO builds each: the default Vulkan full build (degrades to CPU
+# on GPU-less machines) into runtime/llama.cpp/<os>/ plus the pure-CPU safety net into
+# runtime/llama.cpp/<os>/cpu/ (the app's fallback ladder rung 3). mac ships Metal only.
+Step 3 'Download + verify the llama.cpp sidecar builds (every shipped OS)'
 foreach ($osName in @('win', 'mac', 'linux')) {
   $runtime = @{ Target = $Target; Os = $osName }
   if ($DryRun) { $runtime.DryRun = $true }
   Run 'fetch-runtime.ps1' $runtime
+  if ($osName -ne 'mac') {
+    $cpuNet = @{ Target = $Target; Os = $osName; Backend = 'cpu' }
+    if ($DryRun) { $cpuNet.DryRun = $true }
+    Run 'fetch-runtime.ps1' $cpuNet
+  }
 }
 
 # --- 4. Package + sign + notarize (MANUAL) -----------------------------------------
@@ -178,6 +186,36 @@ if (-not $DryRun) {
     }
   } else {
     $problems += 'model-manifests missing on the drive'
+  }
+}
+# Runtime-marker gate (assertCommercialDrive parity, Phase 14): every pinned sidecar
+# build must carry a .paid-runtime.json whose version matches runtime-sources.yaml --
+# a missing/stale marker means the drive ships the wrong build (e.g. a CPU-era binary
+# after the default moved to vulkan).
+if (-not $DryRun) {
+  $rtSources = Join-Path $Target 'model-manifests/runtime-sources.yaml'
+  if (Test-Path $rtSources) {
+    $rtVersion = $null
+    foreach ($raw in (Get-Content -Path $rtSources)) {
+      if ($raw -match '^\s*#') { continue }
+      if ($raw -match '^\s*version\s*:\s*(.+?)\s*$') {
+        $rtVersion = ($Matches[1] -replace '\s+#.*$', '').Trim().Trim('"').Trim("'"); break
+      }
+    }
+    foreach ($rtDir in @('runtime/llama.cpp/win', 'runtime/llama.cpp/win/cpu', 'runtime/llama.cpp/mac', 'runtime/llama.cpp/linux', 'runtime/llama.cpp/linux/cpu')) {
+      $markerFile = Join-Path $Target "$rtDir/.paid-runtime.json"
+      if (-not (Test-Path $markerFile)) {
+        $problems += "runtime: no .paid-runtime.json install marker under $rtDir (re-run fetch-runtime)"
+      } elseif ($rtVersion) {
+        $marker = $null
+        try { $marker = Get-Content -Path $markerFile -Raw | ConvertFrom-Json } catch {}
+        if (-not $marker -or $marker.version -ne $rtVersion) {
+          $problems += "runtime: $rtDir marker does not match the pinned version $rtVersion (re-run fetch-runtime)"
+        }
+      }
+    }
+  } else {
+    $problems += 'model-manifests/runtime-sources.yaml missing on the drive'
   }
 }
 # Weight gate (assertCommercialDrive parity): every weight VERIFIED, automated -- not a

@@ -86,6 +86,11 @@ describe('E5Embedder', () => {
     expect(calls.length).toBe(1) // reused, not re-spawned
     expect(calls[0].args).toContain('--embedding')
     expect(calls[0].args.join(' ')).toContain('--host 127.0.0.1')
+    // Phase 15 (gpu-support-plan §7, decided): the embedder is PINNED to CPU — the
+    // Vulkan default build would otherwise auto-offload it into VRAM contention with
+    // the chat model and expose ingestion to driver flakiness.
+    expect(calls[0].args.join(' ')).toContain('--device none')
+    expect(calls[0].args.join(' ')).not.toContain('-ngl')
     await embedder.stop()
     expect(child.killed).toBe(true)
   })

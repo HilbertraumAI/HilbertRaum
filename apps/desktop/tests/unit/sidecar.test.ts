@@ -8,6 +8,7 @@ import https from 'node:https'
 import net from 'node:net'
 import {
   resolveLlamaServerPath,
+  resolveCpuFallbackServerPath,
   llamaServerBinaryName,
   llamaServerDir,
   llamaOsDir,
@@ -15,7 +16,8 @@ import {
   findFreePort,
   LlamaServer,
   LOOPBACK_HOST,
-  type ChildProcessLike
+  type ChildProcessLike,
+  type UnexpectedExitInfo
 } from '../../src/main/services/runtime/sidecar'
 
 afterEach(() => vi.restoreAllMocks())
@@ -87,6 +89,22 @@ describe('resolveLlamaServerPath', () => {
     expect(llamaOsDir('linux')).toBe('linux')
     expect(llamaServerBinaryName('win32')).toBe('llama-server.exe')
     expect(llamaServerBinaryName('linux')).toBe('llama-server')
+  })
+})
+
+describe('resolveCpuFallbackServerPath (Phase 15, ladder rung 3)', () => {
+  it('finds the safety-net binary under runtime/llama.cpp/<os>/cpu/', () => {
+    const root = mkdtempSync(join(tmpdir(), 'paid-cpubin-'))
+    const dir = join(llamaServerDir(root, 'win32'), 'cpu')
+    mkdirSync(dir, { recursive: true })
+    const bin = join(dir, llamaServerBinaryName('win32'))
+    writeFileSync(bin, 'x')
+    expect(resolveCpuFallbackServerPath(root, 'win32')).toBe(bin)
+  })
+
+  it('returns null when the drive ships no safety net (e.g. mac)', () => {
+    const root = mkdtempSync(join(tmpdir(), 'paid-cpubin-'))
+    expect(resolveCpuFallbackServerPath(root, 'darwin')).toBeNull()
   })
 })
 
@@ -238,6 +256,69 @@ describe('LlamaServer', () => {
     await server.stop()
     expect(child.killed).toBe(true)
     expect(server.port).toBeNull()
+  })
+
+  // Phase 15 (§5.3): the mid-session crash hook — fires only for a healthy server
+  // dying on its own, never for start-time failures or a stop()-initiated exit.
+  it('fires onUnexpectedExit when a healthy server dies on its own', async () => {
+    const { spawn, child } = fakeSpawn()
+    const { fetchImpl } = healthFetch(0)
+    const exits: UnexpectedExitInfo[] = []
+    const server = new LlamaServer({
+      binPath: '/bin/s',
+      modelPath: '/m.gguf',
+      contextTokens: 2048,
+      onUnexpectedExit: (info) => exits.push(info),
+      spawn,
+      fetchImpl,
+      findPort: async () => 50005,
+      healthIntervalMs: 1
+    })
+    await server.start()
+    child.emit('exit', 134, null) // driver crash mid-generation
+    expect(exits).toHaveLength(1)
+    expect(exits[0].exitCode).toBe(134)
+  })
+
+  it('does NOT fire onUnexpectedExit for an exit during stop()', async () => {
+    const { spawn } = fakeSpawn()
+    const { fetchImpl } = healthFetch(0)
+    const exits: UnexpectedExitInfo[] = []
+    const server = new LlamaServer({
+      binPath: '/bin/s',
+      modelPath: '/m.gguf',
+      contextTokens: 2048,
+      onUnexpectedExit: (info) => exits.push(info),
+      spawn,
+      fetchImpl,
+      findPort: async () => 50006,
+      healthIntervalMs: 1
+    })
+    await server.start()
+    await server.stop() // FakeChild.kill emits 'exit'
+    expect(exits).toHaveLength(0)
+  })
+
+  it('does NOT fire onUnexpectedExit for an exit BEFORE becoming healthy (start throws instead)', async () => {
+    const child = new FakeChild()
+    const spawn = (): ChildProcessLike => {
+      queueMicrotask(() => child.emit('exit', 1, null))
+      return child
+    }
+    const fetchImpl = (async () => ({ ok: false, status: 503 }) as Response) as typeof fetch
+    const exits: UnexpectedExitInfo[] = []
+    const server = new LlamaServer({
+      binPath: '/bin/s',
+      modelPath: '/m.gguf',
+      contextTokens: 2048,
+      onUnexpectedExit: (info) => exits.push(info),
+      spawn,
+      fetchImpl,
+      findPort: async () => 50007,
+      healthIntervalMs: 1
+    })
+    await expect(server.start()).rejects.toThrow(/exited before becoming healthy/)
+    expect(exits).toHaveLength(0)
   })
 
   it('makes ZERO non-loopback network calls during start/health/stop', async () => {

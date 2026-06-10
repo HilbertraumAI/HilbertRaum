@@ -31,6 +31,8 @@ const delay = (ms: number, signal?: AbortSignal): Promise<void> =>
 
 export class MockRuntime implements ModelRuntime {
   readonly modelId: string
+  readonly backend = 'mock' as const
+  readonly gpuName = null
   private started = false
 
   constructor(private readonly opts: RuntimeStartOptions) {

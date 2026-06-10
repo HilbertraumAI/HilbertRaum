@@ -3,15 +3,23 @@
 #
 # Reads model-manifests/runtime-sources.yaml (on the drive, falling back to the repo),
 # picks the build matching the host OS/arch (or --os/--arch/--backend overrides), downloads
-# the release zip, SHA-256-verifies it, and extracts it into runtime/llama.cpp/<os>/
-# (the dirs services/runtime/sidecar.ts resolves: win/mac/linux), then chmod +x the binary.
+# the release zip, SHA-256-verifies it, and extracts it into the build's extract_to dir
+# (runtime/llama.cpp/<os>/ for the default build; runtime/llama.cpp/<os>/cpu/ for the
+# pure-CPU safety net), then chmod +x the binary. After extraction a .paid-runtime.json
+# install marker ({ version, backend, os, arch }) is written next to the binary.
 #
-# Mirrors apps/desktop/src/main/services/assets.ts (selectRuntimeBuild / planRuntimeDownload).
-# Self-contained: needs no Node/npm. Default backend = CPU (broadest-compatible build).
+# Mirrors apps/desktop/src/main/services/assets.ts (selectRuntimeBuild /
+# planRuntimeDownload / runtimeInstallCurrent). Self-contained: needs no Node/npm.
+# DEFAULT BACKEND = the FIRST build listed per OS in runtime-sources.yaml — since
+# Phase 14 that is the Vulkan full build on win/linux (contains every CPU backend;
+# degrades to CPU on GPU-less machines) and Metal on mac. --backend cpu fetches the
+# pure-CPU safety net into <os>/cpu/.
 #
 # Verify-before-trust: a real-hash MISMATCH deletes the zip and exits non-zero. A
-# placeholder zip hash extracts but reports UNVERIFIED. Idempotent: an already-extracted
-# llama-server is skipped.
+# placeholder zip hash extracts but reports UNVERIFIED. Idempotent via the MARKER, not
+# mere binary presence: a present llama-server whose .paid-runtime.json matches the
+# selected version + backend is skipped; a missing/stale marker re-fetches (so upgrading
+# a CPU-era drive to the Vulkan default actually replaces the build).
 #
 # Usage:
 #   scripts/fetch-runtime.sh --target /Volumes/PRIVATE_AI_DRIVE \
@@ -144,6 +152,7 @@ esac
 EXTRACT_TO="$TARGET/${B_EXTRACT[$SEL]}"
 BIN_NAME="llama-server"; [[ "${B_OS[$SEL]}" == "win" ]] && BIN_NAME="llama-server.exe"
 BIN_PATH="$EXTRACT_TO/$BIN_NAME"
+MARKER_PATH="$EXTRACT_TO/.paid-runtime.json"
 URL="${B_URL[$SEL]}"
 SHA="${B_SHA[$SEL]}"
 
@@ -153,10 +162,21 @@ echo "  url:   $URL"
 echo "  into:  $EXTRACT_TO"
 [[ $DRY_RUN -eq 1 ]] && { echo "(dry run — nothing will be downloaded)"; exit 0; }
 
-# Idempotent skip: the binary name is derived from the selected build's OS, so
-# presence is a valid skip signal even when cross-provisioning another OS's dir.
+# Idempotent skip is MARKER-based (Phase 14, mirrors assets.ts runtimeInstallCurrent):
+# "binary exists" alone would silently keep a CPU-era build in place after the default
+# became vulkan. Skip only when .paid-runtime.json matches the selected version+backend.
 if [[ -f "$BIN_PATH" ]]; then
-  echo "  skip ($BIN_NAME already extracted)"; exit 0
+  SKIP=0
+  if [[ -f "$MARKER_PATH" ]]; then
+    # The marker is written by us as flat single-line JSON — parse with sed (no jq dep).
+    m_version="$(sed -n 's/.*"version":"\([^"]*\)".*/\1/p' "$MARKER_PATH")"
+    m_backend="$(sed -n 's/.*"backend":"\([^"]*\)".*/\1/p' "$MARKER_PATH")"
+    [[ "$m_version" == "$VERSION" && "$m_backend" == "${B_BACKEND[$SEL]}" ]] && SKIP=1
+  fi
+  if [[ $SKIP -eq 1 ]]; then
+    echo "  skip ($BIN_NAME already installed: $VERSION/${B_BACKEND[$SEL]} per .paid-runtime.json)"; exit 0
+  fi
+  echo "  $BIN_NAME present but install marker is missing or differs — re-fetching $VERSION/${B_BACKEND[$SEL]}"
 fi
 
 mkdir -p "$EXTRACT_TO"
@@ -237,7 +257,10 @@ rm -f "$ARCHIVE"
 # binary's directory contents up so llama-server sits at the extract_to root, where
 # services/runtime/sidecar.ts resolves it.
 if [[ ! -f "$BIN_PATH" ]]; then
-  FOUND="$(find "$EXTRACT_TO" -type f -name "$BIN_NAME" | head -n1)"
+  # Exclude the cpu/ safety-net subdir from the search: when the DEFAULT build is being
+  # (re)fetched into <os>/ and <os>/cpu/ already holds its own llama-server, the flatten
+  # must not mistake the safety net for the freshly extracted nested binary.
+  FOUND="$(find "$EXTRACT_TO" -path "$EXTRACT_TO/cpu" -prune -o -type f -name "$BIN_NAME" -print | head -n1)"
   if [[ -n "$FOUND" ]]; then
     SRC_DIR="$(dirname "$FOUND")"
     if [[ "$SRC_DIR" != "$EXTRACT_TO" ]]; then
@@ -249,7 +272,10 @@ fi
 
 if [[ -f "$BIN_PATH" ]]; then
   chmod +x "$BIN_PATH" 2>/dev/null || true
-  echo "  extracted + chmod +x $BIN_NAME"
+  # Record exactly which build is installed (mirrors assets.ts writeRuntimeMarker).
+  printf '{"version":"%s","backend":"%s","os":"%s","arch":"%s"}' \
+    "$VERSION" "${B_BACKEND[$SEL]}" "${B_OS[$SEL]}" "${B_ARCH[$SEL]}" > "$MARKER_PATH"
+  echo "  extracted + chmod +x $BIN_NAME (+ .paid-runtime.json install marker)"
   exit 0
 fi
 echo "  FAIL: $BIN_NAME not found under $EXTRACT_TO after extraction — the release archive layout may have changed." >&2

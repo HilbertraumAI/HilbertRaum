@@ -3,18 +3,24 @@ import { createHash } from 'node:crypto'
 import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { parse } from 'yaml'
 import {
   planModelDownloads,
   selectRuntimeBuild,
+  selectRuntimeBuilds,
   planRuntimeDownload,
   verifyDownloadedFile,
   downloadToFile,
   fetchAndVerify,
   formatAssetPlan,
   runtimeBinaryName,
+  readRuntimeMarker,
+  writeRuntimeMarker,
+  runtimeInstallCurrent,
+  runtimeMarkerPath,
   type FetchFn
 } from '../../src/main/services/assets'
-import { validateManifest, type ModelManifest } from '../../src/shared/manifest'
+import { validateManifest, isRealSha256, type ModelManifest } from '../../src/shared/manifest'
 import { validateRuntimeSources, type RuntimeSources } from '../../src/shared/runtime-sources'
 
 function tempDir(prefix: string): string {
@@ -181,6 +187,178 @@ describe('selectRuntimeBuild', () => {
   it('returns null when nothing matches the host', () => {
     expect(selectRuntimeBuild(runtimeSources(), { os: 'linux', arch: 'x64' })).toBeNull()
     expect(selectRuntimeBuild(runtimeSources(), { os: 'win', arch: 'arm64' })).toBeNull()
+  })
+})
+
+// Phase 14: vulkan-first yaml ordering + the cpu safety net (gpu-support-plan §6/§9).
+const vulkanFirstSources = (): RuntimeSources => {
+  const res = validateRuntimeSources({
+    llama_cpp: {
+      version: 'b9585',
+      builds: [
+        {
+          os: 'win',
+          arch: 'x64',
+          backend: 'vulkan',
+          url: 'https://example.test/win-vulkan.zip',
+          sha256: 'REPLACE_WITH_REAL_HASH',
+          extract_to: 'runtime/llama.cpp/win'
+        },
+        {
+          os: 'win',
+          arch: 'x64',
+          backend: 'cpu',
+          url: 'https://example.test/win-cpu.zip',
+          sha256: 'REPLACE_WITH_REAL_HASH',
+          extract_to: 'runtime/llama.cpp/win/cpu'
+        },
+        {
+          os: 'mac',
+          arch: 'arm64',
+          backend: 'metal',
+          url: 'https://example.test/mac-arm64.tar.gz',
+          sha256: 'REPLACE_WITH_REAL_HASH',
+          extract_to: 'runtime/llama.cpp/mac'
+        }
+      ]
+    }
+  })
+  if (!res.sources) throw new Error('fixture invalid: ' + res.errors.join(', '))
+  return res.sources
+}
+
+describe('selectRuntimeBuild (vulkan-first default, Phase 14)', () => {
+  it('defaults to the vulkan build when it is listed first', () => {
+    const build = selectRuntimeBuild(vulkanFirstSources(), { os: 'win', arch: 'x64' })
+    expect(build?.backend).toBe('vulkan')
+    expect(build?.extractTo).toBe('runtime/llama.cpp/win')
+  })
+
+  it('backend=cpu selects the safety net extracting into <os>/cpu', () => {
+    const build = selectRuntimeBuild(vulkanFirstSources(), { os: 'win', arch: 'x64', backend: 'cpu' })
+    expect(build?.backend).toBe('cpu')
+    expect(build?.extractTo).toBe('runtime/llama.cpp/win/cpu')
+  })
+})
+
+describe('selectRuntimeBuilds (commercial pipeline, Phase 14)', () => {
+  it('returns every build an OS ships, default first', () => {
+    const builds = selectRuntimeBuilds(vulkanFirstSources(), { os: 'win' })
+    expect(builds.map((b) => b.backend)).toEqual(['vulkan', 'cpu'])
+  })
+
+  it('returns only the metal build for mac (no cpu safety net there)', () => {
+    const builds = selectRuntimeBuilds(vulkanFirstSources(), { os: 'mac' })
+    expect(builds.map((b) => b.backend)).toEqual(['metal'])
+  })
+
+  it('filters by arch when given', () => {
+    expect(selectRuntimeBuilds(vulkanFirstSources(), { os: 'win', arch: 'arm64' })).toEqual([])
+  })
+})
+
+describe('runtime install marker (.paid-runtime.json, Phase 14)', () => {
+  function planFor(root: string, backend?: string) {
+    const build = selectRuntimeBuild(vulkanFirstSources(), { os: 'win', arch: 'x64', backend })!
+    return planRuntimeDownload(root, build, 'b9585')
+  }
+
+  it('round-trips a marker through write + read', () => {
+    const root = tempDir('paid-marker-')
+    writeRuntimeMarker(root, { version: 'b9585', backend: 'vulkan', os: 'win', arch: 'x64' })
+    expect(readRuntimeMarker(root)).toEqual({
+      version: 'b9585',
+      backend: 'vulkan',
+      os: 'win',
+      arch: 'x64'
+    })
+  })
+
+  it('readRuntimeMarker never throws: missing or malformed → null', () => {
+    const root = tempDir('paid-marker-')
+    expect(readRuntimeMarker(root)).toBeNull()
+    writeFileSync(runtimeMarkerPath(root), 'not-json')
+    expect(readRuntimeMarker(root)).toBeNull()
+    writeFileSync(runtimeMarkerPath(root), JSON.stringify({ version: 'b9585' })) // incomplete
+    expect(readRuntimeMarker(root)).toBeNull()
+  })
+
+  it('runtimeInstallCurrent is false with no binary', () => {
+    const root = tempDir('paid-marker-')
+    expect(runtimeInstallCurrent(planFor(root))).toBe(false)
+  })
+
+  it('a present binary WITHOUT a marker is NOT current (CPU-era drive → vulkan re-fetches)', () => {
+    const root = tempDir('paid-marker-')
+    const plan = planFor(root)
+    mkdirSync(plan.extractTo, { recursive: true })
+    writeFileSync(plan.binaryPath, 'old-cpu-era-binary')
+    expect(runtimeInstallCurrent(plan)).toBe(false)
+  })
+
+  it('a marker recording a DIFFERENT backend or version is NOT current', () => {
+    const root = tempDir('paid-marker-')
+    const plan = planFor(root)
+    mkdirSync(plan.extractTo, { recursive: true })
+    writeFileSync(plan.binaryPath, 'binary')
+    writeRuntimeMarker(plan.extractTo, { version: 'b9585', backend: 'cpu', os: 'win', arch: 'x64' })
+    expect(runtimeInstallCurrent(plan)).toBe(false)
+    writeRuntimeMarker(plan.extractTo, { version: 'b9000', backend: 'vulkan', os: 'win', arch: 'x64' })
+    expect(runtimeInstallCurrent(plan)).toBe(false)
+  })
+
+  it('binary + matching marker → current (idempotent skip)', () => {
+    const root = tempDir('paid-marker-')
+    const plan = planFor(root)
+    mkdirSync(plan.extractTo, { recursive: true })
+    writeFileSync(plan.binaryPath, 'binary')
+    writeRuntimeMarker(plan.extractTo, { version: 'b9585', backend: 'vulkan', os: 'win', arch: 'x64' })
+    expect(runtimeInstallCurrent(plan)).toBe(true)
+  })
+})
+
+// The COMMITTED runtime-sources.yaml is the actual pin a drive is provisioned from —
+// assert the Phase-14 shape directly against it (mirrors the committed-manifest tests).
+describe('committed model-manifests/runtime-sources.yaml (Phase 14 pin)', () => {
+  const committed = (): RuntimeSources => {
+    const raw = parse(
+      readFileSync(join(process.cwd(), '..', '..', 'model-manifests', 'runtime-sources.yaml'), 'utf8')
+    )
+    const res = validateRuntimeSources(raw)
+    if (!res.sources) throw new Error('committed yaml invalid: ' + res.errors.join(', '))
+    return res.sources
+  }
+
+  it('validates (incl. the duplicate-triple check)', () => {
+    expect(committed().version).toBe('b9585')
+  })
+
+  it('is vulkan-first on win/linux with the cpu safety net at <os>/cpu', () => {
+    const sources = committed()
+    const winDefault = selectRuntimeBuild(sources, { os: 'win', arch: 'x64' })
+    expect(winDefault?.backend).toBe('vulkan')
+    expect(winDefault?.extractTo).toBe('runtime/llama.cpp/win')
+    const linuxDefault = selectRuntimeBuild(sources, { os: 'linux', arch: 'x64' })
+    expect(linuxDefault?.backend).toBe('vulkan')
+    expect(linuxDefault?.extractTo).toBe('runtime/llama.cpp/linux')
+    expect(selectRuntimeBuilds(sources, { os: 'win' }).map((b) => b.backend)).toEqual([
+      'vulkan',
+      'cpu'
+    ])
+    expect(selectRuntimeBuild(sources, { os: 'win', arch: 'x64', backend: 'cpu' })?.extractTo).toBe(
+      'runtime/llama.cpp/win/cpu'
+    )
+    expect(
+      selectRuntimeBuild(sources, { os: 'linux', arch: 'x64', backend: 'cpu' })?.extractTo
+    ).toBe('runtime/llama.cpp/linux/cpu')
+    // mac is unchanged: Metal-only, no cpu net (Metal failure falls back inside llama.cpp).
+    expect(selectRuntimeBuilds(sources, { os: 'mac' }).map((b) => b.backend)).toEqual(['metal'])
+  })
+
+  it('every build carries a REAL sha256 (no placeholders in the committed pin)', () => {
+    for (const b of committed().builds) {
+      expect(isRealSha256(b.sha256), `${b.os}/${b.arch}/${b.backend}`).toBe(true)
+    }
   })
 })
 

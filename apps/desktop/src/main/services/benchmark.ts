@@ -87,8 +87,13 @@ export function detectSystem(): SystemInfo {
 export interface ClassifyHints {
   /** Measured tokens/sec, if a runtime ran. */
   tokensPerSecond?: number | null
-  /** Detected GPU, if any. */
-  gpu?: string | null
+  /**
+   * True only when the probed GPU passes the conservative §8 gate (≥ 6 GiB VRAM and
+   * not integrated-looking — see `gpuUsefulForProfile` in runtime/gpu.ts). The dormant
+   * Phase-7 "any truthy gpu string bumps" branch was deliberately NOT woken as-is: an
+   * Iris Xe reporting shared RAM must never push a laptop into a bigger model.
+   */
+  gpuUseful?: boolean
 }
 
 /**
@@ -101,7 +106,7 @@ export function classifyProfile(ramGb: number, hints: ClassifyHints = {}): Hardw
   if (!Number.isFinite(ramGb) || ramGb <= 0) return 'UNKNOWN'
 
   let idx = ramGb <= 8 ? 0 : ramGb <= 16 ? 1 : ramGb <= 32 ? 2 : 3
-  if (hints.gpu) idx = Math.min(idx + 1, PROFILE_STEPS.length - 1)
+  if (hints.gpuUseful === true) idx = Math.min(idx + 1, PROFILE_STEPS.length - 1)
   const tps = hints.tokensPerSecond
   if (tps != null && tps > 0 && tps < VERY_LOW_TOKENS_PER_SECOND) {
     idx = Math.max(idx - 1, 0)
@@ -251,6 +256,14 @@ export function buildWarnings(input: WarningInputs): string[] {
   return warnings
 }
 
+/** The GPU probe summary INJECTED into the benchmark (Phase 16, gpu-support-plan §9). */
+export interface GpuBenchmarkInput {
+  /** Display name of the primary probed device (→ `BenchmarkResult.gpu`). */
+  name: string | null
+  /** Pre-computed §8 bump eligibility (`gpuUsefulForProfile` over the probed devices). */
+  useful: boolean
+}
+
 export interface RunBenchmarkDeps {
   /** Workspace directory the drive probe writes its temp file into. */
   workspacePath: string
@@ -258,6 +271,12 @@ export interface RunBenchmarkDeps {
   manifests: ModelManifest[]
   /** Active runtime for the optional tokens/sec probe; null/undefined → skipped. */
   runtime?: ModelRuntime | null
+  /**
+   * GPU probe summary, injected by the caller (registerBenchmarkIpc runs the cached
+   * `--list-devices` probe). NEVER probed in here — this module keeps its zero-
+   * `child_process` purity (and with it the strictly-local guarantee).
+   */
+  gpu?: GpuBenchmarkInput | null
   /** Injectable clock for deterministic `ranAt` in tests. */
   now?: () => Date
 }
@@ -273,7 +292,11 @@ export async function runBenchmark(deps: RunBenchmarkDeps): Promise<BenchmarkRes
   const drive = await measureDriveSpeed(deps.workspacePath)
   const tokensPerSecond = await measureTokensPerSecond(deps.runtime ?? null)
 
-  const profile = classifyProfile(sys.ramGb, { tokensPerSecond, gpu: sys.gpu })
+  const gpuName = deps.gpu?.name ?? sys.gpu
+  const profile = classifyProfile(sys.ramGb, {
+    tokensPerSecond,
+    gpuUseful: deps.gpu?.useful ?? false
+  })
   const recommendedModelId = recommendModelId(deps.manifests, profile, 'chat')
   const warnings = buildWarnings({
     profile,
@@ -288,7 +311,7 @@ export async function runBenchmark(deps: RunBenchmarkDeps): Promise<BenchmarkRes
     cpuModel: sys.cpuModel,
     cpuCores: sys.cpuCores,
     ramGb: sys.ramGb,
-    gpu: sys.gpu,
+    gpu: gpuName,
     driveReadMbps: drive.readMbps,
     driveWriteMbps: drive.writeMbps,
     tokensPerSecond,

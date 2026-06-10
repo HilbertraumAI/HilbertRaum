@@ -1,11 +1,36 @@
 import { useCallback, useEffect, useState } from 'react'
-import type { AppStatus, BenchmarkResult, DriveStatus, RuntimeStatus } from '@shared/types'
+import type {
+  AppSettings,
+  AppStatus,
+  BenchmarkResult,
+  DriveStatus,
+  RuntimeInstallInfo,
+  RuntimeStatus
+} from '@shared/types'
+
+/**
+ * The "Acceleration" line (Phase 16, gpu-support-plan §8): the live backend when a
+ * model is running, else what the cached probe says this machine offers. §11.4 tone —
+ * CPU is presented as normal, never degraded.
+ */
+function accelerationLabel(runtime: RuntimeStatus | null, settings: AppSettings | null): string {
+  if (runtime?.running && runtime.backend) {
+    if (runtime.backend === 'gpu') return `${runtime.gpuName ?? 'Graphics card'} (GPU)`
+    if (runtime.backend === 'mock') return 'Built-in demo runtime'
+    return 'CPU'
+  }
+  const probed = settings?.gpuProbe?.devices ?? []
+  if (probed.length > 0) return `${probed[0].name} (GPU available)`
+  return 'CPU'
+}
 
 export function DiagnosticsScreen(): JSX.Element {
   const [drive, setDrive] = useState<DriveStatus | null>(null)
   const [bench, setBench] = useState<BenchmarkResult | null>(null)
   const [app, setApp] = useState<AppStatus | null>(null)
   const [runtime, setRuntime] = useState<RuntimeStatus | null>(null)
+  const [settings, setSettings] = useState<AppSettings | null>(null)
+  const [install, setInstall] = useState<RuntimeInstallInfo | null>(null)
   const [logTail, setLogTail] = useState<string[] | null>(null)
   const [showLogs, setShowLogs] = useState(false)
   const [running, setRunning] = useState(false)
@@ -14,6 +39,7 @@ export function DiagnosticsScreen(): JSX.Element {
   const refreshStatus = useCallback(async (): Promise<void> => {
     window.api?.getAppStatus().then(setApp).catch(() => setApp(null))
     window.api?.getRuntimeStatus().then(setRuntime).catch(() => setRuntime(null))
+    window.api?.getSettings().then(setSettings).catch(() => setSettings(null))
   }, [])
 
   const refreshLogs = useCallback(async (): Promise<void> => {
@@ -22,6 +48,7 @@ export function DiagnosticsScreen(): JSX.Element {
 
   useEffect(() => {
     window.api?.getDriveStatus().then(setDrive).catch(() => setDrive(null))
+    window.api?.getRuntimeInstall().then(setInstall).catch(() => setInstall(null))
     // Show the last benchmark, if one has been run before, so the profile persists across launches.
     window.api
       ?.getSettings()
@@ -29,6 +56,13 @@ export function DiagnosticsScreen(): JSX.Element {
       .catch(() => setBench(null))
     void refreshStatus()
   }, [refreshStatus])
+
+  // "Try GPU again" (gpu-support-plan §8): clears the automatic compatibility-mode flag
+  // (e.g. after a graphics-driver update) WITHOUT touching the Settings toggle.
+  async function tryGpuAgain(): Promise<void> {
+    const next = await window.api.updateSettings({ gpuAutoDisabled: false, gpuLastError: null })
+    setSettings(next)
+  }
 
   async function runBenchmark(): Promise<void> {
     setRunning(true)
@@ -67,7 +101,27 @@ export function DiagnosticsScreen(): JSX.Element {
               : 'Stopped'
               : 'unknown'}
           </dd>
+          <dt>Acceleration</dt>
+          <dd>{accelerationLabel(runtime, settings)}</dd>
+          <dt>Runtime build</dt>
+          <dd>
+            {install
+              ? `llama.cpp ${install.version} (${install.backend})`
+              : 'no install marker (manually provisioned drive)'}
+          </dd>
         </dl>
+        {settings?.gpuAutoDisabled && (
+          <div className="hint" style={{ marginTop: 8 }}>
+            <p className="hint">
+              Running in compatibility mode: responses use the CPU, which works on every
+              machine. If you have updated your graphics driver, you can try the graphics
+              card again.
+            </p>
+            <button className="btn sm" onClick={() => void tryGpuAgain()}>
+              Try GPU again
+            </button>
+          </div>
+        )}
         <button className="btn sm" onClick={() => void refreshStatus()}>
           Refresh
         </button>

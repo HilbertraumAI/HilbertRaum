@@ -13,6 +13,8 @@ export const IPC = {
   stopRuntime: 'runtime:stop',
   /** Read-only runtime health/state for Diagnostics (spec §7.11 — audit M14). */
   getRuntimeStatus: 'runtime:status',
+  /** The drive's installed sidecar build (.paid-runtime.json marker — Phase 16). */
+  getRuntimeInstall: 'runtime:install',
   // Phase 3+
   createConversation: 'chat:createConversation',
   listConversations: 'chat:listConversations',
@@ -47,4 +49,13 @@ export const STREAM = {
   token: (requestId: string) => `chat:token:${requestId}`,
   done: (requestId: string) => `chat:done:${requestId}`,
   error: (requestId: string) => `chat:error:${requestId}`
+} as const
+
+// One-off main -> renderer notices (not tied to a request).
+export const EVENTS = {
+  /**
+   * A friendly one-line runtime notice (Phase 15: the GPU crash auto-fallback's
+   * "switched to compatibility mode" message — spec §11.4 tone, never alarming).
+   */
+  runtimeNotice: 'runtime:notice'
 } as const

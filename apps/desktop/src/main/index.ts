@@ -1,7 +1,7 @@
 import { app, BrowserWindow, shell } from 'electron'
 import { dirname, join } from 'node:path'
 import { resolvePaths, ensureWorkspaceDirs, findPreparedDriveRoot } from './services/workspace'
-import { getSettings } from './services/settings'
+import { getSettings, updateSettings } from './services/settings'
 import { loadPolicy, buildPolicyStatus } from './services/policy'
 import { vaultPathsFrom, WorkspaceController } from './services/workspace-vault'
 import { assertOfflinePosture } from './services/offlineGuard'
@@ -14,7 +14,9 @@ import { registerDocsIpc } from './ipc/registerDocsIpc'
 import { registerRagIpc } from './ipc/registerRagIpc'
 import { registerBenchmarkIpc, maybeRunFirstBenchmark } from './ipc/registerBenchmarkIpc'
 import { RuntimeManager } from './services/runtime'
-import { createSelectingRuntimeFactory } from './services/runtime/factory'
+import { createGpuCrashAutoFallback, createSelectingRuntimeFactory } from './services/runtime/factory'
+import { createCachedGpuProbe } from './services/runtime/gpu'
+import { EVENTS } from '../shared/ipc'
 import { createSelectedEmbedder, type EmbeddingModelInfo } from './services/embeddings/factory'
 import { discoverManifests, resolveManifestsDir, weightPath } from './services/models'
 import type { AppContext } from './services/context'
@@ -96,13 +98,61 @@ function initBackend(): void {
   // The runtime backend is picked per `start()` (when the model path is known); the
   // embedder is picked here from the embeddings manifest (settings are unreadable until
   // the workspace unlocks, so we use the manifest's default E5 model).
+  //
+  // Phase 15 (GPU): the factory walks the start ladder (gpu-support-plan §5.2). GPU
+  // settings live inside the (possibly encrypted) DB — sidecars only ever start
+  // post-unlock, but every read is still guarded (locked DB → safe defaults). A rung-1
+  // failure or a mid-session GPU crash persists `gpuAutoDisabled` + `gpuLastError`;
+  // the crash path additionally restarts the same model once at CPU and broadcasts the
+  // friendly compatibility-mode notice to the renderer.
+  const gpuProbe = createCachedGpuProbe()
+  const persistGpuFailure = (reason: string): void => {
+    try {
+      updateSettings(workspace.requireDb(), {
+        gpuAutoDisabled: true,
+        gpuLastError: `${new Date().toISOString()} — ${reason}`.slice(0, 2000)
+      })
+    } catch (err) {
+      log.warn('Could not persist GPU fallback state', { error: String(err) })
+    }
+    log.warn('GPU start/run failed — continuing in compatibility (CPU) mode', { reason })
+  }
+  const notifyRenderer = (message: string): void => {
+    for (const win of BrowserWindow.getAllWindows()) {
+      win.webContents.send(EVENTS.runtimeNotice, message)
+    }
+    log.info('Runtime notice', { message })
+  }
+  // The crash handler needs the manager and the manager's factory needs the handler —
+  // late-bind through a ref.
+  let runtimeRef: RuntimeManager | null = null
+  const gpuCrashFallback = createGpuCrashAutoFallback({
+    restart: (opts) => runtimeRef?.start(opts) ?? Promise.resolve(),
+    persistFailure: persistGpuFailure,
+    notify: notifyRenderer
+  })
+  const readGpuSetting = <T>(pick: (s: ReturnType<typeof getSettings>) => T, fallback: T): T => {
+    try {
+      return pick(getSettings(workspace.requireDb()))
+    } catch {
+      return fallback // locked workspace → safe default (sidecars start post-unlock)
+    }
+  }
   const runtime = new RuntimeManager(
     createSelectingRuntimeFactory({
       rootPath: paths.rootPath,
       onSelect: (kind, opts, reason) =>
-        log.info('Runtime backend selected', { kind, modelId: opts.modelId, reason })
+        log.info('Runtime backend selected', { kind, modelId: opts.modelId, reason }),
+      gpu: {
+        getGpuMode: () => readGpuSetting((s) => s.gpuMode, 'auto'),
+        getGpuAutoDisabled: () => readGpuSetting((s) => s.gpuAutoDisabled, false),
+        onGpuFailure: persistGpuFailure,
+        probeDevices: gpuProbe,
+        onGpuCrash: (opts, info) => gpuCrashFallback(opts, info)
+      }
     })
   )
+  runtimeRef = runtime
   const embeddingModel = resolveEmbeddingModel(manifestsDir, paths.rootPath)
   const embedder = createSelectedEmbedder({
     rootPath: paths.rootPath,
@@ -121,6 +171,7 @@ function initBackend(): void {
     runtime,
     embedder,
     manifestsDir,
+    probeGpu: gpuProbe,
     isDev
   }
   registerCoreIpc(ctx)

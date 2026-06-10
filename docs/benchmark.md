@@ -17,9 +17,13 @@ IPC: `runBenchmark()` (`benchmark:run`) in
 1. **System** (`detectSystem`, `node:os`): `os` (platform), `arch`, `cpuModel` + `cpuCores`
    (`os.cpus()`), `ramGb` (`os.totalmem()` ÷ GiB, rounded to 0.1). Every probe is wrapped —
    a failure falls back to `''` / `0` and never throws.
-2. **GPU**: best-effort, **always `null`** for now. There is no reliable cross-platform,
-   network-free, native-dep-free GPU probe, so a missing GPU never throws and never blocks a
-   benchmark. (Real probing can land with the Phase 10 runtime.)
+2. **GPU** (Phase 16, [`gpu-support-plan.md`](gpu-support-plan.md) §5.1/§8): the IPC layer runs
+   the **session-cached `llama-server --list-devices` probe** on the drive's own sidecar binary
+   (`services/runtime/gpu.ts` — an offline subprocess, kill-timeout-bounded, never throws) and
+   **injects** the summary into `runBenchmark` (`RunBenchmarkDeps.gpu: { name, useful }`).
+   `benchmark.ts` itself keeps its **zero-`child_process` purity** — it never probes. The probe
+   result is also persisted to `settings.gpuProbe` for Diagnostics. With no binary / no devices /
+   a failed probe, `gpu` stays `null` and nothing blocks.
 3. **Drive speed** (`measureDriveSpeed`): writes a small temp file
    (`DRIVE_PROBE_BYTES = 8 MB` of random bytes) **inside the workspace**, times a sequential
    write (with `fsync`) then a read, and reports MB/s. The temp file is **always removed**
@@ -34,7 +38,7 @@ IPC: `runBenchmark()` (`benchmark:run`) in
 
 ## Profile classification (spec §11.3)
 
-`classifyProfile(ramGb, { tokensPerSecond?, gpu? })` — pure:
+`classifyProfile(ramGb, { tokensPerSecond?, gpuUseful? })` — pure:
 
 ```text
 ramGb <= 8   → TINY
@@ -45,7 +49,13 @@ invalid ram  → UNKNOWN   (detection failed)
 ```
 
 Adjustments, in order:
-- A **useful GPU** bumps one step toward `PRO` (capped at `PRO`).
+- A **useful GPU** bumps one step toward `PRO` (capped at `PRO`). "Useful" is the
+  **conservative Phase-16 gate** (`gpuUsefulForProfile` in `runtime/gpu.ts`): some probed
+  device has **≥ 6 GiB** (`GPU_BUMP_MIN_VRAM_MB = 6144`) **and** does not look integrated
+  (`looksIntegrated` name heuristic, biased toward *not* bumping). Rationale: an Iris Xe
+  reporting 16 GB of *shared* memory must never push a 16 GB laptop into BALANCED→PRO and a
+  14B recommendation — a false negative only costs a too-small recommendation, never a
+  too-big one.
 - **Very low** throughput (`tokensPerSecond < VERY_LOW_TOKENS_PER_SECOND = 3`) downgrades one
   step (never below `TINY`).
 
