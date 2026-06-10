@@ -1893,6 +1893,18 @@ items are **MANUAL acceptance only** (R2/R5/R7 + the GPU hardware matrix). In ro
    after Phase 27 — the first-run starter step only routes, it does not absorb Home's
    remediation), D-UI4 executed. Remaining UI work =
    the usual manual release eyeball on real drives.
+5. **Model catalog expansion + benchmarking (Phases 28–30) — PLANNED, not started:** see
+   [`docs/model-catalog-expansion-plan.md`](docs/model-catalog-expansion-plan.md) (decisions
+   D16–D22). Phase 28 = three Apache-2.0 challengers as manifest-only additions (Ministral 3
+   8B 2512, Granite 4.1 8B, Gemma 4 12B QAT — all vendor GGUFs, licenses verified 2026-06-10;
+   optionally the Qwen3-4B-2507 incumbent refresh), shipped with **empty
+   `recommended_profiles`** so nothing is auto-recommended before it earns it (D17). Phase 29 =
+   the offline benchmark protocol (llama-bench speed + peak-RSS memory + a judge-free
+   German/English grounded-QA eval set `eval/rag_de_en.jsonl`) + the first comparison run and
+   promotion decisions. Phase 30 (outline only) = the opt-in big slot (Gemma 4 26B-A4B vs
+   Qwen3 30B-A3B) + the embeddings question (Granite Embedding R2 small is the only 384-dim
+   near-drop-in). Key verified fact: our pinned llama.cpp **b9585 is the 2026-06-09 release**,
+   so Gemma 4 (needs ~b8607) runs on the runtime we already ship — no runtime bump needed.
 
 **Current gate (2026-06-10, post-merge of the UI polish wave into master — Phase 21
 verification + Phases 23–27 combined): typecheck clean, 669/669 tests pass (+8 manual
