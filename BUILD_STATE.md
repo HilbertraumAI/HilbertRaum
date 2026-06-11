@@ -1353,22 +1353,25 @@ Repo root: `f:\_coding\ai_drive`.
      fastest); gemma4 beats qwen3-14b on every axis; qwen3-2507 beats orig-4b on every axis (D18);
      granite lost its tier. **APPLIED (live):** `recommended_min_ram_gb` recalibrated from measured
      peak RSS (8B 16→12, 12-14B 16→14; 4B held 8, 30B held 24 — MoE/mmap caveat); orig-4b stays the
-     bundled default (user decision — preserves Deep). **DEFERRED:** the `recommended_profiles`
-     promotions were NOT applied — editing that field is inert in prod (the picker ignores it) or
-     breaking in the legacy path (one-model-per-profile); winners keep `[]`, verdicts recorded in
-     `model-policy.md` + benchmarks §6, to be made live by the recommender follow-up (item 8).
-     **Licence correction:** the WHOLE catalog is Apache-2.0 (Qwen3 too) — the challenger edge is
-     quality+speed, not licence; manifest comments fixed.
-  8. **Recommender finding (proposed follow-up):** the production picker `recommendModelIdByRam`
-     is QUALITY-BLIND (largest model whose `recommended_ram_gb` fits, tie-broken by disk size) and
-     IGNORES `recommended_profiles` (legacy-only) — on a 16 GB box it would pick **granite** (the
-     run's worst 8B). So the promotions are recorded intent that does NOT yet change the app's
-     auto-recommendation. Proposed code follow-up: make best-fit prefer `recommended_profiles` +
-     a quality rank (own decision; `docs/model-benchmarks.md` §6.2).
+     bundled default (user decision — preserves Deep). Promotions made LIVE via the new
+     `recommendation_rank` field (item 8), NOT `recommended_profiles` (winners keep `[]` — the
+     prod picker is RAM-best-fit, not profile-based). **Licence correction:** the WHOLE catalog is
+     Apache-2.0 (Qwen3 too) — the challenger edge is quality+speed, not licence; comments fixed.
+  8. **Recommender made QUALITY-AWARE (the follow-up, done same session — user-approved).** The
+     production picker `recommendModelIdByRam` WAS quality-blind (largest `recommended_ram_gb` that
+     fits, tie-broken by disk size, ignoring `recommended_profiles`) — on a 16 GB box it picked
+     **granite** (the run's worst 8B). FIX: new optional manifest field **`recommendation_rank`**
+     (int, default 0; higher = preferred) is now the tiebreak in `recommendModelIdByRam`, after the
+     capacity fit and before disk size (default 0 ⇒ legacy behaviour unchanged). Ranks: Qwen3-4B=2
+     (default) > 2507=1; Ministral=2 (8B winner) > Qwen3-8B=1 > Granite=0; Gemma4=2 (12-14B winner)
+     > Qwen3-14B=1; 30B=0 (opt-in). Net: **≤12 GB→Qwen3-4B, 16-24 GB→Ministral, ≥32 GB→Gemma4**;
+     Granite/30B never auto-recommended. Wired through `shared/manifest.ts` (schema+parse) +
+     `services/models.ts`; covered by real-manifest picks in `benchmark.test.ts` + tiebreak unit
+     tests in `models.test.ts`. 701/701 tests, typecheck clean.
   PENDING to close: the **Gemma thinking-quality check** (`tests/manual/gemma-thinking.test.ts`,
   run #2 → maybe flip `supports_thinking_mode`); optionally the devbox speed/RSS run (formal
-  ≥2-machine done-when — QA+RSS are machine-independent, already reproduced); the recommender
-  follow-up decision; then condense the plan per the doc lifecycle rule.
+  ≥2-machine done-when — QA+RSS are machine-independent, already reproduced); then condense the
+  plan per the doc lifecycle rule.
 
 ---
 

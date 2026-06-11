@@ -342,6 +342,25 @@ describe('recommendModelIdByRam', () => {
   it('scopes to the requested role', () => {
     expect(recommendModelIdByRam(all, 64, 'embeddings')).toBe('embed')
   })
+
+  // Phase-29 quality-aware tiebreak: among models that tie on capacity fit, higher
+  // recommendation_rank wins BEFORE disk size — so a benchmark winner is preferred over a
+  // larger-on-disk loser. Default rank 0 keeps the legacy biggest-disk behaviour (above).
+  it('prefers higher recommendation_rank among models that tie on comfortable RAM', () => {
+    const winner = asManifest({ id: 'winner', size_on_disk_gb: 5.2, recommended_min_ram_gb: 12, recommended_ram_gb: 16, recommendation_rank: 2 })
+    const loser = asManifest({ id: 'loser', size_on_disk_gb: 5.3, recommended_min_ram_gb: 12, recommended_ram_gb: 16, recommendation_rank: 0 })
+    // 16 GB: both comfortable + tie on recommended_ram_gb; rank picks the (smaller) winner,
+    // where the old disk-size tiebreak would have picked the bigger loser.
+    expect(recommendModelIdByRam([winner, loser], 16)).toBe('winner')
+  })
+
+  it('applies the rank tiebreak in the lightest-runnable fallback too', () => {
+    const keep = asManifest({ id: 'keep', size_on_disk_gb: 2.7, recommended_min_ram_gb: 8, recommended_ram_gb: 16, recommendation_rank: 2 })
+    const alt = asManifest({ id: 'alt', size_on_disk_gb: 2.5, recommended_min_ram_gb: 8, recommended_ram_gb: 16, recommendation_rank: 1 })
+    // 8 GB: neither comfortable; both runnable at min 8. Rank keeps the preferred 'keep' ahead
+    // of the smaller 'alt' (e.g. the thinking-capable default over the instruct-only refresh).
+    expect(recommendModelIdByRam([keep, alt], 8)).toBe('keep')
+  })
 })
 
 describe('buildModelList — RAM gate', () => {

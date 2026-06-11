@@ -302,6 +302,13 @@ export function machineRamGb(): number {
  * model that at least meets its minimum (`recommended_min_ram_gb`); else null. Replaces
  * the profile-table lookup as the primary recommendation — "which model?" is a RAM
  * question first, and this can never recommend a model the RAM gate disables.
+ *
+ * QUALITY-AWARE TIEBREAK (Phase 29, model-benchmarks.md §6.2): among models that tie on the
+ * capacity fit (same comfortable RAM, or same minimum), prefer the higher
+ * `recommendationRank` — the benchmark verdict — BEFORE falling back to disk size. Without
+ * ranks (all 0) this is exactly the old biggest-disk behaviour, so legacy callers are
+ * unchanged; with ranks the picker stops recommending a benchmark loser (e.g. Granite) over a
+ * winner (Ministral) just because it is larger on disk.
  */
 export function recommendModelIdByRam(
   manifests: ModelManifest[],
@@ -313,12 +320,22 @@ export function recommendModelIdByRam(
 
   const comfortable = candidates
     .filter((m) => m.recommendedRamGb <= ramGb)
-    .sort((a, b) => b.recommendedRamGb - a.recommendedRamGb || b.sizeOnDiskGb - a.sizeOnDiskGb)
+    .sort(
+      (a, b) =>
+        b.recommendedRamGb - a.recommendedRamGb ||
+        b.recommendationRank - a.recommendationRank ||
+        b.sizeOnDiskGb - a.sizeOnDiskGb
+    )
   if (comfortable.length > 0) return comfortable[0].id
 
   const runnable = candidates
     .filter((m) => m.recommendedMinRamGb <= ramGb)
-    .sort((a, b) => a.recommendedMinRamGb - b.recommendedMinRamGb || a.sizeOnDiskGb - b.sizeOnDiskGb)
+    .sort(
+      (a, b) =>
+        a.recommendedMinRamGb - b.recommendedMinRamGb ||
+        b.recommendationRank - a.recommendationRank ||
+        a.sizeOnDiskGb - b.sizeOnDiskGb
+    )
   return runnable[0]?.id ?? null
 }
 

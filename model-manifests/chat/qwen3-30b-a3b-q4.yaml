@@ -8,6 +8,7 @@ license: apache-2.0
 size_on_disk_gb: 18.6
 recommended_min_ram_gb: 24
 recommended_ram_gb: 32
+recommendation_rank: 0  # opt-in MoE: rank 0 keeps it from ever being auto-recommended over a winner
 recommended_context_tokens: 8192
 supports_thinking_mode: true
 supports_tools: false

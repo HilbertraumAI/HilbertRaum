@@ -8,6 +8,7 @@ license: apache-2.0
 size_on_disk_gb: 2.5
 recommended_min_ram_gb: 8
 recommended_ram_gb: 16
+recommendation_rank: 1  # Phase-29: better RAG quality than orig 4B, but ranked below it (no thinking)
 recommended_context_tokens: 4096
 supports_thinking_mode: false
 supports_tools: false
@@ -33,10 +34,10 @@ bundled_on_preconfigured_drive: false
 # `qwen3-4b-instruct-q4` STAYS the bundled default (user decision 2026-06-11): 2507 is
 # instruct-only (NO hybrid thinking, so Deep is a no-op), and keeping the original default
 # preserves Deep on low-end machines. 2507 is the recommended-on-QUALITY alternative at the 4B
-# tier, recorded in model-policy.md; recommended_profiles is kept [] because the prod recommender
-# ignores it and the legacy picker is one-per-profile (a 2nd 4B claiming the tier would hijack
-# the default). Surfacing it as an alternative awaits the recommender follow-up
-# (docs/model-benchmarks.md §6.2).
+# tier (selectable, recorded in model-policy.md). recommended_profiles stays []; via
+# `recommendation_rank: 1` the quality-aware picker ranks it just BELOW the original 4B
+# (rank 2) — so the original stays the auto-recommended/default and 2507 is the better-RAG
+# manual pick (docs/model-benchmarks.md §6.2).
 recommended_profiles: []
 license_review:
   status: approved

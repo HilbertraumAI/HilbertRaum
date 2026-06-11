@@ -64,8 +64,15 @@ export interface ModelManifest {
   localPath: string
   /** Expected SHA-256 (lower-case hex). May be a placeholder until a real drive is built. */
   sha256: string
-  /** Hardware profiles this model is recommended for (drives §7.3 recommendation). */
+  /** Hardware profiles this model is recommended for (legacy/no-RAM-known picker). */
   recommendedProfiles: HardwareProfile[]
+  /**
+   * Recommendation tiebreak (Phase 29): higher = preferred among models that fit the
+   * machine's RAM. Encodes the Phase-29 benchmark verdict so the RAM-best-fit picker is
+   * quality-aware instead of biggest-disk-wins (model-benchmarks.md §6.2). Optional in YAML
+   * (`recommendation_rank`), default 0.
+   */
+  recommendationRank: number
   licenseReview: LicenseReview
   /** Optional download metadata (Phase 12). Absent on manifests with no upstream source. */
   download?: DownloadSpec
@@ -156,6 +163,17 @@ export function validateManifest(raw: unknown): ValidationResult {
       errors.push(`"recommended_profiles" must be a list of: ${PROFILES.join(', ')}`)
     } else {
       recommendedProfiles = rp as HardwareProfile[]
+    }
+  }
+
+  // Optional recommendation tiebreak (Phase 29): higher = preferred among models that fit.
+  let recommendationRank = 0
+  const rr = raw['recommendation_rank']
+  if (rr !== undefined) {
+    if (typeof rr !== 'number' || !Number.isFinite(rr)) {
+      errors.push('"recommendation_rank" must be a number when present')
+    } else {
+      recommendationRank = rr
     }
   }
 
@@ -250,6 +268,7 @@ export function validateManifest(raw: unknown): ValidationResult {
       localPath,
       sha256,
       recommendedProfiles,
+      recommendationRank,
       licenseReview,
       ...(download ? { download } : {})
     }

@@ -44,18 +44,18 @@ Sizes/RAM come from each manifest
 (`size_on_disk_gb` / `recommended_min_ram_gb`); download URLs live in the manifests' `download.url`
 (catalog with source links in the [README](../README.md)). **Auto-tier** is the
 `recommended_profiles` list each manifest declares.
-> ‡ **Promotions are DEFERRED, not yet applied to `recommended_profiles` (Phase-29 finding).**
-> The **Phase-29 benchmark** ([`model-benchmarks.md`](model-benchmarks.md)) picked clear tier
-> winners (Ministral at 8B, Gemma 4 at 12–14B, Qwen3-2507 as the better 4B), but two architecture
-> facts mean editing `recommended_profiles` now would be inert or wrong: (1) the production picker
-> is **RAM-best-fit** (`recommendModelIdByRam` — largest model whose `recommended_ram_gb` fits,
-> tie-broken by disk size) and **ignores `recommended_profiles`**; (2) the legacy profile picker
-> is **one-model-per-profile**, so a second model claiming a tier hijacks the incumbent. So the
-> winners keep `recommended_profiles: []` and the verdicts live here, **pending a recommender
-> follow-up** that makes best-fit quality/`recommended_profiles`-aware (own decision —
-> `model-benchmarks.md` §6.2). Until then the app still auto-recommends by RAM-best-fit.
-Min-RAM values WERE **recalibrated from measured peak RSS** in the Phase-29 run (8B: 16→12,
-12–14B: 16→14) — this is live. Adding a model is
+> ‡ **Promotions are LIVE via `recommendation_rank`, not `recommended_profiles`.** The
+> production picker is **RAM-best-fit** (`recommendModelIdByRam`) and ignores `recommended_
+> profiles` (that list is only the legacy no-RAM path, which is one-model-per-profile). Rather
+> than mis-encode the **Phase-29** winners there, each manifest carries a `recommendation_rank`
+> (higher = preferred) that the picker now uses as the tiebreak among models that fit the
+> machine's RAM (the **quality-aware recommender** follow-up — `model-benchmarks.md` §6.2). Net
+> effect on real hardware: **≤12 GB → Qwen3-4B (default, keeps Deep), 16 GB → Ministral 8B,
+> ≥32 GB → Gemma 4 12B**; Granite (loser) and the 30B MoE (opt-in) are never auto-recommended.
+> The "Auto-tier" column above is the declared `recommended_profiles` (kept as-is); the live
+> recommendation is `recommendation_rank` + RAM-best-fit.
+Min-RAM values were **recalibrated from measured peak RSS** in the Phase-29 run (8B: 16→12,
+12–14B: 16→14). Adding a model is
 **manifest-only** (no code change): drop a YAML in
 `model-manifests/chat/` with a `download` block + a `recommended_profiles` list.
 
@@ -68,10 +68,11 @@ main + renderer). Validation collects **all** errors per file and is pure (no I/
 ## Manifest fields (required)
 `id, display_name, family, role, format, runtime, license, size_on_disk_gb,
 recommended_min_ram_gb, recommended_ram_gb, recommended_context_tokens, local_path, sha256` plus a
-`license_review` block. Optional: `recommended_profiles` (a list of hardware profiles this model is
-recommended for — drives the §7.3 picker), `supports_thinking_mode` (below), and a `download`
-block (Phase 12, below). Unknown extra keys (e.g. `supports_tools`, `dimensions`,
-`bundled_on_preconfigured_drive`) are ignored by the validator.
+`license_review` block. Optional: `recommended_profiles` (a list of hardware profiles — the legacy
+no-RAM picker), `recommendation_rank` (integer, default 0; higher = preferred among models that fit
+the machine's RAM — the Phase-29 quality-aware tiebreak in `recommendModelIdByRam`),
+`supports_thinking_mode` (below), and a `download` block (Phase 12, below). Unknown extra keys (e.g.
+`supports_tools`, `dimensions`, `bundled_on_preconfigured_drive`) are ignored by the validator.
 
 - **`local_path`** is resolved **relative to the drive root**, so a value of
   `models/chat/foo.gguf` points at `<drive-root>/models/chat/foo.gguf`.

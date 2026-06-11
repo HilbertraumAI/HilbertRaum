@@ -8,6 +8,7 @@ license: apache-2.0
 size_on_disk_gb: 7.0
 recommended_min_ram_gb: 14
 recommended_ram_gb: 32
+recommendation_rank: 2  # Phase-29 12-14B WINNER (beats Qwen3 14B on every axis) — preferred at tier
 recommended_context_tokens: 8192
 supports_thinking_mode: false
 supports_tools: false
@@ -28,9 +29,9 @@ bundled_on_preconfigured_drive: false
 # i7-1185G7 CPU), same EM/F1, same RAM. (Both are Apache-2.0 — the whole catalog is; the edge
 # is quality + speed, not licence.)
 # recommended_min_ram_gb dropped 16→14 from the measured ~10.6 GiB peak RSS;
-# recommended_profiles kept [] FOR NOW (the prod recommender ignores it / one-per-profile) —
-# making it the PRO recommendation is deferred to the recommender follow-up
-# (docs/model-benchmarks.md §6.2); verdict recorded in model-policy.md. High tier
+# recommended_profiles stays [] (prod picker is RAM-best-fit); its 12-14B-tier win is applied via
+# `recommendation_rank: 2` — the quality-aware picker (docs/model-benchmarks.md §6.2) prefers it
+# over Qwen3 14B on 32 GB+ machines. High tier
 # (Qwen3 14B class), 140+ languages. Vendor QAT **Q4_0** quantization, not Q4_K_M —
 # quantization-aware trained, so higher quality than a naive Q4 at similar size. Needs
 # llama.cpp ~b8607+; our pinned b9585 (2026-06-09) covers it (plan §3.1). TEXT-ONLY USE: the

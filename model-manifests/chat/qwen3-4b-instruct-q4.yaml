@@ -8,6 +8,7 @@ license: apache-2.0
 size_on_disk_gb: 2.7
 recommended_min_ram_gb: 8
 recommended_ram_gb: 16
+recommendation_rank: 2  # Phase-29: the chosen 4B default (preferred over 2507 to keep Deep)
 recommended_context_tokens: 4096
 supports_thinking_mode: true
 supports_tools: false

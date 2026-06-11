@@ -245,26 +245,34 @@ D18). Granite 4.1 8B lost its tier (most 8B hallucinations, lowest F1).
   left unchanged (changing it shifts the quality-blind best-fit — see §6.2).
 - **The original `qwen3-4b-instruct-q4` stays the bundled default** (user decision) — it has
   hybrid thinking, so Deep keeps working out of the box on low-end machines; 2507 is instruct-only.
-- **`recommended_profiles` promotions DEFERRED** — the winners keep `[]`. Editing that field now
-  is inert in production (the picker ignores it) or breaking in the legacy path (one-model-per-
-  profile); see §6.2. The verdicts are recorded here + in `model-policy.md`, to be made live by
-  the recommender follow-up.
+- **Promotions made LIVE via `recommendation_rank`** (the §6.2 follow-up, done same session):
+  each manifest carries a rank (winner = higher) that the now quality-aware `recommendModelIdByRam`
+  uses as the tiebreak. Real-hardware effect: **≤12 GB → Qwen3-4B (default), 16 GB → Ministral,
+  ≥32 GB → Gemma 4**; Granite + the 30B MoE are never auto-recommended. `recommended_profiles`
+  stays `[]` (the picker is RAM-best-fit, not profile-based).
 - **Gemma `supports_thinking_mode` stays `false`** PENDING the thinking-quality check
   (`tests/manual/gemma-thinking.test.ts`, run #2) — flip only if Deep ≥ Balanced on reasoning.
 - **Licence correction:** the whole catalog is **Apache-2.0** (Qwen3 included) — the challengers'
   edge is quality + speed, *not* licence. Manifest comments that implied otherwise were fixed.
 
-### 6.2 Recommender architecture finding (proposed follow-up)
+### 6.2 Recommender architecture finding — FIXED (quality-aware tiebreak)
 
-The benchmark exposed that the production recommender `recommendModelIdByRam` is **quality-blind**:
-it picks the *largest* model whose `recommended_ram_gb` fits, tie-broken by **disk size**, and
-**ignores `recommended_profiles`** (that list is only the legacy no-RAM path). Concretely, on a
-16 GB machine today it would recommend **granite** (largest-disk 8B at `recommended_ram_gb: 16`) —
-the run's *worst* 8B. So the `recommended_profiles` promotions above are recorded intent that does
-**not yet change** the app's auto-recommendation. **Proposed follow-up (code, own decision):** make
-best-fit prefer, among models that fit, those whose `recommended_profiles` matches the machine
-profile, then a benchmark quality rank, then size. Until then the promotions live in docs + the
-manifests, not in the picker.
+The benchmark exposed that the production recommender `recommendModelIdByRam` was **quality-blind**:
+it picked the *largest* model whose `recommended_ram_gb` fits, tie-broken by **disk size**, and
+**ignored `recommended_profiles`** (that list is only the legacy no-RAM path). Concretely, on a
+16 GB machine it would have recommended **granite** (largest-disk 8B at `recommended_ram_gb: 16`) —
+the run's *worst* 8B.
+
+**Fix applied (Phase 29):** a new optional manifest field **`recommendation_rank`** (integer,
+default 0; higher = preferred) is now the tiebreak in `recommendModelIdByRam`, applied AFTER the
+capacity fit (comfortable `recommended_ram_gb`, or the lightest runnable) and BEFORE disk size.
+Default 0 preserves the old behaviour for every other manifest, so legacy callers/tests are
+unchanged. Ranks encode the benchmark verdict folded with the product decisions: Qwen3-4B = 2
+(default, keeps Deep) > 2507 = 1; Ministral = 2 (8B winner) > Qwen3-8B = 1 > Granite = 0; Gemma 4
+= 2 (12–14B winner) > Qwen3-14B = 1; 30B MoE = 0 (opt-in). Net result on real hardware: **≤12 GB →
+Qwen3-4B, 16–24 GB → Ministral, ≥32 GB → Gemma 4**; Granite and the 30B are never auto-recommended.
+Covered by `tests/integration/benchmark.test.ts` (real-manifest picks) + `models.test.ts` (the
+tiebreak unit tests).
 
 **Remaining to close the phase:** the Gemma thinking-quality check (run #2 → maybe flip the flag);
 optionally the devbox speed/RSS run for the formal ≥2-machine done-when (QA is machine-independent

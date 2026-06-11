@@ -7,7 +7,12 @@ import https from 'node:https'
 import net from 'node:net'
 import { openDatabase, type Db } from '../../src/main/services/db'
 import { seedSettings, getSettings, updateSettings } from '../../src/main/services/settings'
-import { buildModelList, discoverManifests, resolveManifestsDir } from '../../src/main/services/models'
+import {
+  buildModelList,
+  discoverManifests,
+  resolveManifestsDir,
+  recommendModelIdByRam
+} from '../../src/main/services/models'
 import { createMockRuntime } from '../../src/main/services/runtime/mock'
 import type { ModelManifest } from '../../src/shared/manifest'
 import {
@@ -181,6 +186,25 @@ describe('recommendation per profile', () => {
     expect(moe!.recommendedProfiles).toEqual([])
     for (const profile of ['TINY', 'LITE', 'BALANCED', 'PRO', 'UNKNOWN'] as const) {
       expect(pick(manifests, profile)).not.toBe('qwen3-30b-a3b-q4')
+    }
+  })
+
+  // Phase-29: the RAM-best-fit picker is now quality-aware (recommendation_rank). It recommends
+  // the BENCHMARK WINNER for each machine size, not the biggest-on-disk model.
+  it('recommends the Phase-29 benchmark winner per machine RAM (real manifests)', () => {
+    const m = realManifests()
+    expect(recommendModelIdByRam(m, 8, 'chat')).toBe('qwen3-4b-instruct-q4') // default 4B (Deep)
+    expect(recommendModelIdByRam(m, 12, 'chat')).toBe('qwen3-4b-instruct-q4')
+    expect(recommendModelIdByRam(m, 16, 'chat')).toBe('ministral3-8b-instruct-2512-q4') // best 8B
+    expect(recommendModelIdByRam(m, 32, 'chat')).toBe('gemma4-12b-it-qat-q4') // best 12-14B
+  })
+
+  it('never auto-recommends the opt-in 30B MoE or the benchmark-loser Granite (real manifests)', () => {
+    const m = realManifests()
+    for (const ram of [8, 12, 16, 24, 32, 64]) {
+      const id = recommendModelIdByRam(m, ram, 'chat')
+      expect(id).not.toBe('qwen3-30b-a3b-q4')
+      expect(id).not.toBe('granite-4.1-8b-q4')
     }
   })
 })
