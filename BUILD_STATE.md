@@ -535,8 +535,9 @@ Repo root: `f:\_coding\ai_drive`.
   (per-phase ritual lives in CLAUDE.md; spec-§22 Definition of Done folded into §5; the dead
   Phase-0 `PlaceholderScreen.tsx` went with it); `docs/gpu-support-plan.md` and
   `docs/provisioning-and-distribution-plan.md` **condensed** with their cited section anchors
-  kept stable (gpu §1–§8; provisioning §0/§12/§12.3/§13). Rule recorded in CLAUDE.md
-  ("Doc lifecycle rule"). Full originals: `git show 4549934:docs/<file>`. **Also applied at
+  kept stable (gpu §1–§8; provisioning §0/§12/§12.3/§13 — the provisioning record was later
+  folded into `docs/packaging.md` and deleted, 2026-06-12 housekeeping). Rule recorded in
+  CLAUDE.md ("Doc lifecycle rule"). Full originals: `git show 4549934:docs/<file>`. **Also applied at
   wave-1 closeout (2026-06-10): `docs/post-mvp-functionality-plan.md` condensed** to the
   wave-1 design record — implemented §5–§8 shrunk to as-built records (sub-anchors §5.5/§6.5/
   §7.1/§8.1 kept), wave-2 outlines §9–§10 + decisions table §13 kept verbatim; full original:

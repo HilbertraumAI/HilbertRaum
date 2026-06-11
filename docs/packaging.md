@@ -152,8 +152,9 @@ Or the older manual flow (no download): `prepare-drive` (no `-WithAssets`) → d
 
 > **Build-time network ≠ runtime network.** The `fetch-*` scripts make the project's first
 > deliberate network access, but they run on the **builder's** machine at build time. The app stays
-> 100% offline by default; the optional in-app downloader (plan §12.3, deferred) is policy-gated +
-> deny-by-default. This does not weaken the offline guarantee.
+> 100% offline by default; the in-app downloader (shipped as Phase 18 — wave-1 record §6) is
+> triple-gated: policy ∧ default-off setting ∧ per-download confirmation, and hidden entirely on
+> commercial drives. This does not weaken the offline guarantee.
 
 These artifacts (weights, sidecar binaries, the workspace DB, logs, the portable `.exe`) are all
 **git-ignored** — they live on the drive, never in the repo.
@@ -161,8 +162,20 @@ These artifacts (weights, sidecar binaries, the workspace DB, logs, the portable
 ## Plug-and-play commercial drive (Phase 13)
 
 A non-technical buyer must be able to **plug in, double-click one icon, and chat** — no Docker, no
-installer, no terminal. The chosen mechanism (see `docs/provisioning-and-distribution-plan.md` §0) is
-the **portable bundled app + a tiny native launcher**, not Docker or a system installer.
+installer, no terminal. The chosen mechanism is the **portable bundled app + a tiny native
+launcher** — the Phase-12/13 distribution decision (folded in here from the retired
+provisioning design record; full original via `git show 4549934:docs/provisioning-and-distribution-plan.md`):
+
+| Approach | Plug-and-play for a non-technical buyer? | Verdict |
+|---|---|---|
+| **Docker container** | ❌ Needs Docker Desktop (multi-GB install, admin rights, daemon, paid for larger orgs); GPU passthrough painful on Win/Mac | **Rejected** |
+| **System installer** (`.msi`/`.pkg`) | ⚠️ Admin rights, writes to the host, breaks "your data lives on the drive, move it between laptops" (success criterion #10) | **Rejected as default** |
+| **Portable bundled app on the drive** (electron-builder `portable` + launcher) | ✅ Plug in → double-click → runs; nothing written to the host; drive movable | **Chosen** |
+
+The classic portable-Electron pitfall (settings leaking into `%APPDATA%`) does not apply:
+`resolvePaths()` redirects **all** state (workspace DB, logs, config, models) onto the drive.
+First-run polish is `services/preflight.ts` (writable/free-space/slow-drive checks, friendly +
+non-blocking, surfaced on Home); encrypted-by-default onboarding is kept.
 
 ### The launcher (sets `PAID_DRIVE_ROOT` from its OWN location)
 

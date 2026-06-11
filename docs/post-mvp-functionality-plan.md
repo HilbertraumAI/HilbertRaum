@@ -17,7 +17,7 @@ outline-only and NOT implemented._
 | Direction | Climb toward **Office/Knowledge Drive** (spec §19.1), not Pro/Studio/Enterprise | Its features had existing hooks in the code; it serves the same target user as Lite |
 | Phase 17 | **RAG trust & document-scoped asking** first | The first real-drive test produced a hallucinated answer via the plain-Chat tab (BUILD_STATE §9) — the killer feature failed silently for exactly our target user |
 | Chat modes | **Keep** the per-conversation `chat`/`documents` modes (locked DB/IPC contract); add ambient document-awareness + scoping. Unified auto-RAG chat deferred (§13 D1) | Auto-grounding without a reranker/quality floor degrades plain chat; the contract change is big |
-| Phase 18 | **In-app model downloader** (revived provisioning-plan §12.3) | All infrastructure existed (`assets.ts` plan/verify seams, policy + user gates); buyers had no path to more models |
+| Phase 18 | **In-app model downloader** (revived the provisioning plan's deferred item — see §6) | All infrastructure existed (`assets.ts` plan/verify seams, policy + user gates); buyers had no path to more models |
 | Phase 19 | **Audit log** on the existing `runtime_events` table | Table existed unwritten; first concrete Office/Enterprise compliance feature; cheap |
 | Phase 20 | **Answer-depth modes** (Fast/Balanced/Deep) wiring Qwen3 thinking mode | `ChatOptions.mode` + manifest `supports_thinking_mode` were dead plumbing; spec §10.3 promises the selector |
 | Phase 21 (wave 2) | Retrieval quality: **reranker** (+ optional hybrid FTS), ANN only if measured | Needs model-licensing research + a llama.cpp rerank endpoint check first |
@@ -108,7 +108,10 @@ persists on the conversation; edits go through `updateConversationScope`. (3) Th
 
 ---
 
-## 6. Phase 18 — In-app model downloader (IMPLEMENTED; provisioning-plan §12.3 revived)
+## 6. Phase 18 — In-app model downloader (IMPLEMENTED)
+
+_Revived the Phase-12 provisioning plan's deferred "in-app download" item (its §12.3; that
+design record is now folded into `packaging.md`, original in git history)._
 
 **Goal:** a user with a missing model can fetch it from the Models screen — explicit,
 verified, resumable-ish, impossible to trigger silently.

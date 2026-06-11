@@ -146,8 +146,7 @@ slower on CPU — pick by your RAM. The full schema + license policy is in
   (the path above).
 - **Preconfigured drive** *(commercial)* — a prepared SSD with tested hardware, a signed/notarized
   app, preloaded + verified models, and double-click onboarding (built by
-  `scripts/build-commercial-drive.*`; see
-  [`docs/provisioning-and-distribution-plan.md`](docs/provisioning-and-distribution-plan.md)). The
+  `scripts/build-commercial-drive.*`; see [`docs/packaging.md`](docs/packaging.md)). The
   software core stays open source.
 
 ## Privacy

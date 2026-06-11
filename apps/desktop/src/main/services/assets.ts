@@ -8,7 +8,7 @@ import type { OcrSources, RuntimeBuild, RuntimeOs, RuntimeSources } from '../../
 import { sha256File, verifyChecksum, weightPath, type HashStore } from './models'
 
 // Asset loader — the CANONICAL, unit-tested reference for the DIY `fetch-*` scripts
-// (Phase 12; see docs/provisioning-and-distribution-plan.md §12 + packaging.md).
+// (Phase 12; see docs/packaging.md).
 //
 // Mirrors services/drive.ts: this module holds the pure/testable planning + selection +
 // verification logic, and `scripts/fetch-models.{ps1,sh}` + `scripts/fetch-runtime.
