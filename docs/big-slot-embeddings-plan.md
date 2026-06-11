@@ -2,7 +2,7 @@
 
 _Status: **WORKING PAPER — not started (created 2026-06-11).** Continues the model-catalog work:
 the wave-1 catalog + benchmark (Phases 28–29) shipped and were condensed into
-[`model-catalog-expansion-plan.md`](model-catalog-expansion-plan.md) (decision **D21** deferred
+[`model-benchmarks.md`](model-benchmarks.md) §7 (decision **D21** deferred
 this to Phase 30). Decision numbering continues the repo series (catalog D16–D22 → **this plan
 D23–D28**). Per the CLAUDE.md doc lifecycle rule this is a working paper: condense into a design
 record / fold into the topic docs once implemented. Two **independent** tracks (A = a bigger chat

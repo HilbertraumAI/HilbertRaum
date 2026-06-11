@@ -269,7 +269,7 @@ describe('generateAssistantMessage (streaming)', () => {
 
 // ---- Answer-depth modes: think-block hygiene + option threading (Phase 20) --------
 
-describe('stripThinkBlocks (plan §13 D6)', () => {
+describe('stripThinkBlocks (wave-1 decision D6 (architecture.md "Chat & streaming"))', () => {
   it('removes closed think blocks and trims the seams', () => {
     expect(stripThinkBlocks('<think>\nstep 1\nstep 2\n</think>\n\nThe answer.')).toBe('The answer.')
     expect(stripThinkBlocks('a <think>x</think> b <think>y</think> c')).toBe('a  b  c')

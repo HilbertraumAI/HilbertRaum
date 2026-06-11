@@ -1,10 +1,10 @@
 import type { Reranker, RerankedHit } from './index'
 import { LlamaServer, type LlamaServerOptions } from '../runtime/sidecar'
 
-// Real on-device reranker (Phase 21, retrieval-plan §4). The THIRD `LlamaServer`
+// Real on-device reranker (Phase 21, rag-design §11 reranker). The THIRD `LlamaServer`
 // composition (after the chat runtime and the E5 embedder): the SAME shipped b9585
 // `llama-server` binary, spawned with `--rerank`, serving `/v1/rerank` over loopback.
-// Verified against the pinned b9585 SOURCE (retrieval-plan §1.1): `--rerank` sets
+// Verified against the pinned b9585 SOURCE (rag-design §12.1 R1): `--rerank` sets
 // embedding mode + RANK pooling (common/arg.cpp L2964–2971); the endpoint takes
 // `{ query, documents }` and returns `results: [{ index, relevance_score }]` sorted by
 // score DESC — results map back to inputs by `index`, never by order
@@ -23,7 +23,7 @@ const DEFAULT_CONTEXT_TOKENS = 2048
  */
 const TOKENS_PER_WORD_ESTIMATE = 1.4
 /**
- * Word caps per rerank input (retrieval-plan §7): each rerank task is ONE
+ * Word caps per rerank input (rag-design §12.3): each rerank task is ONE
  * query+document pair, so (160 + 320) × 1.4 + specials ≈ 700 real tokens. The doc cap
  * chiefly bounds CPU latency per candidate (the reranker is CPU-pinned); tune after
  * PAID_RERANK_SMOKE produces real numbers. NOTE: ~700 tokens exceeds llama-server's
@@ -65,7 +65,7 @@ export class LlamaReranker implements Reranker {
   /** Set by `stop()`; a racing lazy start must not resurrect the sidecar after quit. */
   private stopped = false
   /**
-   * Failed-start latch (retrieval-plan §4): a sidecar that could not start (e.g. an
+   * Failed-start latch (rag-design §11 reranker): a sidecar that could not start (e.g. an
    * incompatible GGUF — the E5 q8_0 story) must not be re-spawned and re-awaited for
    * the full health timeout on EVERY question. First failure disables this instance
    * for the session; rerank() then fails fast and retrieval keeps the fused order.
@@ -93,7 +93,7 @@ export class LlamaReranker implements Reranker {
         // embedder (gpu-support-plan §7): a sub-1B scorer gains little from a GPU and
         // must never contend for VRAM with the chat model.
         //
-        // `--batch-size`/`--ubatch-size` = the context (retrieval-plan §1.1 deviation,
+        // `--batch-size`/`--ubatch-size` = the context (rag-design §12.1 R1 deviation,
         // found by PAID_RERANK_SMOKE): in embedding/rerank mode llama-server FORCES
         // n_batch = n_ubatch and defaults them to 512 (b9585 logs "embeddings enabled
         // with n_batch (2048) > n_ubatch (512) ... setting n_batch = n_ubatch = 512").

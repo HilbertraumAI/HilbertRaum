@@ -25,7 +25,7 @@ import {
 import { createMockRuntime } from '../../src/main/services/runtime/mock'
 import { DEFAULT_SETTINGS } from '../../src/shared/types'
 
-// Phase 17 (post-mvp-functionality-plan §5): "ask selected documents" scoping through
+// Phase 17 (rag-design.md §10): "ask selected documents" scoping through
 // VectorIndex → retrieve → generateGroundedAnswer → the conversation's persisted
 // scope_json, plus the actionable reindex-needed empty-corpus answer (§5.2).
 

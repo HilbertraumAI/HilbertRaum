@@ -227,7 +227,7 @@ describe('registerChatIpc', () => {
     )
   })
 
-  // ---- Answer-depth modes (Phase 20, plan §8) ------------------------------------
+  // ---- Answer-depth modes (Phase 20, architecture.md "Chat & streaming") ------------------------------------
 
   /** A runtime that records chatStream options and emits reasoning then answer text. */
   function depthRuntime(): { runtime: ModelRuntime; seen: { options?: RuntimeChatOptions } } {

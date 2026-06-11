@@ -16,7 +16,7 @@ import {
   stripThinkBlocks
 } from '../chat'
 
-// RAG service (spec §7.8; hybrid + rerank stages Phase 21, retrieval-plan §3). Turns a
+// RAG service (spec §7.8; hybrid + rerank stages Phase 21, rag-design §11 pipeline). Turns a
 // question into a grounded, cited answer:
 //
 //   embed query → cosine top-k ──┐
@@ -60,7 +60,7 @@ export interface RetrievedChunk {
   sectionLabel: string | null
   /**
    * Per-query ranking score; its MEANING depends on how the chunk won its place
-   * (Phase 21, retrieval-plan §3): the embedder's cosine similarity for vector hits,
+   * (Phase 21, rag-design §11 pipeline): the embedder's cosine similarity for vector hits,
    * the RRF fusion score for keyword-only hits, or the reranker's relevance score
    * (an unbounded logit) once a reranker reordered the candidates. Internal only —
    * citations never persist scores.
@@ -135,7 +135,7 @@ interface ChunkRow {
 }
 
 /**
- * Retrieve grounded context for `question` (pipeline per retrieval-plan §3):
+ * Retrieve grounded context for `question` (pipeline per rag-design §11 pipeline):
  *  1. embed the question and cosine-search the vector index (`topKInitial`),
  *  2. drop vector hits below `minSimilarity` (the cosine floor — PRE-fusion/PRE-rerank,
  *     decision D12; rerank scores are a different scale and never meet this floor),
@@ -177,7 +177,7 @@ export async function retrieve(
   const vectorHits = (await index.searchText(question, settings.topKInitial)).filter(
     (hit) => hit.score >= settings.minSimilarity
   )
-  // Hybrid keyword path (Phase 21, retrieval-plan §5): exact terms embeddings miss.
+  // Hybrid keyword path (Phase 21, rag-design §11 keyword index): exact terms embeddings miss.
   // Scoped to chunks VISIBLE to the active embedder (§5.4) so the keyword path can
   // never surface a document vector search couldn't — the re-index honesty story
   // (staleEmbeddings / corpusNeedsReindex / REINDEX_NEEDED_ANSWER) is unchanged.
@@ -209,7 +209,7 @@ export async function retrieve(
     })
   }
 
-  // Rerank between fusion and dedup (retrieval-plan §3 step 6, decision D11): the
+  // Rerank between fusion and dedup (rag-design §11 pipeline step 6, decision D11): the
   // cross-encoder rescoring decides which chunk represents a page BEFORE the dedup
   // collapse. A failing reranker logs and keeps the fused order — a quality pass must
   // never turn into an error for the user (spec §11.4).

@@ -14,7 +14,7 @@ import { weightPath, type HashStore } from '../../src/main/services/models'
 import { validateManifest, type ModelManifest } from '../../src/shared/manifest'
 import type { DownloadJob } from '../../src/shared/types'
 
-// Phase 18 — the in-app model downloader (post-mvp-functionality-plan §6). Everything
+// Phase 18 — the in-app model downloader (architecture.md "In-app model downloader"). Everything
 // runs through the INJECTED fake fetch: the suite makes zero real network calls, and the
 // gate tests prove a closed gate never even reaches the fetch seam.
 

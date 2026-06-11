@@ -14,8 +14,8 @@ import {
   type ItemOutput
 } from './score'
 
-// CI-safe unit tests for the Phase-29 deterministic scorer (model-catalog-expansion-plan
-// §5.3). No model, no binary, no node:sqlite — pure string math, so the logic that decides
+// CI-safe unit tests for the Phase-29 deterministic scorer (model-benchmarks.md
+// §2). No model, no binary, no node:sqlite — pure string math, so the logic that decides
 // catalog promotions (§5.4) is covered without a benchmark run.
 
 describe('normalizeText (German-aware)', () => {

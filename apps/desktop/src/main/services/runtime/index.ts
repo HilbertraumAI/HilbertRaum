@@ -25,7 +25,7 @@ export interface RuntimeChatOptions {
    * Receives reasoning ("thinking") deltas, which stream SEPARATELY from the answer
    * tokens the generator yields (llama-server `--reasoning-format deepseek` puts them
    * in `delta.reasoning_content`). Live-display affordance only — reasoning is never
-   * part of the yielded content and is never persisted (plan §13 D6).
+   * part of the yielded content and is never persisted (wave-1 decision D6 (architecture.md "Chat & streaming")).
    */
   onReasoning?: (delta: string) => void
 }

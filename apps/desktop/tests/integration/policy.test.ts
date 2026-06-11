@@ -114,7 +114,7 @@ describe('loadPolicy', () => {
 
 describe('resolveNetwork (effective = policy ∧ setting)', () => {
   it('with no policy file, the default-off user setting is the gate (Phase 18, D3a)', () => {
-    // DEFAULT_POLICY permits model downloads since Phase 18 (plan §13 D3 resolved (a)):
+    // DEFAULT_POLICY permits model downloads since Phase 18 (wave-1 decision D3 (architecture.md "In-app model downloader") resolved (a)):
     // the spec §3.6 Settings toggle is the effective gate when no policy file restricts.
     // Update checks + telemetry stay denied with no toggle at all, and the app still
     // ships offline because the SETTING defaults to off.

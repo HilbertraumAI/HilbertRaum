@@ -1,4 +1,4 @@
-// Reranker contract (Phase 21, retrieval-plan §4; the spec §3.3 'reranker' manifest
+// Reranker contract (Phase 21, rag-design §11 reranker; the spec §3.3 'reranker' manifest
 // role finally in use). A cross-encoder scores (query, document) pairs jointly —
 // strictly more signal than the bi-encoder cosine the vector index ranks by — and
 // reorders the retrieval candidates between fusion and dedup.
@@ -12,7 +12,7 @@ export interface RerankedHit {
   index: number
   /**
    * The model's relevance score — an UNBOUNDED logit (can be negative), NOT a cosine
-   * similarity. Never compare it to `ragMinSimilarity` (retrieval-plan §10 D12).
+   * similarity. Never compare it to `ragMinSimilarity` (rag-design §12.2 D12).
    */
   score: number
 }

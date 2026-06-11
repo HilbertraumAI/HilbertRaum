@@ -6,7 +6,7 @@ import { createLlamaRuntime } from '../../src/main/services/runtime/llama'
 import { resolveLlamaServerPath } from '../../src/main/services/runtime/sidecar'
 import { containsGold } from '../eval/score'
 
-// MANUAL Phase-29 Gemma thinking-quality check (model-catalog-expansion-plan §5.5 / the Gemma
+// MANUAL Phase-29 Gemma thinking-quality check (model-benchmarks.md §6 / the Gemma
 // `supports_thinking_mode` flag decision) — NOT CI.
 //
 //   PAID_GEMMA_THINKING=<root with runtime/llama.cpp/<os>/llama-server + models/chat/gemma4-...gguf>

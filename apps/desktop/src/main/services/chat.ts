@@ -38,7 +38,7 @@ export function buildSystemPrompt(): string {
 
 /**
  * Remove `<think>…</think>` reasoning blocks (including an unclosed trailing block
- * from a stream stopped mid-thought) from assistant text — Phase 20, plan §13 D6.
+ * from a stream stopped mid-thought) from assistant text — Phase 20, wave-1 decision D6 (architecture.md "Chat & streaming").
  *
  * Reasoning must never persist and must never be fed back as history (Qwen guidance:
  * think blocks confuse the model when replayed). The normal Phase-20 path already

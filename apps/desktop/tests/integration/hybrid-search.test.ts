@@ -24,7 +24,7 @@ import { createMockRuntime } from '../../src/main/services/runtime/mock'
 import type { Reranker } from '../../src/main/services/reranker'
 import { DEFAULT_SETTINGS } from '../../src/shared/types'
 
-// Phase 21 (retrieval-plan §5/§8): the FTS5 keyword index — guarded migration +
+// Phase 21 (rag-design §11 keyword index): the FTS5 keyword index — guarded migration +
 // trigger sync + sanitized MATCH queries + the embedder-visibility rule — RRF fusion,
 // and the rebuilt retrieve() pipeline incl. the fake-reranker end-to-end cases and the
 // grounding-guard invariants.

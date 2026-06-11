@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { createLlamaReranker } from '../../src/main/services/reranker'
 import { resolveLlamaServerPath } from '../../src/main/services/runtime/sidecar'
 
-// MANUAL rerank smoke (Phase 21, retrieval-plan §1.1/§7 live verification) — NOT CI.
+// MANUAL rerank smoke (Phase 21, rag-design §12.1 R1 / §12.3 live verification) — NOT CI.
 //
 // CI stays zero-network/zero-model/zero-binary, so this file is skipped unless
 // PAID_RERANK_SMOKE points at a provisioned drive root (same shape as PAID_GPU_SMOKE):
@@ -15,7 +15,7 @@ import { resolveLlamaServerPath } from '../../src/main/services/runtime/sidecar'
 // Against the REAL pinned b9585 build + the real bge-reranker-v2-m3 F16 GGUF this
 // proves what the fake-fetch unit tests cannot:
 //   1. the F16 GGUF LOADS on b9585 (the q8_0-on-XLM-R warmup crash is the recorded
-//      failure mode this guards against — BUILD_STATE §9 / retrieval-plan §1.1),
+//      failure mode this guards against — BUILD_STATE §9 / rag-design §12.1 R1),
 //   2. /v1/rerank scores a relevant document above an irrelevant one,
 //   3. the wall-clock latency for a topKInitial-sized batch on the CPU pin — THE
 //      headline number the §7 resource budget is waiting for (record it in the plan).

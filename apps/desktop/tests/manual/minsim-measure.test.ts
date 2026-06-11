@@ -5,7 +5,7 @@ import { createE5Embedder } from '../../src/main/services/embeddings/e5'
 import { cosineSimilarity } from '../../src/main/services/embeddings'
 import { resolveLlamaServerPath } from '../../src/main/services/runtime/sidecar'
 
-// MANUAL ragMinSimilarity measurement (Phase 21, retrieval-plan §1.3 / R3 / D12) — NOT CI.
+// MANUAL ragMinSimilarity measurement (Phase 21, rag-design §12.1 R3 / §12.2 D12) — NOT CI.
 //
 // CI stays zero-network/zero-model/zero-binary, so this file is skipped unless
 // PAID_MINSIM_MEASURE points at a provisioned drive root (same shape as PAID_GPU_SMOKE):

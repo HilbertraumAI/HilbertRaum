@@ -18,7 +18,7 @@ import {
 import { createConversation, appendMessage } from '../../src/main/services/chat'
 import { DEFAULT_SETTINGS } from '../../src/shared/types'
 
-// MANUAL end-to-end RAG quality check (Phase 21, retrieval-plan §3 — the "does hybrid +
+// MANUAL end-to-end RAG quality check (Phase 21, rag-design §11 pipeline — the "does hybrid +
 // rerank actually IMPROVE answers?" question the mechanics smokes don't answer) — NOT CI.
 //
 //   PAID_RAG_QUALITY=<root with runtime/llama.cpp/<os>/llama-server + models/{embeddings,chat,reranker}/*.gguf>

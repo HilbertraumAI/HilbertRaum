@@ -1,5 +1,5 @@
 // Deterministic, judge-free scoring for the Phase-29 model benchmark
-// (model-catalog-expansion-plan §5.3 / D19). NO cloud judge, NO telemetry — every metric
+// (model-benchmarks.md §2 / D19). NO cloud judge, NO telemetry — every metric
 // here is pure local string math so a run is reproducible and offline by construction.
 //
 // This module is intentionally dependency-free (no db / runtime / rag imports) so the unit

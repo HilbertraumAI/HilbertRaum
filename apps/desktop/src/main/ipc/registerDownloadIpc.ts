@@ -8,7 +8,7 @@ import { getSettings } from '../services/settings'
 import { loadPolicy } from '../services/policy'
 import { log } from '../services/logging'
 
-// Phase 18 IPC: the in-app model downloader (post-mvp-functionality-plan §6).
+// Phase 18 IPC: the in-app model downloader (architecture.md "In-app model downloader").
 // Async-with-polling like the Phase-4 import jobs: `downloadModel` returns the job
 // immediately, the renderer polls `getDownloadJob`. The gates are re-checked HERE, in
 // the main process, on every start: the policy ceiling (`allow_model_downloads`) AND

@@ -16,17 +16,18 @@ design record per the CLAUDE.md doc lifecycle rule:
 - **GPU acceleration (Phases 14–16)** + a same-day audit round —
   [`docs/gpu-support-plan.md`](docs/gpu-support-plan.md).
 - **Functionality wave 1 toward the Office edition (Phases 17–20):** RAG trust & scoped
-  asking · in-app model downloader · audit log · answer-depth modes —
-  [`docs/post-mvp-functionality-plan.md`](docs/post-mvp-functionality-plan.md).
+  asking · in-app model downloader · audit log · answer-depth modes — record folded into
+  the topic docs: `docs/rag-design.md` §10 (17) · `docs/architecture.md` "In-app model
+  downloader" (18), "Audit log" (19), "Chat & streaming" (20).
 - **Phase 21 retrieval quality** (hybrid FTS5 + RRF, optional reranker) —
-  [`docs/retrieval-quality-plan.md`](docs/retrieval-quality-plan.md) + `docs/rag-design.md`
-  §11; both manual measurements done (rerank smoke; `ragMinSimilarity` confirmed 0).
+  `docs/rag-design.md` §11 (as built) + §12 (design record, D8–D15); both manual
+  measurements done (rerank smoke; `ragMinSimilarity` confirmed 0).
 - **UI polish wave (Phases 23–27)** — [`docs/design-guidelines.md`](docs/design-guidelines.md)
   (ADOPTED; its §11 is the rollout record incl. decisions D-UI1–4).
 - **Model catalog wave 1 + benchmark (Phases 28–29)** —
-  [`docs/model-catalog-expansion-plan.md`](docs/model-catalog-expansion-plan.md) (D16–D22) +
-  [`docs/model-benchmarks.md`](docs/model-benchmarks.md) (protocol + first-run results) +
-  `docs/model-policy.md` (catalog + quality-aware recommendation).
+  [`docs/model-benchmarks.md`](docs/model-benchmarks.md) (protocol + first-run results +
+  the §7 design record, D16–D22) + `docs/model-policy.md` (catalog + quality-aware
+  recommendation + the disqualified-candidates list).
 - **Functionality wave 3 (Phases 31–38):** conversation search · vault password change ·
   document tasks + summary · translation · compare · audio transcription · dictation · OCR —
   [`docs/functionality-wave-3-plan.md`](docs/functionality-wave-3-plan.md) (D23–D37; research
@@ -59,12 +60,12 @@ remaining work is **manual acceptance only** (§5). Consciously-accepted gaps li
 | 12 | DIY asset loader (`fetch-assets`) | 🟢 done |
 | 13 | Plug-and-play distribution (commercial drive) | 🟢 done |
 | 14–16 | GPU acceleration (Vulkan distribution · probe/ladder runtime · surface) | 🟢 done 2026-06-10 — `docs/gpu-support-plan.md` |
-| 17 | RAG trust & document-scoped asking | 🟢 done 2026-06-10 — wave-1 record §5 |
-| 18 | In-app model downloader | 🟢 done 2026-06-10 — wave-1 record §6 |
-| 19 | Audit log (`runtime_events`) | 🟢 done 2026-06-10 — wave-1 record §7 |
-| 20 | Answer-depth modes (Fast/Balanced/Deep) | 🟢 done 2026-06-10 — wave-1 record §8 |
-| 21 | Retrieval quality (reranker + hybrid FTS5 search) | 🟢 done 2026-06-10 — `docs/retrieval-quality-plan.md` + `rag-design.md` §11; both manual measurements done |
-| 22 | Signed offline update bundles | 🔴 blocked (key-management design) — wave-1 record §10 |
+| 17 | RAG trust & document-scoped asking | 🟢 done 2026-06-10 — `rag-design.md` §10 |
+| 18 | In-app model downloader | 🟢 done 2026-06-10 — `architecture.md` "In-app model downloader" |
+| 19 | Audit log (`runtime_events`) | 🟢 done 2026-06-10 — `architecture.md` "Audit log" + `security-model.md` |
+| 20 | Answer-depth modes (Fast/Balanced/Deep) | 🟢 done 2026-06-10 — `architecture.md` "Chat & streaming" |
+| 21 | Retrieval quality (reranker + hybrid FTS5 search) | 🟢 done 2026-06-10 — `rag-design.md` §11 (as built) + §12 (record); both manual measurements done |
+| 22 | Signed offline update bundles | 🔴 blocked (key-management design) — outline in §5 item 3 |
 | 23–27 | UI polish wave (tokens/theming · components · chat restructure · IA regroup · microcopy/ambient signal/first-run) | 🟢 done, merged to master 2026-06-10 — `docs/design-guidelines.md` (+ its §11 rollout record) |
 | 28 | Model catalog wave 1 (challenger manifests, D16–D18/D22) | 🟢 done 2026-06-10 — 4 Apache-2.0 challengers, real hashes, all 10 catalog weights VERIFIED on `D:\`, bring-up smokes PASS |
 | 29 | Benchmark protocol + first comparison run (D19/D20) | 🟢 done 2026-06-11 — judge-free QA+speed+RSS protocol run on all 8 models; RAM mins recalibrated, recommender quality-aware (`recommendation_rank`), Gemma thinking flag ON. Optional dev-box speed sweep = completeness only |
@@ -539,31 +540,35 @@ Repo root: `f:\_coding\ai_drive`.
   folded into `docs/packaging.md` and deleted, 2026-06-12 housekeeping). Rule recorded in
   CLAUDE.md ("Doc lifecycle rule"). Full originals: `git show 4549934:docs/<file>`. **Also applied at
   wave-1 closeout (2026-06-10): `docs/post-mvp-functionality-plan.md` condensed** to the
-  wave-1 design record — implemented §5–§8 shrunk to as-built records (sub-anchors §5.5/§6.5/
-  §7.1/§8.1 kept), wave-2 outlines §9–§10 + decisions table §13 kept verbatim; full original:
-  `git show 2a46ca3:docs/post-mvp-functionality-plan.md`.
-- **Functionality wave 1 — Phases 17–20 (2026-06-10) — design record
-  [`docs/post-mvp-functionality-plan.md`](docs/post-mvp-functionality-plan.md):**
-  **Phase 17** RAG trust & document-scoped asking (record §5 + `docs/rag-design.md` §10 —
+  wave-1 design record (full original: `git show 2a46ca3:docs/post-mvp-functionality-plan.md`);
+  in the 2026-06-12 housekeeping that record — and `docs/retrieval-quality-plan.md` +
+  `docs/model-catalog-expansion-plan.md` — were folded into the topic docs (rag-design §10/§12,
+  architecture, model-benchmarks §7, model-policy) and deleted.
+- **Functionality wave 1 — Phases 17–20 (2026-06-10) — design record folded into the topic
+  docs (full original: `git show 2a46ca3:docs/post-mvp-functionality-plan.md`):**
+  **Phase 17** RAG trust & document-scoped asking (`docs/rag-design.md` §10 incl. D1/D2 —
   ask-selected-documents scope, plain-chat document-awareness notice, vector-tag fix,
-  reindex-needed answer). **Phase 18** in-app model downloader (record §6 — triple-gated:
+  reindex-needed answer). **Phase 18** in-app model downloader (`docs/architecture.md`
+  "In-app model downloader" incl. D3 — triple-gated:
   policy ∧ default-off setting ∧ per-download confirmation; `.part` + verify-before-rename,
-  Range resume, async-with-polling IPC). **Phase 19** audit log on `runtime_events` (record
-  §7 + `docs/security-model.md` — never-throws recorder with locked-vault buffering, hard
+  Range resume, async-with-polling IPC). **Phase 19** audit log on `runtime_events`
+  (`docs/architecture.md` "Audit log" incl. D7
+  + `docs/security-model.md` — never-throws recorder with locked-vault buffering, hard
   privacy rule ids/filenames/counts never content (sentinel-grep-tested), 5 000-row
   prune-on-insert, Diagnostics Activity panel + export). **Phase 20** answer-depth modes
-  (record §8 + `docs/architecture.md` — per-request `chat_template_kwargs.enable_thinking`,
+  (`docs/architecture.md` "Chat & streaming" incl. D4–D6 — per-request
+  `chat_template_kwargs.enable_thinking`,
   the ADDITIVE `chat:reasoning:<id>` stream channel, reasoning stripped from persistence;
   the `--reasoning auto` silent-delta research finding and the `CHAT_SERVER_ARGS` pin are
-  record §8.1/§12).
+  recorded there).
 - **Phase 21 — retrieval quality: reranker + hybrid keyword search (2026-06-10) — design
-  record [`docs/retrieval-quality-plan.md`](docs/retrieval-quality-plan.md) (decisions
+  record `docs/rag-design.md` §12 (decisions
   D8–D15 + research facts, incl. the rerank-mode `n_ubatch=512` HTTP-500 trap and its
-  batch-size fix, §1.1) + `docs/rag-design.md` §11 (as built):** FTS5 keyword pass + RRF
+  batch-size fix, §12.1 R1) + §11 (as built):** FTS5 keyword pass + RRF
   fusion in `retrieve()`; optional CPU-pinned `bge-reranker-v2-m3` sidecar behind a
   `Reranker` interface whose absent default keeps retrieval byte-identical. Real-hardware
   smokes on `D:\` (i7-1185G7): F16 loads on b9585, relevance correct, worst-case
-  12-candidate batch ≈ 24.7 s CPU; `ragMinSimilarity` measured → stays 0 (plan §1.3 —
+  12-candidate batch ≈ 24.7 s CPU; `ragMinSimilarity` measured → stays 0 (§12.1 R3 —
   prefix-less E5 compresses all cosines into ~0.87–0.94, separation is the reranker's job);
   the `PAID_RAG_QUALITY` end-to-end run validated the reranker rescuing the true clause
   from #3-behind-distractors to #1 (the concrete justification for its ~25 s worst case).
@@ -579,9 +584,10 @@ Repo root: `f:\_coding\ai_drive`.
   sweep (accepted items and the bundled-app `WrongPasswordError` instanceof/tree-shake quirk
   are recorded in `docs/known-limitations.md`).
 - **Phases 28–29 — model catalog wave 1 + benchmark (2026-06-10/11) — design record
-  [`docs/model-catalog-expansion-plan.md`](docs/model-catalog-expansion-plan.md) (D16–D22) +
-  [`docs/model-benchmarks.md`](docs/model-benchmarks.md) (protocol, tooling, first-run
-  results) + `docs/model-policy.md` (catalog table, license reviews, recommendation):**
+  [`docs/model-benchmarks.md`](docs/model-benchmarks.md) §7 (D16–D22) + its §0–§6
+  (protocol, tooling, first-run
+  results) + `docs/model-policy.md` (catalog table, license reviews, recommendation,
+  disqualified candidates):**
   four Apache-2.0 challenger manifests landed with vendor-verified sources and real hashes
   (all 10 catalog weights VERIFIED on `D:\`; bring-up smokes PASS on real b9585). The
   judge-free benchmark (scorer `tests/eval/score.ts`, harness `tests/manual/model-eval.test.ts`,
@@ -1243,14 +1249,20 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
    (events appear; export saves — the last wave-1 live-UI item); an icon/`buildResources` for
    electron-builder; the **optional** Phase-29 dev-box speed sweep (completeness only — QA +
    RSS are machine-independent).
-3. **Phase 22 — signed offline update bundles** (wave-1 record §10): 🔴 blocked on a
-   key-management design (signing keys, rotation, where the public key lives on the drive).
+3. **Phase 22 — signed offline update bundles** (spec §12.3): 🔴 blocked. Outline (kept here
+   from the retired wave-1 record): a signed bundle (manifests + optionally weights/runtime/
+   app) dropped into `updates/incoming/`, verified (ed25519 via the already-shipped `@noble`
+   family — no new dep class), applied atomically, recorded in `updates/applied/` + the audit
+   log. **Blocking decision = key management** (who holds the signing key, rotation, whether
+   DIY drives trust a repo key) — needs its own short design doc before any code. The
+   commercial pitch ("signed update bundles", spec §1.3) makes this the first priority once
+   drives actually ship.
 4. **Phase 30 — opt-in big slot + embeddings:** working paper drafted
    ([`docs/big-slot-embeddings-plan.md`](docs/big-slot-embeddings-plan.md), D23–D28): Track A
    (Gemma 4 26B-A4B etc. vs the incumbent Qwen3 30B-A3B, reusing the Phase-29 benchmark) +
    Track B (a better embedder — the reindex-forcing swap; D27 eval-set hardening is the
    prerequisite). Key verified fact: the pinned b9585 already runs Gemma 4 — no runtime bump.
-5. **ANN vector index** only if a real corpus outgrows the linear scan (retrieval record D15 —
+5. **ANN vector index** only if a real corpus outgrows the linear scan (rag-design §12.2 D15 —
    explicitly not built).
 
 **Current gate (2026-06-11, post-Phase-38): typecheck clean, 968/968 tests pass (+25 manual
@@ -1376,6 +1388,6 @@ history). What still matters:
   manifest id is kept as the opaque vector tag.
 - **The first real-drive hallucination was the plain-Chat tab, not the RAG engine** — the
   question never reached retrieval (the grounded path has a hard empty-corpus guard). This
-  finding motivated Phase 17 (wave-1 record §1/§5). Related: a document ingested under the
+  finding motivated Phase 17 (rag-design.md §10). Related: a document ingested under the
   mock embedder is invisible to E5 retrieval (vectors are scoped by `embedder.id`) —
   re-upload/re-index after an embedder change.

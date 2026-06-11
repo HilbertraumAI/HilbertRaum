@@ -4,7 +4,7 @@ import { LlamaReranker } from '../../src/main/services/reranker/llama'
 import { createSelectedReranker } from '../../src/main/services/reranker/factory'
 import type { ChildProcessLike } from '../../src/main/services/runtime/sidecar'
 
-// Phase 21 (retrieval-plan §4/§8): the reranker sidecar — driven entirely through the
+// Phase 21 (rag-design §11 reranker): the reranker sidecar — driven entirely through the
 // fake-spawn + mocked-loopback-fetch harness (the E5 embedder test pattern). CI never
 // needs a binary or a model; the live load + latency check is the PAID_RERANK_SMOKE
 // manual harness (tests/manual/rerank-smoke.test.ts).
@@ -30,8 +30,8 @@ function fakeSpawn() {
 }
 
 /**
- * Routes /health (ok) and /v1/rerank. Replies in the b9585 Jina shape (retrieval-plan
- * §1.1): `results: [{ index, relevance_score }]` SORTED BY SCORE DESC — deliberately
+ * Routes /health (ok) and /v1/rerank. Replies in the b9585 Jina shape (rag-design
+ * §12.1 R1): `results: [{ index, relevance_score }]` SORTED BY SCORE DESC — deliberately
  * not input order, so the index-mapping contract is exercised.
  */
 function rerankFetch(scores: number[], recorded?: Array<{ query: string; documents: string[] }>): typeof fetch {
@@ -92,7 +92,7 @@ describe('LlamaReranker', () => {
     // Physical batch sized to the context: in --rerank/embedding mode llama-server forces
     // n_batch = n_ubatch and defaults them to 512, but a query+document rerank input runs
     // ~670 tokens — the 512 default 500s the whole request on real-length chunks (found by
-    // PAID_RERANK_SMOKE; retrieval-plan §1.1 deviation). Must match --ctx-size.
+    // PAID_RERANK_SMOKE; rag-design §12.1 R1 deviation). Must match --ctx-size.
     expect(args).toContain('--batch-size 2048')
     expect(args).toContain('--ubatch-size 2048')
     expect(args).toContain('--ctx-size 2048')

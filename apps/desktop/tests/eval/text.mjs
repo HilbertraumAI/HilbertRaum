@@ -1,4 +1,4 @@
-// Shared text primitives for the Phase-29 scorer (model-catalog-expansion-plan §5.3).
+// Shared text primitives for the Phase-29 scorer (model-benchmarks.md §2).
 //
 // Lives as plain ESM JS (not TS) so BOTH the TypeScript scorer (`score.ts`, via vitest's
 // esbuild) AND the offline re-score script (`eval/rescore.mjs`, via plain `node`) import the

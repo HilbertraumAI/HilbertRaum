@@ -51,7 +51,7 @@ logs, best-effort shredding on SSDs, no password recovery — are documented in
 - **No dedicated Onboarding wizard (spec §7.1).** The `WorkspaceGate` (create-password / unlock),
   the automatic first-run benchmark, and the Home screen together cover the spec §17 first-run flow.
 - ~~`ChatOptions.mode` (Fast/Balanced/Deep) is dead plumbing~~ **Shipped in Phase 20**
-  (post-mvp-functionality-plan §8): the composer's answer-depth selector maps to Qwen3's
+  (architecture.md "Chat & streaming"): the composer's answer-depth selector maps to Qwen3's
   native thinking switch (`chat_template_kwargs.enable_thinking` at the pinned b9585) with
   live collapsed reasoning in Deep mode. Accepted edges: the depth choice is
   per-conversation **per session** (not persisted to the DB), and document answers always
@@ -64,7 +64,7 @@ logs, best-effort shredding on SSDs, no password recovery — are documented in
   profile bump is live (conservatively gated — see the GPU section below and
   [`benchmark.md`](benchmark.md)).
 - ~~No per-document "ask selected documents" scope (spec §10.4)~~ **Shipped in Phase 17**
-  (post-mvp-functionality-plan §5.3): Documents-screen selection → scoped document Q&A with
+  (rag-design.md §10): Documents-screen selection → scoped document Q&A with
   removable chips; the scope persists on the conversation.
 - **Settings lacks the spec §10.6 Models/Performance/About sections** (Models has its own screen;
   Diagnostics shows version/runtime/model info).
@@ -75,7 +75,7 @@ logs, best-effort shredding on SSDs, no password recovery — are documented in
   unimplemented — the pipeline fetches all six weights (~37 GB); curate with
   `fetch-models --only <id>`.
 - ~~No in-app model downloader (plan §12.3, deferred)~~ **Shipped in Phase 18**
-  (post-mvp-functionality-plan §6): policy ∧ Settings-toggle ∧ per-download confirmation, `.part`
+  (architecture.md "In-app model downloader"): policy ∧ Settings-toggle ∧ per-download confirmation, `.part`
   staging with verify-before-rename, Range resume, one download at a time. Accepted edges:
   - **The startup offline tripwire is not re-evaluated mid-session.** Toggling `allowNetwork` on
     and downloading in the same session leaves the (detection-only, never-blocking) guard
@@ -95,7 +95,7 @@ logs, best-effort shredding on SSDs, no password recovery — are documented in
   their own), offline key rotation/continuity, and rollback protection. Deliberately **not yet
   decided** (discussed 2026-06-10, decision deferred); Phase 22 needs its own short design doc
   (`docs/update-bundles-plan.md`, outline in
-  [`post-mvp-functionality-plan.md`](post-mvp-functionality-plan.md) §10) before any code.
+  BUILD_STATE §5 item 3) before any code.
   One constraint already understood from that discussion: a trust anchor cannot be
   retroactively strengthened, so whatever key signs during development must never anchor
   commercial drives — the production key would be a different, offline-generated key.
@@ -122,16 +122,20 @@ logs, best-effort shredding on SSDs, no password recovery — are documented in
 
 ## Retrieval quality (Phase 21, [`rag-design.md`](rag-design.md) §11)
 
-- **`ragMinSimilarity` still defaults to 0 (unmeasured).** The research gate (retrieval-plan §1.3)
-  required real E5 score distributions from an indexed corpus; the provisioned test drive was not
-  attached, so the floor keeps its locked default. Pending manual item: relevant + irrelevant query
-  batches on the `D:\` test drive, then promote a measured default (the floor's semantics under
-  reranking — cosine, pre-rerank — are already decided, D12).
-- **Reranker latency on CPU is estimated, not measured.** The reranker is pinned to CPU and scores
-  up to 2×`topKInitial` truncated candidates per question (estimate: single-digit seconds on a
-  mid-range CPU). `PAID_RERANK_SMOKE` reports the real number; the candidate cap + word-truncation
-  budgets are the tuning levers. Until measured, the reranker stays an opt-in (provision-the-GGUF)
-  feature and is never bundled by default.
+- **`ragMinSimilarity` stays 0 — a positive cosine floor is impossible under prefix-less E5
+  (MEASURED 2026-06-10, [`rag-design.md`](rag-design.md) §12.1 R3).** On the real `D:\` drive the
+  relevant and irrelevant best-chunk cosine distributions OVERLAP (everything compresses into a
+  ~0.87–0.94 band because E5 runs without its `query:`/`passage:` prefixes), so any positive floor
+  drops real hits. Relevance separation is delegated to RRF + the reranker (D12). Latent
+  improvement: a prefix migration would spread the distribution and make a floor meaningful, but
+  forces re-embedding every corpus — revisit only as a deliberate migration.
+- **Reranker latency on CPU is significant (MEASURED): ≈ 24.7 s worst case** for a 12-candidate
+  batch at the full truncation budget on a CPU-pinned i7-1185G7 (~2 s/candidate;
+  `PAID_RERANK_SMOKE`, 2026-06-10) — a documents query visibly lengthens on a low-end laptop when
+  the reranker is provisioned. Bounded by the candidate cap (≤ 2×`topKInitial`) + word-truncation
+  budgets (the tuning levers); the reranker stays an opt-in (provision-the-GGUF) feature, never
+  bundled by default. The `PAID_RAG_QUALITY` run is the evidence it earns the cost
+  (rag-design §12.3).
 - **The FTS5 index duplicates chunk text inside the workspace DB** (a self-contained table was
   chosen over external-content on `chunks`' implicit rowid, which VACUUM may renumber). Bounded by
   the 1 000-chunk/file cap; encrypted at rest with the same DB file.

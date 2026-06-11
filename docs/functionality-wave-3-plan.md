@@ -10,7 +10,7 @@ closed the wave (2026-06-11): the as-built mechanisms live in the topic docs
 the facts they rest on, the §-anchors BUILD_STATE cites, and the research-gate
 evidence. The full original plan (drafted 2026-06-10, review round 1 + plan audit
 2026-06-11) is in git history. Phases 29–30 are reserved by
-[`model-catalog-expansion-plan.md`](model-catalog-expansion-plan.md); this wave starts
+[`model-benchmarks.md`](model-benchmarks.md) §7 (the Phase-28/29 design record); this wave starts
 at **Phase 31**. Decisions continue the project-wide numbering at **D23** (D1–D7
 wave 1 · D8–D15 retrieval · D16–D22 catalog · D-UI1–4 UI wave)._
 
@@ -54,7 +54,7 @@ distribution + new asset classes — the long poles).
 
 ## 2. Facts the plan rests on (verified in code 2026-06-10; independently re-verified by the 2026-06-11 audit)
 
-1. **FTS5 is proven in both runtimes** (retrieval-plan §1.2: Electron 37 main process AND
+1. **FTS5 is proven in both runtimes** (rag-design §12.1 R2: Electron 37 main process AND
    system Node 24, SQLite 3.50.4 `ENABLE_FTS5`). `chunks_fts` exists as a self-contained
    `fts5(text, chunk_id UNINDEXED)` with three sync triggers + guarded backfill
    (`db.ts`; design rationale D13). `buildFtsMatchQuery` (`services/rag/hybrid.ts`)

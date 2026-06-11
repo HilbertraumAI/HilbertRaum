@@ -11,7 +11,7 @@ import {
   recordEvent
 } from '../../src/main/services/audit'
 
-// Phase 19 service-level tests (post-mvp-functionality-plan §7): the never-throws
+// Phase 19 service-level tests (architecture.md "Audit log"): the never-throws
 // contract, newest-first paging, the fixed-retention prune (decision D7), and the
 // locked-workspace buffering of the app-wide recorder.
 

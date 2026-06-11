@@ -1,5 +1,5 @@
 // Authoring source for the Phase-29 grounded-QA benchmark set
-// (model-catalog-expansion-plan §5.3 / D19). Run with:  node eval/build.mjs
+// (model-benchmarks.md §2 / D19). Run with:  node eval/build.mjs
 //
 // This script IS the source of truth; `corpus_de_en.jsonl` and `rag_de_en.jsonl` are
 // GENERATED from it. Keeping the data structured here (instead of hand-writing 100 JSONL

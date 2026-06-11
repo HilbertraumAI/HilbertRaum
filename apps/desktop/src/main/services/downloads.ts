@@ -12,7 +12,7 @@ import {
 } from './assets'
 import { invalidateChecksum, type HashStore } from './models'
 
-// In-app model downloader (Phase 18, post-mvp-functionality-plan §6 — the revived
+// In-app model downloader (Phase 18, architecture.md "In-app model downloader" — the revived
 // plan §12.3). A thin job state machine over the Phase-12 `assets.ts` seams:
 // `planModelDownloads` (license gate + present/verified states), `downloadToFile`
 // (injected fetch + progress + Range resume), `verifyDownloadedFile` (placeholder

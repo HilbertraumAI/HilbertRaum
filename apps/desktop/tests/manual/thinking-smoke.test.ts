@@ -5,7 +5,7 @@ import { createLlamaRuntime } from '../../src/main/services/runtime/llama'
 import { resolveLlamaServerPath } from '../../src/main/services/runtime/sidecar'
 import type { RuntimeStartOptions } from '../../src/main/services/runtime'
 
-// MANUAL thinking-mode smoke (Phase 20, plan §13 D5 live verification) — NOT part of CI.
+// MANUAL thinking-mode smoke (Phase 20, wave-1 decision D5 (architecture.md "Chat & streaming") live verification) — NOT part of CI.
 //
 // CI stays zero-network/zero-model/zero-binary, so this file is skipped unless
 // PAID_THINKING_SMOKE points at a provisioned drive root (same shape as PAID_GPU_SMOKE):

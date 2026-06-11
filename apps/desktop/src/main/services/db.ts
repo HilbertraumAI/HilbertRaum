@@ -107,7 +107,7 @@ function ensureColumn(db: Db, table: string, column: string, ddl: string): void 
   }
 }
 
-// Phase 21 (retrieval-plan §5): the FTS5 keyword index over chunk text, used by hybrid
+// Phase 21 (rag-design §11 keyword index): the FTS5 keyword index over chunk text, used by hybrid
 // retrieval. SELF-CONTAINED (text + chunk_id UNINDEXED), deliberately NOT an
 // external-content table keyed on chunks' implicit rowid — `chunks.id` is a TEXT PK, so
 // the table has only an implicit rowid, and VACUUM is documented to renumber those,
@@ -115,7 +115,7 @@ function ensureColumn(db: Db, table: string, column: string, ddl: string): void 
 // ingest/reindex/delete code path can ever miss it; the one-time backfill makes a
 // pre-Phase-21 workspace searchable on first open after upgrade (guarded additive
 // migration — the scope_json precedent). FTS5 availability in BOTH runtimes (Electron's
-// bundled Node + system Node) was verified for this phase (retrieval-plan §1.2).
+// bundled Node + system Node) was verified for this phase (rag-design §12.1 R2).
 function ensureChunksFts(db: Db): void {
   const exists = db
     .prepare("SELECT name FROM sqlite_master WHERE name = 'chunks_fts'")

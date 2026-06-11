@@ -5,7 +5,7 @@ import { createLlamaRuntime } from '../../src/main/services/runtime/llama'
 import { resolveLlamaServerPath } from '../../src/main/services/runtime/sidecar'
 import type { RuntimeStartOptions } from '../../src/main/services/runtime'
 
-// MANUAL Phase-28 challenger bring-up smoke (model-catalog-expansion-plan §4.3) — NOT CI.
+// MANUAL Phase-28 challenger bring-up smoke (model-benchmarks.md §7.3) — NOT CI.
 //
 // CI stays zero-network/zero-model/zero-binary, so this file is skipped unless
 // PAID_BRINGUP_SMOKE points at a provisioned drive root (same shape as the other manual

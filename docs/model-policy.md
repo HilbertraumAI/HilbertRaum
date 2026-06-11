@@ -3,8 +3,8 @@
 _Last updated: 2026-06-11 (Phase 29: first benchmark run — Ministral/Gemma/Qwen3-2507 promoted,
 Granite held, min-RAM recalibrated from measured peak RSS; see
 [`model-benchmarks.md`](model-benchmarks.md) §6. Phase 28: four challenger manifests added per
-[`model-catalog-expansion-plan.md`](model-catalog-expansion-plan.md) D16–D18; runtime pinned to
-llama.cpp b9585; all license reviews approved)_
+decisions D16–D18 — design record in [`model-benchmarks.md`](model-benchmarks.md) §7; runtime
+pinned to llama.cpp b9585; all license reviews approved)_
 
 ## Principles
 - **No model weights in git.** Weights live under `models/` on the drive (git-ignored).
@@ -113,6 +113,15 @@ license_review:
 
 Do not bundle a model unless its license has been reviewed.
 
+### Disqualified / parked candidates (Phase-28 license research, 2026-06-10)
+
+**Disqualified (do not revisit without new facts):** EXAONE 4.x (NC license); Ministral
+8B-Instruct-**2410** (Mistral Research License, non-commercial — the `-2512` name-twin
+trap); Phi-4 (MIT but not multilingual → fails German); Mistral Large 3 (Apache but 675B).
+**Parked:** Llama 3.x (community license, encumbered vs all-Apache alternatives), GLM-4
+(MIT, German unproven), Gemma 3 (custom Gemma Terms — superseded by Apache-2.0 Gemma 4).
+Full research record: [`model-benchmarks.md`](model-benchmarks.md) §7.
+
 ## Optional `download` block (Phase 12 — the DIY asset loader)
 
 The schema gained an **optional** `download` block describing where the `fetch-models` scripts pull
@@ -152,11 +161,11 @@ printed first). The DIY path pulls from the **upstream source**, which sidesteps
 > online machine. The app itself never auto-downloads — the in-app downloader below runs only when
 > every gate passes, per explicit user click.
 
-### The in-app downloader (Phase 18 — plan §12.3 revived)
+### The in-app downloader (Phase 18 — the provisioning plan’s deferred item, revived)
 
 A model that is **missing** (or failed its checksum) and whose manifest carries a `download` block
 can be fetched from the **AI Model screen**. Three gates, ALL required, re-checked in the main
-process on every start (post-mvp-functionality-plan §6.1):
+process on every start (architecture.md "In-app model downloader"):
 
 1. **Policy ceiling** — `policy.network.allow_model_downloads`. Since Phase 18 the **default**
    (no `policy.json`) permits downloads (plan §13 D3, resolved (a)) so the user toggle below is the

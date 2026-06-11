@@ -3,7 +3,7 @@ import type { Db } from './db'
 import type { AuditEvent, AuditEventType } from '../../shared/types'
 
 // Audit log over the spec §8 `runtime_events` table (Phase 19,
-// post-mvp-functionality-plan §7) — the user's local answer to "what did this app do,
+// architecture.md "Audit log") — the user's local answer to "what did this app do,
 // when", without reading app.log. NOT telemetry: the log lives in the workspace DB
 // (encrypted at rest on encrypted workspaces, exactly like chats) and nothing here ever
 // leaves the device (spec §7.11).

@@ -152,7 +152,7 @@ Or the older manual flow (no download): `prepare-drive` (no `-WithAssets`) → d
 
 > **Build-time network ≠ runtime network.** The `fetch-*` scripts make the project's first
 > deliberate network access, but they run on the **builder's** machine at build time. The app stays
-> 100% offline by default; the in-app downloader (shipped as Phase 18 — wave-1 record §6) is
+> 100% offline by default; the in-app downloader (shipped as Phase 18 — architecture.md "In-app model downloader") is
 > triple-gated: policy ∧ default-off setting ∧ per-download confirmation, and hidden entirely on
 > commercial drives. This does not weaken the offline guarantee.
 

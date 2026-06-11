@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { stringify } from 'yaml'
 
-// Phase 19 IPC-layer tests (post-mvp-functionality-plan §7): the shallow audit wiring
+// Phase 19 IPC-layer tests (architecture.md "Audit log"): the shallow audit wiring
 // across the real IPC handlers, and above all the PRIVACY RULE — sentinel strings are
 // seeded through the wired flows as chat content, document text, a non-privacy setting
 // value, and a vault password, then every recorded `runtime_events` row is grepped to

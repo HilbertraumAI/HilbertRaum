@@ -3,7 +3,7 @@ import type { Reranker } from './index'
 import { createLlamaReranker } from './llama'
 import { resolveLlamaServerPath } from '../runtime/sidecar'
 
-// Availability-aware reranker selector (Phase 21, retrieval-plan §4/§10 D9), mirroring
+// Availability-aware reranker selector (Phase 21, rag-design §11 reranker / §12.2 D9), mirroring
 // the embedder factory — with one deliberate difference: there is NO mock fallback.
 // A real `LlamaReranker` is chosen only when BOTH the platform `llama-server` binary
 // AND the reranker GGUF are present; otherwise the selector returns NULL and retrieval

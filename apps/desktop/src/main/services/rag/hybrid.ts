@@ -1,14 +1,14 @@
 import type { Db } from '../db'
 import { buildFtsMatchQuery } from '../fts'
 
-// Hybrid keyword retrieval + rank fusion (Phase 21, retrieval-plan §5).
+// Hybrid keyword retrieval + rank fusion (Phase 21, rag-design §11 keyword index).
 //
 // The FTS5 index (`chunks_fts`, created + trigger-synced in `db.ts`) catches the exact
 // terms embeddings miss — invoice numbers, names, codes — and reciprocal-rank fusion
 // merges the keyword ranking with the cosine ranking WITHOUT mixing their incomparable
 // score scales (BM25 vs cosine): only ranks enter the fused score.
 //
-// Embedder-visibility rule (retrieval-plan §5.4): `chunks.text` is embedder-agnostic,
+// Embedder-visibility rule (rag-design §11 visibility rule): `chunks.text` is embedder-agnostic,
 // so a raw keyword path would surface documents the active embedder cannot see and
 // silently break the Phase-17 re-index honesty story. Keyword hits are therefore
 // restricted to chunks that HAVE a vector under the active embedding model — hybrid
@@ -79,7 +79,7 @@ export interface FusedCandidate {
 }
 
 /**
- * Reciprocal-rank fusion of the vector and keyword ranked lists (retrieval-plan §5.3).
+ * Reciprocal-rank fusion of the vector and keyword ranked lists (rag-design §11 keyword index (RRF)).
  * Both inputs must already be ordered best-first. Deterministic: ties break by vector
  * rank (vector-listed chunks first), then chunk id. With an empty keyword list this is
  * monotone in vector rank — i.e. exactly today's ordering (the pass-through guarantee).

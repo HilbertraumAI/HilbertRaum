@@ -383,9 +383,13 @@ an expandable snippet of the cited chunk text. The plain chat path is unchanged.
 
 ## 10. Document-scoped asking & embedder-visibility honesty (Phase 17)
 
-Plan: [`post-mvp-functionality-plan.md`](post-mvp-functionality-plan.md) §5. Adds three
-RAG-trust features on top of the Phase-6 design; the grounded path's no-hallucination
-guarantee (model never called without context) is unchanged.
+This is the Phase-17 design record (the wave-1 working paper was folded into the topic
+docs, 2026-06-12 housekeeping; full original: `git show 2a46ca3:docs/post-mvp-functionality-plan.md`).
+Adds three RAG-trust features on top of the Phase-6 design; the grounded path.'s
+no-hallucination guarantee (model never called without context) is unchanged. Decisions:
+**D1** — keep the two chat modes + the plain-chat awareness notice; unified auto-RAG chat
+was deferred and never reopened. **D2** — the scope persists as the additive nullable
+`conversations.scope_json` column (guarded `ALTER TABLE`).
 
 ### "Ask selected documents" (spec §10.4)
 
@@ -428,7 +432,7 @@ naming a file as "use only that file", so other files showing up as sources read
   `STREAM.scope` notice (`api.onScopeNotice`) and Chat shows an *"Answering from contract.pdf
   only"* toast, so a wrong guess is obvious and the user can rephrase or set scope manually.
 
-### Plain-chat document awareness (plan §5.1)
+### Plain-chat document awareness
 
 While ≥ 1 indexed document exists, plain Chat shows a dismissible per-conversation notice
 ("answers don't use your imported documents") with a one-click **Ask Documents instead**
@@ -436,7 +440,7 @@ switch — the guard against the wrong-tab hallucination found in the first real
 (BUILD_STATE §9). The mode tabs carry subtitles ("General assistant" / "Answers from your
 files, with sources"). Renderer-only; dismissals are per-conversation, in-memory.
 
-### Embedder-visibility honesty (plan §5.2)
+### Embedder-visibility honesty (the mock→E5 trap)
 
 - **Vectors are tagged with the id of the embedder that produced them.** `registerDocsIpc`
   no longer passes `settings.activeEmbeddingModelId` into ingestion — with the E5 manifest
@@ -460,12 +464,12 @@ over IPC), `tests/renderer/ChatHomeNav.test.tsx` (notice, chips, pending-scope h
 
 ## 11. Hybrid retrieval + reranker (Phase 21)
 
-Working paper / decisions D8–D15: [`retrieval-quality-plan.md`](retrieval-quality-plan.md)
+Decisions D8–D15 + the research record live in **§12** below
 (research-gated like the GPU plan: the rerank endpoint shapes were verified against the
 pinned llama.cpp b9585 SOURCE, FTS5 availability was probed in BOTH runtimes). The
 grounding guard is untouched: empty retrieval still never calls the model.
 
-### The pipeline as rebuilt (`retrieve()`, plan §3)
+### The pipeline as rebuilt (`retrieve()`)
 
 ```
 1. embed question → cosine topKInitial      (scoped: embedder id + documentIds)
@@ -484,7 +488,7 @@ pre-Phase-21 result (ordering and scores). `RetrievedChunk.score` is stage-depen
 cosine for vector candidates, RRF score for keyword-only candidates, the reranker's
 relevance logit after a rerank. Citations never persist scores (locked).
 
-### Keyword index (`chunks_fts`, plan §5)
+### Keyword index (`chunks_fts`)
 
 Self-contained FTS5 table `fts5(text, chunk_id UNINDEXED)` — NOT external-content on
 `chunks`' implicit rowid (VACUUM may renumber implicit rowids and would silently desync
@@ -501,7 +505,7 @@ never see more documents than vector search could, so an invisible corpus still 
 empty retrieval ⇒ `REINDEX_NEEDED_ANSWER` (tested, incl. a lexically-matching invisible
 corpus).
 
-### Reranker (`services/reranker/`, plan §4)
+### Reranker (`services/reranker/`)
 
 `bge-reranker-v2-m3` (Apache-2.0; F16 GGUF — q8_0 of the XLM-R family crashes b9585,
 the recorded E5 lesson) behind the `Reranker` interface. `LlamaReranker` is the third
@@ -512,7 +516,7 @@ args never reach it), lazy start on first `rerank()`, `/v1/rerank` Jina shape
 The sidecar also passes `--batch-size`/`--ubatch-size` = the context (2048): in
 `--rerank`/embedding mode llama-server forces `n_batch = n_ubatch` and defaults them to
 **512**, but a query+document rerank input runs ~670 tokens and would otherwise HTTP-500
-the whole request on real-length chunks (found by `PAID_RERANK_SMOKE`; retrieval-plan §1.1).
+the whole request on real-length chunks (found by `PAID_RERANK_SMOKE`; §12.1 R1).
 Selection is availability-driven (`createSelectedReranker` → real iff binary + GGUF,
 else **null**; no mock — null = today's ordering). Failure modes: a failed START latches
 for the session (fail-fast, no 60 s health stall per question); a failed CALL logs and
@@ -525,7 +529,7 @@ Phase-18 in-app downloader covers it. `ragMinSimilarity` keeps its meaning (cosi
 pre-rerank); its default is **measured and stays 0** — on the real drive the relevant and
 irrelevant best-chunk cosine distributions OVERLAP (E5 runs without query:/passage: prefixes
 → everything lands in a narrow ~0.87–0.94 band), so no positive floor separates them without
-dropping real hits (plan §1.3; `tests/manual/minsim-measure.test.ts`). Relevance separation
+dropping real hits (§12.1 R3; `tests/manual/minsim-measure.test.ts`). Relevance separation
 is the reranker's job, not the floor's.
 
 ### Tested behaviour (Phase 21)
@@ -539,3 +543,114 @@ retrieve() e2e with a fake reranker, both grounding-guard variants),
 real F16 GGUF + b9585: loads clean, ranks the relevant doc first (+8.82 vs −11.01), and the
 worst-case 12-candidate batch took **≈ 24.7 s** on a CPU-pinned i7-1185G7 (the §7 number;
 also the regression that surfaced the n_ubatch=512 fix above).
+
+---
+
+## 12. Phase-21 design record — research evidence, decisions, budgets
+
+_Formerly `docs/retrieval-quality-plan.md` (folded in here, 2026-06-12 docs housekeeping;
+the full working paper is in git history: `git show b8feb46:docs/retrieval-quality-plan.md`).
+The design **as built** is §11 above; this section keeps the research facts the design rests
+on, the decision table D8–D15, and the load-bearing budgets. Out of scope, unchanged:
+unified auto-RAG chat (decision D1, never reopened), deep-grounded answers, ANN (D15),
+signed update bundles (Phase 22)._
+
+### 12.1 Research findings (verified 2026-06-10)
+
+**R1 — the b9585 rerank endpoint (verified from the pinned tag's SOURCE):**
+
+- **Routes:** `POST /rerank`, `/reranking`, `/v1/rerank`, `/v1/reranking` → one handler
+  (`tools/server/server.cpp` L201–204).
+- **Flag:** `--rerank` (alias `--reranking`) sets `params.embedding = true` **and**
+  `pooling_type = LLAMA_POOLING_TYPE_RANK` (`common/arg.cpp` L2964–2971) — the one flag
+  is the whole switch; the handler refuses otherwise (`server-context.cpp` L4594–4597).
+- **Request** (`server-context.cpp` L4600–4641): `{ query: string, documents: string[],
+  top_n? }` (alias `texts` = TEI format; we use the Jina format). One internal task per
+  document.
+- **Prompting** (`server-common.cpp` L1540–1582): a GGUF-embedded `rerank` chat template
+  if present, else **`BOS query EOS SEP document EOS`** — the BERT-style default path
+  bge-reranker-v2-m3 uses (no template needed).
+- **DEVIATION found by `PAID_RERANK_SMOKE` (2026-06-10):** in `--rerank`/embedding mode
+  the server **forces `n_batch = n_ubatch`** and they default to **512** ("embeddings
+  enabled with n_batch (2048) > n_ubatch (512) … setting n_batch = n_ubatch = 512"). A
+  rerank input is query+document in ONE sequence — at the §12.3 word caps ≈ 670 real
+  tokens — so the 512 default makes the server **HTTP 500 the whole request**, which would
+  silently drop every rerank pass back to the fused order on real-length chunks. **Fix:**
+  the reranker sidecar passes `--batch-size`/`--ubatch-size` = the context (2048) so any
+  in-context input decodes in one ubatch (`services/reranker/llama.ts`; locked by
+  `reranker.test.ts`).
+- **Response** (`server-common.cpp` L1213–1258; per-task `server-task.cpp` L1867–1873):
+  `{ model, object: "list", usage, results: [{ index, relevance_score }] }` sorted by
+  score **desc**, truncated to `top_n`; results map to inputs by `index`, not order.
+  **`relevance_score` is an unbounded logit** — never a cosine (→ D12).
+
+**R2 — FTS5 in `node:sqlite` (GO):** probed 2026-06-10 in BOTH runtimes that matter —
+**Electron 37.10.3 main process** (Node 22.21.1, probed INSIDE Electron, the Phase-1
+precedent) and **system Node 24.13.0** (what vitest runs under). Both: SQLite **3.50.4**
+with `ENABLE_FTS5`; virtual table + `MATCH` + `bm25()` all work. No native dependency.
+
+**R3 — similarity floor (MEASURED 2026-06-10 → keep 0):** measured on the real `D:\` drive
+(`tests/manual/minsim-measure.test.ts`, `PAID_MINSIM_MEASURE`): a topically-diverse
+12-passage corpus, 12 RELEVANT queries (answerable) vs 12 IRRELEVANT ones (absent topics),
+embedded through the EXACT production path (real multilingual-E5, no `query:`/`passage:`
+prefix, the same `cosineSimilarity` `VectorIndex` uses). Best-chunk cosine per query:
+
+| class | min | median | mean | max |
+|---|---|---|---|---|
+| relevant (n=12) | 0.8790 | 0.9018 | 0.9033 | 0.9352 |
+| irrelevant (n=12) | 0.8658 | 0.8937 | 0.8909 | 0.9065 |
+
+The classes **OVERLAP by 0.0276** (irrelevant.max 0.9065 > relevant.min 0.8790). Because
+E5 runs WITHOUT its prefixes, every cosine compresses into a narrow ~0.87–0.94 band, so
+**no positive floor separates relevant from irrelevant without dropping real hits** (a 0.89
+floor would discard 4/12 relevant queries yet still admit most irrelevant ones — strictly
+harmful: a dropped real hit means an empty/"not in your documents" answer, the worst
+failure). **Decision: `ragMinSimilarity` stays 0** — empirically confirmed, not merely
+deferred. Relevance separation is delegated to the reranker (clean +8.82 vs −11.01, §12.3)
+and RRF, not the cosine floor. *Latent improvement (not done — it would require
+re-embedding the whole corpus): adding the E5 `query:`/`passage:` prefixes would likely
+spread the distribution and make a floor meaningful; revisit only with a prefix migration.*
+
+### 12.2 Decisions (D8–D15, continuing the wave-1 table at D8)
+
+| # | Decision | Resolution |
+|---|---|---|
+| D8 | Reranker model + license | **bge-reranker-v2-m3** (Apache-2.0 base, HF-API-verified 2026-06-10) — GGUF `gpustack/bge-reranker-v2-m3-GGUF` `bge-reranker-v2-m3-FP16.gguf` (1 159 776 896 B). **FP16, not q8_0** (the recorded b9585 XLM-R q8_0 warmup crash, BUILD_STATE §9). Qwen3-Reranker-0.6B rejected: no official GGUF (HF 401), template-path dependency, slower causal arch. Manifest `role: reranker` with `download` block + approved `license_review` |
+| D9 | Sidecar lifecycle | Third **`LlamaServer` composition** (E5 pattern): `--rerank --device none` (CPU pin), lazy start, `stop()` on will-quit / `suspend()` on lock, NO chat args. **Factory default = `null`** (not a mock) ⇒ retrieval byte-identical (graceful-fallback rule). Query-time failure ⇒ log + fused order; start failure ⇒ session latch |
+| D10 | Resource budget (8 GB) | ~1.3 GB RSS when active; lazy + opt-in-by-provisioning + CPU-pinned ⇒ 8 GB worst case ≈ 5.3 GB. NOT bundled for TINY. Latency bounded by candidate cap + word truncation (q ≤ 160, doc ≤ 320); real numbers in §12.3 |
+| D11 | Rerank placement + topKInitial | Between fusion and dedup — dedup keeps the best-by-rerank chunk per page. **`topKInitial` does NOT rise** when a reranker is active (CPU latency linear in candidates; the fused union already reaches ≤ 2×topKInitial; the settings knob remains for tuning) |
+| D12 | `minSimilarity` pre- vs post-rerank | **PRE-rerank, cosine-only** (status quo site + meaning): applied to vector hits before fusion. Rerank `relevance_score` is an unbounded logit — never compared to the floor. Keyword hits carry no cosine and bypass the floor by design. R3 measured ⇒ default stays 0 |
+| D13 | FTS index shape + sync + fusion | Self-contained `fts5(text, chunk_id UNINDEXED)` (NOT external-content on the implicit rowid — VACUUM foot-gun); 3 sync triggers; guarded additive migration + backfill (scope_json precedent). Fusion = **RRF, k = 60**, sanitized phrase-OR MATCH. **Visibility rule: keyword hits require a vector under the active embedder** — `REINDEX_NEEDED_ANSWER` semantics intact |
+| D14 | Settings surface | **Availability-driven (embedder precedent): no new `AppSettings` keys, no toggle, no UI.** Hybrid always-on (pure SQLite); reranker active iff binary + weights present; the Phase-18 downloader covers the GGUF |
+| D15 | ANN index | **NOT built** (evidence rule): sqlite-vec/HNSW are native deps against the project theme; no measured corpus outgrows the linear scan. `VectorIndex.search` stays the upgrade path |
+
+### 12.3 Resource budget (8 GB machines) + measured validation
+
+Reranker ≈ **1.3 GB RSS** when active (F16 1.08 GiB + ctx 2048); worst case alongside
+4B chat (~2.6 GB) + E5 (~0.35 GB) + Electron (~1 GB) ≈ 5.3 GB — workable because the
+reranker is lazy, CPU-pinned, and opt-in by provisioning (never bundled; manifest
+`recommended_min_ram_gb: 6`, profiles LITE/BALANCED/PRO). CPU latency bounded by the
+candidate cap (≤ 2×topKInitial) + word truncation.
+
+**Measured 2026-06-10 (`PAID_RERANK_SMOKE`, real F16 GGUF on b9585, Intel i7-1185G7,
+`--device none`, 4 threads):** the F16 GGUF LOADS clean (no q8_0 XLM-R warmup crash);
+relevance is correct (relevant invoice line **+8.82** vs irrelevant **−11.01**);
+**worst-case latency ≈ 24.7 s** for a 12-candidate batch at the full truncation budget
+(160-word query + 320-word docs, ~670 tokens/input). That worst case is ~2 s/candidate —
+significant on a CPU pin, so reranking visibly lengthens a documents query on a low-end
+laptop; the candidate cap keeps it bounded, and it stays opt-in by provisioning.
+Tightening `MAX_DOC_WORDS` / the candidate cap is the lever if the latency proves too high.
+
+**End-to-end quality validation 2026-06-10 (`PAID_RAG_QUALITY`, all three real backends on
+a 4-doc corpus — `tests/manual/rag-quality.test.ts`):** the evidence the reranker EARNS its
+cost. For "What is the cap on liability in our agreement with Acme?" the hybrid (vector+RRF)
+order put the true *Limitation of liability* clause only **#3 (cosine 0.848)** — behind two
+unrelated chunks (an invoice 0.875; an encryption clause 0.870), the exact prefix-less-E5
+compression R3 found. With the reranker ON the liability clause jumped to **#1 (logit
+−1.88)** and all four contract clauses took the top 4 with a clean gap; the grounded 4B
+answer was correct + cited ("one million United States dollars … [S1]" → the MSA). A
+keyword-exact query (`INV-2024-001`) surfaced the exact invoice chunk at #1 via FTS5. ⇒ on
+this prefix-less-E5 setup the reranker is not marginal polish — it rescued the correct
+answer from #3-behind-distractors to #1; the ~25 s worst-case cost buys real correctness.
+
+Gate at ship: typecheck clean, 601 tests, build green; phase commit `b8feb46`.

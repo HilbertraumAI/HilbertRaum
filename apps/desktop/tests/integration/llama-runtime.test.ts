@@ -174,7 +174,7 @@ describe('LlamaRuntime', () => {
   })
 })
 
-// ---- Answer-depth modes (Phase 20, plan §8 / §13 D4+D5) ---------------------------
+// ---- Answer-depth modes (Phase 20, wave-1 decisions D4+D5 — architecture.md "Chat & streaming") ---------------------------
 
 describe('answer-depth mode → request mapping (D4)', () => {
   it('maps fast / balanced / deep / omitted per the locked D4 table', () => {

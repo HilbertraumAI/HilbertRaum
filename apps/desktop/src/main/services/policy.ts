@@ -14,7 +14,7 @@ import type {
 // runs fall back to defaults) and merges them over DEFAULT_POLICY, where **update
 // checks and telemetry are off** and model downloads are policy-permitted but gated
 // behind the default-off user setting plus a per-download confirmation (Phase 18,
-// plan §13 D3). The module is pure + resilient: a missing or malformed file degrades
+// wave-1 decision D3 (architecture.md "In-app model downloader")). The module is pure + resilient: a missing or malformed file degrades
 // to safe defaults plus a warning, never a throw.
 //
 // Policy precedence (LOCKED): a (future signed) policy.json is AUTHORITATIVE — it can
@@ -25,7 +25,7 @@ import type {
 
 /**
  * Default policy. **Update checks + telemetry are off and have no user toggle.**
- * `allowModelDownloads` is true since Phase 18 (plan §13 D3, resolved (a)): with no
+ * `allowModelDownloads` is true since Phase 18 (wave-1 decision D3 (architecture.md "In-app model downloader"), resolved (a)): with no
  * policy file the spec §3.6 user Settings toggle ("Allow internet access for model
  * downloads…", default OFF) is the effective gate for the in-app downloader — the app
  * still ships offline because the SETTING defaults to off and every download needs an

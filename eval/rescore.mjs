@@ -1,4 +1,4 @@
-// Offline re-score of a completed benchmark run (model-catalog-expansion-plan §5.3).
+// Offline re-score of a completed benchmark run (model-benchmarks.md §2).
 //
 //   node eval/rescore.mjs
 //

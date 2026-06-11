@@ -16,7 +16,7 @@ import { LlamaServer, type LlamaServerOptions } from './sidecar'
 // prompt format. Fully offline: the only socket is loopback to the sidecar.
 
 /**
- * Args every CHAT sidecar gets (Phase 20, plan §13 D5 — verified against the pinned
+ * Args every CHAT sidecar gets (Phase 20, wave-1 decision D5 (architecture.md "Chat & streaming") — verified against the pinned
  * llama.cpp b9585 source):
  *   --jinja                      the kwargs-driven thinking switch only acts in the
  *                                jinja template path (b9585 default is already jinja;
@@ -48,7 +48,7 @@ export type LlamaRuntimeDeps = Pick<
 }
 
 /**
- * What an answer-depth mode means for the chat request (plan §13 D4, LOCKED at
+ * What an answer-depth mode means for the chat request (wave-1 decision D4 (architecture.md "Chat & streaming"), LOCKED at
  * Phase 20 start):
  *
  *   fast      thinking off + temperature 0.7 + a modest token cap — quick answers

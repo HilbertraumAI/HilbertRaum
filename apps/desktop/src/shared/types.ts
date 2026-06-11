@@ -320,7 +320,7 @@ export interface ModelDownloadInfo {
   licenseApproved: boolean
 }
 
-// ---- In-app model downloader (Phase 18, post-mvp-functionality-plan §6) ----
+// ---- In-app model downloader (Phase 18, architecture.md "In-app model downloader") ----
 
 export type DownloadJobStatus =
   | 'queued'
@@ -665,7 +665,7 @@ export interface BenchmarkResult {
   ranAt: string
 }
 
-// ---- Audit log (Phase 19, post-mvp-functionality-plan §7) ----
+// ---- Audit log (Phase 19, architecture.md "Audit log") ----
 /**
  * What the app records to the `runtime_events` audit log — FOR THE USER, local only
  * (spec §7.11): the log lives in the workspace DB (encrypted at rest on encrypted

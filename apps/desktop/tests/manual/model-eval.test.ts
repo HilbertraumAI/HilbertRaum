@@ -22,7 +22,7 @@ import {
   type ItemScore
 } from '../eval/score'
 
-// MANUAL Phase-29 quality benchmark (model-catalog-expansion-plan §5.3 / D19) — NOT CI.
+// MANUAL Phase-29 quality benchmark (model-benchmarks.md §2 / D19) — NOT CI.
 //
 // Runs the hand-authored German/English grounded-QA set (eval/rag_de_en.jsonl, ~15%
 // unanswerable) through the app's REAL RAG path — the SAME embedder + reranker + grounding

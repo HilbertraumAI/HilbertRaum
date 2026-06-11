@@ -126,8 +126,19 @@ the whole DB file is encrypted at rest.
   every chat sidecar is spawned with `--jinja --reasoning-format deepseek`
   (`CHAT_SERVER_ARGS`) so the kwarg acts and reasoning streams as separate
   `delta.reasoning_content` frames. `stripThinkBlocks` (services/chat.ts) scrubs any inline
-  `<think>` block from persisted replies AND from assistant turns replayed as history (D6).
-  Document answers (`rag/`) never pass a mode — grounded answers always run balanced.
+  `<think>` block from persisted replies AND from assistant turns replayed as history (D6 —
+  the collapsed "Thinking…" block is a live-stream affordance only; an all-think aborted
+  reply persists nothing). Document answers (`rag/`) never pass a mode — grounded answers
+  always run balanced. **Research note that shaped D4/D5:** at b9585 `--reasoning auto`
+  (the server default) turns thinking ON for every capable template — the bundled Qwen3
+  models were ALREADY thinking on every reply while the app silently dropped those deltas
+  (pure latency cost), so `enable_thinking` is ALWAYS sent explicitly; balanced/omitted =
+  `false`. The Qwen3 `/think`·`/no_think` soft switches were rejected (they leak into
+  transcripts). D4's fast/deep values come from Qwen3's model-card sampling guidance
+  (re-tune when the release hardware matrix lands); explicit `RuntimeChatOptions.maxTokens`/
+  `temperature` always win over mode-derived values. Deep is offered only when the RUNNING
+  model's manifest sets `supports_thinking_mode` (via `RuntimeStatus` — the Chat screen
+  already polls it; see `model-policy.md`).
 - **Cancellation.** Each in-flight send holds an `AbortController` in a per-conversation map in
   `ipc/registerChatIpc.ts`; `stopGeneration(conversationId)` aborts it. The runtime's
   `chatStream` honours `options.signal` and stops emitting; whatever streamed so far is persisted
@@ -631,18 +642,55 @@ Canonical, unit-tested TS modules that the self-contained `scripts/*.{ps1,sh}` m
 - Drive detection without the launcher: `workspace.ts findPreparedDriveRoot` walks up from the app's
   own location (`PORTABLE_EXECUTABLE_DIR` / exe path) to the `config/drive.json` marker (audit M16).
 
+## In-app model downloader (Phase 18)
+
+The app's first sanctioned network feature — explicit, verified, impossible to trigger
+silently; its absence changes nothing (the app stays 100 % usable offline). **Triple gate,
+all enforced in MAIN and re-checked per call:**
+
+1. `policy.network.allowModelDownloads` — the authoritative ceiling (**wave-1 decision D3**:
+   `DEFAULT_POLICY` allows it so the spec §3.6 user toggle is the sole gate when no policy
+   file restricts — "policy only restricts" preserved; `prepare-drive` writes deny in BOTH
+   postures, so prepared drives stay download-disabled unless the builder edits
+   `config/policy.json`).
+2. `settings.allowNetwork` — the spec §3.6 checkbox, default off; a locked workspace reads
+   as off.
+3. A per-download confirmation: model name, size, license + `license_url`, upstream URL, and
+   an explicit license acknowledgement when `license_review.status != approved` (the in-app
+   `--accept-license`). The renderer dialog is UX; enforcement is main-side. When gate 1
+   or 2 fails the AI Model screen says *why* (policy vs Settings toggle), reusing the
+   `PolicyStatus` distinction.
+
+**Mechanics:** `services/downloads.ts` `DownloadManager` — a job state machine over the
+REUSED `assets.ts` seams (`planModelDownloads` + optional `hashStore`; `downloadToFile`,
+extended additively with `signal`/`headers`/`append`/`onResponse`; `verifyDownloadedFile`).
+Bytes land in `<weightPath>.part`, renamed into place ONLY after the hash verifies; a
+mismatch deletes the partial and fails the job; a placeholder expected hash completes
+`unverified` (checksum honesty). Cancel keeps the `.part`; the next start resumes via a
+`Range` header (append iff the server answered 206). One download at a time; jobs are
+in-memory, polled over `downloads:start/get/cancel` (the Phase-4 import precedent — no new
+event channels). On success the checksum-cache entry is invalidated. Audit events
+(`model_download_started/verified/failed`) flow through the injected
+`DownloadManagerDeps.audit` hook; a placeholder-hash completion records NO "verified".
+No update checks, no catalog (only manifests already on the drive), no background anything;
+a sanctioned download session is by definition not `offlineMode`. Gate semantics +
+licensing: `model-policy.md` §"The in-app downloader"; user-facing posture: `PRIVACY.md`.
+
 ## Diagnostics & transcript export (audit round)
 - `getRuntimeStatus` (read-only runtime health), `getLogTail` (tail of the local `app.log`), and
   `exportConversation` (spec §7.6 transcript export via the OS save dialog) round out spec §7.11/§7.6.
 - A never-benchmarked workspace is benchmarked **automatically in the background** after it becomes
   usable (spec §2.1 first-run benchmark; `maybeRunFirstBenchmark`).
 
-## Audit log (Phase 19, plan §7)
+## Audit log (Phase 19)
 
 `services/audit.ts` finally writes the spec §8 `runtime_events` table (created in Phase 1,
 unwritten until now): `recordEvent(db, type, message, metadata?)` (NEVER throws), a typed
 `AuditEventType` union (`shared/types.ts`), `listAuditEvents` (newest-first, `beforeId`
-cursor), and prune-on-insert retention to `AUDIT_MAX_ROWS = 5000`. The app-wide recorder
+cursor), and prune-on-insert retention to `AUDIT_MAX_ROWS = 5000` (**wave-1 decision D7** —
+fixed for wave 1; configurability is Office-edition admin surface). **For the user, not
+telemetry**: it lives in the workspace DB (encrypted at rest on encrypted workspaces) and
+is never uploaded. The app-wide recorder
 (`createAuditRecorder` → `AppContext.audit`, optional so partial test contexts stay valid) is
 built over the workspace DB *getter* — while the vault is locked it buffers events in memory
 (bounded) and flushes them after the next unlock.
