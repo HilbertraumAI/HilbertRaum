@@ -1,322 +1,183 @@
-# Model Catalog Expansion & Benchmarking — plan (Phases 28–30)
+# Model Catalog Expansion & Benchmarking — design record (Phases 28–29) + Phase 30 outline
 
-_Status: **WORKING PAPER — Phase 28 manifests landed 2026-06-10; hashes promoted + all weights
-verified on a Windows `D:\` drive 2026-06-10; §4.3 chat/RAG bring-up smokes still pending (see
-§4.6); **Phase 29 tooling + eval data landed 2026-06-10 (scorer + harness + protocol +
-`eval/*.jsonl`, see §5.6) — the multi-machine RUNS + promotions are pending**; Phase 30 not
-started.** Created 2026-06-10 from an external model-candidate
-research report (Claude web research, verified spot-checks below) + the planning discussion in
-session. Per the CLAUDE.md doc lifecycle rule this plan gets condensed into a design record (or
-folded into [`model-policy.md`](model-policy.md) / a new `docs/model-benchmarks.md`) once
-implemented. Decision numbering continues the repo series: post-MVP plan D1–D7, retrieval plan
-D8–D15 → **this plan D16–D22**. Phase numbers 28–30 are the next free numbers after the UI wave
-(Phases 23–27); Phase 22 (signed update bundles) keeps its number and stays independent._
+_Status: **DESIGN RECORD. Phase 28 (catalog wave 1) and Phase 29 (benchmark protocol + first
+comparison run) are DONE (2026-06-10/11). Phase 30 (opt-in big slot + embeddings) is OUTLINE
+ONLY — not started.** This was a working paper, condensed per the CLAUDE.md doc lifecycle rule
+once 28–29 shipped; the full original (protocol drafts, bring-up checklists, the pre-measurement
+RAM estimates) is in git history (`git show <pre-condense-hash>:docs/model-catalog-expansion-plan.md`).
+Durable detail now lives in the topic docs: the benchmark protocol + first-run results in
+[`docs/model-benchmarks.md`](model-benchmarks.md); the catalog + recommendation in
+[`docs/model-policy.md`](model-policy.md). Decision numbering continues the repo series (post-MVP
+D1–D7, retrieval D8–D15 → **D16–D22** here)._
 
 ---
 
-## 1. Summary (the decisions, in one screen)
+## 1. Decisions (D16–D22)
 
 | # | Decision | Choice | Why (short) |
 |---|---|---|---|
 | D16 | First challenger batch | **Ministral 3 8B Instruct 2512** + **Granite 4.1 8B** (mid tier) + **Gemma 4 12B QAT** (high tier) | All Apache-2.0, all with *vendor-published* GGUFs, all strong German — 2–3 challengers per tier without 200 GB of downloads |
-| D17 | Challenger auto-recommendation | New manifests ship with **empty `recommended_profiles`** (selectable, never auto-recommended) | Same pattern as the 30B MoE: a challenger must EARN promotion via the Phase-29 benchmark before the recommender offers it |
-| D18 | Incumbent refresh | Evaluate **Qwen3-4B-Instruct-2507** as a 4th Phase-28 manifest (probably also 30B-A3B-2507) | Report data: the 2507 4B beats the *original* 8B on most axes — possibly the cheapest quality win in the whole plan. ⚠️ 2507 is instruct-only (no hybrid thinking) — interacts with Phase-20 depth modes, see §4.4 |
-| D19 | Quality benchmark = judge-free, ours | Hand-rolled **German/English grounded-QA set** (`eval/rag_de_en.jsonl`, ~50–100 items) + deterministic string/F1/citation/abstain scoring; `llama-bench` for speed | No cloud judge (hard rule); tests exactly what the product does (RAG + citations + abstention); no new toolchain (lm-eval-harness needs Python, not installed — optional appendix only) |
-| D20 | Benchmark form | **Manual protocol doc first** (`docs/model-benchmarks.md` + a results CSV convention); a `scripts/benchmark-models.*` automation only if the manual loop proves annoying | One developer, 2–3 laptops; don't build automation before the protocol has run once |
-| D21 | Big/opt-in slot + embeddings | **Phase 30, outline only** — Gemma 4 26B-A4B vs the incumbent Qwen3 30B-A3B; Granite Embedding R2 small as the only near-drop-in embedder | MoE comparisons need Phase-29 numbers first; embedder swap forces a reindex story — separate, later |
-| D22 | License gate posture | Every new manifest lands with a **real `license_review` record** (approved, with source URLs) before merge; in-app download of non-approved stays behind the Phase-18 acknowledgment checkbox | Licensing is the #1 disqualifier; the review work is cheap now (all picks verified Apache-2.0) and mandatory before any drive bundles them |
-| — | New npm deps / code changes | **None expected for Phase 28** (manifest-only); Phase 29 adds eval data + docs (+ maybe scripts); Phase 30 TBD | Adding a chat model is manifest-only by design (model-policy) |
+| D17 | Challenger auto-recommendation | New manifests ship with **empty `recommended_profiles`** (selectable, never auto-recommended) until they earn it | A challenger must EARN promotion via the Phase-29 benchmark before the recommender offers it |
+| D18 | Incumbent refresh | Evaluate **Qwen3-4B-Instruct-2507** as a 4th Phase-28 manifest | Report data: the 2507 4B beats the *original* 8B on most axes. ⚠️ 2507 is instruct-only (no hybrid thinking) — interacts with Phase-20 depth modes |
+| D19 | Quality benchmark = judge-free, ours | Hand-rolled **German/English grounded-QA set** + deterministic string/F1/citation/abstain scoring; `llama-bench` for speed | No cloud judge (hard rule); tests exactly what the product does (RAG + citations + abstention); no new toolchain |
+| D20 | Benchmark form | **Manual protocol doc first** (`docs/model-benchmarks.md` + a results CSV convention); automate only if the manual loop proves annoying | One developer, 2–3 laptops; don't build automation before the protocol has run once |
+| D21 | Big/opt-in slot + embeddings | **Phase 30, outline only** — Gemma 4 26B-A4B vs the incumbent Qwen3 30B-A3B; Granite Embedding R2 small as the only near-drop-in embedder | MoE comparisons need Phase-29 numbers first; an embedder swap forces a reindex story — separate, later |
+| D22 | License gate posture | Every new manifest lands with a **real `license_review` record** (approved, with source URLs) before merge | Licensing is the #1 disqualifier; the review work is cheap now (all picks verified Apache-2.0) and mandatory before any drive bundles them |
+
+**Outcomes (as built):** D16 — all three challengers shipped + license-reviewed. **D17 evolved**:
+the challengers kept `recommended_profiles: []`, but Phase 29 found the production recommender was
+*quality-blind* (RAM-best-fit, ignores `recommended_profiles`; the legacy picker is one-model-per-
+profile), so promotion is now carried by a new **`recommendation_rank`** manifest field that makes
+RAM-best-fit quality-aware (§5). **D18 resolved**: 2507 shipped (via the unsloth fallback) and beat
+the original 4B on *every* Phase-29 metric, but the original stays the **bundled default** (it has
+hybrid thinking → keeps Deep working out of the box); 2507 is ranked just below it. D19/D20 — the
+judge-free harness + protocol shipped and ran. D21 — Phase 30 still outline. D22 — all four
+`license_review`s approved Apache-2.0.
 
 **Disqualified (do not revisit without new facts):** EXAONE 4.x (NC license), Ministral
 8B-Instruct-**2410** (Mistral Research License, non-commercial — the `-2512` name-twin trap),
-Phi-4 (MIT but explicitly not multilingual → fails the German requirement), Mistral Large 3
-(Apache but 675B — over every RAM ceiling). **Parked, not disqualified:** Llama 3.x (community
-license workable but encumbered vs. all-Apache alternatives), GLM-4 (MIT, German quality
-unproven — a fine Phase-29 extra if curiosity strikes), Gemma 3 (custom Gemma Terms —
-superseded by Apache-2.0 Gemma 4, which our b9585 runtime supports).
+Phi-4 (MIT but not multilingual → fails German), Mistral Large 3 (Apache but 675B). **Parked:**
+Llama 3.x (community license, encumbered vs all-Apache alternatives), GLM-4 (MIT, German unproven),
+Gemma 3 (custom Gemma Terms — superseded by Apache-2.0 Gemma 4).
 
 ## 2. Hard rules (these bound every choice)
 
 - **No model weights in git; manifests are the catalog.** Adding a model = one YAML in
   `model-manifests/chat/` with a `download` block + `license_review` (model-policy).
-- **Verify-before-trust:** hashes start as `REPLACE_WITH_REAL_HASH`, get promoted via
-  `verify-models --generate` after the first real fetch — same flow as the Qwen manifests.
+- **Verify-before-trust:** hashes start as `REPLACE_WITH_REAL_HASH`, promoted via
+  `verify-models --generate` after the first real fetch.
 - **License gate:** nothing bundles on a sold drive without `license_review.status: approved`;
-  the review must record license, commercial-use, redistribution, attribution, and
-  **quantization provenance** (vendor GGUF vs third-party requant).
+  the review records license, commercial-use, redistribution, attribution, and **quantization
+  provenance** (vendor GGUF vs third-party requant).
 - **Offline forever:** all fetching is the drive-builder's machine or the triple-gated Phase-18
-  in-app downloader. The benchmark protocol must run with Wi-Fi off (pre-download eval data).
+  in-app downloader. The benchmark runs with Wi-Fi off (eval data pre-committed).
 - **No cloud judge, no telemetry:** quality scoring is deterministic local string math; results
-  stay local (committing summary CSVs to `eval/results/` is fine — they contain no user data).
-- **Friendly copy (spec §11.4)** if any of this surfaces in UI (it mostly doesn't — challengers
-  appear on the Models screen exactly like today's non-recommended models).
+  stay local (summary CSVs in `eval/results/` are fine — no user data).
 
-## 3. Verified research facts (2026-06-10 — what the plan rests on)
+## 3. Verified research facts (2026-06-10 — what the plan rested on; all confirmed live on b9585)
 
-1. **Our pinned llama.cpp `b9585` is the 2026-06-09 release** (confirmed from
-   `model-manifests/runtime-sources.yaml` + the GitHub tag) — NOT a late-2025 build. Therefore
-   every candidate below runs on the runtime we already ship, **including Gemma 4** (needs
-   ~b8607, April 2026). No runtime bump required for any phase of this plan.
-2. **Gemma 4 is Apache-2.0** — first Gemma generation under an OSI license (Gemma 3 and earlier
-   keep the custom Gemma Terms). Verified: Google blog
-   (<https://blog.google/innovation-and-ai/technology/developers-tools/gemma-4/>), Google Open
-   Source Blog (<https://opensource.googleblog.com/2026/03/gemma-4-expanding-the-gemmaverse-with-apache-20.html>).
-   Official Google GGUF (QAT Q4_0): <https://huggingface.co/google/gemma-4-12B-it-qat-q4_0-gguf>.
-3. **The entire Mistral 3 / Ministral 3 (2512) family is Apache-2.0** — verified on the official
-   model card (<https://huggingface.co/mistralai/Ministral-3-8B-Instruct-2512>) and
-   <https://mistral.ai/news/mistral-3/>. **Mistral publishes an official GGUF repo**
-   (<https://huggingface.co/mistralai/Ministral-3-8B-Instruct-2512-GGUF>) — use it, not a
-   third-party requant. ⚠️ The Oct-2024 `Ministral-8B-Instruct-2410` is **non-commercial**
-   (Mistral Research License); the manifest pins the exact `-2512` URL so the trap is structural,
-   but the license review must name it.
-4. **Granite 4.1 is Apache-2.0 with official IBM GGUFs.** Repo naming gotcha: the instruct
-   variant lives at <https://huggingface.co/ibm-granite/granite-4.1-8b-GGUF> (NO `-instruct`
-   suffix — `granite-4.1-8b` *is* the instruct-tuned model). German is one of 12 officially
-   supported languages. Dense decoder → trivially compatible with b9585.
-5. **Our incumbents are the ORIGINAL Qwen3 instruct models** (hybrid thinking,
-   `Qwen/Qwen3-*-GGUF`), not the 2507 refresh. Report benchmark table (Qwen3-VL tech report,
-   <https://arxiv.org/pdf/2511.21631>): 4B-Instruct-**2507** scores MMLU-Pro 69.6 / IFEval 83.4 /
-   MMLU-ProX 61.6 vs the original 4B's 58.0 / 81.2 / 49.6 — i.e. above the *original 8B*. Basis
-   for D18.
-6. **`--jinja` is already in `CHAT_SERVER_ARGS`** (`runtime/llama.ts`, Phase 20) — the server
-   applies each GGUF's embedded chat template; we never hand-roll prompt formats. New-model
-   bring-up therefore only needs a smoke check that the template renders (no code change
-   expected). `--reasoning-format deepseek` is a no-op for non-thinking models.
-7. **Candidate quality/speed expectations** (report; to be replaced by OUR Phase-29 numbers):
-   Ministral 3 8B ≈ Qwen3 8B class, 256k ctx, multimodal-ignored; Granite 4.1 8B ≈ same class,
-   128k ctx, strongest license/provenance story; Gemma 4 12B ≈ Qwen3 14B class, 140+ languages,
-   QAT Q4_0 (higher quality than naive Q4 at similar size); Mistral Small 3.2 24B (Apache,
-   ~14 GB) is the dense quality ceiling but CPU-slow → Phase-30 candidate, not wave 1.
-8. **Embeddings:** our pipeline is built around the E5-small manifest's **384 dims**; switching
-   embedders forces a reindex (the Phase-17 vector-tag rule keeps spaces from mixing meanwhile).
-   **Granite Embedding R2 small (~97M, 384 dims, Apache-2.0)** is the only near-drop-in
-   candidate; BGE-M3 / Qwen3-Embedding-0.6B are 1024-dim (Qwen3 truncatable to 384 via MRL) —
-   all Phase-30 material.
-
-The full candidate report (incl. the disqualification table, per-model dossiers, and the source
-list) is an external working artifact; this plan embeds everything load-bearing.
+1. **Pinned llama.cpp `b9585` = the 2026-06-09 release** — every candidate (incl. Gemma 4, which
+   needs ~b8607) runs on the runtime we already ship. No runtime bump. (Confirmed live in bring-up.)
+2. **Gemma 4 is Apache-2.0** — first Gemma under an OSI license. Official Google QAT Q4_0 GGUF:
+   <https://huggingface.co/google/gemma-4-12B-it-qat-q4_0-gguf>.
+3. **Ministral 3 (2512) family is Apache-2.0**, official Mistral GGUF repo
+   (<https://huggingface.co/mistralai/Ministral-3-8B-Instruct-2512-GGUF>). ⚠️ The Oct-2024
+   `Ministral-8B-Instruct-2410` is **non-commercial** (Mistral Research License) — the manifest
+   pins the exact `-2512` URL; the review names the trap.
+4. **Granite 4.1 is Apache-2.0** with official IBM GGUFs at
+   <https://huggingface.co/ibm-granite/granite-4.1-8b-GGUF> (NO `-instruct` suffix — that repo IS
+   the instruct model). German is one of 12 official languages.
+5. **Incumbents are the ORIGINAL Qwen3 instruct models** (hybrid thinking), not the 2507 refresh.
+   Report table basis for D18: 2507-4B scores above the *original 8B* on MMLU-Pro/IFEval/MMLU-ProX.
+6. **`--jinja` is already in `CHAT_SERVER_ARGS`** — the server applies each GGUF's embedded chat
+   template; new-model bring-up only needs a render smoke. `--reasoning-format deepseek` is a no-op
+   for non-thinking models.
+7. **Embeddings:** the pipeline is built around E5-small's **384 dims**; switching embedders forces
+   a reindex. **Granite Embedding R2 small (384-dim, Apache-2.0)** is the only near-drop-in
+   candidate — Phase-30 material (BGE-M3 / Qwen3-Embedding are 1024-dim).
 
 ---
 
-## 4. Phase 28 — catalog wave 1 (manifest-only)
+## 4. Phase 28 — catalog wave 1 (as built, manifest-only)
 
-**Goal:** three Apache-2.0 challengers (+ optionally the 2507 incumbent refresh) installable
-through every existing path — fetch scripts, in-app downloader, Models screen — with real
-license reviews, real hashes, and a per-model bring-up smoke. **No code changes expected.**
+Four manifests under `model-manifests/chat/`, all Apache-2.0, all `license_review: approved`,
+**no code changes** — the existing validator + committed-manifests discovery test cover them:
 
-### 4.1 New manifests
+| id | source GGUF | notes |
+|---|---|---|
+| `ministral3-8b-instruct-2512-q4` | official `mistralai/…-2512-GGUF` Q4_K_M | text-only (mmproj vision file deliberately not referenced); review names the `-2410` NC trap |
+| `granite-4.1-8b-q4` | official `ibm-granite/granite-4.1-8b-GGUF` Q4_K_M | repo name has no `-instruct` |
+| `gemma4-12b-it-qat-q4` | official `google/gemma-4-12B-it-qat-q4_0-gguf` | vendor QAT **Q4_0**; file name lower-case `gemma-4-12b-…` |
+| `qwen3-4b-instruct-2507-q4` (D18) | **unsloth** `Qwen3-4B-Instruct-2507-GGUF` Q4_K_M | the Qwen org publishes NO official 2507 GGUF → established-quantizer fallback; recorded as third-party requant in the review |
 
-Create under `model-manifests/chat/` (fields per model-policy; sizes/byte counts pulled from the
-HF repo file listings at authoring time, hashes promoted after first fetch):
+Provenance notes that survived to the manifests: vendor GGUF repos declare apache-2.0 via the HF
+card tag only, so their `license_url` points at the canonical Apache-2.0 text (card URLs in the
+review notes); only the Qwen 2507 base repo ships a LICENSE blob. Exact HF-tree byte sizes are
+baked into `download.size_bytes`. Weights fetched + real `sha256` promoted; `verify-models -Target
+D:\` reports **all 10 catalog weights VERIFIED**.
 
-| Manifest id (proposed) | Source (download.url repo) | ~Q4 size | min/rec RAM | Notes |
-|---|---|---|---|---|
-| `ministral3-8b-instruct-2512-q4` | `mistralai/Ministral-3-8B-Instruct-2512-GGUF`, Q4_K_M file | ~5 GB | 16 / 16 | Vendor GGUF; pin the `-2512` URL; text-only use (ignore any mmproj vision file — do NOT list it in the manifest) |
-| `granite-4.1-8b-q4` | `ibm-granite/granite-4.1-8b-GGUF`, Q4_K_M file | ~5 GB | 16 / 16 | Vendor GGUF; repo name has no `-instruct` (it IS instruct) |
-| `gemma4-12b-it-qat-q4` | `google/gemma-4-12B-it-qat-q4_0-gguf` | ~7–8 GB | 16 / 32 | Vendor QAT **Q4_0** (not Q4_K_M — that's fine, `format: gguf` is what the validator checks); mirror Qwen3-14B's RAM numbers, confirm against §5.2 memory runs |
-
-Shared field choices: `runtime: llama_cpp`, `format: gguf`, `license: apache-2.0`,
-`supports_thinking_mode: false` (none has Qwen-style hybrid thinking — Phase-20 depth modes
-degrade gracefully: Deep simply behaves like Balanced), `bundled_on_preconfigured_drive: false`,
-**`recommended_profiles: []`** (D17), `sha256: REPLACE_WITH_REAL_HASH` until first fetch.
-
-### 4.2 License reviews (D22 — done at authoring time, not download time)
-
-Each manifest's `license_review` lands as `approved` with notes recording: license verified
-Apache-2.0 (URL from §3), redistribution permitted, attribution = ship LICENSE/NOTICE
-(`download.license_url`), **quantization published by the model vendor itself** (all three picks
-— that's why they were picked). The Ministral review additionally names the `-2410`
-non-commercial trap. Format precedent: `qwen3-4b-instruct-q4.yaml`.
-
-### 4.3 Bring-up checklist (per model, on the dev box or `D:\` test drive)
-
-1. Fetch via `scripts/fetch-models` (or the in-app downloader — exercises Phase 18 on a real
-   new manifest); `verify-models --generate` → promote the real `sha256`.
-2. Model appears `installed` on the Models screen; RAM badge sane; select + start.
-3. Chat smoke: template renders correctly through `--jinja` (no leaked role tokens / template
-   artifacts in output), streaming + stop work, **German prompt answered in German**.
-4. RAG smoke: grounded answer with citations on the standard test corpus; abstention on an
-   unanswerable question (the `NO_DOCUMENT_CONTEXT_ANSWER` path is model-independent, but the
-   citation-following behavior is not).
-5. Depth-mode sanity: Fast/Balanced/Deep all produce answers (no thinking expected).
-6. Note any quirk in the manifest comment block (the Qwen manifests' style).
-
-### 4.4 D18 — the Qwen3 2507 incumbent refresh (decide during the phase)
-
-Add `qwen3-4b-instruct-2507-q4` as a **fourth challenger manifest** (same empty
-`recommended_profiles`) rather than touching the existing default's manifest. The original 4B
-stays the default until Phase-29 numbers exist. Interaction to check before promoting 2507 to
-default: it has **no hybrid thinking** (`supports_thinking_mode: false`) — promoting it would
-make Deep mode a no-op on the default model, which is a product decision, not a bug
-(record the outcome here). If the 2507 GGUF repo isn't vendor-published, fall back to the
-established-quantizer rule and say so in the review.
-
-### 4.5 Done when
-
-Tests green (no code changed → suite proves manifests validate), the 3–4 new models install +
-pass §4.3 on at least one machine, `docs/model-policy.md`'s catalog table gains the challengers
-(marked "challenger — not auto-recommended"), README catalog updated, BUILD_STATE updated.
-
-### 4.6 As-implemented deviations (manifest authoring, 2026-06-10)
-
-1. **D18 executed — the 2507 manifest exists, via the fallback:** the Qwen org publishes **no
-   official GGUF** for `Qwen3-4B-Instruct-2507` (HF API checked 2026-06-10), so per §4.4 the
-   manifest pins the established quantizer **unsloth**
-   (`unsloth/Qwen3-4B-Instruct-2507-GGUF`, Q4_K_M — card tag apache-2.0, the most-downloaded
-   2507 GGUF source). Recorded as third-party-requant provenance in its license review.
-2. **`license_url` deviation:** only the Qwen 2507 *base* repo publishes a LICENSE blob (used as
-   that manifest's `license_url`). The three vendor GGUF repos (mistralai / ibm-granite /
-   google) declare apache-2.0 via the HF card tag only — their `license_url` points at the
-   canonical Apache-2.0 text (<https://www.apache.org/licenses/LICENSE-2.0>) with the card URLs
-   recorded in the `license_review.notes`.
-3. **Exact byte sizes** from the HF tree API were baked into `download.size_bytes` instead of
-   the round estimates the existing manifests use: Ministral 5 198 911 904 · Granite
-   5 347 914 400 · Gemma 6 975 877 728 · Qwen-2507 2 497 281 120. Gemma's *file* name is
-   lower-case (`gemma-4-12b-it-qat-q4_0.gguf`) while the repo id keeps `12B`.
-4. **Context tokens** (unspecified in §4.1): Ministral/Granite/Gemma mirror the 8B/14B
-   convention (`recommended_context_tokens: 8192`); the 2507 mirrors the original 4B (4096).
-5. **No validator-level changes were needed** — all four manifests pass `validateManifest`
-   as-is; the suite's committed-manifests discovery test covers them (669/669 green).
-6. **Hashes promoted + drive re-synced (2026-06-10, after the first fetch):** all four
-   challenger weights were fetched to a Windows `D:\` drive; the real `sha256` (top-level +
-   `download.sha256`) were promoted into the four manifests and the drive's stale
-   `model-manifests/` was mirrored from the repo (it predated the challengers + used the old
-   flat layout). `verify-models -Target D:\` then reports **all 10 catalog weights VERIFIED**
-   (8 chat + e5 + reranker). Hashes: ministral `33e7a72c…`, granite `ed902ac9…`, gemma4
-   `faff1a63…`, qwen3-2507 `3605803b…`.
-7. **§4.3 chat + depth bring-up PASSED on the dev box (2026-06-10), via a new manual harness**
-   `apps/desktop/tests/manual/bringup-smoke.test.ts` (gated on `PAID_BRINGUP_SMOKE`, same
-   pattern as the thinking/rerank/gpu smokes). Against the real pinned b9585 (Vulkan) all four
-   challengers: load + `/health` ready (chat template renders through `--jinja` — no runtime
-   bump, the §3.1 claim confirmed live), stream tokens, answer the German test prompt **in
-   German** with no chat-template artifacts leaking. Quality note (for Phase 29, not a blocker):
-   Ministral / Granite / Gemma answered "Wien … Donau" correctly; **Qwen3-4B-2507 was factually
-   wobbly** (waffled on the river) though fluent German. **FINDING — Gemma 4 has a working
-   thinking mode:** unlike the other three (which ignore `enable_thinking` → zero reasoning),
-   Gemma 4's template honours it and Deep streamed ~950 chars of `reasoning_content` before
-   answering. `supports_thinking_mode` stays **false** for now (composer keeps "Thorough" gated
-   off) — flipping it is a Phase-29 decision; recorded in the Gemma manifest comment + §4.1.
-   **Still pending to CLOSE Phase 28:** §4.3 steps 1–2 (Models-screen install/RAM/select+start)
-   and step 4 (RAG grounded-answer + citations + abstention) — both need the GUI/retrieval path,
-   exercised by running the app against the drive (in progress).
+**Bring-up** (`tests/manual/bringup-smoke.test.ts`, real b9585): all four load, render the chat
+template through `--jinja` with no leaked artifacts, stream tokens, and answer the German prompt in
+German. Two findings were carried into Phase 29 and **resolved there**: (a) 2507 looked factually
+wobbly in German on *open* knowledge — it did **not** recur on the grounded RAG path (2507 has the
+top German F1 in the benchmark); (b) Gemma 4 honours `enable_thinking` — its
+`supports_thinking_mode` was flipped **true** after the Phase-29 thinking-quality check. Catalog
+table + recommendation story: [`model-policy.md`](model-policy.md).
 
 ---
 
-## 5. Phase 29 — benchmark protocol + first comparison run
+## 5. Phase 29 — benchmark protocol + first comparison run (as built)
 
-**Goal:** one developer can rank every catalog model on a given laptop in ~a day, fully offline,
-with numbers comparable across machines and re-runs. Output = `docs/model-benchmarks.md`
-(protocol) + `eval/` (data + results) + a promotion/demotion decision for the catalog.
+**Protocol = [`docs/model-benchmarks.md`](model-benchmarks.md)** (offline, judge-free): Part A
+quality harness, Part B `llama-bench` speed, Part C peak-RSS memory, the combined CSV schema, the
+§5.4 decision rule, and **§6 the first-run findings + the decisions applied**. Tooling, all
+committed:
 
-### 5.1 Speed — `llama-bench` (ships in the b9585 archives we already fetch — verify on first run)
+- **Scorer** `apps/desktop/tests/eval/score.ts` (+ `text.mjs`, 28 CI tests): German-aware
+  normalization (umlauts/ß kept), containment-EM + token-F1, citation/grounding, a DE/EN
+  refusal-phrase abstention heuristic, DE-vs-EN split aggregates.
+- **Harness** `tests/manual/model-eval.test.ts` — the **real RAG path** (E5 + reranker + grounding
+  template), retrieval embedded once so cross-model deltas isolate the chat model; `temperature 0`.
+- **Eval set** `eval/{corpus,rag}_de_en.jsonl` (built + self-validated by `eval/build.mjs`): **100
+  items, 60 DE / 40 EN, 40 parallel DE/EN pairs + 20 German-only, 15 unanswerable**; office +
+  civic/everyday corpus with deliberate distractors.
+- **Speed/RAM** `scripts/benchmark-speed.ps1` (loop) + `scripts/measure-peak-rss.ps1`;
+  `eval/rescore.mjs` (re-score dumps after a detector change) + `eval/combine.mjs` (join QA+speed).
 
-Per model × laptop × backend (CPU; Vulkan where shipped): `llama-bench -m <gguf> -p 512,2048,8192
--n 128 -t <physical cores> -r 3 -o csv`, with `-ngl 0` (CPU) vs full offload. Record **pp t/s**
-per context size + **tg t/s**. Fixed conditions: AC power, fixed threads, median of 3. MoE note:
-tg tracks *active* params, pp + RAM track total.
+**First run:** i7-1185G7 (all 8 models, QA+speed+RSS — `eval/results/i7-1185G7-cpu.csv`); the dev
+box reproduced the QA numbers **bit-for-bit** (greedy ⇒ quality is machine-independent).
 
-### 5.2 Memory — peak RSS at the standard RAG window
+**Findings (detail in `model-benchmarks.md` §6):**
+- Grounded **EM saturates** (95–98 %, DE ≈ EN) → accuracy does not separate the catalog;
+  `citation_correct` is a **retrieval constant** (citations come from retrieval, not the model).
+  The discriminator is **hallucination-resistance** on the 15 unanswerable items.
+- Audited genuine hallucinations / 15: **Ministral 0**, Gemma4/2507/30B **1**, Qwen3-8B/14B **2**,
+  orig-4B/Granite **3**. (The v1 abstention heuristic overcounted hallucination ~2–3× — hardened
+  after auditing the raw dumps, then re-scored via `rescore.mjs` with **no model re-run**.)
+- Decode tg t/s: 4B ~6.2, **Ministral 4.5** (fastest 8B), Qwen3-8B 3.9, Granite 4.3, **Gemma 3.0**,
+  Qwen3-14B 2.1 (slowest), 30B-A3B 4.7 (MoE).
 
-One realistic run per model at `-c 8192`: Windows = poll Peak Working Set (`Get-Process`),
-Linux = `/usr/bin/time -v`, macOS = `/usr/bin/time -l`. **This number calibrates the manifests'
-`recommended_min_ram_gb`** (peak RSS + 2–3 GB OS/app headroom ≤ tier RAM) — replace the §4.1
-estimates with measured values.
+**Decisions applied (live):**
+- **`recommended_min_ram_gb` recalibrated** from measured peak RSS (8B 16→12, 12–14B 16→14; 4B
+  held 8, 30B held 24 for the MoE/mmap caveat).
+- **Recommender made quality-aware**: new optional `recommendation_rank` manifest field is the
+  tiebreak in `recommendModelIdByRam` (after capacity fit, before disk size; default 0 = legacy
+  behaviour). Net on real hardware: **≤12 GB → Qwen3-4B (default), 16–24 GB → Ministral, ≥32 GB →
+  Gemma 4**; Granite (loser) and the 30B MoE (opt-in) are never auto-recommended.
+- **Gemma `supports_thinking_mode` flipped true** — the run-#2 thinking check had Deep match
+  Balanced 8/8 on reasoning items with coherent chain-of-thought.
+- **Licence correction:** the whole catalog is Apache-2.0 (Qwen3 included) — the challenger edge is
+  quality + speed, not licence.
 
-### 5.3 Quality — judge-free, license-clean, local (D19)
-
-- **`eval/rag_de_en.jsonl`** (~50–100 items, authored by us → license-clean by construction):
-  short German/English passage + question whose answer is a verbatim span + gold source id;
-  **~15% unanswerable items** (gold = abstain). Scoring is deterministic: normalized
-  exact-match + token-F1 (German-aware normalization), citation-present / citation-correct /
-  grounding (answer string ∈ cited chunk), abstain-rate on unanswerables. Greedy decoding
-  (`temperature 0`), fixed seed, run **through the app's real RAG path** where practical (it
-  exercises retrieval + reranker + grounding template, which is what users get) — a
-  `tests/manual/`-style harness gated on an env var, like `rag-quality.test.ts`, is the
-  natural home.
-- **Optional appendix, not the gate:** lm-eval-harness MCQ tasks (MMLU/IFEval/Belebele-de/…)
-  against `llama-server`'s OpenAI endpoint — requires installing Python on the benchmarking
-  machine (dev-time tool; doesn't touch the app's offline guarantee). Only if we want
-  literature-comparable numbers.
-
-### 5.4 Results + decision rule
-
-One CSV row per model × laptop × backend in `eval/results/` (columns: pp512/2048/8192 t/s,
-tg t/s, peak RSS@8k, RAG EM/F1 de+en, citation-correct %, abstain %, notes). **A challenger
-earns `recommended_profiles` promotion** (and a default-model challenge) if at its tier it
-(a) beats the incumbent on the German RAG metrics AND citation-correctness at ≥ comparable
-tg t/s, or (b) matches quality with materially better license/provenance or lower RAM.
-Demotions/removals of losing challengers are equally valid outcomes — the catalog should not
-accumulate dead weight (each model is a multi-GB download someone might make).
-
-### 5.5 Done when
-
-Protocol doc exists and has been executed once on ≥ 2 machines (the dev box ± the i7-1185G7
-Iris-Xe laptop are the natural pair) covering all incumbents + wave-1 challengers; results CSVs
-committed; D17 promotions decided and applied to `recommended_profiles` + the model-policy
-table; BUILD_STATE updated. This plan then condenses per the doc lifecycle rule.
-
-### 5.6 As-implemented (tooling + eval data, 2026-06-10 — RUNS still pending)
-
-The protocol, scorer, harness, eval set, and memory helper are built and committed; the actual
-multi-machine ranking runs (and the promotions that depend on their numbers) are the remaining
-work. What landed:
-
-1. **Protocol doc = [`docs/model-benchmarks.md`](model-benchmarks.md)** — offline (Wi-Fi off),
-   judge-free, with Part A (quality harness), Part B (`llama-bench` speed), Part C (peak-RSS →
-   `recommended_min_ram_gb`), the combined CSV schema, and the §5.4 decision rule (incl. the
-   D18 default-model question + the Gemma flag).
-2. **Quality = a deterministic, dependency-free scorer** `apps/desktop/tests/eval/score.ts`
-   (24 CI unit tests in `score.test.ts`): German-aware normalization with **umlauts/ß kept**
-   (folding them would hide the D18 German delta), containment-EM + token-F1 over multiple
-   accepted gold spans, citation-correct / grounding, and a curated DE/EN refusal-phrase
-   **abstention heuristic** (every raw answer is dumped for audit since it's heuristic — §7 risk
-   row). Aggregates split DE vs EN so the per-model language gap is directly readable.
-3. **Real RAG path harness** `apps/desktop/tests/manual/model-eval.test.ts` (env-gated on
-   `PAID_MODEL_EVAL`): corpus embedded **once** with E5 + reranked once ⇒ retrieval is identical
-   across chat models, so cross-model deltas isolate the chat model. Each `models/chat/*.gguf`
-   answers all items via `generateGroundedAnswer` at `temperature 0`; outputs
-   `eval/results/<machine>-<backend>-quality.csv` + a per-item audit JSONL.
-4. **Eval data authored by us → license-clean.** `eval/build.mjs` is the source of truth and
-   **self-validates** (every answerable gold span must be present in its `gold_doc`); it emits
-   `eval/corpus_de_en.jsonl` (60 passages / 16 docs, office + civic/everyday, with distractors)
-   and `eval/rag_de_en.jsonl` — **100 items: 60 DE / 40 EN, 40 parallel DE/EN pairs + 20
-   German-only, 15 unanswerable** (the §5 "~50–100, ~15% unanswerable" target, the larger end +
-   parallel-pair design chosen with the user for the cleanest D18 signal).
-5. **Memory** = `scripts/measure-peak-rss.ps1` (mirrors the real chat-server args
-   `--jinja --reasoning-format deepseek --ctx-size 8192`), prints peak RSS + a suggested
-   `recommended_min_ram_gb` (peak + 3 GiB headroom). Speed/memory stay a documented manual
-   protocol (D20).
-6. **Placement:** repo-root `eval/` holds DATA + RESULTS only (no code, per the plan); the
-   scoring CODE + its CI test live under `apps/desktop/tests/eval/` so vitest covers them.
-7. **PENDING to close the phase:** run the protocol on ≥ 2 machines, commit `eval/results/*.csv`,
-   apply §5.4 promotions to `recommended_profiles` + [`model-policy.md`](model-policy.md), decide
-   D18 + the Gemma flag, replace the §4.1 RAM estimates with measured peak-RSS, then condense.
+**Not blocking / open:** a dev-box speed/RSS sweep for a formal 2nd machine (QA + RSS are
+machine-independent and already reproduced); the eval set saturates EM, so a harder set would be
+needed to separate models on accuracy (it already separates abstention well — see §6).
 
 ---
 
-## 6. Phase 30 — opt-in big slot + embeddings (OUTLINE ONLY — do not start before Phase 29)
+## 6. Phase 30 — opt-in big slot + embeddings (OUTLINE — drafted as its own plan)
 
-- **Big slot shoot-out:** Gemma 4 26B-A4B (Apache, ~4B active → near-4B CPU tg; official Google
-  QAT GGUF) and/or Granite 4.0 H-Small (Apache, hybrid-Mamba) vs the incumbent Qwen3 30B-A3B;
-  Mistral Small 3.2 24B (Apache, dense ~14 GB) as the dense quality ceiling for 32 GB/GPU
-  machines. Same manifest + benchmark machinery; all stay `recommended_profiles: []`.
-- **Embeddings:** Granite Embedding R2 small (384-dim, Apache-2.0) is the only candidate that
-  avoids a vector-schema question — but ANY embedder swap needs the reindex story surfaced to
-  the user (the Phase-17 `staleEmbeddings` / Re-index-all machinery exists and is the hook).
-  Needs its own mini-plan: GGUF provenance check, llama.cpp embedding-mode compatibility on
-  b9585 (the E5 q8_0 crash precedent — test F16 first), retrieval-quality A/B on the
-  `eval/rag_de_en.jsonl` corpus, and a decision on whether 1024-dim models (BGE-M3,
-  Qwen3-Embedding) are worth the index migration. Coordinate with
-  [`rag-design.md`](rag-design.md) §11 (reranker) — a better retriever may shift the reranker
-  cost/benefit.
+> **Now has a dedicated working paper: [`big-slot-embeddings-plan.md`](big-slot-embeddings-plan.md)**
+> (decisions D23–D28). The outline below is the seed; the plan doc has the candidates-to-verify,
+> the two-track procedure (reusing the Phase-29 benchmark machinery), sequencing, and done-when.
 
-## 7. Risks / open items
+- **Big-slot shoot-out:** Gemma 4 26B-A4B (Apache, ~4B active → near-4B CPU tg; official Google QAT
+  GGUF) and/or Granite 4.0 H-Small (Apache, hybrid-Mamba) vs the incumbent Qwen3 30B-A3B; Mistral
+  Small 3.2 24B (Apache, dense ~14 GB) as the dense quality ceiling for 32 GB/GPU machines. Same
+  manifest + benchmark machinery; all start `recommended_profiles: []` / `recommendation_rank: 0`.
+- **Embeddings:** Granite Embedding R2 small (384-dim, Apache-2.0) is the only candidate that avoids
+  a vector-schema question — but ANY embedder swap needs the reindex story surfaced (the Phase-17
+  `staleEmbeddings` / Re-index-all machinery is the hook). Needs its own mini-plan: GGUF provenance,
+  llama.cpp embedding-mode compatibility on b9585 (test F16 first — the E5 q8_0 crash precedent),
+  retrieval-quality A/B on `eval/rag_de_en.jsonl`, and whether 1024-dim models (BGE-M3,
+  Qwen3-Embedding) are worth the index migration. Coordinate with [`rag-design.md`](rag-design.md)
+  §11 (a better retriever may shift the reranker cost/benefit).
+
+## 7. Risks / open items (still live)
 
 | Risk | Mitigation |
 |---|---|
-| HF repo layouts / filenames drift between authoring and fetch (the report's "verify at download time" flags) | Manifests pin exact URLs; first fetch + `verify-models --generate` catches drift loudly; §4.1 sizes are re-checked at authoring |
-| Gemma 4 GGUF needs a chat-template fix newer than its first upload (report: April-2026 template fixes) | Bring-up step §4.3.3 catches template artifacts; re-download the GGUF if the repo updated it |
-| A challenger underperforms incumbents everywhere | Fine — D17 means users never saw it recommended; remove the manifest, record the numbers |
-| Benchmark machines too few/too similar | The GPU hardware matrix (BUILD_STATE §5 item 1b) machines double as benchmark hosts over time; protocol records machine facts so late runs slot in |
-| Eval set too small to separate models | 50–100 grounded-QA items separate citation/abstention behavior well even when MCQ scores tie; grow the set before trusting small deltas (record per-item outputs, not just aggregates) |
-| `llama-bench` missing from a pinned archive | Verified on first §5.1 run; fallback = time `llama-cli`/server streaming ourselves (we already measure tok/s in-app) |
+| Eval set saturates EM (all models ~96–98 %) | Grow the set with harder/multi-hop + more distractor-heavy items before trusting accuracy deltas; per-item dumps are kept. Abstention already separates models |
+| Benchmark machines too few/too similar | The protocol records machine facts; the GPU hardware matrix machines double as benchmark hosts over time (run the dev-box sweep for the formal 2nd machine) |
+| HF repo layouts / filenames drift | Manifests pin exact URLs; first fetch + `verify-models --generate` catches drift loudly |
+| Phase-30 embedder swap forces a reindex | Surface via the Phase-17 re-index machinery; its own mini-plan before any swap |

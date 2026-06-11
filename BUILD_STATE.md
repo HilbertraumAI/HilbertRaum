@@ -89,16 +89,21 @@ and `verify-models -Target D:\` now reports **all 10 catalog weights VERIFIED**.
 leak; finding — Gemma 4 honours `enable_thinking`, kept `supports_thinking_mode: false`
 pending Phase 29). Only the §4.3 Models-screen-UI + RAG-citation smokes remain before
 Phase 28 closes (§3 entry; §5 item 5).
-**Phase 28 (model catalog wave 1) is 🟡 IN PROGRESS** and **Phase 29 (benchmark protocol +
-first comparison run) is 🟡 IN PROGRESS — tooling + eval data landed 2026-06-10**: the
-judge-free quality benchmark is built and CI-covered (`docs/model-benchmarks.md`; the
-dependency-free scorer `apps/desktop/tests/eval/score.ts` + 24 CI tests; the real-RAG-path
-harness `tests/manual/model-eval.test.ts`; `eval/{corpus,rag}_de_en.jsonl` = 100 license-clean
-German/English grounded-QA items, 60 DE / 40 EN, 15% unanswerable, self-validated by
-`eval/build.mjs`; the peak-RSS helper `scripts/measure-peak-rss.ps1`). The multi-machine RUNS
-and the §5.4 catalog promotions (incl. the D18 default-model question + the Gemma
-`supports_thinking_mode` flip + measured `recommended_min_ram_gb`) are PENDING — executed on
-real hardware (§3 Phase-29 entry).
+**Phases 28 (model catalog wave 1) and 29 (benchmark protocol + first comparison run) are
+🟢 DONE (2026-06-10/11)** and the working-paper plan was **condensed to a design record**
+([`docs/model-catalog-expansion-plan.md`](docs/model-catalog-expansion-plan.md); full original
+in git history). Wave 1 added four Apache-2.0 challengers; the judge-free benchmark
+(`docs/model-benchmarks.md` — scorer `apps/desktop/tests/eval/score.ts` + CI tests, real-RAG-path
+harness `tests/manual/model-eval.test.ts`, 100-item `eval/{corpus,rag}_de_en.jsonl`, speed/RSS
+scripts) ran on the i7-1185G7 (all 8 models; QA reproduced bit-for-bit on the dev box). §5.4
+applied **live**: `recommended_min_ram_gb` recalibrated from measured peak RSS, the recommender
+made **quality-aware** via a new `recommendation_rank` field (≤12 GB → Qwen3-4B default / 16 GB →
+Ministral / ≥32 GB → Gemma 4; Granite + 30B never auto-recommended), and Gemma's
+`supports_thinking_mode` **flipped on** after its thinking-quality check. The headline benchmark
+discriminator was hallucination-resistance on unanswerables (Ministral 0/15 best); the whole
+catalog is Apache-2.0 (the challenger edge is quality+speed, not licence). Only an **optional**
+dev-box speed sweep remains (completeness; QA+RSS are machine-independent). See the §3 Phase-29
+entry.
 **Functionality wave 3 (Phases 31–38, [`docs/functionality-wave-3-plan.md`](docs/functionality-wave-3-plan.md))
 is IN PROGRESS: Phase 31 (conversation search) is DONE 2026-06-11** — R-S1 resolved GO,
 `messages_fts` mirrors the D13 index shape, `searchMessages` ranks bm25/newest-first (D23),
@@ -149,8 +154,9 @@ hardware matrix, item 1b). Consciously-accepted gaps live in
 | 25 | UI chat screen restructure (guidelines §3) | 🟢 done (merged to master 2026-06-10) |
 | 26 | UI information architecture regroup (guidelines §2) | 🟢 done (merged to master 2026-06-10) |
 | 27 | UI microcopy, ambient trust signal, first-run (guidelines §7/§2/§9) | 🟢 done (merged to master 2026-06-10) — **UI polish wave COMPLETE** |
-| 28 | Model catalog wave 1 (challenger manifests, D16–D18) | 🟡 in progress — manifests + docs landed, validated, gate green; weights fetched + hashes promoted (all 10 weights VERIFIED on the `D:\` drive); §4.3 chat + depth smokes PASS for all four challengers; only the Models-screen-UI + RAG-citation smokes remain |
-| 29 | Benchmark protocol + first comparison run (D19/D20) | 🟡 in progress — **protocol + tooling + eval data landed** (`docs/model-benchmarks.md`, the judge-free scorer + 24 CI tests, the real-RAG-path harness, `eval/{corpus,rag}_de_en.jsonl` = 100 items, the peak-RSS script); the multi-machine RUNS + §5.4 promotions are pending (executed on real hardware) |
+| 28 | Model catalog wave 1 (challenger manifests, D16–D18) | 🟢 done — 4 challenger manifests (Apache-2.0, real hashes, all 10 weights VERIFIED on `D:\`), license reviews approved, bring-up smoke PASS; RAG citation/abstention verified across all 8 models by the Phase-29 eval; plan condensed |
+| 29 | Benchmark protocol + first comparison run (D19/D20) | 🟢 done — judge-free protocol + tooling + 100-item eval set; first run on the i7-1185G7 (all 8 models, QA+speed+RSS), QA reproduced on the dev box; §5.4 applied: RAM recalibrated from measured RSS, recommender made **quality-aware** (`recommendation_rank` → ≤12 GB Qwen3-4B / 16 GB Ministral / ≥32 GB Gemma4), **Gemma thinking flag flipped on**; plan condensed to a design record. (Optional dev-box speed sweep = completeness only) |
+| 30 | Opt-in big slot + embeddings (D21 → D23–D28) | ⚪ not started — **plan drafted** ([`docs/big-slot-embeddings-plan.md`](docs/big-slot-embeddings-plan.md)): Track A (bigger chat model vs the 30B-A3B, reuses the Phase-29 benchmark) + Track B (better embedder — the harder, reindex-forcing swap) |
 | 31 | Conversation search (wave-3 plan §4) + session-hardening rider | 🟢 done (2026-06-11) — `messages_fts` + `searchMessages` (bm25, newest-first tie-break) + `chat:search` + ConversationList search UI; deny-by-default permission handler shipped with it |
 | 32 | Vault password change (wave-3 plan §5, D24) | 🟢 done (2026-06-11) — descriptor v2 envelope (wrapped data key; new vaults v2), O(1) re-wrap per change, one-time journaled v1→v2 migration on first change, `workspace:changePassword` + Settings card, import↔change race guard |
 
@@ -1381,10 +1387,15 @@ Repo root: `f:\_coding\ai_drive`.
      Granite/30B never auto-recommended. Wired through `shared/manifest.ts` (schema+parse) +
      `services/models.ts`; covered by real-manifest picks in `benchmark.test.ts` + tiebreak unit
      tests in `models.test.ts`. 701/701 tests, typecheck clean.
-  PENDING to close: the **Gemma thinking-quality check** (`tests/manual/gemma-thinking.test.ts`,
-  run #2 → maybe flip `supports_thinking_mode`); optionally the devbox speed/RSS run (formal
-  ≥2-machine done-when — QA+RSS are machine-independent, already reproduced); then condense the
-  plan per the doc lifecycle rule.
+  9. **Gemma thinking flag FLIPPED to `true` (2026-06-11, run #2)** — the thinking-quality check
+     (`tests/manual/gemma-thinking.test.ts`, i7) had Deep match Balanced **8/8** on reasoning items
+     (incl. the snail/bat-ball/syllogism traps) with coherent chain-of-thought, so Deep is safe to
+     offer; result in `eval/results/gemma-thinking-i7-1185G7.json`. Caveat: both modes hit 100% →
+     the small set shows Deep deliberates well + never regresses, not that it *strictly* helps.
+     Gemma 4 is now the only thinking-capable challenger; the composer offers "Thorough" for it.
+  PENDING to close: optionally the **devbox speed/RSS run** (formal ≥2-machine done-when — QA+RSS
+  are machine-independent and already reproduced, so this is completeness only); then **condense**
+  `model-catalog-expansion-plan.md` to a design record per the doc lifecycle rule.
 
 - **Phase 31 — conversation search + session-hardening rider (2026-06-11, the first wave-3
   phase; plan §4 condensed to its design record):**
@@ -2150,7 +2161,11 @@ items are **MANUAL acceptance only** (R2/R5/R7 + the GPU hardware matrix). In ro
    the usual manual release eyeball on real drives.
 5. **Model catalog expansion + benchmarking (Phases 28–30):** see
    [`docs/model-catalog-expansion-plan.md`](docs/model-catalog-expansion-plan.md) (decisions
-   D16–D22). **Phase 28 — 🟡 manifests landed 2026-06-10 (see the §3 entry):** all four
+   D16–D22). **Update (merge 2026-06-11): Phases 28 + 29 are 🟢 DONE — see §1 and the §3
+   Phase-29 entry; the text below predates the close-out and remains only for Phase-30
+   context (plan drafted in
+   [`docs/big-slot-embeddings-plan.md`](docs/big-slot-embeddings-plan.md)).**
+   **Phase 28 — 🟡 manifests landed 2026-06-10 (see the §3 entry):** all four
    challenger manifests authored + validated (Ministral 3 8B 2512, Granite 4.1 8B, Gemma 4 12B
    QAT — vendor GGUFs; Qwen3-4B-2507 via the unsloth fallback, D18), licenses reviewed/approved
    (D22), docs + README updated, gate green. **Remaining:** fetch the four weights (~20 GB,

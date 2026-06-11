@@ -250,8 +250,11 @@ D18). Granite 4.1 8B lost its tier (most 8B hallucinations, lowest F1).
   uses as the tiebreak. Real-hardware effect: **≤12 GB → Qwen3-4B (default), 16 GB → Ministral,
   ≥32 GB → Gemma 4**; Granite + the 30B MoE are never auto-recommended. `recommended_profiles`
   stays `[]` (the picker is RAM-best-fit, not profile-based).
-- **Gemma `supports_thinking_mode` stays `false`** PENDING the thinking-quality check
-  (`tests/manual/gemma-thinking.test.ts`, run #2) — flip only if Deep ≥ Balanced on reasoning.
+- **Gemma `supports_thinking_mode` FLIPPED to `true`** (run #2, `tests/manual/gemma-thinking.test.ts`,
+  i7): Deep matched Balanced 8/8 on reasoning items (incl. the snail/bat-ball/syllogism traps) with
+  coherent chain-of-thought → Deep is safe to offer. Caveat: both modes hit 100%, so the small set
+  can't show Deep *strictly* helps; it shows Deep deliberates well and never regresses. Gemma 4 is
+  the only thinking-capable challenger; the composer now offers "Thorough" for it.
 - **Licence correction:** the whole catalog is **Apache-2.0** (Qwen3 included) — the challengers'
   edge is quality + speed, *not* licence. Manifest comments that implied otherwise were fixed.
 

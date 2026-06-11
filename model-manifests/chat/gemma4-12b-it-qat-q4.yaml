@@ -10,7 +10,7 @@ recommended_min_ram_gb: 14
 recommended_ram_gb: 32
 recommendation_rank: 2  # Phase-29 12-14B WINNER (beats Qwen3 14B on every axis) — preferred at tier
 recommended_context_tokens: 8192
-supports_thinking_mode: false
+supports_thinking_mode: true  # Phase-29 run #2: thinking-quality check passed (Deep 8/8 = Balanced 8/8, real reasoning) → flipped
 supports_tools: false
 local_path: models/chat/gemma4-12b-it-qat-q4.gguf
 sha256: faff1a63667fac17ac5e777f47114688fcefea96e220e211aaa8d62c2c4561f1
@@ -36,10 +36,13 @@ bundled_on_preconfigured_drive: false
 # quantization-aware trained, so higher quality than a naive Q4 at similar size. Needs
 # llama.cpp ~b8607+; our pinned b9585 (2026-06-09) covers it (plan §3.1). TEXT-ONLY USE: the
 # upstream repo also ships an mmproj vision file — we deliberately do not reference it.
-# THINKING: Gemma 4's chat template DOES honour `enable_thinking` (Deep streams real
-# `reasoning_content`). `supports_thinking_mode` is kept **false** PENDING a thinking-quality
-# check (tests/manual/gemma-thinking.test.ts) — flip to true once that passes (Phase-29
-# decision, run #2).
+# THINKING: Gemma 4's chat template honours `enable_thinking` (Deep streams real
+# `reasoning_content`). `supports_thinking_mode` was FLIPPED to true (Phase-29 run #2): the
+# thinking-quality check (tests/manual/gemma-thinking.test.ts) had Deep match Balanced 8/8 on
+# reasoning items (incl. the snail/bat-ball/syllogism traps) with coherent chain-of-thought, so
+# Deep is safe to offer. Caveat: both modes scored 100%, so the small set can't show Deep
+# *strictly* helps — it shows Deep deliberates well and never regresses. The only thinking-capable
+# challenger; the composer now offers "Thorough" for Gemma 4.
 recommended_profiles: []
 license_review:
   status: approved
