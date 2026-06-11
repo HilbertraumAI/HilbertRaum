@@ -1,7 +1,7 @@
 # Post-MVP Functionality — wave 3 working paper (Phases 31–38)
 
-_Status: **WORKING PAPER — Phase 31 DONE 2026-06-11 (§4 is its condensed design record;
-the §12 session-hardening rider shipped with it); Phases 32–38 NOT IMPLEMENTED** (drafted
+_Status: **WORKING PAPER — Phases 31 + 32 DONE 2026-06-11 (§4/§5 are their condensed design
+records; the §12 session-hardening rider shipped with 31); Phases 33–38 NOT IMPLEMENTED** (drafted
 2026-06-10; **review round 1 resolved
 2026-06-11**: D23–D30 + D33 locked, see §13; D31/D32/D34 stay open by design — they resolve
 with research gates R-O1/R-O2/R-W1. **Plan audit 2026-06-11:** every §2 fact re-verified
@@ -20,7 +20,7 @@ The eight features (user-selected 2026-06-10):
 | Phase | Feature | Size | Hard dependency | New deps / sidecars |
 |---|---|---|---|---|
 | 31 | Conversation search — **✅ DONE 2026-06-11** | S | none | none (FTS5 already proven) |
-| 32 | Vault password change | M | none | none (`@noble/hashes` already shipped) |
+| 32 | Vault password change — **✅ DONE 2026-06-11** | M | none | none (`@noble/hashes` already shipped) |
 | 33 | Document tasks foundation + one-click summary | M | none | none |
 | 34 | Document translation workflow | S–M | Phase 33 (task machinery) | none |
 | 35 | Compare two documents | M | Phase 33 (task machinery) | none |
@@ -167,57 +167,50 @@ search"), `security-model.md` (permission handler), `user-guide.md` §6. Record 
   limit, IPC + privacy sentinel, permission handler (fake session), renderer search flow
   (type → highlighted results → open → clear, no-match copy, Esc).
 
-## 5. Phase 32 — Vault password change
+## 5. Phase 32 — Vault password change — ✅ DONE (2026-06-11, as implemented)
 
-**Goal:** Settings → "Change password": current password + new password (Phase-27 strength
-hint component reused from the first-run flow) + confirm; works for argon2id AND legacy
-scrypt vaults; crash-safe.
+Shipped exactly per D24 (b): **descriptor v2 envelope, migrate-on-first-password-change**.
+Durable design now in `security-model.md` ("Vault descriptor" + "Password change"),
+`user-guide.md` §10, `known-limitations.md` (version-skew + post-commit-swap edges).
+Record of what was built:
 
-**The load-bearing decision (D24).** Fact §2.3: data is encrypted under the password-derived
-key directly, so there are exactly two designs:
-
-- **(a) Direct re-encrypt:** derive new key (fresh salt, `DEFAULT_KDF` — a scrypt vault
-  silently upgrades to argon2id), re-encrypt `paid.sqlite.enc` + EVERY `<id><ext>.enc`
-  document, write new descriptor. No format change, but cost scales with corpus size and
-  the crash window spans many files — needs a journal/two-phase commit (write all `.new`,
-  fsync, swap descriptor LAST as the commit point, then GC).
-- **(b) Envelope migration (descriptor v2):** introduce a random 32-byte **data key**;
-  the password-derived KEK wraps it (AES-256-GCM blob in the descriptor). Password change
-  = re-wrap ONE blob + new verifier — atomic single-file descriptor replace, O(1) regardless
-  of corpus size. Cost: a v1→v2 migration moment (on unlock or on first password change,
-  re-encrypting everything ONCE under the new data key — the same machinery (a) needs
-  anyway), plus a permanent two-key concept in `security/crypto.ts`.
-
-**RESOLVED (review round 1, 2026-06-11): (b), migrate-on-first-password-change** (not on
-unlock — don't touch working vaults that never change their password). (b) is also the
-prerequisite for every future key feature (multiple unlock passwords, recovery codes,
-Phase-22-adjacent rotation), and it makes the *recurring* operation trivially atomic instead
-of making *every* change a bulk re-encryption. The one-time v1→v2 bulk re-encrypt reuses
-(a)'s journaled swap as the migration step. Sizing note (audit): that journaled-migration
-machinery + its crash tests make this phase a solid M, not S.
-
-**Mechanics regardless of D24:** must run UNLOCKED (key in memory); verify current password
-via the existing verifier first; `WorkspaceController` gains `changePassword(current, next)`;
-re-lock cleanly afterwards is NOT required (key object is replaced in place). New audit event
-`workspace_password_changed` (additive `AuditEventType`; id-free, content-free). New IPC
-`workspace:changePassword`. **Plaintext_dev mode: feature hidden** (nothing to change).
-
-**Where to look in detail:**
-- `workspace-vault.ts` `create()`/`unlock()`/`lock()` + `documentCipher()` — every place the
-  key is held or used; how many artifacts are encrypted under it (DB + N documents); whether
-  anything else (checksum cache? no — settings live inside the DB) derives from it.
-- `security/crypto.ts` `makeVerifier`/`verifyKey`/`deriveKey` — where the KEK/data-key split
-  lands; keep `KdfParams` per-algo validation.
-- Crash-safety: the existing atomic write patterns (`encryptFile` `.tmp`-then-rename,
-  `shredFile`) — the journaled swap should compose them, not invent new primitives.
-- The Phase-27 first-run password step (`WorkspaceGate`) — reuse the strength hint +
-  show-toggle component rather than duplicating it in Settings.
-
-**Tests:** change-then-unlock-with-new (argon2id AND scrypt-created fixtures); old password
-rejected after change; wrong current password rejected (and audited as `unlock_failed`-class,
-not a new leak); simulated crash between journal steps recovers to a consistent vault
-(old OR new, never mixed); descriptor never contains password/key material (extend the
-existing scan test); v1→v2 migration leaves documents decryptable.
+- **Descriptor v2 (envelope)** in `workspace-vault.ts`: a random 32-byte data key
+  (`generateDataKey`, `crypto.ts`) encrypts the DB + every `<id><ext>.enc` sidecar; the
+  password-derived KEK wraps it (`dataKey` AES-256-GCM blob next to the verifier). **New
+  vaults are created v2** (their first change is already O(1)); v1 unlocks unchanged via the
+  existing `version` + `deriveKey` dispatch hooks and migrates ONLY on its first password
+  change — never on unlock. Unlock unwraps the data key and zeroes the KEK.
+- **`WorkspaceController.changePassword(current, next)`** (IPC `workspace:changePassword` +
+  preload mirror, `unlockWorkspace` result shape): unlocked only; verifies `current` against
+  the existing verifier FIRST (wrong → `WrongPasswordError`, audited as the existing
+  `workspace_unlock_failed` class); replaces the in-memory key in place (no re-lock). v2 →
+  `rewrapVaultKey`: one atomic descriptor replace (fresh salt + verifier + re-wrap under
+  `DEFAULT_KDF` — a legacy scrypt vault thereby silently upgrades to argon2id). v1 → the
+  one-time journaled migration composed from existing primitives: `stageRekey` (WAL
+  checkpoint, re-encrypt DB + sidecars to fsynced `.new` files; per-doc plaintext transients
+  end `.tmp` for the startup sweep) → descriptor replace = the single COMMIT point →
+  `applyPendingRekey` (shred old, rename `.new` in). `recoverPendingRekey` (startup + before
+  every unlock decrypt) rolls staged files forward on a v2 descriptor, discards them on v1 —
+  crash tests cut the journal at every step and prove old-or-new, never mixed. In-memory key
+  swaps immediately after commit so a post-commit swap failure can't desync lock().
+- **Race guard:** `beginDocumentWork()` lease on the controller — `importDocuments` (whole
+  job) + `reindexDocument` hold it; `changePassword` refuses while held and vice versa
+  (`VaultBusyError`, friendly §11.4 copy both ways).
+- **Audit:** additive `workspace_password_changed`, success-only, id- and content-free.
+- **UI:** Settings → General "Change password" card (current/new/confirm); the Phase-27
+  strength meter + show-toggle EXTRACTED from `WorkspaceGate` into
+  `renderer/components/PasswordField.tsx` and reused by both; honest busy copy ("Securing
+  your documents with the new password…"); hidden entirely in plaintext_dev.
+- Tests (`tests/integration/password-change.test.ts` + audit-ipc + renderer
+  `ChangePassword.test.tsx`): change-then-unlock-with-new on scrypt AND argon2id legacy
+  fixtures (`createEncryptedVaultOnDisk(…, { legacyV1: true })` exists for fixtures only);
+  old password rejected; wrong current rejected + audited in the unlock-failure class;
+  crash cuts at stage/commit/swap each recover consistent with documents decryptable;
+  second change asserted O(1) (sidecar + DB `.enc` byte-identical); the descriptor/`.enc`
+  scan extended to the wrapped blob (no password, no raw/base64/hex data-key bytes);
+  plaintext_dev hides the card. Eyeballed in the built app (walk-phase32.mjs): create →
+  import → wrong-current error → change → lock → old password rejected → unlock with new →
+  document still previews.
 
 ## 6. Phase 33 — Document tasks foundation + one-click summary
 

@@ -1,7 +1,7 @@
 import { ipcMain } from 'electron'
 import { IPC } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
-import { WrongPasswordError } from '../services/workspace-vault'
+import { VaultBusyError, WrongPasswordError } from '../services/workspace-vault'
 import { maybeRunFirstBenchmark } from './registerBenchmarkIpc'
 import { maybeAutoStartActiveModel } from './registerModelIpc'
 import { inFlightStreams } from './inflight'
@@ -86,6 +86,57 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
         }
         log.error('Workspace create failed', message)
         return { ok: false, reason: 'error', message: 'Could not create the workspace.' }
+      }
+    }
+  )
+
+  // Phase 32: change the vault password. Runs UNLOCKED only; a wrong current password
+  // is a NORMAL failure result audited in the existing unlock-failure class (never a
+  // new event, never the password). On a legacy v1 vault the first change runs the
+  // one-time journaled migration to the v2 envelope — it can take a while on a big
+  // document corpus, so the renderer shows honest progress copy while this resolves.
+  ipcMain.handle(
+    IPC.changeWorkspacePassword,
+    (_e, currentPassword: string, nextPassword: string): WorkspaceActionResult => {
+      if (typeof nextPassword !== 'string' || nextPassword.length < MIN_PASSWORD_LENGTH) {
+        return {
+          ok: false,
+          reason: 'refused',
+          message: `The new password must be at least ${MIN_PASSWORD_LENGTH} characters.`
+        }
+      }
+      if (!ctx.workspace.isUnlocked()) {
+        return {
+          ok: false,
+          reason: 'refused',
+          message: 'Unlock the workspace before changing its password.'
+        }
+      }
+      try {
+        const state = ctx.workspace.changePassword(currentPassword, nextPassword)
+        log.info('Workspace password changed') // never the passwords, in any branch
+        // Audit (additive Phase-32 event): id-free, content-free, success only.
+        ctx.audit?.('workspace_password_changed', 'Workspace password changed')
+        return { ok: true, state }
+      } catch (err) {
+        // instanceof PLUS the name — same bundle-duplication quirk as unlockWorkspace.
+        if (err instanceof WrongPasswordError || (err instanceof Error && err.name === 'WrongPasswordError')) {
+          ctx.audit?.('workspace_unlock_failed', 'Workspace password change failed (wrong current password)')
+          return {
+            ok: false,
+            reason: 'wrong_password',
+            message: "That doesn't match your current password. Check it and try again."
+          }
+        }
+        if (err instanceof VaultBusyError || (err instanceof Error && err.name === 'VaultBusyError')) {
+          return { ok: false, reason: 'refused', message: err.message }
+        }
+        log.error('Workspace password change failed', String(err))
+        return {
+          ok: false,
+          reason: 'error',
+          message: 'Could not change the password. Your current password still works.'
+        }
       }
     }
   )

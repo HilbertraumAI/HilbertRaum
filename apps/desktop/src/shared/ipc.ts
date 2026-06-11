@@ -72,7 +72,9 @@ export const IPC = {
   getWorkspaceState: 'workspace:getState',
   unlockWorkspace: 'workspace:unlock',
   createWorkspace: 'workspace:create',
-  lockWorkspace: 'workspace:lock'
+  lockWorkspace: 'workspace:lock',
+  /** Change the encrypted vault's password (Phase 32). Runs unlocked only. */
+  changeWorkspacePassword: 'workspace:changePassword'
 } as const
 
 // Renderer-bound streaming event channels (main -> renderer).

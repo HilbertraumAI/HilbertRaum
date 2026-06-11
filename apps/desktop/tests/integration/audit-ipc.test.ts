@@ -141,7 +141,11 @@ function makeHarness(): Harness {
   const ctx = {
     paths: { rootPath, workspacePath, configPath },
     db,
-    workspace: { isUnlocked: () => true, documentCipher: () => null },
+    workspace: {
+      isUnlocked: () => true,
+      documentCipher: () => null,
+      beginDocumentWork: () => () => {}
+    },
     runtime: {
       active: () => runtime,
       activeModelId: () => runtime.modelId,
@@ -343,6 +347,61 @@ describe('workspace audit events (buffered while locked, flushed after unlock)',
     const recorded = allRowsText(db)
     expect(recorded).not.toContain(PASSWORD_SENTINEL)
     expect(recorded).not.toContain('wrong-password-1')
+  })
+
+  it('password change: success → content-free workspace_password_changed; wrong current → the unlock-failure class (Phase 32)', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'paid-auditpw-'))
+    mkdirSync(join(root, 'config'), { recursive: true })
+    mkdirSync(join(root, 'workspace'), { recursive: true })
+    const vault = vaultPathsFrom({
+      configPath: join(root, 'config'),
+      dbPath: join(root, 'workspace', 'paid.sqlite')
+    })
+    createEncryptedVaultOnDisk(vault, PASSWORD_SENTINEL, FAST_KDF)
+    const ctrl = new WorkspaceController(vault, DEFAULT_POLICY, false)
+    ctrl.init()
+    const ctx = {
+      workspace: ctrl,
+      runtime: { stop: async () => {}, active: () => null, activeModelId: () => null },
+      embedder: { stop: async () => {} },
+      manifestsDir: null,
+      audit: createAuditRecorder(() => ctrl.requireDb())
+    } as unknown as AppContext
+    registerWorkspaceIpc(ctx)
+    await invoke(handlers, IPC.unlockWorkspace, PASSWORD_SENTINEL)
+
+    // Wrong current password → normal failure, audited in the unlock-failure class.
+    const NEW_PASSWORD_SENTINEL = 'XNEWPASS_SENTINEL_correcthorse9'
+    const { result: rejected } = await invoke(
+      handlers,
+      IPC.changeWorkspacePassword,
+      'wrong-current-pw',
+      NEW_PASSWORD_SENTINEL
+    )
+    expect(rejected as WorkspaceActionResult).toMatchObject({ ok: false, reason: 'wrong_password' })
+
+    // Success → the additive event, recorded with no ids and no content.
+    const { result: changed } = await invoke(
+      handlers,
+      IPC.changeWorkspacePassword,
+      PASSWORD_SENTINEL,
+      NEW_PASSWORD_SENTINEL
+    )
+    expect((changed as WorkspaceActionResult).ok).toBe(true)
+
+    const db = ctrl.requireDb()
+    const events = listAuditEvents(db, { limit: 5000 })
+    const changedEvent = events.find((e) => e.type === 'workspace_password_changed')
+    expect(changedEvent).toBeTruthy()
+    expect(changedEvent?.metadata).toBeNull()
+    // The wrong-current attempt landed in the EXISTING failure class — no new leak.
+    expect(
+      events.filter((e) => e.type === 'workspace_unlock_failed').length
+    ).toBeGreaterThanOrEqual(1)
+    const recorded = allRowsText(db)
+    expect(recorded).not.toContain(PASSWORD_SENTINEL)
+    expect(recorded).not.toContain(NEW_PASSWORD_SENTINEL)
+    expect(recorded).not.toContain('wrong-current-pw')
   })
 })
 

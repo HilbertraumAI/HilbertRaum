@@ -1,6 +1,6 @@
 # Known limitations & accepted trade-offs
 
-_Last updated: 2026-06-10._
+_Last updated: 2026-06-11._
 
 The MVP (Phases 0–13) is feature-complete. Four post-MVP multi-persona audit rounds (2026-06-09)
 found and fixed every Critical, High, and Medium finding plus the actionable Lows — see
@@ -25,6 +25,19 @@ logs, best-effort shredding on SSDs, no password recovery — are documented in
 - **Archive extraction trusts verified archives.** `fetch-runtime` rejects `extract_to` escapes,
   and archives are SHA-256-verified before extraction — but member paths inside an archive are only
   as trustworthy as the pinned hash in `runtime-sources.yaml`.
+- **A pre-Phase-32 build cannot open a v2 (envelope) vault.** New vaults — and any vault after
+  its first password change — use the descriptor-v2 envelope (`security-model.md`). An older
+  app version derives the correct KEK and even passes the verifier, but then tries to decrypt
+  the data files with it and fails the GCM tag, surfacing "Could not open the workspace".
+  Nothing is harmed or written; opening the drive with a current build works. Accepted: drives
+  ship the app alongside the data, so version skew requires deliberately mixing an old app
+  with a new workspace.
+- **Password-change edge: a post-commit swap interruption can briefly wedge one document.**
+  If the one-time v1→v2 migration is interrupted AFTER its descriptor commit but mid file-swap
+  (e.g. a transiently locked file on Windows), a not-yet-swapped document sidecar stays under
+  the retired key until the next app start, whose recovery rolls it forward; previewing or
+  re-indexing exactly that document in the SAME session fails with a friendly error. No data
+  loss; self-heals on restart.
 - **The persisted checksum cache trusts size+mtime.** Model weights are SHA-256-hashed once and the
   result is cached (in memory and in `AppSettings.checksumCache`) keyed by `(path, size, mtime)` —
   re-hashing multi-GB GGUFs on every visit/launch cost minutes of USB I/O. A same-size,

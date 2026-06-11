@@ -103,7 +103,13 @@ real hardware (§3 Phase-29 entry).
 is IN PROGRESS: Phase 31 (conversation search) is DONE 2026-06-11** — R-S1 resolved GO,
 `messages_fts` mirrors the D13 index shape, `searchMessages` ranks bm25/newest-first (D23),
 search UI in the conversation list, plus the deny-by-default permission-handler rider; plan §4
-condensed to its design record (§3 entry).
+condensed to its design record (§3 entry). **Phase 32 (vault password change, D24) is DONE
+2026-06-11** — descriptor v2 envelope (wrapped data key; new vaults created v2), O(1)
+descriptor re-wrap per change (scrypt→argon2id upgrade for free), one-time journaled v1→v2
+migration on a legacy vault's first change with crash-cut recovery tests,
+`workspace:changePassword` + the Settings card (Phase-27 password components extracted to
+`renderer/components/PasswordField.tsx`), import↔change race guard; plan §5 condensed to its
+design record (§3 entry).
 Release-wise,
 remaining work = **manual release acceptance only** (§5, incl. the GPU
 hardware matrix, item 1b). Consciously-accepted gaps live in
@@ -146,6 +152,7 @@ hardware matrix, item 1b). Consciously-accepted gaps live in
 | 28 | Model catalog wave 1 (challenger manifests, D16–D18) | 🟡 in progress — manifests + docs landed, validated, gate green; weights fetched + hashes promoted (all 10 weights VERIFIED on the `D:\` drive); §4.3 chat + depth smokes PASS for all four challengers; only the Models-screen-UI + RAG-citation smokes remain |
 | 29 | Benchmark protocol + first comparison run (D19/D20) | 🟡 in progress — **protocol + tooling + eval data landed** (`docs/model-benchmarks.md`, the judge-free scorer + 24 CI tests, the real-RAG-path harness, `eval/{corpus,rag}_de_en.jsonl` = 100 items, the peak-RSS script); the multi-machine RUNS + §5.4 promotions are pending (executed on real hardware) |
 | 31 | Conversation search (wave-3 plan §4) + session-hardening rider | 🟢 done (2026-06-11) — `messages_fts` + `searchMessages` (bm25, newest-first tie-break) + `chat:search` + ConversationList search UI; deny-by-default permission handler shipped with it |
+| 32 | Vault password change (wave-3 plan §5, D24) | 🟢 done (2026-06-11) — descriptor v2 envelope (wrapped data key; new vaults v2), O(1) re-wrap per change, one-time journaled v1→v2 migration on first change, `workspace:changePassword` + Settings card, import↔change race guard |
 
 Legend: ⚪ not started · 🟡 in progress · 🟢 done · 🔴 blocked
 
@@ -1424,6 +1431,71 @@ Repo root: `f:\_coding\ai_drive`.
      `tests/eval/text.d.mts`. Gate: typecheck clean, **720/720 tests pass** (+14 manual
      skips), build green.
 
+- **Phase 32 — vault password change (2026-06-11; plan §5 condensed to its design record;
+  decision D24 implemented as resolved — envelope descriptor v2, migrate-on-first-change):**
+  1. **Descriptor v2 (envelope)** in `workspace-vault.ts`: a random 32-byte **data key**
+     (`generateDataKey` in `security/crypto.ts`) encrypts the DB file + every `<id><ext>.enc`
+     document sidecar; the password-derived key is only a **KEK** that wraps it (AES-256-GCM
+     `dataKey` blob in `config/workspace.json`, next to the verifier). **New vaults are
+     created v2** (their first change is already O(1)); **v1 vaults unlock unchanged forever**
+     (the existing `version` field + `deriveKey` per-algo dispatch were the hooks) and migrate
+     ONLY on their first password change — never on unlock. Unlock on v2 unwraps the data key
+     and zeroes the KEK; `UnlockedVault.key` is now "the file key" (v2 data key / v1 password
+     key) and everything downstream (`lock`, `documentCipher`) is unchanged.
+  2. **`changePassword(current, next)`** on `WorkspaceController` (IPC
+     `workspace:changePassword` + preload mirror, `WorkspaceActionResult` shape): UNLOCKED
+     only; verifies `current` against the existing verifier FIRST (wrong → the same
+     `WrongPasswordError` class as unlock; audited as `workspace_unlock_failed` — no new leak
+     channel); replaces the in-memory key in place — no re-lock. **v2 path = O(1)
+     `rewrapVaultKey`:** fresh salt + verifier + the same data key re-wrapped under
+     `DEFAULT_KDF`, one atomic descriptor replace (write `.tmp`, **fsync**, rename — fsync
+     added to `writeVaultDescriptor` since it is now a commit point). A legacy scrypt vault
+     thereby silently upgrades to argon2id. `changePassword(…, kdf?)` parameterizes the new
+     envelope so tests use cheap params; production callers always default.
+  3. **The one-time v1→v2 migration is a journaled two-phase swap composed from EXISTING
+     primitives** (`encryptFile` `.tmp`-then-rename, `shredFile`, the `shredStalePlaintext`
+     sweep): `stageRekey` (WAL-checkpoint the LIVE working DB → encrypt to
+     `paid.sqlite.enc.new`; decrypt→re-encrypt each sidecar to `<file>.enc.new`, transient
+     plaintexts named `*.rekey.tmp` so the startup sweep covers a crash; every `.new`
+     fsynced) → descriptor replace = the SINGLE commit point → `applyPendingRekey` (shred
+     old ciphertext — its key may be a compromised password's — rename `.new` in;
+     idempotent). `recoverPendingRekey` runs at startup AND before every unlock decrypt:
+     staged files + v1 descriptor ⇒ pre-commit crash ⇒ discard (old password + old files
+     win); + v2 descriptor ⇒ post-commit ⇒ roll forward (new wins). The in-memory key swaps
+     immediately AFTER commit, before the file swap, so a post-commit swap failure can never
+     make `lock()` re-encrypt under the retired key (a not-yet-swapped sidecar self-heals at
+     next startup — accepted edge in `known-limitations.md`).
+  4. **Import/re-index ↔ password-change race guard (documented choice):** the controller
+     counts document-work leases — `beginDocumentWork(): release` is held by the WHOLE
+     import job and by each re-index in `registerDocsIpc`; `changePassword` refuses while
+     any lease is open and `beginDocumentWork` refuses while a change runs (defensive — the
+     change is synchronous on the main thread today), both via `VaultBusyError` with §11.4
+     copy. Chat/RAG DB writes need no guard: the migration snapshots the checkpointed
+     working DB synchronously, and later writes simply re-encrypt at next lock under the
+     new key.
+  5. **Audit + privacy:** additive `AuditEventType` `workspace_password_changed` — recorded
+     on success only, id-free, content-free. The descriptor/`.enc` scan test now also proves
+     the **data key** (raw, base64, hex) never touches disk, alongside both passwords.
+  6. **UI:** Settings → General gains the "Change password" card — current + new + confirm,
+     gated by the same floor/match rules as first-run; the Phase-27 strength meter +
+     show-toggle + password field were EXTRACTED from `WorkspaceGate` into
+     `renderer/components/PasswordField.tsx` (gate re-exports `passwordStrength` for old
+     import sites); honest busy copy ("Securing your documents with the new password… can
+     take a few minutes"); **hidden entirely in `plaintext_dev`** (keyed off
+     `settings.workspaceMode`). `ENCRYPTED_DOC_SUFFIX`'s canonical home moved to
+     `workspace-vault.ts` (ingestion re-exports it) — no import cycle.
+  7. **Tests** (`tests/integration/password-change.test.ts` 18 tests + audit-ipc + renderer
+     `ChangePassword.test.tsx`; `createEncryptedVaultOnDisk(…, { legacyV1: true })` exists
+     solely to build migration fixtures): change-then-unlock-with-new on scrypt AND argon2id
+     v1 fixtures; old password rejected after change; wrong current rejected + audited in
+     the unlock-failure class; journal cut at stage/commit/mid-swap each recovers consistent
+     with documents decryptable; second change asserted O(1) (sidecar + DB `.enc`
+     byte-identical); busy-guard both directions; plaintext_dev hides the card. Gate:
+     typecheck clean, **744/744 tests pass** (+14 manual skips), build green. Eyeballed
+     against the BUILT bundle (`walk-phase32.mjs`, shots-p32): create encrypted → import a
+     real document → wrong-current error → change → success toast → lock → OLD password
+     rejected → unlock with NEW → the document still previews (sidecar decrypts).
+
 ---
 
 ## 4. Shared data contracts (the actual "transported data")
@@ -2091,8 +2163,9 @@ items are **MANUAL acceptance only** (R2/R5/R7 + the GPU hardware matrix). In ro
    Qwen3 30B-A3B) + the embeddings question (Granite Embedding R2 small is the only 384-dim
    near-drop-in). Key verified fact: our pinned llama.cpp **b9585 is the 2026-06-09 release**,
    so Gemma 4 (needs ~b8607) runs on the runtime we already ship — no runtime bump needed.
-6. **Functionality wave 3 (Phases 31–38) — IN PROGRESS: Phase 31 DONE 2026-06-11, next up
-   is Phase 32 (vault password change, D24 resolved):** see the working paper
+6. **Functionality wave 3 (Phases 31–38) — IN PROGRESS: Phases 31 + 32 DONE 2026-06-11,
+   next up is Phase 33 (document tasks foundation + one-click summary; D25/D26 resolved,
+   R-T1 informational — probe alongside):** see the working paper
    [`docs/functionality-wave-3-plan.md`](docs/functionality-wave-3-plan.md) (decisions
    D23–D34, research gates R-S1/R-T1–2/R-W1–4/R-O1–3). Eight user-selected features in
    dependency order: 31 conversation search (messages FTS5, mirrors D13) → 32 vault password
@@ -2119,15 +2192,19 @@ items are **MANUAL acceptance only** (R2/R5/R7 + the GPU hardware matrix). In ro
    `snippet()`/`highlight()` in both runtimes), `messages_fts` + `searchMessages` +
    `chat:search` + the ConversationList search UI shipped, the §12 session-hardening rider
    (deny-by-default `setPermissionRequestHandler`) shipped with it, plan §4 condensed to
-   its design record (§3 entry). **Phase 32 (vault password change) is ready to start.**
+   its design record (§3 entry). **Phase 32 (vault password change) is DONE (2026-06-11)** —
+   descriptor v2 envelope (random data key wrapped by the password-derived KEK; new vaults
+   created v2), every change an O(1) atomic descriptor re-wrap (legacy scrypt silently
+   upgrades to argon2id), one-time journaled v1→v2 migration on a legacy vault's FIRST
+   change (crash-cut tests prove old-or-new-never-mixed), `workspace:changePassword` +
+   Settings card reusing the extracted Phase-27 password components, import↔change race
+   guard, additive `workspace_password_changed` audit event; plan §5 condensed to its
+   design record (§3 entry). **Phase 33 (document tasks + summary) is ready to start.**
 
-**Current gate (2026-06-10, post-merge of the UI polish wave into master — Phase 21
-verification + Phases 23–27 combined): typecheck clean, 669/669 tests pass (+8 manual
-tests — 4 GPU smoke behind `PAID_GPU_SMOKE`, 1 thinking smoke behind `PAID_THINKING_SMOKE`,
-1 rerank smoke behind `PAID_RERANK_SMOKE`, 1 ragMinSimilarity measurement behind
-`PAID_MINSIM_MEASURE`, 1 end-to-end RAG quality check behind `PAID_RAG_QUALITY` — skipped in
-CI), `npm run build` green.** The per-phase gate history (test counts, bundle sizes,
-per-phase test inventories) lives in git history.
+**Current gate (2026-06-11, post-Phase-32): typecheck clean, 744/744 tests pass (+14 manual
+tests behind `PAID_*` env vars — GPU/thinking/rerank/minsim/RAG-quality/bring-up/eval
+smokes — skipped in CI), `npm run build` green.** The per-phase gate history (test counts,
+bundle sizes, per-phase test inventories) lives in git history.
 
 ---
 

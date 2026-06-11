@@ -69,9 +69,22 @@ const SALT_BYTES = 16
 const IV_BYTES = 12
 const TAG_BYTES = 16
 
+/** Size of the random vault DATA key (descriptor v2 envelope, Phase 32). */
+export const DATA_KEY_BYTES = 32
+
 /** Generate a fresh random salt for a new vault. */
 export function generateSalt(): Buffer {
   return randomBytes(SALT_BYTES)
+}
+
+/**
+ * Generate the random 32-byte DATA key of a v2 (envelope) vault. The DB file and every
+ * document sidecar are encrypted under THIS key; the password-derived key only wraps it
+ * (AES-256-GCM via `encrypt`), so a password change re-wraps one small blob instead of
+ * re-encrypting the corpus.
+ */
+export function generateDataKey(): Buffer {
+  return randomBytes(DATA_KEY_BYTES)
 }
 
 /**

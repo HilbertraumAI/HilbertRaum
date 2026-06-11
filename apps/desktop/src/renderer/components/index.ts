@@ -17,3 +17,11 @@ export {
   localIndicatorDetail,
   type LocalIndicatorProps
 } from './LocalIndicator'
+export {
+  PasswordField,
+  PasswordStrengthMeter,
+  passwordStrength,
+  type PasswordFieldProps,
+  type PasswordStrength,
+  type PasswordStrengthMeterProps
+} from './PasswordField'

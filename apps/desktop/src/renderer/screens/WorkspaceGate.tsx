@@ -1,6 +1,18 @@
 import { useRef, useState } from 'react'
-import { Banner, Button, Switch } from '../components'
+import {
+  Banner,
+  Button,
+  PasswordField,
+  PasswordStrengthMeter,
+  Switch,
+  passwordStrength
+} from '../components'
 import type { WorkspaceStateInfo } from '@shared/types'
+
+// The password field + strength meter moved to `components/PasswordField` in Phase 32
+// (the Settings "Change password" card reuses them); re-exported here so existing
+// import sites (tests) stay valid.
+export { passwordStrength, type PasswordStrength } from '../components'
 
 // The pre-app gate (spec §7.1 "show onboarding if first run" + unlock). Rendered before
 // the normal sidebar whenever the workspace is `uninitialized` or `locked`.
@@ -24,36 +36,6 @@ interface Props {
    * omitted on a plain unlock.
    */
   onUnlocked: (next: WorkspaceStateInfo, landOn?: string) => void
-}
-
-export interface PasswordStrength {
-  /** 0 (empty) … 4 (very strong). Purely advisory — never gates submission. */
-  score: 0 | 1 | 2 | 3 | 4
-  label: string
-  hint: string | null
-}
-
-/**
- * Hand-rolled, honest password-strength hint (no external library — fully offline).
- * Length carries most of the weight; character variety adds one step. It is a HINT:
- * only the 8-character floor and the confirm match gate the Create button.
- */
-export function passwordStrength(pw: string): PasswordStrength {
-  if (pw.length === 0) return { score: 0, label: '', hint: null }
-  if (pw.length < 8) {
-    return { score: 1, label: 'Too short', hint: 'Use at least 8 characters.' }
-  }
-  let score = 1
-  if (pw.length >= 12) score += 1
-  if (pw.length >= 16) score += 1
-  const variety = [/[a-z]/, /[A-Z]/, /[0-9]/, /[^a-zA-Z0-9]/].filter((re) => re.test(pw)).length
-  if (variety >= 3) score += 1
-  const capped = Math.min(score, 4) as 1 | 2 | 3 | 4
-  if (capped === 4) return { score: 4, label: 'Very strong', hint: null }
-  if (capped === 3) return { score: 3, label: 'Strong', hint: null }
-  const hint = 'Longer is stronger — 12 or more characters, or a few unrelated words, work well.'
-  if (capped === 2) return { score: 2, label: 'Okay', hint }
-  return { score: 1, label: 'Weak', hint }
 }
 
 /** Which screen the create flow hands off to. */
@@ -296,19 +278,7 @@ export function WorkspaceGate({ state, onUnlocked }: Props): JSX.Element {
               onToggleShow={() => setShowPassword((v) => !v)}
               onChange={setPassword}
             />
-            {password.length > 0 && (
-              <div className="strength" role="status">
-                <span className="strength-bar" aria-hidden="true">
-                  {[1, 2, 3, 4].map((i) => (
-                    <span
-                      key={i}
-                      className={`strength-seg ${i <= strength.score ? `on s${strength.score}` : ''}`}
-                    />
-                  ))}
-                </span>
-                <span className="strength-label">{strength.label}</span>
-              </div>
-            )}
+            {password.length > 0 && <PasswordStrengthMeter strength={strength} />}
             {strength.hint && <p className="hint">{strength.hint}</p>}
             <PasswordField
               placeholder="Confirm password"
@@ -341,58 +311,6 @@ export function WorkspaceGate({ state, onUnlocked }: Props): JSX.Element {
           </Button>
         </div>
       </form>
-    </div>
-  )
-}
-
-interface PasswordFieldProps {
-  placeholder: string
-  value: string
-  autoFocus?: boolean
-  autoComplete: string
-  /** Reveal the password (the toggle is shared between the two create fields). */
-  show: boolean
-  /** Renders the Show/Hide toggle on this field when provided. */
-  onToggleShow?: () => void
-  onChange: (value: string) => void
-}
-
-/**
- * A password input that never fights the user: paste and password managers work (no
- * onPaste/onDrop interception — WCAG 3.3.8) and a Show toggle reveals what was typed.
- */
-function PasswordField({
-  placeholder,
-  value,
-  autoFocus,
-  autoComplete,
-  show,
-  onToggleShow,
-  onChange
-}: PasswordFieldProps): JSX.Element {
-  return (
-    <div className="gate-pw-row">
-      <input
-        type={show ? 'text' : 'password'}
-        className="gate-input"
-        placeholder={placeholder}
-        aria-label={placeholder}
-        autoComplete={autoComplete}
-        value={value}
-        autoFocus={autoFocus}
-        onChange={(e) => onChange(e.target.value)}
-      />
-      {onToggleShow && (
-        <Button
-          size="sm"
-          variant="ghost"
-          className="gate-pw-toggle"
-          aria-pressed={show}
-          onClick={onToggleShow}
-        >
-          {show ? 'Hide' : 'Show'}
-        </Button>
-      )}
     </div>
   )
 }

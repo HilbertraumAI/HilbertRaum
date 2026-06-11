@@ -51,6 +51,13 @@ const api = {
     ipcRenderer.invoke(IPC.createWorkspace, password, mode),
   /** Re-encrypt + shred the working DB and return to the locked state. */
   lockWorkspace: (): Promise<WorkspaceStateInfo> => ipcRenderer.invoke(IPC.lockWorkspace),
+  /** Change the vault password (Phase 32; unlocked only). Wrong current password is a
+   *  normal failure result, like unlockWorkspace. */
+  changeWorkspacePassword: (
+    currentPassword: string,
+    nextPassword: string
+  ): Promise<WorkspaceActionResult> =>
+    ipcRenderer.invoke(IPC.changeWorkspacePassword, currentPassword, nextPassword),
 
   // ---- Models + runtime (Phase 2) ----
   listModels: (): Promise<ModelInfo[]> => ipcRenderer.invoke(IPC.listModels),

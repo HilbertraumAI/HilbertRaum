@@ -22,7 +22,10 @@ import {
   type EncryptedBlob,
   type KdfParams,
   DEFAULT_KDF,
+  decrypt,
   deriveKey,
+  encrypt,
+  generateDataKey,
   generateSalt,
   makeVerifier,
   verifyKey,
@@ -45,7 +48,19 @@ import {
 // the password or key. This is the only thing the app can read BEFORE unlocking, since
 // the settings (incl. `workspaceMode`) live inside the encrypted DB.
 
+/** Legacy descriptor format: data encrypted directly under the password-derived key. */
 export const VAULT_VERSION = 1
+/**
+ * Envelope format (Phase 32, decision D24): a random 32-byte DATA key encrypts the DB +
+ * document sidecars; the password-derived key (KEK) only WRAPS it in the descriptor.
+ * A password change then re-wraps one blob (O(1)) instead of re-encrypting the corpus.
+ * New vaults are created v2; v1 vaults migrate on their FIRST password change (never on
+ * unlock — a vault that never changes its password is never touched).
+ */
+export const VAULT_VERSION_ENVELOPE = 2
+
+/** Suffix marking an encrypted stored document copy under `workspace/documents/`. */
+export const ENCRYPTED_DOC_SUFFIX = '.enc'
 
 /** Serialized form of an EncryptedBlob in the descriptor JSON. */
 interface SerializedBlob {
@@ -62,6 +77,11 @@ export interface VaultDescriptor {
   saltB64: string
   /** AES-256-GCM verifier: a known plaintext under the derived key (password check). */
   verifier: SerializedBlob
+  /**
+   * v2 envelope only: the random DATA key wrapped (AES-256-GCM) by the password-derived
+   * KEK. Like the verifier this is ciphertext — the data key itself never touches disk.
+   */
+  dataKey?: SerializedBlob
 }
 
 /** Resolved file locations the vault works with. */
@@ -79,6 +99,19 @@ export class WrongPasswordError extends Error {
   constructor() {
     super('Incorrect workspace password')
     this.name = 'WrongPasswordError'
+  }
+}
+
+/**
+ * Thrown when a password change and document work (import/re-index, which writes `.enc`
+ * sidecars) would overlap — either operation refuses to START while the other runs, so
+ * a sidecar is never written under a key that is being swapped out (Phase 32 guard).
+ * The message is user-facing (§11.4 tone).
+ */
+export class VaultBusyError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'VaultBusyError'
   }
 }
 
@@ -112,8 +145,10 @@ export function readVaultDescriptor(descriptorPath: string): VaultDescriptor | n
   if (!existsSync(descriptorPath)) return null
   try {
     const raw = JSON.parse(readFileSync(descriptorPath, 'utf8')) as VaultDescriptor
-    if (raw && raw.mode === 'encrypted' && raw.kdf && raw.saltB64 && raw.verifier) return raw
-    return null
+    if (!raw || raw.mode !== 'encrypted' || !raw.kdf || !raw.saltB64 || !raw.verifier) return null
+    // A v2 (envelope) descriptor without its wrapped data key is corrupt, not unlockable.
+    if (raw.version >= VAULT_VERSION_ENVELOPE && !raw.dataKey) return null
+    return raw
   } catch {
     return null
   }
@@ -129,10 +164,18 @@ export function isDescriptorUnreadable(descriptorPath: string): boolean {
   return existsSync(descriptorPath) && readVaultDescriptor(descriptorPath) === null
 }
 
-/** Persist the descriptor atomically (write temp + rename). */
+/** Persist the descriptor atomically (write temp + fsync + rename). The rename is the
+ *  single commit point of the Phase-32 password-change journal, so the temp is fsynced
+ *  first — a descriptor must never land half-written after a power cut. */
 export function writeVaultDescriptor(descriptorPath: string, d: VaultDescriptor): void {
   const tmp = `${descriptorPath}.tmp`
-  writeFileSync(tmp, JSON.stringify(d, null, 2), 'utf8')
+  const fd = openSync(tmp, 'w')
+  try {
+    writeSync(fd, Buffer.from(JSON.stringify(d, null, 2), 'utf8'))
+    fsyncSync(fd)
+  } finally {
+    closeSync(fd)
+  }
   renameSync(tmp, descriptorPath)
 }
 
@@ -323,6 +366,162 @@ export function shredStalePlaintext(vaultPaths: VaultPaths): void {
   }
 }
 
+// ---- password change: envelope rekey + journaled v1→v2 migration (Phase 32) -------
+//
+// Two-phase swap, composed ONLY from the existing atomic primitives: every re-encrypted
+// file is STAGED as `<file>.new` (encryptFile's own `.tmp`-then-rename inside) and
+// fsynced; the atomic descriptor replace is the SINGLE commit point; the staged files
+// are then swapped in (shred old, rename `.new`). A crash at any step recovers to a
+// consistent vault: descriptor still v1 → the staged files are discarded and the OLD
+// password+files win; descriptor already v2 → the staged files are rolled forward and
+// the NEW password wins. Never a mix.
+
+/** Suffix of a staged (re-encrypted, not yet swapped-in) file during a rekey. */
+export const REKEY_SUFFIX = '.new'
+
+/** Transient plaintext infix used while re-encrypting a document sidecar. Ends in
+ *  `.tmp` so the `shredStalePlaintext` startup sweep covers a crash mid-stage. */
+const REKEY_PLAINTEXT_SUFFIX = '.rekey.tmp'
+
+/** fsync a finished file so it is durable BEFORE the descriptor commit point. */
+function fsyncPath(path: string): void {
+  const fd = openSync(path, 'r+')
+  try {
+    fsyncSync(fd)
+  } finally {
+    closeSync(fd)
+  }
+}
+
+/** Every encrypted document sidecar (`<id><ext>.enc`) under `workspace/documents/`. */
+function listEncryptedDocSidecars(vaultPaths: VaultPaths): string[] {
+  const docsDir = join(dirname(vaultPaths.dbPath), 'documents')
+  try {
+    return readdirSync(docsDir)
+      .filter((n) => n.endsWith(ENCRYPTED_DOC_SUFFIX))
+      .map((n) => join(docsDir, n))
+  } catch {
+    return [] // no documents dir yet
+  }
+}
+
+/** Every staged `<file>.new` of an (interrupted or in-progress) rekey: DB + documents. */
+function stagedRekeyFiles(vaultPaths: VaultPaths): string[] {
+  const out: string[] = []
+  if (existsSync(`${vaultPaths.encPath}${REKEY_SUFFIX}`)) {
+    out.push(`${vaultPaths.encPath}${REKEY_SUFFIX}`)
+  }
+  const docsDir = join(dirname(vaultPaths.dbPath), 'documents')
+  try {
+    for (const n of readdirSync(docsDir)) {
+      if (n.endsWith(`${ENCRYPTED_DOC_SUFFIX}${REKEY_SUFFIX}`)) out.push(join(docsDir, n))
+    }
+  } catch {
+    /* no documents dir yet */
+  }
+  return out
+}
+
+/**
+ * Phase 1 of the v1→v2 migration: re-encrypt the database + every document sidecar
+ * under `dataKey`, STAGED next to the originals as `<file>.new`, fsynced. Nothing the
+ * current password unlocks is touched. The DB snapshot comes from the live working file
+ * (WAL checkpointed first), so it is CURRENT — fresher than the at-rest `.enc` from the
+ * last lock. Document sidecars round-trip through a transient plaintext file that is
+ * shredded immediately (and covered by the startup sweep on a crash).
+ */
+export function stageRekey(vaultPaths: VaultPaths, db: Db, oldKey: Buffer, dataKey: Buffer): void {
+  db.exec('PRAGMA wal_checkpoint(TRUNCATE);')
+  encryptFile(vaultPaths.dbPath, `${vaultPaths.encPath}${REKEY_SUFFIX}`, dataKey)
+  fsyncPath(`${vaultPaths.encPath}${REKEY_SUFFIX}`)
+  for (const enc of listEncryptedDocSidecars(vaultPaths)) {
+    const plain = `${enc}${REKEY_PLAINTEXT_SUFFIX}`
+    try {
+      decryptFile(enc, plain, oldKey)
+      encryptFile(plain, `${enc}${REKEY_SUFFIX}`, dataKey)
+      fsyncPath(`${enc}${REKEY_SUFFIX}`)
+    } finally {
+      shredFile(plain)
+    }
+  }
+}
+
+/**
+ * Phase 2 (after the descriptor commit): swap every staged file in — shred the old
+ * ciphertext (its key may be a compromised password's), rename `.new` into place.
+ * Idempotent: already-swapped files have no `.new` left, so crash-and-rerun completes.
+ */
+export function applyPendingRekey(vaultPaths: VaultPaths): void {
+  for (const staged of stagedRekeyFiles(vaultPaths)) {
+    const target = staged.slice(0, -REKEY_SUFFIX.length)
+    shredFile(target)
+    renameSync(staged, target)
+  }
+}
+
+/** Roll back an uncommitted rekey: delete the staged files. Plain delete is enough —
+ *  they are ciphertext under a data key that was never persisted anywhere. */
+export function discardPendingRekey(vaultPaths: VaultPaths): void {
+  for (const staged of stagedRekeyFiles(vaultPaths)) {
+    rmSync(staged, { force: true })
+  }
+}
+
+/**
+ * Crash recovery for an interrupted password change. MUST run before any unlock decrypt:
+ * the descriptor decides which side of the commit point the crash landed on. v2
+ * descriptor + staged files ⇒ committed ⇒ roll FORWARD (the new password's files win);
+ * v1 descriptor ⇒ uncommitted ⇒ roll BACK (the old password + old files stay intact).
+ */
+export function recoverPendingRekey(vaultPaths: VaultPaths, descriptor: VaultDescriptor | null): void {
+  // encryptFile's own atomic-write temp for the staged DB (a crash mid-stage leaves it;
+  // the document-dir equivalents end in `.tmp` and are swept by shredStalePlaintext).
+  rmSync(`${vaultPaths.encPath}${REKEY_SUFFIX}.tmp`, { force: true })
+  if (stagedRekeyFiles(vaultPaths).length === 0) return
+  if (descriptor && descriptor.version >= VAULT_VERSION_ENVELOPE && descriptor.dataKey) {
+    applyPendingRekey(vaultPaths)
+  } else {
+    discardPendingRekey(vaultPaths)
+  }
+}
+
+/**
+ * Build a fresh v2 (envelope) descriptor: new salt, KEK derived from `password` under
+ * `kdf`, new verifier, `dataKey` wrapped by the KEK. The KEK is zeroed before returning.
+ */
+function buildEnvelopeDescriptor(password: string, dataKey: Buffer, kdf: KdfParams): VaultDescriptor {
+  const salt = generateSalt()
+  const kek = deriveKey(password, salt, kdf)
+  const descriptor: VaultDescriptor = {
+    version: VAULT_VERSION_ENVELOPE,
+    mode: 'encrypted',
+    kdf,
+    saltB64: salt.toString('base64'),
+    verifier: blobToJson(makeVerifier(kek)),
+    dataKey: blobToJson(encrypt(kek, dataKey))
+  }
+  kek.fill(0)
+  return descriptor
+}
+
+/**
+ * The O(1) password change of a v2 vault (and the commit step of the v1→v2 migration):
+ * atomically replace the descriptor with a fresh envelope — new salt, new KDF params
+ * (`DEFAULT_KDF` by default, so a legacy scrypt vault silently upgrades to Argon2id),
+ * new verifier, the SAME data key re-wrapped under the new password's KEK. No data file
+ * is touched.
+ */
+export function rewrapVaultKey(
+  vaultPaths: VaultPaths,
+  dataKey: Buffer,
+  newPassword: string,
+  kdf: KdfParams = DEFAULT_KDF
+): VaultDescriptor {
+  const descriptor = buildEnvelopeDescriptor(newPassword, dataKey, kdf)
+  writeVaultDescriptor(vaultPaths.descriptorPath, descriptor)
+  return descriptor
+}
+
 // ---- encrypted document cache ------------------------------------------------------
 
 /**
@@ -342,14 +541,17 @@ export interface DocumentCipher {
 
 /**
  * Create a brand-new encrypted vault ON DISK, leaving it LOCKED (descriptor + `.enc`,
- * no plaintext working file). Derives a key from `password`, writes the descriptor with
- * the salt + KDF params + verifier, builds an initial seeded database, encrypts it, and
- * shreds the plaintext. Call `unlockEncryptedVault` afterwards to open it.
+ * no plaintext working file). New vaults are v2 (envelope, Phase 32): a random data key
+ * encrypts the database; the password-derived KEK wraps it in the descriptor — so their
+ * very first password change is already the O(1) re-wrap. Call `unlockEncryptedVault`
+ * afterwards to open it. `opts.legacyV1` builds the pre-Phase-32 direct-key format and
+ * exists ONLY so tests can create migration fixtures — the app never passes it.
  */
 export function createEncryptedVaultOnDisk(
   vaultPaths: VaultPaths,
   password: string,
-  kdf: KdfParams = DEFAULT_KDF
+  kdf: KdfParams = DEFAULT_KDF,
+  opts: { legacyV1?: boolean } = {}
 ): void {
   // Refuse to overwrite an existing vault — `.enc` IS the user's data (chats, documents,
   // settings), and re-creating would irreversibly replace it with an empty database. A
@@ -361,14 +563,22 @@ export function createEncryptedVaultOnDisk(
         `"${vaultPaths.encPath}" (and config/workspace.json) first.`
     )
   }
-  const salt = generateSalt()
-  const key = deriveKey(password, salt, kdf)
-  const descriptor: VaultDescriptor = {
-    version: VAULT_VERSION,
-    mode: 'encrypted',
-    kdf,
-    saltB64: salt.toString('base64'),
-    verifier: blobToJson(makeVerifier(key))
+  let descriptor: VaultDescriptor
+  /** The key the database FILE is encrypted under (v2: data key; v1: password key). */
+  let fileKey: Buffer
+  if (opts.legacyV1) {
+    const salt = generateSalt()
+    fileKey = deriveKey(password, salt, kdf)
+    descriptor = {
+      version: VAULT_VERSION,
+      mode: 'encrypted',
+      kdf,
+      saltB64: salt.toString('base64'),
+      verifier: blobToJson(makeVerifier(fileKey))
+    }
+  } else {
+    fileKey = generateDataKey()
+    descriptor = buildEnvelopeDescriptor(password, fileKey, kdf)
   }
   writeVaultDescriptor(vaultPaths.descriptorPath, descriptor)
 
@@ -378,22 +588,26 @@ export function createEncryptedVaultOnDisk(
   updateSettings(db, { workspaceMode: 'encrypted' })
   db.exec('PRAGMA wal_checkpoint(TRUNCATE);')
   db.close()
-  encryptFile(vaultPaths.dbPath, vaultPaths.encPath, key)
+  encryptFile(vaultPaths.dbPath, vaultPaths.encPath, fileKey)
   shredFile(vaultPaths.dbPath)
   cleanSidecars(vaultPaths.dbPath)
+  fileKey.fill(0)
 }
 
 /** The in-memory result of a successful unlock. */
 export interface UnlockedVault {
   db: Db
+  /** The FILE key data is encrypted under: v2 = the unwrapped data key; v1 = the
+   *  password-derived key. Lives only in memory; zeroed on lock. */
   key: Buffer
   descriptor: VaultDescriptor
 }
 
 /**
  * Unlock an encrypted vault: derive the key, verify the password against the descriptor
- * (no DB access), decrypt `.enc` → working file, and open the database. Throws
- * `WrongPasswordError` on a bad password (the GCM verifier fails, the DB is never touched).
+ * (no DB access), unwrap the data key on a v2 descriptor, decrypt `.enc` → working file,
+ * and open the database. Throws `WrongPasswordError` on a bad password (the GCM verifier
+ * fails, the DB is never touched).
  */
 export function unlockEncryptedVault(vaultPaths: VaultPaths, password: string): UnlockedVault {
   const descriptor = readVaultDescriptor(vaultPaths.descriptorPath)
@@ -407,18 +621,27 @@ export function unlockEncryptedVault(vaultPaths: VaultPaths, password: string): 
     }
     throw new Error('No encrypted workspace to unlock')
   }
+  // A crash during a password change must be resolved BEFORE any decrypt: the descriptor
+  // decides whether staged `.new` files roll forward (committed) or are discarded.
+  recoverPendingRekey(vaultPaths, descriptor)
   const salt = Buffer.from(descriptor.saltB64, 'base64')
   const key = deriveKey(password, salt, descriptor.kdf)
   if (!verifyKey(key, blobFromJson(descriptor.verifier))) {
     throw new WrongPasswordError()
   }
+  // v2 envelope: the derived key is only the KEK — unwrap the data key, drop the KEK.
+  let fileKey = key
+  if (descriptor.version >= VAULT_VERSION_ENVELOPE && descriptor.dataKey) {
+    fileKey = decrypt(key, blobFromJson(descriptor.dataKey))
+    key.fill(0)
+  }
   // Verified: clean any stale WAL/SHM from a crash first (otherwise SQLite would replay
   // them onto the freshly-decrypted snapshot and corrupt it), then decrypt + open.
   cleanSidecars(vaultPaths.dbPath)
-  decryptFile(vaultPaths.encPath, vaultPaths.dbPath, key)
+  decryptFile(vaultPaths.encPath, vaultPaths.dbPath, fileKey)
   const db = openDatabase(vaultPaths.dbPath)
   seedSettings(db)
-  return { db, key, descriptor }
+  return { db, key: fileKey, descriptor }
 }
 
 /**
@@ -471,6 +694,11 @@ export class WorkspaceController {
   private key: Buffer | null = null
   private descriptor: VaultDescriptor | null
   private _mode: WorkspaceMode | null = null
+  /** Open document-work holds (import/re-index writing `.enc` sidecars) — see the
+   *  Phase-32 race guard on `changePassword`/`beginDocumentWork`. */
+  private docWork = 0
+  /** True while `changePassword` runs (defensive: it is synchronous today). */
+  private changingPassword = false
 
   constructor(
     private readonly vaultPaths: VaultPaths,
@@ -526,6 +754,10 @@ export class WorkspaceController {
       // If a previous run was killed before lock-on-quit ran, shred the leftover so the
       // decrypted database (+ WAL/SHM) never lingers on disk. Safe — see shredStalePlaintext.
       shredStalePlaintext(this.vaultPaths)
+      // And resolve any password change the crash interrupted (roll forward or back per
+      // the descriptor — unlock would do this too; doing it here keeps disk state clean
+      // even while the vault stays locked).
+      recoverPendingRekey(this.vaultPaths, this.descriptor)
       return // locked; await unlock
     }
     if (this.vaultExistsOnDisk()) {
@@ -585,6 +817,97 @@ export class WorkspaceController {
       this._mode = 'encrypted'
     }
     return this.getState()
+  }
+
+  /**
+   * Register a unit of document work (an import job or a re-index) that will WRITE
+   * `.enc` sidecars. Returns a release function (idempotent; call it in `finally`).
+   * Refused while a password change is in progress — and `changePassword` symmetrically
+   * refuses while any hold is open — so a sidecar is never encrypted under a key that
+   * the change is about to retire (the Phase-32 race guard; documented in
+   * security-model.md). No-op-ish for plaintext vaults: holds are counted but nothing
+   * conflicts (changePassword is unreachable there).
+   */
+  beginDocumentWork(): () => void {
+    if (this.changingPassword) {
+      throw new VaultBusyError(
+        'The workspace password is being changed right now. Try again in a moment.'
+      )
+    }
+    this.docWork += 1
+    let released = false
+    return () => {
+      if (!released) {
+        released = true
+        this.docWork -= 1
+      }
+    }
+  }
+
+  /**
+   * Change the vault password (Phase 32, decision D24). Runs UNLOCKED only. Verifies
+   * `currentPassword` against the existing verifier FIRST (a wrong one throws
+   * `WrongPasswordError` — the same failure class as a wrong unlock). On a v2 vault the
+   * change is O(1): re-wrap the data key in a fresh envelope descriptor (atomic
+   * single-file replace). On a v1 vault this is the one-time journaled migration to v2:
+   * stage every re-encrypted file as `.new`, commit by swapping the descriptor, then
+   * swap the staged files in — a crash at any step recovers to old-or-new, never mixed.
+   * The in-memory key is replaced in place; no re-lock is needed. `kdf` parameterizes
+   * the NEW envelope (tests use cheap params); callers default to `DEFAULT_KDF`, which
+   * silently upgrades legacy scrypt vaults to Argon2id.
+   */
+  changePassword(currentPassword: string, nextPassword: string, kdf: KdfParams = DEFAULT_KDF): WorkspaceStateInfo {
+    if (!this._db || !this.key || this._mode !== 'encrypted' || this.descriptor?.mode !== 'encrypted') {
+      throw new Error('The workspace must be unlocked to change its password.')
+    }
+    if (this.docWork > 0) {
+      throw new VaultBusyError(
+        'Documents are still being imported or re-indexed. Wait for that to finish, then try again.'
+      )
+    }
+    // Verify the CURRENT password against the existing verifier before touching anything.
+    const salt = Buffer.from(this.descriptor.saltB64, 'base64')
+    const currentKek = deriveKey(currentPassword, salt, this.descriptor.kdf)
+    const currentOk = verifyKey(currentKek, blobFromJson(this.descriptor.verifier))
+    currentKek.fill(0)
+    if (!currentOk) throw new WrongPasswordError()
+
+    this.changingPassword = true
+    try {
+      if (this.descriptor.version >= VAULT_VERSION_ENVELOPE && this.descriptor.dataKey) {
+        // v2: O(1) — re-wrap the unchanged data key under the new password's KEK.
+        this.descriptor = rewrapVaultKey(this.vaultPaths, this.key, nextPassword, kdf)
+      } else {
+        // v1: the one-time journaled migration to the envelope format.
+        discardPendingRekey(this.vaultPaths) // defensive: drop strays from an old abort
+        const dataKey = generateDataKey()
+        try {
+          stageRekey(this.vaultPaths, this._db, this.key, dataKey)
+          // COMMIT POINT: the atomic descriptor replace. Before it the old password +
+          // old files win; from here on the new ones do.
+          this.descriptor = rewrapVaultKey(this.vaultPaths, dataKey, nextPassword, kdf)
+        } catch (err) {
+          discardPendingRekey(this.vaultPaths)
+          dataKey.fill(0)
+          throw err
+        }
+        // Committed: the new password + data key are authoritative from here on, so the
+        // in-memory key is swapped BEFORE the file swap — lock()/documentCipher() must
+        // never use the retired key once the descriptor wraps the new one.
+        this.key.fill(0)
+        this.key = dataKey
+        try {
+          applyPendingRekey(this.vaultPaths)
+        } catch {
+          // Not fatal post-commit (e.g. a transiently locked file on Windows): any
+          // staged file left behind rolls forward via recoverPendingRekey on the next
+          // startup/unlock — the journal guarantees old-or-new, never mixed.
+        }
+      }
+      return this.getState()
+    } finally {
+      this.changingPassword = false
+    }
   }
 
   /**

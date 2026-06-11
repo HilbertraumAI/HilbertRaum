@@ -12,7 +12,7 @@ import type { Db } from '../db'
 import type { DocumentInfo, DocumentPreview, IngestionStatus } from '../../../shared/types'
 import { sha256File } from '../models'
 import { type Embedder, encodeVector } from '../embeddings'
-import { shredFile, type DocumentCipher } from '../workspace-vault'
+import { ENCRYPTED_DOC_SUFFIX, shredFile, type DocumentCipher } from '../workspace-vault'
 import { selectParser, supportedExtensions } from './parsers'
 import { chunkSegments } from './chunker'
 
@@ -44,8 +44,9 @@ export interface IngestionDeps {
   cipher?: DocumentCipher | null
 }
 
-/** Suffix marking an encrypted stored document copy. */
-export const ENCRYPTED_DOC_SUFFIX = '.enc'
+// Canonical home of the `.enc` suffix moved to workspace-vault (Phase 32 — the password
+// change re-encrypts these sidecars); re-exported here for the existing import sites.
+export { ENCRYPTED_DOC_SUFFIX }
 
 const MIME_BY_EXT: Record<string, string> = {
   '.txt': 'text/plain',

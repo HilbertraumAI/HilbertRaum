@@ -40,6 +40,7 @@ const AUDIT_TYPE_LABELS: Record<AuditEventType, string> = {
   workspace_unlocked: 'Workspace unlocked',
   workspace_locked: 'Workspace locked',
   workspace_unlock_failed: 'Unlock attempt failed',
+  workspace_password_changed: 'Workspace password changed',
   settings_changed: 'Settings changed',
   policy_warning: 'Policy notice',
   offline_guard_violation: 'Network attempt noticed'

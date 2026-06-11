@@ -1,5 +1,14 @@
 import { useEffect, useState } from 'react'
-import { SegmentedControl, Switch, useToast } from '../components'
+import {
+  Banner,
+  Button,
+  PasswordField,
+  PasswordStrengthMeter,
+  SegmentedControl,
+  Switch,
+  passwordStrength,
+  useToast
+} from '../components'
 import { setThemeSetting } from '../theme'
 import { PrivacyTab } from './settings/PrivacyTab'
 import { DiagnosticsTab } from './settings/DiagnosticsTab'
@@ -161,6 +170,99 @@ function GeneralTab(): JSX.Element {
             : 'Plaintext developer workspace — data is stored unencrypted. The encrypted mode is the commercial default.'}
         </p>
       </div>
+
+      {/* Phase 32: hidden entirely in plaintext_dev mode — there is nothing to change. */}
+      {settings.workspaceMode === 'encrypted' && <ChangePasswordCard />}
     </>
+  )
+}
+
+// Settings → "Change password" (Phase 32). Reuses the first-run password components
+// (strength hint, show toggle — components/PasswordField). The first change of an older
+// workspace re-secures every stored document under the new password, which can take a
+// while on a big library — the busy copy says so honestly.
+function ChangePasswordCard(): JSX.Element {
+  const [current, setCurrent] = useState('')
+  const [next, setNext] = useState('')
+  const [confirm, setConfirm] = useState('')
+  const [showPassword, setShowPassword] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const toast = useToast()
+
+  const strength = passwordStrength(next)
+  // The strength meter is advisory; only the 8-character floor + the confirm match
+  // (and the main process's own checks) gate submission — the WorkspaceGate rules.
+  const canSubmit = current.length > 0 && next.length >= 8 && next === confirm && !busy
+
+  async function submit(e: React.FormEvent): Promise<void> {
+    e.preventDefault()
+    if (!canSubmit) return
+    setBusy(true)
+    setError(null)
+    try {
+      const result = await window.api.changeWorkspacePassword(current, next)
+      if (result.ok) {
+        toast('Password changed')
+        setCurrent('')
+        setNext('')
+        setConfirm('')
+      } else {
+        setError(result.message)
+      }
+    } catch {
+      setError('Something went wrong. Your current password still works.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <form className="card" onSubmit={(e) => void submit(e)}>
+      <h2>Change password</h2>
+      <p className="hint">
+        Pick a new password for this workspace. You&apos;ll use it from the next unlock on.
+        It can&apos;t be recovered or reset, so choose something you&apos;ll remember.
+      </p>
+      <div className="gate-fields">
+        <PasswordField
+          placeholder="Current password"
+          autoComplete="current-password"
+          value={current}
+          show={showPassword}
+          onToggleShow={() => setShowPassword((v) => !v)}
+          onChange={setCurrent}
+        />
+        <PasswordField
+          placeholder="New password"
+          autoComplete="new-password"
+          value={next}
+          show={showPassword}
+          onChange={setNext}
+        />
+        {next.length > 0 && <PasswordStrengthMeter strength={strength} />}
+        {strength.hint && <p className="hint">{strength.hint}</p>}
+        <PasswordField
+          placeholder="Confirm new password"
+          autoComplete="new-password"
+          value={confirm}
+          show={showPassword}
+          onChange={setConfirm}
+        />
+        {confirm.length > 0 && confirm !== next && (
+          <p className="hint warn">Passwords don&apos;t match.</p>
+        )}
+      </div>
+      {busy && (
+        <p className="hint" role="status">
+          <span className="spinner" /> Securing your documents with the new password… On a
+          large library this can take a few minutes.
+        </p>
+      )}
+      {error && <Banner tone="error">{error}</Banner>}
+      <Button type="submit" variant="primary" disabled={!canSubmit}>
+        {busy ? 'Changing…' : 'Change password'}
+      </Button>
+    </form>
   )
 }

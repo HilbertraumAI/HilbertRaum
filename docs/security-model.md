@@ -1,6 +1,7 @@
 # Security model — Private AI Drive Lite
 
-_Last updated: 2026-06-10 (Phase 18 — the in-app downloader network surface)_
+_Last updated: 2026-06-11 (Phase 32 — vault password change: descriptor v2 envelope,
+journaled v1→v2 migration)_
 
 This document describes the local threat model, the security baseline (spec §3.5), the offline
 posture (spec §3.6), how the privacy policy is loaded and enforced, and the **encrypted workspace**
@@ -205,17 +206,60 @@ every imported document readable on a lost drive.
 ### Vault descriptor (the only pre-unlock artifact)
 Settings — including `workspaceMode` — live **inside** the encrypted DB, so the app cannot read them
 before unlocking. A small **unencrypted** descriptor at **`config/workspace.json`** is the only thing
-read pre-unlock:
+read pre-unlock. Since Phase 32 it is the **v2 envelope** format:
 
 ```jsonc
-{ "version": 1, "mode": "encrypted",
+{ "version": 2, "mode": "encrypted",
   "kdf": { "algo": "argon2id", "m": 19456, "t": 2, "p": 1, "keyLen": 32 },
-  "saltB64": "…", "verifier": { "ivB64": "…", "tagB64": "…", "ciphertextB64": "…" } }
+  "saltB64": "…",
+  "verifier": { "ivB64": "…", "tagB64": "…", "ciphertextB64": "…" },
+  "dataKey":  { "ivB64": "…", "tagB64": "…", "ciphertextB64": "…" } }
 ```
 
-It holds **only** salt + KDF params + the verifier — never the password or the derived key, which
-exist **only in memory** while unlocked. (Verified: tests scan the descriptor and the `.enc` blob and
-assert the password string is absent.)
+- **v2 (envelope, the default for new vaults):** a random 32-byte **data key** encrypts the DB
+  file and every document sidecar; the password-derived key is only a **KEK** that wraps the
+  data key (`dataKey` = AES-256-GCM of the data key under the KEK). Unlock: derive the KEK →
+  check the verifier → unwrap the data key → zero the KEK. This makes a password change O(1)
+  (re-wrap one blob) and is the foundation for future key features (recovery codes, rotation).
+- **v1 (legacy, still fully supported):** no `dataKey` — the data is encrypted directly under
+  the password-derived key. v1 vaults unlock unchanged forever; they migrate to v2 only on
+  their **first password change** (never on unlock — a vault that never changes its password
+  is never rewritten).
+
+It holds **only** salt + KDF params + the verifier + (v2) the *wrapped* data key — never the
+password, the derived key, or the plaintext data key, which exist **only in memory** while
+unlocked. (Verified: tests scan the descriptor and the `.enc` blobs and assert that neither
+password nor the raw/base64/hex data-key bytes appear.)
+
+### Password change (Phase 32, decision D24)
+`WorkspaceController.changePassword(current, next)` — Settings → General → "Change password",
+IPC `workspace:changePassword`. Runs **unlocked only**; the **current** password is verified
+against the existing verifier first (a wrong one is the same failure class as a wrong unlock —
+audited as `workspace_unlock_failed`, never a new event). Hidden entirely in `plaintext_dev`.
+
+- **v2 vault → O(1) re-wrap:** write a fresh envelope descriptor — new random salt, KEK under
+  `DEFAULT_KDF` (so a legacy **scrypt** vault silently upgrades to **Argon2id** here), new
+  verifier, the *same* data key re-wrapped — as one atomic descriptor replace (write temp,
+  fsync, rename). No data file is touched; the in-memory key is unchanged; no re-lock needed.
+- **v1 vault → one-time journaled migration to v2:** composed from the existing primitives
+  (`encryptFile`'s `.tmp`-then-rename, `shredFile`, the startup sweep):
+  1. **Stage:** checkpoint the WAL, re-encrypt the live DB and every `<id><ext>.enc` document
+     sidecar under a fresh random data key, each written as `<file>.new` and fsynced. The
+     transient plaintext per sidecar ends in `.tmp`, so `shredStalePlaintext` covers a crash.
+  2. **Commit:** the atomic v2-descriptor replace — the *single* commit point.
+  3. **Swap:** shred each old file, rename `<file>.new` into place.
+  **Crash recovery** (`recoverPendingRekey`, run at startup and before every unlock decrypt):
+  staged `.new` files with a **v1** descriptor mean the crash was pre-commit → discard them,
+  the old password + old files win; with a **v2** descriptor the commit happened → roll the
+  staged files forward, the new password wins. Old-or-new, never a mix — tests cut the journal
+  at every step and prove both directions.
+- **Race guard:** an import/re-index job writes `.enc` sidecars, so `changePassword` refuses
+  to start while document work holds a lease (`beginDocumentWork`), and document work refuses
+  to start mid-change — both with friendly copy (`VaultBusyError`), never corruption.
+- **Audit:** success records the additive `workspace_password_changed` — id-free and
+  content-free; passwords never appear in any log or audit row.
+- **Compatibility note:** a pre-Phase-32 build cannot open a v2 vault (the unlock fails with a
+  generic error, harming nothing) — see `known-limitations.md`.
 
 ### Plaintext gating (Phase-8 policy now enforced)
 `plaintextAllowed(policy, { isDev, developerMode })` decides whether plaintext is even offered:

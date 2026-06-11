@@ -530,6 +530,7 @@ export type AuditEventType =
   | 'workspace_unlocked'
   | 'workspace_locked'
   | 'workspace_unlock_failed'
+  | 'workspace_password_changed'
   | 'settings_changed'
   | 'policy_warning'
   | 'offline_guard_violation'

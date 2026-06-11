@@ -312,6 +312,21 @@ inside the encrypted workspace, so before you unlock it the app can't know your 
 - Closing the app stops the local model and, for encrypted workspaces, re-locks and protects
   your data automatically.
 
+### Change your password
+
+On an encrypted workspace, open **Settings → General → Change password** while the workspace
+is unlocked. Enter your current password, then the new one twice — the same strength hint and
+**Show** toggle as on first run. You'll use the new password from the next unlock on.
+
+- The first change on a workspace created before this feature re-secures every stored
+  document under the new password — on a large library that one-time step can take a few
+  minutes. Later changes are instant. If the app is interrupted partway through, nothing is
+  lost: either the old password or the new one still opens the workspace, never a broken mix.
+- The change waits politely: if documents are still importing or re-indexing, finish (or
+  cancel) that first.
+- Like the password itself, the new one can't be recovered or reset — pick something you'll
+  remember.
+
 ---
 
 ## 11. Move between laptops

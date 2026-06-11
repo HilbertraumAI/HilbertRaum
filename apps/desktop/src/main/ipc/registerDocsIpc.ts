@@ -92,6 +92,10 @@ export function registerDocsIpc(ctx: AppContext): void {
 
   ipcMain.handle(IPC.importDocuments, (_e, paths: string[]): ImportJob => {
     requireUnlocked()
+    // Phase-32 race guard: the whole import job holds a document-work lease so a vault
+    // password change (which re-encrypts `.enc` sidecars) refuses to start while we
+    // write them — and vice versa, this throws a friendly VaultBusyError mid-change.
+    const releaseDocWork = ctx.workspace.beginDocumentWork()
     const files = expandPaths(paths ?? [])
     const documentIds = files.map((f) => createQueuedDocument(ctx.db, f).id)
 
@@ -108,33 +112,37 @@ export function registerDocsIpc(ctx: AppContext): void {
 
     // Process sequentially in the background; do not block the invoke return.
     void (async () => {
-      for (const id of documentIds) {
-        // Lock-while-importing (M4): the vault can close mid-job ("Lock now"). Stop the
-        // loop cleanly — the remaining rows stay non-terminal inside the encrypted
-        // snapshot and are reconciled to `failed` (re-indexable) after the next unlock.
-        if (!ctx.workspace.isUnlocked()) {
-          log.warn('Import stopped: workspace locked mid-job', { jobId })
-          break
+      try {
+        for (const id of documentIds) {
+          // Lock-while-importing (M4): the vault can close mid-job ("Lock now"). Stop the
+          // loop cleanly — the remaining rows stay non-terminal inside the encrypted
+          // snapshot and are reconciled to `failed` (re-indexable) after the next unlock.
+          if (!ctx.workspace.isUnlocked()) {
+            log.warn('Import stopped: workspace locked mid-job', { jobId })
+            break
+          }
+          processing.add(id)
+          try {
+            const info = await processDocument(ctx.db, storeDir, id, ingestionDeps())
+            if (info.status === 'failed') status.failed += 1
+            else status.completed += 1
+            // Audit (Phase 19): filename + counts only — never the document's text.
+            ctx.audit?.('document_imported', `Document imported: ${info.title}`, {
+              documentId: id,
+              status: info.status,
+              chunkCount: info.chunkCount
+            })
+          } catch (err) {
+            status.failed += 1
+            log.error('Document ingestion crashed', { id, error: String(err) })
+          } finally {
+            processing.delete(id)
+          }
         }
-        processing.add(id)
-        try {
-          const info = await processDocument(ctx.db, storeDir, id, ingestionDeps())
-          if (info.status === 'failed') status.failed += 1
-          else status.completed += 1
-          // Audit (Phase 19): filename + counts only — never the document's text.
-          ctx.audit?.('document_imported', `Document imported: ${info.title}`, {
-            documentId: id,
-            status: info.status,
-            chunkCount: info.chunkCount
-          })
-        } catch (err) {
-          status.failed += 1
-          log.error('Document ingestion crashed', { id, error: String(err) })
-        } finally {
-          processing.delete(id)
-        }
+      } finally {
+        releaseDocWork()
+        status.done = true
       }
-      status.done = true
       log.info('Import finished', { jobId, completed: status.completed, failed: status.failed })
     })()
 
@@ -189,6 +197,9 @@ export function registerDocsIpc(ctx: AppContext): void {
   ipcMain.handle(IPC.reindexDocument, async (_e, documentId: string): Promise<DocumentInfo> => {
     requireUnlocked()
     requireNotProcessing(documentId)
+    // Phase-32 race guard: re-index rewrites the `.enc` sidecar — mutually exclusive
+    // with a password change (see importDocuments).
+    const releaseDocWork = ctx.workspace.beginDocumentWork()
     log.info('Re-index document', { documentId })
     processing.add(documentId)
     try {
@@ -200,6 +211,7 @@ export function registerDocsIpc(ctx: AppContext): void {
       return info
     } finally {
       processing.delete(documentId)
+      releaseDocWork()
     }
   })
 }
