@@ -239,7 +239,8 @@ your files.
 
 ## 7. Ask your documents (RAG)
 
-1. Open **Documents** and **Import** files (txt, md, pdf, docx, csv) or a folder.
+1. Open **Documents** and **Import** files (txt, md, pdf, docx, csv — and audio
+   recordings: wav, mp3, flac, ogg) or a folder.
 2. Each file shows a friendly status while it is prepared locally (Waiting → Reading →
    Preparing → **Ready**).
    Imported files are **copied into your workspace**, so the drive stays self-contained.
@@ -330,6 +331,30 @@ A few honest notes about comparisons:
 - Like every document task: a model must be running, one job runs at a time, you can
   cancel anytime (a cancelled comparison leaves nothing behind), and the comparison is a
   snapshot — re-run it after the sources change.
+
+**Import an audio recording ("ask your meetings").** Import a **WAV, MP3, FLAC, or OGG**
+recording like any document: it is **transcribed on this drive** (nothing is uploaded —
+there is no cloud speech service involved) and becomes a normal document — searchable,
+answerable in *Ask my documents*, summarizable, translatable. Citations from a recording
+show the **time range** the answer came from (e.g. *12:30–16:05*), so you can jump to
+that spot in the original audio. **Preview** shows the transcript with those time labels.
+
+A few honest notes about recordings:
+
+- Transcription needs the **transcription model** (the AI Model screen shows it —
+  *"Turns audio recordings into searchable text"*). Without it, an audio import fails
+  with a friendly note; download the model and **Re-index** the file.
+- Listening takes real time on a laptop CPU: roughly **two-thirds of the recording's
+  length** (a 30-minute memo ≈ 20 minutes). The row shows **"Transcribing… N%"** and you
+  can keep using the app meanwhile.
+- Importing **large audio** asks first — the recording is copied into your workspace
+  (encrypted on encrypted drives) and transcribed, which costs space and time.
+- **Re-index** of a recording transcribes it again from scratch (same duration as the
+  import). Preview and the document tasks reuse the stored transcript and are instant.
+- **m4a/aac** (some voice-memo apps) is not supported — convert the file to MP3 or WAV
+  and import again.
+- Transcripts are good but not perfect: unusual names and terms can be misheard. Numbers
+  and dates held up well in our German and English checks.
 
 ---
 

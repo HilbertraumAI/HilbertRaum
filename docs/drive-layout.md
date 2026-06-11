@@ -1,6 +1,6 @@
 # Drive & Workspace Layout
 
-_Last updated: 2026-06-10 (Phase 14: Vulkan-default runtime + `<os>/cpu/` safety net + `.paid-runtime.json` markers)_
+_Last updated: 2026-06-11 (Phase 36: the `whisper.cpp` second sidecar family + `models/transcriber/`)_
 
 ## How the app finds its data
 
@@ -45,9 +45,11 @@ PRIVATE_AI_DRIVE/
 ├── runtime/llama.cpp/{win,mac,linux}/          # default sidecar build (Phase 10; Vulkan on win/linux since Phase 14)
 │   ├── .paid-runtime.json                       # install marker: { version, backend, os, arch } (Phase 14)
 │   └── cpu/                                     # pure-CPU safety-net build + its own marker (win/linux only, Phase 14)
-├── models/{chat,embeddings,reranker}/          # GGUF weights (git-ignored; reranker/ is an optional Phase-21 quality add-on)
-├── model-manifests/{chat,embeddings,reranker}/ # committed YAML (the only model metadata in git)
-│   └── runtime-sources.yaml                     # sidecar download manifest (Phase 12)
+├── runtime/whisper.cpp/{win,mac,linux}/        # SECOND sidecar family (Phase 36): the whisper-cli transcriber
+│   └── .paid-runtime.json                       # same marker scheme; win = upstream prebuilt, mac/linux = source-build (see below)
+├── models/{chat,embeddings,reranker,transcriber}/ # weights (git-ignored; transcriber/ holds the whisper GGML .bin)
+├── model-manifests/{chat,embeddings,reranker,transcriber}/ # committed YAML (the only model metadata in git)
+│   └── runtime-sources.yaml                     # sidecar download manifest (Phase 12; + whisper_cpp block since Phase 36)
 ├── workspace/                                  # paid.sqlite (encrypted or plaintext) — EMPTY on a sold drive
 ├── logs/
 ├── docs/                                       # user guide, privacy, troubleshooting
@@ -145,6 +147,29 @@ Since Phase 14 (see [`gpu-support-plan.md`](gpu-support-plan.md)) `runtime-sourc
 
 Existing DIY drives keep working untouched: their flat `<os>/` dir holds a CPU build that resolves
 exactly as before (it just re-fetches as the Vulkan default on the next `fetch-runtime` run).
+
+### Second sidecar family: the whisper.cpp transcriber (Phase 36)
+
+Audio transcription uses a separate, pinned **whisper.cpp** CLI under
+`runtime/whisper.cpp/<os>/` (resolved by `services/transcriber/cli.ts`
+`resolveWhisperCliPath`; `PAID_WHISPER_BIN` overrides for dev). It rides the SAME
+distribution machinery as the llama family:
+
+- The pin lives in `runtime-sources.yaml` under the additive **`whisper_cpp:`** block
+  (same `{ version, builds[] }` shape, own tag — currently `v1.8.6`). A pre-Phase-36
+  app ignores the block entirely (verified forward-compatibility).
+- Fetch with **`fetch-runtime --family whisper_cpp`** (`-Family whisper_cpp` on
+  PowerShell) — same verify-before-trust + `.paid-runtime.json` marker idempotency.
+- **CPU-only by design** (the E5/reranker precedent: transcription is a batch job).
+- **Upstream ships prebuilt binaries for WINDOWS ONLY** (R-W1, 2026-06-11). The
+  mac/linux dirs exist in the layout, but provisioning them means compiling the pinned
+  tag from source (`cmake -B build && cmake --build build -j --config Release`, then
+  copy `build/bin/whisper-cli` + libs into `runtime/whisper.cpp/<os>/` and write the
+  marker). A drive without a whisper binary still works fully — audio imports fail
+  per-file with friendly copy pointing at the AI Model screen.
+- Weights are a NORMAL model manifest (`model-manifests/transcriber/`,
+  `role: transcriber`) → `fetch-models` and the Phase-18 in-app downloader cover them
+  with zero new code; they land in `models/transcriber/`.
 
 ## Portability notes
 - No hardcoded absolute paths; everything derives from the resolved root (spec rule).

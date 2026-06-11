@@ -155,7 +155,11 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
     await Promise.allSettled([
       ctx.runtime.stop(),
       ctx.embedder.suspend?.() ?? ctx.embedder.stop?.() ?? Promise.resolve(),
-      ctx.reranker?.suspend?.() ?? Promise.resolve()
+      ctx.reranker?.suspend?.() ?? Promise.resolve(),
+      // Phase 36: kill any in-flight whisper-cli child (it is reading decrypted audio;
+      // the failing parse marks that document `failed`, and processDocument's finally
+      // shreds the decrypted transient). Per-file CLI — next use just respawns.
+      ctx.transcriber?.suspend?.() ?? Promise.resolve()
     ])
     // Recorded BEFORE the vault closes — afterwards the DB is unreachable.
     ctx.audit?.('workspace_locked', 'Workspace locked')

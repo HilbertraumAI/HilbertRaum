@@ -44,6 +44,27 @@ const ACTIVE_STATUSES: ReadonlySet<IngestionStatus> = new Set([
   'embedding'
 ])
 
+/**
+ * Per-document status badge. Audio in `extracting` is honestly "Transcribing…" —
+ * listening to a recording takes real time (Phase 36) — with the coarse percent the
+ * docs IPC merges in while whisper works.
+ */
+function badgeFor(d: DocumentInfo): { label: string; tone: BadgeTone; icon: string } {
+  const base = STATUS_BADGE[d.status]
+  if (d.status === 'extracting' && d.mimeType?.startsWith('audio/')) {
+    const pct = d.transcriptionProgress != null ? ` ${d.transcriptionProgress}%` : ''
+    return { ...base, label: `Transcribing…${pct}` }
+  }
+  return base
+}
+
+/**
+ * Total picked audio bytes above which the import asks first (Phase 36, D35): the
+ * recording is copied onto the drive (encrypted on encrypted workspaces) AND fully
+ * transcribed on the CPU — real space + real minutes the user should consciously accept.
+ */
+const LARGE_AUDIO_CONFIRM_BYTES = 50 * 1024 * 1024
+
 // Per-kind busy copy for the row spinner (guidelines §7 — speak human, no jargon).
 const TASK_BUSY_LABEL: Record<DocTaskKind, string> = {
   summary: 'Summarizing…',
@@ -76,6 +97,12 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
   const [previewLoading, setPreviewLoading] = useState(false)
   // Destructive delete goes through a ConfirmDialog (guidelines §6), not browser confirm.
   const [confirmDelete, setConfirmDelete] = useState<DocumentInfo | null>(null)
+  // Large-audio import confirmation (Phase 36, D35): pending paths + their preflight.
+  const [confirmAudio, setConfirmAudio] = useState<{
+    paths: string[]
+    audioFileCount: number
+    audioBytes: number
+  } | null>(null)
   // "Translate" target choice (Phase 34): the row button opens this small modal.
   const [translateDoc, setTranslateDoc] = useState<DocumentInfo | null>(null)
   // "Ask these documents" selection (indexed documents only).
@@ -126,11 +153,8 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
     [refresh]
   )
 
-  async function onImport(mode: 'files' | 'folder'): Promise<void> {
-    setError(null)
+  async function startImport(paths: string[]): Promise<void> {
     try {
-      const paths = await window.api.pickDocuments(mode)
-      if (paths.length === 0) return
       setBusy('import')
       const job = await window.api.importDocuments(paths)
       await refresh()
@@ -140,6 +164,25 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
         return
       }
       watchJob(job.jobId)
+    } catch (e) {
+      setBusy(null)
+      setError(friendlyIpcError(e))
+    }
+  }
+
+  async function onImport(mode: 'files' | 'folder'): Promise<void> {
+    setError(null)
+    try {
+      const paths = await window.api.pickDocuments(mode)
+      if (paths.length === 0) return
+      // Size-aware audio gate (Phase 36, D35): large recordings cost drive space
+      // (the workspace copy) and real transcription time — ask first.
+      const pre = await window.api.importPreflight(paths)
+      if (pre.audioBytes >= LARGE_AUDIO_CONFIRM_BYTES) {
+        setConfirmAudio({ paths, audioFileCount: pre.audioFileCount, audioBytes: pre.audioBytes })
+        return
+      }
+      await startImport(paths)
     } catch (e) {
       setBusy(null)
       setError(friendlyIpcError(e))
@@ -352,7 +395,8 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
       )}
 
       <p className="hint" style={{ marginTop: 10 }}>
-        Supported: TXT, Markdown, PDF, DOCX, CSV.{' '}
+        Supported: TXT, Markdown, PDF, DOCX, CSV — and audio recordings (WAV, MP3, FLAC,
+        OGG), which are transcribed on this drive.{' '}
         {anyActive && 'Preparing your documents so you can ask about them…'}
       </p>
 
@@ -391,8 +435,8 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
             <div className="doc-title" title={d.originalPath ?? d.title}>
               {d.title}
             </div>
-            <Badge tone={STATUS_BADGE[d.status].tone} icon={STATUS_BADGE[d.status].icon}>
-              {STATUS_BADGE[d.status].label}
+            <Badge tone={badgeFor(d).tone} icon={badgeFor(d).icon}>
+              {badgeFor(d).label}
             </Badge>
           </div>
           <div className="doc-meta">
@@ -500,6 +544,27 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
           </div>
         </div>
       ))}
+
+      <ConfirmDialog
+        open={confirmAudio != null}
+        title="Import large audio?"
+        confirmLabel="Import and transcribe"
+        onConfirm={() => {
+          const pending = confirmAudio
+          setConfirmAudio(null)
+          if (pending) void startImport(pending.paths)
+        }}
+        onCancel={() => setConfirmAudio(null)}
+      >
+        <p className="hint">
+          {confirmAudio &&
+            `This selection contains ${confirmAudio.audioFileCount} audio ${
+              confirmAudio.audioFileCount === 1 ? 'recording' : 'recordings'
+            } (${formatSize(confirmAudio.audioBytes)}). `}
+          Each recording is copied into your workspace and transcribed on this drive —
+          a long recording can take a while. You can keep using the app meanwhile.
+        </p>
+      </ConfirmDialog>
 
       <ConfirmDialog
         open={confirmDelete != null}

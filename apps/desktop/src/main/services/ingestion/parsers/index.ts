@@ -1,4 +1,5 @@
 import { extname } from 'node:path'
+import type { Transcriber } from '../../transcriber'
 
 // Document parsers (spec §7.7 / §9.2 DocumentParser interface). Each parser turns a
 // file into ordered text segments, attaching whatever structural metadata the format
@@ -26,6 +27,21 @@ export interface ParsedDocument {
   mimeType: string
 }
 
+/**
+ * Optional per-parse context (Phase 36, ADDITIVE — the text parsers ignore it).
+ * Carries the injected transcriber the AudioParser needs (the embedder-injection
+ * precedent: parsers stay constructor-free singletons; the dependency arrives per call
+ * from `IngestionDeps`), a coarse progress callback, and the workspace documents dir
+ * for content transients (`.parse` infix → covered by the startup crash sweep).
+ */
+export interface ParseContext {
+  transcriber?: Transcriber | null
+  /** Coarse progress (0–100) — surfaces as "Transcribing… N%" during audio ingestion. */
+  onProgress?: (percent: number) => void
+  /** Directory for transient content files the parse may create (storeDir). */
+  workDir?: string
+}
+
 /** The contract every format adapter implements (spec §9.2). */
 export interface DocumentParser {
   /** Human-readable name for logs/diagnostics. */
@@ -35,7 +51,7 @@ export interface DocumentParser {
   /** MIME type recorded for documents handled by this parser. */
   readonly mimeType: string
   /** Extract ordered text segments from the file at `filePath`. */
-  parse(filePath: string): Promise<ParsedDocument>
+  parse(filePath: string, ctx?: ParseContext): Promise<ParsedDocument>
 }
 
 import { TxtParser } from './txt'
@@ -43,6 +59,7 @@ import { MarkdownParser } from './markdown'
 import { PdfParser } from './pdf'
 import { DocxParser } from './docx'
 import { CsvParser } from './csv'
+import { AudioParser, AUDIO_EXTENSIONS } from './audio'
 
 // Registry of available parsers. Order is irrelevant — selection is by extension.
 export const PARSERS: readonly DocumentParser[] = [
@@ -50,8 +67,14 @@ export const PARSERS: readonly DocumentParser[] = [
   MarkdownParser,
   PdfParser,
   DocxParser,
-  CsvParser
+  CsvParser,
+  AudioParser
 ]
+
+/** True when this file/title resolves to the audio parser (Phase 36 helpers). */
+export function isAudioPath(filePath: string): boolean {
+  return (AUDIO_EXTENSIONS as readonly string[]).includes(extname(filePath).toLowerCase())
+}
 
 /** Every file extension the ingestion pipeline can handle (lowercase, with dot). */
 export function supportedExtensions(): string[] {

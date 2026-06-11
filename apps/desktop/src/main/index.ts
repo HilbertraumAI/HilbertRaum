@@ -27,6 +27,7 @@ import { createCachedGpuProbe } from './services/runtime/gpu'
 import { EVENTS } from '../shared/ipc'
 import { createSelectedEmbedder, type EmbeddingModelInfo } from './services/embeddings/factory'
 import { createSelectedReranker, type RerankerModelInfo } from './services/reranker'
+import { createSelectedTranscriber, type TranscriberModelInfo } from './services/transcriber'
 import { discoverManifests, resolveManifestsDir, weightPath } from './services/models'
 import type { AppContext } from './services/context'
 
@@ -77,6 +78,29 @@ function resolveRerankerModel(manifestsDir: string | null, rootPath: string): Re
       id: found.manifest.id,
       modelPath: weightPath(rootPath, found.manifest),
       contextTokens: found.manifest.recommendedContextTokens
+    }
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Resolve the transcriber model from the manifests (Phase 36) — the
+ * `resolveRerankerModel` pattern. Returns null when no `transcriber` manifest exists
+ * (→ no transcriber is selected; audio imports fail per-file with friendly copy).
+ */
+function resolveTranscriberModel(
+  manifestsDir: string | null,
+  rootPath: string
+): TranscriberModelInfo | null {
+  if (!manifestsDir) return null
+  try {
+    const { manifests } = discoverManifests(manifestsDir)
+    const found = manifests.find((m) => m.manifest.role === 'transcriber')
+    if (!found) return null
+    return {
+      id: found.manifest.id,
+      modelPath: weightPath(rootPath, found.manifest)
     }
   } catch {
     return null
@@ -218,6 +242,14 @@ function initBackend(): void {
     model: resolveRerankerModel(manifestsDir, paths.rootPath),
     onSelect: (kind, reason) => log.info('Reranker backend selected', { kind, reason })
   })
+  // Phase 36: the audio transcriber — the whisper.cpp CLI behind the Transcriber
+  // interface, selected only when binary + GGML weights exist (null otherwise; audio
+  // imports then fail per-file with the download-the-model copy).
+  const transcriber = createSelectedTranscriber({
+    rootPath: paths.rootPath,
+    model: resolveTranscriberModel(manifestsDir, paths.rootPath),
+    onSelect: (kind, reason) => log.info('Transcriber backend selected', { kind, reason })
+  })
 
   // Document task engine (Phase 33/34): one-at-a-time summary/translation/compare
   // jobs. The chat-streaming guard reads the shared in-flight registry (fact §2.8) —
@@ -247,6 +279,7 @@ function initBackend(): void {
     runtime,
     embedder,
     reranker,
+    transcriber,
     manifestsDir,
     probeGpu: gpuProbe,
     isDev,
@@ -402,7 +435,8 @@ async function shutdown(): Promise<void> {
     await Promise.allSettled([
       ctx?.runtime.stop() ?? Promise.resolve(),
       ctx?.embedder.stop?.() ?? Promise.resolve(),
-      ctx?.reranker?.stop?.() ?? Promise.resolve()
+      ctx?.reranker?.stop?.() ?? Promise.resolve(),
+      ctx?.transcriber?.stop?.() ?? Promise.resolve()
     ])
   } catch (err) {
     log.error('Error stopping sidecars on quit', String(err))

@@ -40,6 +40,9 @@ export const IPC = {
   // Phase 4+
   pickDocuments: 'docs:pick',
   importDocuments: 'docs:import',
+  /** What a picked selection contains (file/audio counts + audio bytes) — the
+   *  renderer's size-aware audio import confirmation (Phase 36, D35). Read-only. */
+  importPreflight: 'docs:importPreflight',
   getImportJob: 'docs:getImportJob',
   listDocuments: 'docs:list',
   deleteDocument: 'docs:delete',

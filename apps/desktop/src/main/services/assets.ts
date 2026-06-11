@@ -170,10 +170,18 @@ export interface RuntimeDownloadPlan {
   placeholderHash: boolean
 }
 
+/** Platform-specific executable name for a sidecar family's base name (Phase 36). */
+export function sidecarBinaryName(base: string, os: RuntimeOs): string {
+  return os === 'win' ? `${base}.exe` : base
+}
+
 /** Platform-specific `llama-server` executable name, keyed by the runtime-sources OS. */
 export function runtimeBinaryName(os: RuntimeOs): string {
-  return os === 'win' ? 'llama-server.exe' : 'llama-server'
+  return sidecarBinaryName('llama-server', os)
 }
+
+/** The whisper family's CLI binary (Phase 36 — `runtime/whisper.cpp/<os>/`). */
+export const WHISPER_BINARY_BASE = 'whisper-cli'
 
 /** Resolve a drive-relative dir, rejecting `..`/absolute escapes (like `weightPath`). */
 function resolveWithinRoot(rootPath: string, relPath: string): string {
@@ -193,19 +201,22 @@ function resolveWithinRoot(rootPath: string, relPath: string): string {
 /**
  * Plan the runtime (sidecar) download for a selected build. Resolves the extraction dir
  * + the final binary path under the drive root (escape-guarded). No network or I/O.
+ * `binaryBase` selects the sidecar family's executable (Phase 36): default
+ * `llama-server`; the whisper family passes `whisper-cli` (`WHISPER_BINARY_BASE`).
  */
 export function planRuntimeDownload(
   rootPath: string,
   build: RuntimeBuild,
-  version: string
+  version: string,
+  binaryBase = 'llama-server'
 ): RuntimeDownloadPlan {
   const extractTo = resolveWithinRoot(rootPath, build.extractTo)
   // Name the downloaded archive after the URL's basename so a .tar.gz (the format the
   // macOS/Linux release assets use in current llama.cpp releases) is not saved — and
   // mis-extracted — as a .zip. Synthetic fallback for URLs without a usable basename.
   const urlBase = build.url.split('/').pop()?.split('?')[0]?.trim()
-  const zipDest = join(extractTo, urlBase || `llama-${version}-${build.os}-${build.arch}.zip`)
-  const binaryPath = join(extractTo, runtimeBinaryName(build.os))
+  const zipDest = join(extractTo, urlBase || `${binaryBase}-${version}-${build.os}-${build.arch}.zip`)
+  const binaryPath = join(extractTo, sidecarBinaryName(binaryBase, build.os))
   return {
     version,
     os: build.os,

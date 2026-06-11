@@ -195,13 +195,67 @@ the whole DB file is encrypted at rest.
 - **Read-only preview (post-MVP).** `extractDocumentPreview` re-parses the stored copy on demand and
   returns the parser's text segments (page/section labels intact) for an in-app modal. It re-parses
   rather than reading `chunks` because chunks OVERLAP (~80 tokens) — concatenation would duplicate
-  text at every boundary. In an encrypted workspace the `.enc` copy is decrypted to a transient
+  text at every boundary. (Exception: AUDIO documents read from stored chunks instead — exact by
+  construction and avoids a minutes-long re-transcription; see "Audio transcription" below.) In an encrypted workspace the `.enc` copy is decrypted to a transient
   `.parse-preview` working file and shredded on the way out (covered by the startup `.parse*` crash
   sweep); the original bytes are never handed to an external viewer, which is why this is an in-app
   TEXT preview and not a `shell.openPath`.
 - **IPC** (`ipc/registerDocsIpc.ts`): `pickDocuments`, `importDocuments`, `getImportJob`,
-  `listDocuments`, `deleteDocument`, `reindexDocument`. Full pipeline detail lives in
-  [`rag-design.md`](rag-design.md).
+  `listDocuments`, `deleteDocument`, `reindexDocument`, `importPreflight` (Phase 36 — the
+  size-aware audio confirm). Full pipeline detail lives in [`rag-design.md`](rag-design.md).
+
+## Audio transcription (Phase 36, wave-3 plan §9)
+
+A recording (`.wav`/`.mp3`/`.flac`/`.ogg` — exactly what the pinned binary decodes, R-W2)
+becomes a **normal corpus document**: transcribed locally, chunked, embedded, searchable,
+citable with time ranges ("ask your meetings"). m4a/aac is descoped (no bundled ffmpeg);
+it fails with friendly convert-to-WAV/MP3 copy.
+
+- **`services/transcriber/` — the second sidecar family.** A `Transcriber` interface
+  (`transcribe(filePath) → TranscriptSegment[{ startMs, endMs, text }]`) behind
+  availability selection: `createSelectedTranscriber` returns the real backend iff the
+  `runtime/whisper.cpp/<os>/whisper-cli` binary AND the `models/transcriber/` GGML
+  weights exist, else **null** — the reranker D9 pattern, deliberately **no mock** (an
+  invented transcript would silently corrupt the corpus). Missing transcriber ⇒ the audio
+  FILE fails friendly ("Audio import needs the transcription model — download it on the
+  AI Model screen") through the documents-table error path; text ingestion is untouched.
+- **D34 (resolved by R-W1): per-file CLI, not a server.** whisper.cpp v1.8.6 ships
+  prebuilt binaries for Windows only (so a server gives no per-OS lifecycle win), the CLI
+  emits `-pp` progress + progressive segments while it works, there is no
+  multi-hundred-MB upload over loopback, and cancel/lock-suspend is just killing the
+  child. `WhisperCliTranscriber` spawns the pinned CLI per file (`-oj` JSON to a
+  transient `.parse-transcript.json` in the documents dir — content, shredded after,
+  crash-sweep-covered), parses `transcription[].offsets` (ms). **The exit code is NOT
+  the success signal** (R-W2: a decode failure exits 0 with stderr-only complaints) —
+  success = the JSON exists and parses; the error tail keeps **stderr only** (stdout
+  carries the transcript, which must never ride an error message into logs).
+  `suspend()` (workspace lock) and `stop()` (will-quit) kill in-flight children; the
+  failing parse marks that document `failed` and the decrypted transient is shredded.
+- **`AudioParser` implements `DocumentParser`.** `parse(filePath, ctx)` uses the
+  transcriber injected per call via the ADDITIVE `ParseContext` (carried from
+  `IngestionDeps.transcriber` — the embedder-injection precedent; text parsers ignore
+  it). Whisper segments are **packed** into paragraph-sized `ExtractedSegment`s
+  (~180-word target, hard cap 400 < the 500-token chunk window) labeled
+  `sectionLabel: "mm:ss–mm:ss"` (`h:mm:ss` above an hour) — D29: the time range rides
+  the EXISTING `Citation.section`, zero citation-path changes. Packing matters twice:
+  distinct labels never coalesce in the chunker (raw whisper segments would mean
+  thousands of tiny chunks), and the ≤400-word cap makes **every audio chunk exactly one
+  packed segment, verbatim, no overlap** — which is why `extractDocumentPreview` (and
+  through it translate/compare re-extraction) reads audio text from the STORED CHUNKS
+  instead of re-transcribing for minutes.
+- **D35: the audio original is KEPT** (the locked Phase-4 copy-into-workspace contract +
+  `reindexDocument` re-parsing the stored file force it), encrypted (`.enc`) on
+  encrypted workspaces; **a re-index of an audio document is a full re-transcription**
+  (no transcript cache — `known-limitations.md`). Large audio (>50 MB picked) gets an
+  explicit import confirmation (`importPreflight` IPC → `summarizeImportPaths`).
+- **Progress.** The CLI's `-pp` lines (~every 5%) flow
+  `transcriber → ParseContext.onProgress → IngestionDeps.onTranscribeProgress` into an
+  in-memory map in `registerDocsIpc`, merged into `listDocuments` responses as
+  `DocumentInfo.transcriptionProgress` — the polling UI shows "Transcribing… N%" on
+  import AND re-index with no new channel (R-W4: a 52-min mp3 ≈ 35 min wall on the dev
+  CPU, peak RSS ≈ 1.2 GB with the small model — honest progress is mandatory).
+- **Audit:** the existing `document_imported` (filename + id only) covers audio; the
+  transcript is CONTENT and never reaches `runtime_events` (sentinel-tested end-to-end).
 
 ## Document tasks (Phases 33–35, wave-3 plan §6/§7/§8)
 - **`services/doctasks.ts` — the shared task engine.** A job state machine on the Phase-4/18

@@ -228,3 +228,30 @@ The win-cpu / ubuntu-cpu / macos-arm64 assets keep their hashes from the origina
 >   + the per-OS asset `url`s (asset names vary per release), download each asset, and promote its
 >   real SHA-256 into `sha256` as a deliberate, reviewed change. A real-hash mismatch makes
 >   `fetch-runtime` delete the archive and fail.
+
+## The whisper.cpp transcriber family (Phase 36)
+
+`runtime-sources.yaml` additionally pins the **`whisper_cpp:`** block — the audio
+transcriber CLI (`whisper-cli`), fetched with `fetch-runtime --family whisper_cpp` into
+`runtime/whisper.cpp/<os>/` with the same verify-before-trust + marker discipline.
+
+**License-review record — whisper.cpp v1.8.6 runtime asset (status: approved, reviewed
+2026-06-11):** whisper.cpp is **MIT** ("the ggml authors", verified in `LICENSE` at tag
+`v1.8.6`). The upstream release ships prebuilt binaries for **Windows only** (R-W1); the
+pinned asset:
+
+| Asset | SHA-256 | Notes |
+|---|---|---|
+| `whisper-bin-x64.zip` (v1.8.6) | `b07ea0b1b4115a38e1a7b07debf581f0b77d999925f8acb8f39d322b0ba0a822` | MIT; plain-CPU build; binaries nest under `Release/` (the fetch scripts flatten); ships `SDL2.dll` (zlib license — permissive, attribution-free; used only by the demo tools, redistributed as part of the upstream archive) |
+
+mac/linux whisper builds are compiled from the same MIT source at the pinned tag by the
+drive builder (no new licenses; see `drive-layout.md`).
+
+**License-review record — Whisper model weights (status: approved, reviewed 2026-06-11):**
+OpenAI's Whisper models are **MIT** (github.com/openai/whisper LICENSE). The shipped
+`whisper-small-multilingual` manifest (`models/transcriber/ggml-small.bin`,
+`1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b`) uses the GGML
+conversion from `huggingface.co/ggerganov/whisper.cpp` (declares MIT; mechanical format
+conversion — the E5/reranker provenance posture). Full notes in the manifest's
+`license_review` block. The weight rides the NORMAL manifest pipeline (`fetch-models`,
+in-app downloader, `verify-models`).

@@ -21,12 +21,16 @@
 # selected version + backend is skipped; a missing/stale marker re-fetches (so upgrading
 # a CPU-era drive to the Vulkan default actually replaces the build).
 #
+# --family selects the sidecar family (Phase 36): llama_cpp (default, llama-server)
+# or whisper_cpp (the whisper-cli transcriber, runtime/whisper.cpp/<os>/). Same
+# verify + marker logic for both.
+#
 # Usage:
 #   scripts/fetch-runtime.sh --target /Volumes/PRIVATE_AI_DRIVE \
-#       [--os linux] [--arch x64] [--backend cpu] [--dry-run]
+#       [--os linux] [--arch x64] [--backend cpu] [--family whisper_cpp] [--dry-run]
 set -euo pipefail
 
-TARGET=""; OS=""; ARCH=""; BACKEND=""; DRY_RUN=0
+TARGET=""; OS=""; ARCH=""; BACKEND=""; FAMILY="llama_cpp"; DRY_RUN=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --target) TARGET="${2:-}"; shift 2 ;;
@@ -37,12 +41,18 @@ while [[ $# -gt 0 ]]; do
     --arch=*) ARCH="${1#*=}"; shift ;;
     --backend) BACKEND="${2:-}"; shift 2 ;;
     --backend=*) BACKEND="${1#*=}"; shift ;;
+    --family) FAMILY="${2:-}"; shift 2 ;;
+    --family=*) FAMILY="${1#*=}"; shift ;;
     --dry-run) DRY_RUN=1; shift ;;
     -h|--help) grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; exit 2 ;;
   esac
 done
 [[ -z "$TARGET" ]] && { echo "Error: --target <drive-root> is required" >&2; exit 2; }
+case "$FAMILY" in
+  llama_cpp|whisper_cpp) ;;
+  *) echo "Error: --family must be llama_cpp or whisper_cpp" >&2; exit 2 ;;
+esac
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -77,16 +87,27 @@ sha256_of() {
   else shasum -a 256 "$1" | awk '{print $1}'; fi
 }
 
-# --- Parse runtime-sources.yaml (list of build maps under builds:) ------------------
+# --- Parse runtime-sources.yaml (list of build maps under <family>.builds:) ---------
+# BLOCK-AWARE since Phase 36: the file holds TWO top-level families (llama_cpp +
+# whisper_cpp) with the same shape — only the selected --family's version/builds are
+# collected, so the whisper builds can never leak into a llama selection or vice versa.
 VERSION=""
 declare -a B_OS B_ARCH B_BACKEND B_URL B_SHA B_EXTRACT
 idx=-1
+TOP_KEY=""
 # Strip an inline YAML comment (whitespace + '#' + rest) before unquoting (M17) — the
 # committed `version: b9196   # PLACEHOLDER …` used to leak the comment into the value.
 strip_value() { echo "$1" | sed 's/[[:space:]][[:space:]]*#.*$//' | tr -d '"'"'"'' | sed 's/[[:space:]]*$//'; }
 
 while IFS= read -r raw; do
   line="${raw%$'\r'}"
+  [[ "$line" =~ ^[[:space:]]*# ]] && continue
+  # A non-indented `key:` line starts a new top-level family block.
+  if [[ "$line" =~ ^([A-Za-z0-9_]+)[[:space:]]*:[[:space:]]*$ ]]; then
+    TOP_KEY="${BASH_REMATCH[1]}"
+    continue
+  fi
+  [[ "$TOP_KEY" == "$FAMILY" ]] || continue
   if [[ -z "$VERSION" && "$line" =~ ^[[:space:]]*version[[:space:]]*:[[:space:]]*(.+)$ ]]; then
     VERSION="$(strip_value "${BASH_REMATCH[1]}")"; continue
   fi
@@ -108,7 +129,7 @@ while IFS= read -r raw; do
   fi
 done < "$SOURCES_FILE"
 
-[[ -z "$VERSION" ]] && { echo "runtime-sources.yaml: missing llama_cpp.version" >&2; exit 2; }
+[[ -z "$VERSION" ]] && { echo "runtime-sources.yaml: missing $FAMILY.version (is the $FAMILY block present?)" >&2; exit 2; }
 
 # --- Select the build (os + arch [+ backend]); default = first os/arch match
 # (vulkan on win/linux, metal on mac since Phase 14).
@@ -151,7 +172,10 @@ case "${B_EXTRACT[$SEL]}" in
 esac
 
 EXTRACT_TO="$TARGET/${B_EXTRACT[$SEL]}"
-BIN_NAME="llama-server"; [[ "${B_OS[$SEL]}" == "win" ]] && BIN_NAME="llama-server.exe"
+# Binary name follows the FAMILY + the selected build's OS (mirrors assets.ts
+# sidecarBinaryName): llama-server for llama_cpp, whisper-cli for whisper_cpp.
+BIN_BASE="llama-server"; [[ "$FAMILY" == "whisper_cpp" ]] && BIN_BASE="whisper-cli"
+BIN_NAME="$BIN_BASE"; [[ "${B_OS[$SEL]}" == "win" ]] && BIN_NAME="$BIN_BASE.exe"
 BIN_PATH="$EXTRACT_TO/$BIN_NAME"
 MARKER_PATH="$EXTRACT_TO/.paid-runtime.json"
 URL="${B_URL[$SEL]}"
@@ -184,7 +208,7 @@ mkdir -p "$EXTRACT_TO"
 # Archive name from the URL basename so a .tar.gz (the macOS/Linux release format) is
 # not saved — and mis-extracted — as a .zip.
 ARCHIVE_NAME="$(basename "$URL")"
-[[ -z "$ARCHIVE_NAME" ]] && ARCHIVE_NAME="llama-$VERSION-${B_OS[$SEL]}-${B_ARCH[$SEL]}.zip"
+[[ -z "$ARCHIVE_NAME" ]] && ARCHIVE_NAME="$BIN_BASE-$VERSION-${B_OS[$SEL]}-${B_ARCH[$SEL]}.zip"
 ARCHIVE="$EXTRACT_TO/$ARCHIVE_NAME"
 
 if command -v curl >/dev/null 2>&1; then

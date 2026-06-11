@@ -1,12 +1,13 @@
 # Post-MVP Functionality — wave 3 working paper (Phases 31–38)
 
-_Status: **WORKING PAPER — Phases 31–35 DONE 2026-06-11 (§4/§5/§6/§7/§8 are their
+_Status: **WORKING PAPER — Phases 31–36 DONE 2026-06-11 (§4/§5/§6/§7/§8/§9 are their
 condensed design records; the §12 session-hardening rider shipped with 31; R-T1 resolved
 with 33; R-T2 FULLY resolved — translation half with 34 (D36), comparison half with 35
-(D37); Phases 36–38 NOT IMPLEMENTED** (drafted
+(D37); R-W1..R-W4 ALL resolved with 36 (D34 → per-file CLI, D35 → keep the copy);
+Phases 37–38 NOT IMPLEMENTED** (drafted
 2026-06-10; **review round 1 resolved
-2026-06-11**: D23–D30 + D33 locked, see §13; D31/D32/D34 stay open by design — they resolve
-with research gates R-O1/R-O2/R-W1. **Plan audit 2026-06-11:** every §2 fact re-verified
+2026-06-11**: D23–D30 + D33 locked, see §13; D31/D32 stay open by design — they resolve
+with research gates R-O1/R-O2. **Plan audit 2026-06-11:** every §2 fact re-verified
 against the code; findings folded in — the mic-permission posture correction in §10 (no
 handler exists; Electron default-ALLOWS), the `models/transcriber/` naming fix, the D35
 audio-storage decision flagged by the re-index contract, staleness guards in §7/§8, and the
@@ -26,7 +27,7 @@ The eight features (user-selected 2026-06-10):
 | 33 | Document tasks foundation + one-click summary — **✅ DONE 2026-06-11** | M | none | none |
 | 34 | Document translation workflow — **✅ DONE 2026-06-11** | S–M | Phase 33 (task machinery) | none |
 | 35 | Compare two documents — **✅ DONE 2026-06-11** | M | Phase 33 (task machinery) | none |
-| 36 | Audio transcription as ingestion (whisper.cpp) | L | research gates R-W1..R-W4 | **whisper.cpp sidecar family + whisper GGML weights** |
+| 36 | Audio transcription as ingestion (whisper.cpp) — **✅ DONE 2026-06-11** | L | research gates R-W1..R-W4 (all resolved) | **whisper.cpp sidecar family + whisper GGML weights** |
 | 37 | Voice dictation in the composer | S–M | Phase 36 (transcriber) | none beyond 36 |
 | 38 | Scanned-PDF / photo OCR | M–L | research gates R-O1..R-O3 | **tesseract.js (WASM) + vendored traineddata** |
 
@@ -415,79 +416,87 @@ documents"), `known-limitations.md` ("Document comparison"). Record of what was 
   mock runtime → select two → Compare (2) → progress → report preview with provenance →
   report row with Export.
 
-## 9. Phase 36 — Audio transcription as document ingestion (whisper.cpp)
+## 9. Phase 36 — Audio transcription as document ingestion (whisper.cpp) — ✅ DONE (2026-06-11, as implemented)
 
-**Goal:** import `.wav`/`.mp3` (formats per R-W2) of a meeting/memo/interview → batch,
-offline transcription with timestamps → a normal corpus document: chunked, embedded,
-searchable, citable — citations showing time ranges ("Ask your meetings").
+Shipped per the sketch with **D34 + D35 resolved** (see §13) and all four research gates
+run FIRST on the real pinned binary + real German audio (§14). Durable design now in
+`architecture.md` (§ "Audio transcription" + the second-family notes in § "Drive tooling"),
+`drive-layout.md` (whisper family + source-build story), `model-policy.md` (whisper
+licenses), `user-guide.md` §7 ("Import an audio recording"), `known-limitations.md`
+("Audio transcription"), `PRIVACY.md` (no audio upload). Record of what was built:
 
-**Distribution (the long pole — mirrors Phases 12/14 exactly):**
-- `runtime-sources.yaml` gains an additive top-level `whisper_cpp:` block (same
-  `{ version, builds[] }` shape); `validateRuntimeSources` extended. **Verified (audit
-  2026-06-11):** the current validator reads ONLY the `llama_cpp` key and ignores unknown
-  siblings (`shared/runtime-sources.ts:61`), so the new block is genuinely additive — an
-  older app on a newer drive parses the file unchanged. Extract to
-  `runtime/whisper.cpp/<os>/`; `.paid-runtime.json` marker reused as-is;
-  `fetch-runtime.{ps1,sh}` + `drive.ts` layout + `assertCommercialDrive` +
-  `build-commercial-drive` all gain the second family. **CPU-only builds first** (E5/reranker
-  precedent: ASR is a batch job; GPU whisper is a later opt-in, not a default risk).
-- Whisper model weights = a normal manifest with `role: transcriber` + `download` block
-  (license: MIT — review per `model-policy.md` like every model) ⇒ Phase-18 in-app
-  downloader covers it with zero new code (D14 precedent); weights live in
-  `models/transcriber/` (the role-named `models/reranker` convention, NOT `models/whisper` —
-  audit naming fix). Candidate sizes: `base`/`small` multilingual (DE+EN) — R-W3 picks via a
-  German-audio smoke.
-
-**Storage + re-index reality (D35, flagged by the audit):** the locked Phase-4 contract
-copies every import into `workspace/documents/` AND `reindexDocument` re-parses the stored
-file — so the audio copy must be KEPT (transcript-only storage would break re-index), it is
-encrypted on encrypted workspaces (a multi-hundred-MB recording costs real encrypt/shred
-time and drive space), and **a re-index of an audio document = a full re-transcription**.
-v1 answer: keep the copy, add a size-aware import confirmation for large audio, honest
-"Transcribing…" progress on re-index, and a `known-limitations.md` entry; a sha256-keyed
-transcript cache (checksumCache precedent) only if re-index proves common.
-
-**Runtime service** (`services/transcriber/`): `Transcriber` interface with availability
-selection (`createSelectedTranscriber` → real iff binary + weights, else **null**, no mock —
-the reranker D9 pattern), lazy lifecycle, will-quit stop, lock-time suspend. Whether it
-composes `LlamaServer`-style (whisper-server over loopback) or invokes the CLI per file is
-**R-W1** — the server gives health/port reuse, the CLI is simpler for batch-only use; decide
-from the pinned release's actual artifacts.
-
-**Ingestion integration:** a new `AudioParser implements DocumentParser`
-(`extensions: ['.wav', '.mp3', …]` per R-W2) whose `parse()` calls the injected transcriber
-and maps whisper segments → `ExtractedSegment{ text, sectionLabel: "mm:ss–mm:ss" }`
-(page-less ⇒ the txt/md dedup rule applies — fact §2.4; citations show the time range via the
-existing `section` field, zero citation changes — D29). Parser construction needs the
-transcriber injected — extend `IngestionDeps` (the embedder-injection precedent). Transcriber
-absent → the file fails friendly ("Audio import needs the transcription model — download it
-on the AI Model screen") with the documents-table error path, never a throw. Encrypted
-workspaces: the stored audio is `.enc`; re-index decrypts to the transient `.parse<ext>`
-(existing pattern) for the transcriber.
-
-**Research gates (ALL before implementation — the Phase-21 discipline):**
-- **R-W1 — pinned whisper.cpp release:** pick the tag; confirm prebuilt win/mac/linux
-  binaries exist (or define the build story), server vs CLI mode, output format with
-  segment timestamps (JSON), license (MIT expected), archive shapes for the fetch scripts.
-  Verify against the release's REAL assets, hashes captured like b9585.
-- **R-W2 — input formats:** recent whisper.cpp decodes wav/mp3/flac via bundled miniaudio;
-  **m4a/aac likely NOT supported** without ffmpeg (which we will NOT bundle — license +
-  surface). Scope = what the pinned binary actually decodes; m4a explicitly descoped with a
-  friendly "convert to mp3/wav" message if so. This gate exists to right-size the user
-  promise BEFORE the UI advertises formats.
-- **R-W3 — model choice:** German+English quality vs size vs CPU speed for `base` vs
-  `small` (real-time factor on the i7-1185G7 reference laptop); sets the default manifest
-  + `recommended_profiles`.
-- **R-W4 — long-file behavior:** a 60-minute meeting on CPU — runtime, memory, whether the
-  import job needs per-segment progress (whisper emits progressively) vs a single
-  "Transcribing…" state.
-
-**Tests:** parser-with-fake-transcriber (segment mapping, timestamp labels, absent-transcriber
-failure copy); runtime-sources validation for the second family; fetch-script marker logic
-(extended fixtures); selector availability matrix; manual smoke
-`tests/manual/whisper-smoke.test.ts` behind `PAID_WHISPER_SMOKE` (real binary + real German
-audio on the test drive — the GPU-smoke pattern). Audit: `document_imported` already covers
-it (filename + id only).
+- **Distribution (mirrors Phases 12/14):** additive top-level `whisper_cpp:` block in
+  `runtime-sources.yaml` (pin **v1.8.6**, real hash from a fresh download);
+  `validateRuntimeSources` grew a per-family validator returning the optional `whisper`
+  result (older-app-ignores-it property regression-tested; duplicate triples rejected
+  PER family — the same triple may exist in both). `fetch-runtime.{ps1,sh}` gained
+  `--family llama_cpp|whisper_cpp` + **block-aware yaml parsing** (the flat parsers would
+  have leaked whisper builds into llama selections), family-specific binary names, and
+  the same marker/verify logic. `drive.ts` layout + `prepare-drive` add
+  `models/transcriber/` + `runtime/whisper.cpp/<os>/`; `assertCommercialDrive` takes an
+  optional `whisperSources` pin (same binary+marker gate, binary `whisper-cli`);
+  `build-commercial-drive.{ps1,sh}` fetch the whisper family and cross-check its marker
+  natively (per-family version parsing). **Win prebuilt only** (R-W1) — mac/linux are a
+  documented source-build step; a drive without the binary degrades to the friendly
+  per-file failure. CPU-only by design.
+- **Weights:** `model-manifests/transcriber/whisper-small-multilingual.yaml`
+  (`role: transcriber` — additive `ModelRole`; format `ggml`, runtime `whisper_cpp`,
+  real sha256 + download block, MIT license review approved, bundled by default, all
+  profiles). The Phase-18 downloader + `fetch-models` + `verify-models` cover it with
+  zero new code (verified in the walk: the AI Model screen lists it with the
+  "Turns audio recordings into searchable text" hint).
+- **`services/transcriber/`:** `Transcriber` interface +
+  `createSelectedTranscriber` (real iff binary+weights else **null**, no mock — D9);
+  `WhisperCliTranscriber` spawns the CLI per file (D34) with `-oj` JSON to a
+  `.parse-transcript.json` transient in the documents dir (content → shredded in
+  `finally`, crash-sweep-covered via the `.parse` infix; never written next to the
+  user's original). **Success = the JSON parses, never the exit code** (R-W2's exit-0
+  decode-failure mode maps to a distinguishable decode error); the error tail keeps
+  **stderr only** (stdout carries the transcript — content must never ride an error
+  into logs); `-pp` progress parsed to an `onProgress(0–100)`; `suspend()`/`stop()`
+  kill in-flight children (lock/will-quit wired in `registerWorkspaceIpc`/`main`).
+  `PAID_WHISPER_BIN` dev override, `resolveWhisperCliPath` mirrors the llama resolver.
+- **`AudioParser`** (`.wav/.mp3/.flac/.ogg` — R-W2's verified list; m4a descoped):
+  transcriber arrives per call via the ADDITIVE `ParseContext` second parameter on
+  `DocumentParser.parse` (from `IngestionDeps.transcriber` — the embedder precedent).
+  Whisper segments are **packed** (~180-word target, hard cap 400) into time-labeled
+  `ExtractedSegment{ sectionLabel: "mm:ss–mm:ss" }` (D29 — `h:mm:ss` above an hour):
+  packing prevents thousands of tiny chunks (distinct labels never coalesce) AND makes
+  every audio chunk exactly one packed segment verbatim — so
+  `extractDocumentPreview` reads audio text from STORED CHUNKS (instant preview;
+  translate/compare re-extraction without re-transcription). Absent transcriber ⇒ the
+  file fails friendly with the download-the-model copy; decode failure ⇒ convert-to
+  copy; anything else ⇒ honest retry copy + the technical reason in the local log.
+- **D35 resolved (keep the copy):** stored audio rests `.enc` on encrypted workspaces
+  (e2e-tested: only-`.enc`-on-disk; re-index decrypts to `.parse<ext>`, hands THAT to
+  the CLI, shreds it); re-index = full re-transcription (known-limitations); imports
+  >50 MB picked audio confirm first (`docs:importPreflight` → `summarizeImportPaths`);
+  "Transcribing… N%" progress on import AND re-index via an in-memory map merged into
+  `listDocuments` (`DocumentInfo.transcriptionProgress` — no new channel). No
+  transcript cache (only on evidence).
+- **UI:** the Supported line advertises the four verified formats ("…which are
+  transcribed on this drive"); the picker filters get them via `supportedExtensions()`;
+  the extracting badge reads "Transcribing… N%" for audio (text keeps "Reading");
+  large-audio ConfirmDialog with honest copy. No new settings keys.
+- **Audit:** `document_imported` covers audio (filename + id only); the audit-ipc
+  sentinel test gained an audio leg (a fake-transcriber transcript sentinel flows into
+  chunks/preview but never `runtime_events`).
+- **Tests (51 new; 910/910 green):** `unit/audio-parser.test.ts` (packing/labels/
+  1:1-chunk invariant/friendly failures), `unit/transcriber.test.ts` (selector matrix,
+  fake-spawn CLI: JSON parse, progress, exit-0 decode mode, hard exits, suspend/stop,
+  transient shred), `integration/audio-ingestion.test.ts` (e2e with fake transcriber:
+  D29 labels, absent-transcriber per-file failure, preview-from-chunks with
+  no-second-transcription proof, re-index = re-transcription, encrypted
+  only-`.enc`-on-disk, preflight), runtime-sources second-family + forward-compat +
+  per-family duplicates, assets whisper marker logic, commercial whisper gate,
+  renderer formats-line/badge/confirm tests, audit sentinel audio leg. Manual harness
+  `tests/manual/whisper-smoke.test.ts` (`PAID_WHISPER_SMOKE` + `PAID_WHISPER_AUDIO`,
+  never-committed local audio): per-format decode legs, m4a expected-fail leg, long-file
+  leg. Eyeballed in the BUILT app (walk-phase36.mjs, shots-p36, real binary + weights
+  on a temp root): import german wav → real whisper run → Ready/audio-wav/Sections 1 →
+  Preview shows the transcript under its "00:00–00:38" label; absent-transcriber root →
+  the exact friendly failure banner. Gate: typecheck clean, 910/910 + manual skips,
+  build green.
 
 ## 10. Phase 37 — Voice dictation into the chat composer
 
@@ -519,8 +528,10 @@ Locked workspace: composer doesn't exist pre-unlock — no special handling.
 - The session setup in `main/index.ts` (where CSP is installed) — the right install site
   for the deny-by-default permission handler; the `media` allow must not loosen anything
   else (audited: no handler exists today, see above).
-- Whether the transcriber accepts stdin/bytes or only file paths (R-W1 output) — decides
-  the temp-file shape.
+- Whether the transcriber accepts stdin/bytes or only file paths — ANSWERED by Phase 36
+  (D34): the CLI takes FILE PATHS only ⇒ dictation writes the temp WAV exactly as
+  sketched above (`.parse` infix, shredded). The `Transcriber.transcribe(filePath)`
+  interface + `TranscribeOptions.workDir` are the ready-made seam.
 - Composer focus/undo behavior on insert (`renderer/chat/Composer.tsx`).
 
 **Tests:** WAV encode round-trip (pure function, unit-testable); IPC temp-file lifecycle
@@ -610,7 +621,7 @@ manual smoke behind `PAID_OCR_SMOKE` with a real scan fixture on the test drive.
   `known-limitations.md` (m4a descope, OCR speed, summary ceiling), `PRIVACY.md` (mic use,
   all-local OCR/ASR), BUILD_STATE §1/§3/§5.
 
-## 13. Decisions (review round 1 resolved 2026-06-11; D31/D32/D34 resolve with their research gates; D35 added by the same-day audit; D36 added + resolved with Phase 34; D37 added + resolved with Phase 35)
+## 13. Decisions (review round 1 resolved 2026-06-11; D31/D32 resolve with their research gates; D34 resolved by R-W1 + D35 resolved with Phase 36; D36 added + resolved with Phase 34; D37 added + resolved with Phase 35)
 
 | # | Decision | Resolution |
 |---|---|---|
@@ -627,8 +638,8 @@ manual smoke behind `PAID_OCR_SMOKE` with a real scan fixture on the test drive.
 | D31 | OCR execution context | **OPEN (by design):** hidden renderer/worker vs `utilityProcess` + OffscreenCanvas — R-O1 decides; photos possibly main-side directly. BLOCKING for Phase 38 implementation |
 | D32 | OCR asset distribution | **OPEN (by design):** extend `runtime-sources.yaml` (new asset class) vs dedicated `fetch-ocr` script entry. Resolve with R-O2's asset inventory |
 | D33 | OCR trigger | **RESOLVED (round 1): never automatic for PDFs** — detection notice + explicit "Make searchable (OCR)" cancellable task with progress; photos OCR on import (small, fast). Auto-on-import and a settings toggle rejected (silent slow imports / a key + two code paths before the feature exists) |
-| D34 | Whisper invocation mode | **OPEN (by design):** whisper-server (loopback, LlamaServer-style) vs per-file CLI. R-W1 decides; lean server if the pinned release ships it per-OS (lifecycle reuse), CLI otherwise |
-| D35 | Audio originals on the drive | **OPEN (flagged by the 2026-06-11 audit; resolve in the Phase-36 review):** the locked Phase-4 copy-into-workspace contract + `reindexDocument` re-parsing the stored file force KEEPING the audio copy (transcript-only breaks re-index), and re-index = full re-transcription. **Rec:** keep the copy + size-aware import confirm + `known-limitations.md` entry; sha256-keyed transcript cache only on evidence (§9) |
+| D34 | Whisper invocation mode | **RESOLVED (Phase 36, 2026-06-11, by R-W1): per-file CLI, not a server.** The v1.8.6 zip ships BOTH `whisper-cli.exe` and `whisper-server.exe` — but only for Windows, so "server ships per-OS" (the lean-server condition) fails; and the CLI wins on merits for batch-only use: progressive `-pp` progress + segments while it works (the R-W4 signal), no multi-hundred-MB upload over loopback, no port/health lifecycle, cancel/lock-suspend = kill the child. The localhost-only sidecar rule is moot (no socket). Revisit server mode only if Phase-37 dictation latency demands a warm model |
+| D35 | Audio originals on the drive | **RESOLVED (Phase 36, 2026-06-11): keep the copy** — the locked Phase-4 copy-into-workspace contract + `reindexDocument` re-parsing the stored file force it (transcript-only storage would break re-index and the self-contained drive). Shipped with the recommended riders: size-aware import confirmation (>50 MB picked audio, `docs:importPreflight`), honest "Transcribing… N%" progress on import AND re-index, re-index = full re-transcription recorded in `known-limitations.md`. A sha256-keyed transcript cache only on evidence. Bonus that fell out of the packing design: preview/translate/compare read the STORED CHUNKS (exact for audio — no overlap by construction), so only re-index pays the re-transcription |
 
 ## 14. Research gates (consolidated — do these BEFORE the affected phase)
 
@@ -637,10 +648,10 @@ manual smoke behind `PAID_OCR_SMOKE` with a real scan fixture on the test drive.
 | R-S1 | FTS5 `snippet()`/`highlight()` present in both runtimes? | **RESOLVED — GO (probed 2026-06-11):** Electron 37.10.3 main process AND system Node 24.13.0, both SQLite 3.50.4: `snippet()`, `highlight()`, `bm25()` all work on a self-contained fts5 table. JS-truncation fallback not needed | 31 (fallback exists) |
 | R-T1 | llama-server b9585 concurrent-request behavior (slots/queue/reject)? | **RESOLVED — probed 2026-06-11** (`tests/manual/server-concurrency-probe.test.ts`, `PAID_CONCURRENCY_PROBE`, real b9585 + Qwen3-4B on the dev box): at our default spawn args a second `/v1/chat/completions` is served on a **PARALLEL slot** (continuous batching) — request B fired 1.5 s into A's stream got its first token at +212 ms and finished while A was still streaming (A: first token 49 ms, done 4 386 ms, 700 tok; B: first token 1 718 ms, done 1 791 ms). Not queued, not rejected ⇒ the D26 app-side guard is the ONLY serialization, which is exactly why it exists (predictable latency, no context splitting). Facts banked for a future parallelism revisit | nothing (informational; D26 stands) |
 | R-T2 | 4B-class quality: long-input translation drift; comparison-format adherence | **Translation half RESOLVED — probed 2026-06-11** (`tests/manual/translation-smoke.test.ts`, `PAID_TRANSLATION_SMOKE`, real pinned b9585 + Qwen3-4B-instruct-q4 on the dev box, the SHIPPING prompts at temp 0.2). Findings: **(1) refusals/chatter: none** — no "Here is the translation", no refusal phrases, and an adversarial embedded-instruction window was translated, not obeyed. **(2) Language drift: none** on a near-budget (~1100-word) EN→DE input — head and tail both fully German (function-word scoring de=42/44, en=0/0). **(3) Markdown survival: complete** (h1/h2/bullets/table pipes/bold/blockquote all preserved DE→EN). **(4) Output↔input length — the load-bearing finding:** word ratios are ~1.0–1.1 (DE→EN) and ~0.94 (EN→DE), but German output costs **~2 real tokens per source word** (subword-heavy compounds): the first run's half-input/half-output context split CAPPED a near-budget window at `maxTokens` (ratio 0.67, output cut mid-sentence — silent truncation, exactly what this gate exists to catch). **Fix shipped:** the usable context now splits by measured weight — input 1.3 tok/word, output 2.0 (`TRANSLATION_OUTPUT_TOKENS_PER_WORD`); at 4096 ctx → 1150-word windows, `maxTokens` 2301. Re-run: 19/19 numbered sections present, no truncation. **(5)** Number VALUES/names/codes survive; formats localize (14.03.2026 → March 14, 2026) — accepted, documented. **Retry policy set:** one retry, then visible marking (failures were not observed; truncation is handled by sizing, not retries). **Comparison half RESOLVED — probed 2026-06-11** (`tests/manual/compare-smoke.test.ts`, `PAID_COMPARE_SMOKE`, real pinned b9585 + Qwen3-4B-instruct-q4 on the dev box, the SHIPPING prompts at temp 0.3, two rounds). Findings: **(1) the 4B holds the dictated four-section report format** — all four `##` headings verbatim and exactly once in EVERY report probe (EN pair, DE pair, reduce), clean bullets, zero refusals/chatter, no truncation (reports ran 106–221 words against the 512-token cap ⇒ `COMPARE_OUTPUT_TOKENS = 512` confirmed; comparison output is summary-shaped — a fixed cap, not a per-word weight). **(2) Fact placement:** shared + differing facts land correctly, names/numbers/dates exact. Round 1 caught two real issues: only-in-one facts were ALSO cross-listed under "What differs", and the matched-pair map step silently MISSED an only-in-A fact (exactly the silent-omission class this gate exists for). **Round-2 prompt fixes shipped:** an exactly-ONE-section instruction (fixed the reduce; mode (a) still cross-lists one-sided clauses under "differs" — accurate but redundant, accepted + documented in known-limitations) and a "check every fact in the section of A" recall instruction (fixed the map miss — 4/4 prefixed bullets, all 6 planted facts present in round 2). **(3) Mode (b) DOES need the smaller per-pair format (plan §8's flag was right)** — compact `- Same:/- Different:/- Only in A/B:` bullets held perfectly at a 256-token map cap. **(4) Reduce over per-pair notes:** four sections back, duplicate shared facts merged to one bullet, exclusive placement correct, no inventions. **(5) German inputs:** the report body stays German (function-word score de=14 vs en=3, facts exact); the DICTATED section headings stay English — cosmetic, recorded in known-limitations. **R-T2 fully resolved** | nothing (both halves resolved — 34 + 35 shipped) |
-| R-W1 | Pinned whisper.cpp release: binaries per OS, server vs CLI, JSON timestamp output, license, archive shapes + hashes | Inspect the release's real assets (b9585 discipline) | 36 (D34) |
-| R-W2 | Decodable input formats of the pinned binary (mp3? flac? m4a?) | Feed real files to the real binary | 36 (format promise) |
-| R-W3 | Whisper model size for DE+EN on the reference laptop (RTF, RAM) | Manual smoke, German audio | 36 (manifest) |
-| R-W4 | 60-min file: time/memory/progress signal | Same smoke | 36 (job UX) |
+| R-W1 | Pinned whisper.cpp release: binaries per OS, server vs CLI, JSON timestamp output, license, archive shapes + hashes | **RESOLVED — probed 2026-06-11** against the real `ggml-org/whisper.cpp` release assets (GitHub API + fresh downloads). **Pin: v1.8.6** (2026-06-02). Findings: **(1) prebuilt binaries exist for WINDOWS ONLY** — `whisper-bin-x64.zip` (plain CPU, 3.9 MB, sha256 `b07ea0b1…0a822`) plus Win32/BLAS/CUDA variants and an Apple xcframework; NO mac/linux CLI assets ⇒ mac/linux = a documented source-build step. **(2)** The zip nests everything under `Release/` (the existing flatten step handles it) and contains BOTH `whisper-cli.exe` AND `whisper-server.exe` + ggml DLLs + SDL2.dll (zlib license). **(3) D34 → CLI** (see §13). **(4)** `-oj` JSON shape verified: `transcription[].offsets.{from,to}` in ms + `text`, `result.language`. **(5)** License MIT ("the ggml authors", 2023-2026, verified at the tag); model weights MIT (OpenAI) — reviews recorded in `model-policy.md` | 36 — done |
+| R-W2 | Decodable input formats of the pinned binary (mp3? flac? m4a?) | **RESOLVED — probed 2026-06-11** with real files against the real v1.8.6 binary. The binary itself declares + decodes **wav, mp3, flac, ogg** (all four verified incl. real German mp3/ogg; ogg was an upside surprise vs the plan's wav/mp3/flac guess). **m4a: NOT decodable — and the failure mode is the trap this gate existed for: whisper-cli EXITS 0** with "failed to read audio data" on stderr and NO output. ⇒ the transcriber treats "JSON exists and parses" as the only success signal, never the exit code; m4a is descoped with friendly convert-to-WAV/MP3 copy | 36 — done (format promise = wav/mp3/flac/ogg) |
+| R-W3 | Whisper model size for DE+EN on the reference laptop (RTF, RAM) | **RESOLVED — probed 2026-06-11** (dev box, 4 threads; TTS German with known ground truth + real LibriVox German speech). **base** (142 MB): RTF ≈ 0.17–0.21 but meaning-destroying word errors on real speech ("Leichenwagen"→"gleichen Wagen", "Töchter"→"Teuchter", "Särge"→"sehrge", "Magd"→"Markt"). **small** (466 MB): RTF ≈ 0.43–0.46 (~2.4× the cost), fixes nearly all of them; clean-speech German near-perfect with numbers/names/dates exact in both. **Shipped default: `small`** (German quality is the product promise); real hashes captured for both (base banked for a possible future low-end manifest: `60ed5bc3…2efe`). All profiles recommended (peak RSS ≈ 1.2 GB, batch job) | 36 — done (manifest = whisper-small-multilingual) |
+| R-W4 | 60-min file: time/memory/progress signal | **RESOLVED — probed 2026-06-11**: a real 52-min German mp3 (128 kbps LibriVox) through the small model on the dev CPU (4 threads): **2123 s wall (≈35 min, RTF ≈ 0.68), peak working set 1155 MB**, 616 segments, **`-pp` progress lines every ~5% (20 ticks) + segments streamed progressively to stdout** ⇒ the import job shows real per-file "Transcribing… N%" (shipped: CLI `-pp` → ParseContext.onProgress → in-memory map → `DocumentInfo.transcriptionProgress` on the existing polling path — no new channel). Memory is a non-issue; wall time is the honest cost recorded in `known-limitations.md` + the size-aware import confirm (D35) | 36 — done (job UX = per-file percent) |
 | R-O1 | pdfjs render-to-OffscreenCanvas in utilityProcess/worker; tesseract.js on Node Buffers w/o canvas | Probe inside the pinned Electron | 38 (D31 — BLOCKING) |
 | R-O2 | Full vendored-asset inventory for offline tesseract.js + licenses + sizes | Build a no-network spike with the offline guard watching | 38 (D32) |
 | R-O3 | `fast` vs `best` traineddata on real German scans | Quality spike on fixtures | 38 (shipped variant) |

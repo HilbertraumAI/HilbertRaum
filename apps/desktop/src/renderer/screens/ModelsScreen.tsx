@@ -35,6 +35,7 @@ function fmtGb(bytes: number | null, fallbackGb: number): string {
 function plainHint(m: ModelInfo): string {
   if (m.role === 'embeddings') return 'Prepares your documents so you can ask about them.'
   if (m.role === 'reranker') return 'Improves which document passages are used for answers.'
+  if (m.role === 'transcriber') return 'Turns audio recordings into searchable text.'
   if (m.sizeOnDiskGb <= 1.5) return 'Small and quick — fast answers on nearly any machine.'
   if (m.sizeOnDiskGb <= 6) return 'Balanced — works well on most laptops.'
   return 'Large — strongest answers; needs a powerful machine.'

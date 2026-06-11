@@ -87,6 +87,13 @@ for os_name in win mac linux; do
     bash "$SCRIPT_DIR/fetch-runtime.sh" "${CPU_NET[@]}"
   fi
 done
+# Second sidecar family (Phase 36): the whisper.cpp transcriber CLI. Upstream ships a
+# prebuilt WINDOWS build only (R-W1); mac/linux whisper builds are a documented manual
+# source-build step (docs/packaging.md) — audio import degrades to a friendly per-file
+# failure on a drive without one.
+WHISPER=(--target "$TARGET" --os win --family whisper_cpp)
+[[ $DRY_RUN -eq 1 ]] && WHISPER+=(--dry-run)
+bash "$SCRIPT_DIR/fetch-runtime.sh" "${WHISPER[@]}"
 
 # --- 4. Package + sign + notarize (MANUAL) -----------------------------------------
 step 4 "Package + sign the app (MANUAL -- secrets never in the repo)"
@@ -175,17 +182,35 @@ fi
 if [[ $DRY_RUN -eq 0 ]]; then
   RT_SOURCES="$TARGET/model-manifests/runtime-sources.yaml"
   if [[ -f "$RT_SOURCES" ]]; then
-    RT_VERSION="$(grep -v '^[[:space:]]*#' "$RT_SOURCES" | sed -n 's/^[[:space:]]*version[[:space:]]*:[[:space:]]*//p' | head -n1 | sed 's/[[:space:]][[:space:]]*#.*$//' | tr -d '"'"'"'' | sed 's/[[:space:]]*$//')"
+    # Per-family pinned versions (Phase 36: the yaml holds llama_cpp AND whisper_cpp) —
+    # take the first version: line INSIDE each top-level family block.
+    LLAMA_VERSION=""; WHISPER_VERSION=""; rt_top=""
+    while IFS= read -r rt_raw; do
+      rt_line="${rt_raw%$'\r'}"
+      [[ "$rt_line" =~ ^[[:space:]]*# ]] && continue
+      if [[ "$rt_line" =~ ^([A-Za-z0-9_]+)[[:space:]]*:[[:space:]]*$ ]]; then
+        rt_top="${BASH_REMATCH[1]}"; continue
+      fi
+      if [[ "$rt_line" =~ ^[[:space:]]*version[[:space:]]*:[[:space:]]*(.+)$ ]]; then
+        rt_v="$(echo "${BASH_REMATCH[1]}" | sed 's/[[:space:]][[:space:]]*#.*$//' | tr -d '"'"'"'' | sed 's/[[:space:]]*$//')"
+        [[ "$rt_top" == "llama_cpp" && -z "$LLAMA_VERSION" ]] && LLAMA_VERSION="$rt_v"
+        [[ "$rt_top" == "whisper_cpp" && -z "$WHISPER_VERSION" ]] && WHISPER_VERSION="$rt_v"
+      fi
+    done < "$RT_SOURCES"
     for rt_entry in \
-      "runtime/llama.cpp/win|vulkan|llama-server.exe" \
-      "runtime/llama.cpp/win/cpu|cpu|llama-server.exe" \
-      "runtime/llama.cpp/mac|metal|llama-server" \
-      "runtime/llama.cpp/linux|vulkan|llama-server" \
-      "runtime/llama.cpp/linux/cpu|cpu|llama-server"; do
-      rt_dir="${rt_entry%%|*}"
+      "llama|runtime/llama.cpp/win|vulkan|llama-server.exe" \
+      "llama|runtime/llama.cpp/win/cpu|cpu|llama-server.exe" \
+      "llama|runtime/llama.cpp/mac|metal|llama-server" \
+      "llama|runtime/llama.cpp/linux|vulkan|llama-server" \
+      "llama|runtime/llama.cpp/linux/cpu|cpu|llama-server" \
+      "whisper|runtime/whisper.cpp/win|cpu|whisper-cli.exe"; do
+      rt_family="${rt_entry%%|*}"
       rt_rest="${rt_entry#*|}"
+      rt_dir="${rt_rest%%|*}"
+      rt_rest="${rt_rest#*|}"
       rt_backend="${rt_rest%%|*}"
       rt_bin="${rt_rest#*|}"
+      RT_VERSION="$LLAMA_VERSION"; [[ "$rt_family" == "whisper" ]] && RT_VERSION="$WHISPER_VERSION"
       marker_file="$TARGET/$rt_dir/.paid-runtime.json"
       bin_file="$TARGET/$rt_dir/$rt_bin"
       if [[ ! -f "$bin_file" ]]; then

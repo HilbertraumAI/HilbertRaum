@@ -15,6 +15,7 @@ import type {
   DriveStatus,
   ImportJob,
   ImportJobStatus,
+  ImportPreflight,
   Message,
   ModelInfo,
   ModelState,
@@ -157,6 +158,9 @@ const api = {
     ipcRenderer.invoke(IPC.pickDocuments, mode),
   importDocuments: (paths: string[]): Promise<ImportJob> =>
     ipcRenderer.invoke(IPC.importDocuments, paths),
+  /** What a picked selection contains (Phase 36, D35) — drives the audio size confirm. */
+  importPreflight: (paths: string[]): Promise<ImportPreflight> =>
+    ipcRenderer.invoke(IPC.importPreflight, paths),
   getImportJob: (jobId: string): Promise<ImportJobStatus> =>
     ipcRenderer.invoke(IPC.getImportJob, jobId),
   listDocuments: (): Promise<DocumentInfo[]> => ipcRenderer.invoke(IPC.listDocuments),

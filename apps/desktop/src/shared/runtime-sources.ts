@@ -29,7 +29,7 @@ export interface RuntimeBuild {
 }
 
 export interface RuntimeSources {
-  /** Pinned `ggml-org/llama.cpp` release tag (e.g. `b9196`). */
+  /** Pinned upstream release tag (`ggml-org/llama.cpp` b-tag or `ggml-org/whisper.cpp` v-tag). */
   version: string
   builds: RuntimeBuild[]
 }
@@ -37,6 +37,12 @@ export interface RuntimeSources {
 export interface RuntimeSourcesResult {
   ok: boolean
   sources?: RuntimeSources
+  /**
+   * The optional `whisper_cpp:` sibling block (Phase 36 — the second sidecar family).
+   * Absent when the file does not declare one; an app from before Phase 36 simply
+   * never read this key, so adding the block to a drive's yaml is forward-compatible.
+   */
+  whisper?: RuntimeSources
   errors: string[]
 }
 
@@ -44,37 +50,20 @@ function isObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v)
 }
 
-/**
- * Validate a parsed `runtime-sources.yaml` object, collecting all errors. Pure (no I/O).
- * The file shape is:
- *   llama_cpp:
- *     version: b9196
- *     builds:
- *       - { os, arch, backend, url, sha256, extract_to }
- */
-export function validateRuntimeSources(raw: unknown): RuntimeSourcesResult {
-  const errors: string[] = []
-  if (!isObject(raw)) {
-    return { ok: false, errors: ['runtime-sources must be a YAML mapping'] }
-  }
-
-  const llama = raw['llama_cpp']
-  if (!isObject(llama)) {
-    return { ok: false, errors: ['"llama_cpp" block is required (version + builds)'] }
-  }
-
-  const version = llama['version']
+/** Validate one `{ version, builds[] }` family block, appending errors under `prefix.…`. */
+function validateFamily(block: Record<string, unknown>, prefix: string, errors: string[]): RuntimeSources | null {
+  const version = block['version']
   if (typeof version !== 'string' || version.trim() === '') {
-    errors.push('"llama_cpp.version" is required and must be a non-empty string')
+    errors.push(`"${prefix}.version" is required and must be a non-empty string`)
   }
 
-  const buildsRaw = llama['builds']
+  const buildsRaw = block['builds']
   const builds: RuntimeBuild[] = []
   if (!Array.isArray(buildsRaw) || buildsRaw.length === 0) {
-    errors.push('"llama_cpp.builds" is required and must be a non-empty list')
+    errors.push(`"${prefix}.builds" is required and must be a non-empty list`)
   } else {
     buildsRaw.forEach((b, i) => {
-      const where = `builds[${i}]`
+      const where = `${prefix}.builds[${i}]`
       if (!isObject(b)) {
         errors.push(`${where} must be a mapping`)
         return
@@ -126,23 +115,67 @@ export function validateRuntimeSources(raw: unknown): RuntimeSourcesResult {
 
   // A duplicate (os, arch, backend) triple would make "first match wins" ambiguous and
   // could silently shadow a deliberate pin — reject it (Phase 14, gpu-support-plan §6).
+  // Per family: the llama and whisper builds live in different extract trees.
   const seen = new Set<string>()
   for (const b of builds) {
     const key = `${b.os}/${b.arch}/${b.backend}`
     if (seen.has(key)) {
-      errors.push(`duplicate build for (${key}) — (os, arch, backend) must be unique`)
+      errors.push(`duplicate ${prefix} build for (${key}) — (os, arch, backend) must be unique`)
     }
     seen.add(key)
   }
 
-  if (errors.length > 0) {
+  if (typeof version !== 'string' || version.trim() === '' || builds.length === 0) return null
+  return { version: version.trim(), builds }
+}
+
+/**
+ * Validate a parsed `runtime-sources.yaml` object, collecting all errors. Pure (no I/O).
+ * The file shape is:
+ *   llama_cpp:
+ *     version: b9196
+ *     builds:
+ *       - { os, arch, backend, url, sha256, extract_to }
+ *   whisper_cpp:        # OPTIONAL second sidecar family (Phase 36), same shape
+ *     version: v1.8.6
+ *     builds: [ … ]
+ *
+ * Unknown sibling keys are ignored (verified forward-compatibility: an older app on a
+ * newer drive parses the file unchanged — wave-3 plan §9).
+ */
+export function validateRuntimeSources(raw: unknown): RuntimeSourcesResult {
+  const errors: string[] = []
+  if (!isObject(raw)) {
+    return { ok: false, errors: ['runtime-sources must be a YAML mapping'] }
+  }
+
+  const llama = raw['llama_cpp']
+  if (!isObject(llama)) {
+    return { ok: false, errors: ['"llama_cpp" block is required (version + builds)'] }
+  }
+  const sources = validateFamily(llama, 'llama_cpp', errors)
+
+  // The whisper block is OPTIONAL (a pre-Phase-36 yaml has none) — but when present it
+  // must be fully valid: a malformed pin must fail loudly, never fetch the wrong thing.
+  let whisper: RuntimeSources | null = null
+  const whisperRaw = raw['whisper_cpp']
+  if (whisperRaw !== undefined) {
+    if (!isObject(whisperRaw)) {
+      errors.push('"whisper_cpp" must be a mapping (version + builds) when present')
+    } else {
+      whisper = validateFamily(whisperRaw, 'whisper_cpp', errors)
+    }
+  }
+
+  if (errors.length > 0 || !sources) {
     return { ok: false, errors }
   }
 
   return {
     ok: true,
     errors: [],
-    sources: { version: String(version).trim(), builds }
+    sources,
+    ...(whisper ? { whisper } : {})
   }
 }
 

@@ -65,6 +65,7 @@ describe('planCommercialDrive', () => {
       'prepare',
       'fetch-models',
       'fetch-runtime',
+      'fetch-whisper',
       'package',
       'copy-app',
       'verify',
@@ -370,6 +371,91 @@ describe('assertCommercialDrive', () => {
       const res = await assertCommercialDrive(root, [chat])
       expect(res.ok).toBe(true)
       expect(res.checks.runtimeCurrent).toBe(true)
+    })
+
+    // ---- Phase 36: the whisper family rides the same gate (binary = whisper-cli) ----
+
+    const whisperSources = (): RuntimeSources => {
+      const res = validateRuntimeSources({
+        llama_cpp: {
+          version: 'b9585',
+          builds: [
+            {
+              os: 'win',
+              arch: 'x64',
+              backend: 'vulkan',
+              url: 'https://example.test/win-vulkan.zip',
+              sha256: 'REPLACE_WITH_REAL_HASH',
+              extract_to: 'runtime/llama.cpp/win'
+            }
+          ]
+        },
+        whisper_cpp: {
+          version: 'v1.8.6',
+          builds: [
+            {
+              os: 'win',
+              arch: 'x64',
+              backend: 'cpu',
+              url: 'https://example.test/whisper-bin-x64.zip',
+              sha256: 'REPLACE_WITH_REAL_HASH',
+              extract_to: 'runtime/whisper.cpp/win'
+            }
+          ]
+        }
+      })
+      if (!res.whisper) throw new Error('fixture invalid: ' + res.errors.join(', '))
+      return res.whisper
+    }
+
+    function writeWhisperInstall(root: string): void {
+      const dir = join(root, 'runtime', 'whisper.cpp', 'win')
+      mkdirSync(dir, { recursive: true })
+      writeFileSync(join(dir, 'whisper-cli.exe'), 'fake-whisper')
+      writeRuntimeMarker(dir, { version: 'v1.8.6', backend: 'cpu', os: 'win', arch: 'x64' })
+    }
+
+    it('passes when the whisper pin has a whisper-cli binary + matching marker', async () => {
+      const root = tempDir('paid-commercial-wh-ok-')
+      writePolicy(root, buildPolicyJson())
+      const chat = writeVerifiedWeight(root, 'chat', 'models/chat/qwen.gguf', 'chat-weights')
+      writeInstalls(root)
+      writeWhisperInstall(root)
+      const res = await assertCommercialDrive(root, [chat], sources(), whisperSources())
+      expect(res.ok).toBe(true)
+      expect(res.checks.runtimeCurrent).toBe(true)
+    })
+
+    it('fails when the whisper-cli binary is missing under the whisper pin', async () => {
+      const root = tempDir('paid-commercial-wh-nobin-')
+      writePolicy(root, buildPolicyJson())
+      const chat = writeVerifiedWeight(root, 'chat', 'models/chat/qwen.gguf', 'chat-weights')
+      writeInstalls(root)
+      writeWhisperInstall(root)
+      rmSync(join(root, 'runtime', 'whisper.cpp', 'win', 'whisper-cli.exe'))
+      const res = await assertCommercialDrive(root, [chat], sources(), whisperSources())
+      expect(res.ok).toBe(false)
+      expect(res.checks.runtimeCurrent).toBe(false)
+      expect(res.problems.some((p) => /whisper-cli binary missing/.test(p))).toBe(true)
+    })
+
+    it('fails when the whisper marker version does not match the whisper pin', async () => {
+      const root = tempDir('paid-commercial-wh-stale-')
+      writePolicy(root, buildPolicyJson())
+      const chat = writeVerifiedWeight(root, 'chat', 'models/chat/qwen.gguf', 'chat-weights')
+      writeInstalls(root)
+      writeWhisperInstall(root)
+      writeRuntimeMarker(join(root, 'runtime', 'whisper.cpp', 'win'), {
+        version: 'v1.7.0',
+        backend: 'cpu',
+        os: 'win',
+        arch: 'x64'
+      })
+      const res = await assertCommercialDrive(root, [chat], sources(), whisperSources())
+      expect(res.ok).toBe(false)
+      expect(res.problems.some((p) => /whisper build .*does not match the pinned v1\.8\.6/.test(p))).toBe(
+        true
+      )
     })
   })
 })

@@ -3,7 +3,12 @@ import { join } from 'node:path'
 import type { ModelManifest } from '../../shared/manifest'
 import type { RuntimeSources } from '../../shared/runtime-sources'
 import { loadPolicy } from './policy'
-import { planRuntimeDownload, readRuntimeMarker, runtimeBinaryPresent } from './assets'
+import {
+  planRuntimeDownload,
+  readRuntimeMarker,
+  runtimeBinaryPresent,
+  WHISPER_BINARY_BASE
+} from './assets'
 import { verifyDriveModels, type ModelVerifyResult } from './drive'
 
 // Commercial-drive pipeline + final posture assertion (spec §12.2 / Phase 13).
@@ -126,6 +131,17 @@ export function planCommercialDrive(opts: PlanCommercialDriveOptions): Commercia
         'into runtime/llama.cpp/<os>/cpu/ where one is pinned. Each archive is verified and ' +
         'leaves a .paid-runtime.json install marker.'
     },
+    {
+      id: 'fetch-whisper',
+      title: 'Download + verify the whisper.cpp transcriber builds (second sidecar family)',
+      command: `fetch-runtime --target ${target} --family whisper_cpp (one run per pinned build)`,
+      manual: false,
+      description:
+        'Fetch every whisper_cpp build pinned in runtime-sources.yaml into ' +
+        'runtime/whisper.cpp/<os>/ (Phase 36: upstream ships a prebuilt Windows CPU build ' +
+        'only; mac/linux builds come from the documented source-build step when shipped). ' +
+        'Same verify-before-trust + .paid-runtime.json marker as the llama family.'
+    },
     packageStep(os),
     {
       id: 'copy-app',
@@ -196,7 +212,8 @@ export interface CommercialAssertion {
     /**
      * Every pinned runtime build's install marker matches the runtime-sources.yaml pin
      * (version + backend) — Phase 14. True when no `runtimeSources` were passed (the
-     * check is opt-in; the native scripts cross-check it too).
+     * check is opt-in; the native scripts cross-check it too). Covers BOTH sidecar
+     * families when `whisperSources` is also passed (Phase 36).
      */
     runtimeCurrent: boolean
   }
@@ -245,7 +262,8 @@ function userDataArtifacts(rootPath: string): string[] {
 export async function assertCommercialDrive(
   rootPath: string,
   manifests: ModelManifest[],
-  runtimeSources?: RuntimeSources | null
+  runtimeSources?: RuntimeSources | null,
+  whisperSources?: RuntimeSources | null
 ): Promise<CommercialAssertion> {
   const problems: string[] = []
 
@@ -313,17 +331,18 @@ export async function assertCommercialDrive(
   // --- Runtime install markers match the yaml pin (Phase 14, opt-in) ---
   // The marker is what fetch-runtime writes after a verified extraction; a missing or
   // stale marker means the drive carries the wrong sidecar build (e.g. a CPU-era build
-  // after the default moved to vulkan) and must be re-provisioned.
+  // after the default moved to vulkan) and must be re-provisioned. Phase 36: the same
+  // check runs for the whisper family (binary `whisper-cli`) when its pin is passed.
   let runtimeCurrent = true
-  if (runtimeSources) {
-    for (const build of runtimeSources.builds) {
-      const label = `runtime build ${build.os}/${build.arch} ${build.backend}`
+  const checkFamily = (sources: RuntimeSources, family: string, binaryBase: string): void => {
+    for (const build of sources.builds) {
+      const label = `${family} build ${build.os}/${build.arch} ${build.backend}`
       // planRuntimeDownload escape-guards extract_to (the yaml on the DRIVE is
       // user-writable) — a tampered path is a failed check, not a crash.
       let binaryOk = false
       let extractTo: string
       try {
-        const plan = planRuntimeDownload(rootPath, build, runtimeSources.version)
+        const plan = planRuntimeDownload(rootPath, build, sources.version, binaryBase)
         extractTo = plan.extractTo
         binaryOk = runtimeBinaryPresent(plan)
       } catch (err) {
@@ -337,7 +356,7 @@ export async function assertCommercialDrive(
       if (!binaryOk) {
         runtimeCurrent = false
         problems.push(
-          `${label}: llama-server binary missing under ${build.extractTo} — ` +
+          `${label}: ${binaryBase} binary missing under ${build.extractTo} — ` +
             'run fetch-runtime for this build'
         )
       } else if (!marker) {
@@ -346,16 +365,18 @@ export async function assertCommercialDrive(
           `${label}: no .paid-runtime.json ` +
             `install marker under ${build.extractTo} — run fetch-runtime for this build`
         )
-      } else if (marker.version !== runtimeSources.version || marker.backend !== build.backend) {
+      } else if (marker.version !== sources.version || marker.backend !== build.backend) {
         runtimeCurrent = false
         problems.push(
           `${label}: installed ` +
             `${marker.version}/${marker.backend} does not match the pinned ` +
-            `${runtimeSources.version}/${build.backend} — re-run fetch-runtime`
+            `${sources.version}/${build.backend} — re-run fetch-runtime`
         )
       }
     }
   }
+  if (runtimeSources) checkFamily(runtimeSources, 'runtime', 'llama-server')
+  if (whisperSources) checkFamily(whisperSources, 'whisper', WHISPER_BINARY_BASE)
 
   return {
     ok: problems.length === 0,

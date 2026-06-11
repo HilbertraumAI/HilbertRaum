@@ -4,6 +4,7 @@ import type { WorkspaceController } from './workspace-vault'
 import type { RuntimeManager } from './runtime'
 import type { Embedder } from './embeddings'
 import type { Reranker } from './reranker'
+import type { Transcriber } from './transcriber'
 import type { CachedGpuProbe } from './runtime/gpu'
 import type { AuditRecorder } from './audit'
 import type { DocTaskManager } from './doctasks'
@@ -29,6 +30,13 @@ export interface AppContext {
    * (graceful-fallback rule — there is deliberately no mock reranker).
    */
   reranker?: Reranker | null
+  /**
+   * Audio transcriber (Phase 36): the whisper.cpp CLI behind the `Transcriber`
+   * interface, selected only when the binary + the GGML weights exist. Null/absent =
+   * audio imports fail per-file with friendly copy (graceful-fallback rule — there is
+   * deliberately no mock transcriber).
+   */
+  transcriber?: Transcriber | null
   /** Directory holding model-manifests, or null if it could not be located. */
   manifestsDir: string | null
   /**

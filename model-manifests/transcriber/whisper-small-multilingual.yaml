@@ -1,0 +1,42 @@
+id: whisper-small-multilingual
+display_name: Whisper Small (multilingual transcriber)
+family: whisper
+role: transcriber
+format: ggml
+runtime: whisper_cpp
+license: mit
+size_on_disk_gb: 0.49
+recommended_min_ram_gb: 4
+recommended_ram_gb: 8
+recommended_context_tokens: 0
+# `small` over `base` (R-W3, probed 2026-06-11 on real German audio): base makes
+# meaning-destroying word errors on real speech ("Leichenwagen" -> "gleichen Wagen",
+# "Toechter" -> "Teuchter", "Saerge" -> "sehrge"); small fixes nearly all of them at
+# ~2.4x the CPU cost (RTF ~0.46 vs ~0.21 at 4 threads on the dev box). German quality
+# is the product promise ("ask your meetings"), so small is the shipped default.
+local_path: models/transcriber/ggml-small.bin
+sha256: 1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b
+# Phase 36: where `fetch-models` (or the in-app downloader) fetches the weight from.
+# sha256 + size captured from a fresh download on 2026-06-11.
+download:
+  url: https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin
+  sha256: 1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b
+  size_bytes: 487601967
+  license_url: https://github.com/openai/whisper/blob/main/LICENSE
+# Bundled by default: audio transcription is a headline feature and the weight is
+# small next to the chat models. Works on every profile — transcription is a batch
+# job (peak RSS well under 2 GB, measured R-W4).
+bundled_on_preconfigured_drive: true
+recommended_profiles: [TINY, LITE, BALANCED, PRO]
+license_review:
+  status: approved
+  reviewed_by: "project maintainer (Claude-assisted review)"
+  reviewed_at: "2026-06-11"
+  notes: "APPROVED 2026-06-11: OpenAI's Whisper models and code are MIT-licensed
+    (github.com/openai/whisper LICENSE, MIT, Copyright OpenAI) — commercial
+    redistribution permitted with the license/notice. The GGML conversion repo
+    (huggingface.co/ggerganov/whisper.cpp) declares MIT and is a mechanical
+    format conversion of the OpenAI weights; treated as distributed under the same
+    MIT terms (the reranker/E5 provenance posture). The whisper.cpp runtime binary
+    is separately MIT ('the ggml authors', verified at tag v1.8.6 — see
+    runtime-sources.yaml and docs/model-policy.md)."

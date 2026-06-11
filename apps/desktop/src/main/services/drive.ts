@@ -37,8 +37,13 @@ export const DRIVE_LAYOUT_DIRS: readonly string[] = [
   'models/chat',
   'models/embeddings',
   'models/reranker',
+  'models/transcriber',
   'model-manifests',
   ...DRIVE_OS_DIRS.map((os) => `runtime/llama.cpp/${os}`),
+  // Second sidecar family (Phase 36): the whisper.cpp transcriber CLI. Upstream ships
+  // a prebuilt Windows build only; the mac/linux dirs exist for the documented
+  // source-build provisioning step (drive-layout.md).
+  ...DRIVE_OS_DIRS.map((os) => `runtime/whisper.cpp/${os}`),
   'logs',
   'config',
   'docs'

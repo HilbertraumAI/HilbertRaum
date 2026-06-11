@@ -38,12 +38,18 @@
   for the os/arch (vulkan on win/linux, metal on mac). -Backend cpu fetches the pure-CPU
   safety net into runtime/llama.cpp/<os>/cpu/.
 
+.PARAMETER Family
+  Which sidecar family to fetch from runtime-sources.yaml (Phase 36): llama_cpp
+  (default; the llama-server binary) or whisper_cpp (the whisper-cli transcriber,
+  extracted to runtime/whisper.cpp/<os>/). Same verify + marker logic for both.
+
 .PARAMETER DryRun
   Print the plan and download nothing.
 
 .EXAMPLE
   .\scripts\fetch-runtime.ps1 -Target E:\
   .\scripts\fetch-runtime.ps1 -Target E:\ -Os linux -Arch x64 -DryRun
+  .\scripts\fetch-runtime.ps1 -Target E:\ -Family whisper_cpp
 #>
 [CmdletBinding()]
 param(
@@ -51,6 +57,7 @@ param(
   [string] $Os,
   [string] $Arch,
   [string] $Backend,
+  [ValidateSet('llama_cpp', 'whisper_cpp')] [string] $Family = 'llama_cpp',
   [switch] $DryRun
 )
 
@@ -87,14 +94,25 @@ if (-not $Arch) {
   $Arch = if ($procArch -match 'ARM64') { 'arm64' } else { 'x64' }
 }
 
-# --- Parse runtime-sources.yaml (flat-ish: a list of build maps under builds:) ------
+# --- Parse runtime-sources.yaml: a list of build maps under <family>.builds: --------
+# BLOCK-AWARE since Phase 36: the file holds TWO top-level families (llama_cpp +
+# whisper_cpp) with the same shape -- only the selected -Family's version/builds are
+# collected, so the whisper builds can never leak into a llama selection or vice versa.
 $lines = (Get-Content -Path $SourcesFile) -split "`n"
 $version = $null
 $builds = @()
 $current = $null
+$topKey = $null
 foreach ($raw in $lines) {
   $line = $raw.TrimEnd()
   if ($line -match '^\s*#') { continue }
+  # A non-indented `key:` line starts a new top-level family block.
+  if ($line -match '^([A-Za-z0-9_]+)\s*:\s*$') {
+    if ($current) { $builds += $current; $current = $null }
+    $topKey = $Matches[1]
+    continue
+  }
+  if ($topKey -ne $Family) { continue }
   # Strip inline YAML comments (whitespace + '#' + rest) before unquoting (M17) -- the
   # committed `version: b9196   # PLACEHOLDER ...` used to leak the comment into the value.
   if (-not $version -and $line -match '^\s*version\s*:\s*(.+?)\s*$') {
@@ -111,7 +129,7 @@ foreach ($raw in $lines) {
 }
 if ($current) { $builds += $current }
 
-if (-not $version) { Write-Error 'runtime-sources.yaml: missing llama_cpp.version'; exit 2 }
+if (-not $version) { Write-Error "runtime-sources.yaml: missing $Family.version (is the $Family block present?)"; exit 2 }
 
 # --- Select the build (os + arch [+ backend]); default = first os/arch match
 # (vulkan on win/linux, metal on mac since Phase 14).
@@ -148,9 +166,10 @@ if ($build.extract_to -match '\.\.' -or $build.extract_to -match '^[/\\]' -or $b
 
 $IsRealSha = { param($h) $h -match '^[a-f0-9]{64}$' }
 $extractTo = Join-Path $Target ($build.extract_to -replace '/', [IO.Path]::DirectorySeparatorChar)
-# Binary name follows the SELECTED build's OS (we may be provisioning the mac/linux
-# dir from a Windows build machine), mirroring assets.ts runtimeBinaryName(os).
-$binaryName = if ($build.os -eq 'win') { 'llama-server.exe' } else { 'llama-server' }
+# Binary name follows the FAMILY + the SELECTED build's OS (we may be provisioning the
+# mac/linux dir from a Windows build machine), mirroring assets.ts sidecarBinaryName.
+$binaryBase = if ($Family -eq 'whisper_cpp') { 'whisper-cli' } else { 'llama-server' }
+$binaryName = if ($build.os -eq 'win') { "$binaryBase.exe" } else { $binaryBase }
 $binaryPath = Join-Path $extractTo $binaryName
 $markerPath = Join-Path $extractTo '.paid-runtime.json'
 $sha = ([string]$build.sha256).ToLower()
@@ -183,7 +202,7 @@ New-Item -ItemType Directory -Force -Path $extractTo | Out-Null
 # Archive name from the URL basename so a .tar.gz (the macOS/Linux release format) is
 # not saved -- and mis-extracted -- as a .zip.
 $archiveName = [System.IO.Path]::GetFileName(([uri]$build.url).AbsolutePath)
-if (-not $archiveName) { $archiveName = "llama-{0}-{1}-{2}.zip" -f $version, $build.os, $build.arch }
+if (-not $archiveName) { $archiveName = "{0}-{1}-{2}-{3}.zip" -f $binaryBase, $version, $build.os, $build.arch }
 $archive = Join-Path $extractTo $archiveName
 
 $Curl = (Get-Command curl.exe -ErrorAction SilentlyContinue)

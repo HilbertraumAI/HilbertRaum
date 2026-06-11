@@ -105,6 +105,13 @@ foreach ($osName in @('win', 'mac', 'linux')) {
     Run 'fetch-runtime.ps1' $cpuNet
   }
 }
+# Second sidecar family (Phase 36): the whisper.cpp transcriber CLI. Upstream ships a
+# prebuilt WINDOWS build only (R-W1); mac/linux whisper builds are a documented manual
+# source-build step (docs/packaging.md) -- audio import degrades to a friendly per-file
+# failure on a drive without one.
+$whisper = @{ Target = $Target; Os = 'win'; Family = 'whisper_cpp' }
+if ($DryRun) { $whisper.DryRun = $true }
+Run 'fetch-runtime.ps1' $whisper
 
 # --- 4. Package + sign + notarize (MANUAL) -----------------------------------------
 Step 4 'Package + sign the portable app (MANUAL -- secrets never in the repo)'
@@ -197,21 +204,26 @@ if (-not $DryRun) {
 if (-not $DryRun) {
   $rtSources = Join-Path $Target 'model-manifests/runtime-sources.yaml'
   if (Test-Path $rtSources) {
-    $rtVersion = $null
+    # Per-family pinned versions (Phase 36: the yaml holds llama_cpp AND whisper_cpp).
+    $famVersions = @{}
+    $topKey = $null
     foreach ($raw in (Get-Content -Path $rtSources)) {
       if ($raw -match '^\s*#') { continue }
-      if ($raw -match '^\s*version\s*:\s*(.+?)\s*$') {
-        $rtVersion = ($Matches[1] -replace '\s+#.*$', '').Trim().Trim('"').Trim("'"); break
+      if ($raw -match '^([A-Za-z0-9_]+)\s*:\s*$') { $topKey = $Matches[1]; continue }
+      if ($topKey -and -not $famVersions[$topKey] -and $raw -match '^\s*version\s*:\s*(.+?)\s*$') {
+        $famVersions[$topKey] = ($Matches[1] -replace '\s+#.*$', '').Trim().Trim('"').Trim("'")
       }
     }
     foreach ($rt in @(
-      @{ dir = 'runtime/llama.cpp/win';       backend = 'vulkan'; bin = 'llama-server.exe' },
-      @{ dir = 'runtime/llama.cpp/win/cpu';   backend = 'cpu';    bin = 'llama-server.exe' },
-      @{ dir = 'runtime/llama.cpp/mac';       backend = 'metal';  bin = 'llama-server' },
-      @{ dir = 'runtime/llama.cpp/linux';     backend = 'vulkan'; bin = 'llama-server' },
-      @{ dir = 'runtime/llama.cpp/linux/cpu'; backend = 'cpu';    bin = 'llama-server' }
+      @{ family = 'llama_cpp';   dir = 'runtime/llama.cpp/win';       backend = 'vulkan'; bin = 'llama-server.exe' },
+      @{ family = 'llama_cpp';   dir = 'runtime/llama.cpp/win/cpu';   backend = 'cpu';    bin = 'llama-server.exe' },
+      @{ family = 'llama_cpp';   dir = 'runtime/llama.cpp/mac';       backend = 'metal';  bin = 'llama-server' },
+      @{ family = 'llama_cpp';   dir = 'runtime/llama.cpp/linux';     backend = 'vulkan'; bin = 'llama-server' },
+      @{ family = 'llama_cpp';   dir = 'runtime/llama.cpp/linux/cpu'; backend = 'cpu';    bin = 'llama-server' },
+      @{ family = 'whisper_cpp'; dir = 'runtime/whisper.cpp/win';     backend = 'cpu';    bin = 'whisper-cli.exe' }
     )) {
       $rtDir = $rt.dir
+      $rtVersion = $famVersions[$rt.family]
       $markerFile = Join-Path $Target "$rtDir/.paid-runtime.json"
       $binFile = Join-Path $Target "$rtDir/$($rt.bin)"
       if (-not (Test-Path $binFile)) {

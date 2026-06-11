@@ -10,7 +10,7 @@
 
 import type { HardwareProfile } from './types'
 
-export type ModelRole = 'chat' | 'embeddings' | 'reranker'
+export type ModelRole = 'chat' | 'embeddings' | 'reranker' | 'transcriber'
 
 export interface LicenseReview {
   status: 'pending' | 'approved' | 'rejected'
@@ -84,7 +84,7 @@ export interface ValidationResult {
   errors: string[]
 }
 
-const ROLES: ModelRole[] = ['chat', 'embeddings', 'reranker']
+const ROLES: ModelRole[] = ['chat', 'embeddings', 'reranker', 'transcriber']
 const PROFILES: HardwareProfile[] = ['TINY', 'LITE', 'BALANCED', 'PRO', 'UNKNOWN']
 const REVIEW_STATUSES = ['pending', 'approved', 'rejected'] as const
 

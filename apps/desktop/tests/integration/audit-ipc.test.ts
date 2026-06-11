@@ -76,9 +76,17 @@ const handlers = ipcState.handlers as unknown as IpcHandlers
 const CHAT_SENTINEL = 'XCHAT_SENTINEL_my secret salary is 99999'
 const DOC_SENTINEL = 'XDOC_SENTINEL_the merger closes friday'
 const DOC_SENTINEL_B = 'XDOCB_SENTINEL_the budget doubles in june'
+const AUDIO_SENTINEL = 'XAUDIO_SENTINEL_the recording reveals the acquisition price'
 const SETTING_SENTINEL = 'XSETTING_SENTINEL_not_privacy_relevant'
 const PASSWORD_SENTINEL = 'XPASS_SENTINEL_hunter2hunter2'
-const SENTINELS = [CHAT_SENTINEL, DOC_SENTINEL, DOC_SENTINEL_B, SETTING_SENTINEL, PASSWORD_SENTINEL]
+const SENTINELS = [
+  CHAT_SENTINEL,
+  DOC_SENTINEL,
+  DOC_SENTINEL_B,
+  AUDIO_SENTINEL,
+  SETTING_SENTINEL,
+  PASSWORD_SENTINEL
+]
 
 const BODY = 'downloaded-model-bytes'
 function sha256(s: string): string {
@@ -210,6 +218,12 @@ beforeEach(() => {
 describe('audit wiring across the IPC layer (privacy sentinel grep)', () => {
   it('records the shallow events and NEVER the seeded chat/document/setting content', async () => {
     const { ctx, db, rootPath } = makeHarness()
+    // Phase 36: a fake transcriber behind the IngestionDeps seam — its transcript IS
+    // the audio sentinel (the audio leg below proves it never reaches runtime_events).
+    ctx.transcriber = {
+      id: 'fake-whisper',
+      transcribe: async () => [{ startMs: 0, endMs: 9000, text: AUDIO_SENTINEL }]
+    }
     // Phase 33/34: the document task engine, wired exactly like main/index.ts does it.
     ctx.docTasks = new DocTaskManager({
       getDb: () => ctx.db,
@@ -362,6 +376,27 @@ describe('audit wiring across the IPC layer (privacy sentinel grep)', () => {
     await invoke(handlers, IPC.deleteDocument, documentIdB)
 
     await invoke(handlers, IPC.deleteDocument, documentId)
+
+    // -- audio import (Phase 36): a "recording" imported through the real handlers with
+    // the FAKE transcriber whose transcript carries the audio sentinel. The transcript
+    // is CONTENT — it lands in the chunks (and the preview proves the flow really
+    // carried it) but must never reach `runtime_events`.
+    const audioPath = join(rootPath, 'board-meeting.mp3')
+    writeFileSync(audioPath, 'fake-mp3-bytes')
+    const { result: audioJobRaw } = await invoke(handlers, IPC.importDocuments, [audioPath])
+    const audioJob = audioJobRaw as ImportJob
+    await pollUntil(async () => {
+      const { result } = await invoke(handlers, IPC.getImportJob, audioJob.jobId)
+      return (result as ImportJobStatus).done
+    }, 'audio import job')
+    const audioId = audioJob.documentIds[0]
+    const { result: audioDocsRaw } = await invoke(handlers, IPC.listDocuments)
+    const audioDoc = (audioDocsRaw as DocumentInfo[]).find((d) => d.id === audioId)
+    expect(audioDoc?.status).toBe('indexed')
+    const { result: audioPreviewRaw } = await invoke(handlers, IPC.previewDocument, audioId)
+    const audioPreview = audioPreviewRaw as { segments: Array<{ text: string }> }
+    expect(audioPreview.segments.map((s) => s.text).join('\n')).toContain(AUDIO_SENTINEL)
+    await invoke(handlers, IPC.deleteDocument, audioId)
 
     // -- models + runtime: select, verify, start (mock fallback), stop.
     await invoke(handlers, IPC.selectModel, 'test-model-q4')

@@ -216,6 +216,34 @@ logs, best-effort shredding on SSDs, no password recovery — are documented in
 - **A comparison is a snapshot, not a synced copy** — the same `origin_json` staleness
   edge as translations; re-run Compare after the sources change.
 
+## Audio transcription (Phase 36, wave-3 plan §9)
+
+- **m4a/aac recordings are not supported.** The pinned whisper.cpp binary decodes
+  WAV/MP3/FLAC/OGG only (probed with real files, R-W2); decoding m4a would require
+  bundling ffmpeg (license + surface we deliberately avoid). The friendly failure asks
+  to convert the file to WAV or MP3 — most voice-recorder apps offer this.
+- **Transcription runs on the CPU at roughly real-time ÷ 1.5.** Measured (R-W4, small
+  model, 4 threads): a 52-minute meeting took ~35 minutes; peak memory ~1.2 GB. The
+  import shows honest "Transcribing… N%" progress and the app stays usable meanwhile.
+  GPU-accelerated whisper is a possible later opt-in, never a default risk.
+- **Re-indexing an audio document is a FULL re-transcription** (D35). The stored copy is
+  the audio itself (the locked copy-into-workspace contract — also what makes the drive
+  self-contained), and there is no separate transcript cache; a sha256-keyed cache is the
+  recorded follow-up if re-index proves common. Preview/translate/compare do NOT
+  re-transcribe — they read the stored transcript chunks.
+- **Audio costs real drive space, twice the size on encrypted workspaces transiently.**
+  The recording is copied into the workspace (encrypted at rest); imports >50 MB of
+  audio ask first. Recordings also re-encrypt on every vault password change like any
+  document sidecar.
+- **mac/linux drives need a source-built whisper-cli.** Upstream ships a prebuilt binary
+  for Windows only (R-W1); on other OSes audio import fails friendly until the drive
+  builder compiles the pinned tag (see `drive-layout.md`). Windows-first, by the
+  project's platform priority.
+- **Transcription quality is the small model's.** Proper nouns and unusual terms can be
+  misheard (R-W3: "LibriVox" → "Librebox"); numbers, names of people/places, and dates
+  held up well in the German probes. The transcript is searchable text, not a notarized
+  record.
+
 ## GPU acceleration (Phases 14–16, [`gpu-support-plan.md`](gpu-support-plan.md))
 
 - **Integrated GPUs (Intel Iris Xe / UHD, AMD APU "Radeon Graphics") gain little.** They share

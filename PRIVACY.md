@@ -19,6 +19,8 @@ This app does not send your data to cloud AI providers.
 - **No remote crash reporting.** Crashes are logged locally only.
 - **No prompt upload.** What you type is processed locally.
 - **No document upload.** Imported files are processed locally.
+- **No audio upload.** Imported recordings are transcribed **on this device** by a local
+  speech-recognition model (whisper.cpp) — no cloud speech service is ever involved.
 - **No embedding upload.** Vector indexes stay local.
 - **No automatic model downloads** unless you explicitly opt in.
 
@@ -27,8 +29,9 @@ This app does not send your data to cloud AI providers.
 All of the following are stored **locally**, inside your workspace (on the drive or in your app-data
 folder):
 
-- Imported documents (a full copy of each imported file is stored in your workspace)
-- Extracted text and document chunks
+- Imported documents (a full copy of each imported file is stored in your workspace —
+  including audio recordings)
+- Extracted text and document chunks (for recordings: the locally produced transcript)
 - Embeddings / the local vector index
 - Chat history (conversations and messages)
 - Generated outputs

@@ -109,4 +109,65 @@ describe('validateRuntimeSources', () => {
     expect(res.ok).toBe(true)
     expect(res.sources?.builds.map((b) => b.backend)).toEqual(['vulkan', 'cpu'])
   })
+
+  // ---- Phase 36: the optional whisper_cpp second family ------------------------------
+
+  function whisperBuild(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return build({
+      backend: 'cpu',
+      url: 'https://github.com/ggml-org/whisper.cpp/releases/download/v1.8.6/whisper-bin-x64.zip',
+      extract_to: 'runtime/whisper.cpp/win',
+      ...overrides
+    })
+  }
+
+  it('parses the optional whisper_cpp block alongside llama_cpp', () => {
+    const res = validateRuntimeSources({
+      ...sources(),
+      whisper_cpp: { version: 'v1.8.6', builds: [whisperBuild()] }
+    })
+    expect(res.ok).toBe(true)
+    expect(res.sources?.version).toBe('b9196')
+    expect(res.whisper?.version).toBe('v1.8.6')
+    expect(res.whisper?.builds[0].extractTo).toBe('runtime/whisper.cpp/win')
+  })
+
+  // The forward-compat property the wave-3 plan verified: a yaml WITHOUT the new block
+  // (a pre-Phase-36 drive) parses exactly as before, with `whisper` simply absent.
+  it('leaves whisper undefined when the block is absent (older-drive compatibility)', () => {
+    const res = validateRuntimeSources(sources())
+    expect(res.ok).toBe(true)
+    expect(res.whisper).toBeUndefined()
+  })
+
+  it('rejects a malformed whisper_cpp block loudly (never fetch the wrong thing)', () => {
+    const res = validateRuntimeSources({ ...sources(), whisper_cpp: { builds: [] } })
+    expect(res.ok).toBe(false)
+    expect(res.errors.some((e) => e.includes('whisper_cpp.version'))).toBe(true)
+    expect(res.errors.some((e) => e.includes('whisper_cpp.builds'))).toBe(true)
+  })
+
+  it('rejects duplicate triples WITHIN the whisper family', () => {
+    const res = validateRuntimeSources({
+      ...sources(),
+      whisper_cpp: {
+        version: 'v1.8.6',
+        builds: [whisperBuild(), whisperBuild({ url: 'https://example.test/other.zip' })]
+      }
+    })
+    expect(res.ok).toBe(false)
+    expect(
+      res.errors.some((e) => e.includes('duplicate whisper_cpp build') && e.includes('win/x64/cpu'))
+    ).toBe(true)
+  })
+
+  // The families are independent pins: the same (os, arch, backend) triple may exist
+  // in BOTH (they extract to different trees) without tripping the duplicate guard.
+  it('allows the same triple across the two families', () => {
+    const res = validateRuntimeSources({
+      llama_cpp: { version: 'b9196', builds: [build({ backend: 'cpu' })] },
+      whisper_cpp: { version: 'v1.8.6', builds: [whisperBuild()] }
+    })
+    expect(res.ok).toBe(true)
+  })
 })

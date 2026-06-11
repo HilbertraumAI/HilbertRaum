@@ -20,7 +20,8 @@ import type {
 import { sha256File } from '../models'
 import { type Embedder, encodeVector } from '../embeddings'
 import { ENCRYPTED_DOC_SUFFIX, shredFile, type DocumentCipher } from '../workspace-vault'
-import { selectParser, supportedExtensions } from './parsers'
+import type { Transcriber } from '../transcriber'
+import { isAudioPath, selectParser, supportedExtensions, type ParseContext } from './parsers'
 import { chunkSegments } from './chunker'
 
 // Ingestion service (spec §7.7). Owns the document lifecycle:
@@ -49,6 +50,17 @@ export interface IngestionDeps {
    * decrypts to a transient working file and shreds it afterwards.
    */
   cipher?: DocumentCipher | null
+  /**
+   * Transcriber for audio imports (Phase 36, the embedder-injection precedent).
+   * Optional AND nullable: absent/null means an audio FILE fails friendly with the
+   * download-the-model copy — text ingestion is unaffected (graceful-fallback rule).
+   */
+  transcriber?: Transcriber | null
+  /**
+   * Coarse transcription progress (0–100) per document, surfaced by the IPC layer as
+   * "Transcribing… N%" on the documents table polling path (import AND re-index).
+   */
+  onTranscribeProgress?: (documentId: string, percent: number) => void
 }
 
 // Canonical home of the `.enc` suffix moved to workspace-vault (Phase 32 — the password
@@ -65,7 +77,12 @@ const MIME_BY_EXT: Record<string, string> = {
   '.pdf': 'application/pdf',
   '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   '.csv': 'text/csv',
-  '.tsv': 'text/csv'
+  '.tsv': 'text/csv',
+  // Audio (Phase 36) — exactly the formats the pinned whisper-cli decodes (R-W2).
+  '.wav': 'audio/wav',
+  '.mp3': 'audio/mpeg',
+  '.flac': 'audio/flac',
+  '.ogg': 'audio/ogg'
 }
 
 function nowIso(): string {
@@ -325,9 +342,21 @@ export async function processDocument(
     if (!parser) {
       throw new Error(`Unsupported file type: ${extname(row.title) || '(none)'}`)
     }
-    db.prepare('UPDATE documents SET mime_type = ? WHERE id = ?').run(parser.mimeType, documentId)
+    // Prefer the per-extension MIME (identical to parser.mimeType for the text formats;
+    // gives audio its real type — audio/wav vs the AudioParser's `audio/*` fallback).
+    db.prepare('UPDATE documents SET mime_type = ? WHERE id = ?').run(
+      guessMime(row.title) ?? parser.mimeType,
+      documentId
+    )
 
-    const parsed = await parser.parse(parseSource)
+    // Parse context (Phase 36, additive — text parsers ignore it): the injected
+    // transcriber, the documents dir for content transients, and per-document progress.
+    const parseCtx: ParseContext = {
+      transcriber: deps.transcriber,
+      workDir: storeDir,
+      onProgress: (percent) => deps.onTranscribeProgress?.(documentId, percent)
+    }
+    const parsed = await parser.parse(parseSource, parseCtx)
 
     setStatus(db, documentId, 'chunking')
     const chunks = chunkSegments(parsed.segments)
@@ -452,6 +481,22 @@ export async function extractDocumentPreview(
     throw new Error(`Unsupported file type: ${extname(row.title) || '(none)'}`)
   }
 
+  // Audio (Phase 36): re-extraction reads the stored CHUNKS, not the file — re-parsing
+  // would re-run the whole transcription (minutes of CPU) just to show text. Exact by
+  // construction: every audio chunk is one packed transcript segment, verbatim, with no
+  // overlap (AudioParser caps packed segments below the chunk window), so unlike the
+  // overlapping text-format chunks these concatenate losslessly. This also serves the
+  // doc-task re-extraction path (translate/compare a transcript without re-transcribing).
+  if (isAudioPath(row.title)) {
+    const segments = audioSegmentsFromChunks(db, documentId)
+    if (segments.length === 0) {
+      throw new Error(
+        'No transcript is stored for this recording yet. Re-index it to transcribe again.'
+      )
+    }
+    return { id: row.id, title: row.title, mimeType: row.mime_type, segments }
+  }
+
   const cipher = deps.cipher ?? null
   const transients: string[] = []
   try {
@@ -490,10 +535,56 @@ export async function extractDocumentPreview(
 }
 
 /**
+ * A transcript document's segments, rebuilt from its stored chunks (Phase 36 — see
+ * the audio branch in `extractDocumentPreview` for why this is exact for audio only).
+ */
+function audioSegmentsFromChunks(
+  db: Db,
+  documentId: string
+): Array<{ text: string; pageNumber: number | null; sectionLabel: string | null }> {
+  const rows = db
+    .prepare(
+      'SELECT text, section_label FROM chunks WHERE document_id = ? ORDER BY chunk_index'
+    )
+    .all(documentId) as unknown as Array<{ text: string; section_label: string | null }>
+  return rows.map((r) => ({ text: r.text, pageNumber: null, sectionLabel: r.section_label }))
+}
+
+/**
+ * Per-path summary of a pending import for the renderer's size-aware audio
+ * confirmation (Phase 36, D35): how many supported files the selection expands to,
+ * how many are audio, and the audio bytes (a stored copy + a full transcription are
+ * real costs the user should consciously accept for large recordings).
+ */
+export interface ImportPreflight {
+  fileCount: number
+  audioFileCount: number
+  audioBytes: number
+}
+
+export function summarizeImportPaths(paths: string[]): ImportPreflight {
+  const files = expandPaths(paths)
+  let audioFileCount = 0
+  let audioBytes = 0
+  for (const f of files) {
+    if (!isAudioPath(f)) continue
+    audioFileCount += 1
+    try {
+      audioBytes += statSync(f).size
+    } catch {
+      // Unreadable file: it will fail per-file during import; size 0 here.
+    }
+  }
+  return { fileCount: files.length, audioFileCount, audioBytes }
+}
+
+/**
  * Re-run ingestion for an existing document (re-parse the stored copy). Clears any
  * persisted summary FIRST (Phase 33, D25): a re-index means the content may have
  * changed, so a summary derived from the old chunks must not survive — even if the
- * re-parse then fails.
+ * re-parse then fails. For AUDIO documents a re-index is a FULL RE-TRANSCRIPTION of
+ * the stored copy (D35 — the transcript is not cached separately; documented in
+ * known-limitations.md), with the same "Transcribing…" progress as the import.
  */
 export async function reindexDocument(
   db: Db,

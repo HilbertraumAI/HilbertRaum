@@ -3,7 +3,13 @@ import { writeFileSync } from 'node:fs'
 import { BrowserWindow, dialog, ipcMain } from 'electron'
 import { IPC } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
-import type { DocumentInfo, DocumentPreview, ImportJob, ImportJobStatus } from '../../shared/types'
+import type {
+  DocumentInfo,
+  DocumentPreview,
+  ImportJob,
+  ImportJobStatus,
+  ImportPreflight
+} from '../../shared/types'
 import {
   createQueuedDocument,
   deleteDocument,
@@ -15,6 +21,7 @@ import {
   readStoredDocumentText,
   reconcileStuckDocuments,
   reindexDocument,
+  summarizeImportPaths,
   type IngestionDeps
 } from '../services/ingestion'
 import { supportedExtensions } from '../services/ingestion/parsers'
@@ -70,9 +77,17 @@ export function registerDocsIpc(ctx: AppContext): void {
   // `ctx.embedder.id`, so tag and scope must come from the same place. The document cipher
   // (non-null only for an UNLOCKED encrypted workspace) keeps stored copies encrypted at
   // rest, per spec §3.5.
+  // Transcription progress per document (Phase 36): fed by the whisper CLI's `-pp`
+  // output through the parse context, merged into `listDocuments` responses so the
+  // polling UI can show "Transcribing… N%" on import AND re-index. In-memory only —
+  // cleared when the document leaves the processing set.
+  const transcribing = new Map<string, number>()
+
   const ingestionDeps = (): IngestionDeps => ({
     embedder: ctx.embedder,
-    cipher: ctx.workspace.documentCipher()
+    cipher: ctx.workspace.documentCipher(),
+    transcriber: ctx.transcriber,
+    onTranscribeProgress: (documentId, percent) => transcribing.set(documentId, percent)
   })
 
   // Open the OS file/folder picker in the main process (renderer has no dialog access).
@@ -148,6 +163,7 @@ export function registerDocsIpc(ctx: AppContext): void {
             log.error('Document ingestion crashed', { id, error: String(err) })
           } finally {
             processing.delete(id)
+            transcribing.delete(id)
           }
         }
       } finally {
@@ -181,7 +197,21 @@ export function registerDocsIpc(ctx: AppContext): void {
     }
     // Flag docs whose vectors were produced by a different embedder than the active one
     // (search is scoped to `ctx.embedder.id`), so the UI can prompt a re-index.
-    return listDocuments(ctx.db, ctx.embedder.id)
+    // Merge in-memory transcription progress (Phase 36) so the polling UI can show
+    // "Transcribing… N%" without any new channel.
+    return listDocuments(ctx.db, ctx.embedder.id).map((d) => {
+      const percent = transcribing.get(d.id)
+      return percent !== undefined && d.status === 'extracting'
+        ? { ...d, transcriptionProgress: percent }
+        : d
+    })
+  })
+
+  // Size-aware audio preflight (Phase 36, D35): the renderer asks what a picked
+  // selection contains BEFORE importing, so large audio (stored copy + a full
+  // transcription are real costs) gets an explicit confirmation. Read-only.
+  ipcMain.handle(IPC.importPreflight, (_e, paths: string[]): ImportPreflight => {
+    return summarizeImportPaths(paths ?? [])
   })
 
   ipcMain.handle(IPC.deleteDocument, (_e, documentId: string): void => {
@@ -258,6 +288,7 @@ export function registerDocsIpc(ctx: AppContext): void {
       return info
     } finally {
       processing.delete(documentId)
+      transcribing.delete(documentId)
       releaseDocWork()
     }
   })

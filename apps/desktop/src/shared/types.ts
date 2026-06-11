@@ -264,7 +264,7 @@ export interface ModelInfo {
   id: string
   displayName: string
   family: string
-  role: 'chat' | 'embeddings' | 'reranker'
+  role: 'chat' | 'embeddings' | 'reranker' | 'transcriber'
   format: string
   runtime: string
   license: string
@@ -580,6 +580,12 @@ export interface DocumentInfo {
    * survives re-index (provenance, not sync — the source may have changed since).
    */
   origin?: DocumentOrigin | null
+  /**
+   * Transcription progress (0–100) while an AUDIO document is being read (Phase 36).
+   * In-memory only (merged in by the docs IPC layer during import/re-index polling);
+   * undefined for text documents and outside an active transcription.
+   */
+  transcriptionProgress?: number
   createdAt: string
   updatedAt: string
 }
@@ -587,6 +593,13 @@ export interface DocumentInfo {
 export interface ImportJob {
   jobId: string
   documentIds: string[]
+}
+
+/** What a picked selection contains — the size-aware audio confirm (Phase 36, D35). */
+export interface ImportPreflight {
+  fileCount: number
+  audioFileCount: number
+  audioBytes: number
 }
 
 export interface ImportJobStatus {

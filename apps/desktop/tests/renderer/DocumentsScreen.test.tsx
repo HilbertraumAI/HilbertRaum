@@ -172,6 +172,101 @@ describe('DocumentsScreen', () => {
     expect(onAskSelected).toHaveBeenCalledWith(expect.arrayContaining(['d1', 'd2']))
   })
 
+  // ---- Audio (Phase 36): formats line, Transcribing badge, D35 size confirm ------
+
+  it('advertises the verified audio formats on the Supported line', async () => {
+    stubApi({ listDocuments: vi.fn(async () => []) })
+    render(<DocumentsScreen />)
+    expect(await screen.findByText(/WAV, MP3, FLAC,\s*OGG/)).toBeInTheDocument()
+  })
+
+  it('shows "Transcribing…" with the percent for an audio document being read', async () => {
+    stubApi({
+      listDocuments: vi.fn(async () => [
+        doc({
+          title: 'meeting.mp3',
+          mimeType: 'audio/mpeg',
+          status: 'extracting',
+          transcriptionProgress: 42,
+          chunkCount: 0
+        })
+      ])
+    })
+    render(<DocumentsScreen />)
+    expect(await screen.findByText(/Transcribing… 42%/)).toBeInTheDocument()
+    // A TEXT document in `extracting` keeps the plain "Reading" label.
+    cleanup()
+    stubApi({ listDocuments: vi.fn(async () => [doc({ status: 'extracting', chunkCount: 0 })]) })
+    render(<DocumentsScreen />)
+    expect(await screen.findByText('Reading')).toBeInTheDocument()
+  })
+
+  it('asks before importing large audio (D35) and imports only on confirm', async () => {
+    const user = userEvent.setup()
+    const importDocuments = vi.fn(async () => ({ jobId: 'j1', documentIds: ['d9'] }))
+    stubApi({
+      listDocuments: vi.fn(async () => [doc({})]),
+      pickDocuments: vi.fn(async () => ['/u/long-meeting.wav']),
+      importPreflight: vi.fn(async () => ({
+        fileCount: 1,
+        audioFileCount: 1,
+        audioBytes: 600 * 1024 * 1024
+      })),
+      importDocuments,
+      getImportJob: vi.fn(async () => ({ jobId: 'j1', total: 1, completed: 1, failed: 0, done: true }))
+    })
+    render(<DocumentsScreen />)
+    await screen.findByText('contract.pdf')
+
+    await user.click(screen.getByRole('button', { name: /import files/i }))
+    // The confirm came up FIRST — nothing imported yet.
+    const dialog = await screen.findByRole('dialog')
+    expect(dialog).toHaveTextContent(/Import large audio\?/)
+    expect(dialog).toHaveTextContent(/600\.0 MB/)
+    expect(importDocuments).not.toHaveBeenCalled()
+
+    await user.click(within(dialog).getByRole('button', { name: /import and transcribe/i }))
+    await waitFor(() => expect(importDocuments).toHaveBeenCalledWith(['/u/long-meeting.wav']))
+  })
+
+  it('cancelling the large-audio confirm imports nothing', async () => {
+    const user = userEvent.setup()
+    const importDocuments = vi.fn(async () => ({ jobId: 'j1', documentIds: [] }))
+    stubApi({
+      listDocuments: vi.fn(async () => [doc({})]),
+      pickDocuments: vi.fn(async () => ['/u/long-meeting.wav']),
+      importPreflight: vi.fn(async () => ({
+        fileCount: 1,
+        audioFileCount: 1,
+        audioBytes: 600 * 1024 * 1024
+      })),
+      importDocuments
+    })
+    render(<DocumentsScreen />)
+    await screen.findByText('contract.pdf')
+    await user.click(screen.getByRole('button', { name: /import files/i }))
+    await user.click(within(await screen.findByRole('dialog')).getByRole('button', { name: /cancel/i }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    expect(importDocuments).not.toHaveBeenCalled()
+  })
+
+  it('small/text selections import directly with no confirm', async () => {
+    const user = userEvent.setup()
+    const importDocuments = vi.fn(async () => ({ jobId: 'j1', documentIds: ['d9'] }))
+    stubApi({
+      listDocuments: vi.fn(async () => [doc({})]),
+      pickDocuments: vi.fn(async () => ['/u/note.txt']),
+      importPreflight: vi.fn(async () => ({ fileCount: 1, audioFileCount: 0, audioBytes: 0 })),
+      importDocuments,
+      getImportJob: vi.fn(async () => ({ jobId: 'j1', total: 1, completed: 1, failed: 0, done: true }))
+    })
+    render(<DocumentsScreen />)
+    await screen.findByText('contract.pdf')
+    await user.click(screen.getByRole('button', { name: /import files/i }))
+    await waitFor(() => expect(importDocuments).toHaveBeenCalledWith(['/u/note.txt']))
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
   it('"Re-index all" re-indexes every stale document', async () => {
     const user = userEvent.setup()
     const stale = [

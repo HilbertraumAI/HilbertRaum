@@ -315,6 +315,40 @@ describe('runtime install marker (.paid-runtime.json, Phase 14)', () => {
     writeRuntimeMarker(plan.extractTo, { version: 'b9585', backend: 'vulkan', os: 'win', arch: 'x64' })
     expect(runtimeInstallCurrent(plan)).toBe(true)
   })
+
+  // Phase 36: the whisper family rides the exact same marker logic — its plan just
+  // points at whisper-cli under runtime/whisper.cpp/<os>/. Version+backend skips hold.
+  describe('whisper family (binaryBase = whisper-cli)', () => {
+    const whisperBuild = {
+      os: 'win' as const,
+      arch: 'x64',
+      backend: 'cpu',
+      url: 'https://example.test/whisper-bin-x64.zip',
+      sha256: 'REPLACE_WITH_REAL_HASH',
+      extractTo: 'runtime/whisper.cpp/win'
+    }
+    const whisperPlan = (root: string) => planRuntimeDownload(root, whisperBuild, 'v1.8.6', 'whisper-cli')
+
+    it('plans the whisper-cli binary path under runtime/whisper.cpp/<os>/', () => {
+      const root = tempDir('paid-whisper-marker-')
+      const plan = whisperPlan(root)
+      expect(plan.extractTo).toBe(join(root, 'runtime', 'whisper.cpp', 'win'))
+      expect(plan.binaryPath).toBe(join(root, 'runtime', 'whisper.cpp', 'win', 'whisper-cli.exe'))
+    })
+
+    it('skips only on a MATCHING version+backend marker; stale/absent re-fetches', () => {
+      const root = tempDir('paid-whisper-marker-')
+      const plan = whisperPlan(root)
+      expect(runtimeInstallCurrent(plan)).toBe(false) // no binary
+      mkdirSync(plan.extractTo, { recursive: true })
+      writeFileSync(plan.binaryPath, 'whisper-binary')
+      expect(runtimeInstallCurrent(plan)).toBe(false) // binary, no marker
+      writeRuntimeMarker(plan.extractTo, { version: 'v1.7.0', backend: 'cpu', os: 'win', arch: 'x64' })
+      expect(runtimeInstallCurrent(plan)).toBe(false) // version bump re-fetches
+      writeRuntimeMarker(plan.extractTo, { version: 'v1.8.6', backend: 'cpu', os: 'win', arch: 'x64' })
+      expect(runtimeInstallCurrent(plan)).toBe(true) // current → idempotent skip
+    })
+  })
 })
 
 // The COMMITTED runtime-sources.yaml is the actual pin a drive is provisioned from —
@@ -359,6 +393,23 @@ describe('committed model-manifests/runtime-sources.yaml (Phase 14 pin)', () => 
     for (const b of committed().builds) {
       expect(isRealSha256(b.sha256), `${b.os}/${b.arch}/${b.backend}`).toBe(true)
     }
+  })
+
+  // Phase 36: the committed whisper pin (the second family) — win CPU prebuilt only
+  // (R-W1: upstream ships no mac/linux CLI binaries), real hash, own extract tree.
+  it('pins the whisper_cpp family at v1.8.6 with a real hash', () => {
+    const raw = parse(
+      readFileSync(join(process.cwd(), '..', '..', 'model-manifests', 'runtime-sources.yaml'), 'utf8')
+    )
+    const res = validateRuntimeSources(raw)
+    expect(res.ok).toBe(true)
+    expect(res.whisper?.version).toBe('v1.8.6')
+    expect(res.whisper?.builds).toHaveLength(1)
+    const win = res.whisper!.builds[0]
+    expect(win.os).toBe('win')
+    expect(win.backend).toBe('cpu')
+    expect(win.extractTo).toBe('runtime/whisper.cpp/win')
+    expect(isRealSha256(win.sha256)).toBe(true)
   })
 })
 

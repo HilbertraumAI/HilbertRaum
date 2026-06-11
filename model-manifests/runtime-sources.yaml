@@ -72,3 +72,27 @@ llama_cpp:
       url: https://github.com/ggml-org/llama.cpp/releases/download/b9585/llama-b9585-bin-ubuntu-x64.tar.gz
       sha256: be111dd28e6228fc4cb6a6ec41f03a67947ab61f315a3d22d0e68ac7372a58ab
       extract_to: runtime/llama.cpp/linux/cpu
+
+# SECOND SIDECAR FAMILY (Phase 36): whisper.cpp — the audio transcriber. ADDITIVE
+# block; an app from before Phase 36 reads only `llama_cpp:` and ignores this
+# (verified forward-compatibility, wave-3 plan §9). Same schema, own pinned tag.
+#
+# PINNED RELEASE: v1.8.6 (2026-06-02). Inspected 2026-06-11 (R-W1): the upstream
+# release ships PREBUILT BINARIES FOR WINDOWS ONLY (whisper-bin-x64.zip — a plain-CPU
+# build whose Release/ folder contains whisper-cli.exe + whisper-server.exe + ggml
+# DLLs; flattened on extraction) plus BLAS/CUDA variants and an Apple xcframework.
+# There are NO prebuilt mac/linux CLI binaries — on those OSes the drive builder
+# compiles the pinned tag from source (cmake; see docs/packaging.md) into
+# runtime/whisper.cpp/<os>/, writing the .paid-runtime.json marker by hand or via
+# fetch-runtime's marker step. CPU-only by design (E5/reranker precedent: ASR is a
+# batch job; GPU whisper would be a later opt-in, never a default risk).
+# The sha256 below was computed from a fresh download on 2026-06-11.
+whisper_cpp:
+  version: v1.8.6
+  builds:
+    - os: win
+      arch: x64
+      backend: cpu
+      url: https://github.com/ggml-org/whisper.cpp/releases/download/v1.8.6/whisper-bin-x64.zip
+      sha256: b07ea0b1b4115a38e1a7b07debf581f0b77d999925f8acb8f39d322b0ba0a822
+      extract_to: runtime/whisper.cpp/win
