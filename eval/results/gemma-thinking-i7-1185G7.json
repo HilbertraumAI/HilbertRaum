@@ -1,0 +1,82 @@
+{
+  "model": "gemma4-12b-it-qat-q4.gguf",
+  "balOk": 8,
+  "deepOk": 8,
+  "n": 8,
+  "deepEmitsReasoning": true,
+  "flipRecommended": true,
+  "rows": [
+    {
+      "id": "train-arrival",
+      "trap": false,
+      "balCorrect": true,
+      "deepCorrect": true,
+      "deepReasoningChars": 427,
+      "balAnswer": "16:15",
+      "deepAnswer": "16:15"
+    },
+    {
+      "id": "discount",
+      "trap": false,
+      "balCorrect": true,
+      "deepCorrect": true,
+      "deepReasoningChars": 946,
+      "balAnswer": "Um den neuen Preis zu berechnen, gibt es zwei einfache Wege:\n\n**Weg 1: Erst den Rabatt berechnen**\n1. Berechne 25 % von 80 Euro:\n   $80 \\times 0,25 = 20$ Euro (Das ist der Rabatt).\n2. Ziehe den Rabatt vom Originalpreis ab:\n   $80 - 20 = 60$ Euro.\n\n**Weg 2: Direkt den Restpreis berechnen**\n1. Wenn da",
+      "deepAnswer": "Der neue Preis ist **60 Euro**.\n\n**So rechnest du es aus:**\n\n1.  **Schritt: Den Rabatt berechnen**\n    25 % von 80 Euro sind $\\frac{1}{4}$ des Preises (da 25 % = 0,25 ist).\n    $80 \\text{ €} \\times 0,25 = 20 \\text{ €}$ Rabatt.\n\n2.  **Schritt: Den Rabatt abziehen**\n    $80 \\text{ €} - 20 \\text{ €} = "
+    },
+    {
+      "id": "multiply",
+      "trap": false,
+      "balCorrect": true,
+      "deepCorrect": true,
+      "deepReasoningChars": 242,
+      "balAnswer": "391",
+      "deepAnswer": "391"
+    },
+    {
+      "id": "syllogism",
+      "trap": true,
+      "balCorrect": true,
+      "deepCorrect": true,
+      "deepReasoningChars": 1323,
+      "balAnswer": "No.\n\n**Explanation:** While all roses are flowers, the premise only states that *some* flowers fade quickly. It does not provide information confirming that roses are part of that specific group. Therefore, it is possible that roses are among the flowers that do not fade quickly.",
+      "deepAnswer": "No.\n\n**Explanation:** While all roses are flowers, the \"some flowers\" that fade quickly might not include roses. The premises do not provide enough information to conclude that roses specifically are among the flowers that fade quickly."
+    },
+    {
+      "id": "snail",
+      "trap": true,
+      "balCorrect": true,
+      "deepCorrect": true,
+      "deepReasoningChars": 1813,
+      "balAnswer": "Die Schnecke braucht **8 Tage**.\n\nHier ist die schrittweise Erklärung:\n\n1.  **Der tägliche Fortschritt:** Jeden Tag klettert sie 3 Meter hoch und rutscht nachts 2 Meter zurück. Das bedeutet, sie macht pro 24-Stunden-Zyklus einen Netto-Fortschritt von **1 Meter**.\n2.  **Der entscheidende Moment:** Ma",
+      "deepAnswer": "Die Schnecke braucht **8 Tage**.\n\n**Hier ist die Erklärung:**\n\nViele rechnen intuitiv: *3 Meter hoch - 2 Meter zurück = 1 Meter Fortschritt pro Tag. 10 Meter : 1 Meter = 10 Tage.* Das ist jedoch ein häufiger Fehler, denn am letzten Tag erreicht die Schnecke den Rand und klettert nicht mehr zurück.\n\n"
+    },
+    {
+      "id": "bat-ball",
+      "trap": true,
+      "balCorrect": true,
+      "deepCorrect": true,
+      "deepReasoningChars": 729,
+      "balAnswer": "The ball costs **0.05** (or 5 cents).\n\nHere is the breakdown:\n1. Let the price of the ball be $x$.\n2. The bat costs $x + 1.00$.\n3. Together, they cost $1.10$:\n   $x + (x + 1.00) = 1.10$\n4. Simplify the equation:\n   $2x + 1.00 = 1.10$\n5. Subtract 1.00 from both sides:\n   $2x = 0.10$\n6. Divide by 2:\n ",
+      "deepAnswer": "The ball costs **5 cents** (or $0.05).\n\nHere is the breakdown:\n1. Let the cost of the ball be **x**.\n2. The bat costs 1.00 more than the ball, so the bat is **x + 1.00**.\n3. Together, they cost 1.10:\n   **x + (x + 1.00) = 1.10**\n4. Simplify the equation:\n   **2x + 1.00 = 1.10**\n5. Subtract 1.00 from"
+    },
+    {
+      "id": "minutes",
+      "trap": false,
+      "balCorrect": true,
+      "deepCorrect": true,
+      "deepReasoningChars": 450,
+      "balAnswer": "150",
+      "deepAnswer": "150"
+    },
+    {
+      "id": "sort",
+      "trap": false,
+      "balCorrect": true,
+      "deepCorrect": true,
+      "deepReasoningChars": 369,
+      "balAnswer": "Die aufsteigend sortierten Zahlen sind: 3, 5, 8, 11.",
+      "deepAnswer": "Die sortierten Zahlen lauten: 3, 5, 8, 11."
+    }
+  ]
+}

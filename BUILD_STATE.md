@@ -139,7 +139,7 @@ hardware matrix, item 1b). Consciously-accepted gaps live in
 | 26 | UI information architecture regroup (guidelines §2) | 🟢 done (merged to master 2026-06-10) |
 | 27 | UI microcopy, ambient trust signal, first-run (guidelines §7/§2/§9) | 🟢 done (merged to master 2026-06-10) — **UI polish wave COMPLETE** |
 | 28 | Model catalog wave 1 (challenger manifests, D16–D18) | 🟡 in progress — manifests + docs landed, validated, gate green; weights fetched + hashes promoted (all 10 weights VERIFIED on the `D:\` drive); §4.3 chat + depth smokes PASS for all four challengers; only the Models-screen-UI + RAG-citation smokes remain |
-| 29 | Benchmark protocol + first comparison run (D19/D20) | 🟡 in progress — **protocol + tooling + eval data landed** (`docs/model-benchmarks.md`, the judge-free scorer + 24 CI tests, the real-RAG-path harness, `eval/{corpus,rag}_de_en.jsonl` = 100 items, the peak-RSS script); the multi-machine RUNS + §5.4 promotions are pending (executed on real hardware) |
+| 29 | Benchmark protocol + first comparison run (D19/D20) | 🟡 in progress (nearly done) — protocol + tooling + 100-item eval set landed; **first run executed on the i7-1185G7 (all 8 models, QA+speed+RSS)**; §5.4 applied: RAM recalibrated from measured RSS, the recommender made **quality-aware** (`recommendation_rank` → ≤12 GB Qwen3-4B / 16 GB Ministral / ≥32 GB Gemma4), **Gemma thinking flag flipped on**. Remaining: optional devbox sweep (2nd machine, completeness) + condense the plan |
 
 Legend: ⚪ not started · 🟡 in progress · 🟢 done · 🔴 blocked
 
@@ -1368,10 +1368,15 @@ Repo root: `f:\_coding\ai_drive`.
      Granite/30B never auto-recommended. Wired through `shared/manifest.ts` (schema+parse) +
      `services/models.ts`; covered by real-manifest picks in `benchmark.test.ts` + tiebreak unit
      tests in `models.test.ts`. 701/701 tests, typecheck clean.
-  PENDING to close: the **Gemma thinking-quality check** (`tests/manual/gemma-thinking.test.ts`,
-  run #2 → maybe flip `supports_thinking_mode`); optionally the devbox speed/RSS run (formal
-  ≥2-machine done-when — QA+RSS are machine-independent, already reproduced); then condense the
-  plan per the doc lifecycle rule.
+  9. **Gemma thinking flag FLIPPED to `true` (2026-06-11, run #2)** — the thinking-quality check
+     (`tests/manual/gemma-thinking.test.ts`, i7) had Deep match Balanced **8/8** on reasoning items
+     (incl. the snail/bat-ball/syllogism traps) with coherent chain-of-thought, so Deep is safe to
+     offer; result in `eval/results/gemma-thinking-i7-1185G7.json`. Caveat: both modes hit 100% →
+     the small set shows Deep deliberates well + never regresses, not that it *strictly* helps.
+     Gemma 4 is now the only thinking-capable challenger; the composer offers "Thorough" for it.
+  PENDING to close: optionally the **devbox speed/RSS run** (formal ≥2-machine done-when — QA+RSS
+  are machine-independent and already reproduced, so this is completeness only); then **condense**
+  `model-catalog-expansion-plan.md` to a design record per the doc lifecycle rule.
 
 ---
 

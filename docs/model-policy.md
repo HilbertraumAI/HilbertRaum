@@ -24,7 +24,7 @@ llama.cpp b9585; all license reviews approved)_
 | Chat MoE | Qwen3 30B-A3B (MoE) Q4 | ~18.6 GB | 24 GB | — (opt-in) | ~30B quality at ~3.3B *active*/token → near-3B speed; needs ~20 GB RAM |
 | Chat (winner, 8B) | Ministral 3 8B Instruct (2512) Q4 | ~5.2 GB | 12 GB | — (deferred‡) | **Phase-29 winner at 8B**: 0/15 hallucinations (only model that never fabricated) + fastest 8B decode |
 | Chat challenger | Granite 4.1 8B Q4 | ~5.3 GB | 12 GB | — (not promoted) | Phase-29: lost its tier (most 8B hallucinations 3/15, lowest F1); kept selectable for its IBM provenance story |
-| Chat (winner, 12–14B) | Gemma 4 12B Instruct QAT Q4_0 | ~7.0 GB | 14 GB | — (deferred‡) | **Phase-29 winner at 12–14B**: beats Qwen3 14B on every axis (fewer hallucinations, faster). `supports_thinking_mode` flip pending a thinking-quality check |
+| Chat (winner, 12–14B) | Gemma 4 12B Instruct QAT Q4_0 | ~7.0 GB | 14 GB | — (rank‡) | **Phase-29 winner at 12–14B**: beats Qwen3 14B on every axis (fewer hallucinations, faster). `supports_thinking_mode` **flipped on** — only thinking-capable challenger |
 | Chat (better 4B) | Qwen3 4B Instruct 2507 Q4 | ~2.5 GB | 8 GB | — (deferred‡) | **Phase-29 (D18)**: beats the original 4B on every axis; the quality alternative at the 4B tier (orig 4B stays the bundled default for Deep). Instruct-only — no thinking |
 | Embeddings | Multilingual E5 Small (F16) | ~0.24 GB | 4 GB | all | Local document search (needed for Q&A) |
 | Reranker (optional) | BGE Reranker v2 M3 (F16) | ~1.08 GB | 6 GB | LITE+ (never bundled by default) | Retrieval-quality pass over document search (Phase 21) — search works fully without it |
@@ -87,9 +87,12 @@ the machine's RAM — the Phase-29 quality-aware tiebreak in `recommendModelIdBy
   Setting it on a model whose template ignores `enable_thinking` is harmless at the request
   level (the kwarg is inert) but misleading — Deep would behave exactly like Balanced.
   The four original Qwen3 chat models are the hybrid-thinking releases (`Qwen/Qwen3-*-GGUF`)
-  and correctly declare `true`. The Phase-28 challengers (Ministral 3, Granite 4.1, Gemma 4, and
-  the "Qwen3 4B Instruct **2507**" refresh — which dropped hybrid thinking) are all instruct-only
-  and declare `false`: Deep behaves like Balanced on them, by design.
+  and correctly declare `true`. Of the Phase-28 challengers, **Gemma 4 also declares `true`** —
+  its template honours `enable_thinking` and the Phase-29 thinking-quality check (run #2,
+  `tests/manual/gemma-thinking.test.ts`) confirmed Deep deliberates coherently and never regresses
+  (8/8 = Balanced), so the flag was flipped. Ministral 3, Granite 4.1, and the "Qwen3 4B Instruct
+  **2507**" refresh are instruct-only and declare `false`: Deep behaves like Balanced on them, by
+  design.
 
 ## Model states (spec §7.4)
 Computed by `services/models.ts` with this precedence:
