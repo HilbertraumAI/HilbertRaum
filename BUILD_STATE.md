@@ -146,6 +146,8 @@ hardware matrix, item 1b). Consciously-accepted gaps live in
 | 28 | Model catalog wave 1 (challenger manifests, D16–D18) | 🟢 done — 4 challenger manifests (Apache-2.0, real hashes, all 10 weights VERIFIED on `D:\`), license reviews approved, bring-up smoke PASS; RAG citation/abstention verified across all 8 models by the Phase-29 eval; plan condensed |
 | 29 | Benchmark protocol + first comparison run (D19/D20) | 🟢 done — judge-free protocol + tooling + 100-item eval set; first run on the i7-1185G7 (all 8 models, QA+speed+RSS), QA reproduced on the dev box; §5.4 applied: RAM recalibrated from measured RSS, recommender made **quality-aware** (`recommendation_rank` → ≤12 GB Qwen3-4B / 16 GB Ministral / ≥32 GB Gemma4), **Gemma thinking flag flipped on**; plan condensed to a design record. (Optional dev-box speed sweep = completeness only) |
 
+| 30 | Opt-in big slot + embeddings (D21 → D23–D28) | ⚪ not started — **plan drafted** ([`docs/big-slot-embeddings-plan.md`](docs/big-slot-embeddings-plan.md)): Track A (bigger chat model vs the 30B-A3B, reuses the Phase-29 benchmark) + Track B (better embedder — the harder, reindex-forcing swap) |
+
 Legend: ⚪ not started · 🟡 in progress · 🟢 done · 🔴 blocked
 
 > Phases 12–13 are the **post-MVP** distribution phases; Phases 14–16 added GPU acceleration on

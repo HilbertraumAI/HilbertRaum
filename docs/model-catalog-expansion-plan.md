@@ -155,7 +155,11 @@ needed to separate models on accuracy (it already separates abstention well — 
 
 ---
 
-## 6. Phase 30 — opt-in big slot + embeddings (OUTLINE ONLY — not started)
+## 6. Phase 30 — opt-in big slot + embeddings (OUTLINE — drafted as its own plan)
+
+> **Now has a dedicated working paper: [`big-slot-embeddings-plan.md`](big-slot-embeddings-plan.md)**
+> (decisions D23–D28). The outline below is the seed; the plan doc has the candidates-to-verify,
+> the two-track procedure (reusing the Phase-29 benchmark machinery), sequencing, and done-when.
 
 - **Big-slot shoot-out:** Gemma 4 26B-A4B (Apache, ~4B active → near-4B CPU tg; official Google QAT
   GGUF) and/or Granite 4.0 H-Small (Apache, hybrid-Mamba) vs the incumbent Qwen3 30B-A3B; Mistral
