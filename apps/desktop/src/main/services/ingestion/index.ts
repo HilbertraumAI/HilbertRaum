@@ -9,7 +9,12 @@ import {
 } from 'node:fs'
 import { basename, extname, join } from 'node:path'
 import type { Db } from '../db'
-import type { DocumentInfo, DocumentPreview, IngestionStatus } from '../../../shared/types'
+import type {
+  DocumentInfo,
+  DocumentPreview,
+  DocumentSummary,
+  IngestionStatus
+} from '../../../shared/types'
 import { sha256File } from '../models'
 import { type Embedder, encodeVector } from '../embeddings'
 import { ENCRYPTED_DOC_SUFFIX, shredFile, type DocumentCipher } from '../workspace-vault'
@@ -86,6 +91,7 @@ interface DocumentRow {
   sha256: string | null
   status: string
   error_message: string | null
+  summary_json: string | null
   created_at: string
   updated_at: string
 }
@@ -104,6 +110,25 @@ function toStatus(value: string): IngestionStatus {
   return (VALID_STATUSES.has(value) ? value : 'failed') as IngestionStatus
 }
 
+/** Parse a stored summary; malformed JSON must never break a document listing. */
+function parseSummary(json: string | null | undefined): DocumentSummary | null {
+  if (!json) return null
+  try {
+    const v = JSON.parse(json) as Partial<DocumentSummary> | null
+    if (v && typeof v.text === 'string' && v.text.length > 0) {
+      return {
+        text: v.text,
+        modelId: typeof v.modelId === 'string' ? v.modelId : 'unknown',
+        createdAt: typeof v.createdAt === 'string' ? v.createdAt : '',
+        truncated: v.truncated === true
+      }
+    }
+  } catch {
+    // fall through to null
+  }
+  return null
+}
+
 function rowToInfo(row: DocumentRow, chunkCount: number, staleEmbeddings?: boolean): DocumentInfo {
   return {
     id: row.id,
@@ -115,6 +140,7 @@ function rowToInfo(row: DocumentRow, chunkCount: number, staleEmbeddings?: boole
     errorMessage: row.error_message,
     chunkCount,
     staleEmbeddings,
+    summary: parseSummary(row.summary_json),
     createdAt: row.created_at,
     updatedAt: row.updated_at
   }
@@ -419,7 +445,12 @@ export async function extractDocumentPreview(
   }
 }
 
-/** Re-run ingestion for an existing document (re-parse the stored copy). */
+/**
+ * Re-run ingestion for an existing document (re-parse the stored copy). Clears any
+ * persisted summary FIRST (Phase 33, D25): a re-index means the content may have
+ * changed, so a summary derived from the old chunks must not survive — even if the
+ * re-parse then fails.
+ */
 export async function reindexDocument(
   db: Db,
   storeDir: string,
@@ -428,8 +459,28 @@ export async function reindexDocument(
 ): Promise<DocumentInfo> {
   const row = getRow(db, documentId)
   if (!row) throw new Error(`Unknown document: ${documentId}`)
+  setDocumentSummary(db, documentId, null)
   setStatus(db, documentId, 'queued')
   return processDocument(db, storeDir, documentId, deps)
+}
+
+/**
+ * Persist (or clear, with null) a document's one-click summary (Phase 33, D25).
+ * The summary is CONTENT: it lives only in this (possibly encrypted) DB column —
+ * callers must never put it into logs or the audit trail.
+ */
+export function setDocumentSummary(db: Db, documentId: string, summary: DocumentSummary | null): void {
+  db.prepare('UPDATE documents SET summary_json = ?, updated_at = ? WHERE id = ?').run(
+    summary ? JSON.stringify(summary) : null,
+    nowIso(),
+    documentId
+  )
+}
+
+/** Read a document's persisted summary, or null (missing document included). */
+export function getDocumentSummary(db: Db, documentId: string): DocumentSummary | null {
+  const row = getRow(db, documentId)
+  return row ? parseSummary(row.summary_json) : null
 }
 
 /**

@@ -114,7 +114,14 @@ descriptor re-wrap per change (scrypt→argon2id upgrade for free), one-time jou
 migration on a legacy vault's first change with crash-cut recovery tests,
 `workspace:changePassword` + the Settings card (Phase-27 password components extracted to
 `renderer/components/PasswordField.tsx`), import↔change race guard; plan §5 condensed to its
-design record (§3 entry).
+design record (§3 entry). **Phase 33 (document tasks foundation + one-click summary, D25/D26)
+is DONE 2026-06-11** — `services/doctasks.ts` `DocTaskManager` (the shared queue/cancel/polling
+engine Phases 34–35 reuse), strict one-at-a-time vs chat enforced both ways with friendly copy
++ a renderer cancel option, budgeted map-reduce summaries over stored chunks persisted in
+`documents.summary_json` (12-map-call ceiling, honest `truncated` flag; cleared by re-index),
+ids-only `document_task_*` audit events, the Documents "Summarize" action + preview summary
+section; R-T1 resolved on the real b9585 (concurrent requests get PARALLEL slots — the
+app-side guard is the only serialization); plan §6 condensed to its design record (§3 entry).
 Release-wise,
 remaining work = **manual release acceptance only** (§5, incl. the GPU
 hardware matrix, item 1b). Consciously-accepted gaps live in
@@ -159,6 +166,7 @@ hardware matrix, item 1b). Consciously-accepted gaps live in
 | 30 | Opt-in big slot + embeddings (D21 → D23–D28) | ⚪ not started — **plan drafted** ([`docs/big-slot-embeddings-plan.md`](docs/big-slot-embeddings-plan.md)): Track A (bigger chat model vs the 30B-A3B, reuses the Phase-29 benchmark) + Track B (better embedder — the harder, reindex-forcing swap) |
 | 31 | Conversation search (wave-3 plan §4) + session-hardening rider | 🟢 done (2026-06-11) — `messages_fts` + `searchMessages` (bm25, newest-first tie-break) + `chat:search` + ConversationList search UI; deny-by-default permission handler shipped with it |
 | 32 | Vault password change (wave-3 plan §5, D24) | 🟢 done (2026-06-11) — descriptor v2 envelope (wrapped data key; new vaults v2), O(1) re-wrap per change, one-time journaled v1→v2 migration on first change, `workspace:changePassword` + Settings card, import↔change race guard |
+| 33 | Document tasks foundation + one-click summary (wave-3 plan §6, D25/D26) | 🟢 done (2026-06-11) — `DocTaskManager` engine (queue/cancel/polling, built for summary+translation+compare), strict one-at-a-time vs chat (both guards + renderer cancel option), budgeted map-reduce summary persisted in `documents.summary_json` (cleared by re-index), Summarize UI + preview section; R-T1 resolved (b9585 serves concurrent requests on parallel slots — app guard is the only serialization) |
 
 Legend: ⚪ not started · 🟡 in progress · 🟢 done · 🔴 blocked
 
@@ -1528,6 +1536,82 @@ Repo root: `f:\_coding\ai_drive`.
      real document → wrong-current error → change → success toast → lock → OLD password
      rejected → unlock with NEW → the document still previews (sidecar decrypts).
 
+- **Phase 33 — document tasks foundation + one-click summary (2026-06-11; plan §6 condensed
+  to its design record; D25/D26 implemented as resolved; R-T1 probed + resolved):**
+  1. **`services/doctasks.ts` `DocTaskManager`** — the shared engine Phases 34–35 reuse: a
+     job state machine on the Phase-4/18 async-with-polling precedent
+     (`startDocTask({ kind, documentIds, params }) → { jobId }`, `getDocTask` →
+     `{ state, progress { stepsDone, stepsTotal }, error?, resultRef? }`,
+     `cancelDocTask(jobId?)` — **no jobId cancels the active task**). FIFO queue, one
+     runner, per-task `AbortController` (NEVER an entry in the per-conversation in-flight
+     map — fact §2.8: `stopGeneration` can't kill a task, a task can't block a
+     conversation). Unknown job ids report terminal so pollers stop. `translation`/`compare`
+     are accepted by the type/IPC shapes but refuse friendly until Phases 34/35. Deps are
+     injected (`getDb/getRuntime/isChatStreaming/getContextTokens/audit`); wired in
+     `main/index.ts` as optional `AppContext.docTasks`.
+  2. **D26 (strict one-at-a-time) enforced BOTH ways:** `startDocTask` refuses while a chat
+     answer streams (reads `inFlightStreams.size`); `chat:send` + `rag:ask` throw the
+     SHARED `DOC_TASK_BUSY_MESSAGE` (`shared/types.ts`) while a task is active, and the
+     chat error banner renders it with a working "Cancel document task" button. Tasks call
+     the ACTIVE runtime via the locked `chatStream` contract with explicit
+     `maxTokens`/`temperature` (0.3) — no depth modes; no runtime → friendly "start a model
+     first" refusal at start AND at dequeue (never an auto-start). Cancellation persists
+     nothing (chat keeps partials; tasks do not). Failures show §11.4 copy; raw reasons go
+     to the local log only.
+  3. **R-T1 RESOLVED (informational, probed on the real pinned b9585 + Qwen3-4B,
+     `tests/manual/server-concurrency-probe.test.ts` behind `PAID_CONCURRENCY_PROBE`):**
+     at our default spawn args a second `/v1/chat/completions` is served on a **PARALLEL
+     slot** (continuous batching) — B fired 1.5 s into A's stream got its first token
+     +212 ms later and finished while A still streamed. Not queued, not rejected ⇒ the
+     app-side D26 guard is the ONLY serialization (findings banked in plan §14).
+  4. **Summary algorithm (D25): budgeted two-level map-reduce over stored CHUNKS** (no
+     re-parse; ~80-token overlap repetition accepted). Input budget derived in WORDS with
+     an explicit words→tokens **1.3 safety factor** — `(max(1024, contextTokens) − 512
+     output − 300 prompt reserve) / 1.3` — so a budget-sized window provably fits the real
+     context (the chunker's whitespace estimate undercounts tokens). Greedy packing in
+     document order; an over-budget chunk is SPLIT, never truncated; map `maxTokens` =
+     `usableTokens / windowCount` so all partials provably fit the reduce input (+ a hard
+     word-truncate belt). **Ceiling = 12 map calls** (≈ ~50 pages at default context) →
+     `truncated` flag + honest UI copy. Outputs run through `stripThinkBlocks` (D6).
+  5. **Persistence:** additive `documents.summary_json` (`ensureColumn` precedent) holding
+     `{ text, modelId, createdAt, truncated }`; parsed into `DocumentInfo.summary`
+     (malformed JSON → null, never a broken listing); cleared FIRST by `reindexDocument`
+     (content may have changed — even a failed re-parse clears it); gone with delete.
+     **Deliberately NO `beginDocumentWork()` lease** — a summary only reads chunk rows and
+     writes one DB column, never `.enc` sidecars (stated in the code); instead
+     `registerDocsIpc` refuses re-index/delete of a task-busy document
+     (`docTasks.isDocumentBusy`) so a task can't persist a result over replaced chunks.
+  6. **Audit + privacy:** additive `document_task_completed` / `document_task_failed`
+     carrying `{ kind, documentId }` ONLY — summaries are CONTENT and live only in the
+     (possibly encrypted) DB. The audit sentinel test now seeds sentinel text through a
+     REAL summarized document (echo runtime ⇒ the summary provably contains it) and proves
+     `runtime_events` never does. Cancel records no event.
+  7. **IPC/UI:** `doctasks:start/get/cancel` + preload mirrors. Renderer watcher
+     `renderer/lib/doctasks.ts` lives at MODULE level (`useSyncExternalStore`) so a running
+     task's busy/progress survives navigating away and back. Documents rows get
+     "Summarize"/"Summarize again" with `Summarizing… (n/m)` + Cancel; re-index/delete
+     disabled for the busy row; on completion the preview auto-opens with the summary as a
+     collapsible section — "Generated by <model> · <date>" attribution, truncation banner,
+     Regenerate. New `renderer/lib/errors.ts` `friendlyIpcError` strips Electron's
+     "Error invoking remote method…" prefix in the Chat/Documents error banners (§11.4).
+  8. **Tests:** `unit/doctasks-windows.test.ts` (budget derivation, single-pass↔map-reduce
+     cutover at the exact word boundary, ceiling + truncated, split-not-truncate, reduce-fit
+     property) · `integration/doctasks.test.ts` (17: e2e single-pass with explicit-params
+     assertion, map-reduce + ceiling on real ingested chunk rows, queue serialization with
+     a max-concurrency-1 proof, cancel running/queued/no-arg, runtime absent at start AND
+     at dequeue, crashing model → friendly error + ids-only audit + raw reason kept out of
+     events, persistence lifecycle incl. malformed JSON) · `integration/doctasks-ipc.test.ts`
+     (handlers, both D26 guards incl. the refused chat message NOT being persisted,
+     busy-document guard, locked-workspace refusal) · the audit-ipc sentinel extension ·
+     `renderer/DocumentSummary.test.tsx` (8: polling flow with progress + auto-preview,
+     cancel, friendly failure, refusal banner, regenerate, truncation note, no-action for
+     unready docs, chat busy banner + cancel clears). Gate: typecheck clean, **798/798
+     tests pass** (+15 manual skips), build green. Eyeballed against the BUILT bundle
+     (`walk-phase33.mjs`, shots-p33): import → mock runtime → Summarize → busy/progress →
+     summary in preview (light+dark, attribution) → persists across navigation → chat
+     busy copy + cancel clears → re-index clears the summary → regenerate writes a fresh
+     one.
+
 ---
 
 ## 4. Shared data contracts (the actual "transported data")
@@ -1571,7 +1655,13 @@ conversation's "ask selected documents" scope) +
 `downloadModel`/`getDownloadJob`/`cancelDownload` (`downloads:start/get/cancel`, Phase 18 —
 the in-app model downloader, async-with-polling) +
 `getAuditEvents(limit?, beforeId?)`/`exportAuditLog` (`audit:list`/`audit:export`, Phase 19 —
-the Diagnostics Activity panel, newest-first paging + save-dialog export).
+the Diagnostics Activity panel, newest-first paging + save-dialog export) +
+`searchConversations` (`chat:search`, Phase 31) + `changeWorkspacePassword`
+(`workspace:changePassword`, Phase 32) +
+`startDocTask`/`getDocTask`/`cancelDocTask` (`doctasks:start/get/cancel`, Phase 33 — document
+tasks, async-with-polling; `cancelDocTask()` with no jobId cancels the active task; shapes
+`StartDocTaskRequest`/`DocTaskStatus`/`DocumentSummary` in `shared/types.ts`, and
+`DocumentInfo` gained an optional `summary` from the additive `documents.summary_json` column).
 (`pickDocuments` + `reindexDocument` are Phase-4 additions to the `IPC` registry beyond the spec
 §9.1 list — picker + re-index UX; `getPolicy` is a Phase-8 addition; the four `workspace:*` channels
 are Phase-9 additions.) `createConversation` now also accepts an optional `mode`
@@ -2199,9 +2289,10 @@ items are **MANUAL acceptance only** (R2/R5/R7 + the GPU hardware matrix). In ro
    Qwen3 30B-A3B) + the embeddings question (Granite Embedding R2 small is the only 384-dim
    near-drop-in). Key verified fact: our pinned llama.cpp **b9585 is the 2026-06-09 release**,
    so Gemma 4 (needs ~b8607) runs on the runtime we already ship — no runtime bump needed.
-6. **Functionality wave 3 (Phases 31–38) — IN PROGRESS: Phases 31 + 32 DONE 2026-06-11,
-   next up is Phase 33 (document tasks foundation + one-click summary; D25/D26 resolved,
-   R-T1 informational — probe alongside):** see the working paper
+6. **Functionality wave 3 (Phases 31–38) — IN PROGRESS: Phases 31 + 32 + 33 DONE
+   2026-06-11, next up is Phase 34 (document translation — mostly a prompt template +
+   output handling on the Phase-33 task machinery; R-T2 manual smoke sets the window
+   size/retry policy; D27 resolved: materialized corpus document):** see the working paper
    [`docs/functionality-wave-3-plan.md`](docs/functionality-wave-3-plan.md) (decisions
    D23–D34, research gates R-S1/R-T1–2/R-W1–4/R-O1–3). Eight user-selected features in
    dependency order: 31 conversation search (messages FTS5, mirrors D13) → 32 vault password
@@ -2235,12 +2326,25 @@ items are **MANUAL acceptance only** (R2/R5/R7 + the GPU hardware matrix). In ro
    change (crash-cut tests prove old-or-new-never-mixed), `workspace:changePassword` +
    Settings card reusing the extracted Phase-27 password components, import↔change race
    guard, additive `workspace_password_changed` audit event; plan §5 condensed to its
-   design record (§3 entry). **Phase 33 (document tasks + summary) is ready to start.**
+   design record (§3 entry). **Phase 33 (document tasks foundation + one-click summary)
+   is DONE (2026-06-11)** — `services/doctasks.ts` `DocTaskManager` (the shared engine
+   Phases 34–35 reuse: FIFO queue, per-task `AbortController`, async-with-polling
+   `doctasks:start/get/cancel`), D26 strict one-at-a-time enforced BOTH ways (task refuses
+   while chat streams; chat/RAG throw the shared `DOC_TASK_BUSY_MESSAGE` with a renderer
+   cancel button), D25 budgeted map-reduce summary over stored chunks (words→tokens 1.3
+   safety factor, 12-map-call ceiling + honest `truncated` flag) persisted in
+   `documents.summary_json` (cleared by re-index, surfaced as `DocumentInfo.summary`),
+   ids-only `document_task_completed/_failed` audit events (sentinel-tested), Documents
+   "Summarize" row action + preview summary section with attribution + Regenerate.
+   **R-T1 RESOLVED (probed on real b9585):** a concurrent second chat request is served
+   on a PARALLEL slot (not queued/rejected) — the app-side guard is the only
+   serialization (plan §14). Plan §6 condensed to its design record (§3 entry).
+   **Phase 34 (document translation) is ready to start.**
 
-**Current gate (2026-06-11, post-Phase-32): typecheck clean, 744/744 tests pass (+14 manual
-tests behind `PAID_*` env vars — GPU/thinking/rerank/minsim/RAG-quality/bring-up/eval
-smokes — skipped in CI), `npm run build` green.** The per-phase gate history (test counts,
-bundle sizes, per-phase test inventories) lives in git history.
+**Current gate (2026-06-11, post-Phase-33): typecheck clean, 798/798 tests pass (+15 manual
+tests behind `PAID_*` env vars — GPU/thinking/rerank/minsim/RAG-quality/bring-up/eval/
+concurrency-probe smokes — skipped in CI), `npm run build` green.** The per-phase gate
+history (test counts, bundle sizes, per-phase test inventories) lives in git history.
 
 ---
 

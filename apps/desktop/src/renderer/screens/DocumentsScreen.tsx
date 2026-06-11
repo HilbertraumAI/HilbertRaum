@@ -1,6 +1,15 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { Badge, Banner, Button, ConfirmDialog, EmptyState, Modal, type BadgeTone } from '../components'
-import type { DocumentInfo, DocumentPreview, IngestionStatus } from '@shared/types'
+import type { DocumentInfo, DocumentPreview, DocumentSummary, IngestionStatus } from '@shared/types'
+import {
+  acknowledgeDocTask,
+  cancelActiveDocTask,
+  getActiveDocTask,
+  isDocTaskTerminal,
+  startSummaryTask,
+  subscribeDocTask
+} from '../lib/doctasks'
+import { friendlyIpcError } from '../lib/errors'
 
 // Documents screen (spec §7.7 / Milestone 4). Import files or a folder via the OS picker
 // (opened in the main process), watch each file move through the ingestion statuses, and
@@ -50,6 +59,9 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
   // "Ask these documents" selection (indexed documents only).
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set())
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  // The (single, D26) active document task — module-level store so a running summary's
+  // busy/progress state survives navigating away and back (Phase 33).
+  const activeTask = useSyncExternalStore(subscribeDocTask, getActiveDocTask)
 
   const refresh = useCallback(async (): Promise<void> => {
     const next = await window.api.listDocuments()
@@ -108,7 +120,7 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
       watchJob(job.jobId)
     } catch (e) {
       setBusy(null)
-      setError(String(e instanceof Error ? e.message : e))
+      setError(friendlyIpcError(e))
     }
   }
 
@@ -119,7 +131,7 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
       await fn()
       await refresh()
     } catch (e) {
-      setError(String(e instanceof Error ? e.message : e))
+      setError(friendlyIpcError(e))
     } finally {
       setBusy(null)
     }
@@ -133,9 +145,37 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
     try {
       setPreview(await window.api.previewDocument(d.id))
     } catch (e) {
-      setError(String(e instanceof Error ? e.message : e))
+      setError(friendlyIpcError(e))
     } finally {
       setPreviewLoading(false)
+    }
+  }
+
+  // When the active task finishes: refresh the list, show the fresh summary (the
+  // one-click promise) or the friendly failure, then clear the store entry.
+  useEffect(() => {
+    if (!activeTask || !isDocTaskTerminal(activeTask.status)) return
+    const status = activeTask.status
+    const documentId = activeTask.documentId
+    acknowledgeDocTask()
+    void refresh().catch(() => undefined)
+    if (status?.state === 'done') {
+      void window.api
+        .previewDocument(documentId)
+        .then(setPreview)
+        .catch(() => undefined)
+    } else if (status?.state === 'failed' && status.error) {
+      setError(status.error)
+    }
+  }, [activeTask, refresh])
+
+  async function onSummarize(d: DocumentInfo): Promise<void> {
+    setError(null)
+    setPreview(null)
+    try {
+      await startSummaryTask(d.id)
+    } catch (e) {
+      setError(friendlyIpcError(e))
     }
   }
 
@@ -163,7 +203,7 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
         await refresh()
       }
     } catch (e) {
-      setError(String(e instanceof Error ? e.message : e))
+      setError(friendlyIpcError(e))
     } finally {
       setBusy(null)
       await refresh().catch(() => undefined)
@@ -267,6 +307,11 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
             <span>
               Type <b>{d.mimeType ?? '—'}</b>
             </span>
+            {d.summary && (
+              <span>
+                Summary <b>✓</b>
+              </span>
+            )}
           </div>
           {d.status === 'failed' && d.errorMessage && <Banner tone="error">{d.errorMessage}</Banner>}
           {d.staleEmbeddings && (
@@ -284,9 +329,33 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
             >
               {previewLoading ? 'Opening…' : 'Preview'}
             </Button>
+            {d.status === 'indexed' &&
+              d.chunkCount > 0 &&
+              (activeTask && activeTask.documentId === d.id && !isDocTaskTerminal(activeTask.status) ? (
+                <>
+                  <Button size="sm" disabled title="The summary is being written">
+                    <span className="spinner" /> Summarizing…
+                    {activeTask.status && activeTask.status.progress.stepsTotal > 1
+                      ? ` (${activeTask.status.progress.stepsDone}/${activeTask.status.progress.stepsTotal})`
+                      : ''}
+                  </Button>
+                  <Button size="sm" onClick={() => void cancelActiveDocTask()} title="Stop the summary">
+                    Cancel
+                  </Button>
+                </>
+              ) : (
+                <Button
+                  size="sm"
+                  disabled={busy !== null || activeTask !== null}
+                  onClick={() => void onSummarize(d)}
+                  title="Write a summary with the local model — nothing leaves this drive"
+                >
+                  {d.summary ? 'Summarize again' : 'Summarize'}
+                </Button>
+              ))}
             <Button
               size="sm"
-              disabled={busy !== null || ACTIVE_STATUSES.has(d.status)}
+              disabled={busy !== null || ACTIVE_STATUSES.has(d.status) || activeTask?.documentId === d.id}
               onClick={() => void run(`reindex-${d.id}`, () => window.api.reindexDocument(d.id))}
               title="Read and prepare the stored copy again"
             >
@@ -294,7 +363,7 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
             </Button>
             <Button
               size="sm"
-              disabled={busy !== null || ACTIVE_STATUSES.has(d.status)}
+              disabled={busy !== null || ACTIVE_STATUSES.has(d.status) || activeTask?.documentId === d.id}
               onClick={() => setConfirmDelete(d)}
             >
               Delete
@@ -320,22 +389,79 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
         </p>
       </ConfirmDialog>
 
-      {preview && <PreviewModal preview={preview} onClose={() => setPreview(null)} />}
+      {preview && (
+        <PreviewModal
+          preview={preview}
+          summary={docs?.find((x) => x.id === preview.id)?.summary ?? null}
+          regenerateDisabled={busy !== null || activeTask !== null}
+          onRegenerate={() => {
+            const d = docs?.find((x) => x.id === preview.id)
+            setPreview(null)
+            if (d) void onSummarize(d)
+          }}
+          onClose={() => setPreview(null)}
+        />
+      )}
     </div>
   )
+}
+
+/** "Generated by <model> · <date>" — the summary attribution line (plan §6). */
+function summaryAttribution(s: DocumentSummary): string {
+  const date = s.createdAt ? new Date(s.createdAt) : null
+  const when = date && !Number.isNaN(date.getTime()) ? date.toLocaleDateString() : ''
+  return `Generated by ${s.modelId}${when ? ` · ${when}` : ''}`
 }
 
 /**
  * Read-only document preview: the parser's extracted text segments, grouped under their
  * page/section labels. Shows extracted TEXT (what the AI reads), not the original
  * layout — in encrypted workspaces the original bytes never leave the vault.
+ * When the document has a persisted summary (Phase 33), it leads in a collapsible
+ * section with the model/date attribution and a Regenerate action.
  */
-function PreviewModal({ preview, onClose }: { preview: DocumentPreview; onClose: () => void }): JSX.Element {
+function PreviewModal({
+  preview,
+  summary,
+  regenerateDisabled,
+  onRegenerate,
+  onClose
+}: {
+  preview: DocumentPreview
+  summary?: DocumentSummary | null
+  regenerateDisabled?: boolean
+  onRegenerate?: () => void
+  onClose: () => void
+}): JSX.Element {
   return (
     <Modal open title={preview.title} ariaLabel={`Preview of ${preview.title}`} width="wide" onClose={onClose}>
       <p className="hint" style={{ margin: '0 0 8px' }}>
         Read-only extracted text — this is what document search and answers are based on.
       </p>
+      {summary && (
+        <details className="doc-summary" open>
+          <summary>Summary</summary>
+          <div className="doc-summary-body">
+            <p className="hint" style={{ margin: 0 }}>
+              {summaryAttribution(summary)}
+            </p>
+            {summary.truncated && (
+              <Banner tone="warning">
+                This document is long — the summary covers its beginning. The rest is still
+                searchable and answerable in chat.
+              </Banner>
+            )}
+            <div className="preview-text">{summary.text}</div>
+            {onRegenerate && (
+              <div className="actions" style={{ marginTop: 4 }}>
+                <Button size="sm" disabled={regenerateDisabled} onClick={onRegenerate}>
+                  Regenerate
+                </Button>
+              </div>
+            )}
+          </div>
+        </details>
+      )}
       <div className="modal-body">
         {preview.segments.length === 0 && (
           <p className="hint">No text could be extracted from this document.</p>

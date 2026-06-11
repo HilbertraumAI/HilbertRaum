@@ -2,11 +2,12 @@ import { BrowserWindow, dialog, ipcMain, type IpcMainInvokeEvent } from 'electro
 import { writeFileSync } from 'node:fs'
 import { IPC, STREAM } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
-import type {
-  ChatOptions,
-  Conversation,
-  ConversationSearchResult,
-  Message
+import {
+  DOC_TASK_BUSY_MESSAGE,
+  type ChatOptions,
+  type Conversation,
+  type ConversationSearchResult,
+  type Message
 } from '../../shared/types'
 import {
   appendMessage,
@@ -109,6 +110,13 @@ export function registerChatIpc(ctx: AppContext): void {
       if (!runtime) {
         // No model loaded — surface a clear, recoverable error to the renderer.
         throw new Error('No AI model is running. Open the AI Model screen and start one first.')
+      }
+
+      // Strict one-at-a-time vs document tasks (Phase 33, D26): the one local model
+      // serves either a chat answer or a task, never both. The shared copy lets the
+      // renderer offer a cancel option for the running task.
+      if (ctx.docTasks?.hasActiveTask()) {
+        throw new Error(DOC_TASK_BUSY_MESSAGE)
       }
 
       // One active stream per conversation. The renderer guards this too, but a second

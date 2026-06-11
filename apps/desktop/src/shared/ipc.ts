@@ -46,6 +46,13 @@ export const IPC = {
   reindexDocument: 'docs:reindex',
   /** Read-only in-app preview: re-extract the stored copy's text (post-MVP). */
   previewDocument: 'docs:preview',
+  // Phase 33 — document tasks (async with polling, the Phase-4/18 precedent)
+  /** Start a document task (summary now; translation/compare ride the same machine). */
+  startDocTask: 'doctasks:start',
+  /** Poll one task's state/progress. */
+  getDocTask: 'doctasks:get',
+  /** Cancel a task; with no jobId, cancels the currently active one. */
+  cancelDocTask: 'doctasks:cancel',
   askDocuments: 'rag:ask',
   // Phase 18 — in-app model downloader (async with polling, the Phase-4 import precedent)
   /** Start downloading one model's weights (gated: policy ∧ setting ∧ confirmation). */

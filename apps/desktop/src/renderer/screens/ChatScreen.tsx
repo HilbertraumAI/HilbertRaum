@@ -1,6 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
-import type { ChatDepthMode, Conversation, DocumentInfo, Message } from '@shared/types'
+import {
+  DOC_TASK_BUSY_MESSAGE,
+  type ChatDepthMode,
+  type Conversation,
+  type DocumentInfo,
+  type Message
+} from '@shared/types'
+import { cancelActiveDocTask } from '../lib/doctasks'
+import { friendlyIpcError } from '../lib/errors'
 import { Banner, Button, Chip, EmptyState, LocalIndicator, SegmentedControl, useToast } from '../components'
 import { Composer, ConversationList, DepthMenu, ScopePopover, Transcript } from '../chat'
 
@@ -266,7 +274,7 @@ export function ChatScreen({ onNavigate, initialMode, initialScopeDocumentIds }:
       await refreshIfVisible()
       await refreshConversations()
     } catch (e) {
-      if (activeIdRef.current === convId) setError(String(e instanceof Error ? e.message : e))
+      if (activeIdRef.current === convId) setError(friendlyIpcError(e))
       // Refresh so a partial (stopped) reply that was persisted still shows.
       await refreshIfVisible().catch(() => undefined)
       await checkRuntime().catch(() => undefined)
@@ -294,7 +302,7 @@ export function ChatScreen({ onNavigate, initialMode, initialScopeDocumentIds }:
       setMessages((prev) => [...prev, optimisticUser(convId, text)])
       await stream(convId, text, false, depth)
     } catch (e) {
-      setError(String(e instanceof Error ? e.message : e))
+      setError(friendlyIpcError(e))
     }
   }
 
@@ -323,7 +331,7 @@ export function ChatScreen({ onNavigate, initialMode, initialScopeDocumentIds }:
       const saved = await window.api.exportConversation(activeId)
       if (saved) showToast(`Saved to ${saved}`)
     } catch (e) {
-      setError(String(e instanceof Error ? e.message : e))
+      setError(friendlyIpcError(e))
     }
   }
 
@@ -356,7 +364,7 @@ export function ChatScreen({ onNavigate, initialMode, initialScopeDocumentIds }:
       }
       await refreshConversations()
     } catch (e) {
-      setError(String(e instanceof Error ? e.message : e))
+      setError(friendlyIpcError(e))
     }
   }
 
@@ -391,7 +399,7 @@ export function ChatScreen({ onNavigate, initialMode, initialScopeDocumentIds }:
         await window.api.updateConversationScope(activeId, next)
         await refreshConversations()
       } catch (e) {
-        setError(String(e instanceof Error ? e.message : e))
+        setError(friendlyIpcError(e))
       }
     } else {
       setPendingScope(next)
@@ -543,6 +551,23 @@ export function ChatScreen({ onNavigate, initialMode, initialScopeDocumentIds }:
         {error && (
           <Banner tone="error" onDismiss={() => setError(null)}>
             {error}
+            {/* Chat refused while a document task runs (Phase 33, D26): the shared
+                copy comes with an actionable cancel — the task, not the chat. */}
+            {error.includes(DOC_TASK_BUSY_MESSAGE) && (
+              <>
+                {' '}
+                <Button
+                  size="sm"
+                  onClick={() => {
+                    void cancelActiveDocTask()
+                      .then(() => setError(null))
+                      .catch(() => undefined)
+                  }}
+                >
+                  Cancel document task
+                </Button>
+              </>
+            )}
           </Banner>
         )}
 

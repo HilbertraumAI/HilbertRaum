@@ -12,6 +12,9 @@ import { registerWorkspaceIpc } from './ipc/registerWorkspaceIpc'
 import { maybeAutoStartActiveModel, registerModelIpc } from './ipc/registerModelIpc'
 import { registerChatIpc } from './ipc/registerChatIpc'
 import { registerDocsIpc } from './ipc/registerDocsIpc'
+import { registerDocTasksIpc } from './ipc/registerDocTasksIpc'
+import { DocTaskManager } from './services/doctasks'
+import { inFlightStreams } from './ipc/inflight'
 import { registerDownloadIpc } from './ipc/registerDownloadIpc'
 import { registerRagIpc } from './ipc/registerRagIpc'
 import { registerBenchmarkIpc, maybeRunFirstBenchmark } from './ipc/registerBenchmarkIpc'
@@ -215,6 +218,17 @@ function initBackend(): void {
     onSelect: (kind, reason) => log.info('Reranker backend selected', { kind, reason })
   })
 
+  // Document task engine (Phase 33): one-at-a-time summary/translation/compare jobs.
+  // The chat-streaming guard reads the shared in-flight registry (fact §2.8) — tasks
+  // never put entries INTO that map; they own their AbortControllers.
+  const docTasks = new DocTaskManager({
+    getDb: () => workspace.requireDb(),
+    getRuntime: () => runtime.active(),
+    isChatStreaming: () => inFlightStreams.size > 0,
+    getContextTokens: () => getSettings(workspace.requireDb()).contextTokens,
+    audit
+  })
+
   // `db` is a getter over the controller: it throws while locked. DB-backed IPC is only
   // reachable after the renderer's unlock gate reports the workspace ready.
   ctx = {
@@ -229,13 +243,15 @@ function initBackend(): void {
     manifestsDir,
     probeGpu: gpuProbe,
     isDev,
-    audit
+    audit,
+    docTasks
   }
   registerCoreIpc(ctx)
   registerWorkspaceIpc(ctx)
   registerModelIpc(ctx)
   registerChatIpc(ctx)
   registerDocsIpc(ctx)
+  registerDocTasksIpc(ctx)
   registerDownloadIpc(ctx)
   registerRagIpc(ctx)
   registerBenchmarkIpc(ctx)

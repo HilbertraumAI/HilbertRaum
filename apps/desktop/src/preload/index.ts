@@ -8,6 +8,7 @@ import type {
   ChatOptions,
   Conversation,
   ConversationSearchResult,
+  DocTaskStatus,
   DocumentInfo,
   DocumentPreview,
   DownloadJob,
@@ -21,6 +22,7 @@ import type {
   PreflightResult,
   RuntimeInstallInfo,
   RuntimeStatus,
+  StartDocTaskRequest,
   WorkspaceActionResult,
   WorkspaceMode,
   WorkspaceStateInfo
@@ -165,6 +167,18 @@ const api = {
   /** Read-only in-app preview: the document's extracted text segments. */
   previewDocument: (documentId: string): Promise<DocumentPreview> =>
     ipcRenderer.invoke(IPC.previewDocument, documentId),
+
+  // ---- Document tasks (Phase 33) ----
+  /** Start a document task (summary now; translation/compare later ride the same
+   *  machine). Strictly one at a time; refused while a chat answer is streaming. */
+  startDocTask: (req: StartDocTaskRequest): Promise<{ jobId: string }> =>
+    ipcRenderer.invoke(IPC.startDocTask, req),
+  /** Poll one task's state/progress (async-with-polling, like imports/downloads). */
+  getDocTask: (jobId: string): Promise<DocTaskStatus> =>
+    ipcRenderer.invoke(IPC.getDocTask, jobId),
+  /** Cancel a task; with no jobId, cancels the currently active one. */
+  cancelDocTask: (jobId?: string): Promise<void> =>
+    ipcRenderer.invoke(IPC.cancelDocTask, jobId),
 
   /** Subscribe to streamed tokens for a request (= conversation id); returns an unsubscribe fn. */
   onToken: (requestId: string, cb: (token: string) => void): (() => void) => {

@@ -139,6 +139,31 @@ logs, best-effort shredding on SSDs, no password recovery — are documented in
   produced by a different embedder is not keyword-searchable either, until re-indexed — that is
   the Phase-17 honesty rule, not a gap (`REINDEX_NEEDED_ANSWER` tells the user what to do).
 
+## Document tasks & summaries (Phase 33, wave-3 plan §6)
+
+- **Very long documents get a beginning-only summary (the map-call ceiling).** The
+  budgeted map-reduce caps at **12 map calls** (≈ a ~50-page document at the default
+  4096-token context) — Deep map-reduce over a 1000-chunk corpus on a CPU laptop is not a
+  v1 promise (D25). The summary is flagged `truncated` and the UI says so honestly; the
+  whole document remains searchable/answerable in RAG. A smaller `contextTokens` setting
+  shrinks the per-call budget and hits the ceiling sooner.
+- **Summary input is the stored chunks, not a re-parse (D25).** Adjacent chunks overlap by
+  ~80 tokens, so stitched windows repeat a little text (harmless for summarization), and
+  text beyond the 1 000-chunk ingestion cap was never chunked — so it is not summarized
+  either (it is also not searchable; the same pre-existing cap).
+- **Strictly one job at a time (D26).** While a summary runs, chat is refused with a
+  friendly message + a cancel option, and vice versa — the one local model serves one
+  request. The R-T1 probe confirmed the pinned b9585 WOULD serve concurrent requests on
+  parallel slots, so this is an app-side product decision (predictable latency, no
+  context-memory splitting), not a server constraint; revisit only with evidence.
+- **Re-index clears the summary and nothing regenerates it automatically** — the content
+  may have changed, so a stale summary must not survive; the user presses Summarize again.
+  Accepted edge, mirrored in the user guide.
+- **Word≈token budgeting is conservative, not exact.** The window math reuses the
+  chunker's whitespace-word estimate with a 1.3 words→tokens safety factor; real token
+  counts vary by language/model. Worst case is smaller-than-necessary windows (more map
+  calls), never a context overflow.
+
 ## GPU acceleration (Phases 14–16, [`gpu-support-plan.md`](gpu-support-plan.md))
 
 - **Integrated GPUs (Intel Iris Xe / UHD, AMD APU "Radeon Graphics") gain little.** They share

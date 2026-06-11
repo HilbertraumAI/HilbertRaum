@@ -444,6 +444,71 @@ export interface ConversationSearchResult {
   hits: ConversationSearchHit[]
 }
 
+// ---- Document tasks (Phase 33, wave-3 plan §6) ----
+
+/**
+ * What a document task runs over stored documents. The task machinery (queue, cancel,
+ * IPC shapes) is built for all three kinds; only 'summary' is implemented in Phase 33 —
+ * 'translation' (Phase 34) and 'compare' (Phase 35) plug into the same engine.
+ */
+export type DocTaskKind = 'summary' | 'translation' | 'compare'
+
+export type DocTaskState = 'queued' | 'running' | 'done' | 'failed' | 'cancelled'
+
+/** Coarse step progress: model calls done / planned (map windows + reduce). */
+export interface DocTaskProgress {
+  stepsDone: number
+  stepsTotal: number
+}
+
+export interface StartDocTaskRequest {
+  kind: DocTaskKind
+  documentIds: string[]
+  /** Kind-specific parameters (e.g. a translation target language in Phase 34). */
+  params?: Record<string, unknown>
+}
+
+/**
+ * One document task as the renderer polls it (async-with-polling, the Phase-4 import /
+ * Phase-18 download precedent). Terminal states: done | failed | cancelled.
+ */
+export interface DocTaskStatus {
+  jobId: string
+  kind: DocTaskKind
+  documentIds: string[]
+  state: DocTaskState
+  progress: DocTaskProgress
+  /** Friendly failure reason when state === 'failed' (spec §11.4 — never raw errors). */
+  error?: string | null
+  /** Where the result landed (summary: the document whose summary was written). */
+  resultRef?: { documentId: string } | null
+}
+
+/**
+ * A persisted document summary (`documents.summary_json`, decision D25). Summaries are
+ * CONTENT: they live only in the (possibly encrypted) workspace DB, never in the audit
+ * log. Cleared by re-index (content may have changed); gone with document delete.
+ */
+export interface DocumentSummary {
+  text: string
+  /** The model that generated it (the attribution line). */
+  modelId: string
+  createdAt: string
+  /**
+   * True when the document was longer than the map-call ceiling allows: the summary
+   * honestly covers only the beginning (D25 — the UI says so, §11.4 copy).
+   */
+  truncated: boolean
+}
+
+/**
+ * Friendly copy thrown by chat/document-answer handlers while a document task runs
+ * (D26 strict one-at-a-time). Shared so the renderer can recognize it and offer the
+ * cancel option next to the message.
+ */
+export const DOC_TASK_BUSY_MESSAGE =
+  'A document task is running. You can cancel it, or wait for it to finish before chatting.'
+
 // ---- Documents (Phase 4) ----
 export type IngestionStatus =
   | 'queued'
@@ -470,6 +535,11 @@ export interface DocumentInfo {
    * not evaluated (no active embedder context).
    */
   staleEmbeddings?: boolean
+  /**
+   * The persisted one-click summary (Phase 33), or null/undefined when none exists.
+   * Parsed from `documents.summary_json`; re-index clears it.
+   */
+  summary?: DocumentSummary | null
   createdAt: string
   updatedAt: string
 }
@@ -524,6 +594,10 @@ export type AuditEventType =
   | 'document_imported'
   | 'document_reindexed'
   | 'document_deleted'
+  // Document tasks (Phase 33, additive). Metadata = { kind, documentId } ONLY — the
+  // produced summary/translation/report is content and never reaches the audit log.
+  | 'document_task_completed'
+  | 'document_task_failed'
   | 'conversation_deleted'
   | 'conversation_exported'
   | 'workspace_created'

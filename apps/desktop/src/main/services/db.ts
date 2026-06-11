@@ -94,6 +94,8 @@ CREATE TABLE IF NOT EXISTS runtime_events (
 // must be ALTERed in — guarded by a pragma check to stay idempotent.
 //   conversations.scope_json — Phase 17 (plan §5.3, decision D2): the optional
 //   "ask selected documents" scope, a JSON array of document ids (NULL = whole corpus).
+//   documents.summary_json — Phase 33 (wave-3 plan §6, decision D25): the persisted
+//   one-click summary `{ text, modelId, createdAt, truncated }` (NULL = none).
 function ensureColumn(db: Db, table: string, column: string, ddl: string): void {
   const cols = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>
   if (!cols.some((c) => c.name === column)) {
@@ -176,6 +178,7 @@ export function openDatabase(path: string): Db {
   db.exec('PRAGMA foreign_keys = ON;')
   db.exec(SCHEMA)
   ensureColumn(db, 'conversations', 'scope_json', 'scope_json TEXT')
+  ensureColumn(db, 'documents', 'summary_json', 'summary_json TEXT')
   ensureChunksFts(db)
   ensureMessagesFts(db)
   return db

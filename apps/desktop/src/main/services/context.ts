@@ -6,6 +6,7 @@ import type { Embedder } from './embeddings'
 import type { Reranker } from './reranker'
 import type { CachedGpuProbe } from './runtime/gpu'
 import type { AuditRecorder } from './audit'
+import type { DocTaskManager } from './doctasks'
 
 // Shared application context assembled at startup and passed to IPC handlers.
 // As later phases land, add: models registry, ingestion queue, etc.
@@ -48,4 +49,10 @@ export interface AppContext {
    * partial test contexts stay valid; call sites use `ctx.audit?.(…)`.
    */
   audit?: AuditRecorder
+  /**
+   * Document task engine (Phase 33): summary/translation/compare jobs, strictly
+   * one-at-a-time (D26). Optional so partial test contexts stay valid; the chat/RAG
+   * handlers guard with `ctx.docTasks?.hasActiveTask()`.
+   */
+  docTasks?: DocTaskManager
 }

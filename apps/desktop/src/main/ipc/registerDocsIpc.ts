@@ -51,6 +51,15 @@ export function registerDocsIpc(ctx: AppContext): void {
     }
   }
 
+  // Phase 33: a running/queued document task reads this document's chunks and then
+  // writes its summary — re-indexing (which rebuilds the chunks and clears the summary)
+  // or deleting the row underneath it would persist a stale result or lose the race.
+  const requireNoActiveTask = (documentId: string): void => {
+    if (ctx.docTasks?.isDocumentBusy(documentId)) {
+      throw new Error('A task is running for this document. Cancel it or wait for it to finish.')
+    }
+  }
+
   // Ingestion dependencies (Phase 5 + H1). Vectors are tagged with the id of the embedder
   // that ACTUALLY produced them (`embedder.id`, the embedChunks fallback) — never the
   // settings selection (Phase 17 fix): with the E5 manifest selected but the mock embedder
@@ -176,6 +185,7 @@ export function registerDocsIpc(ctx: AppContext): void {
   ipcMain.handle(IPC.deleteDocument, (_e, documentId: string): void => {
     requireUnlocked()
     requireNotProcessing(documentId)
+    requireNoActiveTask(documentId)
     log.info('Delete document', { documentId })
     deleteDocument(ctx.db, documentId)
     ctx.audit?.('document_deleted', 'Document deleted', { documentId })
@@ -197,6 +207,7 @@ export function registerDocsIpc(ctx: AppContext): void {
   ipcMain.handle(IPC.reindexDocument, async (_e, documentId: string): Promise<DocumentInfo> => {
     requireUnlocked()
     requireNotProcessing(documentId)
+    requireNoActiveTask(documentId)
     // Phase-32 race guard: re-index rewrites the `.enc` sidecar — mutually exclusive
     // with a password change (see importDocuments).
     const releaseDocWork = ctx.workspace.beginDocumentWork()

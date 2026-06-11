@@ -1,7 +1,7 @@
 import { ipcMain, type IpcMainInvokeEvent } from 'electron'
 import { IPC, STREAM } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
-import type { Message } from '../../shared/types'
+import { DOC_TASK_BUSY_MESSAGE, type Message } from '../../shared/types'
 import { appendMessage, getConversation, maybeSetTitleFromFirstMessage } from '../services/chat'
 import { detectFilenameScope, generateGroundedAnswer, ragSettingsFrom } from '../services/rag'
 import { listDocuments } from '../services/ingestion'
@@ -36,6 +36,11 @@ export function registerRagIpc(ctx: AppContext): void {
       const runtime = ctx.runtime.active()
       if (!runtime) {
         throw new Error('No AI model is running. Open the AI Model screen and start one first.')
+      }
+
+      // Strict one-at-a-time vs document tasks (Phase 33, D26 — see registerChatIpc).
+      if (ctx.docTasks?.hasActiveTask()) {
+        throw new Error(DOC_TASK_BUSY_MESSAGE)
       }
 
       // One active stream per conversation (shared registry with plain chat).

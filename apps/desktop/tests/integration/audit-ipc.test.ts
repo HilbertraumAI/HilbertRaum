@@ -38,11 +38,13 @@ import { registerModelIpc } from '../../src/main/ipc/registerModelIpc'
 import { registerDownloadIpc } from '../../src/main/ipc/registerDownloadIpc'
 import { registerWorkspaceIpc } from '../../src/main/ipc/registerWorkspaceIpc'
 import { registerAuditIpc } from '../../src/main/ipc/registerAuditIpc'
+import { registerDocTasksIpc } from '../../src/main/ipc/registerDocTasksIpc'
+import { DocTaskManager } from '../../src/main/services/doctasks'
 import { DownloadManager } from '../../src/main/services/downloads'
 import type { FetchFn } from '../../src/main/services/assets'
 import { IPC } from '../../src/shared/ipc'
 import { openDatabase, type Db } from '../../src/main/services/db'
-import { seedSettings, updateSettings } from '../../src/main/services/settings'
+import { getSettings, seedSettings, updateSettings } from '../../src/main/services/settings'
 import { createAuditRecorder, listAuditEvents, recordEvent } from '../../src/main/services/audit'
 import { createMockEmbedder } from '../../src/main/services/embeddings/mock'
 import {
@@ -58,6 +60,8 @@ import type { AppContext } from '../../src/main/services/context'
 import type {
   AuditEvent,
   Conversation,
+  DocTaskStatus,
+  DocumentInfo,
   DownloadJob,
   ImportJob,
   ImportJobStatus,
@@ -204,9 +208,18 @@ beforeEach(() => {
 describe('audit wiring across the IPC layer (privacy sentinel grep)', () => {
   it('records the shallow events and NEVER the seeded chat/document/setting content', async () => {
     const { ctx, db, rootPath } = makeHarness()
+    // Phase 33: the document task engine, wired exactly like main/index.ts does it.
+    ctx.docTasks = new DocTaskManager({
+      getDb: () => ctx.db,
+      getRuntime: () => ctx.runtime.active(),
+      isChatStreaming: () => inFlightStreams.size > 0,
+      getContextTokens: () => getSettings(ctx.db).contextTokens,
+      audit: (type, message, metadata) => ctx.audit?.(type, message, metadata)
+    })
     registerCoreIpc(ctx)
     registerChatIpc(ctx)
     registerDocsIpc(ctx)
+    registerDocTasksIpc(ctx)
     registerModelIpc(ctx)
     registerDownloadIpc(
       ctx,
@@ -243,6 +256,27 @@ describe('audit wiring across the IPC layer (privacy sentinel grep)', () => {
     }, 'import job')
     const documentId = job.documentIds[0]
     await invoke(handlers, IPC.reindexDocument, documentId)
+
+    // -- document task (Phase 33): summarize the sentinel-bearing document through the
+    // real engine + echo runtime, so the sentinel REALLY flows into the persisted
+    // summary — then prove it never reaches `runtime_events`.
+    const { result: taskRaw } = await invoke(handlers, IPC.startDocTask, {
+      kind: 'summary',
+      documentIds: [documentId]
+    })
+    const task = taskRaw as { jobId: string }
+    await pollUntil(async () => {
+      const { result } = await invoke(handlers, IPC.getDocTask, task.jobId)
+      const s = result as DocTaskStatus
+      return s.state === 'done' || s.state === 'failed' || s.state === 'cancelled'
+    }, 'document task')
+    const { result: taskDone } = await invoke(handlers, IPC.getDocTask, task.jobId)
+    expect((taskDone as DocTaskStatus).state).toBe('done')
+    const { result: docsRaw } = await invoke(handlers, IPC.listDocuments)
+    const summarized = (docsRaw as DocumentInfo[]).find((d) => d.id === documentId)
+    // The flow really carried the sentinel into the summary content…
+    expect(summarized?.summary?.text).toContain(DOC_SENTINEL)
+
     await invoke(handlers, IPC.deleteDocument, documentId)
 
     // -- models + runtime: select, verify, start (mock fallback), stop.
@@ -268,6 +302,7 @@ describe('audit wiring across the IPC layer (privacy sentinel grep)', () => {
       'conversation_deleted',
       'document_imported',
       'document_reindexed',
+      'document_task_completed',
       'document_deleted',
       'model_selected',
       'model_verified',

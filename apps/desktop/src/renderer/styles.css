@@ -669,6 +669,23 @@ code, pre, kbd { font-family: var(--font-mono); }
   margin-bottom: 4px;
 }
 .preview-text { white-space: pre-wrap; word-break: break-word; font-size: 13px; line-height: 1.55; }
+/* Document summary disclosure inside the preview (Phase 33): collapsible, open by
+   default when a summary exists, visually separated from the extracted text below. */
+.doc-summary {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.doc-summary > summary {
+  cursor: pointer;
+  user-select: none;
+  font-weight: 600;
+  font-size: var(--text-sm);
+  line-height: var(--line-sm);
+}
+.doc-summary-body { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
 
 /* Small inline loading spinner (Models checksum check, runtime warm-up hints). */
 .spinner {
