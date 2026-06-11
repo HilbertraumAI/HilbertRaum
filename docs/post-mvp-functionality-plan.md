@@ -276,10 +276,11 @@ bundles", spec §1.3) makes this the first post-wave-1 priority once drives actu
 **CI stays zero-network/zero-model/zero-GPU** — every wave-1 feature is driven through the
 existing harnesses (fake `fetch`, fake spawn + mocked loopback SSE, temp DBs, fake `ipcMain`,
 jsdom + stubbed preload api). Manual harnesses behind env vars: `PAID_GPU_SMOKE`,
-`PAID_THINKING_SMOKE`. **Manual acceptance still owed (tracked in BUILD_STATE §5 item 3):**
-a real in-app download of the 4B on the `D:\` drive incl. mid-download cancel → resume; the
-mock→E5 re-index flow; a real Deep-mode answer with visible thinking from Qwen3 4B; an
-Ask-selected run against two PDFs where only one contains the answer.
+`PAID_THINKING_SMOKE`. **Manual acceptance: all items completed 2026-06-10** (in-app 4B
+download on `D:\` incl. mid-download cancel → resume, user-confirmed; real Deep-mode answer
+with visible thinking, smoke + live-UI confirmed; citations/source panel + fully-offline run
+confirmed) — **except the Diagnostics Activity-panel eyeball**, still tracked in
+BUILD_STATE §5 item 2.
 
 ## 12. Docs impact
 

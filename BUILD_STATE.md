@@ -5,194 +5,38 @@
 > (see "Per-phase ritual" in [`CLAUDE.md`](CLAUDE.md)).
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
-_Last updated: 2026-06-11 — **MVP feature-complete: Phases 0–13 done**, plus the full **GPU
-acceleration feature (Phases 14–16: Vulkan-default distribution → probe + fallback-ladder runtime
-→ Settings/Diagnostics/benchmark surface)** per the IMPLEMENTED
-[`docs/gpu-support-plan.md`](docs/gpu-support-plan.md). Four post-MVP audit rounds plus a
-**GPU-feature audit round (2026-06-10, post-Phase-16 — see the §3 entry)** are fully
-remediated and the llama.cpp runtime pin + license reviews are complete — summarized in §8. The
-first real Windows `D:\` portable-drive bring-up surfaced + fixed a cluster of provisioning,
-drive-root path, manifest-source and RAG/embedding bugs — see **§9**. A **post-MVP UX polish
-round (2026-06-10)** added conversation deletion, a persisted checksum cache (+ real
-verify/loading UX), startup auto-start of the active model, and the Home → documents-chat
-navigation fix — see the §3 entry. **The Office-edition functionality wave 1 (Phases 17–20) is COMPLETE** — the plan was
-condensed to a design record per the doc lifecycle rule
-([`docs/post-mvp-functionality-plan.md`](docs/post-mvp-functionality-plan.md); cited §-anchors
-unchanged, full original via `git show 2a46ca3:docs/post-mvp-functionality-plan.md`): **Phase 17 (RAG
-trust & document-scoped asking) is DONE** — ask-selected-documents scope, the plain-chat
-document-awareness notice, the vector-tag fix, and the reindex-needed answer (§3 entry; design
-record `docs/rag-design.md` §10). **Phase 18 (in-app model downloader) is DONE** — triple-gated
-(policy ∧ default-off setting ∧ per-download confirmation), `.part` + verify-before-rename,
-Range resume, async-with-polling IPC (§3 entry; plan §6 "as implemented"). **Phase 19 (audit
-log on `runtime_events`) is DONE** — never-throws recorder with locked-vault buffering,
-hard privacy rule (ids/filenames/counts, never content — sentinel-grep-tested), 5 000-row
-prune-on-insert retention, shallow IPC-layer wiring incl. the Phase-18 download events, and
-the Diagnostics Activity panel + export (§3 entry; plan §7.1 "as implemented"). **Phase 20
-(answer-depth modes Fast/Balanced/Deep) is DONE — wave 1 is complete**: the composer depth
-selector wires Qwen3's native thinking via per-request `chat_template_kwargs.enable_thinking`
-(verified against the pinned b9585), Deep streams a collapsed live "Thinking…" block over the
-ADDITIVE `chat:reasoning:<id>` channel, and reasoning is stripped from persistence + replayed
-history (§3 entry; plan §8.1 / decisions D4+D5 resolved). **Phase 21 (retrieval quality:
-reranker + hybrid keyword search — the first wave-2 phase) is DONE**: research-gated like the
-GPU plan (rerank endpoint verified against the pinned b9585 SOURCE; FTS5 probed in BOTH
-runtimes), an FTS5 keyword pass + RRF fusion now hybridizes `retrieve()`, and an optional
-CPU-pinned `bge-reranker-v2-m3` sidecar reorders candidates behind a `Reranker` interface
-whose absent default keeps retrieval byte-identical (§3 entry; working paper
-[`docs/retrieval-quality-plan.md`](docs/retrieval-quality-plan.md), decisions D8–D15; design
-record `docs/rag-design.md` §11). **Verified on real hardware (2026-06-10, `PAID_RERANK_SMOKE`
-on `D:\`): F16 loads on b9585, relevance correct, worst-case batch ≈ 24.7 s CPU — and the
-smoke run caught + fixed a real HTTP-500 (rerank mode forces n_ubatch=512 < a ~670-token
-input; now sizes `--batch-size`/`--ubatch-size` to the 2048 context — §3 entry item 6).
-`ragMinSimilarity` measured on the same drive and confirmed = 0 (relevant/irrelevant cosines
-overlap under prefix-less E5 — §3 entry item 6). Both Phase-21 manual items are now DONE.**
-**The UI polish wave (Phases 23–27) is COMPLETE** (developed on branch
-`ui-phase-23-tokens-theming`, merged to master 2026-06-10); the rollout plan was condensed to
-the design record
-[`docs/ui-ux-redesign-plan.md`](docs/ui-ux-redesign-plan.md) per the doc lifecycle rule.
-**Phase 23 (design-token foundation + light/dark theming) is DONE**
-— tokens.css per the adopted guidelines §4, the full styles.css role-token
-restyle with the AA primary-button fix, the global a11y baseline, and the additive
-`AppSettings.theme` setting with the Settings Appearance card (§3 entry). **Phase 24 (shared
-component layer) is DONE** on the same branch — D-UI1 executed (the four Radix primitives
-pinned + license-reviewed), `renderer/components/` (Button/Badge/Banner/Toast/ConfirmDialog/
-Modal/SegmentedControl/Switch/Chip/EmptyState/Progress per guidelines §6), every non-chat
-screen + the WorkspaceGate migrated onto them, and "Saved" feedback moved to polite-live-region
-toasts (§3 entry). **Phase 25 (chat screen restructure — the wave's priority) is DONE** on the
-same branch — ChatScreen split into `renderer/chat/` per guidelines §3 exactly: collapsible
-date-grouped conversation list (hover "⋯" menu + ConfirmDialog deletes — the last browser
-`confirm()` is gone), centered 720px transcript with per-message Try again/Copy/Save actions
-and the inline "▸ Sources (N)" disclosure, header SegmentedControl + "⋯" overflow, the
-composer-footer "Answer detail" dropdown (Quick/Balanced/Thorough labels per D-UI4) and the
-documents-scope popover, the teaching empty state (doc-hint banner deleted), and buffered
-streaming with the auto-collapsing Thinking… line (§3 entry). **Phase 26 (information
-architecture regroup) is DONE** on the same branch — nav 7→5 (Home · Chat · Documents ·
-**AI Model** ‖ Settings), Privacy + Diagnostics folded into Settings tabs ("Privacy & data" /
-"Diagnostics (advanced)"), `navigate()` virtual `settings:*` targets with the legacy
-`privacy`/`diagnostics` aliases kept working, Home rebuilt as the readiness hub (D-UI3
-RESOLVED: Home stays), and the AI Model screen's per-card "Technical details" disclosure
-(§3 entry). **Phase 27 (microcopy + ambient trust signal + first-run — the wave's LAST
-phase) is DONE** on the same branch — the guidelines-§7 copy sweep across renderer AND
-user-facing main-process strings, the quiet "Local · Offline" indicator (sidebar + chat
-header, Radix Tooltip, honest downloads-allowed variant), the 3-step first-run create flow
-(welcome → password with hand-rolled strength hint/show-toggle/paste support → optional
-starter step), and the final WCAG 2.2 AA sweep (`--border-strong` token fix +
-forced-colors rules; accepted items in `docs/known-limitations.md`) (§3 entry).
-**Phase 28 (model catalog wave 1) is 🟡 IN PROGRESS** — all four challenger manifests
-(Ministral 3 8B 2512, Granite 4.1 8B, Gemma 4 12B QAT, Qwen3-4B-2507) landed 2026-06-10,
-validated + license-reviewed per
-[`docs/model-catalog-expansion-plan.md`](docs/model-catalog-expansion-plan.md) D16–D18/D22.
-**Weights fetched + real `sha256` promoted into all four manifests 2026-06-10**; the test
-`D:\` drive's `model-manifests/` was re-mirrored from the repo (it predated the challengers)
-and `verify-models -Target D:\` now reports **all 10 catalog weights VERIFIED**. The §4.3
-**chat + depth-mode bring-up smokes PASS for all four challengers** on the dev box (new
-`tests/manual/bringup-smoke.test.ts` against real b9585: load, German answer, no template
-leak; finding — Gemma 4 honours `enable_thinking`, kept `supports_thinking_mode: false`
-pending Phase 29). Only the §4.3 Models-screen-UI + RAG-citation smokes remain before
-Phase 28 closes (§3 entry; §5 item 5).
-**Phases 28 (model catalog wave 1) and 29 (benchmark protocol + first comparison run) are
-🟢 DONE (2026-06-10/11)** and the working-paper plan was **condensed to a design record**
-([`docs/model-catalog-expansion-plan.md`](docs/model-catalog-expansion-plan.md); full original
-in git history). Wave 1 added four Apache-2.0 challengers; the judge-free benchmark
-(`docs/model-benchmarks.md` — scorer `apps/desktop/tests/eval/score.ts` + CI tests, real-RAG-path
-harness `tests/manual/model-eval.test.ts`, 100-item `eval/{corpus,rag}_de_en.jsonl`, speed/RSS
-scripts) ran on the i7-1185G7 (all 8 models; QA reproduced bit-for-bit on the dev box). §5.4
-applied **live**: `recommended_min_ram_gb` recalibrated from measured peak RSS, the recommender
-made **quality-aware** via a new `recommendation_rank` field (≤12 GB → Qwen3-4B default / 16 GB →
-Ministral / ≥32 GB → Gemma 4; Granite + 30B never auto-recommended), and Gemma's
-`supports_thinking_mode` **flipped on** after its thinking-quality check. The headline benchmark
-discriminator was hallucination-resistance on unanswerables (Ministral 0/15 best); the whole
-catalog is Apache-2.0 (the challenger edge is quality+speed, not licence). Only an **optional**
-dev-box speed sweep remains (completeness; QA+RSS are machine-independent). See the §3 Phase-29
-entry.
-**Functionality wave 3 (Phases 31–38, [`docs/functionality-wave-3-plan.md`](docs/functionality-wave-3-plan.md))
-is COMPLETE 2026-06-11 — all eight phases shipped and the working paper is now the wave's
-design record. Phase 31 (conversation search) is DONE 2026-06-11** — R-S1 resolved GO,
-`messages_fts` mirrors the D13 index shape, `searchMessages` ranks bm25/newest-first (D23),
-search UI in the conversation list, plus the deny-by-default permission-handler rider; plan §4
-condensed to its design record (§3 entry). **Phase 32 (vault password change, D24) is DONE
-2026-06-11** — descriptor v2 envelope (wrapped data key; new vaults created v2), O(1)
-descriptor re-wrap per change (scrypt→argon2id upgrade for free), one-time journaled v1→v2
-migration on a legacy vault's first change with crash-cut recovery tests,
-`workspace:changePassword` + the Settings card (Phase-27 password components extracted to
-`renderer/components/PasswordField.tsx`), import↔change race guard; plan §5 condensed to its
-design record (§3 entry). **Phase 33 (document tasks foundation + one-click summary, D25/D26)
-is DONE 2026-06-11** — `services/doctasks.ts` `DocTaskManager` (the shared queue/cancel/polling
-engine Phases 34–35 reuse), strict one-at-a-time vs chat enforced both ways with friendly copy
-+ a renderer cancel option, budgeted map-reduce summaries over stored chunks persisted in
-`documents.summary_json` (12-map-call ceiling, honest `truncated` flag; cleared by re-index),
-ids-only `document_task_*` audit events, the Documents "Summarize" action + preview summary
-section; R-T1 resolved on the real b9585 (concurrent requests get PARALLEL slots — the
-app-side guard is the only serialization); plan §6 condensed to its design record (§3 entry).
-**Phase 34 (document translation workflow, D27/D36) is DONE 2026-06-11** — the `translation`
-kind on the same engine (`targetLang: 'de'|'en'`): D36 resolved (input = re-extracted parser
-SEGMENTS, never the ~80-token-overlapping chunks — no duplicated text, regression-tested),
-windows sized from the R-T2-measured German token weight (in 1.3 / out 2.0 tok/word — the
-smoke caught a real silent truncation under a half/half split), map-in-order with no
-ceiling/no reduce, retry-once-then-MARK failed windows, materialize as a NEW corpus document
-("<original> (Deutsch|English).md", attribution line) through the normal import path under
-the Phase-32 lease, `documents.origin_json` provenance surfaced as `DocumentInfo.origin`,
-new `docs:export` save-dialog export + `document_exported` audit event, Translate UI with
-target-choice modal + provenance line; R-T2's translation half resolved on the real b9585 +
-Qwen3-4B (plan §14); plan §7 condensed to its design record (§3 entry).
-**Phase 35 (compare two documents, D28/D37) is DONE 2026-06-11** — the `compare` kind on the
-same engine (exactly two sources); R-T2's comparison half resolved FIRST on the real b9585 +
-Qwen3-4B over two smoke rounds (round 1 caught a silent per-pair omission — prompts
-hardened); auto mode-switch by token math (D37: re-extracted segments for mode (a) AND the
-decision; section-matched mode (b) pairs A-chunk windows with doc-B chunks via the existing
-`VectorIndex`, deterministic, ceiling 12 with an honest in-report notice; embedder-visibility
-guard fails friendly before any model call); materialized "Comparison: <A> vs <B>.md" under
-the Phase-32 lease with the additive `DocumentOrigin` union (`comparedFrom: [a, b]`);
-ids-only audit incl. `documentIdB`; "Compare (2)" multi-select UI, both-rows busy state,
-report auto-open; plan §8 condensed to its design record (§3 entry).
-**Phase 36 (audio transcription as ingestion, D34/D35) is DONE 2026-06-11** — research
-gates R-W1..R-W4 ALL resolved first on the real pinned **whisper.cpp v1.8.6** + real
-German audio (win prebuilt only → D34 = per-file CLI; formats wav/mp3/flac/ogg with the
-exit-0 decode-failure trap found and handled; **small** model shipped over base on German
-quality; 52-min mp3 ≈ 35 min CPU wall with `-pp` percent progress); the SECOND sidecar
-family (`whisper_cpp:` yaml block, `fetch-runtime --family`, `runtime/whisper.cpp/<os>/`,
-commercial-gate checks), the `whisper-small-multilingual` manifest (`role: transcriber`,
-covered by the Phase-18 downloader with zero new code), `services/transcriber/` (D9
-null-not-mock selector), and `AudioParser` (packed time-labeled segments → D29
-`"mm:ss–mm:ss"` citations; 1 chunk = 1 segment ⇒ preview/translate/compare read stored
-chunks, no re-transcription) shipped; D35 resolved = keep the audio copy + size confirm +
-"Transcribing… N%" + re-index-is-re-transcription documented; plan §9 condensed to its
-design record (§3 entry).
-**Phase 38 (scanned-PDF / photo OCR, D31–D33) is DONE 2026-06-11 — wave 3 is COMPLETE
-and the working paper was retired to its design record.** All three research gates ran
-first on real artifacts: R-O1 killed `utilityProcess` (no OffscreenCanvas in Electron
-37) and proved the SPLIT design — a hidden window does only pdfjs-LEGACY page
-rasterization (pull-based protocol, own sandboxed preload) while recognition runs
-MAIN-side in tesseract.js Node mode on Buffers (worker + WASM core ship as pinned npm
-deps; `asarUnpack`ed); R-O2 proved zero remote attempts with only `langPath`/cache
-overridden and inventoried the drive assets (`ocr/{deu,eng}.traineddata.gz`, ~4.1 MB,
-Apache-2.0 ×3 reviewed); R-O3 found float `tessdata_best` CRASHES the WASM core and
-shipped **best_int** (beats `fast` 3-vs-7 misses on degraded German scans). Step-0
-detection fails image-only PDFs friendly ("This PDF looks like a scan…", derived
-`scanDetected`; hybrids index their text pages); "Make searchable (OCR)" is doc-task
-kind `'ocr'` (D33 — never automatic) persisting `documents.ocr_json` then re-ingesting
-through the PdfParser `ocrPages` hook ⇒ page citations unchanged; photos OCR on import;
-`AppStatus.ocrAvailable` gates the UI; D32 = the `ocr:` asset class on
-runtime-sources.yaml + `fetch-runtime --family ocr` + commercial gates. 968 tests
-green; `PAID_OCR_SMOKE` + the built-app eyeball walk both PASSED on real assets
-(§3 entry; plan §11 design record).
-**Phase 37 (voice dictation in the composer, D30) is DONE 2026-06-11** — the locked D30
-pipeline as a thin client of the Phase-36 transcriber: renderer `getUserMedia` →
-`MediaRecorder` → ONE `OfflineAudioContext` render to 16 kHz mono → pure-JS WAV encode
-(`renderer/lib/wav.ts`, zero new deps) → BYTES over the new request/response
-`dictation:transcribe` IPC → main writes `<uuid>.parse-dictation.wav` in the documents
-dir (`.parse` infix ⇒ crash-sweep covered), runs the transcriber (`workDir` steered into
-the same swept dir), shreds in `finally`, returns text; the composer mic
-(`DictationButton`) inserts AT THE CURSOR via `execCommand('insertText')` (joins native
-undo) with a splice fallback — NEVER auto-sent; availability-driven via the additive
-`AppStatus.dictationAvailable` (D14 precedent, no settings key); the Phase-31 permission
-handler gained its SINGLE scoped allow (audio-only `media` from our own WebContents —
-scope matrix unit-tested, nothing else loosened); no audit event (content-adjacent,
-plan §12); friendly §11.4 error copy with the technical reason in the local log only;
-plan §10 condensed to its design record (§3 entry).
-Release-wise,
-remaining work = **manual release acceptance only** (§5, incl. the GPU
-hardware matrix, item 1b). Consciously-accepted gaps live in
-[`docs/known-limitations.md`](docs/known-limitations.md)._
+
+_Last updated: 2026-06-12 — docs housekeeping: this file was compacted; the per-phase build
+narratives now live in the design records they cite (full pre-compaction text in git history)._
+
+**Where the project stands:** the MVP (Phases 0–13) is feature-complete and four post-MVP
+audit rounds are fully remediated (§8). Every shipped wave since is DONE and condensed into a
+design record per the CLAUDE.md doc lifecycle rule:
+
+- **GPU acceleration (Phases 14–16)** + a same-day audit round —
+  [`docs/gpu-support-plan.md`](docs/gpu-support-plan.md).
+- **Functionality wave 1 toward the Office edition (Phases 17–20):** RAG trust & scoped
+  asking · in-app model downloader · audit log · answer-depth modes —
+  [`docs/post-mvp-functionality-plan.md`](docs/post-mvp-functionality-plan.md).
+- **Phase 21 retrieval quality** (hybrid FTS5 + RRF, optional reranker) —
+  [`docs/retrieval-quality-plan.md`](docs/retrieval-quality-plan.md) + `docs/rag-design.md`
+  §11; both manual measurements done (rerank smoke; `ragMinSimilarity` confirmed 0).
+- **UI polish wave (Phases 23–27)** — [`docs/design-guidelines.md`](docs/design-guidelines.md)
+  (ADOPTED; its §11 is the rollout record incl. decisions D-UI1–4).
+- **Model catalog wave 1 + benchmark (Phases 28–29)** —
+  [`docs/model-catalog-expansion-plan.md`](docs/model-catalog-expansion-plan.md) (D16–D22) +
+  [`docs/model-benchmarks.md`](docs/model-benchmarks.md) (protocol + first-run results) +
+  `docs/model-policy.md` (catalog + quality-aware recommendation).
+- **Functionality wave 3 (Phases 31–38):** conversation search · vault password change ·
+  document tasks + summary · translation · compare · audio transcription · dictation · OCR —
+  [`docs/functionality-wave-3-plan.md`](docs/functionality-wave-3-plan.md) (D23–D37; research
+  gates R-S1/R-T1–2/R-W1–4/R-O1–3 with their banked findings in its §14).
+
+**Open:** Phase 22 (signed offline update bundles) is 🔴 blocked on a key-management design;
+Phase 30 (opt-in big slot + embeddings) has a drafted working paper
+([`docs/big-slot-embeddings-plan.md`](docs/big-slot-embeddings-plan.md)). Release-wise the
+remaining work is **manual acceptance only** (§5). Consciously-accepted gaps live in
+[`docs/known-limitations.md`](docs/known-limitations.md).
 
 ---
 
@@ -214,48 +58,31 @@ hardware matrix, item 1b). Consciously-accepted gaps live in
 | 11 | Drive layout, scripts & packaging | 🟢 done |
 | 12 | DIY asset loader (`fetch-assets`) | 🟢 done |
 | 13 | Plug-and-play distribution (commercial drive) | 🟢 done |
-| 14 | GPU distribution (Vulkan default + CPU safety net) | 🟢 done |
-| 15 | GPU runtime (probe, fallback ladder, embedder pin) | 🟢 done |
-| 16 | GPU surface (Settings/Diagnostics/benchmark/docs) | 🟢 done |
-| 17 | RAG trust & document-scoped asking | 🟢 done |
-| 18 | In-app model downloader | 🟢 done |
-| 19 | Audit log (`runtime_events`) | 🟢 done |
-| 20 | Answer-depth modes (Fast/Balanced/Deep) | 🟢 done |
-| 21 | Retrieval quality (reranker + hybrid FTS5 search) | 🟢 done |
-| 22 | Signed offline update bundles | 🔴 blocked (key-management design) |
-| 23 | UI design tokens + light/dark theming | 🟢 done (merged to master 2026-06-10) |
-| 24 | UI shared component layer (Radix + components/) | 🟢 done (merged to master 2026-06-10) |
-| 25 | UI chat screen restructure (guidelines §3) | 🟢 done (merged to master 2026-06-10) |
-| 26 | UI information architecture regroup (guidelines §2) | 🟢 done (merged to master 2026-06-10) |
-| 27 | UI microcopy, ambient trust signal, first-run (guidelines §7/§2/§9) | 🟢 done (merged to master 2026-06-10) — **UI polish wave COMPLETE** |
-| 28 | Model catalog wave 1 (challenger manifests, D16–D18) | 🟢 done — 4 challenger manifests (Apache-2.0, real hashes, all 10 weights VERIFIED on `D:\`), license reviews approved, bring-up smoke PASS; RAG citation/abstention verified across all 8 models by the Phase-29 eval; plan condensed |
-| 29 | Benchmark protocol + first comparison run (D19/D20) | 🟢 done — judge-free protocol + tooling + 100-item eval set; first run on the i7-1185G7 (all 8 models, QA+speed+RSS), QA reproduced on the dev box; §5.4 applied: RAM recalibrated from measured RSS, recommender made **quality-aware** (`recommendation_rank` → ≤12 GB Qwen3-4B / 16 GB Ministral / ≥32 GB Gemma4), **Gemma thinking flag flipped on**; plan condensed to a design record. (Optional dev-box speed sweep = completeness only) |
-| 30 | Opt-in big slot + embeddings (D21 → D23–D28) | ⚪ not started — **plan drafted** ([`docs/big-slot-embeddings-plan.md`](docs/big-slot-embeddings-plan.md)): Track A (bigger chat model vs the 30B-A3B, reuses the Phase-29 benchmark) + Track B (better embedder — the harder, reindex-forcing swap) |
-| 31 | Conversation search (wave-3 plan §4) + session-hardening rider | 🟢 done (2026-06-11) — `messages_fts` + `searchMessages` (bm25, newest-first tie-break) + `chat:search` + ConversationList search UI; deny-by-default permission handler shipped with it |
-| 32 | Vault password change (wave-3 plan §5, D24) | 🟢 done (2026-06-11) — descriptor v2 envelope (wrapped data key; new vaults v2), O(1) re-wrap per change, one-time journaled v1→v2 migration on first change, `workspace:changePassword` + Settings card, import↔change race guard |
-| 33 | Document tasks foundation + one-click summary (wave-3 plan §6, D25/D26) | 🟢 done (2026-06-11) — `DocTaskManager` engine (queue/cancel/polling, built for summary+translation+compare), strict one-at-a-time vs chat (both guards + renderer cancel option), budgeted map-reduce summary persisted in `documents.summary_json` (cleared by re-index), Summarize UI + preview section; R-T1 resolved (b9585 serves concurrent requests on parallel slots — app guard is the only serialization) |
-| 34 | Document translation workflow (wave-3 plan §7, D27/D36) | 🟢 done (2026-06-11) — `translation` kind on the Phase-33 engine (`targetLang: 'de'\|'en'`), D36 resolved (re-extracted parser segments, never the overlapping chunks), R-T2-measured window math (German out ≈ 2 tok/word — half/half split truncated and was fixed), retry-once-then-mark failed windows, materialized "<original> (Deutsch\|English).md" via the normal import path under the Phase-32 lease, `documents.origin_json` provenance, `docs:export` save-dialog export, Translate UI + provenance line; R-T2 translation half resolved on real b9585 + Qwen3-4B |
-| 35 | Compare two documents (wave-3 plan §8, D28/D37) | 🟢 done (2026-06-11) — `compare` kind on the same engine (exactly two distinct indexed sources), auto mode-switch by token math: full compare over re-extracted segments (D37) vs section-matched via the EXISTING `VectorIndex` `documentIds` scope (stored vectors, deterministic pairing, ceiling 12 + honest in-report truncation notice), embedder-visibility guard ("re-index first" before any model call), materialized "Comparison: <A> vs <B>.md" with `{ type: 'compare', comparedFrom: [a, b] }` provenance (additive `DocumentOrigin` union), ids-only audit incl. `documentIdB`, "Compare (2)" multi-select UI with both-rows busy state + report auto-open; R-T2 comparison half resolved on real b9585 + Qwen3-4B (2 smoke rounds — prompts hardened against a silent per-pair omission) |
-| 36 | Audio transcription as ingestion (wave-3 plan §9, D34/D35, R-W1..R-W4) | 🟢 done (2026-06-11) — **all four research gates resolved FIRST on the real pinned binary + real German audio** (R-W1: whisper.cpp **v1.8.6**, win prebuilt only, MIT, real hash → **D34 = per-file CLI**; R-W2: decodes wav/mp3/flac/ogg, m4a fails with **exit 0** → JSON-not-exit-code success signal; R-W3: **small** ships — base makes meaning-destroying German errors at 2.4× less cost; R-W4: 52-min mp3 = 35 min wall / 1.2 GB peak / `-pp` percent ticks → "Transcribing… N%"); additive `whisper_cpp:` yaml block + family-aware validator/fetch-scripts/layout/commercial gate; `whisper-small-multilingual` manifest (`role: transcriber`, real sha256, MIT approved) — Phase-18 downloader covers it with zero new code; `services/transcriber/` (D9 selector → real iff binary+weights else null, no mock; CLI per file, suspend/stop kill children, stderr-only error tails); `AudioParser` packs whisper segments into ≤400-word time-labeled segments (D29 `"mm:ss–mm:ss"` → `Citation.section`; 1 chunk = 1 segment ⇒ preview/translate/compare read STORED CHUNKS, no re-transcription); **D35 = keep the audio copy** (`.enc` at rest, re-index = full re-transcription, >50 MB import confirm via `docs:importPreflight`); friendly absent-transcriber per-file failure; audit sentinel audio leg; 910/910 + `PAID_WHISPER_SMOKE` manual harness; eyeballed in the built app (real + absent legs) |
-| 37 | Voice dictation in the composer (wave-3 plan §10, D30) | 🟢 done (2026-06-11) — composer mic (visible only with a transcriber selected — additive `AppStatus.dictationAvailable`, D14 precedent, no settings key): renderer `MediaRecorder` → one `OfflineAudioContext` render to 16 kHz mono → pure-JS WAV (`renderer/lib/wav.ts`, no new deps) → bytes over the new `dictation:transcribe` IPC → transient `<uuid>.parse-dictation.wav` in the documents dir (crash-sweep covered, `workDir` steered, shredded in `finally`) → Phase-36 transcriber → text inserted at the cursor (`execCommand('insertText')` = native undo; splice fallback) — NEVER auto-sent; Phase-31 permission handler gained its single scoped allow (audio-only `media` from our own WebContents; scope-matrix unit test); no audit event (content-adjacent); 64 MB cap + friendly §11.4 refusals; +21 tests (931 green) incl. `PAID_DICTATION_SMOKE` manual harness |
-| 38 | Scanned-PDF / photo OCR (wave-3 plan §11, D31–D33, R-O1..R-O3) | 🟢 done (2026-06-11) — **all three research gates resolved FIRST on real artifacts** (R-O1: Electron-37 `utilityProcess` has NO OffscreenCanvas → **D31 = the SPLIT design** — hidden-window pdfjs-LEGACY rasterization (300 DPI, pull-based `OCR_RASTER` protocol, own 5-channel sandboxed preload) + MAIN-side tesseract.js **Node mode** on Buffers (no canvas; worker + WASM core from the app's own pinned npm deps); R-O2: in Node mode only `langPath`/cache phone out — the drive carries ONLY `ocr/{deu,eng}.traineddata.gz` (~4.1 MB), zero remote attempts proven under a net watch, three Apache-2.0 license reviews in model-policy.md; R-O3: float `tessdata_best` CRASHES the WASM core → shipped **best_int**, which beats `fast` 3-vs-7 misses of 104 words on degraded German scans); **step 0 detection** (a PDF with no text-bearing page fails friendly "This PDF looks like a scan…" — derived `DocumentInfo.scanDetected`; hybrids NOT detected); **D33**: "Make searchable (OCR)" = doc-task kind `'ocr'` (needs the OCR engine, not the chat runtime; D26 guards hold; progress = pages + 1; cancel persists nothing) → recognition persisted in additive `documents.ocr_json` (content → DB only; `DocumentInfo.ocr` metadata) → re-ingest via the PdfParser `ocrPages` hook ⇒ per-page segments ⇒ **page citations unchanged** (proved e2e via the real retrieval path); ocr_json survives re-index (preview/re-index reuse it; re-running the task overwrites); **photos** (`.png/.jpg/.jpeg`) OCR on import via `ImageParser` (the D33 asymmetry); availability-driven `AppStatus.ocrAvailable` (no settings key — `ocrLanguages` dropped); **D32**: `runtime-sources.yaml` `ocr:` block (NEW plain-file asset class — hash IS the install state), `fetch-runtime --family ocr`, `planOcrDownloads`, `assertCommercialDrive.ocrAssetsVerified` + both script gates, `ocr/` in `DRIVE_LAYOUT_DIRS` + gitignore; tesseract.js **7.0.0 pinned exact** + `asarUnpack` (worker_threads cannot read asar; workerPath rewritten to `.unpacked` — packaged-app OCR smoke is a release-acceptance item); +38 tests (**968 green**) incl. the no-CDN sentinel + the preload channel contract (a sandboxed preload must be ONE file — the multi-entry preload build splits shared chunks); `PAID_OCR_SMOKE` PASSED on real assets (confidence 95, zero remote attempts); built-app eyeball walk PASSED both legs — the REAL hidden-window → tesseract → re-ingest pipeline recognized the generated German office scan (umlauts/ß exact, preview per page) and a photo imported straight to Ready. **Wave 3 (Phases 31–38) is COMPLETE; the working paper was retired to its design record per the doc lifecycle rule** |
+| 14–16 | GPU acceleration (Vulkan distribution · probe/ladder runtime · surface) | 🟢 done 2026-06-10 — `docs/gpu-support-plan.md` |
+| 17 | RAG trust & document-scoped asking | 🟢 done 2026-06-10 — wave-1 record §5 |
+| 18 | In-app model downloader | 🟢 done 2026-06-10 — wave-1 record §6 |
+| 19 | Audit log (`runtime_events`) | 🟢 done 2026-06-10 — wave-1 record §7 |
+| 20 | Answer-depth modes (Fast/Balanced/Deep) | 🟢 done 2026-06-10 — wave-1 record §8 |
+| 21 | Retrieval quality (reranker + hybrid FTS5 search) | 🟢 done 2026-06-10 — `docs/retrieval-quality-plan.md` + `rag-design.md` §11; both manual measurements done |
+| 22 | Signed offline update bundles | 🔴 blocked (key-management design) — wave-1 record §10 |
+| 23–27 | UI polish wave (tokens/theming · components · chat restructure · IA regroup · microcopy/ambient signal/first-run) | 🟢 done, merged to master 2026-06-10 — `docs/design-guidelines.md` (+ its §11 rollout record) |
+| 28 | Model catalog wave 1 (challenger manifests, D16–D18/D22) | 🟢 done 2026-06-10 — 4 Apache-2.0 challengers, real hashes, all 10 catalog weights VERIFIED on `D:\`, bring-up smokes PASS |
+| 29 | Benchmark protocol + first comparison run (D19/D20) | 🟢 done 2026-06-11 — judge-free QA+speed+RSS protocol run on all 8 models; RAM mins recalibrated, recommender quality-aware (`recommendation_rank`), Gemma thinking flag ON. Optional dev-box speed sweep = completeness only |
+| 30 | Opt-in big slot + embeddings (D21 → D23–D28) | ⚪ not started — plan drafted (`docs/big-slot-embeddings-plan.md`) |
+| 31 | Conversation search + permission-handler rider | 🟢 done 2026-06-11 — wave-3 record §4 |
+| 32 | Vault password change (descriptor v2 envelope) | 🟢 done 2026-06-11 — wave-3 record §5 |
+| 33 | Document tasks foundation + one-click summary | 🟢 done 2026-06-11 — wave-3 record §6 |
+| 34 | Document translation workflow | 🟢 done 2026-06-11 — wave-3 record §7 |
+| 35 | Compare two documents | 🟢 done 2026-06-11 — wave-3 record §8 |
+| 36 | Audio transcription as ingestion (whisper.cpp sidecar family) | 🟢 done 2026-06-11 — wave-3 record §9 |
+| 37 | Voice dictation in the composer | 🟢 done 2026-06-11 — wave-3 record §10 |
+| 38 | Scanned-PDF / photo OCR (tesseract.js + `ocr/` assets) | 🟢 done 2026-06-11 — wave-3 record §11; **wave 3 COMPLETE** |
 
 Legend: ⚪ not started · 🟡 in progress · 🟢 done · 🔴 blocked
 
-> Phases 12–13 are the **post-MVP** distribution phases; Phases 14–16 added GPU acceleration on
-> top (see [`docs/gpu-support-plan.md`](docs/gpu-support-plan.md)). All are DONE — see
-> [`docs/provisioning-and-distribution-plan.md`](docs/provisioning-and-distribution-plan.md).
-> Remaining for *release* = **manual acceptance only**: a real signed/notarized build + a USB §17
-> demo (R5/R7) + the GPU hardware matrix (§5 item 1b).
-> **Phases 17–20 are the functionality wave toward the Office edition — ALL DONE**, and the
-> plan is now the **condensed wave-1 design record**
-> [`docs/post-mvp-functionality-plan.md`](docs/post-mvp-functionality-plan.md) (doc lifecycle
-> rule; §-anchors stable, wave-2 outlines §9–§10 + decisions §13 kept; full original =
-> `git show 2a46ca3:docs/post-mvp-functionality-plan.md`). Phase 17 is DONE
-> (record §5/§5.5; fuller record in `docs/rag-design.md` §10). Phase 18 is DONE (record
-> §6/§6.5). Phase 19 is DONE (record §7/§7.1; data class in `docs/security-model.md`).
-> Phase 20 is DONE (record §8/§8.1; D4/D5 resolved in §13; mechanism doc in
-> `docs/architecture.md`).
+> Remaining for *release* = **manual acceptance only** (§5): a real signed/notarized build +
+> a USB spec-§17 demo (R5/R7), the GPU hardware matrix (§5 item 1b), the Activity-panel
+> live-UI eyeball, the packaged-app OCR smoke.
 
 ---
 
@@ -595,104 +422,28 @@ Repo root: `f:\_coding\ai_drive`.
   the commercial first-run still lands on the existing `WorkspaceGate` (no plaintext offered when the
   policy forbids it); only the copy was softened for zero-technical-knowledge users.
 
-- **Vulkan-first runtime distribution (LOCKED, Phase 14 — gpu-support-plan §1 decisions are FINAL):**
-  `runtime-sources.yaml` now lists the **Vulkan full build first** per win/linux (b9585 vulkan assets,
-  hashes re-verified from fresh downloads on 2026-06-10) extracting to `runtime/llama.cpp/<os>/`, plus
-  the **pure-CPU safety net** (the former defaults) at `runtime/llama.cpp/<os>/cpu/`; mac stays
-  Metal-only. Safe-as-default because the upstream Vulkan archives are **standalone full builds**
-  carrying every CPU backend variant (GGML_BACKEND_DL) — on a GPU-less machine the same binary runs on
-  its bundled CPU backends. `selectRuntimeBuild`'s "first match wins" is unchanged (now vulkan-first);
-  new `selectRuntimeBuilds` (plural) returns every build an OS ships for the commercial pipeline.
-  `validateRuntimeSources` rejects duplicate `(os, arch, backend)` triples. **No new licenses**: both
-  vulkan archives build from the same MIT llama.cpp tag already approved (the Vulkan loader is NOT
-  redistributed — it ships with the user's GPU driver).
-- **Runtime install marker `.paid-runtime.json` (LOCKED, Phase 14):** after a verified extraction,
-  `fetch-runtime.{ps1,sh}` write `{ version, backend, os, arch }` (flat single-line JSON, UTF-8 no BOM)
-  into the build's extract dir. **Idempotent skips are marker-based** (version + backend must match) —
-  mere binary presence is no longer trusted, fixing the upgrade hole where a CPU-era drive would
-  silently keep its CPU build after the default moved to vulkan. Canonical logic in `assets.ts`
-  (`RUNTIME_MARKER_FILE`, `read/writeRuntimeMarker`, `runtimeInstallCurrent`); the scripts mirror it.
-  `assertCommercialDrive` gained an optional `runtimeSources` param + `checks.runtimeCurrent` (each
-  pinned build's marker must match version + backend); `build-commercial-drive.{ps1,sh}` fetch BOTH
-  builds per win/linux (default + `-Backend cpu`) and cross-check the five markers natively in step 7.
-  The fetch scripts' flatten step now **excludes the `cpu/` subdir** from the binary search (the
-  safety net must not be mistaken for the freshly extracted nested default binary).
-- **GPU start ladder + probe (LOCKED, Phase 15 — gpu-support-plan §5):** the selecting factory now
-  returns a **ladder runtime** when binary + weights exist: rung 1 = default binary, default args
-  (b9585 `-ngl auto` + `--fit on` auto-offload — **we never pass `-ngl`**; on a GPU-less machine
-  rung 1 IS CPU mode) → rung 2 = same binary + **`--device none`** (the only CPU-forcing mechanism)
-  → rung 3 = `runtime/llama.cpp/<os>/cpu/` safety net (`resolveCpuFallbackServerPath`) → rung 4 =
-  MockRuntime (existing graceful-fallback rule — never stuck). `gpuMode:'off'`/`gpuAutoDisabled`
-  skip rung 1; a rung-1 failure persists `gpuAutoDisabled` + `gpuLastError` (no repeated 60 s GPU
-  timeouts). `services/runtime/gpu.ts`: `probeGpuDevices` (subprocess `--list-devices`, **10 s**
-  kill-timeout — the plan's 3 s sketch was raised after a cold Vulkan init exceeded it, see plan
-  §13 deviation 1; resolves on the child's **`close`** event so late-buffered stdout is never
-  truncated; never throws → `[]`), pure `parseListDevices`, `looksIntegrated` heuristic,
-  `createCachedGpuProbe` (once per binary per session; `invalidate()` re-probes — wired to
-  "Try GPU again"). The probe runs CONCURRENTLY with the rung-1 server start (never serially
-  after it) and only LABELS the backend (`RuntimeStatus.backend: 'gpu'|'cpu'|'mock'` +
-  `gpuName`); the ladder is the guarantee. GPU deps are injected callbacks (never DB reads
-  inside the factory); `main/index.ts` wires them with locked-DB-safe guards (sidecars only
-  start post-unlock anyway).
-- **Mid-generation crash auto-fallback (Phase 15, §5.3):** `LlamaServer.onUnexpectedExit` fires
-  only for a HEALTHY server dying outside `stop()` (start failures still throw; stop exits are
-  expected). When the active backend was GPU, `createGpuCrashAutoFallback` (re-entrancy-guarded)
-  persists the flags, restarts the same model ONCE at CPU via the manager, and broadcasts the
-  friendly notice over the new **`runtime:notice` event channel** (preload `api.onRuntimeNotice`):
-  `COMPATIBILITY_MODE_NOTICE` — §11.4 tone, never "GPU failed". CPU-backend crashes keep today's
-  behavior. **E5 embedder pinned to CPU** (`--device none` appended to its extraArgs, §7).
-- **New `AppSettings` keys (Phase 15):** `gpuMode: 'auto'|'off'` (default `'auto'` — GPU is always
-  the default, decision Q2), `gpuAutoDisabled: boolean`, `gpuLastError: string|null`,
-  `gpuProbe: GpuProbeResult|null` (cached devices + timestamp; persisted by the Phase-16 benchmark
-  path). `GpuDevice`/`GpuProbeResult` live in `shared/types.ts`.
-- **Manual GPU smoke harness:** `tests/manual/gpu-smoke.test.ts` — skipped unless `PAID_GPU_SMOKE`
-  points at a provisioned drive root (CI stays zero-GPU/zero-binary). On the dev box it exercises
-  the real probe, a real rung-1 GPU start + streamed tokens, `gpuMode:'off'`, and a stubbed rung-1
-  failure landing on the real rung-3 safety net.
-- **Conservative GPU profile bump (LOCKED, Phase 16 — gpu-support-plan §8):** `classifyProfile`'s
-  hint is now `gpuUseful?: boolean` (the dormant "any truthy gpu string bumps" branch was NOT woken
-  as-is). Eligibility = `gpuUsefulForProfile(devices)` in `runtime/gpu.ts`: some probed device has
-  **≥ 6144 MiB** (`GPU_BUMP_MIN_VRAM_MB`) AND `!looksIntegrated(name)` — an Iris Xe reporting 16 GB
-  of shared RAM must never push a laptop a profile step up. `benchmark.ts` keeps **zero
-  `child_process`**: the IPC layer (`registerBenchmarkIpc.probeAndPersistGpu`) runs the
-  session-cached probe (`AppContext.probeGpu`), persists `settings.gpuProbe`, and **injects**
-  `RunBenchmarkDeps.gpu: { name, useful }`; `BenchmarkResult.gpu` carries the probed name
-  (additive — old persisted results stay valid).
-- **GPU surface (Phase 16):** Settings gained the "Use GPU acceleration" toggle (default ON,
-  binds `gpuMode 'auto'|'off'` — decision Q2 copy); Diagnostics gained the **Acceleration** line
-  (live `RuntimeStatus.backend`/`gpuName` when running, else the cached `gpuProbe`; mock reads
-  "Built-in demo runtime"), the **runtime build** line (new `getRuntimeInstall` IPC
-  `runtime:install` → the Phase-14 `.paid-runtime.json` marker via `readRuntimeMarker`; null on
-  manually provisioned drives), and the `gpuAutoDisabled` notice + **"Try GPU again"** button
-  (clears `gpuAutoDisabled`+`gpuLastError` — does NOT touch the
-  toggle). `App.tsx` shows the dismissible `runtime:notice` banner (the §5.3 compatibility-mode
-  copy). All copy follows spec §11.4 — "compatibility mode", never "GPU failed".
+- **GPU acceleration (Phases 14–16, 2026-06-10) — design record
+  [`docs/gpu-support-plan.md`](docs/gpu-support-plan.md):** Vulkan-first distribution +
+  `cpu/` safety net + `.paid-runtime.json` install markers (§1/§4), the 4-rung start ladder +
+  `--list-devices` probe (§5 — never pass `-ngl`; `--device none` is the only CPU-forcing
+  mechanism), mid-generation crash auto-fallback over the `runtime:notice` channel (§5.3),
+  E5 embedder pinned to CPU (§7), conservative profile bump via `gpuUsefulForProfile` (§8),
+  Settings toggle + Diagnostics Acceleration/runtime-build/"Try GPU again" surface, and the
+  `PAID_GPU_SMOKE` manual harness. New `AppSettings` keys: `gpuMode 'auto'|'off'` (default
+  `'auto'`), `gpuAutoDisabled`, `gpuLastError`, `gpuProbe`.
 - **GPU audit round (2026-06-10, post-Phase-16 — all findings remediated; commit `4549934`):**
-  1. **fetch-runtime upgrade bug (HIGH):** re-fetching over an existing install (the exact
-     cpu→vulkan upgrade path the Phase-14 marker exists for) never re-flattened the nesting
-     mac/linux tarballs — the OLD root binary survived while the fresh marker claimed vulkan.
-     Both scripts now **pre-clean the extract dir before extraction** (everything except the
-     just-downloaded archive + the `cpu/` safety net); a stale marker dies with the old build.
-  2. **Sell gate hardened:** `assertCommercialDrive` + the native step-7 checks now require the
-     **binary** (not just a marker), the native checks verify **backend** (not only version),
-     and `extract_to` is escape-guarded via `planRuntimeDownload`.
-  3. **Probe correctness:** resolves on the child's `close` (not `exit` — a truncated-stdout
-     race could yield a false-empty device list); `createCachedGpuProbe` gained `invalidate()`;
-     the rung-1 probe runs **concurrently** with the server start (no serial 10 s stall on a
-     cold cache, smaller crash-mislabel window).
-  4. **"Try GPU again" is a dedicated IPC (`gpu:try-again`)**: clears the flags AND invalidates
-     the session probe cache AND re-probes + persists — a plain settings write kept a stale
-     "no GPU" probe cached for the whole session. Diagnostics hides the button when the
-     Settings toggle is OFF (it would silently do nothing) and points at Settings instead;
-     "Run benchmark" now refreshes the Acceleration line.
-  5. **`gpuProbe` persistence is per-session**, not benchmark-only: `maybeRunFirstBenchmark`
-     refreshes it in the background even when a benchmark exists (a drive moved between
-     machines kept showing the previous machine's GPU; pre-GPU workspaces never got one).
-  6. **`looksIntegrated` broadened** for real driver strings: RADV APUs ("AMD Radeon Graphics
-     (RADV REMBRANDT)"), Windows APU names ("AMD Radeon(TM) 780M Graphics"), Meteor-Lake
-     "Intel(R) Arc(TM) Graphics" — discrete Arc "A###"-series still bumps. Fixture-tested.
-  7. Small: `gpuMode` is enum-guarded in `updateSettings`; `fetch-runtime.ps1` is pure ASCII
-     again; stale "(CPU) default" docstrings fixed.
+  ① fetch-runtime upgrade bug (HIGH): re-fetching over an existing install never re-flattened
+  the nested tarballs (old root binary survived under a fresh vulkan marker) — both scripts now
+  pre-clean the extract dir (everything except the fresh archive + `cpu/`); ② sell gate
+  hardened: binary required (not just a marker), backend verified natively, `extract_to`
+  escape-guarded; ③ probe correctness: resolve on the child's `close` (not `exit`),
+  `invalidate()` added, probe runs concurrently with the rung-1 start; ④ "Try GPU again" became
+  a dedicated `gpu:try-again` IPC (clears flags AND invalidates AND re-probes; hidden while the
+  Settings toggle is OFF); ⑤ `gpuProbe` refreshed once per session, not benchmark-only (a drive
+  moved between machines kept the old GPU); ⑥ `looksIntegrated` broadened for real driver
+  strings (RADV APUs, "AMD Radeon(TM) 780M", Meteor-Lake "Intel(R) Arc(TM) Graphics" — discrete
+  Arc "A###" still bumps); ⑦ small: `gpuMode` enum-guarded, `fetch-runtime.ps1` pure ASCII,
+  stale docstrings fixed.
 - **Post-MVP UX polish round (2026-06-10)** — four user-reported issues, all behind existing
   contracts (tests in `chat-ipc`, `core-model-ipc`, `models`, `tests/renderer/ChatHomeNav`):
   1. **Conversation deletion:** `deleteConversation` (`chat:deleteConversation`) removes a
@@ -790,1322 +541,96 @@ Repo root: `f:\_coding\ai_drive`.
   wave-1 design record — implemented §5–§8 shrunk to as-built records (sub-anchors §5.5/§6.5/
   §7.1/§8.1 kept), wave-2 outlines §9–§10 + decisions table §13 kept verbatim; full original:
   `git show 2a46ca3:docs/post-mvp-functionality-plan.md`.
-- **Phase 17 — RAG trust & document-scoped asking (2026-06-10, plan
-  [`docs/post-mvp-functionality-plan.md`](docs/post-mvp-functionality-plan.md) §5; design
-  record in `docs/rag-design.md` §10):**
-  1. **"Ask selected documents" (spec §10.4):** `VectorIndexOptions.documentIds` scopes the
-     cosine scan (placeholder SQL, composes with the Phase-10 model-id filter); the scope
-     **persists on the conversation** (additive nullable `conversations.scope_json`, guarded
-     `ALTER TABLE` in `db.ts` — decision D2a; malformed JSON reads back null, never throws).
-     `createConversation` accepts it, `updateConversationScope` (`chat:updateScope`)
-     replaces/clears it, `askDocuments` reads it from the conversation (**deviation:** no
-     per-call `documentIds` arg — redundant once persisted). UI: Documents-screen checkboxes
-     (indexed only) + "Ask these documents (N)" → Chat with removable scope chips; the
-     pending handoff applies to the next documents conversation created.
-  2. **Plain-chat document awareness (§5.1):** with ≥1 indexed document, plain Chat shows a
-     dismissible per-conversation notice + one-click "Ask Documents instead" (the wrong-tab
-     hallucination guard from the §9 drive test); mode tabs gained subtitles. Renderer-only.
-  3. **Vector-tag rule (LOCKED):** ingestion tags vectors with the id of the embedder that
-     ACTUALLY produced them (`embedder.id` fallback; `registerDocsIpc` no longer passes
-     `settings.activeEmbeddingModelId`). The old tag could stamp mock-produced vectors with
-     the E5 manifest id — invisible to mock-scoped search now, poisoning E5-scoped search
-     later. Tag and search scope must come from the same place. (Stronger fix than the
-     plan's "persist `activeEmbeddingModelId`"; plan §5.5 deviation 1.)
-  4. **`REINDEX_NEEDED_ANSWER` (§5.2):** when retrieval is empty AND `corpusNeedsReindex`
-     (indexed chunks exist but no document has vectors under the active embedder), the fixed
-     answer says "re-index", not "rephrase" — still never calls the model. Documents screen
-     gained **Re-index all** (sequential) next to the existing per-doc stale badge.
-  Tests: `tests/integration/rag-scope.test.ts` (incl. the pre-Phase-17 column migration) +
-  chat-ipc + renderer (ChatHomeNav, DocumentsScreen). Gate: typecheck clean, 499 tests, build
-  green.
-- **Phase 18 — in-app model downloader (2026-06-10, plan
-  [`docs/post-mvp-functionality-plan.md`](docs/post-mvp-functionality-plan.md) §6; the revived
-  plan §12.3):**
-  1. **D3 RESOLVED (a) — `DEFAULT_POLICY.network.allowModelDownloads` is now `true`:** with no
-     policy file, the spec §3.6 user Settings toggle ("Allow internet access for model
-     downloads…", **default OFF**) is the effective downloads gate. Update checks + telemetry
-     stay denied with no toggle. `prepare-drive` keeps writing `allow_model_downloads: false`
-     in BOTH postures, so prepared drives stay download-disabled unless the builder edits
-     `config/policy.json` — the "policy only restricts, never expands" rule is preserved
-     verbatim (the default is the ceiling when no file restricts it).
-  2. **Triple gate, enforced in MAIN (plan §6.1):** policy ceiling ∧ `settings.allowNetwork`
-     (locked workspace ⇒ treated as off) ∧ a per-download confirmation (size, license +
-     `license_url`, upstream URL, and an explicit license-acknowledgement checkbox when
-     `license_review.status != approved` — the in-app `--accept-license`). `downloadModel`
-     re-checks gates 1–2 on every call; the renderer dialog is UX, not enforcement. The Models
-     screen explains WHY downloads are unavailable (policy vs. Settings) via the existing
-     `PolicyStatus` distinction.
-  3. **`services/downloads.ts` `DownloadManager`** — a job state machine over the REUSED
-     `assets.ts` seams (`planModelDownloads` with a new optional `hashStore`, `downloadToFile`,
-     `verifyDownloadedFile`): bytes land in `<weightPath>.part`, renamed into place ONLY after
-     the hash verifies; a mismatch deletes the partial + fails the job; a placeholder expected
-     hash completes but flags the job `unverified` (checksum honesty, R5). Cancel keeps the
-     `.part`; the next start resumes via a `Range` header (206 appends, a 200 restarts cleanly
-     — `downloadToFile` only appends when the server actually honoured the Range). On success
-     the path's checksum-cache entry is invalidated. **One download at a time.** Jobs are
-     in-memory (the Phase-4 import-job precedent).
-  4. **`downloadToFile` seam extended (additive):** `DownloadDeps` gained `signal`, `headers`,
-     `append` (append iff 206), `onResponse({status, contentLength})`; it now returns
-     `{ status, received, contentLength }`. On a stream error the write side is `end()`ed (not
-     destroyed) so the received prefix flushes — it IS the resume prefix. Existing callers
-     (`fetchAndVerify`, scripts' planning) are unchanged.
-  5. **IPC = async-with-polling, no new event channels:** `downloadModel(modelId,
-     {licenseAccepted?})` → `DownloadJob`, `getDownloadJob(jobId)`, `cancelDownload(jobId)`
-     (`downloads:start/get/cancel`) in `ipc/registerDownloadIpc.ts`; production injects the
-     global `fetch`, tests inject a fake (CI stays zero-network — the gate tests prove a closed
-     gate never reaches the fetch seam). `ModelInfo` gained an optional `download`
-     (`ModelDownloadInfo { url, sizeBytes, licenseUrl, licenseApproved }`) so the renderer can
-     populate the confirmation without a fourth IPC.
-  6. **Offline guarantee unchanged:** no update checks, no catalog, no background anything; a
-     sanctioned download session is by definition not `offlineMode`, so the offline guard/CSP
-     posture stays as-is (accepted cosmetic edge in `known-limitations.md`: the startup-installed
-     detection-only tripwire logs a notice if the toggle is flipped and a download runs in the
-     same session).
-  Tests: `tests/integration/downloads.test.ts` (14) + `download-ipc.test.ts` (6) +
-  `tests/renderer/ModelsScreen.test.tsx` (6) + updated `policy.test.ts` for the new default.
-  Gate: typecheck clean, 525 tests, build green.
-- **Phase 19 — audit log on `runtime_events` (2026-06-10, plan
-  [`docs/post-mvp-functionality-plan.md`](docs/post-mvp-functionality-plan.md) §7, deviations
-  in §7.1; data class in `docs/security-model.md`):** the spec §8 table (created in Phase 1,
-  written by nothing) finally gets its writer — the first Office/Enterprise compliance
-  feature. **FOR THE USER, not telemetry**: lives in the workspace DB (encrypted at rest on
-  encrypted workspaces), local only, nothing uploads (spec §7.11). No schema change.
-  1. **`services/audit.ts`:** `recordEvent(db, type, message, metadata?)` **never throws**
-     (returns false on any failure); typed `AuditEventType` union in `shared/types.ts`
-     (runtime_started/stopped/crashed/fallback, model_selected/verified,
-     model_download_started/verified/failed, document_imported/reindexed/deleted,
-     conversation_deleted/exported, workspace_created/unlocked/locked/unlock_failed,
-     settings_changed, policy_warning, offline_guard_violation); `listAuditEvents`
-     (newest-first by `created_at DESC, rowid DESC`, `beforeId` cursor); **retention =
-     prune-on-insert to `AUDIT_MAX_ROWS` = 5 000** (decision D7 RESOLVED: fixed for wave 1).
-     `createAuditRecorder(getDb)` → optional **`AppContext.audit`** (`ctx.audit?.(…)`):
-     buffers events in memory (bounded 100) while `ctx.db` throws (locked vault) and flushes
-     them, original timestamps kept, on the next successful write — how
-     `workspace_unlock_failed` ever reaches the encrypted log.
-  2. **PRIVACY RULE (hard, sentinel-grep-tested):** rows carry ids, model ids, filenames,
-     counts — NEVER chat content, document text, or passwords. `conversation_exported`
-     records the id only (the export filename derives from the title = chat content);
-     `settings_changed` fires only for privacy-relevant keys (`allowNetwork`, `gpuMode`,
-     `developerMode`) and records those keys' post-validation values, never other settings'
-     values. `tests/integration/audit-ipc.test.ts` seeds sentinels through the wired
-     chat/docs/settings/password flows and greps every recorded row for absence.
-  3. **Wiring is shallow (IPC layer + main/index.ts, services stay pure):** registerCoreIpc
-     (settings_changed), registerModelIpc (model_selected/verified,
-     runtime_started/stopped — auto-start included via `startModelRuntime`), registerChatIpc
-     (conversation_deleted/exported), registerDocsIpc (document_imported/reindexed/deleted),
-     registerWorkspaceIpc (workspace_created/unlocked/locked/unlock_failed),
-     registerDownloadIpc → **injected `DownloadManagerDeps.audit` hook** (the manager's
-     background verify/fail outcomes reach the log without the service touching the DB;
-     placeholder-hash completion records NO "verified" — checksum honesty). `main/index.ts`:
-     runtime_fallback (`persistGpuFailure`), runtime_crashed (the §5.3 crash wrapper),
-     policy_warning (startup `loadPolicy` warnings, recorded post-ctx via the buffer),
-     offline_guard_violation (new optional `assertOfflinePosture.onViolation` hook).
-  4. **Surface:** Diagnostics **Activity** panel — on-demand load, client-side type filter,
-     "Show earlier activity" (`beforeId` paging), **Export to file…** (JSON via the
-     exportConversation save-dialog pattern). New IPC `getAuditEvents(limit, beforeId?)`
-     (`audit:list`) + `exportAuditLog()` (`audit:export`) in `ipc/registerAuditIpc.ts`;
-     preload exposes both. §11.4 copy ("A local record of what the app did…").
-  Tests: `tests/integration/audit.test.ts` (8: never-throws, paging/tie-break, D7 retention
-  at the real 5 000 ceiling, recorder buffering) + `audit-ipc.test.ts` (5: the sentinel
-  grep across all wired flows incl. a real fake-fetch download, locked→flush workspace
-  round-trip on a real encrypted vault, IPC paging, export/cancel) +
-  `tests/renderer/DiagnosticsActivity.test.tsx` (4). Gate: typecheck clean, 542 tests,
-  build green.
-- **Phase 20 — answer-depth modes Fast/Balanced/Deep (2026-06-10, plan
-  [`docs/post-mvp-functionality-plan.md`](docs/post-mvp-functionality-plan.md) §8, "as
-  implemented" in §8.1; mechanism doc in `docs/architecture.md`):** the dead
-  `ChatOptions.mode` plumbing and the manifest `supports_thinking_mode` flag are now live —
-  the spec §10.3 selector exists. The whole mechanism is request-side per-call state; nothing
-  about it persists to the DB (no schema change) and the MockRuntime ignores it.
-  1. **D5 RESOLVED (a) — per-request `chat_template_kwargs: { enable_thinking: <bool> }`,
-     verified against the PINNED llama.cpp b9585 SOURCE** (not docs): the server merges the
-     request kwarg over its CLI default and accepts JSON booleans
-     (`tools/server/server-common.cpp` L1074–1088); the kwarg only acts in the **jinja**
-     template path, and `use_jinja = true` is the b9585 server default (`common/common.h`
-     L609); default `--reasoning-format` is deepseek-style, which extracts thinking into
-     SEPARATE `delta.reasoning_content` streaming frames (`common/common.h` L612,
-     `tools/server/server-chat.cpp` L550–557). The Qwen3 `/think`·`/no_think` soft-switch
-     fallback is NOT needed and NOT used (it would leak into transcripts).
-     **Found while verifying: at b9585 `--reasoning auto` (default) turns thinking ON for
-     any capable template** (`server-context.cpp` L1237–1239) — all four bundled Qwen3
-     models were already thinking on every reply and our SSE parser silently DROPPED those
-     deltas (pure latency, no output; the gpu-smoke's `/no_think` workaround was the tell).
-     So `enable_thinking` is now ALWAYS sent explicitly — `false` unless deep.
-  2. **`CHAT_SERVER_ARGS` (LOCKED): every CHAT sidecar spawns with `--jinja
-     --reasoning-format deepseek`** (`llama.ts`, prepended before ladder extraArgs) — pins
-     the two preconditions of D5 in code instead of assuming upstream defaults. The E5
-     embedder composes `LlamaServer` directly and does NOT get these. Consequence: a
-     `PAID_LLAMA_BIN` override must point at a build new enough for both flags (the pinned
-     b9585 qualifies; so do all builds the drives ship).
-  3. **D4 RESOLVED — mode → request mapping (one place: `requestParamsForMode` in
-     `llama.ts`):** `fast` → thinking off + `temperature 0.7` + `max_tokens 1024`;
-     `balanced` AND omitted mode → thinking off, no sampling overrides (server/model
-     defaults — today's intended behavior, now explicit); `deep` → thinking ON +
-     `temperature 0.6` (Qwen3's documented thinking-mode sampling), uncapped. Explicit
-     `RuntimeChatOptions.maxTokens`/`temperature` always win over mode-derived values.
-     (The plan wanted release-matrix tok/s to inform this; the matrix hasn't run — values
-     come from Qwen3's model-card guidance and can be tuned when it lands.)
-  4. **Streaming contract untouched; ONE additive channel:** Deep-mode reasoning deltas go
-     out on **`chat:reasoning:<id>`** (preload `onReasoning`); `chat:token:<id>` still
-     carries answer tokens only. Inside the runtime, `RuntimeChatOptions` gained
-     `mode` + `onReasoning(delta)` — the chatStream generator still yields answer strings
-     only, so every existing consumer (RAG, benchmark tok/s) is unchanged.
-  5. **D6 enforced (strip everywhere):** new `stripThinkBlocks` (services/chat.ts) removes
-     `<think>…</think>` (and an unclosed trailing block from a mid-thought Stop) — applied
-     to assistant content BEFORE persisting (chat AND grounded paths; an all-think aborted
-     reply persists nothing, like the L2 zero-token stop) and to assistant turns replayed
-     as history (`buildChatMessages` + `buildGroundedChatMessages`; Qwen guidance: never
-     feed think blocks back). Normal Phase-20 output never contains inline tags (deepseek
-     format separates them) — the strip is defense-in-depth + legacy-row hygiene. The
-     collapsed live "Thinking…" `<details>` block on the streaming bubble is the ONLY place
-     reasoning is visible; it vanishes when the persisted reply replaces the live bubble.
-  6. **Deep is capability-gated by the manifest:** `supports_thinking_mode` is now parsed
-     into `ModelManifest.supportsThinkingMode` (optional boolean, default false, type-checked)
-     and the `getRuntimeStatus` handler enriches `RuntimeStatus.supportsThinkingMode` for the
-     RUNNING model (manifest reads only while running — the ChatScreen's not-running poll
-     stays I/O-free). The composer offers Deep only when true; a sticky Deep choice on a
-     model without support coerces to Balanced at send time. The four bundled Qwen3 chat
-     manifests are original hybrid-thinking releases — `true` is correct for all of them
-     (`model-policy.md` records the 2507-Instruct caveat).
-  7. **Renderer:** composer "Answer depth" pill row (chat mode only — `askDocuments` always
-     runs balanced this wave, plan §8), sticky per conversation for the session
-     (per-message over IPC, enum-guarded in the handler like `gpuMode`). The depth choice is
-     NOT persisted to the DB (accepted edge in `known-limitations.md`).
-  8. **Phase-19 interplay:** NO new audit events (a mode choice is chat-adjacent state;
-     recording it would add noise, and reasoning content could never be recorded anyway —
-     privacy rule). The sentinel-grep test surface is unchanged.
-  Tests (+30, all through existing harnesses — fake spawn/fetch, temp DBs, fake ipcMain):
-  `llama-runtime.test.ts` (D4 table, kwargs/sampling per mode, explicit-overrides-win,
-  reasoning→callback never→yield, CHAT_SERVER_ARGS + ladder-args composition),
-  `chat.test.ts` (stripThinkBlocks cases; persist-strip; only-thinking persists nothing;
-  history scrub assistant-only; mode/onReasoning forwarding), `rag.test.ts` (grounded
-  answers send NO mode; grounded persist-strip; grounded history scrub), `chat-ipc.test.ts`
-  (reasoning channel separation end-to-end, junk-mode enum guard), `manifest.test.ts`
-  (supports_thinking_mode parse/default/type-error), `core-model-ipc.test.ts`
-  (RuntimeStatus enrichment running/stopped), `tests/renderer/ChatDepth.test.tsx` (6: Deep
-  gating, selector hidden in documents mode, depth sent + balanced default, per-conversation
-  stickiness, collapsed-block live rendering + disappearance after persist). NEW manual
-  harness `tests/manual/thinking-smoke.test.ts` (`PAID_THINKING_SMOKE=<drive root>`,
-  gpu-smoke pattern): real b9585 + real Qwen3 — deep streams separate reasoning + clean
-  answer, balanced streams zero reasoning deltas. CI stays zero-network/zero-model.
-  Gate: typecheck clean, 572 tests, build green.
-- **Phase 21 — retrieval quality: reranker + hybrid keyword search (2026-06-10, the first
-  wave-2 phase; working paper [`docs/retrieval-quality-plan.md`](docs/retrieval-quality-plan.md)
-  with decisions D8–D15; design record `docs/rag-design.md` §11):** research-gated like the GPU
-  plan — all three gates resolved BEFORE design (plan §1):
-  **R1** the b9585 `llama-server` rerank endpoint verified from the pinned tag's SOURCE
-  (`/v1/rerank` + 3 aliases, server.cpp L201–204; `--rerank` = embedding mode + RANK pooling,
-  arg.cpp L2964–2971; request `{query, documents, top_n?}` → Jina `results:[{index,
-  relevance_score}]` sorted desc, mapped back by `index`; `relevance_score` is an UNBOUNDED
-  logit, never a cosine). **R2** FTS5 present in BOTH runtimes (Electron 37.10.3 / Node 22.21.1
-  probed INSIDE Electron + system Node 24.13.0; SQLite 3.50.4, `ENABLE_FTS5`) → hybrid is GO,
-  zero new deps. **R3** the `D:\` test drive was NOT attached ⇒ `ragMinSimilarity` stays 0;
-  the measurement is a pending manual item (§5).
-  1. **Reranker model (D8): `bge-reranker-v2-m3` F16** (Apache-2.0 base verified via HF API;
-     GGUF `gpustack/bge-reranker-v2-m3-GGUF`, 1 159 776 896 B; **F16 because q8_0 XLM-R quants
-     crash b9585** — the §9 E5 lesson; Qwen3-Reranker-0.6B rejected: no official GGUF). New
-     manifest `model-manifests/reranker/bge-reranker-v2-m3.yaml` (the spec-§3.3 reserved role
-     finally used): download block + approved license_review + placeholder sha256 (promote on
-     first real fetch); `bundled_on_preconfigured_drive: false` (~1.3 GB RSS — opt-in add-on).
-     The Phase-18 in-app downloader covers it with zero new code.
-  2. **`services/reranker/` (D9):** `Reranker` interface + `LlamaReranker` — the THIRD
-     `LlamaServer` composition (E5 pattern): `--rerank --device none` (CPU pin), lazy start,
-     word-truncated inputs (query ≤ 160 / doc ≤ 320), `/v1/rerank`, one-hit-per-input
-     validation. **Failed-start latch** (a broken GGUF fails fast per session, no 60 s health
-     stall per question); a query-time failure logs + keeps the fused order.
-     `createSelectedReranker` → real iff binary + weights, else **null — deliberately NO mock**
-     (a mock would invent an ordering); null ⇒ retrieval byte-identical to pre-Phase-21
-     (ordering AND scores — tested). Wired: optional `AppContext.reranker`, `registerRagIpc` →
-     `generateGroundedAnswer` opts, stop on `will-quit`.
-  3. **Hybrid FTS5 search (D13):** guarded additive migration in `db.ts` (scope_json
-     precedent) creates `chunks_fts` = `fts5(text, chunk_id UNINDEXED)` — self-contained, NOT
-     external-content on chunks' implicit rowid (VACUUM renumbering foot-gun) — plus THREE
-     triggers (insert/delete/update-of-text: ingest/reindex/delete can never miss the sync) and
-     a one-time backfill (pre-Phase-21 workspaces become keyword-searchable on first open).
-     `rag/hybrid.ts`: sanitized MATCH queries (quoted phrase tokens OR-ed, cap 32 — FTS5
-     operators in user text never reach MATCH), `bm25()` ranking, **RRF fusion k=60**
-     (rank-based; cosine and BM25 scales never mix). **Embedder-visibility rule:** keyword hits
-     require a vector under the ACTIVE embedder ⇒ hybrid never sees more than vector search
-     could; `REINDEX_NEEDED_ANSWER` semantics intact (tested incl. a lexically-matching
-     invisible corpus). The grounding guard is UNCHANGED — empty retrieval never calls the model.
-  4. **`retrieve()` pipeline (D11/D12):** vector topKInitial → cosine `minSimilarity` floor
-     (PRE-fusion/PRE-rerank — D12; rerank logits never meet the floor) → keyword topKInitial →
-     RRF fuse → chunk join → **rerank between fusion and dedup** (D11; topKInitial does NOT
-     rise — CPU latency is linear in candidates) → dedup → budget → labels.
-     `RetrievedChunk.score` is now stage-dependent (cosine / RRF / rerank logit — documented);
-     citations still never persist scores. **No new AppSettings keys, no UI surface (D14** —
-     availability-driven, the embedder precedent); ANN explicitly NOT built (D15).
-  5. **Found + fixed while wiring:** `lockWorkspace` stopped the E5 embedder via `stop()`,
-     whose latch is PERMANENT — every post-lock/unlock embed failed with "Embedder is stopped".
-     New optional `Embedder.suspend()`/`Reranker.suspend()` (teardown WITHOUT the latch) is what
-     the lock path calls now; `stop()` stays permanent for `will-quit` (orphan protection).
-  6. **Real-drive verification (2026-06-10, `PAID_RERANK_SMOKE` on `D:\`) — DONE, and it
-     caught a real bug.** Fetched the F16 GGUF to the drive, captured + promoted the real
-     sha256 (`5df93be1…f0e41b88`) into the manifest (both top-level + `download.sha256`). The
-     smoke test then surfaced a **deviation from R1's source read**: in `--rerank`/embedding
-     mode b9585 **forces `n_batch = n_ubatch` and defaults them to 512** ("embeddings enabled
-     with n_batch (2048) > n_ubatch (512) … setting n_batch = n_ubatch = 512"). A rerank input
-     is query+document in ONE sequence (~670 tokens at the §7 word caps), so the 512 default
-     made the server **HTTP-500 the whole request** — which the query-time fallback would have
-     silently swallowed into the fused order on real-length chunks. **Fix:** the reranker now
-     passes `--batch-size`/`--ubatch-size` = the context (2048) so any in-context input decodes
-     in one ubatch (`services/reranker/llama.ts`; locked by a `reranker.test.ts` assertion). The
-     smoke test was also corrected to drive the FULL truncation budget with realistic
-     ~1-token-per-word text (the old `fillerNwordM` filler was ~5 tokens/word → unrealistic
-     latency AND it overflowed even the resized batch). **Re-run is green:** loads clean (no
-     q8_0 warmup crash), relevant +8.82 vs irrelevant −11.01, **worst-case 12-candidate batch
-     ≈ 24.7 s** on a CPU-pinned i7-1185G7 (the §7 number — ~2 s/candidate, so reranking visibly
-     lengthens a documents query on a low-end laptop; bounded by the candidate cap, opt-in by
-     provisioning). **`ragMinSimilarity` (R3/D12) also measured + resolved on the same drive
-     (`tests/manual/minsim-measure.test.ts`, `PAID_MINSIM_MEASURE`):** a 12-passage corpus with
-     12 relevant + 12 irrelevant queries through the exact production path shows the best-chunk
-     cosines OVERLAP (relevant 0.879–0.935 mean 0.903; irrelevant 0.866–0.907 mean 0.891) — E5
-     runs WITHOUT query:/passage: prefixes, so everything compresses into ~0.87–0.94 and no
-     positive floor separates the classes without dropping real hits. **Floor stays 0** (now
-     empirically confirmed, not deferred); relevance separation is the reranker's job. Both
-     Phase-21 manual items are DONE; no Phase-21 acceptance work remains.
-  Tests (+29 → 601): `reranker.test.ts` (10: spawn args incl. NO chat args + CPU pin, index
-  mapping, truncation, failed-start latch, stop/suspend, selector), `hybrid-search.test.ts`
-  (18: migration + backfill-once + trigger sync, MATCH sanitization, visibility + scope, RRF,
-  retrieve() e2e with a fake reranker — ordering applied / failure fallback / byte-identical
-  pass-through / both grounding-guard variants), e5 suspend, drive layout. NEW manual harness
-  `tests/manual/rerank-smoke.test.ts` (`PAID_RERANK_SMOKE=<drive root>`): real F16 load on
-  b9585 + relevance sanity + the §7 latency measurement. No new audit events (sentinel surface
-  unchanged). Gate: typecheck clean, 601 tests, build green.
-- **Phase 23 — UI design tokens + light/dark theming (2026-06-10, plan
-  [`docs/ui-ux-redesign-plan.md`](docs/ui-ux-redesign-plan.md) Phase 23; design source
-  [`docs/design-guidelines.md`](docs/design-guidelines.md) §4/§5/§9; built on branch
-  `ui-phase-23-tokens-theming`, since merged to master 2026-06-10):**
-  1. **`renderer/tokens.css` is the single styling source** (imported before `styles.css`):
-     the §4 ramps (neutral/accent/semantic, theme-constant), role tokens (`:root` = LIGHT —
-     the new default-resolving theme; `[data-theme="dark"]` overrides role tokens only —
-     today's palette lightly tuned per §4.3), type scale (size+line pairs), spacing, radii,
-     shadows, motion + `--ease`, offline system font stacks. Beyond the guidelines table,
-     three role aliases keep styles.css theme-blind: `--accent` (accent-600 light /
-     accent-500 dark — borders/icons/selected states), `--success`/`--error`/`--warning`
-     (the per-theme AA ramp steps), plus `--surface-hover` and `--code-bg` (light needs
-     tonal steps where dark used translucent black).
-  2. **`styles.css` fully on role tokens; the 8 legacy vars are gone.** AA fixes: filled
-     controls (`.btn.primary`, `.badge.running`, `.chat-conv-badge`) use **`--accent-600`
-     (#2f6fed, white text 4.55:1) in BOTH themes** — the old `#4f8cff` fill (3.22:1) is
-     banned as a fill and survives only as dark-theme accent/link/focus. Inputs moved to
-     `--border-strong` (§6).
-  3. **A11y baseline (§9):** global `:focus-visible` 2px `--focus` **outline** + 2px offset
-     (outline, not box-shadow — Windows High Contrast keeps it; the old `outline: none` on
-     inputs is gone), a `prefers-reduced-motion` kill-switch, `button { min-width/height:
-     24px }` + `.toggle { min-height: 24px }` (checkboxes stay 16px visually — the
-     clickable label supplies the ≥24px target).
-  4. **Theme plumbing (decision D-UI2 as planned):** additive `AppSettings.theme:
-     'system'|'light'|'dark'` (default `'system'`), enum-guarded in `updateSettings` like
-     `gpuMode`. `renderer/theme.ts` owns `data-theme` on `<html>`: `initTheme()` runs
-     before first render (OS theme via `matchMedia('(prefers-color-scheme: dark)')` + live
-     change listener; no matchMedia ⇒ light); `setThemeSetting()` is called by App.tsx when
-     settings load post-unlock (and re-checked alongside the policy fetch), by the Settings
-     screen on change, and with `'system'` on **Lock now** — the pre-unlock gate can't read
-     the (encrypted) settings, so it always follows the OS. The BrowserWindow pre-paint
-     `backgroundColor` now follows `nativeTheme.shouldUseDarkColors` (flash fix only; not
-     an IPC change).
-  5. **Settings → Appearance card:** System / Light / Dark button group (`aria-pressed`,
-     non-color-only selected state), applies immediately.
-  Tests (+7 → 608): settings-guard (junk `theme` never persisted, default `'system'`) in
-  `db-settings.test.ts`; `tests/renderer/Theme.test.tsx` (resolver, OS-follow + live flip,
-  explicit-choice-overrides-OS, Settings card persists + flips `data-theme`). Eyeballed
-  every screen + the gate + the lock flow in BOTH themes via a scripted Electron/Playwright
-  walk (screenshots reviewed; light badge/banner states checked). Gate: typecheck clean,
-  608 tests, build green.
-- **Phase 24 — UI shared component layer (2026-06-10, plan
-  [`docs/ui-ux-redesign-plan.md`](docs/ui-ux-redesign-plan.md) Phase 24; design source
-  [`docs/design-guidelines.md`](docs/design-guidelines.md) §6/§9; built on branch
-  `ui-phase-23-tokens-theming`, since merged to master 2026-06-10):**
-  1. **Radix primitives adopted (decision D-UI1 executed) — four RENDERER deps, pinned
-     exact:** `@radix-ui/react-dialog@1.1.16`, `@radix-ui/react-popover@1.1.16`,
-     `@radix-ui/react-dropdown-menu@2.1.17`, `@radix-ui/react-tooltip@1.2.9`.
-     **License/transitive review (2026-06-10):** the install added 42 lockfile packages
-     (Radix internals, `@floating-ui/*` positioning, the `react-remove-scroll` family,
-     `aria-hidden`, `get-nonce`, `detect-node-es`) — **every one MIT, pure JS, zero
-     install scripts, no native code, no runtime network**; Vite-bundled into the renderer
-     like `react-markdown` (NOT main-process/externalized). Phase 24 uses only Dialog;
-     popover/dropdown-menu/tooltip are staged for the Phase-25 chat restructure.
-  2. **New `renderer/components/` (guidelines §6 exactly):** `Button` (three levels —
-     primary/secondary/ghost, `type="button"` default, 36px md / ≥24px sm), `Badge`
-     (status pill, ALWAYS icon + word — never color-only), `Banner` (semantic left border
-     + icon + optional action/dismiss; `role="alert"` for errors, else `status`),
-     `Toast`/`ToastProvider`/`useToast` (single host in App.tsx; polite always-mounted
-     live region; 4 s auto-dismiss; **no-op default context** so provider-less unit
-     renders never crash), `Modal` + `ConfirmDialog` on Radix Dialog (focus trap, Esc,
-     **explicit focus-return via captured `document.activeElement`** — Radix's default
-     targets its own Trigger, which controlled dialogs don't render, so without this fix
-     focus fell to `<body>`; primary on the RIGHT; 480/640/760px widths),
-     `SegmentedControl` (hand-rolled radiogroup, roving tabindex, arrow/Home/End keys
-     move focus AND selection, wraps + skips disabled), `Switch` (real
-     `<input type="checkbox" role="switch">` under a styled track — native keyboard +
-     label association kept; track `--accent-600` when on), `Chip` (remove ✕ on
-     hover/focus only; also a button-form for example-prompt chips), `EmptyState`,
-     `Progress` (always-labelled bar; indeterminate without totals). All styled in
-     styles.css with Phase-23 tokens only (no new raw hex); old `.badge`/`.modal-backdrop`
-     CSS deleted (`.pill`/`.dialog-*` replace them).
-  3. **Non-chat screens migrated** (Home, Documents, Models, Settings, Privacy,
-     Diagnostics, WorkspaceGate + the App shell — ChatScreen untouched, Phase 25):
-     Settings' Phase-23 Appearance button group → `SegmentedControl`; the four binary
-     settings checkboxes + the gate's plaintext toggle → `Switch` (§6: switch for binary
-     settings; the Models license acknowledgement deliberately STAYS a checkbox —
-     consent ≠ setting); the **Documents Delete now goes through `ConfirmDialog`** (it
-     was an unconfirmed destructive action; the only browser `confirm()` lives in
-     ChatScreen and is Phase-25 scope); Documents preview + the Phase-18 download
-     confirmation → Radix `Modal`/`ConfirmDialog`; doc/model status spans → `Badge`
-     maps (icon + word per state); ad-hoc warn/error hints + the App-shell runtime
-     notice → `Banner`; Documents/Models zero states → `EmptyState` (the empty
-     Documents screen hides the top action row so the EmptyState button is THE
-     primary); download progress → `Progress`. "Saved" feedback → toasts: Settings
-     patches toast "Saved", Diagnostics' activity export toasts the saved path
-     (was a static hint line).
-  4. **Renderer-only, contracts untouched:** no IPC/schema/main-process changes; both
-     themes keep working via role tokens only (components never theme-check). One
-     stale-copy casualty: the Privacy screen's plaintext warning said encryption
-     "arrives in Phase 9" — rewritten minimally while converting to Banner (Phase 9
-     shipped long ago); the full §7 copy sweep stays Phase 27.
-  Tests (+12 → 620): `tests/renderer/Components.test.tsx` (ConfirmDialog focus trap +
-  primary-right + Esc/focus-return + confirmDisabled; SegmentedControl semantics/roving
-  tabindex/arrows/click; Toast live-region + 3–5 s auto-dismiss + provider-less no-op;
-  Switch keyboard + label toggling). Existing suites updated where the DOM changed,
-  assertions kept equal-or-stronger: gate plaintext toggle queried as `switch`, Documents
-  delete asserts dialog-confirm flow (+ a new cancel-path test), Theme tests query
-  `radio`/`aria-checked`, Diagnostics export asserts the toast text under ToastProvider.
-  Eyeballed via the scripted Playwright walk (memory recipe): gate create/unlock + all
-  seven screens in BOTH themes, preview + delete dialogs (light AND dark), Saved toast,
-  segmented control, switches, badge/banner/empty states on light especially. Gate:
-  typecheck clean, 620 tests, build green.
-- **Phase 25 — chat screen restructure (2026-06-10, plan
-  [`docs/ui-ux-redesign-plan.md`](docs/ui-ux-redesign-plan.md) Phase 25; design source
-  [`docs/design-guidelines.md`](docs/design-guidelines.md) §3 exactly (+§6/§9); built on
-  branch `ui-phase-23-tokens-theming`, since merged to master 2026-06-10). Renderer-only: the
-  `chat:*`/`rag:*` IPC, depth ids, and `chat:reasoning` mechanisms are untouched
-  underneath.**
-  1. **ChatScreen split into `renderer/chat/`:** `ConversationList` (collapsible second
-     column; date-grouped Today/Yesterday/Last 7 days/Earlier via the pure
-     `groupConversations()`; per-row hover/focus "⋯" Radix DropdownMenu — also opened by
-     right-click — whose Delete goes through `ConfirmDialog`, retiring the app's LAST
-     browser `confirm()` and the permanent per-row ✕ buttons; collapse state in
-     localStorage `paid.chat.listCollapsed` — a UI preference, deliberately NOT user
-     data, so it lives outside the encrypted workspace), `Transcript` (centered,
-     max-width 720px, `--text-md` body; owns autoscroll), `MessageActions` (hover/focus
-     row on assistant answers: ↺ Try again [last answer, chat mode only] · Copy · Save —
-     buttons stay focusable while CSS-hidden so keyboard focus reveals them),
-     `Composer` (auto-grow textarea capped at 220px, ONE Send/Stop button, Enter sends /
-     Shift+Enter newline, footer row), `SourcesDisclosure` ("▸ Sources (N)" inline
-     disclosure → name + page/section + snippet cards, replacing the always-open
-     SourcePanel), `DepthMenu`, `ScopePopover`.
-  2. **Header (guidelines §3):** SegmentedControl "Chat | Ask my documents" replaces the
-     mode tabs; a "⋯" overflow DropdownMenu holds **Save this conversation** (the old
-     Export); an empty `data-slot="local-indicator"` span marks where the Phase-27
-     ambient indicator lands. "Copied"/"Saved (path)" confirmations go through the
-     Phase-24 toast host — the old label-mutating Copy button and the `.chat-notice`
-     export line are gone; errors stay inline (`Banner tone="error"`, dismissible).
-  3. **Composer footer:** "Answer detail ▾" Radix DropdownMenu radio group labelled
-     **Quick · Balanced · Thorough per D-UI4 — ids stay `fast|balanced|deep`** in
-     code/IPC/persistence (no migration; tests assert label↔id mapping). Thorough hidden
-     without manifest thinking support; sticky-depth + coerce-to-balanced behavior
-     preserved. Documents mode instead shows **"📄 Using N documents ▾"** (Radix Popover):
-     scoped docs as Phase-24 Chips (✕ removes), "+ title" chips add from the indexed
-     corpus, "Use all documents" resets to null scope — replacing the permanent
-     scope-chip row; same `updateConversationScope`/pendingScope semantics underneath.
-  4. **Teaching empty state** (EmptyState + Chip): friendly line + 3 example-prompt chips
-     that fill the composer + an "Add documents to ask about them" nudge (via the
-     existing `onNavigate`) only when no indexed documents exist. The dismissible
-     plain-chat doc-awareness hint banner is **deleted** (its §5.1 job is now done by the
-     always-visible mode control + empty state — the Phase-17 wrong-tab guard rationale
-     is satisfied structurally).
-  5. **Streaming:** token + reasoning deltas now buffer in refs and flush on a 40 ms
-     timer (one re-render per flush, not per token — layout-thrash guard); the live
-     bubble's text is a `role="log"` polite ARIA live region; the "Thinking…" line is a
-     controlled `<details>` that the FIRST answer token auto-collapses (expand stays
-     one click; the Phase-20 never-persisted contract is unchanged — reasoning state
-     clears with the stream and history re-reads carry answers only). Stop remains a
-     real button (keyboard-reachable single Send/Stop swap).
-  Tests (+8 → 628; chat suites REWRITTEN against the new DOM, proofs kept equal-or-
-  stronger): `ChatHomeNav` (delete via ⋯ menu + ConfirmDialog confirm/cancel, markdown
-  trio, documents-mode entry, scope popover remove/add/reset/handoff/whole-corpus
-  label), `ChatDepth` (Thorough-gating, label↔id send, stickiness, Thinking collapse →
-  expand → auto-collapse → not persisted), new `ChatRestructure` (empty-state chips fill
-  composer, docs nudge, mode radiogroup, collapse persistence across remount via
-  localStorage, per-message Copy/Save/Try-again + toasts, header overflow save,
-  `groupConversations` buckets). `tests/setup.ts` gained jsdom-guarded ResizeObserver/
-  pointer-capture stubs for Radix's positioned primitives. Eyeballed via the scripted
-  Playwright walk in BOTH themes (24 scenes: teaching empty state, chip fill, streamed
-  answer with the Thinking line collapsed AND expanded — reasoning injected from the
-  main process on the real `chat:reasoning:<id>` channel since the mock runtime never
-  emits it, hover actions, Copied/Saved toasts incl. a patched save dialog, answer-detail
-  menu, row ⋯ menu + delete confirm, sources disclosure expanded, scope popover
-  all/scoped, collapsed list; walk gotcha recorded in project memory: Electron userData
-  localStorage persists across walk runs). Gate: typecheck clean, 628 tests, build green.
-- **Phase 26 — information architecture regroup (2026-06-10, plan
-  [`docs/ui-ux-redesign-plan.md`](docs/ui-ux-redesign-plan.md) Phase 26; design source
-  [`docs/design-guidelines.md`](docs/design-guidelines.md) §2 (+§6/§9); same branch
-  `ui-phase-23-tokens-theming`, since merged to master 2026-06-10). Renderer-only; no IPC/schema/main-process
-  changes and no new deps (the Settings tabs reuse the hand-rolled SegmentedControl —
-  Radix Tabs was deliberately NOT added).**
-  1. **Nav 7 → 5 (`App.tsx`):** top group Home · Chat · Documents · **AI Model** (renamed
-     from "Models"; internal `ScreenId` stays `'models'` so existing
-     `onNavigate('models')` callers are untouched) + a separated bottom utility group
-     holding Settings. Privacy and Diagnostics are no longer destinations. Navigation
-     resolution is the pure, unit-tested `renderer/navigation.ts`
-     `resolveNavTarget()`: virtual targets `'settings:privacy'`/`'settings:diagnostics'`
-     pick the Settings tab, and the **legacy `'privacy'`/`'diagnostics'` targets stay
-     working as aliases**; unknown targets fail safe to Home. Entry points re-pointed:
-     the sidebar offline badge → `settings:privacy`; the App-shell `runtime:notice`
-     banner gained a "Details" action → `settings:diagnostics`; ChatScreen's no-model
-     empty state keeps target `'models'` (label now "Open AI Model").
-  2. **SettingsScreen is tabbed:** General (all previous settings cards, unchanged
-     behavior) / **Privacy & data** (absorbs the former `PrivacyScreen` verbatim —
-     §18.1 offline statement, network state, data paths, logs-local, workspace
-     protection) / **Diagnostics (advanced)** (absorbs the former `DiagnosticsScreen`,
-     visually quieter — h1 dropped, lead demoted to a hint — but still the home of ALL
-     technical detail: Acceleration + "Try GPU again", runtime-build line, benchmark,
-     Activity panel + export, log tail). Tab components live in
-     `renderer/screens/settings/{PrivacyTab,DiagnosticsTab}.tsx`; the old screen files
-     are deleted. The open tab is owned by `App.tsx` (controlled prop) so navigation can
-     land on a tab from anywhere; standalone renders fall back to internal state.
-  3. **Home = readiness hub (D-UI3 re-evaluated → RESOLVED: Home STAYS):** three
-     readiness rows (Workspace protection · AI model running/loading/none-selected with
-     remediation buttons · indexed-document count with an Add-documents nudge), ONE
-     primary "Start chatting", quiet preflight warnings (existing
-     `runPreflight`/`getAppStatus`/`getRuntimeStatus`/`listDocuments` IPC only — no new
-     channels; the model row polls `getRuntimeStatus` every 2.5 s, the ChatScreen
-     precedent, so auto-start flips it to Running by itself). **D-UI3 rationale** (also
-     in the plan's decisions table): Home does NOT duplicate the Chat empty state —
-     Chat teaches *what to ask*, Home answers *is the system ready* and carries the
-     warnings/remediation that must not sit on the conversation canvas (guidelines §3).
-  4. **Models → "AI Model" (guidelines §2 singular mental model):** the active model
-     leads under "Your AI model" with a plain-language size/speed hint
-     (`plainHint()`: small-and-quick / balanced / large tiers; embeddings = "prepares
-     your documents"), the rest are the picker ("Other models" / "Choose your AI
-     model"); checksums, quantization-bearing model ids, paths, RAM/context numbers,
-     and the **Verify checksum** action moved into a per-card native
-     `<details class="tech-details">` **"Technical details" disclosure, closed by
-     default**. Select/Start/Stop/mock-start/RAM-gate/download flows are byte-identical
-     underneath (same IPC calls, same gate copy).
-  Tests (+16 → 644, vitest from `apps/desktop`; suites re-pointed at the new IA without
-  weakening proofs): `GpuSurface` + `DiagnosticsActivity` now render
-  `<SettingsScreen tab="diagnostics" />` (same Try-GPU-again/Activity assertions),
-  `ChatHomeNav`'s Home block rewritten for the readiness hub (start-chatting /
-  ask-documents / choose-a-model / no-docs-nudge routes + running/loading/none states +
-  preflight banner), `ModelsScreen` gained the disclosure-closed-by-default +
-  active-model-first tests, and the new `InformationArchitecture` suite covers the
-  `resolveNavTarget` table (incl. legacy aliases), the 5-item nav (and absence of
-  Privacy/Diagnostics items), the offline-badge → Privacy-tab route, and tab switching
-  (controlled + uncontrolled). Eyeballed via the scripted Playwright walk in BOTH themes
-  (17 scenes: 5-item nav, Home with/without a running model — mock start/stop via the
-  real UI/IPC, all three Settings tabs, offline-badge route asserted on
-  `aria-checked`, AI Model disclosure closed/open). Docs: `user-guide.md` (nav
-  overview, Home, AI Model, GPU + Activity pointers now "Settings → Diagnostics
-  (advanced)", Privacy → "Settings → Privacy & data"), `architecture.md` (screen list +
-  PrivacyTab pointer). Gate: typecheck clean, 644 tests, build green.
-- **Phase 27 — microcopy, ambient trust signal, first-run (2026-06-10) — the UI polish
-  wave's LAST phase; the wave is COMPLETE** (same branch; plan condensed to the design
-  record [`docs/ui-ux-redesign-plan.md`](docs/ui-ux-redesign-plan.md) per the doc
-  lifecycle rule — full original = `git show d2ecf5a:docs/ui-ux-redesign-plan.md`).
-  Renderer-only EXCEPT user-facing main-process **string literals** (the one phase where
-  that was in scope; no logic/IPC/schema changes — one targeted exception below). As built:
-  1. **Copy sweep (guidelines §7):** main process — the stale "Models screen" no-model
-     errors in `registerChatIpc`/`registerRagIpc` → "No AI model is running. Open the AI
-     Model screen and start one first."; `NO_DOCUMENT_CONTEXT_ANSWER` reworded to the §7
-     row (it is PERSISTED into conversations — future answers only, old rows keep their
-     text); wrong-password → "That password didn't unlock your workspace. Check it and
-     try again."; `startModelRuntime` refusals lose the raw state code
-     (checksum_failed → "we couldn't verify its file… try downloading it again");
-     manifests-dir-missing + benchmark "Fast Mode" leftovers humanized. Renderer —
-     composer placeholder → "Message…" (§3 wireframe), Documents lead/status pills
-     (Waiting/Reading/Preparing/**Ready** — stage jargon gone), stale-embeddings banner,
-     "Chunks"→"Sections", ModelsScreen "Can't verify" badge + verify/loading copy,
-     "Embeddings" section → "Document search", PrivacyTab telemetry row → "Nothing
-     leaves this drive — there's no tracking to turn off." Error codes stay only in
-     Diagnostics. NEW `tests/unit/copy-tone.test.ts`: tone pins on the exported
-     constants + a source scan failing if stale phrases reappear in string literals.
-  2. **Ambient indicator (guidelines §7):** `renderer/components/LocalIndicator.tsx` —
-     the sidebar offline badge EVOLVED into the quiet "🔒 Local · Offline" signal
-     (neutral `--text-muted`, Radix **Tooltip** — the 4th D-UI1 primitive, now used);
-     hover/focus = "Everything stays on this drive. No internet connection is used.";
-     click = `navigate('settings:privacy')` (the Phase-26 route survives; the
-     InformationArchitecture badge-route test updated honestly, not deleted). Honest
-     variant when downloads are enabled: "Local · Downloads allowed" / "Downloads
-     allowed — chats and documents stay local." Two placements: sidebar (state passed
-     live by App, which re-checks the policy per screen change) and the chat header
-     (fills the Phase-25 `data-slot="local-indicator"` placeholder; self-fetching on
-     mount). "Disabled by policy" wording moved entirely to the Privacy & data tab.
-  3. **First-run (WorkspaceGate, CREATE path only — guidelines §2):** 3 full-window
-     steps, no nav rail. (1) Welcome/trust framing ("Everything stays on this drive. No
-     internet, no account, no tracking."); (2) Create password — show-password toggle,
-     **hand-rolled** advisory strength meter (`passwordStrength()`: length-weighted +
-     variety bonus, 4 segments + word, `role="status"`; a HINT — only the 8-char floor +
-     confirm match gate submission), the ONE honest "can't be recovered" line, paste +
-     password managers verified working (no onPaste interception; `autocomplete`
-     new-password/current-password — WCAG 3.3.8), plaintext-dev Switch unchanged;
-     (3) optional starter step that **only renders when no chat model is installed** —
-     the check runs AFTER create succeeds (listModels needs an unlocked workspace, D-UI2)
-     behind a skippable "Setting things up…" phase (first hash of a large GGUF can take
-     minutes); the step only ROUTES (Choose your AI model → `models`, Add documents →
-     `documents`, Skip → `chat`) so every download gate stays where it lives (policy ∧
-     setting ∧ per-download confirmation on the AI Model screen). `onUnlocked(state,
-     landOn?)` (renderer-only) lets App land on the picked screen; first-run ends on
-     Chat. The unlock path stays a single calm screen (+ Show toggle).
-  4. **WCAG 2.2 AA sweep (guidelines §9):** every role-token pairing contrast-computed
-     in BOTH themes. One real failure fixed — `--border-strong` (the ONLY input boundary
-     on light: input fill = card fill = white) was 2.54:1 light / 2.18:1 dark → now
-     `var(--n-500)` in both themes (4.77:1 / 3.65:1; ramp value, no new hex — the
-     guidelines §4.3 table values were below their own §9 rule). Windows High Contrast:
-     focus already outline-based; added `forced-colors: active` rules for the two
-     custom-drawn controls (Switch track/thumb, strength-meter segments) — words carry
-     the meaning regardless (1.4.1). Reduced-motion kill-switch verified via the walk.
-     Consciously-accepted items recorded in `known-limitations.md` §Accessibility
-     (hairline borders, fatal-screen raw error, 15px doc checkbox via the 2.5.8 spacing
-     exception).
-  5. **Bug found by the eyeball walk (the targeted main-process exception):** in the
-     production rollup bundle, a second tree-shaken copy of `workspace-vault`
-     (`WrongPasswordError2`) made the handler's `instanceof` check fail
-     nondeterministically per build → the friendly wrong-password message degraded to
-     "Could not open the workspace." in the BUILT app only (vitest runs unbundled and
-     can never catch it). `registerWorkspaceIpc` now also matches
-     `err.name === 'WrongPasswordError'`; the bundler quirk is recorded in
-     `known-limitations.md`.
-  Tests (+25 → 669, vitest from `apps/desktop`): `WorkspaceGate.test.tsx` rewritten for
-  the 3-step flow keeping every old proof (floor/match gating, create/unlock,
-  wrong-password, refusal-clears-fields, plaintext gating + create) and adding step
-  navigation/back, paste, show/hide, strength-never-blocks, installed-model skip,
-  starter-step routing, skip-to-chat, and check-failure-never-traps; new
-  `LocalIndicator.test.tsx` (both states, pure copy helpers, self-fetch flip, focus
-  tooltip, settings:privacy click) + `copy-tone.test.ts`; honest pin updates
-  (placeholder "Message…", "Ready" status, /No AI model is running/, /can't be
-  started/, "different search model", the badge-route test). GpuSurface's friendly-copy
-  pins stayed green untouched. Eyeballed via `walk-phase27.mjs` (22 scenes, BOTH themes:
-  all 3 first-run steps incl. weak/strong meter + Show, starter step, post-setup Chat
-  landing, indicator + tooltip in BOTH states by flipping allowNetwork under a
-  downloads-allowing policy, reduced-motion, lock → unlock → wrong-password → unlock).
-  Docs: `user-guide.md` (first-run §3 rewritten, indicator §4/§8, status labels),
-  `PRIVACY.md` (indicator wording), `troubleshooting.md`/`known-limitations.md`/
-  `benchmark.md`/`model-policy.md`/`packaging.md`/`security-model.md` ("AI Model
-  screen"). Gate: typecheck clean, 669 tests, build green.
-
-- **Phase 28 — model catalog wave 1 (manifest-only, plan D16/D17/D18/D22; manifests landed
-  2026-06-10):** four challenger manifests under `model-manifests/chat/`, **zero code changes**
-  (the existing validator covers every field; all four run clean through `validateManifest`).
-  Per **D17** all ship `recommended_profiles: []` (selectable, never auto-recommended — must earn
-  promotion via the Phase-29 benchmark) + `supports_thinking_mode: false` (instruct-only; Deep
-  behaves like Balanced) + `bundled_on_preconfigured_drive: false` + `sha256:
-  REPLACE_WITH_REAL_HASH` (promotion via `verify-models --generate` after first fetch).
-  Filenames/byte sizes verified against the HF tree API 2026-06-10; **exact** byte counts baked
-  into `download.size_bytes` (not round estimates):
-  1. `ministral3-8b-instruct-2512-q4` — official `mistralai/Ministral-3-8B-Instruct-2512-GGUF`
-     Q4_K_M, 5 198 911 904 B. TEXT-ONLY: the repo's BF16 mmproj vision file is deliberately not
-     referenced. License review names the `-2410` non-commercial name-twin trap (plan §3.3).
-  2. `granite-4.1-8b-q4` — official `ibm-granite/granite-4.1-8b-GGUF` Q4_K_M, 5 347 914 400 B
-     (repo name has no `-instruct`; it IS the instruct model).
-  3. `gemma4-12b-it-qat-q4` — official `google/gemma-4-12B-it-qat-q4_0-gguf` vendor QAT **Q4_0**,
-     6 975 877 728 B (file name is lower-case `gemma-4-12b-…`); RAM mirrors the 14B (16/32)
-     pending Phase-29 §5.2 memory runs.
-  4. `qwen3-4b-instruct-2507-q4` (**D18 executed**) — the Qwen org publishes **no official 2507
-     GGUF** (HF API checked 2026-06-10), so the plan-§4.4 fallback applies: pinned to the
-     established quantizer **unsloth** (`unsloth/Qwen3-4B-Instruct-2507-GGUF` Q4_K_M,
-     2 497 281 120 B, card tag apache-2.0, the most-used 2507 GGUF source) — a third-party
-     requant of apache-2.0 weights, recorded as such in the license review. The original
-     `qwen3-4b-instruct-q4` manifest is untouched and stays the default.
-  **D22 license reviews:** all four land `approved` with notes citing the plan-§3 source URLs,
-  redistribution status, attribution obligation, and quantization provenance. `license_url`
-  deviation: only the Qwen 2507 base repo publishes a LICENSE blob; the three vendor GGUF repos
-  declare apache-2.0 via the HF card tag only, so their `license_url` points at the canonical
-  Apache-2.0 text (card URLs recorded in the review notes). Docs: `model-policy.md` catalog
-  table + README catalog gained the challengers ("challenger — not auto-recommended"); plan
-  §4.6 records the as-implemented deviations. Gate: typecheck clean, 669/669 tests (the
-  committed-manifests discovery test covers the new files), build green. REMAINING for phase
-  close: fetch the four weights (~20 GB — user go-ahead required), promote real hashes, run the
-  §4.3 per-model bring-up.
-
-- **Phase 29 — benchmark protocol + tooling (plan D19/D20; tooling + eval data landed
-  2026-06-10, the multi-machine RUNS are pending):** the judge-free quality benchmark is built
-  and CI-covered; the actual ranking runs happen on real hardware (dev box + the i7-1185G7
-  Iris-Xe laptop) and are NOT part of the green gate. Pieces:
-  1. **Deterministic scorer = a dependency-free module** `apps/desktop/tests/eval/score.ts`
-     (NO db/runtime/rag imports → its unit test runs in CI without a model or `node:sqlite`):
-     German-aware normalization (NFC + lowercase + strip punctuation, **umlauts/ß KEPT** — folding
-     them would hide the D18 German-quality delta), containment-EM + token-F1 over multiple
-     accepted gold spans, a curated DE/EN refusal-phrase **abstention heuristic** (the no-context
-     sentinel is caught by "couldn t find"), and an aggregate split by language (`em_rate_de` vs
-     `em_rate_en`). 24 CI tests (`score.test.ts`). No cloud judge (hard rule).
-  2. **The harness runs the REAL RAG path** (`tests/manual/model-eval.test.ts`, env-gated on
-     `PAID_MODEL_EVAL` like the other manual smokes): corpus embedded **once** with E5 + reranked
-     once (so retrieval is identical across chat models → every delta is the chat model following
-     the grounded prompt), each `models/chat/*.gguf` answers all 100 items via
-     `generateGroundedAnswer` at `temperature 0`. Writes `eval/results/<machine>-<backend>-
-     quality.csv` (QA columns) + a per-item audit JSONL (every raw answer, since abstention is
-     heuristic).
-  3. **Eval data = ours → license-clean** (`eval/build.mjs` is the authoring source of truth;
-     `eval/corpus_de_en.jsonl` + `eval/rag_de_en.jsonl` are GENERATED + self-validated — every
-     answerable gold span must be present in its `gold_doc` or the build fails). 100 items:
-     **60 DE / 40 EN**, 40 parallel DE/EN pairs (the language-gap anchor) + 20 German-only
-     civic/everyday, **15 unanswerable** (gold = abstain). 60 passages across 16 docs (office +
-     civic/everyday), with deliberate distractors.
-  4. **Placement decision:** repo-root `eval/` holds DATA + RESULTS only (per plan); the scoring
-     CODE + its test live under `apps/desktop/tests/eval/` so vitest (`include: tests/**`) covers
-     it. Speed (`llama-bench`) + peak-RSS (`scripts/measure-peak-rss.ps1`, mirrors the real chat
-     server args) stay a documented manual protocol (D20 — doc-first, minimal automation).
-  5. **Protocol doc** `docs/model-benchmarks.md` (offline, Wi-Fi off; combined CSV schema;
-     the §5.4 decision rule incl. D18 default-model question + the Gemma `supports_thinking_mode`
-     flip). Gate: 697/697 tests (+28), no `src/` change → build/typecheck surface unchanged.
-  6. **FIRST QA RUN done (2026-06-11, i7-1185G7 CPU, all 8 models + a dev-box reproducibility
-     check; speed/RSS NOT yet run)** — results in `eval/results/` (`docs/model-benchmarks.md`
-     §6 has the analysis). Findings: (a) QA is reproducible bit-for-bit across machines (greedy)
-     ⇒ quality is machine-independent; (b) grounded EM **saturates at 95–98%, DE ≈ EN, for every
-     model** — accuracy does not separate the catalog; (c) `citation_correct_rate` is a **flat
-     0.9882 = a RETRIEVAL constant** (citations come from retrieval, not model `[Sn]`) ⇒ it can't
-     rank models, so the §5.4 citation clause is moot here; (d) the real discriminator is
-     **hallucination-resistance on the 15 unanswerable items** — audited genuine hallucinations:
-     ministral **0**, gemma4 1, qwen3-4b-2507 1, qwen3-30b 1, qwen3-8b 2, qwen3-14b 2,
-     **orig-4b (current default) 3**, granite 3; (e) **D18: 2507 ≥ the original 4B on EVERY axis**
-     (and the §4.6 "German wobble" did NOT recur on the grounded path — 2507 has the top German
-     F1), so promoting 2507 over the default is quality-supported pending speed/RAM. The
-     abstention detector was **hardened mid-analysis** (v1 overcounted hallucination ~2–3×;
-     audited the raw dumps, expanded `text.mjs` + tests, re-scored via `eval/rescore.mjs` with no
-     model re-run — `*-quality-rescored.csv` is authoritative). The Gemma flag is NOT informed by
-     this run (balanced/thinking-off).
-  7. **Speed + RSS measured (2026-06-11, i7-1185G7 CPU)** (`scripts/benchmark-speed.ps1` →
-     `eval/results/i7-1185G7-cpu.csv`; `eval/combine.mjs` joins QA+speed). Decode tg t/s: 4B
-     ~6.2-6.3, ministral 4.5 (fastest 8B), qwen3-8b 3.9, granite 4.3, gemma4 3.0, qwen3-14b 2.1
-     (slowest), 30B-A3B 4.7 (MoE). **Benchmark verdicts:** ministral = best 8B (0 hallucinations,
-     fastest); gemma4 beats qwen3-14b on every axis; qwen3-2507 beats orig-4b on every axis (D18);
-     granite lost its tier. **APPLIED (live):** `recommended_min_ram_gb` recalibrated from measured
-     peak RSS (8B 16→12, 12-14B 16→14; 4B held 8, 30B held 24 — MoE/mmap caveat); orig-4b stays the
-     bundled default (user decision — preserves Deep). Promotions made LIVE via the new
-     `recommendation_rank` field (item 8), NOT `recommended_profiles` (winners keep `[]` — the
-     prod picker is RAM-best-fit, not profile-based). **Licence correction:** the WHOLE catalog is
-     Apache-2.0 (Qwen3 too) — the challenger edge is quality+speed, not licence; comments fixed.
-  8. **Recommender made QUALITY-AWARE (the follow-up, done same session — user-approved).** The
-     production picker `recommendModelIdByRam` WAS quality-blind (largest `recommended_ram_gb` that
-     fits, tie-broken by disk size, ignoring `recommended_profiles`) — on a 16 GB box it picked
-     **granite** (the run's worst 8B). FIX: new optional manifest field **`recommendation_rank`**
-     (int, default 0; higher = preferred) is now the tiebreak in `recommendModelIdByRam`, after the
-     capacity fit and before disk size (default 0 ⇒ legacy behaviour unchanged). Ranks: Qwen3-4B=2
-     (default) > 2507=1; Ministral=2 (8B winner) > Qwen3-8B=1 > Granite=0; Gemma4=2 (12-14B winner)
-     > Qwen3-14B=1; 30B=0 (opt-in). Net: **≤12 GB→Qwen3-4B, 16-24 GB→Ministral, ≥32 GB→Gemma4**;
-     Granite/30B never auto-recommended. Wired through `shared/manifest.ts` (schema+parse) +
-     `services/models.ts`; covered by real-manifest picks in `benchmark.test.ts` + tiebreak unit
-     tests in `models.test.ts`. 701/701 tests, typecheck clean.
-  9. **Gemma thinking flag FLIPPED to `true` (2026-06-11, run #2)** — the thinking-quality check
-     (`tests/manual/gemma-thinking.test.ts`, i7) had Deep match Balanced **8/8** on reasoning items
-     (incl. the snail/bat-ball/syllogism traps) with coherent chain-of-thought, so Deep is safe to
-     offer; result in `eval/results/gemma-thinking-i7-1185G7.json`. Caveat: both modes hit 100% →
-     the small set shows Deep deliberates well + never regresses, not that it *strictly* helps.
-     Gemma 4 is now the only thinking-capable challenger; the composer offers "Thorough" for it.
-  PENDING to close: optionally the **devbox speed/RSS run** (formal ≥2-machine done-when — QA+RSS
-  are machine-independent and already reproduced, so this is completeness only); then **condense**
-  `model-catalog-expansion-plan.md` to a design record per the doc lifecycle rule.
-
-- **Phase 31 — conversation search + session-hardening rider (2026-06-11, the first wave-3
-  phase; plan §4 condensed to its design record):**
-  1. **Research gate R-S1 resolved GO before any feature code** (the two-runtime discipline):
-     FTS5 `snippet()`/`highlight()`/`bm25()` verified working in **Electron 37.10.3 main**
-     AND **system Node 24.13.0** (both SQLite 3.50.4) — the JS-truncation fallback was never
-     needed. Recorded in plan §14.
-  2. **`messages_fts` mirrors `chunks_fts` verbatim** (`ensureMessagesFts` in `db.ts`):
-     self-contained `fts5(content, message_id UNINDEXED)` (NOT external-content — VACUUM
-     renumbers implicit rowids), three sync triggers on `messages` (the update-of-content one
-     is defense-in-depth; nothing UPDATEs message content today), `sqlite_master`-guarded
-     migration + one-time backfill so a pre-Phase-31 workspace is searchable on first open.
-     Think blocks are stripped before persist (Phase 20 D6) ⇒ reasoning is never indexed.
-     The index lives inside the (possibly encrypted) DB ⇒ encrypted at rest for free; while
-     locked, the `db` getter throws ⇒ search simply unavailable pre-unlock.
-  3. **The MATCH sanitizer is now SHARED:** `buildFtsMatchQuery` lifted from `rag/hybrid.ts`
-     into `services/fts.ts`; hybrid re-exports it (Phase-21 imports unchanged; a test pins
-     same-function identity). One set of rules for what user text can reach FTS5 MATCH.
-  4. **`searchMessages(db, query, limit=40)`** (`services/chat.ts`): joins hits → messages →
-     conversations, ranks `ORDER BY bm25, created_at DESC, rowid DESC` (**D23: bm25 with
-     newest-first tie-break**), groups hits per conversation in best-hit order. Snippets via
-     FTS5 `snippet()` with control-character markers (`SEARCH_MARK_START/END` = U+0001/U+0002
-     in `shared/types.ts`) that the renderer splits into `<mark>` — match highlighting with
-     zero HTML parsing. IPC `chat:search` + preload `searchConversations` (request/response).
-  5. **Privacy rule held mechanically:** searches are reads — NO audit event, NO logging of
-     queries/snippets anywhere; a sentinel test drives the real IPC handler with a real audit
-     recorder wired and asserts `runtime_events` stays empty.
-  6. **UI:** search input atop `renderer/chat/ConversationList.tsx` (debounced 150 ms);
-     typing swaps the column to grouped results (title + up to 2 highlighted snippets),
-     clicking opens the conversation and clears the query, Esc restores the list, no-match
-     state uses §11.4 copy ("No matches yet — try a different word."). Message-level
-     scroll-to was skipped (allowed by the plan). Eyeballed in both themes via the Playwright
-     walk (`walk-phase31.mjs`, shots-p31) against the BUILT bundle.
-  7. **Session-hardening rider SHIPPED (plan §12 audit item):** `services/permissions.ts`
-     `installDenyAllPermissionHandler` — Electron default-GRANTS permission requests with no
-     handler, so a deny-by-default `session.setPermissionRequestHandler` (NO exceptions; the
-     scoped `media` allow arrives with Phase 37) is installed next to the CSP in
-     `main/index.ts`, dev and prod alike. Verified live in the walk:
-     `Notification.requestPermission()` → `denied`, `getUserMedia(audio)` →
-     `NotAllowedError`; `npm run dev` boots unaffected. Structural `PermissionSessionLike`
-     keeps the module electron-import-free (unit-tested with a fake session).
-  8. **Pre-existing typecheck break fixed in passing:** `tests/eval/score.ts` imports
-     `./text.mjs` which had no declarations (TS7016 on a clean master) — added
-     `tests/eval/text.d.mts`. Gate: typecheck clean, **720/720 tests pass** (+14 manual
-     skips), build green.
-
-- **Phase 32 — vault password change (2026-06-11; plan §5 condensed to its design record;
-  decision D24 implemented as resolved — envelope descriptor v2, migrate-on-first-change):**
-  1. **Descriptor v2 (envelope)** in `workspace-vault.ts`: a random 32-byte **data key**
-     (`generateDataKey` in `security/crypto.ts`) encrypts the DB file + every `<id><ext>.enc`
-     document sidecar; the password-derived key is only a **KEK** that wraps it (AES-256-GCM
-     `dataKey` blob in `config/workspace.json`, next to the verifier). **New vaults are
-     created v2** (their first change is already O(1)); **v1 vaults unlock unchanged forever**
-     (the existing `version` field + `deriveKey` per-algo dispatch were the hooks) and migrate
-     ONLY on their first password change — never on unlock. Unlock on v2 unwraps the data key
-     and zeroes the KEK; `UnlockedVault.key` is now "the file key" (v2 data key / v1 password
-     key) and everything downstream (`lock`, `documentCipher`) is unchanged.
-  2. **`changePassword(current, next)`** on `WorkspaceController` (IPC
-     `workspace:changePassword` + preload mirror, `WorkspaceActionResult` shape): UNLOCKED
-     only; verifies `current` against the existing verifier FIRST (wrong → the same
-     `WrongPasswordError` class as unlock; audited as `workspace_unlock_failed` — no new leak
-     channel); replaces the in-memory key in place — no re-lock. **v2 path = O(1)
-     `rewrapVaultKey`:** fresh salt + verifier + the same data key re-wrapped under
-     `DEFAULT_KDF`, one atomic descriptor replace (write `.tmp`, **fsync**, rename — fsync
-     added to `writeVaultDescriptor` since it is now a commit point). A legacy scrypt vault
-     thereby silently upgrades to argon2id. `changePassword(…, kdf?)` parameterizes the new
-     envelope so tests use cheap params; production callers always default.
-  3. **The one-time v1→v2 migration is a journaled two-phase swap composed from EXISTING
-     primitives** (`encryptFile` `.tmp`-then-rename, `shredFile`, the `shredStalePlaintext`
-     sweep): `stageRekey` (WAL-checkpoint the LIVE working DB → encrypt to
-     `paid.sqlite.enc.new`; decrypt→re-encrypt each sidecar to `<file>.enc.new`, transient
-     plaintexts named `*.rekey.tmp` so the startup sweep covers a crash; every `.new`
-     fsynced) → descriptor replace = the SINGLE commit point → `applyPendingRekey` (shred
-     old ciphertext — its key may be a compromised password's — rename `.new` in;
-     idempotent). `recoverPendingRekey` runs at startup AND before every unlock decrypt:
-     staged files + v1 descriptor ⇒ pre-commit crash ⇒ discard (old password + old files
-     win); + v2 descriptor ⇒ post-commit ⇒ roll forward (new wins). The in-memory key swaps
-     immediately AFTER commit, before the file swap, so a post-commit swap failure can never
-     make `lock()` re-encrypt under the retired key (a not-yet-swapped sidecar self-heals at
-     next startup — accepted edge in `known-limitations.md`).
-  4. **Import/re-index ↔ password-change race guard (documented choice):** the controller
-     counts document-work leases — `beginDocumentWork(): release` is held by the WHOLE
-     import job and by each re-index in `registerDocsIpc`; `changePassword` refuses while
-     any lease is open and `beginDocumentWork` refuses while a change runs (defensive — the
-     change is synchronous on the main thread today), both via `VaultBusyError` with §11.4
-     copy. Chat/RAG DB writes need no guard: the migration snapshots the checkpointed
-     working DB synchronously, and later writes simply re-encrypt at next lock under the
-     new key.
-  5. **Audit + privacy:** additive `AuditEventType` `workspace_password_changed` — recorded
-     on success only, id-free, content-free. The descriptor/`.enc` scan test now also proves
-     the **data key** (raw, base64, hex) never touches disk, alongside both passwords.
-  6. **UI:** Settings → General gains the "Change password" card — current + new + confirm,
-     gated by the same floor/match rules as first-run; the Phase-27 strength meter +
-     show-toggle + password field were EXTRACTED from `WorkspaceGate` into
-     `renderer/components/PasswordField.tsx` (gate re-exports `passwordStrength` for old
-     import sites); honest busy copy ("Securing your documents with the new password… can
-     take a few minutes"); **hidden entirely in `plaintext_dev`** (keyed off
-     `settings.workspaceMode`). `ENCRYPTED_DOC_SUFFIX`'s canonical home moved to
-     `workspace-vault.ts` (ingestion re-exports it) — no import cycle.
-  7. **Tests** (`tests/integration/password-change.test.ts` 18 tests + audit-ipc + renderer
-     `ChangePassword.test.tsx`; `createEncryptedVaultOnDisk(…, { legacyV1: true })` exists
-     solely to build migration fixtures): change-then-unlock-with-new on scrypt AND argon2id
-     v1 fixtures; old password rejected after change; wrong current rejected + audited in
-     the unlock-failure class; journal cut at stage/commit/mid-swap each recovers consistent
-     with documents decryptable; second change asserted O(1) (sidecar + DB `.enc`
-     byte-identical); busy-guard both directions; plaintext_dev hides the card. Gate:
-     typecheck clean, **744/744 tests pass** (+14 manual skips), build green. Eyeballed
-     against the BUILT bundle (`walk-phase32.mjs`, shots-p32): create encrypted → import a
-     real document → wrong-current error → change → success toast → lock → OLD password
-     rejected → unlock with NEW → the document still previews (sidecar decrypts).
-
-- **Phase 33 — document tasks foundation + one-click summary (2026-06-11; plan §6 condensed
-  to its design record; D25/D26 implemented as resolved; R-T1 probed + resolved):**
-  1. **`services/doctasks.ts` `DocTaskManager`** — the shared engine Phases 34–35 reuse: a
-     job state machine on the Phase-4/18 async-with-polling precedent
-     (`startDocTask({ kind, documentIds, params }) → { jobId }`, `getDocTask` →
-     `{ state, progress { stepsDone, stepsTotal }, error?, resultRef? }`,
-     `cancelDocTask(jobId?)` — **no jobId cancels the active task**). FIFO queue, one
-     runner, per-task `AbortController` (NEVER an entry in the per-conversation in-flight
-     map — fact §2.8: `stopGeneration` can't kill a task, a task can't block a
-     conversation). Unknown job ids report terminal so pollers stop. `translation`/`compare`
-     are accepted by the type/IPC shapes but refuse friendly until Phases 34/35. Deps are
-     injected (`getDb/getRuntime/isChatStreaming/getContextTokens/audit`); wired in
-     `main/index.ts` as optional `AppContext.docTasks`.
-  2. **D26 (strict one-at-a-time) enforced BOTH ways:** `startDocTask` refuses while a chat
-     answer streams (reads `inFlightStreams.size`); `chat:send` + `rag:ask` throw the
-     SHARED `DOC_TASK_BUSY_MESSAGE` (`shared/types.ts`) while a task is active, and the
-     chat error banner renders it with a working "Cancel document task" button. Tasks call
-     the ACTIVE runtime via the locked `chatStream` contract with explicit
-     `maxTokens`/`temperature` (0.3) — no depth modes; no runtime → friendly "start a model
-     first" refusal at start AND at dequeue (never an auto-start). Cancellation persists
-     nothing (chat keeps partials; tasks do not). Failures show §11.4 copy; raw reasons go
-     to the local log only.
-  3. **R-T1 RESOLVED (informational, probed on the real pinned b9585 + Qwen3-4B,
-     `tests/manual/server-concurrency-probe.test.ts` behind `PAID_CONCURRENCY_PROBE`):**
-     at our default spawn args a second `/v1/chat/completions` is served on a **PARALLEL
-     slot** (continuous batching) — B fired 1.5 s into A's stream got its first token
-     +212 ms later and finished while A still streamed. Not queued, not rejected ⇒ the
-     app-side D26 guard is the ONLY serialization (findings banked in plan §14).
-  4. **Summary algorithm (D25): budgeted two-level map-reduce over stored CHUNKS** (no
-     re-parse; ~80-token overlap repetition accepted). Input budget derived in WORDS with
-     an explicit words→tokens **1.3 safety factor** — `(max(1024, contextTokens) − 512
-     output − 300 prompt reserve) / 1.3` — so a budget-sized window provably fits the real
-     context (the chunker's whitespace estimate undercounts tokens). Greedy packing in
-     document order; an over-budget chunk is SPLIT, never truncated; map `maxTokens` =
-     `usableTokens / windowCount` so all partials provably fit the reduce input (+ a hard
-     word-truncate belt). **Ceiling = 12 map calls** (≈ ~50 pages at default context) →
-     `truncated` flag + honest UI copy. Outputs run through `stripThinkBlocks` (D6).
-  5. **Persistence:** additive `documents.summary_json` (`ensureColumn` precedent) holding
-     `{ text, modelId, createdAt, truncated }`; parsed into `DocumentInfo.summary`
-     (malformed JSON → null, never a broken listing); cleared FIRST by `reindexDocument`
-     (content may have changed — even a failed re-parse clears it); gone with delete.
-     **Deliberately NO `beginDocumentWork()` lease** — a summary only reads chunk rows and
-     writes one DB column, never `.enc` sidecars (stated in the code); instead
-     `registerDocsIpc` refuses re-index/delete of a task-busy document
-     (`docTasks.isDocumentBusy`) so a task can't persist a result over replaced chunks.
-  6. **Audit + privacy:** additive `document_task_completed` / `document_task_failed`
-     carrying `{ kind, documentId }` ONLY — summaries are CONTENT and live only in the
-     (possibly encrypted) DB. The audit sentinel test now seeds sentinel text through a
-     REAL summarized document (echo runtime ⇒ the summary provably contains it) and proves
-     `runtime_events` never does. Cancel records no event.
-  7. **IPC/UI:** `doctasks:start/get/cancel` + preload mirrors. Renderer watcher
-     `renderer/lib/doctasks.ts` lives at MODULE level (`useSyncExternalStore`) so a running
-     task's busy/progress survives navigating away and back. Documents rows get
-     "Summarize"/"Summarize again" with `Summarizing… (n/m)` + Cancel; re-index/delete
-     disabled for the busy row; on completion the preview auto-opens with the summary as a
-     collapsible section — "Generated by <model> · <date>" attribution, truncation banner,
-     Regenerate. New `renderer/lib/errors.ts` `friendlyIpcError` strips Electron's
-     "Error invoking remote method…" prefix in the Chat/Documents error banners (§11.4).
-  8. **Tests:** `unit/doctasks-windows.test.ts` (budget derivation, single-pass↔map-reduce
-     cutover at the exact word boundary, ceiling + truncated, split-not-truncate, reduce-fit
-     property) · `integration/doctasks.test.ts` (17: e2e single-pass with explicit-params
-     assertion, map-reduce + ceiling on real ingested chunk rows, queue serialization with
-     a max-concurrency-1 proof, cancel running/queued/no-arg, runtime absent at start AND
-     at dequeue, crashing model → friendly error + ids-only audit + raw reason kept out of
-     events, persistence lifecycle incl. malformed JSON) · `integration/doctasks-ipc.test.ts`
-     (handlers, both D26 guards incl. the refused chat message NOT being persisted,
-     busy-document guard, locked-workspace refusal) · the audit-ipc sentinel extension ·
-     `renderer/DocumentSummary.test.tsx` (8: polling flow with progress + auto-preview,
-     cancel, friendly failure, refusal banner, regenerate, truncation note, no-action for
-     unready docs, chat busy banner + cancel clears). Gate: typecheck clean, **798/798
-     tests pass** (+15 manual skips), build green. Eyeballed against the BUILT bundle
-     (`walk-phase33.mjs`, shots-p33): import → mock runtime → Summarize → busy/progress →
-     summary in preview (light+dark, attribution) → persists across navigation → chat
-     busy copy + cancel clears → re-index clears the summary → regenerate writes a fresh
-     one.
-
-- **Phase 34 — document translation workflow (2026-06-11; plan §7 condensed to its design
-  record; D27 implemented as resolved; new D36 resolved; R-T2 translation half probed +
-  resolved):**
-  1. **The `translation` kind on the Phase-33 engine** (`services/doctasks.ts`): kind
-     guard removed (only `compare` still refuses friendly), validation =
-     `params.targetLang: 'de' | 'en'` (closed v1 set — free-text language fields invite
-     silent quality failures) + exactly one indexed-with-chunks source document.
-     Queue/cancel/polling and both D26 guards came free from Phase 33. New REQUIRED
-     engine deps for materializing kinds: `getStoreDir` / `getIngestionDeps` /
-     `beginDocumentWork` (wired in `main/index.ts` from the workspace controller).
-  2. **D36 (translation input — the overlap answer): re-extract the parser's SEGMENTS
-     from the stored copy** via `extractDocumentPreview` (ordered, non-overlapping,
-     exact; encrypted copies decrypt to a `.parse*` transient and are shredded). Stored
-     chunks overlap by ~80 tokens — in-order chunk concatenation would DUPLICATE text at
-     every boundary (summary tolerated it per D25; a faithful translation cannot).
-     Overlap-trimming was rejected as heuristic where the re-parse is exact. Cost = one
-     re-parse, identical to the in-app preview. Regression test: 600 unique words in,
-     every word EXACTLY once out, original order proven.
-  3. **Window math from R-T2-MEASURED token weight:** usable = ctx − 300 reserve, split
-     input 1.3 tokens/word vs output **2.0 tokens/word**
-     (`TRANSLATION_OUTPUT_TOKENS_PER_WORD`) ⇒ at 4096 ctx: 1150-word windows,
-     `maxTokens` 2301. The smoke's FIRST run (half/half split, 1898 maxTokens) silently
-     TRUNCATED a near-budget German output mid-sentence (word ratio 0.67) — exactly the
-     failure class the research gate exists to catch; the re-run after the fix shows
-     19/19 sections, ratio 0.94. **No window ceiling, no reduce** — a faithful
-     translation may not cover "the beginning" only; windows map in document order at
-     temp 0.2 and concatenate.
-  4. **Retry-then-mark (R-T2 policy):** a failed/empty window is retried once, then
-     MARKED visibly (`failedWindowNotice`, §11.4 blockquote) with the ORIGINAL text kept
-     below — never silently dropped; only all-windows-failed fails the task. Aborts
-     always propagate (cancel never looks like a failed window).
-  5. **Materialize under the Phase-32 lease (the inverse of Phase 33's no-lease note):**
-     only after all windows (cancel persists NOTHING — last cancellation point is right
-     before the lease): attribution ("Machine-translated by <model> — may contain
-     errors.") + body → `<jobId>.parse.md` transient (crash-sweep-covered, shredded in
-     `finally`) → the NORMAL import path (`createQueuedDocument` with display title
-     "<original> (Deutsch|English).md" + `processDocument` with the real ingestion
-     deps) ⇒ chunked, embedded, searchable, citable, `.enc` automatically.
-     `beginDocumentWork()` wraps exactly this step (the long window loop never blocks a
-     password change); `VaultBusyError` passes through as friendly task failure. Failed
-     import deletes the half-born row (fully-succeeds-or-persists-nothing). The output
-     doc id is APPENDED to the task's `documentIds` at creation so `isDocumentBusy`
-     covers it before the import finishes (it is born outside `registerDocsIpc`'s
-     `processing` set).
-  6. **Provenance:** additive `documents.origin_json` (`ensureColumn`) holding
-     `{ translatedFrom, targetLang }` → `DocumentInfo.origin` (malformed JSON → null;
-     SURVIVES re-index — provenance, not sync; `setDocumentOrigin` also clears
-     `original_path`, the shredded transient). Staleness = accepted edge in
-     `known-limitations.md` (re-import/re-index of the source does not update a
-     translation; the user re-runs).
-  7. **Audit + export:** `document_task_completed/_failed` carry
-     `{ kind: 'translation', documentId: <SOURCE> }` (output id travels in `resultRef`);
-     the materialized doc gets a `document_imported` (filename + id only); new additive
-     `document_exported` (id only — never the user-chosen path). New `docs:export` IPC +
-     preload `exportDocument`: save-dialog export of a TEXT document's stored content
-     (`readStoredDocumentText` — decrypts `.enc` to a shredded transient; built for
-     materialized translations, refuses binary formats). Sentinel test extended: a
-     sentinel document is translated AND exported over real IPC; `runtime_events` never
-     contains it.
-  8. **UI:** row "Translate" → target-choice modal (German/English, honest
-     machine-translation note) → "Translating… (n/m)" + Cancel on the GENERALIZED
-     module-level watcher (`startTask(kind, documentId, params)` — one store for all
-     kinds, no second store); a done translation refreshes the list and reveals the new
-     document (summary keeps its auto-open-preview behavior); quiet "Translated from
-     <original>" line on the new doc's row AND preview (deleted source → "a removed
-     document"); Export button on materialized rows.
-  9. **R-T2 (translation half) RESOLVED** on the real pinned b9585 + Qwen3-4B
-     (`tests/manual/translation-smoke.test.ts`, `PAID_TRANSLATION_SMOKE`, dev-box root
-     `F:\paid-gpu-smoke-drive`, the SHIPPING prompts): zero refusals/chatter; zero
-     language drift on a near-budget EN→DE input; full Markdown survival (h1/h2/bullets/
-     table/bold/quote); embedded instructions translated, not obeyed; number VALUES/
-     names/codes kept while FORMATS localize (14.03.2026 → March 14, 2026 — accepted,
-     documented); German output ≈ 2 real tokens per source word (the sizing fact).
-     Findings + the first-run truncation catch banked in plan §14. The
-     comparison-format half stays open for Phase 35.
-  10. **Tests:** `unit/doctasks-windows.test.ts` extension (budget split, packing/order/
-     split-not-truncate, NO ceiling, fit property, templates incl. verbatim-numbers,
-     notice/attribution/title) · `integration/doctasks-translation.test.ts` (12, incl.
-     the D36 regression, lease-after-last-window proof, VaultBusy friendly, gated-
-     embedder busy-guard proof, encrypted-workspace e2e with only-`.enc`-on-disk) ·
-     audit-ipc sentinel extension · `renderer/DocumentTranslate.test.tsx` (7). Gate:
-     typecheck clean, **828/828 tests pass** (+16 manual skips), build green. Eyeballed
-     against the BUILT bundle (`walk-phase34.mjs`, shots-p34): import → mock runtime →
-     Translate→German (modal) → progress → "(Deutsch)" doc indexed with attribution +
-     provenance (light+dark) → preview → ask in chat (Sources disclosure) →
-     cancel-mid-translation leaves no output → Export writes a real attributed file
-     (main-process dialog patched via Playwright `app.evaluate`).
-
-- **Phase 35 — compare two documents (2026-06-11; plan §8 condensed to its design record;
-  D28 implemented as resolved; new D37 resolved; R-T2 comparison half probed FIRST +
-  resolved — R-T2 now fully closed):**
-  1. **Research gate first (the Phase-21/34 discipline):**
-     `tests/manual/compare-smoke.test.ts` (`PAID_COMPARE_SMOKE`, dev-box root `D:\`, real
-     pinned b9585 + Qwen3-4B-instruct-q4, the SHIPPING prompts at temp 0.3, TWO rounds).
-     Round 1: format held perfectly (all four dictated `##` headings verbatim + once,
-     clean bullets, zero refusals/chatter, no truncation at the 512 cap, German body
-     with facts exact) but caught TWO real issues — only-in-one facts cross-listed
-     under "What differs", and the matched-pair map step silently OMITTED an only-in-A
-     fact (the silent-omission class the gate exists for). Round-2 prompt fixes
-     shipped: an exactly-ONE-section instruction (fixed reduce placement; mode (a)
-     still cross-lists one-sided clauses — accurate-but-redundant, accepted +
-     documented) and a "check every fact in the section of A" recall instruction
-     (fixed the omission — all planted facts present). The smaller per-pair bullet
-     format (plan §8's flag) is CONFIRMED necessary and held at a 256-token map cap.
-     Findings banked in plan §14; `COMPARE_OUTPUT_TOKENS = 512` and temp 0.3 confirmed.
-  2. **The `compare` kind on the Phase-33 engine:** the last kind guard fell away;
-     validation = exactly TWO DISTINCT indexed-with-chunks sources
-     (`TASK_COMPARE_PICK_TWO_MESSAGE`). Queue/cancel/polling, both D26 guards, and
-     `isDocumentBusy` (now covering both sources + the output doc) came free.
-  3. **Auto mode-switch by token math (D28):** per-call input budget =
-     `(max(1024, ctx) − 512 − 300) / 1.3` words. Fits ⇒ **mode (a)**: ONE
-     structured-comparison call over both full texts. Else **mode (b)**: doc A's chunks
-     pack into half-budget windows (over-budget chunks split, pieces KEEP the chunk id),
-     each window's doc-B neighbors retrieved via the EXISTING `VectorIndex`
-     (`embeddingModelId` + `documentIds: [docB]` scopes; STORED vectors only — top-3 per
-     A-chunk, best-first fill of the other half-budget, presented in doc-B order;
-     deterministic, proven byte-identical across runs) → smaller per-pair map calls →
-     one reduce into the four-section report. Ceiling 12 (D25 rationale) → honest
-     `compareTruncationNotice` INSIDE the report; map output caps sized so all notes
-     provably fit the reduce input.
-  4. **D37 (mode-(a) input + the mode decision): re-extracted parser SEGMENTS** (the
-     D36 path) — chunk overlap would read as phantom "shared" content to a comparison
-     AND inflates a chunk-based length estimate ~16% (enough to mis-route the mode
-     switch). Mode (b)'s map deliberately uses stored CHUNKS (vectors needed; notes
-     tolerate overlap — D25 precedent). Regression test: every source word exactly once
-     in the mode-(a) prompt.
-  5. **Embedder-visibility guard (the plan-§8 audit finding):** before ANY model call,
-     mode (b) verifies both documents have vectors under the ACTIVE embedder id; a
-     stale/vectorless document fails friendly with the Phase-17-style
-     `TASK_COMPARE_REINDEX_MESSAGE` — never a silently empty pairing. Mode (a) needs no
-     vectors and skips the guard (tested both ways).
-  6. **Materialize via the Phase-34 path unchanged** (attribution "Machine-generated
-     comparison by <model> — may contain errors." + optional truncation notice + report
-     → `<jobId>.parse.md` transient → normal import under the Phase-32 lease, held
-     around exactly that step) ⇒ "Comparison: <A> vs <B>.md", searchable/citable/
-     exportable/`.enc`; failed import deletes the half-born row; cancel persists
-     nothing. **Provenance:** `DocumentOrigin` became a DISCRIMINATED UNION (additive:
-     Phase-34 rows persisted without `type` parse as `'translation'`); compare rows
-     persist `{ type: 'compare', comparedFrom: [a, b] }` → `DocumentInfo.origin`.
-  7. **Audit:** `document_task_completed/_failed` carry
-     `{ kind: 'compare', documentId, documentIdB }` (ids only, additive) +
-     `document_imported` for the report. The audit-ipc sentinel test gained a compare
-     leg: two sentinel-bearing documents compared over real IPC, the exported report
-     carries BOTH sentinels, `runtime_events` never does.
-  8. **UI:** "Compare (2)" appears on the Phase-17 multi-select at EXACTLY two
-     selections (selection cleared on start); the module-level watcher generalized to
-     `documentIds` (`startTask(kind, oneOrTwoIds, params)`) so BOTH source rows show
-     "Comparing… (n/m)" + Cancel and re-index/delete stay disabled on both; completion
-     auto-opens the new report's preview; provenance line "Comparison of <A> and <B>"
-     on row + preview (deleted source → "a removed document"); Export on the report.
-  9. **Tests:** `unit/doctasks-windows.test.ts` extension (compare budget formula +
-     floor, mode boundary, window packing/order/ids, split-keeps-id, ceiling+truncated,
-     reduce-fit property, pair budget, all templates incl. the round-2 smoke fixes) ·
-     `integration/doctasks-compare.test.ts` (10: validation, mode-(a) e2e with the D37
-     exactly-once regression + provenance + ids-only audit, no-vectors mode (a), the
-     mode-switch boundary, mode-(b) pairing shape + determinism, ceiling + notice,
-     staleEmbeddings guard both variants failing BEFORE any model call,
-     cancel-persists-nothing, lease after-the-calls) · `doctasks-ipc.test.ts` extension
-     (compare e2e over real handlers, both-rows busy guard, two-distinct refusal) ·
-     audit-ipc compare leg · `renderer/DocumentCompare.test.tsx` (6). Gate: typecheck
-     clean, **860/860 tests pass** (+17 manual skips), build green. Eyeballed against
-     the BUILT bundle (`walk-phase35.mjs`, shots-p35, WALK PASSED): import two docs →
-     mock runtime → select two → Compare (2) → "Comparing…"+Cancel on BOTH rows →
-     report preview auto-opens with provenance → report row with Export.
-
-- **Phase 36 — audio transcription as document ingestion (2026-06-11; plan §9 condensed
-  to its design record; D34 + D35 resolved; research gates R-W1..R-W4 ALL resolved
-  FIRST):**
-  1. **Research gates first (the Phase-21/34/35 discipline), all four on REAL artifacts
-     before any feature code** — findings banked in plan §14. **R-W1:** pinned
-     **whisper.cpp v1.8.6** (2026-06-02) from the real release assets: prebuilt
-     binaries for WINDOWS ONLY (`whisper-bin-x64.zip`, real sha256 from a fresh
-     download; contents nest under `Release/` with BOTH whisper-cli.exe and
-     whisper-server.exe + ggml DLLs); no mac/linux CLI assets ⇒ documented source-build
-     story; MIT verified at the tag; `-oj` JSON shape (`transcription[].offsets` in ms)
-     verified ⇒ **D34 = per-file CLI** (no per-OS server-ship advantage; progressive
-     progress; no giant loopback uploads; cancel = kill the child). **R-W2:** real-file
-     decode probes — wav/mp3/flac/ogg all decode (ogg an upside surprise); **m4a fails
-     with EXIT 0** and stderr-only complaints (the trap this gate existed for) ⇒ the
-     transcriber's success signal is "the JSON exists and parses", never the exit code;
-     m4a descoped with convert-to copy. **R-W3:** base vs small on TTS-known-text +
-     real LibriVox German — base (RTF ≈ 0.2) makes meaning-destroying errors
-     ("Leichenwagen"→"gleichen Wagen", "Töchter"→"Teuchter"); small (RTF ≈ 0.45, 466 MB)
-     fixes nearly all ⇒ **small ships** (`whisper-small-multilingual`, real hash; base's
-     hash banked in plan §14). **R-W4:** a real 52-min German mp3 through small on the
-     CPU: 2123 s wall (RTF ≈ 0.68), peak WS 1155 MB, 616 segments, `-pp` ticks every
-     ~5% ⇒ per-file "Transcribing… N%" shipped (not a single opaque state).
-  2. **Distribution (the second sidecar family, mirroring Phases 12/14):** additive
-     `whisper_cpp:` block in `runtime-sources.yaml`; `validateRuntimeSources` factored
-     into a per-family validator returning optional `whisper` (forward-compat
-     regression-tested: a yaml without the block parses exactly as before; duplicate
-     triples rejected PER family). `fetch-runtime.{ps1,sh}` gained
-     `--family llama_cpp|whisper_cpp` + **block-aware yaml parsing** (the flat parsers
-     would have leaked whisper builds into llama selections) + family binary names.
-     `drive.ts` `DRIVE_LAYOUT_DIRS` + `prepare-drive.{ps1,sh}` add `models/transcriber/`
-     + `runtime/whisper.cpp/<os>/`; `planRuntimeDownload` takes a `binaryBase`;
-     `assertCommercialDrive` takes an optional `whisperSources` pin (same binary+marker
-     gate for `whisper-cli`); `build-commercial-drive.{ps1,sh}` fetch the whisper family
-     + cross-check its marker natively (per-family version parsing). CPU-only builds.
-  3. **Weights = a normal manifest:** `model-manifests/transcriber/
-     whisper-small-multilingual.yaml` (`role: transcriber` — ADDITIVE `ModelRole`;
-     format `ggml`, runtime `whisper_cpp`; real sha256 + download block; MIT
-     license-review approved — records in `model-policy.md`). Phase-18 downloader +
-     fetch-models + verify-models cover it with ZERO new code (D14 verified, not
-     rebuilt); the AI Model screen lists it with a plain-language transcriber hint.
-  4. **`services/transcriber/`:** `Transcriber` interface
-     (`transcribe(filePath, { language?, onProgress?, workDir?, signal? }) →
-     TranscriptSegment[{ startMs, endMs, text }]`); `createSelectedTranscriber` = the
-     reranker D9 pattern (real iff binary + weights, else NULL, deliberately no mock);
-     `WhisperCliTranscriber` spawns the pinned CLI per file: `-oj` JSON to a
-     `<uuid>.parse-transcript.json` transient in the documents dir (CONTENT — shredded
-     in `finally`, crash-sweep-covered, never written next to the user's original),
-     `-pp` progress parsed from both streams, **error tail kept from STDERR ONLY**
-     (stdout carries the transcript — content must never ride an error into logs);
-     `suspend()` (lock) / `stop()` (will-quit) kill in-flight children — wired in
-     `registerWorkspaceIpc` + `main/index.ts` shutdown; `PAID_WHISPER_BIN` dev override.
-  5. **`AudioParser` + injection seam:** `DocumentParser.parse` gained an ADDITIVE
-     optional `ParseContext` second param (`{ transcriber?, onProgress?, workDir? }`)
-     fed from new `IngestionDeps.transcriber`/`onTranscribeProgress` (the embedder
-     precedent); text parsers ignore it. Whisper segments are PACKED into ~180-word
-     (hard cap 400) `ExtractedSegment`s labeled `"mm:ss–mm:ss"` (`h:mm:ss` over an
-     hour) — D29: the range rides the EXISTING `Citation.section`, zero citation-path
-     changes. The cap keeps every packed segment under the 500-token chunk window ⇒
-     **every audio chunk is one packed segment verbatim (no overlap)** ⇒
-     `extractDocumentPreview` reads AUDIO text from stored chunks (instant preview;
-     translate/compare re-extraction without re-transcription — the documented audio
-     exception to the re-parse rule). Absent transcriber ⇒ the FILE fails friendly
-     ("Audio import needs the transcription model — download it on the AI Model
-     screen") via the documents-table error path; decode failure ⇒ convert-to copy;
-     other failures ⇒ honest retry copy + technical reason in the local log.
-     `processDocument` now records the per-extension MIME (`audio/wav` vs the parser's
-     `audio/*` fallback; identical values for all text formats).
-  6. **D35 resolved (keep the copy) + riders:** stored audio rests `.enc` on encrypted
-     workspaces (e2e: only-`.enc`-on-disk; re-index decrypts to `.parse<ext>`, hands it
-     to the CLI, shreds it); **re-index = full re-transcription** (known-limitations);
-     `docs:importPreflight` (+ `summarizeImportPaths`) drives a renderer ConfirmDialog
-     when a picked selection carries >50 MB audio; "Transcribing… N%" on import AND
-     re-index via an in-memory progress map merged into `listDocuments`
-     (`DocumentInfo.transcriptionProgress` — no new IPC channel). No transcript cache
-     (only on evidence).
-  7. **UI:** Supported line advertises the four verified formats; picker filters get
-     them via `supportedExtensions()`; the `extracting` badge reads "Transcribing… N%"
-     for audio (text formats keep "Reading"); large-audio confirm with honest copy.
-     No new settings keys (availability-driven, D14).
-  8. **Audit:** the existing `document_imported` (filename + id only) covers audio; the
-     audit-ipc sentinel test gained an AUDIO leg (a fake-transcriber transcript
-     sentinel provably flows into chunks/preview and never into `runtime_events`).
-  9. **Tests (+51; total 910):** `unit/audio-parser.test.ts` (timestamps/labels,
-     packing incl. the 1-chunk-per-segment invariant + oversize split, registry/m4a
-     descope, friendly failure mapping, progress/workDir forwarding) ·
-     `unit/transcriber.test.ts` (selector matrix incl. never-a-mock, fake-spawn CLI:
-     args/JSON/transient-shred, progress, the exit-0 decode mode, hard exits,
-     suspend kills + stop latches) · `integration/audio-ingestion.test.ts` (7: D29
-     labels e2e, absent-transcriber friendly FILE failure with text imports untouched,
-     preview-from-chunks with a no-second-transcription proof, chunkless-preview
-     friendly error, re-index-is-re-transcription from the stored copy, encrypted
-     only-`.enc` e2e with the `.parse` transient handed to the transcriber, preflight
-     summary) · runtime-sources second family (parse/forward-compat/malformed-loud/
-     per-family dups/cross-family triple allowed + the committed v1.8.6 pin asserted) ·
-     assets whisper marker logic (binaryBase plan + version/backend skip matrix) ·
-     commercial-drive whisper gate (ok/missing-binary/stale-marker) + the
-     `fetch-whisper` step · renderer DocumentsScreen (formats line, Transcribing badge
-     vs Reading, confirm-gating: large-audio asks/cancel-imports-nothing/small-imports
-     -directly) · the audit sentinel audio leg. Manual:
-     `tests/manual/whisper-smoke.test.ts` behind `PAID_WHISPER_SMOKE` +
-     `PAID_WHISPER_AUDIO` (never-committed local audio; per-format decode legs, the
-     m4a expected-fail leg, the long-file progress leg). Gate: typecheck clean,
-     **910/910** (+23 manual skips), build green. Eyeballed against the BUILT bundle
-     (walk-phase36.mjs, shots-p36, real whisper-cli + ggml-small on a temp root):
-     import german wav → REAL transcription (~20 s) → Ready / `audio/wav` / Sections 1
-     → Preview shows the transcript under its "00:00–00:38" time label; a second
-     absent-transcriber root → the exact friendly failure banner on the row. (Walk
-     note: the first run's whisper child died ~4 s in — not reproducible after a
-     rebuild + fresh workspace, in plain Node, or in an Electron-main probe; most
-     plausibly Defender's first-execution screening of the freshly copied unsigned
-     exe. The new stderr-only failure log in `AudioParser` records the technical
-     reason if it ever recurs.)
-  10. **Same-day fix — the transcriber showed "Unsupported" on the AI Model screen
-      (user-reported):** `computeInstallState`'s Phase-2-era whitelist knew only
-      `llama_cpp`+`gguf`, so the `whisper_cpp`+`ggml` manifest computed `unsupported` —
-      which ALSO hid its in-app download (the offer requires state `missing`). Fixed as
-      a runtime↔format PAIR matrix (`llama_cpp→gguf`, `whisper_cpp→ggml`; mismatched
-      pairs stay unsupported). Closing it exposed a latent hazard now made unreachable:
-      every model card rendered Select/Start, and `selectModel`'s role-else-chat
-      fallback would have written a transcriber (or reranker — latent since Phase 21)
-      id into `activeModelId`, the CHAT slot. `selectModel` now refuses
-      non-chat/non-embeddings roles with friendly copy, and reranker/transcriber cards
-      replace Select/Start with an honest "used automatically" line (Download +
-      Verify checksum + Technical details stay). +6 tests (916 total): the support-pair
-      matrix, the selectModel refusal (slots untouched), and renderer cards for both
-      automatic roles. Eyeballed in the built app: Whisper card = "✓ Installed ·
-      Installed — used automatically. There is nothing to start."; reranker =
-      "Used automatically once installed — no setup needed." + Download.
-
-- **Phase 37 — voice dictation in the composer (2026-06-11; plan §10 condensed to its
-  design record; D30 implemented exactly as locked):**
-  1. **Renderer capture (D30, zero new deps):** `renderer/lib/dictation.ts` —
-     `getUserMedia({ audio: true })` → `MediaRecorder` (webm/opus) → decode + resample +
-     mono-downmix in ONE `OfflineAudioContext` render at **16 kHz** →
-     `renderer/lib/wav.ts` `encodeWavPcm16` (pure-JS RIFF/fmt/data header, clamped
-     asymmetric int16 mapping; unit round-tripped). Streaming ASR out of scope (D30).
-  2. **IPC `dictation:transcribe`** (+ preload `transcribeDictation`;
-     request/response, no new event channels): `ipc/registerDictationIpc.ts` writes
-     the bytes to `<uuid>.parse-dictation.wav` in the DOCUMENTS dir (the `.parse`
-     infix ⇒ `shredStalePlaintext` crash-sweep coverage), calls
-     `transcriber.transcribe(tempPath, { workDir: documentsDir })` so the CLI's own
-     transcript-JSON transient lands in the same swept dir, returns
-     whitespace-normalized joined text, **shreds the WAV in `finally`** (success and
-     failure — tested both ways). Guards: absent transcriber → friendly refusal
-     (backstop; the UI is hidden anyway); empty/non-byte payloads rejected before any
-     disk write; **64 MB cap** (≈35 min of 16 kHz mono PCM16) with import-the-file-
-     instead copy. Failures cross IPC as the fixed friendly copy ("Could not
-     transcribe that — try again."); the technical reason goes to the LOCAL log only
-     (transcriber error tails are stderr-only — the Phase-36 guarantee). **No audit
-     event** (dictation is content-adjacent, like search — plan §12).
-  3. **Permissions (the §12 audit item closed):** `services/permissions.ts` →
-     `installPermissionRequestHandler(session, { allowMicrophoneFor, onDeny })` —
-     still deny-by-default; grants ONLY `media` requests that are **audio-only**
-     (`mediaTypes` present and every entry `'audio'`; absent/empty = unverifiable =
-     denied) AND reference-equal to the app's own `mainWindow.webContents`. The unit
-     test drives the full scope matrix (other requester / video / audio+video / no
-     details / every other permission / grants-don't-log). ⚠️ Typing note: the
-     structural session slice types the handler's `details` as `unknown` — Electron's
-     non-media `details` union members share no properties with the media shape, so a
-     narrower structural type fails assignability against the real `Session`.
-  4. **Availability gating (D14 precedent, NO settings key):** additive
-     `AppStatus.dictationAvailable = ctx.transcriber != null` (`registerCoreIpc`);
-     ChatScreen reads it best-effort (failure → hidden) and passes it to the Composer —
-     without a transcriber there is no mic affordance at all.
-  5. **Composer UI:** `renderer/chat/DictationButton.tsx` — ghost mic beside Send
-     (inline SVG, no icon dep); click-to-start / click-to-stop with `aria-pressed`,
-     CSS pulse while recording (`prefers-reduced-motion` respected), spinner while
-     transcribing, disabled while an answer streams, unmount mid-recording cancels +
-     releases the mic; the OS mic indicator is the recording signal (no overlay).
-     Insert-at-cursor in `Composer.tsx`: prefers `document.execCommand('insertText')`
-     (joins the textarea's NATIVE undo stack; React onChange fires from the input
-     event) with a value-splice + caret-restore fallback (the jsdom path); space-pads
-     against neighbours; **never auto-sends** — the text always waits for review.
-     Errors surface through the screen's existing error Banner (`onDictationError` →
-     `setError`); an empty transcription gets its own no-speech notice. Capture is
-     injectable (`dictationCaptureImpl` — the spawnImpl precedent) for renderer tests.
-  6. **Tests (+21 net; total 931):** `unit/wav.test.ts` (header fields, sine
-     round-trip within quantization, clamping, empty file, bad rate) ·
-     `unit/permissions.test.ts` (the scope matrix) · `integration/dictation-ipc.test.ts`
-     (temp naming/dir/bytes fidelity, workDir steering, shred on success AND error,
-     friendly absent/empty/oversize refusals, raw CLI error never crosses IPC, no
-     audit, Buffer payload) · `renderer/Dictation.test.tsx` (ChatScreen gating both
-     ways, record → insert-at-caret with spacing + caret restore, never-send,
-     no-speech notice, IPC-prefix stripping, mic-blocked recovery, unmount releases
-     the mic). Manual: `tests/manual/dictation-smoke.test.ts` behind
-     `PAID_DICTATION_SMOKE` + `PAID_WHISPER_AUDIO` — real German WAV bytes through the
-     REAL whisper-cli via the real IPC handler (a real microphone is not headlessly
-     drivable; the renderer half needs a human in the built app). Gate: typecheck
-     clean, **931/931** (+24 manual skips), build green.
-
-- **Phase 38 — scanned-PDF / photo OCR (2026-06-11; plan §11 condensed to its design
-  record; CLOSES WAVE 3 — the working paper retired per the doc lifecycle rule):**
-  1. **Research gates FIRST, on real artifacts (the Phase-36 discipline; findings in
-     plan §14):** R-O1 — Electron 37's `utilityProcess` has NO OffscreenCanvas (nor any
-     DOM-ish global), killing D31 option (b); a hidden BrowserWindow renders an
-     image-only PDF at 300 DPI in ~350 ms with the pinned pdfjs LEGACY build; and
-     tesseract.js 7.0.0 **Node mode consumes image Buffers with NO canvas in BOTH
-     runtimes** (system Node 24 + Electron 37 main; confidence 95 on a generated German
-     office scan) ⇒ **D31 = the split design** (hidden window rasterizes; main
-     recognizes; photos never touch a renderer). R-O2 — Node mode loads worker + WASM
-     core from local node_modules; ONLY `langPath` (CDN default) and the CWD cache
-     phone out → both explicitly overridden; zero remote connect attempts proven under
-     a `net.Socket` watch; licenses tesseract.js / tesseract.js-core / traineddata all
-     Apache-2.0 (model-policy.md) ⇒ **D32 = the `ocr:` asset class on
-     runtime-sources.yaml** (plain verified files; drive carries only
-     `ocr/{deu,eng}.traineddata.gz`, ~4.1 MB). R-O3 — float `tessdata_best` CRASHES the
-     WASM core (`DotProductSSE` missing); `best_int` vs `fast` on a degraded ~82-DPI
-     German scan: 3 vs 7 misses of 104 words ⇒ **ship best_int** (sha256-pinned
-     `@tesseract.js-data/*@1.0.0` artifacts).
-  2. **Step 0 — detection (shipped with the phase, the Phase-17 trust fix):**
-     `PdfParser` fails a PDF with no text-bearing page (≥25 chars) with the EXACT
-     friendly notice; `DocumentInfo.scanDetected` is DERIVED from it (no schema
-     change); hybrids keep indexing their text pages. Fixtures synthesized
-     (`makeScanOnlyPdf`/`makeHybridPdf`, a real 1.1 kB JPEG inside handcrafted PDFs).
-  3. **The OCR service (`services/ocr/`):** `OcrEngine` seam (D9: factory returns the
-     real engine iff `ocr/*.traineddata.gz` exist, else null — NO mock);
-     `TesseractOcrEngine` (lazy warm worker, serialized recognitions, explicit
-     `langPath`/`gzip`/`cacheMethod:'none'`/asar-aware `workerPath`, OEM 1);
-     `rasterizer.ts` (hidden window per task, pull-based `OCR_RASTER` protocol —
-     recognition backpressures rendering, 60 s step timeout, destroy on cancel).
-     New renderer entry `ocr.html` + its own FIVE-channel sandboxed preload.
-  4. **The 'ocr' doc-task kind (D33 — never automatic):** validation = one PDF that is
-     scan-detected or already OCR'd; needs the engine, NOT the chat runtime (the D26
-     chat-streaming guard still holds); progress = pages + 1; rasterize → recognize
-     per page → persist `documents.ocr_json` (content → DB only; metadata as
-     `DocumentInfo.ocr`) → `reindexDocument` under the Phase-32 lease; the PdfParser
-     `ocrPages` hook yields one segment per page ⇒ **page citations unchanged**;
-     ocr_json SURVIVES re-index (preview/re-index reuse it; re-run overwrites); cancel
-     persists nothing. **Photos** (`.png/.jpg/.jpeg`): `ImageParser` OCRs on import
-     (engine via ParseContext — the transcriber-injection precedent); preview
-     re-recognizes (one image, cheap). `AppStatus.ocrAvailable` gates the UI.
-  5. **Distribution/UI:** `ocr:` block validated by `validateRuntimeSources`
-     (additive, forward-compatible), `fetch-runtime --family ocr` in BOTH script
-     families, `planOcrDownloads` (assets.ts), `assertCommercialDrive.ocrAssetsVerified`
-     + native gates in both build-commercial-drive scripts, `ocr/` in
-     `DRIVE_LAYOUT_DIRS`/prepare-drive/gitignore, `asarUnpack` for the two tesseract
-     packages. Documents UI: warning banner + "Make searchable (OCR)" (busy/cancel
-     states), needs-the-files hint when unavailable, photo mention in Supported,
-     preview "Text recognized on this drive (OCR)" line.
-  6. **Two implementation traps recorded for posterity:** a SANDBOXED preload must
-     bundle to ONE file (the multi-entry preload build split a shared chunk the
-     sandbox cannot `require` → the ocr preload hardcodes its channel literals,
-     contract-tested against `OCR_RASTER`); and the modern pdfjs v6 build calls
-     `Uint8Array.prototype.toHex` (an ES proposal absent from Electron 37's Chromium)
-     → the rasterizer uses the SAME legacy build as the PdfParser (plus a same-realm
-     copy of bytes crossing the contextBridge — pdf.js rejects cross-realm arrays).
-  7. **Verification:** +38 CI tests (zero-network: fake engine + fake rasterizer behind
-     the injection seams; detection fixtures; task integration incl. cancel/guards/
-     re-run/audit-ids-only; photo pipeline; citations e2e through the REAL retrieval
-     path; runtime-sources ocr validation; planOcrDownloads; the no-CDN sentinel over
-     src/; the preload channel contract). `PAID_OCR_SMOKE` manual harness PASSED on the
-     real assets (confidence 95, zero remote attempts; smoke drive provisioned:
-     `F:\paid-gpu-smoke-drive\ocr` + `ocr-smoke/` fixtures). Built-app eyeball
-     (walk-phase38) PASSED both legs — the real hidden-window → tesseract → re-ingest
-     pipeline read the generated German office scan (umlauts/ß exact, per-page
-     preview) and a photo imported straight to Ready. Gate: typecheck clean,
-     **968/968** (+25 manual skips), build green.
+- **Functionality wave 1 — Phases 17–20 (2026-06-10) — design record
+  [`docs/post-mvp-functionality-plan.md`](docs/post-mvp-functionality-plan.md):**
+  **Phase 17** RAG trust & document-scoped asking (record §5 + `docs/rag-design.md` §10 —
+  ask-selected-documents scope, plain-chat document-awareness notice, vector-tag fix,
+  reindex-needed answer). **Phase 18** in-app model downloader (record §6 — triple-gated:
+  policy ∧ default-off setting ∧ per-download confirmation; `.part` + verify-before-rename,
+  Range resume, async-with-polling IPC). **Phase 19** audit log on `runtime_events` (record
+  §7 + `docs/security-model.md` — never-throws recorder with locked-vault buffering, hard
+  privacy rule ids/filenames/counts never content (sentinel-grep-tested), 5 000-row
+  prune-on-insert, Diagnostics Activity panel + export). **Phase 20** answer-depth modes
+  (record §8 + `docs/architecture.md` — per-request `chat_template_kwargs.enable_thinking`,
+  the ADDITIVE `chat:reasoning:<id>` stream channel, reasoning stripped from persistence;
+  the `--reasoning auto` silent-delta research finding and the `CHAT_SERVER_ARGS` pin are
+  record §8.1/§12).
+- **Phase 21 — retrieval quality: reranker + hybrid keyword search (2026-06-10) — design
+  record [`docs/retrieval-quality-plan.md`](docs/retrieval-quality-plan.md) (decisions
+  D8–D15 + research facts, incl. the rerank-mode `n_ubatch=512` HTTP-500 trap and its
+  batch-size fix, §1.1) + `docs/rag-design.md` §11 (as built):** FTS5 keyword pass + RRF
+  fusion in `retrieve()`; optional CPU-pinned `bge-reranker-v2-m3` sidecar behind a
+  `Reranker` interface whose absent default keeps retrieval byte-identical. Real-hardware
+  smokes on `D:\` (i7-1185G7): F16 loads on b9585, relevance correct, worst-case
+  12-candidate batch ≈ 24.7 s CPU; `ragMinSimilarity` measured → stays 0 (plan §1.3 —
+  prefix-less E5 compresses all cosines into ~0.87–0.94, separation is the reranker's job);
+  the `PAID_RAG_QUALITY` end-to-end run validated the reranker rescuing the true clause
+  from #3-behind-distractors to #1 (the concrete justification for its ~25 s worst case).
+- **UI polish wave — Phases 23–27 (2026-06-10, branch `ui-phase-23-tokens-theming`, merged
+  to master same day) — durable reference [`docs/design-guidelines.md`](docs/design-guidelines.md)
+  (ADOPTED), rollout record + decisions D-UI1–4 + the eyeball-walk verification pattern in
+  its §11:** Phase 23 tokens + theming (additive `AppSettings.theme`; the gate always follows
+  the OS theme, D-UI2) · 24 shared component layer on four pinned, license-reviewed Radix
+  primitives (D-UI1) · 25 chat restructure per guidelines §3 (the wave's priority) · 26 IA
+  regroup nav 7→5 + Privacy/Diagnostics as Settings tabs (legacy `privacy`/`diagnostics` nav
+  aliases kept working; Home stays as the readiness hub, D-UI3) · 27 copy sweep + the
+  "Local · Offline" ambient indicator + the 3-step first-run create flow + the WCAG 2.2 AA
+  sweep (accepted items and the bundled-app `WrongPasswordError` instanceof/tree-shake quirk
+  are recorded in `docs/known-limitations.md`).
+- **Phases 28–29 — model catalog wave 1 + benchmark (2026-06-10/11) — design record
+  [`docs/model-catalog-expansion-plan.md`](docs/model-catalog-expansion-plan.md) (D16–D22) +
+  [`docs/model-benchmarks.md`](docs/model-benchmarks.md) (protocol, tooling, first-run
+  results) + `docs/model-policy.md` (catalog table, license reviews, recommendation):**
+  four Apache-2.0 challenger manifests landed with vendor-verified sources and real hashes
+  (all 10 catalog weights VERIFIED on `D:\`; bring-up smokes PASS on real b9585). The
+  judge-free benchmark (scorer `tests/eval/score.ts`, harness `tests/manual/model-eval.test.ts`,
+  100-item `eval/{corpus,rag}_de_en.jsonl`) ran on the i7-1185G7 for all 8 models (QA
+  reproduced bit-for-bit on the dev box). Applied live: `recommended_min_ram_gb` recalibrated
+  from measured peak RSS, the recommender made quality-aware via the new `recommendation_rank`
+  manifest field (≤12 GB → Qwen3-4B / 16 GB → Ministral / ≥32 GB → Gemma 4; Granite + 30B
+  never auto-recommended), Gemma's `supports_thinking_mode` flipped ON after its thinking
+  check. Headline discriminator: hallucination resistance on unanswerables (Ministral 0/15
+  best); grounded EM saturates (~96–98 %) — the D27 eval-hardening motivation. Only the
+  optional dev-box speed sweep remains (QA + RSS are machine-independent).
+- **Functionality wave 3 — Phases 31–38 (2026-06-11) — design record
+  [`docs/functionality-wave-3-plan.md`](docs/functionality-wave-3-plan.md) (per-phase
+  records §4–§11, decisions D23–D37 resolved in §13, research-gate findings banked in §14):**
+  **31** conversation search (`messages_fts` mirroring the D13 index shape, bm25 ranking,
+  `chat:search`, ConversationList search UI; + the deny-by-default
+  `setPermissionRequestHandler` session-hardening rider) · **32** vault password change
+  (descriptor v2 envelope with a wrapped data key — new vaults v2, O(1) re-wrap per change
+  with a free scrypt→argon2id upgrade, one-time journaled v1→v2 migration on first change
+  with crash-cut recovery tests, `workspace:changePassword` + Settings card, import↔change
+  race guard) · **33** document-task engine + one-click summary (`DocTaskManager` queue/
+  cancel/polling reused by 34–35; strict one-at-a-time vs chat both ways; budgeted map-reduce
+  summary in `documents.summary_json`; R-T1: b9585 serves concurrent requests on PARALLEL
+  slots — the app-side guard is the only serialization) · **34** translation (re-extracted
+  parser segments, never the overlapping chunks — D36; R-T2-measured window math, German out
+  ≈ 2.0 tok/word; retry-once-then-mark; materialized corpus document under the Phase-32
+  lease + `documents.origin_json` provenance; new `docs:export`) · **35** compare two
+  documents (auto mode-switch by token math — D37 segments for input AND decision;
+  section-matched mode pairs windows via the existing `VectorIndex`, deterministic, ceiling
+  12 with an honest in-report notice; embedder-visibility guard fails friendly before any
+  model call; two smoke rounds hardened the prompts against silent per-pair omission) ·
+  **36** audio transcription as ingestion (whisper.cpp **v1.8.6** as the SECOND sidecar
+  family — `whisper_cpp:` yaml block, `fetch-runtime --family`, commercial gates; the
+  `whisper-small-multilingual` manifest, `role: transcriber`, covered by the Phase-18
+  downloader with zero new code; `services/transcriber/` + `AudioParser` packing
+  time-labeled segments → `"mm:ss–mm:ss"` citations, 1 chunk = 1 segment; D35 = keep the
+  audio copy, re-index = re-transcription; the runtime↔format pair matrix in
+  `computeInstallState` and the `selectModel` non-chat-role refusal shipped with it) ·
+  **37** voice dictation (renderer MediaRecorder → 16 kHz mono WAV → `dictation:transcribe`
+  → transient `.parse-dictation.wav`, shredded in `finally` → insert-at-cursor, NEVER
+  auto-sent; the single scoped audio-only own-WebContents `media` permission allow;
+  availability-driven `AppStatus.dictationAvailable`) · **38** scanned-PDF / photo OCR
+  (R-O1 SPLIT design: hidden-window pdfjs-LEGACY rasterization behind a pull-based
+  `OCR_RASTER` protocol + MAIN-side tesseract.js **Node mode** on Buffers, pinned 7.0.0 +
+  `asarUnpack`; R-O3 → **best_int** traineddata (float `tessdata_best` crashes the WASM
+  core); step-0 scan detection with friendly copy; D33 "Make searchable (OCR)" task →
+  `documents.ocr_json` → re-ingest via the PdfParser `ocrPages` hook ⇒ page citations
+  unchanged; photos OCR on import; `ocr:` asset class + `fetch-runtime --family ocr` +
+  commercial gates; `AppStatus.ocrAvailable`). Wave close: **968/968 tests green** (+25
+  `PAID_*` manual skips), `PAID_OCR_SMOKE` + built-app eyeball walks PASSED on real assets.
 
 ---
 
@@ -2674,11 +1199,11 @@ CI are unaffected.
 
 ---
 
+
 ## 5. Next actions (do these next) — POST-MVP
 
-**Phases 0–16 are complete. The MVP is feature-complete, the DIY asset loader ships, the
-plug-and-play commercial drive is built + asserted, and GPU acceleration is in.** The remaining
-items are **MANUAL acceptance only** (R2/R5/R7 + the GPU hardware matrix). In rough priority:
+**Everything shipped is summarized in §1/§3 and detailed in the design records. What remains:
+manual release acceptance, one blocked phase (22), one drafted phase (30).** In rough priority:
 
 > **Definition of Done (MVP, spec §22 — folded in from the retired `docs/IMPLEMENTATION_PLAN.md`):**
 > app builds on ≥1 OS; architecture supports Win/macOS/Linux; local model chat works; local doc
@@ -2687,27 +1212,17 @@ items are **MANUAL acceptance only** (R2/R5/R7 + the GPU hardware matrix). In ro
 > cloud API; no model weights in git; README explains DIY; commercial drive layout documented.
 > All code-verifiable items are ✅; the demo items are the manual acceptance below.
 
-0. **GPU acceleration (Phases 14–16) — ✅ IMPLEMENTED 2026-06-10:** see
-   [`docs/gpu-support-plan.md`](docs/gpu-support-plan.md) (status flipped to IMPLEMENTED;
-   deviations noted in its §13). **Phase 14 (distribution)**: vulkan-first `runtime-sources.yaml`
-   (verified hashes), `<os>/cpu/` safety net, `.paid-runtime.json` install markers + marker-based
-   idempotency, validator dup-check, commercial-pipeline updates. **Phase 15 (runtime)**: `gpu.ts`
-   probe, the 4-rung start ladder, GPU settings keys, mid-generation crash auto-fallback, E5
-   pinned to CPU — smoke-tested for real on the dev box's RTX 3080 Ti
-   (`tests/manual/gpu-smoke.test.ts` with `PAID_GPU_SMOKE`: real GPU start + streamed completion).
-   **Phase 16 (surface)**: Settings toggle, Diagnostics Acceleration/runtime-build lines +
-   "Try GPU again", benchmark probe injection + conservative `classifyProfile` bump, friendly
-   copy + docs. **Remaining for the GPU feature = release acceptance only:** the manual
-   hardware matrix (item 1b below — the canonical list).
-1. **Commercial-drive manual acceptance (needs certs + a real USB run, R5/R7):** obtain the code-
-   signing certs (Windows OV/EV + Apple Developer ID), produce a **signed** Windows portable `.exe` +
-   a **signed & notarized** macOS `.app`, run `build-commercial-drive` end-to-end onto a real drive
-   (`-AppArtifact` the signed build), then do the spec §17 demo on a **fresh laptop with Wi-Fi off** +
-   the **second-laptop continuity** check (same encrypted workspace, different drive letter). The
-   `electron-builder.yml` hooks + the pipeline are wired; only the secrets + hardware are missing.
-   **GPU additions to this checklist:** a SmartScreen sanity re-check (the
-   Vulkan build adds one more unsigned DLL of the same class) and re-running `build-commercial-drive`
-   end-to-end with the two-build fetch.
+1. **Commercial-drive manual acceptance (needs certs + a real USB run, R5/R7):** obtain the
+   code-signing certs (Windows OV/EV + Apple Developer ID), produce a **signed** Windows
+   portable `.exe` + a **signed & notarized** macOS `.app`, run `build-commercial-drive`
+   end-to-end onto a real drive (`-AppArtifact` the signed build), then do the spec §17 demo on
+   a **fresh laptop with Wi-Fi off** + the **second-laptop continuity** check (same encrypted
+   workspace, different drive letter). The `electron-builder.yml` hooks + the pipeline are
+   wired; only the secrets + hardware are missing. **GPU additions:** a SmartScreen sanity
+   re-check (the Vulkan build adds one more unsigned DLL of the same class) and re-running
+   `build-commercial-drive` end-to-end with the two-build fetch. **Phase-38 addition:** a
+   packaged-app OCR smoke (worker_threads cannot read asar — the `asarUnpack`/workerPath
+   rewrite must be exercised in the built app).
 1b. **GPU manual hardware matrix (THIS list is canonical — release acceptance, cannot be CI'd):**
    ① Win11 + discrete NVIDIA (dev box RTX 3080 Ti — ✅ done via the Phase-15 smoke; capture tok/s
    for release notes) · ② Win + discrete AMD (Adrenalin) · ③ Win laptop, Intel Iris Xe only
@@ -2723,260 +1238,55 @@ items are **MANUAL acceptance only** (R2/R5/R7 + the GPU hardware matrix). In ro
    `build-commercial-drive` drive moved between machines ①↔④ (flags/probe re-evaluate per machine;
    encrypted workspace continuity). The fake-spawn unit tests cover the *logic*; this matrix covers
    the *drivers*. Both are required before the release checkbox ticks.
-2. **Manual acceptance (needs hardware/artifacts not in the repo, R2/R5):**
-   - Provision a real drive end-to-end: `prepare-drive -WithAssets -AcceptLicense` (now downloads +
-     verifies the weights + sidecar) → `verify-models -Generate` to capture the real hashes and promote
-     the manifest `REPLACE_WITH_REAL_HASH` placeholders → build the portable `.exe`
-     (`npm run package:win`; watch npm-workspace dep hoisting) → launch from the drive → spec §17 demo
-     with Wi-Fi off. The real GGUF download + the live run are the one manual step.
-3. **New functionality:** see
-   [`docs/post-mvp-functionality-plan.md`](docs/post-mvp-functionality-plan.md) — **wave 1
-   (Phases 17–20) toward the Office/Knowledge edition is COMPLETE**: 17 (RAG trust & scoped
-   asking), 18 (in-app model downloader), 19 (audit log, incl. the Phase-18
-   `model_download_*` events), 20 (Fast/Balanced/Deep answer-depth modes — D4/D5 resolved,
-   see §3). **Wave 2: Phase 21 (retrieval quality — reranker + hybrid FTS5 search) is DONE**
-   (§3 entry; [`docs/retrieval-quality-plan.md`](docs/retrieval-quality-plan.md) D8–D15);
-   Phase 22 (signed offline update bundles, plan §10) remains — blocked on its key-management
-   design doc. Manual-acceptance items from wave 1 (plan §11): **in-app model download incl. the
-   mid-download cancel → resume path — ✅ user-confirmed working in the live app 2026-06-10
-   (D:\)**; a quick Activity-panel eyeball on the same drive (events appear; export saves) —
-   STILL PENDING (the last live-UI item); **a real
-   Deep-mode answer with visible thinking from Qwen3 4B on the test drive**
-   (`tests/manual/thinking-smoke.test.ts` with `PAID_THINKING_SMOKE=<drive root>` covers the
-   mechanism — **✅ run 2026-06-10 on `D:\` (4B): deep streamed 1749 reasoning chars + a clean
-   answer with no `<think>` tags; balanced streamed zero reasoning deltas, both answers correct**;
-   **the in-app UI eyeball is now ✅ user-confirmed 2026-06-10: the collapsed Thinking… block
-   renders, and citations + the source panel work in the live app; the app was also confirmed
-   working fully offline with Wi-Fi OFF (the offline guarantee)**). **Phase 21 manual items — reranker smoke DONE
-   (2026-06-10):** fetched the GGUF to `D:\`, promoted the real sha256 into the manifest, ran
-   `tests/manual/rerank-smoke.test.ts` (`PAID_RERANK_SMOKE=D:\`) — F16 loads on b9585, relevance
-   correct (+8.82 vs −11.01), worst-case 12-candidate batch ≈ 24.7 s on a CPU-pinned i7-1185G7
-   (§7). It **caught a real bug** (rerank-mode forces n_ubatch=512 < the ~670-token input →
-   HTTP 500) now fixed by sizing `--batch-size`/`--ubatch-size` to the context (§3 entry item 6).
-   **`ragMinSimilarity` floor — MEASURED 2026-06-10, stays 0** (`tests/manual/minsim-measure.test.ts`,
-   `PAID_MINSIM_MEASURE=D:\`): relevant vs irrelevant best-chunk cosines OVERLAP (relevant
-   0.879–0.935 vs irrelevant 0.866–0.907 — E5 runs without query:/passage: prefixes, so all
-   cosines compress into ~0.87–0.94), so no positive floor separates them without dropping real
-   hits; relevance separation is the reranker's job (D12 confirmed empirically). **Both Phase-21
-   manual items are now DONE** — no Phase-21 acceptance work remains. **End-to-end quality
-   validated 2026-06-10 (`tests/manual/rag-quality.test.ts`, `PAID_RAG_QUALITY`, all three real
-   backends on a 4-doc corpus):** for a liability-cap question the hybrid order put the true
-   clause only #3 (cosine 0.848) BEHIND an invoice (0.875) + an encryption clause (0.870) — the
-   prefix-less-E5 compression in action — while the reranker promoted it to #1 (logit −1.88) with
-   all four contract clauses on top; the grounded 4B answer was correct + cited (1M USD → the MSA),
-   and a keyword-exact `INV-2024-001` query surfaced the exact chunk at #1 via FTS5. This is the
-   concrete justification for the reranker's ~25 s worst-case cost — it rescued the right answer
-   from #3-behind-distractors to #1. Smaller
-   leftovers: an icon/`buildResources` for electron-builder; ANN vector index only if a real
-   corpus outgrows the linear scan (plan §9 item 4 / D15 — explicitly not built).
-4. **UI/UX polish wave (Phases 23–27) — ✅ COMPLETE 2026-06-10** on branch
-   `ui-phase-23-tokens-theming`, merged to master 2026-06-10 — see the §3 entries:
-   Phase 23 = tokens.css, full role-token restyle + AA fixes, a11y baseline,
-   `AppSettings.theme` + Appearance card; Phase 24 = the four pinned Radix primitives
-   [D-UI1 executed, license-reviewed], `renderer/components/` per guidelines §6, all
-   non-chat screens + gate migrated, Saved-feedback toasts; Phase 25 = the chat
-   restructure per guidelines §3 — `renderer/chat/` split, collapsible conversation
-   list, 720px transcript, per-message actions, sources disclosure, depth dropdown
-   [D-UI4 labels] + scope popover, teaching empty state, buffered streaming; Phase 26 =
-   the IA regroup per guidelines §2 — 5-item nav with "AI Model", Settings tabs
-   absorbing Privacy/Diagnostics, `resolveNavTarget` virtual targets + legacy aliases,
-   Home readiness hub, Technical-details disclosure; Phase 27 = the §7 copy sweep
-   [renderer + user-facing main-process strings], the ambient "Local · Offline"
-   indicator with the honest downloads-allowed variant, the 3-step first-run create
-   flow, and the final WCAG 2.2 AA sweep; all phases eyeballed in both themes). Wave
-   docs: [`docs/design-guidelines.md`](docs/design-guidelines.md) (ADOPTED — the durable
-   design reference) + [`docs/ui-ux-redesign-plan.md`](docs/ui-ux-redesign-plan.md)
-   (now the **condensed design record** per the doc lifecycle rule; full original in git
-   history). All four decisions resolved: D-UI1 executed (all four primitives now in
-   use), D-UI2 as planned, **D-UI3: Home stays as the readiness hub** (re-confirmed
-   after Phase 27 — the first-run starter step only routes, it does not absorb Home's
-   remediation), D-UI4 executed. Remaining UI work =
-   the usual manual release eyeball on real drives.
-5. **Model catalog expansion + benchmarking (Phases 28–30):** see
-   [`docs/model-catalog-expansion-plan.md`](docs/model-catalog-expansion-plan.md) (decisions
-   D16–D22). **Update (merge 2026-06-11): Phases 28 + 29 are 🟢 DONE — see §1 and the §3
-   Phase-29 entry; the text below predates the close-out and remains only for Phase-30
-   context (plan drafted in
-   [`docs/big-slot-embeddings-plan.md`](docs/big-slot-embeddings-plan.md)).**
-   **Phase 28 — 🟡 manifests landed 2026-06-10 (see the §3 entry):** all four
-   challenger manifests authored + validated (Ministral 3 8B 2512, Granite 4.1 8B, Gemma 4 12B
-   QAT — vendor GGUFs; Qwen3-4B-2507 via the unsloth fallback, D18), licenses reviewed/approved
-   (D22), docs + README updated, gate green. **Remaining:** fetch the four weights (~20 GB,
-   user go-ahead), promote real hashes via `verify-models --generate`, run the §4.3 per-model
-   bring-up checklist, then mark the phase done. All ship with **empty
-   `recommended_profiles`** so nothing is auto-recommended before it earns it (D17). Phase 29 =
-   the offline benchmark protocol (llama-bench speed + peak-RSS memory + a judge-free
-   German/English grounded-QA eval set `eval/rag_de_en.jsonl`) + the first comparison run and
-   promotion decisions. Phase 30 (outline only) = the opt-in big slot (Gemma 4 26B-A4B vs
-   Qwen3 30B-A3B) + the embeddings question (Granite Embedding R2 small is the only 384-dim
-   near-drop-in). Key verified fact: our pinned llama.cpp **b9585 is the 2026-06-09 release**,
-   so Gemma 4 (needs ~b8607) runs on the runtime we already ship — no runtime bump needed.
-6. **Functionality wave 3 (Phases 31–38) — ✅ COMPLETE 2026-06-11 (all eight phases
-   shipped; the working paper was retired to its design record per the doc lifecycle
-   rule — full original in git history):** see
-   [`docs/functionality-wave-3-plan.md`](docs/functionality-wave-3-plan.md) (decisions
-   D23–D34, research gates R-S1/R-T1–2/R-W1–4/R-O1–3). Eight user-selected features in
-   dependency order: 31 conversation search (messages FTS5, mirrors D13) → 32 vault password
-   change (D24: envelope descriptor v2 recommended — the vault key is currently derived
-   DIRECTLY from the password, so naive change = re-encrypt everything) → 33 document-task
-   service + one-click summary → 34 translation (materialized corpus document) → 35 compare
-   two documents (vector-paired sections) → 36 audio transcription ingestion (**new
-   whisper.cpp sidecar family** — research-gated like the GPU plan) → 37 voice dictation →
-   38 scanned-PDF/photo OCR (tesseract.js WASM, vendored offline assets; step 0 =
-   image-only-PDF detection notice, can ship early). **Review round 1 resolved 2026-06-11:
-   D23–D30 + D33 locked** — envelope descriptor v2 for password change (migrate on first
-   change); strict one-at-a-time doc-task/chat concurrency (R-T1 demoted to informational);
-   translation + compare results materialize as corpus documents with `origin_json`
-   provenance; OCR never automatic for PDFs (explicit "Make searchable" task). D31/D32/D34
-   stay open by design — they resolve with research gates R-O1/R-O2/R-W1. **Plan audit
-   2026-06-11 (same day):** all plan §2 code-facts re-verified against the source; one
-   correction (NO `setPermissionRequestHandler` exists and Electron default-GRANTS
-   permission requests — Phase 37/D30 now installs a deny-by-default handler, flagged as an
-   early hardening win), one naming fix (`models/transcriber/`, role convention), one new
-   decision (D35: audio originals must be kept — the re-index contract forces it; re-index
-   = re-transcription), staleness/visibility guards added to Phases 34/35, and the additive
-   `whisper_cpp` block's forward-compatibility verified in `shared/runtime-sources.ts`.
-   **Phase 31 (conversation search) is DONE (2026-06-11)** — R-S1 resolved GO (FTS5
-   `snippet()`/`highlight()` in both runtimes), `messages_fts` + `searchMessages` +
-   `chat:search` + the ConversationList search UI shipped, the §12 session-hardening rider
-   (deny-by-default `setPermissionRequestHandler`) shipped with it, plan §4 condensed to
-   its design record (§3 entry). **Phase 32 (vault password change) is DONE (2026-06-11)** —
-   descriptor v2 envelope (random data key wrapped by the password-derived KEK; new vaults
-   created v2), every change an O(1) atomic descriptor re-wrap (legacy scrypt silently
-   upgrades to argon2id), one-time journaled v1→v2 migration on a legacy vault's FIRST
-   change (crash-cut tests prove old-or-new-never-mixed), `workspace:changePassword` +
-   Settings card reusing the extracted Phase-27 password components, import↔change race
-   guard, additive `workspace_password_changed` audit event; plan §5 condensed to its
-   design record (§3 entry). **Phase 33 (document tasks foundation + one-click summary)
-   is DONE (2026-06-11)** — `services/doctasks.ts` `DocTaskManager` (the shared engine
-   Phases 34–35 reuse: FIFO queue, per-task `AbortController`, async-with-polling
-   `doctasks:start/get/cancel`), D26 strict one-at-a-time enforced BOTH ways (task refuses
-   while chat streams; chat/RAG throw the shared `DOC_TASK_BUSY_MESSAGE` with a renderer
-   cancel button), D25 budgeted map-reduce summary over stored chunks (words→tokens 1.3
-   safety factor, 12-map-call ceiling + honest `truncated` flag) persisted in
-   `documents.summary_json` (cleared by re-index, surfaced as `DocumentInfo.summary`),
-   ids-only `document_task_completed/_failed` audit events (sentinel-tested), Documents
-   "Summarize" row action + preview summary section with attribution + Regenerate.
-   **R-T1 RESOLVED (probed on real b9585):** a concurrent second chat request is served
-   on a PARALLEL slot (not queued/rejected) — the app-side guard is the only
-   serialization (plan §14). Plan §6 condensed to its design record (§3 entry).
-   **Phase 34 (document translation workflow) is DONE (2026-06-11)** — the `translation`
-   kind on the same engine (`params.targetLang: 'de' | 'en'`, closed v1 set): **D36**
-   resolved (input = parser SEGMENTS re-extracted via `extractDocumentPreview`, never
-   the ~80-token-overlapping chunks — no duplicated text in the output,
-   regression-tested), windows sized by R-T2-MEASURED token weight (input 1.3 tok/word,
-   output 2.0 — the smoke's first run caught a real silent truncation under a half/half
-   split), map in document order with no ceiling and no reduce, retry-once-then-MARK
-   failed windows (original text kept, §11.4 notice), then materialize as a NEW corpus
-   document through the normal import path under the Phase-32 lease (held around exactly
-   the materialize step; `VaultBusyError` → friendly failure), title
-   "<original> (Deutsch|English).md", attribution line prepended, provenance in additive
-   `documents.origin_json` → `DocumentInfo.origin` (survives re-index — provenance, not
-   sync), output-doc id appended to the task's `documentIds` so `isDocumentBusy` covers
-   it; `document_imported` recorded for the new doc + new `document_exported` event; new
-   `docs:export` IPC (save-dialog export of stored text/Markdown); Documents "Translate"
-   action with a target-choice modal + "Translating… (n/m)"/Cancel on the generalized
-   single watcher (`startTask`), provenance line on row + preview, Export on
-   materialized rows. **R-T2 (translation half) RESOLVED on the real b9585 + Qwen3-4B**
-   (`tests/manual/translation-smoke.test.ts`, `PAID_TRANSLATION_SMOKE`; findings in plan
-   §14: zero refusals/chatter, zero language drift, full Markdown survival, number
-   VALUES kept/formats localized, German output ≈ 2 tokens per source word — the
-   load-bearing sizing fact). Plan §7 condensed to its design record (§3 entry).
-   **Phase 35 (compare two documents) is DONE (2026-06-11)** — the `compare` kind on the
-   same engine (exactly TWO distinct indexed sources; the last kind guard fell away).
-   **R-T2 (comparison half) RESOLVED FIRST** (`tests/manual/compare-smoke.test.ts`,
-   `PAID_COMPARE_SMOKE`, real b9585 + Qwen3-4B, TWO rounds — round 1 caught a silent
-   per-pair omission and cross-section duplication; round-2 prompt fixes shipped;
-   findings in plan §14: the 4B holds the dictated four-section format perfectly, the
-   smaller per-pair bullet format is confirmed necessary, output cap 512 ample, German
-   bodies with English dictated headings). D28 implemented: auto mode-switch by token
-   math — mode (a) one call over both re-extracted full texts (**D37**: segments, not
-   chunks, for the input AND the mode decision — overlap reads as phantom "shared"
-   content and inflates the estimate ~16%), mode (b) section-matched: A-chunk windows
-   paired with doc-B chunks via the EXISTING `VectorIndex` (`documentIds` scope, stored
-   vectors only — deterministic, regression-tested byte-identical across runs), smaller
-   per-pair map format → one reduce; ceiling 12 → honest truncation notice IN the
-   report. **Embedder-visibility guard:** mode (b) fails friendly ("re-index first",
-   BEFORE any model call) when either doc lacks vectors under the active embedder.
-   Materialized "Comparison: <A> vs <B>.md" via the Phase-34 path under the Phase-32
-   lease; `DocumentOrigin` became a discriminated union (additive — type-less Phase-34
-   rows parse as translation) with `{ type: 'compare', comparedFrom: [a, b] }`; audit
-   carries `{ kind, documentId, documentIdB }` ids-only (sentinel test extended with a
-   two-document compare leg). UI: "Compare (2)" on the Phase-17 multi-select at exactly
-   two selections, "Comparing… (n/m)"/Cancel on BOTH source rows (watcher generalized
-   to `documentIds`), completion auto-opens the report preview with the "Comparison of
-   <A> and <B>" provenance line, Export works. Plan §8 condensed to its design record.
-   **Phase 36 (audio transcription as ingestion) is DONE (2026-06-11)** — see the §1
-   row + the §3 entry; all four research gates (R-W1..R-W4) were resolved FIRST on the
-   real pinned v1.8.6 binary + real German audio (D34 → per-file CLI; D35 → keep the
-   copy), the second sidecar family (`whisper_cpp` yaml block, `--family` fetch scripts,
-   `runtime/whisper.cpp/<os>/`, commercial-gate checks), the `whisper-small-multilingual`
-   manifest (`role: transcriber`), `services/transcriber/` + `AudioParser` (D29 time-range
-   citations), the D35 riders (size confirm, "Transcribing… N%" on import/re-index), and
-   the `PAID_WHISPER_SMOKE` manual harness all shipped; plan §9 condensed to its design
-   record.
-   **Phase 37 (voice dictation in the composer) is DONE (2026-06-11)** — see the §1 row
-   + the §3 entry; the locked D30 pipeline shipped exactly as drafted (renderer
-   MediaRecorder → one OfflineAudioContext render to 16 kHz mono → pure-JS WAV → bytes
-   over `dictation:transcribe` → `.parse-dictation.wav` transient, shredded →
-   Phase-36 transcriber → insert-at-cursor, never auto-sent), the Phase-31 permission
-   handler gained its single scoped audio-only own-WebContents `media` allow, the mic is
-   availability-gated via `AppStatus.dictationAvailable`, and the `PAID_DICTATION_SMOKE`
-   manual harness covers the real-binary main-process half; plan §10 condensed to its
-   design record. **Next: Phase 38 (scanned-PDF / photo OCR)** behind its own research
-   gates R-O1..R-O3 (D31/D32 still open by design — they resolve with the gates); its
-   step 0 (image-only-PDF detection, no OCR needed) can ship early.
+2. **Small live-UI leftovers:** the Diagnostics **Activity-panel eyeball** on a real drive
+   (events appear; export saves — the last wave-1 live-UI item); an icon/`buildResources` for
+   electron-builder; the **optional** Phase-29 dev-box speed sweep (completeness only — QA +
+   RSS are machine-independent).
+3. **Phase 22 — signed offline update bundles** (wave-1 record §10): 🔴 blocked on a
+   key-management design (signing keys, rotation, where the public key lives on the drive).
+4. **Phase 30 — opt-in big slot + embeddings:** working paper drafted
+   ([`docs/big-slot-embeddings-plan.md`](docs/big-slot-embeddings-plan.md), D23–D28): Track A
+   (Gemma 4 26B-A4B etc. vs the incumbent Qwen3 30B-A3B, reusing the Phase-29 benchmark) +
+   Track B (a better embedder — the reindex-forcing swap; D27 eval-set hardening is the
+   prerequisite). Key verified fact: the pinned b9585 already runs Gemma 4 — no runtime bump.
+5. **ANN vector index** only if a real corpus outgrows the linear scan (retrieval record D15 —
+   explicitly not built).
 
-**Current gate (2026-06-11, post-Phase-37 incl. the same-day Phase-36
-unsupported-transcriber fix): typecheck clean, 937/937 tests pass (+24 manual tests behind
-`PAID_*` env vars — GPU/thinking/rerank/minsim/RAG-quality/bring-up/eval/concurrency-probe/
-translation/compare/whisper/dictation smokes — skipped in CI), `npm run build` green.** The
-per-phase gate history (test counts, bundle sizes, per-phase test inventories) lives in git
-history.
+**Current gate (2026-06-11, post-Phase-38): typecheck clean, 968/968 tests pass (+25 manual
+tests behind `PAID_*` env vars — GPU/thinking/rerank/minsim/RAG-quality/bring-up/eval/
+concurrency-probe/translation/compare/whisper/dictation/OCR smokes — skipped in CI),
+`npm run build` green.** Per-phase gate history (test counts, bundle sizes, per-phase test
+inventories) lives in git history.
 
 ---
 
 ## 6. Open issues / risks
 
-- **R1 `node:sqlite` ✅ RESOLVED** — works in Electron 37 (Node 22.21) main process and in vitest
-  (system Node 24). Only an experimental warning (harmless). Bundler resolution fixed via
-  `createRequire` in `db.ts`. `sql.js` fallback not needed.
-- **R2 Electron binary download** — `npm i electron` pulls a ~100MB binary; needs dev-time internet.
-  The *app* stays offline; only dev install needs network. **Phase 11:** `electron-builder` may also
-  fetch the platform Electron at package time — building the real portable `.exe` is therefore a manual,
-  network-touching step (the green gate `typecheck`/`test`/`build` does NOT invoke electron-builder).
-  ⚠️ **npm-workspace hoisting:** prod deps live in the **root** `node_modules`; if electron-builder
-  can't collect them, build from `apps/desktop` or adjust hoisting.
-- **R3 PDF/DOCX parsers ✅ RESOLVED** — `pdfjs-dist` (legacy build, `pdfjs-dist/legacy/build/pdf.mjs`)
-  extracts text in the Node main process with **no Web Worker / no DOM** (validated Phase 4);
-  `mammoth`/`papaparse` are pure-JS too. All three marked **external** (`externalizeDepsPlugin`) so
-  pdfjs's large ESM bundle is required at runtime, not bundled. Only a harmless `standardFontDataUrl`
-  warning (rendering-only). Ambient typings for the legacy path in `parsers/pdfjs.d.ts`.
-- **R4 Argon2id ✅ FULLY RESOLVED (audit round 2)** — new vaults now default to **Argon2id** via the
-  pure-JS `@noble/hashes` (no native `argon2`, no build risk on Node 24). `scrypt` stays supported for
-  existing vaults; the descriptor's `algo` + params make unlock deterministic across both. See the KDF
-  decision in §3. (Phase 9 originally shipped `scrypt` as the portable primary; the pure-JS Argon2id
-  removes the only reason that was a compromise.)
-- **R5 Real llama.cpp ⚠️ PARTIALLY RESOLVED (Phase 10)** — the mechanics (sidecar discovery + env
-  override, localhost-only binding, OpenAI-compatible streaming, health-timeout, process cleanup, the
-  real `E5Embedder`, the availability-aware fallback, the embedding-model-mismatch filter) are all
-  **implemented + unit-tested** with a mocked child process / mocked loopback fetch. What remains
-  **manual**: a live real-model answer, because the platform `llama-server` binaries + the GGUF weights
-  are **not** in the repo (Phase 11 prepare-drive provisions them). The selectors fall back to mocks
-  when those files are absent, so dev + CI are unaffected. **Phase 11** adds the scripted provisioning
-  path (`prepare-drive` lays out the tree; the builder drops weights + a `llama-server` build into it;
-  `verify-models --generate` captures real hashes) — but the artifacts themselves are still not in the
-  repo, so the live §17 demo from a real drive remains the one manual acceptance step.
-- **R6 TLS-intercepting proxy on this machine** — `npm install` fails with `UNABLE_TO_VERIFY_LEAF_SIGNATURE` (corporate root CA). Workaround: `NODE_OPTIONS=--use-system-ca npm install` (Node 24 reads the Windows cert store). If that fails, `npm config set strict-ssl false` (dev-only, less secure) or set `NODE_EXTRA_CA_CERTS`. Affects dev installs only; the app stays offline.
-- **R7 Code-signing certificates (Phase 13) — PROCUREMENT, blocks only the *commercial* acceptance.**
-  An unsigned `.exe`/`.app` launched from USB trips Windows SmartScreen / macOS Gatekeeper, which a
-  non-technical buyer cannot get past. The `electron-builder.yml` hooks are wired
-  (`win.signtoolOptions`, `mac.notarize` + `hardenedRuntime` + `build/entitlements.mac.plist`) and
-  driven by env vars / a git-ignored secrets file — but the actual **OV/EV Windows cert** + **Apple
-  Developer ID + notarization creds** cost money + lead time and are not on this machine. The green
-  gate does NOT sign, the DIY path uses the unsigned "Run anyway" fallback (`docs/troubleshooting.md`),
-  and the same-drive-on-a-second-laptop continuity already works (`resolvePaths`). So R7 blocks only
-  the signed commercial build + the live USB §17 demo, not the repo's green gate or the DIY drive.
+- **R1 `node:sqlite` ✅ RESOLVED** — works in Electron 37 (Node 22.21) main process and in
+  vitest (system Node); bundler resolution via `createRequire` in `db.ts`; the `sql.js`
+  fallback was never needed.
+- **R2 Electron binary download** — `npm i electron` and electron-builder packaging need
+  dev-time network; the *app* stays offline. ⚠️ npm-workspace hoisting: prod deps live in the
+  **root** `node_modules`; if electron-builder can't collect them, build from `apps/desktop`
+  or adjust hoisting.
+- **R3 PDF/DOCX parsers ✅ RESOLVED** — pdfjs legacy build runs in the Node main process (no
+  worker/DOM); `mammoth`/`papaparse` pure-JS; all three externalized
+  (`externalizeDepsPlugin`). Ambient typings in `parsers/pdfjs.d.ts`.
+- **R4 Argon2id ✅ RESOLVED** — new vaults use pure-JS `@noble/hashes` Argon2id; scrypt vaults
+  unlock unchanged forever (the descriptor records `algo` + params; see the §3 KDF decision).
+- **R5 Real llama.cpp ⚠️ PARTIALLY RESOLVED** — all mechanics are implemented + tested against
+  mocked processes/fetch, and every real-hardware smoke (`PAID_*`) has passed on provisioned
+  drives; but binaries/weights are not in the repo, so the live spec-§17 demo from a real
+  commercial drive remains the one manual acceptance step.
+- **R6 TLS-intercepting proxy on this machine** — `npm install` fails with
+  `UNABLE_TO_VERIFY_LEAF_SIGNATURE` (corporate root CA). Workaround:
+  `NODE_OPTIONS=--use-system-ca npm install` (Node 24 reads the Windows cert store). Dev-only;
+  the app stays offline.
+- **R7 Code-signing certificates — PROCUREMENT, blocks only the *commercial* acceptance.**
+  The `electron-builder.yml` hooks are wired (win signtool, mac notarize + hardened runtime +
+  entitlements) and driven by env vars / a git-ignored secrets file; the OV/EV Windows cert +
+  Apple Developer ID cost money + lead time. The green gate does NOT sign; the DIY path uses
+  the unsigned "Run anyway" fallback (`docs/troubleshooting.md`).
 
 ---
 
@@ -3027,124 +1337,44 @@ commit). Highlights of what was fixed:
 
 Final gate: typecheck clean, **361/361 tests**, build green, no new runtime deps.
 
-**Still open by choice:** the consciously-accepted items (no onboarding wizard, dead
-Fast/Balanced/Deep plumbing, `runtime_events` unwritten, picker-only import hardening deferred,
-detection-only offline guard, …) are documented in
-[`docs/known-limitations.md`](docs/known-limitations.md).
+**Still open by choice:** the consciously-accepted items are documented in
+[`docs/known-limitations.md`](docs/known-limitations.md) (that list is live; several
+MVP-era examples from this audit — the depth-mode plumbing, `runtime_events` — have
+since shipped in Phases 19–20).
 
 ---
 
-## 9. Windows D:\ drive setup, provisioning & RAG/embedding fixes (2026-06-10)
+## 9. First real Windows `D:\` drive bring-up — durable lessons (2026-06-10)
 
-Found during the first real Windows SSD (`D:\`) provisioning test:
-`prepare-drive.ps1 -Target D:\ -WithAssets -AcceptLicense` laid out the tree + config fine
-but failed at the asset-fetch step with `PositionalParameterNotFound` for `-AcceptLicense`
-(misleadingly attributed to `prepare-drive.ps1`).
+The first real-drive provisioning + RAG run surfaced a cluster of provisioning, path,
+manifest-source and embedding bugs — all fixed same-day (the full narrative is in git
+history). What still matters:
 
-- **Root cause:** the `-WithAssets` block forwarded args to `fetch-models.ps1`/`fetch-runtime.ps1`
-  via **array splatting** (`$a = @('-Target', $Target, '-AcceptLicense'); & $script @a`). PowerShell
-  array splatting binds elements **positionally** and does NOT treat `-`-prefixed strings as parameter
-  names, so `-AcceptLicense` was handed in as a positional value the child script has no slot for. A
-  rooted `-Target` like `D:\` made it surface. Calling `fetch-models.ps1 -AcceptLicense` directly always
-  worked — only the wrapper was broken.
-- **Fix:** switched both call sites in [`scripts/prepare-drive.ps1`](scripts/prepare-drive.ps1) to
-  **hashtable** splatting (`$a = @{ Target = $Target }; if ($AcceptLicense) { $a.AcceptLicense = $true }`).
-  This is the **same convention already documented in §3** and already used by
-  `build-commercial-drive.ps1` (§3, line ~367); `prepare-drive.ps1`'s `-WithAssets` block (added in
-  Phase 12) had simply never been brought into line. The bash path is unaffected (positional args).
-- **Verified:** `prepare-drive.ps1 -Target D:\ -WithAssets -AcceptLicense -DryRun` now runs cleanly
-  through both `fetch-models` and `fetch-runtime`. Layout/config from the earlier non-dry run already
-  succeeded on `D:\`.
-
-**Note for the operator:** the six current manifests fetch many GB (incl. Qwen3-14B + 30B). For a
-quick drive test prefer per-model fetches: `fetch-models.ps1 -Target D:\ -Only qwen3-4b-instruct-q4`
-then `fetch-runtime.ps1 -Target D:\`. This is part of the still-open manual-acceptance path (§8):
-fetch weights → `verify-models --generate` → live smoke test.
-
-### Follow-on: weight-path containment false-positive at a bare drive root (`D:\`)
-
-First `npm run dev` against the prepared `D:\` drive created the encrypted workspace + benchmarked
-fine, then every `models:list` threw `Manifest local_path escapes the drive root`.
-
-- **Root cause:** `weightPath` (and the twin `resolveWithinRoot` in `assets.ts`) guarded against
-  `..`/absolute escapes with `resolved.startsWith(base + sep)`. For a **bare drive root** `resolve('D:\')`
-  keeps the trailing separator, so `base + sep` doubled it (`D:\\`) and rejected every legitimate weight.
-  Latent because the app-data fallback root (`C:\Users\…\AppData`) has no trailing separator — only an
-  actual drive-root launch (the real portable-drive case) hits it. Tests used `/drive`, so they missed it.
-- **Fix:** [`models.ts`](apps/desktop/src/main/services/models.ts) + [`assets.ts`](apps/desktop/src/main/services/assets.ts)
-  now compute `prefix = base.endsWith(sep) ? base : base + sep`. Added a regression test in
-  `tests/integration/models.test.ts` using `parse(process.cwd()).root` (a real trailing-sep root,
-  cross-platform).
-- **Gate:** typecheck clean, **362/362 tests** (+1).
-
-### Promoting the model hash on the test drive
-
-Drive was prepared with the **commercial posture** (`require_sha256_match: true`,
-`allow_unverified_models: false`), which is authoritative and overrides dev-build leniency
-(`registerModelIpc.ts developerLeniency`). So the placeholder-hash weight was rejected
-(`computeInstallState → checksum_failed`). Note `verify-models --generate` only writes
-`config/checksums.json` — it does NOT rewrite the manifest `sha256`. To run the real model on the
-commercial drive the real hash must be promoted into the manifest's top-level `sha256`. Also note a
-manifest re-copy (any `prepare-drive` re-run) overwrites a drive-only edit, so the **durable** place
-to promote is the repo manifest. **Decision (operator):** promote real hashes into the **repo**
-manifests. `qwen3-4b-instruct-q4` real hash
-(`7485fe6f…34fdf5`) promoted in both repo + drive; shows VERIFIED. The remaining downloaded weights
-(8b/14b/30b/embeddings) still need promotion (`verify-models --generate` → copy each into the repo
-manifest → re-sync to drive → `verify-models -Strict`).
-
-### Broken model sources found during the drive fetch (2026-06-10)
-
-A full `fetch-models` against `D:\` surfaced two dead upstream sources (the others — 4b/8b/14b/30b —
-return 200 and download fine):
-
-- **`qwen3-1.7b-instruct-q4` → 404 (`EntryNotFound`).** The official `Qwen/Qwen3-1.7B-GGUF` repo ships
-  **only `Qwen3-1.7B-Q8_0.gguf`** — there is no Q4_K_M. **Decision (operator): drop 1.7b from the
-  set.** Deleted the manifest (repo + drive). It was the spec §7.3 recommendation for the **TINY** and
-  **UNKNOWN** profiles, so `qwen3-4b-instruct-q4` (the smallest remaining chat model) now also claims
-  `recommended_profiles: [TINY, LITE, UNKNOWN]`. ⚠️ **Tradeoff:** 4b wants ~8 GB RAM, so a sub-8 GB TINY
-  machine should run it via Fast Mode / smaller context. `benchmark.test.ts` recommendation mapping
-  updated accordingly (TINY→4b, UNKNOWN→4b).
-- **`multilingual-e5-small-q8` → 401 (gated/removed).** The quant repo
-  `ChristianAzinn/multilingual-e5-small-gguf` now returns 401 on both the file and the HF API. **Decision
-  (operator): switch to the `cstr/multilingual-e5-small-GGUF` mirror** (identical `multilingual-e5-small-q8_0.gguf`,
-  131 MB; base model intfloat/e5-small is MIT). Updated `download.url` + `size_bytes` (135 MB→131624960)
-  + the §8 license-review note (provenance change recorded) in repo + drive manifests.
-
-Gate after these changes: typecheck clean, **362/362 tests**. Still TODO on the drive: re-run
-`fetch-models` (skips the 3 present big weights, fetches 8b + embeddings), then promote the remaining
-hashes as above.
-
-### RAG failure on the drive: plain-chat mode + a broken embeddings GGUF (2026-06-10)
-
-First end-to-end RAG attempt: uploaded a PDF, asked about it, got a **fully hallucinated** answer
-(invented invoice). Detailed analysis:
-
-- **Primary cause (the hallucination): wrong chat mode.** `ChatScreen` has two tabs — **Chat**
-  (`sendChatMessage` → plain LLM, NO retrieval) and **Ask Documents** (`askDocuments` →
-  `generateGroundedAnswer`). The question was asked in plain Chat, so the model only saw the filename
-  and confabulated. The RAG path itself is sound — it has a hard grounding guard (`rag/index.ts`
-  returns a fixed "not found in your documents" answer when retrieval is empty, never calling the
-  model). NOT a RAG-engine bug. (Possible UX hardening, deferred: the `staleEmbeddings` flag is gated
-  on `activeEmbeddingModelId`, which stays null, so the Documents screen never warns a doc was indexed
-  under a different embedder.)
-- **The embedder was the mock, not E5 — same drive-root `weightPath` bug.** At startup
-  `resolveEmbeddingModel` (`index.ts`) calls `weightPath('D:\', …)`; the pre-fix version threw
-  "escapes the drive root", was caught, and returned null → mock embedder. Fixed by the §9 `weightPath`
-  fix; on restart the E5 embedder is selected (no checksum gate on the embedder, so it loads even
-  unverified). Consequence: a doc ingested under the mock is tagged `embedding_model_id='mock-embedder'`
-  and is invisible to E5 retrieval (scoped by `embedder.id`) — **the document must be re-uploaded** under
-  the real embedder.
-- **The E5 GGUF itself was broken (TWICE).** With E5 finally selected, `llama-server --embedding`
-  failed: first the q8_0 lacks `token_type_count` (BERT/XLM-R metadata) → `bert model needs to define
-  token type count`; the same is true of the original quant family. Even a q8_0 that HAS the key crashes
-  llama.cpp b9585 during warmup (`binary_op: unsupported types: dst f32, src1 q8_0`). **Resolution:**
-  switched to an **F16** build — `keisuke-miyako/multilingual-e5-small-gguf-f16` (`multilingual-e5-small-F16.gguf`,
-  242 MB). Test-loaded directly with the drive's `llama-server.exe`: loads, `server is listening`,
-  returns **384-dim** embeddings. Real hash `3c3569e7…b5f6db` promoted into repo + drive manifests
-  (embeddings now **VERIFIED**). The `-q8` id/local_path are kept (opaque vector tag, referenced by
-  tests/docs); `display_name` → "Multilingual E5 Small (F16)". **Lesson: prefer F16 (not q8_0) for this
-  BERT/XLM-R embedder on llama.cpp b9585.**
-
-Gate: typecheck clean, **362/362 tests**. Drive: 4b + embeddings VERIFIED; 8b/14b/30b present but
-UNVERIFIED (hashes still to promote). Remaining to validate RAG end-to-end: restart the app (E5 selected),
-re-upload the PDF (re-embed under E5), ask in the **Ask Documents** tab.
+- **PowerShell arg forwarding = hashtable splatting, never array splatting.**
+  `@('-Target', $t, '-AcceptLicense')` binds positionally (the `-`-prefixed string is NOT a
+  parameter name), which broke `prepare-drive -WithAssets`. Convention recorded in §3;
+  both call sites use hashtables now.
+- **Bare-drive-root containment false positive:** `resolve('D:\')` keeps the trailing
+  separator, so the `base + sep` prefix check doubled it (`D:\\`) and rejected every
+  legitimate weight — latent because only a real drive-root launch hits it.
+  `weightPath`/`resolveWithinRoot` normalize (`prefix = base.endsWith(sep) ? base : base + sep`);
+  regression-tested with a real root (`parse(process.cwd()).root`).
+- **Hash promotion is durable only in the REPO manifests:** `verify-models --generate` writes
+  `config/checksums.json`, never the manifest `sha256`, and any `prepare-drive` re-run
+  overwrites drive-local manifest edits. Promote real hashes into the repo manifest, then
+  re-sync to the drive.
+- **Broken upstream sources found by the fetch:** `qwen3-1.7b-instruct-q4` → 404 (the official
+  repo ships no Q4_K_M) — manifest **dropped**; the 4B took over TINY/UNKNOWN
+  (`recommended_profiles`). `multilingual-e5-small` quant repo went 401 — switched to the
+  `cstr/` mirror, provenance recorded in the manifest license note.
+- **The E5 embedder GGUF must be F16 on b9585** (the failure mode
+  `tests/manual/rerank-smoke.test.ts` guards against): q8_0 builds either lack
+  `token_type_count` (BERT/XLM-R metadata) or crash warmup
+  (`binary_op: unsupported types: dst f32, src1 q8_0`). Shipped
+  `keisuke-miyako/multilingual-e5-small-gguf-f16` (242 MB, 384-dim, VERIFIED); the `-q8`
+  manifest id is kept as the opaque vector tag.
+- **The first real-drive hallucination was the plain-Chat tab, not the RAG engine** — the
+  question never reached retrieval (the grounded path has a hard empty-corpus guard). This
+  finding motivated Phase 17 (wave-1 record §1/§5). Related: a document ingested under the
+  mock embedder is invisible to E5 retrieval (vectors are scoped by `embedder.id`) —
+  re-upload/re-index after an embedder change.

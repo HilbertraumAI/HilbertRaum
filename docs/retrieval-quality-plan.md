@@ -9,7 +9,7 @@ in [`architecture.md`](architecture.md). Section numbers are stable; code commen
 them (retrieval-plan §1, §3–§5, §7, §10 D8–D15)._
 
 Shipped: wave-1 record §9 items 1–3 ([`post-mvp-functionality-plan.md`](post-mvp-functionality-plan.md))
-— item 3 with the measurement still pending (§1.3). Item 4 (ANN) explicitly NOT built (D15).
+— item 3's measurement completed 2026-06-10 (§1.3: `ragMinSimilarity` stays 0). Item 4 (ANN) explicitly NOT built (D15).
 §13 D1 (unified auto-RAG chat) was not reopened.
 
 ---
