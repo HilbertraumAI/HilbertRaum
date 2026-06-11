@@ -36,6 +36,7 @@ const AUDIT_TYPE_LABELS: Record<AuditEventType, string> = {
   document_deleted: 'Document deleted',
   document_task_completed: 'Document task finished',
   document_task_failed: 'Document task failed',
+  document_exported: 'Document exported',
   conversation_deleted: 'Conversation deleted',
   conversation_exported: 'Conversation exported',
   workspace_created: 'Workspace created',

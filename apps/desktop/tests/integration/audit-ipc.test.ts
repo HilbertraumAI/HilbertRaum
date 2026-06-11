@@ -40,6 +40,7 @@ import { registerWorkspaceIpc } from '../../src/main/ipc/registerWorkspaceIpc'
 import { registerAuditIpc } from '../../src/main/ipc/registerAuditIpc'
 import { registerDocTasksIpc } from '../../src/main/ipc/registerDocTasksIpc'
 import { DocTaskManager } from '../../src/main/services/doctasks'
+import { documentsDir } from '../../src/main/services/ingestion'
 import { DownloadManager } from '../../src/main/services/downloads'
 import type { FetchFn } from '../../src/main/services/assets'
 import { IPC } from '../../src/shared/ipc'
@@ -208,12 +209,15 @@ beforeEach(() => {
 describe('audit wiring across the IPC layer (privacy sentinel grep)', () => {
   it('records the shallow events and NEVER the seeded chat/document/setting content', async () => {
     const { ctx, db, rootPath } = makeHarness()
-    // Phase 33: the document task engine, wired exactly like main/index.ts does it.
+    // Phase 33/34: the document task engine, wired exactly like main/index.ts does it.
     ctx.docTasks = new DocTaskManager({
       getDb: () => ctx.db,
       getRuntime: () => ctx.runtime.active(),
       isChatStreaming: () => inFlightStreams.size > 0,
       getContextTokens: () => getSettings(ctx.db).contextTokens,
+      getStoreDir: () => documentsDir(ctx.paths.workspacePath),
+      getIngestionDeps: () => ({ embedder: ctx.embedder, cipher: ctx.workspace.documentCipher() }),
+      beginDocumentWork: () => ctx.workspace.beginDocumentWork(),
       audit: (type, message, metadata) => ctx.audit?.(type, message, metadata)
     })
     registerCoreIpc(ctx)
@@ -277,6 +281,38 @@ describe('audit wiring across the IPC layer (privacy sentinel grep)', () => {
     // The flow really carried the sentinel into the summary content…
     expect(summarized?.summary?.text).toContain(DOC_SENTINEL)
 
+    // -- document task (Phase 34): translate the sentinel-bearing document through the
+    // real engine + echo runtime. The MATERIALIZED output document really carries the
+    // sentinel (and is exported through the save dialog) — `runtime_events` must
+    // record only ids/filenames for all of it.
+    const { result: trRaw } = await invoke(handlers, IPC.startDocTask, {
+      kind: 'translation',
+      documentIds: [documentId],
+      params: { targetLang: 'de' }
+    })
+    const tr = trRaw as { jobId: string }
+    await pollUntil(async () => {
+      const { result } = await invoke(handlers, IPC.getDocTask, tr.jobId)
+      const s = result as DocTaskStatus
+      return s.state === 'done' || s.state === 'failed' || s.state === 'cancelled'
+    }, 'translation task')
+    const { result: trDoneRaw } = await invoke(handlers, IPC.getDocTask, tr.jobId)
+    const trDone = trDoneRaw as DocTaskStatus
+    expect(trDone.state).toBe('done')
+    const translatedId = trDone.resultRef?.documentId as string
+    expect(translatedId).toBeTruthy()
+    expect(translatedId).not.toBe(documentId)
+    const { result: docs2Raw } = await invoke(handlers, IPC.listDocuments)
+    const translated = (docs2Raw as DocumentInfo[]).find((d) => d.id === translatedId)
+    expect(translated?.origin).toEqual({ translatedFrom: documentId, targetLang: 'de' })
+    ipcState.saveDialog.canceled = false
+    ipcState.saveDialog.filePath = join(rootPath, 'translated-export.md')
+    await invoke(handlers, IPC.exportDocument, translatedId)
+    // …the exported file really carries the sentinel (the echo runtime echoes the
+    // window prompt, which contains the document text)…
+    expect(readFileSync(join(rootPath, 'translated-export.md'), 'utf8')).toContain(DOC_SENTINEL)
+    await invoke(handlers, IPC.deleteDocument, translatedId)
+
     await invoke(handlers, IPC.deleteDocument, documentId)
 
     // -- models + runtime: select, verify, start (mock fallback), stop.
@@ -303,6 +339,7 @@ describe('audit wiring across the IPC layer (privacy sentinel grep)', () => {
       'document_imported',
       'document_reindexed',
       'document_task_completed',
+      'document_exported',
       'document_deleted',
       'model_selected',
       'model_verified',

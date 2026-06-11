@@ -1,8 +1,9 @@
 # Post-MVP Functionality — wave 3 working paper (Phases 31–38)
 
-_Status: **WORKING PAPER — Phases 31 + 32 + 33 DONE 2026-06-11 (§4/§5/§6 are their condensed
-design records; the §12 session-hardening rider shipped with 31; R-T1 resolved with 33);
-Phases 34–38 NOT IMPLEMENTED** (drafted
+_Status: **WORKING PAPER — Phases 31 + 32 + 33 + 34 DONE 2026-06-11 (§4/§5/§6/§7 are their
+condensed design records; the §12 session-hardening rider shipped with 31; R-T1 resolved
+with 33; R-T2's translation half resolved with 34 — D36 added);
+Phases 35–38 NOT IMPLEMENTED** (drafted
 2026-06-10; **review round 1 resolved
 2026-06-11**: D23–D30 + D33 locked, see §13; D31/D32/D34 stay open by design — they resolve
 with research gates R-O1/R-O2/R-W1. **Plan audit 2026-06-11:** every §2 fact re-verified
@@ -23,7 +24,7 @@ The eight features (user-selected 2026-06-10):
 | 31 | Conversation search — **✅ DONE 2026-06-11** | S | none | none (FTS5 already proven) |
 | 32 | Vault password change — **✅ DONE 2026-06-11** | M | none | none (`@noble/hashes` already shipped) |
 | 33 | Document tasks foundation + one-click summary — **✅ DONE 2026-06-11** | M | none | none |
-| 34 | Document translation workflow | S–M | Phase 33 (task machinery) | none |
+| 34 | Document translation workflow — **✅ DONE 2026-06-11** | S–M | Phase 33 (task machinery) | none |
 | 35 | Compare two documents | M | Phase 33 (task machinery) | none |
 | 36 | Audio transcription as ingestion (whisper.cpp) | L | research gates R-W1..R-W4 | **whisper.cpp sidecar family + whisper GGML weights** |
 | 37 | Voice dictation in the composer | S–M | Phase 36 (transcriber) | none beyond 36 |
@@ -270,41 +271,75 @@ Shipped exactly per the sketch (D25 + D26 as resolved). Durable design now in
   in preview (both themes) → persists across navigation → chat busy copy + cancel →
   re-index clears → regenerate.
 
-## 7. Phase 34 — Document translation workflow
+## 7. Phase 34 — Document translation workflow — ✅ DONE (2026-06-11, as implemented)
 
-**Goal:** "Translate to German/English" on a document → a translated copy the user can read,
-cite, and export. The DACH angle made concrete; the bundled models are multilingual (E5 is
-multilingual; Qwen3-class chat models handle DE↔EN).
+Shipped per D27 (materialized corpus document) with the new input decision **D36** (see
+§13) and the R-T2 translation findings (§14) folded into the window math. Durable design
+now in `architecture.md` (§ "Document tasks" — translation, D36, the lease split),
+`user-guide.md` §7 ("Translate a document"), `known-limitations.md` ("Document
+translation"). Record of what was built:
 
-**Design sketch.** A `translation` document task: map over chunks **in order** (translation
-is embarrassingly parallel but runs serialized on the one runtime), translating window-wise
-with a strict instruction template (translate, don't summarize; preserve structure; keep
-numbers/names verbatim), concatenate. **Output (D27, RESOLVED review round 1): a NEW document in the corpus** —
-materialize as Markdown, write into `workspace/documents/` via the normal import path
-(`createQueuedDocument` + `processDocument` ⇒ it gets chunked, embedded, searchable, citable
-like any import; encrypted via `DocumentCipher` automatically), titled
-"<original> (Deutsch)" with a metadata link `{ translatedFrom: documentId, targetLang }` in a
-`documents.origin_json` additive column. Export-to-file then comes free via the existing
-save-dialog pattern. Language targets v1: `de`/`en` only (the eval-set languages) — a
-free-text language field invites silent quality failures.
-
-**Honesty requirements:** the §11.4 attribution line ("Machine-translated by <model> — may
-contain errors") prepended to the materialized document; `truncated`/`failed-window`
-handling must be visible, not silent (a window the model refuses/garbles marks the output,
-not drops it). **Staleness (audit finding):** the `origin_json` link is provenance, not
-sync — re-importing or re-indexing the SOURCE does not update an existing translation;
-the user re-runs the task. Record as an accepted edge in `known-limitations.md`.
-
-**Where to look in detail:**
-- Per-window failure modes on the real 4B (R-T2, manual smoke): refusal phrases, language
-  drift on long inputs, markdown structure survival — sets the window size + retry policy.
-- `processDocument` re-entry: importing a generated file from INSIDE the app (not via the
-  picker) — confirm the path-copy + sha256 + status flow accepts a programmatic source path
-  cleanly (it should: `original_path` is just recorded).
-
-**Tests:** template assembly; window ordering + concatenation; origin metadata round-trip;
-generated-document import end-to-end with MockRuntime (deterministic echo = verifiable
-stitching); attribution line presence; audit ids-only.
+- **A `translation` kind on the Phase-33 engine** (`services/doctasks.ts`): the kind guard
+  fell away (only `compare` still refuses); validation = `params.targetLang: 'de' | 'en'`
+  (closed v1 set — a free-text language field invites silent quality failures) + exactly
+  one source document, indexed with chunks. Queue/cancel/polling/both D26 guards came free
+  from Phase 33 — nothing was duplicated. New injected deps for materializing kinds:
+  `getStoreDir` / `getIngestionDeps` / `beginDocumentWork`.
+- **D36 (input): re-extracted parser SEGMENTS, not stored chunks.** Chunks overlap by ~80
+  tokens; in-order chunk concatenation would duplicate text at every boundary (a summary
+  tolerated it, a faithful translation cannot). `extractDocumentPreview` is the existing
+  ordered, non-overlapping re-extraction (encrypted copies decrypt to a `.parse*`
+  transient, shredded inside); overlap-trimming chunks was rejected as heuristic where the
+  re-parse is exact. Cost: one re-parse — the same the in-app preview pays.
+- **Window math from MEASURED token weight (R-T2):** the usable context (ctx − 300 reserve)
+  splits input 1.3 tokens/word vs output **2.0 tokens/word**
+  (`TRANSLATION_OUTPUT_TOKENS_PER_WORD` — the smoke's first run TRUNCATED a near-budget
+  German output under a half/half split; see §14). At 4096 ctx: 1150-word windows,
+  `maxTokens` 2301. Segments pack greedily in order (over-budget segments split, never
+  truncated); **no window ceiling, no reduce** — a faithful translation may not silently
+  truncate; long documents just take more windows (visible progress, cancel anytime).
+- **Strict template, temp 0.2** (R-T2-validated: zero refusal/chatter, full Markdown
+  survival, no language drift, embedded instructions translated not obeyed): translate
+  faithfully/completely, preserve Markdown, numbers/names/dates verbatim, output only the
+  translation. **Retry-then-mark policy:** a failed/empty window is retried once, then
+  marked visibly in the output (`failedWindowNotice`, §11.4 copy) with the ORIGINAL text
+  kept below — never dropped; all-windows-failed fails the task.
+- **Materialize (D27) under the Phase-32 lease:** only after all windows (cancel persists
+  nothing): attribution line ("Machine-translated by <model> — may contain errors.") +
+  body → a `<jobId>.parse.md` transient (crash-sweep-covered, shredded in `finally`) →
+  the NORMAL import path (`createQueuedDocument` with display title
+  "<original> (Deutsch|English).md" + `processDocument` with real ingestion deps) ⇒
+  chunked, embedded, searchable, citable, `.enc` automatically. `beginDocumentWork()` is
+  held around exactly this step (never the long window loop); `VaultBusyError` passes
+  through as a friendly failure. A failed import deletes the half-born row. Provenance =
+  additive `documents.origin_json` (`ensureColumn`) `{ translatedFrom, targetLang }`,
+  surfaced as `DocumentInfo.origin` (malformed → null; survives re-index — provenance,
+  not sync; staleness recorded in `known-limitations.md`). The output document id is
+  appended to the task's `documentIds` at creation so `isDocumentBusy` covers it.
+- **Audit:** `document_task_completed/_failed` with `{ kind: 'translation', documentId }`
+  (the SOURCE; output id travels in `resultRef`) + a `document_imported` for the
+  materialized document (filename + id only) + new additive `document_exported`
+  (id only). Sentinel-tested end-to-end through a real translated + exported document.
+- **UI/IPC:** row "Translate" → target-choice modal (German/English) → "Translating…
+  (n/m)" + Cancel via the generalized module-level watcher (`startTask(kind, id, params)`
+  — one store, no second one); completion reveals the new document with a quiet
+  "Translated from <original>" line (row + preview). New `docs:export` channel
+  (the `exportConversation` pattern: save dialog in main, ids-only audit) saves a text
+  document's stored Markdown — shown on materialized rows.
+- **Tests:** `unit/doctasks-windows.test.ts` (budget split, packing/order/split, NO
+  ceiling, fit property, templates incl. verbatim-numbers, notice/attribution/title) ·
+  `integration/doctasks-translation.test.ts` (12: validation, the D36 overlap regression
+  — 600 unique words, every word exactly once in output, order proven — retry-then-mark,
+  all-fail, cancel-persists-nothing, lease acquired after the last window + released,
+  VaultBusyError friendly, busy-guard on the output doc via a gated embedder, encrypted
+  e2e with only-`.enc`-on-disk + export, origin re-index survival + malformed JSON) ·
+  audit-ipc sentinel extension (translate + export a sentinel document over real IPC) ·
+  `renderer/DocumentTranslate.test.tsx` (7: target choice, en variant, busy/cancel,
+  friendly failure, provenance row+preview, export, deleted-source fallback). Gate:
+  typecheck clean, 828/828 + manual skips, build green. Eyeballed against the built
+  bundle (walk-phase34.mjs, shots-p34): import → mock runtime → Translate→German →
+  progress → "(Deutsch)" doc indexed with attribution + provenance → preview → ask in
+  chat (Sources disclosure) → cancel leaves no output → Export writes a real file.
 
 ## 8. Phase 35 — Compare two documents
 
@@ -540,7 +575,7 @@ manual smoke behind `PAID_OCR_SMOKE` with a real scan fixture on the test drive.
   `known-limitations.md` (m4a descope, OCR speed, summary ceiling), `PRIVACY.md` (mic use,
   all-local OCR/ASR), BUILD_STATE §1/§3/§5.
 
-## 13. Decisions (review round 1 resolved 2026-06-11; D31/D32/D34 resolve with their research gates; D35 added by the same-day audit)
+## 13. Decisions (review round 1 resolved 2026-06-11; D31/D32/D34 resolve with their research gates; D35 added by the same-day audit; D36 added + resolved with Phase 34)
 
 | # | Decision | Resolution |
 |---|---|---|
@@ -548,7 +583,8 @@ manual smoke behind `PAID_OCR_SMOKE` with a real scan fixture on the test drive.
 | D24 | Password-change mechanism | **RESOLVED (round 1): (b) envelope descriptor v2, migrate-on-first-change** — a random data key wrapped by the password-derived KEK; first change pays the one-time v1→v2 bulk re-encrypt (journaled swap), every later change is an atomic single-file re-wrap. O(1) recurring change, atomic commit point, unlocks future key features (recovery codes, rotation); v1 vaults untouched until they opt in. Direct re-encrypt and migrate-on-unlock rejected |
 | D25 | Summary persistence + long-doc strategy | **RESOLVED (round 1):** `documents.summary_json` + budgeted map-reduce with hard ceiling + honest `truncated` flag. Alternatives (summary-as-conversation, unbounded map-reduce) rejected: surface sprawl / CPU latency |
 | D26 | Doc-task concurrency vs chat | **RESOLVED (round 1): strict one-at-a-time** — tasks serialize among themselves (one queue), a task refuses to start while a chat answer is streaming, and a chat message sent while a task runs gets friendly copy ("A document task is running — you can cancel it"). Tasks are cancellable so the user is never stuck. R-T1 demoted to informational (see §14); revisit parallelism only with evidence |
-| D27 | Translation output form | **RESOLVED (round 1): materialized corpus document** ("<original> (Deutsch)") + `origin_json` provenance — searchable/citable/exportable, encrypted for free. Export-only and a dedicated results panel rejected (results leave the workspace / a whole new surface) |
+| D27 | Translation output form | **RESOLVED (round 1): materialized corpus document** ("<original> (Deutsch)") + `origin_json` provenance — searchable/citable/exportable, encrypted for free. Export-only and a dedicated results panel rejected (results leave the workspace / a whole new surface). **Implemented in Phase 34 (§7)** |
+| D36 | Translation input: chunks vs re-parse | **RESOLVED (Phase 34, 2026-06-11): re-extract the parser's SEGMENTS from the stored copy** (the `extractDocumentPreview` path) and window them with the D25 budget math. Stored chunks overlap by ~80 tokens — in-order concatenation duplicates text at every boundary, which a summary tolerated (D25) but a faithful translation cannot; trimming the overlap out of adjacent chunks was rejected as heuristic (chunk text is whitespace-normalized) where the re-parse is exact. Cost = one re-parse, same as the in-app preview. Regression-tested (every source word exactly once in the output) |
 | D28 | Compare result form + big-doc strategy | **RESOLVED (round 1): materialized "Comparison: A vs B" document** (same principle as D27, `origin_json` records both source ids); auto mode-switch full-stuff vs section-matched (vector-paired) by token math. No new result tables |
 | D29 | Timestamp representation | **RESOLVED (round 1):** whisper segments → `sectionLabel: "mm:ss–mm:ss"` (existing `Citation.section` surfaces it). No schema change |
 | D30 | Dictation capture pipeline | **RESOLVED (round 1):** renderer MediaRecorder → OfflineAudioContext resample → WAV bytes → main temp file (shredded) → transcriber; mic via scoped `setPermissionRequestHandler`. Streaming ASR explicitly out of scope |
@@ -564,7 +600,7 @@ manual smoke behind `PAID_OCR_SMOKE` with a real scan fixture on the test drive.
 |---|---|---|---|
 | R-S1 | FTS5 `snippet()`/`highlight()` present in both runtimes? | **RESOLVED — GO (probed 2026-06-11):** Electron 37.10.3 main process AND system Node 24.13.0, both SQLite 3.50.4: `snippet()`, `highlight()`, `bm25()` all work on a self-contained fts5 table. JS-truncation fallback not needed | 31 (fallback exists) |
 | R-T1 | llama-server b9585 concurrent-request behavior (slots/queue/reject)? | **RESOLVED — probed 2026-06-11** (`tests/manual/server-concurrency-probe.test.ts`, `PAID_CONCURRENCY_PROBE`, real b9585 + Qwen3-4B on the dev box): at our default spawn args a second `/v1/chat/completions` is served on a **PARALLEL slot** (continuous batching) — request B fired 1.5 s into A's stream got its first token at +212 ms and finished while A was still streaming (A: first token 49 ms, done 4 386 ms, 700 tok; B: first token 1 718 ms, done 1 791 ms). Not queued, not rejected ⇒ the D26 app-side guard is the ONLY serialization, which is exactly why it exists (predictable latency, no context splitting). Facts banked for a future parallelism revisit | nothing (informational; D26 stands) |
-| R-T2 | 4B-class quality: long-input translation drift; comparison-format adherence | Manual smoke on the test drive (existing `PAID_*` pattern) | 34, 35 (prompt design) |
+| R-T2 | 4B-class quality: long-input translation drift; comparison-format adherence | **Translation half RESOLVED — probed 2026-06-11** (`tests/manual/translation-smoke.test.ts`, `PAID_TRANSLATION_SMOKE`, real pinned b9585 + Qwen3-4B-instruct-q4 on the dev box, the SHIPPING prompts at temp 0.2). Findings: **(1) refusals/chatter: none** — no "Here is the translation", no refusal phrases, and an adversarial embedded-instruction window was translated, not obeyed. **(2) Language drift: none** on a near-budget (~1100-word) EN→DE input — head and tail both fully German (function-word scoring de=42/44, en=0/0). **(3) Markdown survival: complete** (h1/h2/bullets/table pipes/bold/blockquote all preserved DE→EN). **(4) Output↔input length — the load-bearing finding:** word ratios are ~1.0–1.1 (DE→EN) and ~0.94 (EN→DE), but German output costs **~2 real tokens per source word** (subword-heavy compounds): the first run's half-input/half-output context split CAPPED a near-budget window at `maxTokens` (ratio 0.67, output cut mid-sentence — silent truncation, exactly what this gate exists to catch). **Fix shipped:** the usable context now splits by measured weight — input 1.3 tok/word, output 2.0 (`TRANSLATION_OUTPUT_TOKENS_PER_WORD`); at 4096 ctx → 1150-word windows, `maxTokens` 2301. Re-run: 19/19 numbered sections present, no truncation. **(5)** Number VALUES/names/codes survive; formats localize (14.03.2026 → March 14, 2026) — accepted, documented. **Retry policy set:** one retry, then visible marking (failures were not observed; truncation is handled by sizing, not retries). **Comparison-format half stays OPEN for Phase 35** | ~~34~~ (done), 35 (comparison format) |
 | R-W1 | Pinned whisper.cpp release: binaries per OS, server vs CLI, JSON timestamp output, license, archive shapes + hashes | Inspect the release's real assets (b9585 discipline) | 36 (D34) |
 | R-W2 | Decodable input formats of the pinned binary (mp3? flac? m4a?) | Feed real files to the real binary | 36 (format promise) |
 | R-W3 | Whisper model size for DE+EN on the reference laptop (RTF, RAM) | Manual smoke, German audio | 36 (manifest) |

@@ -288,6 +288,25 @@ A few honest notes:
 - Summary quality depends on the model: small models summarize well; very small ones may
   be terse.
 
+**Translate a document.** Every Ready document also has a **Translate** button — pick
+**German** or **English** (the two supported targets for now) and the local model writes a
+translated copy, fully on this drive. The result is a **new document** in your list, named
+like *"report (Deutsch)"*: it is searchable, answerable in *Ask my documents* (with
+citations), and you can **Export** it as a Markdown file. The new document starts with an
+honest *"Machine-translated by &lt;model&gt; — may contain errors."* line, and its row shows
+*"Translated from &lt;original&gt;"* so you always know where it came from.
+
+A few honest notes about translations:
+
+- Long documents are translated part by part — you see the progress on the row and can
+  cancel anytime (a cancelled translation leaves nothing behind).
+- If a part cannot be translated even after a retry, the app **marks that part clearly in
+  the result and keeps the original text there** — it never silently drops content.
+- The translation is a snapshot: if you re-import or re-index the **original**, the
+  translated copy does not update — run Translate again.
+- Machine translation quality depends on the model. Number *values*, names, and dates are
+  preserved, but formats may be localized (e.g. *14.03.2026* → *March 14, 2026*).
+
 ---
 
 ## 8. Privacy & offline

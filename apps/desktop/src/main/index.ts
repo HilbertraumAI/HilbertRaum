@@ -14,6 +14,7 @@ import { registerChatIpc } from './ipc/registerChatIpc'
 import { registerDocsIpc } from './ipc/registerDocsIpc'
 import { registerDocTasksIpc } from './ipc/registerDocTasksIpc'
 import { DocTaskManager } from './services/doctasks'
+import { documentsDir } from './services/ingestion'
 import { inFlightStreams } from './ipc/inflight'
 import { registerDownloadIpc } from './ipc/registerDownloadIpc'
 import { registerRagIpc } from './ipc/registerRagIpc'
@@ -218,14 +219,20 @@ function initBackend(): void {
     onSelect: (kind, reason) => log.info('Reranker backend selected', { kind, reason })
   })
 
-  // Document task engine (Phase 33): one-at-a-time summary/translation/compare jobs.
-  // The chat-streaming guard reads the shared in-flight registry (fact §2.8) — tasks
-  // never put entries INTO that map; they own their AbortControllers.
+  // Document task engine (Phase 33/34): one-at-a-time summary/translation/compare
+  // jobs. The chat-streaming guard reads the shared in-flight registry (fact §2.8) —
+  // tasks never put entries INTO that map; they own their AbortControllers. The
+  // ingestion deps + vault lease serve the translation materialize step (Phase 34):
+  // the new document goes through the normal import path (embedded + `.enc`-encrypted)
+  // while holding `beginDocumentWork()` for exactly that step.
   const docTasks = new DocTaskManager({
     getDb: () => workspace.requireDb(),
     getRuntime: () => runtime.active(),
     isChatStreaming: () => inFlightStreams.size > 0,
     getContextTokens: () => getSettings(workspace.requireDb()).contextTokens,
+    getStoreDir: () => documentsDir(paths.workspacePath),
+    getIngestionDeps: () => ({ embedder, cipher: workspace.documentCipher() }),
+    beginDocumentWork: () => workspace.beginDocumentWork(),
     audit
   })
 

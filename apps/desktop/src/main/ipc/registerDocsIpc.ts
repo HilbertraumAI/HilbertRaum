@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { writeFileSync } from 'node:fs'
 import { BrowserWindow, dialog, ipcMain } from 'electron'
 import { IPC } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
@@ -11,6 +12,7 @@ import {
   extractDocumentPreview,
   listDocuments,
   processDocument,
+  readStoredDocumentText,
   reconcileStuckDocuments,
   reindexDocument,
   type IngestionDeps
@@ -202,6 +204,40 @@ export function registerDocsIpc(ctx: AppContext): void {
     return extractDocumentPreview(ctx.db, storeDir, documentId, {
       cipher: ctx.workspace.documentCipher()
     })
+  })
+
+  // Save a TEXT document's stored content to a user-chosen file (Phase 34 — the
+  // exportConversation pattern: dialog + fs in MAIN, never the renderer). Built for
+  // materialized translations (always Markdown); any plain-text document qualifies.
+  // Resolves with the saved path, or null when the user cancelled.
+  ipcMain.handle(IPC.exportDocument, async (_e, documentId: string): Promise<string | null> => {
+    requireUnlocked()
+    requireNotProcessing(documentId)
+    const { title, text } = readStoredDocumentText(ctx.db, storeDir, documentId, {
+      cipher: ctx.workspace.documentCipher()
+    })
+    const dot = title.lastIndexOf('.')
+    const baseName = (dot > 0 ? title.slice(0, dot) : title)
+      .replace(/[^\p{L}\p{N} ()_-]/gu, '')
+      .trim()
+      .slice(0, 60)
+    const options = {
+      title: 'Export document',
+      defaultPath: `${baseName || 'document'}.md`,
+      filters: [
+        { name: 'Markdown', extensions: ['md'] },
+        { name: 'Text', extensions: ['txt'] }
+      ]
+    }
+    const win = BrowserWindow.getFocusedWindow()
+    const result = win ? await dialog.showSaveDialog(win, options) : await dialog.showSaveDialog(options)
+    if (result.canceled || !result.filePath) return null
+    writeFileSync(result.filePath, text, 'utf8')
+    log.info('Document exported', { documentId })
+    // Audit (Phase 19 privacy rule): the id only — the chosen path is user-private
+    // and the text is content.
+    ctx.audit?.('document_exported', 'Document exported to a file', { documentId })
+    return result.filePath
   })
 
   ipcMain.handle(IPC.reindexDocument, async (_e, documentId: string): Promise<DocumentInfo> => {

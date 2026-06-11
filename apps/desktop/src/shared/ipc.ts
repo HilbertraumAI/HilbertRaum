@@ -46,8 +46,11 @@ export const IPC = {
   reindexDocument: 'docs:reindex',
   /** Read-only in-app preview: re-extract the stored copy's text (post-MVP). */
   previewDocument: 'docs:preview',
-  // Phase 33 — document tasks (async with polling, the Phase-4/18 precedent)
-  /** Start a document task (summary now; translation/compare ride the same machine). */
+  /** Save a text document's stored content to a user-chosen file (Phase 34 —
+   *  the exportConversation pattern; enables exporting materialized translations). */
+  exportDocument: 'docs:export',
+  // Phase 33/34 — document tasks (async with polling, the Phase-4/18 precedent)
+  /** Start a document task (summary, translation; compare rides the same machine). */
   startDocTask: 'doctasks:start',
   /** Poll one task's state/progress. */
   getDocTask: 'doctasks:get',

@@ -4,6 +4,7 @@ import {
   existsSync,
   mkdirSync,
   readdirSync,
+  readFileSync,
   rmSync,
   statSync
 } from 'node:fs'
@@ -11,6 +12,7 @@ import { basename, extname, join } from 'node:path'
 import type { Db } from '../db'
 import type {
   DocumentInfo,
+  DocumentOrigin,
   DocumentPreview,
   DocumentSummary,
   IngestionStatus
@@ -92,6 +94,7 @@ interface DocumentRow {
   status: string
   error_message: string | null
   summary_json: string | null
+  origin_json: string | null
   created_at: string
   updated_at: string
 }
@@ -129,6 +132,25 @@ function parseSummary(json: string | null | undefined): DocumentSummary | null {
   return null
 }
 
+/** Parse a stored origin (Phase 34 provenance); malformed JSON reads as null. */
+function parseOrigin(json: string | null | undefined): DocumentOrigin | null {
+  if (!json) return null
+  try {
+    const v = JSON.parse(json) as Partial<DocumentOrigin> | null
+    if (
+      v &&
+      typeof v.translatedFrom === 'string' &&
+      v.translatedFrom.length > 0 &&
+      (v.targetLang === 'de' || v.targetLang === 'en')
+    ) {
+      return { translatedFrom: v.translatedFrom, targetLang: v.targetLang }
+    }
+  } catch {
+    // fall through to null
+  }
+  return null
+}
+
 function rowToInfo(row: DocumentRow, chunkCount: number, staleEmbeddings?: boolean): DocumentInfo {
   return {
     id: row.id,
@@ -141,6 +163,7 @@ function rowToInfo(row: DocumentRow, chunkCount: number, staleEmbeddings?: boole
     chunkCount,
     staleEmbeddings,
     summary: parseSummary(row.summary_json),
+    origin: parseOrigin(row.origin_json),
     createdAt: row.created_at,
     updatedAt: row.updated_at
   }
@@ -184,8 +207,14 @@ function setStatus(db: Db, id: string, status: IngestionStatus, errorMessage: st
   )
 }
 
-/** Insert a `queued` document row for `filePath` and return its DocumentInfo. */
-export function createQueuedDocument(db: Db, filePath: string): DocumentInfo {
+/**
+ * Insert a `queued` document row for `filePath` and return its DocumentInfo.
+ * `displayTitle` (Phase 34) overrides the filename-derived title for app-GENERATED
+ * files imported from a transient path (e.g. a materialized translation) — the title
+ * drives parser selection, the stored copy's extension, and citation source labels,
+ * so it must be set BEFORE processing and must keep a supported extension.
+ */
+export function createQueuedDocument(db: Db, filePath: string, displayTitle?: string): DocumentInfo {
   const now = nowIso()
   const id = randomUUID()
   let sizeBytes: number | null = null
@@ -194,11 +223,12 @@ export function createQueuedDocument(db: Db, filePath: string): DocumentInfo {
   } catch {
     sizeBytes = null
   }
+  const title = displayTitle ?? basename(filePath)
   db.prepare(
     `INSERT INTO documents
        (id, title, original_path, stored_path, mime_type, size_bytes, sha256, status, error_message, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).run(id, basename(filePath), filePath, null, guessMime(filePath), sizeBytes, null, 'queued', null, now, now)
+  ).run(id, title, filePath, null, guessMime(title), sizeBytes, null, 'queued', null, now, now)
   return rowToInfo(getRow(db, id) as DocumentRow, 0)
 }
 
@@ -481,6 +511,85 @@ export function setDocumentSummary(db: Db, documentId: string, summary: Document
 export function getDocumentSummary(db: Db, documentId: string): DocumentSummary | null {
   const row = getRow(db, documentId)
   return row ? parseSummary(row.summary_json) : null
+}
+
+/**
+ * Record a generated document's provenance (Phase 34, D27): `origin_json` holds
+ * `{ translatedFrom, targetLang }`. Also clears `original_path` — a materialized
+ * document's "original" was a transient generated file that is shredded after import,
+ * so a dangling path must not linger in the row. Provenance survives re-index
+ * deliberately (it states where the document CAME from, not that it is in sync).
+ */
+export function setDocumentOrigin(db: Db, documentId: string, origin: DocumentOrigin): void {
+  db.prepare(
+    'UPDATE documents SET origin_json = ?, original_path = NULL, updated_at = ? WHERE id = ?'
+  ).run(JSON.stringify(origin), nowIso(), documentId)
+}
+
+/** Read a document's provenance, or null (missing document / malformed JSON included). */
+export function getDocumentOrigin(db: Db, documentId: string): DocumentOrigin | null {
+  const row = getRow(db, documentId)
+  return row ? parseOrigin(row.origin_json) : null
+}
+
+/** Plain-text formats `readStoredDocumentText` can export as-is (no layout re-render). */
+const EXPORTABLE_TEXT_EXTENSIONS: ReadonlySet<string> = new Set([
+  '.md',
+  '.markdown',
+  '.mdown',
+  '.txt',
+  '.text',
+  '.log',
+  '.csv',
+  '.tsv'
+])
+
+/**
+ * Read a TEXT document's stored content for export (Phase 34): materialized
+ * translations are Markdown, so saving the stored copy verbatim IS the export. Only
+ * plain-text formats are exportable this way (a PDF/DOCX stored copy is the original
+ * binary, not text). In an encrypted workspace the `.enc` copy is decrypted to a
+ * transient working file (`.parse` infix — covered by the startup crash sweep) that is
+ * shredded on the way out; the plaintext leaves the main process only as the returned
+ * string, which the caller writes to the user-chosen destination.
+ */
+export function readStoredDocumentText(
+  db: Db,
+  storeDir: string,
+  documentId: string,
+  deps: Pick<IngestionDeps, 'cipher'> = {}
+): { title: string; text: string } {
+  const row = getRow(db, documentId)
+  if (!row) throw new Error(`Unknown document: ${documentId}`)
+  const ext = extname(row.title).toLowerCase()
+  if (!EXPORTABLE_TEXT_EXTENSIONS.has(ext)) {
+    throw new Error('Only text documents (Markdown, TXT, CSV) can be exported this way.')
+  }
+
+  const cipher = deps.cipher ?? null
+  const transients: string[] = []
+  try {
+    let source: string
+    if (row.stored_path && existsSync(row.stored_path)) {
+      if (row.stored_path.endsWith(ENCRYPTED_DOC_SUFFIX)) {
+        if (!cipher) {
+          throw new Error('This document is encrypted; unlock the workspace to export it.')
+        }
+        source = join(storeDir, `${documentId}.parse-export${ext}`)
+        cipher.decryptFile(row.stored_path, source)
+        transients.push(source)
+      } else {
+        source = row.stored_path
+      }
+    } else if (row.original_path && existsSync(row.original_path)) {
+      source = row.original_path
+    } else {
+      throw new Error('The document file is no longer on disk. Re-import it to export.')
+    }
+    return { title: row.title, text: readFileSync(source, 'utf8') }
+  } finally {
+    for (const t of transients) shredFile(t)
+  }
 }
 
 /**

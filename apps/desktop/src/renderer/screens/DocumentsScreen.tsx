@@ -1,12 +1,18 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { Badge, Banner, Button, ConfirmDialog, EmptyState, Modal, type BadgeTone } from '../components'
-import type { DocumentInfo, DocumentPreview, DocumentSummary, IngestionStatus } from '@shared/types'
+import type {
+  DocumentInfo,
+  DocumentPreview,
+  DocumentSummary,
+  IngestionStatus,
+  TranslationTargetLang
+} from '@shared/types'
 import {
   acknowledgeDocTask,
   cancelActiveDocTask,
   getActiveDocTask,
   isDocTaskTerminal,
-  startSummaryTask,
+  startTask,
   subscribeDocTask
 } from '../lib/doctasks'
 import { friendlyIpcError } from '../lib/errors'
@@ -56,6 +62,8 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
   const [previewLoading, setPreviewLoading] = useState(false)
   // Destructive delete goes through a ConfirmDialog (guidelines §6), not browser confirm.
   const [confirmDelete, setConfirmDelete] = useState<DocumentInfo | null>(null)
+  // "Translate" target choice (Phase 34): the row button opens this small modal.
+  const [translateDoc, setTranslateDoc] = useState<DocumentInfo | null>(null)
   // "Ask these documents" selection (indexed documents only).
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set())
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -151,15 +159,18 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
     }
   }
 
-  // When the active task finishes: refresh the list, show the fresh summary (the
-  // one-click promise) or the friendly failure, then clear the store entry.
+  // When the active task finishes: refresh the list, then show the outcome — a done
+  // summary auto-opens the preview with the fresh summary (the one-click promise); a
+  // done translation reveals the new document in the refreshed list (its row carries
+  // the provenance line). Failures show the friendly copy; then clear the store entry.
   useEffect(() => {
     if (!activeTask || !isDocTaskTerminal(activeTask.status)) return
     const status = activeTask.status
     const documentId = activeTask.documentId
+    const kind = activeTask.kind
     acknowledgeDocTask()
     void refresh().catch(() => undefined)
-    if (status?.state === 'done') {
+    if (status?.state === 'done' && kind === 'summary') {
       void window.api
         .previewDocument(documentId)
         .then(setPreview)
@@ -173,10 +184,37 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
     setError(null)
     setPreview(null)
     try {
-      await startSummaryTask(d.id)
+      await startTask('summary', d.id)
     } catch (e) {
       setError(friendlyIpcError(e))
     }
+  }
+
+  async function onTranslate(d: DocumentInfo, targetLang: TranslationTargetLang): Promise<void> {
+    setTranslateDoc(null)
+    setError(null)
+    setPreview(null)
+    try {
+      await startTask('translation', d.id, { targetLang })
+    } catch (e) {
+      setError(friendlyIpcError(e))
+    }
+  }
+
+  // Save a document's stored text (e.g. a translation) to a user-chosen file.
+  async function onExport(d: DocumentInfo): Promise<void> {
+    setError(null)
+    try {
+      await window.api.exportDocument(d.id)
+    } catch (e) {
+      setError(friendlyIpcError(e))
+    }
+  }
+
+  /** Source title for a generated document's provenance line (the source may be gone). */
+  function originTitle(d: DocumentInfo): string | null {
+    if (!d.origin) return null
+    return docs?.find((x) => x.id === d.origin?.translatedFrom)?.title ?? 'a removed document'
   }
 
   const anyActive = docs?.some((d) => ACTIVE_STATUSES.has(d.status)) ?? false
@@ -313,6 +351,11 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
               </span>
             )}
           </div>
+          {d.origin && (
+            <p className="hint" style={{ margin: '2px 0 0' }}>
+              Translated from <b>{originTitle(d)}</b>
+            </p>
+          )}
           {d.status === 'failed' && d.errorMessage && <Banner tone="error">{d.errorMessage}</Banner>}
           {d.staleEmbeddings && (
             <Banner tone="warning">
@@ -333,26 +376,55 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
               d.chunkCount > 0 &&
               (activeTask && activeTask.documentId === d.id && !isDocTaskTerminal(activeTask.status) ? (
                 <>
-                  <Button size="sm" disabled title="The summary is being written">
-                    <span className="spinner" /> Summarizing…
+                  <Button
+                    size="sm"
+                    disabled
+                    title={
+                      activeTask.kind === 'translation'
+                        ? 'The translation is being written'
+                        : 'The summary is being written'
+                    }
+                  >
+                    <span className="spinner" />{' '}
+                    {activeTask.kind === 'translation' ? 'Translating…' : 'Summarizing…'}
                     {activeTask.status && activeTask.status.progress.stepsTotal > 1
                       ? ` (${activeTask.status.progress.stepsDone}/${activeTask.status.progress.stepsTotal})`
                       : ''}
                   </Button>
-                  <Button size="sm" onClick={() => void cancelActiveDocTask()} title="Stop the summary">
+                  <Button size="sm" onClick={() => void cancelActiveDocTask()} title="Stop the task">
                     Cancel
                   </Button>
                 </>
               ) : (
-                <Button
-                  size="sm"
-                  disabled={busy !== null || activeTask !== null}
-                  onClick={() => void onSummarize(d)}
-                  title="Write a summary with the local model — nothing leaves this drive"
-                >
-                  {d.summary ? 'Summarize again' : 'Summarize'}
-                </Button>
+                <>
+                  <Button
+                    size="sm"
+                    disabled={busy !== null || activeTask !== null}
+                    onClick={() => void onSummarize(d)}
+                    title="Write a summary with the local model — nothing leaves this drive"
+                  >
+                    {d.summary ? 'Summarize again' : 'Summarize'}
+                  </Button>
+                  <Button
+                    size="sm"
+                    disabled={busy !== null || activeTask !== null}
+                    onClick={() => setTranslateDoc(d)}
+                    title="Translate with the local model — nothing leaves this drive"
+                  >
+                    Translate
+                  </Button>
+                </>
               ))}
+            {d.origin && (
+              <Button
+                size="sm"
+                disabled={busy !== null || ACTIVE_STATUSES.has(d.status)}
+                onClick={() => void onExport(d)}
+                title="Save this document as a Markdown file"
+              >
+                Export
+              </Button>
+            )}
             <Button
               size="sm"
               disabled={busy !== null || ACTIVE_STATUSES.has(d.status) || activeTask?.documentId === d.id}
@@ -389,10 +461,38 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
         </p>
       </ConfirmDialog>
 
+      {translateDoc && (
+        <Modal
+          open
+          title={`Translate "${translateDoc.title}"`}
+          ariaLabel={`Translate ${translateDoc.title}`}
+          onClose={() => setTranslateDoc(null)}
+        >
+          <p className="hint" style={{ marginTop: 0 }}>
+            The local model writes a translated copy as a new document — searchable and
+            askable like any import, and nothing leaves this drive. Machine translations
+            can contain errors.
+          </p>
+          <div className="actions">
+            <Button variant="primary" onClick={() => void onTranslate(translateDoc, 'de')}>
+              To German (Deutsch)
+            </Button>
+            <Button variant="primary" onClick={() => void onTranslate(translateDoc, 'en')}>
+              To English
+            </Button>
+            <Button onClick={() => setTranslateDoc(null)}>Cancel</Button>
+          </div>
+        </Modal>
+      )}
+
       {preview && (
         <PreviewModal
           preview={preview}
           summary={docs?.find((x) => x.id === preview.id)?.summary ?? null}
+          originTitle={(() => {
+            const d = docs?.find((x) => x.id === preview.id)
+            return d ? originTitle(d) : null
+          })()}
           regenerateDisabled={busy !== null || activeTask !== null}
           onRegenerate={() => {
             const d = docs?.find((x) => x.id === preview.id)
@@ -423,12 +523,15 @@ function summaryAttribution(s: DocumentSummary): string {
 function PreviewModal({
   preview,
   summary,
+  originTitle,
   regenerateDisabled,
   onRegenerate,
   onClose
 }: {
   preview: DocumentPreview
   summary?: DocumentSummary | null
+  /** Source document title when this is a generated translation (Phase 34), or null. */
+  originTitle?: string | null
   regenerateDisabled?: boolean
   onRegenerate?: () => void
   onClose: () => void
@@ -438,6 +541,11 @@ function PreviewModal({
       <p className="hint" style={{ margin: '0 0 8px' }}>
         Read-only extracted text — this is what document search and answers are based on.
       </p>
+      {originTitle && (
+        <p className="hint" style={{ margin: '0 0 8px' }}>
+          Translated from <b>{originTitle}</b>
+        </p>
+      )}
       {summary && (
         <details className="doc-summary" open>
           <summary>Summary</summary>

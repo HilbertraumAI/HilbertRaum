@@ -122,6 +122,17 @@ engine Phases 34–35 reuse), strict one-at-a-time vs chat enforced both ways wi
 ids-only `document_task_*` audit events, the Documents "Summarize" action + preview summary
 section; R-T1 resolved on the real b9585 (concurrent requests get PARALLEL slots — the
 app-side guard is the only serialization); plan §6 condensed to its design record (§3 entry).
+**Phase 34 (document translation workflow, D27/D36) is DONE 2026-06-11** — the `translation`
+kind on the same engine (`targetLang: 'de'|'en'`): D36 resolved (input = re-extracted parser
+SEGMENTS, never the ~80-token-overlapping chunks — no duplicated text, regression-tested),
+windows sized from the R-T2-measured German token weight (in 1.3 / out 2.0 tok/word — the
+smoke caught a real silent truncation under a half/half split), map-in-order with no
+ceiling/no reduce, retry-once-then-MARK failed windows, materialize as a NEW corpus document
+("<original> (Deutsch|English).md", attribution line) through the normal import path under
+the Phase-32 lease, `documents.origin_json` provenance surfaced as `DocumentInfo.origin`,
+new `docs:export` save-dialog export + `document_exported` audit event, Translate UI with
+target-choice modal + provenance line; R-T2's translation half resolved on the real b9585 +
+Qwen3-4B (plan §14); plan §7 condensed to its design record (§3 entry).
 Release-wise,
 remaining work = **manual release acceptance only** (§5, incl. the GPU
 hardware matrix, item 1b). Consciously-accepted gaps live in
@@ -167,6 +178,7 @@ hardware matrix, item 1b). Consciously-accepted gaps live in
 | 31 | Conversation search (wave-3 plan §4) + session-hardening rider | 🟢 done (2026-06-11) — `messages_fts` + `searchMessages` (bm25, newest-first tie-break) + `chat:search` + ConversationList search UI; deny-by-default permission handler shipped with it |
 | 32 | Vault password change (wave-3 plan §5, D24) | 🟢 done (2026-06-11) — descriptor v2 envelope (wrapped data key; new vaults v2), O(1) re-wrap per change, one-time journaled v1→v2 migration on first change, `workspace:changePassword` + Settings card, import↔change race guard |
 | 33 | Document tasks foundation + one-click summary (wave-3 plan §6, D25/D26) | 🟢 done (2026-06-11) — `DocTaskManager` engine (queue/cancel/polling, built for summary+translation+compare), strict one-at-a-time vs chat (both guards + renderer cancel option), budgeted map-reduce summary persisted in `documents.summary_json` (cleared by re-index), Summarize UI + preview section; R-T1 resolved (b9585 serves concurrent requests on parallel slots — app guard is the only serialization) |
+| 34 | Document translation workflow (wave-3 plan §7, D27/D36) | 🟢 done (2026-06-11) — `translation` kind on the Phase-33 engine (`targetLang: 'de'\|'en'`), D36 resolved (re-extracted parser segments, never the overlapping chunks), R-T2-measured window math (German out ≈ 2 tok/word — half/half split truncated and was fixed), retry-once-then-mark failed windows, materialized "<original> (Deutsch\|English).md" via the normal import path under the Phase-32 lease, `documents.origin_json` provenance, `docs:export` save-dialog export, Translate UI + provenance line; R-T2 translation half resolved on real b9585 + Qwen3-4B |
 
 Legend: ⚪ not started · 🟡 in progress · 🟢 done · 🔴 blocked
 
@@ -1612,6 +1624,94 @@ Repo root: `f:\_coding\ai_drive`.
      busy copy + cancel clears → re-index clears the summary → regenerate writes a fresh
      one.
 
+- **Phase 34 — document translation workflow (2026-06-11; plan §7 condensed to its design
+  record; D27 implemented as resolved; new D36 resolved; R-T2 translation half probed +
+  resolved):**
+  1. **The `translation` kind on the Phase-33 engine** (`services/doctasks.ts`): kind
+     guard removed (only `compare` still refuses friendly), validation =
+     `params.targetLang: 'de' | 'en'` (closed v1 set — free-text language fields invite
+     silent quality failures) + exactly one indexed-with-chunks source document.
+     Queue/cancel/polling and both D26 guards came free from Phase 33. New REQUIRED
+     engine deps for materializing kinds: `getStoreDir` / `getIngestionDeps` /
+     `beginDocumentWork` (wired in `main/index.ts` from the workspace controller).
+  2. **D36 (translation input — the overlap answer): re-extract the parser's SEGMENTS
+     from the stored copy** via `extractDocumentPreview` (ordered, non-overlapping,
+     exact; encrypted copies decrypt to a `.parse*` transient and are shredded). Stored
+     chunks overlap by ~80 tokens — in-order chunk concatenation would DUPLICATE text at
+     every boundary (summary tolerated it per D25; a faithful translation cannot).
+     Overlap-trimming was rejected as heuristic where the re-parse is exact. Cost = one
+     re-parse, identical to the in-app preview. Regression test: 600 unique words in,
+     every word EXACTLY once out, original order proven.
+  3. **Window math from R-T2-MEASURED token weight:** usable = ctx − 300 reserve, split
+     input 1.3 tokens/word vs output **2.0 tokens/word**
+     (`TRANSLATION_OUTPUT_TOKENS_PER_WORD`) ⇒ at 4096 ctx: 1150-word windows,
+     `maxTokens` 2301. The smoke's FIRST run (half/half split, 1898 maxTokens) silently
+     TRUNCATED a near-budget German output mid-sentence (word ratio 0.67) — exactly the
+     failure class the research gate exists to catch; the re-run after the fix shows
+     19/19 sections, ratio 0.94. **No window ceiling, no reduce** — a faithful
+     translation may not cover "the beginning" only; windows map in document order at
+     temp 0.2 and concatenate.
+  4. **Retry-then-mark (R-T2 policy):** a failed/empty window is retried once, then
+     MARKED visibly (`failedWindowNotice`, §11.4 blockquote) with the ORIGINAL text kept
+     below — never silently dropped; only all-windows-failed fails the task. Aborts
+     always propagate (cancel never looks like a failed window).
+  5. **Materialize under the Phase-32 lease (the inverse of Phase 33's no-lease note):**
+     only after all windows (cancel persists NOTHING — last cancellation point is right
+     before the lease): attribution ("Machine-translated by <model> — may contain
+     errors.") + body → `<jobId>.parse.md` transient (crash-sweep-covered, shredded in
+     `finally`) → the NORMAL import path (`createQueuedDocument` with display title
+     "<original> (Deutsch|English).md" + `processDocument` with the real ingestion
+     deps) ⇒ chunked, embedded, searchable, citable, `.enc` automatically.
+     `beginDocumentWork()` wraps exactly this step (the long window loop never blocks a
+     password change); `VaultBusyError` passes through as friendly task failure. Failed
+     import deletes the half-born row (fully-succeeds-or-persists-nothing). The output
+     doc id is APPENDED to the task's `documentIds` at creation so `isDocumentBusy`
+     covers it before the import finishes (it is born outside `registerDocsIpc`'s
+     `processing` set).
+  6. **Provenance:** additive `documents.origin_json` (`ensureColumn`) holding
+     `{ translatedFrom, targetLang }` → `DocumentInfo.origin` (malformed JSON → null;
+     SURVIVES re-index — provenance, not sync; `setDocumentOrigin` also clears
+     `original_path`, the shredded transient). Staleness = accepted edge in
+     `known-limitations.md` (re-import/re-index of the source does not update a
+     translation; the user re-runs).
+  7. **Audit + export:** `document_task_completed/_failed` carry
+     `{ kind: 'translation', documentId: <SOURCE> }` (output id travels in `resultRef`);
+     the materialized doc gets a `document_imported` (filename + id only); new additive
+     `document_exported` (id only — never the user-chosen path). New `docs:export` IPC +
+     preload `exportDocument`: save-dialog export of a TEXT document's stored content
+     (`readStoredDocumentText` — decrypts `.enc` to a shredded transient; built for
+     materialized translations, refuses binary formats). Sentinel test extended: a
+     sentinel document is translated AND exported over real IPC; `runtime_events` never
+     contains it.
+  8. **UI:** row "Translate" → target-choice modal (German/English, honest
+     machine-translation note) → "Translating… (n/m)" + Cancel on the GENERALIZED
+     module-level watcher (`startTask(kind, documentId, params)` — one store for all
+     kinds, no second store); a done translation refreshes the list and reveals the new
+     document (summary keeps its auto-open-preview behavior); quiet "Translated from
+     <original>" line on the new doc's row AND preview (deleted source → "a removed
+     document"); Export button on materialized rows.
+  9. **R-T2 (translation half) RESOLVED** on the real pinned b9585 + Qwen3-4B
+     (`tests/manual/translation-smoke.test.ts`, `PAID_TRANSLATION_SMOKE`, dev-box root
+     `F:\paid-gpu-smoke-drive`, the SHIPPING prompts): zero refusals/chatter; zero
+     language drift on a near-budget EN→DE input; full Markdown survival (h1/h2/bullets/
+     table/bold/quote); embedded instructions translated, not obeyed; number VALUES/
+     names/codes kept while FORMATS localize (14.03.2026 → March 14, 2026 — accepted,
+     documented); German output ≈ 2 real tokens per source word (the sizing fact).
+     Findings + the first-run truncation catch banked in plan §14. The
+     comparison-format half stays open for Phase 35.
+  10. **Tests:** `unit/doctasks-windows.test.ts` extension (budget split, packing/order/
+     split-not-truncate, NO ceiling, fit property, templates incl. verbatim-numbers,
+     notice/attribution/title) · `integration/doctasks-translation.test.ts` (12, incl.
+     the D36 regression, lease-after-last-window proof, VaultBusy friendly, gated-
+     embedder busy-guard proof, encrypted-workspace e2e with only-`.enc`-on-disk) ·
+     audit-ipc sentinel extension · `renderer/DocumentTranslate.test.tsx` (7). Gate:
+     typecheck clean, **828/828 tests pass** (+16 manual skips), build green. Eyeballed
+     against the BUILT bundle (`walk-phase34.mjs`, shots-p34): import → mock runtime →
+     Translate→German (modal) → progress → "(Deutsch)" doc indexed with attribution +
+     provenance (light+dark) → preview → ask in chat (Sources disclosure) →
+     cancel-mid-translation leaves no output → Export writes a real attributed file
+     (main-process dialog patched via Playwright `app.evaluate`).
+
 ---
 
 ## 4. Shared data contracts (the actual "transported data")
@@ -1658,10 +1758,15 @@ the in-app model downloader, async-with-polling) +
 the Diagnostics Activity panel, newest-first paging + save-dialog export) +
 `searchConversations` (`chat:search`, Phase 31) + `changeWorkspacePassword`
 (`workspace:changePassword`, Phase 32) +
-`startDocTask`/`getDocTask`/`cancelDocTask` (`doctasks:start/get/cancel`, Phase 33 — document
-tasks, async-with-polling; `cancelDocTask()` with no jobId cancels the active task; shapes
-`StartDocTaskRequest`/`DocTaskStatus`/`DocumentSummary` in `shared/types.ts`, and
-`DocumentInfo` gained an optional `summary` from the additive `documents.summary_json` column).
+`startDocTask`/`getDocTask`/`cancelDocTask` (`doctasks:start/get/cancel`, Phases 33–34 —
+document tasks, async-with-polling; `cancelDocTask()` with no jobId cancels the active task;
+shapes `StartDocTaskRequest`/`DocTaskStatus`/`DocumentSummary` in `shared/types.ts`, and
+`DocumentInfo` gained an optional `summary` from the additive `documents.summary_json` column;
+Phase 34: `kind: 'translation'` takes `params.targetLang: TranslationTargetLang ('de'|'en')`,
+`resultRef.documentId` = the NEW materialized document, and `DocumentInfo` gained an optional
+`origin: DocumentOrigin` from the additive `documents.origin_json` column) +
+`exportDocument` (`docs:export`, Phase 34 — save-dialog export of a text document's stored
+content, the `exportConversation` pattern; resolves with the path or null on cancel).
 (`pickDocuments` + `reindexDocument` are Phase-4 additions to the `IPC` registry beyond the spec
 §9.1 list — picker + re-index UX; `getPolicy` is a Phase-8 addition; the four `workspace:*` channels
 are Phase-9 additions.) `createConversation` now also accepts an optional `mode`
@@ -2289,10 +2394,11 @@ items are **MANUAL acceptance only** (R2/R5/R7 + the GPU hardware matrix). In ro
    Qwen3 30B-A3B) + the embeddings question (Granite Embedding R2 small is the only 384-dim
    near-drop-in). Key verified fact: our pinned llama.cpp **b9585 is the 2026-06-09 release**,
    so Gemma 4 (needs ~b8607) runs on the runtime we already ship — no runtime bump needed.
-6. **Functionality wave 3 (Phases 31–38) — IN PROGRESS: Phases 31 + 32 + 33 DONE
-   2026-06-11, next up is Phase 34 (document translation — mostly a prompt template +
-   output handling on the Phase-33 task machinery; R-T2 manual smoke sets the window
-   size/retry policy; D27 resolved: materialized corpus document):** see the working paper
+6. **Functionality wave 3 (Phases 31–38) — IN PROGRESS: Phases 31 + 32 + 33 + 34 DONE
+   2026-06-11, next up is Phase 35 (compare two documents — the second materializing
+   kind on the task engine; the comparison-format half of R-T2 is still open and sets
+   its reduce-prompt design; D28 resolved: materialized "Comparison: A vs B" document,
+   auto mode-switch by token math):** see the working paper
    [`docs/functionality-wave-3-plan.md`](docs/functionality-wave-3-plan.md) (decisions
    D23–D34, research gates R-S1/R-T1–2/R-W1–4/R-O1–3). Eight user-selected features in
    dependency order: 31 conversation search (messages FTS5, mirrors D13) → 32 vault password
@@ -2339,12 +2445,35 @@ items are **MANUAL acceptance only** (R2/R5/R7 + the GPU hardware matrix). In ro
    **R-T1 RESOLVED (probed on real b9585):** a concurrent second chat request is served
    on a PARALLEL slot (not queued/rejected) — the app-side guard is the only
    serialization (plan §14). Plan §6 condensed to its design record (§3 entry).
-   **Phase 34 (document translation) is ready to start.**
+   **Phase 34 (document translation workflow) is DONE (2026-06-11)** — the `translation`
+   kind on the same engine (`params.targetLang: 'de' | 'en'`, closed v1 set): **D36**
+   resolved (input = parser SEGMENTS re-extracted via `extractDocumentPreview`, never
+   the ~80-token-overlapping chunks — no duplicated text in the output,
+   regression-tested), windows sized by R-T2-MEASURED token weight (input 1.3 tok/word,
+   output 2.0 — the smoke's first run caught a real silent truncation under a half/half
+   split), map in document order with no ceiling and no reduce, retry-once-then-MARK
+   failed windows (original text kept, §11.4 notice), then materialize as a NEW corpus
+   document through the normal import path under the Phase-32 lease (held around exactly
+   the materialize step; `VaultBusyError` → friendly failure), title
+   "<original> (Deutsch|English).md", attribution line prepended, provenance in additive
+   `documents.origin_json` → `DocumentInfo.origin` (survives re-index — provenance, not
+   sync), output-doc id appended to the task's `documentIds` so `isDocumentBusy` covers
+   it; `document_imported` recorded for the new doc + new `document_exported` event; new
+   `docs:export` IPC (save-dialog export of stored text/Markdown); Documents "Translate"
+   action with a target-choice modal + "Translating… (n/m)"/Cancel on the generalized
+   single watcher (`startTask`), provenance line on row + preview, Export on
+   materialized rows. **R-T2 (translation half) RESOLVED on the real b9585 + Qwen3-4B**
+   (`tests/manual/translation-smoke.test.ts`, `PAID_TRANSLATION_SMOKE`; findings in plan
+   §14: zero refusals/chatter, zero language drift, full Markdown survival, number
+   VALUES kept/formats localized, German output ≈ 2 tokens per source word — the
+   load-bearing sizing fact). Plan §7 condensed to its design record (§3 entry).
+   **Phase 35 (compare two documents) is ready to start.**
 
-**Current gate (2026-06-11, post-Phase-33): typecheck clean, 798/798 tests pass (+15 manual
+**Current gate (2026-06-11, post-Phase-34): typecheck clean, 828/828 tests pass (+16 manual
 tests behind `PAID_*` env vars — GPU/thinking/rerank/minsim/RAG-quality/bring-up/eval/
-concurrency-probe smokes — skipped in CI), `npm run build` green.** The per-phase gate
-history (test counts, bundle sizes, per-phase test inventories) lives in git history.
+concurrency-probe/translation smokes — skipped in CI), `npm run build` green.** The
+per-phase gate history (test counts, bundle sizes, per-phase test inventories) lives in
+git history.
 
 ---
 

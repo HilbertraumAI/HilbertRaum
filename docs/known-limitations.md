@@ -164,6 +164,31 @@ logs, best-effort shredding on SSDs, no password recovery — are documented in
   counts vary by language/model. Worst case is smaller-than-necessary windows (more map
   calls), never a context overflow.
 
+## Document translation (Phase 34, wave-3 plan §7)
+
+- **v1 targets are German and English only** (decided, plan §7). The bundled models and the
+  Phase-29 eval set cover DE/EN; a free-text language field would invite silent quality
+  failures. Widen only with evidence per language.
+- **A translation is a snapshot, not a synced copy (accepted staleness edge).** The
+  `origin_json` link records where the document CAME from — re-importing or re-indexing
+  the SOURCE does not update an existing translation; the user re-runs Translate. If the
+  source is later deleted, the provenance line says so ("a removed document") but the
+  translation keeps working.
+- **A window the model refuses/garbles is marked, never dropped.** After one retry the
+  output carries a visible "could not be translated" notice with the ORIGINAL text kept
+  below it; only an all-windows failure fails the whole task. Honesty over silent gaps.
+- **Number/date FORMATS may localize even though values survive.** The R-T2 smoke on the
+  real Qwen3-4B showed values, names, and invoice-style codes preserved, but formats
+  adapted to the target language (*14.03.2026* → *March 14, 2026*; *39,90* → *39.90*).
+  Correct translation behavior, stated honestly rather than promised away.
+- **Long documents take time — linearly.** There is deliberately NO window ceiling (a
+  faithful translation may not cover "the beginning" only, unlike the summary), so a
+  100-page document is many model calls on a CPU laptop. Progress is visible per window
+  and cancel always works (a cancelled translation persists nothing).
+- **Export covers text documents only.** The Export action saves the STORED text
+  (materialized translations are Markdown, so it is exact); PDFs/DOCX stored copies are
+  original binaries and are not exported through this path.
+
 ## GPU acceleration (Phases 14–16, [`gpu-support-plan.md`](gpu-support-plan.md))
 
 - **Integrated GPUs (Intel Iris Xe / UHD, AMD APU "Radeon Graphics") gain little.** They share

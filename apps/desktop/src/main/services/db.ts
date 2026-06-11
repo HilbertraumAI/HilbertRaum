@@ -96,6 +96,8 @@ CREATE TABLE IF NOT EXISTS runtime_events (
 //   "ask selected documents" scope, a JSON array of document ids (NULL = whole corpus).
 //   documents.summary_json — Phase 33 (wave-3 plan §6, decision D25): the persisted
 //   one-click summary `{ text, modelId, createdAt, truncated }` (NULL = none).
+//   documents.origin_json — Phase 34 (wave-3 plan §7, decision D27): provenance of an
+//   app-generated document `{ translatedFrom, targetLang }` (NULL = normal import).
 function ensureColumn(db: Db, table: string, column: string, ddl: string): void {
   const cols = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>
   if (!cols.some((c) => c.name === column)) {
@@ -179,6 +181,7 @@ export function openDatabase(path: string): Db {
   db.exec(SCHEMA)
   ensureColumn(db, 'conversations', 'scope_json', 'scope_json TEXT')
   ensureColumn(db, 'documents', 'summary_json', 'summary_json TEXT')
+  ensureColumn(db, 'documents', 'origin_json', 'origin_json TEXT')
   ensureChunksFts(db)
   ensureMessagesFts(db)
   return db

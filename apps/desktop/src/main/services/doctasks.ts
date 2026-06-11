@@ -1,20 +1,34 @@
 import { randomUUID } from 'node:crypto'
+import { writeFileSync } from 'node:fs'
+import { extname, join } from 'node:path'
 import type { Db } from './db'
 import type {
   DocTaskKind,
   DocTaskStatus,
+  DocumentOrigin,
   DocumentSummary,
-  StartDocTaskRequest
+  StartDocTaskRequest,
+  TranslationTargetLang
 } from '../../shared/types'
 import type { ChatMessage, ModelRuntime } from './runtime'
 import { approxTokenCount, tokenize } from './ingestion/chunker'
-import { getDocument, setDocumentSummary } from './ingestion'
+import {
+  createQueuedDocument,
+  deleteDocument,
+  extractDocumentPreview,
+  getDocument,
+  processDocument,
+  setDocumentOrigin,
+  setDocumentSummary,
+  type IngestionDeps
+} from './ingestion'
+import { shredFile } from './workspace-vault'
 import { isAbortError, stripThinkBlocks } from './chat'
 import type { AuditRecorder } from './audit'
 import { log } from './logging'
 
-// Document task service (Phase 33, wave-3 plan §6) — the shared engine for
-// summary (this phase), translation (Phase 34), and compare (Phase 35): a job state
+// Document task service (Phase 33/34, wave-3 plan §6/§7) — the shared engine for
+// summary (Phase 33), translation (Phase 34), and compare (Phase 35): a job state
 // machine on the Phase-4/18 async-with-polling precedent.
 //
 // Concurrency (decision D26, RESOLVED — strict one-at-a-time):
@@ -35,11 +49,15 @@ import { log } from './logging'
 // `documents.summary_json` column of the open DB — it never touches the `.enc`
 // document sidecars on disk. It therefore deliberately does NOT take the
 // `beginDocumentWork()` lease (which exists to keep sidecar writers and the vault
-// password change mutually exclusive). Future task kinds that materialize documents
-// (translation/compare, D27/D28) WILL need the lease — revisit there.
+// password change mutually exclusive). A TRANSLATION task is the inverse: its
+// materialize step writes a `.enc` sidecar through the normal import path, so that
+// step — and ONLY that step — holds the lease. The long window-by-window translation
+// loop runs lease-free so a password change is never blocked for minutes; a change
+// landing mid-loop just makes the final materialize fail friendly (VaultBusyError).
 //
-// Privacy: summaries are CONTENT. They are persisted only via `setDocumentSummary`
-// (the possibly-encrypted DB) and the audit events carry `{ kind, documentId }` only.
+// Privacy: summaries and translations are CONTENT. They are persisted only in the
+// (possibly encrypted) workspace — `documents.summary_json` / the materialized `.enc`
+// document — and the audit events carry `{ kind, documentId }` only.
 
 /** Friendly copy (spec §11.4) for the guards + failure states. */
 export const TASK_NEEDS_RUNTIME_MESSAGE =
@@ -52,6 +70,10 @@ export const TASK_DOCUMENT_NOT_READY_MESSAGE =
 export const TASK_GENERIC_FAILURE_MESSAGE =
   'The task could not be finished. Make sure the model is still running, then try again.'
 export const TASK_EXPIRED_MESSAGE = 'This task is no longer available.'
+export const TASK_TRANSLATION_TARGET_MESSAGE =
+  'Choose a translation language: German or English.'
+export const TASK_SOURCE_UNREADABLE_MESSAGE =
+  'The stored copy of this document could not be read. Re-import the document, then try again.'
 
 // ---- Summary window math (decision D25 — budget-driven two-level map-reduce) -------
 //
@@ -109,12 +131,16 @@ export interface SummaryPlan {
  * ceiling. More windows than the ceiling → keep the first SUMMARY_MAP_CALL_CEILING
  * and mark the plan truncated.
  */
-export function planSummaryWindows(chunkTexts: string[], contextTokens: number): SummaryPlan {
-  const budgetWords = summaryBudgetWords(contextTokens)
-
-  // Split any over-budget chunk into budget-sized pieces (document order kept).
+/**
+ * Pack texts greedily, in order, into windows of at most `budgetWords` words. A single
+ * over-budget text is SPLIT into budget-sized pieces rather than truncated — no text is
+ * silently dropped by packing. Shared by the summary (chunks in) and translation
+ * (segments in) planners.
+ */
+function packIntoWindows(texts: string[], budgetWords: number): string[] {
+  // Split any over-budget text into budget-sized pieces (document order kept).
   const pieces: Array<{ text: string; words: number }> = []
-  for (const text of chunkTexts) {
+  for (const text of texts) {
     const words = tokenize(text)
     if (words.length === 0) continue
     if (words.length <= budgetWords) {
@@ -143,6 +169,12 @@ export function planSummaryWindows(chunkTexts: string[], contextTokens: number):
     currentWords += piece.words
   }
   flush()
+  return windows
+}
+
+export function planSummaryWindows(chunkTexts: string[], contextTokens: number): SummaryPlan {
+  const budgetWords = summaryBudgetWords(contextTokens)
+  const windows = packIntoWindows(chunkTexts, budgetWords)
 
   let truncated = false
   let kept = windows
@@ -203,6 +235,165 @@ function reducePrompt(title: string, partials: string[]): string {
   )
 }
 
+// ---- Translation window math + templates (Phase 34, D36 + R-T2) ----------------------
+//
+// D36 (translation input): translate the parser's SEGMENTS, re-extracted from the
+// stored copy via `extractDocumentPreview` — NOT the stored chunks. Chunks overlap by
+// ~80 tokens (the retrieval overlap); naive in-order chunk concatenation would
+// DUPLICATE text at every boundary in the translated output. A summary tolerates that
+// repetition (D25 accepted it); a faithful translation cannot. The segments are
+// ordered, non-overlapping, and exact; the cost is one re-parse of the stored copy —
+// the same cost the in-app preview already pays, on the same code path (encrypted
+// copies decrypt to a `.parse*` transient and are shredded inside). The alternative —
+// trimming the overlap out of adjacent chunks — was rejected as fragile: chunk text is
+// whitespace-normalized at the token level, so overlap-matching is heuristic where the
+// re-parse is exact.
+//
+// Window sizing: unlike a summary (long in, short out), a translation's OUTPUT is
+// roughly as long as its input — and in TOKENS it is heavier than the input estimate:
+// the R-T2 smoke (plan §14) measured German output at ~2 real tokens per source word
+// (subword-heavy compounds), and an early half-input/half-output split TRUNCATED a
+// near-budget window mid-sentence when its German output hit the cap. The usable
+// context is therefore split by measured weight: input claims 1.3 tokens/word
+// (the D25 safety factor), output claims 2.0 — i.e. a window's input budget is
+// usable/(1.3+2.0) words and the rest of the context is output headroom. There is NO
+// window ceiling: a faithful translation may not silently truncate the document (the
+// summary ceiling exists because a summary may honestly cover "the beginning"; a
+// translation may not). Long documents simply take more windows — progress is visible
+// and cancel always works.
+
+/** Reserved for the instruction template + chat chrome, in model tokens. */
+export const TRANSLATION_PROMPT_RESERVE_TOKENS = 300
+/**
+ * Estimated OUTPUT tokens per source word for DE↔EN (measured on the real pinned
+ * b9585 + Qwen3-4B by the R-T2 smoke — German output is subword-heavy; 1.3× headroom
+ * truncated a near-budget window, 2.0× leaves ~40% margin over the worst measurement).
+ */
+export const TRANSLATION_OUTPUT_TOKENS_PER_WORD = 2.0
+/** Very low temperature: translation should be literal, not creative (R-T2). */
+export const TRANSLATION_TEMPERATURE = 0.2
+/** Floor for a window's output cap (degenerate tiny contexts). */
+const TRANSLATION_MIN_OUTPUT_TOKENS = 256
+/** Floor for the per-window input budget, in words. */
+const TRANSLATION_MIN_BUDGET_WORDS = 120
+
+/** Usable model tokens for a translation call after the prompt reserve. */
+function translationUsableTokens(contextTokens: number): number {
+  const ctx = Math.max(1024, Math.floor(contextTokens) || 0)
+  return ctx - TRANSLATION_PROMPT_RESERVE_TOKENS
+}
+
+/** The per-window INPUT budget in WORDS (the input's share of the usable context). */
+export function translationBudgetWords(contextTokens: number): number {
+  return Math.max(
+    TRANSLATION_MIN_BUDGET_WORDS,
+    Math.floor(
+      translationUsableTokens(contextTokens) /
+        (SUMMARY_TOKENS_PER_WORD + TRANSLATION_OUTPUT_TOKENS_PER_WORD)
+    )
+  )
+}
+
+export interface TranslationPlan {
+  /** Window texts, in document order (segments packed; over-budget segments split). */
+  windows: string[]
+  /** Output cap per window call: everything the input share leaves free. */
+  windowMaxTokens: number
+  /** Model calls (windows) + the final materialize step. */
+  stepsTotal: number
+}
+
+/**
+ * Plan the translation windows for a document's re-extracted SEGMENT texts (pure —
+ * unit-tested at the boundaries). No ceiling and no reduce: every window is translated
+ * in document order and concatenated.
+ */
+export function planTranslationWindows(
+  segmentTexts: string[],
+  contextTokens: number
+): TranslationPlan {
+  const usable = translationUsableTokens(contextTokens)
+  const budgetWords = translationBudgetWords(contextTokens)
+  const windows = packIntoWindows(segmentTexts, budgetWords)
+  // Output headroom = the usable tokens the input share cannot consume — ≈2.0× the
+  // input words by construction (TRANSLATION_OUTPUT_TOKENS_PER_WORD, R-T2-measured).
+  const windowMaxTokens = Math.max(
+    TRANSLATION_MIN_OUTPUT_TOKENS,
+    usable - Math.ceil(budgetWords * SUMMARY_TOKENS_PER_WORD)
+  )
+  return { windows, windowMaxTokens, stepsTotal: windows.length + 1 }
+}
+
+const TARGET_LANG_NAME: Record<TranslationTargetLang, string> = {
+  de: 'German',
+  en: 'English'
+}
+
+/** The display label used in the materialized document's title. */
+export const TARGET_LANG_TITLE_LABEL: Record<TranslationTargetLang, string> = {
+  de: 'Deutsch',
+  en: 'English'
+}
+
+/**
+ * Strict translator instructions (R-T2-informed): translate, don't summarize; keep
+ * the Markdown structure; numbers/names/dates verbatim; output only the translation
+ * (the 4B-class models otherwise prepend "Here is the translation:" chatter).
+ */
+export function translationSystemPrompt(targetLang: TranslationTargetLang): string {
+  const lang = TARGET_LANG_NAME[targetLang]
+  return (
+    `You are a professional translator working fully offline. Translate the user's text into ${lang}. ` +
+    'Translate faithfully and completely — never summarize, shorten, or add anything. ' +
+    'Preserve the Markdown structure: headings, lists, tables, and emphasis stay as they are. ' +
+    'Keep numbers, dates, names, and codes exactly as written. ' +
+    'Reply with ONLY the translation — no introduction, no notes, no explanations.'
+  )
+}
+
+export function translationWindowPrompt(
+  targetLang: TranslationTargetLang,
+  part: number,
+  total: number,
+  text: string
+): string {
+  const lang = TARGET_LANG_NAME[targetLang]
+  const partNote =
+    total > 1 ? ` This is part ${part} of ${total} of a longer document; translate just this part.` : ''
+  return (
+    `Translate the following text into ${lang}.${partNote} ` +
+    'Translate everything, keep numbers, names, and dates verbatim, and reply with only the translation.\n\n' +
+    `Text:\n${text}`
+  )
+}
+
+/**
+ * Visible marker for a window the model refused/garbled after a retry (plan §7
+ * honesty requirement, §11.4 copy): the output keeps the ORIGINAL text under the
+ * notice — never a silent gap.
+ */
+export function failedWindowNotice(part: number, total: number): string {
+  return (
+    `> ⚠ This part (${part} of ${total}) could not be translated — ` +
+    'the original text is kept below unchanged.'
+  )
+}
+
+/** The honesty attribution prepended to every materialized translation (plan §7). */
+export function translationAttributionLine(modelId: string): string {
+  return `Machine-translated by ${modelId} — may contain errors.`
+}
+
+/** "report.pdf" + de → "report (Deutsch).md" (the materialized doc is Markdown). */
+export function translatedDocumentTitle(
+  sourceTitle: string,
+  targetLang: TranslationTargetLang
+): string {
+  const ext = extname(sourceTitle)
+  const base = (ext ? sourceTitle.slice(0, -ext.length) : sourceTitle).trim() || 'document'
+  return `${base} (${TARGET_LANG_TITLE_LABEL[targetLang]}).md`
+}
+
 // ---- The task manager ----------------------------------------------------------------
 
 /** Injected seams so the engine is testable without Electron and the IPC layer. */
@@ -215,12 +406,24 @@ export interface DocTaskDeps {
   isChatStreaming: () => boolean
   /** The user's `contextTokens` setting (drives the window budget). */
   getContextTokens: () => number
+  /** `workspace/documents/` — where materialized documents (and their transients) live. */
+  getStoreDir: () => string
+  /** Ingestion deps (embedder + document cipher) for the materialize/import step. */
+  getIngestionDeps: () => IngestionDeps
+  /**
+   * The Phase-32 vault lease (`WorkspaceController.beginDocumentWork`). Held ONLY
+   * around the materialize step (it writes `.enc` sidecars); throws the friendly
+   * `VaultBusyError` while a password change runs.
+   */
+  beginDocumentWork: () => () => void
   audit?: AuditRecorder
 }
 
 interface InternalTask {
   status: DocTaskStatus
   controller: AbortController
+  /** Validated translation target (kind === 'translation' only). */
+  targetLang?: TranslationTargetLang
 }
 
 const TERMINAL: ReadonlySet<DocTaskStatus['state']> = new Set(['done', 'failed', 'cancelled'])
@@ -242,10 +445,20 @@ export class DocTaskManager {
     if (kind !== 'summary' && kind !== 'translation' && kind !== 'compare') {
       throw new Error('Unknown document task.')
     }
-    if (kind !== 'summary') {
-      // The machine + IPC shapes are built for all three kinds; only summary ships in
-      // Phase 33. Phases 34/35 replace this guard with their implementations.
+    if (kind === 'compare') {
+      // The machine + IPC shapes are built for all three kinds; compare ships in
+      // Phase 35 and replaces this guard with its implementation.
       throw new Error(TASK_KIND_UNAVAILABLE_MESSAGE)
+    }
+    // Translation targets are a closed v1 set (plan §7): de | en only — a free-text
+    // language field invites silent quality failures.
+    let targetLang: TranslationTargetLang | undefined
+    if (kind === 'translation') {
+      const raw = req.params?.targetLang
+      if (raw !== 'de' && raw !== 'en') {
+        throw new Error(TASK_TRANSLATION_TARGET_MESSAGE)
+      }
+      targetLang = raw
     }
     if (this.deps.isChatStreaming()) {
       throw new Error(TASK_REFUSED_CHAT_STREAMING_MESSAGE)
@@ -255,7 +468,11 @@ export class DocTaskManager {
     }
     const documentIds = (req.documentIds ?? []).filter((x) => typeof x === 'string' && x.length > 0)
     if (documentIds.length !== 1) {
-      throw new Error('Pick exactly one document to summarize.')
+      throw new Error(
+        kind === 'translation'
+          ? 'Pick exactly one document to translate.'
+          : 'Pick exactly one document to summarize.'
+      )
     }
     const doc = getDocument(this.deps.getDb(), documentIds[0])
     if (!doc || doc.status !== 'indexed' || doc.chunkCount === 0) {
@@ -273,7 +490,8 @@ export class DocTaskManager {
         error: null,
         resultRef: null
       },
-      controller: new AbortController()
+      controller: new AbortController(),
+      targetLang
     }
     this.tasks.set(jobId, task)
     this.queue.push(jobId)
@@ -349,15 +567,20 @@ export class DocTaskManager {
 
   private async run(task: InternalTask): Promise<void> {
     const { kind } = task.status
+    // The SOURCE document id — the audit events carry this one; a translation's OUTPUT
+    // id travels in `resultRef` (and is appended to `documentIds` for the busy guard).
     const documentId = task.status.documentIds[0]
     task.status.state = 'running'
     try {
       // Re-check at dequeue time: the runtime may have been stopped while queued.
       const runtime = this.deps.getRuntime()
       if (!runtime) throw new Error(TASK_NEEDS_RUNTIME_MESSAGE)
-      await this.runSummary(task, runtime)
+      const resultId =
+        kind === 'translation'
+          ? await this.runTranslation(task, runtime)
+          : await this.runSummary(task, runtime)
       task.status.state = 'done'
-      task.status.resultRef = { documentId }
+      task.status.resultRef = { documentId: resultId }
       this.deps.audit?.('document_task_completed', `Document task completed: ${kind}`, {
         kind,
         documentId
@@ -370,11 +593,14 @@ export class DocTaskManager {
         return
       }
       const raw = err instanceof Error ? err.message : String(err)
-      // Friendly failures (§11.4): our own guard copy passes through; anything else
-      // (runtime/HTTP/SQL errors) is replaced by the generic copy. The raw reason goes
-      // to the local log only — never to the renderer, never to the audit log.
+      // Friendly failures (§11.4): our own guard copy passes through (as does the
+      // vault lease's VaultBusyError — its message is written for users); anything
+      // else (runtime/HTTP/SQL errors) is replaced by the generic copy. The raw reason
+      // goes to the local log only — never to the renderer, never to the audit log.
+      const friendly =
+        FRIENDLY_TASK_ERRORS.has(raw) || (err instanceof Error && err.name === 'VaultBusyError')
       task.status.state = 'failed'
-      task.status.error = FRIENDLY_TASK_ERRORS.has(raw) ? raw : TASK_GENERIC_FAILURE_MESSAGE
+      task.status.error = friendly ? raw : TASK_GENERIC_FAILURE_MESSAGE
       this.deps.audit?.('document_task_failed', `Document task failed: ${kind}`, {
         kind,
         documentId
@@ -384,7 +610,7 @@ export class DocTaskManager {
   }
 
   /** The Phase-33 summary task (D25): stored chunks in, `summary_json` out. */
-  private async runSummary(task: InternalTask, runtime: ModelRuntime): Promise<void> {
+  private async runSummary(task: InternalTask, runtime: ModelRuntime): Promise<string> {
     const db = this.deps.getDb()
     const documentId = task.status.documentIds[0]
     const doc = getDocument(db, documentId)
@@ -408,8 +634,10 @@ export class DocTaskManager {
     if (plan.singlePass) {
       summaryText = await this.generate(
         runtime,
+        SUMMARY_SYSTEM_PROMPT,
         singlePassPrompt(doc.title, plan.windows[0] ?? ''),
         SUMMARY_OUTPUT_TOKENS,
+        SUMMARY_TEMPERATURE,
         signal
       )
       task.status.progress.stepsDone = 1
@@ -418,8 +646,10 @@ export class DocTaskManager {
       for (let i = 0; i < plan.windows.length; i++) {
         const partial = await this.generate(
           runtime,
+          SUMMARY_SYSTEM_PROMPT,
           mapPrompt(doc.title, i + 1, plan.windows.length, plan.windows[i]),
           plan.mapMaxTokens,
+          SUMMARY_TEMPERATURE,
           signal
         )
         if (partial.length > 0) partials.push(partial)
@@ -437,8 +667,10 @@ export class DocTaskManager {
       }
       summaryText = await this.generate(
         runtime,
+        SUMMARY_SYSTEM_PROMPT,
         reducePrompt(doc.title, reduceInput),
         SUMMARY_OUTPUT_TOKENS,
+        SUMMARY_TEMPERATURE,
         signal
       )
       task.status.progress.stepsDone += 1
@@ -455,29 +687,193 @@ export class DocTaskManager {
     // (the IPC layer refuses re-index/delete on a busy document, but be safe anyway —
     // the UPDATE on a vanished row is a no-op).
     setDocumentSummary(this.deps.getDb(), documentId, summary)
+    return documentId
+  }
+
+  /**
+   * The Phase-34 translation task (D27/D36): re-extracted parser SEGMENTS in,
+   * window-by-window translation in document order (no reduce), one NEW materialized
+   * Markdown document out. Returns the new document's id (the `resultRef`).
+   */
+  private async runTranslation(task: InternalTask, runtime: ModelRuntime): Promise<string> {
+    const db = this.deps.getDb()
+    const documentId = task.status.documentIds[0]
+    const targetLang = task.targetLang
+    if (!targetLang) throw new Error(TASK_TRANSLATION_TARGET_MESSAGE)
+    const doc = getDocument(db, documentId)
+    if (!doc) throw new Error(TASK_DOCUMENT_NOT_READY_MESSAGE)
+
+    // D36: the input is the parser's SEGMENTS re-extracted from the stored copy —
+    // ordered and non-overlapping (see the module note above; stored chunks would
+    // duplicate their ~80-token overlap into the translation). Encrypted copies
+    // decrypt to a `.parse*` transient inside and are shredded on the way out.
+    let segmentTexts: string[]
+    try {
+      const preview = await extractDocumentPreview(db, this.deps.getStoreDir(), documentId, {
+        cipher: this.deps.getIngestionDeps().cipher ?? null
+      })
+      segmentTexts = preview.segments.map((s) => s.text).filter((t) => t.trim().length > 0)
+    } catch (err) {
+      log.warn('Translation source re-extraction failed', {
+        documentId,
+        error: err instanceof Error ? err.message : String(err)
+      })
+      throw new Error(TASK_SOURCE_UNREADABLE_MESSAGE)
+    }
+    if (segmentTexts.length === 0) throw new Error(TASK_DOCUMENT_NOT_READY_MESSAGE)
+
+    const plan = planTranslationWindows(segmentTexts, this.deps.getContextTokens())
+    task.status.progress.stepsTotal = plan.stepsTotal
+    const signal = task.controller.signal
+
+    // Map in document order — no reduce. A window the model refuses/garbles is
+    // retried ONCE (R-T2 policy), then MARKED visibly with the original text kept;
+    // it is never silently dropped. Only a fully-failed translation fails the task.
+    const parts: string[] = []
+    let failedWindows = 0
+    for (let i = 0; i < plan.windows.length; i++) {
+      const translated = await this.generateWithRetry(
+        runtime,
+        translationSystemPrompt(targetLang),
+        translationWindowPrompt(targetLang, i + 1, plan.windows.length, plan.windows[i]),
+        plan.windowMaxTokens,
+        TRANSLATION_TEMPERATURE,
+        signal
+      )
+      if (translated !== null) {
+        parts.push(translated)
+      } else {
+        failedWindows += 1
+        parts.push(`${failedWindowNotice(i + 1, plan.windows.length)}\n\n${plan.windows[i]}`)
+      }
+      task.status.progress.stepsDone += 1
+    }
+    if (failedWindows === plan.windows.length) throw new Error(TASK_GENERIC_FAILURE_MESSAGE)
+
+    // Materialize ONLY now that every window succeeded (or is honestly marked) — a
+    // cancelled task persists nothing, so the last cancellation point is here.
+    if (signal.aborted) throw new DOMException('Document task cancelled', 'AbortError')
+    const markdown = `> ${translationAttributionLine(runtime.modelId)}\n\n${parts.join('\n\n')}\n`
+    const newDocId = await this.materializeDocument(
+      task,
+      markdown,
+      translatedDocumentTitle(doc.title, targetLang),
+      { translatedFrom: documentId, targetLang }
+    )
+    task.status.progress.stepsDone += 1
+    return newDocId
+  }
+
+  /**
+   * Write the generated Markdown to a transient file and run it through the NORMAL
+   * import path (`createQueuedDocument` + `processDocument`) so the new document is
+   * chunked, embedded, searchable, citable, and `.enc`-encrypted automatically (D27).
+   * Holds the Phase-32 vault lease for exactly this step — it writes `.enc` sidecars
+   * (`VaultBusyError` from a concurrent password change propagates as a friendly task
+   * failure). The transient uses the `.parse` infix so the startup crash sweep shreds
+   * it if we die mid-step; otherwise it is shredded here, success or failure.
+   */
+  private async materializeDocument(
+    task: InternalTask,
+    markdown: string,
+    title: string,
+    origin: DocumentOrigin
+  ): Promise<string> {
+    const release = this.deps.beginDocumentWork()
+    const db = this.deps.getDb()
+    const storeDir = this.deps.getStoreDir()
+    const tempPath = join(storeDir, `${task.status.jobId}.parse.md`)
+    let newDocId: string | null = null
+    try {
+      writeFileSync(tempPath, markdown, 'utf8')
+      const info = createQueuedDocument(db, tempPath, title)
+      newDocId = info.id
+      // The output document is born inside the task — OUTSIDE registerDocsIpc's
+      // `processing` set — so list it on the task: `isDocumentBusy` then covers it
+      // and it cannot be deleted/re-indexed mid-materialize.
+      task.status.documentIds.push(info.id)
+      const result = await processDocument(db, storeDir, info.id, this.deps.getIngestionDeps())
+      if (result.status !== 'indexed') {
+        // processDocument never throws — but a translation must fully succeed or
+        // persist nothing, so a failed import removes the half-born row again.
+        log.error('Materialized translation failed to import', {
+          jobId: task.status.jobId,
+          status: result.status,
+          error: result.errorMessage
+        })
+        throw new Error(TASK_GENERIC_FAILURE_MESSAGE)
+      }
+      setDocumentOrigin(db, info.id, origin)
+      // A new corpus document must never appear without an audit trail (Phase 19;
+      // filename + id only — the translated text is content).
+      this.deps.audit?.('document_imported', `Document imported: ${result.title}`, {
+        documentId: info.id,
+        status: result.status,
+        chunkCount: result.chunkCount
+      })
+      return info.id
+    } catch (err) {
+      if (newDocId) deleteDocument(db, newDocId)
+      throw err
+    } finally {
+      shredFile(tempPath)
+      release()
+    }
+  }
+
+  /**
+   * One translation window with the R-T2 retry policy: a failed or empty generation
+   * is retried once; a second failure returns null (the caller marks the window).
+   * Aborts always propagate immediately — cancel must never look like a failed window.
+   */
+  private async generateWithRetry(
+    runtime: ModelRuntime,
+    systemPrompt: string,
+    prompt: string,
+    maxTokens: number,
+    temperature: number,
+    signal: AbortSignal
+  ): Promise<string | null> {
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        const out = await this.generate(runtime, systemPrompt, prompt, maxTokens, temperature, signal)
+        if (out.length > 0) return out
+        log.warn('Translation window came back empty', { attempt })
+      } catch (err) {
+        if (isAbortError(err, signal)) throw err
+        log.warn('Translation window failed', {
+          attempt,
+          error: err instanceof Error ? err.message : String(err)
+        })
+      }
+      if (signal.aborted) throw new DOMException('Document task cancelled', 'AbortError')
+    }
+    return null
   }
 
   /**
    * One model call over the locked Phase-3 streaming contract: explicit
    * maxTokens/temperature, NO depth mode, the task's own abort signal. Cancellation
-   * must never persist a half summary — an abort throws instead of returning the
+   * must never persist a half result — an abort throws instead of returning the
    * partial text (chat keeps partials; tasks do not).
    */
   private async generate(
     runtime: ModelRuntime,
+    systemPrompt: string,
     prompt: string,
     maxTokens: number,
+    temperature: number,
     signal: AbortSignal
   ): Promise<string> {
     const messages: ChatMessage[] = [
-      { role: 'system', content: SUMMARY_SYSTEM_PROMPT },
+      { role: 'system', content: systemPrompt },
       { role: 'user', content: prompt }
     ]
     let out = ''
     const stream = runtime.chatStream(messages, {
       signal,
       maxTokens,
-      temperature: SUMMARY_TEMPERATURE
+      temperature
     })
     for await (const token of stream) {
       out += token
@@ -497,5 +893,7 @@ const FRIENDLY_TASK_ERRORS: ReadonlySet<string> = new Set([
   TASK_REFUSED_CHAT_STREAMING_MESSAGE,
   TASK_KIND_UNAVAILABLE_MESSAGE,
   TASK_DOCUMENT_NOT_READY_MESSAGE,
-  TASK_GENERIC_FAILURE_MESSAGE
+  TASK_GENERIC_FAILURE_MESSAGE,
+  TASK_TRANSLATION_TARGET_MESSAGE,
+  TASK_SOURCE_UNREADABLE_MESSAGE
 ])

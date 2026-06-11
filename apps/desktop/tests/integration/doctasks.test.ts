@@ -120,6 +120,8 @@ interface ManagerOptions {
   contextTokens?: number
   chatStreaming?: () => boolean
   audit?: boolean
+  /** Override the Phase-32 lease seam (default: a counting no-op lease). */
+  beginDocumentWork?: () => () => void
 }
 
 function makeManager(opts: ManagerOptions = {}): DocTaskManager {
@@ -128,6 +130,9 @@ function makeManager(opts: ManagerOptions = {}): DocTaskManager {
     getRuntime: () => (opts.runtime === undefined ? null : opts.runtime),
     isChatStreaming: opts.chatStreaming ?? (() => false),
     getContextTokens: () => opts.contextTokens ?? 4096,
+    getStoreDir: () => storeDir,
+    getIngestionDeps: () => ({}),
+    beginDocumentWork: opts.beginDocumentWork ?? (() => () => {}),
     audit: opts.audit
       ? (type, message, metadata) => recordEvent(db, type as AuditEventType, message, metadata)
       : undefined
@@ -262,7 +267,10 @@ describe('state machine guards (D26)', () => {
       getDb: () => db,
       getRuntime: () => runtime,
       isChatStreaming: () => false,
-      getContextTokens: () => 4096
+      getContextTokens: () => 4096,
+      getStoreDir: () => storeDir,
+      getIngestionDeps: () => ({}),
+      beginDocumentWork: () => () => {}
     })
 
     const first = manager.startDocTask({ kind: 'summary', documentIds: [doc1] })
@@ -348,11 +356,12 @@ describe('state machine guards (D26)', () => {
     expect(() => manager.startDocTask({ kind: 'summary', documentIds: [queued.id] })).toThrow(
       TASK_DOCUMENT_NOT_READY_MESSAGE
     )
-    // Kind validation.
+    // Kind validation. (Translation shipped in Phase 34 — see
+    // doctasks-translation.test.ts; only compare still refuses.)
     expect(() =>
       manager.startDocTask({ kind: 'nonsense' as never, documentIds: ['x'] })
     ).toThrow('Unknown document task.')
-    expect(() => manager.startDocTask({ kind: 'translation', documentIds: ['x'] })).toThrow(
+    expect(() => manager.startDocTask({ kind: 'compare', documentIds: ['x'] })).toThrow(
       TASK_KIND_UNAVAILABLE_MESSAGE
     )
   })

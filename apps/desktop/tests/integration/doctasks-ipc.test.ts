@@ -98,7 +98,10 @@ async function makeHarness(opts: { unlocked?: boolean } = {}): Promise<Harness> 
     getDb: () => ctx.db,
     getRuntime: () => ctx.runtime.active(),
     isChatStreaming: () => inFlightStreams.size > 0,
-    getContextTokens: () => getSettings(ctx.db).contextTokens
+    getContextTokens: () => getSettings(ctx.db).contextTokens,
+    getStoreDir: () => storeDir,
+    getIngestionDeps: () => ({ embedder: ctx.embedder, cipher: ctx.workspace.documentCipher() }),
+    beginDocumentWork: () => ctx.workspace.beginDocumentWork()
   })
 
   registerChatIpc(ctx)

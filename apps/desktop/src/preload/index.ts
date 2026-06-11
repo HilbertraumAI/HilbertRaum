@@ -167,10 +167,15 @@ const api = {
   /** Read-only in-app preview: the document's extracted text segments. */
   previewDocument: (documentId: string): Promise<DocumentPreview> =>
     ipcRenderer.invoke(IPC.previewDocument, documentId),
+  /** Save a text document's stored content (e.g. a translation) to a user-chosen
+   *  file; resolves with the path, or null on cancel (Phase 34). */
+  exportDocument: (documentId: string): Promise<string | null> =>
+    ipcRenderer.invoke(IPC.exportDocument, documentId),
 
-  // ---- Document tasks (Phase 33) ----
-  /** Start a document task (summary now; translation/compare later ride the same
-   *  machine). Strictly one at a time; refused while a chat answer is streaming. */
+  // ---- Document tasks (Phase 33/34) ----
+  /** Start a document task (summary, or translation with `params.targetLang`;
+   *  compare rides the same machine in Phase 35). Strictly one at a time; refused
+   *  while a chat answer is streaming. */
   startDocTask: (req: StartDocTaskRequest): Promise<{ jobId: string }> =>
     ipcRenderer.invoke(IPC.startDocTask, req),
   /** Poll one task's state/progress (async-with-polling, like imports/downloads). */
