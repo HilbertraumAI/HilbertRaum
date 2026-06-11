@@ -162,6 +162,69 @@ describe('ModelsScreen — "AI Model" reframe (Phase 26, guidelines §2)', () =>
   })
 })
 
+describe('ModelsScreen — automatic roles (Phase 36: reranker/transcriber)', () => {
+  function transcriber(over: Partial<ModelInfo> = {}): ModelInfo {
+    return model({
+      id: 'whisper-small-multilingual',
+      displayName: 'Whisper Small (multilingual transcriber)',
+      family: 'whisper',
+      role: 'transcriber',
+      format: 'ggml',
+      runtime: 'whisper_cpp',
+      license: 'mit',
+      sizeOnDiskGb: 0.49,
+      localPath: 'models/transcriber/ggml-small.bin',
+      ...over
+    })
+  }
+
+  it('offers Download for a missing transcriber — never Select/Start', async () => {
+    stub({ models: [transcriber({ state: 'missing' })] })
+    render(<ModelsScreen />)
+    await screen.findByText('Whisper Small (multilingual transcriber)')
+
+    // The whole point of the support-matrix fix: the card is downloadable, not
+    // "Unsupported", and explains it works automatically.
+    expect(screen.getByText('Not downloaded')).toBeInTheDocument()
+    expect(screen.queryByText('Unsupported')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /download/i })).toBeInTheDocument()
+    expect(screen.getByText(/used automatically once installed/i)).toBeInTheDocument()
+    // Selecting/starting a transcriber would claim the CHAT slot / feed GGML to
+    // llama-server — those actions must not exist on automatic-role cards.
+    expect(screen.queryByRole('button', { name: /^select$/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /start.*runtime/i })).not.toBeInTheDocument()
+  })
+
+  it('an installed transcriber says it is in use automatically (nothing to start)', async () => {
+    stub({ models: [transcriber({ state: 'installed', download: undefined })] })
+    render(<ModelsScreen />)
+    await screen.findByText('Whisper Small (multilingual transcriber)')
+    expect(screen.getByText('Installed')).toBeInTheDocument()
+    expect(screen.getByText(/Installed — used automatically/i)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^select$/i })).not.toBeInTheDocument()
+    expect(screen.getByText(/Turns audio recordings into searchable text/)).toBeInTheDocument()
+  })
+
+  it('the reranker card gets the same automatic treatment', async () => {
+    stub({
+      models: [
+        model({
+          id: 'bge-reranker-v2-m3-f16',
+          displayName: 'BGE Reranker v2 M3 (F16)',
+          role: 'reranker',
+          state: 'installed',
+          download: undefined
+        })
+      ]
+    })
+    render(<ModelsScreen />)
+    await screen.findByText('BGE Reranker v2 M3 (F16)')
+    expect(screen.queryByRole('button', { name: /^select$/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /start.*runtime/i })).not.toBeInTheDocument()
+    expect(screen.getByText(/used automatically/i)).toBeInTheDocument()
+  })
+})
+
 describe('ModelsScreen — per-download confirmation (plan §6.1 gate 3)', () => {
   it('confirms size, license, and URL before starting; approved license needs no checkbox', async () => {
     const downloadModel = vi.fn(async (): Promise<DownloadJob> => ({

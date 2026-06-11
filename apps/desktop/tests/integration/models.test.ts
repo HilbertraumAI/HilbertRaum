@@ -265,6 +265,51 @@ describe('computeInstallState', () => {
     })
     expect(state).toBe('unsupported')
   })
+
+  // Phase 36 fix: the support gate is a runtime↔format PAIR check. The whisper
+  // transcriber (whisper_cpp + ggml) is supported — it used to fall through the
+  // llama-only whitelist and show "Unsupported" on the AI Model screen, which also
+  // hid its in-app download (the download offer requires state 'missing').
+  it('supports the whisper transcriber pair (whisper_cpp + ggml)', async () => {
+    const root = tempDir('paid-root-')
+    const whisper = asManifest({
+      id: 'whisper-small-multilingual',
+      role: 'transcriber',
+      runtime: 'whisper_cpp',
+      format: 'ggml',
+      local_path: 'models/transcriber/ggml-small.bin'
+    })
+    // Absent weights → 'missing' (downloadable), NOT 'unsupported'.
+    expect(await computeInstallState(whisper, root, { developerMode: false })).toBe('missing')
+
+    // Present + matching hash → installed.
+    mkdirSync(join(root, 'models', 'transcriber'), { recursive: true })
+    writeFileSync(join(root, 'models', 'transcriber', 'ggml-small.bin'), 'ggml-weights')
+    const hash = createHash('sha256').update('ggml-weights').digest('hex')
+    const verified = asManifest({
+      id: 'whisper-small-multilingual',
+      role: 'transcriber',
+      runtime: 'whisper_cpp',
+      format: 'ggml',
+      local_path: 'models/transcriber/ggml-small.bin',
+      sha256: hash
+    })
+    expect(await computeInstallState(verified, root, { developerMode: false })).toBe('installed')
+  })
+
+  it('rejects MISMATCHED runtime/format pairs (never a silent pass)', async () => {
+    const root = tempDir('paid-root-')
+    const cases = [
+      { runtime: 'whisper_cpp', format: 'gguf' },
+      { runtime: 'llama_cpp', format: 'ggml' }
+    ]
+    for (const c of cases) {
+      expect(
+        await computeInstallState(asManifest(c), root, { developerMode: true }),
+        `${c.runtime}+${c.format}`
+      ).toBe('unsupported')
+    }
+  })
 })
 
 describe('recommendModelId', () => {
@@ -497,5 +542,31 @@ describe('selectModel', () => {
     const db = openDatabase(dbPath)
     seedSettings(db)
     expect(() => selectModel(db, manifestsDir, 'nope')).toThrow()
+  })
+
+  // Phase 36 fix: availability-driven roles have no settings slot. The old
+  // role-else-chat fallback would have written a transcriber/reranker id into
+  // activeModelId — the CHAT slot — and broken chat.
+  it('refuses transcriber/reranker selections and leaves both slots untouched', () => {
+    const { dbPath, manifestsDir } = setup()
+    writeFileSync(
+      join(manifestsDir, 'transcriber.yaml'),
+      stringify(
+        manifestObj({
+          id: 'whisper-small-multilingual',
+          role: 'transcriber',
+          runtime: 'whisper_cpp',
+          format: 'ggml',
+          local_path: 'models/transcriber/ggml-small.bin'
+        })
+      )
+    )
+    const db = openDatabase(dbPath)
+    seedSettings(db)
+    expect(() => selectModel(db, manifestsDir, 'whisper-small-multilingual')).toThrow(
+      /used automatically/
+    )
+    expect(getSettings(db).activeModelId).toBe(null)
+    expect(getSettings(db).activeEmbeddingModelId).toBe(null)
   })
 })

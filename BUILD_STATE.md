@@ -1941,6 +1941,22 @@ Repo root: `f:\_coding\ai_drive`.
      plausibly Defender's first-execution screening of the freshly copied unsigned
      exe. The new stderr-only failure log in `AudioParser` records the technical
      reason if it ever recurs.)
+  10. **Same-day fix — the transcriber showed "Unsupported" on the AI Model screen
+      (user-reported):** `computeInstallState`'s Phase-2-era whitelist knew only
+      `llama_cpp`+`gguf`, so the `whisper_cpp`+`ggml` manifest computed `unsupported` —
+      which ALSO hid its in-app download (the offer requires state `missing`). Fixed as
+      a runtime↔format PAIR matrix (`llama_cpp→gguf`, `whisper_cpp→ggml`; mismatched
+      pairs stay unsupported). Closing it exposed a latent hazard now made unreachable:
+      every model card rendered Select/Start, and `selectModel`'s role-else-chat
+      fallback would have written a transcriber (or reranker — latent since Phase 21)
+      id into `activeModelId`, the CHAT slot. `selectModel` now refuses
+      non-chat/non-embeddings roles with friendly copy, and reranker/transcriber cards
+      replace Select/Start with an honest "used automatically" line (Download +
+      Verify checksum + Technical details stay). +6 tests (916 total): the support-pair
+      matrix, the selectModel refusal (slots untouched), and renderer cards for both
+      automatic roles. Eyeballed in the built app: Whisper card = "✓ Installed ·
+      Installed — used automatically. There is nothing to start."; reranker =
+      "Used automatically once installed — no setup needed." + Download.
 
 - **Phase 37 — voice dictation in the composer (2026-06-11; plan §10 condensed to its
   design record; D30 implemented exactly as locked):**
@@ -2817,11 +2833,12 @@ items are **MANUAL acceptance only** (R2/R5/R7 + the GPU hardware matrix). In ro
    gates R-O1..R-O3 (D31/D32 still open by design — they resolve with the gates); its
    step 0 (image-only-PDF detection, no OCR needed) can ship early.
 
-**Current gate (2026-06-11, post-Phase-37): typecheck clean, 931/931 tests pass (+24 manual
-tests behind `PAID_*` env vars — GPU/thinking/rerank/minsim/RAG-quality/bring-up/eval/
-concurrency-probe/translation/compare/whisper/dictation smokes — skipped in CI),
-`npm run build` green.** The per-phase gate history (test counts, bundle sizes, per-phase
-test inventories) lives in git history.
+**Current gate (2026-06-11, post-Phase-37 incl. the same-day Phase-36
+unsupported-transcriber fix): typecheck clean, 937/937 tests pass (+24 manual tests behind
+`PAID_*` env vars — GPU/thinking/rerank/minsim/RAG-quality/bring-up/eval/concurrency-probe/
+translation/compare/whisper/dictation smokes — skipped in CI), `npm run build` green.** The
+per-phase gate history (test counts, bundle sizes, per-phase test inventories) lives in git
+history.
 
 ---
 
