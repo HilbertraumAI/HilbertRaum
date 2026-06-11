@@ -5,7 +5,7 @@
 > (see "Per-phase ritual" in [`CLAUDE.md`](CLAUDE.md)).
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
-_Last updated: 2026-06-10 — **MVP feature-complete: Phases 0–13 done**, plus the full **GPU
+_Last updated: 2026-06-11 — **MVP feature-complete: Phases 0–13 done**, plus the full **GPU
 acceleration feature (Phases 14–16: Vulkan-default distribution → probe + fallback-ladder runtime
 → Settings/Diagnostics/benchmark surface)** per the IMPLEMENTED
 [`docs/gpu-support-plan.md`](docs/gpu-support-plan.md). Four post-MVP audit rounds plus a
@@ -89,16 +89,21 @@ and `verify-models -Target D:\` now reports **all 10 catalog weights VERIFIED**.
 leak; finding — Gemma 4 honours `enable_thinking`, kept `supports_thinking_mode: false`
 pending Phase 29). Only the §4.3 Models-screen-UI + RAG-citation smokes remain before
 Phase 28 closes (§3 entry; §5 item 5).
-**Phase 28 (model catalog wave 1) is 🟡 IN PROGRESS** and **Phase 29 (benchmark protocol +
-first comparison run) is 🟡 IN PROGRESS — tooling + eval data landed 2026-06-10**: the
-judge-free quality benchmark is built and CI-covered (`docs/model-benchmarks.md`; the
-dependency-free scorer `apps/desktop/tests/eval/score.ts` + 24 CI tests; the real-RAG-path
-harness `tests/manual/model-eval.test.ts`; `eval/{corpus,rag}_de_en.jsonl` = 100 license-clean
-German/English grounded-QA items, 60 DE / 40 EN, 15% unanswerable, self-validated by
-`eval/build.mjs`; the peak-RSS helper `scripts/measure-peak-rss.ps1`). The multi-machine RUNS
-and the §5.4 catalog promotions (incl. the D18 default-model question + the Gemma
-`supports_thinking_mode` flip + measured `recommended_min_ram_gb`) are PENDING — executed on
-real hardware (§3 Phase-29 entry).
+**Phases 28 (model catalog wave 1) and 29 (benchmark protocol + first comparison run) are
+🟢 DONE (2026-06-10/11)** and the working-paper plan was **condensed to a design record**
+([`docs/model-catalog-expansion-plan.md`](docs/model-catalog-expansion-plan.md); full original
+in git history). Wave 1 added four Apache-2.0 challengers; the judge-free benchmark
+(`docs/model-benchmarks.md` — scorer `apps/desktop/tests/eval/score.ts` + CI tests, real-RAG-path
+harness `tests/manual/model-eval.test.ts`, 100-item `eval/{corpus,rag}_de_en.jsonl`, speed/RSS
+scripts) ran on the i7-1185G7 (all 8 models; QA reproduced bit-for-bit on the dev box). §5.4
+applied **live**: `recommended_min_ram_gb` recalibrated from measured peak RSS, the recommender
+made **quality-aware** via a new `recommendation_rank` field (≤12 GB → Qwen3-4B default / 16 GB →
+Ministral / ≥32 GB → Gemma 4; Granite + 30B never auto-recommended), and Gemma's
+`supports_thinking_mode` **flipped on** after its thinking-quality check. The headline benchmark
+discriminator was hallucination-resistance on unanswerables (Ministral 0/15 best); the whole
+catalog is Apache-2.0 (the challenger edge is quality+speed, not licence). Only an **optional**
+dev-box speed sweep remains (completeness; QA+RSS are machine-independent). See the §3 Phase-29
+entry.
 Release-wise,
 remaining work = **manual release acceptance only** (§5, incl. the GPU
 hardware matrix, item 1b). Consciously-accepted gaps live in
@@ -138,8 +143,8 @@ hardware matrix, item 1b). Consciously-accepted gaps live in
 | 25 | UI chat screen restructure (guidelines §3) | 🟢 done (merged to master 2026-06-10) |
 | 26 | UI information architecture regroup (guidelines §2) | 🟢 done (merged to master 2026-06-10) |
 | 27 | UI microcopy, ambient trust signal, first-run (guidelines §7/§2/§9) | 🟢 done (merged to master 2026-06-10) — **UI polish wave COMPLETE** |
-| 28 | Model catalog wave 1 (challenger manifests, D16–D18) | 🟡 in progress — manifests + docs landed, validated, gate green; weights fetched + hashes promoted (all 10 weights VERIFIED on the `D:\` drive); §4.3 chat + depth smokes PASS for all four challengers; only the Models-screen-UI + RAG-citation smokes remain |
-| 29 | Benchmark protocol + first comparison run (D19/D20) | 🟡 in progress (nearly done) — protocol + tooling + 100-item eval set landed; **first run executed on the i7-1185G7 (all 8 models, QA+speed+RSS)**; §5.4 applied: RAM recalibrated from measured RSS, the recommender made **quality-aware** (`recommendation_rank` → ≤12 GB Qwen3-4B / 16 GB Ministral / ≥32 GB Gemma4), **Gemma thinking flag flipped on**. Remaining: optional devbox sweep (2nd machine, completeness) + condense the plan |
+| 28 | Model catalog wave 1 (challenger manifests, D16–D18) | 🟢 done — 4 challenger manifests (Apache-2.0, real hashes, all 10 weights VERIFIED on `D:\`), license reviews approved, bring-up smoke PASS; RAG citation/abstention verified across all 8 models by the Phase-29 eval; plan condensed |
+| 29 | Benchmark protocol + first comparison run (D19/D20) | 🟢 done — judge-free protocol + tooling + 100-item eval set; first run on the i7-1185G7 (all 8 models, QA+speed+RSS), QA reproduced on the dev box; §5.4 applied: RAM recalibrated from measured RSS, recommender made **quality-aware** (`recommendation_rank` → ≤12 GB Qwen3-4B / 16 GB Ministral / ≥32 GB Gemma4), **Gemma thinking flag flipped on**; plan condensed to a design record. (Optional dev-box speed sweep = completeness only) |
 
 Legend: ⚪ not started · 🟡 in progress · 🟢 done · 🔴 blocked
 

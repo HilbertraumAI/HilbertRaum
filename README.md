@@ -36,7 +36,7 @@ Remaining work is **manual release acceptance** (signed builds, a live USB demo)
 
 - **A computer:** Windows (first-class), macOS, or Linux.
 - **RAM decides which model you can run** (the app benchmarks your machine and recommends one):
-  ≤16 GB → 4B · ~32 GB → 8B · 32 GB+ → 14B (or the 30B-A3B MoE for the best quality).
+  ≤12 GB → Qwen3-4B · 16–24 GB → Ministral 8B · ≥32 GB → Gemma 4 12B (or the 30B-A3B MoE, opt-in).
 - **Disk space:** ~**3 GB** for the smallest usable setup (the 4B chat model + the embeddings model),
   up to ~**10 GB** for the 14B or ~**19 GB** for the 30B-A3B MoE. A **USB-3 SSD** is recommended for
   a portable drive.
@@ -121,23 +121,22 @@ Downloaded by the scripts above (or add your own via a manifest). Weights are **
 | Model | Role | Size | Min RAM | License | Source |
 |---|---|---|---|---|---|
 | Qwen3 4B Instruct Q4 | Chat (smallest / balanced default) | ~2.7 GB | 8 GB | Apache-2.0 | [Qwen/Qwen3-4B-GGUF](https://huggingface.co/Qwen/Qwen3-4B-GGUF) |
-| Qwen3 8B Instruct Q4 | Chat (16 GB+ laptops) | ~5.0 GB | 16 GB | Apache-2.0 | [Qwen/Qwen3-8B-GGUF](https://huggingface.co/Qwen/Qwen3-8B-GGUF) |
-| Qwen3 14B Instruct Q4 | Chat (best dense, 32 GB+) | ~9.3 GB | 16 GB | Apache-2.0 | [Qwen/Qwen3-14B-GGUF](https://huggingface.co/Qwen/Qwen3-14B-GGUF) |
+| Qwen3 8B Instruct Q4 | Chat (12 GB+ laptops) | ~5.0 GB | 12 GB | Apache-2.0 | [Qwen/Qwen3-8B-GGUF](https://huggingface.co/Qwen/Qwen3-8B-GGUF) |
+| Qwen3 14B Instruct Q4 | Chat (dense, 32 GB+) | ~9.3 GB | 14 GB | Apache-2.0 | [Qwen/Qwen3-14B-GGUF](https://huggingface.co/Qwen/Qwen3-14B-GGUF) |
 | Qwen3 30B-A3B (MoE) Q4 | Chat (≈30B quality, ≈3B speed) | ~18.6 GB | 24 GB | Apache-2.0 | [Qwen/Qwen3-30B-A3B-GGUF](https://huggingface.co/Qwen/Qwen3-30B-A3B-GGUF) |
-| Ministral 3 8B Instruct (2512) Q4 | Chat (challenger — not auto-recommended) | ~5.2 GB | 16 GB | Apache-2.0 | [mistralai/Ministral-3-8B-Instruct-2512-GGUF](https://huggingface.co/mistralai/Ministral-3-8B-Instruct-2512-GGUF) |
-| Granite 4.1 8B Q4 | Chat (challenger — not auto-recommended) | ~5.3 GB | 16 GB | Apache-2.0 | [ibm-granite/granite-4.1-8b-GGUF](https://huggingface.co/ibm-granite/granite-4.1-8b-GGUF) |
-| Gemma 4 12B Instruct QAT Q4_0 | Chat (challenger — not auto-recommended) | ~7.0 GB | 16 GB | Apache-2.0 | [google/gemma-4-12B-it-qat-q4_0-gguf](https://huggingface.co/google/gemma-4-12B-it-qat-q4_0-gguf) |
-| Qwen3 4B Instruct 2507 Q4 | Chat (challenger — not auto-recommended) | ~2.5 GB | 8 GB | Apache-2.0 | [unsloth/Qwen3-4B-Instruct-2507-GGUF](https://huggingface.co/unsloth/Qwen3-4B-Instruct-2507-GGUF) |
+| Ministral 3 8B Instruct (2512) Q4 | Chat (**recommended 8B** — benchmark winner) | ~5.2 GB | 12 GB | Apache-2.0 | [mistralai/Ministral-3-8B-Instruct-2512-GGUF](https://huggingface.co/mistralai/Ministral-3-8B-Instruct-2512-GGUF) |
+| Granite 4.1 8B Q4 | Chat (challenger — not auto-recommended) | ~5.3 GB | 12 GB | Apache-2.0 | [ibm-granite/granite-4.1-8b-GGUF](https://huggingface.co/ibm-granite/granite-4.1-8b-GGUF) |
+| Gemma 4 12B Instruct QAT Q4_0 | Chat (**recommended 12–14B** — benchmark winner; has Deep) | ~7.0 GB | 14 GB | Apache-2.0 | [google/gemma-4-12B-it-qat-q4_0-gguf](https://huggingface.co/google/gemma-4-12B-it-qat-q4_0-gguf) |
+| Qwen3 4B Instruct 2507 Q4 | Chat (better 4B quality; no Deep) | ~2.5 GB | 8 GB | Apache-2.0 | [unsloth/Qwen3-4B-Instruct-2507-GGUF](https://huggingface.co/unsloth/Qwen3-4B-Instruct-2507-GGUF) |
 | Multilingual E5 Small (F16) | Embeddings (document search) | ~0.24 GB | 4 GB | MIT | GGUF: [keisuke-miyako/…-f16](https://huggingface.co/keisuke-miyako/multilingual-e5-small-gguf-f16) · orig: [intfloat/…](https://huggingface.co/intfloat/multilingual-e5-small) |
 
 Document Q&A needs the **embeddings** model; chat needs **one** of the chat models. The benchmark
-auto-recommends per hardware tier (TINY/LITE→4B, BALANCED→8B, **PRO→14B**); the **30B-A3B MoE**
-is opt-in — it has ~30B-class quality but only ~3.3B *active* parameters per token, so it runs near
-small-model speed on CPU **if** its full ~18.6 GB fits in RAM (32 GB machines). The four
-**challengers** (Phase 28) are selectable but never auto-recommended until they earn it in the
-offline model benchmark ([`docs/model-catalog-expansion-plan.md`](docs/model-catalog-expansion-plan.md)).
-Bigger **dense**
-models are smarter but slower on CPU — pick by your RAM. The full schema + license policy is in
+auto-recommends the best model that fits your RAM (Phase-29 quality-aware: **≤12 GB → Qwen3-4B,
+16–24 GB → Ministral 8B, ≥32 GB → Gemma 4 12B**); the **30B-A3B MoE** is opt-in (≈30B quality at
+≈3.3B *active* params/token → near-small-model CPU speed **if** its ~18.6 GB fits in RAM). The
+original Qwen3-4B stays the bundled default (it keeps **Deep** answer mode); Granite is selectable
+but not recommended (it lost its tier in the benchmark). Bigger **dense** models are smarter but
+slower on CPU — pick by your RAM. The full schema + license policy is in
 **[`docs/model-policy.md`](docs/model-policy.md)**; per-model details live in
 [`model-manifests/`](model-manifests).
 
