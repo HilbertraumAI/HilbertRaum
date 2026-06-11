@@ -4,6 +4,7 @@ import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../runtime'
 import { type Embedder, VectorIndex } from '../embeddings'
 import type { Reranker } from '../reranker'
 import { keywordSearchChunks, rrfFuse } from './hybrid'
+export { detectFilenameScope, type DetectedScope, type ScopeableDoc } from './scope'
 import { approxTokenCount } from '../ingestion/chunker'
 import { log } from '../logging'
 import {

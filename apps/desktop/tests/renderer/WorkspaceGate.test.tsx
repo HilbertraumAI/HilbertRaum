@@ -161,11 +161,11 @@ describe('WorkspaceGate — create (3-step first run)', () => {
     const confirm = screen.getByPlaceholderText('Confirm password')
     expect(pw).toHaveAttribute('type', 'password')
 
-    await user.click(screen.getByRole('button', { name: /^show$/i }))
+    await user.click(screen.getByRole('button', { name: /show password/i }))
     expect(pw).toHaveAttribute('type', 'text')
     expect(confirm).toHaveAttribute('type', 'text')
 
-    await user.click(screen.getByRole('button', { name: /^hide$/i }))
+    await user.click(screen.getByRole('button', { name: /hide password/i }))
     expect(pw).toHaveAttribute('type', 'password')
     expect(confirm).toHaveAttribute('type', 'password')
   })

@@ -3,7 +3,8 @@ import { IPC, STREAM } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
 import type { Message } from '../../shared/types'
 import { appendMessage, getConversation, maybeSetTitleFromFirstMessage } from '../services/chat'
-import { generateGroundedAnswer, ragSettingsFrom } from '../services/rag'
+import { detectFilenameScope, generateGroundedAnswer, ragSettingsFrom } from '../services/rag'
+import { listDocuments } from '../services/ingestion'
 import { getSettings } from '../services/settings'
 import { log } from '../services/logging'
 import { inFlightStreams } from './inflight'
@@ -48,6 +49,25 @@ export function registerRagIpc(ctx: AppContext): void {
       maybeSetTitleFromFirstMessage(ctx.db, conversationId, text)
 
       const settings = ragSettingsFrom(getSettings(ctx.db))
+
+      // Filename auto-scope: when the conversation has NO explicit "ask selected
+      // documents" scope but the question names indexed file(s), restrict retrieval to
+      // them so other documents are not surfaced as sources. Only ever narrows; a live
+      // (non-persisted) notice tells the user which file(s) the answer is grounded in.
+      let scopeDocumentIds = conv.scopeDocumentIds
+      if (!scopeDocumentIds || scopeDocumentIds.length === 0) {
+        const candidates = listDocuments(ctx.db)
+          .filter((d) => d.status === 'indexed' && d.chunkCount > 0)
+          .map((d) => ({ id: d.id, title: d.title }))
+        const detected = detectFilenameScope(text, candidates)
+        if (detected) {
+          scopeDocumentIds = detected.ids
+          if (!event.sender.isDestroyed()) {
+            event.sender.send(STREAM.scope(conversationId), { titles: detected.titles })
+          }
+        }
+      }
+
       const controller = new AbortController()
       inFlightStreams.set(conversationId, controller)
       try {
@@ -61,8 +81,9 @@ export function registerRagIpc(ctx: AppContext): void {
           {
             signal: controller.signal,
             // "Ask selected documents" (Phase 17): the conversation's persisted scope
-            // restricts retrieval; null scope = whole corpus (unchanged behavior).
-            scopeDocumentIds: conv.scopeDocumentIds,
+            // restricts retrieval; null scope = whole corpus. When no explicit scope was
+            // set, this may carry the filename auto-scope derived from the question above.
+            scopeDocumentIds,
             // Retrieval reranker (Phase 21): null when no reranker is provisioned —
             // retrieval then keeps the pre-Phase-21 ordering byte-identical.
             reranker: ctx.reranker,

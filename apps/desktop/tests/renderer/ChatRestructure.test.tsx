@@ -192,7 +192,8 @@ describe('ChatScreen — per-message actions (Try again · Copy · Save)', () =>
       sendChatMessage,
       exportConversation,
       onToken: vi.fn(() => () => {}),
-      onReasoning: vi.fn(() => () => {})
+      onReasoning: vi.fn(() => () => {}),
+      onScopeNotice: vi.fn(() => () => {})
     })
     render(
       <ToastProvider>

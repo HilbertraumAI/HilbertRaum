@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import { EVENTS, IPC, STREAM } from '../shared/ipc'
+import { EVENTS, IPC, STREAM, type ScopeNotice } from '../shared/ipc'
 import type {
   AppSettings,
   AppStatus,
@@ -180,6 +180,14 @@ const api = {
   onReasoning: (requestId: string, cb: (delta: string) => void): (() => void) => {
     const ch = STREAM.reasoning(requestId)
     const handler = (_e: unknown, delta: string) => cb(delta)
+    ipcRenderer.on(ch, handler)
+    return () => ipcRenderer.removeListener(ch, handler)
+  },
+  /** Subscribe to the one-shot "answering from this file only" auto-scope notice for a
+   *  document answer (fired once before tokens; ephemeral, never persisted). */
+  onScopeNotice: (requestId: string, cb: (notice: ScopeNotice) => void): (() => void) => {
+    const ch = STREAM.scope(requestId)
+    const handler = (_e: unknown, notice: ScopeNotice) => cb(notice)
     ipcRenderer.on(ch, handler)
     return () => ipcRenderer.removeListener(ch, handler)
   },
