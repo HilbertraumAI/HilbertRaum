@@ -8,6 +8,10 @@
 # Usage:
 #   scripts\measure-peak-rss.ps1 -Root D:\ -Model granite-4.1-8b-q4.gguf -Ctx 8192
 #
+# Output: a friendly summary on the HOST stream, and the peak GiB as the single SUCCESS-stream
+# value (so a loop can capture it:  $gib = & scripts\measure-peak-rss.ps1 ... ). Numbers are
+# formatted with the invariant culture so a German-locale machine still emits "6.98", not "6,98".
+#
 # Pure ASCII on purpose (Windows PowerShell 5.1 reads non-BOM scripts in the ANSI codepage).
 
 [CmdletBinding()]
@@ -22,6 +26,8 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$inv = [System.Globalization.CultureInfo]::InvariantCulture
+function Fmt([double]$x, [int]$d) { return $x.ToString("F$d", $inv) }
 
 $serverBin = Join-Path $Root "runtime\llama.cpp\win\llama-server.exe"
 if (-not (Test-Path $serverBin)) { throw "llama-server not found: $serverBin" }
@@ -46,7 +52,7 @@ $serverArgs = @(
 )
 if ($Backend -eq "cpu") { $serverArgs += @("--device", "none") }
 
-Write-Output "Starting llama-server: $Model  (ctx=$Ctx, threads=$Threads, backend=$(if ($Backend) { $Backend } else { 'auto' }))"
+Write-Host "Starting llama-server: $Model  (ctx=$Ctx, threads=$Threads, backend=$(if ($Backend) { $Backend } else { 'auto' }))"
 $proc = Start-Process -FilePath $serverBin -ArgumentList $serverArgs -PassThru -NoNewWindow
 
 try {
@@ -75,14 +81,16 @@ try {
 
   # Read the peak working set of the actual server process.
   $live = Get-Process -Id $proc.Id
-  $peakBytes = [double]$live.PeakWorkingSet64
-  $peakGiB = [math]::Round($peakBytes / 1GB, 2)
+  $peakGiB = [double]$live.PeakWorkingSet64 / 1GB
   $suggestRam = [int][math]::Ceiling($peakGiB) + 3
 
-  Write-Output ""
-  Write-Output "model:                    $Model"
-  Write-Output "peak working set:         $peakGiB GiB"
-  Write-Output "suggested min RAM (+3):   $suggestRam GiB  (set recommended_min_ram_gb to the measured tier)"
+  Write-Host ""
+  Write-Host "model:                    $Model"
+  Write-Host "peak working set:         $(Fmt $peakGiB 2) GiB"
+  Write-Host "suggested min RAM (+3):   $suggestRam GiB  (set recommended_min_ram_gb to the measured tier)"
+
+  # The single success-stream value, so a loop can capture just the number.
+  Write-Output (Fmt $peakGiB 2)
 }
 finally {
   if (-not $proc.HasExited) {

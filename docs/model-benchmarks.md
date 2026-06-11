@@ -88,6 +88,15 @@ This is exactly how the first run was corrected — see §6.
 
 ## 3. Part B — Speed (`llama-bench`)
 
+> **One-shot loop (Parts B + C together, all models):**
+> ```powershell
+> scripts\benchmark-speed.ps1 -Root D:\ -Machine i7-1185G7 -Backend cpu
+> ```
+> Runs `llama-bench` + the peak-RSS probe for every chat GGUF on the drive and writes
+> `eval/results/<machine>-<backend>-speed.csv` (`model, backend, threads, pp512/2048/8192_tps,
+> tg_tps, peak_rss_gib, suggested_min_ram_gb`). Numbers are invariant-culture-formatted (German
+> locale safe). The per-model commands below are the underlying reference / fallback.
+
 `llama-bench` ships in the b9585 archives we already fetch (`runtime/llama.cpp/<os>/`; verify
 on first run — fallback in §5 risk table = time `llama-server` streaming, which we already
 measure in-app). Per model × backend:
