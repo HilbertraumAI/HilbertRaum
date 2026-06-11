@@ -6,7 +6,7 @@ format: gguf
 runtime: llama_cpp
 license: apache-2.0
 size_on_disk_gb: 7.0
-recommended_min_ram_gb: 16
+recommended_min_ram_gb: 14
 recommended_ram_gb: 32
 recommended_context_tokens: 8192
 supports_thinking_mode: false
@@ -23,19 +23,22 @@ download:
   size_bytes: 6975877728
   license_url: https://www.apache.org/licenses/LICENSE-2.0
 bundled_on_preconfigured_drive: false
-# CHALLENGER (Phase 28, D17): selectable on the Models screen, never auto-recommended —
-# it must earn `recommended_profiles` via the Phase-29 benchmark first. High tier (Qwen3
-# 14B class), 140+ languages. Vendor QAT **Q4_0** quantization, not Q4_K_M — quantization-
-# aware trained, so higher quality than a naive Q4 at similar size (`format: gguf` is all
-# the validator checks). Needs llama.cpp ~b8607+; our pinned b9585 (2026-06-09) covers it
-# (plan §3.1). TEXT-ONLY USE: the upstream repo also ships an mmproj vision file — we
-# deliberately do not download or reference it. THINKING (Phase-28 bring-up finding
-# 2026-06-10): unlike the other three challengers, Gemma 4's chat template DOES honour
-# `enable_thinking` — Deep mode streams a real chain-of-thought as `reasoning_content`
-# (~950 chars in the smoke) before answering. `supports_thinking_mode` is kept **false**
-# for now so the composer keeps "Thorough" gated off until Phase-29 evaluates thinking
-# quality; flipping it to true is a Phase-29 product decision, not a bring-up change. RAM
-# numbers mirror Qwen3 14B pending the Phase-29 §5.2 memory runs.
+# PROMOTED challenger (Phase 29, §5.4): beats the incumbent Qwen3 14B on EVERY axis in the
+# first benchmark run — fewer hallucinations (1 vs 2/15), faster decode (3.0 vs 2.1 tg t/s,
+# i7-1185G7 CPU), same EM/F1, same RAM. (Both are Apache-2.0 — the whole catalog is; the edge
+# is quality + speed, not licence.)
+# recommended_min_ram_gb dropped 16→14 from the measured ~10.6 GiB peak RSS;
+# recommended_profiles kept [] FOR NOW (the prod recommender ignores it / one-per-profile) —
+# making it the PRO recommendation is deferred to the recommender follow-up
+# (docs/model-benchmarks.md §6.2); verdict recorded in model-policy.md. High tier
+# (Qwen3 14B class), 140+ languages. Vendor QAT **Q4_0** quantization, not Q4_K_M —
+# quantization-aware trained, so higher quality than a naive Q4 at similar size. Needs
+# llama.cpp ~b8607+; our pinned b9585 (2026-06-09) covers it (plan §3.1). TEXT-ONLY USE: the
+# upstream repo also ships an mmproj vision file — we deliberately do not reference it.
+# THINKING: Gemma 4's chat template DOES honour `enable_thinking` (Deep streams real
+# `reasoning_content`). `supports_thinking_mode` is kept **false** PENDING a thinking-quality
+# check (tests/manual/gemma-thinking.test.ts) — flip to true once that passes (Phase-29
+# decision, run #2).
 recommended_profiles: []
 license_review:
   status: approved

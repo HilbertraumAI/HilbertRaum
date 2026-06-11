@@ -1,8 +1,10 @@
 # Model Policy — Private AI Drive Lite
 
-_Last updated: 2026-06-10 (Phase 28: catalog wave 1 — four challenger manifests added per
-[`model-catalog-expansion-plan.md`](model-catalog-expansion-plan.md) D16–D18; previously Phase 21:
-reranker manifest added; runtime pinned to llama.cpp b9585; all license reviews approved)_
+_Last updated: 2026-06-11 (Phase 29: first benchmark run — Ministral/Gemma/Qwen3-2507 promoted,
+Granite held, min-RAM recalibrated from measured peak RSS; see
+[`model-benchmarks.md`](model-benchmarks.md) §6. Phase 28: four challenger manifests added per
+[`model-catalog-expansion-plan.md`](model-catalog-expansion-plan.md) D16–D18; runtime pinned to
+llama.cpp b9585; all license reviews approved)_
 
 ## Principles
 - **No model weights in git.** Weights live under `models/` on the drive (git-ignored).
@@ -16,14 +18,14 @@ reranker manifest added; runtime pinned to llama.cpp b9585; all license reviews 
 
 | Role | Candidate | Size | Min RAM | Auto-tier | Purpose |
 |---|---|---|---|---|---|
-| Chat default | Qwen3 4B Instruct Q4 | ~2.7 GB | 8 GB | TINY / LITE / UNKNOWN | Smallest bundled chat model; default + weak-laptop fallback |
-| Chat better | Qwen3 8B Instruct Q4 | ~5.0 GB | 16 GB | BALANCED | 16 GB+ laptops |
-| Chat best dense | Qwen3 14B Instruct Q4 | ~9.3 GB | 16 GB | PRO | 32 GB+; the spec §7.3 PRO model — slower on CPU |
+| Chat default | Qwen3 4B Instruct Q4 | ~2.7 GB | 8 GB | TINY / LITE / UNKNOWN | Smallest bundled chat model; default + weak-laptop fallback. Kept as default (has hybrid thinking → Deep) despite 2507 scoring higher (Phase-29 user decision) |
+| Chat better | Qwen3 8B Instruct Q4 | ~5.0 GB | 12 GB | BALANCED | 12 GB+ laptops (RAM recalibrated from measured ~8.3 GiB peak) |
+| Chat best dense | Qwen3 14B Instruct Q4 | ~9.3 GB | 14 GB | PRO | 32 GB+; the spec §7.3 PRO model — slower on CPU (slowest decode of all 8). RAM recalibrated from measured ~10.6 GiB |
 | Chat MoE | Qwen3 30B-A3B (MoE) Q4 | ~18.6 GB | 24 GB | — (opt-in) | ~30B quality at ~3.3B *active*/token → near-3B speed; needs ~20 GB RAM |
-| Chat challenger | Ministral 3 8B Instruct (2512) Q4 | ~5.2 GB | 16 GB | — (challenger — not auto-recommended) | Phase-28 mid-tier challenger (vendor GGUF, 256k ctx, strong German); must earn promotion via the Phase-29 benchmark |
-| Chat challenger | Granite 4.1 8B Q4 | ~5.3 GB | 16 GB | — (challenger — not auto-recommended) | Phase-28 mid-tier challenger (IBM vendor GGUF — strongest provenance story; German is officially supported) |
-| Chat challenger | Gemma 4 12B Instruct QAT Q4_0 | ~7.0 GB | 16 GB | — (challenger — not auto-recommended) | Phase-28 high-tier challenger (Google vendor QAT GGUF, 140+ languages; first Apache-2.0 Gemma) |
-| Chat challenger | Qwen3 4B Instruct 2507 Q4 | ~2.5 GB | 8 GB | — (challenger — not auto-recommended) | Phase-28 incumbent-refresh challenger (D18); instruct-only — NO thinking mode, unlike the original 4B default |
+| Chat (winner, 8B) | Ministral 3 8B Instruct (2512) Q4 | ~5.2 GB | 12 GB | — (deferred‡) | **Phase-29 winner at 8B**: 0/15 hallucinations (only model that never fabricated) + fastest 8B decode |
+| Chat challenger | Granite 4.1 8B Q4 | ~5.3 GB | 12 GB | — (not promoted) | Phase-29: lost its tier (most 8B hallucinations 3/15, lowest F1); kept selectable for its IBM provenance story |
+| Chat (winner, 12–14B) | Gemma 4 12B Instruct QAT Q4_0 | ~7.0 GB | 14 GB | — (deferred‡) | **Phase-29 winner at 12–14B**: beats Qwen3 14B on every axis (fewer hallucinations, faster). `supports_thinking_mode` flip pending a thinking-quality check |
+| Chat (better 4B) | Qwen3 4B Instruct 2507 Q4 | ~2.5 GB | 8 GB | — (deferred‡) | **Phase-29 (D18)**: beats the original 4B on every axis; the quality alternative at the 4B tier (orig 4B stays the bundled default for Deep). Instruct-only — no thinking |
 | Embeddings | Multilingual E5 Small (F16) | ~0.24 GB | 4 GB | all | Local document search (needed for Q&A) |
 | Reranker (optional) | BGE Reranker v2 M3 (F16) | ~1.08 GB | 6 GB | LITE+ (never bundled by default) | Retrieval-quality pass over document search (Phase 21) — search works fully without it |
 
@@ -40,12 +42,20 @@ reranker manifest added; runtime pinned to llama.cpp b9585; all license reviews 
 All models are **Apache-2.0** (Qwen3, the Phase-28 challengers, BGE reranker) / **MIT** (E5).
 Sizes/RAM come from each manifest
 (`size_on_disk_gb` / `recommended_min_ram_gb`); download URLs live in the manifests' `download.url`
-(catalog with source links in the [README](../README.md)). **Auto-tier** is the hardware profile the
-benchmark auto-recommends the model for (`recommended_profiles`); the **30B-A3B MoE** and all
-**Phase-28 challengers** have an empty list — selectable on the AI Model screen but never
-auto-recommended. The MoE's download + RAM cost should be a deliberate choice; a challenger must
-**earn** its `recommended_profiles` through the Phase-29 benchmark first
-([`model-catalog-expansion-plan.md`](model-catalog-expansion-plan.md) D17). Adding a model is
+(catalog with source links in the [README](../README.md)). **Auto-tier** is the
+`recommended_profiles` list each manifest declares.
+> ‡ **Promotions are DEFERRED, not yet applied to `recommended_profiles` (Phase-29 finding).**
+> The **Phase-29 benchmark** ([`model-benchmarks.md`](model-benchmarks.md)) picked clear tier
+> winners (Ministral at 8B, Gemma 4 at 12–14B, Qwen3-2507 as the better 4B), but two architecture
+> facts mean editing `recommended_profiles` now would be inert or wrong: (1) the production picker
+> is **RAM-best-fit** (`recommendModelIdByRam` — largest model whose `recommended_ram_gb` fits,
+> tie-broken by disk size) and **ignores `recommended_profiles`**; (2) the legacy profile picker
+> is **one-model-per-profile**, so a second model claiming a tier hijacks the incumbent. So the
+> winners keep `recommended_profiles: []` and the verdicts live here, **pending a recommender
+> follow-up** that makes best-fit quality/`recommended_profiles`-aware (own decision —
+> `model-benchmarks.md` §6.2). Until then the app still auto-recommends by RAM-best-fit.
+Min-RAM values WERE **recalibrated from measured peak RSS** in the Phase-29 run (8B: 16→12,
+12–14B: 16→14) — this is live. Adding a model is
 **manifest-only** (no code change): drop a YAML in
 `model-manifests/chat/` with a `download` block + a `recommended_profiles` list.
 

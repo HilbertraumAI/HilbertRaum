@@ -25,12 +25,18 @@ download:
   size_bytes: 2497281120
   license_url: https://huggingface.co/Qwen/Qwen3-4B-Instruct-2507/blob/main/LICENSE
 bundled_on_preconfigured_drive: false
-# CHALLENGER (Phase 28, D18): the 2507 refresh of our default 4B, added as a FOURTH
-# challenger — the original `qwen3-4b-instruct-q4` STAYS the default until Phase-29
-# numbers exist. Report data: the 2507 4B beats the ORIGINAL 8B on most axes (MMLU-Pro
-# 69.6 vs 58.0 etc., plan §3.5). ⚠️ Instruct-only: unlike the original Qwen3 4B it has NO
-# hybrid thinking (`supports_thinking_mode: false`) — promoting it to default would make
-# Deep mode a no-op on the default model; that is a Phase-29 product decision, not a bug.
+# PROMOTED challenger (Phase 29, §5.4 / D18): the 2507 refresh BEAT the original 4B on EVERY
+# axis in the first benchmark run (EM 0.98 vs 0.96, F1 0.36 vs 0.33, German F1 0.37 vs 0.34,
+# 1 vs 3/15 hallucinations) at the same speed (6.2 vs 6.3 tg t/s) and RAM (~5.2 GiB peak).
+# The §4.6 bring-up "German wobble" did NOT recur on the grounded RAG path (2507 has the top
+# German F1 here) was an open-knowledge artifact, not a grounding one. The original
+# `qwen3-4b-instruct-q4` STAYS the bundled default (user decision 2026-06-11): 2507 is
+# instruct-only (NO hybrid thinking, so Deep is a no-op), and keeping the original default
+# preserves Deep on low-end machines. 2507 is the recommended-on-QUALITY alternative at the 4B
+# tier, recorded in model-policy.md; recommended_profiles is kept [] because the prod recommender
+# ignores it and the legacy picker is one-per-profile (a 2nd 4B claiming the tier would hijack
+# the default). Surfacing it as an alternative awaits the recommender follow-up
+# (docs/model-benchmarks.md §6.2).
 recommended_profiles: []
 license_review:
   status: approved

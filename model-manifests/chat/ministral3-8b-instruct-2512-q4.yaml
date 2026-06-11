@@ -6,7 +6,7 @@ format: gguf
 runtime: llama_cpp
 license: apache-2.0
 size_on_disk_gb: 5.2
-recommended_min_ram_gb: 16
+recommended_min_ram_gb: 12
 recommended_ram_gb: 16
 recommended_context_tokens: 8192
 supports_thinking_mode: false
@@ -22,12 +22,17 @@ download:
   size_bytes: 5198911904
   license_url: https://www.apache.org/licenses/LICENSE-2.0
 bundled_on_preconfigured_drive: false
-# CHALLENGER (Phase 28, D17): selectable on the Models screen, never auto-recommended —
-# it must earn `recommended_profiles` via the Phase-29 benchmark first. Mid-tier (Qwen3 8B
-# class), 256k native context, strong German. TEXT-ONLY USE: the upstream repo also ships a
-# BF16 mmproj vision file — we deliberately do not download or reference it (no vision
-# pipeline in this app). Instruct-only: no hybrid thinking, so Deep mode behaves like
-# Balanced (plan §4.1).
+# PROMOTED challenger (Phase 29, §5.4): the BEST 8B in the first benchmark run — 0/15
+# hallucinations on the unanswerable set (the only model that never fabricated) at the
+# fastest 8B decode (4.5 tg t/s, i7-1185G7 CPU). (Edge is quality + speed, not licence — the
+# whole catalog is Apache-2.0.) recommended_min_ram_gb dropped 16→12 from the measured ~8.7 GiB
+# peak RSS. recommended_profiles kept [] FOR NOW: the production recommender is RAM-best-fit and
+# ignores this field, and the legacy picker is one-model-per-profile — so making it the BALANCED
+# recommendation is deferred to the quality-aware recommender follow-up (docs/model-benchmarks.md
+# §6.2); the verdict is recorded in model-policy.md. Mid-tier (Qwen3 8B class), 256k native
+# context, strong German. TEXT-ONLY USE: the upstream repo also ships a BF16 mmproj vision file —
+# we deliberately do not download or reference it. Instruct-only: no hybrid thinking, so Deep
+# mode behaves like Balanced (plan §4.1).
 recommended_profiles: []
 license_review:
   status: approved

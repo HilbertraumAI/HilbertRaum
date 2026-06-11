@@ -1346,9 +1346,29 @@ Repo root: `f:\_coding\ai_drive`.
      audited the raw dumps, expanded `text.mjs` + tests, re-scored via `eval/rescore.mjs` with no
      model re-run — `*-quality-rescored.csv` is authoritative). The Gemma flag is NOT informed by
      this run (balanced/thinking-off).
-  PENDING to close: Part B (`llama-bench` speed) + Part C (peak-RSS) on both machines → combined
-  CSVs; then apply §5.4 promotions to `recommended_profiles` + `model-policy.md`, decide the
-  Gemma flag, replace the §4.1 RAM estimates with measured peak-RSS, and condense the plan.
+  7. **Speed + RSS measured (2026-06-11, i7-1185G7 CPU)** (`scripts/benchmark-speed.ps1` →
+     `eval/results/i7-1185G7-cpu.csv`; `eval/combine.mjs` joins QA+speed). Decode tg t/s: 4B
+     ~6.2-6.3, ministral 4.5 (fastest 8B), qwen3-8b 3.9, granite 4.3, gemma4 3.0, qwen3-14b 2.1
+     (slowest), 30B-A3B 4.7 (MoE). **Benchmark verdicts:** ministral = best 8B (0 hallucinations,
+     fastest); gemma4 beats qwen3-14b on every axis; qwen3-2507 beats orig-4b on every axis (D18);
+     granite lost its tier. **APPLIED (live):** `recommended_min_ram_gb` recalibrated from measured
+     peak RSS (8B 16→12, 12-14B 16→14; 4B held 8, 30B held 24 — MoE/mmap caveat); orig-4b stays the
+     bundled default (user decision — preserves Deep). **DEFERRED:** the `recommended_profiles`
+     promotions were NOT applied — editing that field is inert in prod (the picker ignores it) or
+     breaking in the legacy path (one-model-per-profile); winners keep `[]`, verdicts recorded in
+     `model-policy.md` + benchmarks §6, to be made live by the recommender follow-up (item 8).
+     **Licence correction:** the WHOLE catalog is Apache-2.0 (Qwen3 too) — the challenger edge is
+     quality+speed, not licence; manifest comments fixed.
+  8. **Recommender finding (proposed follow-up):** the production picker `recommendModelIdByRam`
+     is QUALITY-BLIND (largest model whose `recommended_ram_gb` fits, tie-broken by disk size) and
+     IGNORES `recommended_profiles` (legacy-only) — on a 16 GB box it would pick **granite** (the
+     run's worst 8B). So the promotions are recorded intent that does NOT yet change the app's
+     auto-recommendation. Proposed code follow-up: make best-fit prefer `recommended_profiles` +
+     a quality rank (own decision; `docs/model-benchmarks.md` §6.2).
+  PENDING to close: the **Gemma thinking-quality check** (`tests/manual/gemma-thinking.test.ts`,
+  run #2 → maybe flip `supports_thinking_mode`); optionally the devbox speed/RSS run (formal
+  ≥2-machine done-when — QA+RSS are machine-independent, already reproduced); the recommender
+  follow-up decision; then condense the plan per the doc lifecycle rule.
 
 ---
 

@@ -221,6 +221,51 @@ rule needs `tg t/s`). Authoritative numbers are the **`*-quality-rescored.csv`**
   v1-detector output; **`*-quality-rescored.csv` is authoritative** and a fresh run now reproduces
   it.
 
-**Remaining to close the phase:** Part B (`llama-bench`) + Part C (peak-RSS) on both machines →
-join into the combined CSVs; then apply §5.4 (promote 2507 / others as the speed-RAM picture
-allows, decide the Gemma flag, set measured `recommended_min_ram_gb`) and condense.
+### 6.1 Speed + RSS (i7-1185G7, CPU) and the decisions applied
+
+Speed/RSS were measured on the i7 (`scripts/benchmark-speed.ps1`; combined row in
+`eval/results/i7-1185G7-cpu.csv`). Decode (tg t/s) and peak RSS, by tier:
+
+| Tier | Model | tg t/s | peak RSS (GiB) | min RAM set |
+|---|---|---|---|---|
+| 4B | qwen3-4b (default) · qwen3-4b-2507 | 6.3 · 6.2 | 5.2 · 5.2 | 8 (validated) |
+| 8B | qwen3-8b · **ministral** · granite | 3.9 · **4.5** · 4.3 | 8.3 · 8.7 · 8.9 | 12 |
+| 12–14B | qwen3-14b · **gemma4** | 2.1 · **3.0** | 10.6 · 10.6 | 14 |
+| 30B-MoE | qwen3-30b-a3b | 4.7 | 10.3† | 24 (held) |
+
+†MoE + mmap undercounts resident set (the file is ~18.6 GB); `recommended_min_ram_gb` held at 24.
+
+**Benchmark verdicts (tier winners):** Ministral 3 8B (best 8B — 0 hallucinations + fastest);
+Gemma 4 12B (beats Qwen3 14B on every axis); Qwen3-4B-2507 (beats the original 4B on every axis,
+D18). Granite 4.1 8B lost its tier (most 8B hallucinations, lowest F1).
+
+**What was actually applied to the catalog:**
+- **`recommended_min_ram_gb` recalibrated** from measured peak RSS — 8B 16→12, 12–14B 16→14
+  (4B held at 8, 30B held at 24 for the MoE/mmap caveat). This is **live**. `recommended_ram_gb`
+  left unchanged (changing it shifts the quality-blind best-fit — see §6.2).
+- **The original `qwen3-4b-instruct-q4` stays the bundled default** (user decision) — it has
+  hybrid thinking, so Deep keeps working out of the box on low-end machines; 2507 is instruct-only.
+- **`recommended_profiles` promotions DEFERRED** — the winners keep `[]`. Editing that field now
+  is inert in production (the picker ignores it) or breaking in the legacy path (one-model-per-
+  profile); see §6.2. The verdicts are recorded here + in `model-policy.md`, to be made live by
+  the recommender follow-up.
+- **Gemma `supports_thinking_mode` stays `false`** PENDING the thinking-quality check
+  (`tests/manual/gemma-thinking.test.ts`, run #2) — flip only if Deep ≥ Balanced on reasoning.
+- **Licence correction:** the whole catalog is **Apache-2.0** (Qwen3 included) — the challengers'
+  edge is quality + speed, *not* licence. Manifest comments that implied otherwise were fixed.
+
+### 6.2 Recommender architecture finding (proposed follow-up)
+
+The benchmark exposed that the production recommender `recommendModelIdByRam` is **quality-blind**:
+it picks the *largest* model whose `recommended_ram_gb` fits, tie-broken by **disk size**, and
+**ignores `recommended_profiles`** (that list is only the legacy no-RAM path). Concretely, on a
+16 GB machine today it would recommend **granite** (largest-disk 8B at `recommended_ram_gb: 16`) —
+the run's *worst* 8B. So the `recommended_profiles` promotions above are recorded intent that does
+**not yet change** the app's auto-recommendation. **Proposed follow-up (code, own decision):** make
+best-fit prefer, among models that fit, those whose `recommended_profiles` matches the machine
+profile, then a benchmark quality rank, then size. Until then the promotions live in docs + the
+manifests, not in the picker.
+
+**Remaining to close the phase:** the Gemma thinking-quality check (run #2 → maybe flip the flag);
+optionally the devbox speed/RSS run for the formal ≥2-machine done-when (QA is machine-independent
+and already reproduced; RSS is too, so this is for completeness); then condense the plan.

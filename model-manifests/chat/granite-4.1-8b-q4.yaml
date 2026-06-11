@@ -6,7 +6,7 @@ format: gguf
 runtime: llama_cpp
 license: apache-2.0
 size_on_disk_gb: 5.3
-recommended_min_ram_gb: 16
+recommended_min_ram_gb: 12
 recommended_ram_gb: 16
 recommended_context_tokens: 8192
 supports_thinking_mode: false
@@ -22,12 +22,13 @@ download:
   size_bytes: 5347914400
   license_url: https://www.apache.org/licenses/LICENSE-2.0
 bundled_on_preconfigured_drive: false
-# CHALLENGER (Phase 28, D17): selectable on the Models screen, never auto-recommended —
-# it must earn `recommended_profiles` via the Phase-29 benchmark first. Mid-tier (Qwen3 8B
-# class), 128k context, German is one of 12 officially supported languages; the strongest
-# license/provenance story in the catalog (IBM vendor GGUF). Repo-naming gotcha: the
-# upstream repo has NO `-instruct` suffix — `granite-4.1-8b` IS the instruct-tuned model.
-# Instruct-only: no hybrid thinking, so Deep mode behaves like Balanced (plan §4.1).
+# CHALLENGER, NOT promoted (Phase 29, §5.4): lost its tier in the first benchmark run —
+# most hallucinations of the 8B class (3/15) and the lowest F1 of all 8 models (0.28). Kept
+# selectable for its license/provenance story (the strongest in the catalog — IBM vendor
+# GGUF, German one of 12 official languages), but recommended_profiles stays []. RAM
+# recalibrated 16→12 from the measured ~8.9 GiB peak RSS. Mid-tier (Qwen3 8B class), 128k
+# context. Repo-naming gotcha: the upstream repo has NO `-instruct` suffix — `granite-4.1-8b`
+# IS the instruct-tuned model. Instruct-only: no hybrid thinking (Deep behaves like Balanced).
 recommended_profiles: []
 license_review:
   status: approved

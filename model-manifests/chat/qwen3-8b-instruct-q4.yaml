@@ -6,7 +6,8 @@ format: gguf
 runtime: llama_cpp
 license: apache-2.0
 size_on_disk_gb: 5.0
-recommended_min_ram_gb: 16
+# recommended_min_ram_gb recalibrated 16->12 from the Phase-29 measured ~8.3 GiB peak RSS.
+recommended_min_ram_gb: 12
 recommended_ram_gb: 32
 recommended_context_tokens: 8192
 supports_thinking_mode: true
