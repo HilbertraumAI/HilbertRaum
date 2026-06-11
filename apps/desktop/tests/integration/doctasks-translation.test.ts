@@ -19,7 +19,6 @@ import {
   DocTaskManager,
   TASK_GENERIC_FAILURE_MESSAGE,
   TASK_TRANSLATION_TARGET_MESSAGE,
-  TASK_KIND_UNAVAILABLE_MESSAGE,
   failedWindowNotice,
   translationAttributionLine,
   translationBudgetWords,
@@ -205,13 +204,6 @@ describe('validation (kind + params)', () => {
     ).toThrow('Pick exactly one document to translate.')
   })
 
-  it('compare still refuses friendly (Phase 35)', async () => {
-    const docId = await importDoc(50)
-    const manager = makeManager({ runtime: scriptedRuntime() })
-    expect(() => manager.startDocTask({ kind: 'compare', documentIds: [docId] })).toThrow(
-      TASK_KIND_UNAVAILABLE_MESSAGE
-    )
-  })
 })
 
 describe('end-to-end translation (the D36 overlap regression + stitching)', () => {
@@ -267,8 +259,8 @@ describe('end-to-end translation (the D36 overlap regression + stitching)', () =
     expect(tokens).toEqual(Array.from({ length: 600 }, (_, i) => `word${i}`))
 
     // Provenance round-trip.
-    expect(created?.origin).toEqual({ translatedFrom: docId, targetLang: 'de' })
-    expect(getDocumentOrigin(db, newId)).toEqual({ translatedFrom: docId, targetLang: 'de' })
+    expect(created?.origin).toEqual({ type: 'translation', translatedFrom: docId, targetLang: 'de' })
+    expect(getDocumentOrigin(db, newId)).toEqual({ type: 'translation', translatedFrom: docId, targetLang: 'de' })
 
     // Audit: ids-only document_task_completed (with the SOURCE id) + a
     // document_imported for the materialized document.
@@ -298,7 +290,7 @@ describe('end-to-end translation (the D36 overlap regression + stitching)', () =
     // Re-index the translated document: chunks rebuild, origin stays.
     const reinfo = await reindexDocument(db, storeDir, newId)
     expect(reinfo.status).toBe('indexed')
-    expect(getDocumentOrigin(db, newId)).toEqual({ translatedFrom: docId, targetLang: 'en' })
+    expect(getDocumentOrigin(db, newId)).toEqual({ type: 'translation', translatedFrom: docId, targetLang: 'en' })
 
     // Malformed origin_json must never break a listing — it reads as null.
     db.prepare('UPDATE documents SET origin_json = ? WHERE id = ?').run('{not json', newId)

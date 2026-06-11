@@ -17,7 +17,6 @@ import {
   DocTaskManager,
   TASK_DOCUMENT_NOT_READY_MESSAGE,
   TASK_EXPIRED_MESSAGE,
-  TASK_KIND_UNAVAILABLE_MESSAGE,
   TASK_NEEDS_RUNTIME_MESSAGE,
   TASK_REFUSED_CHAT_STREAMING_MESSAGE,
   SUMMARY_MAP_CALL_CEILING,
@@ -356,14 +355,11 @@ describe('state machine guards (D26)', () => {
     expect(() => manager.startDocTask({ kind: 'summary', documentIds: [queued.id] })).toThrow(
       TASK_DOCUMENT_NOT_READY_MESSAGE
     )
-    // Kind validation. (Translation shipped in Phase 34 — see
-    // doctasks-translation.test.ts; only compare still refuses.)
+    // Kind validation. (Translation shipped in Phase 34, compare in Phase 35 — see
+    // doctasks-translation.test.ts / doctasks-compare.test.ts.)
     expect(() =>
       manager.startDocTask({ kind: 'nonsense' as never, documentIds: ['x'] })
     ).toThrow('Unknown document task.')
-    expect(() => manager.startDocTask({ kind: 'compare', documentIds: ['x'] })).toThrow(
-      TASK_KIND_UNAVAILABLE_MESSAGE
-    )
   })
 
   it('reports unknown job ids as terminal so pollers stop', () => {

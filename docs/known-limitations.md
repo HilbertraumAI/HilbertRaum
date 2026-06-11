@@ -189,6 +189,33 @@ logs, best-effort shredding on SSDs, no password recovery — are documented in
   (materialized translations are Markdown, so it is exact); PDFs/DOCX stored copies are
   original binaries and are not exported through this path.
 
+## Document comparison (Phase 35, wave-3 plan §8)
+
+- **Section-matched comparison is A-driven (accepted asymmetry).** When two documents are
+  too long to compare in full, each section of document A is matched with the most
+  RELATED excerpts of document B (stored vectors, no new index). That direction makes
+  "only in A" findings reliable, but content that exists **only in document B** is seen
+  only when it happens to be retrieved as a neighbor — it can be missed. The reduce is
+  instructed to report only what the per-section notes support. A symmetric second pass
+  would double the model calls; revisit with evidence.
+- **The report covers the BEGINNING of document A when it is very long.** The map ceiling
+  (12 calls, the summary's bounded-latency rationale) caps coverage; the report itself
+  carries a visible notice when that happens. Both documents stay fully searchable.
+- **Report section headings are English even for German documents.** The four headings
+  are dictated verbatim so the report structure is deterministic (R-T2-probed: the 4B
+  keeps them); the findings under them follow the documents' language. Cosmetic, accepted
+  for v1.
+- **One-sided clauses may ALSO appear under "What differs" in small-doc compares.** The
+  R-T2 smoke showed the 4B sometimes lists a fact present in only one document both as a
+  difference ("…while document B does not mention this") and under its "Only in" section
+  — accurate but redundant; prompt-tightening fixed the reduce path, the full-compare
+  duplication is accepted (visible, never wrong).
+- **Mixed-language pairs get a single-language report.** The prompt says "write in the
+  language of the documents"; for a German/English pair the model picks one. Compare
+  like-language documents (or translate one first — Phase 34 exists for this).
+- **A comparison is a snapshot, not a synced copy** — the same `origin_json` staleness
+  edge as translations; re-run Compare after the sources change.
+
 ## GPU acceleration (Phases 14–16, [`gpu-support-plan.md`](gpu-support-plan.md))
 
 - **Integrated GPUs (Intel Iris Xe / UHD, AMD APU "Radeon Graphics") gain little.** They share

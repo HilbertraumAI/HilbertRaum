@@ -75,9 +75,10 @@ const handlers = ipcState.handlers as unknown as IpcHandlers
 
 const CHAT_SENTINEL = 'XCHAT_SENTINEL_my secret salary is 99999'
 const DOC_SENTINEL = 'XDOC_SENTINEL_the merger closes friday'
+const DOC_SENTINEL_B = 'XDOCB_SENTINEL_the budget doubles in june'
 const SETTING_SENTINEL = 'XSETTING_SENTINEL_not_privacy_relevant'
 const PASSWORD_SENTINEL = 'XPASS_SENTINEL_hunter2hunter2'
-const SENTINELS = [CHAT_SENTINEL, DOC_SENTINEL, SETTING_SENTINEL, PASSWORD_SENTINEL]
+const SENTINELS = [CHAT_SENTINEL, DOC_SENTINEL, DOC_SENTINEL_B, SETTING_SENTINEL, PASSWORD_SENTINEL]
 
 const BODY = 'downloaded-model-bytes'
 function sha256(s: string): string {
@@ -304,7 +305,7 @@ describe('audit wiring across the IPC layer (privacy sentinel grep)', () => {
     expect(translatedId).not.toBe(documentId)
     const { result: docs2Raw } = await invoke(handlers, IPC.listDocuments)
     const translated = (docs2Raw as DocumentInfo[]).find((d) => d.id === translatedId)
-    expect(translated?.origin).toEqual({ translatedFrom: documentId, targetLang: 'de' })
+    expect(translated?.origin).toEqual({ type: 'translation', translatedFrom: documentId, targetLang: 'de' })
     ipcState.saveDialog.canceled = false
     ipcState.saveDialog.filePath = join(rootPath, 'translated-export.md')
     await invoke(handlers, IPC.exportDocument, translatedId)
@@ -312,6 +313,53 @@ describe('audit wiring across the IPC layer (privacy sentinel grep)', () => {
     // window prompt, which contains the document text)…
     expect(readFileSync(join(rootPath, 'translated-export.md'), 'utf8')).toContain(DOC_SENTINEL)
     await invoke(handlers, IPC.deleteDocument, translatedId)
+
+    // -- document task (Phase 35): compare the sentinel document with a SECOND
+    // sentinel-bearing document through the real engine + echo runtime. The
+    // materialized report really carries both sentinels (the echo reply contains the
+    // full compare prompt with both texts) — `runtime_events` must stay ids-only.
+    const docPathB = join(rootPath, 'meeting-notes-v2.txt')
+    writeFileSync(docPathB, `notes v2\n${DOC_SENTINEL_B}\n`, 'utf8')
+    const { result: jobBRaw } = await invoke(handlers, IPC.importDocuments, [docPathB])
+    const jobB = jobBRaw as ImportJob
+    await pollUntil(async () => {
+      const { result } = await invoke(handlers, IPC.getImportJob, jobB.jobId)
+      return (result as ImportJobStatus).done
+    }, 'second import job')
+    const documentIdB = jobB.documentIds[0]
+    const { result: cmpRaw } = await invoke(handlers, IPC.startDocTask, {
+      kind: 'compare',
+      documentIds: [documentId, documentIdB]
+    })
+    const cmp = cmpRaw as { jobId: string }
+    await pollUntil(async () => {
+      const { result } = await invoke(handlers, IPC.getDocTask, cmp.jobId)
+      const s = result as DocTaskStatus
+      return s.state === 'done' || s.state === 'failed' || s.state === 'cancelled'
+    }, 'compare task')
+    const { result: cmpDoneRaw } = await invoke(handlers, IPC.getDocTask, cmp.jobId)
+    const cmpDone = cmpDoneRaw as DocTaskStatus
+    expect(cmpDone.state).toBe('done')
+    const comparedId = cmpDone.resultRef?.documentId as string
+    expect(comparedId).toBeTruthy()
+    const { result: docs3Raw } = await invoke(handlers, IPC.listDocuments)
+    const compared = (docs3Raw as DocumentInfo[]).find((d) => d.id === comparedId)
+    expect(compared?.origin).toEqual({ type: 'compare', comparedFrom: [documentId, documentIdB] })
+    ipcState.saveDialog.canceled = false
+    ipcState.saveDialog.filePath = join(rootPath, 'comparison-export.md')
+    await invoke(handlers, IPC.exportDocument, comparedId)
+    const comparisonText = readFileSync(join(rootPath, 'comparison-export.md'), 'utf8')
+    expect(comparisonText).toContain(DOC_SENTINEL)
+    expect(comparisonText).toContain(DOC_SENTINEL_B)
+    // The compare completion event carries BOTH source ids — and nothing else.
+    const cmpEvent = listAuditEvents(db, { limit: 5000 }).find(
+      (e) =>
+        e.type === 'document_task_completed' &&
+        (e.metadata as { kind?: string } | null)?.kind === 'compare'
+    )
+    expect(cmpEvent?.metadata).toEqual({ kind: 'compare', documentId, documentIdB })
+    await invoke(handlers, IPC.deleteDocument, comparedId)
+    await invoke(handlers, IPC.deleteDocument, documentIdB)
 
     await invoke(handlers, IPC.deleteDocument, documentId)
 

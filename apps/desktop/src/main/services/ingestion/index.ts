@@ -132,18 +132,32 @@ function parseSummary(json: string | null | undefined): DocumentSummary | null {
   return null
 }
 
-/** Parse a stored origin (Phase 34 provenance); malformed JSON reads as null. */
+/** Parse a stored origin (Phase 34/35 provenance); malformed JSON reads as null. */
 function parseOrigin(json: string | null | undefined): DocumentOrigin | null {
   if (!json) return null
   try {
-    const v = JSON.parse(json) as Partial<DocumentOrigin> | null
+    const v = JSON.parse(json) as Record<string, unknown> | null
+    if (!v || typeof v !== 'object') return null
+    // Comparison provenance (Phase 35): both source ids, A/B order.
+    if (v.type === 'compare') {
+      const from = v.comparedFrom
+      if (
+        Array.isArray(from) &&
+        from.length === 2 &&
+        from.every((x) => typeof x === 'string' && x.length > 0)
+      ) {
+        return { type: 'compare', comparedFrom: [from[0] as string, from[1] as string] }
+      }
+      return null
+    }
+    // Translation provenance. Phase-34 rows persisted WITHOUT the `type` field (it was
+    // the only shape then) — they parse as 'translation' unchanged.
     if (
-      v &&
       typeof v.translatedFrom === 'string' &&
       v.translatedFrom.length > 0 &&
       (v.targetLang === 'de' || v.targetLang === 'en')
     ) {
-      return { translatedFrom: v.translatedFrom, targetLang: v.targetLang }
+      return { type: 'translation', translatedFrom: v.translatedFrom, targetLang: v.targetLang }
     }
   } catch {
     // fall through to null
@@ -514,8 +528,8 @@ export function getDocumentSummary(db: Db, documentId: string): DocumentSummary 
 }
 
 /**
- * Record a generated document's provenance (Phase 34, D27): `origin_json` holds
- * `{ translatedFrom, targetLang }`. Also clears `original_path` — a materialized
+ * Record a generated document's provenance (Phase 34 D27 / Phase 35 D28): `origin_json`
+ * holds a `DocumentOrigin` (translation or compare). Also clears `original_path` — a materialized
  * document's "original" was a transient generated file that is shredded after import,
  * so a dangling path must not linger in the row. Provenance survives re-index
  * deliberately (it states where the document CAME from, not that it is in sync).

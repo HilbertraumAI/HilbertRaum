@@ -23,11 +23,12 @@ import {
   type IngestionDeps
 } from './ingestion'
 import { shredFile } from './workspace-vault'
+import { decodeVector, VectorIndex } from './embeddings'
 import { isAbortError, stripThinkBlocks } from './chat'
 import type { AuditRecorder } from './audit'
 import { log } from './logging'
 
-// Document task service (Phase 33/34, wave-3 plan §6/§7) — the shared engine for
+// Document task service (Phases 33–35, wave-3 plan §6/§7/§8) — the shared engine for
 // summary (Phase 33), translation (Phase 34), and compare (Phase 35): a job state
 // machine on the Phase-4/18 async-with-polling precedent.
 //
@@ -49,22 +50,27 @@ import { log } from './logging'
 // `documents.summary_json` column of the open DB — it never touches the `.enc`
 // document sidecars on disk. It therefore deliberately does NOT take the
 // `beginDocumentWork()` lease (which exists to keep sidecar writers and the vault
-// password change mutually exclusive). A TRANSLATION task is the inverse: its
-// materialize step writes a `.enc` sidecar through the normal import path, so that
-// step — and ONLY that step — holds the lease. The long window-by-window translation
+// password change mutually exclusive). TRANSLATION and COMPARE tasks are the inverse:
+// their materialize step writes a `.enc` sidecar through the normal import path, so
+// that step — and ONLY that step — holds the lease. The long window-by-window model
 // loop runs lease-free so a password change is never blocked for minutes; a change
 // landing mid-loop just makes the final materialize fail friendly (VaultBusyError).
 //
-// Privacy: summaries and translations are CONTENT. They are persisted only in the
-// (possibly encrypted) workspace — `documents.summary_json` / the materialized `.enc`
-// document — and the audit events carry `{ kind, documentId }` only.
+// Privacy: summaries, translations, and comparison reports are CONTENT. They are
+// persisted only in the (possibly encrypted) workspace — `documents.summary_json` /
+// the materialized `.enc` document — and the audit events carry ids and kinds only
+// (`{ kind, documentId }`, plus `documentIdB` for a compare).
 
 /** Friendly copy (spec §11.4) for the guards + failure states. */
 export const TASK_NEEDS_RUNTIME_MESSAGE =
   'No AI model is running. Open the AI Model screen and start one first.'
 export const TASK_REFUSED_CHAT_STREAMING_MESSAGE =
   'An answer is being written right now. Wait for it to finish (or stop it), then try again.'
-export const TASK_KIND_UNAVAILABLE_MESSAGE = 'This document task is not available yet.'
+export const TASK_COMPARE_PICK_TWO_MESSAGE = 'Pick exactly two documents to compare.'
+export const TASK_COMPARE_REINDEX_MESSAGE =
+  'These documents need a quick re-index before they can be compared — at least one was ' +
+  'prepared with a different search model. Open the Documents screen and choose Re-index, ' +
+  'then try again.'
 export const TASK_DOCUMENT_NOT_READY_MESSAGE =
   'This document has no readable text yet. Import or re-index it first, then try again.'
 export const TASK_GENERIC_FAILURE_MESSAGE =
@@ -394,6 +400,274 @@ export function translatedDocumentTitle(
   return `${base} (${TARGET_LANG_TITLE_LABEL[targetLang]}).md`
 }
 
+// ---- Compare window math + templates (Phase 35, D28 + D37 + R-T2) --------------------
+//
+// D28 (RESOLVED): the result is a MATERIALIZED corpus document ("Comparison: A vs B.md",
+// the D27 principle) and the strategy auto-switches on token math:
+//   (a) small-docs full compare — both documents' full texts fit one call ⇒ one
+//       structured-comparison call over both, then materialize.
+//   (b) section-matched compare — for each window of doc A's chunks, the nearest doc-B
+//       chunks are retrieved via the EXISTING VectorIndex scoped to doc B (the Phase-17
+//       `documentIds` scoping; the vectors are already there — no new index), each
+//       matched pair is compared (map), and one reduce merges the notes into the report.
+//
+// D37 (mode-(a) input): like the translation (D36), mode (a) reads the parser's
+// SEGMENTS re-extracted from the stored copies — NOT the stored chunks. Two reasons:
+// chunk overlap (~80 tokens) would present duplicated text to the model as if both
+// documents repeated themselves (phantom "shared" content in a comparison, where a
+// summary merely tolerated repetition), and the MODE DECISION itself must be made on
+// the true text length — the overlap inflates a chunk-based estimate by ~16%, enough
+// to push a fitting pair into the heavier mode (b). Cost: one re-parse per document,
+// the same the preview pays. Mode (b)'s map step uses the stored CHUNKS instead — the
+// pairing needs their vectors, and per-pair notes tolerate overlap like summary
+// partials do (D25 precedent).
+//
+// Mode (b) honesty note: the pairing is A-driven (B excerpts are retrieved by
+// similarity to A's sections), so "only in B" findings are structurally weaker than
+// "only in A" — the reduce is instructed to report only what the notes support, and
+// the per-pair prompt lets the model flag B-excerpt content without an A counterpart.
+// Recorded in known-limitations.md.
+
+/** maxTokens for the single-pass and reduce calls (also the output reserve). */
+export const COMPARE_OUTPUT_TOKENS = 512
+/** Reserved for the instruction template + chat chrome, in model tokens. */
+export const COMPARE_PROMPT_RESERVE_TOKENS = 300
+/** Comparison is faithful synthesis, not creative writing (summary precedent). */
+export const COMPARE_TEMPERATURE = 0.3
+/** Hard ceiling on map calls (the D25/summary rationale: bounded CPU latency). */
+export const COMPARE_MAP_CALL_CEILING = 12
+/** Floor for a map call's output cap — below this, per-pair notes stop being useful. */
+const COMPARE_MAP_OUTPUT_FLOOR_TOKENS = 128
+/** Nearest doc-B chunks retrieved per doc-A chunk before the word-budget fill. */
+export const COMPARE_NEIGHBORS_PER_CHUNK = 3
+
+/** Usable model tokens for input text after the prompt + output reserves. */
+function compareUsableInputTokens(contextTokens: number): number {
+  const ctx = Math.max(1024, Math.floor(contextTokens) || 0)
+  return ctx - COMPARE_OUTPUT_TOKENS - COMPARE_PROMPT_RESERVE_TOKENS
+}
+
+/** Total per-call input budget in WORDS (both documents/sides together). */
+export function compareBudgetWords(contextTokens: number): number {
+  return Math.max(200, Math.floor(compareUsableInputTokens(contextTokens) / SUMMARY_TOKENS_PER_WORD))
+}
+
+/** Mode switch (D28): do both documents' full texts fit one comparison call? */
+export function compareFitsSinglePass(wordsA: number, wordsB: number, contextTokens: number): boolean {
+  return wordsA + wordsB <= compareBudgetWords(contextTokens)
+}
+
+/** A doc-A chunk reference the mode-(b) planner windows (id kept for vector lookup). */
+export interface CompareChunkRef {
+  id: string
+  text: string
+}
+
+/** One mode-(b) map window: consecutive doc-A chunks + the ids to retrieve B-neighbors for. */
+export interface CompareWindow {
+  chunkIds: string[]
+  text: string
+}
+
+export interface ComparePlan {
+  windows: CompareWindow[]
+  /** True when the map-call ceiling cut doc-A coverage: the report covers its beginning. */
+  truncated: boolean
+  /** Output cap per map call, sized so ALL notes fit the reduce call's input budget. */
+  mapMaxTokens: number
+  /** Word budget for the retrieved doc-B excerpts of one map call (the B side's share). */
+  pairBudgetWords: number
+  /** Model calls (map windows + 1 reduce) + the materialize step. */
+  stepsTotal: number
+}
+
+/**
+ * Plan the mode-(b) map windows over doc A's chunks (pure — unit-tested at the
+ * boundaries). The per-call input budget is split half/half between the doc-A window
+ * and the retrieved doc-B excerpts; chunks pack greedily in document order into
+ * A-windows of at most half the budget (an over-budget chunk is split, its pieces
+ * keeping the chunk id — neighbors are per-chunk). More windows than the ceiling →
+ * keep the first COMPARE_MAP_CALL_CEILING and mark the plan truncated.
+ */
+export function planCompareWindows(chunks: CompareChunkRef[], contextTokens: number): ComparePlan {
+  const budget = compareBudgetWords(contextTokens)
+  const aShare = Math.max(100, Math.floor(budget / 2))
+  const pairBudgetWords = Math.max(100, budget - aShare)
+
+  // Split over-budget chunks into aShare-sized pieces (id kept), then pack greedily.
+  const pieces: Array<{ id: string; text: string; words: number }> = []
+  for (const chunk of chunks) {
+    const words = tokenize(chunk.text)
+    if (words.length === 0) continue
+    if (words.length <= aShare) {
+      pieces.push({ id: chunk.id, text: chunk.text, words: words.length })
+    } else {
+      for (let at = 0; at < words.length; at += aShare) {
+        const slice = words.slice(at, at + aShare)
+        pieces.push({ id: chunk.id, text: slice.join(' '), words: slice.length })
+      }
+    }
+  }
+  const windows: CompareWindow[] = []
+  let ids: string[] = []
+  let texts: string[] = []
+  let words = 0
+  const flush = (): void => {
+    if (texts.length > 0) {
+      windows.push({ chunkIds: ids, text: texts.join('\n\n') })
+      ids = []
+      texts = []
+      words = 0
+    }
+  }
+  for (const piece of pieces) {
+    if (words + piece.words > aShare) flush()
+    if (!ids.includes(piece.id)) ids.push(piece.id)
+    texts.push(piece.text)
+    words += piece.words
+  }
+  flush()
+
+  let truncated = false
+  let kept = windows
+  if (windows.length > COMPARE_MAP_CALL_CEILING) {
+    kept = windows.slice(0, COMPARE_MAP_CALL_CEILING)
+    truncated = true
+  }
+
+  // Cap each map call's notes so all of them together provably fit the reduce input
+  // (the D25 provable-fit property: windows × mapMaxTokens ≤ usable input tokens).
+  const mapMaxTokens = Math.max(
+    COMPARE_MAP_OUTPUT_FLOOR_TOKENS,
+    Math.min(
+      COMPARE_OUTPUT_TOKENS,
+      Math.floor(compareUsableInputTokens(contextTokens) / Math.max(1, kept.length))
+    )
+  )
+
+  return {
+    windows: kept,
+    truncated,
+    mapMaxTokens,
+    pairBudgetWords,
+    stepsTotal: kept.length + 2
+  }
+}
+
+const COMPARE_SYSTEM_PROMPT_TEXT =
+  'You are a careful assistant comparing two documents for their owner, fully offline. ' +
+  'Use only the provided text. Never invent facts, names, or numbers. ' +
+  'Write the comparison in the same language as the documents.'
+
+/** Shared system prompt for every compare call (exported for the R-T2 smoke). */
+export function compareSystemPrompt(): string {
+  return COMPARE_SYSTEM_PROMPT_TEXT
+}
+
+/**
+ * The fixed report skeleton (D28: common / differs / only-in-A / only-in-B). The
+ * headings are dictated verbatim so the materialized report has a deterministic
+ * structure; the bullet content follows the documents' language (R-T2-probed).
+ */
+export function compareReportHeadings(titleA: string, titleB: string): string[] {
+  return [
+    '## What both documents share',
+    '## What differs between them',
+    `## Only in "${titleA}"`,
+    `## Only in "${titleB}"`
+  ]
+}
+
+/** Mode (a): one structured-comparison call over both full texts. */
+export function compareFullPrompt(
+  titleA: string,
+  textA: string,
+  titleB: string,
+  textB: string
+): string {
+  return (
+    `Compare document A ("${titleA}") with document B ("${titleB}"). ` +
+    'Write a structured comparison report in Markdown with exactly these four sections:\n' +
+    compareReportHeadings(titleA, titleB).join('\n') +
+    '\n\nUnder each heading write short bullet points. Keep important names, numbers, and ' +
+    'dates exact. List each finding under exactly ONE section: something present in only ' +
+    'one document belongs under its "Only in" section, not under the differences. ' +
+    'If a section has nothing to report, write "Nothing notable." under it. ' +
+    'Reply with ONLY the report — no introduction, no notes.\n\n' +
+    `Document A ("${titleA}"):\n${textA}\n\n` +
+    `Document B ("${titleB}"):\n${textB}`
+  )
+}
+
+/**
+ * Mode (b) map: one doc-A window against its retrieved doc-B excerpts. A deliberately
+ * SMALLER per-pair format than the report (plan §8 flagged this; R-T2-probed): compact
+ * prefixed bullets the reduce can merge mechanically.
+ */
+export function comparePairPrompt(
+  titleA: string,
+  titleB: string,
+  part: number,
+  total: number,
+  windowText: string,
+  excerptsB: string
+): string {
+  return (
+    `You are comparing document A ("${titleA}") with document B ("${titleB}") section by ` +
+    `section. This is section ${part} of ${total} of document A, shown together with the ` +
+    'most closely related excerpts of document B. List your findings as short bullets, ' +
+    'each prefixed exactly like this:\n' +
+    '- Same: a fact stated by both\n' +
+    '- Different: a fact where the two versions disagree (give both versions)\n' +
+    '- Only in A: something in this section of A with no counterpart in the excerpts of B\n' +
+    '- Only in B: something in the excerpts of B with no counterpart in this section of A\n' +
+    'Check every fact in the section of A: if the excerpts of B do not mention it, list it ' +
+    'under "Only in A". Keep names, numbers, and dates exact. Do not mention excerpts or ' +
+    'sections. Reply with ONLY the bullets.\n\n' +
+    `Section of document A:\n${windowText}\n\n` +
+    `Related excerpts of document B:\n${excerptsB}`
+  )
+}
+
+/** Mode (b) reduce: merge the per-window notes into the four-section report. */
+export function compareReducePrompt(titleA: string, titleB: string, partials: string[]): string {
+  return (
+    `Below are comparison notes from consecutive sections of document A ("${titleA}"), each ` +
+    `compared against the most closely related parts of document B ("${titleB}"). Combine ` +
+    'them into one comparison report in Markdown with exactly these four sections:\n' +
+    compareReportHeadings(titleA, titleB).join('\n') +
+    '\n\nMerge duplicate points into one bullet, keep names, numbers, and dates exact, and ' +
+    'only report what the notes support — never add facts of your own. List each finding ' +
+    'under exactly ONE section: a point the notes mark as "Only in" one document belongs ' +
+    'under that document\'s section, not under the differences. If a section has nothing ' +
+    'to report, write "Nothing notable." under it. Do not mention the notes or sections. ' +
+    'Reply with ONLY the report.\n\n' +
+    partials.map((p, i) => `Notes ${i + 1}:\n${p}`).join('\n\n')
+  )
+}
+
+/** The honesty attribution prepended to every materialized comparison (D27 precedent). */
+export function compareAttributionLine(modelId: string): string {
+  return `Machine-generated comparison by ${modelId} — may contain errors.`
+}
+
+/** Honest in-document notice when the map ceiling cut doc-A coverage (mode b). */
+export function compareTruncationNotice(titleA: string): string {
+  return (
+    `> ⚠ These documents are long — this comparison covers the beginning of "${titleA}". ` +
+    'Both documents stay fully searchable and answerable in chat.'
+  )
+}
+
+/** `"report.pdf" + "draft.docx"` → `"Comparison: report vs draft.md"`. */
+export function compareDocumentTitle(titleA: string, titleB: string): string {
+  const base = (t: string): string => {
+    const ext = extname(t)
+    return (ext ? t.slice(0, -ext.length) : t).trim() || 'document'
+  }
+  return `Comparison: ${base(titleA)} vs ${base(titleB)}.md`
+}
+
 // ---- The task manager ----------------------------------------------------------------
 
 /** Injected seams so the engine is testable without Electron and the IPC layer. */
@@ -445,11 +719,6 @@ export class DocTaskManager {
     if (kind !== 'summary' && kind !== 'translation' && kind !== 'compare') {
       throw new Error('Unknown document task.')
     }
-    if (kind === 'compare') {
-      // The machine + IPC shapes are built for all three kinds; compare ships in
-      // Phase 35 and replaces this guard with its implementation.
-      throw new Error(TASK_KIND_UNAVAILABLE_MESSAGE)
-    }
     // Translation targets are a closed v1 set (plan §7): de | en only — a free-text
     // language field invites silent quality failures.
     let targetLang: TranslationTargetLang | undefined
@@ -466,17 +735,23 @@ export class DocTaskManager {
     if (!this.deps.getRuntime()) {
       throw new Error(TASK_NEEDS_RUNTIME_MESSAGE)
     }
+    // Compare runs over exactly TWO (distinct) documents; summary/translation over one.
     const documentIds = (req.documentIds ?? []).filter((x) => typeof x === 'string' && x.length > 0)
-    if (documentIds.length !== 1) {
+    const wanted = kind === 'compare' ? 2 : 1
+    if (documentIds.length !== wanted || new Set(documentIds).size !== wanted) {
       throw new Error(
-        kind === 'translation'
-          ? 'Pick exactly one document to translate.'
-          : 'Pick exactly one document to summarize.'
+        kind === 'compare'
+          ? TASK_COMPARE_PICK_TWO_MESSAGE
+          : kind === 'translation'
+            ? 'Pick exactly one document to translate.'
+            : 'Pick exactly one document to summarize.'
       )
     }
-    const doc = getDocument(this.deps.getDb(), documentIds[0])
-    if (!doc || doc.status !== 'indexed' || doc.chunkCount === 0) {
-      throw new Error(TASK_DOCUMENT_NOT_READY_MESSAGE)
+    for (const id of documentIds) {
+      const doc = getDocument(this.deps.getDb(), id)
+      if (!doc || doc.status !== 'indexed' || doc.chunkCount === 0) {
+        throw new Error(TASK_DOCUMENT_NOT_READY_MESSAGE)
+      }
     }
 
     const jobId = randomUUID()
@@ -567,24 +842,29 @@ export class DocTaskManager {
 
   private async run(task: InternalTask): Promise<void> {
     const { kind } = task.status
-    // The SOURCE document id — the audit events carry this one; a translation's OUTPUT
-    // id travels in `resultRef` (and is appended to `documentIds` for the busy guard).
+    // The SOURCE document id(s) — the audit events carry these; a generated OUTPUT id
+    // travels in `resultRef` (and is appended to `documentIds` for the busy guard, so
+    // capture the sources BEFORE the task runs). A compare's second source rides as
+    // the additive ids-only `documentIdB`.
     const documentId = task.status.documentIds[0]
+    const auditMeta: Record<string, unknown> = { kind, documentId }
+    if (kind === 'compare' && task.status.documentIds[1]) {
+      auditMeta.documentIdB = task.status.documentIds[1]
+    }
     task.status.state = 'running'
     try {
       // Re-check at dequeue time: the runtime may have been stopped while queued.
       const runtime = this.deps.getRuntime()
       if (!runtime) throw new Error(TASK_NEEDS_RUNTIME_MESSAGE)
       const resultId =
-        kind === 'translation'
-          ? await this.runTranslation(task, runtime)
-          : await this.runSummary(task, runtime)
+        kind === 'compare'
+          ? await this.runCompare(task, runtime)
+          : kind === 'translation'
+            ? await this.runTranslation(task, runtime)
+            : await this.runSummary(task, runtime)
       task.status.state = 'done'
       task.status.resultRef = { documentId: resultId }
-      this.deps.audit?.('document_task_completed', `Document task completed: ${kind}`, {
-        kind,
-        documentId
-      })
+      this.deps.audit?.('document_task_completed', `Document task completed: ${kind}`, auditMeta)
       log.info('Document task completed', { jobId: task.status.jobId, kind, documentId })
     } catch (err) {
       if (isAbortError(err, task.controller.signal)) {
@@ -601,10 +881,7 @@ export class DocTaskManager {
         FRIENDLY_TASK_ERRORS.has(raw) || (err instanceof Error && err.name === 'VaultBusyError')
       task.status.state = 'failed'
       task.status.error = friendly ? raw : TASK_GENERIC_FAILURE_MESSAGE
-      this.deps.audit?.('document_task_failed', `Document task failed: ${kind}`, {
-        kind,
-        documentId
-      })
+      this.deps.audit?.('document_task_failed', `Document task failed: ${kind}`, auditMeta)
       log.error('Document task failed', { jobId: task.status.jobId, kind, documentId, error: raw })
     }
   }
@@ -705,22 +982,8 @@ export class DocTaskManager {
 
     // D36: the input is the parser's SEGMENTS re-extracted from the stored copy —
     // ordered and non-overlapping (see the module note above; stored chunks would
-    // duplicate their ~80-token overlap into the translation). Encrypted copies
-    // decrypt to a `.parse*` transient inside and are shredded on the way out.
-    let segmentTexts: string[]
-    try {
-      const preview = await extractDocumentPreview(db, this.deps.getStoreDir(), documentId, {
-        cipher: this.deps.getIngestionDeps().cipher ?? null
-      })
-      segmentTexts = preview.segments.map((s) => s.text).filter((t) => t.trim().length > 0)
-    } catch (err) {
-      log.warn('Translation source re-extraction failed', {
-        documentId,
-        error: err instanceof Error ? err.message : String(err)
-      })
-      throw new Error(TASK_SOURCE_UNREADABLE_MESSAGE)
-    }
-    if (segmentTexts.length === 0) throw new Error(TASK_DOCUMENT_NOT_READY_MESSAGE)
+    // duplicate their ~80-token overlap into the translation).
+    const segmentTexts = await this.extractSegmentTexts(documentId)
 
     const plan = planTranslationWindows(segmentTexts, this.deps.getContextTokens())
     task.status.progress.stepsTotal = plan.stepsTotal
@@ -758,10 +1021,257 @@ export class DocTaskManager {
       task,
       markdown,
       translatedDocumentTitle(doc.title, targetLang),
-      { translatedFrom: documentId, targetLang }
+      { type: 'translation', translatedFrom: documentId, targetLang }
     )
     task.status.progress.stepsDone += 1
     return newDocId
+  }
+
+  /**
+   * Re-extract a document's ordered, non-overlapping segment texts from its stored
+   * copy (the D36/D37 input rule — never the ~80-token-overlapping chunks). Encrypted
+   * copies decrypt to a `.parse*` transient inside and are shredded on the way out.
+   */
+  private async extractSegmentTexts(documentId: string): Promise<string[]> {
+    let texts: string[]
+    try {
+      const preview = await extractDocumentPreview(
+        this.deps.getDb(),
+        this.deps.getStoreDir(),
+        documentId,
+        { cipher: this.deps.getIngestionDeps().cipher ?? null }
+      )
+      texts = preview.segments.map((s) => s.text).filter((t) => t.trim().length > 0)
+    } catch (err) {
+      log.warn('Document task source re-extraction failed', {
+        documentId,
+        error: err instanceof Error ? err.message : String(err)
+      })
+      throw new Error(TASK_SOURCE_UNREADABLE_MESSAGE)
+    }
+    if (texts.length === 0) throw new Error(TASK_DOCUMENT_NOT_READY_MESSAGE)
+    return texts
+  }
+
+  /**
+   * The Phase-35 compare task (D28/D37): two documents in, one materialized
+   * "Comparison: A vs B.md" report out. The strategy auto-switches on token math —
+   * mode (a) when both re-extracted full texts fit one call, else mode (b)
+   * section-matched over the stored chunks + vectors. Returns the new document's id.
+   */
+  private async runCompare(task: InternalTask, runtime: ModelRuntime): Promise<string> {
+    const db = this.deps.getDb()
+    const [idA, idB] = task.status.documentIds
+    const docA = getDocument(db, idA)
+    const docB = getDocument(db, idB)
+    if (!docA || !docB) throw new Error(TASK_DOCUMENT_NOT_READY_MESSAGE)
+
+    // D37: the mode decision AND mode (a)'s input both use the re-extracted parser
+    // segments — exact and non-overlapping. Deciding on stored chunks would inflate
+    // the length by the ~80-token overlap (and mode (a) would show the model
+    // duplicated text as phantom "shared" content).
+    const textA = (await this.extractSegmentTexts(idA)).join('\n\n')
+    const textB = (await this.extractSegmentTexts(idB)).join('\n\n')
+    const contextTokens = this.deps.getContextTokens()
+    const signal = task.controller.signal
+
+    let report: string
+    let truncated = false
+    if (compareFitsSinglePass(approxTokenCount(textA), approxTokenCount(textB), contextTokens)) {
+      // Mode (a): one structured-comparison call over both full texts.
+      task.status.progress.stepsTotal = 2
+      report = await this.generate(
+        runtime,
+        compareSystemPrompt(),
+        compareFullPrompt(docA.title, textA, docB.title, textB),
+        COMPARE_OUTPUT_TOKENS,
+        COMPARE_TEMPERATURE,
+        signal
+      )
+      if (report.length === 0) throw new Error(TASK_GENERIC_FAILURE_MESSAGE)
+      task.status.progress.stepsDone = 1
+    } else {
+      const sectionMatched = await this.runCompareSectionMatched(task, runtime, docA, docB)
+      report = sectionMatched.report
+      truncated = sectionMatched.truncated
+    }
+
+    // Materialize (D27/D28): attribution + (honest) truncation notice + report.
+    if (signal.aborted) throw new DOMException('Document task cancelled', 'AbortError')
+    const markdown =
+      `> ${compareAttributionLine(runtime.modelId)}\n\n` +
+      (truncated ? `${compareTruncationNotice(docA.title)}\n\n` : '') +
+      `${report}\n`
+    const newDocId = await this.materializeDocument(
+      task,
+      markdown,
+      compareDocumentTitle(docA.title, docB.title),
+      { type: 'compare', comparedFrom: [idA, idB] }
+    )
+    task.status.progress.stepsDone += 1
+    return newDocId
+  }
+
+  /**
+   * Mode (b) — section-matched compare (D28): window doc A's stored chunks, retrieve
+   * each window's nearest doc-B chunks via the EXISTING VectorIndex scoped to doc B
+   * (the Phase-17 `documentIds` scoping — the vectors are already there, no new
+   * index), compare each matched pair (map), then reduce the notes into the report.
+   */
+  private async runCompareSectionMatched(
+    task: InternalTask,
+    runtime: ModelRuntime,
+    docA: { id: string; title: string },
+    docB: { id: string; title: string }
+  ): Promise<{ report: string; truncated: boolean }> {
+    const db = this.deps.getDb()
+    const contextTokens = this.deps.getContextTokens()
+    const signal = task.controller.signal
+
+    // Embedder-visibility guard (plan §8 audit finding): the pairing reads stored
+    // vectors, so BOTH documents must be visible to the ACTIVE embedder — a
+    // stale-embeddings document would silently pair against nothing. Fail friendly
+    // with the Phase-17-style actionable answer instead.
+    const embedder = this.deps.getIngestionDeps().embedder
+    if (!embedder) throw new Error(TASK_COMPARE_REINDEX_MESSAGE)
+    const embeddedCount = (documentId: string): number => {
+      const r = db
+        .prepare(
+          `SELECT COUNT(*) AS n FROM embeddings e JOIN chunks c ON e.chunk_id = c.id
+           WHERE c.document_id = ? AND e.embedding_model_id = ?`
+        )
+        .get(documentId, embedder.id) as unknown as { n: number }
+      return r.n
+    }
+    if (embeddedCount(docA.id) === 0 || embeddedCount(docB.id) === 0) {
+      throw new Error(TASK_COMPARE_REINDEX_MESSAGE)
+    }
+
+    // Doc A's chunks in document order, with their STORED vectors (no re-embedding —
+    // the pairing must be deterministic and cost nothing but cosine scans).
+    const aRows = db
+      .prepare(
+        `SELECT c.id, c.text, e.vector_blob, e.dimensions
+         FROM chunks c JOIN embeddings e ON e.chunk_id = c.id AND e.embedding_model_id = ?
+         WHERE c.document_id = ? ORDER BY c.chunk_index`
+      )
+      .all(embedder.id, docA.id) as unknown as Array<{
+      id: string
+      text: string
+      vector_blob: Uint8Array
+      dimensions: number
+    }>
+    if (aRows.length === 0) throw new Error(TASK_COMPARE_REINDEX_MESSAGE)
+
+    const plan = planCompareWindows(
+      aRows.map((r) => ({ id: r.id, text: r.text })),
+      contextTokens
+    )
+    if (plan.windows.length === 0) throw new Error(TASK_DOCUMENT_NOT_READY_MESSAGE)
+    task.status.progress.stepsTotal = plan.stepsTotal
+
+    const vectorByChunk = new Map(
+      aRows.map((r) => [r.id, decodeVector(r.vector_blob, r.dimensions)])
+    )
+    const index = new VectorIndex(db, embedder, {
+      embeddingModelId: embedder.id,
+      documentIds: [docB.id]
+    })
+
+    const partials: string[] = []
+    for (let i = 0; i < plan.windows.length; i++) {
+      const window = plan.windows[i]
+      // Union of each window chunk's top-N doc-B neighbors, best score kept.
+      // Deterministic: scores come from stored vectors; ties break on chunk id.
+      const scoreByB = new Map<string, number>()
+      for (const chunkId of window.chunkIds) {
+        const vec = vectorByChunk.get(chunkId)
+        if (!vec) continue
+        for (const hit of index.search(vec, COMPARE_NEIGHBORS_PER_CHUNK)) {
+          const prev = scoreByB.get(hit.chunkId)
+          if (prev === undefined || hit.score > prev) scoreByB.set(hit.chunkId, hit.score)
+        }
+      }
+      const candidates = [...scoreByB.entries()].sort(
+        (x, y) => y[1] - x[1] || (x[0] < y[0] ? -1 : 1)
+      )
+      // Fill the B side best-first up to its word budget; present the picked excerpts
+      // in doc-B document order (readability). The first excerpt always fits — a
+      // degenerate tiny context hard-truncates it rather than sending nothing.
+      const bTexts = new Map<string, { text: string; chunkIndex: number }>()
+      if (candidates.length > 0) {
+        const rows = db
+          .prepare(
+            `SELECT id, text, chunk_index FROM chunks
+             WHERE id IN (${candidates.map(() => '?').join(', ')})`
+          )
+          .all(...candidates.map(([id]) => id)) as unknown as Array<{
+          id: string
+          text: string
+          chunk_index: number
+        }>
+        for (const r of rows) bTexts.set(r.id, { text: r.text, chunkIndex: r.chunk_index })
+      }
+      const picked: Array<{ text: string; chunkIndex: number }> = []
+      let usedWords = 0
+      for (const [chunkId] of candidates) {
+        const row = bTexts.get(chunkId)
+        if (!row) continue
+        const rowWords = approxTokenCount(row.text)
+        if (picked.length === 0 && rowWords > plan.pairBudgetWords) {
+          picked.push({
+            text: tokenize(row.text).slice(0, plan.pairBudgetWords).join(' '),
+            chunkIndex: row.chunkIndex
+          })
+          usedWords = plan.pairBudgetWords
+          continue
+        }
+        if (usedWords + rowWords > plan.pairBudgetWords) continue
+        picked.push(row)
+        usedWords += rowWords
+      }
+      picked.sort((x, y) => x.chunkIndex - y.chunkIndex)
+      const excerptsB = picked.map((p) => p.text).join('\n\n')
+
+      const partial = await this.generate(
+        runtime,
+        compareSystemPrompt(),
+        comparePairPrompt(
+          docA.title,
+          docB.title,
+          i + 1,
+          plan.windows.length,
+          window.text,
+          excerptsB
+        ),
+        plan.mapMaxTokens,
+        COMPARE_TEMPERATURE,
+        signal
+      )
+      if (partial.length > 0) partials.push(partial)
+      task.status.progress.stepsDone += 1
+    }
+    if (partials.length === 0) throw new Error(TASK_GENERIC_FAILURE_MESSAGE)
+
+    // Belt for the reduce input (the D25 precedent): the map output caps already size
+    // the notes to fit, but a model that ignores maxTokens must still not overflow.
+    const budgetWords = compareBudgetWords(contextTokens)
+    let reduceInput = partials
+    const totalWords = partials.reduce((n, p) => n + approxTokenCount(p), 0)
+    if (totalWords > budgetWords) {
+      reduceInput = [tokenize(partials.join('\n\n')).slice(0, budgetWords).join(' ')]
+    }
+    const report = await this.generate(
+      runtime,
+      compareSystemPrompt(),
+      compareReducePrompt(docA.title, docB.title, reduceInput),
+      COMPARE_OUTPUT_TOKENS,
+      COMPARE_TEMPERATURE,
+      signal
+    )
+    if (report.length === 0) throw new Error(TASK_GENERIC_FAILURE_MESSAGE)
+    task.status.progress.stepsDone += 1
+    return { report, truncated: plan.truncated }
   }
 
   /**
@@ -891,9 +1401,10 @@ export class DocTaskManager {
 const FRIENDLY_TASK_ERRORS: ReadonlySet<string> = new Set([
   TASK_NEEDS_RUNTIME_MESSAGE,
   TASK_REFUSED_CHAT_STREAMING_MESSAGE,
-  TASK_KIND_UNAVAILABLE_MESSAGE,
   TASK_DOCUMENT_NOT_READY_MESSAGE,
   TASK_GENERIC_FAILURE_MESSAGE,
   TASK_TRANSLATION_TARGET_MESSAGE,
-  TASK_SOURCE_UNREADABLE_MESSAGE
+  TASK_SOURCE_UNREADABLE_MESSAGE,
+  TASK_COMPARE_PICK_TWO_MESSAGE,
+  TASK_COMPARE_REINDEX_MESSAGE
 ])

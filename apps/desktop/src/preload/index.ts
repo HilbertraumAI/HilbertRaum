@@ -172,10 +172,10 @@ const api = {
   exportDocument: (documentId: string): Promise<string | null> =>
     ipcRenderer.invoke(IPC.exportDocument, documentId),
 
-  // ---- Document tasks (Phase 33/34) ----
-  /** Start a document task (summary, or translation with `params.targetLang`;
-   *  compare rides the same machine in Phase 35). Strictly one at a time; refused
-   *  while a chat answer is streaming. */
+  // ---- Document tasks (Phases 33–35) ----
+  /** Start a document task (summary; translation with `params.targetLang`; compare
+   *  with exactly two documentIds). Strictly one at a time; refused while a chat
+   *  answer is streaming. */
   startDocTask: (req: StartDocTaskRequest): Promise<{ jobId: string }> =>
     ipcRenderer.invoke(IPC.startDocTask, req),
   /** Poll one task's state/progress (async-with-polling, like imports/downloads). */

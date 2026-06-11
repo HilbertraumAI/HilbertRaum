@@ -247,3 +247,172 @@ describe('translation templates (R-T2-informed)', () => {
     expect(translatedDocumentTitle('no-extension', 'de')).toBe('no-extension (Deutsch).md')
   })
 })
+
+// ---- Phase 35: compare window math + templates (D28 + D37 + R-T2) ---------------------
+
+import {
+  compareAttributionLine,
+  compareBudgetWords,
+  compareDocumentTitle,
+  compareFitsSinglePass,
+  compareFullPrompt,
+  comparePairPrompt,
+  compareReducePrompt,
+  compareReportHeadings,
+  compareTruncationNotice,
+  planCompareWindows,
+  COMPARE_MAP_CALL_CEILING,
+  COMPARE_OUTPUT_TOKENS,
+  COMPARE_PROMPT_RESERVE_TOKENS,
+  type CompareChunkRef
+} from '../../src/main/services/doctasks'
+
+const C_BUDGET = compareBudgetWords(CTX)
+const A_SHARE = Math.floor(C_BUDGET / 2)
+
+function chunkRefs(count: number, wordsEach: number, tag = 'c'): CompareChunkRef[] {
+  return Array.from({ length: count }, (_, i) => ({
+    id: `${tag}${i}`,
+    text: chunkOf(wordsEach, `${tag}${i}w`)
+  }))
+}
+
+describe('compareBudgetWords + the mode switch (D28)', () => {
+  it('derives the total input budget from contextTokens minus the reserves', () => {
+    const usable = CTX - COMPARE_OUTPUT_TOKENS - COMPARE_PROMPT_RESERVE_TOKENS
+    expect(C_BUDGET).toBe(Math.floor(usable / SUMMARY_TOKENS_PER_WORD))
+  })
+
+  it('never collapses below the floor on junk/tiny contexts', () => {
+    expect(compareBudgetWords(0)).toBeGreaterThanOrEqual(200)
+    expect(compareBudgetWords(Number.NaN)).toBeGreaterThanOrEqual(200)
+  })
+
+  it('switches modes exactly at the budget boundary', () => {
+    expect(compareFitsSinglePass(C_BUDGET - 100, 100, CTX)).toBe(true) // at budget
+    expect(compareFitsSinglePass(C_BUDGET - 100, 101, CTX)).toBe(false) // one word over
+    expect(compareFitsSinglePass(0, 0, CTX)).toBe(true)
+  })
+})
+
+describe('planCompareWindows (mode b)', () => {
+  it('packs A chunks into half-budget windows in document order, ids kept', () => {
+    // 500-word chunks like real default chunk rows.
+    const chunks = chunkRefs(6, 500)
+    const plan = planCompareWindows(chunks, CTX)
+    expect(plan.windows.length).toBeGreaterThanOrEqual(2)
+    expect(plan.truncated).toBe(false)
+    for (const w of plan.windows) {
+      expect(approxTokenCount(w.text)).toBeLessThanOrEqual(A_SHARE)
+      expect(w.chunkIds.length).toBeGreaterThan(0)
+    }
+    // Order preserved: window 1 starts with chunk 0's first word, and every chunk id
+    // appears in some window in order.
+    expect(plan.windows[0].text.startsWith('c0w0')).toBe(true)
+    const allIds = plan.windows.flatMap((w) => w.chunkIds)
+    expect(allIds).toEqual([...new Set(allIds)].sort((a, b) => allIds.indexOf(a) - allIds.indexOf(b)))
+    expect(new Set(allIds)).toEqual(new Set(chunks.map((c) => c.id)))
+  })
+
+  it('splits an over-budget chunk into pieces that KEEP its id (neighbors are per-chunk)', () => {
+    const big = { id: 'big', text: chunkOf(A_SHARE * 2 + 10, 'big') }
+    const plan = planCompareWindows([big], CTX)
+    expect(plan.windows.length).toBeGreaterThanOrEqual(2)
+    for (const w of plan.windows) {
+      expect(w.chunkIds).toEqual(['big'])
+      expect(approxTokenCount(w.text)).toBeLessThanOrEqual(A_SHARE)
+    }
+    // No text silently dropped by packing.
+    const total = plan.windows.reduce((n, w) => n + approxTokenCount(w.text), 0)
+    expect(total).toBe(A_SHARE * 2 + 10)
+  })
+
+  it('caps windows at the ceiling and flags the plan truncated', () => {
+    const chunksPerWindow = Math.max(1, Math.floor(A_SHARE / 500))
+    const chunks = chunkRefs((COMPARE_MAP_CALL_CEILING + 5) * chunksPerWindow, 500)
+    const plan = planCompareWindows(chunks, CTX)
+    expect(plan.windows).toHaveLength(COMPARE_MAP_CALL_CEILING)
+    expect(plan.truncated).toBe(true)
+    expect(plan.stepsTotal).toBe(COMPARE_MAP_CALL_CEILING + 2) // maps + reduce + materialize
+    expect(plan.windows[0].text.startsWith('c0w0')).toBe(true) // the BEGINNING is kept
+  })
+
+  it('sizes the per-map output cap so all notes provably fit the reduce input', () => {
+    const chunksPerWindow = Math.max(1, Math.floor(A_SHARE / 500))
+    const chunks = chunkRefs(14 * chunksPerWindow, 500)
+    const plan = planCompareWindows(chunks, CTX)
+    const usable = CTX - COMPARE_OUTPUT_TOKENS - COMPARE_PROMPT_RESERVE_TOKENS
+    expect(plan.windows.length * plan.mapMaxTokens).toBeLessThanOrEqual(usable)
+    expect(plan.mapMaxTokens).toBeGreaterThanOrEqual(128)
+    expect(plan.mapMaxTokens).toBeLessThanOrEqual(COMPARE_OUTPUT_TOKENS)
+  })
+
+  it('reserves the other half of the budget for the retrieved doc-B excerpts', () => {
+    const plan = planCompareWindows(chunkRefs(2, 100), CTX)
+    expect(plan.pairBudgetWords).toBe(C_BUDGET - A_SHARE)
+    expect(plan.pairBudgetWords).toBeGreaterThanOrEqual(100)
+  })
+
+  it('ignores empty chunks; no chunks → no windows', () => {
+    expect(planCompareWindows([], CTX).windows).toHaveLength(0)
+    const plan = planCompareWindows([{ id: 'e', text: '   ' }, { id: 'x', text: chunkOf(10) }], CTX)
+    expect(plan.windows).toHaveLength(1)
+    expect(plan.windows[0].chunkIds).toEqual(['x'])
+  })
+})
+
+describe('compare templates (R-T2-validated on the real b9585 + Qwen3-4B)', () => {
+  it('the report skeleton is the four dictated D28 sections', () => {
+    const h = compareReportHeadings('a.pdf', 'b.pdf')
+    expect(h).toEqual([
+      '## What both documents share',
+      '## What differs between them',
+      '## Only in "a.pdf"',
+      '## Only in "b.pdf"'
+    ])
+  })
+
+  it('full prompt dictates the headings, exclusive placement, and only-the-report', () => {
+    const p = compareFullPrompt('a.pdf', 'TEXT-A', 'b.pdf', 'TEXT-B')
+    for (const h of compareReportHeadings('a.pdf', 'b.pdf')) expect(p).toContain(h)
+    expect(p).toContain('exactly ONE section') // the round-2 smoke fix
+    expect(p).toContain('Nothing notable.')
+    expect(p).toContain('ONLY the report')
+    expect(p).toContain('Document A ("a.pdf"):\nTEXT-A')
+    expect(p).toContain('Document B ("b.pdf"):\nTEXT-B')
+  })
+
+  it('pair prompt uses the SMALLER prefixed-bullets format with the recall instruction', () => {
+    const p = comparePairPrompt('a.pdf', 'b.pdf', 2, 5, 'WINDOW-A', 'EXCERPTS-B')
+    expect(p).toContain('section 2 of 5')
+    for (const prefix of ['- Same:', '- Different:', '- Only in A:', '- Only in B:']) {
+      expect(p).toContain(prefix)
+    }
+    expect(p).toContain('Check every fact in the section of A') // the round-2 smoke fix
+    expect(p).toContain('Section of document A:\nWINDOW-A')
+    expect(p).toContain('Related excerpts of document B:\nEXCERPTS-B')
+  })
+
+  it('reduce prompt dictates the headings, faithfulness, and dedup', () => {
+    const p = compareReducePrompt('a.pdf', 'b.pdf', ['- Same: x.', '- Different: y.'])
+    for (const h of compareReportHeadings('a.pdf', 'b.pdf')) expect(p).toContain(h)
+    expect(p).toContain('never add facts of your own')
+    expect(p).toContain('Merge duplicate points')
+    expect(p).toContain('Notes 1:\n- Same: x.')
+    expect(p).toContain('Notes 2:\n- Different: y.')
+  })
+
+  it('attribution + truncation notice are honest and friendly', () => {
+    expect(compareAttributionLine('qwen3-4b')).toBe(
+      'Machine-generated comparison by qwen3-4b — may contain errors.'
+    )
+    const n = compareTruncationNotice('a.pdf')
+    expect(n.startsWith('> ')).toBe(true)
+    expect(n).toContain('covers the beginning of "a.pdf"')
+  })
+
+  it('report titles strip the source extensions and become Markdown', () => {
+    expect(compareDocumentTitle('report.pdf', 'draft.docx')).toBe('Comparison: report vs draft.md')
+    expect(compareDocumentTitle('no-ext', 'x.txt')).toBe('Comparison: no-ext vs x.md')
+  })
+})

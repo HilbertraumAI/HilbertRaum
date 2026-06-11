@@ -1,9 +1,9 @@
 # Post-MVP Functionality — wave 3 working paper (Phases 31–38)
 
-_Status: **WORKING PAPER — Phases 31 + 32 + 33 + 34 DONE 2026-06-11 (§4/§5/§6/§7 are their
+_Status: **WORKING PAPER — Phases 31–35 DONE 2026-06-11 (§4/§5/§6/§7/§8 are their
 condensed design records; the §12 session-hardening rider shipped with 31; R-T1 resolved
-with 33; R-T2's translation half resolved with 34 — D36 added);
-Phases 35–38 NOT IMPLEMENTED** (drafted
+with 33; R-T2 FULLY resolved — translation half with 34 (D36), comparison half with 35
+(D37); Phases 36–38 NOT IMPLEMENTED** (drafted
 2026-06-10; **review round 1 resolved
 2026-06-11**: D23–D30 + D33 locked, see §13; D31/D32/D34 stay open by design — they resolve
 with research gates R-O1/R-O2/R-W1. **Plan audit 2026-06-11:** every §2 fact re-verified
@@ -25,7 +25,7 @@ The eight features (user-selected 2026-06-10):
 | 32 | Vault password change — **✅ DONE 2026-06-11** | M | none | none (`@noble/hashes` already shipped) |
 | 33 | Document tasks foundation + one-click summary — **✅ DONE 2026-06-11** | M | none | none |
 | 34 | Document translation workflow — **✅ DONE 2026-06-11** | S–M | Phase 33 (task machinery) | none |
-| 35 | Compare two documents | M | Phase 33 (task machinery) | none |
+| 35 | Compare two documents — **✅ DONE 2026-06-11** | M | Phase 33 (task machinery) | none |
 | 36 | Audio transcription as ingestion (whisper.cpp) | L | research gates R-W1..R-W4 | **whisper.cpp sidecar family + whisper GGML weights** |
 | 37 | Voice dictation in the composer | S–M | Phase 36 (transcriber) | none beyond 36 |
 | 38 | Scanned-PDF / photo OCR | M–L | research gates R-O1..R-O3 | **tesseract.js (WASM) + vendored traineddata** |
@@ -341,44 +341,79 @@ translation"). Record of what was built:
   progress → "(Deutsch)" doc indexed with attribution + provenance → preview → ask in
   chat (Sources disclosure) → cancel leaves no output → Export writes a real file.
 
-## 8. Phase 35 — Compare two documents
+## 8. Phase 35 — Compare two documents — ✅ DONE (2026-06-11, as implemented)
 
-**Goal:** select exactly two documents → "Compare" → a structured comparison the user can
-read and keep: what's common, what differs, what exists only in one.
+Shipped per D28 (materialized "Comparison: A vs B" document, auto mode-switch by token
+math) with the new input decision **D37** (see §13) and the R-T2 comparison findings
+(§14, both rounds) setting the shipped templates. Durable design now in
+`architecture.md` (§ "Document tasks" — compare), `user-guide.md` §7 ("Compare two
+documents"), `known-limitations.md` ("Document comparison"). Record of what was built:
 
-**The budget reality (drives D28):** two full documents almost never fit the default
-4096-token context (`ragMaxContextTokens` is 2500 for retrieval). v1 therefore has two modes
-selected automatically by token math: **(a) small-docs full compare** — both docs' total
-chunk tokens fit the single-pass budget ⇒ one structured-comparison call over both full
-texts; **(b) section-matched compare** — embed-pair sections: for each chunk of doc A,
-retrieve the nearest chunks of doc B via the EXISTING `VectorIndex` scoped to doc B (fact:
-`documentIds` scoping exists since Phase 17), compare matched pairs window-wise
-(map), then reduce into one report (differences/additions/omissions). The vectors are
-already there — this is the embeddings-leverage feature, no new index.
-
-**Output:** a comparison REPORT persisted like a summary (`compare` task, result in a
-`document_compare_results` table or — simpler — materialized as a Markdown document via the
-Phase-34 path, titled "Comparison: A vs B", `origin_json` recording both source ids).
-**D28 (RESOLVED review round 1): materialized document** — it inherits persistence, search
-(Phase 31!), citations-adjacent preview, export — and avoids a new result surface.
-**Embedder-visibility guard (audit finding):** mode (b)'s section pairing reads vectors, so
-BOTH documents must be visible to the active embedder — a `staleEmbeddings` doc gets the
-Phase-17-style actionable answer ("re-index first"), never a silently empty pairing.
-
-**UI:** Documents screen already has multi-select (Phase 17 "Ask these documents") — add
-"Compare (2)" enabled at exactly two selections; result opens like a document preview.
-
-**Where to look in detail:**
-- The Phase-17 selection UI in `DocumentsScreen.tsx` — reuse the same checkbox state, don't
-  add a second selection mechanism.
-- `VectorIndex.search` with `documentIds` scope — confirm per-chunk query cost over a large
-  doc-B is fine for the linear scan (it is the SAME scan retrieval does; ~chunk-count
-  cosines per A-chunk — cap A-chunks per the map ceiling).
-- R-T2 (shared with 34): how well the 4B holds a 3-column comparison format — sets the
-  reduce-prompt design and whether (b) needs a smaller per-pair format.
-
-**Tests:** mode selection by token math; pairing determinism; report materialization +
-origin metadata; two-doc-only gating in UI; MockRuntime e2e; audit ids-only.
+- **A `compare` kind on the Phase-33 engine** (`services/doctasks.ts`): the last kind
+  guard fell away; validation = exactly TWO distinct source documents, both indexed
+  with chunks (`TASK_COMPARE_PICK_TWO_MESSAGE`). Queue/cancel/polling/both D26 guards
+  and `isDocumentBusy` (covering BOTH sources + the output document) came free from
+  Phase 33 — nothing was duplicated.
+- **Auto mode-switch by token math (D28):** the per-call input budget is the D25 shape
+  — `(max(1024, ctx) − 512 output − 300 prompt reserve) / 1.3` words. Both re-extracted
+  full texts fit ⇒ **mode (a)**: ONE structured-comparison call over both. Else
+  **mode (b)**: doc A's chunks pack into half-budget windows (over-budget chunks split,
+  pieces keep their chunk id); for each window the nearest doc-B chunks come from the
+  EXISTING `VectorIndex` scoped to doc B with the active embedder's id (stored vectors
+  only — deterministic, no re-embedding, no new index; top-3 neighbors per A-chunk,
+  best-first fill of the other half-budget, presented in doc-B order); per-pair map
+  calls use a SMALLER prefixed-bullets format (R-T2-confirmed necessary), then one
+  reduce builds the four-section report. Map ceiling 12 (the D25 rationale) → honest
+  `compareTruncationNotice` IN the report ("covers the beginning of A"); map output
+  caps sized so all notes provably fit the reduce input.
+- **D37 (mode-(a) input + the mode decision): re-extracted parser SEGMENTS** — chunk
+  overlap would read as phantom "shared" content and inflates a chunk-based length
+  estimate by ~16% (enough to mis-route the mode switch). Mode (b)'s map uses stored
+  CHUNKS (vectors needed; notes tolerate overlap — D25 precedent).
+- **Embedder-visibility guard (the §8 audit finding):** before any model call, mode (b)
+  verifies BOTH documents have vectors under the ACTIVE embedder id; a stale (or
+  vectorless) document fails friendly with the Phase-17-style actionable
+  `TASK_COMPARE_REINDEX_MESSAGE` — never a silently empty pairing. Mode (a) needs no
+  vectors and deliberately skips the guard.
+- **Templates (R-T2, two smoke rounds on the real b9585 + Qwen3-4B):** the four
+  dictated sections (share / differ / only-in-A / only-in-B), temp 0.3, output cap 512.
+  Round 2 added the exactly-ONE-section instruction (reduce placement) and the
+  "check every fact in the section of A" recall instruction (fixed a silent per-pair
+  omission). Headings are dictated verbatim (deterministic structure); the body follows
+  the documents' language.
+- **Materialize (D27 path, unchanged):** attribution line ("Machine-generated
+  comparison by <model> — may contain errors.") + optional truncation notice + report →
+  `<jobId>.parse.md` transient → the normal import path under the Phase-32 lease (held
+  around exactly that step) ⇒ "Comparison: <A> vs <B>.md", chunked/embedded/searchable/
+  exportable/`.enc`. Provenance: `DocumentOrigin` became a discriminated union
+  (additively — Phase-34 rows without `type` parse as `'translation'`); compare rows
+  persist `{ type: 'compare', comparedFrom: [a, b] }`, surfaced via
+  `DocumentInfo.origin`. Cancel persists nothing; a failed import deletes the half-born
+  row.
+- **Audit:** `document_task_completed/_failed` carry `{ kind: 'compare', documentId,
+  documentIdB }` (ids only, additive) + `document_imported` for the report; the
+  audit-ipc sentinel test was extended end-to-end (two sentinel documents compared over
+  real IPC; the report carries both sentinels, `runtime_events` never does).
+- **UI:** the Phase-17 multi-select checkboxes gained "Compare (2)" (visible at exactly
+  two selections); the module-level watcher generalized to `documentIds` so BOTH source
+  rows show "Comparing… (n/m)" + Cancel; completion opens the new report's preview with
+  the "Comparison of <A> and <B>" provenance line (row + preview); Export works on it
+  (any materialized document).
+- **Tests:** `unit/doctasks-windows.test.ts` (compare budget/mode boundary, window
+  packing/split-keeps-id/ceiling, reduce-fit property, all templates) ·
+  `integration/doctasks-compare.test.ts` (10: two-distinct validation, mode-(a) e2e
+  with the D37 exactly-once regression + provenance + ids-only audit, no-vectors
+  mode (a), the mode-switch boundary, mode-(b) pairing shape + DETERMINISM (two runs,
+  byte-identical prompts), ceiling + truncation notice, the staleEmbeddings guard
+  (both variants, failing BEFORE any model call), cancel-persists-nothing, lease
+  after-the-calls/released) · `doctasks-ipc.test.ts` (compare e2e over real IPC
+  handlers, both-rows busy guard, two-distinct friendly refusal) · audit-ipc sentinel
+  extension · `renderer/DocumentCompare.test.tsx` (6: exactly-two gating, busy on both
+  rows + cancel, completion + auto-open + provenance, friendly failure, export,
+  deleted-source fallback). Gate: typecheck clean, 860/860 + manual skips, build green.
+  Eyeballed against the built bundle (walk-phase35.mjs, shots-p35): import two docs →
+  mock runtime → select two → Compare (2) → progress → report preview with provenance →
+  report row with Export.
 
 ## 9. Phase 36 — Audio transcription as document ingestion (whisper.cpp)
 
@@ -575,7 +610,7 @@ manual smoke behind `PAID_OCR_SMOKE` with a real scan fixture on the test drive.
   `known-limitations.md` (m4a descope, OCR speed, summary ceiling), `PRIVACY.md` (mic use,
   all-local OCR/ASR), BUILD_STATE §1/§3/§5.
 
-## 13. Decisions (review round 1 resolved 2026-06-11; D31/D32/D34 resolve with their research gates; D35 added by the same-day audit; D36 added + resolved with Phase 34)
+## 13. Decisions (review round 1 resolved 2026-06-11; D31/D32/D34 resolve with their research gates; D35 added by the same-day audit; D36 added + resolved with Phase 34; D37 added + resolved with Phase 35)
 
 | # | Decision | Resolution |
 |---|---|---|
@@ -585,7 +620,8 @@ manual smoke behind `PAID_OCR_SMOKE` with a real scan fixture on the test drive.
 | D26 | Doc-task concurrency vs chat | **RESOLVED (round 1): strict one-at-a-time** — tasks serialize among themselves (one queue), a task refuses to start while a chat answer is streaming, and a chat message sent while a task runs gets friendly copy ("A document task is running — you can cancel it"). Tasks are cancellable so the user is never stuck. R-T1 demoted to informational (see §14); revisit parallelism only with evidence |
 | D27 | Translation output form | **RESOLVED (round 1): materialized corpus document** ("<original> (Deutsch)") + `origin_json` provenance — searchable/citable/exportable, encrypted for free. Export-only and a dedicated results panel rejected (results leave the workspace / a whole new surface). **Implemented in Phase 34 (§7)** |
 | D36 | Translation input: chunks vs re-parse | **RESOLVED (Phase 34, 2026-06-11): re-extract the parser's SEGMENTS from the stored copy** (the `extractDocumentPreview` path) and window them with the D25 budget math. Stored chunks overlap by ~80 tokens — in-order concatenation duplicates text at every boundary, which a summary tolerated (D25) but a faithful translation cannot; trimming the overlap out of adjacent chunks was rejected as heuristic (chunk text is whitespace-normalized) where the re-parse is exact. Cost = one re-parse, same as the in-app preview. Regression-tested (every source word exactly once in the output) |
-| D28 | Compare result form + big-doc strategy | **RESOLVED (round 1): materialized "Comparison: A vs B" document** (same principle as D27, `origin_json` records both source ids); auto mode-switch full-stuff vs section-matched (vector-paired) by token math. No new result tables |
+| D28 | Compare result form + big-doc strategy | **RESOLVED (round 1): materialized "Comparison: A vs B" document** (same principle as D27, `origin_json` records both source ids); auto mode-switch full-stuff vs section-matched (vector-paired) by token math. No new result tables. **Implemented in Phase 35 (§8)** |
+| D37 | Compare mode-(a) input + mode decision: chunks vs re-parse | **RESOLVED (Phase 35, 2026-06-11): re-extract the parser's SEGMENTS** (the D36 path) for mode (a)'s input AND for the mode decision itself. Two reasons beyond D36's: chunk overlap would present duplicated text as phantom "shared" content to a comparison, and the ~80-token overlap inflates a chunk-based length estimate by ~16% — enough to mis-route a fitting pair into the heavier mode (b). Mode (b)'s map step deliberately uses the stored CHUNKS instead (the pairing needs their vectors; per-pair notes tolerate overlap like summary partials, D25 precedent). Regression-tested (every source word exactly once in the mode-(a) prompt) |
 | D29 | Timestamp representation | **RESOLVED (round 1):** whisper segments → `sectionLabel: "mm:ss–mm:ss"` (existing `Citation.section` surfaces it). No schema change |
 | D30 | Dictation capture pipeline | **RESOLVED (round 1):** renderer MediaRecorder → OfflineAudioContext resample → WAV bytes → main temp file (shredded) → transcriber; mic via scoped `setPermissionRequestHandler`. Streaming ASR explicitly out of scope |
 | D31 | OCR execution context | **OPEN (by design):** hidden renderer/worker vs `utilityProcess` + OffscreenCanvas — R-O1 decides; photos possibly main-side directly. BLOCKING for Phase 38 implementation |
@@ -600,7 +636,7 @@ manual smoke behind `PAID_OCR_SMOKE` with a real scan fixture on the test drive.
 |---|---|---|---|
 | R-S1 | FTS5 `snippet()`/`highlight()` present in both runtimes? | **RESOLVED — GO (probed 2026-06-11):** Electron 37.10.3 main process AND system Node 24.13.0, both SQLite 3.50.4: `snippet()`, `highlight()`, `bm25()` all work on a self-contained fts5 table. JS-truncation fallback not needed | 31 (fallback exists) |
 | R-T1 | llama-server b9585 concurrent-request behavior (slots/queue/reject)? | **RESOLVED — probed 2026-06-11** (`tests/manual/server-concurrency-probe.test.ts`, `PAID_CONCURRENCY_PROBE`, real b9585 + Qwen3-4B on the dev box): at our default spawn args a second `/v1/chat/completions` is served on a **PARALLEL slot** (continuous batching) — request B fired 1.5 s into A's stream got its first token at +212 ms and finished while A was still streaming (A: first token 49 ms, done 4 386 ms, 700 tok; B: first token 1 718 ms, done 1 791 ms). Not queued, not rejected ⇒ the D26 app-side guard is the ONLY serialization, which is exactly why it exists (predictable latency, no context splitting). Facts banked for a future parallelism revisit | nothing (informational; D26 stands) |
-| R-T2 | 4B-class quality: long-input translation drift; comparison-format adherence | **Translation half RESOLVED — probed 2026-06-11** (`tests/manual/translation-smoke.test.ts`, `PAID_TRANSLATION_SMOKE`, real pinned b9585 + Qwen3-4B-instruct-q4 on the dev box, the SHIPPING prompts at temp 0.2). Findings: **(1) refusals/chatter: none** — no "Here is the translation", no refusal phrases, and an adversarial embedded-instruction window was translated, not obeyed. **(2) Language drift: none** on a near-budget (~1100-word) EN→DE input — head and tail both fully German (function-word scoring de=42/44, en=0/0). **(3) Markdown survival: complete** (h1/h2/bullets/table pipes/bold/blockquote all preserved DE→EN). **(4) Output↔input length — the load-bearing finding:** word ratios are ~1.0–1.1 (DE→EN) and ~0.94 (EN→DE), but German output costs **~2 real tokens per source word** (subword-heavy compounds): the first run's half-input/half-output context split CAPPED a near-budget window at `maxTokens` (ratio 0.67, output cut mid-sentence — silent truncation, exactly what this gate exists to catch). **Fix shipped:** the usable context now splits by measured weight — input 1.3 tok/word, output 2.0 (`TRANSLATION_OUTPUT_TOKENS_PER_WORD`); at 4096 ctx → 1150-word windows, `maxTokens` 2301. Re-run: 19/19 numbered sections present, no truncation. **(5)** Number VALUES/names/codes survive; formats localize (14.03.2026 → March 14, 2026) — accepted, documented. **Retry policy set:** one retry, then visible marking (failures were not observed; truncation is handled by sizing, not retries). **Comparison-format half stays OPEN for Phase 35** | ~~34~~ (done), 35 (comparison format) |
+| R-T2 | 4B-class quality: long-input translation drift; comparison-format adherence | **Translation half RESOLVED — probed 2026-06-11** (`tests/manual/translation-smoke.test.ts`, `PAID_TRANSLATION_SMOKE`, real pinned b9585 + Qwen3-4B-instruct-q4 on the dev box, the SHIPPING prompts at temp 0.2). Findings: **(1) refusals/chatter: none** — no "Here is the translation", no refusal phrases, and an adversarial embedded-instruction window was translated, not obeyed. **(2) Language drift: none** on a near-budget (~1100-word) EN→DE input — head and tail both fully German (function-word scoring de=42/44, en=0/0). **(3) Markdown survival: complete** (h1/h2/bullets/table pipes/bold/blockquote all preserved DE→EN). **(4) Output↔input length — the load-bearing finding:** word ratios are ~1.0–1.1 (DE→EN) and ~0.94 (EN→DE), but German output costs **~2 real tokens per source word** (subword-heavy compounds): the first run's half-input/half-output context split CAPPED a near-budget window at `maxTokens` (ratio 0.67, output cut mid-sentence — silent truncation, exactly what this gate exists to catch). **Fix shipped:** the usable context now splits by measured weight — input 1.3 tok/word, output 2.0 (`TRANSLATION_OUTPUT_TOKENS_PER_WORD`); at 4096 ctx → 1150-word windows, `maxTokens` 2301. Re-run: 19/19 numbered sections present, no truncation. **(5)** Number VALUES/names/codes survive; formats localize (14.03.2026 → March 14, 2026) — accepted, documented. **Retry policy set:** one retry, then visible marking (failures were not observed; truncation is handled by sizing, not retries). **Comparison half RESOLVED — probed 2026-06-11** (`tests/manual/compare-smoke.test.ts`, `PAID_COMPARE_SMOKE`, real pinned b9585 + Qwen3-4B-instruct-q4 on the dev box, the SHIPPING prompts at temp 0.3, two rounds). Findings: **(1) the 4B holds the dictated four-section report format** — all four `##` headings verbatim and exactly once in EVERY report probe (EN pair, DE pair, reduce), clean bullets, zero refusals/chatter, no truncation (reports ran 106–221 words against the 512-token cap ⇒ `COMPARE_OUTPUT_TOKENS = 512` confirmed; comparison output is summary-shaped — a fixed cap, not a per-word weight). **(2) Fact placement:** shared + differing facts land correctly, names/numbers/dates exact. Round 1 caught two real issues: only-in-one facts were ALSO cross-listed under "What differs", and the matched-pair map step silently MISSED an only-in-A fact (exactly the silent-omission class this gate exists for). **Round-2 prompt fixes shipped:** an exactly-ONE-section instruction (fixed the reduce; mode (a) still cross-lists one-sided clauses under "differs" — accurate but redundant, accepted + documented in known-limitations) and a "check every fact in the section of A" recall instruction (fixed the map miss — 4/4 prefixed bullets, all 6 planted facts present in round 2). **(3) Mode (b) DOES need the smaller per-pair format (plan §8's flag was right)** — compact `- Same:/- Different:/- Only in A/B:` bullets held perfectly at a 256-token map cap. **(4) Reduce over per-pair notes:** four sections back, duplicate shared facts merged to one bullet, exclusive placement correct, no inventions. **(5) German inputs:** the report body stays German (function-word score de=14 vs en=3, facts exact); the DICTATED section headings stay English — cosmetic, recorded in known-limitations. **R-T2 fully resolved** | nothing (both halves resolved — 34 + 35 shipped) |
 | R-W1 | Pinned whisper.cpp release: binaries per OS, server vs CLI, JSON timestamp output, license, archive shapes + hashes | Inspect the release's real assets (b9585 discipline) | 36 (D34) |
 | R-W2 | Decodable input formats of the pinned binary (mp3? flac? m4a?) | Feed real files to the real binary | 36 (format promise) |
 | R-W3 | Whisper model size for DE+EN on the reference laptop (RTF, RAM) | Manual smoke, German audio | 36 (manifest) |

@@ -461,16 +461,28 @@ export type DocTaskKind = 'summary' | 'translation' | 'compare'
 export type TranslationTargetLang = 'de' | 'en'
 
 /**
- * Provenance of a document the app GENERATED from another document (Phase 34:
- * translation; Phase 35 will add comparison). Persisted in the additive
+ * Provenance of a document the app GENERATED from other documents (Phase 34:
+ * translation; Phase 35: comparison). Persisted in the additive
  * `documents.origin_json` column. Provenance, NOT sync: re-importing or re-indexing
- * the source does not update this document — the user re-runs the task.
+ * a source does not update this document — the user re-runs the task.
+ *
+ * The `type` discriminator was added with Phase 35; Phase-34 rows persisted without
+ * it and parse as `'translation'` (the only pre-35 shape) — an additive migration.
  */
-export interface DocumentOrigin {
+export interface TranslationOrigin {
+  type: 'translation'
   /** The source document's id (it may have been deleted since). */
   translatedFrom: string
   targetLang: TranslationTargetLang
 }
+
+export interface CompareOrigin {
+  type: 'compare'
+  /** The two compared documents' ids, in A/B order (either may be deleted since). */
+  comparedFrom: [string, string]
+}
+
+export type DocumentOrigin = TranslationOrigin | CompareOrigin
 
 export type DocTaskState = 'queued' | 'running' | 'done' | 'failed' | 'cancelled'
 

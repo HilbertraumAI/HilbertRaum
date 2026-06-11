@@ -133,6 +133,16 @@ the Phase-32 lease, `documents.origin_json` provenance surfaced as `DocumentInfo
 new `docs:export` save-dialog export + `document_exported` audit event, Translate UI with
 target-choice modal + provenance line; R-T2's translation half resolved on the real b9585 +
 Qwen3-4B (plan §14); plan §7 condensed to its design record (§3 entry).
+**Phase 35 (compare two documents, D28/D37) is DONE 2026-06-11** — the `compare` kind on the
+same engine (exactly two sources); R-T2's comparison half resolved FIRST on the real b9585 +
+Qwen3-4B over two smoke rounds (round 1 caught a silent per-pair omission — prompts
+hardened); auto mode-switch by token math (D37: re-extracted segments for mode (a) AND the
+decision; section-matched mode (b) pairs A-chunk windows with doc-B chunks via the existing
+`VectorIndex`, deterministic, ceiling 12 with an honest in-report notice; embedder-visibility
+guard fails friendly before any model call); materialized "Comparison: <A> vs <B>.md" under
+the Phase-32 lease with the additive `DocumentOrigin` union (`comparedFrom: [a, b]`);
+ids-only audit incl. `documentIdB`; "Compare (2)" multi-select UI, both-rows busy state,
+report auto-open; plan §8 condensed to its design record (§3 entry).
 Release-wise,
 remaining work = **manual release acceptance only** (§5, incl. the GPU
 hardware matrix, item 1b). Consciously-accepted gaps live in
@@ -179,6 +189,7 @@ hardware matrix, item 1b). Consciously-accepted gaps live in
 | 32 | Vault password change (wave-3 plan §5, D24) | 🟢 done (2026-06-11) — descriptor v2 envelope (wrapped data key; new vaults v2), O(1) re-wrap per change, one-time journaled v1→v2 migration on first change, `workspace:changePassword` + Settings card, import↔change race guard |
 | 33 | Document tasks foundation + one-click summary (wave-3 plan §6, D25/D26) | 🟢 done (2026-06-11) — `DocTaskManager` engine (queue/cancel/polling, built for summary+translation+compare), strict one-at-a-time vs chat (both guards + renderer cancel option), budgeted map-reduce summary persisted in `documents.summary_json` (cleared by re-index), Summarize UI + preview section; R-T1 resolved (b9585 serves concurrent requests on parallel slots — app guard is the only serialization) |
 | 34 | Document translation workflow (wave-3 plan §7, D27/D36) | 🟢 done (2026-06-11) — `translation` kind on the Phase-33 engine (`targetLang: 'de'\|'en'`), D36 resolved (re-extracted parser segments, never the overlapping chunks), R-T2-measured window math (German out ≈ 2 tok/word — half/half split truncated and was fixed), retry-once-then-mark failed windows, materialized "<original> (Deutsch\|English).md" via the normal import path under the Phase-32 lease, `documents.origin_json` provenance, `docs:export` save-dialog export, Translate UI + provenance line; R-T2 translation half resolved on real b9585 + Qwen3-4B |
+| 35 | Compare two documents (wave-3 plan §8, D28/D37) | 🟢 done (2026-06-11) — `compare` kind on the same engine (exactly two distinct indexed sources), auto mode-switch by token math: full compare over re-extracted segments (D37) vs section-matched via the EXISTING `VectorIndex` `documentIds` scope (stored vectors, deterministic pairing, ceiling 12 + honest in-report truncation notice), embedder-visibility guard ("re-index first" before any model call), materialized "Comparison: <A> vs <B>.md" with `{ type: 'compare', comparedFrom: [a, b] }` provenance (additive `DocumentOrigin` union), ids-only audit incl. `documentIdB`, "Compare (2)" multi-select UI with both-rows busy state + report auto-open; R-T2 comparison half resolved on real b9585 + Qwen3-4B (2 smoke rounds — prompts hardened against a silent per-pair omission) |
 
 Legend: ⚪ not started · 🟡 in progress · 🟢 done · 🔴 blocked
 
@@ -1712,6 +1723,83 @@ Repo root: `f:\_coding\ai_drive`.
      cancel-mid-translation leaves no output → Export writes a real attributed file
      (main-process dialog patched via Playwright `app.evaluate`).
 
+- **Phase 35 — compare two documents (2026-06-11; plan §8 condensed to its design record;
+  D28 implemented as resolved; new D37 resolved; R-T2 comparison half probed FIRST +
+  resolved — R-T2 now fully closed):**
+  1. **Research gate first (the Phase-21/34 discipline):**
+     `tests/manual/compare-smoke.test.ts` (`PAID_COMPARE_SMOKE`, dev-box root `D:\`, real
+     pinned b9585 + Qwen3-4B-instruct-q4, the SHIPPING prompts at temp 0.3, TWO rounds).
+     Round 1: format held perfectly (all four dictated `##` headings verbatim + once,
+     clean bullets, zero refusals/chatter, no truncation at the 512 cap, German body
+     with facts exact) but caught TWO real issues — only-in-one facts cross-listed
+     under "What differs", and the matched-pair map step silently OMITTED an only-in-A
+     fact (the silent-omission class the gate exists for). Round-2 prompt fixes
+     shipped: an exactly-ONE-section instruction (fixed reduce placement; mode (a)
+     still cross-lists one-sided clauses — accurate-but-redundant, accepted +
+     documented) and a "check every fact in the section of A" recall instruction
+     (fixed the omission — all planted facts present). The smaller per-pair bullet
+     format (plan §8's flag) is CONFIRMED necessary and held at a 256-token map cap.
+     Findings banked in plan §14; `COMPARE_OUTPUT_TOKENS = 512` and temp 0.3 confirmed.
+  2. **The `compare` kind on the Phase-33 engine:** the last kind guard fell away;
+     validation = exactly TWO DISTINCT indexed-with-chunks sources
+     (`TASK_COMPARE_PICK_TWO_MESSAGE`). Queue/cancel/polling, both D26 guards, and
+     `isDocumentBusy` (now covering both sources + the output doc) came free.
+  3. **Auto mode-switch by token math (D28):** per-call input budget =
+     `(max(1024, ctx) − 512 − 300) / 1.3` words. Fits ⇒ **mode (a)**: ONE
+     structured-comparison call over both full texts. Else **mode (b)**: doc A's chunks
+     pack into half-budget windows (over-budget chunks split, pieces KEEP the chunk id),
+     each window's doc-B neighbors retrieved via the EXISTING `VectorIndex`
+     (`embeddingModelId` + `documentIds: [docB]` scopes; STORED vectors only — top-3 per
+     A-chunk, best-first fill of the other half-budget, presented in doc-B order;
+     deterministic, proven byte-identical across runs) → smaller per-pair map calls →
+     one reduce into the four-section report. Ceiling 12 (D25 rationale) → honest
+     `compareTruncationNotice` INSIDE the report; map output caps sized so all notes
+     provably fit the reduce input.
+  4. **D37 (mode-(a) input + the mode decision): re-extracted parser SEGMENTS** (the
+     D36 path) — chunk overlap would read as phantom "shared" content to a comparison
+     AND inflates a chunk-based length estimate ~16% (enough to mis-route the mode
+     switch). Mode (b)'s map deliberately uses stored CHUNKS (vectors needed; notes
+     tolerate overlap — D25 precedent). Regression test: every source word exactly once
+     in the mode-(a) prompt.
+  5. **Embedder-visibility guard (the plan-§8 audit finding):** before ANY model call,
+     mode (b) verifies both documents have vectors under the ACTIVE embedder id; a
+     stale/vectorless document fails friendly with the Phase-17-style
+     `TASK_COMPARE_REINDEX_MESSAGE` — never a silently empty pairing. Mode (a) needs no
+     vectors and skips the guard (tested both ways).
+  6. **Materialize via the Phase-34 path unchanged** (attribution "Machine-generated
+     comparison by <model> — may contain errors." + optional truncation notice + report
+     → `<jobId>.parse.md` transient → normal import under the Phase-32 lease, held
+     around exactly that step) ⇒ "Comparison: <A> vs <B>.md", searchable/citable/
+     exportable/`.enc`; failed import deletes the half-born row; cancel persists
+     nothing. **Provenance:** `DocumentOrigin` became a DISCRIMINATED UNION (additive:
+     Phase-34 rows persisted without `type` parse as `'translation'`); compare rows
+     persist `{ type: 'compare', comparedFrom: [a, b] }` → `DocumentInfo.origin`.
+  7. **Audit:** `document_task_completed/_failed` carry
+     `{ kind: 'compare', documentId, documentIdB }` (ids only, additive) +
+     `document_imported` for the report. The audit-ipc sentinel test gained a compare
+     leg: two sentinel-bearing documents compared over real IPC, the exported report
+     carries BOTH sentinels, `runtime_events` never does.
+  8. **UI:** "Compare (2)" appears on the Phase-17 multi-select at EXACTLY two
+     selections (selection cleared on start); the module-level watcher generalized to
+     `documentIds` (`startTask(kind, oneOrTwoIds, params)`) so BOTH source rows show
+     "Comparing… (n/m)" + Cancel and re-index/delete stay disabled on both; completion
+     auto-opens the new report's preview; provenance line "Comparison of <A> and <B>"
+     on row + preview (deleted source → "a removed document"); Export on the report.
+  9. **Tests:** `unit/doctasks-windows.test.ts` extension (compare budget formula +
+     floor, mode boundary, window packing/order/ids, split-keeps-id, ceiling+truncated,
+     reduce-fit property, pair budget, all templates incl. the round-2 smoke fixes) ·
+     `integration/doctasks-compare.test.ts` (10: validation, mode-(a) e2e with the D37
+     exactly-once regression + provenance + ids-only audit, no-vectors mode (a), the
+     mode-switch boundary, mode-(b) pairing shape + determinism, ceiling + notice,
+     staleEmbeddings guard both variants failing BEFORE any model call,
+     cancel-persists-nothing, lease after-the-calls) · `doctasks-ipc.test.ts` extension
+     (compare e2e over real handlers, both-rows busy guard, two-distinct refusal) ·
+     audit-ipc compare leg · `renderer/DocumentCompare.test.tsx` (6). Gate: typecheck
+     clean, **860/860 tests pass** (+17 manual skips), build green. Eyeballed against
+     the BUILT bundle (`walk-phase35.mjs`, shots-p35, WALK PASSED): import two docs →
+     mock runtime → select two → Compare (2) → "Comparing…"+Cancel on BOTH rows →
+     report preview auto-opens with provenance → report row with Export.
+
 ---
 
 ## 4. Shared data contracts (the actual "transported data")
@@ -1758,13 +1846,17 @@ the in-app model downloader, async-with-polling) +
 the Diagnostics Activity panel, newest-first paging + save-dialog export) +
 `searchConversations` (`chat:search`, Phase 31) + `changeWorkspacePassword`
 (`workspace:changePassword`, Phase 32) +
-`startDocTask`/`getDocTask`/`cancelDocTask` (`doctasks:start/get/cancel`, Phases 33–34 —
+`startDocTask`/`getDocTask`/`cancelDocTask` (`doctasks:start/get/cancel`, Phases 33–35 —
 document tasks, async-with-polling; `cancelDocTask()` with no jobId cancels the active task;
 shapes `StartDocTaskRequest`/`DocTaskStatus`/`DocumentSummary` in `shared/types.ts`, and
 `DocumentInfo` gained an optional `summary` from the additive `documents.summary_json` column;
 Phase 34: `kind: 'translation'` takes `params.targetLang: TranslationTargetLang ('de'|'en')`,
 `resultRef.documentId` = the NEW materialized document, and `DocumentInfo` gained an optional
-`origin: DocumentOrigin` from the additive `documents.origin_json` column) +
+`origin: DocumentOrigin` from the additive `documents.origin_json` column;
+Phase 35: `kind: 'compare'` takes exactly TWO distinct `documentIds` and `DocumentOrigin` is
+now a discriminated union — `{ type: 'translation', translatedFrom, targetLang }` |
+`{ type: 'compare', comparedFrom: [a, b] }`; Phase-34 rows persisted without `type` parse as
+`'translation'`, an additive migration) +
 `exportDocument` (`docs:export`, Phase 34 — save-dialog export of a text document's stored
 content, the `exportConversation` pattern; resolves with the path or null on cancel).
 (`pickDocuments` + `reindexDocument` are Phase-4 additions to the `IPC` registry beyond the spec
@@ -2394,11 +2486,10 @@ items are **MANUAL acceptance only** (R2/R5/R7 + the GPU hardware matrix). In ro
    Qwen3 30B-A3B) + the embeddings question (Granite Embedding R2 small is the only 384-dim
    near-drop-in). Key verified fact: our pinned llama.cpp **b9585 is the 2026-06-09 release**,
    so Gemma 4 (needs ~b8607) runs on the runtime we already ship — no runtime bump needed.
-6. **Functionality wave 3 (Phases 31–38) — IN PROGRESS: Phases 31 + 32 + 33 + 34 DONE
-   2026-06-11, next up is Phase 35 (compare two documents — the second materializing
-   kind on the task engine; the comparison-format half of R-T2 is still open and sets
-   its reduce-prompt design; D28 resolved: materialized "Comparison: A vs B" document,
-   auto mode-switch by token math):** see the working paper
+6. **Functionality wave 3 (Phases 31–38) — IN PROGRESS: Phases 31–35 DONE
+   2026-06-11, next up is Phase 36 (audio transcription as ingestion — the whisper.cpp
+   sidecar family; its research gates R-W1..R-W4 come FIRST, the Phase-21/35
+   discipline, and decide D34; D35 resolves in the Phase-36 review):** see the working paper
    [`docs/functionality-wave-3-plan.md`](docs/functionality-wave-3-plan.md) (decisions
    D23–D34, research gates R-S1/R-T1–2/R-W1–4/R-O1–3). Eight user-selected features in
    dependency order: 31 conversation search (messages FTS5, mirrors D13) → 32 vault password
@@ -2467,11 +2558,37 @@ items are **MANUAL acceptance only** (R2/R5/R7 + the GPU hardware matrix). In ro
    §14: zero refusals/chatter, zero language drift, full Markdown survival, number
    VALUES kept/formats localized, German output ≈ 2 tokens per source word — the
    load-bearing sizing fact). Plan §7 condensed to its design record (§3 entry).
-   **Phase 35 (compare two documents) is ready to start.**
+   **Phase 35 (compare two documents) is DONE (2026-06-11)** — the `compare` kind on the
+   same engine (exactly TWO distinct indexed sources; the last kind guard fell away).
+   **R-T2 (comparison half) RESOLVED FIRST** (`tests/manual/compare-smoke.test.ts`,
+   `PAID_COMPARE_SMOKE`, real b9585 + Qwen3-4B, TWO rounds — round 1 caught a silent
+   per-pair omission and cross-section duplication; round-2 prompt fixes shipped;
+   findings in plan §14: the 4B holds the dictated four-section format perfectly, the
+   smaller per-pair bullet format is confirmed necessary, output cap 512 ample, German
+   bodies with English dictated headings). D28 implemented: auto mode-switch by token
+   math — mode (a) one call over both re-extracted full texts (**D37**: segments, not
+   chunks, for the input AND the mode decision — overlap reads as phantom "shared"
+   content and inflates the estimate ~16%), mode (b) section-matched: A-chunk windows
+   paired with doc-B chunks via the EXISTING `VectorIndex` (`documentIds` scope, stored
+   vectors only — deterministic, regression-tested byte-identical across runs), smaller
+   per-pair map format → one reduce; ceiling 12 → honest truncation notice IN the
+   report. **Embedder-visibility guard:** mode (b) fails friendly ("re-index first",
+   BEFORE any model call) when either doc lacks vectors under the active embedder.
+   Materialized "Comparison: <A> vs <B>.md" via the Phase-34 path under the Phase-32
+   lease; `DocumentOrigin` became a discriminated union (additive — type-less Phase-34
+   rows parse as translation) with `{ type: 'compare', comparedFrom: [a, b] }`; audit
+   carries `{ kind, documentId, documentIdB }` ids-only (sentinel test extended with a
+   two-document compare leg). UI: "Compare (2)" on the Phase-17 multi-select at exactly
+   two selections, "Comparing… (n/m)"/Cancel on BOTH source rows (watcher generalized
+   to `documentIds`), completion auto-opens the report preview with the "Comparison of
+   <A> and <B>" provenance line, Export works. Plan §8 condensed to its design record.
+   **Next: Phase 36 (audio transcription ingestion) — research gates R-W1..R-W4 FIRST**
+   (pinned whisper.cpp release/binaries/license, decodable formats, DE+EN model size,
+   60-min-file behavior), then D34/D35 in the Phase-36 review.
 
-**Current gate (2026-06-11, post-Phase-34): typecheck clean, 828/828 tests pass (+16 manual
+**Current gate (2026-06-11, post-Phase-35): typecheck clean, 860/860 tests pass (+17 manual
 tests behind `PAID_*` env vars — GPU/thinking/rerank/minsim/RAG-quality/bring-up/eval/
-concurrency-probe/translation smokes — skipped in CI), `npm run build` green.** The
+concurrency-probe/translation/compare smokes — skipped in CI), `npm run build` green.** The
 per-phase gate history (test counts, bundle sizes, per-phase test inventories) lives in
 git history.
 

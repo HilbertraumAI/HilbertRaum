@@ -307,6 +307,30 @@ A few honest notes about translations:
 - Machine translation quality depends on the model. Number *values*, names, and dates are
   preserved, but formats may be localized (e.g. *14.03.2026* → *March 14, 2026*).
 
+**Compare two documents.** Tick the checkboxes next to **exactly two** Ready documents and
+click **Compare (2)**. The local model writes a structured comparison — what both documents
+share, what differs, and what exists only in one — fully on this drive. The result is a
+**new document** named like *"Comparison: report vs draft"*: it opens automatically when
+done, is searchable and answerable like any import, can be **Export**ed as Markdown, and
+its row shows *"Comparison of &lt;A&gt; and &lt;B&gt;"* so you always know where it came from. It
+starts with an honest *"Machine-generated comparison by &lt;model&gt; — may contain errors."*
+line.
+
+A few honest notes about comparisons:
+
+- Two **short** documents are compared in full. **Long** documents are compared section by
+  section: each part of the first document is matched with the most closely related parts
+  of the second — great for spotting changes, but findings that exist *only in the second
+  document* can be missed. For **very long** first documents the report covers their
+  beginning (the report says so when that happens).
+- The report's section headings are in English; the findings themselves follow your
+  documents' language (German documents get German findings).
+- If the app says the documents *"need a quick re-index"*, one of them was prepared with a
+  different search model — use **Re-index** on the Documents screen, then try again.
+- Like every document task: a model must be running, one job runs at a time, you can
+  cancel anytime (a cancelled comparison leaves nothing behind), and the comparison is a
+  snapshot — re-run it after the sources change.
+
 ---
 
 ## 8. Privacy & offline

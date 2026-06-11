@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import type { ReactNode } from 'react'
 import { Badge, Banner, Button, ConfirmDialog, EmptyState, Modal, type BadgeTone } from '../components'
 import type {
+  DocTaskKind,
   DocumentInfo,
   DocumentPreview,
   DocumentSummary,
@@ -41,6 +43,18 @@ const ACTIVE_STATUSES: ReadonlySet<IngestionStatus> = new Set([
   'chunking',
   'embedding'
 ])
+
+// Per-kind busy copy for the row spinner (guidelines §7 — speak human, no jargon).
+const TASK_BUSY_LABEL: Record<DocTaskKind, string> = {
+  summary: 'Summarizing…',
+  translation: 'Translating…',
+  compare: 'Comparing…'
+}
+const TASK_BUSY_TITLE: Record<DocTaskKind, string> = {
+  summary: 'The summary is being written',
+  translation: 'The translation is being written',
+  compare: 'The comparison is being written'
+}
 
 function formatSize(bytes: number | null): string {
   if (bytes == null) return '—'
@@ -161,18 +175,24 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
 
   // When the active task finishes: refresh the list, then show the outcome — a done
   // summary auto-opens the preview with the fresh summary (the one-click promise); a
-  // done translation reveals the new document in the refreshed list (its row carries
-  // the provenance line). Failures show the friendly copy; then clear the store entry.
+  // done comparison opens the NEW report document (its provenance line names both
+  // sources); a done translation reveals the new document in the refreshed list.
+  // Failures show the friendly copy; then clear the store entry.
   useEffect(() => {
     if (!activeTask || !isDocTaskTerminal(activeTask.status)) return
     const status = activeTask.status
-    const documentId = activeTask.documentId
     const kind = activeTask.kind
+    const openId =
+      kind === 'summary'
+        ? activeTask.documentIds[0]
+        : kind === 'compare'
+          ? status?.resultRef?.documentId
+          : null
     acknowledgeDocTask()
     void refresh().catch(() => undefined)
-    if (status?.state === 'done' && kind === 'summary') {
+    if (status?.state === 'done' && openId) {
       void window.api
-        .previewDocument(documentId)
+        .previewDocument(openId)
         .then(setPreview)
         .catch(() => undefined)
     } else if (status?.state === 'failed' && status.error) {
@@ -201,6 +221,20 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
     }
   }
 
+  // Compare the two selected documents (Phase 35): A = first selected, B = second.
+  async function onCompare(): Promise<void> {
+    const ids = [...selected]
+    if (ids.length !== 2) return
+    setError(null)
+    setPreview(null)
+    try {
+      await startTask('compare', ids)
+      setSelected(new Set())
+    } catch (e) {
+      setError(friendlyIpcError(e))
+    }
+  }
+
   // Save a document's stored text (e.g. a translation) to a user-chosen file.
   async function onExport(d: DocumentInfo): Promise<void> {
     setError(null)
@@ -211,10 +245,27 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
     }
   }
 
-  /** Source title for a generated document's provenance line (the source may be gone). */
-  function originTitle(d: DocumentInfo): string | null {
+  /** A source document's title for a provenance line (the source may be gone). */
+  function titleOf(id: string): string {
+    return docs?.find((x) => x.id === id)?.title ?? 'a removed document'
+  }
+
+  /** Quiet provenance line for a generated document (translation or comparison). */
+  function provenanceLine(d: DocumentInfo): ReactNode {
     if (!d.origin) return null
-    return docs?.find((x) => x.id === d.origin?.translatedFrom)?.title ?? 'a removed document'
+    if (d.origin.type === 'compare') {
+      const [a, b] = d.origin.comparedFrom
+      return (
+        <>
+          Comparison of <b>{titleOf(a)}</b> and <b>{titleOf(b)}</b>
+        </>
+      )
+    }
+    return (
+      <>
+        Translated from <b>{titleOf(d.origin.translatedFrom)}</b>
+      </>
+    )
   }
 
   const anyActive = docs?.some((d) => ACTIVE_STATUSES.has(d.status)) ?? false
@@ -277,6 +328,15 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
               onClick={() => onAskSelected([...selected])}
             >
               Ask these documents ({selected.size})
+            </Button>
+          )}
+          {selected.size === 2 && (
+            <Button
+              disabled={busy !== null || activeTask !== null}
+              title="Write a comparison of the two selected documents with the local model — nothing leaves this drive"
+              onClick={() => void onCompare()}
+            >
+              Compare (2)
             </Button>
           )}
           {staleDocs.length > 1 && (
@@ -353,7 +413,7 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
           </div>
           {d.origin && (
             <p className="hint" style={{ margin: '2px 0 0' }}>
-              Translated from <b>{originTitle(d)}</b>
+              {provenanceLine(d)}
             </p>
           )}
           {d.status === 'failed' && d.errorMessage && <Banner tone="error">{d.errorMessage}</Banner>}
@@ -374,19 +434,12 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
             </Button>
             {d.status === 'indexed' &&
               d.chunkCount > 0 &&
-              (activeTask && activeTask.documentId === d.id && !isDocTaskTerminal(activeTask.status) ? (
+              (activeTask &&
+              activeTask.documentIds.includes(d.id) &&
+              !isDocTaskTerminal(activeTask.status) ? (
                 <>
-                  <Button
-                    size="sm"
-                    disabled
-                    title={
-                      activeTask.kind === 'translation'
-                        ? 'The translation is being written'
-                        : 'The summary is being written'
-                    }
-                  >
-                    <span className="spinner" />{' '}
-                    {activeTask.kind === 'translation' ? 'Translating…' : 'Summarizing…'}
+                  <Button size="sm" disabled title={TASK_BUSY_TITLE[activeTask.kind]}>
+                    <span className="spinner" /> {TASK_BUSY_LABEL[activeTask.kind]}
                     {activeTask.status && activeTask.status.progress.stepsTotal > 1
                       ? ` (${activeTask.status.progress.stepsDone}/${activeTask.status.progress.stepsTotal})`
                       : ''}
@@ -427,7 +480,9 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
             )}
             <Button
               size="sm"
-              disabled={busy !== null || ACTIVE_STATUSES.has(d.status) || activeTask?.documentId === d.id}
+              disabled={
+                busy !== null || ACTIVE_STATUSES.has(d.status) || (activeTask?.documentIds.includes(d.id) ?? false)
+              }
               onClick={() => void run(`reindex-${d.id}`, () => window.api.reindexDocument(d.id))}
               title="Read and prepare the stored copy again"
             >
@@ -435,7 +490,9 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
             </Button>
             <Button
               size="sm"
-              disabled={busy !== null || ACTIVE_STATUSES.has(d.status) || activeTask?.documentId === d.id}
+              disabled={
+                busy !== null || ACTIVE_STATUSES.has(d.status) || (activeTask?.documentIds.includes(d.id) ?? false)
+              }
               onClick={() => setConfirmDelete(d)}
             >
               Delete
@@ -489,9 +546,9 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
         <PreviewModal
           preview={preview}
           summary={docs?.find((x) => x.id === preview.id)?.summary ?? null}
-          originTitle={(() => {
+          originLine={(() => {
             const d = docs?.find((x) => x.id === preview.id)
-            return d ? originTitle(d) : null
+            return d ? provenanceLine(d) : null
           })()}
           regenerateDisabled={busy !== null || activeTask !== null}
           onRegenerate={() => {
@@ -523,15 +580,15 @@ function summaryAttribution(s: DocumentSummary): string {
 function PreviewModal({
   preview,
   summary,
-  originTitle,
+  originLine,
   regenerateDisabled,
   onRegenerate,
   onClose
 }: {
   preview: DocumentPreview
   summary?: DocumentSummary | null
-  /** Source document title when this is a generated translation (Phase 34), or null. */
-  originTitle?: string | null
+  /** Provenance line when this is a generated document (Phase 34/35), or null. */
+  originLine?: ReactNode
   regenerateDisabled?: boolean
   onRegenerate?: () => void
   onClose: () => void
@@ -541,9 +598,9 @@ function PreviewModal({
       <p className="hint" style={{ margin: '0 0 8px' }}>
         Read-only extracted text — this is what document search and answers are based on.
       </p>
-      {originTitle && (
+      {originLine && (
         <p className="hint" style={{ margin: '0 0 8px' }}>
-          Translated from <b>{originTitle}</b>
+          {originLine}
         </p>
       )}
       {summary && (

@@ -44,11 +44,12 @@ interface Harness {
   ctx: AppContext
   db: Db
   docId: string
+  docIdB: string
   runtime: ModelRuntime
   releaseGate: () => void
 }
 
-/** Real DB + one indexed document + a gateable runtime, wired through the real handlers. */
+/** Real DB + two indexed documents + a gateable runtime, wired through the real handlers. */
 async function makeHarness(opts: { unlocked?: boolean } = {}): Promise<Harness> {
   const root = mkdtempSync(join(tmpdir(), 'paid-dtipc-'))
   const workspacePath = join(root, 'workspace')
@@ -60,6 +61,10 @@ async function makeHarness(opts: { unlocked?: boolean } = {}): Promise<Harness> 
   writeFileSync(docPath, Array.from({ length: 80 }, (_, i) => `note${i}`).join(' '), 'utf8')
   const doc = createQueuedDocument(db, docPath)
   await processDocument(db, storeDir, doc.id, { embedder: createMockEmbedder() })
+  const docPathB = join(root, 'notes-v2.txt')
+  writeFileSync(docPathB, Array.from({ length: 80 }, (_, i) => `memo${i}`).join(' '), 'utf8')
+  const docB = createQueuedDocument(db, docPathB)
+  await processDocument(db, storeDir, docB.id, { embedder: createMockEmbedder() })
 
   let release!: () => void
   const gate = new Promise<void>((r) => (release = r))
@@ -108,7 +113,7 @@ async function makeHarness(opts: { unlocked?: boolean } = {}): Promise<Harness> 
   registerRagIpc(ctx)
   registerDocsIpc(ctx)
   registerDocTasksIpc(ctx)
-  return { ctx, db, docId: doc.id, runtime, releaseGate: release }
+  return { ctx, db, docId: doc.id, docIdB: docB.id, runtime, releaseGate: release }
 }
 
 async function pollTerminal(jobId: string): Promise<DocTaskStatus> {
@@ -154,6 +159,39 @@ describe('doctasks IPC (start / get / cancel)', () => {
     await invoke(handlers, IPC.cancelDocTask)
     h.releaseGate()
     expect((await pollTerminal(jobId)).state).toBe('cancelled')
+  })
+
+  it('runs a compare end-to-end over the polling contract (Phase 35) and guards BOTH rows', async () => {
+    const h = await makeHarness()
+    const { result } = await invoke(handlers, IPC.startDocTask, {
+      kind: 'compare',
+      documentIds: [h.docId, h.docIdB]
+    })
+    const { jobId } = result as { jobId: string }
+    expect(jobId).toBeTruthy()
+    // While the task runs, BOTH source documents are busy (re-index/delete refused).
+    await expect(invoke(handlers, IPC.reindexDocument, h.docIdB)).rejects.toThrow(
+      /task is running for this document/i
+    )
+    h.releaseGate()
+    const status = await pollTerminal(jobId)
+    expect(status.state).toBe('done')
+    // The result is a NEW materialized report document.
+    const newId = status.resultRef?.documentId as string
+    expect(newId).toBeTruthy()
+    expect(newId).not.toBe(h.docId)
+    expect(newId).not.toBe(h.docIdB)
+  })
+
+  it('compare refuses anything but exactly two distinct documents (friendly copy)', async () => {
+    const h = await makeHarness()
+    await expect(
+      invoke(handlers, IPC.startDocTask, { kind: 'compare', documentIds: [h.docId] })
+    ).rejects.toThrow(/exactly two documents/i)
+    await expect(
+      invoke(handlers, IPC.startDocTask, { kind: 'compare', documentIds: [h.docId, h.docId] })
+    ).rejects.toThrow(/exactly two documents/i)
+    h.releaseGate()
   })
 
   it('refuses to start while the workspace is locked', async () => {

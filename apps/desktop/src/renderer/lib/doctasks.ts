@@ -17,8 +17,11 @@ import type { DocTaskKind, DocTaskStatus } from '@shared/types'
 export interface ActiveDocTask {
   jobId: string
   kind: DocTaskKind
-  /** The SOURCE document the task runs over (summary: summarized; translation: translated). */
-  documentId: string
+  /**
+   * The SOURCE documents the task runs over (summary/translation: one; compare: two,
+   * in A/B order) — the rows that show the busy state.
+   */
+  documentIds: string[]
   /** Latest polled status; null until the first poll lands. */
   status: DocTaskStatus | null
 }
@@ -60,17 +63,19 @@ export function isDocTaskTerminal(status: DocTaskStatus | null): boolean {
 }
 
 /**
- * Start a document task over one document and begin polling. Throws the backend's
- * friendly error when the task is refused (chat streaming, no runtime, bad params, …).
+ * Start a document task over one document (summary/translation) or two (compare,
+ * A/B order) and begin polling. Throws the backend's friendly error when the task is
+ * refused (chat streaming, no runtime, bad params, …).
  */
 export async function startTask(
   kind: DocTaskKind,
-  documentId: string,
+  documentIds: string | string[],
   params?: Record<string, unknown>
 ): Promise<void> {
-  const { jobId } = await window.api.startDocTask({ kind, documentIds: [documentId], params })
+  const ids = Array.isArray(documentIds) ? documentIds : [documentIds]
+  const { jobId } = await window.api.startDocTask({ kind, documentIds: ids, params })
   stopPolling()
-  setActive({ jobId, kind, documentId, status: null })
+  setActive({ jobId, kind, documentIds: ids, status: null })
   timer = setInterval(() => {
     void (async () => {
       const current = active

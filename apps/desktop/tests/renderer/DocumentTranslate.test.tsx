@@ -34,7 +34,7 @@ function translatedDoc(over: Partial<DocumentInfo> = {}): DocumentInfo {
     title: 'contract (Deutsch).md',
     originalPath: null,
     mimeType: 'text/markdown',
-    origin: { translatedFrom: 'd1', targetLang: 'de' },
+    origin: { type: 'translation', translatedFrom: 'd1', targetLang: 'de' },
     ...over
   })
 }

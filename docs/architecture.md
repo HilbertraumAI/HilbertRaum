@@ -203,15 +203,15 @@ the whole DB file is encrypted at rest.
   `listDocuments`, `deleteDocument`, `reindexDocument`. Full pipeline detail lives in
   [`rag-design.md`](rag-design.md).
 
-## Document tasks (Phases 33–34, wave-3 plan §6/§7)
+## Document tasks (Phases 33–35, wave-3 plan §6/§7/§8)
 - **`services/doctasks.ts` — the shared task engine.** A job state machine on the Phase-4/18
   async-with-polling precedent: `startDocTask({ kind, documentIds, params }) → { jobId }`,
   `getDocTask(jobId) → { state, progress { stepsDone, stepsTotal }, error?, resultRef? }`,
   `cancelDocTask(jobId?)`. States: `queued → running → done | failed | cancelled`; unknown
-  job ids report a terminal status so pollers always stop. The machine, queue, cancel
-  semantics, and IPC shapes are built for all three kinds (`summary` | `translation` |
-  `compare`); `summary` (Phase 33) and `translation` (Phase 34) are implemented — Phase 35
-  plugs into the same engine. Deps are injected (`getDb`, `getRuntime`, `isChatStreaming`,
+  job ids report a terminal status so pollers always stop. All three kinds are implemented
+  on the one machine: `summary` (Phase 33), `translation` (Phase 34), `compare` (Phase 35 —
+  exactly TWO distinct source documents; the others take one). Deps are injected (`getDb`,
+  `getRuntime`, `isChatStreaming`,
   `getContextTokens`, `getStoreDir`, `getIngestionDeps`, `beginDocumentWork`, `audit`), so
   the engine tests without Electron; `main/index.ts` wires it and exposes it as
   `AppContext.docTasks`.
@@ -248,7 +248,8 @@ the whole DB file is encrypted at rest.
   with document delete. Surfaced as `DocumentInfo.summary`. Summaries are CONTENT: they
   live only in the (possibly encrypted) DB; the additive audit events
   `document_task_completed`/`document_task_failed` carry `{ kind, documentId }` only
-  (sentinel-tested in `audit-ipc.test.ts`).
+  (plus the additive ids-only `documentIdB` for a compare) — sentinel-tested in
+  `audit-ipc.test.ts`.
 - **Translation (Phase 34, D27/D36): map in document order, materialize a NEW document.**
   `params.targetLang: 'de' | 'en'` (a closed v1 set — free-text language fields invite
   silent quality failures). **D36 — the input is the parser's SEGMENTS, re-extracted from
@@ -268,22 +269,54 @@ the whole DB file is encrypted at rest.
   window the model refuses/garbles is retried ONCE, then **marked visibly** in the output
   with the original text kept below — never silently dropped; only an all-windows failure
   fails the task.
+- **Compare (Phase 35, D28/D37): two documents in, one materialized report out.** The
+  strategy auto-switches on token math (the D25 budget shape: `(max(1024, ctx) − 512 −
+  300) / 1.3` input words per call). Both full texts fit ⇒ **mode (a)**: one
+  structured-comparison call over both. Else **mode (b), section-matched**: doc A's
+  chunks pack into half-budget windows (over-budget chunks split, pieces keep their
+  chunk id), each window's nearest doc-B chunks are retrieved via the EXISTING
+  `VectorIndex` scoped to doc B under the active embedder's id — STORED vectors only,
+  so the pairing is deterministic and costs nothing but cosine scans (top-3 neighbors
+  per A-chunk, best-first fill of the other half-budget, presented in doc-B order);
+  per-pair map calls use a deliberately smaller prefixed-bullets format
+  (R-T2-confirmed), then one reduce merges the notes into the four dictated report
+  sections (share / differ / only-in-A / only-in-B; headings dictated verbatim, body in
+  the documents' language; temp 0.3, output cap 512 — both R-T2-validated over two
+  smoke rounds on the real b9585 + Qwen3-4B). Map ceiling 12 → an honest truncation
+  notice INSIDE the report ("covers the beginning of A"); map output caps are sized so
+  all notes provably fit the reduce input (the D25 fit property). **D37:** mode (a)'s
+  input AND the mode decision use the re-extracted parser segments (chunk overlap would
+  read as phantom "shared" content and inflates a length estimate by ~16% — enough to
+  mis-route the switch); mode (b)'s map deliberately uses the stored chunks (vectors
+  needed; notes tolerate overlap, the D25 precedent). **Embedder-visibility guard:**
+  before any model call, mode (b) verifies BOTH documents have vectors under the ACTIVE
+  embedder id — a stale/vectorless document fails friendly with the Phase-17-style
+  "re-index first" answer, never a silently empty pairing (mode (a) needs no vectors
+  and skips the guard).
 - **Materialize (D27):** only after every window succeeded (cancel persists nothing), the
-  Markdown — `"> Machine-translated by <model> — may contain errors."` + body — is written
+  Markdown — `"> Machine-translated by <model> — may contain errors."` (translations) or
+  `"> Machine-generated comparison by <model> — may contain errors."` (+ the truncation
+  notice when capped) — is written
   to a `<jobId>.parse.md` transient (the startup crash sweep covers it) and run through
   the NORMAL import path (`createQueuedDocument` with the display title
-  `"<original> (Deutsch|English).md"` + `processDocument` with the real ingestion deps) ⇒
+  `"<original> (Deutsch|English).md"` / `"Comparison: <A> vs <B>.md"` + `processDocument`
+  with the real ingestion deps) ⇒
   chunked, embedded, searchable, citable, `.enc`-encrypted automatically; the transient is
-  shredded. Provenance lands in the additive `documents.origin_json` column
-  (`{ translatedFrom, targetLang }`, surfaced as `DocumentInfo.origin`; malformed JSON
-  reads as null; survives re-index — provenance, not sync). A failed import deletes the
-  half-born row: a translation fully succeeds or persists nothing.
+  shredded. Provenance lands in the additive `documents.origin_json` column — a
+  `DocumentOrigin` discriminated union (`{ type: 'translation', translatedFrom,
+  targetLang }` | `{ type: 'compare', comparedFrom: [a, b] }`; Phase-34 rows persisted
+  without `type` parse as `'translation'` — an additive migration), surfaced as
+  `DocumentInfo.origin`; malformed JSON
+  reads as null; survives re-index — provenance, not sync. A failed import deletes the
+  half-born row: a generated document fully succeeds or persists nothing.
 - **Vault lease split:** a summary takes NO `beginDocumentWork()` lease, deliberately — it
-  only reads chunk rows and writes one DB column. A translation's MATERIALIZE step writes
+  only reads chunk rows and writes one DB column. A translation's/comparison's MATERIALIZE
+  step writes
   `.enc` sidecars, so that step — and only that step — holds the lease (the long window
   loop must not block a password change for minutes); a concurrent password change makes
   the materialize fail friendly (`VaultBusyError` passes through). `registerDocsIpc`
-  refuses re-index/delete of any document an active task targets (`isDocumentBusy`), and
+  refuses re-index/delete of any document an active task targets (`isDocumentBusy` — both
+  compare sources), and
   the freshly created OUTPUT document is appended to the task's `documentIds` at creation
   so the guard covers it before the import finishes.
 - **IPC + UI:** `doctasks:start/get/cancel` (+ preload mirrors); `docs:export` saves a
@@ -291,13 +324,17 @@ the whole DB file is encrypted at rest.
   `exportConversation` pattern — built for materialized translations, which are always
   Markdown; audit ids-only). The renderer watcher (`renderer/lib/doctasks.ts`) lives at
   module level so a running task's busy/progress state survives screen navigation — ONE
-  store for all kinds (`startTask(kind, documentId, params)`; D26 guarantees at most one
-  task anyway). The Documents screen polls it (`useSyncExternalStore`), shows the per-row
-  "Summarizing…/Translating… (n/m)" busy state + Cancel; "Translate" opens a small
-  target-choice modal (German/English). A done summary opens the preview (collapsible
-  section, "Generated by <model> · <date>", Regenerate); a done translation reveals the
-  new document in the refreshed list with a quiet "Translated from <original>" provenance
-  line (row + preview) and an Export action.
+  store for all kinds (`startTask(kind, documentIds, params)` — one id, or two for a
+  compare; D26 guarantees at most one task anyway). The Documents screen polls it
+  (`useSyncExternalStore`), shows the per-row
+  "Summarizing…/Translating…/Comparing… (n/m)" busy state + Cancel on EVERY source row;
+  "Translate" opens a small target-choice modal (German/English); "Compare (2)" appears
+  on the Phase-17 multi-select at exactly two selections. A done summary opens the
+  preview (collapsible section, "Generated by <model> · <date>", Regenerate); a done
+  translation reveals the new document in the refreshed list with a quiet "Translated
+  from <original>" provenance line (row + preview); a done comparison opens the new
+  report's preview with its "Comparison of <A> and <B>" line. Both materialized kinds
+  offer Export.
 
 ## Privacy & offline (Phase 8)
 - **`services/policy.ts`** (spec §3.5/§3.6/§6) loads optional `config/policy.json` + `config/drive.json`,
