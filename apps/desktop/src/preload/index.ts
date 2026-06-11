@@ -146,6 +146,13 @@ const api = {
   /** Save the activity log to a user-chosen file; resolves with the path, or null on cancel. */
   exportAuditLog: (): Promise<string | null> => ipcRenderer.invoke(IPC.exportAuditLog),
 
+  // ---- Voice dictation (Phase 37) ----
+  /** Transcribe recorded composer audio (16 kHz mono WAV bytes) into plain text, fully
+   *  locally. The audio exists in main only as a shredded transient; nothing is stored,
+   *  logged, or audited, and the text is only ever inserted for review — never sent. */
+  transcribeDictation: (audio: Uint8Array): Promise<string> =>
+    ipcRenderer.invoke(IPC.transcribeDictation, audio),
+
   // ---- RAG / document Q&A (Phase 6) ----
   /** Stream a document-grounded answer; resolves with the final assistant message
    *  (which carries `citations`). Tokens arrive via onToken, like sendChatMessage. */

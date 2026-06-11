@@ -1,7 +1,7 @@
 import { app, BrowserWindow, nativeTheme, shell } from 'electron'
 import { dirname, join } from 'node:path'
 import { resolvePaths, ensureWorkspaceDirs, findPreparedDriveRoot } from './services/workspace'
-import { installDenyAllPermissionHandler } from './services/permissions'
+import { installPermissionRequestHandler } from './services/permissions'
 import { getSettings, updateSettings } from './services/settings'
 import { loadPolicy, buildPolicyStatus } from './services/policy'
 import { vaultPathsFrom, WorkspaceController } from './services/workspace-vault'
@@ -16,6 +16,7 @@ import { registerDocTasksIpc } from './ipc/registerDocTasksIpc'
 import { DocTaskManager } from './services/doctasks'
 import { documentsDir } from './services/ingestion'
 import { inFlightStreams } from './ipc/inflight'
+import { registerDictationIpc } from './ipc/registerDictationIpc'
 import { registerDownloadIpc } from './ipc/registerDownloadIpc'
 import { registerRagIpc } from './ipc/registerRagIpc'
 import { registerBenchmarkIpc, maybeRunFirstBenchmark } from './ipc/registerBenchmarkIpc'
@@ -292,6 +293,7 @@ function initBackend(): void {
   registerChatIpc(ctx)
   registerDocsIpc(ctx)
   registerDocTasksIpc(ctx)
+  registerDictationIpc(ctx)
   registerDownloadIpc(ctx)
   registerRagIpc(ctx)
   registerBenchmarkIpc(ctx)
@@ -374,11 +376,13 @@ function createWindow(): void {
 
   // Deny-by-default permission handler (Phase 31 hardening rider — wave-3 plan §12).
   // Electron GRANTS permission requests when no handler is installed; this renderer
-  // needs none (geolocation/notifications/media/…), so everything is refused. Phase 37
-  // adds the single scoped `media` (audio) exception for voice dictation.
-  installDenyAllPermissionHandler(mainWindow.webContents.session, (permission) =>
-    log.warn('Renderer permission request denied', { permission })
-  )
+  // needs exactly one: audio-only `media` from OUR OWN window for voice dictation
+  // (Phase 37, D30). Everything else — video, other permissions, other WebContents —
+  // is refused.
+  installPermissionRequestHandler(mainWindow.webContents.session, {
+    allowMicrophoneFor: mainWindow.webContents,
+    onDeny: (permission) => log.warn('Renderer permission request denied', { permission })
+  })
 
   mainWindow.once('ready-to-show', () => mainWindow?.show())
 

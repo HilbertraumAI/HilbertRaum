@@ -36,7 +36,10 @@ export function registerCoreIpc(ctx: AppContext): void {
       hardwareProfile: s?.lastBenchmark?.profile ?? 'UNKNOWN',
       workspaceMode: ws.mode ?? 'plaintext_dev',
       workspaceReady: unlocked,
-      machineRamGb: machineRamGb()
+      machineRamGb: machineRamGb(),
+      // Phase 37: dictation is availability-driven (transcriber selected at startup
+      // iff whisper binary + weights exist) — the composer mic gates on this flag.
+      dictationAvailable: ctx.transcriber != null
     }
   })
 

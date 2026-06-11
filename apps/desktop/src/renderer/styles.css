@@ -753,6 +753,19 @@ code, pre, kbd { font-family: var(--font-mono); }
 .chat-input:focus { border-color: var(--focus); }
 .composer-footer { display: flex; gap: 12px; align-items: center; min-height: 26px; }
 
+/* Voice-dictation mic (Phase 37): quiet ghost button beside Send; while recording it
+   pulses so stopping is obvious (the OS mic indicator is the authoritative signal). */
+.dictation-btn { min-width: 44px; }
+.dictation-btn.dictation-recording {
+  color: var(--accent);
+  border-color: var(--accent);
+  animation: dictation-pulse 1.6s ease-in-out infinite;
+}
+@keyframes dictation-pulse { 50% { opacity: 0.45; } }
+@media (prefers-reduced-motion: reduce) {
+  .dictation-btn.dictation-recording { animation: none; }
+}
+
 /* Documents screen */
 .doc-card { display: flex; flex-direction: column; gap: 10px; }
 .doc-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }

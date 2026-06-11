@@ -60,6 +60,10 @@ export const IPC = {
   /** Cancel a task; with no jobId, cancels the currently active one. */
   cancelDocTask: 'doctasks:cancel',
   askDocuments: 'rag:ask',
+  // Phase 37 — voice dictation (request/response; bytes in, text out, nothing stored)
+  /** Transcribe recorded composer audio (16 kHz mono WAV bytes) into plain text. The
+   *  recording is content: never logged, never audited, shredded after transcription. */
+  transcribeDictation: 'dictation:transcribe',
   // Phase 18 — in-app model downloader (async with polling, the Phase-4 import precedent)
   /** Start downloading one model's weights (gated: policy ∧ setting ∧ confirmation). */
   downloadModel: 'downloads:start',

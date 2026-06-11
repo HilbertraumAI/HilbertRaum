@@ -1,6 +1,6 @@
 # Private AI Drive Lite — User Guide
 
-_Last updated: 2026-06-10 (Phase 27)_
+_Last updated: 2026-06-11 (Phase 37 — voice dictation)_
 
 Private AI Drive Lite is a private AI workspace that runs **entirely on your laptop**, from
 a portable drive. Your prompts, documents, embeddings, and chat history stay local. There is
@@ -200,6 +200,27 @@ the message box — and, if you haven't imported anything yet, offers **Add docu
 about them**.
 
 Everything you type and everything the model replies stays on your device.
+
+### Dictate a message (voice)
+
+If your drive has the speech model installed (the same one that transcribes audio
+recordings — see §7), a small **microphone button** appears next to **Send**:
+
+1. Click the mic to start recording. Your computer's usual microphone indicator turns on,
+   and the button pulses while it listens. The first time, Windows/macOS may ask you to
+   allow microphone access for the app.
+2. Speak, then click the mic again to stop. After a brief moment the recognized text
+   appears in the message box, right where your cursor was — it does **not** send
+   anything.
+3. Read it, fix anything the model misheard, and press **Send** when you're happy. You can
+   dictate again to add more.
+
+Dictation happens entirely on this drive: the recording is turned into text by the local
+speech model and then securely deleted — it is never saved, never listed anywhere, and
+never leaves your device. If no microphone button is visible, the speech model isn't
+installed on this drive (you can add it from the **AI Model** screen if downloads are
+enabled). German and English both work — speak naturally, in whole sentences, for the
+best results.
 
 ### Find something you talked about (search)
 

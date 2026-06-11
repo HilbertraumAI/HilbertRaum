@@ -1,10 +1,12 @@
 # Post-MVP Functionality — wave 3 working paper (Phases 31–38)
 
-_Status: **WORKING PAPER — Phases 31–36 DONE 2026-06-11 (§4/§5/§6/§7/§8/§9 are their
-condensed design records; the §12 session-hardening rider shipped with 31; R-T1 resolved
+_Status: **WORKING PAPER — Phases 31–37 DONE 2026-06-11 (§4/§5/§6/§7/§8/§9/§10 are their
+condensed design records; the §12 session-hardening rider shipped with 31 and gained its
+single scoped mic allow with 37; R-T1 resolved
 with 33; R-T2 FULLY resolved — translation half with 34 (D36), comparison half with 35
 (D37); R-W1..R-W4 ALL resolved with 36 (D34 → per-file CLI, D35 → keep the copy);
-Phases 37–38 NOT IMPLEMENTED** (drafted
+D30 implemented as locked by 37;
+Phase 38 NOT IMPLEMENTED** (drafted
 2026-06-10; **review round 1 resolved
 2026-06-11**: D23–D30 + D33 locked, see §13; D31/D32 stay open by design — they resolve
 with research gates R-O1/R-O2. **Plan audit 2026-06-11:** every §2 fact re-verified
@@ -28,7 +30,7 @@ The eight features (user-selected 2026-06-10):
 | 34 | Document translation workflow — **✅ DONE 2026-06-11** | S–M | Phase 33 (task machinery) | none |
 | 35 | Compare two documents — **✅ DONE 2026-06-11** | M | Phase 33 (task machinery) | none |
 | 36 | Audio transcription as ingestion (whisper.cpp) — **✅ DONE 2026-06-11** | L | research gates R-W1..R-W4 (all resolved) | **whisper.cpp sidecar family + whisper GGML weights** |
-| 37 | Voice dictation in the composer | S–M | Phase 36 (transcriber) | none beyond 36 |
+| 37 | Voice dictation in the composer — **✅ DONE 2026-06-11** | S–M | Phase 36 (transcriber) | none beyond 36 |
 | 38 | Scanned-PDF / photo OCR | M–L | research gates R-O1..R-O3 | **tesseract.js (WASM) + vendored traineddata** |
 
 **Recommended serial order: 31 → 32 → 33 → 34 → 35 → 36 → 37 → 38.** Rationale in §3.
@@ -498,45 +500,66 @@ licenses), `user-guide.md` §7 ("Import an audio recording"), `known-limitations
   the exact friendly failure banner. Gate: typecheck clean, 910/910 + manual skips,
   build green.
 
-## 10. Phase 37 — Voice dictation into the chat composer
+## 10. Phase 37 — Voice dictation into the chat composer — ✅ DONE (2026-06-11, as implemented)
 
-**Goal:** push-to-talk in the composer: hold/click to record, release → transcribe locally →
-text appears in the input for review (never auto-sent).
+Shipped exactly per the locked D30 pipeline (renderer bytes → main transient → Phase-36
+transcriber), as a thin client of Phase 36. Durable design now in `architecture.md`
+(§ "Voice dictation"), `security-model.md` (the scoped-permission section + the
+dictation data-path section), `user-guide.md` §6 ("Dictate a message"),
+`known-limitations.md` ("Voice dictation"), `PRIVACY.md` (microphone bullet). Record of
+what was built:
 
-**Design sketch (D30).** Renderer: `getUserMedia` audio → `MediaRecorder` (webm/opus) →
-decode + resample to 16 kHz mono PCM via `OfflineAudioContext` → encode WAV in JS (pure
-renderer, no new deps) → hand the bytes to main over a new IPC `dictation:transcribe`
-(bytes, not a user path) → main writes a transient temp WAV using the **`.parse` infix
-convention** (so the startup `shredStalePlaintext` crash sweep covers it — the
-documented ingestion-temp pattern, `ingestion/index.ts:367`), shredded after → runs the
-Phase-36 transcriber, returns text. Composer inserts at cursor. Feature visible only when
-the transcriber is available (availability-driven, D14 precedent).
-
-**Permission posture (AUDIT CORRECTION 2026-06-11):** the codebase has **no
-`setPermissionRequestHandler` at all**, and Electron's default with no handler is to
-**GRANT** permission requests — the opposite of the drafted assumption. Phase 37 must
-install a **deny-by-default** handler with a single `media` (audio) exception for our own
-renderer. That handler is an independent hardening win (it closes geolocation/
-notifications/etc. for any renderer content) — small enough to land with whatever wave-3
-phase ships first rather than waiting for Phase 37.
-
-**Privacy:** the recording exists only as a transient temp file, shredded
-(`shredFile` exists); no audit event (content-adjacent); mic indicator is the OS's own.
-Locked workspace: composer doesn't exist pre-unlock — no special handling.
-
-**Where to look in detail:**
-- The session setup in `main/index.ts` (where CSP is installed) — the right install site
-  for the deny-by-default permission handler; the `media` allow must not loosen anything
-  else (audited: no handler exists today, see above).
-- Whether the transcriber accepts stdin/bytes or only file paths — ANSWERED by Phase 36
-  (D34): the CLI takes FILE PATHS only ⇒ dictation writes the temp WAV exactly as
-  sketched above (`.parse` infix, shredded). The `Transcriber.transcribe(filePath)`
-  interface + `TranscribeOptions.workDir` are the ready-made seam.
-- Composer focus/undo behavior on insert (`renderer/chat/Composer.tsx`).
-
-**Tests:** WAV encode round-trip (pure function, unit-testable); IPC temp-file lifecycle
-incl. shred-on-error; availability gating in the composer (renderer test); permission
-handler scope test.
+- **Renderer capture (D30, zero new deps):** `renderer/lib/dictation.ts` — `getUserMedia`
+  audio → `MediaRecorder` (webm/opus) → decode + resample/downmix to **16 kHz mono** in
+  ONE `OfflineAudioContext` render → `renderer/lib/wav.ts` `encodeWavPcm16` (pure JS,
+  hand-written RIFF header, unit round-tripped incl. clamping). Streaming ASR stayed out
+  of scope.
+- **IPC `dictation:transcribe`** (+ preload `transcribeDictation`; request/response, no
+  new event channels): `ipc/registerDictationIpc.ts` writes the bytes to
+  `<uuid>.parse-dictation.wav` in the documents dir (the `.parse` infix ⇒ the startup
+  `shredStalePlaintext` crash sweep covers a crash mid-dictation), runs
+  `Transcriber.transcribe(tempPath, { workDir: documentsDir })` (the CLI's own transcript
+  JSON transient lands in the same swept dir), returns whitespace-normalized joined text,
+  **shreds the WAV in `finally`**. Guards: absent transcriber → friendly refusal
+  (backstop — the UI is hidden anyway); empty/non-byte payload rejected before disk;
+  64 MB cap (≈35 min of 16 kHz PCM16) with "import the audio file instead" copy. Failures
+  return the fixed friendly copy ("Could not transcribe that — try again."); the technical
+  reason goes to the local log only (stderr-only tails, the Phase-36 guarantee). **No
+  audit event** (content-adjacent, plan §12).
+- **Permissions (the §12 audit item, closed):** `services/permissions.ts` became
+  `installPermissionRequestHandler(session, { allowMicrophoneFor })` — still
+  deny-by-default; grants ONLY `media` requests that are **audio-only** (`mediaTypes`
+  present and all `'audio'`; absent/empty = unverifiable = denied) **and** from the app's
+  own WebContents (reference-compared). The unit test drives the full scope matrix
+  (other requester / video / audio+video / no details / every other permission) so the
+  allow cannot silently widen. `details` is typed `unknown` in the structural session
+  slice (Electron's non-media `details` union members share no properties with the media
+  shape — a narrower type fails assignability against the real `Session`).
+- **Availability gating (D14 precedent, no settings key):** additive
+  `AppStatus.dictationAvailable` (= `ctx.transcriber != null`); ChatScreen reads it
+  best-effort and the mic simply doesn't render without it.
+- **Composer UI:** `renderer/chat/DictationButton.tsx` (ghost mic beside Send;
+  click-to-start / click-to-stop with `aria-pressed`, pulse while recording —
+  `prefers-reduced-motion` respected; spinner while transcribing; disabled while an
+  answer streams; unmount mid-recording cancels + releases the mic). The OS mic
+  indicator is the recording signal. Insert-at-cursor lives in `Composer.tsx`: prefers
+  `document.execCommand('insertText')` so the insert joins the textarea's native undo
+  stack and React's onChange fires naturally; falls back to a value splice + caret
+  restore (the jsdom test path). Space-padding against neighbours; **never auto-sends**.
+  Failures surface through the screen's existing error Banner (`onDictationError`);
+  empty transcription gets its own no-speech notice. Capture is injectable
+  (`dictationCaptureImpl`) for renderer tests — the spawnImpl precedent.
+- **Tests (+21 net; 931/931 green):** `unit/wav.test.ts` (header/round-trip/clamp/empty),
+  `unit/permissions.test.ts` (scope matrix), `integration/dictation-ipc.test.ts`
+  (temp-file naming + dir + bytes fidelity, workDir steering, shred on success AND error,
+  friendly absent/empty/oversize refusals, raw CLI error never crosses IPC, no audit,
+  Buffer payload), `renderer/Dictation.test.tsx` (ChatScreen gating both ways, record →
+  insert-at-caret with spacing + caret restore, never-send, no-speech notice, IPC-prefix
+  stripping, mic-blocked recovery, unmount releases mic). Manual harness
+  `tests/manual/dictation-smoke.test.ts` (`PAID_DICTATION_SMOKE` + `PAID_WHISPER_AUDIO`)
+  drives the REAL whisper-cli through the real IPC handler with real German WAV bytes —
+  a real microphone is not headlessly drivable; the renderer half needs a human in the
+  built app.
 
 ## 11. Phase 38 — Scanned-PDF / photo OCR
 
@@ -606,8 +629,8 @@ manual smoke behind `PAID_OCR_SMOKE` with a real scan fixture on the test drive.
   `dictation:transcribe` (+ preload mirrors). All follow existing patterns (request/response
   or async-with-polling; no new event channels).
 - **Session hardening (audit):** the deny-by-default `setPermissionRequestHandler` (§10) —
-  **SHIPPED with Phase 31** (`services/permissions.ts`, no exceptions yet; Phase 37 adds the
-  scoped `media` allow); documented in `security-model.md`.
+  **SHIPPED with Phase 31** (`services/permissions.ts`); **Phase 37 added the single scoped
+  `media` (audio-only, own-WebContents) allow** — documented in `security-model.md`.
 - **Drive layout:** `runtime/whisper.cpp/<os>/`, `models/transcriber/` (manifest-driven,
   role-named like `models/reranker`), `ocr/` assets — `drive.ts` `DRIVE_LAYOUT_DIRS` + both
   script families + `drive-layout.md`.
@@ -634,7 +657,7 @@ manual smoke behind `PAID_OCR_SMOKE` with a real scan fixture on the test drive.
 | D28 | Compare result form + big-doc strategy | **RESOLVED (round 1): materialized "Comparison: A vs B" document** (same principle as D27, `origin_json` records both source ids); auto mode-switch full-stuff vs section-matched (vector-paired) by token math. No new result tables. **Implemented in Phase 35 (§8)** |
 | D37 | Compare mode-(a) input + mode decision: chunks vs re-parse | **RESOLVED (Phase 35, 2026-06-11): re-extract the parser's SEGMENTS** (the D36 path) for mode (a)'s input AND for the mode decision itself. Two reasons beyond D36's: chunk overlap would present duplicated text as phantom "shared" content to a comparison, and the ~80-token overlap inflates a chunk-based length estimate by ~16% — enough to mis-route a fitting pair into the heavier mode (b). Mode (b)'s map step deliberately uses the stored CHUNKS instead (the pairing needs their vectors; per-pair notes tolerate overlap like summary partials, D25 precedent). Regression-tested (every source word exactly once in the mode-(a) prompt) |
 | D29 | Timestamp representation | **RESOLVED (round 1):** whisper segments → `sectionLabel: "mm:ss–mm:ss"` (existing `Citation.section` surfaces it). No schema change |
-| D30 | Dictation capture pipeline | **RESOLVED (round 1):** renderer MediaRecorder → OfflineAudioContext resample → WAV bytes → main temp file (shredded) → transcriber; mic via scoped `setPermissionRequestHandler`. Streaming ASR explicitly out of scope |
+| D30 | Dictation capture pipeline | **RESOLVED (round 1):** renderer MediaRecorder → OfflineAudioContext resample → WAV bytes → main temp file (shredded) → transcriber; mic via scoped `setPermissionRequestHandler`. Streaming ASR explicitly out of scope. **Implemented in Phase 37 (§10) exactly as locked** |
 | D31 | OCR execution context | **OPEN (by design):** hidden renderer/worker vs `utilityProcess` + OffscreenCanvas — R-O1 decides; photos possibly main-side directly. BLOCKING for Phase 38 implementation |
 | D32 | OCR asset distribution | **OPEN (by design):** extend `runtime-sources.yaml` (new asset class) vs dedicated `fetch-ocr` script entry. Resolve with R-O2's asset inventory |
 | D33 | OCR trigger | **RESOLVED (round 1): never automatic for PDFs** — detection notice + explicit "Make searchable (OCR)" cancellable task with progress; photos OCR on import (small, fast). Auto-on-import and a settings toggle rejected (silent slow imports / a key + two code paths before the feature exists) |

@@ -1,6 +1,6 @@
 # Privacy Notice — Private AI Drive Lite
 
-_Last updated: 2026-06-10 (Phase 18 — in-app model downloader)_
+_Last updated: 2026-06-11 (Phase 37 — voice dictation)_
 
 Private AI Drive Lite runs AI models **locally** on your laptop. This document explains, in plain
 language, what the app does and does not do with your data.
@@ -21,6 +21,11 @@ This app does not send your data to cloud AI providers.
 - **No document upload.** Imported files are processed locally.
 - **No audio upload.** Imported recordings are transcribed **on this device** by a local
   speech-recognition model (whisper.cpp) — no cloud speech service is ever involved.
+- **No microphone data leaves this device, and none is kept.** Voice dictation (the mic in the
+  chat message box) records only while you ask it to, turns the speech into text with the same
+  local model, puts the text in the message box for you to review, and securely deletes the
+  recording. Dictations are not saved, not logged, and never sent anywhere — the message itself
+  is only sent to the local model when you press Send.
 - **No embedding upload.** Vector indexes stay local.
 - **No automatic model downloads** unless you explicitly opt in.
 

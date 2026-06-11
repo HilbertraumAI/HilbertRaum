@@ -244,6 +244,25 @@ logs, best-effort shredding on SSDs, no password recovery — are documented in
   held up well in the German probes. The transcript is searchable text, not a notarized
   record.
 
+## Voice dictation (Phase 37, wave-3 plan §10)
+
+- **Dictation is click-to-start / click-to-stop, then transcribe — not live.** Streaming
+  ASR (words appearing while you speak) is explicitly out of scope (D30); the per-file
+  whisper CLI transcribes only a finished recording. The wait after stopping is the
+  whisper small model's real-time factor (~0.5× on the reference CPU), so a 15-second
+  dictation takes a few seconds to land. A warm whisper-server mode is the recorded
+  follow-up if dictation latency ever warrants it (D34's revisit clause).
+- **The mic appears only when the speech model is installed** (the same
+  availability-driven gate as audio import — no settings key). On a drive without the
+  whisper binary + weights there is no dictation affordance at all, by design.
+- **Whisper, not the OS, decides what was said.** Dictation quality is the small model's
+  (see "Audio transcription" above); the text always lands in the message box for review
+  and is never auto-sent — that review step is the accuracy backstop.
+- **No interim cancel-without-transcribe control.** Stopping the recording always
+  transcribes and inserts; deleting unwanted text is one Ctrl+Z / selection away
+  (the insert participates in the input's normal undo history). Leaving the screen
+  mid-recording discards the recording and releases the microphone.
+
 ## GPU acceleration (Phases 14–16, [`gpu-support-plan.md`](gpu-support-plan.md))
 
 - **Integrated GPUs (Intel Iris Xe / UHD, AMD APU "Radeon Graphics") gain little.** They share

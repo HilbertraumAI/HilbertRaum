@@ -1,6 +1,6 @@
 # Architecture — Private AI Drive Lite
 
-_Last updated: 2026-06-09 (Phases 11–13 + audit rounds — see the new sections below)_
+_Last updated: 2026-06-11 (Phase 37 — voice dictation)_
 
 ## Overview
 
@@ -256,6 +256,33 @@ it fails with friendly convert-to-WAV/MP3 copy.
   CPU, peak RSS ≈ 1.2 GB with the small model — honest progress is mandatory).
 - **Audit:** the existing `document_imported` (filename + id only) covers audio; the
   transcript is CONTENT and never reaches `runtime_events` (sentinel-tested end-to-end).
+
+## Voice dictation (Phase 37, wave-3 plan §10, decision D30)
+
+Push-to-talk into the chat composer — a thin client of the Phase-36 transcriber. The
+whole pipeline (locked in D30): renderer `getUserMedia` audio → `MediaRecorder`
+(webm/opus) → decode + resample to **16 kHz mono** via an `OfflineAudioContext` render →
+**pure-JS WAV encode** (`renderer/lib/wav.ts`, no new deps) → BYTES over the
+request/response IPC **`dictation:transcribe`** (preload `transcribeDictation`; no new
+event channels) → main writes a transient `<uuid>.parse-dictation.wav` into the
+documents dir (the `.parse` infix = crash-sweep coverage), runs
+`Transcriber.transcribe(tempPath, { workDir })`, **shreds the WAV in `finally`**, returns
+the text. The composer (`renderer/chat/DictationButton.tsx` + `Composer.tsx`) inserts it
+**at the cursor for review — never auto-sent**; the insert prefers
+`execCommand('insertText')` so it joins the input's normal undo history. Streaming ASR is
+explicitly out of scope.
+
+- **Availability-driven (D14 precedent, no settings key):** `AppStatus.dictationAvailable`
+  = "a transcriber is selected"; the mic button simply doesn't render without it. The IPC
+  refuses friendly as a backstop.
+- **Permissions:** the Phase-31 deny-by-default `setPermissionRequestHandler` gained its
+  single exception — `media` requests that are **audio-only and from the app's own
+  WebContents** (`services/permissions.ts`; scope matrix unit-tested). See
+  `security-model.md`.
+- **Privacy:** the recording exists only as the shredded transient; **no audit event**
+  (content-adjacent, like search); errors to the renderer are fixed friendly copy with
+  the technical reason in the local log only. The OS mic indicator is the recording
+  signal. Locked workspace needs no handling — the composer doesn't exist pre-unlock.
 
 ## Document tasks (Phases 33–35, wave-3 plan §6/§7/§8)
 - **`services/doctasks.ts` — the shared task engine.** A job state machine on the Phase-4/18

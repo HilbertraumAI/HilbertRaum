@@ -80,6 +80,10 @@ export function ChatScreen({ onNavigate, initialMode, initialScopeDocumentIds }:
   // Imported documents — drives the scope popover's titles and the empty-state nudge.
   // Best-effort: a failed load just hides both affordances.
   const [docs, setDocs] = useState<DocumentInfo[]>([])
+  // Voice dictation (Phase 37): availability-driven — the composer mic renders only
+  // when a transcriber is selected (whisper binary + weights on the drive). Best-effort
+  // like `docs`: a failed status read just hides the mic.
+  const [dictationAvailable, setDictationAvailable] = useState(false)
   // Scope for the NEXT documents conversation (from "Ask these documents"); once a
   // conversation is created it owns the scope (`scopeDocumentIds`) and this clears.
   const [pendingScope, setPendingScope] = useState<string[] | null>(initialScopeDocumentIds ?? null)
@@ -151,6 +155,14 @@ export function ChatScreen({ onNavigate, initialMode, initialScopeDocumentIds }:
         setDocs((await window.api.listDocuments()) ?? [])
       } catch {
         setDocs([])
+      }
+    })()
+    void (async () => {
+      try {
+        const status = await window.api.getAppStatus()
+        setDictationAvailable(status?.dictationAvailable === true)
+      } catch {
+        setDictationAvailable(false)
       }
     })()
   }, [refreshConversations, checkRuntime])
@@ -580,6 +592,8 @@ export function ChatScreen({ onNavigate, initialMode, initialScopeDocumentIds }:
           placeholder={mode === 'documents' ? 'Ask about your documents…' : 'Message…'}
           sendLabel={mode === 'documents' ? 'Ask' : 'Send'}
           inputRef={composerRef}
+          dictationAvailable={dictationAvailable}
+          onDictationError={setError}
           footer={
             mode === 'documents' ? (
               <ScopePopover

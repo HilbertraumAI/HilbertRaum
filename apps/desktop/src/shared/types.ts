@@ -22,6 +22,12 @@ export interface AppStatus {
   workspaceReady: boolean
   /** Total RAM of THIS machine, rounded to whole GB (drives the Models RAM gate copy). */
   machineRamGb: number
+  /**
+   * A speech transcriber is selected (whisper binary + weights present — Phase 36).
+   * Availability-driven UI gate for voice dictation (Phase 37, the D14 precedent):
+   * the composer mic renders only when true. No settings key.
+   */
+  dictationAvailable: boolean
 }
 
 // ---- Privacy / offline policy (Phase 8, spec §6 config/policy.json + §3.5/§3.6) ----

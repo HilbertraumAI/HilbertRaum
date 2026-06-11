@@ -312,7 +312,8 @@ describe('HomeScreen — readiness hub (Phase 26)', () => {
         hardwareProfile: 'UNKNOWN' as const,
         workspaceMode: 'plaintext_dev' as const,
         workspaceReady: true,
-        machineRamGb: 16
+        machineRamGb: 16,
+        dictationAvailable: false
       })),
       getRuntimeStatus: vi.fn(async () => ({
         running: opts.running ?? false,

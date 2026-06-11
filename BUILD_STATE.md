@@ -156,6 +156,20 @@ null-not-mock selector), and `AudioParser` (packed time-labeled segments → D29
 chunks, no re-transcription) shipped; D35 resolved = keep the audio copy + size confirm +
 "Transcribing… N%" + re-index-is-re-transcription documented; plan §9 condensed to its
 design record (§3 entry).
+**Phase 37 (voice dictation in the composer, D30) is DONE 2026-06-11** — the locked D30
+pipeline as a thin client of the Phase-36 transcriber: renderer `getUserMedia` →
+`MediaRecorder` → ONE `OfflineAudioContext` render to 16 kHz mono → pure-JS WAV encode
+(`renderer/lib/wav.ts`, zero new deps) → BYTES over the new request/response
+`dictation:transcribe` IPC → main writes `<uuid>.parse-dictation.wav` in the documents
+dir (`.parse` infix ⇒ crash-sweep covered), runs the transcriber (`workDir` steered into
+the same swept dir), shreds in `finally`, returns text; the composer mic
+(`DictationButton`) inserts AT THE CURSOR via `execCommand('insertText')` (joins native
+undo) with a splice fallback — NEVER auto-sent; availability-driven via the additive
+`AppStatus.dictationAvailable` (D14 precedent, no settings key); the Phase-31 permission
+handler gained its SINGLE scoped allow (audio-only `media` from our own WebContents —
+scope matrix unit-tested, nothing else loosened); no audit event (content-adjacent,
+plan §12); friendly §11.4 error copy with the technical reason in the local log only;
+plan §10 condensed to its design record (§3 entry).
 Release-wise,
 remaining work = **manual release acceptance only** (§5, incl. the GPU
 hardware matrix, item 1b). Consciously-accepted gaps live in
@@ -204,6 +218,7 @@ hardware matrix, item 1b). Consciously-accepted gaps live in
 | 34 | Document translation workflow (wave-3 plan §7, D27/D36) | 🟢 done (2026-06-11) — `translation` kind on the Phase-33 engine (`targetLang: 'de'\|'en'`), D36 resolved (re-extracted parser segments, never the overlapping chunks), R-T2-measured window math (German out ≈ 2 tok/word — half/half split truncated and was fixed), retry-once-then-mark failed windows, materialized "<original> (Deutsch\|English).md" via the normal import path under the Phase-32 lease, `documents.origin_json` provenance, `docs:export` save-dialog export, Translate UI + provenance line; R-T2 translation half resolved on real b9585 + Qwen3-4B |
 | 35 | Compare two documents (wave-3 plan §8, D28/D37) | 🟢 done (2026-06-11) — `compare` kind on the same engine (exactly two distinct indexed sources), auto mode-switch by token math: full compare over re-extracted segments (D37) vs section-matched via the EXISTING `VectorIndex` `documentIds` scope (stored vectors, deterministic pairing, ceiling 12 + honest in-report truncation notice), embedder-visibility guard ("re-index first" before any model call), materialized "Comparison: <A> vs <B>.md" with `{ type: 'compare', comparedFrom: [a, b] }` provenance (additive `DocumentOrigin` union), ids-only audit incl. `documentIdB`, "Compare (2)" multi-select UI with both-rows busy state + report auto-open; R-T2 comparison half resolved on real b9585 + Qwen3-4B (2 smoke rounds — prompts hardened against a silent per-pair omission) |
 | 36 | Audio transcription as ingestion (wave-3 plan §9, D34/D35, R-W1..R-W4) | 🟢 done (2026-06-11) — **all four research gates resolved FIRST on the real pinned binary + real German audio** (R-W1: whisper.cpp **v1.8.6**, win prebuilt only, MIT, real hash → **D34 = per-file CLI**; R-W2: decodes wav/mp3/flac/ogg, m4a fails with **exit 0** → JSON-not-exit-code success signal; R-W3: **small** ships — base makes meaning-destroying German errors at 2.4× less cost; R-W4: 52-min mp3 = 35 min wall / 1.2 GB peak / `-pp` percent ticks → "Transcribing… N%"); additive `whisper_cpp:` yaml block + family-aware validator/fetch-scripts/layout/commercial gate; `whisper-small-multilingual` manifest (`role: transcriber`, real sha256, MIT approved) — Phase-18 downloader covers it with zero new code; `services/transcriber/` (D9 selector → real iff binary+weights else null, no mock; CLI per file, suspend/stop kill children, stderr-only error tails); `AudioParser` packs whisper segments into ≤400-word time-labeled segments (D29 `"mm:ss–mm:ss"` → `Citation.section`; 1 chunk = 1 segment ⇒ preview/translate/compare read STORED CHUNKS, no re-transcription); **D35 = keep the audio copy** (`.enc` at rest, re-index = full re-transcription, >50 MB import confirm via `docs:importPreflight`); friendly absent-transcriber per-file failure; audit sentinel audio leg; 910/910 + `PAID_WHISPER_SMOKE` manual harness; eyeballed in the built app (real + absent legs) |
+| 37 | Voice dictation in the composer (wave-3 plan §10, D30) | 🟢 done (2026-06-11) — composer mic (visible only with a transcriber selected — additive `AppStatus.dictationAvailable`, D14 precedent, no settings key): renderer `MediaRecorder` → one `OfflineAudioContext` render to 16 kHz mono → pure-JS WAV (`renderer/lib/wav.ts`, no new deps) → bytes over the new `dictation:transcribe` IPC → transient `<uuid>.parse-dictation.wav` in the documents dir (crash-sweep covered, `workDir` steered, shredded in `finally`) → Phase-36 transcriber → text inserted at the cursor (`execCommand('insertText')` = native undo; splice fallback) — NEVER auto-sent; Phase-31 permission handler gained its single scoped allow (audio-only `media` from our own WebContents; scope-matrix unit test); no audit event (content-adjacent); 64 MB cap + friendly §11.4 refusals; +21 tests (931 green) incl. `PAID_DICTATION_SMOKE` manual harness |
 
 Legend: ⚪ not started · 🟡 in progress · 🟢 done · 🔴 blocked
 
@@ -1927,6 +1942,67 @@ Repo root: `f:\_coding\ai_drive`.
      exe. The new stderr-only failure log in `AudioParser` records the technical
      reason if it ever recurs.)
 
+- **Phase 37 — voice dictation in the composer (2026-06-11; plan §10 condensed to its
+  design record; D30 implemented exactly as locked):**
+  1. **Renderer capture (D30, zero new deps):** `renderer/lib/dictation.ts` —
+     `getUserMedia({ audio: true })` → `MediaRecorder` (webm/opus) → decode + resample +
+     mono-downmix in ONE `OfflineAudioContext` render at **16 kHz** →
+     `renderer/lib/wav.ts` `encodeWavPcm16` (pure-JS RIFF/fmt/data header, clamped
+     asymmetric int16 mapping; unit round-tripped). Streaming ASR out of scope (D30).
+  2. **IPC `dictation:transcribe`** (+ preload `transcribeDictation`;
+     request/response, no new event channels): `ipc/registerDictationIpc.ts` writes
+     the bytes to `<uuid>.parse-dictation.wav` in the DOCUMENTS dir (the `.parse`
+     infix ⇒ `shredStalePlaintext` crash-sweep coverage), calls
+     `transcriber.transcribe(tempPath, { workDir: documentsDir })` so the CLI's own
+     transcript-JSON transient lands in the same swept dir, returns
+     whitespace-normalized joined text, **shreds the WAV in `finally`** (success and
+     failure — tested both ways). Guards: absent transcriber → friendly refusal
+     (backstop; the UI is hidden anyway); empty/non-byte payloads rejected before any
+     disk write; **64 MB cap** (≈35 min of 16 kHz mono PCM16) with import-the-file-
+     instead copy. Failures cross IPC as the fixed friendly copy ("Could not
+     transcribe that — try again."); the technical reason goes to the LOCAL log only
+     (transcriber error tails are stderr-only — the Phase-36 guarantee). **No audit
+     event** (dictation is content-adjacent, like search — plan §12).
+  3. **Permissions (the §12 audit item closed):** `services/permissions.ts` →
+     `installPermissionRequestHandler(session, { allowMicrophoneFor, onDeny })` —
+     still deny-by-default; grants ONLY `media` requests that are **audio-only**
+     (`mediaTypes` present and every entry `'audio'`; absent/empty = unverifiable =
+     denied) AND reference-equal to the app's own `mainWindow.webContents`. The unit
+     test drives the full scope matrix (other requester / video / audio+video / no
+     details / every other permission / grants-don't-log). ⚠️ Typing note: the
+     structural session slice types the handler's `details` as `unknown` — Electron's
+     non-media `details` union members share no properties with the media shape, so a
+     narrower structural type fails assignability against the real `Session`.
+  4. **Availability gating (D14 precedent, NO settings key):** additive
+     `AppStatus.dictationAvailable = ctx.transcriber != null` (`registerCoreIpc`);
+     ChatScreen reads it best-effort (failure → hidden) and passes it to the Composer —
+     without a transcriber there is no mic affordance at all.
+  5. **Composer UI:** `renderer/chat/DictationButton.tsx` — ghost mic beside Send
+     (inline SVG, no icon dep); click-to-start / click-to-stop with `aria-pressed`,
+     CSS pulse while recording (`prefers-reduced-motion` respected), spinner while
+     transcribing, disabled while an answer streams, unmount mid-recording cancels +
+     releases the mic; the OS mic indicator is the recording signal (no overlay).
+     Insert-at-cursor in `Composer.tsx`: prefers `document.execCommand('insertText')`
+     (joins the textarea's NATIVE undo stack; React onChange fires from the input
+     event) with a value-splice + caret-restore fallback (the jsdom path); space-pads
+     against neighbours; **never auto-sends** — the text always waits for review.
+     Errors surface through the screen's existing error Banner (`onDictationError` →
+     `setError`); an empty transcription gets its own no-speech notice. Capture is
+     injectable (`dictationCaptureImpl` — the spawnImpl precedent) for renderer tests.
+  6. **Tests (+21 net; total 931):** `unit/wav.test.ts` (header fields, sine
+     round-trip within quantization, clamping, empty file, bad rate) ·
+     `unit/permissions.test.ts` (the scope matrix) · `integration/dictation-ipc.test.ts`
+     (temp naming/dir/bytes fidelity, workDir steering, shred on success AND error,
+     friendly absent/empty/oversize refusals, raw CLI error never crosses IPC, no
+     audit, Buffer payload) · `renderer/Dictation.test.tsx` (ChatScreen gating both
+     ways, record → insert-at-caret with spacing + caret restore, never-send,
+     no-speech notice, IPC-prefix stripping, mic-blocked recovery, unmount releases
+     the mic). Manual: `tests/manual/dictation-smoke.test.ts` behind
+     `PAID_DICTATION_SMOKE` + `PAID_WHISPER_AUDIO` — real German WAV bytes through the
+     REAL whisper-cli via the real IPC handler (a real microphone is not headlessly
+     drivable; the renderer half needs a human in the built app). Gate: typecheck
+     clean, **931/931** (+24 manual skips), build green.
+
 ---
 
 ## 4. Shared data contracts (the actual "transported data")
@@ -1985,7 +2061,12 @@ now a discriminated union — `{ type: 'translation', translatedFrom, targetLang
 `{ type: 'compare', comparedFrom: [a, b] }`; Phase-34 rows persisted without `type` parse as
 `'translation'`, an additive migration) +
 `exportDocument` (`docs:export`, Phase 34 — save-dialog export of a text document's stored
-content, the `exportConversation` pattern; resolves with the path or null on cancel).
+content, the `exportConversation` pattern; resolves with the path or null on cancel) +
+`importPreflight` (`docs:importPreflight`, Phase 36 — read-only selection summary driving the
+large-audio import confirm; `DocumentInfo` gained optional `transcriptionProgress`) +
+`transcribeDictation(audio: Uint8Array): Promise<string>` (`dictation:transcribe`, Phase 37 —
+voice dictation: 16 kHz mono WAV bytes in, plain text out; request/response, nothing persisted,
+no audit; `AppStatus` gained the additive `dictationAvailable: boolean` gate).
 (`pickDocuments` + `reindexDocument` are Phase-4 additions to the `IPC` registry beyond the spec
 §9.1 list — picker + re-index UX; `getPolicy` is a Phase-8 addition; the four `workspace:*` channels
 are Phase-9 additions.) `createConversation` now also accepts an optional `mode`
@@ -2723,20 +2804,24 @@ items are **MANUAL acceptance only** (R2/R5/R7 + the GPU hardware matrix). In ro
    manifest (`role: transcriber`), `services/transcriber/` + `AudioParser` (D29 time-range
    citations), the D35 riders (size confirm, "Transcribing… N%" on import/re-index), and
    the `PAID_WHISPER_SMOKE` manual harness all shipped; plan §9 condensed to its design
-   record. **Next: Phase 37 (voice dictation in the composer)** — a thin client of the
-   Phase-36 transcriber (D30 resolved: renderer MediaRecorder → 16 kHz WAV bytes → main
-   temp file with the `.parse` infix, shredded → `Transcriber.transcribe` — the CLI takes
-   file paths, so the temp-WAV shape is settled). NOTE for 37: the Phase-31
-   deny-by-default permission handler gains its single scoped `media` (audio) exception
-   there (`services/permissions.ts` — currently NO exceptions); composer
-   insert-at-cursor + availability gating (visible only when `ctx.transcriber` exists).
-   Then Phase 38 (OCR) behind its own gates R-O1..R-O3 (D31/D32 still open by design).
+   record.
+   **Phase 37 (voice dictation in the composer) is DONE (2026-06-11)** — see the §1 row
+   + the §3 entry; the locked D30 pipeline shipped exactly as drafted (renderer
+   MediaRecorder → one OfflineAudioContext render to 16 kHz mono → pure-JS WAV → bytes
+   over `dictation:transcribe` → `.parse-dictation.wav` transient, shredded →
+   Phase-36 transcriber → insert-at-cursor, never auto-sent), the Phase-31 permission
+   handler gained its single scoped audio-only own-WebContents `media` allow, the mic is
+   availability-gated via `AppStatus.dictationAvailable`, and the `PAID_DICTATION_SMOKE`
+   manual harness covers the real-binary main-process half; plan §10 condensed to its
+   design record. **Next: Phase 38 (scanned-PDF / photo OCR)** behind its own research
+   gates R-O1..R-O3 (D31/D32 still open by design — they resolve with the gates); its
+   step 0 (image-only-PDF detection, no OCR needed) can ship early.
 
-**Current gate (2026-06-11, post-Phase-36): typecheck clean, 910/910 tests pass (+23 manual
+**Current gate (2026-06-11, post-Phase-37): typecheck clean, 931/931 tests pass (+24 manual
 tests behind `PAID_*` env vars — GPU/thinking/rerank/minsim/RAG-quality/bring-up/eval/
-concurrency-probe/translation/compare/whisper smokes — skipped in CI), `npm run build`
-green.** The per-phase gate history (test counts, bundle sizes, per-phase test inventories)
-lives in git history.
+concurrency-probe/translation/compare/whisper/dictation smokes — skipped in CI),
+`npm run build` green.** The per-phase gate history (test counts, bundle sizes, per-phase
+test inventories) lives in git history.
 
 ---
 

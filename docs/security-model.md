@@ -1,7 +1,7 @@
 # Security model — Private AI Drive Lite
 
-_Last updated: 2026-06-11 (Phase 32 — vault password change: descriptor v2 envelope,
-journaled v1→v2 migration)_
+_Last updated: 2026-06-11 (Phase 37 — voice dictation: the scoped microphone permission
+exception + the dictation temp-file posture)_
 
 This document describes the local threat model, the security baseline (spec §3.5), the offline
 posture (spec §3.6), how the privacy policy is loaded and enforced, and the **encrypted workspace**
@@ -30,7 +30,7 @@ posture (spec §3.6), how the privacy policy is loaded and enforced, and the **e
 | `will-navigate` blocks remote origins | `main/index.ts` |
 | `setWindowOpenHandler` opens external links in the OS browser, denies in-app | `main/index.ts` |
 | **Content-Security-Policy** (meta tag + response header) | `renderer/index.html`, `main/index.ts` |
-| **Deny-by-default permission-request handler** (Phase 31) | `services/permissions.ts`, installed in `main/index.ts` |
+| **Deny-by-default permission-request handler** (Phase 31; single scoped microphone allow added in Phase 37) | `services/permissions.ts`, installed in `main/index.ts` |
 | **No network in the core path** + startup self-check tripwire | `services/offlineGuard.ts` |
 | No model weights / user data in version control | `.gitignore` |
 | **Encrypted workspace** (AES-256-GCM at rest, Argon2id KDF — scrypt still supported, password never stored) | `services/security/crypto.ts`, `services/workspace-vault.ts` |
@@ -46,16 +46,32 @@ the `index.html` meta tag (defence in depth).
   `http://localhost:*`, and adds `'unsafe-inline'`/`'unsafe-eval'` to `script-src` (and
   `'unsafe-inline'` to `style-src`) for Vite hot-reload. Without this split, `npm run dev` would break.
 
-### Renderer permission requests: deny by default (Phase 31)
+### Renderer permission requests: deny by default, one scoped exception (Phases 31 + 37)
 Electron's default with **no** `session.setPermissionRequestHandler` installed is to **GRANT**
 every permission request (geolocation, notifications, media, …) — found by the 2026-06-11 wave-3
-plan audit. `services/permissions.ts` `installDenyAllPermissionHandler` therefore installs a
-deny-everything handler on the window's session (next to the CSP setup in `main/index.ts`,
-identical in dev and prod — `npm run dev` verified unaffected). There are **no exceptions**: the
-renderer needs none of these APIs today. Phase 37 (voice dictation) will add the single scoped
-`media` (audio) exception here. Denials are logged by permission *name* only — never content.
-Verified live: `Notification.requestPermission()` resolves `denied` and `getUserMedia(audio)`
-rejects `NotAllowedError` in the running app; a unit test drives the handler with a fake session.
+plan audit. `services/permissions.ts` `installPermissionRequestHandler` therefore installs a
+deny-by-default handler on the window's session (next to the CSP setup in `main/index.ts`,
+identical in dev and prod). Since Phase 37 there is exactly **one** exception, for voice
+dictation: a `media` request is granted **iff** it comes from the app's **own WebContents**
+(reference-compared against the main window) **and** its `mediaTypes` name **audio and nothing
+else**. Video capture, screen capture, a missing/empty `mediaTypes` (unverifiable scope), every
+other permission, and any other WebContents stay denied — the unit test drives the full scope
+matrix against a fake session, so the allow cannot silently widen. Denials are logged by
+permission *name* only — never content.
+
+### Voice dictation data path (Phase 37, decision D30)
+The composer mic records **in the renderer** (`getUserMedia` → `MediaRecorder`), resamples to
+16 kHz mono and encodes a WAV **in-page**, and sends the **bytes** (never a path) over the
+`dictation:transcribe` IPC. The main process writes them to a transient
+`<uuid>.parse-dictation.wav` under `workspace/documents/` — the `.parse` infix puts it under the
+same startup `shredStalePlaintext` crash sweep as every ingestion transient — runs the Phase-36
+whisper transcriber (whose own transcript JSON transient is steered into the same swept
+directory), returns the text, and **shreds the WAV in `finally`** (success or failure). Nothing
+about a dictation is persisted: the text goes only into the composer input for review (never
+auto-sent), there is **no audit event** (dictation is content-adjacent, like search), and errors
+returned to the renderer are fixed friendly copy — the technical reason goes to the local log
+only (transcriber error tails are stderr-only by the Phase-36 guarantee, never transcript
+content). The OS microphone indicator is the recording signal; the app adds no overlay of its own.
 
 ## Offline posture (spec §3.6)
 
