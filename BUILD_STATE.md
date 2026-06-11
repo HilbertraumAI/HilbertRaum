@@ -676,6 +676,27 @@ Repo root: `f:\_coding\ai_drive`.
      startup crash sweep); without a cipher an `.enc` copy is refused. Deliberately TEXT-only
      (never `shell.openPath`): the original bytes must never reach an external viewer in
      plaintext. Tested: ingestion + encrypted-leak tests + renderer modal tests.
+- **Post-MVP UX polish round 4 (2026-06-11) — two frontend issues:**
+  1. **Password "Show" toggle → eye icon:** the password-reveal control in the shared
+     `PasswordField` was a text "Show"/"Hide" Button; now an inline eye / eye-off SVG
+     (`currentColor`, muted→full on hover, decorative `aria-hidden`). A11y
+     preserved/improved: the Button keeps `aria-pressed` and carries a descriptive
+     `aria-label`/`title` ("Show password"/"Hide password"). Test name-queries updated.
+     (Merge note: the PR targeted the pre-Phase-32 copy inside `WorkspaceGate`; the change
+     was ported to the extracted `renderer/components/PasswordField.tsx`, so the Unlock,
+     first-run AND Settings → Change-password fields all get the icon.)
+  2. **Filename auto-scope for document chat:** other documents were cited as sources when a
+     question named one file, because document retrieval is **corpus-wide by default** —
+     nothing parsed the question for a filename (the scope plumbing itself was correct
+     end-to-end). New pure `detectFilenameScope(question, docs)` (`services/rag/scope.ts`,
+     unit-tested) matches a file by its title/stem as a whole-token run (token-boundary, lone
+     generic words ignored, whole-corpus match = no match). `askDocuments` applies it **only**
+     when the conversation has no explicit "ask selected documents" scope, as the per-request
+     `scopeDocumentIds` — narrows only, never widens; explicit scope always wins. Visible +
+     honest: a one-shot non-persisted `STREAM.scope` notice (`api.onScopeNotice`) → an
+     *"Answering from contract.pdf only"* toast in Chat. Tests: `tests/unit/rag-scope.test.ts`
+     + a `tests/integration/rag.test.ts` case proving unscoped surfaces both docs while the
+     detected scope returns only the named file. Design record: `docs/rag-design.md` §10.
 - **Doc lifecycle: finished plans become design records (2026-06-10):** implemented plan docs
   are condensed to short design records (decisions + load-bearing facts + the design as built)
   or deleted, with the full original in git history — finished plans otherwise drift and

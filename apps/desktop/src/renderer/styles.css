@@ -169,7 +169,16 @@ button { min-width: 24px; min-height: 24px; }
 .gate-actions-main { display: flex; gap: 10px; align-items: center; }
 .gate-pw-row { display: flex; gap: 6px; align-items: center; }
 .gate-pw-row .gate-input { flex: 1; }
-.gate-pw-toggle { flex-shrink: 0; }
+.gate-pw-toggle {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px;
+  color: var(--text-muted);
+}
+.gate-pw-toggle:hover { color: var(--text); }
+.gate-pw-toggle svg { display: block; }
 
 /* Password-strength meter: 4 segments + a word — never color alone (WCAG 1.4.1).
    Advisory only; it never disables the Create button. */

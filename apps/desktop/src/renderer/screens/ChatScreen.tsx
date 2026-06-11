@@ -240,6 +240,11 @@ export function ChatScreen({ onNavigate, initialMode, initialScopeDocumentIds }:
       pendingThinking.current += delta
       scheduleFlush()
     })
+    // Filename auto-scope notice: a one-shot hint that this document answer was
+    // restricted to the file(s) the question named (ephemeral — never persisted).
+    const unsubscribeScope = window.api.onScopeNotice(convId, ({ titles }) => {
+      if (titles.length > 0) showToast(`Answering from ${titles.join(', ')} only`)
+    })
     // Only update the visible transcript if the user is still looking at THIS
     // conversation — replacing another conversation's view with this one's messages
     // was the M2 corruption.
@@ -268,6 +273,7 @@ export function ChatScreen({ onNavigate, initialMode, initialScopeDocumentIds }:
     } finally {
       unsubscribe()
       unsubscribeReasoning()
+      unsubscribeScope()
       clearStreamBuffers()
       setStreaming(false)
       setStreamConvId(null)

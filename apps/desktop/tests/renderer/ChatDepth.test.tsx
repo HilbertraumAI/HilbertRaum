@@ -107,7 +107,8 @@ describe('ChatScreen — "Answer detail" dropdown (Phase 20 / D-UI4)', () => {
       getRuntimeStatus: vi.fn(async () => status({ supportsThinkingMode: true })),
       sendChatMessage,
       onToken: vi.fn(() => () => {}),
-      onReasoning: vi.fn(() => () => {})
+      onReasoning: vi.fn(() => () => {}),
+      onScopeNotice: vi.fn(() => () => {})
     })
     render(<ChatScreen onNavigate={() => {}} />)
     await user.click(await screen.findByText('Depth chat'))
@@ -176,7 +177,8 @@ describe('ChatScreen — "Answer detail" dropdown (Phase 20 / D-UI4)', () => {
       onReasoning: vi.fn((_id: string, cb: (d: string) => void) => {
         reasoningCb = cb
         return () => {}
-      })
+      }),
+      onScopeNotice: vi.fn(() => () => {})
     })
     render(<ChatScreen onNavigate={() => {}} />)
     await user.click(await screen.findByText('Depth chat'))

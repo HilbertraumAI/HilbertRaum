@@ -85,8 +85,16 @@ export const STREAM = {
   token: (requestId: string) => `chat:token:${requestId}`,
   done: (requestId: string) => `chat:done:${requestId}`,
   error: (requestId: string) => `chat:error:${requestId}`,
-  reasoning: (requestId: string) => `chat:reasoning:${requestId}`
+  reasoning: (requestId: string) => `chat:reasoning:${requestId}`,
+  // ADDITIVE: a one-shot ephemeral notice fired before a document answer when retrieval
+  // was auto-scoped to the file(s) the question named (never persisted — a live hint).
+  scope: (requestId: string) => `chat:scope:${requestId}`
 } as const
+
+/** Payload of the `scope` channel — the filenames retrieval was auto-restricted to. */
+export interface ScopeNotice {
+  titles: string[]
+}
 
 // One-off main -> renderer notices (not tied to a request).
 export const EVENTS = {

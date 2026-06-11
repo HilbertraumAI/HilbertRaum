@@ -11,6 +11,7 @@ import { MockEmbedder, encodeVector } from '../../src/main/services/embeddings'
 import {
   buildGroundedChatMessages,
   buildGroundedPrompt,
+  detectFilenameScope,
   generateGroundedAnswer,
   ragSettingsFrom,
   retrieve,
@@ -223,6 +224,38 @@ describe('retrieve', () => {
     const { chunks } = await retrieve(db, embedder, 'quantum chromodynamics gauge theory', strict)
     expect(chunks).toHaveLength(1)
     expect(chunks[0].text).toContain('quantum')
+  })
+
+  // Filename auto-scope (detectFilenameScope) + retrieve narrowing: naming a file in the
+  // question should keep other documents out of the sources. See scope.ts.
+  it('restricts sources to the named file when the question names a filename', async () => {
+    const db = freshDb()
+    const embedder = new MockEmbedder()
+    const contractId = await seedDocument(db, embedder, 'contract.pdf', [
+      { text: 'the liability cap under this agreement is one million dollars', pageNumber: 1 }
+    ])
+    await seedDocument(db, embedder, 'invoice.pdf', [
+      // Worded to also resemble the question so it WOULD surface without scoping.
+      { text: 'the liability cap line item on this invoice is one million dollars', pageNumber: 1 }
+    ])
+
+    const question = 'what is the liability cap in contract.pdf?'
+
+    // Without scope, both documents surface as sources (the reported bug).
+    const wide = await retrieve(db, embedder, question, SETTINGS)
+    expect(new Set(wide.chunks.map((c) => c.sourceTitle))).toEqual(
+      new Set(['contract.pdf', 'invoice.pdf'])
+    )
+
+    // The detector picks the named file, and scoped retrieval returns only its chunks.
+    const detected = detectFilenameScope(question, [
+      { id: contractId, title: 'contract.pdf' },
+      { id: 'other', title: 'invoice.pdf' }
+    ])
+    expect(detected?.ids).toEqual([contractId])
+    const scoped = await retrieve(db, embedder, question, SETTINGS, detected?.ids)
+    expect(scoped.chunks.length).toBeGreaterThan(0)
+    expect(scoped.chunks.every((c) => c.sourceTitle === 'contract.pdf')).toBe(true)
   })
 })
 

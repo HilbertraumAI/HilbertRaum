@@ -406,6 +406,28 @@ guarantee (model never called without context) is unchanged.
   conversation's scope; removable **scope chips** above the composer show the active scope
   (existing conversations persist chip removal via `updateConversationScope`).
 
+### Filename auto-scope (post-MVP UX fix)
+
+Document retrieval is corpus-wide by default — the question text is only ever a
+semantic/keyword query, so "analyze contract.pdf" runs hybrid search over **all** indexed
+documents and the top-K can include weakly-related chunks from other files (generic words
+like "analyze"/"summary" even inflate other docs' keyword rank). Users reasonably read
+naming a file as "use only that file", so other files showing up as sources reads as a bug.
+
+- **`detectFilenameScope(question, docs)`** (`services/rag/scope.ts`, pure + unit-tested):
+  a document matches when its filename — the full title or its extension-stripped stem,
+  each normalized to lowercase alphanumeric tokens — appears in the normalized question as a
+  **whole token run** (space-delimited both sides, so "contractual" ≠ "contract"). Lone
+  generic words (`document`, `file`, `pdf`, …) never trigger on their own; a question that
+  would match the **entire** corpus narrows nothing and is treated as no match.
+- **Applied only when there is no explicit scope** — `askDocuments` runs the detector over
+  the indexed documents *just* for a conversation whose `scopeDocumentIds` is null/empty, and
+  uses the result as the per-request `scopeDocumentIds`. It can only ever **narrow**, never
+  widen; an explicit "ask selected documents" scope always wins and is left untouched.
+- **Visible + honest:** when it fires, the main process emits a one-shot, non-persisted
+  `STREAM.scope` notice (`api.onScopeNotice`) and Chat shows an *"Answering from contract.pdf
+  only"* toast, so a wrong guess is obvious and the user can rephrase or set scope manually.
+
 ### Plain-chat document awareness (plan §5.1)
 
 While ≥ 1 indexed document exists, plain Chat shows a dismissible per-conversation notice
