@@ -53,7 +53,7 @@ export function resolveLlamaServerPath(
 /**
  * Resolve the pure-CPU safety-net binary at `runtime/llama.cpp/<os>/cpu/` (Phase 14
  * ships it on win/linux), or `null` when absent — the fallback ladder's rung 3
- * (gpu-support-plan §5.2). Deliberately ignores `PAID_LLAMA_BIN`: the override points
+ * (architecture.md GPU record §5.2). Deliberately ignores `PAID_LLAMA_BIN`: the override points
  * at one explicit binary and has no implied sibling.
  */
 export function resolveCpuFallbackServerPath(
@@ -143,7 +143,7 @@ export interface LlamaServerOptions {
    * Fired when the child exits AFTER having become healthy, outside `stop()` — i.e. a
    * mid-session crash (driver crash, VRAM exhaustion). Start-time failures are NOT
    * reported here (they already throw from `start()`); the GPU crash auto-fallback
-   * (gpu-support-plan §5.3) hangs off this hook.
+   * (architecture.md GPU record §5.3) hangs off this hook.
    */
   onUnexpectedExit?: (info: UnexpectedExitInfo) => void
   // Test seams:

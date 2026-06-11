@@ -54,7 +54,7 @@ function auditLabel(type: AuditEventType): string {
 }
 
 /**
- * The "Acceleration" line (Phase 16, gpu-support-plan §8): the live backend when a
+ * The "Acceleration" line (Phase 16, architecture.md GPU record §8): the live backend when a
  * model is running, else what the cached probe says this machine offers. §11.4 tone —
  * CPU is presented as normal, never degraded.
  */
@@ -141,7 +141,7 @@ export function DiagnosticsTab(): JSX.Element {
     void refreshStatus()
   }, [refreshStatus])
 
-  // "Try GPU again" (gpu-support-plan §8): clears the automatic compatibility-mode flag
+  // "Try GPU again" (architecture.md GPU record §8): clears the automatic compatibility-mode flag
   // (e.g. after a graphics-driver update) WITHOUT touching the Settings toggle. The
   // dedicated IPC also invalidates the session probe cache + re-probes (audit fix —
   // a plain settings write would keep a stale "no GPU" probe for the whole session).

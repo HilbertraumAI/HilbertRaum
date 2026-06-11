@@ -9,7 +9,7 @@
 # install marker ({ version, backend, os, arch }) is written next to the binary so
 # re-runs can skip idempotently — and so a version/backend change actually re-fetches.
 #
-# DEFAULT BACKEND = VULKAN-FIRST (Phase 14, docs/gpu-support-plan.md). The win/linux
+# DEFAULT BACKEND = VULKAN-FIRST (Phase 14, docs/architecture.md GPU record). The win/linux
 # Vulkan release archives are STANDALONE FULL BUILDS: they ship llama-server + every
 # ggml-cpu-* variant library + the Vulkan backend, loaded dynamically (GGML_BACKEND_DL).
 # On a machine with no usable Vulkan device the same binary simply runs on its bundled

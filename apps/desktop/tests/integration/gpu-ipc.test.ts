@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-// GPU IPC-layer behavior (audit round, gpu-support-plan §5.4 + §8):
+// GPU IPC-layer behavior (audit round, architecture.md GPU record §5.4 + §8):
 //  - tryGpuAgain clears the flags AND invalidates the session probe cache AND
 //    re-persists a fresh probe (a plain settings write kept a stale "no GPU" cache).
 //  - maybeRunFirstBenchmark refreshes the persisted gpuProbe each session even when a

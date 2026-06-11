@@ -297,7 +297,7 @@ logs, best-effort shredding on SSDs, no password recovery — are documented in
   verifying a real OCR run from the produced portable .exe is a release-acceptance
   item (the green gate never packages — the R2 posture).
 
-## GPU acceleration (Phases 14–16, [`gpu-support-plan.md`](gpu-support-plan.md))
+## GPU acceleration (Phases 14–16, [`architecture.md`](architecture.md) GPU record)
 
 - **Integrated GPUs (Intel Iris Xe / UHD, AMD APU "Radeon Graphics") gain little.** They share
   system RAM, so token generation is often near CPU speed (~1–2×); prompt processing improves
@@ -305,9 +305,9 @@ logs, best-effort shredding on SSDs, no password recovery — are documented in
   the driver is stable, but the hardware-profile bump deliberately ignores them so the model
   recommendation stays RAM-based.
 - **Vulkan slower than CPU is possible** on weak-iGPU + fast-CPU machines. v1 does **not**
-  auto-benchmark CPU vs GPU and pick a winner (decided, gpu-support-plan §1); the Settings
+  auto-benchmark CPU vs GPU and pick a winner (decided, GPU record §1); the Settings
   "Use GPU acceleration" toggle covers that case.
-- **`win/arm64` and `mac/x64` ship no sidecar build** (decided, gpu-support-plan §1). mac/x64 = Intel
+- **`win/arm64` and `mac/x64` ship no sidecar build** (decided, GPU record §1). mac/x64 = Intel
   Macs: upstream builds them with Metal **off** and macOS has no Vulkan, so GPU acceleration is
   impossible there regardless; Apple discontinued the line in 2023.
 - **Intel Macs are not supported by prepared drives at all** (pre-existing gap surfaced while

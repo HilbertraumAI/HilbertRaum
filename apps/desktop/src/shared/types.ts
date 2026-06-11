@@ -161,7 +161,7 @@ export interface AppSettings {
    * (`lastBenchmark.profile`) drives model recommendation + `AppStatus.hardwareProfile`.
    */
   lastBenchmark: BenchmarkResult | null
-  // ---- GPU acceleration (Phase 15, docs/gpu-support-plan.md §5.4) ----
+  // ---- GPU acceleration (Phase 15, architecture.md GPU record §5.4) ----
   /**
    * User intent: 'auto' (default — GPU when it works, the fallback ladder handles the
    * rest) or 'off' (the Settings "Use GPU acceleration" toggle, an explicit choice).
@@ -227,7 +227,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   ragMinSimilarity: 0,
   lastBenchmark: null,
   // GPU is ALWAYS the default ('auto'); only a detected problem or the explicit Settings
-  // toggle moves a machine to CPU (gpu-support-plan review decision Q2 — FINAL).
+  // toggle moves a machine to CPU (GPU-plan review decision Q2 — FINAL).
   gpuMode: 'auto',
   gpuAutoDisabled: false,
   gpuLastError: null,

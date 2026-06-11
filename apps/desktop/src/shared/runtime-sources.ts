@@ -138,7 +138,7 @@ function validateFamily(block: Record<string, unknown>, prefix: string, errors: 
   }
 
   // A duplicate (os, arch, backend) triple would make "first match wins" ambiguous and
-  // could silently shadow a deliberate pin — reject it (Phase 14, gpu-support-plan §6).
+  // could silently shadow a deliberate pin — reject it (Phase 14, architecture.md GPU record §6).
   // Per family: the llama and whisper builds live in different extract trees.
   const seen = new Set<string>()
   for (const b of builds) {

@@ -86,7 +86,7 @@ describe('LlamaReranker', () => {
     const args = calls[0].args.join(' ')
     expect(args).toContain('--rerank')
     expect(args).toContain('--host 127.0.0.1') // localhost-only, locked
-    // CPU pin, same rationale as the E5 embedder (gpu-support-plan §7).
+    // CPU pin, same rationale as the E5 embedder (architecture.md GPU record §7).
     expect(args).toContain('--device none')
     expect(args).not.toContain('-ngl')
     // Physical batch sized to the context: in --rerank/embedding mode llama-server forces

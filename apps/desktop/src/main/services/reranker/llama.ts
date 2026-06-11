@@ -90,7 +90,7 @@ export class LlamaReranker implements Reranker {
         // `--rerank` switches llama-server to embedding mode + RANK pooling and enables
         // /v1/rerank (b9585 common/arg.cpp L2964–2971 — the one flag is the whole
         // switch). `--device none` PINS the reranker to CPU, exactly like the E5
-        // embedder (gpu-support-plan §7): a sub-1B scorer gains little from a GPU and
+        // embedder (architecture.md GPU record §7): a sub-1B scorer gains little from a GPU and
         // must never contend for VRAM with the chat model.
         //
         // `--batch-size`/`--ubatch-size` = the context (rag-design §12.1 R1 deviation,

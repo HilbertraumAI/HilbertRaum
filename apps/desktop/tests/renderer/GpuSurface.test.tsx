@@ -12,7 +12,7 @@ import {
 } from '../../src/shared/types'
 import { stubApi } from '../helpers/renderer'
 
-// Phase 16 GPU surface (gpu-support-plan §8), re-homed by Phase 26: the Diagnostics
+// Phase 16 GPU surface (architecture.md GPU record §8), re-homed by Phase 26: the Diagnostics
 // surfaces live on Settings → "Diagnostics (advanced)", the GPU toggle on Settings →
 // General. Same proofs as before the IA regroup: the "Acceleration" line, "Try GPU
 // again" (the dedicated IPC, never a raw settings write), the runtime-build line, and

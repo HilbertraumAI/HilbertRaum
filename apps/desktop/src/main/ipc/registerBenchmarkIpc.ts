@@ -19,7 +19,7 @@ import { log } from '../services/logging'
 
 /**
  * Run the (session-cached) GPU probe on the drive's own `llama-server` and persist the
- * result to `settings.gpuProbe` (Phase 16, gpu-support-plan §5.4) — so Diagnostics +
+ * result to `settings.gpuProbe` (Phase 16, architecture.md GPU record §5.4) — so Diagnostics +
  * profile classification have device info without re-probing every launch. The probe
  * stays OUT of benchmark.ts (which keeps zero `child_process`); the summary is injected.
  * Never throws: no binary / no devices / probe failure → a null-name, not-useful input.

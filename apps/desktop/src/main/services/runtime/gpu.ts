@@ -2,7 +2,7 @@ import { spawn as nodeSpawn } from 'node:child_process'
 import type { GpuDevice } from '../../../shared/types'
 import type { ChildProcessLike, SpawnFn } from './sidecar'
 
-// GPU device probe (Phase 15, docs/gpu-support-plan.md §5.1). Spawns the drive's OWN
+// GPU device probe (Phase 15, architecture.md GPU record §5.1). Spawns the drive's OWN
 // `llama-server --list-devices` — an offline, no-model, sub-second subprocess that
 // prints ggml's truth about which devices the backend will actually use — and parses
 // the output. No new deps, no registry/wmic scraping, no sockets (the probe is a child

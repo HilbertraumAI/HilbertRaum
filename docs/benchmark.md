@@ -18,7 +18,7 @@ IPC: `runBenchmark()` (`benchmark:run`) in
 1. **System** (`detectSystem`, `node:os`): `os` (platform), `arch`, `cpuModel` + `cpuCores`
    (`os.cpus()`), `ramGb` (`os.totalmem()` ÷ GiB, rounded to 0.1). Every probe is wrapped —
    a failure falls back to `''` / `0` and never throws.
-2. **GPU** (Phase 16, [`gpu-support-plan.md`](gpu-support-plan.md) §5.1/§8): the IPC layer runs
+2. **GPU** (Phase 16, [`architecture.md`](architecture.md) GPU record §5.1/§8): the IPC layer runs
    the **session-cached `llama-server --list-devices` probe** on the drive's own sidecar binary
    (`services/runtime/gpu.ts` — an offline subprocess, kill-timeout-bounded, never throws) and
    **injects** the summary into `runBenchmark` (`RunBenchmarkDeps.gpu: { name, useful }`).

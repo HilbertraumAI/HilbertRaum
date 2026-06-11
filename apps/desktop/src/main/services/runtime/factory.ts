@@ -19,7 +19,7 @@ import {
 } from './sidecar'
 
 // Availability-aware runtime selector (Phase 10 / graceful-fallback rule) + the GPU
-// start LADDER (Phase 15, docs/gpu-support-plan.md §5.2). The app MUST still launch —
+// start LADDER (Phase 15, architecture.md GPU record §5.2). The app MUST still launch —
 // and the test suite MUST still pass — with zero model files, zero binaries, and zero
 // GPUs, so the real `LlamaRuntime` is opt-in by availability (binary + weights present)
 // and every GPU decision degrades automatically:

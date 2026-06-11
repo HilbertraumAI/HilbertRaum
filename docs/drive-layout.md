@@ -130,7 +130,7 @@ build comes from `model-manifests/runtime-sources.yaml`. See
 
 ### Sidecar builds: Vulkan default + CPU safety net (Phase 14)
 
-Since Phase 14 (see [`gpu-support-plan.md`](gpu-support-plan.md)) `runtime-sources.yaml` is
+Since Phase 14 (see the [`architecture.md`](architecture.md) GPU record §6) `runtime-sources.yaml` is
 **vulkan-first** on Windows/Linux:
 
 - **`runtime/llama.cpp/<os>/`** holds the **Vulkan full build** — it ships every CPU backend

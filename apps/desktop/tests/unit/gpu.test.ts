@@ -8,7 +8,7 @@ import {
 } from '../../src/main/services/runtime/gpu'
 import type { ChildProcessLike, SpawnFn } from '../../src/main/services/runtime/sidecar'
 
-// Phase 15 GPU probe (gpu-support-plan §5.1/§11.1). Zero GPUs, zero binaries: the
+// Phase 15 GPU probe (architecture.md GPU record §5.1/§11.1). Zero GPUs, zero binaries: the
 // probe is driven entirely through the fake-spawn seam.
 
 // The REAL output captured from the b9585 Vulkan build on the dev machine.

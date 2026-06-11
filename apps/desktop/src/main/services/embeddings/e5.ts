@@ -84,7 +84,7 @@ export class E5Embedder implements Embedder {
         contextTokens: this.opts.contextTokens ?? DEFAULT_CONTEXT_TOKENS,
         // `--embedding` switches llama-server to the embeddings endpoint; mean pooling
         // is what E5 expects. `--device none` PINS the embedder to CPU (Phase 15,
-        // gpu-support-plan §7 — decided): the 384-dim model gains little from a GPU,
+        // architecture.md GPU record §7 — decided): the 384-dim model gains little from a GPU,
         // and pinning keeps ingestion immune to driver flakiness and VRAM contention
         // with the chat model. This is the codebase's permanent forced-CPU example.
         extraArgs: ['--embedding', '--pooling', 'mean', '--device', 'none'],

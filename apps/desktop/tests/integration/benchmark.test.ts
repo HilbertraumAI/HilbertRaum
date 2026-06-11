@@ -84,7 +84,7 @@ describe('classifyProfile', () => {
     expect(classifyProfile(16, { tokensPerSecond: 80 })).toBe('LITE')
   })
 
-  // Phase 16 (gpu-support-plan §8): the bump fires only on a PRE-QUALIFIED gpuUseful
+  // Phase 16 (architecture.md GPU record §8): the bump fires only on a PRE-QUALIFIED gpuUseful
   // hint (≥ 6 GiB dedicated + not integrated-looking — computed by gpuUsefulForProfile),
   // never on a merely truthy GPU name.
   it('bumps one step toward PRO when the GPU is pre-qualified useful (capped at PRO)', () => {
@@ -101,7 +101,7 @@ describe('classifyProfile', () => {
   })
 })
 
-// ---- GPU profile-bump gate (Phase 16, gpu-support-plan §8/§11.1) -----------------
+// ---- GPU profile-bump gate (Phase 16, architecture.md GPU record §8/§11.1) -----------------
 
 describe('gpuUsefulForProfile', () => {
   const dev = (name: string, totalMb: number): GpuDevice => ({ id: 'Vulkan0', name, totalMb, freeMb: totalMb })

@@ -14,7 +14,8 @@ audit rounds are fully remediated (§8). Every shipped wave since is DONE and co
 design record per the CLAUDE.md doc lifecycle rule:
 
 - **GPU acceleration (Phases 14–16)** + a same-day audit round —
-  [`docs/gpu-support-plan.md`](docs/gpu-support-plan.md).
+  `docs/architecture.md` "GPU acceleration — design record" (§1–§8) + the as-built
+  probe/ladder subsection.
 - **Functionality wave 1 toward the Office edition (Phases 17–20):** RAG trust & scoped
   asking · in-app model downloader · audit log · answer-depth modes — record folded into
   the topic docs: `docs/rag-design.md` §10 (17) · `docs/architecture.md` "In-app model
@@ -59,7 +60,7 @@ remaining work is **manual acceptance only** (§5). Consciously-accepted gaps li
 | 11 | Drive layout, scripts & packaging | 🟢 done |
 | 12 | DIY asset loader (`fetch-assets`) | 🟢 done |
 | 13 | Plug-and-play distribution (commercial drive) | 🟢 done |
-| 14–16 | GPU acceleration (Vulkan distribution · probe/ladder runtime · surface) | 🟢 done 2026-06-10 — `docs/gpu-support-plan.md` |
+| 14–16 | GPU acceleration (Vulkan distribution · probe/ladder runtime · surface) | 🟢 done 2026-06-10 — `architecture.md` GPU record §1–§8 |
 | 17 | RAG trust & document-scoped asking | 🟢 done 2026-06-10 — `rag-design.md` §10 |
 | 18 | In-app model downloader | 🟢 done 2026-06-10 — `architecture.md` "In-app model downloader" |
 | 19 | Audit log (`runtime_events`) | 🟢 done 2026-06-10 — `architecture.md` "Audit log" + `security-model.md` |
@@ -423,8 +424,8 @@ Repo root: `f:\_coding\ai_drive`.
   the commercial first-run still lands on the existing `WorkspaceGate` (no plaintext offered when the
   policy forbids it); only the copy was softened for zero-technical-knowledge users.
 
-- **GPU acceleration (Phases 14–16, 2026-06-10) — design record
-  [`docs/gpu-support-plan.md`](docs/gpu-support-plan.md):** Vulkan-first distribution +
+- **GPU acceleration (Phases 14–16, 2026-06-10) — design record now `docs/architecture.md`
+  "GPU acceleration — design record" (§1–§8):** Vulkan-first distribution +
   `cpu/` safety net + `.paid-runtime.json` install markers (§1/§4), the 4-rung start ladder +
   `--list-devices` probe (§5 — never pass `-ngl`; `--device none` is the only CPU-forcing
   mechanism), mid-generation crash auto-fallback over the `runtime:notice` channel (§5.3),
@@ -536,8 +537,9 @@ Repo root: `f:\_coding\ai_drive`.
   (per-phase ritual lives in CLAUDE.md; spec-§22 Definition of Done folded into §5; the dead
   Phase-0 `PlaceholderScreen.tsx` went with it); `docs/gpu-support-plan.md` and
   `docs/provisioning-and-distribution-plan.md` **condensed** with their cited section anchors
-  kept stable (gpu §1–§8; provisioning §0/§12/§12.3/§13 — the provisioning record was later
-  folded into `docs/packaging.md` and deleted, 2026-06-12 housekeeping). Rule recorded in
+  kept stable (gpu §1–§8; provisioning §0/§12/§12.3/§13). In the 2026-06-12 housekeeping both
+  were folded onward and deleted: provisioning → `docs/packaging.md`; the GPU record →
+  `docs/architecture.md` "GPU acceleration — design record" (§-anchors preserved). Rule recorded in
   CLAUDE.md ("Doc lifecycle rule"). Full originals: `git show 4549934:docs/<file>`. **Also applied at
   wave-1 closeout (2026-06-10): `docs/post-mvp-functionality-plan.md` condensed** to the
   wave-1 design record (full original: `git show 2a46ca3:docs/post-mvp-functionality-plan.md`);

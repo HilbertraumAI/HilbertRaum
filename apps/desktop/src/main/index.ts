@@ -167,7 +167,7 @@ function initBackend(): void {
   // embedder is picked here from the embeddings manifest (settings are unreadable until
   // the workspace unlocks, so we use the manifest's default E5 model).
   //
-  // Phase 15 (GPU): the factory walks the start ladder (gpu-support-plan §5.2). GPU
+  // Phase 15 (GPU): the factory walks the start ladder (architecture.md GPU record §5.2). GPU
   // settings live inside the (possibly encrypted) DB — sidecars only ever start
   // post-unlock, but every read is still guarded (locked DB → safe defaults). A rung-1
   // failure or a mid-session GPU crash persists `gpuAutoDisabled` + `gpuLastError`;

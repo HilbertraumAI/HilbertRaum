@@ -10,11 +10,14 @@ portable drive. No cloud, no telemetry, all user data local.
 
 ## Doc lifecycle rule
 Implementation **plan** documents are working papers: once a plan is fully implemented, condense
-it into a short **design record** (decisions + the facts they rest on + the design as built) or
-fold its durable content into the topic docs and delete it — the full original stays in git
-history. Don't let finished plans linger; they drift and contradict the code. (The original
-phased MVP plan, `docs/IMPLEMENTATION_PLAN.md`, was removed this way — see git history;
-`docs/gpu-support-plan.md` is the template for a condensed design record.)
+it into a short **design record** (decisions + the facts they rest on + the design as built)
+**folded into the relevant topic doc as a §-numbered section**, and delete the plan file — the
+full original stays in git history. Don't let finished plans linger; they drift and contradict
+the code. Keep the record's §-anchors stable: code comments cite them. Templates:
+`docs/rag-design.md` §12 (Phase-21 record) and `docs/architecture.md` "GPU acceleration —
+design record" (§1–§8). A standalone plan file should only exist for work that is still open
+(e.g. `docs/big-slot-embeddings-plan.md`) or for a just-closed wave whose record is still
+heavily cited as a unit (`docs/functionality-wave-3-plan.md`).
 
 ## Hard rules (from spec §0)
 - **No cloud dependencies. No telemetry. No analytics. No remote crash reporting.**

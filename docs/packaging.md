@@ -141,7 +141,7 @@ copy .\apps\desktop\release\*.exe E:\                                 # place th
 > verifies, extracts (zip and tar.gz) and flattens the binaries for all three OSes from any host.
 > Since **Phase 14** the win/linux default is the **Vulkan full build** (GPU acceleration with
 > built-in CPU degradation) plus a pure-CPU safety net at `runtime/llama.cpp/<os>/cpu/` — see
-> [`drive-layout.md`](drive-layout.md) and [`gpu-support-plan.md`](gpu-support-plan.md).
+> [`drive-layout.md`](drive-layout.md) and the [`architecture.md`](architecture.md) GPU record.
 > The chat/embeddings **model** URLs are real Hugging Face links and the bundled manifests now carry
 > **real pinned `sha256` hashes** (captured from verified downloads via `verify-models --generate`);
 > a model you add yourself stays `REPLACE_WITH_REAL_HASH` until you capture its hash the same way.
