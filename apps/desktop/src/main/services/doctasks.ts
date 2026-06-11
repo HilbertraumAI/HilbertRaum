@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { extname, join } from 'node:path'
 import type { Db } from './db'
 import type {
@@ -18,11 +18,16 @@ import {
   extractDocumentPreview,
   getDocument,
   processDocument,
+  reindexDocument,
+  setDocumentOcr,
   setDocumentOrigin,
   setDocumentSummary,
   type IngestionDeps
 } from './ingestion'
-import { shredFile } from './workspace-vault'
+import { isPdfPath } from './ingestion/parsers'
+import type { OcrEngine, OcrPage } from './ocr'
+import type { RasterizePdf } from './ocr/rasterizer'
+import { ENCRYPTED_DOC_SUFFIX, shredFile } from './workspace-vault'
 import { decodeVector, VectorIndex } from './embeddings'
 import { isAbortError, stripThinkBlocks } from './chat'
 import type { AuditRecorder } from './audit'
@@ -80,6 +85,14 @@ export const TASK_TRANSLATION_TARGET_MESSAGE =
   'Choose a translation language: German or English.'
 export const TASK_SOURCE_UNREADABLE_MESSAGE =
   'The stored copy of this document could not be read. Re-import the document, then try again.'
+export const TASK_NEEDS_OCR_MESSAGE =
+  'Text recognition needs the OCR files, which are not on this drive.'
+export const TASK_OCR_NOT_A_SCAN_MESSAGE =
+  'Only a PDF that was detected as a scan can be made searchable this way.'
+export const TASK_OCR_NO_TEXT_MESSAGE =
+  'No readable text was found in this scan. The pages may be blank or too blurry.'
+export const TASK_OCR_FAILED_MESSAGE =
+  "This scan couldn't be read. Make sure the document is still on the drive, then try again."
 
 // ---- Summary window math (decision D25 — budget-driven two-level map-reduce) -------
 //
@@ -690,6 +703,17 @@ export interface DocTaskDeps {
    * `VaultBusyError` while a password change runs.
    */
   beginDocumentWork: () => () => void
+  /**
+   * The local OCR engine (Phase 38), or null when the drive carries no language
+   * files. The 'ocr' kind refuses to start without it (friendly copy) — every other
+   * kind ignores it. Read per task (the assets can appear mid-session).
+   */
+  getOcrEngine?: () => OcrEngine | null
+  /**
+   * PDF → page-PNG rasterizer (Phase 38, D31): the hidden-window renderer in the app,
+   * a fake in tests. Only the 'ocr' kind uses it.
+   */
+  rasterizePdf?: RasterizePdf
   audit?: AuditRecorder
 }
 
@@ -716,7 +740,7 @@ export class DocTaskManager {
    */
   startDocTask(req: StartDocTaskRequest): { jobId: string } {
     const kind = req?.kind as DocTaskKind
-    if (kind !== 'summary' && kind !== 'translation' && kind !== 'compare') {
+    if (kind !== 'summary' && kind !== 'translation' && kind !== 'compare' && kind !== 'ocr') {
       throw new Error('Unknown document task.')
     }
     // Translation targets are a closed v1 set (plan §7): de | en only — a free-text
@@ -732,10 +756,16 @@ export class DocTaskManager {
     if (this.deps.isChatStreaming()) {
       throw new Error(TASK_REFUSED_CHAT_STREAMING_MESSAGE)
     }
-    if (!this.deps.getRuntime()) {
+    // OCR runs the local recognition engine, not the chat model (Phase 38) — it needs
+    // the vendored language files instead of a running runtime.
+    if (kind === 'ocr') {
+      if (!this.deps.getOcrEngine?.()) {
+        throw new Error(TASK_NEEDS_OCR_MESSAGE)
+      }
+    } else if (!this.deps.getRuntime()) {
       throw new Error(TASK_NEEDS_RUNTIME_MESSAGE)
     }
-    // Compare runs over exactly TWO (distinct) documents; summary/translation over one.
+    // Compare runs over exactly TWO (distinct) documents; summary/translation/ocr over one.
     const documentIds = (req.documentIds ?? []).filter((x) => typeof x === 'string' && x.length > 0)
     const wanted = kind === 'compare' ? 2 : 1
     if (documentIds.length !== wanted || new Set(documentIds).size !== wanted) {
@@ -744,13 +774,24 @@ export class DocTaskManager {
           ? TASK_COMPARE_PICK_TWO_MESSAGE
           : kind === 'translation'
             ? 'Pick exactly one document to translate.'
-            : 'Pick exactly one document to summarize.'
+            : kind === 'ocr'
+              ? 'Pick exactly one scanned PDF to make searchable.'
+              : 'Pick exactly one document to summarize.'
       )
     }
-    for (const id of documentIds) {
-      const doc = getDocument(this.deps.getDb(), id)
-      if (!doc || doc.status !== 'indexed' || doc.chunkCount === 0) {
-        throw new Error(TASK_DOCUMENT_NOT_READY_MESSAGE)
+    if (kind === 'ocr') {
+      // The target is a scan-DETECTED PDF (step 0 marked it), or an already-OCR'd PDF
+      // being re-run (better assets / a bad first pass). Never an ordinary document.
+      const doc = getDocument(this.deps.getDb(), documentIds[0])
+      if (!doc || !isPdfPath(doc.title) || !(doc.scanDetected || doc.ocr)) {
+        throw new Error(TASK_OCR_NOT_A_SCAN_MESSAGE)
+      }
+    } else {
+      for (const id of documentIds) {
+        const doc = getDocument(this.deps.getDb(), id)
+        if (!doc || doc.status !== 'indexed' || doc.chunkCount === 0) {
+          throw new Error(TASK_DOCUMENT_NOT_READY_MESSAGE)
+        }
       }
     }
 
@@ -853,15 +894,21 @@ export class DocTaskManager {
     }
     task.status.state = 'running'
     try {
-      // Re-check at dequeue time: the runtime may have been stopped while queued.
-      const runtime = this.deps.getRuntime()
-      if (!runtime) throw new Error(TASK_NEEDS_RUNTIME_MESSAGE)
-      const resultId =
-        kind === 'compare'
-          ? await this.runCompare(task, runtime)
-          : kind === 'translation'
-            ? await this.runTranslation(task, runtime)
-            : await this.runSummary(task, runtime)
+      let resultId: string
+      if (kind === 'ocr') {
+        // OCR uses the recognition engine, not the chat runtime (Phase 38).
+        resultId = await this.runOcr(task)
+      } else {
+        // Re-check at dequeue time: the runtime may have been stopped while queued.
+        const runtime = this.deps.getRuntime()
+        if (!runtime) throw new Error(TASK_NEEDS_RUNTIME_MESSAGE)
+        resultId =
+          kind === 'compare'
+            ? await this.runCompare(task, runtime)
+            : kind === 'translation'
+              ? await this.runTranslation(task, runtime)
+              : await this.runSummary(task, runtime)
+      }
       task.status.state = 'done'
       task.status.resultRef = { documentId: resultId }
       this.deps.audit?.('document_task_completed', `Document task completed: ${kind}`, auditMeta)
@@ -965,6 +1012,130 @@ export class DocTaskManager {
     // the UPDATE on a vanished row is a no-op).
     setDocumentSummary(this.deps.getDb(), documentId, summary)
     return documentId
+  }
+
+  /**
+   * The Phase-38 OCR task (D33: "Make searchable (OCR)", never automatic): rasterize
+   * the stored PDF page by page in the hidden window (D31), recognize each page PNG
+   * main-side with the local engine, persist the recognition (`documents.ocr_json`,
+   * content → DB only), then re-ingest — the PdfParser's ocrPages hook turns the
+   * recognition into one segment per page, so page citations work unchanged.
+   * Progress = pages recognized + the final re-ingest step; cancel persists NOTHING.
+   */
+  private async runOcr(task: InternalTask): Promise<string> {
+    const engine = this.deps.getOcrEngine?.()
+    const rasterize = this.deps.rasterizePdf
+    if (!engine || !rasterize) throw new Error(TASK_NEEDS_OCR_MESSAGE)
+    const db = this.deps.getDb()
+    const documentId = task.status.documentIds[0]
+    const doc = getDocument(db, documentId)
+    if (!doc) throw new Error(TASK_OCR_NOT_A_SCAN_MESSAGE)
+    const signal = task.controller.signal
+
+    const pdf = this.readStoredPdfBytes(documentId)
+    const pages: OcrPage[] = []
+    try {
+      await rasterize(pdf, {
+        signal,
+        onPageCount: (n) => {
+          // pages + persist/re-ingest as the final step.
+          task.status.progress.stepsTotal = n + 1
+        },
+        onPage: async (pageNumber, png) => {
+          // Backpressure: the next page is not rendered until this recognition ends.
+          const result = await engine.recognize(png, { signal })
+          pages.push({ pageNumber, text: result.text.trim() })
+          task.status.progress.stepsDone += 1
+          if (signal.aborted) throw new DOMException('Document task cancelled', 'AbortError')
+        }
+      })
+    } catch (err) {
+      if (isAbortError(err, signal)) throw err
+      // §11.4: raw render/recognition errors go to the local log only.
+      log.warn('OCR task failed while reading the scan', {
+        documentId,
+        error: err instanceof Error ? err.message : String(err)
+      })
+      throw new Error(TASK_OCR_FAILED_MESSAGE)
+    }
+    if (signal.aborted) throw new DOMException('Document task cancelled', 'AbortError')
+    if (!pages.some((p) => p.text.length > 0)) {
+      throw new Error(TASK_OCR_NO_TEXT_MESSAGE)
+    }
+
+    // Persist the recognition, then re-ingest through the normal pipeline (chunks,
+    // embeddings, FTS — the document becomes a first-class searchable corpus member).
+    // The re-ingest may rewrite a legacy plaintext stored copy to `.enc`, so it holds
+    // the Phase-32 lease like every sidecar writer (VaultBusyError → friendly fail).
+    setDocumentOcr(db, documentId, {
+      pages,
+      engineId: engine.id,
+      languages: [...engine.languages]
+    })
+    const release = this.deps.beginDocumentWork()
+    try {
+      const result = await reindexDocument(
+        db,
+        this.deps.getStoreDir(),
+        documentId,
+        this.deps.getIngestionDeps()
+      )
+      if (result.status !== 'indexed') {
+        // The recognition stays persisted (it is real work); the document row keeps
+        // the re-ingest failure message — Re-index retries with the stored pages.
+        log.error('OCR re-ingest did not reach indexed', {
+          documentId,
+          status: result.status,
+          error: result.errorMessage
+        })
+        throw new Error(TASK_OCR_FAILED_MESSAGE)
+      }
+    } finally {
+      release()
+    }
+    task.status.progress.stepsDone += 1
+    return documentId
+  }
+
+  /**
+   * Read the stored PDF's plaintext bytes for rasterization. Encrypted copies decrypt
+   * to a `.parse-ocr.pdf` transient (covered by the startup crash sweep) that is
+   * shredded before returning — only the in-memory Buffer leaves this method.
+   */
+  private readStoredPdfBytes(documentId: string): Buffer {
+    const db = this.deps.getDb()
+    const row = db
+      .prepare('SELECT title, stored_path, original_path FROM documents WHERE id = ?')
+      .get(documentId) as unknown as
+      | { title: string; stored_path: string | null; original_path: string | null }
+      | undefined
+    if (!row) throw new Error(TASK_SOURCE_UNREADABLE_MESSAGE)
+    const cipher = this.deps.getIngestionDeps().cipher ?? null
+    try {
+      if (row.stored_path && existsSync(row.stored_path)) {
+        if (row.stored_path.endsWith(ENCRYPTED_DOC_SUFFIX)) {
+          if (!cipher) throw new Error(TASK_SOURCE_UNREADABLE_MESSAGE)
+          const transient = join(this.deps.getStoreDir(), `${documentId}.parse-ocr.pdf`)
+          try {
+            cipher.decryptFile(row.stored_path, transient)
+            return readFileSync(transient)
+          } finally {
+            shredFile(transient)
+          }
+        }
+        return readFileSync(row.stored_path)
+      }
+      if (row.original_path && existsSync(row.original_path)) {
+        return readFileSync(row.original_path)
+      }
+    } catch (err) {
+      log.warn('OCR source read failed', {
+        documentId,
+        error: err instanceof Error ? err.message : String(err)
+      })
+      throw new Error(TASK_SOURCE_UNREADABLE_MESSAGE)
+    }
+    throw new Error(TASK_SOURCE_UNREADABLE_MESSAGE)
   }
 
   /**
@@ -1406,5 +1577,9 @@ const FRIENDLY_TASK_ERRORS: ReadonlySet<string> = new Set([
   TASK_TRANSLATION_TARGET_MESSAGE,
   TASK_SOURCE_UNREADABLE_MESSAGE,
   TASK_COMPARE_PICK_TWO_MESSAGE,
-  TASK_COMPARE_REINDEX_MESSAGE
+  TASK_COMPARE_REINDEX_MESSAGE,
+  TASK_NEEDS_OCR_MESSAGE,
+  TASK_OCR_NOT_A_SCAN_MESSAGE,
+  TASK_OCR_NO_TEXT_MESSAGE,
+  TASK_OCR_FAILED_MESSAGE
 ])

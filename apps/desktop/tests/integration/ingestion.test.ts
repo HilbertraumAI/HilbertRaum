@@ -54,7 +54,8 @@ describe('parser registry', () => {
     expect(selectParser('x.pdf')?.name).toBe('PdfParser')
     expect(selectParser('x.docx')?.name).toBe('DocxParser')
     expect(selectParser('data.csv')?.name).toBe('CsvParser')
-    expect(selectParser('image.png')).toBeNull()
+    expect(selectParser('image.png')?.name).toBe('image') // photos OCR on import (Phase 38)
+    expect(selectParser('blob.xyz')).toBeNull()
   })
 })
 
@@ -93,7 +94,7 @@ describe('CsvParser', () => {
 
 describe('PdfParser', () => {
   it('extracts text with a page number from a real PDF', async () => {
-    const p = write('a.pdf', makePdf('Hello PDF World'))
+    const p = write('a.pdf', makePdf('Hello PDF World with enough readable words on the page'))
     const out = await PdfParser.parse(p)
     expect(out.mimeType).toBe('application/pdf')
     expect(out.segments.length).toBeGreaterThanOrEqual(1)
@@ -147,7 +148,7 @@ describe('ingestion pipeline', () => {
   it('records per-page metadata on chunks from a PDF', async () => {
     const db = freshDb()
     const storeDir = store()
-    const src = write('doc.pdf', makePdf('Page one content here'))
+    const src = write('doc.pdf', makePdf('Page one content here with plenty of readable words'))
     const queued = createQueuedDocument(db, src)
     const info = await processDocument(db, storeDir, queued.id)
     expect(info.status).toBe('indexed')
@@ -172,7 +173,7 @@ describe('ingestion pipeline', () => {
   it('marks an unsupported file type as failed', async () => {
     const db = freshDb()
     const storeDir = store()
-    const src = write('photo.png', 'binary-ish')
+    const src = write('data.xyz', 'binary-ish')
     const queued = createQueuedDocument(db, src)
     const info = await processDocument(db, storeDir, queued.id)
     expect(info.status).toBe('failed')
@@ -298,15 +299,15 @@ describe('expandPaths', () => {
     const sub = join(dir(), 'sub')
     mkdirSync(sub)
     write('top.txt', 'x')
-    write('ignore.png', 'x')
+    write('ignore.xyz', 'x')
     writeFileSync(join(sub, 'nested.md'), '# h')
-    const explicit = write('explicit.png', 'x') // unsupported but explicitly chosen
+    const explicit = write('explicit.xyz', 'x') // unsupported but explicitly chosen
 
     const files = expandPaths([dir(), explicit])
     // Folder walk keeps supported files only; the explicit png is still included.
     expect(files.some((f) => f.endsWith('top.txt'))).toBe(true)
     expect(files.some((f) => f.endsWith('nested.md'))).toBe(true)
-    expect(files.filter((f) => f.endsWith('ignore.png'))).toHaveLength(0)
-    expect(files.filter((f) => f.endsWith('explicit.png'))).toHaveLength(1)
+    expect(files.filter((f) => f.endsWith('ignore.xyz'))).toHaveLength(0)
+    expect(files.filter((f) => f.endsWith('explicit.xyz'))).toHaveLength(1)
   })
 })

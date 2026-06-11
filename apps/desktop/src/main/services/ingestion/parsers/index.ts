@@ -1,5 +1,6 @@
 import { extname } from 'node:path'
 import type { Transcriber } from '../../transcriber'
+import type { OcrEngine, OcrPage } from '../../ocr'
 
 // Document parsers (spec §7.7 / §9.2 DocumentParser interface). Each parser turns a
 // file into ordered text segments, attaching whatever structural metadata the format
@@ -40,6 +41,18 @@ export interface ParseContext {
   onProgress?: (percent: number) => void
   /** Directory for transient content files the parse may create (storeDir). */
   workDir?: string
+  /**
+   * OCR engine for photo imports (Phase 38, the transcriber-injection precedent).
+   * Optional AND nullable: absent/null means a photo FILE fails friendly with the
+   * needs-the-OCR-files copy — text ingestion is unaffected (graceful-fallback rule).
+   */
+  ocrEngine?: OcrEngine | null
+  /**
+   * Stored per-page OCR recognition for a scan-detected PDF (Phase 38): when present,
+   * the PdfParser turns an image-only PDF into one segment per recognized page
+   * instead of failing with the scan notice. Fed from `documents.ocr_json`.
+   */
+  ocrPages?: OcrPage[] | null
 }
 
 /** The contract every format adapter implements (spec §9.2). */
@@ -60,6 +73,7 @@ import { PdfParser } from './pdf'
 import { DocxParser } from './docx'
 import { CsvParser } from './csv'
 import { AudioParser, AUDIO_EXTENSIONS } from './audio'
+import { ImageParser, IMAGE_EXTENSIONS } from './image'
 
 // Registry of available parsers. Order is irrelevant — selection is by extension.
 export const PARSERS: readonly DocumentParser[] = [
@@ -68,12 +82,23 @@ export const PARSERS: readonly DocumentParser[] = [
   PdfParser,
   DocxParser,
   CsvParser,
-  AudioParser
+  AudioParser,
+  ImageParser
 ]
 
 /** True when this file/title resolves to the audio parser (Phase 36 helpers). */
 export function isAudioPath(filePath: string): boolean {
   return (AUDIO_EXTENSIONS as readonly string[]).includes(extname(filePath).toLowerCase())
+}
+
+/** True when this file/title resolves to the photo parser (Phase 38). */
+export function isImagePath(filePath: string): boolean {
+  return (IMAGE_EXTENSIONS as readonly string[]).includes(extname(filePath).toLowerCase())
+}
+
+/** True when this file/title is a PDF (the scan-detection / OCR-task target). */
+export function isPdfPath(filePath: string): boolean {
+  return extname(filePath).toLowerCase() === '.pdf'
 }
 
 /** Every file extension the ingestion pipeline can handle (lowercase, with dot). */

@@ -1,24 +1,18 @@
-# Post-MVP Functionality — wave 3 working paper (Phases 31–38)
+# Post-MVP Functionality — wave 3 design record (Phases 31–38, COMPLETE)
 
-_Status: **WORKING PAPER — Phases 31–37 DONE 2026-06-11 (§4/§5/§6/§7/§8/§9/§10 are their
-condensed design records; the §12 session-hardening rider shipped with 31 and gained its
-single scoped mic allow with 37; R-T1 resolved
-with 33; R-T2 FULLY resolved — translation half with 34 (D36), comparison half with 35
-(D37); R-W1..R-W4 ALL resolved with 36 (D34 → per-file CLI, D35 → keep the copy);
-D30 implemented as locked by 37;
-Phase 38 NOT IMPLEMENTED** (drafted
-2026-06-10; **review round 1 resolved
-2026-06-11**: D23–D30 + D33 locked, see §13; D31/D32 stay open by design — they resolve
-with research gates R-O1/R-O2. **Plan audit 2026-06-11:** every §2 fact re-verified
-against the code; findings folded in — the mic-permission posture correction in §10 (no
-handler exists; Electron default-ALLOWS), the `models/transcriber/` naming fix, the D35
-audio-storage decision flagged by the re-index contract, staleness guards in §7/§8, and the
-verified forward-compatibility of an additive `whisper_cpp` block in §9). Per the CLAUDE.md doc lifecycle rule this is a plan
-document: once a phase is implemented its section condenses into a design record and the
-durable content moves to the topic docs. Phases 29–30 are reserved by
-[`model-catalog-expansion-plan.md`](model-catalog-expansion-plan.md); this wave starts at
-**Phase 31**. Decisions continue the project-wide numbering at **D23** (D1–D7 wave 1 ·
-D8–D15 retrieval · D16–D22 catalog · D-UI1–4 UI wave)._
+_Status: **DESIGN RECORD — the wave is COMPLETE (Phases 31–38 ALL DONE 2026-06-11).**
+§4–§11 are the per-phase condensed design records; every decision in §13 is resolved
+and every research gate in §14 carries its banked findings. Per the CLAUDE.md doc
+lifecycle rule, this working paper was retired into the durable record when Phase 38
+closed the wave (2026-06-11): the as-built mechanisms live in the topic docs
+(`architecture.md`, `drive-layout.md`, `model-policy.md`, `security-model.md`,
+`user-guide.md`, `known-limitations.md`, `PRIVACY.md`); this file keeps the decisions,
+the facts they rest on, the §-anchors BUILD_STATE cites, and the research-gate
+evidence. The full original plan (drafted 2026-06-10, review round 1 + plan audit
+2026-06-11) is in git history. Phases 29–30 are reserved by
+[`model-catalog-expansion-plan.md`](model-catalog-expansion-plan.md); this wave starts
+at **Phase 31**. Decisions continue the project-wide numbering at **D23** (D1–D7
+wave 1 · D8–D15 retrieval · D16–D22 catalog · D-UI1–4 UI wave)._
 
 The eight features (user-selected 2026-06-10):
 
@@ -31,7 +25,7 @@ The eight features (user-selected 2026-06-10):
 | 35 | Compare two documents — **✅ DONE 2026-06-11** | M | Phase 33 (task machinery) | none |
 | 36 | Audio transcription as ingestion (whisper.cpp) — **✅ DONE 2026-06-11** | L | research gates R-W1..R-W4 (all resolved) | **whisper.cpp sidecar family + whisper GGML weights** |
 | 37 | Voice dictation in the composer — **✅ DONE 2026-06-11** | S–M | Phase 36 (transcriber) | none beyond 36 |
-| 38 | Scanned-PDF / photo OCR | M–L | research gates R-O1..R-O3 | **tesseract.js (WASM) + vendored traineddata** |
+| 38 | Scanned-PDF / photo OCR — **✅ DONE 2026-06-11** | M–L | research gates R-O1..R-O3 (all resolved) | **tesseract.js (WASM, pinned npm dep) + vendored traineddata (`ocr/` asset class)** |
 
 **Recommended serial order: 31 → 32 → 33 → 34 → 35 → 36 → 37 → 38.** Rationale in §3.
 If two tracks can run in parallel: track A = 31–35 (pure DB/LLM/UI work on existing
@@ -561,67 +555,70 @@ what was built:
   a real microphone is not headlessly drivable; the renderer half needs a human in the
   built app.
 
-## 11. Phase 38 — Scanned-PDF / photo OCR
+## 11. Phase 38 — Scanned-PDF / photo OCR — ✅ DONE (2026-06-11, as implemented)
 
-**Step 0 (small, may ship early in any phase):** image-only-PDF **detection**: PdfParser
-yields ~zero text across pages ⇒ document fails with friendly copy ("This PDF looks like a
-scan — it has no readable text yet") instead of silently indexing nothing. Pure trust fix,
-Phase-17 spirit, no OCR needed.
+Image-only PDFs and photos (`.png`/`.jpg`/`.jpeg`) become searchable corpus documents
+via local OCR (tesseract.js 7.0.0, WASM, pinned exact; German + English). All three
+research gates ran FIRST on real artifacts (the Phase-36 discipline) — findings in §14;
+D31/D32 resolved from them (§13). The full mechanism doc is `architecture.md`
+("Scanned-PDF / photo OCR"); licenses in `model-policy.md`; the asset class in
+`drive-layout.md`; honest costs in `known-limitations.md`.
 
-**Goal (full):** image-only PDFs and photos (`.png`/`.jpg`) become searchable documents via
-local OCR (tesseract.js WASM; German + English).
-
-**The architectural wrinkle (D31):** ingestion is main-process; the main process has **no
-canvas/DOM** (fact §2.10), and rendering a PDF page to pixels needs one. node-canvas is a
-native dep (against the theme). Options: **(a)** OCR work runs in a hidden renderer/worker
-context (pdfjs renders pages to canvas; tesseract.js runs in the same context; results
-return over IPC) — keeps zero native deps, adds a renderer↔main ingestion round-trip;
-**(b)** Electron `utilityProcess` with an OffscreenCanvas — cleaner isolation IF pdfjs
-renders there (R-O1 must prove it). Photos need no rendering — tesseract.js consumes
-image bytes directly in either design (and Node-side for photos may work without canvas —
-R-O1 checks that too, which could split the design: photos in main, PDFs via renderer).
-
-**Offline vendoring (R-O2, the licensing/offline gate):** tesseract.js by default fetches
-worker JS, the WASM core, and `*.traineddata` from CDNs at runtime — **all three must be
-vendored on the drive** (`ocr/` dir in the layout: core + worker + `deu`/`eng` traineddata)
-and wired via explicit `workerPath`/`corePath`/`langPath`. Licenses to review: tesseract.js
-(Apache-2.0), tesseract-core WASM (Apache-2.0), traineddata (Apache-2.0) — per
-`model-policy.md` like every shipped asset; sizes recorded (`fast` vs `best` variants —
-pick via R-O3 quality check on real German scans). Distribution rides `runtime-sources.yaml`
-or a new asset class in the fetch scripts (decide in D32 — it is NOT a model manifest; it
-has no GGUF semantics).
-
-**Trigger semantics (D33):** OCR is SLOW on CPU — recommendation: never automatic. Detection
-(step 0) marks the document; the row offers "Make searchable (OCR)" which runs OCR as a
-document task (Phase-33 machinery: progress, cancel) and re-ingests the recognized text
-(per-page `ExtractedSegment{ pageNumber }` ⇒ page citations work). Photos: parser accepts
-them and OCRs on import directly (small, single image) — asymmetry justified by size.
-
-**Where to look in detail:**
-- **R-O1:** can pdfjs (our pinned legacy build) render to an OffscreenCanvas in a
-  `utilityProcess`/worker, and can tesseract.js consume Node Buffers for photos without
-  canvas? Probe BOTH in the Electron we pin (two-runtime discipline).
-- **R-O2:** the exact vendored-asset set + the no-network proof (run with the offline guard
-  watching — zero remote attempts).
-- **R-O3:** recognition quality `fast` vs `best` on real German office scans (umlauts,
-  ß) — sets the shipped traineddata variant and size budget.
-- `DocumentPreview` — OCR'd documents should show per-page text like PDFs do today.
-
-**Tests:** detection heuristic fixtures (true scan, hybrid text+scan, normal PDF); the OCR
-context's IPC contract with a fake OCR engine; vendored-path resolution (no CDN URLs —
-sentinel grep for the CDN hosts in the bundle); page-number preservation → citations;
-manual smoke behind `PAID_OCR_SMOKE` with a real scan fixture on the test drive.
+- **Step 0 — detection (shipped first, the Phase-17 trust fix):** a PDF where no page
+  reaches 25 extractable chars fails friendly ("This PDF looks like a scan — it has no
+  readable text yet.") instead of silently indexing nothing. `DocumentInfo.scanDetected`
+  is DERIVED (failed + the exact notice — no schema change). Hybrid text+scan PDFs are
+  NOT detected (their text pages index normally). Fixtures are synthesized in
+  `tests/helpers/fixtures.ts` (`makeScanOnlyPdf`/`makeHybridPdf` — a real 1.1 kB JPEG
+  in handcrafted PDFs; zero binary fixtures committed).
+- **D31 as built — the split design:** a hidden BrowserWindow (`ocr.html` + its own
+  five-channel sandboxed preload; pull-based `OCR_RASTER` protocol with recognition
+  backpressure) does ONLY pdf→PNG rasterization at 300 DPI (cap 4096 px/side) with the
+  SAME pinned pdfjs LEGACY build the PdfParser uses — the modern v6 build calls
+  `Uint8Array.prototype.toHex`, which Electron 37's Chromium lacks (found live in the
+  eyeball walk; the probe had used legacy). Recognition always runs MAIN-side in
+  tesseract.js Node mode on Buffers (`services/ocr/`: engine + factory + rasterizer).
+  Two implementation traps recorded: a SANDBOXED preload must be a single file (the
+  multi-entry preload build splits shared chunks → the ocr preload hardcodes its
+  channel literals, contract-tested), and bytes crossing the contextBridge are
+  cross-realm typed arrays pdf.js rejects (copied into a same-realm array first).
+- **D33 as built:** "Make searchable (OCR)" = doc-task kind `'ocr'` on the Phase-33
+  engine (queue/progress/cancel; needs the OCR engine, NOT the chat runtime; the D26
+  chat-streaming guard holds). Recognition persists in the additive
+  `documents.ocr_json` (content → DB only; metadata as `DocumentInfo.ocr`), then
+  re-ingests via the PdfParser's `ParseContext.ocrPages` hook → one segment per page ⇒
+  page citations unchanged (proved e2e through the real retrieval path in CI with the
+  fake engine). `ocr_json` survives re-index (preview + re-index reuse it; re-running
+  the task overwrites); cancel persists nothing. Photos: `ImageParser` OCRs on import
+  (engine injected via ParseContext — the transcriber precedent); preview re-recognizes.
+- **Availability (D14/D9):** `createSelectedOcrEngine` → engine iff
+  `ocr/*.traineddata.gz` exist, else null (no mock). `AppStatus.ocrAvailable` gates the
+  offer + the photo mention; absent assets ⇒ notice + "needs the OCR files" hint. The
+  `ocrLanguages` settings key was dropped — availability-driven, no key (D14).
+- **D32 as built:** `runtime-sources.yaml` `ocr:` block (new asset class: plain files,
+  sha256 = install state, no marker), `fetch-runtime --family ocr`, `planOcrDownloads`
+  in assets.ts, `assertCommercialDrive.ocrAssetsVerified` + both script gates,
+  `ocr/` in `DRIVE_LAYOUT_DIRS` + prepare-drive scripts, `/ocr/` git-ignored.
+  Packaged builds `asarUnpack` tesseract.js + tesseract.js-core (worker_threads cannot
+  read asar; workerPath rewritten to `.unpacked`) — release-acceptance smoke recorded.
+- **Verification:** +38 CI tests (detection fixtures, fake-engine task integration
+  incl. cancel/guards/re-run, photo pipeline, factory/engine offline wiring, ocr-block
+  validation, planOcrDownloads, no-CDN sentinel over src/, preload channel contract);
+  `PAID_OCR_SMOKE` manual harness PASSED on the real assets (confidence 95, zero remote
+  connect attempts under a net watch); the built-app eyeball walk PASSED both legs —
+  the real hidden-window → tesseract → re-ingest pipeline recognized the German scan
+  fixture (umlauts/ß exact) and a photo imported straight to Ready.
 
 ---
 
 ## 12. Cross-cutting impact inventory
 
-- **DB:** `messages_fts` (+triggers) · `documents.summary_json`, `documents.origin_json`
-  (additive `ensureColumn`) · optionally a doc-task results shape (D28 prefers
+- **DB:** `messages_fts` (+triggers) · `documents.summary_json`, `documents.origin_json`,
+  `documents.ocr_json` (additive `ensureColumn`) · no doc-task results table (D28:
   materialized documents instead).
 - **Settings (whitelisted additions):** none strictly required for 31/33–35 (availability-
-  driven, D14 precedent); Phase 38 may add `ocrLanguages`; Phase 36/37 need none (manifest +
-  binary presence gate everything).
+  driven, D14 precedent); Phases 36/37/38 added none either — manifest/binary/asset
+  presence gates everything (the considered `ocrLanguages` key was dropped).
 - **AuditEventType (additive):** `workspace_password_changed`, `document_task_completed`
   (+`_failed`) — ids/kinds only; searches and dictation are deliberately NOT audited
   (content-adjacent reads).
@@ -632,10 +629,11 @@ manual smoke behind `PAID_OCR_SMOKE` with a real scan fixture on the test drive.
   **SHIPPED with Phase 31** (`services/permissions.ts`); **Phase 37 added the single scoped
   `media` (audio-only, own-WebContents) allow** — documented in `security-model.md`.
 - **Drive layout:** `runtime/whisper.cpp/<os>/`, `models/transcriber/` (manifest-driven,
-  role-named like `models/reranker`), `ocr/` assets — `drive.ts` `DRIVE_LAYOUT_DIRS` + both
+  role-named like `models/reranker`), `ocr/` traineddata (Phase 38) — `drive.ts` `DRIVE_LAYOUT_DIRS` + both
   script families + `drive-layout.md`.
 - **Commercial pipeline:** `assertCommercialDrive` + `build-commercial-drive` learn the
-  whisper family (markers, backend checks) and the OCR asset set; `verify-models --generate`
+  whisper family (markers, backend checks) and the OCR asset set (`ocrAssetsVerified` +
+  native hash gates in both scripts); `verify-models --generate`
   covers whisper weights via the normal manifest path.
 - **Docs at each phase's end (per the ritual):** `architecture.md` (task service, second
   sidecar family), `rag-design.md` (nothing — retrieval untouched), `security-model.md`
@@ -658,8 +656,8 @@ manual smoke behind `PAID_OCR_SMOKE` with a real scan fixture on the test drive.
 | D37 | Compare mode-(a) input + mode decision: chunks vs re-parse | **RESOLVED (Phase 35, 2026-06-11): re-extract the parser's SEGMENTS** (the D36 path) for mode (a)'s input AND for the mode decision itself. Two reasons beyond D36's: chunk overlap would present duplicated text as phantom "shared" content to a comparison, and the ~80-token overlap inflates a chunk-based length estimate by ~16% — enough to mis-route a fitting pair into the heavier mode (b). Mode (b)'s map step deliberately uses the stored CHUNKS instead (the pairing needs their vectors; per-pair notes tolerate overlap like summary partials, D25 precedent). Regression-tested (every source word exactly once in the mode-(a) prompt) |
 | D29 | Timestamp representation | **RESOLVED (round 1):** whisper segments → `sectionLabel: "mm:ss–mm:ss"` (existing `Citation.section` surfaces it). No schema change |
 | D30 | Dictation capture pipeline | **RESOLVED (round 1):** renderer MediaRecorder → OfflineAudioContext resample → WAV bytes → main temp file (shredded) → transcriber; mic via scoped `setPermissionRequestHandler`. Streaming ASR explicitly out of scope. **Implemented in Phase 37 (§10) exactly as locked** |
-| D31 | OCR execution context | **OPEN (by design):** hidden renderer/worker vs `utilityProcess` + OffscreenCanvas — R-O1 decides; photos possibly main-side directly. BLOCKING for Phase 38 implementation |
-| D32 | OCR asset distribution | **OPEN (by design):** extend `runtime-sources.yaml` (new asset class) vs dedicated `fetch-ocr` script entry. Resolve with R-O2's asset inventory |
+| D31 | OCR execution context | **RESOLVED (Phase 38, 2026-06-11, by R-O1): the split design** — a hidden BrowserWindow does ONLY the pdf→PNG rasterization (it is the sole context with a canvas: R-O1 probed the Electron-37 `utilityProcess` and found NO OffscreenCanvas/DOM globals at all, killing option (b)); recognition ALWAYS runs MAIN-side in tesseract.js **Node mode** on image-file Buffers (no canvas needed — probed in BOTH runtimes), where the worker script + WASM core load from local `node_modules` with zero CDN involvement. Photos never touch the renderer at all. The renderer↔main round-trip carries only page PNGs |
+| D32 | OCR asset distribution | **RESOLVED (Phase 38, 2026-06-11, by R-O2's inventory): ride `runtime-sources.yaml` with a new additive `ocr:` asset class** (plain verified files `{ lang, url, sha256, dest }`, no extraction, no per-OS variance), fetched by `fetch-runtime`'s Phase-36 `--family` mechanism. The drive carries ONLY the traineddata (`ocr/<lang>.traineddata.gz` — tesseract.js reads the `.gz` layout natively, single hash per file); the worker JS + WASM core ship inside the app as the pinned npm deps. A dedicated `fetch-ocr` script family was rejected: two small files don't justify a third script family when the family mechanism already exists |
 | D33 | OCR trigger | **RESOLVED (round 1): never automatic for PDFs** — detection notice + explicit "Make searchable (OCR)" cancellable task with progress; photos OCR on import (small, fast). Auto-on-import and a settings toggle rejected (silent slow imports / a key + two code paths before the feature exists) |
 | D34 | Whisper invocation mode | **RESOLVED (Phase 36, 2026-06-11, by R-W1): per-file CLI, not a server.** The v1.8.6 zip ships BOTH `whisper-cli.exe` and `whisper-server.exe` — but only for Windows, so "server ships per-OS" (the lean-server condition) fails; and the CLI wins on merits for batch-only use: progressive `-pp` progress + segments while it works (the R-W4 signal), no multi-hundred-MB upload over loopback, no port/health lifecycle, cancel/lock-suspend = kill the child. The localhost-only sidecar rule is moot (no socket). Revisit server mode only if Phase-37 dictation latency demands a warm model |
 | D35 | Audio originals on the drive | **RESOLVED (Phase 36, 2026-06-11): keep the copy** — the locked Phase-4 copy-into-workspace contract + `reindexDocument` re-parsing the stored file force it (transcript-only storage would break re-index and the self-contained drive). Shipped with the recommended riders: size-aware import confirmation (>50 MB picked audio, `docs:importPreflight`), honest "Transcribing… N%" progress on import AND re-index, re-index = full re-transcription recorded in `known-limitations.md`. A sha256-keyed transcript cache only on evidence. Bonus that fell out of the packing design: preview/translate/compare read the STORED CHUNKS (exact for audio — no overlap by construction), so only re-index pays the re-transcription |
@@ -675,9 +673,9 @@ manual smoke behind `PAID_OCR_SMOKE` with a real scan fixture on the test drive.
 | R-W2 | Decodable input formats of the pinned binary (mp3? flac? m4a?) | **RESOLVED — probed 2026-06-11** with real files against the real v1.8.6 binary. The binary itself declares + decodes **wav, mp3, flac, ogg** (all four verified incl. real German mp3/ogg; ogg was an upside surprise vs the plan's wav/mp3/flac guess). **m4a: NOT decodable — and the failure mode is the trap this gate existed for: whisper-cli EXITS 0** with "failed to read audio data" on stderr and NO output. ⇒ the transcriber treats "JSON exists and parses" as the only success signal, never the exit code; m4a is descoped with friendly convert-to-WAV/MP3 copy | 36 — done (format promise = wav/mp3/flac/ogg) |
 | R-W3 | Whisper model size for DE+EN on the reference laptop (RTF, RAM) | **RESOLVED — probed 2026-06-11** (dev box, 4 threads; TTS German with known ground truth + real LibriVox German speech). **base** (142 MB): RTF ≈ 0.17–0.21 but meaning-destroying word errors on real speech ("Leichenwagen"→"gleichen Wagen", "Töchter"→"Teuchter", "Särge"→"sehrge", "Magd"→"Markt"). **small** (466 MB): RTF ≈ 0.43–0.46 (~2.4× the cost), fixes nearly all of them; clean-speech German near-perfect with numbers/names/dates exact in both. **Shipped default: `small`** (German quality is the product promise); real hashes captured for both (base banked for a possible future low-end manifest: `60ed5bc3…2efe`). All profiles recommended (peak RSS ≈ 1.2 GB, batch job) | 36 — done (manifest = whisper-small-multilingual) |
 | R-W4 | 60-min file: time/memory/progress signal | **RESOLVED — probed 2026-06-11**: a real 52-min German mp3 (128 kbps LibriVox) through the small model on the dev CPU (4 threads): **2123 s wall (≈35 min, RTF ≈ 0.68), peak working set 1155 MB**, 616 segments, **`-pp` progress lines every ~5% (20 ticks) + segments streamed progressively to stdout** ⇒ the import job shows real per-file "Transcribing… N%" (shipped: CLI `-pp` → ParseContext.onProgress → in-memory map → `DocumentInfo.transcriptionProgress` on the existing polling path — no new channel). Memory is a non-issue; wall time is the honest cost recorded in `known-limitations.md` + the size-aware import confirm (D35) | 36 — done (job UX = per-file percent) |
-| R-O1 | pdfjs render-to-OffscreenCanvas in utilityProcess/worker; tesseract.js on Node Buffers w/o canvas | Probe inside the pinned Electron | 38 (D31 — BLOCKING) |
-| R-O2 | Full vendored-asset inventory for offline tesseract.js + licenses + sizes | Build a no-network spike with the offline guard watching | 38 (D32) |
-| R-O3 | `fast` vs `best` traineddata on real German scans | Quality spike on fixtures | 38 (shipped variant) |
+| R-O1 | pdfjs render-to-OffscreenCanvas in utilityProcess/worker; tesseract.js on Node Buffers w/o canvas | **RESOLVED — probed 2026-06-11** in the pinned Electron 37.10.3 AND system Node 24.13.0 (two-runtime discipline), tesseract.js pinned 7.0.0. **(1) `utilityProcess` has NO OffscreenCanvas** — nor `document`, `createImageBitmap`, `ImageData`, `DOMMatrix`, or `Path2D` (all `undefined`); D31 option (b) is impossible in the Electron we pin. **(2) A hidden BrowserWindow renders fine:** the pinned pdfjs LEGACY build rasterized page 1 of a real image-only PDF at 300 DPI (2550×3301) in ~350 ms with an explicit LOCAL `workerSrc`. **(3) tesseract.js Node mode consumes image-file Buffers WITHOUT canvas in BOTH runtimes** (PNG + JPEG decoded inside the WASM core): confidence 95, near-perfect German incl. umlauts/ß. **(4) Full split-pipeline e2e proved in the pinned Electron:** hidden-renderer render → PNG bytes over IPC → main-side recognize, confidence 94, all six probe words (`Auftragsbestätigung`, `Großmann`, `Bürostühle`, `Schloßallee`, `Özdemir`, `Grüßen`) exact. → D31 resolved (split design) | 38 — done |
+| R-O2 | Full vendored-asset inventory for offline tesseract.js + licenses + sizes | **RESOLVED — probed 2026-06-11** (source inspection + live probes with a `net.Socket.connect` watch — the offline-guard mechanism — installed). **Node-mode inventory:** workerPath defaults to the LOCAL `tesseract.js/src/worker-script/node/index.js`; the WASM core is `require`d from the LOCAL `tesseract.js-core` package (SIMD variant picked at runtime) — both ship INSIDE the app as npm deps, NOT on the drive. **The two runtime-fetch traps:** `langPath` defaults to `https://cdn.jsdelivr.net/npm/@tesseract.js-data/...` (MUST be set to the drive's `ocr/` dir) and the traineddata cache writes into CWD by default (MUST set `cacheMethod: 'none'`). Browser-mode defaults (worker + core from cdn.jsdelivr.net) are irrelevant in the split design — no tesseract code runs in a renderer. **No-network proof: zero remote connect attempts across every probe** (worker init + recognize, both runtimes, render leg included). **Licenses (all reviewed per model-policy.md):** tesseract.js 7.0.0 Apache-2.0 · tesseract.js-core 7.0.0 Apache-2.0 · traineddata Apache-2.0 (tesseract-ocr upstream). **Shipped sizes:** `deu.traineddata.gz` 1.27 MB + `eng.traineddata.gz` 2.82 MB ≈ 4.1 MB total. **Packaged-app caveat:** `worker_threads` cannot load a script from inside `app.asar` → `asarUnpack` tesseract.js + tesseract.js-core and resolve workerPath through `.unpacked` (release-acceptance item; the green gate never packages). → D32 resolved | 38 — done |
+| R-O3 | `fast` vs `best` traineddata on real German scans | **RESOLVED — probed 2026-06-11** on generated German office-scan pages (umlauts, ß, „"-quotes, numbers; 150-DPI clean + ~82-DPI/JPEG-q0.45 degraded variants). **Load-bearing finding: true `tessdata_best` (float) CRASHES the tesseract.js WASM core** (`missing function: DotProductSSE`) — only INTEGER models run, so the real choice is `fast` vs `best_int` (integerized best — what tesseract.js's own CDN default uses). Clean scan: a dead tie (103/104 words exact for both; only the typographic `×`→`x`). Degraded scan: **best_int 3 misses vs fast 7 of 104** — fast garbles the reference number `4711-Ä/2026` and `Jürgen`, best_int keeps both. Cost: ~1.3 s vs ~0.8 s per page (i7 dev box), +1.6 MB on the drive. **Shipped: `best_int`** (`@tesseract.js-data/{deu,eng}@1.0.0`, `4.0.0_best_int`, sha256 pinned in runtime-sources.yaml). The `.gz`-on-drive layout (`langPath` + `gzip: true`) verified end-to-end | 38 — done |
 
 ## 15. Testing posture (held from waves 1–2)
 

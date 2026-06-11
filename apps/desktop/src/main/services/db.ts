@@ -184,6 +184,8 @@ export function openDatabase(path: string): Db {
   ensureColumn(db, 'conversations', 'scope_json', 'scope_json TEXT')
   ensureColumn(db, 'documents', 'summary_json', 'summary_json TEXT')
   ensureColumn(db, 'documents', 'origin_json', 'origin_json TEXT')
+  // Phase 38: persisted per-page OCR recognition (content — lives only in this DB).
+  ensureColumn(db, 'documents', 'ocr_json', 'ocr_json TEXT')
   ensureChunksFts(db)
   ensureMessagesFts(db)
   return db

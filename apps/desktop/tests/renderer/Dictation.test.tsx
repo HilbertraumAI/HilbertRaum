@@ -28,6 +28,7 @@ function appStatus(over: Partial<AppStatus> = {}): AppStatus {
     workspaceReady: true,
     machineRamGb: 16,
     dictationAvailable: false,
+    ocrAvailable: false,
     ...over
   }
 }

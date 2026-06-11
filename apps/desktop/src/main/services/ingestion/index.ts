@@ -12,6 +12,7 @@ import { basename, extname, join } from 'node:path'
 import type { Db } from '../db'
 import type {
   DocumentInfo,
+  DocumentOcrInfo,
   DocumentOrigin,
   DocumentPreview,
   DocumentSummary,
@@ -21,7 +22,15 @@ import { sha256File } from '../models'
 import { type Embedder, encodeVector } from '../embeddings'
 import { ENCRYPTED_DOC_SUFFIX, shredFile, type DocumentCipher } from '../workspace-vault'
 import type { Transcriber } from '../transcriber'
-import { isAudioPath, selectParser, supportedExtensions, type ParseContext } from './parsers'
+import type { OcrEngine, OcrPage } from '../ocr'
+import {
+  isAudioPath,
+  isPdfPath,
+  selectParser,
+  supportedExtensions,
+  type ParseContext
+} from './parsers'
+import { PDF_SCAN_DETECTED_MESSAGE } from './parsers/pdf'
 import { chunkSegments } from './chunker'
 
 // Ingestion service (spec §7.7). Owns the document lifecycle:
@@ -61,6 +70,12 @@ export interface IngestionDeps {
    * "Transcribing… N%" on the documents table polling path (import AND re-index).
    */
   onTranscribeProgress?: (documentId: string, percent: number) => void
+  /**
+   * OCR engine for photo imports (Phase 38, the transcriber pattern). Optional AND
+   * nullable: absent/null means a photo FILE fails friendly with the
+   * needs-the-OCR-files copy — text ingestion is unaffected.
+   */
+  ocrEngine?: OcrEngine | null
 }
 
 // Canonical home of the `.enc` suffix moved to workspace-vault (Phase 32 — the password
@@ -82,7 +97,11 @@ const MIME_BY_EXT: Record<string, string> = {
   '.wav': 'audio/wav',
   '.mp3': 'audio/mpeg',
   '.flac': 'audio/flac',
-  '.ogg': 'audio/ogg'
+  '.ogg': 'audio/ogg',
+  // Photos (Phase 38) — OCR'd on import (D33 asymmetry: small, single image).
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg'
 }
 
 function nowIso(): string {
@@ -112,6 +131,7 @@ interface DocumentRow {
   error_message: string | null
   summary_json: string | null
   origin_json: string | null
+  ocr_json: string | null
   created_at: string
   updated_at: string
 }
@@ -182,6 +202,54 @@ function parseOrigin(json: string | null | undefined): DocumentOrigin | null {
   return null
 }
 
+/**
+ * The stored OCR recognition (Phase 38): full per-page text (CONTENT — DB only,
+ * never logs/audit) plus the surface metadata `DocumentInfo.ocr` exposes.
+ */
+interface StoredOcr {
+  pages: OcrPage[]
+  engineId: string
+  languages: string[]
+  createdAt: string
+}
+
+/** Parse a stored OCR result; malformed JSON must never break a document listing. */
+function parseOcr(json: string | null | undefined): StoredOcr | null {
+  if (!json) return null
+  try {
+    const v = JSON.parse(json) as Partial<StoredOcr> | null
+    if (!v || !Array.isArray(v.pages)) return null
+    const pages: OcrPage[] = []
+    for (const p of v.pages) {
+      const pageNumber = (p as OcrPage)?.pageNumber
+      const text = (p as OcrPage)?.text
+      if (typeof pageNumber === 'number' && Number.isInteger(pageNumber) && typeof text === 'string') {
+        pages.push({ pageNumber, text })
+      }
+    }
+    if (pages.length === 0) return null
+    return {
+      pages,
+      engineId: typeof v.engineId === 'string' ? v.engineId : 'unknown',
+      languages: Array.isArray(v.languages) ? v.languages.filter((l) => typeof l === 'string') : [],
+      createdAt: typeof v.createdAt === 'string' ? v.createdAt : ''
+    }
+  } catch {
+    return null
+  }
+}
+
+/** Metadata-only view of a stored OCR result (never the recognized text). */
+function ocrInfoOf(stored: StoredOcr | null): DocumentOcrInfo | null {
+  if (!stored) return null
+  return {
+    pageCount: stored.pages.length,
+    languages: stored.languages,
+    engineId: stored.engineId,
+    createdAt: stored.createdAt
+  }
+}
+
 function rowToInfo(row: DocumentRow, chunkCount: number, staleEmbeddings?: boolean): DocumentInfo {
   return {
     id: row.id,
@@ -195,6 +263,10 @@ function rowToInfo(row: DocumentRow, chunkCount: number, staleEmbeddings?: boole
     staleEmbeddings,
     summary: parseSummary(row.summary_json),
     origin: parseOrigin(row.origin_json),
+    // DERIVED scan marker (Phase 38 step 0): failed with the exact scan notice. The
+    // OCR task targets exactly these rows (plus already-OCR'd PDFs for a re-run).
+    scanDetected: row.status === 'failed' && row.error_message === PDF_SCAN_DETECTED_MESSAGE,
+    ocr: ocrInfoOf(parseOcr(row.ocr_json)),
     createdAt: row.created_at,
     updatedAt: row.updated_at
   }
@@ -349,10 +421,14 @@ export async function processDocument(
       documentId
     )
 
-    // Parse context (Phase 36, additive — text parsers ignore it): the injected
-    // transcriber, the documents dir for content transients, and per-document progress.
+    // Parse context (Phase 36/38, additive — text parsers ignore it): the injected
+    // transcriber + OCR engine, the documents dir for content transients, per-document
+    // progress, and — for a previously-OCR'd PDF — the stored per-page recognition so
+    // a re-index reuses it instead of failing scan detection again.
     const parseCtx: ParseContext = {
       transcriber: deps.transcriber,
+      ocrEngine: deps.ocrEngine,
+      ocrPages: isPdfPath(row.title) ? getDocumentOcrPages(db, documentId) : null,
       workDir: storeDir,
       onProgress: (percent) => deps.onTranscribeProgress?.(documentId, percent)
     }
@@ -472,7 +548,7 @@ export async function extractDocumentPreview(
   db: Db,
   storeDir: string,
   documentId: string,
-  deps: Pick<IngestionDeps, 'cipher'> = {}
+  deps: Pick<IngestionDeps, 'cipher' | 'ocrEngine'> = {}
 ): Promise<DocumentPreview> {
   const row = getRow(db, documentId)
   if (!row) throw new Error(`Unknown document: ${documentId}`)
@@ -518,7 +594,13 @@ export async function extractDocumentPreview(
       throw new Error('The document file is no longer on disk. Re-import it to preview.')
     }
 
-    const parsed = await parser.parse(parseSource)
+    // Phase 38: an OCR'd PDF previews its STORED recognition (the same ocrPages hook
+    // re-index uses — never a silent re-OCR); a photo re-recognizes the stored copy
+    // (one small image, the audio-preview trade-off inverted: cheap enough to redo).
+    const parsed = await parser.parse(parseSource, {
+      ocrEngine: deps.ocrEngine,
+      ocrPages: isPdfPath(row.title) ? getDocumentOcrPages(db, documentId) : null
+    })
     return {
       id: row.id,
       title: row.title,
@@ -616,6 +698,40 @@ export function setDocumentSummary(db: Db, documentId: string, summary: Document
 export function getDocumentSummary(db: Db, documentId: string): DocumentSummary | null {
   const row = getRow(db, documentId)
   return row ? parseSummary(row.summary_json) : null
+}
+
+/**
+ * Persist (or clear, with null) a document's OCR recognition (Phase 38). The pages
+ * are CONTENT: they live only in this (possibly encrypted) DB column — callers must
+ * never put them into logs or the audit trail. Survives re-index deliberately (like
+ * `origin_json`: it states where the text CAME from; re-running the OCR task is the
+ * explicit way to redo it).
+ */
+export function setDocumentOcr(
+  db: Db,
+  documentId: string,
+  ocr: { pages: OcrPage[]; engineId: string; languages: string[] } | null
+): void {
+  const json = ocr
+    ? JSON.stringify({
+        pages: ocr.pages,
+        engineId: ocr.engineId,
+        languages: ocr.languages,
+        createdAt: nowIso()
+      })
+    : null
+  db.prepare('UPDATE documents SET ocr_json = ?, updated_at = ? WHERE id = ?').run(
+    json,
+    nowIso(),
+    documentId
+  )
+}
+
+/** Read a document's stored per-page recognition, or null. The text is CONTENT. */
+export function getDocumentOcrPages(db: Db, documentId: string): OcrPage[] | null {
+  const row = getRow(db, documentId)
+  const stored = row ? parseOcr(row.ocr_json) : null
+  return stored ? stored.pages : null
 }
 
 /**

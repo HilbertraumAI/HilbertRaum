@@ -1,6 +1,6 @@
 # Drive & Workspace Layout
 
-_Last updated: 2026-06-11 (Phase 36: the `whisper.cpp` second sidecar family + `models/transcriber/`)_
+_Last updated: 2026-06-11 (Phase 38: the `ocr/` language-file asset class)_
 
 ## How the app finds its data
 
@@ -48,8 +48,9 @@ PRIVATE_AI_DRIVE/
 ├── runtime/whisper.cpp/{win,mac,linux}/        # SECOND sidecar family (Phase 36): the whisper-cli transcriber
 │   └── .paid-runtime.json                       # same marker scheme; win = upstream prebuilt, mac/linux = source-build (see below)
 ├── models/{chat,embeddings,reranker,transcriber}/ # weights (git-ignored; transcriber/ holds the whisper GGML .bin)
+├── ocr/                                        # OCR language files (Phase 38): {deu,eng}.traineddata.gz — plain sha256-verified, git-ignored
 ├── model-manifests/{chat,embeddings,reranker,transcriber}/ # committed YAML (the only model metadata in git)
-│   └── runtime-sources.yaml                     # sidecar download manifest (Phase 12; + whisper_cpp block since Phase 36)
+│   └── runtime-sources.yaml                     # sidecar download manifest (Phase 12; + whisper_cpp block Phase 36; + ocr block Phase 38)
 ├── workspace/                                  # paid.sqlite (encrypted or plaintext) — EMPTY on a sold drive
 ├── logs/
 ├── docs/                                       # user guide, privacy, troubleshooting
@@ -170,6 +171,25 @@ distribution machinery as the llama family:
 - Weights are a NORMAL model manifest (`model-manifests/transcriber/`,
   `role: transcriber`) → `fetch-models` and the Phase-18 in-app downloader cover them
   with zero new code; they land in `models/transcriber/`.
+
+### OCR language files (Phase 38)
+
+Local OCR ("Make searchable (OCR)" for scanned PDFs; photo imports) uses
+**tesseract.js**, which ships INSIDE the app as pinned npm dependencies — the drive
+carries ONLY the language data under `ocr/`:
+
+- The pin lives in `runtime-sources.yaml` under the additive **`ocr:`** block — a NEW
+  asset class (D32): plain files `{ lang, url, sha256, dest }`, no extraction, no
+  install marker. Idempotency IS the hash: present + matching sha256 ⇒ skip.
+- Fetch with **`fetch-runtime --family ocr`** (`-Family ocr` on PowerShell) — one run
+  covers every OS (the data is platform-independent).
+- Shipped files: `deu.traineddata.gz` (1.27 MB) + `eng.traineddata.gz` (2.82 MB), the
+  tessdata_best-integerized variant (R-O3), exactly as tesseract.js reads them
+  (`langPath` + gzip — never decompressed on the drive).
+- A drive WITHOUT the `ocr/` files still works fully: detected scans show the friendly
+  notice without the OCR offer, and photo imports fail per-file with friendly copy.
+  `assertCommercialDrive` + both build-commercial-drive script gates verify the files
+  on a SOLD drive.
 
 ## Portability notes
 - No hardcoded absolute paths; everything derives from the resolved root (spec rule).

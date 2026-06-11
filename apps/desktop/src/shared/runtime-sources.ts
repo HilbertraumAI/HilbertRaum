@@ -34,6 +34,25 @@ export interface RuntimeSources {
   builds: RuntimeBuild[]
 }
 
+/**
+ * One vendored OCR language file (Phase 38, D32 — a NEW asset class on this yaml,
+ * not a third script family): a plain verified file, no extraction, no per-OS
+ * variance. `dest` is the drive-relative target (e.g. `ocr/deu.traineddata.gz`).
+ */
+export interface OcrFile {
+  lang: string
+  url: string
+  /** Expected SHA-256 (lower-case hex) of the file AS DOWNLOADED; may be a placeholder. */
+  sha256: string
+  dest: string
+}
+
+export interface OcrSources {
+  /** Pinned upstream data version (e.g. `@tesseract.js-data 4.0.0_best_int`). */
+  version: string
+  files: OcrFile[]
+}
+
 export interface RuntimeSourcesResult {
   ok: boolean
   sources?: RuntimeSources
@@ -43,6 +62,11 @@ export interface RuntimeSourcesResult {
    * never read this key, so adding the block to a drive's yaml is forward-compatible.
    */
   whisper?: RuntimeSources
+  /**
+   * The optional `ocr:` sibling block (Phase 38 — vendored traineddata, D32).
+   * Same forward-compatibility contract as `whisper_cpp:`.
+   */
+  ocr?: OcrSources
   errors: string[]
 }
 
@@ -129,6 +153,67 @@ function validateFamily(block: Record<string, unknown>, prefix: string, errors: 
   return { version: version.trim(), builds }
 }
 
+/** Validate the Phase-38 `ocr:` block (`{ version, files: [{lang,url,sha256,dest}] }`). */
+function validateOcrFamily(
+  block: Record<string, unknown>,
+  errors: string[]
+): OcrSources | null {
+  const version = block['version']
+  if (typeof version !== 'string' || version.trim() === '') {
+    errors.push('"ocr.version" is required and must be a non-empty string')
+  }
+  const filesRaw = block['files']
+  const files: OcrFile[] = []
+  if (!Array.isArray(filesRaw) || filesRaw.length === 0) {
+    errors.push('"ocr.files" is required and must be a non-empty list')
+  } else {
+    filesRaw.forEach((f, i) => {
+      const where = `ocr.files[${i}]`
+      if (!isObject(f)) {
+        errors.push(`${where} must be a mapping`)
+        return
+      }
+      const lang = f['lang']
+      if (typeof lang !== 'string' || !/^[a-z_]{3,}$/i.test(lang.trim())) {
+        errors.push(`${where}.lang must be a traineddata language code (e.g. deu)`)
+      }
+      const url = f['url']
+      if (typeof url !== 'string' || url.trim() === '') {
+        errors.push(`${where}.url is required and must be a non-empty string`)
+      }
+      const sha = f['sha256']
+      if (typeof sha !== 'string' || sha.trim() === '') {
+        errors.push(`${where}.sha256 is required and must be a string (hash or placeholder)`)
+      }
+      const dest = f['dest']
+      if (typeof dest !== 'string' || dest.trim() === '' || dest.includes('..')) {
+        errors.push(`${where}.dest must be a drive-relative path with no ".."`)
+      }
+      if (
+        typeof lang === 'string' &&
+        typeof url === 'string' &&
+        typeof sha === 'string' &&
+        typeof dest === 'string' &&
+        !dest.includes('..')
+      ) {
+        files.push({
+          lang: lang.trim().toLowerCase(),
+          url: url.trim(),
+          sha256: sha.trim().toLowerCase(),
+          dest: dest.trim()
+        })
+      }
+    })
+  }
+  const seen = new Set<string>()
+  for (const f of files) {
+    if (seen.has(f.lang)) errors.push(`duplicate ocr file for language "${f.lang}"`)
+    seen.add(f.lang)
+  }
+  if (typeof version !== 'string' || version.trim() === '' || files.length === 0) return null
+  return { version: version.trim(), files }
+}
+
 /**
  * Validate a parsed `runtime-sources.yaml` object, collecting all errors. Pure (no I/O).
  * The file shape is:
@@ -139,6 +224,10 @@ function validateFamily(block: Record<string, unknown>, prefix: string, errors: 
  *   whisper_cpp:        # OPTIONAL second sidecar family (Phase 36), same shape
  *     version: v1.8.6
  *     builds: [ … ]
+ *   ocr:                # OPTIONAL vendored OCR language data (Phase 38, D32)
+ *     version: 4.0.0_best_int
+ *     files:
+ *       - { lang, url, sha256, dest }
  *
  * Unknown sibling keys are ignored (verified forward-compatibility: an older app on a
  * newer drive parses the file unchanged — wave-3 plan §9).
@@ -167,6 +256,18 @@ export function validateRuntimeSources(raw: unknown): RuntimeSourcesResult {
     }
   }
 
+  // The ocr block is OPTIONAL too (Phase 38) — same contract: absent is fine,
+  // malformed fails loudly.
+  let ocr: OcrSources | null = null
+  const ocrRaw = raw['ocr']
+  if (ocrRaw !== undefined) {
+    if (!isObject(ocrRaw)) {
+      errors.push('"ocr" must be a mapping (version + files) when present')
+    } else {
+      ocr = validateOcrFamily(ocrRaw, errors)
+    }
+  }
+
   if (errors.length > 0 || !sources) {
     return { ok: false, errors }
   }
@@ -175,7 +276,8 @@ export function validateRuntimeSources(raw: unknown): RuntimeSourcesResult {
     ok: true,
     errors: [],
     sources,
-    ...(whisper ? { whisper } : {})
+    ...(whisper ? { whisper } : {}),
+    ...(ocr ? { ocr } : {})
   }
 }
 

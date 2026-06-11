@@ -66,6 +66,7 @@ describe('planCommercialDrive', () => {
       'fetch-models',
       'fetch-runtime',
       'fetch-whisper',
+      'fetch-ocr',
       'package',
       'copy-app',
       'verify',
@@ -124,7 +125,8 @@ describe('assertCommercialDrive', () => {
       weightsVerified: true,
       licensesApproved: true,
       noUserData: true,
-      runtimeCurrent: true
+      runtimeCurrent: true,
+      ocrAssetsVerified: true
     })
   })
 

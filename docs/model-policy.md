@@ -255,3 +255,37 @@ conversion from `huggingface.co/ggerganov/whisper.cpp` (declares MIT; mechanical
 conversion — the E5/reranker provenance posture). Full notes in the manifest's
 `license_review` block. The weight rides the NORMAL manifest pipeline (`fetch-models`,
 in-app downloader, `verify-models`).
+
+## The OCR asset class (Phase 38)
+
+`runtime-sources.yaml` additionally pins the **`ocr:`** block — the vendored OCR
+language files, fetched with `fetch-runtime --family ocr` into `ocr/` as plain
+sha256-verified files (no extraction, no marker — the hash is the install state).
+The OCR engine itself (tesseract.js + its WASM core) ships INSIDE the app as pinned
+npm dependencies, not as drive assets.
+
+**License-review record — tesseract.js 7.0.0 npm dependency (status: approved,
+reviewed 2026-06-11):** **Apache-2.0** (npm + repo `naptha/tesseract.js`). Pure
+JS/WASM, no native build. Pinned EXACT (`"tesseract.js": "7.0.0"` — the D-UI1/Radix
+precedent). Its runtime CDN defaults (worker/core/langPath from cdn.jsdelivr.net) are
+fully disabled in our wiring (R-O2; sentinel-tested) — the dependency never fetches at
+runtime.
+
+**License-review record — tesseract.js-core 7.0.0 (status: approved, reviewed
+2026-06-11):** **Apache-2.0** (the Emscripten/WASM build of the Apache-2.0 tesseract
+engine; transitive dependency of tesseract.js, ships inside the app, `asarUnpack`ed in
+packaged builds).
+
+**License-review record — OCR traineddata (status: approved, reviewed 2026-06-11):**
+tesseract language data is **Apache-2.0** (the tesseract-ocr project's tessdata
+licensing). Shipped variant per R-O3: the **integerized tessdata_best** (`best_int`) —
+the float `tessdata_best` cannot run on the WASM core, and `best_int` clearly beat
+`fast` on degraded German scans (3 vs 7 misses of 104 words) at ~+1.6 MB. Pinned
+artifacts (repackaged by the tesseract.js project as `@tesseract.js-data/*@1.0.0`,
+`4.0.0_best_int`; the npm wrapper declares MIT, the data itself is Apache-2.0
+upstream):
+
+| Asset | SHA-256 | Size |
+|---|---|---|
+| `ocr/deu.traineddata.gz` | `306c4280d0cbed46fbff727486bd43b92730181bae80f56941a091f363bdf28b` | 1.27 MB |
+| `ocr/eng.traineddata.gz` | `45b4cb346724ac1774f1c36f42f182b887bcdb28ebe63e6fff90ac41f3fcff91` | 2.82 MB |

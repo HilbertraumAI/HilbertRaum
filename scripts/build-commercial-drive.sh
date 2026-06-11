@@ -94,6 +94,11 @@ done
 WHISPER=(--target "$TARGET" --os win --family whisper_cpp)
 [[ $DRY_RUN -eq 1 ]] && WHISPER+=(--dry-run)
 bash "$SCRIPT_DIR/fetch-runtime.sh" "${WHISPER[@]}"
+# OCR language files (Phase 38, D32): the ocr/ asset class — plain sha256-verified
+# traineddata files, OS-independent (one run covers every shipped OS).
+OCR_ASSETS=(--target "$TARGET" --family ocr)
+[[ $DRY_RUN -eq 1 ]] && OCR_ASSETS+=(--dry-run)
+bash "$SCRIPT_DIR/fetch-runtime.sh" "${OCR_ASSETS[@]}"
 
 # --- 4. Package + sign + notarize (MANUAL) -----------------------------------------
 step 4 "Package + sign the app (MANUAL -- secrets never in the repo)"
@@ -228,6 +233,44 @@ if [[ $DRY_RUN -eq 0 ]]; then
   else
     PROBLEMS+=("model-manifests/runtime-sources.yaml missing on the drive")
   fi
+fi
+# OCR asset gate (Phase 38, assertCommercialDrive parity): every pinned ocr file must
+# be present with a matching sha256 (plain files — the hash IS the install state).
+if [[ $DRY_RUN -eq 0 && -f "$TARGET/model-manifests/runtime-sources.yaml" ]]; then
+  ocr_top=""; ocr_lang=""; ocr_sha=""; ocr_dest=""
+  check_ocr_file() {
+    [[ -z "$ocr_lang" ]] && return 0
+    if [[ ! -f "$TARGET/$ocr_dest" ]]; then
+      PROBLEMS+=("ocr: $ocr_dest missing (run fetch-runtime --family ocr)")
+    elif [[ "$ocr_sha" =~ ^[a-f0-9]{64}$ ]]; then
+      if command -v sha256sum >/dev/null 2>&1; then ocr_actual="$(sha256sum "$TARGET/$ocr_dest" | awk '{print $1}')"
+      else ocr_actual="$(shasum -a 256 "$TARGET/$ocr_dest" | awk '{print $1}')"; fi
+      if [[ "$ocr_actual" != "$ocr_sha" ]]; then
+        PROBLEMS+=("ocr: $ocr_dest checksum mismatch (re-run fetch-runtime --family ocr)")
+      fi
+    fi
+  }
+  while IFS= read -r ocr_raw; do
+    ocr_line="${ocr_raw%$'\r'}"
+    [[ "$ocr_line" =~ ^[[:space:]]*# ]] && continue
+    if [[ "$ocr_line" =~ ^([A-Za-z0-9_]+)[[:space:]]*:[[:space:]]*$ ]]; then
+      check_ocr_file; ocr_lang=""; ocr_top="${BASH_REMATCH[1]}"; continue
+    fi
+    [[ "$ocr_top" == "ocr" ]] || continue
+    if [[ "$ocr_line" =~ ^[[:space:]]*-[[:space:]]*lang[[:space:]]*:[[:space:]]*(.+)$ ]]; then
+      check_ocr_file
+      ocr_lang="$(echo "${BASH_REMATCH[1]}" | sed 's/[[:space:]][[:space:]]*#.*$//;s/[[:space:]]*$//')"
+      ocr_sha=""; ocr_dest=""
+      continue
+    fi
+    if [[ -n "$ocr_lang" && "$ocr_line" =~ ^[[:space:]]+sha256[[:space:]]*:[[:space:]]*(.+)$ ]]; then
+      ocr_sha="$(echo "${BASH_REMATCH[1]}" | sed 's/[[:space:]][[:space:]]*#.*$//;s/[[:space:]]*$//' | tr '[:upper:]' '[:lower:]')"
+    fi
+    if [[ -n "$ocr_lang" && "$ocr_line" =~ ^[[:space:]]+dest[[:space:]]*:[[:space:]]*(.+)$ ]]; then
+      ocr_dest="$(echo "${BASH_REMATCH[1]}" | sed 's/[[:space:]][[:space:]]*#.*$//;s/[[:space:]]*$//')"
+    fi
+  done < "$TARGET/model-manifests/runtime-sources.yaml"
+  check_ocr_file
 fi
 # Weight gate (assertCommercialDrive parity): every weight VERIFIED, automated — not a
 # manual "confirm it yourself" instruction. UNVERIFIED/MISSING/MISMATCH all fail here.

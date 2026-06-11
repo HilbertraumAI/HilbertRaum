@@ -29,6 +29,8 @@ import { EVENTS } from '../shared/ipc'
 import { createSelectedEmbedder, type EmbeddingModelInfo } from './services/embeddings/factory'
 import { createSelectedReranker, type RerankerModelInfo } from './services/reranker'
 import { createSelectedTranscriber, type TranscriberModelInfo } from './services/transcriber'
+import { createSelectedOcrEngine } from './services/ocr'
+import { rasterizePdfWithHiddenWindow } from './services/ocr/rasterizer'
 import { discoverManifests, resolveManifestsDir, weightPath } from './services/models'
 import type { AppContext } from './services/context'
 
@@ -251,6 +253,13 @@ function initBackend(): void {
     model: resolveTranscriberModel(manifestsDir, paths.rootPath),
     onSelect: (kind, reason) => log.info('Transcriber backend selected', { kind, reason })
   })
+  // Phase 38: local OCR — tesseract.js over the drive's vendored `ocr/` language
+  // files, selected only when those exist (null otherwise; photo imports then fail
+  // per-file and detected scans show the notice without the "Make searchable" offer).
+  const ocrEngine = createSelectedOcrEngine({
+    rootPath: paths.rootPath,
+    onSelect: (kind, reason) => log.info('OCR backend selected', { kind, reason })
+  })
 
   // Document task engine (Phase 33/34): one-at-a-time summary/translation/compare
   // jobs. The chat-streaming guard reads the shared in-flight registry (fact §2.8) —
@@ -264,8 +273,11 @@ function initBackend(): void {
     isChatStreaming: () => inFlightStreams.size > 0,
     getContextTokens: () => getSettings(workspace.requireDb()).contextTokens,
     getStoreDir: () => documentsDir(paths.workspacePath),
-    getIngestionDeps: () => ({ embedder, cipher: workspace.documentCipher() }),
+    getIngestionDeps: () => ({ embedder, cipher: workspace.documentCipher(), ocrEngine }),
     beginDocumentWork: () => workspace.beginDocumentWork(),
+    // Phase 38: the OCR task's engine + the hidden-window PDF rasterizer (D31).
+    getOcrEngine: () => ocrEngine,
+    rasterizePdf: rasterizePdfWithHiddenWindow,
     audit
   })
 
@@ -281,6 +293,7 @@ function initBackend(): void {
     embedder,
     reranker,
     transcriber,
+    ocrEngine,
     manifestsDir,
     probeGpu: gpuProbe,
     isDev,
@@ -440,7 +453,8 @@ async function shutdown(): Promise<void> {
       ctx?.runtime.stop() ?? Promise.resolve(),
       ctx?.embedder.stop?.() ?? Promise.resolve(),
       ctx?.reranker?.stop?.() ?? Promise.resolve(),
-      ctx?.transcriber?.stop?.() ?? Promise.resolve()
+      ctx?.transcriber?.stop?.() ?? Promise.resolve(),
+      ctx?.ocrEngine?.stop?.() ?? Promise.resolve()
     ])
   } catch (err) {
     log.error('Error stopping sidecars on quit', String(err))

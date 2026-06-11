@@ -4,6 +4,7 @@ import { Badge, Banner, Button, ConfirmDialog, EmptyState, Modal, type BadgeTone
 import type {
   DocTaskKind,
   DocumentInfo,
+  DocumentOcrInfo,
   DocumentPreview,
   DocumentSummary,
   IngestionStatus,
@@ -69,12 +70,14 @@ const LARGE_AUDIO_CONFIRM_BYTES = 50 * 1024 * 1024
 const TASK_BUSY_LABEL: Record<DocTaskKind, string> = {
   summary: 'Summarizing…',
   translation: 'Translating…',
-  compare: 'Comparing…'
+  compare: 'Comparing…',
+  ocr: 'Reading the scan…'
 }
 const TASK_BUSY_TITLE: Record<DocTaskKind, string> = {
   summary: 'The summary is being written',
   translation: 'The translation is being written',
-  compare: 'The comparison is being written'
+  compare: 'The comparison is being written',
+  ocr: 'The scanned pages are being read'
 }
 
 function formatSize(bytes: number | null): string {
@@ -105,6 +108,9 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
   } | null>(null)
   // "Translate" target choice (Phase 34): the row button opens this small modal.
   const [translateDoc, setTranslateDoc] = useState<DocumentInfo | null>(null)
+  // OCR availability (Phase 38, D14 precedent): gates "Make searchable (OCR)" and the
+  // photo-import mention. Read once — the language files don't appear mid-session.
+  const [ocrAvailable, setOcrAvailable] = useState(false)
   // "Ask these documents" selection (indexed documents only).
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set())
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -125,6 +131,13 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
 
   useEffect(() => {
     refresh().catch((e) => setError(String(e)))
+    void (async () => {
+      try {
+        setOcrAvailable((await window.api.getAppStatus()).ocrAvailable)
+      } catch {
+        // No status (partial test bridge) → keep the safe default: no OCR offer.
+      }
+    })()
     return () => {
       if (pollRef.current) clearInterval(pollRef.current)
     }
@@ -226,7 +239,7 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
     const status = activeTask.status
     const kind = activeTask.kind
     const openId =
-      kind === 'summary'
+      kind === 'summary' || kind === 'ocr'
         ? activeTask.documentIds[0]
         : kind === 'compare'
           ? status?.resultRef?.documentId
@@ -248,6 +261,18 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
     setPreview(null)
     try {
       await startTask('summary', d.id)
+    } catch (e) {
+      setError(friendlyIpcError(e))
+    }
+  }
+
+  // "Make searchable (OCR)" (Phase 38, D33): explicit, never automatic — reading a
+  // scanned PDF page by page takes real time on the CPU.
+  async function onMakeSearchable(d: DocumentInfo): Promise<void> {
+    setError(null)
+    setPreview(null)
+    try {
+      await startTask('ocr', d.id)
     } catch (e) {
       setError(friendlyIpcError(e))
     }
@@ -395,8 +420,10 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
       )}
 
       <p className="hint" style={{ marginTop: 10 }}>
-        Supported: TXT, Markdown, PDF, DOCX, CSV — and audio recordings (WAV, MP3, FLAC,
-        OGG), which are transcribed on this drive.{' '}
+        Supported: TXT, Markdown, PDF, DOCX, CSV — audio recordings (WAV, MP3, FLAC, OGG),
+        which are transcribed on this drive
+        {ocrAvailable && ', and photos of pages (PNG, JPG), which are read on this drive'}
+        .{' '}
         {anyActive && 'Preparing your documents so you can ask about them…'}
       </p>
 
@@ -460,7 +487,15 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
               {provenanceLine(d)}
             </p>
           )}
-          {d.status === 'failed' && d.errorMessage && <Banner tone="error">{d.errorMessage}</Banner>}
+          {d.status === 'failed' && d.errorMessage && (
+            <Banner tone={d.scanDetected ? 'warning' : 'error'}>
+              {d.errorMessage}
+              {d.scanDetected &&
+                (ocrAvailable
+                  ? ' Use "Make searchable (OCR)" below to read the pages on this drive.'
+                  : ' Making it searchable needs the OCR files, which are not on this drive.')}
+            </Banner>
+          )}
           {d.staleEmbeddings && (
             <Banner tone="warning">
               This document was prepared with a different search model — re-index it so answers
@@ -476,6 +511,34 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
             >
               {previewLoading ? 'Opening…' : 'Preview'}
             </Button>
+            {/* "Make searchable (OCR)" for a detected scan (Phase 38, D33). The same
+                slot shows the busy/cancel pair while the OCR task runs. */}
+            {d.scanDetected &&
+              ocrAvailable &&
+              (activeTask &&
+              activeTask.documentIds.includes(d.id) &&
+              !isDocTaskTerminal(activeTask.status) ? (
+                <>
+                  <Button size="sm" disabled title={TASK_BUSY_TITLE[activeTask.kind]}>
+                    <span className="spinner" /> {TASK_BUSY_LABEL[activeTask.kind]}
+                    {activeTask.status && activeTask.status.progress.stepsTotal > 1
+                      ? ` (${activeTask.status.progress.stepsDone}/${activeTask.status.progress.stepsTotal})`
+                      : ''}
+                  </Button>
+                  <Button size="sm" onClick={() => void cancelActiveDocTask()} title="Stop reading the scan">
+                    Cancel
+                  </Button>
+                </>
+              ) : (
+                <Button
+                  size="sm"
+                  disabled={busy !== null || activeTask !== null}
+                  onClick={() => void onMakeSearchable(d)}
+                  title="Read the scanned pages with local text recognition — nothing leaves this drive"
+                >
+                  Make searchable (OCR)
+                </Button>
+              ))}
             {d.status === 'indexed' &&
               d.chunkCount > 0 &&
               (activeTask &&
@@ -610,6 +673,7 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
       {preview && (
         <PreviewModal
           preview={preview}
+          ocr={docs?.find((x) => x.id === preview.id)?.ocr ?? null}
           summary={docs?.find((x) => x.id === preview.id)?.summary ?? null}
           originLine={(() => {
             const d = docs?.find((x) => x.id === preview.id)
@@ -644,6 +708,7 @@ function summaryAttribution(s: DocumentSummary): string {
  */
 function PreviewModal({
   preview,
+  ocr,
   summary,
   originLine,
   regenerateDisabled,
@@ -651,6 +716,8 @@ function PreviewModal({
   onClose
 }: {
   preview: DocumentPreview
+  /** Recognition metadata when the text came from local OCR (Phase 38), or null. */
+  ocr?: DocumentOcrInfo | null
   summary?: DocumentSummary | null
   /** Provenance line when this is a generated document (Phase 34/35), or null. */
   originLine?: ReactNode
@@ -663,6 +730,12 @@ function PreviewModal({
       <p className="hint" style={{ margin: '0 0 8px' }}>
         Read-only extracted text — this is what document search and answers are based on.
       </p>
+      {ocr && (
+        <p className="hint" style={{ margin: '0 0 8px' }}>
+          Text recognized on this drive (OCR) — {ocr.pageCount}{' '}
+          {ocr.pageCount === 1 ? 'page' : 'pages'}. Recognition can contain errors.
+        </p>
+      )}
       {originLine && (
         <p className="hint" style={{ margin: '0 0 8px' }}>
           {originLine}

@@ -21,13 +21,14 @@
 # selected version + backend is skipped; a missing/stale marker re-fetches (so upgrading
 # a CPU-era drive to the Vulkan default actually replaces the build).
 #
-# --family selects the sidecar family (Phase 36): llama_cpp (default, llama-server)
-# or whisper_cpp (the whisper-cli transcriber, runtime/whisper.cpp/<os>/). Same
-# verify + marker logic for both.
+# --family selects the asset family: llama_cpp (default, llama-server), whisper_cpp
+# (the whisper-cli transcriber, runtime/whisper.cpp/<os>/ — same verify + marker
+# logic), or ocr (Phase 38: the vendored OCR language files, plain sha256-verified
+# downloads into ocr/ — no extraction, no marker; idempotency IS the hash).
 #
 # Usage:
 #   scripts/fetch-runtime.sh --target /Volumes/PRIVATE_AI_DRIVE \
-#       [--os linux] [--arch x64] [--backend cpu] [--family whisper_cpp] [--dry-run]
+#       [--os linux] [--arch x64] [--backend cpu] [--family whisper_cpp|ocr] [--dry-run]
 set -euo pipefail
 
 TARGET=""; OS=""; ARCH=""; BACKEND=""; FAMILY="llama_cpp"; DRY_RUN=0
@@ -50,8 +51,8 @@ while [[ $# -gt 0 ]]; do
 done
 [[ -z "$TARGET" ]] && { echo "Error: --target <drive-root> is required" >&2; exit 2; }
 case "$FAMILY" in
-  llama_cpp|whisper_cpp) ;;
-  *) echo "Error: --family must be llama_cpp or whisper_cpp" >&2; exit 2 ;;
+  llama_cpp|whisper_cpp|ocr) ;;
+  *) echo "Error: --family must be llama_cpp, whisper_cpp, or ocr" >&2; exit 2 ;;
 esac
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -86,6 +87,93 @@ sha256_of() {
   if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | awk '{print $1}'
   else shasum -a 256 "$1" | awk '{print $1}'; fi
 }
+
+# --- The ocr family (Phase 38, D32): plain verified FILES, not build archives -------
+# Parses `ocr.files` (- lang/url/sha256/dest entries), downloads each into its dest,
+# verifies the sha256 of the file AS DOWNLOADED, and skips files already present with
+# a matching hash. Mirrors assets.ts planOcrDownloads.
+if [[ "$FAMILY" == "ocr" ]]; then
+  OCR_VERSION=""
+  declare -a F_LANG F_URL F_SHA F_DEST
+  fidx=-1
+  TOP_KEY=""
+  strip_value_ocr() { echo "$1" | sed 's/[[:space:]][[:space:]]*#.*$//' | tr -d '"'"'"'' | sed 's/[[:space:]]*$//'; }
+  while IFS= read -r raw; do
+    line="${raw%$'\r'}"
+    [[ "$line" =~ ^[[:space:]]*# ]] && continue
+    if [[ "$line" =~ ^([A-Za-z0-9_]+)[[:space:]]*:[[:space:]]*$ ]]; then
+      TOP_KEY="${BASH_REMATCH[1]}"
+      continue
+    fi
+    [[ "$TOP_KEY" == "ocr" ]] || continue
+    if [[ -z "$OCR_VERSION" && "$line" =~ ^[[:space:]]*version[[:space:]]*:[[:space:]]*(.+)$ ]]; then
+      OCR_VERSION="$(strip_value_ocr "${BASH_REMATCH[1]}")"; continue
+    fi
+    if [[ "$line" =~ ^[[:space:]]*-[[:space:]]*lang[[:space:]]*:[[:space:]]*(.+)$ ]]; then
+      fidx=$((fidx + 1))
+      F_LANG[$fidx]="$(strip_value_ocr "${BASH_REMATCH[1]}")"
+      continue
+    fi
+    if [[ $fidx -ge 0 && "$line" =~ ^[[:space:]]+([A-Za-z0-9_]+)[[:space:]]*:[[:space:]]*(.+)$ ]]; then
+      key="${BASH_REMATCH[1]}"
+      val="$(strip_value_ocr "${BASH_REMATCH[2]}")"
+      case "$key" in
+        url) F_URL[$fidx]="$val" ;;
+        sha256) F_SHA[$fidx]="$(echo "$val" | tr '[:upper:]' '[:lower:]')" ;;
+        dest) F_DEST[$fidx]="$val" ;;
+      esac
+    fi
+  done < "$SOURCES_FILE"
+  if [[ -z "$OCR_VERSION" || $fidx -lt 0 ]]; then
+    echo "runtime-sources.yaml: no ocr block (version + files) found." >&2; exit 2
+  fi
+  echo "Fetch OCR language files -> $TARGET (data $OCR_VERSION)"
+  FAILED=0
+  for i in $(seq 0 $fidx); do
+    for required in url sha256 dest; do
+      case "$required" in
+        url) v="${F_URL[$i]:-}" ;;
+        sha256) v="${F_SHA[$i]:-}" ;;
+        dest) v="${F_DEST[$i]:-}" ;;
+      esac
+      [[ -z "$v" ]] && { echo "ocr.files (${F_LANG[$i]}): missing '$required'." >&2; exit 2; }
+    done
+    case "${F_DEST[$i]}" in
+      *..*|/*|[A-Za-z]:*)
+        echo "runtime-sources.yaml: ocr dest escapes the drive root: ${F_DEST[$i]}" >&2; exit 2 ;;
+    esac
+    DEST="$TARGET/${F_DEST[$i]}"
+    SHA="${F_SHA[$i]}"
+    echo "  ${F_LANG[$i]}: ${F_DEST[$i]}"
+    if [[ $DRY_RUN -eq 1 ]]; then echo "    would fetch ${F_URL[$i]}"; continue; fi
+    if [[ -f "$DEST" ]] && is_real_sha "$SHA"; then
+      if [[ "$(sha256_of "$DEST")" == "$SHA" ]]; then echo "    skip (present + verified)"; continue; fi
+      echo "    present but hash differs — re-fetching"
+    fi
+    mkdir -p "$(dirname "$DEST")"
+    if command -v curl >/dev/null 2>&1; then
+      CURL_EXTRA=""
+      curl --version 2>/dev/null | head -n1 | grep -qi schannel && CURL_EXTRA="--ssl-revoke-best-effort"
+      curl -L --fail --retry 3 $CURL_EXTRA -o "$DEST" "${F_URL[$i]}" || { echo "    curl failed" >&2; FAILED=$((FAILED + 1)); continue; }
+    elif command -v wget >/dev/null 2>&1; then
+      wget -O "$DEST" "${F_URL[$i]}" || { echo "    wget failed" >&2; FAILED=$((FAILED + 1)); continue; }
+    else
+      echo "No downloader found (need curl or wget)." >&2; exit 3
+    fi
+    if is_real_sha "$SHA"; then
+      ACTUAL="$(sha256_of "$DEST")"
+      if [[ "$ACTUAL" != "$SHA" ]]; then
+        echo "    FAIL: checksum mismatch (expected $SHA, got $ACTUAL) — deleting" >&2
+        rm -f "$DEST"; FAILED=$((FAILED + 1)); continue
+      fi
+      echo "    VERIFIED"
+    else
+      echo "    UNVERIFIED (placeholder hash)"
+    fi
+  done
+  [[ $FAILED -gt 0 ]] && exit 1
+  exit 0
+fi
 
 # --- Parse runtime-sources.yaml (list of build maps under <family>.builds:) ---------
 # BLOCK-AWARE since Phase 36: the file holds TWO top-level families (llama_cpp +

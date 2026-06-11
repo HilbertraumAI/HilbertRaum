@@ -105,7 +105,8 @@ catalog is Apache-2.0 (the challenger edge is quality+speed, not licence). Only 
 dev-box speed sweep remains (completeness; QA+RSS are machine-independent). See the §3 Phase-29
 entry.
 **Functionality wave 3 (Phases 31–38, [`docs/functionality-wave-3-plan.md`](docs/functionality-wave-3-plan.md))
-is IN PROGRESS: Phase 31 (conversation search) is DONE 2026-06-11** — R-S1 resolved GO,
+is COMPLETE 2026-06-11 — all eight phases shipped and the working paper is now the wave's
+design record. Phase 31 (conversation search) is DONE 2026-06-11** — R-S1 resolved GO,
 `messages_fts` mirrors the D13 index shape, `searchMessages` ranks bm25/newest-first (D23),
 search UI in the conversation list, plus the deny-by-default permission-handler rider; plan §4
 condensed to its design record (§3 entry). **Phase 32 (vault password change, D24) is DONE
@@ -156,6 +157,24 @@ null-not-mock selector), and `AudioParser` (packed time-labeled segments → D29
 chunks, no re-transcription) shipped; D35 resolved = keep the audio copy + size confirm +
 "Transcribing… N%" + re-index-is-re-transcription documented; plan §9 condensed to its
 design record (§3 entry).
+**Phase 38 (scanned-PDF / photo OCR, D31–D33) is DONE 2026-06-11 — wave 3 is COMPLETE
+and the working paper was retired to its design record.** All three research gates ran
+first on real artifacts: R-O1 killed `utilityProcess` (no OffscreenCanvas in Electron
+37) and proved the SPLIT design — a hidden window does only pdfjs-LEGACY page
+rasterization (pull-based protocol, own sandboxed preload) while recognition runs
+MAIN-side in tesseract.js Node mode on Buffers (worker + WASM core ship as pinned npm
+deps; `asarUnpack`ed); R-O2 proved zero remote attempts with only `langPath`/cache
+overridden and inventoried the drive assets (`ocr/{deu,eng}.traineddata.gz`, ~4.1 MB,
+Apache-2.0 ×3 reviewed); R-O3 found float `tessdata_best` CRASHES the WASM core and
+shipped **best_int** (beats `fast` 3-vs-7 misses on degraded German scans). Step-0
+detection fails image-only PDFs friendly ("This PDF looks like a scan…", derived
+`scanDetected`; hybrids index their text pages); "Make searchable (OCR)" is doc-task
+kind `'ocr'` (D33 — never automatic) persisting `documents.ocr_json` then re-ingesting
+through the PdfParser `ocrPages` hook ⇒ page citations unchanged; photos OCR on import;
+`AppStatus.ocrAvailable` gates the UI; D32 = the `ocr:` asset class on
+runtime-sources.yaml + `fetch-runtime --family ocr` + commercial gates. 968 tests
+green; `PAID_OCR_SMOKE` + the built-app eyeball walk both PASSED on real assets
+(§3 entry; plan §11 design record).
 **Phase 37 (voice dictation in the composer, D30) is DONE 2026-06-11** — the locked D30
 pipeline as a thin client of the Phase-36 transcriber: renderer `getUserMedia` →
 `MediaRecorder` → ONE `OfflineAudioContext` render to 16 kHz mono → pure-JS WAV encode
@@ -219,6 +238,7 @@ hardware matrix, item 1b). Consciously-accepted gaps live in
 | 35 | Compare two documents (wave-3 plan §8, D28/D37) | 🟢 done (2026-06-11) — `compare` kind on the same engine (exactly two distinct indexed sources), auto mode-switch by token math: full compare over re-extracted segments (D37) vs section-matched via the EXISTING `VectorIndex` `documentIds` scope (stored vectors, deterministic pairing, ceiling 12 + honest in-report truncation notice), embedder-visibility guard ("re-index first" before any model call), materialized "Comparison: <A> vs <B>.md" with `{ type: 'compare', comparedFrom: [a, b] }` provenance (additive `DocumentOrigin` union), ids-only audit incl. `documentIdB`, "Compare (2)" multi-select UI with both-rows busy state + report auto-open; R-T2 comparison half resolved on real b9585 + Qwen3-4B (2 smoke rounds — prompts hardened against a silent per-pair omission) |
 | 36 | Audio transcription as ingestion (wave-3 plan §9, D34/D35, R-W1..R-W4) | 🟢 done (2026-06-11) — **all four research gates resolved FIRST on the real pinned binary + real German audio** (R-W1: whisper.cpp **v1.8.6**, win prebuilt only, MIT, real hash → **D34 = per-file CLI**; R-W2: decodes wav/mp3/flac/ogg, m4a fails with **exit 0** → JSON-not-exit-code success signal; R-W3: **small** ships — base makes meaning-destroying German errors at 2.4× less cost; R-W4: 52-min mp3 = 35 min wall / 1.2 GB peak / `-pp` percent ticks → "Transcribing… N%"); additive `whisper_cpp:` yaml block + family-aware validator/fetch-scripts/layout/commercial gate; `whisper-small-multilingual` manifest (`role: transcriber`, real sha256, MIT approved) — Phase-18 downloader covers it with zero new code; `services/transcriber/` (D9 selector → real iff binary+weights else null, no mock; CLI per file, suspend/stop kill children, stderr-only error tails); `AudioParser` packs whisper segments into ≤400-word time-labeled segments (D29 `"mm:ss–mm:ss"` → `Citation.section`; 1 chunk = 1 segment ⇒ preview/translate/compare read STORED CHUNKS, no re-transcription); **D35 = keep the audio copy** (`.enc` at rest, re-index = full re-transcription, >50 MB import confirm via `docs:importPreflight`); friendly absent-transcriber per-file failure; audit sentinel audio leg; 910/910 + `PAID_WHISPER_SMOKE` manual harness; eyeballed in the built app (real + absent legs) |
 | 37 | Voice dictation in the composer (wave-3 plan §10, D30) | 🟢 done (2026-06-11) — composer mic (visible only with a transcriber selected — additive `AppStatus.dictationAvailable`, D14 precedent, no settings key): renderer `MediaRecorder` → one `OfflineAudioContext` render to 16 kHz mono → pure-JS WAV (`renderer/lib/wav.ts`, no new deps) → bytes over the new `dictation:transcribe` IPC → transient `<uuid>.parse-dictation.wav` in the documents dir (crash-sweep covered, `workDir` steered, shredded in `finally`) → Phase-36 transcriber → text inserted at the cursor (`execCommand('insertText')` = native undo; splice fallback) — NEVER auto-sent; Phase-31 permission handler gained its single scoped allow (audio-only `media` from our own WebContents; scope-matrix unit test); no audit event (content-adjacent); 64 MB cap + friendly §11.4 refusals; +21 tests (931 green) incl. `PAID_DICTATION_SMOKE` manual harness |
+| 38 | Scanned-PDF / photo OCR (wave-3 plan §11, D31–D33, R-O1..R-O3) | 🟢 done (2026-06-11) — **all three research gates resolved FIRST on real artifacts** (R-O1: Electron-37 `utilityProcess` has NO OffscreenCanvas → **D31 = the SPLIT design** — hidden-window pdfjs-LEGACY rasterization (300 DPI, pull-based `OCR_RASTER` protocol, own 5-channel sandboxed preload) + MAIN-side tesseract.js **Node mode** on Buffers (no canvas; worker + WASM core from the app's own pinned npm deps); R-O2: in Node mode only `langPath`/cache phone out — the drive carries ONLY `ocr/{deu,eng}.traineddata.gz` (~4.1 MB), zero remote attempts proven under a net watch, three Apache-2.0 license reviews in model-policy.md; R-O3: float `tessdata_best` CRASHES the WASM core → shipped **best_int**, which beats `fast` 3-vs-7 misses of 104 words on degraded German scans); **step 0 detection** (a PDF with no text-bearing page fails friendly "This PDF looks like a scan…" — derived `DocumentInfo.scanDetected`; hybrids NOT detected); **D33**: "Make searchable (OCR)" = doc-task kind `'ocr'` (needs the OCR engine, not the chat runtime; D26 guards hold; progress = pages + 1; cancel persists nothing) → recognition persisted in additive `documents.ocr_json` (content → DB only; `DocumentInfo.ocr` metadata) → re-ingest via the PdfParser `ocrPages` hook ⇒ per-page segments ⇒ **page citations unchanged** (proved e2e via the real retrieval path); ocr_json survives re-index (preview/re-index reuse it; re-running the task overwrites); **photos** (`.png/.jpg/.jpeg`) OCR on import via `ImageParser` (the D33 asymmetry); availability-driven `AppStatus.ocrAvailable` (no settings key — `ocrLanguages` dropped); **D32**: `runtime-sources.yaml` `ocr:` block (NEW plain-file asset class — hash IS the install state), `fetch-runtime --family ocr`, `planOcrDownloads`, `assertCommercialDrive.ocrAssetsVerified` + both script gates, `ocr/` in `DRIVE_LAYOUT_DIRS` + gitignore; tesseract.js **7.0.0 pinned exact** + `asarUnpack` (worker_threads cannot read asar; workerPath rewritten to `.unpacked` — packaged-app OCR smoke is a release-acceptance item); +38 tests (**968 green**) incl. the no-CDN sentinel + the preload channel contract (a sandboxed preload must be ONE file — the multi-entry preload build splits shared chunks); `PAID_OCR_SMOKE` PASSED on real assets (confidence 95, zero remote attempts); built-app eyeball walk PASSED both legs — the REAL hidden-window → tesseract → re-ingest pipeline recognized the generated German office scan (umlauts/ß exact, preview per page) and a photo imported straight to Ready. **Wave 3 (Phases 31–38) is COMPLETE; the working paper was retired to its design record per the doc lifecycle rule** |
 
 Legend: ⚪ not started · 🟡 in progress · 🟢 done · 🔴 blocked
 
@@ -2019,6 +2039,74 @@ Repo root: `f:\_coding\ai_drive`.
      drivable; the renderer half needs a human in the built app). Gate: typecheck
      clean, **931/931** (+24 manual skips), build green.
 
+- **Phase 38 — scanned-PDF / photo OCR (2026-06-11; plan §11 condensed to its design
+  record; CLOSES WAVE 3 — the working paper retired per the doc lifecycle rule):**
+  1. **Research gates FIRST, on real artifacts (the Phase-36 discipline; findings in
+     plan §14):** R-O1 — Electron 37's `utilityProcess` has NO OffscreenCanvas (nor any
+     DOM-ish global), killing D31 option (b); a hidden BrowserWindow renders an
+     image-only PDF at 300 DPI in ~350 ms with the pinned pdfjs LEGACY build; and
+     tesseract.js 7.0.0 **Node mode consumes image Buffers with NO canvas in BOTH
+     runtimes** (system Node 24 + Electron 37 main; confidence 95 on a generated German
+     office scan) ⇒ **D31 = the split design** (hidden window rasterizes; main
+     recognizes; photos never touch a renderer). R-O2 — Node mode loads worker + WASM
+     core from local node_modules; ONLY `langPath` (CDN default) and the CWD cache
+     phone out → both explicitly overridden; zero remote connect attempts proven under
+     a `net.Socket` watch; licenses tesseract.js / tesseract.js-core / traineddata all
+     Apache-2.0 (model-policy.md) ⇒ **D32 = the `ocr:` asset class on
+     runtime-sources.yaml** (plain verified files; drive carries only
+     `ocr/{deu,eng}.traineddata.gz`, ~4.1 MB). R-O3 — float `tessdata_best` CRASHES the
+     WASM core (`DotProductSSE` missing); `best_int` vs `fast` on a degraded ~82-DPI
+     German scan: 3 vs 7 misses of 104 words ⇒ **ship best_int** (sha256-pinned
+     `@tesseract.js-data/*@1.0.0` artifacts).
+  2. **Step 0 — detection (shipped with the phase, the Phase-17 trust fix):**
+     `PdfParser` fails a PDF with no text-bearing page (≥25 chars) with the EXACT
+     friendly notice; `DocumentInfo.scanDetected` is DERIVED from it (no schema
+     change); hybrids keep indexing their text pages. Fixtures synthesized
+     (`makeScanOnlyPdf`/`makeHybridPdf`, a real 1.1 kB JPEG inside handcrafted PDFs).
+  3. **The OCR service (`services/ocr/`):** `OcrEngine` seam (D9: factory returns the
+     real engine iff `ocr/*.traineddata.gz` exist, else null — NO mock);
+     `TesseractOcrEngine` (lazy warm worker, serialized recognitions, explicit
+     `langPath`/`gzip`/`cacheMethod:'none'`/asar-aware `workerPath`, OEM 1);
+     `rasterizer.ts` (hidden window per task, pull-based `OCR_RASTER` protocol —
+     recognition backpressures rendering, 60 s step timeout, destroy on cancel).
+     New renderer entry `ocr.html` + its own FIVE-channel sandboxed preload.
+  4. **The 'ocr' doc-task kind (D33 — never automatic):** validation = one PDF that is
+     scan-detected or already OCR'd; needs the engine, NOT the chat runtime (the D26
+     chat-streaming guard still holds); progress = pages + 1; rasterize → recognize
+     per page → persist `documents.ocr_json` (content → DB only; metadata as
+     `DocumentInfo.ocr`) → `reindexDocument` under the Phase-32 lease; the PdfParser
+     `ocrPages` hook yields one segment per page ⇒ **page citations unchanged**;
+     ocr_json SURVIVES re-index (preview/re-index reuse it; re-run overwrites); cancel
+     persists nothing. **Photos** (`.png/.jpg/.jpeg`): `ImageParser` OCRs on import
+     (engine via ParseContext — the transcriber-injection precedent); preview
+     re-recognizes (one image, cheap). `AppStatus.ocrAvailable` gates the UI.
+  5. **Distribution/UI:** `ocr:` block validated by `validateRuntimeSources`
+     (additive, forward-compatible), `fetch-runtime --family ocr` in BOTH script
+     families, `planOcrDownloads` (assets.ts), `assertCommercialDrive.ocrAssetsVerified`
+     + native gates in both build-commercial-drive scripts, `ocr/` in
+     `DRIVE_LAYOUT_DIRS`/prepare-drive/gitignore, `asarUnpack` for the two tesseract
+     packages. Documents UI: warning banner + "Make searchable (OCR)" (busy/cancel
+     states), needs-the-files hint when unavailable, photo mention in Supported,
+     preview "Text recognized on this drive (OCR)" line.
+  6. **Two implementation traps recorded for posterity:** a SANDBOXED preload must
+     bundle to ONE file (the multi-entry preload build split a shared chunk the
+     sandbox cannot `require` → the ocr preload hardcodes its channel literals,
+     contract-tested against `OCR_RASTER`); and the modern pdfjs v6 build calls
+     `Uint8Array.prototype.toHex` (an ES proposal absent from Electron 37's Chromium)
+     → the rasterizer uses the SAME legacy build as the PdfParser (plus a same-realm
+     copy of bytes crossing the contextBridge — pdf.js rejects cross-realm arrays).
+  7. **Verification:** +38 CI tests (zero-network: fake engine + fake rasterizer behind
+     the injection seams; detection fixtures; task integration incl. cancel/guards/
+     re-run/audit-ids-only; photo pipeline; citations e2e through the REAL retrieval
+     path; runtime-sources ocr validation; planOcrDownloads; the no-CDN sentinel over
+     src/; the preload channel contract). `PAID_OCR_SMOKE` manual harness PASSED on the
+     real assets (confidence 95, zero remote attempts; smoke drive provisioned:
+     `F:\paid-gpu-smoke-drive\ocr` + `ocr-smoke/` fixtures). Built-app eyeball
+     (walk-phase38) PASSED both legs — the real hidden-window → tesseract → re-ingest
+     pipeline read the generated German office scan (umlauts/ß exact, per-page
+     preview) and a photo imported straight to Ready. Gate: typecheck clean,
+     **968/968** (+25 manual skips), build green.
+
 ---
 
 ## 4. Shared data contracts (the actual "transported data")
@@ -2083,6 +2171,13 @@ large-audio import confirm; `DocumentInfo` gained optional `transcriptionProgres
 `transcribeDictation(audio: Uint8Array): Promise<string>` (`dictation:transcribe`, Phase 37 —
 voice dictation: 16 kHz mono WAV bytes in, plain text out; request/response, nothing persisted,
 no audit; `AppStatus` gained the additive `dictationAvailable: boolean` gate).
+Phase 38: `kind: 'ocr'` on the same doc-task channels (one PDF; the target must be
+scan-detected or already OCR'd; needs the OCR engine, not the chat runtime);
+`DocumentInfo` gained the DERIVED `scanDetected` flag + optional `ocr: DocumentOcrInfo`
+(metadata of the additive `documents.ocr_json` column — the recognized text itself is
+content and never leaves the DB); `AppStatus` gained the additive
+`ocrAvailable: boolean` gate. The internal `OCR_RASTER` channels (shared/ipc.ts) bind
+ONLY the hidden rasterizer window's preload, never the app bridge.
 (`pickDocuments` + `reindexDocument` are Phase-4 additions to the `IPC` registry beyond the spec
 §9.1 list — picker + re-index UX; `getPolicy` is a Phase-8 addition; the four `workspace:*` channels
 are Phase-9 additions.) `createConversation` now also accepts an optional `mode`
@@ -2716,10 +2811,9 @@ items are **MANUAL acceptance only** (R2/R5/R7 + the GPU hardware matrix). In ro
    Qwen3 30B-A3B) + the embeddings question (Granite Embedding R2 small is the only 384-dim
    near-drop-in). Key verified fact: our pinned llama.cpp **b9585 is the 2026-06-09 release**,
    so Gemma 4 (needs ~b8607) runs on the runtime we already ship — no runtime bump needed.
-6. **Functionality wave 3 (Phases 31–38) — IN PROGRESS: Phases 31–36 DONE
-   2026-06-11, next up is Phase 37 (voice dictation — a thin client of the Phase-36
-   transcriber; the deny-by-default permission handler gains its scoped `media`
-   exception there):** see the working paper
+6. **Functionality wave 3 (Phases 31–38) — ✅ COMPLETE 2026-06-11 (all eight phases
+   shipped; the working paper was retired to its design record per the doc lifecycle
+   rule — full original in git history):** see
    [`docs/functionality-wave-3-plan.md`](docs/functionality-wave-3-plan.md) (decisions
    D23–D34, research gates R-S1/R-T1–2/R-W1–4/R-O1–3). Eight user-selected features in
    dependency order: 31 conversation search (messages FTS5, mirrors D13) → 32 vault password

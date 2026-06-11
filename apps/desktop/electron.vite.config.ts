@@ -21,7 +21,14 @@ export default defineConfig({
     plugins: [externalizeDepsPlugin()],
     build: {
       outDir: 'out/preload',
-      lib: { entry: resolve(__dirname, 'src/preload/index.ts') }
+      lib: {
+        entry: {
+          index: resolve(__dirname, 'src/preload/index.ts'),
+          // The hidden OCR rasterizer window's tiny bridge (Phase 38, D31) — a
+          // separate entry so that window never sees the app API.
+          ocr: resolve(__dirname, 'src/preload/ocr.ts')
+        }
+      }
     }
   },
   renderer: {
@@ -35,7 +42,12 @@ export default defineConfig({
     build: {
       outDir: 'out/renderer',
       rollupOptions: {
-        input: resolve(__dirname, 'src/renderer/index.html')
+        input: {
+          index: resolve(__dirname, 'src/renderer/index.html'),
+          // Hidden OCR rasterizer page (Phase 38): bundles pdfjs + its worker locally
+          // — the sentinel test proves no CDN host ever enters these bundles.
+          ocr: resolve(__dirname, 'src/renderer/ocr.html')
+        }
       }
     },
     plugins: [react()]

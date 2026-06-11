@@ -113,6 +113,26 @@ export interface ScopeNotice {
   titles: string[]
 }
 
+/**
+ * Channels between the main process and the HIDDEN OCR rasterizer window (Phase 38,
+ * D31): the window's whole job is rendering PDF pages to PNG bytes — the only step of
+ * OCR that needs a canvas (recognition itself runs main-side). Pull-based: main
+ * requests ONE page at a time, so a long scan never queues unbounded page images.
+ * These channels are never exposed on the main window's bridge.
+ */
+export const OCR_RASTER = {
+  /** main → ocr window: open this PDF — `{ pdf: Uint8Array }`. */
+  open: 'ocr-raster:open',
+  /** ocr window → main: the document opened — `{ pageCount }`. */
+  opened: 'ocr-raster:opened',
+  /** main → ocr window: render one page — `{ pageNumber }` (1-based). */
+  render: 'ocr-raster:render',
+  /** ocr window → main: one rendered page — `{ pageNumber, png: Uint8Array }`. */
+  page: 'ocr-raster:page',
+  /** ocr window → main: `{ message }` — the OCR task fails friendly. */
+  error: 'ocr-raster:error'
+} as const
+
 // One-off main -> renderer notices (not tied to a request).
 export const EVENTS = {
   /**

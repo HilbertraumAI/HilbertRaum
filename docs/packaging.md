@@ -85,10 +85,16 @@ Key config points:
   **These are externalized, so a missing one only fails at RUNTIME, not in the green gate — after
   packaging, smoke-test importing a PDF, a DOCX, and a CSV, AND creating/unlocking an encrypted
   workspace (exercises `@noble/hashes` argon2id), from the produced `.exe`.**
+- **`tesseract.js` + `tesseract.js-core` are `asarUnpack`ed** (Phase 38): the OCR engine spawns
+  its Node worker via `worker_threads`, which loads the worker script (and the WASM core it
+  requires) through real filesystem reads that cannot see inside the asar archive. The engine
+  rewrites `app.asar` → `app.asar.unpacked` in the resolved workerPath. **After packaging, also
+  smoke-test "Make searchable (OCR)" on a scanned PDF from the produced `.exe`** (same
+  runtime-only-failure class as the externalized parsers).
 - **`model-manifests/` ship as `extraResources`** (beside `app.asar`). The packaged main process
   finds them via `resolveManifestsDir(app.getAppPath())`, which walks up to `resources/model-manifests`;
-  `PAID_MANIFESTS_DIR` overrides. Weights + sidecar binaries are **never** bundled — they live on
-  the prepared drive.
+  `PAID_MANIFESTS_DIR` overrides. Weights + sidecar binaries + the `ocr/` language files are
+  **never** bundled — they live on the prepared drive.
 - The build output goes to `apps/desktop/release/` (git-ignored).
 
 ### Launching from a drive

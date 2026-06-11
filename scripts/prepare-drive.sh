@@ -59,6 +59,7 @@ DIRS=(
   runtime/whisper.cpp/win
   runtime/whisper.cpp/mac
   runtime/whisper.cpp/linux
+  ocr
   logs
   config
   docs

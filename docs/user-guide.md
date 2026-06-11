@@ -260,8 +260,9 @@ your files.
 
 ## 7. Ask your documents (RAG)
 
-1. Open **Documents** and **Import** files (txt, md, pdf, docx, csv — and audio
-   recordings: wav, mp3, flac, ogg) or a folder.
+1. Open **Documents** and **Import** files (txt, md, pdf, docx, csv — audio
+   recordings: wav, mp3, flac, ogg — and, when your drive has the OCR files, photos of
+   pages: png, jpg) or a folder.
 2. Each file shows a friendly status while it is prepared locally (Waiting → Reading →
    Preparing → **Ready**).
    Imported files are **copied into your workspace**, so the drive stays self-contained.
@@ -289,7 +290,17 @@ If the app tells you your documents *"need a quick re-index"*, open **Documents*
 **Re-index** (or **Re-index all**) — this happens when files were indexed with a different
 search model than the one currently active, and takes a moment per file.
 
-> Scanned/image-only PDFs may not extract text (OCR is not included in this Lite version).
+**Scanned PDFs — "Make searchable (OCR)".** A PDF that is only pictures of pages (a
+scanner's output) has no readable text, so the app tells you honestly: *"This PDF looks
+like a scan — it has no readable text yet."* If your drive has the OCR files, the row
+offers **Make searchable (OCR)**: the pages are read **on this drive** (no cloud OCR —
+German and English are included), with per-page progress and a Cancel button. When it
+finishes, the document is a normal searchable document; answers cite it **by page**, and
+**Preview** shows the recognized text per page with a *"Text recognized on this drive
+(OCR)"* note — recognition is good on clean scans but can contain errors on blurry ones.
+Reading a scan is never automatic (it takes a couple of seconds per page); you choose
+when. **Photos of pages** (PNG/JPG) are the small exception: they are read immediately
+on import.
 
 **Summarize a document.** On the **Documents** screen, every Ready document has a
 **Summarize** button. The local model writes a summary on this drive — nothing leaves it —

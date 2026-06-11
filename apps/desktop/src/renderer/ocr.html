@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <!--
+      Hidden OCR rasterizer window (Phase 38, D31): renders PDF pages to PNG bytes for
+      main-side text recognition. Same offline-first CSP as the main window — only
+      same-origin resources; blob:/data: workers are what bundled pdfjs uses.
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; connect-src 'self' ws://localhost:* http://localhost:*; img-src 'self' data: blob:; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'"
+    />
+    <title>OCR rasterizer</title>
+  </head>
+  <body>
+    <script type="module" src="/ocr/main.ts"></script>
+  </body>
+</html>

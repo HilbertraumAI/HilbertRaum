@@ -35,6 +35,10 @@ logs/
 # apps/desktop/src/main/services/runtime/ (that bug silently un-tracked the runtime service).
 /runtime/
 
+# OCR language data (Phase 38) — vendored onto the drive at build time, never committed
+# (the never-commit-model-assets rule). Anchored: the source tree has services/ocr/.
+/ocr/
+
 # Code-signing secrets (Phase 13) — NEVER commit certs/keys/credentials.
 # Signing is driven by env vars / a local, git-ignored secrets file on the build machine.
 *.pfx

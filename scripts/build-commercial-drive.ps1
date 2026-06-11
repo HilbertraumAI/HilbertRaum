@@ -112,6 +112,11 @@ foreach ($osName in @('win', 'mac', 'linux')) {
 $whisper = @{ Target = $Target; Os = 'win'; Family = 'whisper_cpp' }
 if ($DryRun) { $whisper.DryRun = $true }
 Run 'fetch-runtime.ps1' $whisper
+# OCR language files (Phase 38, D32): the ocr/ asset class -- plain sha256-verified
+# traineddata files, OS-independent (one run covers every shipped OS).
+$ocrAssets = @{ Target = $Target; Family = 'ocr' }
+if ($DryRun) { $ocrAssets.DryRun = $true }
+Run 'fetch-runtime.ps1' $ocrAssets
 
 # --- 4. Package + sign + notarize (MANUAL) -----------------------------------------
 Step 4 'Package + sign the portable app (MANUAL -- secrets never in the repo)'
@@ -240,6 +245,44 @@ if (-not $DryRun) {
     }
   } else {
     $problems += 'model-manifests/runtime-sources.yaml missing on the drive'
+  }
+}
+# OCR asset gate (Phase 38, assertCommercialDrive parity): every pinned ocr file must
+# be present with a matching sha256 (plain files -- the hash IS the install state).
+if (-not $DryRun) {
+  $rtSources = Join-Path $Target 'model-manifests/runtime-sources.yaml'
+  if (Test-Path $rtSources) {
+    $topKey = $null
+    $cur = $null
+    $ocrFiles = @()
+    foreach ($raw in (Get-Content -Path $rtSources)) {
+      if ($raw -match '^\s*#') { continue }
+      if ($raw -match '^([A-Za-z0-9_]+)\s*:\s*$') {
+        if ($cur) { $ocrFiles += $cur; $cur = $null }
+        $topKey = $Matches[1]; continue
+      }
+      if ($topKey -ne 'ocr') { continue }
+      if ($raw -match '^\s*-\s*lang\s*:\s*(.+?)\s*$') {
+        if ($cur) { $ocrFiles += $cur }
+        $cur = [ordered]@{ lang = ($Matches[1] -replace '\s+#.*$', '').Trim() }
+        continue
+      }
+      if ($cur -and $raw -match '^\s+([A-Za-z0-9_]+)\s*:\s*(.+?)\s*$') {
+        $cur[$Matches[1].Trim()] = ($Matches[2] -replace '\s+#.*$', '').Trim()
+      }
+    }
+    if ($cur) { $ocrFiles += $cur }
+    foreach ($f in $ocrFiles) {
+      $dest = Join-Path $Target ($f.dest -replace '/', [IO.Path]::DirectorySeparatorChar)
+      if (-not (Test-Path $dest)) {
+        $problems += "ocr: $($f.dest) missing (run fetch-runtime -Family ocr)"
+      } elseif ($f.sha256 -match '^[a-f0-9]{64}$') {
+        $actual = (Get-FileHash -Path $dest -Algorithm SHA256).Hash.ToLower()
+        if ($actual -ne $f.sha256.ToLower()) {
+          $problems += "ocr: $($f.dest) checksum mismatch (re-run fetch-runtime -Family ocr)"
+        }
+      }
+    }
   }
 }
 # Weight gate (assertCommercialDrive parity): every weight VERIFIED, automated -- not a

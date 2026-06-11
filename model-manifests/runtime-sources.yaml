@@ -96,3 +96,27 @@ whisper_cpp:
       url: https://github.com/ggml-org/whisper.cpp/releases/download/v1.8.6/whisper-bin-x64.zip
       sha256: b07ea0b1b4115a38e1a7b07debf581f0b77d999925f8acb8f39d322b0ba0a822
       extract_to: runtime/whisper.cpp/win
+
+# OCR LANGUAGE DATA (Phase 38, D32): a NEW ASSET CLASS on this yaml — plain verified
+# files, no extraction, no per-OS variance. ADDITIVE block (the whisper_cpp
+# forward-compatibility contract). The drive carries ONLY these traineddata files;
+# the tesseract.js worker + WASM core ship inside the app as pinned npm deps (R-O2).
+#
+# PINNED DATA: @tesseract.js-data/{deu,eng}@1.0.0, variant 4.0.0_best_int — the
+# INTEGERIZED tessdata_best (R-O3: the WASM core cannot run float `best` models, and
+# best_int beat `fast` clearly on degraded German scans: 3 vs 7 misses of 104 words).
+# Shipped AS the .gz tesseract.js reads natively (langPath + gzip:true — one hash,
+# no decompression step in the scripts). Upstream license: Apache-2.0 (tesseract-ocr
+# traineddata; reviewed in docs/model-policy.md). The sha256 values were computed
+# from fresh downloads on 2026-06-11.
+ocr:
+  version: 4.0.0_best_int
+  files:
+    - lang: deu
+      url: https://cdn.jsdelivr.net/npm/@tesseract.js-data/deu@1.0.0/4.0.0_best_int/deu.traineddata.gz
+      sha256: 306c4280d0cbed46fbff727486bd43b92730181bae80f56941a091f363bdf28b
+      dest: ocr/deu.traineddata.gz
+    - lang: eng
+      url: https://cdn.jsdelivr.net/npm/@tesseract.js-data/eng@1.0.0/4.0.0_best_int/eng.traineddata.gz
+      sha256: 45b4cb346724ac1774f1c36f42f182b887bcdb28ebe63e6fff90ac41f3fcff91
+      dest: ocr/eng.traineddata.gz

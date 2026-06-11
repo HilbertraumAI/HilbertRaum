@@ -263,6 +263,36 @@ logs, best-effort shredding on SSDs, no password recovery — are documented in
   (the insert participates in the input's normal undo history). Leaving the screen
   mid-recording discards the recording and releases the microphone.
 
+## Scanned-PDF / photo OCR (Phase 38, wave-3 plan §11)
+
+- **OCR runs on the CPU at a couple of seconds per page** (R-O3: ~1.3 s recognition +
+  ~0.4 s rendering per A4 page on the reference CPU with the shipped `best_int` data).
+  That is exactly why it is **never automatic for PDFs** (D33): detection marks the
+  scan, the user starts "Make searchable (OCR)" deliberately, sees per-page progress,
+  and can cancel. A 200-page scanned book is a ~10-minute, user-chosen job.
+- **Language coverage is German + English** — the two shipped traineddata files. Other
+  languages will recognize poorly or not at all. Coverage is availability-driven (the
+  engine uses whatever `ocr/*.traineddata.gz` the drive carries), so a future language
+  is one vendored file away — but only deu+eng are pinned, reviewed, and tested.
+- **Recognition quality is the scan's quality.** Clean 150-DPI office scans came back
+  near-perfect in the R-O3 probes (103/104 words, umlauts/ß exact); a degraded ~80-DPI
+  JPEG still lost 3 of 104 words. The per-page text is searchable content, not a
+  notarized record — Preview shows exactly what was recognized.
+- **Hybrid PDFs (some text pages, some scanned pages) are not detected as scans.**
+  Their real text pages index normally; the scanned pages stay invisible to search.
+  Detection only catches documents with NO readable text — per-page hybrid OCR is a
+  possible follow-up, not shipped.
+- **The recognized text survives re-index; re-running OCR is the explicit redo.**
+  Re-index (e.g. after an embedder switch) reuses the stored recognition rather than
+  silently re-OCRing for minutes; if the recognition itself was bad, run "Make
+  searchable (OCR)" again — it overwrites.
+- **Photos are read on import** (the D33 asymmetry — one image, seconds). A photo
+  import without the OCR files on the drive fails per-file with friendly copy.
+- **Packaged-app OCR needs the asar-unpacked tesseract packages** (worker_threads
+  cannot load scripts from inside `app.asar`). Wired in `electron-builder.yml`;
+  verifying a real OCR run from the produced portable .exe is a release-acceptance
+  item (the green gate never packages — the R2 posture).
+
 ## GPU acceleration (Phases 14–16, [`gpu-support-plan.md`](gpu-support-plan.md))
 
 - **Integrated GPUs (Intel Iris Xe / UHD, AMD APU "Radeon Graphics") gain little.** They share

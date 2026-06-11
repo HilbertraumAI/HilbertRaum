@@ -44,6 +44,9 @@ export const DRIVE_LAYOUT_DIRS: readonly string[] = [
   // a prebuilt Windows build only; the mac/linux dirs exist for the documented
   // source-build provisioning step (drive-layout.md).
   ...DRIVE_OS_DIRS.map((os) => `runtime/whisper.cpp/${os}`),
+  // OCR language files (Phase 38): `<lang>.traineddata.gz`, vendored at drive-build
+  // time (runtime-sources.yaml `ocr:` block) — the engine never fetches at runtime.
+  'ocr',
   'logs',
   'config',
   'docs'

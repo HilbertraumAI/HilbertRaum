@@ -87,6 +87,7 @@ export function registerDocsIpc(ctx: AppContext): void {
     embedder: ctx.embedder,
     cipher: ctx.workspace.documentCipher(),
     transcriber: ctx.transcriber,
+    ocrEngine: ctx.ocrEngine,
     onTranscribeProgress: (documentId, percent) => transcribing.set(documentId, percent)
   })
 
@@ -232,7 +233,9 @@ export function registerDocsIpc(ctx: AppContext): void {
     requireNotProcessing(documentId)
     log.info('Preview document', { documentId })
     return extractDocumentPreview(ctx.db, storeDir, documentId, {
-      cipher: ctx.workspace.documentCipher()
+      cipher: ctx.workspace.documentCipher(),
+      // Phase 38: photos re-recognize on preview; OCR'd PDFs read their stored pages.
+      ocrEngine: ctx.ocrEngine
     })
   })
 

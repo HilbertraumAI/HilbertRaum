@@ -1,9 +1,10 @@
 import { existsSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import type { ModelManifest } from '../../shared/manifest'
-import type { RuntimeSources } from '../../shared/runtime-sources'
+import type { OcrSources, RuntimeSources } from '../../shared/runtime-sources'
 import { loadPolicy } from './policy'
 import {
+  planOcrDownloads,
   planRuntimeDownload,
   readRuntimeMarker,
   runtimeBinaryPresent,
@@ -142,6 +143,16 @@ export function planCommercialDrive(opts: PlanCommercialDriveOptions): Commercia
         'only; mac/linux builds come from the documented source-build step when shipped). ' +
         'Same verify-before-trust + .paid-runtime.json marker as the llama family.'
     },
+    {
+      id: 'fetch-ocr',
+      title: 'Download + verify the OCR language files (ocr/ asset class)',
+      command: `fetch-runtime --target ${target} --family ocr`,
+      manual: false,
+      description:
+        'Fetch the pinned traineddata files from runtime-sources.yaml into ocr/ ' +
+        '(Phase 38: deu + eng, the tessdata_best-integerized variant). Plain ' +
+        'sha256-verified files — no extraction, no marker; idempotency is the hash.'
+    },
     packageStep(os),
     {
       id: 'copy-app',
@@ -216,6 +227,11 @@ export interface CommercialAssertion {
      * families when `whisperSources` is also passed (Phase 36).
      */
     runtimeCurrent: boolean
+    /**
+     * Every pinned OCR language file is present + sha256-verified (Phase 38, opt-in:
+     * true when no `ocrSources` were passed).
+     */
+    ocrAssetsVerified: boolean
   }
   /** The per-weight verification detail (for surfacing which weight failed). */
   modelResults: ModelVerifyResult[]
@@ -263,7 +279,8 @@ export async function assertCommercialDrive(
   rootPath: string,
   manifests: ModelManifest[],
   runtimeSources?: RuntimeSources | null,
-  whisperSources?: RuntimeSources | null
+  whisperSources?: RuntimeSources | null,
+  ocrSources?: OcrSources | null
 ): Promise<CommercialAssertion> {
   const problems: string[] = []
 
@@ -378,6 +395,22 @@ export async function assertCommercialDrive(
   if (runtimeSources) checkFamily(runtimeSources, 'runtime', 'llama-server')
   if (whisperSources) checkFamily(whisperSources, 'whisper', WHISPER_BINARY_BASE)
 
+  // --- OCR language files present + verified (Phase 38, opt-in) ---
+  // Plain files: the hash IS the install state (no marker — mirrors planOcrDownloads).
+  let ocrAssetsVerified = true
+  if (ocrSources) {
+    const ocrTasks = await planOcrDownloads(rootPath, ocrSources)
+    for (const t of ocrTasks) {
+      if (t.status !== 'present-verified') {
+        ocrAssetsVerified = false
+        problems.push(
+          `ocr file "${t.lang}" is not present+verified (${t.relPath}; status: ${t.status}) — ` +
+            'run fetch-runtime --family ocr'
+        )
+      }
+    }
+  }
+
   return {
     ok: problems.length === 0,
     problems,
@@ -387,7 +420,8 @@ export async function assertCommercialDrive(
       weightsVerified,
       licensesApproved,
       noUserData,
-      runtimeCurrent
+      runtimeCurrent,
+      ocrAssetsVerified
     },
     modelResults
   }

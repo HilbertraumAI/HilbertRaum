@@ -46,6 +46,14 @@ extraResources:
 
 # Asar keeps the app a single archive; node:sqlite + the parser libs work from it.
 asar: true
+# tesseract.js spawns its Node OCR worker via worker_threads, which loads the worker
+# SCRIPT (and the WASM core it requires) through real filesystem reads — those cannot
+# see inside the asar archive (Phase 38, R-O2). Unpack both packages; the engine
+# rewrites app.asar → app.asar.unpacked in the resolved workerPath. Verify a real OCR
+# run from the produced .exe at release acceptance (the green gate never packages).
+asarUnpack:
+  - 'node_modules/tesseract.js/**'
+  - 'node_modules/tesseract.js-core/**'
 
 # CODE SIGNING (Phase 13). Signing turns a scary OS gatekeeper dialog into a clean launch
 # for a non-technical buyer; it is the single most important non-code task for the

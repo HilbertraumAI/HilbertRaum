@@ -26,6 +26,7 @@ This app does not send your data to cloud AI providers.
   local model, puts the text in the message box for you to review, and securely deletes the
   recording. Dictations are not saved, not logged, and never sent anywhere — the message itself
   is only sent to the local model when you press Send.
+- **No scan or photo upload.** Reading scanned PDFs and photos of pages (OCR) happens **on this device** with a local recognition engine and language files stored on the drive — no cloud OCR service is ever involved, and the app never fetches language data at run time.
 - **No embedding upload.** Vector indexes stay local.
 - **No automatic model downloads** unless you explicitly opt in.
 
@@ -36,7 +37,7 @@ folder):
 
 - Imported documents (a full copy of each imported file is stored in your workspace —
   including audio recordings)
-- Extracted text and document chunks (for recordings: the locally produced transcript)
+- Extracted text and document chunks (for recordings: the locally produced transcript; for scans/photos: the locally recognized text)
 - Embeddings / the local vector index
 - Chat history (conversations and messages)
 - Generated outputs

@@ -30,6 +30,123 @@ export function makePdf(text: string): Buffer {
   return Buffer.from(pdf, 'latin1')
 }
 
+// ---- Scanned-PDF detection fixtures (Phase 38 step 0) ------------------------------
+//
+// A REAL (tiny, 1.1 kB) JPEG so the image-only PDFs are honest fixtures: pdfjs parses
+// the page tree and finds an image XObject and no text, exactly like a true scan.
+// Detection never decodes the image, so its content is irrelevant.
+export const TINY_JPEG: Buffer = Buffer.from(
+  '/9j/4AAQSkZJRgABAQAAAQABAAD/4gHYSUNDX1BST0ZJTEUAAQEAAAHIAAAAAAQwAABtbnRyUkdCIFhZWiAH4AABAAEAAAAAAABhY3NwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAA9tYAAQAAAADTLQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAlkZXNjAAAA8AAAACRyWFlaAAABFAAAABRnWFlaAAABKAAAABRiWFlaAAABPAAAABR3dHB0AAABUAAAABRyVFJDAAABZAAAAChnVFJDAAABZAAAAChiVFJDAAABZAAAAChjcHJ0AAABjAAAADxtbHVjAAAAAAAAAAEAAAAMZW5VUwAAAAgAAAAcAHMAUgBHAEJYWVogAAAAAAAAb6IAADj1AAADkFhZWiAAAAAAAABimQAAt4UAABjaWFlaIAAAAAAAACSgAAAPhAAAts9YWVogAAAAAAAA9tYAAQAAAADTLXBhcmEAAAAAAAQAAAACZmYAAPKnAAANWQAAE9AAAApbAAAAAAAAAABtbHVjAAAAAAAAAAEAAAAMZW5VUwAAACAAAAAcAEcAbwBvAGcAbABlACAASQBuAGMALgAgADIAMAAxADb/2wBDAAoHBwgHBgoICAgLCgoLDhgQDg0NDh0VFhEYIx8lJCIfIiEmKzcvJik0KSEiMEExNDk7Pj4+JS5ESUM8SDc9Pjv/2wBDAQoLCw4NDhwQEBw7KCIoOzs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozs7Ozv/wAARCACgAHgDASIAAhEBAxEB/8QAGgABAAIDAQAAAAAAAAAAAAAAAAIGAQQHA//EACIQAQACAgICAgMBAAAAAAAAAAABAgMEBRESIRNBIjFRFf/EABQBAQAAAAAAAAAAAAAAAAAAAAD/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIRAxEAPwDrAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACOXJTDivly3ilKRNrWmeoiI/cpNXk4wW4vZrtY75ME4rfJWkT5TXr3EdfYI6fLaW/knHgyX+SK+c0yYr47eP1PVoiep+p+24qOPf2sWHcwaPI05bHh1vLHtY61tnwR3ETS019Wt13MeonuJ7hnd3eJwcdWurzGzsYc2f8AC/8ApTXHW3hP42zTPlEffUTM9/XXoFtHPKctOzqVyZ+ey1tThvk8KbcU6zVnqJnrqZnv+z7+/wCL5pZ67Ojgz0yVy1yY62i9ZiYt6/foHuAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD//2Q==',
+  'base64'
+)
+
+type FixturePage = { kind: 'text'; lines: string[] } | { kind: 'image' }
+
+/**
+ * Build a PDF mixing real-text pages and image-only pages (binary-safe — the JPEG
+ * stream rides untouched). Used for the three Phase-38 detection fixtures:
+ * image-only ("true scan"), hybrid (text + image), and all-text (via makePdf above).
+ */
+export function makeMixedPdf(pages: FixturePage[]): Buffer {
+  const objs: Array<string | { head: string; bin: Buffer; tail: string }> = []
+  const add = (body: (typeof objs)[number]): number => {
+    objs.push(body)
+    return objs.length
+  }
+  const kidRefs: string[] = []
+  add('<< /Type /Catalog /Pages 2 0 R >>') // obj 1
+  add('PLACEHOLDER') // obj 2 — patched below
+  const fontNum = add('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>')
+
+  for (const p of pages) {
+    if (p.kind === 'text') {
+      const content =
+        'BT /F1 12 Tf 72 720 Td 16 TL\n' +
+        p.lines.map((l) => `(${l.replace(/([()\\])/g, '\\$1')}) Tj T*`).join('\n') +
+        '\nET'
+      const contentNum = add(
+        `<< /Length ${Buffer.byteLength(content, 'latin1')} >>\nstream\n${content}\nendstream`
+      )
+      const pageNum = add(
+        '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] ' +
+          `/Resources << /Font << /F1 ${fontNum} 0 R >> >> /Contents ${contentNum} 0 R >>`
+      )
+      kidRefs.push(`${pageNum} 0 R`)
+    } else {
+      const imgNum = add({
+        head:
+          '<< /Type /XObject /Subtype /Image /Width 120 /Height 160 ' +
+          `/ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${TINY_JPEG.length} >>\nstream\n`,
+        bin: TINY_JPEG,
+        tail: '\nendstream'
+      })
+      const content = 'q 612 0 0 792 0 0 cm /Im0 Do Q'
+      const contentNum = add(
+        `<< /Length ${Buffer.byteLength(content, 'latin1')} >>\nstream\n${content}\nendstream`
+      )
+      const pageNum = add(
+        '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] ' +
+          `/Resources << /XObject << /Im0 ${imgNum} 0 R >> >> /Contents ${contentNum} 0 R >>`
+      )
+      kidRefs.push(`${pageNum} 0 R`)
+    }
+  }
+  objs[1] = `<< /Type /Pages /Kids [${kidRefs.join(' ')}] /Count ${kidRefs.length} >>`
+
+  const chunks: Buffer[] = []
+  let offset = 0
+  const push = (b: Buffer | string): void => {
+    const buf = Buffer.isBuffer(b) ? b : Buffer.from(b, 'latin1')
+    chunks.push(buf)
+    offset += buf.length
+  }
+  push('%PDF-1.4\n%\xE2\xE3\xCF\xD3\n')
+  const xref: number[] = [0]
+  for (let i = 0; i < objs.length; i++) {
+    xref.push(offset)
+    push(`${i + 1} 0 obj\n`)
+    const o = objs[i]
+    if (typeof o === 'string') push(o)
+    else {
+      push(o.head)
+      push(o.bin)
+      push(o.tail)
+    }
+    push('\nendobj\n')
+  }
+  const xrefStart = offset
+  push(`xref\n0 ${objs.length + 1}\n0000000000 65535 f \n`)
+  for (let i = 1; i <= objs.length; i++) push(`${String(xref[i]).padStart(10, '0')} 00000 n \n`)
+  push(`trailer\n<< /Size ${objs.length + 1} /Root 1 0 R >>\nstartxref\n${xrefStart}\n%%EOF\n`)
+  return Buffer.concat(chunks)
+}
+
+/** A "true scan": every page is an image, zero extractable text. */
+export function makeScanOnlyPdf(pages = 2): Buffer {
+  return makeMixedPdf(Array.from({ length: pages }, () => ({ kind: 'image' as const })))
+}
+
+/** A hybrid PDF: one real text page + one scanned page (must NOT be detected). */
+export function makeHybridPdf(): Buffer {
+  return makeMixedPdf([
+    {
+      kind: 'text',
+      lines: [
+        'Quarterly report, page one.',
+        'This page has a real text layer with several sentences of content.',
+        'It exists to prove hybrid PDFs are not mistaken for scans.'
+      ]
+    },
+    { kind: 'image' }
+  ])
+}
+
+/** A tiny but valid 1x1 PNG (photo-import tests; the fake engine never decodes it). */
+export const TINY_PNG: Buffer = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+  'base64'
+)
+
 // ---- Minimal .docx (OOXML zip) ---------------------------------------------------
 
 function crc32(buf: Buffer): number {

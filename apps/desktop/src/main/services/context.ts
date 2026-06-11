@@ -5,6 +5,7 @@ import type { RuntimeManager } from './runtime'
 import type { Embedder } from './embeddings'
 import type { Reranker } from './reranker'
 import type { Transcriber } from './transcriber'
+import type { OcrEngine } from './ocr'
 import type { CachedGpuProbe } from './runtime/gpu'
 import type { AuditRecorder } from './audit'
 import type { DocTaskManager } from './doctasks'
@@ -37,6 +38,13 @@ export interface AppContext {
    * deliberately no mock transcriber).
    */
   transcriber?: Transcriber | null
+  /**
+   * Local OCR engine (Phase 38): tesseract.js over the drive's vendored language
+   * files, selected only when those exist. Null/absent = photo imports fail per-file
+   * with friendly copy and detected scans show no "Make searchable" offer
+   * (graceful-fallback rule — there is deliberately no mock OCR engine).
+   */
+  ocrEngine?: OcrEngine | null
   /** Directory holding model-manifests, or null if it could not be located. */
   manifestsDir: string | null
   /**

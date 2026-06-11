@@ -39,9 +39,11 @@
   safety net into runtime/llama.cpp/<os>/cpu/.
 
 .PARAMETER Family
-  Which sidecar family to fetch from runtime-sources.yaml (Phase 36): llama_cpp
-  (default; the llama-server binary) or whisper_cpp (the whisper-cli transcriber,
-  extracted to runtime/whisper.cpp/<os>/). Same verify + marker logic for both.
+  Which asset family to fetch from runtime-sources.yaml: llama_cpp (default; the
+  llama-server binary), whisper_cpp (the whisper-cli transcriber, Phase 36 -- same
+  verify + marker logic), or ocr (Phase 38: the vendored OCR language files, plain
+  sha256-verified downloads into ocr/ -- no extraction, no marker; idempotency IS the
+  hash).
 
 .PARAMETER DryRun
   Print the plan and download nothing.
@@ -50,6 +52,7 @@
   .\scripts\fetch-runtime.ps1 -Target E:\
   .\scripts\fetch-runtime.ps1 -Target E:\ -Os linux -Arch x64 -DryRun
   .\scripts\fetch-runtime.ps1 -Target E:\ -Family whisper_cpp
+  .\scripts\fetch-runtime.ps1 -Target E:\ -Family ocr
 #>
 [CmdletBinding()]
 param(
@@ -57,7 +60,7 @@ param(
   [string] $Os,
   [string] $Arch,
   [string] $Backend,
-  [ValidateSet('llama_cpp', 'whisper_cpp')] [string] $Family = 'llama_cpp',
+  [ValidateSet('llama_cpp', 'whisper_cpp', 'ocr')] [string] $Family = 'llama_cpp',
   [switch] $DryRun
 )
 
@@ -92,6 +95,87 @@ if (-not $Arch) {
   # arch under WOW emulation.
   $procArch = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
   $Arch = if ($procArch -match 'ARM64') { 'arm64' } else { 'x64' }
+}
+
+# --- The ocr family (Phase 38, D32): plain verified FILES, not build archives -------
+# Parses `ocr.files` (- lang/url/sha256/dest entries), downloads each into its dest,
+# verifies the sha256 of the file AS DOWNLOADED, and skips files already present with a
+# matching hash. Mirrors assets.ts planOcrDownloads.
+if ($Family -eq 'ocr') {
+  $lines = (Get-Content -Path $SourcesFile) -split "`n"
+  $ocrVersion = $null
+  $files = @()
+  $cur = $null
+  $top = $null
+  foreach ($raw in $lines) {
+    $line = $raw.TrimEnd()
+    if ($line -match '^\s*#') { continue }
+    if ($line -match '^([A-Za-z0-9_]+)\s*:\s*$') {
+      if ($cur) { $files += $cur; $cur = $null }
+      $top = $Matches[1]
+      continue
+    }
+    if ($top -ne 'ocr') { continue }
+    if (-not $ocrVersion -and $line -match '^\s*version\s*:\s*(.+?)\s*$') {
+      $ocrVersion = ($Matches[1] -replace '\s+#.*$', '').Trim().Trim('"').Trim("'"); continue
+    }
+    if ($line -match '^\s*-\s*lang\s*:\s*(.+?)\s*$') {
+      if ($cur) { $files += $cur }
+      $cur = [ordered]@{ lang = ($Matches[1] -replace '\s+#.*$', '').Trim().Trim('"').Trim("'") }
+      continue
+    }
+    if ($cur -and $line -match '^\s+([A-Za-z0-9_]+)\s*:\s*(.+?)\s*$') {
+      $cur[$Matches[1].Trim()] = ($Matches[2] -replace '\s+#.*$', '').Trim().Trim('"').Trim("'")
+    }
+  }
+  if ($cur) { $files += $cur }
+  if (-not $ocrVersion -or $files.Count -eq 0) {
+    Write-Error 'runtime-sources.yaml: no ocr block (version + files) found.'
+    exit 2
+  }
+  Write-Host "Fetch OCR language files -> $Target (data $ocrVersion)" -ForegroundColor Cyan
+  $IsRealShaOcr = { param($h) $h -match '^[a-f0-9]{64}$' }
+  $failed = 0
+  foreach ($f in $files) {
+    foreach ($required in @('url', 'sha256', 'dest')) {
+      if (-not $f[$required]) { Write-Error "ocr.files ($($f.lang)): missing '$required'."; exit 2 }
+    }
+    if ($f.dest -match '\.\.' -or $f.dest -match '^[/\\]' -or $f.dest -match '^[A-Za-z]:') {
+      Write-Error "runtime-sources.yaml: ocr dest escapes the drive root: $($f.dest)"
+      exit 2
+    }
+    $dest = Join-Path $Target ($f.dest -replace '/', [IO.Path]::DirectorySeparatorChar)
+    $sha = ([string]$f.sha256).ToLower()
+    Write-Host ("  {0}: {1}" -f $f.lang, $f.dest)
+    if ($DryRun) { Write-Host ("    would fetch {0}" -f $f.url) -ForegroundColor Yellow; continue }
+    if ((Test-Path $dest) -and (& $IsRealShaOcr $sha)) {
+      $actual = (Get-FileHash -Path $dest -Algorithm SHA256).Hash.ToLower()
+      if ($actual -eq $sha) { Write-Host '    skip (present + verified)' -ForegroundColor Green; continue }
+      Write-Host '    present but hash differs -- re-fetching' -ForegroundColor Yellow
+    }
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $dest) | Out-Null
+    $Curl = (Get-Command curl.exe -ErrorAction SilentlyContinue)
+    if ($Curl) {
+      & curl.exe -L --fail --retry 3 --ssl-revoke-best-effort -o "$dest" "$($f.url)"
+      if ($LASTEXITCODE -ne 0) { Write-Error "curl failed (exit $LASTEXITCODE)"; $failed++; continue }
+    } else {
+      Invoke-WebRequest -Uri $f.url -OutFile $dest -UseBasicParsing
+    }
+    if (& $IsRealShaOcr $sha) {
+      $actual = (Get-FileHash -Path $dest -Algorithm SHA256).Hash.ToLower()
+      if ($actual -ne $sha) {
+        Write-Host ("    FAIL: checksum mismatch (expected {0}, got {1}) -- deleting" -f $sha, $actual) -ForegroundColor Red
+        Remove-Item -Force -Path $dest -ErrorAction SilentlyContinue
+        $failed++
+        continue
+      }
+      Write-Host '    VERIFIED' -ForegroundColor Green
+    } else {
+      Write-Host '    UNVERIFIED (placeholder hash)' -ForegroundColor Yellow
+    }
+  }
+  if ($failed -gt 0) { exit 1 }
+  exit 0
 }
 
 # --- Parse runtime-sources.yaml: a list of build maps under <family>.builds: --------

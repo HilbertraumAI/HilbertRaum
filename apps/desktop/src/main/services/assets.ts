@@ -4,7 +4,7 @@ import { mkdir, rm } from 'node:fs/promises'
 import { dirname, join, resolve, sep } from 'node:path'
 import { Readable } from 'node:stream'
 import { isRealSha256, type ModelManifest } from '../../shared/manifest'
-import type { RuntimeBuild, RuntimeOs, RuntimeSources } from '../../shared/runtime-sources'
+import type { OcrSources, RuntimeBuild, RuntimeOs, RuntimeSources } from '../../shared/runtime-sources'
 import { sha256File, verifyChecksum, weightPath, type HashStore } from './models'
 
 // Asset loader — the CANONICAL, unit-tested reference for the DIY `fetch-*` scripts
@@ -229,6 +229,54 @@ export function planRuntimeDownload(
     sha256: build.sha256,
     placeholderHash: !isRealSha256(build.sha256)
   }
+}
+
+// ---- OCR language files (Phase 38, D32 — the `ocr:` asset class) --------------------
+
+export type OcrTaskStatus = 'download' | 'present-verified' | 'present-unverified'
+
+export interface OcrFileTask {
+  lang: string
+  url: string
+  /** Absolute destination on the drive (escape-guarded). */
+  dest: string
+  /** Drive-relative destination (forward slashes, from the yaml). */
+  relPath: string
+  expectedSha256: string
+  placeholderHash: boolean
+  status: OcrTaskStatus
+}
+
+/**
+ * Plan the OCR language-file downloads for a drive root. Plain verified files — no
+ * extraction, no markers: idempotency IS the hash (a present file matching its real
+ * sha256 is skipped; mismatched/absent is re-fetched). Filesystem read only; the
+ * network is never touched here (the scripts/Phase-18 seam do the fetching).
+ */
+export async function planOcrDownloads(rootPath: string, ocr: OcrSources): Promise<OcrFileTask[]> {
+  const tasks: OcrFileTask[] = []
+  for (const file of ocr.files) {
+    const dest = resolveWithinRoot(rootPath, file.dest)
+    const placeholderHash = !isRealSha256(file.sha256)
+    let status: OcrTaskStatus = 'download'
+    if (existsSync(dest)) {
+      if (placeholderHash) {
+        status = 'present-unverified'
+      } else {
+        status = (await sha256File(dest)) === file.sha256 ? 'present-verified' : 'download'
+      }
+    }
+    tasks.push({
+      lang: file.lang,
+      url: file.url,
+      dest,
+      relPath: file.dest,
+      expectedSha256: file.sha256,
+      placeholderHash,
+      status
+    })
+  }
+  return tasks
 }
 
 // ---- Verification + download (injected fetch → no real network in tests) -----------

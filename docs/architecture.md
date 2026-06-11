@@ -284,6 +284,59 @@ explicitly out of scope.
   the technical reason in the local log only. The OS mic indicator is the recording
   signal. Locked workspace needs no handling — the composer doesn't exist pre-unlock.
 
+## Scanned-PDF / photo OCR (Phase 38, wave-3 plan §11, decisions D31–D33)
+
+Image-only PDFs and photos of pages (`.png`/`.jpg`/`.jpeg`) become searchable corpus
+documents via **local** OCR: tesseract.js (pure WASM, pinned 7.0.0) over language files
+vendored on the drive (`ocr/deu.traineddata.gz` + `eng.traineddata.gz` — German +
+English, the tessdata_best-INTEGERIZED variant per R-O3). Zero network at runtime
+(R-O2: tesseract.js's CDN `langPath` default and CWD cache are explicitly disabled;
+sentinel-tested), zero native deps.
+
+- **Step 0 — scan detection (the Phase-17 trust spirit).** A PDF where NO page reaches
+  `PDF_TEXT_PAGE_MIN_CHARS` (25) of extractable text used to silently index NOTHING.
+  The `PdfParser` now fails it friendly ("This PDF looks like a scan — it has no
+  readable text yet."); `DocumentInfo.scanDetected` is DERIVED (failed + that exact
+  notice) and drives the row's "Make searchable (OCR)" offer. Hybrid text+scan PDFs
+  are NOT detected — their text pages index normally, exactly as before.
+- **D31 (resolved by R-O1): the split execution design.** Rendering a PDF page to
+  pixels needs a canvas; the main process has none and Electron 37's `utilityProcess`
+  has NO OffscreenCanvas (probed — option (b) was impossible). So a **hidden
+  BrowserWindow** (`ocr.html`, its own tiny sandboxed preload exposing exactly the five
+  `OCR_RASTER` channels, never the app API) does ONLY pdf→PNG rasterization with the
+  SAME pinned pdfjs **legacy** build the PdfParser uses (the modern v6 build calls
+  `Uint8Array.prototype.toHex`, which the pinned Chromium lacks) at 300 DPI (capped at
+  4096 px/side). **Recognition always runs MAIN-side** in tesseract.js **Node mode**
+  (`services/ocr/tesseract.ts`): image Buffers decode inside the WASM core (no canvas),
+  the worker script + core load from the app's own `node_modules` (packaged:
+  `asarUnpack` + the `app.asar → app.asar.unpacked` workerPath rewrite — worker_threads
+  cannot read inside asar). Photos never touch the renderer at all. The rasterizer
+  protocol is **pull-based** (`services/ocr/rasterizer.ts`): main requests one page at
+  a time and recognition backpressures rendering, so a long scan never queues unbounded
+  page images.
+- **D33: OCR is NEVER automatic for PDFs.** Detection marks the row; "Make searchable
+  (OCR)" runs as a **Phase-33 document task** (kind `'ocr'` — queue, progress
+  "pages + 1", cancel; the D26 guards hold, but it needs the OCR engine instead of the
+  chat runtime). The task rasterizes + recognizes page by page, persists the
+  recognition in the additive **`documents.ocr_json`** column (CONTENT — DB only,
+  never logs/audit; metadata surfaces as `DocumentInfo.ocr`), then re-ingests: the
+  `PdfParser`'s `ParseContext.ocrPages` hook turns the stored recognition into one
+  `ExtractedSegment{ pageNumber }` per page ⇒ **page citations work unchanged**.
+  `ocr_json` survives re-index (like `origin_json`): re-index and preview reuse the
+  stored pages instead of silently re-OCRing; re-running the task is the explicit redo.
+  Cancel persists nothing. **Photos are the D33 asymmetry:** the `ImageParser` OCRs on
+  import directly (one small image, seconds) via the engine injected through
+  `ParseContext` — the transcriber-injection precedent.
+- **Availability-driven (D14/D9):** `createSelectedOcrEngine` returns the engine iff
+  `<root>/ocr/*.traineddata.gz` exist, else **null** (no mock — invented text would
+  corrupt the corpus). `AppStatus.ocrAvailable` gates the UI; absent assets ⇒ the scan
+  notice appends a "needs the OCR files" hint and photo imports fail friendly per-file.
+  No settings key (`ocrLanguages` was considered and dropped — availability-driven).
+- **Distribution (D32):** the `ocr:` block on `runtime-sources.yaml` is a NEW asset
+  class (plain verified files `{ lang, url, sha256, dest }`, no extraction, no marker —
+  the hash IS the install state), fetched by `fetch-runtime --family ocr`,
+  asserted by `assertCommercialDrive` (`ocrAssetsVerified`) + both script gates.
+
 ## Document tasks (Phases 33–35, wave-3 plan §6/§7/§8)
 - **`services/doctasks.ts` — the shared task engine.** A job state machine on the Phase-4/18
   async-with-polling precedent: `startDocTask({ kind, documentIds, params }) → { jobId }`,

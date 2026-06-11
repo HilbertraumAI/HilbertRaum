@@ -39,7 +39,10 @@ export function registerCoreIpc(ctx: AppContext): void {
       machineRamGb: machineRamGb(),
       // Phase 37: dictation is availability-driven (transcriber selected at startup
       // iff whisper binary + weights exist) — the composer mic gates on this flag.
-      dictationAvailable: ctx.transcriber != null
+      dictationAvailable: ctx.transcriber != null,
+      // Phase 38: OCR is availability-driven too (engine selected iff the drive's
+      // ocr/ language files exist) — gates "Make searchable (OCR)" + the photo hint.
+      ocrAvailable: ctx.ocrEngine != null
     }
   })
 

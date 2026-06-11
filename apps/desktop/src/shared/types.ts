@@ -28,6 +28,12 @@ export interface AppStatus {
    * the composer mic renders only when true. No settings key.
    */
   dictationAvailable: boolean
+  /**
+   * Local text recognition (OCR) is available: the vendored language files exist in
+   * the drive's `ocr/` dir (Phase 38, the D14 precedent — availability-driven, no
+   * settings key). Gates the "Make searchable (OCR)" offer and photo imports.
+   */
+  ocrAvailable: boolean
 }
 
 // ---- Privacy / offline policy (Phase 8, spec §6 config/policy.json + §3.5/§3.6) ----
@@ -457,7 +463,7 @@ export interface ConversationSearchResult {
  * IPC shapes) is built for all three kinds; 'summary' shipped in Phase 33 and
  * 'translation' in Phase 34 — 'compare' (Phase 35) plugs into the same engine.
  */
-export type DocTaskKind = 'summary' | 'translation' | 'compare'
+export type DocTaskKind = 'summary' | 'translation' | 'compare' | 'ocr'
 
 /**
  * Translation targets, v1 (Phase 34, plan §7): the two eval-set languages only. A
@@ -592,8 +598,34 @@ export interface DocumentInfo {
    * undefined for text documents and outside an active transcription.
    */
   transcriptionProgress?: number
+  /**
+   * True when this PDF was detected as an image-only scan (Phase 38 step 0): it
+   * failed import with the friendly scan notice and is the OCR candidate the row's
+   * "Make searchable (OCR)" action targets. Derived (status + the exact notice), not
+   * stored.
+   */
+  scanDetected?: boolean
+  /**
+   * Recognition METADATA when this document's text came from local OCR (Phase 38),
+   * or null/undefined otherwise. Parsed from `documents.ocr_json` — ids/counts only;
+   * the recognized text itself is content and stays in the (possibly encrypted) DB.
+   * Survives re-index like `origin` (it states where the text came from); re-running
+   * the OCR task overwrites it.
+   */
+  ocr?: DocumentOcrInfo | null
   createdAt: string
   updatedAt: string
+}
+
+/** Surface metadata of a stored OCR result (never the recognized text). */
+export interface DocumentOcrInfo {
+  /** Pages the recognition covered (photos: 1). */
+  pageCount: number
+  /** Traineddata languages used, e.g. ['deu', 'eng']. */
+  languages: string[]
+  /** The OCR engine id, e.g. 'tesseract.js-7.0.0'. */
+  engineId: string
+  createdAt: string
 }
 
 export interface ImportJob {
