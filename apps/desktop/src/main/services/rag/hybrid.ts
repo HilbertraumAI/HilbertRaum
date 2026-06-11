@@ -1,4 +1,5 @@
 import type { Db } from '../db'
+import { buildFtsMatchQuery } from '../fts'
 
 // Hybrid keyword retrieval + rank fusion (Phase 21, retrieval-plan §5).
 //
@@ -17,8 +18,9 @@ import type { Db } from '../db'
 /** Standard RRF constant (Cormack et al.); rank-based, so scale-free. */
 export const RRF_K = 60
 
-/** Most question tokens forwarded into the FTS MATCH query (bounds query cost). */
-const MAX_QUERY_TOKENS = 32
+// The MATCH sanitizer lives in services/fts.ts since Phase 31 (conversation search
+// reuses it); re-exported here so Phase-21 call/import sites are unchanged.
+export { buildFtsMatchQuery }
 
 export interface KeywordSearchOptions {
   /** Restrict hits to chunks with a vector under this embedding model (required — the visibility rule). */
@@ -31,21 +33,6 @@ export interface KeywordHit {
   chunkId: string
   /** BM25 rank score as reported by FTS5 (lower = better; informational only — fusion uses rank). */
   bm25: number
-}
-
-/**
- * Sanitize a natural-language question into an FTS5 MATCH query: extract word tokens,
- * quote each as a phrase, OR them together. FTS5 operator syntax in user text
- * (`"` `-` `NEAR` `*` parentheses) can never reach MATCH raw. Returns null when the
- * question yields no tokens (→ keyword search is skipped).
- */
-export function buildFtsMatchQuery(question: string): string | null {
-  const tokens = question.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []
-  if (tokens.length === 0) return null
-  return tokens
-    .slice(0, MAX_QUERY_TOKENS)
-    .map((t) => `"${t}"`)
-    .join(' OR ')
 }
 
 /**

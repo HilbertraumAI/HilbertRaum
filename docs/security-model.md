@@ -29,6 +29,7 @@ posture (spec §3.6), how the privacy policy is loaded and enforced, and the **e
 | `will-navigate` blocks remote origins | `main/index.ts` |
 | `setWindowOpenHandler` opens external links in the OS browser, denies in-app | `main/index.ts` |
 | **Content-Security-Policy** (meta tag + response header) | `renderer/index.html`, `main/index.ts` |
+| **Deny-by-default permission-request handler** (Phase 31) | `services/permissions.ts`, installed in `main/index.ts` |
 | **No network in the core path** + startup self-check tripwire | `services/offlineGuard.ts` |
 | No model weights / user data in version control | `.gitignore` |
 | **Encrypted workspace** (AES-256-GCM at rest, Argon2id KDF — scrypt still supported, password never stored) | `services/security/crypto.ts`, `services/workspace-vault.ts` |
@@ -43,6 +44,17 @@ the `index.html` meta tag (defence in depth).
 - **Development** (HMR-compatible): relaxes `connect-src` to allow `ws://localhost:*` /
   `http://localhost:*`, and adds `'unsafe-inline'`/`'unsafe-eval'` to `script-src` (and
   `'unsafe-inline'` to `style-src`) for Vite hot-reload. Without this split, `npm run dev` would break.
+
+### Renderer permission requests: deny by default (Phase 31)
+Electron's default with **no** `session.setPermissionRequestHandler` installed is to **GRANT**
+every permission request (geolocation, notifications, media, …) — found by the 2026-06-11 wave-3
+plan audit. `services/permissions.ts` `installDenyAllPermissionHandler` therefore installs a
+deny-everything handler on the window's session (next to the CSP setup in `main/index.ts`,
+identical in dev and prod — `npm run dev` verified unaffected). There are **no exceptions**: the
+renderer needs none of these APIs today. Phase 37 (voice dictation) will add the single scoped
+`media` (audio) exception here. Denials are logged by permission *name* only — never content.
+Verified live: `Notification.requestPermission()` resolves `denied` and `getUserMedia(audio)`
+rejects `NotAllowedError` in the running app; a unit test drives the handler with a fake session.
 
 ## Offline posture (spec §3.6)
 

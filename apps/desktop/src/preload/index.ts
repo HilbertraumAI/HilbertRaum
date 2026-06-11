@@ -7,6 +7,7 @@ import type {
   BenchmarkResult,
   ChatOptions,
   Conversation,
+  ConversationSearchResult,
   DocumentInfo,
   DocumentPreview,
   DownloadJob,
@@ -121,6 +122,10 @@ const api = {
   /** Save a transcript to a user-chosen file; resolves with the path, or null on cancel. */
   exportConversation: (conversationId: string): Promise<string | null> =>
     ipcRenderer.invoke(IPC.exportConversation, conversationId),
+  /** Full-text search across all conversations (Phase 31). Results group hits per
+   *  conversation, best match first; snippets carry SEARCH_MARK_* highlight markers. */
+  searchConversations: (query: string): Promise<ConversationSearchResult[]> =>
+    ipcRenderer.invoke(IPC.searchConversations, query),
   /** Tail of the local log file (Diagnostics, spec §7.11). Local-only. */
   getLogTail: (): Promise<string[]> => ipcRenderer.invoke(IPC.getLogTail),
 

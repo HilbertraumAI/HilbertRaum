@@ -201,6 +201,19 @@ about them**.
 
 Everything you type and everything the model replies stays on your device.
 
+### Find something you talked about (search)
+
+The search box at the top of the conversation list looks through **everything you and the
+model have ever written** — your questions and the answers alike. Type a word or two
+("liability cap", an invoice number, a name) and matching conversations appear as you type,
+each with a short extract around the match, the matched words highlighted. Click a result
+to open that conversation; press **Esc** or clear the box to get your normal list back.
+
+Search runs entirely on this drive: nothing is sent anywhere, and your searches are not
+recorded — not even in the local Activity panel. On an encrypted workspace the search index
+lives inside the same encrypted file as your conversations, so it is protected at rest like
+everything else (and search, like chat, is only available after you unlock).
+
 ### Answer detail (Quick / Balanced / Thorough)
 
 **Answer detail**, just under the message box, chooses how much work the model puts into

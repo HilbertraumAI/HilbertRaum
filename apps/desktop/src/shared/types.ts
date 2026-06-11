@@ -415,6 +415,35 @@ export interface ChatOptions {
   regenerate?: boolean
 }
 
+// ---- Conversation search (Phase 31) ----
+
+/**
+ * Markers FTS5's snippet() wraps around matched terms in `ConversationSearchHit.snippet`
+ * (control characters, so they cannot collide with real message text). The renderer
+ * splits on them to highlight matches; they never reach the DOM as text.
+ */
+export const SEARCH_MARK_START = '\u0001'
+export const SEARCH_MARK_END = '\u0002'
+
+/** One matching message inside a conversation (snippet around the matched terms). */
+export interface ConversationSearchHit {
+  messageId: string
+  role: 'user' | 'assistant'
+  /** Extract of the message around the match, matched terms wrapped in SEARCH_MARK_*. */
+  snippet: string
+  createdAt: string
+}
+
+/**
+ * Search results for one conversation, best match first. The result list itself is
+ * ordered by each conversation's best hit (bm25, newest-first tie-break — D23).
+ */
+export interface ConversationSearchResult {
+  conversationId: string
+  conversationTitle: string
+  hits: ConversationSearchHit[]
+}
+
 // ---- Documents (Phase 4) ----
 export type IngestionStatus =
   | 'queued'

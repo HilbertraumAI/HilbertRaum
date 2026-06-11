@@ -33,6 +33,8 @@ export const IPC = {
   updateConversationScope: 'chat:updateScope',
   /** Save a conversation transcript to a user-chosen file (spec §7.6 — audit M13). */
   exportConversation: 'chat:export',
+  /** Full-text search across conversations (Phase 31). Queries are content: never logged/audited. */
+  searchConversations: 'chat:search',
   /** Tail of the local log for Diagnostics (spec §7.11 — audit M14). Never uploaded. */
   getLogTail: 'logs:tail',
   // Phase 4+

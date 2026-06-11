@@ -135,6 +135,40 @@ INSERT INTO chunks_fts(text, chunk_id) SELECT text, id FROM chunks;
 `)
 }
 
+// Phase 31 (wave-3 plan §4): the FTS5 index over message text, used by conversation
+// search. Mirrors `ensureChunksFts` exactly — self-contained (NOT external-content,
+// same VACUUM rationale), trigger-synced so no chat code path can miss it (message
+// content is never UPDATEd by current code; the third trigger is cheap
+// defense-in-depth), and a one-time guarded backfill makes a pre-Phase-31 workspace
+// searchable on first open after upgrade. Messages are persisted with think blocks
+// already stripped (Phase 20 D6), so reasoning text can never be indexed. FTS5 +
+// snippet()/highlight() availability in BOTH runtimes was re-verified for this phase
+// (research gate R-S1, 2026-06-11).
+function ensureMessagesFts(db: Db): void {
+  const exists = db
+    .prepare("SELECT name FROM sqlite_master WHERE name = 'messages_fts'")
+    .get() as unknown as { name: string } | undefined
+  if (exists) return
+  db.exec(`
+CREATE VIRTUAL TABLE messages_fts USING fts5(content, message_id UNINDEXED);
+
+CREATE TRIGGER messages_fts_ai AFTER INSERT ON messages BEGIN
+  INSERT INTO messages_fts(content, message_id) VALUES (new.content, new.id);
+END;
+
+CREATE TRIGGER messages_fts_ad AFTER DELETE ON messages BEGIN
+  DELETE FROM messages_fts WHERE message_id = old.id;
+END;
+
+CREATE TRIGGER messages_fts_au AFTER UPDATE OF content ON messages BEGIN
+  DELETE FROM messages_fts WHERE message_id = old.id;
+  INSERT INTO messages_fts(content, message_id) VALUES (new.content, new.id);
+END;
+
+INSERT INTO messages_fts(content, message_id) SELECT content, id FROM messages;
+`)
+}
+
 /** Open (or create) the database at `path` and run migrations. */
 export function openDatabase(path: string): Db {
   const db = new DatabaseSync(path)
@@ -143,6 +177,7 @@ export function openDatabase(path: string): Db {
   db.exec(SCHEMA)
   ensureColumn(db, 'conversations', 'scope_json', 'scope_json TEXT')
   ensureChunksFts(db)
+  ensureMessagesFts(db)
   return db
 }
 

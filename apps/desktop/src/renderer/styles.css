@@ -318,6 +318,51 @@ code, pre, kbd { font-family: var(--font-mono); }
 .chat-sidebar-head { display: flex; gap: 6px; align-items: center; }
 .chat-new { flex: 1; }
 .chat-conv-list { display: flex; flex-direction: column; gap: 4px; overflow-y: auto; min-height: 0; }
+/* Conversation search (Phase 31): input atop the column; results replace the groups. */
+.chat-search-input {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-size: 12px;
+  width: 100%;
+}
+.chat-search-input:focus { border-color: var(--focus); outline: none; }
+.chat-search-input::placeholder { color: var(--text-muted); }
+.chat-search-result {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  text-align: left;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-size: 12px;
+  cursor: pointer;
+  min-width: 0;
+}
+.chat-search-result:hover:not(:disabled) { color: var(--text); border-color: var(--border-strong); }
+.chat-search-result:disabled { opacity: 0.5; cursor: not-allowed; }
+.chat-search-result-title {
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.chat-search-snippet {
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.chat-search-snippet mark {
+  background: transparent;
+  color: var(--accent);
+  font-weight: 600;
+}
 .chat-conv-group { display: flex; flex-direction: column; gap: 4px; }
 .chat-conv-group-label {
   font-size: var(--text-xs);

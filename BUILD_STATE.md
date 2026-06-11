@@ -5,7 +5,7 @@
 > (see "Per-phase ritual" in [`CLAUDE.md`](CLAUDE.md)).
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
-_Last updated: 2026-06-10 — **MVP feature-complete: Phases 0–13 done**, plus the full **GPU
+_Last updated: 2026-06-11 — **MVP feature-complete: Phases 0–13 done**, plus the full **GPU
 acceleration feature (Phases 14–16: Vulkan-default distribution → probe + fallback-ladder runtime
 → Settings/Diagnostics/benchmark surface)** per the IMPLEMENTED
 [`docs/gpu-support-plan.md`](docs/gpu-support-plan.md). Four post-MVP audit rounds plus a
@@ -99,6 +99,11 @@ German/English grounded-QA items, 60 DE / 40 EN, 15% unanswerable, self-validate
 and the §5.4 catalog promotions (incl. the D18 default-model question + the Gemma
 `supports_thinking_mode` flip + measured `recommended_min_ram_gb`) are PENDING — executed on
 real hardware (§3 Phase-29 entry).
+**Functionality wave 3 (Phases 31–38, [`docs/functionality-wave-3-plan.md`](docs/functionality-wave-3-plan.md))
+is IN PROGRESS: Phase 31 (conversation search) is DONE 2026-06-11** — R-S1 resolved GO,
+`messages_fts` mirrors the D13 index shape, `searchMessages` ranks bm25/newest-first (D23),
+search UI in the conversation list, plus the deny-by-default permission-handler rider; plan §4
+condensed to its design record (§3 entry).
 Release-wise,
 remaining work = **manual release acceptance only** (§5, incl. the GPU
 hardware matrix, item 1b). Consciously-accepted gaps live in
@@ -140,6 +145,7 @@ hardware matrix, item 1b). Consciously-accepted gaps live in
 | 27 | UI microcopy, ambient trust signal, first-run (guidelines §7/§2/§9) | 🟢 done (merged to master 2026-06-10) — **UI polish wave COMPLETE** |
 | 28 | Model catalog wave 1 (challenger manifests, D16–D18) | 🟡 in progress — manifests + docs landed, validated, gate green; weights fetched + hashes promoted (all 10 weights VERIFIED on the `D:\` drive); §4.3 chat + depth smokes PASS for all four challengers; only the Models-screen-UI + RAG-citation smokes remain |
 | 29 | Benchmark protocol + first comparison run (D19/D20) | 🟡 in progress — **protocol + tooling + eval data landed** (`docs/model-benchmarks.md`, the judge-free scorer + 24 CI tests, the real-RAG-path harness, `eval/{corpus,rag}_de_en.jsonl` = 100 items, the peak-RSS script); the multi-machine RUNS + §5.4 promotions are pending (executed on real hardware) |
+| 31 | Conversation search (wave-3 plan §4) + session-hardening rider | 🟢 done (2026-06-11) — `messages_fts` + `searchMessages` (bm25, newest-first tie-break) + `chat:search` + ConversationList search UI; deny-by-default permission handler shipped with it |
 
 Legend: ⚪ not started · 🟡 in progress · 🟢 done · 🔴 blocked
 
@@ -1373,6 +1379,51 @@ Repo root: `f:\_coding\ai_drive`.
   ≥2-machine done-when — QA+RSS are machine-independent, already reproduced); then condense the
   plan per the doc lifecycle rule.
 
+- **Phase 31 — conversation search + session-hardening rider (2026-06-11, the first wave-3
+  phase; plan §4 condensed to its design record):**
+  1. **Research gate R-S1 resolved GO before any feature code** (the two-runtime discipline):
+     FTS5 `snippet()`/`highlight()`/`bm25()` verified working in **Electron 37.10.3 main**
+     AND **system Node 24.13.0** (both SQLite 3.50.4) — the JS-truncation fallback was never
+     needed. Recorded in plan §14.
+  2. **`messages_fts` mirrors `chunks_fts` verbatim** (`ensureMessagesFts` in `db.ts`):
+     self-contained `fts5(content, message_id UNINDEXED)` (NOT external-content — VACUUM
+     renumbers implicit rowids), three sync triggers on `messages` (the update-of-content one
+     is defense-in-depth; nothing UPDATEs message content today), `sqlite_master`-guarded
+     migration + one-time backfill so a pre-Phase-31 workspace is searchable on first open.
+     Think blocks are stripped before persist (Phase 20 D6) ⇒ reasoning is never indexed.
+     The index lives inside the (possibly encrypted) DB ⇒ encrypted at rest for free; while
+     locked, the `db` getter throws ⇒ search simply unavailable pre-unlock.
+  3. **The MATCH sanitizer is now SHARED:** `buildFtsMatchQuery` lifted from `rag/hybrid.ts`
+     into `services/fts.ts`; hybrid re-exports it (Phase-21 imports unchanged; a test pins
+     same-function identity). One set of rules for what user text can reach FTS5 MATCH.
+  4. **`searchMessages(db, query, limit=40)`** (`services/chat.ts`): joins hits → messages →
+     conversations, ranks `ORDER BY bm25, created_at DESC, rowid DESC` (**D23: bm25 with
+     newest-first tie-break**), groups hits per conversation in best-hit order. Snippets via
+     FTS5 `snippet()` with control-character markers (`SEARCH_MARK_START/END` = U+0001/U+0002
+     in `shared/types.ts`) that the renderer splits into `<mark>` — match highlighting with
+     zero HTML parsing. IPC `chat:search` + preload `searchConversations` (request/response).
+  5. **Privacy rule held mechanically:** searches are reads — NO audit event, NO logging of
+     queries/snippets anywhere; a sentinel test drives the real IPC handler with a real audit
+     recorder wired and asserts `runtime_events` stays empty.
+  6. **UI:** search input atop `renderer/chat/ConversationList.tsx` (debounced 150 ms);
+     typing swaps the column to grouped results (title + up to 2 highlighted snippets),
+     clicking opens the conversation and clears the query, Esc restores the list, no-match
+     state uses §11.4 copy ("No matches yet — try a different word."). Message-level
+     scroll-to was skipped (allowed by the plan). Eyeballed in both themes via the Playwright
+     walk (`walk-phase31.mjs`, shots-p31) against the BUILT bundle.
+  7. **Session-hardening rider SHIPPED (plan §12 audit item):** `services/permissions.ts`
+     `installDenyAllPermissionHandler` — Electron default-GRANTS permission requests with no
+     handler, so a deny-by-default `session.setPermissionRequestHandler` (NO exceptions; the
+     scoped `media` allow arrives with Phase 37) is installed next to the CSP in
+     `main/index.ts`, dev and prod alike. Verified live in the walk:
+     `Notification.requestPermission()` → `denied`, `getUserMedia(audio)` →
+     `NotAllowedError`; `npm run dev` boots unaffected. Structural `PermissionSessionLike`
+     keeps the module electron-import-free (unit-tested with a fake session).
+  8. **Pre-existing typecheck break fixed in passing:** `tests/eval/score.ts` imports
+     `./text.mjs` which had no declarations (TS7016 on a clean master) — added
+     `tests/eval/text.d.mts`. Gate: typecheck clean, **720/720 tests pass** (+14 manual
+     skips), build green.
+
 ---
 
 ## 4. Shared data contracts (the actual "transported data")
@@ -2040,7 +2091,8 @@ items are **MANUAL acceptance only** (R2/R5/R7 + the GPU hardware matrix). In ro
    Qwen3 30B-A3B) + the embeddings question (Granite Embedding R2 small is the only 384-dim
    near-drop-in). Key verified fact: our pinned llama.cpp **b9585 is the 2026-06-09 release**,
    so Gemma 4 (needs ~b8607) runs on the runtime we already ship — no runtime bump needed.
-6. **Functionality wave 3 (Phases 31–38) — PLANNED, not started:** see the working paper
+6. **Functionality wave 3 (Phases 31–38) — IN PROGRESS: Phase 31 DONE 2026-06-11, next up
+   is Phase 32 (vault password change, D24 resolved):** see the working paper
    [`docs/functionality-wave-3-plan.md`](docs/functionality-wave-3-plan.md) (decisions
    D23–D34, research gates R-S1/R-T1–2/R-W1–4/R-O1–3). Eight user-selected features in
    dependency order: 31 conversation search (messages FTS5, mirrors D13) → 32 vault password
@@ -2063,7 +2115,11 @@ items are **MANUAL acceptance only** (R2/R5/R7 + the GPU hardware matrix). In ro
    decision (D35: audio originals must be kept — the re-index contract forces it; re-index
    = re-transcription), staleness/visibility guards added to Phases 34/35, and the additive
    `whisper_cpp` block's forward-compatibility verified in `shared/runtime-sources.ts`.
-   **Phase 31 (conversation search) is ready to start.**
+   **Phase 31 (conversation search) is DONE (2026-06-11)** — R-S1 resolved GO (FTS5
+   `snippet()`/`highlight()` in both runtimes), `messages_fts` + `searchMessages` +
+   `chat:search` + the ConversationList search UI shipped, the §12 session-hardening rider
+   (deny-by-default `setPermissionRequestHandler`) shipped with it, plan §4 condensed to
+   its design record (§3 entry). **Phase 32 (vault password change) is ready to start.**
 
 **Current gate (2026-06-10, post-merge of the UI polish wave into master — Phase 21
 verification + Phases 23–27 combined): typecheck clean, 669/669 tests pass (+8 manual

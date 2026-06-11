@@ -1,6 +1,8 @@
 # Post-MVP Functionality — wave 3 working paper (Phases 31–38)
 
-_Status: **WORKING PAPER — NOT IMPLEMENTED** (drafted 2026-06-10; **review round 1 resolved
+_Status: **WORKING PAPER — Phase 31 DONE 2026-06-11 (§4 is its condensed design record;
+the §12 session-hardening rider shipped with it); Phases 32–38 NOT IMPLEMENTED** (drafted
+2026-06-10; **review round 1 resolved
 2026-06-11**: D23–D30 + D33 locked, see §13; D31/D32/D34 stay open by design — they resolve
 with research gates R-O1/R-O2/R-W1. **Plan audit 2026-06-11:** every §2 fact re-verified
 against the code; findings folded in — the mic-permission posture correction in §10 (no
@@ -17,7 +19,7 @@ The eight features (user-selected 2026-06-10):
 
 | Phase | Feature | Size | Hard dependency | New deps / sidecars |
 |---|---|---|---|---|
-| 31 | Conversation search | S | none | none (FTS5 already proven) |
+| 31 | Conversation search — **✅ DONE 2026-06-11** | S | none | none (FTS5 already proven) |
 | 32 | Vault password change | M | none | none (`@noble/hashes` already shipped) |
 | 33 | Document tasks foundation + one-click summary | M | none | none |
 | 34 | Document translation workflow | S–M | Phase 33 (task machinery) | none |
@@ -136,44 +138,34 @@ distribution + new asset classes — the long poles).
 
 ---
 
-## 4. Phase 31 — Conversation search
+## 4. Phase 31 — Conversation search — ✅ DONE (2026-06-11, as implemented)
 
-**Goal:** a search box over past conversations — "what did it tell me about the liability
-cap last week?" — local, instant, encrypted at rest like everything else in the DB.
+Shipped exactly per the sketch; durable design now in `architecture.md` (Chat § "Conversation
+search"), `security-model.md` (permission handler), `user-guide.md` §6. Record of what was built:
 
-**Design sketch.** Mirror the D13 index shape: `messages_fts = fts5(content, message_id
-UNINDEXED)` — self-contained (NOT external-content; same VACUUM rationale), three sync
-triggers on `messages` (insert / delete / update-of-content — message content is never
-UPDATEd by current code; the third trigger is cheap defense-in-depth, mirroring
-`chunks_fts`), guarded migration + one-time backfill in `openDatabase` (the
-`ensureChunksFts` shape at `db.ts:113` verbatim, incl. the `sqlite_master` existence guard). Reuse `buildFtsMatchQuery` for sanitization (export it from
-`hybrid.ts` or lift to a shared module). New `searchMessages(db, query, limit)` in
-`services/chat.ts` joining hits → `messages` → `conversations`, returning
-`{ conversationId, conversationTitle, messageId, role, snippet, createdAt, bm25 }` grouped
-by conversation. Snippets via FTS5's `snippet()` function (verify available — R-S1; fallback:
-truncate around the first match in JS). New IPC `chat:search` + preload `searchConversations`.
-UI: search input atop `ConversationList.tsx`; result rows navigate to the conversation
-(message-level scroll-to is a nice-to-have, not required).
-
-**Contracts touched:** none locked. DB gains one virtual table + triggers (inside the
-encrypted file — search index is encrypted at rest for free). Locked workspace: the `db`
-getter throws while locked → search is simply unavailable pre-unlock, like everything else.
-
-**Privacy:** queries and snippets are CONTENT — **no audit event for searches** (reads are
-not audited today; keep it that way), nothing logged.
-
-**Where to look in detail:**
-- `db.ts` `chunks_fts` migration block — the exact guarded-migration + backfill shape to
-  replicate, incl. how it detects "table exists but empty".
-- `deleteConversation` (`chat.ts`) — confirm message deletes fire the FTS delete trigger
-  (they go through SQL DELETE, so yes — but the test must assert it).
-- R-S1: probe `snippet()`/`highlight()` in BOTH runtimes (Electron main + system Node),
-  the §1.2 two-runtime precedent.
-- Ranking: bm25 alone vs bm25 blended with recency (D23).
-
-**Tests:** migration + backfill on a pre-existing DB fixture; trigger sync incl.
-conversation delete; sanitizer reuse; ranking determinism; renderer test for the search UI;
-sentinel test that no audit row is written on search.
+- `messages_fts = fts5(content, message_id UNINDEXED)` — self-contained, three sync triggers,
+  guarded migration + one-time backfill (`ensureMessagesFts` in `db.ts`, the `ensureChunksFts`
+  shape verbatim). R-S1 resolved GO (§14): `snippet()`/`highlight()` work in both runtimes —
+  the JS-truncation fallback was never needed.
+- `buildFtsMatchQuery` **lifted to `services/fts.ts`** (shared module); `rag/hybrid.ts`
+  re-exports it so Phase-21 import sites are unchanged (a test asserts same-function identity).
+- `searchMessages(db, query, limit=40)` in `services/chat.ts`: bm25 ranking, newest-first
+  tie-break (`ORDER BY bm25, created_at DESC, rowid DESC` — D23), hits grouped per
+  conversation in best-hit order; snippets via `snippet()` with `U+0001`/`U+0002`
+  (`SEARCH_MARK_*`) highlight markers the renderer splits on (no HTML parsing).
+- IPC `chat:search` + preload `searchConversations` (request/response; handler never logs
+  the query). UI: search input atop `ConversationList.tsx`, debounced 150 ms, results swap
+  the grouped list, Esc/clear restores it; message-level scroll-to was skipped as allowed.
+- Privacy held: **no audit event, nothing logged** — sentinel test asserts `runtime_events`
+  stays empty across an IPC search.
+- **Session-hardening rider shipped (§12):** deny-by-default
+  `session.setPermissionRequestHandler` (`services/permissions.ts`) installed next to the CSP
+  in `main/index.ts`, no exceptions (Phase 37 adds scoped `media`); verified live
+  (Notification → `denied`, getUserMedia → `NotAllowedError`) and `npm run dev` unaffected.
+- Tests: migration/backfill on a pre-Phase-31 fixture, trigger sync incl. conversation
+  delete, sanitizer reuse + operator-injection, ranking/tie-break determinism, grouping,
+  limit, IPC + privacy sentinel, permission handler (fake session), renderer search flow
+  (type → highlighted results → open → clear, no-match copy, Esc).
 
 ## 5. Phase 32 — Vault password change
 
@@ -536,7 +528,8 @@ manual smoke behind `PAID_OCR_SMOKE` with a real scan fixture on the test drive.
   `dictation:transcribe` (+ preload mirrors). All follow existing patterns (request/response
   or async-with-polling; no new event channels).
 - **Session hardening (audit):** the deny-by-default `setPermissionRequestHandler` (§10) —
-  ship with the first wave-3 phase that lands; `security-model.md` documents it.
+  **SHIPPED with Phase 31** (`services/permissions.ts`, no exceptions yet; Phase 37 adds the
+  scoped `media` allow); documented in `security-model.md`.
 - **Drive layout:** `runtime/whisper.cpp/<os>/`, `models/transcriber/` (manifest-driven,
   role-named like `models/reranker`), `ocr/` assets — `drive.ts` `DRIVE_LAYOUT_DIRS` + both
   script families + `drive-layout.md`.
@@ -572,7 +565,7 @@ manual smoke behind `PAID_OCR_SMOKE` with a real scan fixture on the test drive.
 
 | Gate | Question | Method | Blocks |
 |---|---|---|---|
-| R-S1 | FTS5 `snippet()`/`highlight()` present in both runtimes? | The §1.2 two-runtime probe script | 31 (fallback exists) |
+| R-S1 | FTS5 `snippet()`/`highlight()` present in both runtimes? | **RESOLVED — GO (probed 2026-06-11):** Electron 37.10.3 main process AND system Node 24.13.0, both SQLite 3.50.4: `snippet()`, `highlight()`, `bm25()` all work on a self-contained fts5 table. JS-truncation fallback not needed | 31 (fallback exists) |
 | R-T1 | llama-server b9585 concurrent-request behavior (slots/queue/reject)? | Probe the REAL pinned binary; check `--parallel` defaults in the pinned source | nothing (informational since D26 resolved strict one-at-a-time; do alongside 33) |
 | R-T2 | 4B-class quality: long-input translation drift; comparison-format adherence | Manual smoke on the test drive (existing `PAID_*` pattern) | 34, 35 (prompt design) |
 | R-W1 | Pinned whisper.cpp release: binaries per OS, server vs CLI, JSON timestamp output, license, archive shapes + hashes | Inspect the release's real assets (b9585 discipline) | 36 (D34) |

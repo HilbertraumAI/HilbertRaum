@@ -155,6 +155,23 @@ the whole DB file is encrypted at rest.
   re-streams from history. `deleteConversation` removes a conversation (chat or document Q&A) and
   its messages; it refuses while a stream is in flight for that conversation (the persisted
   assistant turn would otherwise resurrect/violate the FK after the delete).
+- **Conversation search (Phase 31, wave-3 plan §4).** `messages_fts` (FTS5,
+  `content` + `message_id UNINDEXED`) mirrors the `chunks_fts` design exactly: self-contained
+  (not external-content — VACUUM renumbers implicit rowids), three sync triggers on `messages`
+  (insert / delete / update-of-content), guarded migration + one-time backfill in
+  `openDatabase` (`ensureMessagesFts`). Messages are persisted with think blocks already
+  stripped (Phase 20 D6), so reasoning is never indexed. `searchMessages(db, query, limit)`
+  (`services/chat.ts`) sanitizes via the SHARED `buildFtsMatchQuery` (lifted from
+  `rag/hybrid.ts` into `services/fts.ts`), ranks **bm25 with a newest-first tie-break**
+  (D23) and groups hits per conversation (conversations ordered by their best hit). Snippets
+  use FTS5's `snippet()` (verified in Electron 37 main AND system Node — research gate
+  R-S1), matched terms wrapped in the `SEARCH_MARK_*` control characters so the renderer
+  highlights without parsing HTML. IPC `chat:search` (preload `searchConversations`) is plain
+  request/response; the search UI lives atop `renderer/chat/ConversationList.tsx`. The index
+  lives inside the (possibly encrypted) DB file — encrypted at rest for free; while the vault
+  is locked the `db` getter throws, so search is simply unavailable pre-unlock. **Searches are
+  never logged or audited** — queries and snippets are content (Phase-19 privacy rule), and a
+  sentinel test asserts `runtime_events` stays untouched.
 
 ## Document ingestion (Phase 4)
 - **`services/ingestion/`** (spec §7.7). `parsers/` implements the `DocumentParser` interface

@@ -1,6 +1,16 @@
 import { randomUUID } from 'node:crypto'
 import type { Db } from './db'
-import type { ChatDepthMode, Citation, Conversation, Message } from '../../shared/types'
+import {
+  SEARCH_MARK_END,
+  SEARCH_MARK_START,
+  type ChatDepthMode,
+  type Citation,
+  type Conversation,
+  type ConversationSearchHit,
+  type ConversationSearchResult,
+  type Message
+} from '../../shared/types'
+import { buildFtsMatchQuery } from './fts'
 import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from './runtime'
 
 // Chat service (spec §7.6): create conversations, append user/assistant messages,
@@ -279,6 +289,77 @@ export function deleteConversation(db: Db, conversationId: string): boolean {
   db.prepare('DELETE FROM messages WHERE conversation_id = ?').run(conversationId)
   const result = db.prepare('DELETE FROM conversations WHERE id = ?').run(conversationId)
   return Number(result.changes) > 0
+}
+
+/** Most message hits one search returns (across all conversations). */
+export const SEARCH_DEFAULT_LIMIT = 40
+
+/** snippet() context: tokens shown around the matched term(s). */
+const SNIPPET_CONTEXT_TOKENS = 12
+
+interface SearchRow {
+  conversationId: string
+  conversationTitle: string
+  messageId: string
+  role: string
+  snippet: string
+  createdAt: string
+}
+
+/**
+ * Full-text search across all conversations (Phase 31, wave-3 plan §4). The query is
+ * sanitized through the shared `buildFtsMatchQuery` (FTS5 operators in user text never
+ * reach MATCH raw); hits are ranked bm25 with a newest-first tie-break (D23) and
+ * grouped by conversation, conversations ordered by their best hit. Snippets come from
+ * FTS5's snippet() (verified in both runtimes — R-S1), matched terms wrapped in the
+ * SEARCH_MARK_* control characters for renderer-side highlighting.
+ *
+ * Privacy: queries and snippets are CONTENT — callers must never log or audit them.
+ */
+export function searchMessages(
+  db: Db,
+  query: string,
+  limit: number = SEARCH_DEFAULT_LIMIT
+): ConversationSearchResult[] {
+  if (limit <= 0) return []
+  const match = buildFtsMatchQuery(query)
+  if (!match) return []
+  const rows = db
+    .prepare(
+      `SELECT m.conversation_id AS conversationId, c.title AS conversationTitle,
+              m.id AS messageId, m.role AS role, m.created_at AS createdAt,
+              snippet(messages_fts, 0, ?, ?, '…', ${SNIPPET_CONTEXT_TOKENS}) AS snippet
+       FROM messages_fts
+       JOIN messages m ON m.id = messages_fts.message_id
+       JOIN conversations c ON c.id = m.conversation_id
+       WHERE messages_fts MATCH ?
+       ORDER BY bm25(messages_fts), m.created_at DESC, m.rowid DESC
+       LIMIT ?`
+    )
+    .all(SEARCH_MARK_START, SEARCH_MARK_END, match, limit) as unknown as SearchRow[]
+
+  // Group by conversation, preserving rank order: a conversation appears where its
+  // best hit ranked, and hits within it stay in their own (bm25, newest-first) order.
+  const byConversation = new Map<string, ConversationSearchResult>()
+  for (const row of rows) {
+    const hit: ConversationSearchHit = {
+      messageId: row.messageId,
+      role: row.role === 'user' ? 'user' : 'assistant',
+      snippet: row.snippet,
+      createdAt: row.createdAt
+    }
+    const existing = byConversation.get(row.conversationId)
+    if (existing) {
+      existing.hits.push(hit)
+    } else {
+      byConversation.set(row.conversationId, {
+        conversationId: row.conversationId,
+        conversationTitle: row.conversationTitle,
+        hits: [hit]
+      })
+    }
+  }
+  return [...byConversation.values()]
 }
 
 /**

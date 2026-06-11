@@ -1,6 +1,7 @@
 import { app, BrowserWindow, nativeTheme, shell } from 'electron'
 import { dirname, join } from 'node:path'
 import { resolvePaths, ensureWorkspaceDirs, findPreparedDriveRoot } from './services/workspace'
+import { installDenyAllPermissionHandler } from './services/permissions'
 import { getSettings, updateSettings } from './services/settings'
 import { loadPolicy, buildPolicyStatus } from './services/policy'
 import { vaultPathsFrom, WorkspaceController } from './services/workspace-vault'
@@ -314,6 +315,14 @@ function createWindow(): void {
       }
     })
   })
+
+  // Deny-by-default permission handler (Phase 31 hardening rider — wave-3 plan §12).
+  // Electron GRANTS permission requests when no handler is installed; this renderer
+  // needs none (geolocation/notifications/media/…), so everything is refused. Phase 37
+  // adds the single scoped `media` (audio) exception for voice dictation.
+  installDenyAllPermissionHandler(mainWindow.webContents.session, (permission) =>
+    log.warn('Renderer permission request denied', { permission })
+  )
 
   mainWindow.once('ready-to-show', () => mainWindow?.show())
 

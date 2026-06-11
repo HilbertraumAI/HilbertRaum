@@ -1,12 +1,52 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
-import type { Conversation } from '@shared/types'
+import {
+  SEARCH_MARK_END,
+  SEARCH_MARK_START,
+  type Conversation,
+  type ConversationSearchResult
+} from '@shared/types'
 import { Button, ConfirmDialog } from '../components'
 
 // Conversation list (Phase 25, guidelines §3): the collapsible second column.
 // Date-grouped by last activity; row actions live behind a hover/focus "⋯" menu
 // (Radix DropdownMenu, also opened by right-click) — never permanent ✕ buttons.
 // Delete confirms through ConfirmDialog (the last browser confirm() is gone).
+// Phase 31: a search box on top — typing switches the column to full-text results
+// across all conversations (matched terms highlighted); picking one opens it.
+
+/** Debounce between keystroke and the search IPC round-trip. */
+const SEARCH_DEBOUNCE_MS = 150
+
+/** Snippets shown per matching conversation (more hits exist; the best ones lead). */
+const SNIPPETS_PER_RESULT = 2
+
+/**
+ * Split a snippet on the SEARCH_MARK_* markers from FTS5's snippet() into plain and
+ * matched parts, so matches render as <mark> without ever parsing HTML. Pure — tested
+ * directly. Markers are control characters and cannot occur in real message text.
+ */
+export function splitSnippet(snippet: string): Array<{ text: string; match: boolean }> {
+  const parts: Array<{ text: string; match: boolean }> = []
+  let rest = snippet
+  while (rest.length > 0) {
+    const start = rest.indexOf(SEARCH_MARK_START)
+    if (start === -1) {
+      parts.push({ text: rest, match: false })
+      break
+    }
+    if (start > 0) parts.push({ text: rest.slice(0, start), match: false })
+    const end = rest.indexOf(SEARCH_MARK_END, start + 1)
+    if (end === -1) {
+      // Unterminated marker (defensive) — treat the tail as plain text.
+      parts.push({ text: rest.slice(start + 1), match: false })
+      break
+    }
+    parts.push({ text: rest.slice(start + 1, end), match: true })
+    rest = rest.slice(end + 1)
+  }
+  return parts.filter((p) => p.text.length > 0)
+}
 
 export interface ConversationGroup {
   label: string
@@ -64,6 +104,42 @@ export function ConversationList({
   const [pendingDelete, setPendingDelete] = useState<Conversation | null>(null)
   // One controlled menu so right-click (context menu) can open the same "⋯" menu.
   const [menuOpenId, setMenuOpenId] = useState<string | null>(null)
+  // Phase 31 search: non-empty query swaps the column to results. `results` is null
+  // while a search is still in flight (→ quiet, no flicker), [] when nothing matched.
+  const [query, setQuery] = useState('')
+  const [results, setResults] = useState<ConversationSearchResult[] | null>(null)
+
+  const searching = query.trim().length > 0
+
+  useEffect(() => {
+    const q = query.trim()
+    if (!q) {
+      setResults(null)
+      return
+    }
+    let cancelled = false
+    const timer = setTimeout(() => {
+      window.api
+        .searchConversations(q)
+        .then((r) => {
+          if (!cancelled) setResults(r)
+        })
+        .catch(() => {
+          if (!cancelled) setResults([])
+        })
+    }, SEARCH_DEBOUNCE_MS)
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+    }
+  }, [query])
+
+  function openResult(r: ConversationSearchResult): void {
+    const conv = conversations.find((c) => c.id === r.conversationId)
+    if (!conv) return
+    onSelect(conv)
+    setQuery('')
+  }
 
   return (
     <aside className="chat-sidebar">
@@ -75,59 +151,97 @@ export function ConversationList({
           «
         </Button>
       </div>
-      <div className="chat-conv-list">
-        {conversations.length === 0 && <p className="hint">No conversations yet.</p>}
-        {groupConversations(conversations).map((group) => (
-          <div key={group.label} className="chat-conv-group" role="group" aria-label={group.label}>
-            <div className="chat-conv-group-label">{group.label}</div>
-            {group.conversations.map((c) => (
-              <div
-                key={c.id}
-                className={`chat-conv-row ${c.id === activeId ? 'active' : ''}`}
-                onContextMenu={(e) => {
-                  e.preventDefault()
-                  if (!streaming) setMenuOpenId(c.id)
-                }}
-              >
-                <button
-                  className={`chat-conv ${c.id === activeId ? 'active' : ''}`}
-                  disabled={streaming && c.id !== activeId}
-                  onClick={() => onSelect(c)}
-                  title={c.title}
+      <input
+        type="search"
+        className="chat-search-input"
+        placeholder="Search conversations…"
+        aria-label="Search conversations"
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Escape') setQuery('')
+        }}
+      />
+      {searching && (
+        <div className="chat-conv-list" role="region" aria-label="Search results">
+          {results != null && results.length === 0 && (
+            <p className="hint">No matches yet — try a different word.</p>
+          )}
+          {(results ?? []).map((r) => (
+            <button
+              key={r.conversationId}
+              className="chat-search-result"
+              disabled={streaming && r.conversationId !== activeId}
+              onClick={() => openResult(r)}
+              title={r.conversationTitle}
+            >
+              <span className="chat-search-result-title">{r.conversationTitle}</span>
+              {r.hits.slice(0, SNIPPETS_PER_RESULT).map((h) => (
+                <span key={h.messageId} className="chat-search-snippet">
+                  {splitSnippet(h.snippet).map((part, i) =>
+                    part.match ? <mark key={i}>{part.text}</mark> : <span key={i}>{part.text}</span>
+                  )}
+                </span>
+              ))}
+            </button>
+          ))}
+        </div>
+      )}
+      {!searching && (
+        <div className="chat-conv-list">
+          {conversations.length === 0 && <p className="hint">No conversations yet.</p>}
+          {groupConversations(conversations).map((group) => (
+            <div key={group.label} className="chat-conv-group" role="group" aria-label={group.label}>
+              <div className="chat-conv-group-label">{group.label}</div>
+              {group.conversations.map((c) => (
+                <div
+                  key={c.id}
+                  className={`chat-conv-row ${c.id === activeId ? 'active' : ''}`}
+                  onContextMenu={(e) => {
+                    e.preventDefault()
+                    if (!streaming) setMenuOpenId(c.id)
+                  }}
                 >
-                  {c.mode === 'documents' && <span className="chat-conv-badge">DOC</span>}
-                  {c.title}
-                </button>
-                <DropdownMenu.Root
-                  open={menuOpenId === c.id}
-                  onOpenChange={(open) => setMenuOpenId(open ? c.id : null)}
-                >
-                  <DropdownMenu.Trigger asChild>
-                    <button
-                      className="chat-conv-menu-btn"
-                      disabled={streaming}
-                      aria-label={`Options for conversation "${c.title}"`}
-                      title="Conversation options"
-                    >
-                      ⋯
-                    </button>
-                  </DropdownMenu.Trigger>
-                  <DropdownMenu.Portal>
-                    <DropdownMenu.Content className="menu" align="start" sideOffset={4}>
-                      <DropdownMenu.Item
-                        className="menu-item danger"
-                        onSelect={() => setPendingDelete(c)}
+                  <button
+                    className={`chat-conv ${c.id === activeId ? 'active' : ''}`}
+                    disabled={streaming && c.id !== activeId}
+                    onClick={() => onSelect(c)}
+                    title={c.title}
+                  >
+                    {c.mode === 'documents' && <span className="chat-conv-badge">DOC</span>}
+                    {c.title}
+                  </button>
+                  <DropdownMenu.Root
+                    open={menuOpenId === c.id}
+                    onOpenChange={(open) => setMenuOpenId(open ? c.id : null)}
+                  >
+                    <DropdownMenu.Trigger asChild>
+                      <button
+                        className="chat-conv-menu-btn"
+                        disabled={streaming}
+                        aria-label={`Options for conversation "${c.title}"`}
+                        title="Conversation options"
                       >
-                        Delete conversation
-                      </DropdownMenu.Item>
-                    </DropdownMenu.Content>
-                  </DropdownMenu.Portal>
-                </DropdownMenu.Root>
-              </div>
-            ))}
-          </div>
-        ))}
-      </div>
+                        ⋯
+                      </button>
+                    </DropdownMenu.Trigger>
+                    <DropdownMenu.Portal>
+                      <DropdownMenu.Content className="menu" align="start" sideOffset={4}>
+                        <DropdownMenu.Item
+                          className="menu-item danger"
+                          onSelect={() => setPendingDelete(c)}
+                        >
+                          Delete conversation
+                        </DropdownMenu.Item>
+                      </DropdownMenu.Content>
+                    </DropdownMenu.Portal>
+                  </DropdownMenu.Root>
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+      )}
       <ConfirmDialog
         open={pendingDelete != null}
         title="Delete this conversation?"

@@ -2,7 +2,12 @@ import { BrowserWindow, dialog, ipcMain, type IpcMainInvokeEvent } from 'electro
 import { writeFileSync } from 'node:fs'
 import { IPC, STREAM } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
-import type { ChatOptions, Conversation, Message } from '../../shared/types'
+import type {
+  ChatOptions,
+  Conversation,
+  ConversationSearchResult,
+  Message
+} from '../../shared/types'
 import {
   appendMessage,
   createConversation,
@@ -14,6 +19,7 @@ import {
   listConversations,
   listMessages,
   maybeSetTitleFromFirstMessage,
+  searchMessages,
   updateConversationScope
 } from '../services/chat'
 import { log } from '../services/logging'
@@ -76,6 +82,13 @@ export function registerChatIpc(ctx: AppContext): void {
   )
 
   ipcMain.handle(IPC.listConversations, (): Conversation[] => listConversations(ctx.db))
+
+  // Full-text search across conversations (Phase 31). The query and the returned
+  // snippets are chat CONTENT: this handler must never log them and never writes an
+  // audit event (reads are not audited — the Phase-19 privacy rule).
+  ipcMain.handle(IPC.searchConversations, (_e, query: string): ConversationSearchResult[] =>
+    searchMessages(ctx.db, typeof query === 'string' ? query : '')
+  )
 
   ipcMain.handle(IPC.listMessages, (_e, conversationId: string): Message[] =>
     listMessages(ctx.db, conversationId)
