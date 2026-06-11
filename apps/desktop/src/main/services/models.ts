@@ -17,8 +17,17 @@ import { getSettings, updateSettings } from './settings'
 // states, recommend by hardware profile, and select the active chat/embedding model.
 // All offline — manifests are local YAML; weights are local files. No network.
 
-const SUPPORTED_RUNTIMES = new Set(['llama_cpp', 'llama.cpp'])
-const SUPPORTED_FORMATS = new Set(['gguf'])
+/**
+ * Runtime → formats this app can actually run (the spec §7.4 `unsupported` gate).
+ * Phase 36 added the whisper.cpp transcriber family (GGML `.bin` weights), so support
+ * is a PAIR check — a manifest claiming `whisper_cpp` with `gguf` (or `llama_cpp` with
+ * `ggml`) is still unsupported, never a silent pass.
+ */
+const SUPPORTED_RUNTIME_FORMATS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+  ['llama_cpp', new Set(['gguf'])],
+  ['llama.cpp', new Set(['gguf'])],
+  ['whisper_cpp', new Set(['ggml'])]
+])
 const MANIFEST_EXTENSIONS = new Set(['.yaml', '.yml'])
 /**
  * Reserved filenames under `model-manifests/` that are NOT model manifests (Phase 12).
@@ -258,7 +267,7 @@ export async function computeInstallState(
   rootPath: string,
   opts: InstallStateOptions
 ): Promise<ModelState> {
-  if (!SUPPORTED_RUNTIMES.has(manifest.runtime) || !SUPPORTED_FORMATS.has(manifest.format)) {
+  if (!SUPPORTED_RUNTIME_FORMATS.get(manifest.runtime)?.has(manifest.format)) {
     return 'unsupported'
   }
   const path = weightPath(rootPath, manifest)
@@ -447,12 +456,19 @@ export interface SelectResult {
 /**
  * Persist the selected active model to settings. Chat models set `activeModelId`;
  * embedding models set `activeEmbeddingModelId`. Throws if the id is unknown.
+ * Reranker/transcriber models are availability-driven (D9/D14: they activate when
+ * binary + weights exist) — there is no settings slot for them, and the old
+ * role-else-chat fallback would have written a transcriber id into `activeModelId`
+ * (the CHAT slot) and broken chat. Refuse with friendly copy instead (Phase 36 fix).
  */
 export function selectModel(db: Db, manifestsDir: string, modelId: string): SelectResult {
   const { manifests } = discoverManifests(manifestsDir)
   const found = manifests.find((m) => m.manifest.id === modelId)
   if (!found) throw new Error(`Unknown model id: ${modelId}`)
 
+  if (found.manifest.role !== 'chat' && found.manifest.role !== 'embeddings') {
+    throw new Error('This model is used automatically once installed — there is nothing to select.')
+  }
   const patch =
     found.manifest.role === 'embeddings'
       ? { activeEmbeddingModelId: modelId }

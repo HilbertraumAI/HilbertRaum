@@ -245,6 +245,10 @@ export function ModelsScreen(): JSX.Element {
   function card(m: ModelInfo): JSX.Element {
     const active = isActive(m)
     const installed = m.state === 'installed' || m.state === 'running' || m.state === 'ready'
+    // Reranker/transcriber are availability-driven (they work automatically once
+    // installed — D9/D14): there is nothing to select or start, so those actions are
+    // not offered (selecting one would have claimed the CHAT slot — Phase 36 fix).
+    const automatic = m.role === 'reranker' || m.role === 'transcriber'
     // Zero-weights first run: the MAIN process computes whether this (missing, chat)
     // model may start the built-in mock (developer + policy gates, H6/M10).
     const canMockStart = Boolean(m.startableAsMock)
@@ -289,39 +293,47 @@ export function ModelsScreen(): JSX.Element {
 
         {ramTooLow && <Banner tone="warning">{ramHint}</Banner>}
 
-        <div className="model-actions">
-          <Button
-            size="sm"
-            variant="primary"
-            disabled={!installed || active || ramTooLow || busy !== null}
-            title={ramHint}
-            onClick={() => run(`select-${m.id}`, () => window.api.selectModel(m.id))}
-          >
-            {active ? 'Selected' : 'Select'}
-          </Button>
-          {m.state === 'running' ? (
-            <Button size="sm" disabled={busy !== null} onClick={() => run('stop', () => window.api.stopRuntime())}>
-              Stop runtime
-            </Button>
-          ) : (
+        {automatic ? (
+          <p className="hint" style={{ margin: '4px 0 0' }}>
+            {installed
+              ? 'Installed — used automatically. There is nothing to start.'
+              : 'Used automatically once installed — no setup needed.'}
+          </p>
+        ) : (
+          <div className="model-actions">
             <Button
               size="sm"
-              disabled={(!installed && !canMockStart) || (installed && ramTooLow) || busy !== null}
-              onClick={() => run(`start-${m.id}`, () => window.api.startRuntime(m.id))}
-              title={
-                installed && ramTooLow
-                  ? ramHint
-                  : installed
-                    ? 'Start the local runtime for this model'
-                    : canMockStart
-                      ? 'No weights present — starts the built-in mock runtime so you can try the app'
-                      : 'Model file not present'
-              }
+              variant="primary"
+              disabled={!installed || active || ramTooLow || busy !== null}
+              title={ramHint}
+              onClick={() => run(`select-${m.id}`, () => window.api.selectModel(m.id))}
             >
-              {installed ? 'Start runtime' : canMockStart ? 'Start mock runtime' : 'Start runtime'}
+              {active ? 'Selected' : 'Select'}
             </Button>
-          )}
-        </div>
+            {m.state === 'running' ? (
+              <Button size="sm" disabled={busy !== null} onClick={() => run('stop', () => window.api.stopRuntime())}>
+                Stop runtime
+              </Button>
+            ) : (
+              <Button
+                size="sm"
+                disabled={(!installed && !canMockStart) || (installed && ramTooLow) || busy !== null}
+                onClick={() => run(`start-${m.id}`, () => window.api.startRuntime(m.id))}
+                title={
+                  installed && ramTooLow
+                    ? ramHint
+                    : installed
+                      ? 'Start the local runtime for this model'
+                      : canMockStart
+                        ? 'No weights present — starts the built-in mock runtime so you can try the app'
+                        : 'Model file not present'
+                }
+              >
+                {installed ? 'Start runtime' : canMockStart ? 'Start mock runtime' : 'Start runtime'}
+              </Button>
+            )}
+          </div>
+        )}
 
         {downloadSection(m)}
 

@@ -1926,6 +1926,22 @@ Repo root: `f:\_coding\ai_drive`.
      plausibly Defender's first-execution screening of the freshly copied unsigned
      exe. The new stderr-only failure log in `AudioParser` records the technical
      reason if it ever recurs.)
+  10. **Same-day fix — the transcriber showed "Unsupported" on the AI Model screen
+      (user-reported):** `computeInstallState`'s Phase-2-era whitelist knew only
+      `llama_cpp`+`gguf`, so the `whisper_cpp`+`ggml` manifest computed `unsupported` —
+      which ALSO hid its in-app download (the offer requires state `missing`). Fixed as
+      a runtime↔format PAIR matrix (`llama_cpp→gguf`, `whisper_cpp→ggml`; mismatched
+      pairs stay unsupported). Closing it exposed a latent hazard now made unreachable:
+      every model card rendered Select/Start, and `selectModel`'s role-else-chat
+      fallback would have written a transcriber (or reranker — latent since Phase 21)
+      id into `activeModelId`, the CHAT slot. `selectModel` now refuses
+      non-chat/non-embeddings roles with friendly copy, and reranker/transcriber cards
+      replace Select/Start with an honest "used automatically" line (Download +
+      Verify checksum + Technical details stay). +6 tests (916 total): the support-pair
+      matrix, the selectModel refusal (slots untouched), and renderer cards for both
+      automatic roles. Eyeballed in the built app: Whisper card = "✓ Installed ·
+      Installed — used automatically. There is nothing to start."; reranker =
+      "Used automatically once installed — no setup needed." + Download.
 
 ---
 
@@ -2732,11 +2748,11 @@ items are **MANUAL acceptance only** (R2/R5/R7 + the GPU hardware matrix). In ro
    insert-at-cursor + availability gating (visible only when `ctx.transcriber` exists).
    Then Phase 38 (OCR) behind its own gates R-O1..R-O3 (D31/D32 still open by design).
 
-**Current gate (2026-06-11, post-Phase-36): typecheck clean, 910/910 tests pass (+23 manual
-tests behind `PAID_*` env vars — GPU/thinking/rerank/minsim/RAG-quality/bring-up/eval/
-concurrency-probe/translation/compare/whisper smokes — skipped in CI), `npm run build`
-green.** The per-phase gate history (test counts, bundle sizes, per-phase test inventories)
-lives in git history.
+**Current gate (2026-06-11, post-Phase-36 incl. the same-day unsupported-transcriber fix):
+typecheck clean, 916/916 tests pass (+23 manual tests behind `PAID_*` env vars —
+GPU/thinking/rerank/minsim/RAG-quality/bring-up/eval/concurrency-probe/translation/compare/
+whisper smokes — skipped in CI), `npm run build` green.** The per-phase gate history (test
+counts, bundle sizes, per-phase test inventories) lives in git history.
 
 ---
 
