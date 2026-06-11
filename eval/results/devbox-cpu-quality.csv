@@ -1,0 +1,2 @@
+model,n,em_rate,mean_f1,citation_correct_rate,grounded_rate,over_abstain_rate,abstain_rate_unans,hallucination_rate,em_rate_de,em_rate_en,f1_de,f1_en
+qwen3-4b-instruct-2507-q4,100,0.9765,0.3613,0.9882,0.9765,0.0235,0.6000,0.4000,0.9608,1.0000,0.3698,0.3485

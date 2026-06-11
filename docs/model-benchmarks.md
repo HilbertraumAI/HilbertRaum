@@ -76,6 +76,14 @@ Abstention is detected by a curated DE/EN refusal-phrase list (heuristic — tha
 raw answer is dumped). Audit borderline unanswerable items in `…-items.jsonl` before trusting
 `abstain_rate_unans` / `hallucination_rate`.
 
+**Re-scoring after a detector change (no model re-run):** when the abstention phrase list is
+improved, regenerate the numbers from the committed `…-items.jsonl` dumps:
+```powershell
+node eval\rescore.mjs   # writes eval/results/<stem>-quality-rescored.csv from every dump
+```
+`rescore.mjs` imports the SAME `text.mjs` the harness uses, so a re-score and a fresh run agree.
+This is exactly how the first run was corrected — see §6.
+
 ---
 
 ## 3. Part B — Speed (`llama-bench`)
@@ -143,3 +151,67 @@ accumulate dead multi-GB downloads. Then update:
   `true` based on its Deep-mode quality numbers (it already honours `enable_thinking`; §4.6).
 
 Record the outcome here, then condense this plan per the CLAUDE.md doc lifecycle rule.
+
+---
+
+## 6. First-run findings (2026-06-11 — i7-1185G7, CPU; QA half only)
+
+First QA execution: all 8 catalog chat models on the i7-1185G7 laptop (CPU/Vulkan-DL build),
+plus a single-model reproducibility check on the dev box. **Speed (Part B) + peak-RSS (Part C)
+not yet run** — they remain before the phase closes and before §5.4 can be fully applied (the
+rule needs `tg t/s`). Authoritative numbers are the **`*-quality-rescored.csv`** (see below).
+
+- **Reproducible across machines.** `qwen3-4b-instruct-2507-q4` scored bit-identically on the
+  dev box and the i7 (EM 0.9765 / F1 0.3613 / 1 hallucination) — greedy decoding is
+  deterministic, so QA quality is machine-independent and one machine suffices for it (the 2nd
+  machine matters for speed/RAM, not quality).
+- **Grounded accuracy saturates → it does NOT separate the catalog.** EM 95–98% for every model,
+  German ≈ English (em_de ≈ 0.94–0.96, em_en = 1.00). All eight are competent grounded
+  extractors; the catalog separates on *hallucination-resistance*, not accuracy.
+- **`citation_correct_rate` is a flat 0.9882 for every model — it is a RETRIEVAL property, not a
+  model one.** `generateGroundedAnswer` persists the citations computed by retrieval (not parsed
+  from the model's `[Sn]`), so this column is constant across chat models and cannot rank them.
+  ⇒ In this architecture the §5.4 "citation-correctness" clause is a retrieval constant; lean the
+  decision on EM/F1 + hallucination-resistance + (pending) speed/RAM instead.
+- **The discriminating axis = abstention on the 15 unanswerable items.** Audited genuine
+  hallucinations (manually confirmed against the raw dump):
+
+  | Model | Genuine hallucinations / 15 |
+  |---|---|
+  | ministral3-8b-instruct-2512-q4 | **0** |
+  | gemma4-12b-it-qat-q4 | 1 |
+  | qwen3-4b-instruct-2507-q4 | 1 |
+  | qwen3-30b-a3b-q4 | 1 |
+  | qwen3-8b-instruct-q4 | 2 |
+  | qwen3-14b-instruct-q4 | 2 |
+  | qwen3-4b-instruct-q4 (current default) | 3 |
+  | granite-4.1-8b-q4 | 3 |
+
+  Two hard item families caused every failure: (a) **`contract-penalty`** — the invoice's "2%
+  late-payment fee" misread as the agreement's (nonexistent) late-*delivery* penalty (fails
+  almost everyone, incl. Gemma's one miss); (b) **`hr-sick`** — answering with the 20 *vacation*
+  days for a paid-*sick*-days question (trips the Qwen family + Granite; Gemma / Ministral / 2507
+  correctly refuse). ±1 item residual on borderline hedged answers (e.g. qwen3-30b's caveated
+  `en-contract-penalty`).
+- **D18 (the incumbent-refresh question): 2507 ≥ the original 4B on every axis** — EM 0.9765 vs
+  0.9647, F1 0.3613 vs 0.3277, em_de 0.9608 vs 0.9412, f1_de 0.3698 vs 0.3400, hallucinations
+  1 vs 3. It also matches the original **8B** on EM with higher F1 and fewer hallucinations
+  (1 vs 2). The §4.6 bring-up "German wobble" did **not** appear on the grounded RAG path (2507
+  has the *top* German F1 here) — that wobble is an open-/parametric-knowledge issue, not a
+  grounding one. Promoting 2507 over the original 4B as default is supported on quality; the only
+  caveat stays the product one (2507 has no hybrid thinking → Deep becomes a no-op). Confirm once
+  speed/RAM are in.
+- **Gemma `supports_thinking_mode` flag: not informed by this run** (grounded answers run
+  balanced, thinking off). Gemma's strong abstention is a general quality signal, but the flag
+  needs a separate thinking-quality check.
+- **Methodology note — the abstention detector was hardened mid-analysis.** The v1 phrase list
+  overcounted hallucination ~2–3× (it missed "none of the documents mention", "does not
+  specify", "nicht ausreichend", "nicht im bereitgestellten Dokument enthalten", bolded Ministral
+  refusals, …). Fixed in `apps/desktop/tests/eval/text.mjs` (+ regression tests), then re-scored
+  from the dumps via `eval/rescore.mjs` — no models re-run. The `*-quality.csv` files are the raw
+  v1-detector output; **`*-quality-rescored.csv` is authoritative** and a fresh run now reproduces
+  it.
+
+**Remaining to close the phase:** Part B (`llama-bench`) + Part C (peak-RSS) on both machines →
+join into the combined CSVs; then apply §5.4 (promote 2507 / others as the speed-RAM picture
+allows, decide the Gemma flag, set measured `recommended_min_ram_gb`) and condense.

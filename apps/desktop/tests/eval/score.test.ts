@@ -101,6 +101,54 @@ describe('isAbstention (DE + EN refusal phrases)', () => {
   })
 })
 
+describe('isAbstention — audited real-run patterns (2026-06-11)', () => {
+  // Refusal phrasings the v1 list MISSED on the first real run (overcounted hallucination).
+  it('catches the patterns the first run missed', () => {
+    expect(isAbstention('None of the documents mention an antivirus product deployed on endpoints.')).toBe(true)
+    expect(isAbstention('The handbook does not specify the number of paid sick days.')).toBe(true)
+    expect(isAbstention('The question is not addressed in any of the provided document excerpts.')).toBe(true)
+    expect(isAbstention('The documents do not provide information on the monthly cost.')).toBe(true)
+    expect(isAbstention('Die Dokumente sind nicht ausreichend, um die Vertragsstrafe zu bestimmen.')).toBe(true)
+    expect(isAbstention('Keine der angegebenen Dokumente enthält Informationen zu einem Antivirenprodukt.')).toBe(true)
+    expect(isAbstention('Im Rahmenvertrag wird keine explizite Vertragsstrafe genannt.')).toBe(true)
+    expect(isAbstention('Antwort nicht möglich aufgrund fehlender Daten.')).toBe(true)
+    expect(isAbstention('Die monatliche Miete ist nicht direkt angegeben.')).toBe(true)
+    // Refusal templates surfaced by the second audit pass.
+    expect(isAbstention('The penalty is not explicitly detailed in the provided excerpts.')).toBe(true)
+    expect(isAbstention('Es wird jedoch nicht ausdrücklich genannt, welches Lehrbuch verwendet wird.')).toBe(true)
+    expect(isAbstention('Die Information ist nicht im bereitgestellten Dokument enthalten.')).toBe(true)
+    expect(isAbstention('Die genaue Bezeichnung ist aus dem Kontext nicht abzuleiten.')).toBe(true)
+  })
+  // The boundary: genuine WRONG answers (distractor conflations) must stay hallucinations.
+  it('does NOT flag a confident wrong answer (real hallucinations from the run)', () => {
+    expect(isAbstention('The handbook grants twenty paid sick days per year [S1].')).toBe(false)
+    expect(isAbstention('A late fee of 2 percent applies after the due date [S1].')).toBe(false)
+    expect(isAbstention('Laut dem Mitarbeiterhandbuch gibt es 20 bezahlte Urlaubstage pro Jahr [S1].')).toBe(false)
+  })
+})
+
+describe('scoreItem — hedged-but-correct vs over-abstention (post-audit semantics)', () => {
+  const answerableItem: EvalItem = {
+    id: 'en-hr-vacation', lang: 'en', question: 'How many vacation days?',
+    answer: ['twenty', '20'], unanswerable: false, gold_doc: 'Employee Handbook.docx', type: 'numeric'
+  }
+  it('a right + correctly-cited answer counts even if it also hedges', () => {
+    const s = scoreItem(answerableItem, {
+      answer: 'The handbook does not specify sick days, but it grants twenty vacation days per year [S1].',
+      citations: [{ label: 'S1', sourceTitle: 'Employee Handbook.docx' }]
+    })
+    expect(s.em).toBe(1)
+    expect(s.abstained).toBe(true) // contains a refusal phrase ("does not specify")
+    expect(s.correct).toBe(true) // …but it answered correctly + cited right → still correct
+  })
+  it('a true over-abstention (declined, no gold span) is incorrect', () => {
+    const s = scoreItem(answerableItem, { answer: 'That is not specified in the documents.', citations: [] })
+    expect(s.em).toBe(0)
+    expect(s.abstained).toBe(true)
+    expect(s.correct).toBe(false)
+  })
+})
+
 const answerable: EvalItem = {
   id: 'de-contract-liability-01',
   lang: 'de',

@@ -7,6 +7,12 @@
 // harness `tests/manual/model-eval.test.ts` imports these same functions to score real
 // model output, so the math that decides promotions is the math that CI covers.
 //
+// Normalization + the abstention phrase list live in `./text.mjs` (shared verbatim with the
+// offline `eval/rescore.mjs`); this file re-exports them so `./score` stays the single import.
+
+import { normalizeText, ABSTAIN_PHRASES, isAbstention } from './text.mjs'
+export { normalizeText, ABSTAIN_PHRASES, isAbstention }
+//
 // Placement note: the eval DATA + RESULTS live at the repo root `eval/` (per the plan —
 // `eval/rag_de_en.jsonl`, `eval/results/*.csv`); the scoring CODE lives here with the tests
 // so vitest (`include: tests/**`) gives it coverage. Repo-root `eval/` stays code-free.
@@ -65,21 +71,7 @@ export interface ItemScore {
   correct: boolean
 }
 
-// --- Text normalization (German-aware) -------------------------------------------------
-//
-// Conservative on purpose: NFC + lowercase + strip punctuation + collapse whitespace.
-// Umlauts/ß are KEPT (they are `\p{L}`): the model SHOULD produce "Donau"/"Straße", and
-// folding ä→ae would hide exactly the German-quality differences this benchmark exists to
-// measure (D18 — Qwen-2507's German wobble).
-
-/** NFC-fold, lowercase, replace every non-(letter|number) run with a single space, trim. */
-export function normalizeText(s: string): string {
-  return s
-    .normalize('NFC')
-    .toLowerCase()
-    .replace(/[^\p{L}\p{N}]+/gu, ' ')
-    .trim()
-}
+// --- Token metrics (German-aware via the shared `normalizeText`) ------------------------
 
 export function tokenize(s: string): string[] {
   const n = normalizeText(s)
@@ -129,80 +121,21 @@ export function containsGold(prediction: string, golds: string[]): boolean {
   return false
 }
 
-// --- Abstention detection --------------------------------------------------------------
-//
-// HEURISTIC (the plan flags it): the model is told "if the excerpts do not contain enough
-// information, say so". For an unanswerable item retrieval still surfaces distractor chunks
-// (ragMinSimilarity = 0), so the model IS called and must soft-decline. We detect that
-// decline by phrase. Because it is heuristic, the harness records every raw answer per item
-// so borderline calls are auditable (plan §7 risk row). The fixed no-context sentinel
-// ("I couldn't find this in your documents…") is caught by the EN "couldn't find" phrase.
-
-/** Refusal phrases, matched as substrings of the lowercased+space-collapsed answer. */
-export const ABSTAIN_PHRASES: readonly string[] = [
-  // English
-  'not enough information',
-  'do not contain',
-  'does not contain',
-  'don t contain',
-  'doesn t contain',
-  'not contain enough',
-  'cannot find',
-  'can not find',
-  'couldn t find',
-  'could not find',
-  'no information',
-  'not mentioned',
-  'isn t mentioned',
-  'not specified',
-  'not stated',
-  'not provided',
-  'unable to answer',
-  'cannot answer',
-  'can not answer',
-  'don t have enough',
-  'do not have enough',
-  'no relevant',
-  'not available in',
-  // German
-  'nicht genug',
-  'nicht genügend',
-  'keine ausreichenden',
-  'keine informationen',
-  'keine angaben',
-  'nicht hervor',
-  'lässt sich nicht',
-  'nicht in den dokumenten',
-  'nicht enthalten',
-  'enthalten keine',
-  'enthalten nicht',
-  'nicht beantworten',
-  'kann nicht beantwortet',
-  'nicht angegeben',
-  'nicht erwähnt',
-  'nicht genannt',
-  'konnte nicht',
-  'finde keine',
-  'nicht verfügbar',
-  'geht nicht hervor'
-]
-
-export function isAbstention(answer: string): boolean {
-  // Collapse to lowercase single-spaced, dropping apostrophes/punctuation so "couldn't" and
-  // "couldn t" both reduce to the phrase form above. (Reuses tokenize's normalization.)
-  const flat = ' ' + tokenize(answer).join(' ') + ' '
-  return ABSTAIN_PHRASES.some((p) => flat.includes(' ' + p.replace(/\s+/g, ' ') + ' '))
-}
+// (Abstention detection — `isAbstention` / `ABSTAIN_PHRASES` — lives in `./text.mjs`, shared
+// verbatim with `eval/rescore.mjs` and re-exported above. It is a HEURISTIC, so the harness
+// dumps every raw answer for audit, and unanswerable-item numbers must be read against that
+// dump, not trusted blind, per plan §7.)
 
 // --- Per-item + aggregate scoring ------------------------------------------------------
 
 /**
  * Score one model answer against one gold item. Verdict (`correct`):
  *  - unanswerable item → correct ⇔ the model abstained (a confident answer = a hallucination);
- *  - answerable item   → correct ⇔ NOT abstained AND the gold span is present (EM) AND the
- *    answer cited the right document. (Citation-correctness is part of "right" because the
- *    product's whole claim is grounded, cited answers — an uncited correct string is a
- *    weaker outcome and is still visible via `em` / `citationCorrect` columns.)
+ *  - answerable item   → correct ⇔ the gold span is present (EM) AND the answer cited the right
+ *    document. We do NOT also require `!abstained` here: a hedged-but-correct answer ("the
+ *    handbook lists vacation, not sick days, but vacation is twenty days [S1]") still answered,
+ *    and a stray refusal phrase shouldn't flip a right+cited answer to wrong. `over_abstain`
+ *    (declined an answerable item AND gave no gold span) is tracked separately as a diagnostic.
  */
 export function scoreItem(item: EvalItem, out: ItemOutput): ItemScore {
   const abstained = isAbstention(out.answer)
@@ -217,7 +150,7 @@ export function scoreItem(item: EvalItem, out: ItemOutput): ItemScore {
     em === 1 &&
     (out.citedTexts ?? []).some((t) => containsGold(t, item.answer))
 
-  const correct = item.unanswerable ? abstained : em === 1 && !abstained && citationCorrect
+  const correct = item.unanswerable ? abstained : em === 1 && citationCorrect
   return {
     id: item.id,
     lang: item.lang,
@@ -275,7 +208,7 @@ export function aggregate(model: string, scores: ItemScore[]): ModelAggregate {
     meanF1: mean(ans.map((s) => s.f1)),
     citationCorrectRate: rate(ans.filter((s) => s.citationCorrect).length, ans.length),
     groundedRate: rate(ans.filter((s) => s.grounded).length, ans.length),
-    overAbstainRate: rate(ans.filter((s) => s.abstained).length, ans.length),
+    overAbstainRate: rate(ans.filter((s) => s.abstained && s.em === 0).length, ans.length),
     unanswerable: un.length,
     abstainRate: rate(un.filter((s) => s.abstained).length, un.length),
     hallucinationRate: rate(un.filter((s) => !s.abstained).length, un.length),

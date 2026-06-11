@@ -1329,9 +1329,26 @@ Repo root: `f:\_coding\ai_drive`.
      server args) stay a documented manual protocol (D20 — doc-first, minimal automation).
   5. **Protocol doc** `docs/model-benchmarks.md` (offline, Wi-Fi off; combined CSV schema;
      the §5.4 decision rule incl. D18 default-model question + the Gemma `supports_thinking_mode`
-     flip). Gate: 693/693 tests (+24), no `src/` change → build/typecheck surface unchanged.
-     PENDING: the runs on ≥2 machines, then apply promotions to `recommended_profiles` +
-     `model-policy.md` and replace the §4.1 RAM estimates with measured peak-RSS values.
+     flip). Gate: 697/697 tests (+28), no `src/` change → build/typecheck surface unchanged.
+  6. **FIRST QA RUN done (2026-06-11, i7-1185G7 CPU, all 8 models + a dev-box reproducibility
+     check; speed/RSS NOT yet run)** — results in `eval/results/` (`docs/model-benchmarks.md`
+     §6 has the analysis). Findings: (a) QA is reproducible bit-for-bit across machines (greedy)
+     ⇒ quality is machine-independent; (b) grounded EM **saturates at 95–98%, DE ≈ EN, for every
+     model** — accuracy does not separate the catalog; (c) `citation_correct_rate` is a **flat
+     0.9882 = a RETRIEVAL constant** (citations come from retrieval, not model `[Sn]`) ⇒ it can't
+     rank models, so the §5.4 citation clause is moot here; (d) the real discriminator is
+     **hallucination-resistance on the 15 unanswerable items** — audited genuine hallucinations:
+     ministral **0**, gemma4 1, qwen3-4b-2507 1, qwen3-30b 1, qwen3-8b 2, qwen3-14b 2,
+     **orig-4b (current default) 3**, granite 3; (e) **D18: 2507 ≥ the original 4B on EVERY axis**
+     (and the §4.6 "German wobble" did NOT recur on the grounded path — 2507 has the top German
+     F1), so promoting 2507 over the default is quality-supported pending speed/RAM. The
+     abstention detector was **hardened mid-analysis** (v1 overcounted hallucination ~2–3×;
+     audited the raw dumps, expanded `text.mjs` + tests, re-scored via `eval/rescore.mjs` with no
+     model re-run — `*-quality-rescored.csv` is authoritative). The Gemma flag is NOT informed by
+     this run (balanced/thinking-off).
+  PENDING to close: Part B (`llama-bench` speed) + Part C (peak-RSS) on both machines → combined
+  CSVs; then apply §5.4 promotions to `recommended_profiles` + `model-policy.md`, decide the
+  Gemma flag, replace the §4.1 RAM estimates with measured peak-RSS, and condense the plan.
 
 ---
 
