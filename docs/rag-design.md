@@ -141,11 +141,11 @@ Spec §7.7 chunk metadata maps onto the `chunks` table (spec §8) like so:
 | `section` | `section_label` | from the segment (Markdown); null otherwise |
 | `text` | `text` | chunk text |
 | `token_count` | `token_count` | approximate (see above) |
-| `embedding_model_id` | `embeddings.embedding_model_id` | written in Phase 5 (see §6) |
+| `embedding_model_id` | `embeddings.embedding_model_id` | written by the embedding step (see §6) |
 | `created_at` | `created_at` | ISO-8601 UTC |
 
 The `[S1] [S2] …` retrieval labels are **not** stored here — they are assigned per query at
-retrieval time in Phase 6.
+retrieval time.
 
 ---
 
@@ -483,7 +483,7 @@ grounding guard is untouched: empty retrieval still never calls the model.
 ```
 1. embed question → cosine topKInitial      (scoped: embedder id + documentIds)
 2. drop vector hits < minSimilarity         (cosine floor, PRE-fusion/PRE-rerank — D12)
-3. FTS5 keyword search topKInitial          (scoped: documentIds + visibility join, §5.4)
+3. FTS5 keyword search topKInitial          (scoped: documentIds + visibility join)
 4. RRF fusion (k = 60)                      (rank-based; scales never mix)
 5. join → chunks rows
 6. rerank when a reranker is active         (reorder by relevance_score; failure ⇒ fused order)

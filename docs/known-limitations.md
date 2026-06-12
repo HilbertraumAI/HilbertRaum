@@ -50,33 +50,21 @@ logs, best-effort shredding on SSDs, no password recovery — are documented in
 
 - **No dedicated Onboarding wizard (spec §7.1).** The `WorkspaceGate` (create-password / unlock),
   the automatic first-run benchmark, and the Home screen together cover the spec §17 first-run flow.
-- ~~`ChatOptions.mode` (Fast/Balanced/Deep) is dead plumbing~~ **Shipped in Phase 20**
-  (architecture.md "Chat & streaming"): the composer's answer-depth selector maps to Qwen3's
-  native thinking switch (`chat_template_kwargs.enable_thinking` at the pinned b9585) with
-  live collapsed reasoning in Deep mode. Accepted edges: the depth choice is
-  per-conversation **per session** (not persisted to the DB), and document answers always
-  run Balanced (deep-grounded is a wave-2 question).
-- ~~`runtime_events` table (spec §8) is created but never written~~ **Shipped in Phase 19**:
-  it now holds the local audit log (Diagnostics → Activity), pruned to 5 000 rows on insert.
+- **Answer-depth accepted edges** (the modes themselves shipped — architecture.md
+  "Chat & streaming"): the depth choice is per-conversation **per session** (not persisted
+  to the DB), and document answers always run Balanced (deep-grounded answering is an open
+  question).
 - **Model states `ready` / `not_recommended` are declared but never produced.**
-- ~~GPU detection is permanently `null`~~ **Superseded by Phases 14–16:** the drive's own
-  `llama-server --list-devices` is the offline, native-free probe, and the benchmark's GPU
-  profile bump is live (conservatively gated — see the GPU section below and
-  [`benchmark.md`](benchmark.md)).
-- ~~No per-document "ask selected documents" scope (spec §10.4)~~ **Shipped in Phase 17**
-  (rag-design.md §10): Documents-screen selection → scoped document Q&A with
-  removable chips; the scope persists on the conversation.
 - **Settings lacks the spec §10.6 Models/Performance/About sections** (Models has its own screen;
   Diagnostics shows version/runtime/model info).
 - **No `sample-contract.pdf` fixture** for the canonical spec §17 demo script.
 - **Manifest fields `supports_tools` / `bundled_on_preconfigured_drive` are unused**
-  (`supports_thinking_mode` became load-bearing in Phase 20 — it gates the Deep answer mode).
+  (`supports_thinking_mode` is load-bearing — it gates the Deep answer mode).
   In particular the bundled flag's intent (don't preload the big models on a commercial drive) is
   unimplemented — the pipeline fetches all six weights (~37 GB); curate with
   `fetch-models --only <id>`.
-- ~~No in-app model downloader (the provisioning plan's deferred item)~~ **Shipped in Phase 18**
-  (architecture.md "In-app model downloader"): policy ∧ Settings-toggle ∧ per-download confirmation, `.part`
-  staging with verify-before-rename, Range resume, one download at a time. Accepted edges:
+- **In-app downloader accepted edges** (the downloader shipped — architecture.md
+  "In-app model downloader"):
   - **The startup offline tripwire is not re-evaluated mid-session.** Toggling `allowNetwork` on
     and downloading in the same session leaves the (detection-only, never-blocking) guard
     installed, so the sanctioned download is logged as a remote-connection notice. Cosmetic;
@@ -84,8 +72,6 @@ logs, best-effort shredding on SSDs, no password recovery — are documented in
   - **Download progress display is per-renderer-session.** The job itself runs in the main
     process and survives navigation; after an app restart the progress card is gone but the kept
     `.part` resumes on the next Download click.
-  - ~~No audit-log records yet~~ `model_download_started/verified/failed` are recorded since
-    Phase 19.
 - **Drive updates are manual — Phase 22 (signed offline update bundles, spec §12.3) is still
   OPEN.** There is no update mechanism yet; the `updates/` and `workspace/backups/` directories
   are not created. The manual procedure is documented in [`drive-layout.md`](drive-layout.md)

@@ -1,5 +1,5 @@
 # Phase-29 speed + memory sweep across the whole chat catalog
-# (docs/model-benchmarks.md Parts B + C / plan sections 5.1-5.2). Runs `llama-bench`
+# (docs/model-benchmarks.md Parts B + C). Runs `llama-bench`
 # (prefill + decode throughput at 512/2048/8192 prompt tokens) and the peak-RSS probe for
 # every chat GGUF on the drive, and writes ONE speed CSV per machine x backend. Fully
 # offline + local. Pair its rows with the QA harness's *-quality-rescored.csv to form the
@@ -31,7 +31,7 @@ function ParseTs([string]$s) { return [double]::Parse($s, $inv) }
 
 $benchBin = Join-Path $Root "runtime\llama.cpp\win\llama-bench.exe"
 if (-not (Test-Path $benchBin)) {
-  throw "llama-bench.exe not found at $benchBin. Verify it ships in the b9585 archive (plan section 7 risk); fallback = time llama-server streaming."
+  throw "llama-bench.exe not found at $benchBin. Verify it ships in the b9585 archive; fallback = time llama-server streaming."
 }
 $rssScript = Join-Path $PSScriptRoot "measure-peak-rss.ps1"
 $chatDir = Join-Path $Root "models\chat"

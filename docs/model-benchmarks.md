@@ -1,8 +1,9 @@
 # Model benchmark protocol (Phase 29)
 
 _The repeatable, fully-offline, judge-free protocol for ranking every catalog chat model on a
-given laptop in ~a day, with numbers comparable across machines and re-runs. Authored for Phase 29; decisions D19/D20 and the catalog design record are §7; apply the
-§5.4 decision rule with the results._
+given laptop in ~a day, with numbers comparable across machines and re-runs. Authored for
+Phase 29; decisions D19/D20 and the catalog design record are §7; apply the §5 decision rule
+with the results._
 
 ## 0. Hard constraints (do not violate)
 
@@ -16,7 +17,7 @@ given laptop in ~a day, with numbers comparable across machines and re-runs. Aut
 
 ## 1. Machines + fixed conditions
 
-Run on **≥ 2 machines** (§5.5): the dev box + the **i7-1185G7 / Iris-Xe laptop** are the
+Run on **≥ 2 machines**: the dev box + the **i7-1185G7 / Iris-Xe laptop** are the
 natural pair. For each run record, in the CSV `notes`, the machine label, CPU, total RAM,
 backend (cpu | vulkan), the runtime build (`runtime/llama.cpp/<os>/.paid-runtime.json`), and
 the thread count. Fixed conditions: **AC power**, no other heavy load, fixed `-t <physical
@@ -97,8 +98,8 @@ This is exactly how the first run was corrected — see §6.
 > locale safe). The per-model commands below are the underlying reference / fallback.
 
 `llama-bench` ships in the b9585 archives we already fetch (`runtime/llama.cpp/<os>/`; verify
-on first run — fallback in §5 risk table = time `llama-server` streaming, which we already
-measure in-app). Per model × backend:
+on first run — fallback = time `llama-server` streaming, which we already measure in-app).
+Per model × backend:
 
 ```powershell
 # CPU
@@ -125,7 +126,7 @@ It starts `llama-server` at `-c 8192`, sends one generation, reads `PeakWorkingS
 peak RSS in GiB and a suggested `recommended_min_ram_gb` (**peak RSS + 3 GiB OS/app headroom**,
 rounded up). Linux = `/usr/bin/time -v` (Maximum resident set size); macOS = `/usr/bin/time -l`.
 
-**This measurement REPLACES the §4.1 estimates** in each manifest's `recommended_min_ram_gb` /
+**This measurement REPLACES the pre-measurement estimates** in each manifest's `recommended_min_ram_gb` /
 `recommended_max_ram_gb` — update the manifests with the measured tier on the highest-RAM
 machine that ran it.
 
@@ -133,7 +134,7 @@ machine that ran it.
 
 ## 5. Combined results + the decision rule
 
-The deliverable (§5.4) is **one row per model × laptop × backend**. Join the Part-A QA columns
+The deliverable is **one row per model × laptop × backend**. Join the Part-A QA columns
 with the Part-B/C speed + RSS columns into `eval/results/<machine>-<backend>.csv`:
 
 ```
@@ -144,7 +145,7 @@ abstain_rate_unans, hallucination_rate, em_rate_de, em_rate_en, f1_de, f1_en, no
 The harness writes the QA half (`…-quality.csv`); paste the speed/RSS numbers alongside. Commit
 the combined CSVs + the per-item JSONL.
 
-**Apply §5.4** — a challenger earns `recommended_profiles` promotion (and a default-model
+**The decision rule** — a challenger earns `recommended_profiles` promotion (and a default-model
 challenge) at its tier when it either (a) beats the incumbent on the German RAG metrics AND
 `citation_correct_rate` at ≥ comparable `tg_tps`, or (b) matches quality with materially better
 license/provenance or lower RAM. Losing challengers are demoted/removed — the catalog must not
@@ -156,18 +157,18 @@ accumulate dead multi-GB downloads. Then update:
   8B) — especially on `em_rate_de` / `f1_de` (the §4.6 German wobble). Promoting it to default
   is a product call because 2507 has no hybrid thinking (Deep becomes a no-op on the default).
 - **Gemma flag:** decide whether to flip `gemma4-12b-it-qat-q4`'s `supports_thinking_mode` to
-  `true` based on its Deep-mode quality numbers (it already honours `enable_thinking`; §4.6).
+  `true` based on its Deep-mode quality numbers (it already honours `enable_thinking`; §7.3).
 
-Record the outcome here, then condense this plan per the CLAUDE.md doc lifecycle rule.
+(Both decisions were made — the outcomes are §6.1 and the §7 record.)
 
 ---
 
 ## 6. First-run findings (2026-06-11 — i7-1185G7, CPU; QA half only)
 
 First QA execution: all 8 catalog chat models on the i7-1185G7 laptop (CPU/Vulkan-DL build),
-plus a single-model reproducibility check on the dev box. **Speed (Part B) + peak-RSS (Part C)
-not yet run** — they remain before the phase closes and before §5.4 can be fully applied (the
-rule needs `tg t/s`). Authoritative numbers are the **`*-quality-rescored.csv`** (see below).
+plus a single-model reproducibility check on the dev box. Speed (Part B) + peak-RSS (Part C)
+followed later the same day — **§6.1**. Authoritative QA numbers are the
+**`*-quality-rescored.csv`** (see below).
 
 - **Reproducible across machines.** `qwen3-4b-instruct-2507-q4` scored bit-identically on the
   dev box and the i7 (EM 0.9765 / F1 0.3613 / 1 hallucination) — greedy decoding is
@@ -179,8 +180,8 @@ rule needs `tg t/s`). Authoritative numbers are the **`*-quality-rescored.csv`**
 - **`citation_correct_rate` is a flat 0.9882 for every model — it is a RETRIEVAL property, not a
   model one.** `generateGroundedAnswer` persists the citations computed by retrieval (not parsed
   from the model's `[Sn]`), so this column is constant across chat models and cannot rank them.
-  ⇒ In this architecture the §5.4 "citation-correctness" clause is a retrieval constant; lean the
-  decision on EM/F1 + hallucination-resistance + (pending) speed/RAM instead.
+  ⇒ In this architecture the decision rule's "citation-correctness" clause is a retrieval
+  constant; lean the decision on EM/F1 + hallucination-resistance + speed/RAM (§6.1) instead.
 - **The discriminating axis = abstention on the 15 unanswerable items.** Audited genuine
   hallucinations (manually confirmed against the raw dump):
 
@@ -204,7 +205,7 @@ rule needs `tg t/s`). Authoritative numbers are the **`*-quality-rescored.csv`**
 - **D18 (the incumbent-refresh question): 2507 ≥ the original 4B on every axis** — EM 0.9765 vs
   0.9647, F1 0.3613 vs 0.3277, em_de 0.9608 vs 0.9412, f1_de 0.3698 vs 0.3400, hallucinations
   1 vs 3. It also matches the original **8B** on EM with higher F1 and fewer hallucinations
-  (1 vs 2). The §4.6 bring-up "German wobble" did **not** appear on the grounded RAG path (2507
+  (1 vs 2). The §7.3 bring-up "German wobble" did **not** appear on the grounded RAG path (2507
   has the *top* German F1 here) — that wobble is an open-/parametric-knowledge issue, not a
   grounding one. Promoting 2507 over the original 4B as default is supported on quality; the only
   caveat stays the product one (2507 has no hybrid thinking → Deep becomes a no-op). Confirm once

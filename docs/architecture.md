@@ -86,9 +86,9 @@ the whole DB file is encrypted at rest.
   don't fit (friendly §11.4 copy — the zero-weights mock fallback is not gated). Rounding is
   `Math.round`, so a "16 GB" machine reporting 15.9 GiB still counts as 16.
 - **`services/runtime/`** defines the `ModelRuntime` interface and a `RuntimeManager` that owns the
-  single active runtime and restarts it on model switch. `MockRuntime` returns healthy immediately;
-  its `chatStream` is a stub until Phase 3, and the real `LlamaRuntime` (localhost-only sidecar)
-  lands in Phase 10. The factory passed to `RuntimeManager` is the only thing that changes.
+  single active runtime and restarts it on model switch. `MockRuntime` streams a deterministic echo
+  with zero model files; the real `LlamaRuntime` (localhost-only sidecar) is selected when binary +
+  weights exist. The factory passed to `RuntimeManager` is the only thing that changes.
 - **IPC** (`ipc/registerModelIpc.ts`): `listModels`, `selectModel`, `verifyModel`, `startRuntime`,
   `stopRuntime`. The active runtime is stopped on `will-quit`.
 - **Auto-start (post-MVP).** `maybeAutoStartActiveModel` starts the persisted `activeModelId` in the
@@ -104,8 +104,8 @@ the whole DB file is encrypted at rest.
   orchestrator `generateAssistantMessage`. IDs are UUID v4, timestamps ISO-8601 UTC.
   Messages order by `created_at ASC, rowid ASC` so equal-millisecond timestamps keep turn
   order. The **system prompt is built per request and not persisted** — the `messages` table
-  holds only user/assistant turns, so the prompt can evolve (RAG context is appended in
-  Phase 6). `messages.citations_json` stays null until Phase 6.
+  holds only user/assistant turns, so the prompt can evolve (the grounded path swaps its own
+  prompt into the last user turn). `messages.citations_json` is written only by grounded answers.
 - **Streaming contract (LOCKED).** Main → renderer over per-conversation IPC event channels
   keyed by the conversation id: `chat:token:<id>` (one token per event), `chat:done:<id>`
   (the final assistant `Message`), `chat:error:<id>` (an error string) — helpers in
@@ -192,8 +192,8 @@ the whole DB file is encrypted at rest.
   segments into overlapping ~500-token windows (overlap 80, cap 1000) without crossing
   segment boundaries, so each chunk inherits one page/section. `index.ts` orchestrates the
   status lifecycle (`queued → extracting → chunking → embedding → indexed`, `failed` on error)
-  and persists to the `documents` + `chunks` tables. The `embedding` step is a pass-through
-  until Phase 5.
+  and persists to the `documents` + `chunks` tables. The `embedding` step embeds all chunks in
+  one batch when an embedder is injected; without one it is a pass-through.
 - **File storage decision.** Imported files are **copied into the workspace**
   (`workspace/documents/<id><ext>` → `stored_path`); `original_path` is also recorded. The
   drive stays self-contained and re-indexable; delete removes the workspace copy + chunks +

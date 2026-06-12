@@ -1,4 +1,4 @@
-# Phase-29 peak-RSS measurement (docs/model-benchmarks.md Part C / plan section 5.2).
+# Peak-RSS measurement (docs/model-benchmarks.md Part C).
 #
 # Starts the REAL llama-server with the same chat args the app uses (--jinja
 # --reasoning-format deepseek, --ctx-size 8192), runs one generation, and reads the
