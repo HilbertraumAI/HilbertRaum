@@ -1,6 +1,6 @@
 # Private AI Drive Lite — User Guide
 
-_Last updated: 2026-06-11 (Phase 37 — voice dictation)_
+_Last updated: 2026-06-12 (added: asking by filename; the password eye button)_
 
 Private AI Drive Lite is a private AI workspace that runs **entirely on your laptop**, from
 a portable drive. Your prompts, documents, embeddings, and chat history stay local. There is
@@ -61,8 +61,8 @@ The first launch walks you through a short, full-window setup:
    and local logs are not encrypted — they contain no document contents.) The password is
    **never stored** anywhere, and if you forget it the data cannot be recovered — that's
    the point. While you type, a small strength meter offers honest advice (longer is
-   stronger); it never blocks you. **Show** reveals what you typed, and pasting from a
-   password manager works normally. On developer drives a toggle offers a **plaintext
+   stronger); it never blocks you. The **eye button** reveals what you typed, and pasting
+   from a password manager works normally. On developer drives a toggle offers a **plaintext
    workspace** (no password, unencrypted) instead.
 3. **One last thing (only if no AI model is on the drive yet).** Commercial drives come
    with a model preinstalled, so most people never see this step. If your drive has none,
@@ -282,6 +282,13 @@ files answers come from — click it to narrow the question to specific document
 or go back to **Use all documents**. You can also start from the **Documents** screen: tick
 the checkboxes next to the files you care about and click **Ask these documents**.
 
+**Naming a file in your question works too.** If you haven't chosen documents and your
+question names one of your files — *"summarize the key dates in contract.pdf"* — the answer
+comes from **that file only**, and a small note says so: *"Answering from contract.pdf
+only."* It only ever narrows (never adds files), and any documents you chose explicitly
+always win. If the note guesses wrong, just rephrase the question or pick the documents
+yourself with **📄 Using N documents**.
+
 **Chat vs. Ask my documents.** Plain **Chat** does *not* read your files — it is a general
 assistant. The switch at the top of the chat keeps the two modes one click apart, so you
 never mistake a confident general answer for a document answer.
@@ -435,7 +442,7 @@ inside the encrypted workspace, so before you unlock it the app can't know your 
 
 On an encrypted workspace, open **Settings → General → Change password** while the workspace
 is unlocked. Enter your current password, then the new one twice — the same strength hint and
-**Show** toggle as on first run. You'll use the new password from the next unlock on.
+**eye button** as on first run. You'll use the new password from the next unlock on.
 
 - The first change on a workspace created before this feature re-secures every stored
   document under the new password — on a large library that one-time step can take a few

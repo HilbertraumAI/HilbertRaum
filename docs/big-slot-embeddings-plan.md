@@ -125,6 +125,12 @@ recorded; **D26** decided (adopt / reject / defer-1024-dim). If adopted: the emb
 re-index UX ship and are tested; `recommended_*` + the reindex story documented; `rag-design.md` +
 `model-policy.md` + BUILD_STATE updated.
 
+**Rider — D1 re-evaluation trigger (decided 2026-06-12, recorded in `rag-design.md` §10):** if
+Track B adopts an embedder that uses **query/passage prefixes** and the A/B shows a **measurable
+relevance floor** (relevant vs irrelevant cosines separate, unlike prefix-less E5 — rag-design
+§12.1 R3), then re-open **D1 (unified auto-RAG chat)**: a cheap floor would make auto-grounding
+gateable without the reranker's per-message CPU cost. Until then the two-mode design stands.
+
 ## 5. Sequencing
 
 1. **Track A** (quick — reuses everything): fetch Gemma-4-26B, bring-up smoke (catches arch/runtime

@@ -640,6 +640,14 @@ Repo root: `f:\_coding\ai_drive`.
   unchanged; photos OCR on import; `ocr:` asset class + `fetch-runtime --family ocr` +
   commercial gates; `AppStatus.ocrAvailable`). Wave close: **968/968 tests green** (+25
   `PAID_*` manual skips), `PAID_OCR_SMOKE` + built-app eyeball walks PASSED on real assets.
+- **D1 re-affirmed â€” unified auto-RAG chat stays NOT built (2026-06-12):** the Phase-21 data
+  the original deferral waited for is in, and it argues AGAINST unifying now: no cheap
+  relevance gate exists under prefix-less E5 (the measured-floor overlap, rag-design §12.1
+  R3), the reranker gate is optional equipment at up to ~25 s worst-case CPU per message, and
+  the wrong-tab failure is already triple-defended (awareness notice, mode subtitles,
+  filename auto-scope). **Revisit trigger = Phase 30 Track B** (a prefix-using embedder with
+  a measurable floor) â€” rider recorded in `big-slot-embeddings-plan.md` §4.4; full
+  rationale in `rag-design.md` §10 (D1).
 
 ---
 

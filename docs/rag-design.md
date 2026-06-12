@@ -385,10 +385,19 @@ an expandable snippet of the cited chunk text. The plain chat path is unchanged.
 
 This is the Phase-17 design record (the wave-1 working paper was folded into the topic
 docs, 2026-06-12 housekeeping; full original: `git show 2a46ca3:docs/post-mvp-functionality-plan.md`).
-Adds three RAG-trust features on top of the Phase-6 design; the grounded path.'s
+Adds three RAG-trust features on top of the Phase-6 design; the grounded path's
 no-hallucination guarantee (model never called without context) is unchanged. Decisions:
-**D1** — keep the two chat modes + the plain-chat awareness notice; unified auto-RAG chat
-was deferred and never reopened. **D2** — the scope persists as the additive nullable
+**D1** — keep the two chat modes + the plain-chat awareness notice. Originally deferred
+"pending Phase-21 quality data"; **re-affirmed 2026-06-12 with that data in hand**: the
+measured floor result (§12.1 R3) proves there is no cheap "is this question about the
+documents?" signal under prefix-less E5 (relevant and irrelevant cosines overlap), the only
+reliable gate is the *optional* reranker at up to ~25 s worst-case on CPU — unacceptable
+per plain-chat message — and the original wrong-tab failure is already triple-defended
+(awareness notice, mode subtitles, filename auto-scope). **Revisit trigger: Phase 30
+Track B** — if a prefix-using embedder lands with a measurable relevance floor,
+auto-grounding becomes cheap to gate and D1 gets re-evaluated (rider recorded in
+`big-slot-embeddings-plan.md` §4.4).
+**D2** — the scope persists as the additive nullable
 `conversations.scope_json` column (guarded `ALTER TABLE`).
 
 ### "Ask selected documents" (spec §10.4)
@@ -552,8 +561,8 @@ _Formerly `docs/retrieval-quality-plan.md` (folded in here, 2026-06-12 docs hous
 the full working paper is in git history: `git show b8feb46:docs/retrieval-quality-plan.md`).
 The design **as built** is §11 above; this section keeps the research facts the design rests
 on, the decision table D8–D15, and the load-bearing budgets. Out of scope, unchanged:
-unified auto-RAG chat (decision D1, never reopened), deep-grounded answers, ANN (D15),
-signed update bundles (Phase 22)._
+unified auto-RAG chat (decision D1 — re-affirmed 2026-06-12, revisit trigger = Phase 30
+Track B; see §10), deep-grounded answers, ANN (D15), signed update bundles (Phase 22)._
 
 ### 12.1 Research findings (verified 2026-06-10)
 
