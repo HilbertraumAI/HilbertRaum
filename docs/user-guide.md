@@ -252,7 +252,8 @@ when the answer starts. It is a live view only: the saved conversation keeps jus
 answer, and saved files never include the thinking text.
 
 The choice sticks per conversation, and **Thorough is only offered when the active model
-supports it** (all chat models that ship with the drive do). Document answers
+supports it** (the Qwen3 models and Gemma have a thinking mode; Ministral, Granite, and
+the Qwen3-4B "2507" variant answer well but skip the thinking step). Document answers
 (**Ask my documents**) always use Balanced — they are meant to be quick and literal about
 your files.
 

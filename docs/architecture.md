@@ -265,7 +265,8 @@ it fails with friendly convert-to-WAV/MP3 copy.
   `DocumentInfo.transcriptionProgress` — the polling UI shows "Transcribing… N%" on
   import AND re-index with no new channel (R-W4: a 52-min mp3 ≈ 35 min wall on the dev
   CPU, peak RSS ≈ 1.2 GB with the small model — honest progress is mandatory).
-- **Audit:** the existing `document_imported` (filename + id only) covers audio; the
+- **Audit:** the existing `document_imported` (filename, document id, status, chunk
+  count — never content) covers audio; the
   transcript is CONTENT and never reaches `runtime_events` (sentinel-tested end-to-end).
 
 ## Voice dictation (Phase 37, wave-3 plan §10, decision D30)

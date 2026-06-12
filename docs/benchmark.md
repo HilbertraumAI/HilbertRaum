@@ -89,7 +89,7 @@ RAM but runs near-3B speed). Each profile is claimed by exactly one chat model, 
 `buildWarnings(...)` is **encouraging, never judgmental** — it never says "your hardware is
 bad":
 
-- **TINY** → *"This device is best suited for Fast Mode. Larger models may run slowly."*
+- **TINY** → *"This device is best suited for the smallest, quickest model. Larger models may run slowly."*
 - **UNKNOWN** → a friendly "we picked a safe, lightweight model" note.
 - **Slow drive** (read or write `< SLOW_DRIVE_MBPS = 30` MB/s) → a non-blocking "models will
   still work, but loading may take longer" note. Slow drives **warn, never block**.
