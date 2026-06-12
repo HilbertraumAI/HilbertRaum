@@ -6,10 +6,11 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
-_Last updated: 2026-06-13 — docs-vs-code consistency audit + code-comment quality pass +
-docs dead-info pass (see the §3 entry). Previous (2026-06-12) housekeeping: this file was
-compacted; the per-phase build narratives now live in the design records they cite (full
-pre-compaction text in git history)._
+_Last updated: 2026-06-13 — the audit's code findings are remediated (strings, robustness,
+test-infra timeout; see the §3 "Audit-findings remediation" entry) on top of the same-day
+docs-vs-code consistency audit + code-comment quality pass + docs dead-info pass. Previous
+(2026-06-12) housekeeping: this file was compacted; the per-phase build narratives now live
+in the design records they cite (full pre-compaction text in git history)._
 
 **Where the project stands:** the MVP (Phases 0–13) is feature-complete and four post-MVP
 audit rounds are fully remediated (§8). Every shipped wave since is DONE and condensed into a
@@ -655,9 +656,29 @@ Repo root: `f:\_coding\ai_drive`.
   the pre-pass HEAD. Dead-info pass: resolved `~~strikethrough~~` entries deleted from
   `known-limitations.md`; dangling §-references to retired plan files repointed
   (model-benchmarks, security-model, rag-design); future-tense "lands in Phase N" rewritten as
-  shipped behavior. ⚠️ Known test-infra nuisance: under the FULL parallel suite on a loaded
-  machine, 1–2 integration/renderer tests can flake on timeouts (different tests each run —
-  rag offline-guarantee, ChatDepth, doctasks-translation observed); each passes in isolation.
+  shipped behavior. The test-infra nuisance noted here (1–2 timeout flakes under the FULL
+  parallel suite on a loaded machine) was mitigated in the remediation entry below.
+- **Audit-findings remediation (2026-06-13):** the code findings banked by the audit are
+  fixed (commits "Audit fix A/B/C"). A — user-visible strings: phase jargon retired from the
+  mock-runtime reply, the DiagnosticsTab fallbacks, and the commercial-drive step
+  descriptions; the doctasks materialize-failure log is kind-aware. B — robustness: orphaned
+  `OCR_RASTER.error` frames are logged; the E5 embedder gained the reranker's failed-start
+  latch with ONE deliberate difference — it **clears on `suspend()`** (the embedder has no
+  graceful degradation, so replace-the-GGUF + lock/unlock must make imports retryable;
+  architecture.md updated); `plaintextAllowed` is now honestly `(policy, { isDev })` — the
+  old `developerMode` parameter was always fed `isDev` (the proxy rule is documented;
+  `encryptionRequired` stays the absolute veto; security-model.md updated); `ensureColumn`
+  asserts identifier/DDL shape before interpolating; downloads detect a cancel race via the
+  AbortSignal (cast removed) and prune terminal jobs beyond the most recent 20; preflight
+  selects the slow-drive warning by content, not `[0]`; `rag.retrieve` joins fused candidates
+  in one `IN (…)` query (placeholders, fused order preserved); `RUNTIME_POLL_MS` is shared
+  (`renderer/lib/polling.ts`); the triplicated export save-dialog step is one helper
+  (`ipc/save-export.ts` — audit calls stay per-site, per the privacy rule); the runtime
+  status `'cpu'` fallback is a named default (`UNLABELLED_BACKEND`). C — test infra: the
+  parallel-suite timeout flakes were CPU starvation tripping vitest's 5 s default, so
+  `testTimeout: 15_000` (3× headroom) in `vitest.config.ts` — chosen over capping
+  `maxWorkers` because it leaves a clean run's wall time unchanged. Suite: **969 tests
+  green** (968 + the new e5 failed-start-latch test).
 - **D1 re-affirmed — unified auto-RAG chat stays NOT built (2026-06-12):** the Phase-21 data
   the original deferral waited for is in, and it argues AGAINST unifying now: no cheap
   relevance gate exists under prefix-less E5 (the measured-floor overlap, rag-design �12.1

@@ -15,6 +15,12 @@ export default defineConfig({
     environment: 'node',
     include: ['tests/**/*.test.{ts,tsx}'],
     setupFiles: ['./tests/setup.ts'],
-    globals: true
+    globals: true,
+    // The full parallel suite on a loaded machine starves the heavy integration/
+    // renderer tests of CPU and trips vitest's 5 s default timeout (1–2 flakes per
+    // run, a different test each time; all pass in isolation). 3× headroom absorbs
+    // the scheduling, costs nothing when tests are fast, and — unlike capping
+    // maxWorkers — leaves the wall time of a clean run unchanged.
+    testTimeout: 15_000
   }
 })
