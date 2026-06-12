@@ -6,8 +6,10 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
-_Last updated: 2026-06-12 — docs housekeeping: this file was compacted; the per-phase build
-narratives now live in the design records they cite (full pre-compaction text in git history)._
+_Last updated: 2026-06-13 — docs-vs-code consistency audit + code-comment quality pass +
+docs dead-info pass (see the §3 entry). Previous (2026-06-12) housekeeping: this file was
+compacted; the per-phase build narratives now live in the design records they cite (full
+pre-compaction text in git history)._
 
 **Where the project stands:** the MVP (Phases 0–13) is feature-complete and four post-MVP
 audit rounds are fully remediated (§8). Every shipped wave since is DONE and condensed into a
@@ -640,6 +642,22 @@ Repo root: `f:\_coding\ai_drive`.
   unchanged; photos OCR on import; `ocr:` asset class + `fetch-runtime --family ocr` +
   commercial gates; `AppStatus.ocrAvailable`). Wave close: **968/968 tests green** (+25
   `PAID_*` manual skips), `PAID_OCR_SMOKE` + built-app eyeball walks PASSED on real assets.
+- **Docs-vs-code audit + comment quality pass (2026-06-13):** a full systematic comparison of
+  every doc against `apps/desktop/src` (8 parallel read-only audits, findings re-verified before
+  changes) found the docs largely accurate; the real doc bugs fixed were: a never-shipped TINY
+  warning string in `benchmark.md`, the user-guide's "all chat models support Thorough" claim
+  (Ministral/Granite/2507 don't), troubleshooting's pre-Phase-38 "OCR is not included", stale
+  §4 contract lines here (DEFAULT_KDF, `selectModel` return, AuditEventType count), and the
+  architecture "Data flow" pipeline that predated hybrid retrieval. A **comments-only quality
+  pass** over all of `apps/desktop/src` (~100 files) trimmed history/provenance narration
+  (Phase/D/R/H/M ids, audit stories) while keeping every LOCKED/security/platform constraint;
+  verified mechanically — esbuild-stripped output of every changed file is byte-identical to
+  the pre-pass HEAD. Dead-info pass: resolved `~~strikethrough~~` entries deleted from
+  `known-limitations.md`; dangling §-references to retired plan files repointed
+  (model-benchmarks, security-model, rag-design); future-tense "lands in Phase N" rewritten as
+  shipped behavior. ⚠️ Known test-infra nuisance: under the FULL parallel suite on a loaded
+  machine, 1–2 integration/renderer tests can flake on timeouts (different tests each run —
+  rag offline-guarantee, ChatDepth, doctasks-translation observed); each passes in isolation.
 - **D1 re-affirmed — unified auto-RAG chat stays NOT built (2026-06-12):** the Phase-21 data
   the original deferral waited for is in, and it argues AGAINST unifying now: no cheap
   relevance gate exists under prefix-less E5 (the measured-floor overlap, rag-design �12.1
@@ -1278,10 +1296,11 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
 5. **ANN vector index** only if a real corpus outgrows the linear scan (rag-design §12.2 D15 —
    explicitly not built).
 
-**Current gate (2026-06-11, post-Phase-38): typecheck clean, 968/968 tests pass (+25 manual
-tests behind `PAID_*` env vars — GPU/thinking/rerank/minsim/RAG-quality/bring-up/eval/
-concurrency-probe/translation/compare/whisper/dictation/OCR smokes — skipped in CI),
-`npm run build` green.** Per-phase gate history (test counts, bundle sizes, per-phase test
+**Current gate (2026-06-13, post docs/comment passes): typecheck clean, 968/968 tests pass
+(+25 manual tests behind `PAID_*` env vars — GPU/thinking/rerank/minsim/RAG-quality/bring-up/
+eval/concurrency-probe/translation/compare/whisper/dictation/OCR smokes — skipped in CI),
+`npm run build` green. Full-suite runs on a loaded machine can flake 1–2 timeout failures
+(different tests each run; each passes in isolation — see the §3 2026-06-13 entry).** Per-phase gate history (test counts, bundle sizes, per-phase test
 inventories) lives in git history.
 
 ---
