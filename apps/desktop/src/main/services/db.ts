@@ -2,8 +2,8 @@ import { createRequire } from 'node:module'
 
 // SQLite storage via Node's built-in driver (no native compilation).
 // Requires the bundled Node >= 22.5; Electron is pinned ^37 (Node 22.x) so the packaged
-// main process has node:sqlite (Electron 33 bundles Node 20 and lacks it). See BUILD_STATE.md §3.
-// Encrypted-at-rest mode (Phase 9) wraps this same file/schema.
+// main process has node:sqlite (Electron 33 bundles Node 20 and lacks it).
+// Encrypted-at-rest mode wraps this same file/schema.
 //
 // node:sqlite is experimental and not listed in module.builtinModules, which
 // makes bundlers (Vite/esbuild) try to resolve a non-existent "sqlite" package.
@@ -92,12 +92,11 @@ CREATE TABLE IF NOT EXISTS runtime_events (
 // Additive column migrations on top of the spec §8 base schema. `CREATE TABLE IF NOT
 // EXISTS` never alters an existing table, so columns added after a workspace was created
 // must be ALTERed in — guarded by a pragma check to stay idempotent.
-//   conversations.scope_json — Phase 17 (plan §5.3, decision D2): the optional
-//   "ask selected documents" scope, a JSON array of document ids (NULL = whole corpus).
-//   documents.summary_json — Phase 33 (wave-3 plan §6, decision D25): the persisted
-//   one-click summary `{ text, modelId, createdAt, truncated }` (NULL = none).
-//   documents.origin_json — Phase 34 (wave-3 plan §7, decision D27; Phase 35 added the
-//   compare shape, D28): provenance of an app-generated document — a `DocumentOrigin`
+//   conversations.scope_json — the optional "ask selected documents" scope, a JSON
+//   array of document ids (NULL = whole corpus).
+//   documents.summary_json — the persisted one-click summary
+//   `{ text, modelId, createdAt, truncated }` (NULL = none).
+//   documents.origin_json — provenance of an app-generated document — a `DocumentOrigin`
 //   (translation `{ translatedFrom, targetLang }` or compare `{ type: 'compare',
 //   comparedFrom: [a, b] }`; NULL = normal import).
 function ensureColumn(db: Db, table: string, column: string, ddl: string): void {
@@ -107,15 +106,15 @@ function ensureColumn(db: Db, table: string, column: string, ddl: string): void 
   }
 }
 
-// Phase 21 (rag-design §11 keyword index): the FTS5 keyword index over chunk text, used by hybrid
-// retrieval. SELF-CONTAINED (text + chunk_id UNINDEXED), deliberately NOT an
+// The FTS5 keyword index over chunk text, used by hybrid retrieval (rag-design §11).
+// SELF-CONTAINED (text + chunk_id UNINDEXED), deliberately NOT an
 // external-content table keyed on chunks' implicit rowid — `chunks.id` is a TEXT PK, so
 // the table has only an implicit rowid, and VACUUM is documented to renumber those,
 // which would silently desync an external-content index. Sync is via triggers so no
-// ingest/reindex/delete code path can ever miss it; the one-time backfill makes a
-// pre-Phase-21 workspace searchable on first open after upgrade (guarded additive
-// migration — the scope_json precedent). FTS5 availability in BOTH runtimes (Electron's
-// bundled Node + system Node) was verified for this phase (rag-design §12.1 R2).
+// ingest/reindex/delete code path can ever miss it; the one-time backfill makes an
+// older workspace searchable on first open after upgrade (guarded additive migration).
+// FTS5 availability in BOTH runtimes (Electron's bundled Node + system Node) is
+// verified.
 function ensureChunksFts(db: Db): void {
   const exists = db
     .prepare("SELECT name FROM sqlite_master WHERE name = 'chunks_fts'")
@@ -141,15 +140,14 @@ INSERT INTO chunks_fts(text, chunk_id) SELECT text, id FROM chunks;
 `)
 }
 
-// Phase 31 (wave-3 plan §4): the FTS5 index over message text, used by conversation
-// search. Mirrors `ensureChunksFts` exactly — self-contained (NOT external-content,
+// The FTS5 index over message text, used by conversation search.
+// Mirrors `ensureChunksFts` exactly — self-contained (NOT external-content,
 // same VACUUM rationale), trigger-synced so no chat code path can miss it (message
 // content is never UPDATEd by current code; the third trigger is cheap
-// defense-in-depth), and a one-time guarded backfill makes a pre-Phase-31 workspace
+// defense-in-depth), and a one-time guarded backfill makes an older workspace
 // searchable on first open after upgrade. Messages are persisted with think blocks
-// already stripped (Phase 20 D6), so reasoning text can never be indexed. FTS5 +
-// snippet()/highlight() availability in BOTH runtimes was re-verified for this phase
-// (research gate R-S1, 2026-06-11).
+// already stripped, so reasoning text can never be indexed. FTS5 +
+// snippet()/highlight() availability in BOTH runtimes is verified.
 function ensureMessagesFts(db: Db): void {
   const exists = db
     .prepare("SELECT name FROM sqlite_master WHERE name = 'messages_fts'")
@@ -184,7 +182,7 @@ export function openDatabase(path: string): Db {
   ensureColumn(db, 'conversations', 'scope_json', 'scope_json TEXT')
   ensureColumn(db, 'documents', 'summary_json', 'summary_json TEXT')
   ensureColumn(db, 'documents', 'origin_json', 'origin_json TEXT')
-  // Phase 38: persisted per-page OCR recognition (content — lives only in this DB).
+  // Persisted per-page OCR recognition (content — lives only in this DB).
   ensureColumn(db, 'documents', 'ocr_json', 'ocr_json TEXT')
   ensureChunksFts(db)
   ensureMessagesFts(db)

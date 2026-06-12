@@ -12,7 +12,7 @@ import {
 } from './assets'
 import { verifyDriveModels, type ModelVerifyResult } from './drive'
 
-// Commercial-drive pipeline + final posture assertion (spec §12.2 / Phase 13).
+// Commercial-drive pipeline + final posture assertion (spec §12.2).
 //
 // Mirrors services/drive.ts + services/assets.ts: this module is the CANONICAL,
 // unit-tested reference, and `scripts/build-commercial-drive.{ps1,sh}` re-implement the
@@ -222,13 +222,13 @@ export interface CommercialAssertion {
     noUserData: boolean
     /**
      * Every pinned runtime build's install marker matches the runtime-sources.yaml pin
-     * (version + backend) — Phase 14. True when no `runtimeSources` were passed (the
+     * (version + backend). True when no `runtimeSources` were passed (the
      * check is opt-in; the native scripts cross-check it too). Covers BOTH sidecar
-     * families when `whisperSources` is also passed (Phase 36).
+     * families when `whisperSources` is also passed.
      */
     runtimeCurrent: boolean
     /**
-     * Every pinned OCR language file is present + sha256-verified (Phase 38, opt-in:
+     * Every pinned OCR language file is present + sha256-verified (opt-in:
      * true when no `ocrSources` were passed).
      */
     ocrAssetsVerified: boolean
@@ -271,8 +271,8 @@ function userDataArtifacts(rootPath: string): string[] {
  * Assert that a prepared drive is actually SELLABLE (spec §12.2). Reuses `loadPolicy`
  * (the commercial posture) + `verifyDriveModels` (all weights VERIFIED) and checks the
  * drive carries no user data. When `runtimeSources` (the yaml pin) is passed, each pinned
- * build's `.paid-runtime.json` install marker must also match (version + backend) —
- * Phase 14. Returns a structured result; never throws. Fails loudly: any violated
+ * build's `.paid-runtime.json` install marker must also match (version + backend).
+ * Returns a structured result; never throws. Fails loudly: any violated
  * invariant adds a `problems[]` entry and flips `ok` to false.
  */
 export async function assertCommercialDrive(
@@ -324,7 +324,7 @@ export async function assertCommercialDrive(
     problems.push('no model weights to verify (a sold drive ships weights pre-loaded)')
   }
 
-  // --- License reviews all APPROVED (spec §13 — M11) ---
+  // --- License reviews all APPROVED (spec §13) ---
   // `--accept-license` lets a builder download a weight; it must never count as the
   // redistribution review. A sold drive ships only models whose review is `approved`.
   const licensesApproved =
@@ -345,10 +345,10 @@ export async function assertCommercialDrive(
     problems.push(`user data present on a drive meant to ship empty: ${path}`)
   }
 
-  // --- Runtime install markers match the yaml pin (Phase 14, opt-in) ---
+  // --- Runtime install markers match the yaml pin (opt-in) ---
   // The marker is what fetch-runtime writes after a verified extraction; a missing or
   // stale marker means the drive carries the wrong sidecar build (e.g. a CPU-era build
-  // after the default moved to vulkan) and must be re-provisioned. Phase 36: the same
+  // after the default moved to vulkan) and must be re-provisioned. The same
   // check runs for the whisper family (binary `whisper-cli`) when its pin is passed.
   let runtimeCurrent = true
   const checkFamily = (sources: RuntimeSources, family: string, binaryBase: string): void => {
@@ -395,7 +395,7 @@ export async function assertCommercialDrive(
   if (runtimeSources) checkFamily(runtimeSources, 'runtime', 'llama-server')
   if (whisperSources) checkFamily(whisperSources, 'whisper', WHISPER_BINARY_BASE)
 
-  // --- OCR language files present + verified (Phase 38, opt-in) ---
+  // --- OCR language files present + verified (opt-in) ---
   // Plain files: the hash IS the install state (no marker — mirrors planOcrDownloads).
   let ocrAssetsVerified = true
   if (ocrSources) {

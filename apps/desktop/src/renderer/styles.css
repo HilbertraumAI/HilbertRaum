@@ -1,8 +1,7 @@
 /*
- * App styles, expressed entirely in the role tokens from tokens.css (Phase 23).
+ * App styles, expressed entirely in the role tokens from tokens.css.
  * No raw hex/ramp colors here except white-on-accent fills; theme switching is
- * purely `[data-theme]` flipping the role tokens. Layout/structure is unchanged
- * from the pre-token era — component-level redesign is Phases 24-26.
+ * purely `[data-theme]` flipping the role tokens.
  */
 
 * { box-sizing: border-box; }
@@ -15,7 +14,7 @@ body {
   font-family: var(--font-sans);
 }
 
-/* ---- Global accessibility baseline (Phase 23, guidelines §9) ---- */
+/* ---- Global accessibility baseline (guidelines §9) ---- */
 
 /* Visible focus on everything: 2px ring with offset. An `outline` (not box-shadow)
    so Windows High Contrast Mode keeps it. */
@@ -71,7 +70,7 @@ button { min-width: 24px; min-height: 24px; }
 .brand-edition { font-size: 11px; color: var(--text-muted); letter-spacing: 0.08em; text-transform: uppercase; }
 
 .nav-list { list-style: none; padding: 0; margin: 0; flex: 1; display: flex; flex-direction: column; gap: 2px; }
-/* Bottom utility group (Phase 26, guidelines §2): Settings sits apart from the
+/* Bottom utility group (guidelines §2): Settings sits apart from the
    everyday destinations, above the lock button / offline badge. */
 .nav-list.nav-bottom { flex: 0 0 auto; border-top: 1px solid var(--border); padding-top: 8px; margin-top: 8px; }
 .nav-item {
@@ -91,7 +90,7 @@ button { min-width: 24px; min-height: 24px; }
 .nav-item:hover, .nav-item.active { background: var(--surface-hover); color: var(--text); }
 .nav-icon { width: 18px; text-align: center; }
 
-/* Ambient "Local · Offline" signal (Phase 27, guidelines §7): quiet glyph + words in a
+/* Ambient "Local · Offline" signal (guidelines §7): quiet glyph + words in a
    neutral color — reassurance, not an alert. Hover/focus shows the tooltip; click opens
    Settings → Privacy & data. */
 .local-indicator {
@@ -137,7 +136,7 @@ button { min-width: 24px; min-height: 24px; }
 
 .lock-btn { margin-top: 12px; width: 100%; text-align: left; }
 
-/* Workspace unlock / onboarding gate (Phase 9) */
+/* Workspace unlock / onboarding gate */
 .gate-shell {
   height: 100vh;
   display: flex;
@@ -161,7 +160,7 @@ button { min-width: 24px; min-height: 24px; }
 .gate-input:focus { border-color: var(--focus); }
 .gate-card .btn.primary { width: 100%; margin-top: 8px; }
 
-/* First-run flow (Phase 27, guidelines §2): hero title, Back|Create action row
+/* First-run flow (guidelines §2): hero title, Back|Create action row
    (primary on the RIGHT, §6), show-password toggle, strength meter. */
 .gate-hero { font-size: var(--text-2xl); line-height: var(--line-2xl); font-weight: 700; }
 .gate-actions { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-top: 8px; }
@@ -195,7 +194,7 @@ button { min-width: 24px; min-height: 24px; }
 .strength-seg.on.s3, .strength-seg.on.s4 { background: var(--success); }
 .strength-label { font-size: var(--text-xs); line-height: var(--line-xs); color: var(--text-muted); }
 
-/* Privacy & Offline screen (Phase 8) */
+/* Privacy & Offline screen */
 .offline-statement { font-size: 15px; margin-bottom: 10px; }
 .offline-statement.on strong { color: var(--success); }
 .offline-statement.off strong { color: var(--accent); }
@@ -252,7 +251,7 @@ code, pre, kbd { font-family: var(--font-mono); }
 .toggle { display: flex; align-items: center; gap: 10px; font-size: 13px; cursor: pointer; min-height: 24px; }
 .toggle input { width: 16px; height: 16px; accent-color: var(--accent-600); }
 
-/* Home readiness hub (Phase 26, guidelines §2): icon + label/value rows ≥40px. */
+/* Home readiness hub (guidelines §2): icon + label/value rows ≥40px. */
 .readiness-card { display: flex; flex-direction: column; gap: 4px; }
 .readiness-row {
   display: flex;
@@ -268,7 +267,7 @@ code, pre, kbd { font-family: var(--font-mono); }
 .readiness-value { font-size: var(--text-base); line-height: var(--line-base); }
 .readiness-action { flex-shrink: 0; }
 
-/* Settings tabs (Phase 26): the segmented switcher between the three sections. */
+/* Settings tabs: the segmented switcher between the three sections. */
 .settings-tabs { margin: 12px 0 4px; }
 
 /* AI Model screen */
@@ -279,12 +278,12 @@ code, pre, kbd { font-family: var(--font-mono); }
 .model-meta { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 4px 14px; font-size: 12px; color: var(--text-muted); }
 .model-meta b { color: var(--text); font-weight: 500; }
 .model-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
-/* In-app model download progress (Phase 18). */
+/* In-app model download progress. */
 .download-progress { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
 .download-progress progress { flex: 1 1 160px; min-width: 120px; accent-color: var(--accent-600); }
 .download-progress .hint { margin: 0; flex-basis: 100%; }
 .btn.sm { padding: 5px 11px; font-size: 12px; min-height: 24px; }
-/* "Technical details" disclosure (Phase 26, guidelines §2/§3): checksums, paths, and
+/* "Technical details" disclosure (guidelines §2/§3): checksums, paths, and
    runtime internals stay one click away, closed by default. */
 .tech-details { margin-top: 2px; }
 .tech-details summary {
@@ -314,7 +313,7 @@ code, pre, kbd { font-family: var(--font-mono); }
 .badges { display: flex; gap: 6px; flex-wrap: wrap; }
 .section-title { font-size: 13px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.06em; margin: 24px 0 4px; }
 
-/* ---- Chat screen (Phase 25, guidelines §3): collapsible conversation column,
+/* ---- Chat screen (guidelines §3): collapsible conversation column,
    centered 720px transcript, composer with quiet footer affordances. ---- */
 .chat-layout {
   display: grid;
@@ -327,7 +326,7 @@ code, pre, kbd { font-family: var(--font-mono); }
 .chat-sidebar-head { display: flex; gap: 6px; align-items: center; }
 .chat-new { flex: 1; }
 .chat-conv-list { display: flex; flex-direction: column; gap: 4px; overflow-y: auto; min-height: 0; }
-/* Conversation search (Phase 31): input atop the column; results replace the groups. */
+/* Conversation search: input atop the column; results replace the groups. */
 .chat-search-input {
   background: var(--surface);
   border: 1px solid var(--border);
@@ -428,7 +427,7 @@ code, pre, kbd { font-family: var(--font-mono); }
   vertical-align: middle;
 }
 
-/* Chat header: segmented mode control + overflow menu (+ the Phase-27 indicator slot). */
+/* Chat header: segmented mode control + overflow menu (+ the ambient-indicator slot). */
 .chat-header { display: flex; align-items: center; gap: 10px; }
 .chat-header-spacer { flex: 1; }
 .chat-overflow-btn {
@@ -543,7 +542,7 @@ code, pre, kbd { font-family: var(--font-mono); }
 .footer-menu-btn:hover:not(:disabled), .footer-menu-btn[data-state='open'] { color: var(--text); background: var(--surface-hover); }
 .footer-menu-btn:disabled { opacity: 0.5; cursor: default; }
 
-/* Live Deep-mode reasoning, collapsed by default (Phase 20; never persisted) */
+/* Live Deep-mode reasoning, collapsed by default (never persisted) */
 .msg-thinking {
   border: 1px dashed var(--border-strong);
   border-radius: 8px;
@@ -620,7 +619,7 @@ code, pre, kbd { font-family: var(--font-mono); }
 .cursor { color: var(--accent); animation: blink 1s steps(2, start) infinite; }
 @keyframes blink { to { visibility: hidden; } }
 
-/* Modal dialogs (Phase 24, guidelines §6): Radix Dialog renders overlay + content as
+/* Modal dialogs (guidelines §6): Radix Dialog renders overlay + content as
    portal siblings — the content centers itself. --shadow-3, --radius-lg; widths per §6
    (~480px confirm / 640px content / 760px reading). */
 .dialog-overlay {
@@ -669,7 +668,7 @@ code, pre, kbd { font-family: var(--font-mono); }
   margin-bottom: 4px;
 }
 .preview-text { white-space: pre-wrap; word-break: break-word; font-size: 13px; line-height: 1.55; }
-/* Document summary disclosure inside the preview (Phase 33): collapsible, open by
+/* Document summary disclosure inside the preview: collapsible, open by
    default when a summary exists, visually separated from the extracted text below. */
 .doc-summary {
   margin: 0 0 12px;
@@ -701,7 +700,7 @@ code, pre, kbd { font-family: var(--font-mono); }
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 
-/* Inline "▸ Sources (N)" disclosure on grounded answers (Phase 25, guidelines §3). */
+/* Inline "▸ Sources (N)" disclosure on grounded answers (guidelines §3). */
 .sources { margin-top: 10px; border-top: 1px solid var(--border); padding-top: 6px; }
 .sources-toggle {
   background: transparent;
@@ -753,7 +752,7 @@ code, pre, kbd { font-family: var(--font-mono); }
 .chat-input:focus { border-color: var(--focus); }
 .composer-footer { display: flex; gap: 12px; align-items: center; min-height: 26px; }
 
-/* Voice-dictation mic (Phase 37): quiet ghost button beside Send; while recording it
+/* Voice-dictation mic: quiet ghost button beside Send; while recording it
    pulses so stopping is obvious (the OS mic indicator is the authoritative signal). */
 .dictation-btn { min-width: 44px; }
 .dictation-btn.dictation-recording {
@@ -776,7 +775,7 @@ code, pre, kbd { font-family: var(--font-mono); }
 .doc-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 .doc-error { color: var(--error); font-size: 12px; word-break: break-word; }
 
-/* Benchmark / diagnostics (Phase 7) */
+/* Benchmark / diagnostics */
 .hint.error { color: var(--error); }
 .benchmark-warnings { list-style: none; padding: 0; margin: 12px 0 0; display: flex; flex-direction: column; gap: 8px; }
 .benchmark-warnings li {
@@ -801,7 +800,7 @@ code, pre, kbd { font-family: var(--font-mono); }
   word-break: break-all;
 }
 
-/* Diagnostics: audit-log Activity panel (Phase 19) */
+/* Diagnostics: audit-log Activity panel */
 .activity-list {
   list-style: none;
   padding: 0;
@@ -820,7 +819,7 @@ code, pre, kbd { font-family: var(--font-mono); }
 }
 .activity-time { opacity: 0.7; font-variant-numeric: tabular-nums; }
 
-/* ---- Shared component layer (Phase 24, guidelines §6) ---------------------------- */
+/* ---- Shared component layer (guidelines §6) ---------------------------- */
 
 /* Badge — status pill: icon + word, never color-only (WCAG 1.4.1). */
 .pill {

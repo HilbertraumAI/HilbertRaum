@@ -1,4 +1,4 @@
-// WAV encoding for voice dictation (Phase 37, D30). The renderer records webm/opus via
+// WAV encoding for voice dictation. The renderer records webm/opus via
 // MediaRecorder, decodes + resamples to 16 kHz mono PCM through an OfflineAudioContext,
 // and hands whisper a plain PCM16 WAV — encoded HERE, in pure JS, so dictation adds no
 // dependency. Pure function (no DOM, no Node) ⇒ unit-testable in the node environment.

@@ -1,21 +1,21 @@
 import type { Embedder } from './index'
 import { LlamaServer, type LlamaServerOptions } from '../runtime/sidecar'
 
-// Real on-device embedder (spec §6, §9.2, Phase 10). Drops in behind the existing
+// Real on-device embedder (spec §6, §9.2). Drops in behind the existing
 // `Embedder` interface with the SAME id/dimensions as the E5-small manifest, so the
 // locked 384-dim Float32 BLOB encoding + `VectorIndex` are unchanged.
 //
 // Backend choice: a `llama.cpp` `llama-server --embedding` sidecar over loopback —
 // the SAME prebuilt binary the chat runtime uses (`runtime/sidecar.ts`). This adds
 // ZERO new npm dependencies and no fragile native build (the alternative, an
-// onnxruntime-node + tokenizer stack, is a heavier, native add — see BUILD_STATE R6).
+// onnxruntime-node + tokenizer stack, is a heavier, native add).
 // The embeddings server is lazy-started on first `embed()` and reused; `stop()` kills
 // it (wired into `will-quit` so no orphan survives). Fully offline: loopback only.
 
 const DEFAULT_DIMENSIONS = 384
 const DEFAULT_CONTEXT_TOKENS = 512
 /**
- * M7 (audit round 4): chunks are sized in whitespace WORDS (~500), but the embedding
+ * Chunks are sized in whitespace WORDS (~500), but the embedding
  * sidecar context is real BPE tokens (E5-small caps at 512) — 500 English words is
  * 650+ tokens, so unmodified chunks routinely overflowed the context and failed the
  * whole document. Inputs are truncated to fit with a safety margin (≈1.4 tokens/word).
@@ -83,10 +83,10 @@ export class E5Embedder implements Embedder {
         modelPath: this.opts.modelPath,
         contextTokens: this.opts.contextTokens ?? DEFAULT_CONTEXT_TOKENS,
         // `--embedding` switches llama-server to the embeddings endpoint; mean pooling
-        // is what E5 expects. `--device none` PINS the embedder to CPU (Phase 15,
-        // architecture.md GPU record §7 — decided): the 384-dim model gains little from a GPU,
+        // is what E5 expects. `--device none` PINS the embedder to CPU
+        // (architecture.md GPU record §7): the 384-dim model gains little from a GPU,
         // and pinning keeps ingestion immune to driver flakiness and VRAM contention
-        // with the chat model. This is the codebase's permanent forced-CPU example.
+        // with the chat model.
         extraArgs: ['--embedding', '--pooling', 'mean', '--device', 'none'],
         spawn: this.opts.spawn,
         fetchImpl: this.opts.fetchImpl,
@@ -127,7 +127,7 @@ export class E5Embedder implements Embedder {
    * Embed texts → L2-normalized `Float32Array`s, one per input, in order. Inputs are
    * truncated to the sidecar context (see TOKENS_PER_WORD_ESTIMATE), sent in bounded
    * batches, and each request carries a timeout so a wedged sidecar cannot park a
-   * document in `embedding` forever (M7).
+   * document in `embedding` forever.
    */
   async embed(texts: string[]): Promise<Float32Array[]> {
     if (texts.length === 0) return []
@@ -146,7 +146,7 @@ export class E5Embedder implements Embedder {
         signal: AbortSignal.timeout(timeoutMs)
       })
       if (!res.ok) {
-        void res.body?.cancel().catch(() => undefined) // release the connection (L1)
+        void res.body?.cancel().catch(() => undefined) // release the connection
         throw new Error(`Embedding request failed: HTTP ${res.status}`)
       }
       const json = (await res.json()) as EmbeddingResponse
@@ -182,9 +182,9 @@ export class E5Embedder implements Embedder {
   }
 
   /**
-   * Kill the sidecar but allow a lazy restart on the next `embed()` (Phase 21 fix).
+   * Kill the sidecar but allow a lazy restart on the next `embed()`.
    * Used on workspace LOCK: the in-memory chunk text must go, but the app keeps
-   * running — the permanent `stop()` latch here used to make every post-lock/unlock
+   * running — the permanent `stop()` latch would make every post-lock/unlock
    * import fail with "Embedder is stopped".
    */
   async suspend(): Promise<void> {

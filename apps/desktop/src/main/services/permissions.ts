@@ -1,13 +1,12 @@
-// Session permission hardening (Phase 31 rider; wave-3 plan §12 audit item).
+// Session permission hardening.
 //
 // Electron's DEFAULT with no permission-request handler installed is to GRANT —
-// geolocation, notifications, media, everything (verified in the 2026-06-11 plan
-// audit). This app's renderer needs exactly ONE of those: microphone audio for voice
-// dictation (Phase 37, D30). The posture is therefore deny-by-default with a single
-// scoped exception — `media` requests that ask for AUDIO ONLY, coming from the app's
-// own window. Video capture, screen capture, geolocation, notifications and every
-// other permission stay refused. Denials are logged by permission NAME only — never
-// content.
+// geolocation, notifications, media, everything. This app's renderer needs exactly
+// ONE of those: microphone audio for voice dictation. The posture is therefore
+// deny-by-default with a single scoped exception — `media` requests that ask for
+// AUDIO ONLY, coming from the app's own window. Video capture, screen capture,
+// geolocation, notifications and every other permission stay refused. Denials are
+// logged by permission NAME only — never content.
 
 type PermissionCallback = (granted: boolean) => void
 
@@ -20,7 +19,7 @@ export interface PermissionRequestDetails {
 /**
  * The slice of Electron's `Session` this module needs. Structural, so tests can pass
  * a fake session and the module never imports `electron` (keeps it unit-testable
- * under plain vitest — the benchmark/gpu injected-deps precedent).
+ * under plain vitest).
  */
 export interface PermissionSessionLike {
   setPermissionRequestHandler(
@@ -41,7 +40,7 @@ export interface PermissionSessionLike {
 export interface PermissionHandlerOptions {
   /**
    * The app's own WebContents (reference-compared). When set, a `media` request from
-   * exactly this WebContents whose `mediaTypes` are audio-only is GRANTED — the Phase-37
+   * exactly this WebContents whose `mediaTypes` are audio-only is GRANTED — the
    * dictation microphone. Everything else, including audio requests from any other
    * WebContents and media requests that name video, is still denied.
    */

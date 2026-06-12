@@ -10,9 +10,9 @@ import type { HealthStatus } from './index'
 // (`LlamaRuntime`) and the real embedder (`E5Embedder`) drive over loopback HTTP.
 //
 // LOCALHOST-ONLY (non-negotiable): the server is always spawned with
-// `--host 127.0.0.1`; we never bind `0.0.0.0` or a routable interface. The Phase-8
-// offline guard exempts loopback precisely so this local socket is allowed; a
-// routable bind would expose local inference to the LAN and violate the spec.
+// `--host 127.0.0.1`; we never bind `0.0.0.0` or a routable interface. The offline
+// guard exempts loopback precisely so this local socket is allowed; a routable bind
+// would expose local inference to the LAN and violate the spec.
 
 /** Loopback host every sidecar binds + every loopback fetch targets. Never routable. */
 export const LOOPBACK_HOST = '127.0.0.1'
@@ -51,10 +51,10 @@ export function resolveLlamaServerPath(
 }
 
 /**
- * Resolve the pure-CPU safety-net binary at `runtime/llama.cpp/<os>/cpu/` (Phase 14
- * ships it on win/linux), or `null` when absent — the fallback ladder's rung 3
- * (architecture.md GPU record §5.2). Deliberately ignores `PAID_LLAMA_BIN`: the override points
- * at one explicit binary and has no implied sibling.
+ * Resolve the pure-CPU safety-net binary at `runtime/llama.cpp/<os>/cpu/` (shipped on
+ * win/linux), or `null` when absent — the fallback ladder's rung 3 (architecture.md
+ * GPU record §5.2). Deliberately ignores `PAID_LLAMA_BIN`: the override points at one
+ * explicit binary and has no implied sibling.
  */
 export function resolveCpuFallbackServerPath(
   rootPath: string,
@@ -119,7 +119,7 @@ export type FetchFn = typeof fetch
 
 const realSpawn: SpawnFn = (command, args, options) => nodeSpawn(command, args, options)
 
-/** What a server that died on its own (not via `stop()`) left behind (Phase 15 §5.3). */
+/** What a server that died on its own (not via `stop()`) left behind. */
 export interface UnexpectedExitInfo {
   exitCode: number | null
   exitSignal: string | null

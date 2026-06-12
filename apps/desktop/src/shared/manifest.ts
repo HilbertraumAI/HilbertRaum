@@ -20,7 +20,7 @@ export interface LicenseReview {
 }
 
 /**
- * Optional download metadata (Phase 12). When present, the `fetch-models` script (and
+ * Optional download metadata. When present, the `fetch-models` script (and
  * the canonical `services/assets.ts`) know where to fetch the weight from and what to
  * verify it against. Validated only when the `download` block is present, so every
  * existing manifest stays valid without it.
@@ -55,7 +55,7 @@ export interface ModelManifest {
   recommendedContextTokens: number
   /**
    * Whether the model has a native thinking/reasoning mode the runtime can toggle per
-   * request (Phase 20: gates the Deep answer mode in the UI). Optional in YAML
+   * request (gates the Deep answer mode in the UI). Optional in YAML
    * (`supports_thinking_mode`), defaulting to false — Deep is never offered for a
    * model that did not declare it.
    */
@@ -67,14 +67,14 @@ export interface ModelManifest {
   /** Hardware profiles this model is recommended for (legacy/no-RAM-known picker). */
   recommendedProfiles: HardwareProfile[]
   /**
-   * Recommendation tiebreak (Phase 29): higher = preferred among models that fit the
-   * machine's RAM. Encodes the Phase-29 benchmark verdict so the RAM-best-fit picker is
+   * Recommendation tiebreak: higher = preferred among models that fit the
+   * machine's RAM. Encodes the model-benchmark verdict so the RAM-best-fit picker is
    * quality-aware instead of biggest-disk-wins (model-benchmarks.md §6.2). Optional in YAML
    * (`recommendation_rank`), default 0.
    */
   recommendationRank: number
   licenseReview: LicenseReview
-  /** Optional download metadata (Phase 12). Absent on manifests with no upstream source. */
+  /** Optional download metadata. Absent on manifests with no upstream source. */
   download?: DownloadSpec
 }
 
@@ -144,7 +144,7 @@ export function validateManifest(raw: unknown): ValidationResult {
   const localPath = str('localPath', 'local_path')
   const sha256 = str('sha256', 'sha256').toLowerCase()
 
-  // Optional capability flag (Phase 20): must be a boolean when present.
+  // Optional capability flag: must be a boolean when present.
   let supportsThinkingMode = false
   const stm = raw['supports_thinking_mode']
   if (stm !== undefined) {
@@ -166,7 +166,7 @@ export function validateManifest(raw: unknown): ValidationResult {
     }
   }
 
-  // Optional recommendation tiebreak (Phase 29): higher = preferred among models that fit.
+  // Optional recommendation tiebreak: higher = preferred among models that fit.
   let recommendationRank = 0
   const rr = raw['recommendation_rank']
   if (rr !== undefined) {
@@ -202,7 +202,7 @@ export function validateManifest(raw: unknown): ValidationResult {
     }
   }
 
-  // Optional download block (Phase 12). Validated only when present, so existing
+  // Optional download block. Validated only when present, so existing
   // manifests with no `download:` stay valid. Sub-fields are checked individually.
   let download: DownloadSpec | undefined
   const dl = raw['download']

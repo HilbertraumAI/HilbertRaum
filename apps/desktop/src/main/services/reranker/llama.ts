@@ -1,10 +1,10 @@
 import type { Reranker, RerankedHit } from './index'
 import { LlamaServer, type LlamaServerOptions } from '../runtime/sidecar'
 
-// Real on-device reranker (Phase 21, rag-design §11 reranker). The THIRD `LlamaServer`
+// Real on-device reranker (rag-design §11). The THIRD `LlamaServer`
 // composition (after the chat runtime and the E5 embedder): the SAME shipped b9585
 // `llama-server` binary, spawned with `--rerank`, serving `/v1/rerank` over loopback.
-// Verified against the pinned b9585 SOURCE (rag-design §12.1 R1): `--rerank` sets
+// Verified against the pinned b9585 SOURCE: `--rerank` sets
 // embedding mode + RANK pooling (common/arg.cpp L2964–2971); the endpoint takes
 // `{ query, documents }` and returns `results: [{ index, relevance_score }]` sorted by
 // score DESC — results map back to inputs by `index`, never by order
@@ -18,16 +18,16 @@ import { LlamaServer, type LlamaServerOptions } from '../runtime/sidecar'
 
 const DEFAULT_CONTEXT_TOKENS = 2048
 /**
- * Same word→BPE-token safety margin as the E5 embedder (M7): inputs are sized in
+ * Same word→BPE-token safety margin as the E5 embedder: inputs are sized in
  * whitespace words, the sidecar context is real tokens (≈1.4 tokens/word for English).
  */
 const TOKENS_PER_WORD_ESTIMATE = 1.4
 /**
  * Word caps per rerank input (rag-design §12.3): each rerank task is ONE
  * query+document pair, so (160 + 320) × 1.4 + specials ≈ 700 real tokens. The doc cap
- * chiefly bounds CPU latency per candidate (the reranker is CPU-pinned); tune after
- * PAID_RERANK_SMOKE produces real numbers. NOTE: ~700 tokens exceeds llama-server's
- * DEFAULT physical batch of 512 in embedding mode — see RERANK_BATCH_TOKENS below.
+ * chiefly bounds CPU latency per candidate (the reranker is CPU-pinned).
+ * NOTE: ~700 tokens exceeds llama-server's DEFAULT physical batch of 512 in
+ * embedding mode — see the --batch-size args in `ensureStarted`.
  */
 const MAX_QUERY_WORDS = 160
 const MAX_DOC_WORDS = 320
@@ -65,8 +65,8 @@ export class LlamaReranker implements Reranker {
   /** Set by `stop()`; a racing lazy start must not resurrect the sidecar after quit. */
   private stopped = false
   /**
-   * Failed-start latch (rag-design §11 reranker): a sidecar that could not start (e.g. an
-   * incompatible GGUF — the E5 q8_0 story) must not be re-spawned and re-awaited for
+   * Failed-start latch: a sidecar that could not start (e.g. an
+   * incompatible GGUF quantization) must not be re-spawned and re-awaited for
    * the full health timeout on EVERY question. First failure disables this instance
    * for the session; rerank() then fails fast and retrieval keeps the fused order.
    */
@@ -93,9 +93,9 @@ export class LlamaReranker implements Reranker {
         // embedder (architecture.md GPU record §7): a sub-1B scorer gains little from a GPU and
         // must never contend for VRAM with the chat model.
         //
-        // `--batch-size`/`--ubatch-size` = the context (rag-design §12.1 R1 deviation,
-        // found by PAID_RERANK_SMOKE): in embedding/rerank mode llama-server FORCES
-        // n_batch = n_ubatch and defaults them to 512 (b9585 logs "embeddings enabled
+        // `--batch-size`/`--ubatch-size` = the context: in embedding/rerank mode
+        // llama-server FORCES n_batch = n_ubatch and defaults them to 512 (b9585 logs
+        // "embeddings enabled
         // with n_batch (2048) > n_ubatch (512) ... setting n_batch = n_ubatch = 512").
         // A rerank input is query+document in ONE sequence — up to
         // (MAX_QUERY_WORDS + MAX_DOC_WORDS) words ≈ 670 real tokens — so the 512 default
@@ -159,7 +159,7 @@ export class LlamaReranker implements Reranker {
       signal: AbortSignal.timeout(this.opts.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS)
     })
     if (!res.ok) {
-      void res.body?.cancel().catch(() => undefined) // release the connection (L1)
+      void res.body?.cancel().catch(() => undefined) // release the connection
       throw new Error(`Rerank request failed: HTTP ${res.status}`)
     }
     const json = (await res.json()) as RerankResponse
@@ -191,8 +191,8 @@ export class LlamaReranker implements Reranker {
 
   /**
    * Kill the sidecar but allow a lazy restart on the next `rerank()` — used on
-   * workspace lock (the E5 `suspend()` rationale). The failed-start latch survives a
-   * suspend: a GGUF the server could not load will not load any better after unlock.
+   * workspace lock, like the E5 embedder's `suspend()`. The failed-start latch survives
+   * a suspend: a GGUF the server could not load will not load any better after unlock.
    */
   async suspend(): Promise<void> {
     await this.teardown()
@@ -200,7 +200,7 @@ export class LlamaReranker implements Reranker {
 
   private async teardown(): Promise<void> {
     // A lazy start may be in flight (first rerank() racing app quit); wait for it to
-    // settle so the spawned child cannot outlive the app as an orphan (E5 precedent).
+    // settle so the spawned child cannot outlive the app as an orphan.
     if (this.starting) {
       await this.starting.catch(() => undefined)
     }

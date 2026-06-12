@@ -15,9 +15,9 @@ import { DiagnosticsTab } from './settings/DiagnosticsTab'
 import type { SettingsTab } from '../navigation'
 import type { AppSettings, ThemeSetting } from '@shared/types'
 
-// Settings (Phase 26, guidelines §2): one utility destination with three tabs.
-// "General" = the everyday settings; "Privacy & data" absorbs the former Privacy
-// screen; "Diagnostics (advanced)" absorbs the former Diagnostics screen. The tab
+// Settings (guidelines §2): one utility destination with three tabs.
+// "General" = the everyday settings; "Privacy & data" and "Diagnostics (advanced)"
+// were once standalone screens and now live here as tabs. The tab
 // switcher reuses SegmentedControl (roving tabindex + arrow keys, guidelines §6).
 // The open tab is owned by App.tsx so navigate('settings:privacy') etc. can land on
 // the right tab from anywhere; standalone use (tests) falls back to internal state.
@@ -80,7 +80,7 @@ function GeneralTab(): JSX.Element {
   async function patch(p: Partial<AppSettings>): Promise<void> {
     const next = await window.api.updateSettings(p)
     setSettings(next)
-    // Appearance applies immediately (Phase 23) — the saved value, not the request.
+    // Appearance applies immediately — the saved value, not the request.
     if (p.theme !== undefined) setThemeSetting(next.theme)
     toast('Saved')
   }
@@ -171,13 +171,13 @@ function GeneralTab(): JSX.Element {
         </p>
       </div>
 
-      {/* Phase 32: hidden entirely in plaintext_dev mode — there is nothing to change. */}
+      {/* Hidden entirely in plaintext_dev mode — there is no password to change. */}
       {settings.workspaceMode === 'encrypted' && <ChangePasswordCard />}
     </>
   )
 }
 
-// Settings → "Change password" (Phase 32). Reuses the first-run password components
+// Settings → "Change password". Reuses the first-run password components
 // (strength hint, show toggle — components/PasswordField). The first change of an older
 // workspace re-secures every stored document under the new password, which can take a
 // while on a big library — the busy copy says so honestly.

@@ -9,8 +9,8 @@ import { machineRamGb } from '../services/models'
 import { log, readLogTail } from '../services/logging'
 import type { AppSettings, AppStatus, PolicyStatus, PreflightResult } from '../../shared/types'
 
-// Phase 1 IPC: app/drive status + settings (spec §9.1). Phase 8 adds the privacy
-// policy surface (`getPolicy`) and makes `offlineMode` policy-aware (spec §3.6).
+// IPC for app/drive status + settings, the privacy policy surface (`getPolicy`),
+// and the policy-aware `offlineMode` (spec §9.1, §3.6).
 export function registerCoreIpc(ctx: AppContext): void {
   // The user's allowNetwork setting lives inside the (possibly locked) DB. When the
   // workspace is locked we can't read it — fall back to the safe default (false), which
@@ -32,23 +32,23 @@ export function registerCoreIpc(ctx: AppContext): void {
       offlineMode: policy.offlineMode,
       networkAllowed: policy.networkAllowed,
       activeModelId: s?.activeModelId ?? null,
-      // Real, persisted profile from the Phase-7 benchmark; UNKNOWN until first run.
+      // Real, persisted profile from the hardware benchmark; UNKNOWN until first run.
       hardwareProfile: s?.lastBenchmark?.profile ?? 'UNKNOWN',
       workspaceMode: ws.mode ?? 'plaintext_dev',
       workspaceReady: unlocked,
       machineRamGb: machineRamGb(),
-      // Phase 37: dictation is availability-driven (transcriber selected at startup
-      // iff whisper binary + weights exist) — the composer mic gates on this flag.
+      // Dictation is availability-driven (transcriber selected at startup iff
+      // whisper binary + weights exist) — the composer mic gates on this flag.
       dictationAvailable: ctx.transcriber != null,
-      // Phase 38: OCR is availability-driven too (engine selected iff the drive's
-      // ocr/ language files exist) — gates "Make searchable (OCR)" + the photo hint.
+      // OCR is availability-driven too (engine selected iff the drive's ocr/
+      // language files exist) — gates "Make searchable (OCR)" + the photo hint.
       ocrAvailable: ctx.ocrEngine != null
     }
   })
 
   ipcMain.handle(IPC.getDriveStatus, () => buildDriveStatus(ctx.paths))
 
-  // Phase 13: the friendly, non-blocking launch preflight (spec §11.4). Reuses the drive
+  // The friendly, non-blocking launch preflight (spec §11.4). Reuses the drive
   // status + benchmark probe; surfaced on Home for a non-technical first run.
   ipcMain.handle(
     IPC.runPreflight,
@@ -59,7 +59,7 @@ export function registerCoreIpc(ctx: AppContext): void {
     buildPolicyStatus(ctx.paths.configPath, allowNetworkSetting(), (m) => log.warn(m))
   )
 
-  // Spec §7.11 "show recent local logs" (audit M14) — read-only, local, never uploaded.
+  // Spec §7.11 "show recent local logs" — read-only, local, never uploaded.
   ipcMain.handle(IPC.getLogTail, (): string[] => readLogTail())
 
   ipcMain.handle(IPC.getSettings, () => getSettings(ctx.db))
@@ -67,7 +67,7 @@ export function registerCoreIpc(ctx: AppContext): void {
   ipcMain.handle(IPC.updateSettings, (_e, patch: Partial<AppSettings>) => {
     log.info('Settings updated', Object.keys(patch))
     const result = updateSettings(ctx.db, patch)
-    // Audit (Phase 19, privacy rule): record ONLY the privacy-relevant keys — and their
+    // Audit privacy rule: record ONLY the privacy-relevant keys — and their
     // post-validation values, which are booleans/enums — never any other setting's value.
     const privacyKeys = (['allowNetwork', 'gpuMode', 'developerMode'] as const).filter(
       (k) => k in patch

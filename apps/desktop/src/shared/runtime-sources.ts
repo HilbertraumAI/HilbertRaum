@@ -1,4 +1,4 @@
-// Runtime-sources schema + validator (Phase 12; see docs/packaging.md + drive-layout.md).
+// Runtime-sources schema + validator (see docs/packaging.md).
 //
 // The `llama-server` sidecar binaries are NOT models, so they get their own committed
 // manifest (`model-manifests/runtime-sources.yaml`) describing one prebuilt build per
@@ -35,9 +35,9 @@ export interface RuntimeSources {
 }
 
 /**
- * One vendored OCR language file (Phase 38, D32 — a NEW asset class on this yaml,
- * not a third script family): a plain verified file, no extraction, no per-OS
- * variance. `dest` is the drive-relative target (e.g. `ocr/deu.traineddata.gz`).
+ * One vendored OCR language file (its own asset class on this yaml, not a third
+ * build family): a plain verified file, no extraction, no per-OS variance.
+ * `dest` is the drive-relative target (e.g. `ocr/deu.traineddata.gz`).
  */
 export interface OcrFile {
   lang: string
@@ -57,13 +57,13 @@ export interface RuntimeSourcesResult {
   ok: boolean
   sources?: RuntimeSources
   /**
-   * The optional `whisper_cpp:` sibling block (Phase 36 — the second sidecar family).
-   * Absent when the file does not declare one; an app from before Phase 36 simply
-   * never read this key, so adding the block to a drive's yaml is forward-compatible.
+   * The optional `whisper_cpp:` sibling block (the second sidecar family).
+   * Absent when the file does not declare one; an older app simply never read
+   * this key, so adding the block to a drive's yaml is forward-compatible.
    */
   whisper?: RuntimeSources
   /**
-   * The optional `ocr:` sibling block (Phase 38 — vendored traineddata, D32).
+   * The optional `ocr:` sibling block (vendored traineddata).
    * Same forward-compatibility contract as `whisper_cpp:`.
    */
   ocr?: OcrSources
@@ -138,7 +138,7 @@ function validateFamily(block: Record<string, unknown>, prefix: string, errors: 
   }
 
   // A duplicate (os, arch, backend) triple would make "first match wins" ambiguous and
-  // could silently shadow a deliberate pin — reject it (Phase 14, architecture.md GPU record §6).
+  // could silently shadow a deliberate pin — reject it (architecture.md GPU record §6).
   // Per family: the llama and whisper builds live in different extract trees.
   const seen = new Set<string>()
   for (const b of builds) {
@@ -153,7 +153,7 @@ function validateFamily(block: Record<string, unknown>, prefix: string, errors: 
   return { version: version.trim(), builds }
 }
 
-/** Validate the Phase-38 `ocr:` block (`{ version, files: [{lang,url,sha256,dest}] }`). */
+/** Validate the `ocr:` block (`{ version, files: [{lang,url,sha256,dest}] }`). */
 function validateOcrFamily(
   block: Record<string, unknown>,
   errors: string[]
@@ -221,16 +221,16 @@ function validateOcrFamily(
  *     version: b9196
  *     builds:
  *       - { os, arch, backend, url, sha256, extract_to }
- *   whisper_cpp:        # OPTIONAL second sidecar family (Phase 36), same shape
+ *   whisper_cpp:        # OPTIONAL second sidecar family, same shape
  *     version: v1.8.6
  *     builds: [ … ]
- *   ocr:                # OPTIONAL vendored OCR language data (Phase 38, D32)
+ *   ocr:                # OPTIONAL vendored OCR language data
  *     version: 4.0.0_best_int
  *     files:
  *       - { lang, url, sha256, dest }
  *
- * Unknown sibling keys are ignored (verified forward-compatibility: an older app on a
- * newer drive parses the file unchanged — wave-3 plan §9).
+ * Unknown sibling keys are ignored (forward compatibility: an older app on a
+ * newer drive parses the file unchanged).
  */
 export function validateRuntimeSources(raw: unknown): RuntimeSourcesResult {
   const errors: string[] = []
@@ -244,7 +244,7 @@ export function validateRuntimeSources(raw: unknown): RuntimeSourcesResult {
   }
   const sources = validateFamily(llama, 'llama_cpp', errors)
 
-  // The whisper block is OPTIONAL (a pre-Phase-36 yaml has none) — but when present it
+  // The whisper block is OPTIONAL (an older yaml has none) — but when present it
   // must be fully valid: a malformed pin must fail loudly, never fetch the wrong thing.
   let whisper: RuntimeSources | null = null
   const whisperRaw = raw['whisper_cpp']
@@ -256,7 +256,7 @@ export function validateRuntimeSources(raw: unknown): RuntimeSourcesResult {
     }
   }
 
-  // The ocr block is OPTIONAL too (Phase 38) — same contract: absent is fine,
+  // The ocr block is OPTIONAL too — same contract: absent is fine,
   // malformed fails loudly.
   let ocr: OcrSources | null = null
   const ocrRaw = raw['ocr']

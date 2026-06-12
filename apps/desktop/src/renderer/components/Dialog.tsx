@@ -2,8 +2,8 @@ import * as RadixDialog from '@radix-ui/react-dialog'
 import { useCallback, useEffect, useRef, type ReactNode } from 'react'
 import { Button } from './Button'
 
-// Modal dialogs (guidelines §6) on Radix Dialog (decision D-UI1: focus trap, Esc-close,
-// and focus-return are easy to get wrong by hand). --shadow-3 + --radius-lg via CSS;
+// Modal dialogs (guidelines §6) on Radix Dialog (focus trap, Esc-close, and
+// focus-return are easy to get wrong by hand). --shadow-3 + --radius-lg via CSS;
 // max ~480px for confirms, 640px for content, `wide` (760px) for reading surfaces.
 // Both components are CONTROLLED (open + close callback).
 

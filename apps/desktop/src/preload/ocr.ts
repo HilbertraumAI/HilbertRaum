@@ -1,8 +1,9 @@
 import { contextBridge, ipcRenderer } from 'electron'
 
-// Preload for the HIDDEN OCR rasterizer window (Phase 38, D31). Deliberately tiny and
-// separate from the main bridge: this window renders PDF pages to PNG bytes and
-// nothing else — it gets exactly the five rasterizer channels, none of the app API.
+// Preload for the HIDDEN OCR rasterizer window. Deliberately tiny and separate from
+// the main bridge: this window renders PDF pages to PNG bytes and nothing else — it
+// gets exactly the five rasterizer channels, none of the app API. Never expose this
+// bridge to the app window.
 //
 // The channel names are LITERALS, not an import of shared/ipc: a SANDBOXED preload
 // must be a single file, and any shared import makes the multi-entry preload build

@@ -13,9 +13,9 @@ import type {
 // Reads `config/policy.json` and `config/drive.json` (both OPTIONAL — developer
 // runs fall back to defaults) and merges them over DEFAULT_POLICY, where **update
 // checks and telemetry are off** and model downloads are policy-permitted but gated
-// behind the default-off user setting plus a per-download confirmation (Phase 18,
-// wave-1 decision D3 (architecture.md "In-app model downloader")). The module is pure + resilient: a missing or malformed file degrades
-// to safe defaults plus a warning, never a throw.
+// behind the default-off user setting plus a per-download confirmation
+// (architecture.md "In-app model downloader"). The module is pure + resilient: a
+// missing or malformed file degrades to safe defaults plus a warning, never a throw.
 //
 // Policy precedence (LOCKED): a (future signed) policy.json is AUTHORITATIVE — it can
 // only RESTRICT, never expand, what the user setting permits. The effective network
@@ -25,15 +25,14 @@ import type {
 
 /**
  * Default policy. **Update checks + telemetry are off and have no user toggle.**
- * `allowModelDownloads` is true since Phase 18 (wave-1 decision D3 (architecture.md "In-app model downloader"), resolved (a)): with no
- * policy file the spec §3.6 user Settings toggle ("Allow internet access for model
- * downloads…", default OFF) is the effective gate for the in-app downloader — the app
- * still ships offline because the SETTING defaults to off and every download needs an
- * explicit per-download confirmation. A `policy.json` that writes
- * `allow_model_downloads: false` (the commercial prepare-drive posture) restricts this
- * unconditionally — policy only restricts, never expands. Workspace/model defaults are
- * developer-friendly (dev with no policy file: plaintext workspace + unverified models
- * allowed) — a commercial `policy.json` tightens these. Encryption enforcement is Phase 9.
+ * `allowModelDownloads` is true: with no policy file the spec §3.6 user Settings toggle
+ * ("Allow internet access for model downloads…", default OFF) is the effective gate for
+ * the in-app downloader — the app still ships offline because the SETTING defaults to
+ * off and every download needs an explicit per-download confirmation. A `policy.json`
+ * that writes `allow_model_downloads: false` (the commercial prepare-drive posture)
+ * restricts this unconditionally — policy only restricts, never expands. Workspace/model
+ * defaults are developer-friendly (dev with no policy file: plaintext workspace +
+ * unverified models allowed) — a commercial `policy.json` tightens these.
  */
 export const DEFAULT_POLICY: PrivacyPolicy = {
   network: {

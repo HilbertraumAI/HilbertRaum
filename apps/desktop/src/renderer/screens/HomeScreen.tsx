@@ -6,7 +6,7 @@ interface Props {
   onNavigate: (screen: string) => void
 }
 
-// Home as a readiness hub (Phase 26, guidelines §2): answers "is everything ready?"
+// Home as a readiness hub (guidelines §2): answers "is everything ready?"
 // at a glance — workspace state, model running?, document count — with ONE primary
 // action ("Start chatting") and quiet preflight warnings. Reuses existing IPC only
 // (getAppStatus / getRuntimeStatus / listDocuments / runPreflight).
@@ -30,7 +30,7 @@ export function HomeScreen({ onNavigate }: Props): JSX.Element {
       ?.listDocuments()
       .then((d) => active && setDocs(d ?? []))
       .catch(() => active && setDocs([]))
-    // Phase 13: friendly, non-blocking launch preflight (drive writable / space / speed).
+    // Friendly, non-blocking launch preflight (drive writable / space / speed).
     window.api
       ?.runPreflight?.()
       .then((p) => active && setPreflight(p))
@@ -41,7 +41,7 @@ export function HomeScreen({ onNavigate }: Props): JSX.Element {
   }, [])
 
   // The selected model auto-starts in the background at launch — poll so the model
-  // row flips to "running" without a manual refresh (the ChatScreen precedent).
+  // row flips to "running" without a manual refresh (same cadence as ChatScreen).
   useEffect(() => {
     let active = true
     const check = (): void => {

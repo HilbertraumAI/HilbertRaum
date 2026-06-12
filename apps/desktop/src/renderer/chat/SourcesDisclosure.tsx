@@ -1,9 +1,9 @@
 import { useState } from 'react'
 import type { Citation } from '@shared/types'
 
-// "▸ Sources (N)" (Phase 25, guidelines §3): citations stay attached to the answer as an
-// inline disclosure. Expanding lists one card per cited source — name + page/section +
-// the cited snippet. Replaces the old always-expanded SourcePanel.
+// "▸ Sources (N)" (guidelines §3): citations stay attached to the answer as an
+// inline disclosure, collapsed by default. Expanding lists one card per cited
+// source — name + page/section + the cited snippet.
 
 export function SourcesDisclosure({ citations }: { citations: Citation[] }): JSX.Element {
   const [open, setOpen] = useState(false)

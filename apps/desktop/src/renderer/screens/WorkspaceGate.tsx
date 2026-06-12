@@ -9,7 +9,7 @@ import {
 } from '../components'
 import type { WorkspaceStateInfo } from '@shared/types'
 
-// The password field + strength meter moved to `components/PasswordField` in Phase 32
+// The password field + strength meter live in `components/PasswordField`
 // (the Settings "Change password" card reuses them); re-exported here so existing
 // import sites (tests) stay valid.
 export { passwordStrength, type PasswordStrength } from '../components'
@@ -17,13 +17,13 @@ export { passwordStrength, type PasswordStrength } from '../components'
 // The pre-app gate (spec §7.1 "show onboarding if first run" + unlock). Rendered before
 // the normal sidebar whenever the workspace is `uninitialized` or `locked`.
 //
-// Phase 27 (guidelines §2): the CREATE path is a 3-step guided first run, full-window,
+// The CREATE path (guidelines §2) is a 3-step guided first run, full-window,
 // no nav rail — (1) welcome + trust framing, (2) create the password (show-password
 // toggle, honest strength hint that never blocks, paste/password managers work — WCAG
 // 3.3.8), (3) an optional starter step that only appears when no AI model is installed
 // on the drive. The UNLOCK path stays a single calm screen.
 //
-// Pre-unlock constraints: settings are unreadable (D-UI2 — the gate follows the OS
+// Pre-unlock constraints: settings are unreadable (the gate follows the OS
 // theme only), and `listModels` needs an unlocked workspace — so the step-3 check runs
 // AFTER create succeeds, before handing off to the shell. The password and derived key
 // never leave the main process — this screen only sends the typed password.

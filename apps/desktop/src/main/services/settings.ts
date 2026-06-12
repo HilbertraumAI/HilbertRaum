@@ -3,6 +3,8 @@ import { DEFAULT_SETTINGS, type AppSettings } from '../../shared/types'
 
 // Settings persistence on top of the key/value `settings` table (spec §8).
 // Each AppSettings field is stored as its own row so partial updates are clean.
+// The table lives inside the workspace database, so on an encrypted workspace the
+// settings are encrypted at rest and unreadable before unlock.
 
 export function getSettings(db: Db): AppSettings {
   const rows = db.prepare('SELECT key, value_json FROM settings').all() as Array<{
@@ -31,7 +33,7 @@ export function updateSettings(db: Db, patch: Partial<AppSettings>): AppSettings
     if (value === undefined) continue
     // The patch crosses the IPC boundary from the renderer: persist only KNOWN settings
     // keys, and only when the value's primitive type matches the default's (nullable
-    // fields accept null). Unknown/mistyped entries are dropped (audit SEC-F).
+    // fields accept null). Unknown/mistyped entries are dropped.
     if (!(key in DEFAULT_SETTINGS)) continue
     const def = (DEFAULT_SETTINGS as unknown as Record<string, unknown>)[key]
     if (def !== null && value !== null && typeof value !== typeof def) continue
@@ -45,7 +47,8 @@ export function updateSettings(db: Db, patch: Partial<AppSettings>): AppSettings
   return getSettings(db)
 }
 
-/** Seed defaults on first run (only writes keys that are missing). */
+/** Seed defaults on first run (writes only when the table is empty; keys added in
+ *  later versions are filled at read time by `getSettings`'s defaults merge). */
 export function seedSettings(db: Db): AppSettings {
   const existing = db.prepare('SELECT COUNT(*) AS n FROM settings').get() as { n: number }
   if (existing.n === 0) {

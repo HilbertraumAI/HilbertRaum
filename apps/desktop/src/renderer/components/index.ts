@@ -1,4 +1,4 @@
-// Shared component layer (Phase 24, guidelines §6). Screens import from here; styling
+// Shared component layer (guidelines §6). Screens import from here; styling
 // is tokens-only (tokens.css role tokens) so both themes work without theme checks.
 
 export { Button, type ButtonProps, type ButtonVariant } from './Button'

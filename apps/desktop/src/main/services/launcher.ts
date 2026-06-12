@@ -1,6 +1,6 @@
 import { win32, posix } from 'node:path'
 
-// Launcher root resolution (spec §6 / Phase 13 — plug-and-play distribution).
+// Launcher root resolution (spec §6 — plug-and-play distribution).
 //
 // A commercial drive ships an obvious, double-clickable launcher at the DRIVE ROOT
 // (`Start Private AI Drive.cmd` / `.command` / `start-private-ai-drive.sh`). The launcher

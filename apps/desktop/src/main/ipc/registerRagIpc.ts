@@ -9,10 +9,10 @@ import { getSettings } from '../services/settings'
 import { log } from '../services/logging'
 import { inFlightStreams } from './inflight'
 
-// Phase 6 IPC: RAG chat with citations (spec §9.1, §7.8, Milestone 6).
+// IPC for RAG chat with citations (spec §9.1, §7.8).
 //
 // `askDocuments(conversationId, question)` is the document-grounded sibling of
-// `sendChatMessage`. It REUSES the locked Phase-3 streaming contract — tokens go out on
+// `sendChatMessage`. It REUSES the LOCKED streaming contract — tokens go out on
 // `chat:token/done/error:<conversationId>` and the invoke resolves with the final
 // assistant Message — so the renderer subscribes exactly as it does for plain chat.
 //
@@ -38,7 +38,7 @@ export function registerRagIpc(ctx: AppContext): void {
         throw new Error('No AI model is running. Open the AI Model screen and start one first.')
       }
 
-      // Strict one-at-a-time vs document tasks (Phase 33, D26 — see registerChatIpc).
+      // Strict one-at-a-time vs document tasks (see registerChatIpc).
       if (ctx.docTasks?.hasActiveTask()) {
         throw new Error(DOC_TASK_BUSY_MESSAGE)
       }
@@ -85,12 +85,12 @@ export function registerRagIpc(ctx: AppContext): void {
           settings,
           {
             signal: controller.signal,
-            // "Ask selected documents" (Phase 17): the conversation's persisted scope
-            // restricts retrieval; null scope = whole corpus. When no explicit scope was
-            // set, this may carry the filename auto-scope derived from the question above.
+            // "Ask selected documents": the conversation's persisted scope restricts
+            // retrieval; null scope = whole corpus. When no explicit scope was set,
+            // this may carry the filename auto-scope derived from the question above.
             scopeDocumentIds,
-            // Retrieval reranker (Phase 21): null when no reranker is provisioned —
-            // retrieval then keeps the pre-Phase-21 ordering byte-identical.
+            // Retrieval reranker: null when no reranker is provisioned — retrieval
+            // then keeps the unreranked ordering byte-identical.
             reranker: ctx.reranker,
             onToken: (token) => {
               if (!event.sender.isDestroyed()) {

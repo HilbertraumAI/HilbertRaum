@@ -5,8 +5,8 @@
     <!--
       Offline-first CSP: only same-origin resources. No remote origins are
       permitted, so the renderer cannot reach any cloud service. The localhost
-      entries exist solely for the dev server's hot-reload. Phase 8 hardens this
-      further via response headers.
+      entries exist solely for the dev server's hot-reload. The main process
+      hardens this further via response headers (strict in prod, HMR-relaxed in dev).
     -->
     <meta
       http-equiv="Content-Security-Policy"

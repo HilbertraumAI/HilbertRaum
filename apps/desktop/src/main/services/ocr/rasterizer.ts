@@ -2,9 +2,9 @@ import { join } from 'node:path'
 import { BrowserWindow, ipcMain } from 'electron'
 import { OCR_RASTER } from '../../../shared/ipc'
 
-// PDF → page-PNG rasterizer (Phase 38, D31 — resolved by R-O1): rendering a PDF page
-// to pixels needs a canvas, the main process has none (plan fact §2.10), node-canvas
-// is a native dep (against the theme), and Electron's utilityProcess has NO
+// PDF → page-PNG rasterizer: rendering a PDF page
+// to pixels needs a canvas, the main process has none, node-canvas
+// is a native dep (avoided by policy), and Electron's utilityProcess has NO
 // OffscreenCanvas (probed). So a HIDDEN BrowserWindow does exactly this one job:
 // open the PDF with the pinned pdfjs, render one page at a time on request, return
 // PNG bytes. Recognition stays main-side; the window is created per task and

@@ -1,11 +1,11 @@
 import type { Db } from '../db'
 
 // Embeddings + vector search (spec §6, §7.8, §9.2). The `Embedder` interface keeps
-// the mock embedder (Phase 5) and the real on-device embedder (Phase 10)
-// interchangeable behind one contract, exactly like `ModelRuntime`. `VectorIndex`
-// runs a cosine search over the vectors stored in the `embeddings` table.
+// the mock embedder and the real on-device embedder interchangeable behind one
+// contract, exactly like `ModelRuntime`. `VectorIndex` runs a cosine search over
+// the vectors stored in the `embeddings` table.
 //
-// Vector encoding (LOCKED — Phase 5): a vector is a `Float32Array`; it is stored in
+// Vector encoding (LOCKED): a vector is a `Float32Array`; it is stored in
 // `embeddings.vector_blob` as the raw little-endian Float32 bytes and decoded back
 // into a `Float32Array` on read. See `encodeVector` / `decodeVector`.
 //
@@ -27,10 +27,10 @@ export interface Embedder {
    */
   stop?(): Promise<void>
   /**
-   * Stop the backing sidecar but allow a lazy restart on next use (Phase 21 fix).
+   * Stop the backing sidecar but allow a lazy restart on next use.
    * Called on workspace LOCK: the sidecar's memory (recent chunk text) must be purged,
-   * but the app keeps running and the next import must work. Without this, the
-   * permanent `stop()` latch made every post-lock/unlock embed fail.
+   * but the app keeps running and the next import must work — the permanent `stop()`
+   * latch would make every post-lock/unlock embed fail.
    */
   suspend?(): Promise<void>
 }
@@ -87,7 +87,7 @@ interface EmbeddingRow {
 export interface VectorIndexOptions {
   /**
    * When set, the search only scans vectors tagged with this `embedding_model_id`.
-   * Phase-10 mismatch guard: mock vectors (`mock-embedder`) and real E5 vectors are
+   * Mismatch guard: mock vectors (`mock-embedder`) and real E5 vectors are
    * BOTH 384-dim, so the dimension guard alone cannot separate them — mixing them
    * silently corrupts ranking. Filtering by the active model id keeps a corpus indexed
    * under one embedder from polluting search under another (e.g. after a mock→real
@@ -96,7 +96,7 @@ export interface VectorIndexOptions {
   embeddingModelId?: string | null
   /**
    * When set and non-empty, the search only scans vectors whose chunk belongs to one of
-   * these documents — "ask selected documents" (spec §10.4, plan §5.3). Empty/absent
+   * these documents — "ask selected documents" (spec §10.4). Empty/absent
    * means the whole corpus, so existing callers are unchanged.
    */
   documentIds?: string[] | null
@@ -120,8 +120,8 @@ export class VectorIndex {
   /** Rank stored chunks by cosine similarity to `queryVector`; return the top `topK`. */
   search(queryVector: Float32Array, topK: number): VectorSearchHit[] {
     if (topK <= 0) return []
-    // Compose the scan filters: model-id scoping (Phase 10) and/or document scoping
-    // (plan §5.3). Placeholders only — ids are never interpolated into the SQL.
+    // Compose the scan filters: model-id scoping and/or document scoping.
+    // Placeholders only — ids are never interpolated into the SQL.
     const where: string[] = []
     const params: string[] = []
     if (this.embeddingModelId) {

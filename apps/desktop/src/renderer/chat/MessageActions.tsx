@@ -1,4 +1,4 @@
-// Per-message action row (Phase 25, guidelines §3): shown under assistant answers,
+// Per-message action row (guidelines §3): shown under assistant answers,
 // revealed on hover or keyboard focus (CSS — the buttons stay focusable while hidden).
 // "Try again" regenerates (last answer, plain chat only), "Copy" copies the answer text,
 // "Save" saves the whole conversation. Feedback ("Copied"/"Saved") goes through the

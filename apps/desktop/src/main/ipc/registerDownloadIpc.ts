@@ -8,8 +8,8 @@ import { getSettings } from '../services/settings'
 import { loadPolicy } from '../services/policy'
 import { log } from '../services/logging'
 
-// Phase 18 IPC: the in-app model downloader (architecture.md "In-app model downloader").
-// Async-with-polling like the Phase-4 import jobs: `downloadModel` returns the job
+// IPC for the in-app model downloader (architecture.md "In-app model downloader").
+// Async-with-polling like the import jobs: `downloadModel` returns the job
 // immediately, the renderer polls `getDownloadJob`. The gates are re-checked HERE, in
 // the main process, on every start: the policy ceiling (`allow_model_downloads`) AND
 // the user's `allowNetwork` setting (default off) — the renderer's confirmation dialog
@@ -21,7 +21,7 @@ export function registerDownloadIpc(ctx: AppContext, manager?: DownloadManager):
   // Production injects the global fetch; tests pass a manager with a fake (CI is
   // zero-network — nothing in the suite ever constructs the default). The audit hook
   // routes the manager's background started/verified/failed outcomes to the app
-  // recorder (Phase 19) without the service touching the DB.
+  // audit recorder without the service touching the DB.
   const downloads =
     manager ??
     new DownloadManager({

@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs'
 import type { Transcriber } from './index'
 import { createWhisperCliTranscriber, resolveWhisperCliPath } from './cli'
 
-// Availability-aware transcriber selector (Phase 36), the reranker D9 pattern verbatim:
+// Availability-aware transcriber selector, the reranker pattern verbatim:
 // NO mock fallback. A real `WhisperCliTranscriber` is chosen only when BOTH the
 // platform `whisper-cli` binary AND the transcriber weights are present; otherwise the
 // selector returns NULL and an audio import fails per-file with friendly copy

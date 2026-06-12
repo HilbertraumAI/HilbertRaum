@@ -2,18 +2,18 @@ import { readFile } from 'node:fs/promises'
 import type { DocumentParser, ParseContext, ParsedDocument } from './index'
 import { log } from '../../logging'
 
-// Photo "parser" (Phase 38): a photographed page becomes a normal corpus document by
-// running the injected OCR engine over the image bytes. This is the D33 asymmetry:
+// Photo "parser": a photographed page becomes a normal corpus document by
+// running the injected OCR engine over the image bytes. Deliberate asymmetry:
 // photos OCR ON IMPORT (one small image, seconds) while PDFs need the explicit
 // "Make searchable (OCR)" task (many pages, minutes). Recognition runs main-side in
 // tesseract.js Node mode — the image bytes are decoded inside the WASM core, no
-// canvas, no renderer round-trip (D31/R-O1).
+// canvas, no renderer round-trip.
 //
 // Page-less single segment, so the txt/md chunk-dedup rule applies. Re-index re-runs
-// the recognition over the stored copy (the audio precedent: the stored copy is the
-// source of truth; recognized text is derived).
+// the recognition over the stored copy (like audio re-transcription: the stored copy
+// is the source of truth; recognized text is derived).
 
-/** Photo extensions the OCR pipeline accepts (plan §11: png + jpg). */
+/** Photo extensions the OCR pipeline accepts (png + jpg). */
 export const IMAGE_EXTENSIONS = ['.png', '.jpg', '.jpeg'] as const
 
 /** Friendly copy when no OCR engine is available (language files missing). */

@@ -1,4 +1,4 @@
-// Filename auto-scope (post-MVP UX fix): when a documents-mode question names an
+// Filename auto-scope: when a documents-mode question names an
 // indexed file by its filename and the conversation has NO explicit "ask selected
 // documents" scope, restrict retrieval to the named file(s) so other documents are not
 // surfaced as sources.

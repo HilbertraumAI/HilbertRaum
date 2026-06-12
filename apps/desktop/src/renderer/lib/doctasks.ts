@@ -1,14 +1,14 @@
 import type { DocTaskKind, DocTaskStatus } from '@shared/types'
 
-// Renderer-side watcher for the (single, D26) active document task — Phase 33/34.
+// Renderer-side watcher for the single active document task (the backend allows at
+// most one at a time).
 //
 // Lives at MODULE level, not inside a screen component: a summary/translation keeps
 // running in the main process while the user navigates away, so the busy/progress
 // state (and its polling loop) must survive screen unmounts. Screens subscribe via
 // `useSyncExternalStore(subscribeDocTask, getActiveDocTask)`; the chat screen's
-// "task is busy" banner uses `cancelActiveDocTask()`. ONE store for every task kind
-// (Phase 34 generalized `startSummaryTask` into `startTask` rather than adding a
-// second store) — D26 guarantees at most one task exists anyway.
+// "task is busy" banner uses `cancelActiveDocTask()`. ONE store covers every task
+// kind — at most one task exists anyway.
 //
 // Lifecycle: start → poll every POLL_MS → terminal status stays visible (so a screen
 // the user returns to can show the outcome) until a screen acknowledges it with

@@ -12,12 +12,11 @@ import {
 } from './assets'
 import { invalidateChecksum, type HashStore } from './models'
 
-// In-app model downloader (Phase 18, architecture.md "In-app model downloader" — the revived
-// plan §12.3). A thin job state machine over the Phase-12 `assets.ts` seams:
-// `planModelDownloads` (license gate + present/verified states), `downloadToFile`
-// (injected fetch + progress + Range resume), `verifyDownloadedFile` (placeholder
-// honesty). Async-with-polling like the Phase-4 import jobs — the renderer polls
-// `getDownloadJob`; there are no new event channels.
+// In-app model downloader (architecture.md "In-app model downloader"). A thin job
+// state machine over the `assets.ts` seams: `planModelDownloads` (license gate +
+// present/verified states), `downloadToFile` (injected fetch + progress + Range
+// resume), `verifyDownloadedFile` (placeholder honesty). Async-with-polling like the
+// import jobs — the renderer polls `getDownloadJob`; there are no new event channels.
 //
 // Invariants:
 // - GATES FIRST (all must hold): the policy ceiling (`network.allow_model_downloads`),
@@ -30,7 +29,7 @@ import { invalidateChecksum, type HashStore } from './models'
 //   where `computeInstallState` can see it. A cancelled/failed `.part` is KEPT and
 //   resumed via a `Range` header next time (best-effort; a server without ranges → 200
 //   → clean restart).
-// - Verify-before-trust (R5): a hash MISMATCH deletes the `.part` and fails the job; a
+// - Verify-before-trust: a hash MISMATCH deletes the `.part` and fails the job; a
 //   PLACEHOLDER expected hash completes the job but marks it `unverified` — the model
 //   stays UNVERIFIED until a real hash lands in the manifest (never a silent pass).
 // - One download at a time (multi-GB weights on USB; a queue is pointless contention).
@@ -73,7 +72,7 @@ export interface StartDownloadOptions {
   hashStore?: HashStore
 }
 
-/** The download-lifecycle audit events this service can emit (Phase 19, plan §6.2). */
+/** The download-lifecycle audit events this service can emit. */
 export type DownloadAuditType =
   | 'model_download_started'
   | 'model_download_verified'
@@ -84,9 +83,9 @@ export interface DownloadManagerDeps {
   fetchImpl?: FetchFn
   log?: (msg: string, meta?: unknown) => void
   /**
-   * Audit hook (Phase 19): the IPC layer injects the app recorder so the background
-   * verify/fail outcomes reach the audit log without this service knowing about the
-   * DB. Carries the model id and counts — never file contents. Must never throw.
+   * Audit hook: the IPC layer injects the app recorder so the background verify/fail
+   * outcomes reach the audit log without this service knowing about the DB. Carries
+   * the model id and counts — never file contents. Must never throw.
    */
   audit?: (type: DownloadAuditType, message: string, metadata: Record<string, unknown>) => void
 }
@@ -97,9 +96,9 @@ export function partPath(dest: string): string {
 }
 
 /**
- * Owns the in-app download jobs. Jobs live in memory for the session (the import-job
- * precedent); the durable truth is the filesystem — a verified weight in place, or a
- * resumable `.part`.
+ * Owns the in-app download jobs. Jobs live in memory for the session only; the
+ * durable truth is the filesystem — a verified weight in place, or a resumable
+ * `.part`.
  */
 export class DownloadManager {
   private jobs = new Map<string, DownloadJob>()
@@ -168,7 +167,7 @@ export class DownloadManager {
       sizeBytes: task.sizeBytes
     })
 
-    // Background run — the invoke returns immediately (Phase-4 import precedent).
+    // Background run — the invoke returns immediately; the renderer polls for progress.
     void this.run(job, task, controller, opts.hashStore).finally(() => {
       if (this.active?.jobId === job.jobId) this.active = null
     })

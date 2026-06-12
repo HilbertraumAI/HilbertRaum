@@ -20,13 +20,13 @@ import {
 } from '../lib/doctasks'
 import { friendlyIpcError } from '../lib/errors'
 
-// Documents screen (spec §7.7 / Milestone 4). Import files or a folder via the OS picker
+// Documents screen (spec §7.7). Import files or a folder via the OS picker
 // (opened in the main process), watch each file move through the ingestion statuses, and
 // delete / re-index documents. Import runs async in the backend; this screen polls
-// getImportJob + listDocuments while a job is in flight (BUILD_STATE: async-with-polling).
+// getImportJob + listDocuments while a job is in flight (async-with-polling).
 
-// Status pills: icon + word, never color-only (guidelines §6). Labels speak human
-// (§7) — the pipeline stages (extract/chunk/embed) read as "Reading"/"Preparing";
+// Status pills: icon + word, never color-only (guidelines §6). Labels speak
+// human — the pipeline stages (extract/chunk/embed) read as "Reading"/"Preparing";
 // the raw stage names stay in logs/Diagnostics.
 const STATUS_BADGE: Record<IngestionStatus, { label: string; tone: BadgeTone; icon: string }> = {
   queued: { label: 'Waiting', tone: 'accent', icon: '…' },
@@ -47,7 +47,7 @@ const ACTIVE_STATUSES: ReadonlySet<IngestionStatus> = new Set([
 
 /**
  * Per-document status badge. Audio in `extracting` is honestly "Transcribing…" —
- * listening to a recording takes real time (Phase 36) — with the coarse percent the
+ * listening to a recording takes real time — with the coarse percent the
  * docs IPC merges in while whisper works.
  */
 function badgeFor(d: DocumentInfo): { label: string; tone: BadgeTone; icon: string } {
@@ -60,7 +60,7 @@ function badgeFor(d: DocumentInfo): { label: string; tone: BadgeTone; icon: stri
 }
 
 /**
- * Total picked audio bytes above which the import asks first (Phase 36, D35): the
+ * Total picked audio bytes above which the import asks first: the
  * recording is copied onto the drive (encrypted on encrypted workspaces) AND fully
  * transcribed on the CPU — real space + real minutes the user should consciously accept.
  */
@@ -88,7 +88,7 @@ function formatSize(bytes: number | null): string {
 }
 
 interface Props {
-  /** "Ask these documents" (Phase 17, spec §10.4): open Chat scoped to the selection. */
+  /** "Ask these documents" (spec §10.4): open Chat scoped to the selection. */
   onAskSelected?: (documentIds: string[]) => void
 }
 
@@ -100,22 +100,23 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
   const [previewLoading, setPreviewLoading] = useState(false)
   // Destructive delete goes through a ConfirmDialog (guidelines §6), not browser confirm.
   const [confirmDelete, setConfirmDelete] = useState<DocumentInfo | null>(null)
-  // Large-audio import confirmation (Phase 36, D35): pending paths + their preflight.
+  // Large-audio import confirmation: pending paths + their preflight.
   const [confirmAudio, setConfirmAudio] = useState<{
     paths: string[]
     audioFileCount: number
     audioBytes: number
   } | null>(null)
-  // "Translate" target choice (Phase 34): the row button opens this small modal.
+  // "Translate" target choice: the row button opens this small modal.
   const [translateDoc, setTranslateDoc] = useState<DocumentInfo | null>(null)
-  // OCR availability (Phase 38, D14 precedent): gates "Make searchable (OCR)" and the
-  // photo-import mention. Read once — the language files don't appear mid-session.
+  // OCR availability (availability-driven, no settings key): gates "Make searchable
+  // (OCR)" and the photo-import mention. Read once — the language files don't appear
+  // mid-session.
   const [ocrAvailable, setOcrAvailable] = useState(false)
   // "Ask these documents" selection (indexed documents only).
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set())
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
-  // The (single, D26) active document task — module-level store so a running summary's
-  // busy/progress state survives navigating away and back (Phase 33).
+  // The single active document task — module-level store so a running summary's
+  // busy/progress state survives navigating away and back.
   const activeTask = useSyncExternalStore(subscribeDocTask, getActiveDocTask)
 
   const refresh = useCallback(async (): Promise<void> => {
@@ -188,7 +189,7 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
     try {
       const paths = await window.api.pickDocuments(mode)
       if (paths.length === 0) return
-      // Size-aware audio gate (Phase 36, D35): large recordings cost drive space
+      // Size-aware audio gate: large recordings cost drive space
       // (the workspace copy) and real transcription time — ask first.
       const pre = await window.api.importPreflight(paths)
       if (pre.audioBytes >= LARGE_AUDIO_CONFIRM_BYTES) {
@@ -266,7 +267,7 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
     }
   }
 
-  // "Make searchable (OCR)" (Phase 38, D33): explicit, never automatic — reading a
+  // "Make searchable (OCR)": explicit, never automatic — reading a
   // scanned PDF page by page takes real time on the CPU.
   async function onMakeSearchable(d: DocumentInfo): Promise<void> {
     setError(null)
@@ -289,7 +290,7 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
     }
   }
 
-  // Compare the two selected documents (Phase 35): A = first selected, B = second.
+  // Compare the two selected documents: A = first selected, B = second.
   async function onCompare(): Promise<void> {
     const ids = [...selected]
     if (ids.length !== 2) return
@@ -349,7 +350,7 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
     })
   }
 
-  // Re-index every stale document sequentially (plan §5.2): same per-document call as
+  // Re-index every stale document sequentially: same per-document call as
   // the row button, one at a time — multi-document re-embedding contends on the embedder.
   async function onReindexAllStale(): Promise<void> {
     setBusy('reindex-all')
@@ -511,7 +512,7 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
             >
               {previewLoading ? 'Opening…' : 'Preview'}
             </Button>
-            {/* "Make searchable (OCR)" for a detected scan (Phase 38, D33). The same
+            {/* "Make searchable (OCR)" for a detected scan. The same
                 slot shows the busy/cancel pair while the OCR task runs. */}
             {d.scanDetected &&
               ocrAvailable &&
@@ -692,7 +693,7 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
   )
 }
 
-/** "Generated by <model> · <date>" — the summary attribution line (plan §6). */
+/** "Generated by <model> · <date>" — the summary attribution line. */
 function summaryAttribution(s: DocumentSummary): string {
   const date = s.createdAt ? new Date(s.createdAt) : null
   const when = date && !Number.isNaN(date.getTime()) ? date.toLocaleDateString() : ''
@@ -703,7 +704,7 @@ function summaryAttribution(s: DocumentSummary): string {
  * Read-only document preview: the parser's extracted text segments, grouped under their
  * page/section labels. Shows extracted TEXT (what the AI reads), not the original
  * layout — in encrypted workspaces the original bytes never leave the vault.
- * When the document has a persisted summary (Phase 33), it leads in a collapsible
+ * When the document has a persisted summary, it leads in a collapsible
  * section with the model/date attribution and a Regenerate action.
  */
 function PreviewModal({
@@ -716,10 +717,10 @@ function PreviewModal({
   onClose
 }: {
   preview: DocumentPreview
-  /** Recognition metadata when the text came from local OCR (Phase 38), or null. */
+  /** Recognition metadata when the text came from local OCR, or null. */
   ocr?: DocumentOcrInfo | null
   summary?: DocumentSummary | null
-  /** Provenance line when this is a generated document (Phase 34/35), or null. */
+  /** Provenance line when this is a generated document, or null. */
   originLine?: ReactNode
   regenerateDisabled?: boolean
   onRegenerate?: () => void

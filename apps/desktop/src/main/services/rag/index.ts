@@ -16,7 +16,7 @@ import {
   stripThinkBlocks
 } from '../chat'
 
-// RAG service (spec §7.8; hybrid + rerank stages Phase 21, rag-design §11 pipeline). Turns a
+// RAG service (spec §7.8; pipeline design in rag-design §11). Turns a
 // question into a grounded, cited answer:
 //
 //   embed query → cosine top-k ──┐
@@ -25,7 +25,7 @@ import {
 //   build the grounded prompt → stream the local LLM → cited answer
 //
 // Everything is local + offline: retrieval is a linear scan over SQLite vectors
-// (`VectorIndex`, Phase 5) plus an in-process FTS5 keyword scan (Phase 21), the query
+// (`VectorIndex`) plus an in-process FTS5 keyword scan, the query
 // is embedded with the SAME embedder used for chunks, and the optional reranker is a
 // loopback llama-server sidecar. The `[S1] [S2] …` labels are assigned PER QUERY at
 // retrieval time and are never stored; only the resolved `Citation[]` is persisted
@@ -59,8 +59,8 @@ export interface RetrievedChunk {
   pageNumber: number | null
   sectionLabel: string | null
   /**
-   * Per-query ranking score; its MEANING depends on how the chunk won its place
-   * (Phase 21, rag-design §11 pipeline): the embedder's cosine similarity for vector hits,
+   * Per-query ranking score; its MEANING depends on how the chunk won its
+   * place: the embedder's cosine similarity for vector hits,
    * the RRF fusion score for keyword-only hits, or the reranker's relevance score
    * (an unbounded logit) once a reranker reordered the candidates. Internal only —
    * citations never persist scores.
@@ -81,14 +81,14 @@ export const SNIPPET_MAX_CHARS = 600
  * the similarity threshold, we do NOT call the model — we return this fixed answer so the
  * assistant can never hallucinate sources it does not have.
  */
-// Phase 27 copy sweep (guidelines §7): this answer is PERSISTED into conversations, so
-// rewording it only affects future answers — old rows keep the text they were saved with.
+// This answer is PERSISTED into conversations, so rewording it only affects future
+// answers — old rows keep the text they were saved with.
 export const NO_DOCUMENT_CONTEXT_ANSWER =
   "I couldn't find this in your documents. Try rephrasing your question, or check which " +
   "documents you're asking about."
 
 /**
- * The actionable variant (Phase 17, plan §5.2): documents ARE indexed, but none of their
+ * The actionable variant: documents ARE indexed, but none of their
  * vectors were produced by the active embedding model, so retrieval cannot see them at
  * all (search is scoped to the active embedder's id). Telling the user to rephrase would
  * be wrong — only a re-index fixes it.
@@ -135,10 +135,10 @@ interface ChunkRow {
 }
 
 /**
- * Retrieve grounded context for `question` (pipeline per rag-design §11 pipeline):
+ * Retrieve grounded context for `question` (pipeline per rag-design §11):
  *  1. embed the question and cosine-search the vector index (`topKInitial`),
- *  2. drop vector hits below `minSimilarity` (the cosine floor — PRE-fusion/PRE-rerank,
- *     decision D12; rerank scores are a different scale and never meet this floor),
+ *  2. drop vector hits below `minSimilarity` (the cosine floor applies PRE-fusion/
+ *     PRE-rerank; rerank scores are a different scale and never meet this floor),
  *  3. FTS5 keyword-search the corpus (`topKInitial`, embedder-visibility-scoped),
  *  4. fuse the two ranked lists by reciprocal rank (RRF, hybrid.ts),
  *  5. join candidates back to `chunks` for text + source label + page/section,
@@ -150,12 +150,12 @@ interface ChunkRow {
  *
  * Labels are assigned here, per query, and are never stored.
  *
- * Pass-through guarantee (D9): with no reranker and no keyword hits, steps 3/4/6 are
- * inert and the result — ordering AND scores — is byte-identical to the pre-Phase-21
+ * Pass-through guarantee: with no reranker and no keyword hits, steps 3/4/6 are
+ * inert and the result — ordering AND scores — is byte-identical to the vector-only
  * pipeline (RRF over a single list is monotone in rank; vector candidates keep their
  * cosine as `score` until a reranker actually rescores them).
  *
- * `scopeDocumentIds` (Phase 17, spec §10.4): when non-empty, retrieval only searches
+ * `scopeDocumentIds` (spec §10.4): when non-empty, retrieval only searches
  * those documents — the conversation's "ask selected documents" scope.
  */
 export async function retrieve(
@@ -166,7 +166,7 @@ export async function retrieve(
   scopeDocumentIds?: string[] | null,
   reranker?: Reranker | null
 ): Promise<RetrievalResult> {
-  // Phase-10 mismatch guard: only search vectors tagged with the active embedder's id.
+  // Mismatch guard: only search vectors tagged with the active embedder's id.
   // Mock and real E5 vectors are both 384-dim, so the dimension guard cannot separate
   // them; scoping by model id stops a corpus indexed under one embedder from polluting
   // search under another (until a reindex re-embeds everything with the active model).
@@ -177,8 +177,8 @@ export async function retrieve(
   const vectorHits = (await index.searchText(question, settings.topKInitial)).filter(
     (hit) => hit.score >= settings.minSimilarity
   )
-  // Hybrid keyword path (Phase 21, rag-design §11 keyword index): exact terms embeddings miss.
-  // Scoped to chunks VISIBLE to the active embedder (§5.4) so the keyword path can
+  // Hybrid keyword path: the exact terms embeddings miss.
+  // Scoped to chunks VISIBLE to the active embedder so the keyword path can
   // never surface a document vector search couldn't — the re-index honesty story
   // (staleEmbeddings / corpusNeedsReindex / REINDEX_NEEDED_ANSWER) is unchanged.
   const keywordHits = keywordSearchChunks(db, question, settings.topKInitial, {
@@ -209,10 +209,9 @@ export async function retrieve(
     })
   }
 
-  // Rerank between fusion and dedup (rag-design §11 pipeline step 6, decision D11): the
-  // cross-encoder rescoring decides which chunk represents a page BEFORE the dedup
-  // collapse. A failing reranker logs and keeps the fused order — a quality pass must
-  // never turn into an error for the user (spec §11.4).
+  // Rerank between fusion and dedup: the cross-encoder rescoring decides which chunk
+  // represents a page BEFORE the dedup collapse. A failing reranker logs and keeps
+  // the fused order — a quality pass must never turn into an error for the user.
   if (reranker && candidates.length > 0) {
     try {
       const scores = new Map(
@@ -324,7 +323,7 @@ export function buildGroundedChatMessages(
     if (isLast && m.role === 'user') {
       messages.push({ role: 'user', content: groundedUserContent })
     } else {
-      // Assistant turns are scrubbed of think blocks before being replayed (Phase 20, D6).
+      // Assistant turns are scrubbed of think blocks before being replayed.
       messages.push({
         role: m.role,
         content: m.role === 'assistant' ? stripThinkBlocks(m.content) : m.content
@@ -338,9 +337,9 @@ export interface GroundedAnswerOptions {
   signal?: AbortSignal
   onToken?: (token: string) => void
   runtimeOptions?: Pick<RuntimeChatOptions, 'maxTokens' | 'temperature'>
-  /** "Ask selected documents" scope for retrieval (Phase 17). Null = whole corpus. */
+  /** "Ask selected documents" scope for retrieval. Null = whole corpus. */
   scopeDocumentIds?: string[] | null
-  /** Optional retrieval reranker (Phase 21). Null/absent = today's ordering. */
+  /** Optional retrieval reranker. Null/absent keeps the fused ordering. */
   reranker?: Reranker | null
 }
 
@@ -374,7 +373,7 @@ export async function generateGroundedAnswer(
 
   if (chunks.length === 0) {
     // Distinguish "nothing relevant" from "the whole corpus is invisible to the active
-    // embedder" (Phase 17): the latter needs a re-index, not a rephrase. Either way the
+    // embedder": the latter needs a re-index, not a rephrase. Either way the
     // model is never called without context (grounding rule).
     const answer = corpusNeedsReindex(db, embedder.id)
       ? REINDEX_NEEDED_ANSWER
@@ -390,8 +389,8 @@ export async function generateGroundedAnswer(
   const grounded = buildGroundedPrompt(question, chunks)
   const messages = buildGroundedChatMessages(db, conversationId, grounded)
   let content = ''
-  // No `mode` is passed: document answers always run 'balanced' (Phase 20 — grounded
-  // answers should be fast + literal; a deep-grounded mode is a wave-2 question).
+  // No `mode` is passed: document answers always run 'balanced' — grounded
+  // answers should be fast + literal.
   const stream = runtime.chatStream(messages, { signal: opts.signal, ...opts.runtimeOptions })
   try {
     for await (const token of stream) {
@@ -403,9 +402,9 @@ export async function generateGroundedAnswer(
     // return normally. Any other error is a real failure and propagates.
     if (!isAbortError(err, opts.signal)) throw err
   }
-  // Reasoning never reaches the DB (D6) — same defense-in-depth strip as plain chat.
+  // Reasoning never reaches the DB — same defense-in-depth strip as plain chat.
   content = stripThinkBlocks(content)
-  // A stop before the first token produced nothing — persist nothing (L2).
+  // A stop before the first token produced nothing — persist nothing.
   if (content === '') return emptyAssistantMessage(conversationId)
   // Persist the assistant turn with the computed citations (source of truth = retrieval).
   return appendMessage(db, { conversationId, role: 'assistant', content, citations })

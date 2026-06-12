@@ -19,9 +19,8 @@ import { getSettings, updateSettings } from './settings'
 
 /**
  * Runtime → formats this app can actually run (the spec §7.4 `unsupported` gate).
- * Phase 36 added the whisper.cpp transcriber family (GGML `.bin` weights), so support
- * is a PAIR check — a manifest claiming `whisper_cpp` with `gguf` (or `llama_cpp` with
- * `ggml`) is still unsupported, never a silent pass.
+ * Support is a PAIR check — a manifest claiming `whisper_cpp` with `gguf` (or
+ * `llama_cpp` with `ggml`) is still unsupported, never a silent pass.
  */
 const SUPPORTED_RUNTIME_FORMATS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
   ['llama_cpp', new Set(['gguf'])],
@@ -30,7 +29,7 @@ const SUPPORTED_RUNTIME_FORMATS: ReadonlyMap<string, ReadonlySet<string>> = new 
 ])
 const MANIFEST_EXTENSIONS = new Set(['.yaml', '.yml'])
 /**
- * Reserved filenames under `model-manifests/` that are NOT model manifests (Phase 12).
+ * Reserved filenames under `model-manifests/` that are NOT model manifests.
  * `runtime-sources.yaml` describes the llama.cpp sidecar builds, not a model, and would
  * fail `validateManifest` — skip it during model discovery (it has its own validator).
  */
@@ -51,7 +50,7 @@ export interface DiscoveryResult {
  * Find the `model-manifests/` directory by walking up from a starting dir.
  * Manifests are committed to git, so they sit at the repo/app root. Packaging places
  * them under resources; the drive launchers set PAID_MANIFESTS_DIR to the drive's copy
- * (one source of truth with the verify/fetch scripts, M21). A set-but-missing override
+ * (one source of truth with the verify/fetch scripts). A set-but-missing override
  * falls back to the walk-up instead of blanking the model list.
  */
 export function resolveManifestsDir(startDir: string, override?: string): string | null {
@@ -139,7 +138,7 @@ export interface ChecksumResult {
   actual: string | null
 }
 
-// ---- checksum cache (H5, audit round 4; persisted post-MVP) -----------------------
+// ---- checksum cache -----------------------------------------------------------------
 // `listModels` runs on every Models-screen visit AND every Chat-screen mount. Without a
 // cache that re-hashed every multi-GB GGUF on the drive each time — minutes of USB I/O
 // per navigation. Hash once per (path, size, mtime); a changed/replaced file re-hashes.
@@ -306,13 +305,13 @@ export function machineRamGb(): number {
 }
 
 /**
- * RAM-best-fit recommendation (post-MVP): the LARGEST model whose comfortable RAM
+ * RAM-best-fit recommendation: the LARGEST model whose comfortable RAM
  * (`recommended_ram_gb`) fits this machine; if nothing fits comfortably, the lightest
  * model that at least meets its minimum (`recommended_min_ram_gb`); else null. Replaces
  * the profile-table lookup as the primary recommendation — "which model?" is a RAM
  * question first, and this can never recommend a model the RAM gate disables.
  *
- * QUALITY-AWARE TIEBREAK (Phase 29, model-benchmarks.md §6.2): among models that tie on the
+ * QUALITY-AWARE TIEBREAK (model-benchmarks.md §6.2): among models that tie on the
  * capacity fit (same comfortable RAM, or same minimum), prefer the higher
  * `recommendationRank` — the benchmark verdict — BEFORE falling back to disk size. Without
  * ranks (all 0) this is exactly the old biggest-disk behaviour, so legacy callers are
@@ -355,9 +354,9 @@ function toModelInfo(
   startableAsMock: boolean,
   insufficientRam: boolean
 ): ModelInfo {
-  // Surface the manifest's optional download block (Phase 18): the renderer's
-  // per-download confirmation needs size, URL, license link, and whether an explicit
-  // license acknowledgement is required (license_review not approved).
+  // Surface the manifest's optional download block: the renderer's per-download
+  // confirmation needs size, URL, license link, and whether an explicit license
+  // acknowledgement is required (license_review not approved).
   const download: ModelDownloadInfo | undefined = manifest.download
     ? {
         url: manifest.download.url,
@@ -437,7 +436,7 @@ export async function buildModelList(opts: BuildModelListOptions): Promise<Model
     }
     const recommended =
       manifest.id === recommendedChat || manifest.id === recommendedEmbed
-    // Zero-weights first run (H6/M10): a missing CHAT model may start the built-in mock
+    // Zero-weights first run: a missing CHAT model may start the built-in mock
     // when the caller's (policy-gated) developer leniency is on. Computed here so the
     // renderer renders an affordance the MAIN process actually allows.
     const startableAsMock =
@@ -456,10 +455,10 @@ export interface SelectResult {
 /**
  * Persist the selected active model to settings. Chat models set `activeModelId`;
  * embedding models set `activeEmbeddingModelId`. Throws if the id is unknown.
- * Reranker/transcriber models are availability-driven (D9/D14: they activate when
- * binary + weights exist) — there is no settings slot for them, and the old
- * role-else-chat fallback would have written a transcriber id into `activeModelId`
- * (the CHAT slot) and broken chat. Refuse with friendly copy instead (Phase 36 fix).
+ * Reranker/transcriber models are availability-driven (they activate when binary +
+ * weights exist) — there is no settings slot for them, and a role-else-chat fallback
+ * would write a transcriber id into `activeModelId` (the CHAT slot) and break chat.
+ * Refuse with friendly copy instead.
  */
 export function selectModel(db: Db, manifestsDir: string, modelId: string): SelectResult {
   const { manifests } = discoverManifests(manifestsDir)

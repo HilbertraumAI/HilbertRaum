@@ -27,9 +27,9 @@ import {
 import { supportedExtensions } from '../services/ingestion/parsers'
 import { log } from '../services/logging'
 
-// Phase 4 IPC: document import + ingestion status (spec §9.1, §7.7).
+// IPC for document import + ingestion status (spec §9.1, §7.7).
 //
-// Import model (DECISION — documented in BUILD_STATE): async with polling.
+// Import model: async with polling.
 // `importDocuments` expands the selection, persists a `queued` row per file, returns the
 // document ids immediately, then processes the files sequentially in the background. The
 // `documents` table is the source of truth for per-file status (it survives restarts);
@@ -42,7 +42,7 @@ export function registerDocsIpc(ctx: AppContext): void {
   // Ephemeral per-import aggregates, keyed by job id.
   const jobs = new Map<string, ImportJobStatus>()
   // Documents currently being processed (import loop or re-index). Guards delete/re-index
-  // against racing an in-flight ingestion of the SAME document (M3): interleaving used to
+  // against racing an in-flight ingestion of the SAME document: interleaving used to
   // produce FK violations, duplicate chunk sets, and EBUSY on the stored copy.
   const processing = new Set<string>()
 
@@ -60,7 +60,7 @@ export function registerDocsIpc(ctx: AppContext): void {
     }
   }
 
-  // Phase 33: a running/queued document task reads this document's chunks and then
+  // A running/queued document task reads this document's chunks and then
   // writes its summary — re-indexing (which rebuilds the chunks and clears the summary)
   // or deleting the row underneath it would persist a stale result or lose the race.
   const requireNoActiveTask = (documentId: string): void => {
@@ -69,15 +69,15 @@ export function registerDocsIpc(ctx: AppContext): void {
     }
   }
 
-  // Ingestion dependencies (Phase 5 + H1). Vectors are tagged with the id of the embedder
-  // that ACTUALLY produced them (`embedder.id`, the embedChunks fallback) — never the
-  // settings selection (Phase 17 fix): with the E5 manifest selected but the mock embedder
-  // active (no binary), the old settings tag stamped mock vectors with the E5 id, hiding
+  // Ingestion dependencies. Vectors are tagged with the id of the embedder that
+  // ACTUALLY produced them (`embedder.id`, the embedChunks fallback) — never the
+  // settings selection: with the E5 manifest selected but the mock embedder active
+  // (no binary), a settings-based tag stamps mock vectors with the E5 id, hiding
   // them from search now AND poisoning the E5-scoped search later. Search scopes by
   // `ctx.embedder.id`, so tag and scope must come from the same place. The document cipher
   // (non-null only for an UNLOCKED encrypted workspace) keeps stored copies encrypted at
   // rest, per spec §3.5.
-  // Transcription progress per document (Phase 36): fed by the whisper CLI's `-pp`
+  // Transcription progress per document: fed by the whisper CLI's `-pp`
   // output through the parse context, merged into `listDocuments` responses so the
   // polling UI can show "Transcribing… N%" on import AND re-index. In-memory only —
   // cleared when the document leaves the processing set.
@@ -119,7 +119,7 @@ export function registerDocsIpc(ctx: AppContext): void {
 
   ipcMain.handle(IPC.importDocuments, (_e, paths: string[]): ImportJob => {
     requireUnlocked()
-    // Phase-32 race guard: the whole import job holds a document-work lease so a vault
+    // Race guard: the whole import job holds a document-work lease so a vault
     // password change (which re-encrypts `.enc` sidecars) refuses to start while we
     // write them — and vice versa, this throws a friendly VaultBusyError mid-change.
     const releaseDocWork = ctx.workspace.beginDocumentWork()
@@ -141,7 +141,7 @@ export function registerDocsIpc(ctx: AppContext): void {
     void (async () => {
       try {
         for (const id of documentIds) {
-          // Lock-while-importing (M4): the vault can close mid-job ("Lock now"). Stop the
+          // Lock-while-importing: the vault can close mid-job ("Lock now"). Stop the
           // loop cleanly — the remaining rows stay non-terminal inside the encrypted
           // snapshot and are reconciled to `failed` (re-indexable) after the next unlock.
           if (!ctx.workspace.isUnlocked()) {
@@ -153,7 +153,7 @@ export function registerDocsIpc(ctx: AppContext): void {
             const info = await processDocument(ctx.db, storeDir, id, ingestionDeps())
             if (info.status === 'failed') status.failed += 1
             else status.completed += 1
-            // Audit (Phase 19): filename + counts only — never the document's text.
+            // Audit: filename + counts only — never the document's text.
             ctx.audit?.('document_imported', `Document imported: ${info.title}`, {
               documentId: id,
               status: info.status,
@@ -186,7 +186,7 @@ export function registerDocsIpc(ctx: AppContext): void {
 
   ipcMain.handle(IPC.listDocuments, (): DocumentInfo[] => {
     requireUnlocked()
-    // Reconcile stuck rows whenever NOTHING is actually running (M4): a row left in an
+    // Reconcile stuck rows whenever NOTHING is actually running: a row left in an
     // active status (queued/extracting/…) with no live job/re-index belongs to a killed
     // run or a lock-interrupted import — reset it to `failed` so the UI offers Re-index
     // instead of a perpetual, button-disabling "in progress". The previous one-shot flag
@@ -198,7 +198,7 @@ export function registerDocsIpc(ctx: AppContext): void {
     }
     // Flag docs whose vectors were produced by a different embedder than the active one
     // (search is scoped to `ctx.embedder.id`), so the UI can prompt a re-index.
-    // Merge in-memory transcription progress (Phase 36) so the polling UI can show
+    // Merge in-memory transcription progress so the polling UI can show
     // "Transcribing… N%" without any new channel.
     return listDocuments(ctx.db, ctx.embedder.id).map((d) => {
       const percent = transcribing.get(d.id)
@@ -208,7 +208,7 @@ export function registerDocsIpc(ctx: AppContext): void {
     })
   })
 
-  // Size-aware audio preflight (Phase 36, D35): the renderer asks what a picked
+  // Size-aware audio preflight: the renderer asks what a picked
   // selection contains BEFORE importing, so large audio (stored copy + a full
   // transcription are real costs) gets an explicit confirmation. Read-only.
   ipcMain.handle(IPC.importPreflight, (_e, paths: string[]): ImportPreflight => {
@@ -224,7 +224,7 @@ export function registerDocsIpc(ctx: AppContext): void {
     ctx.audit?.('document_deleted', 'Document deleted', { documentId })
   })
 
-  // Read-only in-app preview (post-MVP): re-extracts the stored copy's text. Guarded
+  // Read-only in-app preview: re-extracts the stored copy's text. Guarded
   // against racing an in-flight ingestion of the same document (it rewrites the stored
   // copy); in an encrypted workspace the transient decrypted file is shredded inside
   // the service. Nothing is written to the DB and no external viewer ever sees bytes.
@@ -234,12 +234,12 @@ export function registerDocsIpc(ctx: AppContext): void {
     log.info('Preview document', { documentId })
     return extractDocumentPreview(ctx.db, storeDir, documentId, {
       cipher: ctx.workspace.documentCipher(),
-      // Phase 38: photos re-recognize on preview; OCR'd PDFs read their stored pages.
+      // Photos re-recognize on preview; OCR'd PDFs read their stored pages.
       ocrEngine: ctx.ocrEngine
     })
   })
 
-  // Save a TEXT document's stored content to a user-chosen file (Phase 34 — the
+  // Save a TEXT document's stored content to a user-chosen file (the
   // exportConversation pattern: dialog + fs in MAIN, never the renderer). Built for
   // materialized translations (always Markdown); any plain-text document qualifies.
   // Resolves with the saved path, or null when the user cancelled.
@@ -267,7 +267,7 @@ export function registerDocsIpc(ctx: AppContext): void {
     if (result.canceled || !result.filePath) return null
     writeFileSync(result.filePath, text, 'utf8')
     log.info('Document exported', { documentId })
-    // Audit (Phase 19 privacy rule): the id only — the chosen path is user-private
+    // Audit privacy rule: the id only — the chosen path is user-private
     // and the text is content.
     ctx.audit?.('document_exported', 'Document exported to a file', { documentId })
     return result.filePath
@@ -277,7 +277,7 @@ export function registerDocsIpc(ctx: AppContext): void {
     requireUnlocked()
     requireNotProcessing(documentId)
     requireNoActiveTask(documentId)
-    // Phase-32 race guard: re-index rewrites the `.enc` sidecar — mutually exclusive
+    // Race guard: re-index rewrites the `.enc` sidecar — mutually exclusive
     // with a password change (see importDocuments).
     const releaseDocWork = ctx.workspace.beginDocumentWork()
     log.info('Re-index document', { documentId })

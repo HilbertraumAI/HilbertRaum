@@ -1,11 +1,10 @@
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import type { ChatDepthMode } from '@shared/types'
 
-// "Answer detail" dropdown (Phase 25, guidelines §3 + decision D-UI4): a quiet
-// composer-footer affordance, not a prominent 3-way toggle. UI labels are
-// Quick · Balanced · Thorough; the ids stay `fast|balanced|deep` everywhere in
-// code/IPC/persistence (D-UI4 — no data migration). Thorough is offered only when the
-// running model's manifest declares thinking support (current behavior preserved).
+// "Answer detail" dropdown (guidelines §3): a quiet composer-footer affordance, not a
+// prominent 3-way toggle. UI labels are Quick · Balanced · Thorough; the ids stay
+// `fast|balanced|deep` everywhere in code/IPC/persistence (no data migration).
+// Thorough is offered only when the running model's manifest declares thinking support.
 
 export const DEPTH_LABELS: Record<ChatDepthMode, string> = {
   fast: 'Quick',

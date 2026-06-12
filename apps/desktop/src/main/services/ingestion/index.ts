@@ -42,11 +42,11 @@ import { chunkSegments } from './chunker'
 // `error_message`.
 //
 // The `embedding` step writes one vector per chunk into the `embeddings` table when an
-// `Embedder` is supplied (Phase 5). It is optional: with no embedder the step is a
-// pass-through (a document still reaches `indexed` with chunks but no vectors), which keeps
-// the Phase-4 callers/tests valid and lets the real embedder swap in unchanged (Phase 10).
+// `Embedder` is supplied. It is optional: with no embedder the step is a pass-through
+// (a document still reaches `indexed` with chunks but no vectors), so embedders can be
+// swapped — or absent — without changing the pipeline.
 
-/** Optional dependencies for the embedding step (Phase 5) + encrypted storage (H1). */
+/** Optional pipeline dependencies: embedding, encrypted storage, transcription, OCR. */
 export interface IngestionDeps {
   /** Embedder used to vectorize chunks. Omit to skip the embedding step. */
   embedder?: Embedder
@@ -60,9 +60,9 @@ export interface IngestionDeps {
    */
   cipher?: DocumentCipher | null
   /**
-   * Transcriber for audio imports (Phase 36, the embedder-injection precedent).
-   * Optional AND nullable: absent/null means an audio FILE fails friendly with the
-   * download-the-model copy — text ingestion is unaffected (graceful-fallback rule).
+   * Transcriber for audio imports. Optional AND nullable: absent/null means an audio
+   * FILE fails friendly with the download-the-model copy — text ingestion is
+   * unaffected (graceful-fallback rule).
    */
   transcriber?: Transcriber | null
   /**
@@ -71,15 +71,15 @@ export interface IngestionDeps {
    */
   onTranscribeProgress?: (documentId: string, percent: number) => void
   /**
-   * OCR engine for photo imports (Phase 38, the transcriber pattern). Optional AND
-   * nullable: absent/null means a photo FILE fails friendly with the
-   * needs-the-OCR-files copy — text ingestion is unaffected.
+   * OCR engine for photo imports. Optional AND nullable: absent/null means a photo
+   * FILE fails friendly with the needs-the-OCR-files copy — text ingestion is
+   * unaffected.
    */
   ocrEngine?: OcrEngine | null
 }
 
-// Canonical home of the `.enc` suffix moved to workspace-vault (Phase 32 — the password
-// change re-encrypts these sidecars); re-exported here for the existing import sites.
+// Canonical home of the `.enc` suffix is workspace-vault (the password change
+// re-encrypts these sidecars); re-exported here for the existing import sites.
 export { ENCRYPTED_DOC_SUFFIX }
 
 const MIME_BY_EXT: Record<string, string> = {
@@ -93,12 +93,12 @@ const MIME_BY_EXT: Record<string, string> = {
   '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   '.csv': 'text/csv',
   '.tsv': 'text/csv',
-  // Audio (Phase 36) — exactly the formats the pinned whisper-cli decodes (R-W2).
+  // Audio — exactly the formats the pinned whisper-cli decodes.
   '.wav': 'audio/wav',
   '.mp3': 'audio/mpeg',
   '.flac': 'audio/flac',
   '.ogg': 'audio/ogg',
-  // Photos (Phase 38) — OCR'd on import (D33 asymmetry: small, single image).
+  // Photos — OCR'd on import (small, single image; PDFs need the explicit OCR task).
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
   '.jpeg': 'image/jpeg'
@@ -169,13 +169,13 @@ function parseSummary(json: string | null | undefined): DocumentSummary | null {
   return null
 }
 
-/** Parse a stored origin (Phase 34/35 provenance); malformed JSON reads as null. */
+/** Parse a stored origin (generated-document provenance); malformed JSON reads as null. */
 function parseOrigin(json: string | null | undefined): DocumentOrigin | null {
   if (!json) return null
   try {
     const v = JSON.parse(json) as Record<string, unknown> | null
     if (!v || typeof v !== 'object') return null
-    // Comparison provenance (Phase 35): both source ids, A/B order.
+    // Comparison provenance: both source ids, A/B order.
     if (v.type === 'compare') {
       const from = v.comparedFrom
       if (
@@ -187,8 +187,8 @@ function parseOrigin(json: string | null | undefined): DocumentOrigin | null {
       }
       return null
     }
-    // Translation provenance. Phase-34 rows persisted WITHOUT the `type` field (it was
-    // the only shape then) — they parse as 'translation' unchanged.
+    // Translation provenance. Older rows persisted WITHOUT the `type` field
+    // (translation was the only shape then) — they parse as 'translation' unchanged.
     if (
       typeof v.translatedFrom === 'string' &&
       v.translatedFrom.length > 0 &&
@@ -203,8 +203,8 @@ function parseOrigin(json: string | null | undefined): DocumentOrigin | null {
 }
 
 /**
- * The stored OCR recognition (Phase 38): full per-page text (CONTENT — DB only,
- * never logs/audit) plus the surface metadata `DocumentInfo.ocr` exposes.
+ * The stored OCR recognition: full per-page text (CONTENT — DB only, never
+ * logs/audit) plus the surface metadata `DocumentInfo.ocr` exposes.
  */
 interface StoredOcr {
   pages: OcrPage[]
@@ -263,8 +263,8 @@ function rowToInfo(row: DocumentRow, chunkCount: number, staleEmbeddings?: boole
     staleEmbeddings,
     summary: parseSummary(row.summary_json),
     origin: parseOrigin(row.origin_json),
-    // DERIVED scan marker (Phase 38 step 0): failed with the exact scan notice. The
-    // OCR task targets exactly these rows (plus already-OCR'd PDFs for a re-run).
+    // DERIVED scan marker: failed with the exact scan notice. The OCR task targets
+    // exactly these rows (plus already-OCR'd PDFs for a re-run).
     scanDetected: row.status === 'failed' && row.error_message === PDF_SCAN_DETECTED_MESSAGE,
     ocr: ocrInfoOf(parseOcr(row.ocr_json)),
     createdAt: row.created_at,
@@ -312,7 +312,7 @@ function setStatus(db: Db, id: string, status: IngestionStatus, errorMessage: st
 
 /**
  * Insert a `queued` document row for `filePath` and return its DocumentInfo.
- * `displayTitle` (Phase 34) overrides the filename-derived title for app-GENERATED
+ * `displayTitle` overrides the filename-derived title for app-GENERATED
  * files imported from a transient path (e.g. a materialized translation) — the title
  * drives parser selection, the stored copy's extension, and citation source labels,
  * so it must be set BEFORE processing and must keep a supported extension.
@@ -421,7 +421,7 @@ export async function processDocument(
       documentId
     )
 
-    // Parse context (Phase 36/38, additive — text parsers ignore it): the injected
+    // Parse context (additive — text parsers ignore it): the injected
     // transcriber + OCR engine, the documents dir for content transients, per-document
     // progress, and — for a previously-OCR'd PDF — the stored per-page recognition so
     // a re-index reuses it instead of failing scan detection again.
@@ -463,7 +463,7 @@ export async function processDocument(
       )
     }
 
-    // Embedding step: vectorize each chunk and persist to `embeddings` (Phase 5).
+    // Embedding step: vectorize each chunk and persist to `embeddings`.
     // The DELETE above already cleared stale vectors, so re-index re-embeds cleanly.
     setStatus(db, documentId, 'embedding')
     if (deps.embedder) {
@@ -485,7 +485,7 @@ export async function processDocument(
 /**
  * Resolve the final DocumentInfo, tolerating a row that vanished mid-pipeline (e.g. the
  * document was deleted while processing). `processDocument` promises to never throw, so
- * a missing row yields a synthetic `deleted` info instead of a TypeError (M3).
+ * a missing row yields a synthetic `deleted` info instead of a TypeError.
  */
 function infoOrDeleted(db: Db, documentId: string): DocumentInfo {
   const row = getRow(db, documentId)
@@ -535,7 +535,7 @@ async function embedChunks(
 }
 
 /**
- * Read-only in-app preview (post-MVP): re-extract the document's text segments from the
+ * Read-only in-app preview: re-extract the document's text segments from the
  * self-contained stored copy (falling back to the original file if the copy is gone).
  * Re-parses instead of reading the `chunks` table because chunks OVERLAP (~80 tokens) —
  * concatenating them would duplicate text at every boundary. In an encrypted workspace
@@ -557,7 +557,7 @@ export async function extractDocumentPreview(
     throw new Error(`Unsupported file type: ${extname(row.title) || '(none)'}`)
   }
 
-  // Audio (Phase 36): re-extraction reads the stored CHUNKS, not the file — re-parsing
+  // Audio: re-extraction reads the stored CHUNKS, not the file — re-parsing
   // would re-run the whole transcription (minutes of CPU) just to show text. Exact by
   // construction: every audio chunk is one packed transcript segment, verbatim, with no
   // overlap (AudioParser caps packed segments below the chunk window), so unlike the
@@ -594,7 +594,7 @@ export async function extractDocumentPreview(
       throw new Error('The document file is no longer on disk. Re-import it to preview.')
     }
 
-    // Phase 38: an OCR'd PDF previews its STORED recognition (the same ocrPages hook
+    // An OCR'd PDF previews its STORED recognition (the same ocrPages hook
     // re-index uses — never a silent re-OCR); a photo re-recognizes the stored copy
     // (one small image, the audio-preview trade-off inverted: cheap enough to redo).
     const parsed = await parser.parse(parseSource, {
@@ -617,8 +617,8 @@ export async function extractDocumentPreview(
 }
 
 /**
- * A transcript document's segments, rebuilt from its stored chunks (Phase 36 — see
- * the audio branch in `extractDocumentPreview` for why this is exact for audio only).
+ * A transcript document's segments, rebuilt from its stored chunks (see the audio
+ * branch in `extractDocumentPreview` for why this is exact for audio only).
  */
 function audioSegmentsFromChunks(
   db: Db,
@@ -634,7 +634,7 @@ function audioSegmentsFromChunks(
 
 /**
  * Per-path summary of a pending import for the renderer's size-aware audio
- * confirmation (Phase 36, D35): how many supported files the selection expands to,
+ * confirmation: how many supported files the selection expands to,
  * how many are audio, and the audio bytes (a stored copy + a full transcription are
  * real costs the user should consciously accept for large recordings).
  */
@@ -662,10 +662,10 @@ export function summarizeImportPaths(paths: string[]): ImportPreflight {
 
 /**
  * Re-run ingestion for an existing document (re-parse the stored copy). Clears any
- * persisted summary FIRST (Phase 33, D25): a re-index means the content may have
- * changed, so a summary derived from the old chunks must not survive — even if the
- * re-parse then fails. For AUDIO documents a re-index is a FULL RE-TRANSCRIPTION of
- * the stored copy (D35 — the transcript is not cached separately; documented in
+ * persisted summary FIRST: a re-index means the content may have changed, so a
+ * summary derived from the old chunks must not survive — even if the re-parse then
+ * fails. For AUDIO documents a re-index is a FULL RE-TRANSCRIPTION of the stored
+ * copy (the transcript is not cached separately; documented in
  * known-limitations.md), with the same "Transcribing…" progress as the import.
  */
 export async function reindexDocument(
@@ -682,7 +682,7 @@ export async function reindexDocument(
 }
 
 /**
- * Persist (or clear, with null) a document's one-click summary (Phase 33, D25).
+ * Persist (or clear, with null) a document's one-click summary.
  * The summary is CONTENT: it lives only in this (possibly encrypted) DB column —
  * callers must never put it into logs or the audit trail.
  */
@@ -701,7 +701,7 @@ export function getDocumentSummary(db: Db, documentId: string): DocumentSummary 
 }
 
 /**
- * Persist (or clear, with null) a document's OCR recognition (Phase 38). The pages
+ * Persist (or clear, with null) a document's OCR recognition. The pages
  * are CONTENT: they live only in this (possibly encrypted) DB column — callers must
  * never put them into logs or the audit trail. Survives re-index deliberately (like
  * `origin_json`: it states where the text CAME from; re-running the OCR task is the
@@ -735,7 +735,7 @@ export function getDocumentOcrPages(db: Db, documentId: string): OcrPage[] | nul
 }
 
 /**
- * Record a generated document's provenance (Phase 34 D27 / Phase 35 D28): `origin_json`
+ * Record a generated document's provenance: `origin_json`
  * holds a `DocumentOrigin` (translation or compare). Also clears `original_path` — a materialized
  * document's "original" was a transient generated file that is shredded after import,
  * so a dangling path must not linger in the row. Provenance survives re-index
@@ -766,7 +766,7 @@ const EXPORTABLE_TEXT_EXTENSIONS: ReadonlySet<string> = new Set([
 ])
 
 /**
- * Read a TEXT document's stored content for export (Phase 34): materialized
+ * Read a TEXT document's stored content for export: materialized
  * translations are Markdown, so saving the stored copy verbatim IS the export. Only
  * plain-text formats are exportable this way (a PDF/DOCX stored copy is the original
  * binary, not text). In an encrypted workspace the `.enc` copy is decrypted to a

@@ -4,13 +4,13 @@ import type { PreflightResult } from '../../shared/types'
 
 export type { PreflightResult }
 
-// Launch preflight (spec §11.4 / Phase 13 — non-technical first-run polish).
+// Launch preflight (spec §11.4 — non-technical first-run polish).
 //
 // On a commercial drive the buyer is non-technical. Before the app lands on the
 // encrypted-workspace gate we run a friendly, NON-BLOCKING check: is the drive writable,
 // is there free space, and is it a known-slow drive? Every message follows the spec §11.4
-// tone — encouraging, never "your hardware is bad". This REUSES the Phase-1 drive status
-// (`buildDriveStatus`) + the Phase-7 benchmark (`measureDriveSpeed`/`buildWarnings`); it
+// tone — encouraging, never "your hardware is bad". This REUSES the drive status
+// (`buildDriveStatus`) + the benchmark probe (`measureDriveSpeed`/`buildWarnings`); it
 // does not add a second probe. STRICTLY LOCAL: only fs (no network) — the drive-speed
 // function is injectable so the test suite stays deterministic + makes zero I/O surprises.
 
@@ -39,11 +39,11 @@ export async function runPreflight(deps: PreflightDeps): Promise<PreflightResult
   const minFree = deps.minFreeBytes ?? LOW_FREE_SPACE_BYTES
   const measure = deps.measureSpeed ?? measureDriveSpeed
 
-  // Reuse the Phase-1 path resolution + drive status (writable + free space + OS/arch).
+  // Reuse the workspace path resolution + drive status (writable + free space + OS/arch).
   const paths = resolvePaths({ envRoot: deps.rootPath, fallbackRoot: deps.rootPath })
   const status = await buildDriveStatus(paths)
 
-  // Reuse the Phase-7 drive-speed probe + warning copy. Passing the neutral 'BALANCED'
+  // Reuse the benchmark drive-speed probe + warning copy. Passing the neutral 'BALANCED'
   // profile skips `buildWarnings`' TINY/UNKNOWN (hardware) branches, so it can only emit a
   // drive note — which is therefore the single element it returns here. (If 'BALANCED' ever
   // became a warned profile, this index-0 assumption would break; today it cannot.)

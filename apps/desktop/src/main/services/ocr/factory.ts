@@ -3,12 +3,12 @@ import { join } from 'node:path'
 import type { OcrEngine } from './index'
 import { createTesseractOcrEngine } from './tesseract'
 
-// Availability-aware OCR selector (Phase 38), the transcriber/reranker D9 pattern:
+// Availability-aware OCR selector, the transcriber/reranker pattern:
 // NO mock fallback. A real `TesseractOcrEngine` is selected only when the drive's
 // `ocr/` dir holds at least one vendored `<lang>.traineddata.gz`; otherwise the
 // selector returns NULL — photo imports fail per-file with friendly copy and a
-// detected scan shows its notice without the "Make searchable (OCR)" offer (D14:
-// availability-driven, no settings key).
+// detected scan shows its notice without the "Make searchable (OCR)" offer
+// (availability-driven, no settings key).
 
 /** The drive dir holding the vendored OCR language files (drive-layout.md). */
 export function ocrAssetsDir(rootPath: string): string {

@@ -38,11 +38,11 @@ const api = {
   updateSettings: (patch: Partial<AppSettings>): Promise<AppSettings> =>
     ipcRenderer.invoke(IPC.updateSettings, patch),
 
-  // ---- Privacy / offline policy (Phase 8) ----
+  // ---- Privacy / offline policy ----
   /** Effective privacy policy + derived network flags (policy ∧ setting). */
   getPolicy: (): Promise<PolicyStatus> => ipcRenderer.invoke(IPC.getPolicy),
 
-  // ---- Encrypted workspace lifecycle (Phase 9) ----
+  // ---- Encrypted workspace lifecycle ----
   /** Current workspace state (uninitialized | locked | unlocked) for the unlock gate. */
   getWorkspaceState: (): Promise<WorkspaceStateInfo> =>
     ipcRenderer.invoke(IPC.getWorkspaceState),
@@ -54,7 +54,7 @@ const api = {
     ipcRenderer.invoke(IPC.createWorkspace, password, mode),
   /** Re-encrypt + shred the working DB and return to the locked state. */
   lockWorkspace: (): Promise<WorkspaceStateInfo> => ipcRenderer.invoke(IPC.lockWorkspace),
-  /** Change the vault password (Phase 32; unlocked only). Wrong current password is a
+  /** Change the vault password (unlocked only). Wrong current password is a
    *  normal failure result, like unlockWorkspace. */
   changeWorkspacePassword: (
     currentPassword: string,
@@ -62,7 +62,7 @@ const api = {
   ): Promise<WorkspaceActionResult> =>
     ipcRenderer.invoke(IPC.changeWorkspacePassword, currentPassword, nextPassword),
 
-  // ---- Models + runtime (Phase 2) ----
+  // ---- Models + runtime ----
   listModels: (): Promise<ModelInfo[]> => ipcRenderer.invoke(IPC.listModels),
   selectModel: (
     modelId: string
@@ -76,11 +76,11 @@ const api = {
   stopRuntime: (): Promise<void> => ipcRenderer.invoke(IPC.stopRuntime),
   /** Read-only runtime health/state (Diagnostics, spec §7.11). */
   getRuntimeStatus: (): Promise<RuntimeStatus> => ipcRenderer.invoke(IPC.getRuntimeStatus),
-  /** The drive's installed sidecar build (.paid-runtime.json), or null (Phase 16). */
+  /** The drive's installed sidecar build (.paid-runtime.json), or null. */
   getRuntimeInstall: (): Promise<RuntimeInstallInfo | null> =>
     ipcRenderer.invoke(IPC.getRuntimeInstall),
 
-  // ---- In-app model downloader (Phase 18) ----
+  // ---- In-app model downloader ----
   /** Start downloading one model's weights. Gated in the main process (policy ∧ setting);
    *  `licenseAccepted` carries the confirmation dialog's explicit license acknowledgement. */
   downloadModel: (modelId: string, opts?: { licenseAccepted?: boolean }): Promise<DownloadJob> =>
@@ -92,21 +92,21 @@ const api = {
   cancelDownload: (jobId: string): Promise<DownloadJob> =>
     ipcRenderer.invoke(IPC.cancelDownload, jobId),
 
-  // ---- Hardware benchmark (Phase 7) ----
+  // ---- Hardware benchmark ----
   /** Detect hardware + measure drive speed, persist + return the result. Strictly local. */
   runBenchmark: (): Promise<BenchmarkResult> => ipcRenderer.invoke(IPC.runBenchmark),
   /** "Try GPU again": clears the compatibility-mode flag, re-probes, returns fresh settings. */
   tryGpuAgain: (): Promise<AppSettings> => ipcRenderer.invoke(IPC.tryGpuAgain),
 
-  // ---- Launch preflight (Phase 13) ----
+  // ---- Launch preflight ----
   /** Friendly, non-blocking first-run drive check (writable / free space / slow drive). */
   runPreflight: (): Promise<PreflightResult> => ipcRenderer.invoke(IPC.runPreflight),
 
-  // ---- Chat (Phase 3) ----
+  // ---- Chat ----
   createConversation: (opts?: {
     title?: string
     mode?: 'chat' | 'documents'
-    /** "Ask selected documents" scope (Phase 17); only meaningful for documents mode. */
+    /** "Ask selected documents" scope; only meaningful for documents mode. */
     scopeDocumentIds?: string[] | null
   }): Promise<Conversation> => ipcRenderer.invoke(IPC.createConversation, opts),
   /** Replace a conversation's "ask selected documents" scope; null = whole corpus. */
@@ -132,40 +132,40 @@ const api = {
   /** Save a transcript to a user-chosen file; resolves with the path, or null on cancel. */
   exportConversation: (conversationId: string): Promise<string | null> =>
     ipcRenderer.invoke(IPC.exportConversation, conversationId),
-  /** Full-text search across all conversations (Phase 31). Results group hits per
+  /** Full-text search across all conversations. Results group hits per
    *  conversation, best match first; snippets carry SEARCH_MARK_* highlight markers. */
   searchConversations: (query: string): Promise<ConversationSearchResult[]> =>
     ipcRenderer.invoke(IPC.searchConversations, query),
   /** Tail of the local log file (Diagnostics, spec §7.11). Local-only. */
   getLogTail: (): Promise<string[]> => ipcRenderer.invoke(IPC.getLogTail),
 
-  // ---- Audit log (Phase 19) ----
+  // ---- Audit log ----
   /** Page through the local activity log, newest-first (`beforeId` = "load more" cursor). */
   getAuditEvents: (limit?: number, beforeId?: string | null): Promise<AuditEvent[]> =>
     ipcRenderer.invoke(IPC.getAuditEvents, limit, beforeId),
   /** Save the activity log to a user-chosen file; resolves with the path, or null on cancel. */
   exportAuditLog: (): Promise<string | null> => ipcRenderer.invoke(IPC.exportAuditLog),
 
-  // ---- Voice dictation (Phase 37) ----
+  // ---- Voice dictation ----
   /** Transcribe recorded composer audio (16 kHz mono WAV bytes) into plain text, fully
    *  locally. The audio exists in main only as a shredded transient; nothing is stored,
    *  logged, or audited, and the text is only ever inserted for review — never sent. */
   transcribeDictation: (audio: Uint8Array): Promise<string> =>
     ipcRenderer.invoke(IPC.transcribeDictation, audio),
 
-  // ---- RAG / document Q&A (Phase 6) ----
+  // ---- RAG / document Q&A ----
   /** Stream a document-grounded answer; resolves with the final assistant message
    *  (which carries `citations`). Tokens arrive via onToken, like sendChatMessage. */
   askDocuments: (conversationId: string, question: string): Promise<Message> =>
     ipcRenderer.invoke(IPC.askDocuments, conversationId, question),
 
-  // ---- Documents (Phase 4) ----
+  // ---- Documents ----
   /** Open the OS picker for files (default) or a folder; returns selected paths. */
   pickDocuments: (mode?: 'files' | 'folder'): Promise<string[]> =>
     ipcRenderer.invoke(IPC.pickDocuments, mode),
   importDocuments: (paths: string[]): Promise<ImportJob> =>
     ipcRenderer.invoke(IPC.importDocuments, paths),
-  /** What a picked selection contains (Phase 36, D35) — drives the audio size confirm. */
+  /** What a picked selection contains — drives the audio size confirm. */
   importPreflight: (paths: string[]): Promise<ImportPreflight> =>
     ipcRenderer.invoke(IPC.importPreflight, paths),
   getImportJob: (jobId: string): Promise<ImportJobStatus> =>
@@ -179,11 +179,11 @@ const api = {
   previewDocument: (documentId: string): Promise<DocumentPreview> =>
     ipcRenderer.invoke(IPC.previewDocument, documentId),
   /** Save a text document's stored content (e.g. a translation) to a user-chosen
-   *  file; resolves with the path, or null on cancel (Phase 34). */
+   *  file; resolves with the path, or null on cancel. */
   exportDocument: (documentId: string): Promise<string | null> =>
     ipcRenderer.invoke(IPC.exportDocument, documentId),
 
-  // ---- Document tasks (Phases 33–35) ----
+  // ---- Document tasks ----
   /** Start a document task (summary; translation with `params.targetLang`; compare
    *  with exactly two documentIds). Strictly one at a time; refused while a chat
    *  answer is streaming. */
@@ -217,7 +217,7 @@ const api = {
     ipcRenderer.on(ch, handler)
     return () => ipcRenderer.removeListener(ch, handler)
   },
-  /** Subscribe to Deep-mode reasoning deltas (Phase 20) — separate from answer tokens,
+  /** Subscribe to Deep-mode reasoning deltas — separate from answer tokens,
    *  shown live as the collapsed "Thinking…" block and never persisted. */
   onReasoning: (requestId: string, cb: (delta: string) => void): (() => void) => {
     const ch = STREAM.reasoning(requestId)
@@ -233,7 +233,7 @@ const api = {
     ipcRenderer.on(ch, handler)
     return () => ipcRenderer.removeListener(ch, handler)
   },
-  /** Subscribe to one-line runtime notices (Phase 15: compatibility-mode fallback). */
+  /** Subscribe to one-line runtime notices (e.g. the compatibility-mode fallback). */
   onRuntimeNotice: (cb: (message: string) => void): (() => void) => {
     const handler = (_e: unknown, message: string) => cb(message)
     ipcRenderer.on(EVENTS.runtimeNotice, handler)

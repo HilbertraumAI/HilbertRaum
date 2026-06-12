@@ -8,7 +8,7 @@ import type {
 } from './index'
 import { LlamaServer, type LlamaServerOptions } from './sidecar'
 
-// Real local inference (spec §3.2, §7.5, Milestone 2). `LlamaRuntime` drops in behind
+// Real local inference (spec §3.2, §7.5). `LlamaRuntime` drops in behind
 // the existing `ModelRuntime` interface: it spawns a `llama.cpp` `llama-server` sidecar
 // bound to 127.0.0.1 (see `sidecar.ts`), then streams tokens from the server's
 // OpenAI-compatible `/v1/chat/completions` endpoint. The server applies the model's
@@ -16,8 +16,8 @@ import { LlamaServer, type LlamaServerOptions } from './sidecar'
 // prompt format. Fully offline: the only socket is loopback to the sidecar.
 
 /**
- * Args every CHAT sidecar gets (Phase 20, wave-1 decision D5 (architecture.md "Chat & streaming") — verified against the pinned
- * llama.cpp b9585 source):
+ * Args every CHAT sidecar gets (verified against the pinned llama.cpp b9585 source;
+ * rationale in architecture.md "Chat & streaming"):
  *   --jinja                      the kwargs-driven thinking switch only acts in the
  *                                jinja template path (b9585 default is already jinja;
  *                                pinned explicitly so the mechanism's precondition is
@@ -39,8 +39,8 @@ export type LlamaRuntimeDeps = Pick<
   | 'healthTimeoutMs'
   | 'healthIntervalMs'
   | 'host'
-  // Phase 15 (GPU ladder): the ladder forces CPU via `extraArgs: ['--device','none']`
-  // (NEVER `-ngl` — locked decision) and hooks mid-session crashes.
+  // GPU ladder: forces CPU via `extraArgs: ['--device','none']` — `--device none` is
+  // the ONLY CPU-forcing mechanism, NEVER `-ngl` — and hooks mid-session crashes.
   | 'extraArgs'
   | 'onUnexpectedExit'
 > & {
@@ -48,8 +48,8 @@ export type LlamaRuntimeDeps = Pick<
 }
 
 /**
- * What an answer-depth mode means for the chat request (wave-1 decision D4 (architecture.md "Chat & streaming"), LOCKED at
- * Phase 20 start):
+ * What an answer-depth mode means for the chat request (LOCKED — architecture.md
+ * "Chat & streaming"):
  *
  *   fast      thinking off + temperature 0.7 + a modest token cap — quick answers
  *   balanced  thinking off, the server/model sampling defaults — the default mode,
@@ -111,9 +111,9 @@ function parseSseLine(line: string): { delta?: string; reasoning?: string; done?
 
 /**
  * Parse a Server-Sent-Events stream of OpenAI chat-completion chunks, yielding each
- * answer-text delta. Reasoning deltas (`delta.reasoning_content`, Phase 20 Deep mode)
- * are reported through `onReasoning` and are NEVER yielded — the yielded stream stays
- * answer-only, so the locked Phase-3 token contract is untouched. Handles partial
+ * answer-text delta. Reasoning deltas (`delta.reasoning_content`, Deep mode) are
+ * reported through `onReasoning` and are NEVER yielded — the yielded stream stays
+ * answer-only, so the locked streaming token contract is untouched. Handles partial
  * lines across reads, ignores keep-alive/comment lines, and stops on the `[DONE]`
  * sentinel. Honours `signal` so an aborted request stops promptly and cancels the
  * underlying reader.
@@ -194,8 +194,8 @@ export class LlamaRuntime implements ModelRuntime {
    * Stream assistant tokens from the OpenAI-compatible endpoint. `messages` map
    * directly to role/content; `maxTokens`/`temperature` map to `max_tokens`/
    * `temperature` (explicit values win over the mode mapping). The answer-depth
-   * `mode` (Phase 20) maps to `chat_template_kwargs.enable_thinking` — verified
-   * per-request support at the pinned b9585 — plus the D4 sampling defaults; with
+   * `mode` maps to `chat_template_kwargs.enable_thinking` — verified per-request
+   * support at the pinned b9585 — plus the per-mode sampling defaults; with
    * thinking on, reasoning deltas surface via `options.onReasoning`, never in the
    * yielded answer stream. Aborts the fetch + generator on `options.signal`.
    */
@@ -222,8 +222,8 @@ export class LlamaRuntime implements ModelRuntime {
       signal: options?.signal
     })
     if (!res.ok || !res.body) {
-      // Cancel the body so undici releases the connection instead of holding it until
-      // GC (L1, audit round 4).
+      // Cancel the body so undici releases the connection instead of holding it
+      // until GC.
       void res.body?.cancel().catch(() => undefined)
       throw new Error(`Chat request failed: HTTP ${res.status}`)
     }

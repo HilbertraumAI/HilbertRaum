@@ -6,7 +6,7 @@ import './tokens.css'
 import './styles.css'
 
 // Apply a theme before first paint. Settings live in the (possibly encrypted, so
-// unreadable pre-unlock) DB — until they load, follow the OS (Phase 23, D-UI2).
+// unreadable pre-unlock) DB — until they load, follow the OS.
 initTheme()
 
 const container = document.getElementById('root')

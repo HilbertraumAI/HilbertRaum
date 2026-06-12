@@ -29,11 +29,11 @@ export interface ParsedDocument {
 }
 
 /**
- * Optional per-parse context (Phase 36, ADDITIVE — the text parsers ignore it).
- * Carries the injected transcriber the AudioParser needs (the embedder-injection
- * precedent: parsers stay constructor-free singletons; the dependency arrives per call
- * from `IngestionDeps`), a coarse progress callback, and the workspace documents dir
- * for content transients (`.parse` infix → covered by the startup crash sweep).
+ * Optional per-parse context (ADDITIVE — the text parsers ignore it). Carries the
+ * injected transcriber the AudioParser needs (parsers stay constructor-free
+ * singletons; the dependency arrives per call from `IngestionDeps`), a coarse
+ * progress callback, and the workspace documents dir for content transients
+ * (`.parse` infix → covered by the startup crash sweep).
  */
 export interface ParseContext {
   transcriber?: Transcriber | null
@@ -42,13 +42,13 @@ export interface ParseContext {
   /** Directory for transient content files the parse may create (storeDir). */
   workDir?: string
   /**
-   * OCR engine for photo imports (Phase 38, the transcriber-injection precedent).
-   * Optional AND nullable: absent/null means a photo FILE fails friendly with the
-   * needs-the-OCR-files copy — text ingestion is unaffected (graceful-fallback rule).
+   * OCR engine for photo imports. Optional AND nullable: absent/null means a photo
+   * FILE fails friendly with the needs-the-OCR-files copy — text ingestion is
+   * unaffected (graceful-fallback rule).
    */
   ocrEngine?: OcrEngine | null
   /**
-   * Stored per-page OCR recognition for a scan-detected PDF (Phase 38): when present,
+   * Stored per-page OCR recognition for a scan-detected PDF: when present,
    * the PdfParser turns an image-only PDF into one segment per recognized page
    * instead of failing with the scan notice. Fed from `documents.ocr_json`.
    */
@@ -86,12 +86,12 @@ export const PARSERS: readonly DocumentParser[] = [
   ImageParser
 ]
 
-/** True when this file/title resolves to the audio parser (Phase 36 helpers). */
+/** True when this file/title resolves to the audio parser. */
 export function isAudioPath(filePath: string): boolean {
   return (AUDIO_EXTENSIONS as readonly string[]).includes(extname(filePath).toLowerCase())
 }
 
-/** True when this file/title resolves to the photo parser (Phase 38). */
+/** True when this file/title resolves to the photo parser. */
 export function isImagePath(filePath: string): boolean {
   return (IMAGE_EXTENSIONS as readonly string[]).includes(extname(filePath).toLowerCase())
 }

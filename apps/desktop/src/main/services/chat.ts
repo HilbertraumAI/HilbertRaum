@@ -21,7 +21,7 @@ import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from './runtime'
 
 const DEFAULT_TITLE = 'New chat'
 
-// Base system prompt — verbatim from spec §7.6. RAG context injection (Phase 6)
+// Base system prompt — verbatim from spec §7.6. RAG context injection (rag/index.ts)
 // appends source-labelled chunks after this preamble.
 export const BASE_SYSTEM_PROMPT = `You are Private AI Drive Lite, a local offline assistant running on the user's laptop.
 You must be helpful, accurate, and honest about uncertainty.
@@ -31,18 +31,19 @@ When using provided document context, answer only from the context when the ques
 If the context is insufficient, say what is missing.
 For document answers, include citations using the provided source labels.`
 
-/** Build the system prompt for a request. RAG context is appended in Phase 6. */
+/** Build the plain-chat system prompt (document answers compose their own in rag/). */
 export function buildSystemPrompt(): string {
   return BASE_SYSTEM_PROMPT
 }
 
 /**
  * Remove `<think>…</think>` reasoning blocks (including an unclosed trailing block
- * from a stream stopped mid-thought) from assistant text — Phase 20, wave-1 decision D6 (architecture.md "Chat & streaming").
+ * from a stream stopped mid-thought) from assistant text (architecture.md "Chat &
+ * streaming").
  *
  * Reasoning must never persist and must never be fed back as history (Qwen guidance:
- * think blocks confuse the model when replayed). The normal Phase-20 path already
- * separates reasoning out of the answer stream (`--reasoning-format deepseek` →
+ * think blocks confuse the model when replayed). The normal path already separates
+ * reasoning out of the answer stream (`--reasoning-format deepseek` →
  * `delta.reasoning_content`), so this is defense-in-depth: it catches inline tags
  * from a differently configured server and scrubs any legacy persisted rows.
  * Untouched text returns as-is; when blocks were removed the seams are trimmed.
@@ -146,9 +147,9 @@ export interface CreateConversationOptions {
   modelId?: string | null
   mode?: 'chat' | 'documents'
   /**
-   * "Ask selected documents" scope (spec §10.4, Phase 17): retrieval for this
-   * conversation only searches these documents. Null/empty = the whole corpus.
-   * Only meaningful for `mode: 'documents'`.
+   * "Ask selected documents" scope (spec §10.4): retrieval for this conversation
+   * only searches these documents. Null/empty = the whole corpus. Only meaningful
+   * for `mode: 'documents'`.
    */
   scopeDocumentIds?: string[] | null
 }
@@ -262,7 +263,7 @@ export function appendMessage(db: Db, input: AppendMessageInput): Message {
  * Remove the conversation's last message IF it is an assistant turn (used by
  * "regenerate"). Returns true if one was deleted.
  *
- * Deliberately scoped to the LAST message, not the last *assistant* message (M1): after
+ * Deliberately scoped to the LAST message, not the last *assistant* message: after
  * a failed generation the conversation ends in a user turn — deleting the most recent
  * assistant message would then permanently destroy the answer to a *previous* question.
  * In that case regenerate just re-streams from history without deleting anything.
@@ -307,12 +308,12 @@ interface SearchRow {
 }
 
 /**
- * Full-text search across all conversations (Phase 31, wave-3 plan §4). The query is
- * sanitized through the shared `buildFtsMatchQuery` (FTS5 operators in user text never
- * reach MATCH raw); hits are ranked bm25 with a newest-first tie-break (D23) and
- * grouped by conversation, conversations ordered by their best hit. Snippets come from
- * FTS5's snippet() (verified in both runtimes — R-S1), matched terms wrapped in the
- * SEARCH_MARK_* control characters for renderer-side highlighting.
+ * Full-text search across all conversations. The query is sanitized through the
+ * shared `buildFtsMatchQuery` (FTS5 operators in user text never reach MATCH raw);
+ * hits are ranked bm25 with a newest-first tie-break and grouped by conversation,
+ * conversations ordered by their best hit. Snippets come from FTS5's snippet(),
+ * matched terms wrapped in the SEARCH_MARK_* control characters for renderer-side
+ * highlighting.
  *
  * Privacy: queries and snippets are CONTENT — callers must never log or audit them.
  */
@@ -375,7 +376,7 @@ export function maybeSetTitleFromFirstMessage(db: Db, conversationId: string, co
 
 /**
  * Render a conversation as a Markdown transcript for export (spec §7.6 "export chat
- * transcript" — audit M13). Pure string assembly; the IPC layer handles the save dialog.
+ * transcript"). Pure string assembly; the IPC layer handles the save dialog.
  */
 export function exportTranscript(db: Db, conversationId: string): { title: string; markdown: string } {
   const conv = getConversation(db, conversationId)
@@ -411,7 +412,8 @@ export function buildChatMessages(db: Db, conversationId: string): ChatMessage[]
   const messages: ChatMessage[] = [{ role: 'system', content: buildSystemPrompt() }]
   for (const m of history) {
     if (m.role === 'user' || m.role === 'assistant') {
-      // Assistant turns are scrubbed of think blocks before being replayed (D6).
+      // Assistant turns are scrubbed of think blocks before being replayed —
+      // replayed reasoning confuses the model (see stripThinkBlocks).
       messages.push({
         role: m.role,
         content: m.role === 'assistant' ? stripThinkBlocks(m.content) : m.content
@@ -425,7 +427,7 @@ export interface GenerateOptions {
   signal?: AbortSignal
   /** Called with each streamed token so the IPC layer can forward it to the renderer. */
   onToken?: (token: string) => void
-  /** Answer-depth mode (Phase 20), forwarded to the runtime. Omitted = 'balanced'. */
+  /** Answer-depth mode, forwarded to the runtime. Omitted = 'balanced'. */
   mode?: ChatDepthMode
   /** Called with each reasoning delta (Deep mode) — live display only, never persisted. */
   onReasoning?: (delta: string) => void
@@ -462,13 +464,13 @@ export async function generateAssistantMessage(
     // Any other error is a real failure and propagates to the IPC layer.
     if (!isAbortError(err, opts.signal)) throw err
   }
-  // Reasoning never reaches the DB (D6): the runtime already streams it separately,
+  // Reasoning never reaches the DB: the runtime already streams it separately,
   // and any inline think block that slipped into the answer is stripped here.
   content = stripThinkBlocks(content)
   // Persist whatever was produced — on a stop, that is the partial text so far. A stop
   // BEFORE the first token produced nothing: persist nothing (a permanent empty
   // assistant bubble in the transcript otherwise) and return an unpersisted, empty
-  // message to keep the resolve contract (L2, audit round 4).
+  // message to keep the resolve contract.
   if (content === '') return emptyAssistantMessage(conversationId)
   return appendMessage(db, { conversationId, role: 'assistant', content })
 }

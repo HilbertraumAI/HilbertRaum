@@ -4,7 +4,7 @@ import type { ModelManifest } from '../../shared/manifest'
 import { isRealSha256 } from '../../shared/manifest'
 import { sha256File, verifyChecksum, weightPath } from './models'
 
-// Drive preparation logic (spec §6 / §12 — Phase 11).
+// Drive preparation logic (spec §6 / §12).
 //
 // This module is the CANONICAL, unit-tested reference for what `prepare-drive` and
 // `verify-models` do: which directories a prepared drive contains, the exact shape of
@@ -40,11 +40,11 @@ export const DRIVE_LAYOUT_DIRS: readonly string[] = [
   'models/transcriber',
   'model-manifests',
   ...DRIVE_OS_DIRS.map((os) => `runtime/llama.cpp/${os}`),
-  // Second sidecar family (Phase 36): the whisper.cpp transcriber CLI. Upstream ships
+  // Second sidecar family: the whisper.cpp transcriber CLI. Upstream ships
   // a prebuilt Windows build only; the mac/linux dirs exist for the documented
   // source-build provisioning step (drive-layout.md).
   ...DRIVE_OS_DIRS.map((os) => `runtime/whisper.cpp/${os}`),
-  // OCR language files (Phase 38): `<lang>.traineddata.gz`, vendored at drive-build
+  // OCR language files: `<lang>.traineddata.gz`, vendored at drive-build
   // time (runtime-sources.yaml `ocr:` block) — the engine never fetches at runtime.
   'ocr',
   'logs',

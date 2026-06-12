@@ -7,7 +7,7 @@ import {
 } from 'node:crypto'
 import { argon2id } from '@noble/hashes/argon2.js'
 
-// KDF + AEAD primitives for the encrypted workspace (spec §3.5, Phase 9).
+// KDF + AEAD primitives for the encrypted workspace (spec §3.5).
 //
 // Pure + I/O-free so it is trivially unit-testable. Two responsibilities:
 //   1. KDF — derive a 32-byte AES key from a password + salt. The algorithm and its
@@ -16,10 +16,10 @@ import { argon2id } from '@noble/hashes/argon2.js'
 //      tag stored alongside). A wrong key or tampered ciphertext makes `decrypt` throw.
 //
 // KDF: NEW vaults default to **Argon2id** (the OWASP-recommended password KDF), provided
-// by the pure-JS, audited `@noble/hashes` — so there is NO fragile native `argon2` build
-// (the original blocker, R4). `scrypt` from `node:crypto` is still fully supported so any
-// vault created under the earlier default unlocks unchanged: the descriptor records the
-// `algo` + params, and `deriveKey` dispatches on them. No on-disk format change.
+// by the pure-JS, audited `@noble/hashes` — so there is NO fragile native `argon2` build.
+// `scrypt` from `node:crypto` is still fully supported so any vault created under the
+// earlier default unlocks unchanged: the descriptor records the `algo` + params, and
+// `deriveKey` dispatches on them. No on-disk format change.
 
 export type KdfAlgo = 'scrypt' | 'argon2id'
 
@@ -69,7 +69,7 @@ const SALT_BYTES = 16
 const IV_BYTES = 12
 const TAG_BYTES = 16
 
-/** Size of the random vault DATA key (descriptor v2 envelope, Phase 32). */
+/** Size of the random vault DATA key (descriptor v2 envelope). */
 export const DATA_KEY_BYTES = 32
 
 /** Generate a fresh random salt for a new vault. */
@@ -91,7 +91,7 @@ export function generateDataKey(): Buffer {
  * Bounds for descriptor-supplied KDF params. The descriptor (`config/workspace.json`)
  * is UNENCRYPTED and attacker-writable on a removable drive: unbounded params (e.g.
  * argon2id `m: 2e9` KiB) would make every unlock attempt a multi-GB allocation — a
- * denial-of-service on the vault (audit SEC-B). Tampering cannot disclose data (a wrong
+ * denial-of-service on the vault. Tampering cannot disclose data (a wrong
  * key still fails the verifier); these bounds just keep the failure mode sane.
  */
 function validateKdfBounds(params: KdfParams): void {

@@ -61,7 +61,7 @@ export const log = {
 
 /**
  * The last `maxLines` lines of the local log, for the Diagnostics screen (spec §7.11
- * "show recent local logs" — audit M14). Read-only, local-only, never uploaded.
+ * "show recent local logs"). Read-only, local-only, never uploaded.
  */
 export function readLogTail(maxLines = 200): string[] {
   if (!logFile || !existsSync(logFile)) return []

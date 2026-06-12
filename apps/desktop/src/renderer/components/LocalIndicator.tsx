@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import * as Tooltip from '@radix-ui/react-tooltip'
 
-// Ambient privacy signal (Phase 27, guidelines §7): a quiet, persistent "Local ·
+// Ambient privacy signal (guidelines §7): a quiet, persistent "Local ·
 // Offline" status — subtle glyph, neutral color, never an alarm. Hover/focus reveals
 // the reassurance ("Everything stays on this drive…"); clicking opens Settings →
 // Privacy & data, where the full posture is spelled out. When the user has enabled

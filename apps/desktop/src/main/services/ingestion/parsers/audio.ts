@@ -2,13 +2,13 @@ import type { DocumentParser, ExtractedSegment, ParseContext, ParsedDocument } f
 import { AUDIO_DECODE_ERROR_PREFIX } from '../../transcriber/cli'
 import { log } from '../../logging'
 
-// Audio "parser" (Phase 36): a recording becomes a normal corpus document by running
+// Audio "parser": a recording becomes a normal corpus document by running
 // the injected transcriber (whisper.cpp CLI) and mapping its timestamped segments onto
 // `ExtractedSegment`s. Page-less, so the txt/md chunk-dedup rule applies; the time
-// range rides `sectionLabel` → `Citation.section`, zero citation-path changes (D29).
+// range rides `sectionLabel` → `Citation.section`, zero citation-path changes.
 //
-// Extensions = exactly what the pinned whisper-cli v1.8.6 DECODES (R-W2, probed with
-// real files 2026-06-11): wav, mp3, flac, ogg via bundled miniaudio. m4a/aac is NOT
+// Extensions = exactly what the pinned whisper-cli v1.8.6 DECODES (probed with
+// real files): wav, mp3, flac, ogg via bundled miniaudio. m4a/aac is NOT
 // decodable (and we do not bundle ffmpeg) — descoped with friendly convert-to copy.
 //
 // SEGMENT PACKING (the chunker interaction): whisper emits one short segment per
@@ -20,7 +20,7 @@ import { log } from '../../logging'
 // one packed segment, verbatim, with NO overlap — which is what lets re-extraction
 // (preview/translation/compare) read the stored CHUNKS instead of re-transcribing.
 
-/** Extensions the pinned whisper-cli actually decodes (R-W2 — keep the promise honest). */
+/** Extensions the pinned whisper-cli actually decodes — keep the promise honest. */
 export const AUDIO_EXTENSIONS = ['.wav', '.mp3', '.flac', '.ogg'] as const
 
 /** Friendly copy when no transcriber is available (binary or weights missing). */
@@ -55,7 +55,7 @@ export function formatAudioTimestamp(ms: number): string {
   return h > 0 ? `${h}:${mm}:${ss}` : `${mm}:${ss}`
 }
 
-/** The D29 time-range label that rides `sectionLabel` → `Citation.section`. */
+/** The time-range label that rides `sectionLabel` → `Citation.section`. */
 export function audioRangeLabel(startMs: number, endMs: number): string {
   return `${formatAudioTimestamp(startMs)}–${formatAudioTimestamp(endMs)}`
 }

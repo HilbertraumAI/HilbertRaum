@@ -1,22 +1,22 @@
 import type { ExtractedSegment } from './parsers'
 
 // Chunker (spec §7.7). Splits a document's extracted segments into overlapping,
-// fixed-size chunks ready for embedding (Phase 5) and retrieval (Phase 6).
+// fixed-size chunks ready for embedding and retrieval.
 //
-// Token counting is an APPROXIMATION for the mock phase: we treat each whitespace-
-// delimited word as one token. This is deterministic, dependency-free, and good
-// enough to size chunks; a real tokenizer can replace `tokenize`/`approxTokenCount`
-// later without changing the chunk metadata shape. The real model's context budget is
-// generous relative to the 500-token target, so the approximation is safe.
+// Token counting is an APPROXIMATION: each whitespace-delimited word counts as one
+// token. This is deterministic, dependency-free, and good enough to size chunks; a
+// real tokenizer can replace `tokenize`/`approxTokenCount` without changing the chunk
+// metadata shape. The real model's context budget is generous relative to the
+// 500-token target, so the approximation is safe.
 //
 // Chunking is done WITHIN each segment, so a chunk never straddles a page or section
 // boundary — every chunk inherits exactly one `pageNumber`/`sectionLabel` from its
 // source segment (spec §7.7 chunk metadata). Overlap is applied within a segment only.
 //
-// PACKING (M6, audit round 4): consecutive segments with the SAME (pageNumber,
-// sectionLabel) are coalesced before windowing. Parsers like DOCX emit one segment per
-// paragraph (no labels at all); without packing, every paragraph became its own tiny
-// chunk — retrieval quality collapsed and a >1000-paragraph document silently hit the
+// PACKING: consecutive segments with the SAME (pageNumber, sectionLabel) are
+// coalesced before windowing. Parsers like DOCX emit one segment per paragraph (no
+// labels at all); without packing, every paragraph became its own tiny chunk —
+// retrieval quality collapsed and a >1000-paragraph document silently hit the
 // maxChunks cap. Coalescing preserves the never-cross-a-boundary invariant exactly,
 // because only label-identical neighbours are merged.
 

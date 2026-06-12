@@ -36,8 +36,8 @@ import {
 
 // Workspace vault: the lock/unlock lifecycle for the encrypted workspace (spec §7.9).
 //
-// `node:sqlite` has no SQLCipher, so we encrypt the WHOLE database FILE at rest (plan
-// §4b): the at-rest artifact is `paid.sqlite.enc`. On unlock we derive the key, verify
+// `node:sqlite` has no SQLCipher, so we encrypt the WHOLE database FILE at rest: the
+// at-rest artifact is `paid.sqlite.enc`. On unlock we derive the key, verify
 // the password against a small authenticated verifier, decrypt the blob to the working
 // file `paid.sqlite` ON THE DRIVE, and open it normally. On lock/quit we checkpoint +
 // close, re-encrypt the working file back to `.enc`, then shred the plaintext copy.
@@ -51,7 +51,7 @@ import {
 /** Legacy descriptor format: data encrypted directly under the password-derived key. */
 export const VAULT_VERSION = 1
 /**
- * Envelope format (Phase 32, decision D24): a random 32-byte DATA key encrypts the DB +
+ * Envelope format: a random 32-byte DATA key encrypts the DB +
  * document sidecars; the password-derived key (KEK) only WRAPS it in the descriptor.
  * A password change then re-wraps one blob (O(1)) instead of re-encrypting the corpus.
  * New vaults are created v2; v1 vaults migrate on their FIRST password change (never on
@@ -105,8 +105,8 @@ export class WrongPasswordError extends Error {
 /**
  * Thrown when a password change and document work (import/re-index, which writes `.enc`
  * sidecars) would overlap — either operation refuses to START while the other runs, so
- * a sidecar is never written under a key that is being swapped out (Phase 32 guard).
- * The message is user-facing (§11.4 tone).
+ * a sidecar is never written under a key that is being swapped out.
+ * The message is user-facing (shown verbatim in the UI).
  */
 export class VaultBusyError extends Error {
   constructor(message: string) {
@@ -165,7 +165,7 @@ export function isDescriptorUnreadable(descriptorPath: string): boolean {
 }
 
 /** Persist the descriptor atomically (write temp + fsync + rename). The rename is the
- *  single commit point of the Phase-32 password-change journal, so the temp is fsynced
+ *  single commit point of the password-change journal, so the temp is fsynced
  *  first — a descriptor must never land half-written after a power cut. */
 export function writeVaultDescriptor(descriptorPath: string, d: VaultDescriptor): void {
   const tmp = `${descriptorPath}.tmp`
@@ -181,11 +181,11 @@ export function writeVaultDescriptor(descriptorPath: string, d: VaultDescriptor)
 
 // ---- file-level crypto + hygiene -------------------------------------------------
 //
-// STREAMING (M5, audit round 4): the previous implementations read the whole file into
-// one Buffer, which hit Node's ~2 GiB Buffer/IO ceilings — a workspace DB past that
-// size could no longer be locked (shutdown would silently leave plaintext on disk) or
-// re-opened. These versions stream in bounded chunks and write the EXACT same on-disk
-// frame (`MAGIC | iv | tag | ciphertext`), so existing vaults are unaffected.
+// These MUST stream in bounded chunks: reading the whole file into one Buffer hits
+// Node's ~2 GiB Buffer/IO ceilings — a workspace DB past that size could no longer be
+// locked (shutdown would silently leave plaintext on disk) or re-opened. The streaming
+// versions write the EXACT same on-disk frame (`MAGIC | iv | tag | ciphertext`), so
+// existing vaults are unaffected.
 
 /** Chunk size for streaming crypto + shredding. Bounds memory regardless of file size. */
 const FILE_CHUNK_BYTES = 8 * 1024 * 1024
@@ -298,8 +298,8 @@ export function decryptFile(srcPath: string, destPath: string, key: Buffer): voi
 
 /**
  * Best-effort secure delete: overwrite the file with random bytes (in bounded chunks —
- * a single `randomBytes(size)` throws past 2 GiB, which used to skip the unlink too),
- * then unlink. The unlink runs even if the overwrite fails. On SSDs wear-levelling means
+ * a single `randomBytes(size)` throws past 2 GiB), then unlink. The unlink runs even if
+ * the overwrite fails. On SSDs wear-levelling means
  * the original blocks may survive — documented in SECURITY.md and not over-promised.
  */
 export function shredFile(path: string): void {
@@ -366,7 +366,7 @@ export function shredStalePlaintext(vaultPaths: VaultPaths): void {
   }
 }
 
-// ---- password change: envelope rekey + journaled v1→v2 migration (Phase 32) -------
+// ---- password change: envelope rekey + journaled v1→v2 migration ------------------
 //
 // Two-phase swap, composed ONLY from the existing atomic primitives: every re-encrypted
 // file is STAGED as `<file>.new` (encryptFile's own `.tmp`-then-rename inside) and
@@ -541,10 +541,10 @@ export interface DocumentCipher {
 
 /**
  * Create a brand-new encrypted vault ON DISK, leaving it LOCKED (descriptor + `.enc`,
- * no plaintext working file). New vaults are v2 (envelope, Phase 32): a random data key
+ * no plaintext working file). New vaults are v2 (envelope): a random data key
  * encrypts the database; the password-derived KEK wraps it in the descriptor — so their
  * very first password change is already the O(1) re-wrap. Call `unlockEncryptedVault`
- * afterwards to open it. `opts.legacyV1` builds the pre-Phase-32 direct-key format and
+ * afterwards to open it. `opts.legacyV1` builds the legacy v1 direct-key format and
  * exists ONLY so tests can create migration fixtures — the app never passes it.
  */
 export function createEncryptedVaultOnDisk(
@@ -665,12 +665,12 @@ export function lockEncryptedVault(vaultPaths: VaultPaths, db: Db, key: Buffer):
 // ---- plaintext gating ------------------------------------------------------------
 
 /**
- * Is a plaintext (developer) workspace permitted? Gated by the Phase-8 policy AND a
+ * Is a plaintext (developer) workspace permitted? Gated by the drive policy AND a
  * developer/env signal. `encryptionRequired` is an absolute veto; `allowPlaintextDevMode`
  * must be true; and the caller must be a developer (dev build or developer mode).
  *
  * Pre-unlock the `developerMode` setting is unavailable (it lives in the encrypted DB),
- * so callers pass `isDev` as the proxy — documented in BUILD_STATE.
+ * so callers pass `isDev` as the proxy.
  */
 export function plaintextAllowed(
   policy: PrivacyPolicy,
@@ -695,7 +695,7 @@ export class WorkspaceController {
   private descriptor: VaultDescriptor | null
   private _mode: WorkspaceMode | null = null
   /** Open document-work holds (import/re-index writing `.enc` sidecars) — see the
-   *  Phase-32 race guard on `changePassword`/`beginDocumentWork`. */
+   *  race guard on `changePassword`/`beginDocumentWork`. */
   private docWork = 0
   /** True while `changePassword` runs (defensive: it is synchronous today). */
   private changingPassword = false
@@ -824,9 +824,9 @@ export class WorkspaceController {
    * `.enc` sidecars. Returns a release function (idempotent; call it in `finally`).
    * Refused while a password change is in progress — and `changePassword` symmetrically
    * refuses while any hold is open — so a sidecar is never encrypted under a key that
-   * the change is about to retire (the Phase-32 race guard; documented in
-   * security-model.md). No-op-ish for plaintext vaults: holds are counted but nothing
-   * conflicts (changePassword is unreachable there).
+   * the change is about to retire (docs/security-model.md). No-op-ish for plaintext
+   * vaults: holds are counted but nothing conflicts (changePassword is unreachable
+   * there).
    */
   beginDocumentWork(): () => void {
     if (this.changingPassword) {
@@ -845,7 +845,7 @@ export class WorkspaceController {
   }
 
   /**
-   * Change the vault password (Phase 32, decision D24). Runs UNLOCKED only. Verifies
+   * Change the vault password. Runs UNLOCKED only. Verifies
    * `currentPassword` against the existing verifier FIRST (a wrong one throws
    * `WrongPasswordError` — the same failure class as a wrong unlock). On a v2 vault the
    * change is O(1): re-wrap the data key in a fresh envelope descriptor (atomic
@@ -933,7 +933,7 @@ export class WorkspaceController {
     if (this._db && this.key && this.descriptor?.mode === 'encrypted') {
       lockEncryptedVault(this.vaultPaths, this._db, this.key)
       // Zero the key bytes before dropping the reference — otherwise the 32-byte key
-      // lingers in the heap until GC and could surface in a dump/swap (audit SEC-C).
+      // lingers in the heap until GC and could surface in a dump/swap.
       this.key.fill(0)
       this._db = null
       this.key = null

@@ -8,7 +8,7 @@ import type { OcrSources, RuntimeBuild, RuntimeOs, RuntimeSources } from '../../
 import { sha256File, verifyChecksum, weightPath, type HashStore } from './models'
 
 // Asset loader — the CANONICAL, unit-tested reference for the DIY `fetch-*` scripts
-// (Phase 12; see docs/packaging.md).
+// (see docs/packaging.md).
 //
 // Mirrors services/drive.ts: this module holds the pure/testable planning + selection +
 // verification logic, and `scripts/fetch-models.{ps1,sh}` + `scripts/fetch-runtime.
@@ -16,7 +16,7 @@ import { sha256File, verifyChecksum, weightPath, type HashStore } from './models
 // machine with no Node/npm. Keep the two in sync; this file is the source of truth.
 //
 // NETWORK IS EXPLICIT, NEVER AUTOMATIC: the scripts run on the drive-builder's online
-// machine at build time, and the in-app downloader (`downloads.ts`, Phase 18) drives the
+// machine at build time, and the in-app downloader (`downloads.ts`) drives the
 // injected-`fetchImpl` seam below only after its gates pass (policy ceiling ∧ the
 // default-off user setting ∧ a per-download confirmation). The app never auto-downloads.
 // Planning/selection/verify here are network-free (only fs + hashing), so the vitest
@@ -114,16 +114,16 @@ export async function planModelDownloads(
 export interface RuntimeSelector {
   os: RuntimeOs
   arch: string
-  /** Optional backend override; default = the first build listed for the os/arch (vulkan/metal since Phase 14). */
+  /** Optional backend override; default = the first build listed for the os/arch (vulkan/metal). */
   backend?: string
 }
 
 /**
  * Select the `llama-server` build matching the host OS/arch (and optional backend
  * override). With no backend override the FIRST os/arch match wins — runtime-sources.yaml
- * lists the DEFAULT build first per OS (since Phase 14 that is the Vulkan full build on
- * win/linux, which contains every CPU backend and degrades to CPU on GPU-less machines;
- * Metal on mac). `--backend cpu` selects the pure-CPU safety-net build (`<os>/cpu/`).
+ * lists the DEFAULT build first per OS (the Vulkan full build on win/linux, which
+ * contains every CPU backend and degrades to CPU on GPU-less machines; Metal on
+ * mac). `--backend cpu` selects the pure-CPU safety-net build (`<os>/cpu/`).
  */
 export function selectRuntimeBuild(
   sources: RuntimeSources,
@@ -138,7 +138,7 @@ export function selectRuntimeBuild(
 
 /**
  * Select EVERY build a shipped drive needs for one OS — the default (vulkan/metal)
- * build plus the pure-CPU safety net where one exists (Phase 14, architecture.md GPU record §6).
+ * build plus the pure-CPU safety net where one exists (architecture.md GPU record §6).
  * Used by the commercial pipeline, which must provision all of them; yaml order is
  * preserved (default first). With no arch the OS's builds are taken as listed
  * (cross-provisioning another OS's dir from the build host).
@@ -170,7 +170,7 @@ export interface RuntimeDownloadPlan {
   placeholderHash: boolean
 }
 
-/** Platform-specific executable name for a sidecar family's base name (Phase 36). */
+/** Platform-specific executable name for a sidecar family's base name. */
 export function sidecarBinaryName(base: string, os: RuntimeOs): string {
   return os === 'win' ? `${base}.exe` : base
 }
@@ -180,7 +180,7 @@ export function runtimeBinaryName(os: RuntimeOs): string {
   return sidecarBinaryName('llama-server', os)
 }
 
-/** The whisper family's CLI binary (Phase 36 — `runtime/whisper.cpp/<os>/`). */
+/** The whisper family's CLI binary (`runtime/whisper.cpp/<os>/`). */
 export const WHISPER_BINARY_BASE = 'whisper-cli'
 
 /** Resolve a drive-relative dir, rejecting `..`/absolute escapes (like `weightPath`). */
@@ -201,7 +201,7 @@ function resolveWithinRoot(rootPath: string, relPath: string): string {
 /**
  * Plan the runtime (sidecar) download for a selected build. Resolves the extraction dir
  * + the final binary path under the drive root (escape-guarded). No network or I/O.
- * `binaryBase` selects the sidecar family's executable (Phase 36): default
+ * `binaryBase` selects the sidecar family's executable: default
  * `llama-server`; the whisper family passes `whisper-cli` (`WHISPER_BINARY_BASE`).
  */
 export function planRuntimeDownload(
@@ -231,7 +231,7 @@ export function planRuntimeDownload(
   }
 }
 
-// ---- OCR language files (Phase 38, D32 — the `ocr:` asset class) --------------------
+// ---- OCR language files (the `ocr:` asset class) ------------------------------------
 
 export type OcrTaskStatus = 'download' | 'present-verified' | 'present-unverified'
 
@@ -251,7 +251,7 @@ export interface OcrFileTask {
  * Plan the OCR language-file downloads for a drive root. Plain verified files — no
  * extraction, no markers: idempotency IS the hash (a present file matching its real
  * sha256 is skipped; mismatched/absent is re-fetched). Filesystem read only; the
- * network is never touched here (the scripts/Phase-18 seam do the fetching).
+ * network is never touched here (the scripts / in-app downloader seam do the fetching).
  */
 export async function planOcrDownloads(rootPath: string, ocr: OcrSources): Promise<OcrFileTask[]> {
   const tasks: OcrFileTask[] = []
@@ -312,14 +312,14 @@ export interface DownloadDeps {
   fetchImpl?: FetchFn
   /** Progress callback (bytes received so far BY THIS CALL — excludes a resumed prefix). */
   onProgress?: (received: number) => void
-  /** Abort signal — cancels the request + stream (Phase 18 in-app cancel). */
+  /** Abort signal — cancels the request + stream (in-app cancel). */
   signal?: AbortSignal
-  /** Extra request headers (Phase 18 `Range` resume). */
+  /** Extra request headers (`Range` resume). */
   headers?: Record<string, string>
   /**
-   * Resume mode (Phase 18): when true AND the server answered 206 Partial Content, the
+   * Resume mode: when true AND the server answered 206 Partial Content, the
    * response is APPENDED to `dest`; a 200 (server ignored the Range header) truncates
-   * and restarts. Default false = always truncate (the original Phase-12 behaviour).
+   * and restarts. Default false = always truncate.
    */
   append?: boolean
   /** Called once with the response metadata before any body bytes stream. */
@@ -338,7 +338,7 @@ export interface DownloadToFileResult {
 /**
  * Stream a URL to a destination file (creating parent dirs). This is the network seam;
  * the DIY scripts use the OS-native downloader instead, while the in-app downloader
- * (`downloads.ts`, Phase 18) and the tests drive this with an injected `fetchImpl`.
+ * (`downloads.ts`) and the tests drive this with an injected `fetchImpl`.
  * Throws on a non-OK HTTP status. Overwrites by default; see `DownloadDeps.append` for
  * the Range-resume mode (the native scripts resume via `curl -C -` instead).
  */
@@ -475,7 +475,7 @@ export function runtimeBinaryPresent(plan: RuntimeDownloadPlan): boolean {
 // CPU default to the Vulkan default would silently keep the CPU build (the binary name
 // is identical). After extraction the fetchers write a marker recording exactly which
 // build is installed; the skip decision requires the marker to MATCH (version + backend).
-// The marker also tells the app/Diagnostics which build a drive carries (Phase 16).
+// The marker also tells the app/Diagnostics which build a drive carries.
 // The fetch-runtime scripts mirror this logic natively — keep them in sync.
 
 export const RUNTIME_MARKER_FILE = '.paid-runtime.json'

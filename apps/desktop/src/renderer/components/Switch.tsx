@@ -4,7 +4,7 @@ import type { ReactNode } from 'react'
 // acknowledgements). A real <input type="checkbox" role="switch"> under a styled track —
 // native keyboard toggling (Space), native label association (the whole row is the
 // ≥24px hit target), :focus-visible ring on the track via CSS. Track is --accent-600
-// when on in both themes. Hand-rolled per decision D-UI1.
+// when on in both themes. Hand-rolled — only dialogs warrant a library (Radix).
 
 export interface SwitchProps {
   checked: boolean

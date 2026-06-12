@@ -1,11 +1,11 @@
 import { join } from 'node:path'
 import type { OcrEngine, OcrRecognizeOptions, OcrResult } from './index'
 
-// tesseract.js OCR backend (Phase 38). Node mode only (D31/R-O1): the worker script
+// tesseract.js OCR backend. Node mode only: the worker script
 // and the WASM core load from the app's own pinned npm packages; image bytes are
 // decoded inside the WASM core (no canvas anywhere in the main process).
 //
-// The R-O2 offline wiring is the load-bearing part — tesseract.js's DEFAULTS phone a
+// The offline wiring is the load-bearing part — tesseract.js's DEFAULTS phone a
 // CDN and write a cache into the current directory, so every option here is explicit:
 //   - `langPath`  → the drive's `ocr/` dir (never the remote-CDN default)
 //   - `gzip: true` → reads the vendored `<lang>.traineddata.gz` exactly as shipped
@@ -18,7 +18,7 @@ import type { OcrEngine, OcrRecognizeOptions, OcrResult } from './index'
 // ~0.3 s); recognitions are serialized through a promise chain — tesseract.js workers
 // are single-job. `stop()` terminates the worker (will-quit / lock).
 
-/** OEM 1 = LSTM_ONLY. The vendored traineddata is LSTM-only (R-O3: the WASM core
+/** OEM 1 = LSTM_ONLY. The vendored traineddata is LSTM-only (the WASM core
  * cannot run legacy/float models — `tessdata_best` float crashes it). */
 const OEM_LSTM_ONLY = 1
 
@@ -51,7 +51,7 @@ export interface TesseractWorker {
 /**
  * Resolve the Node worker script tesseract.js spawns, rewriting an `app.asar` path to
  * its `app.asar.unpacked` twin: `worker_threads` loads scripts via real filesystem
- * reads, which cannot see inside the archive (R-O2 packaged-app caveat). Exported for
+ * reads, which cannot see inside the archive (packaged-app caveat). Exported for
  * the vendored-path unit test.
  */
 export function resolveWorkerScriptPath(resolved: string): string {
@@ -59,7 +59,7 @@ export function resolveWorkerScriptPath(resolved: string): string {
 }
 
 async function loadRealTesseract(): Promise<TesseractModule> {
-  // Lazy import (the parser-lib precedent): the package only loads when a recognition
+  // Lazy import: the package only loads when a recognition
   // actually happens. `tesseract.js` is CJS; the dynamic import interops fine.
   const mod = (await import('tesseract.js')) as unknown as
     | TesseractModule
@@ -98,7 +98,7 @@ export class TesseractOcrEngine implements OcrEngine {
           workerPath = undefined // fake module in tests / exotic layout: use its default
         }
         const worker = await tesseract.createWorker([...this.opts.languages], OEM_LSTM_ONLY, {
-          // R-O2: every path explicit and LOCAL — never the CDN/cache defaults.
+          // Every path explicit and LOCAL — never the CDN/cache defaults.
           langPath: this.opts.langDir,
           gzip: true,
           cacheMethod: 'none',

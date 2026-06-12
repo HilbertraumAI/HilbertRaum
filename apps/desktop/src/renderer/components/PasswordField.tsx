@@ -1,10 +1,10 @@
 import { Button } from './Button'
 
-// Password input + advisory strength meter, extracted from the Phase-27 first-run flow
-// (WorkspaceGate) so the Phase-32 Settings "Change password" card reuses the exact same
-// behavior instead of duplicating it: paste and password managers always work (no
-// onPaste/onDrop interception — WCAG 3.3.8), a Show toggle reveals what was typed, and
-// the strength meter is honest and NEVER gates submission.
+// Password input + advisory strength meter, shared by the first-run flow
+// (WorkspaceGate) and the Settings "Change password" card so the behavior stays
+// identical: paste and password managers always work (no onPaste/onDrop
+// interception — WCAG 3.3.8), a Show toggle reveals what was typed, and the
+// strength meter is honest and NEVER gates submission.
 
 export interface PasswordStrength {
   /** 0 (empty) … 4 (very strong). Purely advisory — never gates submission. */

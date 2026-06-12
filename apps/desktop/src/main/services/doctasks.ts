@@ -33,25 +33,24 @@ import { isAbortError, stripThinkBlocks } from './chat'
 import type { AuditRecorder } from './audit'
 import { log } from './logging'
 
-// Document task service (Phases 33–35, wave-3 plan §6/§7/§8) — the shared engine for
-// summary (Phase 33), translation (Phase 34), and compare (Phase 35): a job state
-// machine on the Phase-4/18 async-with-polling precedent.
+// Document task service (docs/functionality-wave-3-plan.md §6–§8) — the shared engine
+// for summary, translation, and compare: an async-with-polling job state machine.
 //
-// Concurrency (decision D26, RESOLVED — strict one-at-a-time):
+// Concurrency (strict one-at-a-time):
 // - Tasks serialize among THEMSELVES: one FIFO queue, one running task.
 // - A task REFUSES to start while a chat answer is streaming. The check reads the
 //   per-conversation in-flight registry, but tasks get their OWN AbortController and
-//   are NEVER entries in that map (fact §2.8) — `stopGeneration(conversationId)` must
-//   not be able to kill a document task, and a task must not block a conversation key.
+//   are NEVER entries in that map — `stopGeneration(conversationId)` must not be able
+//   to kill a document task, and a task must not block a conversation key.
 // - The inverse guard lives in the chat/RAG IPC handlers: a chat message sent while a
 //   task is active gets DOC_TASK_BUSY_MESSAGE (with a renderer-side cancel option).
 //
 // Runtime use: tasks call the ACTIVE chat runtime via the same `chatStream` contract
 // with EXPLICIT maxTokens/temperature — never the answer-depth modes. No runtime
 // running → a friendly "start a model first" failure, never an auto-start surprise
-// (consistent with the sendChatMessage decision).
+// (same rule as sendChatMessage).
 //
-// Vault-lease note (Phase 32): a summary task only READS chunk rows and WRITES the
+// Vault-lease note: a summary task only READS chunk rows and WRITES the
 // `documents.summary_json` column of the open DB — it never touches the `.enc`
 // document sidecars on disk. It therefore deliberately does NOT take the
 // `beginDocumentWork()` lease (which exists to keep sidecar writers and the vault
@@ -94,7 +93,7 @@ export const TASK_OCR_NO_TEXT_MESSAGE =
 export const TASK_OCR_FAILED_MESSAGE =
   "This scan couldn't be read. Make sure the document is still on the drive, then try again."
 
-// ---- Summary window math (decision D25 — budget-driven two-level map-reduce) -------
+// ---- Summary window math (budget-driven two-level map-reduce) ------------------------
 //
 // Budgets reuse the chunker's word≈token estimate (`approxTokenCount` = whitespace
 // words). That estimate UNDERCOUNTS real model tokens (umlauts, punctuation, subword
@@ -109,7 +108,7 @@ export const SUMMARY_PROMPT_RESERVE_TOKENS = 300
 /** Real-tokens-per-whitespace-word safety factor (German office text measures ~1.2–1.3). */
 export const SUMMARY_TOKENS_PER_WORD = 1.3
 /**
- * Hard ceiling on map calls (D25): ~12 windows ≈ a ~50-page document at the default
+ * Hard ceiling on map calls: ~12 windows ≈ a ~50-page document at the default
  * context. Beyond it the summary honestly covers the beginning (`truncated` flag).
  */
 export const SUMMARY_MAP_CALL_CEILING = 12
@@ -141,15 +140,6 @@ export interface SummaryPlan {
   stepsTotal: number
 }
 
-/**
- * Plan the summary windows for a document's chunk texts (pure — unit-tested at the
- * boundaries). Chunks are packed greedily, in order, into windows of at most
- * `summaryBudgetWords` words; a single over-budget chunk (only possible when a small
- * `contextTokens` pushes the budget under the ~500-word chunk size) is SPLIT into
- * budget-sized pieces rather than truncated — no text silently dropped before the
- * ceiling. More windows than the ceiling → keep the first SUMMARY_MAP_CALL_CEILING
- * and mark the plan truncated.
- */
 /**
  * Pack texts greedily, in order, into windows of at most `budgetWords` words. A single
  * over-budget text is SPLIT into budget-sized pieces rather than truncated — no text is
@@ -191,6 +181,13 @@ function packIntoWindows(texts: string[], budgetWords: number): string[] {
   return windows
 }
 
+/**
+ * Plan the summary windows for a document's chunk texts (pure — unit-tested at the
+ * boundaries). Chunks are packed greedily, in order, into windows of at most
+ * `summaryBudgetWords` words (an over-budget chunk is split, never truncated). More
+ * windows than the ceiling → keep the first SUMMARY_MAP_CALL_CEILING and mark the
+ * plan truncated.
+ */
 export function planSummaryWindows(chunkTexts: string[], contextTokens: number): SummaryPlan {
   const budgetWords = summaryBudgetWords(contextTokens)
   const windows = packIntoWindows(chunkTexts, budgetWords)
@@ -254,27 +251,26 @@ function reducePrompt(title: string, partials: string[]): string {
   )
 }
 
-// ---- Translation window math + templates (Phase 34, D36 + R-T2) ----------------------
+// ---- Translation window math + templates ----------------------------------------------
 //
-// D36 (translation input): translate the parser's SEGMENTS, re-extracted from the
-// stored copy via `extractDocumentPreview` — NOT the stored chunks. Chunks overlap by
+// Translation input: translate the parser's SEGMENTS, re-extracted from the stored
+// copy via `extractDocumentPreview` — NOT the stored chunks. Chunks overlap by
 // ~80 tokens (the retrieval overlap); naive in-order chunk concatenation would
 // DUPLICATE text at every boundary in the translated output. A summary tolerates that
-// repetition (D25 accepted it); a faithful translation cannot. The segments are
-// ordered, non-overlapping, and exact; the cost is one re-parse of the stored copy —
-// the same cost the in-app preview already pays, on the same code path (encrypted
-// copies decrypt to a `.parse*` transient and are shredded inside). The alternative —
-// trimming the overlap out of adjacent chunks — was rejected as fragile: chunk text is
-// whitespace-normalized at the token level, so overlap-matching is heuristic where the
-// re-parse is exact.
+// repetition; a faithful translation cannot. The segments are ordered,
+// non-overlapping, and exact; the cost is one re-parse of the stored copy — the same
+// cost the in-app preview already pays, on the same code path (encrypted copies
+// decrypt to a `.parse*` transient and are shredded inside). Trimming the overlap out
+// of adjacent chunks instead would be fragile: chunk text is whitespace-normalized at
+// the token level, so overlap-matching is heuristic where the re-parse is exact.
 //
 // Window sizing: unlike a summary (long in, short out), a translation's OUTPUT is
 // roughly as long as its input — and in TOKENS it is heavier than the input estimate:
-// the R-T2 smoke (plan §14) measured German output at ~2 real tokens per source word
-// (subword-heavy compounds), and an early half-input/half-output split TRUNCATED a
-// near-budget window mid-sentence when its German output hit the cap. The usable
-// context is therefore split by measured weight: input claims 1.3 tokens/word
-// (the D25 safety factor), output claims 2.0 — i.e. a window's input budget is
+// a smoke run on the pinned runtime measured German output at ~2 real tokens per
+// source word (subword-heavy compounds), and an early half-input/half-output split
+// TRUNCATED a near-budget window mid-sentence when its German output hit the cap. The
+// usable context is therefore split by measured weight: input claims 1.3 tokens/word
+// (the summary safety factor), output claims 2.0 — i.e. a window's input budget is
 // usable/(1.3+2.0) words and the rest of the context is output headroom. There is NO
 // window ceiling: a faithful translation may not silently truncate the document (the
 // summary ceiling exists because a summary may honestly cover "the beginning"; a
@@ -284,12 +280,12 @@ function reducePrompt(title: string, partials: string[]): string {
 /** Reserved for the instruction template + chat chrome, in model tokens. */
 export const TRANSLATION_PROMPT_RESERVE_TOKENS = 300
 /**
- * Estimated OUTPUT tokens per source word for DE↔EN (measured on the real pinned
- * b9585 + Qwen3-4B by the R-T2 smoke — German output is subword-heavy; 1.3× headroom
+ * Estimated OUTPUT tokens per source word for DE↔EN (measured on the pinned
+ * llama.cpp build + Qwen3-4B — German output is subword-heavy; 1.3× headroom
  * truncated a near-budget window, 2.0× leaves ~40% margin over the worst measurement).
  */
 export const TRANSLATION_OUTPUT_TOKENS_PER_WORD = 2.0
-/** Very low temperature: translation should be literal, not creative (R-T2). */
+/** Very low temperature: translation should be literal, not creative. */
 export const TRANSLATION_TEMPERATURE = 0.2
 /** Floor for a window's output cap (degenerate tiny contexts). */
 const TRANSLATION_MIN_OUTPUT_TOKENS = 256
@@ -335,7 +331,7 @@ export function planTranslationWindows(
   const budgetWords = translationBudgetWords(contextTokens)
   const windows = packIntoWindows(segmentTexts, budgetWords)
   // Output headroom = the usable tokens the input share cannot consume — ≈2.0× the
-  // input words by construction (TRANSLATION_OUTPUT_TOKENS_PER_WORD, R-T2-measured).
+  // input words by construction (TRANSLATION_OUTPUT_TOKENS_PER_WORD).
   const windowMaxTokens = Math.max(
     TRANSLATION_MIN_OUTPUT_TOKENS,
     usable - Math.ceil(budgetWords * SUMMARY_TOKENS_PER_WORD)
@@ -355,7 +351,7 @@ export const TARGET_LANG_TITLE_LABEL: Record<TranslationTargetLang, string> = {
 }
 
 /**
- * Strict translator instructions (R-T2-informed): translate, don't summarize; keep
+ * Strict translator instructions: translate, don't summarize; keep
  * the Markdown structure; numbers/names/dates verbatim; output only the translation
  * (the 4B-class models otherwise prepend "Here is the translation:" chatter).
  */
@@ -387,9 +383,8 @@ export function translationWindowPrompt(
 }
 
 /**
- * Visible marker for a window the model refused/garbled after a retry (plan §7
- * honesty requirement, §11.4 copy): the output keeps the ORIGINAL text under the
- * notice — never a silent gap.
+ * Visible marker for a window the model refused/garbled after a retry: the output
+ * keeps the ORIGINAL text under the notice — never a silent gap.
  */
 export function failedWindowNotice(part: number, total: number): string {
   return (
@@ -398,7 +393,7 @@ export function failedWindowNotice(part: number, total: number): string {
   )
 }
 
-/** The honesty attribution prepended to every materialized translation (plan §7). */
+/** The honesty attribution prepended to every materialized translation. */
 export function translationAttributionLine(modelId: string): string {
   return `Machine-translated by ${modelId} — may contain errors.`
 }
@@ -413,19 +408,19 @@ export function translatedDocumentTitle(
   return `${base} (${TARGET_LANG_TITLE_LABEL[targetLang]}).md`
 }
 
-// ---- Compare window math + templates (Phase 35, D28 + D37 + R-T2) --------------------
+// ---- Compare window math + templates ---------------------------------------------------
 //
-// D28 (RESOLVED): the result is a MATERIALIZED corpus document ("Comparison: A vs B.md",
-// the D27 principle) and the strategy auto-switches on token math:
+// The result is a MATERIALIZED corpus document ("Comparison: A vs B.md") and the
+// strategy auto-switches on token math:
 //   (a) small-docs full compare — both documents' full texts fit one call ⇒ one
 //       structured-comparison call over both, then materialize.
 //   (b) section-matched compare — for each window of doc A's chunks, the nearest doc-B
-//       chunks are retrieved via the EXISTING VectorIndex scoped to doc B (the Phase-17
+//       chunks are retrieved via the EXISTING VectorIndex scoped to doc B (the
 //       `documentIds` scoping; the vectors are already there — no new index), each
 //       matched pair is compared (map), and one reduce merges the notes into the report.
 //
-// D37 (mode-(a) input): like the translation (D36), mode (a) reads the parser's
-// SEGMENTS re-extracted from the stored copies — NOT the stored chunks. Two reasons:
+// Mode-(a) input: like the translation, mode (a) reads the parser's SEGMENTS
+// re-extracted from the stored copies — NOT the stored chunks. Two reasons:
 // chunk overlap (~80 tokens) would present duplicated text to the model as if both
 // documents repeated themselves (phantom "shared" content in a comparison, where a
 // summary merely tolerated repetition), and the MODE DECISION itself must be made on
@@ -433,7 +428,7 @@ export function translatedDocumentTitle(
 // to push a fitting pair into the heavier mode (b). Cost: one re-parse per document,
 // the same the preview pays. Mode (b)'s map step uses the stored CHUNKS instead — the
 // pairing needs their vectors, and per-pair notes tolerate overlap like summary
-// partials do (D25 precedent).
+// partials do.
 //
 // Mode (b) honesty note: the pairing is A-driven (B excerpts are retrieved by
 // similarity to A's sections), so "only in B" findings are structurally weaker than
@@ -445,9 +440,9 @@ export function translatedDocumentTitle(
 export const COMPARE_OUTPUT_TOKENS = 512
 /** Reserved for the instruction template + chat chrome, in model tokens. */
 export const COMPARE_PROMPT_RESERVE_TOKENS = 300
-/** Comparison is faithful synthesis, not creative writing (summary precedent). */
+/** Comparison is faithful synthesis, not creative writing (same as summary). */
 export const COMPARE_TEMPERATURE = 0.3
-/** Hard ceiling on map calls (the D25/summary rationale: bounded CPU latency). */
+/** Hard ceiling on map calls (like the summary ceiling: bounded CPU latency). */
 export const COMPARE_MAP_CALL_CEILING = 12
 /** Floor for a map call's output cap — below this, per-pair notes stop being useful. */
 const COMPARE_MAP_OUTPUT_FLOOR_TOKENS = 128
@@ -465,7 +460,7 @@ export function compareBudgetWords(contextTokens: number): number {
   return Math.max(200, Math.floor(compareUsableInputTokens(contextTokens) / SUMMARY_TOKENS_PER_WORD))
 }
 
-/** Mode switch (D28): do both documents' full texts fit one comparison call? */
+/** Mode switch: do both documents' full texts fit one comparison call? */
 export function compareFitsSinglePass(wordsA: number, wordsB: number, contextTokens: number): boolean {
   return wordsA + wordsB <= compareBudgetWords(contextTokens)
 }
@@ -549,7 +544,7 @@ export function planCompareWindows(chunks: CompareChunkRef[], contextTokens: num
   }
 
   // Cap each map call's notes so all of them together provably fit the reduce input
-  // (the D25 provable-fit property: windows × mapMaxTokens ≤ usable input tokens).
+  // (windows × mapMaxTokens ≤ usable input tokens).
   const mapMaxTokens = Math.max(
     COMPARE_MAP_OUTPUT_FLOOR_TOKENS,
     Math.min(
@@ -572,15 +567,15 @@ const COMPARE_SYSTEM_PROMPT_TEXT =
   'Use only the provided text. Never invent facts, names, or numbers. ' +
   'Write the comparison in the same language as the documents.'
 
-/** Shared system prompt for every compare call (exported for the R-T2 smoke). */
+/** Shared system prompt for every compare call (exported for the manual smoke harness). */
 export function compareSystemPrompt(): string {
   return COMPARE_SYSTEM_PROMPT_TEXT
 }
 
 /**
- * The fixed report skeleton (D28: common / differs / only-in-A / only-in-B). The
+ * The fixed report skeleton (common / differs / only-in-A / only-in-B). The
  * headings are dictated verbatim so the materialized report has a deterministic
- * structure; the bullet content follows the documents' language (R-T2-probed).
+ * structure; the bullet content follows the documents' language.
  */
 export function compareReportHeadings(titleA: string, titleB: string): string[] {
   return [
@@ -614,8 +609,8 @@ export function compareFullPrompt(
 
 /**
  * Mode (b) map: one doc-A window against its retrieved doc-B excerpts. A deliberately
- * SMALLER per-pair format than the report (plan §8 flagged this; R-T2-probed): compact
- * prefixed bullets the reduce can merge mechanically.
+ * SMALLER per-pair format than the report: compact prefixed bullets the reduce can
+ * merge mechanically.
  */
 export function comparePairPrompt(
   titleA: string,
@@ -659,7 +654,7 @@ export function compareReducePrompt(titleA: string, titleB: string, partials: st
   )
 }
 
-/** The honesty attribution prepended to every materialized comparison (D27 precedent). */
+/** The honesty attribution prepended to every materialized comparison. */
 export function compareAttributionLine(modelId: string): string {
   return `Machine-generated comparison by ${modelId} — may contain errors.`
 }
@@ -689,7 +684,7 @@ export interface DocTaskDeps {
   getDb: () => Db
   /** The active chat runtime, or null when none is running. */
   getRuntime: () => ModelRuntime | null
-  /** True while any chat/RAG answer is streaming (the in-flight registry, fact §2.8). */
+  /** True while any chat/RAG answer is streaming (the in-flight registry). */
   isChatStreaming: () => boolean
   /** The user's `contextTokens` setting (drives the window budget). */
   getContextTokens: () => number
@@ -698,20 +693,20 @@ export interface DocTaskDeps {
   /** Ingestion deps (embedder + document cipher) for the materialize/import step. */
   getIngestionDeps: () => IngestionDeps
   /**
-   * The Phase-32 vault lease (`WorkspaceController.beginDocumentWork`). Held ONLY
-   * around the materialize step (it writes `.enc` sidecars); throws the friendly
+   * The vault lease (`WorkspaceController.beginDocumentWork`). Held ONLY around the
+   * materialize step (it writes `.enc` sidecars); throws the friendly
    * `VaultBusyError` while a password change runs.
    */
   beginDocumentWork: () => () => void
   /**
-   * The local OCR engine (Phase 38), or null when the drive carries no language
-   * files. The 'ocr' kind refuses to start without it (friendly copy) — every other
-   * kind ignores it. Read per task (the assets can appear mid-session).
+   * The local OCR engine, or null when the drive carries no language files. The
+   * 'ocr' kind refuses to start without it (friendly copy) — every other kind
+   * ignores it. Read per task (the assets can appear mid-session).
    */
   getOcrEngine?: () => OcrEngine | null
   /**
-   * PDF → page-PNG rasterizer (Phase 38, D31): the hidden-window renderer in the app,
-   * a fake in tests. Only the 'ocr' kind uses it.
+   * PDF → page-PNG rasterizer: the hidden-window renderer in the app, a fake in
+   * tests. Only the 'ocr' kind uses it.
    */
   rasterizePdf?: RasterizePdf
   audit?: AuditRecorder
@@ -734,7 +729,7 @@ export class DocTaskManager {
   constructor(private readonly deps: DocTaskDeps) {}
 
   /**
-   * Validate + enqueue a task. Throws friendly errors for the D26 guards (chat
+   * Validate + enqueue a task. Throws friendly errors for the guards (chat
    * streaming, no runtime) and for invalid requests; a queued/running task is reported
    * via `getDocTask` polling from then on.
    */
@@ -743,8 +738,8 @@ export class DocTaskManager {
     if (kind !== 'summary' && kind !== 'translation' && kind !== 'compare' && kind !== 'ocr') {
       throw new Error('Unknown document task.')
     }
-    // Translation targets are a closed v1 set (plan §7): de | en only — a free-text
-    // language field invites silent quality failures.
+    // Translation targets are a closed set: de | en only — a free-text language
+    // field invites silent quality failures.
     let targetLang: TranslationTargetLang | undefined
     if (kind === 'translation') {
       const raw = req.params?.targetLang
@@ -756,8 +751,8 @@ export class DocTaskManager {
     if (this.deps.isChatStreaming()) {
       throw new Error(TASK_REFUSED_CHAT_STREAMING_MESSAGE)
     }
-    // OCR runs the local recognition engine, not the chat model (Phase 38) — it needs
-    // the vendored language files instead of a running runtime.
+    // OCR runs the local recognition engine, not the chat model — it needs the
+    // vendored language files instead of a running runtime.
     if (kind === 'ocr') {
       if (!this.deps.getOcrEngine?.()) {
         throw new Error(TASK_NEEDS_OCR_MESSAGE)
@@ -853,7 +848,7 @@ export class DocTaskManager {
     task.controller.abort()
   }
 
-  /** True while a task is running or queued — the chat-side D26 guard reads this. */
+  /** True while a task is running or queued — the chat-side busy guard reads this. */
   hasActiveTask(): boolean {
     return this.runningId !== null || this.queue.length > 0
   }
@@ -864,7 +859,7 @@ export class DocTaskManager {
     return ids.some((id) => this.tasks.get(id)?.status.documentIds.includes(documentId) ?? false)
   }
 
-  /** Run the next queued task; tasks serialize among themselves (D26). */
+  /** Run the next queued task; tasks serialize among themselves. */
   private pump(): void {
     if (this.runningId) return
     const next = this.queue.shift()
@@ -896,7 +891,7 @@ export class DocTaskManager {
     try {
       let resultId: string
       if (kind === 'ocr') {
-        // OCR uses the recognition engine, not the chat runtime (Phase 38).
+        // OCR uses the recognition engine, not the chat runtime.
         resultId = await this.runOcr(task)
       } else {
         // Re-check at dequeue time: the runtime may have been stopped while queued.
@@ -933,16 +928,16 @@ export class DocTaskManager {
     }
   }
 
-  /** The Phase-33 summary task (D25): stored chunks in, `summary_json` out. */
+  /** The summary task: stored chunks in, `summary_json` out. */
   private async runSummary(task: InternalTask, runtime: ModelRuntime): Promise<string> {
     const db = this.deps.getDb()
     const documentId = task.status.documentIds[0]
     const doc = getDocument(db, documentId)
     if (!doc) throw new Error(TASK_DOCUMENT_NOT_READY_MESSAGE)
 
-    // Input = the document's stored CHUNKS, in order (no re-parse — D25). Adjacent
-    // chunks overlap by ~80 tokens (the chunker's retrieval overlap); the slight
-    // repetition is harmless for summarization and accepted by the decision.
+    // Input = the document's stored CHUNKS, in order (no re-parse). Adjacent chunks
+    // overlap by ~80 tokens (the chunker's retrieval overlap); the slight repetition
+    // is harmless for summarization.
     const rows = db
       .prepare('SELECT text FROM chunks WHERE document_id = ? ORDER BY chunk_index')
       .all(documentId) as unknown as Array<{ text: string }>
@@ -1015,11 +1010,11 @@ export class DocTaskManager {
   }
 
   /**
-   * The Phase-38 OCR task (D33: "Make searchable (OCR)", never automatic): rasterize
-   * the stored PDF page by page in the hidden window (D31), recognize each page PNG
-   * main-side with the local engine, persist the recognition (`documents.ocr_json`,
-   * content → DB only), then re-ingest — the PdfParser's ocrPages hook turns the
-   * recognition into one segment per page, so page citations work unchanged.
+   * The OCR task ("Make searchable (OCR)", never automatic): rasterize the stored
+   * PDF page by page in the hidden window, recognize each page PNG main-side with
+   * the local engine, persist the recognition (`documents.ocr_json`, content → DB
+   * only), then re-ingest — the PdfParser's ocrPages hook turns the recognition into
+   * one segment per page, so page citations work unchanged.
    * Progress = pages recognized + the final re-ingest step; cancel persists NOTHING.
    */
   private async runOcr(task: InternalTask): Promise<string> {
@@ -1066,7 +1061,7 @@ export class DocTaskManager {
     // Persist the recognition, then re-ingest through the normal pipeline (chunks,
     // embeddings, FTS — the document becomes a first-class searchable corpus member).
     // The re-ingest may rewrite a legacy plaintext stored copy to `.enc`, so it holds
-    // the Phase-32 lease like every sidecar writer (VaultBusyError → friendly fail).
+    // the vault lease like every sidecar writer (VaultBusyError → friendly fail).
     setDocumentOcr(db, documentId, {
       pages,
       engineId: engine.id,
@@ -1139,9 +1134,9 @@ export class DocTaskManager {
   }
 
   /**
-   * The Phase-34 translation task (D27/D36): re-extracted parser SEGMENTS in,
-   * window-by-window translation in document order (no reduce), one NEW materialized
-   * Markdown document out. Returns the new document's id (the `resultRef`).
+   * The translation task: re-extracted parser SEGMENTS in, window-by-window
+   * translation in document order (no reduce), one NEW materialized Markdown
+   * document out. Returns the new document's id (the `resultRef`).
    */
   private async runTranslation(task: InternalTask, runtime: ModelRuntime): Promise<string> {
     const db = this.deps.getDb()
@@ -1151,9 +1146,9 @@ export class DocTaskManager {
     const doc = getDocument(db, documentId)
     if (!doc) throw new Error(TASK_DOCUMENT_NOT_READY_MESSAGE)
 
-    // D36: the input is the parser's SEGMENTS re-extracted from the stored copy —
-    // ordered and non-overlapping (see the module note above; stored chunks would
-    // duplicate their ~80-token overlap into the translation).
+    // The input is the parser's SEGMENTS re-extracted from the stored copy —
+    // ordered and non-overlapping (see the window-math note above; stored chunks
+    // would duplicate their ~80-token overlap into the translation).
     const segmentTexts = await this.extractSegmentTexts(documentId)
 
     const plan = planTranslationWindows(segmentTexts, this.deps.getContextTokens())
@@ -1161,8 +1156,8 @@ export class DocTaskManager {
     const signal = task.controller.signal
 
     // Map in document order — no reduce. A window the model refuses/garbles is
-    // retried ONCE (R-T2 policy), then MARKED visibly with the original text kept;
-    // it is never silently dropped. Only a fully-failed translation fails the task.
+    // retried ONCE, then MARKED visibly with the original text kept; it is never
+    // silently dropped. Only a fully-failed translation fails the task.
     const parts: string[] = []
     let failedWindows = 0
     for (let i = 0; i < plan.windows.length; i++) {
@@ -1200,8 +1195,8 @@ export class DocTaskManager {
 
   /**
    * Re-extract a document's ordered, non-overlapping segment texts from its stored
-   * copy (the D36/D37 input rule — never the ~80-token-overlapping chunks). Encrypted
-   * copies decrypt to a `.parse*` transient inside and are shredded on the way out.
+   * copy (never the ~80-token-overlapping chunks). Encrypted copies decrypt to a
+   * `.parse*` transient inside and are shredded on the way out.
    */
   private async extractSegmentTexts(documentId: string): Promise<string[]> {
     let texts: string[]
@@ -1225,10 +1220,10 @@ export class DocTaskManager {
   }
 
   /**
-   * The Phase-35 compare task (D28/D37): two documents in, one materialized
-   * "Comparison: A vs B.md" report out. The strategy auto-switches on token math —
-   * mode (a) when both re-extracted full texts fit one call, else mode (b)
-   * section-matched over the stored chunks + vectors. Returns the new document's id.
+   * The compare task: two documents in, one materialized "Comparison: A vs B.md"
+   * report out. The strategy auto-switches on token math — mode (a) when both
+   * re-extracted full texts fit one call, else mode (b) section-matched over the
+   * stored chunks + vectors. Returns the new document's id.
    */
   private async runCompare(task: InternalTask, runtime: ModelRuntime): Promise<string> {
     const db = this.deps.getDb()
@@ -1237,7 +1232,7 @@ export class DocTaskManager {
     const docB = getDocument(db, idB)
     if (!docA || !docB) throw new Error(TASK_DOCUMENT_NOT_READY_MESSAGE)
 
-    // D37: the mode decision AND mode (a)'s input both use the re-extracted parser
+    // The mode decision AND mode (a)'s input both use the re-extracted parser
     // segments — exact and non-overlapping. Deciding on stored chunks would inflate
     // the length by the ~80-token overlap (and mode (a) would show the model
     // duplicated text as phantom "shared" content).
@@ -1267,7 +1262,7 @@ export class DocTaskManager {
       truncated = sectionMatched.truncated
     }
 
-    // Materialize (D27/D28): attribution + (honest) truncation notice + report.
+    // Materialize: attribution + (honest) truncation notice + report.
     if (signal.aborted) throw new DOMException('Document task cancelled', 'AbortError')
     const markdown =
       `> ${compareAttributionLine(runtime.modelId)}\n\n` +
@@ -1284,10 +1279,10 @@ export class DocTaskManager {
   }
 
   /**
-   * Mode (b) — section-matched compare (D28): window doc A's stored chunks, retrieve
-   * each window's nearest doc-B chunks via the EXISTING VectorIndex scoped to doc B
-   * (the Phase-17 `documentIds` scoping — the vectors are already there, no new
-   * index), compare each matched pair (map), then reduce the notes into the report.
+   * Mode (b) — section-matched compare: window doc A's stored chunks, retrieve each
+   * window's nearest doc-B chunks via the EXISTING VectorIndex scoped to doc B
+   * (the `documentIds` scoping — the vectors are already there, no new index),
+   * compare each matched pair (map), then reduce the notes into the report.
    */
   private async runCompareSectionMatched(
     task: InternalTask,
@@ -1299,10 +1294,10 @@ export class DocTaskManager {
     const contextTokens = this.deps.getContextTokens()
     const signal = task.controller.signal
 
-    // Embedder-visibility guard (plan §8 audit finding): the pairing reads stored
-    // vectors, so BOTH documents must be visible to the ACTIVE embedder — a
-    // stale-embeddings document would silently pair against nothing. Fail friendly
-    // with the Phase-17-style actionable answer instead.
+    // Embedder-visibility guard: the pairing reads stored vectors, so BOTH documents
+    // must be visible to the ACTIVE embedder — a stale-embeddings document would
+    // silently pair against nothing. Fail friendly with the actionable re-index copy
+    // instead.
     const embedder = this.deps.getIngestionDeps().embedder
     if (!embedder) throw new Error(TASK_COMPARE_REINDEX_MESSAGE)
     const embeddedCount = (documentId: string): number => {
@@ -1424,8 +1419,8 @@ export class DocTaskManager {
     }
     if (partials.length === 0) throw new Error(TASK_GENERIC_FAILURE_MESSAGE)
 
-    // Belt for the reduce input (the D25 precedent): the map output caps already size
-    // the notes to fit, but a model that ignores maxTokens must still not overflow.
+    // Belt for the reduce input: the map output caps already size the notes to fit,
+    // but a model that ignores maxTokens must still not overflow.
     const budgetWords = compareBudgetWords(contextTokens)
     let reduceInput = partials
     const totalWords = partials.reduce((n, p) => n + approxTokenCount(p), 0)
@@ -1448,8 +1443,8 @@ export class DocTaskManager {
   /**
    * Write the generated Markdown to a transient file and run it through the NORMAL
    * import path (`createQueuedDocument` + `processDocument`) so the new document is
-   * chunked, embedded, searchable, citable, and `.enc`-encrypted automatically (D27).
-   * Holds the Phase-32 vault lease for exactly this step — it writes `.enc` sidecars
+   * chunked, embedded, searchable, citable, and `.enc`-encrypted automatically.
+   * Holds the vault lease for exactly this step — it writes `.enc` sidecars
    * (`VaultBusyError` from a concurrent password change propagates as a friendly task
    * failure). The transient uses the `.parse` infix so the startup crash sweep shreds
    * it if we die mid-step; otherwise it is shredded here, success or failure.
@@ -1485,8 +1480,8 @@ export class DocTaskManager {
         throw new Error(TASK_GENERIC_FAILURE_MESSAGE)
       }
       setDocumentOrigin(db, info.id, origin)
-      // A new corpus document must never appear without an audit trail (Phase 19;
-      // filename + id only — the translated text is content).
+      // A new corpus document must never appear without an audit trail (filename +
+      // id only — the translated text is content, never audit-logged).
       this.deps.audit?.('document_imported', `Document imported: ${result.title}`, {
         documentId: info.id,
         status: result.status,
@@ -1503,9 +1498,9 @@ export class DocTaskManager {
   }
 
   /**
-   * One translation window with the R-T2 retry policy: a failed or empty generation
-   * is retried once; a second failure returns null (the caller marks the window).
-   * Aborts always propagate immediately — cancel must never look like a failed window.
+   * One translation window: a failed or empty generation is retried once; a second
+   * failure returns null (the caller marks the window). Aborts always propagate
+   * immediately — cancel must never look like a failed window.
    */
   private async generateWithRetry(
     runtime: ModelRuntime,
@@ -1533,7 +1528,7 @@ export class DocTaskManager {
   }
 
   /**
-   * One model call over the locked Phase-3 streaming contract: explicit
+   * One model call over the LOCKED `chatStream` contract: explicit
    * maxTokens/temperature, NO depth mode, the task's own abort signal. Cancellation
    * must never persist a half result — an abort throws instead of returning the
    * partial text (chat keeps partials; tasks do not).

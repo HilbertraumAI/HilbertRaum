@@ -4,7 +4,7 @@ import type { Embedder } from './index'
 // Mock embedder (spec decision: mock-first). Produces deterministic, hash-based
 // vectors with ZERO network and ZERO model files, so document search runs fully
 // offline. The real on-device embedder (llama.cpp / E5-small) swaps in behind the
-// same `Embedder` interface in Phase 10 — callers never change.
+// same `Embedder` interface — callers never change.
 //
 // How the vectors are built (feature hashing):
 //   1. lowercase + split the text into alphanumeric word tokens,
@@ -64,7 +64,7 @@ export class MockEmbedder implements Embedder {
   }
 }
 
-/** Factory mirroring `createMockRuntime`; the real embedder swaps in here in Phase 10. */
+/** Factory mirroring `createMockRuntime`; the real embedder's factory swaps in here. */
 export function createMockEmbedder(opts?: { id?: string; dimensions?: number }): MockEmbedder {
   return new MockEmbedder(opts)
 }

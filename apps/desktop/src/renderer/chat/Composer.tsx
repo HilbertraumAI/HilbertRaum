@@ -3,10 +3,10 @@ import { Button } from '../components'
 import { DictationButton } from './DictationButton'
 import type { DictationCaptureStart } from '../lib/dictation'
 
-// Composer (Phase 25, guidelines §3/§6): auto-growing textarea with ONE action button —
+// Composer (guidelines §3/§6): auto-growing textarea with ONE action button —
 // Send while idle, Stop while streaming (keyboard-reachable either way). Enter sends,
 // Shift+Enter inserts a newline. The quiet affordances (answer detail, document scope)
-// live in the footer row below the input. Phase 37 adds the optional dictation mic:
+// live in the footer row below the input. Optional dictation mic:
 // transcribed speech is INSERTED at the cursor for review — never sent.
 
 const MAX_GROW_PX = 220
@@ -24,7 +24,7 @@ interface ComposerProps {
   footer?: ReactNode
   /** Lets the screen focus the input (example-prompt chips fill it). */
   inputRef?: RefObject<HTMLTextAreaElement>
-  /** Voice dictation (Phase 37): the mic renders only when a transcriber exists. */
+  /** Voice dictation: the mic renders only when a transcriber exists. */
   dictationAvailable?: boolean
   /** Friendly dictation failure copy — surfaced by the screen like other errors. */
   onDictationError?: (message: string) => void

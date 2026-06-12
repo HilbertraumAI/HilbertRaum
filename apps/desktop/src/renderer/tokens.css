@@ -44,7 +44,7 @@
   --surface: #ffffff;
   --surface-2: #ffffff; /* pair with --shadow-1 on light; tonal step on dark */
   --border: #e2e5ea; /* hairline */
-  /* Phase-27 AA sweep: the guidelines table's #9aa3b2 is 2.54:1 against the white
+  /* AA contrast fix: the guidelines table's #9aa3b2 is 2.54:1 against the white
      surface — under the 3:1 non-text minimum (WCAG 1.4.11), and on light the border is
      the ONLY input boundary (input fill = card fill). n-500 = 4.77:1. */
   --border-strong: var(--n-500); /* inputs / secondary-button outlines */
@@ -114,7 +114,7 @@
   --surface: #171a21;
   --surface-2: #1d212a;
   --border: #2a2f3a;
-  /* Phase-27 AA sweep: the table's #4a515f is 2.18:1 against --surface (< 3:1,
+  /* AA contrast fix: the table's #4a515f is 2.18:1 against --surface (< 3:1,
      WCAG 1.4.11). n-500 reads 3.65:1 on dark — same ramp step as light. */
   --border-strong: var(--n-500);
   --text: #e6e8ec; /* 15.4:1 */

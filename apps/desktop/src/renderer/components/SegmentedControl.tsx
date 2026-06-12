@@ -3,7 +3,7 @@ import { useRef } from 'react'
 // Segmented control (guidelines §6): pill track, the selected segment gets --surface +
 // --shadow-1 (plus weight — never color-only). Radio-group semantics with a roving
 // tabindex: only the selected segment is tabbable; arrow keys move focus AND selection
-// (Home/End jump). Hand-rolled per decision D-UI1.
+// (Home/End jump). Hand-rolled — only dialogs warrant a library (Radix).
 
 export interface SegmentedOption<T extends string> {
   value: T

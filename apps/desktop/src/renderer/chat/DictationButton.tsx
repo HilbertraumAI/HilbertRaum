@@ -3,14 +3,14 @@ import { Button } from '../components'
 import { captureDictation, type DictationCapture, type DictationCaptureStart } from '../lib/dictation'
 import { friendlyIpcError } from '../lib/errors'
 
-// Voice dictation (Phase 37, D30): the composer mic. Click to record (the OS mic
+// Voice dictation: the composer mic. Click to record (the OS mic
 // indicator is the recording signal), click again to stop — the audio is resampled
 // in-page, transcribed locally by the drive's whisper model, and the text lands in
 // the input FOR REVIEW. Nothing is ever auto-sent, and the recording never leaves
 // the machine. The button renders only when a transcriber is available
-// (availability-driven, D14 precedent — ChatScreen gates on `dictationAvailable`).
+// (availability-driven — ChatScreen gates on `dictationAvailable`; no settings key).
 
-/** Friendly notice when the model heard nothing usable (§11.4). */
+/** Friendly notice when the model heard nothing usable (spec §11.4 tone). */
 export const DICTATION_NO_SPEECH_MESSAGE = 'No speech was recognized — try speaking again.'
 
 type DictationState = 'idle' | 'starting' | 'recording' | 'transcribing'

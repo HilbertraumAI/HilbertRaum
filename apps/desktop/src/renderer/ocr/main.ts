@@ -1,4 +1,4 @@
-// Hidden OCR rasterizer window (Phase 38, D31 — resolved by R-O1): the ONLY context
+// Hidden OCR rasterizer window: the ONLY context
 // with a canvas, so the only place a PDF page can become pixels without native deps.
 // Protocol (shared/ipc.ts OCR_RASTER, pull-based): main sends the PDF bytes, we report
 // the page count, then main requests one page at a time and we answer with PNG bytes.
@@ -17,7 +17,7 @@ pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl
 
 /**
  * Target render resolution: 300 DPI equivalent (PDF user units are 72/inch) — the
- * classic OCR sweet spot (R-O1 probed it at confidence 94+). Pages whose 300-DPI
+ * classic OCR sweet spot (probed at confidence 94+). Pages whose 300-DPI
  * raster would exceed MAX_RENDER_PIXELS on a side are scaled down to fit (canvas
  * memory bound: an A4 page at 300 DPI is 2550×3301 ≈ 33 MB RGBA).
  */

@@ -1,15 +1,16 @@
-// Voice-dictation capture (Phase 37, locked design D30): getUserMedia audio →
+// Voice-dictation capture: getUserMedia audio →
 // MediaRecorder (webm/opus) → decode + resample to 16 kHz mono PCM via an
-// OfflineAudioContext render → pure-JS WAV encode. The bytes go to the main process
-// over `dictation:transcribe`; no audio ever leaves the renderer as a file path, and
-// nothing here touches the network. Streaming ASR is explicitly out of scope (D30).
+// OfflineAudioContext render → pure-JS WAV encode (whisper requires 16 kHz mono WAV).
+// The bytes go to the main process over `dictation:transcribe`; no audio ever leaves
+// the renderer as a file path, and nothing here touches the network. Streaming ASR is
+// explicitly out of scope.
 
 import { encodeWavPcm16 } from './wav'
 
 /** Whisper's expected input rate; the OfflineAudioContext renders straight to it. */
 export const DICTATION_SAMPLE_RATE = 16000
 
-/** Friendly copy (§11.4) when the OS/hardware denies the microphone. Our own session
+/** Friendly copy (spec §11.4) when the OS/hardware denies the microphone. Our own session
  *  handler grants audio-only requests, so a failure here is the system's denial. */
 export const MIC_BLOCKED_MESSAGE =
   'The microphone could not be used. Check the system microphone settings, then try again.'

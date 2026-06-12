@@ -10,7 +10,7 @@ import type {
 // files and zero network. health() returns ok immediately; chatStream emits a
 // deterministic reply token-by-token (with a small delay) so the renderer's
 // streaming + stop path is fully exercised without a real model. The real
-// llama.cpp runtime (Phase 10) swaps in behind the same interface.
+// llama.cpp runtime swaps in behind the same interface.
 
 /** Per-token delay (ms). Small enough to keep tests fast, slow enough to stream visibly. */
 const TOKEN_DELAY_MS = 12
@@ -61,7 +61,7 @@ export class MockRuntime implements ModelRuntime {
   /**
    * Stream a simulated reply one token at a time. Honours `options.signal`: when
    * the caller aborts, the generator stops promptly (the consumer keeps whatever
-   * was emitted so far). Real on-device answers replace this in Phase 10.
+   * was emitted so far).
    */
   async *chatStream(
     messages: ChatMessage[],
@@ -88,7 +88,7 @@ export class MockRuntime implements ModelRuntime {
   }
 }
 
-/** Factory used by the RuntimeManager until the real runtime lands (Phase 10). */
+/** Factory used by the runtime selector when no real binary/weights are available. */
 export function createMockRuntime(opts: RuntimeStartOptions): MockRuntime {
   return new MockRuntime(opts)
 }

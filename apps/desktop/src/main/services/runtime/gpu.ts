@@ -2,7 +2,7 @@ import { spawn as nodeSpawn } from 'node:child_process'
 import type { GpuDevice } from '../../../shared/types'
 import type { ChildProcessLike, SpawnFn } from './sidecar'
 
-// GPU device probe (Phase 15, architecture.md GPU record §5.1). Spawns the drive's OWN
+// GPU device probe (architecture.md GPU record §5.1). Spawns the drive's OWN
 // `llama-server --list-devices` — an offline, no-model, sub-second subprocess that
 // prints ggml's truth about which devices the backend will actually use — and parses
 // the output. No new deps, no registry/wmic scraping, no sockets (the probe is a child
@@ -10,14 +10,13 @@ import type { ChildProcessLike, SpawnFn } from './sidecar'
 //
 // The probe can prove enumeration only, never stable inference — the start LADDER in
 // factory.ts is the actual guarantee; this feeds the UI label, Diagnostics, and the
-// conservative classifyProfile bump (§8). Never throws: any failure → [].
+// conservative classifyProfile bump. Never throws: any failure → [].
 
 /**
  * Kill the probe child after this long; a wedged driver must not stall startup.
- * (The plan's §5.1 sketch said 3 s, but a COLD Vulkan driver init under disk load was
- * measured exceeding that on the dev box — a false-empty probe mislabels a working GPU
- * machine as CPU, so the bound is 10 s. Still once per session, off the start's
- * critical path, and a real wedge is still killed.)
+ * Generous (10 s, not ~3 s) because a COLD Vulkan driver init under disk load can take
+ * that long, and a false-empty probe mislabels a working GPU machine as CPU. Still
+ * once per session, off the start's critical path, and a real wedge is still killed.
  */
 export const DEFAULT_PROBE_TIMEOUT_MS = 10_000
 
@@ -47,14 +46,14 @@ export function parseListDevices(stdout: string): GpuDevice[] {
 
 /**
  * Name-based heuristic for "this is an integrated GPU sharing system RAM" — used to
- * keep classifyProfile's GPU bump conservative (§8). Deliberately biased toward
+ * keep classifyProfile's GPU bump conservative (GPU record §8). Deliberately biased toward
  * matching (NOT bumping): an Iris Xe reporting 16 GB of *shared* memory must never
  * push a laptop a profile step up and get recommended a model it cannot run. A false
  * positive only costs a too-small recommendation, never a too-big one.
  */
 export function looksIntegrated(name: string): boolean {
-  // Patterns cover the names real Vulkan drivers report (audit fix — the original
-  // plan-§8 regex missed Linux/RADV APUs and Meteor-Lake Intel):
+  // Patterns cover the names real Vulkan drivers report (including Linux/RADV APUs
+  // and Meteor-Lake Intel, which a name-only "Iris/UHD" check would miss):
   //   - "Intel(R) Iris(R) Xe Graphics", "Intel(R) UHD Graphics 770", "Intel(R) HD ..."
   //   - "Intel(R) Arc(TM) Graphics"          (Meteor/Lunar-Lake iGPU — NO model number;
   //     discrete is "Arc(TM) A770 Graphics" and must NOT match)
@@ -67,11 +66,11 @@ export function looksIntegrated(name: string): boolean {
   )
 }
 
-/** Minimum dedicated VRAM (MiB) before a GPU may bump the hardware profile (§8). */
+/** Minimum dedicated VRAM (MiB) before a GPU may bump the hardware profile. */
 export const GPU_BUMP_MIN_VRAM_MB = 6144
 
 /**
- * The conservative profile-bump gate (Phase 16, §8): bump only when some probed device
+ * The conservative profile-bump gate (GPU record §8): bump only when some probed device
  * has ≥ 6 GiB AND does not look integrated. An iGPU reporting 16 GB of *shared* RAM
  * must never push a laptop a profile step up; a false negative only costs a too-small
  * model recommendation, never a too-big one.
@@ -138,9 +137,9 @@ export function probeGpuDevices(binPath: string, deps: GpuProbeDeps = {}): Promi
 export interface CachedGpuProbe {
   (binPath: string): Promise<GpuDevice[]>
   /**
-   * Drop every cached result so the next call re-probes. Wired to "Try GPU again"
-   * (audit fix): a probe that timed out once (cold/wedged driver) must not stay
-   * cached as "no GPU" after the user explicitly asks for a retry.
+   * Drop every cached result so the next call re-probes. Wired to "Try GPU again":
+   * a probe that timed out once (cold/wedged driver) must not stay cached as
+   * "no GPU" after the user explicitly asks for a retry.
    */
   invalidate(): void
 }

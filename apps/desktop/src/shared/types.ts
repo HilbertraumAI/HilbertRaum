@@ -23,20 +23,19 @@ export interface AppStatus {
   /** Total RAM of THIS machine, rounded to whole GB (drives the Models RAM gate copy). */
   machineRamGb: number
   /**
-   * A speech transcriber is selected (whisper binary + weights present — Phase 36).
-   * Availability-driven UI gate for voice dictation (Phase 37, the D14 precedent):
-   * the composer mic renders only when true. No settings key.
+   * A speech transcriber is available (whisper binary + weights present). Gates the
+   * composer mic — availability-driven, no settings key.
    */
   dictationAvailable: boolean
   /**
-   * Local text recognition (OCR) is available: the vendored language files exist in
-   * the drive's `ocr/` dir (Phase 38, the D14 precedent — availability-driven, no
-   * settings key). Gates the "Make searchable (OCR)" offer and photo imports.
+   * Local text recognition (OCR) is available: the language files exist in the
+   * drive's `ocr/` dir. Gates the "Make searchable (OCR)" offer and photo imports —
+   * availability-driven, no settings key.
    */
   ocrAvailable: boolean
 }
 
-// ---- Privacy / offline policy (Phase 8, spec §6 config/policy.json + §3.5/§3.6) ----
+// ---- Privacy / offline policy (spec §6 config/policy.json + §3.5/§3.6) ----
 
 /** Network permissions (spec §6 policy.json `network` block). Deny-by-default. */
 export interface NetworkPolicy {
@@ -46,7 +45,7 @@ export interface NetworkPolicy {
   allowTelemetry: boolean
 }
 
-/** Workspace policy (spec §6 `workspace` block). Encryption itself lands in Phase 9. */
+/** Workspace policy (spec §6 `workspace` block). */
 export interface WorkspacePolicy {
   encryptionRequired: boolean
   allowPlaintextDevMode: boolean
@@ -88,7 +87,7 @@ export interface PolicyStatus {
   telemetryAllowed: boolean
 }
 
-// ---- Workspace vault / encryption (Phase 9, spec §3.5/§7.9) ----
+// ---- Workspace vault / encryption (spec §3.5/§7.9) ----
 
 /** Lifecycle state of the workspace as seen by the app shell / unlock gate. */
 export type WorkspaceStateName = 'uninitialized' | 'locked' | 'unlocked'
@@ -124,7 +123,7 @@ export interface DriveStatus {
 }
 
 /**
- * Launch preflight (Phase 13, spec §11.4). A friendly, NON-BLOCKING first-run check on a
+ * Launch preflight (spec §11.4). A friendly, NON-BLOCKING first-run check on a
  * (commercial) drive: writable? free space? known-slow drive? Surfaced on Home; never blocks.
  */
 export interface PreflightResult {
@@ -146,7 +145,7 @@ export interface AppSettings {
   developerMode: boolean
   /** Retrieval + chat tuning, with safe defaults. */
   contextTokens: number
-  // ---- RAG retrieval knobs (Phase 6, spec §7.8 defaults) ----
+  // ---- RAG retrieval knobs (spec §7.8 defaults) ----
   /** How many chunks to pull from the vector index before dedup/trim. */
   ragTopKInitial: number
   /** How many chunks to keep in the grounded prompt after dedup + budget. */
@@ -155,13 +154,12 @@ export interface AppSettings {
   ragMaxContextTokens: number
   /** Drop hits below this cosine similarity (0 = keep all non-negative hits). */
   ragMinSimilarity: number
-  // ---- Benchmark (Phase 7) ----
   /**
    * Last hardware benchmark result, or null if never run. The persisted profile
    * (`lastBenchmark.profile`) drives model recommendation + `AppStatus.hardwareProfile`.
    */
   lastBenchmark: BenchmarkResult | null
-  // ---- GPU acceleration (Phase 15, architecture.md GPU record §5.4) ----
+  // ---- GPU acceleration (architecture.md GPU record §5.4) ----
   /**
    * User intent: 'auto' (default — GPU when it works, the fallback ladder handles the
    * rest) or 'off' (the Settings "Use GPU acceleration" toggle, an explicit choice).
@@ -191,7 +189,7 @@ export interface AppSettings {
    * extra table), so on an encrypted workspace it is encrypted at rest with the DB.
    */
   checksumCache: Record<string, ChecksumCacheEntry>
-  // ---- Appearance (Phase 23, design-guidelines §5 / plan decision D-UI2) ----
+  // ---- Appearance (design-guidelines §5) ----
   /**
    * Theme preference. 'system' (default) follows the OS via
    * `prefers-color-scheme` and resolves to light when the OS reports nothing.
@@ -216,7 +214,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   workspaceMode: 'plaintext_dev',
   activeModelId: null,
   activeEmbeddingModelId: null,
-  // Default OFF (M10): developer affordances (unverified models, plaintext) must be an
+  // Default OFF: developer affordances (unverified models, plaintext) must be an
   // explicit opt-in on a shipped build. A dev build (`!app.isPackaged`) is treated as a
   // developer regardless of this setting (`AppContext.isDev`).
   developerMode: false,
@@ -227,7 +225,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   ragMinSimilarity: 0,
   lastBenchmark: null,
   // GPU is ALWAYS the default ('auto'); only a detected problem or the explicit Settings
-  // toggle moves a machine to CPU (GPU-plan review decision Q2 — FINAL).
+  // toggle moves a machine to CPU.
   gpuMode: 'auto',
   gpuAutoDisabled: false,
   gpuLastError: null,
@@ -237,7 +235,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   theme: 'system'
 }
 
-// ---- GPU probe (Phase 15) ----
+// ---- GPU probe ----
 /** One device as enumerated by `llama-server --list-devices` (e.g. "Vulkan0"). */
 export interface GpuDevice {
   id: string
@@ -253,7 +251,7 @@ export interface GpuProbeResult {
 
 /**
  * Which sidecar build this drive carries — the `.paid-runtime.json` install marker
- * written by `fetch-runtime` (Phase 14). Surfaced on Diagnostics ("runtime build").
+ * written by `fetch-runtime`. Surfaced on Diagnostics ("runtime build").
  */
 export interface RuntimeInstallInfo {
   version: string
@@ -262,7 +260,7 @@ export interface RuntimeInstallInfo {
   arch: string
 }
 
-// ---- Models (Phase 2) ----
+// ---- Models ----
 export type ModelState =
   | 'installed'
   | 'missing'
@@ -290,19 +288,19 @@ export interface ModelInfo {
   /**
    * True when this (missing, chat) model may be started anyway, falling back to the
    * built-in mock runtime — the zero-weights first-run journey. Computed in the main
-   * process from developer mode AND the drive policy (H6/M10).
+   * process from developer mode AND the drive policy.
    */
   startableAsMock?: boolean
   /**
    * True when this machine's RAM is below the model's `recommendedMinRamGb` — the
    * model cannot run usefully here. The UI disables Select/Start and shows a flag;
-   * the main process refuses to start installed weights that don't fit (post-MVP).
+   * the main process refuses to start installed weights that don't fit.
    */
   insufficientRam?: boolean
   /**
    * Upstream download metadata (the manifest's optional `download` block), present when
-   * the model CAN be fetched by the in-app downloader (Phase 18). The renderer needs it
-   * for the per-download confirmation (size, license link, URL, license acknowledgement).
+   * the model CAN be fetched by the in-app downloader. The renderer needs it for the
+   * per-download confirmation (size, license link, URL, license acknowledgement).
    */
   download?: ModelDownloadInfo
 }
@@ -320,7 +318,7 @@ export interface ModelDownloadInfo {
   licenseApproved: boolean
 }
 
-// ---- In-app model downloader (Phase 18, architecture.md "In-app model downloader") ----
+// ---- In-app model downloader (architecture.md "In-app model downloader") ----
 
 export type DownloadJobStatus =
   | 'queued'
@@ -331,8 +329,8 @@ export type DownloadJobStatus =
   | 'cancelled'
 
 /**
- * One in-app model download (async-with-polling, the Phase-4 import precedent): the
- * renderer polls `getDownloadJob` to drive progress UI. One download runs at a time.
+ * One in-app model download (async-with-polling, like imports): the renderer polls
+ * `getDownloadJob` to drive progress UI. One download runs at a time.
  */
 export interface DownloadJob {
   jobId: string
@@ -374,7 +372,7 @@ export interface DocumentPreviewSegment {
   sectionLabel: string | null
 }
 
-// ---- Chat (Phase 3) ----
+// ---- Chat ----
 export interface Conversation {
   id: string
   title: string
@@ -383,9 +381,9 @@ export interface Conversation {
   modelId: string | null
   mode: 'chat' | 'documents'
   /**
-   * "Ask selected documents" scope (spec §10.4, Phase 17): when non-null, document
-   * answers in this conversation retrieve ONLY from these documents. Null = whole
-   * corpus. Only meaningful for `mode: 'documents'`.
+   * "Ask selected documents" scope (spec §10.4): when non-null, document answers in
+   * this conversation retrieve ONLY from these documents. Null = whole corpus. Only
+   * meaningful for `mode: 'documents'`.
    */
   scopeDocumentIds: string[] | null
 }
@@ -396,8 +394,8 @@ export interface Citation {
   pageNumber?: number | null
   section?: string | null
   /**
-   * The cited chunk text (Phase 6), truncated for storage, so the renderer's
-   * source-snippet panel can show what was cited without a second lookup.
+   * The cited chunk text, truncated for storage, so the renderer's source-snippet
+   * panel can show what was cited without a second lookup.
    */
   snippet?: string | null
 }
@@ -413,7 +411,7 @@ export interface Message {
 }
 
 /**
- * Answer-depth mode (spec §10.3, Phase 20): how much work the model puts into one
+ * Answer-depth mode (spec §10.3): how much work the model puts into one
  * answer. 'fast' = direct + capped, 'balanced' = direct with the model's defaults
  * (the default everywhere, including document answers), 'deep' = the model's native
  * thinking mode (only offered when the active manifest has `supports_thinking_mode`).
@@ -427,7 +425,7 @@ export interface ChatOptions {
   regenerate?: boolean
 }
 
-// ---- Conversation search (Phase 31) ----
+// ---- Conversation search ----
 
 /**
  * Markers FTS5's snippet() wraps around matched terms in `ConversationSearchHit.snippet`
@@ -448,7 +446,7 @@ export interface ConversationSearchHit {
 
 /**
  * Search results for one conversation, best match first. The result list itself is
- * ordered by each conversation's best hit (bm25, newest-first tie-break — D23).
+ * ordered by each conversation's best hit (bm25, newest-first tie-break).
  */
 export interface ConversationSearchResult {
   conversationId: string
@@ -456,30 +454,27 @@ export interface ConversationSearchResult {
   hits: ConversationSearchHit[]
 }
 
-// ---- Document tasks (Phase 33, wave-3 plan §6) ----
+// ---- Document tasks (wave-3 plan §6) ----
 
-/**
- * What a document task runs over stored documents. The task machinery (queue, cancel,
- * IPC shapes) is built for all three kinds; 'summary' shipped in Phase 33 and
- * 'translation' in Phase 34 — 'compare' (Phase 35) plugs into the same engine.
- */
+/** What a document task runs over stored documents — all kinds share one engine
+ * (queue, cancel, polling IPC). */
 export type DocTaskKind = 'summary' | 'translation' | 'compare' | 'ocr'
 
 /**
- * Translation targets, v1 (Phase 34, plan §7): the two eval-set languages only. A
- * free-text language field invites silent quality failures — widen deliberately, with
- * evidence, never by loosening this type.
+ * Translation targets, v1: the two eval-set languages only. A free-text language
+ * field invites silent quality failures — widen deliberately, with evidence, never
+ * by loosening this type.
  */
 export type TranslationTargetLang = 'de' | 'en'
 
 /**
- * Provenance of a document the app GENERATED from other documents (Phase 34:
- * translation; Phase 35: comparison). Persisted in the additive
- * `documents.origin_json` column. Provenance, NOT sync: re-importing or re-indexing
- * a source does not update this document — the user re-runs the task.
+ * Provenance of a document the app GENERATED from other documents (translation,
+ * comparison). Persisted in the additive `documents.origin_json` column. Provenance,
+ * NOT sync: re-importing or re-indexing a source does not update this document — the
+ * user re-runs the task.
  *
- * The `type` discriminator was added with Phase 35; Phase-34 rows persisted without
- * it and parse as `'translation'` (the only pre-35 shape) — an additive migration.
+ * Rows persisted before the `type` discriminator existed parse as `'translation'`
+ * (the only earlier shape).
  */
 export interface TranslationOrigin {
   type: 'translation'
@@ -507,13 +502,13 @@ export interface DocTaskProgress {
 export interface StartDocTaskRequest {
   kind: DocTaskKind
   documentIds: string[]
-  /** Kind-specific parameters (e.g. a translation target language in Phase 34). */
+  /** Kind-specific parameters (e.g. the translation target language). */
   params?: Record<string, unknown>
 }
 
 /**
- * One document task as the renderer polls it (async-with-polling, the Phase-4 import /
- * Phase-18 download precedent). Terminal states: done | failed | cancelled.
+ * One document task as the renderer polls it (async-with-polling, like imports and
+ * downloads). Terminal states: done | failed | cancelled.
  */
 export interface DocTaskStatus {
   jobId: string
@@ -531,9 +526,9 @@ export interface DocTaskStatus {
 }
 
 /**
- * A persisted document summary (`documents.summary_json`, decision D25). Summaries are
- * CONTENT: they live only in the (possibly encrypted) workspace DB, never in the audit
- * log. Cleared by re-index (content may have changed); gone with document delete.
+ * A persisted document summary (`documents.summary_json`). Summaries are CONTENT:
+ * they live only in the (possibly encrypted) workspace DB, never in the audit log.
+ * Cleared by re-index (content may have changed); gone with document delete.
  */
 export interface DocumentSummary {
   text: string
@@ -542,20 +537,20 @@ export interface DocumentSummary {
   createdAt: string
   /**
    * True when the document was longer than the map-call ceiling allows: the summary
-   * honestly covers only the beginning (D25 — the UI says so, §11.4 copy).
+   * honestly covers only the beginning, and the UI says so.
    */
   truncated: boolean
 }
 
 /**
  * Friendly copy thrown by chat/document-answer handlers while a document task runs
- * (D26 strict one-at-a-time). Shared so the renderer can recognize it and offer the
+ * (strict one-at-a-time). Shared so the renderer can recognize it and offer the
  * cancel option next to the message.
  */
 export const DOC_TASK_BUSY_MESSAGE =
   'A document task is running. You can cancel it, or wait for it to finish before chatting.'
 
-// ---- Documents (Phase 4) ----
+// ---- Documents ----
 export type IngestionStatus =
   | 'queued'
   | 'extracting'
@@ -582,32 +577,31 @@ export interface DocumentInfo {
    */
   staleEmbeddings?: boolean
   /**
-   * The persisted one-click summary (Phase 33), or null/undefined when none exists.
+   * The persisted one-click summary, or null/undefined when none exists.
    * Parsed from `documents.summary_json`; re-index clears it.
    */
   summary?: DocumentSummary | null
   /**
-   * Provenance when this document was GENERATED by the app (Phase 34: a translation),
+   * Provenance when this document was GENERATED by the app (e.g. a translation),
    * or null/undefined for a normal import. Parsed from `documents.origin_json`;
    * survives re-index (provenance, not sync — the source may have changed since).
    */
   origin?: DocumentOrigin | null
   /**
-   * Transcription progress (0–100) while an AUDIO document is being read (Phase 36).
+   * Transcription progress (0–100) while an AUDIO document is being read.
    * In-memory only (merged in by the docs IPC layer during import/re-index polling);
    * undefined for text documents and outside an active transcription.
    */
   transcriptionProgress?: number
   /**
-   * True when this PDF was detected as an image-only scan (Phase 38 step 0): it
-   * failed import with the friendly scan notice and is the OCR candidate the row's
-   * "Make searchable (OCR)" action targets. Derived (status + the exact notice), not
-   * stored.
+   * True when this PDF was detected as an image-only scan: it failed import with the
+   * friendly scan notice and is the OCR candidate the row's "Make searchable (OCR)"
+   * action targets. Derived (status + the exact notice), not stored.
    */
   scanDetected?: boolean
   /**
-   * Recognition METADATA when this document's text came from local OCR (Phase 38),
-   * or null/undefined otherwise. Parsed from `documents.ocr_json` — ids/counts only;
+   * Recognition METADATA when this document's text came from local OCR, or
+   * null/undefined otherwise. Parsed from `documents.ocr_json` — ids/counts only;
    * the recognized text itself is content and stays in the (possibly encrypted) DB.
    * Survives re-index like `origin` (it states where the text came from); re-running
    * the OCR task overwrites it.
@@ -633,7 +627,7 @@ export interface ImportJob {
   documentIds: string[]
 }
 
-/** What a picked selection contains — the size-aware audio confirm (Phase 36, D35). */
+/** What a picked selection contains — drives the size-aware audio import confirm. */
 export interface ImportPreflight {
   fileCount: number
   audioFileCount: number
@@ -648,7 +642,7 @@ export interface ImportJobStatus {
   done: boolean
 }
 
-// ---- Benchmark (Phase 7) ----
+// ---- Benchmark ----
 export interface BenchmarkResult {
   os: string
   arch: string
@@ -665,7 +659,7 @@ export interface BenchmarkResult {
   ranAt: string
 }
 
-// ---- Audit log (Phase 19, architecture.md "Audit log") ----
+// ---- Audit log (architecture.md "Audit log") ----
 /**
  * What the app records to the `runtime_events` audit log — FOR THE USER, local only
  * (spec §7.11): the log lives in the workspace DB (encrypted at rest on encrypted
@@ -685,13 +679,12 @@ export type AuditEventType =
   | 'document_imported'
   | 'document_reindexed'
   | 'document_deleted'
-  // Document tasks (Phase 33, additive). Metadata = { kind, documentId } ONLY — the
-  // produced summary/translation/report is content and never reaches the audit log.
+  // Document tasks: metadata = { kind, documentId } ONLY — the produced
+  // summary/translation/report is content and never reaches the audit log.
   | 'document_task_completed'
   | 'document_task_failed'
-  // A document's stored text saved to a user-chosen file (Phase 34, the
-  // exportConversation pattern). Metadata = { documentId } only — never the path
-  // (user-chosen, content-adjacent) and never the text.
+  // A document's stored text saved to a user-chosen file. Metadata = { documentId }
+  // only — never the path (user-chosen, content-adjacent) and never the text.
   | 'document_exported'
   | 'conversation_deleted'
   | 'conversation_exported'
@@ -722,7 +715,7 @@ export interface RuntimeStatus {
   healthy: boolean
   message: string
   /**
-   * Which backend the active runtime landed on (Phase 15 fallback ladder): 'gpu' (the
+   * Which backend the active runtime landed on (the start ladder): 'gpu' (the
    * default build with a usable GPU), 'cpu' (the same build GPU-less or forced via
    * `--device none`, or the safety-net build), 'mock'. Absent when not running.
    */
@@ -730,7 +723,7 @@ export interface RuntimeStatus {
   /** The probed GPU name when backend === 'gpu' (e.g. for the Diagnostics line). */
   gpuName?: string | null
   /**
-   * Whether the ACTIVE model's manifest declares `supports_thinking_mode` (Phase 20):
+   * Whether the ACTIVE model's manifest declares `supports_thinking_mode`:
    * the renderer offers the Deep answer mode only when true. Enriched by the
    * `getRuntimeStatus` IPC handler from the manifest; absent when not running.
    */

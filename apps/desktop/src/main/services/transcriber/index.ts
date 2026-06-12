@@ -1,21 +1,21 @@
-// Transcriber contract (Phase 36, wave-3 plan §9). Turns an audio FILE into ordered,
+// Transcriber contract (wave-3 plan §9). Turns an audio FILE into ordered,
 // timestamped text segments — the AudioParser maps them onto `ExtractedSegment`s so a
 // recording becomes a normal corpus document (chunked, embedded, searchable, citable
-// with time ranges via `Citation.section` — D29).
+// with time ranges via `Citation.section`).
 //
-// Graceful-fallback rule (the reranker D9 pattern): there is NO mock transcriber. When
-// the whisper-cli binary or the weights are absent the factory returns null and an
+// Graceful-fallback rule (same pattern as the reranker): there is NO mock transcriber.
+// When the whisper-cli binary or the weights are absent the factory returns null and an
 // audio import fails per-file with friendly copy — a mock would invent a transcript
 // and silently corrupt the corpus.
 //
-// D34 (resolved by R-W1, 2026-06-11): the transcriber invokes the pinned whisper.cpp
-// CLI PER FILE rather than composing a whisper-server sidecar. Rationale: (1) upstream
-// ships prebuilt binaries for Windows only, so there is no per-OS server-ship advantage;
-// (2) ingestion is batch per-file — model-load cost is small next to transcription time;
-// (3) the CLI emits segments + `-pp` progress while it works (the R-W4 progress signal)
-// with no HTTP protocol; (4) no multi-hundred-MB upload over loopback, no port/health
-// lifecycle — cancel/suspend is just killing the child process. The localhost-only
-// sidecar rule is moot (no socket at all).
+// The transcriber invokes the pinned whisper.cpp CLI PER FILE rather than composing
+// a whisper-server sidecar. Rationale: (1) upstream ships prebuilt binaries for
+// Windows only, so there is no per-OS server-ship advantage; (2) ingestion is batch
+// per-file — model-load cost is small next to transcription time; (3) the CLI emits
+// segments + `-pp` progress while it works, with no HTTP protocol; (4) no
+// multi-hundred-MB upload over loopback, no port/health lifecycle — cancel/suspend is
+// just killing the child process. The localhost-only sidecar rule is moot (no socket
+// at all).
 
 /** One transcribed span: `[startMs, endMs]` + the recognized text. */
 export interface TranscriptSegment {

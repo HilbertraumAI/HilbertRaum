@@ -4,7 +4,7 @@ import { createMockEmbedder } from './mock'
 import { createE5Embedder } from './e5'
 import { resolveLlamaServerPath } from '../runtime/sidecar'
 
-// Availability-aware embedder selector (Phase 10 / graceful-fallback rule), mirroring
+// Availability-aware embedder selector (graceful-fallback rule), mirroring
 // the runtime factory. The real `E5Embedder` (a loopback `llama-server --embedding`
 // sidecar) is chosen only when BOTH the platform binary AND the E5 GGUF weights are
 // present; otherwise we fall back to `MockEmbedder` so the app launches + tests pass

@@ -1,6 +1,6 @@
 import type { ThemeSetting } from '@shared/types'
 
-// Theme resolution (Phase 23, design-guidelines §5 / plan decision D-UI2).
+// Theme resolution (design-guidelines §5).
 //
 // tokens.css defines `:root` as the LIGHT theme and `[data-theme="dark"]` as the dark
 // overrides; this module owns the `data-theme` attribute on <html>. The current

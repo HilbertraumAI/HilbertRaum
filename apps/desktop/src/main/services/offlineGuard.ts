@@ -5,7 +5,7 @@ import net from 'node:net'
 // The core path makes no outbound network calls at all — this is a tripwire that
 // LOGS (does not crash) if anything ever tries to reach a REMOTE host while the app
 // is offline. Loopback (127.0.0.0/8, ::1, localhost) is explicitly NOT "network":
-// the dev renderer loads from http://localhost today and the Phase-10 llama.cpp
+// the dev renderer loads from http://localhost today and the llama.cpp
 // sidecar binds 127.0.0.1, so loopback connections must always be permitted.
 
 /**
@@ -94,7 +94,7 @@ export interface AssertOfflinePostureDeps {
   installGuard: boolean
   log: (msg: string, meta?: unknown) => void
   warn: (msg: string, meta?: unknown) => void
-  /** Extra per-violation hook (Phase 19: the audit log) — called alongside `warn`. */
+  /** Extra per-violation hook (feeds the audit log) — called alongside `warn`. */
   onViolation?: (host: string) => void
 }
 

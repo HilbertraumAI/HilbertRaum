@@ -12,7 +12,7 @@ import type {
   WorkspaceStateInfo
 } from '../../shared/types'
 
-// Phase 9 IPC: the encrypted-workspace lock/unlock lifecycle (spec §7.9).
+// IPC for the encrypted-workspace lock/unlock lifecycle (spec §7.9).
 // A wrong password or a policy refusal is a NORMAL result (`{ ok: false, reason }`),
 // not a thrown error, so the unlock gate can re-prompt cleanly.
 
@@ -27,21 +27,21 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
     try {
       const state = ctx.workspace.unlock(password)
       log.info('Workspace unlocked')
-      // Audit (Phase 19): writing this also flushes events buffered while locked —
+      // Audit: writing this also flushes events buffered while locked —
       // which is how the unlock_failed events below ever reach the log. NEVER the
       // password, in any branch.
       ctx.audit?.('workspace_unlocked', 'Workspace unlocked')
-      // First unlock of a never-benchmarked workspace → background benchmark (M12).
+      // First unlock of a never-benchmarked workspace → background benchmark.
       maybeRunFirstBenchmark(ctx)
-      // Bring the selected model's runtime back up in the background (post-MVP polish).
+      // Bring the selected model's runtime back up in the background.
       maybeAutoStartActiveModel(ctx)
       return { ok: true, state }
     } catch (err) {
       // instanceof PLUS the name: the production rollup bundle can contain a second,
       // tree-shaken copy of workspace-vault (module-id quirk), and the class thrown by
       // the vault is then not the class this file imported — instanceof alone made the
-      // friendly wrong-password message unreachable in the built app (found by the
-      // Phase-27 eyeball walk; vitest runs unbundled and never sees it).
+      // friendly wrong-password message unreachable in the built app (vitest runs
+      // unbundled and never sees this).
       if (err instanceof WrongPasswordError || (err instanceof Error && err.name === 'WrongPasswordError')) {
         ctx.audit?.('workspace_unlock_failed', 'Workspace unlock failed (wrong password)')
         // §7 voice: describe the problem and the next step, no jargon.
@@ -71,14 +71,14 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
         const state = ctx.workspace.create(password, mode)
         log.info('Workspace created', { mode })
         ctx.audit?.('workspace_created', 'Workspace created', { mode })
-        // A fresh workspace has never been benchmarked → background benchmark (M12).
+        // A fresh workspace has never been benchmarked → background benchmark.
         maybeRunFirstBenchmark(ctx)
         // A fresh workspace has no active model yet; this is a no-op then, but covers
         // re-created vaults that restored settings.
         maybeAutoStartActiveModel(ctx)
         return { ok: true, state }
       } catch (err) {
-        // Plaintext refused by policy, and create-over-an-existing-vault (H4: would wipe
+        // Plaintext refused by policy, and create-over-an-existing-vault (would wipe
         // the user's data), are expected refusals — surface the real message.
         const message = err instanceof Error ? err.message : String(err)
         if (/not permitted|already exists/i.test(message)) {
@@ -90,7 +90,7 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
     }
   )
 
-  // Phase 32: change the vault password. Runs UNLOCKED only; a wrong current password
+  // Change the vault password. Runs UNLOCKED only; a wrong current password
   // is a NORMAL failure result audited in the existing unlock-failure class (never a
   // new event, never the password). On a legacy v1 vault the first change runs the
   // one-time journaled migration to the v2 envelope — it can take a while on a big
@@ -115,7 +115,7 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
       try {
         const state = ctx.workspace.changePassword(currentPassword, nextPassword)
         log.info('Workspace password changed') // never the passwords, in any branch
-        // Audit (additive Phase-32 event): id-free, content-free, success only.
+        // Audit: id-free, content-free, success only.
         ctx.audit?.('workspace_password_changed', 'Workspace password changed')
         return { ok: true, state }
       } catch (err) {
@@ -149,14 +149,14 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
     // DB is still open); the E5 embedder + reranker restart lazily on next use, and the
     // chat runtime comes back via the unlock auto-start.
     for (const controller of inFlightStreams.values()) controller.abort()
-    // `suspend()` (not `stop()`, Phase 21 fix): the sidecars must come back lazily
+    // `suspend()` (not `stop()`): the sidecars must come back lazily
     // after unlock — `stop()` latches permanently for the will-quit path and used to
     // leave every post-lock/unlock embed failing with "Embedder is stopped".
     await Promise.allSettled([
       ctx.runtime.stop(),
       ctx.embedder.suspend?.() ?? ctx.embedder.stop?.() ?? Promise.resolve(),
       ctx.reranker?.suspend?.() ?? Promise.resolve(),
-      // Phase 36: kill any in-flight whisper-cli child (it is reading decrypted audio;
+      // Kill any in-flight whisper-cli child (it is reading decrypted audio;
       // the failing parse marks that document `failed`, and processDocument's finally
       // shreds the decrypted transient). Per-file CLI — next use just respawns.
       ctx.transcriber?.suspend?.() ?? Promise.resolve()

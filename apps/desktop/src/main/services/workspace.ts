@@ -9,7 +9,7 @@ import type { DriveStatus } from '../../shared/types'
 //   2. Explicit override via the PAID_DRIVE_ROOT environment variable
 //   3. App-data fallback (normal install / dev)
 // Detection order in main: PAID_DRIVE_ROOT (the launchers) → walk-up from the app's own
-// location (`findPreparedDriveRoot`, M16 — a buyer who double-clicks the portable .exe /
+// location (`findPreparedDriveRoot` — a buyer who double-clicks the portable .exe /
 // .app directly, bypassing the launcher, must still land on the DRIVE workspace, not a
 // silent fresh app-data one) → app-data fallback.
 

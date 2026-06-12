@@ -12,7 +12,7 @@ import { friendlyIpcError } from '../lib/errors'
 import { Banner, Button, Chip, EmptyState, LocalIndicator, SegmentedControl, useToast } from '../components'
 import { Composer, ConversationList, DepthMenu, ScopePopover, Transcript } from '../chat'
 
-// Chat screen (spec §7.6 / §7.8; layout per design-guidelines §3, Phase 25). The
+// Chat screen (spec §7.6 / §7.8; layout per design-guidelines §3). The
 // conversation is the canvas: a collapsible conversation list, a centered transcript,
 // and a composer whose footer carries the quiet affordances (answer detail, document
 // scope). Two modes share the same streaming contract:
@@ -24,8 +24,8 @@ import { Composer, ConversationList, DepthMenu, ScopePopover, Transcript } from 
 // mode for the NEXT new conversation. Both need a running model — when none is running
 // we show an empty state pointing at the AI Model screen.
 //
-// Phase 20 (spec §10.3): the composer footer carries the answer-detail dropdown
-// (Quick / Balanced / Thorough — ids stay fast|balanced|deep per D-UI4), sticky per
+// Answer depth (spec §10.3): the composer footer carries the answer-detail dropdown
+// (Quick / Balanced / Thorough — the ids stay fast|balanced|deep), sticky per
 // conversation for this session and sent per-message (`ChatOptions.mode`). Thorough is
 // offered only when the running model's manifest declares thinking support
 // (`RuntimeStatus.supportsThinkingMode`); its reasoning streams into a collapsed
@@ -63,12 +63,12 @@ export function ChatScreen({ onNavigate, initialMode, initialScopeDocumentIds }:
   const [input, setInput] = useState('')
   const [streaming, setStreaming] = useState(false)
   const [streamText, setStreamText] = useState('')
-  /** Live Deep-mode reasoning (Phase 20) — rendered as the collapsed "Thinking…" line
+  /** Live Deep-mode reasoning — rendered as the collapsed "Thinking…" line
    *  on the streaming bubble only; it is never persisted, so it vanishes on refresh. */
   const [streamThinking, setStreamThinking] = useState('')
   /** Expand state of the Thinking… line — auto-collapses on the first answer token. */
   const [thinkingOpen, setThinkingOpen] = useState(false)
-  /** Which conversation the live stream belongs to (M2): the bubble renders, and the
+  /** Which conversation the live stream belongs to: the bubble renders, and the
    *  completion refresh applies, only when this still matches the visible conversation. */
   const [streamConvId, setStreamConvId] = useState<string | null>(null)
   const [runtimeRunning, setRuntimeRunning] = useState<boolean | null>(null)
@@ -80,7 +80,7 @@ export function ChatScreen({ onNavigate, initialMode, initialScopeDocumentIds }:
   // Imported documents — drives the scope popover's titles and the empty-state nudge.
   // Best-effort: a failed load just hides both affordances.
   const [docs, setDocs] = useState<DocumentInfo[]>([])
-  // Voice dictation (Phase 37): availability-driven — the composer mic renders only
+  // Voice dictation: availability-driven — the composer mic renders only
   // when a transcriber is selected (whisper binary + weights on the drive). Best-effort
   // like `docs`: a failed status read just hides the mic.
   const [dictationAvailable, setDictationAvailable] = useState(false)
@@ -216,7 +216,7 @@ export function ChatScreen({ onNavigate, initialMode, initialScopeDocumentIds }:
     return conv.id
   }
 
-  // ---- Phase 20: answer depth (Quick / Balanced / Thorough; ids per D-UI4) -----
+  // ---- Answer depth (Quick / Balanced / Thorough) ------------------------------
   /** The depth selected for a conversation key, coerced to Balanced when the running
    *  model cannot think (a sticky Thorough choice must not silently send 'deep'). */
   function depthFor(key: string): ChatDepthMode {
@@ -246,7 +246,7 @@ export function ChatScreen({ onNavigate, initialMode, initialScopeDocumentIds }:
     setThinkingOpen(false)
     answerStarted.current = false
     const unsubscribe = window.api.onToken(convId, (token) => {
-      // The first answer token auto-collapses an expanded Thinking… line (§3).
+      // The first answer token auto-collapses an expanded Thinking… line.
       if (!answerStarted.current) {
         answerStarted.current = true
         setThinkingOpen(false)
@@ -254,7 +254,7 @@ export function ChatScreen({ onNavigate, initialMode, initialScopeDocumentIds }:
       pendingTokens.current += token
       scheduleFlush()
     })
-    // Deep-mode reasoning deltas (Phase 20) feed the live "Thinking…" line. They are
+    // Deep-mode reasoning deltas feed the live "Thinking…" line. They are
     // a separate channel from answer tokens and are never part of the persisted reply.
     const unsubscribeReasoning = window.api.onReasoning(convId, (delta) => {
       pendingThinking.current += delta
@@ -267,7 +267,7 @@ export function ChatScreen({ onNavigate, initialMode, initialScopeDocumentIds }:
     })
     // Only update the visible transcript if the user is still looking at THIS
     // conversation — replacing another conversation's view with this one's messages
-    // was the M2 corruption.
+    // corrupts the visible transcript.
     const refreshIfVisible = async (): Promise<void> => {
       if (activeIdRef.current === convId) {
         setMessages(await window.api.listMessages(convId))
@@ -321,7 +321,7 @@ export function ChatScreen({ onNavigate, initialMode, initialScopeDocumentIds }:
   async function onTryAgain(): Promise<void> {
     if (!activeId || streaming || mode === 'documents') return
     // Drop the LAST message from the view only if it is an assistant turn — mirroring
-    // the backend (M1): after a failed generation the conversation ends in a user turn,
+    // the backend: after a failed generation the conversation ends in a user turn,
     // and regenerate must not touch the answer to an earlier question.
     setMessages((prev) => {
       const last = prev[prev.length - 1]
@@ -334,7 +334,7 @@ export function ChatScreen({ onNavigate, initialMode, initialScopeDocumentIds }:
     if (activeId) void window.api.stopGeneration(activeId)
   }
 
-  // Save the transcript to a user-chosen local file (spec §7.6 — M13). Saving is an
+  // Save the transcript to a user-chosen local file (spec §7.6). Saving is an
   // explicit user action via the OS save dialog; nothing leaves the device otherwise.
   // Confirmation goes through the toast host (guidelines §6) — never inline notices.
   async function onSaveConversation(): Promise<void> {
@@ -519,7 +519,7 @@ export function ChatScreen({ onNavigate, initialMode, initialScopeDocumentIds }:
             disabled={streaming}
           />
           <div className="chat-header-spacer" />
-          {/* Ambient "Local · Offline" signal (Phase 27, guidelines §7). */}
+          {/* Ambient "Local · Offline" signal (guidelines §7). */}
           <LocalIndicator onNavigate={onNavigate} />
           <DropdownMenu.Root>
             <DropdownMenu.Trigger asChild>
@@ -563,7 +563,7 @@ export function ChatScreen({ onNavigate, initialMode, initialScopeDocumentIds }:
         {error && (
           <Banner tone="error" onDismiss={() => setError(null)}>
             {error}
-            {/* Chat refused while a document task runs (Phase 33, D26): the shared
+            {/* Chat refused while a document task runs: the shared
                 copy comes with an actionable cancel — the task, not the chat. */}
             {error.includes(DOC_TASK_BUSY_MESSAGE) && (
               <>

@@ -16,7 +16,7 @@ interface NavItem {
   icon: string
 }
 
-// Information architecture (Phase 26, guidelines §2): 4 everyday destinations on top,
+// Information architecture (design-guidelines §2): 4 everyday destinations on top,
 // Settings as the single bottom utility. Privacy and Diagnostics live INSIDE Settings
 // as tabs — they are no longer nav destinations.
 const NAV_TOP: NavItem[] = [
@@ -30,16 +30,16 @@ const NAV_BOTTOM: NavItem[] = [{ id: 'settings', label: 'Settings', icon: '⚙�
 
 export function App(): JSX.Element {
   const [screen, setScreen] = useState<ScreenId>('home')
-  // Which Settings tab is open (Phase 26): driven by navigate() so virtual targets
+  // Which Settings tab is open: driven by navigate() so virtual targets
   // like 'settings:privacy' (and the legacy 'privacy' alias) land on the right tab.
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('general')
   // Which composer mode the Chat screen opens with. Home's "Ask my documents" jumps
   // straight into a document-Q&A chat; plain "Chat" navigation resets to chat mode.
   const [chatMode, setChatMode] = useState<'chat' | 'documents'>('chat')
-  // "Ask selected documents" handoff (Phase 17): the Documents screen's selection,
+  // "Ask selected documents" handoff: the Documents screen's selection,
   // applied to the next documents conversation the Chat screen creates.
   const [chatScope, setChatScope] = useState<string[] | null>(null)
-  // Phase 9: the workspace lifecycle gate. Null = still loading; not 'unlocked' = show
+  // The workspace lifecycle gate. Null = still loading; not 'unlocked' = show
   // the create-password / unlock gate before the normal app shell.
   const [workspace, setWorkspace] = useState<WorkspaceStateInfo | null>(null)
   // Live offline state for the sidebar's ambient "Local · Offline" indicator
@@ -48,10 +48,10 @@ export function App(): JSX.Element {
   // lives on the Privacy & data tab the indicator opens.
   const [offline, setOffline] = useState(true)
   // Set when the backend never came up (getWorkspaceState rejected). Faking 'unlocked'
-  // here used to render the full shell with every screen surfacing raw IPC errors (L5).
+  // here would render the full shell with every screen surfacing raw IPC errors.
   const [fatalError, setFatalError] = useState<string | null>(null)
-  // One-line, dismissible runtime notice (Phase 16): currently the GPU crash
-  // auto-fallback's friendly "switched to compatibility mode" message (§11.4 tone).
+  // One-line, dismissible runtime notice: currently the GPU crash auto-fallback's
+  // friendly "switched to compatibility mode" message (spec §11.4 tone).
   const [notice, setNotice] = useState<string | null>(null)
 
   useEffect(() => {
@@ -79,7 +79,7 @@ export function App(): JSX.Element {
       ?.getPolicy()
       .then((p) => active && setOffline(p.offlineMode))
       .catch(() => active && setOffline(true))
-    // Apply the persisted Appearance setting (Phase 23). Settings are only readable
+    // Apply the persisted Appearance setting. Settings are only readable
     // post-unlock; re-checked alongside the policy so a Settings-screen change made
     // this session is also picked up after navigation.
     window.api
@@ -103,7 +103,7 @@ export function App(): JSX.Element {
     setScreen(next.screen)
   }
 
-  // Documents screen → "Ask these documents" (Phase 17, spec §10.4): open Chat in
+  // Documents screen → "Ask these documents" (spec §10.4): open Chat in
   // documents mode with the selection as the next conversation's retrieval scope.
   function askSelectedDocuments(documentIds: string[]): void {
     setChatMode('documents')
@@ -172,7 +172,7 @@ export function App(): JSX.Element {
   }
 
   return (
-    // The single toast host (Phase 24): screens fire "Saved"-style confirmations via
+    // The single toast host: screens fire "Saved"-style confirmations via
     // useToast(); the polite live region lives once, here.
     <ToastProvider>
     <div className="app-shell">

@@ -2,9 +2,9 @@ import { randomUUID } from 'node:crypto'
 import type { Db } from './db'
 import type { AuditEvent, AuditEventType } from '../../shared/types'
 
-// Audit log over the spec §8 `runtime_events` table (Phase 19,
-// architecture.md "Audit log") — the user's local answer to "what did this app do,
-// when", without reading app.log. NOT telemetry: the log lives in the workspace DB
+// Audit log over the spec §8 `runtime_events` table (architecture.md "Audit log") —
+// the user's local answer to "what did this app do, when", without reading app.log.
+// NOT telemetry: the log lives in the workspace DB
 // (encrypted at rest on encrypted workspaces, exactly like chats) and nothing here ever
 // leaves the device (spec §7.11).
 //
@@ -16,9 +16,9 @@ import type { AuditEvent, AuditEventType } from '../../shared/types'
 //   counts — NEVER chat content, document text, or passwords. Enforced by review at the
 //   call sites + the sentinel-grep test in tests/integration/audit-ipc.test.ts.
 // - Retention: the table is pruned to the newest `AUDIT_MAX_ROWS` rows on every insert
-//   (decision D7: fixed for wave 1) — bounded table, no vacuum ceremony.
+//   — bounded table, no vacuum ceremony.
 
-/** Fixed retention ceiling (decision D7 — configurability is Office-edition surface). */
+/** Fixed retention ceiling — deliberately not configurable in this edition. */
 export const AUDIT_MAX_ROWS = 5000
 
 /** Newest-first ordering: ISO-8601 `created_at`, with rowid breaking equal-ms ties. */

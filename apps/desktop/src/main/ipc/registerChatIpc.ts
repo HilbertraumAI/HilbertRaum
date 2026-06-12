@@ -26,22 +26,22 @@ import {
 import { log } from '../services/logging'
 import { inFlightStreams } from './inflight'
 
-// Phase 3 IPC: conversation CRUD + streaming chat (spec §9.1, §7.6).
+// IPC for conversation CRUD + streaming chat (spec §9.1, §7.6).
 //
-// Streaming contract (locked in BUILD_STATE §"Streaming contract"): tokens are
-// pushed to the renderer over per-conversation event channels keyed by the
-// conversation id — chat:token:<id> / chat:done:<id> / chat:error:<id>. The
-// `sendChatMessage` invoke also resolves with the final assistant Message so a
-// caller can simply await it. Cancellation: stopGeneration(id) aborts the in-flight
-// AbortController; the partial reply is persisted and a normal `done` is emitted.
-// Phase 20 (ADDITIVE): Deep-mode reasoning deltas go out on chat:reasoning:<id> —
-// a separate channel, so token events still carry only answer text.
+// Streaming contract (LOCKED, additive changes only): tokens are pushed to the
+// renderer over per-conversation event channels keyed by the conversation id —
+// chat:token:<id> / chat:done:<id> / chat:error:<id>. The `sendChatMessage` invoke
+// also resolves with the final assistant Message so a caller can simply await it.
+// Cancellation: stopGeneration(id) aborts the in-flight AbortController; the partial
+// reply is persisted and a normal `done` is emitted. Deep-mode reasoning deltas go
+// out on chat:reasoning:<id> — a separate (additive) channel, so token events still
+// carry only answer text.
 //
-// Decision (documented): sendChatMessage does NOT auto-start a runtime. A chat
-// needs an explicitly-started model (AI Model screen → "Start runtime"); with no
-// active runtime it throws so the renderer can show the "start a model" empty state.
-// Rationale: starting the real llama.cpp sidecar (Phase 10) is heavy and is an
-// explicit user action — keeping it explicit keeps the service boundary clean.
+// sendChatMessage does NOT auto-start a runtime. A chat needs an explicitly-started
+// model (AI Model screen → "Start runtime"); with no active runtime it throws so the
+// renderer can show the "start a model" empty state. Starting the real llama.cpp
+// sidecar is heavy and is an explicit user action — keeping it explicit keeps the
+// service boundary clean.
 
 export function registerChatIpc(ctx: AppContext): void {
   // Active stream cancellers (shared with the RAG path so stopGeneration cancels either).
@@ -68,7 +68,7 @@ export function registerChatIpc(ctx: AppContext): void {
     }
   )
 
-  // Replace the "ask selected documents" scope (Phase 17, spec §10.4) — chip removal
+  // Replace the "ask selected documents" scope (spec §10.4) — chip removal
   // in the UI. Null/empty clears back to whole-corpus retrieval.
   ipcMain.handle(
     IPC.updateConversationScope,
@@ -84,9 +84,9 @@ export function registerChatIpc(ctx: AppContext): void {
 
   ipcMain.handle(IPC.listConversations, (): Conversation[] => listConversations(ctx.db))
 
-  // Full-text search across conversations (Phase 31). The query and the returned
-  // snippets are chat CONTENT: this handler must never log them and never writes an
-  // audit event (reads are not audited — the Phase-19 privacy rule).
+  // Full-text search across conversations. The query and the returned snippets are
+  // chat CONTENT: this handler must never log them and never writes an audit event
+  // (reads are not audited — the audit privacy rule).
   ipcMain.handle(IPC.searchConversations, (_e, query: string): ConversationSearchResult[] =>
     searchMessages(ctx.db, typeof query === 'string' ? query : '')
   )
@@ -112,9 +112,9 @@ export function registerChatIpc(ctx: AppContext): void {
         throw new Error('No AI model is running. Open the AI Model screen and start one first.')
       }
 
-      // Strict one-at-a-time vs document tasks (Phase 33, D26): the one local model
-      // serves either a chat answer or a task, never both. The shared copy lets the
-      // renderer offer a cancel option for the running task.
+      // Strict one-at-a-time vs document tasks: the one local model serves either a
+      // chat answer or a task, never both. The shared copy lets the renderer offer a
+      // cancel option for the running task.
       if (ctx.docTasks?.hasActiveTask()) {
         throw new Error(DOC_TASK_BUSY_MESSAGE)
       }
@@ -141,7 +141,7 @@ export function registerChatIpc(ctx: AppContext): void {
         maybeSetTitleFromFirstMessage(ctx.db, conversationId, text)
       }
 
-      // Answer-depth mode (Phase 20): enum-guarded like gpuMode — junk from a non-UI
+      // Answer-depth mode: enum-guarded like gpuMode — junk from a non-UI
       // caller degrades to the balanced default instead of reaching the runtime.
       const mode =
         options?.mode === 'fast' || options?.mode === 'balanced' || options?.mode === 'deep'
@@ -203,7 +203,7 @@ export function registerChatIpc(ctx: AppContext): void {
     }
   })
 
-  // Export a transcript to a user-chosen file (spec §7.6 — audit M13). The save dialog
+  // Export a transcript to a user-chosen file (spec §7.6). The save dialog
   // runs in MAIN (the renderer has no fs/dialog access); returns the saved path, or
   // null when the user cancelled.
   ipcMain.handle(IPC.exportConversation, async (_e, conversationId: string): Promise<string | null> => {
@@ -222,8 +222,8 @@ export function registerChatIpc(ctx: AppContext): void {
     if (result.canceled || !result.filePath) return null
     writeFileSync(result.filePath, markdown, 'utf8')
     log.info('Transcript exported', { conversationId })
-    // Audit (Phase 19, privacy rule): the id only — the chosen path/default filename
-    // derives from the conversation TITLE, which is chat content.
+    // Audit privacy rule: the id only — the chosen path/default filename derives
+    // from the conversation TITLE, which is chat content.
     ctx.audit?.('conversation_exported', 'Conversation transcript exported to a file', {
       conversationId
     })

@@ -1,14 +1,14 @@
-// OCR contract (Phase 38, wave-3 plan §11). Turns a page IMAGE (PNG/JPEG bytes) into
+// OCR contract (wave-3 plan §11). Turns a page IMAGE (PNG/JPEG bytes) into
 // recognized text — fully local: tesseract.js (WASM) with the language files vendored
-// on the drive (`ocr/`), never fetched at runtime (R-O2).
+// on the drive (`ocr/`), never fetched at runtime.
 //
-// D31 (resolved by R-O1): recognition ALWAYS runs in the MAIN process via tesseract.js
+// Recognition ALWAYS runs in the MAIN process via tesseract.js
 // Node mode, which consumes image-file Buffers with no canvas and loads its worker
 // script + WASM core from the app's own node_modules. Only PDF page RASTERIZATION
 // needs a canvas, so only that step runs in a hidden renderer (`rasterizer.ts`);
 // photos never touch a renderer at all.
 //
-// Graceful-fallback rule (the reranker D9 / transcriber pattern): there is NO mock OCR
+// Graceful-fallback rule (the reranker/transcriber pattern): there is NO mock OCR
 // engine. When the drive carries no language files the factory returns null — a photo
 // import fails per-file with friendly copy and a detected scan shows the notice
 // without the "Make searchable" offer. A mock would invent text and silently corrupt

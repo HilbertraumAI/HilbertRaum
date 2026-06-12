@@ -11,16 +11,15 @@ import type {
   RuntimeStatus
 } from '@shared/types'
 
-// "Diagnostics (advanced)" tab of the Settings screen (Phase 26 — the former
-// DiagnosticsScreen). Still the home of every technical detail: the Activity panel
-// (Phase 19), the log tail, the Acceleration line + "Try GPU again" (Phase 16), and
-// the hardware benchmark. Visually quieter than a destination screen — it is a
+// "Diagnostics (advanced)" tab of the Settings screen. The home of every technical
+// detail: the Activity panel, the log tail, the Acceleration line + "Try GPU again",
+// and the hardware benchmark. Visually quieter than a destination screen — it is a
 // support surface, not an everyday one (guidelines §2).
 
 /** How many activity entries each page load fetches. */
 const ACTIVITY_PAGE_SIZE = 50
 
-/** Friendly labels for the Activity panel's entries + type filter (§11.4 tone). */
+/** Friendly labels for the Activity panel's entries + type filter (spec §11.4 tone). */
 const AUDIT_TYPE_LABELS: Record<AuditEventType, string> = {
   runtime_started: 'Model started',
   runtime_stopped: 'Model stopped',
@@ -54,9 +53,9 @@ function auditLabel(type: AuditEventType): string {
 }
 
 /**
- * The "Acceleration" line (Phase 16, architecture.md GPU record §8): the live backend when a
- * model is running, else what the cached probe says this machine offers. §11.4 tone —
- * CPU is presented as normal, never degraded.
+ * The "Acceleration" line (architecture.md GPU record §8): the live backend when a
+ * model is running, else what the cached probe says this machine offers. Friendly
+ * tone — CPU is presented as normal, never degraded.
  */
 function accelerationLabel(runtime: RuntimeStatus | null, settings: AppSettings | null): string {
   if (runtime?.running && runtime.backend) {
@@ -80,12 +79,12 @@ export function DiagnosticsTab(): JSX.Element {
   const [showLogs, setShowLogs] = useState(false)
   const [running, setRunning] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  // Activity panel (Phase 19): loaded on demand, paged via the beforeId cursor.
+  // Activity panel: loaded on demand, paged via the beforeId cursor.
   const [showActivity, setShowActivity] = useState(false)
   const [events, setEvents] = useState<AuditEvent[] | null>(null)
   const [moreAvailable, setMoreAvailable] = useState(false)
   const [typeFilter, setTypeFilter] = useState<string>('all')
-  // "Saved" confirmations are transient toasts (Phase 24, guidelines §6).
+  // "Saved" confirmations are transient toasts (guidelines §6).
   const toast = useToast()
 
   const refreshStatus = useCallback(async (): Promise<void> => {
@@ -143,8 +142,8 @@ export function DiagnosticsTab(): JSX.Element {
 
   // "Try GPU again" (architecture.md GPU record §8): clears the automatic compatibility-mode flag
   // (e.g. after a graphics-driver update) WITHOUT touching the Settings toggle. The
-  // dedicated IPC also invalidates the session probe cache + re-probes (audit fix —
-  // a plain settings write would keep a stale "no GPU" probe for the whole session).
+  // dedicated IPC also invalidates the session probe cache + re-probes — a plain
+  // settings write would keep a stale "no GPU" probe for the whole session.
   async function tryGpuAgain(): Promise<void> {
     const next = await window.api.tryGpuAgain()
     setSettings(next)

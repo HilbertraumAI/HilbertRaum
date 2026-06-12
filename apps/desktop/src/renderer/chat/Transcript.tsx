@@ -5,15 +5,15 @@ import type { Message } from '@shared/types'
 import { MessageActions } from './MessageActions'
 import { SourcesDisclosure } from './SourcesDisclosure'
 
-// Transcript (Phase 25, guidelines §3): the conversation IS the canvas — centered,
+// Transcript (guidelines §3): the conversation IS the canvas — centered,
 // max-width 720px, --text-md body (CSS). Assistant answers carry an inline
 // "▸ Sources (N)" disclosure and a hover/focus action row; the live streaming bubble
-// shows the collapsed "Thinking…" line (Phase 20 — never persisted) and announces
+// shows the collapsed "Thinking…" line (never persisted) and announces
 // streamed text over a polite ARIA live region.
 
 interface TranscriptProps {
   messages: Message[]
-  /** True when the in-flight stream belongs to THIS conversation (M2). */
+  /** True when the in-flight stream belongs to THIS conversation. */
   streamingHere: boolean
   streamText: string
   /** Live Deep-mode reasoning; '' hides the Thinking… line. */
@@ -83,9 +83,9 @@ export function Transcript({
           <div className="msg-block assistant">
             <div className="msg assistant">
               <div className="msg-role">assistant</div>
-              {/* Deep mode (Phase 20): live reasoning, collapsed by default, auto-collapsed
-                  again when the first answer token lands. Display-only — never persisted
-                  (D6), so it disappears once the final reply is re-read from history. */}
+              {/* Deep mode: live reasoning, collapsed by default, auto-collapsed
+                  again when the first answer token lands. Display-only — never persisted,
+                  so it disappears once the final reply is re-read from history. */}
               {streamThinking !== '' && (
                 <details className="msg-thinking" open={thinkingOpen}>
                   {/* Controlled explicitly (not the native toggle) so auto-collapse on

@@ -18,8 +18,8 @@ import {
   type UnexpectedExitInfo
 } from './sidecar'
 
-// Availability-aware runtime selector (Phase 10 / graceful-fallback rule) + the GPU
-// start LADDER (Phase 15, architecture.md GPU record §5.2). The app MUST still launch —
+// Availability-aware runtime selector + the GPU start LADDER (architecture.md GPU
+// record §5.2). The app MUST still launch —
 // and the test suite MUST still pass — with zero model files, zero binaries, and zero
 // GPUs, so the real `LlamaRuntime` is opt-in by availability (binary + weights present)
 // and every GPU decision degrades automatically:
@@ -27,7 +27,8 @@ import {
 //   rung 1  default binary, NO device args   (b9585: ngl=auto + fit=on → VRAM-aware
 //           offload; on a GPU-less machine this IS CPU mode — the ladder ends here
 //           for almost everyone)
-//   rung 2  same binary, forced CPU          (`--device none` — NEVER `-ngl`, locked)
+//   rung 2  same binary, forced CPU          (`--device none` is the ONLY CPU-forcing
+//           mechanism — NEVER pass `-ngl`)
 //   rung 3  pure-CPU safety-net binary       (`runtime/llama.cpp/<os>/cpu/`, if present)
 //   rung 4  MockRuntime                      (the existing graceful-fallback rule —
 //           the app can never be *stuck*)
@@ -77,7 +78,7 @@ export interface RuntimeSelectionDeps {
   makeMock?: (opts: RuntimeStartOptions) => ModelRuntime
   /** Hook fired with the chosen backend (used for logging). */
   onSelect?: (kind: 'llama' | 'mock', opts: RuntimeStartOptions, reason: string) => void
-  /** GPU ladder hooks (Phase 15). Omitted → defaults (gpuMode 'auto', no persistence). */
+  /** GPU ladder hooks. Omitted → defaults (gpuMode 'auto', no persistence). */
   gpu?: GpuLadderDeps
 }
 
@@ -118,9 +119,9 @@ class LadderRuntime implements ModelRuntime {
     for (const rung of this.rungs) {
       // Kick the (cached) probe off BEFORE the server start so the two run
       // concurrently — the model load dominates, so by the time the server is healthy
-      // the backend label is normally already known (audit fix: a cold probe used to
-      // stall the first start by up to its 10 s bound AFTER the server was healthy,
-      // and a crash inside that window was mislabeled 'cpu').
+      // the backend label is normally already known. Probing only after health would
+      // stall the first start by up to the probe's 10 s bound and mislabel a crash
+      // inside that window as 'cpu'.
       const probe = this.deps.gpu.probeDevices ?? ((bin: string) => probeGpuDevices(bin))
       const probePromise = rung.gpuAttempt
         ? probe(rung.binPath).catch(() => [] as GpuDevice[])
@@ -241,7 +242,7 @@ export function createSelectingRuntimeFactory(deps: RuntimeSelectionDeps): Runti
       extraArgs: ['--device', 'none'],
       gpuAttempt: false
     })
-    // Rung 3: the pure-CPU safety-net build, when the drive ships one (Phase 14).
+    // Rung 3: the pure-CPU safety-net build, when the drive ships one.
     const cpuBin = resolveCpuBin(deps.rootPath)
     if (cpuBin && cpuBin !== binPath) {
       rungs.push({ label: 'rung 3 (pure-CPU safety-net build)', binPath: cpuBin, extraArgs: [], gpuAttempt: false })

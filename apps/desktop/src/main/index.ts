@@ -67,7 +67,7 @@ function resolveEmbeddingModel(manifestsDir: string | null, rootPath: string): E
 }
 
 /**
- * Resolve the reranker model from the manifests (Phase 21) — same manifest-driven,
+ * Resolve the reranker model from the manifests — same manifest-driven,
  * pre-unlock-safe pattern as `resolveEmbeddingModel`. Returns null when no `reranker`
  * manifest exists (→ no reranker is selected; retrieval keeps today's ordering).
  */
@@ -88,9 +88,9 @@ function resolveRerankerModel(manifestsDir: string | null, rootPath: string): Re
 }
 
 /**
- * Resolve the transcriber model from the manifests (Phase 36) — the
- * `resolveRerankerModel` pattern. Returns null when no `transcriber` manifest exists
- * (→ no transcriber is selected; audio imports fail per-file with friendly copy).
+ * Resolve the transcriber model from the manifests — the `resolveRerankerModel`
+ * pattern. Returns null when no `transcriber` manifest exists (→ no transcriber is
+ * selected; audio imports fail per-file with friendly copy).
  */
 function resolveTranscriberModel(
   manifestsDir: string | null,
@@ -113,7 +113,7 @@ function resolveTranscriberModel(
 // Resolve the workspace/drive layout, open the database, and register IPC.
 // Runs once at startup, before the window loads.
 function initBackend(): void {
-  // M16: a buyer who double-clicks the portable .exe / .app DIRECTLY (bypassing the
+  // A buyer who double-clicks the portable .exe / .app DIRECTLY (bypassing the
   // launcher) gets no PAID_DRIVE_ROOT — detect the drive from the app's own location so
   // they still land on the drive's (possibly encrypted) workspace, not a silent fresh
   // app-data one. PORTABLE_EXECUTABLE_DIR is set by the electron-builder portable target
@@ -133,7 +133,7 @@ function initBackend(): void {
     detectedFromAppLocation: !process.env.PAID_DRIVE_ROOT && exeDriveRoot != null
   })
 
-  // Phase 9: the workspace controller owns the DB lifecycle. In plaintext_dev mode the DB
+  // The workspace controller owns the DB lifecycle. In plaintext_dev mode the DB
   // opens immediately (current dev behavior); in encrypted mode it stays locked until the
   // unlock gate provides a password (the DB + key live only in memory while unlocked).
   const policyWarnings: string[] = []
@@ -149,7 +149,7 @@ function initBackend(): void {
   workspace.init()
   log.info('Workspace state', workspace.getState())
 
-  // Phase 19: the app-wide audit recorder (services/audit.ts). Backed by the workspace
+  // The app-wide audit recorder (services/audit.ts). Backed by the workspace
   // DB getter — while the vault is locked, events buffer in memory and flush after the
   // next unlock (which is how `workspace_unlock_failed` survives at all). Startup policy
   // warnings are the first thing on the record.
@@ -159,7 +159,7 @@ function initBackend(): void {
   const manifestsDir = resolveManifestsDir(app.getAppPath(), process.env.PAID_MANIFESTS_DIR)
   log.info('Model manifests directory', { manifestsDir })
 
-  // Phase 10: real llama.cpp runtime + real E5 embedder, behind the SAME interfaces.
+  // Real llama.cpp runtime + real E5 embedder, behind the SAME interfaces.
   // Both are opt-in by availability — the selectors return the real backend only when
   // the platform `llama-server` binary AND the GGUF weights are present, else the mock,
   // so the app launches + tests pass with zero model files (graceful-fallback rule).
@@ -167,7 +167,7 @@ function initBackend(): void {
   // embedder is picked here from the embeddings manifest (settings are unreadable until
   // the workspace unlocks, so we use the manifest's default E5 model).
   //
-  // Phase 15 (GPU): the factory walks the start ladder (architecture.md GPU record §5.2). GPU
+  // GPU: the factory walks the start ladder (architecture.md GPU record §5.2). GPU
   // settings live inside the (possibly encrypted) DB — sidecars only ever start
   // post-unlock, but every read is still guarded (locked DB → safe defaults). A rung-1
   // failure or a mid-session GPU crash persists `gpuAutoDisabled` + `gpuLastError`;
@@ -184,7 +184,7 @@ function initBackend(): void {
       log.warn('Could not persist GPU fallback state', { error: String(err) })
     }
     log.warn('GPU start/run failed — continuing in compatibility (CPU) mode', { reason })
-    // Audit (Phase 19): the reason is sidecar stderr/health output, never user content.
+    // Audit: the reason is sidecar stderr/health output, never user content.
     audit('runtime_fallback', 'Switched to compatibility (CPU) mode', {
       reason: reason.slice(0, 500)
     })
@@ -238,14 +238,14 @@ function initBackend(): void {
     model: embeddingModel,
     onSelect: (kind, reason) => log.info('Embedder backend selected', { kind, reason })
   })
-  // Phase 21: the retrieval reranker — the third sidecar, selected only when binary +
+  // The retrieval reranker — the third sidecar, selected only when binary +
   // reranker GGUF exist (null otherwise; retrieval then keeps today's ordering).
   const reranker = createSelectedReranker({
     rootPath: paths.rootPath,
     model: resolveRerankerModel(manifestsDir, paths.rootPath),
     onSelect: (kind, reason) => log.info('Reranker backend selected', { kind, reason })
   })
-  // Phase 36: the audio transcriber — the whisper.cpp CLI behind the Transcriber
+  // The audio transcriber — the whisper.cpp CLI behind the Transcriber
   // interface, selected only when binary + GGML weights exist (null otherwise; audio
   // imports then fail per-file with the download-the-model copy).
   const transcriber = createSelectedTranscriber({
@@ -253,7 +253,7 @@ function initBackend(): void {
     model: resolveTranscriberModel(manifestsDir, paths.rootPath),
     onSelect: (kind, reason) => log.info('Transcriber backend selected', { kind, reason })
   })
-  // Phase 38: local OCR — tesseract.js over the drive's vendored `ocr/` language
+  // Local OCR — tesseract.js over the drive's vendored `ocr/` language
   // files, selected only when those exist (null otherwise; photo imports then fail
   // per-file and detected scans show the notice without the "Make searchable" offer).
   const ocrEngine = createSelectedOcrEngine({
@@ -261,12 +261,12 @@ function initBackend(): void {
     onSelect: (kind, reason) => log.info('OCR backend selected', { kind, reason })
   })
 
-  // Document task engine (Phase 33/34): one-at-a-time summary/translation/compare
-  // jobs. The chat-streaming guard reads the shared in-flight registry (fact §2.8) —
-  // tasks never put entries INTO that map; they own their AbortControllers. The
-  // ingestion deps + vault lease serve the translation materialize step (Phase 34):
-  // the new document goes through the normal import path (embedded + `.enc`-encrypted)
-  // while holding `beginDocumentWork()` for exactly that step.
+  // Document task engine: one-at-a-time summary/translation/compare jobs. The
+  // chat-streaming guard reads the shared in-flight registry — tasks never put
+  // entries INTO that map; they own their AbortControllers. The ingestion deps +
+  // vault lease serve the translation materialize step: the new document goes
+  // through the normal import path (embedded + `.enc`-encrypted) while holding
+  // `beginDocumentWork()` for exactly that step.
   const docTasks = new DocTaskManager({
     getDb: () => workspace.requireDb(),
     getRuntime: () => runtime.active(),
@@ -275,7 +275,7 @@ function initBackend(): void {
     getStoreDir: () => documentsDir(paths.workspacePath),
     getIngestionDeps: () => ({ embedder, cipher: workspace.documentCipher(), ocrEngine }),
     beginDocumentWork: () => workspace.beginDocumentWork(),
-    // Phase 38: the OCR task's engine + the hidden-window PDF rasterizer (D31).
+    // The OCR task's engine + the hidden-window PDF rasterizer.
     getOcrEngine: () => ocrEngine,
     rasterizePdf: rasterizePdfWithHiddenWindow,
     audit
@@ -312,16 +312,16 @@ function initBackend(): void {
   registerBenchmarkIpc(ctx)
   registerAuditIpc(ctx)
 
-  // Spec §2.1 first-run benchmark (M12): a plaintext-dev workspace is already open at
+  // Spec §2.1 first-run benchmark: a plaintext-dev workspace is already open at
   // startup — benchmark it in the background if it never was. Encrypted workspaces get
   // the same treatment after unlock/create (registerWorkspaceIpc).
   maybeRunFirstBenchmark(ctx)
-  // Post-MVP polish: bring the selected model's runtime back up in the background so a
+  // Bring the selected model's runtime back up in the background so a
   // restarted app matches what the Home screen shows. Encrypted workspaces do this
   // after unlock/create (registerWorkspaceIpc) — settings are unreadable until then.
   maybeAutoStartActiveModel(ctx)
 
-  // Phase 8: log the offline posture and install a defensive tripwire that flags any
+  // Log the offline posture and install a defensive tripwire that flags any
   // attempt to reach a REMOTE host while offline (loopback is exempt — dev renderer +
   // llama.cpp sidecar bind 127.0.0.1). The guard only logs; it never blocks. It is
   // installed in ALL builds when offline (not just dev) so a production regression that
@@ -338,7 +338,7 @@ function initBackend(): void {
     installGuard: true,
     log: (m, meta) => log.info(m, meta),
     warn: (m, meta) => log.warn(m, meta),
-    // Audit (Phase 19): a tripped offline guard goes on the user's local record too.
+    // A tripped offline guard goes on the user's local audit record too.
     onViolation: (host) =>
       audit('offline_guard_violation', 'A remote connection attempt was detected while offline', {
         host
@@ -356,7 +356,7 @@ function createWindow(): void {
     title: 'Private AI Drive Lite',
     // Pre-paint window color: follow the OS theme (the renderer applies the real
     // theme tokens — --bg light/dark — before first paint; this only avoids a
-    // mismatched flash while the window comes up). Phase 23.
+    // mismatched flash while the window comes up).
     backgroundColor: nativeTheme.shouldUseDarkColors ? '#0f1115' : '#f7f8fa',
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
@@ -387,11 +387,10 @@ function createWindow(): void {
     })
   })
 
-  // Deny-by-default permission handler (Phase 31 hardening rider — wave-3 plan §12).
-  // Electron GRANTS permission requests when no handler is installed; this renderer
-  // needs exactly one: audio-only `media` from OUR OWN window for voice dictation
-  // (Phase 37, D30). Everything else — video, other permissions, other WebContents —
-  // is refused.
+  // Deny-by-default permission handler. Electron GRANTS permission requests when no
+  // handler is installed; this renderer needs exactly one: audio-only `media` from
+  // OUR OWN window for voice dictation. Everything else — video, other permissions,
+  // other WebContents — is refused.
   installPermissionRequestHandler(mainWindow.webContents.session, {
     allowMicrophoneFor: mainWindow.webContents,
     onDeny: (permission) => log.warn('Renderer permission request denied', { permission })
@@ -441,8 +440,8 @@ app.whenReady().then(() => {
 let isShuttingDown = false
 
 /**
- * Graceful shutdown: stop the runtime + embedder sidecars (real llama.cpp servers in
- * Phase 10) and AWAIT their exit so no orphaned `llama-server` process survives, then
+ * Graceful shutdown: stop the runtime + embedder sidecars and AWAIT their exit so no
+ * orphaned `llama-server` process survives, then
  * re-encrypt + shred the plaintext working DB (encrypted vault only). `runtime.stop()`
  * waits up to a couple of seconds for the child to die, so this MUST be awaited — a
  * fire-and-forget would let Electron tear down mid-kill and orphan the children.
@@ -459,7 +458,7 @@ async function shutdown(): Promise<void> {
   } catch (err) {
     log.error('Error stopping sidecars on quit', String(err))
   }
-  // Phase 9: lock (re-encrypt + shred) the plaintext working DB. No-op for plaintext_dev.
+  // Lock (re-encrypt + shred) the plaintext working DB. No-op for plaintext_dev.
   try {
     ctx?.workspace.lock()
   } catch (err) {

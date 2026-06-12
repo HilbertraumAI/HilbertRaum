@@ -6,7 +6,7 @@ import type { AuditEvent } from '../../shared/types'
 import { AUDIT_MAX_ROWS, listAuditEvents } from '../services/audit'
 import { log } from '../services/logging'
 
-// Phase 19 IPC: the Diagnostics "Activity" panel over the audit log (spec §7.11).
+// IPC for the Diagnostics "Activity" panel over the audit log (spec §7.11).
 // Read-only + export-to-file; recording happens at the other IPC modules' call sites
 // (see services/audit.ts). The log is FOR THE USER and strictly local — listing and
 // exporting are the only ways it leaves the workspace DB, both user actions.

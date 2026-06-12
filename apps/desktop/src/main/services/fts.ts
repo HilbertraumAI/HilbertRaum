@@ -1,6 +1,5 @@
-// Shared FTS5 query sanitization (lifted from services/rag/hybrid.ts in Phase 31 so
-// conversation search and hybrid retrieval use the SAME sanitizer — one set of rules
-// for what user text can reach a MATCH expression).
+// Shared FTS5 query sanitization: conversation search and hybrid retrieval use the
+// SAME sanitizer — one set of rules for what user text can reach a MATCH expression.
 
 /** Most input tokens forwarded into an FTS MATCH query (bounds query cost). */
 const MAX_QUERY_TOKENS = 32

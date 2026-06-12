@@ -8,11 +8,11 @@ import {
 } from '@shared/types'
 import { Button, ConfirmDialog } from '../components'
 
-// Conversation list (Phase 25, guidelines §3): the collapsible second column.
+// Conversation list (guidelines §3): the collapsible second column.
 // Date-grouped by last activity; row actions live behind a hover/focus "⋯" menu
 // (Radix DropdownMenu, also opened by right-click) — never permanent ✕ buttons.
-// Delete confirms through ConfirmDialog (the last browser confirm() is gone).
-// Phase 31: a search box on top — typing switches the column to full-text results
+// Delete confirms through ConfirmDialog (never browser confirm()).
+// A search box on top — typing switches the column to full-text results
 // across all conversations (matched terms highlighted); picking one opens it.
 
 /** Debounce between keystroke and the search IPC round-trip. */
@@ -80,7 +80,7 @@ export function groupConversations(conversations: Conversation[], now: Date = ne
 interface Props {
   conversations: Conversation[]
   activeId: string | null
-  /** Mid-stream the list locks (M2): selecting/deleting other conversations corrupts views. */
+  /** Mid-stream the list locks: selecting/deleting other conversations corrupts views. */
   streaming: boolean
   /** Labels the "+ New …" button for the composer's current mode. */
   mode: 'chat' | 'documents'
@@ -104,7 +104,7 @@ export function ConversationList({
   const [pendingDelete, setPendingDelete] = useState<Conversation | null>(null)
   // One controlled menu so right-click (context menu) can open the same "⋯" menu.
   const [menuOpenId, setMenuOpenId] = useState<string | null>(null)
-  // Phase 31 search: non-empty query swaps the column to results. `results` is null
+  // Search: a non-empty query swaps the column to results. `results` is null
   // while a search is still in flight (→ quiet, no flicker), [] when nothing matched.
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<ConversationSearchResult[] | null>(null)

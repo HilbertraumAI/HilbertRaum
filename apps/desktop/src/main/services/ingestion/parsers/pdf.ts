@@ -2,15 +2,15 @@ import { readFile } from 'node:fs/promises'
 import type { DocumentParser, ExtractedSegment, ParseContext, ParsedDocument } from './index'
 
 // PDF parser (spec R3). Uses pdfjs-dist's *legacy* build, which runs in plain Node
-// with no Web Worker and no DOM — validated in Phase 4. Each page becomes one segment
+// with no Web Worker and no DOM. Each page becomes one segment
 // tagged with its 1-based page number, so every chunk derived from it can cite a page.
 // pdfjs is imported lazily so the (large) library only loads when a PDF is ingested.
 //
-// Image-only-scan detection (Phase 38 step 0, the Phase-17 trust spirit): a PDF whose
+// Image-only-scan detection: a PDF whose
 // pages carry ~no extractable text used to silently index NOTHING — it reached
 // `indexed` with zero chunks and answers could never find it. Now it fails friendly
 // with PDF_SCAN_DETECTED_MESSAGE; the Documents row offers "Make searchable (OCR)"
-// when the local OCR assets exist (D33: OCR is never automatic for PDFs).
+// when the local OCR assets exist (OCR is never automatic for PDFs).
 //
 // After the OCR task ran, its per-page recognition is persisted (`documents.ocr_json`)
 // and arrives here as `ctx.ocrPages`: a scan-detected PDF then parses into one segment
@@ -74,9 +74,9 @@ export const PdfParser: DocumentParser = {
       await loadingTask.destroy()
     }
 
-    // Scan detection (step 0): NO page reaches the text threshold ⇒ image-only (or
+    // Scan detection: NO page reaches the text threshold ⇒ image-only (or
     // empty) PDF. A hybrid PDF (some real text pages, some scanned) is NOT detected —
-    // its text pages index normally, exactly as before.
+    // its text pages index normally.
     const textPages = segments.filter((s) => s.text.length >= PDF_TEXT_PAGE_MIN_CHARS)
     if (numPages > 0 && textPages.length === 0) {
       // Stored recognition available (the OCR task ran) → one segment per recognized

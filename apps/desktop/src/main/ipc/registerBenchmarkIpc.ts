@@ -9,7 +9,7 @@ import { discoverManifests } from '../services/models'
 import { getSettings, updateSettings } from '../services/settings'
 import { log } from '../services/logging'
 
-// Phase 7 IPC: hardware benchmark + model recommendation (spec §9.1, §11, Milestone 7).
+// IPC for the hardware benchmark + model recommendation (spec §9.1, §11).
 //
 // `runBenchmark()` detects RAM/CPU/OS, probes drive speed in the workspace, optionally
 // estimates tokens/sec from the running runtime, classifies a HardwareProfile, and
@@ -19,7 +19,7 @@ import { log } from '../services/logging'
 
 /**
  * Run the (session-cached) GPU probe on the drive's own `llama-server` and persist the
- * result to `settings.gpuProbe` (Phase 16, architecture.md GPU record §5.4) — so Diagnostics +
+ * result to `settings.gpuProbe` (architecture.md GPU record §5.4) — so Diagnostics +
  * profile classification have device info without re-probing every launch. The probe
  * stays OUT of benchmark.ts (which keeps zero `child_process`); the summary is injected.
  * Never throws: no binary / no devices / probe failure → a null-name, not-useful input.
@@ -63,7 +63,7 @@ export async function runAndPersistBenchmark(ctx: AppContext): Promise<Benchmark
 }
 
 /**
- * Spec §2.1 "first-run hardware benchmark" (audit M12): if this workspace has never been
+ * Spec §2.1 "first-run hardware benchmark": if this workspace has never been
  * benchmarked, run it once in the background so the hardware profile + model
  * recommendation appear without the user having to find the Diagnostics button. Fired
  * after the workspace becomes usable (plaintext open at startup, or unlock/create).
@@ -74,9 +74,9 @@ export function maybeRunFirstBenchmark(ctx: AppContext): void {
     if (!ctx.workspace.isUnlocked()) return
     if (getSettings(ctx.db).lastBenchmark !== null) {
       // Already benchmarked — still refresh the persisted GPU probe for THIS
-      // machine/session in the background (audit fix: a drive moved between machines
-      // kept showing the previous machine's GPU in Diagnostics until a manual
-      // re-benchmark; pre-GPU-era workspaces never got `gpuProbe` populated at all).
+      // machine/session in the background: a drive moved between machines would
+      // otherwise keep showing the previous machine's GPU in Diagnostics until a
+      // manual re-benchmark (and older workspaces may have no `gpuProbe` at all).
       void probeAndPersistGpu(ctx)
       return
     }
@@ -90,7 +90,7 @@ export function maybeRunFirstBenchmark(ctx: AppContext): void {
 }
 
 /**
- * "Try GPU again" (Diagnostics, audit fix): clearing the flags alone is not enough —
+ * "Try GPU again" (Diagnostics): clearing the flags alone is not enough —
  * a probe that timed out once (cold/wedged driver) stays cached for the session and
  * would keep labeling a now-working GPU machine as CPU. Invalidate the cache, clear
  * the flags, re-probe + persist, and hand the renderer the fresh settings.

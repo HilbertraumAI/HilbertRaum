@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react'
 
 // Empty state (guidelines §6): friendly headline + one line + one primary action.
-// Used on Documents, Models (and Chat in Phase 25).
+// Used on Documents, Models, and Chat.
 
 export interface EmptyStateProps {
   title: string

@@ -79,8 +79,8 @@ export function detectSystem(): SystemInfo {
     /* keep default */
   }
   // GPU detection stays out of this module (zero `child_process` — see header): the
-  // real probe (`runtime/gpu.ts` `--list-devices`, Phase 16) runs in the IPC layer and
-  // is INJECTED via `RunBenchmarkDeps.gpu`; detectSystem itself always reports null.
+  // real probe (`runtime/gpu.ts` `--list-devices`) runs in the IPC layer and is
+  // INJECTED via `RunBenchmarkDeps.gpu`; detectSystem itself always reports null.
   return { os, arch, cpuModel, cpuCores, ramGb, gpu: null }
 }
 
@@ -88,10 +88,10 @@ export interface ClassifyHints {
   /** Measured tokens/sec, if a runtime ran. */
   tokensPerSecond?: number | null
   /**
-   * True only when the probed GPU passes the conservative §8 gate (≥ 6 GiB VRAM and
-   * not integrated-looking — see `gpuUsefulForProfile` in runtime/gpu.ts). The dormant
-   * Phase-7 "any truthy gpu string bumps" branch was deliberately NOT woken as-is: an
-   * Iris Xe reporting shared RAM must never push a laptop into a bigger model.
+   * True only when the probed GPU passes the conservative gate (≥ 6 GiB VRAM and not
+   * integrated-looking — see `gpuUsefulForProfile` in runtime/gpu.ts). Deliberately
+   * NOT "any truthy gpu string bumps": an Iris Xe reporting shared RAM must never
+   * push a laptop into a bigger model.
    */
   gpuUseful?: boolean
 }
@@ -256,11 +256,11 @@ export function buildWarnings(input: WarningInputs): string[] {
   return warnings
 }
 
-/** The GPU probe summary INJECTED into the benchmark (Phase 16, architecture.md GPU record §5.1/§8). */
+/** The GPU probe summary INJECTED into the benchmark (architecture.md GPU record §5.1/§8). */
 export interface GpuBenchmarkInput {
   /** Display name of the primary probed device (→ `BenchmarkResult.gpu`). */
   name: string | null
-  /** Pre-computed §8 bump eligibility (`gpuUsefulForProfile` over the probed devices). */
+  /** Pre-computed bump eligibility (`gpuUsefulForProfile` over the probed devices). */
   useful: boolean
 }
 

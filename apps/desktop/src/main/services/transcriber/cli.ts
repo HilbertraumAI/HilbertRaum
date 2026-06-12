@@ -7,16 +7,16 @@ import { llamaOsDir, defaultThreadCount } from '../runtime/sidecar'
 import { shredFile } from '../workspace-vault'
 import type { TranscribeOptions, Transcriber, TranscriptSegment } from './index'
 
-// whisper.cpp CLI transcriber (Phase 36, D34 — see index.ts for the CLI-over-server
+// whisper.cpp CLI transcriber (see index.ts for the CLI-over-server
 // rationale). One child process per file: spawn the pinned `whisper-cli` with the GGML
 // weights, let it write the full transcript JSON (`-oj`) to a TRANSIENT file, parse the
 // `transcription[].offsets` (milliseconds) + text, shred the transient.
 //
-// R-W2 caveat (probed 2026-06-11): whisper-cli v1.8.6 EXITS 0 even when it cannot
+// Caveat: whisper-cli v1.8.6 EXITS 0 even when it cannot
 // decode the input ("failed to read audio data" goes to stderr, no output is written).
 // The exit code is therefore NOT trusted — success means "the JSON output exists and
 // parses"; a missing/empty result with a decode complaint on stderr maps to a
-// distinguishable DECODE error the parser turns into friendly §11.4 copy.
+// distinguishable DECODE error the parser turns into friendly copy (spec §11.4).
 
 /** Platform-specific `whisper-cli` executable name. */
 export function whisperCliBinaryName(platform: NodeJS.Platform = process.platform): string {
@@ -47,7 +47,7 @@ export function resolveWhisperCliPath(
 /** Marker prefix so the AudioParser can map a decode failure to friendly copy. */
 export const AUDIO_DECODE_ERROR_PREFIX = 'AUDIO_DECODE_FAILED:'
 
-/** Shape of the `-oj` output we rely on (whisper.cpp v1.8.6, verified R-W1). */
+/** Shape of the `-oj` output we rely on (whisper.cpp v1.8.6). */
 interface WhisperJson {
   transcription?: Array<{
     offsets?: { from?: number; to?: number }
@@ -100,7 +100,7 @@ export class WhisperCliTranscriber implements Transcriber {
       '-f', filePath,
       '-l', opts.language ?? 'auto',
       '-t', String(this.threads),
-      '-pp', // progress lines (R-W4: "progress = N%" every ~5%)
+      '-pp', // progress lines ("progress = N%" every ~5%)
       '-oj',
       '-of', outBase
     ]
@@ -111,7 +111,8 @@ export class WhisperCliTranscriber implements Transcriber {
       try {
         parsed = JSON.parse(readFileSync(jsonPath, 'utf8')) as WhisperJson
       } catch {
-        // Missing/unparsable output with exit 0 = the R-W2 silent-decode-failure mode.
+        // Missing/unparsable output with exit 0 = the silent-decode-failure mode
+        // (see module note).
         if (/failed to read audio/i.test(stderrTail)) {
           throw new Error(`${AUDIO_DECODE_ERROR_PREFIX} ${filePath}`)
         }

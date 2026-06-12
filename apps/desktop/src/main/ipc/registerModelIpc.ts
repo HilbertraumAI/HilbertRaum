@@ -18,12 +18,12 @@ import { getSettings } from '../services/settings'
 import { loadPolicy } from '../services/policy'
 import { log } from '../services/logging'
 
-// Phase 2 IPC: model discovery/selection + runtime start/stop (spec §9.1).
-// The hardware profile comes from the persisted Phase-7 benchmark (`lastBenchmark`),
+// IPC for model discovery/selection + runtime start/stop (spec §9.1).
+// The hardware profile comes from the persisted benchmark (`lastBenchmark`),
 // falling back to UNKNOWN until the user runs the benchmark for the first time.
 
 /**
- * Effective checksum leniency (M10): "developer" is the user toggle OR a dev build —
+ * Effective checksum leniency: "developer" is the user toggle OR a dev build —
  * but the drive POLICY is authoritative and can only restrict. On a commercial drive
  * (`require_sha256_match: true` / `allow_unverified_models: false`) unverified weights
  * are rejected no matter what the toggle says; this also disables the mock fallback.
@@ -72,7 +72,7 @@ export async function startModelRuntime(ctx: AppContext, modelId: string): Promi
     )
   }
 
-  // RAM gate (post-MVP): loading real weights that exceed this machine's memory would
+  // RAM gate: loading real weights that exceed this machine's memory would
   // thrash or OOM mid-chat — refuse with a friendly, spec §11.4-toned message. Only
   // real weights are gated; the zero-weights mock fallback uses no real memory.
   if (state === 'installed' && found.manifest.recommendedMinRamGb > machineRamGb()) {
@@ -187,8 +187,8 @@ export function registerModelIpc(ctx: AppContext): void {
     }
   })
 
-  // Read-only runtime state for the Diagnostics screen (spec §7.11 — audit M14).
-  // Phase 20: enriched with the active model's `supports_thinking_mode` manifest flag
+  // Read-only runtime state for the Diagnostics screen (spec §7.11),
+  // enriched with the active model's `supports_thinking_mode` manifest flag
   // so the Chat composer knows whether to offer the Deep answer mode. Manifest reads
   // happen only while a runtime is actually running (the ChatScreen's not-running
   // poll stays I/O-free), and a read failure just leaves the flag absent.
@@ -206,8 +206,8 @@ export function registerModelIpc(ctx: AppContext): void {
     return status
   })
 
-  // Which sidecar build the drive carries (the Phase-14 .paid-runtime.json marker) —
-  // the Diagnostics "runtime build" line (Phase 16). Null on unmarked/DIY drives.
+  // Which sidecar build the drive carries (the .paid-runtime.json install marker) —
+  // the Diagnostics "runtime build" line. Null on unmarked/DIY drives.
   ipcMain.handle(
     IPC.getRuntimeInstall,
     (): RuntimeInstallInfo | null => readRuntimeMarker(llamaServerDir(ctx.paths.rootPath))

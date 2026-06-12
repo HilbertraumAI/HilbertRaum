@@ -2,11 +2,10 @@ import * as Popover from '@radix-ui/react-popover'
 import type { DocumentInfo } from '@shared/types'
 import { Button, Chip } from '../components'
 
-// "📄 Using N documents ▾" (Phase 25, guidelines §3): the single composer-footer
-// affordance for the documents-mode retrieval scope, replacing the permanent
-// scope-chip row on the canvas. The popover removes scoped documents (Chip ✕),
-// adds more from the indexed corpus, or resets to all documents. Scope semantics
-// are unchanged underneath: null = whole corpus (spec §10.4).
+// "📄 Using N documents ▾" (guidelines §3): the single composer-footer affordance for
+// the documents-mode retrieval scope — no permanent scope-chip row on the canvas.
+// The popover removes scoped documents (Chip ✕), adds more from the indexed corpus,
+// or resets to all documents. Underneath, null = whole corpus (spec §10.4).
 
 interface ScopePopoverProps {
   /** All imported documents; only indexed ones are offered. */

@@ -1,9 +1,9 @@
 import type { ChatDepthMode, RuntimeStatus } from '../../../shared/types'
 
 // Runtime manager (spec §7.5). Defines the swappable ModelRuntime interface so the
-// mock runtime (Phase 2/3) and the real llama.cpp sidecar (Phase 10) are
-// interchangeable behind the same contract. The manager owns exactly one active
-// runtime and restarts it on model switch. Real runtimes MUST bind 127.0.0.1 only.
+// mock runtime and the real llama.cpp sidecar are interchangeable behind the same
+// contract. The manager owns exactly one active runtime and restarts it on model
+// switch. Real runtimes MUST bind 127.0.0.1 only.
 
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant'
@@ -16,16 +16,16 @@ export interface RuntimeChatOptions {
   temperature?: number
   signal?: AbortSignal
   /**
-   * Answer-depth mode (spec §10.3, Phase 20). Real runtimes map it to the model's
-   * thinking switch + sampling (see `requestParamsForMode` in `llama.ts`); the mock
-   * runtime ignores it. Omitted = 'balanced'.
+   * Answer-depth mode (spec §10.3). Real runtimes map it to the model's thinking
+   * switch + sampling (see `requestParamsForMode` in `llama.ts`); the mock runtime
+   * ignores it. Omitted = 'balanced'.
    */
   mode?: ChatDepthMode
   /**
    * Receives reasoning ("thinking") deltas, which stream SEPARATELY from the answer
    * tokens the generator yields (llama-server `--reasoning-format deepseek` puts them
    * in `delta.reasoning_content`). Live-display affordance only — reasoning is never
-   * part of the yielded content and is never persisted (wave-1 decision D6 (architecture.md "Chat & streaming")).
+   * part of the yielded content and is never persisted (architecture.md "Chat & streaming").
    */
   onReasoning?: (delta: string) => void
 }
@@ -44,7 +44,7 @@ export interface HealthStatus {
   port: number | null
 }
 
-/** Which inference backend a runtime landed on (Phase 15 fallback ladder). */
+/** Which inference backend a runtime landed on (the start ladder in factory.ts). */
 export type RuntimeBackend = 'gpu' | 'cpu' | 'mock'
 
 /** The contract every inference backend implements (spec §9.2). */
@@ -57,7 +57,7 @@ export interface ModelRuntime {
   start(): Promise<void>
   stop(): Promise<void>
   health(): Promise<HealthStatus>
-  /** Stream assistant tokens. Full streaming semantics land in Phase 3. */
+  /** Stream assistant tokens (answer text only — reasoning goes via `onReasoning`). */
   chatStream(messages: ChatMessage[], options?: RuntimeChatOptions): AsyncGenerator<string, void, unknown>
 }
 
@@ -137,7 +137,7 @@ export class RuntimeManager {
     return this.current?.modelId ?? null
   }
 
-  /** The active runtime instance (used by the chat service in Phase 3). */
+  /** The active runtime instance (used by the chat service). */
   active(): ModelRuntime | null {
     return this.current
   }

@@ -2,11 +2,11 @@ import { useEffect, useRef, useState } from 'react'
 import { Badge, Banner, Button, ConfirmDialog, EmptyState, Progress, type BadgeTone } from '../components'
 import type { AppSettings, DownloadJob, ModelInfo, ModelState, PolicyStatus } from '@shared/types'
 
-// "AI Model" screen (Phase 26, guidelines §2/§3 principle: singular mental model).
+// "AI Model" screen (guidelines §2/§3 principle: singular mental model).
 // The active model leads with a plain-language size/speed hint; the rest is a friendly
 // picker. Checksums, quantization ids, paths, and runtime details sit behind a
 // per-card "Technical details" disclosure (closed by default). The verify / download /
-// RAM-gate / mock-start flows underneath are unchanged from Phases 7/18+.
+// RAM-gate / mock-start flows live in the main process; this screen only presents them.
 
 const UNKNOWN_RAM = null
 
@@ -54,7 +54,7 @@ export function ModelsScreen(): JSX.Element {
   const [machineRam, setMachineRam] = useState<number | null>(UNKNOWN_RAM)
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
-  // Phase 18: the per-download confirmation dialog + the polled download job.
+  // The per-download confirmation dialog + the polled download job.
   const [confirming, setConfirming] = useState<ModelInfo | null>(null)
   const [licenseAck, setLicenseAck] = useState(false)
   const [job, setJob] = useState<DownloadJob | null>(rememberedJob)
@@ -80,7 +80,7 @@ export function ModelsScreen(): JSX.Element {
     refresh().catch((e) => setError(String(e)))
   }, [])
 
-  // Poll the live download job (async-with-polling — the import-progress precedent).
+  // Poll the live download job (async-with-polling, like import progress).
   useEffect(() => {
     jobRef.current = job
     rememberedJob = job
@@ -161,7 +161,7 @@ export function ModelsScreen(): JSX.Element {
   const activeChat = chat.find(isActive) ?? null
   const otherChat = chat.filter((m) => m !== activeChat)
 
-  // Phase 18 gates (plan §6.1): the drive policy is the ceiling, the Settings toggle the
+  // Download gates: the drive policy is the ceiling, the Settings toggle the
   // switch. The copy distinguishes the two — "disabled by policy" vs. "turn it on in
   // Settings" — reusing the PolicyStatus distinction the Privacy & data tab makes.
   const downloadsAllowedByPolicy = policy?.policy.network.allowModelDownloads ?? false
@@ -246,11 +246,11 @@ export function ModelsScreen(): JSX.Element {
     const active = isActive(m)
     const installed = m.state === 'installed' || m.state === 'running' || m.state === 'ready'
     // Reranker/transcriber are availability-driven (they work automatically once
-    // installed — D9/D14): there is nothing to select or start, so those actions are
-    // not offered (selecting one would have claimed the CHAT slot — Phase 36 fix).
+    // installed): there is nothing to select or start, so those actions are
+    // not offered — selecting one would claim the CHAT slot.
     const automatic = m.role === 'reranker' || m.role === 'transcriber'
     // Zero-weights first run: the MAIN process computes whether this (missing, chat)
-    // model may start the built-in mock (developer + policy gates, H6/M10).
+    // model may start the built-in mock (developer + policy gates).
     const canMockStart = Boolean(m.startableAsMock)
     // RAM gate: this machine has less memory than the model's minimum. Select/Start are
     // disabled (the main process refuses installed weights too); copy stays friendly.

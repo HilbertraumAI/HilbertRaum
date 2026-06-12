@@ -1,4 +1,4 @@
-// Chat screen building blocks (Phase 25, guidelines §3). ChatScreen.tsx composes these;
+// Chat screen building blocks (guidelines §3). ChatScreen.tsx composes these;
 // each piece is renderer-only and theme-agnostic (role tokens via CSS).
 
 export { ConversationList, groupConversations, type ConversationGroup } from './ConversationList'
