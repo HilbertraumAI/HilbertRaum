@@ -1,6 +1,7 @@
 import { useEffect, useRef, type ReactNode, type RefObject } from 'react'
 import { Button } from '../components'
 import { DictationButton } from './DictationButton'
+import { useT } from '../i18n'
 import type { DictationCaptureStart } from '../lib/dictation'
 
 // Composer (guidelines §3/§6): auto-growing textarea with ONE action button —
@@ -46,6 +47,7 @@ export function Composer({
   onDictationError,
   dictationCaptureImpl
 }: ComposerProps): JSX.Element {
+  const { t } = useT()
   const ownRef = useRef<HTMLTextAreaElement>(null)
   const ref = inputRef ?? ownRef
 
@@ -123,7 +125,7 @@ export function Composer({
           />
         )}
         {streaming ? (
-          <Button onClick={onStop}>Stop</Button>
+          <Button onClick={onStop}>{t('chat.composer.stop')}</Button>
         ) : (
           <Button variant="primary" disabled={!value.trim()} onClick={onSend}>
             {sendLabel}

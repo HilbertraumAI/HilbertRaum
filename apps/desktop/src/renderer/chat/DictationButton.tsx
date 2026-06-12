@@ -1,7 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
 import { Button } from '../components'
-import { captureDictation, type DictationCapture, type DictationCaptureStart } from '../lib/dictation'
+import {
+  captureDictation,
+  MIC_BLOCKED_MESSAGE,
+  type DictationCapture,
+  type DictationCaptureStart
+} from '../lib/dictation'
 import { friendlyIpcError } from '../lib/errors'
+import { useT } from '../i18n'
 
 // Voice dictation: the composer mic. Click to record (the OS mic
 // indicator is the recording signal), click again to stop — the audio is resampled
@@ -9,9 +15,6 @@ import { friendlyIpcError } from '../lib/errors'
 // the input FOR REVIEW. Nothing is ever auto-sent, and the recording never leaves
 // the machine. The button renders only when a transcriber is available
 // (availability-driven — ChatScreen gates on `dictationAvailable`; no settings key).
-
-/** Friendly notice when the model heard nothing usable (spec §11.4 tone). */
-export const DICTATION_NO_SPEECH_MESSAGE = 'No speech was recognized — try speaking again.'
 
 type DictationState = 'idle' | 'starting' | 'recording' | 'transcribing'
 
@@ -32,8 +35,17 @@ export function DictationButton({
   onError,
   captureImpl
 }: DictationButtonProps): JSX.Element {
+  const { t } = useT()
   const [state, setState] = useState<DictationState>('idle')
   const captureRef = useRef<DictationCapture | null>(null)
+
+  // lib/dictation stays t-free (a pure module); its canonical mic-blocked English is
+  // exact-matched here and localized at display (renderer-ephemeral, never persisted).
+  function friendlyCaptureError(e: unknown): string {
+    return e instanceof Error && e.message === MIC_BLOCKED_MESSAGE
+      ? t('chat.dictation.micBlocked')
+      : friendlyIpcError(e)
+  }
 
   // Leaving the screen mid-recording must release the microphone.
   useEffect(() => {
@@ -51,7 +63,7 @@ export function DictationButton({
     } catch (e) {
       captureRef.current = null
       setState('idle')
-      onError?.(friendlyIpcError(e))
+      onError?.(friendlyCaptureError(e))
     }
   }
 
@@ -64,12 +76,12 @@ export function DictationButton({
       const bytes = await capture.stop()
       const text = (await window.api.transcribeDictation(bytes)).trim()
       if (text.length === 0) {
-        onError?.(DICTATION_NO_SPEECH_MESSAGE)
+        onError?.(t('chat.dictation.noSpeech'))
       } else {
         onText(text)
       }
     } catch (e) {
-      onError?.(friendlyIpcError(e))
+      onError?.(friendlyCaptureError(e))
     } finally {
       setState('idle')
     }
@@ -78,10 +90,10 @@ export function DictationButton({
   const recording = state === 'recording'
   const busy = state === 'starting' || state === 'transcribing'
   const label = recording
-    ? 'Stop dictation and insert the text'
+    ? t('chat.dictation.stop')
     : state === 'transcribing'
-      ? 'Turning your speech into text'
-      : 'Dictate a message'
+      ? t('chat.dictation.transcribing')
+      : t('chat.dictation.start')
 
   return (
     <Button

@@ -4,6 +4,7 @@ import { render, screen, cleanup, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { ChatScreen, LIST_COLLAPSED_KEY } from '../../src/renderer/screens/ChatScreen'
 import { groupConversations } from '../../src/renderer/chat'
+import { t } from '../../src/shared/i18n'
 import { ToastProvider } from '../../src/renderer/components'
 import type { Conversation, Message, RuntimeStatus } from '../../src/shared/types'
 import { stubApi } from '../helpers/renderer'
@@ -266,7 +267,7 @@ describe('groupConversations — date grouping', () => {
       ],
       now
     )
-    expect(groups.map((g) => [g.label, g.conversations.map((x) => x.id)])).toEqual([
+    expect(groups.map((g) => [t('en', g.labelKey), g.conversations.map((x) => x.id)])).toEqual([
       ['Today', ['today']],
       ['Yesterday', ['yesterday']],
       ['Last 7 days', ['thisweek']],

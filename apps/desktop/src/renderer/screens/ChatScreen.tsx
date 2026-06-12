@@ -10,8 +10,10 @@ import {
 import { cancelActiveDocTask } from '../lib/doctasks'
 import { friendlyIpcError } from '../lib/errors'
 import { RUNTIME_POLL_MS } from '../lib/polling'
+import { useT } from '../i18n'
 import { Banner, Button, Chip, EmptyState, LocalIndicator, SegmentedControl, useToast } from '../components'
 import { Composer, ConversationList, DepthMenu, ScopePopover, Transcript } from '../chat'
+import type { MessageKey } from '@shared/i18n'
 
 // Chat screen (spec §7.6 / §7.8; layout per design-guidelines §3). The
 // conversation is the canvas: a collapsible conversation list, a centered transcript,
@@ -42,10 +44,10 @@ export const LIST_COLLAPSED_KEY = 'paid.chat.listCollapsed'
 const STREAM_FLUSH_MS = 40
 
 /** Teaching empty state (guidelines §3): example prompts that fill the composer. */
-const EXAMPLE_PROMPTS = [
-  'Summarize this contract',
-  'What are the payment terms?',
-  "Find every mention of 'indemnity'"
+const EXAMPLE_PROMPT_KEYS: MessageKey[] = [
+  'chat.example.summarize',
+  'chat.example.paymentTerms',
+  'chat.example.indemnity'
 ]
 
 interface Props {
@@ -57,6 +59,7 @@ interface Props {
 }
 
 export function ChatScreen({ onNavigate, initialMode, initialScopeDocumentIds }: Props): JSX.Element {
+  const { t } = useT()
   const [conversations, setConversations] = useState<Conversation[]>([])
   const [activeId, setActiveId] = useState<string | null>(null)
   const [messages, setMessages] = useState<Message[]>([])
@@ -264,7 +267,7 @@ export function ChatScreen({ onNavigate, initialMode, initialScopeDocumentIds }:
     // Filename auto-scope notice: a one-shot hint that this document answer was
     // restricted to the file(s) the question named (ephemeral — never persisted).
     const unsubscribeScope = window.api.onScopeNotice(convId, ({ titles }) => {
-      if (titles.length > 0) showToast(`Answering from ${titles.join(', ')} only`)
+      if (titles.length > 0) showToast(t('chat.scopeNotice', { titles: titles.join(', ') }))
     })
     // Only update the visible transcript if the user is still looking at THIS
     // conversation — replacing another conversation's view with this one's messages
@@ -342,14 +345,14 @@ export function ChatScreen({ onNavigate, initialMode, initialScopeDocumentIds }:
     if (!activeId) return
     try {
       const saved = await window.api.exportConversation(activeId)
-      if (saved) showToast(`Saved to ${saved}`)
+      if (saved) showToast(t('chat.savedTo', { path: saved }))
     } catch (e) {
       setError(friendlyIpcError(e))
     }
   }
 
   function onCopyMessage(content: string): void {
-    void navigator.clipboard.writeText(content).then(() => showToast('Copied'))
+    void navigator.clipboard.writeText(content).then(() => showToast(t('chat.copied')))
   }
 
   async function onNewChat(): Promise<void> {
@@ -429,23 +432,22 @@ export function ChatScreen({ onNavigate, initialMode, initialScopeDocumentIds }:
   if (runtimeRunning === false) {
     return (
       <div className="screen">
-        <h1>Chat</h1>
+        <h1>{t('chat.title')}</h1>
         <div className="card">
-          <h2>No model is running</h2>
+          <h2>{t('chat.noModel.title')}</h2>
           <p className="hint">
-            Chat and document Q&amp;A need a model loaded into the runtime. Open the AI Model
-            screen, pick a model, then choose <b>Start runtime</b>. Everything stays local —
-            nothing is downloaded or sent anywhere.
+            {t('chat.noModel.hintBefore')}
+            <b>{t('chat.noModel.hintAction')}</b>
+            {t('chat.noModel.hintAfter')}
           </p>
           <p className="hint">
-            <span className="spinner" /> If you just opened the app, your selected model may still
-            be loading — this screen continues automatically once it is ready.
+            <span className="spinner" /> {t('chat.noModel.stillLoading')}
           </p>
           <div className="actions" style={{ marginTop: 12 }}>
             <Button variant="primary" onClick={() => onNavigate('models')}>
-              Open AI Model
+              {t('chat.noModel.open')}
             </Button>
-            <Button onClick={() => void checkRuntime()}>Re-check</Button>
+            <Button onClick={() => void checkRuntime()}>{t('chat.noModel.recheck')}</Button>
           </div>
         </div>
       </div>
@@ -457,22 +459,18 @@ export function ChatScreen({ onNavigate, initialMode, initialScopeDocumentIds }:
   const emptyState = (
     <div className="chat-empty">
       <EmptyState
-        title="Ask a question, or ask about your documents."
-        line={
-          mode === 'documents'
-            ? 'Answers come from your documents and cite their sources.'
-            : 'Replies stream from the model on this drive — nothing leaves it.'
-        }
+        title={t('chat.empty.title')}
+        line={mode === 'documents' ? t('chat.empty.lineDocuments') : t('chat.empty.lineChat')}
         action={
           <>
-            {EXAMPLE_PROMPTS.map((p) => (
-              <Chip key={p} onClick={() => fillComposer(p)} title="Fill the message box">
-                {p}
+            {EXAMPLE_PROMPT_KEYS.map((key) => (
+              <Chip key={key} onClick={() => fillComposer(t(key))} title={t('chat.empty.fillTitle')}>
+                {t(key)}
               </Chip>
             ))}
             {indexedDocCount === 0 && (
               <Button size="sm" onClick={() => onNavigate('documents')}>
-                Add documents to ask about them
+                {t('chat.empty.addDocs')}
               </Button>
             )}
           </>
@@ -502,18 +500,18 @@ export function ChatScreen({ onNavigate, initialMode, initialScopeDocumentIds }:
             <Button
               size="sm"
               variant="ghost"
-              aria-label="Show conversation list"
-              title="Show conversation list"
+              aria-label={t('chat.listShow')}
+              title={t('chat.listShow')}
               onClick={() => setListCollapsedPersistent(false)}
             >
               »
             </Button>
           )}
           <SegmentedControl
-            ariaLabel="Chat mode"
+            ariaLabel={t('chat.modeAria')}
             options={[
-              { value: 'chat', label: 'Chat' },
-              { value: 'documents', label: 'Ask my documents' }
+              { value: 'chat', label: t('chat.mode.chat') },
+              { value: 'documents', label: t('chat.mode.documents') }
             ]}
             value={mode}
             onChange={onSelectMode}
@@ -527,8 +525,8 @@ export function ChatScreen({ onNavigate, initialMode, initialScopeDocumentIds }:
               <button
                 type="button"
                 className="chat-overflow-btn"
-                aria-label="Conversation options"
-                title="Conversation options"
+                aria-label={t('chat.convOptions')}
+                title={t('chat.convOptions')}
               >
                 ⋯
               </button>
@@ -540,7 +538,7 @@ export function ChatScreen({ onNavigate, initialMode, initialScopeDocumentIds }:
                   disabled={!activeId || messages.length === 0 || streaming}
                   onSelect={() => void onSaveConversation()}
                 >
-                  Save this conversation
+                  {t('chat.saveConversation')}
                 </DropdownMenu.Item>
               </DropdownMenu.Content>
             </DropdownMenu.Portal>
@@ -577,7 +575,7 @@ export function ChatScreen({ onNavigate, initialMode, initialScopeDocumentIds }:
                       .catch(() => undefined)
                   }}
                 >
-                  Cancel document task
+                  {t('chat.cancelDocTask')}
                 </Button>
               </>
             )}
@@ -590,8 +588,8 @@ export function ChatScreen({ onNavigate, initialMode, initialScopeDocumentIds }:
           onSend={() => void onSend()}
           onStop={onStop}
           streaming={streaming}
-          placeholder={mode === 'documents' ? 'Ask about your documents…' : 'Message…'}
-          sendLabel={mode === 'documents' ? 'Ask' : 'Send'}
+          placeholder={mode === 'documents' ? t('chat.placeholder.documents') : t('chat.placeholder.chat')}
+          sendLabel={mode === 'documents' ? t('chat.send.ask') : t('chat.send.send')}
           inputRef={composerRef}
           dictationAvailable={dictationAvailable}
           onDictationError={setError}

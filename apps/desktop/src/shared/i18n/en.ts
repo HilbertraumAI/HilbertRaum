@@ -17,10 +17,153 @@ export const en = {
   'app.lockNow': 'Lock now',
   'app.lockNowTitle': 'Re-encrypt and lock the workspace',
   'app.noticeDetails': 'Details',
+  'app.fatal.title': 'The app could not start',
+  // Split around the inline <code>logs/app.log</code> element (the path is literal).
+  'app.fatal.hintBefore':
+    'The local backend did not come up, so nothing can be loaded. Restart the app; if this ' +
+    'keeps happening, check ',
+  'app.fatal.hintAfter': ' on your drive and see docs/troubleshooting.md.',
+  'app.loadingWorkspace': 'Loading workspace…',
 
-  // ---- Home (plural pair; exercised by unit tests now, wired in the Phase-40 sweep) ----
+  // ---- Home (HomeScreen.tsx) ----
+  'home.headline.ready': 'Ready to chat.',
+  'home.headline.starting': 'Getting ready…',
+  'home.headline.almost': 'Almost set up.',
+  'home.lead':
+    'A private, offline AI workspace. Your prompts, documents, and chat history stay on ' +
+    'this device.',
+  // Split around the inline <strong>docs</strong> (a literal folder name, untranslated).
+  'home.preflight.continueBefore':
+    'You can still continue. If the app doesn’t open, see the troubleshooting guide in the ' +
+    'drive’s ',
+  'home.preflight.continueAfter': ' folder.',
+  'home.checking': 'Checking…',
+  'home.workspace.label': 'Workspace',
+  'home.workspace.encrypted': 'Encrypted — locked with your password when the app is closed',
+  'home.workspace.plaintext': 'Plaintext (developer mode)',
+  'home.workspace.badgeProtected': 'Protected',
+  'home.workspace.badgeDeveloper': 'Developer',
+  'home.model.label': 'AI model',
+  'home.model.fallbackName': 'Your model',
+  'home.model.running': '{model} is running on this device',
+  'home.model.selected': '{model} is selected — it may still be loading',
+  'home.model.none': 'No model selected yet',
+  'home.model.badgeRunning': 'Running',
+  'home.model.badgeStarting': 'Starting',
+  'home.model.badgeNeedsModel': 'Needs a model',
+  'home.model.open': 'Open AI Model',
+  'home.model.choose': 'Choose a model',
+  'home.docs.label': 'Documents',
+  'home.docs.none': 'No documents yet — add some to ask about them',
   'home.docsReady.one': '{count} document ready to ask about',
   'home.docsReady.other': '{count} documents ready to ask about',
+  'home.docs.badgeReady': 'Ready',
+  'home.docs.badgeNone': 'None yet',
+  'home.docs.add': 'Add documents',
+  'home.actions.startChat': 'Start chatting',
+  'home.actions.askDocs': 'Ask my documents',
+
+  // ---- Chat (ChatScreen.tsx) ----
+  'chat.title': 'Chat',
+  'chat.noModel.title': 'No model is running',
+  // Split around the inline <b>Start runtime</b>.
+  'chat.noModel.hintBefore':
+    'Chat and document Q&A need a model loaded into the runtime. Open the AI Model screen, ' +
+    'pick a model, then choose ',
+  'chat.noModel.hintAction': 'Start runtime',
+  'chat.noModel.hintAfter': '. Everything stays local — nothing is downloaded or sent anywhere.',
+  'chat.noModel.stillLoading':
+    'If you just opened the app, your selected model may still be loading — this screen ' +
+    'continues automatically once it is ready.',
+  'chat.noModel.open': 'Open AI Model',
+  'chat.noModel.recheck': 'Re-check',
+  'chat.empty.title': 'Ask a question, or ask about your documents.',
+  'chat.empty.lineDocuments': 'Answers come from your documents and cite their sources.',
+  'chat.empty.lineChat': 'Replies stream from the model on this drive — nothing leaves it.',
+  'chat.empty.fillTitle': 'Fill the message box',
+  'chat.empty.addDocs': 'Add documents to ask about them',
+  'chat.example.summarize': 'Summarize this contract',
+  'chat.example.paymentTerms': 'What are the payment terms?',
+  'chat.example.indemnity': "Find every mention of 'indemnity'",
+  'chat.modeAria': 'Chat mode',
+  'chat.mode.chat': 'Chat',
+  'chat.mode.documents': 'Ask my documents',
+  'chat.listShow': 'Show conversation list',
+  'chat.convOptions': 'Conversation options',
+  'chat.saveConversation': 'Save this conversation',
+  'chat.savedTo': 'Saved to {path}',
+  'chat.copied': 'Copied',
+  'chat.scopeNotice': 'Answering from {titles} only',
+  'chat.cancelDocTask': 'Cancel document task',
+  'chat.placeholder.documents': 'Ask about your documents…',
+  'chat.placeholder.chat': 'Message…',
+  'chat.send.ask': 'Ask',
+  'chat.send.send': 'Send',
+  'chat.composer.stop': 'Stop',
+
+  // ---- Chat: conversation list (ConversationList.tsx) ----
+  'chat.list.newChat': '+ New chat',
+  'chat.list.newDocQa': '+ New document Q&A',
+  'chat.list.hide': 'Hide conversation list',
+  'chat.list.empty': 'No conversations yet.',
+  'chat.list.docBadge': 'DOC',
+  'chat.list.rowOptionsAria': 'Options for conversation "{title}"',
+  'chat.search.placeholder': 'Search conversations…',
+  'chat.search.aria': 'Search conversations',
+  'chat.search.resultsAria': 'Search results',
+  'chat.search.noMatches': 'No matches yet — try a different word.',
+  'chat.group.today': 'Today',
+  'chat.group.yesterday': 'Yesterday',
+  'chat.group.last7days': 'Last 7 days',
+  'chat.group.earlier': 'Earlier',
+  'chat.delete.menuItem': 'Delete conversation',
+  'chat.delete.title': 'Delete this conversation?',
+  'chat.delete.confirm': 'Delete',
+  'chat.delete.body': '“{title}” and its messages will be permanently removed from this drive.',
+
+  // ---- Chat: answer depth (DepthMenu.tsx; ids stay fast|balanced|deep) ----
+  'chat.depth.trigger': 'Answer detail: {label}',
+  'chat.depth.fast': 'Quick',
+  'chat.depth.balanced': 'Balanced',
+  'chat.depth.deep': 'Thorough',
+  'chat.depth.fastHint': 'Short, to-the-point answers',
+  'chat.depth.balancedHint': 'The everyday default',
+  'chat.depth.deepHint': 'Thinks the problem through before answering — takes longer',
+
+  // ---- Chat: transcript + message actions ----
+  'chat.role.user': 'user',
+  'chat.role.assistant': 'assistant',
+  'chat.thinking': 'Thinking…',
+  'chat.actions.tryAgain': 'Try again',
+  'chat.actions.copy': 'Copy',
+  'chat.actions.save': 'Save',
+  'chat.actions.saveTitle': 'Save this conversation as a file (stays local)',
+
+  // ---- Chat: document scope (ScopePopover.tsx) ----
+  'chat.scope.usingAll.one': 'Using your {count} document',
+  'chat.scope.usingAll.other': 'Using all {count} documents',
+  'chat.scope.usingSome.one': 'Using {count} document',
+  'chat.scope.usingSome.other': 'Using {count} documents',
+  'chat.scope.popoverAria': 'Documents to ask',
+  'chat.scope.allLine': 'Answers come from all your documents. Pick documents to ask only those:',
+  'chat.scope.someLine': 'Answers come from these documents only:',
+  'chat.scope.addLine': 'Add a document:',
+  'chat.scope.stopAsking': 'Stop asking {title}',
+  'chat.scope.askToo': 'Ask {title} too',
+  'chat.scope.useAll': 'Use all documents',
+  'chat.scope.removedDoc': 'Removed document',
+
+  // ---- Chat: sources (SourcesDisclosure.tsx) ----
+  'chat.sources.toggle': 'Sources ({count})',
+  'chat.sources.page': 'Page {page}',
+
+  // ---- Chat: dictation (DictationButton.tsx) ----
+  'chat.dictation.start': 'Dictate a message',
+  'chat.dictation.stop': 'Stop dictation and insert the text',
+  'chat.dictation.transcribing': 'Turning your speech into text',
+  'chat.dictation.noSpeech': 'No speech was recognized — try speaking again.',
+  'chat.dictation.micBlocked':
+    'The microphone could not be used. Check the system microphone settings, then try again.',
 
   // ---- Settings (SettingsScreen.tsx — chrome + the General tab) ----
   'settings.title': 'Settings',

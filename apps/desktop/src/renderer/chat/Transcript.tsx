@@ -4,6 +4,7 @@ import remarkGfm from 'remark-gfm'
 import type { Message } from '@shared/types'
 import { MessageActions } from './MessageActions'
 import { SourcesDisclosure } from './SourcesDisclosure'
+import { useT } from '../i18n'
 
 // Transcript (guidelines §3): the conversation IS the canvas — centered,
 // max-width 720px, --text-md body (CSS). Assistant answers carry an inline
@@ -43,7 +44,13 @@ export function Transcript({
   onSave,
   actionsDisabled
 }: TranscriptProps): JSX.Element {
+  const { t } = useT()
   const scrollRef = useRef<HTMLDivElement>(null)
+
+  // Localized role chip; unknown roles (defensive) render as-is.
+  function roleLabel(role: string): string {
+    return role === 'user' ? t('chat.role.user') : role === 'assistant' ? t('chat.role.assistant') : role
+  }
 
   // Keep the transcript scrolled to the newest content.
   useEffect(() => {
@@ -59,7 +66,7 @@ export function Transcript({
         {messages.map((m) => (
           <div key={m.id} className={`msg-block ${m.role}`}>
             <div className={`msg ${m.role}`}>
-              <div className="msg-role">{m.role}</div>
+              <div className="msg-role">{roleLabel(m.role)}</div>
               {m.role === 'assistant' ? (
                 <div className="msg-content md">
                   <AssistantMarkdown text={m.content} />
@@ -82,7 +89,7 @@ export function Transcript({
         {streamingHere && (
           <div className="msg-block assistant">
             <div className="msg assistant">
-              <div className="msg-role">assistant</div>
+              <div className="msg-role">{t('chat.role.assistant')}</div>
               {/* Deep mode: live reasoning, collapsed by default, auto-collapsed
                   again when the first answer token lands. Display-only — never persisted,
                   so it disappears once the final reply is re-read from history. */}
@@ -96,7 +103,7 @@ export function Transcript({
                       onThinkingOpenChange(!thinkingOpen)
                     }}
                   >
-                    Thinking…
+                    {t('chat.thinking')}
                   </summary>
                   <div className="msg-thinking-text">{streamThinking}</div>
                 </details>

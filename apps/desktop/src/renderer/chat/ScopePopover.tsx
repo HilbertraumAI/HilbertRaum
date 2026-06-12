@@ -1,6 +1,7 @@
 import * as Popover from '@radix-ui/react-popover'
 import type { DocumentInfo } from '@shared/types'
 import { Button, Chip } from '../components'
+import { useT } from '../i18n'
 
 // "📄 Using N documents ▾" (guidelines §3): the single composer-footer affordance for
 // the documents-mode retrieval scope — no permanent scope-chip row on the canvas.
@@ -18,20 +19,19 @@ interface ScopePopoverProps {
 }
 
 export function ScopePopover({ docs, scopeIds, disabled, onChangeScope }: ScopePopoverProps): JSX.Element {
+  const { t, tCount } = useT()
   const indexed = docs.filter((d) => d.status === 'indexed')
   const scoped = scopeIds ?? []
   const addable = indexed.filter((d) => !scoped.includes(d.id))
 
   function title(id: string): string {
-    return docs.find((d) => d.id === id)?.title ?? 'Removed document'
+    return docs.find((d) => d.id === id)?.title ?? t('chat.scope.removedDoc')
   }
 
   const label =
     scopeIds == null
-      ? indexed.length === 1
-        ? 'Using your 1 document'
-        : `Using all ${indexed.length} documents`
-      : `Using ${scoped.length} ${scoped.length === 1 ? 'document' : 'documents'}`
+      ? tCount('chat.scope.usingAll', indexed.length)
+      : tCount('chat.scope.usingSome', scoped.length)
 
   return (
     <Popover.Root>
@@ -41,14 +41,17 @@ export function ScopePopover({ docs, scopeIds, disabled, onChangeScope }: ScopeP
         </button>
       </Popover.Trigger>
       <Popover.Portal>
-        <Popover.Content className="popover" align="start" sideOffset={6} aria-label="Documents to ask">
+        <Popover.Content
+          className="popover"
+          align="start"
+          sideOffset={6}
+          aria-label={t('chat.scope.popoverAria')}
+        >
           {scopeIds == null ? (
-            <p className="popover-line">
-              Answers come from all your documents. Pick documents to ask only those:
-            </p>
+            <p className="popover-line">{t('chat.scope.allLine')}</p>
           ) : (
             <>
-              <p className="popover-line">Answers come from these documents only:</p>
+              <p className="popover-line">{t('chat.scope.someLine')}</p>
               <div className="popover-chips">
                 {scoped.map((id) => (
                   <Chip
@@ -58,7 +61,7 @@ export function ScopePopover({ docs, scopeIds, disabled, onChangeScope }: ScopeP
                       const next = scoped.filter((x) => x !== id)
                       onChangeScope(next.length > 0 ? next : null)
                     }}
-                    removeLabel={`Stop asking ${title(id)}`}
+                    removeLabel={t('chat.scope.stopAsking', { title: title(id) })}
                     disabled={disabled}
                   >
                     {title(id)}
@@ -69,12 +72,14 @@ export function ScopePopover({ docs, scopeIds, disabled, onChangeScope }: ScopeP
           )}
           {addable.length > 0 && (
             <>
-              {scopeIds != null && <p className="popover-line popover-line-add">Add a document:</p>}
+              {scopeIds != null && (
+                <p className="popover-line popover-line-add">{t('chat.scope.addLine')}</p>
+              )}
               <div className="popover-chips">
                 {addable.map((d) => (
                   <Chip
                     key={d.id}
-                    title={`Ask ${d.title} too`}
+                    title={t('chat.scope.askToo', { title: d.title })}
                     disabled={disabled}
                     onClick={() => onChangeScope([...scoped, d.id])}
                   >
@@ -86,7 +91,7 @@ export function ScopePopover({ docs, scopeIds, disabled, onChangeScope }: ScopeP
           )}
           {scopeIds != null && (
             <Button size="sm" className="popover-reset" disabled={disabled} onClick={() => onChangeScope(null)}>
-              Use all documents
+              {t('chat.scope.useAll')}
             </Button>
           )}
         </Popover.Content>

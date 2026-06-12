@@ -4,6 +4,8 @@
 // "Save" saves the whole conversation. Feedback ("Copied"/"Saved") goes through the
 // toast host — the buttons never mutate their own labels.
 
+import { useT } from '../i18n'
+
 interface Props {
   /** Omit to hide (only the last assistant answer in a plain chat can regenerate). */
   onTryAgain?: () => void
@@ -13,24 +15,25 @@ interface Props {
 }
 
 export function MessageActions({ onTryAgain, onCopy, onSave, disabled }: Props): JSX.Element {
+  const { t } = useT()
   return (
     <div className="msg-actions">
       {onTryAgain && (
         <button type="button" className="msg-action" disabled={disabled} onClick={onTryAgain}>
-          ↺ Try again
+          ↺ {t('chat.actions.tryAgain')}
         </button>
       )}
       <button type="button" className="msg-action" disabled={disabled} onClick={onCopy}>
-        Copy
+        {t('chat.actions.copy')}
       </button>
       <button
         type="button"
         className="msg-action"
         disabled={disabled}
-        title="Save this conversation as a file (stays local)"
+        title={t('chat.actions.saveTitle')}
         onClick={onSave}
       >
-        Save
+        {t('chat.actions.save')}
       </button>
     </div>
   )

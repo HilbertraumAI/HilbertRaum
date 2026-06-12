@@ -4,8 +4,8 @@ import { describe, it, expect, vi, afterEach, beforeAll } from 'vitest'
 import { render, screen, cleanup, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { Composer } from '../../src/renderer/chat/Composer'
-import { DICTATION_NO_SPEECH_MESSAGE } from '../../src/renderer/chat/DictationButton'
 import { ChatScreen } from '../../src/renderer/screens/ChatScreen'
+import { t } from '../../src/shared/i18n'
 import type { DictationCapture, DictationCaptureStart } from '../../src/renderer/lib/dictation'
 import { MIC_BLOCKED_MESSAGE } from '../../src/renderer/lib/dictation'
 import type { AppStatus, RuntimeStatus } from '../../src/shared/types'
@@ -180,7 +180,7 @@ describe('record → transcribe → insert at the cursor', () => {
     await user.click(micButton())
     await user.click(await screen.findByRole('button', { name: /stop dictation/i }))
 
-    await waitFor(() => expect(onError).toHaveBeenCalledWith(DICTATION_NO_SPEECH_MESSAGE))
+    await waitFor(() => expect(onError).toHaveBeenCalledWith(t('en', 'chat.dictation.noSpeech')))
     expect((screen.getByPlaceholderText('Message…') as HTMLTextAreaElement).value).toBe('keep me')
   })
 })

@@ -7,6 +7,8 @@ import {
   type ConversationSearchResult
 } from '@shared/types'
 import { Button, ConfirmDialog } from '../components'
+import { useT } from '../i18n'
+import type { MessageKey } from '@shared/i18n'
 
 // Conversation list (guidelines §3): the collapsible second column.
 // Date-grouped by last activity; row actions live behind a hover/focus "⋯" menu
@@ -49,7 +51,8 @@ export function splitSnippet(snippet: string): Array<{ text: string; match: bool
 }
 
 export interface ConversationGroup {
-  label: string
+  /** Resolved at render via t() — label maps keep their structure (i18n-plan §5). */
+  labelKey: MessageKey
   conversations: Conversation[]
 }
 
@@ -61,10 +64,10 @@ export function groupConversations(conversations: Conversation[], now: Date = ne
   const dayMs = 24 * 60 * 60 * 1000
   const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
   const groups: ConversationGroup[] = [
-    { label: 'Today', conversations: [] },
-    { label: 'Yesterday', conversations: [] },
-    { label: 'Last 7 days', conversations: [] },
-    { label: 'Earlier', conversations: [] }
+    { labelKey: 'chat.group.today', conversations: [] },
+    { labelKey: 'chat.group.yesterday', conversations: [] },
+    { labelKey: 'chat.group.last7days', conversations: [] },
+    { labelKey: 'chat.group.earlier', conversations: [] }
   ]
   for (const c of conversations) {
     const t = Date.parse(c.updatedAt)
@@ -101,6 +104,7 @@ export function ConversationList({
   onDelete,
   onCollapse
 }: Props): JSX.Element {
+  const { t } = useT()
   const [pendingDelete, setPendingDelete] = useState<Conversation | null>(null)
   // One controlled menu so right-click (context menu) can open the same "⋯" menu.
   const [menuOpenId, setMenuOpenId] = useState<string | null>(null)
@@ -145,17 +149,17 @@ export function ConversationList({
     <aside className="chat-sidebar">
       <div className="chat-sidebar-head">
         <Button size="sm" variant="primary" className="chat-new" disabled={streaming} onClick={onNew}>
-          + New {mode === 'documents' ? 'document Q&A' : 'chat'}
+          {mode === 'documents' ? t('chat.list.newDocQa') : t('chat.list.newChat')}
         </Button>
-        <Button size="sm" variant="ghost" aria-label="Hide conversation list" title="Hide conversation list" onClick={onCollapse}>
+        <Button size="sm" variant="ghost" aria-label={t('chat.list.hide')} title={t('chat.list.hide')} onClick={onCollapse}>
           «
         </Button>
       </div>
       <input
         type="search"
         className="chat-search-input"
-        placeholder="Search conversations…"
-        aria-label="Search conversations"
+        placeholder={t('chat.search.placeholder')}
+        aria-label={t('chat.search.aria')}
         value={query}
         onChange={(e) => setQuery(e.target.value)}
         onKeyDown={(e) => {
@@ -163,9 +167,9 @@ export function ConversationList({
         }}
       />
       {searching && (
-        <div className="chat-conv-list" role="region" aria-label="Search results">
+        <div className="chat-conv-list" role="region" aria-label={t('chat.search.resultsAria')}>
           {results != null && results.length === 0 && (
-            <p className="hint">No matches yet — try a different word.</p>
+            <p className="hint">{t('chat.search.noMatches')}</p>
           )}
           {(results ?? []).map((r) => (
             <button
@@ -189,10 +193,15 @@ export function ConversationList({
       )}
       {!searching && (
         <div className="chat-conv-list">
-          {conversations.length === 0 && <p className="hint">No conversations yet.</p>}
+          {conversations.length === 0 && <p className="hint">{t('chat.list.empty')}</p>}
           {groupConversations(conversations).map((group) => (
-            <div key={group.label} className="chat-conv-group" role="group" aria-label={group.label}>
-              <div className="chat-conv-group-label">{group.label}</div>
+            <div
+              key={group.labelKey}
+              className="chat-conv-group"
+              role="group"
+              aria-label={t(group.labelKey)}
+            >
+              <div className="chat-conv-group-label">{t(group.labelKey)}</div>
               {group.conversations.map((c) => (
                 <div
                   key={c.id}
@@ -208,7 +217,9 @@ export function ConversationList({
                     onClick={() => onSelect(c)}
                     title={c.title}
                   >
-                    {c.mode === 'documents' && <span className="chat-conv-badge">DOC</span>}
+                    {c.mode === 'documents' && (
+                      <span className="chat-conv-badge">{t('chat.list.docBadge')}</span>
+                    )}
                     {c.title}
                   </button>
                   <DropdownMenu.Root
@@ -219,8 +230,8 @@ export function ConversationList({
                       <button
                         className="chat-conv-menu-btn"
                         disabled={streaming}
-                        aria-label={`Options for conversation "${c.title}"`}
-                        title="Conversation options"
+                        aria-label={t('chat.list.rowOptionsAria', { title: c.title })}
+                        title={t('chat.convOptions')}
                       >
                         ⋯
                       </button>
@@ -231,7 +242,7 @@ export function ConversationList({
                           className="menu-item danger"
                           onSelect={() => setPendingDelete(c)}
                         >
-                          Delete conversation
+                          {t('chat.delete.menuItem')}
                         </DropdownMenu.Item>
                       </DropdownMenu.Content>
                     </DropdownMenu.Portal>
@@ -244,17 +255,15 @@ export function ConversationList({
       )}
       <ConfirmDialog
         open={pendingDelete != null}
-        title="Delete this conversation?"
-        confirmLabel="Delete"
+        title={t('chat.delete.title')}
+        confirmLabel={t('chat.delete.confirm')}
         onConfirm={() => {
           if (pendingDelete) onDelete(pendingDelete)
           setPendingDelete(null)
         }}
         onCancel={() => setPendingDelete(null)}
       >
-        <p>
-          “{pendingDelete?.title}” and its messages will be permanently removed from this drive.
-        </p>
+        <p>{t('chat.delete.body', { title: pendingDelete?.title ?? '' })}</p>
       </ConfirmDialog>
     </aside>
   )

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Badge, Banner, Button } from '../components'
 import { RUNTIME_POLL_MS } from '../lib/polling'
+import { useT } from '../i18n'
 import type { AppStatus, DocumentInfo, PreflightResult, RuntimeStatus } from '@shared/types'
 
 interface Props {
@@ -13,6 +14,7 @@ interface Props {
 // (getAppStatus / getRuntimeStatus / listDocuments / runPreflight).
 
 export function HomeScreen({ onNavigate }: Props): JSX.Element {
+  const { t, tCount } = useT()
   const [status, setStatus] = useState<AppStatus | null>(null)
   const [runtime, setRuntime] = useState<RuntimeStatus | null>(null)
   const [docs, setDocs] = useState<DocumentInfo[] | null>(null)
@@ -64,30 +66,30 @@ export function HomeScreen({ onNavigate }: Props): JSX.Element {
   const indexedCount = docs?.filter((d) => d.status === 'indexed').length ?? null
 
   const headline = modelRunning
-    ? 'Ready to chat.'
+    ? t('home.headline.ready')
     : status?.activeModelId
-      ? 'Getting ready…'
-      : 'Almost set up.'
+      ? t('home.headline.starting')
+      : t('home.headline.almost')
 
   // ---- Readiness rows ----------------------------------------------------------
 
   const workspaceRow: ReadinessRowProps = {
     icon: '🗄',
-    label: 'Workspace',
+    label: t('home.workspace.label'),
     value:
       status == null
-        ? 'Checking…'
+        ? t('home.checking')
         : status.workspaceMode === 'encrypted'
-          ? 'Encrypted — locked with your password when the app is closed'
-          : 'Plaintext (developer mode)',
+          ? t('home.workspace.encrypted')
+          : t('home.workspace.plaintext'),
     badge:
       status == null ? null : status.workspaceMode === 'encrypted' ? (
         <Badge tone="success" icon="✓">
-          Protected
+          {t('home.workspace.badgeProtected')}
         </Badge>
       ) : (
         <Badge tone="neutral" icon="○">
-          Developer
+          {t('home.workspace.badgeDeveloper')}
         </Badge>
       )
   }
@@ -95,69 +97,71 @@ export function HomeScreen({ onNavigate }: Props): JSX.Element {
   const modelRow: ReadinessRowProps = modelRunning
     ? {
         icon: '🧠',
-        label: 'AI model',
-        value: `${runtime?.modelId ?? 'Your model'} is running on this device`,
+        label: t('home.model.label'),
+        value: t('home.model.running', {
+          model: runtime?.modelId ?? t('home.model.fallbackName')
+        }),
         badge: (
           <Badge tone="success" icon="▶">
-            Running
+            {t('home.model.badgeRunning')}
           </Badge>
         )
       }
     : status?.activeModelId
       ? {
           icon: '🧠',
-          label: 'AI model',
-          value: `${status.activeModelId} is selected — it may still be loading`,
+          label: t('home.model.label'),
+          value: t('home.model.selected', { model: status.activeModelId }),
           badge: (
             <Badge tone="neutral" icon="○">
-              Starting
+              {t('home.model.badgeStarting')}
             </Badge>
           ),
           action: (
             <Button size="sm" onClick={() => onNavigate('models')}>
-              Open AI Model
+              {t('home.model.open')}
             </Button>
           )
         }
       : {
           icon: '🧠',
-          label: 'AI model',
-          value: 'No model selected yet',
+          label: t('home.model.label'),
+          value: t('home.model.none'),
           badge: (
             <Badge tone="warning" icon="⚠">
-              Needs a model
+              {t('home.model.badgeNeedsModel')}
             </Badge>
           ),
           action: (
             <Button size="sm" onClick={() => onNavigate('models')}>
-              Choose a model
+              {t('home.model.choose')}
             </Button>
           )
         }
 
   const docsRow: ReadinessRowProps = {
     icon: '📄',
-    label: 'Documents',
+    label: t('home.docs.label'),
     value:
       indexedCount == null
-        ? 'Checking…'
+        ? t('home.checking')
         : indexedCount === 0
-          ? 'No documents yet — add some to ask about them'
-          : `${indexedCount} ${indexedCount === 1 ? 'document' : 'documents'} ready to ask about`,
+          ? t('home.docs.none')
+          : tCount('home.docsReady', indexedCount),
     badge:
       indexedCount == null ? null : indexedCount > 0 ? (
         <Badge tone="success" icon="✓">
-          Ready
+          {t('home.docs.badgeReady')}
         </Badge>
       ) : (
         <Badge tone="neutral" icon="○">
-          None yet
+          {t('home.docs.badgeNone')}
         </Badge>
       ),
     action:
       indexedCount === 0 ? (
         <Button size="sm" onClick={() => onNavigate('documents')}>
-          Add documents
+          {t('home.docs.add')}
         </Button>
       ) : undefined
   }
@@ -165,10 +169,7 @@ export function HomeScreen({ onNavigate }: Props): JSX.Element {
   return (
     <div className="screen">
       <h1>{headline}</h1>
-      <p className="lead">
-        A private, offline AI workspace. Your prompts, documents, and chat history stay on
-        this device.
-      </p>
+      <p className="lead">{t('home.lead')}</p>
 
       {preflightNotes.length > 0 && (
         <Banner tone="warning">
@@ -176,8 +177,9 @@ export function HomeScreen({ onNavigate }: Props): JSX.Element {
             <p key={i}>{note}</p>
           ))}
           <p>
-            You can still continue. If the app doesn’t open, see the troubleshooting guide in the
-            drive’s <strong>docs</strong> folder.
+            {t('home.preflight.continueBefore')}
+            <strong>docs</strong>
+            {t('home.preflight.continueAfter')}
           </p>
         </Banner>
       )}
@@ -190,12 +192,14 @@ export function HomeScreen({ onNavigate }: Props): JSX.Element {
 
       <div className="actions">
         <Button variant="primary" onClick={() => onNavigate('chat')}>
-          Start chatting
+          {t('home.actions.startChat')}
         </Button>
         {indexedCount !== 0 && (
-          <Button onClick={() => onNavigate('ask-documents')}>Ask my documents</Button>
+          <Button onClick={() => onNavigate('ask-documents')}>{t('home.actions.askDocs')}</Button>
         )}
-        {indexedCount !== 0 && <Button onClick={() => onNavigate('documents')}>Add documents</Button>}
+        {indexedCount !== 0 && (
+          <Button onClick={() => onNavigate('documents')}>{t('home.docs.add')}</Button>
+        )}
       </div>
     </div>
   )

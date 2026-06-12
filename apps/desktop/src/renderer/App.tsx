@@ -142,11 +142,11 @@ function AppShell(): JSX.Element {
     return (
       <div className="gate-shell">
         <div className="card">
-          <h2>The app could not start</h2>
+          <h2>{t('app.fatal.title')}</h2>
           <p className="hint">
-            The local backend did not come up, so nothing can be loaded. Restart the app; if
-            this keeps happening, check <code>logs/app.log</code> on your drive and see
-            docs/troubleshooting.md.
+            {t('app.fatal.hintBefore')}
+            <code>logs/app.log</code>
+            {t('app.fatal.hintAfter')}
           </p>
           <p className="hint">
             <code>{fatalError}</code>
@@ -171,7 +171,7 @@ function AppShell(): JSX.Element {
   if (!workspace) {
     return (
       <div className="gate-shell">
-        <p className="hint">Loading workspace…</p>
+        <p className="hint">{t('app.loadingWorkspace')}</p>
       </div>
     )
   }

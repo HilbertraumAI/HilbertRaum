@@ -1,21 +1,24 @@
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
+import { useT } from '../i18n'
+import type { MessageKey } from '@shared/i18n'
 import type { ChatDepthMode } from '@shared/types'
 
 // "Answer detail" dropdown (guidelines §3): a quiet composer-footer affordance, not a
 // prominent 3-way toggle. UI labels are Quick · Balanced · Thorough; the ids stay
 // `fast|balanced|deep` everywhere in code/IPC/persistence (no data migration).
 // Thorough is offered only when the running model's manifest declares thinking support.
+// Label/hint maps hold MessageKeys resolved at render (i18n-plan §5).
 
-export const DEPTH_LABELS: Record<ChatDepthMode, string> = {
-  fast: 'Quick',
-  balanced: 'Balanced',
-  deep: 'Thorough'
+export const DEPTH_LABEL_KEYS: Record<ChatDepthMode, MessageKey> = {
+  fast: 'chat.depth.fast',
+  balanced: 'chat.depth.balanced',
+  deep: 'chat.depth.deep'
 }
 
-const DEPTH_HINTS: Record<ChatDepthMode, string> = {
-  fast: 'Short, to-the-point answers',
-  balanced: 'The everyday default',
-  deep: 'Thinks the problem through before answering — takes longer'
+const DEPTH_HINT_KEYS: Record<ChatDepthMode, MessageKey> = {
+  fast: 'chat.depth.fastHint',
+  balanced: 'chat.depth.balancedHint',
+  deep: 'chat.depth.deepHint'
 }
 
 const DEPTH_ORDER: ChatDepthMode[] = ['fast', 'balanced', 'deep']
@@ -29,12 +32,14 @@ interface DepthMenuProps {
 }
 
 export function DepthMenu({ value, onChange, supportsThinking, disabled }: DepthMenuProps): JSX.Element {
+  const { t } = useT()
   const options = DEPTH_ORDER.filter((d) => d !== 'deep' || supportsThinking)
   return (
     <DropdownMenu.Root>
       <DropdownMenu.Trigger asChild>
         <button type="button" className="footer-menu-btn" disabled={disabled}>
-          Answer detail: {DEPTH_LABELS[value]} <span aria-hidden="true">▾</span>
+          {t('chat.depth.trigger', { label: t(DEPTH_LABEL_KEYS[value]) })}{' '}
+          <span aria-hidden="true">▾</span>
         </button>
       </DropdownMenu.Trigger>
       <DropdownMenu.Portal>
@@ -49,8 +54,8 @@ export function DepthMenu({ value, onChange, supportsThinking, disabled }: Depth
                   <DropdownMenu.ItemIndicator>●</DropdownMenu.ItemIndicator>
                 </span>
                 <span>
-                  {DEPTH_LABELS[d]}
-                  <span className="menu-item-hint">{DEPTH_HINTS[d]}</span>
+                  {t(DEPTH_LABEL_KEYS[d])}
+                  <span className="menu-item-hint">{t(DEPTH_HINT_KEYS[d])}</span>
                 </span>
               </DropdownMenu.RadioItem>
             ))}

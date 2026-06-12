@@ -33,10 +33,156 @@ export const de: Record<keyof typeof en, string> = {
   'app.lockNow': 'Jetzt sperren',
   'app.lockNowTitle': 'Arbeitsbereich wieder verschlüsseln und sperren',
   'app.noticeDetails': 'Details',
+  'app.fatal.title': 'Die App konnte nicht starten',
+  'app.fatal.hintBefore':
+    'Das lokale Backend ist nicht gestartet, daher kann nichts geladen werden. Starte die ' +
+    'App neu; wenn das öfter passiert, prüfe ',
+  'app.fatal.hintAfter': ' auf deinem Laufwerk und sieh in docs/troubleshooting.md nach.',
+  'app.loadingWorkspace': 'Arbeitsbereich wird geladen…',
 
   // ---- Home ----
+  'home.headline.ready': 'Bereit zum Chatten.',
+  'home.headline.starting': 'Gleich bereit…',
+  'home.headline.almost': 'Fast fertig eingerichtet.',
+  'home.lead':
+    'Ein privater KI-Arbeitsbereich, komplett offline. Deine Fragen, Dokumente und ' +
+    'Chat-Verläufe bleiben auf diesem Gerät.',
+  'home.preflight.continueBefore':
+    'Du kannst trotzdem fortfahren. Wenn sich die App nicht öffnet, findest du die ' +
+    'Anleitung zur Fehlerbehebung im Ordner ',
+  'home.preflight.continueAfter': ' auf dem Laufwerk.',
+  'home.checking': 'Wird geprüft…',
+  'home.workspace.label': 'Arbeitsbereich',
+  'home.workspace.encrypted':
+    'Verschlüsselt — bei geschlossener App mit deinem Passwort gesperrt',
+  'home.workspace.plaintext': 'Unverschlüsselt (Entwicklermodus)',
+  'home.workspace.badgeProtected': 'Geschützt',
+  'home.workspace.badgeDeveloper': 'Entwickler',
+  'home.model.label': 'KI-Modell',
+  'home.model.fallbackName': 'Dein Modell',
+  'home.model.running': '{model} läuft auf diesem Gerät',
+  'home.model.selected': '{model} ist ausgewählt — es wird möglicherweise noch geladen',
+  'home.model.none': 'Noch kein Modell ausgewählt',
+  'home.model.badgeRunning': 'Läuft',
+  'home.model.badgeStarting': 'Startet',
+  'home.model.badgeNeedsModel': 'Braucht ein Modell',
+  'home.model.open': 'KI-Modell öffnen',
+  'home.model.choose': 'Modell auswählen',
+  'home.docs.label': 'Dokumente',
+  'home.docs.none': 'Noch keine Dokumente — füge welche hinzu, um Fragen dazu zu stellen',
   'home.docsReady.one': '{count} Dokument bereit für deine Fragen',
   'home.docsReady.other': '{count} Dokumente bereit für deine Fragen',
+  'home.docs.badgeReady': 'Bereit',
+  'home.docs.badgeNone': 'Noch keine',
+  'home.docs.add': 'Dokumente hinzufügen',
+  'home.actions.startChat': 'Chat starten',
+  'home.actions.askDocs': 'Meine Dokumente fragen',
+
+  // ---- Chat ----
+  'chat.title': 'Chat',
+  'chat.noModel.title': 'Es läuft gerade kein Modell',
+  'chat.noModel.hintBefore':
+    'Chat und Dokument-Fragen brauchen ein geladenes Modell. Öffne den KI-Modell-Bereich, ' +
+    'wähle ein Modell und wähle dann ',
+  'chat.noModel.hintAction': 'Modell starten',
+  'chat.noModel.hintAfter':
+    '. Alles bleibt lokal — nichts wird heruntergeladen oder irgendwohin gesendet.',
+  'chat.noModel.stillLoading':
+    'Wenn du die App gerade erst geöffnet hast, wird dein ausgewähltes Modell ' +
+    'möglicherweise noch geladen — es geht hier automatisch weiter, sobald es bereit ist.',
+  'chat.noModel.open': 'KI-Modell öffnen',
+  'chat.noModel.recheck': 'Erneut prüfen',
+  'chat.empty.title': 'Stell eine Frage — oder frag deine Dokumente.',
+  'chat.empty.lineDocuments': 'Antworten kommen aus deinen Dokumenten und nennen ihre Quellen.',
+  'chat.empty.lineChat':
+    'Antworten kommen vom Modell auf diesem Laufwerk — nichts verlässt es.',
+  'chat.empty.fillTitle': 'Text ins Eingabefeld übernehmen',
+  'chat.empty.addDocs': 'Dokumente hinzufügen, um Fragen dazu zu stellen',
+  'chat.example.summarize': 'Fasse diesen Vertrag zusammen',
+  'chat.example.paymentTerms': 'Welche Zahlungsbedingungen gelten?',
+  'chat.example.indemnity': 'Finde jede Erwähnung von „Haftungsfreistellung“',
+  'chat.modeAria': 'Chat-Modus',
+  'chat.mode.chat': 'Chat',
+  'chat.mode.documents': 'Meine Dokumente fragen',
+  'chat.listShow': 'Unterhaltungsliste einblenden',
+  'chat.convOptions': 'Optionen der Unterhaltung',
+  'chat.saveConversation': 'Diese Unterhaltung speichern',
+  'chat.savedTo': 'Gespeichert unter {path}',
+  'chat.copied': 'Kopiert',
+  'chat.scopeNotice': 'Antwort nur aus {titles}',
+  'chat.cancelDocTask': 'Dokumentaufgabe abbrechen',
+  'chat.placeholder.documents': 'Frag deine Dokumente…',
+  'chat.placeholder.chat': 'Nachricht…',
+  'chat.send.ask': 'Fragen',
+  'chat.send.send': 'Senden',
+  'chat.composer.stop': 'Stopp',
+
+  // ---- Chat: conversation list ----
+  'chat.list.newChat': '+ Neuer Chat',
+  'chat.list.newDocQa': '+ Neues Dokument-Q&A',
+  'chat.list.hide': 'Unterhaltungsliste ausblenden',
+  'chat.list.empty': 'Noch keine Unterhaltungen.',
+  'chat.list.docBadge': 'DOK',
+  'chat.list.rowOptionsAria': 'Optionen für Unterhaltung „{title}“',
+  'chat.search.placeholder': 'Unterhaltungen durchsuchen…',
+  'chat.search.aria': 'Unterhaltungen durchsuchen',
+  'chat.search.resultsAria': 'Suchergebnisse',
+  'chat.search.noMatches': 'Noch keine Treffer — versuch es mit einem anderen Wort.',
+  'chat.group.today': 'Heute',
+  'chat.group.yesterday': 'Gestern',
+  'chat.group.last7days': 'Letzte 7 Tage',
+  'chat.group.earlier': 'Früher',
+  'chat.delete.menuItem': 'Unterhaltung löschen',
+  'chat.delete.title': 'Diese Unterhaltung löschen?',
+  'chat.delete.confirm': 'Löschen',
+  'chat.delete.body':
+    '„{title}“ und die zugehörigen Nachrichten werden dauerhaft von diesem Laufwerk entfernt.',
+
+  // ---- Chat: answer depth ----
+  'chat.depth.trigger': 'Antwortdetail: {label}',
+  'chat.depth.fast': 'Schnell',
+  'chat.depth.balanced': 'Ausgewogen',
+  'chat.depth.deep': 'Gründlich',
+  'chat.depth.fastHint': 'Kurze Antworten auf den Punkt',
+  'chat.depth.balancedHint': 'Der Standard für den Alltag',
+  'chat.depth.deepHint': 'Denkt das Problem vor dem Antworten durch — dauert länger',
+
+  // ---- Chat: transcript + message actions ----
+  'chat.role.user': 'du',
+  'chat.role.assistant': 'Assistent',
+  'chat.thinking': 'Denkt nach…',
+  'chat.actions.tryAgain': 'Noch einmal',
+  'chat.actions.copy': 'Kopieren',
+  'chat.actions.save': 'Speichern',
+  'chat.actions.saveTitle': 'Diese Unterhaltung als Datei speichern (bleibt lokal)',
+
+  // ---- Chat: document scope ----
+  'chat.scope.usingAll.one': 'Nutzt dein {count} Dokument',
+  'chat.scope.usingAll.other': 'Nutzt alle {count} Dokumente',
+  'chat.scope.usingSome.one': 'Nutzt {count} Dokument',
+  'chat.scope.usingSome.other': 'Nutzt {count} Dokumente',
+  'chat.scope.popoverAria': 'Zu befragende Dokumente',
+  'chat.scope.allLine':
+    'Antworten kommen aus all deinen Dokumenten. Wähle Dokumente aus, um nur diese zu fragen:',
+  'chat.scope.someLine': 'Antworten kommen nur aus diesen Dokumenten:',
+  'chat.scope.addLine': 'Dokument hinzufügen:',
+  'chat.scope.stopAsking': '{title} nicht mehr fragen',
+  'chat.scope.askToo': '{title} auch fragen',
+  'chat.scope.useAll': 'Alle Dokumente verwenden',
+  'chat.scope.removedDoc': 'Entferntes Dokument',
+
+  // ---- Chat: sources ----
+  'chat.sources.toggle': 'Quellen ({count})',
+  'chat.sources.page': 'Seite {page}',
+
+  // ---- Chat: dictation ----
+  'chat.dictation.start': 'Nachricht diktieren',
+  'chat.dictation.stop': 'Diktat beenden und Text einfügen',
+  'chat.dictation.transcribing': 'Deine Sprache wird in Text umgewandelt',
+  'chat.dictation.noSpeech': 'Es wurde keine Sprache erkannt — versuch es noch einmal.',
+  'chat.dictation.micBlocked':
+    'Das Mikrofon konnte nicht verwendet werden. Prüf die Mikrofon-Einstellungen deines ' +
+    'Systems und versuch es dann noch einmal.',
 
   // ---- Settings ----
   'settings.title': 'Einstellungen',
