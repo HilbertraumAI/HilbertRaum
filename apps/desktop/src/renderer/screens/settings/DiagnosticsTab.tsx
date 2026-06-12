@@ -290,7 +290,7 @@ export function DiagnosticsTab(): JSX.Element {
             <dd>{drive.freeBytes != null ? `${(drive.freeBytes / 1e9).toFixed(1)} GB` : 'unknown'}</dd>
           </dl>
         ) : (
-          <p className="hint">System detection lands in Phase 1.</p>
+          <p className="hint">System details could not be loaded yet. Try reopening this tab.</p>
         )}
       </div>
 
@@ -312,7 +312,7 @@ export function DiagnosticsTab(): JSX.Element {
             <dd>{drive.writable ? 'Yes' : 'No'}</dd>
           </dl>
         ) : (
-          <p className="hint">Drive/workspace detection lands in Phase 1.</p>
+          <p className="hint">Drive and workspace details could not be loaded yet. Try reopening this tab.</p>
         )}
       </div>
 

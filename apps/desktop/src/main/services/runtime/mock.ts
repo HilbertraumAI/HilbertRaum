@@ -82,7 +82,7 @@ export class MockRuntime implements ModelRuntime {
     const reply =
       `${echo}I am Private AI Drive Lite running locally on the mock runtime for ` +
       `${this.modelId}, so this reply is simulated and fully offline. Real on-device ` +
-      `answers arrive once a llama.cpp model is loaded (Phase 10).`
+      `answers arrive once a llama.cpp model is loaded.`
     // Keep the trailing space on each token so the stream reassembles verbatim.
     return reply.match(/\S+\s*/g) ?? [reply]
   }

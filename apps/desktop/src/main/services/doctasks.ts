@@ -1470,9 +1470,9 @@ export class DocTaskManager {
       task.status.documentIds.push(info.id)
       const result = await processDocument(db, storeDir, info.id, this.deps.getIngestionDeps())
       if (result.status !== 'indexed') {
-        // processDocument never throws — but a translation must fully succeed or
-        // persist nothing, so a failed import removes the half-born row again.
-        log.error('Materialized translation failed to import', {
+        // processDocument never throws — but a materialized output must fully succeed
+        // or persist nothing, so a failed import removes the half-born row again.
+        log.error(`Materialized ${origin.type} output failed to import`, {
           jobId: task.status.jobId,
           status: result.status,
           error: result.errorMessage

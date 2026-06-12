@@ -139,8 +139,8 @@ export function planCommercialDrive(opts: PlanCommercialDriveOptions): Commercia
       manual: false,
       description:
         'Fetch every whisper_cpp build pinned in runtime-sources.yaml into ' +
-        'runtime/whisper.cpp/<os>/ (Phase 36: upstream ships a prebuilt Windows CPU build ' +
-        'only; mac/linux builds come from the documented source-build step when shipped). ' +
+        'runtime/whisper.cpp/<os>/ (upstream ships a prebuilt Windows CPU build only; ' +
+        'mac/linux builds come from the documented source-build step when shipped). ' +
         'Same verify-before-trust + .paid-runtime.json marker as the llama family.'
     },
     {
@@ -150,7 +150,7 @@ export function planCommercialDrive(opts: PlanCommercialDriveOptions): Commercia
       manual: false,
       description:
         'Fetch the pinned traineddata files from runtime-sources.yaml into ocr/ ' +
-        '(Phase 38: deu + eng, the tessdata_best-integerized variant). Plain ' +
+        '(deu + eng, the tessdata_best-integerized variant). Plain ' +
         'sha256-verified files — no extraction, no marker; idempotency is the hash.'
     },
     packageStep(os),
