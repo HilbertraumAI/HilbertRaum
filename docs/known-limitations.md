@@ -1,6 +1,6 @@
 # Known limitations & accepted trade-offs
 
-_Last updated: 2026-06-11._
+_Last updated: 2026-06-12 (housekeeping: refreshed the measured Phase-21 entries; reference homes updated)._
 
 The MVP (Phases 0–13) is feature-complete. Four post-MVP multi-persona audit rounds (2026-06-09)
 found and fixed every Critical, High, and Medium finding plus the actionable Lows — see
@@ -74,7 +74,7 @@ logs, best-effort shredding on SSDs, no password recovery — are documented in
   In particular the bundled flag's intent (don't preload the big models on a commercial drive) is
   unimplemented — the pipeline fetches all six weights (~37 GB); curate with
   `fetch-models --only <id>`.
-- ~~No in-app model downloader (plan §12.3, deferred)~~ **Shipped in Phase 18**
+- ~~No in-app model downloader (the provisioning plan's deferred item)~~ **Shipped in Phase 18**
   (architecture.md "In-app model downloader"): policy ∧ Settings-toggle ∧ per-download confirmation, `.part`
   staging with verify-before-rename, Range resume, one download at a time. Accepted edges:
   - **The startup offline tripwire is not re-evaluated mid-session.** Toggling `allowNetwork` on

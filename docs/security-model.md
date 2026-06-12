@@ -81,7 +81,7 @@ firewall. Two layers make it visible and defensible:
 ### 1. Policy precedence (`services/policy.ts`)
 `config/policy.json` and `config/drive.json` are **optional** (developer runs fall back to defaults)
 and are merged over `DEFAULT_POLICY`, where **update checks and telemetry are off** (no toggle
-exists for either) and — since Phase 18 (plan §13 D3, resolved (a)) — `allow_model_downloads` is
+exists for either) and — since Phase 18 (wave-1 decision D3 — architecture.md "In-app model downloader") — `allow_model_downloads` is
 **permitted**, so that with no policy file the spec §3.6 user toggle is the effective downloads
 gate. The policy models the spec §6 shape (`network` / `workspace` / `models` blocks).
 
@@ -150,8 +150,8 @@ a **hard privacy rule**:
   buffers in memory while the vault is locked, bounded at 100 events, and flushes after the
   next unlock — which is how `workspace_unlock_failed` reaches the log at all). An audit
   failure can never break the operation it records.
-- Retention: pruned to the **newest 5 000 rows on every insert** (`AUDIT_MAX_ROWS`, plan
-  §13 D7 — fixed for wave 1; configurability is Office-edition admin surface).
+- Retention: pruned to the **newest 5 000 rows on every insert** (`AUDIT_MAX_ROWS`, wave-1 decision
+  D7 — fixed for wave 1; configurability is Office-edition admin surface).
 
 ## Workspace modes (Phase 9)
 

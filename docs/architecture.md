@@ -1,6 +1,6 @@
 # Architecture — Private AI Drive Lite
 
-_Last updated: 2026-06-11 (Phase 37 — voice dictation)_
+_Last updated: 2026-06-12 (docs housekeeping: absorbed the GPU §1–§8, downloader, audit-log and depth-mode design records; Phase 37 was the last feature change)_
 
 ## Overview
 

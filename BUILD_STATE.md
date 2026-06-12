@@ -363,7 +363,7 @@ Repo root: `f:\_coding\ai_drive`.
 - **Build-time network ≠ runtime network (LOCKED, Phase 12):** the `fetch-*` scripts make the
   project's first deliberate network access, but run on the **drive-builder's online machine at build
   time, NOT in the app at runtime**. The app stays 100% offline by default; the optional in-app
-  downloader (plan §12.3) stays policy-gated (`network.allow_model_downloads`, deny-by-default) **and**
+  downloader (the then-deferred provisioning item, later Phase 18) stays policy-gated (`network.allow_model_downloads`, deny-by-default) **and**
   behind the user `allowNetwork` setting. The offline guarantee is unchanged. The in-app downloader
   was **DEFERRED** (not required for the DIY acceptance criteria).
 - **Verify-before-trust + license gate (LOCKED, Phase 12):** every downloaded artifact is
@@ -1103,7 +1103,7 @@ document answers always run balanced (deep-grounded = wave 2).
 - `prepare-drive.{ps1,sh}` gained `-WithAssets`/`--with-assets` (+ forwards `-AcceptLicense`): after the
   layout, runs `fetch-models` + `fetch-runtime` so one command yields a launch-ready drive. Without the
   flag, behaviour is unchanged. Then points the user at `verify-models --generate`.
-✅ **In-app downloader (plan §12.3)** — ~~deferred~~ **shipped in Phase 18** (see the contract
+✅ **In-app downloader (the provisioning plan's deferred item)** — ~~deferred~~ **shipped in Phase 18** (see the contract
   section below). **Real downloads + USB-drive launch = manual (R5).**
 
 ### In-app model downloader (Phase 18 live)

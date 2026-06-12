@@ -1,6 +1,6 @@
 # Packaging — portable build, sidecars & model weights
 
-_Last updated: 2026-06-10_
+_Last updated: 2026-06-12 (docs housekeeping: absorbed the Phases-12/13 distribution decision record)_
 
 This documents **how the app is packaged into a portable build**, **where the runtime binaries and
 model weights live on the drive**, and that those artifacts are **not** in the git repository.

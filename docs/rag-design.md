@@ -1,6 +1,6 @@
 # RAG design — Private AI Drive Lite
 
-_Last updated: 2026-06-10 (Phase 21 — hybrid keyword retrieval + reranker, §11)_
+_Last updated: 2026-06-12 (docs housekeeping: absorbed the Phase-17 record into §10 and the Phase-21 design record as §12; Phase 21 — hybrid keyword retrieval + reranker, §11)_
 
 This document describes the local document → retrieval-augmented-generation pipeline.
 It is built up phase by phase:

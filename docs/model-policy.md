@@ -168,7 +168,7 @@ can be fetched from the **AI Model screen**. Three gates, ALL required, re-check
 process on every start (architecture.md "In-app model downloader"):
 
 1. **Policy ceiling** — `policy.network.allow_model_downloads`. Since Phase 18 the **default**
-   (no `policy.json`) permits downloads (plan §13 D3, resolved (a)) so the user toggle below is the
+   (no `policy.json`) permits downloads (wave-1 decision D3, resolved (a)) so the user toggle below is the
    effective gate on DIY/developer setups; `prepare-drive` keeps writing **deny** in both its
    postures, so prepared drives stay download-disabled unless the drive builder edits
    `config/policy.json`. Policy only restricts, never expands.
