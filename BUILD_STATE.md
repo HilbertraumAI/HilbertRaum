@@ -39,7 +39,10 @@ design record per the CLAUDE.md doc lifecycle rule:
 
 **Open:** Phase 22 (signed offline update bundles) is 🔴 blocked on a key-management design;
 Phase 30 (opt-in big slot + embeddings) has a drafted working paper
-([`docs/big-slot-embeddings-plan.md`](docs/big-slot-embeddings-plan.md)). Release-wise the
+([`docs/big-slot-embeddings-plan.md`](docs/big-slot-embeddings-plan.md)); Phases 39–42
+(English + German UI, language picker in Settings) have a drafted working paper
+([`docs/i18n-plan.md`](docs/i18n-plan.md), decisions D-L1–D-L8; D-L7 resolved: informal
+„du"). Release-wise the
 remaining work is **manual acceptance only** (§5). Consciously-accepted gaps live in
 [`docs/known-limitations.md`](docs/known-limitations.md).
 
