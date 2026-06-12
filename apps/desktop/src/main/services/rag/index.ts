@@ -187,26 +187,32 @@ export async function retrieve(
   })
   const fused = rrfFuse(vectorHits, keywordHits)
 
-  const getChunk = db.prepare(
-    'SELECT id, document_id, text, source_label, page_number, section_label FROM chunks WHERE id = ?'
-  )
-
-  // Join fused candidates → chunk rows, keeping the fused order (best first). A vector
-  // candidate keeps its cosine as `score` (pass-through guarantee); a keyword-only
-  // candidate carries its RRF score (no cosine exists for it).
+  // Join fused candidates → chunk rows in ONE `IN (…)` query (placeholders only),
+  // then reassemble in the fused order (best first). A vector candidate keeps its
+  // cosine as `score` (pass-through guarantee); a keyword-only candidate carries its
+  // RRF score (no cosine exists for it).
   let candidates: Array<Omit<RetrievedChunk, 'label'>> = []
-  for (const cand of fused) {
-    const row = getChunk.get(cand.chunkId) as unknown as ChunkRow | undefined
-    if (!row) continue
-    candidates.push({
-      chunkId: row.id,
-      documentId: row.document_id,
-      text: row.text,
-      sourceTitle: row.source_label ?? 'Untitled',
-      pageNumber: row.page_number,
-      sectionLabel: row.section_label,
-      score: cand.cosine ?? cand.rrfScore
-    })
+  if (fused.length > 0) {
+    const rows = db
+      .prepare(
+        'SELECT id, document_id, text, source_label, page_number, section_label ' +
+          `FROM chunks WHERE id IN (${fused.map(() => '?').join(', ')})`
+      )
+      .all(...fused.map((c) => c.chunkId)) as unknown as ChunkRow[]
+    const rowById = new Map(rows.map((r) => [r.id, r]))
+    for (const cand of fused) {
+      const row = rowById.get(cand.chunkId)
+      if (!row) continue
+      candidates.push({
+        chunkId: row.id,
+        documentId: row.document_id,
+        text: row.text,
+        sourceTitle: row.source_label ?? 'Untitled',
+        pageNumber: row.page_number,
+        sectionLabel: row.section_label,
+        score: cand.cosine ?? cand.rrfScore
+      })
+    }
   }
 
   // Rerank between fusion and dedup: the cross-encoder rescoring decides which chunk

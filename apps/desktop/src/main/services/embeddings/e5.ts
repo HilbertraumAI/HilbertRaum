@@ -67,6 +67,15 @@ export class E5Embedder implements Embedder {
   private starting: Promise<void> | null = null
   /** Set by `stop()`; a racing lazy start must not resurrect the sidecar after quit. */
   private stopped = false
+  /**
+   * Failed-start latch (the LlamaReranker's pattern): a sidecar that could not start
+   * (e.g. a corrupt/incompatible GGUF) must not be re-spawned and re-awaited for the
+   * full health timeout on EVERY embed. Unlike the reranker's, this latch CLEARS on
+   * `suspend()` (workspace lock): the embedder has no graceful degradation — a latched
+   * failure blocks all imports — so the user must be able to replace the weight file
+   * and retry via lock/unlock without restarting the app.
+   */
+  private startFailed: Error | null = null
 
   constructor(private readonly opts: E5EmbedderOptions) {
     this.id = opts.id
@@ -76,6 +85,7 @@ export class E5Embedder implements Embedder {
   /** Lazily spawn the embeddings sidecar (once). Concurrent callers share one start. */
   private async ensureStarted(): Promise<LlamaServer> {
     if (this.stopped) throw new Error('Embedder is stopped (app is shutting down)')
+    if (this.startFailed) throw this.startFailed
     if (this.server) return this.server
     if (!this.starting) {
       const server = new LlamaServer({
@@ -100,6 +110,10 @@ export class E5Embedder implements Embedder {
         .start()
         .then(() => {
           this.server = server
+        })
+        .catch((err) => {
+          this.startFailed = err instanceof Error ? err : new Error(String(err))
+          throw this.startFailed
         })
         .finally(() => {
           this.starting = null
@@ -185,9 +199,11 @@ export class E5Embedder implements Embedder {
    * Kill the sidecar but allow a lazy restart on the next `embed()`.
    * Used on workspace LOCK: the in-memory chunk text must go, but the app keeps
    * running — the permanent `stop()` latch would make every post-lock/unlock
-   * import fail with "Embedder is stopped".
+   * import fail with "Embedder is stopped". Also clears the failed-start latch
+   * (see its declaration for why this differs from the reranker).
    */
   async suspend(): Promise<void> {
+    this.startFailed = null
     await this.teardown()
   }
 

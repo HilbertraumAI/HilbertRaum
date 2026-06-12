@@ -1,5 +1,4 @@
 import { randomUUID } from 'node:crypto'
-import { writeFileSync } from 'node:fs'
 import { BrowserWindow, dialog, ipcMain } from 'electron'
 import { IPC } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
@@ -26,6 +25,7 @@ import {
 } from '../services/ingestion'
 import { supportedExtensions } from '../services/ingestion/parsers'
 import { log } from '../services/logging'
+import { saveTextExport } from './save-export'
 
 // IPC for document import + ingestion status (spec §9.1, §7.7).
 //
@@ -254,23 +254,23 @@ export function registerDocsIpc(ctx: AppContext): void {
       .replace(/[^\p{L}\p{N} ()_-]/gu, '')
       .trim()
       .slice(0, 60)
-    const options = {
-      title: 'Export document',
-      defaultPath: `${baseName || 'document'}.md`,
-      filters: [
-        { name: 'Markdown', extensions: ['md'] },
-        { name: 'Text', extensions: ['txt'] }
-      ]
-    }
-    const win = BrowserWindow.getFocusedWindow()
-    const result = win ? await dialog.showSaveDialog(win, options) : await dialog.showSaveDialog(options)
-    if (result.canceled || !result.filePath) return null
-    writeFileSync(result.filePath, text, 'utf8')
+    const filePath = await saveTextExport(
+      {
+        title: 'Export document',
+        defaultPath: `${baseName || 'document'}.md`,
+        filters: [
+          { name: 'Markdown', extensions: ['md'] },
+          { name: 'Text', extensions: ['txt'] }
+        ]
+      },
+      text
+    )
+    if (!filePath) return null
     log.info('Document exported', { documentId })
     // Audit privacy rule: the id only — the chosen path is user-private
     // and the text is content.
     ctx.audit?.('document_exported', 'Document exported to a file', { documentId })
-    return result.filePath
+    return filePath
   })
 
   ipcMain.handle(IPC.reindexDocument, async (_e, documentId: string): Promise<DocumentInfo> => {

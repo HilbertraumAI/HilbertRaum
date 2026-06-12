@@ -9,6 +9,7 @@ import {
 } from '@shared/types'
 import { cancelActiveDocTask } from '../lib/doctasks'
 import { friendlyIpcError } from '../lib/errors'
+import { RUNTIME_POLL_MS } from '../lib/polling'
 import { Banner, Button, Chip, EmptyState, LocalIndicator, SegmentedControl, useToast } from '../components'
 import { Composer, ConversationList, DepthMenu, ScopePopover, Transcript } from '../chat'
 
@@ -174,7 +175,7 @@ export function ChatScreen({ onNavigate, initialMode, initialScopeDocumentIds }:
     if (runtimeRunning !== false) return
     const timer = setInterval(() => {
       void checkRuntime().catch(() => undefined)
-    }, 2500)
+    }, RUNTIME_POLL_MS)
     return () => clearInterval(timer)
   }, [runtimeRunning, checkRuntime])
 

@@ -44,9 +44,9 @@ export async function runPreflight(deps: PreflightDeps): Promise<PreflightResult
   const status = await buildDriveStatus(paths)
 
   // Reuse the benchmark drive-speed probe + warning copy. Passing the neutral 'BALANCED'
-  // profile skips `buildWarnings`' TINY/UNKNOWN (hardware) branches, so it can only emit a
-  // drive note — which is therefore the single element it returns here. (If 'BALANCED' ever
-  // became a warned profile, this index-0 assumption would break; today it cannot.)
+  // profile skips `buildWarnings`' TINY/UNKNOWN (hardware) branches, so today it can only
+  // emit a drive note — but select it by content rather than by index, so a future
+  // BALANCED-profile warning cannot be misreported as the slow-drive note.
   const speed = await measure(paths.workspacePath)
   const driveWarnings = buildWarnings({
     profile: 'BALANCED',
@@ -54,7 +54,7 @@ export async function runPreflight(deps: PreflightDeps): Promise<PreflightResult
     driveWriteMbps: speed.writeMbps,
     driveError: speed.error
   })
-  const slowDriveWarning = driveWarnings[0] ?? null
+  const slowDriveWarning = driveWarnings.find((w) => /drive/i.test(w)) ?? null
 
   const problems: string[] = []
   if (!status.writable) {

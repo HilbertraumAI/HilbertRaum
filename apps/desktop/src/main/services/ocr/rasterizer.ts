@@ -1,6 +1,7 @@
 import { join } from 'node:path'
 import { BrowserWindow, ipcMain } from 'electron'
 import { OCR_RASTER } from '../../../shared/ipc'
+import { log } from '../logging'
 
 // PDF → page-PNG rasterizer: rendering a PDF page
 // to pixels needs a canvas, the main process has none, node-canvas
@@ -87,8 +88,15 @@ export async function rasterizePdfWithHiddenWindow(
       if (win.isDestroyed() || event.sender !== win.webContents) return
       if (channel === OCR_RASTER.error) {
         const message = typeof payload?.message === 'string' ? payload.message : 'render failed'
-        waiter?.reject(new Error(message))
-        waiter = null
+        if (waiter) {
+          waiter.reject(new Error(message))
+          waiter = null
+        } else {
+          // No request in flight (e.g. the error raced a timeout/abort that already
+          // cleared the waiter) — don't drop it silently; the next expect() would
+          // otherwise hang to its timeout with no trace of the real cause.
+          log.warn('OCR rasterizer error frame arrived with no request in flight', { message })
+        }
         return
       }
       if (channel !== expectChannel) return

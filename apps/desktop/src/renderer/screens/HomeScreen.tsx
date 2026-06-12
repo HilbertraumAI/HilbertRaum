@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Badge, Banner, Button } from '../components'
+import { RUNTIME_POLL_MS } from '../lib/polling'
 import type { AppStatus, DocumentInfo, PreflightResult, RuntimeStatus } from '@shared/types'
 
 interface Props {
@@ -10,9 +11,6 @@ interface Props {
 // at a glance — workspace state, model running?, document count — with ONE primary
 // action ("Start chatting") and quiet preflight warnings. Reuses existing IPC only
 // (getAppStatus / getRuntimeStatus / listDocuments / runPreflight).
-
-/** Matches the ChatScreen no-model poll: Home flips to "ready" by itself. */
-const RUNTIME_POLL_MS = 2500
 
 export function HomeScreen({ onNavigate }: Props): JSX.Element {
   const [status, setStatus] = useState<AppStatus | null>(null)

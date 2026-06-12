@@ -666,19 +666,17 @@ export function lockEncryptedVault(vaultPaths: VaultPaths, db: Db, key: Buffer):
 
 /**
  * Is a plaintext (developer) workspace permitted? Gated by the drive policy AND a
- * developer/env signal. `encryptionRequired` is an absolute veto; `allowPlaintextDevMode`
- * must be true; and the caller must be a developer (dev build or developer mode).
+ * developer signal. `encryptionRequired` is an absolute veto; `allowPlaintextDevMode`
+ * must be true; and the caller must be a developer.
  *
- * Pre-unlock the `developerMode` setting is unavailable (it lives in the encrypted DB),
- * so callers pass `isDev` as the proxy.
+ * Proxy rule: the `developerMode` *setting* lives in the (possibly still locked,
+ * encrypted) workspace DB, so it cannot gate the decision of whether that DB opens
+ * at all — the dev-build flag (`isDev`) is the developer signal here.
  */
-export function plaintextAllowed(
-  policy: PrivacyPolicy,
-  opts: { isDev: boolean; developerMode: boolean }
-): boolean {
+export function plaintextAllowed(policy: PrivacyPolicy, opts: { isDev: boolean }): boolean {
   if (policy.workspace.encryptionRequired) return false
   if (!policy.workspace.allowPlaintextDevMode) return false
-  return opts.isDev || opts.developerMode
+  return opts.isDev
 }
 
 // ---- stateful controller (used by the main process) ------------------------------
@@ -719,7 +717,7 @@ export class WorkspaceController {
   }
 
   private allowPlaintext(): boolean {
-    return plaintextAllowed(this.policy, { isDev: this.isDev, developerMode: this.isDev })
+    return plaintextAllowed(this.policy, { isDev: this.isDev })
   }
 
   /**

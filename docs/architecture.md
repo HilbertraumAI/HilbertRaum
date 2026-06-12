@@ -608,6 +608,10 @@ adds is the safety machinery:
   failed start latches for the session (no health-timeout stall per question); a query-time
   failure logs and keeps the fused order. Stopped on `will-quit`; **suspended** (stop + lazy
   restart allowed) on workspace lock — `suspend()` also fixed the embedder's post-lock latch.
+  The E5 embedder carries the same failed-start latch, with one deliberate difference: its
+  latch **clears on `suspend()`** — the embedder has no graceful degradation (a latched
+  failure blocks all imports), so replacing a bad GGUF + lock/unlock must make imports
+  retryable without an app restart.
 - **Hybrid keyword retrieval (Phase 21)** — `chunks_fts` (FTS5, `text` + `chunk_id UNINDEXED`,
   trigger-synced from `chunks`, guarded migration + backfill in `db.ts`) gives `rag.retrieve` a
   BM25 keyword pass fused with the cosine pass by reciprocal rank (k = 60, `rag/hybrid.ts`).

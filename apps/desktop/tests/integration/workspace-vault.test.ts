@@ -226,14 +226,13 @@ describe('no plaintext password persisted', () => {
 
 describe('plaintextAllowed gating', () => {
   it('allows plaintext only when policy permits AND the caller is a developer', () => {
-    expect(plaintextAllowed(DEFAULT_POLICY, { isDev: true, developerMode: false })).toBe(true)
-    expect(plaintextAllowed(DEFAULT_POLICY, { isDev: false, developerMode: true })).toBe(true)
-    // Not a developer at all → refused even when policy permits.
-    expect(plaintextAllowed(DEFAULT_POLICY, { isDev: false, developerMode: false })).toBe(false)
+    expect(plaintextAllowed(DEFAULT_POLICY, { isDev: true })).toBe(true)
+    // Not a developer → refused even when policy permits.
+    expect(plaintextAllowed(DEFAULT_POLICY, { isDev: false })).toBe(false)
   })
 
   it('refuses plaintext when encryption is required by policy', () => {
-    expect(plaintextAllowed(ENCRYPTION_REQUIRED, { isDev: true, developerMode: true })).toBe(false)
+    expect(plaintextAllowed(ENCRYPTION_REQUIRED, { isDev: true })).toBe(false)
   })
 
   it('refuses plaintext when the policy disables plaintext dev mode', () => {
@@ -241,7 +240,7 @@ describe('plaintextAllowed gating', () => {
       ...DEFAULT_POLICY,
       workspace: { encryptionRequired: false, allowPlaintextDevMode: false }
     }
-    expect(plaintextAllowed(policy, { isDev: true, developerMode: true })).toBe(false)
+    expect(plaintextAllowed(policy, { isDev: true })).toBe(false)
   })
 })
 

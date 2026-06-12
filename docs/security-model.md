@@ -278,12 +278,12 @@ audited as `workspace_unlock_failed`, never a new event). Hidden entirely in `pl
   generic error, harming nothing) — see `known-limitations.md`.
 
 ### Plaintext gating (Phase-8 policy now enforced)
-`plaintextAllowed(policy, { isDev, developerMode })` decides whether plaintext is even offered:
+`plaintextAllowed(policy, { isDev })` decides whether plaintext is even offered:
 `workspace.encryptionRequired` is an absolute veto; `workspace.allowPlaintextDevMode` must be true;
-and the caller must be a developer (dev build or developer mode). Pre-unlock the `developerMode`
-setting is unavailable (it lives in the encrypted DB), so `isDev` is the proxy. A commercial build
-(not dev, `encryptionRequired` or no policy file) therefore **defaults to encrypted** and onboarding
-does not offer plaintext.
+and the caller must be a developer. The `developerMode` *setting* lives in the encrypted DB, so it
+cannot gate the decision of whether that DB opens at all — the dev-build flag (`isDev`) is the
+developer signal. A commercial build (not dev, `encryptionRequired` or no policy file) therefore
+**defaults to encrypted** and onboarding does not offer plaintext.
 
 ### App-shell gate & lifecycle (spec §7.1)
 `WorkspaceController.init()` runs at startup: an encrypted descriptor → stay **locked** until unlock;

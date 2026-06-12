@@ -224,6 +224,34 @@ describe('E5Embedder', () => {
     await embedder.stop()
   })
 
+  it('latches a failed start (fail fast, one spawn) and clears the latch on suspend()', async () => {
+    const calls: Array<{ args: string[] }> = []
+    const spawn = (_c: string, args: string[]): ChildProcessLike => {
+      calls.push({ args })
+      const child = new FakeChild()
+      // The server dies immediately (e.g. a corrupt/incompatible GGUF).
+      queueMicrotask(() => child.emit('exit', 1, null))
+      return child
+    }
+    const embedder = new E5Embedder({
+      ...base,
+      spawn,
+      fetchImpl: (async () => {
+        throw new Error('connection refused')
+      }) as unknown as typeof fetch
+    })
+    await expect(embedder.embed(['a'])).rejects.toThrow()
+    await expect(embedder.embed(['a'])).rejects.toThrow()
+    // One spawn total: the failed-start latch prevents a health-timeout stall per embed.
+    expect(calls.length).toBe(1)
+    // Unlike the reranker, suspend() (workspace lock) clears the latch so the user can
+    // replace the weight file and retry imports without restarting the app.
+    await embedder.suspend()
+    await expect(embedder.embed(['a'])).rejects.toThrow()
+    expect(calls.length).toBe(2)
+    await embedder.stop()
+  })
+
   it('throws on a wrong-width vector instead of storing a 0/short-dim embedding', async () => {
     const { spawn } = fakeSpawn()
     // Declares 384 dims but the server returns a 2-dim (or empty) vector → reject, so the

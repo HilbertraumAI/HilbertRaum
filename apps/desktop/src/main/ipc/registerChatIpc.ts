@@ -1,5 +1,4 @@
-import { BrowserWindow, dialog, ipcMain, type IpcMainInvokeEvent } from 'electron'
-import { writeFileSync } from 'node:fs'
+import { ipcMain, type IpcMainInvokeEvent } from 'electron'
 import { IPC, STREAM } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
 import {
@@ -25,6 +24,7 @@ import {
 } from '../services/chat'
 import { log } from '../services/logging'
 import { inFlightStreams } from './inflight'
+import { saveTextExport } from './save-export'
 
 // IPC for conversation CRUD + streaming chat (spec §9.1, §7.6).
 //
@@ -209,24 +209,24 @@ export function registerChatIpc(ctx: AppContext): void {
   ipcMain.handle(IPC.exportConversation, async (_e, conversationId: string): Promise<string | null> => {
     const { title, markdown } = exportTranscript(ctx.db, conversationId)
     const safeName = title.replace(/[^\p{L}\p{N} _-]/gu, '').trim().slice(0, 60) || 'chat'
-    const win = BrowserWindow.getFocusedWindow()
-    const options = {
-      title: 'Export chat transcript',
-      defaultPath: `${safeName}.md`,
-      filters: [
-        { name: 'Markdown', extensions: ['md'] },
-        { name: 'Text', extensions: ['txt'] }
-      ]
-    }
-    const result = win ? await dialog.showSaveDialog(win, options) : await dialog.showSaveDialog(options)
-    if (result.canceled || !result.filePath) return null
-    writeFileSync(result.filePath, markdown, 'utf8')
+    const filePath = await saveTextExport(
+      {
+        title: 'Export chat transcript',
+        defaultPath: `${safeName}.md`,
+        filters: [
+          { name: 'Markdown', extensions: ['md'] },
+          { name: 'Text', extensions: ['txt'] }
+        ]
+      },
+      markdown
+    )
+    if (!filePath) return null
     log.info('Transcript exported', { conversationId })
     // Audit privacy rule: the id only — the chosen path/default filename derives
     // from the conversation TITLE, which is chat content.
     ctx.audit?.('conversation_exported', 'Conversation transcript exported to a file', {
       conversationId
     })
-    return result.filePath
+    return filePath
   })
 }

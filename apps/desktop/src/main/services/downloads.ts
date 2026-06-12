@@ -95,6 +95,9 @@ export function partPath(dest: string): string {
   return `${dest}.part`
 }
 
+/** Finished (done/failed/cancelled) jobs kept around for late polls; older ones are pruned. */
+const MAX_TERMINAL_JOBS = 20
+
 /**
  * Owns the in-app download jobs. Jobs live in memory for the session only; the
  * durable truth is the filesystem — a verified weight in place, or a resumable
@@ -116,6 +119,7 @@ export class DownloadManager {
    * manifest has no upstream source, or the weight is already present + verified.
    */
   async start(opts: StartDownloadOptions): Promise<DownloadJob> {
+    this.pruneTerminalJobs()
     assertDownloadAllowed(opts.gates)
     if (this.activeJob() !== null) {
       throw new Error('Another download is already running. One model downloads at a time.')
@@ -204,6 +208,21 @@ export class DownloadManager {
     return { ...job }
   }
 
+  /**
+   * Drop the oldest terminal jobs beyond the keep window. Jobs are session-only and a
+   * long session can start many downloads — without this the map grows unbounded. The
+   * Map iterates in insertion (= creation) order, so the front entries are the oldest;
+   * `get()` already answers pruned ids with a terminal "unknown job" snapshot.
+   */
+  private pruneTerminalJobs(): void {
+    const terminal = [...this.jobs.values()].filter(
+      (j) => j.status === 'done' || j.status === 'failed' || j.status === 'cancelled'
+    )
+    for (const job of terminal.slice(0, Math.max(0, terminal.length - MAX_TERMINAL_JOBS))) {
+      this.jobs.delete(job.jobId)
+    }
+  }
+
   /** The currently running job id, or null. */
   activeJob(): string | null {
     if (!this.active) return null
@@ -247,7 +266,9 @@ export class DownloadManager {
         bytes: job.receivedBytes
       })
 
-      if ((job.status as string) === 'cancelled') return // raced a cancel — keep the .part
+      // A cancel that raced the final bytes: cancel() aborts our controller, so the
+      // signal is the explicit cancel flag (no status-narrowing cast needed).
+      if (controller.signal.aborted) return // keep the .part for resume
 
       job.status = 'verifying'
       const verify = await verifyDownloadedFile(part, task.expectedSha256)

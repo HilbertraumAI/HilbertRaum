@@ -100,6 +100,13 @@ CREATE TABLE IF NOT EXISTS runtime_events (
 //   (translation `{ translatedFrom, targetLang }` or compare `{ type: 'compare',
 //   comparedFrom: [a, b] }`; NULL = normal import).
 function ensureColumn(db: Db, table: string, column: string, ddl: string): void {
+  // The arguments are interpolated into SQL (SQLite cannot parameterize DDL). Every
+  // caller passes compile-time constants, but assert the shape anyway so a future
+  // caller cannot turn this into an injection point.
+  const ident = /^[A-Za-z_][A-Za-z0-9_]*$/
+  if (!ident.test(table) || !ident.test(column) || !/^[A-Za-z0-9_ ]+$/.test(ddl)) {
+    throw new Error(`ensureColumn: unsafe identifier/DDL (${table}.${column}: ${ddl})`)
+  }
   const cols = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>
   if (!cols.some((c) => c.name === column)) {
     db.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`)

@@ -47,6 +47,14 @@ export interface HealthStatus {
 /** Which inference backend a runtime landed on (the start ladder in factory.ts). */
 export type RuntimeBackend = 'gpu' | 'cpu' | 'mock'
 
+/**
+ * Backend reported for a runtime that carries no label. Only a bare `LlamaRuntime`
+ * (injected directly in tests) lacks one — the production factory always returns the
+ * labelled ladder runtime or the mock — and a bare LlamaRuntime with no GPU args
+ * runs on the CPU.
+ */
+const UNLABELLED_BACKEND: RuntimeBackend = 'cpu'
+
 /** The contract every inference backend implements (spec §9.2). */
 export interface ModelRuntime {
   readonly modelId: string
@@ -152,9 +160,7 @@ export class RuntimeManager {
       port: this.last?.port ?? null,
       healthy: this.last?.healthy ?? false,
       message: this.last?.message ?? 'Running',
-      // Runtimes without a backend label (bare LlamaRuntime in tests) read as 'cpu' —
-      // the production factory always returns a ladder runtime or the mock.
-      backend: this.current.backend ?? 'cpu',
+      backend: this.current.backend ?? UNLABELLED_BACKEND,
       gpuName: this.current.gpuName ?? null
     }
   }
