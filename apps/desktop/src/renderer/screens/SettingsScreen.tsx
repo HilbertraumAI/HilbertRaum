@@ -10,9 +10,11 @@ import {
   useToast
 } from '../components'
 import { setThemeSetting } from '../theme'
+import { useT } from '../i18n'
 import { PrivacyTab } from './settings/PrivacyTab'
 import { DiagnosticsTab } from './settings/DiagnosticsTab'
 import type { SettingsTab } from '../navigation'
+import type { MessageKey, UiLanguageSetting } from '@shared/i18n'
 import type { AppSettings, ThemeSetting } from '@shared/types'
 
 // Settings (guidelines §2): one utility destination with three tabs.
@@ -21,17 +23,29 @@ import type { AppSettings, ThemeSetting } from '@shared/types'
 // switcher reuses SegmentedControl (roving tabindex + arrow keys, guidelines §6).
 // The open tab is owned by App.tsx so navigate('settings:privacy') etc. can land on
 // the right tab from anywhere; standalone use (tests) falls back to internal state.
+//
+// Labels live in the message catalogs as keys, resolved with t() at render
+// (i18n-plan §5 label-map rule).
 
-const TAB_CHOICES: Array<{ value: SettingsTab; label: string }> = [
-  { value: 'general', label: 'General' },
-  { value: 'privacy', label: 'Privacy & data' },
-  { value: 'diagnostics', label: 'Diagnostics (advanced)' }
+const TAB_CHOICES: Array<{ value: SettingsTab; labelKey: MessageKey }> = [
+  { value: 'general', labelKey: 'settings.tab.general' },
+  { value: 'privacy', labelKey: 'settings.tab.privacy' },
+  { value: 'diagnostics', labelKey: 'settings.tab.diagnostics' }
 ]
 
-const THEME_CHOICES: Array<{ value: ThemeSetting; label: string }> = [
+const THEME_CHOICES: Array<{ value: ThemeSetting; labelKey: MessageKey }> = [
+  { value: 'system', labelKey: 'settings.appearance.system' },
+  { value: 'light', labelKey: 'settings.appearance.light' },
+  { value: 'dark', labelKey: 'settings.appearance.dark' }
+]
+
+// Language names stay UNTRANSLATED (i18n-plan §4, standard practice): a German
+// speaker stuck on an English UI must still recognize „Deutsch“ — and "System" is
+// the same word in both languages.
+const LANGUAGE_CHOICES: Array<{ value: UiLanguageSetting; label: string }> = [
   { value: 'system', label: 'System' },
-  { value: 'light', label: 'Light' },
-  { value: 'dark', label: 'Dark' }
+  { value: 'en', label: 'English' },
+  { value: 'de', label: 'Deutsch' }
 ]
 
 export interface SettingsScreenProps {
@@ -43,6 +57,7 @@ export interface SettingsScreenProps {
 export function SettingsScreen({ tab, onTabChange }: SettingsScreenProps): JSX.Element {
   const [internalTab, setInternalTab] = useState<SettingsTab>('general')
   const activeTab = tab ?? internalTab
+  const { t } = useT()
 
   function selectTab(next: SettingsTab): void {
     onTabChange?.(next)
@@ -51,13 +66,13 @@ export function SettingsScreen({ tab, onTabChange }: SettingsScreenProps): JSX.E
 
   return (
     <div className="screen">
-      <h1>Settings</h1>
+      <h1>{t('settings.title')}</h1>
       <div className="settings-tabs">
         <SegmentedControl
-          options={TAB_CHOICES}
+          options={TAB_CHOICES.map((c) => ({ value: c.value, label: t(c.labelKey) }))}
           value={activeTab}
           onChange={selectTab}
-          ariaLabel="Settings sections"
+          ariaLabel={t('settings.tabsAria')}
         />
       </div>
       {activeTab === 'general' && <GeneralTab />}
@@ -68,10 +83,11 @@ export function SettingsScreen({ tab, onTabChange }: SettingsScreenProps): JSX.E
 }
 
 // The "General" tab — today's settings, unchanged behavior (network toggle, Appearance,
-// Performance, Developer, Workspace facts).
+// Language, Performance, Developer, Workspace facts).
 function GeneralTab(): JSX.Element {
   const [settings, setSettings] = useState<AppSettings | null>(null)
   const toast = useToast()
+  const { t, applyLanguageSetting } = useT()
 
   useEffect(() => {
     window.api?.getSettings().then(setSettings).catch(() => setSettings(null))
@@ -80,94 +96,92 @@ function GeneralTab(): JSX.Element {
   async function patch(p: Partial<AppSettings>): Promise<void> {
     const next = await window.api.updateSettings(p)
     setSettings(next)
-    // Appearance applies immediately — the saved value, not the request.
+    // Appearance + language apply immediately — the saved value, not the request.
     if (p.theme !== undefined) setThemeSetting(next.theme)
-    toast('Saved')
+    if (p.uiLanguage !== undefined) applyLanguageSetting(next.uiLanguage)
+    toast(t('settings.saved'))
   }
 
   if (!settings) {
-    return <p className="hint">Loading settings…</p>
+    return <p className="hint">{t('settings.loading')}</p>
   }
 
   return (
     <>
       <div className="card">
-        <h2>Privacy &amp; Offline Mode</h2>
+        <h2>{t('settings.network.title')}</h2>
         <Switch
           checked={settings.allowNetwork}
           onChange={(on) => void patch({ allowNetwork: on })}
-          label="Allow internet access for model downloads and updates"
+          label={t('settings.network.allow')}
         />
-        <p className="hint">
-          Off by default. When off, the app makes no network calls. Turning it on only enables
-          model downloads from the AI Model screen — each one asks for confirmation first, and a
-          drive policy can keep downloads disabled entirely. Your prompts and documents never
-          leave this device regardless of this setting.
-        </p>
+        <p className="hint">{t('settings.network.hint')}</p>
       </div>
 
       <div className="card">
-        <h2>Appearance</h2>
+        <h2>{t('settings.appearance.title')}</h2>
         <SegmentedControl
-          options={THEME_CHOICES}
+          options={THEME_CHOICES.map((c) => ({ value: c.value, label: t(c.labelKey) }))}
           value={settings.theme}
           onChange={(theme) => void patch({ theme })}
-          ariaLabel="Theme"
+          ariaLabel={t('settings.appearance.aria')}
         />
-        <p className="hint">
-          “System” follows your operating system’s light/dark preference. The lock screen
-          always follows the system theme.
-        </p>
+        <p className="hint">{t('settings.appearance.hint')}</p>
       </div>
 
       <div className="card">
-        <h2>Performance</h2>
+        <h2>{t('settings.language.title')}</h2>
+        <SegmentedControl
+          options={LANGUAGE_CHOICES}
+          value={settings.uiLanguage}
+          onChange={(uiLanguage) => void patch({ uiLanguage })}
+          ariaLabel={t('settings.language.aria')}
+        />
+        <p className="hint">{t('settings.language.hint')}</p>
+      </div>
+
+      <div className="card">
+        <h2>{t('settings.performance.title')}</h2>
         <Switch
           checked={settings.gpuMode === 'auto'}
           onChange={(on) => void patch({ gpuMode: on ? 'auto' : 'off' })}
-          label="Use GPU acceleration"
+          label={t('settings.performance.gpu')}
         />
-        <p className="hint">
-          Uses your graphics card to speed up responses when available. Turn off only if you
-          notice stability problems — everything keeps working either way.
-        </p>
+        <p className="hint">{t('settings.performance.gpuHint')}</p>
         <Switch
           checked={settings.autoStartActiveModel}
           onChange={(on) => void patch({ autoStartActiveModel: on })}
-          label="Load the selected model automatically when the app starts"
+          label={t('settings.performance.autoStart')}
         />
-        <p className="hint">
-          On by default. The model selected on the AI Model screen is loaded in the background at
-          launch (after unlock on encrypted workspaces) so Chat is ready without extra clicks.
-        </p>
+        <p className="hint">{t('settings.performance.autoStartHint')}</p>
       </div>
 
       <div className="card">
-        <h2>Developer</h2>
+        <h2>{t('settings.developer.title')}</h2>
         <Switch
           checked={settings.developerMode}
           onChange={(on) => void patch({ developerMode: on })}
-          label="Developer mode (allows plaintext workspace, unverified models)"
+          label={t('settings.developer.toggle')}
         />
-        <p className="hint">
-          Off by default. Dev builds always count as developer. The drive policy is
-          authoritative: on a commercial drive, unverified models stay rejected regardless of
-          this setting.
-        </p>
+        <p className="hint">{t('settings.developer.hint')}</p>
       </div>
 
       <div className="card">
-        <h2>Workspace</h2>
+        <h2>{t('settings.workspace.title')}</h2>
         <dl className="kv">
-          <dt>Mode</dt>
-          <dd>{settings.workspaceMode === 'encrypted' ? 'Encrypted' : 'Plaintext (developer)'}</dd>
-          <dt>Context tokens</dt>
+          <dt>{t('settings.workspace.mode')}</dt>
+          <dd>
+            {settings.workspaceMode === 'encrypted'
+              ? t('settings.workspace.modeEncrypted')
+              : t('settings.workspace.modePlaintext')}
+          </dd>
+          <dt>{t('settings.workspace.contextTokens')}</dt>
           <dd>{settings.contextTokens}</dd>
         </dl>
         <p className="hint">
           {settings.workspaceMode === 'encrypted'
-            ? 'This workspace is encrypted at rest. Use “Lock now” in the sidebar to re-encrypt and lock it; it also locks automatically on quit.'
-            : 'Plaintext developer workspace — data is stored unencrypted. The encrypted mode is the commercial default.'}
+            ? t('settings.workspace.encryptedHint')
+            : t('settings.workspace.plaintextHint')}
         </p>
       </div>
 
@@ -189,6 +203,7 @@ function ChangePasswordCard(): JSX.Element {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const toast = useToast()
+  const { t } = useT()
 
   const strength = passwordStrength(next)
   // The strength meter is advisory; only the 8-character floor + the confirm match
@@ -203,7 +218,7 @@ function ChangePasswordCard(): JSX.Element {
     try {
       const result = await window.api.changeWorkspacePassword(current, next)
       if (result.ok) {
-        toast('Password changed')
+        toast(t('settings.changePassword.toast'))
         setCurrent('')
         setNext('')
         setConfirm('')
@@ -211,7 +226,7 @@ function ChangePasswordCard(): JSX.Element {
         setError(result.message)
       }
     } catch {
-      setError('Something went wrong. Your current password still works.')
+      setError(t('settings.changePassword.failed'))
     } finally {
       setBusy(false)
     }
@@ -219,14 +234,11 @@ function ChangePasswordCard(): JSX.Element {
 
   return (
     <form className="card" onSubmit={(e) => void submit(e)}>
-      <h2>Change password</h2>
-      <p className="hint">
-        Pick a new password for this workspace. You&apos;ll use it from the next unlock on.
-        It can&apos;t be recovered or reset, so choose something you&apos;ll remember.
-      </p>
+      <h2>{t('settings.changePassword.title')}</h2>
+      <p className="hint">{t('settings.changePassword.hint')}</p>
       <div className="gate-fields">
         <PasswordField
-          placeholder="Current password"
+          placeholder={t('settings.changePassword.current')}
           autoComplete="current-password"
           value={current}
           show={showPassword}
@@ -234,7 +246,7 @@ function ChangePasswordCard(): JSX.Element {
           onChange={setCurrent}
         />
         <PasswordField
-          placeholder="New password"
+          placeholder={t('settings.changePassword.new')}
           autoComplete="new-password"
           value={next}
           show={showPassword}
@@ -243,25 +255,24 @@ function ChangePasswordCard(): JSX.Element {
         {next.length > 0 && <PasswordStrengthMeter strength={strength} />}
         {strength.hint && <p className="hint">{strength.hint}</p>}
         <PasswordField
-          placeholder="Confirm new password"
+          placeholder={t('settings.changePassword.confirm')}
           autoComplete="new-password"
           value={confirm}
           show={showPassword}
           onChange={setConfirm}
         />
         {confirm.length > 0 && confirm !== next && (
-          <p className="hint warn">Passwords don&apos;t match.</p>
+          <p className="hint warn">{t('password.mismatch')}</p>
         )}
       </div>
       {busy && (
         <p className="hint" role="status">
-          <span className="spinner" /> Securing your documents with the new password… On a
-          large library this can take a few minutes.
+          <span className="spinner" /> {t('settings.changePassword.busy')}
         </p>
       )}
       {error && <Banner tone="error">{error}</Banner>}
       <Button type="submit" variant="primary" disabled={!canSubmit}>
-        {busy ? 'Changing…' : 'Change password'}
+        {busy ? t('settings.changePassword.submitBusy') : t('settings.changePassword.submit')}
       </Button>
     </form>
   )

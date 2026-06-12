@@ -42,6 +42,7 @@ export function updateSettings(db: Db, patch: Partial<AppSettings>): AppSettings
     // safe, but junk must not be stored either).
     if (key === 'gpuMode' && value !== 'auto' && value !== 'off') continue
     if (key === 'theme' && value !== 'system' && value !== 'light' && value !== 'dark') continue
+    if (key === 'uiLanguage' && value !== 'system' && value !== 'en' && value !== 'de') continue
     upsert.run(key, JSON.stringify(value), now)
   }
   return getSettings(db)

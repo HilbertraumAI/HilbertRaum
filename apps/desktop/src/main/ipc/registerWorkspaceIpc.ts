@@ -5,6 +5,8 @@ import { VaultBusyError, WrongPasswordError } from '../services/workspace-vault'
 import { maybeRunFirstBenchmark } from './registerBenchmarkIpc'
 import { maybeAutoStartActiveModel } from './registerModelIpc'
 import { inFlightStreams } from './inflight'
+import { applyUiLanguageSetting, tMain } from '../services/i18n'
+import { getSettings } from '../services/settings'
 import { log } from '../services/logging'
 import type {
   WorkspaceActionResult,
@@ -20,6 +22,17 @@ import type {
  * as the password (the salt + KDF params live in the unencrypted descriptor). */
 const MIN_PASSWORD_LENGTH = 8
 
+/** Settings just became readable (unlock/create) → re-resolve the main-side UI
+ *  language from the real `uiLanguage` setting. Best-effort: a settings read must
+ *  never break an unlock. */
+function refreshUiLanguage(ctx: AppContext): void {
+  try {
+    applyUiLanguageSetting(getSettings(ctx.db).uiLanguage)
+  } catch {
+    /* keep the current (OS-locale) language */
+  }
+}
+
 export function registerWorkspaceIpc(ctx: AppContext): void {
   ipcMain.handle(IPC.getWorkspaceState, (): WorkspaceStateInfo => ctx.workspace.getState())
 
@@ -31,6 +44,8 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
       // which is how the unlock_failed events below ever reach the log. NEVER the
       // password, in any branch.
       ctx.audit?.('workspace_unlocked', 'Workspace unlocked')
+      // Settings are readable now — main-side emissions follow the user's language.
+      refreshUiLanguage(ctx)
       // First unlock of a never-benchmarked workspace → background benchmark.
       maybeRunFirstBenchmark(ctx)
       // Bring the selected model's runtime back up in the background.
@@ -44,11 +59,12 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
       // unbundled and never sees this).
       if (err instanceof WrongPasswordError || (err instanceof Error && err.name === 'WrongPasswordError')) {
         ctx.audit?.('workspace_unlock_failed', 'Workspace unlock failed (wrong password)')
-        // §7 voice: describe the problem and the next step, no jargon.
+        // §7 voice: describe the problem and the next step, no jargon. Localized at
+        // emission (D-L5) — ephemeral, never persisted; English value unchanged.
         return {
           ok: false,
           reason: 'wrong_password',
-          message: "That password didn't unlock your workspace. Check it and try again."
+          message: tMain('main.workspace.wrongPassword')
         }
       }
       log.error('Workspace unlock failed', String(err))
@@ -71,6 +87,8 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
         const state = ctx.workspace.create(password, mode)
         log.info('Workspace created', { mode })
         ctx.audit?.('workspace_created', 'Workspace created', { mode })
+        // Settings are readable now — main-side emissions follow the user's language.
+        refreshUiLanguage(ctx)
         // A fresh workspace has never been benchmarked → background benchmark.
         maybeRunFirstBenchmark(ctx)
         // A fresh workspace has no active model yet; this is a no-op then, but covers

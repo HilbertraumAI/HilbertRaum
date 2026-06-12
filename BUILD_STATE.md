@@ -6,11 +6,11 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
-_Last updated: 2026-06-13 — the audit's code findings are remediated (strings, robustness,
-test-infra timeout; see the §3 "Audit-findings remediation" entry) on top of the same-day
-docs-vs-code consistency audit + code-comment quality pass + docs dead-info pass. Previous
-(2026-06-12) housekeeping: this file was compacted; the per-phase build narratives now live
-in the design records they cite (full pre-compaction text in git history)._
+_Last updated: 2026-06-13 — **Phase 39 (i18n foundation + proof slice) is DONE** (see the
+§1 row + the §3 entry; working paper `docs/i18n-plan.md` §4 has the as-built record and
+the R-L1 locale finding). Same day, earlier: the audit's code findings were remediated
+(strings, robustness, test-infra timeout; §3 "Audit-findings remediation" entry) on top of
+the docs-vs-code consistency audit + code-comment quality pass + docs dead-info pass._
 
 **Where the project stands:** the MVP (Phases 0–13) is feature-complete and four post-MVP
 audit rounds are fully remediated (§8). Every shipped wave since is DONE and condensed into a
@@ -39,10 +39,10 @@ design record per the CLAUDE.md doc lifecycle rule:
 
 **Open:** Phase 22 (signed offline update bundles) is 🔴 blocked on a key-management design;
 Phase 30 (opt-in big slot + embeddings) has a drafted working paper
-([`docs/big-slot-embeddings-plan.md`](docs/big-slot-embeddings-plan.md)); Phases 39–42
-(English + German UI, language picker in Settings) have a drafted working paper
-([`docs/i18n-plan.md`](docs/i18n-plan.md), decisions D-L1–D-L8; D-L7 resolved: informal
-„du"). Release-wise the
+([`docs/big-slot-embeddings-plan.md`](docs/big-slot-embeddings-plan.md)); the i18n wave
+(English + German UI, [`docs/i18n-plan.md`](docs/i18n-plan.md)) has **Phase 39 done**
+(foundation + proof slice; D-L1/2/3/5/8 locked, D-L7 in use) and Phases 40–42 open
+(renderer sweep ∥ main-process boundary, then German QA). Release-wise the
 remaining work is **manual acceptance only** (§5). Consciously-accepted gaps live in
 [`docs/known-limitations.md`](docs/known-limitations.md).
 
@@ -85,6 +85,8 @@ remaining work is **manual acceptance only** (§5). Consciously-accepted gaps li
 | 36 | Audio transcription as ingestion (whisper.cpp sidecar family) | 🟢 done 2026-06-11 — wave-3 record §9 |
 | 37 | Voice dictation in the composer | 🟢 done 2026-06-11 — wave-3 record §10 |
 | 38 | Scanned-PDF / photo OCR (tesseract.js + `ocr/` assets) | 🟢 done 2026-06-11 — wave-3 record §11; **wave 3 COMPLETE** |
+| 39 | i18n foundation + proof slice (shared `t()` + catalogs, `uiLanguage` + picker, pre-unlock language) | 🟢 done 2026-06-13 — `docs/i18n-plan.md` §4 (as built + R-L1 finding) |
+| 40–42 | i18n: renderer sweep · main-process boundary · German QA | ⚪ not started — plan `docs/i18n-plan.md` §5–§7 |
 
 Legend: ⚪ not started · 🟡 in progress · 🟢 done · 🔴 blocked
 
@@ -690,6 +692,32 @@ Repo root: `f:\_coding\ai_drive`.
   filename auto-scope). **Revisit trigger = Phase 30 Track B** (a prefix-using embedder with
   a measurable floor) — rider recorded in `big-slot-embeddings-plan.md` �4.4; full
   rationale in `rag-design.md` �10 (D1).
+
+- **Phase 39 — i18n foundation + proof slice (2026-06-13; plan `docs/i18n-plan.md`, as-built
+  record in its §4):** hand-rolled typed i18n in `shared/i18n/` — `en.ts` flat
+  source-of-truth catalog (`MessageKey = keyof typeof en`), `de.ts` typed
+  `Record<MessageKey, string>` so **typecheck enforces catalog parity**, `t`/`tCount`
+  (`.one`/`.other`, n === 1 rule)/`resolveUiLanguage` — synchronous, **zero new deps**
+  (D-L1 LOCKED). New `AppSettings.uiLanguage: 'system'|'en'|'de'` (default `'system'`,
+  theme-style enum guard; D-L2 LOCKED) + a Settings → General SegmentedControl picker
+  (System/English/Deutsch — language names untranslated). Renderer `renderer/i18n.tsx`
+  `I18nProvider`/`useT()`: re-resolves on settings load/patch, sets `<html lang>`, mirrors
+  the RESOLVED language to `localStorage('paid.uiLanguage')`; the pre-unlock gate resolves
+  mirror → `navigator.language` (D-L3 LOCKED). Main `services/i18n.ts`: cached language
+  from `app.getLocale()` (set after whenReady), re-resolved at plaintext startup, after
+  unlock/create, and on `uiLanguage` patches; `tMain()` localizes ephemeral emissions —
+  first use = the gate's wrong-password message, English byte-identical (D-L5 LOCKED).
+  Proof slice migrated: App shell (nav/lock/notice chrome), SettingsScreen (tabs + General
+  tab fully), WorkspaceGate (all steps); German copy is informal „du" (D-L7) with the §3.5
+  glossary pinned atop `de.ts`. **R-L1 finding:** on this de-AT Windows 11 machine
+  `app.getLocale()` returns the BARE tag `'de'` (not `de-*`) and `navigator.language`
+  matches — `resolveUiLanguage` accepts bare `'de'`; the dev machine is German-locale
+  (not EN as the plan assumed), but the suite is locale-independent (jsdom pins
+  `navigator.language` to `en-US`). Tests: 990 green from `apps/desktop`; new
+  `tests/unit/i18n.test.ts`, `tests/unit/main-i18n.test.ts`, `tests/renderer/I18n.test.tsx`
+  (picker patch + mirror + German gate smoke); one scoping edit in `Theme.test.tsx` (the
+  General tab now has two "System" radios — scope by radiogroup, don't rename). Persisted
+  DB strings and LLM prompts untouched (D-L4/D-L6 wait for Phases 41/42).
 
 ---
 

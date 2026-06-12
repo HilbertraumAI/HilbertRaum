@@ -7,12 +7,14 @@ import { DocumentsScreen } from './screens/DocumentsScreen'
 import { WorkspaceGate } from './screens/WorkspaceGate'
 import { Banner, Button, LocalIndicator, ToastProvider } from './components'
 import { setThemeSetting } from './theme'
+import { I18nProvider, useT } from './i18n'
 import { resolveNavTarget, type ScreenId, type SettingsTab } from './navigation'
+import type { MessageKey } from '@shared/i18n'
 import type { WorkspaceStateInfo } from '@shared/types'
 
 interface NavItem {
   id: ScreenId
-  label: string
+  labelKey: MessageKey
   icon: string
 }
 
@@ -20,15 +22,25 @@ interface NavItem {
 // Settings as the single bottom utility. Privacy and Diagnostics live INSIDE Settings
 // as tabs — they are no longer nav destinations.
 const NAV_TOP: NavItem[] = [
-  { id: 'home', label: 'Home', icon: '🏠' },
-  { id: 'chat', label: 'Chat', icon: '💬' },
-  { id: 'documents', label: 'Documents', icon: '📄' },
-  { id: 'models', label: 'AI Model', icon: '🧠' }
+  { id: 'home', labelKey: 'nav.home', icon: '🏠' },
+  { id: 'chat', labelKey: 'nav.chat', icon: '💬' },
+  { id: 'documents', labelKey: 'nav.documents', icon: '📄' },
+  { id: 'models', labelKey: 'nav.models', icon: '🧠' }
 ]
 
-const NAV_BOTTOM: NavItem[] = [{ id: 'settings', label: 'Settings', icon: '⚙️' }]
+const NAV_BOTTOM: NavItem[] = [{ id: 'settings', labelKey: 'nav.settings', icon: '⚙️' }]
 
 export function App(): JSX.Element {
+  // The language provider wraps EVERYTHING, including the pre-unlock gate (which
+  // resolves from the localStorage mirror / OS locale — i18n-plan §3.2).
+  return (
+    <I18nProvider>
+      <AppShell />
+    </I18nProvider>
+  )
+}
+
+function AppShell(): JSX.Element {
   const [screen, setScreen] = useState<ScreenId>('home')
   // Which Settings tab is open: driven by navigate() so virtual targets
   // like 'settings:privacy' (and the legacy 'privacy' alias) land on the right tab.
@@ -53,6 +65,7 @@ export function App(): JSX.Element {
   // One-line, dismissible runtime notice: currently the GPU crash auto-fallback's
   // friendly "switched to compatibility mode" message (spec §11.4 tone).
   const [notice, setNotice] = useState<string | null>(null)
+  const { t, applyLanguageSetting } = useT()
 
   useEffect(() => {
     const unsubscribe = window.api?.onRuntimeNotice?.((message) => setNotice(message))
@@ -79,17 +92,22 @@ export function App(): JSX.Element {
       ?.getPolicy()
       .then((p) => active && setOffline(p.offlineMode))
       .catch(() => active && setOffline(true))
-    // Apply the persisted Appearance setting. Settings are only readable
+    // Apply the persisted Appearance + Language settings. Settings are only readable
     // post-unlock; re-checked alongside the policy so a Settings-screen change made
-    // this session is also picked up after navigation.
+    // this session is also picked up after navigation. applyLanguageSetting also
+    // refreshes <html lang> and the pre-unlock localStorage mirror.
     window.api
       ?.getSettings()
-      .then((s) => active && setThemeSetting(s.theme))
+      .then((s) => {
+        if (!active) return
+        setThemeSetting(s.theme)
+        applyLanguageSetting(s.uiLanguage)
+      })
       .catch(() => {})
     return () => {
       active = false
     }
-  }, [screen, unlocked])
+  }, [screen, unlocked, applyLanguageSetting])
 
   // Central navigation: screens hand any target (real, virtual, or legacy alias) to
   // resolveNavTarget — see navigation.ts for the table.
@@ -116,6 +134,7 @@ export function App(): JSX.Element {
     setWorkspace(next)
     setScreen('home')
     // The locked gate cannot read settings — back to following the OS theme.
+    // (The LANGUAGE deliberately stays: the gate follows the localStorage mirror.)
     setThemeSetting('system')
   }
 
@@ -165,7 +184,7 @@ export function App(): JSX.Element {
           onClick={() => navigate(item.id)}
         >
           <span className="nav-icon">{item.icon}</span>
-          {item.label}
+          {t(item.labelKey)}
         </button>
       </li>
     )
@@ -187,8 +206,8 @@ export function App(): JSX.Element {
         <ul className="nav-list">{NAV_TOP.map(navButton)}</ul>
         <ul className="nav-list nav-bottom">{NAV_BOTTOM.map(navButton)}</ul>
         {workspace.mode === 'encrypted' && (
-          <Button size="sm" className="lock-btn" title="Re-encrypt and lock the workspace" onClick={() => void lockNow()}>
-            🔒 Lock now
+          <Button size="sm" className="lock-btn" title={t('app.lockNowTitle')} onClick={() => void lockNow()}>
+            🔒 {t('app.lockNow')}
           </Button>
         )}
         <LocalIndicator variant="sidebar" offline={offline} onNavigate={navigate} />
@@ -201,7 +220,7 @@ export function App(): JSX.Element {
             onDismiss={() => setNotice(null)}
             action={
               <Button size="sm" onClick={() => navigate('settings:diagnostics')}>
-                Details
+                {t('app.noticeDetails')}
               </Button>
             }
           >

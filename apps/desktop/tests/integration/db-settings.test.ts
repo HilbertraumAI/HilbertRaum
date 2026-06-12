@@ -63,4 +63,15 @@ describe('settings persistence', () => {
     expect(updateSettings(db, { theme: 'banana' as never }).theme).toBe('light')
     expect(updateSettings(db, { theme: 'system' }).theme).toBe('system')
   })
+
+  it('uiLanguage defaults to system, accepts the enum, and drops junk values (Phase 39)', () => {
+    const db = freshDb()
+    seedSettings(db)
+    expect(getSettings(db).uiLanguage).toBe('system')
+    expect(updateSettings(db, { uiLanguage: 'de' }).uiLanguage).toBe('de')
+    expect(updateSettings(db, { uiLanguage: 'en' }).uiLanguage).toBe('en')
+    // Junk from a buggy/hostile renderer is never persisted (same guard as theme/gpuMode).
+    expect(updateSettings(db, { uiLanguage: 'fr' as never }).uiLanguage).toBe('en')
+    expect(updateSettings(db, { uiLanguage: 'system' }).uiLanguage).toBe('system')
+  })
 })

@@ -3,6 +3,7 @@ import { IPC } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
 import { buildDriveStatus } from '../services/workspace'
 import { getSettings, updateSettings } from '../services/settings'
+import { applyUiLanguageSetting } from '../services/i18n'
 import { buildPolicyStatus } from '../services/policy'
 import { runPreflight } from '../services/preflight'
 import { machineRamGb } from '../services/models'
@@ -67,6 +68,9 @@ export function registerCoreIpc(ctx: AppContext): void {
   ipcMain.handle(IPC.updateSettings, (_e, patch: Partial<AppSettings>) => {
     log.info('Settings updated', Object.keys(patch))
     const result = updateSettings(ctx.db, patch)
+    // Keep the main-side cached UI language in step with the setting (D-L3) — the
+    // post-validation value, so junk patches can't move it.
+    if ('uiLanguage' in patch) applyUiLanguageSetting(result.uiLanguage)
     // Audit privacy rule: record ONLY the privacy-relevant keys — and their
     // post-validation values, which are booleans/enums — never any other setting's value.
     const privacyKeys = (['allowNetwork', 'gpuMode', 'developerMode'] as const).filter(

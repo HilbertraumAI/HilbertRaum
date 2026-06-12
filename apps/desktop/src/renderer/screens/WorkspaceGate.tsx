@@ -7,6 +7,7 @@ import {
   Switch,
   passwordStrength
 } from '../components'
+import { useT } from '../i18n'
 import type { WorkspaceStateInfo } from '@shared/types'
 
 // The password field + strength meter live in `components/PasswordField`
@@ -24,7 +25,8 @@ export { passwordStrength, type PasswordStrength } from '../components'
 // on the drive. The UNLOCK path stays a single calm screen.
 //
 // Pre-unlock constraints: settings are unreadable (the gate follows the OS
-// theme only), and `listModels` needs an unlocked workspace — so the step-3 check runs
+// theme only, and resolves its LANGUAGE from the localStorage mirror — i18n-plan
+// §3.2), and `listModels` needs an unlocked workspace — so the step-3 check runs
 // AFTER create succeeds, before handing off to the shell. The password and derived key
 // never leave the main process — this screen only sends the typed password.
 
@@ -56,6 +58,7 @@ export function WorkspaceGate({ state, onUnlocked }: Props): JSX.Element {
   // Set once create succeeds; the starter step hands it to the shell.
   const [createdState, setCreatedState] = useState<WorkspaceStateInfo | null>(null)
   const finished = useRef(false)
+  const { t } = useT()
 
   const usingPassword = !creating || mode === 'encrypted'
   // The strength meter is advisory; only the floor + match (and the main process's own
@@ -118,7 +121,7 @@ export function WorkspaceGate({ state, onUnlocked }: Props): JSX.Element {
         }
       }
     } catch {
-      setError('Something went wrong. Please try again.')
+      setError(t('gate.error.generic'))
     } finally {
       setBusy(false)
     }
@@ -140,14 +143,11 @@ export function WorkspaceGate({ state, onUnlocked }: Props): JSX.Element {
       <div className="gate-shell">
         <form className="gate-card card" onSubmit={(e) => void submit(e)}>
           {brand}
-          <h1>Unlock your workspace</h1>
-          <p className="hint">
-            Enter your password to open this drive&apos;s workspace. Everything stays on
-            this drive.
-          </p>
+          <h1>{t('gate.unlock.title')}</h1>
+          <p className="hint">{t('gate.unlock.hint')}</p>
           <div className="gate-fields">
             <PasswordField
-              placeholder="Password"
+              placeholder={t('gate.passwordPlaceholder')}
               value={password}
               autoFocus
               autoComplete="current-password"
@@ -158,7 +158,7 @@ export function WorkspaceGate({ state, onUnlocked }: Props): JSX.Element {
           </div>
           {error && <Banner tone="error">{error}</Banner>}
           <Button type="submit" variant="primary" disabled={!canSubmit || busy}>
-            {busy ? 'Unlocking…' : 'Unlock'}
+            {busy ? t('gate.unlock.submitBusy') : t('gate.unlock.submit')}
           </Button>
         </form>
       </div>
@@ -172,17 +172,13 @@ export function WorkspaceGate({ state, onUnlocked }: Props): JSX.Element {
       <div className="gate-shell">
         <div className="gate-card card">
           {brand}
-          <h1 className="gate-hero">Welcome</h1>
+          <h1 className="gate-hero">{t('gate.welcome.title')}</h1>
+          <p className="hint">{t('gate.welcome.intro')}</p>
           <p className="hint">
-            This is your private AI workspace. Chat with an AI model and ask questions
-            about your documents — it all runs from this drive.
-          </p>
-          <p className="hint">
-            <strong>Everything stays on this drive.</strong> No internet, no account, no
-            tracking.
+            <strong>{t('gate.welcome.stays')}</strong> {t('gate.welcome.staysRest')}
           </p>
           <Button variant="primary" autoFocus onClick={() => setPhase('password')}>
-            Get started
+            {t('gate.welcome.start')}
           </Button>
         </div>
       </div>
@@ -194,16 +190,15 @@ export function WorkspaceGate({ state, onUnlocked }: Props): JSX.Element {
       <div className="gate-shell">
         <div className="gate-card card">
           {brand}
-          <h1>Setting things up…</h1>
+          <h1>{t('gate.finishing.title')}</h1>
           <p className="hint">
-            <span className="spinner" /> Checking what&apos;s already on this drive. The
-            first look at a large AI model file can take a few minutes.
+            <span className="spinner" /> {t('gate.finishing.hint')}
           </p>
           <Button
             variant="ghost"
             onClick={() => createdState && finish(createdState, 'chat')}
           >
-            Skip — take me to the app
+            {t('gate.finishing.skip')}
           </Button>
         </div>
       </div>
@@ -215,29 +210,23 @@ export function WorkspaceGate({ state, onUnlocked }: Props): JSX.Element {
       <div className="gate-shell">
         <div className="gate-card card">
           {brand}
-          <h1>One last thing</h1>
-          <p className="hint">
-            No AI model is installed on this drive yet — chat needs one to answer. You
-            can add one now, or any time later from the AI Model screen.
-          </p>
-          <p className="hint">
-            Downloading a model is optional and always asks for your confirmation first.
-            Your documents and chats never use the internet either way.
-          </p>
+          <h1>{t('gate.starter.title')}</h1>
+          <p className="hint">{t('gate.starter.noModel')}</p>
+          <p className="hint">{t('gate.starter.optional')}</p>
           <div className="gate-actions">
             <Button variant="ghost" onClick={() => createdState && finish(createdState, 'chat')}>
-              Skip for now
+              {t('gate.starter.skip')}
             </Button>
             <div className="gate-actions-main">
               <Button onClick={() => createdState && finish(createdState, 'documents')}>
-                Add documents
+                {t('gate.starter.addDocuments')}
               </Button>
               <Button
                 variant="primary"
                 autoFocus
                 onClick={() => createdState && finish(createdState, 'models')}
               >
-                Choose your AI model
+                {t('gate.starter.chooseModel')}
               </Button>
             </div>
           </div>
@@ -252,25 +241,21 @@ export function WorkspaceGate({ state, onUnlocked }: Props): JSX.Element {
     <div className="gate-shell">
       <form className="gate-card card" onSubmit={(e) => void submit(e)}>
         {brand}
-        <h1>Create your password</h1>
-        <p className="hint">
-          This password locks everything in your workspace — documents, chats, and
-          notes — on this drive. It can&apos;t be recovered or reset, so pick something
-          you&apos;ll remember.
-        </p>
+        <h1>{t('gate.create.title')}</h1>
+        <p className="hint">{t('gate.create.hint')}</p>
 
         {state.plaintextAllowed && (
           <Switch
             checked={mode === 'plaintext_dev'}
             onChange={(on) => setMode(on ? 'plaintext_dev' : 'encrypted')}
-            label="Use a plaintext developer workspace (no encryption)"
+            label={t('gate.create.plaintextToggle')}
           />
         )}
 
         {usingPassword && (
           <div className="gate-fields">
             <PasswordField
-              placeholder="Password"
+              placeholder={t('gate.passwordPlaceholder')}
               value={password}
               autoFocus
               autoComplete="new-password"
@@ -281,33 +266,30 @@ export function WorkspaceGate({ state, onUnlocked }: Props): JSX.Element {
             {password.length > 0 && <PasswordStrengthMeter strength={strength} />}
             {strength.hint && <p className="hint">{strength.hint}</p>}
             <PasswordField
-              placeholder="Confirm password"
+              placeholder={t('gate.create.confirmPlaceholder')}
               value={confirm}
               autoComplete="new-password"
               show={showPassword}
               onChange={setConfirm}
             />
             {confirm.length > 0 && confirm !== password && (
-              <p className="hint warn">Passwords don&apos;t match.</p>
+              <p className="hint warn">{t('password.mismatch')}</p>
             )}
           </div>
         )}
 
         {mode === 'plaintext_dev' && (
-          <Banner tone="warning">
-            Plaintext mode stores your data unencrypted on this drive. Use it only for
-            development.
-          </Banner>
+          <Banner tone="warning">{t('gate.create.plaintextWarning')}</Banner>
         )}
 
         {error && <Banner tone="error">{error}</Banner>}
 
         <div className="gate-actions">
           <Button variant="ghost" disabled={busy} onClick={() => setPhase('welcome')}>
-            Back
+            {t('gate.create.back')}
           </Button>
           <Button type="submit" variant="primary" disabled={!canSubmit || busy}>
-            {busy ? 'Creating…' : 'Create workspace'}
+            {busy ? t('gate.create.submitBusy') : t('gate.create.submit')}
           </Button>
         </div>
       </form>

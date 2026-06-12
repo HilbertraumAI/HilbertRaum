@@ -2,6 +2,8 @@
 // the React renderer. This is the typed surface referenced by BUILD_STATE.md §4.
 // Keep these in sync with the IPC handlers in src/main/ipc and the spec §9.1.
 
+import type { UiLanguageSetting } from './i18n'
+
 export type HardwareProfile = 'TINY' | 'LITE' | 'BALANCED' | 'PRO' | 'UNKNOWN'
 
 export type WorkspaceMode = 'encrypted' | 'plaintext_dev'
@@ -197,6 +199,15 @@ export interface AppSettings {
    * the OS theme.
    */
   theme: ThemeSetting
+  // ---- Language (i18n-plan §3.2, D-L2/D-L3) ----
+  /**
+   * UI language preference. 'system' (default) follows the OS locale: a `de*`
+   * locale resolves to German, everything else to English. The pre-unlock gate
+   * cannot read settings (encrypted DB) — it resolves from the renderer's
+   * localStorage mirror of the last RESOLVED language, falling back to
+   * `navigator.language`.
+   */
+  uiLanguage: UiLanguageSetting
 }
 
 /** Appearance setting (see `AppSettings.theme`). */
@@ -232,7 +243,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   gpuProbe: null,
   autoStartActiveModel: true,
   checksumCache: {},
-  theme: 'system'
+  theme: 'system',
+  uiLanguage: 'system'
 }
 
 // ---- GPU probe ----

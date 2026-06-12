@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { render, screen, cleanup } from '@testing-library/react'
+import { render, screen, cleanup, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { initTheme, resolveTheme, setThemeSetting } from '../../src/renderer/theme'
 import { SettingsScreen } from '../../src/renderer/screens/SettingsScreen'
@@ -108,6 +108,11 @@ describe('Settings Appearance card', () => {
     render(<SettingsScreen />)
     const dark = await screen.findByRole('radio', { name: 'Dark' })
     expect(dark).toHaveAttribute('aria-checked', 'true')
-    expect(screen.getByRole('radio', { name: 'System' })).toHaveAttribute('aria-checked', 'false')
+    // Scoped to the Theme group: the Phase-39 Language picker also offers "System".
+    const themeGroup = screen.getByRole('radiogroup', { name: 'Theme' })
+    expect(within(themeGroup).getByRole('radio', { name: 'System' })).toHaveAttribute(
+      'aria-checked',
+      'false'
+    )
   })
 })

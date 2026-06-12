@@ -1,7 +1,8 @@
 # Internationalization (i18n) plan — English + German UI (Phases 39–42)
 
-_Status: **WORKING PAPER — drafted 2026-06-13, not yet started.** Per the CLAUDE.md doc
-lifecycle rule this file exists while the work is open; on completion it gets condensed
+_Status: **WORKING PAPER — drafted 2026-06-13. Phase 39 (foundation + proof slice) is
+DONE 2026-06-13; Phases 40–42 are open.** Per the CLAUDE.md doc lifecycle rule this
+file exists while the work is open; on completion it gets condensed
 into a design record (likely a new § in `architecture.md` + a `design-guidelines.md`
 update for the German microcopy rules) and deleted. Phase numbering continues at **39**
 (22 = signed updates and 30 = big slot are open but reserved). Decisions use the scoped
@@ -15,7 +16,7 @@ runtime dependencies, no network, no behavior changes outside copy.
 
 | Phase | Scope | Size | Hard dependency |
 |---|---|---|---|
-| 39 | i18n foundation: shared `t()` module + catalogs, `uiLanguage` setting + picker, pre-unlock resolution; App shell + Settings + WorkspaceGate migrated as the proof slice | M | none |
+| 39 | ✅ DONE 2026-06-13 — i18n foundation: shared `t()` module + catalogs, `uiLanguage` setting + picker, pre-unlock resolution; App shell + Settings + WorkspaceGate migrated as the proof slice | M | none |
 | 40 | Renderer string sweep: all remaining screens/components, pluralization, dates/numbers | L (mechanical) | 39 |
 | 41 | Main-process boundary: transient errors/notices localized at emission; persisted-string display map; native dialog titles | M | 39 |
 | 42 | German QA: full `de` review pass (Sie/glossary), text-expansion layout audit + eyeball walk, docs + known-limitations | M | 40 + 41 |
@@ -182,27 +183,49 @@ existing `TranslationTargetLang` machinery, not with UI i18n).
 - German decimal/date conventions come free from passing the resolved locale to
   `toLocaleString`/`Intl.NumberFormat` (the two date sites + file-size formatting).
 
-## 4. Phase 39 — foundation + proof slice
+## 4. Phase 39 — foundation + proof slice ✅ DONE 2026-06-13
 
-1. `shared/i18n/` module + unit tests (lookup, interpolation, plural, fallback,
-   `resolveUiLanguage`).
-2. `AppSettings.uiLanguage` (+ default + enum guard) — the established additive-key
-   recipe; settings unit test.
-3. Settings → General picker: `LANGUAGE_CHOICES` (`System` / `English` / `Deutsch` —
-   language names shown untranslated, standard practice) via `SegmentedControl`,
-   patching like `theme` does.
-4. Renderer `I18nProvider` + `useT()` + `document.documentElement.lang` + localStorage
-   mirror; main `services/i18n.ts` cache wiring (startup, unlock, `updateSettings`).
-5. Migrate the **proof slice**: `App.tsx` (nav, lock button, notices banner),
-   `SettingsScreen.tsx` (all three tabs' chrome; General tab fully),
-   `WorkspaceGate.tsx` (the pre-unlock path proves §3.2 end-to-end, including
-   wrong-password errors which are *emitted* main-side → first `tMain()` use).
-6. Validation step (was research gate R-L1): confirm `app.getLocale()` returns a
-   `de-*` value on a German-locale Windows after `app.whenReady()`; confirm
-   `navigator.language` in the renderer matches. Trivial, but do it before building on it.
-7. Tests: existing suite green (default `'system'` resolves to `'en'` on the EN dev/CI
-   machine — assert that explicitly); new tests for the picker, the mirror, and a
-   German render smoke of the gate (`localStorage` seeded → German heading).
+1. ✅ `shared/i18n/` module (`en.ts` source-of-truth catalog, `de.ts` typed
+   `Record<MessageKey, string>` with the §3.5 glossary pinned on top, `index.ts` with
+   `t`/`tCount`/`resolveUiLanguage`) + unit tests (`tests/unit/i18n.test.ts`: lookup,
+   interpolation, plural, English fallback for unknown key/missing param,
+   `resolveUiLanguage`, catalog hygiene incl. placeholder parity).
+2. ✅ `AppSettings.uiLanguage` (+ default `'system'` + the theme/gpuMode-style enum
+   guard in `updateSettings`); guard test in `tests/integration/db-settings.test.ts`.
+3. ✅ Settings → General picker: `LANGUAGE_CHOICES` (`System` / `English` / `Deutsch` —
+   language names shown untranslated) via `SegmentedControl`, patching like `theme`.
+   ⚠️ As-built note: the General tab now has TWO radios named "System"
+   (Appearance + Language) — `Theme.test.tsx` scopes its query to the Theme
+   radiogroup; Phase-40 test edits should scope likewise rather than rename.
+4. ✅ Renderer `renderer/i18n.tsx`: `I18nProvider` + `useT()` +
+   `document.documentElement.lang` + the `paid.uiLanguage` localStorage mirror
+   (written only when a real SETTING resolves, never from the pre-unlock guess);
+   a functional English default context keeps provider-less component tests working.
+   Main `services/i18n.ts` cache wired at startup (`app.getLocale()` after whenReady),
+   plaintext startup + unlock/create (`registerWorkspaceIpc`), and `uiLanguage`
+   patches (`registerCoreIpc` updateSettings handler).
+5. ✅ Proof slice migrated: `App.tsx` (nav labels, lock button + tooltip, notice
+   banner "Details"; the fatal-error/loading strings wait for the Phase-40 sweep),
+   `SettingsScreen.tsx` (tab chrome + General tab fully incl. Change-password card),
+   `WorkspaceGate.tsx` (all steps + error display); the wrong-password message is the
+   first `tMain()` emission (D-L5), English value byte-identical.
+6. ✅ Validation (was research gate R-L1) — **finding, measured on this de-AT
+   Windows 11 machine (Electron 37):** after `whenReady`, `app.getLocale()` returns
+   the **bare language tag `'de'`** (Chromium UI language — not always a full
+   `de-DE`-style tag; `app.getSystemLocale()` gives `'de-AT'`), and the renderer's
+   `navigator.language` matches (`'de'`, `navigator.languages` =
+   `['de','de-DE','de-AT']`). ⇒ `resolveUiLanguage` accepts bare `'de'` as well as
+   `de-*`/`de_*` prefixes. **Correction to a §4.7 assumption:** the dev machine is
+   GERMAN-locale, not EN — the suite stays green anyway because the vitest
+   environments are locale-independent (jsdom pins `navigator.language` to `en-US`;
+   unit tests pass explicit locales), which is what the "resolves to 'en'" assertions
+   actually pin.
+7. ✅ Tests: full suite green (990 passed). New: picker patches `uiLanguage` +
+   switches live + writes the mirror + `<html lang>` (`tests/renderer/I18n.test.tsx`),
+   German render smoke of the gate (mirror seeded → „Entsperre deinen
+   Arbeitsbereich“), default-English gate with zero stored state, and the
+   main-process cache lifecycle + German wrong-password emission
+   (`tests/unit/main-i18n.test.ts`).
 
 ## 5. Phase 40 — renderer sweep
 
@@ -274,14 +297,14 @@ Rules for the sweep:
 
 | ID | Decision | Status |
 |---|---|---|
-| D-L1 | Hand-rolled typed i18n module in `shared/i18n/` (flat keys, `{name}` interpolation, `.one`/`.other` plurals); **no new dependency**. Typecheck enforces de↔en catalog parity. | proposed |
-| D-L2 | `uiLanguage: 'system' \| 'en' \| 'de'`, default `'system'` (theme precedent); `de*` locale ⇒ German, else English. | proposed |
-| D-L3 | Pre-unlock language: renderer = localStorage mirror → `navigator.language` fallback; main = cached language from `app.getLocale()` until settings are readable. | proposed |
-| D-L4 | **Persist canonical English, translate at display** (exact-match display map over the finite static persisted set). Keeps the `scanDetected` contract and old rows; makes persisted copy retroactively language-switchable. | proposed |
-| D-L5 | **Ephemeral main→user strings localized at emission** via `tMain()` + cached language; IPC error transport (`friendlyIpcError`) unchanged. | proposed |
-| D-L6 | LLM prompts stay English and unchanged (benchmark comparability; models follow the question's language). Task-output language = future feature, noted in known-limitations. | proposed |
-| D-L7 | German address form = informal **„du"** (lowercase mid-sentence); glossary pinned in `de.ts`. | **RESOLVED** (user, 2026-06-13) |
-| D-L8 | Default-English + synchronous `t()` keeps the existing ~323 copy assertions green; migrated assertions reference the `en` catalog, not re-typed literals. | proposed |
+| D-L1 | Hand-rolled typed i18n module in `shared/i18n/` (flat keys, `{name}` interpolation, `.one`/`.other` plurals); **no new dependency**. Typecheck enforces de↔en catalog parity. | **LOCKED** (Phase 39, as built) |
+| D-L2 | `uiLanguage: 'system' \| 'en' \| 'de'`, default `'system'` (theme precedent); `de*` locale ⇒ German, else English. | **LOCKED** (Phase 39; incl. bare `'de'` — R-L1 finding §4.6) |
+| D-L3 | Pre-unlock language: renderer = localStorage mirror (`paid.uiLanguage`) → `navigator.language` fallback; main = cached language from `app.getLocale()` until settings are readable. | **LOCKED** (Phase 39, as built) |
+| D-L4 | **Persist canonical English, translate at display** (exact-match display map over the finite static persisted set). Keeps the `scanDetected` contract and old rows; makes persisted copy retroactively language-switchable. | proposed (Phase 41) |
+| D-L5 | **Ephemeral main→user strings localized at emission** via `tMain()` + cached language; IPC error transport (`friendlyIpcError`) unchanged. | **LOCKED** (Phase 39 — first use: the gate's wrong-password message) |
+| D-L6 | LLM prompts stay English and unchanged (benchmark comparability; models follow the question's language). Task-output language = future feature, noted in known-limitations. | proposed (document in Phase 42) |
+| D-L7 | German address form = informal **„du"** (lowercase mid-sentence); glossary pinned in `de.ts`. | **RESOLVED** (user, 2026-06-13) — in use since Phase 39 |
+| D-L8 | Default-English + synchronous `t()` keeps the existing ~323 copy assertions green; migrated assertions reference the `en` catalog, not re-typed literals. | **LOCKED** (Phase 39 — suite green with one scoping edit, §4.3 note) |
 
 ## 9. Risks
 

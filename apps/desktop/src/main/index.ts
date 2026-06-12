@@ -1,6 +1,7 @@
 import { app, BrowserWindow, nativeTheme, shell } from 'electron'
 import { dirname, join } from 'node:path'
 import { resolvePaths, ensureWorkspaceDirs, findPreparedDriveRoot } from './services/workspace'
+import { applyUiLanguageSetting, initMainI18n } from './services/i18n'
 import { installPermissionRequestHandler } from './services/permissions'
 import { getSettings, updateSettings } from './services/settings'
 import { loadPolicy, buildPolicyStatus } from './services/policy'
@@ -148,6 +149,17 @@ function initBackend(): void {
   )
   workspace.init()
   log.info('Workspace state', workspace.getState())
+
+  // Settings are readable right away on a plaintext workspace — resolve the UI language
+  // for main-side emissions (tMain) now. Encrypted workspaces stay on the OS-locale
+  // guess until unlock/create (registerWorkspaceIpc re-resolves there).
+  if (workspace.isUnlocked()) {
+    try {
+      applyUiLanguageSetting(getSettings(workspace.requireDb()).uiLanguage)
+    } catch {
+      /* keep the OS-locale default */
+    }
+  }
 
   // The app-wide audit recorder (services/audit.ts). Backed by the workspace
   // DB getter — while the vault is locked, events buffer in memory and flush after the
@@ -425,6 +437,9 @@ function createWindow(): void {
 }
 
 app.whenReady().then(() => {
+  // `app.getLocale()` is only meaningful after whenReady (R-L1: verified on Windows —
+  // it returns a BCP-47 tag like "en-US"/"de"). Best guess until settings are readable.
+  initMainI18n(app.getLocale())
   try {
     initBackend()
   } catch (err) {
