@@ -12,9 +12,10 @@ portable USB-C SSD. Your prompts, documents, embeddings, and chat history never 
 - 🧳 **Portable** — keep models + an encrypted workspace on an external drive; move between laptops.
 - 🪟 **Cross-platform architecture** — Windows-first, with macOS/Linux supported in the design.
 
-> The MVP is **feature-complete** (Phases 0–16, including GPU acceleration). See
-> **[`BUILD_STATE.md`](BUILD_STATE.md)** for current status; the original phased plan
-> (`docs/IMPLEMENTATION_PLAN.md`) was retired after completion and lives in git history.
+> The MVP is **feature-complete**, plus GPU acceleration, retrieval-quality, UI-polish, and
+> office-functionality waves (document tasks, translation, compare, audio transcription,
+> dictation, OCR). See **[`BUILD_STATE.md`](BUILD_STATE.md)** for current status; the original
+> phased plan (`docs/IMPLEMENTATION_PLAN.md`) was retired after completion and lives in git history.
 
 ## Status
 
@@ -57,7 +58,7 @@ npm install        # one-time; downloads the Electron binary (needs internet onc
 npm run dev        # launches the app
 ```
 
-With no model files present you can still explore the whole interface: open **Models** and click
+With no model files present you can still explore the whole interface: open **AI Model** and click
 **Start mock runtime** on a chat model (offered in developer mode, the dev default) — then chat,
 document import, Q&A with citations, benchmark and privacy all work on the built-in mock.
 **Mock answers are placeholders** (they echo your input) — they are *not* real AI. Add a real
@@ -109,7 +110,7 @@ $env:PAID_DRIVE_ROOT = 'E:\'; npm run dev    # Windows
 PAID_DRIVE_ROOT=/Volumes/PAID npm run dev    # macOS / Linux
 ```
 
-Open **Models**, press **Start** on the recommended model, and chat for real. To ship a portable
+Open **AI Model**, press **Start** on the recommended model, and chat for real. To ship a portable
 build instead of `npm run dev`, see `npm run package:win` in **[`docs/packaging.md`](docs/packaging.md)**.
 
 Run tests / type-check: `npm test`, `npm run typecheck`.

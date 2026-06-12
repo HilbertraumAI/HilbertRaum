@@ -1,6 +1,6 @@
 # Private AI Drive Lite — Troubleshooting
 
-_Last updated: 2026-06-09 (Phase 13)_
+_Last updated: 2026-06-13 (scanned-PDF answer updated for the OCR feature; supported types extended for audio + photos)_
 
 Quick answers to common situations. Everything here is normal, local, and offline — none of
 these steps require the internet.
@@ -59,7 +59,7 @@ binary is missing at start time. The mock lets you explore the interface, but it
 produce real AI answers.
 
 **Fix:** add a real model file:
-1. On the **Models** screen, note the model marked *Recommended*.
+1. On the **AI Model** screen, note the model marked *Recommended*.
 2. Put the matching `.gguf` weight file into `models/chat/` on the drive (and the embeddings
    model into `models/embeddings/`). File names come from the model's manifest (`local_path`).
 3. Put the `llama-server` program for your system into `runtime/llama.cpp/win` (Windows),
@@ -135,17 +135,20 @@ Everything keeps working; responses may just be a bit slower.
 
 ## Importing a PDF didn't extract any text
 
-Some PDFs are scanned images with no embedded text. OCR (reading text from images) is **not**
-included in this Lite version, so those files can't be indexed. Use a text-based PDF, or paste
-the text into a `.txt`/`.md` file and import that.
+Some PDFs are scanned images with no embedded text. The app detects this and marks the file
+*"This PDF looks like a scan"* — use the row's **Make searchable (OCR)** action to read the
+text locally (German + English; needs the drive's `ocr/` language files; runs a couple of
+seconds per page). PDFs that mix real text pages with scanned pages index their text pages
+only — they are not detected as scans.
 
 ---
 
 ## A document failed to import
 
 Open **Documents** to see the per-file error. Common causes: an unsupported file type, a
-corrupted file, or a password-protected document. Supported types: txt, md, pdf, docx, csv.
-Other files in the same import still succeed.
+corrupted file, or a password-protected document. Supported types: txt, md, pdf, docx,
+csv/tsv, audio recordings (wav, mp3, flac, ogg — needs the speech model), and photos of
+pages (png, jpg — needs the OCR files). Other files in the same import still succeed.
 
 ---
 

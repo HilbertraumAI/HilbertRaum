@@ -16,7 +16,7 @@ master pipeline** that produces a finished, sellable drive (see the last section
 - The app stays **fully usable offline**. Sidecars bind **`127.0.0.1` only** (loopback); nothing the
   app spawns listens on a routable interface.
 
-## Drive layout (spec §6, updated Phase 14)
+## Drive layout (spec §6 — canonical detail in [`drive-layout.md`](drive-layout.md))
 ```
 <drive root>/
   runtime/
@@ -27,9 +27,13 @@ master pipeline** that produces a finished, sellable drive (see the last section
       mac/    llama-server      (Metal build) + .paid-runtime.json
       linux/  llama-server      (Vulkan full build) + .paid-runtime.json
         cpu/  llama-server      (pure-CPU safety net) + .paid-runtime.json
+    whisper.cpp/
+      {win,mac,linux}/  whisper-cli[.exe]  (audio transcriber) + .paid-runtime.json
   models/
     chat/        qwen3-4b-instruct-q4.gguf  …
     embeddings/  multilingual-e5-small-q8.gguf
+    reranker/    transcriber/               (optional reranker GGUF; whisper GGML .bin)
+  ocr/           {deu,eng}.traineddata.gz   (OCR language files, sha256-verified)
   model-manifests/   (committed YAML — the only model metadata in git)
   workspace/   config/   logs/
 ```
@@ -119,7 +123,7 @@ out on a fresh machine with no Node/npm); their layout + config shapes mirror th
 |---|---|
 | `prepare-drive.{ps1,sh}` | Create the directory tree, copy manifests + user docs, generate `config/{drive,policy}.json`. `-DryRun`/`--dry-run` prints the plan. `-Dev`/`--dev` → a plaintext developer drive. **`-WithAssets`/`--with-assets`** (Phase 12) then runs `fetch-models` + `fetch-runtime` (forwarding `-AcceptLicense`/`--accept-license`) for a launch-ready drive. |
 | `fetch-models.{ps1,sh}` | (Phase 12) Download + **resume** + **SHA-256-verify** each weight with a `download:` block to its `models/...` path. `-Only <id>`/`--only` for one model; `-AcceptLicense`/`--accept-license` for the license gate; `-DryRun`/`--dry-run`. Real-hash mismatch → delete partial + exit 1. Idempotent (present + verified → skip). |
-| `fetch-runtime.{ps1,sh}` | (Phase 12; GPU defaults Phase 14) Read `runtime-sources.yaml`, pick the host build (`-Os/-Arch/-Backend` overrides; **default = the first listed build: Vulkan on win/linux, Metal on mac**; `-Backend cpu` fetches the pure-CPU safety net into `runtime/llama.cpp/<os>/cpu/`), download + verify the archive, extract into the build's `extract_to` (`chmod +x` on mac/linux), and write a `.paid-runtime.json` install marker. Idempotent **via the marker** (version + backend must match — a missing/stale marker re-fetches, so a CPU-era drive actually upgrades); `-DryRun`/`--dry-run`. |
+| `fetch-runtime.{ps1,sh}` | (Phase 12; GPU defaults Phase 14) Read `runtime-sources.yaml`, pick the host build (`-Os/-Arch/-Backend` overrides; **default = the first listed build: Vulkan on win/linux, Metal on mac**; `-Backend cpu` fetches the pure-CPU safety net into `runtime/llama.cpp/<os>/cpu/`), download + verify the archive, extract into the build's `extract_to` (`chmod +x` on mac/linux), and write a `.paid-runtime.json` install marker. Idempotent **via the marker** (version + backend must match — a missing/stale marker re-fetches, so a CPU-era drive actually upgrades); `-DryRun`/`--dry-run`. `-Family`/`--family` selects the asset family: `llama_cpp` (default), `whisper_cpp` (the transcriber CLI), or `ocr` (language files). |
 | `verify-models.{ps1,sh}` | SHA-256 each present weight vs its manifest hash (placeholder → *UNVERIFIED*; real mismatch → fail/exit 1). `-Generate`/`--generate` writes `config/checksums.json`. |
 | `setup-dev.{ps1,sh}` | Dev bootstrap: `NODE_OPTIONS=--use-system-ca npm install` (R6) + build + test smoke. |
 

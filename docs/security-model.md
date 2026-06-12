@@ -121,7 +121,7 @@ a **remote** host is logged as a violation.
 **Loopback is not "network".** `127.0.0.0/8`, `::1`, and `localhost` are explicitly exempt — the dev
 renderer loads from `http://localhost` today and the Phase-10 `llama.cpp` sidecar binds `127.0.0.1`.
 Only genuinely remote origins are flagged. The guard **only logs; it never blocks or throws**, so a
-wrong host guess can never break local IPC or the future sidecar. Real runtimes MUST bind
+wrong host guess can never break local IPC or the sidecars. Real runtimes MUST bind
 `127.0.0.1` only.
 
 ## Logs are local-only (spec §7.11)
@@ -184,7 +184,7 @@ The workspace has two modes, owned by `services/workspace-vault.ts` (`WorkspaceC
 - The encrypted DB file is framed as `MAGIC(8) | iv(12) | tag(16) | ciphertext` (`paid.sqlite.enc`).
 
 ### Whole-file encryption-at-rest (no SQLCipher under `node:sqlite`)
-`node:sqlite` has no SQLCipher, so the **whole database file** is encrypted at rest (plan §4b), not
+`node:sqlite` has no SQLCipher, so the **whole database file** is encrypted at rest, not
 individual rows — the spec §8 schema is identical in both modes.
 
 - **On unlock:** derive the key → verify the password against the descriptor's authenticated
@@ -298,7 +298,7 @@ background (the active-model auto-start); the embedder restarts lazily on the ne
 ### Threat notes / known limitations
 - **A decrypted working copy exists on disk while unlocked.** `node:sqlite` needs a real file, so the
   DB is plaintext on the drive while the app runs (re-encrypted + shredded on lock/quit). Documented
-  limitation (plan §4b). Re-indexing an encrypted document similarly uses a transient decrypted
+  limitation. Re-indexing an encrypted document similarly uses a transient decrypted
   file, shredded after parsing; startup sweeps any crash leftovers (`.parse*`, `.tmp`, WAL/SHM).
 - **Logs are not encrypted.** `logs/app.log` never contains document contents or chat text, but may
   contain file names/paths and model ids.

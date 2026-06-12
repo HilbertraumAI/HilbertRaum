@@ -36,7 +36,7 @@ a future move to Tauri/Rust is a localized swap.
 - **Renderer**: `contextIsolation: true`, `nodeIntegration: false`, `sandbox: true`. Talks only to
   the preload bridge.
 - **Preload**: exposes a single typed `window.api` object (see `src/preload/index.ts`).
-- **Main**: owns all file I/O, the database, the model runtime, and (later) the llama.cpp sidecar.
+- **Main**: owns all file I/O, the database, the model runtime, and the llama.cpp sidecars.
 - **CSP**: same-origin only; no remote origins. Applied as both an `index.html` meta tag and a
   response header (`session.webRequest.onHeadersReceived`) — strict in production, HMR-compatible in
   dev. See [`security-model.md`](security-model.md).
@@ -880,10 +880,11 @@ export-to-file action (`exportAuditLog` IPC `audit:export`, the `exportConversat
 save-dialog precedent, JSON output). Data class + privacy rule:
 [`security-model.md`](security-model.md) §"Audit log data class".
 
-## Data flow (RAG, Phases 4–6)
-import → extract text → chunk → embed (local) → store vectors → on question: embed query → cosine
-top-k → build grounded prompt with `[S1]…` source labels → local LLM → answer with citations →
-render snippets.
+## Data flow (RAG)
+import → extract text → chunk → embed (local) → store vectors → on question: embed query →
+cosine top-k ⊕ FTS5 keyword top-k (RRF fusion) → optional rerank → build grounded prompt with
+`[S1]…` source labels → local LLM → answer with citations → render snippets. Full pipeline:
+[`rag-design.md`](rag-design.md).
 
 ## Module ↔ spec map
 | Module | Spec §7 |
