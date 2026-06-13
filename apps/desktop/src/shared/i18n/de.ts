@@ -36,7 +36,7 @@ export const de: Record<keyof typeof en, string> = {
   'app.fatal.title': 'Die App konnte nicht starten',
   'app.fatal.hintBefore':
     'Das lokale Backend ist nicht gestartet, daher kann nichts geladen werden. Starte die ' +
-    'App neu; wenn das öfter passiert, prüfe ',
+    'App neu; wenn das öfter passiert, prüf ',
   'app.fatal.hintAfter': ' auf deinem Laufwerk und sieh in docs/troubleshooting.md nach.',
   'app.loadingWorkspace': 'Arbeitsbereich wird geladen…',
 
@@ -364,10 +364,10 @@ export const de: Record<keyof typeof en, string> = {
   'models.select': 'Auswählen',
   'models.stopRuntime': 'Modell stoppen',
   'models.startRuntime': 'Modell starten',
-  'models.startMock': 'Mock-Runtime starten',
+  'models.startMock': 'Demo-Runtime starten',
   'models.startTitle': 'Dieses Modell auf diesem Gerät starten',
   'models.startMockTitle':
-    'Keine Modell-Datei vorhanden — startet die eingebaute Mock-Runtime, damit du die App ' +
+    'Keine Modell-Datei vorhanden — startet die eingebaute Demo-Runtime, damit du die App ' +
     'ausprobieren kannst',
   'models.notPresentTitle': 'Modell-Datei nicht vorhanden',
   'models.tech.summary': 'Technische Details',
@@ -383,8 +383,8 @@ export const de: Record<keyof typeof en, string> = {
   'models.tech.contextValue': '{count} Tokens',
   'models.tech.file': 'Datei',
   'models.verifyTitle':
-    'Die Datei auf dem Laufwerk neu hashen und gegen ihre SHA-256 prüfen (umgeht den ' +
-    'Zwischenspeicher)',
+    'Die Datei auf dem Laufwerk neu hashen und mit ihrer SHA-256-Prüfsumme vergleichen ' +
+    '(umgeht den Zwischenspeicher)',
   'models.verifying': 'Wird geprüft…',
   'models.verify': 'Prüfsumme prüfen',
   'models.confirm.title': '{name} herunterladen?',
@@ -603,8 +603,8 @@ export const de: Record<keyof typeof en, string> = {
     'Kompatibilitätsmodus aktiv: Antworten nutzen die CPU — das funktioniert auf jedem ' +
     'Gerät.',
   'diag.gpu.tryHint':
-    'Wenn du deinen Grafiktreiber aktualisiert hast, kannst du die Grafikkarte erneut ' +
-    'versuchen.',
+    'Wenn du deinen Grafiktreiber aktualisiert hast, kannst du es erneut mit der ' +
+    'Grafikkarte versuchen.',
   'diag.gpu.offHint':
     'Die Grafikbeschleunigung ist in den Einstellungen ausgeschaltet — schalte sie dort ' +
     'wieder ein, um die Grafikkarte zu verwenden.',
@@ -657,7 +657,7 @@ export const de: Record<keyof typeof en, string> = {
   'diag.activity.hide': 'Aktivität ausblenden',
   'diag.activity.export': 'In Datei exportieren…',
   'diag.activity.savedTo': 'Aktivitätslog gespeichert unter {path}',
-  'diag.activity.filterShow': 'Zeige',
+  'diag.activity.filterShow': 'Anzeigen',
   'diag.activity.filterAll': 'Alle Aktivitäten',
   'diag.activity.loading': 'Wird geladen…',
   'diag.activity.empty':
@@ -716,7 +716,7 @@ export const de: Record<keyof typeof en, string> = {
   'gate.finishing.hint':
     'Wir schauen kurz nach, was schon auf diesem Laufwerk ist. Der erste Blick auf eine ' +
     'große KI-Modell-Datei kann ein paar Minuten dauern.',
-  'gate.finishing.skip': 'Überspringen — bring mich zur App',
+  'gate.finishing.skip': 'Überspringen — direkt zur App',
   'gate.starter.title': 'Eine letzte Sache',
   'gate.starter.noModel':
     'Auf diesem Laufwerk ist noch kein KI-Modell installiert — der Chat braucht eines zum ' +
@@ -772,7 +772,7 @@ export const de: Record<keyof typeof en, string> = {
     'einmal zu versuchen.',
   'main.rag.noContext':
     'Dazu habe ich in deinen Dokumenten nichts gefunden. Formuliere deine Frage anders oder ' +
-    'prüfe, welche Dokumente du gerade fragst.',
+    'prüf, welche Dokumente du gerade fragst.',
   'main.rag.reindexNeeded':
     'Deine Dokumente brauchen eine kurze Neuindexierung, bevor sie durchsucht werden können ' +
     '— sie wurden mit einem anderen Suchmodell indexiert. Öffne den Dokumente-Bereich und ' +
@@ -881,7 +881,7 @@ export const de: Record<keyof typeof en, string> = {
   'main.download.fileMissing':
     'Die heruntergeladene Datei war vor der Verifizierung nicht mehr auffindbar.',
   'main.download.httpFailed':
-    'Der Download konnte nicht starten ({reason}). Prüfe die Verbindung und versuch es ' +
+    'Der Download konnte nicht starten ({reason}). Prüf die Verbindung und versuch es ' +
     'noch einmal.',
   'main.download.interrupted':
     'Der Download wurde unterbrochen ({reason}). Der fertige Teil bleibt erhalten — beim ' +
@@ -911,8 +911,8 @@ export const de: Record<keyof typeof en, string> = {
     'auszuwählen.',
   'main.preflight.readOnly':
     'Dieses Laufwerk scheint schreibgeschützt zu sein, daher kann die App ihren ' +
-    'Arbeitsbereich nicht anlegen. Versuch einen anderen USB-Anschluss oder sieh in die ' +
-    'Anleitung zur Fehlerbehebung.',
+    'Arbeitsbereich nicht anlegen. Versuch einen anderen USB-Anschluss oder sieh in der ' +
+    'Anleitung zur Fehlerbehebung nach.',
   'main.preflight.lowSpace':
     'Auf diesem Laufwerk ist wenig freier Speicherplatz. Du kannst trotzdem fortfahren, ' +
     'aber der Import großer Dokumente kann fehlschlagen, bis du Platz schaffst.',
