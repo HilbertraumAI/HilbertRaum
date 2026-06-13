@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { Message } from '@shared/types'
@@ -10,8 +10,9 @@ import { useT } from '../i18n'
 // Transcript (guidelines §3): the conversation IS the canvas — centered,
 // max-width 720px, --text-md body (CSS). Assistant answers carry an inline
 // "▸ Sources (N)" disclosure and a hover/focus action row; the live streaming bubble
-// shows the collapsed "Thinking…" line (never persisted) and announces
-// streamed text over a polite ARIA live region.
+// shows the collapsed "Thinking…" line (never persisted) and announces streamed text to
+// screen readers via a separate visually-hidden plain-text live region (StreamAnnouncer,
+// audit L7) — the visible markdown is intentionally not a live region.
 
 interface TranscriptProps {
   messages: Message[]
@@ -112,8 +113,11 @@ export function Transcript({
                   <div className="msg-thinking-text">{streamThinking}</div>
                 </details>
               )}
-              {/* role="log": additions are announced politely without re-reading the lot. */}
-              <div className="msg-content md" role="log" aria-live="polite">
+              {/* The visible markdown is NOT a live region (audit L7): re-rendering the
+                  whole buffer on every ~40 ms flush made role="log" either re-read the
+                  full answer or fall silent. Announcement is delegated to a separate
+                  plain-text region below, throttled to sentence boundaries. */}
+              <div className="msg-content md">
                 {/* The fixed RAG answers arrive as one onToken chunk — map the live
                     bubble too so they never flash English before persisting. */}
                 <AssistantMarkdown text={localizeServerCopy(t, streamText)} />
@@ -121,12 +125,72 @@ export function Transcript({
                   ▋
                 </span>
               </div>
+              <StreamAnnouncer text={localizeServerCopy(t, streamText)} />
             </div>
           </div>
         )}
       </div>
     </div>
   )
+}
+
+/**
+ * Visually-hidden polite live region for streaming answers (audit L7). Screen readers
+ * announce a live region by reading what is ADDED to it, so we feed it only newly
+ * COMPLETED sentences as plain text — never the churning markdown buffer. This avoids
+ * both failure modes of announcing the rendered markdown directly: re-reading the whole
+ * answer on every flush, or (because the subtree remounts) going silent entirely.
+ *
+ * Sentence boundary = the position after the last terminator (. ! ? … or newline). We
+ * announce the stable prefix up to that boundary and remember how far we've gone, so the
+ * trailing in-progress sentence is held back until it completes. Markdown markup is
+ * stripped to a rough plain-text form so the reader doesn't voice "asterisk asterisk".
+ */
+export function StreamAnnouncer({ text }: { text: string }): JSX.Element {
+  const announcedLenRef = useRef(0)
+  const [announced, setAnnounced] = useState('')
+
+  useEffect(() => {
+    // A new stream (text got shorter / reset) → start over.
+    if (text.length < announcedLenRef.current) {
+      announcedLenRef.current = 0
+      setAnnounced('')
+      return
+    }
+    // Find the last completed-sentence boundary in the current buffer.
+    const boundary = lastSentenceBoundary(text)
+    if (boundary <= announcedLenRef.current) return
+    const next = stripMarkdown(text.slice(announcedLenRef.current, boundary)).trim()
+    announcedLenRef.current = boundary
+    if (next !== '') setAnnounced(next)
+  }, [text])
+
+  return (
+    <div className="sr-only" role="log" aria-live="polite" aria-atomic="true">
+      {announced}
+    </div>
+  )
+}
+
+/** Index just past the last sentence terminator (. ! ? … or newline); 0 if none yet. */
+function lastSentenceBoundary(text: string): number {
+  // Match a terminator optionally followed by closing quotes/brackets then whitespace
+  // or end-of-string — the last such match is our boundary.
+  const re = /[.!?…\n]+["')\]]*(?=\s|$)/g
+  let last = 0
+  let m: RegExpExecArray | null
+  while ((m = re.exec(text)) !== null) last = m.index + m[0].length
+  return last
+}
+
+/** Rough markdown → plain text for the announcer (not the visible render). */
+function stripMarkdown(s: string): string {
+  return s
+    .replace(/`{1,3}[^`]*`{1,3}/g, ' ') // inline/code spans
+    .replace(/[*_~`#>]+/g, '') // emphasis / heading / quote / strike markers
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1') // links/images → their text
+    .replace(/^\s*[-+*]\s+/gm, '') // list bullets
+    .replace(/\s+/g, ' ')
 }
 
 /**
