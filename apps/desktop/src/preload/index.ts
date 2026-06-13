@@ -13,6 +13,8 @@ import type {
   DocumentPreview,
   DownloadJob,
   DriveStatus,
+  EngineDownloadJob,
+  EngineStatus,
   ImportJob,
   ImportJobStatus,
   ImportPreflight,
@@ -91,6 +93,18 @@ const api = {
   /** Cancel an in-flight download; the partial file is kept for a future resume. */
   cancelDownload: (jobId: string): Promise<DownloadJob> =>
     ipcRenderer.invoke(IPC.cancelDownload, jobId),
+
+  // ---- In-app engine (llama.cpp sidecar) downloader ----
+  /** Is the real AI engine installed, and (if not) can it be fetched for this host? */
+  getEngineStatus: (): Promise<EngineStatus> => ipcRenderer.invoke(IPC.getEngineStatus),
+  /** Start fetching + extracting the host's llama-server build. Gated like model downloads. */
+  downloadEngine: (): Promise<EngineDownloadJob> => ipcRenderer.invoke(IPC.downloadEngine),
+  /** Poll the engine-download job's progress/status. */
+  getEngineJob: (jobId: string): Promise<EngineDownloadJob> =>
+    ipcRenderer.invoke(IPC.getEngineJob, jobId),
+  /** Cancel an in-flight engine download. */
+  cancelEngineDownload: (jobId: string): Promise<EngineDownloadJob> =>
+    ipcRenderer.invoke(IPC.cancelEngineDownload, jobId),
 
   // ---- Hardware benchmark ----
   /** Detect hardware + measure drive speed, persist + return the result. Strictly local. */

@@ -46,14 +46,16 @@ folder):
 
 ## Offline mode
 
-By default the app makes **no network calls** in its core path. There is a visible, persistent
-**Local · Offline** indicator (in the sidebar and the chat header; clicking it opens Settings →
-**Privacy & data**), and while downloads are enabled it says so honestly: "Downloads allowed —
-chats and documents stay local." The only optional network feature is downloading/updating
-models, which is **off by default** and must be explicitly enabled in Settings:
+The app's **core path — chat, documents, indexing, search — always stays local** and makes no
+network calls. A visible indicator (in the sidebar and the chat header; clicking it opens
+Settings → **Privacy & data**) tells you the current state honestly: **Local · Offline** when
+no network is permitted, or "Downloads allowed — chats and documents stay local" when it is. The
+only optional network feature is downloading/updating models + the AI engine. That setting is now
+**on by default** so a fresh install can fetch models out of the box — but it stays bounded:
+every download is explicit and confirmed, and you can turn it off in Settings:
 
 ```
-[ ] Allow internet access for model downloads and updates
+[x] Allow internet access for model downloads and updates
 ```
 
 Even with that setting on, network access is only used if a drive **policy** permits it. A

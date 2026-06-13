@@ -90,7 +90,9 @@ function makeCtx(opts: {
   const drive = makeDrive({ policyDeniesDownloads: opts.policyDeniesDownloads })
   const db = openDatabase(join(drive.rootPath, 'test.sqlite'))
   seedSettings(db)
-  if (opts.allowNetwork) updateSettings(db, { allowNetwork: true })
+  // Set explicitly (the seeded default is now allowNetwork:true) so an `allowNetwork:false`
+  // case genuinely exercises the setting-off gate rather than inheriting the default.
+  updateSettings(db, { allowNetwork: opts.allowNetwork ?? false })
   const ctx = {
     paths: { rootPath: drive.rootPath, configPath: drive.configPath },
     db,

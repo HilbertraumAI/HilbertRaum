@@ -6,7 +6,38 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
-_Last updated: 2026-06-13 — **Security-hardening wave (audit 2026-06-13 remediation).**
+_Last updated: 2026-06-13 — **Onboarding fixes: network-on-by-default, in-app engine
+installer, voice discoverability.** Three issues found testing the first-run flow.
+**(1) Downloads possible by default:** `DEFAULT_SETTINGS.allowNetwork` flipped `false → true`
+([`shared/types.ts`](apps/desktop/src/shared/types.ts)) so a fresh install can fetch models
+out of the box. The **policy ceiling is still authoritative** — a commercial `policy.json`
+with `allow_model_downloads: false` (or the packaged-build `STRICT_POLICY` fallback) keeps the
+app offline regardless; telemetry stays hardcoded off. Updated `smoke.test.ts` +
+`db-settings.test.ts` (the old "offline-first default" asserts) + the `policy.ts`/`types.ts`
+"default off" comments; `download-ipc.test.ts` `makeCtx` now sets the setting explicitly so the
+setting-off gate is still exercised. **(2) In-app engine installer (the real fix for "I
+downloaded a model but it said mock mode"):** the model downloader fetches WEIGHTS only — without
+the `llama-server` engine binary a started model falls back to the demo runtime
+([`runtime/factory.ts`](apps/desktop/src/main/services/runtime/factory.ts) — "no llama-server
+binary on the drive"). New [`services/runtime-download.ts`](apps/desktop/src/main/services/runtime-download.ts)
+`EngineDownloadManager` fetches + SHA-256-verifies + extracts the host's prebuilt build from
+`runtime-sources.yaml` into `runtime/llama.cpp/<os>/` (download → verify → clean → extract →
+flatten → install marker — mirrors the canonical fetch-runtime scripts), with the network
+(`fetchImpl`) and extraction (`extractImpl`, default `tar -xf`) behind injected seams (suite stays
+zero-network/zero-shell). Same gates as model downloads (policy ∧ `allowNetwork`), re-checked in
+main. New `engine:status`/`download`/`getJob`/`cancel` IPC + preload + a **Models-screen
+"Install the AI engine" banner** (warning tone, progress/cancel, demo-mode explanation) shown when
+the engine is missing but a host build exists. New shared types `EngineDownloadJob`/`EngineStatus`;
+12 tests in `engine-download.test.ts`. **(3) Voice mic discoverability:** the dictation mic was NOT
+removed by the chat-UI polish pass (the Composer block is byte-identical) — it is availability-gated
+on `ctx.transcriber != null` (whisper engine + model present). Per the "keep gated, improve
+discoverability" decision the transcriber card copy now states it unlocks the 🎤 voice button
+(EN+DE `models.hint.transcriber`). **Tests:** typecheck clean, build OK, `npm test` **1131 passed /
+25 skipped** (+12). **Manual-smoke TODO:** the real network fetch + `tar` extraction of the b9585
+build is only exercised by the injected seams in CI — verify end-to-end on a real drive (like the
+GPU/PAID smokes)._
+
+_(prior) 2026-06-13 — **Security-hardening wave (audit 2026-06-13 remediation).**
 Fixed every MEDIUM + the quick-win LOW findings from the same-day multi-persona security
 audit. (Per the doc lifecycle rule the audit report was condensed into this entry +
 `security-model.md` and then deleted — the full report is recoverable from git history at

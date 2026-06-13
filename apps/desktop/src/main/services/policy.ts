@@ -26,11 +26,11 @@ import type {
 /**
  * Default policy. **Update checks + telemetry are off and have no user toggle.**
  * `allowModelDownloads` is true: with no policy file the spec §3.6 user Settings toggle
- * ("Allow internet access for model downloads…", default OFF) is the effective gate for
- * the in-app downloader — the app still ships offline because the SETTING defaults to
- * off and every download needs an explicit per-download confirmation. A `policy.json`
- * that writes `allow_model_downloads: false` (the commercial prepare-drive posture)
- * restricts this unconditionally — policy only restricts, never expands. Workspace/model
+ * ("Allow internet access for model downloads…") is the effective gate for the in-app
+ * downloader. That toggle now defaults ON (DEFAULT_SETTINGS.allowNetwork) so downloads work
+ * out of the box, and every download still needs an explicit per-download confirmation. A
+ * `policy.json` that writes `allow_model_downloads: false` (the commercial prepare-drive
+ * posture) restricts this unconditionally — policy only restricts, never expands. Workspace/model
  * defaults are developer-friendly (dev with no policy file: plaintext workspace +
  * unverified models allowed) — a commercial `policy.json` tightens these.
  */

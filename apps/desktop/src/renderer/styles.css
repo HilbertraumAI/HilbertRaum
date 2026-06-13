@@ -305,6 +305,9 @@ code, pre, kbd { font-family: var(--font-mono); }
 .download-progress { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
 .download-progress progress { flex: 1 1 160px; min-width: 120px; accent-color: var(--accent-600); }
 .download-progress .hint { margin: 0; flex-basis: 100%; }
+/* "Install the AI engine" banner body: stacked label + action/progress. */
+.engine-install { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+.engine-install progress { width: 100%; accent-color: var(--accent-600); }
 .btn.sm { padding: 5px 11px; font-size: 12px; min-height: 24px; }
 /* "Technical details" disclosure (guidelines §2/§3): checksums, paths, and
    runtime internals stay one click away, closed by default. */

@@ -982,6 +982,33 @@ No update checks, no catalog (only manifests already on the drive), no backgroun
 a sanctioned download session is by definition not `offlineMode`. Gate semantics +
 licensing: `model-policy.md` §"The in-app downloader"; user-facing posture: `PRIVACY.md`.
 
+**`settings.allowNetwork` now defaults ON (2026-06-13).** The spec §3.6 checkbox was flipped
+`false → true` in `DEFAULT_SETTINGS` so a fresh install can download models out of the box
+(onboarding feedback). Gate 1 (the policy ceiling) is unchanged and still authoritative: a
+commercial `policy.json` with `allow_model_downloads: false` — or the packaged-build
+`STRICT_POLICY` fallback — keeps the app offline regardless of the toggle, and telemetry stays
+hardcoded off. A locked workspace still reads the setting as off.
+
+### In-app engine installer (2026-06-13)
+
+The model downloader fetches model WEIGHTS only; the `llama-server` **engine binary** is a
+separate asset (`runtime-sources.yaml`, normally provisioned at drive-build time by
+`fetch-runtime`). With weights present but no engine, a started model lands on the **demo
+runtime** (`runtime/factory.ts` — "no llama-server binary on the drive"), which is what a user
+hits when downloading a model into a dev/incomplete drive. `services/runtime-download.ts`
+`EngineDownloadManager` closes that gap: it resolves the host build (`selectHostBuild`), then
+**download → verify → clean → extract → flatten → write the `.hilbertraum-runtime.json`
+marker** — mirroring the canonical `fetch-runtime` scripts, but in-app. The network
+(`fetchImpl`) and the archive extraction (`extractImpl`, default `tar -xf`, which covers the
+.zip/.tar.gz host assets via bsdtar/GNU tar) are **injected seams**, so the unit suite stays
+zero-network and never shells out. **Same gates as the model downloader** (policy ∧
+`allowNetwork`), re-checked in main; placeholder hashes complete `unverified` (checksum
+honesty); the install is **idempotent via the marker** (`runtimeInstallCurrent`). Surfaced as
+`engine:status/download/getJob/cancel` IPC + a Models-screen "Install the AI engine" banner
+(shown only when the engine is missing but a host build exists; progress/cancel like a model
+download). **CI exercises only the injected seams — the real fetch + `tar` extraction of the
+pinned build is a manual smoke (like the GPU/PAID harnesses).**
+
 ## Diagnostics & transcript export (audit round)
 - `getRuntimeStatus` (read-only runtime health), `getLogTail` (tail of the local `app.log`), and
   `exportConversation` (spec §7.6 transcript export via the OS save dialog) round out spec §7.11/§7.6.

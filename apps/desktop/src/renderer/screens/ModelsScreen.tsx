@@ -3,7 +3,15 @@ import { Badge, Banner, Button, ConfirmDialog, EmptyState, ErrorBanner, Progress
 import { friendlyIpcError } from '../lib/errors'
 import { useT } from '../i18n'
 import type { MessageKey, UiLanguage } from '@shared/i18n'
-import type { AppSettings, DownloadJob, ModelInfo, ModelState, PolicyStatus } from '@shared/types'
+import type {
+  AppSettings,
+  DownloadJob,
+  EngineDownloadJob,
+  EngineStatus,
+  ModelInfo,
+  ModelState,
+  PolicyStatus
+} from '@shared/types'
 
 // "AI Model" screen (guidelines §2/§3 principle: singular mental model).
 // The active model leads with a plain-language size/speed hint; the rest is a friendly
@@ -61,6 +69,16 @@ let rememberedJob: DownloadJob | null = null
 
 const JOB_LIVE: ReadonlySet<DownloadJob['status']> = new Set(['queued', 'downloading', 'verifying'])
 
+// The engine download (like the model download) outlives leaving the screen.
+let rememberedEngineJob: EngineDownloadJob | null = null
+
+const ENGINE_JOB_LIVE: ReadonlySet<EngineDownloadJob['status']> = new Set([
+  'queued',
+  'downloading',
+  'verifying',
+  'extracting'
+])
+
 export function ModelsScreen(): JSX.Element {
   const { t, lang } = useT()
   const [models, setModels] = useState<ModelInfo[] | null>(null)
@@ -74,16 +92,24 @@ export function ModelsScreen(): JSX.Element {
   const [licenseAck, setLicenseAck] = useState(false)
   const [job, setJob] = useState<DownloadJob | null>(rememberedJob)
   const jobRef = useRef<DownloadJob | null>(rememberedJob)
+  // The real AI engine (llama.cpp): without it, started models run in demo mode.
+  const [engine, setEngine] = useState<EngineStatus | null>(null)
+  const [engineJob, setEngineJob] = useState<EngineDownloadJob | null>(rememberedEngineJob)
+  const engineJobRef = useRef<EngineDownloadJob | null>(rememberedEngineJob)
 
   async function refresh(): Promise<void> {
-    const [m, s, p] = await Promise.all([
+    const [m, s, p, e] = await Promise.all([
       window.api.listModels(),
       window.api.getSettings(),
-      window.api.getPolicy().catch(() => null)
+      window.api.getPolicy().catch(() => null),
+      // Wrapped in Promise.resolve so a partial bridge (older preload, or a test stub that
+      // returns nothing) degrades to null instead of throwing; the real preload resolves it.
+      Promise.resolve(window.api.getEngineStatus?.()).then((r) => r ?? null, () => null)
     ])
     setModels(m)
     setSettings(s)
     setPolicy(p)
+    setEngine(e)
     // Machine RAM feeds the "needs more memory" flag copy; best-effort.
     window.api
       .getAppStatus()
@@ -114,6 +140,38 @@ export function ModelsScreen(): JSX.Element {
     }, 1000)
     return () => clearInterval(timer)
   }, [job?.jobId, job?.status])
+
+  // Poll the engine download the same way; a finished install refreshes the cards once
+  // (the engine status flips installed → the demo-mode banner disappears).
+  useEffect(() => {
+    engineJobRef.current = engineJob
+    rememberedEngineJob = engineJob
+    if (!engineJob || !ENGINE_JOB_LIVE.has(engineJob.status)) return
+    const timer = setInterval(() => {
+      window.api
+        .getEngineJob(engineJob.jobId)
+        .then((next) => {
+          setEngineJob(next)
+          if (
+            !ENGINE_JOB_LIVE.has(next.status) &&
+            ENGINE_JOB_LIVE.has(engineJobRef.current?.status ?? 'done')
+          ) {
+            void refresh()
+          }
+        })
+        .catch(() => undefined)
+    }, 1000)
+    return () => clearInterval(timer)
+  }, [engineJob?.jobId, engineJob?.status])
+
+  async function startEngineDownload(): Promise<void> {
+    setError(null)
+    try {
+      setEngineJob(await window.api.downloadEngine())
+    } catch (e) {
+      setError(friendlyIpcError(e))
+    }
+  }
 
   async function run(key: string, fn: () => Promise<unknown>): Promise<void> {
     setBusy(key)
@@ -465,12 +523,72 @@ export function ModelsScreen(): JSX.Element {
     )
   }
 
+  // The "install the AI engine" banner: without the real engine, started models run in
+  // the built-in demo runtime. Mirrors the model-download progress/cancel/error shape.
+  function engineBanner(): JSX.Element {
+    const j = engineJob
+    const live = j != null && ENGINE_JOB_LIVE.has(j.status)
+    const pct =
+      j && j.totalBytes && j.totalBytes > 0
+        ? Math.min(100, Math.round((j.receivedBytes / j.totalBytes) * 100))
+        : null
+    return (
+      <Banner tone="warning">
+        <div className="engine-install">
+          <strong>{t('models.engine.title')}</strong>
+          <p className="hint" style={{ margin: '4px 0 8px' }}>
+            {t('models.engine.explain')}
+          </p>
+          {live && j ? (
+            <Progress
+              label={
+                j.status === 'extracting'
+                  ? t('models.engine.extracting')
+                  : j.status === 'verifying'
+                    ? t('models.engine.verifying')
+                    : pct != null
+                      ? t('models.engine.progress', { pct })
+                      : t('models.engine.downloadingNoTotal')
+              }
+              value={pct != null && j.status === 'downloading' ? j.receivedBytes : undefined}
+              max={pct != null && j.status === 'downloading' ? (j.totalBytes ?? undefined) : undefined}
+            />
+          ) : (
+            <>
+              {j?.status === 'failed' && j.error && (
+                <p className="hint" style={{ marginTop: 0 }}>
+                  {j.error}
+                </p>
+              )}
+              <Button
+                size="sm"
+                variant="primary"
+                disabled={!downloadsEnabled}
+                title={downloadsBlockedReason ?? undefined}
+                onClick={() => void startEngineDownload()}
+              >
+                {j?.status === 'failed' ? t('models.engine.retry') : t('models.engine.install')}
+              </Button>
+              {downloadsBlockedReason && (
+                <p className="hint" style={{ marginBottom: 0 }}>
+                  {downloadsBlockedReason}
+                </p>
+              )}
+            </>
+          )}
+        </div>
+      </Banner>
+    )
+  }
+
   return (
     <div className="screen">
       <h1>{t('models.title')}</h1>
       <p className="lead">{t('models.lead')}</p>
 
       {anyDownloadable && downloadsBlockedReason && <Banner tone="info">{downloadsBlockedReason}</Banner>}
+
+      {engine && !engine.installed && engine.available && engineBanner()}
 
       {models.length === 0 && (
         <EmptyState
