@@ -744,8 +744,183 @@ export const de: Record<keyof typeof en, string> = {
   'gate.create.submitBusy': 'Wird erstellt…',
   'gate.error.generic': 'Etwas ist schiefgelaufen. Bitte versuch es noch einmal.',
 
-  // ---- Main-process emissions ----
+  // ---- Main-process strings (Phase 41, §3.3 two-rule boundary) ----
+  // Persist-canonical set (D-L4): the DB keeps the ENGLISH value; these German values
+  // are what the renderer display map shows instead.
+  'main.ingest.pdfScanDetected':
+    'Dieses PDF sieht aus wie ein Scan — es enthält noch keinen lesbaren Text.',
+  'main.ingest.audioNeedsTranscriber':
+    'Für den Audio-Import wird das Transkriptionsmodell benötigt — lade es im ' +
+    'KI-Modell-Bereich herunter.',
+  'main.ingest.audioUnreadable':
+    'Diese Audiodatei konnte nicht gelesen werden. Wandle sie in WAV oder MP3 um und ' +
+    'importiere sie noch einmal.',
+  'main.ingest.audioTranscriptionFailed':
+    'Die Aufnahme konnte nicht transkribiert werden. Indexiere dieses Dokument neu, um es ' +
+    'noch einmal zu versuchen.',
+  'main.ingest.imageNeedsOcr':
+    'Für den Foto-Import werden die Texterkennungs-Dateien (OCR) benötigt, die auf diesem ' +
+    'Laufwerk fehlen.',
+  'main.ingest.imageNoText':
+    'In diesem Foto wurde kein lesbarer Text gefunden. Versuch es mit einem schärferen, ' +
+    'näheren Bild der Seite.',
+  'main.ingest.imageOcrFailed':
+    'Dieses Foto konnte nicht gelesen werden. Indexiere es neu, um es noch einmal zu versuchen.',
+  'main.ingest.sourceMissing': 'Die Quelldatei wurde nicht gefunden.',
+  'main.ingest.interrupted':
+    'Die Indexierung wurde unterbrochen, bevor sie fertig war. Indexiere neu, um es noch ' +
+    'einmal zu versuchen.',
+  'main.rag.noContext':
+    'Dazu habe ich in deinen Dokumenten nichts gefunden. Formuliere deine Frage anders oder ' +
+    'prüfe, welche Dokumente du gerade fragst.',
+  'main.rag.reindexNeeded':
+    'Deine Dokumente brauchen eine kurze Neuindexierung, bevor sie durchsucht werden können ' +
+    '— sie wurden mit einem anderen Suchmodell indexiert. Öffne den Dokumente-Bereich und ' +
+    'wähle „Neu indexieren“.',
+  'main.chat.docTaskBusy':
+    'Eine Dokumentaufgabe läuft gerade. Du kannst sie abbrechen oder warten, bis sie fertig ' +
+    'ist, bevor du chattest.',
+  'main.benchmark.warnTiny':
+    'Dieses Gerät eignet sich am besten für das kleinste, schnellste Modell. Größere ' +
+    'Modelle laufen möglicherweise langsam.',
+  'main.benchmark.warnUnknown':
+    'Wir konnten diese Hardware nicht vollständig erkennen und haben deshalb ein sicheres, ' +
+    'leichtes Modell gewählt. Du kannst jederzeit ein größeres Modell ausprobieren.',
+  'main.benchmark.warnDriveProbe':
+    'Die Laufwerksgeschwindigkeit konnte nicht gemessen werden, die Empfehlung nutzt daher ' +
+    'nur RAM und CPU.',
+  'main.benchmark.warnSlowDrive':
+    'Dieses Laufwerk ist eher langsam. Modelle funktionieren trotzdem, das Laden kann aber ' +
+    'länger dauern.',
+
+  // Emission set (D-L5): localized at the emission site via tMain().
   'main.workspace.wrongPassword':
     'Dieses Passwort hat deinen Arbeitsbereich nicht entsperrt. Prüf es und versuch es ' +
-    'noch einmal.'
+    'noch einmal.',
+  'main.workspace.openFailed': 'Der Arbeitsbereich konnte nicht geöffnet werden.',
+  'main.workspace.createFailed': 'Der Arbeitsbereich konnte nicht erstellt werden.',
+  'main.workspace.passwordTooShort': 'Das Passwort muss mindestens {min} Zeichen lang sein.',
+  'main.workspace.newPasswordTooShort':
+    'Das neue Passwort muss mindestens {min} Zeichen lang sein.',
+  'main.workspace.unlockBeforeChange':
+    'Entsperre den Arbeitsbereich, bevor du das Passwort änderst.',
+  'main.workspace.wrongCurrentPassword':
+    'Das stimmt nicht mit deinem aktuellen Passwort überein. Prüf es und versuch es noch einmal.',
+  'main.workspace.changeFailed':
+    'Das Passwort konnte nicht geändert werden. Dein aktuelles Passwort funktioniert weiterhin.',
+  'main.workspace.busyPasswordChange':
+    'Das Passwort des Arbeitsbereichs wird gerade geändert. Versuch es gleich noch einmal.',
+  'main.runtime.compatibilityMode':
+    'Aus Stabilitätsgründen in den Kompatibilitätsmodus gewechselt. Alles funktioniert ' +
+    'weiter — Antworten können etwas langsamer sein.',
+  'main.noModelRunning':
+    'Es läuft kein KI-Modell. Öffne den KI-Modell-Bereich und starte zuerst eines.',
+  'main.chat.streamInFlight': 'Für diese Unterhaltung wird bereits eine Antwort erstellt.',
+  'main.chat.nothingToRegenerate': 'Es gibt noch keine Antwort, die neu erstellt werden könnte.',
+  'main.chat.emptyMessage': 'Eine leere Nachricht kann nicht gesendet werden.',
+  'main.chat.emptyQuestion': 'Eine leere Frage kann nicht gesendet werden.',
+  'main.chat.stopFirst':
+    'Für diese Unterhaltung wird noch eine Antwort erstellt. Stoppe sie zuerst.',
+  'main.task.unknownKind': 'Unbekannte Dokumentaufgabe.',
+  'main.task.refusedChatStreaming':
+    'Gerade wird eine Antwort geschrieben. Warte, bis sie fertig ist (oder stoppe sie), und ' +
+    'versuch es dann noch einmal.',
+  'main.task.comparePickTwo': 'Wähle genau zwei Dokumente zum Vergleichen aus.',
+  'main.task.compareReindex':
+    'Diese Dokumente brauchen eine kurze Neuindexierung, bevor sie verglichen werden können ' +
+    '— mindestens eines wurde mit einem anderen Suchmodell vorbereitet. Öffne den ' +
+    'Dokumente-Bereich, wähle „Neu indexieren“ und versuch es dann noch einmal.',
+  'main.task.documentNotReady':
+    'Dieses Dokument enthält noch keinen lesbaren Text. Importiere oder indexiere es zuerst ' +
+    'neu und versuch es dann noch einmal.',
+  'main.task.genericFailure':
+    'Die Aufgabe konnte nicht abgeschlossen werden. Stell sicher, dass das Modell noch ' +
+    'läuft, und versuch es dann noch einmal.',
+  'main.task.expired': 'Diese Aufgabe ist nicht mehr verfügbar.',
+  'main.task.translationTarget': 'Wähle eine Übersetzungssprache: Deutsch oder Englisch.',
+  'main.task.sourceUnreadable':
+    'Die gespeicherte Kopie dieses Dokuments konnte nicht gelesen werden. Importiere das ' +
+    'Dokument neu und versuch es dann noch einmal.',
+  'main.task.needsOcr':
+    'Für die Texterkennung werden die OCR-Dateien benötigt, die auf diesem Laufwerk fehlen.',
+  'main.task.ocrNotAScan':
+    'Nur ein PDF, das als Scan erkannt wurde, kann auf diesem Weg durchsuchbar gemacht werden.',
+  'main.task.ocrNoText':
+    'In diesem Scan wurde kein lesbarer Text gefunden. Die Seiten sind vielleicht leer oder ' +
+    'zu unscharf.',
+  'main.task.ocrFailed':
+    'Dieser Scan konnte nicht gelesen werden. Stell sicher, dass das Dokument noch auf dem ' +
+    'Laufwerk ist, und versuch es dann noch einmal.',
+  'main.task.pickOneTranslate': 'Wähle genau ein Dokument zum Übersetzen aus.',
+  'main.task.pickOneOcr':
+    'Wähle genau ein gescanntes PDF aus, das durchsuchbar gemacht werden soll.',
+  'main.task.pickOneSummarize': 'Wähle genau ein Dokument zum Zusammenfassen aus.',
+  'main.task.unavailable': 'Dokumentaufgaben sind nicht verfügbar.',
+  'main.task.workspaceLocked':
+    'Der Arbeitsbereich ist gesperrt. Entsperre ihn, um mit Dokumenten zu arbeiten.',
+  'main.download.policyDisabled':
+    'Downloads sind durch die Richtlinie dieses Laufwerks deaktiviert.',
+  'main.download.networkOff':
+    'Der Internetzugriff ist ausgeschaltet. Schalte zuerst „Internetzugriff für ' +
+    'Modell-Downloads und Updates erlauben“ in den Einstellungen ein.',
+  'main.download.alreadyRunning':
+    'Es läuft bereits ein Download. Modelle werden einzeln heruntergeladen.',
+  'main.download.noSource': 'Das Modell „{modelId}“ hat keine Download-Quelle in seinem Manifest.',
+  'main.download.alreadyVerified': 'Dieses Modell ist bereits heruntergeladen und verifiziert.',
+  'main.download.presentUnverified':
+    'Die Datei dieses Modells ist bereits vorhanden. Ihr Manifest enthält noch keine echte ' +
+    'Prüfsumme, daher kann sie nicht verifiziert werden — erfasse eine mit ' +
+    'verify-models --generate.',
+  'main.download.licenseFirst':
+    'Bitte sieh dir die Lizenz des Modells an ({license}) und akzeptiere sie, bevor du es ' +
+    'herunterlädst.',
+  'main.download.unknownJob': 'Unbekannter Download.',
+  'main.download.checksumMismatch':
+    'Die heruntergeladene Datei entsprach nicht der erwarteten Prüfsumme und wurde deshalb ' +
+    'verworfen. Bitte versuch es noch einmal.',
+  'main.download.fileMissing':
+    'Die heruntergeladene Datei war vor der Verifizierung nicht mehr auffindbar.',
+  'main.download.httpFailed':
+    'Der Download konnte nicht starten ({reason}). Prüfe die Verbindung und versuch es ' +
+    'noch einmal.',
+  'main.download.interrupted':
+    'Der Download wurde unterbrochen ({reason}). Der fertige Teil bleibt erhalten — beim ' +
+    'nächsten Start wird dort weitergemacht.',
+  'main.docs.locked': 'Der Arbeitsbereich ist gesperrt. Entsperre ihn, um Dokumente zu verwalten.',
+  'main.docs.processing':
+    'Dieses Dokument wird noch verarbeitet. Warte, bis der Import fertig ist.',
+  'main.docs.taskRunning':
+    'Für dieses Dokument läuft eine Aufgabe. Brich sie ab oder warte, bis sie fertig ist.',
+  'main.docs.previewEncrypted':
+    'Dieses Dokument ist verschlüsselt; entsperre den Arbeitsbereich, um es anzusehen.',
+  'main.docs.previewGone':
+    'Die Dokumentdatei ist nicht mehr vorhanden. Importiere sie neu, um sie anzusehen.',
+  'main.docs.exportTextOnly':
+    'Nur Textdokumente (Markdown, TXT, CSV) können auf diesem Weg exportiert werden.',
+  'main.docs.exportEncrypted':
+    'Dieses Dokument ist verschlüsselt; entsperre den Arbeitsbereich, um es zu exportieren.',
+  'main.docs.exportGone':
+    'Die Dokumentdatei ist nicht mehr vorhanden. Importiere sie neu, um sie zu exportieren.',
+  'main.docs.noStoredTranscript':
+    'Für diese Aufnahme ist noch kein Transkript gespeichert. Indexiere sie neu, um sie ' +
+    'noch einmal zu transkribieren.',
+  'main.models.noManifests':
+    'Auf diesem Laufwerk wurde keine Modellliste gefunden — der Ordner model-manifests fehlt.',
+  'main.models.autoSelected':
+    'Dieses Modell wird automatisch verwendet, sobald es installiert ist — es gibt nichts ' +
+    'auszuwählen.',
+  'main.preflight.readOnly':
+    'Dieses Laufwerk scheint schreibgeschützt zu sein, daher kann die App ihren ' +
+    'Arbeitsbereich nicht anlegen. Versuch einen anderen USB-Anschluss oder sieh in die ' +
+    'Anleitung zur Fehlerbehebung.',
+  'main.preflight.lowSpace':
+    'Auf diesem Laufwerk ist wenig freier Speicherplatz. Du kannst trotzdem fortfahren, ' +
+    'aber der Import großer Dokumente kann fehlschlagen, bis du Platz schaffst.',
+  'main.dialog.importDocuments': 'Dokumente importieren',
+  'main.dialog.importFolder': 'Einen Ordner mit Dokumenten importieren',
+  'main.dialog.exportDocument': 'Dokument exportieren',
+  'main.dialog.exportChat': 'Chat-Verlauf exportieren',
+  'main.dialog.exportAudit': 'Aktivitätslog exportieren',
+  'main.dialog.filterDocuments': 'Dokumente',
+  'main.dialog.filterAll': 'Alle Dateien'
 }

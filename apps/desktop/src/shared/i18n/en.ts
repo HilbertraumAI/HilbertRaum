@@ -690,8 +690,145 @@ export const en = {
   'gate.create.submitBusy': 'Creating…',
   'gate.error.generic': 'Something went wrong. Please try again.',
 
-  // ---- Main-process emissions (D-L5: ephemeral strings localized via tMain at the
-  // emission site — these never reach the DB) ----
+  // ---- Main-process strings (Phase 41, i18n-plan §3.3 two-rule boundary) --------------
+  //
+  // PERSIST-CANONICAL set (D-L4): these English values are what gets WRITTEN to the DB
+  // (documents.error_message, messages.content) or to settings.lastBenchmark.warnings —
+  // always via an explicit t('en', …) at the persist site — and the renderer translates
+  // them at display time through the exact-match display map
+  // (renderer/lib/displayMap.ts). Editing one of these values breaks the match for
+  // already-persisted rows (and 'main.ingest.pdfScanDetected' additionally carries the
+  // scanDetected exact-match contract) — treat them as part of the data contract.
+  'main.ingest.pdfScanDetected': 'This PDF looks like a scan — it has no readable text yet.',
+  'main.ingest.audioNeedsTranscriber':
+    'Audio import needs the transcription model — download it on the AI Model screen.',
+  'main.ingest.audioUnreadable':
+    'This audio file could not be read. Convert it to WAV or MP3 and import it again.',
+  'main.ingest.audioTranscriptionFailed':
+    'The recording could not be transcribed. Re-index this document to try again.',
+  'main.ingest.imageNeedsOcr':
+    'Photo import needs the text-recognition (OCR) files, which are not on this drive.',
+  'main.ingest.imageNoText':
+    'No readable text was found in this photo. Try a sharper, closer picture of the page.',
+  'main.ingest.imageOcrFailed': "This photo couldn't be read. Re-index it to try again.",
+  'main.ingest.sourceMissing': 'Source file not found on disk.',
+  'main.ingest.interrupted': 'Ingestion was interrupted before it finished. Re-index to try again.',
+  'main.rag.noContext':
+    "I couldn't find this in your documents. Try rephrasing your question, or check which " +
+    "documents you're asking about.",
+  'main.rag.reindexNeeded':
+    'Your documents need a quick re-index before they can be searched — they were indexed ' +
+    'with a different search model. Open the Documents screen and choose Re-index.',
+  'main.chat.docTaskBusy':
+    'A document task is running. You can cancel it, or wait for it to finish before chatting.',
+  'main.benchmark.warnTiny':
+    'This device is best suited for the smallest, quickest model. Larger models may run slowly.',
+  'main.benchmark.warnUnknown':
+    'We could not fully detect this hardware, so we picked a safe, lightweight model. ' +
+    'You can try a larger model any time.',
+  'main.benchmark.warnDriveProbe':
+    'Drive speed could not be measured, so the recommendation uses RAM and CPU only.',
+  'main.benchmark.warnSlowDrive':
+    'This drive is on the slower side. Models will still work, but loading them may take longer.',
+
+  // EMISSION set (D-L5): ephemeral strings localized at the emission site via tMain()
+  // — IPC throws, runtime notices, preflight problems, task-status errors, dialog
+  // titles. These never reach the DB.
   'main.workspace.wrongPassword':
-    "That password didn't unlock your workspace. Check it and try again."
+    "That password didn't unlock your workspace. Check it and try again.",
+  'main.workspace.openFailed': 'Could not open the workspace.',
+  'main.workspace.createFailed': 'Could not create the workspace.',
+  'main.workspace.passwordTooShort': 'Password must be at least {min} characters.',
+  'main.workspace.newPasswordTooShort': 'The new password must be at least {min} characters.',
+  'main.workspace.unlockBeforeChange': 'Unlock the workspace before changing its password.',
+  'main.workspace.wrongCurrentPassword':
+    "That doesn't match your current password. Check it and try again.",
+  'main.workspace.changeFailed':
+    'Could not change the password. Your current password still works.',
+  'main.workspace.busyPasswordChange':
+    'The workspace password is being changed right now. Try again in a moment.',
+  'main.runtime.compatibilityMode':
+    'Switched to compatibility mode for stability. Everything keeps working — responses may be a bit slower.',
+  'main.noModelRunning': 'No AI model is running. Open the AI Model screen and start one first.',
+  'main.chat.streamInFlight': 'A response is already being generated for this conversation.',
+  'main.chat.nothingToRegenerate': 'Nothing to regenerate yet.',
+  'main.chat.emptyMessage': 'Cannot send an empty message.',
+  'main.chat.emptyQuestion': 'Cannot send an empty question.',
+  'main.chat.stopFirst': 'A response is still being generated for this conversation. Stop it first.',
+  'main.task.unknownKind': 'Unknown document task.',
+  'main.task.refusedChatStreaming':
+    'An answer is being written right now. Wait for it to finish (or stop it), then try again.',
+  'main.task.comparePickTwo': 'Pick exactly two documents to compare.',
+  'main.task.compareReindex':
+    'These documents need a quick re-index before they can be compared — at least one was ' +
+    'prepared with a different search model. Open the Documents screen and choose Re-index, ' +
+    'then try again.',
+  'main.task.documentNotReady':
+    'This document has no readable text yet. Import or re-index it first, then try again.',
+  'main.task.genericFailure':
+    'The task could not be finished. Make sure the model is still running, then try again.',
+  'main.task.expired': 'This task is no longer available.',
+  'main.task.translationTarget': 'Choose a translation language: German or English.',
+  'main.task.sourceUnreadable':
+    'The stored copy of this document could not be read. Re-import the document, then try again.',
+  'main.task.needsOcr': 'Text recognition needs the OCR files, which are not on this drive.',
+  'main.task.ocrNotAScan': 'Only a PDF that was detected as a scan can be made searchable this way.',
+  'main.task.ocrNoText':
+    'No readable text was found in this scan. The pages may be blank or too blurry.',
+  'main.task.ocrFailed':
+    "This scan couldn't be read. Make sure the document is still on the drive, then try again.",
+  'main.task.pickOneTranslate': 'Pick exactly one document to translate.',
+  'main.task.pickOneOcr': 'Pick exactly one scanned PDF to make searchable.',
+  'main.task.pickOneSummarize': 'Pick exactly one document to summarize.',
+  'main.task.unavailable': 'Document tasks are not available.',
+  'main.task.workspaceLocked': 'Workspace is locked. Unlock it to work with documents.',
+  'main.download.policyDisabled': 'Downloads are disabled by this drive’s policy.',
+  'main.download.networkOff':
+    'Internet access is turned off. Turn on “Allow internet access for model ' +
+    'downloads and updates” in Settings first.',
+  'main.download.alreadyRunning': 'Another download is already running. One model downloads at a time.',
+  'main.download.noSource': 'Model "{modelId}" has no download source in its manifest.',
+  'main.download.alreadyVerified': 'This model is already downloaded and verified.',
+  'main.download.presentUnverified':
+    'This model’s file is already present. Its manifest carries no real checksum ' +
+    'yet, so it cannot be verified — capture one with verify-models --generate.',
+  'main.download.licenseFirst':
+    'Please review and accept the model’s license ({license}) before downloading.',
+  'main.download.unknownJob': 'Unknown download job.',
+  'main.download.checksumMismatch':
+    'The downloaded file did not match its expected checksum, so it was discarded. ' +
+    'Please try again.',
+  'main.download.fileMissing': 'The downloaded file went missing before it could be verified.',
+  'main.download.httpFailed':
+    'The download could not start ({reason}). Please check the connection and try again.',
+  'main.download.interrupted':
+    'The download was interrupted ({reason}). The finished part is kept — ' +
+    'starting it again will resume where it stopped.',
+  'main.docs.locked': 'Workspace is locked. Unlock it to manage documents.',
+  'main.docs.processing': 'This document is still being processed. Wait for the import to finish.',
+  'main.docs.taskRunning': 'A task is running for this document. Cancel it or wait for it to finish.',
+  'main.docs.previewEncrypted': 'This document is encrypted; unlock the workspace to preview it.',
+  'main.docs.previewGone': 'The document file is no longer on disk. Re-import it to preview.',
+  'main.docs.exportTextOnly': 'Only text documents (Markdown, TXT, CSV) can be exported this way.',
+  'main.docs.exportEncrypted': 'This document is encrypted; unlock the workspace to export it.',
+  'main.docs.exportGone': 'The document file is no longer on disk. Re-import it to export.',
+  'main.docs.noStoredTranscript':
+    'No transcript is stored for this recording yet. Re-index it to transcribe again.',
+  'main.models.noManifests':
+    'No model list was found on this drive — the model-manifests folder is missing.',
+  'main.models.autoSelected':
+    'This model is used automatically once installed — there is nothing to select.',
+  'main.preflight.readOnly':
+    'This drive appears to be read-only, so the app cannot create its workspace. ' +
+    'Try a different USB port, or see the troubleshooting guide.',
+  'main.preflight.lowSpace':
+    'This drive is low on free space. You can still continue, but importing large ' +
+    'documents may fail until you free up room.',
+  'main.dialog.importDocuments': 'Import documents',
+  'main.dialog.importFolder': 'Import a folder of documents',
+  'main.dialog.exportDocument': 'Export document',
+  'main.dialog.exportChat': 'Export chat transcript',
+  'main.dialog.exportAudit': 'Export activity log',
+  'main.dialog.filterDocuments': 'Documents',
+  'main.dialog.filterAll': 'All files'
 } as const
