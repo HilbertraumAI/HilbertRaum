@@ -691,6 +691,28 @@ Repo root: `f:\_coding\ai_drive`.
   `testTimeout: 15_000` (3× headroom) in `vitest.config.ts` — chosen over capping
   `maxWorkers` because it leaves a clean run's wall time unchanged. Suite: **969 tests
   green** (968 + the new e5 failed-start-latch test).
+- **Multi-persona audit + MEDIUM remediation (2026-06-13, branch `audit-2026-06-13-high-fixes`,
+  NOT yet merged):** a fresh five-persona audit (`docs/audit-2026-06-13.md`, a working report
+  outside the doc-lifecycle rule). No CRITICAL. **Round 1** fixed the 4 code HIGHs + M-S3 (H1
+  import lease-leak, H2 RAG token budget ×1.3, H3 truncated-blob guard, H4 OCR rasterizer
+  busy-flag, M-S3 OCR-window nav guards). **Round 2** added the H5/M-A1 drift test
+  (`tests/integration/script-drift.test.ts`) + the M-D1/2/3 stale-doc fixes. **Round 3** banked
+  the prioritized MEDIUMs: M-C1/2/3 sidecar lifecycle (a post-ready `'error'` without `'exit'`
+  now fires the GPU crash auto-fallback **and** resolves `stop()`; `stop()` escalates to SIGKILL
+  even when `child.kill()` throws; the auto-fallback re-arms on a synchronous `restart()` throw —
+  the fix surfaced a secondary bug: `stop()` clears `ready`, so the `'error'` handler must record
+  the exit during teardown too or the SIGKILL escalation double-fires `kill()`); M-C4 RRF
+  tiebreak on best-rank-across-both-lists (exact-term keyword-only hits no longer suppressed);
+  M-C5 caller abort signal plumbed `retrieve → embed/rerank` via a shared `combineSignals`
+  (`runtime/sidecar.ts`); M-S2 per-handler IPC arg-shape guards (`createWorkspace` `password.length`
+  TypeError + unlock/changePassword/importDocuments); M-S1 offline guard kept **detection-only by
+  decision** (`security-model.md` §2 "Detection-only, not enforcement" — enforcing via the
+  process-wide `net.Socket.connect` shim would turn a host-extraction edge case into a hard offline
+  failure breaking loopback IPC/sidecar; the guarantee rests on the no-remote-code posture + the
+  prod CSP). Suite **1026 green**, typecheck + build clean. **Still open** (lower priority): the
+  M-U/M-A UX & architecture refactors, the a11y LOWs (L7 streaming live region, L8 unlabeled
+  composer, M-U1 error-banner announcement), and the M-A1 follow-up (extend the drift test to the
+  `config/*.json` payloads + sha/format gates).
 - **D1 re-affirmed — unified auto-RAG chat stays NOT built (2026-06-12):** the Phase-21 data
   the original deferral waited for is in, and it argues AGAINST unifying now: no cheap
   relevance gate exists under prefix-less E5 (the measured-floor overlap, rag-design �12.1
@@ -1450,8 +1472,9 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
 5. **ANN vector index** only if a real corpus outgrows the linear scan (rag-design §12.2 D15 —
    explicitly not built).
 
-**Current gate (2026-06-13, post i18n wave + audit-HIGH remediation): typecheck clean, 1011/1011 tests pass
-(+25 manual tests behind `PAID_*` env vars — GPU/thinking/rerank/minsim/RAG-quality/bring-up/
+**Current gate (2026-06-13, post i18n wave + audit HIGH+MEDIUM remediation on branch
+`audit-2026-06-13-high-fixes`): typecheck clean, 1026 tests pass (25 skipped — the manual
+tests behind `PAID_*` env vars: GPU/thinking/rerank/minsim/RAG-quality/bring-up/
 eval/concurrency-probe/translation/compare/whisper/dictation/OCR smokes — skipped in CI),
 `npm run build` green. Full-suite runs on a loaded machine can flake 1–2 timeout failures
 (different tests each run; each passes in isolation — see the §3 2026-06-13 entry).** Per-phase gate history (test counts, bundle sizes, per-phase test
