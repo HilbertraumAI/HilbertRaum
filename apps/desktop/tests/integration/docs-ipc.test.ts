@@ -59,6 +59,19 @@ describe('registerDocsIpc', () => {
     await expect(invoke(handlers, IPC.importDocuments, ['/x.txt'])).rejects.toThrow(/Workspace is locked/)
     await expect(invoke(handlers, IPC.reindexDocument, 'id')).rejects.toThrow(/Workspace is locked/)
     await expect(invoke(handlers, IPC.deleteDocument, 'id')).rejects.toThrow(/Workspace is locked/)
+    // L-3: importPreflight is now unlock-gated too (was an unauthenticated filesystem
+    // walk/count oracle).
+    await expect(invoke(handlers, IPC.importPreflight, ['/some/dir'])).rejects.toThrow(/Workspace is locked/)
+  })
+
+  it('importPreflight type-filters its paths arg and never throws on junk (L-3)', async () => {
+    const { db, workspacePath } = freshWorkspace()
+    registerDocsIpc(ctxWith(db, workspacePath, createMockEmbedder(), /* unlocked */ true))
+    // A non-array arg and non-string elements reduce to an empty selection (no walk crash).
+    const bogus = await invoke(handlers, IPC.importPreflight, { not: 'an array' } as unknown as string[])
+    expect(bogus.result).toEqual({ fileCount: 0, audioFileCount: 0, audioBytes: 0 })
+    const mixed = await invoke(handlers, IPC.importPreflight, [42, null] as unknown as string[])
+    expect(mixed.result).toEqual({ fileCount: 0, audioFileCount: 0, audioBytes: 0 })
   })
 
   it('reconciles a prior-run stuck document and flags a stale-embedding document (M5 + M7)', async () => {

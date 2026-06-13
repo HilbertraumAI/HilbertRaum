@@ -628,6 +628,10 @@ export function unlockEncryptedVault(vaultPaths: VaultPaths, password: string): 
   const salt = Buffer.from(descriptor.saltB64, 'base64')
   const key = deriveKey(password, salt, descriptor.kdf)
   if (!verifyKey(key, blobFromJson(descriptor.verifier))) {
+    // L-6: zero the KDF-derived key before throwing, for symmetry with the data-key paths
+    // (which zero the KEK/old data keys after use). A wrong-password attempt should not
+    // leave the derived key sitting in the heap.
+    key.fill(0)
     throw new WrongPasswordError()
   }
   // v2 envelope: the derived key is only the KEK — unwrap the data key, drop the KEK.

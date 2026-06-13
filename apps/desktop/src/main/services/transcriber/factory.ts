@@ -20,6 +20,8 @@ export interface TranscriberSelectionDeps {
   rootPath: string
   /** The transcriber model from the manifest, or null when none is configured. */
   model: TranscriberModelInfo | null
+  /** Dev build — gates the dev-only `HILBERTRAUM_WHISPER_BIN` override (M-5). Default false. */
+  isDev?: boolean
   resolveBin?: (rootPath: string) => string | null
   modelExists?: (modelPath: string) => boolean
   makeTranscriber?: (model: TranscriberModelInfo, binPath: string) => Transcriber
@@ -45,7 +47,9 @@ export function createSelectedTranscriber(deps: TranscriberSelectionDeps): Trans
   const sel = resolveSidecarSelection<TranscriberModelInfo, Transcriber>({
     rootPath: deps.rootPath,
     model: deps.model,
-    resolveBin: deps.resolveBin ?? ((root) => resolveWhisperCliPath(root)),
+    resolveBin:
+      deps.resolveBin ??
+      ((root) => resolveWhisperCliPath(root, process.platform, process.env, { isDev: deps.isDev })),
     modelExists: deps.modelExists,
     makeReal: makeTranscriber,
     binaryName: 'whisper-cli',

@@ -784,6 +784,12 @@ export const de: Record<keyof typeof en, string> = {
   'main.ingest.interrupted':
     'Die Indexierung wurde unterbrochen, bevor sie fertig war. Indexiere neu, um es noch ' +
     'einmal zu versuchen.',
+  'main.ingest.fileTooLarge':
+    'Diese Datei ist zu groß, um sie sicher zu importieren. Teile sie in kleinere Dateien ' +
+    'auf und versuche es noch einmal.',
+  'main.ingest.parseTimeout':
+    'Diese Datei hat zu lange gebraucht und wurde übersprungen. Sie ist möglicherweise ' +
+    'beschädigt oder extrem groß.',
   'main.rag.noContext':
     'Dazu habe ich in deinen Dokumenten nichts gefunden. Formuliere deine Frage anders oder ' +
     'prüf, welche Dokumente du gerade fragst.',

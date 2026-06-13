@@ -12,6 +12,13 @@ import net from 'node:net'
  * True when `host` is a loopback address (or unspecified, which `net` resolves to
  * localhost). Only genuinely remote hosts return false. Loopback is never treated as
  * a network call — see the module header.
+ *
+ * SECURITY (L-1): this is a DETECTION helper only — it must NEVER gate an
+ * allowed-vs-blocked enforcement decision. The offline guard is detection-only by design
+ * (audit M-S1; security-model.md "Detection-only, not enforcement"), so an over-match
+ * here only ever costs an audit line, never an allowed remote connection. The IPv4 form
+ * is anchored end-to-end (`/^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/`) so a hostname like
+ * `127.evil.com` / `127.0.0.1.evil.com` is NOT misclassified as loopback.
  */
 export function isLoopbackHost(host?: string | null): boolean {
   if (!host) return true // net.connect() with no host defaults to localhost
@@ -19,7 +26,7 @@ export function isLoopbackHost(host?: string | null): boolean {
   if (h.startsWith('[') && h.endsWith(']')) h = h.slice(1, -1) // strip IPv6 brackets
   if (h === 'localhost' || h.endsWith('.localhost')) return true
   if (h === '::1' || h === '::ffff:127.0.0.1') return true
-  if (/^127\./.test(h)) return true
+  if (/^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(h)) return true
   return false
 }
 

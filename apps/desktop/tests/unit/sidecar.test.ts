@@ -75,12 +75,38 @@ describe('resolveLlamaServerPath', () => {
     expect(resolveLlamaServerPath(root, 'win32', {})).toBeNull()
   })
 
-  it('honours the HILBERTRAUM_LLAMA_BIN override when it exists, else null', () => {
+  it('honours the HILBERTRAUM_LLAMA_BIN override in DEV when it exists, else null', () => {
     const dir = mkdtempSync(join(tmpdir(), 'hilbertraum-bin-'))
     const explicit = join(dir, 'my-llama-server')
     writeFileSync(explicit, 'x')
-    expect(resolveLlamaServerPath('/nope', 'linux', { HILBERTRAUM_LLAMA_BIN: explicit })).toBe(explicit)
-    expect(resolveLlamaServerPath('/nope', 'linux', { HILBERTRAUM_LLAMA_BIN: join(dir, 'absent') })).toBeNull()
+    expect(
+      resolveLlamaServerPath('/nope', 'linux', { HILBERTRAUM_LLAMA_BIN: explicit }, { isDev: true })
+    ).toBe(explicit)
+    expect(
+      resolveLlamaServerPath('/nope', 'linux', { HILBERTRAUM_LLAMA_BIN: join(dir, 'absent') }, { isDev: true })
+    ).toBeNull()
+  })
+
+  it('IGNORES the HILBERTRAUM_LLAMA_BIN override in a packaged build (M-5)', () => {
+    // The override would spawn an arbitrary, unverified binary; a packaged build must
+    // resolve only from the on-drive location. With no drive binary present → null.
+    const dir = mkdtempSync(join(tmpdir(), 'hilbertraum-bin-'))
+    const explicit = join(dir, 'evil-llama-server')
+    writeFileSync(explicit, 'x')
+    // Default (no opts) and explicit isDev:false both ignore the override.
+    expect(resolveLlamaServerPath('/nope', 'linux', { HILBERTRAUM_LLAMA_BIN: explicit })).toBeNull()
+    expect(
+      resolveLlamaServerPath('/nope', 'linux', { HILBERTRAUM_LLAMA_BIN: explicit }, { isDev: false })
+    ).toBeNull()
+
+    // Even with the override set, a packaged build still finds the legitimate on-drive
+    // binary (the override is simply ignored, not a hard failure).
+    const root = mkdtempSync(join(tmpdir(), 'hilbertraum-bin-'))
+    const driveDir = llamaServerDir(root, 'linux')
+    mkdirSync(driveDir, { recursive: true })
+    const driveBin = join(driveDir, llamaServerBinaryName('linux'))
+    writeFileSync(driveBin, 'x')
+    expect(resolveLlamaServerPath(root, 'linux', { HILBERTRAUM_LLAMA_BIN: explicit })).toBe(driveBin)
   })
 
   it('maps platforms to os dirs and exe names', () => {

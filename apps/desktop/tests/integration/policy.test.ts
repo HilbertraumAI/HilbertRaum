@@ -9,6 +9,7 @@ import { openDatabase, type Db } from '../../src/main/services/db'
 import { seedSettings, getSettings, updateSettings } from '../../src/main/services/settings'
 import {
   DEFAULT_POLICY,
+  STRICT_POLICY,
   parsePolicy,
   loadPolicy,
   resolveNetwork,
@@ -108,6 +109,55 @@ describe('loadPolicy', () => {
     expect(loaded.allowNetworkByDefault).toBe(false)
     expect(warn).toHaveBeenCalled()
   })
+
+  // M-4: a packaged build must FAIL CLOSED to the strict commercial posture, not the
+  // dev-friendly default, when policy.json is missing/malformed/partial.
+  describe('fail-closed on a packaged build (M-4)', () => {
+    it('adopts STRICT_POLICY when no policy.json exists', () => {
+      const loaded = loadPolicy(configDir(), undefined, { isDev: false })
+      expect(loaded.policy).toEqual(STRICT_POLICY)
+      expect(loaded.policyFilePresent).toBe(false)
+      // The dev fallback would have loosened these — the strict fallback locks them down.
+      expect(loaded.policy.models.allowUnverifiedModels).toBe(false)
+      expect(loaded.policy.models.requireSha256Match).toBe(true)
+      expect(loaded.policy.workspace.encryptionRequired).toBe(true)
+      expect(loaded.policy.network.allowModelDownloads).toBe(false)
+    })
+
+    it('keeps the dev-friendly default when isDev', () => {
+      expect(loadPolicy(configDir(), undefined, { isDev: true }).policy).toEqual(DEFAULT_POLICY)
+      // No opts ⇒ dev default (canonical reference / unit callers).
+      expect(loadPolicy(configDir()).policy).toEqual(DEFAULT_POLICY)
+    })
+
+    it('falls back to STRICT on malformed JSON in a packaged build', () => {
+      const warn = vi.fn()
+      const loaded = loadPolicy(configDir({ policy: '{ not json' }), warn, { isDev: false })
+      expect(loaded.policy).toEqual(STRICT_POLICY)
+      // policyFilePresent is true (the file exists) but its content was rejected.
+      expect(loaded.policyFilePresent).toBe(true)
+      expect(warn).toHaveBeenCalled()
+    })
+
+    it('leaves a PARTIAL file at the strict value for omitted fields (packaged)', () => {
+      // A junk/partial file that only flips model downloads on must not loosen the rest.
+      const loaded = loadPolicy(
+        configDir({ policy: JSON.stringify({ network: { allow_model_downloads: true } }) }),
+        undefined,
+        { isDev: false }
+      )
+      expect(loaded.policy.network.allowModelDownloads).toBe(true) // the one set field
+      expect(loaded.policy.workspace.encryptionRequired).toBe(true) // strict base survives
+      expect(loaded.policy.models.requireSha256Match).toBe(true)
+      expect(loaded.policy.models.allowUnverifiedModels).toBe(false)
+    })
+
+    it('honours an explicit commercial policy.json regardless of build type', () => {
+      const loaded = loadPolicy(configDir({ policy: COMMERCIAL_POLICY }), undefined, { isDev: false })
+      expect(loaded.policy.workspace.encryptionRequired).toBe(true)
+      expect(loaded.policy.models.requireSha256Match).toBe(true)
+    })
+  })
 })
 
 // ---- deny-by-default + effective permission -------------------------------------
@@ -185,6 +235,16 @@ describe('offline self-check', () => {
     expect(isLoopbackHost('127.0.0.53')).toBe(true)
     expect(isLoopbackHost(undefined)).toBe(true)
     expect(isLoopbackHost('')).toBe(true)
+  })
+
+  it('does NOT misclassify a 127.* HOSTNAME as loopback (L-1 anchored regex)', () => {
+    // The old unanchored /^127\./ matched these remote hosts as loopback.
+    expect(isLoopbackHost('127.evil.com')).toBe(false)
+    expect(isLoopbackHost('127.0.0.1.evil.com')).toBe(false)
+    expect(isLoopbackHost('127.0.0.1.example.org')).toBe(false)
+    // Genuine IPv4 loopback addresses still match.
+    expect(isLoopbackHost('127.0.0.1')).toBe(true)
+    expect(isLoopbackHost('127.255.255.255')).toBe(true)
   })
 
   it('treats remote hosts as a violation only while offline', () => {

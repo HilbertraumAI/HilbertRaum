@@ -70,6 +70,8 @@ export interface LlamaRungOptions {
 export interface RuntimeSelectionDeps {
   /** Drive root used to resolve `runtime/llama.cpp/<os>/llama-server`. */
   rootPath: string
+  /** Dev build — gates the dev-only `HILBERTRAUM_LLAMA_BIN` override (M-5). Default false. */
+  isDev?: boolean
   /** Resolve the sidecar binary (defaults to `resolveLlamaServerPath`). */
   resolveBin?: (rootPath: string) => string | null
   /** Check whether the model weight file exists (defaults to `existsSync`). */
@@ -206,7 +208,9 @@ class LadderRuntime implements ModelRuntime {
  * the selection + ladder logic is unit-testable without spawning anything.
  */
 export function createSelectingRuntimeFactory(deps: RuntimeSelectionDeps): RuntimeFactory {
-  const resolveBin = deps.resolveBin ?? ((root: string) => resolveLlamaServerPath(root))
+  const resolveBin =
+    deps.resolveBin ??
+    ((root: string) => resolveLlamaServerPath(root, process.platform, process.env, { isDev: deps.isDev }))
   const modelExists = deps.modelExists ?? existsSync
   const makeLlama =
     deps.makeLlama ??

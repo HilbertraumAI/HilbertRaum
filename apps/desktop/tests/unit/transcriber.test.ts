@@ -69,12 +69,32 @@ describe('resolveWhisperCliPath', () => {
     expect(resolveWhisperCliPath(root, 'win32', {})).toBe(join(binDir, 'whisper-cli.exe'))
   })
 
-  it('honours the HILBERTRAUM_WHISPER_BIN override (existing file only)', () => {
+  it('honours the HILBERTRAUM_WHISPER_BIN override in DEV (existing file only)', () => {
     const root = mkdtempSync(join(tmpdir(), 'hilbertraum-whisper-ovr-'))
     const bin = join(root, 'custom-whisper.exe')
-    expect(resolveWhisperCliPath(root, 'win32', { HILBERTRAUM_WHISPER_BIN: bin })).toBeNull()
+    expect(
+      resolveWhisperCliPath(root, 'win32', { HILBERTRAUM_WHISPER_BIN: bin }, { isDev: true })
+    ).toBeNull()
     writeFileSync(bin, 'fake')
-    expect(resolveWhisperCliPath(root, 'win32', { HILBERTRAUM_WHISPER_BIN: bin })).toBe(bin)
+    expect(resolveWhisperCliPath(root, 'win32', { HILBERTRAUM_WHISPER_BIN: bin }, { isDev: true })).toBe(bin)
+  })
+
+  it('IGNORES the HILBERTRAUM_WHISPER_BIN override in a packaged build (M-5)', () => {
+    const root = mkdtempSync(join(tmpdir(), 'hilbertraum-whisper-ovr-'))
+    const bin = join(root, 'evil-whisper.exe')
+    writeFileSync(bin, 'fake')
+    // Default (no opts) and explicit isDev:false both ignore the env override.
+    expect(resolveWhisperCliPath(root, 'win32', { HILBERTRAUM_WHISPER_BIN: bin })).toBeNull()
+    expect(
+      resolveWhisperCliPath(root, 'win32', { HILBERTRAUM_WHISPER_BIN: bin }, { isDev: false })
+    ).toBeNull()
+    // The legitimate on-drive binary still resolves with the override set.
+    const binDir = whisperCliDir(root, 'win32')
+    mkdirSync(binDir, { recursive: true })
+    writeFileSync(join(binDir, whisperCliBinaryName('win32')), 'fake')
+    expect(resolveWhisperCliPath(root, 'win32', { HILBERTRAUM_WHISPER_BIN: bin })).toBe(
+      join(binDir, 'whisper-cli.exe')
+    )
   })
 })
 

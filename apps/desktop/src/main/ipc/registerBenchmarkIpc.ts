@@ -27,7 +27,9 @@ import { log } from '../services/logging'
 async function probeAndPersistGpu(ctx: AppContext): Promise<GpuBenchmarkInput> {
   let devices: GpuDevice[] = []
   try {
-    const binPath = resolveLlamaServerPath(ctx.paths.rootPath)
+    const binPath = resolveLlamaServerPath(ctx.paths.rootPath, process.platform, process.env, {
+      isDev: ctx.isDev
+    })
     if (binPath && ctx.probeGpu) {
       devices = await ctx.probeGpu(binPath)
       updateSettings(ctx.db, { gpuProbe: { devices, probedAt: new Date().toISOString() } })

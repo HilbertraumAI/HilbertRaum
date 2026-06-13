@@ -142,6 +142,14 @@ describe('validateManifest — optional download block (Phase 12)', () => {
     expect(res.errors.some((e) => e.includes('"download"'))).toBe(true)
   })
 
+  it('rejects a non-https download.url (L-2)', () => {
+    const res = validateManifest(
+      rawManifest({ download: downloadBlock({ url: 'http://huggingface.co/x/y.gguf' }) })
+    )
+    expect(res.ok).toBe(false)
+    expect(res.errors.some((e) => e.includes('https'))).toBe(true)
+  })
+
   it('rejects a negative size_bytes', () => {
     const res = validateManifest(rawManifest({ download: downloadBlock({ size_bytes: -5 }) }))
     expect(res.ok).toBe(false)
