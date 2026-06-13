@@ -246,7 +246,9 @@ code, pre, kbd { font-family: var(--font-mono); }
 
 .kv { display: grid; grid-template-columns: 140px 1fr; gap: 6px 14px; margin: 0; font-size: 13px; }
 .kv dt { color: var(--text-muted); }
-.kv dd { margin: 0; word-break: break-all; }
+/* overflow-wrap (not break-all): prose values wrap at word boundaries — break-all cut
+   German sentences mid-word (i18n audit) — while over-long paths can still break. */
+.kv dd { margin: 0; overflow-wrap: anywhere; }
 
 .toggle { display: flex; align-items: center; gap: 10px; font-size: 13px; cursor: pointer; min-height: 24px; }
 .toggle input { width: 16px; height: 16px; accent-color: var(--accent-600); }
@@ -427,8 +429,10 @@ code, pre, kbd { font-family: var(--font-mono); }
   vertical-align: middle;
 }
 
-/* Chat header: segmented mode control + overflow menu (+ the ambient-indicator slot). */
-.chat-header { display: flex; align-items: center; gap: 10px; }
+/* Chat header: segmented mode control + overflow menu (+ the ambient-indicator slot).
+   Wraps instead of clipping — the German mode label + indicator outgrow 880px (i18n
+   text-expansion audit: fix with layout, never copy). */
+.chat-header { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .chat-header-spacer { flex: 1; }
 .chat-overflow-btn {
   background: transparent;
@@ -508,6 +512,10 @@ code, pre, kbd { font-family: var(--font-mono); }
 }
 .chat-empty { margin: auto; width: 100%; }
 .chat-empty .empty-state { border: none; background: transparent; }
+/* Example-prompt chips hold full sentences — German ones outgrow the generic chip's
+   240px ellipsis cap, so here they wrap to extra lines instead (i18n audit). */
+.chat-empty .chip { max-width: 100%; height: auto; }
+.chat-empty .chip-text { white-space: normal; overflow: visible; text-overflow: clip; }
 
 .msg-block { display: flex; flex-direction: column; gap: 2px; margin-bottom: 8px; }
 .msg { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 12px 14px; box-shadow: var(--shadow-1); }

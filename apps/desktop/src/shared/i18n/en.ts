@@ -721,6 +721,10 @@ export const en = {
     'with a different search model. Open the Documents screen and choose Re-index.',
   'main.chat.docTaskBusy':
     'A document task is running. You can cancel it, or wait for it to finish before chatting.',
+  // Default conversation title — persisted into conversations.title AND exact-matched by
+  // maybeSetTitleFromFirstMessage (the first-message title rewrite), so it is part of the
+  // data contract like the rest of this section.
+  'main.chat.defaultTitle': 'New chat',
   'main.benchmark.warnTiny':
     'This device is best suited for the smallest, quickest model. Larger models may run slowly.',
   'main.benchmark.warnUnknown':

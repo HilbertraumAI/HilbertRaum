@@ -27,6 +27,7 @@ const DISPLAY_MAP_KEYS: readonly MessageKey[] = [
   'main.rag.noContext',
   'main.rag.reindexNeeded',
   'main.chat.docTaskBusy',
+  'main.chat.defaultTitle',
   'main.benchmark.warnTiny',
   'main.benchmark.warnUnknown',
   'main.benchmark.warnDriveProbe',

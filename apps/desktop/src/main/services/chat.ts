@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { t } from '../../shared/i18n'
 import type { Db } from './db'
 import {
   SEARCH_MARK_END,
@@ -19,7 +20,10 @@ import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from './runtime'
 // (BUILD_STATE §7 conventions). The system prompt is built per-request and NOT
 // persisted; the messages table holds only user/assistant turns.
 
-const DEFAULT_TITLE = 'New chat'
+// Persist-canonical English (i18n boundary rule 1): written into conversations.title
+// AND exact-matched by maybeSetTitleFromFirstMessage below, so the value must never
+// localize at persist time — the renderer display map translates it (D-L4).
+const DEFAULT_TITLE = t('en', 'main.chat.defaultTitle')
 
 // Base system prompt — verbatim from spec §7.6. RAG context injection (rag/index.ts)
 // appends source-labelled chunks after this preamble.

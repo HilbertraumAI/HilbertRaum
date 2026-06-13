@@ -8,6 +8,7 @@ import {
 } from '@shared/types'
 import { Button, ConfirmDialog } from '../components'
 import { useT } from '../i18n'
+import { localizeServerCopy } from '../lib/displayMap'
 import type { MessageKey } from '@shared/i18n'
 
 // Conversation list (guidelines §3): the collapsible second column.
@@ -177,9 +178,9 @@ export function ConversationList({
               className="chat-search-result"
               disabled={streaming && r.conversationId !== activeId}
               onClick={() => openResult(r)}
-              title={r.conversationTitle}
+              title={localizeServerCopy(t, r.conversationTitle)}
             >
-              <span className="chat-search-result-title">{r.conversationTitle}</span>
+              <span className="chat-search-result-title">{localizeServerCopy(t, r.conversationTitle)}</span>
               {r.hits.slice(0, SNIPPETS_PER_RESULT).map((h) => (
                 <span key={h.messageId} className="chat-search-snippet">
                   {splitSnippet(h.snippet).map((part, i) =>
@@ -215,12 +216,14 @@ export function ConversationList({
                     className={`chat-conv ${c.id === activeId ? 'active' : ''}`}
                     disabled={streaming && c.id !== activeId}
                     onClick={() => onSelect(c)}
-                    title={c.title}
+                    title={localizeServerCopy(t, c.title)}
                   >
                     {c.mode === 'documents' && (
                       <span className="chat-conv-badge">{t('chat.list.docBadge')}</span>
                     )}
-                    {c.title}
+                    {/* Titles are user data, but the persisted DEFAULT title is canonical
+                        English (D-L4) — the display map translates it, all else passes. */}
+                    {localizeServerCopy(t, c.title)}
                   </button>
                   <DropdownMenu.Root
                     open={menuOpenId === c.id}
@@ -230,7 +233,7 @@ export function ConversationList({
                       <button
                         className="chat-conv-menu-btn"
                         disabled={streaming}
-                        aria-label={t('chat.list.rowOptionsAria', { title: c.title })}
+                        aria-label={t('chat.list.rowOptionsAria', { title: localizeServerCopy(t, c.title) })}
                         title={t('chat.convOptions')}
                       >
                         ⋯
@@ -264,7 +267,7 @@ export function ConversationList({
         }}
         onCancel={() => setPendingDelete(null)}
       >
-        <p>{t('chat.delete.body', { title: pendingDelete?.title ?? '' })}</p>
+        <p>{t('chat.delete.body', { title: localizeServerCopy(t, pendingDelete?.title ?? '') })}</p>
       </ConfirmDialog>
     </aside>
   )

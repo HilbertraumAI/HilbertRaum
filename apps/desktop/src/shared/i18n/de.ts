@@ -780,6 +780,7 @@ export const de: Record<keyof typeof en, string> = {
   'main.chat.docTaskBusy':
     'Eine Dokumentaufgabe läuft gerade. Du kannst sie abbrechen oder warten, bis sie fertig ' +
     'ist, bevor du chattest.',
+  'main.chat.defaultTitle': 'Neuer Chat',
   'main.benchmark.warnTiny':
     'Dieses Gerät eignet sich am besten für das kleinste, schnellste Modell. Größere ' +
     'Modelle laufen möglicherweise langsam.',
