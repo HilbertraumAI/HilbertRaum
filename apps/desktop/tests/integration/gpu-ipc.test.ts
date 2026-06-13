@@ -37,7 +37,7 @@ const RTX: GpuDevice = {
 
 /** A drive root with a fake llama-server present (so probeAndPersistGpu resolves it). */
 function rootWithBinary(): string {
-  const root = mkdtempSync(join(tmpdir(), 'paid-gpuipc-'))
+  const root = mkdtempSync(join(tmpdir(), 'hilbertraum-gpuipc-'))
   const dir = llamaServerDir(root)
   mkdirSync(dir, { recursive: true })
   writeFileSync(join(dir, llamaServerBinaryName()), 'fake-binary')

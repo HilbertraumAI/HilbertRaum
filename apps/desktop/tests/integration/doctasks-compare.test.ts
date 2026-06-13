@@ -49,7 +49,7 @@ let db: Db
 let storeDir: string
 
 beforeEach(() => {
-  tmp = mkdtempSync(join(tmpdir(), 'paid-doccmp-'))
+  tmp = mkdtempSync(join(tmpdir(), 'hilbertraum-doccmp-'))
   db = openDatabase(join(tmp, 'test.sqlite'))
   storeDir = documentsDir(join(tmp, 'workspace'))
 })

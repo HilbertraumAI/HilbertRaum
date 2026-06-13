@@ -1,4 +1,4 @@
-# electron-builder configuration — Private AI Drive Lite (Phase 11, spec §12).
+# electron-builder configuration — HilbertRaum (Phase 11, spec §12).
 #
 # Goal: a PORTABLE Windows build that launches from an external drive. macOS/Linux
 # targets are defined for architecture parity (spec rule: keep all three supported),
@@ -14,8 +14,8 @@
 #
 # Producing the actual artifact is a MANUAL step (R2/R5): see docs/packaging.md.
 
-appId: org.privateaidrive.lite
-productName: Private AI Drive Lite
+appId: space.hilbertraum.app
+productName: HilbertRaum
 
 directories:
   # buildResources holds icons etc. (optional; defaults are used if absent).
@@ -45,7 +45,7 @@ npmRebuild: false
 
 # Model manifests are the ONLY model metadata in git. Ship them beside app.asar so the
 # packaged main process finds them: resolveManifestsDir(app.getAppPath()) walks up from
-# resources/app.asar and matches resources/model-manifests. PAID_MANIFESTS_DIR overrides.
+# resources/app.asar and matches resources/model-manifests. HILBERTRAUM_MANIFESTS_DIR overrides.
 # Weights + sidecar binaries are NEVER bundled — they live on the prepared drive.
 extraResources:
   - from: ../../model-manifests
@@ -77,7 +77,7 @@ win:
   #   WIN_CSC_LINK              path/URL to the OV/EV .pfx (or base64) — NEVER in the repo
   #   WIN_CSC_KEY_PASSWORD      the .pfx password
   # An EV cert (hardware token / cloud HSM) builds SmartScreen reputation fastest. The
-  # launcher (Start Private AI Drive.cmd) is a script and is not itself signed; the portable
+  # launcher (Start HilbertRaum.cmd) is a script and is not itself signed; the portable
   # .exe it spawns IS signed, which is what SmartScreen evaluates.
   signtoolOptions:
     signingHashAlgorithms:
@@ -86,9 +86,9 @@ win:
     # so a .pfx supplied via WIN_CSC_LINK/WIN_CSC_KEY_PASSWORD is used.
 
 # A single self-contained .exe — copy it onto the drive root next to the prepared layout
-# and launch it with PAID_DRIVE_ROOT pointing at the drive (see docs/packaging.md).
+# and launch it with HILBERTRAUM_DRIVE_ROOT pointing at the drive (see docs/packaging.md).
 portable:
-  artifactName: PrivateAIDriveLite-${version}-portable.exe
+  artifactName: HilbertRaum-${version}-portable.exe
 
 mac:
   target:

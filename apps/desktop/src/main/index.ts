@@ -32,7 +32,7 @@ import { resolveManifestsDir } from './services/models'
 import { composeServices } from './services/compose-services'
 import type { AppContext } from './services/context'
 
-// Private AI Drive Lite — Electron main process (the "backend").
+// HilbertRaum — Electron main process (the "backend").
 // Security posture (spec §3.5): context isolation on, node integration off,
 // sandboxed renderer, and NO network code in the core path.
 
@@ -50,7 +50,7 @@ let ctx: AppContext | null = null
 // Runs once at startup, before the window loads.
 function initBackend(): void {
   // A buyer who double-clicks the portable .exe / .app DIRECTLY (bypassing the
-  // launcher) gets no PAID_DRIVE_ROOT — detect the drive from the app's own location so
+  // launcher) gets no HILBERTRAUM_DRIVE_ROOT — detect the drive from the app's own location so
   // they still land on the drive's (possibly encrypted) workspace, not a silent fresh
   // app-data one. PORTABLE_EXECUTABLE_DIR is set by the electron-builder portable target
   // (the exe extracts itself to a temp dir, so execPath alone would miss the drive).
@@ -58,7 +58,7 @@ function initBackend(): void {
     findPreparedDriveRoot(process.env.PORTABLE_EXECUTABLE_DIR) ??
     findPreparedDriveRoot(dirname(app.getPath('exe')))
   const paths = resolvePaths({
-    envRoot: process.env.PAID_DRIVE_ROOT ?? exeDriveRoot ?? undefined,
+    envRoot: process.env.HILBERTRAUM_DRIVE_ROOT ?? exeDriveRoot ?? undefined,
     fallbackRoot: app.getPath('userData')
   })
   ensureWorkspaceDirs(paths)
@@ -66,7 +66,7 @@ function initBackend(): void {
   log.info('Workspace resolved', {
     root: paths.rootPath,
     preparedDrive: paths.isPreparedDrive,
-    detectedFromAppLocation: !process.env.PAID_DRIVE_ROOT && exeDriveRoot != null
+    detectedFromAppLocation: !process.env.HILBERTRAUM_DRIVE_ROOT && exeDriveRoot != null
   })
 
   // The workspace controller owns the DB lifecycle. In plaintext_dev mode the DB
@@ -103,7 +103,7 @@ function initBackend(): void {
   const audit = createAuditRecorder(() => workspace.requireDb())
   for (const warning of policyWarnings) audit('policy_warning', warning)
 
-  const manifestsDir = resolveManifestsDir(app.getAppPath(), process.env.PAID_MANIFESTS_DIR)
+  const manifestsDir = resolveManifestsDir(app.getAppPath(), process.env.HILBERTRAUM_MANIFESTS_DIR)
   log.info('Model manifests directory', { manifestsDir })
 
   // Real llama.cpp runtime + real E5 embedder, behind the SAME interfaces.
@@ -279,7 +279,7 @@ function createWindow(): void {
     minWidth: 880,
     minHeight: 600,
     show: false,
-    title: 'Private AI Drive Lite',
+    title: 'HilbertRaum',
     // Pre-paint window color: follow the OS theme (the renderer applies the real
     // theme tokens — --bg light/dark — before first paint; this only avoids a
     // mismatched flash while the window comes up).

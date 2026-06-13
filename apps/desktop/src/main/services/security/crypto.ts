@@ -171,7 +171,7 @@ export function decrypt(key: Buffer, blob: EncryptedBlob): Buffer {
 
 // ---- Framed serialization (for the encrypted DB file on disk) -------------------
 
-const MAGIC = Buffer.from('PAIDENC1') // 8 bytes: format magic + version
+const MAGIC = Buffer.from('HRAUMEN1') // 8 bytes: format magic + version
 
 /** Frame layout constants, exported for the STREAMING file crypto in workspace-vault.ts
  *  (which must read/write the exact same `MAGIC | iv | tag | ciphertext` format). */
@@ -181,7 +181,7 @@ export const BLOB_TAG_BYTES = TAG_BYTES
 
 /**
  * Serialize an encrypted blob to a single self-describing buffer:
- * `MAGIC(8) | iv(12) | tag(16) | ciphertext(...)`. Written to `paid.sqlite.enc`.
+ * `MAGIC(8) | iv(12) | tag(16) | ciphertext(...)`. Written to `hilbertraum.sqlite.enc`.
  */
 export function serializeBlob(blob: EncryptedBlob): Buffer {
   return Buffer.concat([MAGIC, blob.iv, blob.tag, blob.ciphertext])
@@ -205,7 +205,7 @@ export function deserializeBlob(buf: Buffer): EncryptedBlob {
 // ---- Password verifier ----------------------------------------------------------
 
 /** A fixed known plaintext encrypted under the derived key to verify a password. */
-const VERIFIER_PLAINTEXT = Buffer.from('paid-vault-verifier-v1')
+const VERIFIER_PLAINTEXT = Buffer.from('hilbertraum-vault-verifier-v1')
 
 /** Encrypt the known verifier plaintext under `key` (stored in the vault descriptor). */
 export function makeVerifier(key: Buffer): EncryptedBlob {

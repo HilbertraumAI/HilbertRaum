@@ -29,7 +29,7 @@ import { sha256File } from '../../src/main/services/models'
 // zero network, zero models — the real tesseract.js module is never loaded here.
 
 function tmp(): string {
-  return mkdtempSync(join(tmpdir(), 'paid-ocr-'))
+  return mkdtempSync(join(tmpdir(), 'hilbertraum-ocr-'))
 }
 
 describe('image-only PDF detection (step 0)', () => {

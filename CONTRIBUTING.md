@@ -1,4 +1,4 @@
-# Contributing — Private AI Drive Lite
+# Contributing — HilbertRaum
 
 Thanks for your interest! This project values **privacy, portability, and boring reliable tech**.
 

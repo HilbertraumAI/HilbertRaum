@@ -80,7 +80,7 @@ export class MockRuntime implements ModelRuntime {
     const lastUser = [...messages].reverse().find((m) => m.role === 'user')?.content.trim() ?? ''
     const echo = lastUser.length > 0 ? `You said: “${lastUser}”. ` : ''
     const reply =
-      `${echo}I am Private AI Drive Lite running locally on the mock runtime for ` +
+      `${echo}I am HilbertRaum running locally on the mock runtime for ` +
       `${this.modelId}, so this reply is simulated and fully offline. Real on-device ` +
       `answers arrive once a llama.cpp model is loaded.`
     // Keep the trailing space on each token so the stream reassembles verbatim.

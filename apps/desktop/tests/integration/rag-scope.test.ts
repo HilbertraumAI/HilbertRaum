@@ -32,7 +32,7 @@ import { DEFAULT_SETTINGS } from '../../src/shared/types'
 const SETTINGS: RagRetrievalSettings = ragSettingsFrom(DEFAULT_SETTINGS)
 
 function freshDb(): { db: Db; path: string } {
-  const path = join(mkdtempSync(join(tmpdir(), 'paid-scope-')), 'test.sqlite')
+  const path = join(mkdtempSync(join(tmpdir(), 'hilbertraum-scope-')), 'test.sqlite')
   return { db: openDatabase(path), path }
 }
 
@@ -232,7 +232,7 @@ describe('conversation scope persistence', () => {
   it('migrates a pre-Phase-17 database: scope_json is added to an existing table', () => {
     // Build a DB whose conversations table predates the scope_json column, exactly as a
     // real pre-Phase-17 workspace would have it on disk.
-    const dir = mkdtempSync(join(tmpdir(), 'paid-scope-mig-'))
+    const dir = mkdtempSync(join(tmpdir(), 'hilbertraum-scope-mig-'))
     const path = join(dir, 'old.sqlite')
     const nodeRequire = createRequire(process.execPath)
     const { DatabaseSync } = nodeRequire('node:sqlite') as typeof import('node:sqlite')

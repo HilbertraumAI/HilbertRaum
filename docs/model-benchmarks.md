@@ -19,7 +19,7 @@ with the results._
 
 Run on **≥ 2 machines**: the dev box + the **i7-1185G7 / Iris-Xe laptop** are the
 natural pair. For each run record, in the CSV `notes`, the machine label, CPU, total RAM,
-backend (cpu | vulkan), the runtime build (`runtime/llama.cpp/<os>/.paid-runtime.json`), and
+backend (cpu | vulkan), the runtime build (`runtime/llama.cpp/<os>/.hilbertraum-runtime.json`), and
 the thread count. Fixed conditions: **AC power**, no other heavy load, fixed `-t <physical
 cores>`, median of repeated runs.
 
@@ -42,10 +42,10 @@ users get — for every chat GGUF on the drive, scoring each answer deterministi
 
 **Run:**
 ```powershell
-$env:PAID_MODEL_EVAL = "D:\"
-$env:PAID_EVAL_MACHINE = "devbox"      # or "i7-1185G7"
-$env:PAID_EVAL_BACKEND = "cpu"          # or "vulkan"
-# $env:PAID_EVAL_MODEL = "granite-4.1-8b-q4.gguf"   # optional: a single model
+$env:HILBERTRAUM_MODEL_EVAL = "D:\"
+$env:HILBERTRAUM_EVAL_MACHINE = "devbox"      # or "i7-1185G7"
+$env:HILBERTRAUM_EVAL_BACKEND = "cpu"          # or "vulkan"
+# $env:HILBERTRAUM_EVAL_MODEL = "granite-4.1-8b-q4.gguf"   # optional: a single model
 cd apps\desktop
 npx vitest run tests/manual/model-eval.test.ts
 ```

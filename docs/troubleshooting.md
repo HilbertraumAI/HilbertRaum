@@ -1,4 +1,4 @@
-# Private AI Drive Lite — Troubleshooting
+# HilbertRaum — Troubleshooting
 
 _Last updated: 2026-06-13 (scanned-PDF answer updated for the OCR feature; supported types extended for audio + photos)_
 
@@ -11,9 +11,9 @@ these steps require the internet.
 
 Open the drive and **double-click the launcher** at the top level:
 
-- **Windows:** `Start Private AI Drive`
-- **macOS:** `Start Private AI Drive.command`
-- **Linux:** `start-private-ai-drive.sh`
+- **Windows:** `Start HilbertRaum`
+- **macOS:** `Start HilbertRaum.command`
+- **Linux:** `start-hilbertraum.sh`
 
 You do **not** need to install anything. The launcher finds the drive automatically, wherever it is
 plugged in, so the same drive works on any computer.
@@ -45,7 +45,7 @@ should not appear at all.
 
 ## "Offline Mode is ON — is something wrong?"
 
-**No. That is the intended state.** Private AI Drive Lite runs the AI model on your laptop and
+**No. That is the intended state.** HilbertRaum runs the AI model on your laptop and
 keeps your data local. It does not need the internet and network access is off by default. You
 can confirm this on the **Privacy** screen.
 
@@ -154,7 +154,7 @@ pages (png, jpg — needs the OCR files). Other files in the same import still s
 
 ## The app won't start from the drive
 
-- Use the **launcher** at the drive root (`Start Private AI Drive`) rather than opening the
+- Use the **launcher** at the drive root (`Start HilbertRaum`) rather than opening the
   `.exe`/`.app` directly — the launcher points the app at the drive's workspace.
 - If you saw a security warning, follow **"Windows protected your PC" / "macOS cannot open the app"**
   above.

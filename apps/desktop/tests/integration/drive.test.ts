@@ -56,7 +56,7 @@ function writeWeight(root: string, manifest: ModelManifest, content: string): vo
 
 describe('drive layout', () => {
   it('lays out the directories the code reads, with win/mac/linux sidecar dirs', () => {
-    const root = join(tmpdir(), 'paid-drive-x')
+    const root = join(tmpdir(), 'hilbertraum-drive-x')
     const dirs = driveLayoutDirs(root)
     const rels = dirs.map((d) => d.slice(root.length + 1).replace(/\\/g, '/'))
     expect(rels).toContain('workspace')
@@ -77,10 +77,10 @@ describe('drive layout', () => {
 
 describe('config generators', () => {
   it('drive.json is a valid prepared-drive marker resolvePaths detects', () => {
-    const root = tempDir('paid-drive-')
+    const root = tempDir('hilbertraum-drive-')
     mkdirSync(join(root, 'config'), { recursive: true })
     const drive = buildDriveJson({ createdAt: '2026-06-09T00:00:00Z' })
-    expect(drive.product).toBe('Private AI Drive Lite')
+    expect(drive.product).toBe('HilbertRaum')
     expect(drive.offline_by_default).toBe(true)
     expect(drive.allow_network_by_default).toBe(false)
     writeFileSync(join(root, 'config', 'drive.json'), JSON.stringify(drive))
@@ -119,7 +119,7 @@ describe('config generators', () => {
 
 describe('planPrepareDrive (dry-run)', () => {
   it('produces the full layout, config files, and weight destinations', () => {
-    const root = tempDir('paid-plan-')
+    const root = tempDir('hilbertraum-plan-')
     const manifests = [asManifest(), asManifest({ id: 'embed', role: 'embeddings', local_path: 'models/embeddings/e5.gguf' })]
     const plan = planPrepareDrive(root, manifests, { createdAt: '2026-06-09T00:00:00Z' })
 
@@ -135,7 +135,7 @@ describe('planPrepareDrive (dry-run)', () => {
   })
 
   it('flags an existing config as would-overwrite', () => {
-    const root = tempDir('paid-plan-')
+    const root = tempDir('hilbertraum-plan-')
     mkdirSync(join(root, 'config'), { recursive: true })
     writeFileSync(join(root, 'config', 'drive.json'), '{}')
     const plan = planPrepareDrive(root, [asManifest()])
@@ -145,7 +145,7 @@ describe('planPrepareDrive (dry-run)', () => {
 
 describe('verifyDriveModels', () => {
   it('reports missing / placeholder / verified / mismatch / unsupported honestly', async () => {
-    const root = tempDir('paid-verify-')
+    const root = tempDir('hilbertraum-verify-')
     const real = asManifest({ id: 'real', local_path: 'models/chat/real.gguf' })
     const placeholder = asManifest({ id: 'ph', local_path: 'models/chat/ph.gguf' })
     const mismatch = asManifest({
@@ -175,7 +175,7 @@ describe('verifyDriveModels', () => {
 
 describe('buildChecksumsJson (generate mode)', () => {
   it('captures real hashes for present weights and null for absent', async () => {
-    const root = tempDir('paid-sums-')
+    const root = tempDir('hilbertraum-sums-')
     const present = asManifest({ id: 'present', local_path: 'models/chat/present.gguf' })
     const absent = asManifest({ id: 'absent', local_path: 'models/chat/absent.gguf' })
     writeWeight(root, present, 'abc')

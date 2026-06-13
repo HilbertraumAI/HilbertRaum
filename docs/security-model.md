@@ -1,4 +1,4 @@
-# Security model — Private AI Drive Lite
+# Security model — HilbertRaum
 
 _Last updated: 2026-06-11 (Phase 37 — voice dictation: the scoped microphone permission
 exception + the dictation temp-file posture)_
@@ -205,7 +205,7 @@ The workspace has two modes, owned by `services/workspace-vault.ts` (`WorkspaceC
 - **AES-256-GCM.** Every encryption uses a fresh random 12-byte IV; the 16-byte auth tag is stored
   alongside the ciphertext. A wrong key or any tampering fails the GCM tag → `decrypt` throws, which
   upstream is treated as "wrong password" (the DB is never opened with a bad key).
-- The encrypted DB file is framed as `MAGIC(8) | iv(12) | tag(16) | ciphertext` (`paid.sqlite.enc`).
+- The encrypted DB file is framed as `MAGIC(8) | iv(12) | tag(16) | ciphertext` (`hilbertraum.sqlite.enc`).
 
 ### Whole-file encryption-at-rest (no SQLCipher under `node:sqlite`)
 `node:sqlite` has no SQLCipher, so the **whole database file** is encrypted at rest, not
@@ -213,12 +213,12 @@ individual rows — the spec §8 schema is identical in both modes.
 
 - **On unlock:** derive the key → verify the password against the descriptor's authenticated
   **verifier** (a known plaintext encrypted under the key; a wrong key fails the GCM tag **without
-  touching the DB**) → decrypt `paid.sqlite.enc` → `paid.sqlite` **on the drive** (never a temp/cloud
+  touching the DB**) → decrypt `hilbertraum.sqlite.enc` → `hilbertraum.sqlite` **on the drive** (never a temp/cloud
   dir) → `openDatabase()`.
 - **On lock / quit:** `PRAGMA wal_checkpoint(TRUNCATE)` + `close()` (flush WAL into the main file) →
-  re-encrypt the working file → `paid.sqlite.enc` → **shred + delete** the plaintext working file and
+  re-encrypt the working file → `hilbertraum.sqlite.enc` → **shred + delete** the plaintext working file and
   its `-wal`/`-shm` sidecars.
-- **WAL sidecars:** WAL mode creates `paid.sqlite-wal` / `-shm`, which can hold plaintext pages.
+- **WAL sidecars:** WAL mode creates `hilbertraum.sqlite-wal` / `-shm`, which can hold plaintext pages.
   They are checkpointed before encryption and shredded after, so the encrypted snapshot is complete
   and no plaintext leaks in a sidecar.
 

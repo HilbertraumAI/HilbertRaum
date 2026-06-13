@@ -37,12 +37,12 @@ const FAST_KDF: KdfParams = { algo: 'scrypt', N: 1024, r: 8, p: 1, keyLen: 32 }
 
 /** Build a fresh temp workspace layout + its vault paths. */
 function freshVault(): VaultPaths {
-  const root = mkdtempSync(join(tmpdir(), 'paid-vault-'))
+  const root = mkdtempSync(join(tmpdir(), 'hilbertraum-vault-'))
   const configPath = join(root, 'config')
   const workspacePath = join(root, 'workspace')
   mkdirSync(configPath, { recursive: true })
   mkdirSync(workspacePath, { recursive: true })
-  return vaultPathsFrom({ configPath, dbPath: join(workspacePath, 'paid.sqlite') })
+  return vaultPathsFrom({ configPath, dbPath: join(workspacePath, 'hilbertraum.sqlite') })
 }
 
 const ENCRYPTION_REQUIRED: PrivacyPolicy = {
@@ -118,7 +118,7 @@ describe('encrypted vault lifecycle', () => {
 
 describe('streaming file crypto (M5)', () => {
   function tmpFile(name: string, data: Buffer | string): string {
-    const dir = mkdtempSync(join(tmpdir(), 'paid-stream-'))
+    const dir = mkdtempSync(join(tmpdir(), 'hilbertraum-stream-'))
     const p = join(dir, name)
     writeFileSync(p, data)
     return p

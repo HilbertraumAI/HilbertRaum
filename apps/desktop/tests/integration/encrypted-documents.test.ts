@@ -41,15 +41,15 @@ function writeSource(name: string, data: string): string {
 }
 
 beforeEach(() => {
-  srcDir = mkdtempSync(join(tmpdir(), 'paid-encdoc-src-'))
+  srcDir = mkdtempSync(join(tmpdir(), 'hilbertraum-encdoc-src-'))
 })
 
 function freshDb(): Db {
-  return openDatabase(join(mkdtempSync(join(tmpdir(), 'paid-encdoc-db-')), 'test.sqlite'))
+  return openDatabase(join(mkdtempSync(join(tmpdir(), 'hilbertraum-encdoc-db-')), 'test.sqlite'))
 }
 
 function freshStore(): string {
-  return documentsDir(mkdtempSync(join(tmpdir(), 'paid-encdoc-ws-')))
+  return documentsDir(mkdtempSync(join(tmpdir(), 'hilbertraum-encdoc-ws-')))
 }
 
 /** A cipher equivalent to the unlocked vault's (same encryptFile/decryptFile, fixed key). */
@@ -179,12 +179,12 @@ describe('encrypted document cache (H1)', () => {
 
 describe('WorkspaceController.documentCipher()', () => {
   function freshVaultRoot(): { vp: ReturnType<typeof vaultPathsFrom> } {
-    const root = mkdtempSync(join(tmpdir(), 'paid-encdoc-vault-'))
+    const root = mkdtempSync(join(tmpdir(), 'hilbertraum-encdoc-vault-'))
     const configPath = join(root, 'config')
     const workspacePath = join(root, 'workspace')
     mkdirSync(configPath, { recursive: true })
     mkdirSync(workspacePath, { recursive: true })
-    return { vp: vaultPathsFrom({ configPath, dbPath: join(workspacePath, 'paid.sqlite') }) }
+    return { vp: vaultPathsFrom({ configPath, dbPath: join(workspacePath, 'hilbertraum.sqlite') }) }
   }
 
   it('is null while locked and in plaintext mode; round-trips files when unlocked', () => {
@@ -220,12 +220,12 @@ describe('WorkspaceController.documentCipher()', () => {
 
 describe('shredStalePlaintext — transient sweep (H1/M9)', () => {
   it('shreds the DB .tmp and stray .parse document transients, sparing stored copies', () => {
-    const root = mkdtempSync(join(tmpdir(), 'paid-encdoc-shred-'))
+    const root = mkdtempSync(join(tmpdir(), 'hilbertraum-encdoc-shred-'))
     const configPath = join(root, 'config')
     const workspacePath = join(root, 'workspace')
     mkdirSync(configPath, { recursive: true })
     mkdirSync(workspacePath, { recursive: true })
-    const vp = vaultPathsFrom({ configPath, dbPath: join(workspacePath, 'paid.sqlite') })
+    const vp = vaultPathsFrom({ configPath, dbPath: join(workspacePath, 'hilbertraum.sqlite') })
     const docs = join(workspacePath, 'documents')
     mkdirSync(docs, { recursive: true })
 

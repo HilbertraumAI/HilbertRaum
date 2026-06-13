@@ -8,9 +8,9 @@ import { resolveLlamaServerPath } from '../../src/main/services/runtime/sidecar'
 // MANUAL ragMinSimilarity measurement (Phase 21, rag-design §12.1 R3 / §12.2 D12) — NOT CI.
 //
 // CI stays zero-network/zero-model/zero-binary, so this file is skipped unless
-// PAID_MINSIM_MEASURE points at a provisioned drive root (same shape as PAID_GPU_SMOKE):
+// HILBERTRAUM_MINSIM_MEASURE points at a provisioned drive root (same shape as HILBERTRAUM_GPU_SMOKE):
 //
-//   PAID_MINSIM_MEASURE=<root with runtime/llama.cpp/<os>/llama-server + models/embeddings/*.gguf>
+//   HILBERTRAUM_MINSIM_MEASURE=<root with runtime/llama.cpp/<os>/llama-server + models/embeddings/*.gguf>
 //   npx vitest run tests/manual/minsim-measure.test.ts
 //
 // PURPOSE: ragMinSimilarity is the cosine floor applied to vector hits BEFORE fusion
@@ -26,7 +26,7 @@ import { resolveLlamaServerPath } from '../../src/main/services/runtime/sidecar'
 // the worst failure; a too-low floor merely lets weak hits through, where RRF + the
 // reranker + the token budget already cope).
 
-const ROOT = process.env.PAID_MINSIM_MEASURE?.trim() ?? ''
+const ROOT = process.env.HILBERTRAUM_MINSIM_MEASURE?.trim() ?? ''
 const enabled = ROOT.length > 0 && existsSync(ROOT)
 
 /** Generous health budget: a model from a possibly-cold USB drive. */

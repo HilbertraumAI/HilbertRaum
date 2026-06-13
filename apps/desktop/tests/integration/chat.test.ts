@@ -20,7 +20,7 @@ import type { Db } from '../../src/main/services/db'
 import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../../src/main/services/runtime'
 
 function freshDb(): Db {
-  const dir = mkdtempSync(join(tmpdir(), 'paid-chat-'))
+  const dir = mkdtempSync(join(tmpdir(), 'hilbertraum-chat-'))
   return openDatabase(join(dir, 'test.sqlite'))
 }
 
@@ -94,7 +94,7 @@ describe('message ordering', () => {
 describe('system prompt + message assembly', () => {
   it('matches the spec §7.6 base prompt', () => {
     const p = buildSystemPrompt()
-    expect(p).toContain('You are Private AI Drive Lite')
+    expect(p).toContain('You are HilbertRaum')
     expect(p).toContain('You do not have internet access.')
     expect(p).toContain('include citations using the provided source labels')
   })

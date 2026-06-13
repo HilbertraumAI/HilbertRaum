@@ -60,7 +60,7 @@ describe('createSelectedTranscriber — availability matrix (D9 pattern)', () =>
 
 describe('resolveWhisperCliPath', () => {
   it('resolves runtime/whisper.cpp/<os>/whisper-cli[.exe] when present', () => {
-    const root = mkdtempSync(join(tmpdir(), 'paid-whisper-bin-'))
+    const root = mkdtempSync(join(tmpdir(), 'hilbertraum-whisper-bin-'))
     expect(resolveWhisperCliPath(root, 'win32', {})).toBeNull()
     const binDir = whisperCliDir(root, 'win32')
     expect(binDir).toBe(join(root, 'runtime', 'whisper.cpp', 'win'))
@@ -69,12 +69,12 @@ describe('resolveWhisperCliPath', () => {
     expect(resolveWhisperCliPath(root, 'win32', {})).toBe(join(binDir, 'whisper-cli.exe'))
   })
 
-  it('honours the PAID_WHISPER_BIN override (existing file only)', () => {
-    const root = mkdtempSync(join(tmpdir(), 'paid-whisper-ovr-'))
+  it('honours the HILBERTRAUM_WHISPER_BIN override (existing file only)', () => {
+    const root = mkdtempSync(join(tmpdir(), 'hilbertraum-whisper-ovr-'))
     const bin = join(root, 'custom-whisper.exe')
-    expect(resolveWhisperCliPath(root, 'win32', { PAID_WHISPER_BIN: bin })).toBeNull()
+    expect(resolveWhisperCliPath(root, 'win32', { HILBERTRAUM_WHISPER_BIN: bin })).toBeNull()
     writeFileSync(bin, 'fake')
-    expect(resolveWhisperCliPath(root, 'win32', { PAID_WHISPER_BIN: bin })).toBe(bin)
+    expect(resolveWhisperCliPath(root, 'win32', { HILBERTRAUM_WHISPER_BIN: bin })).toBe(bin)
   })
 })
 
@@ -139,7 +139,7 @@ const WHISPER_JSON = {
 
 describe('WhisperCliTranscriber (fake spawn)', () => {
   it('parses the -oj JSON into ordered ms segments and shreds the transient', async () => {
-    const workDir = mkdtempSync(join(tmpdir(), 'paid-whisper-work-'))
+    const workDir = mkdtempSync(join(tmpdir(), 'hilbertraum-whisper-work-'))
     const { transcriber, spawned } = fakeCliTranscriber({ json: WHISPER_JSON })
     const segments = await transcriber.transcribe('C:/audio/meeting.mp3', { workDir })
     expect(segments).toEqual([
@@ -163,7 +163,7 @@ describe('WhisperCliTranscriber (fake spawn)', () => {
   })
 
   it('reports -pp progress percentages', async () => {
-    const workDir = mkdtempSync(join(tmpdir(), 'paid-whisper-prog-'))
+    const workDir = mkdtempSync(join(tmpdir(), 'hilbertraum-whisper-prog-'))
     const { transcriber } = fakeCliTranscriber({
       json: WHISPER_JSON,
       stderrText: 'whisper_print_progress_callback: progress =   5%\nprogress =  60%\n'
@@ -176,7 +176,7 @@ describe('WhisperCliTranscriber (fake spawn)', () => {
   // R-W2: whisper-cli EXITS 0 on an undecodable file (error only on stderr, no output).
   // Success therefore means "the JSON exists and parses" — never the exit code.
   it('maps the exit-0 decode failure to the AUDIO_DECODE_FAILED error', async () => {
-    const workDir = mkdtempSync(join(tmpdir(), 'paid-whisper-decode-'))
+    const workDir = mkdtempSync(join(tmpdir(), 'hilbertraum-whisper-decode-'))
     const { transcriber } = fakeCliTranscriber({
       stderrText: 'read_audio_data: failed to read audio data\nerror: failed to read audio file',
       exitCode: 0
@@ -187,13 +187,13 @@ describe('WhisperCliTranscriber (fake spawn)', () => {
   })
 
   it('fails loudly on a hard non-zero exit (missing DLL, bad model)', async () => {
-    const workDir = mkdtempSync(join(tmpdir(), 'paid-whisper-exit-'))
+    const workDir = mkdtempSync(join(tmpdir(), 'hilbertraum-whisper-exit-'))
     const { transcriber } = fakeCliTranscriber({ stderrText: 'model load failed', exitCode: 3 })
     await expect(transcriber.transcribe('a.mp3', { workDir })).rejects.toThrow(/exited with code 3/)
   })
 
   it('suspend() kills the in-flight child and the call rejects (workspace lock)', async () => {
-    const workDir = mkdtempSync(join(tmpdir(), 'paid-whisper-susp-'))
+    const workDir = mkdtempSync(join(tmpdir(), 'hilbertraum-whisper-susp-'))
     let heldChild: FakeChild | null = null
     // A spawn that never closes on its own — the child "runs" until killed.
     const pending = createWhisperCliTranscriber({
@@ -217,7 +217,7 @@ describe('WhisperCliTranscriber (fake spawn)', () => {
   // shred in transcribe()'s finally), so the parent never exits leaving an un-shredded
   // transcript in tmpdir() (the workspace crash-sweep never reaches the default workDir).
   it('suspend() awaits the transient-transcript shred before returning (L5)', async () => {
-    const workDir = mkdtempSync(join(tmpdir(), 'paid-whisper-shred-'))
+    const workDir = mkdtempSync(join(tmpdir(), 'hilbertraum-whisper-shred-'))
     let outJson = ''
     // A child that writes the transcript JSON, then "runs" (never closes on its own) until killed.
     const pending = createWhisperCliTranscriber({

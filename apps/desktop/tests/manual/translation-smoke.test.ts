@@ -28,13 +28,13 @@ import type { TranslationTargetLang } from '../../src/shared/types'
 //
 // The comparison-format half of R-T2 stays open for Phase 35.
 //
-// CI stays zero-network/zero-model/zero-binary; skipped unless PAID_TRANSLATION_SMOKE
-// points at a provisioned drive root (the PAID_GPU_SMOKE shape — dev box:
+// CI stays zero-network/zero-model/zero-binary; skipped unless HILBERTRAUM_TRANSLATION_SMOKE
+// points at a provisioned drive root (the HILBERTRAUM_GPU_SMOKE shape — dev box:
 // F:\paid-gpu-smoke-drive):
 //
-//   PAID_TRANSLATION_SMOKE=<root> npx vitest run tests/manual/translation-smoke.test.ts
+//   HILBERTRAUM_TRANSLATION_SMOKE=<root> npx vitest run tests/manual/translation-smoke.test.ts
 
-const ROOT = process.env.PAID_TRANSLATION_SMOKE?.trim() ?? ''
+const ROOT = process.env.HILBERTRAUM_TRANSLATION_SMOKE?.trim() ?? ''
 const enabled = ROOT.length > 0 && existsSync(ROOT)
 
 const PATIENT_MS = 240_000

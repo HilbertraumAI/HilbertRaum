@@ -19,7 +19,7 @@ export type { PreflightResult }
 export const LOW_FREE_SPACE_BYTES = 2 * 1024 * 1024 * 1024 // 2 GB
 
 export interface PreflightDeps {
-  /** The drive root (the launcher's resolved `PAID_DRIVE_ROOT`). */
+  /** The drive root (the launcher's resolved `HILBERTRAUM_DRIVE_ROOT`). */
   rootPath: string
   /**
    * Injectable drive-speed probe (defaults to the real `measureDriveSpeed`). Tests pass a

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Lay out a Private AI Drive Lite portable drive (spec §6 / Phase 11).
+# Lay out a HilbertRaum portable drive (spec §6 / Phase 11).
 #
 # Creates the directory tree the app actually reads (workspace/, models/{chat,embeddings}/,
 # model-manifests/, runtime/llama.cpp/{win,mac,linux}/, logs/, config/, docs/), copies the
@@ -124,7 +124,7 @@ write_json() {
 
 DRIVE_JSON=$(cat <<EOF
 {
-  "product": "Private AI Drive Lite",
+  "product": "HilbertRaum",
   "drive_format_version": 1,
   "created_at": "$CREATED_AT",
   "edition": "lite",
@@ -180,5 +180,5 @@ else
   echo "  3. Run scripts/verify-models.sh --target \"$TARGET\" to verify checksums."
 fi
 echo
-echo "Launch from the drive with PAID_DRIVE_ROOT set to the drive root:"
-echo "  export PAID_DRIVE_ROOT=\"$TARGET\""
+echo "Launch from the drive with HILBERTRAUM_DRIVE_ROOT set to the drive root:"
+echo "  export HILBERTRAUM_DRIVE_ROOT=\"$TARGET\""

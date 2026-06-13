@@ -11,11 +11,11 @@ import { packTranscriptSegments } from '../../src/main/services/ingestion/parser
 // MANUAL whisper smoke (Phase 36, wave-3 plan §14 R-W2..R-W4 live verification) — NOT CI.
 //
 // CI stays zero-network/zero-model/zero-binary/zero-audio, so this file is skipped
-// unless PAID_WHISPER_SMOKE points at a provisioned drive root (the gpu/rerank/
+// unless HILBERTRAUM_WHISPER_SMOKE points at a provisioned drive root (the gpu/rerank/
 // translation-smoke shape):
 //
-//   PAID_WHISPER_SMOKE=<root with runtime/whisper.cpp/<os>/whisper-cli + models/transcriber/ggml-*.bin>
-//   PAID_WHISPER_AUDIO=<dir with local German audio fixtures — NEVER committed; the repo ships no audio>
+//   HILBERTRAUM_WHISPER_SMOKE=<root with runtime/whisper.cpp/<os>/whisper-cli + models/transcriber/ggml-*.bin>
+//   HILBERTRAUM_WHISPER_AUDIO=<dir with local German audio fixtures — NEVER committed; the repo ships no audio>
 //     expected files (source locally, e.g. TTS + LibriVox):
 //       german.wav german.mp3 german.flac german.ogg   (short German speech, any length)
 //       german_long.mp3                                 (optional: ~60 min for the R-W4 leg)
@@ -31,8 +31,8 @@ import { packTranscriptSegments } from '../../src/main/services/ingestion/parser
 // Findings 2026-06-11 (dev box, 4 threads): formats wav/mp3/flac/ogg decode; m4a fails
 // with exit 0 + stderr only; small RTF ≈ 0.46 vs base ≈ 0.21; 52-min mp3 → see plan §14.
 
-const ROOT = process.env.PAID_WHISPER_SMOKE?.trim() ?? ''
-const AUDIO_DIR = process.env.PAID_WHISPER_AUDIO?.trim() ?? ''
+const ROOT = process.env.HILBERTRAUM_WHISPER_SMOKE?.trim() ?? ''
+const AUDIO_DIR = process.env.HILBERTRAUM_WHISPER_AUDIO?.trim() ?? ''
 const enabled = ROOT.length > 0 && existsSync(ROOT) && AUDIO_DIR.length > 0 && existsSync(AUDIO_DIR)
 
 function transcriberModel(root: string): string | null {

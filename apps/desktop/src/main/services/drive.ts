@@ -80,7 +80,7 @@ export interface DriveJsonOptions {
 /** Build `config/drive.json` — the marker `resolvePaths` keys off (spec §6 example). */
 export function buildDriveJson(opts: DriveJsonOptions = {}): DriveJson {
   return {
-    product: 'Private AI Drive Lite',
+    product: 'HilbertRaum',
     drive_format_version: DRIVE_FORMAT_VERSION,
     created_at: opts.createdAt ?? new Date().toISOString(),
     edition: opts.edition ?? 'lite',

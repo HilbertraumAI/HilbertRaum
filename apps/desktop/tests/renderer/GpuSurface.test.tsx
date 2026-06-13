@@ -29,7 +29,7 @@ function runtimeStatus(over: Partial<RuntimeStatus> = {}): RuntimeStatus {
 }
 
 const appStatus = {
-  appName: 'Private AI Drive Lite',
+  appName: 'HilbertRaum',
   appVersion: '0.1.0',
   activeModelId: null,
   hardwareProfile: 'UNKNOWN'
@@ -110,7 +110,7 @@ describe('Settings → Diagnostics (advanced) — Acceleration (Phase 16)', () =
     expect(screen.queryByText(/fail|broken|bad/i)).not.toBeInTheDocument()
   })
 
-  it('shows the installed runtime build from the .paid-runtime.json marker', async () => {
+  it('shows the installed runtime build from the .hilbertraum-runtime.json marker', async () => {
     stubDiagnostics({ install: { version: 'b9585', backend: 'vulkan', os: 'win', arch: 'x64' } })
     renderDiagnostics()
     expect(await screen.findByText('llama.cpp b9585 (vulkan)')).toBeInTheDocument()

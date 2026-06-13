@@ -57,7 +57,7 @@ function asManifest(overrides: Record<string, unknown> = {}): ModelManifest {
 
 describe('checksum verification', () => {
   it('hashes a file and matches its own SHA-256', async () => {
-    const dir = tempDir('paid-hash-')
+    const dir = tempDir('hilbertraum-hash-')
     const file = join(dir, 'weight.bin')
     writeFileSync(file, 'hello world')
     const expected = createHash('sha256').update('hello world').digest('hex')
@@ -72,12 +72,12 @@ describe('checksum verification', () => {
   })
 
   it('reports a missing file', async () => {
-    const res = await verifyChecksum(join(tempDir('paid-hash-'), 'nope.bin'), 'f'.repeat(64))
+    const res = await verifyChecksum(join(tempDir('hilbertraum-hash-'), 'nope.bin'), 'f'.repeat(64))
     expect(res).toEqual({ exists: false, matched: null, actual: null })
   })
 
   it('returns matched=null for a placeholder hash', async () => {
-    const dir = tempDir('paid-hash-')
+    const dir = tempDir('hilbertraum-hash-')
     const file = join(dir, 'weight.bin')
     writeFileSync(file, 'data')
     const res = await verifyChecksum(file, 'REPLACE_WITH_REAL_HASH')
@@ -92,7 +92,7 @@ describe('checksum verification', () => {
 describe('checksum cache (H5)', () => {
   it('hashes a file once and serves repeat verifications from the cache', async () => {
     clearChecksumCache()
-    const dir = tempDir('paid-hash-')
+    const dir = tempDir('hilbertraum-hash-')
     const file = join(dir, 'weight.bin')
     writeFileSync(file, 'big model weights')
     const expected = createHash('sha256').update('big model weights').digest('hex')
@@ -109,7 +109,7 @@ describe('checksum cache (H5)', () => {
 
   it('re-hashes when the file changes, so a swapped weight is still detected', async () => {
     clearChecksumCache()
-    const dir = tempDir('paid-hash-')
+    const dir = tempDir('hilbertraum-hash-')
     const file = join(dir, 'weight.bin')
     writeFileSync(file, 'original')
     const originalHash = createHash('sha256').update('original').digest('hex')
@@ -129,7 +129,7 @@ describe('checksum cache (H5)', () => {
 // once EVER; size/mtime changes and the explicit "Verify checksum" force a real re-hash.
 describe('persistent checksum cache (settings hash store)', () => {
   function makeStore(): { store: ReturnType<typeof createSettingsHashStore>; db: ReturnType<typeof openDatabase> } {
-    const db = openDatabase(join(tempDir('paid-db-'), 'cache.sqlite'))
+    const db = openDatabase(join(tempDir('hilbertraum-db-'), 'cache.sqlite'))
     seedSettings(db)
     return { store: createSettingsHashStore(db), db }
   }
@@ -137,7 +137,7 @@ describe('persistent checksum cache (settings hash store)', () => {
   it('serves the hash from the DB after a simulated restart (no re-hash)', async () => {
     clearChecksumCache()
     const { store, db } = makeStore()
-    const file = join(tempDir('paid-hash-'), 'weight.bin')
+    const file = join(tempDir('hilbertraum-hash-'), 'weight.bin')
     writeFileSync(file, 'persisted weights')
     const expected = createHash('sha256').update('persisted weights').digest('hex')
 
@@ -154,7 +154,7 @@ describe('persistent checksum cache (settings hash store)', () => {
   it('re-hashes when the file content/size changed since the persisted entry', async () => {
     clearChecksumCache()
     const { store } = makeStore()
-    const file = join(tempDir('paid-hash-'), 'weight.bin')
+    const file = join(tempDir('hilbertraum-hash-'), 'weight.bin')
     writeFileSync(file, 'original')
     const originalHash = createHash('sha256').update('original').digest('hex')
     expect((await verifyChecksum(file, originalHash, store)).matched).toBe(true)
@@ -170,7 +170,7 @@ describe('persistent checksum cache (settings hash store)', () => {
   it('invalidateChecksum drops memory + store so the next verify truly re-hashes', async () => {
     clearChecksumCache()
     const { store, db } = makeStore()
-    const file = join(tempDir('paid-hash-'), 'weight.bin')
+    const file = join(tempDir('hilbertraum-hash-'), 'weight.bin')
     writeFileSync(file, 'weights')
     const expected = createHash('sha256').update('weights').digest('hex')
     await verifyChecksum(file, expected, store)
@@ -208,14 +208,14 @@ describe('weightPath', () => {
 
 describe('computeInstallState', () => {
   function rootWithWeight(content: string): string {
-    const root = tempDir('paid-root-')
+    const root = tempDir('hilbertraum-root-')
     mkdirSync(join(root, 'models', 'chat'), { recursive: true })
     writeFileSync(join(root, 'models', 'chat', 'qwen3-4b-instruct-q4.gguf'), content)
     return root
   }
 
   it('is missing when the weight file is absent', async () => {
-    const root = tempDir('paid-root-')
+    const root = tempDir('hilbertraum-root-')
     const state = await computeInstallState(asManifest(), root, { developerMode: true })
     expect(state).toBe('missing')
   })
@@ -259,7 +259,7 @@ describe('computeInstallState', () => {
   })
 
   it('is unsupported for an unknown runtime/format', async () => {
-    const root = tempDir('paid-root-')
+    const root = tempDir('hilbertraum-root-')
     const state = await computeInstallState(asManifest({ runtime: 'onnx' }), root, {
       developerMode: true
     })
@@ -271,7 +271,7 @@ describe('computeInstallState', () => {
   // llama-only whitelist and show "Unsupported" on the AI Model screen, which also
   // hid its in-app download (the download offer requires state 'missing').
   it('supports the whisper transcriber pair (whisper_cpp + ggml)', async () => {
-    const root = tempDir('paid-root-')
+    const root = tempDir('hilbertraum-root-')
     const whisper = asManifest({
       id: 'whisper-small-multilingual',
       role: 'transcriber',
@@ -298,7 +298,7 @@ describe('computeInstallState', () => {
   })
 
   it('rejects MISMATCHED runtime/format pairs (never a silent pass)', async () => {
-    const root = tempDir('paid-root-')
+    const root = tempDir('hilbertraum-root-')
     const cases = [
       { runtime: 'whisper_cpp', format: 'gguf' },
       { runtime: 'llama_cpp', format: 'ggml' }
@@ -410,7 +410,7 @@ describe('recommendModelIdByRam', () => {
 
 describe('buildModelList — RAM gate', () => {
   function manifestsDirWith(...objs: Array<Record<string, unknown>>): string {
-    const dir = tempDir('paid-manifests-')
+    const dir = tempDir('hilbertraum-manifests-')
     for (const [i, o] of objs.entries()) writeFileSync(join(dir, `m${i}.yaml`), stringify(o))
     return dir
   }
@@ -422,7 +422,7 @@ describe('buildModelList — RAM gate', () => {
     )
     const { models } = await buildModelList({
       manifestsDir: dir,
-      rootPath: tempDir('paid-root-'),
+      rootPath: tempDir('hilbertraum-root-'),
       profile: 'UNKNOWN',
       developerMode: true,
       machineRamGb: 16
@@ -438,7 +438,7 @@ describe('buildModelList — RAM gate', () => {
     const dir = manifestsDirWith(manifestObj({ id: 'lite-model', recommended_profiles: ['LITE'] }))
     const { models } = await buildModelList({
       manifestsDir: dir,
-      rootPath: tempDir('paid-root-'),
+      rootPath: tempDir('hilbertraum-root-'),
       profile: 'LITE',
       developerMode: true
     })
@@ -453,7 +453,7 @@ describe('discoverManifests', () => {
   }
 
   it('parses valid manifests and reports invalid ones', () => {
-    const dir = tempDir('paid-manifests-')
+    const dir = tempDir('hilbertraum-manifests-')
     writeManifest(dir, 'good.yaml', manifestObj())
     writeManifest(dir, 'embed.yml', manifestObj({ id: 'embed', role: 'embeddings' }))
     writeManifest(dir, 'bad.yaml', { id: 'broken' }) // missing required fields
@@ -466,7 +466,7 @@ describe('discoverManifests', () => {
   })
 
   it('flags duplicate ids', () => {
-    const dir = tempDir('paid-manifests-')
+    const dir = tempDir('hilbertraum-manifests-')
     writeManifest(dir, 'a.yaml', manifestObj())
     writeManifest(dir, 'b.yaml', manifestObj())
     const res = discoverManifests(dir)
@@ -475,7 +475,7 @@ describe('discoverManifests', () => {
   })
 
   it('recurses into subdirectories', () => {
-    const dir = tempDir('paid-manifests-')
+    const dir = tempDir('hilbertraum-manifests-')
     mkdirSync(join(dir, 'chat'), { recursive: true })
     writeManifest(join(dir, 'chat'), 'm.yaml', manifestObj())
     const res = discoverManifests(dir)
@@ -485,17 +485,17 @@ describe('discoverManifests', () => {
 
 describe('resolveManifestsDir', () => {
   it('honours an explicit override that exists', () => {
-    const dir = tempDir('paid-manifests-')
+    const dir = tempDir('hilbertraum-manifests-')
     expect(resolveManifestsDir('/somewhere', dir)).toBe(dir)
   })
   it('falls back to the walk-up when the override path is missing (M21)', () => {
-    const root = tempDir('paid-up-fallback-')
+    const root = tempDir('hilbertraum-up-fallback-')
     const mdir = join(root, 'model-manifests')
     mkdirSync(mdir, { recursive: true })
     expect(resolveManifestsDir(root, join(root, 'no-such-dir'))).toBe(mdir)
   })
   it('finds model-manifests by walking up', () => {
-    const root = tempDir('paid-up-')
+    const root = tempDir('hilbertraum-up-')
     const mdir = join(root, 'model-manifests')
     mkdirSync(mdir, { recursive: true })
     const deep = join(root, 'apps', 'desktop', 'out', 'main')
@@ -503,19 +503,19 @@ describe('resolveManifestsDir', () => {
     expect(resolveManifestsDir(deep)).toBe(mdir)
   })
   it('returns null when nothing is found', () => {
-    expect(resolveManifestsDir(tempDir('paid-empty-'))).toBe(null)
+    expect(resolveManifestsDir(tempDir('hilbertraum-empty-'))).toBe(null)
   })
 })
 
 describe('selectModel', () => {
   function setup(): { dbPath: string; manifestsDir: string } {
-    const manifestsDir = tempDir('paid-manifests-')
+    const manifestsDir = tempDir('hilbertraum-manifests-')
     writeFileSync(join(manifestsDir, 'chat.yaml'), stringify(manifestObj()))
     writeFileSync(
       join(manifestsDir, 'embed.yaml'),
       stringify(manifestObj({ id: 'embed', role: 'embeddings' }))
     )
-    const dbPath = join(tempDir('paid-db-'), 'test.sqlite')
+    const dbPath = join(tempDir('hilbertraum-db-'), 'test.sqlite')
     return { dbPath, manifestsDir }
   }
 

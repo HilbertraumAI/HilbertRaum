@@ -469,7 +469,7 @@ export function runtimeBinaryPresent(plan: RuntimeDownloadPlan): boolean {
   return existsSync(plan.binaryPath) && statSync(plan.binaryPath).isFile()
 }
 
-// ---- Runtime install marker (.paid-runtime.json) ------------------------------------
+// ---- Runtime install marker (.hilbertraum-runtime.json) ------------------------------------
 //
 // "Binary exists" alone is a broken idempotency signal: upgrading a drive from the old
 // CPU default to the Vulkan default would silently keep the CPU build (the binary name
@@ -478,7 +478,7 @@ export function runtimeBinaryPresent(plan: RuntimeDownloadPlan): boolean {
 // The marker also tells the app/Diagnostics which build a drive carries.
 // The fetch-runtime scripts mirror this logic natively — keep them in sync.
 
-export const RUNTIME_MARKER_FILE = '.paid-runtime.json'
+export const RUNTIME_MARKER_FILE = '.hilbertraum-runtime.json'
 
 export interface RuntimeInstallMarker {
   version: string

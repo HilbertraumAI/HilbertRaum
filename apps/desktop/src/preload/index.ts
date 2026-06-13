@@ -76,7 +76,7 @@ const api = {
   stopRuntime: (): Promise<void> => ipcRenderer.invoke(IPC.stopRuntime),
   /** Read-only runtime health/state (Diagnostics, spec §7.11). */
   getRuntimeStatus: (): Promise<RuntimeStatus> => ipcRenderer.invoke(IPC.getRuntimeStatus),
-  /** The drive's installed sidecar build (.paid-runtime.json), or null. */
+  /** The drive's installed sidecar build (.hilbertraum-runtime.json), or null. */
   getRuntimeInstall: (): Promise<RuntimeInstallInfo | null> =>
     ipcRenderer.invoke(IPC.getRuntimeInstall),
 

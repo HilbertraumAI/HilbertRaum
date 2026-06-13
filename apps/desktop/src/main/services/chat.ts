@@ -27,7 +27,7 @@ const DEFAULT_TITLE = t('en', 'main.chat.defaultTitle')
 
 // Base system prompt — verbatim from spec §7.6. RAG context injection (rag/index.ts)
 // appends source-labelled chunks after this preamble.
-export const BASE_SYSTEM_PROMPT = `You are Private AI Drive Lite, a local offline assistant running on the user's laptop.
+export const BASE_SYSTEM_PROMPT = `You are HilbertRaum, a local offline assistant running on the user's laptop.
 You must be helpful, accurate, and honest about uncertainty.
 You do not have internet access.
 You must not claim to have accessed external services.
@@ -412,7 +412,7 @@ export function exportTranscript(db: Db, conversationId: string): { title: strin
   const lines: string[] = []
   lines.push(`# ${conv.title}`)
   lines.push('')
-  lines.push(`_Exported from Private AI Drive Lite on ${nowIso()} — local transcript, never uploaded._`)
+  lines.push(`_Exported from HilbertRaum on ${nowIso()} — local transcript, never uploaded._`)
   lines.push('')
   for (const m of messages) {
     lines.push(`## ${m.role === 'user' ? 'You' : 'Assistant'} (${m.createdAt})`)

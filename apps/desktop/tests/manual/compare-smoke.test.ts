@@ -36,12 +36,12 @@ import type { ChatMessage } from '../../src/main/services/runtime'
 //   6. output length vs the COMPARE_OUTPUT_TOKENS cap (silent-truncation check — the
 //      translation smoke caught exactly this class of bug).
 //
-// CI stays zero-network/zero-model/zero-binary; skipped unless PAID_COMPARE_SMOKE
-// points at a provisioned drive root (the PAID_TRANSLATION_SMOKE shape — dev box: D:\):
+// CI stays zero-network/zero-model/zero-binary; skipped unless HILBERTRAUM_COMPARE_SMOKE
+// points at a provisioned drive root (the HILBERTRAUM_TRANSLATION_SMOKE shape — dev box: D:\):
 //
-//   PAID_COMPARE_SMOKE=<root> npx vitest run tests/manual/compare-smoke.test.ts
+//   HILBERTRAUM_COMPARE_SMOKE=<root> npx vitest run tests/manual/compare-smoke.test.ts
 
-const ROOT = process.env.PAID_COMPARE_SMOKE?.trim() ?? ''
+const ROOT = process.env.HILBERTRAUM_COMPARE_SMOKE?.trim() ?? ''
 const enabled = ROOT.length > 0 && existsSync(ROOT)
 
 const PATIENT_MS = 240_000

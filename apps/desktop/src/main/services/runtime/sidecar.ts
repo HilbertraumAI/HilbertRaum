@@ -36,7 +36,7 @@ export function llamaServerDir(rootPath: string, platform: NodeJS.Platform = pro
 
 /**
  * Resolve the `llama-server` binary, or `null` when it is absent. Pure I/O check (only
- * `existsSync`) so a "binary present?" decision has no surprises. A `PAID_LLAMA_BIN`
+ * `existsSync`) so a "binary present?" decision has no surprises. A `HILBERTRAUM_LLAMA_BIN`
  * env override points at an explicit binary for dev (still validated for existence).
  */
 export function resolveLlamaServerPath(
@@ -44,7 +44,7 @@ export function resolveLlamaServerPath(
   platform: NodeJS.Platform = process.platform,
   env: NodeJS.ProcessEnv = process.env
 ): string | null {
-  const override = env.PAID_LLAMA_BIN?.trim()
+  const override = env.HILBERTRAUM_LLAMA_BIN?.trim()
   if (override) return existsSync(override) ? override : null
   const candidate = join(llamaServerDir(rootPath, platform), llamaServerBinaryName(platform))
   return existsSync(candidate) ? candidate : null
@@ -53,7 +53,7 @@ export function resolveLlamaServerPath(
 /**
  * Resolve the pure-CPU safety-net binary at `runtime/llama.cpp/<os>/cpu/` (shipped on
  * win/linux), or `null` when absent — the fallback ladder's rung 3 (architecture.md
- * GPU record §5.2). Deliberately ignores `PAID_LLAMA_BIN`: the override points at one
+ * GPU record §5.2). Deliberately ignores `HILBERTRAUM_LLAMA_BIN`: the override points at one
  * explicit binary and has no implied sibling.
  */
 export function resolveCpuFallbackServerPath(

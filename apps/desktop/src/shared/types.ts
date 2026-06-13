@@ -262,7 +262,7 @@ export interface GpuProbeResult {
 }
 
 /**
- * Which sidecar build this drive carries — the `.paid-runtime.json` install marker
+ * Which sidecar build this drive carries — the `.hilbertraum-runtime.json` install marker
  * written by `fetch-runtime`. Surfaced on Diagnostics ("runtime build").
  */
 export interface RuntimeInstallInfo {

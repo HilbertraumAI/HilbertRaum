@@ -6,7 +6,7 @@ import type { en } from './en'
 //
 // Style (i18n record §3.5, D-L7): informal „du", lowercase „du/dein" mid-sentence,
 // consistently — including errors and the gate. The copy ADAPTS the friendly spec-§11.4
-// tone rather than translating literally. The product name "Private AI Drive Lite" is
+// tone rather than translating literally. The product name "HilbertRaum" is
 // never translated (D-L4 note); language names in the picker stay untranslated.
 //
 // Glossary (§3.5) — keep terms consistent across ALL German copy:
@@ -498,10 +498,10 @@ export const de: Record<keyof typeof en, string> = {
   'privacy.offlineOn': '● Offline-Modus: AN',
   'privacy.offlineOff': '○ Netzwerkzugriff aktiviert',
   'privacy.statement.offline':
-    'Der Offline-Modus ist an. Private AI Drive Lite führt das KI-Modell auf deinem ' +
+    'Der Offline-Modus ist an. HilbertRaum führt das KI-Modell auf deinem ' +
     'Laptop aus. Deine Fragen, Dokumente, Embeddings und Chat-Verläufe bleiben lokal.',
   'privacy.statement.online':
-    'Private AI Drive Lite führt das KI-Modell auf deinem Laptop aus. Deine Fragen, ' +
+    'HilbertRaum führt das KI-Modell auf deinem Laptop aus. Deine Fragen, ' +
     'Dokumente, Embeddings und Chat-Verläufe bleiben lokal — auch mit aktiviertem ' +
     'Internetzugriff nutzen nur Modell-Downloads das Netzwerk.',
   'privacy.statement.noUploads':

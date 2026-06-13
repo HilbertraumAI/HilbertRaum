@@ -21,7 +21,7 @@ import { DEFAULT_SETTINGS } from '../../src/shared/types'
 // MANUAL end-to-end RAG quality check (Phase 21, rag-design §11 pipeline — the "does hybrid +
 // rerank actually IMPROVE answers?" question the mechanics smokes don't answer) — NOT CI.
 //
-//   PAID_RAG_QUALITY=<root with runtime/llama.cpp/<os>/llama-server + models/{embeddings,chat,reranker}/*.gguf>
+//   HILBERTRAUM_RAG_QUALITY=<root with runtime/llama.cpp/<os>/llama-server + models/{embeddings,chat,reranker}/*.gguf>
 //   npx vitest run tests/manual/rag-quality.test.ts
 //
 // Uses ALL THREE real backends (E5 embedder + bge reranker + Qwen3 chat) on a small but
@@ -33,7 +33,7 @@ import { DEFAULT_SETTINGS } from '../../src/shared/types'
 // Nothing is asserted about WHICH ordering is "better" (data-dependent); the evidence is
 // the console output. Hard asserts cover only that the pipeline runs and grounds an answer.
 
-const ROOT = process.env.PAID_RAG_QUALITY?.trim() ?? ''
+const ROOT = process.env.HILBERTRAUM_RAG_QUALITY?.trim() ?? ''
 const enabled = ROOT.length > 0 && existsSync(ROOT)
 const PATIENT_MS = 240_000
 
@@ -127,7 +127,7 @@ describe.skipIf(!enabled)('RAG quality (manual, real E5 + reranker + Qwen3)', ()
     expect(rerankPath).toBeTruthy()
     expect(chatPath).toBeTruthy()
 
-    const db = openDatabase(join(mkdtempSync(join(tmpdir(), 'paid-ragq-')), 'q.sqlite'))
+    const db = openDatabase(join(mkdtempSync(join(tmpdir(), 'hilbertraum-ragq-')), 'q.sqlite'))
     const embedder = createE5Embedder({
       id: 'multilingual-e5-small-q8',
       binPath: binPath!,

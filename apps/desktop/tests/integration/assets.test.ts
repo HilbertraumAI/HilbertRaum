@@ -105,14 +105,14 @@ const runtimeSources = (): RuntimeSources => {
 
 describe('planModelDownloads', () => {
   it('excludes manifests with no download block', async () => {
-    const root = tempDir('paid-assets-')
+    const root = tempDir('hilbertraum-assets-')
     const noDownload = manifest({ id: 'nodl', download: undefined, local_path: 'models/chat/nodl.gguf' })
     const tasks = await planModelDownloads(root, [noDownload])
     expect(tasks).toHaveLength(0)
   })
 
   it('plans a download for a missing weight (license accepted)', async () => {
-    const root = tempDir('paid-assets-')
+    const root = tempDir('hilbertraum-assets-')
     const tasks = await planModelDownloads(root, [manifest()], { acceptLicense: true })
     expect(tasks).toHaveLength(1)
     expect(tasks[0].status).toBe('download')
@@ -122,14 +122,14 @@ describe('planModelDownloads', () => {
   })
 
   it('blocks a download whose license is not approved without --accept-license', async () => {
-    const root = tempDir('paid-assets-')
+    const root = tempDir('hilbertraum-assets-')
     const tasks = await planModelDownloads(root, [manifest()])
     expect(tasks[0].status).toBe('license-blocked')
     expect(tasks[0].licenseApproved).toBe(false)
   })
 
   it('plans a download for an approved license with no override', async () => {
-    const root = tempDir('paid-assets-')
+    const root = tempDir('hilbertraum-assets-')
     const approved = manifest({
       license_review: { status: 'approved', reviewed_by: 'me', reviewed_at: '2026-01-01', notes: '' }
     })
@@ -139,7 +139,7 @@ describe('planModelDownloads', () => {
   })
 
   it('skips a present + verified weight (real hash matches)', async () => {
-    const root = tempDir('paid-assets-')
+    const root = tempDir('hilbertraum-assets-')
     const content = 'real-weights'
     const hash = sha256(content)
     const m = manifest({ sha256: hash, download: { url: 'https://x/y.gguf', sha256: hash, size_bytes: 1, license_url: null } })
@@ -149,7 +149,7 @@ describe('planModelDownloads', () => {
   })
 
   it('skips a present weight with a placeholder hash as present-unverified', async () => {
-    const root = tempDir('paid-assets-')
+    const root = tempDir('hilbertraum-assets-')
     const m = manifest()
     writeWeight(root, m, 'whatever')
     const tasks = await planModelDownloads(root, [m], { acceptLicense: true })
@@ -157,7 +157,7 @@ describe('planModelDownloads', () => {
   })
 
   it('re-plans a download when a present weight mismatches a real hash', async () => {
-    const root = tempDir('paid-assets-')
+    const root = tempDir('hilbertraum-assets-')
     const m = manifest({ sha256: 'a'.repeat(64), download: { url: 'https://x/y.gguf', sha256: 'a'.repeat(64), size_bytes: 1, license_url: null } })
     writeWeight(root, m, 'wrong-content')
     const tasks = await planModelDownloads(root, [m], { acceptLicense: true })
@@ -165,7 +165,7 @@ describe('planModelDownloads', () => {
   })
 
   it('honours the --only filter', async () => {
-    const root = tempDir('paid-assets-')
+    const root = tempDir('hilbertraum-assets-')
     const a = manifest({ id: 'a', local_path: 'models/chat/a.gguf' })
     const b = manifest({ id: 'b', local_path: 'models/chat/b.gguf' })
     const tasks = await planModelDownloads(root, [a, b], { acceptLicense: true, only: 'b' })
@@ -257,14 +257,14 @@ describe('selectRuntimeBuilds (commercial pipeline, Phase 14)', () => {
   })
 })
 
-describe('runtime install marker (.paid-runtime.json, Phase 14)', () => {
+describe('runtime install marker (.hilbertraum-runtime.json, Phase 14)', () => {
   function planFor(root: string, backend?: string) {
     const build = selectRuntimeBuild(vulkanFirstSources(), { os: 'win', arch: 'x64', backend })!
     return planRuntimeDownload(root, build, 'b9585')
   }
 
   it('round-trips a marker through write + read', () => {
-    const root = tempDir('paid-marker-')
+    const root = tempDir('hilbertraum-marker-')
     writeRuntimeMarker(root, { version: 'b9585', backend: 'vulkan', os: 'win', arch: 'x64' })
     expect(readRuntimeMarker(root)).toEqual({
       version: 'b9585',
@@ -275,7 +275,7 @@ describe('runtime install marker (.paid-runtime.json, Phase 14)', () => {
   })
 
   it('readRuntimeMarker never throws: missing or malformed → null', () => {
-    const root = tempDir('paid-marker-')
+    const root = tempDir('hilbertraum-marker-')
     expect(readRuntimeMarker(root)).toBeNull()
     writeFileSync(runtimeMarkerPath(root), 'not-json')
     expect(readRuntimeMarker(root)).toBeNull()
@@ -284,12 +284,12 @@ describe('runtime install marker (.paid-runtime.json, Phase 14)', () => {
   })
 
   it('runtimeInstallCurrent is false with no binary', () => {
-    const root = tempDir('paid-marker-')
+    const root = tempDir('hilbertraum-marker-')
     expect(runtimeInstallCurrent(planFor(root))).toBe(false)
   })
 
   it('a present binary WITHOUT a marker is NOT current (CPU-era drive → vulkan re-fetches)', () => {
-    const root = tempDir('paid-marker-')
+    const root = tempDir('hilbertraum-marker-')
     const plan = planFor(root)
     mkdirSync(plan.extractTo, { recursive: true })
     writeFileSync(plan.binaryPath, 'old-cpu-era-binary')
@@ -297,7 +297,7 @@ describe('runtime install marker (.paid-runtime.json, Phase 14)', () => {
   })
 
   it('a marker recording a DIFFERENT backend or version is NOT current', () => {
-    const root = tempDir('paid-marker-')
+    const root = tempDir('hilbertraum-marker-')
     const plan = planFor(root)
     mkdirSync(plan.extractTo, { recursive: true })
     writeFileSync(plan.binaryPath, 'binary')
@@ -308,7 +308,7 @@ describe('runtime install marker (.paid-runtime.json, Phase 14)', () => {
   })
 
   it('binary + matching marker → current (idempotent skip)', () => {
-    const root = tempDir('paid-marker-')
+    const root = tempDir('hilbertraum-marker-')
     const plan = planFor(root)
     mkdirSync(plan.extractTo, { recursive: true })
     writeFileSync(plan.binaryPath, 'binary')
@@ -330,14 +330,14 @@ describe('runtime install marker (.paid-runtime.json, Phase 14)', () => {
     const whisperPlan = (root: string) => planRuntimeDownload(root, whisperBuild, 'v1.8.6', 'whisper-cli')
 
     it('plans the whisper-cli binary path under runtime/whisper.cpp/<os>/', () => {
-      const root = tempDir('paid-whisper-marker-')
+      const root = tempDir('hilbertraum-whisper-marker-')
       const plan = whisperPlan(root)
       expect(plan.extractTo).toBe(join(root, 'runtime', 'whisper.cpp', 'win'))
       expect(plan.binaryPath).toBe(join(root, 'runtime', 'whisper.cpp', 'win', 'whisper-cli.exe'))
     })
 
     it('skips only on a MATCHING version+backend marker; stale/absent re-fetches', () => {
-      const root = tempDir('paid-whisper-marker-')
+      const root = tempDir('hilbertraum-whisper-marker-')
       const plan = whisperPlan(root)
       expect(runtimeInstallCurrent(plan)).toBe(false) // no binary
       mkdirSync(plan.extractTo, { recursive: true })
@@ -415,7 +415,7 @@ describe('committed model-manifests/runtime-sources.yaml (Phase 14 pin)', () => 
 
 describe('planRuntimeDownload', () => {
   it('resolves the extraction dir + binary path under the drive root', () => {
-    const root = tempDir('paid-rt-')
+    const root = tempDir('hilbertraum-rt-')
     const build = selectRuntimeBuild(runtimeSources(), { os: 'win', arch: 'x64' })!
     const plan = planRuntimeDownload(root, build, 'b9196')
     expect(plan.extractTo).toBe(join(root, 'runtime', 'llama.cpp', 'win'))
@@ -426,7 +426,7 @@ describe('planRuntimeDownload', () => {
   })
 
   it('keeps a .tar.gz archive name from the URL (macOS/Linux release assets)', () => {
-    const root = tempDir('paid-rt-')
+    const root = tempDir('hilbertraum-rt-')
     const build = selectRuntimeBuild(
       {
         version: 'b9585',
@@ -448,7 +448,7 @@ describe('planRuntimeDownload', () => {
   })
 
   it('rejects an extract_to that escapes the drive root', () => {
-    const root = tempDir('paid-rt-')
+    const root = tempDir('hilbertraum-rt-')
     const build = { os: 'win' as const, arch: 'x64', backend: 'cpu', url: 'https://x', sha256: 'x', extractTo: '../evil' }
     expect(() => planRuntimeDownload(root, build, 'b1')).toThrow(/escapes the drive root/)
   })
@@ -462,7 +462,7 @@ describe('planRuntimeDownload', () => {
 
 describe('verifyDownloadedFile', () => {
   it('verifies a present file against a real hash', async () => {
-    const root = tempDir('paid-verify-')
+    const root = tempDir('hilbertraum-verify-')
     const file = join(root, 'w.gguf')
     writeFileSync(file, 'abc')
     const ok = await verifyDownloadedFile(file, sha256('abc'))
@@ -471,7 +471,7 @@ describe('verifyDownloadedFile', () => {
   })
 
   it('reports a mismatch', async () => {
-    const root = tempDir('paid-verify-')
+    const root = tempDir('hilbertraum-verify-')
     const file = join(root, 'w.gguf')
     writeFileSync(file, 'abc')
     const res = await verifyDownloadedFile(file, 'a'.repeat(64))
@@ -480,7 +480,7 @@ describe('verifyDownloadedFile', () => {
   })
 
   it('reports a placeholder hash as not-a-pass', async () => {
-    const root = tempDir('paid-verify-')
+    const root = tempDir('hilbertraum-verify-')
     const file = join(root, 'w.gguf')
     writeFileSync(file, 'abc')
     const res = await verifyDownloadedFile(file, 'REPLACE_WITH_REAL_HASH')
@@ -489,7 +489,7 @@ describe('verifyDownloadedFile', () => {
   })
 
   it('reports a missing file', async () => {
-    const root = tempDir('paid-verify-')
+    const root = tempDir('hilbertraum-verify-')
     const res = await verifyDownloadedFile(join(root, 'gone.gguf'), sha256('abc'))
     expect(res.ok).toBe(false)
     expect(res.reason).toBe('missing')
@@ -501,7 +501,7 @@ describe('downloadToFile + fetchAndVerify (injected fetch — no real network)',
     (async () => new Response(ok ? body : null, { status: ok ? 200 : 404 })) as unknown as FetchFn
 
   it('streams a response body to disk via the injected fetch', async () => {
-    const root = tempDir('paid-dl-')
+    const root = tempDir('hilbertraum-dl-')
     const dest = join(root, 'models', 'chat', 'x.gguf')
     let progress = 0
     await downloadToFile('https://example.test/x.gguf', dest, {
@@ -514,7 +514,7 @@ describe('downloadToFile + fetchAndVerify (injected fetch — no real network)',
   })
 
   it('throws on a non-OK HTTP status', async () => {
-    const root = tempDir('paid-dl-')
+    const root = tempDir('hilbertraum-dl-')
     const dest = join(root, 'x.gguf')
     await expect(
       downloadToFile('https://example.test/missing', dest, { fetchImpl: fakeFetch('', false) })
@@ -522,7 +522,7 @@ describe('downloadToFile + fetchAndVerify (injected fetch — no real network)',
   })
 
   it('fetchAndVerify passes for a matching real hash', async () => {
-    const root = tempDir('paid-dl-')
+    const root = tempDir('hilbertraum-dl-')
     const dest = join(root, 'w.gguf')
     const body = 'verified-bytes'
     const res = await fetchAndVerify(
@@ -533,7 +533,7 @@ describe('downloadToFile + fetchAndVerify (injected fetch — no real network)',
   })
 
   it('fetchAndVerify deletes the partial and throws on a mismatch', async () => {
-    const root = tempDir('paid-dl-')
+    const root = tempDir('hilbertraum-dl-')
     const dest = join(root, 'w.gguf')
     await expect(
       fetchAndVerify(
@@ -547,7 +547,7 @@ describe('downloadToFile + fetchAndVerify (injected fetch — no real network)',
 
 describe('formatAssetPlan', () => {
   it('renders model tasks + the runtime plan', async () => {
-    const root = tempDir('paid-fmt-')
+    const root = tempDir('hilbertraum-fmt-')
     const tasks = await planModelDownloads(root, [manifest()], { acceptLicense: true })
     const build = selectRuntimeBuild(runtimeSources(), { os: 'win', arch: 'x64' })!
     const plan = planRuntimeDownload(root, build, 'b9196')

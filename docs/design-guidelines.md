@@ -1,4 +1,4 @@
-# Design & UI/UX Guidelines — Private AI Drive Lite
+# Design & UI/UX Guidelines — HilbertRaum
 
 **Status:** ADOPTED 2026-06-10. Source: external design research (Claude web, 2026-06-10),
 reviewed and adapted to this repo's constraints — adaptations are marked **[adapted]**.
@@ -429,7 +429,7 @@ housekeeping; the full original phased plan is in git history —
 
 Each phase: `npm run typecheck` + full vitest from `apps/desktop` + `npm run build`, plus a
 scripted Playwright `_electron` screenshot walk of every touched screen in BOTH themes
-(workspace `%TEMP%\paid-eyeball`, per-phase `walk-phaseNN.mjs`; strip `ELECTRON_RUN_AS_NODE`,
+(workspace `%TEMP%\hilbertraum-eyeball`, per-phase `walk-phaseNN.mjs`; strip `ELECTRON_RUN_AS_NODE`,
 clear localStorage after the first window, `emulateMedia` for theme/reduced-motion; write a
 `config/policy.json` with `encryption_required: true` to exercise the gate). Suite grew
 644 → 669 tests (+6 manual skips) over the wave.

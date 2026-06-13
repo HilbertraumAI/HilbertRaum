@@ -29,10 +29,10 @@ import { gpuUsefulForProfile } from '../../src/main/services/runtime/gpu'
 import type { GpuDevice } from '../../src/shared/types'
 
 function freshDb(): Db {
-  return openDatabase(join(mkdtempSync(join(tmpdir(), 'paid-bench-')), 'test.sqlite'))
+  return openDatabase(join(mkdtempSync(join(tmpdir(), 'hilbertraum-bench-')), 'test.sqlite'))
 }
 function workspace(): string {
-  return mkdtempSync(join(tmpdir(), 'paid-bench-ws-'))
+  return mkdtempSync(join(tmpdir(), 'hilbertraum-bench-ws-'))
 }
 function realManifests(): ModelManifest[] {
   const dir = resolveManifestsDir(process.cwd())
@@ -230,7 +230,7 @@ describe('measureDriveSpeed', () => {
   })
 
   it('returns null Mbps + an error (no throw) when the workspace is not writable', async () => {
-    const speed = await measureDriveSpeed(join(tmpdir(), 'paid-does-not-exist-xyz', 'nope'))
+    const speed = await measureDriveSpeed(join(tmpdir(), 'hilbertraum-does-not-exist-xyz', 'nope'))
     expect(speed.readMbps).toBeNull()
     expect(speed.writeMbps).toBeNull()
     expect(speed.error).toBeTruthy()

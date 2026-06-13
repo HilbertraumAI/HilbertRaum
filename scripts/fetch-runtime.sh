@@ -5,7 +5,7 @@
 # picks the build matching the host OS/arch (or --os/--arch/--backend overrides), downloads
 # the release zip, SHA-256-verifies it, and extracts it into the build's extract_to dir
 # (runtime/llama.cpp/<os>/ for the default build; runtime/llama.cpp/<os>/cpu/ for the
-# pure-CPU safety net), then chmod +x the binary. After extraction a .paid-runtime.json
+# pure-CPU safety net), then chmod +x the binary. After extraction a .hilbertraum-runtime.json
 # install marker ({ version, backend, os, arch }) is written next to the binary.
 #
 # Mirrors apps/desktop/src/main/services/assets.ts (selectRuntimeBuild /
@@ -17,7 +17,7 @@
 #
 # Verify-before-trust: a real-hash MISMATCH deletes the zip and exits non-zero. A
 # placeholder zip hash extracts but reports UNVERIFIED. Idempotent via the MARKER, not
-# mere binary presence: a present llama-server whose .paid-runtime.json matches the
+# mere binary presence: a present llama-server whose .hilbertraum-runtime.json matches the
 # selected version + backend is skipped; a missing/stale marker re-fetches (so upgrading
 # a CPU-era drive to the Vulkan default actually replaces the build).
 #
@@ -265,7 +265,7 @@ EXTRACT_TO="$TARGET/${B_EXTRACT[$SEL]}"
 BIN_BASE="llama-server"; [[ "$FAMILY" == "whisper_cpp" ]] && BIN_BASE="whisper-cli"
 BIN_NAME="$BIN_BASE"; [[ "${B_OS[$SEL]}" == "win" ]] && BIN_NAME="$BIN_BASE.exe"
 BIN_PATH="$EXTRACT_TO/$BIN_NAME"
-MARKER_PATH="$EXTRACT_TO/.paid-runtime.json"
+MARKER_PATH="$EXTRACT_TO/.hilbertraum-runtime.json"
 URL="${B_URL[$SEL]}"
 SHA="${B_SHA[$SEL]}"
 
@@ -277,7 +277,7 @@ echo "  into:  $EXTRACT_TO"
 
 # Idempotent skip is MARKER-based (Phase 14, mirrors assets.ts runtimeInstallCurrent):
 # "binary exists" alone would silently keep a CPU-era build in place after the default
-# became vulkan. Skip only when .paid-runtime.json matches the selected version+backend.
+# became vulkan. Skip only when .hilbertraum-runtime.json matches the selected version+backend.
 if [[ -f "$BIN_PATH" ]]; then
   SKIP=0
   if [[ -f "$MARKER_PATH" ]]; then
@@ -287,7 +287,7 @@ if [[ -f "$BIN_PATH" ]]; then
     [[ "$m_version" == "$VERSION" && "$m_backend" == "${B_BACKEND[$SEL]}" ]] && SKIP=1
   fi
   if [[ $SKIP -eq 1 ]]; then
-    echo "  skip ($BIN_NAME already installed: $VERSION/${B_BACKEND[$SEL]} per .paid-runtime.json)"; exit 0
+    echo "  skip ($BIN_NAME already installed: $VERSION/${B_BACKEND[$SEL]} per .hilbertraum-runtime.json)"; exit 0
   fi
   echo "  $BIN_NAME present but install marker is missing or differs — re-fetching $VERSION/${B_BACKEND[$SEL]}"
 fi
@@ -397,7 +397,7 @@ if [[ -f "$BIN_PATH" ]]; then
   # Record exactly which build is installed (mirrors assets.ts writeRuntimeMarker).
   printf '{"version":"%s","backend":"%s","os":"%s","arch":"%s"}' \
     "$VERSION" "${B_BACKEND[$SEL]}" "${B_OS[$SEL]}" "${B_ARCH[$SEL]}" > "$MARKER_PATH"
-  echo "  extracted + chmod +x $BIN_NAME (+ .paid-runtime.json install marker)"
+  echo "  extracted + chmod +x $BIN_NAME (+ .hilbertraum-runtime.json install marker)"
   exit 0
 fi
 echo "  FAIL: $BIN_NAME not found under $EXTRACT_TO after extraction — the release archive layout may have changed." >&2

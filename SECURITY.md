@@ -1,4 +1,4 @@
-# Security Policy — Private AI Drive Lite
+# Security Policy — HilbertRaum
 
 _Last updated: 2026-06-09 (Phase 9)_
 
@@ -15,7 +15,7 @@ vulnerabilities. There is **no paid bug bounty** at this stage.
 
 ## Local threat model (summary)
 
-Private AI Drive Lite is a **local-first, offline** application. Full details live in
+HilbertRaum is a **local-first, offline** application. Full details live in
 [`docs/security-model.md`](docs/security-model.md).
 
 ### Assets we protect
@@ -44,7 +44,7 @@ Private AI Drive Lite is a **local-first, offline** application. Full details li
 - The MVP may permit a **plaintext developer workspace** for speed; this is gated by policy, clearly
   labelled, and is not the commercial default.
 - **A decrypted working copy of the database exists on disk while the app is unlocked.**
-  `node:sqlite` requires a real file, so the encrypted workspace is decrypted to `paid.sqlite` on the
+  `node:sqlite` requires a real file, so the encrypted workspace is decrypted to `hilbertraum.sqlite` on the
   drive while running and re-encrypted (and the plaintext shredded) on lock/quit. Re-indexing an
   encrypted document likewise decrypts it to a **transient** working file that is shredded when
   parsing finishes. A hard crash or power loss can leave such plaintext files behind; the app shreds

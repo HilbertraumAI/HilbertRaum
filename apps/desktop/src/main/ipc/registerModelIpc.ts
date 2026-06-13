@@ -207,7 +207,7 @@ export function registerModelIpc(ctx: AppContext): void {
     return status
   })
 
-  // Which sidecar build the drive carries (the .paid-runtime.json install marker) —
+  // Which sidecar build the drive carries (the .hilbertraum-runtime.json install marker) —
   // the Diagnostics "runtime build" line. Null on unmarked/DIY drives.
   ipcMain.handle(
     IPC.getRuntimeInstall,

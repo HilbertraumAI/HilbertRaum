@@ -8,7 +8,7 @@
   picks the build matching the host OS/arch (or -Os/-Arch/-Backend overrides), downloads
   the release zip, SHA-256-verifies it, and extracts it into the build's extract_to dir
   (runtime/llama.cpp/<os>/ for the default build; runtime/llama.cpp/<os>/cpu/ for the
-  pure-CPU safety net). After extraction a .paid-runtime.json install marker
+  pure-CPU safety net). After extraction a .hilbertraum-runtime.json install marker
   ({ version, backend, os, arch }) is written next to the binary.
 
   Mirrors apps/desktop/src/main/services/assets.ts (selectRuntimeBuild /
@@ -20,7 +20,7 @@
 
   Verify-before-trust: a real-hash MISMATCH deletes the zip and exits non-zero. A
   placeholder zip hash extracts but reports UNVERIFIED. Idempotent via the MARKER, not
-  mere binary presence: a present llama-server[.exe] whose .paid-runtime.json matches the
+  mere binary presence: a present llama-server[.exe] whose .hilbertraum-runtime.json matches the
   selected version + backend is skipped; a missing/stale marker re-fetches (so upgrading
   a CPU-era drive to the Vulkan default actually replaces the build).
 
@@ -255,7 +255,7 @@ $extractTo = Join-Path $Target ($build.extract_to -replace '/', [IO.Path]::Direc
 $binaryBase = if ($Family -eq 'whisper_cpp') { 'whisper-cli' } else { 'llama-server' }
 $binaryName = if ($build.os -eq 'win') { "$binaryBase.exe" } else { $binaryBase }
 $binaryPath = Join-Path $extractTo $binaryName
-$markerPath = Join-Path $extractTo '.paid-runtime.json'
+$markerPath = Join-Path $extractTo '.hilbertraum-runtime.json'
 $sha = ([string]$build.sha256).ToLower()
 
 Write-Host "Fetch runtime -> $Target" -ForegroundColor Cyan
@@ -266,7 +266,7 @@ if ($DryRun) { Write-Host '(dry run -- nothing will be downloaded)' -ForegroundC
 
 # Idempotent skip is MARKER-based (Phase 14, mirrors assets.ts runtimeInstallCurrent):
 # "binary exists" alone would silently keep a CPU-era build in place after the default
-# became vulkan. Skip only when .paid-runtime.json matches the selected version+backend.
+# became vulkan. Skip only when .hilbertraum-runtime.json matches the selected version+backend.
 if (Test-Path $binaryPath) {
   $skip = $false
   if (Test-Path $markerPath) {
@@ -276,7 +276,7 @@ if (Test-Path $binaryPath) {
     } catch { $skip = $false }
   }
   if ($skip) {
-    Write-Host "  skip ($binaryName already installed: $version/$($build.backend) per .paid-runtime.json)" -ForegroundColor Green
+    Write-Host "  skip ($binaryName already installed: $version/$($build.backend) per .hilbertraum-runtime.json)" -ForegroundColor Green
     exit 0
   }
   Write-Host "  $binaryName present but install marker is missing or differs -- re-fetching $version/$($build.backend)" -ForegroundColor Yellow
@@ -395,7 +395,7 @@ if (Test-Path $binaryPath) {
   $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
   $markerJson = '{"version":"' + $version + '","backend":"' + $build.backend + '","os":"' + $build.os + '","arch":"' + $build.arch + '"}'
   [System.IO.File]::WriteAllText($markerPath, $markerJson, $utf8NoBom)
-  Write-Host "  extracted $binaryName (+ .paid-runtime.json install marker)" -ForegroundColor Green
+  Write-Host "  extracted $binaryName (+ .hilbertraum-runtime.json install marker)" -ForegroundColor Green
   if ($build.os -ne 'win') {
     Write-Host "  NOTE: exec bit for $binaryName cannot be set from Windows; exFAT mounts are typically all-executable, otherwise chmod +x it on the target OS." -ForegroundColor Yellow
   }

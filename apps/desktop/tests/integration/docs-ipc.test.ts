@@ -35,8 +35,8 @@ import { invoke, type IpcHandlers } from '../helpers/ipc'
 const handlers = ipcState.handlers as unknown as IpcHandlers
 
 function freshWorkspace(): { db: Db; workspacePath: string } {
-  const root = mkdtempSync(join(tmpdir(), 'paid-docsipc-'))
-  return { db: openDatabase(join(root, 'paid.sqlite')), workspacePath: root }
+  const root = mkdtempSync(join(tmpdir(), 'hilbertraum-docsipc-'))
+  return { db: openDatabase(join(root, 'hilbertraum.sqlite')), workspacePath: root }
 }
 
 function ctxWith(db: Db, workspacePath: string, embedder: Embedder, unlocked: boolean): AppContext {

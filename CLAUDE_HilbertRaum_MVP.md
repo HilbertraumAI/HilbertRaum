@@ -1,8 +1,8 @@
-# CLAUDE.md — Private AI Drive Lite MVP
+# CLAUDE.md — HilbertRaum MVP
 
 _Last updated: 2026-06-09_
 
-This file is the working instruction document for building the **Private AI Drive Lite** MVP with Claude Code. It is intentionally detailed so that implementation context is preserved across coding sessions.
+This file is the working instruction document for building the **HilbertRaum** MVP with Claude Code. It is intentionally detailed so that implementation context is preserved across coding sessions.
 
 The project goal is to create an open-source local/offline AI application that can be installed on a user-owned USB-C SSD / NVMe drive and launched on a normal laptop. The commercial product will be a preconfigured drive sold to non-technical users, while advanced users can clone the GitHub repository and prepare their own drive.
 
@@ -72,11 +72,11 @@ Claude Code should:
 
 ### 1.1 Product name
 
-Working name: **Private AI Drive Lite**
+Working name: **HilbertRaum**
 
 Alternative names under consideration:
 
-- Private AI Drive
+- HilbertRaum
 - Sovereign AI Drive
 - Offline AI Drive
 - LocalGPT Drive
@@ -85,12 +85,12 @@ Alternative names under consideration:
 For MVP code and directories, use:
 
 ```text
-private-ai-drive-lite
+hilbertraum
 ```
 
 ### 1.2 Product thesis
 
-Private AI Drive Lite is an open-source offline AI workspace for normal laptop users.
+HilbertRaum is an open-source offline AI workspace for normal laptop users.
 
 The user plugs in an external USB-C SSD, launches the app, and gets:
 
@@ -175,7 +175,7 @@ The MVP is successful when a non-technical user can:
 
 ## 2. Scope
 
-### 2.1 Private AI Drive Lite MVP includes
+### 2.1 HilbertRaum MVP includes
 
 Core features:
 
@@ -576,7 +576,7 @@ Docker may be used for CI or developer utilities only.
 Target structure:
 
 ```text
-private-ai-drive-lite/
+hilbertraum/
 ├── CLAUDE.md
 ├── README.md
 ├── LICENSE
@@ -615,10 +615,10 @@ private-ai-drive-lite/
 │       │       └── logging/
 │       └── tests/
 ├── crates/
-│   ├── paid-core/
-│   ├── paid-rag/
-│   ├── paid-security/
-│   └── paid-benchmark/
+│   ├── hilbertraum-core/
+│   ├── hilbertraum-rag/
+│   ├── hilbertraum-security/
+│   └── hilbertraum-benchmark/
 ├── model-manifests/
 │   ├── chat/
 │   ├── embeddings/
@@ -650,7 +650,7 @@ private-ai-drive-lite/
 If this is too much for the first commit, start with:
 
 ```text
-private-ai-drive-lite/
+hilbertraum/
 ├── CLAUDE.md
 ├── README.md
 ├── apps/desktop
@@ -669,9 +669,9 @@ The prepared drive should have a clear layout.
 
 ```text
 PRIVATE_AI_DRIVE/
-├── Start Private AI Drive.exe
-├── Start Private AI Drive.app
-├── start-private-ai-drive.sh
+├── Start HilbertRaum.exe
+├── Start HilbertRaum.app
+├── start-hilbertraum.sh
 ├── app/
 │   ├── windows/
 │   ├── macos/
@@ -711,7 +711,7 @@ PRIVATE_AI_DRIVE/
 
 ```json
 {
-  "product": "Private AI Drive Lite",
+  "product": "HilbertRaum",
   "drive_format_version": 1,
   "created_at": "2026-06-09T00:00:00Z",
   "edition": "lite",
@@ -889,7 +889,7 @@ Responsibilities:
 Base system prompt:
 
 ```text
-You are Private AI Drive Lite, a local offline assistant running on the user's laptop.
+You are HilbertRaum, a local offline assistant running on the user's laptop.
 You must be helpful, accurate, and honest about uncertainty.
 You do not have internet access.
 You must not claim to have accessed external services.
@@ -1043,7 +1043,7 @@ Responsibilities:
 Required UI text:
 
 ```text
-Private AI Drive Lite runs models locally on your laptop.
+HilbertRaum runs models locally on your laptop.
 Your prompts, documents, embeddings, and chat history stay on this device/drive unless you explicitly export them.
 This app does not send your data to cloud AI providers.
 ```
@@ -1268,7 +1268,7 @@ Show:
 Example:
 
 ```text
-Private AI Drive Lite is ready.
+HilbertRaum is ready.
 
 Offline Mode: ON
 Active model: Qwen3 4B
@@ -1412,8 +1412,8 @@ Your laptop is best suited for Fast Mode. Larger models may run slowly.
 Commands should eventually be:
 
 ```bash
-git clone https://github.com/OUR_ORG/private-ai-drive-lite.git
-cd private-ai-drive-lite
+git clone https://github.com/OUR_ORG/hilbertraum.git
+cd hilbertraum
 pnpm install
 pnpm dev
 ```
@@ -1703,7 +1703,7 @@ Acceptance criteria:
 Use this as the canonical demo:
 
 1. Laptop has Wi-Fi turned off.
-2. User plugs in Private AI Drive Lite.
+2. User plugs in HilbertRaum.
 3. User launches app.
 4. Home screen says:
    - Offline Mode: ON
@@ -1732,7 +1732,7 @@ Use this as the canonical demo:
 ### 18.1 Offline statement
 
 ```text
-Offline Mode is on. Private AI Drive Lite runs the AI model on your laptop.
+Offline Mode is on. HilbertRaum runs the AI model on your laptop.
 Your prompts, documents, embeddings, and chat history stay local.
 ```
 
@@ -1973,7 +1973,7 @@ The MVP Lite is done when:
 
 ## 23. Development philosophy
 
-Private AI Drive Lite is not trying to beat frontier cloud models.
+HilbertRaum is not trying to beat frontier cloud models.
 
 It is trying to be:
 

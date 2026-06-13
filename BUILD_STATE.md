@@ -1,4 +1,4 @@
-# BUILD STATE — Private AI Drive Lite
+# BUILD STATE — HilbertRaum
 
 > **This is the handoff/transport file between build steps and sessions.**
 > Read this FIRST at the start of every session. Update it at the END of every phase
@@ -6,14 +6,28 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
-_Last updated: 2026-06-13 — **UX polish: live dictation waveform in the chat composer.**
-A read-only Web Audio analyser tap on the existing mic stream now drives an in-input
-`<canvas>` waveform (`renderer/chat/Waveform.tsx`) + a dimmed-draft/accent-border recording
-state, so it's unmistakable that capture has started (the OS mic indicator + button pulse
-were the only prior signals). Decorative + `prefers-reduced-motion`-aware; degrades to no
-wave (pulse + dim only) without Web Audio; the WAV pipeline is byte-identical. Zero new
-deps, fully local. Tests green (1084 passed); verified in the built app (both themes) via
-`walk-waveform.mjs`. Record: wave-3 plan §10 + `architecture.md` "Voice dictation"._
+_Last updated: 2026-06-13 — **Rebrand: "Private AI Drive Lite" / "PAID" → "HilbertRaum".**
+Repo-wide rename across code, design, and docs. User-facing brand "Private AI Drive Lite"
+(and the bare "Private AI Drive") → **HilbertRaum** everywhere (window title, renderer brand,
+i18n EN/DE copy, system prompt, READ ME FIRST, all docs + the spec, now
+`CLAUDE_HilbertRaum_MVP.md`). The **`PAID` acronym was also retired from code identifiers**
+(decision: full-depth rename, no in-field drives to preserve): env-var prefix `PAID_*` →
+`HILBERTRAUM_*` (incl. every `PAID_*_SMOKE` manual harness + `HILBERTRAUM_DRIVE_ROOT` /
+`HILBERTRAUM_MANIFESTS_DIR` / `HILBERTRAUM_LLAMA_BIN` / `HILBERTRAUM_WHISPER_BIN`); on-disk
+working DB `paid.sqlite` → `hilbertraum.sqlite` (+ `.enc`/`-wal`/`-shm`); runtime install
+marker `.paid-runtime.json` → `.hilbertraum-runtime.json`; **encryption format magic
+`PAIDENC1` → `HRAUMEN1`** (8 bytes, encode/decode in `security/crypto.ts`); vault verifier
+plaintext `paid-vault-verifier-v1` → `hilbertraum-vault-verifier-v1`; localStorage keys
+`paid.uiLanguage` / `paid.chat.listCollapsed` → `hilbertraum.*`. Package names →
+`hilbertraum` / `@hilbertraum/desktop`; electron-builder `appId` →
+`space.hilbertraum.app`, `productName`/artifact → `HilbertRaum`; launcher files renamed
+(`Start HilbertRaum.cmd`/`.command`, `start-hilbertraum.sh`). **These on-disk changes are
+NOT backward-compatible** — an existing pre-rebrand vault/drive would not be recognized;
+acceptable per the user decision (MVP not yet shipped). Typecheck clean, build OK, tests
+green (1084 passed / 25 skipped — unchanged baseline)._
+
+_(prior) UX polish: live dictation waveform in the chat composer —
+`renderer/chat/Waveform.tsx`; record: wave-3 plan §10 + `architecture.md` "Voice dictation"._
 
 _**Phase 42 (German QA + closeout) is DONE ⇒ the i18n wave
 (Phases 39–42) is COMPLETE.** The working paper `docs/i18n-plan.md` was condensed into
@@ -275,9 +289,9 @@ Repo root: `f:\_coding\ai_drive`.
   validated in `deriveKey`. New dep: `@noble/hashes` (pure-JS, externalized like the parser libs).
 - **Whole-DB-FILE encryption-at-rest (Phase 9, plan §4b):** `node:sqlite` has no SQLCipher, so the
   whole file is encrypted (AES-256-GCM, fresh 12-byte IV/encryption, 16-byte tag) — **the spec §8
-  schema is identical in both modes**. At-rest artifact = `paid.sqlite.enc` (framed
+  schema is identical in both modes**. At-rest artifact = `hilbertraum.sqlite.enc` (framed
   `MAGIC|iv|tag|ciphertext`). **On unlock:** verify password against an authenticated verifier (no
-  DB touched) → decrypt `.enc` → `paid.sqlite` **on the drive** → `openDatabase`. **On lock/quit:**
+  DB touched) → decrypt `.enc` → `hilbertraum.sqlite` **on the drive** → `openDatabase`. **On lock/quit:**
   `PRAGMA wal_checkpoint(TRUNCATE)` + close → re-encrypt → `.enc` → **shred** the plaintext working
   file + `-wal`/`-shm`. The plaintext working copy on disk while unlocked is a **documented
   limitation**; secure-erase is **best-effort** on SSDs (wear-levelling).
@@ -300,7 +314,7 @@ Repo root: `f:\_coding\ai_drive`.
   unlock/lock at call time.
 - **Sidecar discovery + env override (Phase 10):** `resolveLlamaServerPath(rootPath, platform, env)`
   finds `runtime/llama.cpp/<os>/llama-server[.exe]` (`win`/`mac`/`linux` sub-dirs, spec §6); a
-  `PAID_LLAMA_BIN` env var overrides for dev. Pure `existsSync` — the "binary present?" check has no
+  `HILBERTRAUM_LLAMA_BIN` env var overrides for dev. Pure `existsSync` — the "binary present?" check has no
   I/O surprises. `findFreePort()` picks a free **loopback** port (listen `127.0.0.1:0` → read → close;
   an inbound bind, not the outbound `connect` the offline guard watches).
 - **Localhost-only binding (LOCKED, Phase 10):** every sidecar is spawned with `--host 127.0.0.1` and
@@ -359,7 +373,7 @@ Repo root: `f:\_coding\ai_drive`.
 - **Portable Windows target via electron-builder (Phase 11):** `electron-builder.yml` defines a
   `portable` Windows `.exe` (launch-from-drive) + `mac`(dir)/`linux`(AppImage) for parity.
   `model-manifests/` ship as `extraResources` (found via `resolveManifestsDir(app.getAppPath())` →
-  `resources/model-manifests`; `PAID_MANIFESTS_DIR` overrides); prod deps (the externalized parser
+  `resources/model-manifests`; `HILBERTRAUM_MANIFESTS_DIR` overrides); prod deps (the externalized parser
   libs) ship inside `app.asar`; Electron stays **≥37** so `node:sqlite` exists. `npm run package` /
   `package:win` wired. **Building the real artifact is a MANUAL step** (R2 Electron download; npm
   workspace dep-hoisting may need attention) — it is NOT part of the green gate.
@@ -406,7 +420,7 @@ Repo root: `f:\_coding\ai_drive`.
   `0x94` byte decodes to `"` and breaks a double-quoted string — same class of bug as the Phase-11
   BOM issue).
 - **Launcher resolves the drive root from its OWN location (LOCKED, Phase 13):** the per-OS launcher
-  (`Start Private AI Drive.{cmd,command}` / `start-private-ai-drive.sh`) sets `PAID_DRIVE_ROOT` from
+  (`Start HilbertRaum.{cmd,command}` / `start-hilbertraum.sh`) sets `HILBERTRAUM_DRIVE_ROOT` from
   where it sits (`%~dp0` / `dirname "$0"`), **never** a hardcoded drive letter — drive letters/mounts
   change per machine, and the same drive must continue the **same encrypted workspace** on a second
   laptop (success criterion #10; `resolvePaths` already redirects all state onto the drive). Canonical,
@@ -450,12 +464,12 @@ Repo root: `f:\_coding\ai_drive`.
 
 - **GPU acceleration (Phases 14–16, 2026-06-10) — design record now `docs/architecture.md`
   "GPU acceleration — design record" (§1–§8):** Vulkan-first distribution +
-  `cpu/` safety net + `.paid-runtime.json` install markers (§1/§4), the 4-rung start ladder +
+  `cpu/` safety net + `.hilbertraum-runtime.json` install markers (§1/§4), the 4-rung start ladder +
   `--list-devices` probe (§5 — never pass `-ngl`; `--device none` is the only CPU-forcing
   mechanism), mid-generation crash auto-fallback over the `runtime:notice` channel (§5.3),
   E5 embedder pinned to CPU (§7), conservative profile bump via `gpuUsefulForProfile` (§8),
   Settings toggle + Diagnostics Acceleration/runtime-build/"Try GPU again" surface, and the
-  `PAID_GPU_SMOKE` manual harness. New `AppSettings` keys: `gpuMode 'auto'|'off'` (default
+  `HILBERTRAUM_GPU_SMOKE` manual harness. New `AppSettings` keys: `gpuMode 'auto'|'off'` (default
   `'auto'`), `gpuAutoDisabled`, `gpuLastError`, `gpuProbe`.
 - **GPU audit round (2026-06-10, post-Phase-16 — all findings remediated; commit `4549934`):**
   ① fetch-runtime upgrade bug (HIGH): re-fetching over an existing install never re-flattened
@@ -596,7 +610,7 @@ Repo root: `f:\_coding\ai_drive`.
   smokes on `D:\` (i7-1185G7): F16 loads on b9585, relevance correct, worst-case
   12-candidate batch ≈ 24.7 s CPU; `ragMinSimilarity` measured → stays 0 (§12.1 R3 —
   prefix-less E5 compresses all cosines into ~0.87–0.94, separation is the reranker's job);
-  the `PAID_RAG_QUALITY` end-to-end run validated the reranker rescuing the true clause
+  the `HILBERTRAUM_RAG_QUALITY` end-to-end run validated the reranker rescuing the true clause
   from #3-behind-distractors to #1 (the concrete justification for its ~25 s worst case).
 - **UI polish wave — Phases 23–27 (2026-06-10, branch `ui-phase-23-tokens-theming`, merged
   to master same day) — durable reference [`docs/design-guidelines.md`](docs/design-guidelines.md)
@@ -663,7 +677,7 @@ Repo root: `f:\_coding\ai_drive`.
   `documents.ocr_json` → re-ingest via the PdfParser `ocrPages` hook ⇒ page citations
   unchanged; photos OCR on import; `ocr:` asset class + `fetch-runtime --family ocr` +
   commercial gates; `AppStatus.ocrAvailable`). Wave close: **968/968 tests green** (+25
-  `PAID_*` manual skips), `PAID_OCR_SMOKE` + built-app eyeball walks PASSED on real assets.
+  `HILBERTRAUM_*` manual skips), `HILBERTRAUM_OCR_SMOKE` + built-app eyeball walks PASSED on real assets.
 - **Docs-vs-code audit + comment quality pass (2026-06-13):** a full systematic comparison of
   every doc against `apps/desktop/src` (8 parallel read-only audits, findings re-verified before
   changes) found the docs largely accurate; the real doc bugs fixed were: a never-shipped TINY
@@ -765,7 +779,7 @@ Repo root: `f:\_coding\ai_drive`.
   preamble + stream lifecycle that registerChatIpc/registerRagIpc kept in hand-synced lockstep); M-A3
   (`resolveModelByRole` + `composeServices` extracted from `initBackend`); M-A4 (the 1582-line
   `doctasks.ts` split into `doctasks/{summary,translation,compare,manager}.ts` behind a byte-identical
-  re-export barrel); M-A5 (the `PAID_*` manual-harness matrix documented as a required pre-release gate
+  re-export barrel); M-A5 (the `HILBERTRAUM_*` manual-harness matrix documented as a required pre-release gate
   in `packaging.md` + the canned-real-output regression-fixture policy). **The 2026-06-13 audit is now
   fully remediated** (every HIGH, MEDIUM, and LOW closed; the `docs/audit-2026-06-13.md` working report
   was deleted per its own lifecycle rule — the full annotated report, incl. the "Confirmed NON-issues"
@@ -790,7 +804,7 @@ Repo root: `f:\_coding\ai_drive`.
   theme-style enum guard; D-L2 LOCKED) + a Settings → General SegmentedControl picker
   (System/English/Deutsch — language names untranslated). Renderer `renderer/i18n.tsx`
   `I18nProvider`/`useT()`: re-resolves on settings load/patch, sets `<html lang>`, mirrors
-  the RESOLVED language to `localStorage('paid.uiLanguage')`; the pre-unlock gate resolves
+  the RESOLVED language to `localStorage('hilbertraum.uiLanguage')`; the pre-unlock gate resolves
   mirror → `navigator.language` (D-L3 LOCKED). Main `services/i18n.ts`: cached language
   from `app.getLocale()` (set after whenReady), re-resolved at plaintext startup, after
   unlock/create, and on `uiLanguage` patches; `tMain()` localizes ephemeral emissions —
@@ -866,7 +880,7 @@ Repo root: `f:\_coding\ai_drive`.
   "i18n-plan §" to "i18n record §" (§-numbers preserved):**
   ① full `de.ts` review pass — 9 value fixes (imperative consistency prüfe→prüf,
   Mock→Demo-Runtime, grammar/idiom fixes; commit `a4d91de`), the user holds the final
-  D-L7 human-review pass. ② German eyeball walk (`%TEMP%\paid-eyeball\walk-phase42.mjs`,
+  D-L7 human-review pass. ② German eyeball walk (`%TEMP%\hilbertraum-eyeball\walk-phase42.mjs`,
   shots in `shots-p42`): encrypted first-run gate flow + every screen at BOTH window
   extremes (880×600 / 1920×1040) with a programmatic overflow scan, plus an English
   regression leg via the picker. Three text-expansion findings, all fixed with LAYOUT:
@@ -1279,7 +1293,7 @@ document answers always run balanced (deep-grounded = wave 2).
 ### Real runtime + embedder (Phase 10 live)
 ✅ **`services/runtime/sidecar.ts`** — discovery + `LlamaServer` lifecycle.
 - `resolveLlamaServerPath(rootPath, platform, env)` → binary path | null (`runtime/llama.cpp/<os>/`,
-  `PAID_LLAMA_BIN` override); `llamaServerDir`/`llamaServerBinaryName`/`llamaOsDir`; `findFreePort()`;
+  `HILBERTRAUM_LLAMA_BIN` override); `llamaServerDir`/`llamaServerBinaryName`/`llamaOsDir`; `findFreePort()`;
   `defaultThreadCount()`; `LOOPBACK_HOST = '127.0.0.1'`.
 - **`LlamaServer`** owns one child process: `start()` (spawn `--host 127.0.0.1 --port <random> --model
   --ctx-size --threads` + `extraArgs`, then poll `/health` with a **timeout** → throw on crash/timeout),
@@ -1413,8 +1427,8 @@ document answers always run balanced (deep-grounded = wave 2).
   drive-letter + POSIX/macOS paths; throws on empty/relative. **No hardcoded path** — the canonical
   reference the launcher scripts mirror.
 ✅ **`launchers/`** (repo templates copied to the drive root by the pipeline) — `Start Private AI
-  Drive.cmd` (`%~dp0` → set `PAID_DRIVE_ROOT` → spawn `PrivateAIDriveLite-*-portable.exe`), `Start
-  Private AI Drive.command` (macOS, exec the `.app` binary with the env exported), `start-private-ai-
+  Drive.cmd` (`%~dp0` → set `HILBERTRAUM_DRIVE_ROOT` → spawn `HilbertRaum-*-portable.exe`), `Start
+  HilbertRaum.command` (macOS, exec the `.app` binary with the env exported), `start-private-ai-
   drive.sh` (Linux, next to the AppImage), `READ ME FIRST.txt` (friendly first-run + SmartScreen/
   Gatekeeper "Run anyway" copy).
 ✅ **`services/preflight.ts`** — `runPreflight({ rootPath, measureSpeed?, minFreeBytes? }) →
@@ -1428,7 +1442,7 @@ document answers always run balanced (deep-grounded = wave 2).
   `assertCommercialDrive(rootPath, manifests) → CommercialAssertion { ok, problems[], checks{
   policyCommercial, networkDenied, weightsVerified, noUserData }, modelResults }` (reuses `loadPolicy`
   + `verifyDriveModels`; flags network-allowed / plaintext / unverified-or-mismatch weights / present
-  user data — `workspace/paid.sqlite[.enc]`, `config/workspace.json`, non-empty `workspace/documents/`).
+  user data — `workspace/hilbertraum.sqlite[.enc]`, `config/workspace.json`, non-empty `workspace/documents/`).
 ✅ **`scripts/build-commercial-drive.{ps1,sh}`** — self-contained dual-shell master pipeline mirroring
   the plan; `-Target`/`--target` (req), `-AcceptLicense`/`--accept-license`, `-AppArtifact`/
   `--app-artifact` (a pre-built signed app to copy), `-SkipPackage`/`--skip-package`, `-DryRun`/
@@ -1498,7 +1512,7 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
 1b. **GPU manual hardware matrix (THIS list is canonical — release acceptance, cannot be CI'd):**
    ① Win11 + discrete NVIDIA (dev box RTX 3080 Ti — ✅ done via the Phase-15 smoke; capture tok/s
    for release notes) · ② Win + discrete AMD (Adrenalin) · ③ Win laptop, Intel Iris Xe only
-   (modest gain; profile does NOT bump) — **✅ done 2026-06-10 (i7-1185G7 + Iris Xe, `PAID_GPU_SMOKE`
+   (modest gain; profile does NOT bump) — **✅ done 2026-06-10 (i7-1185G7 + Iris Xe, `HILBERTRAUM_GPU_SMOKE`
    on `D:\`): probe sees "Intel(R) Iris(R) Xe Graphics" (8108 MiB), rung-1 starts as backend=gpu and
    streams, `gpuMode:off`→cpu, simulated rung-1 failure lands on the rung-3 CPU safety net; Iris Xe is
    integrated so `gpuUsefulForProfile` keeps the profile from bumping (unit-tested)** · ④ Win with no
@@ -1532,7 +1546,7 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
 
 **Current gate (2026-06-13, post i18n wave + FULL audit remediation — every HIGH/MEDIUM/LOW closed — on
 branch `audit-2026-06-13-high-fixes`): typecheck clean, 1083 tests pass (25 skipped — the manual
-tests behind `PAID_*` env vars: GPU/thinking/rerank/minsim/RAG-quality/bring-up/
+tests behind `HILBERTRAUM_*` env vars: GPU/thinking/rerank/minsim/RAG-quality/bring-up/
 eval/concurrency-probe/translation/compare/whisper/dictation/OCR smokes — skipped in CI),
 `npm run build` green. Full-suite runs on a loaded machine can flake 1–2 timeout failures
 (different tests each run; each passes in isolation — see the §3 2026-06-13 entry).** Per-phase gate history (test counts, bundle sizes, per-phase test
@@ -1555,7 +1569,7 @@ inventories) lives in git history.
 - **R4 Argon2id ✅ RESOLVED** — new vaults use pure-JS `@noble/hashes` Argon2id; scrypt vaults
   unlock unchanged forever (the descriptor records `algo` + params; see the §3 KDF decision).
 - **R5 Real llama.cpp ⚠️ PARTIALLY RESOLVED** — all mechanics are implemented + tested against
-  mocked processes/fetch, and every real-hardware smoke (`PAID_*`) has passed on provisioned
+  mocked processes/fetch, and every real-hardware smoke (`HILBERTRAUM_*`) has passed on provisioned
   drives; but binaries/weights are not in the repo, so the live spec-§17 demo from a real
   commercial drive remains the one manual acceptance step.
 - **R6 TLS-intercepting proxy on this machine** — `npm install` fails with

@@ -6,7 +6,7 @@ import { openDatabase, type Db } from '../../src/main/services/db'
 import { MockEmbedder, VectorIndex, encodeVector } from '../../src/main/services/embeddings'
 
 function freshDb(): Db {
-  return openDatabase(join(mkdtempSync(join(tmpdir(), 'paid-mismatch-')), 'test.sqlite'))
+  return openDatabase(join(mkdtempSync(join(tmpdir(), 'hilbertraum-mismatch-')), 'test.sqlite'))
 }
 
 /**

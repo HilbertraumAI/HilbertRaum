@@ -21,13 +21,13 @@ import {
 } from '../../src/main/services/ingestion'
 
 function freshDb(): Db {
-  return openDatabase(join(mkdtempSync(join(tmpdir(), 'paid-db-')), 'test.sqlite'))
+  return openDatabase(join(mkdtempSync(join(tmpdir(), 'hilbertraum-db-')), 'test.sqlite'))
 }
 function store(): string {
-  return documentsDir(mkdtempSync(join(tmpdir(), 'paid-ws-')))
+  return documentsDir(mkdtempSync(join(tmpdir(), 'hilbertraum-ws-')))
 }
 function write(name: string, data: string): string {
-  const p = join(mkdtempSync(join(tmpdir(), 'paid-emb-')), name)
+  const p = join(mkdtempSync(join(tmpdir(), 'hilbertraum-emb-')), name)
   writeFileSync(p, data)
   return p
 }

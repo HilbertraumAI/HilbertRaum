@@ -19,7 +19,7 @@ import type { DownloadJob } from '../../src/shared/types'
 // gate tests prove a closed gate never even reaches the fetch seam.
 
 function tempRoot(): string {
-  return mkdtempSync(join(tmpdir(), 'paid-downloads-'))
+  return mkdtempSync(join(tmpdir(), 'hilbertraum-downloads-'))
 }
 
 function sha256(s: string): string {

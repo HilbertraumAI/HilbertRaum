@@ -1,7 +1,7 @@
 #requires -Version 5.1
 <#
 .SYNOPSIS
-  Lay out a Private AI Drive Lite portable drive (spec §6 / Phase 11).
+  Lay out a HilbertRaum portable drive (spec §6 / Phase 11).
 
 .DESCRIPTION
   Creates the directory tree the app actually reads (workspace/, models/{chat,embeddings}/,
@@ -91,7 +91,7 @@ function Join-DrivePath([string]$rel) {
 
 # --- Build config payloads (snake_case shapes parsePolicy/resolvePaths accept) ------
 $DriveJson = [ordered]@{
-  product                  = 'Private AI Drive Lite'
+  product                  = 'HilbertRaum'
   drive_format_version     = 1
   created_at               = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
   edition                  = 'lite'
@@ -217,5 +217,5 @@ if ($WithAssets) {
   Write-Host "  3. Run scripts\verify-models.ps1 -Target '$Target' to verify checksums."
 }
 Write-Host ''
-Write-Host 'Launch from the drive with PAID_DRIVE_ROOT set to the drive root:' -ForegroundColor Cyan
-Write-Host "  `$env:PAID_DRIVE_ROOT = '$Target'"
+Write-Host 'Launch from the drive with HILBERTRAUM_DRIVE_ROOT set to the drive root:' -ForegroundColor Cyan
+Write-Host "  `$env:HILBERTRAUM_DRIVE_ROOT = '$Target'"

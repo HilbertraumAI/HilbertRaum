@@ -3,10 +3,10 @@ import { win32, posix } from 'node:path'
 // Launcher root resolution (spec §6 — plug-and-play distribution).
 //
 // A commercial drive ships an obvious, double-clickable launcher at the DRIVE ROOT
-// (`Start Private AI Drive.cmd` / `.command` / `start-private-ai-drive.sh`). The launcher
-// sets `PAID_DRIVE_ROOT` and spawns the portable app. CRITICAL RULE (CLAUDE.md / spec):
+// (`Start HilbertRaum.cmd` / `.command` / `start-hilbertraum.sh`). The launcher
+// sets `HILBERTRAUM_DRIVE_ROOT` and spawns the portable app. CRITICAL RULE (CLAUDE.md / spec):
 // drive letters + mount points change per machine (E:\ on one laptop, F:\ on the next,
-// /Volumes/PAID on a Mac), so the launcher MUST derive the drive root from its OWN
+// /Volumes/HILBERTRAUM on a Mac), so the launcher MUST derive the drive root from its OWN
 // location at launch — never a hardcoded path. This module is the canonical, unit-tested
 // reference for that resolution; the launcher scripts mirror it natively
 // (`%~dp0` on Windows, `dirname "$0"` on POSIX).
@@ -22,7 +22,7 @@ function detectFlavor(p: string): 'win32' | 'posix' {
 }
 
 /**
- * Resolve the drive root (the value a launcher exports as `PAID_DRIVE_ROOT`) from the
+ * Resolve the drive root (the value a launcher exports as `HILBERTRAUM_DRIVE_ROOT`) from the
  * launcher's OWN absolute path. The launcher sits AT the drive root, so the root is the
  * directory that contains it. Pure (path math only, no fs) so both Windows and POSIX
  * inputs are unit-testable on any host. There is NO hardcoded path: the result is always

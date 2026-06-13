@@ -39,7 +39,7 @@ import type { MessageKey } from '@shared/i18n'
 type Mode = 'chat' | 'documents'
 
 /** localStorage key for the conversation-list collapse (a UI preference, not user data). */
-export const LIST_COLLAPSED_KEY = 'paid.chat.listCollapsed'
+export const LIST_COLLAPSED_KEY = 'hilbertraum.chat.listCollapsed'
 
 /** Streamed tokens are batched and flushed on this cadence instead of per-token. */
 const STREAM_FLUSH_MS = 40

@@ -12,7 +12,7 @@ import {
 // dirs → report status. Mirrors what main/index.ts initBackend() does.
 describe('workspace initialization', () => {
   it('creates the required directory layout and reports a usable DriveStatus', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'paid-init-'))
+    const root = mkdtempSync(join(tmpdir(), 'hilbertraum-init-'))
     const paths = resolvePaths({ envRoot: root, fallbackRoot: root })
 
     ensureWorkspaceDirs(paths)

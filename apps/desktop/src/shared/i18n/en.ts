@@ -456,10 +456,10 @@ export const en = {
   'privacy.offlineOff': '○ Network access enabled',
   // spec §18.1 — the offline statement (verbatim in English).
   'privacy.statement.offline':
-    'Offline Mode is on. Private AI Drive Lite runs the AI model on your laptop. Your ' +
+    'Offline Mode is on. HilbertRaum runs the AI model on your laptop. Your ' +
     'prompts, documents, embeddings, and chat history stay local.',
   'privacy.statement.online':
-    'Private AI Drive Lite runs the AI model on your laptop. Your prompts, documents, ' +
+    'HilbertRaum runs the AI model on your laptop. Your prompts, documents, ' +
     'embeddings, and chat history stay local — even with internet access enabled, only ' +
     'model downloads use the network.',
   'privacy.statement.noUploads':

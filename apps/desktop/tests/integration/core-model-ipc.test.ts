@@ -30,13 +30,13 @@ const handlers = ipcState.handlers as unknown as IpcHandlers
 const REPO_MANIFESTS = join(process.cwd(), '..', '..', 'model-manifests')
 
 function seededDb(): Db {
-  const db = openDatabase(join(mkdtempSync(join(tmpdir(), 'paid-coreipc-')), 'test.sqlite'))
+  const db = openDatabase(join(mkdtempSync(join(tmpdir(), 'hilbertraum-coreipc-')), 'test.sqlite'))
   seedSettings(db)
   return db
 }
 
 function bogusConfigDir(): string {
-  return join(tmpdir(), 'paid-no-such-config-dir')
+  return join(tmpdir(), 'hilbertraum-no-such-config-dir')
 }
 
 beforeEach(() => ipcState.handlers.clear())
@@ -73,7 +73,7 @@ describe('registerModelIpc', () => {
   // Model handlers resolve the drive policy from `paths.configPath` (M10); a missing
   // config dir means "no policy file" → developer-friendly defaults.
   const noWeightPaths = (): { rootPath: string; configPath: string } => ({
-    rootPath: join(tmpdir(), 'paid-no-weights'),
+    rootPath: join(tmpdir(), 'hilbertraum-no-weights'),
     configPath: bogusConfigDir()
   })
 
@@ -178,7 +178,7 @@ describe('registerModelIpc', () => {
   // M10: the drive POLICY is authoritative — a commercial policy.json disables developer
   // leniency (and thus the mock fallback) even when the toggle/dev build says developer.
   it('a commercial policy vetoes developer leniency (no mock fallback)', async () => {
-    const configPath = mkdtempSync(join(tmpdir(), 'paid-policy-'))
+    const configPath = mkdtempSync(join(tmpdir(), 'hilbertraum-policy-'))
     writeFileSync(
       join(configPath, 'policy.json'),
       JSON.stringify({
@@ -191,7 +191,7 @@ describe('registerModelIpc', () => {
     const ctx = {
       db,
       manifestsDir: REPO_MANIFESTS,
-      paths: { rootPath: join(tmpdir(), 'paid-no-weights'), configPath },
+      paths: { rootPath: join(tmpdir(), 'hilbertraum-no-weights'), configPath },
       isDev: true,
       runtime: { start: async () => ({}), activeModelId: () => null }
     } as unknown as AppContext
@@ -219,7 +219,7 @@ describe('registerModelIpc', () => {
   // with a friendly error (the UI also disables the buttons; this guards auto-start and
   // non-UI callers). The mock fallback (missing weights) is NOT gated — it uses no RAM.
   it('startRuntime refuses installed weights that need more RAM than this machine has', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'paid-ramgate-'))
+    const root = mkdtempSync(join(tmpdir(), 'hilbertraum-ramgate-'))
     const manifestsDir = join(root, 'model-manifests')
     mkdirSync(manifestsDir, { recursive: true })
     writeFileSync(
@@ -325,7 +325,7 @@ describe('maybeAutoStartActiveModel', () => {
     return {
       db: opts.db,
       manifestsDir: REPO_MANIFESTS,
-      paths: { rootPath: join(tmpdir(), 'paid-no-weights'), configPath: bogusConfigDir() },
+      paths: { rootPath: join(tmpdir(), 'hilbertraum-no-weights'), configPath: bogusConfigDir() },
       isDev: true, // developer leniency → the missing-weights model may start (mock fallback)
       workspace: { isUnlocked: () => opts.unlocked !== false },
       runtime: {

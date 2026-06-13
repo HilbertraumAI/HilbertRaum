@@ -1,5 +1,5 @@
 ==============================================================================
-  Private AI Drive Lite  -  READ ME FIRST
+  HilbertRaum  -  READ ME FIRST
 ==============================================================================
 
 Welcome! This drive is your own private AI workspace. It runs entirely on your
@@ -10,9 +10,9 @@ documents, chats, and everything you type stay on this drive.
 HOW TO START
 ------------------------------------------------------------------------------
 
-  Windows :  Double-click   "Start Private AI Drive"
-  Mac     :  Double-click   "Start Private AI Drive.command"
-  Linux   :  Run            "start-private-ai-drive.sh"
+  Windows :  Double-click   "Start HilbertRaum"
+  Mac     :  Double-click   "Start HilbertRaum.command"
+  Linux   :  Run            "start-hilbertraum.sh"
 
 The first time you open it, you will be asked to create a password for your
 workspace. The password encrypts your workspace: your chats, your settings, and

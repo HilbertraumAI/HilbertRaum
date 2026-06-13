@@ -16,16 +16,16 @@ import type { RuntimeStartOptions } from '../../src/main/services/runtime'
 // MANUAL GPU smoke (Phase 15 green gate; architecture.md GPU record "Release acceptance") — NOT part of CI.
 //
 // The CI suite must stay green with zero binaries, zero models, and zero GPUs, so this
-// whole file is skipped unless PAID_GPU_SMOKE points at a provisioned drive root:
+// whole file is skipped unless HILBERTRAUM_GPU_SMOKE points at a provisioned drive root:
 //
-//   PAID_GPU_SMOKE=<root with runtime/llama.cpp/<os>/{,cpu/}llama-server + models/chat/*.gguf>
+//   HILBERTRAUM_GPU_SMOKE=<root with runtime/llama.cpp/<os>/{,cpu/}llama-server + models/chat/*.gguf>
 //   npx vitest run tests/manual/gpu-smoke.test.ts
 //
 // On the dev box (RTX 3080 Ti) this exercises, against the REAL b9585 Vulkan build:
 // rung-1 GPU start + streamed tokens, the forced-CPU rung (`--device none`), and a
 // simulated rung-1 failure landing on the rung-3 pure-CPU safety net.
 
-const ROOT = process.env.PAID_GPU_SMOKE?.trim() ?? ''
+const ROOT = process.env.HILBERTRAUM_GPU_SMOKE?.trim() ?? ''
 const enabled = ROOT.length > 0 && existsSync(ROOT)
 
 // Production keeps the locked 60 s health timeout; the smoke loads a multi-GB model
@@ -47,10 +47,10 @@ const patientMakeLlama = (
 function firstChatModel(root: string): string | null {
   const dir = join(root, 'models', 'chat')
   if (!existsSync(dir)) return null
-  // PAID_SMOKE_MODEL pins an explicit filename; otherwise prefer the SMALLEST chat model
+  // HILBERTRAUM_SMOKE_MODEL pins an explicit filename; otherwise prefer the SMALLEST chat model
   // so the smoke runs on modest laptops (e.g. a 16 GB Iris Xe box), not just the dev
   // workstation — the ladder/GPU mechanics don't depend on model size.
-  const override = process.env.PAID_SMOKE_MODEL?.trim()
+  const override = process.env.HILBERTRAUM_SMOKE_MODEL?.trim()
   if (override) {
     const p = join(dir, override)
     return existsSync(p) ? p : null

@@ -62,7 +62,7 @@ function healthFetch(readyAfter = 0) {
 
 describe('resolveLlamaServerPath', () => {
   it('finds the platform binary under runtime/llama.cpp/<os>/', () => {
-    const root = mkdtempSync(join(tmpdir(), 'paid-bin-'))
+    const root = mkdtempSync(join(tmpdir(), 'hilbertraum-bin-'))
     const dir = llamaServerDir(root, 'win32')
     mkdirSync(dir, { recursive: true })
     const bin = join(dir, llamaServerBinaryName('win32'))
@@ -71,16 +71,16 @@ describe('resolveLlamaServerPath', () => {
   })
 
   it('returns null when the binary is absent', () => {
-    const root = mkdtempSync(join(tmpdir(), 'paid-bin-'))
+    const root = mkdtempSync(join(tmpdir(), 'hilbertraum-bin-'))
     expect(resolveLlamaServerPath(root, 'win32', {})).toBeNull()
   })
 
-  it('honours the PAID_LLAMA_BIN override when it exists, else null', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'paid-bin-'))
+  it('honours the HILBERTRAUM_LLAMA_BIN override when it exists, else null', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'hilbertraum-bin-'))
     const explicit = join(dir, 'my-llama-server')
     writeFileSync(explicit, 'x')
-    expect(resolveLlamaServerPath('/nope', 'linux', { PAID_LLAMA_BIN: explicit })).toBe(explicit)
-    expect(resolveLlamaServerPath('/nope', 'linux', { PAID_LLAMA_BIN: join(dir, 'absent') })).toBeNull()
+    expect(resolveLlamaServerPath('/nope', 'linux', { HILBERTRAUM_LLAMA_BIN: explicit })).toBe(explicit)
+    expect(resolveLlamaServerPath('/nope', 'linux', { HILBERTRAUM_LLAMA_BIN: join(dir, 'absent') })).toBeNull()
   })
 
   it('maps platforms to os dirs and exe names', () => {
@@ -94,7 +94,7 @@ describe('resolveLlamaServerPath', () => {
 
 describe('resolveCpuFallbackServerPath (Phase 15, ladder rung 3)', () => {
   it('finds the safety-net binary under runtime/llama.cpp/<os>/cpu/', () => {
-    const root = mkdtempSync(join(tmpdir(), 'paid-cpubin-'))
+    const root = mkdtempSync(join(tmpdir(), 'hilbertraum-cpubin-'))
     const dir = join(llamaServerDir(root, 'win32'), 'cpu')
     mkdirSync(dir, { recursive: true })
     const bin = join(dir, llamaServerBinaryName('win32'))
@@ -103,7 +103,7 @@ describe('resolveCpuFallbackServerPath (Phase 15, ladder rung 3)', () => {
   })
 
   it('returns null when the drive ships no safety net (e.g. mac)', () => {
-    const root = mkdtempSync(join(tmpdir(), 'paid-cpubin-'))
+    const root = mkdtempSync(join(tmpdir(), 'hilbertraum-cpubin-'))
     expect(resolveCpuFallbackServerPath(root, 'darwin')).toBeNull()
   })
 })

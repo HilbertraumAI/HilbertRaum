@@ -1,7 +1,7 @@
 #requires -Version 5.1
 <#
 .SYNOPSIS
-  One-shot developer bootstrap for Private AI Drive Lite (Phase 11).
+  One-shot developer bootstrap for HilbertRaum (Phase 11).
 
 .DESCRIPTION
   Installs dependencies, then runs the build + tests as a smoke check. Uses

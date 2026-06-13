@@ -41,7 +41,7 @@ let db: Db
 let storeDir: string
 
 beforeEach(() => {
-  tmp = mkdtempSync(join(tmpdir(), 'paid-doctasks-'))
+  tmp = mkdtempSync(join(tmpdir(), 'hilbertraum-doctasks-'))
   db = openDatabase(join(tmp, 'test.sqlite'))
   storeDir = documentsDir(join(tmp, 'workspace'))
 })

@@ -1,10 +1,10 @@
 #!/bin/bash
 # ============================================================================
-#  Start Private AI Drive (macOS launcher) -- Phase 13, spec section 6.
+#  Start HilbertRaum (macOS launcher) -- Phase 13, spec section 6.
 #
 #  This file lives at the DRIVE ROOT. Double-clicking it starts the app.
 #  It derives the drive root from its OWN location every launch, so the same
-#  drive works on any Mac no matter where it mounts (/Volumes/PAID, etc.).
+#  drive works on any Mac no matter where it mounts (/Volumes/HILBERTRAUM, etc.).
 #  NO path is hardcoded.
 #
 #  Mirrors apps/desktop/src/main/services/launcher.ts resolveDriveRootFromLauncher.
@@ -13,9 +13,9 @@ set -e
 
 # The directory this script sits in = the drive root.
 DIR="$(cd "$(dirname "$0")" && pwd)"
-export PAID_DRIVE_ROOT="$DIR"
+export HILBERTRAUM_DRIVE_ROOT="$DIR"
 # One source of truth: the app reads the SAME manifests the drive scripts verified.
-export PAID_MANIFESTS_DIR="$DIR/model-manifests"
+export HILBERTRAUM_MANIFESTS_DIR="$DIR/model-manifests"
 
 # Find the packaged app bundle.
 APP=""
@@ -25,21 +25,21 @@ done
 
 if [ -z "$APP" ]; then
   echo
-  echo "  Could not find the Private AI Drive app on this drive."
-  echo "  Make sure 'Private AI Drive Lite.app' is in this folder."
+  echo "  Could not find the HilbertRaum app on this drive."
+  echo "  Make sure 'HilbertRaum.app' is in this folder."
   echo "  See docs/troubleshooting.md for help."
   echo
   exit 1
 fi
 
-# Launch the app binary directly so it inherits PAID_DRIVE_ROOT.
+# Launch the app binary directly so it inherits HILBERTRAUM_DRIVE_ROOT.
 # If macOS Gatekeeper blocks it the first time, right-click the .app and choose
 # "Open" (see READ ME FIRST.txt / docs/troubleshooting.md).
 BIN="$APP/Contents/MacOS/$(basename "$APP" .app)"
 if [ -x "$BIN" ]; then
   exec "$BIN"
 else
-  # `open` would NOT propagate PAID_DRIVE_ROOT (launchd strips the env) — the app would
+  # `open` would NOT propagate HILBERTRAUM_DRIVE_ROOT (launchd strips the env) — the app would
   # silently use a non-drive workspace. Fail with a message instead.
   echo
   echo "  Could not start the app binary inside '$APP'."

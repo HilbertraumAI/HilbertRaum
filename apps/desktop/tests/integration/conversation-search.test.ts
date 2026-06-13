@@ -36,7 +36,7 @@ import { invoke, type IpcHandlers } from '../helpers/ipc'
 const handlers = ipcState.handlers as unknown as IpcHandlers
 
 function freshDb(): Db {
-  return openDatabase(join(mkdtempSync(join(tmpdir(), 'paid-search-')), 'test.sqlite'))
+  return openDatabase(join(mkdtempSync(join(tmpdir(), 'hilbertraum-search-')), 'test.sqlite'))
 }
 
 function ftsRows(db: Db): Array<{ content: string; message_id: string }> {
@@ -84,7 +84,7 @@ describe('messages_fts migration', () => {
   it('backfills a pre-Phase-31 database (existing messages become searchable on open)', () => {
     // A DB with the pre-Phase-31 schema and message rows but no messages_fts — exactly
     // what an upgraded workspace looks like on disk (the chunks_fts backfill precedent).
-    const dir = mkdtempSync(join(tmpdir(), 'paid-search-mig-'))
+    const dir = mkdtempSync(join(tmpdir(), 'hilbertraum-search-mig-'))
     const path = join(dir, 'old.sqlite')
     const nodeRequire = createRequire(process.execPath)
     const { DatabaseSync } = nodeRequire('node:sqlite') as typeof import('node:sqlite')

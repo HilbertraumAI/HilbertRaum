@@ -38,9 +38,9 @@ import {
 // Workspace vault: the lock/unlock lifecycle for the encrypted workspace (spec §7.9).
 //
 // `node:sqlite` has no SQLCipher, so we encrypt the WHOLE database FILE at rest: the
-// at-rest artifact is `paid.sqlite.enc`. On unlock we derive the key, verify
+// at-rest artifact is `hilbertraum.sqlite.enc`. On unlock we derive the key, verify
 // the password against a small authenticated verifier, decrypt the blob to the working
-// file `paid.sqlite` ON THE DRIVE, and open it normally. On lock/quit we checkpoint +
+// file `hilbertraum.sqlite` ON THE DRIVE, and open it normally. On lock/quit we checkpoint +
 // close, re-encrypt the working file back to `.enc`, then shred the plaintext copy.
 //
 // The password + derived key live ONLY in memory. The on-disk descriptor
@@ -89,9 +89,9 @@ export interface VaultDescriptor {
 export interface VaultPaths {
   /** `config/workspace.json` — the unencrypted descriptor. */
   descriptorPath: string
-  /** `workspace/paid.sqlite.enc` — the encrypted-at-rest database. */
+  /** `workspace/hilbertraum.sqlite.enc` — the encrypted-at-rest database. */
   encPath: string
-  /** `workspace/paid.sqlite` — the decrypted working file (present only while unlocked). */
+  /** `workspace/hilbertraum.sqlite` — the decrypted working file (present only while unlocked). */
   dbPath: string
 }
 

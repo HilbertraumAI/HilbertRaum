@@ -30,11 +30,11 @@ import {
 // with the deterministic, judge-free scorer (tests/eval/score.ts). No cloud judge, no
 // telemetry; Wi-Fi off (the eval data is committed, the weights are already on the drive).
 //
-//   PAID_MODEL_EVAL=<root with runtime/llama.cpp/<os>/llama-server + models/{embeddings,chat,reranker}/*.gguf>
-//   PAID_EVAL_MODEL=<one chat .gguf filename>   # optional: score a single model
-//   PAID_EVAL_MACHINE=<label>                   # optional: CSV machine column (default hostname)
-//   PAID_EVAL_BACKEND=cpu|vulkan                # optional: CSV backend column (default cpu)
-//   PAID_EVAL_DIR=<dir>                         # optional: override the eval/ data dir
+//   HILBERTRAUM_MODEL_EVAL=<root with runtime/llama.cpp/<os>/llama-server + models/{embeddings,chat,reranker}/*.gguf>
+//   HILBERTRAUM_EVAL_MODEL=<one chat .gguf filename>   # optional: score a single model
+//   HILBERTRAUM_EVAL_MACHINE=<label>                   # optional: CSV machine column (default hostname)
+//   HILBERTRAUM_EVAL_BACKEND=cpu|vulkan                # optional: CSV backend column (default cpu)
+//   HILBERTRAUM_EVAL_DIR=<dir>                         # optional: override the eval/ data dir
 //   npx vitest run tests/manual/model-eval.test.ts
 //
 // Retrieval is IDENTICAL across chat models (one E5 embedding of the corpus, one reranker),
@@ -43,17 +43,17 @@ import {
 // 0) for reproducibility. Per-model QA columns + a per-item audit dump are written to
 // eval/results/ (the speed/RSS columns from §5.1/§5.2 are joined in per the protocol doc).
 
-const ROOT = process.env.PAID_MODEL_EVAL?.trim() ?? ''
+const ROOT = process.env.HILBERTRAUM_MODEL_EVAL?.trim() ?? ''
 const enabled = ROOT.length > 0 && existsSync(ROOT)
 const PATIENT_MS = 300_000
 
-const EVAL_DIR = process.env.PAID_EVAL_DIR?.trim() || resolve(__dirname, '../../../../eval')
+const EVAL_DIR = process.env.HILBERTRAUM_EVAL_DIR?.trim() || resolve(__dirname, '../../../../eval')
 const CORPUS_PATH = join(EVAL_DIR, 'corpus_de_en.jsonl')
 const ITEMS_PATH = join(EVAL_DIR, 'rag_de_en.jsonl')
 const RESULTS_DIR = join(EVAL_DIR, 'results')
 
-const MACHINE = process.env.PAID_EVAL_MACHINE?.trim() || hostname()
-const BACKEND = process.env.PAID_EVAL_BACKEND?.trim() || 'cpu'
+const MACHINE = process.env.HILBERTRAUM_EVAL_MACHINE?.trim() || hostname()
+const BACKEND = process.env.HILBERTRAUM_EVAL_BACKEND?.trim() || 'cpu'
 
 const SETTINGS: RagRetrievalSettings = ragSettingsFrom(DEFAULT_SETTINGS)
 
@@ -108,11 +108,11 @@ function firstModel(root: string, sub: string): string | null {
   return ggufs.length ? ggufs[0].path : null
 }
 
-/** Every chat GGUF on the drive (the whole catalog), or just PAID_EVAL_MODEL when set. */
+/** Every chat GGUF on the drive (the whole catalog), or just HILBERTRAUM_EVAL_MODEL when set. */
 function chatModels(root: string): Array<{ id: string; path: string }> {
   const dir = join(root, 'models', 'chat')
   if (!existsSync(dir)) return []
-  const only = process.env.PAID_EVAL_MODEL?.trim()
+  const only = process.env.HILBERTRAUM_EVAL_MODEL?.trim()
   return readdirSync(dir)
     .filter((f) => f.endsWith('.gguf'))
     .filter((f) => !only || f === only)
@@ -146,7 +146,7 @@ describe.skipIf(!enabled)('Phase-29 model quality benchmark (manual, real RAG pa
         }
       }
 
-      const db = openDatabase(join(mkdtempSync(join(tmpdir(), 'paid-eval-')), 'eval.sqlite'))
+      const db = openDatabase(join(mkdtempSync(join(tmpdir(), 'hilbertraum-eval-')), 'eval.sqlite'))
       const embedder = createE5Embedder({
         id: 'multilingual-e5-small-q8',
         binPath: binPath!,

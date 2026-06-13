@@ -9,8 +9,8 @@ import { containsGold } from '../eval/score'
 // MANUAL Phase-29 Gemma thinking-quality check (model-benchmarks.md §6 / the Gemma
 // `supports_thinking_mode` flag decision) — NOT CI.
 //
-//   PAID_GEMMA_THINKING=<root with runtime/llama.cpp/<os>/llama-server + models/chat/gemma4-...gguf>
-//   PAID_GEMMA_MODEL=gemma4-12b-it-qat-q4.gguf   # optional override
+//   HILBERTRAUM_GEMMA_THINKING=<root with runtime/llama.cpp/<os>/llama-server + models/chat/gemma4-...gguf>
+//   HILBERTRAUM_GEMMA_MODEL=gemma4-12b-it-qat-q4.gguf   # optional override
 //   npx vitest run tests/manual/gemma-thinking.test.ts
 //
 // Gemma 4's chat template honours `enable_thinking` (Phase-28 bring-up), but it ships
@@ -21,10 +21,10 @@ import { containsGold } from '../eval/score'
 // reasoning length. DECISION RULE: flip the flag iff Deep >= Balanced on correctness AND Deep
 // emits real reasoning (a non-empty chain-of-thought) — i.e. thinking helps and isn't inert.
 
-const ROOT = process.env.PAID_GEMMA_THINKING?.trim() ?? ''
+const ROOT = process.env.HILBERTRAUM_GEMMA_THINKING?.trim() ?? ''
 const enabled = ROOT.length > 0 && existsSync(ROOT)
 const PATIENT_MS = 300_000
-const MODEL = process.env.PAID_GEMMA_MODEL?.trim() || 'gemma4-12b-it-qat-q4.gguf'
+const MODEL = process.env.HILBERTRAUM_GEMMA_MODEL?.trim() || 'gemma4-12b-it-qat-q4.gguf'
 
 interface ReasoningItem {
   id: string
@@ -114,7 +114,7 @@ describe.skipIf(!enabled)('Phase-29 Gemma thinking-quality (manual, real b9585)'
 
       const outDir = resolve(__dirname, '../../../../eval/results')
       mkdirSync(outDir, { recursive: true })
-      const machine = (process.env.PAID_EVAL_MACHINE?.trim() || hostname()).replace(/[^A-Za-z0-9._-]+/g, '_')
+      const machine = (process.env.HILBERTRAUM_EVAL_MACHINE?.trim() || hostname()).replace(/[^A-Za-z0-9._-]+/g, '_')
       writeFileSync(
         join(outDir, `gemma-thinking-${machine}.json`),
         JSON.stringify({ model: MODEL, balOk, deepOk, n, deepEmitsReasoning, flipRecommended, rows }, null, 2),

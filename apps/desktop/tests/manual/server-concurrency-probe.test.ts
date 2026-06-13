@@ -17,12 +17,12 @@ import type { ChatMessage } from '../../src/main/services/runtime'
 // revisit. Record the findings in functionality-wave-3-plan §14.
 //
 // CI stays zero-network/zero-model/zero-binary, so this file is skipped unless
-// PAID_CONCURRENCY_PROBE points at a provisioned drive root (the PAID_GPU_SMOKE shape):
+// HILBERTRAUM_CONCURRENCY_PROBE points at a provisioned drive root (the HILBERTRAUM_GPU_SMOKE shape):
 //
-//   PAID_CONCURRENCY_PROBE=<root with runtime/llama.cpp/<os>/llama-server + models/chat/*.gguf>
+//   HILBERTRAUM_CONCURRENCY_PROBE=<root with runtime/llama.cpp/<os>/llama-server + models/chat/*.gguf>
 //   npx vitest run tests/manual/server-concurrency-probe.test.ts
 
-const ROOT = process.env.PAID_CONCURRENCY_PROBE?.trim() ?? ''
+const ROOT = process.env.HILBERTRAUM_CONCURRENCY_PROBE?.trim() ?? ''
 const enabled = ROOT.length > 0 && existsSync(ROOT)
 
 /** Generous health budget: weights may come from a cold USB drive. */

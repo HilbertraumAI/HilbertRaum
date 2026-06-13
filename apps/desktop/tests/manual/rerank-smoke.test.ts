@@ -7,9 +7,9 @@ import { resolveLlamaServerPath } from '../../src/main/services/runtime/sidecar'
 // MANUAL rerank smoke (Phase 21, rag-design §12.1 R1 / §12.3 live verification) — NOT CI.
 //
 // CI stays zero-network/zero-model/zero-binary, so this file is skipped unless
-// PAID_RERANK_SMOKE points at a provisioned drive root (same shape as PAID_GPU_SMOKE):
+// HILBERTRAUM_RERANK_SMOKE points at a provisioned drive root (same shape as HILBERTRAUM_GPU_SMOKE):
 //
-//   PAID_RERANK_SMOKE=<root with runtime/llama.cpp/<os>/llama-server + models/reranker/*.gguf>
+//   HILBERTRAUM_RERANK_SMOKE=<root with runtime/llama.cpp/<os>/llama-server + models/reranker/*.gguf>
 //   npx vitest run tests/manual/rerank-smoke.test.ts
 //
 // Against the REAL pinned b9585 build + the real bge-reranker-v2-m3 F16 GGUF this
@@ -20,7 +20,7 @@ import { resolveLlamaServerPath } from '../../src/main/services/runtime/sidecar'
 //   3. the wall-clock latency for a topKInitial-sized batch on the CPU pin — THE
 //      headline number the §7 resource budget is waiting for (record it in the plan).
 
-const ROOT = process.env.PAID_RERANK_SMOKE?.trim() ?? ''
+const ROOT = process.env.HILBERTRAUM_RERANK_SMOKE?.trim() ?? ''
 const enabled = ROOT.length > 0 && existsSync(ROOT)
 
 /** Generous health budget: a ~1.1 GB model from a possibly-cold USB drive. */

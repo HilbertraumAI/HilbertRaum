@@ -12,38 +12,38 @@ function tempDir(prefix: string): string {
 
 describe('resolveDriveRootFromLauncher', () => {
   it('derives the drive root from a Windows drive-letter launcher (no hardcoded letter)', () => {
-    expect(resolveDriveRootFromLauncher('E:\\Start Private AI Drive.cmd', 'win32')).toBe('E:\\')
+    expect(resolveDriveRootFromLauncher('E:\\Start HilbertRaum.cmd', 'win32')).toBe('E:\\')
     // The SAME drive on a second laptop gets a different letter — must follow it (criterion #10).
-    expect(resolveDriveRootFromLauncher('F:\\Start Private AI Drive.cmd', 'win32')).toBe('F:\\')
+    expect(resolveDriveRootFromLauncher('F:\\Start HilbertRaum.cmd', 'win32')).toBe('F:\\')
   })
 
   it('handles a launcher nested in a sub-folder of the drive', () => {
-    expect(resolveDriveRootFromLauncher('E:\\PRIVATE_AI\\Start Private AI Drive.cmd', 'win32')).toBe(
+    expect(resolveDriveRootFromLauncher('E:\\PRIVATE_AI\\Start HilbertRaum.cmd', 'win32')).toBe(
       'E:\\PRIVATE_AI'
     )
   })
 
   it('derives the drive root from a POSIX / macOS launcher', () => {
     expect(
-      resolveDriveRootFromLauncher('/Volumes/PRIVATE_AI_DRIVE/start-private-ai-drive.sh', 'posix')
+      resolveDriveRootFromLauncher('/Volumes/PRIVATE_AI_DRIVE/start-hilbertraum.sh', 'posix')
     ).toBe('/Volumes/PRIVATE_AI_DRIVE')
     expect(
-      resolveDriveRootFromLauncher('/Volumes/PAID/Start Private AI Drive.command', 'posix')
-    ).toBe('/Volumes/PAID')
+      resolveDriveRootFromLauncher('/Volumes/HILBERTRAUM/Start HilbertRaum.command', 'posix')
+    ).toBe('/Volumes/HILBERTRAUM')
   })
 
   it('auto-detects Windows vs POSIX grammar from the path', () => {
-    expect(resolveDriveRootFromLauncher('E:\\Start Private AI Drive.cmd')).toBe('E:\\')
-    expect(resolveDriveRootFromLauncher('/media/usb/start-private-ai-drive.sh')).toBe('/media/usb')
+    expect(resolveDriveRootFromLauncher('E:\\Start HilbertRaum.cmd')).toBe('E:\\')
+    expect(resolveDriveRootFromLauncher('/media/usb/start-hilbertraum.sh')).toBe('/media/usb')
     // Mixed separators still resolve (auto picks win32 on a backslash).
-    expect(resolveDriveRootFromLauncher('E:/PRIVATE_AI\\Start Private AI Drive.cmd')).toBe(
+    expect(resolveDriveRootFromLauncher('E:/PRIVATE_AI\\Start HilbertRaum.cmd')).toBe(
       'E:\\PRIVATE_AI'
     )
   })
 
   it('resolves a Windows UNC launcher to its share root (absolute)', () => {
     const root = resolveDriveRootFromLauncher(
-      '\\\\SERVER\\share\\Start Private AI Drive.cmd',
+      '\\\\SERVER\\share\\Start HilbertRaum.cmd',
       'win32'
     )
     expect(root.startsWith('\\\\SERVER\\share')).toBe(true)
@@ -55,7 +55,7 @@ describe('resolveDriveRootFromLauncher', () => {
   })
 
   it('rejects a bare filename / relative path with no absolute parent', () => {
-    expect(() => resolveDriveRootFromLauncher('Start Private AI Drive.cmd', 'win32')).toThrow(
+    expect(() => resolveDriveRootFromLauncher('Start HilbertRaum.cmd', 'win32')).toThrow(
       /absolute/
     )
     expect(() => resolveDriveRootFromLauncher('./sub/start.sh', 'posix')).toThrow(/absolute/)
@@ -66,7 +66,7 @@ describe('runPreflight', () => {
   const fastSpeed: DriveSpeed = { readMbps: 520, writeMbps: 410 }
 
   it('passes on a writable, fast drive with no problems', async () => {
-    const root = tempDir('paid-preflight-ok-')
+    const root = tempDir('hilbertraum-preflight-ok-')
     mkdirSync(join(root, 'workspace'), { recursive: true })
     const measureSpeed = vi.fn(async () => fastSpeed)
 
@@ -80,7 +80,7 @@ describe('runPreflight', () => {
   })
 
   it('surfaces a friendly, non-blocking slow-drive note (never "bad hardware")', async () => {
-    const root = tempDir('paid-preflight-slow-')
+    const root = tempDir('hilbertraum-preflight-slow-')
     mkdirSync(join(root, 'workspace'), { recursive: true })
     const slow: DriveSpeed = { readMbps: 9, writeMbps: 7 }
 
@@ -93,7 +93,7 @@ describe('runPreflight', () => {
   })
 
   it('flags a read-only drive as a problem (workspace cannot be created)', async () => {
-    const root = tempDir('paid-preflight-ro-')
+    const root = tempDir('hilbertraum-preflight-ro-')
     // Deliberately do NOT create the workspace dir → isWritable() probe fails → not writable.
     const res = await runPreflight({ rootPath: root, measureSpeed: async () => fastSpeed })
 
@@ -102,7 +102,7 @@ describe('runPreflight', () => {
   })
 
   it('flags low free space (non-blocking) when below the floor', async () => {
-    const root = tempDir('paid-preflight-space-')
+    const root = tempDir('hilbertraum-preflight-space-')
     mkdirSync(join(root, 'workspace'), { recursive: true })
 
     const res = await runPreflight({
@@ -119,7 +119,7 @@ describe('runPreflight', () => {
   it('does not report low space when free space is unmeasurable (freeBytes == null)', async () => {
     // A non-existent root → statfs throws → freeBytes is null; the low-space branch must
     // be skipped (guarded by `!= null`) even with an impossibly high floor.
-    const root = join(tempDir('paid-preflight-noroot-'), 'does-not-exist')
+    const root = join(tempDir('hilbertraum-preflight-noroot-'), 'does-not-exist')
     const res = await runPreflight({
       rootPath: root,
       measureSpeed: async () => fastSpeed,
@@ -130,7 +130,7 @@ describe('runPreflight', () => {
   })
 
   it('degrades to "could not measure" when the drive probe errors (no throw)', async () => {
-    const root = tempDir('paid-preflight-err-')
+    const root = tempDir('hilbertraum-preflight-err-')
     mkdirSync(join(root, 'workspace'), { recursive: true })
     const errored: DriveSpeed = { readMbps: null, writeMbps: null, error: 'probe failed' }
 

@@ -114,7 +114,7 @@ interface Harness {
 
 /** A drive root + DB + audit-wired ctx exercising the REAL handler registrations. */
 function makeHarness(): Harness {
-  const rootPath = mkdtempSync(join(tmpdir(), 'paid-auditipc-'))
+  const rootPath = mkdtempSync(join(tmpdir(), 'hilbertraum-auditipc-'))
   const workspacePath = join(rootPath, 'workspace')
   const configPath = join(rootPath, 'config')
   const manifestsDir = join(rootPath, 'model-manifests')
@@ -469,12 +469,12 @@ describe('workspace audit events (buffered while locked, flushed after unlock)',
   const FAST_KDF: KdfParams = { algo: 'scrypt', N: 1024, r: 8, p: 1, keyLen: 32 }
 
   it('unlock failures recorded while locked appear after the next successful unlock — never the password', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'paid-auditws-'))
+    const root = mkdtempSync(join(tmpdir(), 'hilbertraum-auditws-'))
     mkdirSync(join(root, 'config'), { recursive: true })
     mkdirSync(join(root, 'workspace'), { recursive: true })
     const vault = vaultPathsFrom({
       configPath: join(root, 'config'),
-      dbPath: join(root, 'workspace', 'paid.sqlite')
+      dbPath: join(root, 'workspace', 'hilbertraum.sqlite')
     })
     createEncryptedVaultOnDisk(vault, PASSWORD_SENTINEL, FAST_KDF)
     const ctrl = new WorkspaceController(vault, DEFAULT_POLICY, false)
@@ -505,12 +505,12 @@ describe('workspace audit events (buffered while locked, flushed after unlock)',
   })
 
   it('password change: success → content-free workspace_password_changed; wrong current → the unlock-failure class (Phase 32)', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'paid-auditpw-'))
+    const root = mkdtempSync(join(tmpdir(), 'hilbertraum-auditpw-'))
     mkdirSync(join(root, 'config'), { recursive: true })
     mkdirSync(join(root, 'workspace'), { recursive: true })
     const vault = vaultPathsFrom({
       configPath: join(root, 'config'),
-      dbPath: join(root, 'workspace', 'paid.sqlite')
+      dbPath: join(root, 'workspace', 'hilbertraum.sqlite')
     })
     createEncryptedVaultOnDisk(vault, PASSWORD_SENTINEL, FAST_KDF)
     const ctrl = new WorkspaceController(vault, DEFAULT_POLICY, false)

@@ -18,7 +18,7 @@ import {
 // `applyLanguageSetting` re-resolves, updates `<html lang>`, and rewrites the mirror.
 
 /** localStorage key mirroring the last RESOLVED language ('en' | 'de'). */
-export const UI_LANGUAGE_STORAGE_KEY = 'paid.uiLanguage'
+export const UI_LANGUAGE_STORAGE_KEY = 'hilbertraum.uiLanguage'
 
 function readMirror(): UiLanguage | null {
   try {

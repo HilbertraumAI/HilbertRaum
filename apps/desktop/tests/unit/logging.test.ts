@@ -12,7 +12,7 @@ describe('logging service (L17)', () => {
   let dir: string
 
   beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), 'paid-log-'))
+    dir = mkdtempSync(join(tmpdir(), 'hilbertraum-log-'))
     // The console echo is just dev noise here; silence it so a passing run stays quiet.
     vi.spyOn(console, 'log').mockImplementation(() => {})
     vi.spyOn(console, 'warn').mockImplementation(() => {})

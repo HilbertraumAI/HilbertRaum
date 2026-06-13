@@ -22,13 +22,13 @@ master pipeline** that produces a finished, sellable drive (see the last section
   runtime/
     llama.cpp/
       win/    llama-server.exe  (+ DLLs — Vulkan full build, incl. all CPU backends)
-              .paid-runtime.json            (install marker: version/backend/os/arch)
-        cpu/  llama-server.exe  (+ DLLs — pure-CPU safety net) + .paid-runtime.json
-      mac/    llama-server      (Metal build) + .paid-runtime.json
-      linux/  llama-server      (Vulkan full build) + .paid-runtime.json
-        cpu/  llama-server      (pure-CPU safety net) + .paid-runtime.json
+              .hilbertraum-runtime.json            (install marker: version/backend/os/arch)
+        cpu/  llama-server.exe  (+ DLLs — pure-CPU safety net) + .hilbertraum-runtime.json
+      mac/    llama-server      (Metal build) + .hilbertraum-runtime.json
+      linux/  llama-server      (Vulkan full build) + .hilbertraum-runtime.json
+        cpu/  llama-server      (pure-CPU safety net) + .hilbertraum-runtime.json
     whisper.cpp/
-      {win,mac,linux}/  whisper-cli[.exe]  (audio transcriber) + .paid-runtime.json
+      {win,mac,linux}/  whisper-cli[.exe]  (audio transcriber) + .hilbertraum-runtime.json
   models/
     chat/        qwen3-4b-instruct-q4.gguf  …
     embeddings/  multilingual-e5-small-q8.gguf
@@ -41,7 +41,7 @@ master pipeline** that produces a finished, sellable drive (see the last section
 - **Sidecar binaries** — prebuilt `llama.cpp` `llama-server` executables, one folder per OS. The OS
   sub-dir (`win`/`mac`/`linux`) and the executable name (`llama-server.exe` on Windows, `llama-server`
   elsewhere) are resolved by `resolveLlamaServerPath(rootPath, platform)` in
-  `services/runtime/sidecar.ts`. A `PAID_LLAMA_BIN` env var overrides the path for dev.
+  `services/runtime/sidecar.ts`. A `HILBERTRAUM_LLAMA_BIN` env var overrides the path for dev.
 - **Model weights** — GGUF files under `models/`, resolved from each manifest's `local_path` (relative
   to the drive root) via `weightPath(rootPath, manifest)`. They are **git-ignored**; a real drive is
   built by Phase 11's prepare-drive scripts (and verified against the manifest `sha256`). The bundled
@@ -97,13 +97,13 @@ Key config points:
   runtime-only-failure class as the externalized parsers).
 - **`model-manifests/` ship as `extraResources`** (beside `app.asar`). The packaged main process
   finds them via `resolveManifestsDir(app.getAppPath())`, which walks up to `resources/model-manifests`;
-  `PAID_MANIFESTS_DIR` overrides. Weights + sidecar binaries + the `ocr/` language files are
+  `HILBERTRAUM_MANIFESTS_DIR` overrides. Weights + sidecar binaries + the `ocr/` language files are
   **never** bundled — they live on the prepared drive.
 - The build output goes to `apps/desktop/release/` (git-ignored).
 
 ### Launching from a drive
 Copy the portable `.exe` to the drive root next to the prepared layout, then launch it with
-`PAID_DRIVE_ROOT` pointing at the drive root (the drive's launcher sets this; `resolvePaths` keys
+`HILBERTRAUM_DRIVE_ROOT` pointing at the drive root (the drive's launcher sets this; `resolvePaths` keys
 off `config/drive.json`). The app then reads `models/`, `workspace/`, `config/`, etc. from the drive.
 
 > ⚠️ **Producing the actual artifact is a MANUAL step (R2/R5).** electron-builder may download the
@@ -123,7 +123,7 @@ out on a fresh machine with no Node/npm); their layout + config shapes mirror th
 |---|---|
 | `prepare-drive.{ps1,sh}` | Create the directory tree, copy manifests + user docs, generate `config/{drive,policy}.json`. `-DryRun`/`--dry-run` prints the plan. `-Dev`/`--dev` → a plaintext developer drive. **`-WithAssets`/`--with-assets`** (Phase 12) then runs `fetch-models` + `fetch-runtime` (forwarding `-AcceptLicense`/`--accept-license`) for a launch-ready drive. |
 | `fetch-models.{ps1,sh}` | (Phase 12) Download + **resume** + **SHA-256-verify** each weight with a `download:` block to its `models/...` path. `-Only <id>`/`--only` for one model; `-AcceptLicense`/`--accept-license` for the license gate; `-DryRun`/`--dry-run`. Real-hash mismatch → delete partial + exit 1. Idempotent (present + verified → skip). |
-| `fetch-runtime.{ps1,sh}` | (Phase 12; GPU defaults Phase 14) Read `runtime-sources.yaml`, pick the host build (`-Os/-Arch/-Backend` overrides; **default = the first listed build: Vulkan on win/linux, Metal on mac**; `-Backend cpu` fetches the pure-CPU safety net into `runtime/llama.cpp/<os>/cpu/`), download + verify the archive, extract into the build's `extract_to` (`chmod +x` on mac/linux), and write a `.paid-runtime.json` install marker. Idempotent **via the marker** (version + backend must match — a missing/stale marker re-fetches, so a CPU-era drive actually upgrades); `-DryRun`/`--dry-run`. `-Family`/`--family` selects the asset family: `llama_cpp` (default), `whisper_cpp` (the transcriber CLI), or `ocr` (language files). |
+| `fetch-runtime.{ps1,sh}` | (Phase 12; GPU defaults Phase 14) Read `runtime-sources.yaml`, pick the host build (`-Os/-Arch/-Backend` overrides; **default = the first listed build: Vulkan on win/linux, Metal on mac**; `-Backend cpu` fetches the pure-CPU safety net into `runtime/llama.cpp/<os>/cpu/`), download + verify the archive, extract into the build's `extract_to` (`chmod +x` on mac/linux), and write a `.hilbertraum-runtime.json` install marker. Idempotent **via the marker** (version + backend must match — a missing/stale marker re-fetches, so a CPU-era drive actually upgrades); `-DryRun`/`--dry-run`. `-Family`/`--family` selects the asset family: `llama_cpp` (default), `whisper_cpp` (the transcriber CLI), or `ocr` (language files). |
 | `verify-models.{ps1,sh}` | SHA-256 each present weight vs its manifest hash (placeholder → *UNVERIFIED*; real mismatch → fail/exit 1). `-Generate`/`--generate` writes `config/checksums.json`. |
 | `setup-dev.{ps1,sh}` | Dev bootstrap: `NODE_OPTIONS=--use-system-ca npm install` (R6) + build + test smoke. |
 
@@ -181,16 +181,16 @@ The classic portable-Electron pitfall (settings leaking into `%APPDATA%`) does n
 First-run polish is `services/preflight.ts` (writable/free-space/slow-drive checks, friendly +
 non-blocking, surfaced on Home); encrypted-by-default onboarding is kept.
 
-### The launcher (sets `PAID_DRIVE_ROOT` from its OWN location)
+### The launcher (sets `HILBERTRAUM_DRIVE_ROOT` from its OWN location)
 
 The drive root ships an obvious, double-clickable launcher (spec §6 names). Source templates live in
 `launchers/` and are copied to the drive root by the pipeline:
 
 | OS | File | What it does |
 |---|---|---|
-| Windows | `Start Private AI Drive.cmd` | `%~dp0` → drive root → set `PAID_DRIVE_ROOT` → spawn the portable `.exe`. |
-| macOS | `Start Private AI Drive.command` | `cd "$(dirname "$0")"` → export `PAID_DRIVE_ROOT` → exec the `.app` binary. |
-| Linux | `start-private-ai-drive.sh` | same, next to the AppImage. |
+| Windows | `Start HilbertRaum.cmd` | `%~dp0` → drive root → set `HILBERTRAUM_DRIVE_ROOT` → spawn the portable `.exe`. |
+| macOS | `Start HilbertRaum.command` | `cd "$(dirname "$0")"` → export `HILBERTRAUM_DRIVE_ROOT` → exec the `.app` binary. |
+| Linux | `start-hilbertraum.sh` | same, next to the AppImage. |
 | all | `READ ME FIRST.txt` | friendly first-run + SmartScreen/Gatekeeper instructions. |
 
 > ⚠️ **No hardcoded paths — drive letters change per machine.** The launcher derives the root from
@@ -244,12 +244,12 @@ final check: commercial posture (encrypted, network denied) + all weights VERIFI
 
 ```powershell
 # Windows (supply a pre-built, signed .exe; or --skip-package to assemble + sign yourself)
-.\scripts\build-commercial-drive.ps1 -Target E:\ -AcceptLicense -AppArtifact .\apps\desktop\release\PrivateAIDriveLite-0.1.0-portable.exe
+.\scripts\build-commercial-drive.ps1 -Target E:\ -AcceptLicense -AppArtifact .\apps\desktop\release\HilbertRaum-0.1.0-portable.exe
 .\scripts\build-commercial-drive.ps1 -Target E:\ -AcceptLicense -DryRun        # print the plan
 ```
 ```bash
 # macOS / Linux
-scripts/build-commercial-drive.sh --target /Volumes/PAID --accept-license --app-artifact ./apps/desktop/release/Private\ AI\ Drive\ Lite.app
+scripts/build-commercial-drive.sh --target /Volumes/HILBERTRAUM --accept-license --app-artifact ./apps/desktop/release/Private\ AI\ Drive\ Lite.app
 ```
 
 The final automated check asserts the **commercial posture** (`policy.json`: encryption required,
@@ -283,13 +283,13 @@ run one real-model session covering:
    pre-Vulkan-1.2 degradation, the mid-generation driver-crash auto-fallback, and the
    machine-move re-probe (1↔4). Measured tok/s feed the release notes.
 
-### The `PAID_*` manual harness matrix — a REQUIRED pre-release gate (audit M-A5)
+### The `HILBERTRAUM_*` manual harness matrix — a REQUIRED pre-release gate (audit M-A5)
 
 The riskiest integration surface — real `spawn`, the llama-server SSE stream, GPU
 `--list-devices` parsing, whisper-cli, WASM OCR, real weights, real retrieval quality —
 is **deliberately not in CI** (the zero-binary / zero-network green-gate posture, audit
 M-A5). It is covered instead by the `tests/manual/*.test.ts` harnesses, each gated behind
-a `PAID_*` env var that points at a provisioned drive / binary / model. They are skipped
+a `HILBERTRAUM_*` env var that points at a provisioned drive / binary / model. They are skipped
 unless that env var is set, so a green CI run says nothing about them.
 
 **Before any drive ships, run the applicable subset against the real artifacts** (the dev
@@ -298,20 +298,20 @@ Treat this as part of the gate, not optional polish:
 
 | Harness | Env var(s) | Proves |
 | --- | --- | --- |
-| `bringup-smoke` | `PAID_BRINGUP_SMOKE` | the runtime starts + streams against the real binary |
-| `gpu-smoke` | `PAID_GPU_SMOKE` | rung-1 GPU start, forced-CPU rung, rung-3 safety net |
-| `thinking-smoke` / `gemma-thinking` | `PAID_THINKING_SMOKE` / `PAID_GEMMA_THINKING` | deep-mode reasoning channel |
-| `rerank-smoke` | `PAID_RERANK_SMOKE` | the reranker sidecar reorders retrieval |
-| `whisper-smoke` / `dictation-smoke` | `PAID_WHISPER_SMOKE` / `PAID_DICTATION_SMOKE` | whisper-cli transcription + dictation |
-| `ocr-smoke` | `PAID_OCR_SMOKE` | WASM OCR over a real scan |
-| `compare-smoke` / `translation-smoke` | `PAID_COMPARE_SMOKE` / `PAID_TRANSLATION_SMOKE` | the doc-task pipelines end-to-end |
-| `rag-quality` / `minsim-measure` | `PAID_RAG_QUALITY` / `PAID_MINSIM_MEASURE` | retrieval quality + the similarity floor |
-| `server-concurrency-probe` | `PAID_CONCURRENCY_PROBE` | the one-at-a-time sidecar invariant |
-| `model-eval` | `PAID_MODEL_EVAL` | the model-recommendation ladder on real hardware |
+| `bringup-smoke` | `HILBERTRAUM_BRINGUP_SMOKE` | the runtime starts + streams against the real binary |
+| `gpu-smoke` | `HILBERTRAUM_GPU_SMOKE` | rung-1 GPU start, forced-CPU rung, rung-3 safety net |
+| `thinking-smoke` / `gemma-thinking` | `HILBERTRAUM_THINKING_SMOKE` / `HILBERTRAUM_GEMMA_THINKING` | deep-mode reasoning channel |
+| `rerank-smoke` | `HILBERTRAUM_RERANK_SMOKE` | the reranker sidecar reorders retrieval |
+| `whisper-smoke` / `dictation-smoke` | `HILBERTRAUM_WHISPER_SMOKE` / `HILBERTRAUM_DICTATION_SMOKE` | whisper-cli transcription + dictation |
+| `ocr-smoke` | `HILBERTRAUM_OCR_SMOKE` | WASM OCR over a real scan |
+| `compare-smoke` / `translation-smoke` | `HILBERTRAUM_COMPARE_SMOKE` / `HILBERTRAUM_TRANSLATION_SMOKE` | the doc-task pipelines end-to-end |
+| `rag-quality` / `minsim-measure` | `HILBERTRAUM_RAG_QUALITY` / `HILBERTRAUM_MINSIM_MEASURE` | retrieval quality + the similarity floor |
+| `server-concurrency-probe` | `HILBERTRAUM_CONCURRENCY_PROBE` | the one-at-a-time sidecar invariant |
+| `model-eval` | `HILBERTRAUM_MODEL_EVAL` | the model-recommendation ladder on real hardware |
 
 **Canned-real-output regression-fixture policy:** because these never run in CI, an
 upstream format change (SSE shape, `--list-devices` lines, whisper JSON) would otherwise
-slip past the green gate and only surface on real hardware. So **whenever a `PAID_*` run
+slip past the green gate and only surface on real hardware. So **whenever a `HILBERTRAUM_*` run
 observes an upstream output format change — or a new format worth pinning — capture the
 verbatim real output into `apps/desktop/tests/fixtures/` and assert a pure parser against
 it in a CI unit test** (the bytes are kept binary via `.gitattributes`). The first such

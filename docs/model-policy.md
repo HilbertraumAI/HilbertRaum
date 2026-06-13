@@ -1,4 +1,4 @@
-# Model Policy — Private AI Drive Lite
+# Model Policy — HilbertRaum
 
 _Last updated: 2026-06-11 (Phase 29: first benchmark run — Ministral/Gemma/Qwen3-2507 promoted,
 Granite held, min-RAM recalibrated from measured peak RSS; see
@@ -34,7 +34,7 @@ pinned to llama.cpp b9585; all license reviews approved)_
 > The embeddings model uses an **F16** GGUF, not Q8 — the q8_0 conversions of this BERT/XLM-R model
 > crash llama.cpp b9585 (`binary_op: unsupported types … q8_0`). See BUILD_STATE §9. The
 > **reranker** (also XLM-R family) is pinned to **F16 for the same reason**; its live load on b9585
-> is verified by the `PAID_RERANK_SMOKE` manual harness. License review (recorded in its manifest):
+> is verified by the `HILBERTRAUM_RERANK_SMOKE` manual harness. License review (recorded in its manifest):
 > base model `BAAI/bge-reranker-v2-m3` = Apache-2.0 (HF API, 2026-06-10); GGUF from
 > `gpustack/bge-reranker-v2-m3-GGUF` (also Apache-2.0, mechanical conversion — same provenance
 > posture as the E5 entry). `Qwen3-Reranker-0.6B` was rejected: no official GGUF.
@@ -206,7 +206,7 @@ already-approved pinned tag, and the Vulkan *loader* is not redistributed (it co
 GPU driver) — no new licenses enter the product. The file is validated by
 `shared/runtime-sources.ts` (duplicate `(os, arch, backend)` triples are rejected) and is
 **excluded from model discovery** (it is not a model manifest). After each verified extraction
-`fetch-runtime` writes a `.paid-runtime.json` install marker; skips are marker-based
+`fetch-runtime` writes a `.hilbertraum-runtime.json` install marker; skips are marker-based
 (version + backend), never mere binary presence. Re-fetches **pre-clean the previous install**
 (everything except the downloaded archive + the `cpu/` safety net) so an upgrade can never mix
 two builds or keep a stale binary under a fresh marker (GPU audit round).

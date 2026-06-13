@@ -18,7 +18,7 @@ import type { Transcriber, TranscriptSegment } from '../../src/main/services/tra
 
 // Phase 36 — the AudioParser with a FAKE transcriber behind the injection seam (the
 // wave-3 testing posture: CI is zero-binary/zero-audio; the real path lives in the
-// PAID_WHISPER_SMOKE manual harness).
+// HILBERTRAUM_WHISPER_SMOKE manual harness).
 
 function fakeTranscriber(segments: TranscriptSegment[]): Transcriber {
   return {

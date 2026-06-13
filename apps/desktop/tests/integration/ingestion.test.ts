@@ -34,15 +34,15 @@ function write(name: string, data: string | Buffer): string {
 }
 
 beforeEach(() => {
-  tmp = mkdtempSync(join(tmpdir(), 'paid-ingest-'))
+  tmp = mkdtempSync(join(tmpdir(), 'hilbertraum-ingest-'))
 })
 
 function freshDb(): Db {
-  return openDatabase(join(mkdtempSync(join(tmpdir(), 'paid-db-')), 'test.sqlite'))
+  return openDatabase(join(mkdtempSync(join(tmpdir(), 'hilbertraum-db-')), 'test.sqlite'))
 }
 function store(): string {
   // A workspace 'documents' dir for stored copies.
-  return documentsDir(mkdtempSync(join(tmpdir(), 'paid-ws-')))
+  return documentsDir(mkdtempSync(join(tmpdir(), 'hilbertraum-ws-')))
 }
 
 // ---- Parser unit coverage --------------------------------------------------------

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# One-shot developer bootstrap for Private AI Drive Lite (Phase 11).
+# One-shot developer bootstrap for HilbertRaum (Phase 11).
 #
 # Installs dependencies, then runs the build + tests as a smoke check. Uses
 # NODE_OPTIONS=--use-system-ca so npm install works behind a TLS-intercepting corporate

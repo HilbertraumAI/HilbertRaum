@@ -10,12 +10,12 @@ import {
 
 // MANUAL OCR smoke (Phase 38, wave-3 plan §14 R-O2/R-O3 live verification) — NOT CI.
 //
-// CI stays zero-network/zero-model, so this file is skipped unless PAID_OCR_SMOKE
+// CI stays zero-network/zero-model, so this file is skipped unless HILBERTRAUM_OCR_SMOKE
 // points at a root whose ocr/ dir holds the vendored language files (the whisper-smoke
 // shape):
 //
-//   PAID_OCR_SMOKE=<root with ocr/deu.traineddata.gz + ocr/eng.traineddata.gz>
-//   PAID_OCR_IMAGE=<a real German scan image (png/jpg) — NEVER committed>
+//   HILBERTRAUM_OCR_SMOKE=<root with ocr/deu.traineddata.gz + ocr/eng.traineddata.gz>
+//   HILBERTRAUM_OCR_IMAGE=<a real German scan image (png/jpg) — NEVER committed>
 //   npx vitest run tests/manual/ocr-smoke.test.ts
 //
 // Against the REAL pinned tesseract.js + the real vendored traineddata this proves
@@ -30,8 +30,8 @@ import {
 // words exact in both runtimes; degraded ~82-DPI JPEG → best_int 3 misses of 104
 // words vs fast 7 (the shipped-variant decision); zero remote attempts.
 
-const ROOT = process.env.PAID_OCR_SMOKE?.trim() ?? ''
-const IMAGE = process.env.PAID_OCR_IMAGE?.trim() ?? ''
+const ROOT = process.env.HILBERTRAUM_OCR_SMOKE?.trim() ?? ''
+const IMAGE = process.env.HILBERTRAUM_OCR_IMAGE?.trim() ?? ''
 const enabled =
   ROOT.length > 0 &&
   existsSync(ROOT) &&
@@ -39,7 +39,7 @@ const enabled =
   IMAGE.length > 0 &&
   existsSync(IMAGE)
 
-describe.skipIf(!enabled)('PAID_OCR_SMOKE — real tesseract.js on a real scan', () => {
+describe.skipIf(!enabled)('HILBERTRAUM_OCR_SMOKE — real tesseract.js on a real scan', () => {
   it(
     'recognizes German text from the vendored assets with zero remote attempts',
     { timeout: 300_000 },
@@ -87,8 +87,8 @@ describe.skipIf(!enabled)('PAID_OCR_SMOKE — real tesseract.js on a real scan',
   )
 })
 
-describe.skipIf(enabled)('PAID_OCR_SMOKE disabled', () => {
-  it('skips without PAID_OCR_SMOKE/PAID_OCR_IMAGE (CI posture: zero network, zero assets)', () => {
+describe.skipIf(enabled)('HILBERTRAUM_OCR_SMOKE disabled', () => {
+  it('skips without HILBERTRAUM_OCR_SMOKE/HILBERTRAUM_OCR_IMAGE (CI posture: zero network, zero assets)', () => {
     expect(enabled).toBe(false)
   })
 })

@@ -47,12 +47,12 @@ const ENCRYPTION_REQUIRED: PrivacyPolicy = {
 
 /** Build a fresh temp workspace layout + its vault paths. */
 function freshVault(): VaultPaths {
-  const root = mkdtempSync(join(tmpdir(), 'paid-pwchange-'))
+  const root = mkdtempSync(join(tmpdir(), 'hilbertraum-pwchange-'))
   mkdirSync(join(root, 'config'), { recursive: true })
   mkdirSync(join(root, 'workspace'), { recursive: true })
   return vaultPathsFrom({
     configPath: join(root, 'config'),
-    dbPath: join(root, 'workspace', 'paid.sqlite')
+    dbPath: join(root, 'workspace', 'hilbertraum.sqlite')
   })
 }
 

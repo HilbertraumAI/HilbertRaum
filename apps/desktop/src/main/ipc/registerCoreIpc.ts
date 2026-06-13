@@ -28,7 +28,7 @@ export function registerCoreIpc(ctx: AppContext): void {
       log.warn(m)
     )
     return {
-      appName: 'Private AI Drive Lite',
+      appName: 'HilbertRaum',
       appVersion: app.getVersion(),
       offlineMode: policy.offlineMode,
       networkAllowed: policy.networkAllowed,

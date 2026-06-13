@@ -5,7 +5,7 @@
 # OS/arch (or --os/--arch/--backend overrides), downloads + SHA-256-verifies the release
 # archive (.zip or .tar.gz), and extracts it into the build's extract_to dir. Archives
 # that nest their binaries in a subfolder (the macOS/Linux tarballs) are flattened so
-# llama-server lands at the extract_to root. After extraction a `.paid-runtime.json`
+# llama-server lands at the extract_to root. After extraction a `.hilbertraum-runtime.json`
 # install marker ({ version, backend, os, arch }) is written next to the binary so
 # re-runs can skip idempotently — and so a version/backend change actually re-fetches.
 #
@@ -83,7 +83,7 @@ llama_cpp:
 # DLLs; flattened on extraction) plus BLAS/CUDA variants and an Apple xcframework.
 # There are NO prebuilt mac/linux CLI binaries — on those OSes the drive builder
 # compiles the pinned tag from source (cmake; see docs/packaging.md) into
-# runtime/whisper.cpp/<os>/, writing the .paid-runtime.json marker by hand or via
+# runtime/whisper.cpp/<os>/, writing the .hilbertraum-runtime.json marker by hand or via
 # fetch-runtime's marker step. CPU-only by design (E5/reranker precedent: ASR is a
 # batch job; GPU whisper would be a later opt-in, never a default risk).
 # The sha256 below was computed from a fresh download on 2026-06-11.

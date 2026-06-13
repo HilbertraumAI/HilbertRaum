@@ -1,8 +1,8 @@
-# Private AI Drive Lite — User Guide
+# HilbertRaum — User Guide
 
 _Last updated: 2026-06-12 (added: asking by filename; the password eye button)_
 
-Private AI Drive Lite is a private AI workspace that runs **entirely on your laptop**, from
+HilbertRaum is a private AI workspace that runs **entirely on your laptop**, from
 a portable drive. Your prompts, documents, embeddings, and chat history stay local. There is
 **no cloud, no account, and no internet required**.
 
@@ -10,7 +10,7 @@ a portable drive. Your prompts, documents, embeddings, and chat history stay loc
 
 ## 1. What you need
 
-- **The Private AI Drive** — a USB/SSD drive that already has the app **and** the AI models on it.
+- **The HilbertRaum** — a USB/SSD drive that already has the app **and** the AI models on it.
   Everything is preloaded; you don't download or install anything.
 - **A laptop** running Windows (macOS and Linux also work). No admin rights needed.
 - **Enough memory (RAM):** about **8 GB** runs the standard model well; **16 GB or more** lets you
@@ -30,9 +30,9 @@ type or import ever leaves the drive.
 ### From a prepared drive
 1. Plug the drive into your laptop.
 2. Open the drive and **double-click the launcher** at the top level:
-   - **Windows:** `Start Private AI Drive`
-   - **macOS:** `Start Private AI Drive.command`
-   - **Linux:** `start-private-ai-drive.sh`
+   - **Windows:** `Start HilbertRaum`
+   - **macOS:** `Start HilbertRaum.command`
+   - **Linux:** `start-hilbertraum.sh`
 3. **First-time security warning?** The very first time you run an app from a USB drive, your
    computer may show a warning ("Windows protected your PC" / "macOS cannot open the app"). This is
    normal. On Windows click **More info → Run anyway**; on macOS **right-click the app → Open**. You
@@ -46,7 +46,7 @@ You do **not** need to install anything, and you don't need admin rights.
 Launch the app from your Start menu / Applications folder as usual.
 
 > The launcher finds the drive **from its own location** every time, so the same drive works no
-> matter which drive letter it gets. It sets `PAID_DRIVE_ROOT` for you — nothing to configure.
+> matter which drive letter it gets. It sets `HILBERTRAUM_DRIVE_ROOT` for you — nothing to configure.
 
 ---
 

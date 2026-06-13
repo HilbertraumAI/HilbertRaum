@@ -6,7 +6,7 @@ import type { ChildProcessLike } from '../../src/main/services/runtime/sidecar'
 
 // Phase 21 (rag-design §11 reranker): the reranker sidecar — driven entirely through the
 // fake-spawn + mocked-loopback-fetch harness (the E5 embedder test pattern). CI never
-// needs a binary or a model; the live load + latency check is the PAID_RERANK_SMOKE
+// needs a binary or a model; the live load + latency check is the HILBERTRAUM_RERANK_SMOKE
 // manual harness (tests/manual/rerank-smoke.test.ts).
 
 class FakeChild extends EventEmitter implements ChildProcessLike {
@@ -116,7 +116,7 @@ describe('LlamaReranker', () => {
     // Physical batch sized to the context: in --rerank/embedding mode llama-server forces
     // n_batch = n_ubatch and defaults them to 512, but a query+document rerank input runs
     // ~670 tokens — the 512 default 500s the whole request on real-length chunks (found by
-    // PAID_RERANK_SMOKE; rag-design §12.1 R1 deviation). Must match --ctx-size.
+    // HILBERTRAUM_RERANK_SMOKE; rag-design §12.1 R1 deviation). Must match --ctx-size.
     expect(args).toContain('--batch-size 2048')
     expect(args).toContain('--ubatch-size 2048')
     expect(args).toContain('--ctx-size 2048')

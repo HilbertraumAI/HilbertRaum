@@ -29,13 +29,13 @@ import {
 import { DEFAULT_SETTINGS } from '../../src/shared/types'
 
 function freshDb(): Db {
-  return openDatabase(join(mkdtempSync(join(tmpdir(), 'paid-rag-')), 'test.sqlite'))
+  return openDatabase(join(mkdtempSync(join(tmpdir(), 'hilbertraum-rag-')), 'test.sqlite'))
 }
 function store(): string {
-  return documentsDir(mkdtempSync(join(tmpdir(), 'paid-rag-ws-')))
+  return documentsDir(mkdtempSync(join(tmpdir(), 'hilbertraum-rag-ws-')))
 }
 function write(name: string, data: string): string {
-  const p = join(mkdtempSync(join(tmpdir(), 'paid-rag-src-')), name)
+  const p = join(mkdtempSync(join(tmpdir(), 'hilbertraum-rag-src-')), name)
   writeFileSync(p, data)
   return p
 }

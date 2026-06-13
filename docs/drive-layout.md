@@ -7,7 +7,7 @@ _Last updated: 2026-06-11 (Phase 38: the `ocr/` language-file asset class)_
 At startup (`main/index.ts` → `initBackend()`), the app resolves a **root path** using
 `services/workspace.ts` → `resolvePaths()`, in this priority:
 
-1. **`PAID_DRIVE_ROOT` environment variable** — explicit override (used when launching from a
+1. **`HILBERTRAUM_DRIVE_ROOT` environment variable** — explicit override (used when launching from a
    prepared drive, or for testing). If the root contains `config/drive.json`, it is treated as a
    **prepared drive**.
 2. **App-data fallback** — `app.getPath('userData')` for a normal install / dev run.
@@ -17,8 +17,8 @@ From the root, these paths are derived and created (idempotently) on first run:
 ```
 <root>/
 ├── workspace/
-│   ├── paid.sqlite        # all app data (spec §8 tables) — paid.sqlite.enc at rest in
-│   │                      # encrypted mode (decrypted to paid.sqlite only while unlocked)
+│   ├── hilbertraum.sqlite        # all app data (spec §8 tables) — hilbertraum.sqlite.enc at rest in
+│   │                      # encrypted mode (decrypted to hilbertraum.sqlite only while unlocked)
 │   └── documents/         # stored copies of imported files (<id><ext>.enc in encrypted mode)
 ├── models/                # GGUF weights (git-ignored, never committed)
 ├── logs/
@@ -37,28 +37,28 @@ laptops (spec success criterion #10).
 
 ```
 PRIVATE_AI_DRIVE/
-├── Start Private AI Drive.cmd                  # Windows launcher (Phase 13) ── DOUBLE-CLICK THIS
-├── Start Private AI Drive.command              # macOS launcher (Phase 13)
-├── start-private-ai-drive.sh                   # Linux launcher (Phase 13)
+├── Start HilbertRaum.cmd                  # Windows launcher (Phase 13) ── DOUBLE-CLICK THIS
+├── Start HilbertRaum.command              # macOS launcher (Phase 13)
+├── start-hilbertraum.sh                   # Linux launcher (Phase 13)
 ├── READ ME FIRST.txt                           # friendly first-run + SmartScreen note (Phase 13)
-├── PrivateAIDriveLite-<version>-portable.exe   # the portable build (Phase 11) — signed for commercial
+├── HilbertRaum-<version>-portable.exe   # the portable build (Phase 11) — signed for commercial
 ├── runtime/llama.cpp/{win,mac,linux}/          # default sidecar build (Phase 10; Vulkan on win/linux since Phase 14)
-│   ├── .paid-runtime.json                       # install marker: { version, backend, os, arch } (Phase 14)
+│   ├── .hilbertraum-runtime.json                       # install marker: { version, backend, os, arch } (Phase 14)
 │   └── cpu/                                     # pure-CPU safety-net build + its own marker (win/linux only, Phase 14)
 ├── runtime/whisper.cpp/{win,mac,linux}/        # SECOND sidecar family (Phase 36): the whisper-cli transcriber
-│   └── .paid-runtime.json                       # same marker scheme; win = upstream prebuilt, mac/linux = source-build (see below)
+│   └── .hilbertraum-runtime.json                       # same marker scheme; win = upstream prebuilt, mac/linux = source-build (see below)
 ├── models/{chat,embeddings,reranker,transcriber}/ # weights (git-ignored; transcriber/ holds the whisper GGML .bin)
 ├── ocr/                                        # OCR language files (Phase 38): {deu,eng}.traineddata.gz — plain sha256-verified, git-ignored
 ├── model-manifests/{chat,embeddings,reranker,transcriber}/ # committed YAML (the only model metadata in git)
 │   └── runtime-sources.yaml                     # sidecar download manifest (Phase 12; + whisper_cpp block Phase 36; + ocr block Phase 38)
-├── workspace/                                  # paid.sqlite (encrypted or plaintext) — EMPTY on a sold drive
+├── workspace/                                  # hilbertraum.sqlite (encrypted or plaintext) — EMPTY on a sold drive
 ├── logs/
 ├── docs/                                       # user guide, privacy, troubleshooting
 └── config/{drive.json,policy.json,checksums.json}
 ```
 
-> **Launchers (Phase 13).** The `Start Private AI Drive.*` files sit at the drive root beside the
-> portable app and set `PAID_DRIVE_ROOT` from **their own location** every launch — never a hardcoded
+> **Launchers (Phase 13).** The `Start HilbertRaum.*` files sit at the drive root beside the
+> portable app and set `HILBERTRAUM_DRIVE_ROOT` from **their own location** every launch — never a hardcoded
 > drive letter — so the same drive continues the same encrypted workspace on any laptop (success
 > criterion #10). The canonical resolver is `services/launcher.ts` `resolveDriveRootFromLauncher`.
 > A **commercial (sellable) drive** ships `policy.json` in the commercial posture (encryption required,
@@ -75,7 +75,7 @@ PRIVATE_AI_DRIVE/
 > - The spec §6 sketch also shows `updates/{incoming,applied}/`, `workspace/{encrypted,
 >   plaintext-dev,backups}/`, and `runtime/embeddings/` — **not shipped**: there is no update
 >   mechanism yet (see *Updating a drive* below), the workspace is a single flat dir whose DB is
->   `paid.sqlite` or `paid.sqlite.enc` (mode is an attribute, not a directory), and the embeddings
+>   `hilbertraum.sqlite` or `hilbertraum.sqlite.enc` (mode is an attribute, not a directory), and the embeddings
 >   sidecar reuses the same `runtime/llama.cpp/<os>/` binary.
 >
 > The `apps/desktop/src/main/services/drive.ts` module (`DRIVE_LAYOUT_DIRS`) is the canonical,
@@ -140,7 +140,7 @@ Since Phase 14 (see the [`architecture.md`](architecture.md) GPU record §6) `ru
   if the default binary itself cannot start (the app's fallback ladder rung 3). Fetch it with
   `fetch-runtime --backend cpu`.
 - **mac is unchanged**: the arm64 Metal build, no `cpu/` subdir.
-- Each extraction dir carries a **`.paid-runtime.json` install marker**
+- Each extraction dir carries a **`.hilbertraum-runtime.json` install marker**
   (`{ version, backend, os, arch }`), written by `fetch-runtime` after a verified extraction.
   Re-runs skip only when the marker matches the pinned version + backend — so bumping the pin or
   switching a CPU-era drive to the Vulkan default actually re-fetches (mere binary presence is not
@@ -153,14 +153,14 @@ exactly as before (it just re-fetches as the Vulkan default on the next `fetch-r
 
 Audio transcription uses a separate, pinned **whisper.cpp** CLI under
 `runtime/whisper.cpp/<os>/` (resolved by `services/transcriber/cli.ts`
-`resolveWhisperCliPath`; `PAID_WHISPER_BIN` overrides for dev). It rides the SAME
+`resolveWhisperCliPath`; `HILBERTRAUM_WHISPER_BIN` overrides for dev). It rides the SAME
 distribution machinery as the llama family:
 
 - The pin lives in `runtime-sources.yaml` under the additive **`whisper_cpp:`** block
   (same `{ version, builds[] }` shape, own tag — currently `v1.8.6`). A pre-Phase-36
   app ignores the block entirely (verified forward-compatibility).
 - Fetch with **`fetch-runtime --family whisper_cpp`** (`-Family whisper_cpp` on
-  PowerShell) — same verify-before-trust + `.paid-runtime.json` marker idempotency.
+  PowerShell) — same verify-before-trust + `.hilbertraum-runtime.json` marker idempotency.
 - **CPU-only by design** (the E5/reranker precedent: transcription is a batch job).
 - **Upstream ships prebuilt binaries for WINDOWS ONLY** (R-W1, 2026-06-11). The
   mac/linux dirs exist in the layout, but provisioning them means compiling the pinned

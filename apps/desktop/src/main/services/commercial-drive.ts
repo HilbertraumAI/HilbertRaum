@@ -130,7 +130,7 @@ export function planCommercialDrive(opts: PlanCommercialDriveOptions): Commercia
         'the default build (Vulkan full build on win/linux — degrades to CPU on GPU-less ' +
         'machines; Metal on mac) into runtime/llama.cpp/<os>/ PLUS the pure-CPU safety net ' +
         'into runtime/llama.cpp/<os>/cpu/ where one is pinned. Each archive is verified and ' +
-        'leaves a .paid-runtime.json install marker.'
+        'leaves a .hilbertraum-runtime.json install marker.'
     },
     {
       id: 'fetch-whisper',
@@ -141,7 +141,7 @@ export function planCommercialDrive(opts: PlanCommercialDriveOptions): Commercia
         'Fetch every whisper_cpp build pinned in runtime-sources.yaml into ' +
         'runtime/whisper.cpp/<os>/ (upstream ships a prebuilt Windows CPU build only; ' +
         'mac/linux builds come from the documented source-build step when shipped). ' +
-        'Same verify-before-trust + .paid-runtime.json marker as the llama family.'
+        'Same verify-before-trust + .hilbertraum-runtime.json marker as the llama family.'
     },
     {
       id: 'fetch-ocr',
@@ -157,7 +157,7 @@ export function planCommercialDrive(opts: PlanCommercialDriveOptions): Commercia
     {
       id: 'copy-app',
       title: 'Copy the launcher + portable app + user docs onto the drive',
-      command: `copy "Start Private AI Drive" launcher + portable app + docs -> ${target}`,
+      command: `copy "Start HilbertRaum" launcher + portable app + docs -> ${target}`,
       manual: false,
       description:
         'Place the signed portable app and the obvious double-click launcher at the drive ' +
@@ -247,10 +247,10 @@ function userDataArtifacts(rootPath: string): string[] {
   // — not factory-fresh. (We check the sidecars too so this final ship gate doesn't rely
   // on shredStalePlaintext having run.)
   for (const rel of [
-    join('workspace', 'paid.sqlite'),
-    join('workspace', 'paid.sqlite.enc'),
-    join('workspace', 'paid.sqlite-wal'),
-    join('workspace', 'paid.sqlite-shm'),
+    join('workspace', 'hilbertraum.sqlite'),
+    join('workspace', 'hilbertraum.sqlite.enc'),
+    join('workspace', 'hilbertraum.sqlite-wal'),
+    join('workspace', 'hilbertraum.sqlite-shm'),
     join('config', 'workspace.json')
   ]) {
     if (existsSync(join(rootPath, rel))) found.push(rel.replace(/\\/g, '/'))
@@ -271,7 +271,7 @@ function userDataArtifacts(rootPath: string): string[] {
  * Assert that a prepared drive is actually SELLABLE (spec §12.2). Reuses `loadPolicy`
  * (the commercial posture) + `verifyDriveModels` (all weights VERIFIED) and checks the
  * drive carries no user data. When `runtimeSources` (the yaml pin) is passed, each pinned
- * build's `.paid-runtime.json` install marker must also match (version + backend).
+ * build's `.hilbertraum-runtime.json` install marker must also match (version + backend).
  * Returns a structured result; never throws. Fails loudly: any violated
  * invariant adds a `problems[]` entry and flips `ok` to false.
  */
@@ -379,7 +379,7 @@ export async function assertCommercialDrive(
       } else if (!marker) {
         runtimeCurrent = false
         problems.push(
-          `${label}: no .paid-runtime.json ` +
+          `${label}: no .hilbertraum-runtime.json ` +
             `install marker under ${build.extractTo} — run fetch-runtime for this build`
         )
       } else if (marker.version !== sources.version || marker.backend !== build.backend) {

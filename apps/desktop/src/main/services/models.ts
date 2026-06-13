@@ -50,7 +50,7 @@ export interface DiscoveryResult {
 /**
  * Find the `model-manifests/` directory by walking up from a starting dir.
  * Manifests are committed to git, so they sit at the repo/app root. Packaging places
- * them under resources; the drive launchers set PAID_MANIFESTS_DIR to the drive's copy
+ * them under resources; the drive launchers set HILBERTRAUM_MANIFESTS_DIR to the drive's copy
  * (one source of truth with the verify/fetch scripts). A set-but-missing override
  * falls back to the walk-up instead of blanking the model list.
  */

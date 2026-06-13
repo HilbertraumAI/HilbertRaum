@@ -129,7 +129,7 @@ export interface DriveSpeed {
  * hangs the UI. A failure returns null Mbps + an error string rather than throwing.
  */
 export async function measureDriveSpeed(workspacePath: string): Promise<DriveSpeed> {
-  const file = join(workspacePath, `.paid-benchmark-${process.pid}-${Date.now()}.tmp`)
+  const file = join(workspacePath, `.hilbertraum-benchmark-${process.pid}-${Date.now()}.tmp`)
   const payload = Buffer.allocUnsafe(DRIVE_PROBE_BYTES)
   randomFillSync(payload) // avoid filesystem compression skewing the numbers
   try {

@@ -199,7 +199,7 @@ function AppShell(): JSX.Element {
         <div className="brand">
           <span className="brand-mark">◈</span>
           <div>
-            <div className="brand-name">Private AI Drive</div>
+            <div className="brand-name">HilbertRaum</div>
             <div className="brand-edition">Lite</div>
           </div>
         </div>

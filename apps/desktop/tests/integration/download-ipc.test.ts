@@ -42,7 +42,7 @@ function makeDrive(opts: { policyDeniesDownloads?: boolean } = {}): {
   configPath: string
   manifestsDir: string
 } {
-  const rootPath = mkdtempSync(join(tmpdir(), 'paid-dlipc-'))
+  const rootPath = mkdtempSync(join(tmpdir(), 'hilbertraum-dlipc-'))
   const manifestsDir = join(rootPath, 'model-manifests')
   mkdirSync(manifestsDir, { recursive: true })
   writeFileSync(

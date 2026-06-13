@@ -6,14 +6,14 @@ import { join } from 'node:path'
 // MANUAL dictation smoke (Phase 37) — NOT CI.
 //
 // CI stays zero-network/zero-model/zero-binary/zero-mic, so this file is skipped
-// unless PAID_DICTATION_SMOKE points at a provisioned drive root (the whisper-smoke
+// unless HILBERTRAUM_DICTATION_SMOKE points at a provisioned drive root (the whisper-smoke
 // shape). A REAL microphone cannot be driven from a test; what this proves on the
 // real pinned binary + weights is the whole MAIN-PROCESS half of dictation: WAV
 // bytes → `dictation:transcribe` handler → temp `.parse-dictation.wav` → real
 // whisper-cli → text back, transient shredded.
 //
-//   PAID_DICTATION_SMOKE=<root with runtime/whisper.cpp/<os>/whisper-cli + models/transcriber/ggml-*.bin>
-//   PAID_WHISPER_AUDIO=<dir with german.wav — the Phase-36 fixture dir; NEVER committed>
+//   HILBERTRAUM_DICTATION_SMOKE=<root with runtime/whisper.cpp/<os>/whisper-cli + models/transcriber/ggml-*.bin>
+//   HILBERTRAUM_WHISPER_AUDIO=<dir with german.wav — the Phase-36 fixture dir; NEVER committed>
 //   npx vitest run tests/manual/dictation-smoke.test.ts
 //
 // The renderer half (getUserMedia → MediaRecorder → OfflineAudioContext → WAV) needs a
@@ -37,8 +37,8 @@ import {
 import type { AppContext } from '../../src/main/services/context'
 import { invoke, type IpcHandlers } from '../helpers/ipc'
 
-const ROOT = process.env.PAID_DICTATION_SMOKE?.trim() ?? ''
-const AUDIO_DIR = process.env.PAID_WHISPER_AUDIO?.trim() ?? ''
+const ROOT = process.env.HILBERTRAUM_DICTATION_SMOKE?.trim() ?? ''
+const AUDIO_DIR = process.env.HILBERTRAUM_WHISPER_AUDIO?.trim() ?? ''
 const enabled = ROOT.length > 0 && existsSync(ROOT) && AUDIO_DIR.length > 0 && existsSync(AUDIO_DIR)
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
@@ -64,7 +64,7 @@ describe.skipIf(!enabled)('Dictation smoke (manual, real whisper-cli over the di
       const wavFixture = join(AUDIO_DIR, 'german.wav')
       expect(existsSync(wavFixture), `fixture missing: ${wavFixture}`).toBe(true)
 
-      const workspacePath = mkdtempSync(join(tmpdir(), 'paid-dictation-smoke-'))
+      const workspacePath = mkdtempSync(join(tmpdir(), 'hilbertraum-dictation-smoke-'))
       const ctx = {
         paths: { workspacePath },
         transcriber: createWhisperCliTranscriber({

@@ -6,9 +6,9 @@ import type { DriveStatus } from '../../shared/types'
 // Workspace / drive manager (spec §7.2 drive detector + §7.9 workspace manager).
 // Resolves where models + the workspace live, supporting three layouts:
 //   1. Prepared external drive (a `config/drive.json` marker at the root)
-//   2. Explicit override via the PAID_DRIVE_ROOT environment variable
+//   2. Explicit override via the HILBERTRAUM_DRIVE_ROOT environment variable
 //   3. App-data fallback (normal install / dev)
-// Detection order in main: PAID_DRIVE_ROOT (the launchers) → walk-up from the app's own
+// Detection order in main: HILBERTRAUM_DRIVE_ROOT (the launchers) → walk-up from the app's own
 // location (`findPreparedDriveRoot` — a buyer who double-clicks the portable .exe /
 // .app directly, bypassing the launcher, must still land on the DRIVE workspace, not a
 // silent fresh app-data one) → app-data fallback.
@@ -44,7 +44,7 @@ export interface ResolvedPaths {
 }
 
 export interface ResolveOptions {
-  /** Value of PAID_DRIVE_ROOT, if set. */
+  /** Value of HILBERTRAUM_DRIVE_ROOT, if set. */
   envRoot?: string
   /** Fallback root (e.g. Electron app.getPath('userData')). */
   fallbackRoot: string
@@ -70,7 +70,7 @@ export function resolvePaths(opts: ResolveOptions): ResolvedPaths {
     modelsPath: join(rootPath, 'models'),
     logsPath: join(rootPath, 'logs'),
     configPath: join(rootPath, 'config'),
-    dbPath: join(rootPath, 'workspace', 'paid.sqlite'),
+    dbPath: join(rootPath, 'workspace', 'hilbertraum.sqlite'),
     isPreparedDrive
   }
 }

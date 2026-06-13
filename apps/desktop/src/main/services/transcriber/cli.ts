@@ -30,7 +30,7 @@ export function whisperCliDir(rootPath: string, platform: NodeJS.Platform = proc
 
 /**
  * Resolve the `whisper-cli` binary, or `null` when it is absent (mirrors
- * `resolveLlamaServerPath`). A `PAID_WHISPER_BIN` env override points at an explicit
+ * `resolveLlamaServerPath`). A `HILBERTRAUM_WHISPER_BIN` env override points at an explicit
  * binary for dev (still validated for existence).
  */
 export function resolveWhisperCliPath(
@@ -38,7 +38,7 @@ export function resolveWhisperCliPath(
   platform: NodeJS.Platform = process.platform,
   env: NodeJS.ProcessEnv = process.env
 ): string | null {
-  const override = env.PAID_WHISPER_BIN?.trim()
+  const override = env.HILBERTRAUM_WHISPER_BIN?.trim()
   if (override) return existsSync(override) ? override : null
   const candidate = join(whisperCliDir(rootPath, platform), whisperCliBinaryName(platform))
   return existsSync(candidate) ? candidate : null

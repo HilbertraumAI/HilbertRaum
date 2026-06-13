@@ -51,7 +51,7 @@ function fakeTranscriber(
 
 let srcDir: string
 beforeEach(() => {
-  srcDir = mkdtempSync(join(tmpdir(), 'paid-audio-src-'))
+  srcDir = mkdtempSync(join(tmpdir(), 'hilbertraum-audio-src-'))
 })
 
 function writeAudioSource(name = 'meeting.mp3'): string {
@@ -62,11 +62,11 @@ function writeAudioSource(name = 'meeting.mp3'): string {
 }
 
 function freshDb(): Db {
-  return openDatabase(join(mkdtempSync(join(tmpdir(), 'paid-audio-db-')), 'test.sqlite'))
+  return openDatabase(join(mkdtempSync(join(tmpdir(), 'hilbertraum-audio-db-')), 'test.sqlite'))
 }
 
 function freshStore(): string {
-  return documentsDir(mkdtempSync(join(tmpdir(), 'paid-audio-ws-')))
+  return documentsDir(mkdtempSync(join(tmpdir(), 'hilbertraum-audio-ws-')))
 }
 
 function testCipher(): DocumentCipher {

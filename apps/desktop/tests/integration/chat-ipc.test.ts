@@ -59,7 +59,7 @@ function makeCtx(db: Db, runtime: ModelRuntime | null): AppContext {
 }
 
 function freshDb(): Db {
-  return openDatabase(join(mkdtempSync(join(tmpdir(), 'paid-chatipc-')), 'test.sqlite'))
+  return openDatabase(join(mkdtempSync(join(tmpdir(), 'hilbertraum-chatipc-')), 'test.sqlite'))
 }
 
 beforeEach(() => {

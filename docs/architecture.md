@@ -1,10 +1,10 @@
-# Architecture — Private AI Drive Lite
+# Architecture — HilbertRaum
 
 _Last updated: 2026-06-12 (docs housekeeping: absorbed the GPU §1–§8, downloader, audit-log and depth-mode design records; Phase 37 was the last feature change)_
 
 ## Overview
 
-Private AI Drive Lite is an **Electron** desktop app. It maps the spec's Tauri/Rust design onto
+HilbertRaum is an **Electron** desktop app. It maps the spec's Tauri/Rust design onto
 TypeScript while preserving the same module boundaries (spec §7) and command surface (spec §9.1), so
 a future move to Tauri/Rust is a localized swap.
 
@@ -55,7 +55,7 @@ a future move to Tauri/Rust is a localized swap.
 `node:sqlite` — built into the Node bundled by **Electron ^37** (Node 22.x). It is loaded via
 `createRequire` in `services/db.ts` because the experimental module is absent from
 `module.builtinModules`, which otherwise makes bundlers try to resolve a non-existent `sqlite`
-package. One SQLite DB per workspace (`workspace/paid.sqlite`) holds the spec §8 tables (settings,
+package. One SQLite DB per workspace (`workspace/hilbertraum.sqlite`) holds the spec §8 tables (settings,
 conversations, messages, documents, chunks, embeddings, runtime_events). In encrypted mode (Phase 9)
 the whole DB file is encrypted at rest.
 
@@ -378,7 +378,7 @@ sentinel-tested), zero native deps.
   chat/RAG handlers: a message sent while a task is active throws the shared
   `DOC_TASK_BUSY_MESSAGE`, which the chat screen renders with a "Cancel document task"
   button (`cancelDocTask()` with no jobId cancels the active task). The **R-T1 probe**
-  (`tests/manual/server-concurrency-probe.test.ts`, `PAID_CONCURRENCY_PROBE`) showed the
+  (`tests/manual/server-concurrency-probe.test.ts`, `HILBERTRAUM_CONCURRENCY_PROBE`) showed the
   pinned b9585 would serve two requests on PARALLEL slots at our default args — the
   app-side guard is the only serialization, which is exactly why it exists.
 - **Tasks call the active chat runtime** over the locked `chatStream` contract with
@@ -520,7 +520,7 @@ files**.
 
 - **`services/runtime/sidecar.ts`** — sidecar discovery + lifecycle.
   - `resolveLlamaServerPath(rootPath, platform, env)` finds `runtime/llama.cpp/<os>/llama-server[.exe]`
-    (spec §6 drive layout; `win`/`mac`/`linux` sub-dirs). A `PAID_LLAMA_BIN` env var overrides it for
+    (spec §6 drive layout; `win`/`mac`/`linux` sub-dirs). A `HILBERTRAUM_LLAMA_BIN` env var overrides it for
     dev. Pure `existsSync` check — no surprises in the "binary present?" decision.
   - `findFreePort()` asks the OS for a free **loopback** port (listen on `127.0.0.1:0`, read it, close).
   - **`LlamaServer`** owns one child process: spawns `llama-server` **bound to `127.0.0.1` only**
@@ -579,11 +579,11 @@ adds is the safety machinery:
   `main/index.ts` is still guarded (locked → safe defaults).
 - CI never touches a GPU/binary: the probe + ladder are covered through the existing
   `SpawnFn`/fetch seams; a real-GPU smoke lives in `tests/manual/gpu-smoke.test.ts`, **skipped
-  unless `PAID_GPU_SMOKE` points at a provisioned drive**.
+  unless `HILBERTRAUM_GPU_SMOKE` points at a provisioned drive**.
 - **The Phase-16 surface** on top of the ladder: Settings' "Use GPU acceleration" toggle binds
   `gpuMode 'auto' | 'off'` (default ON). The Settings "Diagnostics (advanced)" tab shows the **Acceleration** line (live
   `RuntimeStatus.backend`/`gpuName` while running, else the persisted `settings.gpuProbe`), the
-  **runtime build** line (`getRuntimeInstall` IPC `runtime:install` → the `.paid-runtime.json`
+  **runtime build** line (`getRuntimeInstall` IPC `runtime:install` → the `.hilbertraum-runtime.json`
   marker), and the compatibility-mode notice with **"Try GPU again"** — a dedicated IPC
   (`gpu:try-again`) that clears `gpuAutoDisabled`/`gpuLastError`, invalidates the session probe
   cache, and re-probes + persists (hidden while the toggle is OFF, where it would do nothing).
@@ -742,7 +742,7 @@ DB) — fine, since sidecars only ever start post-unlock.
 | mac/arm64 | `mac/` ← macos-arm64 tar.gz (unchanged) | Metal + CPU |
 | mac/x64, win/arm64 | **not shipped** (out of scope; Intel-Mac note in `known-limitations.md`) | — |
 
-Each install dir carries a `.paid-runtime.json` marker (`{version, backend, os, arch}`);
+Each install dir carries a `.hilbertraum-runtime.json` marker (`{version, backend, os, arch}`);
 `fetch-runtime` skips are marker-based and re-fetches **pre-clean the dir** (everything except
 the archive + `cpu/`) so an upgrade can never keep a stale binary under a fresh marker.
 
@@ -794,7 +794,7 @@ benchmark-card GPU row. Never "GPU failed" / "your hardware is bad".
 **Release acceptance:** the manual 9-machine hardware matrix lives in **BUILD_STATE §5**
 (item 1b — canonical); the fake-spawn unit tests cover the *logic*, the matrix covers the
 *drivers*. Machine ① (dev box, RTX 3080 Ti) passed end-to-end 2026-06-10 via
-`tests/manual/gpu-smoke.test.ts` (`PAID_GPU_SMOKE`; CI never runs it).
+`tests/manual/gpu-smoke.test.ts` (`HILBERTRAUM_GPU_SMOKE`; CI never runs it).
 
 **History:** Phases 14–16 = commits `f1dcf34`, `9067b89`, `2d4adb7` (2026-06-10); the GPU
 audit round = commit `4549934` (same day; full finding list in BUILD_STATE §3 "GPU audit
@@ -819,7 +819,7 @@ code comments cite them as "i18n record §N"** (the German style rules of §3.5 
 |---|---|
 | D-L1 | Hand-rolled typed i18n module in `shared/i18n/` (flat keys, `{name}` interpolation, `.one`/`.other` plurals); **no new dependency**. `de.ts` is typed `Record<keyof typeof en, string>`, so typecheck enforces catalog parity — removing a key is a compile error. i18next/react-intl were rejected: async resource loading + ICU machinery en/de don't need, and a provider-suspense would have churned hundreds of green synchronous tests. |
 | D-L2 | `AppSettings.uiLanguage: 'system' \| 'en' \| 'de'`, default `'system'` (theme precedent); a `de`-prefixed OS locale ⇒ German, else English — **including the bare tag `'de'`** (the R-L1 finding below). |
-| D-L3 | Pre-unlock language: renderer = the `paid.uiLanguage` **localStorage mirror** → `navigator.language` fallback; main = a cached language from `app.getLocale()` until settings become readable (post-unlock / plaintext startup), refreshed on `uiLanguage` patches. |
+| D-L3 | Pre-unlock language: renderer = the `hilbertraum.uiLanguage` **localStorage mirror** → `navigator.language` fallback; main = a cached language from `app.getLocale()` until settings become readable (post-unlock / plaintext startup), refreshed on `uiLanguage` patches. |
 | D-L4 | **Persist canonical English, translate at display**: an exact-match display map over the finite static persisted set (`renderer/lib/displayMap.ts`). Keeps the `scanDetected` contract and pre-i18n rows valid; persisted copy is retroactively language-switchable. |
 | D-L5 | **Ephemeral main→user strings localize at emission** via `tMain()` + the cached language; the IPC error transport (`friendlyIpcError`) is unchanged. |
 | D-L6 | LLM prompts stay English and unchanged (Phase-29 benchmark comparability; models follow the question's language). Task-output language = a future feature; documented in `known-limitations.md` ("Internationalization"). |
@@ -840,7 +840,7 @@ osLocale)`.
 
 - Renderer: `renderer/i18n.tsx` — `I18nProvider`/`useT()` re-resolve on settings
   load/patch, set `document.documentElement.lang`, and mirror the **resolved** language to
-  `localStorage('paid.uiLanguage')` (written only when a real setting resolves, never from
+  `localStorage('hilbertraum.uiLanguage')` (written only when a real setting resolves, never from
   the pre-unlock guess). The gate reads the mirror, falling back to `navigator.language` —
   a first run on a German OS shows a German gate with zero stored state; a user who chose
   the non-OS language gets it back at the next gate render. The mirror is a UI preference,
@@ -877,7 +877,7 @@ osLocale)`.
   picker filter names) localizes **in the main process at emission** via `tMain()`.
   Transient messages interpolate values and cannot be exact-matched — that is why
   display-mapping was rejected for this class.
-- The product name "Private AI Drive Lite" is never translated; language names in the
+- The product name "HilbertRaum" is never translated; language names in the
   picker stay untranslated (`System`/`English`/`Deutsch`); technical values (model ids,
   paths, hardware-profile codes) stay as-is. Audit-log `message` strings stay English in
   the DB and export (the Phase-19 privacy rule; only the Activity panel's type labels

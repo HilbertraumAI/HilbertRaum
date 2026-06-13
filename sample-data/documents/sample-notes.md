@@ -1,4 +1,4 @@
-# Private AI Drive Lite — Sample Notes
+# HilbertRaum — Sample Notes
 
 These notes are a tiny, license-clean sample document used to exercise the ingestion and
 (later) retrieval pipeline. Import this file from the **Documents** screen to see it parsed,
@@ -6,7 +6,7 @@ chunked, and marked **Indexed**.
 
 ## What this app does
 
-Private AI Drive Lite is an offline, local-LLM workspace that runs from a portable drive.
+HilbertRaum is an offline, local-LLM workspace that runs from a portable drive.
 It keeps all user data on the device — no cloud, no telemetry, no remote APIs.
 
 ## How ingestion works

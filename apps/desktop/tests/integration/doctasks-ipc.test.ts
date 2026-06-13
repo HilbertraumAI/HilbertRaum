@@ -51,7 +51,7 @@ interface Harness {
 
 /** Real DB + two indexed documents + a gateable runtime, wired through the real handlers. */
 async function makeHarness(opts: { unlocked?: boolean } = {}): Promise<Harness> {
-  const root = mkdtempSync(join(tmpdir(), 'paid-dtipc-'))
+  const root = mkdtempSync(join(tmpdir(), 'hilbertraum-dtipc-'))
   const workspacePath = join(root, 'workspace')
   const db = openDatabase(join(root, 'test.sqlite'))
   seedSettings(db)

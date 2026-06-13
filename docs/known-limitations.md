@@ -117,10 +117,10 @@ logs, best-effort shredding on SSDs, no password recovery — are documented in
   forces re-embedding every corpus — revisit only as a deliberate migration.
 - **Reranker latency on CPU is significant (MEASURED): ≈ 24.7 s worst case** for a 12-candidate
   batch at the full truncation budget on a CPU-pinned i7-1185G7 (~2 s/candidate;
-  `PAID_RERANK_SMOKE`, 2026-06-10) — a documents query visibly lengthens on a low-end laptop when
+  `HILBERTRAUM_RERANK_SMOKE`, 2026-06-10) — a documents query visibly lengthens on a low-end laptop when
   the reranker is provisioned. Bounded by the candidate cap (≤ 2×`topKInitial`) + word-truncation
   budgets (the tuning levers); the reranker stays an opt-in (provision-the-GGUF) feature, never
-  bundled by default. The `PAID_RAG_QUALITY` run is the evidence it earns the cost
+  bundled by default. The `HILBERTRAUM_RAG_QUALITY` run is the evidence it earns the cost
   (rag-design §12.3).
 - **The FTS5 index duplicates chunk text inside the workspace DB** (a self-contained table was
   chosen over external-content on `chunks`' implicit rowid, which VACUUM may renumber). Bounded by

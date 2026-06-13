@@ -1,8 +1,8 @@
-# Private AI Drive Lite
+# HilbertRaum
 
 > Plug in a trusted drive, ask questions about your private documents, and keep everything local.
 
-Private AI Drive Lite is an **open-source, offline AI workspace** for normal laptop users. It runs
+HilbertRaum is an **open-source, offline AI workspace** for normal laptop users. It runs
 small/medium open-weight language models **locally** — on your laptop's CPU, reading models from a
 portable USB-C SSD. Your prompts, documents, embeddings, and chat history never leave your device.
 
@@ -28,7 +28,7 @@ Remaining work is **manual release acceptance** (signed builds, a live USB demo)
 ## Which path are you on?
 
 - **You bought a preconfigured drive** → you don't need this repo. Plug it in, double-click
-  **Start Private AI Drive**, and follow **[`docs/user-guide.md`](docs/user-guide.md)**. Models are
+  **Start HilbertRaum**, and follow **[`docs/user-guide.md`](docs/user-guide.md)**. Models are
   already on the drive.
 - **You're setting it up yourself (DIY / from source)** → keep reading. You'll run the app, then
   download the models, then point the app at them.
@@ -79,8 +79,8 @@ external drive, or a folder on your disk). Lay one out and download everything i
 ```
 ```bash
 # macOS / Linux
-scripts/prepare-drive.sh --target /Volumes/PAID --with-assets --accept-license
-scripts/verify-models.sh  --target /Volumes/PAID --generate
+scripts/prepare-drive.sh --target /Volumes/HILBERTRAUM --with-assets --accept-license
+scripts/verify-models.sh  --target /Volumes/HILBERTRAUM --generate
 ```
 
 This downloads each model weight from its source (Hugging Face) **and** the `llama.cpp` sidecar,
@@ -99,15 +99,15 @@ interrupted and re-running **skips** what's already there. You can also fetch pi
 
 ### 3. Point the app at your models
 
-The app uses whatever folder **`PAID_DRIVE_ROOT`** names (a prepared folder contains
+The app uses whatever folder **`HILBERTRAUM_DRIVE_ROOT`** names (a prepared folder contains
 `config/drive.json`). On a preconfigured drive the launcher sets this automatically; from source you
 set it yourself, then launch:
 
 ```powershell
-$env:PAID_DRIVE_ROOT = 'E:\'; npm run dev    # Windows
+$env:HILBERTRAUM_DRIVE_ROOT = 'E:\'; npm run dev    # Windows
 ```
 ```bash
-PAID_DRIVE_ROOT=/Volumes/PAID npm run dev    # macOS / Linux
+HILBERTRAUM_DRIVE_ROOT=/Volumes/HILBERTRAUM npm run dev    # macOS / Linux
 ```
 
 Open **AI Model**, press **Start** on the recommended model, and chat for real. To ship a portable

@@ -1,4 +1,4 @@
-# RAG design — Private AI Drive Lite
+# RAG design — HilbertRaum
 
 _Last updated: 2026-06-12 (docs housekeeping: absorbed the Phase-17 record into §10 and the Phase-21 design record as §12; Phase 21 — hybrid keyword retrieval + reranker, §11)_
 
@@ -525,7 +525,7 @@ args never reach it), lazy start on first `rerank()`, `/v1/rerank` Jina shape
 The sidecar also passes `--batch-size`/`--ubatch-size` = the context (2048): in
 `--rerank`/embedding mode llama-server forces `n_batch = n_ubatch` and defaults them to
 **512**, but a query+document rerank input runs ~670 tokens and would otherwise HTTP-500
-the whole request on real-length chunks (found by `PAID_RERANK_SMOKE`; §12.1 R1).
+the whole request on real-length chunks (found by `HILBERTRAUM_RERANK_SMOKE`; §12.1 R1).
 Selection is availability-driven (`createSelectedReranker` → real iff binary + GGUF,
 else **null**; no mock — null = today's ordering). Failure modes: a failed START latches
 for the session (fail-fast, no 60 s health stall per question); a failed CALL logs and
@@ -548,7 +548,7 @@ truncation, failed-start latch, stop/suspend, selector), `hybrid-search.test.ts`
 (migration + backfill + trigger sync, MATCH sanitization, visibility + scope, RRF,
 retrieve() e2e with a fake reranker, both grounding-guard variants),
 `e5-embedder.test.ts` (suspend), `drive.test.ts` (`models/reranker`). Manual:
-`tests/manual/rerank-smoke.test.ts` behind `PAID_RERANK_SMOKE` — **run 2026-06-10** on the
+`tests/manual/rerank-smoke.test.ts` behind `HILBERTRAUM_RERANK_SMOKE` — **run 2026-06-10** on the
 real F16 GGUF + b9585: loads clean, ranks the relevant doc first (+8.82 vs −11.01), and the
 worst-case 12-candidate batch took **≈ 24.7 s** on a CPU-pinned i7-1185G7 (the §7 number;
 also the regression that surfaced the n_ubatch=512 fix above).
@@ -579,7 +579,7 @@ Track B; see §10), deep-grounded answers, ANN (D15), signed update bundles (Pha
 - **Prompting** (`server-common.cpp` L1540–1582): a GGUF-embedded `rerank` chat template
   if present, else **`BOS query EOS SEP document EOS`** — the BERT-style default path
   bge-reranker-v2-m3 uses (no template needed).
-- **DEVIATION found by `PAID_RERANK_SMOKE` (2026-06-10):** in `--rerank`/embedding mode
+- **DEVIATION found by `HILBERTRAUM_RERANK_SMOKE` (2026-06-10):** in `--rerank`/embedding mode
   the server **forces `n_batch = n_ubatch`** and they default to **512** ("embeddings
   enabled with n_batch (2048) > n_ubatch (512) … setting n_batch = n_ubatch = 512"). A
   rerank input is query+document in ONE sequence — at the §12.3 word caps ≈ 670 real
@@ -599,7 +599,7 @@ precedent) and **system Node 24.13.0** (what vitest runs under). Both: SQLite **
 with `ENABLE_FTS5`; virtual table + `MATCH` + `bm25()` all work. No native dependency.
 
 **R3 — similarity floor (MEASURED 2026-06-10 → keep 0):** measured on the real `D:\` drive
-(`tests/manual/minsim-measure.test.ts`, `PAID_MINSIM_MEASURE`): a topically-diverse
+(`tests/manual/minsim-measure.test.ts`, `HILBERTRAUM_MINSIM_MEASURE`): a topically-diverse
 12-passage corpus, 12 RELEVANT queries (answerable) vs 12 IRRELEVANT ones (absent topics),
 embedded through the EXACT production path (real multilingual-E5, no `query:`/`passage:`
 prefix, the same `cosineSimilarity` `VectorIndex` uses). Best-chunk cosine per query:
@@ -641,7 +641,7 @@ reranker is lazy, CPU-pinned, and opt-in by provisioning (never bundled; manifes
 `recommended_min_ram_gb: 6`, profiles LITE/BALANCED/PRO). CPU latency bounded by the
 candidate cap (≤ 2×topKInitial) + word truncation.
 
-**Measured 2026-06-10 (`PAID_RERANK_SMOKE`, real F16 GGUF on b9585, Intel i7-1185G7,
+**Measured 2026-06-10 (`HILBERTRAUM_RERANK_SMOKE`, real F16 GGUF on b9585, Intel i7-1185G7,
 `--device none`, 4 threads):** the F16 GGUF LOADS clean (no q8_0 XLM-R warmup crash);
 relevance is correct (relevant invoice line **+8.82** vs irrelevant **−11.01**);
 **worst-case latency ≈ 24.7 s** for a 12-candidate batch at the full truncation budget
@@ -650,7 +650,7 @@ significant on a CPU pin, so reranking visibly lengthens a documents query on a 
 laptop; the candidate cap keeps it bounded, and it stays opt-in by provisioning.
 Tightening `MAX_DOC_WORDS` / the candidate cap is the lever if the latency proves too high.
 
-**End-to-end quality validation 2026-06-10 (`PAID_RAG_QUALITY`, all three real backends on
+**End-to-end quality validation 2026-06-10 (`HILBERTRAUM_RAG_QUALITY`, all three real backends on
 a 4-doc corpus — `tests/manual/rag-quality.test.ts`):** the evidence the reranker EARNS its
 cost. For "What is the cap on liability in our agreement with Acme?" the hybrid (vector+RRF)
 order put the true *Limitation of liability* clause only **#3 (cosine 0.848)** — behind two

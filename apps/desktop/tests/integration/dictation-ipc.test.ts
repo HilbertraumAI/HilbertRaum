@@ -74,7 +74,7 @@ function ctxWith(workspacePath: string, transcriber: Transcriber | null): {
 }
 
 function freshWorkspacePath(): string {
-  return mkdtempSync(join(tmpdir(), 'paid-dictation-'))
+  return mkdtempSync(join(tmpdir(), 'hilbertraum-dictation-'))
 }
 
 beforeEach(() => ipcState.handlers.clear())

@@ -1,11 +1,11 @@
 # CLAUDE.md — Working instructions for this repo
 
-Private AI Drive Lite is an **open-source, offline, local-LLM workspace** that runs from a
+HilbertRaum is an **open-source, offline, local-LLM workspace** that runs from a
 portable drive. No cloud, no telemetry, all user data local.
 
 ## Read these first, in order
 1. [`BUILD_STATE.md`](BUILD_STATE.md) — the live handoff/state file. **Always read first.** It says what is done, current decisions, data contracts, and the next actions.
-2. [`CLAUDE_Private_AI_Drive_Lite_MVP.md`](CLAUDE_Private_AI_Drive_Lite_MVP.md) — the original product/architecture spec (source of truth for *what* to build).
+2. [`CLAUDE_HilbertRaum_MVP.md`](CLAUDE_HilbertRaum_MVP.md) — the original product/architecture spec (source of truth for *what* to build).
 3. Topic docs under [`docs/`](docs/) (architecture, drive layout, packaging, model policy, …) as the task requires.
 
 ## Doc lifecycle rule

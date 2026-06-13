@@ -37,10 +37,10 @@ const ENCRYPTION_REQUIRED: PrivacyPolicy = {
 }
 
 function freshVault(): VaultPaths {
-  const root = mkdtempSync(join(tmpdir(), 'paid-wsipc-'))
+  const root = mkdtempSync(join(tmpdir(), 'hilbertraum-wsipc-'))
   mkdirSync(join(root, 'config'), { recursive: true })
   mkdirSync(join(root, 'workspace'), { recursive: true })
-  return vaultPathsFrom({ configPath: join(root, 'config'), dbPath: join(root, 'workspace', 'paid.sqlite') })
+  return vaultPathsFrom({ configPath: join(root, 'config'), dbPath: join(root, 'workspace', 'hilbertraum.sqlite') })
 }
 
 function ctxWith(

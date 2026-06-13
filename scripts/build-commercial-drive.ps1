@@ -33,7 +33,7 @@
 
 .PARAMETER AppArtifact
   Path to a pre-built, SIGNED portable app to copy onto the drive (e.g. the
-  PrivateAIDriveLite-<version>-portable.exe produced + signed on the build machine).
+  HilbertRaum-<version>-portable.exe produced + signed on the build machine).
 
 .PARAMETER SkipPackage
   Skip the packaging/signing step entirely (assemble layout + assets + launchers + verify).
@@ -42,7 +42,7 @@
   Print the plan and change nothing.
 
 .EXAMPLE
-  .\scripts\build-commercial-drive.ps1 -Target E:\ -AcceptLicense -AppArtifact .\release\PrivateAIDriveLite-0.1.0-portable.exe
+  .\scripts\build-commercial-drive.ps1 -Target E:\ -AcceptLicense -AppArtifact .\release\HilbertRaum-0.1.0-portable.exe
 #>
 [CmdletBinding()]
 param(
@@ -135,7 +135,7 @@ if ($SkipPackage) {
 # --- 5. Copy the launcher + user docs onto the drive root --------------------------
 Step 5 'Copy the launcher + user docs onto the drive root'
 $LauncherSrc = Join-Path $RepoRoot 'launchers'
-$LauncherFiles = @('Start Private AI Drive.cmd', 'Start Private AI Drive.command', 'start-private-ai-drive.sh', 'READ ME FIRST.txt')
+$LauncherFiles = @('Start HilbertRaum.cmd', 'Start HilbertRaum.command', 'start-hilbertraum.sh', 'READ ME FIRST.txt')
 foreach ($f in $LauncherFiles) {
   $src = Join-Path $LauncherSrc $f
   if (Test-Path $src) {
@@ -170,7 +170,7 @@ if (Test-Path $policyPath) {
 }
 # No user data on a drive meant to ship empty (spec 12.2). Mirror assertCommercialDrive:
 # flat DB/descriptor files + the WAL/SHM sidecars + a non-empty documents dir.
-foreach ($ud in @('workspace/paid.sqlite', 'workspace/paid.sqlite.enc', 'workspace/paid.sqlite-wal', 'workspace/paid.sqlite-shm', 'config/workspace.json')) {
+foreach ($ud in @('workspace/hilbertraum.sqlite', 'workspace/hilbertraum.sqlite.enc', 'workspace/hilbertraum.sqlite-wal', 'workspace/hilbertraum.sqlite-shm', 'config/workspace.json')) {
   if (Test-Path (Join-Path $Target $ud)) { $problems += "user data present: $ud" }
 }
 $docsDir = Join-Path $Target 'workspace/documents'
@@ -201,7 +201,7 @@ if (-not $DryRun) {
   }
 }
 # Runtime-marker gate (assertCommercialDrive parity, Phase 14): every pinned sidecar
-# build must be PRESENT (binary) and carry a .paid-runtime.json whose version AND
+# build must be PRESENT (binary) and carry a .hilbertraum-runtime.json whose version AND
 # backend match runtime-sources.yaml -- a missing binary or a missing/stale marker
 # means the drive ships the wrong build (e.g. a CPU-era binary after the default moved
 # to vulkan, or a half-deleted install). The dir/backend list mirrors the committed
@@ -229,12 +229,12 @@ if (-not $DryRun) {
     )) {
       $rtDir = $rt.dir
       $rtVersion = $famVersions[$rt.family]
-      $markerFile = Join-Path $Target "$rtDir/.paid-runtime.json"
+      $markerFile = Join-Path $Target "$rtDir/.hilbertraum-runtime.json"
       $binFile = Join-Path $Target "$rtDir/$($rt.bin)"
       if (-not (Test-Path $binFile)) {
         $problems += "runtime: $($rt.bin) missing under $rtDir (re-run fetch-runtime)"
       } elseif (-not (Test-Path $markerFile)) {
-        $problems += "runtime: no .paid-runtime.json install marker under $rtDir (re-run fetch-runtime)"
+        $problems += "runtime: no .hilbertraum-runtime.json install marker under $rtDir (re-run fetch-runtime)"
       } else {
         $marker = $null
         try { $marker = Get-Content -Path $markerFile -Raw | ConvertFrom-Json } catch {}

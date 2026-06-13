@@ -24,12 +24,12 @@ import {
 // ---- helpers --------------------------------------------------------------------
 
 function freshDb(): Db {
-  return openDatabase(join(mkdtempSync(join(tmpdir(), 'paid-policy-')), 'test.sqlite'))
+  return openDatabase(join(mkdtempSync(join(tmpdir(), 'hilbertraum-policy-')), 'test.sqlite'))
 }
 
 /** Make a temp config dir, optionally seeded with policy.json / drive.json contents. */
 function configDir(files: { policy?: string; drive?: string } = {}): string {
-  const dir = mkdtempSync(join(tmpdir(), 'paid-policy-cfg-'))
+  const dir = mkdtempSync(join(tmpdir(), 'hilbertraum-policy-cfg-'))
   const cfg = join(dir, 'config')
   mkdirSync(cfg, { recursive: true })
   if (files.policy !== undefined) writeFileSync(join(cfg, 'policy.json'), files.policy)

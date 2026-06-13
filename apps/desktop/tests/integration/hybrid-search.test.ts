@@ -32,7 +32,7 @@ import { DEFAULT_SETTINGS } from '../../src/shared/types'
 const SETTINGS: RagRetrievalSettings = ragSettingsFrom(DEFAULT_SETTINGS)
 
 function freshDb(): Db {
-  return openDatabase(join(mkdtempSync(join(tmpdir(), 'paid-hybrid-')), 'test.sqlite'))
+  return openDatabase(join(mkdtempSync(join(tmpdir(), 'hilbertraum-hybrid-')), 'test.sqlite'))
 }
 
 /** Seed one indexed document with chunks + vectors under `modelId` (rag-scope pattern). */
@@ -96,7 +96,7 @@ describe('chunks_fts migration + sync', () => {
   it('backfills a pre-Phase-21 database (existing chunks become searchable on open)', async () => {
     // Build a DB with the full pre-Phase-21 schema and chunk rows, but no FTS table —
     // exactly what an upgraded workspace looks like on disk (the scope_json precedent).
-    const dir = mkdtempSync(join(tmpdir(), 'paid-hybrid-mig-'))
+    const dir = mkdtempSync(join(tmpdir(), 'hilbertraum-hybrid-mig-'))
     const path = join(dir, 'old.sqlite')
     const nodeRequire = createRequire(process.execPath)
     const { DatabaseSync } = nodeRequire('node:sqlite') as typeof import('node:sqlite')

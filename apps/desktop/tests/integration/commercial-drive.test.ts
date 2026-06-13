@@ -84,7 +84,7 @@ describe('planCommercialDrive', () => {
     expect(win.find((s) => s.id === 'fetch-models')!.command).not.toContain('--accept-license')
     expect(win.find((s) => s.id === 'package')!.title).toMatch(/Windows/i)
 
-    const mac = planCommercialDrive({ target: '/Volumes/PAID', os: 'mac' })
+    const mac = planCommercialDrive({ target: '/Volumes/HILBERTRAUM', os: 'mac' })
     expect(mac.find((s) => s.id === 'package')!.description).toMatch(/notarize/i)
   })
 
@@ -110,7 +110,7 @@ describe('planCommercialDrive', () => {
 
 describe('assertCommercialDrive', () => {
   it('passes on a verified, commercial-posture drive with no user data', async () => {
-    const root = tempDir('paid-commercial-ok-')
+    const root = tempDir('hilbertraum-commercial-ok-')
     writePolicy(root, buildPolicyJson()) // commercial default
     const chat = writeVerifiedWeight(root, 'chat', 'models/chat/qwen.gguf', 'chat-weights')
     const embed = writeVerifiedWeight(root, 'embed', 'models/embeddings/e5.gguf', 'embed-weights')
@@ -133,7 +133,7 @@ describe('assertCommercialDrive', () => {
   // M11 (audit round 4): a sold drive requires every license_review APPROVED (spec §13).
   // --accept-license is download-time acceptance, never a substitute for the review.
   it('fails when a model license_review is not approved', async () => {
-    const root = tempDir('paid-commercial-license-')
+    const root = tempDir('hilbertraum-commercial-license-')
     writePolicy(root, buildPolicyJson())
     const pendingReview = writeVerifiedWeight(root, 'chat', 'models/chat/qwen.gguf', 'chat-weights')
     const notApproved = asManifest({
@@ -151,7 +151,7 @@ describe('assertCommercialDrive', () => {
   })
 
   it('fails when the policy allows network', async () => {
-    const root = tempDir('paid-commercial-net-')
+    const root = tempDir('hilbertraum-commercial-net-')
     const policy = buildPolicyJson()
     policy.network.allow_model_downloads = true
     writePolicy(root, policy)
@@ -164,7 +164,7 @@ describe('assertCommercialDrive', () => {
   })
 
   it('fails when the policy allows a plaintext workspace', async () => {
-    const root = tempDir('paid-commercial-plain-')
+    const root = tempDir('hilbertraum-commercial-plain-')
     writePolicy(root, buildPolicyJson({ dev: true })) // plaintext + unverified allowed
     const chat = writeVerifiedWeight(root, 'chat', 'models/chat/qwen.gguf', 'chat-weights')
 
@@ -175,7 +175,7 @@ describe('assertCommercialDrive', () => {
   })
 
   it('fails when a weight is a placeholder (cannot verify)', async () => {
-    const root = tempDir('paid-commercial-weight-')
+    const root = tempDir('hilbertraum-commercial-weight-')
     writePolicy(root, buildPolicyJson())
     // Present file but the manifest carries the placeholder hash → unverified_placeholder.
     const dest = join(root, 'models', 'chat', 'ph.gguf')
@@ -190,7 +190,7 @@ describe('assertCommercialDrive', () => {
   })
 
   it('fails when a weight has a real but MISMATCHED hash', async () => {
-    const root = tempDir('paid-commercial-mismatch-')
+    const root = tempDir('hilbertraum-commercial-mismatch-')
     writePolicy(root, buildPolicyJson())
     const dest = join(root, 'models', 'chat', 'mm.gguf')
     mkdirSync(join(dest, '..'), { recursive: true })
@@ -205,7 +205,7 @@ describe('assertCommercialDrive', () => {
   })
 
   it('fails when there are no weights to verify (a sold drive ships weights pre-loaded)', async () => {
-    const root = tempDir('paid-commercial-noweights-')
+    const root = tempDir('hilbertraum-commercial-noweights-')
     writePolicy(root, buildPolicyJson())
     const res = await assertCommercialDrive(root, [])
     expect(res.ok).toBe(false)
@@ -214,12 +214,12 @@ describe('assertCommercialDrive', () => {
   })
 
   it('fails when user data is present (a sold drive must ship empty)', async () => {
-    const root = tempDir('paid-commercial-userdata-')
+    const root = tempDir('hilbertraum-commercial-userdata-')
     writePolicy(root, buildPolicyJson())
     const chat = writeVerifiedWeight(root, 'chat', 'models/chat/qwen.gguf', 'chat-weights')
     // Simulate an already-initialised workspace.
     mkdirSync(join(root, 'workspace'), { recursive: true })
-    writeFileSync(join(root, 'workspace', 'paid.sqlite.enc'), 'encrypted-db')
+    writeFileSync(join(root, 'workspace', 'hilbertraum.sqlite.enc'), 'encrypted-db')
 
     const res = await assertCommercialDrive(root, [chat])
     expect(res.ok).toBe(false)
@@ -230,12 +230,12 @@ describe('assertCommercialDrive', () => {
   // Each user-data artifact independently flips noUserData (matrix), incl. the WAL/SHM
   // sidecars a crash can leave behind (the P1 fix) and a non-empty documents dir.
   it.each([
-    ['plaintext DB', 'workspace/paid.sqlite'],
+    ['plaintext DB', 'workspace/hilbertraum.sqlite'],
     ['vault descriptor', 'config/workspace.json'],
-    ['WAL sidecar', 'workspace/paid.sqlite-wal'],
-    ['SHM sidecar', 'workspace/paid.sqlite-shm']
+    ['WAL sidecar', 'workspace/hilbertraum.sqlite-wal'],
+    ['SHM sidecar', 'workspace/hilbertraum.sqlite-shm']
   ])('flags a %s as user data', async (_label, rel) => {
-    const root = tempDir('paid-commercial-ud-')
+    const root = tempDir('hilbertraum-commercial-ud-')
     writePolicy(root, buildPolicyJson())
     const chat = writeVerifiedWeight(root, 'chat', 'models/chat/qwen.gguf', 'chat-weights')
     const dest = join(root, ...rel.split('/'))
@@ -248,7 +248,7 @@ describe('assertCommercialDrive', () => {
   })
 
   it('flags a non-empty workspace/documents/ directory as user data', async () => {
-    const root = tempDir('paid-commercial-docs-')
+    const root = tempDir('hilbertraum-commercial-docs-')
     writePolicy(root, buildPolicyJson())
     const chat = writeVerifiedWeight(root, 'chat', 'models/chat/qwen.gguf', 'chat-weights')
     mkdirSync(join(root, 'workspace', 'documents'), { recursive: true })
@@ -260,7 +260,7 @@ describe('assertCommercialDrive', () => {
   })
 
   it('an EMPTY workspace/documents/ directory is NOT user data', async () => {
-    const root = tempDir('paid-commercial-emptydocs-')
+    const root = tempDir('hilbertraum-commercial-emptydocs-')
     writePolicy(root, buildPolicyJson())
     const chat = writeVerifiedWeight(root, 'chat', 'models/chat/qwen.gguf', 'chat-weights')
     mkdirSync(join(root, 'workspace', 'documents'), { recursive: true }) // empty
@@ -270,7 +270,7 @@ describe('assertCommercialDrive', () => {
   })
 
   // Phase 14: when the runtime-sources pin is passed, every pinned build's
-  // .paid-runtime.json install marker must match (version + backend).
+  // .hilbertraum-runtime.json install marker must match (version + backend).
   describe('runtime install markers (Phase 14)', () => {
     const sources = (): RuntimeSources => {
       const res = validateRuntimeSources({
@@ -314,7 +314,7 @@ describe('assertCommercialDrive', () => {
     }
 
     it('passes when every pinned build has a binary + matching marker', async () => {
-      const root = tempDir('paid-commercial-rt-ok-')
+      const root = tempDir('hilbertraum-commercial-rt-ok-')
       writePolicy(root, buildPolicyJson())
       const chat = writeVerifiedWeight(root, 'chat', 'models/chat/qwen.gguf', 'chat-weights')
       writeInstalls(root)
@@ -324,20 +324,20 @@ describe('assertCommercialDrive', () => {
     })
 
     it('fails when a pinned build has NO install marker', async () => {
-      const root = tempDir('paid-commercial-rt-missing-')
+      const root = tempDir('hilbertraum-commercial-rt-missing-')
       writePolicy(root, buildPolicyJson())
       const chat = writeVerifiedWeight(root, 'chat', 'models/chat/qwen.gguf', 'chat-weights')
       // Both binaries present, but only the win default has a marker.
       writeInstalls(root)
-      rmSync(join(root, 'runtime', 'llama.cpp', 'win', 'cpu', '.paid-runtime.json'))
+      rmSync(join(root, 'runtime', 'llama.cpp', 'win', 'cpu', '.hilbertraum-runtime.json'))
       const res = await assertCommercialDrive(root, [chat], sources())
       expect(res.ok).toBe(false)
       expect(res.checks.runtimeCurrent).toBe(false)
-      expect(res.problems.some((p) => /\.paid-runtime\.json/.test(p))).toBe(true)
+      expect(res.problems.some((p) => /\.hilbertraum-runtime\.json/.test(p))).toBe(true)
     })
 
     it('fails when a marker exists but the binary is missing (half-deleted install)', async () => {
-      const root = tempDir('paid-commercial-rt-nobin-')
+      const root = tempDir('hilbertraum-commercial-rt-nobin-')
       writePolicy(root, buildPolicyJson())
       const chat = writeVerifiedWeight(root, 'chat', 'models/chat/qwen.gguf', 'chat-weights')
       writeInstalls(root)
@@ -349,7 +349,7 @@ describe('assertCommercialDrive', () => {
     })
 
     it('fails when a marker is STALE (CPU-era build under the vulkan pin)', async () => {
-      const root = tempDir('paid-commercial-rt-stale-')
+      const root = tempDir('hilbertraum-commercial-rt-stale-')
       writePolicy(root, buildPolicyJson())
       const chat = writeVerifiedWeight(root, 'chat', 'models/chat/qwen.gguf', 'chat-weights')
       writeInstalls(root)
@@ -367,7 +367,7 @@ describe('assertCommercialDrive', () => {
     })
 
     it('skips the marker check when no runtimeSources are passed (runtimeCurrent stays true)', async () => {
-      const root = tempDir('paid-commercial-rt-skip-')
+      const root = tempDir('hilbertraum-commercial-rt-skip-')
       writePolicy(root, buildPolicyJson())
       const chat = writeVerifiedWeight(root, 'chat', 'models/chat/qwen.gguf', 'chat-weights')
       const res = await assertCommercialDrive(root, [chat])
@@ -418,7 +418,7 @@ describe('assertCommercialDrive', () => {
     }
 
     it('passes when the whisper pin has a whisper-cli binary + matching marker', async () => {
-      const root = tempDir('paid-commercial-wh-ok-')
+      const root = tempDir('hilbertraum-commercial-wh-ok-')
       writePolicy(root, buildPolicyJson())
       const chat = writeVerifiedWeight(root, 'chat', 'models/chat/qwen.gguf', 'chat-weights')
       writeInstalls(root)
@@ -429,7 +429,7 @@ describe('assertCommercialDrive', () => {
     })
 
     it('fails when the whisper-cli binary is missing under the whisper pin', async () => {
-      const root = tempDir('paid-commercial-wh-nobin-')
+      const root = tempDir('hilbertraum-commercial-wh-nobin-')
       writePolicy(root, buildPolicyJson())
       const chat = writeVerifiedWeight(root, 'chat', 'models/chat/qwen.gguf', 'chat-weights')
       writeInstalls(root)
@@ -442,7 +442,7 @@ describe('assertCommercialDrive', () => {
     })
 
     it('fails when the whisper marker version does not match the whisper pin', async () => {
-      const root = tempDir('paid-commercial-wh-stale-')
+      const root = tempDir('hilbertraum-commercial-wh-stale-')
       writePolicy(root, buildPolicyJson())
       const chat = writeVerifiedWeight(root, 'chat', 'models/chat/qwen.gguf', 'chat-weights')
       writeInstalls(root)

@@ -8,11 +8,11 @@ import type { RuntimeStartOptions } from '../../src/main/services/runtime'
 // MANUAL Phase-28 challenger bring-up smoke (model-benchmarks.md §7.3) — NOT CI.
 //
 // CI stays zero-network/zero-model/zero-binary, so this file is skipped unless
-// PAID_BRINGUP_SMOKE points at a provisioned drive root (same shape as the other manual
+// HILBERTRAUM_BRINGUP_SMOKE points at a provisioned drive root (same shape as the other manual
 // smokes):
 //
-//   PAID_BRINGUP_SMOKE=<root with runtime/llama.cpp/<os>/llama-server + models/chat/*.gguf>
-//   PAID_SMOKE_MODEL=<one .gguf filename>   # optional: smoke a single model
+//   HILBERTRAUM_BRINGUP_SMOKE=<root with runtime/llama.cpp/<os>/llama-server + models/chat/*.gguf>
+//   HILBERTRAUM_SMOKE_MODEL=<one .gguf filename>   # optional: smoke a single model
 //   npx vitest run tests/manual/bringup-smoke.test.ts
 //
 // Against the REAL pinned b9585 build + a real challenger GGUF this proves the §4.3
@@ -33,7 +33,7 @@ import type { RuntimeStartOptions } from '../../src/main/services/runtime'
 //
 // The RAG/citation + Models-screen-UI parts of §4.3 are exercised in the app, not here.
 
-const ROOT = process.env.PAID_BRINGUP_SMOKE?.trim() ?? ''
+const ROOT = process.env.HILBERTRAUM_BRINGUP_SMOKE?.trim() ?? ''
 const enabled = ROOT.length > 0 && existsSync(ROOT)
 
 /** Generous health budget: loads a multi-GB model from a possibly-cold disk on first run. */
@@ -70,7 +70,7 @@ const QUESTION =
   'und wie heißt der große Fluss, der durch sie fließt?'
 const EXPECTED_FACT = 'Wien'
 
-const override = process.env.PAID_SMOKE_MODEL?.trim()
+const override = process.env.HILBERTRAUM_SMOKE_MODEL?.trim()
 const models = override ? CHALLENGERS.filter((m) => m.file === override) : CHALLENGERS
 
 function assertClean(answer: string): void {

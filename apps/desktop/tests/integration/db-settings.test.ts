@@ -6,7 +6,7 @@ import { openDatabase, listTables } from '../../src/main/services/db'
 import { seedSettings, getSettings, updateSettings } from '../../src/main/services/settings'
 
 function freshDb() {
-  const dir = mkdtempSync(join(tmpdir(), 'paid-db-'))
+  const dir = mkdtempSync(join(tmpdir(), 'hilbertraum-db-'))
   return openDatabase(join(dir, 'test.sqlite'))
 }
 

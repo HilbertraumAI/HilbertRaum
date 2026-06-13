@@ -20,8 +20,8 @@
 # --app-artifact, or use --skip-package. See docs/packaging.md.
 #
 # Usage:
-#   scripts/build-commercial-drive.sh --target /Volumes/PAID --accept-license \
-#       [--app-artifact ./release/PrivateAIDriveLite-0.1.0.AppImage] [--skip-package] [--dry-run]
+#   scripts/build-commercial-drive.sh --target /Volumes/HILBERTRAUM --accept-license \
+#       [--app-artifact ./release/HilbertRaum-0.1.0.AppImage] [--skip-package] [--dry-run]
 set -euo pipefail
 
 TARGET=""
@@ -116,7 +116,7 @@ fi
 
 # --- 5. Copy the launcher + user docs onto the drive root --------------------------
 step 5 "Copy the launcher + user docs onto the drive root"
-for f in "Start Private AI Drive.cmd" "Start Private AI Drive.command" "start-private-ai-drive.sh" "READ ME FIRST.txt"; do
+for f in "Start HilbertRaum.cmd" "Start HilbertRaum.command" "start-hilbertraum.sh" "READ ME FIRST.txt"; do
   src="$REPO_ROOT/launchers/$f"
   if [[ -f "$src" ]]; then
     if [[ $DRY_RUN -eq 1 ]]; then echo "  copy $f -> drive root"
@@ -124,7 +124,7 @@ for f in "Start Private AI Drive.cmd" "Start Private AI Drive.command" "start-pr
   fi
 done
 # Make the POSIX launchers executable.
-[[ $DRY_RUN -eq 0 ]] && chmod +x "$TARGET/Start Private AI Drive.command" "$TARGET/start-private-ai-drive.sh" 2>/dev/null || true
+[[ $DRY_RUN -eq 0 ]] && chmod +x "$TARGET/Start HilbertRaum.command" "$TARGET/start-hilbertraum.sh" 2>/dev/null || true
 
 # --- 6. Capture real hashes + verify -----------------------------------------------
 step 6 "Capture real hashes + verify all weights"
@@ -153,7 +153,7 @@ else
   PROBLEMS+=("config/policy.json missing")
 fi
 # Mirror assertCommercialDrive: flat DB/descriptor files + WAL/SHM sidecars + documents dir.
-for ud in workspace/paid.sqlite workspace/paid.sqlite.enc workspace/paid.sqlite-wal workspace/paid.sqlite-shm config/workspace.json; do
+for ud in workspace/hilbertraum.sqlite workspace/hilbertraum.sqlite.enc workspace/hilbertraum.sqlite-wal workspace/hilbertraum.sqlite-shm config/workspace.json; do
   [[ -e "$TARGET/$ud" ]] && PROBLEMS+=("user data present: $ud")
 done
 if [[ -d "$TARGET/workspace/documents" ]] && [[ -n "$(ls -A "$TARGET/workspace/documents" 2>/dev/null)" ]]; then
@@ -179,7 +179,7 @@ if [[ $DRY_RUN -eq 0 ]]; then
   fi
 fi
 # Runtime-marker gate (assertCommercialDrive parity, Phase 14): every pinned sidecar
-# build must be PRESENT (binary) and carry a .paid-runtime.json whose version AND
+# build must be PRESENT (binary) and carry a .hilbertraum-runtime.json whose version AND
 # backend match runtime-sources.yaml — a missing binary or a missing/stale marker means
 # the drive ships the wrong build (e.g. a CPU-era binary after the default moved to
 # vulkan, or a half-deleted install). The dir|backend list mirrors the committed yaml
@@ -216,12 +216,12 @@ if [[ $DRY_RUN -eq 0 ]]; then
       rt_backend="${rt_rest%%|*}"
       rt_bin="${rt_rest#*|}"
       RT_VERSION="$LLAMA_VERSION"; [[ "$rt_family" == "whisper" ]] && RT_VERSION="$WHISPER_VERSION"
-      marker_file="$TARGET/$rt_dir/.paid-runtime.json"
+      marker_file="$TARGET/$rt_dir/.hilbertraum-runtime.json"
       bin_file="$TARGET/$rt_dir/$rt_bin"
       if [[ ! -f "$bin_file" ]]; then
         PROBLEMS+=("runtime: $rt_bin missing under $rt_dir (re-run fetch-runtime)")
       elif [[ ! -f "$marker_file" ]]; then
-        PROBLEMS+=("runtime: no .paid-runtime.json install marker under $rt_dir (re-run fetch-runtime)")
+        PROBLEMS+=("runtime: no .hilbertraum-runtime.json install marker under $rt_dir (re-run fetch-runtime)")
       else
         m_version="$(sed -n 's/.*"version":"\([^"]*\)".*/\1/p' "$marker_file")"
         m_backend="$(sed -n 's/.*"backend":"\([^"]*\)".*/\1/p' "$marker_file")"

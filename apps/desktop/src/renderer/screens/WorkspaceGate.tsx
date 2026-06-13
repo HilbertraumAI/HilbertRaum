@@ -132,7 +132,7 @@ export function WorkspaceGate({ state, onUnlocked }: Props): JSX.Element {
     <div className="brand" style={{ marginBottom: 18 }}>
       <span className="brand-mark">◈</span>
       <div>
-        <div className="brand-name">Private AI Drive</div>
+        <div className="brand-name">HilbertRaum</div>
         <div className="brand-edition">Lite</div>
       </div>
     </div>

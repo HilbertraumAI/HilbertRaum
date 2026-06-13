@@ -16,7 +16,7 @@ import {
 // locked-workspace buffering of the app-wide recorder.
 
 function freshDb(): Db {
-  return openDatabase(join(mkdtempSync(join(tmpdir(), 'paid-audit-')), 'test.sqlite'))
+  return openDatabase(join(mkdtempSync(join(tmpdir(), 'hilbertraum-audit-')), 'test.sqlite'))
 }
 
 /** Deterministic, strictly increasing ISO timestamps (second `n` of a fixed minute). */
