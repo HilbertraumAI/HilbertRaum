@@ -1,6 +1,7 @@
-import { useEffect, useRef, type ReactNode, type RefObject } from 'react'
+import { useEffect, useRef, useState, type ReactNode, type RefObject } from 'react'
 import { Button } from '../components'
 import { DictationButton } from './DictationButton'
+import { Waveform } from './Waveform'
 import { useT } from '../i18n'
 import type { DictationCaptureStart } from '../lib/dictation'
 
@@ -50,6 +51,11 @@ export function Composer({
   const { t } = useT()
   const ownRef = useRef<HTMLTextAreaElement>(null)
   const ref = inputRef ?? ownRef
+  // Dictation recording state + the live mic tap. `recording` drives the dim + overlay
+  // (true even when Web Audio is unavailable, so the affordance never silently vanishes);
+  // `analyser` is null then and Waveform simply draws nothing.
+  const [recording, setRecording] = useState(false)
+  const [analyser, setAnalyser] = useState<AnalyserNode | null>(null)
 
   // Auto-grow with content, capped — past the cap the textarea scrolls. scrollHeight
   // excludes the border (box-sizing: border-box), so add it back or a 2px overflow
@@ -101,30 +107,37 @@ export function Composer({
 
   return (
     <div className="composer">
-      <div className="composer-row">
-        <textarea
-          ref={ref}
-          className="chat-input"
-          rows={1}
-          placeholder={placeholder}
-          // Accessible name (audit L8): a placeholder is not a label — it vanishes on
-          // input and AT support is inconsistent. Mirror the PasswordField pattern and
-          // name the field after its mode-specific prompt ("Message…" / "Ask about…").
-          aria-label={placeholder}
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
-              e.preventDefault()
-              if (!streaming) onSend()
-            }
-          }}
-        />
+      <div className={`composer-row${recording ? ' composer-recording' : ''}`}>
+        <div className="chat-input-wrap">
+          <textarea
+            ref={ref}
+            className="chat-input"
+            rows={1}
+            placeholder={placeholder}
+            // Accessible name (audit L8): a placeholder is not a label — it vanishes on
+            // input and AT support is inconsistent. Mirror the PasswordField pattern and
+            // name the field after its mode-specific prompt ("Message…" / "Ask about…").
+            aria-label={placeholder}
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault()
+                if (!streaming) onSend()
+              }
+            }}
+          />
+          {recording && <Waveform analyser={analyser} />}
+        </div>
         {dictationAvailable === true && (
           <DictationButton
             disabled={streaming}
             onText={insertDictation}
             onError={onDictationError}
+            onRecording={(a, rec) => {
+              setAnalyser(a)
+              setRecording(rec)
+            }}
             captureImpl={dictationCaptureImpl}
           />
         )}

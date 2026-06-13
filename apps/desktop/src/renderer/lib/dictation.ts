@@ -21,6 +21,9 @@ export interface DictationCapture {
   stop(): Promise<Uint8Array>
   /** Abandon the recording — releases the microphone, discards everything. */
   cancel(): void
+  /** A read-only tap on the live mic for the in-input waveform. `null` when Web Audio
+   *  is unavailable (older webview / a test fake) — the UI then simply draws no wave. */
+  analyser: AnalyserNode | null
 }
 
 /** Starts the recording (the seam `DictationButton` injects in renderer tests). */
@@ -33,7 +36,28 @@ export const captureDictation: DictationCaptureStart = async () => {
   } catch {
     throw new Error(MIC_BLOCKED_MESSAGE)
   }
-  const release = (): void => stream.getTracks().forEach((track) => track.stop())
+  // A read-only Web Audio tap on the SAME stream, feeding the in-input waveform. It is
+  // never connected to a destination (nothing is played back) and never touches the
+  // recorded bytes, so the WAV pipeline below is byte-identical with or without it.
+  // Web Audio failing must not break recording — degrade to no waveform.
+  let audioCtx: AudioContext | null = null
+  let analyser: AnalyserNode | null = null
+  try {
+    audioCtx = new AudioContext()
+    void audioCtx.resume() // the mic click is the user gesture; resume if suspended
+    const source = audioCtx.createMediaStreamSource(stream)
+    analyser = audioCtx.createAnalyser()
+    analyser.fftSize = 1024
+    analyser.smoothingTimeConstant = 0.8
+    source.connect(analyser) // NOT to destination — read tap only
+  } catch {
+    audioCtx = null
+    analyser = null
+  }
+  const release = (): void => {
+    stream.getTracks().forEach((track) => track.stop())
+    void audioCtx?.close().catch(() => {})
+  }
 
   let recorder: MediaRecorder
   try {
@@ -52,6 +76,7 @@ export const captureDictation: DictationCaptureStart = async () => {
   recorder.start()
 
   return {
+    analyser,
     async stop() {
       try {
         recorder.stop()

@@ -543,7 +543,25 @@ what was built:
   Failures surface through the screen's existing error Banner (`onDictationError`);
   empty transcription gets its own no-speech notice. Capture is injectable
   (`dictationCaptureImpl`) for renderer tests — the spawnImpl precedent.
-- **Tests (+21 net; 931/931 green):** `unit/wav.test.ts` (header/round-trip/clamp/empty),
+- **Live in-input waveform (2026-06-13 enhancement):** the OS mic indicator + button
+  pulse were the only "recording has started" signals; users couldn't tell capture had
+  begun. `captureDictation` now adds a **read-only Web Audio tap** on the SAME mic
+  stream (`MediaStreamAudioSource → AnalyserNode`, never connected to a destination, never
+  touching the recorded bytes — the WAV path is byte-identical), exposed as
+  `DictationCapture.analyser`. `renderer/chat/Waveform.tsx` draws the time-domain data to
+  a `<canvas>` overlaid on the textarea (`requestAnimationFrame`, DPR-aware, accent stroke
+  from the theme var) while `DictationButton` reports recording via `onRecording(analyser,
+  recording)`; `Composer` adds `.composer-recording` (dims the draft text + accent border
+  so the wave reads cleanly) and renders the overlay. **Graceful degradation:** Web Audio
+  failing or absent (older webview / jsdom) ⇒ `analyser: null` ⇒ the canvas no-ops while
+  recording + dim still engage (button pulse stays as redundancy). Decorative
+  (`aria-hidden`); the mic button's `aria-pressed`/label stays authoritative.
+  `prefers-reduced-motion` ⇒ a static baseline, no RAF loop. Fully local, zero new deps,
+  no network. The `onRecording` cleanup uses a ref so an inline parent callback's
+  per-render identity change can't tear down a live recording. Verified in the built app
+  (both themes) via `walk-waveform.mjs` (fake-device audio drives a real analyser; the
+  canvas painted 1559 px, not a dead baseline).
+- **Tests (+22 net):** `unit/wav.test.ts` (header/round-trip/clamp/empty),
   `unit/permissions.test.ts` (scope matrix), `integration/dictation-ipc.test.ts`
   (temp-file naming + dir + bytes fidelity, workDir steering, shred on success AND error,
   friendly absent/empty/oversize refusals, raw CLI error never crosses IPC, no audit,

@@ -749,7 +749,9 @@ code, pre, kbd { font-family: var(--font-mono); }
 /* Composer (guidelines §3/§6): centered with the transcript; auto-grow input,
    one Send/Stop button, quiet footer row. */
 .composer { display: flex; flex-direction: column; gap: 6px; max-width: 720px; width: 100%; margin: 0 auto; }
-.composer-row { display: flex; gap: 8px; align-items: flex-end; }
+.composer-row { display: flex; gap: 8px; align-items: flex-end; position: relative; }
+/* Holds the textarea + the live dictation waveform overlay, taking the row's flex space. */
+.chat-input-wrap { flex: 1; min-width: 0; position: relative; display: flex; }
 .chat-input {
   flex: 1;
   width: 100%;
@@ -779,6 +781,24 @@ code, pre, kbd { font-family: var(--font-mono); }
 @keyframes dictation-pulse { 50% { opacity: 0.45; } }
 @media (prefers-reduced-motion: reduce) {
   .dictation-btn.dictation-recording { animation: none; }
+}
+
+/* Live mic waveform: a canvas overlaid on the input while dictating, so it is
+   unmistakable that recording has started. The textarea text dims beneath it (the
+   draft is preserved — dictation inserts at the cursor). Decorative + pointer-through;
+   the mic button stays the authoritative, keyboard-reachable recording control. */
+.dictation-waveform {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  border-radius: var(--radius-sm);
+}
+.composer-recording .chat-input {
+  color: var(--text-muted);
+  opacity: 0.35;
+  border-color: var(--accent);
 }
 
 /* Documents screen */
