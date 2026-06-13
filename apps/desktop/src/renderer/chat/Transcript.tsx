@@ -99,19 +99,22 @@ export function Transcript({
                   again when the first answer token lands. Display-only — never persisted,
                   so it disappears once the final reply is re-read from history. */}
               {streamThinking !== '' && (
-                <details className="msg-thinking" open={thinkingOpen}>
-                  {/* Controlled explicitly (not the native toggle) so auto-collapse on
-                      the first answer token can't fight the browser's own state. */}
-                  <summary
-                    onClick={(e) => {
-                      e.preventDefault()
-                      onThinkingOpenChange(!thinkingOpen)
-                    }}
+                // A <button aria-expanded> (the SourcesDisclosure pattern), not a
+                // <details>/<summary> driven by preventDefault (audit L15): the controlled
+                // toggle (auto-collapse on the first answer token) used to fight the native
+                // <details> state, which could desync the implicit aria-expanded a screen
+                // reader announces. An explicit aria-expanded button stays in lockstep.
+                <div className="msg-thinking">
+                  <button
+                    type="button"
+                    className="msg-thinking-toggle"
+                    aria-expanded={thinkingOpen}
+                    onClick={() => onThinkingOpenChange(!thinkingOpen)}
                   >
                     {t('chat.thinking')}
-                  </summary>
-                  <div className="msg-thinking-text">{streamThinking}</div>
-                </details>
+                  </button>
+                  {thinkingOpen && <div className="msg-thinking-text">{streamThinking}</div>}
+                </div>
               )}
               {/* The visible markdown is NOT a live region (audit L7): re-rendering the
                   whole buffer on every ~40 ms flush made role="log" either re-read the
@@ -206,14 +209,34 @@ export function AssistantMarkdown({ text }: { text: string }): JSX.Element {
     <Markdown
       remarkPlugins={[remarkGfm]}
       components={{
-        a: ({ href, children }) => (
-          <a href={href} target="_blank" rel="noreferrer">
-            {children}
-          </a>
-        )
+        a: ({ href, children }) => {
+          // Whitelist http(s) only (audit L1): a model could emit a `javascript:`/`data:`
+          // href. The CSP + the window-open handler already block execution/navigation, so
+          // this is belt-and-suspenders — a disallowed scheme renders as inert text, not a link.
+          const safe = isSafeHttpUrl(href)
+          return safe ? (
+            <a href={href} target="_blank" rel="noreferrer">
+              {children}
+            </a>
+          ) : (
+            <span>{children}</span>
+          )
+        }
       }}
     >
       {text}
     </Markdown>
   )
+}
+
+/** True only for absolute http(s) URLs — the one scheme allowed in rendered model links. */
+function isSafeHttpUrl(href: string | undefined): boolean {
+  if (!href) return false
+  try {
+    const proto = new URL(href).protocol
+    return proto === 'http:' || proto === 'https:'
+  } catch {
+    // Not an absolute URL (relative/anchor/malformed) → not a safe external link.
+    return false
+  }
 }

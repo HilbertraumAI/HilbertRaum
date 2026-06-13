@@ -559,7 +559,15 @@ code, pre, kbd { font-family: var(--font-mono); }
   font-size: 12px;
   color: var(--text-muted);
 }
-.msg-thinking summary { cursor: pointer; user-select: none; }
+.msg-thinking-toggle {
+  cursor: pointer;
+  user-select: none;
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+}
 .msg-thinking-text { white-space: pre-wrap; word-break: break-word; margin-top: 6px; line-height: 1.45; }
 .msg-role {
   display: flex;
