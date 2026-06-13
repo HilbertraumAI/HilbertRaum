@@ -42,6 +42,18 @@ master pipeline** that produces a finished, sellable drive (see the last section
   sub-dir (`win`/`mac`/`linux`) and the executable name (`llama-server.exe` on Windows, `llama-server`
   elsewhere) are resolved by `resolveLlamaServerPath(rootPath, platform)` in
   `services/runtime/sidecar.ts`. A `HILBERTRAUM_LLAMA_BIN` env var overrides the path for dev.
+  - **In-app engine install (`services/runtime-download.ts`).** The same prebuilt binaries the DIY
+    `fetch-runtime` scripts provision at build time can also be fetched **from inside the app** (the
+    "Install the AI engine" banner on the AI Model screen) when a drive has model weights but no
+    engine — otherwise a started model silently falls back to the demo runtime. The installer is
+    **engine-family-generic**: `ENGINE_FAMILIES` lists `llama_cpp` (the `llama-server` chat engine)
+    and `whisper_cpp` (the `whisper-cli` voice/transcription engine), and a single install fetches
+    every missing family for the host. **To add a future engine family:** add its `<family>:` block
+    to `model-manifests/runtime-sources.yaml` (with a real host build + SHA-256) and one entry to
+    `ENGINE_FAMILIES` (`{ family, binaryBase }`); status, install, flatten, marker, and the banner
+    generalize automatically. A family with **no prebuilt host build** (e.g. whisper.cpp on
+    macOS/Linux, which ships Windows-only binaries — built from source by the drive builder) is
+    simply skipped by the in-app installer.
 - **Model weights** — GGUF files under `models/`, resolved from each manifest's `local_path` (relative
   to the drive root) via `weightPath(rootPath, manifest)`. They are **git-ignored**; a real drive is
   built by Phase 11's prepare-drive scripts (and verified against the manifest `sha256`). The bundled

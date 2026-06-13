@@ -85,6 +85,23 @@ exists for either) and — since Phase 18 (wave-1 decision D3 — architecture.m
 **permitted**, so that with no policy file the spec §3.6 user toggle is the effective downloads
 gate. The policy models the spec §6 shape (`network` / `workspace` / `models` blocks).
 
+**Fail-closed on a packaged build (audit M-4, 2026-06-13).** The base the file is merged over —
+and the fallback for a **missing / malformed / partial** `policy.json` — depends on the build type
+(`loadPolicy(configDir, onWarn, { isDev })`):
+
+- **Dev build** (`!app.isPackaged`): base = `DEFAULT_POLICY` (developer-friendly — plaintext + unverified
+  models allowed, downloads permitted). Unchanged.
+- **Packaged build**: base = `STRICT_POLICY` (`encryption_required: true`, `allow_plaintext_dev_mode:
+  false`, `allow_unverified_models: false`, `require_sha256_match: true`, all network denied). A
+  corrupted or deleted `policy.json` on a removable drive therefore **tightens** toward the commercial
+  posture instead of loosening toward dev — it can no longer silently disable model-integrity
+  enforcement. A partial/junk file leaves every unspecified field at the strict value. This also
+  neutralizes M-6: an unverified/placeholder-hash weight cannot be loaded when the fallback forbids it.
+
+`isDev` is threaded from `initBackend()` into every policy read (the model/download/core IPC handlers).
+The commercial **sell gate** (`assertCommercialDrive`) deliberately keeps the DEFAULT base: a drive
+shipping *no* `policy.json` must FAIL the gate, not pass on the strict fallback.
+
 A (future signed) `policy.json` is **authoritative**: it can only **restrict**, never expand, what
 the user setting permits — `prepare-drive` keeps writing `allow_model_downloads: false` in both its
 postures, so prepared drives deny downloads unless the drive builder deliberately changes that. The
@@ -122,7 +139,9 @@ a **remote** host is logged as a violation.
 renderer loads from `http://localhost` today and the Phase-10 `llama.cpp` sidecar binds `127.0.0.1`.
 Only genuinely remote origins are flagged. The guard **only logs; it never blocks or throws**, so a
 wrong host guess can never break local IPC or the sidecars. Real runtimes MUST bind
-`127.0.0.1` only.
+`127.0.0.1` only. The IPv4 loopback test is **anchored** (`/^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/`,
+audit L-1) so a hostname like `127.evil.com` is not misclassified as loopback; `isLoopbackHost` is a
+detection helper only and must never gate an allowed-vs-blocked decision.
 
 #### Detection-only, not enforcement — a recorded decision (audit M-S1, 2026-06-13)
 
@@ -381,6 +400,40 @@ background (the active-model auto-start); the embedder restarts lazily on the ne
   leave original blocks recoverable. We do not over-promise this.
 - **No password recovery.** The password is never stored and the key is unrecoverable without it —
   losing the password means losing the workspace. Onboarding copy says so.
+
+## Malicious-document resource caps (audit M-1/M-2/M-3, 2026-06-13)
+
+A user can import an attacker-crafted file. The ingestion pipeline now bounds the work
+**before** a parser touches the bytes, so a crafted document fails the one document instead of
+OOMing or hanging the main process. The caps live in `services/ingestion/limits.ts` and are
+generous (a legitimate large recording/scan still imports) and env-overridable:
+
+- **Byte ceiling** (`HILBERTRAUM_MAX_DOC_BYTES`, default 1 GiB) — checked in `processDocument`
+  against the queued `size_bytes` (cheap, before any copy/decrypt) AND against a `statSync` of the
+  resolved parse source (covers a decrypted transient / an unknown queue-time size).
+- **Parse wall-clock timeout** (`HILBERTRAUM_PARSE_TIMEOUT_MS`, default 30 min) around
+  `parser.parse` — a backstop for a wedged parser. **Audio is exempt**: a long recording
+  legitimately transcribes for many minutes and the whisper child manages its own lifecycle.
+- **PDF page cap** (`HILBERTRAUM_PDF_MAX_PAGES`, default 5 000) — a tiny PDF can declare an
+  enormous page count; the text loop walks at most this many pages and logs the truncation.
+- **DOCX inflated-size ceiling** (`HILBERTRAUM_DOCX_MAX_INFLATED_BYTES`, default 1 GiB) — sums the
+  zip central-directory declared uncompressed sizes and refuses a zip bomb before mammoth/JSZip
+  inflates it. (Declared sizes can be spoofed; the byte cap + timeout remain the backstop.)
+
+A rejection surfaces as the friendly, persist-canonical `main.ingest.fileTooLarge` /
+`main.ingest.parseTimeout` on the document row (display-mapped at render, like the other ingestion
+failures). The downstream `maxChunks` cap still applies after parsing.
+
+## Unverified-binary env overrides are dev-only (audit M-5, 2026-06-13)
+
+`HILBERTRAUM_LLAMA_BIN` and `HILBERTRAUM_WHISPER_BIN` point the sidecar resolvers at an explicit,
+**unverified** binary. They are a dev affordance and are now honoured **only in a dev build**:
+`resolveLlamaServerPath` / `resolveWhisperCliPath` take an `{ isDev }` option (default `false` =
+ignore + log), and `isDev` is threaded through the runtime / embedder / reranker / transcriber
+factories and the benchmark probe. In a packaged build the override is ignored and resolution falls
+back to the on-drive `runtime/<family>/<os>/` location, so process environment alone cannot make the
+app spawn an arbitrary binary. (Hash-verifying the on-drive sidecar against `runtime-sources.yaml`
+before spawn remains a possible future hardening; today trust rests on drive provisioning.)
 
 ## Out of scope (MVP)
 - OS-level firewall enforcement (offline is by design + policy/UX, not a hard network block).

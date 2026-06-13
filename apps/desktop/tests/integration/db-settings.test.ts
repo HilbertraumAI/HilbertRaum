@@ -34,10 +34,10 @@ describe('database migration', () => {
 })
 
 describe('settings persistence', () => {
-  it('seeds offline-first defaults', () => {
+  it('seeds the default settings (network permitted by default so downloads work)', () => {
     const db = freshDb()
     const seeded = seedSettings(db)
-    expect(seeded.allowNetwork).toBe(false)
+    expect(seeded.allowNetwork).toBe(true)
     expect(seeded.workspaceMode).toBe('plaintext_dev')
   })
 

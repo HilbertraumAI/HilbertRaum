@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises'
 import { t } from '../../../../shared/i18n'
+import { log } from '../../logging'
 import type { DocumentParser, ExtractedSegment, ParseContext, ParsedDocument } from './index'
 
 // PDF parser (spec R3). Uses pdfjs-dist's *legacy* build, which runs in plain Node
@@ -59,7 +60,18 @@ export const PdfParser: DocumentParser = {
     let numPages = 0
     try {
       numPages = doc.numPages
-      for (let pageNumber = 1; pageNumber <= numPages; pageNumber++) {
+      // Page cap (security audit M-2): a tiny PDF can declare an enormous page count to
+      // make this loop (getPage + getTextContent per page) spin unbounded. Walk at most
+      // `ctx.maxPages` pages; beyond that we index what we read and log the truncation.
+      const pageCap = ctx?.maxPages && ctx.maxPages > 0 ? ctx.maxPages : Number.POSITIVE_INFINITY
+      const lastPage = Math.min(numPages, pageCap)
+      if (numPages > lastPage) {
+        log.warn('PDF page cap reached — indexing a truncated document', {
+          numPages,
+          pageCap: lastPage
+        })
+      }
+      for (let pageNumber = 1; pageNumber <= lastPage; pageNumber++) {
         const page = await doc.getPage(pageNumber)
         const content = await page.getTextContent()
         let text = ''

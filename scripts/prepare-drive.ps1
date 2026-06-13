@@ -119,7 +119,6 @@ $PolicyJson = [ordered]@{
   network   = [ordered]@{
     allow_model_downloads = $false
     allow_update_checks   = $false
-    allow_telemetry       = $false
   }
   workspace = [ordered]@{
     encryption_required     = (-not $Dev)

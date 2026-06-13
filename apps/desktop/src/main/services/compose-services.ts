@@ -29,6 +29,13 @@ export interface ComposeServicesDeps {
   rootPath: string
   /** Resolved model-manifests dir, or null (→ every role falls back to mock/null). */
   manifestsDir: string | null
+  /**
+   * Developer build (`!app.isPackaged`). Gates the dev-only `HILBERTRAUM_LLAMA_BIN` /
+   * `HILBERTRAUM_WHISPER_BIN` binary overrides (M-5): in a packaged build the sidecar
+   * binaries are resolved only from the on-drive location, never an env-supplied path.
+   * Defaults to `false` (ignore the override) so a forgetful caller fails SAFE.
+   */
+  isDev?: boolean
 }
 
 /**
@@ -37,9 +44,14 @@ export interface ComposeServicesDeps {
  * reranker / transcriber / OCR engine (real when provisioned, else `null` — a mock there
  * would invent an ordering / a transcript / OCR text and silently corrupt answers).
  */
-export function composeServices({ rootPath, manifestsDir }: ComposeServicesDeps): AvailabilityServices {
+export function composeServices({
+  rootPath,
+  manifestsDir,
+  isDev = false
+}: ComposeServicesDeps): AvailabilityServices {
   const embedder = createSelectedEmbedder({
     rootPath,
+    isDev,
     model: resolveModelByRole(manifestsDir, rootPath, 'embeddings'),
     onSelect: (kind, reason) => log.info('Embedder backend selected', { kind, reason })
   })
@@ -47,6 +59,7 @@ export function composeServices({ rootPath, manifestsDir }: ComposeServicesDeps)
   // otherwise; retrieval then keeps today's ordering byte-identical).
   const reranker = createSelectedReranker({
     rootPath,
+    isDev,
     model: resolveModelByRole(manifestsDir, rootPath, 'reranker'),
     onSelect: (kind, reason) => log.info('Reranker backend selected', { kind, reason })
   })
@@ -55,6 +68,7 @@ export function composeServices({ rootPath, manifestsDir }: ComposeServicesDeps)
   // No context window.
   const transcriber = createSelectedTranscriber({
     rootPath,
+    isDev,
     model: resolveModelByRole(manifestsDir, rootPath, 'transcriber', {
       includeContextTokens: false
     }),

@@ -25,6 +25,8 @@ export const DISPLAY_MAP_KEYS: readonly MessageKey[] = [
   'main.ingest.imageOcrFailed',
   'main.ingest.sourceMissing',
   'main.ingest.interrupted',
+  'main.ingest.fileTooLarge',
+  'main.ingest.parseTimeout',
   'main.rag.noContext',
   'main.rag.reindexNeeded',
   'main.chat.docTaskBusy',

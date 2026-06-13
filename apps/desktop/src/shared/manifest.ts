@@ -95,6 +95,15 @@ export function isRealSha256(value: string): boolean {
   return SHA256_RE.test(value)
 }
 
+/**
+ * True only for an `https://` URL (case-insensitive scheme). Download URLs must be TLS:
+ * cleartext `http://` leaks which model is fetched and is downgrade-friendly (L-2). Shared
+ * by the manifest validator and the asset planners so the rule has one definition.
+ */
+export function isHttpsUrl(value: string): boolean {
+  return /^https:\/\//i.test(value.trim())
+}
+
 function isObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v)
 }
@@ -213,6 +222,10 @@ export function validateManifest(raw: unknown): ValidationResult {
       const url = dl['url']
       if (typeof url !== 'string' || url.trim() === '') {
         errors.push('"download.url" is required and must be a non-empty string')
+      } else if (!isHttpsUrl(url)) {
+        // L-2: cleartext http:// leaks which model is fetched and is downgrade-friendly.
+        // SHA-256 still protects integrity (for real hashes), but the transport must be TLS.
+        errors.push('"download.url" must be an https:// URL')
       }
       const dlShaRaw = dl['sha256']
       if (typeof dlShaRaw !== 'string' || dlShaRaw.trim() === '') {

@@ -3,8 +3,9 @@ import { randomUUID } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { llamaOsDir, defaultThreadCount } from '../runtime/sidecar'
+import { llamaOsDir, defaultThreadCount, type ResolveBinOptions } from '../runtime/sidecar'
 import { shredFile } from '../workspace-vault'
+import { log } from '../logging'
 import type { TranscribeOptions, Transcriber, TranscriptSegment } from './index'
 
 // whisper.cpp CLI transcriber (see index.ts for the CLI-over-server
@@ -31,15 +32,20 @@ export function whisperCliDir(rootPath: string, platform: NodeJS.Platform = proc
 /**
  * Resolve the `whisper-cli` binary, or `null` when it is absent (mirrors
  * `resolveLlamaServerPath`). A `HILBERTRAUM_WHISPER_BIN` env override points at an explicit
- * binary for dev (still validated for existence).
+ * binary for DEV ONLY (still validated for existence); in a packaged build it is ignored
+ * — it would spawn an arbitrary, unverified binary (security audit M-5).
  */
 export function resolveWhisperCliPath(
   rootPath: string,
   platform: NodeJS.Platform = process.platform,
-  env: NodeJS.ProcessEnv = process.env
+  env: NodeJS.ProcessEnv = process.env,
+  opts: ResolveBinOptions = {}
 ): string | null {
   const override = env.HILBERTRAUM_WHISPER_BIN?.trim()
-  if (override) return existsSync(override) ? override : null
+  if (override) {
+    if (opts.isDev) return existsSync(override) ? override : null
+    log.warn('Ignoring HILBERTRAUM_WHISPER_BIN in a packaged build (dev-only override)')
+  }
   const candidate = join(whisperCliDir(rootPath, platform), whisperCliBinaryName(platform))
   return existsSync(candidate) ? candidate : null
 }

@@ -19,6 +19,7 @@ import { documentsDir } from './services/ingestion'
 import { inFlightStreams } from './ipc/inflight'
 import { registerDictationIpc } from './ipc/registerDictationIpc'
 import { registerDownloadIpc } from './ipc/registerDownloadIpc'
+import { registerEngineIpc } from './ipc/registerEngineIpc'
 import { registerRagIpc } from './ipc/registerRagIpc'
 import { registerBenchmarkIpc, maybeRunFirstBenchmark } from './ipc/registerBenchmarkIpc'
 import { registerAuditIpc } from './ipc/registerAuditIpc'
@@ -73,10 +74,15 @@ function initBackend(): void {
   // opens immediately (current dev behavior); in encrypted mode it stays locked until the
   // unlock gate provides a password (the DB + key live only in memory while unlocked).
   const policyWarnings: string[] = []
-  const { policy } = loadPolicy(paths.configPath, (m) => {
-    log.warn(m)
-    policyWarnings.push(m)
-  })
+  const { policy } = loadPolicy(
+    paths.configPath,
+    (m) => {
+      log.warn(m)
+      policyWarnings.push(m)
+    },
+    // M-4: a packaged build fails CLOSED (STRICT_POLICY) on a missing/malformed policy.json.
+    { isDev }
+  )
   const workspace = new WorkspaceController(
     vaultPathsFrom({ configPath: paths.configPath, dbPath: paths.dbPath }),
     policy,
@@ -174,6 +180,8 @@ function initBackend(): void {
   const runtime = new RuntimeManager(
     createSelectingRuntimeFactory({
       rootPath: paths.rootPath,
+      // M-5: the dev-only HILBERTRAUM_LLAMA_BIN override is honoured only in a dev build.
+      isDev,
       onSelect: (kind, opts, reason) =>
         log.info('Runtime backend selected', { kind, modelId: opts.modelId, reason }),
       gpu: {
@@ -191,7 +199,9 @@ function initBackend(): void {
   // wiring above stays inline because of its late-bound crash handler.
   const { embedder, reranker, transcriber, ocrEngine } = composeServices({
     rootPath: paths.rootPath,
-    manifestsDir
+    manifestsDir,
+    // M-5: dev-only binary env overrides are honoured only in a dev build.
+    isDev
   })
 
   // Document task engine: one-at-a-time summary/translation/compare jobs. The
@@ -241,6 +251,7 @@ function initBackend(): void {
   registerDocTasksIpc(ctx)
   registerDictationIpc(ctx)
   registerDownloadIpc(ctx)
+  registerEngineIpc(ctx)
   registerRagIpc(ctx)
   registerBenchmarkIpc(ctx)
   registerAuditIpc(ctx)
@@ -264,7 +275,8 @@ function initBackend(): void {
   const status = buildPolicyStatus(
     paths.configPath,
     unlocked ? getSettings(ctx.db).allowNetwork : false,
-    (m) => log.warn(m)
+    (m) => log.warn(m),
+    { isDev }
   )
   assertOfflinePosture({
     posture: { offline: status.offlineMode, networkAllowed: status.networkAllowed },

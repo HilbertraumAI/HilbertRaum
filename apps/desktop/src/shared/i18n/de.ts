@@ -339,7 +339,8 @@ export const de: Record<keyof typeof en, string> = {
   'models.state.running': 'Läuft',
   'models.hint.embeddings': 'Bereitet deine Dokumente vor, damit du Fragen dazu stellen kannst.',
   'models.hint.reranker': 'Verbessert, welche Dokumentpassagen für Antworten verwendet werden.',
-  'models.hint.transcriber': 'Wandelt Audioaufnahmen in durchsuchbaren Text um.',
+  'models.hint.transcriber':
+    'Wandelt Audioaufnahmen in durchsuchbaren Text um — und schaltet die 🎤 Spracheingabe im Chat frei.',
   'models.hint.small': 'Klein und flott — schnelle Antworten auf fast jedem Gerät.',
   'models.hint.balanced': 'Ausgewogen — läuft gut auf den meisten Laptops.',
   'models.hint.large': 'Groß — stärkste Antworten; braucht einen leistungsstarken Rechner.',
@@ -364,6 +365,19 @@ export const de: Record<keyof typeof en, string> = {
   'models.download.titled': '{name} herunterladen ({size})',
   'models.download.resume': 'Download fortsetzen',
   'models.download.start': 'Herunterladen',
+  // In-App-Engine-(llama.cpp + whisper.cpp)-Installer-Banner — sichtbar, wenn eine Engine fehlt.
+  'models.engine.title': 'KI-Engine installieren',
+  'models.engine.explain':
+    'Modelle laufen in einem eingebauten Demo-Modus (sichtbar simulierte Antworten), bis die ' +
+    'KI-Engine installiert ist; die Spracheingabe braucht die Sprach-Engine. Installiere die ' +
+    'Engines einmal — starte dann ein Modell für echte Antworten.',
+  'models.engine.install': 'KI-Engine installieren',
+  'models.engine.retry': 'Erneut versuchen',
+  'models.engine.progress': 'KI-Engine wird heruntergeladen… {pct} %',
+  'models.engine.downloadingNoTotal': 'KI-Engine wird heruntergeladen…',
+  'models.engine.verifying': 'KI-Engine wird geprüft…',
+  'models.engine.extracting': 'KI-Engine wird entpackt…',
+  'models.engine.installedNote': 'Die KI-Engine ist installiert — starte ein Modell, um sie zu nutzen.',
   'models.ram.needs': 'Braucht mindestens {min} GB RAM',
   'models.ram.machine': ' — dieser Computer hat etwa {ram} GB',
   'models.ram.advice': '. Wähle ein kleineres Modell — die Qualität bleibt top.',
@@ -784,6 +798,12 @@ export const de: Record<keyof typeof en, string> = {
   'main.ingest.interrupted':
     'Die Indexierung wurde unterbrochen, bevor sie fertig war. Indexiere neu, um es noch ' +
     'einmal zu versuchen.',
+  'main.ingest.fileTooLarge':
+    'Diese Datei ist zu groß, um sie sicher zu importieren. Teile sie in kleinere Dateien ' +
+    'auf und versuche es noch einmal.',
+  'main.ingest.parseTimeout':
+    'Diese Datei hat zu lange gebraucht und wurde übersprungen. Sie ist möglicherweise ' +
+    'beschädigt oder extrem groß.',
   'main.rag.noContext':
     'Dazu habe ich in deinen Dokumenten nichts gefunden. Formuliere deine Frage anders oder ' +
     'prüf, welche Dokumente du gerade fragst.',
@@ -901,6 +921,23 @@ export const de: Record<keyof typeof en, string> = {
   'main.download.interrupted':
     'Der Download wurde unterbrochen ({reason}). Der fertige Teil bleibt erhalten — beim ' +
     'nächsten Start wird dort weitergemacht.',
+  'main.engine.alreadyRunning': 'Die KI-Engine wird bereits heruntergeladen.',
+  'main.engine.noSources':
+    'Auf diesem Laufwerk wurden keine Engine-Quellen gefunden (runtime-sources.yaml fehlt).',
+  'main.engine.noHostBuild': 'Für diesen Computer ist keine KI-Engine verfügbar.',
+  'main.engine.alreadyInstalled': 'Die KI-Engine ist bereits installiert.',
+  'main.engine.unknownJob': 'Unbekannter Engine-Download.',
+  'main.engine.checksumMismatch':
+    'Die heruntergeladene Engine entsprach nicht ihrer erwarteten Prüfsumme und wurde verworfen. ' +
+    'Bitte versuche es erneut.',
+  'main.engine.fileMissing': 'Die heruntergeladene Engine fehlte, bevor sie geprüft werden konnte.',
+  'main.engine.binaryMissing':
+    'Die Engine wurde heruntergeladen, konnte aber nicht entpackt werden (das Archivformat hat sich evtl. geändert).',
+  'main.engine.extractFailed':
+    'Die KI-Engine wurde heruntergeladen, konnte aber nicht entpackt werden. Bitte versuche es erneut.',
+  'main.engine.httpFailed':
+    'Der Engine-Download konnte nicht starten ({reason}). Bitte prüfe die Verbindung und versuche es erneut.',
+  'main.engine.interrupted': 'Der Engine-Download wurde unterbrochen ({reason}). Bitte versuche es erneut.',
   'main.docs.locked': 'Der Arbeitsbereich ist gesperrt. Entsperre ihn, um Dokumente zu verwalten.',
   'main.docs.processing':
     'Dieses Dokument wird noch verarbeitet. Warte, bis der Import fertig ist.',

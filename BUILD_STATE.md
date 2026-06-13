@@ -6,7 +6,97 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
-_Last updated: 2026-06-13 — **Encrypt the diagnostics log at rest.** `logs/app.log`
+_Last updated: 2026-06-13 — **Onboarding follow-ups: whisper auto-install, embeddings card,
+policy cleanup, responsive screens (0.1.14 cont.).** (1) **Engine installer generalized to all
+families.** [`runtime-download.ts`](apps/desktop/src/main/services/runtime-download.ts) now drives
+an `ENGINE_FAMILIES` list — `llama_cpp` (chat, `llama-server`) **and `whisper_cpp` (voice,
+`whisper-cli`)`; one install fetches every missing family for the host (a family with no host build,
+e.g. whisper on mac/linux, is skipped). `EngineStatus` gained `missingFamilies`; the banner copy
+covers chat + voice. Doc: [`packaging.md`](docs/packaging.md) "In-app engine install" — how to add a
+future family. (2) **Embeddings model card bug.** The document-search (embeddings) card showed
+Select/Start (Start threw — only chat models are activatable) and an inconsistent "Active" badge.
+Embeddings is now treated as **automatic** (like reranker/transcriber): no Select/Start, no Active
+badge — "Used automatically once installed." Safe because retrieval uses `embedder.id` directly
+([`registerDocsIpc.ts`](apps/desktop/src/main/ipc/registerDocsIpc.ts) already passes it), not the
+`activeEmbeddingModelId` setting. (3) **policy.json cleanup.** `allow_telemetry` removed from the
+generated file ([`drive.ts`](apps/desktop/src/main/services/drive.ts) `buildPolicyJson` +
+prepare-drive `.ps1`/`.sh`) — the app has no telemetry and `buildPolicyStatus` hardcodes
+`telemetryAllowed:false`; the runtime parser still tolerates the field. **`encryption_required` was
+KEPT** — it is a deliberate, audited security control: `assertCommercialDrive` reads it from the
+file using the DEFAULT (non-STRICT) base **on purpose** (M-4), so a sold drive must *explicitly*
+declare encryption-required and cannot pass via the fallback. (Flagged to the user.) (4)
+**Responsive screens.** Only Chat adapted below ~1150px (its JS list-collapse); added
+[`styles.css`](apps/desktop/src/renderer/styles.css) `@media (max-width: 760px / 520px)` so Home /
+AI Model / Documents / Settings / Diagnostics also reflow — slim nav rail, tighter gutters, stacked
+`.kv` grids, wrapping card heads, scrollable segmented switchers. **Tests:** typecheck clean, build
+OK, `npm test` **1133 passed / 25 skipped** (+2 engine family tests)._
+
+_(prior) 2026-06-13 — **Onboarding fixes: network-on-by-default, in-app engine
+installer, voice discoverability.** Three issues found testing the first-run flow.
+**(1) Downloads possible by default:** `DEFAULT_SETTINGS.allowNetwork` flipped `false → true`
+([`shared/types.ts`](apps/desktop/src/shared/types.ts)) so a fresh install can fetch models
+out of the box. The **policy ceiling is still authoritative** — a commercial `policy.json`
+with `allow_model_downloads: false` (or the packaged-build `STRICT_POLICY` fallback) keeps the
+app offline regardless; telemetry stays hardcoded off. Updated `smoke.test.ts` +
+`db-settings.test.ts` (the old "offline-first default" asserts) + the `policy.ts`/`types.ts`
+"default off" comments; `download-ipc.test.ts` `makeCtx` now sets the setting explicitly so the
+setting-off gate is still exercised. **(2) In-app engine installer (the real fix for "I
+downloaded a model but it said mock mode"):** the model downloader fetches WEIGHTS only — without
+the `llama-server` engine binary a started model falls back to the demo runtime
+([`runtime/factory.ts`](apps/desktop/src/main/services/runtime/factory.ts) — "no llama-server
+binary on the drive"). New [`services/runtime-download.ts`](apps/desktop/src/main/services/runtime-download.ts)
+`EngineDownloadManager` fetches + SHA-256-verifies + extracts the host's prebuilt build from
+`runtime-sources.yaml` into `runtime/llama.cpp/<os>/` (download → verify → clean → extract →
+flatten → install marker — mirrors the canonical fetch-runtime scripts), with the network
+(`fetchImpl`) and extraction (`extractImpl`, default `tar -xf`) behind injected seams (suite stays
+zero-network/zero-shell). Same gates as model downloads (policy ∧ `allowNetwork`), re-checked in
+main. New `engine:status`/`download`/`getJob`/`cancel` IPC + preload + a **Models-screen
+"Install the AI engine" banner** (warning tone, progress/cancel, demo-mode explanation) shown when
+the engine is missing but a host build exists. New shared types `EngineDownloadJob`/`EngineStatus`;
+12 tests in `engine-download.test.ts`. **(3) Voice mic discoverability:** the dictation mic was NOT
+removed by the chat-UI polish pass (the Composer block is byte-identical) — it is availability-gated
+on `ctx.transcriber != null` (whisper engine + model present). Per the "keep gated, improve
+discoverability" decision the transcriber card copy now states it unlocks the 🎤 voice button
+(EN+DE `models.hint.transcriber`). **Tests:** typecheck clean, build OK, `npm test` **1131 passed /
+25 skipped** (+12). **Manual-smoke TODO:** the real network fetch + `tar` extraction of the b9585
+build is only exercised by the injected seams in CI — verify end-to-end on a real drive (like the
+GPU/PAID smokes)._
+
+_(prior) 2026-06-13 — **Security-hardening wave (audit 2026-06-13 remediation).**
+Fixed every MEDIUM + the quick-win LOW findings from the same-day multi-persona security
+audit. (Per the doc lifecycle rule the audit report was condensed into this entry +
+`security-model.md` and then deleted — the full report is recoverable from git history at
+commit `f99bc86`, which added it.)
+**M-1/M-2/M-3 (parser DoS):** new `services/ingestion/limits.ts` adds env-overridable
+pre-parse caps — a **byte ceiling** (`HILBERTRAUM_MAX_DOC_BYTES`, 1 GiB), a **parse wall-clock
+timeout** (`HILBERTRAUM_PARSE_TIMEOUT_MS`, 30 min; **audio exempt** so long transcriptions
+aren't killed), a **PDF page cap** (`HILBERTRAUM_PDF_MAX_PAGES`, 5 000), and a **DOCX zip-bomb
+guard** (`declaredZipInflatedSize` over the zip central directory; `HILBERTRAUM_DOCX_MAX_INFLATED_BYTES`,
+1 GiB) — wired into `processDocument` + `pdf.ts`/`docx.ts`; rejection → friendly persist-canonical
+`main.ingest.fileTooLarge`/`parseTimeout` (new i18n keys EN+DE + display map). **M-4/M-6 (policy
+fail-open):** `policy.ts` gained `STRICT_POLICY` + an `{ isDev }` option on `loadPolicy`/`parsePolicy`/
+`buildPolicyStatus`; a **packaged** build with a missing/malformed/partial `policy.json` now fails
+**CLOSED** to the strict commercial posture (encryption required, plaintext off, models must verify,
+network denied) — `isDev` threaded from `index.ts` + every model/download/core IPC call site. The
+commercial sell gate keeps the DEFAULT base on purpose (no policy.json must FAIL the gate). This
+neutralizes M-6 (unverified weight can't load on a packaged drive). **M-5 (arbitrary binary):**
+`HILBERTRAUM_LLAMA_BIN`/`HILBERTRAUM_WHISPER_BIN` honoured **dev-only** (`resolveLlamaServerPath`/
+`resolveWhisperCliPath` gained `{ isDev }`, default false=ignore+log; threaded through the
+runtime/embedder/reranker/transcriber factories + benchmark probe). **LOW:** L-1 anchored the
+loopback regex (`/^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/`) + a "never gate enforcement" comment; L-2
+rejects non-`https:` download URLs (`validateManifest` + the `downloadToFile` seam, new `isHttpsUrl`);
+L-3 added `requireUnlocked()` + string-array filter to `importPreflight`; L-6 zeroes the KDF-derived
+key before throwing `WrongPasswordError`. **Open hardening (deferred — see "Open hardening items"
+below):** L-4 (opaque pick-token import redemption), L-5 (`lstatSync` symlink guard in `expandPaths`),
+L-7 (build-script archive containment), L-8 (`npm ci` + committed lockfile in the build pipeline).
+**Docs:** `security-model.md` (policy fail-closed §1, parser caps + env-override gating sections,
+loopback note); the audit report itself was condensed here + deleted (recoverable at git `f99bc86`).
+**Tests:** typecheck clean,
+build OK, `npm test` **1119 passed / 25 skipped** (+24: ingestion-limits, policy fail-closed,
+sidecar/transcriber override-gating, manifest/assets https, importPreflight gate, vault key-zero,
+model-IPC fail-closed)._
+
+_(prior) 2026-06-13 — **Encrypt the diagnostics log at rest.** `logs/app.log`
 could carry file names/paths + model ids but sat in plaintext beside the encrypted DB; it is
 now sealed under the **same vault key** as the DB/document cache. `services/logging.ts` became a
 three-state machine: **`buffering`** (pre-unlock — lines held in a bounded in-memory buffer, no
@@ -1707,6 +1797,32 @@ Final gate: typecheck clean, **361/361 tests**, build green, no new runtime deps
 [`docs/known-limitations.md`](docs/known-limitations.md) (that list is live; several
 MVP-era examples from this audit — the depth-mode plumbing, `runtime_events` — have
 since shipped in Phases 19–20).
+
+### Open hardening items — security audit 2026-06-13 (deferred, NOT yet fixed)
+
+The 2026-06-13 hardening wave fixed every MEDIUM + the quick-win LOWs (see the entry at the
+top of this file; the full audit report is in git history at commit `f99bc86`). These four
+LOW items were consciously deferred — they are defense-in-depth / build-pipeline, none blocks
+the offline/privacy guarantees:
+
+- **L-4 — `importDocuments` trusts renderer-supplied source paths.** The handler type-filters +
+  unlock-gates, but the path *values* are not constrained to the OS-picker output, so a
+  compromised renderer could ingest any user-readable absolute path (arbitrary local-file *read*,
+  no traversal *write*). Fix: have `pickDocuments` return **opaque tokens** that `importDocuments`
+  redeems, instead of trusting renderer-supplied paths. (Discuss before implementing — it changes
+  the import IPC contract.)
+- **L-5 — `expandPaths` follows directory symlinks.** `walk()` uses `statSync` (follows links) with
+  no cycle guard, so a picked folder with a symlink to e.g. `C:\Windows` traverses outside the
+  selection. Blast radius: "indexes files the user didn't intend" (supported extensions only), not
+  RCE. Fix: `lstatSync` for directory entries (skip symlinks) or a visited-realpath cycle guard.
+- **L-7 — Runtime-archive extraction doesn't prevent member traversal (build-time only).**
+  `Expand-Archive` / `tar -xzf` in `scripts/fetch-runtime.{ps1,sh}` run on the drive **builder's**
+  trusted machine, not the shipped app. A crafted archive (attacker controlling both URL and its
+  placeholder hash) could write outside `extract_to`. Fix: list/extract members with an explicit
+  containment check.
+- **L-8 — Lockfile / `npm ci` discipline.** Confirm `package-lock.json` is committed and the
+  provisioning/build scripts use `npm ci` (not `npm install`) so a build can't float a caret range
+  to a newer minor. Integrity anchor = the committed lockfile.
 
 ---
 

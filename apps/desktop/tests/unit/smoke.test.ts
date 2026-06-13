@@ -4,8 +4,8 @@ import { IPC } from '../../src/shared/ipc'
 
 // Phase 0 sanity: shared contracts import cleanly and have sane defaults.
 describe('shared contracts', () => {
-  it('defaults to offline / no network', () => {
-    expect(DEFAULT_SETTINGS.allowNetwork).toBe(false)
+  it('permits network by default so downloads work out of the box (policy ceiling still wins)', () => {
+    expect(DEFAULT_SETTINGS.allowNetwork).toBe(true)
   })
 
   it('exposes a stable IPC channel registry', () => {

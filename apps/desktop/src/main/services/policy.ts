@@ -26,11 +26,11 @@ import type {
 /**
  * Default policy. **Update checks + telemetry are off and have no user toggle.**
  * `allowModelDownloads` is true: with no policy file the spec §3.6 user Settings toggle
- * ("Allow internet access for model downloads…", default OFF) is the effective gate for
- * the in-app downloader — the app still ships offline because the SETTING defaults to
- * off and every download needs an explicit per-download confirmation. A `policy.json`
- * that writes `allow_model_downloads: false` (the commercial prepare-drive posture)
- * restricts this unconditionally — policy only restricts, never expands. Workspace/model
+ * ("Allow internet access for model downloads…") is the effective gate for the in-app
+ * downloader. That toggle now defaults ON (DEFAULT_SETTINGS.allowNetwork) so downloads work
+ * out of the box, and every download still needs an explicit per-download confirmation. A
+ * `policy.json` that writes `allow_model_downloads: false` (the commercial prepare-drive
+ * posture) restricts this unconditionally — policy only restricts, never expands. Workspace/model
  * defaults are developer-friendly (dev with no policy file: plaintext workspace +
  * unverified models allowed) — a commercial `policy.json` tightens these.
  */
@@ -48,6 +48,34 @@ export const DEFAULT_POLICY: PrivacyPolicy = {
     allowUnverifiedModels: true,
     requireManifest: true,
     requireSha256Match: false
+  }
+}
+
+/**
+ * Strict commercial posture (security audit M-4 / M-6). A PACKAGED build with a
+ * **missing or malformed** `policy.json` must fail CLOSED to this — not to the
+ * dev-friendly `DEFAULT_POLICY` — so a corrupted/absent policy on a removable drive
+ * cannot silently loosen model-integrity enforcement (it would otherwise let an
+ * unverified weight run). Encryption is required, plaintext is off, models must verify,
+ * and all network is denied. A real shipped drive still writes its own `policy.json`
+ * (the prepare-drive commercial posture); this is only the safe fallback. The merge
+ * still uses this as the base for a packaged build, so a partial/junk file leaves the
+ * unspecified fields at the strict value rather than at the dev default.
+ */
+export const STRICT_POLICY: PrivacyPolicy = {
+  network: {
+    allowModelDownloads: false,
+    allowUpdateChecks: false,
+    allowTelemetry: false
+  },
+  workspace: {
+    encryptionRequired: true,
+    allowPlaintextDevMode: false
+  },
+  models: {
+    allowUnverifiedModels: false,
+    requireManifest: true,
+    requireSha256Match: true
   }
 }
 
@@ -91,16 +119,38 @@ export function mergePolicyObject(base: PrivacyPolicy, raw: unknown): PrivacyPol
 }
 
 /**
- * Parse a `policy.json` string into an effective policy (merged over DEFAULT_POLICY).
- * Malformed JSON → DEFAULT_POLICY + an `onWarn` note; never throws.
+ * Parse a `policy.json` string into an effective policy (merged over `base`, default
+ * `DEFAULT_POLICY`). Malformed JSON → `base` + an `onWarn` note; never throws. A packaged
+ * build passes `STRICT_POLICY` as the base so a malformed file fails CLOSED (M-4).
  */
-export function parsePolicy(contents: string, onWarn?: (msg: string) => void): PrivacyPolicy {
+export function parsePolicy(
+  contents: string,
+  onWarn?: (msg: string) => void,
+  base: PrivacyPolicy = DEFAULT_POLICY
+): PrivacyPolicy {
   try {
-    return mergePolicyObject(DEFAULT_POLICY, JSON.parse(contents))
+    return mergePolicyObject(base, JSON.parse(contents))
   } catch (err) {
     onWarn?.(`Ignoring malformed policy.json (${err instanceof Error ? err.message : String(err)})`)
-    return DEFAULT_POLICY
+    return base
   }
+}
+
+/** Options shared by the policy loaders. */
+export interface PolicyLoadOptions {
+  /**
+   * Whether this is a developer build (`!app.isPackaged`). A packaged build (`isDev:
+   * false`) fails CLOSED to `STRICT_POLICY` when `policy.json` is missing/malformed (M-4);
+   * a dev build keeps the permissive `DEFAULT_POLICY`. Defaults to `true` (dev) so the
+   * canonical reference + unit callers that do not pass it keep the historical behaviour;
+   * the production call sites pass the real value.
+   */
+  isDev?: boolean
+}
+
+/** The base/fallback policy for a build type: strict when packaged, dev-friendly in dev. */
+export function basePolicyFor(opts: PolicyLoadOptions = {}): PrivacyPolicy {
+  return opts.isDev === false ? STRICT_POLICY : DEFAULT_POLICY
 }
 
 export interface LoadedPolicy {
@@ -116,8 +166,15 @@ export interface LoadedPolicy {
  * are optional; either being absent or malformed falls back to safe defaults. Pure with
  * respect to its inputs aside from reading those two files; never throws.
  */
-export function loadPolicy(configDir: string, onWarn?: (msg: string) => void): LoadedPolicy {
-  let policy = DEFAULT_POLICY
+export function loadPolicy(
+  configDir: string,
+  onWarn?: (msg: string) => void,
+  opts: PolicyLoadOptions = {}
+): LoadedPolicy {
+  // Fail-closed base for a packaged build (M-4): a missing/malformed/unreadable
+  // policy.json degrades to STRICT_POLICY, not the dev-friendly DEFAULT_POLICY.
+  const base = basePolicyFor(opts)
+  let policy = base
   let policyFilePresent = false
   let driveFilePresent = false
   let allowNetworkByDefault = false
@@ -125,10 +182,12 @@ export function loadPolicy(configDir: string, onWarn?: (msg: string) => void): L
   const policyPath = join(configDir, 'policy.json')
   if (existsSync(policyPath)) {
     try {
-      policy = parsePolicy(readFileSync(policyPath, 'utf8'), onWarn)
+      policy = parsePolicy(readFileSync(policyPath, 'utf8'), onWarn, base)
       policyFilePresent = true
     } catch (err) {
       onWarn?.(`Could not read policy.json (${err instanceof Error ? err.message : String(err)})`)
+      // An unreadable file is treated like a malformed one — keep the (possibly strict) base.
+      policy = base
     }
   }
 
@@ -177,9 +236,10 @@ export function resolveNetwork(
 export function buildPolicyStatus(
   configDir: string,
   allowNetworkSetting: boolean,
-  onWarn?: (msg: string) => void
+  onWarn?: (msg: string) => void,
+  opts: PolicyLoadOptions = {}
 ): PolicyStatus {
-  const loaded = loadPolicy(configDir, onWarn)
+  const loaded = loadPolicy(configDir, onWarn, opts)
   const net = resolveNetwork(loaded.policy, allowNetworkSetting)
   return {
     policy: loaded.policy,

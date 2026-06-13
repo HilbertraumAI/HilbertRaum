@@ -25,6 +25,8 @@ export interface EmbedderSelectionDeps {
   rootPath: string
   /** The embeddings model from the manifest, or null when none is configured. */
   model: EmbeddingModelInfo | null
+  /** Dev build — gates the dev-only `HILBERTRAUM_LLAMA_BIN` override (M-5). Default false. */
+  isDev?: boolean
   resolveBin?: (rootPath: string) => string | null
   modelExists?: (modelPath: string) => boolean
   makeE5?: (model: EmbeddingModelInfo, binPath: string) => Embedder
@@ -55,7 +57,9 @@ export function createSelectedEmbedder(deps: EmbedderSelectionDeps): Embedder {
   const sel = resolveSidecarSelection<EmbeddingModelInfo, Embedder>({
     rootPath: deps.rootPath,
     model: deps.model,
-    resolveBin: deps.resolveBin ?? ((root) => resolveLlamaServerPath(root)),
+    resolveBin:
+      deps.resolveBin ??
+      ((root) => resolveLlamaServerPath(root, process.platform, process.env, { isDev: deps.isDev })),
     modelExists: deps.modelExists,
     makeReal: makeE5,
     binaryName: 'llama-server',

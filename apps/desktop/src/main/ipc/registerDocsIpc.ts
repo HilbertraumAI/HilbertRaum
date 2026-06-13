@@ -228,8 +228,13 @@ export function registerDocsIpc(ctx: AppContext): void {
   // Size-aware audio preflight: the renderer asks what a picked
   // selection contains BEFORE importing, so large audio (stored copy + a full
   // transcription are real costs) gets an explicit confirmation. Read-only.
+  // L-3: gate + type-filter exactly like importDocuments — a compromised renderer must
+  // not drive a recursive statSync/readdirSync walk of arbitrary directories while the
+  // workspace is locked, nor pass non-string elements that would crash expandPaths.
   ipcMain.handle(IPC.importPreflight, (_e, paths: string[]): ImportPreflight => {
-    return summarizeImportPaths(paths ?? [])
+    requireUnlocked()
+    const safePaths = Array.isArray(paths) ? paths.filter((p): p is string => typeof p === 'string') : []
+    return summarizeImportPaths(safePaths)
   })
 
   ipcMain.handle(IPC.deleteDocument, (_e, documentId: string): void => {

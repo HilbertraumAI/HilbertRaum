@@ -285,6 +285,10 @@ export async function assertCommercialDrive(
   const problems: string[] = []
 
   // --- Policy posture (reuse loadPolicy) ---
+  // Deliberately uses the DEFAULT (dev) base, NOT the packaged STRICT fallback (M-4): the
+  // sell gate must FAIL a drive that ships no policy.json. With the strict fallback a
+  // missing file would resolve to an encrypted/verified posture and silently pass — here
+  // we want a missing/loose policy.json to surface as a problem below.
   const { policy } = loadPolicy(join(rootPath, 'config'))
   const policyCommercial =
     policy.workspace.encryptionRequired &&

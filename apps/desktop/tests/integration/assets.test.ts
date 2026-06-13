@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { createHash } from 'node:crypto'
 import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -519,6 +519,22 @@ describe('downloadToFile + fetchAndVerify (injected fetch — no real network)',
     await expect(
       downloadToFile('https://example.test/missing', dest, { fetchImpl: fakeFetch('', false) })
     ).rejects.toThrow(/HTTP 404/)
+  })
+
+  it('refuses a non-HTTPS URL before fetching (L-2)', async () => {
+    const root = tempDir('hilbertraum-dl-')
+    const dest = join(root, 'x.gguf')
+    const spy = vi.fn()
+    await expect(
+      downloadToFile('http://example.test/x.gguf', dest, {
+        fetchImpl: (async (...a: unknown[]) => {
+          spy(...a)
+          return new Response('x')
+        }) as unknown as FetchFn
+      })
+    ).rejects.toThrow(/non-HTTPS/)
+    // The guard fires BEFORE any fetch — nothing was requested in cleartext.
+    expect(spy).not.toHaveBeenCalled()
   })
 
   it('fetchAndVerify passes for a matching real hash', async () => {

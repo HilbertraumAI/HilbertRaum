@@ -23,6 +23,8 @@ export interface RerankerSelectionDeps {
   rootPath: string
   /** The reranker model from the manifest, or null when none is configured. */
   model: RerankerModelInfo | null
+  /** Dev build — gates the dev-only `HILBERTRAUM_LLAMA_BIN` override (M-5). Default false. */
+  isDev?: boolean
   resolveBin?: (rootPath: string) => string | null
   modelExists?: (modelPath: string) => boolean
   makeReranker?: (model: RerankerModelInfo, binPath: string) => Reranker
@@ -49,7 +51,9 @@ export function createSelectedReranker(deps: RerankerSelectionDeps): Reranker | 
   const sel = resolveSidecarSelection<RerankerModelInfo, Reranker>({
     rootPath: deps.rootPath,
     model: deps.model,
-    resolveBin: deps.resolveBin ?? ((root) => resolveLlamaServerPath(root)),
+    resolveBin:
+      deps.resolveBin ??
+      ((root) => resolveLlamaServerPath(root, process.platform, process.env, { isDev: deps.isDev })),
     modelExists: deps.modelExists,
     makeReal: makeReranker,
     binaryName: 'llama-server',
