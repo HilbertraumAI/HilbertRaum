@@ -115,6 +115,9 @@ export function ChatScreen({ onNavigate, initialMode, initialScopeDocumentIds }:
   const pendingTokens = useRef('')
   const pendingThinking = useRef('')
   const answerStarted = useRef(false)
+  // M-U2: set when the user presses Stop during a stream, so the stream`s finally can
+  // confirm the interruption (a stopped partial reply otherwise looks like a normal turn).
+  const stopped = useRef(false)
   const flushTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const flushStream = useCallback((): void => {
@@ -250,6 +253,7 @@ export function ChatScreen({ onNavigate, initialMode, initialScopeDocumentIds }:
     setStreamThinking('')
     setThinkingOpen(false)
     answerStarted.current = false
+    stopped.current = false
     const unsubscribe = window.api.onToken(convId, (token) => {
       // The first answer token auto-collapses an expanded Thinking… line.
       if (!answerStarted.current) {
@@ -304,6 +308,11 @@ export function ChatScreen({ onNavigate, initialMode, initialScopeDocumentIds }:
       setStreamConvId(null)
       setStreamText('')
       setStreamThinking('')
+      // M-U2: confirm a user-requested stop so a truncated reply is not mistaken for a
+      // complete one. Only when looking at THIS conversation (a background stream`s toast
+      // would be confusing) and only if no error already explained the early end.
+      if (stopped.current && activeIdRef.current === convId) showToast(t('chat.stopped'))
+      stopped.current = false
     }
   }
 
@@ -336,7 +345,10 @@ export function ChatScreen({ onNavigate, initialMode, initialScopeDocumentIds }:
   }
 
   function onStop(): void {
-    if (activeId) void window.api.stopGeneration(activeId)
+    if (activeId) {
+      stopped.current = true
+      void window.api.stopGeneration(activeId)
+    }
   }
 
   // Save the transcript to a user-chosen local file (spec §7.6). Saving is an

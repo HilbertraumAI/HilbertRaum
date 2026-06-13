@@ -109,6 +109,7 @@ export const de: Record<keyof typeof en, string> = {
   'chat.saveConversation': 'Diese Unterhaltung speichern',
   'chat.savedTo': 'Gespeichert unter {path}',
   'chat.copied': 'Kopiert',
+  'chat.stopped': 'Gestoppt – die Antwort ist möglicherweise unvollständig',
   'chat.scopeNotice': 'Antwort nur aus {titles}',
   'chat.cancelDocTask': 'Dokumentaufgabe abbrechen',
   'chat.placeholder.documents': 'Frag deine Dokumente…',

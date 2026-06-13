@@ -253,6 +253,48 @@ describe('ChatScreen — per-message actions (Try again · Copy · Save)', () =>
   })
 })
 
+describe('ChatScreen — Stop confirmation (M-U2)', () => {
+  it('toasts a "Stopped" confirmation when the user stops a live stream', async () => {
+    const user = userEvent.setup()
+    // Hold the send open so the Stop button is visible; we resolve it after Stop is
+    // pressed, mirroring the backend ending the (now-stopped) stream.
+    let resolveSend!: () => void
+    const sendChatMessage = vi.fn(
+      () => new Promise<void>((res) => { resolveSend = () => res() })
+    )
+    const stopGeneration = vi.fn(async () => {})
+    stubApi({
+      listConversations: vi.fn(async () => [conv()]),
+      getRuntimeStatus: vi.fn(async () => runningStatus),
+      listMessages: vi.fn(async () => []),
+      sendChatMessage,
+      stopGeneration,
+      onToken: vi.fn(() => () => {}),
+      onReasoning: vi.fn(() => () => {}),
+      onScopeNotice: vi.fn(() => () => {})
+    })
+    render(
+      <ToastProvider>
+        <ChatScreen onNavigate={() => {}} />
+      </ToastProvider>
+    )
+
+    await user.click(await screen.findByText('My first chat'))
+    const box = screen.getByRole('textbox')
+    await user.type(box, 'hello')
+    await user.keyboard('{Enter}')
+
+    // Streaming: the composer now shows Stop. Pressing it requests a stop…
+    const stop = await screen.findByRole('button', { name: 'Stop' })
+    await user.click(stop)
+    expect(stopGeneration).toHaveBeenCalledWith('c1')
+
+    // …and once the (stopped) stream resolves, the interruption is confirmed.
+    resolveSend()
+    expect(await screen.findByText(/Stopped — the reply may be incomplete/)).toBeInTheDocument()
+  })
+})
+
 describe('groupConversations — date grouping', () => {
   it('buckets by recency relative to "now" and drops empty groups', () => {
     const now = new Date('2026-06-10T12:00:00')

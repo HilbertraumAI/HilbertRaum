@@ -93,6 +93,7 @@ export const en = {
   'chat.saveConversation': 'Save this conversation',
   'chat.savedTo': 'Saved to {path}',
   'chat.copied': 'Copied',
+  'chat.stopped': 'Stopped — the reply may be incomplete',
   'chat.scopeNotice': 'Answering from {titles} only',
   'chat.cancelDocTask': 'Cancel document task',
   'chat.placeholder.documents': 'Ask about your documents…',
