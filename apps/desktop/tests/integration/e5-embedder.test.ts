@@ -149,6 +149,33 @@ describe('E5Embedder', () => {
     expect(vectors.every((v) => v.length === 2)).toBe(true)
   })
 
+  // M-C5: a caller "Stop" (opts.signal) must be plumbed into the loopback fetch so query
+  // embedding aborts promptly, not only on the request timeout.
+  it('forwards the caller abort signal to the embeddings request (aborts in flight)', async () => {
+    const { spawn } = fakeSpawn()
+    let seenSignal: AbortSignal | undefined
+    const hangingFetch = (async (url: string | URL, init?: RequestInit) => {
+      const u = String(url)
+      if (u.endsWith('/health')) return { ok: true, status: 200 } as Response
+      seenSignal = init?.signal ?? undefined
+      // Never resolve on its own — only the aborted signal ends this request.
+      return await new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')))
+      })
+    }) as typeof fetch
+
+    const embedder = new E5Embedder({ ...base, spawn, fetchImpl: hangingFetch })
+    const controller = new AbortController()
+    const embedPromise = embedder.embed(['hello'], { signal: controller.signal })
+    // Let the request reach the fetch, then the user hits Stop.
+    await new Promise((r) => setTimeout(r, 1))
+    controller.abort()
+    await expect(embedPromise).rejects.toThrow(/abort/i)
+    // The signal handed to fetch fires when the caller aborts (combined with the timeout).
+    expect(seenSignal?.aborted).toBe(true)
+    await embedder.stop()
+  })
+
   it('returns [] for an empty batch without starting the server', async () => {
     const { spawn, calls } = fakeSpawn()
     const embedder = new E5Embedder({ ...base, spawn, fetchImpl: embedFetch([]) })

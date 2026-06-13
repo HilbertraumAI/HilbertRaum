@@ -94,6 +94,17 @@ export function findFreePort(host: string = LOOPBACK_HOST): Promise<number> {
 
 const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
+/**
+ * A request abort signal that fires on EITHER the per-request timeout OR an optional
+ * caller signal (a user "Stop"). When no caller signal is given it's just the timeout,
+ * so existing callers are unchanged. Used by the embedder + reranker loopback fetches so
+ * a "Stop" during query embedding / rerank cancels promptly, not only on timeout (M-C5).
+ */
+export function combineSignals(caller: AbortSignal | undefined, timeoutMs: number): AbortSignal {
+  const timeout = AbortSignal.timeout(timeoutMs)
+  return caller ? AbortSignal.any([caller, timeout]) : timeout
+}
+
 // ---- Injectable seams (so the server can be unit-tested with no real binary) -----
 
 /** A readable stream surface — just enough to drain + capture the child's stderr. */

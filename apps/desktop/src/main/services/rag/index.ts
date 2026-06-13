@@ -170,7 +170,8 @@ export async function retrieve(
   question: string,
   settings: RagRetrievalSettings,
   scopeDocumentIds?: string[] | null,
-  reranker?: Reranker | null
+  reranker?: Reranker | null,
+  signal?: AbortSignal
 ): Promise<RetrievalResult> {
   // Mismatch guard: only search vectors tagged with the active embedder's id.
   // Mock and real E5 vectors are both 384-dim, so the dimension guard cannot separate
@@ -180,7 +181,7 @@ export async function retrieve(
     embeddingModelId: embedder.id,
     documentIds: scopeDocumentIds ?? null
   })
-  const vectorHits = (await index.searchText(question, settings.topKInitial)).filter(
+  const vectorHits = (await index.searchText(question, settings.topKInitial, signal)).filter(
     (hit) => hit.score >= settings.minSimilarity
   )
   // Hybrid keyword path: the exact terms embeddings miss.
@@ -227,7 +228,7 @@ export async function retrieve(
   if (reranker && candidates.length > 0) {
     try {
       const scores = new Map(
-        (await reranker.rerank(question, candidates.map((c) => c.text))).map((h) => [
+        (await reranker.rerank(question, candidates.map((c) => c.text), { signal })).map((h) => [
           h.index,
           h.score
         ])
@@ -380,7 +381,8 @@ export async function generateGroundedAnswer(
     question,
     settings,
     opts.scopeDocumentIds,
-    opts.reranker
+    opts.reranker,
+    opts.signal
   )
 
   if (chunks.length === 0) {

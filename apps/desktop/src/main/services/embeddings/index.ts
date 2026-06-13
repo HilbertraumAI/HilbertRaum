@@ -12,6 +12,15 @@ import type { Db } from '../db'
 // Everything is local + offline: the embedder never touches the network, and the
 // search is an in-process linear scan over SQLite rows (no remote vector service).
 
+/** Per-call embed options. `signal` lets a caller "Stop" cancel an in-flight request. */
+export interface EmbedOptions {
+  /**
+   * Caller abort signal. Combined with the per-request timeout so a user "Stop" during
+   * query embedding cancels the loopback request promptly (M-C5), not only on timeout.
+   */
+  signal?: AbortSignal
+}
+
 /** The contract every embedding backend implements (spec §9.2). */
 export interface Embedder {
   /** The embedding-model id tag (written to `embeddings.embedding_model_id`). */
@@ -19,7 +28,7 @@ export interface Embedder {
   /** Fixed output width of every vector this embedder produces. */
   readonly dimensions: number
   /** Embed a batch of texts into L2-normalized vectors (one per input, in order). */
-  embed(texts: string[]): Promise<Float32Array[]>
+  embed(texts: string[], opts?: EmbedOptions): Promise<Float32Array[]>
   /**
    * Release any backing resources (e.g. the real embedder's loopback sidecar). Optional
    * — the mock embedder holds nothing. Called on `will-quit`; PERMANENT (a racing lazy
@@ -153,8 +162,8 @@ export class VectorIndex {
   }
 
   /** Embed `query` with the same embedder, then run the cosine search. */
-  async searchText(query: string, topK: number): Promise<VectorSearchHit[]> {
-    const [queryVector] = await this.embedder.embed([query])
+  async searchText(query: string, topK: number, signal?: AbortSignal): Promise<VectorSearchHit[]> {
+    const [queryVector] = await this.embedder.embed([query], { signal })
     return this.search(queryVector, topK)
   }
 }

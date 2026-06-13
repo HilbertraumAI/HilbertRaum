@@ -17,12 +17,21 @@ export interface RerankedHit {
   score: number
 }
 
+/** Per-call rerank options. `signal` lets a caller "Stop" cancel the in-flight rerank. */
+export interface RerankOptions {
+  /**
+   * Caller abort signal. Combined with the per-request timeout so a user "Stop" during
+   * the (CPU-slow) rerank cancels promptly (M-C5), not only after it completes.
+   */
+  signal?: AbortSignal
+}
+
 /** The contract a reranking backend implements (mirrors `Embedder`, spec §9.2 style). */
 export interface Reranker {
   /** The reranker model id (manifest id) — diagnostics/logging only, never stored. */
   readonly id: string
   /** Score every document against `query`. Returns EXACTLY one hit per input. */
-  rerank(query: string, documents: string[]): Promise<RerankedHit[]>
+  rerank(query: string, documents: string[], opts?: RerankOptions): Promise<RerankedHit[]>
   /** Release the backing sidecar PERMANENTLY. Called on `will-quit`. */
   stop?(): Promise<void>
   /** Stop the sidecar but allow a lazy restart on next use. Called on workspace lock. */

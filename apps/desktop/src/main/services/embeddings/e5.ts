@@ -1,5 +1,5 @@
-import type { Embedder } from './index'
-import { LlamaServer, type LlamaServerOptions } from '../runtime/sidecar'
+import type { Embedder, EmbedOptions } from './index'
+import { LlamaServer, combineSignals, type LlamaServerOptions } from '../runtime/sidecar'
 
 // Real on-device embedder (spec §6, §9.2). Drops in behind the existing
 // `Embedder` interface with the SAME id/dimensions as the E5-small manifest, so the
@@ -141,9 +141,10 @@ export class E5Embedder implements Embedder {
    * Embed texts → L2-normalized `Float32Array`s, one per input, in order. Inputs are
    * truncated to the sidecar context (see TOKENS_PER_WORD_ESTIMATE), sent in bounded
    * batches, and each request carries a timeout so a wedged sidecar cannot park a
-   * document in `embedding` forever.
+   * document in `embedding` forever. `opts.signal` (a user "Stop") is combined with
+   * the timeout so query embedding cancels promptly (M-C5).
    */
-  async embed(texts: string[]): Promise<Float32Array[]> {
+  async embed(texts: string[], opts?: EmbedOptions): Promise<Float32Array[]> {
     if (texts.length === 0) return []
     const server = await this.ensureStarted()
     const prepared = texts.map((t) => this.truncateForContext(t))
@@ -157,7 +158,7 @@ export class E5Embedder implements Embedder {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ model: this.id, input: batch }),
-        signal: AbortSignal.timeout(timeoutMs)
+        signal: combineSignals(opts?.signal, timeoutMs)
       })
       if (!res.ok) {
         void res.body?.cancel().catch(() => undefined) // release the connection
