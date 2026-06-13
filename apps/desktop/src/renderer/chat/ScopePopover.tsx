@@ -16,9 +16,11 @@ interface ScopePopoverProps {
   disabled?: boolean
   /** Receives the next scope (null to reset to all documents). */
   onChangeScope: (next: string[] | null) => void
+  /** Jump to the Documents screen — used by the empty-corpus "Add documents" affordance. */
+  onAddDocuments?: () => void
 }
 
-export function ScopePopover({ docs, scopeIds, disabled, onChangeScope }: ScopePopoverProps): JSX.Element {
+export function ScopePopover({ docs, scopeIds, disabled, onChangeScope, onAddDocuments }: ScopePopoverProps): JSX.Element {
   const { t, tCount } = useT()
   const indexed = docs.filter((d) => d.status === 'indexed')
   const scoped = scopeIds ?? []
@@ -28,10 +30,19 @@ export function ScopePopover({ docs, scopeIds, disabled, onChangeScope }: ScopeP
     return docs.find((d) => d.id === id)?.title ?? t('chat.scope.removedDoc')
   }
 
+  // Truthful footer copy (guidelines §7): never "Using all 0 documents". With no indexed
+  // documents the affordance becomes a direct "Add documents" jump, not a scope picker.
+  const hasDocs = indexed.length > 0
+  if (!hasDocs) {
+    return (
+      <button type="button" className="footer-menu-btn" disabled={disabled} onClick={onAddDocuments}>
+        <span aria-hidden="true">📄</span> {t('chat.scope.none')}
+      </button>
+    )
+  }
+
   const label =
-    scopeIds == null
-      ? tCount('chat.scope.usingAll', indexed.length)
-      : tCount('chat.scope.usingSome', scoped.length)
+    scopeIds == null ? t('chat.scope.usingAll') : tCount('chat.scope.usingSome', scoped.length)
 
   return (
     <Popover.Root>

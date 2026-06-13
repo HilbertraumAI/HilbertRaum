@@ -433,3 +433,69 @@ scripted Playwright `_electron` screenshot walk of every touched screen in BOTH 
 clear localStorage after the first window, `emulateMedia` for theme/reduced-motion; write a
 `config/policy.json` with `encryption_required: true` to exercise the gate). Suite grew
 644 → 669 tests (+6 manual skips) over the wave.
+
+---
+
+## 12. Chat-UI polish pass — design record (IMPLEMENTED 2026-06-13)
+
+_Branch `chat-ui-polish`. A focused, **renderer-only** calm/premium pass on the Chat screen +
+conversation history, deepening §3/§7 (visual hierarchy: conversation → history → nav). No
+backend/data-contract/IPC changes. Before/after eyeball captures live in
+`docs/design-review/chat-screenshots/` (before) and `…-after/` (after)._
+
+### 12.1 What changed (decisions + the facts they rest on)
+
+1. **App nav is a compact rail, not a panel.** `.app-shell` grid → `80px 1fr`; nav items are
+   icon-over-short-label with a `title` tooltip for the full name. The conversation is the
+   centre of gravity (§1/§2). Active state is a **soft neutral fill** (`--surface-hover`) with
+   weight, *not* an accent fill — accent blue is reserved for the focus ring, links, and the
+   one primary button (§7, fixes accent overuse).
+2. **One privacy signal.** The duplicate lower-left sidebar `LocalIndicator` was removed; the
+   ambient "Local · Offline" lives only in the chat header now (the `variant="sidebar"` path +
+   `.local-indicator-sidebar` CSS are dormant). The lock became a quiet rail button.
+3. **History rows read as a calm list.** Selected = a soft *fill* on the row, never a border
+   outline (a bordered selection read as keyboard focus). `:focus-visible` keeps the accent
+   ring (the global baseline), so selection and focus are visually distinct. Rows are
+   structured (title + an optional quiet `📄 Documents` metadata line) and ≥40px tall; the
+   loud filled `DOC` badge is gone (the glyph pairs with the word — never color-only, 1.4.1).
+4. **Search mode is contextual.** A "Results for '{query}'" header (`chat.search.resultsFor`)
+   sits above the hits; snippets clamp to 2 lines and the matched term renders in `--text`
+   weight 600 (not loud accent). Empty copy softened to "I didn't find a match. Try
+   rephrasing." (§7 voice). The searchbox/region ARIA names + the sr-only count are unchanged
+   (the tested L14 contract holds).
+5. **Messages are softer.** User turns → a neutral tinted surface (`--surface-hover`), no
+   strong blue border that read like a focused input. Assistant turns are **borderless +
+   shadowless** — they read as text on the page, not nested cards; source cards therefore sit
+   one quiet level of nesting deep, not box-in-box (§4 "no nested cards"). Uppercase
+   `USER`/`ASSISTANT` chips → quiet **You** / **HilbertRaum** labels (`chat.role.*`).
+6. **Composer is one unit.** `.composer-row` is the bordered shell that owns the focus ring
+   (`:focus-within`); the textarea is borderless inside it and the Send/Ask button sits in the
+   shell — it reads as part of the composer (§6). Enter=send / Shift+Enter=newline,
+   dictation, and stop-generation are unchanged.
+7. **Truthful doc-scope copy.** Never "Using all 0 documents": zero indexed docs → the footer
+   becomes a direct "📄 No documents yet · Add documents" jump (`chat.scope.none` →
+   Documents); some selected → "Using N documents"; all (count>0) → "Using all documents" (no
+   count). `chat.scope.usingAll.*` plurals were collapsed to a single `chat.scope.usingAll`.
+8. **Responsive (§8).** History **auto-collapses ≤1150px** (`ChatScreen.LIST_AUTO_COLLAPSE_PX`
+   via a `matchMedia('change')` listener; `effectiveCollapsed = narrow ? !narrowPeek :
+   listCollapsed`, so the persisted desktop preference is untouched and a session "peek"
+   override re-opens it while narrow). Screen gutters + `chat-layout` height tighten at
+   ≤1280/≤1150px so nothing overflows down to 1024px; the 720px transcript stays centred.
+
+### 12.2 Intentional non-changes
+
+- **History was already collapsible** (`LIST_COLLAPSED_KEY`, the `«`/`»` handles) — this pass
+  refined the collapsed handle, the header toggle, and *added* the responsive auto-collapse;
+  it did **not** reimplement collapse.
+- **No backend / IPC / schema changes.** Edits are confined to the renderer + the EN/DE i18n
+  string catalogs (the two-rule main-process boundary is untouched).
+
+### 12.3 As built — files + tests
+
+`renderer/App.tsx` (rail markup, drop sidebar indicator), `renderer/styles.css` (rail,
+rows, messages, composer shell, responsive media queries),
+`renderer/chat/{ConversationList,Composer,ScopePopover}.tsx`, `renderer/screens/ChatScreen.tsx`
+(responsive collapse), `shared/i18n/{en,de}.ts`. Verification per §11.4: typecheck clean,
+build OK, vitest **1085 passed / 25 skipped** (the `InformationArchitecture` indicator test
+now drives the **header** indicator; scope + no-match copy assertions updated). German copy
+for the new/changed strings awaits the D-L7 human-review pass.

@@ -5,7 +5,7 @@ import { ModelsScreen } from './screens/ModelsScreen'
 import { ChatScreen } from './screens/ChatScreen'
 import { DocumentsScreen } from './screens/DocumentsScreen'
 import { WorkspaceGate } from './screens/WorkspaceGate'
-import { Banner, Button, LocalIndicator, ToastProvider } from './components'
+import { Banner, Button, ToastProvider } from './components'
 import { setThemeSetting } from './theme'
 import { I18nProvider, useT } from './i18n'
 import { resolveNavTarget, type ScreenId, type SettingsTab } from './navigation'
@@ -177,14 +177,20 @@ function AppShell(): JSX.Element {
   }
 
   function navButton(item: NavItem): JSX.Element {
+    const label = t(item.labelKey)
+    const active = screen === item.id
     return (
       <li key={item.id}>
         <button
-          className={`nav-item ${screen === item.id ? 'active' : ''}`}
+          className={`nav-item ${active ? 'active' : ''}`}
+          // Icon + short label make a quiet rail; the label can wrap/clip on narrow
+          // widths, so the title carries the full destination name for a tooltip too.
+          title={label}
+          aria-current={active ? 'page' : undefined}
           onClick={() => navigate(item.id)}
         >
-          <span className="nav-icon">{item.icon}</span>
-          {t(item.labelKey)}
+          <span className="nav-icon" aria-hidden="true">{item.icon}</span>
+          <span className="nav-label">{label}</span>
         </button>
       </li>
     )
@@ -195,22 +201,25 @@ function AppShell(): JSX.Element {
     // useToast(); the polite live region lives once, here.
     <ToastProvider>
     <div className="app-shell">
-      <nav className="sidebar">
-        <div className="brand">
-          <span className="brand-mark">◈</span>
-          <div>
-            <div className="brand-name">HilbertRaum</div>
-            <div className="brand-edition">Lite</div>
-          </div>
+      <nav className="sidebar" aria-label={t('nav.aria')}>
+        <div className="brand" title="HilbertRaum">
+          <span className="brand-mark" aria-hidden="true">◈</span>
+          <span className="brand-name">HilbertRaum</span>
         </div>
         <ul className="nav-list">{NAV_TOP.map(navButton)}</ul>
         <ul className="nav-list nav-bottom">{NAV_BOTTOM.map(navButton)}</ul>
         {workspace.mode === 'encrypted' && (
-          <Button size="sm" className="lock-btn" title={t('app.lockNowTitle')} onClick={() => void lockNow()}>
-            🔒 {t('app.lockNow')}
-          </Button>
+          <button
+            type="button"
+            className="lock-btn"
+            title={t('app.lockNowTitle')}
+            aria-label={t('app.lockNow')}
+            onClick={() => void lockNow()}
+          >
+            <span className="nav-icon" aria-hidden="true">🔒</span>
+            <span className="nav-label">{t('app.lockNow')}</span>
+          </button>
         )}
-        <LocalIndicator variant="sidebar" offline={offline} onNavigate={navigate} t={t} />
       </nav>
 
       <main className="content">

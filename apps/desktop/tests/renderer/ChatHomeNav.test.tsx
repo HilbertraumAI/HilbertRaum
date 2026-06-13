@@ -287,7 +287,8 @@ describe('ChatScreen — documents-scope popover', () => {
       listDocuments: vi.fn(async () => [indexedDoc('d1', 'contract.pdf'), indexedDoc('d2', 'terms.docx')])
     })
     render(<ChatScreen onNavigate={() => {}} initialMode="documents" />)
-    expect(await screen.findByRole('button', { name: /using all 2 documents/i })).toBeInTheDocument()
+    // Truthful "all" copy never shows a count (it can't be "all 0 documents").
+    expect(await screen.findByRole('button', { name: /using all documents/i })).toBeInTheDocument()
   })
 })
 

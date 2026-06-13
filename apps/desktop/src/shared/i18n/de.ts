@@ -25,6 +25,7 @@ import type { en } from './en'
 
 export const de: Record<keyof typeof en, string> = {
   // ---- App shell ----
+  'nav.aria': 'Hauptnavigation',
   'nav.home': 'Start',
   'nav.chat': 'Chat',
   'nav.documents': 'Dokumente',
@@ -119,16 +120,19 @@ export const de: Record<keyof typeof en, string> = {
   'chat.composer.stop': 'Stopp',
 
   // ---- Chat: conversation list ----
+  'chat.list.title': 'Unterhaltungen',
+  'chat.list.aria': 'Unterhaltungsverlauf',
   'chat.list.newChat': '+ Neuer Chat',
   'chat.list.newDocQa': '+ Neues Dokument-Q&A',
   'chat.list.hide': 'Unterhaltungsliste ausblenden',
   'chat.list.empty': 'Noch keine Unterhaltungen.',
-  'chat.list.docBadge': 'DOK',
+  'chat.list.docMeta': 'Dokumente',
   'chat.list.rowOptionsAria': 'Optionen für Unterhaltung „{title}“',
   'chat.search.placeholder': 'Unterhaltungen durchsuchen…',
   'chat.search.aria': 'Unterhaltungen durchsuchen',
   'chat.search.resultsAria': 'Suchergebnisse',
-  'chat.search.noMatches': 'Noch keine Treffer — versuch es mit einem anderen Wort.',
+  'chat.search.resultsFor': 'Ergebnisse für „{query}“',
+  'chat.search.noMatches': 'Ich habe nichts gefunden. Formulier es anders.',
   'chat.search.count.one': '{count} Treffer',
   'chat.search.count.other': '{count} Treffer',
   'chat.group.today': 'Heute',
@@ -151,8 +155,8 @@ export const de: Record<keyof typeof en, string> = {
   'chat.depth.deepHint': 'Denkt das Problem vor dem Antworten durch — dauert länger',
 
   // ---- Chat: transcript + message actions ----
-  'chat.role.user': 'du',
-  'chat.role.assistant': 'Assistent',
+  'chat.role.user': 'Du',
+  'chat.role.assistant': 'HilbertRaum',
   'chat.thinking': 'Denkt nach…',
   'chat.actions.tryAgain': 'Noch einmal',
   'chat.actions.copy': 'Kopieren',
@@ -160,10 +164,10 @@ export const de: Record<keyof typeof en, string> = {
   'chat.actions.saveTitle': 'Diese Unterhaltung als Datei speichern (bleibt lokal)',
 
   // ---- Chat: document scope ----
-  'chat.scope.usingAll.one': 'Nutzt dein {count} Dokument',
-  'chat.scope.usingAll.other': 'Nutzt alle {count} Dokumente',
+  'chat.scope.usingAll': 'Nutzt alle Dokumente',
   'chat.scope.usingSome.one': 'Nutzt {count} Dokument',
   'chat.scope.usingSome.other': 'Nutzt {count} Dokumente',
+  'chat.scope.none': 'Noch keine Dokumente · Dokumente hinzufügen',
   'chat.scope.popoverAria': 'Zu befragende Dokumente',
   'chat.scope.allLine':
     'Antworten kommen aus all deinen Dokumenten. Wähle Dokumente aus, um nur diese zu fragen:',

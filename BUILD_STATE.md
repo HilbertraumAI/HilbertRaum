@@ -6,7 +6,38 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
-_Last updated: 2026-06-13 — **Rebrand: "Private AI Drive Lite" / "PAID" → "HilbertRaum".**
+_Last updated: 2026-06-13 — **Chat-UI polish pass (branch `chat-ui-polish`).** A
+focused, renderer-only calm/premium pass on the Chat screen + conversation history
+(design-guidelines §3/§7). **What changed:** ① app nav → a compact ~80px **icon+label
+rail** (`.app-shell` grid `80px 1fr`), active = soft neutral fill (accent reserved for the
+focus ring); the **duplicate lower-left "Local · Offline" badge was removed** (the chat
+header keeps the one ambient signal) and the lock became a quiet rail button. ② **history
+rows** restyled: soft selected *fill* (the blue selection outline that read as keyboard
+focus is gone), structured row (title + a quiet "📄 Documents" meta line replacing the loud
+filled `DOC` badge), ≥40px tall; search mode gained a **"Results for '…'" header** +
+2-line snippets + calmer empty copy ("I didn't find a match. Try rephrasing."). ③
+**messages softened**: user turns → neutral tinted surface (no strong blue border),
+assistant turns borderless (read as text, not nested cards), uppercase role chips → quiet
+**You** / **HilbertRaum** labels; source cards lightened. ④ **composer** is now one bordered
+shell with the Send/Ask button inside it (shell takes the focus ring). ⑤ **truthful
+doc-scope copy**: "Using all 0 documents" is gone — zero docs → "📄 No documents yet · Add
+documents" (jumps to Documents), some → "Using N documents", all → "Using all documents"
+(no count). ⑥ **responsive**: history **auto-collapses ≤1150px** (`LIST_AUTO_COLLAPSE_PX`,
+a `matchMedia` listener in ChatScreen OR-ed with the persisted preference; a session "peek"
+override re-opens it while narrow), gutters tighten at ≤1280/≤1150px. **History was already
+collapsible — refined, not reimplemented.** **Files:** `renderer/App.tsx`,
+`renderer/styles.css`, `renderer/chat/{ConversationList,Composer,ScopePopover}.tsx`,
+`renderer/screens/ChatScreen.tsx`, `shared/i18n/{en,de}.ts` (new keys `nav.aria`,
+`chat.list.title/aria/docMeta`, `chat.search.resultsFor`; changed `chat.role.*`,
+`chat.scope.*`, `chat.search.noMatches`; removed `chat.list.docBadge`/`chat.scope.usingAll.*`
+plurals). **No backend / data-contract / IPC changes.** **Tests:** typecheck clean, build OK,
+vitest **1085 passed / 25 skipped** (updated `InformationArchitecture` — the ambient
+indicator is now header-only — and the scope/no-match copy assertions; +1 test). Eyeball
+walk + before/after screenshots: `docs/design-review/chat-screenshots-after/` (BEFORE set:
+`docs/design-review/chat-screenshots/`). Design record folded into `docs/design-guidelines.md`
+§12. **Open:** German copy for the new strings still wants the D-L7 human review._
+
+_(prior) **Rebrand: "Private AI Drive Lite" / "PAID" → "HilbertRaum".**
 Repo-wide rename across code, design, and docs. User-facing brand "Private AI Drive Lite"
 (and the bare "Private AI Drive") → **HilbertRaum** everywhere (window title, renderer brand,
 i18n EN/DE copy, system prompt, READ ME FIRST, all docs + the spec, now

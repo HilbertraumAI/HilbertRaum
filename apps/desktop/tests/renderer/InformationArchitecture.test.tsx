@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, afterEach } from 'vitest'
+import { describe, it, expect, vi, afterEach, beforeAll } from 'vitest'
 import { render, screen, cleanup, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { App } from '../../src/renderer/App'
@@ -14,6 +14,16 @@ import { stubApi } from '../helpers/renderer'
 // point still uses.
 
 afterEach(cleanup)
+
+// jsdom implements neither element scrolling nor scrollTo; the chat transcript's
+// autoscroll effect would otherwise crash when the chat-header route test mounts it.
+beforeAll(() => {
+  Object.defineProperty(window.HTMLElement.prototype, 'scrollTo', {
+    configurable: true,
+    writable: true,
+    value: () => {}
+  })
+})
 
 describe('resolveNavTarget — virtual targets + legacy aliases', () => {
   it('maps the five real destinations to themselves', () => {
@@ -128,11 +138,65 @@ describe('App shell — 5-item nav (Phase 26)', () => {
     expect(within(nav).queryByText(/diagnostics/i)).not.toBeInTheDocument()
   })
 
-  it('routes the sidebar "Local · Offline" indicator to Settings → Privacy & data', async () => {
-    // Phase 27: the offline badge evolved into the ambient indicator — same route.
-    const user = userEvent.setup()
+  it('keeps the ambient "Local · Offline" indicator OUT of the nav rail (dedup)', async () => {
+    // Chat-UI polish: the privacy signal lives only in the chat header now — the
+    // duplicate lower-left nav badge was removed (one primary persistent signal).
     stubAppShell()
     render(<App />)
+    const nav = await screen.findByRole('navigation')
+    expect(within(nav).queryByRole('button', { name: 'Local · Offline' })).not.toBeInTheDocument()
+  })
+
+  it('routes the chat-header "Local · Offline" indicator to Settings → Privacy & data', async () => {
+    // The ambient indicator (guidelines §7) now sits in the chat header; clicking it
+    // still opens Settings → Privacy & data (the route is unchanged).
+    const user = userEvent.setup()
+    stubApi({
+      getWorkspaceState: vi.fn(async () => unlockedWorkspace),
+      getPolicy: vi.fn(async () => offlinePolicy),
+      getSettings: vi.fn(async () => DEFAULT_SETTINGS),
+      onRuntimeNotice: vi.fn(() => () => {}) as never,
+      onToken: vi.fn(() => () => {}) as never,
+      onReasoning: vi.fn(() => () => {}) as never,
+      onScopeNotice: vi.fn(() => () => {}) as never,
+      getAppStatus: vi.fn(async () => ({
+        appName: 'x',
+        appVersion: '0',
+        offlineMode: true,
+        networkAllowed: false,
+        activeModelId: 'm',
+        hardwareProfile: 'UNKNOWN' as const,
+        workspaceMode: 'plaintext_dev' as const,
+        workspaceReady: true,
+        machineRamGb: 16,
+        dictationAvailable: false
+      })),
+      // A running runtime so the full chat layout (with the header indicator) renders.
+      getRuntimeStatus: vi.fn(async () => ({
+        running: true,
+        modelId: 'm',
+        port: 1,
+        healthy: true,
+        message: 'ok',
+        supportsThinkingMode: false
+      })),
+      listConversations: vi.fn(async () => []),
+      listMessages: vi.fn(async () => []),
+      listDocuments: vi.fn(async () => []),
+      runPreflight: vi.fn(async () => ({
+        ok: true,
+        rootPath: '/drive',
+        writable: true,
+        freeBytes: 1024 * 1024 * 1024,
+        slowDriveWarning: null,
+        problems: []
+      })),
+      getDriveStatus: vi.fn(async () => ({}) as never),
+      getRuntimeInstall: vi.fn(async () => null),
+      getLogTail: vi.fn(async () => [])
+    } as never)
+    render(<App />)
+    await user.click(await screen.findByRole('button', { name: /Chat/ }))
     await user.click(await screen.findByRole('button', { name: 'Local · Offline' }))
 
     // The Settings screen opens with the Privacy & data tab selected…
