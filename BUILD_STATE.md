@@ -6,11 +6,11 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
-_Last updated: 2026-06-13 — **Phase 40 (i18n renderer string sweep) is DONE** (see the
-§1 row + the §3 entry; working paper `docs/i18n-plan.md` §5 has the as-built notes and
-the grep-audit result). Same day, earlier: Phase 39 (i18n foundation + proof slice,
-`docs/i18n-plan.md` §4 + R-L1 locale finding) and the audit's code-finding remediation
-(strings, robustness, test-infra timeout; §3 "Audit-findings remediation" entry)._
+_Last updated: 2026-06-13 — **Phase 41 (i18n main-process boundary) is DONE** (see the
+§1 row + the §3 entry; working paper `docs/i18n-plan.md` §6 has the as-built notes incl.
+the fact-5 classification findings; D-L4 is now LOCKED). Same day, earlier: Phase 40
+(renderer sweep, plan §5) and Phase 39 (foundation + proof slice, plan §4 + R-L1
+locale finding). Only Phase 42 (German QA + closeout) remains in the i18n wave._
 
 **Where the project stands:** the MVP (Phases 0–13) is feature-complete and four post-MVP
 audit rounds are fully remediated (§8). Every shipped wave since is DONE and condensed into a
@@ -40,9 +40,10 @@ design record per the CLAUDE.md doc lifecycle rule:
 **Open:** Phase 22 (signed offline update bundles) is 🔴 blocked on a key-management design;
 Phase 30 (opt-in big slot + embeddings) has a drafted working paper
 ([`docs/big-slot-embeddings-plan.md`](docs/big-slot-embeddings-plan.md)); the i18n wave
-(English + German UI, [`docs/i18n-plan.md`](docs/i18n-plan.md)) has **Phases 39 + 40
-done** (foundation + proof slice; full renderer sweep — every screen/component renders
-from the catalogs) and Phases 41–42 open (main-process boundary, then German QA). Release-wise the
+(English + German UI, [`docs/i18n-plan.md`](docs/i18n-plan.md)) has **Phases 39–41
+done** (foundation + proof slice; full renderer sweep; main-process boundary — emissions
+localize via `tMain()`, persisted strings stay canonical English behind the D-L4 display
+map) and only Phase 42 open (German QA + closeout). Release-wise the
 remaining work is **manual acceptance only** (§5). Consciously-accepted gaps live in
 [`docs/known-limitations.md`](docs/known-limitations.md).
 
@@ -87,7 +88,8 @@ remaining work is **manual acceptance only** (§5). Consciously-accepted gaps li
 | 38 | Scanned-PDF / photo OCR (tesseract.js + `ocr/` assets) | 🟢 done 2026-06-11 — wave-3 record §11; **wave 3 COMPLETE** |
 | 39 | i18n foundation + proof slice (shared `t()` + catalogs, `uiLanguage` + picker, pre-unlock language) | 🟢 done 2026-06-13 — `docs/i18n-plan.md` §4 (as built + R-L1 finding) |
 | 40 | i18n renderer string sweep (all screens/components, plurals, dates/numbers, shared-component `t` prop) | 🟢 done 2026-06-13 — `docs/i18n-plan.md` §5 (as built + grep-audit result) |
-| 41–42 | i18n: main-process boundary · German QA | ⚪ not started — plan `docs/i18n-plan.md` §6–§7 |
+| 41 | i18n main-process boundary (emissions via `tMain()`, persist-canonical English + D-L4 display map, dialog titles) | 🟢 done 2026-06-13 — `docs/i18n-plan.md` §6 (as built + fact-5 findings) |
+| 42 | i18n German QA + closeout (de review, text-expansion audit, eyeball walk, docs) | ⚪ not started — plan `docs/i18n-plan.md` §7 |
 
 Legend: ⚪ not started · 🟡 in progress · 🟢 done · 🔴 blocked
 
@@ -741,6 +743,35 @@ Repo root: `f:\_coding\ai_drive`.
   `tests/renderer/GermanSmoke.test.tsx` (German render smoke per migrated screen + the
   shared-component built-ins); grep audit clean (remaining capitalized literals =
   comments, dev-internal throws, `e.key` names — recorded in plan §5).
+- **Phase 41 — i18n main-process boundary (2026-06-13; as-built notes + fact-5
+  classification findings in `docs/i18n-plan.md` §6; D-L4 LOCKED):** the §3.3 two-rule
+  boundary applied across the main process in four step commits. **Rule 1 (persist
+  canonical, LOCKED D-L4):** everything written to the DB / settings stays canonical
+  English via explicit `t('en', …)` + a §3.3 comment — the 7 parser-failure constants
+  (`scanDetected` exact-match contract untouched), source-missing + reconcile messages,
+  `NO_DOCUMENT_CONTEXT_ANSWER` **and `REINDEX_NEEDED_ANSWER`** (fact-5 correction:
+  also persisted into `messages.content`), `DOC_TASK_BUSY_MESSAGE` (canonical ON THE
+  WIRE — ChatScreen's `error.includes` recognition), and `buildWarnings` (persisted in
+  `settings.lastBenchmark`). The renderer translates them at display via the new
+  exact-match **display map** (`renderer/lib/displayMap.ts`, `localizeServerCopy`) in
+  DocumentsScreen failure rows, Transcript (persisted + live bubble), the ChatScreen
+  banner (busy-message substring case), DiagnosticsTab warnings, and Home preflight
+  notes; unknown strings (raw library errors, the interpolated `Unsupported file
+  type: …`) render as-is — accepted. Old pre-i18n rows re-translate retroactively on a
+  language switch (byte-identical English, D-L8). **Rule 2 (emit localized, D-L5):**
+  `tMain()` at every emission site — doc-task guards/status errors (**verified
+  in-memory only**, never persisted), download refusals + job errors, the IPC guards
+  (docs/chat/rag/doctasks/models/downloads), preview/export throws, preflight problems
+  (transient; the slow-drive note stays canonical — shared with persisted benchmark
+  warnings — and is display-mapped), the GPU compatibility-mode notice, the remaining
+  workspace gate/change-password results, the `VaultBusyError` lease message, and the
+  five native dialog titles + picker filters (window title stays the product name).
+  `FRIENDLY_TASK_ERRORS` became the exported `isFriendlyTaskError()` checking both
+  catalogs (guard throws are now localized). Audit-log messages stay English in DB +
+  export (privacy rule, accepted); LLM prompts untouched (D-L6). Tests: full suite
+  **1007 green**; new `tests/integration/i18n-boundary.test.ts` +
+  `tests/unit/display-map.test.ts`; built bundle launch-smoked on this de-AT machine
+  (German home, German no-model IPC refusal in vivo).
 
 ---
 

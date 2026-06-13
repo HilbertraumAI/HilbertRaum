@@ -1,7 +1,8 @@
 # Internationalization (i18n) plan — English + German UI (Phases 39–42)
 
-_Status: **WORKING PAPER — drafted 2026-06-13. Phase 39 (foundation + proof slice) and
-Phase 40 (renderer sweep) are DONE 2026-06-13; Phases 41–42 are open.** Per the CLAUDE.md doc lifecycle rule this
+_Status: **WORKING PAPER — drafted 2026-06-13. Phases 39 (foundation + proof slice),
+40 (renderer sweep), and 41 (main-process boundary) are DONE 2026-06-13; Phase 42
+(German QA + closeout) is open.** Per the CLAUDE.md doc lifecycle rule this
 file exists while the work is open; on completion it gets condensed
 into a design record (likely a new § in `architecture.md` + a `design-guidelines.md`
 update for the German microcopy rules) and deleted. Phase numbering continues at **39**
@@ -18,7 +19,7 @@ runtime dependencies, no network, no behavior changes outside copy.
 |---|---|---|---|
 | 39 | ✅ DONE 2026-06-13 — i18n foundation: shared `t()` module + catalogs, `uiLanguage` setting + picker, pre-unlock resolution; App shell + Settings + WorkspaceGate migrated as the proof slice | M | none |
 | 40 | ✅ DONE 2026-06-13 — Renderer string sweep: all remaining screens/components, pluralization, dates/numbers | L (mechanical) | 39 |
-| 41 | Main-process boundary: transient errors/notices localized at emission; persisted-string display map; native dialog titles | M | 39 |
+| 41 | ✅ DONE 2026-06-13 — Main-process boundary: transient errors/notices localized at emission; persisted-string display map; native dialog titles | M | 39 |
 | 42 | German QA: full `de` review pass (Sie/glossary), text-expansion layout audit + eyeball walk, docs + known-limitations | M | 40 + 41 |
 
 Recommended order: 39 → (40 ∥ 41) → 42. 40 and 41 touch disjoint files and can run as
@@ -304,24 +305,78 @@ Rules for the sweep:
   import `en` and assert against `t('en', key)` instead of a string literal — the
   assertion strength is identical and survives future copy edits.
 
-## 6. Phase 41 — main-process boundary
+## 6. Phase 41 — main-process boundary ✅ DONE 2026-06-13
 
-1. Move the static constants into catalog entries **whose English values are
-   byte-identical to today's strings** (so persisted-data contracts and exact-string
-   tests don't move): parser messages, task messages, download/policy refusals, IPC
-   guard errors, preflight problems, GPU notice copy.
-2. Apply the two-rule boundary (§3.3): persist-sites keep writing `t('en', …)`
-   (explicitly, with a comment citing this plan's §3.3); emission-sites switch to
-   `tMain()`.
-3. Renderer display map for the persisted static set (`documents.error_message`
-   rendering in `DocumentsScreen`, and assistant messages equal to
-   `NO_DOCUMENT_CONTEXT_ANSWER` in `Transcript`).
-4. Verify the fact-5 classification of doctask errors (in-memory vs persisted) and
-   place them on the right side of the rule.
-5. `dialog.showOpenDialog` titles via `tMain()`. Window title stays the product name.
-6. Tests: existing main-process exact-string tests stay green (English defaults); add
-   one unit proving a German-cached language localizes an emitted error while the
-   persisted row stays English; add a `scanDetected`-survives-language-switch test.
+Implemented in four step commits (catalogs → boundary → display map → tests), suite
+green after each. **As-built notes:**
+
+- **Catalogs:** ~64 new `main.*` keys per language, split into a **persist-canonical
+  section** (16 keys, commented as part of the data contract — editing a value breaks
+  the display-map match for already-persisted rows) and an **emission section**.
+  English values are byte-identical to the pre-Phase-41 literals (D-L8 — the existing
+  exact-string tests passed unchanged).
+- **Rule 1 (persist canonical) as built:** the seven parser-failure constants
+  (`PDF_SCAN_DETECTED_MESSAGE`, 3× audio, 3× image), `'Source file not found on
+  disk.'`, the reconcile-stuck-documents message, `NO_DOCUMENT_CONTEXT_ANSWER`,
+  `REINDEX_NEEDED_ANSWER`, `DOC_TASK_BUSY_MESSAGE`, and the four `buildWarnings`
+  strings are now defined as / written via explicit `t('en', …)` with a §3.3 comment.
+  The `scanDetected` exact-match site (`services/ingestion/index.ts`) is untouched.
+- **Rule 2 (emit localized) as built:** `tMain()` at every emission site — doc-task
+  guards + status errors (incl. the inline pick-one/unknown-kind throws), download
+  refusals + job errors (`friendlyDownloadError` interpolates via `{reason}`), the IPC
+  guards in registerDocsIpc/ChatIpc/RagIpc/DocTasksIpc/ModelIpc/DownloadIpc, `selectModel`'s
+  not-selectable refusal, preview/export throws in `ingestion/index.ts`, preflight
+  problems, the GPU compatibility-mode notice (`factory.ts` notify site; the exported
+  constant stays canonical for tests), the remaining `registerWorkspaceIpc` result
+  messages (password-length via `{min}`, create/open/change failures), the
+  `VaultBusyError` lease message, and all five dialog titles + the two picker filter
+  names (scope was widened beyond the §6.5 "open-dialog titles" to the save-dialog
+  titles — same boundary class). `DOC_TASK_BUSY_MESSAGE` is deliberately NOT localized
+  at emission: it stays canonical English on the wire because `ChatScreen` recognizes
+  it via `error.includes` — the display map translates it renderer-side.
+- **`FRIENDLY_TASK_ERRORS` became `isFriendlyTaskError()`** (exported): the guard
+  throws are now localized, so the exact-match pass-through checks each key's value in
+  BOTH catalogs (the cached language can even change between throw and catch).
+- **Display map (D-L4) as built:** `renderer/lib/displayMap.ts` —
+  `localizeServerCopy(t, raw)`, an exact-match reverse lookup over the 16
+  persist-canonical keys; unknown strings render as-is;
+  `DOC_TASK_BUSY_MESSAGE` is additionally substring-replaced (the `includes`
+  contract). Wired into: `DocumentsScreen` failure rows, `Transcript` assistant
+  messages AND the live streaming bubble (the fixed answers arrive as one token),
+  the `ChatScreen` error banner, `DiagnosticsTab` benchmark warnings, and the Home
+  preflight notes (identity for already-localized/unknown strings).
+- **Fact-5 classification verified (§6.4):** doc-task errors live ONLY in the
+  in-memory `DocTaskManager` polling status — never the DB ⇒ emission side, `tMain()`.
+  `BenchmarkResult.warnings` ARE persisted (`settings.lastBenchmark`,
+  registerBenchmarkIpc) ⇒ persist-canonical + display-mapped; the preflight
+  `slowDriveWarning` reuses the same `buildWarnings` copy and is display-mapped at
+  Home, while preflight `problems` are transient ⇒ `tMain()`. **Fact-5 corrections
+  found:** `REINDEX_NEEDED_ANSWER` is also persisted into `messages.content`
+  (handled like `NO_DOCUMENT_CONTEXT_ANSWER`); `documents.error_message` can also
+  carry the interpolated `'Unsupported file type: <ext>'` and raw parser-library
+  errors — both render as-is under German (accepted; the display map is exact-match
+  by design). Audit-log messages (`ev.message`) stay English in the DB and export —
+  accepted per the privacy rule, not translated.
+- **Untouched by design:** LLM prompts (D-L6), the audit-log privacy rule, the window
+  title (product name), developer-facing invariant throws that never render in the UI
+  (sidecar/crypto/rasterizer internals, `Unknown document: <id>`-class guards).
+- **Tests:** `tests/integration/i18n-boundary.test.ts` (German-cached emission vs
+  English persisted row; doc-task guard in German + two-language friendly
+  pass-through; warnings canonical under `de`; scanDetected survives en→de→en with
+  rows imported under either language) and `tests/unit/display-map.test.ts` (known
+  constant → German, re-typed pre-i18n literal still matches, unknown/interpolated
+  as-is, English identity, busy-message embedding, benchmark warning). Full suite
+  1007 passed; built bundle launch-smoked on the de-AT machine — German home and a
+  German no-model IPC refusal observed in vivo.
+
+Original step plan: ① catalog entries byte-identical to today's strings (parser
+messages, task messages, download/policy refusals, IPC guard errors, preflight
+problems, GPU notice copy) ② the §3.3 two-rule boundary (persist-sites `t('en', …)`
+with a §3.3 comment; emission-sites `tMain()`) ③ renderer display map for the
+persisted static set ④ verify the fact-5 classification of doctask errors ⑤ dialog
+titles via `tMain()` (window title stays the product name) ⑥ tests: exact-string
+tests stay green via English defaults; German-emission-vs-English-row unit;
+scanDetected-survives-language-switch.
 
 ## 7. Phase 42 — German QA + closeout
 
@@ -349,7 +404,7 @@ Rules for the sweep:
 | D-L1 | Hand-rolled typed i18n module in `shared/i18n/` (flat keys, `{name}` interpolation, `.one`/`.other` plurals); **no new dependency**. Typecheck enforces de↔en catalog parity. | **LOCKED** (Phase 39, as built) |
 | D-L2 | `uiLanguage: 'system' \| 'en' \| 'de'`, default `'system'` (theme precedent); `de*` locale ⇒ German, else English. | **LOCKED** (Phase 39; incl. bare `'de'` — R-L1 finding §4.6) |
 | D-L3 | Pre-unlock language: renderer = localStorage mirror (`paid.uiLanguage`) → `navigator.language` fallback; main = cached language from `app.getLocale()` until settings are readable. | **LOCKED** (Phase 39, as built) |
-| D-L4 | **Persist canonical English, translate at display** (exact-match display map over the finite static persisted set). Keeps the `scanDetected` contract and old rows; makes persisted copy retroactively language-switchable. | proposed (Phase 41) |
+| D-L4 | **Persist canonical English, translate at display** (exact-match display map over the finite static persisted set). Keeps the `scanDetected` contract and old rows; makes persisted copy retroactively language-switchable. | **LOCKED** (Phase 41, as built — `renderer/lib/displayMap.ts`; set incl. `REINDEX_NEEDED_ANSWER` + benchmark warnings, §6 notes) |
 | D-L5 | **Ephemeral main→user strings localized at emission** via `tMain()` + cached language; IPC error transport (`friendlyIpcError`) unchanged. | **LOCKED** (Phase 39 — first use: the gate's wrong-password message) |
 | D-L6 | LLM prompts stay English and unchanged (benchmark comparability; models follow the question's language). Task-output language = future feature, noted in known-limitations. | proposed (document in Phase 42) |
 | D-L7 | German address form = informal **„du"** (lowercase mid-sentence); glossary pinned in `de.ts`. | **RESOLVED** (user, 2026-06-13) — in use since Phase 39 |
