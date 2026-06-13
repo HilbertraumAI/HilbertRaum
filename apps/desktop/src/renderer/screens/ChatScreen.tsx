@@ -442,27 +442,36 @@ export function ChatScreen({ onNavigate, initialMode, initialScopeDocumentIds }:
   }
 
   // --- Empty state: no model running ------------------------------------------
+  // Routed through the shared EmptyState (guidelines §6) like every other screen
+  // (M-U3) instead of a hand-rolled .card. The "still loading" spinner line + the two
+  // buttons ride in the `action` slot.
   if (runtimeRunning === false) {
     return (
       <div className="screen">
         <h1>{t('chat.title')}</h1>
-        <div className="card">
-          <h2>{t('chat.noModel.title')}</h2>
-          <p className="hint">
-            {t('chat.noModel.hintBefore')}
-            <b>{t('chat.noModel.hintAction')}</b>
-            {t('chat.noModel.hintAfter')}
-          </p>
-          <p className="hint">
-            <Spinner /> {t('chat.noModel.stillLoading')}
-          </p>
-          <div className="actions" style={{ marginTop: 12 }}>
-            <Button variant="primary" onClick={() => onNavigate('models')}>
-              {t('chat.noModel.open')}
-            </Button>
-            <Button onClick={() => void checkRuntime()}>{t('chat.noModel.recheck')}</Button>
-          </div>
-        </div>
+        <EmptyState
+          title={t('chat.noModel.title')}
+          line={
+            <>
+              {t('chat.noModel.hintBefore')}
+              <b>{t('chat.noModel.hintAction')}</b>
+              {t('chat.noModel.hintAfter')}
+            </>
+          }
+          action={
+            <>
+              <p className="hint">
+                <Spinner /> {t('chat.noModel.stillLoading')}
+              </p>
+              <div className="actions" style={{ marginTop: 12 }}>
+                <Button variant="primary" onClick={() => onNavigate('models')}>
+                  {t('chat.noModel.open')}
+                </Button>
+                <Button onClick={() => void checkRuntime()}>{t('chat.noModel.recheck')}</Button>
+              </div>
+            </>
+          }
+        />
       </div>
     )
   }

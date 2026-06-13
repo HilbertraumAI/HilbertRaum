@@ -295,6 +295,37 @@ describe('ChatScreen — Stop confirmation (M-U2)', () => {
   })
 })
 
+describe('ChatScreen — no-model empty state (M-U3)', () => {
+  it('renders the no-model state through the shared EmptyState (not a hand-rolled card)', async () => {
+    stubApi({
+      listConversations: vi.fn(async () => [conv()]),
+      getRuntimeStatus: vi.fn(async () => ({
+        running: false,
+        modelId: null,
+        port: null,
+        healthy: false,
+        message: 'no model'
+      })),
+      listMessages: vi.fn(async () => []),
+      onToken: vi.fn(() => () => {}),
+      onReasoning: vi.fn(() => () => {}),
+      onScopeNotice: vi.fn(() => () => {})
+    })
+    const { container } = render(
+      <ToastProvider>
+        <ChatScreen onNavigate={() => {}} />
+      </ToastProvider>
+    )
+
+    // The shared EmptyState markup is used; the old `.card` wrapper is gone.
+    expect(await screen.findByText('No model is running')).toBeInTheDocument()
+    expect(container.querySelector('.empty-state')).not.toBeNull()
+    expect(container.querySelector('.card')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Open AI Model' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Re-check' })).toBeInTheDocument()
+  })
+})
+
 describe('groupConversations — date grouping', () => {
   it('buckets by recency relative to "now" and drops empty groups', () => {
     const now = new Date('2026-06-10T12:00:00')
