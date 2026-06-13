@@ -8,6 +8,11 @@
 launchers/*.cmd text eol=crlf
 launchers/READ* text eol=crlf
 
+# Captured-real-output regression fixtures (audit L19/M-A5) are byte-for-byte snapshots of
+# upstream tool output — including its native CRLF line endings — so a format change is
+# noticed. Treat as binary so normalization never rewrites the captured bytes.
+apps/desktop/tests/fixtures/** -text
+
 # Binary/lock files left untouched
 package-lock.json text eol=lf
 *.gguf binary

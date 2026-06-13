@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { EventEmitter } from 'node:events'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import {
   parseListDevices,
   looksIntegrated,
@@ -11,12 +13,31 @@ import type { ChildProcessLike, SpawnFn } from '../../src/main/services/runtime/
 // Phase 15 GPU probe (architecture.md GPU record §5.1/§11.1). Zero GPUs, zero binaries: the
 // probe is driven entirely through the fake-spawn seam.
 
+// L19 (audit-2026-06-13): a captured-real-output regression fixture. This is the verbatim
+// `llama-server --list-devices` stdout from the pinned b9585 Vulkan build on the dev box
+// (CRLF preserved; .gitattributes keeps it binary). If an upstream release changes the
+// device-line shape, this fixture-backed parse fails in CI instead of silently mislabelling
+// the backend on real hardware (M-A5 canned-real-output policy).
+const LIST_DEVICES_B9585 = readFileSync(
+  join(__dirname, '..', 'fixtures', 'list-devices-b9585-vulkan-rtx3080ti.txt'),
+  'utf8'
+)
+
 // The REAL output captured from the b9585 Vulkan build on the dev machine.
 const RTX_3080TI_OUTPUT = `Available devices:
   Vulkan0: NVIDIA GeForce RTX 3080 Ti (12300 MiB, 11511 MiB free)
 `
 
 describe('parseListDevices', () => {
+  it('parses the captured real b9585 --list-devices fixture (L19 regression)', () => {
+    // The on-disk capture still carries the tool`s native CRLF line endings — the parser
+    // must split on /\r?\n/ and land the same device a hand-written string would.
+    expect(LIST_DEVICES_B9585).toContain('\r\n')
+    expect(parseListDevices(LIST_DEVICES_B9585)).toEqual([
+      { id: 'Vulkan0', name: 'NVIDIA GeForce RTX 3080 Ti', totalMb: 12300, freeMb: 11525 }
+    ])
+  })
+
   it('parses the real single-GPU fixture', () => {
     expect(parseListDevices(RTX_3080TI_OUTPUT)).toEqual([
       { id: 'Vulkan0', name: 'NVIDIA GeForce RTX 3080 Ti', totalMb: 12300, freeMb: 11511 }
