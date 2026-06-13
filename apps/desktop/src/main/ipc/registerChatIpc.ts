@@ -22,6 +22,7 @@ import {
   searchMessages,
   updateConversationScope
 } from '../services/chat'
+import { tMain } from '../services/i18n'
 import { log } from '../services/logging'
 import { inFlightStreams } from './inflight'
 import { saveTextExport } from './save-export'
@@ -109,7 +110,10 @@ export function registerChatIpc(ctx: AppContext): void {
       const runtime = ctx.runtime.active()
       if (!runtime) {
         // No model loaded — surface a clear, recoverable error to the renderer.
-        throw new Error('No AI model is running. Open the AI Model screen and start one first.')
+        // Guard throws here are ephemeral IPC emissions → tMain (i18n-plan §3.3);
+        // DOC_TASK_BUSY_MESSAGE below deliberately stays canonical English on the
+        // wire — the renderer recognizes it by exact match and display-maps it.
+        throw new Error(tMain('main.noModelRunning'))
       }
 
       // Strict one-at-a-time vs document tasks: the one local model serves either a
@@ -123,7 +127,7 @@ export function registerChatIpc(ctx: AppContext): void {
       // window / reload / non-UI caller must not clobber the in-flight canceller (which
       // would orphan the first stream and corrupt the transcript).
       if (inFlight.has(conversationId)) {
-        throw new Error('A response is already being generated for this conversation.')
+        throw new Error(tMain('main.chat.streamInFlight'))
       }
 
       const regenerate = options?.regenerate === true
@@ -132,11 +136,11 @@ export function registerChatIpc(ctx: AppContext): void {
         // With no prior assistant reply there is nothing to regenerate — bail rather than
         // re-prompting on stale context.
         if (!deleteLastAssistantMessage(ctx.db, conversationId)) {
-          throw new Error('Nothing to regenerate yet.')
+          throw new Error(tMain('main.chat.nothingToRegenerate'))
         }
       } else {
         const text = content.trim()
-        if (!text) throw new Error('Cannot send an empty message.')
+        if (!text) throw new Error(tMain('main.chat.emptyMessage'))
         appendMessage(ctx.db, { conversationId, role: 'user', content: text })
         maybeSetTitleFromFirstMessage(ctx.db, conversationId, text)
       }
@@ -188,7 +192,7 @@ export function registerChatIpc(ctx: AppContext): void {
     // the delete (FK violation / resurrection) — refuse while one is in flight; the
     // renderer disables Delete during streaming, this guards other windows/callers.
     if (inFlight.has(conversationId)) {
-      throw new Error('A response is still being generated for this conversation. Stop it first.')
+      throw new Error(tMain('main.chat.stopFirst'))
     }
     deleteConversation(ctx.db, conversationId)
     log.info('Conversation deleted', { conversationId })
@@ -211,7 +215,7 @@ export function registerChatIpc(ctx: AppContext): void {
     const safeName = title.replace(/[^\p{L}\p{N} _-]/gu, '').trim().slice(0, 60) || 'chat'
     const filePath = await saveTextExport(
       {
-        title: 'Export chat transcript',
+        title: tMain('main.dialog.exportChat'),
         defaultPath: `${safeName}.md`,
         filters: [
           { name: 'Markdown', extensions: ['md'] },

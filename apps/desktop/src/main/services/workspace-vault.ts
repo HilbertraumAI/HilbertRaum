@@ -14,6 +14,7 @@ import {
 } from 'node:fs'
 import { randomBytes, createCipheriv, createDecipheriv } from 'node:crypto'
 import { dirname, join } from 'node:path'
+import { tMain } from './i18n'
 import type { Db } from './db'
 import { openDatabase } from './db'
 import { seedSettings, updateSettings } from './settings'
@@ -828,9 +829,8 @@ export class WorkspaceController {
    */
   beginDocumentWork(): () => void {
     if (this.changingPassword) {
-      throw new VaultBusyError(
-        'The workspace password is being changed right now. Try again in a moment.'
-      )
+      // Emission (i18n-plan §3.3 rule 2): user-facing, transient — localized via tMain.
+      throw new VaultBusyError(tMain('main.workspace.busyPasswordChange'))
     }
     this.docWork += 1
     let released = false

@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto'
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { extname, join } from 'node:path'
+import { t, type MessageKey } from '../../shared/i18n'
+import { tMain } from './i18n'
 import type { Db } from './db'
 import type {
   DocTaskKind,
@@ -65,33 +67,23 @@ import { log } from './logging'
 // the materialized `.enc` document — and the audit events carry ids and kinds only
 // (`{ kind, documentId }`, plus `documentIdB` for a compare).
 
-/** Friendly copy (spec §11.4) for the guards + failure states. */
-export const TASK_NEEDS_RUNTIME_MESSAGE =
-  'No AI model is running. Open the AI Model screen and start one first.'
-export const TASK_REFUSED_CHAT_STREAMING_MESSAGE =
-  'An answer is being written right now. Wait for it to finish (or stop it), then try again.'
-export const TASK_COMPARE_PICK_TWO_MESSAGE = 'Pick exactly two documents to compare.'
-export const TASK_COMPARE_REINDEX_MESSAGE =
-  'These documents need a quick re-index before they can be compared — at least one was ' +
-  'prepared with a different search model. Open the Documents screen and choose Re-index, ' +
-  'then try again.'
-export const TASK_DOCUMENT_NOT_READY_MESSAGE =
-  'This document has no readable text yet. Import or re-index it first, then try again.'
-export const TASK_GENERIC_FAILURE_MESSAGE =
-  'The task could not be finished. Make sure the model is still running, then try again.'
-export const TASK_EXPIRED_MESSAGE = 'This task is no longer available.'
-export const TASK_TRANSLATION_TARGET_MESSAGE =
-  'Choose a translation language: German or English.'
-export const TASK_SOURCE_UNREADABLE_MESSAGE =
-  'The stored copy of this document could not be read. Re-import the document, then try again.'
-export const TASK_NEEDS_OCR_MESSAGE =
-  'Text recognition needs the OCR files, which are not on this drive.'
-export const TASK_OCR_NOT_A_SCAN_MESSAGE =
-  'Only a PDF that was detected as a scan can be made searchable this way.'
-export const TASK_OCR_NO_TEXT_MESSAGE =
-  'No readable text was found in this scan. The pages may be blank or too blurry.'
-export const TASK_OCR_FAILED_MESSAGE =
-  "This scan couldn't be read. Make sure the document is still on the drive, then try again."
+// Friendly copy (spec §11.4) for the guards + failure states. Task errors live ONLY in
+// the in-memory polling status (never the DB — verified for the i18n boundary, plan §6
+// fact-5 check), so the THROW sites localize via tMain() (i18n-plan §3.3 rule 2). The
+// canonical-English constants stay exported for the exact-string tests (D-L8).
+export const TASK_NEEDS_RUNTIME_MESSAGE = t('en', 'main.noModelRunning')
+export const TASK_REFUSED_CHAT_STREAMING_MESSAGE = t('en', 'main.task.refusedChatStreaming')
+export const TASK_COMPARE_PICK_TWO_MESSAGE = t('en', 'main.task.comparePickTwo')
+export const TASK_COMPARE_REINDEX_MESSAGE = t('en', 'main.task.compareReindex')
+export const TASK_DOCUMENT_NOT_READY_MESSAGE = t('en', 'main.task.documentNotReady')
+export const TASK_GENERIC_FAILURE_MESSAGE = t('en', 'main.task.genericFailure')
+export const TASK_EXPIRED_MESSAGE = t('en', 'main.task.expired')
+export const TASK_TRANSLATION_TARGET_MESSAGE = t('en', 'main.task.translationTarget')
+export const TASK_SOURCE_UNREADABLE_MESSAGE = t('en', 'main.task.sourceUnreadable')
+export const TASK_NEEDS_OCR_MESSAGE = t('en', 'main.task.needsOcr')
+export const TASK_OCR_NOT_A_SCAN_MESSAGE = t('en', 'main.task.ocrNotAScan')
+export const TASK_OCR_NO_TEXT_MESSAGE = t('en', 'main.task.ocrNoText')
+export const TASK_OCR_FAILED_MESSAGE = t('en', 'main.task.ocrFailed')
 
 // ---- Summary window math (budget-driven two-level map-reduce) ------------------------
 //
@@ -736,7 +728,7 @@ export class DocTaskManager {
   startDocTask(req: StartDocTaskRequest): { jobId: string } {
     const kind = req?.kind as DocTaskKind
     if (kind !== 'summary' && kind !== 'translation' && kind !== 'compare' && kind !== 'ocr') {
-      throw new Error('Unknown document task.')
+      throw new Error(tMain('main.task.unknownKind'))
     }
     // Translation targets are a closed set: de | en only — a free-text language
     // field invites silent quality failures.
@@ -744,21 +736,21 @@ export class DocTaskManager {
     if (kind === 'translation') {
       const raw = req.params?.targetLang
       if (raw !== 'de' && raw !== 'en') {
-        throw new Error(TASK_TRANSLATION_TARGET_MESSAGE)
+        throw new Error(tMain('main.task.translationTarget'))
       }
       targetLang = raw
     }
     if (this.deps.isChatStreaming()) {
-      throw new Error(TASK_REFUSED_CHAT_STREAMING_MESSAGE)
+      throw new Error(tMain('main.task.refusedChatStreaming'))
     }
     // OCR runs the local recognition engine, not the chat model — it needs the
     // vendored language files instead of a running runtime.
     if (kind === 'ocr') {
       if (!this.deps.getOcrEngine?.()) {
-        throw new Error(TASK_NEEDS_OCR_MESSAGE)
+        throw new Error(tMain('main.task.needsOcr'))
       }
     } else if (!this.deps.getRuntime()) {
-      throw new Error(TASK_NEEDS_RUNTIME_MESSAGE)
+      throw new Error(tMain('main.noModelRunning'))
     }
     // Compare runs over exactly TWO (distinct) documents; summary/translation/ocr over one.
     const documentIds = (req.documentIds ?? []).filter((x) => typeof x === 'string' && x.length > 0)
@@ -766,12 +758,12 @@ export class DocTaskManager {
     if (documentIds.length !== wanted || new Set(documentIds).size !== wanted) {
       throw new Error(
         kind === 'compare'
-          ? TASK_COMPARE_PICK_TWO_MESSAGE
+          ? tMain('main.task.comparePickTwo')
           : kind === 'translation'
-            ? 'Pick exactly one document to translate.'
+            ? tMain('main.task.pickOneTranslate')
             : kind === 'ocr'
-              ? 'Pick exactly one scanned PDF to make searchable.'
-              : 'Pick exactly one document to summarize.'
+              ? tMain('main.task.pickOneOcr')
+              : tMain('main.task.pickOneSummarize')
       )
     }
     if (kind === 'ocr') {
@@ -779,13 +771,13 @@ export class DocTaskManager {
       // being re-run (better assets / a bad first pass). Never an ordinary document.
       const doc = getDocument(this.deps.getDb(), documentIds[0])
       if (!doc || !isPdfPath(doc.title) || !(doc.scanDetected || doc.ocr)) {
-        throw new Error(TASK_OCR_NOT_A_SCAN_MESSAGE)
+        throw new Error(tMain('main.task.ocrNotAScan'))
       }
     } else {
       for (const id of documentIds) {
         const doc = getDocument(this.deps.getDb(), id)
         if (!doc || doc.status !== 'indexed' || doc.chunkCount === 0) {
-          throw new Error(TASK_DOCUMENT_NOT_READY_MESSAGE)
+          throw new Error(tMain('main.task.documentNotReady'))
         }
       }
     }
@@ -824,7 +816,7 @@ export class DocTaskManager {
       documentIds: [],
       state: 'failed',
       progress: { stepsDone: 0, stepsTotal: 0 },
-      error: TASK_EXPIRED_MESSAGE,
+      error: tMain('main.task.expired'),
       resultRef: null
     }
   }
@@ -896,7 +888,7 @@ export class DocTaskManager {
       } else {
         // Re-check at dequeue time: the runtime may have been stopped while queued.
         const runtime = this.deps.getRuntime()
-        if (!runtime) throw new Error(TASK_NEEDS_RUNTIME_MESSAGE)
+        if (!runtime) throw new Error(tMain('main.noModelRunning'))
         resultId =
           kind === 'compare'
             ? await this.runCompare(task, runtime)
@@ -920,9 +912,9 @@ export class DocTaskManager {
       // else (runtime/HTTP/SQL errors) is replaced by the generic copy. The raw reason
       // goes to the local log only — never to the renderer, never to the audit log.
       const friendly =
-        FRIENDLY_TASK_ERRORS.has(raw) || (err instanceof Error && err.name === 'VaultBusyError')
+        isFriendlyTaskError(raw) || (err instanceof Error && err.name === 'VaultBusyError')
       task.status.state = 'failed'
-      task.status.error = friendly ? raw : TASK_GENERIC_FAILURE_MESSAGE
+      task.status.error = friendly ? raw : tMain('main.task.genericFailure')
       this.deps.audit?.('document_task_failed', `Document task failed: ${kind}`, auditMeta)
       log.error('Document task failed', { jobId: task.status.jobId, kind, documentId, error: raw })
     }
@@ -933,7 +925,7 @@ export class DocTaskManager {
     const db = this.deps.getDb()
     const documentId = task.status.documentIds[0]
     const doc = getDocument(db, documentId)
-    if (!doc) throw new Error(TASK_DOCUMENT_NOT_READY_MESSAGE)
+    if (!doc) throw new Error(tMain('main.task.documentNotReady'))
 
     // Input = the document's stored CHUNKS, in order (no re-parse). Adjacent chunks
     // overlap by ~80 tokens (the chunker's retrieval overlap); the slight repetition
@@ -942,7 +934,7 @@ export class DocTaskManager {
       .prepare('SELECT text FROM chunks WHERE document_id = ? ORDER BY chunk_index')
       .all(documentId) as unknown as Array<{ text: string }>
     const texts = rows.map((r) => r.text).filter((t) => t.trim().length > 0)
-    if (texts.length === 0) throw new Error(TASK_DOCUMENT_NOT_READY_MESSAGE)
+    if (texts.length === 0) throw new Error(tMain('main.task.documentNotReady'))
 
     const contextTokens = this.deps.getContextTokens()
     const plan = planSummaryWindows(texts, contextTokens)
@@ -974,7 +966,7 @@ export class DocTaskManager {
         if (partial.length > 0) partials.push(partial)
         task.status.progress.stepsDone += 1
       }
-      if (partials.length === 0) throw new Error(TASK_GENERIC_FAILURE_MESSAGE)
+      if (partials.length === 0) throw new Error(tMain('main.task.genericFailure'))
       // Belt for the reduce input: the map output caps already size partials to fit,
       // but a model that ignores maxTokens semantics must still not overflow.
       const budgetWords = summaryBudgetWords(contextTokens)
@@ -995,7 +987,7 @@ export class DocTaskManager {
       task.status.progress.stepsDone += 1
     }
 
-    if (summaryText.length === 0) throw new Error(TASK_GENERIC_FAILURE_MESSAGE)
+    if (summaryText.length === 0) throw new Error(tMain('main.task.genericFailure'))
     const summary: DocumentSummary = {
       text: summaryText,
       modelId: runtime.modelId,
@@ -1020,11 +1012,11 @@ export class DocTaskManager {
   private async runOcr(task: InternalTask): Promise<string> {
     const engine = this.deps.getOcrEngine?.()
     const rasterize = this.deps.rasterizePdf
-    if (!engine || !rasterize) throw new Error(TASK_NEEDS_OCR_MESSAGE)
+    if (!engine || !rasterize) throw new Error(tMain('main.task.needsOcr'))
     const db = this.deps.getDb()
     const documentId = task.status.documentIds[0]
     const doc = getDocument(db, documentId)
-    if (!doc) throw new Error(TASK_OCR_NOT_A_SCAN_MESSAGE)
+    if (!doc) throw new Error(tMain('main.task.ocrNotAScan'))
     const signal = task.controller.signal
 
     const pdf = this.readStoredPdfBytes(documentId)
@@ -1051,11 +1043,11 @@ export class DocTaskManager {
         documentId,
         error: err instanceof Error ? err.message : String(err)
       })
-      throw new Error(TASK_OCR_FAILED_MESSAGE)
+      throw new Error(tMain('main.task.ocrFailed'))
     }
     if (signal.aborted) throw new DOMException('Document task cancelled', 'AbortError')
     if (!pages.some((p) => p.text.length > 0)) {
-      throw new Error(TASK_OCR_NO_TEXT_MESSAGE)
+      throw new Error(tMain('main.task.ocrNoText'))
     }
 
     // Persist the recognition, then re-ingest through the normal pipeline (chunks,
@@ -1083,7 +1075,7 @@ export class DocTaskManager {
           status: result.status,
           error: result.errorMessage
         })
-        throw new Error(TASK_OCR_FAILED_MESSAGE)
+        throw new Error(tMain('main.task.ocrFailed'))
       }
     } finally {
       release()
@@ -1104,12 +1096,12 @@ export class DocTaskManager {
       .get(documentId) as unknown as
       | { title: string; stored_path: string | null; original_path: string | null }
       | undefined
-    if (!row) throw new Error(TASK_SOURCE_UNREADABLE_MESSAGE)
+    if (!row) throw new Error(tMain('main.task.sourceUnreadable'))
     const cipher = this.deps.getIngestionDeps().cipher ?? null
     try {
       if (row.stored_path && existsSync(row.stored_path)) {
         if (row.stored_path.endsWith(ENCRYPTED_DOC_SUFFIX)) {
-          if (!cipher) throw new Error(TASK_SOURCE_UNREADABLE_MESSAGE)
+          if (!cipher) throw new Error(tMain('main.task.sourceUnreadable'))
           const transient = join(this.deps.getStoreDir(), `${documentId}.parse-ocr.pdf`)
           try {
             cipher.decryptFile(row.stored_path, transient)
@@ -1128,9 +1120,9 @@ export class DocTaskManager {
         documentId,
         error: err instanceof Error ? err.message : String(err)
       })
-      throw new Error(TASK_SOURCE_UNREADABLE_MESSAGE)
+      throw new Error(tMain('main.task.sourceUnreadable'))
     }
-    throw new Error(TASK_SOURCE_UNREADABLE_MESSAGE)
+    throw new Error(tMain('main.task.sourceUnreadable'))
   }
 
   /**
@@ -1142,9 +1134,9 @@ export class DocTaskManager {
     const db = this.deps.getDb()
     const documentId = task.status.documentIds[0]
     const targetLang = task.targetLang
-    if (!targetLang) throw new Error(TASK_TRANSLATION_TARGET_MESSAGE)
+    if (!targetLang) throw new Error(tMain('main.task.translationTarget'))
     const doc = getDocument(db, documentId)
-    if (!doc) throw new Error(TASK_DOCUMENT_NOT_READY_MESSAGE)
+    if (!doc) throw new Error(tMain('main.task.documentNotReady'))
 
     // The input is the parser's SEGMENTS re-extracted from the stored copy —
     // ordered and non-overlapping (see the window-math note above; stored chunks
@@ -1177,7 +1169,7 @@ export class DocTaskManager {
       }
       task.status.progress.stepsDone += 1
     }
-    if (failedWindows === plan.windows.length) throw new Error(TASK_GENERIC_FAILURE_MESSAGE)
+    if (failedWindows === plan.windows.length) throw new Error(tMain('main.task.genericFailure'))
 
     // Materialize ONLY now that every window succeeded (or is honestly marked) — a
     // cancelled task persists nothing, so the last cancellation point is here.
@@ -1213,9 +1205,9 @@ export class DocTaskManager {
         documentId,
         error: err instanceof Error ? err.message : String(err)
       })
-      throw new Error(TASK_SOURCE_UNREADABLE_MESSAGE)
+      throw new Error(tMain('main.task.sourceUnreadable'))
     }
-    if (texts.length === 0) throw new Error(TASK_DOCUMENT_NOT_READY_MESSAGE)
+    if (texts.length === 0) throw new Error(tMain('main.task.documentNotReady'))
     return texts
   }
 
@@ -1230,7 +1222,7 @@ export class DocTaskManager {
     const [idA, idB] = task.status.documentIds
     const docA = getDocument(db, idA)
     const docB = getDocument(db, idB)
-    if (!docA || !docB) throw new Error(TASK_DOCUMENT_NOT_READY_MESSAGE)
+    if (!docA || !docB) throw new Error(tMain('main.task.documentNotReady'))
 
     // The mode decision AND mode (a)'s input both use the re-extracted parser
     // segments — exact and non-overlapping. Deciding on stored chunks would inflate
@@ -1254,7 +1246,7 @@ export class DocTaskManager {
         COMPARE_TEMPERATURE,
         signal
       )
-      if (report.length === 0) throw new Error(TASK_GENERIC_FAILURE_MESSAGE)
+      if (report.length === 0) throw new Error(tMain('main.task.genericFailure'))
       task.status.progress.stepsDone = 1
     } else {
       const sectionMatched = await this.runCompareSectionMatched(task, runtime, docA, docB)
@@ -1299,7 +1291,7 @@ export class DocTaskManager {
     // silently pair against nothing. Fail friendly with the actionable re-index copy
     // instead.
     const embedder = this.deps.getIngestionDeps().embedder
-    if (!embedder) throw new Error(TASK_COMPARE_REINDEX_MESSAGE)
+    if (!embedder) throw new Error(tMain('main.task.compareReindex'))
     const embeddedCount = (documentId: string): number => {
       const r = db
         .prepare(
@@ -1310,7 +1302,7 @@ export class DocTaskManager {
       return r.n
     }
     if (embeddedCount(docA.id) === 0 || embeddedCount(docB.id) === 0) {
-      throw new Error(TASK_COMPARE_REINDEX_MESSAGE)
+      throw new Error(tMain('main.task.compareReindex'))
     }
 
     // Doc A's chunks in document order, with their STORED vectors (no re-embedding —
@@ -1327,13 +1319,13 @@ export class DocTaskManager {
       vector_blob: Uint8Array
       dimensions: number
     }>
-    if (aRows.length === 0) throw new Error(TASK_COMPARE_REINDEX_MESSAGE)
+    if (aRows.length === 0) throw new Error(tMain('main.task.compareReindex'))
 
     const plan = planCompareWindows(
       aRows.map((r) => ({ id: r.id, text: r.text })),
       contextTokens
     )
-    if (plan.windows.length === 0) throw new Error(TASK_DOCUMENT_NOT_READY_MESSAGE)
+    if (plan.windows.length === 0) throw new Error(tMain('main.task.documentNotReady'))
     task.status.progress.stepsTotal = plan.stepsTotal
 
     const vectorByChunk = new Map(
@@ -1417,7 +1409,7 @@ export class DocTaskManager {
       if (partial.length > 0) partials.push(partial)
       task.status.progress.stepsDone += 1
     }
-    if (partials.length === 0) throw new Error(TASK_GENERIC_FAILURE_MESSAGE)
+    if (partials.length === 0) throw new Error(tMain('main.task.genericFailure'))
 
     // Belt for the reduce input: the map output caps already size the notes to fit,
     // but a model that ignores maxTokens must still not overflow.
@@ -1435,7 +1427,7 @@ export class DocTaskManager {
       COMPARE_TEMPERATURE,
       signal
     )
-    if (report.length === 0) throw new Error(TASK_GENERIC_FAILURE_MESSAGE)
+    if (report.length === 0) throw new Error(tMain('main.task.genericFailure'))
     task.status.progress.stepsDone += 1
     return { report, truncated: plan.truncated }
   }
@@ -1477,7 +1469,7 @@ export class DocTaskManager {
           status: result.status,
           error: result.errorMessage
         })
-        throw new Error(TASK_GENERIC_FAILURE_MESSAGE)
+        throw new Error(tMain('main.task.genericFailure'))
       }
       setDocumentOrigin(db, info.id, origin)
       // A new corpus document must never appear without an audit trail (filename +
@@ -1563,18 +1555,28 @@ export class DocTaskManager {
   }
 }
 
-/** Exact guard/validation copy that may pass through to the renderer on failure. */
-const FRIENDLY_TASK_ERRORS: ReadonlySet<string> = new Set([
-  TASK_NEEDS_RUNTIME_MESSAGE,
-  TASK_REFUSED_CHAT_STREAMING_MESSAGE,
-  TASK_DOCUMENT_NOT_READY_MESSAGE,
-  TASK_GENERIC_FAILURE_MESSAGE,
-  TASK_TRANSLATION_TARGET_MESSAGE,
-  TASK_SOURCE_UNREADABLE_MESSAGE,
-  TASK_COMPARE_PICK_TWO_MESSAGE,
-  TASK_COMPARE_REINDEX_MESSAGE,
-  TASK_NEEDS_OCR_MESSAGE,
-  TASK_OCR_NOT_A_SCAN_MESSAGE,
-  TASK_OCR_NO_TEXT_MESSAGE,
-  TASK_OCR_FAILED_MESSAGE
-])
+/** Keys of the guard/validation copy that may pass through to the renderer on failure. */
+const FRIENDLY_TASK_ERROR_KEYS: readonly MessageKey[] = [
+  'main.noModelRunning',
+  'main.task.refusedChatStreaming',
+  'main.task.documentNotReady',
+  'main.task.genericFailure',
+  'main.task.translationTarget',
+  'main.task.sourceUnreadable',
+  'main.task.comparePickTwo',
+  'main.task.compareReindex',
+  'main.task.needsOcr',
+  'main.task.ocrNotAScan',
+  'main.task.ocrNoText',
+  'main.task.ocrFailed'
+]
+
+/**
+ * True when a thrown message is our own friendly guard copy (exact match). The guards
+ * throw via tMain(), so the message may be in EITHER language — and the cached language
+ * can even change between a guard throwing and the failure being recorded — so both
+ * catalogs are checked, not just the current one.
+ */
+export function isFriendlyTaskError(raw: string): boolean {
+  return FRIENDLY_TASK_ERROR_KEYS.some((key) => raw === t('en', key) || raw === t('de', key))
+}

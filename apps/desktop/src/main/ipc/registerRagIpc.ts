@@ -6,6 +6,7 @@ import { appendMessage, getConversation, maybeSetTitleFromFirstMessage } from '.
 import { detectFilenameScope, generateGroundedAnswer, ragSettingsFrom } from '../services/rag'
 import { listDocuments } from '../services/ingestion'
 import { getSettings } from '../services/settings'
+import { tMain } from '../services/i18n'
 import { log } from '../services/logging'
 import { inFlightStreams } from './inflight'
 
@@ -35,7 +36,9 @@ export function registerRagIpc(ctx: AppContext): void {
 
       const runtime = ctx.runtime.active()
       if (!runtime) {
-        throw new Error('No AI model is running. Open the AI Model screen and start one first.')
+        // Ephemeral IPC guard → tMain (i18n-plan §3.3); DOC_TASK_BUSY_MESSAGE below
+        // stays canonical English on the wire (renderer exact-match + display map).
+        throw new Error(tMain('main.noModelRunning'))
       }
 
       // Strict one-at-a-time vs document tasks (see registerChatIpc).
@@ -45,11 +48,11 @@ export function registerRagIpc(ctx: AppContext): void {
 
       // One active stream per conversation (shared registry with plain chat).
       if (inFlightStreams.has(conversationId)) {
-        throw new Error('A response is already being generated for this conversation.')
+        throw new Error(tMain('main.chat.streamInFlight'))
       }
 
       const text = question.trim()
-      if (!text) throw new Error('Cannot send an empty question.')
+      if (!text) throw new Error(tMain('main.chat.emptyQuestion'))
       appendMessage(ctx.db, { conversationId, role: 'user', content: text })
       maybeSetTitleFromFirstMessage(ctx.db, conversationId, text)
 

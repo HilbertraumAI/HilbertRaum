@@ -1,4 +1,5 @@
 import type { Db } from '../db'
+import { t } from '../../../shared/i18n'
 import type { AppSettings, Citation, Message } from '../../../shared/types'
 import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../runtime'
 import { type Embedder, VectorIndex } from '../embeddings'
@@ -81,11 +82,11 @@ export const SNIPPET_MAX_CHARS = 600
  * the similarity threshold, we do NOT call the model — we return this fixed answer so the
  * assistant can never hallucinate sources it does not have.
  */
-// This answer is PERSISTED into conversations, so rewording it only affects future
-// answers — old rows keep the text they were saved with.
-export const NO_DOCUMENT_CONTEXT_ANSWER =
-  "I couldn't find this in your documents. Try rephrasing your question, or check which " +
-  "documents you're asking about."
+// This answer is PERSISTED into conversations (messages.content), so it is written as
+// the explicit ENGLISH catalog value (i18n-plan §3.3 rule 1) — the renderer display
+// map translates it at display time (D-L4), which also retroactively re-translates
+// old rows on a language switch.
+export const NO_DOCUMENT_CONTEXT_ANSWER = t('en', 'main.rag.noContext')
 
 /**
  * The actionable variant: documents ARE indexed, but none of their
@@ -93,9 +94,8 @@ export const NO_DOCUMENT_CONTEXT_ANSWER =
  * all (search is scoped to the active embedder's id). Telling the user to rephrase would
  * be wrong — only a re-index fixes it.
  */
-export const REINDEX_NEEDED_ANSWER =
-  'Your documents need a quick re-index before they can be searched — they were indexed ' +
-  'with a different search model. Open the Documents screen and choose Re-index.'
+// Persist-canonical English like NO_DOCUMENT_CONTEXT_ANSWER (i18n-plan §3.3 rule 1).
+export const REINDEX_NEEDED_ANSWER = t('en', 'main.rag.reindexNeeded')
 
 /**
  * True when the corpus is invisible to `embeddingModelId`: at least one indexed document

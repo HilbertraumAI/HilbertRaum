@@ -69,7 +69,7 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
       }
       log.error('Workspace unlock failed', String(err))
       ctx.audit?.('workspace_unlock_failed', 'Workspace unlock failed')
-      return { ok: false, reason: 'error', message: 'Could not open the workspace.' }
+      return { ok: false, reason: 'error', message: tMain('main.workspace.openFailed') }
     }
   })
 
@@ -80,7 +80,7 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
         return {
           ok: false,
           reason: 'refused',
-          message: `Password must be at least ${MIN_PASSWORD_LENGTH} characters.`
+          message: tMain('main.workspace.passwordTooShort', { min: MIN_PASSWORD_LENGTH })
         }
       }
       try {
@@ -103,7 +103,7 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
           return { ok: false, reason: 'refused', message }
         }
         log.error('Workspace create failed', message)
-        return { ok: false, reason: 'error', message: 'Could not create the workspace.' }
+        return { ok: false, reason: 'error', message: tMain('main.workspace.createFailed') }
       }
     }
   )
@@ -120,14 +120,14 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
         return {
           ok: false,
           reason: 'refused',
-          message: `The new password must be at least ${MIN_PASSWORD_LENGTH} characters.`
+          message: tMain('main.workspace.newPasswordTooShort', { min: MIN_PASSWORD_LENGTH })
         }
       }
       if (!ctx.workspace.isUnlocked()) {
         return {
           ok: false,
           reason: 'refused',
-          message: 'Unlock the workspace before changing its password.'
+          message: tMain('main.workspace.unlockBeforeChange')
         }
       }
       try {
@@ -143,7 +143,7 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
           return {
             ok: false,
             reason: 'wrong_password',
-            message: "That doesn't match your current password. Check it and try again."
+            message: tMain('main.workspace.wrongCurrentPassword')
           }
         }
         if (err instanceof VaultBusyError || (err instanceof Error && err.name === 'VaultBusyError')) {
@@ -153,7 +153,7 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
         return {
           ok: false,
           reason: 'error',
-          message: 'Could not change the password. Your current password still works.'
+          message: tMain('main.workspace.changeFailed')
         }
       }
     }

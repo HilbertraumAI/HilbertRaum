@@ -1,3 +1,4 @@
+import { t } from '../../../../shared/i18n'
 import type { DocumentParser, ExtractedSegment, ParseContext, ParsedDocument } from './index'
 import { AUDIO_DECODE_ERROR_PREFIX } from '../../transcriber/cli'
 import { log } from '../../logging'
@@ -23,17 +24,18 @@ import { log } from '../../logging'
 /** Extensions the pinned whisper-cli actually decodes — keep the promise honest. */
 export const AUDIO_EXTENSIONS = ['.wav', '.mp3', '.flac', '.ogg'] as const
 
+// The three failure messages below are persist-canonical English (i18n-plan §3.3
+// rule 1): they land in `documents.error_message`, so they are written as the explicit
+// ENGLISH catalog values — the renderer display map translates them at display (D-L4).
+
 /** Friendly copy when no transcriber is available (binary or weights missing). */
-export const AUDIO_NEEDS_TRANSCRIBER_MESSAGE =
-  'Audio import needs the transcription model — download it on the AI Model screen.'
+export const AUDIO_NEEDS_TRANSCRIBER_MESSAGE = t('en', 'main.ingest.audioNeedsTranscriber')
 
 /** Friendly copy when the binary cannot decode the file (corrupt / unsupported codec). */
-export const AUDIO_UNREADABLE_MESSAGE =
-  'This audio file could not be read. Convert it to WAV or MP3 and import it again.'
+export const AUDIO_UNREADABLE_MESSAGE = t('en', 'main.ingest.audioUnreadable')
 
 /** Friendly copy for any other transcription failure (killed child, bad exit, …). */
-export const AUDIO_TRANSCRIPTION_FAILED_MESSAGE =
-  'The recording could not be transcribed. Re-index this document to try again.'
+export const AUDIO_TRANSCRIPTION_FAILED_MESSAGE = t('en', 'main.ingest.audioTranscriptionFailed')
 
 /** Packing target per ExtractedSegment (~70 s of speech — the citation granularity). */
 export const AUDIO_SEGMENT_TARGET_WORDS = 180

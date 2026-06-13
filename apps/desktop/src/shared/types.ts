@@ -2,7 +2,7 @@
 // the React renderer. This is the typed surface referenced by BUILD_STATE.md §4.
 // Keep these in sync with the IPC handlers in src/main/ipc and the spec §9.1.
 
-import type { UiLanguageSetting } from './i18n'
+import { t, type UiLanguageSetting } from './i18n'
 
 export type HardwareProfile = 'TINY' | 'LITE' | 'BALANCED' | 'PRO' | 'UNKNOWN'
 
@@ -557,10 +557,11 @@ export interface DocumentSummary {
 /**
  * Friendly copy thrown by chat/document-answer handlers while a document task runs
  * (strict one-at-a-time). Shared so the renderer can recognize it and offer the
- * cancel option next to the message.
+ * cancel option next to the message. Canonical ENGLISH on the wire (i18n-plan §3.3):
+ * the renderer recognizes it by exact match (`error.includes`), so it is never
+ * localized at emission — the renderer display map translates it at display (D-L4).
  */
-export const DOC_TASK_BUSY_MESSAGE =
-  'A document task is running. You can cancel it, or wait for it to finish before chatting.'
+export const DOC_TASK_BUSY_MESSAGE = t('en', 'main.chat.docTaskBusy')
 
 // ---- Documents ----
 export type IngestionStatus =

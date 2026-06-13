@@ -1,5 +1,6 @@
 import { resolvePaths, buildDriveStatus } from './workspace'
 import { measureDriveSpeed, buildWarnings, type DriveSpeed } from './benchmark'
+import { tMain } from './i18n'
 import type { PreflightResult } from '../../shared/types'
 
 export type { PreflightResult }
@@ -56,18 +57,16 @@ export async function runPreflight(deps: PreflightDeps): Promise<PreflightResult
   })
   const slowDriveWarning = driveWarnings.find((w) => /drive/i.test(w)) ?? null
 
+  // Problems are ephemeral (IPC response only) — localized at emission via tMain
+  // (i18n-plan §3.3 rule 2). slowDriveWarning above stays canonical English: it comes
+  // from buildWarnings, whose copy is persisted with benchmark results, so the
+  // renderer display map translates it at display instead (D-L4).
   const problems: string[] = []
   if (!status.writable) {
-    problems.push(
-      'This drive appears to be read-only, so the app cannot create its workspace. ' +
-        'Try a different USB port, or see the troubleshooting guide.'
-    )
+    problems.push(tMain('main.preflight.readOnly'))
   }
   if (status.freeBytes != null && status.freeBytes < minFree) {
-    problems.push(
-      'This drive is low on free space. You can still continue, but importing large ' +
-        'documents may fail until you free up room.'
-    )
+    problems.push(tMain('main.preflight.lowSpace'))
   }
 
   return {

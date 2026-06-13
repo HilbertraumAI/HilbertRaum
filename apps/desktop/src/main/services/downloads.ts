@@ -1,6 +1,7 @@
 import { existsSync, renameSync, statSync } from 'node:fs'
 import { rm } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
+import { tMain } from './i18n'
 import type { ModelManifest } from '../../shared/manifest'
 import type { DownloadJob } from '../../shared/types'
 import {
@@ -45,17 +46,16 @@ export interface DownloadGates {
 /**
  * Throw a friendly, cause-specific error when either network gate is closed. The copy
  * mirrors the Models screen's explanations (policy vs. Settings — the `PolicyStatus`
- * distinction the Privacy screen already makes).
+ * distinction the Privacy screen already makes). Job errors and throws in this service
+ * are session-only (never persisted), so they localize at emission via tMain()
+ * (i18n-plan §3.3 rule 2).
  */
 export function assertDownloadAllowed(gates: DownloadGates): void {
   if (!gates.policyAllows) {
-    throw new Error('Downloads are disabled by this drive’s policy.')
+    throw new Error(tMain('main.download.policyDisabled'))
   }
   if (!gates.settingAllows) {
-    throw new Error(
-      'Internet access is turned off. Turn on “Allow internet access for model ' +
-        'downloads and updates” in Settings first.'
-    )
+    throw new Error(tMain('main.download.networkOff'))
   }
 }
 
@@ -122,10 +122,10 @@ export class DownloadManager {
     this.pruneTerminalJobs()
     assertDownloadAllowed(opts.gates)
     if (this.activeJob() !== null) {
-      throw new Error('Another download is already running. One model downloads at a time.')
+      throw new Error(tMain('main.download.alreadyRunning'))
     }
     if (!opts.manifest.download) {
-      throw new Error(`Model "${opts.manifest.id}" has no download source in its manifest.`)
+      throw new Error(tMain('main.download.noSource', { modelId: opts.manifest.id }))
     }
 
     // Reuse the canonical planner: license gate + present/verified/unverified states.
@@ -135,21 +135,16 @@ export class DownloadManager {
     })
     const task = tasks[0]
     if (!task) {
-      throw new Error(`Model "${opts.manifest.id}" has no download source in its manifest.`)
+      throw new Error(tMain('main.download.noSource', { modelId: opts.manifest.id }))
     }
     if (task.status === 'present-verified') {
-      throw new Error('This model is already downloaded and verified.')
+      throw new Error(tMain('main.download.alreadyVerified'))
     }
     if (task.status === 'present-unverified') {
-      throw new Error(
-        'This model’s file is already present. Its manifest carries no real checksum ' +
-          'yet, so it cannot be verified — capture one with verify-models --generate.'
-      )
+      throw new Error(tMain('main.download.presentUnverified'))
     }
     if (task.status === 'license-blocked') {
-      throw new Error(
-        `Please review and accept the model’s license (${task.license}) before downloading.`
-      )
+      throw new Error(tMain('main.download.licenseFirst', { license: task.license ?? '' }))
     }
 
     const job: DownloadJob = {
@@ -189,7 +184,7 @@ export class DownloadManager {
       receivedBytes: 0,
       totalBytes: null,
       unverified: false,
-      error: 'Unknown download job.'
+      error: tMain('main.download.unknownJob')
     }
   }
 
@@ -276,9 +271,7 @@ export class DownloadManager {
         // Verify-before-trust: the partial is deleted, the job fails loudly.
         await rm(part, { force: true })
         job.status = 'failed'
-        job.error =
-          'The downloaded file did not match its expected checksum, so it was discarded. ' +
-          'Please try again.'
+        job.error = tMain('main.download.checksumMismatch')
         this.deps.log?.('Model download checksum mismatch — partial deleted', {
           modelId: job.modelId,
           expected: task.expectedSha256,
@@ -293,7 +286,7 @@ export class DownloadManager {
       }
       if (verify.reason === 'missing') {
         job.status = 'failed'
-        job.error = 'The downloaded file went missing before it could be verified.'
+        job.error = tMain('main.download.fileMissing')
         this.deps.audit?.('model_download_failed', `Model download failed: ${job.modelId}`, {
           modelId: job.modelId,
           jobId: job.jobId,
@@ -346,9 +339,7 @@ export class DownloadManager {
 function friendlyDownloadError(err: unknown): string {
   const raw = err instanceof Error ? err.message : String(err)
   if (/HTTP \d+/.test(raw)) {
-    return `The download could not start (${raw.replace(/^Download failed: /, '')}). ` +
-      'Please check the connection and try again.'
+    return tMain('main.download.httpFailed', { reason: raw.replace(/^Download failed: /, '') })
   }
-  return `The download was interrupted (${raw}). The finished part is kept — ` +
-    'starting it again will resume where it stopped.'
+  return tMain('main.download.interrupted', { reason: raw })
 }

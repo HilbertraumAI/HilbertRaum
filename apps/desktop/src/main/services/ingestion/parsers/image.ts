@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises'
+import { t } from '../../../../shared/i18n'
 import type { DocumentParser, ParseContext, ParsedDocument } from './index'
 import { log } from '../../logging'
 
@@ -16,17 +17,18 @@ import { log } from '../../logging'
 /** Photo extensions the OCR pipeline accepts (png + jpg). */
 export const IMAGE_EXTENSIONS = ['.png', '.jpg', '.jpeg'] as const
 
+// The three failure messages below are persist-canonical English (i18n-plan §3.3
+// rule 1): they land in `documents.error_message`, so they are written as the explicit
+// ENGLISH catalog values — the renderer display map translates them at display (D-L4).
+
 /** Friendly copy when no OCR engine is available (language files missing). */
-export const IMAGE_NEEDS_OCR_MESSAGE =
-  'Photo import needs the text-recognition (OCR) files, which are not on this drive.'
+export const IMAGE_NEEDS_OCR_MESSAGE = t('en', 'main.ingest.imageNeedsOcr')
 
 /** Friendly copy when recognition finds no readable text in the photo. */
-export const IMAGE_NO_TEXT_MESSAGE =
-  'No readable text was found in this photo. Try a sharper, closer picture of the page.'
+export const IMAGE_NO_TEXT_MESSAGE = t('en', 'main.ingest.imageNoText')
 
 /** Friendly copy for any other recognition failure (spec §11.4 — never raw errors). */
-export const IMAGE_OCR_FAILED_MESSAGE =
-  "This photo couldn't be read. Re-index it to try again."
+export const IMAGE_OCR_FAILED_MESSAGE = t('en', 'main.ingest.imageOcrFailed')
 
 export const ImageParser: DocumentParser = {
   name: 'image',

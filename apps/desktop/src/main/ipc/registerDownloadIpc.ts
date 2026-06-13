@@ -6,6 +6,7 @@ import { DownloadManager, type DownloadGates } from '../services/downloads'
 import { createSettingsHashStore, discoverManifests } from '../services/models'
 import { getSettings } from '../services/settings'
 import { loadPolicy } from '../services/policy'
+import { tMain } from '../services/i18n'
 import { log } from '../services/logging'
 
 // IPC for the in-app model downloader (architecture.md "In-app model downloader").
@@ -41,7 +42,7 @@ export function registerDownloadIpc(ctx: AppContext, manager?: DownloadManager):
   ipcMain.handle(
     IPC.downloadModel,
     async (_e, modelId: string, opts?: { licenseAccepted?: boolean }): Promise<DownloadJob> => {
-      if (!ctx.manifestsDir) throw new Error('No model list was found on this drive — the model-manifests folder is missing.')
+      if (!ctx.manifestsDir) throw new Error(tMain('main.models.noManifests'))
       const { manifests } = discoverManifests(ctx.manifestsDir)
       const found = manifests.find((m) => m.manifest.id === modelId)
       if (!found) throw new Error(`Unknown model id: ${modelId}`)

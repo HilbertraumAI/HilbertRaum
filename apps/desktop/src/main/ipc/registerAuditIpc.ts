@@ -4,6 +4,7 @@ import type { AppContext } from '../services/context'
 import type { AuditEvent } from '../../shared/types'
 import { AUDIT_MAX_ROWS, listAuditEvents } from '../services/audit'
 import { log } from '../services/logging'
+import { tMain } from '../services/i18n'
 import { saveTextExport } from './save-export'
 
 // IPC for the Diagnostics "Activity" panel over the audit log (spec §7.11).
@@ -27,7 +28,7 @@ export function registerAuditIpc(ctx: AppContext): void {
     const events = listAuditEvents(ctx.db, { limit: AUDIT_MAX_ROWS })
     const filePath = await saveTextExport(
       {
-        title: 'Export activity log',
+        title: tMain('main.dialog.exportAudit'),
         defaultPath: 'activity-log.json',
         filters: [
           { name: 'JSON', extensions: ['json'] },

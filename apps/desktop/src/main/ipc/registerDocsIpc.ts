@@ -24,6 +24,7 @@ import {
   type IngestionDeps
 } from '../services/ingestion'
 import { supportedExtensions } from '../services/ingestion/parsers'
+import { tMain } from '../services/i18n'
 import { log } from '../services/logging'
 import { saveTextExport } from './save-export'
 
@@ -48,15 +49,16 @@ export function registerDocsIpc(ctx: AppContext): void {
 
   // DB-backed handlers require an unlocked workspace; surface a clean message instead of
   // the raw "Workspace is locked" the `ctx.db` getter would throw mid-operation.
+  // Guard throws are ephemeral IPC emissions — localized via tMain (i18n-plan §3.3).
   const requireUnlocked = (): void => {
     if (!ctx.workspace.isUnlocked()) {
-      throw new Error('Workspace is locked. Unlock it to manage documents.')
+      throw new Error(tMain('main.docs.locked'))
     }
   }
 
   const requireNotProcessing = (documentId: string): void => {
     if (processing.has(documentId)) {
-      throw new Error('This document is still being processed. Wait for the import to finish.')
+      throw new Error(tMain('main.docs.processing'))
     }
   }
 
@@ -65,7 +67,7 @@ export function registerDocsIpc(ctx: AppContext): void {
   // or deleting the row underneath it would persist a stale result or lose the race.
   const requireNoActiveTask = (documentId: string): void => {
     if (ctx.docTasks?.isDocumentBusy(documentId)) {
-      throw new Error('A task is running for this document. Cancel it or wait for it to finish.')
+      throw new Error(tMain('main.docs.taskRunning'))
     }
   }
 
@@ -99,15 +101,15 @@ export function registerDocsIpc(ctx: AppContext): void {
     const options =
       mode === 'folder'
         ? {
-            title: 'Import a folder of documents',
+            title: tMain('main.dialog.importFolder'),
             properties: ['openDirectory'] as Array<'openDirectory'>
           }
         : {
-            title: 'Import documents',
+            title: tMain('main.dialog.importDocuments'),
             properties: ['openFile', 'multiSelections'] as Array<'openFile' | 'multiSelections'>,
             filters: [
-              { name: 'Documents', extensions: exts },
-              { name: 'All files', extensions: ['*'] }
+              { name: tMain('main.dialog.filterDocuments'), extensions: exts },
+              { name: tMain('main.dialog.filterAll'), extensions: ['*'] }
             ]
           }
     const win = BrowserWindow.getFocusedWindow()
@@ -256,7 +258,7 @@ export function registerDocsIpc(ctx: AppContext): void {
       .slice(0, 60)
     const filePath = await saveTextExport(
       {
-        title: 'Export document',
+        title: tMain('main.dialog.exportDocument'),
         defaultPath: `${baseName || 'document'}.md`,
         filters: [
           { name: 'Markdown', extensions: ['md'] },

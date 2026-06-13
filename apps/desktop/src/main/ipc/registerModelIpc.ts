@@ -16,6 +16,7 @@ import {
 } from '../services/models'
 import { getSettings } from '../services/settings'
 import { loadPolicy } from '../services/policy'
+import { tMain } from '../services/i18n'
 import { log } from '../services/logging'
 
 // IPC for model discovery/selection + runtime start/stop (spec §9.1).
@@ -39,7 +40,7 @@ function developerLeniency(ctx: AppContext, s: AppSettings): boolean {
  * the `startRuntime` IPC handler and the startup auto-start). Throws on any refusal.
  */
 export async function startModelRuntime(ctx: AppContext, modelId: string): Promise<RuntimeStatus> {
-  if (!ctx.manifestsDir) throw new Error('No model list was found on this drive — the model-manifests folder is missing.')
+  if (!ctx.manifestsDir) throw new Error(tMain('main.models.noManifests'))
   const { manifests } = discoverManifests(ctx.manifestsDir)
   const found = manifests.find((m) => m.manifest.id === modelId)
   if (!found) throw new Error(`Unknown model id: ${modelId}`)
@@ -148,7 +149,7 @@ export function registerModelIpc(ctx: AppContext): void {
   })
 
   ipcMain.handle(IPC.selectModel, (_e, modelId: string) => {
-    if (!ctx.manifestsDir) throw new Error('No model list was found on this drive — the model-manifests folder is missing.')
+    if (!ctx.manifestsDir) throw new Error(tMain('main.models.noManifests'))
     log.info('Select model', { modelId })
     const result = selectModel(ctx.db, ctx.manifestsDir, modelId)
     ctx.audit?.('model_selected', `Model selected: ${modelId}`, { modelId })
@@ -159,7 +160,7 @@ export function registerModelIpc(ctx: AppContext): void {
   // model's weight file and re-hash it for real. `listModels` alone would read the
   // cache back and confirm nothing.
   ipcMain.handle(IPC.verifyModel, async (_e, modelId: string): Promise<ModelState> => {
-    if (!ctx.manifestsDir) throw new Error('No model list was found on this drive — the model-manifests folder is missing.')
+    if (!ctx.manifestsDir) throw new Error(tMain('main.models.noManifests'))
     const { manifests } = discoverManifests(ctx.manifestsDir)
     const found = manifests.find((m) => m.manifest.id === modelId)
     if (!found) throw new Error(`Unknown model id: ${modelId}`)

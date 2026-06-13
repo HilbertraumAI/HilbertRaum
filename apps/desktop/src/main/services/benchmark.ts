@@ -10,6 +10,7 @@ import {
 import { join } from 'node:path'
 import { performance } from 'node:perf_hooks'
 import { randomFillSync } from 'node:crypto'
+import { t } from '../../shared/i18n'
 import type { ModelManifest } from '../../shared/manifest'
 import type { BenchmarkResult, HardwareProfile } from '../../shared/types'
 import type { ModelRuntime } from './runtime'
@@ -226,30 +227,30 @@ export interface WarningInputs {
  * Build the user-facing warnings (spec §11.3 + §11.4). Always encouraging, never
  * judgmental — weak hardware is framed as "best suited for the smallest, quickest model", never
  * "your hardware is bad". Slow drives warn but do not block.
+ *
+ * Persist-canonical English (i18n-plan §3.3 rule 1): these warnings are persisted
+ * inside `settings.lastBenchmark` (BenchmarkResult.warnings), so they are written as
+ * the explicit ENGLISH catalog values — the renderer display map translates them at
+ * display time (D-L4). Preflight reuses the slow-drive warning the same way.
  */
 export function buildWarnings(input: WarningInputs): string[] {
   const warnings: string[] = []
 
   if (input.profile === 'TINY') {
-    warnings.push('This device is best suited for the smallest, quickest model. Larger models may run slowly.')
+    warnings.push(t('en', 'main.benchmark.warnTiny'))
   } else if (input.profile === 'UNKNOWN') {
-    warnings.push(
-      'We could not fully detect this hardware, so we picked a safe, lightweight model. ' +
-        'You can try a larger model any time.'
-    )
+    warnings.push(t('en', 'main.benchmark.warnUnknown'))
   }
 
   if (input.driveError) {
-    warnings.push('Drive speed could not be measured, so the recommendation uses RAM and CPU only.')
+    warnings.push(t('en', 'main.benchmark.warnDriveProbe'))
   } else {
     const slowest = Math.min(
       input.driveReadMbps ?? Number.POSITIVE_INFINITY,
       input.driveWriteMbps ?? Number.POSITIVE_INFINITY
     )
     if (Number.isFinite(slowest) && slowest < SLOW_DRIVE_MBPS) {
-      warnings.push(
-        'This drive is on the slower side. Models will still work, but loading them may take longer.'
-      )
+      warnings.push(t('en', 'main.benchmark.warnSlowDrive'))
     }
   }
 

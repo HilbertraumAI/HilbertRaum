@@ -1,6 +1,7 @@
 import { ipcMain } from 'electron'
 import { IPC } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
+import { tMain } from '../services/i18n'
 import type { DocTaskStatus, StartDocTaskRequest } from '../../shared/types'
 
 // IPC for document tasks (wave-3 plan §6). Async with polling, like imports and
@@ -14,14 +15,15 @@ import type { DocTaskStatus, StartDocTaskRequest } from '../../shared/types'
 // them. The manager records the ids-only `document_task_*` audit events itself.
 
 export function registerDocTasksIpc(ctx: AppContext): void {
+  // Guard throws are ephemeral IPC emissions — localized via tMain (i18n-plan §3.3).
   const requireTasks = () => {
-    if (!ctx.docTasks) throw new Error('Document tasks are not available.')
+    if (!ctx.docTasks) throw new Error(tMain('main.task.unavailable'))
     return ctx.docTasks
   }
 
   const requireUnlocked = (): void => {
     if (!ctx.workspace.isUnlocked()) {
-      throw new Error('Workspace is locked. Unlock it to work with documents.')
+      throw new Error(tMain('main.task.workspaceLocked'))
     }
   }
 

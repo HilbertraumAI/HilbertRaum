@@ -1,4 +1,6 @@
 import { existsSync } from 'node:fs'
+import { t } from '../../../shared/i18n'
+import { tMain } from '../i18n'
 import type { GpuDevice } from '../../../shared/types'
 import type {
   ChatMessage,
@@ -254,10 +256,11 @@ export function createSelectingRuntimeFactory(deps: RuntimeSelectionDeps): Runti
 
 /**
  * Friendly §11.4 copy for the mid-generation auto-fallback. Never "GPU failed" /
- * "your hardware is bad" — CPU mode is normal, not degraded.
+ * "your hardware is bad" — CPU mode is normal, not degraded. The canonical-English
+ * constant stays exported for tests (D-L8); the notify site below emits via tMain()
+ * (i18n-plan §3.3 rule 2 — runtime:notice is ephemeral).
  */
-export const COMPATIBILITY_MODE_NOTICE =
-  'Switched to compatibility mode for stability. Everything keeps working — responses may be a bit slower.'
+export const COMPATIBILITY_MODE_NOTICE = t('en', 'main.runtime.compatibilityMode')
 
 export interface GpuCrashFallbackDeps {
   /** Restart the same model (the ladder now starts at rung 2 — CPU). */
@@ -285,7 +288,7 @@ export function createGpuCrashAutoFallback(
     const code = info.exitCode != null ? `code ${info.exitCode}` : `signal ${info.exitSignal}`
     const tail = info.stderrTail.trim()
     deps.persistFailure(`crashed mid-session (${code})${tail ? ` — last output: ${tail}` : ''}`)
-    deps.notify?.(COMPATIBILITY_MODE_NOTICE)
+    deps.notify?.(tMain('main.runtime.compatibilityMode'))
     void deps
       .restart(opts)
       .catch(() => undefined) // a failed CPU restart surfaces on the user's next start

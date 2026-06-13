@@ -9,6 +9,8 @@ import {
   statSync
 } from 'node:fs'
 import { basename, extname, join } from 'node:path'
+import { t } from '../../../shared/i18n'
+import { tMain } from '../i18n'
 import type { Db } from '../db'
 import type {
   DocumentInfo,
@@ -370,7 +372,9 @@ export async function processDocument(
     if (!storedPath || !existsSync(storedPath)) {
       const origin = row.original_path
       if (!origin || !existsSync(origin)) {
-        throw new Error('Source file not found on disk.')
+        // Persist-canonical English (i18n-plan §3.3 rule 1): the catch below writes
+        // this into documents.error_message; the display map translates it (D-L4).
+        throw new Error(t('en', 'main.ingest.sourceMissing'))
       }
       const sha = await sha256File(origin)
       const size = statSync(origin).size
@@ -566,9 +570,8 @@ export async function extractDocumentPreview(
   if (isAudioPath(row.title)) {
     const segments = audioSegmentsFromChunks(db, documentId)
     if (segments.length === 0) {
-      throw new Error(
-        'No transcript is stored for this recording yet. Re-index it to transcribe again.'
-      )
+      // Emission (§3.3 rule 2): an IPC throw, never persisted — localized via tMain.
+      throw new Error(tMain('main.docs.noStoredTranscript'))
     }
     return { id: row.id, title: row.title, mimeType: row.mime_type, segments }
   }
@@ -584,14 +587,15 @@ export async function extractDocumentPreview(
         cipher.decryptFile(row.stored_path, parseSource)
         transients.push(parseSource)
       } else if (!cipher && row.stored_path.endsWith(ENCRYPTED_DOC_SUFFIX)) {
-        throw new Error('This document is encrypted; unlock the workspace to preview it.')
+        // Emission (§3.3 rule 2): IPC throws below are transient — localized via tMain.
+        throw new Error(tMain('main.docs.previewEncrypted'))
       } else {
         parseSource = row.stored_path
       }
     } else if (row.original_path && existsSync(row.original_path)) {
       parseSource = row.original_path
     } else {
-      throw new Error('The document file is no longer on disk. Re-import it to preview.')
+      throw new Error(tMain('main.docs.previewGone'))
     }
 
     // An OCR'd PDF previews its STORED recognition (the same ocrPages hook
@@ -784,7 +788,8 @@ export function readStoredDocumentText(
   if (!row) throw new Error(`Unknown document: ${documentId}`)
   const ext = extname(row.title).toLowerCase()
   if (!EXPORTABLE_TEXT_EXTENSIONS.has(ext)) {
-    throw new Error('Only text documents (Markdown, TXT, CSV) can be exported this way.')
+    // Emission (§3.3 rule 2): IPC throws below are transient — localized via tMain.
+    throw new Error(tMain('main.docs.exportTextOnly'))
   }
 
   const cipher = deps.cipher ?? null
@@ -794,7 +799,7 @@ export function readStoredDocumentText(
     if (row.stored_path && existsSync(row.stored_path)) {
       if (row.stored_path.endsWith(ENCRYPTED_DOC_SUFFIX)) {
         if (!cipher) {
-          throw new Error('This document is encrypted; unlock the workspace to export it.')
+          throw new Error(tMain('main.docs.exportEncrypted'))
         }
         source = join(storeDir, `${documentId}.parse-export${ext}`)
         cipher.decryptFile(row.stored_path, source)
@@ -805,7 +810,7 @@ export function readStoredDocumentText(
     } else if (row.original_path && existsSync(row.original_path)) {
       source = row.original_path
     } else {
-      throw new Error('The document file is no longer on disk. Re-import it to export.')
+      throw new Error(tMain('main.docs.exportGone'))
     }
     return { title: row.title, text: readFileSync(source, 'utf8') }
   } finally {
@@ -826,7 +831,8 @@ export function reconcileStuckDocuments(db: Db, beforeIso: string): number {
       `UPDATE documents SET status = 'failed', error_message = ?, updated_at = ?
        WHERE status IN ('queued','extracting','chunking','embedding') AND updated_at < ?`
     )
-    .run('Ingestion was interrupted before it finished. Re-index to try again.', nowIso(), beforeIso)
+    // Persist-canonical English (i18n-plan §3.3 rule 1) — display-mapped at render.
+    .run(t('en', 'main.ingest.interrupted'), nowIso(), beforeIso)
   return Number(res.changes ?? 0)
 }
 

@@ -10,6 +10,7 @@ import {
   type ModelRole
 } from '../../shared/manifest'
 import type { HardwareProfile, ModelDownloadInfo, ModelInfo, ModelState } from '../../shared/types'
+import { tMain } from './i18n'
 import type { Db } from './db'
 import { getSettings, updateSettings } from './settings'
 
@@ -466,7 +467,7 @@ export function selectModel(db: Db, manifestsDir: string, modelId: string): Sele
   if (!found) throw new Error(`Unknown model id: ${modelId}`)
 
   if (found.manifest.role !== 'chat' && found.manifest.role !== 'embeddings') {
-    throw new Error('This model is used automatically once installed — there is nothing to select.')
+    throw new Error(tMain('main.models.autoSelected'))
   }
   const patch =
     found.manifest.role === 'embeddings'

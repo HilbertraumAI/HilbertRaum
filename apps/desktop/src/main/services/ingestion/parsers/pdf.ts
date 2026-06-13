@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises'
+import { t } from '../../../../shared/i18n'
 import type { DocumentParser, ExtractedSegment, ParseContext, ParsedDocument } from './index'
 
 // PDF parser (spec R3). Uses pdfjs-dist's *legacy* build, which runs in plain Node
@@ -21,9 +22,11 @@ import type { DocumentParser, ExtractedSegment, ParseContext, ParsedDocument } f
  * Friendly notice for an image-only PDF (spec §11.4 — never "no text layer found").
  * Also the DERIVED `scanDetected` marker: ingestion compares a failed document's
  * error_message against this exact string, so treat the copy as part of the contract.
+ * Persist-canonical English (i18n-plan §3.3 rule 1): this lands in
+ * `documents.error_message`, so it is written as the explicit ENGLISH catalog value —
+ * the renderer display map translates it at display time (D-L4).
  */
-export const PDF_SCAN_DETECTED_MESSAGE =
-  'This PDF looks like a scan — it has no readable text yet.'
+export const PDF_SCAN_DETECTED_MESSAGE = t('en', 'main.ingest.pdfScanDetected')
 
 /**
  * A page counts as text-bearing from this many extracted characters. Real scans often
