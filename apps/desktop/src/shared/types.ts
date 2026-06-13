@@ -808,6 +808,18 @@ export interface AuditEvent {
   createdAt: string
 }
 
+/**
+ * Live snapshot of a still-streaming generation (the `getActiveStream` IPC). Lets a Chat
+ * screen that was unmounted mid-stream (the user navigated away and back) recover the
+ * in-progress reply on remount — the token events it missed while gone are not replayed.
+ */
+export interface ActiveStreamSnapshot {
+  /** Answer tokens accumulated so far. */
+  content: string
+  /** Deep-mode reasoning deltas accumulated so far (may be empty). */
+  reasoning: string
+}
+
 export interface RuntimeStatus {
   running: boolean
   modelId: string | null

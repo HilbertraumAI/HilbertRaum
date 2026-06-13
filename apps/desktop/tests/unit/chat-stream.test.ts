@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import type { IpcMainInvokeEvent } from 'electron'
 import { withChatStream } from '../../src/main/ipc/chat-stream'
-import { inFlightStreams } from '../../src/main/ipc/inflight'
+import { inFlightStreams, streamBuffers } from '../../src/main/ipc/inflight'
 import { type Message } from '../../src/shared/types'
 
 // `assertChatStreamReady`'s guard preamble (unknown conversation, no runtime, doc-task
@@ -40,7 +40,10 @@ function msg(content: string): Message {
 }
 
 describe('withChatStream (M-A2)', () => {
-  beforeEach(() => inFlightStreams.clear())
+  beforeEach(() => {
+    inFlightStreams.clear()
+    streamBuffers.clear()
+  })
 
   it('registers an in-flight controller, streams tokens, emits done, and clears the entry', async () => {
     const { event, sent } = fakeEvent()
@@ -99,5 +102,43 @@ describe('withChatStream (M-A2)', () => {
     })
     // The finally must not have deleted the later controller.
     expect(inFlightStreams.get('c1')).toBe(later)
+  })
+
+  // Stream recovery (navigate-away-and-back): the wrapper buffers the accumulated answer +
+  // reasoning so a remounted Chat screen can resume the live view via getActiveStream.
+  it('buffers accumulated content + reasoning, then clears it on completion', async () => {
+    const { event, sent } = fakeEvent()
+    let midContent = ''
+    let midReasoning = ''
+    await withChatStream(event, 'c1', 'label', async (_signal, sendToken, sendReasoning) => {
+      sendToken('Hel')
+      sendReasoning('think ')
+      sendToken('lo')
+      const buf = streamBuffers.get('c1')! // live snapshot mid-stream
+      midContent = buf.content
+      midReasoning = buf.reasoning
+      return msg('Hello')
+    })
+    expect(midContent).toBe('Hello')
+    expect(midReasoning).toBe('think ')
+    // Reasoning rides its own channel; both buffer + clear in lockstep with the registry.
+    expect(sent.map((s) => s.channel)).toEqual([
+      'chat:token:c1',
+      'chat:reasoning:c1',
+      'chat:token:c1',
+      'chat:done:c1'
+    ])
+    expect(streamBuffers.has('c1')).toBe(false)
+    expect(inFlightStreams.has('c1')).toBe(false)
+  })
+
+  it('clears the buffer when the run throws', async () => {
+    const { event } = fakeEvent()
+    await expect(
+      withChatStream(event, 'c1', 'label', async () => {
+        throw new Error('boom')
+      })
+    ).rejects.toThrow('boom')
+    expect(streamBuffers.has('c1')).toBe(false)
   })
 })

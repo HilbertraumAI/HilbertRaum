@@ -1,7 +1,8 @@
 import { ipcMain, type IpcMainInvokeEvent } from 'electron'
-import { IPC, STREAM } from '../../shared/ipc'
+import { IPC } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
 import {
+  type ActiveStreamSnapshot,
   type ChatOptions,
   type Conversation,
   type ConversationSearchResult,
@@ -22,7 +23,7 @@ import {
 } from '../services/chat'
 import { tMain } from '../services/i18n'
 import { log } from '../services/logging'
-import { inFlightStreams } from './inflight'
+import { inFlightStreams, streamBuffers } from './inflight'
 import { assertChatStreamReady, withChatStream } from './chat-stream'
 import { saveTextExport } from './save-export'
 
@@ -130,17 +131,18 @@ export function registerChatIpc(ctx: AppContext): void {
           ? options.mode
           : undefined
 
-      return withChatStream(event, conversationId, 'Chat generation failed', (signal, sendToken) =>
-        generateAssistantMessage(ctx.db, runtime, conversationId, {
-          signal,
-          mode,
-          onToken: sendToken,
-          onReasoning: (delta) => {
-            if (!event.sender.isDestroyed()) {
-              event.sender.send(STREAM.reasoning(conversationId), delta)
-            }
-          }
-        })
+      return withChatStream(
+        event,
+        conversationId,
+        'Chat generation failed',
+        (signal, sendToken, sendReasoning) =>
+          generateAssistantMessage(ctx.db, runtime, conversationId, {
+            signal,
+            mode,
+            onToken: sendToken,
+            // sendReasoning emits the reasoning event AND buffers it for stream recovery.
+            onReasoning: sendReasoning
+          })
       )
     }
   )
@@ -164,6 +166,17 @@ export function registerChatIpc(ctx: AppContext): void {
       controller.abort()
     }
   })
+
+  // Recover an in-flight generation after the Chat screen was unmounted (the user
+  // navigated away and back). Returns the live accumulated answer/reasoning snapshot, or
+  // null when nothing is generating for this conversation. Read-only; never mutates.
+  ipcMain.handle(
+    IPC.getActiveStream,
+    (_e, conversationId: string): ActiveStreamSnapshot | null => {
+      const buf = streamBuffers.get(conversationId)
+      return buf ? { content: buf.content, reasoning: buf.reasoning } : null
+    }
+  )
 
   // Export a transcript to a user-chosen file (spec §7.6). The save dialog
   // runs in MAIN (the renderer has no fs/dialog access); returns the saved path, or

@@ -6,7 +6,7 @@ import { getConversation } from '../services/chat'
 import type { ModelRuntime } from '../services/runtime'
 import { tMain } from '../services/i18n'
 import { log } from '../services/logging'
-import { inFlightStreams } from './inflight'
+import { inFlightStreams, streamBuffers } from './inflight'
 
 // M-A2 (audit-2026-06-13): the plain-chat (`sendChatMessage`) and RAG (`askDocuments`)
 // handlers duplicated the entire stream lifecycle verbatim — the guard preamble plus the
@@ -47,29 +47,46 @@ export function assertChatStreamReady(
 
 /** A guarded token sender: a no-op once the renderer is gone (window closed mid-stream). */
 export type SendToken = (token: string) => void
+/** A guarded reasoning-delta sender (Deep mode); buffers like `SendToken`. */
+export type SendReasoning = (delta: string) => void
 
 /**
  * Run a streaming generation under the LOCKED streaming contract: register an
- * AbortController in the shared in-flight registry, run `runFn` (handed the abort signal
- * and a guarded token sender), emit `chat:done:<id>` with the final Message on success or
- * `chat:error:<id>` (+ log under `logLabel`) on failure, and always clear our own registry
- * entry. Returns the final assistant Message so the invoke can resolve with it.
+ * AbortController in the shared in-flight registry, run `runFn` (handed the abort signal,
+ * a guarded token sender, and a guarded reasoning sender), emit `chat:done:<id>` with the
+ * final Message on success or `chat:error:<id>` (+ log under `logLabel`) on failure, and
+ * always clear our own registry entry. Returns the final assistant Message so the invoke
+ * can resolve with it.
+ *
+ * Both senders also append to the shared `streamBuffers` snapshot, so a Chat screen that
+ * unmounted mid-stream (navigated away) can recover the in-progress reply on remount via
+ * the `getActiveStream` IPC instead of seeing an idle screen that still rejects new turns.
  */
 export async function withChatStream(
   event: IpcMainInvokeEvent,
   conversationId: string,
   logLabel: string,
-  runFn: (signal: AbortSignal, sendToken: SendToken) => Promise<Message>
+  runFn: (signal: AbortSignal, sendToken: SendToken, sendReasoning: SendReasoning) => Promise<Message>
 ): Promise<Message> {
   const controller = new AbortController()
   inFlightStreams.set(conversationId, controller)
+  streamBuffers.set(conversationId, { content: '', reasoning: '' })
   const sendToken: SendToken = (token) => {
+    const buf = streamBuffers.get(conversationId)
+    if (buf) buf.content += token
     if (!event.sender.isDestroyed()) {
       event.sender.send(STREAM.token(conversationId), token)
     }
   }
+  const sendReasoning: SendReasoning = (delta) => {
+    const buf = streamBuffers.get(conversationId)
+    if (buf) buf.reasoning += delta
+    if (!event.sender.isDestroyed()) {
+      event.sender.send(STREAM.reasoning(conversationId), delta)
+    }
+  }
   try {
-    const assistant = await runFn(controller.signal, sendToken)
+    const assistant = await runFn(controller.signal, sendToken, sendReasoning)
     if (!event.sender.isDestroyed()) {
       event.sender.send(STREAM.done(conversationId), assistant)
     }
@@ -82,7 +99,11 @@ export async function withChatStream(
     }
     throw err
   } finally {
-    // Only clear our own entry — a later stream may already own this key.
-    if (inFlightStreams.get(conversationId) === controller) inFlightStreams.delete(conversationId)
+    // Only clear our own entry — a later stream may already own this key. The buffer is
+    // cleared in lockstep so `getActiveStream` reports "done" the instant the stream ends.
+    if (inFlightStreams.get(conversationId) === controller) {
+      inFlightStreams.delete(conversationId)
+      streamBuffers.delete(conversationId)
+    }
   }
 }
