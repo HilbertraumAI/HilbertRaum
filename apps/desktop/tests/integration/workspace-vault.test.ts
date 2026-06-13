@@ -93,6 +93,20 @@ describe('encrypted vault lifecycle', () => {
     expect(existsSync(vp.dbPath)).toBe(false)
   })
 
+  it('zeroes the KDF-derived key on the wrong-password path (L-6)', () => {
+    const vp = freshVault()
+    createEncryptedVaultOnDisk(vp, 'right-password', FAST_KDF)
+    const fillSpy = vi.spyOn(Buffer.prototype, 'fill')
+    try {
+      expect(() => unlockEncryptedVault(vp, 'wrong-password')).toThrow(WrongPasswordError)
+      // The derived key buffer is zeroed (fill(0)) before the throw — for symmetry with
+      // the data-key paths that zero the KEK/old keys after use.
+      expect(fillSpy.mock.calls.some((args) => args[0] === 0)).toBe(true)
+    } finally {
+      fillSpy.mockRestore()
+    }
+  })
+
   // H4 (audit round 4): `.enc` IS the user's data; creating over it would irreversibly
   // replace chats/documents/settings with an empty vault.
   it('refuses to create over an existing .enc (the data must never be wiped)', () => {

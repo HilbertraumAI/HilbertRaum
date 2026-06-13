@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs'
 import { cpus } from 'node:os'
 import { join } from 'node:path'
 import net from 'node:net'
+import { log } from '../logging'
 import type { HealthStatus } from './index'
 
 // Sidecar discovery + lifecycle (spec §6, §7.5). Locates the prebuilt `llama-server`
@@ -34,18 +35,36 @@ export function llamaServerDir(rootPath: string, platform: NodeJS.Platform = pro
   return join(rootPath, 'runtime', 'llama.cpp', llamaOsDir(platform))
 }
 
+/** Options for the sidecar binary resolvers. */
+export interface ResolveBinOptions {
+  /**
+   * Whether this is a developer build (`!app.isPackaged`). The `HILBERTRAUM_LLAMA_BIN` /
+   * `HILBERTRAUM_WHISPER_BIN` env overrides spawn an arbitrary, UNVERIFIED binary, so they
+   * are honoured ONLY in dev (security audit M-5). In a packaged build the override is
+   * ignored (and logged) and resolution falls back to the on-drive location. Defaults to
+   * `false` (ignore the override) so a caller that forgets to pass it fails SAFE.
+   */
+  isDev?: boolean
+}
+
 /**
  * Resolve the `llama-server` binary, or `null` when it is absent. Pure I/O check (only
  * `existsSync`) so a "binary present?" decision has no surprises. A `HILBERTRAUM_LLAMA_BIN`
- * env override points at an explicit binary for dev (still validated for existence).
+ * env override points at an explicit binary for DEV ONLY (still validated for existence);
+ * in a packaged build it is ignored — see M-5 / `ResolveBinOptions`.
  */
 export function resolveLlamaServerPath(
   rootPath: string,
   platform: NodeJS.Platform = process.platform,
-  env: NodeJS.ProcessEnv = process.env
+  env: NodeJS.ProcessEnv = process.env,
+  opts: ResolveBinOptions = {}
 ): string | null {
   const override = env.HILBERTRAUM_LLAMA_BIN?.trim()
-  if (override) return existsSync(override) ? override : null
+  if (override) {
+    if (opts.isDev) return existsSync(override) ? override : null
+    // Packaged build: never spawn an env-supplied, unverified binary.
+    log.warn('Ignoring HILBERTRAUM_LLAMA_BIN in a packaged build (dev-only override)')
+  }
   const candidate = join(llamaServerDir(rootPath, platform), llamaServerBinaryName(platform))
   return existsSync(candidate) ? candidate : null
 }

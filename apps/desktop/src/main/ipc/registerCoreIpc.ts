@@ -24,8 +24,11 @@ export function registerCoreIpc(ctx: AppContext): void {
     const unlocked = ctx.workspace.isUnlocked()
     const s = unlocked ? getSettings(ctx.db) : null
     // Effective offline state = policy ceiling ∧ the user's allowNetwork setting.
-    const policy = buildPolicyStatus(ctx.paths.configPath, s?.allowNetwork ?? false, (m) =>
-      log.warn(m)
+    const policy = buildPolicyStatus(
+      ctx.paths.configPath,
+      s?.allowNetwork ?? false,
+      (m) => log.warn(m),
+      { isDev: ctx.isDev }
     )
     return {
       appName: 'HilbertRaum',
@@ -57,7 +60,9 @@ export function registerCoreIpc(ctx: AppContext): void {
   )
 
   ipcMain.handle(IPC.getPolicy, (): PolicyStatus =>
-    buildPolicyStatus(ctx.paths.configPath, allowNetworkSetting(), (m) => log.warn(m))
+    buildPolicyStatus(ctx.paths.configPath, allowNetworkSetting(), (m) => log.warn(m), {
+      isDev: ctx.isDev
+    })
   )
 
   // Spec §7.11 "show recent local logs" — read-only, local, never uploaded.

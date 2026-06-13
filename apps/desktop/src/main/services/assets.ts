@@ -3,7 +3,7 @@ import { createWriteStream, existsSync, readFileSync, statSync, writeFileSync } 
 import { mkdir, rm } from 'node:fs/promises'
 import { dirname, join, resolve, sep } from 'node:path'
 import { Readable } from 'node:stream'
-import { isRealSha256, type ModelManifest } from '../../shared/manifest'
+import { isHttpsUrl, isRealSha256, type ModelManifest } from '../../shared/manifest'
 import type { OcrSources, RuntimeBuild, RuntimeOs, RuntimeSources } from '../../shared/runtime-sources'
 import { sha256File, verifyChecksum, weightPath, type HashStore } from './models'
 
@@ -347,6 +347,12 @@ export async function downloadToFile(
   dest: string,
   deps: DownloadDeps = {}
 ): Promise<DownloadToFileResult> {
+  // L-2: enforce TLS at the network seam — this covers model weights, the runtime
+  // sidecar, AND the OCR language files (only model URLs pass through validateManifest's
+  // https check). Cleartext http:// is downgrade-friendly and leaks which asset is fetched.
+  if (!isHttpsUrl(url)) {
+    throw new Error(`Refusing a non-HTTPS download URL: ${url}`)
+  }
   const doFetch = deps.fetchImpl ?? fetch
   const res = await doFetch(url, {
     ...(deps.headers ? { headers: deps.headers } : {}),

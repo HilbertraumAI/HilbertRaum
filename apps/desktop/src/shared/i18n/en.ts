@@ -729,6 +729,10 @@ export const en = {
   'main.ingest.imageOcrFailed': "This photo couldn't be read. Re-index it to try again.",
   'main.ingest.sourceMissing': 'Source file not found on disk.',
   'main.ingest.interrupted': 'Ingestion was interrupted before it finished. Re-index to try again.',
+  'main.ingest.fileTooLarge':
+    'This file is too large to import safely. Split it into smaller files and try again.',
+  'main.ingest.parseTimeout':
+    'This file took too long to process and was skipped. It may be damaged or extremely large.',
   'main.rag.noContext':
     "I couldn't find this in your documents. Try rephrasing your question, or check which " +
     "documents you're asking about.",

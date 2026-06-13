@@ -30,7 +30,7 @@ import { log } from '../services/logging'
  * are rejected no matter what the toggle says; this also disables the mock fallback.
  */
 function developerLeniency(ctx: AppContext, s: AppSettings): boolean {
-  const { policy } = loadPolicy(ctx.paths.configPath)
+  const { policy } = loadPolicy(ctx.paths.configPath, undefined, { isDev: ctx.isDev })
   const developer = s.developerMode || ctx.isDev
   return developer && policy.models.allowUnverifiedModels && !policy.models.requireSha256Match
 }

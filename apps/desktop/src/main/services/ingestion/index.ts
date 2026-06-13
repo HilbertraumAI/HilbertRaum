@@ -34,6 +34,7 @@ import {
 } from './parsers'
 import { PDF_SCAN_DETECTED_MESSAGE } from './parsers/pdf'
 import { chunkSegments } from './chunker'
+import { resolveIngestionLimits, withParseTimeout, type IngestionLimits } from './limits'
 
 // Ingestion service (spec §7.7). Owns the document lifecycle:
 //   queued → extracting → chunking → embedding → indexed   (failed on error)
@@ -78,6 +79,13 @@ export interface IngestionDeps {
    * unaffected.
    */
   ocrEngine?: OcrEngine | null
+  /**
+   * Resource caps applied before a parser runs (security audit M-1/M-2/M-3): a
+   * pre-parse byte ceiling, a parse wall-clock timeout, a PDF page cap, and a DOCX
+   * inflated-size ceiling. Omit to use `resolveIngestionLimits()` (env-overridable
+   * defaults). Injected mainly so tests can dial the caps down.
+   */
+  limits?: IngestionLimits
 }
 
 // Canonical home of the `.enc` suffix is workspace-vault (the password change
@@ -356,8 +364,18 @@ export async function processDocument(
   // document content lingers on the drive.
   const transients: string[] = []
 
+  const limits = deps.limits ?? resolveIngestionLimits()
+
   try {
     setStatus(db, documentId, 'extracting')
+
+    // Pre-parse byte ceiling (M-1): reject an oversized file BEFORE any copy/decrypt/parse
+    // work, using the size recorded at queue time. A friendly, persist-canonical message
+    // lands on the row (display-mapped at render). A null size_bytes falls through to the
+    // authoritative pre-parse stat below.
+    if (row.size_bytes != null && row.size_bytes > limits.maxBytes) {
+      throw new Error(t('en', 'main.ingest.fileTooLarge'))
+    }
 
     const ext = extname(row.title).toLowerCase()
     const cipher = deps.cipher ?? null
@@ -414,6 +432,18 @@ export async function processDocument(
       parseSource = storedPath
     }
 
+    // Authoritative pre-parse byte ceiling (M-1): the file the parser will actually read
+    // (the decrypted transient in an encrypted workspace, or the source when size_bytes
+    // was unknown at queue time). Cheap `statSync`; a stat failure here is non-fatal — the
+    // parser will surface its own read error.
+    try {
+      if (statSync(parseSource).size > limits.maxBytes) {
+        throw new Error(t('en', 'main.ingest.fileTooLarge'))
+      }
+    } catch (err) {
+      if (err instanceof Error && err.message === t('en', 'main.ingest.fileTooLarge')) throw err
+    }
+
     const parser = selectParser(row.title)
     if (!parser) {
       throw new Error(`Unsupported file type: ${extname(row.title) || '(none)'}`)
@@ -434,9 +464,22 @@ export async function processDocument(
       ocrEngine: deps.ocrEngine,
       ocrPages: isPdfPath(row.title) ? getDocumentOcrPages(db, documentId) : null,
       workDir: storeDir,
-      onProgress: (percent) => deps.onTranscribeProgress?.(documentId, percent)
+      onProgress: (percent) => deps.onTranscribeProgress?.(documentId, percent),
+      // Per-parser caps (M-2/M-3): bound the PDF page loop and the DOCX inflate.
+      maxPages: limits.pdfMaxPages,
+      maxInflatedBytes: limits.docxMaxInflatedBytes
     }
-    const parsed = await parser.parse(parseSource, parseCtx)
+    // Wall-clock parse timeout (M-2): bound a wedged/pathological parser so it fails the
+    // one document instead of hanging the import loop. Audio is EXEMPT — a long recording
+    // legitimately transcribes for many minutes, and the whisper child manages its own
+    // lifecycle; killing the wait would orphan that process and reject valid imports.
+    const parsed = isAudioPath(row.title)
+      ? await parser.parse(parseSource, parseCtx)
+      : await withParseTimeout(
+          parser.parse(parseSource, parseCtx),
+          limits.parseTimeoutMs,
+          t('en', 'main.ingest.parseTimeout')
+        )
 
     setStatus(db, documentId, 'chunking')
     const chunks = chunkSegments(parsed.segments)

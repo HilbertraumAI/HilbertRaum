@@ -34,7 +34,7 @@ export function registerDownloadIpc(ctx: AppContext, manager?: DownloadManager):
   // Both gates read at call time: the policy from disk (authoritative ceiling), the
   // setting from the (possibly locked → treated as off) workspace DB.
   const gates = (): DownloadGates => {
-    const { policy } = loadPolicy(ctx.paths.configPath, (m) => log.warn(m))
+    const { policy } = loadPolicy(ctx.paths.configPath, (m) => log.warn(m), { isDev: ctx.isDev })
     const settingAllows = ctx.workspace.isUnlocked() && getSettings(ctx.db).allowNetwork
     return { policyAllows: policy.network.allowModelDownloads, settingAllows }
   }

@@ -77,6 +77,21 @@ describe('registerModelIpc', () => {
     configPath: bogusConfigDir()
   })
 
+  // A config dir carrying a dev-friendly policy.json (allows unverified models). Used to
+  // exercise developer leniency now that a MISSING policy.json on a packaged build fails
+  // CLOSED to the strict posture (M-4) — leniency requires a policy that permits it.
+  const devPolicyConfigDir = (): string => {
+    const dir = mkdtempSync(join(tmpdir(), 'hilbertraum-devpolicy-'))
+    writeFileSync(
+      join(dir, 'policy.json'),
+      JSON.stringify({
+        workspace: { encryption_required: false, allow_plaintext_dev_mode: true },
+        models: { allow_unverified_models: true, require_manifest: true, require_sha256_match: false }
+      })
+    )
+    return dir
+  }
+
   it('returns an empty model list when no manifests directory is configured', async () => {
     const ctx = { db: seededDb(), manifestsDir: null } as unknown as AppContext
     registerModelIpc(ctx)
@@ -126,7 +141,9 @@ describe('registerModelIpc', () => {
     const ctx = {
       db,
       manifestsDir: REPO_MANIFESTS,
-      paths: noWeightPaths(),
+      // A drive whose policy permits unverified models — leniency now needs both a
+      // developer AND a permitting policy (M-4 fail-closed neutralizes M-6).
+      paths: { rootPath: join(tmpdir(), 'hilbertraum-no-weights'), configPath: devPolicyConfigDir() },
       isDev: false,
       runtime: {
         start: async (o: unknown) => {
@@ -139,6 +156,25 @@ describe('registerModelIpc', () => {
     registerModelIpc(ctx)
     await invoke(handlers, IPC.startRuntime, 'qwen3-4b-instruct-q4')
     expect(startedWith).not.toBeNull()
+  })
+
+  it('refuses the mock fallback on a PACKAGED build with no policy.json (M-4 fail-closed)', async () => {
+    // developerMode is ON, but a packaged build (isDev:false) with a missing policy.json
+    // now fails closed to the strict posture (allow_unverified_models:false), so the
+    // unverified mock fallback is NOT granted — neutralizing M-6.
+    const db = seededDb()
+    updateSettings(db, { developerMode: true })
+    const ctx = {
+      db,
+      manifestsDir: REPO_MANIFESTS,
+      paths: noWeightPaths(), // missing config dir → no policy.json
+      isDev: false,
+      runtime: { start: async () => ({}), activeModelId: () => null }
+    } as unknown as AppContext
+    registerModelIpc(ctx)
+    await expect(invoke(handlers, IPC.startRuntime, 'qwen3-4b-instruct-q4')).rejects.toThrow(
+      /can't be started/
+    )
   })
 
   it('a dev build counts as developer even with the toggle off (isDev)', async () => {

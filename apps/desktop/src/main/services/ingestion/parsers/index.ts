@@ -53,6 +53,17 @@ export interface ParseContext {
    * instead of failing with the scan notice. Fed from `documents.ocr_json`.
    */
   ocrPages?: OcrPage[] | null
+  /**
+   * Max PDF pages the text-extraction loop will walk (security audit M-2). Beyond this,
+   * the PdfParser stops and logs — a crafted PDF can declare an enormous page count.
+   * Absent → no cap (the parser's historical behaviour).
+   */
+  maxPages?: number
+  /**
+   * Max DECLARED uncompressed size (bytes) of a DOCX zip before it is inflated (security
+   * audit M-3 — zip-bomb guard). Absent → no cap.
+   */
+  maxInflatedBytes?: number
 }
 
 /** The contract every format adapter implements (spec §9.2). */
