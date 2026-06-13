@@ -7,7 +7,7 @@ import { maybeAutoStartActiveModel } from './registerModelIpc'
 import { inFlightStreams } from './inflight'
 import { applyUiLanguageSetting, tMain } from '../services/i18n'
 import { getSettings } from '../services/settings'
-import { log } from '../services/logging'
+import { log, attachVaultKey, detachVaultKey, usesPlaintextLog, rekeyVaultLog } from '../services/logging'
 import type {
   WorkspaceActionResult,
   WorkspaceMode,
@@ -33,6 +33,22 @@ function refreshUiLanguage(ctx: AppContext): void {
   }
 }
 
+/**
+ * Point the diagnostics log at the now-resolved workspace. Encrypted → adopt the live vault
+ * key so `app.log.enc` is encrypted at rest under the same key as the DB. Plaintext_dev →
+ * switch to the plain `app.log` (no key exists). Best-effort: a logging hiccup must never
+ * break an unlock/create.
+ */
+function attachLogKey(ctx: AppContext): void {
+  try {
+    const key = ctx.workspace.encryptionKey()
+    if (key) attachVaultKey(key)
+    else usesPlaintextLog()
+  } catch {
+    /* logging is best-effort */
+  }
+}
+
 export function registerWorkspaceIpc(ctx: AppContext): void {
   ipcMain.handle(IPC.getWorkspaceState, (): WorkspaceStateInfo => ctx.workspace.getState())
 
@@ -45,6 +61,9 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
     }
     try {
       const state = ctx.workspace.unlock(password)
+      // The vault key is live now — adopt it for the diagnostics log so it is encrypted at
+      // rest like the DB, and fold in this session's pre-unlock buffer + any prior history.
+      attachLogKey(ctx)
       log.info('Workspace unlocked')
       // Audit: writing this also flushes events buffered while locked —
       // which is how the unlock_failed events below ever reach the log. NEVER the
@@ -104,6 +123,9 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
       }
       try {
         const state = ctx.workspace.create(password, mode)
+        // Encrypted: adopt the fresh vault key for the log. Plaintext_dev: switch the log to
+        // the plain file (`attachLogKey` dispatches on the workspace mode).
+        attachLogKey(ctx)
         log.info('Workspace created', { mode })
         ctx.audit?.('workspace_created', 'Workspace created', { mode })
         // Settings are readable now — main-side emissions follow the user's language.
@@ -156,11 +178,19 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
       }
       try {
         const state = ctx.workspace.changePassword(currentPassword, nextPassword)
+        // A v1→v2 migration swaps in a NEW data key and zeroes the old one (v2 keeps the same
+        // key). Re-seal the diagnostics log under the now-current key, carrying the in-memory
+        // buffer across unchanged — `rekeyVaultLog` deliberately does NOT re-load from disk,
+        // which would discard history under a rotated key or double it under an unchanged one.
+        const key = ctx.workspace.encryptionKey()
+        if (key) rekeyVaultLog(key)
         log.info('Workspace password changed') // never the passwords, in any branch
         // Audit: id-free, content-free, success only.
         ctx.audit?.('workspace_password_changed', 'Workspace password changed')
         return { ok: true, state }
       } catch (err) {
+        // The change did not commit, so the vault still holds the ORIGINAL key and the log was
+        // never detached — nothing to re-adopt; it keeps writing under the unchanged key.
         // instanceof PLUS the name — same bundle-duplication quirk as unlockWorkspace.
         if (err instanceof WrongPasswordError || (err instanceof Error && err.name === 'WrongPasswordError')) {
           ctx.audit?.('workspace_unlock_failed', 'Workspace password change failed (wrong current password)')
@@ -205,6 +235,10 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
     ])
     // Recorded BEFORE the vault closes — afterwards the DB is unreachable.
     ctx.audit?.('workspace_locked', 'Workspace locked')
+    // Flush the encrypted diagnostics log while the key is still live, then drop it —
+    // lock() zeroes the key, after which the log can no longer be persisted. The next
+    // unlock re-attaches and continues the same `app.log.enc`.
+    detachVaultKey()
     const state = ctx.workspace.lock()
     log.info('Workspace locked (sidecars stopped)')
     return state

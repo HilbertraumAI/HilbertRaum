@@ -22,7 +22,7 @@ From the root, these paths are derived and created (idempotently) on first run:
 │   └── documents/         # stored copies of imported files (<id><ext>.enc in encrypted mode)
 ├── models/                # GGUF weights (git-ignored, never committed)
 ├── logs/
-│   └── app.log            # local rotating logs (never uploaded; not encrypted)
+│   └── app.log[.enc]      # local rotating logs (never uploaded; .enc on an encrypted workspace)
 └── config/                # drive.json / policy.json / checksums.json / workspace.json (vault descriptor)
 ```
 

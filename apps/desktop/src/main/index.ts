@@ -7,7 +7,7 @@ import { getSettings, updateSettings } from './services/settings'
 import { loadPolicy, buildPolicyStatus } from './services/policy'
 import { vaultPathsFrom, WorkspaceController } from './services/workspace-vault'
 import { assertOfflinePosture } from './services/offlineGuard'
-import { initLogging, log } from './services/logging'
+import { initLogging, log, usesPlaintextLog, detachVaultKey } from './services/logging'
 import { registerCoreIpc } from './ipc/registerCoreIpc'
 import { registerWorkspaceIpc } from './ipc/registerWorkspaceIpc'
 import { maybeAutoStartActiveModel, registerModelIpc } from './ipc/registerModelIpc'
@@ -94,6 +94,13 @@ function initBackend(): void {
     } catch {
       /* keep the OS-locale default */
     }
+    // A workspace open at startup is plaintext_dev (encrypted ones stay locked until the
+    // unlock gate). Flush the pre-unlock log buffer to a plain `app.log` and keep it
+    // plaintext — matching the unencrypted dev DB. Encrypted workspaces instead adopt the
+    // vault key in registerWorkspaceIpc's unlock/create handlers (`attachVaultKey`); until
+    // then the log stays in memory, and a session spent entirely at the unlock gate is
+    // discarded on quit (the pre-auth "no sensitive bytes on disk" trade — see logging.ts).
+    usesPlaintextLog()
   }
 
   // The app-wide audit recorder (services/audit.ts). Backed by the workspace
@@ -387,6 +394,9 @@ async function shutdown(): Promise<void> {
   } catch (err) {
     log.error('Error stopping sidecars on quit', String(err))
   }
+  // Flush the encrypted diagnostics log to disk while the vault key is still live (lock()
+  // zeroes it). No-op for plaintext_dev (that log is appended in real time).
+  detachVaultKey()
   // Lock (re-encrypt + shred) the plaintext working DB. No-op for plaintext_dev.
   try {
     ctx?.workspace.lock()
@@ -408,6 +418,7 @@ app.on('will-quit', (event) => {
 process.on('uncaughtException', (err) => {
   try {
     log.error('Uncaught exception', String(err))
+    detachVaultKey() // flush the encrypted log before lock() zeroes the key
     ctx?.workspace.lock()
   } catch {
     /* best-effort */

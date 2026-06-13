@@ -148,9 +148,57 @@ OS-level network blocking remains explicitly **out of scope** (see "Out of scope
 offline is by design + policy/UX, not a kernel-level block. If a hard block is ever wanted, the
 right layer is the OS firewall / a sandbox profile, not an in-process `connect` shim.
 
-## Logs are local-only (spec §7.11)
-`services/logging.ts` writes a rotating `app.log` under the workspace `logs/` directory and never
-uploads. Diagnostics surfaces local data only; it transmits nothing off-device.
+## Logs are local-only AND encrypted at rest (spec §7.11, §3.5)
+`services/logging.ts` writes a rotating diagnostics log under the workspace `logs/` directory and
+never uploads. Diagnostics surfaces local data only; it transmits nothing off-device.
+
+**The log is encrypted at rest on an encrypted workspace** — `app.log` can carry file
+names/paths and model ids (never document or chat text — a hard call-site rule), so it is sealed
+under the **same vault key as the database and the document cache** (AES-256-GCM, the framed
+`MAGIC | iv | tag | ciphertext` blob), at rest as `logs/app.log.enc` (rotated copy
+`app.1.log.enc`). On a `plaintext_dev` workspace the log stays a plain rotating `app.log`,
+matching the unencrypted dev DB.
+
+### Design record — encrypted log (2026-06-13)
+
+The wrinkle is **timing**: logging starts at app launch, *before* the vault is unlocked, so the
+key does not yet exist (startup, policy load, and the unlock attempts themselves all log). The log
+therefore runs as a three-state machine (`services/logging.ts`):
+
+- **`buffering`** (pre-unlock, the initial state after `initLogging`): every line is held in a
+  bounded in-memory buffer (≤ 2 MB by UTF-8 byte length, oldest whole lines dropped on a line
+  boundary). **Nothing touches disk.** Lines logged before the user authenticates are lost if the
+  app is killed while still locked — a deliberate trade for "no sensitive bytes on disk before
+  unlock." The same applies to a session spent entirely at the unlock gate (never unlocked): it
+  stays in `buffering` and is discarded on quit.
+- **`encrypted`** (after `attachVaultKey(key)`, called from the unlock/create IPC path): the buffer
+  is folded together with any persisted history decrypted from `app.log.enc`, then re-sealed. New
+  lines append to the in-memory buffer; the `.enc` snapshot is rewritten **on every `error`**
+  (so a crash keeps the failure), on **rotation**, and on **lock/quit** (`detachVaultKey()`, called
+  before `WorkspaceController.lock()` zeroes the key). `info`/`warn` lines ride the next flush
+  rather than re-encrypting ~1 MB per line — so a **hard kill** (SIGKILL/OOM/power loss/drive
+  removal, no `uncaughtException` flush) loses the `info`/`warn` accumulated since the last flush;
+  the price of not thrashing the drive on the hot path. Both the live `.enc` and the rotated
+  `app.1.log.enc` are written **atomically** (temp + fsync + rename). `readLogTail` reads the
+  in-memory buffer (the on-disk copy is ciphertext). **Rotation keeps one prior generation**:
+  `app.1.log.enc` is recovery-only — `readLogTail`/`loadEncrypted` read only the live `.enc`/buffer,
+  so the Diagnostics tail shows the current generation (mirroring the plaintext rotation, whose tail
+  reads only `app.log`).
+- **`plaintext`** (after `usesPlaintextLog()`, called when a `plaintext_dev` workspace opens at
+  startup): the buffer is flushed to a plain `app.log` and appended in real time.
+
+A **password change** swaps in a fresh data key on a v1→v2 migration and zeroes the old one (v2 keeps
+the same data key). After a *successful* change the IPC handler calls `rekeyVaultLog(newKey)`, which
+re-seals the **same in-memory buffer** under the now-current key **without re-loading from disk** —
+the buffer already holds the full session-plus-history log, so a re-load would discard history under
+a rotated key, or **double** it under an unchanged one. On a *failed* change the key never moved, so
+the log is left untouched (it keeps writing under the unchanged live key).
+
+**Migration:** an older (pre-encryption) build, or a crash before this build's first lock, can leave
+a plaintext `app.log`/`app.1.log` on an encrypted drive. `attachVaultKey` **shreds** them on the
+first encrypted attach (best-effort, same `shredFile` as the DB working copy). The vault key is
+exposed to logging via `WorkspaceController.encryptionKey()` (the same data key as
+`documentCipher()`); the caller must not retain it past a lock.
 
 ## Audit log data class (Phase 19)
 
@@ -324,8 +372,11 @@ background (the active-model auto-start); the embedder restarts lazily on the ne
   DB is plaintext on the drive while the app runs (re-encrypted + shredded on lock/quit). Documented
   limitation. Re-indexing an encrypted document similarly uses a transient decrypted
   file, shredded after parsing; startup sweeps any crash leftovers (`.parse*`, `.tmp`, WAL/SHM).
-- **Logs are not encrypted.** `logs/app.log` never contains document contents or chat text, but may
-  contain file names/paths and model ids.
+- **Logs are encrypted at rest** on an encrypted workspace (`logs/app.log.enc`, under the vault key);
+  plaintext only on a `plaintext_dev` workspace. The log never contains document contents or chat
+  text, but may contain file names/paths and model ids — which is why it is sealed. The narrow
+  residual: lines logged *before unlock* are buffered in memory only (never persisted), so they are
+  lost on a kill while still locked. See "Logs are local-only AND encrypted at rest" above.
 - **Secure erase is best-effort.** Shredding overwrites then unlinks, but on SSDs wear-levelling may
   leave original blocks recoverable. We do not over-promise this.
 - **No password recovery.** The password is never stored and the key is unrecoverable without it —

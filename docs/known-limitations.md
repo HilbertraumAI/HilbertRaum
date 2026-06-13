@@ -10,8 +10,9 @@ BUILD_STATE §8 for the remediation summary; the full final audit report is pres
 
 ## Security & privacy
 
-The encrypted-workspace limitations — a decrypted working copy on disk while unlocked, unencrypted
-logs, best-effort shredding on SSDs, no password recovery — are documented in
+The encrypted-workspace limitations — a decrypted working copy on disk while unlocked, pre-unlock
+log lines buffered in memory only (lost on a kill before unlock), best-effort shredding on SSDs, no
+password recovery — are documented in
 [`security-model.md`](security-model.md) ("Threat notes / known limitations"). In addition:
 
 - **The offline guard is detection-only and Node-socket-scoped.** It wraps

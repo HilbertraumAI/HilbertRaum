@@ -90,12 +90,14 @@ An encrypted workspace option protects your data at rest with a password you cho
 **never stored**; only a salt and key-derivation parameters are kept.
 
 **What is encrypted** (encrypted workspace mode): the workspace database — chat history, extracted
-text, chunks, embeddings, settings — and the **stored copies of your imported documents**
-(`workspace/documents/`, encrypted with the same vault key).
+text, chunks, embeddings, settings — the **stored copies of your imported documents**
+(`workspace/documents/`), and the **local diagnostics log** (`logs/app.log.enc`) — all encrypted
+with the same vault key. The log never contains document contents or chat text, but may contain
+file names or paths, which is why it is encrypted too. (Lines written *before* you unlock are kept
+in memory only and never reach disk.)
 
-**What is not encrypted:** the AI model files (public weights, not your data), the app itself, and
-the local log file (`logs/app.log`). Logs never contain document contents or chat text, but may
-contain file names or paths. While the workspace is **unlocked**, a decrypted working copy of the
+**What is not encrypted:** the AI model files (public weights, not your data) and the app itself.
+While the workspace is **unlocked**, a decrypted working copy of the
 database exists on disk (and a transient decrypted copy of a document exists briefly during
 re-indexing); both are shredded on lock/quit, and any crash leftovers are shredded at next startup.
 Documents imported **before** encryption support existed (or into a plaintext workspace) remain
