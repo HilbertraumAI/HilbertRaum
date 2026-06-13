@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Badge, Banner, Button } from '../components'
+import { Badge, Banner, Button, Icon, type IconName } from '../components'
 import { RUNTIME_POLL_MS } from '../lib/polling'
 import { localizeServerCopy } from '../lib/displayMap'
 import { useT } from '../i18n'
@@ -75,7 +75,7 @@ export function HomeScreen({ onNavigate }: Props): JSX.Element {
   // ---- Readiness rows ----------------------------------------------------------
 
   const workspaceRow: ReadinessRowProps = {
-    icon: '🗄',
+    icon: 'lock',
     label: t('home.workspace.label'),
     value:
       status == null
@@ -97,7 +97,7 @@ export function HomeScreen({ onNavigate }: Props): JSX.Element {
 
   const modelRow: ReadinessRowProps = modelRunning
     ? {
-        icon: '🧠',
+        icon: 'brain',
         label: t('home.model.label'),
         value: t('home.model.running', {
           model: runtime?.modelId ?? t('home.model.fallbackName')
@@ -110,7 +110,7 @@ export function HomeScreen({ onNavigate }: Props): JSX.Element {
       }
     : status?.activeModelId
       ? {
-          icon: '🧠',
+          icon: 'brain',
           label: t('home.model.label'),
           value: t('home.model.selected', { model: status.activeModelId }),
           badge: (
@@ -125,7 +125,7 @@ export function HomeScreen({ onNavigate }: Props): JSX.Element {
           )
         }
       : {
-          icon: '🧠',
+          icon: 'brain',
           label: t('home.model.label'),
           value: t('home.model.none'),
           badge: (
@@ -141,7 +141,7 @@ export function HomeScreen({ onNavigate }: Props): JSX.Element {
         }
 
   const docsRow: ReadinessRowProps = {
-    icon: '📄',
+    icon: 'file',
     label: t('home.docs.label'),
     value:
       indexedCount == null
@@ -220,7 +220,7 @@ export function HomeScreen({ onNavigate }: Props): JSX.Element {
 }
 
 interface ReadinessRowProps {
-  icon: string
+  icon: IconName
   label: string
   value: string
   badge?: JSX.Element | null
@@ -230,9 +230,7 @@ interface ReadinessRowProps {
 function ReadinessRow({ icon, label, value, badge, action }: ReadinessRowProps): JSX.Element {
   return (
     <div className="readiness-row">
-      <span className="readiness-icon" aria-hidden="true">
-        {icon}
-      </span>
+      <Icon name={icon} className="readiness-icon" />
       <div className="readiness-text">
         <div className="readiness-label">{label}</div>
         <div className="readiness-value">{value}</div>

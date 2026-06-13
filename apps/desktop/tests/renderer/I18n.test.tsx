@@ -61,7 +61,7 @@ describe('pre-unlock gate language (App + WorkspaceGate)', () => {
     stubApi({ getWorkspaceState: vi.fn(async () => LOCKED) })
     render(<App />)
     expect(
-      await screen.findByRole('heading', { name: 'Entsperre deinen Arbeitsbereich' })
+      await screen.findByRole('heading', { name: 'Arbeitsbereich entsperren' })
     ).toBeInTheDocument()
     expect(screen.getByPlaceholderText('Passwort')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Entsperren' })).toBeInTheDocument()

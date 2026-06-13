@@ -21,7 +21,7 @@ describe('t — lookup and interpolation', () => {
     expect(noShy(t('en', 'nav.documents'))).toBe('Documents')
     expect(noShy(t('de', 'nav.documents'))).toBe('Dokumente')
     expect(t('en', 'gate.unlock.title')).toBe('Unlock your workspace')
-    expect(t('de', 'gate.unlock.title')).toBe('Entsperre deinen Arbeitsbereich')
+    expect(t('de', 'gate.unlock.title')).toBe('Arbeitsbereich entsperren')
   })
 
   it('interpolates {name} params in both languages', () => {

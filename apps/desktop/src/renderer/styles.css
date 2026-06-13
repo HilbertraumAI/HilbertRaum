@@ -107,7 +107,10 @@ button { min-width: 24px; min-height: 24px; }
 /* Selected = soft neutral fill + full-strength text (guidelines §7: accent blue is
    reserved for the focus ring, not selection). */
 .nav-item.active { background: var(--surface-hover); color: var(--text); font-weight: 600; }
-.nav-icon { font-size: 17px; line-height: 1; }
+/* Line icons in one calm accent (replacing the colorful OS emoji): the glyph stays
+   accent-blue in every state; selection is carried by the label weight + row fill, not
+   by tinting the icon. 19px reads cleanly at the rail's stroke weight. */
+.nav-icon { width: 19px; height: 19px; color: var(--accent); flex-shrink: 0; }
 /* Long destination names ("Documents", "Dokumente", "Einstellungen") overflow the ~80px
    rail. Electron's Chromium ships NO hyphenation dictionaries, so `hyphens: auto` does
    nothing and a bare `break-word` splits mid-word with no hyphen ("Dokument" / "e"). So
@@ -137,6 +140,9 @@ button { min-width: 24px; min-height: 24px; }
   white-space: nowrap;
 }
 .local-indicator:hover { color: var(--text); border-color: var(--border); }
+/* Inline lock glyph — inherits the indicator's muted text color (not accent: this is an
+   ambient signal, not an action). */
+.local-indicator-icon { width: 14px; height: 14px; flex-shrink: 0; }
 /* Sidebar variant (the old offline badge's spot, bottom of the nav rail). Its own
    class name — `.sidebar` is the nav rail itself. */
 .local-indicator-sidebar {
@@ -174,8 +180,37 @@ button { min-width: 24px; min-height: 24px; }
   padding: 24px;
 }
 .gate-card { width: 100%; max-width: 420px; margin-top: 0; }
-.gate-card h1 { margin-bottom: 10px; }
-.gate-fields { display: flex; flex-direction: column; gap: 10px; margin: 16px 0; }
+/* Calmer hierarchy (guidelines §7): the title is a step down from the old hero size and
+   sits centered under the vertical brand; the body hint inherits the muted tone. */
+.gate-card h1 {
+  margin-bottom: 8px;
+  font-size: var(--text-xl);
+  line-height: var(--line-xl);
+  font-weight: 600;
+  text-align: center;
+}
+.gate-card > .hint { text-align: center; }
+
+/* Vertical brand lockup for the gate: diamond centered above the edition word so they
+   read as one mark (the rail's horizontal `.brand` is a separate, quieter treatment). */
+.gate-brand {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 22px;
+}
+.gate-brand-mark { font-size: 34px; line-height: 1; color: var(--accent); }
+.gate-brand-edition {
+  font-size: var(--text-xs);
+  line-height: var(--line-xs);
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.gate-fields { display: flex; flex-direction: column; gap: 10px; margin: 20px 0; }
 .gate-input {
   width: 100%;
   background: var(--surface-2);
@@ -190,21 +225,33 @@ button { min-width: 24px; min-height: 24px; }
 
 /* First-run flow (guidelines §2): hero title, Back|Create action row
    (primary on the RIGHT, §6), show-password toggle, strength meter. */
-.gate-hero { font-size: var(--text-2xl); line-height: var(--line-2xl); font-weight: 700; }
+/* The first-run welcome keeps a true hero size — specific enough to win over the
+   calmer `.gate-card h1` baseline above. */
+.gate-card h1.gate-hero { font-size: var(--text-2xl); line-height: var(--line-2xl); font-weight: 700; }
 .gate-actions { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-top: 8px; }
 .gate-actions .btn.primary { width: auto; margin-top: 0; }
 .gate-actions-main { display: flex; gap: 10px; align-items: center; }
-.gate-pw-row { display: flex; gap: 6px; align-items: center; }
-.gate-pw-row .gate-input { flex: 1; }
+/* The reveal toggle lives INSIDE the field (the expected pattern): the input reserves
+   room on the right and the button is a real ~40px hit target pinned to that edge. */
+.gate-pw-field { position: relative; display: flex; }
+.gate-input-with-toggle { padding-right: 48px; }
 .gate-pw-toggle {
-  flex-shrink: 0;
+  position: absolute;
+  top: 50%;
+  right: 4px;
+  transform: translateY(-50%);
+  width: 40px;
+  height: 40px;
+  min-height: 40px;
+  padding: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: 8px;
   color: var(--text-muted);
 }
-.gate-pw-toggle:hover { color: var(--text); }
+/* No hover fill — the ghost button's grey box would collide with the field border;
+   the eye just shifts to the accent blue instead. */
+.btn.ghost.gate-pw-toggle:hover:not(:disabled) { background: transparent; border-color: transparent; color: var(--accent); }
 .gate-pw-toggle svg { display: block; }
 
 /* Password-strength meter: 4 segments + a word — never color alone (WCAG 1.4.1).
@@ -291,7 +338,7 @@ code, pre, kbd { font-family: var(--font-mono); }
   padding: 6px 4px;
 }
 .readiness-row + .readiness-row { border-top: 1px solid var(--border); }
-.readiness-icon { width: 22px; text-align: center; flex-shrink: 0; }
+.readiness-icon { width: 22px; height: 22px; color: var(--accent); flex-shrink: 0; }
 .readiness-text { flex: 1; min-width: 0; }
 .readiness-label { font-size: var(--text-xs); line-height: var(--line-xs); color: var(--text-muted); }
 .readiness-value { font-size: var(--text-base); line-height: var(--line-base); }
@@ -638,6 +685,9 @@ code, pre, kbd { font-family: var(--font-mono); }
 
 /* Composer footer affordances: quiet text-style menu/popover triggers. */
 .footer-menu-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   background: transparent;
   border: 1px solid transparent;
   color: var(--text-muted);
@@ -646,6 +696,10 @@ code, pre, kbd { font-family: var(--font-mono); }
   cursor: pointer;
   padding: 3px 8px;
 }
+/* Inline file glyph in the chat-scope footer button / conversation meta line — muted,
+   sized to the surrounding text (not accent: these are quiet labels, not actions). */
+.footer-menu-icon { width: 15px; height: 15px; flex-shrink: 0; }
+.chat-conv-meta-icon { width: 13px; height: 13px; flex-shrink: 0; }
 .footer-menu-btn:hover:not(:disabled), .footer-menu-btn[data-state='open'] { color: var(--text); background: var(--surface-hover); }
 .footer-menu-btn:disabled { opacity: 0.5; cursor: default; }
 
@@ -884,7 +938,9 @@ code, pre, kbd { font-family: var(--font-mono); }
 }
 /* The shell owns the focus ring; the textarea itself shows none (no double ring). */
 .chat-input:focus, .chat-input:focus-visible { outline: none; }
-.composer-row .btn { align-self: flex-end; }
+/* Vertically center Send/Stop (and the mic) in the row — with a single-line textarea
+   flex-end left them sitting low against the field's bottom edge. */
+.composer-row .btn { align-self: center; }
 .composer-footer { display: flex; gap: 12px; align-items: center; min-height: 26px; padding: 0 4px; }
 
 /* Voice-dictation mic: quiet ghost button beside Send; while recording it

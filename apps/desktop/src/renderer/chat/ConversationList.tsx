@@ -6,7 +6,7 @@ import {
   type Conversation,
   type ConversationSearchResult
 } from '@shared/types'
-import { Button, ConfirmDialog } from '../components'
+import { Button, ConfirmDialog, Icon } from '../components'
 import { useT } from '../i18n'
 import { localizeServerCopy } from '../lib/displayMap'
 import type { MessageKey } from '@shared/i18n'
@@ -250,7 +250,7 @@ export function ConversationList({
                         Never color-only (WCAG 1.4.1) — the glyph pairs with the word. */}
                     {c.mode === 'documents' && (
                       <span className="chat-conv-meta">
-                        <span aria-hidden="true">📄</span> {t('chat.list.docMeta')}
+                        <Icon name="file" className="chat-conv-meta-icon" /> {t('chat.list.docMeta')}
                       </span>
                     )}
                   </button>

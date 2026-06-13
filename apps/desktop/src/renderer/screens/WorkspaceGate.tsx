@@ -144,13 +144,13 @@ export function WorkspaceGate({ state, onUnlocked }: Props): JSX.Element {
     }
   }
 
+  // Vertical brand lockup (guidelines §7): the diamond sits centered above the edition
+  // word so "Lite" reads as part of the mark, not a loose label beside it. The full
+  // wordmark stays in the a11y tree (visually hidden) so the brand is announced.
   const brand = (
-    <div className="brand" style={{ marginBottom: 18 }}>
-      <span className="brand-mark">◈</span>
-      <div>
-        <div className="brand-name">HilbertRaum</div>
-        <div className="brand-edition">Lite</div>
-      </div>
+    <div className="gate-brand">
+      <span className="gate-brand-mark" aria-hidden="true">◈</span>
+      <span className="gate-brand-edition">HilbertRaum Lite</span>
     </div>
   )
 

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import * as Tooltip from '@radix-ui/react-tooltip'
+import { Icon } from './Icon'
 import { englishTranslator, type Translator } from './translator'
 
 // Ambient privacy signal (guidelines §7): a quiet, persistent "Local ·
@@ -71,7 +72,7 @@ export function LocalIndicator({
             className={`local-indicator ${variant === 'sidebar' ? 'local-indicator-sidebar' : ''}`}
             onClick={() => onNavigate('settings:privacy')}
           >
-            <span aria-hidden="true">🔒</span> {localIndicatorLabel(isOffline, t)}
+            <Icon name="lock" className="local-indicator-icon" /> {localIndicatorLabel(isOffline, t)}
           </button>
         </Tooltip.Trigger>
         <Tooltip.Portal>

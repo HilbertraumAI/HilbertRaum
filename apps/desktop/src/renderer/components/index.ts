@@ -4,6 +4,7 @@
 export { englishTranslator, type Translator } from './translator'
 export { Button, type ButtonProps, type ButtonVariant } from './Button'
 export { Badge, type BadgeProps, type BadgeTone } from './Badge'
+export { Icon, type IconName, type IconProps } from './Icon'
 export { Banner, type BannerProps, type BannerTone } from './Banner'
 export { ErrorBanner, type ErrorBannerProps } from './ErrorBanner'
 export { ToastProvider, useToast, TOAST_DURATION_MS } from './Toast'

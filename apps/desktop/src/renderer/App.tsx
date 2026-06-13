@@ -5,7 +5,7 @@ import { ModelsScreen } from './screens/ModelsScreen'
 import { ChatScreen } from './screens/ChatScreen'
 import { DocumentsScreen } from './screens/DocumentsScreen'
 import { WorkspaceGate } from './screens/WorkspaceGate'
-import { Banner, Button, ToastProvider } from './components'
+import { Banner, Button, Icon, ToastProvider, type IconName } from './components'
 import { setThemeSetting } from './theme'
 import { I18nProvider, useT } from './i18n'
 import { resolveNavTarget, type ScreenId, type SettingsTab } from './navigation'
@@ -15,20 +15,20 @@ import type { WorkspaceStateInfo } from '@shared/types'
 interface NavItem {
   id: ScreenId
   labelKey: MessageKey
-  icon: string
+  icon: IconName
 }
 
 // Information architecture (design-guidelines §2): 4 everyday destinations on top,
 // Settings as the single bottom utility. Privacy and Diagnostics live INSIDE Settings
 // as tabs — they are no longer nav destinations.
 const NAV_TOP: NavItem[] = [
-  { id: 'home', labelKey: 'nav.home', icon: '🏠' },
-  { id: 'chat', labelKey: 'nav.chat', icon: '💬' },
-  { id: 'documents', labelKey: 'nav.documents', icon: '📄' },
-  { id: 'models', labelKey: 'nav.models', icon: '🧠' }
+  { id: 'home', labelKey: 'nav.home', icon: 'home' },
+  { id: 'chat', labelKey: 'nav.chat', icon: 'chat' },
+  { id: 'documents', labelKey: 'nav.documents', icon: 'file' },
+  { id: 'models', labelKey: 'nav.models', icon: 'brain' }
 ]
 
-const NAV_BOTTOM: NavItem[] = [{ id: 'settings', labelKey: 'nav.settings', icon: '⚙️' }]
+const NAV_BOTTOM: NavItem[] = [{ id: 'settings', labelKey: 'nav.settings', icon: 'settings' }]
 
 export function App(): JSX.Element {
   // The language provider wraps EVERYTHING, including the pre-unlock gate (which
@@ -189,7 +189,7 @@ function AppShell(): JSX.Element {
           aria-current={active ? 'page' : undefined}
           onClick={() => navigate(item.id)}
         >
-          <span className="nav-icon" aria-hidden="true">{item.icon}</span>
+          <Icon name={item.icon} className="nav-icon" />
           <span className="nav-label">{label}</span>
         </button>
       </li>
@@ -216,7 +216,7 @@ function AppShell(): JSX.Element {
             aria-label={t('app.lockNow')}
             onClick={() => void lockNow()}
           >
-            <span className="nav-icon" aria-hidden="true">🔒</span>
+            <Icon name="lock" className="nav-icon" />
             <span className="nav-label">{t('app.lockNow')}</span>
           </button>
         )}

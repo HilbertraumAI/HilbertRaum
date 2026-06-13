@@ -1,0 +1,6 @@
+<!-- Renderer favicon — the HilbertRaum brand mark (◈), transparent background. Mirrors
+     build/icon.svg; served same-origin so it satisfies the strict offline CSP. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <path d="M32 6 L58 32 L32 58 L6 32 Z" fill="none" stroke="#2f6fed" stroke-width="5" stroke-linejoin="round" />
+  <path d="M32 21 L43 32 L32 43 L21 32 Z" fill="#2f6fed" />
+</svg>

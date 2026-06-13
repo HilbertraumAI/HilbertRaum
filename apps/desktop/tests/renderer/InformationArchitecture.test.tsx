@@ -129,12 +129,13 @@ describe('App shell — 5-item nav (Phase 26)', () => {
       .filter((b) => b.className.includes('nav-item'))
     // Strip soft hyphens (U+00AD): nav labels carry them so the narrow rail wraps cleanly
     // ("Docu­ments"); they are invisible to the user and irrelevant to the IA assertion.
+    // Icons are now aria-hidden line SVGs (no text content), so only the label remains.
     expect(items.map((b) => b.textContent?.replace(/­/g, ''))).toEqual([
-      '🏠Home',
-      '💬Chat',
-      '📄Documents',
-      '🧠AI Model',
-      '⚙️Settings'
+      'Home',
+      'Chat',
+      'Documents',
+      'AI Model',
+      'Settings'
     ])
     expect(within(nav).queryByText(/privacy/i)).not.toBeInTheDocument()
     expect(within(nav).queryByText(/diagnostics/i)).not.toBeInTheDocument()

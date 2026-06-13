@@ -1,6 +1,6 @@
 import * as Popover from '@radix-ui/react-popover'
 import type { DocumentInfo } from '@shared/types'
-import { Button, Chip } from '../components'
+import { Button, Chip, Icon } from '../components'
 import { useT } from '../i18n'
 
 // "📄 Using N documents ▾" (guidelines §3): the single composer-footer affordance for
@@ -36,7 +36,7 @@ export function ScopePopover({ docs, scopeIds, disabled, onChangeScope, onAddDoc
   if (!hasDocs) {
     return (
       <button type="button" className="footer-menu-btn" disabled={disabled} onClick={onAddDocuments}>
-        <span aria-hidden="true">📄</span> {t('chat.scope.none')}
+        <Icon name="file" className="footer-menu-icon" /> {t('chat.scope.none')}
       </button>
     )
   }
@@ -48,7 +48,7 @@ export function ScopePopover({ docs, scopeIds, disabled, onChangeScope, onAddDoc
     <Popover.Root>
       <Popover.Trigger asChild>
         <button type="button" className="footer-menu-btn" disabled={disabled}>
-          <span aria-hidden="true">📄</span> {label} <span aria-hidden="true">▾</span>
+          <Icon name="file" className="footer-menu-icon" /> {label} <span aria-hidden="true">▾</span>
         </button>
       </Popover.Trigger>
       <Popover.Portal>

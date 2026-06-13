@@ -1,4 +1,5 @@
 import { app, BrowserWindow, nativeTheme, shell } from 'electron'
+import { existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { resolvePaths, ensureWorkspaceDirs, findPreparedDriveRoot } from './services/workspace'
 import { applyUiLanguageSetting, initMainI18n } from './services/i18n'
@@ -292,6 +293,10 @@ function initBackend(): void {
 }
 
 function createWindow(): void {
+  // The brand-mark window/taskbar icon. On a packaged Windows build the .exe already
+  // carries build/icon.ico (electron-builder embeds it), so build/ is not inside the
+  // asar — this path only resolves in dev and on Linux, where the explicit icon matters.
+  const iconPath = join(app.getAppPath(), 'build', 'icon.png')
   mainWindow = new BrowserWindow({
     width: 1100,
     height: 760,
@@ -299,6 +304,7 @@ function createWindow(): void {
     minHeight: 600,
     show: false,
     title: 'HilbertRaum',
+    ...(existsSync(iconPath) ? { icon: iconPath } : {}),
     // Pre-paint window color: follow the OS theme (the renderer applies the real
     // theme tokens — --bg light/dark — before first paint; this only avoids a
     // mismatched flash while the window comes up).

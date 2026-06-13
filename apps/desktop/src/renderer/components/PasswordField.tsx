@@ -124,10 +124,11 @@ export function PasswordField({
   t = englishTranslator
 }: PasswordFieldProps): JSX.Element {
   return (
-    <div className="gate-pw-row">
+    <div className="gate-pw-field">
       <input
         type={show ? 'text' : 'password'}
-        className="gate-input"
+        // Reserve room on the right so typed text never slides under the reveal button.
+        className={onToggleShow ? 'gate-input gate-input-with-toggle' : 'gate-input'}
         placeholder={placeholder}
         aria-label={placeholder}
         autoComplete={autoComplete}

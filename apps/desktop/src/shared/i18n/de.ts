@@ -749,7 +749,7 @@ export const de: Record<keyof typeof en, string> = {
 
   // ---- Workspace gate ----
   'gate.passwordPlaceholder': 'Passwort',
-  'gate.unlock.title': 'Entsperre deinen Arbeitsbereich',
+  'gate.unlock.title': 'Arbeitsbereich entsperren',
   'gate.unlock.hint':
     'Gib dein Passwort ein, um den Arbeitsbereich dieses Laufwerks zu öffnen. Alles bleibt ' +
     'auf diesem Laufwerk.',
