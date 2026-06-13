@@ -124,6 +124,30 @@ Only genuinely remote origins are flagged. The guard **only logs; it never block
 wrong host guess can never break local IPC or the sidecars. Real runtimes MUST bind
 `127.0.0.1` only.
 
+#### Detection-only, not enforcement — a recorded decision (audit M-S1, 2026-06-13)
+
+The tripwire deliberately **logs and audits** a remote connect, then **calls the original
+`connect` anyway**. It is a regression detector, not a firewall. Audit finding M-S1 asked whether
+to upgrade it to *reject* non-loopback connects while offline (feasible, since `isLoopbackHost`
+already exempts the sidecar). **Decision: keep detection-only.** Rationale:
+
+- The offline guarantee already rests on two stronger, structural controls: **no remote-calling
+  code exists** in the core path (no hosted-AI SDKs, no telemetry — spec §0, enforced by review +
+  the no-dependency posture) and the **prod CSP** (`connect-src` excludes remote origins for the
+  renderer). The tripwire is a third, defence-in-depth *signal* that those held — not the primary
+  guarantee.
+- The patch monkey-patches `net.Socket.prototype.connect` **process-wide**. Throwing on a
+  misclassified host would convert a host-extraction edge case (`extractHost` returning the wrong
+  value for some future connect shape) into a **hard offline failure that breaks loopback IPC or a
+  sidecar** — strictly worse than today's silent-log-plus-audit. A detector that is wrong merely
+  logs noise; an enforcer that is wrong takes the app down offline.
+- A firing at all already indicates a regression worth investigating (the core path makes zero
+  remote calls), and it is **recorded in the audit log**, so the operator sees it.
+
+OS-level network blocking remains explicitly **out of scope** (see "Out of scope (MVP)" below):
+offline is by design + policy/UX, not a kernel-level block. If a hard block is ever wanted, the
+right layer is the OS firewall / a sandbox profile, not an in-process `connect` shim.
+
 ## Logs are local-only (spec §7.11)
 `services/logging.ts` writes a rotating `app.log` under the workspace `logs/` directory and never
 uploads. Diagnostics surfaces local data only; it transmits nothing off-device.
