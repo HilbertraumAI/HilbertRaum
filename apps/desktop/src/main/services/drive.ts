@@ -166,8 +166,10 @@ export interface ModelVerifyResult {
   sizeBytes: number | null
 }
 
-const SUPPORTED_RUNTIMES = new Set(['llama_cpp', 'llama.cpp'])
-const SUPPORTED_FORMATS = new Set(['gguf'])
+/** Runtimes/formats the app can load. Exported so the drift test (audit M-A1) can assert
+ *  the `verify-models.{ps1,sh}` gate literals against this single source of truth. */
+export const SUPPORTED_RUNTIMES = new Set(['llama_cpp', 'llama.cpp'])
+export const SUPPORTED_FORMATS = new Set(['gguf'])
 
 /**
  * Verify each manifest's weight against its `sha256`, mirroring `services/models.ts`
