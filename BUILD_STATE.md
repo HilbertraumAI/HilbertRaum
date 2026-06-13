@@ -7,8 +7,10 @@
 
 
 _Last updated: 2026-06-13 — **Security-hardening wave (audit 2026-06-13 remediation).**
-Fixed every MEDIUM + the quick-win LOW findings from the multi-persona audit
-(`docs/security-audit-2026-06-13.md`, now annotated with a per-finding remediation table).
+Fixed every MEDIUM + the quick-win LOW findings from the same-day multi-persona security
+audit. (Per the doc lifecycle rule the audit report was condensed into this entry +
+`security-model.md` and then deleted — the full report is recoverable from git history at
+commit `f99bc86`, which added it.)
 **M-1/M-2/M-3 (parser DoS):** new `services/ingestion/limits.ts` adds env-overridable
 pre-parse caps — a **byte ceiling** (`HILBERTRAUM_MAX_DOC_BYTES`, 1 GiB), a **parse wall-clock
 timeout** (`HILBERTRAUM_PARSE_TIMEOUT_MS`, 30 min; **audio exempt** so long transcriptions
@@ -32,7 +34,8 @@ key before throwing `WrongPasswordError`. **Open hardening (deferred — see "Op
 below):** L-4 (opaque pick-token import redemption), L-5 (`lstatSync` symlink guard in `expandPaths`),
 L-7 (build-script archive containment), L-8 (`npm ci` + committed lockfile in the build pipeline).
 **Docs:** `security-model.md` (policy fail-closed §1, parser caps + env-override gating sections,
-loopback note), `docs/security-audit-2026-06-13.md` (remediation table). **Tests:** typecheck clean,
+loopback note); the audit report itself was condensed here + deleted (recoverable at git `f99bc86`).
+**Tests:** typecheck clean,
 build OK, `npm test` **1119 passed / 25 skipped** (+24: ingestion-limits, policy fail-closed,
 sidecar/transcriber override-gating, manifest/assets https, importPreflight gate, vault key-zero,
 model-IPC fail-closed)._
@@ -1735,9 +1738,9 @@ since shipped in Phases 19–20).
 ### Open hardening items — security audit 2026-06-13 (deferred, NOT yet fixed)
 
 The 2026-06-13 hardening wave fixed every MEDIUM + the quick-win LOWs (see the entry at the
-top of this file and `docs/security-audit-2026-06-13.md`). These four LOW items were
-consciously deferred — they are defense-in-depth / build-pipeline, none blocks the
-offline/privacy guarantees:
+top of this file; the full audit report is in git history at commit `f99bc86`). These four
+LOW items were consciously deferred — they are defense-in-depth / build-pipeline, none blocks
+the offline/privacy guarantees:
 
 - **L-4 — `importDocuments` trusts renderer-supplied source paths.** The handler type-filters +
   unlock-gates, but the path *values* are not constrained to the OS-picker output, so a
