@@ -87,7 +87,11 @@ the whole DB file is encrypted at rest.
   renderer subscribes through `api.onModelVerifyProgress`. **Surfaces:** the first-run `WorkspaceGate`
   *finishing* step and the first cold AI Model screen visit render the shared `Progress` bar
   (byte-weighted %, "Checking model N of M") in place of the spinner; both keep their existing
-  fallbacks (the gate's Skip + never-trap `catch`, the screen's calm "Checking…" hint). Additive
+  fallbacks (the gate's Skip + never-trap `catch`, the screen's calm "Checking…" hint). Each pass
+  carries a `runId` (`randomUUID`): `listModels` can run as **overlapping passes** (a screen remount,
+  the download poll), each with a different `modelCount` as the cache warms, and the events broadcast
+  to the renderer — so the renderer **locks onto the first `runId`** it sees and ignores the others
+  until that pass's `done` (without this the bar flips between e.g. "1 of 1" and "2 of 2"). Additive
   behind the locked `listModels` contract; omitting the sink is zero-overhead, so tests/legacy callers
   are unchanged.
 - **Recommendation is RAM-best-fit (post-MVP).** `recommendModelIdByRam(manifests, ramGb)` picks the
@@ -105,6 +109,17 @@ the whole DB file is encrypted at rest.
   single active runtime and restarts it on model switch. `MockRuntime` streams a deterministic echo
   with zero model files; the real `LlamaRuntime` (localhost-only sidecar) is selected when binary +
   weights exist. The factory passed to `RuntimeManager` is the only thing that changes.
+- **Start is idempotent for the in-flight/running model; `startingModelId` is server truth.**
+  `RuntimeManager.start()` serializes via a queue (orphan-safe on a switch), and now short-circuits
+  when the requested model is **already running or already starting** — a double-click or a revisit
+  to the AI Model screen before a large GGUF finished loading used to **stop-and-restart** the
+  runtime (two "Start runtime" log lines, two backend selections). It tracks the in-flight
+  `startingModelId` (set synchronously, cleared when the start settles) and exposes it on
+  `RuntimeStatus.startingModelId`. The AI Model screen reads runtime status (and polls while a start
+  is in flight) to show a disabled **"Starting…"** button that survives leaving + re-entering the
+  screen — the per-component `busy` flag is lost on remount, this is not. The Chat screen's no-model
+  state likewise says "your model is starting" while `startingModelId` is set. A model *switch*
+  (start B while A runs) still stops A first; only same-model re-starts are suppressed.
 - **IPC** (`ipc/registerModelIpc.ts`): `listModels`, `selectModel`, `verifyModel`, `startRuntime`,
   `stopRuntime`. The active runtime is stopped on `will-quit`.
 - **Auto-start (post-MVP).** `maybeAutoStartActiveModel` starts the persisted `activeModelId` in the

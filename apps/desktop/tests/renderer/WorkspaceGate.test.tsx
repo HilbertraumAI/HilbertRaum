@@ -285,6 +285,7 @@ describe('WorkspaceGate — create (3-step first run)', () => {
     await waitFor(() => expect(emit).not.toBeNull())
     act(() =>
       emit!({
+        runId: 'run-1',
         modelIndex: 1,
         modelCount: 2,
         modelId: 'a',

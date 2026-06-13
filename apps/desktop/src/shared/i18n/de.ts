@@ -91,6 +91,9 @@ export const de: Record<keyof typeof en, string> = {
   'chat.noModel.stillLoading':
     'Wenn du die App gerade erst geöffnet hast, wird dein ausgewähltes Modell ' +
     'möglicherweise noch geladen — es geht hier automatisch weiter, sobald es bereit ist.',
+  'chat.noModel.starting':
+    'Dein Modell wird gestartet — große Modelle brauchen einen Moment zum Laden. Es geht ' +
+    'hier automatisch weiter, sobald es bereit ist.',
   'chat.noModel.open': 'KI-Modell öffnen',
   'chat.noModel.recheck': 'Erneut prüfen',
   'chat.empty.title': 'Stell eine Frage — oder frag deine Dokumente.',
@@ -394,6 +397,8 @@ export const de: Record<keyof typeof en, string> = {
   'models.stopRuntime': 'Modell stoppen',
   'models.startRuntime': 'Modell starten',
   'models.startMock': 'Demo-Runtime starten',
+  'models.starting': 'Wird gestartet…',
+  'models.startingTitle': 'Dieses Modell wird geladen — bei großen Modellen kann das etwas dauern',
   'models.startTitle': 'Dieses Modell auf diesem Gerät starten',
   'models.startMockTitle':
     'Keine Modell-Datei vorhanden — startet die eingebaute Demo-Runtime, damit du die App ' +

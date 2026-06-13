@@ -333,6 +333,13 @@ export interface ModelInfo {
  * `modelIndex / modelCount` the "how many steps left" label.
  */
 export interface ModelVerifyProgress {
+  /**
+   * Identifies one verification pass. `listModels` can run as overlapping passes (a screen
+   * remount, a concurrent poll), each with its own `modelCount` as the cache warms — the
+   * renderer locks onto the first `runId` it sees and ignores the others until that pass's
+   * `done`, so the bar can't flip between interleaved passes.
+   */
+  runId: string
   /** 1-based index of the model currently being hashed. */
   modelIndex: number
   /** How many models will be hashed this pass (the denominator of the step label). */
@@ -807,6 +814,15 @@ export interface RuntimeStatus {
   port: number | null
   healthy: boolean
   message: string
+  /**
+   * The model whose runtime is currently being brought up (loading a large GGUF + the
+   * health wait can take tens of seconds), or null when no start is in flight. Lets the
+   * UI show a disabled "Starting…" state that survives leaving and re-entering a screen —
+   * the per-component `busy` flag is lost on remount, this is server truth. While a start
+   * is in flight `running` is still false (or reflects the previously-running model during
+   * a switch).
+   */
+  startingModelId?: string | null
   /**
    * Which backend the active runtime landed on (the start ladder): 'gpu' (the
    * default build with a usable GPU), 'cpu' (the same build GPU-less or forced via

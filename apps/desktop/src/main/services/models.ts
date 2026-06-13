@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { createReadStream, existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { totalmem } from 'node:os'
 import { dirname, join, resolve, sep } from 'node:path'
@@ -528,6 +528,8 @@ export async function buildModelList(opts: BuildModelListOptions): Promise<Model
   // The byte-weighted denominator is only honest when there is work to do; with nothing
   // to hash (everything cached) we emit no events and the renderer shows no bar.
   const emit = opts.onProgress && overallBytesTotal > 0 ? opts.onProgress : undefined
+  // Tags every event of THIS pass so the renderer can lock onto one when passes overlap.
+  const runId = emit ? randomUUID() : ''
 
   const models: ModelInfo[] = []
   for (let i = 0; i < manifests.length; i++) {
@@ -542,6 +544,7 @@ export async function buildModelList(opts: BuildModelListOptions): Promise<Model
         emit && thisHashes
           ? (bytesHashed) =>
               emit({
+                runId,
                 modelIndex: stepAt,
                 modelCount: hashCount,
                 modelId: manifest.id,
@@ -570,6 +573,7 @@ export async function buildModelList(opts: BuildModelListOptions): Promise<Model
   // a chunk short of the total.
   if (emit) {
     emit({
+      runId,
       modelIndex: hashCount,
       modelCount: hashCount,
       modelId: '',

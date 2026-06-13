@@ -11,8 +11,10 @@ import type {
   ModelInfo,
   ModelState,
   ModelVerifyProgress,
-  PolicyStatus
+  PolicyStatus,
+  RuntimeStatus
 } from '@shared/types'
+import { RUNTIME_POLL_MS } from '../lib/polling'
 
 // "AI Model" screen (guidelines §2/§3 principle: singular mental model).
 // The active model leads with a plain-language size/speed hint; the rest is a friendly
@@ -89,6 +91,11 @@ export function ModelsScreen(): JSX.Element {
   // First cold visit hashes the (multi-GB) weights; this drives a determinate bar in the
   // loading state instead of an opaque spinner. Null once nothing is hashing.
   const [verifyProgress, setVerifyProgress] = useState<ModelVerifyProgress | null>(null)
+  // Runtime status — so a model that is loading in the background shows a disabled
+  // "Starting…" button (the `startingModelId` is server truth that survives a revisit,
+  // unlike the per-click `busy` flag). Without this, the still-enabled Start button let a
+  // revisit kick off a disruptive restart.
+  const [runtime, setRuntime] = useState<RuntimeStatus | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   // The per-download confirmation dialog + the polled download job.
@@ -102,18 +109,20 @@ export function ModelsScreen(): JSX.Element {
   const engineJobRef = useRef<EngineDownloadJob | null>(rememberedEngineJob)
 
   async function refresh(): Promise<void> {
-    const [m, s, p, e] = await Promise.all([
+    const [m, s, p, e, rt] = await Promise.all([
       window.api.listModels(),
       window.api.getSettings(),
       window.api.getPolicy().catch(() => null),
       // Wrapped in Promise.resolve so a partial bridge (older preload, or a test stub that
       // returns nothing) degrades to null instead of throwing; the real preload resolves it.
-      Promise.resolve(window.api.getEngineStatus?.()).then((r) => r ?? null, () => null)
+      Promise.resolve(window.api.getEngineStatus?.()).then((r) => r ?? null, () => null),
+      Promise.resolve(window.api.getRuntimeStatus?.()).then((r) => r ?? null, () => null)
     ])
     setModels(m)
     setSettings(s)
     setPolicy(p)
     setEngine(e)
+    setRuntime(rt)
     // Machine RAM feeds the "needs more memory" flag copy; best-effort.
     window.api
       .getAppStatus()
@@ -130,9 +139,27 @@ export function ModelsScreen(): JSX.Element {
   // preloads / test stubs (they simply never drive the bar).
   useEffect(() => {
     return window.api.onModelVerifyProgress?.((p) =>
-      setVerifyProgress(p.done ? null : p)
+      // Lock onto one pass: `listModels` can run as overlapping passes (a remount, the
+      // download poll), each with its own `modelCount` as the cache warms — without this
+      // the bar flips between "1 of 1" and "2 of 2". Ignore events from a different pass
+      // until the tracked one's terminal `done`.
+      setVerifyProgress((prev) => {
+        if (prev && prev.runId !== p.runId) return prev
+        return p.done ? null : p
+      })
     )
   }, [])
+
+  // While a model is starting in the background, poll runtime status so the "Starting…"
+  // button flips to "Stop" on its own once the GGUF finishes loading (a full `refresh`
+  // also picks up the new `running` model state).
+  useEffect(() => {
+    if (!runtime?.startingModelId) return
+    const timer = setInterval(() => {
+      void refresh().catch(() => undefined)
+    }, RUNTIME_POLL_MS)
+    return () => clearInterval(timer)
+  }, [runtime?.startingModelId])
 
   // Poll the live download job (async-with-polling, like import progress).
   useEffect(() => {
@@ -374,6 +401,9 @@ export function ModelsScreen(): JSX.Element {
         (machineRam != null ? t('models.ram.machine', { ram: machineRam }) : '') +
         t('models.ram.advice')
       : undefined
+    // A start in flight (server truth, survives a revisit): this model's own, or any.
+    const thisStarting = runtime?.startingModelId === m.id
+    const anyStarting = runtime?.startingModelId != null
     return (
       <div className="card model-card" key={m.id}>
         <div className="model-head">
@@ -426,10 +456,21 @@ export function ModelsScreen(): JSX.Element {
               <Button size="sm" disabled={busy !== null} onClick={() => run('stop', () => window.api.stopRuntime())}>
                 {t('models.stopRuntime')}
               </Button>
+            ) : thisStarting ? (
+              // Server-truth "Starting…": disabled, and it survives leaving + revisiting
+              // the screen (the cause of the accidental restart).
+              <Button size="sm" disabled title={t('models.startingTitle')}>
+                <Spinner /> {t('models.starting')}
+              </Button>
             ) : (
               <Button
                 size="sm"
-                disabled={(!installed && !canMockStart) || (installed && ramTooLow) || busy !== null}
+                disabled={
+                  (!installed && !canMockStart) ||
+                  (installed && ramTooLow) ||
+                  busy !== null ||
+                  anyStarting // a different model is coming up — the runtime is single-slot
+                }
                 onClick={() => run(`start-${m.id}`, () => window.api.startRuntime(m.id))}
                 title={
                   installed && ramTooLow

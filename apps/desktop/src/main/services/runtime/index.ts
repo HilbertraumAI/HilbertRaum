@@ -86,6 +86,14 @@ export class RuntimeManager {
    * makes those calls wait for the in-flight operation and act on its committed result.
    */
   private op: Promise<unknown> = Promise.resolve()
+  /**
+   * The model id whose start is currently in flight (set synchronously when `start()` is
+   * called, cleared when that start settles). Surfaced via `status().startingModelId` so
+   * the UI can show a disabled "Starting…" state across screen remounts, and used to make
+   * `start()` idempotent — a second start for the SAME model (a double-click or a revisit
+   * while the first is still loading) must not stop-and-restart the runtime.
+   */
+  private startingModelId: string | null = null
 
   constructor(private readonly factory: RuntimeFactory) {}
 
@@ -100,7 +108,22 @@ export class RuntimeManager {
   }
 
   async start(opts: RuntimeStartOptions): Promise<RuntimeStatus> {
-    return this.enqueue(() => this.doStart(opts))
+    // Idempotent for the same model: if it is already running, or a start for it is
+    // already in flight (a double-click, or a revisit to the AI Model screen before the
+    // GGUF finished loading), do NOT stop-and-restart it — just resolve with the
+    // current/forthcoming status once the queue drains. The old behavior spawned a
+    // disruptive restart (two "Start runtime" log lines, two backend selections).
+    if (this.startingModelId === opts.modelId || this.current?.modelId === opts.modelId) {
+      return this.enqueue(() => Promise.resolve(this.status()))
+    }
+    // Set synchronously so a concurrent caller sees the in-flight model immediately.
+    this.startingModelId = opts.modelId
+    try {
+      return await this.enqueue(() => this.doStart(opts))
+    } finally {
+      // Only clear if no newer start (a switch) has since claimed the slot.
+      if (this.startingModelId === opts.modelId) this.startingModelId = null
+    }
   }
 
   async stop(): Promise<void> {
@@ -151,8 +174,16 @@ export class RuntimeManager {
   }
 
   status(): RuntimeStatus {
+    const startingModelId = this.startingModelId
     if (!this.current) {
-      return { running: false, modelId: null, port: null, healthy: false, message: 'Stopped' }
+      return {
+        running: false,
+        modelId: null,
+        port: null,
+        healthy: false,
+        message: startingModelId ? 'Starting' : 'Stopped',
+        startingModelId
+      }
     }
     return {
       running: true,
@@ -161,7 +192,9 @@ export class RuntimeManager {
       healthy: this.last?.healthy ?? false,
       message: this.last?.message ?? 'Running',
       backend: this.current.backend ?? UNLABELLED_BACKEND,
-      gpuName: this.current.gpuName ?? null
+      gpuName: this.current.gpuName ?? null,
+      // A start in flight for a DIFFERENT model than the running one = a switch underway.
+      startingModelId: startingModelId !== this.current.modelId ? startingModelId : null
     }
   }
 }
