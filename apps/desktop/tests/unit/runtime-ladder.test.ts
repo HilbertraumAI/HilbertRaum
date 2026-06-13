@@ -246,4 +246,22 @@ describe('createGpuCrashAutoFallback (§5.3)', () => {
     expect(() => handler(opts, info)).not.toThrow()
     await new Promise((r) => setTimeout(r, 0))
   })
+
+  // M-C3: a SYNCHRONOUS throw from restart() (before it returns a promise) must not
+  // wedge the re-entrancy guard `restarting=true` forever — a later crash must still
+  // be able to trigger a fresh fallback.
+  it('re-arms after a SYNCHRONOUS throw from restart() so future crashes still fall back', () => {
+    let calls = 0
+    const handler = createGpuCrashAutoFallback({
+      restart: () => {
+        calls++
+        throw new Error('sync boom') // throws before returning a promise
+      },
+      persistFailure: () => {}
+    })
+    expect(() => handler(opts, info)).not.toThrow()
+    // A second, later crash report is NOT suppressed — the guard reset, so restart runs again.
+    expect(() => handler(opts, info)).not.toThrow()
+    expect(calls).toBe(2)
+  })
 })
