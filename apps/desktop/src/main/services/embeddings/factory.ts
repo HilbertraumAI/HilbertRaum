@@ -1,8 +1,8 @@
-import { existsSync } from 'node:fs'
 import type { Embedder } from './index'
 import { createMockEmbedder } from './mock'
 import { createE5Embedder } from './e5'
 import { resolveLlamaServerPath } from '../runtime/sidecar'
+import { resolveSidecarSelection } from '../select-sidecar-backed'
 
 // Availability-aware embedder selector (graceful-fallback rule), mirroring
 // the runtime factory. The real `E5Embedder` (a loopback `llama-server --embedding`
@@ -38,8 +38,6 @@ export interface EmbedderSelectionDeps {
  * is lazy-started on first `embed()`), so this returns synchronously.
  */
 export function createSelectedEmbedder(deps: EmbedderSelectionDeps): Embedder {
-  const resolveBin = deps.resolveBin ?? ((root: string) => resolveLlamaServerPath(root))
-  const modelExists = deps.modelExists ?? existsSync
   const makeMock = deps.makeMock ?? (() => createMockEmbedder())
   const makeE5 =
     deps.makeE5 ??
@@ -52,19 +50,21 @@ export function createSelectedEmbedder(deps: EmbedderSelectionDeps): Embedder {
         contextTokens: model.contextTokens
       }))
 
-  if (!deps.model) {
-    deps.onSelect?.('mock', 'no embeddings model configured')
+  // Shared model→binary→weights ladder (L16). The embedder is the one selector that
+  // degrades to a MockEmbedder instead of null, so the app launches with zero model files.
+  const sel = resolveSidecarSelection<EmbeddingModelInfo, Embedder>({
+    rootPath: deps.rootPath,
+    model: deps.model,
+    resolveBin: deps.resolveBin ?? ((root) => resolveLlamaServerPath(root)),
+    modelExists: deps.modelExists,
+    makeReal: makeE5,
+    binaryName: 'llama-server',
+    modelNoun: 'embedding model'
+  })
+  if (!sel.available) {
+    deps.onSelect?.('mock', sel.reason)
     return makeMock()
   }
-  const binPath = resolveBin(deps.rootPath)
-  if (!binPath) {
-    deps.onSelect?.('mock', 'no llama-server binary on the drive')
-    return makeMock()
-  }
-  if (!modelExists(deps.model.modelPath)) {
-    deps.onSelect?.('mock', 'embedding model weights not present')
-    return makeMock()
-  }
-  deps.onSelect?.('e5', 'binary + weights present')
-  return makeE5(deps.model, binPath)
+  deps.onSelect?.('e5', sel.reason)
+  return makeE5(sel.model, sel.binPath)
 }
