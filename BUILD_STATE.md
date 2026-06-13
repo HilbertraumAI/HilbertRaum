@@ -709,10 +709,17 @@ Repo root: `f:\_coding\ai_drive`.
   decision** (`security-model.md` §2 "Detection-only, not enforcement" — enforcing via the
   process-wide `net.Socket.connect` shim would turn a host-extraction edge case into a hard offline
   failure breaking loopback IPC/sidecar; the guarantee rests on the no-remote-code posture + the
-  prod CSP). Suite **1026 green**, typecheck + build clean. **Still open** (lower priority): the
-  M-U/M-A UX & architecture refactors, the a11y LOWs (L7 streaming live region, L8 unlabeled
-  composer, M-U1 error-banner announcement), and the M-A1 follow-up (extend the drift test to the
-  `config/*.json` payloads + sha/format gates).
+  prod CSP). **Round 4** banked the a11y trio + the M-A1 follow-up: L8 (composer `aria-label`
+  mirroring the mode prompt), M-U1 (new `ErrorBanner` — an always-mounted `role="alert"`
+  `display:contents` wrapper that swaps text; Banner took a `role` override so the inner one is
+  `status` not a nested alert; chat/documents/models error banners migrated), L7 (the visible
+  streaming markdown is no longer a live region — a separate `.sr-only` `StreamAnnouncer` announces
+  only newly-completed sentences, markdown-stripped, resetting per stream), and M-A1 **completed**
+  (drift test extended to the `config/{drive,policy}.json` payloads vs `buildDriveJson`/`buildPolicyJson`
+  for both editions, plus the `verify-models.{ps1,sh}` sha256 regex vs `isRealSha256` and the
+  runtime/format gate vs the now-exported `SUPPORTED_RUNTIMES`/`SUPPORTED_FORMATS`). Suite **1043 green**,
+  typecheck + build clean. **Still open** (lower priority): the M-U2..6 / M-A2..5 UX & architecture
+  refactors, the remaining a11y LOWs (L1, L9–L15), and the security/correctness LOWs (L2–L6, L16–L19).
 - **D1 re-affirmed — unified auto-RAG chat stays NOT built (2026-06-12):** the Phase-21 data
   the original deferral waited for is in, and it argues AGAINST unifying now: no cheap
   relevance gate exists under prefix-less E5 (the measured-floor overlap, rag-design �12.1
@@ -1472,8 +1479,8 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
 5. **ANN vector index** only if a real corpus outgrows the linear scan (rag-design §12.2 D15 —
    explicitly not built).
 
-**Current gate (2026-06-13, post i18n wave + audit HIGH+MEDIUM remediation on branch
-`audit-2026-06-13-high-fixes`): typecheck clean, 1026 tests pass (25 skipped — the manual
+**Current gate (2026-06-13, post i18n wave + audit HIGH+MEDIUM+round-4 remediation on branch
+`audit-2026-06-13-high-fixes`): typecheck clean, 1043 tests pass (25 skipped — the manual
 tests behind `PAID_*` env vars: GPU/thinking/rerank/minsim/RAG-quality/bring-up/
 eval/concurrency-probe/translation/compare/whisper/dictation/OCR smokes — skipped in CI),
 `npm run build` green. Full-suite runs on a loaded machine can flake 1–2 timeout failures
