@@ -22,7 +22,7 @@ export interface LocalIndicatorProps {
    */
   offline?: boolean
   variant?: 'header' | 'sidebar'
-  /** Bound translate fn for the built-in label/detail (i18n-plan §5 ⑤); English default. */
+  /** Bound translate fn for the built-in label/detail (i18n record §5 ⑤); English default. */
   t?: Translator
 }
 

@@ -14,9 +14,9 @@ import { t } from '../../src/shared/i18n'
 import type { AppStatus, RuntimeStatus } from '../../src/shared/types'
 import { stubApi } from '../helpers/renderer'
 
-// Phase-40 German render smokes (i18n-plan §5): one per migrated screen. Each renders
+// Phase-40 German render smokes (i18n record §5): one per migrated screen. Each renders
 // the screen inside I18nProvider with the pre-unlock localStorage mirror seeded 'de'
-// (i18n-plan §3.2 / D-L3) and asserts a German string from the de catalog — proving the
+// (i18n record §3.2 / D-L3) and asserts a German string from the de catalog — proving the
 // screen's copy actually flows through t() (an untranslated literal would stay English).
 // Assertions reference the catalogs (D-L8), never re-typed literals.
 

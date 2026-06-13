@@ -829,7 +829,7 @@ export class WorkspaceController {
    */
   beginDocumentWork(): () => void {
     if (this.changingPassword) {
-      // Emission (i18n-plan §3.3 rule 2): user-facing, transient — localized via tMain.
+      // Emission (i18n record §3.3 rule 2): user-facing, transient — localized via tMain.
       throw new VaultBusyError(tMain('main.workspace.busyPasswordChange'))
     }
     this.docWork += 1

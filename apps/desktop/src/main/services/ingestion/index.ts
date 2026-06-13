@@ -372,7 +372,7 @@ export async function processDocument(
     if (!storedPath || !existsSync(storedPath)) {
       const origin = row.original_path
       if (!origin || !existsSync(origin)) {
-        // Persist-canonical English (i18n-plan §3.3 rule 1): the catch below writes
+        // Persist-canonical English (i18n record §3.3 rule 1): the catch below writes
         // this into documents.error_message; the display map translates it (D-L4).
         throw new Error(t('en', 'main.ingest.sourceMissing'))
       }
@@ -831,7 +831,7 @@ export function reconcileStuckDocuments(db: Db, beforeIso: string): number {
       `UPDATE documents SET status = 'failed', error_message = ?, updated_at = ?
        WHERE status IN ('queued','extracting','chunking','embedding') AND updated_at < ?`
     )
-    // Persist-canonical English (i18n-plan §3.3 rule 1) — display-mapped at render.
+    // Persist-canonical English (i18n record §3.3 rule 1) — display-mapped at render.
     .run(t('en', 'main.ingest.interrupted'), nowIso(), beforeIso)
   return Number(res.changes ?? 0)
 }

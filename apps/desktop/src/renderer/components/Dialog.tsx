@@ -37,7 +37,7 @@ export interface ModalProps {
   ariaLabel?: string
   width?: 'content' | 'wide'
   children: ReactNode
-  /** Bound translate fn for the built-in Close label (i18n-plan §5 ⑤); English default. */
+  /** Bound translate fn for the built-in Close label (i18n record §5 ⑤); English default. */
   t?: Translator
 }
 
@@ -87,7 +87,7 @@ export interface ConfirmDialogProps {
   onConfirm: () => void
   /** Called on Cancel, Esc, and clicking the overlay. */
   onCancel: () => void
-  /** Bound translate fn for the built-in Cancel label (i18n-plan §5 ⑤); English default. */
+  /** Bound translate fn for the built-in Cancel label (i18n record §5 ⑤); English default. */
   t?: Translator
 }
 

@@ -25,7 +25,7 @@ import type { AppSettings, ThemeSetting } from '@shared/types'
 // the right tab from anywhere; standalone use (tests) falls back to internal state.
 //
 // Labels live in the message catalogs as keys, resolved with t() at render
-// (i18n-plan §5 label-map rule).
+// (i18n record §5 label-map rule).
 
 const TAB_CHOICES: Array<{ value: SettingsTab; labelKey: MessageKey }> = [
   { value: 'general', labelKey: 'settings.tab.general' },
@@ -39,7 +39,7 @@ const THEME_CHOICES: Array<{ value: ThemeSetting; labelKey: MessageKey }> = [
   { value: 'dark', labelKey: 'settings.appearance.dark' }
 ]
 
-// Language names stay UNTRANSLATED (i18n-plan §4, standard practice): a German
+// Language names stay UNTRANSLATED (i18n record §3.3, standard practice): a German
 // speaker stuck on an English UI must still recognize „Deutsch“ — and "System" is
 // the same word in both languages.
 const LANGUAGE_CHOICES: Array<{ value: UiLanguageSetting; label: string }> = [

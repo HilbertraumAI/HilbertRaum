@@ -15,7 +15,7 @@ export interface ChipProps {
   disabled?: boolean
   /** Chips can also be actions themselves (e.g. example prompts that fill the composer). */
   onClick?: () => void
-  /** Bound translate fn for the built-in remove fallback (i18n-plan §5 ⑤); English default. */
+  /** Bound translate fn for the built-in remove fallback (i18n record §5 ⑤); English default. */
   t?: Translator
 }
 

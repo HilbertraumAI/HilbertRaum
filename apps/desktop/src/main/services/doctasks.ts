@@ -69,7 +69,7 @@ import { log } from './logging'
 
 // Friendly copy (spec §11.4) for the guards + failure states. Task errors live ONLY in
 // the in-memory polling status (never the DB — verified for the i18n boundary, plan §6
-// fact-5 check), so the THROW sites localize via tMain() (i18n-plan §3.3 rule 2). The
+// fact-5 check), so the THROW sites localize via tMain() (i18n record §3.3 rule 2). The
 // canonical-English constants stay exported for the exact-string tests (D-L8).
 export const TASK_NEEDS_RUNTIME_MESSAGE = t('en', 'main.noModelRunning')
 export const TASK_REFUSED_CHAT_STREAMING_MESSAGE = t('en', 'main.task.refusedChatStreaming')

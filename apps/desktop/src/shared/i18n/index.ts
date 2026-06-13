@@ -1,7 +1,7 @@
 import { en } from './en'
 import { de } from './de'
 
-// Hand-rolled, typed i18n for the two UI languages (i18n-plan §3.1, D-L1): synchronous
+// Hand-rolled, typed i18n for the two UI languages (i18n record §3.1, D-L1): synchronous
 // flat-catalog lookup with `{name}` interpolation and `.one`/`.other` plural pairs.
 // Importable from BOTH processes (like `shared/types.ts`); no dependency, no async
 // resource loading, nothing fetched at runtime — the catalogs are bundled statically.

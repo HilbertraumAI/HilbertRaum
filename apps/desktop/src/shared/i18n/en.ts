@@ -1,4 +1,4 @@
-// The ENGLISH catalog — the source of truth for every message key (i18n-plan §3.1,
+// The ENGLISH catalog — the source of truth for every message key (i18n record §3.1,
 // D-L1). Flat keys, `{name}` interpolation placeholders, `.one`/`.other` plural pairs.
 // `de.ts` is typed `Record<MessageKey, string>` against this object, so `npm run
 // typecheck` fails when the catalogs drift apart.
@@ -625,7 +625,7 @@ export const en = {
   'diag.logs.hide': 'Hide logs',
   'diag.logs.empty': '(log is empty)',
 
-  // ---- Shared components' built-in copy (receive a bound t — i18n-plan §5 ⑤) ----
+  // ---- Shared components' built-in copy (receive a bound t — i18n record §5 ⑤) ----
   'common.dismiss': 'Dismiss',
   'common.close': 'Close',
   'common.cancel': 'Cancel',
@@ -690,7 +690,7 @@ export const en = {
   'gate.create.submitBusy': 'Creating…',
   'gate.error.generic': 'Something went wrong. Please try again.',
 
-  // ---- Main-process strings (Phase 41, i18n-plan §3.3 two-rule boundary) --------------
+  // ---- Main-process strings (Phase 41, i18n record §3.3 two-rule boundary) --------------
   //
   // PERSIST-CANONICAL set (D-L4): these English values are what gets WRITTEN to the DB
   // (documents.error_message, messages.content) or to settings.lastBenchmark.warnings —

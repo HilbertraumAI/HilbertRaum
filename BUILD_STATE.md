@@ -6,11 +6,13 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
-_Last updated: 2026-06-13 — **Phase 41 (i18n main-process boundary) is DONE** (see the
-§1 row + the §3 entry; working paper `docs/i18n-plan.md` §6 has the as-built notes incl.
-the fact-5 classification findings; D-L4 is now LOCKED). Same day, earlier: Phase 40
-(renderer sweep, plan §5) and Phase 39 (foundation + proof slice, plan §4 + R-L1
-locale finding). Only Phase 42 (German QA + closeout) remains in the i18n wave._
+_Last updated: 2026-06-13 — **Phase 42 (German QA + closeout) is DONE ⇒ the i18n wave
+(Phases 39–42) is COMPLETE.** The working paper `docs/i18n-plan.md` was condensed into
+the design record per the doc lifecycle rule — `docs/architecture.md`
+"Internationalization — design record" (D-L1–L8; code comments cite "i18n record §N") +
+`docs/design-guidelines.md` §7 "German microcopy"; full original:
+`git show 5059ed8:docs/i18n-plan.md`. **One open item: the user's human review of the
+German copy (D-L7 sign-off) — the Phase-42 change list was handed over for review.**_
 
 **Where the project stands:** the MVP (Phases 0–13) is feature-complete and four post-MVP
 audit rounds are fully remediated (§8). Every shipped wave since is DONE and condensed into a
@@ -36,14 +38,16 @@ design record per the CLAUDE.md doc lifecycle rule:
   document tasks + summary · translation · compare · audio transcription · dictation · OCR —
   [`docs/functionality-wave-3-plan.md`](docs/functionality-wave-3-plan.md) (D23–D37; research
   gates R-S1/R-T1–2/R-W1–4/R-O1–3 with their banked findings in its §14).
+- **i18n wave (Phases 39–42):** English + German UI (`uiLanguage` setting + picker,
+  pre-unlock gate language, full renderer sweep, the two-rule main-process boundary,
+  German QA) — `docs/architecture.md` "Internationalization — design record" (D-L1–L8)
+  + `docs/design-guidelines.md` §7 "German microcopy".
 
 **Open:** Phase 22 (signed offline update bundles) is 🔴 blocked on a key-management design;
 Phase 30 (opt-in big slot + embeddings) has a drafted working paper
-([`docs/big-slot-embeddings-plan.md`](docs/big-slot-embeddings-plan.md)); the i18n wave
-(English + German UI, [`docs/i18n-plan.md`](docs/i18n-plan.md)) has **Phases 39–41
-done** (foundation + proof slice; full renderer sweep; main-process boundary — emissions
-localize via `tMain()`, persisted strings stay canonical English behind the D-L4 display
-map) and only Phase 42 open (German QA + closeout). Release-wise the
+([`docs/big-slot-embeddings-plan.md`](docs/big-slot-embeddings-plan.md)); the i18n wave's
+German copy awaits the **user's human review pass (D-L7)** — the Phase-42 change list +
+screenshots were handed over. Release-wise the
 remaining work is **manual acceptance only** (§5). Consciously-accepted gaps live in
 [`docs/known-limitations.md`](docs/known-limitations.md).
 
@@ -86,10 +90,10 @@ remaining work is **manual acceptance only** (§5). Consciously-accepted gaps li
 | 36 | Audio transcription as ingestion (whisper.cpp sidecar family) | 🟢 done 2026-06-11 — wave-3 record §9 |
 | 37 | Voice dictation in the composer | 🟢 done 2026-06-11 — wave-3 record §10 |
 | 38 | Scanned-PDF / photo OCR (tesseract.js + `ocr/` assets) | 🟢 done 2026-06-11 — wave-3 record §11; **wave 3 COMPLETE** |
-| 39 | i18n foundation + proof slice (shared `t()` + catalogs, `uiLanguage` + picker, pre-unlock language) | 🟢 done 2026-06-13 — `docs/i18n-plan.md` §4 (as built + R-L1 finding) |
-| 40 | i18n renderer string sweep (all screens/components, plurals, dates/numbers, shared-component `t` prop) | 🟢 done 2026-06-13 — `docs/i18n-plan.md` §5 (as built + grep-audit result) |
-| 41 | i18n main-process boundary (emissions via `tMain()`, persist-canonical English + D-L4 display map, dialog titles) | 🟢 done 2026-06-13 — `docs/i18n-plan.md` §6 (as built + fact-5 findings) |
-| 42 | i18n German QA + closeout (de review, text-expansion audit, eyeball walk, docs) | ⚪ not started — plan `docs/i18n-plan.md` §7 |
+| 39 | i18n foundation + proof slice (shared `t()` + catalogs, `uiLanguage` + picker, pre-unlock language) | 🟢 done 2026-06-13 — `architecture.md` i18n record (§3.1/§3.2 + R-L1 finding) |
+| 40 | i18n renderer string sweep (all screens/components, plurals, dates/numbers, shared-component `t` prop) | 🟢 done 2026-06-13 — `architecture.md` i18n record §5 |
+| 41 | i18n main-process boundary (emissions via `tMain()`, persist-canonical English + D-L4 display map, dialog titles) | 🟢 done 2026-06-13 — `architecture.md` i18n record §3.3 |
+| 42 | i18n German QA + closeout (de review, text-expansion audit, eyeball walk, docs) | 🟢 done 2026-06-13 — **wave COMPLETE**; record + Phase-42 QA notes in `architecture.md`; German human review (D-L7) handed to the user |
 
 Legend: ⚪ not started · 🟡 in progress · 🟢 done · 🔴 blocked
 
@@ -696,8 +700,9 @@ Repo root: `f:\_coding\ai_drive`.
   a measurable floor) — rider recorded in `big-slot-embeddings-plan.md` �4.4; full
   rationale in `rag-design.md` �10 (D1).
 
-- **Phase 39 — i18n foundation + proof slice (2026-06-13; plan `docs/i18n-plan.md`, as-built
-  record in its §4):** hand-rolled typed i18n in `shared/i18n/` — `en.ts` flat
+- **Phase 39 — i18n foundation + proof slice (2026-06-13; condensed record:
+  `architecture.md` "Internationalization — design record"; full original plan
+  `git show 5059ed8:docs/i18n-plan.md` §4):** hand-rolled typed i18n in `shared/i18n/` — `en.ts` flat
   source-of-truth catalog (`MessageKey = keyof typeof en`), `de.ts` typed
   `Record<MessageKey, string>` so **typecheck enforces catalog parity**, `t`/`tCount`
   (`.one`/`.other`, n === 1 rule)/`resolveUiLanguage` — synchronous, **zero new deps**
@@ -721,8 +726,9 @@ Repo root: `f:\_coding\ai_drive`.
   (picker patch + mirror + German gate smoke); one scoping edit in `Theme.test.tsx` (the
   General tab now has two "System" radios — scope by radiogroup, don't rename). Persisted
   DB strings and LLM prompts untouched (D-L4/D-L6 wait for Phases 41/42).
-- **Phase 40 — i18n renderer string sweep (2026-06-13; as-built notes + grep-audit result
-  in `docs/i18n-plan.md` §5):** every remaining renderer screen/component migrated to the
+- **Phase 40 — i18n renderer string sweep (2026-06-13; sweep conventions kept as
+  `architecture.md` i18n record §5; grep-audit result in the original plan §5,
+  `git show 5059ed8:docs/i18n-plan.md`):** every remaining renderer screen/component migrated to the
   shared catalogs in five batch commits (① Home + chat components + App leftovers ②
   Documents ③ Models ④ Privacy/Diagnostics tabs ⑤ shared components), catalogs now
   ~440 keys/language with **English values byte-identical** (D-L8 — the pre-existing
@@ -743,8 +749,9 @@ Repo root: `f:\_coding\ai_drive`.
   `tests/renderer/GermanSmoke.test.tsx` (German render smoke per migrated screen + the
   shared-component built-ins); grep audit clean (remaining capitalized literals =
   comments, dev-internal throws, `e.key` names — recorded in plan §5).
-- **Phase 41 — i18n main-process boundary (2026-06-13; as-built notes + fact-5
-  classification findings in `docs/i18n-plan.md` §6; D-L4 LOCKED):** the §3.3 two-rule
+- **Phase 41 — i18n main-process boundary (2026-06-13; condensed as `architecture.md`
+  i18n record §3.3; fact-5 classification findings in the original plan §6,
+  `git show 5059ed8:docs/i18n-plan.md`; D-L4 LOCKED):** the §3.3 two-rule
   boundary applied across the main process in four step commits. **Rule 1 (persist
   canonical, LOCKED D-L4):** everything written to the DB / settings stays canonical
   English via explicit `t('en', …)` + a §3.3 comment — the 7 parser-failure constants
@@ -772,6 +779,39 @@ Repo root: `f:\_coding\ai_drive`.
   **1007 green**; new `tests/integration/i18n-boundary.test.ts` +
   `tests/unit/display-map.test.ts`; built bundle launch-smoked on this de-AT machine
   (German home, German no-model IPC refusal in vivo).
+- **Phase 42 — i18n German QA + closeout (2026-06-13) ⇒ i18n wave (39–42) COMPLETE;
+  plan condensed to `architecture.md` "Internationalization — design record" +
+  `design-guidelines.md` §7 "German microcopy" and DELETED
+  (`git show 5059ed8:docs/i18n-plan.md`); ~51 code comments retargeted from
+  "i18n-plan §" to "i18n record §" (§-numbers preserved):**
+  ① full `de.ts` review pass — 9 value fixes (imperative consistency prüfe→prüf,
+  Mock→Demo-Runtime, grammar/idiom fixes; commit `a4d91de`), the user holds the final
+  D-L7 human-review pass. ② German eyeball walk (`%TEMP%\paid-eyeball\walk-phase42.mjs`,
+  shots in `shots-p42`): encrypted first-run gate flow + every screen at BOTH window
+  extremes (880×600 / 1920×1040) with a programmatic overflow scan, plus an English
+  regression leg via the picker. Three text-expansion findings, all fixed with LAYOUT:
+  `.chat-header` wraps (the German mode label + ambient indicator clipped at 880),
+  chat empty-state example chips wrap instead of ellipsizing at the 240px chip cap,
+  `.kv dd` uses `overflow-wrap: anywhere` (break-all cut German words mid-word).
+  ③ Untranslated-string finding fixed: the persisted default conversation title
+  `'New chat'` is persist-canonical with a behavioral exact-match
+  (`maybeSetTitleFromFirstMessage`) ⇒ new `main.chat.defaultTitle` key (persist-canonical
+  section), `DEFAULT_TITLE = t('en', …)`, display-map entry, `ConversationList` passes
+  titles through `localizeServerCopy` (real user titles pass through). ④ Catalog hygiene
+  tests extended: plural-pair completeness + `DISPLAY_MAP_KEYS` ↔ persist-canonical
+  section pinned key-for-key (`display-map.test.ts`). ⑤ **All seven acceptance criteria
+  verified explicitly:** (1) instant System/English/Deutsch switch + `<html lang>` in
+  vivo; (2) German gate/first-run/post-unlock with zero stored state in vivo (cleared
+  localStorage + reload); (3) no English remnant in the German walk (product
+  name/technical values excepted — the one finding was ③, fixed); (4) scanned-PDF under
+  German UI: scanDetected intact, German failure row, OCR offer present, same row
+  canonical English after switching (display map works both ways); (5) wrong-password +
+  no-model refusals German in vivo, download/policy refusal copy pinned by
+  main-i18n/boundary tests; (6) suite 1010 green + typecheck green, removing a de.ts key
+  ⇒ TS2741 (demonstrated); (7) zero new deps / no network / audit-log untouched (phase
+  diff inspected). ⑥ `known-limitations.md` "Internationalization" section added (D-L6
+  documented ⇒ RESOLVED; audit-log English; interpolated/library errors render as-is;
+  user-guide/README English-only for now; mixed-language transcripts accepted).
 
 ---
 
@@ -906,6 +946,8 @@ equal-ms ties → stable turn order). **System prompt is built per request, NOT 
 `shared/types.ts`. `messages.citations_json` stays null until Phase 6.
 ✅ **Title:** new conversations are `"New chat"`; first user message sets the title (≤60 chars),
 later messages don't overwrite it. Conversations list newest-updated first.
+(Phase 42: the default is persist-canonical English — `t('en', 'main.chat.defaultTitle')`,
+value unchanged — and display-mapped to the UI language at render, D-L4.)
 
 ### Streaming contract (LOCKED — Phase 3; one ADDITIVE channel in Phase 20)
 Main → renderer over per-conversation IPC event channels keyed by the **conversation id**

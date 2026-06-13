@@ -9,7 +9,7 @@ import {
 } from '../../src/shared/i18n'
 import { DEFAULT_SETTINGS } from '../../src/shared/types'
 
-// Phase 39 — the shared i18n module (i18n-plan §3.1, D-L1/D-L2/D-L8): synchronous
+// Phase 39 — the shared i18n module (i18n record §3.1, D-L1/D-L2/D-L8): synchronous
 // lookup, {name} interpolation, .one/.other plurals, English fallback, and the
 // 'system' → locale resolution the setting + the pre-unlock gate both use.
 

@@ -10,7 +10,7 @@ import {
   type UiLanguageSetting
 } from '@shared/i18n'
 
-// Renderer-side language resolution (i18n-plan §3.2, D-L2/D-L3) — the theme.ts
+// Renderer-side language resolution (i18n record §3.2, D-L2/D-L3) — the theme.ts
 // pattern: settings live in the possibly-encrypted DB and are unreadable pre-unlock,
 // so the gate resolves from a localStorage MIRROR of the last resolved language
 // (a UI preference, not user data — the ChatScreen list-collapse precedent), falling

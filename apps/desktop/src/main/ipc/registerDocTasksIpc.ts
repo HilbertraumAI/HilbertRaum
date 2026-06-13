@@ -15,7 +15,7 @@ import type { DocTaskStatus, StartDocTaskRequest } from '../../shared/types'
 // them. The manager records the ids-only `document_task_*` audit events itself.
 
 export function registerDocTasksIpc(ctx: AppContext): void {
-  // Guard throws are ephemeral IPC emissions — localized via tMain (i18n-plan §3.3).
+  // Guard throws are ephemeral IPC emissions — localized via tMain (i18n record §3.3).
   const requireTasks = () => {
     if (!ctx.docTasks) throw new Error(tMain('main.task.unavailable'))
     return ctx.docTasks

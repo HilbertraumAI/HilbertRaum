@@ -7,7 +7,7 @@ import type { ChatDepthMode } from '@shared/types'
 // prominent 3-way toggle. UI labels are Quick · Balanced · Thorough; the ids stay
 // `fast|balanced|deep` everywhere in code/IPC/persistence (no data migration).
 // Thorough is offered only when the running model's manifest declares thinking support.
-// Label/hint maps hold MessageKeys resolved at render (i18n-plan §5).
+// Label/hint maps hold MessageKeys resolved at render (i18n record §5).
 
 export const DEPTH_LABEL_KEYS: Record<ChatDepthMode, MessageKey> = {
   fast: 'chat.depth.fast',

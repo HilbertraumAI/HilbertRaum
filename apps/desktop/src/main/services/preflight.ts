@@ -58,7 +58,7 @@ export async function runPreflight(deps: PreflightDeps): Promise<PreflightResult
   const slowDriveWarning = driveWarnings.find((w) => /drive/i.test(w)) ?? null
 
   // Problems are ephemeral (IPC response only) — localized at emission via tMain
-  // (i18n-plan §3.3 rule 2). slowDriveWarning above stays canonical English: it comes
+  // (i18n record §3.3 rule 2). slowDriveWarning above stays canonical English: it comes
   // from buildWarnings, whose copy is persisted with benchmark results, so the
   // renderer display map translates it at display instead (D-L4).
   const problems: string[] = []

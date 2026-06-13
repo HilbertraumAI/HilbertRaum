@@ -48,7 +48,7 @@ export interface DownloadGates {
  * mirrors the Models screen's explanations (policy vs. Settings — the `PolicyStatus`
  * distinction the Privacy screen already makes). Job errors and throws in this service
  * are session-only (never persisted), so they localize at emission via tMain()
- * (i18n-plan §3.3 rule 2).
+ * (i18n record §3.3 rule 2).
  */
 export function assertDownloadAllowed(gates: DownloadGates): void {
   if (!gates.policyAllows) {

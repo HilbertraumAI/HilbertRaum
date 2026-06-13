@@ -13,7 +13,7 @@ import type { AppSettings, DownloadJob, ModelInfo, ModelState, PolicyStatus } fr
 const UNKNOWN_RAM = null
 
 // Status pills: icon + word, never color-only (guidelines §6). Label values are
-// MessageKeys resolved at render (i18n-plan §5).
+// MessageKeys resolved at render (i18n record §5).
 const STATE_BADGE: Record<ModelState, { labelKey: MessageKey; tone: BadgeTone; icon: string }> = {
   installed: { labelKey: 'models.state.installed', tone: 'success', icon: '✓' },
   missing: { labelKey: 'models.state.missing', tone: 'neutral', icon: '○' },

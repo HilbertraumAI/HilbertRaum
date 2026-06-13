@@ -22,7 +22,7 @@ export interface BannerProps {
   action?: ReactNode
   /** When set, renders a ✕ dismiss button that calls this. */
   onDismiss?: () => void
-  /** Bound translate fn for the built-in dismiss label (i18n-plan §5 ⑤); English default. */
+  /** Bound translate fn for the built-in dismiss label (i18n record §5 ⑤); English default. */
   t?: Translator
 }
 

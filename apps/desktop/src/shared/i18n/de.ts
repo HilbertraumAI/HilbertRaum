@@ -2,9 +2,9 @@ import type { en } from './en'
 
 // The GERMAN catalog. Typed against the English source-of-truth catalog, so a missing,
 // stale, or extra key is a `npm run typecheck` failure — no partial catalogs, ever
-// (i18n-plan §3.1, D-L1).
+// (i18n record §3.1, D-L1).
 //
-// Style (i18n-plan §3.5, D-L7): informal „du", lowercase „du/dein" mid-sentence,
+// Style (i18n record §3.5, D-L7): informal „du", lowercase „du/dein" mid-sentence,
 // consistently — including errors and the gate. The copy ADAPTS the friendly spec-§11.4
 // tone rather than translating literally. The product name "Private AI Drive Lite" is
 // never translated (D-L4 note); language names in the picker stay untranslated.

@@ -110,7 +110,7 @@ export function registerChatIpc(ctx: AppContext): void {
       const runtime = ctx.runtime.active()
       if (!runtime) {
         // No model loaded — surface a clear, recoverable error to the renderer.
-        // Guard throws here are ephemeral IPC emissions → tMain (i18n-plan §3.3);
+        // Guard throws here are ephemeral IPC emissions → tMain (i18n record §3.3);
         // DOC_TASK_BUSY_MESSAGE below deliberately stays canonical English on the
         // wire — the renderer recognizes it by exact match and display-maps it.
         throw new Error(tMain('main.noModelRunning'))

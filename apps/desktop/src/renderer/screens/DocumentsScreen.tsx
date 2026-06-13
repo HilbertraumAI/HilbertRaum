@@ -31,7 +31,7 @@ import type { MessageKey, UiLanguage } from '@shared/i18n'
 // Status pills: icon + word, never color-only (guidelines §6). Labels speak
 // human — the pipeline stages (extract/chunk/embed) read as "Reading"/"Preparing";
 // the raw stage names stay in logs/Diagnostics. Label values are MessageKeys
-// resolved at render (i18n-plan §5).
+// resolved at render (i18n record §5).
 const STATUS_BADGE: Record<IngestionStatus, { labelKey: MessageKey; tone: BadgeTone; icon: string }> = {
   queued: { labelKey: 'docs.status.queued', tone: 'accent', icon: '…' },
   extracting: { labelKey: 'docs.status.extracting', tone: 'accent', icon: '⟳' },
@@ -84,7 +84,7 @@ const TASK_BUSY_TITLE: Record<DocTaskKind, MessageKey> = {
   ocr: 'docs.task.ocrBusyTitle'
 }
 
-// Decimal separator follows the UI language (i18n-plan §5); units stay as-is.
+// Decimal separator follows the UI language (i18n record §5); units stay as-is.
 function formatSize(bytes: number | null, lang: UiLanguage): string {
   if (bytes == null) return '—'
   if (bytes < 1024) return `${bytes} B`

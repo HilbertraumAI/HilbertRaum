@@ -1,6 +1,6 @@
 # Known limitations & accepted trade-offs
 
-_Last updated: 2026-06-12 (housekeeping: refreshed the measured Phase-21 entries; reference homes updated)._
+_Last updated: 2026-06-13 (Phase 42: added the Internationalization section)._
 
 The MVP (Phases 0–13) is feature-complete. Four post-MVP multi-persona audit rounds (2026-06-09)
 found and fixed every Critical, High, and Medium finding plus the actionable Lows — see
@@ -282,6 +282,30 @@ logs, best-effort shredding on SSDs, no password recovery — are documented in
   cannot load scripts from inside `app.asar`). Wired in `electron-builder.yml`;
   verifying a real OCR run from the produced portable .exe is a release-acceptance
   item (the green gate never packages — the R2 posture).
+
+## Internationalization (Phases 39–42, [`architecture.md`](architecture.md) i18n record)
+
+- **Task/summary output language follows the model, not the UI (D-L6 — RESOLVED as
+  documented).** LLM prompts are pinned English (Phase-29 benchmark comparability; models
+  follow the language of the user's question naturally), so a one-click summary of a German
+  document may come back in English depending on the model. Making task-output language
+  explicit is a separate future feature — it belongs with the existing
+  `TranslationTargetLang` machinery, not with UI i18n.
+- **Audit-log messages and the activity export stay English.** `runtime_events.message` is
+  written and exported as-is (the export is a diagnostic artifact); only the friendly TYPE
+  labels in the Diagnostics Activity panel are translated. Per the Phase-19 privacy rule the
+  messages carry ids/filenames/counts, never content — a stable English diagnostic record was
+  chosen over translated DB rows.
+- **Interpolated and library-origin error strings render as-is under German.** The D-L4
+  display map is exact-match over the finite persist-canonical set by design, so
+  `documents.error_message` values like `Unsupported file type: .xyz` and raw parser-library
+  errors (e.g. a pdfjs exception message) show English in a German UI. Rare failure-path
+  remnants, accepted.
+- **`user-guide.md`, `READ ME FIRST.txt`, and the drive docs are English-only for now.**
+  Translating them is content work, tracked separately from UI i18n.
+- **A conversation transcript can legitimately mix languages.** Old answers, model output,
+  and the fixed RAG answers translate (or don't) independently of the current UI language —
+  accepted.
 
 ## GPU acceleration (Phases 14–16, [`architecture.md`](architecture.md) GPU record)
 

@@ -52,7 +52,7 @@ export function splitSnippet(snippet: string): Array<{ text: string; match: bool
 }
 
 export interface ConversationGroup {
-  /** Resolved at render via t() — label maps keep their structure (i18n-plan §5). */
+  /** Resolved at render via t() — label maps keep their structure (i18n record §5). */
   labelKey: MessageKey
   conversations: Conversation[]
 }

@@ -25,7 +25,7 @@ export { passwordStrength, type PasswordStrength } from '../components'
 // on the drive. The UNLOCK path stays a single calm screen.
 //
 // Pre-unlock constraints: settings are unreadable (the gate follows the OS
-// theme only, and resolves its LANGUAGE from the localStorage mirror — i18n-plan
+// theme only, and resolves its LANGUAGE from the localStorage mirror — i18n record
 // §3.2), and `listModels` needs an unlocked workspace — so the step-3 check runs
 // AFTER create succeeds, before handing off to the shell. The password and derived key
 // never leave the main process — this screen only sends the typed password.

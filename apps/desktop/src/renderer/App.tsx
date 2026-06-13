@@ -32,7 +32,7 @@ const NAV_BOTTOM: NavItem[] = [{ id: 'settings', labelKey: 'nav.settings', icon:
 
 export function App(): JSX.Element {
   // The language provider wraps EVERYTHING, including the pre-unlock gate (which
-  // resolves from the localStorage mirror / OS locale — i18n-plan §3.2).
+  // resolves from the localStorage mirror / OS locale — i18n record §3.2).
   return (
     <I18nProvider>
       <AppShell />

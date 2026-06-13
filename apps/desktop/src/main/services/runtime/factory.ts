@@ -258,7 +258,7 @@ export function createSelectingRuntimeFactory(deps: RuntimeSelectionDeps): Runti
  * Friendly §11.4 copy for the mid-generation auto-fallback. Never "GPU failed" /
  * "your hardware is bad" — CPU mode is normal, not degraded. The canonical-English
  * constant stays exported for tests (D-L8); the notify site below emits via tMain()
- * (i18n-plan §3.3 rule 2 — runtime:notice is ephemeral).
+ * (i18n record §3.3 rule 2 — runtime:notice is ephemeral).
  */
 export const COMPATIBILITY_MODE_NOTICE = t('en', 'main.runtime.compatibilityMode')
 

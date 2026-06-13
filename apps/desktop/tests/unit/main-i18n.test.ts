@@ -6,7 +6,7 @@ import {
   tMain
 } from '../../src/main/services/i18n'
 
-// Phase 39 — the main process's cached resolved language (i18n-plan §3.2 D-L3 /
+// Phase 39 — the main process's cached resolved language (i18n record §3.2 D-L3 /
 // §3.3 D-L5): OS-locale guess until settings are readable, then the real setting;
 // tMain() localizes ephemeral emissions like the gate's wrong-password message.
 // Plain-node testable: the module never touches Electron (the locale is passed in).

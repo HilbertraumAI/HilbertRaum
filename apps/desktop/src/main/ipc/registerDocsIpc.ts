@@ -49,7 +49,7 @@ export function registerDocsIpc(ctx: AppContext): void {
 
   // DB-backed handlers require an unlocked workspace; surface a clean message instead of
   // the raw "Workspace is locked" the `ctx.db` getter would throw mid-operation.
-  // Guard throws are ephemeral IPC emissions — localized via tMain (i18n-plan §3.3).
+  // Guard throws are ephemeral IPC emissions — localized via tMain (i18n record §3.3).
   const requireUnlocked = (): void => {
     if (!ctx.workspace.isUnlocked()) {
       throw new Error(tMain('main.docs.locked'))

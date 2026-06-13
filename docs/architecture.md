@@ -792,6 +792,131 @@ audit round = commit `4549934` (same day; full finding list in BUILD_STATE §3 "
 round"); the full original plan: `git show 4549934:docs/gpu-support-plan.md`.
 
 
+## Internationalization — design record (Phases 39–42)
+
+_Formerly `docs/i18n-plan.md` (condensed here at the Phase-42 closeout, 2026-06-13, per the
+CLAUDE.md doc lifecycle rule; the full original working paper — phased plan, per-phase
+as-built notes, original research — is in git history:
+`git show 5059ed8:docs/i18n-plan.md`). The entire user-visible surface is available in
+**English and German**, selectable in Settings → General (default: follow the OS); the
+pre-unlock gate already renders in the right language. No new runtime dependency, no
+network, no behavior change outside copy. **§ numbers below are preserved from the plan —
+code comments cite them as "i18n record §N"** (the German style rules of §3.5 live in
+`design-guidelines.md` "German microcopy")._
+
+### Decisions (all LOCKED as built)
+
+| ID | Decision |
+|---|---|
+| D-L1 | Hand-rolled typed i18n module in `shared/i18n/` (flat keys, `{name}` interpolation, `.one`/`.other` plurals); **no new dependency**. `de.ts` is typed `Record<keyof typeof en, string>`, so typecheck enforces catalog parity — removing a key is a compile error. i18next/react-intl were rejected: async resource loading + ICU machinery en/de don't need, and a provider-suspense would have churned hundreds of green synchronous tests. |
+| D-L2 | `AppSettings.uiLanguage: 'system' \| 'en' \| 'de'`, default `'system'` (theme precedent); a `de`-prefixed OS locale ⇒ German, else English — **including the bare tag `'de'`** (the R-L1 finding below). |
+| D-L3 | Pre-unlock language: renderer = the `paid.uiLanguage` **localStorage mirror** → `navigator.language` fallback; main = a cached language from `app.getLocale()` until settings become readable (post-unlock / plaintext startup), refreshed on `uiLanguage` patches. |
+| D-L4 | **Persist canonical English, translate at display**: an exact-match display map over the finite static persisted set (`renderer/lib/displayMap.ts`). Keeps the `scanDetected` contract and pre-i18n rows valid; persisted copy is retroactively language-switchable. |
+| D-L5 | **Ephemeral main→user strings localize at emission** via `tMain()` + the cached language; the IPC error transport (`friendlyIpcError`) is unchanged. |
+| D-L6 | LLM prompts stay English and unchanged (Phase-29 benchmark comparability; models follow the question's language). Task-output language = a future feature; documented in `known-limitations.md` ("Internationalization"). |
+| D-L7 | German address form = informal **„du"** (lowercase mid-sentence), a deliberate brand choice (user decision 2026-06-13); glossary pinned in `de.ts`. Human review of the German copy gates the wave (the user is the reviewer). |
+| D-L8 | Default-English + synchronous `t()` keeps the ~323 pre-existing English copy assertions green; migrated assertions reference the `en` catalog instead of re-typed literals. English values for shipped strings stay **byte-identical** to the pre-i18n literals. |
+
+### §3.1 The i18n module
+
+`apps/desktop/src/shared/i18n/` (importable from both processes): `en.ts` is the
+source-of-truth catalog (~600 keys; `MessageKey = keyof typeof en`), `de.ts` the typed
+German catalog with the §3.5 glossary pinned on top, `index.ts` exports `t(lang, key,
+params?)` (synchronous lookup + `{name}` interpolation; unknown key/missing param falls
+back to English — never a crash), `tCount(lang, keyBase, n)` (`.one` for exactly 1, else
+`.other` — English and German share the n===1 rule), and `resolveUiLanguage(setting,
+osLocale)`.
+
+### §3.2 The setting and its resolution
+
+- Renderer: `renderer/i18n.tsx` — `I18nProvider`/`useT()` re-resolve on settings
+  load/patch, set `document.documentElement.lang`, and mirror the **resolved** language to
+  `localStorage('paid.uiLanguage')` (written only when a real setting resolves, never from
+  the pre-unlock guess). The gate reads the mirror, falling back to `navigator.language` —
+  a first run on a German OS shows a German gate with zero stored state; a user who chose
+  the non-OS language gets it back at the next gate render. The mirror is a UI preference,
+  not user data (the ChatScreen localStorage precedent).
+- Main: `services/i18n.ts` holds the cached resolved language — initialized from
+  `app.getLocale()` after `whenReady`, updated when settings become readable and inside
+  `updateSettings()`. Every main-side emission calls `tMain(key, params)`. No new IPC.
+- **R-L1 locale finding (measured on de-AT Windows 11, Electron 37):**
+  `app.getLocale()` returns the **bare language tag `'de'`** (Chromium UI language — not
+  always a full `de-DE` tag; `app.getSystemLocale()` gives `'de-AT'`), and the renderer's
+  `navigator.language` matches. ⇒ `resolveUiLanguage` accepts bare `'de'` as well as
+  `de-*`/`de_*` prefixes. The vitest environments are locale-independent (jsdom pins
+  `navigator.language` to en-US; unit tests pass explicit locales) — never write a test
+  that reads the real OS locale.
+
+### §3.3 The two-rule boundary for main-process strings
+
+- **Rule 1 — persist canonical, translate at display (D-L4).** Anything written to the DB
+  or settings keeps being written as the exact English catalog value via an explicit
+  `t('en', …)` at the persist site: the seven parser-failure constants (incl.
+  `PDF_SCAN_DETECTED_MESSAGE`, whose **exact-match derives `scanDetected`** — the OCR
+  offer), source-missing/interrupted ingestion messages, `NO_DOCUMENT_CONTEXT_ANSWER` +
+  `REINDEX_NEEDED_ANSWER` (persisted into `messages.content`), `DOC_TASK_BUSY_MESSAGE`
+  (recognized renderer-side via `includes`), the four `buildWarnings` strings (persisted in
+  `settings.lastBenchmark`), and the default conversation title `'New chat'` (exact-matched
+  by `maybeSetTitleFromFirstMessage`). The renderer translates at display via the
+  exact-match reverse lookup `localizeServerCopy()` over `DISPLAY_MAP_KEYS` — the en.ts
+  **persist-canonical section is a data contract**: editing a value breaks the match for
+  already-persisted rows. Unknown/interpolated strings (e.g. `Unsupported file type: …`,
+  raw parser-library errors) render as-is by design. A hygiene test pins
+  `DISPLAY_MAP_KEYS` ↔ the persist-canonical section key-for-key.
+- **Rule 2 — emit localized (D-L5).** Anything ephemeral (IPC guard throws, task-status
+  errors, download/policy refusals, preflight problems, `runtime:notice`, dialog titles +
+  picker filter names) localizes **in the main process at emission** via `tMain()`.
+  Transient messages interpolate values and cannot be exact-matched — that is why
+  display-mapping was rejected for this class.
+- The product name "Private AI Drive Lite" is never translated; language names in the
+  picker stay untranslated (`System`/`English`/`Deutsch`); technical values (model ids,
+  paths, hardware-profile codes) stay as-is. Audit-log `message` strings stay English in
+  the DB and export (the Phase-19 privacy rule; only the Activity panel's type labels
+  translate).
+
+### §3.4 LLM prompts stay English (D-L6)
+
+`BASE_SYSTEM_PROMPT`, the grounded template, and the task prompts are pinned — see the
+D-L6 row and `known-limitations.md`.
+
+### §3.5 German style
+
+See `design-guidelines.md` → "German microcopy (D-L7)": the glossary, the informal-du
+rules, and §11.4 tone adaptation. The glossary is also pinned as the comment block on top
+of `de.ts`.
+
+### §5 Renderer conventions (the Phase-40 sweep rules, kept for future strings)
+
+- Label maps keep their structure; `label` values are `MessageKey`s resolved at render
+  (`t(STATUS_BADGE[s].labelKey)`).
+- Every `aria-label`, `title`, `placeholder`, and confirm-dialog string is catalog copy —
+  accessibility copy is user-visible copy.
+- Hand-rolled plurals use `tCount`; the date sites + number formatting take the resolved
+  locale from `useT().lang` (`useGrouping: false` keeps English output byte-identical to
+  the old `toFixed`).
+- Inline JSX islands (`<code>`, `<strong>`) use before/after key pairs
+  (`app.fatal.hintBefore/After`).
+- Shared components RECEIVE a bound `t` prop/argument (`components/translator.ts`,
+  `englishTranslator` default) — they stay pure and provider-less tests keep working (⑤).
+- `MIC_BLOCKED_MESSAGE` stays canonical English in `lib/dictation.ts` and is exact-matched
+  at display in `DictationButton` — the renderer-internal analogue of the display map.
+- Tests assert via `t('en', key)` / the `en` catalog, never re-typed literals; German
+  render smokes live in `tests/renderer/GermanSmoke.test.tsx`.
+
+### Phase-42 QA (as built)
+
+Full `de.ts` review pass against the glossary/du-form/tone rules (9 value fixes, commit
+`a4d91de`); German eyeball walk over every screen incl. the encrypted first-run gate at
+both window extremes (880×600 and maximized) with a programmatic overflow scan — found
+and fixed three text-expansion layout issues (chat-header wrap, empty-state chip wrap,
+`.kv dd` overflow-wrap) and one untranslated persisted string (`'New chat'`, now D-L4
+treated); English regression leg via the Settings picker proved the display map
+language-switches both ways. All seven acceptance criteria verified (BUILD_STATE §3,
+Phase-42 entry). Tests: `tests/unit/i18n.test.ts` (module + catalog hygiene incl.
+placeholder parity and plural pairs), `tests/unit/display-map.test.ts`,
+`tests/unit/main-i18n.test.ts`, `tests/integration/i18n-boundary.test.ts`,
+`tests/renderer/I18n.test.tsx` + `GermanSmoke.test.tsx`.
+
 ## Encrypted workspace (Phase 9 + audit rounds)
 - **`services/security/crypto.ts`** — KDF (Argon2id default, scrypt legacy; descriptor-supplied
   params are bounds-checked) + AES-256-GCM primitives and the framed blob format.

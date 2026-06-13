@@ -83,7 +83,7 @@ export const SNIPPET_MAX_CHARS = 600
  * assistant can never hallucinate sources it does not have.
  */
 // This answer is PERSISTED into conversations (messages.content), so it is written as
-// the explicit ENGLISH catalog value (i18n-plan §3.3 rule 1) — the renderer display
+// the explicit ENGLISH catalog value (i18n record §3.3 rule 1) — the renderer display
 // map translates it at display time (D-L4), which also retroactively re-translates
 // old rows on a language switch.
 export const NO_DOCUMENT_CONTEXT_ANSWER = t('en', 'main.rag.noContext')
@@ -94,7 +94,7 @@ export const NO_DOCUMENT_CONTEXT_ANSWER = t('en', 'main.rag.noContext')
  * all (search is scoped to the active embedder's id). Telling the user to rephrase would
  * be wrong — only a re-index fixes it.
  */
-// Persist-canonical English like NO_DOCUMENT_CONTEXT_ANSWER (i18n-plan §3.3 rule 1).
+// Persist-canonical English like NO_DOCUMENT_CONTEXT_ANSWER (i18n record §3.3 rule 1).
 export const REINDEX_NEEDED_ANSWER = t('en', 'main.rag.reindexNeeded')
 
 /**

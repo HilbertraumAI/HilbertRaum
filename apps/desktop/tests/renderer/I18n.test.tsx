@@ -12,7 +12,7 @@ import {
 import { DEFAULT_SETTINGS, type AppSettings, type WorkspaceStateInfo } from '../../src/shared/types'
 import { stubApi } from '../helpers/renderer'
 
-// Phase 39 — renderer language resolution (i18n-plan §3.2, D-L2/D-L3): the pre-unlock
+// Phase 39 — renderer language resolution (i18n record §3.2, D-L2/D-L3): the pre-unlock
 // gate resolves from the localStorage mirror (falling back to navigator.language),
 // the Settings → General picker patches `uiLanguage` and switches the UI live, and
 // the RESOLVED language is mirrored to localStorage + `<html lang>`.

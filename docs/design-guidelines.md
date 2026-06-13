@@ -267,6 +267,39 @@ subtle lock/shield glyph + "Local · Offline", neutral color. Hover/click popove
 network for model downloads it must say so honestly (e.g. "Downloads allowed — chats and
 documents stay local").
 
+### German microcopy (D-L7, Phases 39–42 — `architecture.md` i18n record)
+
+Everything above applies to the German copy too — **adapted, never translated literally**.
+The spec-§11.4 rule ("never 'your hardware is bad'") binds the German rendering of every
+warning and error: carry the same calm reassurance, not a word-for-word transfer
+(e.g. "Pick a smaller model — quality stays great" → „Wähle ein kleineres Modell — die
+Qualität bleibt top.").
+
+- **Form of address: informal „du“** (user decision 2026-06-13 — a deliberate brand
+  choice; modern consumer-software tone). Lowercase „du/dein“ mid-sentence, consistently —
+  including errors and the gate. Imperatives use the colloquial short form where idiomatic
+  („versuch“, „prüf“, „stell sicher“); verbs that need the -e keep it
+  („öffne“, „wähle“, „indexiere“).
+- **Glossary** (pinned as the comment block on top of `de.ts` — keep terms consistent
+  across ALL German copy): workspace → Arbeitsbereich · drive → Laufwerk ·
+  vault/encrypted workspace → verschlüsselter Arbeitsbereich · model → Modell (AI model →
+  KI-Modell) · document → Dokument · re-index → neu indexieren · offline → offline ·
+  "Ask my documents" → „Meine Dokumente fragen“ · lock/unlock → sperren/entsperren ·
+  password → Passwort · settings → Einstellungen · plaintext (developer) mode →
+  unverschlüsselt (Entwickler).
+- **Screen-name references** match the German nav labels: KI-Modell-Bereich,
+  Dokumente-Bereich, „in den Einstellungen“. A string that names a button quotes the
+  button's exact German label („Neu indexieren“, „Durchsuchbar machen (OCR)“).
+- **Typography:** German quotation marks „…“ (and ’ for apostrophes); German
+  decimal/date conventions come from passing the resolved locale to
+  `toLocaleString`/`Intl.NumberFormat`, never from hand-formatting.
+- **Untranslated by design:** the product name / "Lite" brand line, language names in the
+  picker, technical values (model ids, paths, profile codes, "llama.cpp <version>").
+- **Text expansion is a layout problem:** German runs ~30 % longer — fix overflows with
+  wrapping/min-widths/flex (the Phase-42 audit pattern: chat-header `flex-wrap`,
+  empty-state chips wrap, `overflow-wrap: anywhere` on `.kv dd`), never by abbreviating
+  copy.
+
 ---
 
 ## 8. What to avoid

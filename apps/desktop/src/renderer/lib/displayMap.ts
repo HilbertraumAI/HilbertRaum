@@ -1,6 +1,6 @@
 import { en, type MessageKey, type MessageParams } from '@shared/i18n'
 
-// The D-L4 display map (i18n-plan §3.3 rule 1 / §6.3): persisted main-process strings
+// The D-L4 display map (i18n record §3.3 rule 1): persisted main-process strings
 // are stored as canonical ENGLISH (documents.error_message, the fixed RAG answers in
 // messages.content, benchmark warnings in settings.lastBenchmark) so the data
 // contracts — most importantly the `scanDetected` exact-match — never move. The

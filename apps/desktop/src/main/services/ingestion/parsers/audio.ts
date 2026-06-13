@@ -24,7 +24,7 @@ import { log } from '../../logging'
 /** Extensions the pinned whisper-cli actually decodes — keep the promise honest. */
 export const AUDIO_EXTENSIONS = ['.wav', '.mp3', '.flac', '.ogg'] as const
 
-// The three failure messages below are persist-canonical English (i18n-plan §3.3
+// The three failure messages below are persist-canonical English (i18n record §3.3
 // rule 1): they land in `documents.error_message`, so they are written as the explicit
 // ENGLISH catalog values — the renderer display map translates them at display (D-L4).
 

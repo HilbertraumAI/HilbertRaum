@@ -17,7 +17,7 @@ import { log } from '../../logging'
 /** Photo extensions the OCR pipeline accepts (png + jpg). */
 export const IMAGE_EXTENSIONS = ['.png', '.jpg', '.jpeg'] as const
 
-// The three failure messages below are persist-canonical English (i18n-plan §3.3
+// The three failure messages below are persist-canonical English (i18n record §3.3
 // rule 1): they land in `documents.error_message`, so they are written as the explicit
 // ENGLISH catalog values — the renderer display map translates them at display (D-L4).
 

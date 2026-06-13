@@ -199,7 +199,7 @@ export interface AppSettings {
    * the OS theme.
    */
   theme: ThemeSetting
-  // ---- Language (i18n-plan §3.2, D-L2/D-L3) ----
+  // ---- Language (i18n record §3.2, D-L2/D-L3) ----
   /**
    * UI language preference. 'system' (default) follows the OS locale: a `de*`
    * locale resolves to German, everything else to English. The pre-unlock gate
@@ -557,7 +557,7 @@ export interface DocumentSummary {
 /**
  * Friendly copy thrown by chat/document-answer handlers while a document task runs
  * (strict one-at-a-time). Shared so the renderer can recognize it and offer the
- * cancel option next to the message. Canonical ENGLISH on the wire (i18n-plan §3.3):
+ * cancel option next to the message. Canonical ENGLISH on the wire (i18n record §3.3):
  * the renderer recognizes it by exact match (`error.includes`), so it is never
  * localized at emission — the renderer display map translates it at display (D-L4).
  */

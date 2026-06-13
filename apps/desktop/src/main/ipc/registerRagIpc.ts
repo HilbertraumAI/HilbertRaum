@@ -36,7 +36,7 @@ export function registerRagIpc(ctx: AppContext): void {
 
       const runtime = ctx.runtime.active()
       if (!runtime) {
-        // Ephemeral IPC guard → tMain (i18n-plan §3.3); DOC_TASK_BUSY_MESSAGE below
+        // Ephemeral IPC guard → tMain (i18n record §3.3); DOC_TASK_BUSY_MESSAGE below
         // stays canonical English on the wire (renderer exact-match + display map).
         throw new Error(tMain('main.noModelRunning'))
       }

@@ -11,7 +11,7 @@ import type { MessageKey } from '@shared/i18n'
 export interface PasswordStrength {
   /** 0 (empty) … 4 (very strong). Purely advisory — never gates submission. */
   score: 0 | 1 | 2 | 3 | 4
-  /** Strength word as a MessageKey, resolved at render (i18n-plan §5); null when empty. */
+  /** Strength word as a MessageKey, resolved at render (i18n record §5); null when empty. */
   labelKey: MessageKey | null
   /** Advisory hint as a MessageKey, or null when there is nothing to suggest. */
   hintKey: MessageKey | null
@@ -42,7 +42,7 @@ export function passwordStrength(pw: string): PasswordStrength {
 
 export interface PasswordStrengthMeterProps {
   strength: PasswordStrength
-  /** Bound translate fn (i18n-plan §5 ⑤); English default for provider-less tests. */
+  /** Bound translate fn (i18n record §5 ⑤); English default for provider-less tests. */
   t?: Translator
 }
 
@@ -77,7 +77,7 @@ export interface PasswordFieldProps {
   /** Renders the Show/Hide toggle on this field when provided. */
   onToggleShow?: () => void
   onChange: (value: string) => void
-  /** Bound translate fn for the built-in Show/Hide labels (i18n-plan §5 ⑤). */
+  /** Bound translate fn for the built-in Show/Hide labels (i18n record §5 ⑤). */
   t?: Translator
 }
 

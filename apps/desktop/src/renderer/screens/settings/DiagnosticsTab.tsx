@@ -23,7 +23,7 @@ import type {
 const ACTIVITY_PAGE_SIZE = 50
 
 /** Friendly labels for the Activity panel's entries + type filter (spec §11.4 tone).
- *  Label values are MessageKeys resolved at render (i18n-plan §5). */
+ *  Label values are MessageKeys resolved at render (i18n record §5). */
 const AUDIT_TYPE_LABELS: Record<AuditEventType, MessageKey> = {
   runtime_started: 'diag.audit.runtime_started',
   runtime_stopped: 'diag.audit.runtime_stopped',

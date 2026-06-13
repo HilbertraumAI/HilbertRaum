@@ -228,7 +228,7 @@ export interface WarningInputs {
  * judgmental — weak hardware is framed as "best suited for the smallest, quickest model", never
  * "your hardware is bad". Slow drives warn but do not block.
  *
- * Persist-canonical English (i18n-plan §3.3 rule 1): these warnings are persisted
+ * Persist-canonical English (i18n record §3.3 rule 1): these warnings are persisted
  * inside `settings.lastBenchmark` (BenchmarkResult.warnings), so they are written as
  * the explicit ENGLISH catalog values — the renderer display map translates them at
  * display time (D-L4). Preflight reuses the slow-drive warning the same way.

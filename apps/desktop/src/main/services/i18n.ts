@@ -7,7 +7,7 @@ import {
   type UiLanguageSetting
 } from '../../shared/i18n'
 
-// Main-process UI language (i18n-plan §3.2 D-L3, §3.3 D-L5): a cached RESOLVED
+// Main-process UI language (i18n record §3.2 D-L3, §3.3 D-L5): a cached RESOLVED
 // language for everything the main process emits to the user (transient errors,
 // notices, dialog titles — never strings persisted to the DB, which stay canonical
 // English per D-L4).
