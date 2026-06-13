@@ -72,6 +72,16 @@ describe('MockEmbedder', () => {
   })
 })
 
+// ---- cosineSimilarity contract --------------------------------------------------
+
+describe('cosineSimilarity', () => {
+  it('throws on a length mismatch instead of scoring on the shorter prefix (L2)', () => {
+    const a = new Float32Array([1, 0, 0])
+    const b = new Float32Array([1, 0, 0, 0])
+    expect(() => cosineSimilarity(a, b)).toThrow(RangeError)
+  })
+})
+
 // ---- BLOB round-trip ------------------------------------------------------------
 
 describe('vector BLOB encoding', () => {

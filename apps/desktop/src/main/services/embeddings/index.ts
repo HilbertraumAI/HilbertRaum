@@ -65,9 +65,19 @@ export function decodeVector(blob: Uint8Array, dimensions: number): Float32Array
   return new Float32Array(bytes.buffer, bytes.byteOffset, dimensions)
 }
 
-/** Cosine similarity of two equal-length vectors. Returns 0 if either is all-zero. */
+/**
+ * Cosine similarity of two equal-length vectors. Returns 0 if either is all-zero.
+ *
+ * Throws on a length mismatch rather than silently scoring on `min(length)` (L2):
+ * the exported contract is "equal-length", and the only in-tree caller already
+ * dimension-guards before calling — so a mismatch here means a real bug (a future
+ * caller mixing dimensions), not data to score on a prefix.
+ */
 export function cosineSimilarity(a: Float32Array, b: Float32Array): number {
-  const n = Math.min(a.length, b.length)
+  if (a.length !== b.length) {
+    throw new RangeError(`cosineSimilarity length mismatch: ${a.length} vs ${b.length}`)
+  }
+  const n = a.length
   let dot = 0
   let na = 0
   let nb = 0
