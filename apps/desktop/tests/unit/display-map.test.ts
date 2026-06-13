@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { t, type MessageKey, type MessageParams } from '../../src/shared/i18n'
-import { localizeServerCopy } from '../../src/renderer/lib/displayMap'
+import { DISPLAY_MAP_KEYS, localizeServerCopy } from '../../src/renderer/lib/displayMap'
 import { NO_DOCUMENT_CONTEXT_ANSWER, REINDEX_NEEDED_ANSWER } from '../../src/main/services/rag'
 import { DOC_TASK_BUSY_MESSAGE } from '../../src/shared/types'
 
@@ -47,5 +47,42 @@ describe('localizeServerCopy (D-L4)', () => {
     const warning =
       'This drive is on the slower side. Models will still work, but loading them may take longer.'
     expect(localizeServerCopy(tDe, warning)).toBe(t('de', 'main.benchmark.warnSlowDrive'))
+  })
+
+  it('translates the persisted default conversation title; real user titles pass through', () => {
+    expect(localizeServerCopy(tDe, 'New chat')).toBe(t('de', 'main.chat.defaultTitle'))
+    expect(localizeServerCopy(tDe, 'Summarize this contract please')).toBe(
+      'Summarize this contract please'
+    )
+  })
+
+  it('covers exactly the en.ts persist-canonical section (catalog hygiene, Phase 42)', () => {
+    // This list mirrors the PERSIST-CANONICAL section of en.ts (the data-contract
+    // comment there). A new persisted constant must land in BOTH places — here and in
+    // DISPLAY_MAP_KEYS — or this fails loudly.
+    const persistCanonical: MessageKey[] = [
+      'main.ingest.pdfScanDetected',
+      'main.ingest.audioNeedsTranscriber',
+      'main.ingest.audioUnreadable',
+      'main.ingest.audioTranscriptionFailed',
+      'main.ingest.imageNeedsOcr',
+      'main.ingest.imageNoText',
+      'main.ingest.imageOcrFailed',
+      'main.ingest.sourceMissing',
+      'main.ingest.interrupted',
+      'main.rag.noContext',
+      'main.rag.reindexNeeded',
+      'main.chat.docTaskBusy',
+      'main.chat.defaultTitle',
+      'main.benchmark.warnTiny',
+      'main.benchmark.warnUnknown',
+      'main.benchmark.warnDriveProbe',
+      'main.benchmark.warnSlowDrive'
+    ]
+    expect([...DISPLAY_MAP_KEYS].sort()).toEqual(persistCanonical.sort())
+    // Every mapped English value must round-trip to its German catalog value.
+    for (const key of persistCanonical) {
+      expect(localizeServerCopy(tDe, t('en', key)), key).toBe(t('de', key))
+    }
   })
 })

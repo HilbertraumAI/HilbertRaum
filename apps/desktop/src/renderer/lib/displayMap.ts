@@ -13,8 +13,9 @@ import { en, type MessageKey, type MessageParams } from '@shared/i18n'
 // retroactively re-translates old failure rows and old "couldn't find it in your
 // documents" answers. In an English UI the lookup is the identity.
 
-/** Every persist-canonical key the map recognizes (keep in step with the en.ts set). */
-const DISPLAY_MAP_KEYS: readonly MessageKey[] = [
+/** Every persist-canonical key the map recognizes (keep in step with the en.ts set —
+ * exported so the catalog hygiene test can pin the two sets to each other). */
+export const DISPLAY_MAP_KEYS: readonly MessageKey[] = [
   'main.ingest.pdfScanDetected',
   'main.ingest.audioNeedsTranscriber',
   'main.ingest.audioUnreadable',
