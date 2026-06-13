@@ -6,6 +6,8 @@ import { HomeScreen } from '../../src/renderer/screens/HomeScreen'
 import { ChatScreen } from '../../src/renderer/screens/ChatScreen'
 import { DocumentsScreen } from '../../src/renderer/screens/DocumentsScreen'
 import { ModelsScreen } from '../../src/renderer/screens/ModelsScreen'
+import { PrivacyTab } from '../../src/renderer/screens/settings/PrivacyTab'
+import { DiagnosticsTab } from '../../src/renderer/screens/settings/DiagnosticsTab'
 import { I18nProvider, UI_LANGUAGE_STORAGE_KEY } from '../../src/renderer/i18n'
 import { t } from '../../src/shared/i18n'
 import type { AppStatus, RuntimeStatus } from '../../src/shared/types'
@@ -135,5 +137,51 @@ describe('German render smokes (Phase 40)', () => {
       await screen.findByRole('heading', { name: t('de', 'models.title') })
     ).toBeInTheDocument()
     expect(await screen.findByText(t('de', 'models.empty.title'))).toBeInTheDocument()
+  })
+
+  it('PrivacyTab renders German', async () => {
+    stubApi({
+      getPolicy: vi.fn(async () => {
+        throw new Error('no policy')
+      }),
+      getDriveStatus: vi.fn(async () => {
+        throw new Error('no drive')
+      }),
+      getSettings: vi.fn(async () => {
+        throw new Error('no settings')
+      })
+    })
+    render(german(<PrivacyTab />))
+
+    expect(
+      await screen.findByRole('heading', { name: t('de', 'privacy.network.title') })
+    ).toBeInTheDocument()
+    expect(screen.getByText(t('de', 'privacy.networkState.noPolicy'))).toBeInTheDocument()
+    expect(screen.getByText(t('de', 'privacy.statement.offline'))).toBeInTheDocument()
+  })
+
+  it('DiagnosticsTab renders German', async () => {
+    stubApi({
+      getAppStatus: vi.fn(async () => appStatus()),
+      getRuntimeStatus: vi.fn(async () => runningStatus),
+      getSettings: vi.fn(async () => {
+        throw new Error('no settings')
+      }),
+      getDriveStatus: vi.fn(async () => {
+        throw new Error('no drive')
+      }),
+      getRuntimeInstall: vi.fn(async () => {
+        throw new Error('no install')
+      })
+    })
+    render(german(<DiagnosticsTab />))
+
+    expect(
+      await screen.findByRole('heading', { name: t('de', 'diag.bench.title') })
+    ).toBeInTheDocument()
+    expect(screen.getByText(t('de', 'diag.localOnly'))).toBeInTheDocument()
+    expect(
+      screen.getByRole('heading', { name: t('de', 'diag.activity.title') })
+    ).toBeInTheDocument()
   })
 })

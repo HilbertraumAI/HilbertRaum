@@ -484,6 +484,194 @@ export const de: Record<keyof typeof en, string> = {
   'settings.changePassword.submitBusy': 'Wird geändert…',
   'settings.changePassword.toast': 'Passwort geändert',
 
+  // ---- Settings → Privacy & data tab ----
+  'privacy.offlineOn': '● Offline-Modus: AN',
+  'privacy.offlineOff': '○ Netzwerkzugriff aktiviert',
+  'privacy.statement.offline':
+    'Der Offline-Modus ist an. Private AI Drive Lite führt das KI-Modell auf deinem ' +
+    'Laptop aus. Deine Fragen, Dokumente, Embeddings und Chat-Verläufe bleiben lokal.',
+  'privacy.statement.online':
+    'Private AI Drive Lite führt das KI-Modell auf deinem Laptop aus. Deine Fragen, ' +
+    'Dokumente, Embeddings und Chat-Verläufe bleiben lokal — auch mit aktiviertem ' +
+    'Internetzugriff nutzen nur Modell-Downloads das Netzwerk.',
+  'privacy.statement.noUploads':
+    'Diese App sendet deine Daten an keine Cloud-KI-Anbieter. Es gibt keine Uploads von ' +
+    'Fragen, Dokumenten oder Embeddings, keine Telemetrie, keine Analytik und keine ' +
+    'Fehlerberichte an externe Server.',
+  'privacy.network.title': 'Aktueller Netzwerkstatus',
+  'privacy.networkState.noPolicy': 'Der Offline-Modus ist an.',
+  'privacy.networkState.disabledByPolicy': 'Netzwerkzugriff durch Richtlinie deaktiviert.',
+  'privacy.networkState.offDefault': 'Der Offline-Modus ist an (Netzwerk standardmäßig aus).',
+  'privacy.networkState.enabled':
+    'Internetzugriff ist für Modell-Downloads und Updates aktiviert.',
+  'privacy.network.noFiles': 'Keine Fragen oder Dateien verlassen dieses Gerät.',
+  'privacy.network.effective': 'Effektiver Zustand',
+  'privacy.network.effectiveOffline': 'Offline (keine Netzwerkzugriffe)',
+  'privacy.network.effectiveAllowed': 'Netzwerk erlaubt',
+  'privacy.network.byPolicy': 'Durch Richtlinie erlaubt',
+  'privacy.network.policyYes': 'Ja',
+  'privacy.network.policyNo': 'Nein (durch Richtlinie deaktiviert)',
+  'privacy.network.yourSetting': 'Deine Einstellung',
+  'privacy.network.settingAllowed': 'Internetzugriff erlaubt',
+  'privacy.network.settingOff': 'Aus (Standard)',
+  'privacy.network.telemetry': 'Telemetrie',
+  'privacy.network.telemetryValue':
+    'Nichts verlässt dieses Laufwerk — es gibt kein Tracking, das man abschalten müsste',
+  'privacy.network.hint':
+    'Die App warnt vor jeder Netzwerkaktion. Die einzige optionale Netzwerkfunktion ist ' +
+    'das Herunterladen oder Aktualisieren von Modellen — standardmäßig aus und nur über ' +
+    'den Allgemein-Tab aktivierbar. Eine Laufwerksrichtlinie kann sie komplett deaktivieren.',
+  'privacy.data.title': 'Wo deine Daten liegen',
+  'privacy.data.driveRoot': 'Laufwerksstamm',
+  'privacy.data.workspace': 'Arbeitsbereich',
+  'privacy.data.models': 'Modelle',
+  'privacy.data.logs': 'Logs',
+  'privacy.data.loading': 'Pfade werden geladen…',
+  'privacy.data.hint':
+    'Alles — importierte Dokumente, extrahierter Text, Embeddings, Chat-Verläufe, ' +
+    'erzeugte Ausgaben, Einstellungen — liegt lokal in deinem Arbeitsbereich. Zum ' +
+    'Löschen entfernst du den Arbeitsbereich-Ordner.',
+  'privacy.logs.title': 'Nur lokale Logs',
+  'privacy.logs.hintBefore':
+    'Debug- und Diagnose-Logs werden in eine rotierende Datei im Logs-Ordner oben ' +
+    'geschrieben und ',
+  'privacy.logs.never': 'niemals hochgeladen',
+  'privacy.logs.hintAfter': '. Die Diagnose überträgt nichts von diesem Gerät.',
+  'privacy.protection.title': 'Arbeitsbereich-Schutz',
+  'privacy.protection.encryptedBefore': 'Dein Arbeitsbereich ist im ',
+  'privacy.protection.encryptedWord': 'verschlüsselten',
+  'privacy.protection.encryptedAfter': ' Modus.',
+  'privacy.protection.plainBefore': 'Dein Arbeitsbereich ist im ',
+  'privacy.protection.plainWord': 'unverschlüsselten Entwicklermodus',
+  'privacy.protection.plainAfter':
+    '. Dateien liegen für schnellere Entwicklung unverschlüsselt auf dem Laufwerk.',
+  'privacy.protection.plainWarning':
+    'Der unverschlüsselte Entwicklermodus ist nicht der Standard der Kaufversion. ' +
+    'Kommerzielle Laufwerke verwenden den verschlüsselten Modus — Schlüssel aus dem ' +
+    'Passwort abgeleitet, nichts unverschlüsselt gespeichert. Lege keine sensiblen ' +
+    'Dokumente im unverschlüsselten Modus auf einem geteilten oder Wechsellaufwerk ab.',
+
+  // ---- Settings → Diagnostics tab ----
+  'diag.localOnly': 'Nur lokale Diagnose. Nichts hiervon wird jemals hochgeladen.',
+  'diag.audit.runtime_started': 'Modell gestartet',
+  'diag.audit.runtime_stopped': 'Modell gestoppt',
+  'diag.audit.runtime_crashed': 'Modell unerwartet beendet',
+  'diag.audit.runtime_fallback': 'Kompatibilitätsmodus',
+  'diag.audit.model_selected': 'Modell ausgewählt',
+  'diag.audit.model_verified': 'Modell-Prüfsumme geprüft',
+  'diag.audit.model_download_started': 'Download gestartet',
+  'diag.audit.model_download_verified': 'Download verifiziert',
+  'diag.audit.model_download_failed': 'Download fehlgeschlagen',
+  'diag.audit.document_imported': 'Dokument importiert',
+  'diag.audit.document_reindexed': 'Dokument neu indexiert',
+  'diag.audit.document_deleted': 'Dokument gelöscht',
+  'diag.audit.document_task_completed': 'Dokumentaufgabe abgeschlossen',
+  'diag.audit.document_task_failed': 'Dokumentaufgabe fehlgeschlagen',
+  'diag.audit.document_exported': 'Dokument exportiert',
+  'diag.audit.conversation_deleted': 'Unterhaltung gelöscht',
+  'diag.audit.conversation_exported': 'Unterhaltung exportiert',
+  'diag.audit.workspace_created': 'Arbeitsbereich erstellt',
+  'diag.audit.workspace_unlocked': 'Arbeitsbereich entsperrt',
+  'diag.audit.workspace_locked': 'Arbeitsbereich gesperrt',
+  'diag.audit.workspace_unlock_failed': 'Entsperrversuch fehlgeschlagen',
+  'diag.audit.workspace_password_changed': 'Arbeitsbereich-Passwort geändert',
+  'diag.audit.settings_changed': 'Einstellungen geändert',
+  'diag.audit.policy_warning': 'Richtlinien-Hinweis',
+  'diag.audit.offline_guard_violation': 'Netzwerkversuch bemerkt',
+  'diag.accel.gpuFallbackName': 'Grafikkarte',
+  'diag.accel.gpu': '{name} (GPU)',
+  'diag.accel.mock': 'Eingebaute Demo-Runtime',
+  'diag.accel.cpu': 'CPU',
+  'diag.accel.gpuAvailable': '{name} (GPU verfügbar)',
+  'diag.app.title': 'App & Laufzeit',
+  'diag.app.version': 'App-Version',
+  'diag.app.unknown': 'unbekannt',
+  'diag.app.selectedModel': 'Ausgewähltes Modell',
+  'diag.app.noneSelected': 'keins ausgewählt',
+  'diag.app.profile': 'Hardware-Profil',
+  'diag.app.runtime': 'Laufzeit',
+  'diag.app.unknownModel': 'unbekanntes Modell',
+  'diag.app.onPort': ' auf 127.0.0.1:{port}',
+  'diag.app.healthy': 'in Ordnung',
+  'diag.app.unhealthy': 'gestört',
+  'diag.app.runtimeRunning': 'Läuft — {model}{onPort} ({health})',
+  'diag.app.stopped': 'Gestoppt',
+  'diag.app.acceleration': 'Beschleunigung',
+  'diag.app.runtimeBuild': 'Laufzeit-Build',
+  'diag.app.noInstallMarker': 'kein Installations-Marker (manuell bestücktes Laufwerk)',
+  'diag.gpu.compat':
+    'Kompatibilitätsmodus aktiv: Antworten nutzen die CPU — das funktioniert auf jedem ' +
+    'Gerät.',
+  'diag.gpu.tryHint':
+    'Wenn du deinen Grafiktreiber aktualisiert hast, kannst du die Grafikkarte erneut ' +
+    'versuchen.',
+  'diag.gpu.offHint':
+    'Die Grafikbeschleunigung ist in den Einstellungen ausgeschaltet — schalte sie dort ' +
+    'wieder ein, um die Grafikkarte zu verwenden.',
+  'diag.gpu.tryAgain': 'GPU erneut versuchen',
+  'diag.refresh': 'Aktualisieren',
+  'diag.bench.title': 'Hardware-Benchmark',
+  'diag.bench.hint':
+    'Misst RAM, CPU und Laufwerksgeschwindigkeit dieses Geräts, um ein Modell zu ' +
+    'empfehlen. Läuft komplett offline — keine Daten verlassen dein Gerät.',
+  'diag.bench.running': 'Läuft…',
+  'diag.bench.rerun': 'Benchmark erneut ausführen',
+  'diag.bench.run': 'Benchmark ausführen',
+  'diag.bench.failed': 'Benchmark fehlgeschlagen: {error}',
+  'diag.bench.profile': 'Zugewiesenes Profil',
+  'diag.bench.recommended': 'Empfohlenes Modell',
+  'diag.bench.noMatch': 'Kein passendes Modell',
+  'diag.bench.ram': 'RAM',
+  'diag.bench.cpu': 'CPU',
+  'diag.bench.cores': ' ({count} Kerne)',
+  'diag.bench.osArch': 'OS / Architektur',
+  'diag.bench.gpu': 'GPU',
+  'diag.bench.notDetected': 'nicht erkannt',
+  'diag.bench.driveRead': 'Laufwerk lesen',
+  'diag.bench.driveWrite': 'Laufwerk schreiben',
+  'diag.bench.notMeasured': 'nicht gemessen',
+  'diag.bench.tokens': 'Tokens / Sek.',
+  'diag.bench.tokensNotMeasured': 'nicht gemessen (starte zuerst ein Modell)',
+  'diag.bench.lastRun': 'Letzter Lauf',
+  'diag.system.title': 'System',
+  'diag.system.osPlatform': 'OS / Plattform',
+  'diag.system.freeSpace': 'Freier Speicher',
+  'diag.system.loadFailed':
+    'Systemdetails konnten noch nicht geladen werden. Öffne den Tab noch einmal.',
+  'diag.paths.title': 'Pfade',
+  'diag.paths.prepared': 'Vorbereitetes Laufwerk',
+  'diag.paths.yes': 'Ja',
+  'diag.paths.noFallback': 'Nein (App-Daten-Fallback)',
+  'diag.paths.writable': 'Beschreibbar',
+  'diag.paths.no': 'Nein',
+  'diag.paths.loadFailed':
+    'Laufwerks- und Arbeitsbereich-Details konnten noch nicht geladen werden. Öffne den ' +
+    'Tab noch einmal.',
+  'diag.activity.title': 'Aktivität',
+  'diag.activity.hint':
+    'Eine lokale Aufzeichnung dessen, was die App getan hat — Modell-Starts, Downloads, ' +
+    'Dokument-Importe, Arbeitsbereich-Ereignisse. Sie bleibt in deinem Arbeitsbereich ' +
+    '(verschlüsselt, wenn er es ist) und wird nie hochgeladen. Sie enthält nie Chat-Text ' +
+    'oder Dokumentinhalte.',
+  'diag.activity.show': 'Aktivität anzeigen',
+  'diag.activity.hide': 'Aktivität ausblenden',
+  'diag.activity.export': 'In Datei exportieren…',
+  'diag.activity.savedTo': 'Aktivitätslog gespeichert unter {path}',
+  'diag.activity.filterShow': 'Zeige',
+  'diag.activity.filterAll': 'Alle Aktivitäten',
+  'diag.activity.loading': 'Wird geladen…',
+  'diag.activity.empty':
+    'Noch nichts aufgezeichnet — Aktivität erscheint hier, während du die App verwendest.',
+  'diag.activity.earlier': 'Frühere Aktivität anzeigen',
+  'diag.logs.title': 'Aktuelle Logs',
+  'diag.logs.hintBefore': 'Das Ende von ',
+  'diag.logs.hintAfter':
+    ' auf diesem Gerät. Logs bleiben lokal und werden nie hochgeladen; sie enthalten ' +
+    'keine Dokumentinhalte und keinen Chat-Text.',
+  'diag.logs.show': 'Logs anzeigen',
+  'diag.logs.hide': 'Logs ausblenden',
+  'diag.logs.empty': '(Log ist leer)',
+
   // ---- Shared password copy ----
   'password.mismatch': 'Die Passwörter stimmen nicht überein.',
 

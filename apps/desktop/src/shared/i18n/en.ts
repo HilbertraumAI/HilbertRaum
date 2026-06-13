@@ -441,6 +441,190 @@ export const en = {
   'settings.changePassword.submitBusy': 'Changing…',
   'settings.changePassword.toast': 'Password changed',
 
+  // ---- Settings → Privacy & data tab (PrivacyTab.tsx) ----
+  'privacy.offlineOn': '● Offline Mode: ON',
+  'privacy.offlineOff': '○ Network access enabled',
+  // spec §18.1 — the offline statement (verbatim in English).
+  'privacy.statement.offline':
+    'Offline Mode is on. Private AI Drive Lite runs the AI model on your laptop. Your ' +
+    'prompts, documents, embeddings, and chat history stay local.',
+  'privacy.statement.online':
+    'Private AI Drive Lite runs the AI model on your laptop. Your prompts, documents, ' +
+    'embeddings, and chat history stay local — even with internet access enabled, only ' +
+    'model downloads use the network.',
+  'privacy.statement.noUploads':
+    'This app does not send your data to cloud AI providers. There are no prompt, ' +
+    'document, or embedding uploads, no telemetry, no analytics, and no remote crash ' +
+    'reporting.',
+  'privacy.network.title': 'Current network state',
+  'privacy.networkState.noPolicy': 'Offline Mode is on.',
+  'privacy.networkState.disabledByPolicy': 'Network access disabled by policy.',
+  'privacy.networkState.offDefault': 'Offline Mode is on (network off by default).',
+  'privacy.networkState.enabled': 'Internet access is enabled for model downloads and updates.',
+  'privacy.network.noFiles': 'No prompts or files leave this device.',
+  'privacy.network.effective': 'Effective state',
+  'privacy.network.effectiveOffline': 'Offline (no network calls)',
+  'privacy.network.effectiveAllowed': 'Network allowed',
+  'privacy.network.byPolicy': 'Allowed by policy',
+  'privacy.network.policyYes': 'Yes',
+  'privacy.network.policyNo': 'No (disabled by policy)',
+  'privacy.network.yourSetting': 'Your setting',
+  'privacy.network.settingAllowed': 'Internet access allowed',
+  'privacy.network.settingOff': 'Off (default)',
+  'privacy.network.telemetry': 'Telemetry',
+  'privacy.network.telemetryValue': 'Nothing leaves this drive — there’s no tracking to turn off',
+  'privacy.network.hint':
+    'The app warns before any network action. The only optional network feature is ' +
+    'downloading or updating models, which is off by default and must be enabled on the ' +
+    'General tab. A drive policy can disable it entirely.',
+  'privacy.data.title': 'Where your data lives',
+  'privacy.data.driveRoot': 'Drive root',
+  'privacy.data.workspace': 'Workspace',
+  'privacy.data.models': 'Models',
+  'privacy.data.logs': 'Logs',
+  'privacy.data.loading': 'Loading paths…',
+  'privacy.data.hint':
+    'Everything — imported documents, extracted text, embeddings, chat history, generated ' +
+    'outputs, settings — is stored locally under your workspace. To delete it, remove the ' +
+    'workspace folder.',
+  'privacy.logs.title': 'Local logs only',
+  // Split around the inline <strong>never uploaded</strong>.
+  'privacy.logs.hintBefore':
+    'Debug and diagnostic logs are written to a rotating file under the logs folder above ' +
+    'and are ',
+  'privacy.logs.never': 'never uploaded',
+  'privacy.logs.hintAfter': '. Diagnostics does not transmit anything off this device.',
+  'privacy.protection.title': 'Workspace protection',
+  // Split around the inline <strong>…</strong> mode words.
+  'privacy.protection.encryptedBefore': 'Your workspace is in ',
+  'privacy.protection.encryptedWord': 'encrypted',
+  'privacy.protection.encryptedAfter': ' mode.',
+  'privacy.protection.plainBefore': 'Your workspace is in ',
+  'privacy.protection.plainWord': 'plaintext developer mode',
+  'privacy.protection.plainAfter':
+    '. Files are stored unencrypted on the drive for development speed.',
+  'privacy.protection.plainWarning':
+    'Plaintext developer mode is not the commercial default. The encrypted mode — ' +
+    'password-derived key, nothing stored in plaintext — is what commercial drives use. ' +
+    'Do not store sensitive documents in plaintext mode on a shared or removable drive.',
+
+  // ---- Settings → Diagnostics tab (DiagnosticsTab.tsx) ----
+  'diag.localOnly': 'Local-only diagnostics. Nothing here is ever uploaded.',
+  // Friendly labels for the Activity panel's entries + type filter (spec §11.4 tone).
+  'diag.audit.runtime_started': 'Model started',
+  'diag.audit.runtime_stopped': 'Model stopped',
+  'diag.audit.runtime_crashed': 'Model stopped unexpectedly',
+  'diag.audit.runtime_fallback': 'Compatibility mode',
+  'diag.audit.model_selected': 'Model selected',
+  'diag.audit.model_verified': 'Model checksum checked',
+  'diag.audit.model_download_started': 'Download started',
+  'diag.audit.model_download_verified': 'Download verified',
+  'diag.audit.model_download_failed': 'Download failed',
+  'diag.audit.document_imported': 'Document imported',
+  'diag.audit.document_reindexed': 'Document re-indexed',
+  'diag.audit.document_deleted': 'Document deleted',
+  'diag.audit.document_task_completed': 'Document task finished',
+  'diag.audit.document_task_failed': 'Document task failed',
+  'diag.audit.document_exported': 'Document exported',
+  'diag.audit.conversation_deleted': 'Conversation deleted',
+  'diag.audit.conversation_exported': 'Conversation exported',
+  'diag.audit.workspace_created': 'Workspace created',
+  'diag.audit.workspace_unlocked': 'Workspace unlocked',
+  'diag.audit.workspace_locked': 'Workspace locked',
+  'diag.audit.workspace_unlock_failed': 'Unlock attempt failed',
+  'diag.audit.workspace_password_changed': 'Workspace password changed',
+  'diag.audit.settings_changed': 'Settings changed',
+  'diag.audit.policy_warning': 'Policy notice',
+  'diag.audit.offline_guard_violation': 'Network attempt noticed',
+  'diag.accel.gpuFallbackName': 'Graphics card',
+  'diag.accel.gpu': '{name} (GPU)',
+  'diag.accel.mock': 'Built-in demo runtime',
+  'diag.accel.cpu': 'CPU',
+  'diag.accel.gpuAvailable': '{name} (GPU available)',
+  'diag.app.title': 'App & runtime',
+  'diag.app.version': 'App version',
+  'diag.app.unknown': 'unknown',
+  'diag.app.selectedModel': 'Selected model',
+  'diag.app.noneSelected': 'none selected',
+  'diag.app.profile': 'Hardware profile',
+  'diag.app.runtime': 'Runtime',
+  'diag.app.unknownModel': 'unknown model',
+  'diag.app.onPort': ' on 127.0.0.1:{port}',
+  'diag.app.healthy': 'healthy',
+  'diag.app.unhealthy': 'unhealthy',
+  'diag.app.runtimeRunning': 'Running — {model}{onPort} ({health})',
+  'diag.app.stopped': 'Stopped',
+  'diag.app.acceleration': 'Acceleration',
+  'diag.app.runtimeBuild': 'Runtime build',
+  'diag.app.noInstallMarker': 'no install marker (manually provisioned drive)',
+  'diag.gpu.compat':
+    'Running in compatibility mode: responses use the CPU, which works on every machine.',
+  'diag.gpu.tryHint':
+    'If you have updated your graphics driver, you can try the graphics card again.',
+  'diag.gpu.offHint':
+    'GPU acceleration is turned off in Settings — turn it back on there to use the ' +
+    'graphics card again.',
+  'diag.gpu.tryAgain': 'Try GPU again',
+  'diag.refresh': 'Refresh',
+  'diag.bench.title': 'Hardware benchmark',
+  'diag.bench.hint':
+    'Measures RAM, CPU, and drive speed on this device to recommend a model. Runs ' +
+    'entirely offline — no data leaves your machine.',
+  'diag.bench.running': 'Running…',
+  'diag.bench.rerun': 'Re-run benchmark',
+  'diag.bench.run': 'Run benchmark',
+  'diag.bench.failed': 'Benchmark failed: {error}',
+  'diag.bench.profile': 'Assigned profile',
+  'diag.bench.recommended': 'Recommended model',
+  'diag.bench.noMatch': 'No matching model',
+  'diag.bench.ram': 'RAM',
+  'diag.bench.cpu': 'CPU',
+  'diag.bench.cores': ' ({count} cores)',
+  'diag.bench.osArch': 'OS / arch',
+  'diag.bench.gpu': 'GPU',
+  'diag.bench.notDetected': 'not detected',
+  'diag.bench.driveRead': 'Drive read',
+  'diag.bench.driveWrite': 'Drive write',
+  'diag.bench.notMeasured': 'not measured',
+  'diag.bench.tokens': 'Tokens / sec',
+  'diag.bench.tokensNotMeasured': 'not measured (start a model first)',
+  'diag.bench.lastRun': 'Last run',
+  'diag.system.title': 'System',
+  'diag.system.osPlatform': 'OS / platform',
+  'diag.system.freeSpace': 'Free space',
+  'diag.system.loadFailed': 'System details could not be loaded yet. Try reopening this tab.',
+  'diag.paths.title': 'Paths',
+  'diag.paths.prepared': 'Prepared drive',
+  'diag.paths.yes': 'Yes',
+  'diag.paths.noFallback': 'No (app-data fallback)',
+  'diag.paths.writable': 'Writable',
+  'diag.paths.no': 'No',
+  'diag.paths.loadFailed':
+    'Drive and workspace details could not be loaded yet. Try reopening this tab.',
+  'diag.activity.title': 'Activity',
+  'diag.activity.hint':
+    'A local record of what the app did — model starts, downloads, document imports, ' +
+    'workspace events. It stays in your workspace (encrypted when the workspace is) ' +
+    'and is never uploaded. It never contains chat text or document contents.',
+  'diag.activity.show': 'Show activity',
+  'diag.activity.hide': 'Hide activity',
+  'diag.activity.export': 'Export to file…',
+  'diag.activity.savedTo': 'Activity log saved to {path}',
+  'diag.activity.filterShow': 'Show',
+  'diag.activity.filterAll': 'All activity',
+  'diag.activity.loading': 'Loading…',
+  'diag.activity.empty': 'Nothing recorded yet — activity appears here as you use the app.',
+  'diag.activity.earlier': 'Show earlier activity',
+  'diag.logs.title': 'Recent logs',
+  // Split around the inline <code>logs/app.log</code>.
+  'diag.logs.hintBefore': 'The tail of ',
+  'diag.logs.hintAfter':
+    ' on this device. Logs are local-only and never uploaded; they contain no document ' +
+    'contents or chat text.',
+  'diag.logs.show': 'Show logs',
+  'diag.logs.hide': 'Hide logs',
+  'diag.logs.empty': '(log is empty)',
+
   // ---- Shared password copy ----
   'password.mismatch': "Passwords don't match.",
 

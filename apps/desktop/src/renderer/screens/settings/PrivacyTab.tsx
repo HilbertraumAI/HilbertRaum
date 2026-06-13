@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Banner } from '../../components'
+import { useT } from '../../i18n'
 import type { AppSettings, DriveStatus, PolicyStatus } from '@shared/types'
 
 // "Privacy & data" tab of the Settings screen (spec §7.10 + §18.1).
@@ -9,6 +10,7 @@ import type { AppSettings, DriveStatus, PolicyStatus } from '@shared/types'
 // this tab is the place that spells it out (guidelines §2).
 
 export function PrivacyTab(): JSX.Element {
+  const { t } = useT()
   const [policy, setPolicy] = useState<PolicyStatus | null>(null)
   const [drive, setDrive] = useState<DriveStatus | null>(null)
   const [settings, setSettings] = useState<AppSettings | null>(null)
@@ -22,104 +24,101 @@ export function PrivacyTab(): JSX.Element {
   const offline = policy?.offlineMode ?? true
   // Three states: disabled by policy (hard), off by choice (setting), or allowed.
   const networkState = !policy
-    ? 'Offline Mode is on.'
+    ? t('privacy.networkState.noPolicy')
     : !policy.networkAllowedByPolicy
-      ? 'Network access disabled by policy.'
+      ? t('privacy.networkState.disabledByPolicy')
       : !policy.allowNetworkSetting
-        ? 'Offline Mode is on (network off by default).'
-        : 'Internet access is enabled for model downloads and updates.'
+        ? t('privacy.networkState.offDefault')
+        : t('privacy.networkState.enabled')
 
   return (
     <>
       <div className="card">
         <div className={`offline-statement ${offline ? 'on' : 'off'}`}>
-          <strong>{offline ? '● Offline Mode: ON' : '○ Network access enabled'}</strong>
+          <strong>{offline ? t('privacy.offlineOn') : t('privacy.offlineOff')}</strong>
         </div>
-        {/* spec §18.1 — verbatim offline statement */}
+        {/* spec §18.1 — verbatim offline statement (in English; the German adapts it) */}
         <p className="lead" style={{ marginBottom: 8 }}>
-          {offline
-            ? 'Offline Mode is on. Private AI Drive Lite runs the AI model on your laptop. Your prompts, documents, embeddings, and chat history stay local.'
-            : 'Private AI Drive Lite runs the AI model on your laptop. Your prompts, documents, embeddings, and chat history stay local — even with internet access enabled, only model downloads use the network.'}
+          {offline ? t('privacy.statement.offline') : t('privacy.statement.online')}
         </p>
-        <p className="hint">
-          This app does not send your data to cloud AI providers. There are no prompt, document, or
-          embedding uploads, no telemetry, no analytics, and no remote crash reporting.
-        </p>
+        <p className="hint">{t('privacy.statement.noUploads')}</p>
       </div>
 
       <div className="card">
-        <h2>Current network state</h2>
+        <h2>{t('privacy.network.title')}</h2>
         <p>{networkState}</p>
-        <p className="hint">No prompts or files leave this device.</p>
+        <p className="hint">{t('privacy.network.noFiles')}</p>
         <dl className="kv">
-          <dt>Effective state</dt>
-          <dd>{offline ? 'Offline (no network calls)' : 'Network allowed'}</dd>
-          <dt>Allowed by policy</dt>
-          <dd>{policy ? (policy.networkAllowedByPolicy ? 'Yes' : 'No (disabled by policy)') : '…'}</dd>
-          <dt>Your setting</dt>
+          <dt>{t('privacy.network.effective')}</dt>
+          <dd>
+            {offline ? t('privacy.network.effectiveOffline') : t('privacy.network.effectiveAllowed')}
+          </dd>
+          <dt>{t('privacy.network.byPolicy')}</dt>
+          <dd>
+            {policy
+              ? policy.networkAllowedByPolicy
+                ? t('privacy.network.policyYes')
+                : t('privacy.network.policyNo')
+              : '…'}
+          </dd>
+          <dt>{t('privacy.network.yourSetting')}</dt>
           <dd>
             {policy
               ? policy.allowNetworkSetting
-                ? 'Internet access allowed'
-                : 'Off (default)'
+                ? t('privacy.network.settingAllowed')
+                : t('privacy.network.settingOff')
               : '…'}
           </dd>
-          <dt>Telemetry</dt>
-          <dd>Nothing leaves this drive — there’s no tracking to turn off</dd>
+          <dt>{t('privacy.network.telemetry')}</dt>
+          <dd>{t('privacy.network.telemetryValue')}</dd>
         </dl>
-        <p className="hint">
-          The app warns before any network action. The only optional network feature is downloading
-          or updating models, which is off by default and must be enabled on the General tab. A
-          drive policy can disable it entirely.
-        </p>
+        <p className="hint">{t('privacy.network.hint')}</p>
       </div>
 
       <div className="card">
-        <h2>Where your data lives</h2>
+        <h2>{t('privacy.data.title')}</h2>
         {drive ? (
           <dl className="kv">
-            <dt>Drive root</dt>
+            <dt>{t('privacy.data.driveRoot')}</dt>
             <dd>{drive.rootPath}</dd>
-            <dt>Workspace</dt>
+            <dt>{t('privacy.data.workspace')}</dt>
             <dd>{drive.workspacePath}</dd>
-            <dt>Models</dt>
+            <dt>{t('privacy.data.models')}</dt>
             <dd>{drive.modelsPath}</dd>
-            <dt>Logs</dt>
+            <dt>{t('privacy.data.logs')}</dt>
             <dd>{drive.logsPath}</dd>
           </dl>
         ) : (
-          <p className="hint">Loading paths…</p>
+          <p className="hint">{t('privacy.data.loading')}</p>
         )}
+        <p className="hint">{t('privacy.data.hint')}</p>
+      </div>
+
+      <div className="card">
+        <h2>{t('privacy.logs.title')}</h2>
         <p className="hint">
-          Everything — imported documents, extracted text, embeddings, chat history, generated
-          outputs, settings — is stored locally under your workspace. To delete it, remove the
-          workspace folder.
+          {t('privacy.logs.hintBefore')}
+          <strong>{t('privacy.logs.never')}</strong>
+          {t('privacy.logs.hintAfter')}
         </p>
       </div>
 
       <div className="card">
-        <h2>Local logs only</h2>
-        <p className="hint">
-          Debug and diagnostic logs are written to a rotating file under the logs folder above and
-          are <strong>never uploaded</strong>. Diagnostics does not transmit anything off this device.
-        </p>
-      </div>
-
-      <div className="card">
-        <h2>Workspace protection</h2>
+        <h2>{t('privacy.protection.title')}</h2>
         {settings?.workspaceMode === 'encrypted' ? (
-          <p>Your workspace is in <strong>encrypted</strong> mode.</p>
+          <p>
+            {t('privacy.protection.encryptedBefore')}
+            <strong>{t('privacy.protection.encryptedWord')}</strong>
+            {t('privacy.protection.encryptedAfter')}
+          </p>
         ) : (
           <>
             <p>
-              Your workspace is in <strong>plaintext developer mode</strong>. Files are stored
-              unencrypted on the drive for development speed.
+              {t('privacy.protection.plainBefore')}
+              <strong>{t('privacy.protection.plainWord')}</strong>
+              {t('privacy.protection.plainAfter')}
             </p>
-            <Banner tone="warning">
-              Plaintext developer mode is not the commercial default. The encrypted mode —
-              password-derived key, nothing stored in plaintext — is what commercial drives use.
-              Do not store sensitive documents in plaintext mode on a shared or removable drive.
-            </Banner>
+            <Banner tone="warning">{t('privacy.protection.plainWarning')}</Banner>
           </>
         )}
       </div>

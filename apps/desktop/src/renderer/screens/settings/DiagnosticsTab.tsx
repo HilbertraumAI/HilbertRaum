@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Banner, Button, useToast } from '../../components'
+import { useT, type I18n } from '../../i18n'
+import type { MessageKey, UiLanguage } from '@shared/i18n'
 import type {
   AppSettings,
   AppStatus,
@@ -19,37 +21,39 @@ import type {
 /** How many activity entries each page load fetches. */
 const ACTIVITY_PAGE_SIZE = 50
 
-/** Friendly labels for the Activity panel's entries + type filter (spec §11.4 tone). */
-const AUDIT_TYPE_LABELS: Record<AuditEventType, string> = {
-  runtime_started: 'Model started',
-  runtime_stopped: 'Model stopped',
-  runtime_crashed: 'Model stopped unexpectedly',
-  runtime_fallback: 'Compatibility mode',
-  model_selected: 'Model selected',
-  model_verified: 'Model checksum checked',
-  model_download_started: 'Download started',
-  model_download_verified: 'Download verified',
-  model_download_failed: 'Download failed',
-  document_imported: 'Document imported',
-  document_reindexed: 'Document re-indexed',
-  document_deleted: 'Document deleted',
-  document_task_completed: 'Document task finished',
-  document_task_failed: 'Document task failed',
-  document_exported: 'Document exported',
-  conversation_deleted: 'Conversation deleted',
-  conversation_exported: 'Conversation exported',
-  workspace_created: 'Workspace created',
-  workspace_unlocked: 'Workspace unlocked',
-  workspace_locked: 'Workspace locked',
-  workspace_unlock_failed: 'Unlock attempt failed',
-  workspace_password_changed: 'Workspace password changed',
-  settings_changed: 'Settings changed',
-  policy_warning: 'Policy notice',
-  offline_guard_violation: 'Network attempt noticed'
+/** Friendly labels for the Activity panel's entries + type filter (spec §11.4 tone).
+ *  Label values are MessageKeys resolved at render (i18n-plan §5). */
+const AUDIT_TYPE_LABELS: Record<AuditEventType, MessageKey> = {
+  runtime_started: 'diag.audit.runtime_started',
+  runtime_stopped: 'diag.audit.runtime_stopped',
+  runtime_crashed: 'diag.audit.runtime_crashed',
+  runtime_fallback: 'diag.audit.runtime_fallback',
+  model_selected: 'diag.audit.model_selected',
+  model_verified: 'diag.audit.model_verified',
+  model_download_started: 'diag.audit.model_download_started',
+  model_download_verified: 'diag.audit.model_download_verified',
+  model_download_failed: 'diag.audit.model_download_failed',
+  document_imported: 'diag.audit.document_imported',
+  document_reindexed: 'diag.audit.document_reindexed',
+  document_deleted: 'diag.audit.document_deleted',
+  document_task_completed: 'diag.audit.document_task_completed',
+  document_task_failed: 'diag.audit.document_task_failed',
+  document_exported: 'diag.audit.document_exported',
+  conversation_deleted: 'diag.audit.conversation_deleted',
+  conversation_exported: 'diag.audit.conversation_exported',
+  workspace_created: 'diag.audit.workspace_created',
+  workspace_unlocked: 'diag.audit.workspace_unlocked',
+  workspace_locked: 'diag.audit.workspace_locked',
+  workspace_unlock_failed: 'diag.audit.workspace_unlock_failed',
+  workspace_password_changed: 'diag.audit.workspace_password_changed',
+  settings_changed: 'diag.audit.settings_changed',
+  policy_warning: 'diag.audit.policy_warning',
+  offline_guard_violation: 'diag.audit.offline_guard_violation'
 }
 
-function auditLabel(type: AuditEventType): string {
-  return AUDIT_TYPE_LABELS[type] ?? type
+function auditLabel(type: AuditEventType, t: I18n['t']): string {
+  const key = AUDIT_TYPE_LABELS[type]
+  return key != null ? t(key) : type
 }
 
 /**
@@ -57,18 +61,34 @@ function auditLabel(type: AuditEventType): string {
  * model is running, else what the cached probe says this machine offers. Friendly
  * tone — CPU is presented as normal, never degraded.
  */
-function accelerationLabel(runtime: RuntimeStatus | null, settings: AppSettings | null): string {
+function accelerationLabel(
+  runtime: RuntimeStatus | null,
+  settings: AppSettings | null,
+  t: I18n['t']
+): string {
   if (runtime?.running && runtime.backend) {
-    if (runtime.backend === 'gpu') return `${runtime.gpuName ?? 'Graphics card'} (GPU)`
-    if (runtime.backend === 'mock') return 'Built-in demo runtime'
-    return 'CPU'
+    if (runtime.backend === 'gpu')
+      return t('diag.accel.gpu', { name: runtime.gpuName ?? t('diag.accel.gpuFallbackName') })
+    if (runtime.backend === 'mock') return t('diag.accel.mock')
+    return t('diag.accel.cpu')
   }
   const probed = settings?.gpuProbe?.devices ?? []
-  if (probed.length > 0) return `${probed[0].name} (GPU available)`
-  return 'CPU'
+  if (probed.length > 0) return t('diag.accel.gpuAvailable', { name: probed[0].name })
+  return t('diag.accel.cpu')
+}
+
+/** Locale-aware one-decimal number (file sizes / RAM) — grouping off so EN output
+ *  stays byte-identical to the previous toFixed(1). */
+function fmt1(n: number, lang: UiLanguage): string {
+  return n.toLocaleString(lang, {
+    minimumFractionDigits: 1,
+    maximumFractionDigits: 1,
+    useGrouping: false
+  })
 }
 
 export function DiagnosticsTab(): JSX.Element {
+  const { t, lang } = useT()
   const [drive, setDrive] = useState<DriveStatus | null>(null)
   const [bench, setBench] = useState<BenchmarkResult | null>(null)
   const [app, setApp] = useState<AppStatus | null>(null)
@@ -123,7 +143,7 @@ export function DiagnosticsTab(): JSX.Element {
   async function exportActivity(): Promise<void> {
     try {
       const path = await window.api.exportAuditLog()
-      if (path) toast(`Activity log saved to ${path}`)
+      if (path) toast(t('diag.activity.savedTo', { path }))
     } catch {
       // Export is cancellable from the OS dialog; a failure simply shows no toast.
     }
@@ -167,34 +187,36 @@ export function DiagnosticsTab(): JSX.Element {
 
   return (
     <>
-      <p className="hint">Local-only diagnostics. Nothing here is ever uploaded.</p>
+      <p className="hint">{t('diag.localOnly')}</p>
 
       <div className="card">
-        <h2>App &amp; runtime</h2>
+        <h2>{t('diag.app.title')}</h2>
         <dl className="kv">
-          <dt>App version</dt>
-          <dd>{app ? `${app.appName} ${app.appVersion}` : 'unknown'}</dd>
-          <dt>Selected model</dt>
-          <dd>{app?.activeModelId ?? 'none selected'}</dd>
-          <dt>Hardware profile</dt>
+          <dt>{t('diag.app.version')}</dt>
+          <dd>{app ? `${app.appName} ${app.appVersion}` : t('diag.app.unknown')}</dd>
+          <dt>{t('diag.app.selectedModel')}</dt>
+          <dd>{app?.activeModelId ?? t('diag.app.noneSelected')}</dd>
+          <dt>{t('diag.app.profile')}</dt>
           <dd>{app?.hardwareProfile ?? 'UNKNOWN'}</dd>
-          <dt>Runtime</dt>
+          <dt>{t('diag.app.runtime')}</dt>
           <dd>
             {runtime
               ? runtime.running
-                ? `Running — ${runtime.modelId ?? 'unknown model'}${
-                    runtime.port != null ? ` on 127.0.0.1:${runtime.port}` : ''
-                  } (${runtime.healthy ? 'healthy' : 'unhealthy'})`
-              : 'Stopped'
-              : 'unknown'}
+                ? t('diag.app.runtimeRunning', {
+                    model: runtime.modelId ?? t('diag.app.unknownModel'),
+                    onPort: runtime.port != null ? t('diag.app.onPort', { port: runtime.port }) : '',
+                    health: runtime.healthy ? t('diag.app.healthy') : t('diag.app.unhealthy')
+                  })
+                : t('diag.app.stopped')
+              : t('diag.app.unknown')}
           </dd>
-          <dt>Acceleration</dt>
-          <dd>{accelerationLabel(runtime, settings)}</dd>
-          <dt>Runtime build</dt>
+          <dt>{t('diag.app.acceleration')}</dt>
+          <dd>{accelerationLabel(runtime, settings, t)}</dd>
+          <dt>{t('diag.app.runtimeBuild')}</dt>
           <dd>
             {install
               ? `llama.cpp ${install.version} (${install.backend})`
-              : 'no install marker (manually provisioned drive)'}
+              : t('diag.app.noInstallMarker')}
           </dd>
         </dl>
         {settings?.gpuAutoDisabled && (
@@ -203,68 +225,70 @@ export function DiagnosticsTab(): JSX.Element {
             action={
               settings.gpuMode === 'auto' ? (
                 <Button size="sm" onClick={() => void tryGpuAgain()}>
-                  Try GPU again
+                  {t('diag.gpu.tryAgain')}
                 </Button>
               ) : undefined
             }
           >
-            Running in compatibility mode: responses use the CPU, which works on every
-            machine.{' '}
-            {settings.gpuMode === 'auto'
-              ? 'If you have updated your graphics driver, you can try the graphics card again.'
-              : 'GPU acceleration is turned off in Settings — turn it back on there to use the graphics card again.'}
+            {t('diag.gpu.compat')}{' '}
+            {settings.gpuMode === 'auto' ? t('diag.gpu.tryHint') : t('diag.gpu.offHint')}
           </Banner>
         )}
         <Button size="sm" onClick={() => void refreshStatus()}>
-          Refresh
+          {t('diag.refresh')}
         </Button>
       </div>
 
       <div className="card">
-        <h2>Hardware benchmark</h2>
-        <p className="hint">
-          Measures RAM, CPU, and drive speed on this device to recommend a model. Runs entirely
-          offline — no data leaves your machine.
-        </p>
+        <h2>{t('diag.bench.title')}</h2>
+        <p className="hint">{t('diag.bench.hint')}</p>
         <Button variant="primary" onClick={() => void runBenchmark()} disabled={running}>
-          {running ? 'Running…' : bench ? 'Re-run benchmark' : 'Run benchmark'}
+          {running ? t('diag.bench.running') : bench ? t('diag.bench.rerun') : t('diag.bench.run')}
         </Button>
-        {error && <Banner tone="error">Benchmark failed: {error}</Banner>}
+        {error && <Banner tone="error">{t('diag.bench.failed', { error })}</Banner>}
 
         {bench && (
           <>
             <dl className="kv">
-              <dt>Assigned profile</dt>
+              <dt>{t('diag.bench.profile')}</dt>
               <dd>
                 <strong>{bench.profile}</strong>
               </dd>
-              <dt>Recommended model</dt>
-              <dd>{bench.recommendedModelId ?? 'No matching model'}</dd>
-              <dt>RAM</dt>
-              <dd>{bench.ramGb > 0 ? `${bench.ramGb.toFixed(1)} GB` : 'unknown'}</dd>
-              <dt>CPU</dt>
+              <dt>{t('diag.bench.recommended')}</dt>
+              <dd>{bench.recommendedModelId ?? t('diag.bench.noMatch')}</dd>
+              <dt>{t('diag.bench.ram')}</dt>
+              <dd>{bench.ramGb > 0 ? `${fmt1(bench.ramGb, lang)} GB` : t('diag.app.unknown')}</dd>
+              <dt>{t('diag.bench.cpu')}</dt>
               <dd>
-                {bench.cpuModel || 'unknown'}
-                {bench.cpuCores > 0 ? ` (${bench.cpuCores} cores)` : ''}
+                {bench.cpuModel || t('diag.app.unknown')}
+                {bench.cpuCores > 0 ? t('diag.bench.cores', { count: bench.cpuCores }) : ''}
               </dd>
-              <dt>OS / arch</dt>
+              <dt>{t('diag.bench.osArch')}</dt>
               <dd>
-                {bench.os || 'unknown'} ({bench.arch || 'unknown'})
+                {bench.os || t('diag.app.unknown')} ({bench.arch || t('diag.app.unknown')})
               </dd>
-              <dt>GPU</dt>
-              <dd>{bench.gpu ?? 'not detected'}</dd>
-              <dt>Drive read</dt>
-              <dd>{bench.driveReadMbps != null ? `${bench.driveReadMbps} MB/s` : 'not measured'}</dd>
-              <dt>Drive write</dt>
-              <dd>{bench.driveWriteMbps != null ? `${bench.driveWriteMbps} MB/s` : 'not measured'}</dd>
-              <dt>Tokens / sec</dt>
+              <dt>{t('diag.bench.gpu')}</dt>
+              <dd>{bench.gpu ?? t('diag.bench.notDetected')}</dd>
+              <dt>{t('diag.bench.driveRead')}</dt>
+              <dd>
+                {bench.driveReadMbps != null
+                  ? `${bench.driveReadMbps} MB/s`
+                  : t('diag.bench.notMeasured')}
+              </dd>
+              <dt>{t('diag.bench.driveWrite')}</dt>
+              <dd>
+                {bench.driveWriteMbps != null
+                  ? `${bench.driveWriteMbps} MB/s`
+                  : t('diag.bench.notMeasured')}
+              </dd>
+              <dt>{t('diag.bench.tokens')}</dt>
               <dd>
                 {bench.tokensPerSecond != null
                   ? `${bench.tokensPerSecond}`
-                  : 'not measured (start a model first)'}
+                  : t('diag.bench.tokensNotMeasured')}
               </dd>
-              <dt>Last run</dt>
-              <dd>{new Date(bench.ranAt).toLocaleString()}</dd>
+              <dt>{t('diag.bench.lastRun')}</dt>
+              <dd>{new Date(bench.ranAt).toLocaleString(lang)}</dd>
             </dl>
 
             {bench.warnings.length > 0 && (
@@ -281,48 +305,48 @@ export function DiagnosticsTab(): JSX.Element {
       </div>
 
       <div className="card">
-        <h2>System</h2>
+        <h2>{t('diag.system.title')}</h2>
         {drive ? (
           <dl className="kv">
-            <dt>OS / platform</dt>
+            <dt>{t('diag.system.osPlatform')}</dt>
             <dd>{drive.platform} ({drive.arch})</dd>
-            <dt>Free space</dt>
-            <dd>{drive.freeBytes != null ? `${(drive.freeBytes / 1e9).toFixed(1)} GB` : 'unknown'}</dd>
+            <dt>{t('diag.system.freeSpace')}</dt>
+            <dd>
+              {drive.freeBytes != null
+                ? `${fmt1(drive.freeBytes / 1e9, lang)} GB`
+                : t('diag.app.unknown')}
+            </dd>
           </dl>
         ) : (
-          <p className="hint">System details could not be loaded yet. Try reopening this tab.</p>
+          <p className="hint">{t('diag.system.loadFailed')}</p>
         )}
       </div>
 
       <div className="card">
-        <h2>Paths</h2>
+        <h2>{t('diag.paths.title')}</h2>
         {drive ? (
           <dl className="kv">
-            <dt>Drive root</dt>
+            <dt>{t('privacy.data.driveRoot')}</dt>
             <dd>{drive.rootPath}</dd>
-            <dt>Workspace</dt>
+            <dt>{t('privacy.data.workspace')}</dt>
             <dd>{drive.workspacePath}</dd>
-            <dt>Models</dt>
+            <dt>{t('privacy.data.models')}</dt>
             <dd>{drive.modelsPath}</dd>
-            <dt>Logs</dt>
+            <dt>{t('privacy.data.logs')}</dt>
             <dd>{drive.logsPath}</dd>
-            <dt>Prepared drive</dt>
-            <dd>{drive.isPreparedDrive ? 'Yes' : 'No (app-data fallback)'}</dd>
-            <dt>Writable</dt>
-            <dd>{drive.writable ? 'Yes' : 'No'}</dd>
+            <dt>{t('diag.paths.prepared')}</dt>
+            <dd>{drive.isPreparedDrive ? t('diag.paths.yes') : t('diag.paths.noFallback')}</dd>
+            <dt>{t('diag.paths.writable')}</dt>
+            <dd>{drive.writable ? t('diag.paths.yes') : t('diag.paths.no')}</dd>
           </dl>
         ) : (
-          <p className="hint">Drive and workspace details could not be loaded yet. Try reopening this tab.</p>
+          <p className="hint">{t('diag.paths.loadFailed')}</p>
         )}
       </div>
 
       <div className="card">
-        <h2>Activity</h2>
-        <p className="hint">
-          A local record of what the app did — model starts, downloads, document imports,
-          workspace events. It stays in your workspace (encrypted when the workspace is)
-          and is never uploaded. It never contains chat text or document contents.
-        </p>
+        <h2>{t('diag.activity.title')}</h2>
+        <p className="hint">{t('diag.activity.hint')}</p>
         <div className="actions">
           <Button
             size="sm"
@@ -331,15 +355,15 @@ export function DiagnosticsTab(): JSX.Element {
               if (!showActivity) void loadActivity()
             }}
           >
-            {showActivity ? 'Hide activity' : 'Show activity'}
+            {showActivity ? t('diag.activity.hide') : t('diag.activity.show')}
           </Button>
           {showActivity && (
             <>
               <Button size="sm" onClick={() => void loadActivity()}>
-                Refresh
+                {t('diag.refresh')}
               </Button>
               <Button size="sm" onClick={() => void exportActivity()}>
-                Export to file…
+                {t('diag.activity.export')}
               </Button>
             </>
           )}
@@ -348,21 +372,21 @@ export function DiagnosticsTab(): JSX.Element {
           <>
             {events != null && events.length > 0 && (
               <label className="hint" style={{ display: 'block', marginTop: 8 }}>
-                Show{' '}
+                {t('diag.activity.filterShow')}{' '}
                 <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}>
-                  <option value="all">All activity</option>
-                  {[...new Set(events.map((ev) => ev.type))].map((t) => (
-                    <option key={t} value={t}>
-                      {auditLabel(t)}
+                  <option value="all">{t('diag.activity.filterAll')}</option>
+                  {[...new Set(events.map((ev) => ev.type))].map((type) => (
+                    <option key={type} value={type}>
+                      {auditLabel(type, t)}
                     </option>
                   ))}
                 </select>
               </label>
             )}
             {events == null ? (
-              <p className="hint">Loading…</p>
+              <p className="hint">{t('diag.activity.loading')}</p>
             ) : events.length === 0 ? (
-              <p className="hint">Nothing recorded yet — activity appears here as you use the app.</p>
+              <p className="hint">{t('diag.activity.empty')}</p>
             ) : (
               <ul className="activity-list">
                 {events
@@ -370,16 +394,16 @@ export function DiagnosticsTab(): JSX.Element {
                   .map((ev) => (
                     <li key={ev.id} className="hint">
                       <span className="activity-time">
-                        {new Date(ev.createdAt).toLocaleString()}
+                        {new Date(ev.createdAt).toLocaleString(lang)}
                       </span>{' '}
-                      — <strong>{auditLabel(ev.type)}</strong>: {ev.message}
+                      — <strong>{auditLabel(ev.type, t)}</strong>: {ev.message}
                     </li>
                   ))}
               </ul>
             )}
             {moreAvailable && (
               <Button size="sm" onClick={() => void loadMoreActivity()}>
-                Show earlier activity
+                {t('diag.activity.earlier')}
               </Button>
             )}
           </>
@@ -387,10 +411,11 @@ export function DiagnosticsTab(): JSX.Element {
       </div>
 
       <div className="card">
-        <h2>Recent logs</h2>
+        <h2>{t('diag.logs.title')}</h2>
         <p className="hint">
-          The tail of <code>logs/app.log</code> on this device. Logs are local-only and never
-          uploaded; they contain no document contents or chat text.
+          {t('diag.logs.hintBefore')}
+          <code>logs/app.log</code>
+          {t('diag.logs.hintAfter')}
         </p>
         <div className="actions">
           <Button
@@ -400,17 +425,21 @@ export function DiagnosticsTab(): JSX.Element {
               if (!showLogs) void refreshLogs()
             }}
           >
-            {showLogs ? 'Hide logs' : 'Show logs'}
+            {showLogs ? t('diag.logs.hide') : t('diag.logs.show')}
           </Button>
           {showLogs && (
             <Button size="sm" onClick={() => void refreshLogs()}>
-              Refresh
+              {t('diag.refresh')}
             </Button>
           )}
         </div>
         {showLogs && (
           <pre className="log-tail">
-            {logTail == null ? 'Loading…' : logTail.length === 0 ? '(log is empty)' : logTail.join('\n')}
+            {logTail == null
+              ? t('diag.activity.loading')
+              : logTail.length === 0
+                ? t('diag.logs.empty')
+                : logTail.join('\n')}
           </pre>
         )}
       </div>
