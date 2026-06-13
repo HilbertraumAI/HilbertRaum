@@ -30,18 +30,19 @@
   Network is OFF either way (deny-by-default offline guarantee).
 
 .PARAMETER WithAssets
-  After laying out the tree, download + verify the default chat model weight and the
-  llama.cpp sidecar (invokes fetch-models.ps1 + fetch-runtime.ps1) so one command yields a
-  launch-ready drive. Build-time network only — the app itself stays offline. To keep setup
-  fast, ONLY the default chat model (Ministral 3 8B) is fetched; the user downloads any
-  other models (larger chat models, embeddings, reranker, transcriber) from inside the app.
-  Without this flag the behaviour is unchanged (layout + config; you drop artifacts in by
-  hand).
+  After laying out the tree, download + verify a launch-ready default asset set (invokes
+  fetch-models.ps1 + fetch-runtime.ps1) so one command yields a usable drive. Build-time
+  network only — the app itself stays offline. To keep setup fast the default set is small
+  but complete for the core features: the default chat model (Ministral 3 8B), the embeddings
+  model, the reranker, and the Whisper transcriber model, PLUS both sidecar runtimes
+  (llama.cpp + whisper.cpp). The user downloads any other models (larger chat models) from
+  inside the app. Without this flag the behaviour is unchanged (layout + config; you drop
+  artifacts in by hand).
 
 .PARAMETER AllModels
   With -WithAssets, fetch ALL models with a download block (every chat model + embeddings +
-  reranker + transcriber) instead of just the default chat model. Slower; for building a
-  fully provisioned drive.
+  reranker + transcriber) instead of the small default set. Slower; for building a fully
+  provisioned drive. The sidecar runtimes are fetched either way.
 
 .PARAMETER AcceptLicense
   Forwarded to fetch-models.ps1 (accept the model licenses) when -WithAssets is used.
@@ -64,10 +65,18 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-# The single chat model -WithAssets provisions by default (fast setup). Every other model
-# is downloaded by the user from inside the app. Pass -AllModels to fetch everything.
-# Keep this id in sync with the chat manifest under model-manifests/chat/.
-$DefaultModelId = 'ministral3-8b-instruct-2512-q4'
+# The models -WithAssets provisions by default (fast setup): the default chat model plus the
+# embeddings model, reranker, and Whisper transcriber, so chat, document Q&A, retrieval
+# quality, and audio/dictation all work out of the box. Every OTHER model (larger chat
+# models) is downloaded by the user from inside the app. Pass -AllModels to fetch everything.
+# The whisper.cpp runtime is fetched alongside these (see the -WithAssets block). Keep these
+# ids in sync with the manifests under model-manifests/.
+$DefaultModelIds = @(
+  'ministral3-8b-instruct-2512-q4',   # chat (benchmark-winning 8B)
+  'multilingual-e5-small-q8',         # embeddings (document Q&A)
+  'bge-reranker-v2-m3-f16',           # reranker (retrieval quality)
+  'whisper-small-multilingual'        # transcriber (audio / dictation)
+)
 
 # Normalize -Target to a full path: the config files below are written via .NET
 # ([System.IO.File]::WriteAllText), which resolves relative paths against the PROCESS
@@ -210,19 +219,39 @@ if ($WithAssets) {
   # positionally and '-AcceptLicense'/'-DryRun' strings are NOT recognised as switch names,
   # which fails param binding (PositionalParameterNotFound), especially with a rooted
   # -Target like 'D:\'.
-  $modelArgs = @{ Target = $Target }
-  if (-not $AllModels) {
-    $modelArgs.Only = $DefaultModelId
-    Write-Host ("  (default: fetching only '{0}'; pass -AllModels for every model)" -f $DefaultModelId) -ForegroundColor DarkGray
+  # fetch-models takes a single -Only id, so the default set is fetched one id at a time;
+  # -AllModels fetches every manifest in one pass (a single call with no -Only).
+  if ($AllModels) {
+    $modelTargets = @($null)
+  } else {
+    $modelTargets = $DefaultModelIds
+    Write-Host ("  (default set: {0}; pass -AllModels for every model)" -f ($DefaultModelIds -join ', ')) -ForegroundColor DarkGray
   }
-  if ($AcceptLicense) { $modelArgs.AcceptLicense = $true }
-  if ($DryRun) { $modelArgs.DryRun = $true }
-  & $fetchModels @modelArgs
-  if ($LASTEXITCODE -ne 0) { Write-Error 'fetch-models failed.'; exit 1 }
+  foreach ($only in $modelTargets) {
+    $modelArgs = @{ Target = $Target }
+    if ($only) { $modelArgs.Only = $only }
+    if ($AcceptLicense) { $modelArgs.AcceptLicense = $true }
+    if ($DryRun) { $modelArgs.DryRun = $true }
+    & $fetchModels @modelArgs
+    if ($LASTEXITCODE -ne 0) { Write-Error 'fetch-models failed.'; exit 1 }
+  }
+
+  # llama.cpp sidecar (the chat + embeddings engine) -- always.
   $runtimeArgs = @{ Target = $Target }
   if ($DryRun) { $runtimeArgs.DryRun = $true }
   & $fetchRuntime @runtimeArgs
-  if ($LASTEXITCODE -ne 0) { Write-Error 'fetch-runtime failed.'; exit 1 }
+  if ($LASTEXITCODE -ne 0) { Write-Error 'fetch-runtime (llama.cpp) failed.'; exit 1 }
+
+  # whisper.cpp sidecar (the transcriber engine) -- always, to match the bundled Whisper
+  # model. Best-effort: prebuilt whisper.cpp binaries exist for Windows only, so on a
+  # mac/linux build host there is no build to fetch -- a miss is a warning, not a failure
+  # (those drives build whisper.cpp from source; see docs/packaging.md).
+  $whisperArgs = @{ Target = $Target; Family = 'whisper_cpp' }
+  if ($DryRun) { $whisperArgs.DryRun = $true }
+  & $fetchRuntime @whisperArgs
+  if ($LASTEXITCODE -ne 0) {
+    Write-Host '  note: whisper.cpp runtime not provisioned (no prebuilt build for this host -- build from source on mac/linux).' -ForegroundColor Yellow
+  }
   Write-Host ''
   Write-Host "Now capture real hashes: scripts\verify-models.ps1 -Target '$Target' -Generate" -ForegroundColor Cyan
 } else {

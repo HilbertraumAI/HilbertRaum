@@ -1610,13 +1610,18 @@ document answers always run balanced (deep-grounded = wave 2).
 - `prepare-drive.{ps1,sh}` gained `-WithAssets`/`--with-assets` (+ forwards `-AcceptLicense`): after the
   layout, runs `fetch-models` + `fetch-runtime` so one command yields a launch-ready drive. Without the
   flag, behaviour is unchanged. Then points the user at `verify-models --generate`.
-  - **Fast-setup default (2026-06):** `-WithAssets` fetches **only the default chat model**
-    (`ministral3-8b-instruct-2512-q4`, via `fetch-models --only`) + the sidecar, not all ~11 models —
-    enough to start chatting; the user pulls other models (larger chat, embeddings, reranker,
-    transcriber) from the app on demand. `-AllModels`/`--all-models` restores fetch-everything. The
-    default model id is a constant at the top of each script (keep in sync with `model-manifests/chat/`).
-    The commercial build (`build-commercial-drive`) calls `fetch-models` directly, so it still pre-loads
-    every model — unaffected.
+  - **Fast-setup default (2026-06):** `-WithAssets` fetches a small but complete **default set** —
+    `ministral3-8b-instruct-2512-q4` (chat) + `multilingual-e5-small-q8` (embeddings) +
+    `bge-reranker-v2-m3-f16` (reranker) + `whisper-small-multilingual` (transcriber), each via
+    `fetch-models --only` (looped, since `--only` takes one id) — **plus both sidecar runtimes**:
+    `fetch-runtime` (llama.cpp, default family) AND `fetch-runtime --family whisper_cpp`. Not all ~11
+    models; the user pulls the rest (larger chat models) from the app on demand. `-AllModels`/`--all-models` restores fetch-everything
+    (one `fetch-models` call, no `--only`); the runtimes are fetched either way. The default id list is
+    a `$DefaultModelIds`/`DEFAULT_MODEL_IDS` constant at the top of each script (keep in sync with
+    `model-manifests/`). The whisper.cpp runtime fetch is **best-effort**: prebuilt binaries are
+    Windows-only, so on a mac/linux host the "no build" miss is a warning, not a failure (those drives
+    build whisper.cpp from source). The commercial build (`build-commercial-drive`) calls `fetch-models`
+    directly, so it still pre-loads every model — unaffected.
 ✅ **In-app downloader (the provisioning plan's deferred item)** — ~~deferred~~ **shipped in Phase 18** (see the contract
   section below). **Real downloads + USB-drive launch = manual (R5).**
 

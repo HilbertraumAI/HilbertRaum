@@ -76,12 +76,16 @@ The live path needs artifacts **not in the repo**:
 - the GGUF weights named by the manifests (under `models/...`).
 
 **Phase 12 automates this** with the `fetch-*` scripts (below) — `prepare-drive --with-assets`
-downloads + SHA-256-verifies the artifacts in one command. By default it fetches only the **default
-chat model** (Ministral 3 8B) + the sidecar, so setup is fast and you grab any other models (larger
-chat models, embeddings, reranker, transcriber) from the app's AI Model screen on demand; add
-`-AllModels`/`--all-models` to provision every model up front. You can still drop them in by hand.
-With either, start a chat model on the AI Model screen to get real on-device inference and real
-tokens/sec.
+downloads + SHA-256-verifies the artifacts in one command. By default it fetches a small but
+complete **default set** — the default **chat** model (Ministral 3 8B), the **embeddings** model,
+the **reranker**, and the **Whisper** transcriber model — plus **both sidecar runtimes** (`llama.cpp`
++ `whisper.cpp`), so chat, document Q&A, retrieval quality, and audio work out of the box. The user
+grabs any other models (larger chat models) from the app's AI Model screen on demand; add
+`-AllModels`/`--all-models` to provision every model up front (the runtimes are fetched either way).
+The
+whisper.cpp runtime is prebuilt for **Windows only**, so on a macOS/Linux build host `--with-assets`
+skips it with a note (build it from source). You can still drop everything in by hand. Then start a
+chat model on the AI Model screen to get real on-device inference and real tokens/sec.
 
 ## Portable build (electron-builder, Phase 11)
 
@@ -137,7 +141,7 @@ out on a fresh machine with no Node/npm); their layout + config shapes mirror th
 
 | Script | Purpose |
 |---|---|
-| `prepare-drive.{ps1,sh}` | Create the directory tree, copy manifests + user docs, generate `config/{drive,policy}.json`. `-DryRun`/`--dry-run` prints the plan. `-Dev`/`--dev` → a plaintext developer drive. **`-WithAssets`/`--with-assets`** (Phase 12) then runs `fetch-models` + `fetch-runtime` (forwarding `-AcceptLicense`/`--accept-license`) for a launch-ready drive — by default fetching **only the default chat model** (Ministral 3 8B) for fast setup; **`-AllModels`/`--all-models`** fetches every model instead. |
+| `prepare-drive.{ps1,sh}` | Create the directory tree, copy manifests + user docs, generate `config/{drive,policy}.json`. `-DryRun`/`--dry-run` prints the plan. `-Dev`/`--dev` → a plaintext developer drive. **`-WithAssets`/`--with-assets`** (Phase 12) then runs `fetch-models` + `fetch-runtime` (forwarding `-AcceptLicense`/`--accept-license`) for a launch-ready drive — by default fetching a small **default set** (chat model Ministral 3 8B + embeddings + reranker + Whisper transcriber) **plus both sidecar runtimes** (`llama.cpp` + `whisper.cpp`, the latter Windows-only/best-effort); **`-AllModels`/`--all-models`** fetches every model instead (runtimes either way). |
 | `fetch-models.{ps1,sh}` | (Phase 12) Download + **resume** + **SHA-256-verify** each weight with a `download:` block to its `models/...` path. `-Only <id>`/`--only` for one model; `-AcceptLicense`/`--accept-license` for the license gate; `-DryRun`/`--dry-run`. Real-hash mismatch → delete partial + exit 1. Idempotent (present + verified → skip). |
 | `fetch-runtime.{ps1,sh}` | (Phase 12; GPU defaults Phase 14) Read `runtime-sources.yaml`, pick the host build (`-Os/-Arch/-Backend` overrides; **default = the first listed build: Vulkan on win/linux, Metal on mac**; `-Backend cpu` fetches the pure-CPU safety net into `runtime/llama.cpp/<os>/cpu/`), download + verify the archive, extract into the build's `extract_to` (`chmod +x` on mac/linux), and write a `.hilbertraum-runtime.json` install marker. Idempotent **via the marker** (version + backend must match — a missing/stale marker re-fetches, so a CPU-era drive actually upgrades); `-DryRun`/`--dry-run`. `-Family`/`--family` selects the asset family: `llama_cpp` (default), `whisper_cpp` (the transcriber CLI), or `ocr` (language files). |
 | `verify-models.{ps1,sh}` | SHA-256 each present weight vs its manifest hash (placeholder → *UNVERIFIED*; real mismatch → fail/exit 1). `-Generate`/`--generate` writes `config/checksums.json`. |
