@@ -849,6 +849,11 @@ code, pre, kbd { font-family: var(--font-mono); }
 .pill-accent { color: var(--accent); border-color: var(--accent); }
 
 /* Banner — persistent in-context notice: semantic left border + icon + text. */
+/* ErrorBanner (audit M-U1): always-mounted role="alert" wrapper. Empty when there is no
+   message — no padding/margin of its own, so it collapses to zero height; the inner
+   Banner carries the visible spacing. */
+.error-banner-region { display: contents; }
+
 .banner {
   display: flex;
   align-items: flex-start;

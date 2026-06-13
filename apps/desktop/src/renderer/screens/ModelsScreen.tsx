@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Badge, Banner, Button, ConfirmDialog, EmptyState, Progress, type BadgeTone } from '../components'
+import { Badge, Banner, Button, ConfirmDialog, EmptyState, ErrorBanner, Progress, type BadgeTone } from '../components'
 import { useT } from '../i18n'
 import type { MessageKey, UiLanguage } from '@shared/i18n'
 import type { AppSettings, DownloadJob, ModelInfo, ModelState, PolicyStatus } from '@shared/types'
@@ -495,7 +495,8 @@ export function ModelsScreen(): JSX.Element {
       {others.length > 0 && <div className="section-title">{t('models.section.other')}</div>}
       {others.map(card)}
 
-      {error && <Banner tone="error">{error}</Banner>}
+      {/* Always-mounted alert region (audit M-U1) — announced on first appearance. */}
+      <ErrorBanner message={error} t={t} />
 
       {confirming && confirmDialog(confirming)}
     </div>

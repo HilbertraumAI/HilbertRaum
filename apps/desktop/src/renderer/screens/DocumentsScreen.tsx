@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { ReactNode } from 'react'
-import { Badge, Banner, Button, ConfirmDialog, EmptyState, Modal, type BadgeTone } from '../components'
+import { Badge, Banner, Button, ConfirmDialog, EmptyState, ErrorBanner, Modal, type BadgeTone } from '../components'
 import type {
   DocTaskKind,
   DocumentInfo,
@@ -437,7 +437,8 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
         {anyActive && t('docs.preparing')}
       </p>
 
-      {error && <Banner tone="error">{error}</Banner>}
+      {/* Always-mounted alert region (audit M-U1) — announced on first appearance. */}
+      <ErrorBanner message={error} t={t} />
 
       {empty && (
         <EmptyState

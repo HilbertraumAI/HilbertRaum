@@ -12,7 +12,7 @@ import { localizeServerCopy } from '../lib/displayMap'
 import { friendlyIpcError } from '../lib/errors'
 import { RUNTIME_POLL_MS } from '../lib/polling'
 import { useT } from '../i18n'
-import { Banner, Button, Chip, EmptyState, LocalIndicator, SegmentedControl, useToast } from '../components'
+import { Button, Chip, EmptyState, ErrorBanner, LocalIndicator, SegmentedControl, useToast } from '../components'
 import { Composer, ConversationList, DepthMenu, ScopePopover, Transcript } from '../chat'
 import type { MessageKey } from '@shared/i18n'
 
@@ -560,30 +560,32 @@ export function ChatScreen({ onNavigate, initialMode, initialScopeDocumentIds }:
           actionsDisabled={streaming}
         />
 
-        {error && (
-          <Banner tone="error" t={t} onDismiss={() => setError(null)}>
-            {/* DOC_TASK_BUSY_MESSAGE arrives canonical English on the wire (the
-                exact-match recognition below) — the display map localizes it here. */}
-            {localizeServerCopy(t, error)}
-            {/* Chat refused while a document task runs: the shared
-                copy comes with an actionable cancel — the task, not the chat. */}
-            {error.includes(DOC_TASK_BUSY_MESSAGE) && (
-              <>
-                {' '}
-                <Button
-                  size="sm"
-                  onClick={() => {
-                    void cancelActiveDocTask()
-                      .then(() => setError(null))
-                      .catch(() => undefined)
-                  }}
-                >
-                  {t('chat.cancelDocTask')}
-                </Button>
-              </>
-            )}
-          </Banner>
-        )}
+        {/* Always-mounted alert region (audit M-U1) so the error is announced even on
+            its first appearance. DOC_TASK_BUSY_MESSAGE arrives canonical English on the
+            wire — the display map localizes it here. */}
+        <ErrorBanner
+          message={error != null ? localizeServerCopy(t, error) : null}
+          t={t}
+          onDismiss={() => setError(null)}
+        >
+          {/* Chat refused while a document task runs: the shared
+              copy comes with an actionable cancel — the task, not the chat. */}
+          {error != null && error.includes(DOC_TASK_BUSY_MESSAGE) && (
+            <>
+              {' '}
+              <Button
+                size="sm"
+                onClick={() => {
+                  void cancelActiveDocTask()
+                    .then(() => setError(null))
+                    .catch(() => undefined)
+                }}
+              >
+                {t('chat.cancelDocTask')}
+              </Button>
+            </>
+          )}
+        </ErrorBanner>
 
         <Composer
           value={input}
