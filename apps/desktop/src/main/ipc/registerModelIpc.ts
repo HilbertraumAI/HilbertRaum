@@ -1,5 +1,5 @@
 import { ipcMain } from 'electron'
-import { IPC } from '../../shared/ipc'
+import { EVENTS, IPC } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
 import type { AppSettings, ModelInfo, ModelState, RuntimeInstallInfo, RuntimeStatus } from '../../shared/types'
 import { readRuntimeMarker } from '../services/assets'
@@ -127,7 +127,7 @@ export function maybeAutoStartActiveModel(ctx: AppContext): void {
 
 export function registerModelIpc(ctx: AppContext): void {
 
-  ipcMain.handle(IPC.listModels, async (): Promise<ModelInfo[]> => {
+  ipcMain.handle(IPC.listModels, async (event): Promise<ModelInfo[]> => {
     if (!ctx.manifestsDir) {
       log.warn('No model-manifests directory found; returning empty model list')
       return []
@@ -140,7 +140,13 @@ export function registerModelIpc(ctx: AppContext): void {
       developerMode: developerLeniency(ctx, s),
       runningModelId: ctx.runtime.activeModelId(),
       hashStore: createSettingsHashStore(ctx.db),
-      machineRamGb: machineRamGb()
+      machineRamGb: machineRamGb(),
+      // First-run weight hashing can take a while on a fresh drive — stream progress back
+      // to the calling renderer so the gate + Models screen show a determinate bar. Guard
+      // against a closed/destroyed window (navigation away mid-hash).
+      onProgress: (p) => {
+        if (!event.sender.isDestroyed()) event.sender.send(EVENTS.modelVerifyProgress, p)
+      }
     })
     if (manifestErrors.length > 0) {
       log.warn('Invalid model manifests skipped', manifestErrors)

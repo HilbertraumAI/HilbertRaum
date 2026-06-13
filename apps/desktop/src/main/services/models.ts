@@ -9,7 +9,13 @@ import {
   type ModelManifest,
   type ModelRole
 } from '../../shared/manifest'
-import type { HardwareProfile, ModelDownloadInfo, ModelInfo, ModelState } from '../../shared/types'
+import type {
+  HardwareProfile,
+  ModelDownloadInfo,
+  ModelInfo,
+  ModelState,
+  ModelVerifyProgress
+} from '../../shared/types'
 import { tMain } from './i18n'
 import type { Db } from './db'
 import { getSettings, updateSettings } from './settings'
@@ -121,16 +127,39 @@ export function discoverManifests(manifestsDir: string): DiscoveryResult {
   return { manifests, errors }
 }
 
-/** Stream a file through SHA-256 (large GGUF files never fully buffer in memory). */
-export function sha256File(filePath: string): Promise<string> {
+/**
+ * Stream a file through SHA-256 (large GGUF files never fully buffer in memory).
+ * `onProgress` (optional) receives the running byte count, throttled to at most one call
+ * per `PROGRESS_CHUNK_BYTES` (so the 64 KB read chunks of a multi-GB weight don't flood
+ * IPC) — plus a final exact-total call. Used to drive the first-run verification bar.
+ */
+export function sha256File(
+  filePath: string,
+  onProgress?: (bytesHashed: number) => void
+): Promise<string> {
   return new Promise((resolve, reject) => {
     const hash = createHash('sha256')
     const stream = createReadStream(filePath)
+    let hashed = 0
+    let lastReported = 0
     stream.on('error', reject)
-    stream.on('data', (chunk) => hash.update(chunk))
-    stream.on('end', () => resolve(hash.digest('hex')))
+    stream.on('data', (chunk) => {
+      hash.update(chunk)
+      hashed += chunk.length
+      if (onProgress && hashed - lastReported >= PROGRESS_CHUNK_BYTES) {
+        lastReported = hashed
+        onProgress(hashed)
+      }
+    })
+    stream.on('end', () => {
+      if (onProgress && hashed !== lastReported) onProgress(hashed)
+      resolve(hash.digest('hex'))
+    })
   })
 }
+
+/** Throttle granularity for `sha256File` progress callbacks (64 MB). */
+const PROGRESS_CHUNK_BYTES = 64 * 1024 * 1024
 
 export interface ChecksumResult {
   exists: boolean
@@ -201,8 +230,16 @@ export function createSettingsHashStore(db: Db): HashStore {
   }
 }
 
-/** SHA-256 of a file, cached by (path, size, mtimeMs) — memory first, then `store`. */
-async function sha256FileCached(filePath: string, store?: HashStore): Promise<string> {
+/**
+ * SHA-256 of a file, cached by (path, size, mtimeMs) — memory first, then `store`.
+ * `onProgress` fires only on a real cache MISS (a cache hit does no I/O), so callers can
+ * weight the verification bar by the bytes actually hashed.
+ */
+async function sha256FileCached(
+  filePath: string,
+  store?: HashStore,
+  onProgress?: (bytesHashed: number) => void
+): Promise<string> {
   const st = statSync(filePath)
   const hit = hashCache.get(filePath)
   if (hit && hit.size === st.size && hit.mtimeMs === st.mtimeMs) return hit.actual
@@ -211,7 +248,7 @@ async function sha256FileCached(filePath: string, store?: HashStore): Promise<st
     hashCache.set(filePath, persisted)
     return persisted.actual
   }
-  const actual = await sha256File(filePath)
+  const actual = await sha256File(filePath, onProgress)
   checksumCacheStats.computed += 1
   const entry: CachedHash = { size: st.size, mtimeMs: st.mtimeMs, actual }
   hashCache.set(filePath, entry)
@@ -223,10 +260,11 @@ async function sha256FileCached(filePath: string, store?: HashStore): Promise<st
 export async function verifyChecksum(
   filePath: string,
   expected: string,
-  store?: HashStore
+  store?: HashStore,
+  onProgress?: (bytesHashed: number) => void
 ): Promise<ChecksumResult> {
   if (!existsSync(filePath)) return { exists: false, matched: null, actual: null }
-  const actual = await sha256FileCached(filePath, store)
+  const actual = await sha256FileCached(filePath, store, onProgress)
   if (!isRealSha256(expected)) return { exists: true, matched: null, actual }
   return { exists: true, matched: actual === expected, actual }
 }
@@ -256,6 +294,11 @@ export interface InstallStateOptions {
   developerMode: boolean
   /** Optional persistent hash cache (L2) so unchanged weights are hashed once ever. */
   hashStore?: HashStore
+  /**
+   * Optional per-file hashing progress (running byte count). Fires only when this model's
+   * weight is actually hashed (a real, present, non-cached file); drives the first-run bar.
+   */
+  onProgress?: (bytesHashed: number) => void
 }
 
 /**
@@ -281,9 +324,43 @@ export async function computeInstallState(
     return opts.developerMode ? 'installed' : 'checksum_failed'
   }
 
-  const check = await verifyChecksum(path, manifest.sha256, opts.hashStore)
+  const check = await verifyChecksum(path, manifest.sha256, opts.hashStore, opts.onProgress)
   if (check.matched === false) return 'checksum_failed'
   return 'installed'
+}
+
+/**
+ * Will `computeInstallState` actually hash this weight (a real, present, non-cached file
+ * with a real expected hash)? Used by `buildModelList`'s pre-pass to compute the
+ * verification bar's byte denominator WITHOUT hashing — a cheap `statSync` + cache lookup.
+ * Returns the file size to hash, or `0` when the file will be skipped (missing, cached,
+ * placeholder hash, unsupported).
+ */
+function pendingHashBytes(
+  manifest: ModelManifest,
+  rootPath: string,
+  opts: { developerMode: boolean; hashStore?: HashStore }
+): number {
+  if (!SUPPORTED_RUNTIME_FORMATS.get(manifest.runtime)?.has(manifest.format)) return 0
+  if (!isRealSha256(manifest.sha256)) return 0
+  let path: string
+  try {
+    path = weightPath(rootPath, manifest)
+  } catch {
+    return 0 // an escaping local_path never reaches a hash
+  }
+  let st: ReturnType<typeof statSync>
+  try {
+    st = statSync(path)
+  } catch {
+    return 0 // missing
+  }
+  // A live cache hit (memory or store, matching size+mtime) means no hashing this pass.
+  const hit = hashCache.get(path)
+  if (hit && hit.size === st.size && hit.mtimeMs === st.mtimeMs) return 0
+  const persisted = opts.hashStore?.get(path)
+  if (persisted && persisted.size === st.size && persisted.mtimeMs === st.mtimeMs) return 0
+  return st.size
 }
 
 /** Recommend a model id for a hardware profile + role (spec §7.3). */
@@ -403,6 +480,13 @@ export interface BuildModelListOptions {
    * profile-table lookup. Omitted (tests/legacy callers) → old behavior unchanged.
    */
   machineRamGb?: number
+  /**
+   * Optional verification-progress sink. Called once per model that will be hashed (with
+   * a 1-based step index + the byte-weighted overall totals), throttled within a file by
+   * `sha256File`, plus a terminal `done` event. `overallBytesTotal === 0` ⇒ nothing to
+   * hash this pass (all cached) and NO events are emitted. Omitted ⇒ no overhead.
+   */
+  onProgress?: (p: ModelVerifyProgress) => void
 }
 
 export interface ModelListResult {
@@ -426,12 +510,49 @@ export async function buildModelList(opts: BuildModelListOptions): Promise<Model
       ? recommendModelIdByRam(all, ram, 'embeddings')
       : recommendModelId(all, opts.profile, 'embeddings')
 
+  // Verification-progress pre-pass (no hashing): which models will actually be hashed,
+  // and the total bytes — the byte denominator for a determinate first-run bar. Cheap
+  // (statSync + cache lookup per weight). Skipped entirely when no sink is wired.
+  const willHash = opts.onProgress
+    ? manifests.map(({ manifest }) =>
+        pendingHashBytes(manifest, opts.rootPath, {
+          developerMode: opts.developerMode,
+          hashStore: opts.hashStore
+        })
+      )
+    : []
+  const overallBytesTotal = willHash.reduce((a, b) => a + b, 0)
+  const hashCount = willHash.filter((b) => b > 0).length
+  let completedBytes = 0 // bytes from already-finished models this pass
+  let stepIndex = 0 // 1-based step among the models that hash
+  // The byte-weighted denominator is only honest when there is work to do; with nothing
+  // to hash (everything cached) we emit no events and the renderer shows no bar.
+  const emit = opts.onProgress && overallBytesTotal > 0 ? opts.onProgress : undefined
+
   const models: ModelInfo[] = []
-  for (const { manifest } of manifests) {
+  for (let i = 0; i < manifests.length; i++) {
+    const { manifest } = manifests[i]
+    const thisHashes = willHash[i] > 0
+    if (emit && thisHashes) stepIndex++
+    const stepAt = stepIndex // capture for this model's throttled callbacks
     let state = await computeInstallState(manifest, opts.rootPath, {
       developerMode: opts.developerMode,
-      hashStore: opts.hashStore
+      hashStore: opts.hashStore,
+      onProgress:
+        emit && thisHashes
+          ? (bytesHashed) =>
+              emit({
+                modelIndex: stepAt,
+                modelCount: hashCount,
+                modelId: manifest.id,
+                displayName: manifest.displayName,
+                overallBytesHashed: completedBytes + bytesHashed,
+                overallBytesTotal,
+                done: false
+              })
+          : undefined
     })
+    if (emit && thisHashes) completedBytes += willHash[i]
     if (opts.runningModelId && manifest.id === opts.runningModelId && state === 'installed') {
       state = 'running'
     }
@@ -444,6 +565,19 @@ export async function buildModelList(opts: BuildModelListOptions): Promise<Model
       state === 'missing' && manifest.role === 'chat' && opts.developerMode
     const insufficientRam = ram != null && manifest.recommendedMinRamGb > ram
     models.push(toModelInfo(manifest, state, recommended, startableAsMock, insufficientRam))
+  }
+  // Terminal event so the bar settles to 100% even if the last throttled callback landed
+  // a chunk short of the total.
+  if (emit) {
+    emit({
+      modelIndex: hashCount,
+      modelCount: hashCount,
+      modelId: '',
+      displayName: '',
+      overallBytesHashed: overallBytesTotal,
+      overallBytesTotal,
+      done: true
+    })
   }
   return { models, manifestErrors: errors }
 }

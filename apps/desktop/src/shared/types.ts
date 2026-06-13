@@ -324,6 +324,33 @@ export interface ModelInfo {
   download?: ModelDownloadInfo
 }
 
+/**
+ * First-run / first-cold-visit checksum-verification progress (architecture.md
+ * "Model verification progress"). Emitted from the `listModels` handler over
+ * `EVENTS.modelVerifyProgress` while the multi-GB GGUF weights are hashed for the first
+ * time (the two-tier cache makes this a first-run-only cost). Drives a determinate bar:
+ * the byte-weighted `overallBytesHashed / overallBytesTotal` is the primary indicator,
+ * `modelIndex / modelCount` the "how many steps left" label.
+ */
+export interface ModelVerifyProgress {
+  /** 1-based index of the model currently being hashed. */
+  modelIndex: number
+  /** How many models will be hashed this pass (the denominator of the step label). */
+  modelCount: number
+  modelId: string
+  displayName: string
+  /** Bytes hashed so far across ALL to-be-hashed files this pass. */
+  overallBytesHashed: number
+  /**
+   * Total bytes that will be hashed this pass — the sum of only the weight files that
+   * actually need hashing (cached / missing / placeholder-hash files are excluded).
+   * `0` ⇒ nothing to hash (everything already cached) ⇒ the renderer skips the bar.
+   */
+  overallBytesTotal: number
+  /** True on the final event of the pass, so the bar can settle to 100%. */
+  done: boolean
+}
+
 /** What the per-download confirmation shows (from the manifest `download` block). */
 export interface ModelDownloadInfo {
   url: string

@@ -10,6 +10,7 @@ import type {
   EngineStatus,
   ModelInfo,
   ModelState,
+  ModelVerifyProgress,
   PolicyStatus
 } from '@shared/types'
 
@@ -85,6 +86,9 @@ export function ModelsScreen(): JSX.Element {
   const [settings, setSettings] = useState<AppSettings | null>(null)
   const [policy, setPolicy] = useState<PolicyStatus | null>(null)
   const [machineRam, setMachineRam] = useState<number | null>(UNKNOWN_RAM)
+  // First cold visit hashes the (multi-GB) weights; this drives a determinate bar in the
+  // loading state instead of an opaque spinner. Null once nothing is hashing.
+  const [verifyProgress, setVerifyProgress] = useState<ModelVerifyProgress | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   // The per-download confirmation dialog + the polled download job.
@@ -119,6 +123,15 @@ export function ModelsScreen(): JSX.Element {
 
   useEffect(() => {
     refresh().catch((e) => setError(friendlyIpcError(e)))
+  }, [])
+
+  // Stream first-run verification progress (the cold-hash bar). The terminal `done` event
+  // clears it so the bar never lingers after hashing finishes. `?.` tolerates older
+  // preloads / test stubs (they simply never drive the bar).
+  useEffect(() => {
+    return window.api.onModelVerifyProgress?.((p) =>
+      setVerifyProgress(p.done ? null : p)
+    )
   }, [])
 
   // Poll the live download job (async-with-polling, like import progress).
@@ -209,12 +222,30 @@ export function ModelsScreen(): JSX.Element {
   }
 
   if (!models || !settings) {
+    const p = verifyProgress
+    const pct =
+      p && p.overallBytesTotal > 0
+        ? Math.min(100, Math.round((p.overallBytesHashed / p.overallBytesTotal) * 100))
+        : null
     return (
       <div className="screen">
         <h1>{t('models.title')}</h1>
-        <p className="hint">
-          <Spinner /> {t('models.checking')}
-        </p>
+        {p && pct != null ? (
+          <Progress
+            label={t('models.checkingProgress', {
+              n: p.modelIndex,
+              m: p.modelCount,
+              name: p.displayName,
+              pct
+            })}
+            value={p.overallBytesHashed}
+            max={p.overallBytesTotal}
+          />
+        ) : (
+          <p className="hint">
+            <Spinner /> {t('models.checking')}
+          </p>
+        )}
       </div>
     )
   }

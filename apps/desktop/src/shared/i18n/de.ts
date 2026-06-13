@@ -330,6 +330,7 @@ export const de: Record<keyof typeof en, string> = {
     'Modell-Dateien werden geprüft… Die erste Prüfung nach dem Hinzufügen oder ' +
     'Aktualisieren eines Modells kann bei großen Dateien ein paar Minuten dauern; danach ' +
     'wird das Ergebnis gemerkt und es geht sofort.',
+  'models.checkingProgress': 'Modell {n} von {m} wird geprüft: {name} — {pct} %',
   'models.state.installed': 'Installiert',
   'models.state.missing': 'Nicht heruntergeladen',
   'models.state.checksumFailed': 'Nicht prüfbar',
@@ -744,6 +745,7 @@ export const de: Record<keyof typeof en, string> = {
   'gate.finishing.hint':
     'Wir schauen kurz nach, was schon auf diesem Laufwerk ist. Der erste Blick auf eine ' +
     'große KI-Modell-Datei kann ein paar Minuten dauern.',
+  'gate.finishing.progress': 'KI-Modell {n} von {m} wird geprüft: {name} — {pct} %',
   'gate.finishing.skip': 'Überspringen — direkt zur App',
   'gate.starter.title': 'Eine letzte Sache',
   'gate.starter.noModel':

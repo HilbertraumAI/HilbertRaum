@@ -150,5 +150,12 @@ export const EVENTS = {
    * A friendly one-line runtime notice (the GPU crash auto-fallback's
    * "switched to compatibility mode" message — spec §11.4 tone, never alarming).
    */
-  runtimeNotice: 'runtime:notice'
+  runtimeNotice: 'runtime:notice',
+  /**
+   * Checksum-verification progress during `listModels` (`ModelVerifyProgress`). Emitted
+   * to the calling renderer (`event.sender`) while first-run weight hashing runs, so the
+   * first-run gate + first cold Models visit can show a determinate bar instead of an
+   * opaque spinner. First-run-only in practice (the hash cache makes later passes a no-op).
+   */
+  modelVerifyProgress: 'models:verifyProgress'
 } as const

@@ -23,6 +23,7 @@ import {
   weightPath
 } from '../../src/main/services/models'
 import { validateManifest, type ModelManifest } from '../../src/shared/manifest'
+import type { ModelVerifyProgress } from '../../src/shared/types'
 
 function tempDir(prefix: string): string {
   return mkdtempSync(join(tmpdir(), prefix))
@@ -444,6 +445,107 @@ describe('buildModelList — RAM gate', () => {
     })
     expect(models[0].recommended).toBe(true)
     expect(models[0].insufficientRam).toBe(false)
+  })
+})
+
+// First-run verification progress (architecture.md "Model verification progress"): the
+// `listModels`/`buildModelList` path streams a byte-weighted progress signal so the gate +
+// Models screen can show a determinate bar instead of an opaque spinner while multi-GB
+// weights hash for the first time.
+describe('buildModelList — verification progress', () => {
+  function manifestsDirWith(...objs: Array<Record<string, unknown>>): string {
+    const dir = tempDir('hilbertraum-manifests-')
+    for (const [i, o] of objs.entries()) writeFileSync(join(dir, `m${i}.yaml`), stringify(o))
+    return dir
+  }
+  /** Write a weight at `<root>/<relPath>` and return its real SHA-256. */
+  function writeWeight(rootPath: string, relPath: string, content: string): string {
+    const p = join(rootPath, relPath)
+    mkdirSync(parse(p).dir, { recursive: true })
+    writeFileSync(p, content)
+    return createHash('sha256').update(content).digest('hex')
+  }
+
+  it('emits a final exact-total progress event when a weight is hashed', async () => {
+    clearChecksumCache()
+    const file = join(tempDir('hilbertraum-hash-'), 'weight.bin')
+    writeFileSync(file, 'progress payload')
+    const seen: number[] = []
+    await sha256File(file, (b) => seen.push(b))
+    // Small file < the 64 MB throttle ⇒ exactly one (final flush) call with the byte total.
+    expect(seen).toEqual([Buffer.byteLength('progress payload')])
+  })
+
+  it('reports byte-weighted progress across the models that hash', async () => {
+    clearChecksumCache()
+    const root = tempDir('hilbertraum-root-')
+    const h1 = writeWeight(root, 'models/chat/a.gguf', 'AAAA') // 4 bytes
+    const h2 = writeWeight(root, 'models/chat/b.gguf', 'BBBBBBBB') // 8 bytes
+    const dir = manifestsDirWith(
+      manifestObj({ id: 'a', local_path: 'models/chat/a.gguf', sha256: h1 }),
+      manifestObj({ id: 'b', local_path: 'models/chat/b.gguf', sha256: h2 })
+    )
+    const events: ModelVerifyProgress[] = []
+    const { models } = await buildModelList({
+      manifestsDir: dir,
+      rootPath: root,
+      profile: 'UNKNOWN',
+      developerMode: false,
+      onProgress: (p) => events.push(p)
+    })
+    expect(models.every((m) => m.state === 'installed')).toBe(true)
+
+    // Denominator = both files; step counter spans both; overall byte count is monotonic.
+    expect(events.every((e) => e.overallBytesTotal === 12)).toBe(true)
+    expect(events.every((e) => e.modelCount === 2)).toBe(true)
+    expect(events.map((e) => e.modelIndex)).toEqual([...events.map((e) => e.modelIndex)].sort((a, b) => a - b))
+    const hashed = events.map((e) => e.overallBytesHashed)
+    expect(hashed).toEqual([...hashed].sort((a, b) => a - b))
+
+    // The terminal event settles the bar to 100%.
+    const last = events.at(-1)!
+    expect(last.done).toBe(true)
+    expect(last.overallBytesHashed).toBe(12)
+    expect(last.modelIndex).toBe(2)
+  })
+
+  it('emits NO events when every weight is already cached (the common 2nd run)', async () => {
+    clearChecksumCache()
+    const root = tempDir('hilbertraum-root-')
+    const h = writeWeight(root, 'models/chat/a.gguf', 'cached weights')
+    const dir = manifestsDirWith(manifestObj({ id: 'a', local_path: 'models/chat/a.gguf', sha256: h }))
+    const db = openDatabase(join(tempDir('hilbertraum-db-'), 'c.sqlite'))
+    seedSettings(db)
+    const store = createSettingsHashStore(db)
+
+    const opts = { manifestsDir: dir, rootPath: root, profile: 'UNKNOWN' as const, developerMode: false, hashStore: store }
+    await buildModelList(opts) // warm the cache
+    const events: ModelVerifyProgress[] = []
+    await buildModelList({ ...opts, onProgress: (p) => events.push(p) })
+    expect(events).toEqual([])
+  })
+
+  it('excludes missing and placeholder-hash weights from the byte denominator', async () => {
+    clearChecksumCache()
+    const root = tempDir('hilbertraum-root-')
+    const real = writeWeight(root, 'models/chat/real.gguf', 'REAL') // 4 bytes, will hash
+    // placeholder hash (default fixture) → never hashed; missing file → never hashed.
+    const dir = manifestsDirWith(
+      manifestObj({ id: 'real', local_path: 'models/chat/real.gguf', sha256: real }),
+      manifestObj({ id: 'placeholder', local_path: 'models/chat/placeholder.gguf' }),
+      manifestObj({ id: 'missing', local_path: 'models/chat/missing.gguf', sha256: 'f'.repeat(64) })
+    )
+    const events: ModelVerifyProgress[] = []
+    await buildModelList({
+      manifestsDir: dir,
+      rootPath: root,
+      profile: 'UNKNOWN',
+      developerMode: true, // placeholder counts as installed, still not hashed
+      onProgress: (p) => events.push(p)
+    })
+    expect(events.length).toBeGreaterThan(0)
+    expect(events.every((e) => e.overallBytesTotal === 4)).toBe(true)
+    expect(events.every((e) => e.modelCount === 1)).toBe(true)
   })
 })
 

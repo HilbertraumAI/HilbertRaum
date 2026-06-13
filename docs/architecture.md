@@ -74,6 +74,22 @@ the whole DB file is encrypted at rest.
   **once ever**, not once per session. A size/mtime change re-hashes; the AI Model screen's
   **Verify checksum** button calls the `verifyModel` IPC, which drops the cache entry and re-hashes
   for real. The ship-time gates (`verify-models --strict`, `assertCommercialDrive`) always hash fully.
+- **Model verification progress (first-run bar).** The first cold pass over a fresh drive hashes the
+  multi-GB weights — minutes of I/O behind what used to be an opaque spinner. `buildModelList` now
+  takes an optional `onProgress(p: ModelVerifyProgress)` sink: a cheap pre-pass (`statSync` + cache
+  lookup, **no hashing**) sums the bytes of only the files that will actually hash (cached / missing /
+  placeholder-hash weights excluded) into `overallBytesTotal`, then `sha256File` streams a running
+  byte count (throttled to one callback per 64 MB, plus a final exact-total flush) that the loop
+  re-weights into the overall total and a 1-based `modelIndex / modelCount` step label. A terminal
+  `done` event settles the bar to 100%. `overallBytesTotal === 0` (everything cached — the common
+  2nd-run case) ⇒ **no events**, no bar. The `listModels` handler forwards the sink to the calling
+  renderer over `EVENTS.modelVerifyProgress` via `event.sender` (guarded by `isDestroyed()`); the
+  renderer subscribes through `api.onModelVerifyProgress`. **Surfaces:** the first-run `WorkspaceGate`
+  *finishing* step and the first cold AI Model screen visit render the shared `Progress` bar
+  (byte-weighted %, "Checking model N of M") in place of the spinner; both keep their existing
+  fallbacks (the gate's Skip + never-trap `catch`, the screen's calm "Checking…" hint). Additive
+  behind the locked `listModels` contract; omitting the sink is zero-overhead, so tests/legacy callers
+  are unchanged.
 - **Recommendation is RAM-best-fit (post-MVP).** `recommendModelIdByRam(manifests, ramGb)` picks the
   LARGEST model whose comfortable RAM (`recommended_ram_gb`) fits this machine; if nothing fits
   comfortably, the lightest model meeting its minimum; else none. Used by `listModels` (live
