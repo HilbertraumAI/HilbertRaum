@@ -277,6 +277,101 @@ export const en = {
   'docs.previewModal.noText': 'No text could be extracted from this document.',
   'docs.previewModal.page': 'Page {page}',
 
+  // ---- Models (ModelsScreen.tsx) ----
+  'models.title': 'AI Model',
+  'models.lead':
+    'The AI model answers your questions, entirely on this device. Everything is verified ' +
+    'before use, and nothing is downloaded without your explicit confirmation.',
+  'models.loadError': 'Could not load models: {error}',
+  'models.checking':
+    'Checking model files… The first check after adding or updating a model can take a few ' +
+    'minutes for large files; after that the result is remembered and this is instant.',
+  'models.state.installed': 'Installed',
+  'models.state.missing': 'Not downloaded',
+  'models.state.checksumFailed': 'Can’t verify',
+  'models.state.unsupported': 'Unsupported',
+  'models.state.notRecommended': 'Not recommended',
+  'models.state.ready': 'Ready',
+  'models.state.running': 'Running',
+  'models.hint.embeddings': 'Prepares your documents so you can ask about them.',
+  'models.hint.reranker': 'Improves which document passages are used for answers.',
+  'models.hint.transcriber': 'Turns audio recordings into searchable text.',
+  'models.hint.small': 'Small and quick — fast answers on nearly any machine.',
+  'models.hint.balanced': 'Balanced — works well on most laptops.',
+  'models.hint.large': 'Large — strongest answers; needs a powerful machine.',
+  'models.usesSpace': 'Uses {size} of drive space.',
+  'models.downloads.blockedByPolicy': 'Downloads are disabled by this drive’s policy.',
+  'models.downloads.enableInSettings':
+    'To download models, turn on “Allow internet access for model downloads and updates” ' +
+    'in Settings.',
+  'models.download.verifying': 'Verifying the downloaded file…',
+  'models.download.progress': 'Downloading… {pct} % ({received} of {total})',
+  'models.download.progressNoTotal': 'Downloading… {received} so far',
+  'models.download.cancel': 'Cancel download',
+  'models.download.cancelled': 'Download cancelled — starting it again resumes where it stopped.',
+  // Split around the inline <code>verify-models --generate</code>.
+  'models.download.unverifiedBefore':
+    'Downloaded, but this model’s manifest has no real checksum yet so the file stays ' +
+    'unverified. Capture one with ',
+  'models.download.unverifiedAfter': '.',
+  'models.download.otherRunning': 'Another download is running — one model downloads at a time',
+  'models.download.titled': 'Download {name} ({size})',
+  'models.download.resume': 'Resume download',
+  'models.download.start': 'Download',
+  // RAM-gate copy, composed of full clauses (spec §11.4 — never "your hardware is bad").
+  'models.ram.needs': 'Needs at least {min} GB RAM',
+  'models.ram.machine': ' — this computer has about {ram} GB',
+  'models.ram.advice': '. Pick a smaller model — quality stays great.',
+  'models.badge.active': 'Active',
+  'models.badge.recommended': 'Recommended',
+  'models.badge.ramNeeded': 'Needs ≥{min} GB RAM',
+  'models.automatic.installed': 'Installed — used automatically. There is nothing to start.',
+  'models.automatic.notInstalled': 'Used automatically once installed — no setup needed.',
+  'models.selected': 'Selected',
+  'models.select': 'Select',
+  'models.stopRuntime': 'Stop runtime',
+  'models.startRuntime': 'Start runtime',
+  'models.startMock': 'Start mock runtime',
+  'models.startTitle': 'Start the local runtime for this model',
+  'models.startMockTitle':
+    'No weights present — starts the built-in mock runtime so you can try the app',
+  'models.notPresentTitle': 'Model file not present',
+  'models.tech.summary': 'Technical details',
+  'models.tech.id': 'Model id',
+  'models.tech.family': 'Family',
+  'models.tech.format': 'Format',
+  'models.tech.runtime': 'Runtime',
+  'models.tech.license': 'License',
+  'models.tech.sizeOnDisk': 'Size on disk',
+  'models.tech.minRam': 'Minimum RAM',
+  'models.tech.recRam': 'Recommended RAM',
+  'models.tech.context': 'Context window',
+  'models.tech.contextValue': '{count} tokens',
+  'models.tech.file': 'File',
+  'models.verifyTitle':
+    'Re-hash the file on disk and check it against its SHA-256 (bypasses the cache)',
+  'models.verifying': 'Verifying…',
+  'models.verify': 'Verify checksum',
+  'models.confirm.title': 'Download {name}?',
+  'models.confirm.start': 'Start download',
+  'models.confirm.size': 'Size',
+  'models.confirm.license': 'License',
+  'models.confirm.from': 'From',
+  'models.confirm.readLicense': 'read the license',
+  'models.confirm.hint':
+    'The downloaded file is verified before it is used. This is the only network request ' +
+    'the app makes — nothing about you or your documents is sent.',
+  'models.confirm.licenseAck': 'I have read and accept this model’s license terms',
+  'models.empty.title': 'No model manifests found',
+  // Split around the inline <code>model-manifests/</code>.
+  'models.empty.lineBefore': 'Add YAML manifests under ',
+  'models.empty.lineAfter': ' on the drive.',
+  'models.section.yourModel': 'Your AI model',
+  'models.section.otherModels': 'Other models',
+  'models.section.choose': 'Choose your AI model',
+  'models.section.docSearch': 'Document search',
+  'models.section.other': 'Other',
+
   // ---- Settings (SettingsScreen.tsx — chrome + the General tab) ----
   'settings.title': 'Settings',
   'settings.tabsAria': 'Settings sections',

@@ -5,6 +5,7 @@ import { render, screen, cleanup } from '@testing-library/react'
 import { HomeScreen } from '../../src/renderer/screens/HomeScreen'
 import { ChatScreen } from '../../src/renderer/screens/ChatScreen'
 import { DocumentsScreen } from '../../src/renderer/screens/DocumentsScreen'
+import { ModelsScreen } from '../../src/renderer/screens/ModelsScreen'
 import { I18nProvider, UI_LANGUAGE_STORAGE_KEY } from '../../src/renderer/i18n'
 import { t } from '../../src/shared/i18n'
 import type { AppStatus, RuntimeStatus } from '../../src/shared/types'
@@ -117,5 +118,22 @@ describe('German render smokes (Phase 40)', () => {
     expect(
       screen.getAllByRole('button', { name: t('de', 'docs.import.files') }).length
     ).toBeGreaterThan(0)
+  })
+
+  it('ModelsScreen renders German (empty manifests)', async () => {
+    stubApi({
+      listModels: vi.fn(async () => []),
+      getSettings: vi.fn(async () => ({}) as never),
+      getPolicy: vi.fn(async () => {
+        throw new Error('no policy')
+      }),
+      getAppStatus: vi.fn(async () => appStatus())
+    })
+    render(german(<ModelsScreen />))
+
+    expect(
+      await screen.findByRole('heading', { name: t('de', 'models.title') })
+    ).toBeInTheDocument()
+    expect(await screen.findByText(t('de', 'models.empty.title'))).toBeInTheDocument()
   })
 })

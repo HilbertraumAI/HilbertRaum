@@ -305,6 +305,108 @@ export const de: Record<keyof typeof en, string> = {
   'docs.previewModal.noText': 'Aus diesem Dokument konnte kein Text extrahiert werden.',
   'docs.previewModal.page': 'Seite {page}',
 
+  // ---- Models ----
+  'models.title': 'KI-Modell',
+  'models.lead':
+    'Das KI-Modell beantwortet deine Fragen, vollständig auf diesem Gerät. Alles wird vor ' +
+    'der Verwendung geprüft, und nichts wird ohne deine ausdrückliche Bestätigung ' +
+    'heruntergeladen.',
+  'models.loadError': 'Modelle konnten nicht geladen werden: {error}',
+  'models.checking':
+    'Modell-Dateien werden geprüft… Die erste Prüfung nach dem Hinzufügen oder ' +
+    'Aktualisieren eines Modells kann bei großen Dateien ein paar Minuten dauern; danach ' +
+    'wird das Ergebnis gemerkt und es geht sofort.',
+  'models.state.installed': 'Installiert',
+  'models.state.missing': 'Nicht heruntergeladen',
+  'models.state.checksumFailed': 'Nicht prüfbar',
+  'models.state.unsupported': 'Nicht unterstützt',
+  'models.state.notRecommended': 'Nicht empfohlen',
+  'models.state.ready': 'Bereit',
+  'models.state.running': 'Läuft',
+  'models.hint.embeddings': 'Bereitet deine Dokumente vor, damit du Fragen dazu stellen kannst.',
+  'models.hint.reranker': 'Verbessert, welche Dokumentpassagen für Antworten verwendet werden.',
+  'models.hint.transcriber': 'Wandelt Audioaufnahmen in durchsuchbaren Text um.',
+  'models.hint.small': 'Klein und flott — schnelle Antworten auf fast jedem Gerät.',
+  'models.hint.balanced': 'Ausgewogen — läuft gut auf den meisten Laptops.',
+  'models.hint.large': 'Groß — stärkste Antworten; braucht einen leistungsstarken Rechner.',
+  'models.usesSpace': 'Belegt {size} Speicherplatz auf dem Laufwerk.',
+  'models.downloads.blockedByPolicy':
+    'Downloads sind durch die Richtlinie dieses Laufwerks deaktiviert.',
+  'models.downloads.enableInSettings':
+    'Um Modelle herunterzuladen, schalte in den Einstellungen „Internetzugriff für ' +
+    'Modell-Downloads und Updates erlauben“ ein.',
+  'models.download.verifying': 'Die heruntergeladene Datei wird geprüft…',
+  'models.download.progress': 'Wird heruntergeladen… {pct} % ({received} von {total})',
+  'models.download.progressNoTotal': 'Wird heruntergeladen… bisher {received}',
+  'models.download.cancel': 'Download abbrechen',
+  'models.download.cancelled':
+    'Download abgebrochen — ein erneuter Start setzt fort, wo er aufgehört hat.',
+  'models.download.unverifiedBefore':
+    'Heruntergeladen, aber das Manifest dieses Modells hat noch keine echte Prüfsumme, ' +
+    'daher bleibt die Datei ungeprüft. Erzeuge eine mit ',
+  'models.download.unverifiedAfter': '.',
+  'models.download.otherRunning':
+    'Es läuft bereits ein Download — Modelle werden einzeln heruntergeladen',
+  'models.download.titled': '{name} herunterladen ({size})',
+  'models.download.resume': 'Download fortsetzen',
+  'models.download.start': 'Herunterladen',
+  'models.ram.needs': 'Braucht mindestens {min} GB RAM',
+  'models.ram.machine': ' — dieser Computer hat etwa {ram} GB',
+  'models.ram.advice': '. Wähle ein kleineres Modell — die Qualität bleibt top.',
+  'models.badge.active': 'Aktiv',
+  'models.badge.recommended': 'Empfohlen',
+  'models.badge.ramNeeded': 'Braucht ≥{min} GB RAM',
+  'models.automatic.installed':
+    'Installiert — wird automatisch verwendet. Es gibt nichts zu starten.',
+  'models.automatic.notInstalled':
+    'Wird nach der Installation automatisch verwendet — keine Einrichtung nötig.',
+  'models.selected': 'Ausgewählt',
+  'models.select': 'Auswählen',
+  'models.stopRuntime': 'Modell stoppen',
+  'models.startRuntime': 'Modell starten',
+  'models.startMock': 'Mock-Runtime starten',
+  'models.startTitle': 'Dieses Modell auf diesem Gerät starten',
+  'models.startMockTitle':
+    'Keine Modell-Datei vorhanden — startet die eingebaute Mock-Runtime, damit du die App ' +
+    'ausprobieren kannst',
+  'models.notPresentTitle': 'Modell-Datei nicht vorhanden',
+  'models.tech.summary': 'Technische Details',
+  'models.tech.id': 'Modell-ID',
+  'models.tech.family': 'Familie',
+  'models.tech.format': 'Format',
+  'models.tech.runtime': 'Laufzeit',
+  'models.tech.license': 'Lizenz',
+  'models.tech.sizeOnDisk': 'Größe auf dem Laufwerk',
+  'models.tech.minRam': 'Minimaler RAM',
+  'models.tech.recRam': 'Empfohlener RAM',
+  'models.tech.context': 'Kontextfenster',
+  'models.tech.contextValue': '{count} Tokens',
+  'models.tech.file': 'Datei',
+  'models.verifyTitle':
+    'Die Datei auf dem Laufwerk neu hashen und gegen ihre SHA-256 prüfen (umgeht den ' +
+    'Zwischenspeicher)',
+  'models.verifying': 'Wird geprüft…',
+  'models.verify': 'Prüfsumme prüfen',
+  'models.confirm.title': '{name} herunterladen?',
+  'models.confirm.start': 'Download starten',
+  'models.confirm.size': 'Größe',
+  'models.confirm.license': 'Lizenz',
+  'models.confirm.from': 'Quelle',
+  'models.confirm.readLicense': 'Lizenz lesen',
+  'models.confirm.hint':
+    'Die heruntergeladene Datei wird vor der Verwendung geprüft. Das ist die einzige ' +
+    'Netzwerkanfrage der App — nichts über dich oder deine Dokumente wird gesendet.',
+  'models.confirm.licenseAck':
+    'Ich habe die Lizenzbedingungen dieses Modells gelesen und akzeptiere sie',
+  'models.empty.title': 'Keine Modell-Manifeste gefunden',
+  'models.empty.lineBefore': 'Lege YAML-Manifeste unter ',
+  'models.empty.lineAfter': ' auf dem Laufwerk ab.',
+  'models.section.yourModel': 'Dein KI-Modell',
+  'models.section.otherModels': 'Weitere Modelle',
+  'models.section.choose': 'Wähle dein KI-Modell',
+  'models.section.docSearch': 'Dokumentsuche',
+  'models.section.other': 'Sonstiges',
+
   // ---- Settings ----
   'settings.title': 'Einstellungen',
   'settings.tabsAria': 'Einstellungsbereiche',

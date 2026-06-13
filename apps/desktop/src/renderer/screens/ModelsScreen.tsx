@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Badge, Banner, Button, ConfirmDialog, EmptyState, Progress, type BadgeTone } from '../components'
+import { useT } from '../i18n'
+import type { MessageKey, UiLanguage } from '@shared/i18n'
 import type { AppSettings, DownloadJob, ModelInfo, ModelState, PolicyStatus } from '@shared/types'
 
 // "AI Model" screen (guidelines §2/§3 principle: singular mental model).
@@ -10,21 +12,23 @@ import type { AppSettings, DownloadJob, ModelInfo, ModelState, PolicyStatus } fr
 
 const UNKNOWN_RAM = null
 
-// Status pills: icon + word, never color-only (guidelines §6).
-const STATE_BADGE: Record<ModelState, { label: string; tone: BadgeTone; icon: string }> = {
-  installed: { label: 'Installed', tone: 'success', icon: '✓' },
-  missing: { label: 'Not downloaded', tone: 'neutral', icon: '○' },
-  checksum_failed: { label: 'Can’t verify', tone: 'error', icon: '⚠' },
-  unsupported: { label: 'Unsupported', tone: 'error', icon: '⚠' },
-  not_recommended: { label: 'Not recommended', tone: 'warning', icon: '⚠' },
-  ready: { label: 'Ready', tone: 'success', icon: '✓' },
-  running: { label: 'Running', tone: 'accent', icon: '▶' }
+// Status pills: icon + word, never color-only (guidelines §6). Label values are
+// MessageKeys resolved at render (i18n-plan §5).
+const STATE_BADGE: Record<ModelState, { labelKey: MessageKey; tone: BadgeTone; icon: string }> = {
+  installed: { labelKey: 'models.state.installed', tone: 'success', icon: '✓' },
+  missing: { labelKey: 'models.state.missing', tone: 'neutral', icon: '○' },
+  checksum_failed: { labelKey: 'models.state.checksumFailed', tone: 'error', icon: '⚠' },
+  unsupported: { labelKey: 'models.state.unsupported', tone: 'error', icon: '⚠' },
+  not_recommended: { labelKey: 'models.state.notRecommended', tone: 'warning', icon: '⚠' },
+  ready: { labelKey: 'models.state.ready', tone: 'success', icon: '✓' },
+  running: { labelKey: 'models.state.running', tone: 'accent', icon: '▶' }
 }
 
-/** Bytes → a friendly GB string for the confirmation dialog. */
-function fmtGb(bytes: number | null, fallbackGb: number): string {
+/** Bytes → a friendly GB string; the decimal separator follows the UI language. */
+function fmtGb(bytes: number | null, fallbackGb: number, lang: UiLanguage): string {
   const gb = bytes != null ? bytes / 1024 ** 3 : fallbackGb
-  return `${gb >= 10 ? Math.round(gb) : Math.round(gb * 10) / 10} GB`
+  const rounded = gb >= 10 ? Math.round(gb) : Math.round(gb * 10) / 10
+  return `${rounded.toLocaleString(lang, { useGrouping: false })} GB`
 }
 
 /**
@@ -32,13 +36,13 @@ function fmtGb(bytes: number | null, fallbackGb: number): string {
  * laptops" instead of quantization labels). Derived from what the manifest already
  * carries; the technical numbers live in the disclosure.
  */
-function plainHint(m: ModelInfo): string {
-  if (m.role === 'embeddings') return 'Prepares your documents so you can ask about them.'
-  if (m.role === 'reranker') return 'Improves which document passages are used for answers.'
-  if (m.role === 'transcriber') return 'Turns audio recordings into searchable text.'
-  if (m.sizeOnDiskGb <= 1.5) return 'Small and quick — fast answers on nearly any machine.'
-  if (m.sizeOnDiskGb <= 6) return 'Balanced — works well on most laptops.'
-  return 'Large — strongest answers; needs a powerful machine.'
+function plainHintKey(m: ModelInfo): MessageKey {
+  if (m.role === 'embeddings') return 'models.hint.embeddings'
+  if (m.role === 'reranker') return 'models.hint.reranker'
+  if (m.role === 'transcriber') return 'models.hint.transcriber'
+  if (m.sizeOnDiskGb <= 1.5) return 'models.hint.small'
+  if (m.sizeOnDiskGb <= 6) return 'models.hint.balanced'
+  return 'models.hint.large'
 }
 
 // The in-flight download survives leaving + re-entering the screen (the job itself
@@ -48,6 +52,7 @@ let rememberedJob: DownloadJob | null = null
 const JOB_LIVE: ReadonlySet<DownloadJob['status']> = new Set(['queued', 'downloading', 'verifying'])
 
 export function ModelsScreen(): JSX.Element {
+  const { t, lang } = useT()
   const [models, setModels] = useState<ModelInfo[] | null>(null)
   const [settings, setSettings] = useState<AppSettings | null>(null)
   const [policy, setPolicy] = useState<PolicyStatus | null>(null)
@@ -129,8 +134,8 @@ export function ModelsScreen(): JSX.Element {
   if (error && !models) {
     return (
       <div className="screen">
-        <h1>AI Model</h1>
-        <p className="hint">Could not load models: {error}</p>
+        <h1>{t('models.title')}</h1>
+        <p className="hint">{t('models.loadError', { error })}</p>
       </div>
     )
   }
@@ -138,11 +143,9 @@ export function ModelsScreen(): JSX.Element {
   if (!models || !settings) {
     return (
       <div className="screen">
-        <h1>AI Model</h1>
+        <h1>{t('models.title')}</h1>
         <p className="hint">
-          <span className="spinner" /> Checking model files… The first check after adding or
-          updating a model can take a few minutes for large files; after that the result is
-          remembered and this is instant.
+          <span className="spinner" /> {t('models.checking')}
         </p>
       </div>
     )
@@ -167,9 +170,9 @@ export function ModelsScreen(): JSX.Element {
   const downloadsAllowedByPolicy = policy?.policy.network.allowModelDownloads ?? false
   const downloadsEnabled = downloadsAllowedByPolicy && (policy?.allowNetworkSetting ?? false)
   const downloadsBlockedReason = !downloadsAllowedByPolicy
-    ? 'Downloads are disabled by this drive’s policy.'
+    ? t('models.downloads.blockedByPolicy')
     : !(policy?.allowNetworkSetting ?? false)
-      ? 'To download models, turn on “Allow internet access for model downloads and updates” in Settings.'
+      ? t('models.downloads.enableInSettings')
       : null
   const anyDownloadable = models.some(
     (m) => m.download && (m.state === 'missing' || m.state === 'checksum_failed')
@@ -189,10 +192,16 @@ export function ModelsScreen(): JSX.Element {
           <Progress
             label={
               mine.status === 'verifying'
-                ? 'Verifying the downloaded file…'
+                ? t('models.download.verifying')
                 : pct != null
-                  ? `Downloading… ${pct} % (${fmtGb(mine.receivedBytes, 0)} of ${fmtGb(mine.totalBytes, m.sizeOnDiskGb)})`
-                  : `Downloading… ${fmtGb(mine.receivedBytes, 0)} so far`
+                  ? t('models.download.progress', {
+                      pct,
+                      received: fmtGb(mine.receivedBytes, 0, lang),
+                      total: fmtGb(mine.totalBytes, m.sizeOnDiskGb, lang)
+                    })
+                  : t('models.download.progressNoTotal', {
+                      received: fmtGb(mine.receivedBytes, 0, lang)
+                    })
             }
             value={pct != null ? mine.receivedBytes : undefined}
             max={pct != null ? (mine.totalBytes ?? undefined) : undefined}
@@ -202,7 +211,7 @@ export function ModelsScreen(): JSX.Element {
             disabled={mine.status === 'verifying'}
             onClick={() => window.api.cancelDownload(mine.jobId).then(setJob)}
           >
-            Cancel download
+            {t('models.download.cancel')}
           </Button>
         </div>
       )
@@ -211,12 +220,13 @@ export function ModelsScreen(): JSX.Element {
       <div className="download-progress">
         {mine?.status === 'failed' && <Banner tone="error">{mine.error}</Banner>}
         {mine?.status === 'cancelled' && (
-          <p className="hint">Download cancelled — starting it again resumes where it stopped.</p>
+          <p className="hint">{t('models.download.cancelled')}</p>
         )}
         {mine?.status === 'done' && mine.unverified && (
           <Banner tone="warning">
-            Downloaded, but this model’s manifest has no real checksum yet so the file stays
-            unverified. Capture one with <code>verify-models --generate</code>.
+            {t('models.download.unverifiedBefore')}
+            <code>verify-models --generate</code>
+            {t('models.download.unverifiedAfter')}
           </Banner>
         )}
         <Button
@@ -226,8 +236,11 @@ export function ModelsScreen(): JSX.Element {
           title={
             downloadsBlockedReason ??
             (job != null && JOB_LIVE.has(job.status)
-              ? 'Another download is running — one model downloads at a time'
-              : `Download ${m.displayName} (${fmtGb(m.download.sizeBytes, m.sizeOnDiskGb)})`)
+              ? t('models.download.otherRunning')
+              : t('models.download.titled', {
+                  name: m.displayName,
+                  size: fmtGb(m.download.sizeBytes, m.sizeOnDiskGb, lang)
+                }))
           }
           onClick={() => {
             setLicenseAck(false)
@@ -235,8 +248,8 @@ export function ModelsScreen(): JSX.Element {
           }}
         >
           {mine?.status === 'cancelled' || mine?.status === 'failed'
-            ? 'Resume download'
-            : 'Download'}
+            ? t('models.download.resume')
+            : t('models.download.start')}
         </Button>
       </div>
     )
@@ -256,9 +269,9 @@ export function ModelsScreen(): JSX.Element {
     // disabled (the main process refuses installed weights too); copy stays friendly.
     const ramTooLow = m.insufficientRam === true
     const ramHint = ramTooLow
-      ? `Needs at least ${m.recommendedMinRamGb} GB RAM` +
-        (machineRam != null ? ` — this computer has about ${machineRam} GB` : '') +
-        '. Pick a smaller model — quality stays great.'
+      ? t('models.ram.needs', { min: m.recommendedMinRamGb }) +
+        (machineRam != null ? t('models.ram.machine', { ram: machineRam }) : '') +
+        t('models.ram.advice')
       : undefined
     return (
       <div className="card model-card" key={m.id}>
@@ -266,27 +279,27 @@ export function ModelsScreen(): JSX.Element {
           <div>
             <div className="model-title">{m.displayName}</div>
             <div className="model-sub">
-              {plainHint(m)} Uses {fmtGb(null, m.sizeOnDiskGb)} of drive space.
+              {t(plainHintKey(m))} {t('models.usesSpace', { size: fmtGb(null, m.sizeOnDiskGb, lang) })}
             </div>
           </div>
           <div className="badges">
             {active && (
               <Badge tone="success" icon="●">
-                Active
+                {t('models.badge.active')}
               </Badge>
             )}
             {m.recommended && (
               <Badge tone="accent" icon="★">
-                Recommended
+                {t('models.badge.recommended')}
               </Badge>
             )}
             {ramTooLow && (
               <Badge tone="warning" icon="⚠" title={ramHint}>
-                Needs ≥{m.recommendedMinRamGb} GB RAM
+                {t('models.badge.ramNeeded', { min: m.recommendedMinRamGb })}
               </Badge>
             )}
             <Badge tone={STATE_BADGE[m.state].tone} icon={STATE_BADGE[m.state].icon}>
-              {STATE_BADGE[m.state].label}
+              {t(STATE_BADGE[m.state].labelKey)}
             </Badge>
           </div>
         </div>
@@ -295,9 +308,7 @@ export function ModelsScreen(): JSX.Element {
 
         {automatic ? (
           <p className="hint" style={{ margin: '4px 0 0' }}>
-            {installed
-              ? 'Installed — used automatically. There is nothing to start.'
-              : 'Used automatically once installed — no setup needed.'}
+            {installed ? t('models.automatic.installed') : t('models.automatic.notInstalled')}
           </p>
         ) : (
           <div className="model-actions">
@@ -308,11 +319,11 @@ export function ModelsScreen(): JSX.Element {
               title={ramHint}
               onClick={() => run(`select-${m.id}`, () => window.api.selectModel(m.id))}
             >
-              {active ? 'Selected' : 'Select'}
+              {active ? t('models.selected') : t('models.select')}
             </Button>
             {m.state === 'running' ? (
               <Button size="sm" disabled={busy !== null} onClick={() => run('stop', () => window.api.stopRuntime())}>
-                Stop runtime
+                {t('models.stopRuntime')}
               </Button>
             ) : (
               <Button
@@ -323,13 +334,17 @@ export function ModelsScreen(): JSX.Element {
                   installed && ramTooLow
                     ? ramHint
                     : installed
-                      ? 'Start the local runtime for this model'
+                      ? t('models.startTitle')
                       : canMockStart
-                        ? 'No weights present — starts the built-in mock runtime so you can try the app'
-                        : 'Model file not present'
+                        ? t('models.startMockTitle')
+                        : t('models.notPresentTitle')
                 }
               >
-                {installed ? 'Start runtime' : canMockStart ? 'Start mock runtime' : 'Start runtime'}
+                {installed
+                  ? t('models.startRuntime')
+                  : canMockStart
+                    ? t('models.startMock')
+                    : t('models.startRuntime')}
               </Button>
             )}
           </div>
@@ -340,30 +355,30 @@ export function ModelsScreen(): JSX.Element {
         {/* Checksums / quantization ids / paths / runtime internals live here, closed
             by default (guidelines §2/§3 principle 3 — never in the everyday path). */}
         <details className="tech-details">
-          <summary>Technical details</summary>
+          <summary>{t('models.tech.summary')}</summary>
           <div className="tech-details-body">
             <dl className="kv">
-              <dt>Model id</dt>
+              <dt>{t('models.tech.id')}</dt>
               <dd>
                 <code>{m.id}</code>
               </dd>
-              <dt>Family</dt>
+              <dt>{t('models.tech.family')}</dt>
               <dd>{m.family}</dd>
-              <dt>Format</dt>
+              <dt>{t('models.tech.format')}</dt>
               <dd>{m.format}</dd>
-              <dt>Runtime</dt>
+              <dt>{t('models.tech.runtime')}</dt>
               <dd>{m.runtime}</dd>
-              <dt>License</dt>
+              <dt>{t('models.tech.license')}</dt>
               <dd>{m.license}</dd>
-              <dt>Size on disk</dt>
+              <dt>{t('models.tech.sizeOnDisk')}</dt>
               <dd>{m.sizeOnDiskGb} GB</dd>
-              <dt>Minimum RAM</dt>
+              <dt>{t('models.tech.minRam')}</dt>
               <dd>{m.recommendedMinRamGb} GB</dd>
-              <dt>Recommended RAM</dt>
+              <dt>{t('models.tech.recRam')}</dt>
               <dd>{m.recommendedRamGb} GB</dd>
-              <dt>Context window</dt>
-              <dd>{m.recommendedContextTokens} tokens</dd>
-              <dt>File</dt>
+              <dt>{t('models.tech.context')}</dt>
+              <dd>{t('models.tech.contextValue', { count: m.recommendedContextTokens })}</dd>
+              <dt>{t('models.tech.file')}</dt>
               <dd>
                 <code>{m.localPath}</code>
               </dd>
@@ -372,14 +387,14 @@ export function ModelsScreen(): JSX.Element {
               size="sm"
               disabled={busy !== null}
               onClick={() => run(`verify-${m.id}`, () => window.api.verifyModel(m.id))}
-              title="Re-hash the file on disk and check it against its SHA-256 (bypasses the cache)"
+              title={t('models.verifyTitle')}
             >
               {busy === `verify-${m.id}` ? (
                 <>
-                  <span className="spinner" /> Verifying…
+                  <span className="spinner" /> {t('models.verifying')}
                 </>
               ) : (
-                'Verify checksum'
+                t('models.verify')
               )}
             </Button>
           </div>
@@ -398,36 +413,33 @@ export function ModelsScreen(): JSX.Element {
     return (
       <ConfirmDialog
         open
-        title={`Download ${m.displayName}?`}
-        confirmLabel="Start download"
+        title={t('models.confirm.title', { name: m.displayName })}
+        confirmLabel={t('models.confirm.start')}
         confirmDisabled={needsAck && !licenseAck}
         onConfirm={() => void startDownload(m)}
         onCancel={close}
       >
         <dl className="kv">
-          <dt>Size</dt>
-          <dd>{fmtGb(m.download.sizeBytes, m.sizeOnDiskGb)}</dd>
-          <dt>License</dt>
+          <dt>{t('models.confirm.size')}</dt>
+          <dd>{fmtGb(m.download.sizeBytes, m.sizeOnDiskGb, lang)}</dd>
+          <dt>{t('models.confirm.license')}</dt>
           <dd>
             {m.license}
             {m.download.licenseUrl && (
               <>
                 {' — '}
                 <a href={m.download.licenseUrl} target="_blank" rel="noreferrer">
-                  read the license
+                  {t('models.confirm.readLicense')}
                 </a>
               </>
             )}
           </dd>
-          <dt>From</dt>
+          <dt>{t('models.confirm.from')}</dt>
           <dd>
             <code>{m.download.url}</code>
           </dd>
         </dl>
-        <p className="hint">
-          The downloaded file is verified before it is used. This is the only network request
-          the app makes — nothing about you or your documents is sent.
-        </p>
+        <p className="hint">{t('models.confirm.hint')}</p>
         {needsAck && (
           <label className="toggle">
             <input
@@ -435,7 +447,7 @@ export function ModelsScreen(): JSX.Element {
               checked={licenseAck}
               onChange={(e) => setLicenseAck(e.target.checked)}
             />
-            <span>I have read and accept this model’s license terms</span>
+            <span>{t('models.confirm.licenseAck')}</span>
           </label>
         )}
       </ConfirmDialog>
@@ -444,20 +456,19 @@ export function ModelsScreen(): JSX.Element {
 
   return (
     <div className="screen">
-      <h1>AI Model</h1>
-      <p className="lead">
-        The AI model answers your questions, entirely on this device. Everything is verified
-        before use, and nothing is downloaded without your explicit confirmation.
-      </p>
+      <h1>{t('models.title')}</h1>
+      <p className="lead">{t('models.lead')}</p>
 
       {anyDownloadable && downloadsBlockedReason && <Banner tone="info">{downloadsBlockedReason}</Banner>}
 
       {models.length === 0 && (
         <EmptyState
-          title="No model manifests found"
+          title={t('models.empty.title')}
           line={
             <>
-              Add YAML manifests under <code>model-manifests/</code> on the drive.
+              {t('models.empty.lineBefore')}
+              <code>model-manifests/</code>
+              {t('models.empty.lineAfter')}
             </>
           }
         />
@@ -465,20 +476,22 @@ export function ModelsScreen(): JSX.Element {
 
       {activeChat && (
         <>
-          <div className="section-title">Your AI model</div>
+          <div className="section-title">{t('models.section.yourModel')}</div>
           {card(activeChat)}
         </>
       )}
 
       {otherChat.length > 0 && (
-        <div className="section-title">{activeChat ? 'Other models' : 'Choose your AI model'}</div>
+        <div className="section-title">
+          {activeChat ? t('models.section.otherModels') : t('models.section.choose')}
+        </div>
       )}
       {otherChat.map(card)}
 
-      {embeddings.length > 0 && <div className="section-title">Document search</div>}
+      {embeddings.length > 0 && <div className="section-title">{t('models.section.docSearch')}</div>}
       {embeddings.map(card)}
 
-      {others.length > 0 && <div className="section-title">Other</div>}
+      {others.length > 0 && <div className="section-title">{t('models.section.other')}</div>}
       {others.map(card)}
 
       {error && <Banner tone="error">{error}</Banner>}
