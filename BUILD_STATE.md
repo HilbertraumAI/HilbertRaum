@@ -919,8 +919,10 @@ unencrypted `config/workspace.json` vault descriptor is the only pre-unlock arti
 
 ### Models + runtime (Phase 2 live)
 ✅ **Manifest** schema/validator in `src/shared/manifest.ts` (`ModelManifest`, `validateManifest`,
-`isRealSha256`). YAML files under `model-manifests/` (chat: Qwen3 4B/8B/14B Q4 + 30B-A3B MoE;
-embeddings: E5 small F16 — five manifests total; 1.7B dropped, see §9).
+`isRealSha256`). YAML files under `model-manifests/` (originally chat: Qwen3 4B/8B/14B Q4 + 30B-A3B
+MoE + embeddings: E5 small F16 — five; 1.7B dropped, see §9). **The live catalog is now 11 manifests**
+(8 chat + E5 + bge-reranker + whisper transcriber, in `model-manifests/{chat,embeddings,reranker,
+transcriber}/`) — `model-policy.md` is the authoritative list.
 ✅ **`services/models.ts`** — `resolveManifestsDir`, `discoverManifests`, `sha256File`,
 `verifyChecksum`, `computeInstallState`, `recommendModelId`, `buildModelList`, `selectModel`.
 States: `unsupported→missing→checksum_failed→installed` (+`running` overlay). `ModelInfo` shape per
@@ -1254,9 +1256,13 @@ document answers always run balanced (deep-grounded = wave 2).
 ✅ **Schema** — `shared/manifest.ts` `DownloadSpec` + optional `ModelManifest.download` (validated only
   when present; real `download.sha256` must equal a real top-level `sha256`). `shared/runtime-sources.ts`
   `RuntimeBuild`/`RuntimeSources` + `validateRuntimeSources` (mirror `validateManifest`). The committed
-  model manifests (six, incl. the later 14B/30B-A3B) carry real upstream URLs + placeholder hashes;
-  `model-manifests/runtime-sources.yaml` references `ggml-org/llama.cpp@b9196` — a **PLACEHOLDER**
-  version/URLs/hashes to be replaced with a real release before any fetch — one CPU build per OS.
+  model manifests (the original six, incl. the later 14B/30B-A3B) carry real upstream URLs + placeholder hashes.
+  **(Updated since Phase 12 — see `model-policy.md` for the live catalog: the catalog is now 11
+  manifests (8 chat + E5 + bge-reranker + whisper transcriber), and `runtime-sources.yaml` is pinned
+  to the REAL `ggml-org/llama.cpp@b9585` release with real URLs + SHA-256, plus `whisper_cpp:`/`ocr:`
+  asset blocks — the original "b9196 placeholder / one CPU build per OS" text below is the Phase-12
+  as-built snapshot.)** The Phase-12 snapshot: `runtime-sources.yaml` referenced
+  `ggml-org/llama.cpp@b9196` as a PLACEHOLDER, one CPU build per OS.
   `models.ts` `RESERVED_MANIFEST_FILES` excludes `runtime-sources.yaml` from model discovery.
 ✅ **`services/assets.ts`** — the canonical, unit-tested asset logic (mirrors `drive.ts`; NO real network):
 - `planModelDownloads(root, manifests, {only?, acceptLicense?}) → ModelDownloadTask[]` — only manifests
@@ -1444,7 +1450,7 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
 5. **ANN vector index** only if a real corpus outgrows the linear scan (rag-design §12.2 D15 —
    explicitly not built).
 
-**Current gate (2026-06-13, post docs/comment passes): typecheck clean, 968/968 tests pass
+**Current gate (2026-06-13, post i18n wave + audit-HIGH remediation): typecheck clean, 1011/1011 tests pass
 (+25 manual tests behind `PAID_*` env vars — GPU/thinking/rerank/minsim/RAG-quality/bring-up/
 eval/concurrency-probe/translation/compare/whisper/dictation/OCR smokes — skipped in CI),
 `npm run build` green. Full-suite runs on a loaded machine can flake 1–2 timeout failures
