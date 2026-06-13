@@ -718,8 +718,26 @@ Repo root: `f:\_coding\ai_drive`.
   (drift test extended to the `config/{drive,policy}.json` payloads vs `buildDriveJson`/`buildPolicyJson`
   for both editions, plus the `verify-models.{ps1,sh}` sha256 regex vs `isRealSha256` and the
   runtime/format gate vs the now-exported `SUPPORTED_RUNTIMES`/`SUPPORTED_FORMATS`). Suite **1043 green**,
-  typecheck + build clean. **Still open** (lower priority): the M-U2..6 / M-A2..5 UX & architecture
-  refactors, the remaining a11y LOWs (L1, L9–L15), and the security/correctness LOWs (L2–L6, L16–L19).
+  typecheck + build clean. **Round 5** banked the remaining LOWs (except L16–L19). Correctness: L2
+  (`cosineSimilarity` throws `RangeError` on a length mismatch — the only caller dimension-guards first,
+  so a mismatch is a real bug not a prefix to score); L3 (E5 batch reorder handles all-indexed → sort,
+  none-indexed → trust array order, and **throws** on a partial mix that would silently misalign
+  vectors↔chunks); L4 (embedder `suspend()` clears the failed-start latch **after** teardown — teardown
+  awaits an in-flight start, so a racing failure during it would otherwise re-arm the latch and force a
+  second lock/unlock); L5 (transcriber `suspend()`/`stop()` track each child against a promise that
+  resolves only after its transient-transcript shred runs, then **await** them — the parent can no longer
+  exit on quit leaving an un-shredded transcript in `tmpdir()`, which the workspace crash-sweep never
+  reaches); L6 (`parseCitations`/`isCitation` validate the `citations_json` shape on read, mirroring
+  `parseScope`). a11y: L1 (markdown `a` renderer whitelists http(s), else inert text); L9 (`docs` literal
+  → single `home.preflight.continue` key with a `{folder}` placeholder the UI splits to bold); L10
+  (`friendlyIpcError` at the remaining `String(e)` sites in Chat/Documents/Models screens); L11
+  (`<Spinner>` with `aria-hidden` baked in, replacing every bare `.spinner` span); L12 (`aria-describedby`
+  on the ConfirmDialog body via `useId`); L13 (strength meter is no longer a `role="status"` live region —
+  a separate debounced `.sr-only` region announces the word only after typing settles); L14
+  (search-results `aria-live="polite"` + an `.sr-only` count); L15 (Thinking `<button aria-expanded>`
+  instead of a `preventDefault`-driven `<details>`, reasoning kept mounted-but-`hidden` when collapsed).
+  Suite **1058 green**, typecheck + build clean. **Still open** (deferred, lower priority, not started):
+  the architecture/deps LOWs L16–L19 and the M-U2..6 / M-A2..5 UX & architecture refactors.
 - **D1 re-affirmed — unified auto-RAG chat stays NOT built (2026-06-12):** the Phase-21 data
   the original deferral waited for is in, and it argues AGAINST unifying now: no cheap
   relevance gate exists under prefix-less E5 (the measured-floor overlap, rag-design �12.1
@@ -1479,8 +1497,8 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
 5. **ANN vector index** only if a real corpus outgrows the linear scan (rag-design §12.2 D15 —
    explicitly not built).
 
-**Current gate (2026-06-13, post i18n wave + audit HIGH+MEDIUM+round-4 remediation on branch
-`audit-2026-06-13-high-fixes`): typecheck clean, 1043 tests pass (25 skipped — the manual
+**Current gate (2026-06-13, post i18n wave + audit HIGH+MEDIUM+round-4/5 remediation on branch
+`audit-2026-06-13-high-fixes`): typecheck clean, 1058 tests pass (25 skipped — the manual
 tests behind `PAID_*` env vars: GPU/thinking/rerank/minsim/RAG-quality/bring-up/
 eval/concurrency-probe/translation/compare/whisper/dictation/OCR smokes — skipped in CI),
 `npm run build` green. Full-suite runs on a loaded machine can flake 1–2 timeout failures
