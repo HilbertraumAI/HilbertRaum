@@ -909,6 +909,17 @@ export class WorkspaceController {
   }
 
   /**
+   * The unlocked vault DATA key, or null in plaintext mode / while locked. Exposed ONLY for
+   * the local diagnostics log, which encrypts `app.log.enc` under the same key as the DB and
+   * document cache (one at-rest key for the whole workspace). Like `documentCipher`, the
+   * caller must not retain it past a lock — the controller zeroes its copy on `lock()`.
+   */
+  encryptionKey(): Buffer | null {
+    if (this._mode !== 'encrypted') return null
+    return this.key
+  }
+
+  /**
    * A `DocumentCipher` bound to the unlocked vault key, or null in plaintext mode /
    * while locked. Ingestion uses it to keep the imported-document cache encrypted at
    * rest (the cipher captures the key; it stops working only at process exit).

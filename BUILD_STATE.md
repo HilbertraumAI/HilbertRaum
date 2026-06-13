@@ -6,7 +6,39 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
-_Last updated: 2026-06-13 — **Chat-UI polish pass (branch `chat-ui-polish`).** A
+_Last updated: 2026-06-13 — **Encrypt the diagnostics log at rest.** `logs/app.log`
+could carry file names/paths + model ids but sat in plaintext beside the encrypted DB; it is
+now sealed under the **same vault key** as the DB/document cache. `services/logging.ts` became a
+three-state machine: **`buffering`** (pre-unlock — lines held in a bounded in-memory buffer, no
+disk writes; lost on a kill while still locked, the accepted trade), **`encrypted`** (after
+`attachVaultKey(key)` from the unlock/create IPC — buffer + decrypted history sealed to
+`app.log.enc`; rewritten on every `error`, on rotation `app.1.log.enc`, and on lock/quit via
+`detachVaultKey()` before `lock()` zeroes the key; `info`/`warn` ride the next flush;
+`readLogTail` reads the in-memory buffer), and **`plaintext`** (after `usesPlaintextLog()` for a
+`plaintext_dev` workspace — plain `app.log`, matching the unencrypted dev DB). The vault key
+reaches logging via new `WorkspaceController.encryptionKey()` (same data key as `documentCipher()`).
+**Password change** calls `rekeyVaultLog(newKey)` *after* a successful change — it re-seals the same
+in-memory buffer under the now-current key (v1→v2 rotates the data key; v2 keeps it) **without**
+re-loading from disk, which would discard history under a rotated key or **double** it under an
+unchanged one. (The earlier detach-before/re-attach-after dance had exactly that doubling bug on the
+common v2 path — fixed in the code-review pass.) **Hardening from the review:** buffer caps + the
+rotation threshold are measured by **UTF-8 byte length** (not char count, so multibyte paths can't
+blow past them); `loadEncrypted` trims on a **line boundary**; `app.1.log.enc` is written
+**atomically** like the live `.enc`. Durability/rotation windows (info/warn lost on a hard kill;
+`app.1.log.enc` recovery-only; stuck-at-gate session discarded) are now documented in code + docs.
+**Migration:** `attachVaultKey` shreds any stale plaintext `app.log`/`app.1.log` an older build
+left on an encrypted drive. **Files:** `services/logging.ts` (rewrite), `services/workspace-vault.ts`
+(+`encryptionKey()`), `ipc/registerWorkspaceIpc.ts` (attach/detach/rekey in unlock/create/lock/change),
+`main/index.ts` (plaintext switch at startup; flush before lock on quit + uncaughtException).
+**Docs:** `security-model.md` ("Logs are local-only AND encrypted at rest" + design record),
+`PRIVACY.md`, `known-limitations.md`, `drive-layout.md`. **Tests:** typecheck clean, build OK,
+`npm test` **1095 passed / 25 skipped** (full suite green). logging.test.ts covers **14
+tests** across the 3 modes + encrypted rotation + the migration shred + cross-session re-unlock +
+the rekey no-double / v1 key-rotation + byte-boundary trim (+9 over the prior 5). _(Reminder: run the suite via `npm test` or from `apps/desktop` — a bare
+`npx vitest` from the repo root finds no config, drops the `@shared`/`@renderer` aliases + jest-dom
+setup, and falsely fails every renderer suite. See the run-vitest memory.)_
+
+_(prior) **Chat-UI polish pass (branch `chat-ui-polish`).** A
 focused, renderer-only calm/premium pass on the Chat screen + conversation history
 (design-guidelines §3/§7). **What changed:** ① app nav → a compact ~80px **icon+label
 rail** (`.app-shell` grid `80px 1fr`), active = soft neutral fill (accent reserved for the
@@ -309,7 +341,9 @@ Repo root: `f:\_coding\ai_drive`.
   for Vite HMR (a strict policy breaks `npm run dev`).
 - **Logs-local guarantee (Phase 8):** confirmed `services/logging.ts` is the only log writer
   (rotating `app.log` under `logsPath`); nothing writes logs/crash data off-device. Stated as fact
-  on the Privacy screen + PRIVACY.md.
+  on the Privacy screen + PRIVACY.md. **Superseded 2026-06-13 (encrypted-log change):** still the
+  only writer, but on an encrypted workspace it writes `app.log.enc` (sealed under the vault key),
+  not plaintext — see the "Encrypt the diagnostics log at rest" entry at the top + `security-model.md`.
 - **KDF = Argon2id (default for new vaults), scrypt still supported (Phase 9 → audit round 2, R4):**
   NEW vaults derive the key with **Argon2id** (OWASP-recommended) via the pure-JS, audited
   **`@noble/hashes`** — no fragile native `argon2` build (the original R4 blocker). Default params
