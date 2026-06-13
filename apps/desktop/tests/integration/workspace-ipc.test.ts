@@ -94,6 +94,38 @@ describe('registerWorkspaceIpc', () => {
     expect(ctrl.isUnlocked()).toBe(false)
   })
 
+  // M-S2: the renderer is the untrusted boundary — a non-string password must NOT throw
+  // an unhandled TypeError at the IPC layer (password.length used to run before the try).
+  it('handles a non-string create password as a clean refusal (no throw)', async () => {
+    const ctrl = new WorkspaceController(freshVault(), ENCRYPTION_REQUIRED, false)
+    ctrl.init()
+    registerWorkspaceIpc(ctxWith(ctrl))
+    // A throwing handler would reject this await — the no-throw guarantee IS the test.
+    const { result } = await invoke(handlers, IPC.createWorkspace, 12345 as unknown as string, 'encrypted')
+    expect(result).toMatchObject({ ok: false, reason: 'refused' })
+    expect(ctrl.isUnlocked()).toBe(false)
+  })
+
+  it('rejects an unknown create mode as a clean result (no throw)', async () => {
+    const ctrl = new WorkspaceController(freshVault(), ENCRYPTION_REQUIRED, false)
+    ctrl.init()
+    registerWorkspaceIpc(ctxWith(ctrl))
+    const { result } = await invoke(handlers, IPC.createWorkspace, 'longenough', 'bogus' as never)
+    expect(result).toMatchObject({ ok: false })
+    expect(ctrl.isUnlocked()).toBe(false)
+  })
+
+  it('handles a non-string unlock password as wrong_password (no throw)', async () => {
+    const vp = freshVault()
+    createEncryptedVaultOnDisk(vp, 'right-password', FAST_KDF)
+    const ctrl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctrl.init()
+    registerWorkspaceIpc(ctxWith(ctrl))
+    const { result } = await invoke(handlers, IPC.unlockWorkspace, { evil: true } as unknown as string)
+    expect(result).toMatchObject({ ok: false, reason: 'wrong_password' })
+    expect(ctrl.isUnlocked()).toBe(false)
+  })
+
   it('maps a policy-forbidden plaintext create to { ok:false, reason:"refused" }', async () => {
     const ctrl = new WorkspaceController(freshVault(), ENCRYPTION_REQUIRED, true)
     ctrl.init()

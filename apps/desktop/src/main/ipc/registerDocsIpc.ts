@@ -131,7 +131,12 @@ export function registerDocsIpc(ctx: AppContext): void {
     // session with no import in flight to explain it.
     let documentIds: string[]
     try {
-      const files = expandPaths(paths ?? [])
+      // M-S2: the renderer is the untrusted boundary — accept only an array of strings.
+      // A non-array (or non-string elements) would otherwise crash expandPaths with the
+      // lease held. Element strings are still server-validated downstream (expandPaths
+      // filters to existing, supported files).
+      const safePaths = Array.isArray(paths) ? paths.filter((p): p is string => typeof p === 'string') : []
+      const files = expandPaths(safePaths)
       documentIds = files.map((f) => createQueuedDocument(ctx.db, f).id)
     } catch (err) {
       releaseDocWork()

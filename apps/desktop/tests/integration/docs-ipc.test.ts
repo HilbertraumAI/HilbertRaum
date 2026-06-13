@@ -99,4 +99,36 @@ describe('registerDocsIpc', () => {
     const { result } = await invoke(handlers, IPC.getImportJob, 'no-such-job')
     expect(result).toMatchObject({ done: true, total: 0 })
   })
+
+  // M-S2: the renderer is the untrusted boundary — a non-array `paths` (or non-string
+  // elements) must NOT throw at the IPC layer (which would also leak the doc-work lease).
+  it('treats a malformed importDocuments paths arg as an empty import (no throw, lease released)', async () => {
+    const { db, workspacePath } = freshWorkspace()
+    let leaseDelta = 0
+    const ctx = {
+      ...ctxWith(db, workspacePath, createMockEmbedder(), /* unlocked */ true),
+      workspace: {
+        isUnlocked: () => true,
+        beginDocumentWork: () => {
+          leaseDelta += 1
+          return () => {
+            leaseDelta -= 1
+          }
+        }
+      }
+    } as unknown as AppContext
+    registerDocsIpc(ctx)
+
+    // A non-array arg and an array with a non-string element both reduce to no real files
+    // (the throwing path is what M-S2 prevents). The handler returns a clean empty job.
+    const bogus = await invoke(handlers, IPC.importDocuments, { not: 'an array' } as unknown as string[])
+    expect((bogus.result as { documentIds: string[] }).documentIds).toEqual([])
+    const mixed = await invoke(handlers, IPC.importDocuments, [42, null, '/nope.txt'] as unknown as string[])
+    expect((mixed.result as { documentIds: string[] }).documentIds).toEqual([]) // /nope.txt absent → dropped
+
+    // The lease is released in the background loop's finally — let those microtasks run,
+    // then confirm no lease leaked (both acquire/release pairs balanced).
+    await new Promise((r) => setTimeout(r, 0))
+    expect(leaseDelta).toBe(0)
+  })
 })

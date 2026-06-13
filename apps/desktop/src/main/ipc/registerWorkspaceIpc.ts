@@ -37,6 +37,12 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
   ipcMain.handle(IPC.getWorkspaceState, (): WorkspaceStateInfo => ctx.workspace.getState())
 
   ipcMain.handle(IPC.unlockWorkspace, (_e, password: string): WorkspaceActionResult => {
+    // The renderer is the untrusted boundary in Electron (M-S2): args are TS-typed but
+    // arrive unvalidated. A non-string password would throw deep in the vault; reject it
+    // here as a clean wrong-password result instead.
+    if (typeof password !== 'string') {
+      return { ok: false, reason: 'wrong_password', message: tMain('main.workspace.wrongPassword') }
+    }
     try {
       const state = ctx.workspace.unlock(password)
       log.info('Workspace unlocked')
@@ -76,6 +82,19 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
   ipcMain.handle(
     IPC.createWorkspace,
     (_e, password: string, mode: WorkspaceMode): WorkspaceActionResult => {
+      // M-S2: validate the renderer-supplied shapes FIRST. `password.length` used to be
+      // read OUTSIDE the try/catch, so a non-string password was an unhandled TypeError
+      // at the IPC boundary instead of a clean refusal. `mode` must be a known enum too.
+      if (mode !== 'encrypted' && mode !== 'plaintext_dev') {
+        return { ok: false, reason: 'error', message: tMain('main.workspace.createFailed') }
+      }
+      if (typeof password !== 'string') {
+        return {
+          ok: false,
+          reason: 'refused',
+          message: tMain('main.workspace.passwordTooShort', { min: MIN_PASSWORD_LENGTH })
+        }
+      }
       if (mode === 'encrypted' && password.length < MIN_PASSWORD_LENGTH) {
         return {
           ok: false,
@@ -116,6 +135,11 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
   ipcMain.handle(
     IPC.changeWorkspacePassword,
     (_e, currentPassword: string, nextPassword: string): WorkspaceActionResult => {
+      // M-S2: a non-string current password would throw in the vault verifier — treat it
+      // as a wrong-current-password result (the new-password shape is validated below).
+      if (typeof currentPassword !== 'string') {
+        return { ok: false, reason: 'wrong_password', message: tMain('main.workspace.wrongCurrentPassword') }
+      }
       if (typeof nextPassword !== 'string' || nextPassword.length < MIN_PASSWORD_LENGTH) {
         return {
           ok: false,
