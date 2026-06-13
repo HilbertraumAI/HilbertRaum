@@ -207,6 +207,13 @@ export const en = {
     'leaves this drive',
   'docs.reindexAll': 'Re-index all ({count})',
   'docs.reindexAllTitle': 'Re-index every document that was indexed with a different search model',
+  'docs.reindexAllConfirm.title': 'Re-index {count} documents?',
+  'docs.reindexAllConfirm.body':
+    'This re-reads and re-embeds every stale document one at a time. It can take several ' +
+    'minutes and uses the processor heavily — you can keep working, but answers may be slower ' +
+    'until it finishes.',
+  'docs.reindexAllConfirm.confirm': 'Re-index all',
+  'docs.reindexAllProgress': 'Re-indexing {done} of {total}…',
   'docs.supported.base':
     'Supported: TXT, Markdown, PDF, DOCX, CSV — audio recordings (WAV, MP3, FLAC, OGG), ' +
     'which are transcribed on this drive',

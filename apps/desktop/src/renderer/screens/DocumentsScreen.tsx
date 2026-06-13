@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { ReactNode } from 'react'
-import { Badge, Banner, Button, ConfirmDialog, EmptyState, ErrorBanner, Modal, Spinner, type BadgeTone } from '../components'
+import { Badge, Banner, Button, ConfirmDialog, EmptyState, ErrorBanner, Modal, Progress, Spinner, type BadgeTone } from '../components'
 import type {
   DocTaskKind,
   DocumentInfo,
@@ -122,6 +122,12 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
   const [ocrAvailable, setOcrAvailable] = useState(false)
   // "Ask these documents" selection (indexed documents only).
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set())
+  // M-U6: re-index-all is multi-minute CPU work — gate it behind a ConfirmDialog and
+  // show a determinate Progress bar ("Re-indexing 3 of 12…") instead of a button spinner.
+  const [confirmReindexAll, setConfirmReindexAll] = useState(false)
+  const [reindexProgress, setReindexProgress] = useState<{ done: number; total: number } | null>(
+    null
+  )
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   // The single active document task — module-level store so a running summary's
   // busy/progress state survives navigating away and back.
@@ -364,18 +370,24 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
 
   // Re-index every stale document sequentially: same per-document call as
   // the row button, one at a time — multi-document re-embedding contends on the embedder.
+  // Confirmed first (M-U6) because it is multi-minute CPU work; a determinate Progress
+  // bar reports "Re-indexing N of M…" rather than a bare button spinner.
   async function onReindexAllStale(): Promise<void> {
+    const targets = staleDocs // snapshot — refresh() mutates staleDocs as docs clear
     setBusy('reindex-all')
     setError(null)
+    setReindexProgress({ done: 0, total: targets.length })
     try {
-      for (const d of staleDocs) {
-        await window.api.reindexDocument(d.id)
+      for (let i = 0; i < targets.length; i++) {
+        await window.api.reindexDocument(targets[i].id)
+        setReindexProgress({ done: i + 1, total: targets.length })
         await refresh()
       }
     } catch (e) {
       setError(friendlyIpcError(e))
     } finally {
       setBusy(null)
+      setReindexProgress(null)
       await refresh().catch(() => undefined)
     }
   }
@@ -420,7 +432,7 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
             <Button
               disabled={busy !== null || anyActive}
               title={t('docs.reindexAllTitle')}
-              onClick={() => void onReindexAllStale()}
+              onClick={() => setConfirmReindexAll(true)}
             >
               {busy === 'reindex-all'
                 ? t('docs.reindexBusy')
@@ -428,6 +440,17 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
             </Button>
           )}
         </div>
+      )}
+
+      {reindexProgress && (
+        <Progress
+          label={t('docs.reindexAllProgress', {
+            done: reindexProgress.done,
+            total: reindexProgress.total
+          })}
+          value={reindexProgress.done}
+          max={reindexProgress.total}
+        />
       )}
 
       <p className="hint" style={{ marginTop: 10 }}>
@@ -655,6 +678,20 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
         onCancel={() => setConfirmDelete(null)}
       >
         <p className="hint">{t('docs.deleteConfirm.body')}</p>
+      </ConfirmDialog>
+
+      <ConfirmDialog
+        open={confirmReindexAll}
+        title={t('docs.reindexAllConfirm.title', { count: staleDocs.length })}
+        confirmLabel={t('docs.reindexAllConfirm.confirm')}
+        t={t}
+        onConfirm={() => {
+          setConfirmReindexAll(false)
+          void onReindexAllStale()
+        }}
+        onCancel={() => setConfirmReindexAll(false)}
+      >
+        <p className="hint">{t('docs.reindexAllConfirm.body')}</p>
       </ConfirmDialog>
 
       {translateDoc && (

@@ -226,6 +226,13 @@ export const de: Record<keyof typeof en, string> = {
   'docs.reindexAll': 'Alle neu indexieren ({count})',
   'docs.reindexAllTitle':
     'Jedes Dokument neu indexieren, das mit einem anderen Suchmodell indexiert wurde',
+  'docs.reindexAllConfirm.title': '{count} Dokumente neu indexieren?',
+  'docs.reindexAllConfirm.body':
+    'Dabei wird jedes veraltete Dokument nacheinander neu eingelesen und neu eingebettet. ' +
+    'Das kann mehrere Minuten dauern und beansprucht den Prozessor stark – Sie können ' +
+    'weiterarbeiten, aber Antworten sind bis zum Abschluss möglicherweise langsamer.',
+  'docs.reindexAllConfirm.confirm': 'Alle neu indexieren',
+  'docs.reindexAllProgress': 'Indexiere {done} von {total} neu…',
   'docs.supported.base':
     'Unterstützt: TXT, Markdown, PDF, DOCX, CSV — Audioaufnahmen (WAV, MP3, FLAC, OGG), ' +
     'die auf diesem Laufwerk transkribiert werden',
