@@ -676,6 +676,7 @@ export const de: Record<keyof typeof en, string> = {
   'common.dismiss': 'Ausblenden',
   'common.close': 'Schließen',
   'common.cancel': 'Abbrechen',
+  'common.remove': 'Entfernen',
   'indicator.offline': 'Lokal · Offline',
   'indicator.online': 'Lokal · Downloads erlaubt',
   'indicator.offlineDetail':

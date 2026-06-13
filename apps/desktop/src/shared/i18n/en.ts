@@ -629,6 +629,7 @@ export const en = {
   'common.dismiss': 'Dismiss',
   'common.close': 'Close',
   'common.cancel': 'Cancel',
+  'common.remove': 'Remove',
   'indicator.offline': 'Local · Offline',
   'indicator.online': 'Local · Downloads allowed',
   'indicator.offlineDetail': 'Everything stays on this drive. No internet connection is used.',

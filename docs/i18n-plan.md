@@ -1,7 +1,7 @@
 # Internationalization (i18n) plan — English + German UI (Phases 39–42)
 
-_Status: **WORKING PAPER — drafted 2026-06-13. Phase 39 (foundation + proof slice) is
-DONE 2026-06-13; Phases 40–42 are open.** Per the CLAUDE.md doc lifecycle rule this
+_Status: **WORKING PAPER — drafted 2026-06-13. Phase 39 (foundation + proof slice) and
+Phase 40 (renderer sweep) are DONE 2026-06-13; Phases 41–42 are open.** Per the CLAUDE.md doc lifecycle rule this
 file exists while the work is open; on completion it gets condensed
 into a design record (likely a new § in `architecture.md` + a `design-guidelines.md`
 update for the German microcopy rules) and deleted. Phase numbering continues at **39**
@@ -17,7 +17,7 @@ runtime dependencies, no network, no behavior changes outside copy.
 | Phase | Scope | Size | Hard dependency |
 |---|---|---|---|
 | 39 | ✅ DONE 2026-06-13 — i18n foundation: shared `t()` module + catalogs, `uiLanguage` setting + picker, pre-unlock resolution; App shell + Settings + WorkspaceGate migrated as the proof slice | M | none |
-| 40 | Renderer string sweep: all remaining screens/components, pluralization, dates/numbers | L (mechanical) | 39 |
+| 40 | ✅ DONE 2026-06-13 — Renderer string sweep: all remaining screens/components, pluralization, dates/numbers | L (mechanical) | 39 |
 | 41 | Main-process boundary: transient errors/notices localized at emission; persisted-string display map; native dialog titles | M | 39 |
 | 42 | German QA: full `de` review pass (Sie/glossary), text-expansion layout audit + eyeball walk, docs + known-limitations | M | 40 + 41 |
 
@@ -227,10 +227,59 @@ existing `TranslationTargetLang` machinery, not with UI i18n).
    main-process cache lifecycle + German wrong-password emission
    (`tests/unit/main-i18n.test.ts`).
 
-## 5. Phase 40 — renderer sweep
+## 5. Phase 40 — renderer sweep ✅ DONE 2026-06-13
 
-Mechanical migration, batched per screen so each batch is reviewable and the suite
-stays green between batches: ① Home + chat components (`Composer`, `ConversationList`,
+Implemented in five batch commits (one per ①–⑤ below), suite green after each.
+**As-built notes:**
+
+- The catalogs grew from ~70 to ~440 keys per language; English values stayed
+  byte-identical to the pre-sweep literals (D-L8 — the existing role+name assertions
+  passed unchanged; only structural changes needed test edits).
+- Label maps kept their structure with `labelKey: MessageKey` values resolved at
+  render: `STATUS_BADGE` + `TASK_BUSY_LABEL/TITLE` (Documents), `STATE_BADGE` +
+  `plainHintKey` (Models), `AUDIT_TYPE_LABELS` (Diagnostics), `DEPTH_LABEL_KEYS`
+  (chat), `ConversationGroup.labelKey` (conversation list — the date-group test now
+  asserts via `t('en', labelKey)`).
+- Plurals via `tCount`: `home.docsReady` (wired), scope-popover document counts,
+  audio-import recording count, preview OCR page count.
+- Locale-aware formatting from `useT().lang`: the two `toLocaleString()` date sites
+  (`DocumentsScreen` summary attribution, `DiagnosticsTab` benchmark/activity
+  timestamps) plus file-size/RAM one-decimal numbers (`formatSize`, `fmtGb`, `fmt1`)
+  — `useGrouping: false` keeps English output byte-identical to the old `toFixed`.
+- Inline JSX islands (`<code>`, `<strong>`, `<b>`) are handled with before/after key
+  pairs (e.g. `app.fatal.hintBefore/After`) — both languages order around the island.
+- ⑤ as built: shared components RECEIVE a bound `t` prop/argument
+  (`components/translator.ts` exports the `Translator` type and the
+  `englishTranslator` default used when no `t` is passed — provider-less component
+  tests keep working). Built-in copy migrated: Banner "Dismiss", Modal "Close",
+  ConfirmDialog default "Cancel", Chip "Remove" fallback, PasswordField Show/Hide,
+  strength labels (now `labelKey`/`hintKey` MessageKeys on `PasswordStrength`),
+  LocalIndicator label/detail (the helper functions take `t` as an argument,
+  defaulting to English). Toast has no built-in copy.
+- Deliberately NOT migrated (Phase 41 / D-L4–D-L5 boundary): persisted
+  `documents.error_message` rendering, `NO_DOCUMENT_CONTEXT_ANSWER` matching,
+  `DOC_TASK_BUSY_MESSAGE` recognition (both sides untouched), raw IPC/job/task error
+  strings (`friendlyIpcError` output, download `job.error`, audit `ev.message`,
+  benchmark warnings). `MIC_BLOCKED_MESSAGE` stays canonical English in
+  `lib/dictation.ts` (a pure module) and is exact-matched + localized at display in
+  `DictationButton` — the renderer-internal analogue of the D-L4 display map.
+- Untranslated by design: the product name / "Lite" brand line, the language names in
+  the picker (`System`/`English`/`Deutsch`), technical values (model ids, paths,
+  hardware-profile codes, "llama.cpp <version>").
+- Tests: +9 German render smokes (`tests/renderer/GermanSmoke.test.tsx`: Home, Chat,
+  Documents, Models, Privacy tab, Diagnostics tab, shared-component built-ins) on top
+  of the Phase-39 gate smoke; structural assertions reference the `en` catalog.
+- **Grep-audit result (the completeness heuristic below, run 2026-06-13):** after the
+  sweep, the only remaining capitalized string literals in `renderer/` are (a) code
+  comments / CSS comments, (b) developer-facing internal `throw new Error(...)`
+  messages that never render in the UI (`main.tsx` root-element guard, `ocr/main.ts`
+  worker guards, `lib/wav.ts` validation), (c) the canonical `MIC_BLOCKED_MESSAGE`
+  constant (see above), (d) the untranslated-by-design brand/language-name strings,
+  and (e) keyboard `e.key` names (`'Escape'`, `'Home'`, `'End'`). No user-visible
+  literal remains.
+
+Original batch plan — mechanical migration, batched per screen so each batch is
+reviewable and the suite stays green between batches: ① Home + chat components (`Composer`, `ConversationList`,
 `DepthMenu`, `Transcript`, `ScopePopover`, `SourcesDisclosure`, `MessageActions`,
 `DictationButton`) ② Documents (incl. `STATUS_BADGE`, task buttons, translation-target
 buttons) ③ Models (incl. `STATE_BADGE`, download confirm dialog, RAM badge) ④ Privacy +

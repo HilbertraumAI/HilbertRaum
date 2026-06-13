@@ -6,11 +6,11 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
-_Last updated: 2026-06-13 — **Phase 39 (i18n foundation + proof slice) is DONE** (see the
-§1 row + the §3 entry; working paper `docs/i18n-plan.md` §4 has the as-built record and
-the R-L1 locale finding). Same day, earlier: the audit's code findings were remediated
-(strings, robustness, test-infra timeout; §3 "Audit-findings remediation" entry) on top of
-the docs-vs-code consistency audit + code-comment quality pass + docs dead-info pass._
+_Last updated: 2026-06-13 — **Phase 40 (i18n renderer string sweep) is DONE** (see the
+§1 row + the §3 entry; working paper `docs/i18n-plan.md` §5 has the as-built notes and
+the grep-audit result). Same day, earlier: Phase 39 (i18n foundation + proof slice,
+`docs/i18n-plan.md` §4 + R-L1 locale finding) and the audit's code-finding remediation
+(strings, robustness, test-infra timeout; §3 "Audit-findings remediation" entry)._
 
 **Where the project stands:** the MVP (Phases 0–13) is feature-complete and four post-MVP
 audit rounds are fully remediated (§8). Every shipped wave since is DONE and condensed into a
@@ -40,9 +40,9 @@ design record per the CLAUDE.md doc lifecycle rule:
 **Open:** Phase 22 (signed offline update bundles) is 🔴 blocked on a key-management design;
 Phase 30 (opt-in big slot + embeddings) has a drafted working paper
 ([`docs/big-slot-embeddings-plan.md`](docs/big-slot-embeddings-plan.md)); the i18n wave
-(English + German UI, [`docs/i18n-plan.md`](docs/i18n-plan.md)) has **Phase 39 done**
-(foundation + proof slice; D-L1/2/3/5/8 locked, D-L7 in use) and Phases 40–42 open
-(renderer sweep ∥ main-process boundary, then German QA). Release-wise the
+(English + German UI, [`docs/i18n-plan.md`](docs/i18n-plan.md)) has **Phases 39 + 40
+done** (foundation + proof slice; full renderer sweep — every screen/component renders
+from the catalogs) and Phases 41–42 open (main-process boundary, then German QA). Release-wise the
 remaining work is **manual acceptance only** (§5). Consciously-accepted gaps live in
 [`docs/known-limitations.md`](docs/known-limitations.md).
 
@@ -86,7 +86,8 @@ remaining work is **manual acceptance only** (§5). Consciously-accepted gaps li
 | 37 | Voice dictation in the composer | 🟢 done 2026-06-11 — wave-3 record §10 |
 | 38 | Scanned-PDF / photo OCR (tesseract.js + `ocr/` assets) | 🟢 done 2026-06-11 — wave-3 record §11; **wave 3 COMPLETE** |
 | 39 | i18n foundation + proof slice (shared `t()` + catalogs, `uiLanguage` + picker, pre-unlock language) | 🟢 done 2026-06-13 — `docs/i18n-plan.md` §4 (as built + R-L1 finding) |
-| 40–42 | i18n: renderer sweep · main-process boundary · German QA | ⚪ not started — plan `docs/i18n-plan.md` §5–§7 |
+| 40 | i18n renderer string sweep (all screens/components, plurals, dates/numbers, shared-component `t` prop) | 🟢 done 2026-06-13 — `docs/i18n-plan.md` §5 (as built + grep-audit result) |
+| 41–42 | i18n: main-process boundary · German QA | ⚪ not started — plan `docs/i18n-plan.md` §6–§7 |
 
 Legend: ⚪ not started · 🟡 in progress · 🟢 done · 🔴 blocked
 
@@ -718,6 +719,28 @@ Repo root: `f:\_coding\ai_drive`.
   (picker patch + mirror + German gate smoke); one scoping edit in `Theme.test.tsx` (the
   General tab now has two "System" radios — scope by radiogroup, don't rename). Persisted
   DB strings and LLM prompts untouched (D-L4/D-L6 wait for Phases 41/42).
+- **Phase 40 — i18n renderer string sweep (2026-06-13; as-built notes + grep-audit result
+  in `docs/i18n-plan.md` §5):** every remaining renderer screen/component migrated to the
+  shared catalogs in five batch commits (① Home + chat components + App leftovers ②
+  Documents ③ Models ④ Privacy/Diagnostics tabs ⑤ shared components), catalogs now
+  ~440 keys/language with **English values byte-identical** (D-L8 — the pre-existing
+  role+name assertions passed unchanged). Label maps kept their structure with
+  `labelKey: MessageKey` values (`STATUS_BADGE`, `STATE_BADGE`, `AUDIT_TYPE_LABELS`,
+  `TASK_BUSY_*`, `DEPTH_LABEL_KEYS`, `ConversationGroup.labelKey`); hand-rolled plurals
+  → `tCount`; the two `toLocale*String()` date sites + file-size/RAM formatting take the
+  resolved locale from `useT().lang` (`useGrouping: false` keeps EN output identical).
+  **Shared components RECEIVE a bound `t` prop/argument** (`components/translator.ts`:
+  `Translator` type + `englishTranslator` default for provider-less tests) — Banner
+  Dismiss, Modal Close, ConfirmDialog Cancel, Chip Remove, PasswordField Show/Hide +
+  strength `labelKey`/`hintKey`, LocalIndicator label/detail. Phase-41 boundary
+  untouched: persisted `documents.error_message` renders as-is, `DOC_TASK_BUSY_MESSAGE`
+  recognition unchanged, raw IPC/job/audit error strings pass through;
+  `MIC_BLOCKED_MESSAGE` stays canonical in `lib/dictation.ts` and is exact-matched +
+  localized at display in `DictationButton`. Untranslated by design: product name/"Lite",
+  picker language names, technical ids/paths. Tests: 997 green from `apps/desktop`; new
+  `tests/renderer/GermanSmoke.test.tsx` (German render smoke per migrated screen + the
+  shared-component built-ins); grep audit clean (remaining capitalized literals =
+  comments, dev-internal throws, `e.key` names — recorded in plan §5).
 
 ---
 

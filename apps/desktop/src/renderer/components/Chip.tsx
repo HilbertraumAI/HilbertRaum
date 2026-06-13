@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react'
+import { englishTranslator, type Translator } from './translator'
 
 // Chip (guidelines §6): --radius-sm, --text-sm; the remove ✕ is revealed on hover/focus
 // only (CSS). Used for example prompts and document-scope entries (popover) — never
@@ -14,9 +15,19 @@ export interface ChipProps {
   disabled?: boolean
   /** Chips can also be actions themselves (e.g. example prompts that fill the composer). */
   onClick?: () => void
+  /** Bound translate fn for the built-in remove fallback (i18n-plan §5 ⑤); English default. */
+  t?: Translator
 }
 
-export function Chip({ children, title, onRemove, removeLabel, disabled, onClick }: ChipProps): JSX.Element {
+export function Chip({
+  children,
+  title,
+  onRemove,
+  removeLabel,
+  disabled,
+  onClick,
+  t = englishTranslator
+}: ChipProps): JSX.Element {
   const body = <span className="chip-text">{children}</span>
   if (onClick) {
     return (
@@ -32,7 +43,7 @@ export function Chip({ children, title, onRemove, removeLabel, disabled, onClick
         <button
           type="button"
           className="chip-remove"
-          aria-label={removeLabel ?? 'Remove'}
+          aria-label={removeLabel ?? t('common.remove')}
           disabled={disabled}
           onClick={onRemove}
         >
