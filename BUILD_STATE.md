@@ -736,8 +736,18 @@ Repo root: `f:\_coding\ai_drive`.
   a separate debounced `.sr-only` region announces the word only after typing settles); L14
   (search-results `aria-live="polite"` + an `.sr-only` count); L15 (Thinking `<button aria-expanded>`
   instead of a `preventDefault`-driven `<details>`, reasoning kept mounted-but-`hidden` when collapsed).
-  Suite **1058 green**, typecheck + build clean. **Still open** (deferred, lower priority, not started):
-  the architecture/deps LOWs L16–L19 and the M-U2..6 / M-A2..5 UX & architecture refactors.
+  Suite **1058 green**, typecheck + build clean. **Round 6 — batch 1 (branch
+  `audit-2026-06-13-high-fixes`):** the deps/test-gap LOWs + one locale MEDIUM. L17 (`logging.ts` had
+  zero tests — added `tests/unit/logging.test.ts`: MAX_BYTES rotation, circular-meta non-throw,
+  `readLogTail`); L18 (`@napi-rs/canvas` native `.node` excluded from app.asar via a `!**/@napi-rs/
+  canvas*/**` `files` glob in `electron-builder.yml` + `tests/integration/packaging.test.ts` asserting
+  it); L19 (captured the real **b9585** `--list-devices` stdout into `tests/fixtures/` — CRLF kept
+  binary — and parse it as a `gpu.test.ts` regression); L16 (extracted `resolveSidecarSelection` in
+  `services/select-sidecar-backed.ts` — the shared model→binary→weights ladder behind the three
+  sidecar factories); M-U5 (tech-disclosure GB / Diagnostics MB-s + tokens-s / Settings context-tokens
+  now route through locale `toLocaleString` helpers). Suite **1070 green**, typecheck + build clean.
+  **Still open** (deferred, lower priority): the M-U2..4/U6 / M-A2..5 UX & architecture refactors
+  (round-6 batch 2).
 - **D1 re-affirmed — unified auto-RAG chat stays NOT built (2026-06-12):** the Phase-21 data
   the original deferral waited for is in, and it argues AGAINST unifying now: no cheap
   relevance gate exists under prefix-less E5 (the measured-floor overlap, rag-design �12.1
@@ -1497,8 +1507,8 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
 5. **ANN vector index** only if a real corpus outgrows the linear scan (rag-design §12.2 D15 —
    explicitly not built).
 
-**Current gate (2026-06-13, post i18n wave + audit HIGH+MEDIUM+round-4/5 remediation on branch
-`audit-2026-06-13-high-fixes`): typecheck clean, 1058 tests pass (25 skipped — the manual
+**Current gate (2026-06-13, post i18n wave + audit HIGH+MEDIUM+round-4/5/6-batch-1 remediation on branch
+`audit-2026-06-13-high-fixes`): typecheck clean, 1070 tests pass (25 skipped — the manual
 tests behind `PAID_*` env vars: GPU/thinking/rerank/minsim/RAG-quality/bring-up/
 eval/concurrency-probe/translation/compare/whisper/dictation/OCR smokes — skipped in CI),
 `npm run build` green. Full-suite runs on a loaded machine can flake 1–2 timeout failures
