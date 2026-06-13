@@ -88,6 +88,13 @@ function fmt1(n: number, lang: UiLanguage): string {
   })
 }
 
+/** Locale-aware plain number (throughput: MB/s, tokens/s) — keeps the measured value
+ *  as-is but routes the decimal separator + grouping through the UI language (M-U5,
+ *  German "1.234,5"). */
+function fmtNum(n: number, lang: UiLanguage): string {
+  return n.toLocaleString(lang)
+}
+
 export function DiagnosticsTab(): JSX.Element {
   const { t, lang } = useT()
   const [drive, setDrive] = useState<DriveStatus | null>(null)
@@ -273,19 +280,19 @@ export function DiagnosticsTab(): JSX.Element {
               <dt>{t('diag.bench.driveRead')}</dt>
               <dd>
                 {bench.driveReadMbps != null
-                  ? `${bench.driveReadMbps} MB/s`
+                  ? `${fmtNum(bench.driveReadMbps, lang)} MB/s`
                   : t('diag.bench.notMeasured')}
               </dd>
               <dt>{t('diag.bench.driveWrite')}</dt>
               <dd>
                 {bench.driveWriteMbps != null
-                  ? `${bench.driveWriteMbps} MB/s`
+                  ? `${fmtNum(bench.driveWriteMbps, lang)} MB/s`
                   : t('diag.bench.notMeasured')}
               </dd>
               <dt>{t('diag.bench.tokens')}</dt>
               <dd>
                 {bench.tokensPerSecond != null
-                  ? `${bench.tokensPerSecond}`
+                  ? fmtNum(bench.tokensPerSecond, lang)
                   : t('diag.bench.tokensNotMeasured')}
               </dd>
               <dt>{t('diag.bench.lastRun')}</dt>

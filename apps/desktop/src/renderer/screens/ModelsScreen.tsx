@@ -33,6 +33,15 @@ function fmtGb(bytes: number | null, fallbackGb: number, lang: UiLanguage): stri
 }
 
 /**
+ * A GB number that is ALREADY a GB value (manifest fields, not bytes) → locale string
+ * (M-U5). Unlike `fmtGb` this does not round the manifest figure away; it only routes
+ * the decimal separator + grouping through the UI language (German "4,5 GB").
+ */
+function fmtGbNum(gb: number, lang: UiLanguage): string {
+  return `${gb.toLocaleString(lang)} GB`
+}
+
+/**
  * Plain-language size/speed hint (guidelines §7 spirit: "Balanced — works well on most
  * laptops" instead of quantization labels). Derived from what the manifest already
  * carries; the technical numbers live in the disclosure.
@@ -372,11 +381,11 @@ export function ModelsScreen(): JSX.Element {
               <dt>{t('models.tech.license')}</dt>
               <dd>{m.license}</dd>
               <dt>{t('models.tech.sizeOnDisk')}</dt>
-              <dd>{m.sizeOnDiskGb} GB</dd>
+              <dd>{fmtGbNum(m.sizeOnDiskGb, lang)}</dd>
               <dt>{t('models.tech.minRam')}</dt>
-              <dd>{m.recommendedMinRamGb} GB</dd>
+              <dd>{fmtGbNum(m.recommendedMinRamGb, lang)}</dd>
               <dt>{t('models.tech.recRam')}</dt>
-              <dd>{m.recommendedRamGb} GB</dd>
+              <dd>{fmtGbNum(m.recommendedRamGb, lang)}</dd>
               <dt>{t('models.tech.context')}</dt>
               <dd>{t('models.tech.contextValue', { count: m.recommendedContextTokens })}</dd>
               <dt>{t('models.tech.file')}</dt>
