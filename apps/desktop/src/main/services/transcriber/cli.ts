@@ -74,8 +74,14 @@ export class WhisperCliTranscriber implements Transcriber {
   private readonly modelPath: string
   private readonly threads: number
   private readonly spawnImpl: (command: string, args: string[], options: SpawnOptions) => ChildProcess
-  /** In-flight CLI children — killed on suspend/stop (lock/quit must not orphan them). */
-  private readonly active = new Set<ChildProcess>()
+  /**
+   * In-flight CLI children mapped to a promise that resolves when that child has fully
+   * exited AND its `transcribe()` cleanup (the transient-transcript shred) has run.
+   * suspend()/stop() kill each child and AWAIT these so the parent does not exit before
+   * the shred completes (L5): the transient JSON lives in `tmpdir()` by default, which the
+   * workspace crash-sweep never reaches, so a missed shred leaves transcript content on disk.
+   */
+  private readonly active = new Map<ChildProcess, Promise<void>>()
   private stopped = false
 
   constructor(opts: WhisperCliOptions) {
@@ -105,8 +111,19 @@ export class WhisperCliTranscriber implements Transcriber {
       '-of', outBase
     ]
 
+    // `done` resolves only after the shred below runs. suspend()/stop() await it (via the
+    // `active` map) so a killed child's transient transcript is shredded before the parent
+    // exits (L5).
+    let resolveDone: () => void = () => undefined
+    const done = new Promise<void>((resolve) => {
+      resolveDone = resolve
+    })
+    let registeredChild: ChildProcess | null = null
     try {
-      const { stderrTail } = await this.run(args, opts)
+      const { stderrTail } = await this.run(args, opts, (child) => {
+        registeredChild = child
+        this.active.set(child, done)
+      })
       let parsed: WhisperJson
       try {
         parsed = JSON.parse(readFileSync(jsonPath, 'utf8')) as WhisperJson
@@ -131,17 +148,20 @@ export class WhisperCliTranscriber implements Transcriber {
       return segments
     } finally {
       shredFile(jsonPath) // the transcript is content — never leave it on disk
+      if (registeredChild) this.active.delete(registeredChild)
+      resolveDone() // unblock any suspend()/stop() waiting on this child's cleanup
     }
   }
 
   /** Spawn the CLI and resolve on exit, surfacing progress + a bounded stderr tail. */
   private run(
     args: string[],
-    opts: TranscribeOptions
+    opts: TranscribeOptions,
+    onChild: (child: ChildProcess) => void
   ): Promise<{ code: number | null; stderrTail: string }> {
     return new Promise((resolve, reject) => {
       const child = this.spawnImpl(this.binPath, args, { stdio: ['ignore', 'pipe', 'pipe'] })
-      this.active.add(child)
+      onChild(child) // register in `active` so suspend()/stop() can kill + await its cleanup
       let stderrTail = ''
       const scanProgress = (text: string): void => {
         for (const m of text.matchAll(/progress\s*=\s*(\d{1,3})%/g)) {
@@ -169,12 +189,10 @@ export class WhisperCliTranscriber implements Transcriber {
       opts.signal?.addEventListener('abort', onAbort, { once: true })
 
       child.on('error', (err) => {
-        this.active.delete(child)
         opts.signal?.removeEventListener('abort', onAbort)
         reject(err)
       })
       child.on('close', (code, signal) => {
-        this.active.delete(child)
         opts.signal?.removeEventListener('abort', onAbort)
         if (opts.signal?.aborted || this.stopped) {
           reject(new Error('Transcription was cancelled.'))
@@ -193,15 +211,22 @@ export class WhisperCliTranscriber implements Transcriber {
     })
   }
 
-  /** Kill in-flight children (workspace lock) — per-file CLI, so next use just respawns. */
+  /**
+   * Kill in-flight children (workspace lock) — per-file CLI, so next use just respawns.
+   * Awaits each child's full cleanup (exit + transient-transcript shred) before returning,
+   * so the parent cannot exit on quit with an un-shredded transcript still in `tmpdir()` (L5).
+   */
   async suspend(): Promise<void> {
-    for (const child of [...this.active]) {
+    const pending = [...this.active.entries()]
+    for (const [child] of pending) {
       try {
         child.kill()
       } catch {
         /* already gone */
       }
     }
+    // Wait for each killed child's `close` to drive transcribe()'s finally (shred + resolve).
+    await Promise.all(pending.map(([, done]) => done))
   }
 
   /** Permanent stop (`will-quit`): kill children and refuse new work. */
