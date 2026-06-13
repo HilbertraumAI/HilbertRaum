@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { EVENTS, IPC, STREAM, type ScopeNotice } from '../shared/ipc'
 import type {
+  ActiveStreamSnapshot,
   AppSettings,
   AppStatus,
   AuditEvent,
@@ -141,6 +142,10 @@ const api = {
   ): Promise<Message> => ipcRenderer.invoke(IPC.sendChatMessage, conversationId, content, options),
   stopGeneration: (conversationId: string): Promise<void> =>
     ipcRenderer.invoke(IPC.stopGeneration, conversationId),
+  /** Snapshot of an in-flight generation (accumulated answer + reasoning), or null. Lets a
+   *  remounted Chat screen recover a reply still streaming after navigating away + back. */
+  getActiveStream: (conversationId: string): Promise<ActiveStreamSnapshot | null> =>
+    ipcRenderer.invoke(IPC.getActiveStream, conversationId),
   /** Delete a conversation (chat or document Q&A) and all of its messages. */
   deleteConversation: (conversationId: string): Promise<void> =>
     ipcRenderer.invoke(IPC.deleteConversation, conversationId),

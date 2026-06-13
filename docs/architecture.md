@@ -174,6 +174,19 @@ the whole DB file is encrypted at rest.
   `ipc/registerChatIpc.ts`; `stopGeneration(conversationId)` aborts it. The runtime's
   `chatStream` honours `options.signal` and stops emitting; whatever streamed so far is persisted
   as the (partial) assistant message and a normal `done` is emitted.
+- **Stream recovery across navigation.** The Chat screen is unmounted when the user switches
+  screens, which destroyed its `streaming` state + token listeners while the main-process
+  generation kept running — on return the fresh screen looked idle yet a new message was rejected
+  ("a response is already being generated"). `withChatStream` now mirrors the accumulated answer +
+  reasoning into a shared `streamBuffers` snapshot (in `ipc/inflight.ts`, cleared in lockstep with
+  the `AbortController`); both `sendToken` and the new `sendReasoning` it hands `runFn` write to it,
+  so the chat + RAG paths buffer identically. The read-only `getActiveStream(conversationId)` IPC
+  returns the live snapshot (or null). On mount/conversation-change the Chat screen, when it does
+  not itself own a stream, **polls `getActiveStream`** (`STREAM_RECOVER_POLL_MS`, only while one is
+  in flight) and drives the same streaming UI (live bubble via `streamText`/`streamThinking`,
+  locked composer + Stop) through a derived `busyStreaming = streaming || recovering`. The token
+  events missed while unmounted are not replayed — the snapshot carries the full accumulated text,
+  so the bubble resumes complete. Completion (snapshot → null) refreshes the transcript from the DB.
 - **`MockRuntime.chatStream`** emits a deterministic reply token-by-token with a small delay so
   the renderer's streaming + stop path is exercised with zero model files. The real
   `LlamaRuntime` (Phase 10) swaps in behind the same `ModelRuntime` interface.

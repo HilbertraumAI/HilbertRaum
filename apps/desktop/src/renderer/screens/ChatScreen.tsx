@@ -10,7 +10,7 @@ import {
 import { cancelActiveDocTask } from '../lib/doctasks'
 import { localizeServerCopy } from '../lib/displayMap'
 import { friendlyIpcError } from '../lib/errors'
-import { RUNTIME_POLL_MS } from '../lib/polling'
+import { RUNTIME_POLL_MS, STREAM_RECOVER_POLL_MS } from '../lib/polling'
 import { useT } from '../i18n'
 import { Button, Chip, EmptyState, ErrorBanner, LocalIndicator, SegmentedControl, Spinner, useToast } from '../components'
 import { Composer, ConversationList, DepthMenu, ScopePopover, Transcript } from '../chat'
@@ -91,6 +91,12 @@ export function ChatScreen({
   /** Which conversation the live stream belongs to: the bubble renders, and the
    *  completion refresh applies, only when this still matches the visible conversation. */
   const [streamConvId, setStreamConvId] = useState<string | null>(null)
+  // True while RECOVERING an in-flight generation that this component instance did not
+  // start — the user sent a message, navigated away (unmounting the screen + its token
+  // listeners), and came back while the model is still responding. Drives the same
+  // streaming UI (live bubble, locked composer, Stop) as a locally-owned stream, but is
+  // fed by polling `getActiveStream` rather than the live token events it missed.
+  const [recovering, setRecovering] = useState(false)
   const [runtimeRunning, setRuntimeRunning] = useState<boolean | null>(null)
   // True while a model is loading in the background (server `startingModelId`), so the
   // no-model state can say "your model is starting" instead of the generic loading hint.
@@ -240,6 +246,64 @@ export function ChatScreen({
       .catch((e) => setError(friendlyIpcError(e)))
   }, [activeId])
 
+  // Recover an in-flight generation after a remount: if the visible conversation is still
+  // streaming in the main process (the user navigated away mid-reply and came back), show
+  // the live partial and lock the composer, finishing when it completes. Only runs when
+  // this instance is NOT itself the stream owner (`streaming` false); a locally-owned
+  // stream already drives the UI via live token events. Polls the main-side snapshot —
+  // the token events fired while the screen was gone are not replayed.
+  useEffect(() => {
+    if (!activeId || streaming) return
+    if (!window.api.getActiveStream) return // older preload / test stub
+    let cancelled = false
+    let timer: ReturnType<typeof setInterval> | null = null
+    const stopPolling = (): void => {
+      if (timer != null) {
+        clearInterval(timer)
+        timer = null
+      }
+    }
+    const tick = async (): Promise<void> => {
+      let snap: Awaited<ReturnType<NonNullable<typeof window.api.getActiveStream>>> = null
+      try {
+        snap = await window.api.getActiveStream!(activeId)
+      } catch {
+        snap = null
+      }
+      if (cancelled || activeIdRef.current !== activeId) return
+      if (snap) {
+        setRecovering(true)
+        setStreamConvId(activeId)
+        setStreamText(snap.content)
+        setStreamThinking(snap.reasoning)
+      } else {
+        // Nothing in flight — either it never was, or it just finished while we watched.
+        setRecovering((was) => {
+          if (was) {
+            // Completed: pull the persisted final reply and clear the live bubble.
+            void window.api
+              .listMessages(activeId)
+              .then((m) => {
+                if (!cancelled && activeIdRef.current === activeId) setMessages(m)
+              })
+              .catch(() => undefined)
+            setStreamConvId(null)
+            setStreamText('')
+            setStreamThinking('')
+          }
+          return false
+        })
+        stopPolling() // idle — stop until activeId/streaming changes again
+      }
+    }
+    void tick()
+    timer = setInterval(() => void tick(), STREAM_RECOVER_POLL_MS)
+    return () => {
+      cancelled = true
+      stopPolling()
+    }
+  }, [activeId, streaming])
+
   function setListCollapsedPersistent(collapsed: boolean): void {
     setListCollapsed(collapsed)
     try {
@@ -288,9 +352,13 @@ export function ChatScreen({
 
   const depthKey = activeId ?? 'new'
   const currentDepth = depthFor(depthKey)
+  // A reply is in progress — either this instance owns the live stream, or we are
+  // recovering one that survived a navigation. Gates every "no new turn / no edits while
+  // answering" affordance so a recovered stream behaves exactly like a live one.
+  const busyStreaming = streaming || recovering
 
   function selectDepth(d: ChatDepthMode): void {
-    if (streaming) return
+    if (busyStreaming) return
     setDepths((prev) => ({ ...prev, [depthKey]: d }))
   }
 
@@ -372,7 +440,7 @@ export function ChatScreen({
 
   async function onSend(): Promise<void> {
     const text = input.trim()
-    if (!text || streaming) return
+    if (!text || busyStreaming) return
     setInput('')
     try {
       // The 'new'-composer depth selection sticks to the conversation that gets created.
@@ -387,7 +455,7 @@ export function ChatScreen({
   }
 
   async function onTryAgain(): Promise<void> {
-    if (!activeId || streaming || mode === 'documents') return
+    if (!activeId || busyStreaming || mode === 'documents') return
     // Drop the LAST message from the view only if it is an assistant turn — mirroring
     // the backend: after a failed generation the conversation ends in a user turn,
     // and regenerate must not touch the answer to an earlier question.
@@ -438,7 +506,7 @@ export function ChatScreen({
   // Delete a conversation (chat or document Q&A) and its messages — permanent. The
   // ConfirmDialog lives in ConversationList; this runs after the user confirmed.
   async function onDeleteConversation(c: Conversation): Promise<void> {
-    if (streaming) return
+    if (busyStreaming) return
     try {
       await window.api.deleteConversation(c.id)
       if (activeId === c.id) {
@@ -454,7 +522,7 @@ export function ChatScreen({
   // Switching mode starts a fresh composition: if the active conversation is in a
   // different mode, deselect it so the next send creates a conversation in the new mode.
   function onSelectMode(next: Mode): void {
-    if (streaming) return
+    if (busyStreaming) return
     setMode(next)
     const active = conversations.find((c) => c.id === activeId)
     if (active && active.mode !== next) {
@@ -463,7 +531,7 @@ export function ChatScreen({
     }
   }
 
-  const canTryAgain = !streaming && mode === 'chat' && messages.some((m) => m.role === 'assistant')
+  const canTryAgain = !busyStreaming && mode === 'chat' && messages.some((m) => m.role === 'assistant')
   const indexedDocCount = docs.filter((d) => d.status === 'indexed').length
 
   /** The active retrieval scope: the conversation's own, or the pending handoff. */
@@ -562,7 +630,7 @@ export function ChatScreen({
         <ConversationList
           conversations={conversations}
           activeId={activeId}
-          streaming={streaming}
+          streaming={busyStreaming}
           mode={mode}
           onSelect={onSelectConversation}
           onNew={() => void onNewChat()}
@@ -593,7 +661,7 @@ export function ChatScreen({
             ]}
             value={mode}
             onChange={onSelectMode}
-            disabled={streaming}
+            disabled={busyStreaming}
           />
           <div className="chat-header-spacer" />
           {/* Ambient "Local · Offline" signal (guidelines §7); offline owned by App
@@ -614,7 +682,7 @@ export function ChatScreen({
               <DropdownMenu.Content className="menu" align="end" sideOffset={4}>
                 <DropdownMenu.Item
                   className="menu-item"
-                  disabled={!activeId || messages.length === 0 || streaming}
+                  disabled={!activeId || messages.length === 0 || busyStreaming}
                   onSelect={() => void onSaveConversation()}
                 >
                   {t('chat.saveConversation')}
@@ -626,7 +694,7 @@ export function ChatScreen({
 
         <Transcript
           messages={messages}
-          streamingHere={streaming && streamConvId === activeId}
+          streamingHere={busyStreaming && streamConvId === activeId}
           streamText={streamText}
           streamThinking={streamThinking}
           thinkingOpen={thinkingOpen}
@@ -635,7 +703,7 @@ export function ChatScreen({
           onTryAgain={canTryAgain ? () => void onTryAgain() : undefined}
           onCopy={onCopyMessage}
           onSave={() => void onSaveConversation()}
-          actionsDisabled={streaming}
+          actionsDisabled={busyStreaming}
         />
 
         {/* Always-mounted alert region (audit M-U1) so the error is announced even on
@@ -670,7 +738,7 @@ export function ChatScreen({
           onChange={setInput}
           onSend={() => void onSend()}
           onStop={onStop}
-          streaming={streaming}
+          streaming={busyStreaming}
           placeholder={mode === 'documents' ? t('chat.placeholder.documents') : t('chat.placeholder.chat')}
           sendLabel={mode === 'documents' ? t('chat.send.ask') : t('chat.send.send')}
           inputRef={composerRef}
@@ -681,7 +749,7 @@ export function ChatScreen({
               <ScopePopover
                 docs={docs}
                 scopeIds={scopeIds}
-                disabled={streaming}
+                disabled={busyStreaming}
                 onChangeScope={(next) => void onChangeScope(next)}
                 onAddDocuments={() => onNavigate('documents')}
               />
@@ -690,7 +758,7 @@ export function ChatScreen({
                 value={currentDepth}
                 onChange={selectDepth}
                 supportsThinking={supportsThinking}
-                disabled={streaming}
+                disabled={busyStreaming}
               />
             )
           }

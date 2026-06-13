@@ -6,7 +6,30 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
-_Last updated: 2026-06-13 — **Two first-start UX fixes (follow-ups to the progress bar).**
+_Last updated: 2026-06-13 — **Chat stream survives screen navigation.** A reply that was still
+streaming when the user left the Chat screen and came back looked **idle** (the screen unmounts,
+destroying its `streaming` state + token listeners), yet a new message was rejected with "a response
+is already being generated" (the main-process generation, registered in `inFlightStreams`, kept
+running). Fix: `withChatStream` now mirrors the accumulated answer + reasoning into a shared
+**`streamBuffers`** snapshot (`ipc/inflight.ts`, cleared in lockstep with the `AbortController`) —
+both `sendToken` and a new `sendReasoning` handed to `runFn` write to it, so chat + RAG buffer
+identically. New read-only **`getActiveStream(conversationId)`** IPC returns the live snapshot (or
+null). On mount/conversation-change the Chat screen, when it does **not** own a live stream, polls
+`getActiveStream` (`STREAM_RECOVER_POLL_MS = 300`, only while one is in flight) and drives the same
+streaming UI — live bubble (`streamText`/`streamThinking`), locked composer, Stop — via a derived
+**`busyStreaming = streaming || recovering`** that replaced the bare `streaming` in every "no new
+turn while answering" gate. The missed token events are not replayed; the snapshot carries the full
+text so the bubble resumes complete, and completion (snapshot → null) refreshes the transcript from
+the DB. **Files:** `ipc/inflight.ts` (+`streamBuffers`/`StreamBuffer`), `ipc/chat-stream.ts`
+(`withChatStream` buffers + `sendReasoning`), `ipc/registerChatIpc.ts` (`getActiveStream` handler,
+reasoning via `sendReasoning`), `shared/ipc.ts` + `shared/types.ts` (`getActiveStream` +
+`ActiveStreamSnapshot`), `preload/index.ts`, `renderer/lib/polling.ts`,
+`renderer/screens/ChatScreen.tsx`. **No streaming-contract change** (token/done/error/reasoning
+channels untouched; the recovery path is additive + poll-based). **Tests:** typecheck clean, build
+OK, `npm test` **1142 passed / 25 skipped** — +2 in `chat-stream.test.ts` (buffers content +
+reasoning then clears on done; clears on error). _(No version bump this change, per request.)_
+
+_(prior) **Two first-start UX fixes (follow-ups to the progress bar).**
 **(1) Progress bar jumped "1 of 1" ↔ "2 of 2" on the AI Model screen.** `listModels` runs as
 **overlapping passes** (a dev-StrictMode remount, the download poll), each computing a different
 `modelCount` as the hash cache warms, and the progress events broadcast to the renderer — so the

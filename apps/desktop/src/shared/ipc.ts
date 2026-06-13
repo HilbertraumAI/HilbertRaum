@@ -27,6 +27,12 @@ export const IPC = {
   listMessages: 'chat:listMessages',
   sendChatMessage: 'chat:send',
   stopGeneration: 'chat:stop',
+  /**
+   * Snapshot of an in-flight generation for a conversation (accumulated answer +
+   * reasoning), or null if none — lets a remounted Chat screen recover a reply that is
+   * still streaming after the user navigated away and back.
+   */
+  getActiveStream: 'chat:activeStream',
   /** Delete a conversation (chat or document Q&A) and all of its messages. */
   deleteConversation: 'chat:deleteConversation',
   /** Replace a documents-conversation's "ask selected documents" scope. */
