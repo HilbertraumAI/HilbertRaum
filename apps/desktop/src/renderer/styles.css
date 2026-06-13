@@ -108,7 +108,12 @@ button { min-width: 24px; min-height: 24px; }
    reserved for the focus ring, not selection). */
 .nav-item.active { background: var(--surface-hover); color: var(--text); font-weight: 600; }
 .nav-icon { font-size: 17px; line-height: 1; }
-.nav-label { display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+/* Wrap a long destination name onto a second line instead of clipping it ("Documents",
+   "Dokumente", "Einstellungen" all overflow the ~80px rail); hyphens: auto follows
+   <html lang> so the break is language-correct. The button's title= still carries the
+   full name. (Was overflow:hidden + text-overflow:ellipsis, which truncated single
+   long words on the narrow rail.) */
+.nav-label { display: block; max-width: 100%; overflow-wrap: break-word; hyphens: auto; }
 /* Lock sits at the very bottom, slightly muted — a utility, not a destination. */
 .lock-btn { margin-top: 2px; }
 

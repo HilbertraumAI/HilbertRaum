@@ -86,7 +86,12 @@ export const en = {
   'chat.empty.lineChat': 'Replies stream from the model on this drive — nothing leaves it.',
   'chat.empty.fillTitle': 'Fill the message box',
   'chat.empty.addDocs': 'Add documents to ask about them',
-  'chat.example.summarize': 'Summarize this contract',
+  // Two example sets: plain Chat has no documents, so its prompts are general-purpose;
+  // the "Ask my documents" mode keeps document-shaped prompts. ChatScreen picks by mode.
+  'chat.exampleChat.explain': 'Explain a concept in simple terms',
+  'chat.exampleChat.draftEmail': 'Help me write a polite email',
+  'chat.exampleChat.brainstorm': 'Brainstorm ideas for a project',
+  'chat.example.summarize': 'Summarize this document',
   'chat.example.paymentTerms': 'What are the payment terms?',
   'chat.example.indemnity': "Find every mention of 'indemnity'",
   'chat.modeAria': 'Chat mode',
@@ -353,6 +358,14 @@ export const en = {
   'models.engine.verifying': 'Verifying the AI engine…',
   'models.engine.extracting': 'Unpacking the AI engine…',
   'models.engine.installedNote': 'The AI engine is installed — start a model to use it.',
+  // Voice-engine-only note: the chat engine is installed (chat works for real); only the
+  // optional voice engine (whisper.cpp) is missing, so this is a quiet info note — never the
+  // "demo mode" alarm. Reuses the engine download job (progress/retry/policy) keys above.
+  'models.voiceEngine.title': 'Add voice dictation (optional)',
+  'models.voiceEngine.explain':
+    'Chat and document answers already work on this drive. The voice engine is optional — ' +
+    'install it only if you want to dictate messages with your microphone.',
+  'models.voiceEngine.install': 'Install voice engine',
   // RAM-gate copy, composed of full clauses (spec §11.4 — never "your hardware is bad").
   'models.ram.needs': 'Needs at least {min} GB RAM',
   'models.ram.machine': ' — this computer has about {ram} GB',

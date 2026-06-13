@@ -6,7 +6,28 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
-_Last updated: 2026-06-13 — **Chat stream survives screen navigation.** A reply that was still
+_Last updated: 2026-06-13 — **Three post-MVP UI fine-tunes.** (1) **Chat example chips matched
+the mode.** Plain Chat has no document access, yet its empty-state examples were document-shaped
+("Summarize this contract" / payment terms / indemnity). Split into two key sets: `chat.exampleChat.*`
+(explain a concept / write a polite email / brainstorm — general-purpose) for chat mode and
+`chat.example.*` (now "Summarize this document" …) for the "Ask my documents" mode; `ChatScreen`
+picks by `mode`. (2) **Nav rail labels no longer truncate.** `.nav-label` was `overflow:hidden +
+text-overflow:ellipsis`, which clipped single long words on the ~80px rail ("Documents",
+"Dokumente", "Einstellungen"). Now `overflow-wrap:break-word; hyphens:auto` — wraps to a second
+line, hyphenated per `<html lang>` (kept in sync by `applyLanguageSetting`); the button `title=`
+still carries the full name. (3) **Engine banner no longer cries "demo mode" when chat works.**
+The "Install the AI engine" warning gated on `EngineStatus.installed` (every fetchable family
+present). A drive with the chat engine (`llama_cpp`) but no voice engine (`whisper_cpp`, empty
+`runtime/whisper.cpp/win/` — the real cause on D:) showed the alarming demo-mode banner even though
+chat answers for real. `ModelsScreen` now reads `missingFamilies`: strong **warning** only when
+`llama_cpp` is missing; chat-present + voice-missing shows a quiet **info** note
+(`models.voiceEngine.*`, "Add voice dictation (optional)"). **Files:** `renderer/screens/ChatScreen.tsx`,
+`renderer/screens/ModelsScreen.tsx`, `renderer/styles.css`, `shared/i18n/{en,de}.ts`,
+`tests/renderer/{ChatRestructure,GermanSmoke}.test.tsx`. **Docs:** `packaging.md` (banner-per-concern
+bullet). **Tests:** typecheck clean, build OK, `npm test` **1142 passed / 25 skipped** (unchanged;
+two assertions repointed to the new chat-example keys). No version bump._
+
+_(prior) **Chat stream survives screen navigation.** A reply that was still
 streaming when the user left the Chat screen and came back looked **idle** (the screen unmounts,
 destroying its `streaming` state + token listeners), yet a new message was rejected with "a response
 is already being generated" (the main-process generation, registered in `inFlightStreams`, kept

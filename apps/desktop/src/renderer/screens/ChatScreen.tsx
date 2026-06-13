@@ -48,8 +48,17 @@ export const LIST_AUTO_COLLAPSE_PX = 1150
 /** Streamed tokens are batched and flushed on this cadence instead of per-token. */
 const STREAM_FLUSH_MS = 40
 
-/** Teaching empty state (guidelines §3): example prompts that fill the composer. */
-const EXAMPLE_PROMPT_KEYS: MessageKey[] = [
+/**
+ * Teaching empty state (guidelines §3): example prompts that fill the composer. Two sets —
+ * plain Chat has no document access, so its examples are general-purpose; the "Ask my
+ * documents" mode keeps document-shaped prompts. The empty state picks by `mode`.
+ */
+const CHAT_EXAMPLE_KEYS: MessageKey[] = [
+  'chat.exampleChat.explain',
+  'chat.exampleChat.draftEmail',
+  'chat.exampleChat.brainstorm'
+]
+const DOC_EXAMPLE_KEYS: MessageKey[] = [
   'chat.example.summarize',
   'chat.example.paymentTerms',
   'chat.example.indemnity'
@@ -608,7 +617,7 @@ export function ChatScreen({
         line={mode === 'documents' ? t('chat.empty.lineDocuments') : t('chat.empty.lineChat')}
         action={
           <>
-            {EXAMPLE_PROMPT_KEYS.map((key) => (
+            {(mode === 'documents' ? DOC_EXAMPLE_KEYS : CHAT_EXAMPLE_KEYS).map((key) => (
               <Chip key={key} onClick={() => fillComposer(t(key))} title={t('chat.empty.fillTitle')}>
                 {t(key)}
               </Chip>

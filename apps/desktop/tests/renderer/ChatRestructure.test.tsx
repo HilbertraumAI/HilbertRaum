@@ -89,9 +89,9 @@ describe('ChatScreen — teaching empty state (guidelines §3)', () => {
     expect(
       await screen.findByText('Ask a question, or ask about your documents.')
     ).toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: 'Summarize this contract' }))
+    await user.click(screen.getByRole('button', { name: 'Explain a concept in simple terms' }))
     expect(screen.getByPlaceholderText("Message…")).toHaveValue(
-      'Summarize this contract'
+      'Explain a concept in simple terms'
     )
   })
 

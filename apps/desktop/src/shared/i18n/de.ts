@@ -102,7 +102,12 @@ export const de: Record<keyof typeof en, string> = {
     'Antworten kommen vom Modell auf diesem Laufwerk — nichts verlässt es.',
   'chat.empty.fillTitle': 'Text ins Eingabefeld übernehmen',
   'chat.empty.addDocs': 'Dokumente hinzufügen, um Fragen dazu zu stellen',
-  'chat.example.summarize': 'Fasse diesen Vertrag zusammen',
+  // Zwei Beispielsätze: der reine Chat hat keine Dokumente, daher allgemeine Fragen;
+  // der Modus „Meine Dokumente fragen“ behält dokumentbezogene Beispiele. ChatScreen wählt je Modus.
+  'chat.exampleChat.explain': 'Erkläre ein Konzept einfach',
+  'chat.exampleChat.draftEmail': 'Hilf mir, eine höfliche E-Mail zu schreiben',
+  'chat.exampleChat.brainstorm': 'Sammle Ideen für ein Projekt',
+  'chat.example.summarize': 'Fasse dieses Dokument zusammen',
   'chat.example.paymentTerms': 'Welche Zahlungsbedingungen gelten?',
   'chat.example.indemnity': 'Finde jede Erwähnung von „Haftungsfreistellung“',
   'chat.modeAria': 'Chat-Modus',
@@ -382,6 +387,14 @@ export const de: Record<keyof typeof en, string> = {
   'models.engine.verifying': 'KI-Engine wird geprüft…',
   'models.engine.extracting': 'KI-Engine wird entpackt…',
   'models.engine.installedNote': 'Die KI-Engine ist installiert — starte ein Modell, um sie zu nutzen.',
+  // Hinweis nur zur Sprach-Engine: die Chat-Engine ist installiert (Chat funktioniert echt);
+  // nur die optionale Sprach-Engine (whisper.cpp) fehlt — daher ein ruhiger Info-Hinweis, kein
+  // „Demo-Modus“-Alarm. Nutzt dieselben Download-Job-Schlüssel (Fortschritt/Wiederholen/Richtlinie).
+  'models.voiceEngine.title': 'Sprachdiktat hinzufügen (optional)',
+  'models.voiceEngine.explain':
+    'Chat- und Dokumentantworten funktionieren auf diesem Laufwerk bereits. Die Sprach-Engine ist ' +
+    'optional — installiere sie nur, wenn du Nachrichten per Mikrofon diktieren möchtest.',
+  'models.voiceEngine.install': 'Sprach-Engine installieren',
   'models.ram.needs': 'Braucht mindestens {min} GB RAM',
   'models.ram.machine': ' — dieser Computer hat etwa {ram} GB',
   'models.ram.advice': '. Wähle ein kleineres Modell — die Qualität bleibt top.',

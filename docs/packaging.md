@@ -48,7 +48,12 @@ master pipeline** that produces a finished, sellable drive (see the last section
     engine — otherwise a started model silently falls back to the demo runtime. The installer is
     **engine-family-generic**: `ENGINE_FAMILIES` lists `llama_cpp` (the `llama-server` chat engine)
     and `whisper_cpp` (the `whisper-cli` voice/transcription engine), and a single install fetches
-    every missing family for the host. **To add a future engine family:** add its `<family>:` block
+    every missing family for the host. **The banner is scoped per concern (ModelsScreen):** it reads
+    `EngineStatus.missingFamilies` and shows the strong *"Install the AI engine — models run in demo
+    mode"* **warning only when `llama_cpp` (the chat engine) is missing**; when the chat engine is
+    present and only `whisper_cpp` is absent it shows a quiet **info** note (*"Add voice dictation
+    (optional)"*) instead — chat already answers for real, so the demo-mode alarm would be false. **To
+    add a future engine family:** add its `<family>:` block
     to `model-manifests/runtime-sources.yaml` (with a real host build + SHA-256) and one entry to
     `ENGINE_FAMILIES` (`{ family, binaryBase }`); status, install, flatten, marker, and the banner
     generalize automatically. A family with **no prebuilt host build** (e.g. whisper.cpp on
