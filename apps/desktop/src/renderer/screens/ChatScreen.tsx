@@ -41,6 +41,10 @@ type Mode = 'chat' | 'documents'
 /** localStorage key for the conversation-list collapse (a UI preference, not user data). */
 export const LIST_COLLAPSED_KEY = 'hilbertraum.chat.listCollapsed'
 
+/** Below this viewport width the history column auto-collapses (responsive; the
+ *  persisted desktop preference is untouched — widening restores the user's choice). */
+export const LIST_AUTO_COLLAPSE_PX = 1150
+
 /** Streamed tokens are batched and flushed on this cadence instead of per-token. */
 const STREAM_FLUSH_MS = 40
 
@@ -112,6 +116,29 @@ export function ChatScreen({
       return false
     }
   })
+  // Responsive auto-collapse: on narrower windows the history column gives its space
+  // to the transcript without disturbing the persisted desktop preference. The effective
+  // collapsed state is (user preference OR viewport-too-narrow); only the toggle writes
+  // the persisted preference, so widening the window restores what the user last chose.
+  const [narrow, setNarrow] = useState<boolean>(
+    () => typeof window.matchMedia === 'function' && window.matchMedia(`(max-width: ${LIST_AUTO_COLLAPSE_PX}px)`).matches
+  )
+  useEffect(() => {
+    if (typeof window.matchMedia !== 'function') return
+    const mql = window.matchMedia(`(max-width: ${LIST_AUTO_COLLAPSE_PX}px)`)
+    const onChange = (e: MediaQueryListEvent): void => {
+      setNarrow(e.matches)
+      // Leaving the narrow range drops any session-only "peek open" override.
+      if (!e.matches) setNarrowPeek(false)
+    }
+    mql.addEventListener('change', onChange)
+    setNarrow(mql.matches)
+    return () => mql.removeEventListener('change', onChange)
+  }, [])
+  // Session-only override that re-opens the list while the window is narrow (the user
+  // pressed the reopen handle). Cleared when the window widens again.
+  const [narrowPeek, setNarrowPeek] = useState(false)
+  const effectiveCollapsed = narrow ? !narrowPeek : listCollapsed
   const showToast = useToast()
   const composerRef = useRef<HTMLTextAreaElement>(null)
   // The currently-visible conversation, readable from inside async stream completions
@@ -216,6 +243,18 @@ export function ChatScreen({
     } catch {
       // Remembering the preference is best-effort.
     }
+  }
+
+  // Collapse/expand from the toggle. While the window is narrow the list is auto-collapsed,
+  // so the toggle drives a session-only "peek" override instead of the persisted preference
+  // (which still governs wide windows and survives the session).
+  function collapseList(): void {
+    if (narrow) setNarrowPeek(false)
+    else setListCollapsedPersistent(true)
+  }
+  function expandList(): void {
+    if (narrow) setNarrowPeek(true)
+    else setListCollapsedPersistent(false)
   }
 
   // Create a conversation in the current mode. A documents conversation takes the
@@ -513,8 +552,8 @@ export function ChatScreen({
   )
 
   return (
-    <div className={`chat-layout ${listCollapsed ? 'list-collapsed' : ''}`}>
-      {!listCollapsed && (
+    <div className={`chat-layout ${effectiveCollapsed ? 'list-collapsed' : ''}`}>
+      {!effectiveCollapsed && (
         <ConversationList
           conversations={conversations}
           activeId={activeId}
@@ -523,19 +562,20 @@ export function ChatScreen({
           onSelect={onSelectConversation}
           onNew={() => void onNewChat()}
           onDelete={(c) => void onDeleteConversation(c)}
-          onCollapse={() => setListCollapsedPersistent(true)}
+          onCollapse={collapseList}
         />
       )}
 
       <section className="chat-main">
         <div className="chat-header">
-          {listCollapsed && (
+          {effectiveCollapsed && (
             <Button
               size="sm"
               variant="ghost"
+              className="chat-list-show"
               aria-label={t('chat.listShow')}
               title={t('chat.listShow')}
-              onClick={() => setListCollapsedPersistent(false)}
+              onClick={expandList}
             >
               »
             </Button>
@@ -638,6 +678,7 @@ export function ChatScreen({
                 scopeIds={scopeIds}
                 disabled={streaming}
                 onChangeScope={(next) => void onChangeScope(next)}
+                onAddDocuments={() => onNavigate('documents')}
               />
             ) : (
               <DepthMenu

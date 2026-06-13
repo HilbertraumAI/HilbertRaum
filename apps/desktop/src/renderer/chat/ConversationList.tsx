@@ -147,15 +147,22 @@ export function ConversationList({
   }
 
   return (
-    <aside className="chat-sidebar">
+    <aside className="chat-sidebar" aria-label={t('chat.list.aria')}>
       <div className="chat-sidebar-head">
-        <Button size="sm" variant="primary" className="chat-new" disabled={streaming} onClick={onNew}>
-          {mode === 'documents' ? t('chat.list.newDocQa') : t('chat.list.newChat')}
-        </Button>
-        <Button size="sm" variant="ghost" aria-label={t('chat.list.hide')} title={t('chat.list.hide')} onClick={onCollapse}>
+        <span className="chat-sidebar-title">{t('chat.list.title')}</span>
+        <button
+          type="button"
+          className="chat-sidebar-collapse"
+          aria-label={t('chat.list.hide')}
+          title={t('chat.list.hide')}
+          onClick={onCollapse}
+        >
           «
-        </Button>
+        </button>
       </div>
+      <Button size="sm" variant="primary" className="chat-new" disabled={streaming} onClick={onNew}>
+        {mode === 'documents' ? t('chat.list.newDocQa') : t('chat.list.newChat')}
+      </Button>
       <input
         type="search"
         className="chat-search-input"
@@ -174,13 +181,19 @@ export function ConversationList({
           aria-label={t('chat.search.resultsAria')}
           aria-live="polite"
         >
-          {/* sr-only result count so a screen reader hears "3 results" as the list updates
-              (audit L14) — the visible list alone never announces how many matched. */}
+          {/* Contextual header: a calm "Results for 'x'" label so it's obvious the column
+              is showing search hits, not the normal grouped list. The sr-only count rides
+              alongside so a screen reader still hears "3 results" (audit L14). */}
           {results != null && results.length > 0 && (
-            <p className="sr-only">{tCount('chat.search.count', results.length)}</p>
+            <div className="chat-search-head">
+              <span className="chat-search-label">
+                {t('chat.search.resultsFor', { query: query.trim() })}
+              </span>
+              <span className="sr-only">{tCount('chat.search.count', results.length)}</span>
+            </div>
           )}
           {results != null && results.length === 0 && (
-            <p className="hint">{t('chat.search.noMatches')}</p>
+            <p className="chat-search-empty">{t('chat.search.noMatches')}</p>
           )}
           {(results ?? []).map((r) => (
             <button
@@ -224,16 +237,22 @@ export function ConversationList({
                 >
                   <button
                     className={`chat-conv ${c.id === activeId ? 'active' : ''}`}
+                    aria-current={c.id === activeId ? 'true' : undefined}
                     disabled={streaming && c.id !== activeId}
                     onClick={() => onSelect(c)}
                     title={localizeServerCopy(t, c.title)}
                   >
-                    {c.mode === 'documents' && (
-                      <span className="chat-conv-badge">{t('chat.list.docBadge')}</span>
-                    )}
                     {/* Titles are user data, but the persisted DEFAULT title is canonical
                         English (D-L4) — the display map translates it, all else passes. */}
-                    {localizeServerCopy(t, c.title)}
+                    <span className="chat-conv-title">{localizeServerCopy(t, c.title)}</span>
+                    {/* Quiet metadata line: a small document glyph + "Documents" for a
+                        document Q&A thread (replacing the loud DOC badge), else nothing.
+                        Never color-only (WCAG 1.4.1) — the glyph pairs with the word. */}
+                    {c.mode === 'documents' && (
+                      <span className="chat-conv-meta">
+                        <span aria-hidden="true">📄</span> {t('chat.list.docMeta')}
+                      </span>
+                    )}
                   </button>
                   <DropdownMenu.Root
                     open={menuOpenId === c.id}

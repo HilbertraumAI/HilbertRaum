@@ -9,6 +9,7 @@
 
 export const en = {
   // ---- App shell (App.tsx) ----
+  'nav.aria': 'Main',
   'nav.home': 'Home',
   'nav.chat': 'Chat',
   'nav.documents': 'Documents',
@@ -103,16 +104,19 @@ export const en = {
   'chat.composer.stop': 'Stop',
 
   // ---- Chat: conversation list (ConversationList.tsx) ----
+  'chat.list.title': 'Conversations',
+  'chat.list.aria': 'Conversation history',
   'chat.list.newChat': '+ New chat',
   'chat.list.newDocQa': '+ New document Q&A',
   'chat.list.hide': 'Hide conversation list',
   'chat.list.empty': 'No conversations yet.',
-  'chat.list.docBadge': 'DOC',
+  'chat.list.docMeta': 'Documents',
   'chat.list.rowOptionsAria': 'Options for conversation "{title}"',
   'chat.search.placeholder': 'Search conversations…',
   'chat.search.aria': 'Search conversations',
   'chat.search.resultsAria': 'Search results',
-  'chat.search.noMatches': 'No matches yet — try a different word.',
+  'chat.search.resultsFor': 'Results for “{query}”',
+  'chat.search.noMatches': "I didn't find a match. Try rephrasing.",
   'chat.search.count.one': '{count} result',
   'chat.search.count.other': '{count} results',
   'chat.group.today': 'Today',
@@ -134,8 +138,8 @@ export const en = {
   'chat.depth.deepHint': 'Thinks the problem through before answering — takes longer',
 
   // ---- Chat: transcript + message actions ----
-  'chat.role.user': 'user',
-  'chat.role.assistant': 'assistant',
+  'chat.role.user': 'You',
+  'chat.role.assistant': 'HilbertRaum',
   'chat.thinking': 'Thinking…',
   'chat.actions.tryAgain': 'Try again',
   'chat.actions.copy': 'Copy',
@@ -143,10 +147,12 @@ export const en = {
   'chat.actions.saveTitle': 'Save this conversation as a file (stays local)',
 
   // ---- Chat: document scope (ScopePopover.tsx) ----
-  'chat.scope.usingAll.one': 'Using your {count} document',
-  'chat.scope.usingAll.other': 'Using all {count} documents',
+  // Truthful, calm scope copy: never "Using all 0 documents". Zero documents routes to
+  // a "No documents yet · Add documents" affordance; "all" never shows a count.
+  'chat.scope.usingAll': 'Using all documents',
   'chat.scope.usingSome.one': 'Using {count} document',
   'chat.scope.usingSome.other': 'Using {count} documents',
+  'chat.scope.none': 'No documents yet · Add documents',
   'chat.scope.popoverAria': 'Documents to ask',
   'chat.scope.allLine': 'Answers come from all your documents. Pick documents to ask only those:',
   'chat.scope.someLine': 'Answers come from these documents only:',

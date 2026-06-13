@@ -52,43 +52,65 @@ button { min-width: 24px; min-height: 24px; }
 
 .app-shell {
   display: grid;
-  grid-template-columns: 230px 1fr;
+  /* A quiet, compact navigation RAIL (guidelines §2): icon + short label, ~80px,
+     so the conversation canvas is the centre of gravity, not the chrome. */
+  grid-template-columns: 80px 1fr;
   height: 100vh;
 }
 
 .sidebar {
-  background: var(--surface);
+  background: var(--bg);
   border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
-  padding: 16px 12px;
+  align-items: stretch;
+  padding: 12px 8px;
+  gap: 4px;
 }
 
-.brand { display: flex; gap: 10px; align-items: center; padding: 8px 8px 18px; }
+/* Just the brand mark on the rail — the wordmark sits behind a tooltip so the rail
+   stays quiet and narrow. */
+.brand { display: flex; justify-content: center; padding: 6px 0 14px; }
 .brand-mark { font-size: 22px; color: var(--accent); }
-.brand-name { font-weight: 600; font-size: 14px; }
-.brand-edition { font-size: 11px; color: var(--text-muted); letter-spacing: 0.08em; text-transform: uppercase; }
+.brand-name {
+  /* Visually hidden on the rail; the title attribute carries the tooltip. */
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
 
-.nav-list { list-style: none; padding: 0; margin: 0; flex: 1; display: flex; flex-direction: column; gap: 2px; }
+.nav-list { list-style: none; padding: 0; margin: 0; flex: 1; display: flex; flex-direction: column; gap: 4px; }
 /* Bottom utility group (guidelines §2): Settings sits apart from the
-   everyday destinations, above the lock button / offline badge. */
-.nav-list.nav-bottom { flex: 0 0 auto; border-top: 1px solid var(--border); padding-top: 8px; margin-top: 8px; }
-.nav-item {
+   everyday destinations, above the lock button. */
+.nav-list.nav-bottom { flex: 0 0 auto; border-top: 1px solid var(--border); padding-top: 6px; margin-top: 6px; }
+.nav-item, .lock-btn {
   width: 100%;
   display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: 10px;
+  gap: 3px;
   background: transparent;
-  border: none;
+  border: 1px solid transparent;
   color: var(--text-muted);
-  padding: 9px 10px;
-  border-radius: 8px;
-  font-size: 13px;
+  padding: 8px 4px;
+  border-radius: var(--radius-md);
+  font-size: 11px;
+  line-height: 1.2;
   cursor: pointer;
-  text-align: left;
+  text-align: center;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 }
-.nav-item:hover, .nav-item.active { background: var(--surface-hover); color: var(--text); }
-.nav-icon { width: 18px; text-align: center; }
+.nav-item:hover, .lock-btn:hover { background: var(--surface-hover); color: var(--text); }
+/* Selected = soft neutral fill + full-strength text (guidelines §7: accent blue is
+   reserved for the focus ring, not selection). */
+.nav-item.active { background: var(--surface-hover); color: var(--text); font-weight: 600; }
+.nav-icon { font-size: 17px; line-height: 1; }
+.nav-label { display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+/* Lock sits at the very bottom, slightly muted — a utility, not a destination. */
+.lock-btn { margin-top: 2px; }
 
 /* Ambient "Local · Offline" signal (guidelines §7): quiet glyph + words in a
    neutral color — reassurance, not an alert. Hover/focus shows the tooltip; click opens
@@ -120,7 +142,8 @@ button { min-width: 24px; min-height: 24px; }
 }
 .local-indicator-sidebar:hover { border-color: var(--border-strong); }
 
-/* Tooltip (Radix Tooltip content — the indicator's reassurance line). */
+/* Tooltip (Radix Tooltip content — the indicator's reassurance line, and nav-rail
+   destination labels on narrow widths via title attributes). */
 .tooltip {
   background: var(--surface);
   color: var(--text);
@@ -133,8 +156,6 @@ button { min-width: 24px; min-height: 24px; }
   max-width: 280px;
   z-index: 70;
 }
-
-.lock-btn { margin-top: 12px; width: 100%; text-align: left; }
 
 /* Workspace unlock / onboarding gate */
 .gate-shell {
@@ -324,66 +345,110 @@ code, pre, kbd { font-family: var(--font-mono); }
   height: calc(100vh - 64px);
 }
 .chat-layout.list-collapsed { grid-template-columns: 1fr; }
-.chat-sidebar { display: flex; flex-direction: column; gap: 10px; min-height: 0; }
-.chat-sidebar-head { display: flex; gap: 6px; align-items: center; }
-.chat-new { flex: 1; }
-.chat-conv-list { display: flex; flex-direction: column; gap: 4px; overflow-y: auto; min-height: 0; }
+.chat-sidebar { display: flex; flex-direction: column; gap: 8px; min-height: 0; }
+/* History header: a quiet title + the collapse handle (guidelines §3 — a clear toggle
+   affordance near the history header). */
+.chat-sidebar-head { display: flex; gap: 6px; align-items: center; justify-content: space-between; padding: 2px 2px 0; }
+.chat-sidebar-title {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.chat-sidebar-collapse {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-muted);
+  border-radius: var(--radius-sm);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 3px 7px;
+}
+.chat-sidebar-collapse:hover { background: var(--surface-hover); color: var(--text); }
+.chat-new { width: 100%; }
+.chat-conv-list { display: flex; flex-direction: column; gap: 2px; overflow-y: auto; min-height: 0; padding-right: 2px; }
 /* Conversation search: input atop the column; results replace the groups. */
 .chat-search-input {
   background: var(--surface);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-strong);
   color: var(--text);
-  border-radius: 8px;
-  padding: 6px 10px;
-  font-size: 12px;
+  border-radius: var(--radius-sm);
+  padding: 7px 10px;
+  font-size: var(--text-sm);
   width: 100%;
 }
-.chat-search-input:focus { border-color: var(--focus); outline: none; }
+.chat-search-input:focus-visible { border-color: var(--focus); outline: 2px solid var(--focus); outline-offset: 1px; }
 .chat-search-input::placeholder { color: var(--text-muted); }
+/* Contextual "Results for 'x'" header above the search hits. */
+.chat-search-head { padding: 2px 4px 4px; }
+.chat-search-label {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--text-muted);
+  word-break: break-word;
+}
+.chat-search-empty {
+  margin: 8px 4px;
+  font-size: var(--text-sm);
+  line-height: var(--line-sm);
+  color: var(--text-muted);
+}
+/* A search result reads as a small card: title line + the matching snippet, which is
+   given more room than a normal row so the match is obvious. */
 .chat-search-result {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 3px;
   text-align: left;
-  background: var(--surface);
-  border: 1px solid var(--border);
+  background: transparent;
+  border: 1px solid transparent;
   color: var(--text-muted);
   padding: 8px 10px;
-  border-radius: 8px;
-  font-size: 12px;
+  border-radius: var(--radius-md);
+  font-size: var(--text-sm);
   cursor: pointer;
   min-width: 0;
 }
-.chat-search-result:hover:not(:disabled) { color: var(--text); border-color: var(--border-strong); }
+.chat-search-result:hover:not(:disabled) { background: var(--surface-hover); color: var(--text); }
 .chat-search-result:disabled { opacity: 0.5; cursor: not-allowed; }
 .chat-search-result-title {
   color: var(--text);
+  font-weight: 500;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 .chat-search-snippet {
-  font-size: 11px;
-  white-space: nowrap;
+  font-size: var(--text-xs);
+  line-height: var(--line-xs);
+  color: var(--text-muted);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
   overflow: hidden;
-  text-overflow: ellipsis;
 }
 .chat-search-snippet mark {
   background: transparent;
-  color: var(--accent);
+  color: var(--text);
   font-weight: 600;
 }
-.chat-conv-group { display: flex; flex-direction: column; gap: 4px; }
+.chat-conv-group { display: flex; flex-direction: column; gap: 2px; }
 .chat-conv-group-label {
   font-size: var(--text-xs);
   color: var(--text-muted);
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  margin: 10px 4px 2px;
+  margin: 12px 4px 4px;
 }
-.chat-conv-group:first-child .chat-conv-group-label { margin-top: 0; }
-.chat-conv-row { display: flex; gap: 4px; align-items: stretch; min-width: 0; }
+.chat-conv-group:first-child .chat-conv-group-label { margin-top: 2px; }
+.chat-conv-row { display: flex; gap: 2px; align-items: stretch; min-width: 0; border-radius: var(--radius-md); }
 .chat-conv-row .chat-conv { flex: 1; min-width: 0; }
+/* Hover/selected fill spans the whole row (button + menu) so the menu button does not
+   sit on a different background. */
+.chat-conv-row:hover { background: var(--surface-hover); }
+.chat-conv-row.active { background: var(--surface-hover); }
 /* Row actions reveal on hover/focus (guidelines §6) — the button stays focusable. */
 .chat-conv-menu-btn {
   background: transparent;
@@ -394,39 +459,53 @@ code, pre, kbd { font-family: var(--font-mono); }
   cursor: pointer;
   padding: 0 6px;
   flex-shrink: 0;
+  align-self: center;
   opacity: 0;
   transition: opacity var(--dur-fast) var(--ease);
 }
 .chat-conv-row:hover .chat-conv-menu-btn,
 .chat-conv-menu-btn:focus-visible,
 .chat-conv-menu-btn[data-state='open'] { opacity: 1; }
-.chat-conv-menu-btn:hover:not(:disabled) { color: var(--text); border-color: var(--border); }
+.chat-conv-menu-btn:hover:not(:disabled) { color: var(--text); background: var(--surface); }
 .chat-conv-menu-btn:disabled { cursor: default; }
+/* History row: a soft, structured row. Selected = a soft fill (no border outline that
+   could read as keyboard focus); the accent ring is reserved for :focus-visible only
+   (guidelines §7). Min height ≥40px. */
 .chat-conv {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+  min-height: 40px;
   text-align: left;
-  background: var(--surface);
-  border: 1px solid var(--border);
+  background: transparent;
+  border: 1px solid transparent;
   color: var(--text-muted);
-  padding: 8px 10px;
-  border-radius: 8px;
-  font-size: 12px;
+  padding: 6px 10px;
+  border-radius: var(--radius-md);
+  font-size: var(--text-sm);
   cursor: pointer;
+  min-width: 0;
+}
+.chat-conv:hover { color: var(--text); }
+.chat-conv.active { color: var(--text); }
+.chat-conv.active .chat-conv-title { font-weight: 600; }
+.chat-conv:disabled { cursor: default; }
+.chat-conv-title {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  max-width: 100%;
 }
-.chat-conv:hover { color: var(--text); }
-.chat-conv.active { color: var(--text); border-color: var(--accent); }
-.chat-conv-badge {
-  display: inline-block;
-  font-size: 9px;
-  letter-spacing: 0.06em;
-  background: var(--accent-600);
-  color: #fff;
-  border-radius: 4px;
-  padding: 1px 4px;
-  margin-right: 6px;
-  vertical-align: middle;
+/* Quiet document-Q&A affordance: a small glyph + "Documents" metadata line, replacing
+   the loud filled DOC badge (guidelines §7: less visual weight). */
+.chat-conv-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--text-xs);
+  line-height: var(--line-xs);
+  color: var(--text-muted);
 }
 
 /* Chat header: segmented mode control + overflow menu (+ the ambient-indicator slot).
@@ -517,9 +596,19 @@ code, pre, kbd { font-family: var(--font-mono); }
 .chat-empty .chip { max-width: 100%; height: auto; }
 .chat-empty .chip-text { white-space: normal; overflow: visible; text-overflow: clip; }
 
-.msg-block { display: flex; flex-direction: column; gap: 2px; margin-bottom: 8px; }
-.msg { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 12px 14px; box-shadow: var(--shadow-1); }
-.msg.user { border-color: var(--accent); }
+.msg-block { display: flex; flex-direction: column; gap: 2px; margin-bottom: 14px; }
+/* Calmer transcript (guidelines §7: fewer boxes, less accent). The assistant turn is
+   borderless and shadowless — the role label + spacing carry the structure, so it reads
+   as text on the page, not a nested card. */
+.msg { background: transparent; border: 1px solid transparent; border-radius: var(--radius-md); padding: 4px 2px; box-shadow: none; }
+/* The user turn gets a quiet tinted surface so it's distinguishable from the assistant
+   without a strong blue outline that reads like a focused input (guidelines §4: neutral
+   fills for message surfaces; accent reserved for focus/links/primary button). */
+.msg.user {
+  background: var(--surface-hover);
+  border-color: var(--border);
+  padding: 10px 14px;
+}
 
 /* Per-message action row (§3): revealed on hover or keyboard focus, never permanent. */
 .msg-actions { display: flex; gap: 2px; align-items: center; opacity: 0; transition: opacity var(--dur-fast) var(--ease); }
@@ -569,15 +658,16 @@ code, pre, kbd { font-family: var(--font-mono); }
   color: inherit;
 }
 .msg-thinking-text { white-space: pre-wrap; word-break: break-word; margin-top: 6px; line-height: 1.45; }
+/* Quiet sender label — "You" / "HilbertRaum" (guidelines §4: no shouty uppercase
+   role chips). Reads as a name, not a system tag. */
 .msg-role {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
+  font-size: var(--text-xs);
+  font-weight: 600;
   color: var(--text-muted);
-  margin-bottom: 6px;
+  margin-bottom: 4px;
 }
 /* Chat body reads at --text-md (guidelines §4.4: chat/document reading size). */
 .msg-content { white-space: pre-wrap; word-break: break-word; font-size: var(--text-md); line-height: var(--line-md); }
@@ -717,7 +807,7 @@ code, pre, kbd { font-family: var(--font-mono); }
 @keyframes spin { to { transform: rotate(360deg); } }
 
 /* Inline "▸ Sources (N)" disclosure on grounded answers (guidelines §3). */
-.sources { margin-top: 10px; border-top: 1px solid var(--border); padding-top: 6px; }
+.sources { margin-top: 10px; border-top: 1px solid var(--border); padding-top: 8px; }
 .sources-toggle {
   background: transparent;
   border: none;
@@ -726,12 +816,15 @@ code, pre, kbd { font-family: var(--font-mono); }
   cursor: pointer;
   padding: 2px 0;
 }
-.sources-cards { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
+/* Source cards (guidelines §4: avoid cards-inside-heavy-cards). The assistant turn is
+   borderless, so a light hairline-bordered surface here reads as one quiet level of
+   nesting, not a box-in-a-box. Title · page/section · snippet preserved. */
+.sources-cards { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
 .source-card {
-  background: var(--surface-2);
+  background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: 8px 10px;
+  border-radius: var(--radius-md);
+  padding: 8px 12px;
   font-size: var(--text-sm);
   line-height: var(--line-sm);
 }
@@ -749,26 +842,40 @@ code, pre, kbd { font-family: var(--font-mono); }
 /* Composer (guidelines §3/§6): centered with the transcript; auto-grow input,
    one Send/Stop button, quiet footer row. */
 .composer { display: flex; flex-direction: column; gap: 6px; max-width: 720px; width: 100%; margin: 0 auto; }
-.composer-row { display: flex; gap: 8px; align-items: flex-end; position: relative; }
+/* The composer shell: one bordered unit holding the textarea, optional mic, and the
+   Send/Stop button (guidelines §6 — looks like one composer, not a detached button). */
+.composer-row {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+  position: relative;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  padding: 6px 6px 6px 4px;
+}
+.composer-row:focus-within { border-color: var(--focus); outline: 2px solid var(--focus); outline-offset: -1px; }
 /* Holds the textarea + the live dictation waveform overlay, taking the row's flex space. */
 .chat-input-wrap { flex: 1; min-width: 0; position: relative; display: flex; }
 .chat-input {
   flex: 1;
   width: 100%;
   resize: none;
-  min-height: 44px;
+  min-height: 40px;
   max-height: 220px;
-  background: var(--surface-2);
-  border: 1px solid var(--border-strong);
+  background: transparent;
+  border: none;
   color: var(--text);
   border-radius: var(--radius-sm);
-  padding: 10px 12px;
+  padding: 9px 10px;
   font-family: inherit;
   font-size: var(--text-base);
   line-height: var(--line-base);
 }
-.chat-input:focus { border-color: var(--focus); }
-.composer-footer { display: flex; gap: 12px; align-items: center; min-height: 26px; }
+/* The shell owns the focus ring; the textarea itself shows none (no double ring). */
+.chat-input:focus, .chat-input:focus-visible { outline: none; }
+.composer-row .btn { align-self: flex-end; }
+.composer-footer { display: flex; gap: 12px; align-items: center; min-height: 26px; padding: 0 4px; }
 
 /* Voice-dictation mic: quiet ghost button beside Send; while recording it
    pulses so stopping is obvious (the OS mic indicator is the authoritative signal). */
@@ -795,10 +902,27 @@ code, pre, kbd { font-family: var(--font-mono); }
   pointer-events: none;
   border-radius: var(--radius-sm);
 }
+.composer-recording { border-color: var(--accent); }
 .composer-recording .chat-input {
   color: var(--text-muted);
   opacity: 0.35;
-  border-color: var(--accent);
+}
+
+/* ---- Responsive (guidelines §8): the conversation is the centre of gravity at desktop
+   widths; narrower windows give the history column's space to the transcript. The
+   history column auto-collapses below ~1150px in JS (ChatScreen LIST_AUTO_COLLAPSE_PX);
+   these rules trim chrome so nothing overflows on the way down. ---- */
+@media (max-width: 1280px) {
+  /* Reclaim screen gutters for the canvas as the window narrows. The chat-layout height
+     tracks the reduced vertical padding (2 × 24px) so the composer stays in view. */
+  .content { padding: 24px 28px; }
+  .chat-layout { gap: 12px; height: calc(100vh - 48px); }
+}
+@media (max-width: 1150px) {
+  /* History is collapsed here (JS), so the transcript already spans the width; keep
+     the gutters tight so the 720px column has room to breathe. */
+  .content { padding: 20px 20px; }
+  .chat-layout { height: calc(100vh - 40px); }
 }
 
 /* Documents screen */

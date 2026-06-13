@@ -128,7 +128,7 @@ describe('ConversationList — search (Phase 31)', () => {
     renderList([conv()])
 
     await user.type(screen.getByRole('searchbox', { name: 'Search conversations' }), 'zzz')
-    expect(await screen.findByText('No matches yet — try a different word.')).toBeInTheDocument()
+    expect(await screen.findByText("I didn't find a match. Try rephrasing.")).toBeInTheDocument()
     // The grouped list is hidden while searching.
     expect(screen.queryByRole('group')).toBeNull()
   })

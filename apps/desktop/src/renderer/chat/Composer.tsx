@@ -107,6 +107,9 @@ export function Composer({
 
   return (
     <div className="composer">
+      {/* One composer unit (guidelines §6): the textarea, optional mic, and Send/Stop
+          live inside a single bordered shell that takes the focus ring, so the button
+          reads as part of the composer, not a detached control. */}
       <div className={`composer-row${recording ? ' composer-recording' : ''}`}>
         <div className="chat-input-wrap">
           <textarea
