@@ -33,10 +33,10 @@ export const en = {
     'A private, offline AI workspace. Your prompts, documents, and chat history stay on ' +
     'this device.',
   // Split around the inline <strong>docs</strong> (a literal folder name, untranslated).
-  'home.preflight.continueBefore':
+  // {folder} is the literal drive folder name (not translated); the UI bolds it.
+  'home.preflight.continue':
     'You can still continue. If the app doesn’t open, see the troubleshooting guide in the ' +
-    'drive’s ',
-  'home.preflight.continueAfter': ' folder.',
+    'drive’s {folder} folder.',
   'home.checking': 'Checking…',
   'home.workspace.label': 'Workspace',
   'home.workspace.encrypted': 'Encrypted — locked with your password when the app is closed',
@@ -93,6 +93,7 @@ export const en = {
   'chat.saveConversation': 'Save this conversation',
   'chat.savedTo': 'Saved to {path}',
   'chat.copied': 'Copied',
+  'chat.stopped': 'Stopped — the reply may be incomplete',
   'chat.scopeNotice': 'Answering from {titles} only',
   'chat.cancelDocTask': 'Cancel document task',
   'chat.placeholder.documents': 'Ask about your documents…',
@@ -112,6 +113,8 @@ export const en = {
   'chat.search.aria': 'Search conversations',
   'chat.search.resultsAria': 'Search results',
   'chat.search.noMatches': 'No matches yet — try a different word.',
+  'chat.search.count.one': '{count} result',
+  'chat.search.count.other': '{count} results',
   'chat.group.today': 'Today',
   'chat.group.yesterday': 'Yesterday',
   'chat.group.last7days': 'Last 7 days',
@@ -204,6 +207,13 @@ export const en = {
     'leaves this drive',
   'docs.reindexAll': 'Re-index all ({count})',
   'docs.reindexAllTitle': 'Re-index every document that was indexed with a different search model',
+  'docs.reindexAllConfirm.title': 'Re-index {count} documents?',
+  'docs.reindexAllConfirm.body':
+    'This re-reads and re-embeds every stale document one at a time. It can take several ' +
+    'minutes and uses the processor heavily — you can keep working, but answers may be slower ' +
+    'until it finishes.',
+  'docs.reindexAllConfirm.confirm': 'Re-index all',
+  'docs.reindexAllProgress': 'Re-indexing {done} of {total}…',
   'docs.supported.base':
     'Supported: TXT, Markdown, PDF, DOCX, CSV — audio recordings (WAV, MP3, FLAC, OGG), ' +
     'which are transcribed on this drive',

@@ -126,15 +126,37 @@ interface MessageRow {
   citations_json: string | null
 }
 
-function rowToMessage(r: MessageRow): Message {
-  let citations: Citation[] | undefined
-  if (r.citations_json) {
-    try {
-      citations = JSON.parse(r.citations_json) as Citation[]
-    } catch {
-      citations = undefined
-    }
+/**
+ * Validate one parsed element against the `Citation` shape: `label`/`sourceTitle` required
+ * strings, the rest optional. A structurally wrong-but-valid-JSON payload (e.g. a stale or
+ * hand-edited row) must not flow untyped to the renderer (L6) — mirrors `parseScope`.
+ */
+function isCitation(v: unknown): v is Citation {
+  if (typeof v !== 'object' || v === null) return false
+  const c = v as Record<string, unknown>
+  if (typeof c.label !== 'string' || typeof c.sourceTitle !== 'string') return false
+  if (c.pageNumber != null && typeof c.pageNumber !== 'number') return false
+  if (c.section != null && typeof c.section !== 'string') return false
+  if (c.snippet != null && typeof c.snippet !== 'string') return false
+  return true
+}
+
+/** Parse stored citations: a JSON array of `Citation`s, else undefined. Validates shape. */
+function parseCitations(json: string | null): Citation[] | undefined {
+  if (!json) return undefined
+  try {
+    const v = JSON.parse(json) as unknown
+    if (!Array.isArray(v)) return undefined
+    const valid = v.filter(isCitation)
+    return valid.length > 0 ? valid : undefined
+  } catch {
+    // A malformed payload must never break rendering a conversation — drop the citations.
+    return undefined
   }
+}
+
+function rowToMessage(r: MessageRow): Message {
+  const citations = parseCitations(r.citations_json)
   return {
     id: r.id,
     conversationId: r.conversation_id,

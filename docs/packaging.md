@@ -282,3 +282,38 @@ run one real-model session covering:
    NVIDIA/AMD happy paths, Iris-Xe-only laptop (no profile bump), no-GPU/RDP silent CPU,
    pre-Vulkan-1.2 degradation, the mid-generation driver-crash auto-fallback, and the
    machine-move re-probe (1↔4). Measured tok/s feed the release notes.
+
+### The `PAID_*` manual harness matrix — a REQUIRED pre-release gate (audit M-A5)
+
+The riskiest integration surface — real `spawn`, the llama-server SSE stream, GPU
+`--list-devices` parsing, whisper-cli, WASM OCR, real weights, real retrieval quality —
+is **deliberately not in CI** (the zero-binary / zero-network green-gate posture, audit
+M-A5). It is covered instead by the `tests/manual/*.test.ts` harnesses, each gated behind
+a `PAID_*` env var that points at a provisioned drive / binary / model. They are skipped
+unless that env var is set, so a green CI run says nothing about them.
+
+**Before any drive ships, run the applicable subset against the real artifacts** (the dev
+box has `F:\paid-gpu-smoke-drive` with the b9585 binary + Qwen3-4B; see BUILD_STATE).
+Treat this as part of the gate, not optional polish:
+
+| Harness | Env var(s) | Proves |
+| --- | --- | --- |
+| `bringup-smoke` | `PAID_BRINGUP_SMOKE` | the runtime starts + streams against the real binary |
+| `gpu-smoke` | `PAID_GPU_SMOKE` | rung-1 GPU start, forced-CPU rung, rung-3 safety net |
+| `thinking-smoke` / `gemma-thinking` | `PAID_THINKING_SMOKE` / `PAID_GEMMA_THINKING` | deep-mode reasoning channel |
+| `rerank-smoke` | `PAID_RERANK_SMOKE` | the reranker sidecar reorders retrieval |
+| `whisper-smoke` / `dictation-smoke` | `PAID_WHISPER_SMOKE` / `PAID_DICTATION_SMOKE` | whisper-cli transcription + dictation |
+| `ocr-smoke` | `PAID_OCR_SMOKE` | WASM OCR over a real scan |
+| `compare-smoke` / `translation-smoke` | `PAID_COMPARE_SMOKE` / `PAID_TRANSLATION_SMOKE` | the doc-task pipelines end-to-end |
+| `rag-quality` / `minsim-measure` | `PAID_RAG_QUALITY` / `PAID_MINSIM_MEASURE` | retrieval quality + the similarity floor |
+| `server-concurrency-probe` | `PAID_CONCURRENCY_PROBE` | the one-at-a-time sidecar invariant |
+| `model-eval` | `PAID_MODEL_EVAL` | the model-recommendation ladder on real hardware |
+
+**Canned-real-output regression-fixture policy:** because these never run in CI, an
+upstream format change (SSE shape, `--list-devices` lines, whisper JSON) would otherwise
+slip past the green gate and only surface on real hardware. So **whenever a `PAID_*` run
+observes an upstream output format change — or a new format worth pinning — capture the
+verbatim real output into `apps/desktop/tests/fixtures/` and assert a pure parser against
+it in a CI unit test** (the bytes are kept binary via `.gitattributes`). The first such
+fixture is the b9585 `--list-devices` capture parsed by `gpu.test.ts` (audit L19); add SSE
+and whisper-JSON fixtures the same way as those formats are observed.

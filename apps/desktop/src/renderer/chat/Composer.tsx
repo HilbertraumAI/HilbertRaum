@@ -107,6 +107,10 @@ export function Composer({
           className="chat-input"
           rows={1}
           placeholder={placeholder}
+          // Accessible name (audit L8): a placeholder is not a label — it vanishes on
+          // input and AT support is inconsistent. Mirror the PasswordField pattern and
+          // name the field after its mode-specific prompt ("Message…" / "Ask about…").
+          aria-label={placeholder}
           value={value}
           onChange={(e) => onChange(e.target.value)}
           onKeyDown={(e) => {

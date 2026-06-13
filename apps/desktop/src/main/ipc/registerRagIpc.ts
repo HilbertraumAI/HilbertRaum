@@ -1,14 +1,13 @@
 import { ipcMain, type IpcMainInvokeEvent } from 'electron'
 import { IPC, STREAM } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
-import { DOC_TASK_BUSY_MESSAGE, type Message } from '../../shared/types'
-import { appendMessage, getConversation, maybeSetTitleFromFirstMessage } from '../services/chat'
+import { type Message } from '../../shared/types'
+import { appendMessage, maybeSetTitleFromFirstMessage } from '../services/chat'
 import { detectFilenameScope, generateGroundedAnswer, ragSettingsFrom } from '../services/rag'
 import { listDocuments } from '../services/ingestion'
 import { getSettings } from '../services/settings'
 import { tMain } from '../services/i18n'
-import { log } from '../services/logging'
-import { inFlightStreams } from './inflight'
+import { assertChatStreamReady, withChatStream } from './chat-stream'
 
 // IPC for RAG chat with citations (spec §9.1, §7.8).
 //
@@ -31,25 +30,9 @@ export function registerRagIpc(ctx: AppContext): void {
   ipcMain.handle(
     IPC.askDocuments,
     async (event: IpcMainInvokeEvent, conversationId: string, question: string): Promise<Message> => {
-      const conv = getConversation(ctx.db, conversationId)
-      if (!conv) throw new Error(`Unknown conversation: ${conversationId}`)
-
-      const runtime = ctx.runtime.active()
-      if (!runtime) {
-        // Ephemeral IPC guard → tMain (i18n record §3.3); DOC_TASK_BUSY_MESSAGE below
-        // stays canonical English on the wire (renderer exact-match + display map).
-        throw new Error(tMain('main.noModelRunning'))
-      }
-
-      // Strict one-at-a-time vs document tasks (see registerChatIpc).
-      if (ctx.docTasks?.hasActiveTask()) {
-        throw new Error(DOC_TASK_BUSY_MESSAGE)
-      }
-
-      // One active stream per conversation (shared registry with plain chat).
-      if (inFlightStreams.has(conversationId)) {
-        throw new Error(tMain('main.chat.streamInFlight'))
-      }
+      // Shared guard preamble (M-A2): conv exists, runtime active, no doc task / stream
+      // already in flight.
+      const { conv, runtime } = assertChatStreamReady(ctx, conversationId)
 
       const text = question.trim()
       if (!text) throw new Error(tMain('main.chat.emptyQuestion'))
@@ -76,47 +59,19 @@ export function registerRagIpc(ctx: AppContext): void {
         }
       }
 
-      const controller = new AbortController()
-      inFlightStreams.set(conversationId, controller)
-      try {
-        const assistant = await generateGroundedAnswer(
-          ctx.db,
-          runtime,
-          ctx.embedder,
-          conversationId,
-          text,
-          settings,
-          {
-            signal: controller.signal,
-            // "Ask selected documents": the conversation's persisted scope restricts
-            // retrieval; null scope = whole corpus. When no explicit scope was set,
-            // this may carry the filename auto-scope derived from the question above.
-            scopeDocumentIds,
-            // Retrieval reranker: null when no reranker is provisioned — retrieval
-            // then keeps the unreranked ordering byte-identical.
-            reranker: ctx.reranker,
-            onToken: (token) => {
-              if (!event.sender.isDestroyed()) {
-                event.sender.send(STREAM.token(conversationId), token)
-              }
-            }
-          }
-        )
-        if (!event.sender.isDestroyed()) {
-          event.sender.send(STREAM.done(conversationId), assistant)
-        }
-        return assistant
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err)
-        log.error('Document answer failed', { conversationId, message })
-        if (!event.sender.isDestroyed()) {
-          event.sender.send(STREAM.error(conversationId), message)
-        }
-        throw err
-      } finally {
-        // Only clear our own entry — a later stream may already own this key.
-        if (inFlightStreams.get(conversationId) === controller) inFlightStreams.delete(conversationId)
-      }
+      return withChatStream(event, conversationId, 'Document answer failed', (signal, sendToken) =>
+        generateGroundedAnswer(ctx.db, runtime, ctx.embedder, conversationId, text, settings, {
+          signal,
+          // "Ask selected documents": the conversation's persisted scope restricts
+          // retrieval; null scope = whole corpus. When no explicit scope was set, this
+          // may carry the filename auto-scope derived from the question above.
+          scopeDocumentIds,
+          // Retrieval reranker: null when no reranker is provisioned — retrieval then
+          // keeps the unreranked ordering byte-identical.
+          reranker: ctx.reranker,
+          onToken: sendToken
+        })
+      )
     }
   )
 }

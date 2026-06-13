@@ -280,6 +280,91 @@ describe('LlamaServer', () => {
     expect(exits[0].exitCode).toBe(134)
   })
 
+  // M-C1: a post-ready 'error' WITHOUT an 'exit' (process gone via ECHILD/EPIPE) is
+  // still a mid-session death — it must fire onUnexpectedExit so the GPU auto-fallback
+  // runs and stop() doesn't hang waiting on an 'exit' that never comes.
+  it('fires onUnexpectedExit when a healthy server emits "error" without "exit"', async () => {
+    const { spawn, child } = fakeSpawn()
+    const { fetchImpl } = healthFetch(0)
+    const exits: UnexpectedExitInfo[] = []
+    const server = new LlamaServer({
+      binPath: '/bin/s',
+      modelPath: '/m.gguf',
+      contextTokens: 2048,
+      onUnexpectedExit: (info) => exits.push(info),
+      spawn,
+      fetchImpl,
+      findPort: async () => 50008,
+      healthIntervalMs: 1
+    })
+    await server.start()
+    child.emit('error', new Error('read ECHILD')) // dies without ever emitting 'exit'
+    expect(exits).toHaveLength(1)
+  })
+
+  it('stop() resolves (does not hang) when the child only ever emits "error"', async () => {
+    // A child whose kill() emits 'error' rather than 'exit'.
+    class ErrorOnlyChild extends EventEmitter implements ChildProcessLike {
+      pid = 9
+      killed = false
+      kill(): boolean {
+        this.killed = true
+        queueMicrotask(() => this.emit('error', new Error('gone')))
+        return true
+      }
+    }
+    const child = new ErrorOnlyChild()
+    const spawn = (): ChildProcessLike => child
+    const { fetchImpl } = healthFetch(0)
+    const server = new LlamaServer({
+      binPath: '/bin/s',
+      modelPath: '/m.gguf',
+      contextTokens: 2048,
+      spawn,
+      fetchImpl,
+      findPort: async () => 50009,
+      healthIntervalMs: 1,
+      killGraceMs: 10_000 // long: the test would time out if stop() waited on the grace timer
+    })
+    await server.start()
+    await server.stop() // resolves via the 'error' branch of the race, not the grace timeout
+    expect(child.killed).toBe(true)
+  })
+
+  // M-C2: when child.kill() THROWS, stop() must not bail early (which would leave an
+  // orphan holding VRAM + the port) — it still races exit/grace and escalates to SIGKILL.
+  it('stop() still escalates to SIGKILL when the polite kill() throws', async () => {
+    const signals: Array<NodeJS.Signals | number | undefined> = []
+    class ThrowOnFirstKillChild extends EventEmitter implements ChildProcessLike {
+      pid = 11
+      killed = false
+      kill(signal?: NodeJS.Signals | number): boolean {
+        signals.push(signal)
+        if (signals.length === 1) throw new Error('kill failed (EPERM)') // the polite SIGTERM throws
+        this.killed = true
+        return true
+      }
+    }
+    const child = new ThrowOnFirstKillChild()
+    const spawn = (): ChildProcessLike => child
+    const { fetchImpl } = healthFetch(0)
+    const server = new LlamaServer({
+      binPath: '/bin/s',
+      modelPath: '/m.gguf',
+      contextTokens: 2048,
+      spawn,
+      fetchImpl,
+      findPort: async () => 50011,
+      healthIntervalMs: 1,
+      killGraceMs: 1 // child never exits → grace window elapses → SIGKILL escalation
+    })
+    await server.start()
+    await server.stop()
+    // First call (the throwing SIGTERM) did NOT short-circuit stop(): SIGKILL was still sent.
+    expect(signals[0]).toBeUndefined() // child.kill() with no arg = SIGTERM
+    expect(signals).toContain('SIGKILL')
+  })
+
   it('does NOT fire onUnexpectedExit for an exit during stop()', async () => {
     const { spawn } = fakeSpawn()
     const { fetchImpl } = healthFetch(0)

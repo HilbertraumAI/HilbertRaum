@@ -1,6 +1,6 @@
-import { existsSync } from 'node:fs'
 import type { Transcriber } from './index'
 import { createWhisperCliTranscriber, resolveWhisperCliPath } from './cli'
+import { resolveSidecarSelection } from '../select-sidecar-backed'
 
 // Availability-aware transcriber selector, the reranker pattern verbatim:
 // NO mock fallback. A real `WhisperCliTranscriber` is chosen only when BOTH the
@@ -31,8 +31,6 @@ export interface TranscriberSelectionDeps {
  * (the CLI is spawned per `transcribe()` call), so this returns synchronously.
  */
 export function createSelectedTranscriber(deps: TranscriberSelectionDeps): Transcriber | null {
-  const resolveBin = deps.resolveBin ?? ((root: string) => resolveWhisperCliPath(root))
-  const modelExists = deps.modelExists ?? existsSync
   const makeTranscriber =
     deps.makeTranscriber ??
     ((model: TranscriberModelInfo, binPath: string) =>
@@ -42,19 +40,21 @@ export function createSelectedTranscriber(deps: TranscriberSelectionDeps): Trans
         modelPath: model.modelPath
       }))
 
-  if (!deps.model) {
-    deps.onSelect?.('none', 'no transcriber model configured')
+  // Shared model→binary→weights ladder (L16). NO mock fallback — a mock transcript would
+  // silently corrupt the corpus, so unavailable means null.
+  const sel = resolveSidecarSelection<TranscriberModelInfo, Transcriber>({
+    rootPath: deps.rootPath,
+    model: deps.model,
+    resolveBin: deps.resolveBin ?? ((root) => resolveWhisperCliPath(root)),
+    modelExists: deps.modelExists,
+    makeReal: makeTranscriber,
+    binaryName: 'whisper-cli',
+    modelNoun: 'transcriber model'
+  })
+  if (!sel.available) {
+    deps.onSelect?.('none', sel.reason)
     return null
   }
-  const binPath = resolveBin(deps.rootPath)
-  if (!binPath) {
-    deps.onSelect?.('none', 'no whisper-cli binary on the drive')
-    return null
-  }
-  if (!modelExists(deps.model.modelPath)) {
-    deps.onSelect?.('none', 'transcriber model weights not present')
-    return null
-  }
-  deps.onSelect?.('whisper', 'binary + weights present')
-  return makeTranscriber(deps.model, binPath)
+  deps.onSelect?.('whisper', sel.reason)
+  return makeTranscriber(sel.model, sel.binPath)
 }

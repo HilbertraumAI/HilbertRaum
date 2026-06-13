@@ -141,6 +141,14 @@ describe('ModelsScreen — "AI Model" reframe (Phase 26, guidelines §2)', () =>
     await user.click(screen.getByText('Technical details'))
     expect(screen.getByText('models/chat/qwen3-4b-instruct-q4.gguf')).toBeVisible()
     expect(screen.getByRole('button', { name: /verify checksum/i })).toBeVisible()
+
+    // M-U5: the manifest GB figures route through fmtGbNum (locale-aware). In EN the
+    // value is byte-identical to the old raw render; the point is they go through the
+    // formatter so a German UI gets "2,7 GB" / grouped numbers instead of raw output.
+    const tech = within(details)
+    expect(tech.getByText('2.7 GB')).toBeVisible() // size on disk
+    expect(tech.getByText('8 GB')).toBeVisible() // minimum RAM
+    expect(tech.getByText('16 GB')).toBeVisible() // recommended RAM
   })
 
   it('puts the active model first under "Your AI model"', async () => {

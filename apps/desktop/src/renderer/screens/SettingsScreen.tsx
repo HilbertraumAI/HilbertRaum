@@ -5,6 +5,7 @@ import {
   PasswordField,
   PasswordStrengthMeter,
   SegmentedControl,
+  Spinner,
   Switch,
   passwordStrength,
   useToast
@@ -87,7 +88,7 @@ export function SettingsScreen({ tab, onTabChange }: SettingsScreenProps): JSX.E
 function GeneralTab(): JSX.Element {
   const [settings, setSettings] = useState<AppSettings | null>(null)
   const toast = useToast()
-  const { t, applyLanguageSetting } = useT()
+  const { t, lang, applyLanguageSetting } = useT()
 
   useEffect(() => {
     window.api?.getSettings().then(setSettings).catch(() => setSettings(null))
@@ -176,7 +177,8 @@ function GeneralTab(): JSX.Element {
               : t('settings.workspace.modePlaintext')}
           </dd>
           <dt>{t('settings.workspace.contextTokens')}</dt>
-          <dd>{settings.contextTokens}</dd>
+          {/* M-U5: group the token count by locale (German "8.192"). */}
+          <dd>{settings.contextTokens.toLocaleString(lang)}</dd>
         </dl>
         <p className="hint">
           {settings.workspaceMode === 'encrypted'
@@ -270,7 +272,7 @@ function ChangePasswordCard(): JSX.Element {
       </div>
       {busy && (
         <p className="hint" role="status">
-          <span className="spinner" /> {t('settings.changePassword.busy')}
+          <Spinner /> {t('settings.changePassword.busy')}
         </p>
       )}
       {error && <Banner tone="error">{error}</Banner>}

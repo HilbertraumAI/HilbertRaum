@@ -248,12 +248,37 @@ describe('rrfFuse', () => {
     expect(fused.map((c) => c.cosine)).toEqual([0.9, 0.5, 0.1])
   })
 
-  it('breaks exact ties deterministically (vector rank, then chunk id)', () => {
+  it('breaks exact ties deterministically (best rank across both lists, then chunk id)', () => {
     const fused = rrfFuse([], [{ chunkId: 'z', bm25: -1 }, { chunkId: 'y', bm25: -0.5 }])
-    // Ranks 1 and 2 differ; same-rank ties can only happen across lists — construct one:
+    // A #1 vector hit vs a #1 keyword-only hit: equal RRF score, equal best rank (1) →
+    // the ONLY remaining tiebreak is chunk id, so neither list is privileged (M-C4).
     const tie = rrfFuse([{ chunkId: 'v', score: 0.9 }], [{ chunkId: 'k', bm25: -1 }])
-    expect(tie.map((c) => c.chunkId)).toEqual(['v', 'k']) // equal RRF → vector-listed first
+    expect(tie.map((c) => c.chunkId)).toEqual(['k', 'v']) // 'k' < 'v' by id; no list bias
     expect(fused.map((c) => c.chunkId)).toEqual(['z', 'y'])
+  })
+
+  // M-C4: a #1 keyword-only hit must NOT be systematically suppressed below a vector
+  // hit it ties on RRF score. Before the fix, keyword-only chunks carried
+  // vectorRank = MAX_SAFE_INTEGER and ALWAYS lost the tiebreak to any vector-listed
+  // chunk, even one ranked lower in its own list.
+  it('a #1 keyword-only hit ties on best rank with a #1 vector hit (not buried last)', () => {
+    // Keyword-only 'invoice-code' is rank 1 → RRF 1/(K+1), best rank 1.
+    // Vector 'vec-2' is rank 2 → RRF 1/(K+2), best rank 2. The keyword-only chunk has
+    // BOTH the higher RRF score and the better best-rank, so it must outrank 'vec-2'.
+    // Under the old vectorRank tiebreak its rank-1 status was invisible.
+    const fused = rrfFuse(
+      [
+        { chunkId: 'vec-1', score: 0.9 }, // vector rank 1
+        { chunkId: 'vec-2', score: 0.5 } // vector rank 2
+      ],
+      [{ chunkId: 'invoice-code', bm25: -3 }] // keyword rank 1, keyword-only
+    )
+    const codeIdx = fused.findIndex((c) => c.chunkId === 'invoice-code')
+    const vec2Idx = fused.findIndex((c) => c.chunkId === 'vec-2')
+    expect(codeIdx).toBeLessThan(vec2Idx) // exact-term hit beats the lower vector hit
+    // It ties 'vec-1' exactly (both RRF 1/(K+1), both best rank 1) → id decides:
+    // 'invoice-code' < 'vec-1', so the keyword-only chunk leads the result.
+    expect(fused[0].chunkId).toBe('invoice-code')
   })
 })
 

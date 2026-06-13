@@ -47,10 +47,10 @@ export const de: Record<keyof typeof en, string> = {
   'home.lead':
     'Ein privater KI-Arbeitsbereich, komplett offline. Deine Fragen, Dokumente und ' +
     'Chat-Verläufe bleiben auf diesem Gerät.',
-  'home.preflight.continueBefore':
+  // {folder} ist der wörtliche Ordnername auf dem Laufwerk (nicht übersetzt); die UI hebt ihn fett hervor.
+  'home.preflight.continue':
     'Du kannst trotzdem fortfahren. Wenn sich die App nicht öffnet, findest du die ' +
-    'Anleitung zur Fehlerbehebung im Ordner ',
-  'home.preflight.continueAfter': ' auf dem Laufwerk.',
+    'Anleitung zur Fehlerbehebung im Ordner {folder} auf dem Laufwerk.',
   'home.checking': 'Wird geprüft…',
   'home.workspace.label': 'Arbeitsbereich',
   'home.workspace.encrypted':
@@ -109,6 +109,7 @@ export const de: Record<keyof typeof en, string> = {
   'chat.saveConversation': 'Diese Unterhaltung speichern',
   'chat.savedTo': 'Gespeichert unter {path}',
   'chat.copied': 'Kopiert',
+  'chat.stopped': 'Gestoppt – die Antwort ist möglicherweise unvollständig',
   'chat.scopeNotice': 'Antwort nur aus {titles}',
   'chat.cancelDocTask': 'Dokumentaufgabe abbrechen',
   'chat.placeholder.documents': 'Frag deine Dokumente…',
@@ -128,6 +129,8 @@ export const de: Record<keyof typeof en, string> = {
   'chat.search.aria': 'Unterhaltungen durchsuchen',
   'chat.search.resultsAria': 'Suchergebnisse',
   'chat.search.noMatches': 'Noch keine Treffer — versuch es mit einem anderen Wort.',
+  'chat.search.count.one': '{count} Treffer',
+  'chat.search.count.other': '{count} Treffer',
   'chat.group.today': 'Heute',
   'chat.group.yesterday': 'Gestern',
   'chat.group.last7days': 'Letzte 7 Tage',
@@ -223,6 +226,13 @@ export const de: Record<keyof typeof en, string> = {
   'docs.reindexAll': 'Alle neu indexieren ({count})',
   'docs.reindexAllTitle':
     'Jedes Dokument neu indexieren, das mit einem anderen Suchmodell indexiert wurde',
+  'docs.reindexAllConfirm.title': '{count} Dokumente neu indexieren?',
+  'docs.reindexAllConfirm.body':
+    'Dabei wird jedes veraltete Dokument nacheinander neu eingelesen und neu eingebettet. ' +
+    'Das kann mehrere Minuten dauern und beansprucht den Prozessor stark – Sie können ' +
+    'weiterarbeiten, aber Antworten sind bis zum Abschluss möglicherweise langsamer.',
+  'docs.reindexAllConfirm.confirm': 'Alle neu indexieren',
+  'docs.reindexAllProgress': 'Indexiere {done} von {total} neu…',
   'docs.supported.base':
     'Unterstützt: TXT, Markdown, PDF, DOCX, CSV — Audioaufnahmen (WAV, MP3, FLAC, OGG), ' +
     'die auf diesem Laufwerk transkribiert werden',

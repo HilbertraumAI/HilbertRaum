@@ -94,6 +94,17 @@ export function findFreePort(host: string = LOOPBACK_HOST): Promise<number> {
 
 const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
+/**
+ * A request abort signal that fires on EITHER the per-request timeout OR an optional
+ * caller signal (a user "Stop"). When no caller signal is given it's just the timeout,
+ * so existing callers are unchanged. Used by the embedder + reranker loopback fetches so
+ * a "Stop" during query embedding / rerank cancels promptly, not only on timeout (M-C5).
+ */
+export function combineSignals(caller: AbortSignal | undefined, timeoutMs: number): AbortSignal {
+  const timeout = AbortSignal.timeout(timeoutMs)
+  return caller ? AbortSignal.any([caller, timeout]) : timeout
+}
+
 // ---- Injectable seams (so the server can be unit-tested with no real binary) -----
 
 /** A readable stream surface — just enough to drain + capture the child's stderr. */
@@ -255,6 +266,24 @@ export class LlamaServer {
     })
     child.once('error', (err: unknown) => {
       this.spawnError = err instanceof Error ? err : new Error(String(err))
+      // An 'error' after the process is up means it is gone (the OS reports it via
+      // ECHILD, an EPIPE writing to a dead child) — possibly without ever emitting
+      // 'exit'. Mark it exited — like the 'exit' handler does — so stop()'s grace race
+      // resolves AND its SIGKILL escalation is correctly skipped (the child is already
+      // dead). `stop()` clears `ready`, so we record the exit whenever it's during
+      // teardown too; the unexpected-exit hook still only fires for a healthy server
+      // dying on its own (the GPU crash auto-fallback path, architecture.md §5.3).
+      // Start-time errors are consulted by waitForHealthy instead, so they don't set this.
+      if ((this.ready || this.stopping) && !this.exited) {
+        this.exited = true
+        if (this.ready && !this.stopping) {
+          this.opts.onUnexpectedExit?.({
+            exitCode: this.exitCode,
+            exitSignal: this.exitSignal,
+            stderrTail: this.stderrTail
+          })
+        }
+      }
     })
     child.once('exit', (code: unknown, signal: unknown) => {
       this.exited = true
@@ -346,11 +375,18 @@ export class LlamaServer {
     if (!child) return
     if (child.killed || this.exited) return
 
-    const exited = new Promise<void>((resolve) => child.once('exit', () => resolve()))
+    // Resolve the wait on EITHER 'exit' or 'error': a child that died via 'error'
+    // without ever emitting 'exit' (M-C1) would otherwise never settle this race.
+    const exited = new Promise<void>((resolve) => {
+      child.once('exit', () => resolve())
+      child.once('error', () => resolve())
+    })
     try {
       child.kill()
     } catch {
-      return
+      // kill() itself threw (already-dead child, EPERM): do NOT bail early (M-C2) — a
+      // surviving orphan would still hold VRAM + the port. Fall through to race the
+      // grace window and attempt SIGKILL like the normal path.
     }
     // Force-kill if it ignores the polite signal, but never hang the quit path.
     // NB: gate on `this.exited` (set by the 'exit' listener), NOT `child.killed` —

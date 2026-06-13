@@ -213,6 +213,34 @@ describe('WhisperCliTranscriber (fake spawn)', () => {
     await expect(call).rejects.toThrow(/terminated|cancelled/i)
   })
 
+  // L5: suspend()/stop() must AWAIT each killed child's cleanup (the transient-transcript
+  // shred in transcribe()'s finally), so the parent never exits leaving an un-shredded
+  // transcript in tmpdir() (the workspace crash-sweep never reaches the default workDir).
+  it('suspend() awaits the transient-transcript shred before returning (L5)', async () => {
+    const workDir = mkdtempSync(join(tmpdir(), 'paid-whisper-shred-'))
+    let outJson = ''
+    // A child that writes the transcript JSON, then "runs" (never closes on its own) until killed.
+    const pending = createWhisperCliTranscriber({
+      id: 't',
+      binPath: 'C:/fake/whisper-cli.exe',
+      modelPath: 'C:/fake/m.bin',
+      spawnImpl: (_cmd: string, args: string[]): ChildProcess => {
+        const child = makeFakeChild()
+        const outBase = args[args.indexOf('-of') + 1]
+        outJson = `${outBase}.json`
+        writeFileSync(outJson, JSON.stringify(WHISPER_JSON)) // transcript content on disk
+        return child as unknown as ChildProcess
+      }
+    })
+    const call = pending.transcribe('a.mp3', { workDir })
+    await new Promise((r) => setImmediate(r))
+    expect(existsSync(outJson)).toBe(true) // present mid-transcription
+    await pending.suspend() // kills the child; must not return until the shred has run
+    expect(existsSync(outJson)).toBe(false) // shredded by the time suspend() resolves
+    expect(readdirSync(workDir)).toEqual([])
+    await call.catch(() => undefined) // the cancelled call rejects; the shred is the point
+  })
+
   it('stop() refuses new work permanently (the will-quit latch)', async () => {
     const { transcriber } = fakeCliTranscriber({ json: WHISPER_JSON })
     await transcriber.stop()

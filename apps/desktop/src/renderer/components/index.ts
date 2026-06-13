@@ -5,6 +5,7 @@ export { englishTranslator, type Translator } from './translator'
 export { Button, type ButtonProps, type ButtonVariant } from './Button'
 export { Badge, type BadgeProps, type BadgeTone } from './Badge'
 export { Banner, type BannerProps, type BannerTone } from './Banner'
+export { ErrorBanner, type ErrorBannerProps } from './ErrorBanner'
 export { ToastProvider, useToast, TOAST_DURATION_MS } from './Toast'
 export { Modal, ConfirmDialog, type ModalProps, type ConfirmDialogProps } from './Dialog'
 export { SegmentedControl, type SegmentedControlProps, type SegmentedOption } from './SegmentedControl'
@@ -12,6 +13,7 @@ export { Switch, type SwitchProps } from './Switch'
 export { Chip, type ChipProps } from './Chip'
 export { EmptyState, type EmptyStateProps } from './EmptyState'
 export { Progress, type ProgressProps } from './Progress'
+export { Spinner } from './Spinner'
 export {
   LocalIndicator,
   localIndicatorLabel,

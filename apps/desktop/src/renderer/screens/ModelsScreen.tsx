@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import { Badge, Banner, Button, ConfirmDialog, EmptyState, Progress, type BadgeTone } from '../components'
+import { Badge, Banner, Button, ConfirmDialog, EmptyState, ErrorBanner, Progress, Spinner, type BadgeTone } from '../components'
+import { friendlyIpcError } from '../lib/errors'
 import { useT } from '../i18n'
 import type { MessageKey, UiLanguage } from '@shared/i18n'
 import type { AppSettings, DownloadJob, ModelInfo, ModelState, PolicyStatus } from '@shared/types'
@@ -29,6 +30,15 @@ function fmtGb(bytes: number | null, fallbackGb: number, lang: UiLanguage): stri
   const gb = bytes != null ? bytes / 1024 ** 3 : fallbackGb
   const rounded = gb >= 10 ? Math.round(gb) : Math.round(gb * 10) / 10
   return `${rounded.toLocaleString(lang, { useGrouping: false })} GB`
+}
+
+/**
+ * A GB number that is ALREADY a GB value (manifest fields, not bytes) → locale string
+ * (M-U5). Unlike `fmtGb` this does not round the manifest figure away; it only routes
+ * the decimal separator + grouping through the UI language (German "4,5 GB").
+ */
+function fmtGbNum(gb: number, lang: UiLanguage): string {
+  return `${gb.toLocaleString(lang)} GB`
 }
 
 /**
@@ -82,7 +92,7 @@ export function ModelsScreen(): JSX.Element {
   }
 
   useEffect(() => {
-    refresh().catch((e) => setError(String(e)))
+    refresh().catch((e) => setError(friendlyIpcError(e)))
   }, [])
 
   // Poll the live download job (async-with-polling, like import progress).
@@ -112,7 +122,7 @@ export function ModelsScreen(): JSX.Element {
       await fn()
       await refresh()
     } catch (e) {
-      setError(String(e))
+      setError(friendlyIpcError(e))
     } finally {
       setBusy(null)
     }
@@ -125,7 +135,7 @@ export function ModelsScreen(): JSX.Element {
       const started = await window.api.downloadModel(m.id, { licenseAccepted: licenseAck })
       setJob(started)
     } catch (e) {
-      setError(String(e))
+      setError(friendlyIpcError(e))
     } finally {
       setLicenseAck(false)
     }
@@ -145,7 +155,7 @@ export function ModelsScreen(): JSX.Element {
       <div className="screen">
         <h1>{t('models.title')}</h1>
         <p className="hint">
-          <span className="spinner" /> {t('models.checking')}
+          <Spinner /> {t('models.checking')}
         </p>
       </div>
     )
@@ -371,11 +381,11 @@ export function ModelsScreen(): JSX.Element {
               <dt>{t('models.tech.license')}</dt>
               <dd>{m.license}</dd>
               <dt>{t('models.tech.sizeOnDisk')}</dt>
-              <dd>{m.sizeOnDiskGb} GB</dd>
+              <dd>{fmtGbNum(m.sizeOnDiskGb, lang)}</dd>
               <dt>{t('models.tech.minRam')}</dt>
-              <dd>{m.recommendedMinRamGb} GB</dd>
+              <dd>{fmtGbNum(m.recommendedMinRamGb, lang)}</dd>
               <dt>{t('models.tech.recRam')}</dt>
-              <dd>{m.recommendedRamGb} GB</dd>
+              <dd>{fmtGbNum(m.recommendedRamGb, lang)}</dd>
               <dt>{t('models.tech.context')}</dt>
               <dd>{t('models.tech.contextValue', { count: m.recommendedContextTokens })}</dd>
               <dt>{t('models.tech.file')}</dt>
@@ -391,7 +401,7 @@ export function ModelsScreen(): JSX.Element {
             >
               {busy === `verify-${m.id}` ? (
                 <>
-                  <span className="spinner" /> {t('models.verifying')}
+                  <Spinner /> {t('models.verifying')}
                 </>
               ) : (
                 t('models.verify')
@@ -495,7 +505,8 @@ export function ModelsScreen(): JSX.Element {
       {others.length > 0 && <div className="section-title">{t('models.section.other')}</div>}
       {others.map(card)}
 
-      {error && <Banner tone="error">{error}</Banner>}
+      {/* Always-mounted alert region (audit M-U1) — announced on first appearance. */}
+      <ErrorBanner message={error} t={t} />
 
       {confirming && confirmDialog(confirming)}
     </div>

@@ -105,7 +105,7 @@ export function ConversationList({
   onDelete,
   onCollapse
 }: Props): JSX.Element {
-  const { t } = useT()
+  const { t, tCount } = useT()
   const [pendingDelete, setPendingDelete] = useState<Conversation | null>(null)
   // One controlled menu so right-click (context menu) can open the same "⋯" menu.
   const [menuOpenId, setMenuOpenId] = useState<string | null>(null)
@@ -168,7 +168,17 @@ export function ConversationList({
         }}
       />
       {searching && (
-        <div className="chat-conv-list" role="region" aria-label={t('chat.search.resultsAria')}>
+        <div
+          className="chat-conv-list"
+          role="region"
+          aria-label={t('chat.search.resultsAria')}
+          aria-live="polite"
+        >
+          {/* sr-only result count so a screen reader hears "3 results" as the list updates
+              (audit L14) — the visible list alone never announces how many matched. */}
+          {results != null && results.length > 0 && (
+            <p className="sr-only">{tCount('chat.search.count', results.length)}</p>
+          )}
           {results != null && results.length === 0 && (
             <p className="hint">{t('chat.search.noMatches')}</p>
           )}

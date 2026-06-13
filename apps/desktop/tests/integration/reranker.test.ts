@@ -76,6 +76,30 @@ describe('LlamaReranker', () => {
     await reranker.stop()
   })
 
+  // M-C5: a caller "Stop" (opts.signal) must abort the (CPU-slow) rerank in flight,
+  // not only on the request timeout.
+  it('forwards the caller abort signal to the rerank request (aborts in flight)', async () => {
+    const { spawn } = fakeSpawn()
+    let seenSignal: AbortSignal | undefined
+    const hangingFetch = (async (url: string | URL, init?: RequestInit) => {
+      const u = String(url)
+      if (u.endsWith('/health')) return { ok: true, status: 200 } as Response
+      seenSignal = init?.signal ?? undefined
+      return await new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')))
+      })
+    }) as typeof fetch
+
+    const reranker = new LlamaReranker({ ...base, spawn, fetchImpl: hangingFetch })
+    const controller = new AbortController()
+    const rerankPromise = reranker.rerank('q', ['a', 'b'], { signal: controller.signal })
+    await new Promise((r) => setTimeout(r, 1))
+    controller.abort()
+    await expect(rerankPromise).rejects.toThrow(/abort/i)
+    expect(seenSignal?.aborted).toBe(true)
+    await reranker.stop()
+  })
+
   it('spawns the sidecar once with --rerank + CPU pin, lazily, WITHOUT the chat args', async () => {
     const { spawn, calls, child } = fakeSpawn()
     const reranker = new LlamaReranker({ ...base, spawn, fetchImpl: rerankFetch([1]) })

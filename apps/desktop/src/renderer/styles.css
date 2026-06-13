@@ -559,7 +559,15 @@ code, pre, kbd { font-family: var(--font-mono); }
   font-size: 12px;
   color: var(--text-muted);
 }
-.msg-thinking summary { cursor: pointer; user-select: none; }
+.msg-thinking-toggle {
+  cursor: pointer;
+  user-select: none;
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+}
 .msg-thinking-text { white-space: pre-wrap; word-break: break-word; margin-top: 6px; line-height: 1.45; }
 .msg-role {
   display: flex;
@@ -849,6 +857,26 @@ code, pre, kbd { font-family: var(--font-mono); }
 .pill-accent { color: var(--accent); border-color: var(--accent); }
 
 /* Banner — persistent in-context notice: semantic left border + icon + text. */
+/* Visually-hidden, still in the a11y tree (screen-reader-only). Used by the streaming
+   live region (audit L7) and any other off-screen announcement text. The standard
+   clip-rect recipe — never display:none, which removes it from the a11y tree too. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ErrorBanner (audit M-U1): always-mounted role="alert" wrapper. Empty when there is no
+   message — no padding/margin of its own, so it collapses to zero height; the inner
+   Banner carries the visible spacing. */
+.error-banner-region { display: contents; }
+
 .banner {
   display: flex;
   align-items: flex-start;

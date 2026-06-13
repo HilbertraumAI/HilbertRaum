@@ -32,6 +32,12 @@ import {
 // retrieval time and are never stored; only the resolved `Citation[]` is persisted
 // (in `messages.citations_json` — citations never persist scores).
 
+// `approxTokenCount` counts whitespace words; real BPE tokens run ~1.3× that. The token
+// budget is a MODEL-token limit, so words must be scaled up before comparing — otherwise
+// the assembled excerpt block overflows the context window and the runtime silently
+// truncates excerpts. Same factor doctasks uses (SUMMARY_TOKENS_PER_WORD).
+const TOKENS_PER_WORD = 1.3
+
 /** Retrieval knobs, resolved from `AppSettings` (spec §7.8 defaults). */
 export interface RagRetrievalSettings {
   topKInitial: number
@@ -164,7 +170,8 @@ export async function retrieve(
   question: string,
   settings: RagRetrievalSettings,
   scopeDocumentIds?: string[] | null,
-  reranker?: Reranker | null
+  reranker?: Reranker | null,
+  signal?: AbortSignal
 ): Promise<RetrievalResult> {
   // Mismatch guard: only search vectors tagged with the active embedder's id.
   // Mock and real E5 vectors are both 384-dim, so the dimension guard cannot separate
@@ -174,7 +181,7 @@ export async function retrieve(
     embeddingModelId: embedder.id,
     documentIds: scopeDocumentIds ?? null
   })
-  const vectorHits = (await index.searchText(question, settings.topKInitial)).filter(
+  const vectorHits = (await index.searchText(question, settings.topKInitial, signal)).filter(
     (hit) => hit.score >= settings.minSimilarity
   )
   // Hybrid keyword path: the exact terms embeddings miss.
@@ -221,7 +228,7 @@ export async function retrieve(
   if (reranker && candidates.length > 0) {
     try {
       const scores = new Map(
-        (await reranker.rerank(question, candidates.map((c) => c.text))).map((h) => [
+        (await reranker.rerank(question, candidates.map((c) => c.text), { signal })).map((h) => [
           h.index,
           h.score
         ])
@@ -254,7 +261,7 @@ export async function retrieve(
   let usedTokens = 0
   for (const c of deduped) {
     if (selected.length >= settings.topKFinal) break
-    const tokens = approxTokenCount(c.text)
+    const tokens = Math.ceil(approxTokenCount(c.text) * TOKENS_PER_WORD)
     if (selected.length > 0 && usedTokens + tokens > settings.maxContextTokens) break
     selected.push(c)
     usedTokens += tokens
@@ -374,7 +381,8 @@ export async function generateGroundedAnswer(
     question,
     settings,
     opts.scopeDocumentIds,
-    opts.reranker
+    opts.reranker,
+    opts.signal
   )
 
   if (chunks.length === 0) {

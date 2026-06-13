@@ -12,7 +12,7 @@ import { localizeServerCopy } from '../lib/displayMap'
 import { friendlyIpcError } from '../lib/errors'
 import { RUNTIME_POLL_MS } from '../lib/polling'
 import { useT } from '../i18n'
-import { Banner, Button, Chip, EmptyState, LocalIndicator, SegmentedControl, useToast } from '../components'
+import { Button, Chip, EmptyState, ErrorBanner, LocalIndicator, SegmentedControl, Spinner, useToast } from '../components'
 import { Composer, ConversationList, DepthMenu, ScopePopover, Transcript } from '../chat'
 import type { MessageKey } from '@shared/i18n'
 
@@ -57,9 +57,20 @@ interface Props {
   initialMode?: Mode
   /** Retrieval scope for the NEXT documents conversation ("Ask these documents"). */
   initialScopeDocumentIds?: string[] | null
+  /**
+   * Effective offline state, owned by App (M-U4: one ambient truth, guidelines §7).
+   * Passed to the header LocalIndicator so it agrees with the sidebar instead of
+   * self-fetching the policy at its own mount.
+   */
+  offline?: boolean
 }
 
-export function ChatScreen({ onNavigate, initialMode, initialScopeDocumentIds }: Props): JSX.Element {
+export function ChatScreen({
+  onNavigate,
+  initialMode,
+  initialScopeDocumentIds,
+  offline
+}: Props): JSX.Element {
   const { t } = useT()
   const [conversations, setConversations] = useState<Conversation[]>([])
   const [activeId, setActiveId] = useState<string | null>(null)
@@ -115,6 +126,9 @@ export function ChatScreen({ onNavigate, initialMode, initialScopeDocumentIds }:
   const pendingTokens = useRef('')
   const pendingThinking = useRef('')
   const answerStarted = useRef(false)
+  // M-U2: set when the user presses Stop during a stream, so the stream`s finally can
+  // confirm the interruption (a stopped partial reply otherwise looks like a normal turn).
+  const stopped = useRef(false)
   const flushTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const flushStream = useCallback((): void => {
@@ -192,7 +206,7 @@ export function ChatScreen({ onNavigate, initialMode, initialScopeDocumentIds }:
     window.api
       .listMessages(activeId)
       .then(setMessages)
-      .catch((e) => setError(String(e)))
+      .catch((e) => setError(friendlyIpcError(e)))
   }, [activeId])
 
   function setListCollapsedPersistent(collapsed: boolean): void {
@@ -250,6 +264,7 @@ export function ChatScreen({ onNavigate, initialMode, initialScopeDocumentIds }:
     setStreamThinking('')
     setThinkingOpen(false)
     answerStarted.current = false
+    stopped.current = false
     const unsubscribe = window.api.onToken(convId, (token) => {
       // The first answer token auto-collapses an expanded Thinking… line.
       if (!answerStarted.current) {
@@ -304,6 +319,11 @@ export function ChatScreen({ onNavigate, initialMode, initialScopeDocumentIds }:
       setStreamConvId(null)
       setStreamText('')
       setStreamThinking('')
+      // M-U2: confirm a user-requested stop so a truncated reply is not mistaken for a
+      // complete one. Only when looking at THIS conversation (a background stream`s toast
+      // would be confusing) and only if no error already explained the early end.
+      if (stopped.current && activeIdRef.current === convId) showToast(t('chat.stopped'))
+      stopped.current = false
     }
   }
 
@@ -336,7 +356,10 @@ export function ChatScreen({ onNavigate, initialMode, initialScopeDocumentIds }:
   }
 
   function onStop(): void {
-    if (activeId) void window.api.stopGeneration(activeId)
+    if (activeId) {
+      stopped.current = true
+      void window.api.stopGeneration(activeId)
+    }
   }
 
   // Save the transcript to a user-chosen local file (spec §7.6). Saving is an
@@ -430,27 +453,36 @@ export function ChatScreen({ onNavigate, initialMode, initialScopeDocumentIds }:
   }
 
   // --- Empty state: no model running ------------------------------------------
+  // Routed through the shared EmptyState (guidelines §6) like every other screen
+  // (M-U3) instead of a hand-rolled .card. The "still loading" spinner line + the two
+  // buttons ride in the `action` slot.
   if (runtimeRunning === false) {
     return (
       <div className="screen">
         <h1>{t('chat.title')}</h1>
-        <div className="card">
-          <h2>{t('chat.noModel.title')}</h2>
-          <p className="hint">
-            {t('chat.noModel.hintBefore')}
-            <b>{t('chat.noModel.hintAction')}</b>
-            {t('chat.noModel.hintAfter')}
-          </p>
-          <p className="hint">
-            <span className="spinner" /> {t('chat.noModel.stillLoading')}
-          </p>
-          <div className="actions" style={{ marginTop: 12 }}>
-            <Button variant="primary" onClick={() => onNavigate('models')}>
-              {t('chat.noModel.open')}
-            </Button>
-            <Button onClick={() => void checkRuntime()}>{t('chat.noModel.recheck')}</Button>
-          </div>
-        </div>
+        <EmptyState
+          title={t('chat.noModel.title')}
+          line={
+            <>
+              {t('chat.noModel.hintBefore')}
+              <b>{t('chat.noModel.hintAction')}</b>
+              {t('chat.noModel.hintAfter')}
+            </>
+          }
+          action={
+            <>
+              <p className="hint">
+                <Spinner /> {t('chat.noModel.stillLoading')}
+              </p>
+              <div className="actions" style={{ marginTop: 12 }}>
+                <Button variant="primary" onClick={() => onNavigate('models')}>
+                  {t('chat.noModel.open')}
+                </Button>
+                <Button onClick={() => void checkRuntime()}>{t('chat.noModel.recheck')}</Button>
+              </div>
+            </>
+          }
+        />
       </div>
     )
   }
@@ -519,8 +551,9 @@ export function ChatScreen({ onNavigate, initialMode, initialScopeDocumentIds }:
             disabled={streaming}
           />
           <div className="chat-header-spacer" />
-          {/* Ambient "Local · Offline" signal (guidelines §7). */}
-          <LocalIndicator onNavigate={onNavigate} t={t} />
+          {/* Ambient "Local · Offline" signal (guidelines §7); offline owned by App
+              so the header and sidebar can never disagree (M-U4). */}
+          <LocalIndicator offline={offline} onNavigate={onNavigate} t={t} />
           <DropdownMenu.Root>
             <DropdownMenu.Trigger asChild>
               <button
@@ -560,30 +593,32 @@ export function ChatScreen({ onNavigate, initialMode, initialScopeDocumentIds }:
           actionsDisabled={streaming}
         />
 
-        {error && (
-          <Banner tone="error" t={t} onDismiss={() => setError(null)}>
-            {/* DOC_TASK_BUSY_MESSAGE arrives canonical English on the wire (the
-                exact-match recognition below) — the display map localizes it here. */}
-            {localizeServerCopy(t, error)}
-            {/* Chat refused while a document task runs: the shared
-                copy comes with an actionable cancel — the task, not the chat. */}
-            {error.includes(DOC_TASK_BUSY_MESSAGE) && (
-              <>
-                {' '}
-                <Button
-                  size="sm"
-                  onClick={() => {
-                    void cancelActiveDocTask()
-                      .then(() => setError(null))
-                      .catch(() => undefined)
-                  }}
-                >
-                  {t('chat.cancelDocTask')}
-                </Button>
-              </>
-            )}
-          </Banner>
-        )}
+        {/* Always-mounted alert region (audit M-U1) so the error is announced even on
+            its first appearance. DOC_TASK_BUSY_MESSAGE arrives canonical English on the
+            wire — the display map localizes it here. */}
+        <ErrorBanner
+          message={error != null ? localizeServerCopy(t, error) : null}
+          t={t}
+          onDismiss={() => setError(null)}
+        >
+          {/* Chat refused while a document task runs: the shared
+              copy comes with an actionable cancel — the task, not the chat. */}
+          {error != null && error.includes(DOC_TASK_BUSY_MESSAGE) && (
+            <>
+              {' '}
+              <Button
+                size="sm"
+                onClick={() => {
+                  void cancelActiveDocTask()
+                    .then(() => setError(null))
+                    .catch(() => undefined)
+                }}
+              >
+                {t('chat.cancelDocTask')}
+              </Button>
+            </>
+          )}
+        </ErrorBanner>
 
         <Composer
           value={input}

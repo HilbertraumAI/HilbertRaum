@@ -32,6 +32,13 @@ directories:
 files:
   - out/**/*
   - package.json
+  # L18 (audit-2026-06-13): `@napi-rs/canvas` is an OPTIONAL transitive dep of pdfjs-dist
+  # — a platform-specific native `.node` (Skia) we never import (the PDF path uses the
+  # hidden-window rasterizer, not node-canvas). `includeSubNodeModules: true` would
+  # otherwise follow the hoisted tree and bundle the win32 `.node` into app.asar, breaking
+  # the pure-JS / cross-OS portable posture (a Windows .node on a macOS/Linux drive).
+  # Exclude every platform variant. tests/integration/packaging.test.ts asserts this stays.
+  - '!**/node_modules/@napi-rs/canvas*/**'
 includeSubNodeModules: true
 # No native addons (node:sqlite is built into Electron; parsers are pure-JS) → skip rebuild.
 npmRebuild: false

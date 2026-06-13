@@ -12,6 +12,15 @@ import type { Db } from '../db'
 // Everything is local + offline: the embedder never touches the network, and the
 // search is an in-process linear scan over SQLite rows (no remote vector service).
 
+/** Per-call embed options. `signal` lets a caller "Stop" cancel an in-flight request. */
+export interface EmbedOptions {
+  /**
+   * Caller abort signal. Combined with the per-request timeout so a user "Stop" during
+   * query embedding cancels the loopback request promptly (M-C5), not only on timeout.
+   */
+  signal?: AbortSignal
+}
+
 /** The contract every embedding backend implements (spec §9.2). */
 export interface Embedder {
   /** The embedding-model id tag (written to `embeddings.embedding_model_id`). */
@@ -19,7 +28,7 @@ export interface Embedder {
   /** Fixed output width of every vector this embedder produces. */
   readonly dimensions: number
   /** Embed a batch of texts into L2-normalized vectors (one per input, in order). */
-  embed(texts: string[]): Promise<Float32Array[]>
+  embed(texts: string[], opts?: EmbedOptions): Promise<Float32Array[]>
   /**
    * Release any backing resources (e.g. the real embedder's loopback sidecar). Optional
    * — the mock embedder holds nothing. Called on `will-quit`; PERMANENT (a racing lazy
@@ -56,9 +65,19 @@ export function decodeVector(blob: Uint8Array, dimensions: number): Float32Array
   return new Float32Array(bytes.buffer, bytes.byteOffset, dimensions)
 }
 
-/** Cosine similarity of two equal-length vectors. Returns 0 if either is all-zero. */
+/**
+ * Cosine similarity of two equal-length vectors. Returns 0 if either is all-zero.
+ *
+ * Throws on a length mismatch rather than silently scoring on `min(length)` (L2):
+ * the exported contract is "equal-length", and the only in-tree caller already
+ * dimension-guards before calling — so a mismatch here means a real bug (a future
+ * caller mixing dimensions), not data to score on a prefix.
+ */
 export function cosineSimilarity(a: Float32Array, b: Float32Array): number {
-  const n = Math.min(a.length, b.length)
+  if (a.length !== b.length) {
+    throw new RangeError(`cosineSimilarity length mismatch: ${a.length} vs ${b.length}`)
+  }
+  const n = a.length
   let dot = 0
   let na = 0
   let nb = 0
@@ -142,6 +161,9 @@ export class VectorIndex {
     for (const row of rows) {
       // Skip vectors from a different model/dimensionality (e.g. mid-migration).
       if (row.dimensions !== queryVector.length) continue
+      // Skip a physically truncated blob rather than letting decodeVector throw a
+      // RangeError and abort the whole query — one corrupt row must not break all search.
+      if (row.vector_blob.length < row.dimensions * 4) continue
       const vec = decodeVector(row.vector_blob, row.dimensions)
       hits.push({ chunkId: row.chunk_id, score: cosineSimilarity(queryVector, vec) })
     }
@@ -150,8 +172,8 @@ export class VectorIndex {
   }
 
   /** Embed `query` with the same embedder, then run the cosine search. */
-  async searchText(query: string, topK: number): Promise<VectorSearchHit[]> {
-    const [queryVector] = await this.embedder.embed([query])
+  async searchText(query: string, topK: number, signal?: AbortSignal): Promise<VectorSearchHit[]> {
+    const [queryVector] = await this.embedder.embed([query], { signal })
     return this.search(queryVector, topK)
   }
 }

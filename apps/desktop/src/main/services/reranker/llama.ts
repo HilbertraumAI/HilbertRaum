@@ -1,5 +1,5 @@
-import type { Reranker, RerankedHit } from './index'
-import { LlamaServer, type LlamaServerOptions } from '../runtime/sidecar'
+import type { Reranker, RerankedHit, RerankOptions } from './index'
+import { LlamaServer, combineSignals, type LlamaServerOptions } from '../runtime/sidecar'
 
 // Real on-device reranker (rag-design §11). The THIRD `LlamaServer`
 // composition (after the chat runtime and the E5 embedder): the SAME shipped b9585
@@ -143,9 +143,10 @@ export class LlamaReranker implements Reranker {
    * Score every document against `query` via `/v1/rerank`. Inputs are word-truncated
    * to the context/latency budget; the response's `results[].index` maps each score
    * back to its input (the server sorts by score desc — order is NOT input order).
-   * Throws unless every input received exactly one score.
+   * Throws unless every input received exactly one score. `opts.signal` (a user "Stop")
+   * is combined with the timeout so the CPU-slow rerank cancels promptly (M-C5).
    */
-  async rerank(query: string, documents: string[]): Promise<RerankedHit[]> {
+  async rerank(query: string, documents: string[], opts?: RerankOptions): Promise<RerankedHit[]> {
     if (documents.length === 0) return []
     const server = await this.ensureStarted()
     const res = await server.fetch('/v1/rerank', {
@@ -156,7 +157,7 @@ export class LlamaReranker implements Reranker {
         query: truncateWords(query, MAX_QUERY_WORDS),
         documents: documents.map((d) => truncateWords(d, MAX_DOC_WORDS))
       }),
-      signal: AbortSignal.timeout(this.opts.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS)
+      signal: combineSignals(opts?.signal, this.opts.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS)
     })
     if (!res.ok) {
       void res.body?.cancel().catch(() => undefined) // release the connection

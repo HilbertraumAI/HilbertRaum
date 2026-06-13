@@ -77,6 +77,42 @@ describe('E5Embedder', () => {
     await embedder.stop()
   })
 
+  // L3: the OpenAI embeddings schema makes `index` optional. Handle the two clean cases
+  // (all-indexed → sort; none-indexed → trust array order) and reject a partial mix, which
+  // would collapse the missing entries to 0 and silently misalign vectors↔chunks.
+  it('trusts response array order when NO entry carries an index', async () => {
+    const noIndexFetch = (async (url: string | URL) => {
+      const u = String(url)
+      if (u.endsWith('/health')) return { ok: true, status: 200 } as Response
+      // Deliberately omit `index`; the embedder must keep this exact order.
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ data: [{ embedding: [1, 0] }, { embedding: [0, 1] }] })
+      } as Response
+    }) as typeof fetch
+    const embedder = new E5Embedder({ ...base, spawn: fakeSpawn().spawn, fetchImpl: noIndexFetch })
+    const [a, b] = await embedder.embed(['first', 'second'])
+    expect(Array.from(a)).toEqual([1, 0])
+    expect(Array.from(b)).toEqual([0, 1])
+    await embedder.stop()
+  })
+
+  it('rejects a response that mixes indexed and unindexed entries (L3)', async () => {
+    const mixedFetch = (async (url: string | URL) => {
+      const u = String(url)
+      if (u.endsWith('/health')) return { ok: true, status: 200 } as Response
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ data: [{ embedding: [1, 0], index: 1 }, { embedding: [0, 1] }] })
+      } as Response
+    }) as typeof fetch
+    const embedder = new E5Embedder({ ...base, spawn: fakeSpawn().spawn, fetchImpl: mixedFetch })
+    await expect(embedder.embed(['first', 'second'])).rejects.toThrow(/mixes indexed/)
+    await embedder.stop()
+  })
+
   it('spawns the embeddings sidecar once with --embedding, lazily, and reuses it', async () => {
     const { spawn, calls, child } = fakeSpawn()
     const embedder = new E5Embedder({ ...base, spawn, fetchImpl: embedFetch([[1, 0]]) })
@@ -147,6 +183,33 @@ describe('E5Embedder', () => {
     // L2-normalized [n, 0] → [1, 0]; the global order check is that nothing was dropped
     // or duplicated across batch boundaries.
     expect(vectors.every((v) => v.length === 2)).toBe(true)
+  })
+
+  // M-C5: a caller "Stop" (opts.signal) must be plumbed into the loopback fetch so query
+  // embedding aborts promptly, not only on the request timeout.
+  it('forwards the caller abort signal to the embeddings request (aborts in flight)', async () => {
+    const { spawn } = fakeSpawn()
+    let seenSignal: AbortSignal | undefined
+    const hangingFetch = (async (url: string | URL, init?: RequestInit) => {
+      const u = String(url)
+      if (u.endsWith('/health')) return { ok: true, status: 200 } as Response
+      seenSignal = init?.signal ?? undefined
+      // Never resolve on its own — only the aborted signal ends this request.
+      return await new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')))
+      })
+    }) as typeof fetch
+
+    const embedder = new E5Embedder({ ...base, spawn, fetchImpl: hangingFetch })
+    const controller = new AbortController()
+    const embedPromise = embedder.embed(['hello'], { signal: controller.signal })
+    // Let the request reach the fetch, then the user hits Stop.
+    await new Promise((r) => setTimeout(r, 1))
+    controller.abort()
+    await expect(embedPromise).rejects.toThrow(/abort/i)
+    // The signal handed to fetch fires when the caller aborts (combined with the timeout).
+    expect(seenSignal?.aborted).toBe(true)
+    await embedder.stop()
   })
 
   it('returns [] for an empty batch without starting the server', async () => {
@@ -249,6 +312,49 @@ describe('E5Embedder', () => {
     await embedder.suspend()
     await expect(embedder.embed(['a'])).rejects.toThrow()
     expect(calls.length).toBe(2)
+    await embedder.stop()
+  })
+
+  // L4: suspend() must clear the failed-start latch AFTER teardown, not before. If a
+  // first-start is in flight when suspend() runs, teardown awaits it; should that start
+  // then FAIL, it re-arms `startFailed`. Clearing the latch last guarantees a post-suspend
+  // embed() gets a fresh attempt rather than throwing the stale failure.
+  it('suspend() clears the latch even when an in-flight start fails during teardown (L4)', async () => {
+    let attempt = 0
+    const spawn = (): ChildProcessLike => new FakeChild()
+    // First start: hold /health, then fail (exit emitted by the test). Later starts: healthy.
+    const health = { release: null as (() => void) | null }
+    const fetchImpl = (async (url: string | URL) => {
+      const u = String(url)
+      if (u.endsWith('/health')) {
+        attempt++
+        if (attempt === 1) {
+          // First start stays in flight until the test releases it, then rejects (sidecar died).
+          await new Promise<void>((resolve) => (health.release = resolve))
+          throw new Error('connection refused')
+        }
+        return { ok: true, status: 200 } as Response
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ data: [{ embedding: [1, 0], index: 0 }] })
+      } as Response
+    }) as typeof fetch
+
+    const embedder = new E5Embedder({ ...base, spawn, fetchImpl })
+    const first = embedder.embed(['a']) // first start goes in flight, polling /health
+    while (!health.release) await new Promise((r) => setTimeout(r, 1))
+
+    const suspendPromise = embedder.suspend() // teardown awaits the in-flight start
+    health.release!() // the in-flight start now fails DURING teardown's await
+    await suspendPromise
+    await first.catch(() => undefined)
+
+    // If the latch had been cleared before teardown, the racing failure would have re-armed
+    // it and this embed would throw the stale 'connection refused'. Clearing last → fresh start.
+    const [v] = await embedder.embed(['b'])
+    expect(Array.from(v)).toEqual([1, 0])
     await embedder.stop()
   })
 

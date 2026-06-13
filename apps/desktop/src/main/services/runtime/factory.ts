@@ -289,11 +289,18 @@ export function createGpuCrashAutoFallback(
     const tail = info.stderrTail.trim()
     deps.persistFailure(`crashed mid-session (${code})${tail ? ` — last output: ${tail}` : ''}`)
     deps.notify?.(tMain('main.runtime.compatibilityMode'))
-    void deps
-      .restart(opts)
-      .catch(() => undefined) // a failed CPU restart surfaces on the user's next start
-      .finally(() => {
-        restarting = false
-      })
+    // restart() may throw SYNCHRONOUSLY (before returning a promise). Without this
+    // try/catch the throw escapes before `.finally` is attached, `restarting` stays
+    // true forever, and EVERY future crash auto-fallback is silently suppressed (M-C3).
+    try {
+      void deps
+        .restart(opts)
+        .catch(() => undefined) // a failed CPU restart surfaces on the user's next start
+        .finally(() => {
+          restarting = false
+        })
+    } catch {
+      restarting = false // a sync throw surfaces on the user's next start; re-arm the guard
+    }
   }
 }

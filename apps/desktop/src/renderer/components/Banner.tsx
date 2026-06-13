@@ -24,6 +24,12 @@ export interface BannerProps {
   onDismiss?: () => void
   /** Bound translate fn for the built-in dismiss label (i18n record §5 ⑤); English default. */
   t?: Translator
+  /**
+   * Override the announce role. Defaults to `alert` for the error tone, `status`
+   * otherwise. ErrorBanner (audit M-U1) passes `status` so the always-mounted wrapper
+   * owns the single `role="alert"` live region instead of nesting two.
+   */
+  role?: 'alert' | 'status'
 }
 
 export function Banner({
@@ -31,10 +37,14 @@ export function Banner({
   children,
   action,
   onDismiss,
-  t = englishTranslator
+  t = englishTranslator,
+  role
 }: BannerProps): JSX.Element {
   return (
-    <div className={`banner banner-${tone}`} role={tone === 'error' ? 'alert' : 'status'}>
+    <div
+      className={`banner banner-${tone}`}
+      role={role ?? (tone === 'error' ? 'alert' : 'status')}
+    >
       <span className="banner-icon" aria-hidden="true">
         {TONE_ICON[tone]}
       </span>

@@ -1,7 +1,7 @@
-import { existsSync } from 'node:fs'
 import type { Reranker } from './index'
 import { createLlamaReranker } from './llama'
 import { resolveLlamaServerPath } from '../runtime/sidecar'
+import { resolveSidecarSelection } from '../select-sidecar-backed'
 
 // Availability-aware reranker selector (rag-design §11), mirroring
 // the embedder factory — with one deliberate difference: there is NO mock fallback.
@@ -34,8 +34,6 @@ export interface RerankerSelectionDeps {
  * sidecar is lazy-started on first `rerank()`), so this returns synchronously.
  */
 export function createSelectedReranker(deps: RerankerSelectionDeps): Reranker | null {
-  const resolveBin = deps.resolveBin ?? ((root: string) => resolveLlamaServerPath(root))
-  const modelExists = deps.modelExists ?? existsSync
   const makeReranker =
     deps.makeReranker ??
     ((model: RerankerModelInfo, binPath: string) =>
@@ -46,19 +44,21 @@ export function createSelectedReranker(deps: RerankerSelectionDeps): Reranker | 
         contextTokens: model.contextTokens
       }))
 
-  if (!deps.model) {
-    deps.onSelect?.('none', 'no reranker model configured')
+  // Shared model→binary→weights ladder (L16). NO mock fallback — a mock reranker would
+  // invent an ordering and silently change answers, so unavailable means null.
+  const sel = resolveSidecarSelection<RerankerModelInfo, Reranker>({
+    rootPath: deps.rootPath,
+    model: deps.model,
+    resolveBin: deps.resolveBin ?? ((root) => resolveLlamaServerPath(root)),
+    modelExists: deps.modelExists,
+    makeReal: makeReranker,
+    binaryName: 'llama-server',
+    modelNoun: 'reranker model'
+  })
+  if (!sel.available) {
+    deps.onSelect?.('none', sel.reason)
     return null
   }
-  const binPath = resolveBin(deps.rootPath)
-  if (!binPath) {
-    deps.onSelect?.('none', 'no llama-server binary on the drive')
-    return null
-  }
-  if (!modelExists(deps.model.modelPath)) {
-    deps.onSelect?.('none', 'reranker model weights not present')
-    return null
-  }
-  deps.onSelect?.('llama', 'binary + weights present')
-  return makeReranker(deps.model, binPath)
+  deps.onSelect?.('llama', sel.reason)
+  return makeReranker(sel.model, sel.binPath)
 }

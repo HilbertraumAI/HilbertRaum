@@ -125,8 +125,23 @@ export function registerDocsIpc(ctx: AppContext): void {
     // password change (which re-encrypts `.enc` sidecars) refuses to start while we
     // write them — and vice versa, this throws a friendly VaultBusyError mid-change.
     const releaseDocWork = ctx.workspace.beginDocumentWork()
-    const files = expandPaths(paths ?? [])
-    const documentIds = files.map((f) => createQueuedDocument(ctx.db, f).id)
+    // The lease is held until the background loop's `finally`. Anything that can throw
+    // synchronously between here and that loop (a failed INSERT, a path expansion error)
+    // must release the lease first, or a vault password change is wedged for the whole
+    // session with no import in flight to explain it.
+    let documentIds: string[]
+    try {
+      // M-S2: the renderer is the untrusted boundary — accept only an array of strings.
+      // A non-array (or non-string elements) would otherwise crash expandPaths with the
+      // lease held. Element strings are still server-validated downstream (expandPaths
+      // filters to existing, supported files).
+      const safePaths = Array.isArray(paths) ? paths.filter((p): p is string => typeof p === 'string') : []
+      const files = expandPaths(safePaths)
+      documentIds = files.map((f) => createQueuedDocument(ctx.db, f).id)
+    } catch (err) {
+      releaseDocWork()
+      throw err
+    }
 
     const jobId = randomUUID()
     const status: ImportJobStatus = {

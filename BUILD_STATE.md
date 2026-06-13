@@ -691,6 +691,77 @@ Repo root: `f:\_coding\ai_drive`.
   `testTimeout: 15_000` (3× headroom) in `vitest.config.ts` — chosen over capping
   `maxWorkers` because it leaves a clean run's wall time unchanged. Suite: **969 tests
   green** (968 + the new e5 failed-start-latch test).
+- **Multi-persona audit + MEDIUM remediation (2026-06-13, branch `audit-2026-06-13-high-fixes`,
+  NOT yet merged):** a fresh five-persona audit (`docs/audit-2026-06-13.md`, a working report
+  outside the doc-lifecycle rule). No CRITICAL. **Round 1** fixed the 4 code HIGHs + M-S3 (H1
+  import lease-leak, H2 RAG token budget ×1.3, H3 truncated-blob guard, H4 OCR rasterizer
+  busy-flag, M-S3 OCR-window nav guards). **Round 2** added the H5/M-A1 drift test
+  (`tests/integration/script-drift.test.ts`) + the M-D1/2/3 stale-doc fixes. **Round 3** banked
+  the prioritized MEDIUMs: M-C1/2/3 sidecar lifecycle (a post-ready `'error'` without `'exit'`
+  now fires the GPU crash auto-fallback **and** resolves `stop()`; `stop()` escalates to SIGKILL
+  even when `child.kill()` throws; the auto-fallback re-arms on a synchronous `restart()` throw —
+  the fix surfaced a secondary bug: `stop()` clears `ready`, so the `'error'` handler must record
+  the exit during teardown too or the SIGKILL escalation double-fires `kill()`); M-C4 RRF
+  tiebreak on best-rank-across-both-lists (exact-term keyword-only hits no longer suppressed);
+  M-C5 caller abort signal plumbed `retrieve → embed/rerank` via a shared `combineSignals`
+  (`runtime/sidecar.ts`); M-S2 per-handler IPC arg-shape guards (`createWorkspace` `password.length`
+  TypeError + unlock/changePassword/importDocuments); M-S1 offline guard kept **detection-only by
+  decision** (`security-model.md` §2 "Detection-only, not enforcement" — enforcing via the
+  process-wide `net.Socket.connect` shim would turn a host-extraction edge case into a hard offline
+  failure breaking loopback IPC/sidecar; the guarantee rests on the no-remote-code posture + the
+  prod CSP). **Round 4** banked the a11y trio + the M-A1 follow-up: L8 (composer `aria-label`
+  mirroring the mode prompt), M-U1 (new `ErrorBanner` — an always-mounted `role="alert"`
+  `display:contents` wrapper that swaps text; Banner took a `role` override so the inner one is
+  `status` not a nested alert; chat/documents/models error banners migrated), L7 (the visible
+  streaming markdown is no longer a live region — a separate `.sr-only` `StreamAnnouncer` announces
+  only newly-completed sentences, markdown-stripped, resetting per stream), and M-A1 **completed**
+  (drift test extended to the `config/{drive,policy}.json` payloads vs `buildDriveJson`/`buildPolicyJson`
+  for both editions, plus the `verify-models.{ps1,sh}` sha256 regex vs `isRealSha256` and the
+  runtime/format gate vs the now-exported `SUPPORTED_RUNTIMES`/`SUPPORTED_FORMATS`). Suite **1043 green**,
+  typecheck + build clean. **Round 5** banked the remaining LOWs (except L16–L19). Correctness: L2
+  (`cosineSimilarity` throws `RangeError` on a length mismatch — the only caller dimension-guards first,
+  so a mismatch is a real bug not a prefix to score); L3 (E5 batch reorder handles all-indexed → sort,
+  none-indexed → trust array order, and **throws** on a partial mix that would silently misalign
+  vectors↔chunks); L4 (embedder `suspend()` clears the failed-start latch **after** teardown — teardown
+  awaits an in-flight start, so a racing failure during it would otherwise re-arm the latch and force a
+  second lock/unlock); L5 (transcriber `suspend()`/`stop()` track each child against a promise that
+  resolves only after its transient-transcript shred runs, then **await** them — the parent can no longer
+  exit on quit leaving an un-shredded transcript in `tmpdir()`, which the workspace crash-sweep never
+  reaches); L6 (`parseCitations`/`isCitation` validate the `citations_json` shape on read, mirroring
+  `parseScope`). a11y: L1 (markdown `a` renderer whitelists http(s), else inert text); L9 (`docs` literal
+  → single `home.preflight.continue` key with a `{folder}` placeholder the UI splits to bold); L10
+  (`friendlyIpcError` at the remaining `String(e)` sites in Chat/Documents/Models screens); L11
+  (`<Spinner>` with `aria-hidden` baked in, replacing every bare `.spinner` span); L12 (`aria-describedby`
+  on the ConfirmDialog body via `useId`); L13 (strength meter is no longer a `role="status"` live region —
+  a separate debounced `.sr-only` region announces the word only after typing settles); L14
+  (search-results `aria-live="polite"` + an `.sr-only` count); L15 (Thinking `<button aria-expanded>`
+  instead of a `preventDefault`-driven `<details>`, reasoning kept mounted-but-`hidden` when collapsed).
+  Suite **1058 green**, typecheck + build clean. **Round 6 — batch 1 (branch
+  `audit-2026-06-13-high-fixes`):** the deps/test-gap LOWs + one locale MEDIUM. L17 (`logging.ts` had
+  zero tests — added `tests/unit/logging.test.ts`: MAX_BYTES rotation, circular-meta non-throw,
+  `readLogTail`); L18 (`@napi-rs/canvas` native `.node` excluded from app.asar via a `!**/@napi-rs/
+  canvas*/**` `files` glob in `electron-builder.yml` + `tests/integration/packaging.test.ts` asserting
+  it); L19 (captured the real **b9585** `--list-devices` stdout into `tests/fixtures/` — CRLF kept
+  binary — and parse it as a `gpu.test.ts` regression); L16 (extracted `resolveSidecarSelection` in
+  `services/select-sidecar-backed.ts` — the shared model→binary→weights ladder behind the three
+  sidecar factories); M-U5 (tech-disclosure GB / Diagnostics MB-s + tokens-s / Settings context-tokens
+  now route through locale `toLocaleString` helpers). Suite **1070 green**, typecheck + build clean.
+  **Round 6 — batch 2 (branch `audit-2026-06-13-high-fixes`):** the UX + architecture MEDIUMs, closing
+  the audit. UX: M-U2 (a stopped chat stream now toasts `chat.stopped` — a truncated reply is no longer
+  mistaken for a complete one); M-U3 (the no-model chat state routed through the shared `EmptyState`);
+  M-U4 (offline state lifted to App as the single ambient truth — the chat header `LocalIndicator` takes
+  it as a prop instead of self-fetching, so it can't disagree with the sidebar); M-U6 (`Re-index all
+  stale` gated behind a `ConfirmDialog` + a determinate `Progress` bar). Architecture: M-A2
+  (`ipc/chat-stream.ts` — `assertChatStreamReady` + `withChatStream` collapse the duplicated guard
+  preamble + stream lifecycle that registerChatIpc/registerRagIpc kept in hand-synced lockstep); M-A3
+  (`resolveModelByRole` + `composeServices` extracted from `initBackend`); M-A4 (the 1582-line
+  `doctasks.ts` split into `doctasks/{summary,translation,compare,manager}.ts` behind a byte-identical
+  re-export barrel); M-A5 (the `PAID_*` manual-harness matrix documented as a required pre-release gate
+  in `packaging.md` + the canned-real-output regression-fixture policy). **The 2026-06-13 audit is now
+  fully remediated** (every HIGH, MEDIUM, and LOW closed; the `docs/audit-2026-06-13.md` working report
+  was deleted per its own lifecycle rule — the full annotated report, incl. the "Confirmed NON-issues"
+  list of accepted limitations, stays recoverable from git history). Suite **1083 green**, typecheck +
+  build clean.
 - **D1 re-affirmed — unified auto-RAG chat stays NOT built (2026-06-12):** the Phase-21 data
   the original deferral waited for is in, and it argues AGAINST unifying now: no cheap
   relevance gate exists under prefix-less E5 (the measured-floor overlap, rag-design �12.1
@@ -919,8 +990,10 @@ unencrypted `config/workspace.json` vault descriptor is the only pre-unlock arti
 
 ### Models + runtime (Phase 2 live)
 ✅ **Manifest** schema/validator in `src/shared/manifest.ts` (`ModelManifest`, `validateManifest`,
-`isRealSha256`). YAML files under `model-manifests/` (chat: Qwen3 4B/8B/14B Q4 + 30B-A3B MoE;
-embeddings: E5 small F16 — five manifests total; 1.7B dropped, see §9).
+`isRealSha256`). YAML files under `model-manifests/` (originally chat: Qwen3 4B/8B/14B Q4 + 30B-A3B
+MoE + embeddings: E5 small F16 — five; 1.7B dropped, see §9). **The live catalog is now 11 manifests**
+(8 chat + E5 + bge-reranker + whisper transcriber, in `model-manifests/{chat,embeddings,reranker,
+transcriber}/`) — `model-policy.md` is the authoritative list.
 ✅ **`services/models.ts`** — `resolveManifestsDir`, `discoverManifests`, `sha256File`,
 `verifyChecksum`, `computeInstallState`, `recommendModelId`, `buildModelList`, `selectModel`.
 States: `unsupported→missing→checksum_failed→installed` (+`running` overlay). `ModelInfo` shape per
@@ -1254,9 +1327,13 @@ document answers always run balanced (deep-grounded = wave 2).
 ✅ **Schema** — `shared/manifest.ts` `DownloadSpec` + optional `ModelManifest.download` (validated only
   when present; real `download.sha256` must equal a real top-level `sha256`). `shared/runtime-sources.ts`
   `RuntimeBuild`/`RuntimeSources` + `validateRuntimeSources` (mirror `validateManifest`). The committed
-  model manifests (six, incl. the later 14B/30B-A3B) carry real upstream URLs + placeholder hashes;
-  `model-manifests/runtime-sources.yaml` references `ggml-org/llama.cpp@b9196` — a **PLACEHOLDER**
-  version/URLs/hashes to be replaced with a real release before any fetch — one CPU build per OS.
+  model manifests (the original six, incl. the later 14B/30B-A3B) carry real upstream URLs + placeholder hashes.
+  **(Updated since Phase 12 — see `model-policy.md` for the live catalog: the catalog is now 11
+  manifests (8 chat + E5 + bge-reranker + whisper transcriber), and `runtime-sources.yaml` is pinned
+  to the REAL `ggml-org/llama.cpp@b9585` release with real URLs + SHA-256, plus `whisper_cpp:`/`ocr:`
+  asset blocks — the original "b9196 placeholder / one CPU build per OS" text below is the Phase-12
+  as-built snapshot.)** The Phase-12 snapshot: `runtime-sources.yaml` referenced
+  `ggml-org/llama.cpp@b9196` as a PLACEHOLDER, one CPU build per OS.
   `models.ts` `RESERVED_MANIFEST_FILES` excludes `runtime-sources.yaml` from model discovery.
 ✅ **`services/assets.ts`** — the canonical, unit-tested asset logic (mirrors `drive.ts`; NO real network):
 - `planModelDownloads(root, manifests, {only?, acceptLicense?}) → ModelDownloadTask[]` — only manifests
@@ -1444,8 +1521,9 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
 5. **ANN vector index** only if a real corpus outgrows the linear scan (rag-design §12.2 D15 —
    explicitly not built).
 
-**Current gate (2026-06-13, post docs/comment passes): typecheck clean, 968/968 tests pass
-(+25 manual tests behind `PAID_*` env vars — GPU/thinking/rerank/minsim/RAG-quality/bring-up/
+**Current gate (2026-06-13, post i18n wave + FULL audit remediation — every HIGH/MEDIUM/LOW closed — on
+branch `audit-2026-06-13-high-fixes`): typecheck clean, 1083 tests pass (25 skipped — the manual
+tests behind `PAID_*` env vars: GPU/thinking/rerank/minsim/RAG-quality/bring-up/
 eval/concurrency-probe/translation/compare/whisper/dictation/OCR smokes — skipped in CI),
 `npm run build` green. Full-suite runs on a loaded machine can flake 1–2 timeout failures
 (different tests each run; each passes in isolation — see the §3 2026-06-13 entry).** Per-phase gate history (test counts, bundle sizes, per-phase test

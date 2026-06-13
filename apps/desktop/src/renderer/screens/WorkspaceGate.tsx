@@ -4,6 +4,7 @@ import {
   Button,
   PasswordField,
   PasswordStrengthMeter,
+  Spinner,
   Switch,
   passwordStrength
 } from '../components'
@@ -193,7 +194,7 @@ export function WorkspaceGate({ state, onUnlocked }: Props): JSX.Element {
           {brand}
           <h1>{t('gate.finishing.title')}</h1>
           <p className="hint">
-            <span className="spinner" /> {t('gate.finishing.hint')}
+            <Spinner /> {t('gate.finishing.hint')}
           </p>
           <Button
             variant="ghost"

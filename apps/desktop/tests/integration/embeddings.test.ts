@@ -72,6 +72,16 @@ describe('MockEmbedder', () => {
   })
 })
 
+// ---- cosineSimilarity contract --------------------------------------------------
+
+describe('cosineSimilarity', () => {
+  it('throws on a length mismatch instead of scoring on the shorter prefix (L2)', () => {
+    const a = new Float32Array([1, 0, 0])
+    const b = new Float32Array([1, 0, 0, 0])
+    expect(() => cosineSimilarity(a, b)).toThrow(RangeError)
+  })
+})
+
 // ---- BLOB round-trip ------------------------------------------------------------
 
 describe('vector BLOB encoding', () => {
@@ -159,6 +169,29 @@ describe('VectorIndex', () => {
     const hits = await index.searchText('alpha', 2)
     expect(hits).toHaveLength(2)
     expect(hits.some((h) => h.chunkId === 'cX')).toBe(false)
+  })
+
+  it('skips a physically truncated blob instead of aborting the whole query', async () => {
+    const db = freshDb()
+    const embedder = new MockEmbedder()
+    await seedChunks(db, embedder, ['alpha', 'beta', 'gamma'])
+    // A corrupt row whose blob is shorter than dimensions*4 bytes (e.g. a partial write).
+    // The dimensions column still claims 384, so the dimension guard does not catch it —
+    // decodeVector would throw a RangeError and break ALL search without the length guard.
+    const now = new Date().toISOString()
+    db.prepare(
+      `INSERT INTO chunks (id, document_id, chunk_index, text, source_label, token_count, created_at)
+       VALUES ('cT', 'doc', 98, 'truncated', 'doc.txt', 1, ?)`
+    ).run(now)
+    db.prepare(
+      `INSERT INTO embeddings (chunk_id, embedding_model_id, vector_blob, dimensions, created_at)
+       VALUES ('cT', ?, ?, 384, ?)`
+    ).run(embedder.id, Buffer.alloc(16), now) // 16 bytes ≪ 384*4
+
+    const index = new VectorIndex(db, embedder)
+    const hits = await index.searchText('alpha', 3)
+    expect(hits).toHaveLength(3) // the three good chunks, query did not crash
+    expect(hits.some((h) => h.chunkId === 'cT')).toBe(false)
   })
 })
 

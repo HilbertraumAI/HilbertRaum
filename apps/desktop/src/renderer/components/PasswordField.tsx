@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from 'react'
 import { Button } from './Button'
 import { englishTranslator, type Translator } from './translator'
 import type { MessageKey } from '@shared/i18n'
@@ -46,14 +47,22 @@ export interface PasswordStrengthMeterProps {
   t?: Translator
 }
 
+/** Debounce window before the strength word is announced to screen readers. */
+const STRENGTH_ANNOUNCE_MS = 600
+
 /** The 4-segment strength bar + word (never color alone — WCAG 1.4.1). Render only
  *  while the password field is non-empty; the textual hint is the caller's to place. */
 export function PasswordStrengthMeter({
   strength,
   t = englishTranslator
 }: PasswordStrengthMeterProps): JSX.Element {
+  // The visible meter is NOT a live region (audit L13): with role="status" it re-announced
+  // the strength word on every keystroke (the bar segments change each char). The bar is
+  // aria-hidden and the label is plain text; announcement is delegated to a separate
+  // sr-only region that updates only after typing pauses (debounced).
+  const label = strength.labelKey != null ? t(strength.labelKey) : ''
   return (
-    <div className="strength" role="status">
+    <div className="strength">
       <span className="strength-bar" aria-hidden="true">
         {[1, 2, 3, 4].map((i) => (
           <span
@@ -62,8 +71,27 @@ export function PasswordStrengthMeter({
           />
         ))}
       </span>
-      <span className="strength-label">{strength.labelKey != null ? t(strength.labelKey) : ''}</span>
+      <span className="strength-label">{label}</span>
+      <DebouncedStrengthAnnouncer label={label} />
     </div>
+  )
+}
+
+/** sr-only polite region that announces the strength word only after typing settles (L13). */
+function DebouncedStrengthAnnouncer({ label }: { label: string }): JSX.Element {
+  const [announced, setAnnounced] = useState('')
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => {
+    if (timer.current) clearTimeout(timer.current)
+    timer.current = setTimeout(() => setAnnounced(label), STRENGTH_ANNOUNCE_MS)
+    return () => {
+      if (timer.current) clearTimeout(timer.current)
+    }
+  }, [label])
+  return (
+    <span className="sr-only" role="status">
+      {announced}
+    </span>
   )
 }
 

@@ -267,7 +267,7 @@ describe('DocumentsScreen', () => {
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   })
 
-  it('"Re-index all" re-indexes every stale document', async () => {
+  it('"Re-index all" confirms first, then re-indexes every stale document (M-U6)', async () => {
     const user = userEvent.setup()
     const stale = [
       doc({ id: 'd1', staleEmbeddings: true }),
@@ -281,12 +281,34 @@ describe('DocumentsScreen', () => {
     stubApi({ listDocuments, reindexDocument })
     render(<DocumentsScreen />)
 
+    // The toolbar button opens a ConfirmDialog — nothing runs until it is confirmed (M-U6).
     await user.click(await screen.findByRole('button', { name: /re-index all \(2\)/i }))
+    const dialog = within(await screen.findByRole('dialog'))
+    expect(dialog.getByText(/re-index 2 documents\?/i)).toBeInTheDocument()
+    expect(reindexDocument).not.toHaveBeenCalled()
+
+    await user.click(dialog.getByRole('button', { name: /^re-index all$/i }))
     await waitFor(() => expect(reindexDocument).toHaveBeenCalledTimes(2))
     expect(reindexDocument).toHaveBeenCalledWith('d1')
     expect(reindexDocument).toHaveBeenCalledWith('d2')
     await waitFor(() =>
       expect(screen.queryByRole('button', { name: /re-index all/i })).not.toBeInTheDocument()
     )
+  })
+
+  it('"Re-index all" can be cancelled without running anything (M-U6)', async () => {
+    const user = userEvent.setup()
+    const stale = [
+      doc({ id: 'd1', staleEmbeddings: true }),
+      doc({ id: 'd2', title: 'terms.docx', staleEmbeddings: true })
+    ]
+    const reindexDocument = vi.fn(async (id: string) => doc({ id, staleEmbeddings: false }))
+    stubApi({ listDocuments: vi.fn(async () => stale), reindexDocument })
+    render(<DocumentsScreen />)
+
+    await user.click(await screen.findByRole('button', { name: /re-index all \(2\)/i }))
+    const dialog = within(await screen.findByRole('dialog'))
+    await user.click(dialog.getByRole('button', { name: /cancel/i }))
+    expect(reindexDocument).not.toHaveBeenCalled()
   })
 })

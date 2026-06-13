@@ -114,9 +114,12 @@ export function assertOfflinePosture(deps: AssertOfflinePostureDeps): () => void
   return installOfflineNetworkGuard({
     offline: true,
     onViolation: (host) => {
-      // Detection-only: the connect is LOGGED, not blocked (blocking net.Socket app-wide
-      // could break loopback IPC / the sidecar). The core path makes no remote calls, so
-      // this firing at all indicates a regression worth investigating.
+      // Detection-only, by decision (audit M-S1; security-model.md "Detection-only, not
+      // enforcement"): the connect is LOGGED + AUDITED, not blocked. Blocking net.Socket
+      // app-wide could turn a host-extraction edge case into a hard offline failure that
+      // breaks loopback IPC / the sidecar — strictly worse than logging. The offline
+      // guarantee rests on the no-remote-code posture + the prod CSP; this is defence in
+      // depth. The core path makes no remote calls, so a firing indicates a regression.
       deps.warn('Offline posture: remote connection attempt detected (logged, not blocked)', { host })
       deps.onViolation?.(host)
     }

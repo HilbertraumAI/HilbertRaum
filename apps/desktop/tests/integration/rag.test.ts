@@ -207,9 +207,10 @@ describe('retrieve', () => {
       { text: `${base} three` },
       { text: `${base} four` }
     ])
-    const budget: RagRetrievalSettings = { ...SETTINGS, maxContextTokens: 2500, topKFinal: 6 }
+    const budget: RagRetrievalSettings = { ...SETTINGS, maxContextTokens: 3500, topKFinal: 6 }
     const { chunks } = await retrieve(db, embedder, 'lorem', budget)
-    // First chunk (~1001) always included; second fits (~2002); third would exceed 2500.
+    // ~1001 words ≈ ceil(1001 * 1.3) ≈ 1302 model tokens per chunk. First chunk always
+    // included (~1302); second fits (~2604 ≤ 3500); third would exceed 3500.
     expect(chunks).toHaveLength(2)
   })
 
@@ -291,6 +292,37 @@ describe('generateGroundedAnswer', () => {
     const reloaded = listMessages(db, conv.id).at(-1)
     expect(reloaded?.citations?.[0].label).toBe('S1')
     expect(reloaded?.citations?.[0].snippet).toContain('photosynthesis')
+  })
+
+  it('drops structurally-wrong citations_json on reload instead of passing it untyped (L6)', () => {
+    const db = freshDb()
+    const conv = createConversation(db, { mode: 'documents' })
+    // A valid-JSON but wrong-shape payload (e.g. a stale/hand-edited row): one good citation,
+    // one missing the required sourceTitle, one not even an object.
+    const now = new Date().toISOString()
+    db.prepare(
+      `INSERT INTO messages (id, conversation_id, role, content, created_at, token_count, citations_json)
+       VALUES ('m1', ?, 'assistant', 'answer', ?, NULL, ?)`
+    ).run(
+      conv.id,
+      now,
+      JSON.stringify([
+        { label: 'S1', sourceTitle: 'good.pdf', pageNumber: 1 },
+        { label: 'S2' }, // missing sourceTitle → rejected
+        'not-an-object' // → rejected
+      ])
+    )
+    // A row whose citations_json is not even valid JSON must not throw.
+    db.prepare(
+      `INSERT INTO messages (id, conversation_id, role, content, created_at, token_count, citations_json)
+       VALUES ('m2', ?, 'assistant', 'answer2', ?, NULL, '{not json')`
+    ).run(conv.id, now)
+
+    const msgs = listMessages(db, conv.id)
+    // Only the well-shaped citation survives; the malformed ones are dropped, not forwarded.
+    expect(msgs[0].citations).toHaveLength(1)
+    expect(msgs[0].citations?.[0]).toMatchObject({ label: 'S1', sourceTitle: 'good.pdf' })
+    expect(msgs[1].citations).toBeUndefined()
   })
 
   it('answers "not found in your documents" without calling the model on an empty corpus', async () => {

@@ -230,7 +230,12 @@ function AppShell(): JSX.Element {
         )}
         {screen === 'home' && <HomeScreen onNavigate={navigate} />}
         {screen === 'chat' && (
-          <ChatScreen onNavigate={navigate} initialMode={chatMode} initialScopeDocumentIds={chatScope} />
+          <ChatScreen
+            onNavigate={navigate}
+            initialMode={chatMode}
+            initialScopeDocumentIds={chatScope}
+            offline={offline}
+          />
         )}
         {screen === 'documents' && <DocumentsScreen onAskSelected={askSelectedDocuments} />}
         {screen === 'models' && <ModelsScreen />}

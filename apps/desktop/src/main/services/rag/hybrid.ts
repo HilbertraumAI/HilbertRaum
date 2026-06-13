@@ -80,34 +80,41 @@ export interface FusedCandidate {
 
 /**
  * Reciprocal-rank fusion of the vector and keyword ranked lists.
- * Both inputs must already be ordered best-first. Deterministic: ties break by vector
- * rank (vector-listed chunks first), then chunk id. With an empty keyword list this is
- * monotone in vector rank — i.e. exactly today's ordering (the pass-through guarantee).
+ * Both inputs must already be ordered best-first. Deterministic: ties break by the
+ * chunk's BEST individual rank across both lists (M-C4), then chunk id. Tiebreaking on
+ * `min(vectorRank, keywordRank)` rather than vector rank alone keeps a #1 keyword-only
+ * hit (exact invoice numbers / codes — the precise case hybrid search exists to catch)
+ * from always losing an RRF-score tie to a #1 vector hit. With an empty keyword list
+ * every chunk's best rank IS its vector rank, so this is exactly today's ordering (the
+ * pass-through guarantee).
  */
 export function rrfFuse(
   vectorRanked: Array<{ chunkId: string; score: number }>,
   keywordRanked: KeywordHit[]
 ): FusedCandidate[] {
-  const byId = new Map<string, FusedCandidate & { vectorRank: number }>()
+  const byId = new Map<string, FusedCandidate & { bestRank: number }>()
   vectorRanked.forEach((hit, i) => {
     byId.set(hit.chunkId, {
       chunkId: hit.chunkId,
       rrfScore: 1 / (RRF_K + i + 1),
       cosine: hit.score,
-      vectorRank: i + 1
+      bestRank: i + 1
     })
   })
   keywordRanked.forEach((hit, i) => {
+    const keywordRank = i + 1
     const existing = byId.get(hit.chunkId)
-    const contribution = 1 / (RRF_K + i + 1)
+    const contribution = 1 / (RRF_K + keywordRank)
     if (existing) {
       existing.rrfScore += contribution
+      // A chunk in both lists tiebreaks on whichever list ranked it higher.
+      existing.bestRank = Math.min(existing.bestRank, keywordRank)
     } else {
       byId.set(hit.chunkId, {
         chunkId: hit.chunkId,
         rrfScore: contribution,
         cosine: null,
-        vectorRank: Number.MAX_SAFE_INTEGER
+        bestRank: keywordRank
       })
     }
   })
@@ -115,7 +122,7 @@ export function rrfFuse(
     .sort(
       (a, b) =>
         b.rrfScore - a.rrfScore ||
-        a.vectorRank - b.vectorRank ||
+        a.bestRank - b.bestRank ||
         (a.chunkId < b.chunkId ? -1 : a.chunkId > b.chunkId ? 1 : 0)
     )
     .map(({ chunkId, rrfScore, cosine }) => ({ chunkId, rrfScore, cosine }))
