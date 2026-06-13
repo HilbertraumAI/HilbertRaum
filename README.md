@@ -83,11 +83,14 @@ scripts/prepare-drive.sh --target /Volumes/HILBERTRAUM --with-assets --accept-li
 scripts/verify-models.sh  --target /Volumes/HILBERTRAUM --generate
 ```
 
-**To keep setup fast, `-WithAssets` downloads only the default chat model** (Ministral 3 8B, ~5 GB)
-plus the `llama.cpp` sidecar — not all ~11 models. That's enough to start chatting immediately; you
-download any **other** models (larger chat models, embeddings for document Q&A, reranker,
-transcriber) **from inside the app** later, on demand. To provision *every* model up front instead,
-add `-AllModels` (Windows) / `--all-models` (macOS/Linux).
+**To keep setup fast, `-WithAssets` downloads a small but complete default set** — not all ~11
+models. It fetches the default chat model (Ministral 3 8B, ~5 GB), the **embeddings** model (for
+document Q&A), the **reranker**, and the **Whisper** transcriber model, plus **both sidecar
+runtimes** (`llama.cpp` for chat/embeddings, `whisper.cpp` for audio). That's enough to chat, ask
+questions about your documents, get higher-quality retrieval, and transcribe audio out of the box.
+You download any **other** models (larger chat models) **from inside the app** later, on demand. To
+provision *every* model up front instead, add `-AllModels` (Windows) / `--all-models` (macOS/Linux).
+The sidecar runtimes are fetched either way.
 
 Whatever it fetches, it **SHA-256-verifies** against the manifest and copies the manifests/config
 onto the drive. Downloads **resume** if interrupted and re-running **skips** what's already there.
@@ -95,9 +98,8 @@ You can also fetch piecemeal (`fetch-models` / `fetch-runtime`, with `--only <id
 model) or drop the files into `models/` and `runtime/llama.cpp/<os>/` **by hand** — see
 **[`docs/packaging.md`](docs/packaging.md)**.
 
-> 📄 **Document Q&A needs the embeddings model**, which is *not* in the fast default. Grab it from
-> the app's **AI Model** screen after first launch, or pre-load everything with `-AllModels` /
-> `--all-models`.
+> 🎙️ The whisper.cpp runtime ships **prebuilt for Windows only**; on a macOS/Linux build host
+> `-WithAssets` skips it with a note (build it from source — see **[`docs/packaging.md`](docs/packaging.md)**).
 
 > ✅ **`runtime-sources.yaml` is pinned to a real release** (`llama.cpp` **b9585**, real per-OS
 > URLs + SHA-256 checksums computed from the actual assets) — `fetch-runtime` downloads, verifies,

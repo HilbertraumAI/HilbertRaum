@@ -597,9 +597,18 @@ export function ModelsScreen(): JSX.Element {
     )
   }
 
-  // The "install the AI engine" banner: without the real engine, started models run in
-  // the built-in demo runtime. Mirrors the model-download progress/cancel/error shape.
-  function engineBanner(): JSX.Element {
+  // The engine banner: the SAME progress/cancel/error shape serves two distinct cases —
+  // the chat engine (llama.cpp) missing is a strong warning (started models would fall
+  // back to the demo runtime), while only the voice engine (whisper.cpp) missing is a
+  // quiet, accurate note (chat already works — voice dictation is the only thing waiting).
+  // The caller picks the tone + copy so the two never get conflated (an installed chat
+  // engine must NOT show a "models run in demo mode" alarm).
+  function engineBanner(opts: {
+    tone: 'warning' | 'info'
+    titleKey: MessageKey
+    explainKey: MessageKey
+    installKey: MessageKey
+  }): JSX.Element {
     const j = engineJob
     const live = j != null && ENGINE_JOB_LIVE.has(j.status)
     const pct =
@@ -607,11 +616,11 @@ export function ModelsScreen(): JSX.Element {
         ? Math.min(100, Math.round((j.receivedBytes / j.totalBytes) * 100))
         : null
     return (
-      <Banner tone="warning">
+      <Banner tone={opts.tone}>
         <div className="engine-install">
-          <strong>{t('models.engine.title')}</strong>
+          <strong>{t(opts.titleKey)}</strong>
           <p className="hint" style={{ margin: '4px 0 8px' }}>
-            {t('models.engine.explain')}
+            {t(opts.explainKey)}
           </p>
           {live && j ? (
             <Progress
@@ -641,7 +650,7 @@ export function ModelsScreen(): JSX.Element {
                 title={downloadsBlockedReason ?? undefined}
                 onClick={() => void startEngineDownload()}
               >
-                {j?.status === 'failed' ? t('models.engine.retry') : t('models.engine.install')}
+                {j?.status === 'failed' ? t('models.engine.retry') : t(opts.installKey)}
               </Button>
               {downloadsBlockedReason && (
                 <p className="hint" style={{ marginBottom: 0 }}>
@@ -662,7 +671,26 @@ export function ModelsScreen(): JSX.Element {
 
       {anyDownloadable && downloadsBlockedReason && <Banner tone="info">{downloadsBlockedReason}</Banner>}
 
-      {engine && !engine.installed && engine.available && engineBanner()}
+      {/* Chat engine (llama.cpp) missing → real "demo mode" warning. Voice engine
+          (whisper.cpp) missing on its own → a quiet note: chat already works, only
+          dictation waits. An installed chat engine never shows the alarming banner. */}
+      {engine && engine.available && engine.missingFamilies.includes('llama_cpp') &&
+        engineBanner({
+          tone: 'warning',
+          titleKey: 'models.engine.title',
+          explainKey: 'models.engine.explain',
+          installKey: 'models.engine.install'
+        })}
+      {engine &&
+        engine.available &&
+        !engine.missingFamilies.includes('llama_cpp') &&
+        engine.missingFamilies.includes('whisper_cpp') &&
+        engineBanner({
+          tone: 'info',
+          titleKey: 'models.voiceEngine.title',
+          explainKey: 'models.voiceEngine.explain',
+          installKey: 'models.voiceEngine.install'
+        })}
 
       {models.length === 0 && (
         <EmptyState

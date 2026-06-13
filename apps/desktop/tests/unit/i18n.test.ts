@@ -15,8 +15,11 @@ import { DEFAULT_SETTINGS } from '../../src/shared/types'
 
 describe('t — lookup and interpolation', () => {
   it('looks up plain keys per language', () => {
-    expect(t('en', 'nav.documents')).toBe('Documents')
-    expect(t('de', 'nav.documents')).toBe('Dokumente')
+    // nav labels carry soft hyphens (U+00AD) so the narrow rail wraps cleanly; strip them
+    // for the readable comparison (they are invisible to the user when the word fits).
+    const noShy = (s: string): string => s.replace(/­/g, '')
+    expect(noShy(t('en', 'nav.documents'))).toBe('Documents')
+    expect(noShy(t('de', 'nav.documents'))).toBe('Dokumente')
     expect(t('en', 'gate.unlock.title')).toBe('Unlock your workspace')
     expect(t('de', 'gate.unlock.title')).toBe('Entsperre deinen Arbeitsbereich')
   })

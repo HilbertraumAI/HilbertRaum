@@ -6,7 +6,32 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
-_Last updated: 2026-06-13 — **Chat stream survives screen navigation.** A reply that was still
+_Last updated: 2026-06-13 — **Three post-MVP UI fine-tunes.** (1) **Chat example chips matched
+the mode.** Plain Chat has no document access, yet its empty-state examples were document-shaped
+("Summarize this contract" / payment terms / indemnity). Split into two key sets: `chat.exampleChat.*`
+(explain a concept / write a polite email / brainstorm — general-purpose) for chat mode and
+`chat.example.*` (now "Summarize this document" …) for the "Ask my documents" mode; `ChatScreen`
+picks by `mode`. (2) **Nav rail labels no longer truncate.** `.nav-label` was `overflow:hidden +
+text-overflow:ellipsis`, which clipped single long words on the ~80px rail ("Documents",
+"Dokumente", "Einstellungen"). **Electron's Chromium ships no hyphenation dictionaries**, so
+`hyphens:auto` is inert and a bare `break-word` splits mid-word with no hyphen ("Dokument"/"e").
+Fix: the long labels carry explicit **soft hyphens (U+00AD)** in the i18n strings
+(`nav.documents` = `Docu­ments`/`Doku­mente`, `nav.settings` = `Ein­stel­lungen`),
+honored by `.nav-label { hyphens:manual; overflow-wrap:break-word }` — they wrap to a clean
+hyphenated second line ("Doku-/mente", "Einstel-/lungen"); invisible when the word fits and in the
+button `title=` tooltip. (`break-word` stays only as a last-resort net.) (3) **Engine banner no longer cries "demo mode" when chat works.**
+The "Install the AI engine" warning gated on `EngineStatus.installed` (every fetchable family
+present). A drive with the chat engine (`llama_cpp`) but no voice engine (`whisper_cpp`, empty
+`runtime/whisper.cpp/win/` — the real cause on D:) showed the alarming demo-mode banner even though
+chat answers for real. `ModelsScreen` now reads `missingFamilies`: strong **warning** only when
+`llama_cpp` is missing; chat-present + voice-missing shows a quiet **info** note
+(`models.voiceEngine.*`, "Add voice dictation (optional)"). **Files:** `renderer/screens/ChatScreen.tsx`,
+`renderer/screens/ModelsScreen.tsx`, `renderer/styles.css`, `shared/i18n/{en,de}.ts`,
+`tests/renderer/{ChatRestructure,GermanSmoke}.test.tsx`. **Docs:** `packaging.md` (banner-per-concern
+bullet). **Tests:** typecheck clean, build OK, `npm test` **1142 passed / 25 skipped** (unchanged;
+two assertions repointed to the new chat-example keys). No version bump._
+
+_(prior) **Chat stream survives screen navigation.** A reply that was still
 streaming when the user left the Chat screen and came back looked **idle** (the screen unmounts,
 destroying its `streaming` state + token listeners), yet a new message was rejected with "a response
 is already being generated" (the main-process generation, registered in `inFlightStreams`, kept
@@ -1610,13 +1635,18 @@ document answers always run balanced (deep-grounded = wave 2).
 - `prepare-drive.{ps1,sh}` gained `-WithAssets`/`--with-assets` (+ forwards `-AcceptLicense`): after the
   layout, runs `fetch-models` + `fetch-runtime` so one command yields a launch-ready drive. Without the
   flag, behaviour is unchanged. Then points the user at `verify-models --generate`.
-  - **Fast-setup default (2026-06):** `-WithAssets` fetches **only the default chat model**
-    (`ministral3-8b-instruct-2512-q4`, via `fetch-models --only`) + the sidecar, not all ~11 models —
-    enough to start chatting; the user pulls other models (larger chat, embeddings, reranker,
-    transcriber) from the app on demand. `-AllModels`/`--all-models` restores fetch-everything. The
-    default model id is a constant at the top of each script (keep in sync with `model-manifests/chat/`).
-    The commercial build (`build-commercial-drive`) calls `fetch-models` directly, so it still pre-loads
-    every model — unaffected.
+  - **Fast-setup default (2026-06):** `-WithAssets` fetches a small but complete **default set** —
+    `ministral3-8b-instruct-2512-q4` (chat) + `multilingual-e5-small-q8` (embeddings) +
+    `bge-reranker-v2-m3-f16` (reranker) + `whisper-small-multilingual` (transcriber), each via
+    `fetch-models --only` (looped, since `--only` takes one id) — **plus both sidecar runtimes**:
+    `fetch-runtime` (llama.cpp, default family) AND `fetch-runtime --family whisper_cpp`. Not all ~11
+    models; the user pulls the rest (larger chat models) from the app on demand. `-AllModels`/`--all-models` restores fetch-everything
+    (one `fetch-models` call, no `--only`); the runtimes are fetched either way. The default id list is
+    a `$DefaultModelIds`/`DEFAULT_MODEL_IDS` constant at the top of each script (keep in sync with
+    `model-manifests/`). The whisper.cpp runtime fetch is **best-effort**: prebuilt binaries are
+    Windows-only, so on a mac/linux host the "no build" miss is a warning, not a failure (those drives
+    build whisper.cpp from source). The commercial build (`build-commercial-drive`) calls `fetch-models`
+    directly, so it still pre-loads every model — unaffected.
 ✅ **In-app downloader (the provisioning plan's deferred item)** — ~~deferred~~ **shipped in Phase 18** (see the contract
   section below). **Real downloads + USB-drive launch = manual (R5).**
 

@@ -103,7 +103,7 @@ describe('German render smokes (Phase 40)', () => {
       screen.getByRole('button', { name: t('de', 'chat.send.send') })
     ).toBeInTheDocument()
     expect(
-      screen.getByRole('button', { name: t('de', 'chat.example.summarize') })
+      screen.getByRole('button', { name: t('de', 'chat.exampleChat.explain') })
     ).toBeInTheDocument()
   })
 

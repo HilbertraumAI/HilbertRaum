@@ -8,21 +8,31 @@
 #
 # Canonical, unit-tested reference: apps/desktop/src/main/services/drive.ts — keep in sync.
 #
-# --with-assets downloads + verifies the default chat model weight + llama.cpp sidecar
-# (Phase 12), so one command yields a launch-ready drive (build-time network; the app stays
-# offline). To keep setup fast, ONLY the default chat model (Ministral 3 8B) is fetched; the
-# user downloads any other models (larger chat models, embeddings, reranker, transcriber)
-# from inside the app. Pass --all-models to fetch every model instead.
+# --with-assets downloads + verifies a launch-ready default asset set (Phase 12), so one
+# command yields a usable drive (build-time network; the app stays offline). To keep setup
+# fast the default set is small but complete for the core features: the default chat model
+# (Ministral 3 8B), the embeddings model, the reranker, and the Whisper transcriber model,
+# PLUS both sidecar runtimes (llama.cpp + whisper.cpp). The user downloads any other models
+# (larger chat models) from inside the app. Pass --all-models to fetch every model instead
+# (the sidecar runtimes are fetched either way).
 #
 # Usage:
 #   scripts/prepare-drive.sh --target /Volumes/PRIVATE_AI_DRIVE [--dry-run] [--force] \
 #       [--dev] [--with-assets] [--all-models] [--accept-license]
 set -euo pipefail
 
-# The single chat model --with-assets provisions by default (fast setup). Every other model
-# is downloaded by the user from inside the app. Pass --all-models to fetch everything.
-# Keep this id in sync with the chat manifest under model-manifests/chat/.
-DEFAULT_MODEL_ID="ministral3-8b-instruct-2512-q4"
+# The models --with-assets provisions by default (fast setup): the default chat model plus
+# the embeddings model, reranker, and Whisper transcriber, so chat, document Q&A, retrieval
+# quality, and audio/dictation all work out of the box. Every OTHER model (larger chat
+# models) is downloaded by the user from inside the app. Pass --all-models to fetch
+# everything. The whisper.cpp runtime is fetched alongside these (see the --with-assets
+# block). Keep these ids in sync with the manifests under model-manifests/.
+DEFAULT_MODEL_IDS=(
+  ministral3-8b-instruct-2512-q4   # chat (benchmark-winning 8B)
+  multilingual-e5-small-q8         # embeddings (document Q&A)
+  bge-reranker-v2-m3-f16           # reranker (retrieval quality)
+  whisper-small-multilingual       # transcriber (audio / dictation)
+)
 
 TARGET=""
 DRY_RUN=0
@@ -172,17 +182,35 @@ echo
 
 if [[ $WITH_ASSETS -eq 1 ]]; then
   echo "Fetching assets (build-time network; the app itself stays offline):"
-  MODEL_ARGS=(--target "$TARGET")
-  if [[ $ALL_MODELS -eq 0 ]]; then
-    MODEL_ARGS+=(--only "$DEFAULT_MODEL_ID")
-    echo "  (default: fetching only '$DEFAULT_MODEL_ID'; pass --all-models for every model)"
+
+  # Common model args (license + dry-run) shared by every fetch-models call below.
+  COMMON_MODEL_ARGS=()
+  [[ $ACCEPT_LICENSE -eq 1 ]] && COMMON_MODEL_ARGS+=(--accept-license)
+  [[ $DRY_RUN -eq 1 ]] && COMMON_MODEL_ARGS+=(--dry-run)
+
+  # fetch-models takes a single --only id, so the default set is fetched one id at a time;
+  # --all-models fetches every manifest in one pass (a single call with no --only).
+  if [[ $ALL_MODELS -eq 1 ]]; then
+    bash "$SCRIPT_DIR/fetch-models.sh" --target "$TARGET" "${COMMON_MODEL_ARGS[@]}"
+  else
+    echo "  (default set: ${DEFAULT_MODEL_IDS[*]}; pass --all-models for every model)"
+    for id in "${DEFAULT_MODEL_IDS[@]}"; do
+      bash "$SCRIPT_DIR/fetch-models.sh" --target "$TARGET" --only "$id" "${COMMON_MODEL_ARGS[@]}"
+    done
   fi
-  [[ $ACCEPT_LICENSE -eq 1 ]] && MODEL_ARGS+=(--accept-license)
-  [[ $DRY_RUN -eq 1 ]] && MODEL_ARGS+=(--dry-run)
-  bash "$SCRIPT_DIR/fetch-models.sh" "${MODEL_ARGS[@]}"
+
+  # llama.cpp sidecar (the chat + embeddings engine) — always.
   RUNTIME_ARGS=(--target "$TARGET")
   [[ $DRY_RUN -eq 1 ]] && RUNTIME_ARGS+=(--dry-run)
   bash "$SCRIPT_DIR/fetch-runtime.sh" "${RUNTIME_ARGS[@]}"
+
+  # whisper.cpp sidecar (the transcriber engine) — always, to match the bundled Whisper
+  # model. Best-effort: prebuilt whisper.cpp binaries exist for Windows only, so on a
+  # mac/linux build host there is no build to fetch — a miss is a warning, not a failure
+  # (those drives build whisper.cpp from source; see docs/packaging.md).
+  if ! bash "$SCRIPT_DIR/fetch-runtime.sh" "${RUNTIME_ARGS[@]}" --family whisper_cpp; then
+    echo "  note: whisper.cpp runtime not provisioned (no prebuilt build for this host — build from source on mac/linux)."
+  fi
   echo
   echo "Now capture real hashes: scripts/verify-models.sh --target \"$TARGET\" --generate"
 else

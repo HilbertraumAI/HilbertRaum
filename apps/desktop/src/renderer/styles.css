@@ -108,7 +108,14 @@ button { min-width: 24px; min-height: 24px; }
    reserved for the focus ring, not selection). */
 .nav-item.active { background: var(--surface-hover); color: var(--text); font-weight: 600; }
 .nav-icon { font-size: 17px; line-height: 1; }
-.nav-label { display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+/* Long destination names ("Documents", "Dokumente", "Einstellungen") overflow the ~80px
+   rail. Electron's Chromium ships NO hyphenation dictionaries, so `hyphens: auto` does
+   nothing and a bare `break-word` splits mid-word with no hyphen ("Dokument" / "e"). So
+   the long labels instead carry explicit SOFT HYPHENS (U+00AD) in the i18n strings, honored
+   here via `hyphens: manual` — they wrap to a second line with a real hyphen at a sensible
+   point. `break-word` stays only as a last-resort net for any future label without one. The
+   button's title= still carries the full name. */
+.nav-label { display: block; max-width: 100%; hyphens: manual; overflow-wrap: break-word; }
 /* Lock sits at the very bottom, slightly muted — a utility, not a destination. */
 .lock-btn { margin-top: 2px; }
 
