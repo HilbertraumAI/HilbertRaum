@@ -76,6 +76,9 @@ export const en = {
   'chat.noModel.stillLoading':
     'If you just opened the app, your selected model may still be loading — this screen ' +
     'continues automatically once it is ready.',
+  'chat.noModel.starting':
+    'Your model is starting — large models take a little while to load. This screen ' +
+    'continues automatically once it is ready.',
   'chat.noModel.open': 'Open AI Model',
   'chat.noModel.recheck': 'Re-check',
   'chat.empty.title': 'Ask a question, or ask about your documents.',
@@ -364,6 +367,8 @@ export const en = {
   'models.stopRuntime': 'Stop runtime',
   'models.startRuntime': 'Start runtime',
   'models.startMock': 'Start mock runtime',
+  'models.starting': 'Starting…',
+  'models.startingTitle': 'This model is loading — it can take a little while for large models',
   'models.startTitle': 'Start the local runtime for this model',
   'models.startMockTitle':
     'No weights present — starts the built-in mock runtime so you can try the app',

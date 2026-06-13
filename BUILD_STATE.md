@@ -6,7 +6,32 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
-_Last updated: 2026-06-13 — **First-run model-verification progress bar.** The first cold pass
+_Last updated: 2026-06-13 — **Two first-start UX fixes (follow-ups to the progress bar).**
+**(1) Progress bar jumped "1 of 1" ↔ "2 of 2" on the AI Model screen.** `listModels` runs as
+**overlapping passes** (a dev-StrictMode remount, the download poll), each computing a different
+`modelCount` as the hash cache warms, and the progress events broadcast to the renderer — so the
+bar flipped between interleaved passes. `ModelVerifyProgress` gained a **`runId`** (`randomUUID` per
+`buildModelList` pass); the gate + Models renderers **lock onto the first `runId`** they see and
+ignore the others until that pass's `done`. **(2) Model could be started twice (a disruptive
+restart).** `RuntimeManager.start()` serialized but `doStart` stop-and-restarts when a runtime is
+already current; with no "starting" state the AI Model screen's Start button stayed enabled while a
+large GGUF loaded (tens of seconds), so a **revisit re-clicked Start** → two "Start runtime" log
+lines, two backend selections (exactly the user's log). `start()` is now **idempotent** for the
+in-flight/running model (a *switch* to a different model still stops the old one first), tracks
+`startingModelId` (set synchronously, cleared on settle), and surfaces it on
+**`RuntimeStatus.startingModelId`**. The AI Model screen now reads runtime status (polling while a
+start is in flight) and shows a disabled **"Starting…"** button that survives a remount (the
+per-click `busy` flag does not); the Chat no-model state says "your model is starting" while it is
+set. **Files:** `shared/types.ts` (`ModelVerifyProgress.runId`, `RuntimeStatus.startingModelId`),
+`services/models.ts` (per-pass `runId`), `services/runtime/index.ts` (idempotent start +
+`startingModelId` in `status()`), `renderer/screens/{WorkspaceGate,ModelsScreen,ChatScreen}.tsx`,
+`shared/i18n/{en,de}.ts` (`models.starting`/`models.startingTitle`, `chat.noModel.starting`).
+**Docs:** `architecture.md` "Models & runtime" (progress-bar bullet + new idempotent-start bullet).
+**Tests:** typecheck clean, build OK, `npm test` **1140 passed / 25 skipped** — repurposed the
+concurrent-start test as a model *switch*, added **2** runtime tests (same-model double-start is one
+start, no restart; already-running start is a no-op). German copy still wants the D-L7 review._
+
+_(prior) **First-run model-verification progress bar.** The first cold pass
 over a fresh drive hashes the multi-GB GGUF weights (minutes of USB I/O) behind what was an opaque
 spinner. `buildModelList` now accepts an optional `onProgress(p: ModelVerifyProgress)` sink: a cheap
 pre-pass (`statSync` + cache lookup, **no hashing**) sums only the bytes that will actually hash

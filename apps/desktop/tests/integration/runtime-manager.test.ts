@@ -120,33 +120,84 @@ describe('RuntimeManager.start() — B2 reset on failed start', () => {
   // H2 (audit round 4): start/stop must be SERIALIZED. A real GGUF start can take up
   // to the health timeout; in that window a second start() used to skip the stop
   // (current was still null) and spawn a second, never-stopped llama-server (orphan),
-  // and a stop() used to be a silent no-op the in-flight start then overrode.
-  it('serializes concurrent starts — the first runtime is stopped, never orphaned', async () => {
+  // and a stop() used to be a silent no-op the in-flight start then overrode. A model
+  // SWITCH (start A, then start B) must stop A before starting B.
+  it('serializes a model switch — the first runtime is stopped, never orphaned', async () => {
     const events: string[] = []
     const gate: { release: (() => void) | null } = { release: null }
-    let n = 0
-    const mgr = new RuntimeManager(() => {
-      const id = `r${++n}`
-      const slow = id === 'r1'
-      return runtime({
-        modelId: id,
+    const mgr = new RuntimeManager((o) =>
+      runtime({
+        modelId: o.modelId,
         start: async () => {
-          events.push(`start:${id}`)
-          if (slow) await new Promise<void>((resolve) => (gate.release = resolve))
+          events.push(`start:${o.modelId}`)
+          if (o.modelId === 'a') await new Promise<void>((resolve) => (gate.release = resolve))
         },
-        onStop: () => events.push(`stop:${id}`)
+        onStop: () => events.push(`stop:${o.modelId}`)
       })
-    })
+    )
 
-    const p1 = mgr.start(opts)
-    const p2 = mgr.start(opts) // issued while r1 is still loading
-    // Let r1 finish loading; p2 must then stop r1 before starting r2.
+    const p1 = mgr.start({ modelId: 'a', modelPath: '/a.gguf', contextTokens: 2048 })
+    const p2 = mgr.start({ modelId: 'b', modelPath: '/b.gguf', contextTokens: 2048 })
+    // Let A finish loading; B must then stop A before starting B.
     await new Promise((r) => setTimeout(r, 0))
     gate.release?.()
     await Promise.all([p1, p2])
 
-    expect(events).toEqual(['start:r1', 'stop:r1', 'start:r2'])
-    expect(mgr.activeModelId()).toBe('r2')
+    expect(events).toEqual(['start:a', 'stop:a', 'start:b'])
+    expect(mgr.activeModelId()).toBe('b')
+  })
+
+  // The reported double-start bug: clicking Start twice for the SAME model (or revisiting
+  // the AI Model screen before the GGUF finished loading) used to stop-and-restart the
+  // runtime — two "Start runtime" log lines, two backend selections. start() is now
+  // idempotent for the in-flight/running model, and exposes `startingModelId` so the UI
+  // can disable the button.
+  it('is idempotent for the same model — a double-start does not restart it', async () => {
+    const events: string[] = []
+    const gate: { release: (() => void) | null } = { release: null }
+    const mgr = new RuntimeManager((o) =>
+      runtime({
+        modelId: o.modelId,
+        start: async () => {
+          events.push(`start:${o.modelId}`)
+          await new Promise<void>((resolve) => (gate.release = resolve))
+        },
+        onStop: () => events.push(`stop:${o.modelId}`)
+      })
+    )
+
+    const p1 = mgr.start(opts) // opts.modelId === 'm'
+    // The in-flight model is visible immediately (server truth for the disabled button).
+    expect(mgr.status().startingModelId).toBe('m')
+    const p2 = mgr.start(opts) // a double-click while m is still loading
+    await new Promise((r) => setTimeout(r, 0)) // let m's start() run and arm the gate
+    gate.release?.()
+    const [s1, s2] = await Promise.all([p1, p2])
+
+    expect(events).toEqual(['start:m']) // ONE start, no stop/restart
+    expect(mgr.activeModelId()).toBe('m')
+    expect(s1.running).toBe(true)
+    expect(s2.running).toBe(true)
+    expect(mgr.status().startingModelId).toBeNull() // cleared once settled
+  })
+
+  // Starting the model that is ALREADY running is a no-op too (the AI Model screen shows
+  // Stop, but a stale tab or race could still call start).
+  it('is idempotent for the already-running model', async () => {
+    const events: string[] = []
+    const mgr = new RuntimeManager((o) =>
+      runtime({
+        modelId: o.modelId,
+        start: async () => {
+          events.push(`start:${o.modelId}`)
+        },
+        onStop: () => events.push(`stop:${o.modelId}`)
+      })
+    )
+    await mgr.start(opts)
+    await mgr.start(opts) // already running
+    expect(events).toEqual(['start:m'])
+    expect(mgr.activeModelId()).toBe('m')
   })
 
   it('stop() during an in-flight start stops the runtime that start committed', async () => {

@@ -92,6 +92,9 @@ export function ChatScreen({
    *  completion refresh applies, only when this still matches the visible conversation. */
   const [streamConvId, setStreamConvId] = useState<string | null>(null)
   const [runtimeRunning, setRuntimeRunning] = useState<boolean | null>(null)
+  // True while a model is loading in the background (server `startingModelId`), so the
+  // no-model state can say "your model is starting" instead of the generic loading hint.
+  const [modelStarting, setModelStarting] = useState(false)
   /** Whether the RUNNING model's manifest declares thinking support — gates Thorough. */
   const [supportsThinking, setSupportsThinking] = useState(false)
   /** Per-conversation answer depth for this session ('new' = no conversation yet). */
@@ -190,6 +193,7 @@ export function ChatScreen({
   const checkRuntime = useCallback(async (): Promise<void> => {
     const status = await window.api.getRuntimeStatus()
     setRuntimeRunning(status.running)
+    setModelStarting(status.startingModelId != null)
     setSupportsThinking(status.supportsThinkingMode === true)
   }, [])
 
@@ -511,7 +515,8 @@ export function ChatScreen({
           action={
             <>
               <p className="hint">
-                <Spinner /> {t('chat.noModel.stillLoading')}
+                <Spinner />{' '}
+                {modelStarting ? t('chat.noModel.starting') : t('chat.noModel.stillLoading')}
               </p>
               <div className="actions" style={{ marginTop: 12 }}>
                 <Button variant="primary" onClick={() => onNavigate('models')}>

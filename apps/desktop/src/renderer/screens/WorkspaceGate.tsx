@@ -91,7 +91,12 @@ export function WorkspaceGate({ state, onUnlocked }: Props): JSX.Element {
     // Subscribe BEFORE the call so no early progress event is missed; the bar stays the
     // calm hint until (and unless) hashing actually starts. `?.` keeps older preloads /
     // test stubs working (they just never drive the bar).
-    const unsubscribe = window.api.onModelVerifyProgress?.((p) => setVerifyProgress(p))
+    const unsubscribe = window.api.onModelVerifyProgress?.((p) =>
+      setVerifyProgress((prev) => {
+        if (prev && prev.runId !== p.runId) return prev // ignore a concurrent pass
+        return p.done ? null : p
+      })
+    )
     try {
       const models = await window.api.listModels()
       const hasChatModel = models.some(
