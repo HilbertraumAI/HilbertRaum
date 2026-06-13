@@ -620,6 +620,7 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
         open={confirmAudio != null}
         title={t('docs.audioConfirm.title')}
         confirmLabel={t('docs.audioConfirm.confirm')}
+        t={t}
         onConfirm={() => {
           const pending = confirmAudio
           setConfirmAudio(null)
@@ -643,6 +644,7 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
         open={confirmDelete != null}
         title={t('docs.deleteConfirm.title', { title: confirmDelete?.title ?? '' })}
         confirmLabel={t('docs.delete')}
+        t={t}
         onConfirm={() => {
           const d = confirmDelete
           setConfirmDelete(null)
@@ -659,6 +661,7 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
           title={t('docs.translateModal.title', { title: translateDoc.title })}
           ariaLabel={t('docs.translateModal.aria', { title: translateDoc.title })}
           onClose={() => setTranslateDoc(null)}
+          t={t}
         >
           <p className="hint" style={{ marginTop: 0 }}>
             {t('docs.translateModal.hint')}
@@ -738,6 +741,7 @@ function PreviewModal({
       ariaLabel={t('docs.previewModal.aria', { title: preview.title })}
       width="wide"
       onClose={onClose}
+      t={t}
     >
       <p className="hint" style={{ margin: '0 0 8px' }}>
         {t('docs.previewModal.hint')}

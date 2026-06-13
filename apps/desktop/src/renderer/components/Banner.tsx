@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react'
+import { englishTranslator, type Translator } from './translator'
 
 // Banner (guidelines §6): persistent, in-context notice — semantic left border + icon +
 // text + optional action, optionally dismissible. Errors announce via role="alert";
@@ -21,9 +22,17 @@ export interface BannerProps {
   action?: ReactNode
   /** When set, renders a ✕ dismiss button that calls this. */
   onDismiss?: () => void
+  /** Bound translate fn for the built-in dismiss label (i18n-plan §5 ⑤); English default. */
+  t?: Translator
 }
 
-export function Banner({ tone = 'info', children, action, onDismiss }: BannerProps): JSX.Element {
+export function Banner({
+  tone = 'info',
+  children,
+  action,
+  onDismiss,
+  t = englishTranslator
+}: BannerProps): JSX.Element {
   return (
     <div className={`banner banner-${tone}`} role={tone === 'error' ? 'alert' : 'status'}>
       <span className="banner-icon" aria-hidden="true">
@@ -32,7 +41,12 @@ export function Banner({ tone = 'info', children, action, onDismiss }: BannerPro
       <div className="banner-text">{children}</div>
       {action != null && <div className="banner-action">{action}</div>}
       {onDismiss && (
-        <button type="button" className="banner-dismiss" aria-label="Dismiss" onClick={onDismiss}>
+        <button
+          type="button"
+          className="banner-dismiss"
+          aria-label={t('common.dismiss')}
+          onClick={onDismiss}
+        >
           ✕
         </button>
       )}

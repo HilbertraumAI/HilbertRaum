@@ -257,6 +257,7 @@ export function ConversationList({
         open={pendingDelete != null}
         title={t('chat.delete.title')}
         confirmLabel={t('chat.delete.confirm')}
+        t={t}
         onConfirm={() => {
           if (pendingDelete) onDelete(pendingDelete)
           setPendingDelete(null)

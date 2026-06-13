@@ -244,6 +244,7 @@ function ChangePasswordCard(): JSX.Element {
           show={showPassword}
           onToggleShow={() => setShowPassword((v) => !v)}
           onChange={setCurrent}
+          t={t}
         />
         <PasswordField
           placeholder={t('settings.changePassword.new')}
@@ -251,15 +252,17 @@ function ChangePasswordCard(): JSX.Element {
           value={next}
           show={showPassword}
           onChange={setNext}
+          t={t}
         />
-        {next.length > 0 && <PasswordStrengthMeter strength={strength} />}
-        {strength.hint && <p className="hint">{strength.hint}</p>}
+        {next.length > 0 && <PasswordStrengthMeter strength={strength} t={t} />}
+        {strength.hintKey && <p className="hint">{t(strength.hintKey)}</p>}
         <PasswordField
           placeholder={t('settings.changePassword.confirm')}
           autoComplete="new-password"
           value={confirm}
           show={showPassword}
           onChange={setConfirm}
+          t={t}
         />
         {confirm.length > 0 && confirm !== next && (
           <p className="hint warn">{t('password.mismatch')}</p>

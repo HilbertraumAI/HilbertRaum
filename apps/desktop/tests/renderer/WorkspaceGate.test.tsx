@@ -3,6 +3,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, cleanup, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { WorkspaceGate, passwordStrength } from '../../src/renderer/screens/WorkspaceGate'
+import { t } from '../../src/shared/i18n'
 import type {
   WorkspaceStateInfo,
   WorkspaceActionResult,
@@ -63,13 +64,20 @@ async function toPasswordStep(user: ReturnType<typeof userEvent.setup>): Promise
 afterEach(cleanup)
 
 describe('passwordStrength — advisory meter (hand-rolled, never a blocker)', () => {
+  // Strength words are MessageKeys resolved at render (Phase 40); the English
+  // catalog stays the assertion source of truth (D-L8).
+  const label = (pw: string): string => {
+    const key = passwordStrength(pw).labelKey
+    return key == null ? '' : t('en', key)
+  }
   it('scores by length with a variety bonus', () => {
     expect(passwordStrength('').score).toBe(0)
-    expect(passwordStrength('short').label).toBe('Too short')
-    expect(passwordStrength('eightchr').label).toBe('Weak') // ≥8 but short + one class
-    expect(passwordStrength('twelve chars').label).toBe('Okay')
-    expect(passwordStrength('sixteen long pwd').label).toBe('Strong')
-    expect(passwordStrength('C0rrect-horse-battery!').label).toBe('Very strong')
+    expect(passwordStrength('').labelKey).toBeNull()
+    expect(label('short')).toBe('Too short')
+    expect(label('eightchr')).toBe('Weak') // ≥8 but short + one class
+    expect(label('twelve chars')).toBe('Okay')
+    expect(label('sixteen long pwd')).toBe('Strong')
+    expect(label('C0rrect-horse-battery!')).toBe('Very strong')
   })
 })
 

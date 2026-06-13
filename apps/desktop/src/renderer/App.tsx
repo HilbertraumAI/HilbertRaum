@@ -210,13 +210,14 @@ function AppShell(): JSX.Element {
             🔒 {t('app.lockNow')}
           </Button>
         )}
-        <LocalIndicator variant="sidebar" offline={offline} onNavigate={navigate} />
+        <LocalIndicator variant="sidebar" offline={offline} onNavigate={navigate} t={t} />
       </nav>
 
       <main className="content">
         {notice && (
           <Banner
             tone="info"
+            t={t}
             onDismiss={() => setNotice(null)}
             action={
               <Button size="sm" onClick={() => navigate('settings:diagnostics')}>

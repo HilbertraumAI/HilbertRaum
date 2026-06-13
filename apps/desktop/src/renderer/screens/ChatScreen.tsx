@@ -519,7 +519,7 @@ export function ChatScreen({ onNavigate, initialMode, initialScopeDocumentIds }:
           />
           <div className="chat-header-spacer" />
           {/* Ambient "Local · Offline" signal (guidelines §7). */}
-          <LocalIndicator onNavigate={onNavigate} />
+          <LocalIndicator onNavigate={onNavigate} t={t} />
           <DropdownMenu.Root>
             <DropdownMenu.Trigger asChild>
               <button
@@ -560,7 +560,7 @@ export function ChatScreen({ onNavigate, initialMode, initialScopeDocumentIds }:
         />
 
         {error && (
-          <Banner tone="error" onDismiss={() => setError(null)}>
+          <Banner tone="error" t={t} onDismiss={() => setError(null)}>
             {error}
             {/* Chat refused while a document task runs: the shared
                 copy comes with an actionable cancel — the task, not the chat. */}

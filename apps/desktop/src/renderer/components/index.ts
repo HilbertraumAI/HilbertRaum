@@ -1,6 +1,7 @@
 // Shared component layer (guidelines §6). Screens import from here; styling
 // is tokens-only (tokens.css role tokens) so both themes work without theme checks.
 
+export { englishTranslator, type Translator } from './translator'
 export { Button, type ButtonProps, type ButtonVariant } from './Button'
 export { Badge, type BadgeProps, type BadgeTone } from './Badge'
 export { Banner, type BannerProps, type BannerTone } from './Banner'

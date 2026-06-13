@@ -154,6 +154,7 @@ export function WorkspaceGate({ state, onUnlocked }: Props): JSX.Element {
               show={showPassword}
               onToggleShow={() => setShowPassword((v) => !v)}
               onChange={setPassword}
+              t={t}
             />
           </div>
           {error && <Banner tone="error">{error}</Banner>}
@@ -262,15 +263,17 @@ export function WorkspaceGate({ state, onUnlocked }: Props): JSX.Element {
               show={showPassword}
               onToggleShow={() => setShowPassword((v) => !v)}
               onChange={setPassword}
+              t={t}
             />
-            {password.length > 0 && <PasswordStrengthMeter strength={strength} />}
-            {strength.hint && <p className="hint">{strength.hint}</p>}
+            {password.length > 0 && <PasswordStrengthMeter strength={strength} t={t} />}
+            {strength.hintKey && <p className="hint">{t(strength.hintKey)}</p>}
             <PasswordField
               placeholder={t('gate.create.confirmPlaceholder')}
               value={confirm}
               autoComplete="new-password"
               show={showPassword}
               onChange={setConfirm}
+              t={t}
             />
             {confirm.length > 0 && confirm !== password && (
               <p className="hint warn">{t('password.mismatch')}</p>

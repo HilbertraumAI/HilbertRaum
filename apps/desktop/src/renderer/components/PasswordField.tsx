@@ -1,4 +1,6 @@
 import { Button } from './Button'
+import { englishTranslator, type Translator } from './translator'
+import type { MessageKey } from '@shared/i18n'
 
 // Password input + advisory strength meter, shared by the first-run flow
 // (WorkspaceGate) and the Settings "Change password" card so the behavior stays
@@ -9,8 +11,10 @@ import { Button } from './Button'
 export interface PasswordStrength {
   /** 0 (empty) … 4 (very strong). Purely advisory — never gates submission. */
   score: 0 | 1 | 2 | 3 | 4
-  label: string
-  hint: string | null
+  /** Strength word as a MessageKey, resolved at render (i18n-plan §5); null when empty. */
+  labelKey: MessageKey | null
+  /** Advisory hint as a MessageKey, or null when there is nothing to suggest. */
+  hintKey: MessageKey | null
 }
 
 /**
@@ -19,9 +23,9 @@ export interface PasswordStrength {
  * only the 8-character floor and the confirm match gate submission.
  */
 export function passwordStrength(pw: string): PasswordStrength {
-  if (pw.length === 0) return { score: 0, label: '', hint: null }
+  if (pw.length === 0) return { score: 0, labelKey: null, hintKey: null }
   if (pw.length < 8) {
-    return { score: 1, label: 'Too short', hint: 'Use at least 8 characters.' }
+    return { score: 1, labelKey: 'password.strength.tooShort', hintKey: 'password.strength.minHint' }
   }
   let score = 1
   if (pw.length >= 12) score += 1
@@ -29,20 +33,25 @@ export function passwordStrength(pw: string): PasswordStrength {
   const variety = [/[a-z]/, /[A-Z]/, /[0-9]/, /[^a-zA-Z0-9]/].filter((re) => re.test(pw)).length
   if (variety >= 3) score += 1
   const capped = Math.min(score, 4) as 1 | 2 | 3 | 4
-  if (capped === 4) return { score: 4, label: 'Very strong', hint: null }
-  if (capped === 3) return { score: 3, label: 'Strong', hint: null }
-  const hint = 'Longer is stronger — 12 or more characters, or a few unrelated words, work well.'
-  if (capped === 2) return { score: 2, label: 'Okay', hint }
-  return { score: 1, label: 'Weak', hint }
+  if (capped === 4) return { score: 4, labelKey: 'password.strength.veryStrong', hintKey: null }
+  if (capped === 3) return { score: 3, labelKey: 'password.strength.strong', hintKey: null }
+  const hintKey = 'password.strength.longerHint' as const
+  if (capped === 2) return { score: 2, labelKey: 'password.strength.okay', hintKey }
+  return { score: 1, labelKey: 'password.strength.weak', hintKey }
 }
 
 export interface PasswordStrengthMeterProps {
   strength: PasswordStrength
+  /** Bound translate fn (i18n-plan §5 ⑤); English default for provider-less tests. */
+  t?: Translator
 }
 
 /** The 4-segment strength bar + word (never color alone — WCAG 1.4.1). Render only
  *  while the password field is non-empty; the textual hint is the caller's to place. */
-export function PasswordStrengthMeter({ strength }: PasswordStrengthMeterProps): JSX.Element {
+export function PasswordStrengthMeter({
+  strength,
+  t = englishTranslator
+}: PasswordStrengthMeterProps): JSX.Element {
   return (
     <div className="strength" role="status">
       <span className="strength-bar" aria-hidden="true">
@@ -53,7 +62,7 @@ export function PasswordStrengthMeter({ strength }: PasswordStrengthMeterProps):
           />
         ))}
       </span>
-      <span className="strength-label">{strength.label}</span>
+      <span className="strength-label">{strength.labelKey != null ? t(strength.labelKey) : ''}</span>
     </div>
   )
 }
@@ -68,6 +77,8 @@ export interface PasswordFieldProps {
   /** Renders the Show/Hide toggle on this field when provided. */
   onToggleShow?: () => void
   onChange: (value: string) => void
+  /** Bound translate fn for the built-in Show/Hide labels (i18n-plan §5 ⑤). */
+  t?: Translator
 }
 
 /**
@@ -81,7 +92,8 @@ export function PasswordField({
   autoComplete,
   show,
   onToggleShow,
-  onChange
+  onChange,
+  t = englishTranslator
 }: PasswordFieldProps): JSX.Element {
   return (
     <div className="gate-pw-row">
@@ -101,8 +113,8 @@ export function PasswordField({
           variant="ghost"
           className="gate-pw-toggle"
           aria-pressed={show}
-          aria-label={show ? 'Hide password' : 'Show password'}
-          title={show ? 'Hide password' : 'Show password'}
+          aria-label={show ? t('password.hide') : t('password.show')}
+          title={show ? t('password.hide') : t('password.show')}
           onClick={onToggleShow}
         >
           <EyeIcon off={show} />

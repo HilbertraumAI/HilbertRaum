@@ -625,8 +625,27 @@ export const en = {
   'diag.logs.hide': 'Hide logs',
   'diag.logs.empty': '(log is empty)',
 
+  // ---- Shared components' built-in copy (receive a bound t — i18n-plan §5 ⑤) ----
+  'common.dismiss': 'Dismiss',
+  'common.close': 'Close',
+  'common.cancel': 'Cancel',
+  'indicator.offline': 'Local · Offline',
+  'indicator.online': 'Local · Downloads allowed',
+  'indicator.offlineDetail': 'Everything stays on this drive. No internet connection is used.',
+  'indicator.onlineDetail': 'Downloads allowed — chats and documents stay local.',
+
   // ---- Shared password copy ----
   'password.mismatch': "Passwords don't match.",
+  'password.show': 'Show password',
+  'password.hide': 'Hide password',
+  'password.strength.tooShort': 'Too short',
+  'password.strength.weak': 'Weak',
+  'password.strength.okay': 'Okay',
+  'password.strength.strong': 'Strong',
+  'password.strength.veryStrong': 'Very strong',
+  'password.strength.minHint': 'Use at least 8 characters.',
+  'password.strength.longerHint':
+    'Longer is stronger — 12 or more characters, or a few unrelated words, work well.',
 
   // ---- Workspace gate (WorkspaceGate.tsx) ----
   'gate.passwordPlaceholder': 'Password',

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import * as Tooltip from '@radix-ui/react-tooltip'
+import { englishTranslator, type Translator } from './translator'
 
 // Ambient privacy signal (guidelines §7): a quiet, persistent "Local ·
 // Offline" status — subtle glyph, neutral color, never an alarm. Hover/focus reveals
@@ -21,21 +22,26 @@ export interface LocalIndicatorProps {
    */
   offline?: boolean
   variant?: 'header' | 'sidebar'
+  /** Bound translate fn for the built-in label/detail (i18n-plan §5 ⑤); English default. */
+  t?: Translator
 }
 
 /** The short status text (icon + word — never color alone, WCAG 1.4.1). */
-export function localIndicatorLabel(offline: boolean): string {
-  return offline ? 'Local · Offline' : 'Local · Downloads allowed'
+export function localIndicatorLabel(offline: boolean, t: Translator = englishTranslator): string {
+  return offline ? t('indicator.offline') : t('indicator.online')
 }
 
 /** The reassurance line shown on hover/focus (guidelines §7, honest variant). */
-export function localIndicatorDetail(offline: boolean): string {
-  return offline
-    ? 'Everything stays on this drive. No internet connection is used.'
-    : 'Downloads allowed — chats and documents stay local.'
+export function localIndicatorDetail(offline: boolean, t: Translator = englishTranslator): string {
+  return offline ? t('indicator.offlineDetail') : t('indicator.onlineDetail')
 }
 
-export function LocalIndicator({ onNavigate, offline, variant = 'header' }: LocalIndicatorProps): JSX.Element {
+export function LocalIndicator({
+  onNavigate,
+  offline,
+  variant = 'header',
+  t = englishTranslator
+}: LocalIndicatorProps): JSX.Element {
   // Self-fetching fallback: deny-by-default (offline) until the policy answers.
   const [fetched, setFetched] = useState(true)
   const controlled = offline !== undefined
@@ -65,12 +71,12 @@ export function LocalIndicator({ onNavigate, offline, variant = 'header' }: Loca
             className={`local-indicator ${variant === 'sidebar' ? 'local-indicator-sidebar' : ''}`}
             onClick={() => onNavigate('settings:privacy')}
           >
-            <span aria-hidden="true">🔒</span> {localIndicatorLabel(isOffline)}
+            <span aria-hidden="true">🔒</span> {localIndicatorLabel(isOffline, t)}
           </button>
         </Tooltip.Trigger>
         <Tooltip.Portal>
           <Tooltip.Content className="tooltip" sideOffset={6}>
-            {localIndicatorDetail(isOffline)}
+            {localIndicatorDetail(isOffline, t)}
           </Tooltip.Content>
         </Tooltip.Portal>
       </Tooltip.Root>

@@ -672,8 +672,29 @@ export const de: Record<keyof typeof en, string> = {
   'diag.logs.hide': 'Logs ausblenden',
   'diag.logs.empty': '(Log ist leer)',
 
+  // ---- Shared components' built-in copy ----
+  'common.dismiss': 'Ausblenden',
+  'common.close': 'Schließen',
+  'common.cancel': 'Abbrechen',
+  'indicator.offline': 'Lokal · Offline',
+  'indicator.online': 'Lokal · Downloads erlaubt',
+  'indicator.offlineDetail':
+    'Alles bleibt auf diesem Laufwerk. Es wird keine Internetverbindung verwendet.',
+  'indicator.onlineDetail': 'Downloads erlaubt — Chats und Dokumente bleiben lokal.',
+
   // ---- Shared password copy ----
   'password.mismatch': 'Die Passwörter stimmen nicht überein.',
+  'password.show': 'Passwort anzeigen',
+  'password.hide': 'Passwort verbergen',
+  'password.strength.tooShort': 'Zu kurz',
+  'password.strength.weak': 'Schwach',
+  'password.strength.okay': 'Okay',
+  'password.strength.strong': 'Stark',
+  'password.strength.veryStrong': 'Sehr stark',
+  'password.strength.minHint': 'Verwende mindestens 8 Zeichen.',
+  'password.strength.longerHint':
+    'Länger ist stärker — 12 oder mehr Zeichen oder ein paar zusammenhanglose Wörter ' +
+    'funktionieren gut.',
 
   // ---- Workspace gate ----
   'gate.passwordPlaceholder': 'Passwort',

@@ -1,6 +1,7 @@
 import * as RadixDialog from '@radix-ui/react-dialog'
 import { useCallback, useEffect, useRef, type ReactNode } from 'react'
 import { Button } from './Button'
+import { englishTranslator, type Translator } from './translator'
 
 // Modal dialogs (guidelines §6) on Radix Dialog (focus trap, Esc-close, and
 // focus-return are easy to get wrong by hand). --shadow-3 + --radius-lg via CSS;
@@ -36,10 +37,20 @@ export interface ModalProps {
   ariaLabel?: string
   width?: 'content' | 'wide'
   children: ReactNode
+  /** Bound translate fn for the built-in Close label (i18n-plan §5 ⑤); English default. */
+  t?: Translator
 }
 
 /** General content dialog with a header Close button (preview, forms). */
-export function Modal({ open, onClose, title, ariaLabel, width = 'content', children }: ModalProps): JSX.Element {
+export function Modal({
+  open,
+  onClose,
+  title,
+  ariaLabel,
+  width = 'content',
+  children,
+  t = englishTranslator
+}: ModalProps): JSX.Element {
   const onCloseAutoFocus = useReturnFocus(open)
   return (
     <RadixDialog.Root open={open} onOpenChange={(next) => !next && onClose()}>
@@ -54,7 +65,7 @@ export function Modal({ open, onClose, title, ariaLabel, width = 'content', chil
           <div className="modal-head">
             <RadixDialog.Title className="modal-title">{title}</RadixDialog.Title>
             <RadixDialog.Close asChild>
-              <Button size="sm">Close</Button>
+              <Button size="sm">{t('common.close')}</Button>
             </RadixDialog.Close>
           </div>
           {children}
@@ -76,6 +87,8 @@ export interface ConfirmDialogProps {
   onConfirm: () => void
   /** Called on Cancel, Esc, and clicking the overlay. */
   onCancel: () => void
+  /** Bound translate fn for the built-in Cancel label (i18n-plan §5 ⑤); English default. */
+  t?: Translator
 }
 
 /**
@@ -87,10 +100,11 @@ export function ConfirmDialog({
   title,
   children,
   confirmLabel,
-  cancelLabel = 'Cancel',
+  cancelLabel,
   confirmDisabled,
   onConfirm,
-  onCancel
+  onCancel,
+  t = englishTranslator
 }: ConfirmDialogProps): JSX.Element {
   const onCloseAutoFocus = useReturnFocus(open)
   return (
@@ -105,7 +119,7 @@ export function ConfirmDialog({
           <RadixDialog.Title className="modal-title">{title}</RadixDialog.Title>
           {children != null && <div className="modal-body">{children}</div>}
           <div className="modal-actions">
-            <Button onClick={onCancel}>{cancelLabel}</Button>
+            <Button onClick={onCancel}>{cancelLabel ?? t('common.cancel')}</Button>
             <Button variant="primary" disabled={confirmDisabled} onClick={onConfirm}>
               {confirmLabel}
             </Button>

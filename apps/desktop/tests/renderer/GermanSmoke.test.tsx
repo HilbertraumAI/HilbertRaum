@@ -8,6 +8,7 @@ import { DocumentsScreen } from '../../src/renderer/screens/DocumentsScreen'
 import { ModelsScreen } from '../../src/renderer/screens/ModelsScreen'
 import { PrivacyTab } from '../../src/renderer/screens/settings/PrivacyTab'
 import { DiagnosticsTab } from '../../src/renderer/screens/settings/DiagnosticsTab'
+import { Banner, PasswordField, type Translator } from '../../src/renderer/components'
 import { I18nProvider, UI_LANGUAGE_STORAGE_KEY } from '../../src/renderer/i18n'
 import { t } from '../../src/shared/i18n'
 import type { AppStatus, RuntimeStatus } from '../../src/shared/types'
@@ -183,5 +184,27 @@ describe('German render smokes (Phase 40)', () => {
     expect(
       screen.getByRole('heading', { name: t('de', 'diag.activity.title') })
     ).toBeInTheDocument()
+  })
+
+  it('shared components render their built-in copy from a received t (plan §5 ⑤)', () => {
+    const deT: Translator = (key, params) => t('de', key, params)
+    render(
+      <>
+        <Banner t={deT} onDismiss={() => {}}>
+          x
+        </Banner>
+        <PasswordField
+          placeholder="pw"
+          value=""
+          autoComplete="new-password"
+          show={false}
+          onToggleShow={() => {}}
+          onChange={() => {}}
+          t={deT}
+        />
+      </>
+    )
+    expect(screen.getByRole('button', { name: t('de', 'common.dismiss') })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: t('de', 'password.show') })).toBeInTheDocument()
   })
 })

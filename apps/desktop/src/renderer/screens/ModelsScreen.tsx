@@ -415,6 +415,7 @@ export function ModelsScreen(): JSX.Element {
         open
         title={t('models.confirm.title', { name: m.displayName })}
         confirmLabel={t('models.confirm.start')}
+        t={t}
         confirmDisabled={needsAck && !licenseAck}
         onConfirm={() => void startDownload(m)}
         onCancel={close}
