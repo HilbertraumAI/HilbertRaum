@@ -169,8 +169,22 @@ export class E5Embedder implements Embedder {
       if (data.length !== batch.length) {
         throw new Error(`Embedding count mismatch: expected ${batch.length}, got ${data.length}`)
       }
-      // Order by `index` so the result lines up with the input batch.
-      const ordered = [...data].sort((a, b) => (a.index ?? 0) - (b.index ?? 0))
+      // Order by `index` so the result lines up with the input batch. The OpenAI
+      // embeddings schema makes `index` optional, so handle the two clean cases and
+      // reject the mixed one (L3): if EVERY entry carries an `index`, sort by it; if
+      // NONE do, trust the response's array order. A partial mix would collapse the
+      // missing entries to 0 and silently misalign vectors↔chunks (the count guard
+      // above still passes), so fail loudly instead.
+      const withIndex = data.filter((d) => typeof d.index === 'number').length
+      if (withIndex !== 0 && withIndex !== data.length) {
+        throw new Error(
+          `Embedding response mixes indexed and unindexed entries (${withIndex}/${data.length}); cannot order safely`
+        )
+      }
+      const ordered =
+        withIndex === data.length
+          ? [...data].sort((a, b) => (a.index as number) - (b.index as number))
+          : data
       for (const d of ordered) {
         // Reject a missing/short vector rather than storing a 0/short-dim row: such a row
         // is silently un-searchable (the VectorIndex dimension guard skips it) and the
@@ -204,8 +218,13 @@ export class E5Embedder implements Embedder {
    * (see its declaration for why this differs from the reranker).
    */
   async suspend(): Promise<void> {
-    this.startFailed = null
+    // Clear the failed-start latch AFTER teardown, not before (L4): teardown awaits an
+    // in-flight start, and a start that fails during that await sets `startFailed`. If we
+    // cleared first, that racing failure would re-arm the latch and the next embed() would
+    // throw the stale error — forcing a second lock/unlock. Clearing last guarantees a
+    // post-suspend embed() gets a fresh start attempt.
     await this.teardown()
+    this.startFailed = null
   }
 
   private async teardown(): Promise<void> {
