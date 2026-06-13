@@ -8,19 +8,28 @@
 #
 # Canonical, unit-tested reference: apps/desktop/src/main/services/drive.ts — keep in sync.
 #
-# --with-assets downloads + verifies the model weights + llama.cpp sidecar (Phase 12), so
-# one command yields a launch-ready drive (build-time network; the app stays offline).
+# --with-assets downloads + verifies the default chat model weight + llama.cpp sidecar
+# (Phase 12), so one command yields a launch-ready drive (build-time network; the app stays
+# offline). To keep setup fast, ONLY the default chat model (Ministral 3 8B) is fetched; the
+# user downloads any other models (larger chat models, embeddings, reranker, transcriber)
+# from inside the app. Pass --all-models to fetch every model instead.
 #
 # Usage:
 #   scripts/prepare-drive.sh --target /Volumes/PRIVATE_AI_DRIVE [--dry-run] [--force] \
-#       [--dev] [--with-assets] [--accept-license]
+#       [--dev] [--with-assets] [--all-models] [--accept-license]
 set -euo pipefail
+
+# The single chat model --with-assets provisions by default (fast setup). Every other model
+# is downloaded by the user from inside the app. Pass --all-models to fetch everything.
+# Keep this id in sync with the chat manifest under model-manifests/chat/.
+DEFAULT_MODEL_ID="ministral3-8b-instruct-2512-q4"
 
 TARGET=""
 DRY_RUN=0
 FORCE=0
 DEV=0
 WITH_ASSETS=0
+ALL_MODELS=0
 ACCEPT_LICENSE=0
 
 while [[ $# -gt 0 ]]; do
@@ -31,6 +40,7 @@ while [[ $# -gt 0 ]]; do
     --force) FORCE=1; shift ;;
     --dev) DEV=1; shift ;;
     --with-assets) WITH_ASSETS=1; shift ;;
+    --all-models) ALL_MODELS=1; shift ;;
     --accept-license) ACCEPT_LICENSE=1; shift ;;
     -h|--help) grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; exit 2 ;;
@@ -164,6 +174,10 @@ echo
 if [[ $WITH_ASSETS -eq 1 ]]; then
   echo "Fetching assets (build-time network; the app itself stays offline):"
   MODEL_ARGS=(--target "$TARGET")
+  if [[ $ALL_MODELS -eq 0 ]]; then
+    MODEL_ARGS+=(--only "$DEFAULT_MODEL_ID")
+    echo "  (default: fetching only '$DEFAULT_MODEL_ID'; pass --all-models for every model)"
+  fi
   [[ $ACCEPT_LICENSE -eq 1 ]] && MODEL_ARGS+=(--accept-license)
   [[ $DRY_RUN -eq 1 ]] && MODEL_ARGS+=(--dry-run)
   bash "$SCRIPT_DIR/fetch-models.sh" "${MODEL_ARGS[@]}"

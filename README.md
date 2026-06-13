@@ -70,7 +70,7 @@ model (step 2) for genuine answers.
 ### 2. Download the models (the real AI)
 
 The app reads model weights + the `llama-server` binary from a **drive root** — any folder (an
-external drive, or a folder on your disk). Lay one out and download everything in one command:
+external drive, or a folder on your disk). Lay one out and download the AI in one command:
 
 ```powershell
 # Windows
@@ -83,11 +83,21 @@ scripts/prepare-drive.sh --target /Volumes/HILBERTRAUM --with-assets --accept-li
 scripts/verify-models.sh  --target /Volumes/HILBERTRAUM --generate
 ```
 
-This downloads each model weight from its source (Hugging Face) **and** the `llama.cpp` sidecar,
-**SHA-256-verifies** them, and copies the manifests/config onto the drive. Downloads **resume** if
-interrupted and re-running **skips** what's already there. You can also fetch piecemeal
-(`fetch-models` / `fetch-runtime`, with `--only <id>` for a single model) or drop the files into
-`models/` and `runtime/llama.cpp/<os>/` **by hand** — see **[`docs/packaging.md`](docs/packaging.md)**.
+**To keep setup fast, `-WithAssets` downloads only the default chat model** (Ministral 3 8B, ~5 GB)
+plus the `llama.cpp` sidecar — not all ~11 models. That's enough to start chatting immediately; you
+download any **other** models (larger chat models, embeddings for document Q&A, reranker,
+transcriber) **from inside the app** later, on demand. To provision *every* model up front instead,
+add `-AllModels` (Windows) / `--all-models` (macOS/Linux).
+
+Whatever it fetches, it **SHA-256-verifies** against the manifest and copies the manifests/config
+onto the drive. Downloads **resume** if interrupted and re-running **skips** what's already there.
+You can also fetch piecemeal (`fetch-models` / `fetch-runtime`, with `--only <id>` for a single
+model) or drop the files into `models/` and `runtime/llama.cpp/<os>/` **by hand** — see
+**[`docs/packaging.md`](docs/packaging.md)**.
+
+> 📄 **Document Q&A needs the embeddings model**, which is *not* in the fast default. Grab it from
+> the app's **AI Model** screen after first launch, or pre-load everything with `-AllModels` /
+> `--all-models`.
 
 > ✅ **`runtime-sources.yaml` is pinned to a real release** (`llama.cpp` **b9585**, real per-OS
 > URLs + SHA-256 checksums computed from the actual assets) — `fetch-runtime` downloads, verifies,

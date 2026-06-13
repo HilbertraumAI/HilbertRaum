@@ -30,10 +30,18 @@
   Network is OFF either way (deny-by-default offline guarantee).
 
 .PARAMETER WithAssets
-  After laying out the tree, download + verify the model weights and the llama.cpp sidecar
-  (invokes fetch-models.ps1 + fetch-runtime.ps1) so one command yields a launch-ready
-  drive. Build-time network only — the app itself stays offline. Without this flag the
-  behaviour is unchanged (layout + config; you drop artifacts in by hand).
+  After laying out the tree, download + verify the default chat model weight and the
+  llama.cpp sidecar (invokes fetch-models.ps1 + fetch-runtime.ps1) so one command yields a
+  launch-ready drive. Build-time network only — the app itself stays offline. To keep setup
+  fast, ONLY the default chat model (Ministral 3 8B) is fetched; the user downloads any
+  other models (larger chat models, embeddings, reranker, transcriber) from inside the app.
+  Without this flag the behaviour is unchanged (layout + config; you drop artifacts in by
+  hand).
+
+.PARAMETER AllModels
+  With -WithAssets, fetch ALL models with a download block (every chat model + embeddings +
+  reranker + transcriber) instead of just the default chat model. Slower; for building a
+  fully provisioned drive.
 
 .PARAMETER AcceptLicense
   Forwarded to fetch-models.ps1 (accept the model licenses) when -WithAssets is used.
@@ -50,10 +58,16 @@ param(
   [switch] $Force,
   [switch] $Dev,
   [switch] $WithAssets,
+  [switch] $AllModels,
   [switch] $AcceptLicense
 )
 
 $ErrorActionPreference = 'Stop'
+
+# The single chat model -WithAssets provisions by default (fast setup). Every other model
+# is downloaded by the user from inside the app. Pass -AllModels to fetch everything.
+# Keep this id in sync with the chat manifest under model-manifests/chat/.
+$DefaultModelId = 'ministral3-8b-instruct-2512-q4'
 
 # Normalize -Target to a full path: the config files below are written via .NET
 # ([System.IO.File]::WriteAllText), which resolves relative paths against the PROCESS
@@ -198,6 +212,10 @@ if ($WithAssets) {
   # which fails param binding (PositionalParameterNotFound), especially with a rooted
   # -Target like 'D:\'.
   $modelArgs = @{ Target = $Target }
+  if (-not $AllModels) {
+    $modelArgs.Only = $DefaultModelId
+    Write-Host ("  (default: fetching only '{0}'; pass -AllModels for every model)" -f $DefaultModelId) -ForegroundColor DarkGray
+  }
   if ($AcceptLicense) { $modelArgs.AcceptLicense = $true }
   if ($DryRun) { $modelArgs.DryRun = $true }
   & $fetchModels @modelArgs

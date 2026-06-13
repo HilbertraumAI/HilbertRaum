@@ -64,8 +64,12 @@ The live path needs artifacts **not in the repo**:
 - the GGUF weights named by the manifests (under `models/...`).
 
 **Phase 12 automates this** with the `fetch-*` scripts (below) — `prepare-drive --with-assets`
-downloads + SHA-256-verifies both in one command. You can still drop them in by hand. With either,
-start a chat model on the AI Model screen to get real on-device inference and real tokens/sec.
+downloads + SHA-256-verifies the artifacts in one command. By default it fetches only the **default
+chat model** (Ministral 3 8B) + the sidecar, so setup is fast and you grab any other models (larger
+chat models, embeddings, reranker, transcriber) from the app's AI Model screen on demand; add
+`-AllModels`/`--all-models` to provision every model up front. You can still drop them in by hand.
+With either, start a chat model on the AI Model screen to get real on-device inference and real
+tokens/sec.
 
 ## Portable build (electron-builder, Phase 11)
 
@@ -121,7 +125,7 @@ out on a fresh machine with no Node/npm); their layout + config shapes mirror th
 
 | Script | Purpose |
 |---|---|
-| `prepare-drive.{ps1,sh}` | Create the directory tree, copy manifests + user docs, generate `config/{drive,policy}.json`. `-DryRun`/`--dry-run` prints the plan. `-Dev`/`--dev` → a plaintext developer drive. **`-WithAssets`/`--with-assets`** (Phase 12) then runs `fetch-models` + `fetch-runtime` (forwarding `-AcceptLicense`/`--accept-license`) for a launch-ready drive. |
+| `prepare-drive.{ps1,sh}` | Create the directory tree, copy manifests + user docs, generate `config/{drive,policy}.json`. `-DryRun`/`--dry-run` prints the plan. `-Dev`/`--dev` → a plaintext developer drive. **`-WithAssets`/`--with-assets`** (Phase 12) then runs `fetch-models` + `fetch-runtime` (forwarding `-AcceptLicense`/`--accept-license`) for a launch-ready drive — by default fetching **only the default chat model** (Ministral 3 8B) for fast setup; **`-AllModels`/`--all-models`** fetches every model instead. |
 | `fetch-models.{ps1,sh}` | (Phase 12) Download + **resume** + **SHA-256-verify** each weight with a `download:` block to its `models/...` path. `-Only <id>`/`--only` for one model; `-AcceptLicense`/`--accept-license` for the license gate; `-DryRun`/`--dry-run`. Real-hash mismatch → delete partial + exit 1. Idempotent (present + verified → skip). |
 | `fetch-runtime.{ps1,sh}` | (Phase 12; GPU defaults Phase 14) Read `runtime-sources.yaml`, pick the host build (`-Os/-Arch/-Backend` overrides; **default = the first listed build: Vulkan on win/linux, Metal on mac**; `-Backend cpu` fetches the pure-CPU safety net into `runtime/llama.cpp/<os>/cpu/`), download + verify the archive, extract into the build's `extract_to` (`chmod +x` on mac/linux), and write a `.hilbertraum-runtime.json` install marker. Idempotent **via the marker** (version + backend must match — a missing/stale marker re-fetches, so a CPU-era drive actually upgrades); `-DryRun`/`--dry-run`. `-Family`/`--family` selects the asset family: `llama_cpp` (default), `whisper_cpp` (the transcriber CLI), or `ocr` (language files). |
 | `verify-models.{ps1,sh}` | SHA-256 each present weight vs its manifest hash (placeholder → *UNVERIFIED*; real mismatch → fail/exit 1). `-Generate`/`--generate` writes `config/checksums.json`. |
@@ -132,12 +136,13 @@ The asset-planning + verify logic is mirrored from the unit-tested
 `prepare-drive` mirrors `drive.ts`. The scripts use the **OS-native downloader** (`curl` /
 `Invoke-WebRequest`, preferring `aria2c` if installed) — no new npm/script deps.
 
-End-to-end (Windows example — one command provisions everything):
+End-to-end (Windows example). `-WithAssets` alone provisions the default chat model for a fast,
+launch-ready drive; add `-AllModels` to pre-load every model (a fully provisioned commercial drive):
 ```powershell
-.\scripts\prepare-drive.ps1 -Target E:\ -WithAssets -AcceptLicense   # layout + download + verify
-.\scripts\verify-models.ps1 -Target E:\ -Generate                    # record real hashes
-npm run package:win                                                  # build the portable .exe
-copy .\apps\desktop\release\*.exe E:\                                 # place the launcher on the drive
+.\scripts\prepare-drive.ps1 -Target E:\ -WithAssets -AllModels -AcceptLicense  # layout + download + verify (all models)
+.\scripts\verify-models.ps1 -Target E:\ -Generate                              # record real hashes
+npm run package:win                                                            # build the portable .exe
+copy .\apps\desktop\release\*.exe E:\                                           # place the launcher on the drive
 ```
 
 > ✅ **`runtime-sources.yaml` is pinned to a real release** (`ggml-org/llama.cpp` **b9585**, real

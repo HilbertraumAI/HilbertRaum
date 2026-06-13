@@ -122,7 +122,9 @@ drive, and generates `config/drive.json` (the prepared-drive marker) + `config/p
 By default it does **not** download artifacts. **Phase 12** adds `--with-assets`/`-WithAssets`, which
 then runs `fetch-models` (weights) + `fetch-runtime` (the `llama-server` sidecar) — each download is
 **resumable** and **SHA-256-verified before it counts as installed** (mismatch → delete partial +
-exit 1; placeholder hash → *UNVERIFIED*). You can still drop artifacts in by hand (R5). `verify-models`
+exit 1; placeholder hash → *UNVERIFIED*). For a fast setup `--with-assets` fetches **only the default
+chat model** (Ministral 3 8B); the user pulls any other models from the app's AI Model screen on
+demand. Add `--all-models`/`-AllModels` to provision every model up front. You can still drop artifacts in by hand (R5). `verify-models`
 SHA-256s each present weight against its manifest hash, and `--generate` captures real hashes into
 `config/checksums.json`. The asset logic mirrors the unit-tested `services/assets.ts`; the sidecar
 build comes from `model-manifests/runtime-sources.yaml`. See
