@@ -92,7 +92,8 @@ describe('config generators', () => {
     const json = buildPolicyJson()
     expect(json.network.allow_model_downloads).toBe(false)
     expect(json.network.allow_update_checks).toBe(false)
-    expect(json.network.allow_telemetry).toBe(false)
+    // No `allow_telemetry` field — the app has no telemetry, so the knob is gone.
+    expect('allow_telemetry' in json.network).toBe(false)
     expect(json.workspace.encryption_required).toBe(true)
     expect(json.workspace.allow_plaintext_dev_mode).toBe(false)
     expect(json.models.require_sha256_match).toBe(true)

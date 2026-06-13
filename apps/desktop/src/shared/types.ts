@@ -401,16 +401,18 @@ export interface EngineDownloadJob {
   error: string | null
 }
 
-/** Whether the llama.cpp engine is installed and (if not) whether it can be fetched. */
+/** Whether the engine binaries are installed and (if not) whether they can be fetched. */
 export interface EngineStatus {
-  /** The host's `llama-server` binary is present on the drive (real runtime available). */
+  /** Every fetchable engine family's binary is present on the drive (real runtimes ready). */
   installed: boolean
-  /** A build matching this host (os/arch) exists in runtime-sources.yaml → fetchable. */
+  /** At least one engine family has a build for this host (os/arch) → fetchable. */
   available: boolean
-  /** Pinned release tag of the host build, when available. */
+  /** Pinned release tag of the chat engine (llama.cpp), when available. */
   version: string | null
-  /** Backend label of the host build (vulkan/metal/cpu), when available. */
+  /** Backend label of the chat engine (vulkan/metal/cpu), when available. */
   backend: string | null
+  /** Engine families with a host build but no binary yet (e.g. `llama_cpp`, `whisper_cpp`). */
+  missingFamilies: string[]
 }
 
 // ---- Document preview (post-MVP) ----

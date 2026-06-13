@@ -97,7 +97,6 @@ export interface PolicyJson {
   network: {
     allow_model_downloads: boolean
     allow_update_checks: boolean
-    allow_telemetry: boolean
   }
   workspace: {
     encryption_required: boolean
@@ -129,10 +128,12 @@ export interface PolicyJsonOptions {
 export function buildPolicyJson(opts: PolicyJsonOptions = {}): PolicyJson {
   const dev = opts.dev ?? false
   return {
+    // Telemetry has no knob — the app has no telemetry at all, so policy.json does not
+    // carry an `allow_telemetry` field (it would only ever be false). `buildPolicyStatus`
+    // hardcodes `telemetryAllowed: false`.
     network: {
       allow_model_downloads: false,
-      allow_update_checks: false,
-      allow_telemetry: false
+      allow_update_checks: false
     },
     workspace: {
       encryption_required: !dev,

@@ -365,11 +365,12 @@ export const de: Record<keyof typeof en, string> = {
   'models.download.titled': '{name} herunterladen ({size})',
   'models.download.resume': 'Download fortsetzen',
   'models.download.start': 'Herunterladen',
-  // In-App-Engine-(llama.cpp)-Installer-Banner — sichtbar, wenn die echte Engine fehlt.
+  // In-App-Engine-(llama.cpp + whisper.cpp)-Installer-Banner — sichtbar, wenn eine Engine fehlt.
   'models.engine.title': 'KI-Engine installieren',
   'models.engine.explain':
     'Modelle laufen in einem eingebauten Demo-Modus (sichtbar simulierte Antworten), bis die ' +
-    'KI-Engine installiert ist. Installiere sie einmal — starte dann ein Modell für echte Antworten.',
+    'KI-Engine installiert ist; die Spracheingabe braucht die Sprach-Engine. Installiere die ' +
+    'Engines einmal — starte dann ein Modell für echte Antworten.',
   'models.engine.install': 'KI-Engine installieren',
   'models.engine.retry': 'Erneut versuchen',
   'models.engine.progress': 'KI-Engine wird heruntergeladen… {pct} %',

@@ -324,12 +324,14 @@ export function ModelsScreen(): JSX.Element {
   }
 
   function card(m: ModelInfo): JSX.Element {
-    const active = isActive(m)
     const installed = m.state === 'installed' || m.state === 'running' || m.state === 'ready'
-    // Reranker/transcriber are availability-driven (they work automatically once
-    // installed): there is nothing to select or start, so those actions are
-    // not offered — selecting one would claim the CHAT slot.
-    const automatic = m.role === 'reranker' || m.role === 'transcriber'
+    // Embeddings/reranker/transcriber are availability-driven (they work automatically once
+    // installed — the embedder/reranker/transcriber pick their model by presence, not a UI
+    // selection): there is nothing to select or start, so neither those actions NOR the
+    // "Active" badge are shown (only the chat model has a user-chosen active slot). Starting
+    // a non-chat model would claim the CHAT runtime slot and throw.
+    const automatic = m.role === 'embeddings' || m.role === 'reranker' || m.role === 'transcriber'
+    const active = !automatic && isActive(m)
     // Zero-weights first run: the MAIN process computes whether this (missing, chat)
     // model may start the built-in mock (developer + policy gates).
     const canMockStart = Boolean(m.startableAsMock)

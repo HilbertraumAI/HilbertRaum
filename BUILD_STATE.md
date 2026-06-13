@@ -6,7 +6,32 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
-_Last updated: 2026-06-13 — **Onboarding fixes: network-on-by-default, in-app engine
+_Last updated: 2026-06-13 — **Onboarding follow-ups: whisper auto-install, embeddings card,
+policy cleanup, responsive screens (0.1.14 cont.).** (1) **Engine installer generalized to all
+families.** [`runtime-download.ts`](apps/desktop/src/main/services/runtime-download.ts) now drives
+an `ENGINE_FAMILIES` list — `llama_cpp` (chat, `llama-server`) **and `whisper_cpp` (voice,
+`whisper-cli`)`; one install fetches every missing family for the host (a family with no host build,
+e.g. whisper on mac/linux, is skipped). `EngineStatus` gained `missingFamilies`; the banner copy
+covers chat + voice. Doc: [`packaging.md`](docs/packaging.md) "In-app engine install" — how to add a
+future family. (2) **Embeddings model card bug.** The document-search (embeddings) card showed
+Select/Start (Start threw — only chat models are activatable) and an inconsistent "Active" badge.
+Embeddings is now treated as **automatic** (like reranker/transcriber): no Select/Start, no Active
+badge — "Used automatically once installed." Safe because retrieval uses `embedder.id` directly
+([`registerDocsIpc.ts`](apps/desktop/src/main/ipc/registerDocsIpc.ts) already passes it), not the
+`activeEmbeddingModelId` setting. (3) **policy.json cleanup.** `allow_telemetry` removed from the
+generated file ([`drive.ts`](apps/desktop/src/main/services/drive.ts) `buildPolicyJson` +
+prepare-drive `.ps1`/`.sh`) — the app has no telemetry and `buildPolicyStatus` hardcodes
+`telemetryAllowed:false`; the runtime parser still tolerates the field. **`encryption_required` was
+KEPT** — it is a deliberate, audited security control: `assertCommercialDrive` reads it from the
+file using the DEFAULT (non-STRICT) base **on purpose** (M-4), so a sold drive must *explicitly*
+declare encryption-required and cannot pass via the fallback. (Flagged to the user.) (4)
+**Responsive screens.** Only Chat adapted below ~1150px (its JS list-collapse); added
+[`styles.css`](apps/desktop/src/renderer/styles.css) `@media (max-width: 760px / 520px)` so Home /
+AI Model / Documents / Settings / Diagnostics also reflow — slim nav rail, tighter gutters, stacked
+`.kv` grids, wrapping card heads, scrollable segmented switchers. **Tests:** typecheck clean, build
+OK, `npm test` **1133 passed / 25 skipped** (+2 engine family tests)._
+
+_(prior) 2026-06-13 — **Onboarding fixes: network-on-by-default, in-app engine
 installer, voice discoverability.** Three issues found testing the first-run flow.
 **(1) Downloads possible by default:** `DEFAULT_SETTINGS.allowNetwork` flipped `false → true`
 ([`shared/types.ts`](apps/desktop/src/shared/types.ts)) so a fresh install can fetch models

@@ -55,8 +55,36 @@ function makeDrive(sha = REAL_SHA): { rootPath: string; manifestsDir: string } {
   return { rootPath, manifestsDir }
 }
 
+/** A drive whose runtime-sources.yaml pins BOTH the chat (llama) and voice (whisper) engines. */
+function makeMultiFamilyDrive(): { rootPath: string; manifestsDir: string } {
+  const rootPath = mkdtempSync(join(tmpdir(), 'hr-engine-root-'))
+  const manifestsDir = mkdtempSync(join(tmpdir(), 'hr-engine-manifests-'))
+  const build = (backend: string, family: string) => ({
+    os: HOST_OS,
+    arch: HOST_ARCH,
+    backend,
+    url: `https://example.test/${family}.zip`,
+    sha256: REAL_SHA,
+    extract_to: `runtime/${family === 'whisper_cpp' ? 'whisper.cpp' : 'llama.cpp'}/${HOST_OS}`
+  })
+  const yaml = stringify({
+    llama_cpp: { version: 'btest', builds: [build('cpu', 'llama_cpp')] },
+    whisper_cpp: { version: 'wtest', builds: [build('cpu', 'whisper_cpp')] }
+  })
+  writeFileSync(join(manifestsDir, 'runtime-sources.yaml'), yaml)
+  return { rootPath, manifestsDir }
+}
+
+const WHISPER_BIN = process.platform === 'win32' ? 'whisper-cli.exe' : 'whisper-cli'
+
 const okFetch = (async () =>
   new Response(BODY, { status: 200, headers: { 'content-length': String(BODY.length) } })) as unknown as FetchFn
+
+/** A fake extractor that drops the family-correct binary (keyed off the extract dir). */
+const familyExtract: ExtractFn = async (_archive, destDir) => {
+  const name = destDir.includes('whisper.cpp') ? WHISPER_BIN : BIN_NAME
+  await writeFile(join(destDir, name), 'binary')
+}
 
 /** A fake extractor that materializes the binary at the extract-dir root (no nesting). */
 const fakeExtract: ExtractFn = async (_archive, destDir) => {
@@ -91,6 +119,7 @@ describe('engineStatus + host build selection', () => {
     expect(status.available).toBe(true)
     expect(status.version).toBe('btest')
     expect(status.backend).toBe('cpu')
+    expect(status.missingFamilies).toContain('llama_cpp')
   })
 
   it('reports installed once the binary is on the drive', async () => {
@@ -199,5 +228,38 @@ describe('EngineDownloadManager install flow', () => {
     const mgr = new EngineDownloadManager({ fetchImpl: okFetch, extractImpl: fakeExtract })
     await runToEnd(mgr, (await mgr.start({ rootPath, manifestsDir, gates: ALLOW })).jobId)
     await expect(mgr.start({ rootPath, manifestsDir, gates: ALLOW })).rejects.toThrow()
+  })
+
+  it('installs ALL missing engine families (chat llama + voice whisper) in one job', async () => {
+    const { rootPath, manifestsDir } = makeMultiFamilyDrive()
+    expect(engineStatus(rootPath, manifestsDir).missingFamilies.sort()).toEqual([
+      'llama_cpp',
+      'whisper_cpp'
+    ])
+    const mgr = new EngineDownloadManager({ fetchImpl: okFetch, extractImpl: familyExtract })
+    const job = await runToEnd(mgr, (await mgr.start({ rootPath, manifestsDir, gates: ALLOW })).jobId)
+    expect(job.status).toBe('done')
+    expect(existsSync(join(rootPath, 'runtime', 'llama.cpp', HOST_OS, BIN_NAME))).toBe(true)
+    expect(existsSync(join(rootPath, 'runtime', 'whisper.cpp', HOST_OS, WHISPER_BIN))).toBe(true)
+    // Both engines now present → installed, nothing missing.
+    const status = engineStatus(rootPath, manifestsDir)
+    expect(status.installed).toBe(true)
+    expect(status.missingFamilies).toEqual([])
+  })
+
+  it('can install just one requested family (voice engine only)', async () => {
+    const { rootPath, manifestsDir } = makeMultiFamilyDrive()
+    const mgr = new EngineDownloadManager({ fetchImpl: okFetch, extractImpl: familyExtract })
+    const started = await mgr.start({
+      rootPath,
+      manifestsDir,
+      gates: ALLOW,
+      families: ['whisper_cpp']
+    })
+    await runToEnd(mgr, started.jobId)
+    expect(existsSync(join(rootPath, 'runtime', 'whisper.cpp', HOST_OS, WHISPER_BIN))).toBe(true)
+    expect(existsSync(join(rootPath, 'runtime', 'llama.cpp', HOST_OS, BIN_NAME))).toBe(false)
+    // The chat engine is still missing.
+    expect(engineStatus(rootPath, manifestsDir).missingFamilies).toEqual(['llama_cpp'])
   })
 })

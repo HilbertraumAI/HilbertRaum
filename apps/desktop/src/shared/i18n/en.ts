@@ -335,11 +335,12 @@ export const en = {
   'models.download.titled': 'Download {name} ({size})',
   'models.download.resume': 'Resume download',
   'models.download.start': 'Download',
-  // In-app engine (llama.cpp) installer banner — shown when the real engine is missing.
+  // In-app engine (llama.cpp + whisper.cpp) installer banner — shown when an engine is missing.
   'models.engine.title': 'Install the AI engine',
   'models.engine.explain':
     'Models run in a built-in demo mode (visibly simulated answers) until the AI engine ' +
-    'is installed. Install it once — then start a model for real answers.',
+    'is installed; voice dictation needs the voice engine. Install the engines once — then ' +
+    'start a model for real answers.',
   'models.engine.install': 'Install AI engine',
   'models.engine.retry': 'Try again',
   'models.engine.progress': 'Downloading the AI engine… {pct} %',
