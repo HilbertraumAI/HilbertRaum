@@ -260,7 +260,7 @@ describe('ChatScreen — Stop confirmation (M-U2)', () => {
     // pressed, mirroring the backend ending the (now-stopped) stream.
     let resolveSend!: () => void
     const sendChatMessage = vi.fn(
-      () => new Promise<void>((res) => { resolveSend = () => res() })
+      () => new Promise<Message>((res) => { resolveSend = () => res(msg({ content: 'partial' })) })
     )
     const stopGeneration = vi.fn(async () => {})
     stubApi({
@@ -323,6 +323,33 @@ describe('ChatScreen — no-model empty state (M-U3)', () => {
     expect(container.querySelector('.card')).toBeNull()
     expect(screen.getByRole('button', { name: 'Open AI Model' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Re-check' })).toBeInTheDocument()
+  })
+})
+
+describe('ChatScreen — offline indicator is App-controlled (M-U4)', () => {
+  it('shows the offline prop value in the header without self-fetching the policy', async () => {
+    // getPolicy is provided but should NOT drive the header when offline is passed in:
+    // even though the policy here says NOT offline, the App-owned offline=true wins.
+    const getPolicy = vi.fn(async () => ({ offlineMode: false }) as never)
+    stubApi({
+      listConversations: vi.fn(async () => [conv()]),
+      getRuntimeStatus: vi.fn(async () => runningStatus),
+      listMessages: vi.fn(async () => []),
+      getPolicy,
+      onToken: vi.fn(() => () => {}),
+      onReasoning: vi.fn(() => () => {}),
+      onScopeNotice: vi.fn(() => () => {})
+    })
+    render(
+      <ToastProvider>
+        <ChatScreen onNavigate={() => {}} offline={true} />
+      </ToastProvider>
+    )
+    await screen.findByText('My first chat')
+    // The header indicator reflects the controlled prop (Local · Offline), and the
+    // self-fetch path was skipped.
+    expect(screen.getByRole('button', { name: 'Local · Offline' })).toBeInTheDocument()
+    expect(getPolicy).not.toHaveBeenCalled()
   })
 })
 

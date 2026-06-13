@@ -57,9 +57,20 @@ interface Props {
   initialMode?: Mode
   /** Retrieval scope for the NEXT documents conversation ("Ask these documents"). */
   initialScopeDocumentIds?: string[] | null
+  /**
+   * Effective offline state, owned by App (M-U4: one ambient truth, guidelines §7).
+   * Passed to the header LocalIndicator so it agrees with the sidebar instead of
+   * self-fetching the policy at its own mount.
+   */
+  offline?: boolean
 }
 
-export function ChatScreen({ onNavigate, initialMode, initialScopeDocumentIds }: Props): JSX.Element {
+export function ChatScreen({
+  onNavigate,
+  initialMode,
+  initialScopeDocumentIds,
+  offline
+}: Props): JSX.Element {
   const { t } = useT()
   const [conversations, setConversations] = useState<Conversation[]>([])
   const [activeId, setActiveId] = useState<string | null>(null)
@@ -540,8 +551,9 @@ export function ChatScreen({ onNavigate, initialMode, initialScopeDocumentIds }:
             disabled={streaming}
           />
           <div className="chat-header-spacer" />
-          {/* Ambient "Local · Offline" signal (guidelines §7). */}
-          <LocalIndicator onNavigate={onNavigate} t={t} />
+          {/* Ambient "Local · Offline" signal (guidelines §7); offline owned by App
+              so the header and sidebar can never disagree (M-U4). */}
+          <LocalIndicator offline={offline} onNavigate={onNavigate} t={t} />
           <DropdownMenu.Root>
             <DropdownMenu.Trigger asChild>
               <button
