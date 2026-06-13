@@ -2,7 +2,6 @@ import { ipcMain, type IpcMainInvokeEvent } from 'electron'
 import { IPC, STREAM } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
 import {
-  DOC_TASK_BUSY_MESSAGE,
   type ChatOptions,
   type Conversation,
   type ConversationSearchResult,
@@ -15,7 +14,6 @@ import {
   deleteLastAssistantMessage,
   exportTranscript,
   generateAssistantMessage,
-  getConversation,
   listConversations,
   listMessages,
   maybeSetTitleFromFirstMessage,
@@ -25,6 +23,7 @@ import {
 import { tMain } from '../services/i18n'
 import { log } from '../services/logging'
 import { inFlightStreams } from './inflight'
+import { assertChatStreamReady, withChatStream } from './chat-stream'
 import { saveTextExport } from './save-export'
 
 // IPC for conversation CRUD + streaming chat (spec §9.1, §7.6).
@@ -104,31 +103,10 @@ export function registerChatIpc(ctx: AppContext): void {
       content: string,
       options?: ChatOptions
     ): Promise<Message> => {
-      const conv = getConversation(ctx.db, conversationId)
-      if (!conv) throw new Error(`Unknown conversation: ${conversationId}`)
-
-      const runtime = ctx.runtime.active()
-      if (!runtime) {
-        // No model loaded — surface a clear, recoverable error to the renderer.
-        // Guard throws here are ephemeral IPC emissions → tMain (i18n record §3.3);
-        // DOC_TASK_BUSY_MESSAGE below deliberately stays canonical English on the
-        // wire — the renderer recognizes it by exact match and display-maps it.
-        throw new Error(tMain('main.noModelRunning'))
-      }
-
-      // Strict one-at-a-time vs document tasks: the one local model serves either a
-      // chat answer or a task, never both. The shared copy lets the renderer offer a
-      // cancel option for the running task.
-      if (ctx.docTasks?.hasActiveTask()) {
-        throw new Error(DOC_TASK_BUSY_MESSAGE)
-      }
-
-      // One active stream per conversation. The renderer guards this too, but a second
-      // window / reload / non-UI caller must not clobber the in-flight canceller (which
-      // would orphan the first stream and corrupt the transcript).
-      if (inFlight.has(conversationId)) {
-        throw new Error(tMain('main.chat.streamInFlight'))
-      }
+      // Shared guard preamble + stream lifecycle (M-A2): conv exists, runtime active,
+      // no doc task / stream in flight. The DOC_TASK_BUSY_MESSAGE stays canonical English
+      // on the wire (renderer exact-match + display map).
+      const { runtime } = assertChatStreamReady(ctx, conversationId)
 
       const regenerate = options?.regenerate === true
       if (regenerate) {
@@ -152,38 +130,18 @@ export function registerChatIpc(ctx: AppContext): void {
           ? options.mode
           : undefined
 
-      const controller = new AbortController()
-      inFlight.set(conversationId, controller)
-      try {
-        const assistant = await generateAssistantMessage(ctx.db, runtime, conversationId, {
-          signal: controller.signal,
+      return withChatStream(event, conversationId, 'Chat generation failed', (signal, sendToken) =>
+        generateAssistantMessage(ctx.db, runtime, conversationId, {
+          signal,
           mode,
-          onToken: (token) => {
-            if (!event.sender.isDestroyed()) {
-              event.sender.send(STREAM.token(conversationId), token)
-            }
-          },
+          onToken: sendToken,
           onReasoning: (delta) => {
             if (!event.sender.isDestroyed()) {
               event.sender.send(STREAM.reasoning(conversationId), delta)
             }
           }
         })
-        if (!event.sender.isDestroyed()) {
-          event.sender.send(STREAM.done(conversationId), assistant)
-        }
-        return assistant
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err)
-        log.error('Chat generation failed', { conversationId, message })
-        if (!event.sender.isDestroyed()) {
-          event.sender.send(STREAM.error(conversationId), message)
-        }
-        throw err
-      } finally {
-        // Only clear our own entry — a later stream may already own this key.
-        if (inFlight.get(conversationId) === controller) inFlight.delete(conversationId)
-      }
+      )
     }
   )
 
