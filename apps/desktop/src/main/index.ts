@@ -27,12 +27,9 @@ import { RuntimeManager } from './services/runtime'
 import { createGpuCrashAutoFallback, createSelectingRuntimeFactory } from './services/runtime/factory'
 import { createCachedGpuProbe } from './services/runtime/gpu'
 import { EVENTS } from '../shared/ipc'
-import { createSelectedEmbedder, type EmbeddingModelInfo } from './services/embeddings/factory'
-import { createSelectedReranker, type RerankerModelInfo } from './services/reranker'
-import { createSelectedTranscriber, type TranscriberModelInfo } from './services/transcriber'
-import { createSelectedOcrEngine } from './services/ocr'
 import { rasterizePdfWithHiddenWindow } from './services/ocr/rasterizer'
-import { discoverManifests, resolveManifestsDir, weightPath } from './services/models'
+import { resolveManifestsDir } from './services/models'
+import { composeServices } from './services/compose-services'
 import type { AppContext } from './services/context'
 
 // Private AI Drive Lite — Electron main process (the "backend").
@@ -44,72 +41,10 @@ const isDev = !app.isPackaged
 let mainWindow: BrowserWindow | null = null
 let ctx: AppContext | null = null
 
-/**
- * Resolve the embeddings model (id + GGUF weight path) from the manifests so the real
- * E5 embedder can be selected when its weights are present. Settings live inside the
- * (possibly encrypted) DB and are unreadable before unlock, so we use the manifest's
- * default embeddings model rather than `activeEmbeddingModelId`. Returns null when no
- * embeddings manifest is found (→ the selector falls back to the mock embedder).
- */
-function resolveEmbeddingModel(manifestsDir: string | null, rootPath: string): EmbeddingModelInfo | null {
-  if (!manifestsDir) return null
-  try {
-    const { manifests } = discoverManifests(manifestsDir)
-    const found = manifests.find((m) => m.manifest.role === 'embeddings')
-    if (!found) return null
-    return {
-      id: found.manifest.id,
-      modelPath: weightPath(rootPath, found.manifest),
-      contextTokens: found.manifest.recommendedContextTokens
-    }
-  } catch {
-    return null
-  }
-}
-
-/**
- * Resolve the reranker model from the manifests — same manifest-driven,
- * pre-unlock-safe pattern as `resolveEmbeddingModel`. Returns null when no `reranker`
- * manifest exists (→ no reranker is selected; retrieval keeps today's ordering).
- */
-function resolveRerankerModel(manifestsDir: string | null, rootPath: string): RerankerModelInfo | null {
-  if (!manifestsDir) return null
-  try {
-    const { manifests } = discoverManifests(manifestsDir)
-    const found = manifests.find((m) => m.manifest.role === 'reranker')
-    if (!found) return null
-    return {
-      id: found.manifest.id,
-      modelPath: weightPath(rootPath, found.manifest),
-      contextTokens: found.manifest.recommendedContextTokens
-    }
-  } catch {
-    return null
-  }
-}
-
-/**
- * Resolve the transcriber model from the manifests — the `resolveRerankerModel`
- * pattern. Returns null when no `transcriber` manifest exists (→ no transcriber is
- * selected; audio imports fail per-file with friendly copy).
- */
-function resolveTranscriberModel(
-  manifestsDir: string | null,
-  rootPath: string
-): TranscriberModelInfo | null {
-  if (!manifestsDir) return null
-  try {
-    const { manifests } = discoverManifests(manifestsDir)
-    const found = manifests.find((m) => m.manifest.role === 'transcriber')
-    if (!found) return null
-    return {
-      id: found.manifest.id,
-      modelPath: weightPath(rootPath, found.manifest)
-    }
-  } catch {
-    return null
-  }
-}
+// The three model resolvers + the four availability-driven service selectors that used to
+// live inline here were extracted (M-A3): `resolveModelByRole` (services/resolve-model.ts)
+// collapses the embeddings/reranker/transcriber resolvers; `composeServices`
+// (services/compose-services.ts) builds the embedder/reranker/transcriber/OCR bundle.
 
 // Resolve the workspace/drive layout, open the database, and register IPC.
 // Runs once at startup, before the window loads.
@@ -244,33 +179,12 @@ function initBackend(): void {
     })
   )
   runtimeRef = runtime
-  const embeddingModel = resolveEmbeddingModel(manifestsDir, paths.rootPath)
-  const embedder = createSelectedEmbedder({
+  // The availability-driven services (embedder + reranker/transcriber/OCR) — built from
+  // the drive layout in one place (M-A3, services/compose-services.ts). The runtime/GPU
+  // wiring above stays inline because of its late-bound crash handler.
+  const { embedder, reranker, transcriber, ocrEngine } = composeServices({
     rootPath: paths.rootPath,
-    model: embeddingModel,
-    onSelect: (kind, reason) => log.info('Embedder backend selected', { kind, reason })
-  })
-  // The retrieval reranker — the third sidecar, selected only when binary +
-  // reranker GGUF exist (null otherwise; retrieval then keeps today's ordering).
-  const reranker = createSelectedReranker({
-    rootPath: paths.rootPath,
-    model: resolveRerankerModel(manifestsDir, paths.rootPath),
-    onSelect: (kind, reason) => log.info('Reranker backend selected', { kind, reason })
-  })
-  // The audio transcriber — the whisper.cpp CLI behind the Transcriber
-  // interface, selected only when binary + GGML weights exist (null otherwise; audio
-  // imports then fail per-file with the download-the-model copy).
-  const transcriber = createSelectedTranscriber({
-    rootPath: paths.rootPath,
-    model: resolveTranscriberModel(manifestsDir, paths.rootPath),
-    onSelect: (kind, reason) => log.info('Transcriber backend selected', { kind, reason })
-  })
-  // Local OCR — tesseract.js over the drive's vendored `ocr/` language
-  // files, selected only when those exist (null otherwise; photo imports then fail
-  // per-file and detected scans show the notice without the "Make searchable" offer).
-  const ocrEngine = createSelectedOcrEngine({
-    rootPath: paths.rootPath,
-    onSelect: (kind, reason) => log.info('OCR backend selected', { kind, reason })
+    manifestsDir
   })
 
   // Document task engine: one-at-a-time summary/translation/compare jobs. The
