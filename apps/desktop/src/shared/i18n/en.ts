@@ -311,7 +311,8 @@ export const en = {
   'models.state.running': 'Running',
   'models.hint.embeddings': 'Prepares your documents so you can ask about them.',
   'models.hint.reranker': 'Improves which document passages are used for answers.',
-  'models.hint.transcriber': 'Turns audio recordings into searchable text.',
+  'models.hint.transcriber':
+    'Turns audio recordings into searchable text — and unlocks the 🎤 voice-dictation button in chat.',
   'models.hint.small': 'Small and quick — fast answers on nearly any machine.',
   'models.hint.balanced': 'Balanced — works well on most laptops.',
   'models.hint.large': 'Large — strongest answers; needs a powerful machine.',
@@ -334,6 +335,19 @@ export const en = {
   'models.download.titled': 'Download {name} ({size})',
   'models.download.resume': 'Resume download',
   'models.download.start': 'Download',
+  // In-app engine (llama.cpp + whisper.cpp) installer banner — shown when an engine is missing.
+  'models.engine.title': 'Install the AI engine',
+  'models.engine.explain':
+    'Models run in a built-in demo mode (visibly simulated answers) until the AI engine ' +
+    'is installed; voice dictation needs the voice engine. Install the engines once — then ' +
+    'start a model for real answers.',
+  'models.engine.install': 'Install AI engine',
+  'models.engine.retry': 'Try again',
+  'models.engine.progress': 'Downloading the AI engine… {pct} %',
+  'models.engine.downloadingNoTotal': 'Downloading the AI engine…',
+  'models.engine.verifying': 'Verifying the AI engine…',
+  'models.engine.extracting': 'Unpacking the AI engine…',
+  'models.engine.installedNote': 'The AI engine is installed — start a model to use it.',
   // RAM-gate copy, composed of full clauses (spec §11.4 — never "your hardware is bad").
   'models.ram.needs': 'Needs at least {min} GB RAM',
   'models.ram.machine': ' — this computer has about {ram} GB',
@@ -828,6 +842,20 @@ export const en = {
   'main.download.interrupted':
     'The download was interrupted ({reason}). The finished part is kept — ' +
     'starting it again will resume where it stopped.',
+  'main.engine.alreadyRunning': 'The AI engine is already downloading.',
+  'main.engine.noSources': 'No engine sources were found on this drive (runtime-sources.yaml is missing).',
+  'main.engine.noHostBuild': 'No AI-engine build is available for this computer.',
+  'main.engine.alreadyInstalled': 'The AI engine is already installed.',
+  'main.engine.unknownJob': 'Unknown engine-download job.',
+  'main.engine.checksumMismatch':
+    'The downloaded engine did not match its expected checksum, so it was discarded. Please try again.',
+  'main.engine.fileMissing': 'The downloaded engine went missing before it could be verified.',
+  'main.engine.binaryMissing':
+    'The engine downloaded but could not be unpacked (the archive layout may have changed).',
+  'main.engine.extractFailed': 'The AI engine downloaded but could not be unpacked. Please try again.',
+  'main.engine.httpFailed':
+    'The engine download could not start ({reason}). Please check the connection and try again.',
+  'main.engine.interrupted': 'The engine download was interrupted ({reason}). Please try again.',
   'main.docs.locked': 'Workspace is locked. Unlock it to manage documents.',
   'main.docs.processing': 'This document is still being processed. Wait for the import to finish.',
   'main.docs.taskRunning': 'A task is running for this document. Cancel it or wait for it to finish.',

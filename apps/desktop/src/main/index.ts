@@ -19,6 +19,7 @@ import { documentsDir } from './services/ingestion'
 import { inFlightStreams } from './ipc/inflight'
 import { registerDictationIpc } from './ipc/registerDictationIpc'
 import { registerDownloadIpc } from './ipc/registerDownloadIpc'
+import { registerEngineIpc } from './ipc/registerEngineIpc'
 import { registerRagIpc } from './ipc/registerRagIpc'
 import { registerBenchmarkIpc, maybeRunFirstBenchmark } from './ipc/registerBenchmarkIpc'
 import { registerAuditIpc } from './ipc/registerAuditIpc'
@@ -250,6 +251,7 @@ function initBackend(): void {
   registerDocTasksIpc(ctx)
   registerDictationIpc(ctx)
   registerDownloadIpc(ctx)
+  registerEngineIpc(ctx)
   registerRagIpc(ctx)
   registerBenchmarkIpc(ctx)
   registerAuditIpc(ctx)

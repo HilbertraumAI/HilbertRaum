@@ -140,8 +140,7 @@ POLICY_JSON=$(cat <<EOF
 {
   "network": {
     "allow_model_downloads": false,
-    "allow_update_checks": false,
-    "allow_telemetry": false
+    "allow_update_checks": false
   },
   "workspace": {
     "encryption_required": $ENC_REQUIRED,

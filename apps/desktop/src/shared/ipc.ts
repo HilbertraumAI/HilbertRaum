@@ -71,6 +71,16 @@ export const IPC = {
   getDownloadJob: 'downloads:get',
   /** Cancel an in-flight download (the `.part` file is kept for a future resume). */
   cancelDownload: 'downloads:cancel',
+  // In-app engine (llama.cpp sidecar) downloader — fetches the real runtime so models
+  // stop falling back to the built-in demo runtime. Same gates as model downloads.
+  /** Is the llama.cpp engine installed, and can it be fetched for this host? */
+  getEngineStatus: 'engine:status',
+  /** Start fetching + extracting the host's llama-server build (gated: policy ∧ setting). */
+  downloadEngine: 'engine:download',
+  /** Poll the engine-download job's progress/status. */
+  getEngineJob: 'engine:getJob',
+  /** Cancel an in-flight engine download. */
+  cancelEngineDownload: 'engine:cancel',
   // Benchmark
   runBenchmark: 'benchmark:run',
   /**

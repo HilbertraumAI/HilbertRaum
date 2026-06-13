@@ -139,7 +139,12 @@ export interface PreflightResult {
 }
 
 export interface AppSettings {
-  /** Default false — no network in the core path (spec §3.6). */
+  /**
+   * Whether the user permits network access for model/engine downloads. Default TRUE so
+   * a fresh install can download new AI models out of the box (the policy ceiling is still
+   * authoritative — a commercial `policy.json` with `allow_model_downloads: false` keeps the
+   * app offline regardless). Telemetry is never gated by this and is always off.
+   */
   allowNetwork: boolean
   workspaceMode: WorkspaceMode
   activeModelId: string | null
@@ -221,7 +226,9 @@ export interface ChecksumCacheEntry {
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
-  allowNetwork: false,
+  // Network is PERMITTED by default so model/engine downloads work on a fresh install
+  // (the policy ceiling still wins — a commercial policy.json can force this back off).
+  allowNetwork: true,
   workspaceMode: 'plaintext_dev',
   activeModelId: null,
   activeEmbeddingModelId: null,
@@ -360,6 +367,52 @@ export interface DownloadJob {
   unverified: boolean
   /** Friendly failure reason when status === 'failed'. */
   error: string | null
+}
+
+// ---- In-app engine (llama.cpp sidecar) downloader -----------------------------------
+//
+// The in-app model downloader fetches model WEIGHTS; without the llama.cpp engine binary
+// a started model falls back to the built-in demo runtime (services/runtime/factory.ts).
+// This job fetches + verifies + extracts the host's prebuilt `llama-server` build from
+// model-manifests/runtime-sources.yaml into runtime/llama.cpp/<os>/ so real models run.
+// Same async-with-polling shape as DownloadJob; `extracting` is the extra archive step.
+
+export type EngineDownloadStatus =
+  | 'queued'
+  | 'downloading'
+  | 'verifying'
+  | 'extracting'
+  | 'done'
+  | 'failed'
+  | 'cancelled'
+
+export interface EngineDownloadJob {
+  jobId: string
+  status: EngineDownloadStatus
+  /** Bytes of the release archive downloaded so far. */
+  receivedBytes: number
+  /** Expected archive size (server Content-Length), or null. */
+  totalBytes: number | null
+  /** True when finished but the runtime-sources hash was a placeholder (cannot verify). */
+  unverified: boolean
+  /** Absolute path of the installed binary when status === 'done'. */
+  binaryPath: string | null
+  /** Friendly failure reason when status === 'failed'. */
+  error: string | null
+}
+
+/** Whether the engine binaries are installed and (if not) whether they can be fetched. */
+export interface EngineStatus {
+  /** Every fetchable engine family's binary is present on the drive (real runtimes ready). */
+  installed: boolean
+  /** At least one engine family has a build for this host (os/arch) → fetchable. */
+  available: boolean
+  /** Pinned release tag of the chat engine (llama.cpp), when available. */
+  version: string | null
+  /** Backend label of the chat engine (vulkan/metal/cpu), when available. */
+  backend: string | null
+  /** Engine families with a host build but no binary yet (e.g. `llama_cpp`, `whisper_cpp`). */
+  missingFamilies: string[]
 }
 
 // ---- Document preview (post-MVP) ----

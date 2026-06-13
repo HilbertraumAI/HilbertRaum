@@ -305,6 +305,9 @@ code, pre, kbd { font-family: var(--font-mono); }
 .download-progress { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
 .download-progress progress { flex: 1 1 160px; min-width: 120px; accent-color: var(--accent-600); }
 .download-progress .hint { margin: 0; flex-basis: 100%; }
+/* "Install the AI engine" banner body: stacked label + action/progress. */
+.engine-install { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+.engine-install progress { width: 100%; accent-color: var(--accent-600); }
 .btn.sm { padding: 5px 11px; font-size: 12px; min-height: 24px; }
 /* "Technical details" disclosure (guidelines §2/§3): checksums, paths, and
    runtime internals stay one click away, closed by default. */
@@ -923,6 +926,33 @@ code, pre, kbd { font-family: var(--font-mono); }
      the gutters tight so the 720px column has room to breathe. */
   .content { padding: 20px 20px; }
   .chat-layout { height: calc(100vh - 40px); }
+}
+
+/* ---- Narrow windows: keep EVERY screen usable when the window is resized small, not
+   just Chat (which collapses its history list in JS). These rules trim chrome, slim the
+   nav rail, stack the key/value grids, and let the segmented switchers scroll so nothing
+   on Home / AI Model / Documents / Settings / Diagnostics overflows the viewport. ---- */
+@media (max-width: 760px) {
+  .app-shell { grid-template-columns: 68px 1fr; }
+  .content { padding: 16px 14px; }
+  /* Stack key/value rows so a fixed 140px label never squeezes long values off-screen. */
+  .kv { grid-template-columns: 1fr; gap: 2px 0; }
+  .kv dt { margin-top: 8px; }
+  .kv dt:first-of-type { margin-top: 0; }
+  /* Title + status badges stack instead of crowding (model/document cards, dialog heads). */
+  .model-head,
+  .doc-head { flex-wrap: wrap; }
+  /* The settings/section segmented switcher scrolls instead of pushing past the edge. */
+  .seg { max-width: 100%; overflow-x: auto; }
+  .status-grid { gap: 10px; margin: 16px 0; }
+}
+@media (max-width: 520px) {
+  .app-shell { grid-template-columns: 60px 1fr; }
+  .content { padding: 12px 10px; }
+  .card { padding: 14px; }
+  h1 { font-size: 20px; }
+  /* On a phone-width window the centered column is the whole width. */
+  .status-grid { grid-template-columns: 1fr 1fr; }
 }
 
 /* Documents screen */
