@@ -4,6 +4,7 @@ import { describe, it, expect, vi, afterEach, beforeAll } from 'vitest'
 import { render, screen, cleanup } from '@testing-library/react'
 import { HomeScreen } from '../../src/renderer/screens/HomeScreen'
 import { ChatScreen } from '../../src/renderer/screens/ChatScreen'
+import { DocumentsScreen } from '../../src/renderer/screens/DocumentsScreen'
 import { I18nProvider, UI_LANGUAGE_STORAGE_KEY } from '../../src/renderer/i18n'
 import { t } from '../../src/shared/i18n'
 import type { AppStatus, RuntimeStatus } from '../../src/shared/types'
@@ -100,5 +101,21 @@ describe('German render smokes (Phase 40)', () => {
     expect(
       screen.getByRole('button', { name: t('de', 'chat.example.summarize') })
     ).toBeInTheDocument()
+  })
+
+  it('DocumentsScreen renders German (empty state)', async () => {
+    stubApi({
+      listDocuments: vi.fn(async () => []),
+      getAppStatus: vi.fn(async () => appStatus())
+    })
+    render(german(<DocumentsScreen />))
+
+    expect(
+      await screen.findByRole('heading', { name: t('de', 'docs.title') })
+    ).toBeInTheDocument()
+    expect(await screen.findByText(t('de', 'docs.empty.title'))).toBeInTheDocument()
+    expect(
+      screen.getAllByRole('button', { name: t('de', 'docs.import.files') }).length
+    ).toBeGreaterThan(0)
   })
 })

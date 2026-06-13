@@ -19,6 +19,8 @@ import {
   subscribeDocTask
 } from '../lib/doctasks'
 import { friendlyIpcError } from '../lib/errors'
+import { useT, type I18n } from '../i18n'
+import type { MessageKey, UiLanguage } from '@shared/i18n'
 
 // Documents screen (spec §7.7). Import files or a folder via the OS picker
 // (opened in the main process), watch each file move through the ingestion statuses, and
@@ -27,15 +29,16 @@ import { friendlyIpcError } from '../lib/errors'
 
 // Status pills: icon + word, never color-only (guidelines §6). Labels speak
 // human — the pipeline stages (extract/chunk/embed) read as "Reading"/"Preparing";
-// the raw stage names stay in logs/Diagnostics.
-const STATUS_BADGE: Record<IngestionStatus, { label: string; tone: BadgeTone; icon: string }> = {
-  queued: { label: 'Waiting', tone: 'accent', icon: '…' },
-  extracting: { label: 'Reading', tone: 'accent', icon: '⟳' },
-  chunking: { label: 'Preparing', tone: 'accent', icon: '⟳' },
-  embedding: { label: 'Preparing', tone: 'accent', icon: '⟳' },
-  indexed: { label: 'Ready', tone: 'success', icon: '✓' },
-  failed: { label: 'Failed', tone: 'error', icon: '⚠' },
-  deleted: { label: 'Deleted', tone: 'neutral', icon: '—' }
+// the raw stage names stay in logs/Diagnostics. Label values are MessageKeys
+// resolved at render (i18n-plan §5).
+const STATUS_BADGE: Record<IngestionStatus, { labelKey: MessageKey; tone: BadgeTone; icon: string }> = {
+  queued: { labelKey: 'docs.status.queued', tone: 'accent', icon: '…' },
+  extracting: { labelKey: 'docs.status.extracting', tone: 'accent', icon: '⟳' },
+  chunking: { labelKey: 'docs.status.preparing', tone: 'accent', icon: '⟳' },
+  embedding: { labelKey: 'docs.status.preparing', tone: 'accent', icon: '⟳' },
+  indexed: { labelKey: 'docs.status.indexed', tone: 'success', icon: '✓' },
+  failed: { labelKey: 'docs.status.failed', tone: 'error', icon: '⚠' },
+  deleted: { labelKey: 'docs.status.deleted', tone: 'neutral', icon: '—' }
 }
 
 const ACTIVE_STATUSES: ReadonlySet<IngestionStatus> = new Set([
@@ -50,13 +53,13 @@ const ACTIVE_STATUSES: ReadonlySet<IngestionStatus> = new Set([
  * listening to a recording takes real time — with the coarse percent the
  * docs IPC merges in while whisper works.
  */
-function badgeFor(d: DocumentInfo): { label: string; tone: BadgeTone; icon: string } {
+function badgeFor(d: DocumentInfo, t: I18n['t']): { label: string; tone: BadgeTone; icon: string } {
   const base = STATUS_BADGE[d.status]
   if (d.status === 'extracting' && d.mimeType?.startsWith('audio/')) {
     const pct = d.transcriptionProgress != null ? ` ${d.transcriptionProgress}%` : ''
-    return { ...base, label: `Transcribing…${pct}` }
+    return { tone: base.tone, icon: base.icon, label: `${t('docs.status.transcribing')}${pct}` }
   }
-  return base
+  return { tone: base.tone, icon: base.icon, label: t(base.labelKey) }
 }
 
 /**
@@ -67,24 +70,27 @@ function badgeFor(d: DocumentInfo): { label: string; tone: BadgeTone; icon: stri
 const LARGE_AUDIO_CONFIRM_BYTES = 50 * 1024 * 1024
 
 // Per-kind busy copy for the row spinner (guidelines §7 — speak human, no jargon).
-const TASK_BUSY_LABEL: Record<DocTaskKind, string> = {
-  summary: 'Summarizing…',
-  translation: 'Translating…',
-  compare: 'Comparing…',
-  ocr: 'Reading the scan…'
+const TASK_BUSY_LABEL: Record<DocTaskKind, MessageKey> = {
+  summary: 'docs.task.summaryBusy',
+  translation: 'docs.task.translationBusy',
+  compare: 'docs.task.compareBusy',
+  ocr: 'docs.task.ocrBusy'
 }
-const TASK_BUSY_TITLE: Record<DocTaskKind, string> = {
-  summary: 'The summary is being written',
-  translation: 'The translation is being written',
-  compare: 'The comparison is being written',
-  ocr: 'The scanned pages are being read'
+const TASK_BUSY_TITLE: Record<DocTaskKind, MessageKey> = {
+  summary: 'docs.task.summaryBusyTitle',
+  translation: 'docs.task.translationBusyTitle',
+  compare: 'docs.task.compareBusyTitle',
+  ocr: 'docs.task.ocrBusyTitle'
 }
 
-function formatSize(bytes: number | null): string {
+// Decimal separator follows the UI language (i18n-plan §5); units stay as-is.
+function formatSize(bytes: number | null, lang: UiLanguage): string {
   if (bytes == null) return '—'
   if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+  const fmt = (n: number): string =>
+    n.toLocaleString(lang, { minimumFractionDigits: 1, maximumFractionDigits: 1, useGrouping: false })
+  if (bytes < 1024 * 1024) return `${fmt(bytes / 1024)} KB`
+  return `${fmt(bytes / (1024 * 1024))} MB`
 }
 
 interface Props {
@@ -93,6 +99,7 @@ interface Props {
 }
 
 export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
+  const { t, tCount, lang } = useT()
   const [docs, setDocs] = useState<DocumentInfo[] | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -174,7 +181,7 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
       await refresh()
       if (job.documentIds.length === 0) {
         setBusy(null)
-        setError('No supported documents were found in that selection.')
+        setError(t('docs.error.noSupported'))
         return
       }
       watchJob(job.jobId)
@@ -316,7 +323,7 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
 
   /** A source document's title for a provenance line (the source may be gone). */
   function titleOf(id: string): string {
-    return docs?.find((x) => x.id === id)?.title ?? 'a removed document'
+    return docs?.find((x) => x.id === id)?.title ?? t('docs.removedDocFallback')
   }
 
   /** Quiet provenance line for a generated document (translation or comparison). */
@@ -326,13 +333,17 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
       const [a, b] = d.origin.comparedFrom
       return (
         <>
-          Comparison of <b>{titleOf(a)}</b> and <b>{titleOf(b)}</b>
+          {t('docs.provenance.compareBefore')}
+          <b>{titleOf(a)}</b>
+          {t('docs.provenance.compareMiddle')}
+          <b>{titleOf(b)}</b>
         </>
       )
     }
     return (
       <>
-        Translated from <b>{titleOf(d.origin.translatedFrom)}</b>
+        {t('docs.provenance.translatedBefore')}
+        <b>{titleOf(d.origin.translatedFrom)}</b>
       </>
     )
   }
@@ -370,77 +381,74 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
 
   return (
     <div className="screen">
-      <h1>Documents</h1>
-      <p className="lead">
-        Import documents to ask questions about them. Each file is copied into your workspace
-        and prepared for search — everything stays on this drive. Ask from the Chat
-        screen&apos;s &quot;Ask my documents&quot; mode.
-      </p>
+      <h1>{t('docs.title')}</h1>
+      <p className="lead">{t('docs.lead')}</p>
 
       {/* When the list is empty the EmptyState below carries the primary action. */}
       {!empty && (
         <div className="actions">
           <Button variant="primary" disabled={busy === 'import'} onClick={() => void onImport('files')}>
-            {busy === 'import' ? 'Importing…' : 'Import files'}
+            {busy === 'import' ? t('docs.import.busy') : t('docs.import.files')}
           </Button>
           <Button disabled={busy === 'import'} onClick={() => void onImport('folder')}>
-            Import folder
+            {t('docs.import.folder')}
           </Button>
           <Button size="sm" disabled={busy !== null} onClick={() => void refresh()}>
-            Refresh
+            {t('docs.refresh')}
           </Button>
           {onAskSelected && selected.size > 0 && (
             <Button
               variant="primary"
               disabled={busy !== null}
-              title="Open a document Q&A scoped to the selected documents"
+              title={t('docs.askSelectedTitle')}
               onClick={() => onAskSelected([...selected])}
             >
-              Ask these documents ({selected.size})
+              {t('docs.askSelected', { count: selected.size })}
             </Button>
           )}
           {selected.size === 2 && (
             <Button
               disabled={busy !== null || activeTask !== null}
-              title="Write a comparison of the two selected documents with the local model — nothing leaves this drive"
+              title={t('docs.compareBtnTitle')}
               onClick={() => void onCompare()}
             >
-              Compare (2)
+              {t('docs.compareBtn')}
             </Button>
           )}
           {staleDocs.length > 1 && (
             <Button
               disabled={busy !== null || anyActive}
-              title="Re-index every document that was indexed with a different search model"
+              title={t('docs.reindexAllTitle')}
               onClick={() => void onReindexAllStale()}
             >
-              {busy === 'reindex-all' ? 'Re-indexing…' : `Re-index all (${staleDocs.length})`}
+              {busy === 'reindex-all'
+                ? t('docs.reindexBusy')
+                : t('docs.reindexAll', { count: staleDocs.length })}
             </Button>
           )}
         </div>
       )}
 
       <p className="hint" style={{ marginTop: 10 }}>
-        Supported: TXT, Markdown, PDF, DOCX, CSV — audio recordings (WAV, MP3, FLAC, OGG),
-        which are transcribed on this drive
-        {ocrAvailable && ', and photos of pages (PNG, JPG), which are read on this drive'}
+        {t('docs.supported.base')}
+        {ocrAvailable && t('docs.supported.ocrExtra')}
         .{' '}
-        {anyActive && 'Preparing your documents so you can ask about them…'}
+        {anyActive && t('docs.preparing')}
       </p>
 
       {error && <Banner tone="error">{error}</Banner>}
 
       {empty && (
         <EmptyState
-          title="No documents yet"
-          line="Import files to ask questions about them — everything stays on this drive."
+          title={t('docs.empty.title')}
+          line={t('docs.empty.line')}
           action={
             <>
               <Button variant="primary" disabled={busy === 'import'} onClick={() => void onImport('files')}>
-                {busy === 'import' ? 'Importing…' : 'Import files'}
+                {busy === 'import' ? t('docs.import.busy') : t('docs.import.files')}
               </Button>
               <Button disabled={busy === 'import'} onClick={() => void onImport('folder')}>
-                Import folder
+                {t('docs.import.folder')}
               </Button>
             </>
           }
@@ -455,31 +463,31 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
                 type="checkbox"
                 className="doc-select"
                 checked={selected.has(d.id)}
-                aria-label={`Select ${d.title} for asking`}
-                title="Select to ask only chosen documents"
+                aria-label={t('docs.selectAria', { title: d.title })}
+                title={t('docs.selectTitle')}
                 onChange={() => toggleSelected(d.id)}
               />
             )}
             <div className="doc-title" title={d.originalPath ?? d.title}>
               {d.title}
             </div>
-            <Badge tone={badgeFor(d).tone} icon={badgeFor(d).icon}>
-              {badgeFor(d).label}
+            <Badge tone={badgeFor(d, t).tone} icon={badgeFor(d, t).icon}>
+              {badgeFor(d, t).label}
             </Badge>
           </div>
           <div className="doc-meta">
             <span>
-              Size <b>{formatSize(d.sizeBytes)}</b>
+              {t('docs.meta.size')} <b>{formatSize(d.sizeBytes, lang)}</b>
             </span>
             <span>
-              Sections <b>{d.chunkCount}</b>
+              {t('docs.meta.sections')} <b>{d.chunkCount}</b>
             </span>
             <span>
-              Type <b>{d.mimeType ?? '—'}</b>
+              {t('docs.meta.type')} <b>{d.mimeType ?? '—'}</b>
             </span>
             {d.summary && (
               <span>
-                Summary <b>✓</b>
+                {t('docs.meta.summary')} <b>✓</b>
               </span>
             )}
           </div>
@@ -490,27 +498,26 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
           )}
           {d.status === 'failed' && d.errorMessage && (
             <Banner tone={d.scanDetected ? 'warning' : 'error'}>
+              {/* The persisted error_message renders AS-IS — the display map that
+                  translates the known canonical strings is Phase 41 (D-L4). */}
               {d.errorMessage}
-              {d.scanDetected &&
-                (ocrAvailable
-                  ? ' Use "Make searchable (OCR)" below to read the pages on this drive.'
-                  : ' Making it searchable needs the OCR files, which are not on this drive.')}
+              {d.scanDetected && (
+                <>
+                  {' '}
+                  {ocrAvailable ? t('docs.scan.ocrOffer') : t('docs.scan.ocrMissing')}
+                </>
+              )}
             </Banner>
           )}
-          {d.staleEmbeddings && (
-            <Banner tone="warning">
-              This document was prepared with a different search model — re-index it so answers
-              can find it.
-            </Banner>
-          )}
+          {d.staleEmbeddings && <Banner tone="warning">{t('docs.stale.banner')}</Banner>}
           <div className="doc-actions">
             <Button
               size="sm"
               disabled={busy !== null || previewLoading || ACTIVE_STATUSES.has(d.status)}
               onClick={() => void onPreview(d)}
-              title="Read the extracted text (read-only; nothing leaves the app)"
+              title={t('docs.previewTitle')}
             >
-              {previewLoading ? 'Opening…' : 'Preview'}
+              {previewLoading ? t('docs.previewBusy') : t('docs.preview')}
             </Button>
             {/* "Make searchable (OCR)" for a detected scan. The same
                 slot shows the busy/cancel pair while the OCR task runs. */}
@@ -520,14 +527,14 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
               activeTask.documentIds.includes(d.id) &&
               !isDocTaskTerminal(activeTask.status) ? (
                 <>
-                  <Button size="sm" disabled title={TASK_BUSY_TITLE[activeTask.kind]}>
-                    <span className="spinner" /> {TASK_BUSY_LABEL[activeTask.kind]}
+                  <Button size="sm" disabled title={t(TASK_BUSY_TITLE[activeTask.kind])}>
+                    <span className="spinner" /> {t(TASK_BUSY_LABEL[activeTask.kind])}
                     {activeTask.status && activeTask.status.progress.stepsTotal > 1
                       ? ` (${activeTask.status.progress.stepsDone}/${activeTask.status.progress.stepsTotal})`
                       : ''}
                   </Button>
-                  <Button size="sm" onClick={() => void cancelActiveDocTask()} title="Stop reading the scan">
-                    Cancel
+                  <Button size="sm" onClick={() => void cancelActiveDocTask()} title={t('docs.cancelOcrTitle')}>
+                    {t('docs.cancel')}
                   </Button>
                 </>
               ) : (
@@ -535,9 +542,9 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
                   size="sm"
                   disabled={busy !== null || activeTask !== null}
                   onClick={() => void onMakeSearchable(d)}
-                  title="Read the scanned pages with local text recognition — nothing leaves this drive"
+                  title={t('docs.makeSearchableTitle')}
                 >
-                  Make searchable (OCR)
+                  {t('docs.makeSearchable')}
                 </Button>
               ))}
             {d.status === 'indexed' &&
@@ -546,14 +553,14 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
               activeTask.documentIds.includes(d.id) &&
               !isDocTaskTerminal(activeTask.status) ? (
                 <>
-                  <Button size="sm" disabled title={TASK_BUSY_TITLE[activeTask.kind]}>
-                    <span className="spinner" /> {TASK_BUSY_LABEL[activeTask.kind]}
+                  <Button size="sm" disabled title={t(TASK_BUSY_TITLE[activeTask.kind])}>
+                    <span className="spinner" /> {t(TASK_BUSY_LABEL[activeTask.kind])}
                     {activeTask.status && activeTask.status.progress.stepsTotal > 1
                       ? ` (${activeTask.status.progress.stepsDone}/${activeTask.status.progress.stepsTotal})`
                       : ''}
                   </Button>
-                  <Button size="sm" onClick={() => void cancelActiveDocTask()} title="Stop the task">
-                    Cancel
+                  <Button size="sm" onClick={() => void cancelActiveDocTask()} title={t('docs.cancelTaskTitle')}>
+                    {t('docs.cancel')}
                   </Button>
                 </>
               ) : (
@@ -562,17 +569,17 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
                     size="sm"
                     disabled={busy !== null || activeTask !== null}
                     onClick={() => void onSummarize(d)}
-                    title="Write a summary with the local model — nothing leaves this drive"
+                    title={t('docs.summarizeTitle')}
                   >
-                    {d.summary ? 'Summarize again' : 'Summarize'}
+                    {d.summary ? t('docs.summarizeAgain') : t('docs.summarize')}
                   </Button>
                   <Button
                     size="sm"
                     disabled={busy !== null || activeTask !== null}
                     onClick={() => setTranslateDoc(d)}
-                    title="Translate with the local model — nothing leaves this drive"
+                    title={t('docs.translateTitle')}
                   >
-                    Translate
+                    {t('docs.translate')}
                   </Button>
                 </>
               ))}
@@ -581,9 +588,9 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
                 size="sm"
                 disabled={busy !== null || ACTIVE_STATUSES.has(d.status)}
                 onClick={() => void onExport(d)}
-                title="Save this document as a Markdown file"
+                title={t('docs.exportTitle')}
               >
-                Export
+                {t('docs.export')}
               </Button>
             )}
             <Button
@@ -592,9 +599,9 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
                 busy !== null || ACTIVE_STATUSES.has(d.status) || (activeTask?.documentIds.includes(d.id) ?? false)
               }
               onClick={() => void run(`reindex-${d.id}`, () => window.api.reindexDocument(d.id))}
-              title="Read and prepare the stored copy again"
+              title={t('docs.reindexTitle')}
             >
-              {busy === `reindex-${d.id}` ? 'Re-indexing…' : 'Re-index'}
+              {busy === `reindex-${d.id}` ? t('docs.reindexBusy') : t('docs.reindex')}
             </Button>
             <Button
               size="sm"
@@ -603,7 +610,7 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
               }
               onClick={() => setConfirmDelete(d)}
             >
-              Delete
+              {t('docs.delete')}
             </Button>
           </div>
         </div>
@@ -611,8 +618,8 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
 
       <ConfirmDialog
         open={confirmAudio != null}
-        title="Import large audio?"
-        confirmLabel="Import and transcribe"
+        title={t('docs.audioConfirm.title')}
+        confirmLabel={t('docs.audioConfirm.confirm')}
         onConfirm={() => {
           const pending = confirmAudio
           setConfirmAudio(null)
@@ -621,19 +628,21 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
         onCancel={() => setConfirmAudio(null)}
       >
         <p className="hint">
-          {confirmAudio &&
-            `This selection contains ${confirmAudio.audioFileCount} audio ${
-              confirmAudio.audioFileCount === 1 ? 'recording' : 'recordings'
-            } (${formatSize(confirmAudio.audioBytes)}). `}
-          Each recording is copied into your workspace and transcribed on this drive —
-          a long recording can take a while. You can keep using the app meanwhile.
+          {confirmAudio && (
+            <>
+              {tCount('docs.audioConfirm.contains', confirmAudio.audioFileCount, {
+                size: formatSize(confirmAudio.audioBytes, lang)
+              })}{' '}
+            </>
+          )}
+          {t('docs.audioConfirm.body')}
         </p>
       </ConfirmDialog>
 
       <ConfirmDialog
         open={confirmDelete != null}
-        title={`Delete "${confirmDelete?.title ?? ''}"?`}
-        confirmLabel="Delete"
+        title={t('docs.deleteConfirm.title', { title: confirmDelete?.title ?? '' })}
+        confirmLabel={t('docs.delete')}
         onConfirm={() => {
           const d = confirmDelete
           setConfirmDelete(null)
@@ -641,32 +650,27 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
         }}
         onCancel={() => setConfirmDelete(null)}
       >
-        <p className="hint">
-          This permanently removes the document, its extracted text, and its search index from
-          your workspace. The original file outside the workspace is not touched.
-        </p>
+        <p className="hint">{t('docs.deleteConfirm.body')}</p>
       </ConfirmDialog>
 
       {translateDoc && (
         <Modal
           open
-          title={`Translate "${translateDoc.title}"`}
-          ariaLabel={`Translate ${translateDoc.title}`}
+          title={t('docs.translateModal.title', { title: translateDoc.title })}
+          ariaLabel={t('docs.translateModal.aria', { title: translateDoc.title })}
           onClose={() => setTranslateDoc(null)}
         >
           <p className="hint" style={{ marginTop: 0 }}>
-            The local model writes a translated copy as a new document — searchable and
-            askable like any import, and nothing leaves this drive. Machine translations
-            can contain errors.
+            {t('docs.translateModal.hint')}
           </p>
           <div className="actions">
             <Button variant="primary" onClick={() => void onTranslate(translateDoc, 'de')}>
-              To German (Deutsch)
+              {t('docs.translateModal.toGerman')}
             </Button>
             <Button variant="primary" onClick={() => void onTranslate(translateDoc, 'en')}>
-              To English
+              {t('docs.translateModal.toEnglish')}
             </Button>
-            <Button onClick={() => setTranslateDoc(null)}>Cancel</Button>
+            <Button onClick={() => setTranslateDoc(null)}>{t('docs.cancel')}</Button>
           </div>
         </Modal>
       )}
@@ -694,10 +698,10 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
 }
 
 /** "Generated by <model> · <date>" — the summary attribution line. */
-function summaryAttribution(s: DocumentSummary): string {
+function summaryAttribution(s: DocumentSummary, t: I18n['t'], lang: UiLanguage): string {
   const date = s.createdAt ? new Date(s.createdAt) : null
-  const when = date && !Number.isNaN(date.getTime()) ? date.toLocaleDateString() : ''
-  return `Generated by ${s.modelId}${when ? ` · ${when}` : ''}`
+  const when = date && !Number.isNaN(date.getTime()) ? date.toLocaleDateString(lang) : ''
+  return `${t('docs.previewModal.generatedBy', { model: s.modelId })}${when ? ` · ${when}` : ''}`
 }
 
 /**
@@ -726,15 +730,21 @@ function PreviewModal({
   onRegenerate?: () => void
   onClose: () => void
 }): JSX.Element {
+  const { t, tCount, lang } = useT()
   return (
-    <Modal open title={preview.title} ariaLabel={`Preview of ${preview.title}`} width="wide" onClose={onClose}>
+    <Modal
+      open
+      title={preview.title}
+      ariaLabel={t('docs.previewModal.aria', { title: preview.title })}
+      width="wide"
+      onClose={onClose}
+    >
       <p className="hint" style={{ margin: '0 0 8px' }}>
-        Read-only extracted text — this is what document search and answers are based on.
+        {t('docs.previewModal.hint')}
       </p>
       {ocr && (
         <p className="hint" style={{ margin: '0 0 8px' }}>
-          Text recognized on this drive (OCR) — {ocr.pageCount}{' '}
-          {ocr.pageCount === 1 ? 'page' : 'pages'}. Recognition can contain errors.
+          {tCount('docs.previewModal.ocrInfo', ocr.pageCount)}
         </p>
       )}
       {originLine && (
@@ -744,22 +754,19 @@ function PreviewModal({
       )}
       {summary && (
         <details className="doc-summary" open>
-          <summary>Summary</summary>
+          <summary>{t('docs.previewModal.summary')}</summary>
           <div className="doc-summary-body">
             <p className="hint" style={{ margin: 0 }}>
-              {summaryAttribution(summary)}
+              {summaryAttribution(summary, t, lang)}
             </p>
             {summary.truncated && (
-              <Banner tone="warning">
-                This document is long — the summary covers its beginning. The rest is still
-                searchable and answerable in chat.
-              </Banner>
+              <Banner tone="warning">{t('docs.previewModal.truncated')}</Banner>
             )}
             <div className="preview-text">{summary.text}</div>
             {onRegenerate && (
               <div className="actions" style={{ marginTop: 4 }}>
                 <Button size="sm" disabled={regenerateDisabled} onClick={onRegenerate}>
-                  Regenerate
+                  {t('docs.previewModal.regenerate')}
                 </Button>
               </div>
             )}
@@ -768,13 +775,15 @@ function PreviewModal({
       )}
       <div className="modal-body">
         {preview.segments.length === 0 && (
-          <p className="hint">No text could be extracted from this document.</p>
+          <p className="hint">{t('docs.previewModal.noText')}</p>
         )}
         {preview.segments.map((s, i) => (
           <div key={i} className="preview-segment">
             {(s.pageNumber != null || s.sectionLabel) && (
               <div className="preview-label">
-                {s.pageNumber != null ? `Page ${s.pageNumber}` : s.sectionLabel}
+                {s.pageNumber != null
+                  ? t('docs.previewModal.page', { page: s.pageNumber })
+                  : s.sectionLabel}
               </div>
             )}
             <div className="preview-text">{s.text}</div>

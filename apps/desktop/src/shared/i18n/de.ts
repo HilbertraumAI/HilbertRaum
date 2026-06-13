@@ -184,6 +184,127 @@ export const de: Record<keyof typeof en, string> = {
     'Das Mikrofon konnte nicht verwendet werden. Prüf die Mikrofon-Einstellungen deines ' +
     'Systems und versuch es dann noch einmal.',
 
+  // ---- Documents ----
+  'docs.title': 'Dokumente',
+  'docs.lead':
+    'Importiere Dokumente, um Fragen dazu zu stellen. Jede Datei wird in deinen ' +
+    'Arbeitsbereich kopiert und für die Suche vorbereitet — alles bleibt auf diesem ' +
+    'Laufwerk. Frag über den Modus „Meine Dokumente fragen“ im Chat.',
+  'docs.status.queued': 'Wartet',
+  'docs.status.extracting': 'Liest',
+  'docs.status.preparing': 'Bereitet vor',
+  'docs.status.indexed': 'Bereit',
+  'docs.status.failed': 'Fehlgeschlagen',
+  'docs.status.deleted': 'Gelöscht',
+  'docs.status.transcribing': 'Transkribiert…',
+  'docs.task.summaryBusy': 'Fasst zusammen…',
+  'docs.task.translationBusy': 'Übersetzt…',
+  'docs.task.compareBusy': 'Vergleicht…',
+  'docs.task.ocrBusy': 'Liest den Scan…',
+  'docs.task.summaryBusyTitle': 'Die Zusammenfassung wird geschrieben',
+  'docs.task.translationBusyTitle': 'Die Übersetzung wird geschrieben',
+  'docs.task.compareBusyTitle': 'Der Vergleich wird geschrieben',
+  'docs.task.ocrBusyTitle': 'Die gescannten Seiten werden gelesen',
+  'docs.error.noSupported': 'In dieser Auswahl wurden keine unterstützten Dokumente gefunden.',
+  'docs.removedDocFallback': 'einem entfernten Dokument',
+  'docs.provenance.compareBefore': 'Vergleich von ',
+  'docs.provenance.compareMiddle': ' und ',
+  'docs.provenance.translatedBefore': 'Übersetzt aus ',
+  'docs.import.busy': 'Wird importiert…',
+  'docs.import.files': 'Dateien importieren',
+  'docs.import.folder': 'Ordner importieren',
+  'docs.refresh': 'Aktualisieren',
+  'docs.askSelected': 'Diese Dokumente fragen ({count})',
+  'docs.askSelectedTitle': 'Ein Dokument-Q&A nur mit den ausgewählten Dokumenten öffnen',
+  'docs.compareBtn': 'Vergleichen (2)',
+  'docs.compareBtnTitle':
+    'Einen Vergleich der beiden ausgewählten Dokumente mit dem lokalen Modell schreiben — ' +
+    'nichts verlässt dieses Laufwerk',
+  'docs.reindexAll': 'Alle neu indexieren ({count})',
+  'docs.reindexAllTitle':
+    'Jedes Dokument neu indexieren, das mit einem anderen Suchmodell indexiert wurde',
+  'docs.supported.base':
+    'Unterstützt: TXT, Markdown, PDF, DOCX, CSV — Audioaufnahmen (WAV, MP3, FLAC, OGG), ' +
+    'die auf diesem Laufwerk transkribiert werden',
+  'docs.supported.ocrExtra':
+    ' sowie Fotos von Seiten (PNG, JPG), die auf diesem Laufwerk gelesen werden',
+  'docs.preparing': 'Deine Dokumente werden vorbereitet, damit du Fragen dazu stellen kannst…',
+  'docs.empty.title': 'Noch keine Dokumente',
+  'docs.empty.line':
+    'Importiere Dateien, um Fragen dazu zu stellen — alles bleibt auf diesem Laufwerk.',
+  'docs.selectAria': '{title} zum Fragen auswählen',
+  'docs.selectTitle': 'Auswählen, um nur ausgewählte Dokumente zu fragen',
+  'docs.meta.size': 'Größe',
+  'docs.meta.sections': 'Abschnitte',
+  'docs.meta.type': 'Typ',
+  'docs.meta.summary': 'Zusammenfassung',
+  'docs.scan.ocrOffer':
+    'Nutze unten „Durchsuchbar machen (OCR)“, um die Seiten auf diesem Laufwerk zu lesen.',
+  'docs.scan.ocrMissing':
+    'Zum Durchsuchbar-Machen fehlen die OCR-Dateien auf diesem Laufwerk.',
+  'docs.stale.banner':
+    'Dieses Dokument wurde mit einem anderen Suchmodell vorbereitet — indexiere es neu, ' +
+    'damit Antworten es finden können.',
+  'docs.preview': 'Vorschau',
+  'docs.previewBusy': 'Wird geöffnet…',
+  'docs.previewTitle': 'Den extrahierten Text lesen (nur Ansicht; nichts verlässt die App)',
+  'docs.cancel': 'Abbrechen',
+  'docs.cancelOcrTitle': 'Das Lesen des Scans stoppen',
+  'docs.cancelTaskTitle': 'Die Aufgabe stoppen',
+  'docs.makeSearchable': 'Durchsuchbar machen (OCR)',
+  'docs.makeSearchableTitle':
+    'Die gescannten Seiten mit lokaler Texterkennung lesen — nichts verlässt dieses Laufwerk',
+  'docs.summarize': 'Zusammenfassen',
+  'docs.summarizeAgain': 'Erneut zusammenfassen',
+  'docs.summarizeTitle':
+    'Eine Zusammenfassung mit dem lokalen Modell schreiben — nichts verlässt dieses Laufwerk',
+  'docs.translate': 'Übersetzen',
+  'docs.translateTitle': 'Mit dem lokalen Modell übersetzen — nichts verlässt dieses Laufwerk',
+  'docs.export': 'Exportieren',
+  'docs.exportTitle': 'Dieses Dokument als Markdown-Datei speichern',
+  'docs.reindex': 'Neu indexieren',
+  'docs.reindexBusy': 'Wird neu indexiert…',
+  'docs.reindexTitle': 'Die gespeicherte Kopie erneut lesen und vorbereiten',
+  'docs.delete': 'Löschen',
+  'docs.audioConfirm.title': 'Große Audiodateien importieren?',
+  'docs.audioConfirm.confirm': 'Importieren und transkribieren',
+  'docs.audioConfirm.contains.one': 'Diese Auswahl enthält {count} Audioaufnahme ({size}).',
+  'docs.audioConfirm.contains.other': 'Diese Auswahl enthält {count} Audioaufnahmen ({size}).',
+  'docs.audioConfirm.body':
+    'Jede Aufnahme wird in deinen Arbeitsbereich kopiert und auf diesem Laufwerk ' +
+    'transkribiert — eine lange Aufnahme kann eine Weile dauern. Du kannst die App ' +
+    'währenddessen weiter verwenden.',
+  'docs.deleteConfirm.title': '„{title}“ löschen?',
+  'docs.deleteConfirm.body':
+    'Das entfernt das Dokument, seinen extrahierten Text und seinen Suchindex dauerhaft ' +
+    'aus deinem Arbeitsbereich. Die Originaldatei außerhalb des Arbeitsbereichs bleibt ' +
+    'unberührt.',
+  'docs.translateModal.title': '„{title}“ übersetzen',
+  'docs.translateModal.aria': '{title} übersetzen',
+  'docs.translateModal.hint':
+    'Das lokale Modell schreibt eine übersetzte Kopie als neues Dokument — durchsuchbar ' +
+    'und befragbar wie jeder Import, und nichts verlässt dieses Laufwerk. Maschinelle ' +
+    'Übersetzungen können Fehler enthalten.',
+  'docs.translateModal.toGerman': 'Ins Deutsche',
+  'docs.translateModal.toEnglish': 'Ins Englische',
+  'docs.previewModal.aria': 'Vorschau von {title}',
+  'docs.previewModal.hint':
+    'Extrahierter Text (nur Ansicht) — darauf basieren Dokumentsuche und Antworten.',
+  'docs.previewModal.ocrInfo.one':
+    'Auf diesem Laufwerk erkannter Text (OCR) — {count} Seite. Die Erkennung kann Fehler ' +
+    'enthalten.',
+  'docs.previewModal.ocrInfo.other':
+    'Auf diesem Laufwerk erkannter Text (OCR) — {count} Seiten. Die Erkennung kann Fehler ' +
+    'enthalten.',
+  'docs.previewModal.summary': 'Zusammenfassung',
+  'docs.previewModal.generatedBy': 'Erstellt von {model}',
+  'docs.previewModal.truncated':
+    'Dieses Dokument ist lang — die Zusammenfassung deckt den Anfang ab. Der Rest bleibt ' +
+    'durchsuchbar und im Chat befragbar.',
+  'docs.previewModal.regenerate': 'Neu erstellen',
+  'docs.previewModal.noText': 'Aus diesem Dokument konnte kein Text extrahiert werden.',
+  'docs.previewModal.page': 'Seite {page}',
+
   // ---- Settings ----
   'settings.title': 'Einstellungen',
   'settings.tabsAria': 'Einstellungsbereiche',

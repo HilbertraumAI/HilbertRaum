@@ -165,6 +165,118 @@ export const en = {
   'chat.dictation.micBlocked':
     'The microphone could not be used. Check the system microphone settings, then try again.',
 
+  // ---- Documents (DocumentsScreen.tsx) ----
+  'docs.title': 'Documents',
+  'docs.lead':
+    'Import documents to ask questions about them. Each file is copied into your workspace ' +
+    'and prepared for search — everything stays on this drive. Ask from the Chat screen\'s ' +
+    '"Ask my documents" mode.',
+  'docs.status.queued': 'Waiting',
+  'docs.status.extracting': 'Reading',
+  'docs.status.preparing': 'Preparing',
+  'docs.status.indexed': 'Ready',
+  'docs.status.failed': 'Failed',
+  'docs.status.deleted': 'Deleted',
+  'docs.status.transcribing': 'Transcribing…',
+  'docs.task.summaryBusy': 'Summarizing…',
+  'docs.task.translationBusy': 'Translating…',
+  'docs.task.compareBusy': 'Comparing…',
+  'docs.task.ocrBusy': 'Reading the scan…',
+  'docs.task.summaryBusyTitle': 'The summary is being written',
+  'docs.task.translationBusyTitle': 'The translation is being written',
+  'docs.task.compareBusyTitle': 'The comparison is being written',
+  'docs.task.ocrBusyTitle': 'The scanned pages are being read',
+  'docs.error.noSupported': 'No supported documents were found in that selection.',
+  'docs.removedDocFallback': 'a removed document',
+  // Provenance lines render around inline <b>title</b> elements.
+  'docs.provenance.compareBefore': 'Comparison of ',
+  'docs.provenance.compareMiddle': ' and ',
+  'docs.provenance.translatedBefore': 'Translated from ',
+  'docs.import.busy': 'Importing…',
+  'docs.import.files': 'Import files',
+  'docs.import.folder': 'Import folder',
+  'docs.refresh': 'Refresh',
+  'docs.askSelected': 'Ask these documents ({count})',
+  'docs.askSelectedTitle': 'Open a document Q&A scoped to the selected documents',
+  'docs.compareBtn': 'Compare (2)',
+  'docs.compareBtnTitle':
+    'Write a comparison of the two selected documents with the local model — nothing ' +
+    'leaves this drive',
+  'docs.reindexAll': 'Re-index all ({count})',
+  'docs.reindexAllTitle': 'Re-index every document that was indexed with a different search model',
+  'docs.supported.base':
+    'Supported: TXT, Markdown, PDF, DOCX, CSV — audio recordings (WAV, MP3, FLAC, OGG), ' +
+    'which are transcribed on this drive',
+  'docs.supported.ocrExtra': ', and photos of pages (PNG, JPG), which are read on this drive',
+  'docs.preparing': 'Preparing your documents so you can ask about them…',
+  'docs.empty.title': 'No documents yet',
+  'docs.empty.line': 'Import files to ask questions about them — everything stays on this drive.',
+  'docs.selectAria': 'Select {title} for asking',
+  'docs.selectTitle': 'Select to ask only chosen documents',
+  'docs.meta.size': 'Size',
+  'docs.meta.sections': 'Sections',
+  'docs.meta.type': 'Type',
+  'docs.meta.summary': 'Summary',
+  'docs.scan.ocrOffer': 'Use "Make searchable (OCR)" below to read the pages on this drive.',
+  'docs.scan.ocrMissing': 'Making it searchable needs the OCR files, which are not on this drive.',
+  'docs.stale.banner':
+    'This document was prepared with a different search model — re-index it so answers ' +
+    'can find it.',
+  'docs.preview': 'Preview',
+  'docs.previewBusy': 'Opening…',
+  'docs.previewTitle': 'Read the extracted text (read-only; nothing leaves the app)',
+  'docs.cancel': 'Cancel',
+  'docs.cancelOcrTitle': 'Stop reading the scan',
+  'docs.cancelTaskTitle': 'Stop the task',
+  'docs.makeSearchable': 'Make searchable (OCR)',
+  'docs.makeSearchableTitle':
+    'Read the scanned pages with local text recognition — nothing leaves this drive',
+  'docs.summarize': 'Summarize',
+  'docs.summarizeAgain': 'Summarize again',
+  'docs.summarizeTitle': 'Write a summary with the local model — nothing leaves this drive',
+  'docs.translate': 'Translate',
+  'docs.translateTitle': 'Translate with the local model — nothing leaves this drive',
+  'docs.export': 'Export',
+  'docs.exportTitle': 'Save this document as a Markdown file',
+  'docs.reindex': 'Re-index',
+  'docs.reindexBusy': 'Re-indexing…',
+  'docs.reindexTitle': 'Read and prepare the stored copy again',
+  'docs.delete': 'Delete',
+  'docs.audioConfirm.title': 'Import large audio?',
+  'docs.audioConfirm.confirm': 'Import and transcribe',
+  'docs.audioConfirm.contains.one': 'This selection contains {count} audio recording ({size}).',
+  'docs.audioConfirm.contains.other': 'This selection contains {count} audio recordings ({size}).',
+  'docs.audioConfirm.body':
+    'Each recording is copied into your workspace and transcribed on this drive — ' +
+    'a long recording can take a while. You can keep using the app meanwhile.',
+  'docs.deleteConfirm.title': 'Delete "{title}"?',
+  'docs.deleteConfirm.body':
+    'This permanently removes the document, its extracted text, and its search index from ' +
+    'your workspace. The original file outside the workspace is not touched.',
+  'docs.translateModal.title': 'Translate "{title}"',
+  'docs.translateModal.aria': 'Translate {title}',
+  'docs.translateModal.hint':
+    'The local model writes a translated copy as a new document — searchable and ' +
+    'askable like any import, and nothing leaves this drive. Machine translations ' +
+    'can contain errors.',
+  'docs.translateModal.toGerman': 'To German (Deutsch)',
+  'docs.translateModal.toEnglish': 'To English',
+  'docs.previewModal.aria': 'Preview of {title}',
+  'docs.previewModal.hint':
+    'Read-only extracted text — this is what document search and answers are based on.',
+  'docs.previewModal.ocrInfo.one':
+    'Text recognized on this drive (OCR) — {count} page. Recognition can contain errors.',
+  'docs.previewModal.ocrInfo.other':
+    'Text recognized on this drive (OCR) — {count} pages. Recognition can contain errors.',
+  'docs.previewModal.summary': 'Summary',
+  'docs.previewModal.generatedBy': 'Generated by {model}',
+  'docs.previewModal.truncated':
+    'This document is long — the summary covers its beginning. The rest is still ' +
+    'searchable and answerable in chat.',
+  'docs.previewModal.regenerate': 'Regenerate',
+  'docs.previewModal.noText': 'No text could be extracted from this document.',
+  'docs.previewModal.page': 'Page {page}',
+
   // ---- Settings (SettingsScreen.tsx — chrome + the General tab) ----
   'settings.title': 'Settings',
   'settings.tabsAria': 'Settings sections',
