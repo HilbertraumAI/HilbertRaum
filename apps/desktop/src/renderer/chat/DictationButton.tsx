@@ -25,6 +25,9 @@ interface DictationButtonProps {
   onText: (text: string) => void
   /** Friendly failure copy — surfaced by the screen (Banner), like other chat errors. */
   onError?: (message: string) => void
+  /** Fires on enter/exit of the recording state with the live mic tap (null when not
+   *  recording, or when Web Audio is unavailable) — drives the in-input waveform + dim. */
+  onRecording?: (analyser: AnalyserNode | null, recording: boolean) => void
   /** Test seam: replaces the real getUserMedia/MediaRecorder capture pipeline. */
   captureImpl?: DictationCaptureStart
 }
@@ -33,6 +36,7 @@ export function DictationButton({
   disabled,
   onText,
   onError,
+  onRecording,
   captureImpl
 }: DictationButtonProps): JSX.Element {
   const { t } = useT()
@@ -47,19 +51,28 @@ export function DictationButton({
       : friendlyIpcError(e)
   }
 
-  // Leaving the screen mid-recording must release the microphone.
+  // Keep a stable handle to the latest onRecording so the unmount cleanup can call it
+  // without re-subscribing the effect (an inline parent callback changes identity every
+  // render — making it a dep would tear down the live recording mid-session).
+  const onRecordingRef = useRef(onRecording)
+  onRecordingRef.current = onRecording
+
+  // Leaving the screen mid-recording must release the microphone (and clear the wave).
   useEffect(() => {
     return () => {
       captureRef.current?.cancel()
       captureRef.current = null
+      onRecordingRef.current?.(null, false)
     }
   }, [])
 
   async function start(): Promise<void> {
     setState('starting')
     try {
-      captureRef.current = await (captureImpl ?? captureDictation)()
+      const capture = await (captureImpl ?? captureDictation)()
+      captureRef.current = capture
       setState('recording')
+      onRecording?.(capture.analyser, true)
     } catch (e) {
       captureRef.current = null
       setState('idle')
@@ -71,6 +84,7 @@ export function DictationButton({
     const capture = captureRef.current
     captureRef.current = null
     if (!capture) return
+    onRecording?.(null, false)
     setState('transcribing')
     try {
       const bytes = await capture.stop()

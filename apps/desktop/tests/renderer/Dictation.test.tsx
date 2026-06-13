@@ -43,7 +43,9 @@ function fakeCapture(bytes = new Uint8Array([1, 2, 3])): {
   cancel: ReturnType<typeof vi.fn>
 } {
   const cancel = vi.fn()
-  const capture: DictationCapture = { stop: async () => bytes, cancel }
+  // analyser: null — jsdom has no Web Audio. The Composer's waveform overlay must
+  // no-op (render nothing) on a null analyser; the record flow stays unaffected.
+  const capture: DictationCapture = { stop: async () => bytes, cancel, analyser: null }
   return { start: async () => capture, cancel }
 }
 
@@ -155,6 +157,24 @@ describe('record → transcribe → insert at the cursor', () => {
     expect(onSend).not.toHaveBeenCalled()
     // The caret sits after the inserted text (fallback insert path restores it).
     await waitFor(() => expect(input.selectionStart).toBe('foo hello world'.length))
+  })
+
+  it('engages the recording affordance (dim + waveform overlay) only while recording', async () => {
+    const user = userEvent.setup()
+    stubApi({ transcribeDictation: vi.fn(async () => 'x') })
+    const { start } = fakeCapture()
+    const { container } = render(<Harness capture={start} />)
+    const row = container.querySelector('.composer-row') as HTMLElement
+
+    expect(row).not.toHaveClass('composer-recording')
+    await user.click(micButton())
+    await screen.findByRole('button', { name: /stop dictation/i })
+    // recording → row carries the dim/overlay class (works even with a null analyser:
+    // Web Audio is absent in jsdom, so the canvas no-ops but the affordance still shows).
+    expect(row).toHaveClass('composer-recording')
+
+    await user.click(screen.getByRole('button', { name: /stop dictation/i }))
+    await waitFor(() => expect(row).not.toHaveClass('composer-recording'))
   })
 
   it('appends without doubling whitespace when the input is empty', async () => {

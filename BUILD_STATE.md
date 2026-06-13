@@ -6,7 +6,16 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
-_Last updated: 2026-06-13 — **Phase 42 (German QA + closeout) is DONE ⇒ the i18n wave
+_Last updated: 2026-06-13 — **UX polish: live dictation waveform in the chat composer.**
+A read-only Web Audio analyser tap on the existing mic stream now drives an in-input
+`<canvas>` waveform (`renderer/chat/Waveform.tsx`) + a dimmed-draft/accent-border recording
+state, so it's unmistakable that capture has started (the OS mic indicator + button pulse
+were the only prior signals). Decorative + `prefers-reduced-motion`-aware; degrades to no
+wave (pulse + dim only) without Web Audio; the WAV pipeline is byte-identical. Zero new
+deps, fully local. Tests green (1084 passed); verified in the built app (both themes) via
+`walk-waveform.mjs`. Record: wave-3 plan §10 + `architecture.md` "Voice dictation"._
+
+_**Phase 42 (German QA + closeout) is DONE ⇒ the i18n wave
 (Phases 39–42) is COMPLETE.** The working paper `docs/i18n-plan.md` was condensed into
 the design record per the doc lifecycle rule — `docs/architecture.md`
 "Internationalization — design record" (D-L1–L8; code comments cite "i18n record §N") +

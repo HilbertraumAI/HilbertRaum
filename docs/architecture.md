@@ -295,6 +295,15 @@ explicitly out of scope.
   (content-adjacent, like search); errors to the renderer are fixed friendly copy with
   the technical reason in the local log only. The OS mic indicator is the recording
   signal. Locked workspace needs no handling — the composer doesn't exist pre-unlock.
+- **Live in-input waveform (2026-06-13):** an in-app "recording started" cue. A read-only
+  Web Audio `AnalyserNode` tap on the SAME `getUserMedia` stream (never wired to a
+  destination, never touching the recorded bytes) is exposed as `DictationCapture.analyser`;
+  `renderer/chat/Waveform.tsx` paints its time-domain data to a `<canvas>` overlaid on the
+  textarea while recording (`Composer` adds `.composer-recording` to dim the draft + accent
+  the border). Decorative (`aria-hidden`) — the mic `aria-pressed`/label stays
+  authoritative — and `prefers-reduced-motion`-aware (static baseline). Degrades to no
+  wave (button pulse + dim only) when Web Audio is absent (`analyser: null`). Local, no new
+  deps. Full record: wave-3 plan §10.
 
 ## Scanned-PDF / photo OCR (Phase 38, wave-3 plan §11, decisions D31–D33)
 
