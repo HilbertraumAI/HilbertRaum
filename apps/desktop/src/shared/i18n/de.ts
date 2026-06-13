@@ -47,10 +47,10 @@ export const de: Record<keyof typeof en, string> = {
   'home.lead':
     'Ein privater KI-Arbeitsbereich, komplett offline. Deine Fragen, Dokumente und ' +
     'Chat-Verläufe bleiben auf diesem Gerät.',
-  'home.preflight.continueBefore':
+  // {folder} ist der wörtliche Ordnername auf dem Laufwerk (nicht übersetzt); die UI hebt ihn fett hervor.
+  'home.preflight.continue':
     'Du kannst trotzdem fortfahren. Wenn sich die App nicht öffnet, findest du die ' +
-    'Anleitung zur Fehlerbehebung im Ordner ',
-  'home.preflight.continueAfter': ' auf dem Laufwerk.',
+    'Anleitung zur Fehlerbehebung im Ordner {folder} auf dem Laufwerk.',
   'home.checking': 'Wird geprüft…',
   'home.workspace.label': 'Arbeitsbereich',
   'home.workspace.encrypted':
@@ -128,6 +128,8 @@ export const de: Record<keyof typeof en, string> = {
   'chat.search.aria': 'Unterhaltungen durchsuchen',
   'chat.search.resultsAria': 'Suchergebnisse',
   'chat.search.noMatches': 'Noch keine Treffer — versuch es mit einem anderen Wort.',
+  'chat.search.count.one': '{count} Treffer',
+  'chat.search.count.other': '{count} Treffer',
   'chat.group.today': 'Heute',
   'chat.group.yesterday': 'Gestern',
   'chat.group.last7days': 'Letzte 7 Tage',

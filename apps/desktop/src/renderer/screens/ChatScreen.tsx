@@ -12,7 +12,7 @@ import { localizeServerCopy } from '../lib/displayMap'
 import { friendlyIpcError } from '../lib/errors'
 import { RUNTIME_POLL_MS } from '../lib/polling'
 import { useT } from '../i18n'
-import { Button, Chip, EmptyState, ErrorBanner, LocalIndicator, SegmentedControl, useToast } from '../components'
+import { Button, Chip, EmptyState, ErrorBanner, LocalIndicator, SegmentedControl, Spinner, useToast } from '../components'
 import { Composer, ConversationList, DepthMenu, ScopePopover, Transcript } from '../chat'
 import type { MessageKey } from '@shared/i18n'
 
@@ -192,7 +192,7 @@ export function ChatScreen({ onNavigate, initialMode, initialScopeDocumentIds }:
     window.api
       .listMessages(activeId)
       .then(setMessages)
-      .catch((e) => setError(String(e)))
+      .catch((e) => setError(friendlyIpcError(e)))
   }, [activeId])
 
   function setListCollapsedPersistent(collapsed: boolean): void {
@@ -442,7 +442,7 @@ export function ChatScreen({ onNavigate, initialMode, initialScopeDocumentIds }:
             {t('chat.noModel.hintAfter')}
           </p>
           <p className="hint">
-            <span className="spinner" /> {t('chat.noModel.stillLoading')}
+            <Spinner /> {t('chat.noModel.stillLoading')}
           </p>
           <div className="actions" style={{ marginTop: 12 }}>
             <Button variant="primary" onClick={() => onNavigate('models')}>

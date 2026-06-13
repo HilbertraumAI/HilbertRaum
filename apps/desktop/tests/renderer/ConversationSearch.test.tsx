@@ -110,6 +110,18 @@ describe('ConversationList — search (Phase 31)', () => {
     expect(screen.getByRole('searchbox', { name: 'Search conversations' })).toHaveValue('')
   })
 
+  // L14: the results region is a polite live region and carries an sr-only result count.
+  it('announces the result region with an sr-only count (L14)', async () => {
+    const user = userEvent.setup()
+    stubApi({ searchConversations: vi.fn(async () => [result(), result({ conversationId: 'c2' })]) })
+    renderList([conv()])
+
+    await user.type(screen.getByRole('searchbox', { name: 'Search conversations' }), 'liability')
+    const region = await screen.findByRole('region', { name: 'Search results' })
+    expect(region).toHaveAttribute('aria-live', 'polite')
+    await waitFor(() => expect(screen.getByText('2 results')).toBeInTheDocument())
+  })
+
   it('shows friendly copy when nothing matches', async () => {
     const user = userEvent.setup()
     stubApi({ searchConversations: vi.fn(async () => []) })

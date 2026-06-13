@@ -180,10 +180,20 @@ export function HomeScreen({ onNavigate }: Props): JSX.Element {
           {preflightNotes.map((note, i) => (
             <p key={i}>{localizeServerCopy(t, note)}</p>
           ))}
+          {/* The "docs" folder name is a literal embedded in the localized sentence via a
+              {folder} placeholder (audit L9) — splitting on it lets us bold the name without
+              hardcoding English word order around a raw <strong>docs</strong>. */}
           <p>
-            {t('home.preflight.continueBefore')}
-            <strong>docs</strong>
-            {t('home.preflight.continueAfter')}
+            {(() => {
+              const [before, after = ''] = t('home.preflight.continue').split('{folder}')
+              return (
+                <>
+                  {before}
+                  <strong>docs</strong>
+                  {after}
+                </>
+              )
+            })()}
           </p>
         </Banner>
       )}

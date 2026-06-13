@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { ReactNode } from 'react'
-import { Badge, Banner, Button, ConfirmDialog, EmptyState, ErrorBanner, Modal, type BadgeTone } from '../components'
+import { Badge, Banner, Button, ConfirmDialog, EmptyState, ErrorBanner, Modal, Spinner, type BadgeTone } from '../components'
 import type {
   DocTaskKind,
   DocumentInfo,
@@ -139,7 +139,7 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
   }, [])
 
   useEffect(() => {
-    refresh().catch((e) => setError(String(e)))
+    refresh().catch((e) => setError(friendlyIpcError(e)))
     void (async () => {
       try {
         setOcrAvailable((await window.api.getAppStatus()).ocrAvailable)
@@ -168,7 +168,7 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
           if (pollRef.current) clearInterval(pollRef.current)
           pollRef.current = null
           setBusy(null)
-          setError(String(e))
+          setError(friendlyIpcError(e))
         }
       }, 400)
     },
@@ -530,7 +530,7 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
               !isDocTaskTerminal(activeTask.status) ? (
                 <>
                   <Button size="sm" disabled title={t(TASK_BUSY_TITLE[activeTask.kind])}>
-                    <span className="spinner" /> {t(TASK_BUSY_LABEL[activeTask.kind])}
+                    <Spinner /> {t(TASK_BUSY_LABEL[activeTask.kind])}
                     {activeTask.status && activeTask.status.progress.stepsTotal > 1
                       ? ` (${activeTask.status.progress.stepsDone}/${activeTask.status.progress.stepsTotal})`
                       : ''}
@@ -556,7 +556,7 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
               !isDocTaskTerminal(activeTask.status) ? (
                 <>
                   <Button size="sm" disabled title={t(TASK_BUSY_TITLE[activeTask.kind])}>
-                    <span className="spinner" /> {t(TASK_BUSY_LABEL[activeTask.kind])}
+                    <Spinner /> {t(TASK_BUSY_LABEL[activeTask.kind])}
                     {activeTask.status && activeTask.status.progress.stepsTotal > 1
                       ? ` (${activeTask.status.progress.stepsDone}/${activeTask.status.progress.stepsTotal})`
                       : ''}

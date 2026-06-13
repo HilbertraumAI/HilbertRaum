@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Button } from '../components'
+import { Button, Spinner } from '../components'
 import {
   captureDictation,
   MIC_BLOCKED_MESSAGE,
@@ -108,7 +108,7 @@ export function DictationButton({
         else if (state === 'idle') void start()
       }}
     >
-      {state === 'transcribing' ? <span className="spinner" aria-hidden /> : <MicIcon />}
+      {state === 'transcribing' ? <Spinner /> : <MicIcon />}
     </Button>
   )
 }

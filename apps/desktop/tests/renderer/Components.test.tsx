@@ -5,6 +5,8 @@ import { render, screen, cleanup, fireEvent, act, waitFor } from '@testing-libra
 import userEvent from '@testing-library/user-event'
 import {
   ConfirmDialog,
+  PasswordStrengthMeter,
+  passwordStrength,
   SegmentedControl,
   Switch,
   ToastProvider,
@@ -91,6 +93,29 @@ describe('ConfirmDialog', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
     // Radix restores focus to the previously focused element asynchronously.
     await waitFor(() => expect(document.activeElement).toBe(trigger))
+  })
+
+  // L12: the body must be associated via aria-describedby so a screen reader announces
+  // "This permanently removes it.", not just the title.
+  it('associates the body via aria-describedby (L12)', async () => {
+    render(
+      <ConfirmDialog open title="Delete this document?" confirmLabel="Delete" onConfirm={() => {}} onCancel={() => {}}>
+        <p>This permanently removes it.</p>
+      </ConfirmDialog>
+    )
+    const dialog = await screen.findByRole('dialog')
+    const describedBy = dialog.getAttribute('aria-describedby')
+    expect(describedBy).toBeTruthy()
+    const body = document.getElementById(describedBy!)
+    expect(body?.textContent).toBe('This permanently removes it.')
+  })
+
+  it('leaves aria-describedby unset when there is no body', async () => {
+    render(
+      <ConfirmDialog open title="Proceed?" confirmLabel="Yes" onConfirm={() => {}} onCancel={() => {}} />
+    )
+    const dialog = await screen.findByRole('dialog')
+    expect(dialog.getAttribute('aria-describedby')).toBeNull()
   })
 
   it('disables the confirm button when confirmDisabled is set', async () => {
@@ -251,5 +276,37 @@ describe('Switch', () => {
     render(<SwitchHarness onChange={onChange} />)
     await user.click(screen.getByText('Use GPU acceleration'))
     expect(onChange).toHaveBeenLastCalledWith(true)
+  })
+})
+
+// ---- PasswordStrengthMeter -------------------------------------------------------
+
+describe('PasswordStrengthMeter (L13)', () => {
+  it('does not put role="status" on the visible meter (no per-keystroke re-announce)', () => {
+    const { container } = render(<PasswordStrengthMeter strength={passwordStrength('aaaaaaaa')} />)
+    // The visible word is plain text; the meter container is not a live region.
+    expect(container.querySelector('.strength')?.getAttribute('role')).toBeNull()
+    expect(screen.getByText('Weak')).toBeInTheDocument()
+  })
+
+  it('announces the strength word in an sr-only region only after a debounce', () => {
+    vi.useFakeTimers()
+    try {
+      const { rerender } = render(<PasswordStrengthMeter strength={passwordStrength('aaaaaaaa')} />)
+      const status = screen.getByRole('status')
+      expect(status).toHaveClass('sr-only')
+      expect(status).toBeEmptyDOMElement() // nothing announced yet (still typing)
+
+      // Keep "typing" before the debounce elapses → still nothing announced.
+      act(() => vi.advanceTimersByTime(300))
+      rerender(<PasswordStrengthMeter strength={passwordStrength('aaaaaaaaaaaa')} />)
+      expect(screen.getByRole('status')).toBeEmptyDOMElement()
+
+      // Typing settles → the latest word is announced once.
+      act(() => vi.advanceTimersByTime(700))
+      expect(screen.getByRole('status')).toHaveTextContent('Okay')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

@@ -1,5 +1,5 @@
 import * as RadixDialog from '@radix-ui/react-dialog'
-import { useCallback, useEffect, useRef, type ReactNode } from 'react'
+import { useCallback, useEffect, useId, useRef, type ReactNode } from 'react'
 import { Button } from './Button'
 import { englishTranslator, type Translator } from './translator'
 
@@ -107,17 +107,26 @@ export function ConfirmDialog({
   t = englishTranslator
 }: ConfirmDialogProps): JSX.Element {
   const onCloseAutoFocus = useReturnFocus(open)
+  // Associate the body via aria-describedby (audit L12): without it a screen reader
+  // announces only the title, not the "this permanently deletes…" sentence. When there is
+  // no body we keep aria-describedby undefined (the prior value silenced Radix's warning).
+  const bodyId = useId()
+  const hasBody = children != null
   return (
     <RadixDialog.Root open={open} onOpenChange={(next) => !next && onCancel()}>
       <RadixDialog.Portal>
         <RadixDialog.Overlay className="dialog-overlay" />
         <RadixDialog.Content
           className="dialog dialog-confirm"
-          aria-describedby={undefined}
+          aria-describedby={hasBody ? bodyId : undefined}
           onCloseAutoFocus={onCloseAutoFocus}
         >
           <RadixDialog.Title className="modal-title">{title}</RadixDialog.Title>
-          {children != null && <div className="modal-body">{children}</div>}
+          {hasBody && (
+            <div className="modal-body" id={bodyId}>
+              {children}
+            </div>
+          )}
           <div className="modal-actions">
             <Button onClick={onCancel}>{cancelLabel ?? t('common.cancel')}</Button>
             <Button variant="primary" disabled={confirmDisabled} onClick={onConfirm}>

@@ -133,10 +133,11 @@ describe('WorkspaceGate — create (3-step first run)', () => {
     render(<WorkspaceGate state={UNINITIALIZED} onUnlocked={vi.fn()} />)
     await toPasswordStep(user)
 
-    // A weak-but-valid password: meter says "Weak", the button stays enabled.
+    // A weak-but-valid password: meter says "Weak", the button stays enabled. The visible
+    // word is plain text now (not a live region — audit L13), so query it by text.
     await user.type(screen.getByPlaceholderText('Password'), 'aaaaaaaa')
     await user.type(screen.getByPlaceholderText('Confirm password'), 'aaaaaaaa')
-    expect(screen.getByRole('status')).toHaveTextContent('Weak')
+    expect(screen.getByText('Weak')).toBeInTheDocument()
     expect(screen.getByText(/longer is stronger/i)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /create workspace/i })).toBeEnabled()
   })

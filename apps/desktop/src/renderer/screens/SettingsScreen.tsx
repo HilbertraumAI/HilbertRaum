@@ -5,6 +5,7 @@ import {
   PasswordField,
   PasswordStrengthMeter,
   SegmentedControl,
+  Spinner,
   Switch,
   passwordStrength,
   useToast
@@ -270,7 +271,7 @@ function ChangePasswordCard(): JSX.Element {
       </div>
       {busy && (
         <p className="hint" role="status">
-          <span className="spinner" /> {t('settings.changePassword.busy')}
+          <Spinner /> {t('settings.changePassword.busy')}
         </p>
       )}
       {error && <Banner tone="error">{error}</Banner>}

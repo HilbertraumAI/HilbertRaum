@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import { Badge, Banner, Button, ConfirmDialog, EmptyState, ErrorBanner, Progress, type BadgeTone } from '../components'
+import { Badge, Banner, Button, ConfirmDialog, EmptyState, ErrorBanner, Progress, Spinner, type BadgeTone } from '../components'
+import { friendlyIpcError } from '../lib/errors'
 import { useT } from '../i18n'
 import type { MessageKey, UiLanguage } from '@shared/i18n'
 import type { AppSettings, DownloadJob, ModelInfo, ModelState, PolicyStatus } from '@shared/types'
@@ -82,7 +83,7 @@ export function ModelsScreen(): JSX.Element {
   }
 
   useEffect(() => {
-    refresh().catch((e) => setError(String(e)))
+    refresh().catch((e) => setError(friendlyIpcError(e)))
   }, [])
 
   // Poll the live download job (async-with-polling, like import progress).
@@ -112,7 +113,7 @@ export function ModelsScreen(): JSX.Element {
       await fn()
       await refresh()
     } catch (e) {
-      setError(String(e))
+      setError(friendlyIpcError(e))
     } finally {
       setBusy(null)
     }
@@ -125,7 +126,7 @@ export function ModelsScreen(): JSX.Element {
       const started = await window.api.downloadModel(m.id, { licenseAccepted: licenseAck })
       setJob(started)
     } catch (e) {
-      setError(String(e))
+      setError(friendlyIpcError(e))
     } finally {
       setLicenseAck(false)
     }
@@ -145,7 +146,7 @@ export function ModelsScreen(): JSX.Element {
       <div className="screen">
         <h1>{t('models.title')}</h1>
         <p className="hint">
-          <span className="spinner" /> {t('models.checking')}
+          <Spinner /> {t('models.checking')}
         </p>
       </div>
     )
@@ -391,7 +392,7 @@ export function ModelsScreen(): JSX.Element {
             >
               {busy === `verify-${m.id}` ? (
                 <>
-                  <span className="spinner" /> {t('models.verifying')}
+                  <Spinner /> {t('models.verifying')}
                 </>
               ) : (
                 t('models.verify')
