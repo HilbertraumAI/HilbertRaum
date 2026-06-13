@@ -4,6 +4,7 @@ import remarkGfm from 'remark-gfm'
 import type { Message } from '@shared/types'
 import { MessageActions } from './MessageActions'
 import { SourcesDisclosure } from './SourcesDisclosure'
+import { localizeServerCopy } from '../lib/displayMap'
 import { useT } from '../i18n'
 
 // Transcript (guidelines §3): the conversation IS the canvas — centered,
@@ -69,7 +70,10 @@ export function Transcript({
               <div className="msg-role">{roleLabel(m.role)}</div>
               {m.role === 'assistant' ? (
                 <div className="msg-content md">
-                  <AssistantMarkdown text={m.content} />
+                  {/* The fixed RAG answers (no-context / reindex-needed) are persisted
+                      canonical English; the D-L4 display map translates them at render
+                      — exact match only, real model output passes through untouched. */}
+                  <AssistantMarkdown text={localizeServerCopy(t, m.content)} />
                 </div>
               ) : (
                 <div className="msg-content">{m.content}</div>
@@ -110,7 +114,9 @@ export function Transcript({
               )}
               {/* role="log": additions are announced politely without re-reading the lot. */}
               <div className="msg-content md" role="log" aria-live="polite">
-                <AssistantMarkdown text={streamText} />
+                {/* The fixed RAG answers arrive as one onToken chunk — map the live
+                    bubble too so they never flash English before persisting. */}
+                <AssistantMarkdown text={localizeServerCopy(t, streamText)} />
                 <span className="cursor" aria-hidden="true">
                   ▋
                 </span>

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Banner, Button, useToast } from '../../components'
 import { useT, type I18n } from '../../i18n'
+import { localizeServerCopy } from '../../lib/displayMap'
 import type { MessageKey, UiLanguage } from '@shared/i18n'
 import type {
   AppSettings,
@@ -293,9 +294,11 @@ export function DiagnosticsTab(): JSX.Element {
 
             {bench.warnings.length > 0 && (
               <ul className="benchmark-warnings">
+                {/* Warnings are persisted canonical English inside lastBenchmark —
+                    the D-L4 display map translates the known set at render. */}
                 {bench.warnings.map((w, i) => (
                   <li key={i} className="hint">
-                    {w}
+                    {localizeServerCopy(t, w)}
                   </li>
                 ))}
               </ul>

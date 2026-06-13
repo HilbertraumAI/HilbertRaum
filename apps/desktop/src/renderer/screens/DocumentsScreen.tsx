@@ -19,6 +19,7 @@ import {
   subscribeDocTask
 } from '../lib/doctasks'
 import { friendlyIpcError } from '../lib/errors'
+import { localizeServerCopy } from '../lib/displayMap'
 import { useT, type I18n } from '../i18n'
 import type { MessageKey, UiLanguage } from '@shared/i18n'
 
@@ -498,9 +499,9 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
           )}
           {d.status === 'failed' && d.errorMessage && (
             <Banner tone={d.scanDetected ? 'warning' : 'error'}>
-              {/* The persisted error_message renders AS-IS — the display map that
-                  translates the known canonical strings is Phase 41 (D-L4). */}
-              {d.errorMessage}
+              {/* error_message is persisted canonical English; the D-L4 display map
+                  translates the known constants — unknown strings render as-is. */}
+              {localizeServerCopy(t, d.errorMessage)}
               {d.scanDetected && (
                 <>
                   {' '}

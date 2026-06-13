@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Badge, Banner, Button } from '../components'
 import { RUNTIME_POLL_MS } from '../lib/polling'
+import { localizeServerCopy } from '../lib/displayMap'
 import { useT } from '../i18n'
 import type { AppStatus, DocumentInfo, PreflightResult, RuntimeStatus } from '@shared/types'
 
@@ -173,8 +174,11 @@ export function HomeScreen({ onNavigate }: Props): JSX.Element {
 
       {preflightNotes.length > 0 && (
         <Banner tone="warning">
+          {/* Preflight problems arrive already localized (tMain); the slow-drive note
+              is canonical English shared with persisted benchmark warnings, so it is
+              display-mapped here (D-L4 — identity for localized/unknown strings). */}
           {preflightNotes.map((note, i) => (
-            <p key={i}>{note}</p>
+            <p key={i}>{localizeServerCopy(t, note)}</p>
           ))}
           <p>
             {t('home.preflight.continueBefore')}

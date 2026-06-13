@@ -8,6 +8,7 @@ import {
   type Message
 } from '@shared/types'
 import { cancelActiveDocTask } from '../lib/doctasks'
+import { localizeServerCopy } from '../lib/displayMap'
 import { friendlyIpcError } from '../lib/errors'
 import { RUNTIME_POLL_MS } from '../lib/polling'
 import { useT } from '../i18n'
@@ -561,7 +562,9 @@ export function ChatScreen({ onNavigate, initialMode, initialScopeDocumentIds }:
 
         {error && (
           <Banner tone="error" t={t} onDismiss={() => setError(null)}>
-            {error}
+            {/* DOC_TASK_BUSY_MESSAGE arrives canonical English on the wire (the
+                exact-match recognition below) — the display map localizes it here. */}
+            {localizeServerCopy(t, error)}
             {/* Chat refused while a document task runs: the shared
                 copy comes with an actionable cancel — the task, not the chat. */}
             {error.includes(DOC_TASK_BUSY_MESSAGE) && (
