@@ -142,6 +142,9 @@ export class VectorIndex {
     for (const row of rows) {
       // Skip vectors from a different model/dimensionality (e.g. mid-migration).
       if (row.dimensions !== queryVector.length) continue
+      // Skip a physically truncated blob rather than letting decodeVector throw a
+      // RangeError and abort the whole query — one corrupt row must not break all search.
+      if (row.vector_blob.length < row.dimensions * 4) continue
       const vec = decodeVector(row.vector_blob, row.dimensions)
       hits.push({ chunkId: row.chunk_id, score: cosineSimilarity(queryVector, vec) })
     }

@@ -32,6 +32,12 @@ import {
 // retrieval time and are never stored; only the resolved `Citation[]` is persisted
 // (in `messages.citations_json` — citations never persist scores).
 
+// `approxTokenCount` counts whitespace words; real BPE tokens run ~1.3× that. The token
+// budget is a MODEL-token limit, so words must be scaled up before comparing — otherwise
+// the assembled excerpt block overflows the context window and the runtime silently
+// truncates excerpts. Same factor doctasks uses (SUMMARY_TOKENS_PER_WORD).
+const TOKENS_PER_WORD = 1.3
+
 /** Retrieval knobs, resolved from `AppSettings` (spec §7.8 defaults). */
 export interface RagRetrievalSettings {
   topKInitial: number
@@ -254,7 +260,7 @@ export async function retrieve(
   let usedTokens = 0
   for (const c of deduped) {
     if (selected.length >= settings.topKFinal) break
-    const tokens = approxTokenCount(c.text)
+    const tokens = Math.ceil(approxTokenCount(c.text) * TOKENS_PER_WORD)
     if (selected.length > 0 && usedTokens + tokens > settings.maxContextTokens) break
     selected.push(c)
     usedTokens += tokens

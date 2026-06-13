@@ -207,9 +207,10 @@ describe('retrieve', () => {
       { text: `${base} three` },
       { text: `${base} four` }
     ])
-    const budget: RagRetrievalSettings = { ...SETTINGS, maxContextTokens: 2500, topKFinal: 6 }
+    const budget: RagRetrievalSettings = { ...SETTINGS, maxContextTokens: 3500, topKFinal: 6 }
     const { chunks } = await retrieve(db, embedder, 'lorem', budget)
-    // First chunk (~1001) always included; second fits (~2002); third would exceed 2500.
+    // ~1001 words ≈ ceil(1001 * 1.3) ≈ 1302 model tokens per chunk. First chunk always
+    // included (~1302); second fits (~2604 ≤ 3500); third would exceed 3500.
     expect(chunks).toHaveLength(2)
   })
 

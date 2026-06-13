@@ -55,18 +55,31 @@ export async function rasterizePdfWithHiddenWindow(
   if (opts.signal?.aborted) throw abortError()
   inUse = true
 
-  const win = new BrowserWindow({
-    show: false,
-    // Never steal focus or appear in any window list UX; it is a worker, not a UI.
-    skipTaskbar: true,
-    webPreferences: {
-      preload: join(__dirname, '../preload/ocr.js'),
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: true,
-      webSecurity: true
-    }
-  })
+  // Window construction can throw (resource exhaustion, mid-quit). Reset the busy
+  // flag if it does, or the rasterizer wedges to "busy" for the rest of the session
+  // (the `finally` below only runs once we are past this point).
+  let win: BrowserWindow
+  try {
+    win = new BrowserWindow({
+      show: false,
+      // Never steal focus or appear in any window list UX; it is a worker, not a UI.
+      skipTaskbar: true,
+      webPreferences: {
+        preload: join(__dirname, '../preload/ocr.js'),
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: true,
+        webSecurity: true
+      }
+    })
+  } catch (err) {
+    inUse = false
+    throw err
+  }
+  // Untrusted PDF bytes render here — deny any navigation/window-open the page attempts
+  // (defence in depth on top of the shared-session CSP), matching the main window.
+  win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+  win.webContents.on('will-navigate', (e) => e.preventDefault())
 
   // Collect replies addressed from OUR window only (defence in depth — the channels
   // are not exposed on the main window's bridge at all).
