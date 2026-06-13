@@ -113,7 +113,13 @@ export function Transcript({
                   >
                     {t('chat.thinking')}
                   </button>
-                  {thinkingOpen && <div className="msg-thinking-text">{streamThinking}</div>}
+                  {/* Kept mounted and hidden (not unmounted) when collapsed, matching the
+                      old <details> semantics: the live reasoning buffer keeps accumulating
+                      and is available to AT, while `hidden` removes it from view + the a11y
+                      tree when collapsed. */}
+                  <div className="msg-thinking-text" hidden={!thinkingOpen}>
+                    {streamThinking}
+                  </div>
                 </div>
               )}
               {/* The visible markdown is NOT a live region (audit L7): re-rendering the

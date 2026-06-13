@@ -62,11 +62,11 @@ describe('Transcript Thinking disclosure (L15)', () => {
     render(<ThinkingHarness />)
     const toggle = screen.getByRole('button', { name: /thinking/i })
     expect(toggle).toHaveAttribute('aria-expanded', 'false')
-    // Collapsed → the reasoning text is not in the DOM.
-    expect(screen.queryByText('reasoning about the question')).toBeNull()
+    // Collapsed → the reasoning text is mounted (it keeps buffering) but hidden from view.
+    expect(screen.getByText('reasoning about the question')).not.toBeVisible()
 
     fireEvent.click(toggle)
     expect(toggle).toHaveAttribute('aria-expanded', 'true')
-    expect(screen.getByText('reasoning about the question')).toBeInTheDocument()
+    expect(screen.getByText('reasoning about the question')).toBeVisible()
   })
 })

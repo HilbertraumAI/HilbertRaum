@@ -188,22 +188,22 @@ describe('ChatScreen — "Answer detail" dropdown (Phase 20 / D-UI4)', () => {
     await user.click(screen.getByRole('button', { name: 'Send' }))
     await waitFor(() => expect(reasoningCb).toBeDefined())
 
-    // Reasoning deltas (buffered) appear inside a collapsed <details> on the live bubble.
+    // Reasoning deltas (buffered) appear behind a collapsed disclosure on the live bubble.
+    // The disclosure is a <button aria-expanded> (audit L15), not a <details>/<summary>.
     act(() => {
       reasoningCb?.('step one, ')
       reasoningCb?.('step two')
     })
-    const summary = await screen.findByText('Thinking…')
-    const details = summary.closest('details')
-    expect(details).not.toBeNull()
-    expect(details?.open).toBe(false) // collapsed by default
-    expect(await screen.findByText('step one, step two')).toBeInTheDocument()
+    const toggle = await screen.findByRole('button', { name: 'Thinking…' })
+    expect(toggle).toHaveAttribute('aria-expanded', 'false') // collapsed by default
+    const reasoning = await screen.findByText('step one, step two')
+    expect(reasoning).not.toBeVisible() // mounted (buffering) but hidden while collapsed
 
     // Expanding, then receiving the first answer token, auto-collapses the line (§3).
-    await user.click(summary)
-    await waitFor(() => expect(details?.open).toBe(true))
+    await user.click(toggle)
+    await waitFor(() => expect(toggle).toHaveAttribute('aria-expanded', 'true'))
     act(() => tokenCb?.('The answer.'))
-    await waitFor(() => expect(details?.open).toBe(false))
+    await waitFor(() => expect(toggle).toHaveAttribute('aria-expanded', 'false'))
 
     // Stream completes → the transcript re-reads persisted history, which carries the
     // answer only (D6) — the live Thinking line is gone.
