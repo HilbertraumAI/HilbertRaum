@@ -21,6 +21,7 @@ import type {
   Message,
   ModelInfo,
   ModelState,
+  ModelVerifyProgress,
   PolicyStatus,
   PreflightResult,
   RuntimeInstallInfo,
@@ -252,6 +253,13 @@ const api = {
     const handler = (_e: unknown, message: string) => cb(message)
     ipcRenderer.on(EVENTS.runtimeNotice, handler)
     return () => ipcRenderer.removeListener(EVENTS.runtimeNotice, handler)
+  },
+  /** Subscribe to first-run checksum-verification progress (the gate + Models bar).
+   *  Broadcast while a `listModels` call hashes weights; returns an unsubscribe fn. */
+  onModelVerifyProgress: (cb: (p: ModelVerifyProgress) => void): (() => void) => {
+    const handler = (_e: unknown, p: ModelVerifyProgress) => cb(p)
+    ipcRenderer.on(EVENTS.modelVerifyProgress, handler)
+    return () => ipcRenderer.removeListener(EVENTS.modelVerifyProgress, handler)
   }
 }
 

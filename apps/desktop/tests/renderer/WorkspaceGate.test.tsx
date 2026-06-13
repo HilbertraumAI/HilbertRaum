@@ -1,13 +1,14 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { render, screen, cleanup, waitFor } from '@testing-library/react'
+import { render, screen, cleanup, waitFor, act } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { WorkspaceGate, passwordStrength } from '../../src/renderer/screens/WorkspaceGate'
 import { t } from '../../src/shared/i18n'
 import type {
   WorkspaceStateInfo,
   WorkspaceActionResult,
-  ModelInfo
+  ModelInfo,
+  ModelVerifyProgress
 } from '../../src/shared/types'
 import { stubApi } from '../helpers/renderer'
 
@@ -258,6 +259,51 @@ describe('WorkspaceGate — create (3-step first run)', () => {
     await user.click(screen.getByRole('button', { name: /create workspace/i }))
 
     await waitFor(() => expect(onUnlocked).toHaveBeenCalledWith(UNLOCKED, 'chat'))
+  })
+
+  it('shows a determinate verification bar while first-run hashing runs, then unsubscribes', async () => {
+    const user = userEvent.setup()
+    let emit: ((p: ModelVerifyProgress) => void) | null = null
+    const unsubscribe = vi.fn()
+    let resolveList!: (m: ModelInfo[]) => void
+    const listModels = vi.fn(() => new Promise<ModelInfo[]>((r) => (resolveList = r)))
+    stubApi({
+      createWorkspace: okCreate(),
+      listModels,
+      onModelVerifyProgress: (cb) => {
+        emit = cb
+        return unsubscribe
+      }
+    })
+    render(<WorkspaceGate state={UNINITIALIZED} onUnlocked={vi.fn()} />)
+    await toPasswordStep(user)
+    await user.type(screen.getByPlaceholderText('Password'), 'longenough')
+    await user.type(screen.getByPlaceholderText('Confirm password'), 'longenough')
+    await user.click(screen.getByRole('button', { name: /create workspace/i }))
+
+    // The gate subscribed before awaiting listModels; drive a mid-hash event.
+    await waitFor(() => expect(emit).not.toBeNull())
+    act(() =>
+      emit!({
+        modelIndex: 1,
+        modelCount: 2,
+        modelId: 'a',
+        displayName: 'Qwen3 4B',
+        overallBytesHashed: 50,
+        overallBytesTotal: 100,
+        done: false
+      })
+    )
+
+    // The bare spinner gives way to a determinate bar with the "N of M" label + percent.
+    expect(await screen.findByText(/checking ai model 1 of 2: qwen3 4b — 50%/i)).toBeInTheDocument()
+    const bar = screen.getByRole('progressbar')
+    expect(bar).toHaveAttribute('value', '50')
+    expect(bar).toHaveAttribute('max', '100')
+
+    // Finishing the call tears down the subscription (no lingering listener).
+    resolveList([])
+    await waitFor(() => expect(unsubscribe).toHaveBeenCalled())
   })
 
   it('shows the error message and clears the fields when create is refused', async () => {

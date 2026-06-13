@@ -302,6 +302,8 @@ export const en = {
   'models.checking':
     'Checking model files… The first check after adding or updating a model can take a few ' +
     'minutes for large files; after that the result is remembered and this is instant.',
+  // Determinate variant shown once first-run hashing actually starts (the % is the bar).
+  'models.checkingProgress': 'Checking model {n} of {m}: {name} — {pct}%',
   'models.state.installed': 'Installed',
   'models.state.missing': 'Not downloaded',
   'models.state.checksumFailed': 'Can’t verify',
@@ -696,6 +698,9 @@ export const en = {
   'gate.finishing.hint':
     "Checking what's already on this drive. The first look at a large AI model file can " +
     'take a few minutes.',
+  // Determinate verification bar (replaces the bare spinner once hashing starts): the
+  // byte-weighted % is the bar; this label says which model and how many are left.
+  'gate.finishing.progress': 'Checking AI model {n} of {m}: {name} — {pct}%',
   'gate.finishing.skip': 'Skip — take me to the app',
   'gate.starter.title': 'One last thing',
   'gate.starter.noModel':

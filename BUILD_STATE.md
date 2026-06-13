@@ -6,7 +6,35 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
-_Last updated: 2026-06-13 — **Onboarding follow-ups: whisper auto-install, embeddings card,
+_Last updated: 2026-06-13 — **First-run model-verification progress bar.** The first cold pass
+over a fresh drive hashes the multi-GB GGUF weights (minutes of USB I/O) behind what was an opaque
+spinner. `buildModelList` now accepts an optional `onProgress(p: ModelVerifyProgress)` sink: a cheap
+pre-pass (`statSync` + cache lookup, **no hashing**) sums only the bytes that will actually hash
+(cached/missing/placeholder-hash weights excluded) into `overallBytesTotal`; `sha256File` streams a
+running byte count (throttled to one callback per **64 MB** + a final exact-total flush) which the
+loop re-weights into the overall total plus a 1-based `modelIndex / modelCount` step label; a terminal
+`done` event settles the bar to 100%. **`overallBytesTotal === 0` (all cached — the common 2nd run) ⇒
+no events, no bar.** The `listModels` IPC forwards the sink to the calling renderer over the new
+`EVENTS.modelVerifyProgress` channel via `event.sender` (guarded by `isDestroyed()`); preload exposes
+`api.onModelVerifyProgress`. **Surfaces (Gate + Models, per the chosen scope):** the first-run
+`WorkspaceGate` *finishing* step and the first cold **AI Model** screen visit render the existing
+`Progress` component (byte-weighted %, "Checking model N of M: name") in place of the spinner — both
+keep their fallbacks (the gate's Skip + never-trap `catch`; the screen's calm "Checking…" hint).
+**Additive behind the locked `listModels` contract**; no sink ⇒ zero overhead (legacy callers/tests
+unchanged). **Files:** `shared/types.ts` (+`ModelVerifyProgress`), `shared/ipc.ts`
+(+`EVENTS.modelVerifyProgress`), `services/models.ts` (`sha256File`/`sha256FileCached`/
+`verifyChecksum`/`computeInstallState`/`buildModelList` + the no-hash `pendingHashBytes` pre-pass),
+`ipc/registerModelIpc.ts` (forward via `event.sender`), `preload/index.ts`
+(`onModelVerifyProgress`), `renderer/screens/{WorkspaceGate,ModelsScreen}.tsx`, `shared/i18n/{en,de}.ts`
+(`gate.finishing.progress`, `models.checkingProgress`). **Docs:** `architecture.md` "Models & runtime"
+→ new "Model verification progress (first-run bar)" bullet. **Tests:** typecheck clean, build OK,
+`npm test` **1138 passed / 25 skipped** — +4 in `models.test.ts` (final-flush event; byte-weighted
+monotonic progress + terminal `done`; no-events-when-cached; missing/placeholder excluded from the
+denominator) and +1 renderer (`WorkspaceGate` drives the determinate bar then unsubscribes). **Open:**
+the new strings still want the D-L7 German review; the Models-screen bar covers only the initial
+loading state (a post-download cold re-hash isn't in that state — out of scope this pass)._
+
+_(prior) **Onboarding follow-ups: whisper auto-install, embeddings card,
 policy cleanup, responsive screens (0.1.14 cont.).** (1) **Engine installer generalized to all
 families.** [`runtime-download.ts`](apps/desktop/src/main/services/runtime-download.ts) now drives
 an `ENGINE_FAMILIES` list — `llama_cpp` (chat, `llama-server`) **and `whisper_cpp` (voice,

@@ -4,12 +4,13 @@ import {
   Button,
   PasswordField,
   PasswordStrengthMeter,
+  Progress,
   Spinner,
   Switch,
   passwordStrength
 } from '../components'
 import { useT } from '../i18n'
-import type { WorkspaceStateInfo } from '@shared/types'
+import type { ModelVerifyProgress, WorkspaceStateInfo } from '@shared/types'
 
 // The password field + strength meter live in `components/PasswordField`
 // (the Settings "Change password" card reuses them); re-exported here so existing
@@ -58,6 +59,10 @@ export function WorkspaceGate({ state, onUnlocked }: Props): JSX.Element {
   const [error, setError] = useState<string | null>(null)
   // Set once create succeeds; the starter step hands it to the shell.
   const [createdState, setCreatedState] = useState<WorkspaceStateInfo | null>(null)
+  // Live first-run checksum-verification progress (drives the determinate bar in the
+  // 'finishing' step). Null until the first event lands — until then the bar is just the
+  // calm "Setting things up…" hint.
+  const [verifyProgress, setVerifyProgress] = useState<ModelVerifyProgress | null>(null)
   const finished = useRef(false)
   const { t } = useT()
 
@@ -83,6 +88,10 @@ export function WorkspaceGate({ state, onUnlocked }: Props): JSX.Element {
   async function completeCreate(next: WorkspaceStateInfo): Promise<void> {
     setCreatedState(next)
     setPhase('finishing')
+    // Subscribe BEFORE the call so no early progress event is missed; the bar stays the
+    // calm hint until (and unless) hashing actually starts. `?.` keeps older preloads /
+    // test stubs working (they just never drive the bar).
+    const unsubscribe = window.api.onModelVerifyProgress?.((p) => setVerifyProgress(p))
     try {
       const models = await window.api.listModels()
       const hasChatModel = models.some(
@@ -94,6 +103,8 @@ export function WorkspaceGate({ state, onUnlocked }: Props): JSX.Element {
     } catch {
       // Whatever went wrong, the workspace is open — never trap the user in the gate.
       finish(next, 'chat')
+    } finally {
+      unsubscribe?.()
     }
   }
 
@@ -188,14 +199,35 @@ export function WorkspaceGate({ state, onUnlocked }: Props): JSX.Element {
   }
 
   if (phase === 'finishing') {
+    // Once weight hashing starts (a progress event with real work) the bare spinner gives
+    // way to a determinate, byte-weighted bar with a "model N of M" label; before that —
+    // and when everything is cached (no events) — the calm hint stays.
+    const p = verifyProgress
+    const pct =
+      p && p.overallBytesTotal > 0
+        ? Math.min(100, Math.round((p.overallBytesHashed / p.overallBytesTotal) * 100))
+        : null
     return (
       <div className="gate-shell">
         <div className="gate-card card">
           {brand}
           <h1>{t('gate.finishing.title')}</h1>
-          <p className="hint">
-            <Spinner /> {t('gate.finishing.hint')}
-          </p>
+          {p && pct != null && !p.done ? (
+            <Progress
+              label={t('gate.finishing.progress', {
+                n: p.modelIndex,
+                m: p.modelCount,
+                name: p.displayName,
+                pct
+              })}
+              value={p.overallBytesHashed}
+              max={p.overallBytesTotal}
+            />
+          ) : (
+            <p className="hint">
+              <Spinner /> {t('gate.finishing.hint')}
+            </p>
+          )}
           <Button
             variant="ghost"
             onClick={() => createdState && finish(createdState, 'chat')}
