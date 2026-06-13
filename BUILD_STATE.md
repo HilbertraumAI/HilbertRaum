@@ -746,8 +746,22 @@ Repo root: `f:\_coding\ai_drive`.
   `services/select-sidecar-backed.ts` — the shared model→binary→weights ladder behind the three
   sidecar factories); M-U5 (tech-disclosure GB / Diagnostics MB-s + tokens-s / Settings context-tokens
   now route through locale `toLocaleString` helpers). Suite **1070 green**, typecheck + build clean.
-  **Still open** (deferred, lower priority): the M-U2..4/U6 / M-A2..5 UX & architecture refactors
-  (round-6 batch 2).
+  **Round 6 — batch 2 (branch `audit-2026-06-13-high-fixes`):** the UX + architecture MEDIUMs, closing
+  the audit. UX: M-U2 (a stopped chat stream now toasts `chat.stopped` — a truncated reply is no longer
+  mistaken for a complete one); M-U3 (the no-model chat state routed through the shared `EmptyState`);
+  M-U4 (offline state lifted to App as the single ambient truth — the chat header `LocalIndicator` takes
+  it as a prop instead of self-fetching, so it can't disagree with the sidebar); M-U6 (`Re-index all
+  stale` gated behind a `ConfirmDialog` + a determinate `Progress` bar). Architecture: M-A2
+  (`ipc/chat-stream.ts` — `assertChatStreamReady` + `withChatStream` collapse the duplicated guard
+  preamble + stream lifecycle that registerChatIpc/registerRagIpc kept in hand-synced lockstep); M-A3
+  (`resolveModelByRole` + `composeServices` extracted from `initBackend`); M-A4 (the 1582-line
+  `doctasks.ts` split into `doctasks/{summary,translation,compare,manager}.ts` behind a byte-identical
+  re-export barrel); M-A5 (the `PAID_*` manual-harness matrix documented as a required pre-release gate
+  in `packaging.md` + the canned-real-output regression-fixture policy). **The 2026-06-13 audit is now
+  fully remediated** (every HIGH, MEDIUM, and LOW closed; the `docs/audit-2026-06-13.md` working report
+  was deleted per its own lifecycle rule — the full annotated report, incl. the "Confirmed NON-issues"
+  list of accepted limitations, stays recoverable from git history). Suite **1083 green**, typecheck +
+  build clean.
 - **D1 re-affirmed — unified auto-RAG chat stays NOT built (2026-06-12):** the Phase-21 data
   the original deferral waited for is in, and it argues AGAINST unifying now: no cheap
   relevance gate exists under prefix-less E5 (the measured-floor overlap, rag-design �12.1
@@ -1507,8 +1521,8 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
 5. **ANN vector index** only if a real corpus outgrows the linear scan (rag-design §12.2 D15 —
    explicitly not built).
 
-**Current gate (2026-06-13, post i18n wave + audit HIGH+MEDIUM+round-4/5/6-batch-1 remediation on branch
-`audit-2026-06-13-high-fixes`): typecheck clean, 1070 tests pass (25 skipped — the manual
+**Current gate (2026-06-13, post i18n wave + FULL audit remediation — every HIGH/MEDIUM/LOW closed — on
+branch `audit-2026-06-13-high-fixes`): typecheck clean, 1083 tests pass (25 skipped — the manual
 tests behind `PAID_*` env vars: GPU/thinking/rerank/minsim/RAG-quality/bring-up/
 eval/concurrency-probe/translation/compare/whisper/dictation/OCR smokes — skipped in CI),
 `npm run build` green. Full-suite runs on a loaded machine can flake 1–2 timeout failures
