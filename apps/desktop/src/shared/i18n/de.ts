@@ -28,9 +28,12 @@ export const de: Record<keyof typeof en, string> = {
   'nav.aria': 'Hauptnavigation',
   'nav.home': 'Start',
   'nav.chat': 'Chat',
-  'nav.documents': 'Dokumente',
+  // Soft hyphens (U+00AD) give the narrow nav rail clean break points ("Doku-/mente",
+  // "Einstel-/lungen") — Electron ships no auto-hyphenation; invisible when the word fits
+  // and in the button tooltip. "KI-Modell" already breaks at its real hyphen.
+  'nav.documents': 'Doku­mente',
   'nav.models': 'KI-Modell',
-  'nav.settings': 'Einstellungen',
+  'nav.settings': 'Ein­stel­lungen',
   'app.lockNow': 'Jetzt sperren',
   'app.lockNowTitle': 'Arbeitsbereich wieder verschlüsseln und sperren',
   'app.noticeDetails': 'Details',

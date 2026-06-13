@@ -127,7 +127,9 @@ describe('App shell — 5-item nav (Phase 26)', () => {
     const items = within(nav)
       .getAllByRole('button')
       .filter((b) => b.className.includes('nav-item'))
-    expect(items.map((b) => b.textContent)).toEqual([
+    // Strip soft hyphens (U+00AD): nav labels carry them so the narrow rail wraps cleanly
+    // ("Docu­ments"); they are invisible to the user and irrelevant to the IA assertion.
+    expect(items.map((b) => b.textContent?.replace(/­/g, ''))).toEqual([
       '🏠Home',
       '💬Chat',
       '📄Documents',

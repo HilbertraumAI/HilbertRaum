@@ -12,7 +12,9 @@ export const en = {
   'nav.aria': 'Main',
   'nav.home': 'Home',
   'nav.chat': 'Chat',
-  'nav.documents': 'Documents',
+  // Soft hyphen (U+00AD) gives the narrow nav rail a clean break point ("Docu-/ments")
+  // since Electron has no auto-hyphenation; invisible when the word fits or in the tooltip.
+  'nav.documents': 'Docu­ments',
   'nav.models': 'AI Model',
   'nav.settings': 'Settings',
   'app.lockNow': 'Lock now',

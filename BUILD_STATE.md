@@ -13,9 +13,13 @@ the mode.** Plain Chat has no document access, yet its empty-state examples were
 `chat.example.*` (now "Summarize this document" …) for the "Ask my documents" mode; `ChatScreen`
 picks by `mode`. (2) **Nav rail labels no longer truncate.** `.nav-label` was `overflow:hidden +
 text-overflow:ellipsis`, which clipped single long words on the ~80px rail ("Documents",
-"Dokumente", "Einstellungen"). Now `overflow-wrap:break-word; hyphens:auto` — wraps to a second
-line, hyphenated per `<html lang>` (kept in sync by `applyLanguageSetting`); the button `title=`
-still carries the full name. (3) **Engine banner no longer cries "demo mode" when chat works.**
+"Dokumente", "Einstellungen"). **Electron's Chromium ships no hyphenation dictionaries**, so
+`hyphens:auto` is inert and a bare `break-word` splits mid-word with no hyphen ("Dokument"/"e").
+Fix: the long labels carry explicit **soft hyphens (U+00AD)** in the i18n strings
+(`nav.documents` = `Docu­ments`/`Doku­mente`, `nav.settings` = `Ein­stel­lungen`),
+honored by `.nav-label { hyphens:manual; overflow-wrap:break-word }` — they wrap to a clean
+hyphenated second line ("Doku-/mente", "Einstel-/lungen"); invisible when the word fits and in the
+button `title=` tooltip. (`break-word` stays only as a last-resort net.) (3) **Engine banner no longer cries "demo mode" when chat works.**
 The "Install the AI engine" warning gated on `EngineStatus.installed` (every fetchable family
 present). A drive with the chat engine (`llama_cpp`) but no voice engine (`whisper_cpp`, empty
 `runtime/whisper.cpp/win/` — the real cause on D:) showed the alarming demo-mode banner even though
