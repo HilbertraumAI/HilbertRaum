@@ -229,6 +229,9 @@ export const de: Record<keyof typeof en, string> = {
   'docs.provenance.compareBefore': 'Vergleich von ',
   'docs.provenance.compareMiddle': ' und ',
   'docs.provenance.translatedBefore': 'Übersetzt aus ',
+  // D-L7: German provenance copy to review in the next German pass.
+  'docs.provenance.summaryBefore': 'Zusammenfassung von ',
+  'docs.provenance.generatedBefore': 'Erzeugt aus ',
   'docs.import.busy': 'Wird importiert…',
   'docs.import.files': 'Dateien importieren',
   'docs.import.folder': 'Ordner importieren',

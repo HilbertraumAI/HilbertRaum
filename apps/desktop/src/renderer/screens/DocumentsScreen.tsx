@@ -13,6 +13,7 @@ import type {
   IngestionStatus,
   TranslationTargetLang
 } from '@shared/types'
+import { provenanceView } from '@shared/types'
 import {
   acknowledgeDocTask,
   cancelActiveDocTask,
@@ -358,11 +359,17 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
     return docs?.find((x) => x.id === id)?.title ?? t('docs.removedDocFallback')
   }
 
-  /** Quiet provenance line for a generated document (translation or comparison). */
+  /**
+   * Quiet provenance line for a generated document, rendered from the structured
+   * `GeneratedProvenance` view (kind + source ids) so old and new rows take one path
+   * (plan §15.3). Source titles resolve tolerantly — a deleted source falls back to the
+   * "removed document" copy.
+   */
   function provenanceLine(d: DocumentInfo): ReactNode {
     if (!d.origin) return null
-    if (d.origin.type === 'compare') {
-      const [a, b] = d.origin.comparedFrom
+    const { kind, sourceDocumentIds } = provenanceView(d.origin)
+    if (kind === 'compare') {
+      const [a, b] = sourceDocumentIds
       return (
         <>
           {t('docs.provenance.compareBefore')}
@@ -372,10 +379,16 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
         </>
       )
     }
+    const before =
+      kind === 'translation'
+        ? t('docs.provenance.translatedBefore')
+        : kind === 'summary'
+          ? t('docs.provenance.summaryBefore')
+          : t('docs.provenance.generatedBefore')
     return (
       <>
-        {t('docs.provenance.translatedBefore')}
-        <b>{titleOf(d.origin.translatedFrom)}</b>
+        {before}
+        <b>{titleOf(sourceDocumentIds[0])}</b>
       </>
     )
   }

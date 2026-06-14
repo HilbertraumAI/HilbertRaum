@@ -18,6 +18,7 @@ import type {
   DocumentOrigin,
   DocumentPreview,
   DocumentSummary,
+  GeneratedProvenance,
   ImportDestination,
   IngestionStatus
 } from '../../../shared/types'
@@ -183,12 +184,40 @@ function parseSummary(json: string | null | undefined): DocumentSummary | null {
   return null
 }
 
+/** The valid `GeneratedProvenance.kind` values (used to narrow a parsed string). */
+const GENERATED_KINDS = ['summary', 'translation', 'compare', 'transcript', 'other'] as const
+
 /** Parse a stored origin (generated-document provenance); malformed JSON reads as null. */
 function parseOrigin(json: string | null | undefined): DocumentOrigin | null {
   if (!json) return null
   try {
     const v = JSON.parse(json) as Record<string, unknown> | null
     if (!v || typeof v !== 'object') return null
+    // NEW structured provenance (GeneratedProvenance, plan §15.1): a `kind` discriminator
+    // plus `sourceDocumentIds`. Checked FIRST — new translation/compare rows carry no
+    // legacy `type`/`translatedFrom`/`comparedFrom` fields, so they only match here.
+    if (typeof v.kind === 'string' && Array.isArray(v.sourceDocumentIds)) {
+      const kind = GENERATED_KINDS.find((k) => k === v.kind)
+      const sourceDocumentIds = v.sourceDocumentIds.filter(
+        (x): x is string => typeof x === 'string' && x.length > 0
+      )
+      if (!kind || sourceDocumentIds.length === 0) return null
+      const out: GeneratedProvenance = {
+        kind,
+        sourceDocumentIds,
+        // createdAt is tolerated when absent/odd (parseOcr precedent) — provenance must
+        // still render; only the later staleness phase consumes it.
+        createdAt: typeof v.createdAt === 'string' ? v.createdAt : ''
+      }
+      if (Array.isArray(v.sourceCollectionIds)) {
+        const ids = v.sourceCollectionIds.filter(
+          (x): x is string => typeof x === 'string' && x.length > 0
+        )
+        if (ids.length > 0) out.sourceCollectionIds = ids
+      }
+      if (typeof v.modelId === 'string' && v.modelId.length > 0) out.modelId = v.modelId
+      return out
+    }
     // Comparison provenance: both source ids, A/B order.
     if (v.type === 'compare') {
       const from = v.comparedFrom

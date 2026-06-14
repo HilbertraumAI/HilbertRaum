@@ -212,6 +212,8 @@ export const en = {
   'docs.provenance.compareBefore': 'Comparison of ',
   'docs.provenance.compareMiddle': ' and ',
   'docs.provenance.translatedBefore': 'Translated from ',
+  'docs.provenance.summaryBefore': 'Summary of ',
+  'docs.provenance.generatedBefore': 'Generated from ',
   'docs.import.busy': 'Importing…',
   'docs.import.files': 'Import files',
   'docs.import.folder': 'Import folder',

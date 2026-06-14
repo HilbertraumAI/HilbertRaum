@@ -605,7 +605,52 @@ export interface CompareOrigin {
   comparedFrom: [string, string]
 }
 
-export type DocumentOrigin = TranslationOrigin | CompareOrigin
+/** The kind of generation a `GeneratedProvenance` records. */
+export type GeneratedKind = 'summary' | 'translation' | 'compare' | 'transcript' | 'other'
+
+/**
+ * Structured provenance for a document the app GENERATED from other documents
+ * (document-organization plan §15.1). This is the shape NEW generations write into
+ * `documents.origin_json`; the legacy `TranslationOrigin`/`CompareOrigin` shapes still
+ * parse (back-compat — the `parseOrigin` precedent). Like the legacy shapes this is
+ * PROVENANCE, not sync: re-indexing or re-importing a source never updates this row.
+ *
+ * `createdAt` + `sourceDocumentIds` are kept so a later phase can compute a staleness
+ * indicator (a source re-indexed/deleted after the output was made); v1 ships no
+ * staleness UI (plan §15.3).
+ */
+export interface GeneratedProvenance {
+  kind: GeneratedKind
+  /** The source document id(s) this output was derived from (any may be deleted since). */
+  sourceDocumentIds: string[]
+  /** The source(s)' collection memberships captured at creation time (display/forward-use). */
+  sourceCollectionIds?: string[]
+  /** The model that produced the output, when cheaply known at creation. */
+  modelId?: string
+  createdAt: string
+}
+
+export type DocumentOrigin = TranslationOrigin | CompareOrigin | GeneratedProvenance
+
+/**
+ * Normalize any stored provenance into the uniform view the UI renders: the generation
+ * KIND plus the ordered source document ids. Reads either the structured
+ * `GeneratedProvenance` (new) or a legacy `TranslationOrigin`/`CompareOrigin` (old rows),
+ * so the provenance label is one code path regardless of when the row was written
+ * (plan §15.3). Compare preserves A/B order.
+ */
+export function provenanceView(origin: DocumentOrigin): {
+  kind: GeneratedKind
+  sourceDocumentIds: string[]
+} {
+  if ('kind' in origin) {
+    return { kind: origin.kind, sourceDocumentIds: origin.sourceDocumentIds }
+  }
+  if (origin.type === 'compare') {
+    return { kind: 'compare', sourceDocumentIds: [...origin.comparedFrom] }
+  }
+  return { kind: 'translation', sourceDocumentIds: [origin.translatedFrom] }
+}
 
 export type DocTaskState = 'queued' | 'running' | 'done' | 'failed' | 'cancelled'
 

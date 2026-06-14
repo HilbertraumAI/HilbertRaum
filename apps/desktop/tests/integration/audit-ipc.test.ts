@@ -325,7 +325,7 @@ describe('audit wiring across the IPC layer (privacy sentinel grep)', () => {
     expect(translatedId).not.toBe(documentId)
     const { result: docs2Raw } = await invoke(handlers, IPC.listDocuments)
     const translated = (docs2Raw as DocumentInfo[]).find((d) => d.id === translatedId)
-    expect(translated?.origin).toEqual({ type: 'translation', translatedFrom: documentId, targetLang: 'de' })
+    expect(translated?.origin).toMatchObject({ kind: 'translation', sourceDocumentIds: [documentId] })
     ipcState.saveDialog.canceled = false
     ipcState.saveDialog.filePath = join(rootPath, 'translated-export.md')
     await invoke(handlers, IPC.exportDocument, translatedId)
@@ -364,7 +364,7 @@ describe('audit wiring across the IPC layer (privacy sentinel grep)', () => {
     expect(comparedId).toBeTruthy()
     const { result: docs3Raw } = await invoke(handlers, IPC.listDocuments)
     const compared = (docs3Raw as DocumentInfo[]).find((d) => d.id === comparedId)
-    expect(compared?.origin).toEqual({ type: 'compare', comparedFrom: [documentId, documentIdB] })
+    expect(compared?.origin).toMatchObject({ kind: 'compare', sourceDocumentIds: [documentId, documentIdB] })
     ipcState.saveDialog.canceled = false
     ipcState.saveDialog.filePath = join(rootPath, 'comparison-export.md')
     await invoke(handlers, IPC.exportDocument, comparedId)

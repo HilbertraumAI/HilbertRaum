@@ -7,8 +7,8 @@ import type { Db } from '../db'
 import type {
   DocTaskKind,
   DocTaskStatus,
-  DocumentOrigin,
   DocumentSummary,
+  GeneratedProvenance,
   StartDocTaskRequest,
   TranslationTargetLang
 } from '../../../shared/types'
@@ -32,6 +32,7 @@ import type { RasterizePdf } from '../ocr/rasterizer'
 import { ENCRYPTED_DOC_SUFFIX, shredFile } from '../workspace-vault'
 import { decodeVector, VectorIndex } from '../embeddings'
 import { isAbortError, stripThinkBlocks } from '../chat'
+import { collectionIdsForDocument } from '../collections'
 import type { AuditRecorder } from '../audit'
 import { log } from '../logging'
 import {
@@ -630,7 +631,7 @@ export class DocTaskManager {
       task,
       markdown,
       translatedDocumentTitle(doc.title, targetLang),
-      { type: 'translation', translatedFrom: documentId, targetLang }
+      this.buildProvenance('translation', [documentId], runtime.modelId)
     )
     task.status.progress.stepsDone += 1
     return newDocId
@@ -715,7 +716,7 @@ export class DocTaskManager {
       task,
       markdown,
       compareDocumentTitle(docA.title, docB.title),
-      { type: 'compare', comparedFrom: [idA, idB] }
+      this.buildProvenance('compare', [idA, idB], runtime.modelId)
     )
     task.status.progress.stepsDone += 1
     return newDocId
@@ -892,11 +893,38 @@ export class DocTaskManager {
    * failure). The transient uses the `.parse` infix so the startup crash sweep shreds
    * it if we die mid-step; otherwise it is shredded here, success or failure.
    */
+  /**
+   * Build the structured provenance (plan §15.1) a materialized output carries: the
+   * generation kind, its source ids, the model that produced it, and a snapshot of the
+   * source(s)' collection memberships at creation time. NEW generations write this
+   * `GeneratedProvenance`; the legacy `Translation/CompareOrigin` shapes still parse on
+   * read (back-compat). A generated row is given NO `document_collections` membership of
+   * its own (N1/D3 — handled by NOT filing it); `sourceCollectionIds` is provenance only.
+   */
+  private buildProvenance(
+    kind: GeneratedProvenance['kind'],
+    sourceDocumentIds: string[],
+    modelId: string
+  ): GeneratedProvenance {
+    const db = this.deps.getDb()
+    const sourceCollectionIds = [
+      ...new Set(sourceDocumentIds.flatMap((id) => collectionIdsForDocument(db, id)))
+    ]
+    const prov: GeneratedProvenance = {
+      kind,
+      sourceDocumentIds,
+      modelId,
+      createdAt: new Date().toISOString()
+    }
+    if (sourceCollectionIds.length > 0) prov.sourceCollectionIds = sourceCollectionIds
+    return prov
+  }
+
   private async materializeDocument(
     task: InternalTask,
     markdown: string,
     title: string,
-    origin: DocumentOrigin
+    origin: GeneratedProvenance
   ): Promise<string> {
     const release = this.deps.beginDocumentWork()
     const db = this.deps.getDb()
@@ -915,7 +943,7 @@ export class DocTaskManager {
       if (result.status !== 'indexed') {
         // processDocument never throws — but a materialized output must fully succeed
         // or persist nothing, so a failed import removes the half-born row again.
-        log.error(`Materialized ${origin.type} output failed to import`, {
+        log.error(`Materialized ${origin.kind} output failed to import`, {
           jobId: task.status.jobId,
           status: result.status,
           error: result.errorMessage

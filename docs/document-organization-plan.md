@@ -1,7 +1,13 @@
 # Document organization plan — Library / Projects / Temporary / Generated / Archive
 
 _Status: **IN PROGRESS — Phase A (Collections core) + Phase B (Projects + composite scope, D1) +
-Phase C (Temporary analysis) implemented 2026-06-14.** Phase A = schema/migration/`CollectionService`/
+Phase C (Temporary analysis) + Phase D (Generated provenance, D3) implemented 2026-06-14.**
+Phase D = structured `GeneratedProvenance` written into the reused `origin_json` by translation/compare
+materialization (tolerant `parseOrigin` still reads the legacy `Translation/CompareOrigin` shapes),
+`sourceCollectionIds` snapshot of the source(s)' collections at creation time, structured provenance UI
+labels (`provenanceView`), and the locked N1/D3 invariant that a generated row gets ZERO
+`document_collections` membership (structurally excluded from every collection-derived scope, reachable
+only by explicit `documentIds` or download + re-import). Phase A = schema/migration/`CollectionService`/
 `resolveScope`/collection-aware retrieval backend. Phase B = the full IPC/preload surface (collections
 CRUD + membership + lifecycle + `chat:setScope`/`setCollection`), `resolveScope` wired into the live ask
 path (scope-aware `corpusNeedsReindex` M2 + filename auto-scope **within** the resolved scope, N2),
@@ -12,7 +18,7 @@ project grouping). Phase C = `ImportDestination`/`ImportOptions` + destination-a
 (`pending_destination_json` at queue time M1, applied on indexing success / crash-resume); net-new chat
 attach + drag-drop intake (`conversation_documents` link, FK-guarded N3) with plain-chat drop routing
 (§13.5 H2), in-flight pending chip → live attachment (N4), `chat:listAttachments`; Temporary view
-Keep/Move (drops Temporary, makes permanent) wiring. Phases D–F still open. Condense into a §-numbered
+Keep/Move (drops Temporary, makes permanent) wiring. Phases E–F still open. Condense into a §-numbered
 design record in `docs/rag-design.md`
 (scope) + `docs/architecture.md` (data model / IPC) + `docs/user-guide.md` (UX) once the WHOLE feature
 ships, then delete this file (CLAUDE.md doc-lifecycle rule). Per-phase status lives in `BUILD_STATE.md`._

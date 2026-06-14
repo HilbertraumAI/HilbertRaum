@@ -362,6 +362,18 @@ export function conversationAttachmentIds(db: Db, conversationId: string): strin
   return rows.map((r) => r.document_id)
 }
 
+/**
+ * The collection ids a document currently belongs to (the reverse of
+ * `documentIdsInCollection`). Used to snapshot a generated output's source
+ * memberships into its provenance at creation time (plan §15.1/§15.2).
+ */
+export function collectionIdsForDocument(db: Db, documentId: string): string[] {
+  const rows = db
+    .prepare('SELECT collection_id FROM document_collections WHERE document_id = ?')
+    .all(documentId) as unknown as Array<{ collection_id: string }>
+  return rows.map((r) => r.collection_id)
+}
+
 /** Document ids that belong to a collection (membership listing). */
 export function documentIdsInCollection(db: Db, collectionId: string): string[] {
   const rows = db

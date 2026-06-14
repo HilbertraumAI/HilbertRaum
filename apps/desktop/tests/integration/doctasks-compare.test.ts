@@ -232,8 +232,15 @@ describe('mode (a) — small-docs full compare (D37: re-extracted segments)', ()
     expect(created?.status).toBe('indexed')
     expect(created?.chunkCount).toBeGreaterThan(0)
     expect(created?.title).toBe('Comparison: a vs b.md')
-    expect(created?.origin).toEqual({ type: 'compare', comparedFrom: [a, b] })
-    expect(getDocumentOrigin(db, newId)).toEqual({ type: 'compare', comparedFrom: [a, b] })
+    // Phase D: structured GeneratedProvenance (kind + both source ids, A/B order + model).
+    const expectedOrigin = {
+      kind: 'compare',
+      sourceDocumentIds: [a, b],
+      modelId: 'scripted-model',
+      createdAt: expect.any(String)
+    }
+    expect(created?.origin).toEqual(expectedOrigin)
+    expect(getDocumentOrigin(db, newId)).toEqual(expectedOrigin)
     const { text } = readStoredDocumentText(db, storeDir, newId)
     expect(text.startsWith(`> ${compareAttributionLine('scripted-model')}`)).toBe(true)
     expect(text).toContain(REPORT)

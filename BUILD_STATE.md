@@ -6,7 +6,51 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
-_Last updated: 2026-06-14 — **Document organization — Phase C (Temporary analysis).**
+_Last updated: 2026-06-14 — **Document organization — Phase D (Generated provenance, D3/N1).**
+Fourth phase of [`docs/document-organization-plan.md`](docs/document-organization-plan.md) (esp. §2.3, §7.4,
+§15.1–§15.3, §16, §17, §19, §20 "Phase D"; decisions D3/M4 + audit N1). Gives generated
+translation/comparison documents **structured provenance** and locks the **no-membership** invariant.
+**Data contract** ([`shared/types.ts`](apps/desktop/src/shared/types.ts)): new `GeneratedProvenance`
+(`{kind:'summary'|'translation'|'compare'|'transcript'|'other', sourceDocumentIds[], sourceCollectionIds?,
+modelId?, createdAt}`) + `GeneratedKind`; `DocumentOrigin` widened to the union
+`TranslationOrigin | CompareOrigin | GeneratedProvenance` (reuses `origin_json` — **no new column**); a new
+**`provenanceView(origin)`** normalizer collapses old+new shapes to `{kind, sourceDocumentIds}` so the UI
+has one code path. **Read** ([`ingestion/index.ts`](apps/desktop/src/main/services/ingestion/index.ts)):
+`parseOrigin` now reads the structured shape FIRST (by `kind`+`sourceDocumentIds`, narrowed via a
+`GENERATED_KINDS` tuple), then falls back to the legacy `type`/`translatedFrom`/`comparedFrom` branches
+**unchanged** (old rows keep parsing); malformed ⇒ null, never throws (tolerant — `createdAt` defaulted to
+`''` when absent). **Write** ([`doctasks/manager.ts`](apps/desktop/src/main/services/doctasks/manager.ts)):
+a new `buildProvenance(kind, sourceIds, modelId)` builds the `GeneratedProvenance` translation/compare now
+write (capturing `modelId=runtime.modelId` + a de-duped `sourceCollectionIds` snapshot via new
+[`collectionIdsForDocument`](apps/desktop/src/main/services/collections.ts)); `materializeDocument`'s
+`origin` param is now `GeneratedProvenance`. **N1/D3 locked:** a generated row still gets **NO**
+`document_collections` membership at all (doctasks call `createQueuedDocument`+`processDocument` directly,
+never `fileFromPendingDestination`/`fileIntoLibraryIfUnfiled`), so it is **structurally excluded** from
+every collection-derived scope and reachable only via explicit `documentIds` (or download + re-import).
+`role='generated'` stays a reserved-unused enum string; the `role <> 'generated'` predicate stays dropped.
+**Renderer** ([`DocumentsScreen.tsx`](apps/desktop/src/renderer/screens/DocumentsScreen.tsx)):
+`provenanceLine` + the PreviewModal origin line now render from `provenanceView` (kind+source ids), not the
+parsed display strings — "Translated from …" / "Comparison of … and …" / new "Summary of …" /
+"Generated from …"; source titles still resolve tolerantly (deleted source ⇒ "a removed document"). The
+Generated section view (`origin != null`) + Export/Download are unchanged; snapshot semantics unchanged
+(no auto-update; **staleness UI is Phase E** — v1 only persists `createdAt`+`sourceDocumentIds`). **i18n**:
+new flat `docs.provenance.summaryBefore`/`generatedBefore` EN+DE — **German copy flagged for the D-L7
+review.** **Decisions locked:** generated docs out of the DEFAULT corpus structurally (no predicate);
+summaries stay `summary_json` metadata (NOT materialized — `kind:'summary'`/`'transcript'` reserved for
+forward use); additive/nullable only, `origin_json` reused, tolerant parse everywhere; no parser/chunker/
+embedder change; no new audit events. **Tests:** typecheck clean, build OK, `npm test` **1200 passed /
+25 skipped** (+3 net: doctasks-translation gains structured-provenance+zero-membership+sourceCollectionIds
+and new-shape-round-trip/old-shape-back-compat/malformed-null tests; DocumentTranslate gains a
+new-structured-shape label render; existing doctasks-translation/compare + audit-ipc origin assertions
+updated to the new shape — extended, not broken; audit sentinel stays clean). No version bump.
+**Deliverable proof (covered by tests):** translate report.pdf ⇒ the output shows "Translated from
+report.pdf" from structured provenance, sits in Documents → Generated, carries ZERO collection membership
+(so it's absent from a Library/project answer), is answerable only when hand-picked, and is made durable by
+Download + re-import (Phase C). **Out of scope (Phase E+):** smart views beyond Generated; explicit
+retention; staleness/auto-update UI; converting summaries to documents. **Next:** Phase E — Smart views +
+cleanup (Generated/Recently added/Unfiled/Needs re-index/… + optional explicit retention with review UI)._
+
+_(prior) 2026-06-14 — **Document organization — Phase C (Temporary analysis).**
 Third phase of [`docs/document-organization-plan.md`](docs/document-organization-plan.md) (esp. §2.5, §7.3,
 §11.1–§11.4 D2, §13.1/§13.3/§13.5, §14.1/§14.2, §16, §17, §19, §20 "Phase C"; audit C3/H1/H2/M1/N3/N4/N12).
 Builds the **net-new chat attach / drag-drop intake** + import-destination filing over the Phase-A/B
