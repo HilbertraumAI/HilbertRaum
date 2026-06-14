@@ -946,10 +946,23 @@ code, pre, kbd { font-family: var(--font-mono); }
 /* Voice-dictation mic: quiet ghost button beside Send; while recording it
    pulses so stopping is obvious (the OS mic indicator is the authoritative signal). */
 .dictation-btn { min-width: 44px; }
+/* Same hover treatment as the password reveal eye (gate-pw-toggle): no grey ghost fill,
+   the glyph just shifts to the accent blue. Skipped while recording so the pulsing
+   accent-border state stays intact. */
+.btn.ghost.dictation-btn:not(.dictation-recording):hover:not(:disabled) {
+  background: transparent;
+  border-color: transparent;
+  color: var(--accent);
+}
 .dictation-btn.dictation-recording {
   color: var(--accent);
   border-color: var(--accent);
   animation: dictation-pulse 1.6s ease-in-out infinite;
+}
+/* Hovering while recording must not bring back the grey ghost fill — keep it transparent
+   so only the accent border + pulse show. */
+.btn.ghost.dictation-btn.dictation-recording:hover:not(:disabled) {
+  background: transparent;
 }
 @keyframes dictation-pulse { 50% { opacity: 0.45; } }
 @media (prefers-reduced-motion: reduce) {
