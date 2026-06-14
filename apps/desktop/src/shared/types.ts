@@ -838,7 +838,8 @@ export interface ImportJobStatus {
   done: boolean
 }
 
-// ---- Document organization (docs/document-organization-plan.md) ----
+// ---- Document organization (architecture.md "Document organization — design record";
+//      retrieval/scope half in rag-design.md §13) ----
 //
 // A collection-membership layer over the existing ingestion/retrieval pipeline: one
 // stored file, one chunk set, one vector set per document; organization is metadata

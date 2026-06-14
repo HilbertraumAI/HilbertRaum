@@ -1089,6 +1089,161 @@ export-to-file action (`exportAuditLog` IPC `audit:export`, the `exportConversat
 save-dialog precedent, JSON output). Data class + privacy rule:
 [`security-model.md`](security-model.md) §"Audit log data class".
 
+## Document organization — design record (Phases A–F, §1–§8)
+
+_Formerly `docs/document-organization-plan.md` (condensed here at the Phase-F v1 closeout,
+2026-06-14, per the CLAUDE.md doc-lifecycle rule; the full original working paper — three audit
+rounds, the §0/§0.1/§0.2 decision ladder, per-phase as-built notes, the open-questions register —
+is in git history: `git show 477f803:docs/document-organization-plan.md`). A collection-membership
+layer over the existing ingestion/retrieval pipeline: one stored file, one chunk set, one vector set
+per document — organization is metadata. Five user-facing containers — **Library**, **Projects**,
+**Temporary**, **Generated** (a role/view, not a place), **Archive** — plus query-time **Smart
+views** and rule-based **filing suggestions**. Everything stays local + offline. **The retrieval /
+scope half of this design lives in [`rag-design.md`](rag-design.md) §13** (resolveScope, the
+RetrievalScope union, collection-filtered search); this record is the **data model, IPC, audit, and
+filing-suggestion engine**. **§ numbers below are stable — new code comments cite them as "doc-org
+record §N"** (existing comments still say "plan §x"; those resolve via git history above)._
+
+### §1 Decisions (the locked ladder — D1/D2/D3 + the audit fixes)
+
+| Decision | Choice | Why (short) |
+|---|---|---|
+| Organization primitive | **Collection membership** (`document_collections`), never duplicated files/vectors | One doc = one chunk/vector set shared across every collection it belongs to (the cheap-change principle) |
+| Projects vs a new table | **Projects ARE collections** (`type='project'`); Library/Temporary are seeded built-ins (`builtin=1`) | One membership model carries Library, projects, and (later) smart-view ids uniformly |
+| **D1** — chat scope | A **composed UNION** the user picks from Library + project(s) + specific docs, persisted in `conversations.scope_v2_json` | Users think in "my sources", not one bucket; survives restart |
+| **D2** — duplicate import | **Always a new document** (no sha-dedup, no prompt). Share one doc across folders via **Add to collection** | Import stays dumb + predictable; de-duplicated sharing is the explicit membership action |
+| **D3 + N1** — generated docs | Get **NO `document_collections` membership at all** ⇒ structurally absent from every collection scope; reachable only by explicit doc-id or download + re-import | Generated outputs are work products, not auto-trusted knowledge; no exclusion predicate needed |
+| **C1** — archive | A doc leaves retrieval **only** via its own `lifecycle='archived'`; archiving a *project* just removes it as a selectable source | Archiving "Tax 2025" must never make a Library doc vanish from Library answers |
+| **C2** — delete-project "with documents" | Deletes ONLY docs with **no other membership of any kind** (built-ins counted) | A Library+project doc is Library knowledge — un-filed from the project, never deleted |
+| **C3** — temporary chat files | Their own scope category — a `conversation_documents` link, **never** `scope_json` | `scope_json` chips would masquerade temp files as a removable manual selection + disable filename auto-scope |
+| **M1** — queued-import intent | `documents.pending_destination_json` written at queue time, applied on indexing success | A crash mid-import re-files to the intended Project/Temporary, not Library |
+| **Phase F** — filing suggestions | **Rule-based only** (no model, no network), **never silent / never auto-file**; dismissals in `AppSettings` (no new column) | Local-AI classification is a later owner-gated step; a suggestion is inert until Apply |
+| Migration shape | Additive only — new tables + **nullable** columns (the `ensureColumn` DDL allows no `DEFAULT`/`NOT NULL`); NULL-as-sentinel coalesced in code | Matches the established `scope_json`/`parseScope` precedent |
+
+### §2 Hard rules (these bound every choice)
+
+- **Additive, nullable columns only** — `ensureColumn` validates DDL with `/^[A-Za-z0-9_ ]+$/`
+  (no quotes/punctuation), so every new column is nullable with NULL coalesced in code (e.g.
+  `docLifecycle(row)`: NULL ⇒ `'permanent'`). New *tables* carry full SQL in the `SCHEMA` constant.
+- **Malformed persisted JSON never throws** — every parse (`parseDocumentScope`,
+  `parsePendingDestination`, `parseOrigin`) is tolerant → safe default.
+- **Privacy/audit data class holds** — collection events record **id + type + count only, NEVER the
+  collection/project NAME** (a project name like "Divorce" is content-ish; the filename allowance does
+  not extend to it). Search/scope query text is still never logged. Enforced by the sentinel-grep
+  test `tests/integration/audit-ipc.test.ts`.
+- **Offline/local** — every organization op is a pure local SQLite write; filing suggestions are a
+  pure local rule engine. No network, no model, no telemetry; the feature works with zero models.
+- **Encryption at rest** — the new tables live in the same workspace DB, so they are encrypted with it.
+
+### §3 Data model (additive — `db.ts` `SCHEMA` + `ensureColumn`)
+
+Three new tables; **`ON DELETE CASCADE` on both FKs of `document_collections` and
+`conversation_documents` is load-bearing (C4)**: `openDatabase` runs `PRAGMA foreign_keys = ON` and
+`deleteDocument` deletes the `documents` row directly, so without CASCADE a *pre-feature* app deleting
+a doc in a *post-feature* DB would hit an FK violation. CASCADE makes any build delete a doc cleanly
+and removes manual membership-cleanup ordering.
+
+```
+collections(id, name, type, description, builtin, color, created_at, updated_at,
+            archived_at, retention_policy_json)        -- type ∈ library|project|temporary|archive|smart
+document_collections(document_id, collection_id, role, added_at)  -- PK(doc,coll) ⇒ idempotent add
+conversation_documents(conversation_id, document_id, added_at)    -- C3 temp-attachment link
+```
+
+- `type='archive'`/`'smart'` are reserved enum strings, **not stored as rows** in v1 (archive is a
+  lifecycle; smart views are query-time). `role='generated'` is reserved-unused (N1 — generated docs
+  get no membership). The composite PKs make add idempotent (`ON CONFLICT DO NOTHING`).
+- Additive `documents` columns (all nullable): `lifecycle` (NULL ⇒ permanent),
+  `source_relative_path` / `source_folder_label` (folder-import display metadata),
+  `pending_destination_json` (M1), `expires_at` (reserved for Phase-E.2 retention, NULL in v1).
+  **`last_used_at` is deferred** (L2 — it would add a hot-path write per cited doc).
+- Additive `conversations` columns: `collection_id` (the legacy single-project creation anchor) +
+  `scope_v2_json` (the D1 composite `DocumentScope`).
+- **Migration** (idempotent, inside `openDatabase`): create tables → `ensureColumn`s → seed **one**
+  Library + **one** Temporary built-in (canonical English name stored; UI localizes by `type`) →
+  **backfill Library membership** for every `status='indexed'` doc that has no membership **and
+  `origin_json IS NULL`** (the M1 status gate + the D3 generated-skip). Re-open is a no-op
+  (membership-guarded). Generated rows get no membership (step is a no-op by construction).
+
+### §4 Services (`collections.ts` + `filing-suggestions.ts`)
+
+- **`CollectionService` (`collections.ts`)** — CRUD (`createCollection`/`rename`/`setCollectionArchived`/
+  `deleteCollection`), membership (`addToCollection`/`removeFromCollection`, idempotent),
+  `setDocumentsLifecycle`, the **C2 predicate** `projectOnlyDocumentIds` (counts ALL memberships so a
+  Library member is spared), and the indexing-success filing entry points
+  `fileFromPendingDestination` → `fileDocumentByDestination` (Library default when no intent recorded,
+  so options-less imports stay byte-for-byte). `linkConversationDocument` is **FK-guarded (N3)**:
+  verifies the conversation still exists + try/catch the race; if gone, keep the doc in Temporary, drop
+  only the link. `resolveScope` is documented in rag-design §13.
+- **Filing-suggestion engine (`filing-suggestions.ts`, Phase F)** — pure, LOCAL, deterministic (no
+  model, no network, no clock, no randomness). `suggestFilingForDocument(doc, collections, allDocs)`
+  returns ranked, de-duped `FilingSuggestion[]` via three rules, highest-confidence first:
+  **(1) folder-name match** (`source_folder_label` equals/contains an active project name),
+  **(2) same-source-folder cohort** (other docs from the same folder are filed in project X),
+  **(3) bilingual filename pattern** — small documented EN-canonical + German token tables
+  (invoice/receipt/bill/statement·Rechnung/Beleg/Quittung/Kontoauszug; contract/agreement·Vertrag/
+  Vereinbarung) ⇒ a matching existing project, else a `newProject` with a canonical English name. Each
+  suggestion carries a stable `ruleId` + an i18n reason **key + params** (never free text). **Subjects
+  excluded** (D3/§7): generated (`origin != null`), Temporary/archived lifecycle, already-project-filed;
+  archived projects are never targets. Tolerant (missing metadata ⇒ no suggestion, never throws).
+
+### §5 IPC / preload surface (additive, backward-compatible)
+
+| Channel | Signature | Handler |
+|---|---|---|
+| `collections:list/create/rename/setArchived/delete` | CRUD; delete takes `'membershipOnly' \| 'withDocuments'` (C2) | `registerCollectionsIpc.ts` |
+| `docs:addToCollection` / `removeFromCollection` | `(documentIds[], collectionId)` — **Move = add + remove** (no channel) | `registerDocsIpc.ts` |
+| `docs:setLifecycle` | `(documentIds[], 'permanent'\|'temporary'\|'archived') ⇒ DocumentInfo[]` | `registerDocsIpc.ts` |
+| `docs:import` (extend) | `(paths[], options?: ImportOptions)` — `destination` persisted at queue time (M1) | `registerDocsIpc.ts` |
+| `docs:list` (extend) | `filter?: { collectionId?, lifecycle?, smart?: SmartListView }` — `smart` shares the pure `matchesSmartView` with the renderer rail | `registerDocsIpc.ts` |
+| `docs:filingSuggestions` (Phase F) | `() => FilingSuggestionResult[]` (read-only; Apply reuses addToCollection / collections:create) | `registerDocsIpc.ts` |
+| `chat:setScope` / `setCollection` / `listAttachments` | composite scope persist · creation anchor · the `conversation_documents` attachments | `registerChatIpc.ts` |
+
+Renderer-untrusted inputs are sanitized at the boundary (`sanitizeDestination` ⇒ Library fallback;
+`safeIdArray`). Every channel mirrors 1:1 in `preload/index.ts`. **Smart views** (§7.6) are query-time
+predicates via the shared `matchesSmartView` (`shared/types.ts`) — Generated/Unfiled/Recently added/
+Needs re-index/Large/Failed/Audio/OCR — kept in lockstep between the rail and `docs:list`; they are
+**not stored collections and not pickable retrieval scopes** in v1.
+
+### §6 Generated provenance (Phase D, structured)
+
+A materialized translation/comparison writes a structured `GeneratedProvenance`
+(`{kind, sourceDocumentIds, sourceCollectionIds?, modelId?, createdAt}`) into the **reused**
+`origin_json` (no new column); `parseOrigin` reads it first, then falls back to the legacy
+`Translation/CompareOrigin` shapes unchanged. `provenanceView(origin)` normalizes both to
+`{kind, sourceDocumentIds}` so the UI has one path. The generated row gets **zero membership** (N1/D3)
+and is surfaced only by the Generated smart view (`origin != null`). Snapshot semantics are unchanged;
+the Phase-E `generatedStaleness(doc, sources)` is a pure, tolerant derivation (no new column, no
+hot-path write) flagging a row when a source's `updatedAt` post-dates the output's `createdAt`
+(`source-changed`) or a source is missing/archived (`source-removed`).
+
+### §7 Audit events (id/type/count only)
+
+New `AuditEventType`s: `collection_created`/`renamed`/`archived`/`deleted` and
+`documents_added_to_collection`/`removed_from_collection`/`document_lifecycle_changed` — metadata is
+**collection id + type + affected count ONLY, never the name**. The deliberate asymmetry (filenames are
+logged, project names are not) is recorded so a future reviewer doesn't "fix" it by logging names.
+**Filing suggestions add NO audit event**: Apply reuses `documents_added_to_collection`, so the
+suggestion reason (folder / filename pattern / project name) is never logged. The sentinel-grep test
+seeds a project-name + a folder-label (suggestion-reason) sentinel and proves neither appears.
+
+### §8 Accepted v1 trade-offs & deferred work
+
+- **Library == all documents on day one** — the distinction earns its keep only as the user adds
+  Temporary/Archived/Project-only docs (intended gradual behaviour).
+- **Re-importing the same file yields a second row + vector set** (D2) — deliberate de-dup-free import.
+- **Pre-feature app on a post-feature DB** ignores collections for *display* but relies on CASCADE for
+  safe *deletion* (C4) — one-line note in `known-limitations.md`.
+- **Deferred (owner-gated):** Phase E.2 explicit retention + Temporary review dashboard (the reserved
+  `expires_at` column, a review-before-delete UI, default Never, never touching Library/generated/
+  project-filed docs, shredding sidecars under encryption); `last_used_at`/"Recently used" (L2);
+  **local-AI filing suggestions** (Phase F "later"); auto-creating projects from top-level import
+  folders (§11.2 / open question Q8).
+
+**History:** Phases A–F = commits `5c70021`, `7bcd4a1`, `39531e8`, `e0bff6b`, `499c3ab`, `477f803`
+(2026-06-14); the full original plan: `git show 477f803:docs/document-organization-plan.md`.
+
+
 ## Data flow (RAG)
 import → extract text → chunk → embed (local) → store vectors → on question: embed query →
 cosine top-k ⊕ FTS5 keyword top-k (RRF fusion) → optional rerank → build grounded prompt with

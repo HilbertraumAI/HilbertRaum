@@ -89,7 +89,7 @@ CREATE TABLE IF NOT EXISTS runtime_events (
   created_at TEXT NOT NULL
 );
 
--- Document organization (docs/document-organization-plan.md, Phase A). A collection is
+-- Document organization (architecture.md "Document organization — design record" §3). A collection is
 -- the unifying primitive: Projects are collections; Library/Temporary are seeded
 -- built-ins; Archive is a lifecycle; Generated is a role/view. Membership never
 -- duplicates documents/chunks/embeddings.

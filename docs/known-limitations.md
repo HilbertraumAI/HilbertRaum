@@ -39,8 +39,8 @@ password recovery — are documented in
   corrupting. Document **deletion** stays safe only because those membership/link tables declare
   `ON DELETE CASCADE`: the old app's direct `DELETE FROM documents` (with `PRAGMA foreign_keys = ON`)
   cascade-removes the orphan rows instead of raising a foreign-key violation. Same accepted
-  app-beside-data version-skew stance as the vault note above. (See `docs/document-organization-plan.md`
-  §9/§8.1.)
+  app-beside-data version-skew stance as the vault note above. (See `docs/architecture.md`
+  "Document organization — design record" §3.)
 - **Password-change edge: a post-commit swap interruption can briefly wedge one document.**
   If the one-time v1→v2 migration is interrupted AFTER its descriptor commit but mid file-swap
   (e.g. a transiently locked file on Windows), a not-yet-swapped document sidecar stays under

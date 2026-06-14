@@ -396,6 +396,60 @@ A few honest notes about recordings:
 - Transcripts are good but not perfect: unusual names and terms can be misheard. Numbers
   and dates held up well in our German and English checks.
 
+### Organize your documents (Library, Projects, Temporary)
+
+The **Documents** screen has a list of **sections** down the left so a one-off invoice never
+pollutes the same pile as your long-term records:
+
+- **Library** — your long-term knowledge base. Everything you import lands here by default and
+  it is the default source when you ask your documents.
+- **Projects** — focused folders you create (e.g. *"Tax 2025"*, *"Client Müller"*). Use the
+  **+** next to **Projects** to make one; the **⋯** menu renames, archives, or deletes it. A
+  document can be in a project **and** in your Library at the same time — it is the *same* file,
+  not a copy, so it is never stored or indexed twice.
+- **Temporary** — one-off files you want to read *now* without adding them to your Library
+  (for example, a PDF you drop into a chat). They stay here, clearly visible, until you decide
+  what to do with them. Nothing is ever deleted automatically.
+- **Generated** — documents the app made for you (translations, comparisons). They show where
+  they came from and are kept out of your default answers (see below).
+- **Archived** — documents you've set aside: kept on the drive but left out of answers until
+  you un-archive them.
+- **Views** — handy filters like *Recently added*, *Unfiled*, *Large files*, *Scanned / OCR*,
+  *Failed imports*. These just filter the list; they don't move anything.
+
+**Move things around.** Each document row has an **Add to project…** menu — file it into a
+project, **Keep in Library**, mark it **Temporary** or **Archived**, or (inside a project)
+remove it from that project. Tick several documents to do it in bulk. Deleting a *project* asks
+whether to keep its documents (they stay in your Library / other projects) or delete the ones
+that live *only* in that project — Library knowledge is never deleted by accident.
+
+**Suggested places to file things.** On unfiled documents the app may show a calm suggestion
+like **"Suggested project: Tax 2025 — Apply?"** — based simply on the folder a file came from,
+where similar files are already filed, or a name that looks like an invoice/receipt
+(*Rechnung*, *Beleg*…). It is only ever a suggestion: **nothing is filed until you click
+Apply**, and **Dismiss** hides it for that document for good. No AI guessing, no automatic
+sorting — you stay in control.
+
+### Choose which sources a chat uses
+
+In **Ask my documents**, the **📄 Using…** button under the message box lets you compose
+exactly where answers come from: tick **Library**, any **projects**, and/or pick **specific
+documents** — they all add together (e.g. *"Library + Tax 2025 + contract.pdf"*). Your choice
+is remembered for that chat, even after you restart the app. Files you dropped into the chat
+are always included and shown separately as *"files in this chat"*. A chat started inside a
+project uses that project to begin with; **"All documents"** is always one tap away.
+
+### Generated documents stay out of answers until you decide
+
+A translation or comparison the app makes is a **work product**, so it is kept out of your
+default answers — it lives in **Generated**, explains its origin, and can be **Export**ed. To
+make one part of your knowledge, **Export it and re-import** it into the right place. If a
+generated document's source later changes, its row shows a quiet **"Outdated — re-run to
+update"** note (the app never silently rewrites it; re-run the task when you want a fresh one).
+
+Everything here is local: organizing, suggesting, and scoping never call a model or the
+network, and the activity log records only counts and ids — never your project or folder names.
+
 ---
 
 ## 8. Privacy & offline

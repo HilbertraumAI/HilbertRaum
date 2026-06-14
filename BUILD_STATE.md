@@ -52,14 +52,20 @@ flow). No version bump. **Deliverable proof (covered by tests):** importing rece
 folder (or invoice/rechnung filenames) surfaces a quiet "Suggested project: Tax 2025 — Apply?" on Unfiled;
 one click files the doc via the existing membership path; nothing is filed without that click; no model is
 called, no network touched, and the audit log records only ids/counts — never the suggestion reason or any
-name. **DOC-LIFECYCLE CLOSE-OUT (owner action needed):** Phase F completes the planned v1 arc (E.2 is
-owner-deferred). Per CLAUDE.md, the whole feature now warrants condensing
-[`docs/document-organization-plan.md`](docs/document-organization-plan.md) into §-numbered design records
-in `docs/rag-design.md` (scope) + `docs/architecture.md` (data model / IPC) + `docs/user-guide.md` (UX),
-then DELETING the plan file (history stays in git). Because this is a large, irreversible-feeling doc move,
-it is **left for explicit owner confirmation** — the plan is marked v1-COMPLETE with Phase F done and this
-pending condensation flagged here. **Next:** owner-confirmed plan condensation + deletion; or owner-gated
-Phase E.2 (explicit retention + Temporary review dashboard); local-AI filing suggestions (owner-gated)._
+name. **DOC-LIFECYCLE CLOSE-OUT (DONE — owner-confirmed 2026-06-14):** the whole v1 feature (Phases A–F;
+E.2 owner-deferred) was condensed into §-numbered design records and
+`docs/document-organization-plan.md` was **deleted** (full original in git: `git show
+477f803:docs/document-organization-plan.md`). The records: **[`docs/architecture.md`](docs/architecture.md)
+"Document organization — design record" §1–§8** (decisions D1/D2/D3 + the audit fixes, data model,
+services, IPC, generated provenance, audit, trade-offs); **[`docs/rag-design.md`](docs/rag-design.md) §13**
+(the scope/retrieval half — `DocumentScope`, `resolveScope`, the arg-5 `RetrievalScope` union H3, the
+membership-OR-id SQL filter, C1 archive, D3/N1 generated exclusion, N2 filename auto-scope, M2 scoped
+re-index); **[`docs/user-guide.md`](docs/user-guide.md) §7** (the user-facing Library/Projects/Temporary/
+Generated/Archived + source picker + filing suggestions copy). The two in-code doc pointers
+([`types.ts`](apps/desktop/src/shared/types.ts), [`db.ts`](apps/desktop/src/main/services/db.ts)) and the
+`known-limitations.md` C4 note were repointed to the new records (existing inline "plan §x" comments
+resolve via git history). **Next:** owner-gated Phase E.2 (explicit retention + Temporary review
+dashboard); local-AI filing suggestions (owner-gated); or new work._
 
 _(prior) 2026-06-14 — **Document organization — Phase E (Smart views + generated staleness).**
 Fifth phase of [`docs/document-organization-plan.md`](docs/document-organization-plan.md) (esp. §5,

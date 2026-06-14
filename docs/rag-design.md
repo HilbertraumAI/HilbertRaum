@@ -663,3 +663,88 @@ this prefix-less-E5 setup the reranker is not marginal polish — it rescued the
 answer from #3-behind-distractors to #1; the ~25 s worst-case cost buys real correctness.
 
 Gate at ship: typecheck clean, 601 tests, build green; phase commit `b8feb46`.
+
+## 13. Collection-scoped retrieval & composite scope — design record (document organization, Phases A–F)
+
+_The retrieval/scope half of the document-organization layer. The **data model, IPC, audit, and
+filing-suggestion engine** are in [`architecture.md`](architecture.md) "Document organization — design
+record" (§1–§8); this section is **how a chat's chosen sources become a retrieval filter**. Condensed
+from `docs/document-organization-plan.md` at the Phase-F closeout (2026-06-14); full original:
+`git show 477f803:docs/document-organization-plan.md`. **§13.x anchors are stable.**_
+
+### 13.1 The scope model (D1 — a union of selected sources)
+
+A documents-chat's scope is a **UNION** the user composes from any mix of the whole **Library**, one or
+more **project** folders, and **specific documents** — not one anchor. It is persisted per conversation
+in `conversations.scope_v2_json` as a `DocumentScope` (`{ collectionIds, documentIds, includeArchived? }`);
+an **empty** scope (both arrays empty) is the explicit **"All documents"** choice (whole corpus). This
+supersedes the original single-`collection_id` anchor (kept only as the creation anchor + a legacy
+fallback). Tolerant parse → NULL falls back to the legacy interpretation, never throws.
+
+### 13.2 `resolveScope(db, conversationId) ⇒ RetrievalScope` (`collections.ts`)
+
+Pure (reads only). Resolution order:
+1. `scope_v2_json` present ⇒ authoritative composite scope (`collectionIds` ∪ `documentIds`).
+2. else legacy fallback: non-empty `scope_json` ⇒ explicit specific-doc scope; else `collection_id` ⇒
+   that project; else the **Library** default (documents-mode default).
+3. **chat attachments** (`conversation_documents`, C3) are **always** merged into `documentIds` — a file
+   dropped into the chat is answerable regardless of the rest of the scope, and the link (not Temporary
+   membership) is authoritative, so a later "Keep in Library" doesn't drop it from its chat.
+
+`hasExplicitDocSelection` is set from the user's **hand-picked** docs **before** attachments/expansion
+are merged (N2), so filename auto-scope can tell a deliberate pick from an attachment. Result:
+`RetrievalScope { documentIds?, collectionIds?, includeArchived?, hasExplicitDocSelection? }`.
+
+### 13.3 Threading scope into retrieval (H3 — arg-5 union, no caller churn)
+
+`retrieve()`'s parameter 5 is widened to `string[] | RetrievalScope | null` and **normalized
+internally** (`Array.isArray(scope) || scope == null ? { documentIds: scope ?? null } : scope`), so
+**every existing positional `scopeDocumentIds` caller and test stays valid byte-for-byte**;
+`generateGroundedAnswer` gains `opts.scope` and forwards it. The membership filter is pushed into SQL
+as an **EXISTS/IN disjunction** (index-backed by `idx_doccoll_*`), not a materialized `IN (…thousands…)`:
+
+```sql
+AND embeddings.chunk_id IN (
+  SELECT c.id FROM chunks c WHERE (
+    EXISTS (SELECT 1 FROM document_collections dc                 -- membership branch
+            WHERE dc.document_id = c.document_id AND dc.collection_id IN (…collectionIds…))
+    OR c.document_id IN (…documentIds…))                          -- explicit-doc branch, UNIONed in
+  AND NOT EXISTS (SELECT 1 FROM documents d                       -- C1: doc-level archive only
+                  WHERE d.id = c.document_id AND d.lifecycle = 'archived'))
+```
+
+`keywordSearchChunks` (FTS5) attaches the analogous predicate to its existing `chunks c` join. A
+document is in scope when it is a member of any `collectionIds` entry **OR** its id is in `documentIds`
+(a UNION, D1 — not a short-circuit). Empty both ⇒ no filter = "All documents".
+
+### 13.4 What scoping does and does NOT exclude
+
+- **Archive is document-level only (C1).** `includeArchived=false` (default) adds a single
+  `lifecycle != 'archived'` predicate to the whole union. Archiving a *project* only removes it as a
+  selectable source; a member also reachable via Library/another project stays answerable.
+- **Generated docs are excluded structurally (D3/N1).** They carry **no membership**, so a
+  `collectionIds` expansion never reaches them — no `role='generated'` predicate exists. They are
+  answerable only when their specific id is hand-added to `documentIds`.
+- **Temporary is not a pickable bulk source** (N10); **Generated is not a source** (D3) — both are
+  reached only via "Specific documents…" or (for temp) their own chat attachment.
+
+### 13.5 Filename auto-scope within the resolved scope (N2/N13)
+
+`detectFilenameScope` now runs over the **documents visible in the resolved scope** (a bounded
+`id,title` projection — no vectors loaded), not the whole corpus. It is skipped **only** when
+`hasExplicitDocSelection` is true (a deliberate hand-pick). Multiple in-scope matches ⇒ scope to *all*
+matches + a disambiguation notice on the existing `STREAM.scope` channel — never a silent guess.
+
+### 13.6 Scope-aware re-index honesty (M2)
+
+`corpusNeedsReindex(db, embeddingModelId, scope?)` applies the same membership/`includeArchived` filter
+as retrieval, so the grounding guarantee stays correct under scope: an **empty** scope (a new/empty
+project) ⇒ `NO_DOCUMENT_CONTEXT_ANSWER` (re-indexing wouldn't help); a scope with indexed docs **none
+visible to the active embedder** ⇒ `REINDEX_NEEDED_ANSWER`. Collection filtering can only shrink the
+candidate set, so the empty-context ⇒ no-model-call guarantee strengthens, never weakens.
+
+### 13.7 Persistence & smart-view-as-scope (out of v1)
+
+The composite `DocumentScope` (incl. the empty "All documents") persists in `scope_v2_json` and survives
+restarts. A smart view (§7.6 — a query-time predicate, not a stored collection) is **not** storable *as*
+a scope in v1; a user can apply it to the listing and hand-add its current ids via "Specific documents…".
