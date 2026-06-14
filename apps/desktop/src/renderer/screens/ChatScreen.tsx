@@ -3,8 +3,10 @@ import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import {
   DOC_TASK_BUSY_MESSAGE,
   type ChatDepthMode,
+  type Collection,
   type Conversation,
   type DocumentInfo,
+  type DocumentScope,
   type Message
 } from '@shared/types'
 import { cancelActiveDocTask } from '../lib/doctasks'
@@ -118,13 +120,21 @@ export function ChatScreen({
   // Imported documents — drives the scope popover's titles and the empty-state nudge.
   // Best-effort: a failed load just hides both affordances.
   const [docs, setDocs] = useState<DocumentInfo[]>([])
+  // Collections (Library + projects) — drives the multi-select source picker + footer union
+  // (document-organization plan §13). Best-effort: a failed load leaves the picker docs-only.
+  const [collections, setCollections] = useState<Collection[]>([])
   // Voice dictation: availability-driven — the composer mic renders only
   // when a transcriber is selected (whisper binary + weights on the drive). Best-effort
   // like `docs`: a failed status read just hides the mic.
   const [dictationAvailable, setDictationAvailable] = useState(false)
-  // Scope for the NEXT documents conversation (from "Ask these documents"); once a
-  // conversation is created it owns the scope (`scopeDocumentIds`) and this clears.
-  const [pendingScope, setPendingScope] = useState<string[] | null>(initialScopeDocumentIds ?? null)
+  // Composite scope for the NEXT documents conversation (plan D1); once a conversation is
+  // created it owns the scope (`scope_v2_json`) and this clears. Seeded from the Documents
+  // screen's "Ask these documents" handoff (a specific-doc selection).
+  const [pendingScope, setPendingScope] = useState<DocumentScope | null>(
+    initialScopeDocumentIds && initialScopeDocumentIds.length > 0
+      ? { collectionIds: [], documentIds: initialScopeDocumentIds }
+      : null
+  )
   // Conversation-list collapse, remembered across sessions (localStorage — a UI
   // preference, NOT user data, so it may live outside the encrypted workspace).
   const [listCollapsed, setListCollapsed] = useState<boolean>(() => {
@@ -220,6 +230,13 @@ export function ChatScreen({
         setDocs((await window.api.listDocuments()) ?? [])
       } catch {
         setDocs([])
+      }
+    })()
+    void (async () => {
+      try {
+        setCollections((await window.api.listCollections?.()) ?? [])
+      } catch {
+        setCollections([])
       }
     })()
     void (async () => {
@@ -334,11 +351,16 @@ export function ChatScreen({
     else setListCollapsedPersistent(false)
   }
 
-  // Create a conversation in the current mode. A documents conversation takes the
-  // pending "ask selected documents" scope (which it then owns — the handoff clears).
+  // Create a conversation in the current mode. A documents conversation takes the pending
+  // composite scope (which it then owns — the handoff clears). When the pending scope is a
+  // single project, that project also becomes the creation anchor (plan §13.3/§13.4).
   async function createConversationInMode(): Promise<Conversation> {
     const scope = mode === 'documents' ? pendingScope : undefined
-    const conv = await window.api.createConversation({ mode, scopeDocumentIds: scope })
+    const collectionId =
+      scope && scope.collectionIds.length === 1 && scope.documentIds.length === 0
+        ? scope.collectionIds[0]
+        : undefined
+    const conv = await window.api.createConversation({ mode, scope, collectionId })
     if (scope) setPendingScope(null)
     return conv
   }
@@ -543,20 +565,28 @@ export function ChatScreen({
   const canTryAgain = !busyStreaming && mode === 'chat' && messages.some((m) => m.role === 'assistant')
   const indexedDocCount = docs.filter((d) => d.status === 'indexed').length
 
-  /** The active retrieval scope: the conversation's own, or the pending handoff. */
-  const scopeIds: string[] | null =
-    mode === 'documents'
-      ? activeId
-        ? (conversations.find((c) => c.id === activeId)?.scopeDocumentIds ?? null)
-        : pendingScope
-      : null
+  const activeConv = activeId ? conversations.find((c) => c.id === activeId) : undefined
 
-  // Scope changes from the popover. An existing conversation persists the change; with
-  // no conversation yet, only the pending handoff updates. Null = the whole corpus.
-  async function onChangeScope(next: string[] | null): Promise<void> {
+  // The composite source scope shown in the picker (plan §13.2/D1). From the active
+  // conversation's stored scope, falling back to its legacy fields, else the Library
+  // default; a dangling/archived anchor falls back to Library with a quiet notice (§13.4).
+  const library = collections.find((c) => c.type === 'library') ?? null
+  const danglingProject =
+    activeConv?.scope == null &&
+    activeConv?.collectionId != null &&
+    !(activeConv.scopeDocumentIds && activeConv.scopeDocumentIds.length > 0) &&
+    !collections.some((c) => c.id === activeConv.collectionId && c.archivedAt == null)
+  const pickerScope: DocumentScope =
+    mode !== 'documents'
+      ? { collectionIds: [], documentIds: [] }
+      : deriveScope(activeConv, pendingScope, library, danglingProject)
+
+  // Scope changes from the picker. An existing conversation persists the change; with no
+  // conversation yet, the pending handoff updates. An empty scope = the whole corpus.
+  async function onChangeScope(next: DocumentScope): Promise<void> {
     if (activeId) {
       try {
-        await window.api.updateConversationScope(activeId, next)
+        await window.api.setConversationScope(activeId, next)
         await refreshConversations()
       } catch (e) {
         setError(friendlyIpcError(e))
@@ -641,6 +671,7 @@ export function ChatScreen({
           activeId={activeId}
           streaming={busyStreaming}
           mode={mode}
+          collections={collections}
           onSelect={onSelectConversation}
           onNew={() => void onNewChat()}
           onDelete={(c) => void onDeleteConversation(c)}
@@ -755,13 +786,19 @@ export function ChatScreen({
           onDictationError={setError}
           footer={
             mode === 'documents' ? (
-              <ScopePopover
-                docs={docs}
-                scopeIds={scopeIds}
-                disabled={busyStreaming}
-                onChangeScope={(next) => void onChangeScope(next)}
-                onAddDocuments={() => onNavigate('documents')}
-              />
+              <span className="scope-footer-wrap">
+                {danglingProject && (
+                  <span className="scope-dangling hint">{t('chat.scope.archivedFallback')}</span>
+                )}
+                <ScopePopover
+                  docs={docs}
+                  collections={collections}
+                  scope={pickerScope}
+                  disabled={busyStreaming}
+                  onChangeScope={(next) => void onChangeScope(next)}
+                  onAddDocuments={() => onNavigate('documents')}
+                />
+              </span>
             ) : (
               <DepthMenu
                 value={currentDepth}
@@ -775,6 +812,31 @@ export function ChatScreen({
       </section>
     </div>
   )
+}
+
+/**
+ * The composite scope to show in the picker for a documents conversation (plan §13.2/§13.4).
+ * Precedence: the stored composite `scope` ⇒ legacy `scopeDocumentIds` ⇒ a non-archived
+ * `collectionId` anchor ⇒ the Library default. A dangling/archived anchor falls back to
+ * Library (the quiet notice is rendered separately).
+ */
+function deriveScope(
+  conv: Conversation | undefined,
+  pending: DocumentScope | null,
+  library: Collection | null,
+  dangling: boolean
+): DocumentScope {
+  const libraryDefault: DocumentScope = {
+    collectionIds: library ? [library.id] : [],
+    documentIds: []
+  }
+  if (!conv) return pending ?? libraryDefault
+  if (conv.scope) return conv.scope
+  if (conv.scopeDocumentIds && conv.scopeDocumentIds.length > 0) {
+    return { collectionIds: [], documentIds: conv.scopeDocumentIds }
+  }
+  if (conv.collectionId && !dangling) return { collectionIds: [conv.collectionId], documentIds: [] }
+  return libraryDefault
 }
 
 function optimisticUser(conversationId: string, content: string): Message {

@@ -3,7 +3,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, cleanup, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { DocumentsScreen } from '../../src/renderer/screens/DocumentsScreen'
-import type { DocumentInfo } from '../../src/shared/types'
+import type { Collection, DocumentInfo } from '../../src/shared/types'
 import { stubApi } from '../helpers/renderer'
 
 // Renderer test (jsdom + RTL) for the Documents screen: list rendering + status, the
@@ -26,7 +26,81 @@ function doc(over: Partial<DocumentInfo>): DocumentInfo {
   }
 }
 
+function coll(over: Partial<Collection>): Collection {
+  return {
+    id: 'c1',
+    name: 'Project',
+    type: 'project',
+    description: null,
+    builtin: false,
+    color: null,
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-01T00:00:00Z',
+    archivedAt: null,
+    ...over
+  }
+}
+
 afterEach(cleanup)
+
+// ---- Document organization: section rail + chips + project management (plan §12) ----
+describe('DocumentsScreen — organization', () => {
+  it('renders the section rail and filters the list by the selected project', async () => {
+    const user = userEvent.setup()
+    const library = coll({ id: 'lib', name: 'Library', type: 'library', builtin: true })
+    const tax = coll({ id: 'tax', name: 'Tax 2025' })
+    stubApi({
+      listCollections: vi.fn(async () => [library, tax]),
+      listDocuments: vi.fn(async () => [
+        doc({ id: 'd1', title: 'policy.pdf', collections: [{ id: 'lib', name: 'Library', type: 'library', role: 'source' }] }),
+        doc({ id: 'd2', title: 'return.pdf', collections: [{ id: 'tax', name: 'Tax 2025', type: 'project', role: 'source' }] })
+      ])
+    })
+    render(<DocumentsScreen />)
+    // Rail sections are present.
+    expect(await screen.findByRole('button', { name: 'Library' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Tax 2025' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Generated' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Archived' })).toBeInTheDocument()
+    // Both docs show under "All documents" (default section).
+    expect(screen.getByText('policy.pdf')).toBeInTheDocument()
+    expect(screen.getByText('return.pdf')).toBeInTheDocument()
+    // Selecting the project filters to its member.
+    await user.click(screen.getByRole('button', { name: 'Tax 2025' }))
+    expect(screen.getByText('return.pdf')).toBeInTheDocument()
+    expect(screen.queryByText('policy.pdf')).not.toBeInTheDocument()
+  })
+
+  it('creates a project from the rail "+" and selects it', async () => {
+    const user = userEvent.setup()
+    const library = coll({ id: 'lib', name: 'Library', type: 'library', builtin: true })
+    const created = coll({ id: 'new', name: 'Lawsuit' })
+    const createCollection = vi.fn(async () => created)
+    const listCollections = vi
+      .fn<() => Promise<Collection[]>>()
+      .mockResolvedValueOnce([library])
+      .mockResolvedValue([library, created])
+    stubApi({ listCollections, listDocuments: vi.fn(async () => [doc({})]), createCollection })
+    render(<DocumentsScreen />)
+    await user.click(await screen.findByRole('button', { name: 'New project' }))
+    await user.type(await screen.findByLabelText('Project name'), 'Lawsuit')
+    await user.click(screen.getByRole('button', { name: 'Create' }))
+    await waitFor(() => expect(createCollection).toHaveBeenCalledWith('Lawsuit'))
+  })
+
+  it('shows collection chips on a document row', async () => {
+    stubApi({
+      listCollections: vi.fn(async () => [coll({ id: 'lib', name: 'Library', type: 'library', builtin: true })]),
+      listDocuments: vi.fn(async () => [
+        doc({ collections: [{ id: 'lib', name: 'Library', type: 'library', role: 'source' }] })
+      ])
+    })
+    render(<DocumentsScreen />)
+    await screen.findByText('contract.pdf')
+    // The Library membership renders as a chip (localized by type).
+    expect(screen.getAllByText('Library').length).toBeGreaterThan(0)
+  })
+})
 
 describe('DocumentsScreen', () => {
   it('lists documents with their status and chunk count', async () => {

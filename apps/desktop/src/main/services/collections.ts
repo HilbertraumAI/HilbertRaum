@@ -185,6 +185,52 @@ export function removeFromCollection(db: Db, documentIds: string[], collectionId
   for (const docId of documentIds) stmt.run(collectionId, docId)
 }
 
+/** Set the retention lifecycle on documents (plan §8.2; 'permanent'|'temporary'|'archived'). */
+export function setDocumentsLifecycle(
+  db: Db,
+  documentIds: string[],
+  lifecycle: DocumentLifecycle
+): void {
+  const now = nowIso()
+  const stmt = db.prepare('UPDATE documents SET lifecycle = ?, updated_at = ? WHERE id = ?')
+  for (const docId of documentIds) stmt.run(lifecycle, now, docId)
+}
+
+/**
+ * Document ids that are GENUINELY project-only (the C2 delete-with-documents predicate,
+ * plan §12.3): a member of `collectionId` that has NO OTHER membership of any kind — no
+ * Library, no other project, no Temporary. Counting ALL memberships (built-ins included)
+ * is the fix for the first draft's bug: a Library+project doc is Library knowledge and
+ * must be spared. Returned ids are safe to delete; everything else is only un-filed.
+ */
+export function projectOnlyDocumentIds(db: Db, collectionId: string): string[] {
+  const rows = db
+    .prepare(
+      `SELECT dc.document_id AS id FROM document_collections dc
+       WHERE dc.collection_id = ?
+         AND (SELECT COUNT(*) FROM document_collections o
+              WHERE o.document_id = dc.document_id AND o.collection_id <> ?) = 0`
+    )
+    .all(collectionId, collectionId) as unknown as Array<{ id: string }>
+  return rows.map((r) => r.id)
+}
+
+/**
+ * File a freshly-indexed document into Library IF it has no membership yet (plan §11.2
+ * default destination). Idempotent and safe for re-index: a doc already filed somewhere
+ * (e.g. project-only) keeps its membership and is NOT re-filed to Library. Until the
+ * Phase-C destination chooser ships, every import defaults to Library this way, so
+ * "Library == all documents" stays true.
+ */
+export function fileIntoLibraryIfUnfiled(db: Db, documentId: string): void {
+  const existing = db
+    .prepare('SELECT 1 FROM document_collections WHERE document_id = ? LIMIT 1')
+    .get(documentId) as unknown as { 1: number } | undefined
+  if (existing) return
+  const library = getBuiltinCollection(db, 'library')
+  if (library) addToCollection(db, [documentId], library.id, 'source')
+}
+
 /** Document ids that belong to a collection (membership listing). */
 export function documentIdsInCollection(db: Db, collectionId: string): string[] {
   const rows = db
@@ -196,7 +242,7 @@ export function documentIdsInCollection(db: Db, collectionId: string): string[] 
 // ---- Scope resolution (plan §10.1) -------------------------------------------------
 
 /** Tolerant parse of a stored composite scope (`scope_v2_json`). Malformed ⇒ null. */
-function parseDocumentScope(json: string | null): DocumentScope | null {
+export function parseDocumentScope(json: string | null): DocumentScope | null {
   if (!json) return null
   try {
     const v = JSON.parse(json) as unknown

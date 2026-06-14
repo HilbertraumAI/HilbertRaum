@@ -4,6 +4,7 @@ import { IPC } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
 import type {
   DocumentInfo,
+  DocumentLifecycle,
   DocumentPreview,
   ImportJob,
   ImportJobStatus,
@@ -23,6 +24,12 @@ import {
   summarizeImportPaths,
   type IngestionDeps
 } from '../services/ingestion'
+import {
+  addToCollection,
+  fileIntoLibraryIfUnfiled,
+  removeFromCollection,
+  setDocumentsLifecycle
+} from '../services/collections'
 import { supportedExtensions } from '../services/ingestion/parsers'
 import { tMain } from '../services/i18n'
 import { log } from '../services/logging'
@@ -37,6 +44,36 @@ import { saveTextExport } from './save-export'
 // the per-job aggregate (ImportJobStatus) is kept in memory and read via `getImportJob`.
 // The renderer polls `listDocuments` + `getImportJob` to drive the UI. This reuses no
 // streaming channel — ingestion progress is coarse-grained and polling is simpler/robust.
+
+/**
+ * Optional `docs:list` filter (plan §16) for the Documents section rail. `collectionId`
+ * narrows to that collection's members; `lifecycle` to that retention state; `smart` to a
+ * query-time view ('generated' = app-generated provenance, 'archived' = archived docs).
+ * All omitted ⇒ every non-deleted document.
+ */
+export interface DocumentListFilter {
+  collectionId?: string
+  lifecycle?: DocumentLifecycle
+  smart?: 'generated' | 'archived' | 'all'
+}
+
+/** Untrusted-boundary guard: keep only non-empty string ids. */
+function safeIdArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((x): x is string => typeof x === 'string' && x.length > 0) : []
+}
+
+/** Apply a `DocumentListFilter` to an already-built DocumentInfo list. */
+function filterDocuments(docs: DocumentInfo[], filter?: DocumentListFilter): DocumentInfo[] {
+  if (!filter) return docs
+  let out = docs
+  if (filter.smart === 'generated') out = out.filter((d) => d.origin != null)
+  if (filter.smart === 'archived') out = out.filter((d) => d.lifecycle === 'archived')
+  if (filter.lifecycle) out = out.filter((d) => (d.lifecycle ?? 'permanent') === filter.lifecycle)
+  if (filter.collectionId) {
+    out = out.filter((d) => (d.collections ?? []).some((c) => c.id === filter.collectionId))
+  }
+  return out
+}
 
 export function registerDocsIpc(ctx: AppContext): void {
   const storeDir = documentsDir(ctx.paths.workspacePath)
@@ -169,7 +206,14 @@ export function registerDocsIpc(ctx: AppContext): void {
           try {
             const info = await processDocument(ctx.db, storeDir, id, ingestionDeps())
             if (info.status === 'failed') status.failed += 1
-            else status.completed += 1
+            else {
+              status.completed += 1
+              // Default destination = Library (plan §11.2): file the freshly-indexed doc
+              // into Library if it isn't filed anywhere yet, so "Library == all documents"
+              // holds for newly imported docs (not only ones present at the last open's
+              // migration backfill). Idempotent + safe for re-index (zero-membership guard).
+              fileIntoLibraryIfUnfiled(ctx.db, id)
+            }
             // Audit: filename + counts only — never the document's text.
             ctx.audit?.('document_imported', `Document imported: ${info.title}`, {
               documentId: id,
@@ -201,7 +245,7 @@ export function registerDocsIpc(ctx: AppContext): void {
     return { jobId, total: 0, completed: 0, failed: 0, done: true }
   })
 
-  ipcMain.handle(IPC.listDocuments, (): DocumentInfo[] => {
+  ipcMain.handle(IPC.listDocuments, (_e, filter?: DocumentListFilter): DocumentInfo[] => {
     requireUnlocked()
     // Reconcile stuck rows whenever NOTHING is actually running: a row left in an
     // active status (queued/extracting/…) with no live job/re-index belongs to a killed
@@ -217,12 +261,13 @@ export function registerDocsIpc(ctx: AppContext): void {
     // (search is scoped to `ctx.embedder.id`), so the UI can prompt a re-index.
     // Merge in-memory transcription progress so the polling UI can show
     // "Transcribing… N%" without any new channel.
-    return listDocuments(ctx.db, ctx.embedder.id).map((d) => {
+    const docs = listDocuments(ctx.db, ctx.embedder.id).map((d) => {
       const percent = transcribing.get(d.id)
       return percent !== undefined && d.status === 'extracting'
         ? { ...d, transcriptionProgress: percent }
         : d
     })
+    return filterDocuments(docs, filter)
   })
 
   // Size-aware audio preflight: the renderer asks what a picked
@@ -245,6 +290,58 @@ export function registerDocsIpc(ctx: AppContext): void {
     deleteDocument(ctx.db, documentId)
     ctx.audit?.('document_deleted', 'Document deleted', { documentId })
   })
+
+  // ---- Document-organization membership + lifecycle (plan §16) ----------------------
+  // "Move" is composed renderer-side as add + remove (no separate channel). Audit records
+  // ids + counts ONLY — never the collection/project name (plan §17).
+
+  ipcMain.handle(
+    IPC.addToCollection,
+    (_e, documentIds: string[], collectionId: string): void => {
+      requireUnlocked()
+      const ids = safeIdArray(documentIds)
+      if (ids.length === 0 || typeof collectionId !== 'string') return
+      addToCollection(ctx.db, ids, collectionId, 'source')
+      ctx.audit?.('documents_added_to_collection', 'Documents added to a collection', {
+        collectionId,
+        documentCount: ids.length
+      })
+    }
+  )
+
+  ipcMain.handle(
+    IPC.removeFromCollection,
+    (_e, documentIds: string[], collectionId: string): void => {
+      requireUnlocked()
+      const ids = safeIdArray(documentIds)
+      if (ids.length === 0 || typeof collectionId !== 'string') return
+      removeFromCollection(ctx.db, ids, collectionId)
+      ctx.audit?.('documents_removed_from_collection', 'Documents removed from a collection', {
+        collectionId,
+        documentCount: ids.length
+      })
+    }
+  )
+
+  ipcMain.handle(
+    IPC.setDocumentLifecycle,
+    (_e, documentIds: string[], lifecycle: DocumentLifecycle): DocumentInfo[] => {
+      requireUnlocked()
+      const ids = safeIdArray(documentIds)
+      const lc: DocumentLifecycle =
+        lifecycle === 'temporary' || lifecycle === 'archived' ? lifecycle : 'permanent'
+      if (ids.length > 0) {
+        setDocumentsLifecycle(ctx.db, ids, lc)
+        ctx.audit?.('document_lifecycle_changed', 'Document lifecycle changed', {
+          lifecycle: lc,
+          documentCount: ids.length
+        })
+      }
+      // Return the affected documents, fully populated (collections come from listDocuments).
+      const byId = new Map(listDocuments(ctx.db, ctx.embedder.id).map((d) => [d.id, d]))
+      return ids.map((id) => byId.get(id)).filter((d): d is DocumentInfo => d != null)
+    }
+  )
 
   // Read-only in-app preview: re-extracts the stored copy's text. Guarded
   // against racing an in-flight ingestion of the same document (it rewrites the stored

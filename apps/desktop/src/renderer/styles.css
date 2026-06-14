@@ -1031,6 +1031,52 @@ code, pre, kbd { font-family: var(--font-mono); }
   .status-grid { grid-template-columns: 1fr 1fr; }
 }
 
+/* Documents screen — section rail + organization (document-organization plan §12) */
+.docs-layout { display: grid; grid-template-columns: 200px 1fr; gap: 18px; align-items: start; }
+.docs-rail { display: flex; flex-direction: column; gap: 2px; position: sticky; top: 0; }
+.docs-rail-item {
+  text-align: left; background: none; border: none; color: var(--text-muted);
+  padding: 6px 10px; border-radius: 6px; font-size: 13px; cursor: pointer; width: 100%;
+}
+.docs-rail-item:hover { background: var(--surface-hover); color: var(--text); }
+.docs-rail-item.active { background: var(--surface-hover); color: var(--text); font-weight: 600; }
+.docs-rail-group { display: flex; flex-direction: column; gap: 2px; margin: 6px 0; }
+.docs-rail-group-head { display: flex; align-items: center; justify-content: space-between; padding: 4px 10px; }
+.docs-rail-group-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); }
+.docs-rail-add { background: none; border: none; color: var(--text-muted); font-size: 16px; line-height: 1; cursor: pointer; padding: 0 4px; }
+.docs-rail-add:hover:not(:disabled) { color: var(--text); }
+.docs-rail-empty { padding: 2px 10px; font-size: 12px; }
+.docs-rail-project { display: flex; align-items: center; }
+.docs-rail-project .docs-rail-project-name { flex: 1; }
+.docs-rail-project.active .docs-rail-project-name { background: var(--surface-hover); color: var(--text); font-weight: 600; border-radius: 6px; }
+.docs-rail-project.archived .docs-rail-project-name { opacity: 0.6; font-style: italic; }
+.docs-rail-project-menu { background: none; border: none; color: var(--text-muted); cursor: pointer; padding: 2px 6px; border-radius: 6px; }
+.docs-rail-project-menu:hover:not(:disabled) { color: var(--text); background: var(--surface-hover); }
+.doc-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.doc-chip { font-size: 11px; padding: 1px 8px; border-radius: 999px; background: var(--surface-hover); color: var(--text-muted); border: 1px solid var(--border); }
+.text-input {
+  width: 100%; padding: 8px 10px; border: 1px solid var(--border-strong); border-radius: 8px;
+  background: var(--surface); color: var(--text); font-size: 14px;
+}
+/* Scope picker — multi-select source rows (plan §13.2) */
+.scope-footer-wrap { display: inline-flex; align-items: center; gap: 8px; }
+.scope-dangling { font-size: 12px; }
+.scope-sources { display: flex; flex-direction: column; gap: 4px; margin: 4px 0; }
+.scope-source-row { display: flex; align-items: baseline; gap: 8px; font-size: 13px; cursor: pointer; }
+.scope-source-name { color: var(--text); }
+.scope-source-hint { color: var(--text-muted); font-size: 11px; }
+.scope-specific-toggle { background: none; border: none; cursor: pointer; text-align: left; }
+/* Conversation list — creation-anchor project sections (plan §13.4) */
+.chat-proj-group-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); padding: 8px 10px 2px; font-weight: 600; }
+
+@media (max-width: 760px) {
+  /* The section rail collapses to a horizontal scrolling strip above the list (plan §12 L4). */
+  .docs-layout { grid-template-columns: 1fr; }
+  .docs-rail { flex-direction: row; overflow-x: auto; gap: 6px; position: static; padding-bottom: 6px; }
+  .docs-rail-group { flex-direction: row; margin: 0; }
+  .docs-rail-group-head { display: none; }
+}
+
 /* Documents screen */
 .doc-card { display: flex; flex-direction: column; gap: 10px; }
 .doc-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }

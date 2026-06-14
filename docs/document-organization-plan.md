@@ -1,8 +1,14 @@
 # Document organization plan — Library / Projects / Temporary / Generated / Archive
 
-_Status: **IN PROGRESS — Phase A (Collections core) implemented 2026-06-14** (schema + migration +
-`CollectionService` + `resolveScope` + collection-aware retrieval backend; behaviour identical,
-Library == all). Phases B–F still open. Condense into a §-numbered design record in `docs/rag-design.md`
+_Status: **IN PROGRESS — Phase A (Collections core) + Phase B (Projects + composite scope, D1)
+implemented 2026-06-14.** Phase A = schema/migration/`CollectionService`/`resolveScope`/collection-aware
+retrieval backend. Phase B = the full IPC/preload surface (collections CRUD + membership + lifecycle +
+`chat:setScope`/`setCollection`), `resolveScope` wired into the live ask path (scope-aware
+`corpusNeedsReindex` M2 + filename auto-scope **within** the resolved scope, N2), `Conversation.scope`/
+`collectionId` + `scope_v2_json` persistence, import→Library default membership, delete-project two
+modes (C2), audit events (id/type/count only), and the renderer (Documents section rail + chips +
+project management; multi-select source picker; composer footer union; conversation-list project
+grouping). Phases C–F still open. Condense into a §-numbered design record in `docs/rag-design.md`
 (scope) + `docs/architecture.md` (data model / IPC) + `docs/user-guide.md` (UX) once the WHOLE feature
 ships, then delete this file (CLAUDE.md doc-lifecycle rule). Per-phase status lives in `BUILD_STATE.md`._
 

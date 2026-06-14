@@ -9,8 +9,10 @@ import {
   type Conversation,
   type ConversationSearchHit,
   type ConversationSearchResult,
+  type DocumentScope,
   type Message
 } from '../../shared/types'
+import { parseDocumentScope } from './collections'
 import { buildFtsMatchQuery } from './fts'
 import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from './runtime'
 
@@ -80,6 +82,8 @@ interface ConversationRow {
   model_id: string | null
   mode: string
   scope_json: string | null
+  collection_id: string | null
+  scope_v2_json: string | null
 }
 
 /** Parse a stored scope: a JSON array of document-id strings, else null (whole corpus). */
@@ -104,6 +108,16 @@ function normalizeScope(ids: string[] | null | undefined): string[] | null {
   return clean.length > 0 ? clean : null
 }
 
+/** Serialize a composite scope for `scope_v2_json` (null clears it). Empty scope persists. */
+function serializeDocumentScope(scope: DocumentScope | null | undefined): string | null {
+  if (!scope) return null
+  return JSON.stringify({
+    collectionIds: scope.collectionIds ?? [],
+    documentIds: scope.documentIds ?? [],
+    ...(scope.includeArchived ? { includeArchived: true } : {})
+  })
+}
+
 function rowToConversation(r: ConversationRow): Conversation {
   return {
     id: r.id,
@@ -112,7 +126,10 @@ function rowToConversation(r: ConversationRow): Conversation {
     updatedAt: r.updated_at,
     modelId: r.model_id,
     mode: r.mode === 'documents' ? 'documents' : 'chat',
-    scopeDocumentIds: parseScope(r.scope_json)
+    scopeDocumentIds: parseScope(r.scope_json),
+    collectionId: r.collection_id ?? null,
+    // Composite scope (D1) — tolerant parse, malformed ⇒ null (legacy fallback applies).
+    scope: parseDocumentScope(r.scope_v2_json)
   }
 }
 
@@ -178,12 +195,26 @@ export interface CreateConversationOptions {
    * for `mode: 'documents'`.
    */
   scopeDocumentIds?: string[] | null
+  /**
+   * Creation-anchor project (document-organization plan §13.4): the project a chat is
+   * started inside. Persisted in `conversations.collection_id`; used for list grouping
+   * and as the legacy single-project scope fallback.
+   */
+  collectionId?: string | null
+  /**
+   * The persisted composite source scope (D1). When given it is authoritative over the
+   * legacy `scopeDocumentIds`/`collectionId` interpretation. An empty scope is the
+   * explicit "All documents" choice.
+   */
+  scope?: DocumentScope | null
 }
 
 /** Create a new conversation and persist it. */
 export function createConversation(db: Db, opts: CreateConversationOptions = {}): Conversation {
   const now = nowIso()
   const scope = normalizeScope(opts.scopeDocumentIds)
+  const collectionId = opts.collectionId ?? null
+  const compositeScope = opts.scope ?? null
   const conv: Conversation = {
     id: randomUUID(),
     title: opts.title?.trim() || DEFAULT_TITLE,
@@ -191,11 +222,13 @@ export function createConversation(db: Db, opts: CreateConversationOptions = {})
     updatedAt: now,
     modelId: opts.modelId ?? null,
     mode: opts.mode ?? 'chat',
-    scopeDocumentIds: scope
+    scopeDocumentIds: scope,
+    collectionId,
+    scope: compositeScope
   }
   db.prepare(
-    `INSERT INTO conversations (id, title, created_at, updated_at, model_id, mode, scope_json)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO conversations (id, title, created_at, updated_at, model_id, mode, scope_json, collection_id, scope_v2_json)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     conv.id,
     conv.title,
@@ -203,9 +236,51 @@ export function createConversation(db: Db, opts: CreateConversationOptions = {})
     conv.updatedAt,
     conv.modelId,
     conv.mode,
-    scope ? JSON.stringify(scope) : null
+    scope ? JSON.stringify(scope) : null,
+    collectionId,
+    serializeDocumentScope(compositeScope)
   )
   return conv
+}
+
+/**
+ * Persist a conversation's composite source scope (document-organization plan §8.3/D1) to
+ * `scope_v2_json`. Null clears it (back to the legacy/Library interpretation); an empty
+ * `DocumentScope` persists as the explicit "All documents" choice. Does NOT touch the
+ * legacy `scope_json` (temp attachments never ride it — H4/C3). Returns the updated
+ * conversation.
+ */
+export function setScope(
+  db: Db,
+  conversationId: string,
+  scope: DocumentScope | null
+): Conversation {
+  const conv = getConversation(db, conversationId)
+  if (!conv) throw new Error(`Unknown conversation: ${conversationId}`)
+  db.prepare('UPDATE conversations SET scope_v2_json = ? WHERE id = ?').run(
+    serializeDocumentScope(scope),
+    conversationId
+  )
+  return { ...conv, scope }
+}
+
+/**
+ * Persist a conversation's creation-anchor project (plan §13.4) to `conversations.
+ * collection_id`. Null clears it (an unscoped/Library chat). Returns the updated
+ * conversation.
+ */
+export function setConversationCollection(
+  db: Db,
+  conversationId: string,
+  collectionId: string | null
+): Conversation {
+  const conv = getConversation(db, conversationId)
+  if (!conv) throw new Error(`Unknown conversation: ${conversationId}`)
+  db.prepare('UPDATE conversations SET collection_id = ? WHERE id = ?').run(
+    collectionId,
+    conversationId
+  )
+  return { ...conv, collectionId }
 }
 
 /**

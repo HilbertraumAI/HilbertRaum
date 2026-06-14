@@ -482,9 +482,26 @@ export interface Conversation {
   /**
    * "Ask selected documents" scope (spec §10.4): when non-null, document answers in
    * this conversation retrieve ONLY from these documents. Null = whole corpus. Only
-   * meaningful for `mode: 'documents'`.
+   * meaningful for `mode: 'documents'`. Legacy single-list scope; the composite `scope`
+   * below supersedes it when present (document-organization plan §8.3/D1).
    */
   scopeDocumentIds: string[] | null
+  /**
+   * Creation-anchor collection (document-organization plan §13.4): the project a chat was
+   * started inside, or null for an unscoped/Library chat. Used for conversation-list
+   * grouping (N8) and as the legacy single-project scope fallback. Persisted in
+   * `conversations.collection_id`.
+   */
+  collectionId: string | null
+  /**
+   * The persisted composite source scope (document-organization plan §8.3/D1): the UNION
+   * of whole collections (Library / projects) and specific documents the user composed in
+   * the multi-select picker. Null ⇒ no composite scope stored (the legacy
+   * `scopeDocumentIds`/`collectionId` interpretation applies). An empty scope
+   * (`collectionIds:[]`, `documentIds:[]`) is the explicit "All documents" choice.
+   * Persisted in `conversations.scope_v2_json`.
+   */
+  scope: DocumentScope | null
 }
 
 export interface Citation {
@@ -707,8 +724,33 @@ export interface DocumentInfo {
    * the OCR task overwrites it.
    */
   ocr?: DocumentOcrInfo | null
+  /**
+   * Collection memberships of this document (document-organization plan §16): the
+   * Library/project/Temporary collections it belongs to, for the Documents-screen chips.
+   * Empty array when filed nowhere. Built by `listDocuments` from `document_collections`.
+   */
+  collections?: DocumentCollectionMembership[]
+  /**
+   * Retention lifecycle (NULL in the DB ⇒ 'permanent'; document-organization plan §8.2).
+   * `archived` documents are globally excluded from default retrieval (C1).
+   */
+  lifecycle?: DocumentLifecycle
+  /**
+   * Top-level folder name captured on a folder import (display-only metadata; plan §11.2).
+   * Null/undefined for a file import. (`lastUsedAt` is deferred — L2.)
+   */
+  sourceFolderLabel?: string | null
   createdAt: string
   updatedAt: string
+}
+
+/** A document's membership in one collection, as surfaced on `DocumentInfo.collections`. */
+export interface DocumentCollectionMembership {
+  id: string
+  /** Canonical stored name; the renderer localizes built-ins by `type`, never the name. */
+  name: string
+  type: CollectionType
+  role: DocumentCollectionRole
 }
 
 /** Surface metadata of a stored OCR result (never the recognized text). */
@@ -866,6 +908,16 @@ export type AuditEventType =
   | 'document_exported'
   | 'conversation_deleted'
   | 'conversation_exported'
+  // Document-organization (plan §17): collection/membership/lifecycle changes. Metadata is
+  // id + type + COUNT ONLY — never the collection/project NAME (a project name like
+  // "Divorce" is content-ish; the filename allowance does NOT extend to it).
+  | 'collection_created'
+  | 'collection_renamed'
+  | 'collection_archived'
+  | 'collection_deleted'
+  | 'documents_added_to_collection'
+  | 'documents_removed_from_collection'
+  | 'document_lifecycle_changed'
   | 'workspace_created'
   | 'workspace_unlocked'
   | 'workspace_locked'

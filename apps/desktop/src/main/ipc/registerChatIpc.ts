@@ -6,6 +6,7 @@ import {
   type ChatOptions,
   type Conversation,
   type ConversationSearchResult,
+  type DocumentScope,
   type Message
 } from '../../shared/types'
 import {
@@ -19,6 +20,8 @@ import {
   listMessages,
   maybeSetTitleFromFirstMessage,
   searchMessages,
+  setConversationCollection,
+  setScope,
   updateConversationScope
 } from '../services/chat'
 import { tMain } from '../services/i18n'
@@ -52,21 +55,54 @@ export function registerChatIpc(ctx: AppContext): void {
     IPC.createConversation,
     (
       _e,
-      opts?: { title?: string; mode?: 'chat' | 'documents'; scopeDocumentIds?: string[] | null }
+      opts?: {
+        title?: string
+        mode?: 'chat' | 'documents'
+        scopeDocumentIds?: string[] | null
+        /** Creation-anchor project (plan §13.4). */
+        collectionId?: string | null
+        /** Initial composite source scope (plan D1). */
+        scope?: DocumentScope | null
+      }
     ): Conversation => {
       const conv = createConversation(ctx.db, {
         title: opts?.title,
         mode: opts?.mode,
         modelId: ctx.runtime.activeModelId(),
-        scopeDocumentIds: opts?.scopeDocumentIds
+        scopeDocumentIds: opts?.scopeDocumentIds,
+        collectionId: opts?.collectionId,
+        scope: opts?.scope
       })
       log.info('Conversation created', {
         id: conv.id,
         mode: conv.mode,
-        scopedDocuments: conv.scopeDocumentIds?.length ?? 0
+        scopedDocuments: conv.scopeDocumentIds?.length ?? 0,
+        anchored: conv.collectionId != null
       })
       return conv
     }
+  )
+
+  // Persist a conversation's composite source scope (plan D1 — the multi-select picker).
+  // Null clears it; an empty DocumentScope is the explicit "All documents" choice.
+  ipcMain.handle(
+    IPC.setConversationScope,
+    (_e, conversationId: string, scope: DocumentScope | null): Conversation => {
+      const conv = setScope(ctx.db, conversationId, scope ?? null)
+      log.info('Conversation scope set', {
+        conversationId,
+        collections: scope?.collectionIds?.length ?? 0,
+        documents: scope?.documentIds?.length ?? 0
+      })
+      return conv
+    }
+  )
+
+  // Persist a conversation's creation-anchor project (plan §13.4).
+  ipcMain.handle(
+    IPC.setConversationCollection,
+    (_e, conversationId: string, collectionId: string | null): Conversation =>
+      setConversationCollection(ctx.db, conversationId, collectionId ?? null)
   )
 
   // Replace the "ask selected documents" scope (spec §10.4) — chip removal

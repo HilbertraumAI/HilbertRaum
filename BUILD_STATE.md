@@ -6,7 +6,61 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
-_Last updated: 2026-06-14 — **Document organization — Phase A (Collections core, backend
+_Last updated: 2026-06-14 — **Document organization — Phase B (Projects + composite scope, D1).**
+Second phase of [`docs/document-organization-plan.md`](docs/document-organization-plan.md) (esp. §0.1 D1,
+§8.3, §10.1, §12, §13, §16). Builds the user-facing surface over the Phase-A backend.
+**Data contract** ([`chat.ts`](apps/desktop/src/main/services/chat.ts)): `Conversation` gains
+`collectionId: string|null` + `scope: DocumentScope|null` (parsed tolerantly from `scope_v2_json` via the
+relocated, now-exported `parseDocumentScope` in [`collections.ts`](apps/desktop/src/main/services/collections.ts));
+`createConversation` gains `opts.collectionId`/`opts.scope`; new `setScope` (persists `scope_v2_json`,
+empty scope = explicit "All documents", null clears) + `setConversationCollection` writers.
+`updateConversationScope`'s legacy replace semantics are **unchanged** (H4/C3). **IPC/preload** (plan §16):
+new [`registerCollectionsIpc.ts`](apps/desktop/src/main/ipc/registerCollectionsIpc.ts)
+(`collections:list/create/rename/setArchived/delete`); [`registerDocsIpc.ts`](apps/desktop/src/main/ipc/registerDocsIpc.ts)
+gains `docs:addToCollection`/`removeFromCollection`/`setLifecycle` + a `docs:list` filter
+(`{collectionId?,lifecycle?,smart?}`) + **imports default-file into Library** on indexing success
+(`fileIntoLibraryIfUnfiled`, zero-membership-guarded so re-index never re-files a project-only doc, keeping
+"Library == all"); [`registerChatIpc.ts`](apps/desktop/src/main/ipc/registerChatIpc.ts) gains
+`chat:setScope`/`setCollection` + the two `createConversation` opts. "Move" = add + remove (no channel).
+**delete-project two modes** (plan §12.3): `membershipOnly` (CASCADE) and `withDocuments` (deletes ONLY
+genuinely project-only docs — the C2 `projectOnlyDocumentIds` predicate counts ALL memberships so a Library
+member is spared; reuses ingestion `deleteDocument`, which **now `shredFile`s** the stored copy instead of
+`rmSync` — M5). Every channel mirrored 1:1 in [`preload/index.ts`](apps/desktop/src/preload/index.ts).
+**Live ask path** ([`registerRagIpc.ts`](apps/desktop/src/main/ipc/registerRagIpc.ts)): now calls
+`resolveScope(db, conversationId)`, passes the `RetrievalScope` to `generateGroundedAnswer` via `opts.scope`
+(so `corpusNeedsReindex` is scope-aware — M2), and runs filename auto-scope **within** the resolved scope
+(`documentsInScope` + `buildScopeFilter`), skipping it only when `hasExplicitDocSelection` (N2); the
+STREAM.scope notice is kept. **DocumentInfo** gains `collections[]` (joined in `listDocuments`), `lifecycle`
+(NULL⇒permanent), `sourceFolderLabel` (NOT `lastUsedAt` — L2). **Audit** (plan §17): `collection_created/
+renamed/archived/deleted` + `documents_added_to_collection/removed_from_collection/document_lifecycle_changed`
+— **id/type/count ONLY, never the project NAME** (asserted by the extended `audit-ipc` sentinel-grep with a
+project-name sentinel). **Renderer**: [`DocumentsScreen.tsx`](apps/desktop/src/renderer/screens/DocumentsScreen.tsx)
+left **section rail** (Library/Projects/Temporary/Generated/Archived/All — responsive collapse at 760px) +
+membership chips + lifecycle pills + an Organize per-row menu + bulk move/lifecycle + project
+create/rename/archive/delete (two-mode confirm); [`ScopePopover.tsx`](apps/desktop/src/renderer/chat/ScopePopover.tsx)
+is now a **multi-select source picker** (Library + each non-archived project + "Specific documents…" +
+one-tap "All documents"; Temporary/Generated not pickable — N10/D3) writing a persisted `DocumentScope`;
+the composer footer summarizes the composed union (`scopeFooterLabel`);
+[`ChatScreen.tsx`](apps/desktop/src/renderer/screens/ChatScreen.tsx) derives the picker scope, persists via
+`setConversationScope`, project-defaults the anchor on create, and shows the dangling/archived-project →
+Library fallback notice (§13.4); [`ConversationList.tsx`](apps/desktop/src/renderer/chat/ConversationList.tsx)
+groups by the creation-anchor `collection_id` with an "Other / Library" group when any chat is anchored
+(`groupByProject`, additive — date grouping otherwise unchanged, N8). **i18n**: new flat `docs.section.*`/
+`docs.action.*`/`docs.project.*`/`chat.scope.*`/`chat.list.otherGroup`/`diag.audit.collection_*` keys in
+[`{en,de}.ts`](apps/desktop/src/shared/i18n) — **German copy flagged for the D-L7 review.** **Forbidden UI
+words** (bucket/vector/scope_json/FTS/collection_id/membership/embedding) avoided. **Out of scope (Phase C+):**
+chat attach/drag-drop INTAKE + `conversation_documents` writes + plain-chat drop; generated provenance;
+smart views/retention. **Tests:** typecheck clean, build OK, `npm test` **1179 passed / 25 skipped** (+16:
+new [`collections-ipc.test.ts`](apps/desktop/tests/integration/collections-ipc.test.ts) [CRUD, membership+
+lifecycle+filtered list, C2 delete-with-documents spares a Library member, `chat:setScope` round-trip across
+a DB reopen, resolveScope-in-IPC filename auto-scope + N2 skip] + chat scope/collection round-trip & writers &
+C2 predicate in `collections.test.ts` + the audit sentinel/event extensions + renderer rail/project/picker
+tests + GermanSmoke). No version bump. **Deliverable proof (covered by tests):** create project "Tax 2025",
+ask over "Library + Tax 2025 + contractA.pdf" in one documents chat, and the composite scope persists across
+an app restart (`scope_v2_json`). **Next:** Phase C — Temporary analysis (chat attach/drag-drop intake +
+`conversation_documents` + destination chooser)._
+
+_(prior) 2026-06-14 — **Document organization — Phase A (Collections core, backend
 foundation).** First phase of [`docs/document-organization-plan.md`](docs/document-organization-plan.md).
 Adds a collection-membership layer over the existing pipeline — one stored file, one chunk set,
 one vector set per document; organization is metadata. **Schema** ([`db.ts`](apps/desktop/src/main/services/db.ts)):

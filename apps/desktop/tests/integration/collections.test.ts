@@ -14,12 +14,18 @@ import {
   documentIdsInCollection,
   getBuiltinCollection,
   listCollections,
+  projectOnlyDocumentIds,
   removeFromCollection,
   renameCollection,
   resolveScope,
   setCollectionArchived
 } from '../../src/main/services/collections'
-import { createConversation } from '../../src/main/services/chat'
+import {
+  createConversation,
+  getConversation,
+  setConversationCollection,
+  setScope
+} from '../../src/main/services/chat'
 
 // Document-organization plan, Phase A: collection CRUD + membership, the built-in
 // seed + Library backfill migration, version-skew CASCADE, and resolveScope.
@@ -263,6 +269,81 @@ describe('resolveScope', () => {
     db.prepare('UPDATE conversations SET scope_v2_json = ? WHERE id = ?').run('{not json', conv.id)
     const scope = resolveScope(db, conv.id)
     expect(scope.collectionIds).toEqual([lib.id])
+  })
+})
+
+// ---- Conversation scope/collection data contract (plan §8.3, Phase B) --------------
+
+describe('conversation scope + collection round-trip', () => {
+  it('createConversation persists scope + collectionId; rowToConversation reads them back', () => {
+    const db = freshDb()
+    const lib = getBuiltinCollection(db, 'library')!
+    const project = createCollection(db, 'Tax')
+    const conv = createConversation(db, {
+      mode: 'documents',
+      collectionId: project.id,
+      scope: { collectionIds: [lib.id, project.id], documentIds: ['contractA'] }
+    })
+    const reread = getConversation(db, conv.id)!
+    expect(reread.collectionId).toBe(project.id)
+    expect(reread.scope).toEqual({
+      collectionIds: [lib.id, project.id],
+      documentIds: ['contractA'],
+      includeArchived: false
+    })
+    // The composite scope is authoritative for resolveScope.
+    const resolved = resolveScope(db, conv.id)
+    expect(resolved.collectionIds?.sort()).toEqual([lib.id, project.id].sort())
+    expect(resolved.documentIds).toEqual(['contractA'])
+  })
+
+  it('setScope writer round-trips; an empty scope is the explicit "All documents" choice', () => {
+    const db = freshDb()
+    const conv = createConversation(db, { mode: 'documents' })
+    setScope(db, conv.id, { collectionIds: [], documentIds: [] })
+    expect(getConversation(db, conv.id)!.scope).toEqual({
+      collectionIds: [],
+      documentIds: [],
+      includeArchived: false
+    })
+    const resolved = resolveScope(db, conv.id)
+    expect(resolved.collectionIds).toBeNull()
+    expect(resolved.documentIds).toBeNull()
+    // Null clears it back to the legacy/Library interpretation.
+    setScope(db, conv.id, null)
+    expect(getConversation(db, conv.id)!.scope).toBeNull()
+  })
+
+  it('setConversationCollection writer round-trips the anchor', () => {
+    const db = freshDb()
+    const project = createCollection(db, 'P')
+    const conv = createConversation(db, { mode: 'documents' })
+    setConversationCollection(db, conv.id, project.id)
+    expect(getConversation(db, conv.id)!.collectionId).toBe(project.id)
+    setConversationCollection(db, conv.id, null)
+    expect(getConversation(db, conv.id)!.collectionId).toBeNull()
+  })
+
+  it('a corrupt scope_v2_json falls back without throwing (legacy/Library)', () => {
+    const db = freshDb()
+    const lib = getBuiltinCollection(db, 'library')!
+    const conv = createConversation(db, { mode: 'documents' })
+    db.prepare('UPDATE conversations SET scope_v2_json = ? WHERE id = ?').run('{bad', conv.id)
+    expect(() => getConversation(db, conv.id)).not.toThrow()
+    expect(getConversation(db, conv.id)!.scope).toBeNull()
+    expect(resolveScope(db, conv.id).collectionIds).toEqual([lib.id])
+  })
+
+  it('projectOnlyDocumentIds spares a Library member and flags a project-only doc (C2)', () => {
+    const db = freshDb()
+    const lib = getBuiltinCollection(db, 'library')!
+    const project = createCollection(db, 'Lawsuit')
+    seedDoc(db, 'libdoc')
+    seedDoc(db, 'projonly')
+    addToCollection(db, ['libdoc'], lib.id)
+    addToCollection(db, ['libdoc'], project.id)
+    addToCollection(db, ['projonly'], project.id)
+    expect(projectOnlyDocumentIds(db, project.id)).toEqual(['projonly'])
   })
 })
 

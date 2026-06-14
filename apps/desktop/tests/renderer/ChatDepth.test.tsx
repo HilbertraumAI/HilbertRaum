@@ -23,6 +23,8 @@ function conv(over: Partial<Conversation> = {}): Conversation {
     modelId: null,
     mode: 'chat',
     scopeDocumentIds: null,
+    collectionId: null,
+    scope: null,
     ...over
   }
 }

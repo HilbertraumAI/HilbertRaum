@@ -3,6 +3,7 @@ import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import {
   SEARCH_MARK_END,
   SEARCH_MARK_START,
+  type Collection,
   type Conversation,
   type ConversationSearchResult
 } from '@shared/types'
@@ -81,6 +82,51 @@ export function groupConversations(conversations: Conversation[], now: Date = ne
   return groups.filter((g) => g.conversations.length > 0)
 }
 
+/**
+ * A creation-anchor project section (document-organization plan §13.4/N8): conversations
+ * grouped by their `collection_id` anchor. A chat whose composite scope spans several
+ * sources still groups under its single anchor; unanchored/dangling chats fall into the
+ * "Other / Library" section. Exported for tests.
+ */
+export interface ProjectSection {
+  /** The anchor project, or null for the "Other / Library" catch-all. */
+  project: Collection | null
+  conversations: Conversation[]
+}
+
+/**
+ * Group conversations by their creation-anchor project (plan §13.4). A `collection_id` that
+ * references a missing or archived project (or no anchor at all) lands in "Other / Library".
+ * Returns null when NO conversation is anchored to a live project — the caller then falls
+ * back to plain date grouping (the common, project-free case; keeps the existing UX intact).
+ */
+export function groupByProject(
+  conversations: Conversation[],
+  collections: Collection[]
+): ProjectSection[] | null {
+  const liveProjects = new Map(
+    collections.filter((c) => c.type === 'project' && c.archivedAt == null).map((c) => [c.id, c])
+  )
+  const anchored = conversations.some((c) => c.collectionId != null && liveProjects.has(c.collectionId))
+  if (!anchored) return null
+  const byProject = new Map<string, Conversation[]>()
+  const other: Conversation[] = []
+  for (const c of conversations) {
+    if (c.collectionId != null && liveProjects.has(c.collectionId)) {
+      const list = byProject.get(c.collectionId) ?? []
+      list.push(c)
+      byProject.set(c.collectionId, list)
+    } else {
+      other.push(c)
+    }
+  }
+  const sections: ProjectSection[] = [...byProject.entries()]
+    .map(([id, convs]) => ({ project: liveProjects.get(id)!, conversations: convs }))
+    .sort((a, b) => a.project!.name.localeCompare(b.project!.name))
+  if (other.length > 0) sections.push({ project: null, conversations: other })
+  return sections
+}
+
 interface Props {
   conversations: Conversation[]
   activeId: string | null
@@ -88,6 +134,8 @@ interface Props {
   streaming: boolean
   /** Labels the "+ New …" button for the composer's current mode. */
   mode: 'chat' | 'documents'
+  /** Projects/built-ins — drives the creation-anchor project sections (plan §13.4). */
+  collections?: Collection[]
   onSelect: (c: Conversation) => void
   onNew: () => void
   /** Called after the user confirms deletion. */
@@ -100,6 +148,7 @@ export function ConversationList({
   activeId,
   streaming,
   mode,
+  collections = [],
   onSelect,
   onNew,
   onDelete,
@@ -145,6 +194,74 @@ export function ConversationList({
     onSelect(conv)
     setQuery('')
   }
+
+  // One conversation row (title + doc-meta + the ⋯ menu). Shared by date and project groups.
+  const renderRow = (c: Conversation): JSX.Element => (
+    <div
+      key={c.id}
+      className={`chat-conv-row ${c.id === activeId ? 'active' : ''}`}
+      onContextMenu={(e) => {
+        e.preventDefault()
+        if (!streaming) setMenuOpenId(c.id)
+      }}
+    >
+      <button
+        className={`chat-conv ${c.id === activeId ? 'active' : ''}`}
+        aria-current={c.id === activeId ? 'true' : undefined}
+        disabled={streaming && c.id !== activeId}
+        onClick={() => onSelect(c)}
+        title={localizeServerCopy(t, c.title)}
+      >
+        {/* Titles are user data, but the persisted DEFAULT title is canonical English
+            (D-L4) — the display map translates it, all else passes. */}
+        <span className="chat-conv-title">{localizeServerCopy(t, c.title)}</span>
+        {/* Quiet metadata line: a small document glyph + "Documents" for a document Q&A
+            thread (replacing the loud DOC badge), else nothing. Never color-only
+            (WCAG 1.4.1) — the glyph pairs with the word. */}
+        {c.mode === 'documents' && (
+          <span className="chat-conv-meta">
+            <Icon name="file" className="chat-conv-meta-icon" /> {t('chat.list.docMeta')}
+          </span>
+        )}
+      </button>
+      <DropdownMenu.Root
+        open={menuOpenId === c.id}
+        onOpenChange={(open) => setMenuOpenId(open ? c.id : null)}
+      >
+        <DropdownMenu.Trigger asChild>
+          <button
+            className="chat-conv-menu-btn"
+            disabled={streaming}
+            aria-label={t('chat.list.rowOptionsAria', { title: localizeServerCopy(t, c.title) })}
+            title={t('chat.convOptions')}
+          >
+            ⋯
+          </button>
+        </DropdownMenu.Trigger>
+        <DropdownMenu.Portal>
+          <DropdownMenu.Content className="menu" align="start" sideOffset={4}>
+            <DropdownMenu.Item className="menu-item danger" onSelect={() => setPendingDelete(c)}>
+              {t('chat.delete.menuItem')}
+            </DropdownMenu.Item>
+          </DropdownMenu.Content>
+        </DropdownMenu.Portal>
+      </DropdownMenu.Root>
+    </div>
+  )
+
+  // Date-grouped rows (Today / Yesterday / …) — the existing grouping, reused inside each
+  // project section when project grouping is active.
+  const renderDateGroups = (convs: Conversation[]): JSX.Element[] =>
+    groupConversations(convs).map((group) => (
+      <div key={group.labelKey} className="chat-conv-group" role="group" aria-label={t(group.labelKey)}>
+        <div className="chat-conv-group-label">{t(group.labelKey)}</div>
+        {group.conversations.map(renderRow)}
+      </div>
+    ))
+
+  // Project sections when any conversation is anchored to a live project (plan §13.4/N8),
+  // else null ⇒ plain date grouping (the common project-free case, unchanged UX).
+  const projectSections = groupByProject(conversations, collections)
 
   return (
     <aside className="chat-sidebar" aria-label={t('chat.list.aria')}>
@@ -218,71 +335,21 @@ export function ConversationList({
       {!searching && (
         <div className="chat-conv-list">
           {conversations.length === 0 && <p className="hint">{t('chat.list.empty')}</p>}
-          {groupConversations(conversations).map((group) => (
-            <div
-              key={group.labelKey}
-              className="chat-conv-group"
-              role="group"
-              aria-label={t(group.labelKey)}
-            >
-              <div className="chat-conv-group-label">{t(group.labelKey)}</div>
-              {group.conversations.map((c) => (
+          {projectSections
+            ? projectSections.map((section) => (
                 <div
-                  key={c.id}
-                  className={`chat-conv-row ${c.id === activeId ? 'active' : ''}`}
-                  onContextMenu={(e) => {
-                    e.preventDefault()
-                    if (!streaming) setMenuOpenId(c.id)
-                  }}
+                  key={section.project?.id ?? '__other__'}
+                  className="chat-proj-group"
+                  role="group"
+                  aria-label={section.project ? section.project.name : t('chat.list.otherGroup')}
                 >
-                  <button
-                    className={`chat-conv ${c.id === activeId ? 'active' : ''}`}
-                    aria-current={c.id === activeId ? 'true' : undefined}
-                    disabled={streaming && c.id !== activeId}
-                    onClick={() => onSelect(c)}
-                    title={localizeServerCopy(t, c.title)}
-                  >
-                    {/* Titles are user data, but the persisted DEFAULT title is canonical
-                        English (D-L4) — the display map translates it, all else passes. */}
-                    <span className="chat-conv-title">{localizeServerCopy(t, c.title)}</span>
-                    {/* Quiet metadata line: a small document glyph + "Documents" for a
-                        document Q&A thread (replacing the loud DOC badge), else nothing.
-                        Never color-only (WCAG 1.4.1) — the glyph pairs with the word. */}
-                    {c.mode === 'documents' && (
-                      <span className="chat-conv-meta">
-                        <Icon name="file" className="chat-conv-meta-icon" /> {t('chat.list.docMeta')}
-                      </span>
-                    )}
-                  </button>
-                  <DropdownMenu.Root
-                    open={menuOpenId === c.id}
-                    onOpenChange={(open) => setMenuOpenId(open ? c.id : null)}
-                  >
-                    <DropdownMenu.Trigger asChild>
-                      <button
-                        className="chat-conv-menu-btn"
-                        disabled={streaming}
-                        aria-label={t('chat.list.rowOptionsAria', { title: localizeServerCopy(t, c.title) })}
-                        title={t('chat.convOptions')}
-                      >
-                        ⋯
-                      </button>
-                    </DropdownMenu.Trigger>
-                    <DropdownMenu.Portal>
-                      <DropdownMenu.Content className="menu" align="start" sideOffset={4}>
-                        <DropdownMenu.Item
-                          className="menu-item danger"
-                          onSelect={() => setPendingDelete(c)}
-                        >
-                          {t('chat.delete.menuItem')}
-                        </DropdownMenu.Item>
-                      </DropdownMenu.Content>
-                    </DropdownMenu.Portal>
-                  </DropdownMenu.Root>
+                  <div className="chat-proj-group-label">
+                    {section.project ? section.project.name : t('chat.list.otherGroup')}
+                  </div>
+                  {renderDateGroups(section.conversations)}
                 </div>
-              ))}
-            </div>
-          ))}
+              ))
+            : renderDateGroups(conversations)}
         </div>
       )}
       <ConfirmDialog

@@ -5,7 +5,6 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
-  rmSync,
   statSync
 } from 'node:fs'
 import { basename, extname, join } from 'node:path'
@@ -13,6 +12,7 @@ import { t } from '../../../shared/i18n'
 import { tMain } from '../i18n'
 import type { Db } from '../db'
 import type {
+  DocumentCollectionMembership,
   DocumentInfo,
   DocumentOcrInfo,
   DocumentOrigin,
@@ -21,6 +21,7 @@ import type {
   IngestionStatus
 } from '../../../shared/types'
 import { sha256File } from '../models'
+import { docLifecycle } from '../collections'
 import { type Embedder, encodeVector } from '../embeddings'
 import { ENCRYPTED_DOC_SUFFIX, shredFile, type DocumentCipher } from '../workspace-vault'
 import type { Transcriber } from '../transcriber'
@@ -142,6 +143,8 @@ interface DocumentRow {
   summary_json: string | null
   origin_json: string | null
   ocr_json: string | null
+  lifecycle: string | null
+  source_folder_label: string | null
   created_at: string
   updated_at: string
 }
@@ -277,6 +280,11 @@ function rowToInfo(row: DocumentRow, chunkCount: number, staleEmbeddings?: boole
     // exactly these rows (plus already-OCR'd PDFs for a re-run).
     scanDetected: row.status === 'failed' && row.error_message === PDF_SCAN_DETECTED_MESSAGE,
     ocr: ocrInfoOf(parseOcr(row.ocr_json)),
+    // Document-organization (plan §8.2/§16): retention lifecycle (NULL ⇒ permanent) +
+    // folder-import display label. Collection memberships are merged in by listDocuments
+    // (it has the db handle for the join); getDocument/createQueuedDocument leave it absent.
+    lifecycle: docLifecycle(row.lifecycle),
+    sourceFolderLabel: row.source_folder_label,
     createdAt: row.created_at,
     updatedAt: row.updated_at
   }
@@ -889,13 +897,32 @@ export function listDocuments(db: Db, activeEmbeddingModelId?: string | null): D
   const rows = db
     .prepare("SELECT * FROM documents WHERE status != 'deleted' ORDER BY created_at DESC, rowid DESC")
     .all() as unknown as DocumentRow[]
+  // One join for every membership (document-organization plan §16/§18 — one extra indexed
+  // join, not N+1), grouped by document for the per-row `collections` chips.
+  const memberships = new Map<string, DocumentCollectionMembership[]>()
+  const memberRows = db
+    .prepare(
+      `SELECT dc.document_id AS documentId, c.id AS id, c.name AS name, c.type AS type, dc.role AS role
+       FROM document_collections dc JOIN collections c ON c.id = dc.collection_id`
+    )
+    .all() as Array<{ documentId: string; id: string; name: string; type: string; role: string }>
+  for (const m of memberRows) {
+    const list = memberships.get(m.documentId) ?? []
+    list.push({
+      id: m.id,
+      name: m.name,
+      type: m.type as DocumentCollectionMembership['type'],
+      role: m.role as DocumentCollectionMembership['role']
+    })
+    memberships.set(m.documentId, list)
+  }
   return rows.map((r) => {
     const chunkCount = chunkCountFor(db, r.id)
     let stale: boolean | undefined
     if (activeEmbeddingModelId && r.status === 'indexed' && chunkCount > 0) {
       stale = chunksEmbeddedUnder(db, r.id, activeEmbeddingModelId) === 0
     }
-    return rowToInfo(r, chunkCount, stale)
+    return { ...rowToInfo(r, chunkCount, stale), collections: memberships.get(r.id) ?? [] }
   })
 }
 
@@ -912,14 +939,15 @@ export function deleteDocument(db: Db, id: string): void {
   const row = getRow(db, id)
   if (!row) return
   if (row.stored_path && existsSync(row.stored_path)) {
-    try {
-      rmSync(row.stored_path)
-    } catch {
-      // Best-effort: a locked/missing workspace copy must not block the DB cleanup.
-    }
+    // Shred (overwrite-then-unlink) the workspace copy rather than a bare unlink (plan M5),
+    // keeping the on-disk delete contract consistent with the rest of the app. Best-effort:
+    // a locked/missing copy must not block the DB cleanup.
+    shredFile(row.stored_path)
   }
   db.prepare('DELETE FROM embeddings WHERE chunk_id IN (SELECT id FROM chunks WHERE document_id = ?)').run(id)
   db.prepare('DELETE FROM chunks WHERE document_id = ?').run(id)
+  // Membership (document_collections) + chat-attachment (conversation_documents) rows
+  // cascade away via ON DELETE CASCADE (plan C4) — no manual cleanup needed here.
   db.prepare('DELETE FROM documents WHERE id = ?').run(id)
 }
 
