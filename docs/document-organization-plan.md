@@ -1,9 +1,10 @@
 # Document organization plan — Library / Projects / Temporary / Generated / Archive
 
-_Status: **WORKING PAPER — not implemented.** Open plan; condense into a §-numbered design
-record in `docs/rag-design.md` (scope) + `docs/architecture.md` (data model / IPC) +
-`docs/user-guide.md` (UX) once the feature ships, then delete this file (CLAUDE.md doc-lifecycle
-rule)._
+_Status: **IN PROGRESS — Phase A (Collections core) implemented 2026-06-14** (schema + migration +
+`CollectionService` + `resolveScope` + collection-aware retrieval backend; behaviour identical,
+Library == all). Phases B–F still open. Condense into a §-numbered design record in `docs/rag-design.md`
+(scope) + `docs/architecture.md` (data model / IPC) + `docs/user-guide.md` (UX) once the WHOLE feature
+ships, then delete this file (CLAUDE.md doc-lifecycle rule). Per-phase status lives in `BUILD_STATE.md`._
 
 _Created: 2026-06-14. Author: planning pass on branch `Improved-Document-Structure`._
 

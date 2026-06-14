@@ -1,4 +1,5 @@
 import { createRequire } from 'node:module'
+import { randomUUID } from 'node:crypto'
 
 // SQLite storage via Node's built-in driver (no native compilation).
 // Requires the bundled Node >= 22.5; Electron is pinned ^37 (Node 22.x) so the packaged
@@ -87,6 +88,53 @@ CREATE TABLE IF NOT EXISTS runtime_events (
   metadata_json TEXT,
   created_at TEXT NOT NULL
 );
+
+-- Document organization (docs/document-organization-plan.md, Phase A). A collection is
+-- the unifying primitive: Projects are collections; Library/Temporary are seeded
+-- built-ins; Archive is a lifecycle; Generated is a role/view. Membership never
+-- duplicates documents/chunks/embeddings.
+CREATE TABLE IF NOT EXISTS collections (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  type TEXT NOT NULL,                  -- 'library' | 'project' | 'temporary' | 'archive' | 'smart'
+  description TEXT,
+  builtin INTEGER NOT NULL DEFAULT 0,  -- 1 for the seeded Library/Temporary (undeletable)
+  color TEXT,                          -- optional UI accent; null = neutral
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  archived_at TEXT,                    -- project-level archive (null = active)
+  retention_policy_json TEXT           -- reserved for later explicit retention (null in v1)
+);
+CREATE INDEX IF NOT EXISTS idx_collections_type ON collections(type);
+
+-- Many-to-many document↔collection membership. ON DELETE CASCADE on BOTH FKs is
+-- load-bearing for version-skew safety (plan C4): foreign_keys is ON and deleteDocument
+-- deletes the documents row directly, so without CASCADE a delete would hit an FK
+-- violation and dangling rows; CASCADE makes the orphan membership rows disappear.
+CREATE TABLE IF NOT EXISTS document_collections (
+  document_id TEXT NOT NULL,
+  collection_id TEXT NOT NULL,
+  role TEXT NOT NULL DEFAULT 'source', -- 'source' | 'reference' | 'attachment' ('generated' RESERVED, unused in v1)
+  added_at TEXT NOT NULL,
+  PRIMARY KEY (document_id, collection_id),
+  FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE,
+  FOREIGN KEY (collection_id) REFERENCES collections(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_doccoll_collection ON document_collections(collection_id);
+CREATE INDEX IF NOT EXISTS idx_doccoll_document ON document_collections(document_id);
+
+-- Temporary chat attachments are bound to their conversation HERE (plan C3), never via
+-- scope_json. CASCADE removes only the LINK on conversation delete, never the document.
+CREATE TABLE IF NOT EXISTS conversation_documents (
+  conversation_id TEXT NOT NULL,
+  document_id TEXT NOT NULL,
+  added_at TEXT NOT NULL,
+  PRIMARY KEY (conversation_id, document_id),
+  FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
+  FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_convdoc_conversation ON conversation_documents(conversation_id);
+CREATE INDEX IF NOT EXISTS idx_convdoc_document ON conversation_documents(document_id);
 `
 
 // Additive column migrations on top of the spec §8 base schema. `CREATE TABLE IF NOT
@@ -180,6 +228,44 @@ INSERT INTO messages_fts(content, message_id) SELECT content, id FROM messages;
 `)
 }
 
+/**
+ * Seed the built-in collections and back-fill Library membership (document-organization
+ * plan §9). Idempotent: built-ins are seeded once (guarded by `type`), and the backfill
+ * only touches documents that have NO membership yet, so re-opening never double-files.
+ *
+ * Backfill rule (plan §9 step 4): every `status='indexed'` document with NO membership and
+ * `origin_json IS NULL` becomes a Library member. The `status='indexed'` gate (M1) skips a
+ * doc still importing for a Project/Temporary destination; the `origin_json IS NULL` guard
+ * (D3) keeps generated translations/comparisons OUT of the default corpus — they get no
+ * membership at all and are reached only via explicit selection.
+ */
+function seedCollections(db: Db): void {
+  const now = new Date().toISOString()
+  const ensureBuiltin = (type: 'library' | 'temporary', name: string): string => {
+    const existing = db
+      .prepare('SELECT id FROM collections WHERE type = ? LIMIT 1')
+      .get(type) as unknown as { id: string } | undefined
+    if (existing) return existing.id
+    const id = randomUUID()
+    db.prepare(
+      `INSERT INTO collections (id, name, type, description, builtin, color, created_at, updated_at, archived_at, retention_policy_json)
+       VALUES (?, ?, ?, NULL, 1, NULL, ?, ?, NULL, NULL)`
+    ).run(id, name, type, now, now)
+    return id
+  }
+  // Canonical English names; the UI localizes built-ins by type (plan §9 step 3).
+  const libraryId = ensureBuiltin('library', 'Library')
+  ensureBuiltin('temporary', 'Temporary')
+  db.prepare(
+    `INSERT INTO document_collections (document_id, collection_id, role, added_at)
+     SELECT d.id, ?, 'source', ?
+     FROM documents d
+     WHERE d.status = 'indexed'
+       AND d.origin_json IS NULL
+       AND NOT EXISTS (SELECT 1 FROM document_collections dc WHERE dc.document_id = d.id)`
+  ).run(libraryId, now)
+}
+
 /** Open (or create) the database at `path` and run migrations. */
 export function openDatabase(path: string): Db {
   const db = new DatabaseSync(path)
@@ -191,8 +277,19 @@ export function openDatabase(path: string): Db {
   ensureColumn(db, 'documents', 'origin_json', 'origin_json TEXT')
   // Persisted per-page OCR recognition (content — lives only in this DB).
   ensureColumn(db, 'documents', 'ocr_json', 'ocr_json TEXT')
+  // Document-organization columns (plan §8.2/§8.3). All nullable — the ensureColumn DDL
+  // grammar allows no DEFAULT/NOT NULL, so NULL is the sentinel, coalesced in code
+  // (`lifecycle` NULL ⇒ 'permanent', the parseScope precedent).
+  ensureColumn(db, 'documents', 'lifecycle', 'lifecycle TEXT')
+  ensureColumn(db, 'documents', 'source_relative_path', 'source_relative_path TEXT')
+  ensureColumn(db, 'documents', 'source_folder_label', 'source_folder_label TEXT')
+  ensureColumn(db, 'documents', 'pending_destination_json', 'pending_destination_json TEXT')
+  ensureColumn(db, 'documents', 'expires_at', 'expires_at TEXT')
+  ensureColumn(db, 'conversations', 'collection_id', 'collection_id TEXT')
+  ensureColumn(db, 'conversations', 'scope_v2_json', 'scope_v2_json TEXT')
   ensureChunksFts(db)
   ensureMessagesFts(db)
+  seedCollections(db)
   return db
 }
 

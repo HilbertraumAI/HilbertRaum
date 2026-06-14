@@ -6,7 +6,52 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
-_Last updated: 2026-06-13 — **Three post-MVP UI fine-tunes.** (1) **Chat example chips matched
+_Last updated: 2026-06-14 — **Document organization — Phase A (Collections core, backend
+foundation).** First phase of [`docs/document-organization-plan.md`](docs/document-organization-plan.md).
+Adds a collection-membership layer over the existing pipeline — one stored file, one chunk set,
+one vector set per document; organization is metadata. **Schema** ([`db.ts`](apps/desktop/src/main/services/db.ts)):
+three additive tables in the `SCHEMA` constant — `collections`, `document_collections`,
+`conversation_documents` (the last two with **`ON DELETE CASCADE` on both FKs**, plan C4: with
+`PRAGMA foreign_keys = ON` a pre-feature app's direct `DELETE FROM documents` would otherwise hit an
+FK violation; CASCADE makes any build delete a doc cleanly) — plus indexes, plus nullable
+`ensureColumn` additions (`documents.lifecycle`/`source_relative_path`/`source_folder_label`/
+`pending_destination_json`/`expires_at`, `conversations.collection_id`/`scope_v2_json`; all NULL-sentinel
+since the `ensureColumn` DDL grammar forbids DEFAULT/NOT NULL). **Migration** (`seedCollections`, run in
+`openDatabase`, idempotent): seeds one **Library** + one **Temporary** built-in (by `type`, canonical
+English names, UI localizes by type) and back-fills Library membership for every `status='indexed'`,
+**`origin_json IS NULL`** (generated docs get NO membership — D3/N1), **unfiled** document (the
+`NOT EXISTS` guard makes re-open a no-op; the `status='indexed'` gate is M1). **Services** (new
+[`collections.ts`](apps/desktop/src/main/services/collections.ts)): CollectionService CRUD
+(create/rename/archive/delete — built-ins undeletable/unarchivable, delete is membership-only via
+CASCADE) + membership (add/remove, idempotent `ON CONFLICT DO NOTHING`) + `docLifecycle` coalesce +
+**`resolveScope`** (a conversation's stored scope → a `RetrievalScope`: `scope_v2_json` composite ⇒
+authoritative union; else legacy `scope_json`⇒specific docs / `collection_id`⇒project / else Library
+default; chat attachments from `conversation_documents` always unioned in; `hasExplicitDocSelection`
+set from hand-picks BEFORE merging attachments — N2; tolerant parse → never throws). **Retrieval**:
+new neutral [`retrieval-scope.ts`](apps/desktop/src/main/services/retrieval-scope.ts) `buildScopeFilter`
+(membership-OR-id UNION + document-level archived exclusion, plan §10.2/C1/D1) shared by `VectorIndex`
+([`embeddings/index.ts`](apps/desktop/src/main/services/embeddings/index.ts)), `keywordSearchChunks`
+([`rag/hybrid.ts`](apps/desktop/src/main/services/rag/hybrid.ts)), and scope-threaded `corpusNeedsReindex`
+(M2); `retrieve`'s arg-5 is now a normalized union **`string[] | RetrievalScope | null`** (H3 — a bare
+array/null still means legacy doc-ids, so **every existing positional caller/test is byte-identical**),
+`generateGroundedAnswer` gains `opts.scope`. **Data contract:** `RetrievalScope`, `DocumentScope`,
+`Collection`/`CollectionType`/`DocumentCollectionRole`/`DocumentLifecycle` in
+[`shared/types.ts`](apps/desktop/src/shared/types.ts). **Deliberately deferred to later phases:** no IPC/
+preload/renderer surface, no `Conversation.scope`/`collectionId` fields, no project UI, no chat attach
+UI, no delete-with-documents, no audit events for collection ops, no `last_used_at` (L2) — Phase A is
+backend-only and leaves observable behaviour **identical** (Library == all documents on day one). The
+live ask path ([`registerRagIpc.ts`](apps/desktop/src/main/ipc/registerRagIpc.ts)) is **unchanged**;
+`resolveScope` is built + tested but wired into the IPC in Phase B. **Docs:** version-skew note added to
+[`known-limitations.md`](docs/known-limitations.md); the plan stays open (condensed into §-records +
+deleted only when the whole feature ships — CLAUDE.md doc-lifecycle rule). **Tests:** typecheck clean,
+build OK, `npm test` **1163 passed / 25 skipped** (+21: new `collections.test.ts` [seed/backfill,
+CRUD, membership idempotency, CASCADE version-skew, resolveScope, no-network] + `rag-collections.test.ts`
+[collection∪doc union, archived exclude/include + project-archive-doesn't-exclude C1, generated
+structurally excluded + explicitly selectable D3, M2 empty-vs-stale split, legacy arg-5 unchanged]). No
+version bump. **Next:** Phase B — projects + composite scope (IPC + multi-select source picker +
+`Conversation.scope`/`scope_v2_json` wiring + conversation-list grouping)._
+
+_(prior) 2026-06-13 — **Three post-MVP UI fine-tunes.** (1) **Chat example chips matched
 the mode.** Plain Chat has no document access, yet its empty-state examples were document-shaped
 ("Summarize this contract" / payment terms / indemnity). Split into two key sets: `chat.exampleChat.*`
 (explain a concept / write a polite email / brainstorm — general-purpose) for chat mode and

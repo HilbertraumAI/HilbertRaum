@@ -1,11 +1,20 @@
 import type { Db } from '../db'
 import { t } from '../../../shared/i18n'
-import type { AppSettings, Citation, Message } from '../../../shared/types'
+import type { AppSettings, Citation, Message, RetrievalScope } from '../../../shared/types'
 import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../runtime'
 import { type Embedder, VectorIndex } from '../embeddings'
 import type { Reranker } from '../reranker'
+import { buildScopeFilter } from '../retrieval-scope'
 import { keywordSearchChunks, rrfFuse } from './hybrid'
 export { detectFilenameScope, type DetectedScope, type ScopeableDoc } from './scope'
+// Re-exported so callers can `import { retrieve, type RetrievalScope } from '../services/rag'`
+// (plan §10.2). The canonical definition lives in shared/types.ts (no cycle with embeddings).
+export type { RetrievalScope } from '../../../shared/types'
+
+/** Normalize retrieve's arg-5 union: a bare `string[]`/`null` is the legacy doc-id scope. */
+function normalizeScope(scope: string[] | RetrievalScope | null | undefined): RetrievalScope {
+  return Array.isArray(scope) || scope == null ? { documentIds: scope ?? null } : scope
+}
 import { approxTokenCount } from '../ingestion/chunker'
 import { log } from '../logging'
 import {
@@ -108,15 +117,29 @@ export const REINDEX_NEEDED_ANSWER = t('en', 'main.rag.reindexNeeded')
  * has chunks, but not a single one of those documents has any vector under the active
  * model. Drives the `REINDEX_NEEDED_ANSWER` variant — a per-document partial mismatch
  * still retrieves from the visible documents and stays on the normal path.
+ *
+ * `scope` (document-organization plan M2): when given, the SAME membership / id-union /
+ * archived filter retrieval applies is applied here, so the re-index honesty story is
+ * correct under collection scope. This distinguishes, WITHIN the active scope, an
+ * empty scope (no indexed docs ⇒ false ⇒ `NO_DOCUMENT_CONTEXT_ANSWER`, re-index wouldn't
+ * help) from a stale scope (indexed docs, none visible to the embedder ⇒ true ⇒
+ * `REINDEX_NEEDED_ANSWER`). Omit `scope` for the whole-corpus check (unchanged).
  */
-export function corpusNeedsReindex(db: Db, embeddingModelId: string): boolean {
+export function corpusNeedsReindex(
+  db: Db,
+  embeddingModelId: string,
+  scope?: RetrievalScope | null
+): boolean {
+  const scopeFilter = buildScopeFilter(scope, 'd.id')
+  const scopeSql = scopeFilter ? ` AND ${scopeFilter.sql}` : ''
+  const scopeParams = scopeFilter ? scopeFilter.params : []
   const indexed = db
     .prepare(
       `SELECT COUNT(*) AS n FROM documents d
        WHERE d.status = 'indexed'
-         AND EXISTS (SELECT 1 FROM chunks c WHERE c.document_id = d.id)`
+         AND EXISTS (SELECT 1 FROM chunks c WHERE c.document_id = d.id)${scopeSql}`
     )
-    .get() as unknown as { n: number }
+    .get(...scopeParams) as unknown as { n: number }
   if (indexed.n === 0) return false
   const visible = db
     .prepare(
@@ -125,9 +148,9 @@ export function corpusNeedsReindex(db: Db, embeddingModelId: string): boolean {
          AND EXISTS (
            SELECT 1 FROM embeddings e JOIN chunks c ON e.chunk_id = c.id
            WHERE c.document_id = d.id AND e.embedding_model_id = ?
-         )`
+         )${scopeSql}`
     )
-    .get(embeddingModelId) as unknown as { n: number }
+    .get(embeddingModelId, ...scopeParams) as unknown as { n: number }
   return visible.n === 0
 }
 
@@ -161,25 +184,31 @@ interface ChunkRow {
  * pipeline (RRF over a single list is monotone in rank; vector candidates keep their
  * cosine as `score` until a reranker actually rescores them).
  *
- * `scopeDocumentIds` (spec §10.4): when non-empty, retrieval only searches
- * those documents — the conversation's "ask selected documents" scope.
+ * `scope` (spec §10.4 + document-organization plan §10.2) is a normalized union on
+ * parameter 5: a bare `string[]`/`null` is the legacy "ask selected documents" doc-id
+ * scope (normalized to `{ documentIds }`), so every existing positional caller stays valid;
+ * a `RetrievalScope` adds `collectionIds`/`includeArchived` (membership + archived filter,
+ * unioned with `documentIds`).
  */
 export async function retrieve(
   db: Db,
   embedder: Embedder,
   question: string,
   settings: RagRetrievalSettings,
-  scopeDocumentIds?: string[] | null,
+  scope?: string[] | RetrievalScope | null,
   reranker?: Reranker | null,
   signal?: AbortSignal
 ): Promise<RetrievalResult> {
+  const s = normalizeScope(scope)
   // Mismatch guard: only search vectors tagged with the active embedder's id.
   // Mock and real E5 vectors are both 384-dim, so the dimension guard cannot separate
   // them; scoping by model id stops a corpus indexed under one embedder from polluting
   // search under another (until a reindex re-embeds everything with the active model).
   const index = new VectorIndex(db, embedder, {
     embeddingModelId: embedder.id,
-    documentIds: scopeDocumentIds ?? null
+    documentIds: s.documentIds ?? null,
+    collectionIds: s.collectionIds ?? null,
+    includeArchived: s.includeArchived
   })
   const vectorHits = (await index.searchText(question, settings.topKInitial, signal)).filter(
     (hit) => hit.score >= settings.minSimilarity
@@ -190,7 +219,9 @@ export async function retrieve(
   // (staleEmbeddings / corpusNeedsReindex / REINDEX_NEEDED_ANSWER) is unchanged.
   const keywordHits = keywordSearchChunks(db, question, settings.topKInitial, {
     embeddingModelId: embedder.id,
-    documentIds: scopeDocumentIds ?? null
+    documentIds: s.documentIds ?? null,
+    collectionIds: s.collectionIds ?? null,
+    includeArchived: s.includeArchived
   })
   const fused = rrfFuse(vectorHits, keywordHits)
 
@@ -350,8 +381,17 @@ export interface GroundedAnswerOptions {
   signal?: AbortSignal
   onToken?: (token: string) => void
   runtimeOptions?: Pick<RuntimeChatOptions, 'maxTokens' | 'temperature'>
-  /** "Ask selected documents" scope for retrieval. Null = whole corpus. */
+  /**
+   * Legacy "ask selected documents" doc-id scope. Null = whole corpus. Kept for existing
+   * callers; ignored when `scope` is provided.
+   */
   scopeDocumentIds?: string[] | null
+  /**
+   * Composite retrieval scope (document-organization plan §10.2): membership + specific
+   * docs + archived flag. When set it takes precedence over `scopeDocumentIds` AND makes
+   * the empty-context re-index check scope-aware (M2). Absent ⇒ legacy whole-corpus check.
+   */
+  scope?: RetrievalScope | null
   /** Optional retrieval reranker. Null/absent keeps the fused ordering. */
   reranker?: Reranker | null
 }
@@ -375,21 +415,26 @@ export async function generateGroundedAnswer(
   settings: RagRetrievalSettings,
   opts: GroundedAnswerOptions = {}
 ): Promise<Message> {
+  // A composite `scope` (plan §10.2) wins over the legacy doc-id scope. Both normalize
+  // inside `retrieve`, so a bare doc-id array still works byte-for-byte.
+  const scopeArg = opts.scope ?? opts.scopeDocumentIds
   const { chunks, citations } = await retrieve(
     db,
     embedder,
     question,
     settings,
-    opts.scopeDocumentIds,
+    scopeArg,
     opts.reranker,
     opts.signal
   )
 
   if (chunks.length === 0) {
-    // Distinguish "nothing relevant" from "the whole corpus is invisible to the active
-    // embedder": the latter needs a re-index, not a rephrase. Either way the
-    // model is never called without context (grounding rule).
-    const answer = corpusNeedsReindex(db, embedder.id)
+    // Distinguish "nothing relevant" from "the corpus is invisible to the active
+    // embedder": the latter needs a re-index, not a rephrase. Either way the model is
+    // never called without context (grounding rule). The check is scope-aware ONLY when a
+    // composite `scope` was supplied (M2); the legacy doc-id path keeps the whole-corpus
+    // check unchanged, so existing behaviour is byte-identical.
+    const answer = corpusNeedsReindex(db, embedder.id, opts.scope ?? undefined)
       ? REINDEX_NEEDED_ANSWER
       : NO_DOCUMENT_CONTEXT_ANSWER
     opts.onToken?.(answer)

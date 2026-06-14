@@ -1,0 +1,291 @@
+import { describe, it, expect, vi, afterEach } from 'vitest'
+import net from 'node:net'
+import { mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { randomUUID } from 'node:crypto'
+import { createRequire } from 'node:module'
+import { openDatabase, type Db } from '../../src/main/services/db'
+import {
+  addToCollection,
+  createCollection,
+  deleteCollection,
+  docLifecycle,
+  documentIdsInCollection,
+  getBuiltinCollection,
+  listCollections,
+  removeFromCollection,
+  renameCollection,
+  resolveScope,
+  setCollectionArchived
+} from '../../src/main/services/collections'
+import { createConversation } from '../../src/main/services/chat'
+
+// Document-organization plan, Phase A: collection CRUD + membership, the built-in
+// seed + Library backfill migration, version-skew CASCADE, and resolveScope.
+
+function freshDb(): Db {
+  return openDatabase(join(mkdtempSync(join(tmpdir(), 'hilbertraum-coll-')), 'test.sqlite'))
+}
+
+/** Insert a bare document row (no chunks/vectors needed for membership tests). */
+function seedDoc(
+  db: Db,
+  id: string,
+  opts: { status?: string; origin?: string | null } = {}
+): string {
+  const now = new Date().toISOString()
+  db.prepare(
+    `INSERT INTO documents (id, title, status, origin_json, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?)`
+  ).run(id, `${id}.txt`, opts.status ?? 'indexed', opts.origin ?? null, now, now)
+  return id
+}
+
+afterEach(() => {
+  vi.restoreAllMocks()
+})
+
+// ---- Built-in seed + backfill migration (plan §9) ----------------------------------
+
+describe('built-in seed', () => {
+  it('seeds exactly one Library and one Temporary, undeletable + idempotent on re-open', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'hilbertraum-coll-seed-'))
+    const path = join(dir, 'test.sqlite')
+    const db = openDatabase(path)
+
+    const library = getBuiltinCollection(db, 'library')
+    const temporary = getBuiltinCollection(db, 'temporary')
+    expect(library?.builtin).toBe(true)
+    expect(temporary?.builtin).toBe(true)
+    expect(library?.name).toBe('Library')
+    expect(temporary?.name).toBe('Temporary')
+
+    // Built-ins are undeletable / unarchivable.
+    expect(() => deleteCollection(db, library!.id)).toThrow(/Built-in/)
+    expect(() => setCollectionArchived(db, library!.id, true)).toThrow(/Built-in/)
+    db.close()
+
+    // Re-open: still exactly one of each (no double-seed).
+    const again = openDatabase(path)
+    expect(again.prepare("SELECT COUNT(*) AS n FROM collections WHERE type='library'").get()).toEqual({
+      n: 1
+    })
+    expect(
+      again.prepare("SELECT COUNT(*) AS n FROM collections WHERE type='temporary'").get()
+    ).toEqual({ n: 1 })
+  })
+})
+
+describe('Library backfill', () => {
+  it('files indexed non-generated unfiled docs into Library; skips generated + unindexed', () => {
+    // Build a pre-feature DB (documents only) then migrate by opening it.
+    const dir = mkdtempSync(join(tmpdir(), 'hilbertraum-coll-bf-'))
+    const path = join(dir, 'old.sqlite')
+    const nodeRequire = createRequire(process.execPath)
+    const { DatabaseSync } = nodeRequire('node:sqlite') as typeof import('node:sqlite')
+    const old = new DatabaseSync(path)
+    old.exec(`CREATE TABLE documents (
+      id TEXT PRIMARY KEY, title TEXT NOT NULL, original_path TEXT, stored_path TEXT,
+      mime_type TEXT, size_bytes INTEGER, sha256 TEXT, status TEXT NOT NULL,
+      error_message TEXT, origin_json TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`)
+    const ins = old.prepare(
+      `INSERT INTO documents (id, title, status, origin_json, created_at, updated_at)
+       VALUES (?, ?, ?, ?, '2026-01-01', '2026-01-01')`
+    )
+    ins.run('indexed-1', 'a.txt', 'indexed', null)
+    ins.run('indexed-2', 'b.txt', 'indexed', null)
+    ins.run('generated-1', 't.md', 'indexed', JSON.stringify({ type: 'translation' })) // generated → no membership
+    ins.run('queued-1', 'c.txt', 'queued', null) // still importing → not backfilled (M1)
+    old.close()
+
+    const db = openDatabase(path)
+    const library = getBuiltinCollection(db, 'library')!
+    const members = documentIdsInCollection(db, library.id).sort()
+    expect(members).toEqual(['indexed-1', 'indexed-2'])
+
+    // Re-open must not double-file (the NOT EXISTS guard).
+    const again = openDatabase(path)
+    const lib2 = getBuiltinCollection(again, 'library')!
+    expect(documentIdsInCollection(again, lib2.id).sort()).toEqual(['indexed-1', 'indexed-2'])
+  })
+})
+
+// ---- CRUD + membership -------------------------------------------------------------
+
+describe('collection CRUD + membership', () => {
+  it('creates, renames, archives/unarchives a project; delete keeps its documents', () => {
+    const db = freshDb()
+    const project = createCollection(db, '  Tax 2025  ')
+    expect(project.name).toBe('Tax 2025')
+    expect(project.type).toBe('project')
+    expect(project.builtin).toBe(false)
+    expect(() => createCollection(db, '   ')).toThrow(/empty/)
+
+    expect(renameCollection(db, project.id, 'Tax 2026').name).toBe('Tax 2026')
+    expect(setCollectionArchived(db, project.id, true).archivedAt).not.toBeNull()
+    expect(setCollectionArchived(db, project.id, false).archivedAt).toBeNull()
+
+    const doc = seedDoc(db, 'doc-1')
+    addToCollection(db, [doc], project.id)
+    expect(documentIdsInCollection(db, project.id)).toEqual(['doc-1'])
+
+    // Delete (membership-only) drops the collection + membership, keeps the document.
+    deleteCollection(db, project.id)
+    expect(listCollections(db).some((c) => c.id === project.id)).toBe(false)
+    expect(db.prepare('SELECT COUNT(*) AS n FROM documents').get()).toEqual({ n: 1 })
+    expect(
+      db.prepare('SELECT COUNT(*) AS n FROM document_collections').get()
+    ).toEqual({ n: 0 })
+  })
+
+  it('membership add is idempotent; remove is a no-op for non-members', () => {
+    const db = freshDb()
+    const project = createCollection(db, 'P')
+    seedDoc(db, 'd1')
+    addToCollection(db, ['d1'], project.id)
+    addToCollection(db, ['d1'], project.id) // duplicate → no-op
+    expect(documentIdsInCollection(db, project.id)).toEqual(['d1'])
+    removeFromCollection(db, ['nope'], project.id) // not a member → no-op
+    expect(documentIdsInCollection(db, project.id)).toEqual(['d1'])
+    removeFromCollection(db, ['d1'], project.id)
+    expect(documentIdsInCollection(db, project.id)).toEqual([])
+  })
+
+  it('docLifecycle coalesces NULL/unknown to permanent', () => {
+    expect(docLifecycle(null)).toBe('permanent')
+    expect(docLifecycle(undefined)).toBe('permanent')
+    expect(docLifecycle('weird')).toBe('permanent')
+    expect(docLifecycle('temporary')).toBe('temporary')
+    expect(docLifecycle('archived')).toBe('archived')
+  })
+})
+
+// ---- Version-skew: deleting a document cascades memberships + links (plan C4) -------
+
+describe('ON DELETE CASCADE (version skew)', () => {
+  it('a direct DELETE FROM documents cascades membership + conversation links, no FK error', () => {
+    const db = freshDb()
+    const project = createCollection(db, 'P')
+    const lib = getBuiltinCollection(db, 'library')!
+    const doc = seedDoc(db, 'd1')
+    addToCollection(db, [doc], project.id)
+    addToCollection(db, [doc], lib.id)
+    const conv = createConversation(db, { mode: 'documents' })
+    db.prepare(
+      `INSERT INTO conversation_documents (conversation_id, document_id, added_at) VALUES (?, ?, ?)`
+    ).run(conv.id, doc, new Date().toISOString())
+
+    // The pre-feature delete path: a direct DELETE with foreign_keys = ON.
+    expect(() => db.prepare('DELETE FROM documents WHERE id = ?').run(doc)).not.toThrow()
+    expect(db.prepare('SELECT COUNT(*) AS n FROM document_collections').get()).toEqual({ n: 0 })
+    expect(db.prepare('SELECT COUNT(*) AS n FROM conversation_documents').get()).toEqual({ n: 0 })
+  })
+})
+
+// ---- resolveScope (plan §10.1) -----------------------------------------------------
+
+describe('resolveScope', () => {
+  it('defaults a documents-mode conversation to the whole Library', () => {
+    const db = freshDb()
+    const lib = getBuiltinCollection(db, 'library')!
+    const conv = createConversation(db, { mode: 'documents' })
+    const scope = resolveScope(db, conv.id)
+    expect(scope.collectionIds).toEqual([lib.id])
+    expect(scope.documentIds).toBeNull()
+    expect(scope.hasExplicitDocSelection).toBe(false)
+  })
+
+  it('maps a legacy scope_json to a specific-doc selection', () => {
+    const db = freshDb()
+    const conv = createConversation(db, { mode: 'documents', scopeDocumentIds: ['da', 'db'] })
+    const scope = resolveScope(db, conv.id)
+    expect(scope.collectionIds).toBeNull()
+    expect(scope.documentIds).toEqual(['da', 'db'])
+    expect(scope.hasExplicitDocSelection).toBe(true)
+  })
+
+  it('maps a legacy collection_id to that project', () => {
+    const db = freshDb()
+    const project = createCollection(db, 'P')
+    const conv = createConversation(db, { mode: 'documents' })
+    db.prepare('UPDATE conversations SET collection_id = ? WHERE id = ?').run(project.id, conv.id)
+    const scope = resolveScope(db, conv.id)
+    expect(scope.collectionIds).toEqual([project.id])
+    expect(scope.hasExplicitDocSelection).toBe(false)
+  })
+
+  it('resolves a composite scope_v2_json as a union (collections + specific docs)', () => {
+    const db = freshDb()
+    const lib = getBuiltinCollection(db, 'library')!
+    const project = createCollection(db, 'Tax')
+    const conv = createConversation(db, { mode: 'documents' })
+    db.prepare('UPDATE conversations SET scope_v2_json = ? WHERE id = ?').run(
+      JSON.stringify({ collectionIds: [lib.id, project.id], documentIds: ['contractA'] }),
+      conv.id
+    )
+    const scope = resolveScope(db, conv.id)
+    expect(scope.collectionIds?.sort()).toEqual([lib.id, project.id].sort())
+    expect(scope.documentIds).toEqual(['contractA'])
+    expect(scope.hasExplicitDocSelection).toBe(true)
+  })
+
+  it('treats an empty scope_v2_json as the explicit "All documents" choice', () => {
+    const db = freshDb()
+    const conv = createConversation(db, { mode: 'documents' })
+    db.prepare('UPDATE conversations SET scope_v2_json = ? WHERE id = ?').run(
+      JSON.stringify({ collectionIds: [], documentIds: [] }),
+      conv.id
+    )
+    const scope = resolveScope(db, conv.id)
+    expect(scope.collectionIds).toBeNull()
+    expect(scope.documentIds).toBeNull()
+  })
+
+  it('always unions chat attachments without flagging them as a hand-pick (N2)', () => {
+    const db = freshDb()
+    const lib = getBuiltinCollection(db, 'library')!
+    const conv = createConversation(db, { mode: 'documents' })
+    seedDoc(db, 'attach-1')
+    db.prepare(
+      `INSERT INTO conversation_documents (conversation_id, document_id, added_at) VALUES (?, ?, ?)`
+    ).run(conv.id, 'attach-1', new Date().toISOString())
+    const scope = resolveScope(db, conv.id)
+    expect(scope.collectionIds).toEqual([lib.id]) // default library still present
+    expect(scope.documentIds).toEqual(['attach-1']) // attachment unioned in
+    expect(scope.hasExplicitDocSelection).toBe(false) // attachment is NOT a hand-pick
+  })
+
+  it('falls back to the Library default on malformed scope_v2_json (never throws)', () => {
+    const db = freshDb()
+    const lib = getBuiltinCollection(db, 'library')!
+    const conv = createConversation(db, { mode: 'documents' })
+    db.prepare('UPDATE conversations SET scope_v2_json = ? WHERE id = ?').run('{not json', conv.id)
+    const scope = resolveScope(db, conv.id)
+    expect(scope.collectionIds).toEqual([lib.id])
+  })
+})
+
+// ---- Privacy / offline (plan §17/§19.4) --------------------------------------------
+
+describe('no network', () => {
+  it('collection CRUD + membership + resolveScope make zero network calls', () => {
+    const db = freshDb()
+    const socketSpy = vi.spyOn(net.Socket.prototype, 'connect')
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+
+    const project = createCollection(db, 'P')
+    const doc = seedDoc(db, 'd1')
+    addToCollection(db, [doc], project.id)
+    renameCollection(db, project.id, 'P2')
+    setCollectionArchived(db, project.id, true)
+    listCollections(db)
+    const conv = createConversation(db, { mode: 'documents' })
+    resolveScope(db, conv.id)
+    removeFromCollection(db, [doc], project.id)
+    deleteCollection(db, project.id)
+
+    expect(socketSpy).not.toHaveBeenCalled()
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+})

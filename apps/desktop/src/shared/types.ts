@@ -742,6 +742,84 @@ export interface ImportJobStatus {
   done: boolean
 }
 
+// ---- Document organization (docs/document-organization-plan.md) ----
+//
+// A collection-membership layer over the existing ingestion/retrieval pipeline: one
+// stored file, one chunk set, one vector set per document; organization is metadata
+// (`collections` + `document_collections`) plus a `lifecycle` attribute on documents.
+// Five user-facing containers — Library, Projects, Temporary, Generated (a role/view),
+// Archive — built on these primitives. Everything stays local + offline.
+
+/**
+ * Collection kind. `library`/`temporary` are the seeded built-ins (one each, `builtin`);
+ * `project` is user-created. `archive`/`smart` are reserved in the domain but NOT stored
+ * as rows in v1 (archive is a doc/project lifecycle; smart views are query-time filters).
+ */
+export type CollectionType = 'library' | 'project' | 'temporary' | 'archive' | 'smart'
+
+/**
+ * How a document belongs to a collection. `'generated'` is RESERVED (unused in v1):
+ * generated documents get NO membership at all and are reached only via explicit
+ * selection (plan §15.2 / N1).
+ */
+export type DocumentCollectionRole = 'source' | 'reference' | 'attachment' | 'generated'
+
+/** A document's retention lifecycle. NULL in the DB is coalesced to `'permanent'`. */
+export type DocumentLifecycle = 'permanent' | 'temporary' | 'archived'
+
+/** A collection as surfaced over IPC (a `collections` row). */
+export interface Collection {
+  id: string
+  /** Stable canonical name; the UI localizes built-ins by `type`, never the stored name. */
+  name: string
+  type: CollectionType
+  description: string | null
+  /** True for the seeded Library/Temporary built-ins (undeletable). */
+  builtin: boolean
+  /** Optional UI accent; null = neutral. */
+  color: string | null
+  createdAt: string
+  updatedAt: string
+  /** Project-level archive timestamp (null = active). A scope-target change, not a global exclusion. */
+  archivedAt: string | null
+}
+
+/**
+ * The composite chat scope the user composes (plan §0.1 D1): a UNION of whole
+ * collections (Library / projects) and specific documents. Persisted per conversation in
+ * `conversations.scope_v2_json`. An empty scope (both arrays empty) means the explicit
+ * "All documents" choice (whole corpus, archived excluded unless `includeArchived`).
+ */
+export interface DocumentScope {
+  /** Any mix of library id, project ids (and later smart-view ids). */
+  collectionIds: string[]
+  /** Specific documents added to the union. */
+  documentIds: string[]
+  /** Include `lifecycle='archived'` documents. Default false. */
+  includeArchived?: boolean
+}
+
+/**
+ * The resolved, internal retrieval filter (plan §10.2). Produced by `resolveScope` from a
+ * conversation's stored `DocumentScope` + chat attachments, and threaded into the vector /
+ * keyword search. A document is in scope when it is a member of any `collectionIds` entry
+ * OR its id is in `documentIds` (a UNION — plan D1). Empty/null both ⇒ whole corpus.
+ * Re-exported from `services/rag` for callers that import it alongside `retrieve`.
+ */
+export interface RetrievalScope {
+  /** Explicit selected docs ∪ chat attachments after `resolveScope` merges them. */
+  documentIds?: string[] | null
+  /** Membership filter: collections whose members are in scope. */
+  collectionIds?: string[] | null
+  /** Include `lifecycle='archived'` documents. Default false. */
+  includeArchived?: boolean
+  /**
+   * True iff the user hand-picked specific documents (set BEFORE attachments/expansion are
+   * merged into `documentIds`). Gates the filename auto-scope skip (plan §10.1 rule 5 / N2).
+   */
+  hasExplicitDocSelection?: boolean
+}
+
 // ---- Benchmark ----
 export interface BenchmarkResult {
   os: string

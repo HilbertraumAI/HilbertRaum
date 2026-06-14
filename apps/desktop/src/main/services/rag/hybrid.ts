@@ -1,5 +1,6 @@
 import type { Db } from '../db'
 import { buildFtsMatchQuery } from '../fts'
+import { buildScopeFilter } from '../retrieval-scope'
 
 // Hybrid keyword retrieval + rank fusion (rag-design §11).
 //
@@ -25,8 +26,12 @@ export { buildFtsMatchQuery }
 export interface KeywordSearchOptions {
   /** Restrict hits to chunks with a vector under this embedding model (required — the visibility rule). */
   embeddingModelId: string
-  /** "Ask selected documents" scope; null/empty = whole corpus (composes like the vector path). */
+  /** "Ask selected documents" / specific-doc scope; null/empty = no doc-id filter (composes like the vector path). */
   documentIds?: string[] | null
+  /** Collection-membership filter, UNIONED with `documentIds` (plan §10.2). */
+  collectionIds?: string[] | null
+  /** Include `lifecycle='archived'` documents. Default false (plan C1). */
+  includeArchived?: boolean
 }
 
 export interface KeywordHit {
@@ -51,11 +56,20 @@ export function keywordSearchChunks(
   if (!match) return []
 
   const params: (string | number)[] = [options.embeddingModelId]
+  // Collection/document scope + archived exclusion, unioned exactly like the vector path
+  // (shared builder). `c` (chunks) is already joined, so the predicate attaches there.
+  const scopeFilter = buildScopeFilter(
+    {
+      documentIds: options.documentIds,
+      collectionIds: options.collectionIds,
+      includeArchived: options.includeArchived
+    },
+    'c.document_id'
+  )
   let docFilter = ''
-  const docs = options.documentIds
-  if (docs && docs.length > 0) {
-    docFilter = ` AND c.document_id IN (${docs.map(() => '?').join(', ')})`
-    params.push(...docs)
+  if (scopeFilter) {
+    docFilter = ` AND ${scopeFilter.sql}`
+    params.push(...scopeFilter.params)
   }
   const sql =
     `SELECT chunks_fts.chunk_id AS chunkId, bm25(chunks_fts) AS bm25

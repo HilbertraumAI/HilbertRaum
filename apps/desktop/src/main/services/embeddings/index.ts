@@ -1,4 +1,5 @@
 import type { Db } from '../db'
+import { buildScopeFilter } from '../retrieval-scope'
 
 // Embeddings + vector search (spec §6, §7.8, §9.2). The `Embedder` interface keeps
 // the mock embedder and the real on-device embedder interchangeable behind one
@@ -115,15 +116,28 @@ export interface VectorIndexOptions {
   embeddingModelId?: string | null
   /**
    * When set and non-empty, the search only scans vectors whose chunk belongs to one of
-   * these documents — "ask selected documents" (spec §10.4). Empty/absent
-   * means the whole corpus, so existing callers are unchanged.
+   * these documents — "ask selected documents" (spec §10.4) / specific-doc selection.
+   * Empty/absent means no document-id filter, so existing callers are unchanged.
    */
   documentIds?: string[] | null
+  /**
+   * Collection-membership filter (document-organization plan §10.2): scopes to chunks whose
+   * document is a member of one of these collections, UNIONED with `documentIds`. Empty/absent
+   * means no membership filter.
+   */
+  collectionIds?: string[] | null
+  /**
+   * Include `lifecycle='archived'` documents. Default false — archived documents are
+   * globally excluded from default retrieval (plan C1).
+   */
+  includeArchived?: boolean
 }
 
 export class VectorIndex {
   private readonly embeddingModelId: string | null
   private readonly documentIds: string[] | null
+  private readonly collectionIds: string[] | null
+  private readonly includeArchived: boolean
 
   constructor(
     private readonly db: Db,
@@ -134,24 +148,35 @@ export class VectorIndex {
     this.embeddingModelId = id && id.length > 0 ? id : null
     const docs = options?.documentIds
     this.documentIds = docs && docs.length > 0 ? docs : null
+    const colls = options?.collectionIds
+    this.collectionIds = colls && colls.length > 0 ? colls : null
+    this.includeArchived = options?.includeArchived ?? false
   }
 
   /** Rank stored chunks by cosine similarity to `queryVector`; return the top `topK`. */
   search(queryVector: Float32Array, topK: number): VectorSearchHit[] {
     if (topK <= 0) return []
-    // Compose the scan filters: model-id scoping and/or document scoping.
-    // Placeholders only — ids are never interpolated into the SQL.
+    // Compose the scan filters: model-id scoping and/or collection/document scoping
+    // (+ archived exclusion). Placeholders only — ids are never interpolated into the SQL.
     const where: string[] = []
-    const params: string[] = []
+    const params: (string | number)[] = []
     if (this.embeddingModelId) {
       where.push('embedding_model_id = ?')
       params.push(this.embeddingModelId)
     }
-    if (this.documentIds) {
-      where.push(
-        `chunk_id IN (SELECT id FROM chunks WHERE document_id IN (${this.documentIds.map(() => '?').join(', ')}))`
-      )
-      params.push(...this.documentIds)
+    // `embeddings` has only `chunk_id`, so the chunk→document hop + every scope predicate
+    // live inside one `chunk_id IN (SELECT …)` subquery (the existing pattern).
+    const scopeFilter = buildScopeFilter(
+      {
+        documentIds: this.documentIds,
+        collectionIds: this.collectionIds,
+        includeArchived: this.includeArchived
+      },
+      'c.document_id'
+    )
+    if (scopeFilter) {
+      where.push(`chunk_id IN (SELECT c.id FROM chunks c WHERE ${scopeFilter.sql})`)
+      params.push(...scopeFilter.params)
     }
     const sql =
       'SELECT chunk_id, vector_blob, dimensions FROM embeddings' +
