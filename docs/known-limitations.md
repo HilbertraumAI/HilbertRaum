@@ -33,6 +33,14 @@ password recovery — are documented in
   Nothing is harmed or written; opening the drive with a current build works. Accepted: drives
   ship the app alongside the data, so version skew requires deliberately mixing an old app
   with a new workspace.
+- **A pre-document-organization build ignores collections on a post-feature DB — but deletes still
+  work.** An older app shows the flat document corpus (it never reads the `collections` /
+  `document_collections` / `conversation_documents` tables), so organization is invisible, not
+  corrupting. Document **deletion** stays safe only because those membership/link tables declare
+  `ON DELETE CASCADE`: the old app's direct `DELETE FROM documents` (with `PRAGMA foreign_keys = ON`)
+  cascade-removes the orphan rows instead of raising a foreign-key violation. Same accepted
+  app-beside-data version-skew stance as the vault note above. (See `docs/document-organization-plan.md`
+  §9/§8.1.)
 - **Password-change edge: a post-commit swap interruption can briefly wedge one document.**
   If the one-time v1→v2 migration is interrupted AFTER its descriptor commit but mid file-swap
   (e.g. a transiently locked file on Windows), a not-yet-swapped document sidecar stays under
