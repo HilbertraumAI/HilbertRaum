@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer, clipboard } from 'electron'
+import { contextBridge, ipcRenderer } from 'electron'
 import { EVENTS, IPC, STREAM, type ScopeNotice } from '../shared/ipc'
 import type {
   ActiveStreamSnapshot,
@@ -185,18 +185,13 @@ const api = {
   getLogTail: (): Promise<string[]> => ipcRenderer.invoke(IPC.getLogTail),
   /** Save the full local log to a user-chosen file (plaintext); path, or null on cancel. */
   exportLog: (): Promise<string | null> => ipcRenderer.invoke(IPC.exportLog),
-  /** Copy text to the OS clipboard via Electron's native `clipboard` module. Used instead
-   *  of `navigator.clipboard`, which needs a secure context + focused document and is
-   *  unreliable in a file://-loaded renderer (it threw the "Zwischenablage" copy error).
-   *  Synchronous; returns whether it ran without throwing. */
-  copyToClipboard: (text: string): boolean => {
-    try {
-      clipboard.writeText(text)
-      return true
-    } catch {
-      return false
-    }
-  },
+  /** Copy text to the OS clipboard. The write happens in MAIN (`clipboard:write`) — the
+   *  sandboxed preload has no access to Electron's `clipboard` module, and
+   *  `navigator.clipboard` needs a secure context + focused document and is unreliable in a
+   *  file://-loaded renderer (it threw the "Zwischenablage" copy error). Resolves to whether
+   *  the write succeeded. */
+  copyToClipboard: (text: string): Promise<boolean> =>
+    ipcRenderer.invoke(IPC.writeClipboard, text),
 
   // ---- Audit log ----
   /** Page through the local activity log, newest-first (`beforeId` = "load more" cursor). */

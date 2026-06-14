@@ -562,9 +562,11 @@ export function ChatScreen({
   }
 
   function onCopyMessage(content: string): void {
-    // Electron's native clipboard (via preload), not navigator.clipboard — the latter needs
+    // Copy via MAIN (preload → clipboard:write), not navigator.clipboard — the latter needs
     // a secure context + focused document and is unreliable in the file://-loaded renderer.
-    if (window.api?.copyToClipboard(content)) showToast(t('chat.copied'))
+    void window.api?.copyToClipboard(content).then((ok) => {
+      if (ok) showToast(t('chat.copied'))
+    })
   }
 
   async function onNewChat(): Promise<void> {

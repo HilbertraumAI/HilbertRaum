@@ -1072,10 +1072,15 @@ pinned build is a manual smoke (like the GPU/PAID harnesses).**
   `exportConversation` (spec §7.6 transcript export via the OS save dialog) round out spec §7.11/§7.6.
 - **Copy / save (support hand-off).** Each Diagnostics card — **App & runtime**, **Hardware
   benchmark**, **Logs** — has a **Copy** button that writes a plain-text rendering of exactly the
-  rows shown to the clipboard (`navigator.clipboard`, confirmed by a transient toast), so a user can
-  paste the lot into a support message. The on-screen rows and the copied text are built from the
-  same helpers (`runtimeStatusLine` / `buildAppRuntimeReport` / `buildBenchmarkReport` in
-  `DiagnosticsTab.tsx`) so they can't drift. The Logs card additionally has **Save to file…** →
+  rows shown to the clipboard (confirmed by a transient toast), so a user can paste the lot into a
+  support message. The copy goes through **`window.api.copyToClipboard`**, which writes from the
+  **main process** (`clipboard:write` IPC → Electron's `clipboard.writeText`) — **not**
+  `navigator.clipboard` (unreliable in the `file://` renderer: needs a secure context + focus) and
+  **not** a preload-side `clipboard` call (the renderer is `sandbox: true`, so the sandboxed preload
+  has no `clipboard` module — only `ipcRenderer`/`contextBridge`/`webFrame`/`nativeImage`/`webUtils`).
+  The same bridge backs the chat message-copy action. The on-screen rows and the copied text are
+  built from the same helpers (`runtimeStatusLine` / `buildAppRuntimeReport` / `buildBenchmarkReport`
+  in `DiagnosticsTab.tsx`) so they can't drift. The Logs card additionally has **Save to file…** →
   `exportLog` IPC → `saveTextExport`, which writes the **whole** current log (`readLogFull()`, not
   just the `getLogTail` tail) as **plaintext** to a user-chosen location. This is a deliberate user
   action: the on-disk `app.log` stays **encrypted** at rest (see "Encrypt the diagnostics log at

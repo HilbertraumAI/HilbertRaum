@@ -51,6 +51,8 @@ export const IPC = {
   getLogTail: 'logs:tail',
   /** Save the full local log to a user-chosen file (plaintext, a deliberate user action). */
   exportLog: 'logs:export',
+  /** Write text to the OS clipboard from MAIN — the sandboxed preload has no `clipboard`. */
+  writeClipboard: 'clipboard:write',
   // Documents
   pickDocuments: 'docs:pick',
   importDocuments: 'docs:import',

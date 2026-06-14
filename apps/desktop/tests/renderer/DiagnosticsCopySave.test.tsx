@@ -52,7 +52,7 @@ function stubDiagnostics(overrides: Record<string, ReturnType<typeof vi.fn>> = {
     getRuntimeStatus: vi.fn(async () => runtimeStatus),
     getRuntimeInstall: vi.fn(async () => null),
     getSettings: vi.fn(async () => ({ ...DEFAULT_SETTINGS, lastBenchmark: benchmark })),
-    copyToClipboard: vi.fn((text: string) => {
+    copyToClipboard: vi.fn(async (text: string) => {
       lastCopied = text
       return true
     }),
@@ -110,6 +110,8 @@ describe('Settings → Diagnostics (advanced) — copy & save logs', () => {
     const copyButtons = await screen.findAllByRole('button', { name: 'Copy' })
     await user.click(copyButtons[copyButtons.length - 1])
 
+    // Copy is async (tail read → clipboard write in MAIN); wait for the confirmation toast.
+    expect(await screen.findByText('Copied to clipboard')).toBeInTheDocument()
     expect(getLogTail).toHaveBeenCalled()
     expect(lastCopied).toContain('[WARN] hmm')
   })

@@ -14,10 +14,13 @@ the rows shown to the clipboard (toast-confirmed), so a user can paste diagnosti
 message. The on-screen rows and the copied text share the same builders
 (`runtimeStatusLine`/`buildAppRuntimeReport`/`buildBenchmarkReport` in `DiagnosticsTab.tsx`) so they
 can't drift — the App-card runtime row was refactored onto `runtimeStatusLine` to dedupe. Copy goes
-through **Electron's native `clipboard`** (new `window.api.copyToClipboard` in the preload), **not**
-`navigator.clipboard` — the latter needs a secure context + focused document and threw a "can't copy
-to clipboard" error in the `file://`-loaded renderer (beta-tester report); the same fix was applied to
-the chat message-copy action. **(2) Save
+through a new **`window.api.copyToClipboard`** that writes from the **MAIN process** (`clipboard:write`
+IPC → Electron's `clipboard.writeText`), **not** `navigator.clipboard` — the latter needs a secure
+context + focused document and threw a "can't copy to clipboard" error in the `file://`-loaded
+renderer (beta-tester report). **The write MUST be in main:** the renderer is `sandbox: true`, and a
+sandboxed preload has no access to the `clipboard` module (only `ipcRenderer`/`contextBridge`/
+`webFrame`/`nativeImage`/`webUtils`) — an initial preload-side `clipboard.writeText` silently failed
+the same way until it was moved to main. The same bridge is used by the chat message-copy action. **(2) Save
 logs to a file:** the Logs card gained **Save to file…** → new `exportLog` IPC (`logs:export`) →
 `saveTextExport`, writing the **whole** current log (new `readLogFull()` in `logging.ts`, not just the
 `getLogTail` tail) as **plaintext** to a user-chosen path. The on-disk `app.log` stays **encrypted**
@@ -29,16 +32,19 @@ curl, so every `curl` in the fetch scripts now goes through a wrapper (`Invoke-C
 **resumes the partial file** (`-C -`) each attempt, plus strengthened per-call flags (`--retry 3
 --retry-delay 2 --retry-connrefused --connect-timeout 30`). SHA-256 verification AFTER download is
 unchanged, so resume can't weaken integrity. **Files:** `services/logging.ts` (+`readLogFull`),
-`shared/ipc.ts` (+`exportLog`), `ipc/registerCoreIpc.ts` (export handler), `preload/index.ts`
-(+`exportLog`, +`copyToClipboard`), `renderer/screens/settings/DiagnosticsTab.tsx`,
-`renderer/screens/ChatScreen.tsx` (native-clipboard copy), `shared/i18n/{en,de}.ts`
+`shared/ipc.ts` (+`exportLog`, +`writeClipboard`), `ipc/registerCoreIpc.ts` (export + clipboard
+handlers), `preload/index.ts` (+`exportLog`, +`copyToClipboard`),
+`renderer/screens/settings/DiagnosticsTab.tsx`, `renderer/screens/ChatScreen.tsx` (main-clipboard
+copy), `shared/i18n/{en,de}.ts`
 (+`diag.copy*`/`diag.logs.save`/`diag.logs.savedTo`/`main.dialog.exportLog`),
-`scripts/fetch-runtime.{ps1,sh}`, `scripts/fetch-models.{ps1,sh}`. **Docs:** `architecture.md`
+`scripts/fetch-runtime.{ps1,sh}`, `scripts/fetch-models.{ps1,sh}`. Two follow-up polish passes:
+benchmark-card buttons restyled to match App & runtime (small secondary, not a large primary) + 8px
+gap above the results; clipboard write moved preload → main (sandbox fix). **Docs:** `architecture.md`
 ("Diagnostics & transcript export" copy/save bullet), `packaging.md` ("Resilient downloads" para).
-**Tests:** typecheck clean, build OK, `npm test` **1261 passed / 25 skipped** (+5 over the 0.1.21
+**Tests:** typecheck clean, build OK, `npm test` **1263 passed / 25 skipped** (+7 over the 0.1.21
 doc-org baseline: 4 renderer copy/save in `DiagnosticsCopySave.test.tsx`, +1 `readLogFull` in
-`logging.test.ts`; `ChatRestructure`/`DiagnosticsCopySave` copy assertions repointed to the native
-clipboard bridge). Version bumped **0.1.21 → 0.1.22**, tagged `v0.1.22`._
+`logging.test.ts`, +2 `writeClipboard` handler in `core-model-ipc.test.ts`; the copy assertions point
+at the `copyToClipboard` bridge). Version bumped **0.1.21 → 0.1.22**, tagged `v0.1.22`._
 
 _(prior) 2026-06-15 — **Merged the document-organization wave (Phases A–F) to `master`; release
 0.1.21.** The whole Library/Projects/Temporary/Generated/Archive feature + its audit remediation

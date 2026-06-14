@@ -8,13 +8,23 @@ import { stringify } from 'yaml'
 // fallback (the offline ceiling must hold pre-unlock, when allowNetwork is unreadable) and
 // the model handler guards (no manifests dir → empty list; unknown model id → throw).
 
-const ipcState = vi.hoisted(() => ({ handlers: new Map<string, unknown>() }))
+const ipcState = vi.hoisted(() => ({
+  handlers: new Map<string, unknown>(),
+  clipboardText: null as string | null,
+  clipboardThrows: false
+}))
 vi.mock('electron', () => ({
   ipcMain: {
     handle: (channel: string, fn: unknown) => ipcState.handlers.set(channel, fn),
     removeHandler: (channel: string) => ipcState.handlers.delete(channel)
   },
-  app: { getVersion: () => '0.0.0-test' }
+  app: { getVersion: () => '0.0.0-test' },
+  clipboard: {
+    writeText: (text: string) => {
+      if (ipcState.clipboardThrows) throw new Error('clipboard unavailable')
+      ipcState.clipboardText = text
+    }
+  }
 }))
 
 import { registerCoreIpc } from '../../src/main/ipc/registerCoreIpc'
@@ -39,7 +49,11 @@ function bogusConfigDir(): string {
   return join(tmpdir(), 'hilbertraum-no-such-config-dir')
 }
 
-beforeEach(() => ipcState.handlers.clear())
+beforeEach(() => {
+  ipcState.handlers.clear()
+  ipcState.clipboardText = null
+  ipcState.clipboardThrows = false
+})
 
 describe('registerCoreIpc', () => {
   it('getAppStatus keeps the offline ceiling while the workspace is locked', async () => {
@@ -66,6 +80,24 @@ describe('registerCoreIpc', () => {
     expect(status.workspaceReady).toBe(false)
     expect(status.activeModelId).toBeNull()
     expect(status.hardwareProfile).toBe('UNKNOWN')
+  })
+
+  it('writeClipboard writes text via the MAIN clipboard module and reports success', async () => {
+    const ctx = { paths: {}, workspace: { isUnlocked: () => false } } as unknown as AppContext
+    registerCoreIpc(ctx)
+
+    const { result } = await invoke(handlers, IPC.writeClipboard, 'copy me')
+    expect(result).toBe(true)
+    expect(ipcState.clipboardText).toBe('copy me')
+  })
+
+  it('writeClipboard returns false (never throws) when the clipboard write fails', async () => {
+    const ctx = { paths: {}, workspace: { isUnlocked: () => false } } as unknown as AppContext
+    registerCoreIpc(ctx)
+    ipcState.clipboardThrows = true
+
+    const { result } = await invoke(handlers, IPC.writeClipboard, 'copy me')
+    expect(result).toBe(false)
   })
 })
 

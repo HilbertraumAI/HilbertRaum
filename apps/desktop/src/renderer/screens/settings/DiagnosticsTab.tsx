@@ -224,7 +224,10 @@ export function DiagnosticsTab(): JSX.Element {
    *  which is unreliable in the file://-loaded renderer. */
   const copyReport = useCallback(
     (text: string): void => {
-      toast(window.api?.copyToClipboard(text) ? t('diag.copied') : t('diag.copyFailed'))
+      void window.api
+        ?.copyToClipboard(text)
+        .then((ok) => toast(ok ? t('diag.copied') : t('diag.copyFailed')))
+        .catch(() => toast(t('diag.copyFailed')))
     },
     [toast, t]
   )
@@ -235,7 +238,8 @@ export function DiagnosticsTab(): JSX.Element {
     try {
       const lines = (await window.api?.getLogTail()) ?? []
       setLogTail(lines)
-      toast(window.api?.copyToClipboard(lines.join('\n')) ? t('diag.copied') : t('diag.copyFailed'))
+      const ok = await window.api?.copyToClipboard(lines.join('\n'))
+      toast(ok ? t('diag.copied') : t('diag.copyFailed'))
     } catch {
       toast(t('diag.copyFailed'))
     }

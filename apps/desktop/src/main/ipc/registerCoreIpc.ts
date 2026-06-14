@@ -1,4 +1,4 @@
-import { ipcMain, app } from 'electron'
+import { ipcMain, app, clipboard } from 'electron'
 import { IPC } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
 import { buildDriveStatus } from '../services/workspace'
@@ -68,6 +68,19 @@ export function registerCoreIpc(ctx: AppContext): void {
 
   // Spec §7.11 "show recent local logs" — read-only, local, never uploaded.
   ipcMain.handle(IPC.getLogTail, (): string[] => readLogTail())
+
+  // Copy text to the OS clipboard. Done in MAIN because the sandboxed preload has no access
+  // to Electron's `clipboard` module and `navigator.clipboard` is unreliable in the
+  // file://-loaded renderer (it threw the "can't copy" error). Returns false on failure so
+  // the renderer can show a friendly message rather than throw.
+  ipcMain.handle(IPC.writeClipboard, (_e, text: string): boolean => {
+    try {
+      clipboard.writeText(String(text ?? ''))
+      return true
+    } catch {
+      return false
+    }
+  })
 
   // Save the WHOLE current log to a user-chosen file as plaintext (".txt"), so a user can
   // hand diagnostics to support without unsealing the workspace. The dialog + write run in

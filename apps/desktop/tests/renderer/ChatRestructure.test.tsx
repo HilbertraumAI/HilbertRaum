@@ -199,7 +199,7 @@ describe('ChatScreen — per-message actions (Try again · Copy · Save)', () =>
       ]),
       sendChatMessage,
       exportConversation,
-      copyToClipboard: vi.fn((text: string) => {
+      copyToClipboard: vi.fn(async (text: string) => {
         chatCopied = text
         return true
       }),
