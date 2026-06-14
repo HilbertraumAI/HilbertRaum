@@ -6,7 +6,50 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
-_Last updated: 2026-06-14 — **Document organization — Phase D (Generated provenance, D3/N1).**
+_Last updated: 2026-06-14 — **Document organization — Phase E (Smart views + generated staleness).**
+Fifth phase of [`docs/document-organization-plan.md`](docs/document-organization-plan.md) (esp. §5,
+§7.5/§7.6, §8.2, §12.1, §15.3, §16, §17, §19, §20 "Phase E"). **Additive, query-time only — no new
+column, no migration, no parser/chunker/embedder change, no new audit events.**
+**Data contract** ([`shared/types.ts`](apps/desktop/src/shared/types.ts)): new `LARGE_FILE_BYTES` (10 MB),
+`SmartListView`/`SmartViewPredicate`, a pure **`matchesSmartView(doc, view)`** (the single source of truth
+for the smart-view predicates so the renderer rail and the `docs:list` filter never drift), and
+`GeneratedStaleness`/`GeneratedStaleReason` + a pure **`generatedStaleness(doc, sources)`**.
+**Smart views (§7.6/§12.1):** the remaining query-time views ship as section-rail entries + `docs:list`
+`smart` predicates — Recently added (createdAt desc — **no new column**), Unfiled (no *project* membership;
+Library/Temporary builtins don't count as filed), Needs re-index (`staleEmbeddings`), Large files
+(`sizeBytes >= LARGE_FILE_BYTES`), Failed imports (`status='failed'`), Audio (audio mime / generated
+transcript), OCR/scanned (`ocr != null || scanDetected`). **IPC**
+([`registerDocsIpc.ts`](apps/desktop/src/main/ipc/registerDocsIpc.ts)): `DocumentListFilter.smart` widened
+to `SmartListView`; `filterDocuments` routes `recent`⇒createdAt-desc order, `all`⇒no-op, else
+`matchesSmartView`. **Renderer** ([`DocumentsScreen.tsx`](apps/desktop/src/renderer/screens/DocumentsScreen.tsx)):
+`DocSection` union + `inSection` extended (generated/archived/unfiled/needsReindex/large/failed/audio/ocr
+delegate to `matchesSmartView`; `recent` ordered in `visibleDocs`); a **Views** rail group reusing the
+projects-group layout so the existing 760px reflow applies (L4, no horizontal page scroll). **Generated
+staleness (§15.3):** `generatedStaleness` is a tolerant derivation over the already-listed `updatedAt`/
+`lifecycle` fields (**no hot-path write**) — flags `source-changed` when a source was updated after the
+output's `createdAt`, `source-removed` when a source is missing/archived; a legacy origin shape or a
+malformed/empty `createdAt` ⇒ no flag (never throws); a non-generated doc is never evaluated. Surfaced as a
+quiet **Badge (icon + word, never color-only) + "re-run to update" copy** on the Generated rows; re-running
+the task stays the only fix (snapshot semantics unchanged). **i18n**: new flat `docs.smart.*` (heading +
+7 view labels) + `docs.provenance.stale{Badge,Changed,Removed}` EN+DE — **German copy flagged for the D-L7
+review.** Forbidden-UI-words list honoured (no bucket/vector/scope_json/FTS/collection_id/membership/
+embedding). **Decisions locked:** smart views are query-time predicates, **not** stored collections
+(`CollectionType` keeps `'smart'` reserved-unused) and **not** pickable retrieval scopes in v1 (§13.2);
+"Recently added" uses `createdAt` (no column) — `last_used_at`/"Recently used" (L2) stays deferred.
+**Explicitly DEFERRED (owner-gated Phase E.2, NOT built):** explicit retention + Temporary review dashboard
+(§14.3 — needs the reserved `expires_at` column, a review-before-delete UI, default Never, must never touch
+Library/generated/project-filed docs, must shred sidecars under an encrypted workspace); `last_used_at`
+(§8.2 L2). **Tests:** typecheck clean, build OK, `npm test` **1216 passed / 25 skipped** (+16: new
+[`smart-views.test.ts`](apps/desktop/tests/unit/smart-views.test.ts) [each predicate incl. Unfiled
+project-vs-Library-only + the 7 staleness cases]; `docs-ipc` smart-view filter + recent ordering;
+`DocumentsScreen` smart-rail filter + staleness-badge-on-stale-not-fresh; GermanSmoke extended for the new
+keys). No version bump. **Deliverable proof (covered by tests):** the Documents screen exposes the full
+smart-view set; a translation whose source was re-indexed after it was generated shows a quiet "source
+changed — re-run to update" badge in Generated while an untouched one does not — with no new column, no
+retrieval change, and the audit log still content-free. **Next:** Phase F — filing suggestions (rule-based
+first, never silent); or owner-gated Phase E.2 (explicit retention + Temporary review dashboard)._
+
+_(prior) 2026-06-14 — **Document organization — Phase D (Generated provenance, D3/N1).**
 Fourth phase of [`docs/document-organization-plan.md`](docs/document-organization-plan.md) (esp. §2.3, §7.4,
 §15.1–§15.3, §16, §17, §19, §20 "Phase D"; decisions D3/M4 + audit N1). Gives generated
 translation/comparison documents **structured provenance** and locks the **no-membership** invariant.

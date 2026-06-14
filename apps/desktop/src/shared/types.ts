@@ -854,6 +854,120 @@ export type DocumentCollectionRole = 'source' | 'reference' | 'attachment' | 'ge
 /** A document's retention lifecycle. NULL in the DB is coalesced to `'permanent'`. */
 export type DocumentLifecycle = 'permanent' | 'temporary' | 'archived'
 
+/**
+ * Size (bytes) at or above which a document counts as a "large file" in the
+ * `large` smart view (document-organization plan §7.6/§12.1, Phase E). 10 MB is well
+ * above an ordinary text/PDF document but below most recordings, so the view surfaces
+ * the files that actually cost drive space — without a new column. Shared so the
+ * renderer predicate (`inSection`) and the `docs:list` filter stay byte-for-byte equal.
+ */
+export const LARGE_FILE_BYTES = 10 * 1024 * 1024
+
+/**
+ * The query-time smart views (plan §7.6/§12.1). These are predicates/orderings over
+ * `documents` metadata — NEVER stored collections (`CollectionType` keeps `'smart'`
+ * reserved-unused). `'all'` (everything) and `'recent'` (a createdAt ordering, not a
+ * membership predicate) are handled by the caller; `matchesSmartView` covers the rest.
+ */
+export type SmartListView =
+  | 'generated'
+  | 'archived'
+  | 'all'
+  | 'recent'
+  | 'unfiled'
+  | 'needsReindex'
+  | 'large'
+  | 'failed'
+  | 'audio'
+  | 'ocr'
+
+/** The smart views that are a pure per-document predicate (excludes `all`/`recent`). */
+export type SmartViewPredicate = Exclude<SmartListView, 'all' | 'recent'>
+
+/**
+ * Whether a document belongs in a predicate smart view (plan §7.6/§12.1). The single
+ * source of truth so the renderer rail (`inSection`) and the `docs:list` filter never
+ * drift apart. Tolerant: missing optional fields coalesce to a safe default, never throws.
+ * - `generated`    — app-generated provenance (`origin != null`).
+ * - `archived`     — `lifecycle === 'archived'`.
+ * - `unfiled`      — not filed into any *project* (Library/Temporary builtins don't count).
+ * - `needsReindex` — vectors produced by a different search model (`staleEmbeddings`).
+ * - `large`        — `sizeBytes >= LARGE_FILE_BYTES`.
+ * - `failed`       — import `status === 'failed'`.
+ * - `audio`        — an audio file, or a generated transcript of one.
+ * - `ocr`          — text came from OCR, or a scan was detected.
+ */
+export function matchesSmartView(d: DocumentInfo, view: SmartViewPredicate): boolean {
+  switch (view) {
+    case 'generated':
+      return d.origin != null
+    case 'archived':
+      return (d.lifecycle ?? 'permanent') === 'archived'
+    case 'unfiled':
+      return !(d.collections ?? []).some((c) => c.type === 'project')
+    case 'needsReindex':
+      return d.staleEmbeddings === true
+    case 'large':
+      return d.sizeBytes != null && d.sizeBytes >= LARGE_FILE_BYTES
+    case 'failed':
+      return d.status === 'failed'
+    case 'audio':
+      return (
+        (d.mimeType?.startsWith('audio/') ?? false) ||
+        (d.origin != null && provenanceView(d.origin).kind === 'transcript')
+      )
+    case 'ocr':
+      return d.ocr != null || d.scanDetected === true
+  }
+}
+
+/** Why a generated document is flagged stale (plan §15.3). */
+export type GeneratedStaleReason = 'source-changed' | 'source-removed'
+
+export interface GeneratedStaleness {
+  stale: boolean
+  reason: GeneratedStaleReason | null
+}
+
+/**
+ * Whether a GENERATED document is out of date relative to its sources (plan §15.3).
+ * Pure + tolerant — a derivation over already-listed `DocumentInfo` fields, NOT a
+ * hot-path write. Flags stale when a source was updated (e.g. re-indexed) after this
+ * output's `createdAt`, or a source was deleted/archived. Snapshot semantics are
+ * unchanged: the only fix is re-running the task (this never auto-updates anything).
+ *
+ * Rules:
+ * - A non-generated document (`origin == null`) is never evaluated ⇒ not stale.
+ * - Only the structured `GeneratedProvenance` shape carries `createdAt`; a legacy
+ *   `Translation/CompareOrigin` (or a malformed/empty `createdAt`) ⇒ no flag, never throws.
+ * - A missing (deleted) or archived source ⇒ `source-removed`.
+ * - Else a source whose `updatedAt` is after `createdAt` ⇒ `source-changed`.
+ *
+ * @param sources lookup of source documents by id (the renderer's already-listed docs).
+ */
+export function generatedStaleness(
+  doc: Pick<DocumentInfo, 'origin'>,
+  sources: ReadonlyMap<string, Pick<DocumentInfo, 'updatedAt' | 'lifecycle'>>
+): GeneratedStaleness {
+  const NOT_STALE: GeneratedStaleness = { stale: false, reason: null }
+  const origin = doc.origin
+  if (!origin) return NOT_STALE
+  // `createdAt` exists only on the structured shape; legacy rows have none → no flag.
+  const createdAt = 'kind' in origin ? origin.createdAt : ''
+  const createdMs = Date.parse(createdAt)
+  if (!createdAt || Number.isNaN(createdMs)) return NOT_STALE
+  let changed = false
+  for (const id of provenanceView(origin).sourceDocumentIds) {
+    const src = sources.get(id)
+    if (!src || (src.lifecycle ?? 'permanent') === 'archived') {
+      return { stale: true, reason: 'source-removed' }
+    }
+    const updatedMs = Date.parse(src.updatedAt)
+    if (!Number.isNaN(updatedMs) && updatedMs > createdMs) changed = true
+  }
+  return changed ? { stale: true, reason: 'source-changed' } : NOT_STALE
+}
+
 /** A collection as surfaced over IPC (a `collections` row). */
 export interface Collection {
   id: string

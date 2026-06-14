@@ -101,6 +101,65 @@ describe('DocumentsScreen — organization', () => {
     expect(screen.getAllByText('Library').length).toBeGreaterThan(0)
   })
 
+  // ---- Phase E: smart views + generated-staleness badge (plan §7.6/§12.1/§15.3) ------
+
+  it('renders the smart-view rail entries and filters by the selected view', async () => {
+    const user = userEvent.setup()
+    const library = coll({ id: 'lib', name: 'Library', type: 'library', builtin: true })
+    const tax = coll({ id: 'tax', name: 'Tax 2025' })
+    stubApi({
+      listCollections: vi.fn(async () => [library, tax]),
+      listDocuments: vi.fn(async () => [
+        doc({ id: 'd1', title: 'libonly.pdf', collections: [{ id: 'lib', name: 'Library', type: 'library', role: 'source' }] }),
+        doc({ id: 'd2', title: 'filed.pdf', collections: [{ id: 'tax', name: 'Tax 2025', type: 'project', role: 'source' }] }),
+        doc({ id: 'd3', title: 'broken.xyz', status: 'failed', errorMessage: 'Unsupported file type: .xyz', chunkCount: 0 })
+      ])
+    })
+    render(<DocumentsScreen />)
+
+    // Failed imports → only the failed doc.
+    await user.click(await screen.findByRole('button', { name: 'Failed imports' }))
+    expect(screen.getByText('broken.xyz')).toBeInTheDocument()
+    expect(screen.queryByText('libonly.pdf')).not.toBeInTheDocument()
+    expect(screen.queryByText('filed.pdf')).not.toBeInTheDocument()
+
+    // Unfiled → the Library-only doc, never the project-filed one (Library isn't "filed").
+    await user.click(screen.getByRole('button', { name: 'Unfiled' }))
+    expect(screen.getByText('libonly.pdf')).toBeInTheDocument()
+    expect(screen.queryByText('filed.pdf')).not.toBeInTheDocument()
+  })
+
+  it('shows a quiet staleness badge on a generated row whose source changed, but not a fresh one', async () => {
+    const user = userEvent.setup()
+    stubApi({
+      listCollections: vi.fn(async () => []),
+      listDocuments: vi.fn(async () => [
+        // Source re-indexed (updatedAt) AFTER the translation was made → stale.
+        doc({ id: 's1', title: 'report.pdf', updatedAt: '2026-05-01T00:00:00Z' }),
+        doc({
+          id: 'staleGen',
+          title: 'report.de.md',
+          origin: { kind: 'translation', sourceDocumentIds: ['s1'], createdAt: '2026-01-01T00:00:00Z' }
+        }),
+        // Source untouched since the output was made → fresh.
+        doc({ id: 's2', title: 'memo.pdf', updatedAt: '2026-01-01T00:00:00Z' }),
+        doc({
+          id: 'freshGen',
+          title: 'memo.de.md',
+          origin: { kind: 'translation', sourceDocumentIds: ['s2'], createdAt: '2026-02-01T00:00:00Z' }
+        })
+      ])
+    })
+    render(<DocumentsScreen />)
+
+    // In the Generated view both generated docs show; exactly one is flagged stale.
+    await user.click(await screen.findByRole('button', { name: 'Generated' }))
+    expect(screen.getByText('report.de.md')).toBeInTheDocument()
+    expect(screen.getByText('memo.de.md')).toBeInTheDocument()
+    expect(screen.getAllByText('Outdated')).toHaveLength(1)
+    expect(screen.getByText(/re-run to update/i)).toBeInTheDocument()
+  })
+
   // ---- Phase C: Temporary lifecycle actions (plan §14.1) ----------------------------
   function tempStubs(extra: Record<string, unknown> = {}): {
     addToCollection: ReturnType<typeof vi.fn>

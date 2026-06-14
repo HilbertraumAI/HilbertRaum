@@ -36,6 +36,7 @@ import { createConversation } from '../../src/main/services/chat'
 import { createMockEmbedder } from '../../src/main/services/embeddings/mock'
 import type { Embedder } from '../../src/main/services/embeddings'
 import type { DocumentInfo, ImportJob, ImportJobStatus, ImportOptions } from '../../src/shared/types'
+import { LARGE_FILE_BYTES } from '../../src/shared/types'
 import type { AppContext } from '../../src/main/services/context'
 import { invoke, type IpcHandlers } from '../helpers/ipc'
 
@@ -193,6 +194,53 @@ describe('registerDocsIpc', () => {
     expect(documentIdsInCollection(db, getBuiltinCollection(db, 'library')!.id)).toContain(
       job.documentIds[0]
     )
+  })
+
+  // ---- Phase E: docs:list smart-view predicates (plan §7.6/§12.1) ------------------
+
+  it('filters docs:list by each smart view and orders "recent" by createdAt desc', async () => {
+    const { db, workspacePath } = freshWorkspace()
+    registerDocsIpc(ctxWith(db, workspacePath, createMockEmbedder(), /* unlocked */ true))
+    const project = createCollection(db, 'Tax 2025')
+
+    // A project-filed doc (older) and a Library-default doc (newer).
+    const filed = join(workspacePath, 'filed.txt')
+    writeFileSync(filed, 'a receipt filed straight into the tax project for the year')
+    const filedJob = await runImport([filed], { destination: { kind: 'collection', collectionId: project.id } })
+    const libDoc = join(workspacePath, 'note.txt')
+    writeFileSync(libDoc, 'a plain library note with several words to index here')
+    const libJob = await runImport([libDoc])
+    const filedId = filedJob.documentIds[0]
+    const libId = libJob.documentIds[0]
+    // Make the Library doc unambiguously newer so the "recent" ordering is deterministic.
+    db.prepare("UPDATE documents SET created_at = '2025-01-01T00:00:00.000Z' WHERE id = ?").run(filedId)
+    db.prepare("UPDATE documents SET created_at = '2026-01-01T00:00:00.000Z' WHERE id = ?").run(libId)
+
+    const list = async (smart: string): Promise<DocumentInfo[]> =>
+      (await invoke(handlers, IPC.listDocuments, { smart } as never)).result as DocumentInfo[]
+
+    // Unfiled: the Library-only doc is "unfiled" (Library doesn't count); the project doc isn't.
+    const unfiled = await list('unfiled')
+    expect(unfiled.map((d) => d.id)).toContain(libId)
+    expect(unfiled.map((d) => d.id)).not.toContain(filedId)
+
+    // Recently added: newest first.
+    const recent = await list('recent')
+    expect(recent[0].id).toBe(libId)
+    expect(recent.findIndex((d) => d.id === libId)).toBeLessThan(recent.findIndex((d) => d.id === filedId))
+
+    // Large files: bump one doc's size past the threshold; only it shows.
+    db.prepare('UPDATE documents SET size_bytes = ? WHERE id = ?').run(LARGE_FILE_BYTES + 1, libId)
+    const large = await list('large')
+    expect(large.map((d) => d.id)).toEqual([libId])
+
+    // Failed imports: force one to failed.
+    db.prepare("UPDATE documents SET status = 'failed' WHERE id = ?").run(filedId)
+    const failed = await list('failed')
+    expect(failed.map((d) => d.id)).toEqual([filedId])
+
+    // 'all' is a no-op (returns everything non-deleted).
+    expect((await list('all')).length).toBeGreaterThanOrEqual(2)
   })
 
   it('returns done:true for an unknown import job so a poller stops', async () => {

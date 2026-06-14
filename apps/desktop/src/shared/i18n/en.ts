@@ -968,6 +968,22 @@ export const en = {
   'docs.bulk.selected.other': '{count} selected',
   'docs.empty.section': 'Nothing here yet.',
 
+  // ---- Document organization — smart views (plan §7.6/§12.1, Phase E) ----
+  // Query-time filters over document metadata, not stored collections.
+  'docs.smart.heading': 'Views',
+  'docs.smart.recentlyAdded': 'Recently added',
+  'docs.smart.unfiled': 'Unfiled',
+  'docs.smart.needsReindex': 'Needs re-index',
+  'docs.smart.largeFiles': 'Large files',
+  'docs.smart.failed': 'Failed imports',
+  'docs.smart.audio': 'Audio',
+  'docs.smart.ocr': 'Scanned / OCR',
+  // Staleness indicator on a generated document (plan §15.3). Quiet, non-blaming;
+  // re-running the task is the only fix (snapshot semantics are unchanged).
+  'docs.provenance.staleBadge': 'Outdated',
+  'docs.provenance.staleChanged': 'A source changed since this was made — re-run to update.',
+  'docs.provenance.staleRemoved': 'A source was removed since this was made — re-run to update.',
+
   // ---- Chat — composite source scope (multi-select picker + footer union, plan §13) ----
   'chat.scope.using': 'Using {sources}',
   'chat.scope.library': 'Library',

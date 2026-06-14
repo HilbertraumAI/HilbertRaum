@@ -1,7 +1,18 @@
 # Document organization plan — Library / Projects / Temporary / Generated / Archive
 
 _Status: **IN PROGRESS — Phase A (Collections core) + Phase B (Projects + composite scope, D1) +
-Phase C (Temporary analysis) + Phase D (Generated provenance, D3) implemented 2026-06-14.**
+Phase C (Temporary analysis) + Phase D (Generated provenance, D3) + Phase E (Smart views +
+generated staleness) implemented 2026-06-14.**
+Phase E = the remaining query-time smart views (§7.6/§12.1: Recently added [createdAt order, no new
+column], Unfiled [no project membership], Needs re-index [staleEmbeddings], Large files [`LARGE_FILE_BYTES`
+= 10 MB], Failed imports, Audio, OCR/scanned) added as section-rail entries + `docs:list` `smart`
+predicates kept in lockstep by a shared pure `matchesSmartView`; and the generated-provenance staleness
+indicator (§15.3) — a pure, tolerant `generatedStaleness(doc, sources)` derivation (no new column, no
+hot-path write) flagging a generated row when a source was updated after the output's `createdAt`
+(`source-changed`) or deleted/archived (`source-removed`), surfaced as a quiet Badge + "re-run to update"
+copy. Additive, query-time only; smart views are NOT stored collections and NOT pickable retrieval scopes
+(§13.2). Explicit retention + the Temporary review dashboard (§14.3) and `last_used_at`/"Recently used"
+(§8.2 L2) remain DEFERRED (owner-gated Phase E.2). Phase F (filing suggestions) still open.
 Phase D = structured `GeneratedProvenance` written into the reused `origin_json` by translation/compare
 materialization (tolerant `parseOrigin` still reads the legacy `Translation/CompareOrigin` shapes),
 `sourceCollectionIds` snapshot of the source(s)' collections at creation time, structured provenance UI
@@ -976,7 +987,12 @@ history auto-collapse. New rail CSS lives beside the existing media queries, not
   so they must **not** be presented as "excluded"). Conflating the two would imply a Library doc went
   dark just because some project was archived, which is false.
 - **All documents**
-- *(Phase E: Recently added, Unfiled, Needs re-index, Large files, Failed imports, Audio, OCR)*
+- **Smart views (Phase E — implemented):** Recently added (createdAt order), Unfiled (no *project*
+  membership — Library/Temporary builtins don't count), Needs re-index (`staleEmbeddings`), Large files
+  (`sizeBytes >= LARGE_FILE_BYTES` = 10 MB), Failed imports (`status='failed'`), Audio (audio mime / a
+  generated transcript), OCR/scanned (`ocr != null || scanDetected`). Query-time predicates via the shared
+  `matchesSmartView` (renderer rail + `docs:list` `smart` in lockstep); not stored collections, not
+  pickable scopes (§13.2).
 
 ### 12.2 Main table columns
 
@@ -1237,9 +1253,13 @@ any assignment heuristic **and** any Generated-home seed/type — so **§21 Q3 i
   policy.pdf" from structured provenance (not parsed display strings).
 - Snapshot semantics preserved (no auto-update; re-run the task after source changes — the existing
   documented behaviour).
-- **Staleness indicator is a later phase:** flag when a source was re-indexed after the generated
-  output's `createdAt`, or a source was deleted/archived/moved. v1 only keeps the data needed to
-  compute it later (`createdAt` + `sourceDocumentIds`).
+- **Staleness indicator (Phase E — implemented):** a pure, tolerant `generatedStaleness(doc, sources)`
+  (in `shared/types.ts`) flags a generated row when a source's `updatedAt` is after the output's
+  `createdAt` (`source-changed`) or a source was deleted/archived (`source-removed`). It is a derivation
+  over the already-listed `DocumentInfo` fields — **no new column, no hot-path write**. Tolerant: a legacy
+  origin shape or a malformed/empty `createdAt` ⇒ no flag, never throws; a non-generated doc is never
+  evaluated. Surfaced as a quiet Badge (icon + word) + "re-run to update" copy on the Generated rows.
+  Snapshot semantics are unchanged — re-running the task is the only fix (no auto-update).
 
 ---
 

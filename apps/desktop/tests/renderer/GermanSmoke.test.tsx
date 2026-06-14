@@ -130,6 +130,10 @@ describe('German render smokes (Phase 40)', () => {
     expect(screen.getByRole('button', { name: t('de', 'docs.section.library') })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: t('de', 'docs.section.generated') })).toBeInTheDocument()
     expect(screen.getByText(t('de', 'docs.section.projects'))).toBeInTheDocument()
+    // The Phase-E smart-view rail entries render their German labels (plan §7.6/§12.1).
+    expect(screen.getByText(t('de', 'docs.smart.heading'))).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: t('de', 'docs.smart.recentlyAdded') })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: t('de', 'docs.smart.unfiled') })).toBeInTheDocument()
   })
 
   it('ChatScreen documents-mode renders the German source picker (plan §13)', async () => {

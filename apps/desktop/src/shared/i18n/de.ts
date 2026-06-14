@@ -1060,6 +1060,20 @@ export const de: Record<keyof typeof en, string> = {
   'docs.bulk.selected.other': '{count} ausgewählt',
   'docs.empty.section': 'Hier ist noch nichts.',
 
+  // ---- Dokumentorganisation — intelligente Ansichten (Plan §7.6/§12.1, Phase E). ----
+  // Deutsche Texte für die D-L7-Durchsicht markiert (siehe BUILD_STATE).
+  'docs.smart.heading': 'Ansichten',
+  'docs.smart.recentlyAdded': 'Kürzlich hinzugefügt',
+  'docs.smart.unfiled': 'Nicht einsortiert',
+  'docs.smart.needsReindex': 'Neu aufzubereiten',
+  'docs.smart.largeFiles': 'Große Dateien',
+  'docs.smart.failed': 'Fehlgeschlagen',
+  'docs.smart.audio': 'Audio',
+  'docs.smart.ocr': 'Gescannt / OCR',
+  'docs.provenance.staleBadge': 'Veraltet',
+  'docs.provenance.staleChanged': 'Eine Quelle hat sich seit der Erstellung geändert — zum Aktualisieren neu ausführen.',
+  'docs.provenance.staleRemoved': 'Eine Quelle wurde seit der Erstellung entfernt — zum Aktualisieren neu ausführen.',
+
   // ---- Chat — zusammengesetzter Quellenbereich (Plan §13). D-L7-Review ausstehend. ----
   'chat.scope.using': 'Quelle: {sources}',
   'chat.scope.library': 'Bibliothek',

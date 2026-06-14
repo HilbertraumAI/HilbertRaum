@@ -13,7 +13,7 @@ import type {
   IngestionStatus,
   TranslationTargetLang
 } from '@shared/types'
-import { provenanceView } from '@shared/types'
+import { generatedStaleness, matchesSmartView, provenanceView } from '@shared/types'
 import {
   acknowledgeDocTask,
   cancelActiveDocTask,
@@ -98,9 +98,14 @@ function formatSize(bytes: number | null, lang: UiLanguage): string {
   return `${fmt(bytes / (1024 * 1024))} MB`
 }
 
-/** The Documents section-rail selection (plan §12.1). */
+/**
+ * The Documents section-rail selection (plan §12.1). The built-in containers
+ * (library/temporary/generated/archived/all) plus a project, plus the Phase-E
+ * query-time smart views (recent/unfiled/needsReindex/large/failed/audio/ocr — §7.6).
+ */
 type DocSection =
   | { kind: 'library' | 'temporary' | 'generated' | 'archived' | 'all' }
+  | { kind: 'recent' | 'unfiled' | 'needsReindex' | 'large' | 'failed' | 'audio' | 'ocr' }
   | { kind: 'project'; id: string }
 
 interface Props {
@@ -407,24 +412,39 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
   function inSection(d: DocumentInfo): boolean {
     const lifecycle = d.lifecycle ?? 'permanent'
     switch (section.kind) {
-      case 'generated':
-        return d.origin != null
-      case 'archived':
-        return lifecycle === 'archived'
       case 'temporary':
         return lifecycle === 'temporary' || (d.collections ?? []).some((c) => c.type === 'temporary')
       case 'library':
         return (d.collections ?? []).some((c) => c.type === 'library')
+      // Phase-E query-time smart views (plan §7.6): the shared predicate keeps the rail
+      // in lockstep with the docs:list filter. ('generated'/'archived' route through it too.)
+      case 'generated':
+      case 'archived':
+      case 'unfiled':
+      case 'needsReindex':
+      case 'large':
+      case 'failed':
+      case 'audio':
+      case 'ocr':
+        return matchesSmartView(d, section.kind)
       default:
-        return true // 'all' (and 'project', handled separately below)
+        return true // 'all' + 'recent' (ordered in visibleDocs) + 'project' (handled below)
     }
   }
-  const visibleDocs: DocumentInfo[] =
+  // Source lookup for the generated-staleness derivation (plan §15.3) — pure, off the
+  // already-listed fields; no extra read, no hot-path write.
+  const sourcesById = new Map((docs ?? []).map((d) => [d.id, d]))
+  const sectioned: DocumentInfo[] =
     docs == null
       ? []
       : section.kind === 'project'
         ? docs.filter((d) => (d.collections ?? []).some((c) => c.id === section.id))
         : docs.filter(inSection)
+  // "Recently added" is an ordering, not a membership predicate (plan §7.6 — no new column).
+  const visibleDocs: DocumentInfo[] =
+    section.kind === 'recent'
+      ? [...sectioned].sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0))
+      : sectioned
 
   async function runOrg(key: string, fn: () => Promise<unknown>): Promise<void> {
     setBusy(key)
@@ -736,6 +756,26 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
               {provenanceLine(d)}
             </p>
           )}
+          {/* Quiet staleness indicator on a generated row (plan §15.3): a Badge (icon +
+              word, never color-only) plus copy when a source changed/was removed after this
+              output was generated. Re-running the task stays the only fix — no auto-update. */}
+          {d.origin &&
+            (() => {
+              const stale = generatedStaleness(d, sourcesById)
+              if (!stale.stale) return null
+              return (
+                <p className="hint" style={{ margin: '2px 0 0' }}>
+                  <Badge tone="warning" icon="⟳">
+                    {t('docs.provenance.staleBadge')}
+                  </Badge>{' '}
+                  {t(
+                    stale.reason === 'source-removed'
+                      ? 'docs.provenance.staleRemoved'
+                      : 'docs.provenance.staleChanged'
+                  )}
+                </p>
+              )
+            })()}
           {d.status === 'failed' && d.errorMessage && (
             <Banner tone={d.scanDetected ? 'warning' : 'error'}>
               {/* error_message is persisted canonical English; the D-L4 display map
@@ -1210,6 +1250,20 @@ function SectionRail({
       {railBtn({ kind: 'generated' }, t('docs.section.generated'))}
       {railBtn({ kind: 'archived' }, t('docs.section.archived'))}
       {railBtn({ kind: 'all' }, t('docs.section.all'))}
+      {/* Phase-E smart views (plan §7.6/§12.1): query-time filters, not stored collections.
+          Reuses the projects-group layout so the existing 760px reflow applies (L4). */}
+      <div className="docs-rail-group">
+        <div className="docs-rail-group-head">
+          <span className="docs-rail-group-label">{t('docs.smart.heading')}</span>
+        </div>
+        {railBtn({ kind: 'recent' }, t('docs.smart.recentlyAdded'))}
+        {railBtn({ kind: 'unfiled' }, t('docs.smart.unfiled'))}
+        {railBtn({ kind: 'needsReindex' }, t('docs.smart.needsReindex'))}
+        {railBtn({ kind: 'large' }, t('docs.smart.largeFiles'))}
+        {railBtn({ kind: 'failed' }, t('docs.smart.failed'))}
+        {railBtn({ kind: 'audio' }, t('docs.smart.audio'))}
+        {railBtn({ kind: 'ocr' }, t('docs.smart.ocr'))}
+      </div>
     </nav>
   )
 }

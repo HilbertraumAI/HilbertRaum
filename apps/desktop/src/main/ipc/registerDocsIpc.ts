@@ -11,8 +11,10 @@ import type {
   ImportJob,
   ImportJobStatus,
   ImportOptions,
-  ImportPreflight
+  ImportPreflight,
+  SmartListView
 } from '../../shared/types'
+import { matchesSmartView } from '../../shared/types'
 import {
   createQueuedDocument,
   deleteDocument,
@@ -51,13 +53,14 @@ import { saveTextExport } from './save-export'
 /**
  * Optional `docs:list` filter (plan §16) for the Documents section rail. `collectionId`
  * narrows to that collection's members; `lifecycle` to that retention state; `smart` to a
- * query-time view ('generated' = app-generated provenance, 'archived' = archived docs).
- * All omitted ⇒ every non-deleted document.
+ * query-time view (plan §7.6/§12.1). The smart views are predicates/orderings over
+ * `documents` metadata, never stored collections; they stay in lockstep with the
+ * renderer rail via the shared `matchesSmartView`. All omitted ⇒ every non-deleted document.
  */
 export interface DocumentListFilter {
   collectionId?: string
   lifecycle?: DocumentLifecycle
-  smart?: 'generated' | 'archived' | 'all'
+  smart?: SmartListView
 }
 
 /** Untrusted-boundary guard: keep only non-empty string ids. */
@@ -90,8 +93,15 @@ function sanitizeDestination(value: unknown): ImportDestination {
 function filterDocuments(docs: DocumentInfo[], filter?: DocumentListFilter): DocumentInfo[] {
   if (!filter) return docs
   let out = docs
-  if (filter.smart === 'generated') out = out.filter((d) => d.origin != null)
-  if (filter.smart === 'archived') out = out.filter((d) => d.lifecycle === 'archived')
+  if (filter.smart && filter.smart !== 'all') {
+    if (filter.smart === 'recent') {
+      // Recently added: order by createdAt desc (no new column). Copy before sorting —
+      // the input is the caller's list.
+      out = [...out].sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0))
+    } else {
+      out = out.filter((d) => matchesSmartView(d, filter.smart as Exclude<SmartListView, 'all' | 'recent'>))
+    }
+  }
   if (filter.lifecycle) out = out.filter((d) => (d.lifecycle ?? 'permanent') === filter.lifecycle)
   if (filter.collectionId) {
     out = out.filter((d) => (d.collections ?? []).some((c) => c.id === filter.collectionId))
