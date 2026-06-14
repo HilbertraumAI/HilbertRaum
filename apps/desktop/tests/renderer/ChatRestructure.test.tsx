@@ -180,7 +180,12 @@ describe('ChatScreen — conversation-list collapse persistence', () => {
 })
 
 describe('ChatScreen — per-message actions (Try again · Copy · Save)', () => {
+  // The Copy action goes through Electron's native clipboard bridge
+  // (window.api.copyToClipboard), not navigator.clipboard — capture what it receives.
+  let chatCopied: string | null = null
+
   function renderWithMessages() {
+    chatCopied = null
     const sendChatMessage = vi.fn(async () => msg({ content: 'regenerated' }))
     const exportConversation = vi.fn(async () => 'D:\\out\\chat.md')
     stubApi({
@@ -194,6 +199,10 @@ describe('ChatScreen — per-message actions (Try again · Copy · Save)', () =>
       ]),
       sendChatMessage,
       exportConversation,
+      copyToClipboard: vi.fn((text: string) => {
+        chatCopied = text
+        return true
+      }),
       onToken: vi.fn(() => () => {}),
       onReasoning: vi.fn(() => () => {}),
       onScopeNotice: vi.fn(() => () => {})
@@ -214,7 +223,7 @@ describe('ChatScreen — per-message actions (Try again · Copy · Save)', () =>
 
     await user.click(screen.getAllByRole('button', { name: 'Copy' })[0])
     expect(await screen.findByText('Copied')).toBeInTheDocument()
-    expect(await window.navigator.clipboard.readText()).toBe('first answer')
+    expect(chatCopied).toBe('first answer')
   })
 
   it('offers Try again only on the last assistant answer and regenerates', async () => {

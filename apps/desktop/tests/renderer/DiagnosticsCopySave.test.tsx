@@ -35,7 +35,12 @@ const benchmark: BenchmarkResult = {
   warnings: []
 }
 
+// Capture what the renderer hands to Electron's native clipboard bridge
+// (window.api.copyToClipboard) — we no longer use navigator.clipboard.
+let lastCopied: string | null = null
+
 function stubDiagnostics(overrides: Record<string, ReturnType<typeof vi.fn>> = {}): void {
+  lastCopied = null
   stubApi({
     getAppStatus: vi.fn(async () => ({
       appName: 'HilbertRaum',
@@ -47,6 +52,10 @@ function stubDiagnostics(overrides: Record<string, ReturnType<typeof vi.fn>> = {
     getRuntimeStatus: vi.fn(async () => runtimeStatus),
     getRuntimeInstall: vi.fn(async () => null),
     getSettings: vi.fn(async () => ({ ...DEFAULT_SETTINGS, lastBenchmark: benchmark })),
+    copyToClipboard: vi.fn((text: string) => {
+      lastCopied = text
+      return true
+    }),
     ...overrides
   } as never)
 }
@@ -72,10 +81,9 @@ describe('Settings → Diagnostics (advanced) — copy & save logs', () => {
     await user.click(screen.getAllByRole('button', { name: 'Copy' })[0])
 
     expect(await screen.findByText('Copied to clipboard')).toBeInTheDocument()
-    const copied = await navigator.clipboard.readText()
-    expect(copied).toContain('App & runtime')
-    expect(copied).toContain('HilbertRaum 0.1.20')
-    expect(copied).toContain('BALANCED')
+    expect(lastCopied).toContain('App & runtime')
+    expect(lastCopied).toContain('HilbertRaum 0.1.20')
+    expect(lastCopied).toContain('BALANCED')
   })
 
   it('copies the hardware benchmark details to the clipboard', async () => {
@@ -87,10 +95,9 @@ describe('Settings → Diagnostics (advanced) — copy & save logs', () => {
     await screen.findByText('Test CPU', { exact: false })
     await user.click(screen.getAllByRole('button', { name: 'Copy' })[1])
 
-    const copied = await navigator.clipboard.readText()
-    expect(copied).toContain('Hardware benchmark')
-    expect(copied).toContain('Test CPU')
-    expect(copied).toContain('120 MB/s')
+    expect(lastCopied).toContain('Hardware benchmark')
+    expect(lastCopied).toContain('Test CPU')
+    expect(lastCopied).toContain('120 MB/s')
   })
 
   it('copies the logs from a fresh tail read', async () => {
@@ -104,7 +111,7 @@ describe('Settings → Diagnostics (advanced) — copy & save logs', () => {
     await user.click(copyButtons[copyButtons.length - 1])
 
     expect(getLogTail).toHaveBeenCalled()
-    expect(await navigator.clipboard.readText()).toContain('[WARN] hmm')
+    expect(lastCopied).toContain('[WARN] hmm')
   })
 
   it('saves the full log to a user-chosen file and confirms with a toast', async () => {

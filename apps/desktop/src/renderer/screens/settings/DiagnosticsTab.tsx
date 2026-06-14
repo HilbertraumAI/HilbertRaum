@@ -219,13 +219,12 @@ export function DiagnosticsTab(): JSX.Element {
   }
 
   /** Copy a plain-text report to the clipboard, confirming with a transient toast — so a
-   *  user can hand technical details to support without retyping (guidelines §6). */
+   *  user can hand technical details to support without retyping (guidelines §6). Uses
+   *  Electron's native clipboard (window.api.copyToClipboard), not navigator.clipboard,
+   *  which is unreliable in the file://-loaded renderer. */
   const copyReport = useCallback(
     (text: string): void => {
-      void navigator.clipboard
-        .writeText(text)
-        .then(() => toast(t('diag.copied')))
-        .catch(() => toast(t('diag.copyFailed')))
+      toast(window.api?.copyToClipboard(text) ? t('diag.copied') : t('diag.copyFailed'))
     },
     [toast, t]
   )
@@ -236,8 +235,7 @@ export function DiagnosticsTab(): JSX.Element {
     try {
       const lines = (await window.api?.getLogTail()) ?? []
       setLogTail(lines)
-      await navigator.clipboard.writeText(lines.join('\n'))
-      toast(t('diag.copied'))
+      toast(window.api?.copyToClipboard(lines.join('\n')) ? t('diag.copied') : t('diag.copyFailed'))
     } catch {
       toast(t('diag.copyFailed'))
     }
