@@ -63,6 +63,9 @@ export const IPC = {
   removeFromCollection: 'docs:removeFromCollection',
   /** Set documents' retention lifecycle ('permanent'|'temporary'|'archived'). */
   setDocumentLifecycle: 'docs:setLifecycle',
+  /** Read-only rule-based filing suggestions for unfiled documents (plan §20 Phase F).
+   *  Never files anything — Apply reuses addToCollection / createCollection. */
+  filingSuggestions: 'docs:filingSuggestions',
   deleteDocument: 'docs:delete',
   reindexDocument: 'docs:reindex',
   /** Read-only in-app preview: re-extract the stored copy's text. */

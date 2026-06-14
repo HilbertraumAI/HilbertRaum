@@ -2,7 +2,7 @@
 // the React renderer. This is the typed surface referenced by BUILD_STATE.md §4.
 // Keep these in sync with the IPC handlers in src/main/ipc and the spec §9.1.
 
-import { t, type UiLanguageSetting } from './i18n'
+import { t, type MessageKey, type UiLanguageSetting } from './i18n'
 
 export type HardwareProfile = 'TINY' | 'LITE' | 'BALANCED' | 'PRO' | 'UNKNOWN'
 
@@ -213,6 +213,14 @@ export interface AppSettings {
    * `navigator.language`.
    */
   uiLanguage: UiLanguageSetting
+  // ---- Filing suggestions (document-organization plan §20 Phase F) ----
+  /**
+   * Document ids whose rule-based filing suggestions the user has DISMISSED. Persisted in
+   * this AppSettings JSON blob (NOT a new `documents` column — additive, tolerant) so a
+   * dismiss sticks across a restart. A suggestion is otherwise inert; this only hides the
+   * quiet per-row chip — nothing is ever filed without an explicit Apply (plan §5).
+   */
+  dismissedFilingSuggestions: string[]
 }
 
 /** Appearance setting (see `AppSettings.theme`). */
@@ -251,7 +259,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   autoStartActiveModel: true,
   checksumCache: {},
   theme: 'system',
-  uiLanguage: 'system'
+  uiLanguage: 'system',
+  dismissedFilingSuggestions: []
 }
 
 // ---- GPU probe ----
@@ -1047,6 +1056,42 @@ export interface ImportOptions {
    * import (N12). Default true for a folder import, false otherwise; display-only.
    */
   preserveRelativePaths?: boolean
+}
+
+// ---- Filing suggestions (rule-based, non-silent — document-organization plan §20 Phase F) ----
+//
+// A LOCAL, deterministic rule engine proposes which project an UNFILED document might belong
+// to (folder-name match, same-source-folder cohort, bilingual filename pattern). Rule-based
+// ONLY in v1 — no model, no network, no telemetry (local-AI classification is a LATER,
+// owner-gated step). A suggestion is INERT: surfaced as a quiet, dismissible chip and acted on
+// ONLY when the user clicks Apply (existing project ⇒ addToCollection; new project ⇒
+// createCollection + addToCollection). Never silent, never auto-file (plan §5).
+
+/** Which rule produced a suggestion (stable id, for de-dup + tests; never shown to the user). */
+export type FilingRuleId = 'folder-name-match' | 'same-source-folder-cohort' | 'filename-pattern'
+
+/** What a suggestion proposes: filing into an existing project, or creating a new one. */
+export type FilingTarget =
+  | { kind: 'existingProject'; collectionId: string }
+  | { kind: 'newProject'; suggestedName: string }
+
+/**
+ * One ranked filing suggestion for a document. The reason is an i18n KEY + params (never
+ * concatenated free text), so the renderer localizes it; `ruleId` is stable for de-dup/tests.
+ */
+export interface FilingSuggestion {
+  ruleId: FilingRuleId
+  target: FilingTarget
+  /** i18n key for the human reason line (e.g. `docs.suggest.reason.folder`). */
+  reasonKey: MessageKey
+  /** Interpolation params for `reasonKey` (display-only; never logged/audited). */
+  reasonParams?: Record<string, string>
+}
+
+/** The suggestions for one document (ranked, highest-confidence first, de-duped, always ≥1). */
+export interface FilingSuggestionResult {
+  documentId: string
+  suggestions: FilingSuggestion[]
 }
 
 // ---- Benchmark ----

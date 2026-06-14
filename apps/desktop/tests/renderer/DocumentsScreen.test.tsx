@@ -3,7 +3,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, cleanup, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { DocumentsScreen } from '../../src/renderer/screens/DocumentsScreen'
-import type { Collection, DocumentInfo } from '../../src/shared/types'
+import type { Collection, DocumentInfo, FilingSuggestionResult } from '../../src/shared/types'
 import { stubApi } from '../helpers/renderer'
 
 // Renderer test (jsdom + RTL) for the Documents screen: list rendering + status, the
@@ -213,6 +213,132 @@ describe('DocumentsScreen — organization', () => {
     await waitFor(() => expect(addToCollection).toHaveBeenCalledWith(['d1'], 'tax'))
     expect(setDocumentLifecycle).toHaveBeenCalledWith(['d1'], 'permanent')
     expect(removeFromCollection).toHaveBeenCalledWith(['d1'], 'temp')
+  })
+
+  // ---- Phase F: filing suggestions (rule-based, non-silent — plan §20) ----------------
+  function existingSuggestion(documentId = 'd1', collectionId = 'tax'): FilingSuggestionResult {
+    return {
+      documentId,
+      suggestions: [
+        {
+          ruleId: 'folder-name-match',
+          target: { kind: 'existingProject', collectionId },
+          reasonKey: 'docs.suggest.reason.folder',
+          reasonParams: { folder: 'Tax 2025' }
+        }
+      ]
+    }
+  }
+
+  it('shows a quiet suggestion chip on an unfiled doc; Apply files it and the chip clears', async () => {
+    const user = userEvent.setup()
+    const library = coll({ id: 'lib', name: 'Library', type: 'library', builtin: true })
+    const tax = coll({ id: 'tax', name: 'Tax 2025' })
+    const unfiled = doc({
+      id: 'd1',
+      title: 'return.pdf',
+      sourceFolderLabel: 'Tax 2025',
+      collections: [{ id: 'lib', name: 'Library', type: 'library', role: 'source' }]
+    })
+    const filed = {
+      ...unfiled,
+      collections: [...(unfiled.collections ?? []), { id: 'tax', name: 'Tax 2025', type: 'project' as const, role: 'source' as const }]
+    }
+    const listDocuments = vi
+      .fn<() => Promise<DocumentInfo[]>>()
+      .mockResolvedValueOnce([unfiled])
+      .mockResolvedValue([filed])
+    const filingSuggestions = vi
+      .fn<() => Promise<FilingSuggestionResult[]>>()
+      .mockResolvedValueOnce([existingSuggestion()])
+      .mockResolvedValue([])
+    const addToCollection = vi.fn(async () => {})
+    stubApi({ listCollections: vi.fn(async () => [library, tax]), listDocuments, filingSuggestions, addToCollection })
+    render(<DocumentsScreen />)
+
+    expect(await screen.findByText('Suggested project: Tax 2025')).toBeInTheDocument()
+    // The reason is a localized keyed template, not free text.
+    expect(screen.getByText(/came from a folder named/i)).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Apply' }))
+    await waitFor(() => expect(addToCollection).toHaveBeenCalledWith(['d1'], 'tax'))
+    await waitFor(() =>
+      expect(screen.queryByText('Suggested project: Tax 2025')).not.toBeInTheDocument()
+    )
+  })
+
+  it('Apply on a "new project" suggestion creates the project then files the doc', async () => {
+    const user = userEvent.setup()
+    const created = coll({ id: 'inv', name: 'Invoices' })
+    const createCollection = vi.fn(async () => created)
+    const addToCollection = vi.fn(async () => {})
+    stubApi({
+      listCollections: vi.fn(async () => []),
+      listDocuments: vi.fn(async () => [doc({ id: 'd1', title: 'invoice.pdf' })]),
+      filingSuggestions: vi.fn(async () => [
+        {
+          documentId: 'd1',
+          suggestions: [
+            {
+              ruleId: 'filename-pattern',
+              target: { kind: 'newProject', suggestedName: 'Invoices' },
+              reasonKey: 'docs.suggest.reason.filename'
+            }
+          ]
+        } satisfies FilingSuggestionResult
+      ]),
+      createCollection,
+      addToCollection
+    })
+    render(<DocumentsScreen />)
+
+    expect(await screen.findByText('Suggested new project: Invoices')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Apply' }))
+    await waitFor(() => expect(createCollection).toHaveBeenCalledWith('Invoices'))
+    await waitFor(() => expect(addToCollection).toHaveBeenCalledWith(['d1'], 'inv'))
+  })
+
+  it('Dismiss hides the chip, persists it to settings, and it stays hidden after a refresh', async () => {
+    const user = userEvent.setup()
+    let dismissed: string[] = []
+    const getSettings = vi.fn(async () => ({ dismissedFilingSuggestions: dismissed }) as never)
+    const updateSettings = vi.fn(async (patch: { dismissedFilingSuggestions?: string[] }) => {
+      dismissed = patch.dismissedFilingSuggestions ?? dismissed
+      return {} as never
+    })
+    stubApi({
+      listCollections: vi.fn(async () => [coll({ id: 'tax', name: 'Tax 2025' })]),
+      listDocuments: vi.fn(async () => [doc({ id: 'd1', title: 'return.pdf', sourceFolderLabel: 'Tax 2025' })]),
+      // The suggestion is ALWAYS returned — only the persisted dismissal hides the chip.
+      filingSuggestions: vi.fn(async () => [existingSuggestion()]),
+      getSettings,
+      updateSettings
+    })
+    render(<DocumentsScreen />)
+
+    await user.click(await screen.findByRole('button', { name: 'Dismiss' }))
+    await waitFor(() =>
+      expect(updateSettings).toHaveBeenCalledWith({ dismissedFilingSuggestions: ['d1'] })
+    )
+    await waitFor(() =>
+      expect(screen.queryByText('Suggested project: Tax 2025')).not.toBeInTheDocument()
+    )
+
+    // A refresh re-reads settings; the dismissal persisted, so the chip stays hidden.
+    await user.click(screen.getByRole('button', { name: 'Refresh' }))
+    await waitFor(() => expect(getSettings).toHaveBeenCalled())
+    expect(screen.queryByText('Suggested project: Tax 2025')).not.toBeInTheDocument()
+  })
+
+  it('a document with no suggestion shows no chip', async () => {
+    stubApi({
+      listCollections: vi.fn(async () => []),
+      listDocuments: vi.fn(async () => [doc({ id: 'd1', title: 'random.pdf' })]),
+      filingSuggestions: vi.fn(async () => [])
+    })
+    render(<DocumentsScreen />)
+    await screen.findByText('random.pdf')
+    expect(screen.queryByRole('button', { name: 'Apply' })).not.toBeInTheDocument()
   })
 })
 

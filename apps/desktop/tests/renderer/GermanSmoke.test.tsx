@@ -136,6 +136,59 @@ describe('German render smokes (Phase 40)', () => {
     expect(screen.getByRole('button', { name: t('de', 'docs.smart.unfiled') })).toBeInTheDocument()
   })
 
+  it('DocumentsScreen renders the German filing-suggestion chip (plan §20 Phase F)', async () => {
+    stubApi({
+      listCollections: vi.fn(async () => [
+        {
+          id: 'tax',
+          name: 'Tax 2025',
+          type: 'project' as const,
+          description: null,
+          builtin: false,
+          color: null,
+          createdAt: '2026-01-01T00:00:00Z',
+          updatedAt: '2026-01-01T00:00:00Z',
+          archivedAt: null
+        }
+      ]),
+      listDocuments: vi.fn(async () => [
+        {
+          id: 'd1',
+          title: 'return.pdf',
+          originalPath: null,
+          mimeType: 'application/pdf',
+          sizeBytes: 1,
+          status: 'indexed' as const,
+          errorMessage: null,
+          chunkCount: 1,
+          sourceFolderLabel: 'Tax 2025',
+          createdAt: '2026-01-01T00:00:00Z',
+          updatedAt: '2026-01-01T00:00:00Z'
+        }
+      ]),
+      filingSuggestions: vi.fn(async () => [
+        {
+          documentId: 'd1',
+          suggestions: [
+            {
+              ruleId: 'folder-name-match' as const,
+              target: { kind: 'existingProject' as const, collectionId: 'tax' },
+              reasonKey: 'docs.suggest.reason.folder' as const,
+              reasonParams: { folder: 'Tax 2025' }
+            }
+          ]
+        }
+      ]),
+      getAppStatus: vi.fn(async () => appStatus())
+    })
+    render(german(<DocumentsScreen />))
+    expect(
+      await screen.findByText(t('de', 'docs.suggest.chipExisting', { name: 'Tax 2025' }))
+    ).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: t('de', 'docs.suggest.apply') })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: t('de', 'docs.suggest.dismiss') })).toBeInTheDocument()
+  })
+
   it('ChatScreen documents-mode renders the German source picker (plan §13)', async () => {
     stubApi({
       listConversations: vi.fn(async () => []),

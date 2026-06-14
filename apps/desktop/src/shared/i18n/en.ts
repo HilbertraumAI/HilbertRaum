@@ -984,6 +984,20 @@ export const en = {
   'docs.provenance.staleChanged': 'A source changed since this was made — re-run to update.',
   'docs.provenance.staleRemoved': 'A source was removed since this was made — re-run to update.',
 
+  // ---- Filing suggestions (rule-based, non-silent — plan §20 Phase F) ----
+  // A quiet, dismissible per-row chip on an UNFILED document. Apply files it via the existing
+  // membership path; nothing is ever filed without that click. Reasons are keyed templates,
+  // not concatenated free text. German copy in de.ts still wants the D-L7 review pass.
+  'docs.suggest.chipExisting': 'Suggested project: {name}',
+  'docs.suggest.chipNew': 'Suggested new project: {name}',
+  'docs.suggest.apply': 'Apply',
+  'docs.suggest.dismiss': 'Dismiss',
+  'docs.suggest.applyTitle': 'File this document into {name}',
+  'docs.suggest.dismissTitle': 'Hide filing suggestions for this document',
+  'docs.suggest.reason.folder': 'It came from a folder named “{folder}”.',
+  'docs.suggest.reason.cohort': 'Other files from “{folder}” are filed there.',
+  'docs.suggest.reason.filename': 'Its name looks like this kind of document.',
+
   // ---- Chat — composite source scope (multi-select picker + footer union, plan §13) ----
   'chat.scope.using': 'Using {sources}',
   'chat.scope.library': 'Library',

@@ -83,6 +83,9 @@ const PASSWORD_SENTINEL = 'XPASS_SENTINEL_hunter2hunter2'
 // A project NAME is content-ish (plan §17): the collection audit events must record
 // id/type/count only, never the name — this sentinel proves it.
 const PROJECT_SENTINEL = 'XPROJECT_SENTINEL_lawsuit_mueller_divorce'
+// A filing-suggestion REASON (plan §20 Phase F): a folder label is display metadata used to
+// derive a suggestion — it must never reach the audit log (no suggestion-specific event).
+const FOLDER_SENTINEL = 'XFOLDER_SENTINEL_secret_clientfolder'
 const SENTINELS = [
   CHAT_SENTINEL,
   DOC_SENTINEL,
@@ -90,7 +93,8 @@ const SENTINELS = [
   AUDIO_SENTINEL,
   SETTING_SENTINEL,
   PASSWORD_SENTINEL,
-  PROJECT_SENTINEL
+  PROJECT_SENTINEL,
+  FOLDER_SENTINEL
 ]
 
 const BODY = 'downloaded-model-bytes'
@@ -420,6 +424,10 @@ describe('audit wiring across the IPC layer (privacy sentinel grep)', () => {
       return (result as ImportJobStatus).done
     }, 'org import job')
     const orgDocId = orgJob.documentIds[0]
+    // Phase F: stamp a folder label (a filing-suggestion reason) and run the read-only
+    // suggestions IPC — it writes NO audit event, so the sentinel can never leak.
+    db.prepare('UPDATE documents SET source_folder_label = ? WHERE id = ?').run(FOLDER_SENTINEL, orgDocId)
+    await invoke(handlers, IPC.filingSuggestions)
     await invoke(handlers, IPC.addToCollection, [orgDocId], proj.id)
     await invoke(handlers, IPC.setDocumentLifecycle, [orgDocId], 'temporary')
     await invoke(handlers, IPC.removeFromCollection, [orgDocId], proj.id)

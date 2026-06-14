@@ -1,8 +1,21 @@
 # Document organization plan — Library / Projects / Temporary / Generated / Archive
 
-_Status: **IN PROGRESS — Phase A (Collections core) + Phase B (Projects + composite scope, D1) +
-Phase C (Temporary analysis) + Phase D (Generated provenance, D3) + Phase E (Smart views +
-generated staleness) implemented 2026-06-14.**
+_Status: **v1 COMPLETE (pending doc-lifecycle condensation) — Phase A (Collections core) +
+Phase B (Projects + composite scope, D1) + Phase C (Temporary analysis) + Phase D (Generated
+provenance, D3) + Phase E (Smart views + generated staleness) + Phase F (Filing suggestions,
+rule-based + non-silent) implemented 2026-06-14.**
+Phase F = a pure, LOCAL, deterministic rule engine ([`filing-suggestions.ts`](apps/desktop/src/main/services/filing-suggestions.ts):
+folder-name match, same-source-folder cohort, bilingual filename pattern [invoice/rechnung,
+contract/vertrag]) proposing a project for each UNFILED document; surfaced as a quiet, dismissible
+per-row chip ("Suggested project: Tax 2025 — Apply?") read via the new read-only
+`docs:filingSuggestions`. Apply reuses the existing membership channels (existing project ⇒
+addToCollection; new project ⇒ createCollection + addToCollection) — never silent, never auto-file
+(§5). Dismissals persist in `AppSettings.dismissedFilingSuggestions` (no new column). Rule-based ONLY
+in v1 — no model, no network; local-AI classification + auto-creating projects from import folders
+(§21 Q8) stay owner-gated/deferred. **Remaining: condense this working paper into §-records in
+docs/rag-design.md (scope) + docs/architecture.md (data model / IPC) + docs/user-guide.md (UX) and
+delete it (CLAUDE.md doc-lifecycle rule) — a large, irreversible move, so it AWAITS owner confirmation
+(flagged in BUILD_STATE).**
 Phase E = the remaining query-time smart views (§7.6/§12.1: Recently added [createdAt order, no new
 column], Unfiled [no project membership], Needs re-index [staleEmbeddings], Large files [`LARGE_FILE_BYTES`
 = 10 MB], Failed imports, Audio, OCR/scanned) added as section-rail entries + `docs:list` `smart`
@@ -12,7 +25,8 @@ hot-path write) flagging a generated row when a source was updated after the out
 (`source-changed`) or deleted/archived (`source-removed`), surfaced as a quiet Badge + "re-run to update"
 copy. Additive, query-time only; smart views are NOT stored collections and NOT pickable retrieval scopes
 (§13.2). Explicit retention + the Temporary review dashboard (§14.3) and `last_used_at`/"Recently used"
-(§8.2 L2) remain DEFERRED (owner-gated Phase E.2). Phase F (filing suggestions) still open.
+(§8.2 L2) remain DEFERRED (owner-gated Phase E.2). Phase F (filing suggestions) is now implemented
+(see the v1-COMPLETE summary above).
 Phase D = structured `GeneratedProvenance` written into the reused `origin_json` by translation/compare
 materialization (tolerant `parseOrigin` still reads the legacy `Translation/CompareOrigin` shapes),
 `sourceCollectionIds` snapshot of the source(s)' collections at creation time, structured provenance UI
@@ -1281,6 +1295,7 @@ New `shared/ipc.ts` channels (under a `collections:` / extended `docs:` namespac
 | `docs:setLifecycle` | `(documentIds[], 'permanent'\|'temporary'\|'archived') => DocumentInfo[]` | `registerDocsIpc` |
 | `docs:import` (extend) | `(paths[], options?: ImportOptions) => ImportJob` | `registerDocsIpc` |
 | `docs:list` (extend) | `(filter?: { collectionId?, lifecycle?, smart? }) => DocumentInfo[]` | `registerDocsIpc` |
+| `docs:filingSuggestions` (new — Phase F) | `() => FilingSuggestionResult[]` (read-only, rule-based; Apply reuses addToCollection / collections:create) | `registerDocsIpc` |
 | `chat:setCollection` | `(conversationId, collectionId\|null) => Conversation` | `registerChatIpc` |
 | `chat:setScope` (new — D1) | `(conversationId, scope: DocumentScope \| null) => Conversation` (persists `scope_v2_json`) | `registerChatIpc` |
 | `chat:createConversation` (extend) | `opts.collectionId?`, `opts.scope?` | `registerChatIpc` |
@@ -1487,10 +1502,25 @@ Generated / Recently added / Unfiled / Needs re-index / Large files / Failed imp
 smart views; optional Temporary review dashboard; optional explicit retention setting (with review
 UI). **Deliverable:** corpus hygiene tools.
 
-### Phase F — Filing suggestions (later, non-silent)
-Rule-based first (folder name, filename patterns like invoice/rechnung/receipt, same source folder as
-an existing project, sha/path patterns); local-AI suggestions only later, never silent — always
-"Suggested project: Tax 2025 — Apply?". **Deliverable:** suggestions without automatic filing.
+### Phase F — Filing suggestions (rule-based, non-silent) — IMPLEMENTED 2026-06-14
+Rule-based ONLY in v1: a pure, LOCAL, deterministic engine
+([`filing-suggestions.ts`](../apps/desktop/src/main/services/filing-suggestions.ts)) with three rules —
+**folder-name match** (the doc's `source_folder_label` equals/contains an existing project name),
+**same-source-folder cohort** (other docs from the same folder are already filed in project X), and
+**bilingual filename pattern** (invoice/receipt/bill/statement · Rechnung/Beleg/Quittung/Kontoauszug;
+contract/agreement · Vertrag/Vereinbarung — suggest a matching existing project, else CREATE one). Each
+suggestion carries a stable `ruleId` and an i18n reason KEY + params (never free text); ranked +
+de-duped; generated/Temporary/archived/already-project-filed docs are excluded as subjects (D3/§7).
+Surfaced as a quiet, dismissible per-row chip on the Documents screen (natural home: the Unfiled view)
+read via the new read-only **`docs:filingSuggestions`**; **Apply** reuses the existing membership
+channels (existing project ⇒ `docs:addToCollection`; new project ⇒ `collections:create` +
+`docs:addToCollection`), **Dismiss** persists into `AppSettings.dismissedFilingSuggestions` (no new
+column, sticky across restart). **Never silent / never auto-file** (§5): a suggestion is inert until the
+user clicks Apply, and applying records only the existing `documents_added_to_collection`
+(id/type/count) — the suggestion REASON (folder name / filename pattern / project name) is **never**
+audited. **Local-AI / model-based classification stays a LATER, owner-gated step (NOT built);
+auto-creating projects from top-level folders at import (§11.2 / §21 Q8) is a separate deferred
+follow-up.** **Deliverable:** suggestions without automatic filing.
 
 ---
 

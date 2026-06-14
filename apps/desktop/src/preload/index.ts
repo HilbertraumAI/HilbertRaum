@@ -15,6 +15,7 @@ import type {
   DocumentLifecycle,
   DocumentPreview,
   DocumentScope,
+  FilingSuggestionResult,
   DownloadJob,
   DriveStatus,
   EngineDownloadJob,
@@ -234,6 +235,10 @@ const api = {
     lifecycle: DocumentLifecycle
   ): Promise<DocumentInfo[]> =>
     ipcRenderer.invoke(IPC.setDocumentLifecycle, documentIds, lifecycle),
+  /** Read-only rule-based filing suggestions for unfiled documents (plan §20 Phase F). Never
+   *  files anything — Apply reuses addToCollection / createCollection. */
+  filingSuggestions: (): Promise<FilingSuggestionResult[]> =>
+    ipcRenderer.invoke(IPC.filingSuggestions),
   deleteDocument: (documentId: string): Promise<void> =>
     ipcRenderer.invoke(IPC.deleteDocument, documentId),
   reindexDocument: (documentId: string): Promise<DocumentInfo> =>

@@ -10,6 +10,8 @@ import type {
   DocumentOcrInfo,
   DocumentPreview,
   DocumentSummary,
+  FilingSuggestion,
+  FilingSuggestionResult,
   IngestionStatus,
   TranslationTargetLang
 } from '@shared/types'
@@ -139,6 +141,11 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
   // Document-organization (plan §12): the section rail selection + the collections list.
   const [collections, setCollections] = useState<Collection[]>([])
   const [section, setSection] = useState<DocSection>({ kind: 'all' })
+  // Rule-based filing suggestions (plan §20 Phase F): the unfiled-doc suggestions from the
+  // read-only IPC + the user's persisted dismissals (AppSettings). A suggestion is inert — it
+  // only files on an explicit Apply; Dismiss hides the chip and sticks across a restart.
+  const [suggestions, setSuggestions] = useState<FilingSuggestionResult[]>([])
+  const [dismissedSuggestions, setDismissedSuggestions] = useState<ReadonlySet<string>>(new Set())
   // Project management dialogs.
   const [projectModal, setProjectModal] = useState<{ mode: 'create' | 'rename'; id?: string; name: string } | null>(null)
   const [deleteProject, setDeleteProject] = useState<Collection | null>(null)
@@ -163,17 +170,34 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
     }
   }, [])
 
+  // Filing suggestions + the persisted dismissal set (plan §20 Phase F). Tolerant: a partial
+  // test bridge / a read failure leaves the chips absent, never an error.
+  const refreshSuggestions = useCallback(async (): Promise<void> => {
+    try {
+      setSuggestions((await window.api.filingSuggestions?.()) ?? [])
+    } catch {
+      setSuggestions([])
+    }
+    try {
+      const s = await window.api.getSettings?.()
+      setDismissedSuggestions(new Set(s?.dismissedFilingSuggestions ?? []))
+    } catch {
+      /* keep the prior dismissal set */
+    }
+  }, [])
+
   const refresh = useCallback(async (): Promise<void> => {
     const next = await window.api.listDocuments()
     setDocs(next)
     void refreshCollections()
+    void refreshSuggestions()
     // Drop selected ids that no longer exist or are no longer indexed.
     setSelected((prev) => {
       const valid = new Set(next.filter((d) => d.status === 'indexed').map((d) => d.id))
       const kept = [...prev].filter((id) => valid.has(id))
       return kept.length === prev.size ? prev : new Set(kept)
     })
-  }, [refreshCollections])
+  }, [refreshCollections, refreshSuggestions])
 
   useEffect(() => {
     refresh().catch((e) => setError(friendlyIpcError(e)))
@@ -434,6 +458,9 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
   // Source lookup for the generated-staleness derivation (plan §15.3) — pure, off the
   // already-listed fields; no extra read, no hot-path write.
   const sourcesById = new Map((docs ?? []).map((d) => [d.id, d]))
+  // Top filing suggestion per document (plan §20 Phase F) — the renderer surfaces one quiet
+  // chip per row; the rest of the ranked list stays available for a later affordance.
+  const topSuggestionByDoc = new Map(suggestions.map((s) => [s.documentId, s.suggestions[0]]))
   const sectioned: DocumentInfo[] =
     docs == null
       ? []
@@ -523,6 +550,43 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
 
   async function onSetLifecycle(documentId: string, lifecycle: DocumentLifecycle): Promise<void> {
     await runOrg('org', () => window.api.setDocumentLifecycle([documentId], lifecycle))
+  }
+
+  // ---- Filing suggestions: Apply (never auto-file) + Dismiss (plan §20 Phase F) ----------
+  // Apply reuses the existing membership path — existing project ⇒ addToCollection; new
+  // project ⇒ createCollection + addToCollection — then the refresh drops the now-filed doc
+  // out of Unfiled and clears its chip. A suggestion is NEVER applied without this click.
+  async function onApplySuggestion(documentId: string, sug: FilingSuggestion): Promise<void> {
+    await runOrg('suggest', async () => {
+      if (sug.target.kind === 'existingProject') {
+        await window.api.addToCollection([documentId], sug.target.collectionId)
+      } else {
+        const created = await window.api.createCollection(sug.target.suggestedName)
+        await window.api.addToCollection([documentId], created.id)
+      }
+    })
+  }
+
+  // Dismiss: hide the chip and persist the dismissal in AppSettings (NOT a new column) so it
+  // sticks across a restart. Optimistic + tolerant — a failed persist still hides it this
+  // session.
+  async function onDismissSuggestion(documentId: string): Promise<void> {
+    const next = new Set(dismissedSuggestions)
+    next.add(documentId)
+    setDismissedSuggestions(next)
+    try {
+      await window.api.updateSettings?.({ dismissedFilingSuggestions: [...next] })
+    } catch {
+      /* stays hidden this session even if the persist failed */
+    }
+  }
+
+  /** The display name of a suggestion's target project (existing ⇒ resolved; new ⇒ proposed).
+   *  Empty when an existing target no longer exists (then the chip is suppressed). */
+  function suggestionTargetName(sug: FilingSuggestion): string {
+    const target = sug.target
+    if (target.kind === 'newProject') return target.suggestedName
+    return collections.find((c) => c.id === target.collectionId)?.name ?? ''
   }
 
   function toggleSelected(id: string): void {
@@ -735,6 +799,44 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
               ))}
             </div>
           )}
+          {/* Quiet, dismissible filing suggestion (plan §20 Phase F): a calm chip on an
+              unfiled doc — "Suggested project: Tax 2025 — Apply?". Apply files via the existing
+              membership path; nothing is ever filed without that click. Never shown once
+              dismissed (persisted) or when the target project has since vanished. */}
+          {!dismissedSuggestions.has(d.id) &&
+            (() => {
+              const sug = topSuggestionByDoc.get(d.id)
+              if (!sug) return null
+              const name = suggestionTargetName(sug)
+              if (!name) return null
+              return (
+                <div className="doc-suggest">
+                  <span className="doc-suggest-text">
+                    {t(sug.target.kind === 'newProject' ? 'docs.suggest.chipNew' : 'docs.suggest.chipExisting', {
+                      name
+                    })}
+                  </span>
+                  <span className="doc-suggest-reason hint">{t(sug.reasonKey, sug.reasonParams)}</span>
+                  <Button
+                    size="sm"
+                    variant="primary"
+                    disabled={busy !== null}
+                    title={t('docs.suggest.applyTitle', { name })}
+                    onClick={() => void onApplySuggestion(d.id, sug)}
+                  >
+                    {t('docs.suggest.apply')}
+                  </Button>
+                  <Button
+                    size="sm"
+                    disabled={busy !== null}
+                    title={t('docs.suggest.dismissTitle')}
+                    onClick={() => void onDismissSuggestion(d.id)}
+                  >
+                    {t('docs.suggest.dismiss')}
+                  </Button>
+                </div>
+              )
+            })()}
           <div className="doc-meta">
             <span>
               {t('docs.meta.size')} <b>{formatSize(d.sizeBytes, lang)}</b>

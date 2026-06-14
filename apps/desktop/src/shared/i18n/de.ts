@@ -1074,6 +1074,18 @@ export const de: Record<keyof typeof en, string> = {
   'docs.provenance.staleChanged': 'Eine Quelle hat sich seit der Erstellung geändert — zum Aktualisieren neu ausführen.',
   'docs.provenance.staleRemoved': 'Eine Quelle wurde seit der Erstellung entfernt — zum Aktualisieren neu ausführen.',
 
+  // ---- Ablagevorschläge (regelbasiert, nicht stillschweigend — Plan §20 Phase F). ----
+  // D-L7-Review ausstehend.
+  'docs.suggest.chipExisting': 'Vorgeschlagenes Projekt: {name}',
+  'docs.suggest.chipNew': 'Vorgeschlagenes neues Projekt: {name}',
+  'docs.suggest.apply': 'Übernehmen',
+  'docs.suggest.dismiss': 'Verwerfen',
+  'docs.suggest.applyTitle': 'Dieses Dokument in {name} ablegen',
+  'docs.suggest.dismissTitle': 'Ablagevorschläge für dieses Dokument ausblenden',
+  'docs.suggest.reason.folder': 'Es stammt aus einem Ordner namens „{folder}“.',
+  'docs.suggest.reason.cohort': 'Andere Dateien aus „{folder}“ sind dort abgelegt.',
+  'docs.suggest.reason.filename': 'Der Name deutet auf diese Art von Dokument hin.',
+
   // ---- Chat — zusammengesetzter Quellenbereich (Plan §13). D-L7-Review ausstehend. ----
   'chat.scope.using': 'Quelle: {sources}',
   'chat.scope.library': 'Bibliothek',

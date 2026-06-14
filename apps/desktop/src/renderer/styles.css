@@ -1089,6 +1089,11 @@ code, pre, kbd { font-family: var(--font-mono); }
 .docs-rail-project-menu:hover:not(:disabled) { color: var(--text); background: var(--surface-hover); }
 .doc-chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .doc-chip { font-size: 11px; padding: 1px 8px; border-radius: 999px; background: var(--surface-hover); color: var(--text-muted); border: 1px solid var(--border); }
+/* Filing suggestion (plan §20 Phase F) — a calm, dismissible chip; wraps so a narrow window
+   never forces horizontal page scroll (responsive discipline, plan §12 L4). */
+.doc-suggest { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.doc-suggest-text { font-size: 13px; color: var(--text); }
+.doc-suggest-reason { font-size: 12px; }
 .text-input {
   width: 100%; padding: 8px 10px; border: 1px solid var(--border-strong); border-radius: 8px;
   background: var(--surface); color: var(--text); font-size: 14px;

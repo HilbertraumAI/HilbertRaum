@@ -6,7 +6,62 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
-_Last updated: 2026-06-14 — **Document organization — Phase E (Smart views + generated staleness).**
+_Last updated: 2026-06-14 — **Document organization — Phase F (Filing suggestions, rule-based +
+non-silent).** Sixth and final v1 phase of [`docs/document-organization-plan.md`](docs/document-organization-plan.md)
+(esp. §5 non-goals, §11.2, §12.3, §16, §17, §19, §20 "Phase F", §21 Q8/Q9). **Rule-based ONLY — no
+model, no network, no telemetry, never silent, never auto-file.** **Engine** (new pure, LOCAL,
+deterministic [`filing-suggestions.ts`](apps/desktop/src/main/services/filing-suggestions.ts)):
+`suggestFilingForDocument(doc, collections, allDocs)` returns ranked, de-duped suggestions
+(`{ruleId, target: existingProject|newProject, reasonKey: MessageKey, reasonParams}`) via three rules,
+highest-confidence first — **(1) folder-name match** (`source_folder_label` equals/contains an active
+project name), **(2) same-source-folder cohort** (other docs sharing the folder are filed in project X),
+**(3) bilingual filename pattern** (small documented EN-canonical+German token tables: invoice/receipt/
+bill/statement·Rechnung/Beleg/Quittung/Kontoauszug, contract/agreement·Vertrag/Vereinbarung → a matching
+existing project else a `newProject` with a canonical English name). **Subjects EXCLUDED** (D3/§7):
+generated (`origin != null`), Temporary/archived lifecycle, and already-project-filed docs — and archived
+projects are never suggestion targets. Tolerant: missing/empty metadata ⇒ no suggestion, never throws;
+**deterministic** (no clock, no randomness). **Data contract** ([`shared/types.ts`](apps/desktop/src/shared/types.ts)):
+new `FilingRuleId`/`FilingTarget`/`FilingSuggestion`/`FilingSuggestionResult` (reason is an i18n KEY +
+params, NOT free text); new `AppSettings.dismissedFilingSuggestions: string[]` (DEFAULT `[]`) — dismissals
+persist in the **existing settings JSON blob, NOT a new `documents` column** (additive, tolerant, sticky
+across restart). **IPC** ([`registerDocsIpc.ts`](apps/desktop/src/main/ipc/registerDocsIpc.ts)): new
+**read-only `docs:filingSuggestions`** ⇒ `suggestFilingForDocuments(listDocuments, listCollections)`;
+mirrored in [`preload`](apps/desktop/src/preload/index.ts). **Apply reuses existing channels** (existing ⇒
+`docs:addToCollection`; new ⇒ `collections:create` + `docs:addToCollection`); no new audit event — applying
+records only `documents_added_to_collection` (id/type/count), so the suggestion REASON
+(folder/pattern/project name) is **never** logged. **Renderer**
+([`DocumentsScreen.tsx`](apps/desktop/src/renderer/screens/DocumentsScreen.tsx)): a quiet, dismissible
+per-row chip ("Suggested project: Tax 2025 — Apply?" + a localized reason line + **Apply**/**Dismiss**) on
+unfiled docs (its natural home is the Phase-E **Unfiled** view, also shown in All); Apply files via the
+membership path then the doc leaves Unfiled; Dismiss hides it + persists via `updateSettings`; suppressed
+once dismissed or when the target project vanished; reflow-safe (`.doc-suggest` flex-wrap, plan §12 L4).
+**i18n**: new flat `docs.suggest.*` (chipExisting/chipNew/apply/dismiss/titles + reason.folder/cohort/
+filename) EN+DE — reason strings are keyed templates; **German copy flagged for the D-L7 review.**
+Forbidden-UI-words honoured. **Decisions locked:** rule-based only in v1 (local-AI classification is a
+LATER owner-gated step, NOT built); auto-creating projects from top-level folders at import (§11.2/§21 Q8)
+is a separate deferred follow-up (NOT built); dismissals in AppSettings (not a column); no new audit event
+(reuse `documents_added_to_collection`, sentinel stays clean). **Tests:** typecheck clean, build OK,
+`npm test` **1235 passed / 25 skipped** (+19: new [`filing-suggestions.test.ts`](apps/desktop/tests/unit/filing-suggestions.test.ts)
+[12 — each rule incl. EN/DE patterns, ranking+de-dup, exclusions, archived-target, tolerance, determinism,
+batch]; new [`filing-suggestions-ipc.test.ts`](apps/desktop/tests/integration/filing-suggestions-ipc.test.ts)
+[2 — expected set + Apply existing via addToCollection + leaves-unfiled; Apply new via createCollection;
+audit folder-label content-free]; `DocumentsScreen` [+4 — chip render+Apply-clears, Apply newProject,
+Dismiss-persists-and-sticks-across-refresh, no-suggestion-no-chip]; GermanSmoke [+1 — German chip];
+`audit-ipc` sentinel-grep extended with a FOLDER_SENTINEL (suggestion-reason) + the filingSuggestions
+flow). No version bump. **Deliverable proof (covered by tests):** importing receipts from a "Tax 2025"
+folder (or invoice/rechnung filenames) surfaces a quiet "Suggested project: Tax 2025 — Apply?" on Unfiled;
+one click files the doc via the existing membership path; nothing is filed without that click; no model is
+called, no network touched, and the audit log records only ids/counts — never the suggestion reason or any
+name. **DOC-LIFECYCLE CLOSE-OUT (owner action needed):** Phase F completes the planned v1 arc (E.2 is
+owner-deferred). Per CLAUDE.md, the whole feature now warrants condensing
+[`docs/document-organization-plan.md`](docs/document-organization-plan.md) into §-numbered design records
+in `docs/rag-design.md` (scope) + `docs/architecture.md` (data model / IPC) + `docs/user-guide.md` (UX),
+then DELETING the plan file (history stays in git). Because this is a large, irreversible-feeling doc move,
+it is **left for explicit owner confirmation** — the plan is marked v1-COMPLETE with Phase F done and this
+pending condensation flagged here. **Next:** owner-confirmed plan condensation + deletion; or owner-gated
+Phase E.2 (explicit retention + Temporary review dashboard); local-AI filing suggestions (owner-gated)._
+
+_(prior) 2026-06-14 — **Document organization — Phase E (Smart views + generated staleness).**
 Fifth phase of [`docs/document-organization-plan.md`](docs/document-organization-plan.md) (esp. §5,
 §7.5/§7.6, §8.2, §12.1, §15.3, §16, §17, §19, §20 "Phase E"). **Additive, query-time only — no new
 column, no migration, no parser/chunker/embedder change, no new audit events.**
