@@ -5,22 +5,25 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
-  rmSync,
   statSync
 } from 'node:fs'
-import { basename, extname, join } from 'node:path'
+import { basename, extname, isAbsolute, join, relative, sep } from 'node:path'
 import { t } from '../../../shared/i18n'
 import { tMain } from '../i18n'
 import type { Db } from '../db'
 import type {
+  DocumentCollectionMembership,
   DocumentInfo,
   DocumentOcrInfo,
   DocumentOrigin,
   DocumentPreview,
   DocumentSummary,
+  GeneratedProvenance,
+  ImportDestination,
   IngestionStatus
 } from '../../../shared/types'
 import { sha256File } from '../models'
+import { docLifecycle, fileFromPendingDestination } from '../collections'
 import { type Embedder, encodeVector } from '../embeddings'
 import { ENCRYPTED_DOC_SUFFIX, shredFile, type DocumentCipher } from '../workspace-vault'
 import type { Transcriber } from '../transcriber'
@@ -142,6 +145,8 @@ interface DocumentRow {
   summary_json: string | null
   origin_json: string | null
   ocr_json: string | null
+  lifecycle: string | null
+  source_folder_label: string | null
   created_at: string
   updated_at: string
 }
@@ -179,12 +184,40 @@ function parseSummary(json: string | null | undefined): DocumentSummary | null {
   return null
 }
 
+/** The valid `GeneratedProvenance.kind` values (used to narrow a parsed string). */
+const GENERATED_KINDS = ['summary', 'translation', 'compare', 'transcript', 'other'] as const
+
 /** Parse a stored origin (generated-document provenance); malformed JSON reads as null. */
 function parseOrigin(json: string | null | undefined): DocumentOrigin | null {
   if (!json) return null
   try {
     const v = JSON.parse(json) as Record<string, unknown> | null
     if (!v || typeof v !== 'object') return null
+    // NEW structured provenance (GeneratedProvenance, plan §15.1): a `kind` discriminator
+    // plus `sourceDocumentIds`. Checked FIRST — new translation/compare rows carry no
+    // legacy `type`/`translatedFrom`/`comparedFrom` fields, so they only match here.
+    if (typeof v.kind === 'string' && Array.isArray(v.sourceDocumentIds)) {
+      const kind = GENERATED_KINDS.find((k) => k === v.kind)
+      const sourceDocumentIds = v.sourceDocumentIds.filter(
+        (x): x is string => typeof x === 'string' && x.length > 0
+      )
+      if (!kind || sourceDocumentIds.length === 0) return null
+      const out: GeneratedProvenance = {
+        kind,
+        sourceDocumentIds,
+        // createdAt is tolerated when absent/odd (parseOcr precedent) — provenance must
+        // still render; only the later staleness phase consumes it.
+        createdAt: typeof v.createdAt === 'string' ? v.createdAt : ''
+      }
+      if (Array.isArray(v.sourceCollectionIds)) {
+        const ids = v.sourceCollectionIds.filter(
+          (x): x is string => typeof x === 'string' && x.length > 0
+        )
+        if (ids.length > 0) out.sourceCollectionIds = ids
+      }
+      if (typeof v.modelId === 'string' && v.modelId.length > 0) out.modelId = v.modelId
+      return out
+    }
     // Comparison provenance: both source ids, A/B order.
     if (v.type === 'compare') {
       const from = v.comparedFrom
@@ -277,6 +310,11 @@ function rowToInfo(row: DocumentRow, chunkCount: number, staleEmbeddings?: boole
     // exactly these rows (plus already-OCR'd PDFs for a re-run).
     scanDetected: row.status === 'failed' && row.error_message === PDF_SCAN_DETECTED_MESSAGE,
     ocr: ocrInfoOf(parseOcr(row.ocr_json)),
+    // Document-organization (plan §8.2/§16): retention lifecycle (NULL ⇒ permanent) +
+    // folder-import display label. Collection memberships are merged in by listDocuments
+    // (it has the db handle for the join); getDocument/createQueuedDocument leave it absent.
+    lifecycle: docLifecycle(row.lifecycle),
+    sourceFolderLabel: row.source_folder_label,
     createdAt: row.created_at,
     updatedAt: row.updated_at
   }
@@ -321,13 +359,49 @@ function setStatus(db: Db, id: string, status: IngestionStatus, errorMessage: st
 }
 
 /**
- * Insert a `queued` document row for `filePath` and return its DocumentInfo.
- * `displayTitle` overrides the filename-derived title for app-GENERATED
- * files imported from a transient path (e.g. a materialized translation) — the title
- * drives parser selection, the stored copy's extension, and citation source labels,
- * so it must be set BEFORE processing and must keep a supported extension.
+ * Options for `createQueuedDocument` (document-organization plan §11.3, Phase C). All
+ * optional; a bare string is accepted as a shorthand for `{ displayTitle }` so the
+ * doctasks materialized-document caller stays unchanged.
  */
-export function createQueuedDocument(db: Db, filePath: string, displayTitle?: string): DocumentInfo {
+export interface CreateQueuedDocumentOptions {
+  /**
+   * Overrides the filename-derived title for app-GENERATED files imported from a transient
+   * path (e.g. a materialized translation) — the title drives parser selection, the stored
+   * copy's extension, and citation source labels, so it must be set BEFORE processing and
+   * must keep a supported extension.
+   */
+  displayTitle?: string
+  /**
+   * Where this import should land (plan §11.3). Persisted into `pending_destination_json`
+   * at queue time (M1) so a crash-and-restart re-files to the intended destination instead
+   * of being swept into Library by the migration backfill. Applied on indexing SUCCESS via
+   * `fileFromPendingDestination`. Omit ⇒ no recorded intent ⇒ Library default.
+   */
+  destination?: ImportDestination
+  /**
+   * Provenance for an app-GENERATED document (translation/comparison/transcript, plan
+   * §15.1, D3/N1). Stamped into `origin_json` AT QUEUE TIME, before the row can ever be
+   * `indexed`, so the Library backfill's `origin_json IS NULL` guard (db.ts) holds even if
+   * the process is killed mid-import — a half-born work-product is never swept into Library
+   * (DM-2). A generated row also gets NO membership; both together keep it explicit-id only.
+   */
+  origin?: DocumentOrigin
+  /** Folder-import display metadata (N12; display-only). */
+  sourceRelativePath?: string | null
+  sourceFolderLabel?: string | null
+}
+
+/**
+ * Insert a `queued` document row for `filePath` and return its DocumentInfo. The resolved
+ * import destination + folder metadata are persisted on the row immediately (plan §11.3,
+ * M1), before parse/embed.
+ */
+export function createQueuedDocument(
+  db: Db,
+  filePath: string,
+  opts: string | CreateQueuedDocumentOptions = {}
+): DocumentInfo {
+  const o: CreateQueuedDocumentOptions = typeof opts === 'string' ? { displayTitle: opts } : opts
   const now = nowIso()
   const id = randomUUID()
   let sizeBytes: number | null = null
@@ -336,12 +410,32 @@ export function createQueuedDocument(db: Db, filePath: string, displayTitle?: st
   } catch {
     sizeBytes = null
   }
-  const title = displayTitle ?? basename(filePath)
+  const title = o.displayTitle ?? basename(filePath)
   db.prepare(
     `INSERT INTO documents
-       (id, title, original_path, stored_path, mime_type, size_bytes, sha256, status, error_message, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).run(id, title, filePath, null, guessMime(title), sizeBytes, null, 'queued', null, now, now)
+       (id, title, original_path, stored_path, mime_type, size_bytes, sha256, status, error_message,
+        pending_destination_json, origin_json, source_relative_path, source_folder_label, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    id,
+    title,
+    filePath,
+    null,
+    guessMime(title),
+    sizeBytes,
+    null,
+    'queued',
+    null,
+    o.destination ? JSON.stringify(o.destination) : null,
+    // Generated provenance is stamped HERE (before `indexed`) so the Library backfill never
+    // sweeps a crash-interrupted work-product in (DM-2). original_path stays set — the parser
+    // still needs the transient source on first index; setDocumentOrigin nulls it post-success.
+    o.origin ? JSON.stringify(o.origin) : null,
+    o.sourceRelativePath ?? null,
+    o.sourceFolderLabel ?? null,
+    now,
+    now
+  )
   return rowToInfo(getRow(db, id) as DocumentRow, 0)
 }
 
@@ -725,7 +819,16 @@ export async function reindexDocument(
   if (!row) throw new Error(`Unknown document: ${documentId}`)
   setDocumentSummary(db, documentId, null)
   setStatus(db, documentId, 'queued')
-  return processDocument(db, storeDir, documentId, deps)
+  const info = await processDocument(db, storeDir, documentId, deps)
+  // M1 crash-resume: a crash-interrupted import is re-driven to `indexed` through HERE (the
+  // user clicks Re-index on the reconciled `failed` row), NOT through the in-session import
+  // loop. So filing-by-pending-destination must happen on this path too, or the doc loses
+  // its Project/Temporary/conversation intent and the next backfill sweeps it into Library.
+  // `fileFromPendingDestination` is idempotent (Library is unfiled-guarded, pending cleared
+  // on first success, generated docs skipped), so a normal re-index of an already-filed doc
+  // is a no-op — making this a true single indexing-success entry point.
+  if (info.status === 'indexed') fileFromPendingDestination(db, documentId)
+  return info
 }
 
 /**
@@ -889,13 +992,32 @@ export function listDocuments(db: Db, activeEmbeddingModelId?: string | null): D
   const rows = db
     .prepare("SELECT * FROM documents WHERE status != 'deleted' ORDER BY created_at DESC, rowid DESC")
     .all() as unknown as DocumentRow[]
+  // One join for every membership (document-organization plan §16/§18 — one extra indexed
+  // join, not N+1), grouped by document for the per-row `collections` chips.
+  const memberships = new Map<string, DocumentCollectionMembership[]>()
+  const memberRows = db
+    .prepare(
+      `SELECT dc.document_id AS documentId, c.id AS id, c.name AS name, c.type AS type, dc.role AS role
+       FROM document_collections dc JOIN collections c ON c.id = dc.collection_id`
+    )
+    .all() as Array<{ documentId: string; id: string; name: string; type: string; role: string }>
+  for (const m of memberRows) {
+    const list = memberships.get(m.documentId) ?? []
+    list.push({
+      id: m.id,
+      name: m.name,
+      type: m.type as DocumentCollectionMembership['type'],
+      role: m.role as DocumentCollectionMembership['role']
+    })
+    memberships.set(m.documentId, list)
+  }
   return rows.map((r) => {
     const chunkCount = chunkCountFor(db, r.id)
     let stale: boolean | undefined
     if (activeEmbeddingModelId && r.status === 'indexed' && chunkCount > 0) {
       stale = chunksEmbeddedUnder(db, r.id, activeEmbeddingModelId) === 0
     }
-    return rowToInfo(r, chunkCount, stale)
+    return { ...rowToInfo(r, chunkCount, stale), collections: memberships.get(r.id) ?? [] }
   })
 }
 
@@ -912,14 +1034,15 @@ export function deleteDocument(db: Db, id: string): void {
   const row = getRow(db, id)
   if (!row) return
   if (row.stored_path && existsSync(row.stored_path)) {
-    try {
-      rmSync(row.stored_path)
-    } catch {
-      // Best-effort: a locked/missing workspace copy must not block the DB cleanup.
-    }
+    // Shred (overwrite-then-unlink) the workspace copy rather than a bare unlink (plan M5),
+    // keeping the on-disk delete contract consistent with the rest of the app. Best-effort:
+    // a locked/missing copy must not block the DB cleanup.
+    shredFile(row.stored_path)
   }
   db.prepare('DELETE FROM embeddings WHERE chunk_id IN (SELECT id FROM chunks WHERE document_id = ?)').run(id)
   db.prepare('DELETE FROM chunks WHERE document_id = ?').run(id)
+  // Membership (document_collections) + chat-attachment (conversation_documents) rows
+  // cascade away via ON DELETE CASCADE (plan C4) — no manual cleanup needed here.
   db.prepare('DELETE FROM documents WHERE id = ?').run(id)
 }
 
@@ -971,4 +1094,55 @@ export function expandPaths(paths: string[]): string[] {
     else add(p)
   }
   return out
+}
+
+/** An expanded file with its folder-import display metadata (plan §11.2, N12). */
+export interface ExpandedFile {
+  path: string
+  /** Path relative to the picked top-level folder root, or null for a picked file. */
+  sourceRelativePath: string | null
+  /** The picked top-level folder's name, or null for a picked file. */
+  sourceFolderLabel: string | null
+}
+
+/**
+ * Expand a selection like `expandPaths`, additionally capturing folder-import display
+ * metadata (plan §11.2): for a picked DIRECTORY, `sourceFolderLabel` is that directory's
+ * name and `sourceRelativePath` is each walked file's path relative to it; a picked FILE
+ * carries no metadata. **Display-only** (the stored copy is always
+ * `workspace/documents/<id><ext>`); never used for any file I/O.
+ *
+ * L3 symlink/basename fallback: `expandPaths`/`statSync` follow symlinks, so a symlinked
+ * entry can resolve outside the picked root and produce a relative path with `..` or a
+ * different drive root. When the relative path can't be cleanly computed, fall back to the
+ * bare basename. The order matches `expandPaths` (dedup by absolute path; first wins).
+ */
+export function expandPathsWithSource(paths: string[]): ExpandedFile[] {
+  const flat = expandPaths(paths)
+  // Map each picked DIRECTORY to its label, longest-prefix-first so a nested pick wins.
+  const roots: Array<{ dir: string; label: string }> = []
+  for (const p of paths) {
+    try {
+      if (statSync(p).isDirectory()) roots.push({ dir: p, label: basename(p) || p })
+    } catch {
+      // Unreadable pick — its files never made it into `flat` anyway.
+    }
+  }
+  roots.sort((a, b) => b.dir.length - a.dir.length)
+
+  const cleanRelative = (root: string, file: string): string => {
+    const rel = relative(root, file)
+    // A `..` escape or an absolute result (different drive on Windows) ⇒ basename fallback.
+    if (!rel || rel.startsWith('..') || isAbsolute(rel)) return basename(file)
+    return rel
+  }
+
+  return flat.map((path) => {
+    // Match on a separator boundary, not a raw string prefix, so a file under `…\taxes`
+    // can't false-attribute its folder label to a sibling picked root `…\tax` (DM-3).
+    const root = roots.find((r) => path === r.dir || path.startsWith(r.dir + sep))
+    return root
+      ? { path, sourceRelativePath: cleanRelative(root.dir, path), sourceFolderLabel: root.label }
+      : { path, sourceRelativePath: null, sourceFolderLabel: null }
+  })
 }

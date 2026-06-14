@@ -31,7 +31,12 @@ import {
   type DocumentCipher
 } from '../../src/main/services/workspace-vault'
 import { recordEvent, listAuditEvents } from '../../src/main/services/audit'
-import type { AuditEventType } from '../../src/shared/types'
+import {
+  addToCollection,
+  createCollection,
+  getBuiltinCollection
+} from '../../src/main/services/collections'
+import type { AuditEventType, GeneratedProvenance } from '../../src/shared/types'
 import type { Embedder } from '../../src/main/services/embeddings'
 import type {
   ChatMessage,
@@ -258,9 +263,16 @@ describe('end-to-end translation (the D36 overlap regression + stitching)', () =
     // …and in the original order.
     expect(tokens).toEqual(Array.from({ length: 600 }, (_, i) => `word${i}`))
 
-    // Provenance round-trip.
-    expect(created?.origin).toEqual({ type: 'translation', translatedFrom: docId, targetLang: 'de' })
-    expect(getDocumentOrigin(db, newId)).toEqual({ type: 'translation', translatedFrom: docId, targetLang: 'de' })
+    // Provenance round-trip (Phase D: structured GeneratedProvenance — kind + source id +
+    // model; no sourceCollectionIds because this source is filed nowhere).
+    const expectedOrigin = {
+      kind: 'translation',
+      sourceDocumentIds: [docId],
+      modelId: 'scripted-model',
+      createdAt: expect.any(String)
+    }
+    expect(created?.origin).toEqual(expectedOrigin)
+    expect(getDocumentOrigin(db, newId)).toEqual(expectedOrigin)
 
     // Audit: ids-only document_task_completed (with the SOURCE id) + a
     // document_imported for the materialized document.
@@ -290,12 +302,98 @@ describe('end-to-end translation (the D36 overlap regression + stitching)', () =
     // Re-index the translated document: chunks rebuild, origin stays.
     const reinfo = await reindexDocument(db, storeDir, newId)
     expect(reinfo.status).toBe('indexed')
-    expect(getDocumentOrigin(db, newId)).toEqual({ type: 'translation', translatedFrom: docId, targetLang: 'en' })
+    expect(getDocumentOrigin(db, newId)).toEqual({
+      kind: 'translation',
+      sourceDocumentIds: [docId],
+      modelId: 'scripted-model',
+      createdAt: expect.any(String)
+    })
 
     // Malformed origin_json must never break a listing — it reads as null.
     db.prepare('UPDATE documents SET origin_json = ? WHERE id = ?').run('{not json', newId)
     expect(getDocumentOrigin(db, newId)).toBeNull()
     expect(listDocuments(db).find((d) => d.id === newId)?.origin).toBeNull()
+  })
+})
+
+describe('generated provenance + membership (Phase D — §15.1/§15.2, D3/N1)', () => {
+  it('writes structured provenance, snapshots the SOURCE collections, and files NO membership', async () => {
+    const docId = await importDoc(80, 'source.txt')
+    // The SOURCE lives in Library + a project; the generated output must NOT inherit them.
+    const lib = getBuiltinCollection(db, 'library')!
+    const project = createCollection(db, 'Tax 2025')
+    addToCollection(db, [docId], lib.id)
+    addToCollection(db, [docId], project.id)
+
+    const manager = makeManager({ runtime: scriptedRuntime() })
+    const { jobId } = manager.startDocTask({
+      kind: 'translation',
+      documentIds: [docId],
+      params: { targetLang: 'de' }
+    })
+    const status = await waitTerminal(manager, jobId)
+    expect(status.state).toBe('done')
+    const newId = status.resultRef?.documentId as string
+
+    // Structured provenance persisted: kind + source id + model + a snapshot of the
+    // source's collections at creation time (display/forward-use only).
+    const origin = getDocumentOrigin(db, newId) as GeneratedProvenance
+    expect(origin.kind).toBe('translation')
+    expect(origin.sourceDocumentIds).toEqual([docId])
+    expect(origin.modelId).toBe('scripted-model')
+    expect(origin.createdAt.length).toBeGreaterThan(0)
+    expect([...(origin.sourceCollectionIds ?? [])].sort()).toEqual([lib.id, project.id].sort())
+
+    // N1/D3: the generated row gets ZERO document_collections rows of its own — it is
+    // structurally excluded from every collection-derived (Library/project) scope.
+    const memberships = db
+      .prepare('SELECT collection_id FROM document_collections WHERE document_id = ?')
+      .all(newId) as unknown as Array<{ collection_id: string }>
+    expect(memberships).toHaveLength(0)
+    // The source keeps its memberships untouched.
+    const sourceMemberships = db
+      .prepare('SELECT collection_id FROM document_collections WHERE document_id = ?')
+      .all(docId) as unknown as Array<{ collection_id: string }>
+    expect(sourceMemberships.map((r) => r.collection_id).sort()).toEqual([lib.id, project.id].sort())
+  })
+
+  it('round-trips the new shape and STILL parses the old Translation/CompareOrigin shapes', async () => {
+    const docId = await importDoc(40, 'rt.txt')
+
+    // Old translation shape (pre-discriminator, no `type`) still parses unchanged.
+    db.prepare('UPDATE documents SET origin_json = ? WHERE id = ?').run(
+      JSON.stringify({ translatedFrom: 'src-1', targetLang: 'en' }),
+      docId
+    )
+    expect(getDocumentOrigin(db, docId)).toEqual({
+      type: 'translation',
+      translatedFrom: 'src-1',
+      targetLang: 'en'
+    })
+    // Old compare shape still parses.
+    db.prepare('UPDATE documents SET origin_json = ? WHERE id = ?').run(
+      JSON.stringify({ type: 'compare', comparedFrom: ['a', 'b'] }),
+      docId
+    )
+    expect(getDocumentOrigin(db, docId)).toEqual({ type: 'compare', comparedFrom: ['a', 'b'] })
+
+    // New GeneratedProvenance round-trips exactly.
+    const prov: GeneratedProvenance = {
+      kind: 'compare',
+      sourceDocumentIds: ['a', 'b'],
+      sourceCollectionIds: ['c1'],
+      modelId: 'm',
+      createdAt: '2026-06-14T00:00:00.000Z'
+    }
+    db.prepare('UPDATE documents SET origin_json = ? WHERE id = ?').run(JSON.stringify(prov), docId)
+    expect(getDocumentOrigin(db, docId)).toEqual(prov)
+
+    // A `kind` with no source ids is malformed ⇒ null (never throws).
+    db.prepare('UPDATE documents SET origin_json = ? WHERE id = ?').run(
+      JSON.stringify({ kind: 'translation', sourceDocumentIds: [] }),
+      docId
+    )
+    expect(getDocumentOrigin(db, docId)).toBeNull()
   })
 })
 

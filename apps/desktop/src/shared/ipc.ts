@@ -37,6 +37,12 @@ export const IPC = {
   deleteConversation: 'chat:deleteConversation',
   /** Replace a documents-conversation's "ask selected documents" scope. */
   updateConversationScope: 'chat:updateScope',
+  /** Persist a conversation's composite source scope (`scope_v2_json`, plan D1). */
+  setConversationScope: 'chat:setScope',
+  /** Persist a conversation's creation-anchor project (`collection_id`, plan §13.4). */
+  setConversationCollection: 'chat:setCollection',
+  /** A conversation's temporary chat attachments (`conversation_documents`, plan C3/§16). */
+  listAttachments: 'chat:listAttachments',
   /** Save a conversation transcript to a user-chosen file (spec §7.6). */
   exportConversation: 'chat:export',
   /** Full-text search across conversations. Queries are content: never logged/audited. */
@@ -51,6 +57,15 @@ export const IPC = {
   importPreflight: 'docs:importPreflight',
   getImportJob: 'docs:getImportJob',
   listDocuments: 'docs:list',
+  /** Add documents to a collection (membership; idempotent). "Move" = add + remove. */
+  addToCollection: 'docs:addToCollection',
+  /** Remove documents from a collection (membership only; documents untouched). */
+  removeFromCollection: 'docs:removeFromCollection',
+  /** Set documents' retention lifecycle ('permanent'|'temporary'|'archived'). */
+  setDocumentLifecycle: 'docs:setLifecycle',
+  /** Read-only rule-based filing suggestions for unfiled documents (plan §20 Phase F).
+   *  Never files anything — Apply reuses addToCollection / createCollection. */
+  filingSuggestions: 'docs:filingSuggestions',
   deleteDocument: 'docs:delete',
   reindexDocument: 'docs:reindex',
   /** Read-only in-app preview: re-extract the stored copy's text. */
@@ -101,6 +116,18 @@ export const IPC = {
   getAuditEvents: 'audit:list',
   /** Save the activity log to a user-chosen file (the exportConversation pattern). */
   exportAuditLog: 'audit:export',
+  // Document organization — collections (projects + built-ins). Handlers in
+  // registerCollectionsIpc.ts; membership/lifecycle live on the docs: namespace above.
+  /** All collections (built-ins first, then projects by name). */
+  listCollections: 'collections:list',
+  /** Create a project. */
+  createCollection: 'collections:create',
+  /** Rename a collection (built-ins included, but the UI never offers it for built-ins). */
+  renameCollection: 'collections:rename',
+  /** Archive / unarchive a project (a scope-target change, not a global exclusion — C1). */
+  setCollectionArchived: 'collections:setArchived',
+  /** Delete a project: 'membershipOnly' (keep docs) or 'withDocuments' (delete project-only docs — C2). */
+  deleteCollection: 'collections:delete',
   // Encrypted workspace lifecycle
   getWorkspaceState: 'workspace:getState',
   unlockWorkspace: 'workspace:unlock',

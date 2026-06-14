@@ -2,7 +2,7 @@
 // the React renderer. This is the typed surface referenced by BUILD_STATE.md §4.
 // Keep these in sync with the IPC handlers in src/main/ipc and the spec §9.1.
 
-import { t, type UiLanguageSetting } from './i18n'
+import { t, type MessageKey, type UiLanguageSetting } from './i18n'
 
 export type HardwareProfile = 'TINY' | 'LITE' | 'BALANCED' | 'PRO' | 'UNKNOWN'
 
@@ -213,6 +213,14 @@ export interface AppSettings {
    * `navigator.language`.
    */
   uiLanguage: UiLanguageSetting
+  // ---- Filing suggestions (document-organization plan §20 Phase F) ----
+  /**
+   * Document ids whose rule-based filing suggestions the user has DISMISSED. Persisted in
+   * this AppSettings JSON blob (NOT a new `documents` column — additive, tolerant) so a
+   * dismiss sticks across a restart. A suggestion is otherwise inert; this only hides the
+   * quiet per-row chip — nothing is ever filed without an explicit Apply (plan §5).
+   */
+  dismissedFilingSuggestions: string[]
 }
 
 /** Appearance setting (see `AppSettings.theme`). */
@@ -251,7 +259,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   autoStartActiveModel: true,
   checksumCache: {},
   theme: 'system',
-  uiLanguage: 'system'
+  uiLanguage: 'system',
+  dismissedFilingSuggestions: []
 }
 
 // ---- GPU probe ----
@@ -482,9 +491,26 @@ export interface Conversation {
   /**
    * "Ask selected documents" scope (spec §10.4): when non-null, document answers in
    * this conversation retrieve ONLY from these documents. Null = whole corpus. Only
-   * meaningful for `mode: 'documents'`.
+   * meaningful for `mode: 'documents'`. Legacy single-list scope; the composite `scope`
+   * below supersedes it when present (document-organization plan §8.3/D1).
    */
   scopeDocumentIds: string[] | null
+  /**
+   * Creation-anchor collection (document-organization plan §13.4): the project a chat was
+   * started inside, or null for an unscoped/Library chat. Used for conversation-list
+   * grouping (N8) and as the legacy single-project scope fallback. Persisted in
+   * `conversations.collection_id`.
+   */
+  collectionId: string | null
+  /**
+   * The persisted composite source scope (document-organization plan §8.3/D1): the UNION
+   * of whole collections (Library / projects) and specific documents the user composed in
+   * the multi-select picker. Null ⇒ no composite scope stored (the legacy
+   * `scopeDocumentIds`/`collectionId` interpretation applies). An empty scope
+   * (`collectionIds:[]`, `documentIds:[]`) is the explicit "All documents" choice.
+   * Persisted in `conversations.scope_v2_json`.
+   */
+  scope: DocumentScope | null
 }
 
 export interface Citation {
@@ -588,7 +614,52 @@ export interface CompareOrigin {
   comparedFrom: [string, string]
 }
 
-export type DocumentOrigin = TranslationOrigin | CompareOrigin
+/** The kind of generation a `GeneratedProvenance` records. */
+export type GeneratedKind = 'summary' | 'translation' | 'compare' | 'transcript' | 'other'
+
+/**
+ * Structured provenance for a document the app GENERATED from other documents
+ * (document-organization plan §15.1). This is the shape NEW generations write into
+ * `documents.origin_json`; the legacy `TranslationOrigin`/`CompareOrigin` shapes still
+ * parse (back-compat — the `parseOrigin` precedent). Like the legacy shapes this is
+ * PROVENANCE, not sync: re-indexing or re-importing a source never updates this row.
+ *
+ * `createdAt` + `sourceDocumentIds` are kept so a later phase can compute a staleness
+ * indicator (a source re-indexed/deleted after the output was made); v1 ships no
+ * staleness UI (plan §15.3).
+ */
+export interface GeneratedProvenance {
+  kind: GeneratedKind
+  /** The source document id(s) this output was derived from (any may be deleted since). */
+  sourceDocumentIds: string[]
+  /** The source(s)' collection memberships captured at creation time (display/forward-use). */
+  sourceCollectionIds?: string[]
+  /** The model that produced the output, when cheaply known at creation. */
+  modelId?: string
+  createdAt: string
+}
+
+export type DocumentOrigin = TranslationOrigin | CompareOrigin | GeneratedProvenance
+
+/**
+ * Normalize any stored provenance into the uniform view the UI renders: the generation
+ * KIND plus the ordered source document ids. Reads either the structured
+ * `GeneratedProvenance` (new) or a legacy `TranslationOrigin`/`CompareOrigin` (old rows),
+ * so the provenance label is one code path regardless of when the row was written
+ * (plan §15.3). Compare preserves A/B order.
+ */
+export function provenanceView(origin: DocumentOrigin): {
+  kind: GeneratedKind
+  sourceDocumentIds: string[]
+} {
+  if ('kind' in origin) {
+    return { kind: origin.kind, sourceDocumentIds: origin.sourceDocumentIds }
+  }
+  if (origin.type === 'compare') {
+    return { kind: 'compare', sourceDocumentIds: [...origin.comparedFrom] }
+  }
+  return { kind: 'translation', sourceDocumentIds: [origin.translatedFrom] }
+}
 
 export type DocTaskState = 'queued' | 'running' | 'done' | 'failed' | 'cancelled'
 
@@ -707,8 +778,33 @@ export interface DocumentInfo {
    * the OCR task overwrites it.
    */
   ocr?: DocumentOcrInfo | null
+  /**
+   * Collection memberships of this document (document-organization plan §16): the
+   * Library/project/Temporary collections it belongs to, for the Documents-screen chips.
+   * Empty array when filed nowhere. Built by `listDocuments` from `document_collections`.
+   */
+  collections?: DocumentCollectionMembership[]
+  /**
+   * Retention lifecycle (NULL in the DB ⇒ 'permanent'; document-organization plan §8.2).
+   * `archived` documents are globally excluded from default retrieval (C1).
+   */
+  lifecycle?: DocumentLifecycle
+  /**
+   * Top-level folder name captured on a folder import (display-only metadata; plan §11.2).
+   * Null/undefined for a file import. (`lastUsedAt` is deferred — L2.)
+   */
+  sourceFolderLabel?: string | null
   createdAt: string
   updatedAt: string
+}
+
+/** A document's membership in one collection, as surfaced on `DocumentInfo.collections`. */
+export interface DocumentCollectionMembership {
+  id: string
+  /** Canonical stored name; the renderer localizes built-ins by `type`, never the name. */
+  name: string
+  type: CollectionType
+  role: DocumentCollectionRole
 }
 
 /** Surface metadata of a stored OCR result (never the recognized text). */
@@ -740,6 +836,263 @@ export interface ImportJobStatus {
   completed: number
   failed: number
   done: boolean
+}
+
+// ---- Document organization (architecture.md "Document organization — design record";
+//      retrieval/scope half in rag-design.md §13) ----
+//
+// A collection-membership layer over the existing ingestion/retrieval pipeline: one
+// stored file, one chunk set, one vector set per document; organization is metadata
+// (`collections` + `document_collections`) plus a `lifecycle` attribute on documents.
+// Five user-facing containers — Library, Projects, Temporary, Generated (a role/view),
+// Archive — built on these primitives. Everything stays local + offline.
+
+/**
+ * Collection kind. `library`/`temporary` are the seeded built-ins (one each, `builtin`);
+ * `project` is user-created. `archive`/`smart` are reserved in the domain but NOT stored
+ * as rows in v1 (archive is a doc/project lifecycle; smart views are query-time filters).
+ */
+export type CollectionType = 'library' | 'project' | 'temporary' | 'archive' | 'smart'
+
+/**
+ * How a document belongs to a collection. `'generated'` is RESERVED (unused in v1):
+ * generated documents get NO membership at all and are reached only via explicit
+ * selection (plan §15.2 / N1).
+ */
+export type DocumentCollectionRole = 'source' | 'reference' | 'attachment' | 'generated'
+
+/** A document's retention lifecycle. NULL in the DB is coalesced to `'permanent'`. */
+export type DocumentLifecycle = 'permanent' | 'temporary' | 'archived'
+
+/**
+ * Size (bytes) at or above which a document counts as a "large file" in the
+ * `large` smart view (document-organization plan §7.6/§12.1, Phase E). 10 MB is well
+ * above an ordinary text/PDF document but below most recordings, so the view surfaces
+ * the files that actually cost drive space — without a new column. Shared so the
+ * renderer predicate (`inSection`) and the `docs:list` filter stay byte-for-byte equal.
+ */
+export const LARGE_FILE_BYTES = 10 * 1024 * 1024
+
+/**
+ * The query-time smart views (plan §7.6/§12.1). These are predicates/orderings over
+ * `documents` metadata — NEVER stored collections (`CollectionType` keeps `'smart'`
+ * reserved-unused). `'all'` (everything) and `'recent'` (a createdAt ordering, not a
+ * membership predicate) are handled by the caller; `matchesSmartView` covers the rest.
+ */
+export type SmartListView =
+  | 'generated'
+  | 'archived'
+  | 'all'
+  | 'recent'
+  | 'unfiled'
+  | 'needsReindex'
+  | 'large'
+  | 'failed'
+  | 'audio'
+  | 'ocr'
+
+/** The smart views that are a pure per-document predicate (excludes `all`/`recent`). */
+export type SmartViewPredicate = Exclude<SmartListView, 'all' | 'recent'>
+
+/**
+ * Whether a document belongs in a predicate smart view (plan §7.6/§12.1). The single
+ * source of truth so the renderer rail (`inSection`) and the `docs:list` filter never
+ * drift apart. Tolerant: missing optional fields coalesce to a safe default, never throws.
+ * - `generated`    — app-generated provenance (`origin != null`).
+ * - `archived`     — `lifecycle === 'archived'`.
+ * - `unfiled`      — not filed into any *project* (Library/Temporary builtins don't count).
+ * - `needsReindex` — vectors produced by a different search model (`staleEmbeddings`).
+ * - `large`        — `sizeBytes >= LARGE_FILE_BYTES`.
+ * - `failed`       — import `status === 'failed'`.
+ * - `audio`        — an audio file, or a generated transcript of one.
+ * - `ocr`          — text came from OCR, or a scan was detected.
+ */
+export function matchesSmartView(d: DocumentInfo, view: SmartViewPredicate): boolean {
+  switch (view) {
+    case 'generated':
+      return d.origin != null
+    case 'archived':
+      return (d.lifecycle ?? 'permanent') === 'archived'
+    case 'unfiled':
+      return !(d.collections ?? []).some((c) => c.type === 'project')
+    case 'needsReindex':
+      return d.staleEmbeddings === true
+    case 'large':
+      return d.sizeBytes != null && d.sizeBytes >= LARGE_FILE_BYTES
+    case 'failed':
+      return d.status === 'failed'
+    case 'audio':
+      return (
+        (d.mimeType?.startsWith('audio/') ?? false) ||
+        (d.origin != null && provenanceView(d.origin).kind === 'transcript')
+      )
+    case 'ocr':
+      return d.ocr != null || d.scanDetected === true
+  }
+}
+
+/** Why a generated document is flagged stale (plan §15.3). */
+export type GeneratedStaleReason = 'source-changed' | 'source-removed'
+
+export interface GeneratedStaleness {
+  stale: boolean
+  reason: GeneratedStaleReason | null
+}
+
+/**
+ * Whether a GENERATED document is out of date relative to its sources (plan §15.3).
+ * Pure + tolerant — a derivation over already-listed `DocumentInfo` fields, NOT a
+ * hot-path write. Flags stale when a source was updated (e.g. re-indexed) after this
+ * output's `createdAt`, or a source was deleted/archived. Snapshot semantics are
+ * unchanged: the only fix is re-running the task (this never auto-updates anything).
+ *
+ * Rules:
+ * - A non-generated document (`origin == null`) is never evaluated ⇒ not stale.
+ * - Only the structured `GeneratedProvenance` shape carries `createdAt`; a legacy
+ *   `Translation/CompareOrigin` (or a malformed/empty `createdAt`) ⇒ no flag, never throws.
+ * - A missing (deleted) or archived source ⇒ `source-removed`.
+ * - Else a source whose `updatedAt` is after `createdAt` ⇒ `source-changed`.
+ *
+ * @param sources lookup of source documents by id (the renderer's already-listed docs).
+ */
+export function generatedStaleness(
+  doc: Pick<DocumentInfo, 'origin'>,
+  sources: ReadonlyMap<string, Pick<DocumentInfo, 'updatedAt' | 'lifecycle'>>
+): GeneratedStaleness {
+  const NOT_STALE: GeneratedStaleness = { stale: false, reason: null }
+  const origin = doc.origin
+  if (!origin) return NOT_STALE
+  // `createdAt` exists only on the structured shape; legacy rows have none → no flag.
+  const createdAt = 'kind' in origin ? origin.createdAt : ''
+  const createdMs = Date.parse(createdAt)
+  if (!createdAt || Number.isNaN(createdMs)) return NOT_STALE
+  let changed = false
+  for (const id of provenanceView(origin).sourceDocumentIds) {
+    const src = sources.get(id)
+    if (!src || (src.lifecycle ?? 'permanent') === 'archived') {
+      return { stale: true, reason: 'source-removed' }
+    }
+    const updatedMs = Date.parse(src.updatedAt)
+    if (!Number.isNaN(updatedMs) && updatedMs > createdMs) changed = true
+  }
+  return changed ? { stale: true, reason: 'source-changed' } : NOT_STALE
+}
+
+/** A collection as surfaced over IPC (a `collections` row). */
+export interface Collection {
+  id: string
+  /** Stable canonical name; the UI localizes built-ins by `type`, never the stored name. */
+  name: string
+  type: CollectionType
+  description: string | null
+  /** True for the seeded Library/Temporary built-ins (undeletable). */
+  builtin: boolean
+  /** Optional UI accent; null = neutral. */
+  color: string | null
+  createdAt: string
+  updatedAt: string
+  /** Project-level archive timestamp (null = active). A scope-target change, not a global exclusion. */
+  archivedAt: string | null
+}
+
+/**
+ * The composite chat scope the user composes (plan §0.1 D1): a UNION of whole
+ * collections (Library / projects) and specific documents. Persisted per conversation in
+ * `conversations.scope_v2_json`. An empty scope (both arrays empty) means the explicit
+ * "All documents" choice (whole corpus, archived excluded unless `includeArchived`).
+ */
+export interface DocumentScope {
+  /** Any mix of library id, project ids (and later smart-view ids). */
+  collectionIds: string[]
+  /** Specific documents added to the union. */
+  documentIds: string[]
+  /** Include `lifecycle='archived'` documents. Default false. */
+  includeArchived?: boolean
+}
+
+/**
+ * The resolved, internal retrieval filter (plan §10.2). Produced by `resolveScope` from a
+ * conversation's stored `DocumentScope` + chat attachments, and threaded into the vector /
+ * keyword search. A document is in scope when it is a member of any `collectionIds` entry
+ * OR its id is in `documentIds` (a UNION — plan D1). Empty/null both ⇒ whole corpus.
+ * Re-exported from `services/rag` for callers that import it alongside `retrieve`.
+ */
+export interface RetrievalScope {
+  /** Explicit selected docs ∪ chat attachments after `resolveScope` merges them. */
+  documentIds?: string[] | null
+  /** Membership filter: collections whose members are in scope. */
+  collectionIds?: string[] | null
+  /** Include `lifecycle='archived'` documents. Default false. */
+  includeArchived?: boolean
+  /**
+   * True iff the user hand-picked specific documents (set BEFORE attachments/expansion are
+   * merged into `documentIds`). Gates the filename auto-scope skip (plan §10.1 rule 5 / N2).
+   */
+  hasExplicitDocSelection?: boolean
+}
+
+/**
+ * Where an import should land (document-organization plan §11.3, Phase C). Resolved
+ * renderer-side per entry point (Documents screen ⇒ Library; inside a project ⇒ that
+ * project; chat attach/drop ⇒ that conversation), persisted into
+ * `documents.pending_destination_json` at queue time (M1) and applied on indexing success.
+ * A `conversation` destination links the doc to its chat via `conversation_documents`
+ * (C3) and makes it a Temporary doc — NEVER a `scope_json` mutation (N5/H4).
+ */
+export type ImportDestination =
+  | { kind: 'library' }
+  | { kind: 'collection'; collectionId: string }
+  | { kind: 'temporary' }
+  | { kind: 'conversation'; conversationId: string }
+
+/**
+ * Options for `importDocuments(paths, options?)` (plan §11.3). Entirely optional and
+ * backward-compatible: an old no-options caller defaults to Library, byte-for-byte.
+ */
+export interface ImportOptions {
+  /** Destination for every file in this import. Default `{ kind: 'library' }`. */
+  destination?: ImportDestination
+  /**
+   * Capture `source_relative_path` / `source_folder_label` display metadata for a folder
+   * import (N12). Default true for a folder import, false otherwise; display-only.
+   */
+  preserveRelativePaths?: boolean
+}
+
+// ---- Filing suggestions (rule-based, non-silent — document-organization plan §20 Phase F) ----
+//
+// A LOCAL, deterministic rule engine proposes which project an UNFILED document might belong
+// to (folder-name match, same-source-folder cohort, bilingual filename pattern). Rule-based
+// ONLY in v1 — no model, no network, no telemetry (local-AI classification is a LATER,
+// owner-gated step). A suggestion is INERT: surfaced as a quiet, dismissible chip and acted on
+// ONLY when the user clicks Apply (existing project ⇒ addToCollection; new project ⇒
+// createCollection + addToCollection). Never silent, never auto-file (plan §5).
+
+/** Which rule produced a suggestion (stable id, for de-dup + tests; never shown to the user). */
+export type FilingRuleId = 'folder-name-match' | 'same-source-folder-cohort' | 'filename-pattern'
+
+/** What a suggestion proposes: filing into an existing project, or creating a new one. */
+export type FilingTarget =
+  | { kind: 'existingProject'; collectionId: string }
+  | { kind: 'newProject'; suggestedName: string }
+
+/**
+ * One ranked filing suggestion for a document. The reason is an i18n KEY + params (never
+ * concatenated free text), so the renderer localizes it; `ruleId` is stable for de-dup/tests.
+ */
+export interface FilingSuggestion {
+  ruleId: FilingRuleId
+  target: FilingTarget
+  /** i18n key for the human reason line (e.g. `docs.suggest.reason.folder`). */
+  reasonKey: MessageKey
+  /** Interpolation params for `reasonKey` (display-only; never logged/audited). */
+  reasonParams?: Record<string, string>
+}
+
+/** The suggestions for one document (ranked, highest-confidence first, de-duped, always ≥1). */
+export interface FilingSuggestionResult {
+  documentId: string
+  suggestions: FilingSuggestion[]
 }
 
 // ---- Benchmark ----
@@ -788,6 +1141,16 @@ export type AuditEventType =
   | 'document_exported'
   | 'conversation_deleted'
   | 'conversation_exported'
+  // Document-organization (plan §17): collection/membership/lifecycle changes. Metadata is
+  // id + type + COUNT ONLY — never the collection/project NAME (a project name like
+  // "Divorce" is content-ish; the filename allowance does NOT extend to it).
+  | 'collection_created'
+  | 'collection_renamed'
+  | 'collection_archived'
+  | 'collection_deleted'
+  | 'documents_added_to_collection'
+  | 'documents_removed_from_collection'
+  | 'document_lifecycle_changed'
   | 'workspace_created'
   | 'workspace_unlocked'
   | 'workspace_locked'

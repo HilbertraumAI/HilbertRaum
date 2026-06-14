@@ -34,6 +34,7 @@ vi.mock('electron', () => ({
 import { registerCoreIpc } from '../../src/main/ipc/registerCoreIpc'
 import { registerChatIpc } from '../../src/main/ipc/registerChatIpc'
 import { registerDocsIpc } from '../../src/main/ipc/registerDocsIpc'
+import { registerCollectionsIpc } from '../../src/main/ipc/registerCollectionsIpc'
 import { registerModelIpc } from '../../src/main/ipc/registerModelIpc'
 import { registerDownloadIpc } from '../../src/main/ipc/registerDownloadIpc'
 import { registerWorkspaceIpc } from '../../src/main/ipc/registerWorkspaceIpc'
@@ -79,13 +80,21 @@ const DOC_SENTINEL_B = 'XDOCB_SENTINEL_the budget doubles in june'
 const AUDIO_SENTINEL = 'XAUDIO_SENTINEL_the recording reveals the acquisition price'
 const SETTING_SENTINEL = 'XSETTING_SENTINEL_not_privacy_relevant'
 const PASSWORD_SENTINEL = 'XPASS_SENTINEL_hunter2hunter2'
+// A project NAME is content-ish (plan §17): the collection audit events must record
+// id/type/count only, never the name — this sentinel proves it.
+const PROJECT_SENTINEL = 'XPROJECT_SENTINEL_lawsuit_mueller_divorce'
+// A filing-suggestion REASON (plan §20 Phase F): a folder label is display metadata used to
+// derive a suggestion — it must never reach the audit log (no suggestion-specific event).
+const FOLDER_SENTINEL = 'XFOLDER_SENTINEL_secret_clientfolder'
 const SENTINELS = [
   CHAT_SENTINEL,
   DOC_SENTINEL,
   DOC_SENTINEL_B,
   AUDIO_SENTINEL,
   SETTING_SENTINEL,
-  PASSWORD_SENTINEL
+  PASSWORD_SENTINEL,
+  PROJECT_SENTINEL,
+  FOLDER_SENTINEL
 ]
 
 const BODY = 'downloaded-model-bytes'
@@ -238,6 +247,7 @@ describe('audit wiring across the IPC layer (privacy sentinel grep)', () => {
     registerCoreIpc(ctx)
     registerChatIpc(ctx)
     registerDocsIpc(ctx)
+    registerCollectionsIpc(ctx)
     registerDocTasksIpc(ctx)
     registerModelIpc(ctx)
     registerDownloadIpc(
@@ -319,7 +329,7 @@ describe('audit wiring across the IPC layer (privacy sentinel grep)', () => {
     expect(translatedId).not.toBe(documentId)
     const { result: docs2Raw } = await invoke(handlers, IPC.listDocuments)
     const translated = (docs2Raw as DocumentInfo[]).find((d) => d.id === translatedId)
-    expect(translated?.origin).toEqual({ type: 'translation', translatedFrom: documentId, targetLang: 'de' })
+    expect(translated?.origin).toMatchObject({ kind: 'translation', sourceDocumentIds: [documentId] })
     ipcState.saveDialog.canceled = false
     ipcState.saveDialog.filePath = join(rootPath, 'translated-export.md')
     await invoke(handlers, IPC.exportDocument, translatedId)
@@ -358,7 +368,7 @@ describe('audit wiring across the IPC layer (privacy sentinel grep)', () => {
     expect(comparedId).toBeTruthy()
     const { result: docs3Raw } = await invoke(handlers, IPC.listDocuments)
     const compared = (docs3Raw as DocumentInfo[]).find((d) => d.id === comparedId)
-    expect(compared?.origin).toEqual({ type: 'compare', comparedFrom: [documentId, documentIdB] })
+    expect(compared?.origin).toMatchObject({ kind: 'compare', sourceDocumentIds: [documentId, documentIdB] })
     ipcState.saveDialog.canceled = false
     ipcState.saveDialog.filePath = join(rootPath, 'comparison-export.md')
     await invoke(handlers, IPC.exportDocument, comparedId)
@@ -398,6 +408,32 @@ describe('audit wiring across the IPC layer (privacy sentinel grep)', () => {
     expect(audioPreview.segments.map((s) => s.text).join('\n')).toContain(AUDIO_SENTINEL)
     await invoke(handlers, IPC.deleteDocument, audioId)
 
+    // -- collections (plan §17): a project whose NAME is a sentinel; every collection +
+    // membership + lifecycle event must record id/type/count only — never the name.
+    const { result: projRaw } = await invoke(handlers, IPC.createCollection, PROJECT_SENTINEL)
+    const proj = projRaw as { id: string }
+    await invoke(handlers, IPC.renameCollection, proj.id, `${PROJECT_SENTINEL}_v2`)
+    await invoke(handlers, IPC.setCollectionArchived, proj.id, true)
+    // A doc to file in/out of the project + flip its lifecycle.
+    const orgPath = join(rootPath, 'org-notes.txt')
+    writeFileSync(orgPath, 'org notes\n', 'utf8')
+    const { result: orgJobRaw } = await invoke(handlers, IPC.importDocuments, [orgPath])
+    const orgJob = orgJobRaw as ImportJob
+    await pollUntil(async () => {
+      const { result } = await invoke(handlers, IPC.getImportJob, orgJob.jobId)
+      return (result as ImportJobStatus).done
+    }, 'org import job')
+    const orgDocId = orgJob.documentIds[0]
+    // Phase F: stamp a folder label (a filing-suggestion reason) and run the read-only
+    // suggestions IPC — it writes NO audit event, so the sentinel can never leak.
+    db.prepare('UPDATE documents SET source_folder_label = ? WHERE id = ?').run(FOLDER_SENTINEL, orgDocId)
+    await invoke(handlers, IPC.filingSuggestions)
+    await invoke(handlers, IPC.addToCollection, [orgDocId], proj.id)
+    await invoke(handlers, IPC.setDocumentLifecycle, [orgDocId], 'temporary')
+    await invoke(handlers, IPC.removeFromCollection, [orgDocId], proj.id)
+    await invoke(handlers, IPC.deleteCollection, proj.id, 'membershipOnly')
+    await invoke(handlers, IPC.deleteDocument, orgDocId)
+
     // -- models + runtime: select, verify, start (mock fallback), stop.
     await invoke(handlers, IPC.selectModel, 'test-model-q4')
     await invoke(handlers, IPC.verifyModel, 'test-model-q4')
@@ -429,7 +465,14 @@ describe('audit wiring across the IPC layer (privacy sentinel grep)', () => {
       'runtime_started',
       'runtime_stopped',
       'model_download_started',
-      'model_download_verified'
+      'model_download_verified',
+      'collection_created',
+      'collection_renamed',
+      'collection_archived',
+      'collection_deleted',
+      'documents_added_to_collection',
+      'documents_removed_from_collection',
+      'document_lifecycle_changed'
     ]) {
       expect(types, `missing audit event: ${expected}`).toContain(expected)
     }

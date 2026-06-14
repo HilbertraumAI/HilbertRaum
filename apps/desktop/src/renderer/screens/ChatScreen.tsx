@@ -1,10 +1,12 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, type DragEvent } from 'react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import {
   DOC_TASK_BUSY_MESSAGE,
   type ChatDepthMode,
+  type Collection,
   type Conversation,
   type DocumentInfo,
+  type DocumentScope,
   type Message
 } from '@shared/types'
 import { cancelActiveDocTask } from '../lib/doctasks'
@@ -118,13 +120,41 @@ export function ChatScreen({
   // Imported documents — drives the scope popover's titles and the empty-state nudge.
   // Best-effort: a failed load just hides both affordances.
   const [docs, setDocs] = useState<DocumentInfo[]>([])
+  // Collections (Library + projects) — drives the multi-select source picker + footer union
+  // (document-organization plan §13). Best-effort: a failed load leaves the picker docs-only.
+  const [collections, setCollections] = useState<Collection[]>([])
   // Voice dictation: availability-driven — the composer mic renders only
   // when a transcriber is selected (whisper binary + weights on the drive). Best-effort
   // like `docs`: a failed status read just hides the mic.
   const [dictationAvailable, setDictationAvailable] = useState(false)
-  // Scope for the NEXT documents conversation (from "Ask these documents"); once a
-  // conversation is created it owns the scope (`scopeDocumentIds`) and this clears.
-  const [pendingScope, setPendingScope] = useState<string[] | null>(initialScopeDocumentIds ?? null)
+  // Composite scope for the NEXT documents conversation (plan D1); once a conversation is
+  // created it owns the scope (`scope_v2_json`) and this clears. Seeded from the Documents
+  // screen's "Ask these documents" handoff (a specific-doc selection).
+  const [pendingScope, setPendingScope] = useState<DocumentScope | null>(
+    initialScopeDocumentIds && initialScopeDocumentIds.length > 0
+      ? { collectionIds: [], documentIds: initialScopeDocumentIds }
+      : null
+  )
+  // Temporary chat attachments for the active conversation (plan C3): the docs dropped /
+  // attached into THIS chat, shown read-only as "Files in this chat" and always unioned
+  // into retrieval. Loaded from `listAttachments` whenever the active documents chat changes.
+  const [attachments, setAttachments] = useState<DocumentInfo[]>([])
+  // An in-flight attachment import (plan §11.2 N4): drives the non-removable "processing
+  // invoice.pdf…" pending chip until the doc is indexed and its `conversation_documents`
+  // link exists. Conversation-scoped so it only shows on the chat that received the file.
+  const [pendingImport, setPendingImport] = useState<{
+    jobId: string
+    convId: string
+    documentIds: string[]
+    fileNames: string[]
+  } | null>(null)
+  // Screen-reader-only status for the attach flow (UX-3): the pending chip lives inside a
+  // closed ScopePopover, so keyboard/picker users get no audible "processing"/"added" cue.
+  // A polite live region in the chat surface announces both (failures stay on ErrorBanner).
+  const [attachStatus, setAttachStatus] = useState('')
+  // Drag-over highlight for the chat-surface drop target (plan §11.2 net-new intake).
+  const [dragOver, setDragOver] = useState(false)
+  const attachPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   // Conversation-list collapse, remembered across sessions (localStorage — a UI
   // preference, NOT user data, so it may live outside the encrypted workspace).
   const [listCollapsed, setListCollapsed] = useState<boolean>(() => {
@@ -224,6 +254,13 @@ export function ChatScreen({
     })()
     void (async () => {
       try {
+        setCollections((await window.api.listCollections?.()) ?? [])
+      } catch {
+        setCollections([])
+      }
+    })()
+    void (async () => {
+      try {
         const status = await window.api.getAppStatus()
         setDictationAvailable(status?.dictationAvailable === true)
       } catch {
@@ -254,6 +291,30 @@ export function ChatScreen({
       .then(setMessages)
       .catch((e) => setError(friendlyIpcError(e)))
   }, [activeId])
+
+  // Load the conversation's chat attachments (plan C3) when it changes. Best-effort: a
+  // failed load (or an older preload without the channel) just hides the affordance.
+  const refreshAttachments = useCallback(async (convId: string | null): Promise<void> => {
+    if (!convId || !window.api.listAttachments) {
+      setAttachments([])
+      return
+    }
+    try {
+      setAttachments((await window.api.listAttachments(convId)) ?? [])
+    } catch {
+      setAttachments([])
+    }
+  }, [])
+  useEffect(() => {
+    void refreshAttachments(activeId)
+  }, [activeId, refreshAttachments])
+
+  // Stop the attachment-import poll on unmount.
+  useEffect(() => {
+    return () => {
+      if (attachPollRef.current) clearInterval(attachPollRef.current)
+    }
+  }, [])
 
   // Recover an in-flight generation after a remount: if the visible conversation is still
   // streaming in the main process (the user navigated away mid-reply and came back), show
@@ -334,11 +395,16 @@ export function ChatScreen({
     else setListCollapsedPersistent(false)
   }
 
-  // Create a conversation in the current mode. A documents conversation takes the
-  // pending "ask selected documents" scope (which it then owns — the handoff clears).
+  // Create a conversation in the current mode. A documents conversation takes the pending
+  // composite scope (which it then owns — the handoff clears). When the pending scope is a
+  // single project, that project also becomes the creation anchor (plan §13.3/§13.4).
   async function createConversationInMode(): Promise<Conversation> {
     const scope = mode === 'documents' ? pendingScope : undefined
-    const conv = await window.api.createConversation({ mode, scopeDocumentIds: scope })
+    const collectionId =
+      scope && scope.collectionIds.length === 1 && scope.documentIds.length === 0
+        ? scope.collectionIds[0]
+        : undefined
+    const conv = await window.api.createConversation({ mode, scope, collectionId })
     if (scope) setPendingScope(null)
     return conv
   }
@@ -543,26 +609,146 @@ export function ChatScreen({
   const canTryAgain = !busyStreaming && mode === 'chat' && messages.some((m) => m.role === 'assistant')
   const indexedDocCount = docs.filter((d) => d.status === 'indexed').length
 
-  /** The active retrieval scope: the conversation's own, or the pending handoff. */
-  const scopeIds: string[] | null =
-    mode === 'documents'
-      ? activeId
-        ? (conversations.find((c) => c.id === activeId)?.scopeDocumentIds ?? null)
-        : pendingScope
-      : null
+  const activeConv = activeId ? conversations.find((c) => c.id === activeId) : undefined
 
-  // Scope changes from the popover. An existing conversation persists the change; with
-  // no conversation yet, only the pending handoff updates. Null = the whole corpus.
-  async function onChangeScope(next: string[] | null): Promise<void> {
+  // The composite source scope shown in the picker (plan §13.2/D1). From the active
+  // conversation's stored scope, falling back to its legacy fields, else the Library
+  // default; a dangling/archived anchor falls back to Library with a quiet notice (§13.4).
+  const library = collections.find((c) => c.type === 'library') ?? null
+  const danglingProject =
+    activeConv?.scope == null &&
+    activeConv?.collectionId != null &&
+    !(activeConv.scopeDocumentIds && activeConv.scopeDocumentIds.length > 0) &&
+    !collections.some((c) => c.id === activeConv.collectionId && c.archivedAt == null)
+  const pickerScope: DocumentScope =
+    mode !== 'documents'
+      ? { collectionIds: [], documentIds: [] }
+      : deriveScope(activeConv, pendingScope, library, danglingProject)
+
+  // Scope changes from the picker. An existing conversation persists the change; with no
+  // conversation yet, the pending handoff updates. An empty scope = the whole corpus.
+  async function onChangeScope(next: DocumentScope): Promise<void> {
     if (activeId) {
       try {
-        await window.api.updateConversationScope(activeId, next)
+        await window.api.setConversationScope(activeId, next)
         await refreshConversations()
       } catch (e) {
         setError(friendlyIpcError(e))
       }
     } else {
       setPendingScope(next)
+    }
+  }
+
+  // ---- Chat attach / drag-drop intake (plan §11.2 H1 / §13.5 H2) ---------------------
+  // Net-new ingestion entry point: dropped/picked files become Temporary docs linked to
+  // this conversation (`conversation_documents`), answerable here by default — never added
+  // to Library unless the user later Keeps them.
+
+  // Poll the import job; when a file indexes its link row is written (main-side, FK-guarded),
+  // so a refreshed `listAttachments` reveals it as a live "Files in this chat" entry. A
+  // failed file surfaces the friendly per-file error and writes no link (N4).
+  function watchAttachJob(jobId: string, convId: string, documentIds: string[], fileNames: string[]): void {
+    if (attachPollRef.current) clearInterval(attachPollRef.current)
+    attachPollRef.current = setInterval(async () => {
+      try {
+        const job = await window.api.getImportJob(jobId)
+        if (activeIdRef.current === convId) await refreshAttachments(convId)
+        if (!job.done) return
+        if (attachPollRef.current) clearInterval(attachPollRef.current)
+        attachPollRef.current = null
+        setPendingImport(null)
+        const fresh = (await window.api.listDocuments().catch(() => [])) ?? []
+        setDocs(fresh)
+        if (activeIdRef.current === convId) await refreshAttachments(convId)
+        // Per-file failure: show the friendly error (canonical English → display map).
+        if (job.failed > 0) {
+          const failed = fresh.find((d) => documentIds.includes(d.id) && d.status === 'failed')
+          if (failed) {
+            setError(
+              failed.errorMessage
+                ? localizeServerCopy(t, failed.errorMessage)
+                : t('chat.attach.failed', { name: failed.title })
+            )
+          }
+        } else {
+          // UX-3: audibly confirm the attachment for the keyboard/picker path.
+          setAttachStatus(t('chat.attach.added', { name: fileNames.join(', ') }))
+        }
+      } catch {
+        if (attachPollRef.current) clearInterval(attachPollRef.current)
+        attachPollRef.current = null
+        setPendingImport(null)
+      }
+    }, 400)
+  }
+
+  // Attach files to a chat. Routing (§13.5): a documents chat takes them directly; an
+  // in-progress PLAIN chat is never mutated — a new documents conversation is created and
+  // committed BEFORE the import references its id (N3 ordering), then focused with a toast;
+  // an empty chat switches in place to a documents conversation (nothing to lose).
+  async function attachFiles(paths: string[]): Promise<void> {
+    if (paths.length === 0 || busyStreaming) return
+    setError(null)
+    const fileNames = paths.map(fileBaseName)
+    const active = activeId ? conversations.find((c) => c.id === activeId) : undefined
+    try {
+      let convId: string
+      if (active && active.mode === 'documents') {
+        convId = active.id
+      } else if (active && active.mode === 'chat' && messages.length > 0) {
+        const conv = await window.api.createConversation({ mode: 'documents' })
+        convId = conv.id
+        setMode('documents')
+        setActiveId(conv.id)
+        setMessages([])
+        await refreshConversations()
+        showToast(t('chat.attach.newDocChat', { name: fileNames[0] }))
+      } else {
+        // Empty (no conversation, or an empty plain chat): switch in place to documents.
+        const conv = await window.api.createConversation({ mode: 'documents' })
+        convId = conv.id
+        setMode('documents')
+        setActiveId(conv.id)
+        setMessages([])
+        await refreshConversations()
+      }
+      const job = await window.api.importDocuments(paths, {
+        destination: { kind: 'conversation', conversationId: convId }
+      })
+      setPendingImport({ jobId: job.jobId, convId, documentIds: job.documentIds, fileNames })
+      setAttachStatus(t('chat.attach.processing', { name: fileNames.join(', ') }))
+      watchAttachJob(job.jobId, convId, job.documentIds, fileNames)
+    } catch (e) {
+      setError(friendlyIpcError(e))
+    }
+  }
+
+  // Keyboard-reachable picker fallback for the drag/drop target.
+  async function onPickAttach(): Promise<void> {
+    if (busyStreaming) return
+    try {
+      const paths = await window.api.pickDocuments('files')
+      if (paths.length > 0) await attachFiles(paths)
+    } catch (e) {
+      setError(friendlyIpcError(e))
+    }
+  }
+
+  function onDrop(e: DragEvent): void {
+    e.preventDefault()
+    setDragOver(false)
+    if (busyStreaming) return
+    const paths = pathsFromDrop(e)
+    if (paths.length > 0) void attachFiles(paths)
+  }
+
+  function onDragOver(e: DragEvent): void {
+    // preventDefault marks this a valid drop target; the copy cursor reads "add", not "move".
+    if (e.dataTransfer?.types?.includes('Files')) {
+      e.preventDefault()
+      e.dataTransfer.dropEffect = 'copy'
+      if (!busyStreaming) setDragOver(true)
     }
   }
 
@@ -641,6 +827,7 @@ export function ChatScreen({
           activeId={activeId}
           streaming={busyStreaming}
           mode={mode}
+          collections={collections}
           onSelect={onSelectConversation}
           onNew={() => void onNewChat()}
           onDelete={(c) => void onDeleteConversation(c)}
@@ -648,7 +835,22 @@ export function ChatScreen({
         />
       )}
 
-      <section className="chat-main">
+      <section
+        className="chat-main"
+        onDragOver={onDragOver}
+        onDragLeave={() => setDragOver(false)}
+        onDrop={onDrop}
+      >
+        {dragOver && (
+          <div className="chat-drop-overlay" aria-hidden="true">
+            {t('chat.attach.drop')}
+          </div>
+        )}
+        {/* UX-3: visually-hidden polite live region for attach processing/added (the visible
+            pending chip lives in a closed popover, inaudible to keyboard/SR users). */}
+        <div className="sr-only" role="status" aria-live="polite">
+          {attachStatus}
+        </div>
         <div className="chat-header">
           {effectiveCollapsed && (
             <Button
@@ -753,15 +955,26 @@ export function ChatScreen({
           inputRef={composerRef}
           dictationAvailable={dictationAvailable}
           onDictationError={setError}
+          onAttach={() => void onPickAttach()}
           footer={
             mode === 'documents' ? (
-              <ScopePopover
-                docs={docs}
-                scopeIds={scopeIds}
-                disabled={busyStreaming}
-                onChangeScope={(next) => void onChangeScope(next)}
-                onAddDocuments={() => onNavigate('documents')}
-              />
+              <span className="scope-footer-wrap">
+                {danglingProject && (
+                  <span className="scope-dangling hint">{t('chat.scope.archivedFallback')}</span>
+                )}
+                <ScopePopover
+                  docs={docs}
+                  collections={collections}
+                  scope={pickerScope}
+                  disabled={busyStreaming}
+                  onChangeScope={(next) => void onChangeScope(next)}
+                  onAddDocuments={() => onNavigate('documents')}
+                  attachments={attachments}
+                  pendingAttachmentNames={
+                    pendingImport && pendingImport.convId === activeId ? pendingImport.fileNames : []
+                  }
+                />
+              </span>
             ) : (
               <DepthMenu
                 value={currentDepth}
@@ -775,6 +988,53 @@ export function ChatScreen({
       </section>
     </div>
   )
+}
+
+/**
+ * The composite scope to show in the picker for a documents conversation (plan §13.2/§13.4).
+ * Precedence: the stored composite `scope` ⇒ legacy `scopeDocumentIds` ⇒ a non-archived
+ * `collectionId` anchor ⇒ the Library default. A dangling/archived anchor falls back to
+ * Library (the quiet notice is rendered separately).
+ */
+function deriveScope(
+  conv: Conversation | undefined,
+  pending: DocumentScope | null,
+  library: Collection | null,
+  dangling: boolean
+): DocumentScope {
+  const libraryDefault: DocumentScope = {
+    collectionIds: library ? [library.id] : [],
+    documentIds: []
+  }
+  if (!conv) return pending ?? libraryDefault
+  if (conv.scope) return conv.scope
+  if (conv.scopeDocumentIds && conv.scopeDocumentIds.length > 0) {
+    return { collectionIds: [], documentIds: conv.scopeDocumentIds }
+  }
+  if (conv.collectionId && !dangling) return { collectionIds: [conv.collectionId], documentIds: [] }
+  return libraryDefault
+}
+
+/** Basename of an absolute path for a friendly chip label (cross-platform separators). */
+function fileBaseName(path: string): string {
+  const parts = path.split(/[/\\]/)
+  return parts[parts.length - 1] || path
+}
+
+/**
+ * Absolute paths of dropped files. Electron exposes `File.path` on a native drag/drop; the
+ * main process re-validates every path (existence + supported extension) downstream, so a
+ * spoofed entry simply fails to import. Files without a path (a browser drag) are skipped.
+ */
+function pathsFromDrop(e: DragEvent): string[] {
+  const files = e.dataTransfer?.files
+  if (!files) return []
+  const out: string[] = []
+  for (let i = 0; i < files.length; i++) {
+    const p = (files[i] as unknown as { path?: string }).path
+    if (typeof p === 'string' && p.length > 0) out.push(p)
+  }
+  return out
 }
 
 function optimisticUser(conversationId: string, content: string): Message {

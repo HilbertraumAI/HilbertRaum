@@ -3,7 +3,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, cleanup, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { DocumentsScreen } from '../../src/renderer/screens/DocumentsScreen'
-import type { DocumentInfo } from '../../src/shared/types'
+import type { Collection, DocumentInfo, FilingSuggestionResult } from '../../src/shared/types'
 import { stubApi } from '../helpers/renderer'
 
 // Renderer test (jsdom + RTL) for the Documents screen: list rendering + status, the
@@ -26,7 +26,321 @@ function doc(over: Partial<DocumentInfo>): DocumentInfo {
   }
 }
 
+function coll(over: Partial<Collection>): Collection {
+  return {
+    id: 'c1',
+    name: 'Project',
+    type: 'project',
+    description: null,
+    builtin: false,
+    color: null,
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-01T00:00:00Z',
+    archivedAt: null,
+    ...over
+  }
+}
+
 afterEach(cleanup)
+
+// ---- Document organization: section rail + chips + project management (plan §12) ----
+describe('DocumentsScreen — organization', () => {
+  it('renders the section rail and filters the list by the selected project', async () => {
+    const user = userEvent.setup()
+    const library = coll({ id: 'lib', name: 'Library', type: 'library', builtin: true })
+    const tax = coll({ id: 'tax', name: 'Tax 2025' })
+    stubApi({
+      listCollections: vi.fn(async () => [library, tax]),
+      listDocuments: vi.fn(async () => [
+        doc({ id: 'd1', title: 'policy.pdf', collections: [{ id: 'lib', name: 'Library', type: 'library', role: 'source' }] }),
+        doc({ id: 'd2', title: 'return.pdf', collections: [{ id: 'tax', name: 'Tax 2025', type: 'project', role: 'source' }] })
+      ])
+    })
+    render(<DocumentsScreen />)
+    // Rail sections are present.
+    expect(await screen.findByRole('button', { name: 'Library' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Tax 2025' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Generated' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Archived' })).toBeInTheDocument()
+    // Both docs show under "All documents" (default section).
+    expect(screen.getByText('policy.pdf')).toBeInTheDocument()
+    expect(screen.getByText('return.pdf')).toBeInTheDocument()
+    // Selecting the project filters to its member.
+    await user.click(screen.getByRole('button', { name: 'Tax 2025' }))
+    expect(screen.getByText('return.pdf')).toBeInTheDocument()
+    expect(screen.queryByText('policy.pdf')).not.toBeInTheDocument()
+  })
+
+  it('creates a project from the rail "+" and selects it', async () => {
+    const user = userEvent.setup()
+    const library = coll({ id: 'lib', name: 'Library', type: 'library', builtin: true })
+    const created = coll({ id: 'new', name: 'Lawsuit' })
+    const createCollection = vi.fn(async () => created)
+    const listCollections = vi
+      .fn<() => Promise<Collection[]>>()
+      .mockResolvedValueOnce([library])
+      .mockResolvedValue([library, created])
+    stubApi({ listCollections, listDocuments: vi.fn(async () => [doc({})]), createCollection })
+    render(<DocumentsScreen />)
+    await user.click(await screen.findByRole('button', { name: 'New project' }))
+    await user.type(await screen.findByLabelText('Project name'), 'Lawsuit')
+    await user.click(screen.getByRole('button', { name: 'Create' }))
+    await waitFor(() => expect(createCollection).toHaveBeenCalledWith('Lawsuit'))
+  })
+
+  it('shows collection chips on a document row', async () => {
+    stubApi({
+      listCollections: vi.fn(async () => [coll({ id: 'lib', name: 'Library', type: 'library', builtin: true })]),
+      listDocuments: vi.fn(async () => [
+        doc({ collections: [{ id: 'lib', name: 'Library', type: 'library', role: 'source' }] })
+      ])
+    })
+    render(<DocumentsScreen />)
+    await screen.findByText('contract.pdf')
+    // The Library membership renders as a chip (localized by type).
+    expect(screen.getAllByText('Library').length).toBeGreaterThan(0)
+  })
+
+  // ---- Phase E: smart views + generated-staleness badge (plan §7.6/§12.1/§15.3) ------
+
+  it('renders the smart-view rail entries and filters by the selected view', async () => {
+    const user = userEvent.setup()
+    const library = coll({ id: 'lib', name: 'Library', type: 'library', builtin: true })
+    const tax = coll({ id: 'tax', name: 'Tax 2025' })
+    stubApi({
+      listCollections: vi.fn(async () => [library, tax]),
+      listDocuments: vi.fn(async () => [
+        doc({ id: 'd1', title: 'libonly.pdf', collections: [{ id: 'lib', name: 'Library', type: 'library', role: 'source' }] }),
+        doc({ id: 'd2', title: 'filed.pdf', collections: [{ id: 'tax', name: 'Tax 2025', type: 'project', role: 'source' }] }),
+        doc({ id: 'd3', title: 'broken.xyz', status: 'failed', errorMessage: 'Unsupported file type: .xyz', chunkCount: 0 })
+      ])
+    })
+    render(<DocumentsScreen />)
+
+    // Failed imports → only the failed doc.
+    await user.click(await screen.findByRole('button', { name: 'Failed imports' }))
+    expect(screen.getByText('broken.xyz')).toBeInTheDocument()
+    expect(screen.queryByText('libonly.pdf')).not.toBeInTheDocument()
+    expect(screen.queryByText('filed.pdf')).not.toBeInTheDocument()
+
+    // Unfiled → the Library-only doc, never the project-filed one (Library isn't "filed").
+    await user.click(screen.getByRole('button', { name: 'Unfiled' }))
+    expect(screen.getByText('libonly.pdf')).toBeInTheDocument()
+    expect(screen.queryByText('filed.pdf')).not.toBeInTheDocument()
+  })
+
+  it('shows a quiet staleness badge on a generated row whose source changed, but not a fresh one', async () => {
+    const user = userEvent.setup()
+    stubApi({
+      listCollections: vi.fn(async () => []),
+      listDocuments: vi.fn(async () => [
+        // Source re-indexed (updatedAt) AFTER the translation was made → stale.
+        doc({ id: 's1', title: 'report.pdf', updatedAt: '2026-05-01T00:00:00Z' }),
+        doc({
+          id: 'staleGen',
+          title: 'report.de.md',
+          origin: { kind: 'translation', sourceDocumentIds: ['s1'], createdAt: '2026-01-01T00:00:00Z' }
+        }),
+        // Source untouched since the output was made → fresh.
+        doc({ id: 's2', title: 'memo.pdf', updatedAt: '2026-01-01T00:00:00Z' }),
+        doc({
+          id: 'freshGen',
+          title: 'memo.de.md',
+          origin: { kind: 'translation', sourceDocumentIds: ['s2'], createdAt: '2026-02-01T00:00:00Z' }
+        })
+      ])
+    })
+    render(<DocumentsScreen />)
+
+    // In the Generated view both generated docs show; exactly one is flagged stale.
+    await user.click(await screen.findByRole('button', { name: 'Generated' }))
+    expect(screen.getByText('report.de.md')).toBeInTheDocument()
+    expect(screen.getByText('memo.de.md')).toBeInTheDocument()
+    expect(screen.getAllByText('Outdated')).toHaveLength(1)
+    expect(screen.getByText(/re-run to update/i)).toBeInTheDocument()
+  })
+
+  // ---- Phase C: Temporary lifecycle actions (plan §14.1) ----------------------------
+  function tempStubs(extra: Record<string, unknown> = {}): {
+    addToCollection: ReturnType<typeof vi.fn>
+    setDocumentLifecycle: ReturnType<typeof vi.fn>
+    removeFromCollection: ReturnType<typeof vi.fn>
+  } {
+    const library = coll({ id: 'lib', name: 'Library', type: 'library', builtin: true })
+    const temp = coll({ id: 'temp', name: 'Temporary', type: 'temporary', builtin: true })
+    const tax = coll({ id: 'tax', name: 'Tax 2025' })
+    const addToCollection = vi.fn(async () => {})
+    const setDocumentLifecycle = vi.fn(async () => [])
+    const removeFromCollection = vi.fn(async () => {})
+    stubApi({
+      listCollections: vi.fn(async () => [library, temp, tax]),
+      listDocuments: vi.fn(async () => [
+        doc({
+          id: 'd1',
+          title: 'invoice.pdf',
+          lifecycle: 'temporary',
+          collections: [{ id: 'temp', name: 'Temporary', type: 'temporary', role: 'source' }]
+        })
+      ]),
+      addToCollection,
+      setDocumentLifecycle,
+      removeFromCollection,
+      ...extra
+    })
+    return { addToCollection, setDocumentLifecycle, removeFromCollection }
+  }
+
+  it('"Keep in Library" adds Library, sets permanent, and drops Temporary', async () => {
+    const user = userEvent.setup()
+    const { addToCollection, setDocumentLifecycle, removeFromCollection } = tempStubs()
+    render(<DocumentsScreen />)
+    await screen.findByText('invoice.pdf')
+    await user.click(screen.getByRole('button', { name: 'Add to project…' }))
+    await user.click(await screen.findByRole('menuitem', { name: 'Keep in Library' }))
+    await waitFor(() => expect(addToCollection).toHaveBeenCalledWith(['d1'], 'lib'))
+    expect(setDocumentLifecycle).toHaveBeenCalledWith(['d1'], 'permanent')
+    expect(removeFromCollection).toHaveBeenCalledWith(['d1'], 'temp')
+  })
+
+  it('"Move to project" on a Temporary doc adds the project, sets permanent, and drops Temporary', async () => {
+    const user = userEvent.setup()
+    const { addToCollection, setDocumentLifecycle, removeFromCollection } = tempStubs()
+    render(<DocumentsScreen />)
+    await screen.findByText('invoice.pdf')
+    await user.click(screen.getByRole('button', { name: 'Add to project…' }))
+    await user.click(await screen.findByRole('menuitem', { name: 'Move to project…' }))
+    await user.click(await screen.findByRole('button', { name: 'Tax 2025' }))
+    await waitFor(() => expect(addToCollection).toHaveBeenCalledWith(['d1'], 'tax'))
+    expect(setDocumentLifecycle).toHaveBeenCalledWith(['d1'], 'permanent')
+    expect(removeFromCollection).toHaveBeenCalledWith(['d1'], 'temp')
+  })
+
+  // ---- Phase F: filing suggestions (rule-based, non-silent — plan §20) ----------------
+  function existingSuggestion(documentId = 'd1', collectionId = 'tax'): FilingSuggestionResult {
+    return {
+      documentId,
+      suggestions: [
+        {
+          ruleId: 'folder-name-match',
+          target: { kind: 'existingProject', collectionId },
+          reasonKey: 'docs.suggest.reason.folder',
+          reasonParams: { folder: 'Tax 2025' }
+        }
+      ]
+    }
+  }
+
+  it('shows a quiet suggestion chip on an unfiled doc; Apply files it and the chip clears', async () => {
+    const user = userEvent.setup()
+    const library = coll({ id: 'lib', name: 'Library', type: 'library', builtin: true })
+    const tax = coll({ id: 'tax', name: 'Tax 2025' })
+    const unfiled = doc({
+      id: 'd1',
+      title: 'return.pdf',
+      sourceFolderLabel: 'Tax 2025',
+      collections: [{ id: 'lib', name: 'Library', type: 'library', role: 'source' }]
+    })
+    const filed = {
+      ...unfiled,
+      collections: [...(unfiled.collections ?? []), { id: 'tax', name: 'Tax 2025', type: 'project' as const, role: 'source' as const }]
+    }
+    const listDocuments = vi
+      .fn<() => Promise<DocumentInfo[]>>()
+      .mockResolvedValueOnce([unfiled])
+      .mockResolvedValue([filed])
+    const filingSuggestions = vi
+      .fn<() => Promise<FilingSuggestionResult[]>>()
+      .mockResolvedValueOnce([existingSuggestion()])
+      .mockResolvedValue([])
+    const addToCollection = vi.fn(async () => {})
+    stubApi({ listCollections: vi.fn(async () => [library, tax]), listDocuments, filingSuggestions, addToCollection })
+    render(<DocumentsScreen />)
+
+    expect(await screen.findByText('Suggested project: Tax 2025')).toBeInTheDocument()
+    // The reason is a localized keyed template, not free text.
+    expect(screen.getByText(/came from a folder named/i)).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Apply' }))
+    await waitFor(() => expect(addToCollection).toHaveBeenCalledWith(['d1'], 'tax'))
+    await waitFor(() =>
+      expect(screen.queryByText('Suggested project: Tax 2025')).not.toBeInTheDocument()
+    )
+  })
+
+  it('Apply on a "new project" suggestion creates the project then files the doc', async () => {
+    const user = userEvent.setup()
+    const created = coll({ id: 'inv', name: 'Invoices' })
+    const createCollection = vi.fn(async () => created)
+    const addToCollection = vi.fn(async () => {})
+    stubApi({
+      listCollections: vi.fn(async () => []),
+      listDocuments: vi.fn(async () => [doc({ id: 'd1', title: 'invoice.pdf' })]),
+      filingSuggestions: vi.fn(async () => [
+        {
+          documentId: 'd1',
+          suggestions: [
+            {
+              ruleId: 'filename-pattern',
+              target: { kind: 'newProject', suggestedName: 'Invoices' },
+              reasonKey: 'docs.suggest.reason.filename'
+            }
+          ]
+        } satisfies FilingSuggestionResult
+      ]),
+      createCollection,
+      addToCollection
+    })
+    render(<DocumentsScreen />)
+
+    expect(await screen.findByText('Suggested new project: Invoices')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Apply' }))
+    await waitFor(() => expect(createCollection).toHaveBeenCalledWith('Invoices'))
+    await waitFor(() => expect(addToCollection).toHaveBeenCalledWith(['d1'], 'inv'))
+  })
+
+  it('Dismiss hides the chip, persists it to settings, and it stays hidden after a refresh', async () => {
+    const user = userEvent.setup()
+    let dismissed: string[] = []
+    const getSettings = vi.fn(async () => ({ dismissedFilingSuggestions: dismissed }) as never)
+    const updateSettings = vi.fn(async (patch: { dismissedFilingSuggestions?: string[] }) => {
+      dismissed = patch.dismissedFilingSuggestions ?? dismissed
+      return {} as never
+    })
+    stubApi({
+      listCollections: vi.fn(async () => [coll({ id: 'tax', name: 'Tax 2025' })]),
+      listDocuments: vi.fn(async () => [doc({ id: 'd1', title: 'return.pdf', sourceFolderLabel: 'Tax 2025' })]),
+      // The suggestion is ALWAYS returned — only the persisted dismissal hides the chip.
+      filingSuggestions: vi.fn(async () => [existingSuggestion()]),
+      getSettings,
+      updateSettings
+    })
+    render(<DocumentsScreen />)
+
+    await user.click(await screen.findByRole('button', { name: 'Dismiss' }))
+    await waitFor(() =>
+      expect(updateSettings).toHaveBeenCalledWith({ dismissedFilingSuggestions: ['d1'] })
+    )
+    await waitFor(() =>
+      expect(screen.queryByText('Suggested project: Tax 2025')).not.toBeInTheDocument()
+    )
+
+    // A refresh re-reads settings; the dismissal persisted, so the chip stays hidden.
+    await user.click(screen.getByRole('button', { name: 'Refresh' }))
+    await waitFor(() => expect(getSettings).toHaveBeenCalled())
+    expect(screen.queryByText('Suggested project: Tax 2025')).not.toBeInTheDocument()
+  })
+
+  it('a document with no suggestion shows no chip', async () => {
+    stubApi({
+      listCollections: vi.fn(async () => []),
+      listDocuments: vi.fn(async () => [doc({ id: 'd1', title: 'random.pdf' })]),
+      filingSuggestions: vi.fn(async () => [])
+    })
+    render(<DocumentsScreen />)
+    await screen.findByText('random.pdf')
+    expect(screen.queryByRole('button', { name: 'Apply' })).not.toBeInTheDocument()
+  })
+})
 
 describe('DocumentsScreen', () => {
   it('lists documents with their status and chunk count', async () => {

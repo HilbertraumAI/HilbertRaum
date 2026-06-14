@@ -6,6 +6,7 @@ import {
   type ChatOptions,
   type Conversation,
   type ConversationSearchResult,
+  type DocumentScope,
   type Message
 } from '../../shared/types'
 import {
@@ -19,8 +20,13 @@ import {
   listMessages,
   maybeSetTitleFromFirstMessage,
   searchMessages,
+  setConversationCollection,
+  setScope,
   updateConversationScope
 } from '../services/chat'
+import { conversationAttachmentIds } from '../services/collections'
+import { listDocuments } from '../services/ingestion'
+import type { DocumentInfo } from '../../shared/types'
 import { tMain } from '../services/i18n'
 import { log } from '../services/logging'
 import { inFlightStreams, streamBuffers } from './inflight'
@@ -52,21 +58,54 @@ export function registerChatIpc(ctx: AppContext): void {
     IPC.createConversation,
     (
       _e,
-      opts?: { title?: string; mode?: 'chat' | 'documents'; scopeDocumentIds?: string[] | null }
+      opts?: {
+        title?: string
+        mode?: 'chat' | 'documents'
+        scopeDocumentIds?: string[] | null
+        /** Creation-anchor project (plan §13.4). */
+        collectionId?: string | null
+        /** Initial composite source scope (plan D1). */
+        scope?: DocumentScope | null
+      }
     ): Conversation => {
       const conv = createConversation(ctx.db, {
         title: opts?.title,
         mode: opts?.mode,
         modelId: ctx.runtime.activeModelId(),
-        scopeDocumentIds: opts?.scopeDocumentIds
+        scopeDocumentIds: opts?.scopeDocumentIds,
+        collectionId: opts?.collectionId,
+        scope: opts?.scope
       })
       log.info('Conversation created', {
         id: conv.id,
         mode: conv.mode,
-        scopedDocuments: conv.scopeDocumentIds?.length ?? 0
+        scopedDocuments: conv.scopeDocumentIds?.length ?? 0,
+        anchored: conv.collectionId != null
       })
       return conv
     }
+  )
+
+  // Persist a conversation's composite source scope (plan D1 — the multi-select picker).
+  // Null clears it; an empty DocumentScope is the explicit "All documents" choice.
+  ipcMain.handle(
+    IPC.setConversationScope,
+    (_e, conversationId: string, scope: DocumentScope | null): Conversation => {
+      const conv = setScope(ctx.db, conversationId, scope ?? null)
+      log.info('Conversation scope set', {
+        conversationId,
+        collections: scope?.collectionIds?.length ?? 0,
+        documents: scope?.documentIds?.length ?? 0
+      })
+      return conv
+    }
+  )
+
+  // Persist a conversation's creation-anchor project (plan §13.4).
+  ipcMain.handle(
+    IPC.setConversationCollection,
+    (_e, conversationId: string, collectionId: string | null): Conversation =>
+      setConversationCollection(ctx.db, conversationId, collectionId ?? null)
   )
 
   // Replace the "ask selected documents" scope (spec §10.4) — chip removal
@@ -84,6 +123,17 @@ export function registerChatIpc(ctx: AppContext): void {
   )
 
   ipcMain.handle(IPC.listConversations, (): Conversation[] => listConversations(ctx.db))
+
+  // A conversation's temporary chat attachments (plan C3/§16 — `conversation_documents`):
+  // the docs dropped/attached into THIS chat, for the composer's read-only "Files in this
+  // chat" affordance. The link — not Temporary membership — is authoritative, so a doc the
+  // user later Keeps in Library still shows here. Only indexed+linked docs appear; a
+  // still-processing attachment is surfaced by the renderer's pending chip (import polling).
+  ipcMain.handle(IPC.listAttachments, (_e, conversationId: string): DocumentInfo[] => {
+    const ids = new Set(conversationAttachmentIds(ctx.db, conversationId))
+    if (ids.size === 0) return []
+    return listDocuments(ctx.db, ctx.embedder.id).filter((d) => ids.has(d.id))
+  })
 
   // Full-text search across conversations. The query and the returned snippets are
   // chat CONTENT: this handler must never log them and never writes an audit event

@@ -239,7 +239,9 @@ describe('ChatScreen — chat during a document task (D26 friendly copy)', () =>
         updatedAt: '2026-06-11T00:00:00Z',
         modelId: null,
         mode: 'chat' as const,
-        scopeDocumentIds: null
+        scopeDocumentIds: null,
+        collectionId: null,
+        scope: null
       })),
       sendChatMessage: vi.fn(async () => {
         throw new Error(DOC_TASK_BUSY_MESSAGE)

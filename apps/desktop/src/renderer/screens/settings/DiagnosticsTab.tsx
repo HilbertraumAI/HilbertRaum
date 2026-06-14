@@ -49,7 +49,14 @@ const AUDIT_TYPE_LABELS: Record<AuditEventType, MessageKey> = {
   workspace_password_changed: 'diag.audit.workspace_password_changed',
   settings_changed: 'diag.audit.settings_changed',
   policy_warning: 'diag.audit.policy_warning',
-  offline_guard_violation: 'diag.audit.offline_guard_violation'
+  offline_guard_violation: 'diag.audit.offline_guard_violation',
+  collection_created: 'diag.audit.collection_created',
+  collection_renamed: 'diag.audit.collection_renamed',
+  collection_archived: 'diag.audit.collection_archived',
+  collection_deleted: 'diag.audit.collection_deleted',
+  documents_added_to_collection: 'diag.audit.documents_added_to_collection',
+  documents_removed_from_collection: 'diag.audit.documents_removed_from_collection',
+  document_lifecycle_changed: 'diag.audit.document_lifecycle_changed'
 }
 
 function auditLabel(type: AuditEventType, t: I18n['t']): string {

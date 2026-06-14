@@ -22,6 +22,8 @@ import { inFlightStreams } from '../../src/main/ipc/inflight'
 import { IPC, STREAM } from '../../src/shared/ipc'
 import { openDatabase, type Db } from '../../src/main/services/db'
 import { createConversation, listConversations, listMessages, appendMessage } from '../../src/main/services/chat'
+import { linkConversationDocument } from '../../src/main/services/collections'
+import { createMockEmbedder } from '../../src/main/services/embeddings/mock'
 import type { ModelRuntime, RuntimeChatOptions, ChatMessage } from '../../src/main/services/runtime'
 import type { AppContext } from '../../src/main/services/context'
 import { invoke, invokeWithEvent, makeEvent, type IpcHandlers } from '../helpers/ipc'
@@ -103,6 +105,32 @@ describe('registerChatIpc', () => {
     // The user turn + the assistant reply are persisted; nothing left in the in-flight map.
     expect(listMessages(db, conv.id).map((m) => m.role)).toEqual(['user', 'assistant'])
     expect(inFlightStreams.has(conv.id)).toBe(false)
+  })
+
+  // ---- Phase C: chat attachments (plan C3/§16) -------------------------------------
+  it('listAttachments returns a conversation\'s linked temporary docs (and [] for none)', async () => {
+    const db = freshDb()
+    const conv = createConversation(db, { mode: 'documents' })
+    // A bare indexed document row, linked to the conversation as a temporary attachment.
+    const now = new Date().toISOString()
+    db.prepare(
+      `INSERT INTO documents (id, title, status, created_at, updated_at) VALUES (?, ?, 'indexed', ?, ?)`
+    ).run('att-1', 'invoice.pdf', now, now)
+    linkConversationDocument(db, conv.id, 'att-1')
+
+    const ctx = {
+      db,
+      embedder: createMockEmbedder(),
+      runtime: { active: () => null, activeModelId: () => null }
+    } as unknown as AppContext
+    registerChatIpc(ctx)
+
+    const { result } = await invoke(handlers, IPC.listAttachments, conv.id)
+    expect((result as Array<{ id: string; title: string }>).map((d) => d.id)).toEqual(['att-1'])
+    // A conversation with no attachments resolves to an empty list.
+    const other = createConversation(db, { mode: 'documents' })
+    const { result: none } = await invoke(handlers, IPC.listAttachments, other.id)
+    expect(none).toEqual([])
   })
 
   it('rejects a second concurrent stream on the same conversation without clobbering the first (H3)', async () => {

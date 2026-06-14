@@ -7,17 +7,22 @@ import type {
   AuditEvent,
   BenchmarkResult,
   ChatOptions,
+  Collection,
   Conversation,
   ConversationSearchResult,
   DocTaskStatus,
   DocumentInfo,
+  DocumentLifecycle,
   DocumentPreview,
+  DocumentScope,
+  FilingSuggestionResult,
   DownloadJob,
   DriveStatus,
   EngineDownloadJob,
   EngineStatus,
   ImportJob,
   ImportJobStatus,
+  ImportOptions,
   ImportPreflight,
   Message,
   ModelInfo,
@@ -124,6 +129,10 @@ const api = {
     mode?: 'chat' | 'documents'
     /** "Ask selected documents" scope; only meaningful for documents mode. */
     scopeDocumentIds?: string[] | null
+    /** Creation-anchor project (plan §13.4). */
+    collectionId?: string | null
+    /** Initial composite source scope (plan D1). */
+    scope?: DocumentScope | null
   }): Promise<Conversation> => ipcRenderer.invoke(IPC.createConversation, opts),
   /** Replace a conversation's "ask selected documents" scope; null = whole corpus. */
   updateConversationScope: (
@@ -131,6 +140,22 @@ const api = {
     documentIds: string[] | null
   ): Promise<Conversation> =>
     ipcRenderer.invoke(IPC.updateConversationScope, conversationId, documentIds),
+  /** Persist a conversation's composite source scope (plan D1); null clears it. */
+  setConversationScope: (
+    conversationId: string,
+    scope: DocumentScope | null
+  ): Promise<Conversation> =>
+    ipcRenderer.invoke(IPC.setConversationScope, conversationId, scope),
+  /** Persist a conversation's creation-anchor project (plan §13.4); null clears it. */
+  setConversationCollection: (
+    conversationId: string,
+    collectionId: string | null
+  ): Promise<Conversation> =>
+    ipcRenderer.invoke(IPC.setConversationCollection, conversationId, collectionId),
+  /** The conversation's temporary chat attachments (plan C3 — for the "Files in this chat"
+   *  footer affordance). Only indexed+linked docs; a still-processing one shows as pending. */
+  listAttachments: (conversationId: string): Promise<DocumentInfo[]> =>
+    ipcRenderer.invoke(IPC.listAttachments, conversationId),
   listConversations: (): Promise<Conversation[]> => ipcRenderer.invoke(IPC.listConversations),
   listMessages: (conversationId: string): Promise<Message[]> =>
     ipcRenderer.invoke(IPC.listMessages, conversationId),
@@ -183,14 +208,37 @@ const api = {
   /** Open the OS picker for files (default) or a folder; returns selected paths. */
   pickDocuments: (mode?: 'files' | 'folder'): Promise<string[]> =>
     ipcRenderer.invoke(IPC.pickDocuments, mode),
-  importDocuments: (paths: string[]): Promise<ImportJob> =>
-    ipcRenderer.invoke(IPC.importDocuments, paths),
+  /** Import files. `options.destination` routes them (Library / a project / Temporary / a
+   *  chat attachment, plan §11.3); omitted ⇒ Library, byte-for-byte with old callers. */
+  importDocuments: (paths: string[], options?: ImportOptions): Promise<ImportJob> =>
+    ipcRenderer.invoke(IPC.importDocuments, paths, options),
   /** What a picked selection contains — drives the audio size confirm. */
   importPreflight: (paths: string[]): Promise<ImportPreflight> =>
     ipcRenderer.invoke(IPC.importPreflight, paths),
   getImportJob: (jobId: string): Promise<ImportJobStatus> =>
     ipcRenderer.invoke(IPC.getImportJob, jobId),
-  listDocuments: (): Promise<DocumentInfo[]> => ipcRenderer.invoke(IPC.listDocuments),
+  /** List documents, optionally filtered to a collection / lifecycle / smart view (plan §16). */
+  listDocuments: (filter?: {
+    collectionId?: string
+    lifecycle?: DocumentLifecycle
+    smart?: 'generated' | 'archived' | 'all'
+  }): Promise<DocumentInfo[]> => ipcRenderer.invoke(IPC.listDocuments, filter),
+  /** Add documents to a collection (membership; idempotent). "Move" = add then remove. */
+  addToCollection: (documentIds: string[], collectionId: string): Promise<void> =>
+    ipcRenderer.invoke(IPC.addToCollection, documentIds, collectionId),
+  /** Remove documents from a collection (membership only; the documents are untouched). */
+  removeFromCollection: (documentIds: string[], collectionId: string): Promise<void> =>
+    ipcRenderer.invoke(IPC.removeFromCollection, documentIds, collectionId),
+  /** Set documents' retention lifecycle; resolves with the updated documents. */
+  setDocumentLifecycle: (
+    documentIds: string[],
+    lifecycle: DocumentLifecycle
+  ): Promise<DocumentInfo[]> =>
+    ipcRenderer.invoke(IPC.setDocumentLifecycle, documentIds, lifecycle),
+  /** Read-only rule-based filing suggestions for unfiled documents (plan §20 Phase F). Never
+   *  files anything — Apply reuses addToCollection / createCollection. */
+  filingSuggestions: (): Promise<FilingSuggestionResult[]> =>
+    ipcRenderer.invoke(IPC.filingSuggestions),
   deleteDocument: (documentId: string): Promise<void> =>
     ipcRenderer.invoke(IPC.deleteDocument, documentId),
   reindexDocument: (documentId: string): Promise<DocumentInfo> =>
@@ -215,6 +263,24 @@ const api = {
   /** Cancel a task; with no jobId, cancels the currently active one. */
   cancelDocTask: (jobId?: string): Promise<void> =>
     ipcRenderer.invoke(IPC.cancelDocTask, jobId),
+
+  // ---- Document organization — collections (projects + built-ins, plan §16) ----
+  /** All collections (built-ins first, then projects by name). */
+  listCollections: (): Promise<Collection[]> => ipcRenderer.invoke(IPC.listCollections),
+  /** Create a project. */
+  createCollection: (
+    name: string,
+    opts?: { description?: string | null; color?: string | null }
+  ): Promise<Collection> => ipcRenderer.invoke(IPC.createCollection, name, opts),
+  /** Rename a collection. */
+  renameCollection: (id: string, name: string): Promise<Collection> =>
+    ipcRenderer.invoke(IPC.renameCollection, id, name),
+  /** Archive / unarchive a project (a scope-target change, not a global exclusion — C1). */
+  setCollectionArchived: (id: string, archived: boolean): Promise<Collection> =>
+    ipcRenderer.invoke(IPC.setCollectionArchived, id, archived),
+  /** Delete a project — 'membershipOnly' keeps docs; 'withDocuments' deletes project-only docs (C2). */
+  deleteCollection: (id: string, mode: 'membershipOnly' | 'withDocuments'): Promise<void> =>
+    ipcRenderer.invoke(IPC.deleteCollection, id, mode),
 
   /** Subscribe to streamed tokens for a request (= conversation id); returns an unsubscribe fn. */
   onToken: (requestId: string, cb: (token: string) => void): (() => void) => {

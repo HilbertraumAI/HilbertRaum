@@ -22,6 +22,8 @@ function conv(over: Partial<Conversation>): Conversation {
     modelId: null,
     mode: 'chat',
     scopeDocumentIds: null,
+    collectionId: null,
+    scope: null,
     ...over
   }
 }
@@ -193,11 +195,11 @@ function indexedDoc(id: string, title: string) {
   }
 }
 
-describe('ChatScreen — documents-scope popover', () => {
-  it('shows a persisted conversation scope and removes one document via updateConversationScope', async () => {
+describe('ChatScreen — documents-scope multi-select picker (plan §13)', () => {
+  it('shows a persisted specific-doc scope and removes one document via setConversationScope', async () => {
     const user = userEvent.setup()
     const scoped = conv({ id: 'c9', title: 'Doc Q&A', mode: 'documents', scopeDocumentIds: ['d1', 'd2'] })
-    const updateConversationScope = vi.fn(async () => ({ ...scoped, scopeDocumentIds: ['d2'] }))
+    const setConversationScope = vi.fn(async () => ({ ...scoped, scopeDocumentIds: ['d2'] }))
     const listConversations = vi
       .fn<() => Promise<Conversation[]>>()
       .mockResolvedValueOnce([scoped])
@@ -207,53 +209,58 @@ describe('ChatScreen — documents-scope popover', () => {
       getRuntimeStatus: vi.fn(async () => runningStatus),
       listMessages: vi.fn(async () => []),
       listDocuments: vi.fn(async () => [indexedDoc('d1', 'contract.pdf'), indexedDoc('d2', 'terms.docx')]),
-      updateConversationScope
+      setConversationScope
     })
     render(<ChatScreen onNavigate={() => {}} />)
 
     await user.click(await screen.findByText('Doc Q&A'))
     await user.click(await screen.findByRole('button', { name: /using 2 documents/i }))
+    // The two specific docs render as removable chips.
     expect(await screen.findByText('contract.pdf')).toBeInTheDocument()
     expect(screen.getByText('terms.docx')).toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: /stop asking contract.pdf/i }))
-    await waitFor(() => expect(updateConversationScope).toHaveBeenCalledWith('c9', ['d2']))
+    await waitFor(() =>
+      expect(setConversationScope).toHaveBeenCalledWith('c9', { collectionIds: [], documentIds: ['d2'] })
+    )
     await waitFor(() =>
       expect(screen.getByRole('button', { name: /using 1 document/i })).toBeInTheDocument()
     )
   })
 
-  it('adds a document to the scope and resets to all documents', async () => {
+  it('adds a document via "Specific documents…" and resets to all documents', async () => {
     const user = userEvent.setup()
     const scoped = conv({ id: 'c9', title: 'Doc Q&A', mode: 'documents', scopeDocumentIds: ['d1'] })
-    const updateConversationScope = vi.fn(async (_id: string, next: string[] | null) => ({
-      ...scoped,
-      scopeDocumentIds: next
-    }))
+    const setConversationScope = vi.fn(async () => scoped)
     const listConversations = vi
       .fn<() => Promise<Conversation[]>>()
       .mockResolvedValueOnce([scoped])
       .mockResolvedValueOnce([{ ...scoped, scopeDocumentIds: ['d1', 'd2'] }])
-      .mockResolvedValue([{ ...scoped, scopeDocumentIds: null }])
+      .mockResolvedValue([{ ...scoped, scopeDocumentIds: ['d1', 'd2'] }])
     stubApi({
       listConversations,
       getRuntimeStatus: vi.fn(async () => runningStatus),
       listMessages: vi.fn(async () => []),
       listDocuments: vi.fn(async () => [indexedDoc('d1', 'contract.pdf'), indexedDoc('d2', 'terms.docx')]),
-      updateConversationScope
+      setConversationScope
     })
     render(<ChatScreen onNavigate={() => {}} />)
 
     await user.click(await screen.findByText('Doc Q&A'))
     await user.click(await screen.findByRole('button', { name: /using 1 document/i }))
-    // Documents outside the scope are offered as "+ add" chips.
+    // Reveal the doc picker, then add an out-of-scope document as a "+ add" chip.
+    await user.click(await screen.findByRole('button', { name: /specific documents/i }))
     await user.click(await screen.findByRole('button', { name: /\+ terms.docx/i }))
-    await waitFor(() => expect(updateConversationScope).toHaveBeenCalledWith('c9', ['d1', 'd2']))
-    // The trigger label tracks the refreshed scope while the popover stays open.
+    await waitFor(() =>
+      expect(setConversationScope).toHaveBeenCalledWith('c9', { collectionIds: [], documentIds: ['d1', 'd2'] })
+    )
     expect(await screen.findByRole('button', { name: /using 2 documents/i })).toBeInTheDocument()
 
-    await user.click(await screen.findByRole('button', { name: /use all documents/i }))
-    await waitFor(() => expect(updateConversationScope).toHaveBeenCalledWith('c9', null))
+    // The reset taps to the explicit empty "All documents" scope.
+    await user.click(screen.getByRole('button', { name: 'All documents' }))
+    await waitFor(() =>
+      expect(setConversationScope).toHaveBeenCalledWith('c9', { collectionIds: [], documentIds: [] })
+    )
   })
 
   it('applies the pending handoff scope to the next documents conversation', async () => {
@@ -273,10 +280,14 @@ describe('ChatScreen — documents-scope popover', () => {
 
     // The handoff shows in the footer affordance before any conversation exists…
     expect(await screen.findByRole('button', { name: /using 1 document/i })).toBeInTheDocument()
-    // …and the next conversation is created WITH the scope.
+    // …and the next conversation is created WITH the composite scope (plan D1).
     await user.click(screen.getByRole('button', { name: /new document q&a/i }))
     await waitFor(() =>
-      expect(createConversation).toHaveBeenCalledWith({ mode: 'documents', scopeDocumentIds: ['d1'] })
+      expect(createConversation).toHaveBeenCalledWith({
+        mode: 'documents',
+        scope: { collectionIds: [], documentIds: ['d1'] },
+        collectionId: undefined
+      })
     )
   })
 

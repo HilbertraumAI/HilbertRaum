@@ -6,7 +6,15 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
-_Last updated: 2026-06-14 — **Bugfix: document analysis failed with `HTTP 400` on space-less
+_Last updated: 2026-06-15 — **Merged the document-organization wave (Phases A–F) to `master`; release
+0.1.21.** The whole Library/Projects/Temporary/Generated/Archive feature + its audit remediation
+(DM-1/DM-2/RAG-1/SEC-1 + UX-1/UX-2/UX-3) + the D-L7 doc-org German pass are now on `master`; a focused
+security review of the branch came back clean (no findings). Merged on top of `master`'s
+document-analysis `HTTP 400` fix (0.1.20) — the overlapping service/i18n files auto-merged; only the two
+`package.json` versions (→ 0.1.21) and this handoff narrative needed hand-resolution. Tagged `v0.1.21`.
+Per-entry detail for both lines below._
+
+_(prior) 2026-06-14 — **Bugfix: document analysis failed with `HTTP 400` on space-less
 text (beta-tester report).** Symptom: every document **summary** and **document answer** failed
 with `Chat request failed: HTTP 400` while plain chat worked, across two models (qwen3-4b-2507 /
 4096 ctx and qwen3-8b / 8192 ctx). **Root cause:** `tokenize`/`approxTokenCount`
@@ -36,7 +44,363 @@ windowing), `architecture.md` "Chat & streaming" (role alternation + surfaced er
 `npm test` **1155 passed / 25 skipped** (+13: chunker space-less/windowing, summary CJK window,
 llama-runtime error-body + `isExceedContextError`, `collapseToAlternating`). No version bump._
 
-_(prior) **Three post-MVP UI fine-tunes.** (1) **Chat example chips matched
+_(prior) 2026-06-14 — **D-L7 German-copy review (document-organization slice) + UX-3.**
+Closing the i18n/a11y items deferred by the doc-org audit remediation. Surveyed the German catalog
+against the pinned informal-„du" glossary ([`de.ts`](apps/desktop/src/shared/i18n/de.ts) header, D-L7):
+the Phase D/E/F doc-org copy was clean **except** for **7 formal „Sie/Ihre" strings**, all now recast
+informal — `chat.scope.sourcesTitle` („Wähle deine Quellen", **UX-2**), `chat.scope.librarySourceHint`
+(„Deine gesamte Wissensbasis", **UX-2**), `chat.scope.archivedFallback`, `docs.project.deleteBody`/
+`deleteKeepHint`/`deleteWithHint`, and the adjacent `docs.reindexAllConfirm.body`. (Verified the three
+other `Sie/Ihr` hits at `de.ts:714/839/940` are the pronoun „it/its", not address — left as-is.) The
+six `D-L7-Review ausstehend`/`…markiert` markers on the doc-org blocks (de.ts + en.ts) now read
+**`erledigt (2026-06-14)`**. **UX-3 (a11y):** attachment processing/added is now announced on the
+keyboard/picker path — a visually-hidden polite **`role="status"` aria-live** region in the chat surface
+([`ChatScreen.tsx`](apps/desktop/src/renderer/screens/ChatScreen.tsx)) driven by a new
+**`chat.attach.added`** key (EN „Added {name} to this chat" / DE „{name} zu diesem Chat hinzugefügt");
+processing reuses `chat.attach.processing`; failures stay on `ErrorBanner`. en/de key parity stays
+type-enforced. **Tests:** typecheck clean, **`npm test` 1243 passed / 25 skipped** (count unchanged;
+`ChatAttach` "pending chip" test now asserts the text appears in BOTH the visible chip AND the sr-only
+announcer — i.e. covers UX-3). No version bump. **Audit findings now fully closed:** UX-1/UX-2/UX-3 (the
+last open doc-org items). Docs: `known-limitations.md` flipped the deferral note to DONE. **Next:** the
+broader Phase 39–42 German sign-off (user's standing D-L7 pass) is still open; owner-gated Phase E.2; the
+unremediated security audit (`docs/security-audit-2026-06-14.md`); or new work._
+
+_(prior) 2026-06-14 — **Document-organization audit remediation
+([`docs/document-organization-audit-2026-06-14.md`](docs/document-organization-audit-2026-06-14.md)).**
+Implementation pass fixing the audit's correctness bugs + adding the tests that should have caught them.
+**FIXED (closed):** **DM-1 (High)** — M1 crash-resume now files by pending destination on EVERY
+indexing success: `fileFromPendingDestination` is called inside
+[`reindexDocument`](apps/desktop/src/main/services/ingestion/index.ts) (not only the import loop), so a
+crash-interrupted Project/Temporary/conversation import that the user re-indexes lands in its intended
+destination, not Library; the helper now also **skips generated docs** (`origin_json` set ⇒ never filed,
+D3/N1) so re-indexing a translation can't sweep it into Library. **DM-2 (Medium)** — generated
+`origin_json` is now stamped at `createQueuedDocument` time (new `origin` option) BEFORE the row can be
+`indexed`, so the Library backfill's `origin_json IS NULL` guard holds across a mid-materialize crash
+(`materializeDocument` passes `origin` at create; the post-success `setDocumentOrigin` only re-asserts it
++ clears `original_path`). **RAG-1 (Medium)** — `generateGroundedAnswer` now passes the same scope
+retrieval used to `corpusNeedsReindex` (`normalizeScope(opts.scope ?? opts.scopeDocumentIds)`), so the
+re-index-vs-empty honesty holds on the legacy doc-id path too (whole-corpus/composite paths
+byte-identical). **SEC-1 (Low)** — `updateSettings` now validates array-typed defaults element-wise
+(require `Array.isArray`, keep only strings, cap at 10 000) so `dismissedFilingSuggestions` can't persist
+a non-array/oversized renderer value. **DM-3 (Low)** — `expandPathsWithSource` matches a picked root on a
+separator boundary (`=== dir || startsWith(dir+sep)`), no sibling-prefix mislabel. **RAG-3 (Low)** — the
+FTS scope predicate moved from the JOIN `ON` to `WHERE` (param order preserved; LEFT-JOIN-safe). **UX-1
+(Low)** — the filing-suggestion chip is `role="group"`+`aria-labelledby` with the reason tied to Apply via
+`aria-describedby`. **DOC-1 (Low)** — softened the "doc-org record §N" convention sentence. **RAG-2
+(Low)** — clarifying comment (inheriting `includeArchived` is correct/consistent with `documentsInScope`;
+no leak); no risky pin. **DEFERRED (with reason):** **UX-2** (formal "Sie/Ihre") + **UX-3** (attachment
+`aria-live`, needs a new German "added" string) — both folded into the pending **D-L7 German-copy review**
+rather than fixed ad hoc; noted in [`known-limitations.md`](docs/known-limitations.md). RAG-4/DOC-2/4 etc.
+are correct-by-spec or stale-but-permitted nits (left as-is). **Tests:** typecheck clean, build OK,
+`npm test` **1243 passed / 25 skipped** (+8): **TEST-1** (real crash-resume flow through the
+`reindexDocument` IPC — reconcile→failed→re-index→asserts PROJECT membership; fails pre-DM-1) + a
+generated-guard test; **DM-2/TEST-9** (origin stamped while `queued`; re-open backfill never files it);
+**TEST-8** (a doc in BOTH a picked collection AND `documentIds` counts each chunk once); **TEST-2**
+(folder exact-before-contains ordering + cohort tie-break most-common-then-lexicographic-id) + **TEST-5**
+(engine tolerant of a malformed `origin` shape); **SEC-1** settings array validation. **Docs updated:**
+architecture.md §1 M1 row + §4 (single indexing-success entry point) + §6 (origin stamped at queue time);
+rag-design.md §13.6 (legacy-path scoped honesty); known-limitations.md (UX-2/UX-3 deferred). No version
+bump, no skipped hooks. **Next:** the D-L7 German-copy review (UX-2/UX-3 + the Phase D/E/F German flags);
+owner-gated Phase E.2; or new work._
+
+_(prior) 2026-06-14 — **Document organization — Phase F (Filing suggestions, rule-based +
+non-silent).** Sixth and final v1 phase of [`docs/document-organization-plan.md`](docs/document-organization-plan.md)
+(esp. §5 non-goals, §11.2, §12.3, §16, §17, §19, §20 "Phase F", §21 Q8/Q9). **Rule-based ONLY — no
+model, no network, no telemetry, never silent, never auto-file.** **Engine** (new pure, LOCAL,
+deterministic [`filing-suggestions.ts`](apps/desktop/src/main/services/filing-suggestions.ts)):
+`suggestFilingForDocument(doc, collections, allDocs)` returns ranked, de-duped suggestions
+(`{ruleId, target: existingProject|newProject, reasonKey: MessageKey, reasonParams}`) via three rules,
+highest-confidence first — **(1) folder-name match** (`source_folder_label` equals/contains an active
+project name), **(2) same-source-folder cohort** (other docs sharing the folder are filed in project X),
+**(3) bilingual filename pattern** (small documented EN-canonical+German token tables: invoice/receipt/
+bill/statement·Rechnung/Beleg/Quittung/Kontoauszug, contract/agreement·Vertrag/Vereinbarung → a matching
+existing project else a `newProject` with a canonical English name). **Subjects EXCLUDED** (D3/§7):
+generated (`origin != null`), Temporary/archived lifecycle, and already-project-filed docs — and archived
+projects are never suggestion targets. Tolerant: missing/empty metadata ⇒ no suggestion, never throws;
+**deterministic** (no clock, no randomness). **Data contract** ([`shared/types.ts`](apps/desktop/src/shared/types.ts)):
+new `FilingRuleId`/`FilingTarget`/`FilingSuggestion`/`FilingSuggestionResult` (reason is an i18n KEY +
+params, NOT free text); new `AppSettings.dismissedFilingSuggestions: string[]` (DEFAULT `[]`) — dismissals
+persist in the **existing settings JSON blob, NOT a new `documents` column** (additive, tolerant, sticky
+across restart). **IPC** ([`registerDocsIpc.ts`](apps/desktop/src/main/ipc/registerDocsIpc.ts)): new
+**read-only `docs:filingSuggestions`** ⇒ `suggestFilingForDocuments(listDocuments, listCollections)`;
+mirrored in [`preload`](apps/desktop/src/preload/index.ts). **Apply reuses existing channels** (existing ⇒
+`docs:addToCollection`; new ⇒ `collections:create` + `docs:addToCollection`); no new audit event — applying
+records only `documents_added_to_collection` (id/type/count), so the suggestion REASON
+(folder/pattern/project name) is **never** logged. **Renderer**
+([`DocumentsScreen.tsx`](apps/desktop/src/renderer/screens/DocumentsScreen.tsx)): a quiet, dismissible
+per-row chip ("Suggested project: Tax 2025 — Apply?" + a localized reason line + **Apply**/**Dismiss**) on
+unfiled docs (its natural home is the Phase-E **Unfiled** view, also shown in All); Apply files via the
+membership path then the doc leaves Unfiled; Dismiss hides it + persists via `updateSettings`; suppressed
+once dismissed or when the target project vanished; reflow-safe (`.doc-suggest` flex-wrap, plan §12 L4).
+**i18n**: new flat `docs.suggest.*` (chipExisting/chipNew/apply/dismiss/titles + reason.folder/cohort/
+filename) EN+DE — reason strings are keyed templates; **German copy flagged for the D-L7 review.**
+Forbidden-UI-words honoured. **Decisions locked:** rule-based only in v1 (local-AI classification is a
+LATER owner-gated step, NOT built); auto-creating projects from top-level folders at import (§11.2/§21 Q8)
+is a separate deferred follow-up (NOT built); dismissals in AppSettings (not a column); no new audit event
+(reuse `documents_added_to_collection`, sentinel stays clean). **Tests:** typecheck clean, build OK,
+`npm test` **1235 passed / 25 skipped** (+19: new [`filing-suggestions.test.ts`](apps/desktop/tests/unit/filing-suggestions.test.ts)
+[12 — each rule incl. EN/DE patterns, ranking+de-dup, exclusions, archived-target, tolerance, determinism,
+batch]; new [`filing-suggestions-ipc.test.ts`](apps/desktop/tests/integration/filing-suggestions-ipc.test.ts)
+[2 — expected set + Apply existing via addToCollection + leaves-unfiled; Apply new via createCollection;
+audit folder-label content-free]; `DocumentsScreen` [+4 — chip render+Apply-clears, Apply newProject,
+Dismiss-persists-and-sticks-across-refresh, no-suggestion-no-chip]; GermanSmoke [+1 — German chip];
+`audit-ipc` sentinel-grep extended with a FOLDER_SENTINEL (suggestion-reason) + the filingSuggestions
+flow). No version bump. **Deliverable proof (covered by tests):** importing receipts from a "Tax 2025"
+folder (or invoice/rechnung filenames) surfaces a quiet "Suggested project: Tax 2025 — Apply?" on Unfiled;
+one click files the doc via the existing membership path; nothing is filed without that click; no model is
+called, no network touched, and the audit log records only ids/counts — never the suggestion reason or any
+name. **DOC-LIFECYCLE CLOSE-OUT (DONE — owner-confirmed 2026-06-14):** the whole v1 feature (Phases A–F;
+E.2 owner-deferred) was condensed into §-numbered design records and
+`docs/document-organization-plan.md` was **deleted** (full original in git: `git show
+477f803:docs/document-organization-plan.md`). The records: **[`docs/architecture.md`](docs/architecture.md)
+"Document organization — design record" §1–§8** (decisions D1/D2/D3 + the audit fixes, data model,
+services, IPC, generated provenance, audit, trade-offs); **[`docs/rag-design.md`](docs/rag-design.md) §13**
+(the scope/retrieval half — `DocumentScope`, `resolveScope`, the arg-5 `RetrievalScope` union H3, the
+membership-OR-id SQL filter, C1 archive, D3/N1 generated exclusion, N2 filename auto-scope, M2 scoped
+re-index); **[`docs/user-guide.md`](docs/user-guide.md) §7** (the user-facing Library/Projects/Temporary/
+Generated/Archived + source picker + filing suggestions copy). The two in-code doc pointers
+([`types.ts`](apps/desktop/src/shared/types.ts), [`db.ts`](apps/desktop/src/main/services/db.ts)) and the
+`known-limitations.md` C4 note were repointed to the new records (existing inline "plan §x" comments
+resolve via git history). **Next:** owner-gated Phase E.2 (explicit retention + Temporary review
+dashboard); local-AI filing suggestions (owner-gated); or new work._
+
+_(prior) 2026-06-14 — **Document organization — Phase E (Smart views + generated staleness).**
+Fifth phase of [`docs/document-organization-plan.md`](docs/document-organization-plan.md) (esp. §5,
+§7.5/§7.6, §8.2, §12.1, §15.3, §16, §17, §19, §20 "Phase E"). **Additive, query-time only — no new
+column, no migration, no parser/chunker/embedder change, no new audit events.**
+**Data contract** ([`shared/types.ts`](apps/desktop/src/shared/types.ts)): new `LARGE_FILE_BYTES` (10 MB),
+`SmartListView`/`SmartViewPredicate`, a pure **`matchesSmartView(doc, view)`** (the single source of truth
+for the smart-view predicates so the renderer rail and the `docs:list` filter never drift), and
+`GeneratedStaleness`/`GeneratedStaleReason` + a pure **`generatedStaleness(doc, sources)`**.
+**Smart views (§7.6/§12.1):** the remaining query-time views ship as section-rail entries + `docs:list`
+`smart` predicates — Recently added (createdAt desc — **no new column**), Unfiled (no *project* membership;
+Library/Temporary builtins don't count as filed), Needs re-index (`staleEmbeddings`), Large files
+(`sizeBytes >= LARGE_FILE_BYTES`), Failed imports (`status='failed'`), Audio (audio mime / generated
+transcript), OCR/scanned (`ocr != null || scanDetected`). **IPC**
+([`registerDocsIpc.ts`](apps/desktop/src/main/ipc/registerDocsIpc.ts)): `DocumentListFilter.smart` widened
+to `SmartListView`; `filterDocuments` routes `recent`⇒createdAt-desc order, `all`⇒no-op, else
+`matchesSmartView`. **Renderer** ([`DocumentsScreen.tsx`](apps/desktop/src/renderer/screens/DocumentsScreen.tsx)):
+`DocSection` union + `inSection` extended (generated/archived/unfiled/needsReindex/large/failed/audio/ocr
+delegate to `matchesSmartView`; `recent` ordered in `visibleDocs`); a **Views** rail group reusing the
+projects-group layout so the existing 760px reflow applies (L4, no horizontal page scroll). **Generated
+staleness (§15.3):** `generatedStaleness` is a tolerant derivation over the already-listed `updatedAt`/
+`lifecycle` fields (**no hot-path write**) — flags `source-changed` when a source was updated after the
+output's `createdAt`, `source-removed` when a source is missing/archived; a legacy origin shape or a
+malformed/empty `createdAt` ⇒ no flag (never throws); a non-generated doc is never evaluated. Surfaced as a
+quiet **Badge (icon + word, never color-only) + "re-run to update" copy** on the Generated rows; re-running
+the task stays the only fix (snapshot semantics unchanged). **i18n**: new flat `docs.smart.*` (heading +
+7 view labels) + `docs.provenance.stale{Badge,Changed,Removed}` EN+DE — **German copy flagged for the D-L7
+review.** Forbidden-UI-words list honoured (no bucket/vector/scope_json/FTS/collection_id/membership/
+embedding). **Decisions locked:** smart views are query-time predicates, **not** stored collections
+(`CollectionType` keeps `'smart'` reserved-unused) and **not** pickable retrieval scopes in v1 (§13.2);
+"Recently added" uses `createdAt` (no column) — `last_used_at`/"Recently used" (L2) stays deferred.
+**Explicitly DEFERRED (owner-gated Phase E.2, NOT built):** explicit retention + Temporary review dashboard
+(§14.3 — needs the reserved `expires_at` column, a review-before-delete UI, default Never, must never touch
+Library/generated/project-filed docs, must shred sidecars under an encrypted workspace); `last_used_at`
+(§8.2 L2). **Tests:** typecheck clean, build OK, `npm test` **1216 passed / 25 skipped** (+16: new
+[`smart-views.test.ts`](apps/desktop/tests/unit/smart-views.test.ts) [each predicate incl. Unfiled
+project-vs-Library-only + the 7 staleness cases]; `docs-ipc` smart-view filter + recent ordering;
+`DocumentsScreen` smart-rail filter + staleness-badge-on-stale-not-fresh; GermanSmoke extended for the new
+keys). No version bump. **Deliverable proof (covered by tests):** the Documents screen exposes the full
+smart-view set; a translation whose source was re-indexed after it was generated shows a quiet "source
+changed — re-run to update" badge in Generated while an untouched one does not — with no new column, no
+retrieval change, and the audit log still content-free. **Next:** Phase F — filing suggestions (rule-based
+first, never silent); or owner-gated Phase E.2 (explicit retention + Temporary review dashboard)._
+
+_(prior) 2026-06-14 — **Document organization — Phase D (Generated provenance, D3/N1).**
+Fourth phase of [`docs/document-organization-plan.md`](docs/document-organization-plan.md) (esp. §2.3, §7.4,
+§15.1–§15.3, §16, §17, §19, §20 "Phase D"; decisions D3/M4 + audit N1). Gives generated
+translation/comparison documents **structured provenance** and locks the **no-membership** invariant.
+**Data contract** ([`shared/types.ts`](apps/desktop/src/shared/types.ts)): new `GeneratedProvenance`
+(`{kind:'summary'|'translation'|'compare'|'transcript'|'other', sourceDocumentIds[], sourceCollectionIds?,
+modelId?, createdAt}`) + `GeneratedKind`; `DocumentOrigin` widened to the union
+`TranslationOrigin | CompareOrigin | GeneratedProvenance` (reuses `origin_json` — **no new column**); a new
+**`provenanceView(origin)`** normalizer collapses old+new shapes to `{kind, sourceDocumentIds}` so the UI
+has one code path. **Read** ([`ingestion/index.ts`](apps/desktop/src/main/services/ingestion/index.ts)):
+`parseOrigin` now reads the structured shape FIRST (by `kind`+`sourceDocumentIds`, narrowed via a
+`GENERATED_KINDS` tuple), then falls back to the legacy `type`/`translatedFrom`/`comparedFrom` branches
+**unchanged** (old rows keep parsing); malformed ⇒ null, never throws (tolerant — `createdAt` defaulted to
+`''` when absent). **Write** ([`doctasks/manager.ts`](apps/desktop/src/main/services/doctasks/manager.ts)):
+a new `buildProvenance(kind, sourceIds, modelId)` builds the `GeneratedProvenance` translation/compare now
+write (capturing `modelId=runtime.modelId` + a de-duped `sourceCollectionIds` snapshot via new
+[`collectionIdsForDocument`](apps/desktop/src/main/services/collections.ts)); `materializeDocument`'s
+`origin` param is now `GeneratedProvenance`. **N1/D3 locked:** a generated row still gets **NO**
+`document_collections` membership at all (doctasks call `createQueuedDocument`+`processDocument` directly,
+never `fileFromPendingDestination`/`fileIntoLibraryIfUnfiled`), so it is **structurally excluded** from
+every collection-derived scope and reachable only via explicit `documentIds` (or download + re-import).
+`role='generated'` stays a reserved-unused enum string; the `role <> 'generated'` predicate stays dropped.
+**Renderer** ([`DocumentsScreen.tsx`](apps/desktop/src/renderer/screens/DocumentsScreen.tsx)):
+`provenanceLine` + the PreviewModal origin line now render from `provenanceView` (kind+source ids), not the
+parsed display strings — "Translated from …" / "Comparison of … and …" / new "Summary of …" /
+"Generated from …"; source titles still resolve tolerantly (deleted source ⇒ "a removed document"). The
+Generated section view (`origin != null`) + Export/Download are unchanged; snapshot semantics unchanged
+(no auto-update; **staleness UI is Phase E** — v1 only persists `createdAt`+`sourceDocumentIds`). **i18n**:
+new flat `docs.provenance.summaryBefore`/`generatedBefore` EN+DE — **German copy flagged for the D-L7
+review.** **Decisions locked:** generated docs out of the DEFAULT corpus structurally (no predicate);
+summaries stay `summary_json` metadata (NOT materialized — `kind:'summary'`/`'transcript'` reserved for
+forward use); additive/nullable only, `origin_json` reused, tolerant parse everywhere; no parser/chunker/
+embedder change; no new audit events. **Tests:** typecheck clean, build OK, `npm test` **1200 passed /
+25 skipped** (+3 net: doctasks-translation gains structured-provenance+zero-membership+sourceCollectionIds
+and new-shape-round-trip/old-shape-back-compat/malformed-null tests; DocumentTranslate gains a
+new-structured-shape label render; existing doctasks-translation/compare + audit-ipc origin assertions
+updated to the new shape — extended, not broken; audit sentinel stays clean). No version bump.
+**Deliverable proof (covered by tests):** translate report.pdf ⇒ the output shows "Translated from
+report.pdf" from structured provenance, sits in Documents → Generated, carries ZERO collection membership
+(so it's absent from a Library/project answer), is answerable only when hand-picked, and is made durable by
+Download + re-import (Phase C). **Out of scope (Phase E+):** smart views beyond Generated; explicit
+retention; staleness/auto-update UI; converting summaries to documents. **Next:** Phase E — Smart views +
+cleanup (Generated/Recently added/Unfiled/Needs re-index/… + optional explicit retention with review UI)._
+
+_(prior) 2026-06-14 — **Document organization — Phase C (Temporary analysis).**
+Third phase of [`docs/document-organization-plan.md`](docs/document-organization-plan.md) (esp. §2.5, §7.3,
+§11.1–§11.4 D2, §13.1/§13.3/§13.5, §14.1/§14.2, §16, §17, §19, §20 "Phase C"; audit C3/H1/H2/M1/N3/N4/N12).
+Builds the **net-new chat attach / drag-drop intake** + import-destination filing over the Phase-A/B
+backend. **Data contract** ([`shared/types.ts`](apps/desktop/src/shared/types.ts)): new `ImportDestination`
+(`{kind:'library'} | {kind:'collection';collectionId} | {kind:'temporary'} | {kind:'conversation';conversationId}`)
++ `ImportOptions` (`{destination?, preserveRelativePaths?}`). **Ingestion**
+([`ingestion/index.ts`](apps/desktop/src/main/services/ingestion/index.ts)): `createQueuedDocument(db, path,
+opts)` now persists the resolved destination into `documents.pending_destination_json` **at queue time**
+(M1) + folder `source_relative_path`/`source_folder_label`; new `expandPathsWithSource` (N12 folder
+metadata, L3 basename fallback); a bare-string 3rd arg still means `displayTitle` (doctasks caller
+unchanged). **Filing** ([`collections.ts`](apps/desktop/src/main/services/collections.ts)): new
+`fileFromPendingDestination` (the single indexing-success entry point — reads `pending_destination_json`,
+files, clears; NULL ⇒ Library default so old options-less imports stay byte-for-byte; also the crash-resume
+path), `fileDocumentByDestination`, `linkConversationDocument` (**FK-guarded N3** — verifies the conversation
+exists, try/catch the check-then-insert race; skip the link, keep the doc in Temporary if it's gone;
+append-only `ON CONFLICT DO NOTHING`), `conversationAttachmentIds`, `parsePendingDestination` (tolerant).
+A conversation/temporary destination ⇒ Temporary membership + `lifecycle='temporary'`; conversation also
+writes the `conversation_documents` link (C3) — **never** `scope_json` (H4/N5). **IPC/preload**:
+`docs:import` extended to `(paths, options?)` (the loop now files via `fileFromPendingDestination`, replacing
+the Phase-B blanket `fileIntoLibraryIfUnfiled`); new **`chat:listAttachments`** (the conversation's
+`conversation_documents` docs for the footer); both mirrored in [`preload`](apps/desktop/src/preload/index.ts).
+A renderer-untrusted `ImportDestination` is sanitized in the IPC (`sanitizeDestination` ⇒ Library fallback).
+**Renderer**: [`ChatScreen.tsx`](apps/desktop/src/renderer/screens/ChatScreen.tsx) gains a chat-surface
+**drag-drop target** + a Composer **📎 attach** picker (`onAttach`), the **intake** (`attachFiles` →
+`importDocuments(paths,{destination:{kind:'conversation',…}})`), **plain-chat drop routing** (§13.5/H2:
+documents chat ⇒ attach in place; empty ⇒ switch in place to a new documents conversation; an in-progress
+plain chat ⇒ **create+commit a NEW documents conversation before** the import references its id (N3), focus
+it, toast — **never** mutate/clear the plain chat), and the **pending chip → live attachment** transition
+(N4, driven by the existing `getImportJob` polling); [`ScopePopover.tsx`](apps/desktop/src/renderer/chat/ScopePopover.tsx)
+shows a read-only **"Files in this chat"** line (attachments always unioned in, NOT removable chips; a
+processing one is a pending chip) + a "· N file(s) in this chat" footer suffix;
+[`DocumentsScreen.tsx`](apps/desktop/src/renderer/screens/DocumentsScreen.tsx) "Move to project" on a
+**Temporary** doc now also makes it permanent + drops Temporary membership (§14.1; Keep-in-Library already did).
+**i18n**: new flat `chat.attach.*` keys (button/drop/processing/newDocChat/failed) EN+DE — **German copy
+flagged for the D-L7 review.** **Decisions locked:** temporary attachments live in `conversation_documents`
+(C3), never `scope_v2_json`; the LINK (not Temporary membership) is authoritative for "files in this chat";
+duplicate import is always-new (D2 — no sha dedup); deleting a conversation removes only the link (CASCADE),
+never the doc (§14.2); no retention sweep in v1 (Phase E); no new audit events. **Out of scope (Phase D+):**
+generated provenance; smart views / explicit retention. **Tests:** typecheck clean, build OK, `npm test`
+**1197 passed / 25 skipped** (+18: destination filing round-trip + M1 crash-resume + N3 FK-guard + idempotent
+link + `parsePendingDestination` in `collections.test.ts`; `docs-ipc` destination round-trip (temporary/
+conversation/project + options-less Library); `chat-ipc` `listAttachments`; renderer `ChatAttach.test.tsx`
+[empty-drop new conversation + pending chip, pending→live N4, plain-chat-with-messages new conversation +
+toast, read-only Files-in-this-chat]; DocumentsScreen Keep-in-Library / Move-from-Temporary; GermanSmoke
+attach button). No version bump. **Deliverable proof (covered by tests):** drop invoice.pdf into a chat ⇒
+it imports as a Temporary `conversation_documents` attachment answerable in that chat, appears in Documents →
+Temporary, and is NOT in Library until the user explicitly Keeps it. **Next:** Phase D — Generated provenance
+(D3: `GeneratedProvenance`, no membership, structurally excluded, downloadable + re-importable)._
+
+_(prior) 2026-06-14 — **Document organization — Phase B (Projects + composite scope, D1).**
+Second phase of [`docs/document-organization-plan.md`](docs/document-organization-plan.md) (esp. §0.1 D1,
+§8.3, §10.1, §12, §13, §16). Builds the user-facing surface over the Phase-A backend.
+**Data contract** ([`chat.ts`](apps/desktop/src/main/services/chat.ts)): `Conversation` gains
+`collectionId: string|null` + `scope: DocumentScope|null` (parsed tolerantly from `scope_v2_json` via the
+relocated, now-exported `parseDocumentScope` in [`collections.ts`](apps/desktop/src/main/services/collections.ts));
+`createConversation` gains `opts.collectionId`/`opts.scope`; new `setScope` (persists `scope_v2_json`,
+empty scope = explicit "All documents", null clears) + `setConversationCollection` writers.
+`updateConversationScope`'s legacy replace semantics are **unchanged** (H4/C3). **IPC/preload** (plan §16):
+new [`registerCollectionsIpc.ts`](apps/desktop/src/main/ipc/registerCollectionsIpc.ts)
+(`collections:list/create/rename/setArchived/delete`); [`registerDocsIpc.ts`](apps/desktop/src/main/ipc/registerDocsIpc.ts)
+gains `docs:addToCollection`/`removeFromCollection`/`setLifecycle` + a `docs:list` filter
+(`{collectionId?,lifecycle?,smart?}`) + **imports default-file into Library** on indexing success
+(`fileIntoLibraryIfUnfiled`, zero-membership-guarded so re-index never re-files a project-only doc, keeping
+"Library == all"); [`registerChatIpc.ts`](apps/desktop/src/main/ipc/registerChatIpc.ts) gains
+`chat:setScope`/`setCollection` + the two `createConversation` opts. "Move" = add + remove (no channel).
+**delete-project two modes** (plan §12.3): `membershipOnly` (CASCADE) and `withDocuments` (deletes ONLY
+genuinely project-only docs — the C2 `projectOnlyDocumentIds` predicate counts ALL memberships so a Library
+member is spared; reuses ingestion `deleteDocument`, which **now `shredFile`s** the stored copy instead of
+`rmSync` — M5). Every channel mirrored 1:1 in [`preload/index.ts`](apps/desktop/src/preload/index.ts).
+**Live ask path** ([`registerRagIpc.ts`](apps/desktop/src/main/ipc/registerRagIpc.ts)): now calls
+`resolveScope(db, conversationId)`, passes the `RetrievalScope` to `generateGroundedAnswer` via `opts.scope`
+(so `corpusNeedsReindex` is scope-aware — M2), and runs filename auto-scope **within** the resolved scope
+(`documentsInScope` + `buildScopeFilter`), skipping it only when `hasExplicitDocSelection` (N2); the
+STREAM.scope notice is kept. **DocumentInfo** gains `collections[]` (joined in `listDocuments`), `lifecycle`
+(NULL⇒permanent), `sourceFolderLabel` (NOT `lastUsedAt` — L2). **Audit** (plan §17): `collection_created/
+renamed/archived/deleted` + `documents_added_to_collection/removed_from_collection/document_lifecycle_changed`
+— **id/type/count ONLY, never the project NAME** (asserted by the extended `audit-ipc` sentinel-grep with a
+project-name sentinel). **Renderer**: [`DocumentsScreen.tsx`](apps/desktop/src/renderer/screens/DocumentsScreen.tsx)
+left **section rail** (Library/Projects/Temporary/Generated/Archived/All — responsive collapse at 760px) +
+membership chips + lifecycle pills + an Organize per-row menu + bulk move/lifecycle + project
+create/rename/archive/delete (two-mode confirm); [`ScopePopover.tsx`](apps/desktop/src/renderer/chat/ScopePopover.tsx)
+is now a **multi-select source picker** (Library + each non-archived project + "Specific documents…" +
+one-tap "All documents"; Temporary/Generated not pickable — N10/D3) writing a persisted `DocumentScope`;
+the composer footer summarizes the composed union (`scopeFooterLabel`);
+[`ChatScreen.tsx`](apps/desktop/src/renderer/screens/ChatScreen.tsx) derives the picker scope, persists via
+`setConversationScope`, project-defaults the anchor on create, and shows the dangling/archived-project →
+Library fallback notice (§13.4); [`ConversationList.tsx`](apps/desktop/src/renderer/chat/ConversationList.tsx)
+groups by the creation-anchor `collection_id` with an "Other / Library" group when any chat is anchored
+(`groupByProject`, additive — date grouping otherwise unchanged, N8). **i18n**: new flat `docs.section.*`/
+`docs.action.*`/`docs.project.*`/`chat.scope.*`/`chat.list.otherGroup`/`diag.audit.collection_*` keys in
+[`{en,de}.ts`](apps/desktop/src/shared/i18n) — **German copy flagged for the D-L7 review.** **Forbidden UI
+words** (bucket/vector/scope_json/FTS/collection_id/membership/embedding) avoided. **Out of scope (Phase C+):**
+chat attach/drag-drop INTAKE + `conversation_documents` writes + plain-chat drop; generated provenance;
+smart views/retention. **Tests:** typecheck clean, build OK, `npm test` **1179 passed / 25 skipped** (+16:
+new [`collections-ipc.test.ts`](apps/desktop/tests/integration/collections-ipc.test.ts) [CRUD, membership+
+lifecycle+filtered list, C2 delete-with-documents spares a Library member, `chat:setScope` round-trip across
+a DB reopen, resolveScope-in-IPC filename auto-scope + N2 skip] + chat scope/collection round-trip & writers &
+C2 predicate in `collections.test.ts` + the audit sentinel/event extensions + renderer rail/project/picker
+tests + GermanSmoke). No version bump. **Deliverable proof (covered by tests):** create project "Tax 2025",
+ask over "Library + Tax 2025 + contractA.pdf" in one documents chat, and the composite scope persists across
+an app restart (`scope_v2_json`). **Next:** Phase C — Temporary analysis (chat attach/drag-drop intake +
+`conversation_documents` + destination chooser)._
+
+_(prior) 2026-06-14 — **Document organization — Phase A (Collections core, backend
+foundation).** First phase of [`docs/document-organization-plan.md`](docs/document-organization-plan.md).
+Adds a collection-membership layer over the existing pipeline — one stored file, one chunk set,
+one vector set per document; organization is metadata. **Schema** ([`db.ts`](apps/desktop/src/main/services/db.ts)):
+three additive tables in the `SCHEMA` constant — `collections`, `document_collections`,
+`conversation_documents` (the last two with **`ON DELETE CASCADE` on both FKs**, plan C4: with
+`PRAGMA foreign_keys = ON` a pre-feature app's direct `DELETE FROM documents` would otherwise hit an
+FK violation; CASCADE makes any build delete a doc cleanly) — plus indexes, plus nullable
+`ensureColumn` additions (`documents.lifecycle`/`source_relative_path`/`source_folder_label`/
+`pending_destination_json`/`expires_at`, `conversations.collection_id`/`scope_v2_json`; all NULL-sentinel
+since the `ensureColumn` DDL grammar forbids DEFAULT/NOT NULL). **Migration** (`seedCollections`, run in
+`openDatabase`, idempotent): seeds one **Library** + one **Temporary** built-in (by `type`, canonical
+English names, UI localizes by type) and back-fills Library membership for every `status='indexed'`,
+**`origin_json IS NULL`** (generated docs get NO membership — D3/N1), **unfiled** document (the
+`NOT EXISTS` guard makes re-open a no-op; the `status='indexed'` gate is M1). **Services** (new
+[`collections.ts`](apps/desktop/src/main/services/collections.ts)): CollectionService CRUD
+(create/rename/archive/delete — built-ins undeletable/unarchivable, delete is membership-only via
+CASCADE) + membership (add/remove, idempotent `ON CONFLICT DO NOTHING`) + `docLifecycle` coalesce +
+**`resolveScope`** (a conversation's stored scope → a `RetrievalScope`: `scope_v2_json` composite ⇒
+authoritative union; else legacy `scope_json`⇒specific docs / `collection_id`⇒project / else Library
+default; chat attachments from `conversation_documents` always unioned in; `hasExplicitDocSelection`
+set from hand-picks BEFORE merging attachments — N2; tolerant parse → never throws). **Retrieval**:
+new neutral [`retrieval-scope.ts`](apps/desktop/src/main/services/retrieval-scope.ts) `buildScopeFilter`
+(membership-OR-id UNION + document-level archived exclusion, plan §10.2/C1/D1) shared by `VectorIndex`
+([`embeddings/index.ts`](apps/desktop/src/main/services/embeddings/index.ts)), `keywordSearchChunks`
+([`rag/hybrid.ts`](apps/desktop/src/main/services/rag/hybrid.ts)), and scope-threaded `corpusNeedsReindex`
+(M2); `retrieve`'s arg-5 is now a normalized union **`string[] | RetrievalScope | null`** (H3 — a bare
+array/null still means legacy doc-ids, so **every existing positional caller/test is byte-identical**),
+`generateGroundedAnswer` gains `opts.scope`. **Data contract:** `RetrievalScope`, `DocumentScope`,
+`Collection`/`CollectionType`/`DocumentCollectionRole`/`DocumentLifecycle` in
+[`shared/types.ts`](apps/desktop/src/shared/types.ts). **Deliberately deferred to later phases:** no IPC/
+preload/renderer surface, no `Conversation.scope`/`collectionId` fields, no project UI, no chat attach
+UI, no delete-with-documents, no audit events for collection ops, no `last_used_at` (L2) — Phase A is
+backend-only and leaves observable behaviour **identical** (Library == all documents on day one). The
+live ask path ([`registerRagIpc.ts`](apps/desktop/src/main/ipc/registerRagIpc.ts)) is **unchanged**;
+`resolveScope` is built + tested but wired into the IPC in Phase B. **Docs:** version-skew note added to
+[`known-limitations.md`](docs/known-limitations.md); the plan stays open (condensed into §-records +
+deleted only when the whole feature ships — CLAUDE.md doc-lifecycle rule). **Tests:** typecheck clean,
+build OK, `npm test` **1163 passed / 25 skipped** (+21: new `collections.test.ts` [seed/backfill,
+CRUD, membership idempotency, CASCADE version-skew, resolveScope, no-network] + `rag-collections.test.ts`
+[collection∪doc union, archived exclude/include + project-archive-doesn't-exclude C1, generated
+structurally excluded + explicitly selectable D3, M2 empty-vs-stale split, legacy arg-5 unchanged]). No
+version bump. **Next:** Phase B — projects + composite scope (IPC + multi-select source picker +
+`Conversation.scope`/`scope_v2_json` wiring + conversation-list grouping)._
+
+_(prior) 2026-06-13 — **Three post-MVP UI fine-tunes.** (1) **Chat example chips matched
 the mode.** Plain Chat has no document access, yet its empty-state examples were document-shaped
 ("Summarize this contract" / payment terms / indemnity). Split into two key sets: `chat.exampleChat.*`
 (explain a concept / write a polite email / brainstorm — general-purpose) for chat mode and

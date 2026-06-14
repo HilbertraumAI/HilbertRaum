@@ -26,9 +26,23 @@ import {
   processDocument,
   documentsDir
 } from '../../src/main/services/ingestion'
+import {
+  conversationAttachmentIds,
+  createCollection,
+  documentIdsInCollection,
+  getBuiltinCollection
+} from '../../src/main/services/collections'
+import { createConversation } from '../../src/main/services/chat'
 import { createMockEmbedder } from '../../src/main/services/embeddings/mock'
 import type { Embedder } from '../../src/main/services/embeddings'
-import type { DocumentInfo } from '../../src/shared/types'
+import type {
+  DocumentInfo,
+  DocumentOrigin,
+  ImportJob,
+  ImportJobStatus,
+  ImportOptions
+} from '../../src/shared/types'
+import { LARGE_FILE_BYTES } from '../../src/shared/types'
 import type { AppContext } from '../../src/main/services/context'
 import { invoke, type IpcHandlers } from '../helpers/ipc'
 
@@ -44,8 +58,28 @@ function ctxWith(db: Db, workspacePath: string, embedder: Embedder, unlocked: bo
     db,
     paths: { workspacePath },
     embedder,
-    workspace: { isUnlocked: () => unlocked }
+    // A full-enough workspace for the background import loop (lease + null cipher).
+    workspace: {
+      isUnlocked: () => unlocked,
+      beginDocumentWork: () => () => {},
+      documentCipher: () => null
+    }
   } as unknown as AppContext
+}
+
+/** Drive the background import loop to completion by polling the in-memory job aggregate. */
+async function runImport(
+  paths: string[],
+  options?: ImportOptions
+): Promise<{ documentIds: string[] }> {
+  const { result } = await invoke(handlers, IPC.importDocuments, paths, options)
+  const job = result as ImportJob
+  for (let i = 0; i < 200; i++) {
+    const { result: s } = await invoke(handlers, IPC.getImportJob, job.jobId)
+    if ((s as ImportJobStatus).done) break
+    await new Promise((r) => setTimeout(r, 5))
+  }
+  return job
 }
 
 beforeEach(() => ipcState.handlers.clear())
@@ -104,6 +138,191 @@ describe('registerDocsIpc', () => {
     // M7: the indexed doc is flagged stale because the active embedder id differs.
     expect(byId(good.id).status).toBe('indexed')
     expect(byId(good.id).staleEmbeddings).toBe(true)
+  })
+
+  // ---- Phase C: import destination round-trip (plan §11.3) -------------------------
+
+  it('imports into Temporary (membership + lifecycle, NOT Library) via the destination option', async () => {
+    const { db, workspacePath } = freshWorkspace()
+    registerDocsIpc(ctxWith(db, workspacePath, createMockEmbedder(), /* unlocked */ true))
+    const file = join(workspacePath, 'invoice.txt')
+    writeFileSync(file, 'invoice total due 2026-01-31 alpha beta gamma')
+
+    const job = await runImport([file], { destination: { kind: 'temporary' } })
+    const id = job.documentIds[0]
+    const { result } = await invoke(handlers, IPC.listDocuments)
+    const doc = (result as DocumentInfo[]).find((d) => d.id === id)!
+    expect(doc.status).toBe('indexed')
+    expect(doc.lifecycle).toBe('temporary')
+    const temp = getBuiltinCollection(db, 'temporary')!
+    const lib = getBuiltinCollection(db, 'library')!
+    expect(documentIdsInCollection(db, temp.id)).toContain(id)
+    expect(documentIdsInCollection(db, lib.id)).not.toContain(id) // stays out of Library
+  })
+
+  it('imports a chat attachment: Temporary + a conversation_documents link (C3)', async () => {
+    const { db, workspacePath } = freshWorkspace()
+    registerDocsIpc(ctxWith(db, workspacePath, createMockEmbedder(), /* unlocked */ true))
+    const conv = createConversation(db, { mode: 'documents' })
+    const file = join(workspacePath, 'drop.txt')
+    writeFileSync(file, 'a dropped file about widgets and gadgets')
+
+    const job = await runImport([file], {
+      destination: { kind: 'conversation', conversationId: conv.id }
+    })
+    const id = job.documentIds[0]
+    expect(conversationAttachmentIds(db, conv.id)).toEqual([id])
+    expect(documentIdsInCollection(db, getBuiltinCollection(db, 'temporary')!.id)).toContain(id)
+  })
+
+  it('imports into a project (membership, NOT Library) via the collection destination', async () => {
+    const { db, workspacePath } = freshWorkspace()
+    registerDocsIpc(ctxWith(db, workspacePath, createMockEmbedder(), /* unlocked */ true))
+    const project = createCollection(db, 'Tax 2025')
+    const file = join(workspacePath, 'receipt.txt')
+    writeFileSync(file, 'a receipt for the tax project filing')
+
+    const job = await runImport([file], {
+      destination: { kind: 'collection', collectionId: project.id }
+    })
+    const id = job.documentIds[0]
+    expect(documentIdsInCollection(db, project.id)).toContain(id)
+    expect(documentIdsInCollection(db, getBuiltinCollection(db, 'library')!.id)).not.toContain(id)
+  })
+
+  it('an options-less import still defaults to Library, byte-for-byte', async () => {
+    const { db, workspacePath } = freshWorkspace()
+    registerDocsIpc(ctxWith(db, workspacePath, createMockEmbedder(), /* unlocked */ true))
+    const file = join(workspacePath, 'note.txt')
+    writeFileSync(file, 'a plain library note with several words to index')
+
+    const job = await runImport([file])
+    expect(documentIdsInCollection(db, getBuiltinCollection(db, 'library')!.id)).toContain(
+      job.documentIds[0]
+    )
+  })
+
+  // ---- M1 crash-resume through the REAL re-index flow (DM-1 / TEST-1) ---------------
+
+  it('crash-resume re-index files by the pending destination, not Library (M1/DM-1)', async () => {
+    const { db, workspacePath } = freshWorkspace()
+    const project = createCollection(db, 'Lawsuit')
+    const lib = getBuiltinCollection(db, 'library')!
+
+    // Simulate a crash-interrupted PROJECT import: the destination is persisted at queue
+    // time, but the row never reached `indexed` and was last touched by a PRIOR run (old
+    // updated_at) — exactly the state `reconcileStuckDocuments` reconciles to `failed`.
+    const file = join(workspacePath, 'brief.txt')
+    writeFileSync(file, 'a legal brief about the lawsuit with several indexable words here')
+    const doc = createQueuedDocument(db, file, {
+      destination: { kind: 'collection', collectionId: project.id }
+    })
+    db.prepare(
+      "UPDATE documents SET status = 'queued', updated_at = '2000-01-01T00:00:00.000Z' WHERE id = ?"
+    ).run(doc.id)
+
+    registerDocsIpc(ctxWith(db, workspacePath, createMockEmbedder(), /* unlocked */ true))
+
+    // The first listDocuments runs the one-shot reconcile → the stuck row becomes `failed`,
+    // and it is filed NOWHERE yet (its destination intent is still only the pending JSON).
+    const before = (await invoke(handlers, IPC.listDocuments)).result as DocumentInfo[]
+    expect(before.find((d) => d.id === doc.id)!.status).toBe('failed')
+    expect(documentIdsInCollection(db, project.id)).not.toContain(doc.id)
+
+    // User clicks Re-index → the REAL reindexDocument IPC path (NOT the import loop, NOT the
+    // helper). Before the DM-1 fix this reached `indexed` and filed the doc nowhere.
+    const info = (await invoke(handlers, IPC.reindexDocument, doc.id)).result as DocumentInfo
+    expect(info.status).toBe('indexed')
+
+    // It lands in the intended PROJECT (not Library), and the pending intent is cleared.
+    expect(documentIdsInCollection(db, project.id)).toContain(doc.id)
+    expect(documentIdsInCollection(db, lib.id)).not.toContain(doc.id)
+    const row = db
+      .prepare('SELECT pending_destination_json FROM documents WHERE id = ?')
+      .get(doc.id) as { pending_destination_json: string | null }
+    expect(row.pending_destination_json).toBeNull()
+  })
+
+  // ---- DM-2: generated provenance is stamped at queue time, never backfilled --------
+
+  it('a generated doc carries origin_json from queue time, so a crash never backfills it into Library (DM-2)', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'hilbertraum-dm2-'))
+    const dbPath = join(root, 'hilbertraum.sqlite')
+    let db = openDatabase(dbPath)
+    const file = join(root, 'translation.md')
+    writeFileSync(file, '# Translated output\n\nsome generated body text to index here')
+
+    // Materialize-style create: provenance is stamped AT QUEUE TIME (the DM-2 fix), before
+    // the row can ever flip to `indexed` — closing the window the old stamp-after-`indexed`
+    // ordering left open.
+    const origin: DocumentOrigin = {
+      kind: 'translation',
+      sourceDocumentIds: ['src'],
+      modelId: 'm',
+      createdAt: '2026-01-01T00:00:00.000Z'
+    }
+    const doc = createQueuedDocument(db, file, { displayTitle: 'translation.md', origin })
+    const stamped = db
+      .prepare('SELECT origin_json, status FROM documents WHERE id = ?')
+      .get(doc.id) as { origin_json: string | null; status: string }
+    expect(stamped.origin_json).not.toBeNull() // stamped while still `queued`
+    expect(stamped.status).toBe('queued')
+
+    // Simulate a kill in the exact old crash window: the row reached `indexed` with NO
+    // membership (generated, D3). origin_json is already set, so the backfill guard holds.
+    db.prepare("UPDATE documents SET status = 'indexed' WHERE id = ?").run(doc.id)
+    db.close()
+
+    // Next app open re-runs the Library backfill — the work-product must NOT be swept in.
+    db = openDatabase(dbPath)
+    expect(documentIdsInCollection(db, getBuiltinCollection(db, 'library')!.id)).not.toContain(doc.id)
+  })
+
+  // ---- Phase E: docs:list smart-view predicates (plan §7.6/§12.1) ------------------
+
+  it('filters docs:list by each smart view and orders "recent" by createdAt desc', async () => {
+    const { db, workspacePath } = freshWorkspace()
+    registerDocsIpc(ctxWith(db, workspacePath, createMockEmbedder(), /* unlocked */ true))
+    const project = createCollection(db, 'Tax 2025')
+
+    // A project-filed doc (older) and a Library-default doc (newer).
+    const filed = join(workspacePath, 'filed.txt')
+    writeFileSync(filed, 'a receipt filed straight into the tax project for the year')
+    const filedJob = await runImport([filed], { destination: { kind: 'collection', collectionId: project.id } })
+    const libDoc = join(workspacePath, 'note.txt')
+    writeFileSync(libDoc, 'a plain library note with several words to index here')
+    const libJob = await runImport([libDoc])
+    const filedId = filedJob.documentIds[0]
+    const libId = libJob.documentIds[0]
+    // Make the Library doc unambiguously newer so the "recent" ordering is deterministic.
+    db.prepare("UPDATE documents SET created_at = '2025-01-01T00:00:00.000Z' WHERE id = ?").run(filedId)
+    db.prepare("UPDATE documents SET created_at = '2026-01-01T00:00:00.000Z' WHERE id = ?").run(libId)
+
+    const list = async (smart: string): Promise<DocumentInfo[]> =>
+      (await invoke(handlers, IPC.listDocuments, { smart } as never)).result as DocumentInfo[]
+
+    // Unfiled: the Library-only doc is "unfiled" (Library doesn't count); the project doc isn't.
+    const unfiled = await list('unfiled')
+    expect(unfiled.map((d) => d.id)).toContain(libId)
+    expect(unfiled.map((d) => d.id)).not.toContain(filedId)
+
+    // Recently added: newest first.
+    const recent = await list('recent')
+    expect(recent[0].id).toBe(libId)
+    expect(recent.findIndex((d) => d.id === libId)).toBeLessThan(recent.findIndex((d) => d.id === filedId))
+
+    // Large files: bump one doc's size past the threshold; only it shows.
+    db.prepare('UPDATE documents SET size_bytes = ? WHERE id = ?').run(LARGE_FILE_BYTES + 1, libId)
+    const large = await list('large')
+    expect(large.map((d) => d.id)).toEqual([libId])
+
+    // Failed imports: force one to failed.
+    db.prepare("UPDATE documents SET status = 'failed' WHERE id = ?").run(filedId)
+    const failed = await list('failed')
+    expect(failed.map((d) => d.id)).toEqual([filedId])
+
+    // 'all' is a no-op (returns everything non-deleted).
+    expect((await list('all')).length).toBeGreaterThanOrEqual(2)
   })
 
   it('returns done:true for an unknown import job so a poller stops', async () => {

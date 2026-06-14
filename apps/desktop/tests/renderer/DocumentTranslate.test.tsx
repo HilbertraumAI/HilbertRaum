@@ -213,4 +213,22 @@ describe('DocumentsScreen — Translate action (Phase 34)', () => {
     await screen.findByText('contract (Deutsch).md')
     expect(screen.getByText('a removed document')).toBeInTheDocument()
   })
+
+  it('renders the provenance label from the NEW structured GeneratedProvenance shape (Phase D)', async () => {
+    // A row written by Phase-D generation: GeneratedProvenance (kind + sourceDocumentIds),
+    // not the legacy translatedFrom shape. The label resolves the same way.
+    const structured = translatedDoc({
+      origin: {
+        kind: 'translation',
+        sourceDocumentIds: ['d1'],
+        modelId: 'scripted-model',
+        createdAt: '2026-06-14T00:00:00.000Z'
+      }
+    })
+    stubApi({ listDocuments: vi.fn(async () => [doc(), structured]) })
+    render(<DocumentsScreen />)
+    await screen.findByText('contract (Deutsch).md')
+    expect(screen.getByText(/Translated from/)).toBeInTheDocument()
+    expect(screen.getByText('contract.pdf', { selector: 'b' })).toBeInTheDocument()
+  })
 })

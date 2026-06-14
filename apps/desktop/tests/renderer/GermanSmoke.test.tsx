@@ -105,11 +105,16 @@ describe('German render smokes (Phase 40)', () => {
     expect(
       screen.getByRole('button', { name: t('de', 'chat.exampleChat.explain') })
     ).toBeInTheDocument()
+    // The Phase-C attach affordance renders its German label (plan §11.2).
+    expect(
+      screen.getByRole('button', { name: t('de', 'chat.attach.button') })
+    ).toBeInTheDocument()
   })
 
-  it('DocumentsScreen renders German (empty state)', async () => {
+  it('DocumentsScreen renders German (empty state + section rail)', async () => {
     stubApi({
       listDocuments: vi.fn(async () => []),
+      listCollections: vi.fn(async () => []),
       getAppStatus: vi.fn(async () => appStatus())
     })
     render(german(<DocumentsScreen />))
@@ -121,6 +126,95 @@ describe('German render smokes (Phase 40)', () => {
     expect(
       screen.getAllByRole('button', { name: t('de', 'docs.import.files') }).length
     ).toBeGreaterThan(0)
+    // The document-organization section rail (plan §12) renders its German labels.
+    expect(screen.getByRole('button', { name: t('de', 'docs.section.library') })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: t('de', 'docs.section.generated') })).toBeInTheDocument()
+    expect(screen.getByText(t('de', 'docs.section.projects'))).toBeInTheDocument()
+    // The Phase-E smart-view rail entries render their German labels (plan §7.6/§12.1).
+    expect(screen.getByText(t('de', 'docs.smart.heading'))).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: t('de', 'docs.smart.recentlyAdded') })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: t('de', 'docs.smart.unfiled') })).toBeInTheDocument()
+  })
+
+  it('DocumentsScreen renders the German filing-suggestion chip (plan §20 Phase F)', async () => {
+    stubApi({
+      listCollections: vi.fn(async () => [
+        {
+          id: 'tax',
+          name: 'Tax 2025',
+          type: 'project' as const,
+          description: null,
+          builtin: false,
+          color: null,
+          createdAt: '2026-01-01T00:00:00Z',
+          updatedAt: '2026-01-01T00:00:00Z',
+          archivedAt: null
+        }
+      ]),
+      listDocuments: vi.fn(async () => [
+        {
+          id: 'd1',
+          title: 'return.pdf',
+          originalPath: null,
+          mimeType: 'application/pdf',
+          sizeBytes: 1,
+          status: 'indexed' as const,
+          errorMessage: null,
+          chunkCount: 1,
+          sourceFolderLabel: 'Tax 2025',
+          createdAt: '2026-01-01T00:00:00Z',
+          updatedAt: '2026-01-01T00:00:00Z'
+        }
+      ]),
+      filingSuggestions: vi.fn(async () => [
+        {
+          documentId: 'd1',
+          suggestions: [
+            {
+              ruleId: 'folder-name-match' as const,
+              target: { kind: 'existingProject' as const, collectionId: 'tax' },
+              reasonKey: 'docs.suggest.reason.folder' as const,
+              reasonParams: { folder: 'Tax 2025' }
+            }
+          ]
+        }
+      ]),
+      getAppStatus: vi.fn(async () => appStatus())
+    })
+    render(german(<DocumentsScreen />))
+    expect(
+      await screen.findByText(t('de', 'docs.suggest.chipExisting', { name: 'Tax 2025' }))
+    ).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: t('de', 'docs.suggest.apply') })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: t('de', 'docs.suggest.dismiss') })).toBeInTheDocument()
+  })
+
+  it('ChatScreen documents-mode renders the German source picker (plan §13)', async () => {
+    stubApi({
+      listConversations: vi.fn(async () => []),
+      listCollections: vi.fn(async () => []),
+      getRuntimeStatus: vi.fn(async () => runningStatus),
+      listDocuments: vi.fn(async () => [
+        {
+          id: 'd1',
+          title: 'contract.pdf',
+          originalPath: null,
+          mimeType: 'text/plain',
+          sizeBytes: 1,
+          status: 'indexed' as const,
+          errorMessage: null,
+          chunkCount: 1,
+          createdAt: '2026-01-01T00:00:00Z',
+          updatedAt: '2026-01-01T00:00:00Z'
+        }
+      ]),
+      getAppStatus: vi.fn(async () => appStatus())
+    })
+    render(german(<ChatScreen onNavigate={() => {}} initialMode="documents" />))
+    // The composer footer's source affordance uses the German "Using all documents".
+    expect(
+      await screen.findByRole('button', { name: new RegExp(t('de', 'chat.scope.usingAll'), 'i') })
+    ).toBeInTheDocument()
   })
 
   it('ModelsScreen renders German (empty manifests)', async () => {

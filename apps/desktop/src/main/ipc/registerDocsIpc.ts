@@ -2,18 +2,25 @@ import { randomUUID } from 'node:crypto'
 import { BrowserWindow, dialog, ipcMain } from 'electron'
 import { IPC } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
+import { statSync } from 'node:fs'
 import type {
   DocumentInfo,
+  DocumentLifecycle,
   DocumentPreview,
+  FilingSuggestionResult,
+  ImportDestination,
   ImportJob,
   ImportJobStatus,
-  ImportPreflight
+  ImportOptions,
+  ImportPreflight,
+  SmartListView
 } from '../../shared/types'
+import { matchesSmartView } from '../../shared/types'
 import {
   createQueuedDocument,
   deleteDocument,
   documentsDir,
-  expandPaths,
+  expandPathsWithSource,
   extractDocumentPreview,
   listDocuments,
   processDocument,
@@ -23,6 +30,14 @@ import {
   summarizeImportPaths,
   type IngestionDeps
 } from '../services/ingestion'
+import {
+  addToCollection,
+  fileFromPendingDestination,
+  listCollections,
+  removeFromCollection,
+  setDocumentsLifecycle
+} from '../services/collections'
+import { suggestFilingForDocuments } from '../services/filing-suggestions'
 import { supportedExtensions } from '../services/ingestion/parsers'
 import { tMain } from '../services/i18n'
 import { log } from '../services/logging'
@@ -37,6 +52,65 @@ import { saveTextExport } from './save-export'
 // the per-job aggregate (ImportJobStatus) is kept in memory and read via `getImportJob`.
 // The renderer polls `listDocuments` + `getImportJob` to drive the UI. This reuses no
 // streaming channel — ingestion progress is coarse-grained and polling is simpler/robust.
+
+/**
+ * Optional `docs:list` filter (plan §16) for the Documents section rail. `collectionId`
+ * narrows to that collection's members; `lifecycle` to that retention state; `smart` to a
+ * query-time view (plan §7.6/§12.1). The smart views are predicates/orderings over
+ * `documents` metadata, never stored collections; they stay in lockstep with the
+ * renderer rail via the shared `matchesSmartView`. All omitted ⇒ every non-deleted document.
+ */
+export interface DocumentListFilter {
+  collectionId?: string
+  lifecycle?: DocumentLifecycle
+  smart?: SmartListView
+}
+
+/** Untrusted-boundary guard: keep only non-empty string ids. */
+function safeIdArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((x): x is string => typeof x === 'string' && x.length > 0) : []
+}
+
+/**
+ * Untrusted-boundary guard for an `ImportDestination` (the renderer is untrusted). An
+ * unknown/malformed shape falls back to the Library default — never throws, never trusts a
+ * non-string id. (Whether the referenced collection/conversation actually exists is the
+ * filing step's concern — `linkConversationDocument` is FK-guarded; an unknown collection id
+ * simply yields a dangling membership row, harmless and ignored.)
+ */
+function sanitizeDestination(value: unknown): ImportDestination {
+  if (value && typeof value === 'object') {
+    const v = value as Record<string, unknown>
+    if (v.kind === 'temporary') return { kind: 'temporary' }
+    if (v.kind === 'collection' && typeof v.collectionId === 'string' && v.collectionId.length > 0) {
+      return { kind: 'collection', collectionId: v.collectionId }
+    }
+    if (v.kind === 'conversation' && typeof v.conversationId === 'string' && v.conversationId.length > 0) {
+      return { kind: 'conversation', conversationId: v.conversationId }
+    }
+  }
+  return { kind: 'library' }
+}
+
+/** Apply a `DocumentListFilter` to an already-built DocumentInfo list. */
+function filterDocuments(docs: DocumentInfo[], filter?: DocumentListFilter): DocumentInfo[] {
+  if (!filter) return docs
+  let out = docs
+  if (filter.smart && filter.smart !== 'all') {
+    if (filter.smart === 'recent') {
+      // Recently added: order by createdAt desc (no new column). Copy before sorting —
+      // the input is the caller's list.
+      out = [...out].sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0))
+    } else {
+      out = out.filter((d) => matchesSmartView(d, filter.smart as Exclude<SmartListView, 'all' | 'recent'>))
+    }
+  }
+  if (filter.lifecycle) out = out.filter((d) => (d.lifecycle ?? 'permanent') === filter.lifecycle)
+  if (filter.collectionId) {
+    out = out.filter((d) => (d.collections ?? []).some((c) => c.id === filter.collectionId))
+  }
+  return out
+}
 
 export function registerDocsIpc(ctx: AppContext): void {
   const storeDir = documentsDir(ctx.paths.workspacePath)
@@ -119,7 +193,7 @@ export function registerDocsIpc(ctx: AppContext): void {
     return result.canceled ? [] : result.filePaths
   })
 
-  ipcMain.handle(IPC.importDocuments, (_e, paths: string[]): ImportJob => {
+  ipcMain.handle(IPC.importDocuments, (_e, paths: string[], options?: ImportOptions): ImportJob => {
     requireUnlocked()
     // Race guard: the whole import job holds a document-work lease so a vault
     // password change (which re-encrypts `.enc` sidecars) refuses to start while we
@@ -133,11 +207,31 @@ export function registerDocsIpc(ctx: AppContext): void {
     try {
       // M-S2: the renderer is the untrusted boundary — accept only an array of strings.
       // A non-array (or non-string elements) would otherwise crash expandPaths with the
-      // lease held. Element strings are still server-validated downstream (expandPaths
+      // lease held. Element strings are still server-validated downstream (expandPathsWithSource
       // filters to existing, supported files).
       const safePaths = Array.isArray(paths) ? paths.filter((p): p is string => typeof p === 'string') : []
-      const files = expandPaths(safePaths)
-      documentIds = files.map((f) => createQueuedDocument(ctx.db, f).id)
+      // Destination (plan §11.3): persisted per queued doc and applied on indexing success.
+      // No options ⇒ Library default, byte-for-byte with the pre-Phase-C behaviour.
+      const destination: ImportDestination = sanitizeDestination(options?.destination)
+      // preserveRelativePaths (N12): explicit when given, else default true for a folder
+      // import (any picked path is a directory), false otherwise. Display-only metadata.
+      const hasDir = safePaths.some((p) => {
+        try {
+          return statSync(p).isDirectory()
+        } catch {
+          return false
+        }
+      })
+      const preserve = options?.preserveRelativePaths ?? hasDir
+      const files = expandPathsWithSource(safePaths)
+      documentIds = files.map(
+        (f) =>
+          createQueuedDocument(ctx.db, f.path, {
+            destination,
+            sourceRelativePath: preserve ? f.sourceRelativePath : null,
+            sourceFolderLabel: preserve ? f.sourceFolderLabel : null
+          }).id
+      )
     } catch (err) {
       releaseDocWork()
       throw err
@@ -169,7 +263,16 @@ export function registerDocsIpc(ctx: AppContext): void {
           try {
             const info = await processDocument(ctx.db, storeDir, id, ingestionDeps())
             if (info.status === 'failed') status.failed += 1
-            else status.completed += 1
+            else {
+              status.completed += 1
+              // File the freshly-indexed doc by its persisted destination (plan §11.3):
+              // Library ⇒ Library; collection ⇒ that project; temporary/conversation ⇒
+              // Temporary (+ the FK-guarded chat link). No recorded destination ⇒ the
+              // Library default, so old options-less imports stay byte-for-byte. This is the
+              // in-session filing path; the crash-resume path (M1) files the same way from
+              // `reindexDocument` (whoever drives a doc to `indexed` files it).
+              fileFromPendingDestination(ctx.db, id)
+            }
             // Audit: filename + counts only — never the document's text.
             ctx.audit?.('document_imported', `Document imported: ${info.title}`, {
               documentId: id,
@@ -201,7 +304,7 @@ export function registerDocsIpc(ctx: AppContext): void {
     return { jobId, total: 0, completed: 0, failed: 0, done: true }
   })
 
-  ipcMain.handle(IPC.listDocuments, (): DocumentInfo[] => {
+  ipcMain.handle(IPC.listDocuments, (_e, filter?: DocumentListFilter): DocumentInfo[] => {
     requireUnlocked()
     // Reconcile stuck rows whenever NOTHING is actually running: a row left in an
     // active status (queued/extracting/…) with no live job/re-index belongs to a killed
@@ -217,12 +320,13 @@ export function registerDocsIpc(ctx: AppContext): void {
     // (search is scoped to `ctx.embedder.id`), so the UI can prompt a re-index.
     // Merge in-memory transcription progress so the polling UI can show
     // "Transcribing… N%" without any new channel.
-    return listDocuments(ctx.db, ctx.embedder.id).map((d) => {
+    const docs = listDocuments(ctx.db, ctx.embedder.id).map((d) => {
       const percent = transcribing.get(d.id)
       return percent !== undefined && d.status === 'extracting'
         ? { ...d, transcriptionProgress: percent }
         : d
     })
+    return filterDocuments(docs, filter)
   })
 
   // Size-aware audio preflight: the renderer asks what a picked
@@ -244,6 +348,70 @@ export function registerDocsIpc(ctx: AppContext): void {
     log.info('Delete document', { documentId })
     deleteDocument(ctx.db, documentId)
     ctx.audit?.('document_deleted', 'Document deleted', { documentId })
+  })
+
+  // ---- Document-organization membership + lifecycle (plan §16) ----------------------
+  // "Move" is composed renderer-side as add + remove (no separate channel). Audit records
+  // ids + counts ONLY — never the collection/project name (plan §17).
+
+  ipcMain.handle(
+    IPC.addToCollection,
+    (_e, documentIds: string[], collectionId: string): void => {
+      requireUnlocked()
+      const ids = safeIdArray(documentIds)
+      if (ids.length === 0 || typeof collectionId !== 'string') return
+      addToCollection(ctx.db, ids, collectionId, 'source')
+      ctx.audit?.('documents_added_to_collection', 'Documents added to a collection', {
+        collectionId,
+        documentCount: ids.length
+      })
+    }
+  )
+
+  ipcMain.handle(
+    IPC.removeFromCollection,
+    (_e, documentIds: string[], collectionId: string): void => {
+      requireUnlocked()
+      const ids = safeIdArray(documentIds)
+      if (ids.length === 0 || typeof collectionId !== 'string') return
+      removeFromCollection(ctx.db, ids, collectionId)
+      ctx.audit?.('documents_removed_from_collection', 'Documents removed from a collection', {
+        collectionId,
+        documentCount: ids.length
+      })
+    }
+  )
+
+  ipcMain.handle(
+    IPC.setDocumentLifecycle,
+    (_e, documentIds: string[], lifecycle: DocumentLifecycle): DocumentInfo[] => {
+      requireUnlocked()
+      const ids = safeIdArray(documentIds)
+      const lc: DocumentLifecycle =
+        lifecycle === 'temporary' || lifecycle === 'archived' ? lifecycle : 'permanent'
+      if (ids.length > 0) {
+        setDocumentsLifecycle(ctx.db, ids, lc)
+        ctx.audit?.('document_lifecycle_changed', 'Document lifecycle changed', {
+          lifecycle: lc,
+          documentCount: ids.length
+        })
+      }
+      // Return the affected documents, fully populated (collections come from listDocuments).
+      const byId = new Map(listDocuments(ctx.db, ctx.embedder.id).map((d) => [d.id, d]))
+      return ids.map((id) => byId.get(id)).filter((d): d is DocumentInfo => d != null)
+    }
+  )
+
+  // Rule-based filing suggestions (plan §20 Phase F): read-only + LOCAL — the pure engine
+  // proposes a project for each unfiled document (folder name, source-folder cohort, bilingual
+  // filename pattern). NO model, NO network, NO new audit event (a suggestion is inert — the
+  // renderer files it via the existing addToCollection/createCollection channels on Apply, so
+  // only those record ids/counts; the suggestion REASON is never logged). Dismissals persist
+  // in AppSettings, filtered renderer-side.
+  ipcMain.handle(IPC.filingSuggestions, (): FilingSuggestionResult[] => {
+    requireUnlocked()
+    const docs = listDocuments(ctx.db, ctx.embedder.id)
+    return suggestFilingForDocuments(docs, listCollections(ctx.db))
   })
 
   // Read-only in-app preview: re-extracts the stored copy's text. Guarded

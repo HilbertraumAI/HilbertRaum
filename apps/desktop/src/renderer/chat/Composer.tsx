@@ -32,6 +32,9 @@ interface ComposerProps {
   onDictationError?: (message: string) => void
   /** Test seam forwarded to DictationButton (real getUserMedia capture by default). */
   dictationCaptureImpl?: DictationCaptureStart
+  /** Attach files to the chat (plan §11.2 net-new intake). Renders a 📎 button when given;
+   *  the keyboard-reachable picker fallback for the chat-surface drag/drop target. */
+  onAttach?: () => void
 }
 
 export function Composer({
@@ -46,7 +49,8 @@ export function Composer({
   inputRef,
   dictationAvailable,
   onDictationError,
-  dictationCaptureImpl
+  dictationCaptureImpl,
+  onAttach
 }: ComposerProps): JSX.Element {
   const { t } = useT()
   const ownRef = useRef<HTMLTextAreaElement>(null)
@@ -132,6 +136,18 @@ export function Composer({
           />
           {recording && <Waveform analyser={analyser} />}
         </div>
+        {onAttach && (
+          <button
+            type="button"
+            className="composer-attach"
+            disabled={streaming}
+            aria-label={t('chat.attach.button')}
+            title={t('chat.attach.button')}
+            onClick={onAttach}
+          >
+            📎
+          </button>
+        )}
         {dictationAvailable === true && (
           <DictationButton
             disabled={streaming}
