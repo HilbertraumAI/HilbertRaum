@@ -41,6 +41,14 @@ password recovery — are documented in
   cascade-removes the orphan rows instead of raising a foreign-key violation. Same accepted
   app-beside-data version-skew stance as the vault note above. (See `docs/architecture.md`
   "Document organization — design record" §3.)
+- **Document-organization a11y/i18n polish deferred (2026-06-14 audit, Low).** Two items stay open
+  and are folded into the pending **D-L7 German-copy review** rather than fixed ad hoc, because both
+  touch user-facing German strings: **(UX-2)** two scope strings use formal "Sie/Ihre"
+  (`de.ts` `chat.scope.sourcesTitle`/`librarySourceHint`) against the pinned informal-"du" glossary;
+  **(UX-3)** attachment processing/added has no `aria-live` announcement on the keyboard path — adding
+  one needs a new "added" string that should be authored in the same German pass. Failures are already
+  announced via `ErrorBanner`. The filing-suggestion chip a11y (UX-1: `role="group"` + `aria-describedby`)
+  was fixed.
 - **Password-change edge: a post-commit swap interruption can briefly wedge one document.**
   If the one-time v1→v2 migration is interrupted AFTER its descriptor commit but mid file-swap
   (e.g. a transiently locked file on Windows), a not-yet-swapped document sidecar stays under

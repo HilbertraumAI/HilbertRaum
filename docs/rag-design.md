@@ -742,6 +742,12 @@ as retrieval, so the grounding guarantee stays correct under scope: an **empty**
 project) ⇒ `NO_DOCUMENT_CONTEXT_ANSWER` (re-indexing wouldn't help); a scope with indexed docs **none
 visible to the active embedder** ⇒ `REINDEX_NEEDED_ANSWER`. Collection filtering can only shrink the
 candidate set, so the empty-context ⇒ no-model-call guarantee strengthens, never weakens.
+`generateGroundedAnswer` passes the **same scope retrieval used** to this check —
+`corpusNeedsReindex(db, embedder.id, normalizeScope(opts.scope ?? opts.scopeDocumentIds))` — so the
+honesty story holds on the **legacy doc-id path too**, not only the composite-`scope` path (RAG-1). A
+bare `null`/`undefined` still normalizes to the whole-corpus check (the archived exclusion only),
+byte-identical to before; only the legacy `scopeDocumentIds` array path changes — from a wrong
+whole-corpus diagnosis to the correct scoped one.
 
 ### 13.7 Persistence & smart-view-as-scope (out of v1)
 

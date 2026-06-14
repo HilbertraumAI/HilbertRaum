@@ -35,7 +35,13 @@ import {
 import { createConversation } from '../../src/main/services/chat'
 import { createMockEmbedder } from '../../src/main/services/embeddings/mock'
 import type { Embedder } from '../../src/main/services/embeddings'
-import type { DocumentInfo, ImportJob, ImportJobStatus, ImportOptions } from '../../src/shared/types'
+import type {
+  DocumentInfo,
+  DocumentOrigin,
+  ImportJob,
+  ImportJobStatus,
+  ImportOptions
+} from '../../src/shared/types'
 import { LARGE_FILE_BYTES } from '../../src/shared/types'
 import type { AppContext } from '../../src/main/services/context'
 import { invoke, type IpcHandlers } from '../helpers/ipc'
@@ -194,6 +200,82 @@ describe('registerDocsIpc', () => {
     expect(documentIdsInCollection(db, getBuiltinCollection(db, 'library')!.id)).toContain(
       job.documentIds[0]
     )
+  })
+
+  // ---- M1 crash-resume through the REAL re-index flow (DM-1 / TEST-1) ---------------
+
+  it('crash-resume re-index files by the pending destination, not Library (M1/DM-1)', async () => {
+    const { db, workspacePath } = freshWorkspace()
+    const project = createCollection(db, 'Lawsuit')
+    const lib = getBuiltinCollection(db, 'library')!
+
+    // Simulate a crash-interrupted PROJECT import: the destination is persisted at queue
+    // time, but the row never reached `indexed` and was last touched by a PRIOR run (old
+    // updated_at) — exactly the state `reconcileStuckDocuments` reconciles to `failed`.
+    const file = join(workspacePath, 'brief.txt')
+    writeFileSync(file, 'a legal brief about the lawsuit with several indexable words here')
+    const doc = createQueuedDocument(db, file, {
+      destination: { kind: 'collection', collectionId: project.id }
+    })
+    db.prepare(
+      "UPDATE documents SET status = 'queued', updated_at = '2000-01-01T00:00:00.000Z' WHERE id = ?"
+    ).run(doc.id)
+
+    registerDocsIpc(ctxWith(db, workspacePath, createMockEmbedder(), /* unlocked */ true))
+
+    // The first listDocuments runs the one-shot reconcile → the stuck row becomes `failed`,
+    // and it is filed NOWHERE yet (its destination intent is still only the pending JSON).
+    const before = (await invoke(handlers, IPC.listDocuments)).result as DocumentInfo[]
+    expect(before.find((d) => d.id === doc.id)!.status).toBe('failed')
+    expect(documentIdsInCollection(db, project.id)).not.toContain(doc.id)
+
+    // User clicks Re-index → the REAL reindexDocument IPC path (NOT the import loop, NOT the
+    // helper). Before the DM-1 fix this reached `indexed` and filed the doc nowhere.
+    const info = (await invoke(handlers, IPC.reindexDocument, doc.id)).result as DocumentInfo
+    expect(info.status).toBe('indexed')
+
+    // It lands in the intended PROJECT (not Library), and the pending intent is cleared.
+    expect(documentIdsInCollection(db, project.id)).toContain(doc.id)
+    expect(documentIdsInCollection(db, lib.id)).not.toContain(doc.id)
+    const row = db
+      .prepare('SELECT pending_destination_json FROM documents WHERE id = ?')
+      .get(doc.id) as { pending_destination_json: string | null }
+    expect(row.pending_destination_json).toBeNull()
+  })
+
+  // ---- DM-2: generated provenance is stamped at queue time, never backfilled --------
+
+  it('a generated doc carries origin_json from queue time, so a crash never backfills it into Library (DM-2)', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'hilbertraum-dm2-'))
+    const dbPath = join(root, 'hilbertraum.sqlite')
+    let db = openDatabase(dbPath)
+    const file = join(root, 'translation.md')
+    writeFileSync(file, '# Translated output\n\nsome generated body text to index here')
+
+    // Materialize-style create: provenance is stamped AT QUEUE TIME (the DM-2 fix), before
+    // the row can ever flip to `indexed` — closing the window the old stamp-after-`indexed`
+    // ordering left open.
+    const origin: DocumentOrigin = {
+      kind: 'translation',
+      sourceDocumentIds: ['src'],
+      modelId: 'm',
+      createdAt: '2026-01-01T00:00:00.000Z'
+    }
+    const doc = createQueuedDocument(db, file, { displayTitle: 'translation.md', origin })
+    const stamped = db
+      .prepare('SELECT origin_json, status FROM documents WHERE id = ?')
+      .get(doc.id) as { origin_json: string | null; status: string }
+    expect(stamped.origin_json).not.toBeNull() // stamped while still `queued`
+    expect(stamped.status).toBe('queued')
+
+    // Simulate a kill in the exact old crash window: the row reached `indexed` with NO
+    // membership (generated, D3). origin_json is already set, so the backfill guard holds.
+    db.prepare("UPDATE documents SET status = 'indexed' WHERE id = ?").run(doc.id)
+    db.close()
+
+    // Next app open re-runs the Library backfill — the work-product must NOT be swept in.
+    db = openDatabase(dbPath)
+    expect(documentIdsInCollection(db, getBuiltinCollection(db, 'library')!.id)).not.toContain(doc.id)
   })
 
   // ---- Phase E: docs:list smart-view predicates (plan §7.6/§12.1) ------------------

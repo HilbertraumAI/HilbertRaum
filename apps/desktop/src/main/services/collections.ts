@@ -342,8 +342,15 @@ export function fileDocumentByDestination(
  */
 export function fileFromPendingDestination(db: Db, documentId: string): void {
   const row = db
-    .prepare('SELECT pending_destination_json FROM documents WHERE id = ?')
-    .get(documentId) as unknown as { pending_destination_json: string | null } | undefined
+    .prepare('SELECT pending_destination_json, origin_json FROM documents WHERE id = ?')
+    .get(documentId) as unknown as
+    | { pending_destination_json: string | null; origin_json: string | null }
+    | undefined
+  // Generated work-products carry provenance (`origin_json`) and NEVER get a membership
+  // (D3/N1) — they are reachable only by explicit doc-id. Re-indexing one must not sweep it
+  // into Library via the no-intent default below, so skip filing entirely. This keeps the
+  // helper safe as the single indexing-success entry point on EVERY driver-to-`indexed`.
+  if (row?.origin_json != null) return
   const destination = parsePendingDestination(row?.pending_destination_json)
   if (!destination) {
     // No recorded intent (a pre-Phase-C import, or an options-less call) ⇒ Library default.

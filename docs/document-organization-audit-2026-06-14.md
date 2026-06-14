@@ -13,6 +13,17 @@ the condensation; the original is recoverable at `git show 477f803:docs/document
 
 **Date.** 2026-06-14.
 
+**Remediation status (2026-06-14, branch `Improved-Document-Structure`).** **REMEDIATED.** All Tier-1
+correctness bugs are fixed (**DM-1, DM-2, RAG-1**) with the tests that should have caught them
+(**TEST-1, TEST-8, TEST-2**, the DM-2 regression, plus TEST-5). Hardening fixes applied: **SEC-1, DM-3,
+RAG-3, UX-1, DOC-1** (RAG-2 addressed by a clarifying comment, not a pin — pinning would regress a scope
+that deliberately includes archived docs). **Deferred:** **UX-2** (formal "Sie/Ihre") and **UX-3**
+(attachment `aria-live`, needs a new German string) are folded into the pending **D-L7 German-copy
+review** rather than fixed ad hoc; RAG-4 / DOC-2 / DOC-4 and similar are correct-by-spec or
+stale-but-permitted nits. Design records updated (architecture.md §1/§4/§6, rag-design.md §13.6,
+known-limitations.md). See `BUILD_STATE.md` top entry for the full close-out. Suite: **1243 passed / 25
+skipped**.
+
 **Method.** READ-ONLY. Six independent persona passes, each opening the cited code and
 confirming line numbers and behaviour against the design records
 (`architecture.md` "Document organization — design record" §1–§8, `rag-design.md` §13,

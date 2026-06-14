@@ -66,18 +66,22 @@ export function keywordSearchChunks(
     },
     'c.document_id'
   )
+  // Keep the scope predicate in WHERE, not on a JOIN `ON` clause (RAG-3): equivalent for
+  // these INNER joins, but row-excluding regardless of any future LEFT JOIN, and consistent
+  // with the vector path / corpusNeedsReindex. Placed before MATCH so param order is stable.
   let docFilter = ''
   if (scopeFilter) {
-    docFilter = ` AND ${scopeFilter.sql}`
+    docFilter = `${scopeFilter.sql} AND `
     params.push(...scopeFilter.params)
   }
   const sql =
     `SELECT chunks_fts.chunk_id AS chunkId, bm25(chunks_fts) AS bm25
      FROM chunks_fts
      JOIN chunks c ON c.id = chunks_fts.chunk_id
-     JOIN embeddings e ON e.chunk_id = c.id AND e.embedding_model_id = ?` +
+     JOIN embeddings e ON e.chunk_id = c.id AND e.embedding_model_id = ?
+     WHERE ` +
     docFilter +
-    ` WHERE chunks_fts MATCH ?
+    `chunks_fts MATCH ?
      ORDER BY bm25(chunks_fts)
      LIMIT ?`
   params.push(match, topK)

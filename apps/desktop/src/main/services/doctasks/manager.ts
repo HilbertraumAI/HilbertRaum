@@ -933,7 +933,11 @@ export class DocTaskManager {
     let newDocId: string | null = null
     try {
       writeFileSync(tempPath, markdown, 'utf8')
-      const info = createQueuedDocument(db, tempPath, title)
+      // Stamp the generated provenance AT QUEUE TIME, before processDocument can flip the
+      // row to `indexed`. A process kill between `indexed` and a later origin-write would
+      // otherwise satisfy the Library backfill (`origin_json IS NULL` + no membership) and
+      // wrongly file this work-product into Library, violating D3/N1 (DM-2).
+      const info = createQueuedDocument(db, tempPath, { displayTitle: title, origin })
       newDocId = info.id
       // The output document is born inside the task — OUTSIDE registerDocsIpc's
       // `processing` set — so list it on the task: `isDocumentBusy` then covers it
@@ -950,6 +954,8 @@ export class DocTaskManager {
         })
         throw new Error(tMain('main.task.genericFailure'))
       }
+      // origin_json was already stamped at queue time (DM-2); re-assert it post-success to
+      // also clear original_path (the transient source is shredded in `finally`). Idempotent.
       setDocumentOrigin(db, info.id, origin)
       // A new corpus document must never appear without an audit trail (filename +
       // id only — the translated text is content, never audit-logged).

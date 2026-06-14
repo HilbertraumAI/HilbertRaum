@@ -71,7 +71,11 @@ export function registerRagIpc(ctx: AppContext): void {
       if (!scope.hasExplicitDocSelection) {
         const detected = detectFilenameScope(text, documentsInScope(ctx.db, scope))
         if (detected) {
-          // Narrow to exactly the matched docs (a subset of the resolved scope).
+          // Narrow to exactly the matched docs (a subset of the resolved scope). `detected.ids`
+          // come from `documentsInScope(scope)`, which already applied this scope's archived
+          // filter, so inheriting `includeArchived` by spread keeps the narrowed scope
+          // CONSISTENT with what surfaced the docs — it never widens visibility (RAG-2). The
+          // same `buildScopeFilter` then guards retrieval, so there is no archived-leak path.
           scope = { ...scope, collectionIds: null, documentIds: detected.ids }
           if (!event.sender.isDestroyed()) {
             event.sender.send(STREAM.scope(conversationId), { titles: detected.titles })

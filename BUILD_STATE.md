@@ -6,7 +6,45 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
-_Last updated: 2026-06-14 — **Document organization — Phase F (Filing suggestions, rule-based +
+_Last updated: 2026-06-14 — **Document-organization audit remediation
+([`docs/document-organization-audit-2026-06-14.md`](docs/document-organization-audit-2026-06-14.md)).**
+Implementation pass fixing the audit's correctness bugs + adding the tests that should have caught them.
+**FIXED (closed):** **DM-1 (High)** — M1 crash-resume now files by pending destination on EVERY
+indexing success: `fileFromPendingDestination` is called inside
+[`reindexDocument`](apps/desktop/src/main/services/ingestion/index.ts) (not only the import loop), so a
+crash-interrupted Project/Temporary/conversation import that the user re-indexes lands in its intended
+destination, not Library; the helper now also **skips generated docs** (`origin_json` set ⇒ never filed,
+D3/N1) so re-indexing a translation can't sweep it into Library. **DM-2 (Medium)** — generated
+`origin_json` is now stamped at `createQueuedDocument` time (new `origin` option) BEFORE the row can be
+`indexed`, so the Library backfill's `origin_json IS NULL` guard holds across a mid-materialize crash
+(`materializeDocument` passes `origin` at create; the post-success `setDocumentOrigin` only re-asserts it
++ clears `original_path`). **RAG-1 (Medium)** — `generateGroundedAnswer` now passes the same scope
+retrieval used to `corpusNeedsReindex` (`normalizeScope(opts.scope ?? opts.scopeDocumentIds)`), so the
+re-index-vs-empty honesty holds on the legacy doc-id path too (whole-corpus/composite paths
+byte-identical). **SEC-1 (Low)** — `updateSettings` now validates array-typed defaults element-wise
+(require `Array.isArray`, keep only strings, cap at 10 000) so `dismissedFilingSuggestions` can't persist
+a non-array/oversized renderer value. **DM-3 (Low)** — `expandPathsWithSource` matches a picked root on a
+separator boundary (`=== dir || startsWith(dir+sep)`), no sibling-prefix mislabel. **RAG-3 (Low)** — the
+FTS scope predicate moved from the JOIN `ON` to `WHERE` (param order preserved; LEFT-JOIN-safe). **UX-1
+(Low)** — the filing-suggestion chip is `role="group"`+`aria-labelledby` with the reason tied to Apply via
+`aria-describedby`. **DOC-1 (Low)** — softened the "doc-org record §N" convention sentence. **RAG-2
+(Low)** — clarifying comment (inheriting `includeArchived` is correct/consistent with `documentsInScope`;
+no leak); no risky pin. **DEFERRED (with reason):** **UX-2** (formal "Sie/Ihre") + **UX-3** (attachment
+`aria-live`, needs a new German "added" string) — both folded into the pending **D-L7 German-copy review**
+rather than fixed ad hoc; noted in [`known-limitations.md`](docs/known-limitations.md). RAG-4/DOC-2/4 etc.
+are correct-by-spec or stale-but-permitted nits (left as-is). **Tests:** typecheck clean, build OK,
+`npm test` **1243 passed / 25 skipped** (+8): **TEST-1** (real crash-resume flow through the
+`reindexDocument` IPC — reconcile→failed→re-index→asserts PROJECT membership; fails pre-DM-1) + a
+generated-guard test; **DM-2/TEST-9** (origin stamped while `queued`; re-open backfill never files it);
+**TEST-8** (a doc in BOTH a picked collection AND `documentIds` counts each chunk once); **TEST-2**
+(folder exact-before-contains ordering + cohort tie-break most-common-then-lexicographic-id) + **TEST-5**
+(engine tolerant of a malformed `origin` shape); **SEC-1** settings array validation. **Docs updated:**
+architecture.md §1 M1 row + §4 (single indexing-success entry point) + §6 (origin stamped at queue time);
+rag-design.md §13.6 (legacy-path scoped honesty); known-limitations.md (UX-2/UX-3 deferred). No version
+bump, no skipped hooks. **Next:** the D-L7 German-copy review (UX-2/UX-3 + the Phase D/E/F German flags);
+owner-gated Phase E.2; or new work._
+
+_(prior) 2026-06-14 — **Document organization — Phase F (Filing suggestions, rule-based +
 non-silent).** Sixth and final v1 phase of [`docs/document-organization-plan.md`](docs/document-organization-plan.md)
 (esp. §5 non-goals, §11.2, §12.3, §16, §17, §19, §20 "Phase F", §21 Q8/Q9). **Rule-based ONLY — no
 model, no network, no telemetry, never silent, never auto-file.** **Engine** (new pure, LOCAL,

@@ -1101,8 +1101,8 @@ per document — organization is metadata. Five user-facing containers — **Lib
 views** and rule-based **filing suggestions**. Everything stays local + offline. **The retrieval /
 scope half of this design lives in [`rag-design.md`](rag-design.md) §13** (resolveScope, the
 RetrievalScope union, collection-filtered search); this record is the **data model, IPC, audit, and
-filing-suggestion engine**. **§ numbers below are stable — new code comments cite them as "doc-org
-record §N"** (existing comments still say "plan §x"; those resolve via git history above)._
+filing-suggestion engine**. **§ numbers below are stable**; future code comments _should_ cite them
+as "doc-org record §N" (existing comments still say "plan §x"; those resolve via git history above)._
 
 ### §1 Decisions (the locked ladder — D1/D2/D3 + the audit fixes)
 
@@ -1116,7 +1116,7 @@ record §N"** (existing comments still say "plan §x"; those resolve via git his
 | **C1** — archive | A doc leaves retrieval **only** via its own `lifecycle='archived'`; archiving a *project* just removes it as a selectable source | Archiving "Tax 2025" must never make a Library doc vanish from Library answers |
 | **C2** — delete-project "with documents" | Deletes ONLY docs with **no other membership of any kind** (built-ins counted) | A Library+project doc is Library knowledge — un-filed from the project, never deleted |
 | **C3** — temporary chat files | Their own scope category — a `conversation_documents` link, **never** `scope_json` | `scope_json` chips would masquerade temp files as a removable manual selection + disable filename auto-scope |
-| **M1** — queued-import intent | `documents.pending_destination_json` written at queue time, applied on indexing success | A crash mid-import re-files to the intended Project/Temporary, not Library |
+| **M1** — queued-import intent | `documents.pending_destination_json` written at queue time, applied on **every** indexing success (`fileFromPendingDestination` runs in the import loop AND inside `reindexDocument`) | A crash mid-import is reconciled to `failed`; the user's Re-index then re-files to the intended Project/Temporary, not Library (the re-index path files too — DM-1) |
 | **Phase F** — filing suggestions | **Rule-based only** (no model, no network), **never silent / never auto-file**; dismissals in `AppSettings` (no new column) | Local-AI classification is a later owner-gated step; a suggestion is inert until Apply |
 | Migration shape | Additive only — new tables + **nullable** columns (the `ensureColumn` DDL allows no `DEFAULT`/`NOT NULL`); NULL-as-sentinel coalesced in code | Matches the established `scope_json`/`parseScope` precedent |
 
@@ -1172,7 +1172,13 @@ conversation_documents(conversation_id, document_id, added_at)    -- C3 temp-att
   `setDocumentsLifecycle`, the **C2 predicate** `projectOnlyDocumentIds` (counts ALL memberships so a
   Library member is spared), and the indexing-success filing entry points
   `fileFromPendingDestination` → `fileDocumentByDestination` (Library default when no intent recorded,
-  so options-less imports stay byte-for-byte). `linkConversationDocument` is **FK-guarded (N3)**:
+  so options-less imports stay byte-for-byte). `fileFromPendingDestination` is the **single
+  indexing-success entry point (M1/DM-1)**: it runs both in the in-session import loop AND inside
+  `reindexDocument`, so whoever drives a doc to `indexed` files it by its intent — a crash-interrupted
+  import that the user re-indexes lands in its Project/Temporary, not Library. It is idempotent (Library
+  is unfiled-guarded, pending cleared on first success) and **skips generated docs** (`origin_json` set
+  ⇒ no membership, D3/N1), so re-indexing a translation never sweeps it into Library.
+  `linkConversationDocument` is **FK-guarded (N3)**:
   verifies the conversation still exists + try/catch the race; if gone, keep the doc in Temporary, drop
   only the link. `resolveScope` is documented in rag-design §13.
 - **Filing-suggestion engine (`filing-suggestions.ts`, Phase F)** — pure, LOCAL, deterministic (no
@@ -1212,7 +1218,11 @@ A materialized translation/comparison writes a structured `GeneratedProvenance`
 `origin_json` (no new column); `parseOrigin` reads it first, then falls back to the legacy
 `Translation/CompareOrigin` shapes unchanged. `provenanceView(origin)` normalizes both to
 `{kind, sourceDocumentIds}` so the UI has one path. The generated row gets **zero membership** (N1/D3)
-and is surfaced only by the Generated smart view (`origin != null`). Snapshot semantics are unchanged;
+and is surfaced only by the Generated smart view (`origin != null`). **`origin_json` is stamped at
+`createQueuedDocument` time — BEFORE the row can be `indexed` (DM-2)** — so the Library backfill's
+`origin_json IS NULL` guard holds even if the process is killed mid-materialize; the post-success
+`setDocumentOrigin` then only re-asserts it and clears `original_path`. A half-born work-product is
+therefore never swept into Library. Snapshot semantics are unchanged;
 the Phase-E `generatedStaleness(doc, sources)` is a pure, tolerant derivation (no new column, no
 hot-path write) flagging a row when a source's `updatedAt` post-dates the output's `createdAt`
 (`source-changed`) or a source is missing/archived (`source-removed`).

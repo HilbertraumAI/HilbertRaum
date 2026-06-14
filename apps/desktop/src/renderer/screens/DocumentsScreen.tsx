@@ -809,19 +809,27 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
               if (!sug) return null
               const name = suggestionTargetName(sug)
               if (!name) return null
+              // a11y (UX-1): group the chip and tie the rationale to Apply via
+              // aria-describedby, so a screen-reader user tabbing to Apply hears WHY the
+              // suggestion was made, not just its title. Ids are per-doc-row unique.
+              const textId = `suggest-text-${d.id}`
+              const reasonId = `suggest-reason-${d.id}`
               return (
-                <div className="doc-suggest">
-                  <span className="doc-suggest-text">
+                <div className="doc-suggest" role="group" aria-labelledby={textId}>
+                  <span className="doc-suggest-text" id={textId}>
                     {t(sug.target.kind === 'newProject' ? 'docs.suggest.chipNew' : 'docs.suggest.chipExisting', {
                       name
                     })}
                   </span>
-                  <span className="doc-suggest-reason hint">{t(sug.reasonKey, sug.reasonParams)}</span>
+                  <span className="doc-suggest-reason hint" id={reasonId}>
+                    {t(sug.reasonKey, sug.reasonParams)}
+                  </span>
                   <Button
                     size="sm"
                     variant="primary"
                     disabled={busy !== null}
                     title={t('docs.suggest.applyTitle', { name })}
+                    aria-describedby={reasonId}
                     onClick={() => void onApplySuggestion(d.id, sug)}
                   >
                     {t('docs.suggest.apply')}

@@ -91,6 +91,24 @@ describe('collection-scoped retrieval', () => {
     expect(union.chunks.map((c) => c.documentId).sort()).toEqual([inProject, specific].sort())
   })
 
+  it('counts a doc in BOTH a picked collection AND documentIds exactly once (D1 union de-dup, TEST-8)', async () => {
+    const db = freshDb()
+    const embedder = new MockEmbedder()
+    const q = 'shared phrase across documents'
+    const both = await seedDocument(db, embedder, 'both.pdf', [q, q]) // two chunks
+    const project = createCollection(db, 'Tax')
+    addToCollection(db, [both], project.id)
+
+    // Same doc reachable via the collection EXISTS branch AND the explicit-id IN branch.
+    const union = await retrieve(db, embedder, q, SETTINGS, {
+      collectionIds: [project.id],
+      documentIds: [both]
+    })
+    // The UNION must not double-count: exactly the doc's two chunks, each once.
+    const fromBoth = union.chunks.filter((c) => c.documentId === both)
+    expect(fromBoth).toHaveLength(2)
+  })
+
   it('excludes document-level archived by default, includes with includeArchived (C1)', async () => {
     const db = freshDb()
     const embedder = new MockEmbedder()

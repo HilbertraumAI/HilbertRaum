@@ -478,6 +478,16 @@ describe('import destination filing', () => {
     fileFromPendingDestination(db, 'legacy')
     expect(isMember(db, 'legacy', lib.id)).toBe(true)
   })
+
+  it('fileFromPendingDestination NEVER files a generated doc (origin_json set) into Library (D3/N1)', () => {
+    const db = freshDb()
+    const lib = getBuiltinCollection(db, 'library')!
+    // A generated work-product: indexed, origin stamped, no pending destination, no membership.
+    // Re-indexing it drives fileFromPendingDestination, which must skip it (no Library sweep).
+    seedDoc(db, 'gen', { origin: JSON.stringify({ kind: 'translation', sourceDocumentIds: ['s'], createdAt: 'x' }) })
+    fileFromPendingDestination(db, 'gen')
+    expect(isMember(db, 'gen', lib.id)).toBe(false)
+  })
 })
 
 // ---- Privacy / offline (plan §17/§19.4) --------------------------------------------

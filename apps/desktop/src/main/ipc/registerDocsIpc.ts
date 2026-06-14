@@ -268,8 +268,9 @@ export function registerDocsIpc(ctx: AppContext): void {
               // File the freshly-indexed doc by its persisted destination (plan §11.3):
               // Library ⇒ Library; collection ⇒ that project; temporary/conversation ⇒
               // Temporary (+ the FK-guarded chat link). No recorded destination ⇒ the
-              // Library default, so old options-less imports stay byte-for-byte. Also the
-              // crash-resume entry point (M1) — a doc that finishes indexing files itself.
+              // Library default, so old options-less imports stay byte-for-byte. This is the
+              // in-session filing path; the crash-resume path (M1) files the same way from
+              // `reindexDocument` (whoever drives a doc to `indexed` files it).
               fileFromPendingDestination(ctx.db, id)
             }
             // Audit: filename + counts only — never the document's text.

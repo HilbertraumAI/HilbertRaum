@@ -431,10 +431,11 @@ export async function generateGroundedAnswer(
   if (chunks.length === 0) {
     // Distinguish "nothing relevant" from "the corpus is invisible to the active
     // embedder": the latter needs a re-index, not a rephrase. Either way the model is
-    // never called without context (grounding rule). The check is scope-aware ONLY when a
-    // composite `scope` was supplied (M2); the legacy doc-id path keeps the whole-corpus
-    // check unchanged, so existing behaviour is byte-identical.
-    const answer = corpusNeedsReindex(db, embedder.id, opts.scope ?? undefined)
+    // never called without context (grounding rule). The check uses the SAME scope retrieval
+    // used (`scopeArg`, normalized) — composite OR legacy doc-id — so the re-index honesty
+    // story holds on both paths (M2/RAG-1): a stale scope reports REINDEX_NEEDED, an empty
+    // scope reports NO_DOCUMENT_CONTEXT, never the whole-corpus answer when retrieval was scoped.
+    const answer = corpusNeedsReindex(db, embedder.id, normalizeScope(scopeArg))
       ? REINDEX_NEEDED_ANSWER
       : NO_DOCUMENT_CONTEXT_ANSWER
     opts.onToken?.(answer)

@@ -74,4 +74,33 @@ describe('settings persistence', () => {
     expect(updateSettings(db, { uiLanguage: 'fr' as never }).uiLanguage).toBe('en')
     expect(updateSettings(db, { uiLanguage: 'system' }).uiLanguage).toBe('system')
   })
+
+  it('validates a string[] setting element-wise and never persists a non-array/junk value (SEC-1)', () => {
+    const db = freshDb()
+    seedSettings(db)
+    expect(getSettings(db).dismissedFilingSuggestions).toEqual([]) // default
+
+    // A valid string[] round-trips and persists.
+    expect(updateSettings(db, { dismissedFilingSuggestions: ['a', 'b'] }).dismissedFilingSuggestions).toEqual([
+      'a',
+      'b'
+    ])
+
+    // Non-string elements are filtered out (coerced), not stored verbatim.
+    expect(
+      updateSettings(db, { dismissedFilingSuggestions: ['ok', 1, null, {}] as never }).dismissedFilingSuggestions
+    ).toEqual(['ok'])
+
+    // A non-array object passes the old `typeof === 'object'` check but is now REJECTED:
+    // the prior valid value is kept (the SEC-1 hole — `new Set(obj)` would have thrown).
+    expect(
+      updateSettings(db, { dismissedFilingSuggestions: { x: 1 } as never }).dismissedFilingSuggestions
+    ).toEqual(['ok'])
+
+    // Over-long arrays are capped so a renderer can't bloat the encrypted settings blob.
+    const huge = Array.from({ length: 10_005 }, (_, i) => `id-${i}`)
+    expect(updateSettings(db, { dismissedFilingSuggestions: huge }).dismissedFilingSuggestions).toHaveLength(
+      10_000
+    )
+  })
 })

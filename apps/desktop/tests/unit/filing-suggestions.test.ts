@@ -118,6 +118,68 @@ describe('suggestFilingForDocument (plan §20 Phase F)', () => {
     expect(out[0].ruleId).toBe('folder-name-match')
   })
 
+  it('folder-name match ranks an EXACT project-name match before a CONTAINED one (TEST-2)', () => {
+    const exact = project({ id: 'exact', name: 'Tax 2025' })
+    const contained = project({ id: 'contained', name: 'Tax' })
+    const subject = doc({ id: 'd', title: 'return.pdf', sourceFolderLabel: 'Tax 2025' })
+    // The contained project is listed FIRST to prove ordering is by exact-vs-contains
+    // (engine `:108`), not array order: folder "Tax 2025" == "Tax 2025" (exact), ⊃ "Tax".
+    const out = suggestFilingForDocument(subject, [contained, exact], [subject])
+    expect(out[0].target).toEqual({ kind: 'existingProject', collectionId: 'exact' })
+    expect(out.map((s) => (s.target as { collectionId: string }).collectionId)).toEqual([
+      'exact',
+      'contained'
+    ])
+    // Stable under re-run (determinism on a multi-project input — strengthens TEST-3).
+    expect(suggestFilingForDocument(subject, [contained, exact], [subject])).toEqual(out)
+  })
+
+  it('cohort tie-break: most-common project wins; an even tie breaks by lexicographic id (TEST-2)', () => {
+    const a = project({ id: 'aaa', name: 'Alpha' })
+    const b = project({ id: 'bbb', name: 'Beta' })
+    const sib = (id: string, projId: string, projName: string): DocumentInfo =>
+      doc({
+        id,
+        sourceFolderLabel: 'Downloads',
+        collections: [{ id: projId, name: projName, type: 'project', role: 'source' }]
+      })
+    // 'Downloads' matches no project name (rule 1 inert) and 'x.pdf' no pattern (rule 3 inert),
+    // so the cohort rule alone decides — letting us assert its tie-break in isolation.
+    const subject = doc({ id: 'd', title: 'x.pdf', sourceFolderLabel: 'Downloads' })
+
+    // 2-in-A vs 1-in-B ⇒ A wins.
+    const out = suggestFilingForDocument(
+      subject,
+      [a, b],
+      [subject, sib('s1', 'aaa', 'Alpha'), sib('s2', 'aaa', 'Alpha'), sib('s3', 'bbb', 'Beta')]
+    )
+    expect(out[0]).toMatchObject({
+      ruleId: 'same-source-folder-cohort',
+      target: { kind: 'existingProject', collectionId: 'aaa' }
+    })
+
+    // 1-in-A vs 1-in-B (even) ⇒ the lexicographically smaller id ('aaa' < 'bbb') wins.
+    const tie = suggestFilingForDocument(
+      subject,
+      [a, b],
+      [subject, sib('s1', 'aaa', 'Alpha'), sib('s2', 'bbb', 'Beta')]
+    )
+    expect(tie[0].target).toEqual({ kind: 'existingProject', collectionId: 'aaa' })
+  })
+
+  it('is tolerant of a malformed/odd origin shape at the engine boundary (excluded, no throw — TEST-5)', () => {
+    const tax = project({ id: 'tax', name: 'Tax 2025' })
+    const base = { title: 'return.pdf', sourceFolderLabel: 'Tax 2025' }
+    // Any non-null origin marks a generated work-product and is excluded structurally —
+    // even shapes the parser would never produce. The engine must not inspect/parse it.
+    const oddOrigins = [{}, { kind: 'nope' }, 'not-an-object', 42]
+    for (const origin of oddOrigins) {
+      const subject = doc({ ...base, id: 'g', origin: origin as never })
+      expect(() => suggestFilingForDocument(subject, [tax], [subject])).not.toThrow()
+      expect(suggestFilingForDocument(subject, [tax], [subject])).toEqual([])
+    }
+  })
+
   it('excludes generated / temporary / archived / already-filed docs as subjects', () => {
     const tax = project({ id: 'tax', name: 'Tax 2025' })
     const base = { title: 'return.pdf', sourceFolderLabel: 'Tax 2025' }

@@ -7,7 +7,7 @@ import {
   readFileSync,
   statSync
 } from 'node:fs'
-import { basename, extname, isAbsolute, join, relative } from 'node:path'
+import { basename, extname, isAbsolute, join, relative, sep } from 'node:path'
 import { t } from '../../../shared/i18n'
 import { tMain } from '../i18n'
 import type { Db } from '../db'
@@ -23,7 +23,7 @@ import type {
   IngestionStatus
 } from '../../../shared/types'
 import { sha256File } from '../models'
-import { docLifecycle } from '../collections'
+import { docLifecycle, fileFromPendingDestination } from '../collections'
 import { type Embedder, encodeVector } from '../embeddings'
 import { ENCRYPTED_DOC_SUFFIX, shredFile, type DocumentCipher } from '../workspace-vault'
 import type { Transcriber } from '../transcriber'
@@ -378,6 +378,14 @@ export interface CreateQueuedDocumentOptions {
    * `fileFromPendingDestination`. Omit ⇒ no recorded intent ⇒ Library default.
    */
   destination?: ImportDestination
+  /**
+   * Provenance for an app-GENERATED document (translation/comparison/transcript, plan
+   * §15.1, D3/N1). Stamped into `origin_json` AT QUEUE TIME, before the row can ever be
+   * `indexed`, so the Library backfill's `origin_json IS NULL` guard (db.ts) holds even if
+   * the process is killed mid-import — a half-born work-product is never swept into Library
+   * (DM-2). A generated row also gets NO membership; both together keep it explicit-id only.
+   */
+  origin?: DocumentOrigin
   /** Folder-import display metadata (N12; display-only). */
   sourceRelativePath?: string | null
   sourceFolderLabel?: string | null
@@ -406,8 +414,8 @@ export function createQueuedDocument(
   db.prepare(
     `INSERT INTO documents
        (id, title, original_path, stored_path, mime_type, size_bytes, sha256, status, error_message,
-        pending_destination_json, source_relative_path, source_folder_label, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        pending_destination_json, origin_json, source_relative_path, source_folder_label, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     id,
     title,
@@ -419,6 +427,10 @@ export function createQueuedDocument(
     'queued',
     null,
     o.destination ? JSON.stringify(o.destination) : null,
+    // Generated provenance is stamped HERE (before `indexed`) so the Library backfill never
+    // sweeps a crash-interrupted work-product in (DM-2). original_path stays set — the parser
+    // still needs the transient source on first index; setDocumentOrigin nulls it post-success.
+    o.origin ? JSON.stringify(o.origin) : null,
     o.sourceRelativePath ?? null,
     o.sourceFolderLabel ?? null,
     now,
@@ -807,7 +819,16 @@ export async function reindexDocument(
   if (!row) throw new Error(`Unknown document: ${documentId}`)
   setDocumentSummary(db, documentId, null)
   setStatus(db, documentId, 'queued')
-  return processDocument(db, storeDir, documentId, deps)
+  const info = await processDocument(db, storeDir, documentId, deps)
+  // M1 crash-resume: a crash-interrupted import is re-driven to `indexed` through HERE (the
+  // user clicks Re-index on the reconciled `failed` row), NOT through the in-session import
+  // loop. So filing-by-pending-destination must happen on this path too, or the doc loses
+  // its Project/Temporary/conversation intent and the next backfill sweeps it into Library.
+  // `fileFromPendingDestination` is idempotent (Library is unfiled-guarded, pending cleared
+  // on first success, generated docs skipped), so a normal re-index of an already-filed doc
+  // is a no-op — making this a true single indexing-success entry point.
+  if (info.status === 'indexed') fileFromPendingDestination(db, documentId)
+  return info
 }
 
 /**
@@ -1117,7 +1138,9 @@ export function expandPathsWithSource(paths: string[]): ExpandedFile[] {
   }
 
   return flat.map((path) => {
-    const root = roots.find((r) => path.startsWith(r.dir))
+    // Match on a separator boundary, not a raw string prefix, so a file under `…\taxes`
+    // can't false-attribute its folder label to a sibling picked root `…\tax` (DM-3).
+    const root = roots.find((r) => path === r.dir || path.startsWith(r.dir + sep))
     return root
       ? { path, sourceRelativePath: cleanRelative(root.dir, path), sourceFolderLabel: root.label }
       : { path, sourceRelativePath: null, sourceFolderLabel: null }
