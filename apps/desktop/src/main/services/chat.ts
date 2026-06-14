@@ -446,7 +446,32 @@ export function buildChatMessages(db: Db, conversationId: string): ChatMessage[]
       })
     }
   }
-  return messages
+  return collapseToAlternating(messages)
+}
+
+/**
+ * Force strict user/assistant alternation (after the leading system message) before the
+ * messages reach the model. A turn whose role repeats the previous kept turn — e.g.
+ * consecutive USER turns left behind when an answer failed and persisted no assistant
+ * reply — collapses to the LATEST of that run (stale orphans dropped). Several chat
+ * templates (Mistral, Qwen tool-style) RAISE on non-alternating roles, which surfaced as
+ * an HTTP 500 on the next turn; this keeps the conversation answerable regardless.
+ */
+export function collapseToAlternating(messages: ChatMessage[]): ChatMessage[] {
+  const out: ChatMessage[] = []
+  for (const m of messages) {
+    if (m.role === 'system') {
+      out.push(m)
+      continue
+    }
+    const prev = out[out.length - 1]
+    if (prev && prev.role === m.role) {
+      out[out.length - 1] = m
+    } else {
+      out.push(m)
+    }
+  }
+  return out
 }
 
 export interface GenerateOptions {

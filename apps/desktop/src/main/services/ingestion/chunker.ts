@@ -3,11 +3,17 @@ import type { ExtractedSegment } from './parsers'
 // Chunker (spec §7.7). Splits a document's extracted segments into overlapping,
 // fixed-size chunks ready for embedding and retrieval.
 //
-// Token counting is an APPROXIMATION: each whitespace-delimited word counts as one
-// token. This is deterministic, dependency-free, and good enough to size chunks; a
-// real tokenizer can replace `tokenize`/`approxTokenCount` without changing the chunk
-// metadata shape. The real model's context budget is generous relative to the
-// 500-token target, so the approximation is safe.
+// Token counting is an APPROXIMATION, but it must never wildly UNDER-count: every
+// context budget in the app (chunk size, summary/translation/compare windows, the RAG
+// context cap) is derived from `approxTokenCount`, and an under-count lets the assembled
+// prompt overflow the model's context window — the server then rejects it with HTTP 400
+// (`exceed_context_size_error`). A naive whitespace-word count does exactly that for text
+// WITHOUT spaces — CJK/Thai, or PDF/extraction runs with no word breaks — where a whole
+// paragraph collapses to "1 word". So `approxTokenCount` counts space-less scripts
+// per-character and charges long no-space runs by length, biased to slightly OVER-count
+// (over-filling never 400s; under-filling does). Windowing (`windowByTokens`) likewise
+// hard-cuts space-less runs by character instead of leaving them whole. A real tokenizer
+// can still replace these without changing the chunk-metadata shape.
 //
 // Chunking is done WITHIN each segment, so a chunk never straddles a page or section
 // boundary — every chunk inherits exactly one `pageNumber`/`sectionLabel` from its
@@ -44,14 +50,127 @@ export interface DocumentChunk {
   tokenCount: number
 }
 
-/** Split text into approximate tokens (whitespace-delimited words). */
+/** Split text into whitespace-delimited words. NB: this is a plain word split, NOT a
+ * token estimate — for budgeting use `approxTokenCount`, which also handles space-less
+ * scripts. Kept for callers that genuinely want words (e.g. keyword search). */
 export function tokenize(text: string): string[] {
   return text.split(/\s+/).filter((t) => t.length > 0)
 }
 
-/** Approximate token count for a string (see module note on the approximation). */
+// Scripts whose real tokenizers split roughly per-character AND that carry no whitespace
+// word boundaries: Hiragana/Katakana, CJK ext-A, CJK unified, compatibility ideographs,
+// Hangul syllables, half/fullwidth forms, Thai. Counted ~1 token/char (a safe over-count).
+const SPACELESS_SCRIPT_RE =
+  /[぀-ヿ㐀-䶿一-鿿豈-﫿가-힯＀-￯฀-๿]/g
+/** Average characters per token for BPE text — used to charge ABNORMALLY long runs. */
+const CHARS_PER_TOKEN = 4
+/**
+ * A whitespace word up to this many characters counts as one token (the long-standing
+ * word≈token estimate, which is fine for ordinary prose in any space-separated language).
+ * Only words LONGER than this — a glued no-space PDF run, base64, a giant URL — are
+ * charged by length, so the estimate can't collapse a huge run to a single token.
+ */
+const ONE_TOKEN_WORD_CHARS = 16
+
+/**
+ * Approximate MODEL-token count for a string (see the module note). Space-less-script
+ * characters (CJK/Thai/…) count ~1 token each; an ordinary whitespace word counts as one
+ * token; only an over-long no-space run is charged `ceil(len / CHARS_PER_TOKEN)`. The
+ * estimate is unchanged for normal prose and merely refuses to under-count space-less or
+ * glued text — the case that let document prompts overflow the context (HTTP 400).
+ */
 export function approxTokenCount(text: string): number {
-  return tokenize(text).length
+  const spaceless = text.match(SPACELESS_SCRIPT_RE)?.length ?? 0
+  let tokens = spaceless
+  // Strip the space-less chars (already counted) before the word pass so they don't
+  // also inflate a surrounding word's length.
+  const rest = text.replace(SPACELESS_SCRIPT_RE, ' ')
+  for (const word of rest.split(/\s+/)) {
+    if (word.length === 0) continue
+    tokens += word.length <= ONE_TOKEN_WORD_CHARS ? 1 : Math.ceil(word.length / CHARS_PER_TOKEN)
+  }
+  return tokens
+}
+
+/** One atom of text for windowing: a substring plus its approx token cost. */
+interface TokenAtom {
+  text: string
+  tokens: number
+}
+
+/**
+ * Split `text` into atoms (whitespace words), hard-cutting any single word longer than
+ * `maxAtomTokens` tokens into character pieces that each fit — so a space-less run yields
+ * MANY atoms instead of one giant one. Each atom's text is a raw substring (no characters
+ * inserted), so re-joining the pieces of one cut word reproduces it exactly.
+ */
+function atomize(text: string, maxAtomTokens: number): TokenAtom[] {
+  const cap = Math.max(1, Math.floor(maxAtomTokens))
+  const atoms: TokenAtom[] = []
+  for (const word of text.split(/\s+/)) {
+    if (word.length === 0) continue
+    const tokens = approxTokenCount(word)
+    if (tokens <= cap) {
+      atoms.push({ text: word, tokens })
+      continue
+    }
+    // Over-long word (no whitespace to break on): cut by character. `cap` chars is a
+    // safe slice length — even all-CJK (1 token/char) yields ≤ cap tokens per piece.
+    for (let i = 0; i < word.length; i += cap) {
+      const piece = word.slice(i, i + cap)
+      atoms.push({ text: piece, tokens: approxTokenCount(piece) })
+    }
+  }
+  return atoms
+}
+
+/**
+ * Split `text` into consecutive windows, each at most `size` approx tokens, overlapping
+ * by ~`overlap` tokens. Windows are content-preserving substrings (words re-joined by a
+ * single space, like the pre-existing chunker; a space-less run is character-sliced with
+ * nothing inserted). Unlike a raw word split, this never yields a window larger than the
+ * budget for text without spaces — the bug that let document prompts overflow the model
+ * context. With `overlap = 0` it is a plain non-overlapping split.
+ */
+export function windowByTokens(text: string, size: number, overlap = 0): string[] {
+  const sz = Math.max(1, Math.floor(size))
+  const ov = Math.max(0, Math.min(Math.floor(overlap), sz - 1))
+  const atoms = atomize(text, sz)
+  if (atoms.length === 0) return []
+
+  const windows: string[] = []
+  let i = 0
+  while (i < atoms.length) {
+    let j = i
+    let sum = 0
+    // Always take at least one atom (it fits — atomize capped each at `sz`).
+    while (j < atoms.length && (sum === 0 || sum + atoms[j].tokens <= sz)) {
+      sum += atoms[j].tokens
+      j += 1
+    }
+    windows.push(
+      atoms
+        .slice(i, j)
+        .map((a) => a.text)
+        .join(' ')
+    )
+    if (j >= atoms.length) break
+    // Step the next window back to re-include ~`ov` tokens, but advance at least one atom.
+    let start = j
+    let back = 0
+    while (start > i + 1 && back + atoms[start - 1].tokens <= ov) {
+      start -= 1
+      back += atoms[start].tokens
+    }
+    i = start
+  }
+  return windows
+}
+
+/** The leading prefix of `text` that fits in `maxTokens` approx tokens (the rest is
+ * dropped). Content-preserving. Used where a single block must be clamped to a budget. */
+export function truncateToApproxTokens(text: string, maxTokens: number): string {
+  return windowByTokens(text, maxTokens, 0)[0] ?? ''
 }
 
 function clampInt(value: number, min: number, max: number): number {
@@ -90,31 +209,26 @@ export function chunkSegments(
   // Overlap must be < size, otherwise the window never advances.
   const overlap = clampInt(options.chunkOverlapTokens ?? CHUNK_DEFAULTS.chunkOverlapTokens, 0, size - 1)
   const maxChunks = Math.max(0, Math.floor(options.maxChunks ?? CHUNK_DEFAULTS.maxChunks))
-  const step = size - overlap
 
   const chunks: DocumentChunk[] = []
   let index = 0
 
   for (const segment of coalesceSegments(segments)) {
-    const tokens = tokenize(segment.text)
-    if (tokens.length === 0) continue
     const pageNumber = segment.pageNumber ?? null
     const sectionLabel = segment.sectionLabel ?? null
 
-    for (let start = 0; start < tokens.length; start += step) {
+    // `windowByTokens` handles overlap AND space-less text (no one-giant-chunk); it
+    // already stops at the segment end, so there is no redundant tail window to guard.
+    for (const text of windowByTokens(segment.text, size, overlap)) {
       if (index >= maxChunks) return chunks
-      const slice = tokens.slice(start, start + size)
       chunks.push({
         chunkIndex: index,
-        text: slice.join(' '),
+        text,
         pageNumber,
         sectionLabel,
-        tokenCount: slice.length
+        tokenCount: approxTokenCount(text)
       })
       index += 1
-      // This window already reached the end of the segment — stop before producing a
-      // redundant tail chunk that begins inside the region we just covered.
-      if (start + size >= tokens.length) break
     }
   }
 

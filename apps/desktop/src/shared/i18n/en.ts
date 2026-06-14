@@ -813,6 +813,8 @@ export const en = {
   'main.runtime.compatibilityMode':
     'Switched to compatibility mode for stability. Everything keeps working — responses may be a bit slower.',
   'main.noModelRunning': 'No AI model is running. Open the AI Model screen and start one first.',
+  'main.model.contextExceeded':
+    "This is too large for the current model's context window. Try a model with a larger context, or a smaller document.",
   'main.chat.streamInFlight': 'A response is already being generated for this conversation.',
   'main.chat.nothingToRegenerate': 'Nothing to regenerate yet.',
   'main.chat.emptyMessage': 'Cannot send an empty message.',

@@ -137,6 +137,20 @@ the whole DB file is encrypted at rest.
   order. The **system prompt is built per request and not persisted** — the `messages` table
   holds only user/assistant turns, so the prompt can evolve (the grounded path swaps its own
   prompt into the last user turn). `messages.citations_json` is written only by grounded answers.
+- **Role alternation (fix 2026-06-14).** A failed answer persists the user turn but no
+  assistant reply; left unguarded, the next turn sent **consecutive user messages**, which
+  several chat templates (Mistral, Qwen tool-style) reject with `HTTP 500` ("roles must
+  alternate"). `buildChatMessages` and `buildGroundedChatMessages` run `collapseToAlternating`,
+  which forces strict user/assistant alternation after the system prompt by keeping the LATEST
+  of any same-role run (stale orphan turns dropped) — so a conversation with earlier failures
+  stays answerable.
+- **Surfaced runtime errors (fix 2026-06-14).** `LlamaRuntime.chatStream` throws a typed
+  `ChatRequestError` carrying the server's `{error:{message,type}}` body (previously the body
+  was discarded and only "HTTP <status>" survived). `isExceedContextError` recognizes the
+  `exceed_context_size_error` (an HTTP 400 — the prompt is larger than `contextTokens`); the
+  doctask manager and the chat/RAG stream wrapper map it to the friendly, localized
+  `main.model.contextExceeded` ("too large for this model — try a larger-context model or a
+  smaller document") instead of a raw code. The raw reason still goes to the local log only.
 - **Streaming contract (LOCKED).** Main → renderer over per-conversation IPC event channels
   keyed by the conversation id: `chat:token:<id>` (one token per event), `chat:done:<id>`
   (the final assistant `Message`), `chat:error:<id>` (an error string) — helpers in

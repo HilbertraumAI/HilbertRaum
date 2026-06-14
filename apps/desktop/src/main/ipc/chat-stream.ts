@@ -4,6 +4,7 @@ import type { AppContext } from '../services/context'
 import { DOC_TASK_BUSY_MESSAGE, type Conversation, type Message } from '../../shared/types'
 import { getConversation } from '../services/chat'
 import type { ModelRuntime } from '../services/runtime'
+import { isExceedContextError } from '../services/runtime/llama'
 import { tMain } from '../services/i18n'
 import { log } from '../services/logging'
 import { inFlightStreams, streamBuffers } from './inflight'
@@ -92,8 +93,12 @@ export async function withChatStream(
     }
     return assistant
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err)
-    log.error(logLabel, { conversationId, message })
+    const raw = err instanceof Error ? err.message : String(err)
+    // A grounded answer whose retrieved context overflows the model is an HTTP 400; show
+    // the actionable "too large for this model" copy to the user (the raw reason still
+    // goes to the local log).
+    const message = isExceedContextError(err) ? tMain('main.model.contextExceeded') : raw
+    log.error(logLabel, { conversationId, message: raw })
     if (!event.sender.isDestroyed()) {
       event.sender.send(STREAM.error(conversationId), message)
     }

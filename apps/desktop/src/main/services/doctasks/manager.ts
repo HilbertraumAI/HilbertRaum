@@ -13,7 +13,8 @@ import type {
   TranslationTargetLang
 } from '../../../shared/types'
 import type { ChatMessage, ModelRuntime } from '../runtime'
-import { approxTokenCount, tokenize } from '../ingestion/chunker'
+import { isExceedContextError } from '../runtime/llama'
+import { approxTokenCount, truncateToApproxTokens } from '../ingestion/chunker'
 import {
   createQueuedDocument,
   deleteDocument,
@@ -424,8 +425,7 @@ export class DocTaskManager {
       let reduceInput = partials
       const totalWords = partials.reduce((n, p) => n + approxTokenCount(p), 0)
       if (totalWords > budgetWords) {
-        const allWords = tokenize(partials.join('\n\n'))
-        reduceInput = [allWords.slice(0, budgetWords).join(' ')]
+        reduceInput = [truncateToApproxTokens(partials.join('\n\n'), budgetWords)]
       }
       summaryText = await this.generate(
         runtime,
@@ -829,7 +829,7 @@ export class DocTaskManager {
         const rowWords = approxTokenCount(row.text)
         if (picked.length === 0 && rowWords > plan.pairBudgetWords) {
           picked.push({
-            text: tokenize(row.text).slice(0, plan.pairBudgetWords).join(' '),
+            text: truncateToApproxTokens(row.text, plan.pairBudgetWords),
             chunkIndex: row.chunkIndex
           })
           usedWords = plan.pairBudgetWords
@@ -868,7 +868,7 @@ export class DocTaskManager {
     let reduceInput = partials
     const totalWords = partials.reduce((n, p) => n + approxTokenCount(p), 0)
     if (totalWords > budgetWords) {
-      reduceInput = [tokenize(partials.join('\n\n')).slice(0, budgetWords).join(' ')]
+      reduceInput = [truncateToApproxTokens(partials.join('\n\n'), budgetWords)]
     }
     const report = await this.generate(
       runtime,
@@ -994,8 +994,16 @@ export class DocTaskManager {
       maxTokens,
       temperature
     })
-    for await (const token of stream) {
-      out += token
+    try {
+      for await (const token of stream) {
+        out += token
+      }
+    } catch (err) {
+      // A document window that overflows the model context comes back as an HTTP 400.
+      // Surface the actionable "too large for this model" copy (a friendly task error)
+      // rather than the raw "Chat request failed: HTTP 400" the generic path would hide.
+      if (isExceedContextError(err)) throw new Error(tMain('main.model.contextExceeded'))
+      throw err
     }
     // The mock runtime returns cleanly on abort; the real one throws AbortError. Both
     // must land in the `cancelled` state, so normalize the clean return into a throw.
@@ -1009,6 +1017,7 @@ export class DocTaskManager {
 /** Keys of the guard/validation copy that may pass through to the renderer on failure. */
 const FRIENDLY_TASK_ERROR_KEYS: readonly MessageKey[] = [
   'main.noModelRunning',
+  'main.model.contextExceeded',
   'main.task.refusedChatStreaming',
   'main.task.documentNotReady',
   'main.task.genericFailure',

@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest'
-import { chunkSegments, approxTokenCount, tokenize, CHUNK_DEFAULTS } from '../../src/main/services/ingestion/chunker'
+import {
+  chunkSegments,
+  approxTokenCount,
+  tokenize,
+  truncateToApproxTokens,
+  windowByTokens,
+  CHUNK_DEFAULTS
+} from '../../src/main/services/ingestion/chunker'
 import type { ExtractedSegment } from '../../src/main/services/ingestion/parsers'
 
 const words = (n: number): string => Array.from({ length: n }, (_, i) => `w${i}`).join(' ')
@@ -9,6 +16,61 @@ describe('tokenize / approxTokenCount', () => {
     expect(tokenize('  hello   world\n\nfoo ')).toEqual(['hello', 'world', 'foo'])
     expect(approxTokenCount('one two three')).toBe(3)
     expect(approxTokenCount('   ')).toBe(0)
+  })
+
+  // The bug fix: a whitespace-word count collapses space-less or glued text to ~1 token,
+  // which let document prompts overflow the model context (HTTP 400). The estimate must
+  // NOT under-count these — it counts CJK per character and charges long no-space runs.
+  it('counts space-less scripts (CJK/Thai) per character, not as one word', () => {
+    expect(approxTokenCount('情報情報情報')).toBe(6) // 6 chars, no spaces → 6, not 1
+    expect(approxTokenCount('你好世界')).toBe(4)
+    expect(approxTokenCount('สวัสดีครับ')).toBeGreaterThanOrEqual(8)
+  })
+
+  it('charges an over-long no-space run by length instead of as a single token', () => {
+    const blob = 'x'.repeat(4000) // one "word", no whitespace (e.g. base64 / glued PDF)
+    expect(approxTokenCount(blob)).toBeGreaterThanOrEqual(1000)
+  })
+
+  it('still treats ordinary prose words as ~1 token each (no regression)', () => {
+    expect(approxTokenCount(words(500))).toBe(500)
+    // Normal-length words (incl. German compounds up to the threshold) stay 1 token.
+    expect(approxTokenCount('the quick brown fox')).toBe(4)
+  })
+})
+
+describe('windowByTokens (content-preserving, space-less safe)', () => {
+  it('splits a space-less run into windows that each fit the budget', () => {
+    const cjk = '情'.repeat(5000) // 5000 tokens, no whitespace
+    const wins = windowByTokens(cjk, 500, 0)
+    expect(wins.length).toBeGreaterThan(1)
+    for (const w of wins) expect(approxTokenCount(w)).toBeLessThanOrEqual(500)
+    // No characters inserted/dropped: the pieces concatenate back to the original.
+    expect(wins.join('')).toBe(cjk)
+  })
+
+  it('keeps ordinary word windows within budget with overlap', () => {
+    const wins = windowByTokens(words(110), 40, 10)
+    for (const w of wins) expect(approxTokenCount(w)).toBeLessThanOrEqual(40)
+    expect(wins.length).toBeGreaterThan(1)
+  })
+
+  it('truncateToApproxTokens keeps a leading prefix within budget', () => {
+    expect(approxTokenCount(truncateToApproxTokens(words(1000), 50))).toBeLessThanOrEqual(50)
+    expect(truncateToApproxTokens('', 50)).toBe('')
+  })
+})
+
+describe('chunkSegments — space-less documents (the HTTP 400 fix)', () => {
+  it('bounds every chunk of a space-less document to the configured size', () => {
+    // A 6000-char CJK paragraph with NO whitespace previously became ONE giant chunk
+    // (~1 "word"); its prompt then overflowed the model context. It must window now.
+    const cjk = '情報'.repeat(3000) // 6000 chars, zero spaces
+    const chunks = chunkSegments([{ text: cjk }], { chunkSizeTokens: 500, chunkOverlapTokens: 0 })
+    expect(chunks.length).toBeGreaterThan(1)
+    for (const c of chunks) expect(c.tokenCount).toBeLessThanOrEqual(500)
+    // Content preserved across the chunk set.
+    expect(chunks.map((c) => c.text).join('')).toBe(cjk)
   })
 })
 

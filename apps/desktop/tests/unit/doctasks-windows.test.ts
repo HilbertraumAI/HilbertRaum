@@ -85,6 +85,19 @@ describe('planSummaryWindows — single-pass vs map-reduce cutover', () => {
     const plan = planSummaryWindows(['   ', chunkOf(10)], CTX)
     expect(plan.windows).toHaveLength(1)
   })
+
+  // The HTTP 400 fix: a space-less chunk (CJK / glued PDF run) used to count as ~1 "word",
+  // so it packed into a single pass whose real prompt overflowed the model context. It must
+  // now window into in-budget pieces.
+  it('windows a space-less (CJK) chunk into in-budget pieces instead of one over-budget pass', () => {
+    const cjk = '情報'.repeat(3000) // 6000 tokens, zero whitespace; budget at CTX 4096 ≈ 2526
+    const plan = planSummaryWindows([cjk], CTX)
+    expect(plan.singlePass).toBe(false)
+    expect(plan.windows.length).toBeGreaterThan(1)
+    for (const w of plan.windows) {
+      expect(approxTokenCount(w)).toBeLessThanOrEqual(BUDGET)
+    }
+  })
 })
 
 describe('planSummaryWindows — the hard ceiling (truncated flag)', () => {

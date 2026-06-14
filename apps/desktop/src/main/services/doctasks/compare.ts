@@ -1,5 +1,5 @@
 import { extname } from 'node:path'
-import { tokenize } from '../ingestion/chunker'
+import { approxTokenCount, windowByTokens } from '../ingestion/chunker'
 import { SUMMARY_TOKENS_PER_WORD } from './summary'
 
 // Compare window math + templates (split out of the former monolithic doctasks.ts —
@@ -98,36 +98,37 @@ export function planCompareWindows(chunks: CompareChunkRef[], contextTokens: num
   const pairBudgetWords = Math.max(100, budget - aShare)
 
   // Split over-budget chunks into aShare-sized pieces (id kept), then pack greedily.
-  const pieces: Array<{ id: string; text: string; words: number }> = []
+  // Measuring/splitting by `approxTokenCount` (not a raw word count) keeps space-less or
+  // glued text from packing past the budget and overflowing the model context.
+  const pieces: Array<{ id: string; text: string; tokens: number }> = []
   for (const chunk of chunks) {
-    const words = tokenize(chunk.text)
-    if (words.length === 0) continue
-    if (words.length <= aShare) {
-      pieces.push({ id: chunk.id, text: chunk.text, words: words.length })
+    const tokens = approxTokenCount(chunk.text)
+    if (tokens === 0) continue
+    if (tokens <= aShare) {
+      pieces.push({ id: chunk.id, text: chunk.text, tokens })
     } else {
-      for (let at = 0; at < words.length; at += aShare) {
-        const slice = words.slice(at, at + aShare)
-        pieces.push({ id: chunk.id, text: slice.join(' '), words: slice.length })
+      for (const sub of windowByTokens(chunk.text, aShare, 0)) {
+        pieces.push({ id: chunk.id, text: sub, tokens: approxTokenCount(sub) })
       }
     }
   }
   const windows: CompareWindow[] = []
   let ids: string[] = []
   let texts: string[] = []
-  let words = 0
+  let tokens = 0
   const flush = (): void => {
     if (texts.length > 0) {
       windows.push({ chunkIds: ids, text: texts.join('\n\n') })
       ids = []
       texts = []
-      words = 0
+      tokens = 0
     }
   }
   for (const piece of pieces) {
-    if (words + piece.words > aShare) flush()
+    if (tokens > 0 && tokens + piece.tokens > aShare) flush()
     if (!ids.includes(piece.id)) ids.push(piece.id)
     texts.push(piece.text)
-    words += piece.words
+    tokens += piece.tokens
   }
   flush()
 

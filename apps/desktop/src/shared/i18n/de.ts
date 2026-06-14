@@ -873,6 +873,8 @@ export const de: Record<keyof typeof en, string> = {
     'weiter — Antworten können etwas langsamer sein.',
   'main.noModelRunning':
     'Es läuft kein KI-Modell. Öffne den KI-Modell-Bereich und starte zuerst eines.',
+  'main.model.contextExceeded':
+    'Das ist zu groß für das Kontextfenster des aktuellen Modells. Wähle ein Modell mit größerem Kontext oder ein kleineres Dokument.',
   'main.chat.streamInFlight': 'Für diese Unterhaltung wird bereits eine Antwort erstellt.',
   'main.chat.nothingToRegenerate': 'Es gibt noch keine Antwort, die neu erstellt werden könnte.',
   'main.chat.emptyMessage': 'Eine leere Nachricht kann nicht gesendet werden.',

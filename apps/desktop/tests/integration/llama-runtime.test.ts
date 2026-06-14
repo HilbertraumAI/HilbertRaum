@@ -2,9 +2,11 @@ import { describe, it, expect } from 'vitest'
 import { EventEmitter } from 'node:events'
 import {
   CHAT_SERVER_ARGS,
+  ChatRequestError,
   DEEP_TEMPERATURE,
   FAST_MAX_TOKENS,
   FAST_TEMPERATURE,
+  isExceedContextError,
   LlamaRuntime,
   readChatSSE,
   requestParamsForMode
@@ -171,6 +173,50 @@ describe('LlamaRuntime', () => {
       for await (const _t of runtime.chatStream([{ role: 'user', content: 'hi' }])) void _t
     }).rejects.toThrow(/HTTP 500/)
     await runtime.stop()
+  })
+
+  it('surfaces the server error body and flags an exceed-context HTTP 400', async () => {
+    const { spawn } = fakeSpawn()
+    const errorJson = JSON.stringify({
+      error: {
+        message: 'request (6006 tokens) exceeds the available context size (4096 tokens)',
+        type: 'exceed_context_size_error'
+      }
+    })
+    const fetchImpl = (async (url: string | URL) => {
+      const u = String(url)
+      if (u.endsWith('/health')) return { ok: true, status: 200 } as Response
+      return {
+        ok: false,
+        status: 400,
+        text: async () => errorJson
+      } as unknown as Response
+    }) as typeof fetch
+    const runtime = new LlamaRuntime(startOpts, {
+      binPath: '/bin/s',
+      spawn,
+      fetchImpl,
+      findPort: async () => 51010,
+      healthIntervalMs: 1
+    })
+    await runtime.start()
+    let caught: unknown
+    try {
+      for await (const _t of runtime.chatStream([{ role: 'user', content: 'hi' }])) void _t
+    } catch (err) {
+      caught = err
+    }
+    expect(caught).toBeInstanceOf(ChatRequestError)
+    expect((caught as Error).message).toMatch(/HTTP 400/)
+    // The server's REASON is now part of the error (it used to be discarded).
+    expect((caught as Error).message).toMatch(/exceeds the available context size/)
+    expect(isExceedContextError(caught)).toBe(true)
+    await runtime.stop()
+  })
+
+  it('isExceedContextError is false for ordinary errors and non-context HTTP failures', () => {
+    expect(isExceedContextError(new Error('boom'))).toBe(false)
+    expect(isExceedContextError(new ChatRequestError(503, 'service unavailable', ''))).toBe(false)
   })
 })
 
