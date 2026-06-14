@@ -105,6 +105,10 @@ describe('German render smokes (Phase 40)', () => {
     expect(
       screen.getByRole('button', { name: t('de', 'chat.exampleChat.explain') })
     ).toBeInTheDocument()
+    // The Phase-C attach affordance renders its German label (plan §11.2).
+    expect(
+      screen.getByRole('button', { name: t('de', 'chat.attach.button') })
+    ).toBeInTheDocument()
   })
 
   it('DocumentsScreen renders German (empty state + section rail)', async () => {

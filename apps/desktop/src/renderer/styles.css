@@ -628,9 +628,30 @@ code, pre, kbd { font-family: var(--font-mono); }
 }
 .popover-line { margin: 0; font-size: var(--text-sm); line-height: var(--line-sm); color: var(--text-muted); }
 .popover-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+/* "Files in this chat" (plan §13.1): read-only attachment chips, visually distinct from the
+   removable specific-doc selection chips above. A still-processing one is dimmed. */
+.scope-attachments { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border); }
+.scope-attachment { cursor: default; }
+.scope-attachment.pending { opacity: 0.7; font-style: italic; }
 .popover-reset { align-self: flex-start; }
 
-.chat-main { display: flex; flex-direction: column; min-height: 0; gap: 12px; }
+.chat-main { display: flex; flex-direction: column; min-height: 0; gap: 12px; position: relative; }
+/* Drag-drop intake target (plan §11.2): a calm dashed overlay while a file is dragged over
+   the chat surface — never alarming, just "drop here". */
+.chat-drop-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--surface) 82%, transparent);
+  border: 2px dashed var(--focus);
+  border-radius: var(--radius-md);
+  color: var(--text);
+  font-weight: 600;
+  pointer-events: none;
+}
 .chat-transcript {
   flex: 1;
   overflow-y: auto;
@@ -946,6 +967,20 @@ code, pre, kbd { font-family: var(--font-mono); }
 /* Voice-dictation mic: quiet ghost button beside Send; while recording it
    pulses so stopping is obvious (the OS mic indicator is the authoritative signal). */
 .dictation-btn { min-width: 44px; }
+/* Attach-files button: quiet ghost paperclip beside the mic/Send (plan §11.2). */
+.composer-attach {
+  align-self: center;
+  min-width: 40px;
+  height: 36px;
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: var(--text-lg);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.composer-attach:hover:not(:disabled) { color: var(--accent); }
+.composer-attach:disabled { opacity: 0.5; cursor: default; }
 /* Same hover treatment as the password reveal eye (gate-pw-toggle): no grey ghost fill,
    the glyph just shifts to the accent blue. Skipped while recording so the pulsing
    accent-border state stays intact. */

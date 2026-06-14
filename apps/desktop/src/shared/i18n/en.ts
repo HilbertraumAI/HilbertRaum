@@ -983,5 +983,13 @@ export const en = {
   'chat.scope.allTap': 'All documents',
   'chat.scope.filesInChatLine': 'Files in this chat',
   'chat.scope.noProjects': 'No projects yet',
-  'chat.scope.archivedFallback': 'This project was archived — answering from your Library.'
+  'chat.scope.archivedFallback': 'This project was archived — answering from your Library.',
+
+  // ---- Chat — attach / drag-drop a file into a chat (plan §11.2/§13.5, Phase C) ----
+  // German copy flagged for the D-L7 review (see BUILD_STATE).
+  'chat.attach.button': 'Attach files',
+  'chat.attach.drop': 'Drop files to use them in this chat',
+  'chat.attach.processing': 'Processing {name}…',
+  'chat.attach.newDocChat': 'Started a new document chat for {name}',
+  'chat.attach.failed': "Couldn't add {name} to this chat."
 } as const

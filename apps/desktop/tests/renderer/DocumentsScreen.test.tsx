@@ -100,6 +100,61 @@ describe('DocumentsScreen — organization', () => {
     // The Library membership renders as a chip (localized by type).
     expect(screen.getAllByText('Library').length).toBeGreaterThan(0)
   })
+
+  // ---- Phase C: Temporary lifecycle actions (plan §14.1) ----------------------------
+  function tempStubs(extra: Record<string, unknown> = {}): {
+    addToCollection: ReturnType<typeof vi.fn>
+    setDocumentLifecycle: ReturnType<typeof vi.fn>
+    removeFromCollection: ReturnType<typeof vi.fn>
+  } {
+    const library = coll({ id: 'lib', name: 'Library', type: 'library', builtin: true })
+    const temp = coll({ id: 'temp', name: 'Temporary', type: 'temporary', builtin: true })
+    const tax = coll({ id: 'tax', name: 'Tax 2025' })
+    const addToCollection = vi.fn(async () => {})
+    const setDocumentLifecycle = vi.fn(async () => [])
+    const removeFromCollection = vi.fn(async () => {})
+    stubApi({
+      listCollections: vi.fn(async () => [library, temp, tax]),
+      listDocuments: vi.fn(async () => [
+        doc({
+          id: 'd1',
+          title: 'invoice.pdf',
+          lifecycle: 'temporary',
+          collections: [{ id: 'temp', name: 'Temporary', type: 'temporary', role: 'source' }]
+        })
+      ]),
+      addToCollection,
+      setDocumentLifecycle,
+      removeFromCollection,
+      ...extra
+    })
+    return { addToCollection, setDocumentLifecycle, removeFromCollection }
+  }
+
+  it('"Keep in Library" adds Library, sets permanent, and drops Temporary', async () => {
+    const user = userEvent.setup()
+    const { addToCollection, setDocumentLifecycle, removeFromCollection } = tempStubs()
+    render(<DocumentsScreen />)
+    await screen.findByText('invoice.pdf')
+    await user.click(screen.getByRole('button', { name: 'Add to project…' }))
+    await user.click(await screen.findByRole('menuitem', { name: 'Keep in Library' }))
+    await waitFor(() => expect(addToCollection).toHaveBeenCalledWith(['d1'], 'lib'))
+    expect(setDocumentLifecycle).toHaveBeenCalledWith(['d1'], 'permanent')
+    expect(removeFromCollection).toHaveBeenCalledWith(['d1'], 'temp')
+  })
+
+  it('"Move to project" on a Temporary doc adds the project, sets permanent, and drops Temporary', async () => {
+    const user = userEvent.setup()
+    const { addToCollection, setDocumentLifecycle, removeFromCollection } = tempStubs()
+    render(<DocumentsScreen />)
+    await screen.findByText('invoice.pdf')
+    await user.click(screen.getByRole('button', { name: 'Add to project…' }))
+    await user.click(await screen.findByRole('menuitem', { name: 'Move to project…' }))
+    await user.click(await screen.findByRole('button', { name: 'Tax 2025' }))
+    await waitFor(() => expect(addToCollection).toHaveBeenCalledWith(['d1'], 'tax'))
+    expect(setDocumentLifecycle).toHaveBeenCalledWith(['d1'], 'permanent')
+    expect(removeFromCollection).toHaveBeenCalledWith(['d1'], 'temp')
+  })
 })
 
 describe('DocumentsScreen', () => {

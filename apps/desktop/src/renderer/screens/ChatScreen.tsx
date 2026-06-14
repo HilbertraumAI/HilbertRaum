@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, type DragEvent } from 'react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import {
   DOC_TASK_BUSY_MESSAGE,
@@ -135,6 +135,22 @@ export function ChatScreen({
       ? { collectionIds: [], documentIds: initialScopeDocumentIds }
       : null
   )
+  // Temporary chat attachments for the active conversation (plan C3): the docs dropped /
+  // attached into THIS chat, shown read-only as "Files in this chat" and always unioned
+  // into retrieval. Loaded from `listAttachments` whenever the active documents chat changes.
+  const [attachments, setAttachments] = useState<DocumentInfo[]>([])
+  // An in-flight attachment import (plan §11.2 N4): drives the non-removable "processing
+  // invoice.pdf…" pending chip until the doc is indexed and its `conversation_documents`
+  // link exists. Conversation-scoped so it only shows on the chat that received the file.
+  const [pendingImport, setPendingImport] = useState<{
+    jobId: string
+    convId: string
+    documentIds: string[]
+    fileNames: string[]
+  } | null>(null)
+  // Drag-over highlight for the chat-surface drop target (plan §11.2 net-new intake).
+  const [dragOver, setDragOver] = useState(false)
+  const attachPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   // Conversation-list collapse, remembered across sessions (localStorage — a UI
   // preference, NOT user data, so it may live outside the encrypted workspace).
   const [listCollapsed, setListCollapsed] = useState<boolean>(() => {
@@ -271,6 +287,30 @@ export function ChatScreen({
       .then(setMessages)
       .catch((e) => setError(friendlyIpcError(e)))
   }, [activeId])
+
+  // Load the conversation's chat attachments (plan C3) when it changes. Best-effort: a
+  // failed load (or an older preload without the channel) just hides the affordance.
+  const refreshAttachments = useCallback(async (convId: string | null): Promise<void> => {
+    if (!convId || !window.api.listAttachments) {
+      setAttachments([])
+      return
+    }
+    try {
+      setAttachments((await window.api.listAttachments(convId)) ?? [])
+    } catch {
+      setAttachments([])
+    }
+  }, [])
+  useEffect(() => {
+    void refreshAttachments(activeId)
+  }, [activeId, refreshAttachments])
+
+  // Stop the attachment-import poll on unmount.
+  useEffect(() => {
+    return () => {
+      if (attachPollRef.current) clearInterval(attachPollRef.current)
+    }
+  }, [])
 
   // Recover an in-flight generation after a remount: if the visible conversation is still
   // streaming in the main process (the user navigated away mid-reply and came back), show
@@ -596,6 +636,114 @@ export function ChatScreen({
     }
   }
 
+  // ---- Chat attach / drag-drop intake (plan §11.2 H1 / §13.5 H2) ---------------------
+  // Net-new ingestion entry point: dropped/picked files become Temporary docs linked to
+  // this conversation (`conversation_documents`), answerable here by default — never added
+  // to Library unless the user later Keeps them.
+
+  // Poll the import job; when a file indexes its link row is written (main-side, FK-guarded),
+  // so a refreshed `listAttachments` reveals it as a live "Files in this chat" entry. A
+  // failed file surfaces the friendly per-file error and writes no link (N4).
+  function watchAttachJob(jobId: string, convId: string, documentIds: string[]): void {
+    if (attachPollRef.current) clearInterval(attachPollRef.current)
+    attachPollRef.current = setInterval(async () => {
+      try {
+        const job = await window.api.getImportJob(jobId)
+        if (activeIdRef.current === convId) await refreshAttachments(convId)
+        if (!job.done) return
+        if (attachPollRef.current) clearInterval(attachPollRef.current)
+        attachPollRef.current = null
+        setPendingImport(null)
+        const fresh = (await window.api.listDocuments().catch(() => [])) ?? []
+        setDocs(fresh)
+        if (activeIdRef.current === convId) await refreshAttachments(convId)
+        // Per-file failure: show the friendly error (canonical English → display map).
+        if (job.failed > 0) {
+          const failed = fresh.find((d) => documentIds.includes(d.id) && d.status === 'failed')
+          if (failed) {
+            setError(
+              failed.errorMessage
+                ? localizeServerCopy(t, failed.errorMessage)
+                : t('chat.attach.failed', { name: failed.title })
+            )
+          }
+        }
+      } catch {
+        if (attachPollRef.current) clearInterval(attachPollRef.current)
+        attachPollRef.current = null
+        setPendingImport(null)
+      }
+    }, 400)
+  }
+
+  // Attach files to a chat. Routing (§13.5): a documents chat takes them directly; an
+  // in-progress PLAIN chat is never mutated — a new documents conversation is created and
+  // committed BEFORE the import references its id (N3 ordering), then focused with a toast;
+  // an empty chat switches in place to a documents conversation (nothing to lose).
+  async function attachFiles(paths: string[]): Promise<void> {
+    if (paths.length === 0 || busyStreaming) return
+    setError(null)
+    const fileNames = paths.map(fileBaseName)
+    const active = activeId ? conversations.find((c) => c.id === activeId) : undefined
+    try {
+      let convId: string
+      if (active && active.mode === 'documents') {
+        convId = active.id
+      } else if (active && active.mode === 'chat' && messages.length > 0) {
+        const conv = await window.api.createConversation({ mode: 'documents' })
+        convId = conv.id
+        setMode('documents')
+        setActiveId(conv.id)
+        setMessages([])
+        await refreshConversations()
+        showToast(t('chat.attach.newDocChat', { name: fileNames[0] }))
+      } else {
+        // Empty (no conversation, or an empty plain chat): switch in place to documents.
+        const conv = await window.api.createConversation({ mode: 'documents' })
+        convId = conv.id
+        setMode('documents')
+        setActiveId(conv.id)
+        setMessages([])
+        await refreshConversations()
+      }
+      const job = await window.api.importDocuments(paths, {
+        destination: { kind: 'conversation', conversationId: convId }
+      })
+      setPendingImport({ jobId: job.jobId, convId, documentIds: job.documentIds, fileNames })
+      watchAttachJob(job.jobId, convId, job.documentIds)
+    } catch (e) {
+      setError(friendlyIpcError(e))
+    }
+  }
+
+  // Keyboard-reachable picker fallback for the drag/drop target.
+  async function onPickAttach(): Promise<void> {
+    if (busyStreaming) return
+    try {
+      const paths = await window.api.pickDocuments('files')
+      if (paths.length > 0) await attachFiles(paths)
+    } catch (e) {
+      setError(friendlyIpcError(e))
+    }
+  }
+
+  function onDrop(e: DragEvent): void {
+    e.preventDefault()
+    setDragOver(false)
+    if (busyStreaming) return
+    const paths = pathsFromDrop(e)
+    if (paths.length > 0) void attachFiles(paths)
+  }
+
+  function onDragOver(e: DragEvent): void {
+    // preventDefault marks this a valid drop target; the copy cursor reads "add", not "move".
+    if (e.dataTransfer?.types?.includes('Files')) {
+      e.preventDefault()
+      e.dataTransfer.dropEffect = 'copy'
+      if (!busyStreaming) setDragOver(true)
+    }
+  }
+
   // Example-prompt chips fill the composer (the user still presses Send).
   function fillComposer(prompt: string): void {
     setInput(prompt)
@@ -679,7 +827,17 @@ export function ChatScreen({
         />
       )}
 
-      <section className="chat-main">
+      <section
+        className="chat-main"
+        onDragOver={onDragOver}
+        onDragLeave={() => setDragOver(false)}
+        onDrop={onDrop}
+      >
+        {dragOver && (
+          <div className="chat-drop-overlay" aria-hidden="true">
+            {t('chat.attach.drop')}
+          </div>
+        )}
         <div className="chat-header">
           {effectiveCollapsed && (
             <Button
@@ -784,6 +942,7 @@ export function ChatScreen({
           inputRef={composerRef}
           dictationAvailable={dictationAvailable}
           onDictationError={setError}
+          onAttach={() => void onPickAttach()}
           footer={
             mode === 'documents' ? (
               <span className="scope-footer-wrap">
@@ -797,6 +956,10 @@ export function ChatScreen({
                   disabled={busyStreaming}
                   onChangeScope={(next) => void onChangeScope(next)}
                   onAddDocuments={() => onNavigate('documents')}
+                  attachments={attachments}
+                  pendingAttachmentNames={
+                    pendingImport && pendingImport.convId === activeId ? pendingImport.fileNames : []
+                  }
                 />
               </span>
             ) : (
@@ -837,6 +1000,28 @@ function deriveScope(
   }
   if (conv.collectionId && !dangling) return { collectionIds: [conv.collectionId], documentIds: [] }
   return libraryDefault
+}
+
+/** Basename of an absolute path for a friendly chip label (cross-platform separators). */
+function fileBaseName(path: string): string {
+  const parts = path.split(/[/\\]/)
+  return parts[parts.length - 1] || path
+}
+
+/**
+ * Absolute paths of dropped files. Electron exposes `File.path` on a native drag/drop; the
+ * main process re-validates every path (existence + supported extension) downstream, so a
+ * spoofed entry simply fails to import. Files without a path (a browser drag) are skipped.
+ */
+function pathsFromDrop(e: DragEvent): string[] {
+  const files = e.dataTransfer?.files
+  if (!files) return []
+  const out: string[] = []
+  for (let i = 0; i < files.length; i++) {
+    const p = (files[i] as unknown as { path?: string }).path
+    if (typeof p === 'string' && p.length > 0) out.push(p)
+  }
+  return out
 }
 
 function optimisticUser(conversationId: string, content: string): Message {

@@ -1,14 +1,19 @@
 # Document organization plan — Library / Projects / Temporary / Generated / Archive
 
-_Status: **IN PROGRESS — Phase A (Collections core) + Phase B (Projects + composite scope, D1)
-implemented 2026-06-14.** Phase A = schema/migration/`CollectionService`/`resolveScope`/collection-aware
-retrieval backend. Phase B = the full IPC/preload surface (collections CRUD + membership + lifecycle +
-`chat:setScope`/`setCollection`), `resolveScope` wired into the live ask path (scope-aware
-`corpusNeedsReindex` M2 + filename auto-scope **within** the resolved scope, N2), `Conversation.scope`/
-`collectionId` + `scope_v2_json` persistence, import→Library default membership, delete-project two
-modes (C2), audit events (id/type/count only), and the renderer (Documents section rail + chips +
-project management; multi-select source picker; composer footer union; conversation-list project
-grouping). Phases C–F still open. Condense into a §-numbered design record in `docs/rag-design.md`
+_Status: **IN PROGRESS — Phase A (Collections core) + Phase B (Projects + composite scope, D1) +
+Phase C (Temporary analysis) implemented 2026-06-14.** Phase A = schema/migration/`CollectionService`/
+`resolveScope`/collection-aware retrieval backend. Phase B = the full IPC/preload surface (collections
+CRUD + membership + lifecycle + `chat:setScope`/`setCollection`), `resolveScope` wired into the live ask
+path (scope-aware `corpusNeedsReindex` M2 + filename auto-scope **within** the resolved scope, N2),
+`Conversation.scope`/`collectionId` + `scope_v2_json` persistence, import→Library default membership,
+delete-project two modes (C2), audit events (id/type/count only), and the renderer (Documents section
+rail + chips + project management; multi-select source picker; composer footer union; conversation-list
+project grouping). Phase C = `ImportDestination`/`ImportOptions` + destination-aware filing
+(`pending_destination_json` at queue time M1, applied on indexing success / crash-resume); net-new chat
+attach + drag-drop intake (`conversation_documents` link, FK-guarded N3) with plain-chat drop routing
+(§13.5 H2), in-flight pending chip → live attachment (N4), `chat:listAttachments`; Temporary view
+Keep/Move (drops Temporary, makes permanent) wiring. Phases D–F still open. Condense into a §-numbered
+design record in `docs/rag-design.md`
 (scope) + `docs/architecture.md` (data model / IPC) + `docs/user-guide.md` (UX) once the WHOLE feature
 ships, then delete this file (CLAUDE.md doc-lifecycle rule). Per-phase status lives in `BUILD_STATE.md`._
 

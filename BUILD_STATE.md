@@ -6,7 +6,57 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
-_Last updated: 2026-06-14 — **Document organization — Phase B (Projects + composite scope, D1).**
+_Last updated: 2026-06-14 — **Document organization — Phase C (Temporary analysis).**
+Third phase of [`docs/document-organization-plan.md`](docs/document-organization-plan.md) (esp. §2.5, §7.3,
+§11.1–§11.4 D2, §13.1/§13.3/§13.5, §14.1/§14.2, §16, §17, §19, §20 "Phase C"; audit C3/H1/H2/M1/N3/N4/N12).
+Builds the **net-new chat attach / drag-drop intake** + import-destination filing over the Phase-A/B
+backend. **Data contract** ([`shared/types.ts`](apps/desktop/src/shared/types.ts)): new `ImportDestination`
+(`{kind:'library'} | {kind:'collection';collectionId} | {kind:'temporary'} | {kind:'conversation';conversationId}`)
++ `ImportOptions` (`{destination?, preserveRelativePaths?}`). **Ingestion**
+([`ingestion/index.ts`](apps/desktop/src/main/services/ingestion/index.ts)): `createQueuedDocument(db, path,
+opts)` now persists the resolved destination into `documents.pending_destination_json` **at queue time**
+(M1) + folder `source_relative_path`/`source_folder_label`; new `expandPathsWithSource` (N12 folder
+metadata, L3 basename fallback); a bare-string 3rd arg still means `displayTitle` (doctasks caller
+unchanged). **Filing** ([`collections.ts`](apps/desktop/src/main/services/collections.ts)): new
+`fileFromPendingDestination` (the single indexing-success entry point — reads `pending_destination_json`,
+files, clears; NULL ⇒ Library default so old options-less imports stay byte-for-byte; also the crash-resume
+path), `fileDocumentByDestination`, `linkConversationDocument` (**FK-guarded N3** — verifies the conversation
+exists, try/catch the check-then-insert race; skip the link, keep the doc in Temporary if it's gone;
+append-only `ON CONFLICT DO NOTHING`), `conversationAttachmentIds`, `parsePendingDestination` (tolerant).
+A conversation/temporary destination ⇒ Temporary membership + `lifecycle='temporary'`; conversation also
+writes the `conversation_documents` link (C3) — **never** `scope_json` (H4/N5). **IPC/preload**:
+`docs:import` extended to `(paths, options?)` (the loop now files via `fileFromPendingDestination`, replacing
+the Phase-B blanket `fileIntoLibraryIfUnfiled`); new **`chat:listAttachments`** (the conversation's
+`conversation_documents` docs for the footer); both mirrored in [`preload`](apps/desktop/src/preload/index.ts).
+A renderer-untrusted `ImportDestination` is sanitized in the IPC (`sanitizeDestination` ⇒ Library fallback).
+**Renderer**: [`ChatScreen.tsx`](apps/desktop/src/renderer/screens/ChatScreen.tsx) gains a chat-surface
+**drag-drop target** + a Composer **📎 attach** picker (`onAttach`), the **intake** (`attachFiles` →
+`importDocuments(paths,{destination:{kind:'conversation',…}})`), **plain-chat drop routing** (§13.5/H2:
+documents chat ⇒ attach in place; empty ⇒ switch in place to a new documents conversation; an in-progress
+plain chat ⇒ **create+commit a NEW documents conversation before** the import references its id (N3), focus
+it, toast — **never** mutate/clear the plain chat), and the **pending chip → live attachment** transition
+(N4, driven by the existing `getImportJob` polling); [`ScopePopover.tsx`](apps/desktop/src/renderer/chat/ScopePopover.tsx)
+shows a read-only **"Files in this chat"** line (attachments always unioned in, NOT removable chips; a
+processing one is a pending chip) + a "· N file(s) in this chat" footer suffix;
+[`DocumentsScreen.tsx`](apps/desktop/src/renderer/screens/DocumentsScreen.tsx) "Move to project" on a
+**Temporary** doc now also makes it permanent + drops Temporary membership (§14.1; Keep-in-Library already did).
+**i18n**: new flat `chat.attach.*` keys (button/drop/processing/newDocChat/failed) EN+DE — **German copy
+flagged for the D-L7 review.** **Decisions locked:** temporary attachments live in `conversation_documents`
+(C3), never `scope_v2_json`; the LINK (not Temporary membership) is authoritative for "files in this chat";
+duplicate import is always-new (D2 — no sha dedup); deleting a conversation removes only the link (CASCADE),
+never the doc (§14.2); no retention sweep in v1 (Phase E); no new audit events. **Out of scope (Phase D+):**
+generated provenance; smart views / explicit retention. **Tests:** typecheck clean, build OK, `npm test`
+**1197 passed / 25 skipped** (+18: destination filing round-trip + M1 crash-resume + N3 FK-guard + idempotent
+link + `parsePendingDestination` in `collections.test.ts`; `docs-ipc` destination round-trip (temporary/
+conversation/project + options-less Library); `chat-ipc` `listAttachments`; renderer `ChatAttach.test.tsx`
+[empty-drop new conversation + pending chip, pending→live N4, plain-chat-with-messages new conversation +
+toast, read-only Files-in-this-chat]; DocumentsScreen Keep-in-Library / Move-from-Temporary; GermanSmoke
+attach button). No version bump. **Deliverable proof (covered by tests):** drop invoice.pdf into a chat ⇒
+it imports as a Temporary `conversation_documents` attachment answerable in that chat, appears in Documents →
+Temporary, and is NOT in Library until the user explicitly Keeps it. **Next:** Phase D — Generated provenance
+(D3: `GeneratedProvenance`, no membership, structurally excluded, downloadable + re-importable)._
+
+_(prior) 2026-06-14 — **Document organization — Phase B (Projects + composite scope, D1).**
 Second phase of [`docs/document-organization-plan.md`](docs/document-organization-plan.md) (esp. §0.1 D1,
 §8.3, §10.1, §12, §13, §16). Builds the user-facing surface over the Phase-A backend.
 **Data contract** ([`chat.ts`](apps/desktop/src/main/services/chat.ts)): `Conversation` gains

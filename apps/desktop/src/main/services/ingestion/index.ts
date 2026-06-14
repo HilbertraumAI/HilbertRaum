@@ -7,7 +7,7 @@ import {
   readFileSync,
   statSync
 } from 'node:fs'
-import { basename, extname, join } from 'node:path'
+import { basename, extname, isAbsolute, join, relative } from 'node:path'
 import { t } from '../../../shared/i18n'
 import { tMain } from '../i18n'
 import type { Db } from '../db'
@@ -18,6 +18,7 @@ import type {
   DocumentOrigin,
   DocumentPreview,
   DocumentSummary,
+  ImportDestination,
   IngestionStatus
 } from '../../../shared/types'
 import { sha256File } from '../models'
@@ -329,13 +330,41 @@ function setStatus(db: Db, id: string, status: IngestionStatus, errorMessage: st
 }
 
 /**
- * Insert a `queued` document row for `filePath` and return its DocumentInfo.
- * `displayTitle` overrides the filename-derived title for app-GENERATED
- * files imported from a transient path (e.g. a materialized translation) — the title
- * drives parser selection, the stored copy's extension, and citation source labels,
- * so it must be set BEFORE processing and must keep a supported extension.
+ * Options for `createQueuedDocument` (document-organization plan §11.3, Phase C). All
+ * optional; a bare string is accepted as a shorthand for `{ displayTitle }` so the
+ * doctasks materialized-document caller stays unchanged.
  */
-export function createQueuedDocument(db: Db, filePath: string, displayTitle?: string): DocumentInfo {
+export interface CreateQueuedDocumentOptions {
+  /**
+   * Overrides the filename-derived title for app-GENERATED files imported from a transient
+   * path (e.g. a materialized translation) — the title drives parser selection, the stored
+   * copy's extension, and citation source labels, so it must be set BEFORE processing and
+   * must keep a supported extension.
+   */
+  displayTitle?: string
+  /**
+   * Where this import should land (plan §11.3). Persisted into `pending_destination_json`
+   * at queue time (M1) so a crash-and-restart re-files to the intended destination instead
+   * of being swept into Library by the migration backfill. Applied on indexing SUCCESS via
+   * `fileFromPendingDestination`. Omit ⇒ no recorded intent ⇒ Library default.
+   */
+  destination?: ImportDestination
+  /** Folder-import display metadata (N12; display-only). */
+  sourceRelativePath?: string | null
+  sourceFolderLabel?: string | null
+}
+
+/**
+ * Insert a `queued` document row for `filePath` and return its DocumentInfo. The resolved
+ * import destination + folder metadata are persisted on the row immediately (plan §11.3,
+ * M1), before parse/embed.
+ */
+export function createQueuedDocument(
+  db: Db,
+  filePath: string,
+  opts: string | CreateQueuedDocumentOptions = {}
+): DocumentInfo {
+  const o: CreateQueuedDocumentOptions = typeof opts === 'string' ? { displayTitle: opts } : opts
   const now = nowIso()
   const id = randomUUID()
   let sizeBytes: number | null = null
@@ -344,12 +373,28 @@ export function createQueuedDocument(db: Db, filePath: string, displayTitle?: st
   } catch {
     sizeBytes = null
   }
-  const title = displayTitle ?? basename(filePath)
+  const title = o.displayTitle ?? basename(filePath)
   db.prepare(
     `INSERT INTO documents
-       (id, title, original_path, stored_path, mime_type, size_bytes, sha256, status, error_message, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).run(id, title, filePath, null, guessMime(title), sizeBytes, null, 'queued', null, now, now)
+       (id, title, original_path, stored_path, mime_type, size_bytes, sha256, status, error_message,
+        pending_destination_json, source_relative_path, source_folder_label, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    id,
+    title,
+    filePath,
+    null,
+    guessMime(title),
+    sizeBytes,
+    null,
+    'queued',
+    null,
+    o.destination ? JSON.stringify(o.destination) : null,
+    o.sourceRelativePath ?? null,
+    o.sourceFolderLabel ?? null,
+    now,
+    now
+  )
   return rowToInfo(getRow(db, id) as DocumentRow, 0)
 }
 
@@ -999,4 +1044,53 @@ export function expandPaths(paths: string[]): string[] {
     else add(p)
   }
   return out
+}
+
+/** An expanded file with its folder-import display metadata (plan §11.2, N12). */
+export interface ExpandedFile {
+  path: string
+  /** Path relative to the picked top-level folder root, or null for a picked file. */
+  sourceRelativePath: string | null
+  /** The picked top-level folder's name, or null for a picked file. */
+  sourceFolderLabel: string | null
+}
+
+/**
+ * Expand a selection like `expandPaths`, additionally capturing folder-import display
+ * metadata (plan §11.2): for a picked DIRECTORY, `sourceFolderLabel` is that directory's
+ * name and `sourceRelativePath` is each walked file's path relative to it; a picked FILE
+ * carries no metadata. **Display-only** (the stored copy is always
+ * `workspace/documents/<id><ext>`); never used for any file I/O.
+ *
+ * L3 symlink/basename fallback: `expandPaths`/`statSync` follow symlinks, so a symlinked
+ * entry can resolve outside the picked root and produce a relative path with `..` or a
+ * different drive root. When the relative path can't be cleanly computed, fall back to the
+ * bare basename. The order matches `expandPaths` (dedup by absolute path; first wins).
+ */
+export function expandPathsWithSource(paths: string[]): ExpandedFile[] {
+  const flat = expandPaths(paths)
+  // Map each picked DIRECTORY to its label, longest-prefix-first so a nested pick wins.
+  const roots: Array<{ dir: string; label: string }> = []
+  for (const p of paths) {
+    try {
+      if (statSync(p).isDirectory()) roots.push({ dir: p, label: basename(p) || p })
+    } catch {
+      // Unreadable pick — its files never made it into `flat` anyway.
+    }
+  }
+  roots.sort((a, b) => b.dir.length - a.dir.length)
+
+  const cleanRelative = (root: string, file: string): string => {
+    const rel = relative(root, file)
+    // A `..` escape or an absolute result (different drive on Windows) ⇒ basename fallback.
+    if (!rel || rel.startsWith('..') || isAbsolute(rel)) return basename(file)
+    return rel
+  }
+
+  return flat.map((path) => {
+    const root = roots.find((r) => path.startsWith(r.dir))
+    return root
+      ? { path, sourceRelativePath: cleanRelative(root.dir, path), sourceFolderLabel: root.label }
+      : { path, sourceRelativePath: null, sourceFolderLabel: null }
+  })
 }

@@ -2,19 +2,22 @@ import { randomUUID } from 'node:crypto'
 import { BrowserWindow, dialog, ipcMain } from 'electron'
 import { IPC } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
+import { statSync } from 'node:fs'
 import type {
   DocumentInfo,
   DocumentLifecycle,
   DocumentPreview,
+  ImportDestination,
   ImportJob,
   ImportJobStatus,
+  ImportOptions,
   ImportPreflight
 } from '../../shared/types'
 import {
   createQueuedDocument,
   deleteDocument,
   documentsDir,
-  expandPaths,
+  expandPathsWithSource,
   extractDocumentPreview,
   listDocuments,
   processDocument,
@@ -26,7 +29,7 @@ import {
 } from '../services/ingestion'
 import {
   addToCollection,
-  fileIntoLibraryIfUnfiled,
+  fileFromPendingDestination,
   removeFromCollection,
   setDocumentsLifecycle
 } from '../services/collections'
@@ -60,6 +63,27 @@ export interface DocumentListFilter {
 /** Untrusted-boundary guard: keep only non-empty string ids. */
 function safeIdArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((x): x is string => typeof x === 'string' && x.length > 0) : []
+}
+
+/**
+ * Untrusted-boundary guard for an `ImportDestination` (the renderer is untrusted). An
+ * unknown/malformed shape falls back to the Library default — never throws, never trusts a
+ * non-string id. (Whether the referenced collection/conversation actually exists is the
+ * filing step's concern — `linkConversationDocument` is FK-guarded; an unknown collection id
+ * simply yields a dangling membership row, harmless and ignored.)
+ */
+function sanitizeDestination(value: unknown): ImportDestination {
+  if (value && typeof value === 'object') {
+    const v = value as Record<string, unknown>
+    if (v.kind === 'temporary') return { kind: 'temporary' }
+    if (v.kind === 'collection' && typeof v.collectionId === 'string' && v.collectionId.length > 0) {
+      return { kind: 'collection', collectionId: v.collectionId }
+    }
+    if (v.kind === 'conversation' && typeof v.conversationId === 'string' && v.conversationId.length > 0) {
+      return { kind: 'conversation', conversationId: v.conversationId }
+    }
+  }
+  return { kind: 'library' }
 }
 
 /** Apply a `DocumentListFilter` to an already-built DocumentInfo list. */
@@ -156,7 +180,7 @@ export function registerDocsIpc(ctx: AppContext): void {
     return result.canceled ? [] : result.filePaths
   })
 
-  ipcMain.handle(IPC.importDocuments, (_e, paths: string[]): ImportJob => {
+  ipcMain.handle(IPC.importDocuments, (_e, paths: string[], options?: ImportOptions): ImportJob => {
     requireUnlocked()
     // Race guard: the whole import job holds a document-work lease so a vault
     // password change (which re-encrypts `.enc` sidecars) refuses to start while we
@@ -170,11 +194,31 @@ export function registerDocsIpc(ctx: AppContext): void {
     try {
       // M-S2: the renderer is the untrusted boundary — accept only an array of strings.
       // A non-array (or non-string elements) would otherwise crash expandPaths with the
-      // lease held. Element strings are still server-validated downstream (expandPaths
+      // lease held. Element strings are still server-validated downstream (expandPathsWithSource
       // filters to existing, supported files).
       const safePaths = Array.isArray(paths) ? paths.filter((p): p is string => typeof p === 'string') : []
-      const files = expandPaths(safePaths)
-      documentIds = files.map((f) => createQueuedDocument(ctx.db, f).id)
+      // Destination (plan §11.3): persisted per queued doc and applied on indexing success.
+      // No options ⇒ Library default, byte-for-byte with the pre-Phase-C behaviour.
+      const destination: ImportDestination = sanitizeDestination(options?.destination)
+      // preserveRelativePaths (N12): explicit when given, else default true for a folder
+      // import (any picked path is a directory), false otherwise. Display-only metadata.
+      const hasDir = safePaths.some((p) => {
+        try {
+          return statSync(p).isDirectory()
+        } catch {
+          return false
+        }
+      })
+      const preserve = options?.preserveRelativePaths ?? hasDir
+      const files = expandPathsWithSource(safePaths)
+      documentIds = files.map(
+        (f) =>
+          createQueuedDocument(ctx.db, f.path, {
+            destination,
+            sourceRelativePath: preserve ? f.sourceRelativePath : null,
+            sourceFolderLabel: preserve ? f.sourceFolderLabel : null
+          }).id
+      )
     } catch (err) {
       releaseDocWork()
       throw err
@@ -208,11 +252,12 @@ export function registerDocsIpc(ctx: AppContext): void {
             if (info.status === 'failed') status.failed += 1
             else {
               status.completed += 1
-              // Default destination = Library (plan §11.2): file the freshly-indexed doc
-              // into Library if it isn't filed anywhere yet, so "Library == all documents"
-              // holds for newly imported docs (not only ones present at the last open's
-              // migration backfill). Idempotent + safe for re-index (zero-membership guard).
-              fileIntoLibraryIfUnfiled(ctx.db, id)
+              // File the freshly-indexed doc by its persisted destination (plan §11.3):
+              // Library ⇒ Library; collection ⇒ that project; temporary/conversation ⇒
+              // Temporary (+ the FK-guarded chat link). No recorded destination ⇒ the
+              // Library default, so old options-less imports stay byte-for-byte. Also the
+              // crash-resume entry point (M1) — a doc that finishes indexing files itself.
+              fileFromPendingDestination(ctx.db, id)
             }
             // Audit: filename + counts only — never the document's text.
             ctx.audit?.('document_imported', `Document imported: ${info.title}`, {

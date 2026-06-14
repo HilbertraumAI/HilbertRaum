@@ -41,6 +41,8 @@ export const IPC = {
   setConversationScope: 'chat:setScope',
   /** Persist a conversation's creation-anchor project (`collection_id`, plan §13.4). */
   setConversationCollection: 'chat:setCollection',
+  /** A conversation's temporary chat attachments (`conversation_documents`, plan C3/§16). */
+  listAttachments: 'chat:listAttachments',
   /** Save a conversation transcript to a user-chosen file (spec §7.6). */
   exportConversation: 'chat:export',
   /** Full-text search across conversations. Queries are content: never logged/audited. */

@@ -862,6 +862,34 @@ export interface RetrievalScope {
   hasExplicitDocSelection?: boolean
 }
 
+/**
+ * Where an import should land (document-organization plan §11.3, Phase C). Resolved
+ * renderer-side per entry point (Documents screen ⇒ Library; inside a project ⇒ that
+ * project; chat attach/drop ⇒ that conversation), persisted into
+ * `documents.pending_destination_json` at queue time (M1) and applied on indexing success.
+ * A `conversation` destination links the doc to its chat via `conversation_documents`
+ * (C3) and makes it a Temporary doc — NEVER a `scope_json` mutation (N5/H4).
+ */
+export type ImportDestination =
+  | { kind: 'library' }
+  | { kind: 'collection'; collectionId: string }
+  | { kind: 'temporary' }
+  | { kind: 'conversation'; conversationId: string }
+
+/**
+ * Options for `importDocuments(paths, options?)` (plan §11.3). Entirely optional and
+ * backward-compatible: an old no-options caller defaults to Library, byte-for-byte.
+ */
+export interface ImportOptions {
+  /** Destination for every file in this import. Default `{ kind: 'library' }`. */
+  destination?: ImportDestination
+  /**
+   * Capture `source_relative_path` / `source_folder_label` display metadata for a folder
+   * import (N12). Default true for a folder import, false otherwise; display-only.
+   */
+  preserveRelativePaths?: boolean
+}
+
 // ---- Benchmark ----
 export interface BenchmarkResult {
   os: string

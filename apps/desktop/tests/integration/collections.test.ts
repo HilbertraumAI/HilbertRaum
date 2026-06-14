@@ -8,12 +8,17 @@ import { createRequire } from 'node:module'
 import { openDatabase, type Db } from '../../src/main/services/db'
 import {
   addToCollection,
+  conversationAttachmentIds,
   createCollection,
   deleteCollection,
   docLifecycle,
   documentIdsInCollection,
+  fileDocumentByDestination,
+  fileFromPendingDestination,
   getBuiltinCollection,
+  linkConversationDocument,
   listCollections,
+  parsePendingDestination,
   projectOnlyDocumentIds,
   removeFromCollection,
   renameCollection,
@@ -344,6 +349,134 @@ describe('conversation scope + collection round-trip', () => {
     addToCollection(db, ['libdoc'], project.id)
     addToCollection(db, ['projonly'], project.id)
     expect(projectOnlyDocumentIds(db, project.id)).toEqual(['projonly'])
+  })
+})
+
+// ---- Phase C: import destination filing (plan §11.3) -------------------------------
+
+describe('import destination filing', () => {
+  /** A document's stored lifecycle column (NULL-coalesced like the app). */
+  function lifecycleOf(db: Db, id: string): string {
+    const row = db.prepare('SELECT lifecycle FROM documents WHERE id = ?').get(id) as
+      | { lifecycle: string | null }
+      | undefined
+    return docLifecycle(row?.lifecycle)
+  }
+  function isMember(db: Db, docId: string, collectionId: string): boolean {
+    return (
+      (db
+        .prepare('SELECT 1 FROM document_collections WHERE document_id = ? AND collection_id = ?')
+        .get(docId, collectionId) as unknown) != null
+    )
+  }
+
+  it('parsePendingDestination tolerates junk and reads every kind', () => {
+    expect(parsePendingDestination(null)).toBeNull()
+    expect(parsePendingDestination('{bad')).toBeNull()
+    expect(parsePendingDestination(JSON.stringify({ kind: 'nope' }))).toBeNull()
+    expect(parsePendingDestination(JSON.stringify({ kind: 'collection' }))).toBeNull() // no id
+    expect(parsePendingDestination(JSON.stringify({ kind: 'library' }))).toEqual({ kind: 'library' })
+    expect(parsePendingDestination(JSON.stringify({ kind: 'temporary' }))).toEqual({
+      kind: 'temporary'
+    })
+    expect(
+      parsePendingDestination(JSON.stringify({ kind: 'collection', collectionId: 'p1' }))
+    ).toEqual({ kind: 'collection', collectionId: 'p1' })
+    expect(
+      parsePendingDestination(JSON.stringify({ kind: 'conversation', conversationId: 'c1' }))
+    ).toEqual({ kind: 'conversation', conversationId: 'c1' })
+  })
+
+  it('files a document by each destination kind (library/collection/temporary)', () => {
+    const db = freshDb()
+    const lib = getBuiltinCollection(db, 'library')!
+    const temp = getBuiltinCollection(db, 'temporary')!
+    const project = createCollection(db, 'Tax')
+
+    seedDoc(db, 'toLib')
+    fileDocumentByDestination(db, 'toLib', { kind: 'library' })
+    expect(isMember(db, 'toLib', lib.id)).toBe(true)
+
+    seedDoc(db, 'toProj')
+    fileDocumentByDestination(db, 'toProj', { kind: 'collection', collectionId: project.id })
+    expect(isMember(db, 'toProj', project.id)).toBe(true)
+    expect(isMember(db, 'toProj', lib.id)).toBe(false) // a project import is NOT in Library
+
+    seedDoc(db, 'toTemp')
+    fileDocumentByDestination(db, 'toTemp', { kind: 'temporary' })
+    expect(isMember(db, 'toTemp', temp.id)).toBe(true)
+    expect(lifecycleOf(db, 'toTemp')).toBe('temporary')
+    expect(isMember(db, 'toTemp', lib.id)).toBe(false) // temporary stays out of Library
+  })
+
+  it('a conversation destination links the doc + files it into Temporary (C3)', () => {
+    const db = freshDb()
+    const temp = getBuiltinCollection(db, 'temporary')!
+    const conv = createConversation(db, { mode: 'documents' })
+    seedDoc(db, 'attach')
+    fileDocumentByDestination(db, 'attach', { kind: 'conversation', conversationId: conv.id })
+    expect(conversationAttachmentIds(db, conv.id)).toEqual(['attach'])
+    expect(isMember(db, 'attach', temp.id)).toBe(true)
+    expect(lifecycleOf(db, 'attach')).toBe('temporary')
+    // The link makes it answerable in this chat (resolveScope rule 1).
+    expect(resolveScope(db, conv.id).documentIds).toContain('attach')
+  })
+
+  it('FK-guards the link write when the conversation is gone (N3) — doc stays in Temporary', () => {
+    const db = freshDb()
+    const temp = getBuiltinCollection(db, 'temporary')!
+    seedDoc(db, 'orphan')
+    // No such conversation: the link is skipped, never throws.
+    expect(linkConversationDocument(db, 'ghost-conv', 'orphan')).toBe(false)
+    expect(conversationAttachmentIds(db, 'ghost-conv')).toEqual([])
+    // Filing to a deleted conversation keeps the doc in Temporary, drops only the link.
+    fileDocumentByDestination(db, 'orphan', { kind: 'conversation', conversationId: 'ghost-conv' })
+    expect(isMember(db, 'orphan', temp.id)).toBe(true)
+    expect(lifecycleOf(db, 'orphan')).toBe('temporary')
+    expect(
+      db.prepare('SELECT COUNT(*) AS n FROM conversation_documents').get()
+    ).toEqual({ n: 0 })
+  })
+
+  it('the link write is idempotent (append-only, ON CONFLICT DO NOTHING)', () => {
+    const db = freshDb()
+    const conv = createConversation(db, { mode: 'documents' })
+    seedDoc(db, 'a1')
+    expect(linkConversationDocument(db, conv.id, 'a1')).toBe(true)
+    expect(linkConversationDocument(db, conv.id, 'a1')).toBe(true) // duplicate → no-op
+    expect(conversationAttachmentIds(db, conv.id)).toEqual(['a1'])
+  })
+
+  it('fileFromPendingDestination resumes a crash-interrupted import to its destination (M1)', () => {
+    const db = freshDb()
+    const lib = getBuiltinCollection(db, 'library')!
+    const project = createCollection(db, 'Lawsuit')
+    // A doc queued for a project, then "killed" mid-import (status stays queued).
+    seedDoc(db, 'resume', { status: 'queued' })
+    db.prepare('UPDATE documents SET pending_destination_json = ? WHERE id = ?').run(
+      JSON.stringify({ kind: 'collection', collectionId: project.id }),
+      'resume'
+    )
+    // The migration backfill (status='indexed' gated) must NOT file it into Library.
+    expect(isMember(db, 'resume', lib.id)).toBe(false)
+
+    // Resume: it reaches indexed and files itself to the persisted destination, clearing it.
+    db.prepare("UPDATE documents SET status = 'indexed' WHERE id = ?").run('resume')
+    fileFromPendingDestination(db, 'resume')
+    expect(isMember(db, 'resume', project.id)).toBe(true)
+    expect(isMember(db, 'resume', lib.id)).toBe(false)
+    const after = db.prepare('SELECT pending_destination_json FROM documents WHERE id = ?').get('resume') as {
+      pending_destination_json: string | null
+    }
+    expect(after.pending_destination_json).toBeNull()
+  })
+
+  it('fileFromPendingDestination with no recorded intent defaults to Library (byte-for-byte)', () => {
+    const db = freshDb()
+    const lib = getBuiltinCollection(db, 'library')!
+    seedDoc(db, 'legacy') // no pending_destination_json
+    fileFromPendingDestination(db, 'legacy')
+    expect(isMember(db, 'legacy', lib.id)).toBe(true)
   })
 })
 

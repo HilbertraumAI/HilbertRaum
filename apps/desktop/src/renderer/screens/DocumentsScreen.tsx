@@ -460,7 +460,19 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
     const ids = addToProjectFor
     setAddToProjectFor(null)
     if (!ids || ids.length === 0) return
-    await runOrg('org', () => window.api.addToCollection(ids, collectionId))
+    // Moving a Temporary doc into a project makes it durable (plan §14.1): add the project,
+    // set it permanent, and drop Temporary membership. Non-temporary docs are unaffected —
+    // the lifecycle/membership ops are scoped to the ids that are actually temporary.
+    const tempIds = ids.filter((id) => docs?.find((d) => d.id === id)?.lifecycle === 'temporary')
+    await runOrg('org', async () => {
+      await window.api.addToCollection(ids, collectionId)
+      if (tempIds.length > 0) {
+        await window.api.setDocumentLifecycle(tempIds, 'permanent')
+        if (temporaryCollection) {
+          await window.api.removeFromCollection(tempIds, temporaryCollection.id)
+        }
+      }
+    })
   }
 
   async function onRemoveFromCollection(documentId: string, collectionId: string): Promise<void> {

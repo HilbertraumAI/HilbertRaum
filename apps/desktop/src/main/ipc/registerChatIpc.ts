@@ -24,6 +24,9 @@ import {
   setScope,
   updateConversationScope
 } from '../services/chat'
+import { conversationAttachmentIds } from '../services/collections'
+import { listDocuments } from '../services/ingestion'
+import type { DocumentInfo } from '../../shared/types'
 import { tMain } from '../services/i18n'
 import { log } from '../services/logging'
 import { inFlightStreams, streamBuffers } from './inflight'
@@ -120,6 +123,17 @@ export function registerChatIpc(ctx: AppContext): void {
   )
 
   ipcMain.handle(IPC.listConversations, (): Conversation[] => listConversations(ctx.db))
+
+  // A conversation's temporary chat attachments (plan C3/§16 — `conversation_documents`):
+  // the docs dropped/attached into THIS chat, for the composer's read-only "Files in this
+  // chat" affordance. The link — not Temporary membership — is authoritative, so a doc the
+  // user later Keeps in Library still shows here. Only indexed+linked docs appear; a
+  // still-processing attachment is surfaced by the renderer's pending chip (import polling).
+  ipcMain.handle(IPC.listAttachments, (_e, conversationId: string): DocumentInfo[] => {
+    const ids = new Set(conversationAttachmentIds(ctx.db, conversationId))
+    if (ids.size === 0) return []
+    return listDocuments(ctx.db, ctx.embedder.id).filter((d) => ids.has(d.id))
+  })
 
   // Full-text search across conversations. The query and the returned snippets are
   // chat CONTENT: this handler must never log them and never writes an audit event

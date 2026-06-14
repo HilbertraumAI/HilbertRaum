@@ -21,6 +21,7 @@ import type {
   EngineStatus,
   ImportJob,
   ImportJobStatus,
+  ImportOptions,
   ImportPreflight,
   Message,
   ModelInfo,
@@ -150,6 +151,10 @@ const api = {
     collectionId: string | null
   ): Promise<Conversation> =>
     ipcRenderer.invoke(IPC.setConversationCollection, conversationId, collectionId),
+  /** The conversation's temporary chat attachments (plan C3 — for the "Files in this chat"
+   *  footer affordance). Only indexed+linked docs; a still-processing one shows as pending. */
+  listAttachments: (conversationId: string): Promise<DocumentInfo[]> =>
+    ipcRenderer.invoke(IPC.listAttachments, conversationId),
   listConversations: (): Promise<Conversation[]> => ipcRenderer.invoke(IPC.listConversations),
   listMessages: (conversationId: string): Promise<Message[]> =>
     ipcRenderer.invoke(IPC.listMessages, conversationId),
@@ -202,8 +207,10 @@ const api = {
   /** Open the OS picker for files (default) or a folder; returns selected paths. */
   pickDocuments: (mode?: 'files' | 'folder'): Promise<string[]> =>
     ipcRenderer.invoke(IPC.pickDocuments, mode),
-  importDocuments: (paths: string[]): Promise<ImportJob> =>
-    ipcRenderer.invoke(IPC.importDocuments, paths),
+  /** Import files. `options.destination` routes them (Library / a project / Temporary / a
+   *  chat attachment, plan §11.3); omitted ⇒ Library, byte-for-byte with old callers. */
+  importDocuments: (paths: string[], options?: ImportOptions): Promise<ImportJob> =>
+    ipcRenderer.invoke(IPC.importDocuments, paths, options),
   /** What a picked selection contains — drives the audio size confirm. */
   importPreflight: (paths: string[]): Promise<ImportPreflight> =>
     ipcRenderer.invoke(IPC.importPreflight, paths),

@@ -6,6 +6,7 @@ import type {
   DocumentCollectionRole,
   DocumentLifecycle,
   DocumentScope,
+  ImportDestination,
   RetrievalScope
 } from '../../shared/types'
 
@@ -218,9 +219,9 @@ export function projectOnlyDocumentIds(db: Db, collectionId: string): string[] {
 /**
  * File a freshly-indexed document into Library IF it has no membership yet (plan §11.2
  * default destination). Idempotent and safe for re-index: a doc already filed somewhere
- * (e.g. project-only) keeps its membership and is NOT re-filed to Library. Until the
- * Phase-C destination chooser ships, every import defaults to Library this way, so
- * "Library == all documents" stays true.
+ * (e.g. project-only) keeps its membership and is NOT re-filed to Library. This is the
+ * Library destination + the no-recorded-intent fallback of `fileFromPendingDestination`
+ * (Phase C), so an options-less import still lands in Library and "Library == all" holds.
  */
 export function fileIntoLibraryIfUnfiled(db: Db, documentId: string): void {
   const existing = db
@@ -229,6 +230,136 @@ export function fileIntoLibraryIfUnfiled(db: Db, documentId: string): void {
   if (existing) return
   const library = getBuiltinCollection(db, 'library')
   if (library) addToCollection(db, [documentId], library.id, 'source')
+}
+
+// ---- Phase-C import destination filing (plan §11.3) --------------------------------
+
+/** Tolerant parse of a stored `pending_destination_json`. Malformed/unknown ⇒ null. */
+export function parsePendingDestination(json: string | null | undefined): ImportDestination | null {
+  if (!json) return null
+  try {
+    const v = JSON.parse(json) as Record<string, unknown> | null
+    if (!v || typeof v !== 'object') return null
+    switch (v.kind) {
+      case 'library':
+        return { kind: 'library' }
+      case 'temporary':
+        return { kind: 'temporary' }
+      case 'collection':
+        return typeof v.collectionId === 'string' && v.collectionId.length > 0
+          ? { kind: 'collection', collectionId: v.collectionId }
+          : null
+      case 'conversation':
+        return typeof v.conversationId === 'string' && v.conversationId.length > 0
+          ? { kind: 'conversation', conversationId: v.conversationId }
+          : null
+      default:
+        return null
+    }
+  } catch {
+    return null
+  }
+}
+
+/** File a freshly-indexed document into the built-in Temporary collection + mark it
+ *  `lifecycle='temporary'` (plan §7.3/§14.1). Idempotent. */
+function fileIntoTemporary(db: Db, documentId: string): void {
+  const temporary = getBuiltinCollection(db, 'temporary')
+  if (temporary) addToCollection(db, [documentId], temporary.id, 'source')
+  setDocumentsLifecycle(db, [documentId], 'temporary')
+}
+
+/**
+ * Bind a temporary document to the conversation that received it (plan C3/§11.3) — the
+ * link is authoritative for "files in this chat", NOT Temporary membership, so a later
+ * Keep-in-Library doesn't drop the file from its chat. Append-only/idempotent.
+ *
+ * **FK-guarded (N3):** the link is written on indexing SUCCESS, which may be seconds after
+ * the import was queued; if the conversation was deleted meanwhile the FK on
+ * `conversation_id` would raise (and `ON CONFLICT DO NOTHING` catches only the PK conflict,
+ * not an FK violation). So verify the conversation still exists first AND wrap the insert in
+ * a try/catch for the check-then-insert race — if it is gone, skip the link and leave the
+ * doc in Temporary. Returns true when the link was written.
+ */
+export function linkConversationDocument(
+  db: Db,
+  conversationId: string,
+  documentId: string
+): boolean {
+  const conv = db
+    .prepare('SELECT 1 FROM conversations WHERE id = ?')
+    .get(conversationId) as unknown as { 1: number } | undefined
+  if (!conv) return false
+  try {
+    db.prepare(
+      `INSERT INTO conversation_documents (conversation_id, document_id, added_at)
+       VALUES (?, ?, ?)
+       ON CONFLICT (conversation_id, document_id) DO NOTHING`
+    ).run(conversationId, documentId, nowIso())
+    return true
+  } catch {
+    // The conversation was deleted between the existence check and the insert — keep the
+    // doc in Temporary, drop only the chat binding (its chat no longer exists).
+    return false
+  }
+}
+
+/**
+ * Apply an `ImportDestination` to a freshly-indexed document (plan §11.3): write the
+ * membership/lifecycle/link it implies. Library ⇒ Library (unfiled-guarded, "Library ==
+ * all"); collection ⇒ that project; temporary ⇒ Temporary membership + lifecycle; a
+ * conversation ⇒ Temporary + the FK-guarded `conversation_documents` link.
+ */
+export function fileDocumentByDestination(
+  db: Db,
+  documentId: string,
+  destination: ImportDestination
+): void {
+  switch (destination.kind) {
+    case 'library':
+      fileIntoLibraryIfUnfiled(db, documentId)
+      break
+    case 'collection':
+      addToCollection(db, [documentId], destination.collectionId, 'source')
+      break
+    case 'temporary':
+      fileIntoTemporary(db, documentId)
+      break
+    case 'conversation':
+      fileIntoTemporary(db, documentId)
+      linkConversationDocument(db, destination.conversationId, documentId)
+      break
+  }
+}
+
+/**
+ * File a freshly-indexed document by its persisted `pending_destination_json` (plan §11.3,
+ * M1), then clear it. This is the single filing entry point on indexing success — it works
+ * for the in-session import loop AND a crash-resume (whoever drives the doc to `indexed`
+ * files it to its intended destination). No persisted destination ⇒ the legacy Library
+ * default (so old no-options imports stay byte-for-byte). A normal re-index of an
+ * already-filed doc is a no-op here (its pending was cleared on first success).
+ */
+export function fileFromPendingDestination(db: Db, documentId: string): void {
+  const row = db
+    .prepare('SELECT pending_destination_json FROM documents WHERE id = ?')
+    .get(documentId) as unknown as { pending_destination_json: string | null } | undefined
+  const destination = parsePendingDestination(row?.pending_destination_json)
+  if (!destination) {
+    // No recorded intent (a pre-Phase-C import, or an options-less call) ⇒ Library default.
+    fileIntoLibraryIfUnfiled(db, documentId)
+    return
+  }
+  fileDocumentByDestination(db, documentId, destination)
+  db.prepare('UPDATE documents SET pending_destination_json = NULL WHERE id = ?').run(documentId)
+}
+
+/** A conversation's temporary-attachment document ids (plan C3 — `conversation_documents`). */
+export function conversationAttachmentIds(db: Db, conversationId: string): string[] {
+  const rows = db
+    .prepare('SELECT document_id FROM conversation_documents WHERE conversation_id = ?')
+    .all(conversationId) as unknown as Array<{ document_id: string }>
+  return rows.map((r) => r.document_id)
 }
 
 /** Document ids that belong to a collection (membership listing). */

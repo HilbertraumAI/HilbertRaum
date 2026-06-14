@@ -25,6 +25,14 @@ interface ScopePopoverProps {
   onChangeScope: (next: DocumentScope) => void
   /** Jump to the Documents screen — used by the empty-corpus "Add documents" affordance. */
   onAddDocuments?: () => void
+  /**
+   * Temporary chat attachments linked to this conversation (plan C3/§13.1): shown as a
+   * read-only "Files in this chat" line, ALWAYS unioned into retrieval — NOT removable
+   * selection chips, distinct from the multi-select sources.
+   */
+  attachments?: DocumentInfo[]
+  /** File names of attachments still being processed (N4): non-removable pending chips. */
+  pendingAttachmentNames?: string[]
 }
 
 /** Localize a built-in collection's display name by type; projects keep their stored name. */
@@ -66,11 +74,14 @@ export function ScopePopover({
   scope,
   disabled,
   onChangeScope,
-  onAddDocuments
+  onAddDocuments,
+  attachments = [],
+  pendingAttachmentNames = []
 }: ScopePopoverProps): JSX.Element {
   const { t, tCount } = useT()
   const [showDocs, setShowDocs] = useState(false)
   const indexed = docs.filter((d) => d.status === 'indexed')
+  const fileCount = attachments.length + pendingAttachmentNames.length
 
   const collIds = scope?.collectionIds ?? []
   const docIds = scope?.documentIds ?? []
@@ -78,9 +89,10 @@ export function ScopePopover({
   const library = collections.find((c) => c.type === 'library')
   const projects = collections.filter((c) => c.type === 'project' && c.archivedAt == null)
 
-  // Truthful footer copy (guidelines §7): with no indexed documents the affordance becomes
-  // a direct "Add documents" jump, not a scope picker.
-  if (indexed.length === 0) {
+  // Truthful footer copy (guidelines §7): with no indexed documents AND no chat attachments
+  // the affordance becomes a direct "Add documents" jump, not a scope picker. (Attachments —
+  // live or still processing — keep the picker, so a freshly dropped file is visible.)
+  if (indexed.length === 0 && fileCount === 0) {
     return (
       <button type="button" className="footer-menu-btn" disabled={disabled} onClick={onAddDocuments}>
         <Icon name="file" className="footer-menu-icon" /> {t('chat.scope.none')}
@@ -102,12 +114,16 @@ export function ScopePopover({
 
   const addableDocs = indexed.filter((d) => !docIds.includes(d.id))
   const label = scopeFooterLabel(scope, collections, t, tCount)
+  // Chat attachments (live + pending) are always included; surfaced as a quiet count
+  // alongside the composed sources (plan §13.1), never as removable selection chips.
+  const filesSuffix = fileCount > 0 ? ` · ${tCount('chat.scope.filesInChat', fileCount)}` : ''
 
   return (
     <Popover.Root>
       <Popover.Trigger asChild>
         <button type="button" className="footer-menu-btn" disabled={disabled}>
-          <Icon name="file" className="footer-menu-icon" /> {label} <span aria-hidden="true">▾</span>
+          <Icon name="file" className="footer-menu-icon" /> {label}
+          {filesSuffix} <span aria-hidden="true">▾</span>
         </button>
       </Popover.Trigger>
       <Popover.Portal>
@@ -184,6 +200,27 @@ export function ScopePopover({
                   + {d.title}
                 </Chip>
               ))}
+            </div>
+          )}
+
+          {/* Files in this chat (plan §13.1/§13.3): the conversation's temporary attachments,
+              ALWAYS included and NOT removable (distinct from the multi-select sources). A
+              still-processing attachment shows as a pending chip (N4). */}
+          {fileCount > 0 && (
+            <div className="scope-attachments">
+              <p className="popover-line">{t('chat.scope.filesInChatLine')}</p>
+              <div className="popover-chips">
+                {attachments.map((d) => (
+                  <span className="doc-chip scope-attachment" key={d.id} title={d.title}>
+                    {d.title}
+                  </span>
+                ))}
+                {pendingAttachmentNames.map((name, i) => (
+                  <span className="doc-chip scope-attachment pending" key={`pending-${i}`}>
+                    {t('chat.attach.processing', { name })}
+                  </span>
+                ))}
+              </div>
             </div>
           )}
 

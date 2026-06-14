@@ -1074,5 +1074,13 @@ export const de: Record<keyof typeof en, string> = {
   'chat.scope.allTap': 'Alle Dokumente',
   'chat.scope.filesInChatLine': 'Dateien in diesem Chat',
   'chat.scope.noProjects': 'Noch keine Projekte',
-  'chat.scope.archivedFallback': 'Dieses Projekt wurde archiviert — Antwort aus Ihrer Bibliothek.'
+  'chat.scope.archivedFallback': 'Dieses Projekt wurde archiviert — Antwort aus Ihrer Bibliothek.',
+
+  // ---- Chat — Datei an einen Chat anhängen / hineinziehen (Plan §11.2/§13.5, Phase C) ----
+  // Deutsche Texte für die D-L7-Durchsicht markiert (siehe BUILD_STATE).
+  'chat.attach.button': 'Dateien anhängen',
+  'chat.attach.drop': 'Dateien hier ablegen, um sie in diesem Chat zu verwenden',
+  'chat.attach.processing': '{name} wird verarbeitet…',
+  'chat.attach.newDocChat': 'Neuer Dokument-Chat für {name} gestartet',
+  'chat.attach.failed': '{name} konnte diesem Chat nicht hinzugefügt werden.'
 }
