@@ -65,8 +65,10 @@ last open doc-org items). Docs: `known-limitations.md` flipped the deferral note
 broader Phase 39–42 German sign-off (user's standing D-L7 pass) is still open; owner-gated Phase E.2; the
 unremediated security audit (`docs/security-audit-2026-06-14.md`); or new work._
 
-_(prior) 2026-06-14 — **Document-organization audit remediation
-([`docs/document-organization-audit-2026-06-14.md`](docs/document-organization-audit-2026-06-14.md)).**
+_(prior) 2026-06-14 — **Document-organization audit remediation** (the audit report
+`docs/document-organization-audit-2026-06-14.md` was deleted once fully remediated — the final version
+incl. the remediation banner is recoverable via
+`git show e294377:docs/document-organization-audit-2026-06-14.md`).
 Implementation pass fixing the audit's correctness bugs + adding the tests that should have caught them.
 **FIXED (closed):** **DM-1 (High)** — M1 crash-resume now files by pending destination on EVERY
 indexing success: `fileFromPendingDestination` is called inside

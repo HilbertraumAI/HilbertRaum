@@ -740,6 +740,10 @@ document is in scope when it is a member of any `collectionIds` entry **OR** its
 `id,title` projection — no vectors loaded), not the whole corpus. It is skipped **only** when
 `hasExplicitDocSelection` is true (a deliberate hand-pick). Multiple in-scope matches ⇒ scope to *all*
 matches + a disambiguation notice on the existing `STREAM.scope` channel — never a silent guess.
+Note (RAG-4): the flag is union-wide — **one** hand-picked doc in a composite scope
+(`collectionIds=[project]` *plus* a specific doc) sets `hasExplicitDocSelection` and disables filename
+auto-scope across the *entire* union, even though the picked collections are still in play. This is
+intended (an explicit pick means "I chose these"), just easy to overlook.
 
 ### 13.6 Scope-aware re-index honesty (M2)
 
