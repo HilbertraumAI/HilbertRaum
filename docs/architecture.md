@@ -1070,6 +1070,17 @@ pinned build is a manual smoke (like the GPU/PAID harnesses).**
 ## Diagnostics & transcript export (audit round)
 - `getRuntimeStatus` (read-only runtime health), `getLogTail` (tail of the local `app.log`), and
   `exportConversation` (spec §7.6 transcript export via the OS save dialog) round out spec §7.11/§7.6.
+- **Copy / save (support hand-off).** Each Diagnostics card — **App & runtime**, **Hardware
+  benchmark**, **Logs** — has a **Copy** button that writes a plain-text rendering of exactly the
+  rows shown to the clipboard (`navigator.clipboard`, confirmed by a transient toast), so a user can
+  paste the lot into a support message. The on-screen rows and the copied text are built from the
+  same helpers (`runtimeStatusLine` / `buildAppRuntimeReport` / `buildBenchmarkReport` in
+  `DiagnosticsTab.tsx`) so they can't drift. The Logs card additionally has **Save to file…** →
+  `exportLog` IPC → `saveTextExport`, which writes the **whole** current log (`readLogFull()`, not
+  just the `getLogTail` tail) as **plaintext** to a user-chosen location. This is a deliberate user
+  action: the on-disk `app.log` stays **encrypted** at rest (see "Encrypt the diagnostics log at
+  rest"); the export is the user choosing to take a copy *outside* the vault to share — never
+  uploaded, no telemetry.
 - A never-benchmarked workspace is benchmarked **automatically in the background** after it becomes
   usable (spec §2.1 first-run benchmark; `maybeRunFirstBenchmark`).
 

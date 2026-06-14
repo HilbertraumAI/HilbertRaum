@@ -157,6 +157,17 @@ The asset-planning + verify logic is mirrored from the unit-tested
 `prepare-drive` mirrors `drive.ts`. The scripts use the **OS-native downloader** (`curl` /
 `Invoke-WebRequest`, preferring `aria2c` if installed) — no new npm/script deps.
 
+**Resilient downloads (flaky-connection hardening).** `curl`'s own `--retry` does not retry a
+**mid-transfer drop** (exit 18/56/28) on older curl, so a beta tester whose link dropped during a
+`curl` lost the whole download. Every `curl` call now goes through a small wrapper
+(`Invoke-CurlResilient` in the `.ps1` scripts, `curl_resilient` in the `.sh` scripts) that runs an
+**outer retry loop** (5 attempts, growing back-off) and **resumes the partial file** with `-C -` on
+each attempt — so a download survives several disconnects rather than restarting from zero. Per-call
+flags were also strengthened: `--retry 3 --retry-delay 2 --retry-connrefused --connect-timeout 30`
+(all available on the curl that ships with Win10 1803+/git-bash). Integrity is still enforced by the
+**SHA-256 pin AFTER download**, so resuming a partial transfer can never weaken verification. `aria2c`
+(when present) already resumes via `--continue=true`; `wget` via `-c`.
+
 End-to-end (Windows example). `-WithAssets` alone provisions the default chat model for a fast,
 launch-ready drive; add `-AllModels` to pre-load every model (a fully provisioned commercial drive):
 ```powershell

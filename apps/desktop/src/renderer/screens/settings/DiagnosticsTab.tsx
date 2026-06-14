@@ -102,6 +102,60 @@ function fmtNum(n: number, lang: UiLanguage): string {
   return n.toLocaleString(lang)
 }
 
+/** The one-line runtime status, shared by the card row and the copy report so they can
+ *  never drift. */
+function runtimeStatusLine(runtime: RuntimeStatus | null, t: I18n['t']): string {
+  if (!runtime) return t('diag.app.unknown')
+  if (!runtime.running) return t('diag.app.stopped')
+  return t('diag.app.runtimeRunning', {
+    model: runtime.modelId ?? t('diag.app.unknownModel'),
+    onPort: runtime.port != null ? t('diag.app.onPort', { port: runtime.port }) : '',
+    health: runtime.healthy ? t('diag.app.healthy') : t('diag.app.unhealthy')
+  })
+}
+
+/** Plain-text rendering of the "App & runtime" card for the Copy button — the same labels
+ *  + values shown on screen, so a user can paste the lot into a support message. */
+function buildAppRuntimeReport(
+  app: AppStatus | null,
+  runtime: RuntimeStatus | null,
+  settings: AppSettings | null,
+  install: RuntimeInstallInfo | null,
+  t: I18n['t']
+): string {
+  return [
+    t('diag.app.title'),
+    `${t('diag.app.version')}: ${app ? `${app.appName} ${app.appVersion}` : t('diag.app.unknown')}`,
+    `${t('diag.app.selectedModel')}: ${app?.activeModelId ?? t('diag.app.noneSelected')}`,
+    `${t('diag.app.profile')}: ${app?.hardwareProfile ?? 'UNKNOWN'}`,
+    `${t('diag.app.runtime')}: ${runtimeStatusLine(runtime, t)}`,
+    `${t('diag.app.acceleration')}: ${accelerationLabel(runtime, settings, t)}`,
+    `${t('diag.app.runtimeBuild')}: ${
+      install ? `llama.cpp ${install.version} (${install.backend})` : t('diag.app.noInstallMarker')
+    }`
+  ].join('\n')
+}
+
+/** Plain-text rendering of the "Hardware benchmark" card for the Copy button. */
+function buildBenchmarkReport(bench: BenchmarkResult, t: I18n['t'], lang: UiLanguage): string {
+  const lines = [
+    t('diag.bench.title'),
+    `${t('diag.bench.profile')}: ${bench.profile}`,
+    `${t('diag.bench.recommended')}: ${bench.recommendedModelId ?? t('diag.bench.noMatch')}`,
+    `${t('diag.bench.ram')}: ${bench.ramGb > 0 ? `${fmt1(bench.ramGb, lang)} GB` : t('diag.app.unknown')}`,
+    `${t('diag.bench.cpu')}: ${(bench.cpuModel || t('diag.app.unknown')) + (bench.cpuCores > 0 ? t('diag.bench.cores', { count: bench.cpuCores }) : '')}`,
+    `${t('diag.bench.osArch')}: ${bench.os || t('diag.app.unknown')} (${bench.arch || t('diag.app.unknown')})`,
+    `${t('diag.bench.gpu')}: ${bench.gpu ?? t('diag.bench.notDetected')}`,
+    `${t('diag.bench.driveRead')}: ${bench.driveReadMbps != null ? `${fmtNum(bench.driveReadMbps, lang)} MB/s` : t('diag.bench.notMeasured')}`,
+    `${t('diag.bench.driveWrite')}: ${bench.driveWriteMbps != null ? `${fmtNum(bench.driveWriteMbps, lang)} MB/s` : t('diag.bench.notMeasured')}`,
+    `${t('diag.bench.tokens')}: ${bench.tokensPerSecond != null ? fmtNum(bench.tokensPerSecond, lang) : t('diag.bench.tokensNotMeasured')}`,
+    `${t('diag.bench.lastRun')}: ${new Date(bench.ranAt).toLocaleString(lang)}`
+  ]
+  // Warnings are persisted canonical English — localize the known set at render (D-L4).
+  for (const w of bench.warnings) lines.push(`- ${localizeServerCopy(t, w)}`)
+  return lines.join('\n')
+}
+
 export function DiagnosticsTab(): JSX.Element {
   const { t, lang } = useT()
   const [drive, setDrive] = useState<DriveStatus | null>(null)
@@ -164,6 +218,42 @@ export function DiagnosticsTab(): JSX.Element {
     }
   }
 
+  /** Copy a plain-text report to the clipboard, confirming with a transient toast — so a
+   *  user can hand technical details to support without retyping (guidelines §6). */
+  const copyReport = useCallback(
+    (text: string): void => {
+      void navigator.clipboard
+        .writeText(text)
+        .then(() => toast(t('diag.copied')))
+        .catch(() => toast(t('diag.copyFailed')))
+    },
+    [toast, t]
+  )
+
+  // Copy the logs from a FRESH tail read (the panel may be collapsed / stale), not just
+  // whatever is currently rendered.
+  async function copyLogs(): Promise<void> {
+    try {
+      const lines = (await window.api?.getLogTail()) ?? []
+      setLogTail(lines)
+      await navigator.clipboard.writeText(lines.join('\n'))
+      toast(t('diag.copied'))
+    } catch {
+      toast(t('diag.copyFailed'))
+    }
+  }
+
+  // Save the WHOLE log to a user-chosen file (plaintext, via the main-process dialog) so it
+  // can be shared with support. The on-disk log stays encrypted; this is a deliberate copy.
+  async function saveLogs(): Promise<void> {
+    try {
+      const path = await window.api.exportLog()
+      if (path) toast(t('diag.logs.savedTo', { path }))
+    } catch {
+      // Cancellable from the OS dialog; a failure simply shows no toast.
+    }
+  }
+
   useEffect(() => {
     window.api?.getDriveStatus().then(setDrive).catch(() => setDrive(null))
     window.api?.getRuntimeInstall().then(setInstall).catch(() => setInstall(null))
@@ -214,17 +304,7 @@ export function DiagnosticsTab(): JSX.Element {
           <dt>{t('diag.app.profile')}</dt>
           <dd>{app?.hardwareProfile ?? 'UNKNOWN'}</dd>
           <dt>{t('diag.app.runtime')}</dt>
-          <dd>
-            {runtime
-              ? runtime.running
-                ? t('diag.app.runtimeRunning', {
-                    model: runtime.modelId ?? t('diag.app.unknownModel'),
-                    onPort: runtime.port != null ? t('diag.app.onPort', { port: runtime.port }) : '',
-                    health: runtime.healthy ? t('diag.app.healthy') : t('diag.app.unhealthy')
-                  })
-                : t('diag.app.stopped')
-              : t('diag.app.unknown')}
-          </dd>
+          <dd>{runtimeStatusLine(runtime, t)}</dd>
           <dt>{t('diag.app.acceleration')}</dt>
           <dd>{accelerationLabel(runtime, settings, t)}</dd>
           <dt>{t('diag.app.runtimeBuild')}</dt>
@@ -249,17 +329,37 @@ export function DiagnosticsTab(): JSX.Element {
             {settings.gpuMode === 'auto' ? t('diag.gpu.tryHint') : t('diag.gpu.offHint')}
           </Banner>
         )}
-        <Button size="sm" onClick={() => void refreshStatus()}>
-          {t('diag.refresh')}
-        </Button>
+        <div className="actions">
+          <Button size="sm" onClick={() => void refreshStatus()}>
+            {t('diag.refresh')}
+          </Button>
+          <Button
+            size="sm"
+            title={t('diag.copyTitle')}
+            onClick={() => copyReport(buildAppRuntimeReport(app, runtime, settings, install, t))}
+          >
+            {t('diag.copy')}
+          </Button>
+        </div>
       </div>
 
       <div className="card">
         <h2>{t('diag.bench.title')}</h2>
         <p className="hint">{t('diag.bench.hint')}</p>
-        <Button variant="primary" onClick={() => void runBenchmark()} disabled={running}>
-          {running ? t('diag.bench.running') : bench ? t('diag.bench.rerun') : t('diag.bench.run')}
-        </Button>
+        <div className="actions">
+          <Button variant="primary" onClick={() => void runBenchmark()} disabled={running}>
+            {running ? t('diag.bench.running') : bench ? t('diag.bench.rerun') : t('diag.bench.run')}
+          </Button>
+          {bench && (
+            <Button
+              size="sm"
+              title={t('diag.copyTitle')}
+              onClick={() => copyReport(buildBenchmarkReport(bench, t, lang))}
+            >
+              {t('diag.copy')}
+            </Button>
+          )}
+        </div>
         {error && <Banner tone="error">{t('diag.bench.failed', { error })}</Banner>}
 
         {bench && (
@@ -449,6 +549,12 @@ export function DiagnosticsTab(): JSX.Element {
               {t('diag.refresh')}
             </Button>
           )}
+          <Button size="sm" title={t('diag.copyTitle')} onClick={() => void copyLogs()}>
+            {t('diag.copy')}
+          </Button>
+          <Button size="sm" onClick={() => void saveLogs()}>
+            {t('diag.logs.save')}
+          </Button>
         </div>
         {showLogs && (
           <pre className="log-tail">

@@ -58,6 +58,29 @@ esac
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
+# Resilient curl: a flaky link (beta-tester report — the connection dropped mid-curl) can
+# fail repeatedly. curl's own --retry does not cover a mid-transfer DROP (exit 18/56/28) on
+# older curl, so an OUTER loop RESUMES the partial file (-C -) on each attempt. $3 = extra
+# flags (e.g. schannel's --ssl-revoke-best-effort). Integrity is enforced by the SHA-256 pin
+# AFTER download, so resume can never weaken verification.
+curl_resilient() {
+  local url="$1" dest="$2" extra="${3:-}"
+  local attempts=5 i wait
+  for (( i = 1; i <= attempts; i++ )); do
+    # shellcheck disable=SC2086 # $extra is an intentional word-split flag list (may be empty)
+    if curl -L --fail --retry 3 --retry-delay 2 --retry-connrefused \
+         --connect-timeout 30 $extra -C - -o "$dest" "$url"; then
+      return 0
+    fi
+    if (( i < attempts )); then
+      wait=$(( i * 3 ))
+      echo "    connection interrupted -- retry $i/$attempts in ${wait}s, resuming…" >&2
+      sleep "$wait"
+    fi
+  done
+  return 1
+}
+
 SOURCES_FILE="$TARGET/model-manifests/runtime-sources.yaml"
 [[ -f "$SOURCES_FILE" ]] || SOURCES_FILE="$REPO_ROOT/model-manifests/runtime-sources.yaml"
 [[ -f "$SOURCES_FILE" ]] || { echo "No runtime-sources.yaml found under '$TARGET' or repo root." >&2; exit 2; }
@@ -154,7 +177,7 @@ if [[ "$FAMILY" == "ocr" ]]; then
     if command -v curl >/dev/null 2>&1; then
       CURL_EXTRA=""
       curl --version 2>/dev/null | head -n1 | grep -qi schannel && CURL_EXTRA="--ssl-revoke-best-effort"
-      curl -L --fail --retry 3 $CURL_EXTRA -o "$DEST" "${F_URL[$i]}" || { echo "    curl failed" >&2; FAILED=$((FAILED + 1)); continue; }
+      curl_resilient "${F_URL[$i]}" "$DEST" "$CURL_EXTRA" || { echo "    curl failed after retries" >&2; FAILED=$((FAILED + 1)); continue; }
     elif command -v wget >/dev/null 2>&1; then
       wget -O "$DEST" "${F_URL[$i]}" || { echo "    wget failed" >&2; FAILED=$((FAILED + 1)); continue; }
     else
@@ -302,10 +325,11 @@ ARCHIVE="$EXTRACT_TO/$ARCHIVE_NAME"
 if command -v curl >/dev/null 2>&1; then
   # Schannel curl (Windows/git-bash): corporate proxies often block CRL/OCSP, failing
   # with CRYPT_E_NO_REVOCATION_CHECK. Best-effort revocation only on that backend;
-  # artifact integrity is enforced by the SHA-256 pin below.
+  # artifact integrity is enforced by the SHA-256 pin below. curl_resilient retries +
+  # resumes a dropped transfer so a flaky connection doesn't lose the whole archive.
   CURL_EXTRA=""
   curl --version 2>/dev/null | head -n1 | grep -qi schannel && CURL_EXTRA="--ssl-revoke-best-effort"
-  curl -L --fail --retry 3 $CURL_EXTRA -C - -o "$ARCHIVE" "$URL"
+  curl_resilient "$URL" "$ARCHIVE" "$CURL_EXTRA" || { echo "curl failed after retries" >&2; exit 1; }
 elif command -v wget >/dev/null 2>&1; then
   wget -c -O "$ARCHIVE" "$URL"
 else

@@ -183,6 +183,8 @@ const api = {
     ipcRenderer.invoke(IPC.searchConversations, query),
   /** Tail of the local log file (Diagnostics, spec §7.11). Local-only. */
   getLogTail: (): Promise<string[]> => ipcRenderer.invoke(IPC.getLogTail),
+  /** Save the full local log to a user-chosen file (plaintext); path, or null on cancel. */
+  exportLog: (): Promise<string | null> => ipcRenderer.invoke(IPC.exportLog),
 
   // ---- Audit log ----
   /** Page through the local activity log, newest-first (`beforeId` = "load more" cursor). */

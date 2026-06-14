@@ -84,6 +84,25 @@ function Get-Sha256([string]$path) {
 $Aria = (Get-Command aria2c -ErrorAction SilentlyContinue)
 $Curl = (Get-Command curl.exe -ErrorAction SilentlyContinue)
 
+# Resilient curl (mirrors fetch-runtime.ps1): curl --retry alone does not retry a mid-transfer
+# DROP on older curl, so an OUTER loop resumes the partial file (-C -) on each attempt — a
+# flaky link (beta-tester report) survives several disconnects. Hash verification afterwards
+# guards integrity, so resume is safe.
+function Invoke-CurlResilient([string]$url, [string]$dest) {
+  $attempts = 5
+  for ($i = 1; $i -le $attempts; $i++) {
+    & curl.exe -L --fail --retry 3 --retry-delay 2 --retry-connrefused `
+      --connect-timeout 30 --ssl-revoke-best-effort -C - -o "$dest" "$url"
+    if ($LASTEXITCODE -eq 0) { return $true }
+    if ($i -lt $attempts) {
+      $wait = $i * 3
+      Write-Host ("    connection interrupted (curl exit {0}) -- retry {1}/{2} in {3}s, resuming…" -f $LASTEXITCODE, $i, $attempts, $wait) -ForegroundColor Yellow
+      Start-Sleep -Seconds $wait
+    }
+  }
+  return $false
+}
+
 function Invoke-Download([string]$url, [string]$dest) {
   $dir = Split-Path -Parent $dest
   New-Item -ItemType Directory -Force -Path $dir | Out-Null
@@ -92,10 +111,11 @@ function Invoke-Download([string]$url, [string]$dest) {
       --dir "$dir" --out (Split-Path -Leaf $dest) "$url"
     if ($LASTEXITCODE -ne 0) { throw "aria2c failed (exit $LASTEXITCODE)" }
   } elseif ($Curl) {
-    # --ssl-revoke-best-effort: see fetch-runtime.ps1 — corporate proxies block CRL/OCSP;
-    # integrity is enforced by the SHA-256 verification after download.
-    & curl.exe -L --fail --retry 3 --ssl-revoke-best-effort -C - -o "$dest" "$url"
-    if ($LASTEXITCODE -ne 0) { throw "curl failed (exit $LASTEXITCODE)" }
+    # Resilient curl: an OUTER retry loop that RESUMES the partial file (-C -) so a flaky
+    # connection (beta-tester report) doesn't lose a multi-GB weight. --ssl-revoke-best-effort:
+    # corporate proxies block CRL/OCSP. Integrity is enforced by the SHA-256 verification
+    # after download, so resume can never weaken verification.
+    if (-not (Invoke-CurlResilient $url $dest)) { throw 'curl failed after retries' }
   } else {
     # Last resort: Invoke-WebRequest (no resume; restarts the file).
     Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing

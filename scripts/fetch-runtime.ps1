@@ -67,6 +67,30 @@ param(
 $ErrorActionPreference = 'Stop'
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 
+# Resilient download: a flaky link (beta-tester report — the connection dropped mid-curl)
+# can fail repeatedly. curl's own --retry does NOT cover a mid-transfer DROP (exit 18/56/28)
+# on older curl, so we wrap it in an OUTER loop that RESUMES the partial file (-C -) on each
+# attempt. Combined flags: --retry 3 (transient HTTP), --retry-delay 2, --retry-connrefused
+# (curl >=7.52, on Win10 1803+), --connect-timeout 30. --ssl-revoke-best-effort: schannel
+# curl on Windows; corporate proxies block CRL/OCSP. Integrity is enforced by the SHA-256
+# pin AFTER download, so resume can never weaken verification.
+function Invoke-CurlResilient {
+  param([Parameter(Mandatory = $true)] [string] $Url,
+        [Parameter(Mandatory = $true)] [string] $Dest)
+  $attempts = 5
+  for ($i = 1; $i -le $attempts; $i++) {
+    & curl.exe -L --fail --retry 3 --retry-delay 2 --retry-connrefused `
+      --connect-timeout 30 --ssl-revoke-best-effort -C - -o "$Dest" "$Url"
+    if ($LASTEXITCODE -eq 0) { return $true }
+    if ($i -lt $attempts) {
+      $wait = $i * 3
+      Write-Host ("    connection interrupted (curl exit {0}) -- retry {1}/{2} in {3}s, resuming…" -f $LASTEXITCODE, $i, $attempts, $wait) -ForegroundColor Yellow
+      Start-Sleep -Seconds $wait
+    }
+  }
+  return $false
+}
+
 # Normalize -Target to a full path: curl.exe resolves relative paths against the PROCESS
 # working directory, which does not follow Set-Location (audit M22).
 if (-not [System.IO.Path]::IsPathRooted($Target)) { $Target = Join-Path (Get-Location).Path $Target }
@@ -156,8 +180,9 @@ if ($Family -eq 'ocr') {
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $dest) | Out-Null
     $Curl = (Get-Command curl.exe -ErrorAction SilentlyContinue)
     if ($Curl) {
-      & curl.exe -L --fail --retry 3 --ssl-revoke-best-effort -o "$dest" "$($f.url)"
-      if ($LASTEXITCODE -ne 0) { Write-Error "curl failed (exit $LASTEXITCODE)"; $failed++; continue }
+      if (-not (Invoke-CurlResilient -Url $f.url -Dest $dest)) {
+        Write-Error 'download failed after retries'; $failed++; continue
+      }
     } else {
       Invoke-WebRequest -Uri $f.url -OutFile $dest -UseBasicParsing
     }
@@ -291,11 +316,12 @@ $archive = Join-Path $extractTo $archiveName
 
 $Curl = (Get-Command curl.exe -ErrorAction SilentlyContinue)
 if ($Curl) {
-  # --ssl-revoke-best-effort: corporate TLS proxies often block the CRL/OCSP endpoints,
-  # making schannel fail with CRYPT_E_NO_REVOCATION_CHECK. Best-effort still checks
-  # revocation when reachable; artifact integrity is enforced by the SHA-256 pin below.
-  & curl.exe -L --fail --retry 3 --ssl-revoke-best-effort -C - -o "$archive" "$($build.url)"
-  if ($LASTEXITCODE -ne 0) { Write-Error "curl failed (exit $LASTEXITCODE)"; exit 1 }
+  # Resilient curl (see Invoke-CurlResilient): retries + resumes a dropped transfer so a
+  # flaky connection doesn't lose the whole archive. Integrity is enforced by the SHA-256
+  # pin below, so resume can never weaken verification.
+  if (-not (Invoke-CurlResilient -Url $build.url -Dest $archive)) {
+    Write-Error 'curl failed after retries'; exit 1
+  }
 } else {
   Invoke-WebRequest -Uri $build.url -OutFile $archive -UseBasicParsing
 }

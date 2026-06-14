@@ -6,6 +6,7 @@ import {
   initLogging,
   log,
   readLogTail,
+  readLogFull,
   usesPlaintextLog,
   attachVaultKey,
   detachVaultKey,
@@ -105,6 +106,19 @@ describe('logging service (L17)', () => {
       const tail = readLogTail(3)
       expect(tail).toHaveLength(3)
       expect(tail[2]).toContain('line 4')
+    })
+
+    it('readLogFull returns the WHOLE log (every line, not just the tail)', () => {
+      initLogging(dir)
+      usesPlaintextLog()
+      expect(readLogFull()).toBe('')
+
+      for (let i = 0; i < 250; i++) log.info(`line ${i}`)
+      const full = readLogFull()
+      // readLogTail caps at 200; readLogFull keeps the lot.
+      expect(full).toContain('line 0')
+      expect(full).toContain('line 249')
+      expect(readLogTail().length).toBeLessThan(full.split('\n').length)
     })
   })
 

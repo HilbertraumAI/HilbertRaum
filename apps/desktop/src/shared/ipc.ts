@@ -49,6 +49,8 @@ export const IPC = {
   searchConversations: 'chat:search',
   /** Tail of the local log for Diagnostics (spec §7.11). Never uploaded. */
   getLogTail: 'logs:tail',
+  /** Save the full local log to a user-chosen file (plaintext, a deliberate user action). */
+  exportLog: 'logs:export',
   // Documents
   pickDocuments: 'docs:pick',
   importDocuments: 'docs:import',

@@ -294,3 +294,22 @@ export function readLogTail(maxLines = 200): string[] {
   while (lines.length > 0 && lines[lines.length - 1] === '') lines.pop()
   return lines.slice(-maxLines)
 }
+
+/**
+ * The ENTIRE current log as one string (not just the tail), for the Diagnostics "Save to
+ * file" action. Same source as readLogTail — the plain file in plaintext mode, the
+ * in-memory buffer otherwise (the on-disk copy is encrypted). The export itself is written
+ * as plaintext to a user-chosen location, a deliberate user action (spec §7.11): the user
+ * is taking diagnostics OUT of the encrypted workspace to share with support.
+ */
+export function readLogFull(): string {
+  if (mode === 'plaintext') {
+    if (!plainLogFile || !existsSync(plainLogFile)) return ''
+    try {
+      return readFileSync(plainLogFile, 'utf8')
+    } catch {
+      return ''
+    }
+  }
+  return buffer
+}

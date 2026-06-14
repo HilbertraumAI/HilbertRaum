@@ -6,7 +6,35 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
-_Last updated: 2026-06-15 — **Merged the document-organization wave (Phases A–F) to `master`; release
+_Last updated: 2026-06-15 — **Diagnostics copy/save + download resilience (beta-tester
+feedback).** Three small improvements, rebased on top of the 0.1.21 document-organization wave.
+**(1) Copy buttons** on the Settings → "Diagnostics (advanced)" cards: **App & runtime**, **Hardware
+benchmark**, and **Logs** each gained a **Copy** button that writes a plain-text rendering of exactly
+the rows shown to the clipboard (toast-confirmed), so a user can paste diagnostics into a support
+message. The on-screen rows and the copied text share the same builders
+(`runtimeStatusLine`/`buildAppRuntimeReport`/`buildBenchmarkReport` in `DiagnosticsTab.tsx`) so they
+can't drift — the App-card runtime row was refactored onto `runtimeStatusLine` to dedupe. **(2) Save
+logs to a file:** the Logs card gained **Save to file…** → new `exportLog` IPC (`logs:export`) →
+`saveTextExport`, writing the **whole** current log (new `readLogFull()` in `logging.ts`, not just the
+`getLogTail` tail) as **plaintext** to a user-chosen path. The on-disk `app.log` stays **encrypted**
+at rest; the export is a deliberate user action to take a copy *outside* the vault for support (never
+uploaded, no telemetry). **(3) Flaky-connection download hardening:** a beta tester's link dropped
+mid-`curl` and lost the download. `curl --retry` alone doesn't retry a mid-transfer DROP on older
+curl, so every `curl` in the fetch scripts now goes through a wrapper (`Invoke-CurlResilient` in
+`.ps1`, `curl_resilient` in `.sh`) — an **outer retry loop** (5 attempts, growing back-off) that
+**resumes the partial file** (`-C -`) each attempt, plus strengthened per-call flags (`--retry 3
+--retry-delay 2 --retry-connrefused --connect-timeout 30`). SHA-256 verification AFTER download is
+unchanged, so resume can't weaken integrity. **Files:** `services/logging.ts` (+`readLogFull`),
+`shared/ipc.ts` (+`exportLog`), `ipc/registerCoreIpc.ts` (export handler), `preload/index.ts`
+(+`exportLog`), `renderer/screens/settings/DiagnosticsTab.tsx`, `shared/i18n/{en,de}.ts`
+(+`diag.copy*`/`diag.logs.save`/`diag.logs.savedTo`/`main.dialog.exportLog`),
+`scripts/fetch-runtime.{ps1,sh}`, `scripts/fetch-models.{ps1,sh}`. **Docs:** `architecture.md`
+("Diagnostics & transcript export" copy/save bullet), `packaging.md` ("Resilient downloads" para).
+**Tests:** typecheck clean, build OK, `npm test` **1261 passed / 25 skipped** (+5 over the 0.1.21
+doc-org baseline: 4 renderer copy/save in `DiagnosticsCopySave.test.tsx`, +1 `readLogFull` in
+`logging.test.ts`). Version bumped **0.1.21 → 0.1.22**, tagged `v0.1.22`._
+
+_(prior) 2026-06-15 — **Merged the document-organization wave (Phases A–F) to `master`; release
 0.1.21.** The whole Library/Projects/Temporary/Generated/Archive feature + its audit remediation
 (DM-1/DM-2/RAG-1/SEC-1 + UX-1/UX-2/UX-3) + the D-L7 doc-org German pass are now on `master`; a focused
 security review of the branch came back clean (no findings). Merged on top of `master`'s

@@ -732,6 +732,13 @@ export const de: Record<keyof typeof en, string> = {
   'diag.logs.show': 'Logs anzeigen',
   'diag.logs.hide': 'Logs ausblenden',
   'diag.logs.empty': '(Log ist leer)',
+  'diag.logs.save': 'In Datei speichern…',
+  'diag.logs.savedTo': 'Logs gespeichert unter {path}',
+  // Kopieren der Diagnose-Karten (Details an den Support weitergeben).
+  'diag.copy': 'Kopieren',
+  'diag.copyTitle': 'Diese Details in die Zwischenablage kopieren',
+  'diag.copied': 'In die Zwischenablage kopiert',
+  'diag.copyFailed': 'Kopieren in die Zwischenablage nicht möglich',
 
   // ---- Shared components' built-in copy ----
   'common.dismiss': 'Ausblenden',
@@ -1009,6 +1016,7 @@ export const de: Record<keyof typeof en, string> = {
   'main.dialog.exportDocument': 'Dokument exportieren',
   'main.dialog.exportChat': 'Chat-Verlauf exportieren',
   'main.dialog.exportAudit': 'Aktivitätslog exportieren',
+  'main.dialog.exportLog': 'Diagnose-Logs speichern',
   'main.dialog.filterDocuments': 'Dokumente',
   'main.dialog.filterAll': 'Alle Dateien',
   'main.collections.builtinUndeletable':

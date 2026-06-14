@@ -686,6 +686,13 @@ export const en = {
   'diag.logs.show': 'Show logs',
   'diag.logs.hide': 'Hide logs',
   'diag.logs.empty': '(log is empty)',
+  'diag.logs.save': 'Save to file…',
+  'diag.logs.savedTo': 'Logs saved to {path}',
+  // Copy-to-clipboard for the diagnostic cards (hand details to support).
+  'diag.copy': 'Copy',
+  'diag.copyTitle': 'Copy these details to the clipboard',
+  'diag.copied': 'Copied to clipboard',
+  'diag.copyFailed': 'Could not copy to the clipboard',
 
   // ---- Shared components' built-in copy (receive a bound t — i18n record §5 ⑤) ----
   'common.dismiss': 'Dismiss',
@@ -918,6 +925,7 @@ export const en = {
   'main.dialog.exportDocument': 'Export document',
   'main.dialog.exportChat': 'Export chat transcript',
   'main.dialog.exportAudit': 'Export activity log',
+  'main.dialog.exportLog': 'Save diagnostic logs',
   'main.dialog.filterDocuments': 'Documents',
   'main.dialog.filterAll': 'All files',
   'main.collections.builtinUndeletable': 'The built-in Library and Temporary cannot be deleted.',

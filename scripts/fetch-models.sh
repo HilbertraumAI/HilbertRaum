@@ -56,6 +56,28 @@ field() { sed -n "s/^[[:space:]]*$2[[:space:]]*:[[:space:]]*//p" "$1" | head -n1
 
 is_real_sha() { [[ "$1" =~ ^[a-f0-9]{64}$ ]]; }
 
+# Resilient curl (mirrors fetch-runtime.sh): curl --retry alone does not retry a mid-transfer
+# DROP on older curl, so an OUTER loop RESUMES the partial file (-C -) on each attempt — a
+# flaky link (beta-tester report) survives several disconnects. $3 = extra flags (may be
+# empty). Hash verification afterwards guards integrity, so resume is safe.
+curl_resilient() {
+  local url="$1" dest="$2" extra="${3:-}"
+  local attempts=5 i wait
+  for (( i = 1; i <= attempts; i++ )); do
+    # shellcheck disable=SC2086 # $extra is an intentional word-split flag list (may be empty)
+    if curl -L --fail --retry 3 --retry-delay 2 --retry-connrefused \
+         --connect-timeout 30 $extra -C - -o "$dest" "$url"; then
+      return 0
+    fi
+    if (( i < attempts )); then
+      wait=$(( i * 3 ))
+      echo "    connection interrupted -- retry $i/$attempts in ${wait}s, resuming…" >&2
+      sleep "$wait"
+    fi
+  done
+  return 1
+}
+
 # Best available downloader: aria2c (multi-connection, resumable) else curl (-C - resumes).
 download() {
   local url="$1" dest="$2" dir
@@ -69,7 +91,7 @@ download() {
     # integrity is enforced by the SHA-256 verification after download.
     local curl_extra=""
     curl --version 2>/dev/null | head -n1 | grep -qi schannel && curl_extra="--ssl-revoke-best-effort"
-    curl -L --fail --retry 3 $curl_extra -C - -o "$dest" "$url"
+    curl_resilient "$url" "$dest" "$curl_extra"
   elif command -v wget >/dev/null 2>&1; then
     wget -c -O "$dest" "$url"
   else

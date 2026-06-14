@@ -3,11 +3,12 @@ import { IPC } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
 import { buildDriveStatus } from '../services/workspace'
 import { getSettings, updateSettings } from '../services/settings'
-import { applyUiLanguageSetting } from '../services/i18n'
+import { applyUiLanguageSetting, tMain } from '../services/i18n'
 import { buildPolicyStatus } from '../services/policy'
 import { runPreflight } from '../services/preflight'
 import { machineRamGb } from '../services/models'
-import { log, readLogTail } from '../services/logging'
+import { log, readLogTail, readLogFull } from '../services/logging'
+import { saveTextExport } from './save-export'
 import type { AppSettings, AppStatus, PolicyStatus, PreflightResult } from '../../shared/types'
 
 // IPC for app/drive status + settings, the privacy policy surface (`getPolicy`),
@@ -67,6 +68,26 @@ export function registerCoreIpc(ctx: AppContext): void {
 
   // Spec §7.11 "show recent local logs" — read-only, local, never uploaded.
   ipcMain.handle(IPC.getLogTail, (): string[] => readLogTail())
+
+  // Save the WHOLE current log to a user-chosen file as plaintext (".txt"), so a user can
+  // hand diagnostics to support without unsealing the workspace. The dialog + write run in
+  // MAIN (saveTextExport). The on-disk log stays encrypted; this writes a copy the user
+  // deliberately places outside the vault (spec §7.11 — logs are FOR THE USER).
+  ipcMain.handle(IPC.exportLog, async (): Promise<string | null> => {
+    const filePath = await saveTextExport(
+      {
+        title: tMain('main.dialog.exportLog'),
+        defaultPath: 'hilbertraum-logs.txt',
+        filters: [
+          { name: 'Log', extensions: ['txt', 'log'] },
+          { name: tMain('main.dialog.filterAll'), extensions: ['*'] }
+        ]
+      },
+      readLogFull()
+    )
+    if (filePath) log.info('Diagnostic logs exported')
+    return filePath
+  })
 
   ipcMain.handle(IPC.getSettings, () => getSettings(ctx.db))
 
