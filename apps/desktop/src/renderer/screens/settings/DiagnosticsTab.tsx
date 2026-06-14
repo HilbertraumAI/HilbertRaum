@@ -345,7 +345,7 @@ export function DiagnosticsTab(): JSX.Element {
         <h2>{t('diag.bench.title')}</h2>
         <p className="hint">{t('diag.bench.hint')}</p>
         <div className="actions">
-          <Button variant="primary" onClick={() => void runBenchmark()} disabled={running}>
+          <Button size="sm" onClick={() => void runBenchmark()} disabled={running}>
             {running ? t('diag.bench.running') : bench ? t('diag.bench.rerun') : t('diag.bench.run')}
           </Button>
           {bench && (
@@ -362,7 +362,9 @@ export function DiagnosticsTab(): JSX.Element {
 
         {bench && (
           <>
-            <dl className="kv">
+            {/* Match the 8px gap the .actions row has above it, so the results don't
+                crowd the buttons. */}
+            <dl className="kv" style={{ marginTop: 8 }}>
               <dt>{t('diag.bench.profile')}</dt>
               <dd>
                 <strong>{bench.profile}</strong>
