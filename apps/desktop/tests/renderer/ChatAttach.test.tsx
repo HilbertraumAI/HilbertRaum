@@ -109,9 +109,12 @@ describe('ChatScreen — chat attach / drag-drop intake (plan §11.2 / §13.5)',
     // No "started a new document chat" toast — there was nothing to preserve.
     expect(screen.queryByText(/started a new document chat/i)).not.toBeInTheDocument()
 
-    // The non-removable pending chip is visible while processing (N4).
+    // The non-removable pending chip is visible while processing (N4); the same status is
+    // mirrored to a polite aria-live region for keyboard/screen-reader users (UX-3), so the
+    // text legitimately appears twice — the visible chip AND the sr-only announcer.
     await userEvent.click(await screen.findByRole('button', { name: /files? in this chat/i }))
-    expect(await screen.findByText(/processing invoice\.pdf/i)).toBeInTheDocument()
+    const processing = await screen.findAllByText(/processing invoice\.pdf/i)
+    expect(processing.length).toBeGreaterThanOrEqual(2)
   })
 
   it('converts a pending attachment to a live "Files in this chat" entry once indexed (N4)', async () => {

@@ -229,7 +229,7 @@ export const de: Record<keyof typeof en, string> = {
   'docs.provenance.compareBefore': 'Vergleich von ',
   'docs.provenance.compareMiddle': ' und ',
   'docs.provenance.translatedBefore': 'Übersetzt aus ',
-  // D-L7: German provenance copy to review in the next German pass.
+  // German provenance copy reviewed in the D-L7 pass (2026-06-14).
   'docs.provenance.summaryBefore': 'Zusammenfassung von ',
   'docs.provenance.generatedBefore': 'Erzeugt aus ',
   'docs.import.busy': 'Wird importiert…',
@@ -248,7 +248,7 @@ export const de: Record<keyof typeof en, string> = {
   'docs.reindexAllConfirm.title': '{count} Dokumente neu indexieren?',
   'docs.reindexAllConfirm.body':
     'Dabei wird jedes veraltete Dokument nacheinander neu eingelesen und neu eingebettet. ' +
-    'Das kann mehrere Minuten dauern und beansprucht den Prozessor stark – Sie können ' +
+    'Das kann mehrere Minuten dauern und beansprucht den Prozessor stark – du kannst ' +
     'weiterarbeiten, aber Antworten sind bis zum Abschluss möglicherweise langsamer.',
   'docs.reindexAllConfirm.confirm': 'Alle neu indexieren',
   'docs.reindexAllProgress': 'Indexiere {done} von {total} neu…',
@@ -1012,7 +1012,7 @@ export const de: Record<keyof typeof en, string> = {
   'main.collections.builtinUndeletable':
     'Die integrierte Bibliothek und „Temporär“ können nicht gelöscht werden.',
 
-  // ---- Dokumentorganisation — Bereiche + Aktionen (Plan §12). D-L7-Review ausstehend. ----
+  // ---- Dokumentorganisation — Bereiche + Aktionen (Plan §12). D-L7-Review erledigt (2026-06-14). ----
   'docs.section.heading': 'Bereiche',
   'docs.section.library': 'Bibliothek',
   'docs.section.projects': 'Projekte',
@@ -1033,12 +1033,12 @@ export const de: Record<keyof typeof en, string> = {
   'docs.project.unarchive': 'Aus dem Archiv holen',
   'docs.project.delete': 'Projekt löschen',
   'docs.project.deleteTitle': 'Dieses Projekt löschen?',
-  'docs.project.deleteBody': 'Wählen Sie, was mit den Dokumenten dieses Projekts geschieht:',
+  'docs.project.deleteBody': 'Wähle, was mit den Dokumenten dieses Projekts geschehen soll:',
   'docs.project.deleteKeep': 'Nur das Projekt entfernen — Dokumente behalten',
-  'docs.project.deleteKeepHint': 'Die Dokumente bleiben in Ihrer Bibliothek und in anderen Projekten.',
+  'docs.project.deleteKeepHint': 'Die Dokumente bleiben in deiner Bibliothek und in anderen Projekten.',
   'docs.project.deleteWith': 'Das Projekt und die nur hier abgelegten Dokumente löschen',
   'docs.project.deleteWithHint':
-    'Nur Dokumente, die nicht in Ihrer Bibliothek oder einem anderen Projekt liegen, werden gelöscht. Bibliothekswissen bleibt unberührt.',
+    'Nur Dokumente, die nicht in deiner Bibliothek oder einem anderen Projekt liegen, werden gelöscht. Bibliothekswissen bleibt unberührt.',
   'docs.project.deleteConfirm': 'Projekt löschen',
   'docs.project.archivedNote':
     'Archiviert — als Quelle ausgeblendet, die Dokumente bleiben aber anderswo beantwortbar.',
@@ -1061,7 +1061,7 @@ export const de: Record<keyof typeof en, string> = {
   'docs.empty.section': 'Hier ist noch nichts.',
 
   // ---- Dokumentorganisation — intelligente Ansichten (Plan §7.6/§12.1, Phase E). ----
-  // Deutsche Texte für die D-L7-Durchsicht markiert (siehe BUILD_STATE).
+  // D-L7-Review erledigt (2026-06-14).
   'docs.smart.heading': 'Ansichten',
   'docs.smart.recentlyAdded': 'Kürzlich hinzugefügt',
   'docs.smart.unfiled': 'Nicht einsortiert',
@@ -1075,7 +1075,7 @@ export const de: Record<keyof typeof en, string> = {
   'docs.provenance.staleRemoved': 'Eine Quelle wurde seit der Erstellung entfernt — zum Aktualisieren neu ausführen.',
 
   // ---- Ablagevorschläge (regelbasiert, nicht stillschweigend — Plan §20 Phase F). ----
-  // D-L7-Review ausstehend.
+  // D-L7-Review erledigt (2026-06-14).
   'docs.suggest.chipExisting': 'Vorgeschlagenes Projekt: {name}',
   'docs.suggest.chipNew': 'Vorgeschlagenes neues Projekt: {name}',
   'docs.suggest.apply': 'Übernehmen',
@@ -1086,7 +1086,7 @@ export const de: Record<keyof typeof en, string> = {
   'docs.suggest.reason.cohort': 'Andere Dateien aus „{folder}“ sind dort abgelegt.',
   'docs.suggest.reason.filename': 'Der Name deutet auf diese Art von Dokument hin.',
 
-  // ---- Chat — zusammengesetzter Quellenbereich (Plan §13). D-L7-Review ausstehend. ----
+  // ---- Chat — zusammengesetzter Quellenbereich (Plan §13). D-L7-Review erledigt (2026-06-14). ----
   'chat.scope.using': 'Quelle: {sources}',
   'chat.scope.library': 'Bibliothek',
   'chat.scope.projectNamed': 'Projekt: {name}',
@@ -1096,20 +1096,21 @@ export const de: Record<keyof typeof en, string> = {
   'chat.scope.docCount.other': '{count} Dokumente',
   'chat.scope.filesInChat.one': '{count} Datei in diesem Chat',
   'chat.scope.filesInChat.other': '{count} Dateien in diesem Chat',
-  'chat.scope.sourcesTitle': 'Wählen Sie Ihre Quellen',
+  'chat.scope.sourcesTitle': 'Wähle deine Quellen',
   'chat.scope.librarySource': 'Bibliothek',
-  'chat.scope.librarySourceHint': 'Ihre gesamte Wissensbasis',
+  'chat.scope.librarySourceHint': 'Deine gesamte Wissensbasis',
   'chat.scope.specificToggle': 'Bestimmte Dokumente…',
   'chat.scope.allTap': 'Alle Dokumente',
   'chat.scope.filesInChatLine': 'Dateien in diesem Chat',
   'chat.scope.noProjects': 'Noch keine Projekte',
-  'chat.scope.archivedFallback': 'Dieses Projekt wurde archiviert — Antwort aus Ihrer Bibliothek.',
+  'chat.scope.archivedFallback': 'Dieses Projekt wurde archiviert — Antwort aus deiner Bibliothek.',
 
   // ---- Chat — Datei an einen Chat anhängen / hineinziehen (Plan §11.2/§13.5, Phase C) ----
-  // Deutsche Texte für die D-L7-Durchsicht markiert (siehe BUILD_STATE).
+  // D-L7-Review erledigt (2026-06-14).
   'chat.attach.button': 'Dateien anhängen',
   'chat.attach.drop': 'Dateien hier ablegen, um sie in diesem Chat zu verwenden',
   'chat.attach.processing': '{name} wird verarbeitet…',
+  'chat.attach.added': '{name} zu diesem Chat hinzugefügt',
   'chat.attach.newDocChat': 'Neuer Dokument-Chat für {name} gestartet',
   'chat.attach.failed': '{name} konnte diesem Chat nicht hinzugefügt werden.'
 }

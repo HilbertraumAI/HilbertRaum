@@ -921,7 +921,7 @@ export const en = {
   'main.collections.builtinUndeletable': 'The built-in Library and Temporary cannot be deleted.',
 
   // ---- Document organization — Documents screen sections + actions (plan §12) ----
-  // German copy in de.ts still wants the D-L7 review pass.
+  // German copy in de.ts reviewed in the D-L7 pass (2026-06-14).
   'docs.section.heading': 'Sections',
   'docs.section.library': 'Library',
   'docs.section.projects': 'Projects',
@@ -987,7 +987,7 @@ export const en = {
   // ---- Filing suggestions (rule-based, non-silent — plan §20 Phase F) ----
   // A quiet, dismissible per-row chip on an UNFILED document. Apply files it via the existing
   // membership path; nothing is ever filed without that click. Reasons are keyed templates,
-  // not concatenated free text. German copy in de.ts still wants the D-L7 review pass.
+  // not concatenated free text. German copy in de.ts reviewed in the D-L7 pass (2026-06-14).
   'docs.suggest.chipExisting': 'Suggested project: {name}',
   'docs.suggest.chipNew': 'Suggested new project: {name}',
   'docs.suggest.apply': 'Apply',
@@ -1018,10 +1018,13 @@ export const en = {
   'chat.scope.archivedFallback': 'This project was archived — answering from your Library.',
 
   // ---- Chat — attach / drag-drop a file into a chat (plan §11.2/§13.5, Phase C) ----
-  // German copy flagged for the D-L7 review (see BUILD_STATE).
+  // German copy reviewed in the D-L7 pass (2026-06-14).
   'chat.attach.button': 'Attach files',
   'chat.attach.drop': 'Drop files to use them in this chat',
   'chat.attach.processing': 'Processing {name}…',
+  // Screen-reader-only confirmation for the keyboard/picker path (UX-3) — paired with
+  // `processing` in an aria-live region so attaching a file is audibly acknowledged.
+  'chat.attach.added': 'Added {name} to this chat',
   'chat.attach.newDocChat': 'Started a new document chat for {name}',
   'chat.attach.failed': "Couldn't add {name} to this chat."
 } as const

@@ -6,7 +6,28 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
-_Last updated: 2026-06-14 — **Document-organization audit remediation
+_Last updated: 2026-06-14 — **D-L7 German-copy review (document-organization slice) + UX-3.**
+Closing the i18n/a11y items deferred by the doc-org audit remediation. Surveyed the German catalog
+against the pinned informal-„du" glossary ([`de.ts`](apps/desktop/src/shared/i18n/de.ts) header, D-L7):
+the Phase D/E/F doc-org copy was clean **except** for **7 formal „Sie/Ihre" strings**, all now recast
+informal — `chat.scope.sourcesTitle` („Wähle deine Quellen", **UX-2**), `chat.scope.librarySourceHint`
+(„Deine gesamte Wissensbasis", **UX-2**), `chat.scope.archivedFallback`, `docs.project.deleteBody`/
+`deleteKeepHint`/`deleteWithHint`, and the adjacent `docs.reindexAllConfirm.body`. (Verified the three
+other `Sie/Ihr` hits at `de.ts:714/839/940` are the pronoun „it/its", not address — left as-is.) The
+six `D-L7-Review ausstehend`/`…markiert` markers on the doc-org blocks (de.ts + en.ts) now read
+**`erledigt (2026-06-14)`**. **UX-3 (a11y):** attachment processing/added is now announced on the
+keyboard/picker path — a visually-hidden polite **`role="status"` aria-live** region in the chat surface
+([`ChatScreen.tsx`](apps/desktop/src/renderer/screens/ChatScreen.tsx)) driven by a new
+**`chat.attach.added`** key (EN „Added {name} to this chat" / DE „{name} zu diesem Chat hinzugefügt");
+processing reuses `chat.attach.processing`; failures stay on `ErrorBanner`. en/de key parity stays
+type-enforced. **Tests:** typecheck clean, **`npm test` 1243 passed / 25 skipped** (count unchanged;
+`ChatAttach` "pending chip" test now asserts the text appears in BOTH the visible chip AND the sr-only
+announcer — i.e. covers UX-3). No version bump. **Audit findings now fully closed:** UX-1/UX-2/UX-3 (the
+last open doc-org items). Docs: `known-limitations.md` flipped the deferral note to DONE. **Next:** the
+broader Phase 39–42 German sign-off (user's standing D-L7 pass) is still open; owner-gated Phase E.2; the
+unremediated security audit (`docs/security-audit-2026-06-14.md`); or new work._
+
+_(prior) 2026-06-14 — **Document-organization audit remediation
 ([`docs/document-organization-audit-2026-06-14.md`](docs/document-organization-audit-2026-06-14.md)).**
 Implementation pass fixing the audit's correctness bugs + adding the tests that should have caught them.
 **FIXED (closed):** **DM-1 (High)** — M1 crash-resume now files by pending destination on EVERY

@@ -41,14 +41,13 @@ password recovery — are documented in
   cascade-removes the orphan rows instead of raising a foreign-key violation. Same accepted
   app-beside-data version-skew stance as the vault note above. (See `docs/architecture.md`
   "Document organization — design record" §3.)
-- **Document-organization a11y/i18n polish deferred (2026-06-14 audit, Low).** Two items stay open
-  and are folded into the pending **D-L7 German-copy review** rather than fixed ad hoc, because both
-  touch user-facing German strings: **(UX-2)** two scope strings use formal "Sie/Ihre"
-  (`de.ts` `chat.scope.sourcesTitle`/`librarySourceHint`) against the pinned informal-"du" glossary;
-  **(UX-3)** attachment processing/added has no `aria-live` announcement on the keyboard path — adding
-  one needs a new "added" string that should be authored in the same German pass. Failures are already
-  announced via `ErrorBanner`. The filing-suggestion chip a11y (UX-1: `role="group"` + `aria-describedby`)
-  was fixed.
+- **Document-organization a11y/i18n polish — DONE (2026-06-14 audit Low items + D-L7 pass).** All three
+  are now fixed: **UX-1** filing-suggestion chip is `role="group"` + reason tied to Apply via
+  `aria-describedby`; **UX-2** the doc-org German copy was recast informal-"du" in the D-L7 review (the
+  formal "Sie/Ihre" scope/delete strings, plus the reindex-all confirm); **UX-3** attachment
+  processing/added is announced via a polite `aria-live` status region in the chat surface (new
+  `chat.attach.added` string). The broader Phase 39–42 German copy still awaits the user's standing D-L7
+  sign-off, tracked separately in `architecture.md` (i18n record).
 - **Password-change edge: a post-commit swap interruption can briefly wedge one document.**
   If the one-time v1→v2 migration is interrupted AFTER its descriptor commit but mid file-swap
   (e.g. a transiently locked file on Windows), a not-yet-swapped document sidecar stays under

@@ -17,12 +17,12 @@ the condensation; the original is recoverable at `git show 477f803:docs/document
 correctness bugs are fixed (**DM-1, DM-2, RAG-1**) with the tests that should have caught them
 (**TEST-1, TEST-8, TEST-2**, the DM-2 regression, plus TEST-5). Hardening fixes applied: **SEC-1, DM-3,
 RAG-3, UX-1, DOC-1** (RAG-2 addressed by a clarifying comment, not a pin — pinning would regress a scope
-that deliberately includes archived docs). **Deferred:** **UX-2** (formal "Sie/Ihre") and **UX-3**
-(attachment `aria-live`, needs a new German string) are folded into the pending **D-L7 German-copy
-review** rather than fixed ad hoc; RAG-4 / DOC-2 / DOC-4 and similar are correct-by-spec or
-stale-but-permitted nits. Design records updated (architecture.md §1/§4/§6, rag-design.md §13.6,
-known-limitations.md). See `BUILD_STATE.md` top entry for the full close-out. Suite: **1243 passed / 25
-skipped**.
+that deliberately includes archived docs). **UX-2 and UX-3 are now also fixed** in the follow-up D-L7
+German-copy pass (2026-06-14): the formal "Sie/Ihre" doc-org strings were recast informal-"du", and
+attachment processing/added is announced via a polite `aria-live` status region (new `chat.attach.added`
+string). RAG-4 / DOC-2 / DOC-4 and similar are correct-by-spec or stale-but-permitted nits. Design
+records updated (architecture.md §1/§4/§6, rag-design.md §13.6, known-limitations.md). See `BUILD_STATE.md`
+top two entries for the full close-out. Suite: **1243 passed / 25 skipped**.
 
 **Method.** READ-ONLY. Six independent persona passes, each opening the cited code and
 confirming line numbers and behaviour against the design records

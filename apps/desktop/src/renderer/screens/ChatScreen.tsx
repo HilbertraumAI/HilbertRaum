@@ -148,6 +148,10 @@ export function ChatScreen({
     documentIds: string[]
     fileNames: string[]
   } | null>(null)
+  // Screen-reader-only status for the attach flow (UX-3): the pending chip lives inside a
+  // closed ScopePopover, so keyboard/picker users get no audible "processing"/"added" cue.
+  // A polite live region in the chat surface announces both (failures stay on ErrorBanner).
+  const [attachStatus, setAttachStatus] = useState('')
   // Drag-over highlight for the chat-surface drop target (plan §11.2 net-new intake).
   const [dragOver, setDragOver] = useState(false)
   const attachPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -644,7 +648,7 @@ export function ChatScreen({
   // Poll the import job; when a file indexes its link row is written (main-side, FK-guarded),
   // so a refreshed `listAttachments` reveals it as a live "Files in this chat" entry. A
   // failed file surfaces the friendly per-file error and writes no link (N4).
-  function watchAttachJob(jobId: string, convId: string, documentIds: string[]): void {
+  function watchAttachJob(jobId: string, convId: string, documentIds: string[], fileNames: string[]): void {
     if (attachPollRef.current) clearInterval(attachPollRef.current)
     attachPollRef.current = setInterval(async () => {
       try {
@@ -667,6 +671,9 @@ export function ChatScreen({
                 : t('chat.attach.failed', { name: failed.title })
             )
           }
+        } else {
+          // UX-3: audibly confirm the attachment for the keyboard/picker path.
+          setAttachStatus(t('chat.attach.added', { name: fileNames.join(', ') }))
         }
       } catch {
         if (attachPollRef.current) clearInterval(attachPollRef.current)
@@ -710,7 +717,8 @@ export function ChatScreen({
         destination: { kind: 'conversation', conversationId: convId }
       })
       setPendingImport({ jobId: job.jobId, convId, documentIds: job.documentIds, fileNames })
-      watchAttachJob(job.jobId, convId, job.documentIds)
+      setAttachStatus(t('chat.attach.processing', { name: fileNames.join(', ') }))
+      watchAttachJob(job.jobId, convId, job.documentIds, fileNames)
     } catch (e) {
       setError(friendlyIpcError(e))
     }
@@ -838,6 +846,11 @@ export function ChatScreen({
             {t('chat.attach.drop')}
           </div>
         )}
+        {/* UX-3: visually-hidden polite live region for attach processing/added (the visible
+            pending chip lives in a closed popover, inaudible to keyboard/SR users). */}
+        <div className="sr-only" role="status" aria-live="polite">
+          {attachStatus}
+        </div>
         <div className="chat-header">
           {effectiveCollapsed && (
             <Button
