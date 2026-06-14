@@ -44,7 +44,8 @@ gap above the results; clipboard write moved preload → main (sandbox fix). **D
 **Tests:** typecheck clean, build OK, `npm test` **1263 passed / 25 skipped** (+7 over the 0.1.21
 doc-org baseline: 4 renderer copy/save in `DiagnosticsCopySave.test.tsx`, +1 `readLogFull` in
 `logging.test.ts`, +2 `writeClipboard` handler in `core-model-ipc.test.ts`; the copy assertions point
-at the `copyToClipboard` bridge). Version bumped **0.1.21 → 0.1.22**, tagged `v0.1.22`._
+at the `copyToClipboard` bridge). Released as **0.1.23** (the wave's working `v0.1.22` tag was
+superseded by the version bump), tagged `v0.1.23`._
 
 _(prior) 2026-06-15 — **Merged the document-organization wave (Phases A–F) to `master`; release
 0.1.21.** The whole Library/Projects/Temporary/Generated/Archive feature + its audit remediation
