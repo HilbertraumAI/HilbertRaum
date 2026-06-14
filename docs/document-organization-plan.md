@@ -90,6 +90,74 @@ Three open questions were resolved by the owner; these override the audit-pass d
   (via D1). Generated docs are therefore not auto-filed into source collections. Changes: §7.4, §9
   step 5, §15.2, §19, §22.
 
+### 0.2 Second-pass audit (2026-06-14)
+
+A fresh multi-persona audit (after §0/§0.1) re-verified every code citation against the source on
+`Improved-Document-Structure` (all confirmed accurate, incl. the C4-load-bearing fact that
+`chunks`/`embeddings` carry FKs **without** CASCADE so `deleteDocument` deletes embeddings→chunks→doc
+in order) and found the following. Resolutions are applied inline; numbering is otherwise unchanged.
+
+- **N1 (blocker) — the "built-in Generated home" was referenced but never defined or seeded.** §8.1's
+  `collections.type` enum had no `'generated'`, §9 seeded only Library + Temporary, yet §9 step 5 /
+  §15.2 / §12.1 relied on a *Generated home* membership. Worse, had it been a selectable collection,
+  §10.2's `role <> 'generated'` would have excluded its own members. **Resolved (owner-overridable):
+  Generated is a pure smart view over `origin_json IS NOT NULL` with NO collection membership at all.**
+  No membership ⇒ a generated doc is automatically absent from every collection-derived scope (D3),
+  reachable only via explicit `documentIds`. No Generated-home collection is seeded; no `'generated'`
+  collection type. The `document_collections.role` value `'generated'` is **retired in v1** (kept only
+  as a reserved enum string); the §10.2 `role <> 'generated'` predicate is dropped as unnecessary.
+  Changes: §7.4, §8.1, §9 step 5, §10.1 rule 4, §10.2, §12.1, §15.2, §19. (Alternative the owner may
+  pick instead: seed a `type='generated'` built-in — rejected here because it adds a type + seed step
+  and creates the self-excluding-collection paradox for no gain.)
+- **N2 (blocker) — filename auto-scope's skip condition lost its information under D1+C3.** §10.1 rule 5
+  skipped auto-scope "only when the user has a deliberate `documentIds` selection," but rule 1 merges
+  **attachments** and rule 2 merges **explicit picks** into one flat `RetrievalScope.documentIds`, so
+  the skip decision was unmakeable from the resolved scope. **Resolved:** `resolveScope` computes an
+  explicit-pick boolean from `conv.scope.documentIds` (the stored hand-picks) **before** merging
+  attachments/collection-expansion, and returns it on `RetrievalScope.hasExplicitDocSelection`; rule 5
+  keys off that flag, not the merged ids. Changes: §10.1 rule 5, §10.2.
+- **N3 (blocker) — `conversation_documents` FK + async import is an unhandled crash path.** The
+  attachment link row is written on indexing **success** (async, later); if the conversation is deleted
+  meanwhile, the `INSERT` raises an FK violation on `conversation_id`, and `ON CONFLICT DO NOTHING`
+  catches **only PK conflicts, not FK violations**. **Resolved:** the success-path (and crash-resume)
+  link write is guarded by a conversation-existence check (skip the link, keep the doc in Temporary, if
+  the conversation is gone) inside a try/catch; and §13.5's "new documents-mode conversation" must be
+  **created and committed before** the import references its id. Changes: §11.3, §13.5.
+- **N4 — drop-to-chat in-flight state was undefined.** The link row only exists post-indexing, so a
+  freshly dropped file is neither answerable nor shown in "Files in this chat" until processing
+  finishes. **Resolved:** define a pending attachment state (a non-removable "processing" chip driven
+  by the existing import-job polling; it becomes a live attachment when the doc reaches `indexed` and
+  the link row is written). Changes: §11.2, §13.1, §13.5.
+- **N5 — stale contradictory comment.** §11.3's `{ kind: 'conversation' }` variant was annotated
+  "tie to a chat's scope_json", contradicting C3/H4. **Resolved:** comment corrected. Changes: §11.3.
+- **N6 — the §10.2 illustrative union SQL was scope-broken** (aliased `chunks c2` inside the `EXISTS`
+  but referenced `c2` outside it; `embeddings` only has `chunk_id`). **Resolved:** rewritten to the
+  existing `chunk_id IN (SELECT id FROM chunks WHERE …)` pattern with the chunk→document join in each
+  branch. Changes: §10.2.
+- **N7 — doc-lifecycle condensation anchors don't exist.** "spec §10.4" is not a label in
+  `CLAUDE_HilbertRaum_MVP.md` (it was echoed from a comment in `embeddings/index.ts`), and
+  `known-limitations.md` is heading-based with no §11.3/§16. **Resolved:** references corrected to the
+  real homes ("Document tasks & summaries" heading; the MVP spec's selected-documents section by name,
+  not a fabricated §-number). Changes: top-of-file note, §15.1.
+- **N8 — conversation-list grouping vs union scope.** Grouping by single `collection_id` (§13.4) can't
+  place a chat that spans Library + multiple projects. **Resolved:** group only by the creation anchor
+  `collection_id`; composite/edited-scope chats fall into the "Other / Library" group. Changes: §13.4.
+- **N9 — the Archived listing showed still-answerable docs** (an archived-project member that also
+  lives in Library is fully retrievable per C1). **Resolved:** clarify the Archived view splits
+  *document-archived* (lifecycle, truly excluded) from *project-archived members* (a hint, still
+  answerable elsewhere). Changes: §12.1.
+- **N10 — Temporary isn't a selectable scope source** (§13.2 lists Library/Projects/Specific/All).
+  Stated explicitly as intended. Changes: §13.2.
+- **N11 — line-ref drift:** `generateGroundedAnswer` is at `rag/index.ts:369` (retrieve call `:383`),
+  not `:378`. Corrected at §10.2.
+- **N12 — `ImportOptions.preserveRelativePaths` default** was unspecified. **Resolved:** defaults
+  **true for a folder import, false otherwise**; it only gates the display-metadata capture (§11.2).
+  Changes: §11.3.
+- **N13 — rule 5 re-introduces the materialization §10.2/§18 avoided.** Filename auto-scope "within the
+  resolved scope" needs a materialized in-scope (id, title) list — the very thing pushed into SQL to
+  keep a large Library cheap. **Resolved:** recorded as an accepted, bounded cost (one indexed
+  `id,title` projection over in-scope docs; no vectors loaded) with a note at §10.1 rule 5 / §18.
+
 ---
 
 ## 1. Summary
@@ -330,26 +398,29 @@ footer label and chips distinguish the two (§13.1/§13.3). After analysis the u
 actions: **Keep in Library**, **Move to Project**, **Delete from drive**, **Archive**. **No silent
 deletion in v1.**
 
-### 7.4 Generated (role `generated`, plus a smart view)
+### 7.4 Generated (a smart view, no collection membership — N1)
 
-Summaries/translations/comparisons. A materialized generated document (translation/compare) gets a
-`document_collections` row with `role='generated'` in the **same collection(s) as its source(s)**
-(assignment rule in §15). Provenance is structured in `documents.origin_json` (extended shape) so the
-UI can render "Translated from report.pdf", "Comparison of draft.pdf and final.pdf", "Summary of
-policy.pdf". Snapshot semantics are unchanged (a generated output does not auto-update when its
-source changes; staleness indicator is a later phase).
+Summaries/translations/comparisons. A materialized generated document (translation/compare) is **not
+given any `document_collections` membership** (N1). It is recorded only by its structured
+`documents.origin_json` (extended shape, §15), and that `origin_json IS NOT NULL` predicate **is** the
+Generated smart view (§12.1) — exactly like the other query-time smart views (Failed = `status='failed'`,
+etc.). With no membership, a generated doc is automatically absent from every collection-derived scope
+(D3), so no separate exclusion mechanism is required. The provenance lets the UI render "Translated
+from report.pdf", "Comparison of draft.pdf and final.pdf", "Summary of policy.pdf". Snapshot semantics
+are unchanged (a generated output does not auto-update when its source changes; staleness indicator is
+a later phase).
 
 **Generated docs are excluded from default retrieval (D3, decided — owner override of the audit-pass
-M4 default).** A materialized translation/comparison is **not** part of any default answer corpus. It
-is visible in the **Generated view**, **downloadable**, and **explicitly selectable** as a specific-doc
-source (it can be hand-added to a chat's `documentIds`, §10.1). But it is **never auto-filed into a
-source collection** and is **excluded from collection-derived retrieval** (the `role='generated'`
-exclusion in §10.1 rule 4 / §10.2 SQL). The intended path to make a generated output *durable
+M4 default; mechanism simplified by N1).** A materialized translation/comparison is **not** part of any
+default answer corpus. It is visible in the **Generated view**, **downloadable**, and **explicitly
+selectable** as a specific-doc source (it can be hand-added to a chat's `documentIds`, §10.1). Because
+it has **no collection membership at all**, it can never be reached through a Library/project scope —
+the exclusion is structural, not a predicate. The intended path to make a generated output *durable
 knowledge* is: **download it, then re-import it into the right folder** (where it becomes an ordinary
-imported document — D2). Rationale (owner): generated outputs are work products, not automatically
-trusted knowledge; the user decides if/where one becomes part of the answer corpus. (Summaries are
-*not* materialized documents — they stay `summary_json` metadata, §15.1 — so this question doesn't
-arise for them.)
+imported document with normal membership — D2). Rationale (owner): generated outputs are work products,
+not automatically trusted knowledge; the user decides if/where one becomes part of the answer corpus.
+(Summaries are *not* materialized documents — they stay `summary_json` metadata, §15.1 — so this
+question doesn't arise for them.)
 
 ### 7.5 Archive
 
@@ -370,7 +441,7 @@ arise for them.)
 ### 7.6 Smart views (later — Phase E)
 
 Query-time filters over metadata, **not** stored collections: *Recently added*, *Unfiled* (no
-non-builtin membership), *Generated by AI* (`role='generated'`), *Temporary*, *Needs re-index*
+non-builtin membership), *Generated by AI* (`origin_json IS NOT NULL` — N1), *Temporary*, *Needs re-index*
 (`staleEmbeddings`), *Large files*, *Audio transcripts*, *OCR/scanned*, *Failed imports*
 (`status='failed'`). A smart view is a named predicate evaluated against `documents` +
 `document_collections`; selecting one as a chat scope resolves to its current document-id set.
@@ -402,7 +473,7 @@ CREATE INDEX IF NOT EXISTS idx_collections_type ON collections(type);
 CREATE TABLE IF NOT EXISTS document_collections (
   document_id TEXT NOT NULL,
   collection_id TEXT NOT NULL,
-  role TEXT NOT NULL DEFAULT 'source', -- 'source' | 'reference' | 'generated' | 'attachment'
+  role TEXT NOT NULL DEFAULT 'source', -- 'source' | 'reference' | 'attachment' ('generated' RESERVED, unused in v1 — N1: generated docs get NO membership)
   added_at TEXT NOT NULL,
   PRIMARY KEY (document_id, collection_id),
   FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE,
@@ -535,14 +606,16 @@ partially-migrated DB are safe.
    already-indexed docs (which never had an intent recorded) fall through to Library. (Backfilling
    only indexed docs is also correct because an unfinished import has no answerable content yet, so it
    is invisible to retrieval until it finishes and files itself per §11.3.)
-5. **Backfill generated rows (best-effort — D3):** existing rows with `origin_json` (translations/
-   comparisons) are **not** given Library/source-collection membership; instead they get the single
-   `role='generated'` membership in the built-in Generated home (§15.2), which **excludes them from
-   default retrieval** (§10.1 rule 4). This is the D3 behaviour applied retroactively: a previously
-   generated translation stops silently polluting the default corpus on upgrade. (A user who wants it
-   back as knowledge re-imports it — D3.) The `origin_json` shape is widened lazily (read tolerates the
-   old shape; §15). (Step 4 already skips `origin_json`-bearing rows, so a generated row is never *also*
-   a Library member regardless of step order.)
+5. **Generated rows need no backfill (D3, simplified by N1):** existing rows with `origin_json`
+   (translations/comparisons) are given **no** `document_collections` membership at all — not Library,
+   not a Generated home (N1 retires the Generated-home idea). Step 4 already skips them (its
+   `origin_json IS NULL` guard), so they simply remain membership-free, which **structurally excludes
+   them from every collection-derived scope** (§10.1 rule 4 / §10.2). They surface only through the
+   Generated smart view (`origin_json IS NOT NULL`, §12.1). This is the D3 behaviour applied
+   retroactively: a previously generated translation stops silently polluting the default corpus on
+   upgrade. (A user who wants it back as knowledge re-imports it — D3.) The `origin_json` shape is
+   widened lazily (read tolerates the old shape; §15). There is therefore **no step-5 write** — it is a
+   no-op by construction, kept in the list only to document the intent.
 6. **Lifecycle:** all existing docs get `lifecycle` NULL ⇒ `permanent` (no write needed).
 7. **Indexes** from §8.1.
 
@@ -603,26 +676,32 @@ the Library/knowledgebase, project folders, and specific documents, and retrieva
    no longer appears in the picker — §7.5, §13), but a document also reachable via Library or another
    selected source stays retrievable. A doc leaves retrieval globally only via its own
    `lifecycle='archived'`.
-4. **Generated docs are excluded from *collection-derived* membership (D3).** When the scope's
-   `collectionIds` expand to members, rows whose membership `role='generated'` are **not** included
-   (generated outputs are not part of any default answer corpus — §7.4/§15.2). They are answerable
-   **only** when the user puts their specific id in `documentIds` (explicit selection via D1). So D3 is
-   enforced here: exclude `role='generated'` from the collection expansion, never from an explicit
-   `documentIds` pick.
+4. **Generated docs are excluded structurally (D3, simplified by N1).** Generated docs carry **no
+   collection membership** (§7.4/§15.2), so a `collectionIds` expansion never reaches them — no
+   `role='generated'` predicate is needed (N1 dropped it). They are answerable **only** when the user
+   puts their specific id in `documentIds` (explicit selection via D1), which bypasses collection
+   expansion entirely.
 5. **Filename auto-scope narrows within the resolved union.** `detectFilenameScope` runs over the
    **documents visible in the resolved scope** (not the whole corpus). It runs whenever the scope is a
    collection/attachment-derived set; it is **skipped only when the user has an explicit, deliberate
-   `documentIds` selection of their own** (a hand-picked specific-doc list), since narrowing a precise
-   pick would be surprising. On **multiple matches** inside scope, do not guess — scope to *all*
-   matches and surface a disambiguation notice ("Two files match 'contract' — answering from both")
-   via the existing `STREAM.scope` channel (extended payload). No-match-in-scope ⇒ answer from the
-   resolved scope; silent widening to Library is an open question (§21 Q1).
+   hand-picked specific-doc selection** — keyed off `RetrievalScope.hasExplicitDocSelection` (N2), the
+   flag `resolveScope` sets from `conv.scope.documentIds` **before** attachments and collection
+   expansion are merged into `documentIds`. (Merging would otherwise make a hand-pick indistinguishable
+   from an attachment or expansion; the flag preserves that distinction — N2.) On **multiple matches**
+   inside scope, do not guess — scope to *all* matches and surface a disambiguation notice ("Two files
+   match 'contract' — answering from both") via the existing `STREAM.scope` channel (extended payload).
+   No-match-in-scope ⇒ answer from the resolved scope; silent widening to Library is an open question
+   (§21 Q1). **Cost note (N13):** matching filenames "within the resolved scope" needs a materialized
+   in-scope `(id, title)` list — the projection §10.2/§18 otherwise push into SQL. Accepted as a
+   bounded cost: it loads only `id`+`title` for in-scope docs (no vectors, indexed), evaluated once per
+   question.
 
 ### 10.2 Backend shape (decided — concrete signature, H3)
 
 Verified current signature (`rag/index.ts:167`):
 `retrieve(db, embedder, question, settings, scopeDocumentIds?: string[] | null, reranker?, signal?)`.
-It has many callers — the production `generateGroundedAnswer` (`rag/index.ts:378`) and a dozen test
+It has many callers — the production `generateGroundedAnswer` (`rag/index.ts:369`, retrieve call at
+`:383` — N11) and a dozen test
 call sites across `tests/integration/{rag,rag-scope,hybrid-search,ocr-task}.test.ts` and
 `tests/manual/rag-quality.test.ts`, several of which pass a doc-id array (e.g. `detected?.ids`) or
 `null` **positionally** as argument 5. A plain "options object replaces arg 5" would break every one
@@ -632,9 +711,10 @@ widen the type, normalize internally:
 ```ts
 // main/services/rag/index.ts
 export interface RetrievalScope {
-  documentIds?: string[] | null       // explicit selected docs — existing behaviour
+  documentIds?: string[] | null       // explicit selected docs — existing behaviour (after merge: hand-picks ∪ attachments)
   collectionIds?: string[] | null     // NEW — membership filter
   includeArchived?: boolean           // NEW — default false
+  hasExplicitDocSelection?: boolean   // NEW (N2) — true iff the user hand-picked specific docs; set by resolveScope BEFORE merging attachments/expansion; gates filename auto-scope skip (§10.1 rule 5)
 }
 // arg 5 is now: string[] | RetrievalScope | null
 export async function retrieve(
@@ -651,8 +731,9 @@ test stays valid byte-for-byte** — no call-site churn for the legacy doc-id pa
 `RetrievalScope` to use `collectionIds`/`includeArchived`.
 
 **Forced edits (the only ones this signature change requires):**
-- `generateGroundedAnswer` (`rag/index.ts:378`) — its `opts` gains a `scope?: RetrievalScope` (or it
-  forwards a resolved `RetrievalScope`); it passes that through to `retrieve` as arg 5.
+- `generateGroundedAnswer` (`rag/index.ts:369`) — its `opts` gains a `scope?: RetrievalScope` (or it
+  forwards a resolved `RetrievalScope`); it passes that through to `retrieve` as arg 5 (the existing
+  `opts.scopeDocumentIds` pass-through is at `:383`).
 - `registerRagIpc.ts` — call `resolveScope(db, conv, question)` (§10.1) and hand the resulting
   `RetrievalScope` to `generateGroundedAnswer`; the filename-auto-scope wiring moves to operate
   *within* the resolved scope (§10.1 rule 7).
@@ -666,21 +747,30 @@ project + contractA.pdf" works.) To stay index-friendly for a large Library, the
 SQL as an `EXISTS`/`IN` disjunction, **not** a materialized `IN (…thousands…)`:
 
 - `VectorIndex` (`main/services/embeddings/index.ts`) `VectorIndexOptions` gains
-  `collectionIds?: string[] | null`, `documentIds?: string[] | null`, `includeArchived?: boolean`;
-  `search()` adds (when either filter is set):
+  `collectionIds?: string[] | null`, `documentIds?: string[] | null`, `includeArchived?: boolean`.
+  `embeddings` has only `chunk_id`, so (mirroring the **existing** `chunk_id IN (SELECT id FROM chunks
+  WHERE document_id IN (…))` filter — N6) the chunk→document hop and every predicate live **inside one
+  `chunk_id IN (SELECT …)` subquery**, with the chunk→document join in *each* branch:
   ```sql
-  AND (
-    EXISTS (SELECT 1 FROM document_collections dc JOIN chunks c2 ON c2.id = embeddings.chunk_id
-            WHERE dc.document_id = c2.document_id AND dc.collection_id IN (…)
-              AND dc.role <> 'generated')          -- D3: generated excluded from collection expansion
-    OR c2.document_id IN (… documentIds …)         -- D1: explicit docs unioned in (incl. generated)
+  AND embeddings.chunk_id IN (
+    SELECT c.id FROM chunks c
+    WHERE (
+      EXISTS (SELECT 1 FROM document_collections dc           -- D1: membership branch
+              WHERE dc.document_id = c.document_id AND dc.collection_id IN (…collectionIds…))
+      OR c.document_id IN (…documentIds…)                     -- D1: explicit-doc branch, unioned in
+    )
+    AND NOT EXISTS (SELECT 1 FROM documents d                 -- C1: doc-level archive only
+                    WHERE d.id = c.document_id AND d.lifecycle = 'archived')
   )
-  AND NOT EXISTS (SELECT 1 FROM documents d WHERE d.id = c2.document_id AND d.lifecycle = 'archived')
   ```
-  (final SQL tuned during implementation; the point is union-of-membership-OR-id, with the
-  `idx_doccoll_*` indexes; empty `collectionIds` AND empty `documentIds` ⇒ no filter = "All documents").
+  (No `role <> 'generated'` predicate — N1: generated docs have no membership, so the membership branch
+  never reaches them; explicit `documentIds` still can. `includeArchived=true` drops the `NOT EXISTS`.
+  Final SQL tuned during implementation; the point is union-of-membership-OR-id, indexed by
+  `idx_doccoll_*`; empty `collectionIds` AND empty `documentIds` ⇒ no filter = "All documents".)
 - `keywordSearchChunks` (`main/services/rag/hybrid.ts`) `KeywordSearchOptions` gains the same and
-  adds the analogous disjunction / generated / archived predicates.
+  adds the analogous membership-OR-id disjunction + doc-level archived predicate (no generated
+  predicate — N1). Its existing `AND c.document_id IN (…)` already joins `chunks c`, so the predicates
+  attach there directly.
 
 Backward compatibility is provided by the **arg-5 union + internal normalization** above (a bare
 `string[]`/`null` becomes `{ documentIds }`), not by a separate overload — so the old positional
@@ -757,6 +847,12 @@ A calm "Where should these files go?" step on import, with three options (copy a
   so the chat answers from it by default via the `temporary-attachments` scope kind (§10.1 rule 2).
   Dropping into a **plain-`chat`** conversation is handled by §13.5 (it does not silently gain doc
   retrieval).
+  - **In-flight state (N4):** because the `conversation_documents` link is written only when the doc
+    reaches `indexed` (it is async), the file is **not answerable nor a live attachment until then**.
+    The chat shows a **pending "processing invoice.pdf…" chip** driven by the existing import-job
+    polling (`getImportJob`/`ImportJobStatus`, §2.5); the chip is **not removable** and converts to a
+    live "Files in this chat" attachment (§13.1) once the link row exists. A failed import surfaces the
+    existing friendly per-file error in place of the chip and writes **no** link.
 - **Folder import** → preserve `source_relative_path` + `source_folder_label` as metadata; do **not**
   auto-create collections in v1. Destination still asked (defaults Library). Optional later mode:
   "Create projects from top-level folders."
@@ -780,11 +876,11 @@ export type ImportDestination =
   | { kind: 'library' }
   | { kind: 'collection'; collectionId: string }
   | { kind: 'temporary' }
-  | { kind: 'conversation'; conversationId: string } // temp + tie to a chat's scope_json
+  | { kind: 'conversation'; conversationId: string } // temp attachment, linked via conversation_documents (C3) — NEVER scope_json (N5/H4)
 
 export interface ImportOptions {
   destination?: ImportDestination     // default { kind: 'library' }
-  preserveRelativePaths?: boolean      // folder import
+  preserveRelativePaths?: boolean      // N12: capture source_relative_path/source_folder_label; default true for a folder import, false otherwise
 }
 ```
 
@@ -810,6 +906,16 @@ cannot wipe earlier temp files. (Had temp files still lived in `scope_json` per 
 import would have had to read-append-write to avoid clobbering; C3's link table removes that hazard
 entirely. Any future code that *does* edit `scope_json` for multiple files must still read-append-write,
 never call the replace path.)
+
+**The link write is FK-guarded (N3).** The `conversation_documents.conversation_id` FK means a naïve
+`INSERT` would raise an FK violation if the conversation was deleted between import-queue and
+import-**success** (the link is written on success, asynchronously — possibly seconds later) — and
+`ON CONFLICT DO NOTHING` catches only the **PK** conflict, **not** an FK violation. So the success-path
+(and crash-resume from `pending_destination_json`) link write must (a) run inside a try/catch and (b)
+verify the conversation still exists first; if it is gone, **skip the link** and leave the doc in the
+Temporary collection (still reviewable in Documents → Temporary). The doc is never lost; only the
+chat binding is dropped because its chat no longer exists. This is the one place `{ kind: 'conversation' }`
+differs from the other destinations (which have no conversation FK).
 
 ### 11.4 Duplicate handling on import — always import as new (decided, D2)
 
@@ -845,8 +951,12 @@ history auto-collapse. New rail CSS lives beside the existing media queries, not
 - **Library** (default selected)
 - **Projects** → each project (with doc count, failed/needs-reindex badge)
 - **Temporary**
-- **Generated** (smart view: `role='generated'`)
-- **Archived** (smart view: `lifecycle='archived'` ∪ archived-project members)
+- **Generated** (smart view: `origin_json IS NOT NULL` — N1; no membership predicate)
+- **Archived** (smart view) — **two visually distinct groups (N9):** *document-archived*
+  (`lifecycle='archived'`, genuinely excluded from retrieval) and, separately, *members of an archived
+  project* (a navigational hint only — per C1 these stay fully answerable via their other memberships,
+  so they must **not** be presented as "excluded"). Conflating the two would imply a Library doc went
+  dark just because some project was archived, which is false.
 - **All documents**
 - *(Phase E: Recently added, Unfiled, Needs re-index, Large files, Failed imports, Audio, OCR)*
 
@@ -912,7 +1022,9 @@ usingSome(N)` (`ScopePopover.tsx:45`). D1 makes scope a **composed union**, so t
 - multiple sources → summarize the union: "Using Library + Project: Tax 2025" ·
   "Using Project: Tax 2025 + 2 documents" · "Using Library + 2 projects + 1 document"
 - chat **attachments** are shown separately as their own affordance ("+ 1 file in this chat"), **not**
-  as removable selection chips (C3) — they're always unioned in (§10.1 rule 1).
+  as removable selection chips (C3) — they're always unioned in (§10.1 rule 1). An attachment still
+  **processing** shows as a non-removable pending chip ("processing invoice.pdf…", N4) until it is
+  indexed and its `conversation_documents` link exists.
 
 New i18n keys: per-source labels + a composer that joins them (`chat.scope.union`, `chat.scope.library`,
 `chat.scope.project`, `chat.scope.docs`, `chat.scope.attachments`, plus existing `usingAll`).
@@ -926,6 +1038,11 @@ user can tick any combination of:
 - ☑ **each Project** (one or more; archived projects are not listed — §7.5/C1)
 - ☑ **Specific documents…** (opens a doc picker; adds ids to `documentIds`)
 - a one-tap **"All documents"** that clears the union to empty (whole corpus)
+
+The built-in **Temporary** collection is intentionally **not** offered as a pickable source (N10):
+temporary files are reached through their own chat (the `conversation_documents` attachment, §10.1
+rule 1) or hand-picked via "Specific documents…", never as a bulk "all my temporary files" corpus.
+Likewise **Generated** is not a source (D3); a generated doc is reached only via "Specific documents…".
 
 The composed selection is written to `conversations.scope_v2_json` (§8.3/§10.4) so it persists across
 restarts. Chat attachments appear as a read-only "Files in this chat" line (always included), distinct
@@ -959,9 +1076,13 @@ but a user can apply a smart view in the listing and hand-add its docs through "
   `ChatScreen.tsx`).
 - New IPC `setConversationCollection(conversationId, collectionId | null)` (parallel to
   `updateConversationScope`).
-- **Conversation list grouping:** group the existing `ConversationList` by project (a project header
-  with its chats), with an "Other / Library" group for unscoped chats. Keep it a view change, not a
-  new screen.
+- **Conversation list grouping:** group the existing `ConversationList` strictly by the creation
+  anchor `collection_id` (a project header with its chats), with an "Other / Library" group for
+  unscoped chats. Keep it a view change, not a new screen. **Composite-scope chats group by anchor, not
+  union (N8):** a chat whose scope spans Library + several projects (`scope_v2_json`) cannot belong to
+  one project header, so it groups under its original `collection_id` if set, else "Other / Library".
+  Grouping is an organizational convenience over the *anchor*, deliberately **not** an index of every
+  source a chat draws from (that lives in the footer summary, §13.1).
 - **Dangling scope safety:** if a conversation's `collection_id` references an **archived or deleted**
   project, the footer shows a quiet "This project was archived — answering from Library" and falls
   back to Library scope (never an error, never an empty silent corpus). Same calm-fallback discipline
@@ -983,6 +1104,12 @@ conversation" must be defined rather than left to that destructive default. **De
   temporary attachment (mirroring the existing `pendingScope` / `createConversation` handoff pattern
   in `ChatScreen.tsx`), and switch focus to it. The user's plain chat is preserved verbatim; a toast
   ("Started a new document chat for invoice.pdf") explains the jump.
+  - **Ordering (N3):** the new conversation row must be **created and committed before** the import is
+    queued with `{ kind: 'conversation', conversationId }`, because `conversation_documents` has an FK
+    on `conversation_id`. The chat-drop intake therefore: (1) `createConversation` (documents mode),
+    (2) `importDocuments(paths, { destination: { kind:'conversation', conversationId } })`, (3) the
+    link row is written FK-guarded on indexing success (§11.3 N3). Until then the new chat shows the
+    pending chip (N4).
 - **Never** silently convert an in-progress plain chat to documents mode (that would wipe its
   messages via the `onSelectMode` clear) and **never** answer a plain-chat turn from documents (the
   mode boundary stays intact).
@@ -1059,29 +1186,32 @@ export interface GeneratedProvenance {
 `DocumentOrigin` becomes a discriminated union that **still accepts** the existing
 `TranslationOrigin` / `CompareOrigin` shapes (read path tolerant — the `parseOrigin` precedent), with
 the richer `GeneratedProvenance` written going forward. **Summary stays `summary_json` metadata** on
-the source row (do not churn it into a separate document — §16/§11.3 of `known-limitations.md`
-describe the current summary contract; converting it is an open question §21, leaning *keep as
-metadata*).
+the source row (do not churn it into a separate document — the **"Document tasks & summaries"** section
+of `known-limitations.md` describes the current summary contract: *"Summary = `documents.summary_json`
+… metadata, not a separate document. Cleared on re-index."* N7 — that file is heading-based, not
+§-numbered). Converting it is an open question §21, leaning *keep as metadata*.
 
 ### 15.2 Membership of materialized generated docs (decided — D3)
 
-**D3 simplifies this radically: generated docs are NOT auto-filed into any source/project collection.**
-The first draft's intersection / active-project / Library assignment rules are **dropped.** When a
-translation/compare produces a new `documents` row:
-- It is **not** given a `document_collections` membership in its sources' collections (Library, the
-  active project, etc.), so it is **excluded from every default and collection-derived scope**
-  (§10.1 rule 4 / §10.2 SQL `role <> 'generated'`).
-- It is recorded as generated via `origin_json` / `GeneratedProvenance` (§15.1) and surfaced through
-  the **Generated smart view** (§12.1). It may carry a single membership in a built-in **Generated**
-  home (role `generated`) purely so the view and the `role <> 'generated'` exclusion are uniform — but
-  that membership is **never** an answer-corpus source.
+**D3 (simplified by N1): generated docs get NO `document_collections` membership at all.** The first
+draft's intersection / active-project / Library assignment rules are **dropped**, and so is the §0.1
+"built-in Generated home" idea (N1 — it was never seeded, had no collection type, and would have
+self-excluded under the old `role <> 'generated'` predicate). When a translation/compare produces a
+new `documents` row:
+- It is given **no** membership — not Library, not the source's collections, not a Generated home. With
+  no membership, a collection-scope expansion **structurally never reaches it** (§10.1 rule 4 / §10.2),
+  so no `role`-based exclusion predicate is needed.
+- It is recorded as generated via `origin_json` / `GeneratedProvenance` (§15.1) and surfaced **only**
+  through the **Generated smart view** — the query-time predicate `origin_json IS NOT NULL` (§12.1),
+  exactly like the other smart views. The `document_collections.role` value `'generated'` is **unused
+  in v1** (reserved enum string only).
 - It is **answerable only when the user explicitly selects it** as a specific-doc source (its id in a
-  chat's `documentIds`, §10.1) — the explicit pick bypasses the generated exclusion.
+  chat's `documentIds`, §10.1) — the explicit `documentIds` branch bypasses collection expansion.
 - The path to making a generated output **durable knowledge** is **download + re-import** into the
   chosen folder (D3/§7.4), at which point it is an ordinary imported document with normal membership.
 
-This keeps generated outputs out of the default corpus entirely (owner intent) and removes the need
-for any multi-collection assignment heuristic — so **§21 Q3 is moot** (see §21).
+This keeps generated outputs out of the default corpus entirely (owner intent) and removes the need for
+any assignment heuristic **and** any Generated-home seed/type — so **§21 Q3 is moot** (see §21).
 
 ### 15.3 UI provenance + staleness
 
@@ -1199,8 +1329,9 @@ No erosion of any hard rule. Specifics:
 - `resolveScope` **union (D1):** a composite `DocumentScope` `{collectionIds:[library, projectTax],
   documentIds:[contractA]}` resolves to the **union** of those members + that doc (not a short-circuit);
   empty scope ⇒ "All documents"; attachments are always unioned in (§10.1 rule 1); legacy fallback
-  (NULL `scope_v2_json`) maps `scope_json`/`collection_id` correctly. **D3:** a `role='generated'` doc
-  is excluded from a collection-derived scope but **included** when its id is in `documentIds`.
+  (NULL `scope_v2_json`) maps `scope_json`/`collection_id` correctly. **D3/N1:** a generated doc (one
+  with `origin_json` set and **no membership**) is absent from a collection-derived scope but **included**
+  when its id is in `documentIds`; `hasExplicitDocSelection` is set only for hand-picked docs (N2).
   **C1 regression:** a doc in Library **and** an archived project is still returned for a **Library**
   scope. **C3:** attachments resolve from `conversation_documents`, not `scope_json`.
   document-level `lifecycle='archived'` excluded by default; `includeArchived` path.
@@ -1213,8 +1344,9 @@ No erosion of any hard rule. Specifics:
 ### 19.2 Integration (`tests/integration`)
 
 - **Migration:** open a pre-feature DB → all **non-generated** indexed docs become Library members
-  (generated rows get the Generated home only — D3/step 5); built-ins seeded once; re-open is a no-op
-  (no double-filing). Pre-feature `scope_json` conversations still answer (legacy fallback, §10.4).
+  (generated rows get **no** membership — D3/step 5 is a no-op, N1); built-ins (Library + Temporary
+  only) seeded once; re-open is a no-op (no double-filing). Pre-feature `scope_json` conversations
+  still answer (legacy fallback, §10.4).
 - Import to Library / Project / Temporary / conversation; folder import preserves
   `source_relative_path` + `source_folder_label`; old `importDocuments(paths)` caller unchanged.
 - `retrieve` with `collectionIds` + `documentIds` **unioned (D1)** — a query over "Library + projectX
@@ -1234,9 +1366,11 @@ No erosion of any hard rule. Specifics:
   back-filled to Library by the migration; on resume it files to its `pending_destination_json`.
 - **C2:** delete-project "with documents" deletes only genuinely project-only docs and **never** a
   Library member.
-- **D3:** generated translation/compare gets **no** source/Library membership, is excluded from
-  default retrieval, but is answerable when explicitly selected; provenance persisted; migration
-  step 5 retro-excludes pre-existing generated rows (and step 4 doesn't Library-file them).
+- **D3/N1:** generated translation/compare gets **no membership at all**, is excluded from default
+  retrieval **structurally** (no membership ⇒ no collection expansion reaches it), but is answerable
+  when explicitly selected; provenance persisted; on migration a pre-existing generated row ends up
+  membership-free (step 4's `origin_json IS NULL` guard skips it; step 5 is a no-op) and therefore out
+  of the default corpus.
 - **D2:** importing a file whose `sha256` already exists creates a **new** `documents` row + new
   embeddings (no dedup, no prompt); `docs:addToCollection` on an existing doc shares it across
   collections **without** a new vector set.
@@ -1303,9 +1437,10 @@ view; Keep / Move / Delete actions; dangling-scope fallback. No retention sweep.
 analyse invoice.pdf in chat without polluting Library.
 
 ### Phase D — Generated provenance (D3)
-Extended `origin_json`/`GeneratedProvenance`; `role='generated'` membership in the built-in Generated
-home **only** (no source/project auto-filing — D3); generated docs **excluded from default retrieval**,
-visible in the Generated view, **downloadable**, and explicitly selectable; provenance UI labels.
+Extended `origin_json`/`GeneratedProvenance`; generated docs get **no `document_collections` membership
+at all** (N1 — no source/project filing, no Generated home), so they are **excluded from default
+retrieval** structurally, visible in the Generated smart view (`origin_json IS NOT NULL`),
+**downloadable**, and explicitly selectable; provenance UI labels.
 **Deliverable:** generated docs explain their origin, stay out of the default corpus, and can be made
 durable knowledge by download + re-import.
 
@@ -1439,8 +1574,8 @@ an existing project, sha/path patterns); local-AI suggestions only later, never 
   `deleteDocument` switches `rmSync` → `shredFile` (M5) and relies on CASCADE for membership/link
   cleanup (C4 — the manual `DELETE FROM document_collections` is unnecessary); extend/parse
   `origin_json`.
-- `apps/desktop/src/main/services/doctasks/manager.ts` — generated-doc gets the Generated-home
-  membership only (no source/project filing — D3) + structured provenance.
+- `apps/desktop/src/main/services/doctasks/manager.ts` — generated-doc gets **no membership** (N1 —
+  no source/project filing, no Generated home) + structured provenance (`GeneratedProvenance`).
 - `apps/desktop/src/main/services/audit.ts` — collection events (id/type/count only).
 
 **IPC / preload / shared:**
