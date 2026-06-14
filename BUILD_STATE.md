@@ -6,7 +6,37 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
-_Last updated: 2026-06-13 — **Three post-MVP UI fine-tunes.** (1) **Chat example chips matched
+_Last updated: 2026-06-14 — **Bugfix: document analysis failed with `HTTP 400` on space-less
+text (beta-tester report).** Symptom: every document **summary** and **document answer** failed
+with `Chat request failed: HTTP 400` while plain chat worked, across two models (qwen3-4b-2507 /
+4096 ctx and qwen3-8b / 8192 ctx). **Root cause:** `tokenize`/`approxTokenCount`
+([`chunker.ts`](apps/desktop/src/main/services/ingestion/chunker.ts)) counted whitespace WORDS, so
+text with no word breaks — CJK/Thai, or a glued PDF/extraction run — collapsed to ~1 "token". That
+silently defeated every context budget (chunker, summary/translation/compare windows, the RAG cap),
+so the assembled prompt overflowed the model context and llama-server returned
+`exceed_context_size_error` (a 400). Reproduced + verified the fix end-to-end against the user's exact
+build (b9585 `d73cd0767` on `D:`): an un-windowed space-less doc → 400, a budget-sized window → 200.
+**Fixes:** (1) `approxTokenCount` now counts space-less scripts per character and charges over-long
+no-space runs by length; new `windowByTokens`/`truncateToApproxTokens` do content-preserving,
+budget-bounded windowing (space-less runs hard-cut by char, nothing inserted). `chunkSegments`,
+`packIntoWindows` (summary+translation), `planCompareWindows`, and the manager reduce/pair clamps all
+switched off raw word slicing onto these. **Normal prose is unchanged (word≈token), so existing
+budget tests stayed green; documents indexed before the fix keep their old chunks until Re-indexed.**
+(2) `LlamaRuntime.chatStream` now throws a typed **`ChatRequestError`** that includes the server's
+`{error:{message,type}}` body (it used to be discarded); `isExceedContextError` maps the overflow to
+the friendly, localized **`main.model.contextExceeded`** in the doctask manager + chat/RAG stream
+wrapper. (3) Secondary latent bug fixed: a failed answer left an orphan user turn, so a later turn
+sent **consecutive user messages** → some templates raise `HTTP 500` ("roles must alternate");
+`collapseToAlternating` (applied in `buildChatMessages`/`buildGroundedChatMessages`) keeps strict
+role alternation. **Files:** `services/ingestion/chunker.ts`, `services/doctasks/{summary,compare,
+manager}.ts`, `services/runtime/llama.ts`, `services/chat.ts`, `services/rag/index.ts`,
+`ipc/chat-stream.ts`, `shared/i18n/{en,de}.ts`. **Docs:** `rag-design.md` (token estimate +
+windowing), `architecture.md` "Chat & streaming" (role alternation + surfaced errors),
+`known-limitations.md` (token-budget bullet corrected + re-index note). **Tests:** typecheck clean,
+`npm test` **1155 passed / 25 skipped** (+13: chunker space-less/windowing, summary CJK window,
+llama-runtime error-body + `isExceedContextError`, `collapseToAlternating`). No version bump._
+
+_(prior) **Three post-MVP UI fine-tunes.** (1) **Chat example chips matched
 the mode.** Plain Chat has no document access, yet its empty-state examples were document-shaped
 ("Summarize this contract" / payment terms / indemnity). Split into two key sets: `chat.exampleChat.*`
 (explain a concept / write a polite email / brainstorm — general-purpose) for chat mode and

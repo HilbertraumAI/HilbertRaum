@@ -150,10 +150,19 @@ password recovery — are documented in
 - **Re-index clears the summary and nothing regenerates it automatically** — the content
   may have changed, so a stale summary must not survive; the user presses Summarize again.
   Accepted edge, mirrored in the user guide.
-- **Word≈token budgeting is conservative, not exact.** The window math reuses the
-  chunker's whitespace-word estimate with a 1.3 words→tokens safety factor; real token
-  counts vary by language/model. Worst case is smaller-than-necessary windows (more map
-  calls), never a context overflow.
+- **Token budgeting is conservative, not exact.** The window math uses the chunker's
+  `approxTokenCount` plus a 1.3 words→tokens safety factor; real token counts vary by
+  language/model. Worst case is smaller-than-necessary windows (more map calls), never a
+  context overflow. **NB (fix 2026-06-14):** the estimate formerly counted only
+  whitespace words, so a *space-less* document — CJK/Thai, or a glued PDF/extraction run
+  with no word breaks — collapsed to ~1 "token" and the assembled prompt overflowed the
+  model context, which the server rejected with `HTTP 400 exceed_context_size_error` (the
+  whole document-analysis path failed). `approxTokenCount` now counts space-less scripts
+  per character and charges long no-space runs by length, and `windowByTokens` slices such
+  runs instead of leaving them whole. **Documents indexed before this fix keep their
+  pre-fix (possibly oversized) chunks until Re-indexed.** Space-less estimates are
+  deliberately on the high side (CJK counted ~1 token/char), so CJK summaries window more
+  finely than strictly necessary — safe, slightly more map calls.
 
 ## Document translation (Phase 34, wave-3 plan §7)
 

@@ -221,14 +221,74 @@ export class LlamaRuntime implements ModelRuntime {
       body,
       signal: options?.signal
     })
-    if (!res.ok || !res.body) {
-      // Cancel the body so undici releases the connection instead of holding it
-      // until GC.
-      void res.body?.cancel().catch(() => undefined)
-      throw new Error(`Chat request failed: HTTP ${res.status}`)
+    if (!res.ok) {
+      // Read the body for the REASON: llama-server returns a JSON error
+      // (`{error:{message,type}}`) that explains the failure — most importantly
+      // `exceed_context_size_error` when the prompt is larger than the model's context
+      // window. Surfacing it turns an opaque "HTTP 400" into an actionable error and
+      // drains the body so undici releases the connection. (readBody handles no-body.)
+      throw await chatRequestError(res)
+    }
+    if (!res.body) {
+      throw new ChatRequestError(res.status, 'empty response body', '')
     }
     yield* readChatSSE(res.body, options?.signal, options?.onReasoning)
   }
+}
+
+/** Cap on how much of a non-JSON error body we keep in the message. */
+const ERROR_BODY_MAX_CHARS = 500
+
+/**
+ * A failed `/v1/chat/completions` request, carrying the HTTP status plus the server's
+ * own error `message`/`type` when it sent the OpenAI-style `{error:{…}}` body. The
+ * message stays "Chat request failed: HTTP <status>" (callers/tests match on it) with the
+ * server reason appended.
+ */
+export class ChatRequestError extends Error {
+  readonly status: number
+  readonly serverMessage: string
+  readonly serverType: string
+  constructor(status: number, serverMessage: string, serverType: string) {
+    super(`Chat request failed: HTTP ${status}${serverMessage ? ` — ${serverMessage}` : ''}`)
+    this.name = 'ChatRequestError'
+    this.status = status
+    this.serverMessage = serverMessage
+    this.serverType = serverType
+  }
+}
+
+/** Build a `ChatRequestError` from a non-ok Response, extracting the server's reason. */
+async function chatRequestError(res: Response): Promise<ChatRequestError> {
+  let serverMessage = ''
+  let serverType = ''
+  try {
+    const raw = await res.text()
+    if (raw) {
+      try {
+        const parsed = JSON.parse(raw) as { error?: { message?: string; type?: string } }
+        serverMessage = parsed.error?.message?.trim() ?? ''
+        serverType = parsed.error?.type?.trim() ?? ''
+        if (!serverMessage) serverMessage = raw.slice(0, ERROR_BODY_MAX_CHARS)
+      } catch {
+        serverMessage = raw.slice(0, ERROR_BODY_MAX_CHARS)
+      }
+    }
+  } catch {
+    // Body unreadable (already consumed / stream error) — the status alone must do.
+  }
+  return new ChatRequestError(res.status, serverMessage, serverType)
+}
+
+/**
+ * True when a chat request was rejected because the prompt exceeds the model's context
+ * window (llama-server `exceed_context_size_error`, an HTTP 400). The doctask + chat
+ * layers map this to a friendly "too large for this model" message instead of a raw code.
+ */
+export function isExceedContextError(err: unknown): boolean {
+  if (!(err instanceof ChatRequestError)) return false
+  if (err.serverType === 'exceed_context_size_error') return true
+  return err.status === 400 && /context size|context window|n_ctx|exceed/i.test(err.serverMessage)
 }
 
 /** Factory mirroring `createMockRuntime`; selected by the runtime factory when a binary + weights exist. */

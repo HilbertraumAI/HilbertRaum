@@ -7,6 +7,7 @@ import {
   appendMessage,
   buildChatMessages,
   buildSystemPrompt,
+  collapseToAlternating,
   createConversation,
   deleteLastAssistantMessage,
   generateAssistantMessage,
@@ -28,6 +29,41 @@ function runtime() {
   const r = createMockRuntime({ modelId: 'mock-chat', modelPath: '/m.gguf', contextTokens: 2048 })
   return r
 }
+
+describe('collapseToAlternating (orphan turns from failed answers)', () => {
+  const sys = { role: 'system' as const, content: 's' }
+  it('drops stale consecutive user turns, keeping the latest (no HTTP 500 from templates)', () => {
+    // A conversation where 3 answers failed (each persisted a user turn, no assistant)
+    // then a 4th question — the model must still see strictly alternating roles.
+    const out = collapseToAlternating([
+      sys,
+      { role: 'user', content: 'q1' },
+      { role: 'user', content: 'q2' },
+      { role: 'user', content: 'q3' },
+      { role: 'user', content: 'q4' }
+    ])
+    expect(out).toEqual([sys, { role: 'user', content: 'q4' }])
+  })
+
+  it('preserves a normal alternating history unchanged', () => {
+    const msgs = [
+      sys,
+      { role: 'user' as const, content: 'q1' },
+      { role: 'assistant' as const, content: 'a1' },
+      { role: 'user' as const, content: 'q2' }
+    ]
+    expect(collapseToAlternating(msgs)).toEqual(msgs)
+  })
+
+  it('buildChatMessages collapses orphan user turns left by failed answers', () => {
+    const db = freshDb()
+    const conv = createConversation(db, { modelId: 'mock-chat' })
+    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'first' })
+    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'second' })
+    const built = buildChatMessages(db, conv.id)
+    expect(built.filter((m) => m.role === 'user')).toEqual([{ role: 'user', content: 'second' }])
+  })
+})
 
 describe('conversation persistence', () => {
   it('creates a conversation and lists it back', () => {

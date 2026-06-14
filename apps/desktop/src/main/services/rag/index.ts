@@ -11,6 +11,7 @@ import { log } from '../logging'
 import {
   appendMessage,
   BASE_SYSTEM_PROMPT,
+  collapseToAlternating,
   emptyAssistantMessage,
   isAbortError,
   listMessages,
@@ -343,7 +344,9 @@ export function buildGroundedChatMessages(
       })
     }
   }
-  return messages
+  // Drop orphan user turns from earlier failed answers so the roles still alternate
+  // (a non-alternating history makes some chat templates raise — an HTTP 500).
+  return collapseToAlternating(messages)
 }
 
 export interface GroundedAnswerOptions {

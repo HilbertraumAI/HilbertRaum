@@ -1,14 +1,14 @@
-import { tokenize } from '../ingestion/chunker'
+import { approxTokenCount, windowByTokens } from '../ingestion/chunker'
 
 // Summary window math + prompts (split out of the former monolithic doctasks.ts — audit
 // M-A4). The budget-driven two-level map-reduce; pure and unit-tested at the boundaries.
 // `packIntoWindows` is shared with the translation planner (re-imported there).
 //
-// Budgets reuse the chunker's word≈token estimate (`approxTokenCount` = whitespace
-// words). That estimate UNDERCOUNTS real model tokens (umlauts, punctuation, subword
-// splits), so the input budget is derived in words via an explicit words→tokens safety
-// factor: usable context tokens ÷ SUMMARY_TOKENS_PER_WORD. A window that fits the word
-// budget then cannot overflow the model's real `contextTokens` window.
+// Budgets use the chunker's `approxTokenCount` (≈1 token/word for prose, per-character
+// for space-less scripts, length-charged for glued runs — so it never collapses a huge
+// no-space run to one token). The budget keeps an explicit words→tokens safety factor on
+// top (usable context tokens ÷ SUMMARY_TOKENS_PER_WORD) to absorb subword splits, so a
+// window that fits the budget cannot overflow the model's real `contextTokens` window.
 
 /** maxTokens for the single-pass and reduce calls (also the output reserve). */
 export const SUMMARY_OUTPUT_TOKENS = 512
@@ -56,35 +56,38 @@ export interface SummaryPlan {
  * (segments in) planners.
  */
 export function packIntoWindows(texts: string[], budgetWords: number): string[] {
-  // Split any over-budget text into budget-sized pieces (document order kept).
-  const pieces: Array<{ text: string; words: number }> = []
+  const budget = Math.max(1, Math.floor(budgetWords))
+  // Split any over-budget text into budget-sized pieces (document order kept). Measuring
+  // and splitting by `approxTokenCount` (not a raw word count) is what keeps space-less
+  // text — CJK, or glued PDF runs — from packing far past the budget and overflowing the
+  // model context: `windowByTokens` charges such runs by length and slices them.
+  const pieces: Array<{ text: string; tokens: number }> = []
   for (const text of texts) {
-    const words = tokenize(text)
-    if (words.length === 0) continue
-    if (words.length <= budgetWords) {
-      pieces.push({ text, words: words.length })
+    const tokens = approxTokenCount(text)
+    if (tokens === 0) continue
+    if (tokens <= budget) {
+      pieces.push({ text, tokens })
     } else {
-      for (let at = 0; at < words.length; at += budgetWords) {
-        const slice = words.slice(at, at + budgetWords)
-        pieces.push({ text: slice.join(' '), words: slice.length })
+      for (const sub of windowByTokens(text, budget, 0)) {
+        pieces.push({ text: sub, tokens: approxTokenCount(sub) })
       }
     }
   }
 
   const windows: string[] = []
   let current: string[] = []
-  let currentWords = 0
+  let currentTokens = 0
   const flush = (): void => {
     if (current.length > 0) {
       windows.push(current.join('\n\n'))
       current = []
-      currentWords = 0
+      currentTokens = 0
     }
   }
   for (const piece of pieces) {
-    if (currentWords + piece.words > budgetWords) flush()
+    if (currentTokens > 0 && currentTokens + piece.tokens > budget) flush()
     current.push(piece.text)
-    currentWords += piece.words
+    currentTokens += piece.tokens
   }
   flush()
   return windows

@@ -115,13 +115,19 @@ chunk_overlap_tokens: 80
 max_chunks_per_file: 1000
 ```
 
-- **Token counting is approximate** for the mock phase: one whitespace-delimited word ≈ one
-  token (`tokenize` / `approxTokenCount`). Deterministic and dependency-free; a real
-  tokenizer can replace it later without changing the chunk metadata shape.
-- **Windows.** Within each segment, tokens are split into windows of `size`, advancing by
-  `step = size − overlap`. Consecutive windows overlap by `overlap` tokens. `overlap` is
-  clamped to `size − 1` so the window always advances. A window that reaches the end of the
-  segment stops the segment (no redundant tail chunk).
+- **Token counting is approximate** but must never UNDER-count: `approxTokenCount` counts an
+  ordinary whitespace word as ~1 token, a space-less-script character (CJK/Thai/…) as ~1
+  token, and an over-long no-space run as `ceil(len / 4)` — so a glued run can't collapse to
+  one token. (A plain whitespace count did exactly that, letting space-less documents overflow
+  the model context — `HTTP 400 exceed_context_size_error` — across the whole doc-analysis
+  path; fixed 2026-06-14.) Deterministic and dependency-free; a real tokenizer can still
+  replace it without changing the chunk-metadata shape.
+- **Windows.** `windowByTokens` splits a segment into windows of `size` approx tokens,
+  overlapping by `overlap` (clamped to `size − 1`); a window that reaches the segment end
+  stops it (no redundant tail chunk). A space-less run with no word breaks is hard-cut by
+  character so a window is never larger than the budget — content is preserved (pieces are
+  raw substrings). The same windower backs the summary/translation/compare planners and the
+  `truncateToApproxTokens` budget clamp.
 - **No cross-segment chunks.** Chunking happens *within* a segment, so each chunk inherits
   exactly one `pageNumber` / `sectionLabel`.
 - **Cap.** The global chunk count is capped at `max_chunks_per_file`; once hit, remaining
