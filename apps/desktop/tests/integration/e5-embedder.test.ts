@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { EventEmitter } from 'node:events'
 import { E5Embedder } from '../../src/main/services/embeddings/e5'
+import { approxTokenCount } from '../../src/main/services/ingestion/chunker'
 import { createSelectedEmbedder } from '../../src/main/services/embeddings/factory'
 import type { ChildProcessLike } from '../../src/main/services/runtime/sidecar'
 
@@ -131,7 +132,7 @@ describe('E5Embedder', () => {
     expect(child.killed).toBe(true)
   })
 
-  // M7 (audit round 4): chunk sizing is whitespace WORDS but the sidecar context is real
+  // M7 (audit round 4): chunk sizing is approx tokens but the sidecar context is real
   // BPE tokens — oversize inputs overflowed the context and failed the whole document,
   // and all (up to 1000) chunks went out as ONE request with no timeout.
   it('truncates each input to the embedder context budget before sending', async () => {
@@ -154,10 +155,45 @@ describe('E5Embedder', () => {
     await embedder.stop()
 
     const sent = bodies[0].input
-    const maxWords = Math.floor(512 / 1.4)
-    expect(sent[0].split(' ').length).toBeLessThanOrEqual(maxWords) // truncated
+    const maxApproxTokens = Math.floor(512 / 2.2)
+    // The sent head fits the approx-token budget, so its real-token cost stays under ctx.
+    expect(approxTokenCount(sent[0])).toBeLessThanOrEqual(maxApproxTokens)
     expect(sent[0].startsWith('word0 word1')).toBe(true) // the chunk's head is kept
     expect(sent[1]).toBe('short text') // short inputs pass through untouched
+  })
+
+  // Regression (HTTP 500 on a German translation import): the embedder is the MULTILINGUAL
+  // E5, and subword-heavy languages (German ~2 real tokens/word) and space-less scripts
+  // (CJK — counted ~1 token/CHAR) cost far more real BPE tokens than a naive word split
+  // implies. A word-count truncation let those inputs stay over the 512-token context, so
+  // the sidecar 500'd and the whole materialized translation failed to import. Truncation
+  // is now measured by approxTokenCount against a real-BPE safety factor.
+  it('truncates subword-heavy and space-less inputs so they cannot overflow the context', async () => {
+    const bodies: Array<{ input: string[] }> = []
+    const recordingFetch = (async (url: string | URL, init?: RequestInit) => {
+      const u = String(url)
+      if (u.endsWith('/health')) return { ok: true, status: 200 } as Response
+      const body = JSON.parse(String(init?.body)) as { input: string[] }
+      bodies.push(body)
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ data: body.input.map((_, i) => ({ embedding: [1, 0], index: i })) })
+      } as Response
+    }) as typeof fetch
+
+    const embedder = new E5Embedder({ ...base, contextTokens: 512, spawn: fakeSpawn().spawn, fetchImpl: recordingFetch })
+    // A glued, space-less run (the case a word split collapses to "1 word") and a long
+    // CJK run — both far over a 512-token budget if not truncated by token cost.
+    const noSpace = 'Donaudampfschifffahrtsgesellschaftskapitän'.repeat(60) // one giant "word"
+    const cjk = '東'.repeat(2000)
+    await embedder.embed([noSpace, cjk])
+    await embedder.stop()
+
+    const maxApproxTokens = Math.floor(512 / 2.2)
+    for (const sent of bodies[0].input) {
+      expect(approxTokenCount(sent)).toBeLessThanOrEqual(maxApproxTokens)
+    }
   })
 
   it('splits large inputs into bounded batches, preserving global order', async () => {

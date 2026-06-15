@@ -210,7 +210,15 @@ password recovery — are documented in
   runs instead of leaving them whole. **Documents indexed before this fix keep their
   pre-fix (possibly oversized) chunks until Re-indexed.** Space-less estimates are
   deliberately on the high side (CJK counted ~1 token/char), so CJK summaries window more
-  finely than strictly necessary — safe, slightly more map calls.
+  finely than strictly necessary — safe, slightly more map calls. **NB (fix 2026-06-15):**
+  the *embedder* sidecar truncation had the same class of bug — it truncated each chunk by a
+  naive whitespace-word count at an English-calibrated 1.4 tokens/word, so a subword-heavy
+  language (German runs ~2 real tokens/word) or a space-less script stayed over the 512-token
+  E5 context and the embeddings endpoint failed with **`HTTP 500`** — which surfaced when a
+  machine translation **into German** was imported. The embedder now truncates by
+  `approxTokenCount` against a conservative real-BPE safety factor (2.2× for the *multilingual*
+  E5), covering worst-case German with headroom; the embedding vector covers the chunk's head
+  (adjacent chunks overlap), so retrieval is unaffected in practice.
 
 ## Document translation (Phase 34, wave-3 plan §7)
 

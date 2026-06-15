@@ -6,7 +6,35 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
-_Last updated: 2026-06-15 — **Document-summary preview UI fixes (3 reported bugs).** The summary in
+_Last updated: 2026-06-15 — **Bugfix: translation import failed with `Embedding request failed:
+HTTP 500` (beta-tester report).** Symptom: translating a document ran to completion, then the
+materialized output failed to import with `Embedding request failed: HTTP 500`
+([`e5.ts`](apps/desktop/src/main/services/embeddings/e5.ts)), surfaced to the user as "The task could
+not be finished. Make sure the model is still running." **Root cause (same class as the 0.1.20 HTTP 400
+fix, but in the embedder):** the chunker now sizes chunks by space-aware `approxTokenCount` (~500), but
+`E5Embedder.truncateForContext` still truncated each chunk by a **naive whitespace-word split** at an
+**English-calibrated 1.4 tokens/word** (`maxInputWords = floor(512/1.4) ≈ 365`). The embedder is the
+**multilingual** E5 and the translation target was **German**, which is subword-heavy at ~2 real BPE
+tokens/word (see [`translation.ts`](apps/desktop/src/main/services/doctasks/translation.ts) output-token
+note) — so 365 German words ≈ 730 real tokens, well over the sidecar's `--ctx-size 512`
+([`sidecar.ts`](apps/desktop/src/main/services/runtime/sidecar.ts)), and llama-server's embeddings
+endpoint returns **HTTP 500** for an over-context sequence (chat returns 400; embeddings 500). Space-less
+scripts (CJK/Thai — the whole-word-collapse case) had the same exposure. **Fix:** `truncateForContext`
+now reuses the chunker's space-aware **`truncateToApproxTokens`** and budgets against the context with a
+conservative **real-BPE safety factor `REAL_TOKENS_PER_APPROX_TOKEN = 2.2`** (→ ~232 approx tokens →
+~464 real worst-case German, ~50-token headroom for BOS/EOS + slop). The vector still covers the chunk's
+head (adjacent chunks overlap by ~80 tokens), so retrieval is unaffected in practice. **Tests:** typecheck
+clean, `npm test` **1348 passed / 25 skipped** (+2 in
+[`e5-embedder.test.ts`](apps/desktop/tests/integration/e5-embedder.test.ts): the existing truncation test
+now asserts `approxTokenCount(sent) ≤ floor(512/2.2)`; a new regression embeds a glued space-less run + a
+2000-char CJK run and asserts both are truncated within the approx-token budget — i.e. can't overflow the
+sidecar). **Docs:** [`known-limitations.md`](docs/known-limitations.md) token-budgeting bullet gained the
+embedder-side NB. No version bump, no schema change. **Documents embedded before this fix are unaffected
+(their vectors already persisted); the bug only ever blocked NEW imports of subword-heavy/space-less
+text.** **Next:** open work unchanged (Phase 30 big-slot/embeddings — D38–D43; owner-gated doc-org Phase
+E.2)._
+
+_(prior) 2026-06-15 — **Document-summary preview UI fixes (3 reported bugs).** The summary in
 the document preview modal ([`DocumentsScreen.tsx`](apps/desktop/src/renderer/screens/DocumentsScreen.tsx)
 `PreviewModal`) had three frontend problems, all fixed. **(1) Layout/scroll:** the summary `<details>`
 block sat ABOVE the single `.modal-body` scroll region, so a long summary grew past the dialog's

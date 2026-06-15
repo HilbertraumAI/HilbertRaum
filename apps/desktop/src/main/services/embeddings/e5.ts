@@ -1,5 +1,6 @@
 import type { Embedder, EmbedOptions } from './index'
 import { LlamaServer, combineSignals, type LlamaServerOptions } from '../runtime/sidecar'
+import { approxTokenCount, truncateToApproxTokens } from '../ingestion/chunker'
 
 // Real on-device embedder (spec §6, §9.2). Drops in behind the existing
 // `Embedder` interface with the SAME id/dimensions as the E5-small manifest, so the
@@ -15,12 +16,24 @@ import { LlamaServer, combineSignals, type LlamaServerOptions } from '../runtime
 const DEFAULT_DIMENSIONS = 384
 const DEFAULT_CONTEXT_TOKENS = 512
 /**
- * Chunks are sized in whitespace WORDS (~500), but the embedding
- * sidecar context is real BPE tokens (E5-small caps at 512) — 500 English words is
- * 650+ tokens, so unmodified chunks routinely overflowed the context and failed the
- * whole document. Inputs are truncated to fit with a safety margin (≈1.4 tokens/word).
+ * Chunks are sized by `approxTokenCount` (~500), but the embedding sidecar context is
+ * real BPE tokens (E5-small caps at 512), and the real-token cost of a chunk is heavier
+ * than the estimate — so unmodified chunks routinely overflowed the context and the
+ * sidecar failed the request (HTTP 500). Inputs are therefore truncated to fit, measured
+ * by `approxTokenCount` (which already handles space-less CJK/Thai) and divided by a
+ * real-BPE safety factor.
+ *
+ * The factor must cover the WORST case, not English: this is the *multilingual* E5, and a
+ * machine translation into German — the very feature that surfaced the original HTTP 500
+ * — is subword-heavy at ~2 real tokens per word (see translation.ts). `approxTokenCount`
+ * charges an ordinary word ~1 token, so a German chunk's real-token cost is ~2× its
+ * estimate. 2.2 keeps even worst-case German (and a fortiori English/space-less text)
+ * comfortably under 512 with ~50 tokens of headroom for BOS/EOS + estimate slop. The cost
+ * is embedding only the head of a long German chunk — acceptable (the vector covers the
+ * chunk's head regardless, and adjacent chunks overlap), and strictly better than a
+ * wedged document.
  */
-const TOKENS_PER_WORD_ESTIMATE = 1.4
+const REAL_TOKENS_PER_APPROX_TOKEN = 2.2
 /** Embed in bounded batches instead of one giant request (up to 1000 chunks). */
 const DEFAULT_EMBED_BATCH_SIZE = 32
 /** Per-request bound so a wedged sidecar fails the document instead of hanging it. */
@@ -124,17 +137,19 @@ export class E5Embedder implements Embedder {
     return this.server
   }
 
-  /** Most whitespace words that safely fit the sidecar's real-token context window. */
-  private maxInputWords(): number {
+  /** Most `approxTokenCount` tokens that safely fit the sidecar's real-token context. */
+  private maxInputApproxTokens(): number {
     const ctx = this.opts.contextTokens ?? DEFAULT_CONTEXT_TOKENS
-    return Math.max(16, Math.floor(ctx / TOKENS_PER_WORD_ESTIMATE))
+    return Math.max(16, Math.floor(ctx / REAL_TOKENS_PER_APPROX_TOKEN))
   }
 
-  /** Truncate an input to the context budget (the vector covers the chunk's head). */
+  /**
+   * Truncate an input to the context budget (the vector covers the chunk's head).
+   * Measured by `approxTokenCount` so space-less scripts (CJK/Thai) and subword-heavy
+   * languages can't slip past a naive word count and overflow the sidecar (HTTP 500).
+   */
   private truncateForContext(text: string): string {
-    const words = text.split(/\s+/).filter((w) => w.length > 0)
-    const max = this.maxInputWords()
-    return words.length <= max ? text : words.slice(0, max).join(' ')
+    return truncateToApproxTokens(text, this.maxInputApproxTokens())
   }
 
   /**
