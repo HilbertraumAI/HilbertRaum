@@ -6,7 +6,45 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
-_Last updated: 2026-06-15 — **Documents-screen UI refinement (renderer-only; extends the Phase
+_Last updated: 2026-06-15 — **Documents-screen UI refinement — follow-up pass (renderer-only,
+presentation only).** Four visual fixes after the compact-row restructure shipped; **no IPC,
+schema, persistence, or main-process changes**, document-task handlers untouched. Folded into
+[`design-guidelines.md`](docs/design-guidelines.md) **§11.6** (the same design record the prior
+pass added — extended, §-anchor stable). **What changed:** (1) **Right-aligned trailing cluster
++ reading column** — chips/badges/Preview/"⋯" wrapped in one `.doc-row-trailing`
+(`flex-shrink:0`, right-aligned) next to the flex-filling `.doc-row-main` (`flex:1;min-width:0`),
+so filenames use the available width and ellipsize only when truly long while Preview/"⋯" align in
+a clean column down the list; the list is capped to a ~1000px reading column (`.doc-list`) and the
+**Documents screen widened past the 860px `.screen` prose cap** (`.docs-screen{max-width:1180px}`,
+left-aligned, not centred — a list needs more width than a reading column), with
+`.docs-main{min-width:0}` as the grid-blowout guard so a long unbreakable name ellipsizes instead
+of pushing the trailing actions off the edge. (2) **Tags read as tags** — row Chips restyled
+(`.doc-row-chips .chip`) to a quiet filled `--surface-hover` neutral, no hard border, `--text-xs`
+`--text-muted`, clearly distinct from the bordered Secondary Preview button (≥4.6:1 both themes).
+(3) **Status hierarchy — one green, the rest neutral** — only the readiness badge stays green
+(`success`); **Summary** and **Deeply indexed** demoted to `neutral` capability badges, each with
+its own glyph (`≡`/`▦`), separating "is it ready" from "what's been done to it"; exactly one
+`pill-success` per row, all icon+word (1.4.1). (4) **"⋯" overflow** confirmed present,
+keyboard-focusable/tabbable (hover-revealed but never out of tab order), `aria-label` "More actions
+for <filename>", full secondary set incl. the separated danger **Delete → `ConfirmDialog`** — no
+regression. **Files:** `renderer/screens/DocumentsScreen.tsx` (trailing-cluster wrap, reading-column
+wrap, badge tones/glyphs), `renderer/styles.css` (`.doc-list`, `.doc-row-trailing`, `.docs-screen`/
+`.docs-main` width + min-width, quiet `.doc-row-chips .chip`). **No i18n/string changes** (badge
+glyphs are decorative; copy-tone guard green). **Tests:** typecheck + `npm run build` clean; full
+vitest from `apps/desktop` **1357 passed / 25 skipped** (+4 in `DocumentsScreen.test.tsx`:
+flex-fill name + right-aligned cluster order, quiet-chip-distinct-from-Preview, one-green status
+hierarchy [Ready `pill-success` vs Summary/Deeply-indexed `pill-neutral`], "⋯" keyboard-focusable).
+Playwright `_electron` eyeball walk of the Documents screen in BOTH themes (a long filename
+ellipsizing cleanly with room beside it, the aligned Preview/"⋯" column, quiet chips vs the Preview
+button, Ready-green-only with neutral Summary/Deeply-indexed, the "⋯" menu open incl. Delete) —
+before/after captures in `docs/design-review/docs-refinement/{before,after}/`. **Row-alignment and
+"⋯"-reachability are now verified** (long-name breathing + aligned trailing column + keyboard-
+reachable overflow). Watch items unchanged: the **location-taxonomy** ambiguity (Library/Temporary/
+Generated/Archived chips over a mixed collection/lifecycle/origin model — data untouched) and the
+**sub-nav vs global-rail** stacking note. **No version bump, no schema change. Next:** open work
+unchanged (Phase 30 big-slot/embeddings — D38–D43; owner-gated doc-org Phase E.2)._
+
+_(prior) 2026-06-15 — **Documents-screen UI refinement (renderer-only; extends the Phase
 23–27 wave).** A presentation-only pass on the Documents screen — **no IPC, schema, persistence,
 or main-process changes**; every document task keeps its existing handler/IPC. Folded into
 [`design-guidelines.md`](docs/design-guidelines.md) **§11.6** (the design record; code/i18n

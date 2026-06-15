@@ -501,6 +501,37 @@ helper + selection-toolbar + status-as-Badge cases). Both themes contrast-checke
 accent left bar reads ≥3:1 on both surfaces. German copy added in the same pass (D-L7 informal
 „du").
 
+**Follow-up refinement (same area, 2026-06-15 — renderer-only, presentation only):** four
+visual fixes after the compact-row restructure shipped. (1) **Right-aligned trailing cluster +
+reading column.** The chips/badges/Preview/"⋯" are wrapped in one `.doc-row-trailing`
+(`flex-shrink:0`, right-aligned) sibling to the flex-filling `.doc-row-main` (`flex:1;
+min-width:0`); the filename uses the available width and only ellipsizes when genuinely out of
+room, while Preview + "⋯" form a clean aligned column down the list. The list is capped to a
+~1000px reading column (`.doc-list`) and the **Documents screen widened past the 860px `.screen`
+prose cap** (`.docs-screen { max-width: 1180px }`, left-aligned, NOT centred) because a list with
+chips + three badges + actions needs more width than a reading column; `.docs-main { min-width:0 }`
+is the grid-blowout guard so a long unbreakable filename ellipsizes instead of widening the row
+and pushing Preview/"⋯" off the edge. (2) **Tags read as tags, not buttons.** The row tag Chips
+are restyled (scoped to `.doc-row-chips .chip`) as a quiet **filled `--surface-hover` neutral with
+no hard border**, `--text-xs` `--text-muted` — visibly quieter than and clearly distinct from the
+bordered Secondary Preview button (muted text on `--surface-hover` computes ≥4.6:1 both themes, AA
+text ✓). (3) **Status hierarchy — one green, the rest neutral.** Only the **readiness** badge is
+green (`success`); **Summary** and **Deeply indexed** are demoted to **`neutral`** capability
+badges, each with its **own glyph** (`≡` for Summary, `▦` for Deeply indexed) — separating "is it
+ready" (green) from "what's been done to it" (neutral). All keep icon + word (1.4.1); exactly one
+`pill-success` per row. (4) **"⋯" overflow** confirmed present, keyboard-focusable/tabbable even
+though hover-revealed, `aria-label` "More actions for <filename>", holding the full secondary set
+(Summarize/again, Translate, Re-index, Build deep index [until deeply indexed], Make searchable
+(OCR) for scans, Add to project…/Keep in Library/lifecycle/remove-from-project, Export for
+generated docs, and the separated danger **Delete → `ConfirmDialog`**). **No user-facing string
+changes** (badge glyphs are decorative; the copy-tone guard stays green). Verification per §11.4:
+typecheck + build clean, full vitest from `apps/desktop` **1357 passed / 25 skipped** (+4:
+flex-fill/right-aligned-cluster, quiet-chip-distinct-from-Preview, one-green-status-hierarchy,
+"⋯"-keyboard-focusable). Playwright `_electron` eyeball walk in BOTH themes (a long filename
+ellipsizing cleanly with room beside it, the aligned Preview/"⋯" column, quiet chips vs the Preview
+button, Ready-green-only with neutral Summary/Deeply-indexed, the "⋯" menu open incl. Delete) —
+before/after captures in `docs/design-review/docs-refinement/{before,after}/`.
+
 ---
 
 ## 12. Chat-UI polish pass — design record (IMPLEMENTED 2026-06-13)

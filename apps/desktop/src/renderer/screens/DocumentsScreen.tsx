@@ -900,6 +900,10 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
         <p className="hint">{t('docs.empty.section')}</p>
       )}
 
+      {/* Reading column (§11.6 refinement): the list is capped to a ~1000px max-width, left-
+          aligned with the screen's content gutter (NOT centred), so long filenames get room and
+          the right-aligned Preview/⋯ column never drifts to a far edge on wide displays. */}
+      <div className="doc-list">
       {visibleDocs.map((d) => {
         // One task occupies the runtime at a time; while it targets THIS row, the row shows a
         // busy/cancel pair instead of the Preview + "⋯" pair. `rowTask` is the active task (so
@@ -1016,8 +1020,15 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
                 )
               })()}
             </div>
-            {/* Uniform location/project chips (Task 3): one neutral Chip style, never a blue
-                status pill — grouped, visually separate from the green status badges. */}
+            {/* Trailing cluster (§11.6 refinement): right-aligned, shrink:0 — tag chips, then
+                status badges, then Preview + "⋯". The cluster never shrinks and the name column
+                (.doc-row-main) takes the flex space, so names breathe and only ellipsize when
+                genuinely out of room, while the Preview/⋯ pair lines up in a clean column down
+                the list. */}
+            <div className="doc-row-trailing">
+            {/* Uniform location/project chips (Task 3): a quiet, borderless filled Chip —
+                visibly quieter than the bordered Secondary Preview button so a tag never reads
+                as clickable. Grouped, visually separate from the status badges. */}
             {chips.length > 0 && (
               <div className="doc-row-chips">
                 {chips.map((label) => (
@@ -1025,19 +1036,21 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
                 ))}
               </div>
             )}
-            {/* Status badge cluster (Task 2): processing/ready + Summary + Deeply indexed all
-                read as Badges (icon + word), never as buttons. */}
+            {/* Status badge cluster (Task 2 + §11.6 refinement): readiness is the ONLY green
+                (success) badge. "Summary" and "Deeply indexed" are NEUTRAL capability badges,
+                each with its own glyph — separating "is it ready" (green) from "what's been done
+                to it" (neutral). All keep icon + word (1.4.1). */}
             <div className="doc-row-badges">
               <Badge tone={status.tone} icon={status.icon}>
                 {status.label}
               </Badge>
               {d.summary && (
-                <Badge tone="neutral" icon="✓">
+                <Badge tone="neutral" icon="≡">
                   {t('docs.meta.summary')}
                 </Badge>
               )}
               {d.treeStatus === 'ready' && !d.origin && (
-                <Badge tone="success" icon="✓" title={t('docs.deepIndex.readyTitle')}>
+                <Badge tone="neutral" icon="▦" title={t('docs.deepIndex.readyTitle')}>
                   {t('docs.deepIndex.ready')}
                 </Badge>
               )}
@@ -1183,9 +1196,11 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
                 </>
               )}
             </div>
+            </div>{/* /doc-row-trailing */}
           </div>
         )
       })}
+      </div>{/* /doc-list */}
         </div>
       </div>{/* /docs-layout */}
 

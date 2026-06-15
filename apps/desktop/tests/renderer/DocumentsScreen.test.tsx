@@ -732,4 +732,86 @@ describe('DocumentsScreen — action overflow + selection toolbar (§11.6)', () 
     await screen.findByRole('menuitem', { name: 'Summarize' })
     expect(screen.queryByRole('menuitem', { name: 'Build deep index' })).not.toBeInTheDocument()
   })
+
+  // ---- §11.6 follow-up refinement: reading column, right-aligned cluster, quiet chips,
+  //      one-green status hierarchy, keyboard-reachable "⋯" ----------------------------------
+
+  it('lays the row out as a flex-filling name column + a right-aligned trailing cluster', async () => {
+    const summary = { text: 's', modelId: 'm', createdAt: '2026-01-01T00:00:00Z', truncated: false }
+    stubApi({
+      listCollections: vi.fn(async () => [coll({ id: 'lib', name: 'Library', type: 'library', builtin: true })]),
+      listDocuments: vi.fn(async () => [
+        doc({
+          fullyChunked: true,
+          treeStatus: 'ready',
+          summary,
+          collections: [{ id: 'lib', name: 'Library', type: 'library', role: 'source' }]
+        })
+      ])
+    })
+    const { container } = render(<DocumentsScreen />)
+    await screen.findByText('contract.pdf')
+
+    // The name column fills the flex space and the title line ellipsizes only on overflow.
+    const main = container.querySelector('.doc-row-main')
+    expect(main).toBeInTheDocument()
+    const title = container.querySelector('.doc-row-title')
+    expect(title).toHaveTextContent('contract.pdf')
+
+    // One right-aligned trailing cluster holds chips, badges, then the actions — in that order.
+    const trailing = container.querySelector('.doc-row-trailing')
+    expect(trailing).toBeInTheDocument()
+    const children = Array.from(trailing!.children)
+    expect(children[0]).toHaveClass('doc-row-chips')
+    expect(children[1]).toHaveClass('doc-row-badges')
+    expect(children[2]).toHaveClass('doc-row-actions')
+    // Preview + "⋯" are the rightmost group, so they align in a column down the list.
+    const actions = trailing!.querySelector('.doc-row-actions')!
+    expect(within(actions as HTMLElement).getByRole('button', { name: /^preview$/i })).toBeInTheDocument()
+    expect(within(actions as HTMLElement).getByRole('button', { name: /more actions/i })).toBeInTheDocument()
+  })
+
+  it('renders tag chips as a distinct quieter element from the bordered Preview button', async () => {
+    stubApi({
+      listCollections: vi.fn(async () => [coll({ id: 'lib', name: 'Library', type: 'library', builtin: true })]),
+      listDocuments: vi.fn(async () => [
+        doc({ collections: [{ id: 'lib', name: 'Library', type: 'library', role: 'source' }] })
+      ])
+    })
+    const { container } = render(<DocumentsScreen />)
+    await screen.findByText('contract.pdf')
+    // The tag is a non-interactive Chip inside the chips group — not a button, not the Preview.
+    const chipGroup = container.querySelector('.doc-row-chips')!
+    const chip = within(chipGroup as HTMLElement).getByText('Library')
+    expect(chip.closest('.chip')).toBeInTheDocument()
+    expect(chip.closest('button')).toBeNull()
+    // Preview is a separate <button>, so a tag can never read as that action.
+    expect(screen.getByRole('button', { name: /^preview$/i })).toBeInTheDocument()
+  })
+
+  it('keeps readiness as the only green badge — Summary + Deeply indexed are neutral', async () => {
+    const summary = { text: 's', modelId: 'm', createdAt: '2026-01-01T00:00:00Z', truncated: false }
+    stubApi({
+      listDocuments: vi.fn(async () => [doc({ fullyChunked: true, treeStatus: 'ready', summary })])
+    })
+    render(<DocumentsScreen />)
+    await screen.findByText('contract.pdf')
+    // Readiness = success (green).
+    expect(screen.getByText('Ready').closest('.pill')).toHaveClass('pill-success')
+    // Capability badges = neutral (grey), each keeping icon + word (1.4.1).
+    expect(screen.getByText('Summary').closest('.pill')).toHaveClass('pill-neutral')
+    expect(screen.getByText('Deeply indexed').closest('.pill')).toHaveClass('pill-neutral')
+    // Exactly one success badge on the row.
+    expect(document.querySelectorAll('.doc-row .pill-success')).toHaveLength(1)
+  })
+
+  it('the "⋯" trigger is keyboard-focusable even though it is hover-revealed', async () => {
+    stubApi({ listDocuments: vi.fn(async () => [doc({})]) })
+    render(<DocumentsScreen />)
+    await screen.findByText('contract.pdf')
+    const trigger = screen.getByRole('button', { name: 'More actions for contract.pdf' })
+    trigger.focus()
+    expect(trigger).toHaveFocus()
+    expect(trigger).not.toHaveAttribute('tabindex', '-1')
+  })
 })

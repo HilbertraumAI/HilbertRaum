@@ -1079,7 +1079,14 @@ code, pre, kbd { font-family: var(--font-mono); }
 }
 
 /* Documents screen — section rail + organization (document-organization plan §12) */
+/* The Documents screen is a list, not a prose column, so it gets more width than the 860px
+   `.screen` reading cap (§11.6 refinement) — left-aligned (no auto margins), the doc list caps
+   itself at ~1000px below. min-width:0 on the grid item is the grid-blowout guard: it lets the
+   1fr track shrink so a long, unbreakable filename ellipsizes instead of widening the row and
+   pushing the trailing Preview/⋯ off the edge. */
+.docs-screen { max-width: 1180px; }
 .docs-layout { display: grid; grid-template-columns: 200px 1fr; gap: 18px; align-items: start; }
+.docs-main { min-width: 0; }
 .docs-rail { display: flex; flex-direction: column; gap: 2px; position: sticky; top: 0; }
 .docs-rail-item {
   text-align: left; background: none; border: none; color: var(--text-muted);
@@ -1130,8 +1137,13 @@ code, pre, kbd { font-family: var(--font-mono); }
 }
 
 /* Documents screen — compact list rows (§6 lists/tables; §11.6). Each row: checkbox ·
-   file-type icon · filename + muted meta · chips · status badges · inline Preview · "⋯".
-   Rows are ≥40px (target ~56px for the two-line name+meta) so ~3× more docs fit a screen. */
+   file-type icon · filename + muted meta · [trailing cluster: chips · status badges ·
+   inline Preview · "⋯"]. Rows are ≥40px (target ~56px for the two-line name+meta) so ~3×
+   more docs fit a screen. */
+/* Reading column (§11.6 refinement): cap the list width and keep it left-aligned with the
+   screen gutter (no auto margins → never centred), so names get room and the trailing
+   Preview/⋯ column stays close to the content on wide displays. */
+.doc-list { max-width: 1000px; }
 .doc-row {
   display: flex;
   align-items: center;
@@ -1170,9 +1182,27 @@ code, pre, kbd { font-family: var(--font-mono); }
   white-space: nowrap;
 }
 .doc-row-cap { margin: 2px 0 0; }
-.doc-row-chips { display: flex; flex-wrap: wrap; gap: 6px; flex-shrink: 0; max-width: 38%; justify-content: flex-end; }
-.doc-row-badges { display: flex; flex-wrap: wrap; gap: 6px; flex-shrink: 0; justify-content: flex-end; }
-.doc-row-actions { display: flex; gap: 6px; align-items: center; flex-shrink: 0; }
+/* Trailing cluster (§11.6 refinement): right-aligned, never shrinks. Holds, in order, the tag
+   chips, the status badges, then Preview + "⋯". Because it is shrink:0 and the name column
+   takes the flex space, the name breathes and the Preview/⋯ pair aligns in a column down the
+   list. */
+.doc-row-trailing { display: flex; align-items: center; gap: 10px; flex-shrink: 0; justify-content: flex-end; }
+/* Chips are bounded so a doc with several project tags can't crowd the filename out. */
+.doc-row-chips { display: flex; flex-wrap: wrap; gap: 6px; max-width: 220px; justify-content: flex-end; }
+.doc-row-badges { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
+.doc-row-actions { display: flex; gap: 6px; align-items: center; }
+/* Quieter row tag chips (§11.6 refinement / FIX 2): a subtle filled neutral, NO hard border,
+   --text-xs muted — clearly distinct from the bordered Secondary Preview button so a tag never
+   reads as clickable. Scoped to the row so the popover/example Chip is untouched. Muted text on
+   --surface-hover computes ≥4.6:1 in both themes (AA text ✓). */
+.doc-row-chips .chip {
+  background: var(--surface-hover);
+  border-color: transparent;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  padding: 2px 8px;
+  max-width: 160px;
+}
 /* The "⋯" overflow trigger: revealed on hover/focus, but ALWAYS keyboard-focusable and
    tabbable (the opacity never removes it from the tab order). ≥24px hit target (2.5.8). */
 .doc-row-menu-btn {

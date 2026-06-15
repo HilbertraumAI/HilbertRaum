@@ -15,7 +15,7 @@ import os from 'node:os'
 const ROOT = join(os.tmpdir(), 'hilbertraum-eyeball')
 // Screenshots live at the REPO ROOT docs/design-review (alongside the chat-UI captures), not
 // under apps/desktop. The script runs from apps/desktop, so go up two levels.
-const OUT = join(process.cwd(), '..', '..', 'docs', 'design-review', 'docs-refinement')
+const OUT = join(process.cwd(), '..', '..', 'docs', 'design-review', 'docs-refinement', 'after')
 const PW = 'eyeball-pass-123'
 
 rmSync(ROOT, { recursive: true, force: true })
@@ -39,7 +39,11 @@ const paths = [
   file('contract.txt', 'Severance and termination clauses.\n'.repeat(60)),
   file('terms.txt', 'Payment terms net 30 days.\n'.repeat(60)),
   file('quarterly-report.txt', 'Quarterly figures and commentary.\n'.repeat(60)),
-  file('invoice.txt', 'Invoice total and due date.\n'.repeat(60))
+  file('invoice.txt', 'Invoice total and due date.\n'.repeat(60)),
+  // A deliberately long filename (§11.6 refinement / FIX 1): confirms the name uses the
+  // available width and ellipsizes cleanly — not a premature one-word truncation.
+  file('Oracle metrics summary and quarterly variance analysis 2025 H2 final.txt',
+    'Long-name coverage check.\n'.repeat(60))
 ]
 
 const env = { ...process.env, HILBERTRAUM_DRIVE_ROOT: ROOT }
@@ -97,7 +101,7 @@ await page.evaluate(async (p) => await window.api.importDocuments(p), paths)
 await page.waitForFunction(
   async () => {
     const docs = await window.api.listDocuments()
-    return docs.length >= 4 && docs.every((d) => d.status === 'indexed' || d.status === 'failed')
+    return docs.length >= 5 && docs.every((d) => d.status === 'indexed' || d.status === 'failed')
   },
   null,
   { timeout: 90000 }
