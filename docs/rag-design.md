@@ -916,6 +916,12 @@ only consumer**, so they are embedded **lazily** here, the first time a compare 
   flagged — `runCompareSymmetricTrees` returns `truncated`, and the report materializes
   `compareSymmetricTruncationNotice` ("some sections were condensed … may not list every section-level
   detail") — so the symmetric report never silently implies a complete two-way comparison (H8).
+  **Symmetric loss (review follow-up):** the Only-A/Only-B notes are **interleaved** (A, B, A, B …) before
+  the belt, so a tail-truncating reduce sheds both documents' unique content roughly evenly and the loss
+  stays mirror-symmetric (swapping A/B drops the same sections, off by at most one note at an odd boundary)
+  rather than always sacrificing the Only-B tail. The same belt in mode (b) (`runCompareSectionMatched`)
+  also sets `truncated` now (it cuts the later doc-A windows, so the existing `compareTruncationNotice`
+  "covers its beginning" wording applies) — the two paths are honest about condensing in parallel.
 - **(b) asymmetric A-driven** (the existing section-matched map-reduce over `VectorIndex`-scoped doc-B
   neighbours) — the labelled fallback when the two docs are **not** both deeply indexed. The materialized
   report now carries `compareAsymmetricNotice` ("one-directional — may under-report content found only in

@@ -1222,12 +1222,17 @@ export class DocTaskManager {
     if (partials.length === 0) throw new Error(tMain('main.task.genericFailure'))
 
     // Belt for the reduce input: the map output caps already size the notes to fit,
-    // but a model that ignores maxTokens must still not overflow.
+    // but a model that ignores maxTokens must still not overflow. If it fires it cuts the
+    // tail — i.e. the later doc-A windows — so flag it too (alongside the map-ceiling
+    // coverage cut) and let the caller surface the honest notice (H8 — never imply full
+    // coverage when content was dropped; mirrors the symmetric path).
     const budgetWords = compareBudgetWords(contextTokens)
     let reduceInput = partials
+    let beltTruncated = false
     const totalWords = partials.reduce((n, p) => n + approxTokenCount(p), 0)
     if (totalWords > budgetWords) {
       reduceInput = [truncateToApproxTokens(partials.join('\n\n'), budgetWords)]
+      beltTruncated = true
     }
     const report = await this.generate(
       runtime,
@@ -1239,7 +1244,7 @@ export class DocTaskManager {
     )
     if (report.length === 0) throw new Error(tMain('main.task.genericFailure'))
     task.status.progress.stepsDone += 1
-    return { report, truncated: plan.truncated }
+    return { report, truncated: plan.truncated || beltTruncated }
   }
 
   /**
@@ -1331,14 +1336,23 @@ export class DocTaskManager {
       task.status.progress.stepsDone += 1
     }
     // Unmatched sections → Only-A / Only-B notes with NO model call (M2-safe: the node
-    // summary is fed as a note for the reduce, never surfaced as a citation).
-    for (const id of alignment.unmatchedA) {
-      const s = aById.get(id)?.summaryText
-      if (s && s.trim().length > 0) partials.push(`- Only in A: ${oneLine(s)}`)
-    }
-    for (const id of alignment.unmatchedB) {
-      const s = bById.get(id)?.summaryText
-      if (s && s.trim().length > 0) partials.push(`- Only in B: ${oneLine(s)}`)
+    // summary is fed as a note for the reduce, never surfaced as a citation). INTERLEAVE the
+    // two sides (A, B, A, B, …) rather than appending all Only-A then all Only-B: if the
+    // reduce belt below cuts the tail, an interleaved order sheds both documents' unique
+    // content roughly evenly, keeping the loss mirror-symmetric (swapping A/B drops the same
+    // sections, off by at most one note at an odd boundary) instead of always sacrificing the
+    // Only-B tail first.
+    const onlyA = alignment.unmatchedA
+      .map((id) => aById.get(id)?.summaryText)
+      .filter((s): s is string => !!s && s.trim().length > 0)
+      .map((s) => `- Only in A: ${oneLine(s)}`)
+    const onlyB = alignment.unmatchedB
+      .map((id) => bById.get(id)?.summaryText)
+      .filter((s): s is string => !!s && s.trim().length > 0)
+      .map((s) => `- Only in B: ${oneLine(s)}`)
+    for (let i = 0; i < Math.max(onlyA.length, onlyB.length); i++) {
+      if (i < onlyA.length) partials.push(onlyA[i])
+      if (i < onlyB.length) partials.push(onlyB[i])
     }
     if (partials.length === 0) throw new Error(tMain('main.task.genericFailure'))
 

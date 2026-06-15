@@ -6,7 +6,24 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
-_Last updated: 2026-06-15 — **Whole-document analysis — post-merge code review closeout.** Reviewed the
+_Last updated: 2026-06-15 — **Whole-document analysis — second-pass review follow-up (2 fixes).** A
+high-effort re-review of the closeout diff surfaced two honesty gaps the first pass left, both now fixed in
+[`manager.ts`](apps/desktop/src/main/services/doctasks/manager.ts). **(1) Mode-(b) belt parity:**
+`runCompareSectionMatched`'s reduce-input belt was structurally identical to the one M-1 fixed in mode (c)
+but still returned only `plan.truncated` (the map-ceiling flag) — so a model that overruns `maxTokens`
+could silently condense the asymmetric report with no notice. It now returns `plan.truncated ||
+beltTruncated`; the belt cuts the later doc-A windows, so the existing `compareTruncationNotice` ("covers
+its beginning") wording is accurate. **(2) Symmetric loss is now mirror-even:** the Only-A/Only-B notes in
+`runCompareSymmetricTrees` are **interleaved** (A, B, A, B …) before the belt instead of appended all-A-
+then-all-B, so a tail-truncating reduce sheds both documents' unique content roughly evenly — preserving
+the mirror property under truncation (swapping A/B drops the same sections, off by ≤1 note at an odd
+boundary) rather than always sacrificing the Only-B tail. Folded into
+[`rag-design.md`](docs/rag-design.md) §14.6. **Tests:** typecheck clean, `whole-doc-compare` suite 6/6
+green (the M-1 truncation test still passes; the alignNodes mirror unit tests are unaffected — the
+interleave is manager-level, the pure function is unchanged). No version bump, no schema change. Feature
+remains COMPLETE._
+
+_(prior) 2026-06-15 — **Whole-document analysis — post-merge code review closeout.** Reviewed the
 full wave diff (`6c27cef..f3ae4e4`) against the seven priority areas (shared-connection transactions,
 the arbiter handshake, H5 staleness, mirror symmetry, grounding honesty, offline/no-leak, compare cost).
 **No High/Critical findings** — the concurrency machinery, transaction discipline, and the
