@@ -20,7 +20,8 @@ import type {
   DocumentSummary,
   GeneratedProvenance,
   ImportDestination,
-  IngestionStatus
+  IngestionStatus,
+  TreeBuildStatus
 } from '../../../shared/types'
 import { sha256File } from '../models'
 import { docLifecycle, fileFromPendingDestination } from '../collections'
@@ -147,6 +148,9 @@ interface DocumentRow {
   ocr_json: string | null
   lifecycle: string | null
   source_folder_label: string | null
+  tree_status: string | null
+  tree_meta_json: string | null
+  fully_chunked: string | null
   created_at: string
   updated_at: string
 }
@@ -175,7 +179,9 @@ function parseSummary(json: string | null | undefined): DocumentSummary | null {
         text: v.text,
         modelId: typeof v.modelId === 'string' ? v.modelId : 'unknown',
         createdAt: typeof v.createdAt === 'string' ? v.createdAt : '',
-        truncated: v.truncated === true
+        truncated: v.truncated === true,
+        // Coverage tier when the summary came from a ready deep index (1/2/3), else absent.
+        ...(v.tier === 1 || v.tier === 2 || v.tier === 3 ? { tier: v.tier } : {})
       }
     }
   } catch {
@@ -315,8 +321,38 @@ function rowToInfo(row: DocumentRow, chunkCount: number, staleEmbeddings?: boole
     // (it has the db handle for the join); getDocument/createQueuedDocument leave it absent.
     lifecycle: docLifecycle(row.lifecycle),
     sourceFolderLabel: row.source_folder_label,
+    // Deep-index (summary-tree) state (whole-document-analysis plan §3.2/§5.2). Additive +
+    // optional — old callers that never read these are byte-identical. `treeLevels` comes
+    // from the ready tree's `tree_meta_json` (tolerant parse: a malformed blob ⇒ undefined).
+    treeStatus: treeStatusOf(row.tree_status),
+    fullyChunked: row.fully_chunked != null,
+    treeLevels: treeLevelsOf(row.tree_meta_json),
     createdAt: row.created_at,
     updatedAt: row.updated_at
+  }
+}
+
+const TREE_BUILD_STATES: ReadonlySet<string> = new Set<TreeBuildStatus>([
+  'pending',
+  'building',
+  'ready',
+  'stale',
+  'failed'
+])
+
+/** Coalesce the stored `tree_status` to the typed union (unknown/NULL ⇒ undefined). */
+function treeStatusOf(raw: string | null): TreeBuildStatus | undefined {
+  return raw && TREE_BUILD_STATES.has(raw) ? (raw as TreeBuildStatus) : undefined
+}
+
+/** Levels from a ready tree's `tree_meta_json` (tolerant: malformed/absent ⇒ undefined). */
+function treeLevelsOf(raw: string | null): number | undefined {
+  if (!raw) return undefined
+  try {
+    const meta = JSON.parse(raw) as { levels?: unknown }
+    return typeof meta.levels === 'number' && Number.isFinite(meta.levels) ? meta.levels : undefined
+  } catch {
+    return undefined
   }
 }
 

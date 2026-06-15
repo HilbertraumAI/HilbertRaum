@@ -336,6 +336,33 @@ export const de: Record<keyof typeof en, string> = {
   'docs.previewModal.noText': 'Aus diesem Dokument konnte kein Text extrahiert werden.',
   'docs.previewModal.page': 'Seite {page}',
 
+  // ---- Tiefenindex + Abdeckung (whole-document-analysis plan §5.2) — D-L7-Review ausstehend ----
+  'docs.deepIndex.build': 'Tiefenindex erstellen',
+  'docs.deepIndex.buildTitle':
+    'Liest das ganze Dokument in einen Tiefenindex ein, damit Zusammenfassungen und ' +
+    'Antworten alles abdecken können — läuft auf diesem Laufwerk, nichts verlässt es',
+  'docs.deepIndex.reindexFirst': 'Für Tiefenindex neu indexieren',
+  'docs.deepIndex.reindexFirstTitle':
+    'Dieses Dokument wurde hinzugefügt, bevor es Tiefenindexe gab — indexiere es zuerst neu, ' +
+    'damit ein Tiefenindex das ganze Dokument abdecken kann',
+  'docs.deepIndex.ready': 'Tief indexiert',
+  'docs.deepIndex.readyTitle':
+    'Ein Tiefenindex für das ganze Dokument ist fertig — Zusammenfassungen können alles abdecken',
+  'coverage.relevance': 'Basiert auf den relevantesten Passagen — nicht auf dem ganzen Dokument',
+  'coverage.capped.whole': 'Deckt das ganze Dokument ab',
+  'coverage.capped.beginning': 'Deckt den Anfang des Dokuments ab',
+  'coverage.tree.whole': 'Deckt das ganze Dokument ab (tief indexiert)',
+  'coverage.tree.partial': 'Tiefenindex läuft — {covered} von {total} Abschnitten',
+  'coverage.tree.pending': 'Noch kein Tiefenindex',
+  'coverage.depth': 'Detailgrad: {label}',
+  'coverage.tier.1': 'Überblick',
+  'coverage.tier.2': 'Abschnitt für Abschnitt',
+  'coverage.tier.3': 'Ausführlich (volle Abdeckung)',
+  'coverage.tier.hint.1': 'Am schnellsten — der gespeicherte Überblick',
+  'coverage.tier.hint.2': 'Ein ausführlicherer Durchgang über die Abschnitte',
+  'coverage.tier.hint.3': 'Die meisten Details, über das ganze Dokument',
+  'coverage.tierSelect.trigger': 'Detailgrad: {label}',
+
   // ---- Models ----
   'models.title': 'KI-Modell',
   'models.lead':

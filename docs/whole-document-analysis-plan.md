@@ -1,6 +1,6 @@
 # Whole-document analysis beyond the context window — implementation plan
 
-> **Status: PLAN (working paper). Phase 1 SHIPPED (2026-06-15); Phases 2–4 open.** Per
+> **Status: PLAN (working paper). Phases 1–2 SHIPPED (2026-06-15); Phases 3–4 open.** Per
 > `CLAUDE.md` doc-lifecycle, this file lives only while the work is open; once the WHOLE
 > feature ships it condenses into §-records in `docs/rag-design.md` / `docs/architecture.md`
 > and is deleted. Phase-1 record: cap honesty (C1/C2/C4/M13), the `tree_nodes`/`tree_edges`/
@@ -8,8 +8,15 @@
 > the yielding per-node build (`services/analysis/tree-build.ts`), the `tree` DocTask kind +
 > `maybeEnqueueTreeBuild`/`abortActiveBuild`, the async chat handoff (`chat-stream.ts`), and the
 > tree-first `runSummary` (M1) are all in `apps/desktop`; see `BUILD_STATE.md` for the entry.
-> Phase 2 (coverage meter UI), Phase 3 (`extraction_records`/`extract.ts`), and Phase 4
-> (symmetric compare + node embeddings) remain unbuilt — node vectors are stored NULL (L6).
+> Phase-2 record: `CoverageInfo`/`DocumentCoverage` + `DocumentInfo.treeStatus`/`fullyChunked`/
+> `treeLevels` (shared/types), the production provenance + coverage reader
+> (`services/analysis/coverage.ts`), coverage **tiers** in `runSummary` (Tier 1 = 0 calls, Tier 2
+> = 1 reduce, Tier 3 = batched), the `analysis:coverage` IPC, the `CoverageMeter`/`TierMenu`
+> renderer components (breadth ≠ fidelity, never 100% unless `ready` — C1/L2; node summaries are
+> never `[Sn]` citations — M2), the PreviewModal meter+selector+provenance, the chat relevance
+> label, and the "Build deep index"/"Re-index first" row action (C4 gate). Phase 3
+> (`extraction_records`/`extract.ts`) and Phase 4 (symmetric compare + node embeddings) remain
+> unbuilt — node vectors are stored NULL (L6).
 >
 > Goal: first-class analysis of documents (and collections) that **vastly exceed** the
 > 4k–8k model context — covering the **whole** document, faithfully and honestly — by
@@ -384,9 +391,26 @@ Each phase is an **incrementally** shippable release in order (Phases 2/3/4 buil
   - A chat request sent **during** a build is served within ~one node (build yields), not blocked for the whole build [H3]; **after the chat stream ends the same build resumes in-session** from the next node [H10] (assert the build reaches `ready` without an app restart — a paused build that only resumed on a startup sweep would fail this).
   - A tree-less doc still summarizes via the capped path with the honest banner.
 
-### Phase 2 — Coverage meter in the UI
-- `CoverageInfo` type + plumb through IPC; coverage meter + tier selector + "no tree yet" labels + provenance.
-- **Acceptance:** every summary/answer shows an accurate coverage statement; a relevance answer is explicitly labelled "not exhaustive"; a capped result never displays as complete.
+### Phase 2 — Coverage meter in the UI — **SHIPPED (2026-06-15)**
+- `CoverageInfo`/`DocumentCoverage` type + plumb through IPC (`analysis:coverage`); coverage meter +
+  tier selector + "no deep index yet" label / "Build deep index" action + provenance.
+- **Built:** `CoverageInfo`/`DocumentCoverage`/`TreeBuildStatus`/`CoverageTier` + `DocumentInfo.treeStatus`/
+  `fullyChunked`/`treeLevels` (shared/types, threaded via `rowToInfo`/`DocumentRow`); production
+  `services/analysis/coverage.ts` (`reachableLeafChunkIds` provenance walk, `documentLeafProvenance` →
+  `Citation[]`, `documentCoverage` breadth+depth math); coverage **tiers** in `runSummary`
+  (`summarizeFromTree`: Tier 1 root verbatim = **0** calls, Tier 2 = **1** reduce over the root's
+  children, Tier 3 = all level-1 nodes reduced in batches bounded by node count) selected via the
+  `summary` task `params.tier` (no-arg = Tier 1, unchanged); `DocumentSummary.tier` persisted; the
+  `analysis:coverage` IPC + preload; `CoverageMeter`/`TierMenu` components; the PreviewModal meter +
+  tier selector + `SourcesDisclosure` provenance (M2 — source chunks only); the chat relevance label
+  in `Transcript`; the "Build deep index"/"Re-index for deep index" row action (C4 gate via
+  `fullyChunked`); EN+DE `coverage.*`/`docs.deepIndex.*` keys (forbidden-UI-words honoured: "deeply
+  indexed"/"sections"/"passages"; German flagged for D-L7).
+- **Acceptance (met, tested):** every summary shows an accurate coverage statement; a relevance answer
+  is explicitly labelled "not exhaustive / based on the most relevant passages"; a capped result never
+  displays as complete; a `building`/`stale`/`pending` deep index never shows 100% — the partial
+  fraction; Tier 1/2/3 cost 0/1/few model calls (asserted); provenance walk returns exactly the leaf
+  source chunks; the C4 legacy doc offers "Re-index first", not a dead build.
 
 ### Phase 3 — Structured extract-then-aggregate
 - `extraction_records` schema; `extract.ts`; `extract` ingest pass; router rule "list all/every/how many" → coverage; SQL aggregation answer.

@@ -6,7 +6,64 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
-_Last updated: 2026-06-15 — **Whole-document analysis — Phase 1 (cap honesty + ingest-time
+_Last updated: 2026-06-15 — **Whole-document analysis — Phase 2 (coverage meter + tiers +
+provenance UI).** Second phase of [`docs/whole-document-analysis-plan.md`](docs/whole-document-analysis-plan.md)
+(§6 Phase 2; mechanisms §4.5 coverage tiers, §5.1 IPC + `CoverageInfo`, §5.2 renderer). The
+honesty layer over Phase 1's deep index: surface BREADTH (whole document vs the most relevant
+passages) and DEPTH (tier) as two separate, honest statements — **breadth ≠ fidelity [C1/L2]**,
+"100%"/"deeply indexed" shown ONLY for a `ready` tree, and node summaries are NEVER `[Sn]`
+citations [M2]. **(1) Shared contracts** ([`shared/types.ts`](apps/desktop/src/shared/types.ts)):
+new `CoverageInfo` (`mode:'tree'|'relevance'|'capped'`, `treeStatus?`, `chunksCovered/Total`,
+`treeLevels?`, `tier?`, `truncated?`; `unparsedChunks` reserved for Phase 3), `DocumentCoverage`
+(`{coverage, provenance: Citation[]}`), `TreeBuildStatus`, `CoverageTier`; `DocumentSummary.tier?`;
+`DocumentInfo.treeStatus`/`fullyChunked`/`treeLevels` (additive/optional, threaded via
+`DocumentRow`/`rowToInfo`/`listDocuments`/`getDocument` in
+[`ingestion/index.ts`](apps/desktop/src/main/services/ingestion/index.ts); `parseSummary` now keeps
+`tier`). **(2) Coverage + provenance reader** (new
+[`services/analysis/coverage.ts`](apps/desktop/src/main/services/analysis/coverage.ts)):
+`reachableLeafChunkIds` (the PRODUCTION `tree_edges`→leaf-chunk walk, replacing Phase 1's test-only
+helper), `documentLeafProvenance` (leaf SOURCE chunks → `Citation[]`, M2-safe), `documentCoverage`
+(breadth+depth — ready ⇒ whole-document at tier; building/stale/pending ⇒ partial fraction, never
+100%; no tree ⇒ capped/beginning), plus `maxTreeLevel`/`nodeSummariesAtLevel` for the tiers. Pure DB
+reads, no model call; all CONTENT-derived (never logged/audited). **(3) Coverage tiers** in
+`runSummary` ([`doctasks/manager.ts`](apps/desktop/src/main/services/doctasks/manager.ts) new
+`summarizeFromTree`): requested via the `summary` task `params.tier` (no-arg = **Tier 1**, so the
+one-click summary is byte-unchanged) — **Tier 1** = stored root verbatim (**0** model calls, Q6);
+**Tier 2** = ONE reduce over the root's children (the layer that fit the root's single budget group,
+so always one window); **Tier 3** = ALL level-1 nodes reduced in budget batches **bounded by node
+count**, never document size. All tiers cover the whole document (`truncated:false`). **(4) IPC**:
+`analysis:coverage(documentId)` ([`registerDocTasksIpc.ts`](apps/desktop/src/main/ipc/registerDocTasksIpc.ts))
+→ `DocumentCoverage|null` (read-only; provenance only for a `ready`-tree summary); mirrored in
+[`preload`](apps/desktop/src/preload/index.ts); channel in
+[`shared/ipc.ts`](apps/desktop/src/shared/ipc.ts). **(5) Renderer**: new
+[`components/CoverageMeter.tsx`](apps/desktop/src/renderer/components/CoverageMeter.tsx) — `CoverageMeter`
+(breadth pill + depth line) and `TierMenu` (reusing the `DepthMenu` Radix pattern); the
+PreviewModal ([`DocumentsScreen.tsx`](apps/desktop/src/renderer/screens/DocumentsScreen.tsx)) renders
+the meter (augmenting the truncated banner), the tier selector (only with a ready deep index), and
+`SourcesDisclosure` provenance — fetched via `documentCoverage` on open; the chat
+[`Transcript`](apps/desktop/src/renderer/chat/Transcript.tsx) labels every grounded (cited) answer
+mode `relevance` ("the most relevant passages — not the whole document"); a **"Build deep index"** /
+**"Re-index for deep index"** (C4) / **"Deeply indexed"** badge row action on `DocumentsScreen`
+(`onBuildDeepIndex`/`onSummarizeTier`). **i18n**: new EN+DE `coverage.*` + `docs.deepIndex.*` +
+`docs.previewModal.sources` (type-enforced parity; forbidden-UI-words honoured — "deeply indexed"/
+"sections"/"passages", no tree/node/chunk/vector/embedding leak; German flagged for **D-L7**). **NOT
+built (Phases 3–4):** `extraction_records`/`extract.ts`, the "list every X" router rule, symmetric
+compare, node embeddings (node vectors stay NULL — L6). **Tests:** typecheck clean, build OK,
+`npm test` **1306 passed / 25 skipped** (+22: 8 integration in
+[`whole-doc-analysis.test.ts`](apps/desktop/tests/integration/whole-doc-analysis.test.ts) — ready-tree
+whole-document coverage at tier, reachable-leaves==chunk-count + leaf provenance [M2], tree-less
+capped truncated/whole, building reports partial-not-ready [C1], Tier 1/2/3 = 0/1/bounded calls +
+absent-param-defaults-Tier-1; 10 renderer in
+[`Coverage.test.tsx`](apps/desktop/tests/renderer/Coverage.test.tsx) — meter honesty [relevance label,
+ready whole+tier, building never 100%, capped never complete], chat relevance label on/off, Build-deep-
+index starts a `tree` task, C4 "Re-index first" re-indexes not a dead build, ready "Deeply indexed"
+badge, PreviewModal meter+selector from `analysis:coverage`; +2 GermanSmoke — deep-index action +
+CoverageMeter German). No version bump, no schema change (Phase 1's columns/tables suffice). **Risks /
+next:** the row "Build deep index" is offered on any indexed non-generated doc without a ready tree
+(user-initiated, may be a multi-minute CPU build on weak hardware); **Next:** Phase 3 —
+`extraction_records`/`extract.ts` + the "list all/every/how many" router rule._
+
+_(prior) 2026-06-15 — **Whole-document analysis — Phase 1 (cap honesty + ingest-time
 summary tree).** First phase of [`docs/whole-document-analysis-plan.md`](docs/whole-document-analysis-plan.md)
 (§6 Phase 1; mechanisms §3.1–§3.5, §4.1, §5.1). Moves whole-document coverage from query time
 to ingest time via a persistent hierarchical summary tree (RAPTOR-lite), and makes the

@@ -5,6 +5,7 @@ import { t, type MessageKey } from '../../../shared/i18n'
 import { tMain } from '../i18n'
 import type { Db } from '../db'
 import type {
+  CoverageTier,
   DocTaskKind,
   DocTaskStatus,
   DocumentSummary,
@@ -36,9 +37,11 @@ import { isAbortError, stripThinkBlocks } from '../chat'
 import { collectionIdsForDocument } from '../collections'
 import { ModelSlotArbiter } from '../analysis/model-slot-arbiter'
 import { buildTree } from '../analysis/tree-build'
+import { maxTreeLevel, nodeSummariesAtLevel } from '../analysis/coverage'
 import type { AuditRecorder } from '../audit'
 import { log } from '../logging'
 import {
+  packIntoWindows,
   planSummaryWindows,
   summaryBudgetWords,
   SUMMARY_OUTPUT_TOKENS,
@@ -164,6 +167,12 @@ interface InternalTask {
   controller: AbortController
   /** Validated translation target (kind === 'translation' only). */
   targetLang?: TranslationTargetLang
+  /**
+   * Coverage tier for a `summary` task over a ready deep index (whole-document-analysis plan
+   * §4.5). 1 (default) = the stored root verbatim, 0 model calls; 2 = one section-by-section
+   * reduce; 3 = a detailed full-coverage reduce in budget batches. Ignored without a tree.
+   */
+  summaryTier?: CoverageTier
 }
 
 const TERMINAL: ReadonlySet<DocTaskStatus['state']> = new Set(['done', 'failed', 'cancelled'])
@@ -294,6 +303,14 @@ export class DocTaskManager {
       }
       targetLang = raw
     }
+    // Coverage tier for a summary (whole-document-analysis plan §4.5). Tolerant: any value
+    // other than 2 or 3 (incl. absent — the one-click summary) means Tier 1 (the default,
+    // 0 extra model calls when a tree is ready), so the existing call site is unchanged.
+    let summaryTier: CoverageTier | undefined
+    if (kind === 'summary') {
+      const raw = req.params?.tier
+      summaryTier = raw === 2 ? 2 : raw === 3 ? 3 : 1
+    }
     if (this.deps.isChatStreaming()) {
       throw new Error(tMain('main.task.refusedChatStreaming'))
     }
@@ -358,7 +375,8 @@ export class DocTaskManager {
         resultRef: null
       },
       controller: new AbortController(),
-      targetLang
+      targetLang,
+      summaryTier
     }
     this.tasks.set(jobId, task)
     this.queue.push(jobId)
@@ -523,6 +541,107 @@ export class DocTaskManager {
     return documentId
   }
 
+  /**
+   * Serve a whole-document summary from a READY deep index at the chosen coverage tier
+   * (whole-document-analysis plan §4.5). All tiers cover the whole document (`truncated:false`)
+   * — they differ in DEPTH, not breadth. Returns the summary, or null to fall through to the
+   * capped path. One model job at a time (we run inside the serialized summary task).
+   * - Tier 1: the stored ROOT verbatim — 0 model calls (Q6).
+   * - Tier 2: the root's children (the layer below the root, which fit ONE budget window by
+   *   construction) reduced once → a richer section-by-section summary (1 model call).
+   * - Tier 3: ALL level-1 nodes (the deepest summary layer, full leaf coverage) reduced in
+   *   budget-bounded batches — bounded by NODE count, never by document size at query time.
+   */
+  private async summarizeFromTree(
+    task: InternalTask,
+    runtime: ModelRuntime,
+    documentId: string,
+    title: string,
+    tier: CoverageTier
+  ): Promise<DocumentSummary | null> {
+    const db = this.deps.getDb()
+    const root = db
+      .prepare('SELECT summary_text, model_id FROM tree_nodes WHERE document_id = ? AND is_root = 1 LIMIT 1')
+      .get(documentId) as unknown as { summary_text: string; model_id: string | null } | undefined
+    if (!root || root.summary_text.length === 0) return null
+    const now = (): string => new Date().toISOString()
+
+    // Tier 1: the stored root verbatim — no model call (Q6).
+    if (tier === 1) {
+      task.status.progress.stepsTotal = 1
+      task.status.progress.stepsDone = 1
+      return { text: root.summary_text, modelId: root.model_id ?? runtime.modelId, createdAt: now(), truncated: false, tier: 1 }
+    }
+
+    // Tier 2/3 read precomputed node summaries and reduce them.
+    const maxLevel = maxTreeLevel(db, documentId)
+    const nodeTexts =
+      tier === 3
+        ? nodeSummariesAtLevel(db, documentId, 1)
+        : maxLevel > 1
+          ? nodeSummariesAtLevel(db, documentId, maxLevel - 1)
+          : []
+    // Degenerate tree (a single level, or an empty layer): nothing richer than the root.
+    if (nodeTexts.length === 0) {
+      task.status.progress.stepsTotal = 1
+      task.status.progress.stepsDone = 1
+      return { text: root.summary_text, modelId: root.model_id ?? runtime.modelId, createdAt: now(), truncated: false, tier }
+    }
+
+    const contextTokens = this.deps.getContextTokens()
+    const budgetWords = summaryBudgetWords(contextTokens)
+    const windows = packIntoWindows(nodeTexts, budgetWords)
+    const signal = task.controller.signal
+    task.status.progress.stepsTotal = windows.length <= 1 ? 1 : windows.length + 1
+
+    let text: string
+    if (windows.length <= 1) {
+      // One reduce over the node summaries (Tier 2 always; Tier 3 when they fit one window).
+      text = await this.generate(
+        runtime,
+        SUMMARY_SYSTEM_PROMPT,
+        reducePrompt(title, windows.length === 1 ? [windows[0]] : nodeTexts),
+        SUMMARY_OUTPUT_TOKENS,
+        SUMMARY_TEMPERATURE,
+        signal
+      )
+      task.status.progress.stepsDone = 1
+    } else {
+      // Tier 3 deep tree: reduce each batch (map), then reduce the batch summaries — bounded
+      // by node count. Each batch was packed to fit the input budget.
+      const partials: string[] = []
+      for (const w of windows) {
+        const partial = await this.generate(
+          runtime,
+          SUMMARY_SYSTEM_PROMPT,
+          reducePrompt(title, [w]),
+          SUMMARY_OUTPUT_TOKENS,
+          SUMMARY_TEMPERATURE,
+          signal
+        )
+        if (partial.length > 0) partials.push(partial)
+        task.status.progress.stepsDone += 1
+      }
+      if (partials.length === 0) return null
+      let reduceInput = partials
+      const totalWords = partials.reduce((n, p) => n + approxTokenCount(p), 0)
+      if (totalWords > budgetWords) {
+        reduceInput = [truncateToApproxTokens(partials.join('\n\n'), budgetWords)]
+      }
+      text = await this.generate(
+        runtime,
+        SUMMARY_SYSTEM_PROMPT,
+        reducePrompt(title, reduceInput),
+        SUMMARY_OUTPUT_TOKENS,
+        SUMMARY_TEMPERATURE,
+        signal
+      )
+      task.status.progress.stepsDone += 1
+    }
+    if (text.length === 0) return null
+    return { text, modelId: runtime.modelId, createdAt: now(), truncated: false, tier }
+  }
+
   /** The summary task: stored chunks in, `summary_json` out. */
   private async runSummary(task: InternalTask, runtime: ModelRuntime): Promise<string> {
     const db = this.deps.getDb()
@@ -530,29 +649,26 @@ export class DocTaskManager {
     const doc = getDocument(db, documentId)
     if (!doc) throw new Error(tMain('main.task.documentNotReady'))
 
-    // Tree-first (plan M1): when a deep index is ready, serve its ROOT summary verbatim —
-    // a whole-document summary at 0 extra model calls (Tier 1, Q6), `truncated:false`. The
-    // existing summary_json / PreviewModal surface is unchanged. Falls through to the capped
-    // map-reduce below when there is no ready tree (the tree-less fallback).
+    // Tree-first (plan M1/§4.5): when a deep index is ready, serve from it at the requested
+    // coverage TIER — Tier 1 (default) returns the stored ROOT verbatim at 0 extra model
+    // calls (Q6), Tier 2/3 reduce precomputed node summaries (still whole-document, so
+    // `truncated:false`). The existing summary_json / PreviewModal surface is unchanged.
+    // Falls through to the capped map-reduce below when there is no ready tree (the fallback).
     const treeRow = db
       .prepare('SELECT tree_status, tree_meta_json FROM documents WHERE id = ?')
       .get(documentId) as unknown as
       | { tree_status: string | null; tree_meta_json: string | null }
       | undefined
     if (treeRow?.tree_status === 'ready' && treeRow.tree_meta_json) {
-      const root = db
-        .prepare('SELECT summary_text, model_id FROM tree_nodes WHERE document_id = ? AND is_root = 1 LIMIT 1')
-        .get(documentId) as unknown as { summary_text: string; model_id: string | null } | undefined
-      if (root && root.summary_text.length > 0) {
-        const summary: DocumentSummary = {
-          text: root.summary_text,
-          modelId: root.model_id ?? runtime.modelId,
-          createdAt: new Date().toISOString(),
-          truncated: false
-        }
-        setDocumentSummary(this.deps.getDb(), documentId, summary)
-        task.status.progress.stepsTotal = 1
-        task.status.progress.stepsDone = 1
+      const built = await this.summarizeFromTree(
+        task,
+        runtime,
+        documentId,
+        doc.title,
+        task.summaryTier ?? 1
+      )
+      if (built) {
+        setDocumentSummary(this.deps.getDb(), documentId, built)
         return documentId
       }
     }

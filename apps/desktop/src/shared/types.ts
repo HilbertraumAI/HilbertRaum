@@ -712,6 +712,69 @@ export interface DocumentSummary {
    * honestly covers only the beginning, and the UI says so.
    */
   truncated: boolean
+  /**
+   * Which coverage tier produced this summary when it was served from a ready deep index
+   * (whole-document-analysis plan §4.5): 1 = the stored root verbatim (0 model calls),
+   * 2 = a section-by-section reduce, 3 = a detailed full-coverage reduce. Absent for the
+   * capped map-reduce fallback (no deep index). Drives the depth line of the coverage meter.
+   */
+  tier?: CoverageTier
+}
+
+/**
+ * Deep-index (summary-tree) build lifecycle, surfaced on `DocumentInfo.treeStatus`
+ * (whole-document-analysis plan §3.2). NULL in the DB ⇒ no deep index yet. "Deeply indexed"
+ * is the user-facing word for `'ready'`; the internal tree/node vocabulary never reaches UI.
+ */
+export type TreeBuildStatus = 'pending' | 'building' | 'ready' | 'stale' | 'failed'
+
+/** A coverage tier (whole-document-analysis plan §4.5): how much precomputed depth to surface. */
+export type CoverageTier = 1 | 2 | 3
+
+/**
+ * How a summary/answer covers the document(s) it is about (whole-document-analysis plan
+ * §4.5/§5.1). The meter renders BREADTH ("covers the whole document" vs "the most relevant
+ * passages") and DEPTH (the tier) as TWO separate honesty statements — breadth ≠ fidelity
+ * [C1/L2]. "100%"/whole-document is claimed ONLY for `mode:'tree'` + `treeStatus:'ready'`
+ * (where the stored chunks are provably the whole document — the `fully_chunked` invariant);
+ * a `building`/`stale`/`pending` tree reports the partial fraction, never 100%.
+ */
+export type CoverageMode =
+  /** Served from the ready deep-index tree — whole-document coverage at the chosen tier. */
+  | 'tree'
+  /** A relevance (RAG) answer — the most relevant passages, NOT exhaustive. */
+  | 'relevance'
+  /** The capped map-reduce summary — covers the beginning when `truncated`. */
+  | 'capped'
+
+export interface CoverageInfo {
+  mode: CoverageMode
+  /** The deep-index state when relevant (mode `tree`); absent for relevance/capped. */
+  treeStatus?: Exclude<TreeBuildStatus, 'failed'>
+  /** Document sections (chunks) reachable from the served material. */
+  chunksCovered: number
+  /** Total sections (chunks) in the document. */
+  chunksTotal: number
+  /** Levels in the deep-index tree (mode `tree`); display-internal, not shown verbatim. */
+  treeLevels?: number
+  /** The depth tier surfaced (mode `tree`). */
+  tier?: CoverageTier
+  /** Node ids behind the served summary (provenance plumbing); never `[Sn]` citations (M2). */
+  nodeIds?: string[]
+  /** True when the result honestly covers only the beginning (capped) — never shown as complete. */
+  truncated?: boolean
+  // unparsedChunks?: number  // reserved for Phase 3 (structured-extract coverage)
+}
+
+/**
+ * What `analysis:coverage` returns for one document (whole-document-analysis plan §5.1): the
+ * coverage of its current summary plus the source-chunk provenance behind it. Node summaries
+ * are NEVER citations (M2) — `provenance` is the underlying SOURCE chunks only.
+ */
+export interface DocumentCoverage {
+  coverage: CoverageInfo
+  /** The leaf source chunks behind a ready-tree summary, as `[Sn]` citations (M2-safe). */
+  provenance: Citation[]
 }
 
 /**
@@ -796,6 +859,21 @@ export interface DocumentInfo {
    * Null/undefined for a file import. (`lastUsedAt` is deferred — L2.)
    */
   sourceFolderLabel?: string | null
+  /**
+   * Deep-index (summary-tree) build state (whole-document-analysis plan §3.2/§5.2). NULL/
+   * undefined ⇒ no deep index yet ("Build deep index" offered); `'ready'` ⇒ "Deeply indexed"
+   * — a whole-document summary is a cheap read. Drives the row's deep-index affordance + the
+   * coverage meter. Read from `documents.tree_status`.
+   */
+  treeStatus?: TreeBuildStatus | null
+  /**
+   * True when the stored chunks are provably the WHOLE document (post-cap-honesty pipeline,
+   * plan C4 — `documents.fully_chunked` is set). A legacy/truncated doc (`false`) must be
+   * re-indexed before a deep index / 100%-coverage claim is allowed. Undefined ⇒ not read.
+   */
+  fullyChunked?: boolean
+  /** Levels in the ready deep-index tree (from `tree_meta_json`); display-internal. */
+  treeLevels?: number
   createdAt: string
   updatedAt: string
 }

@@ -84,6 +84,12 @@ export const IPC = {
   getDocTask: 'doctasks:get',
   /** Cancel a task; with no jobId, cancels the currently active one. */
   cancelDocTask: 'doctasks:cancel',
+  /**
+   * Read-only coverage + provenance of a document's current summary (whole-document-analysis
+   * plan §5.1): how much of the document it covers (breadth) at what depth (tier), and the
+   * source-chunk lineage behind a deep-index summary. No model call. Content stays in the DB.
+   */
+  documentCoverage: 'analysis:coverage',
   askDocuments: 'rag:ask',
   // Voice dictation (request/response; bytes in, text out, nothing stored)
   /** Transcribe recorded composer audio (16 kHz mono WAV bytes) into plain text. The

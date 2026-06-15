@@ -10,11 +10,18 @@ import {
   getDocumentSummary,
   processDocument,
   reconcileStuckTrees,
-  reindexDocument
+  reindexDocument,
+  setDocumentSummary
 } from '../../src/main/services/ingestion'
 import { DocTaskManager } from '../../src/main/services/doctasks'
 import { buildTree } from '../../src/main/services/analysis/tree-build'
 import { ModelSlotArbiter } from '../../src/main/services/analysis/model-slot-arbiter'
+import {
+  documentChunkCount,
+  documentCoverage,
+  documentLeafProvenance,
+  reachableLeafChunkIds
+} from '../../src/main/services/analysis/coverage'
 import { t } from '../../src/shared/i18n'
 import type {
   ChatMessage,
@@ -502,5 +509,132 @@ describe('persistence + reconcile', () => {
     const n = reconcileStuckTrees(db, new Date().toISOString())
     expect(n).toBe(1)
     expect(treeStatus(id)).toBe('pending')
+  })
+})
+
+// ---- Phase 2: coverage math + provenance (C1/L2, M2) --------------------------------
+
+describe('coverage math + provenance', () => {
+  async function buildReadyTree(words = 4000): Promise<string> {
+    const id = await importWords(words)
+    const m = makeManager(scriptedRuntime(), 1024)
+    await waitTerminal(m, m.startDocTask({ kind: 'tree', documentIds: [id] }).jobId)
+    return id
+  }
+
+  it('a ready tree reports whole-document tree coverage at the served tier (100% only when ready)', async () => {
+    const id = await buildReadyTree()
+    // A Tier-1 summary (the stored root, untruncated) ⇒ the coverage describes the deep index.
+    const m = makeManager(scriptedRuntime(), 1024)
+    await waitTerminal(m, m.startDocTask({ kind: 'summary', documentIds: [id] }).jobId)
+    const summary = getDocumentSummary(db, id)
+
+    const cov = documentCoverage(db, id, summary)
+    const total = documentChunkCount(db, id)
+    expect(cov.mode).toBe('tree')
+    expect(cov.treeStatus).toBe('ready')
+    expect(cov.chunksCovered).toBe(total) // reachable leaves == chunk count (whole document)
+    expect(cov.chunksTotal).toBe(total)
+    expect(cov.truncated).toBe(false)
+    expect(cov.treeLevels).toBeGreaterThanOrEqual(1)
+    expect(cov.tier).toBe(1)
+  })
+
+  it('reachable leaves == chunk count, and provenance is the leaf SOURCE chunks (M2)', async () => {
+    const id = await buildReadyTree()
+    const total = documentChunkCount(db, id)
+    expect(reachableLeafChunkIds(db, id).length).toBe(total)
+    const prov = documentLeafProvenance(db, id, 'doc.txt')
+    // One citation per leaf source chunk — never a node summary (M2). Labels are [S1..].
+    expect(prov.length).toBe(total)
+    expect(prov[0].label).toBe('S1')
+  })
+
+  it('a tree-less doc is capped: truncated ⇒ beginning, untruncated ⇒ whole (never tree 100%)', async () => {
+    const id = await importWords(300)
+    expect(treeStatus(id)).toBeNull()
+    const total = documentChunkCount(db, id)
+
+    setDocumentSummary(db, id, { text: 's', modelId: 'm', createdAt: '2026-01-01T00:00:00Z', truncated: true })
+    const truncCov = documentCoverage(db, id, getDocumentSummary(db, id))
+    expect(truncCov.mode).toBe('capped')
+    expect(truncCov.truncated).toBe(true)
+
+    setDocumentSummary(db, id, { text: 's', modelId: 'm', createdAt: '2026-01-01T00:00:00Z', truncated: false })
+    const wholeCov = documentCoverage(db, id, getDocumentSummary(db, id))
+    expect(wholeCov.mode).toBe('capped')
+    expect(wholeCov.truncated).toBe(false)
+    expect(wholeCov.chunksCovered).toBe(total)
+  })
+
+  it('a building tree reports tree state (labelled building, NOT ready/100% — C1)', async () => {
+    const id = await buildReadyTree()
+    db.prepare("UPDATE documents SET tree_status = 'building' WHERE id = ?").run(id)
+    // The pure deep-index state (no summary) — used by the row chip.
+    const cov = documentCoverage(db, id, null)
+    expect(cov.mode).toBe('tree')
+    expect(cov.treeStatus).toBe('building') // never 'ready' ⇒ the meter can't render "whole"
+    expect(cov.truncated).toBe(true)
+  })
+})
+
+// ---- Phase 2: coverage tiers (0 / 1 / few model calls) ------------------------------
+
+describe('coverage tiers', () => {
+  async function withTree(words: number, ctx = 1024): Promise<{ id: string; runtime: ScriptedRuntime; m: DocTaskManager }> {
+    const id = await importWords(words)
+    const runtime = scriptedRuntime()
+    const m = makeManager(runtime, ctx)
+    await waitTerminal(m, m.startDocTask({ kind: 'tree', documentIds: [id] }).jobId)
+    return { id, runtime, m }
+  }
+
+  it('Tier 1 serves the root verbatim with 0 extra model calls (truncated:false)', async () => {
+    const { id, runtime, m } = await withTree(4000)
+    const before = runtime.calls
+    await waitTerminal(m, m.startDocTask({ kind: 'summary', documentIds: [id], params: { tier: 1 } }).jobId)
+    expect(runtime.calls).toBe(before) // 0 extra calls (Q6)
+    const s = getDocumentSummary(db, id)
+    expect(s?.truncated).toBe(false)
+    expect(s?.tier).toBe(1)
+    const root = db
+      .prepare('SELECT summary_text FROM tree_nodes WHERE document_id = ? AND is_root = 1')
+      .get(id) as unknown as { summary_text: string }
+    expect(s?.text).toBe(root.summary_text)
+  })
+
+  it('Tier 2 runs exactly ONE reduce over the precomputed sections (truncated:false)', async () => {
+    const { id, runtime, m } = await withTree(4000)
+    const before = runtime.calls
+    await waitTerminal(m, m.startDocTask({ kind: 'summary', documentIds: [id], params: { tier: 2 } }).jobId)
+    expect(runtime.calls).toBe(before + 1) // exactly one reduce call
+    const s = getDocumentSummary(db, id)
+    expect(s?.truncated).toBe(false)
+    expect(s?.tier).toBe(2)
+  })
+
+  it('Tier 3 reduces every section in a few calls bounded by NODE count, not document size', async () => {
+    const { id, runtime, m } = await withTree(8000)
+    const level1 = (
+      db
+        .prepare('SELECT COUNT(*) AS n FROM tree_nodes WHERE document_id = ? AND level = 1')
+        .get(id) as unknown as { n: number }
+    ).n
+    const before = runtime.calls
+    await waitTerminal(m, m.startDocTask({ kind: 'summary', documentIds: [id], params: { tier: 3 } }).jobId)
+    const used = runtime.calls - before
+    expect(used).toBeGreaterThanOrEqual(1)
+    expect(used).toBeLessThanOrEqual(level1 + 1) // bounded by node count (+1 reduce), never chunk/doc size
+    const s = getDocumentSummary(db, id)
+    expect(s?.truncated).toBe(false)
+    expect(s?.tier).toBe(3)
+  })
+
+  it('an absent tier param defaults to Tier 1 (the one-click summary is unchanged)', async () => {
+    const { id, runtime, m } = await withTree(4000)
+    const before = runtime.calls
+    await waitTerminal(m, m.startDocTask({ kind: 'summary', documentIds: [id] }).jobId) // no params
+    expect(runtime.calls).toBe(before) // Tier-1 default ⇒ 0 extra calls
+    expect(getDocumentSummary(db, id)?.tier).toBe(1)
   })
 })

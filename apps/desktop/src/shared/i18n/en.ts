@@ -308,6 +308,35 @@ export const en = {
   'docs.previewModal.noText': 'No text could be extracted from this document.',
   'docs.previewModal.page': 'Page {page}',
 
+  // ---- Deep index + coverage (whole-document-analysis plan §5.2) ----
+  // User words only: "deeply indexed" (a ready summary tree), "sections" (chunks),
+  // "passages" (retrieved excerpts). No tree/node/chunk/vector/embedding jargon.
+  'docs.deepIndex.build': 'Build deep index',
+  'docs.deepIndex.buildTitle':
+    'Read the whole document into a deep index so summaries and answers can cover all of ' +
+    'it — runs on this drive, nothing leaves it',
+  'docs.deepIndex.reindexFirst': 'Re-index for deep index',
+  'docs.deepIndex.reindexFirstTitle':
+    'This document was added before deep indexing was available — re-index it first so a ' +
+    'deep index can cover the whole document',
+  'docs.deepIndex.ready': 'Deeply indexed',
+  'docs.deepIndex.readyTitle':
+    'A whole-document deep index is ready — summaries can cover everything',
+  'coverage.relevance': 'Based on the most relevant passages — not the whole document',
+  'coverage.capped.whole': 'Covers the whole document',
+  'coverage.capped.beginning': 'Covers the beginning of the document',
+  'coverage.tree.whole': 'Covers the whole document (deeply indexed)',
+  'coverage.tree.partial': 'Deep index in progress — {covered} of {total} sections',
+  'coverage.tree.pending': 'No deep index yet',
+  'coverage.depth': 'Detail: {label}',
+  'coverage.tier.1': 'Overview',
+  'coverage.tier.2': 'Section by section',
+  'coverage.tier.3': 'Detailed (full coverage)',
+  'coverage.tier.hint.1': 'Fastest — the stored overview',
+  'coverage.tier.hint.2': 'A richer pass across the sections',
+  'coverage.tier.hint.3': 'The most detail, across the whole document',
+  'coverage.tierSelect.trigger': 'Detail: {label}',
+
   // ---- Models (ModelsScreen.tsx) ----
   'models.title': 'AI Model',
   'models.lead':
