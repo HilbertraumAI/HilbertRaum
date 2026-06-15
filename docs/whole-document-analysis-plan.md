@@ -146,14 +146,20 @@ CREATE TABLE IF NOT EXISTS tree_edges (
   FOREIGN KEY (parent_id) REFERENCES tree_nodes(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_tree_edges_parent ON tree_edges(parent_id);
+-- [L5] reverse lookup "which node(s) contain chunk/node X" — cheap, enables chunk→node
+-- provenance and a future incremental "which subtree did this edit touch" check.
+CREATE INDEX IF NOT EXISTS idx_tree_edges_child ON tree_edges(child_id, child_is_chunk);
 
 -- [C3] Content cache: maps the exact summarize-input text to its computed summary (and the
 -- node embedding), so a rebuild — or a different document with identical boilerplate — skips
 -- the model + embed call. This is SEPARATE from node identity: a tree always gets one fresh
 -- tree_nodes row per structural position (so repeated content can never collapse two
 -- positions into one node — the C3 bug). Keyed by (content_hash, model_id) so a model change
--- doesn't silently reuse an older model's summary [M5]. Cache survives node/tree deletion;
--- it carries no document_id and is pruned by a size/age policy, never by FK.
+-- doesn't silently reuse an older model's summary [M5]. NOTE: model_id is the CHAT model; a
+-- hit returns summary_text (chat call skipped) but the consumer must check the cached
+-- embedding_model_id against the ACTIVE embedder — if it differs, re-embed the summary
+-- (cheap, no chat call) rather than reuse a stale node vector [H5]. Cache survives node/tree
+-- deletion; it carries no document_id and is pruned by a size/age policy, never by FK.
 CREATE TABLE IF NOT EXISTS summary_cache (
   content_hash TEXT NOT NULL,
   model_id TEXT NOT NULL,             -- chat model that produced summary_text
@@ -209,6 +215,10 @@ CREATE INDEX IF NOT EXISTS idx_extract_doc_type ON extraction_records(document_i
 - **Reject over-cap at upload [C1].** `chunkSegments` (or a cheap pre-count helper `wouldExceedChunkCap(segments)`) must report **overflow** instead of silently returning the first `MAX_CHUNKS_PER_DOCUMENT` windows. In `processDocument`'s chunking step: if the document would exceed the cap, set `status='failed'` with a new friendly, persist-canonical English message `main.ingest.tooManyChunks` ("This document is too large to fully index (over N sections). Split it and import the parts."), display-mapped at render. Because over-cap docs never reach `indexed`, **every indexed document is fully chunked** → the tree's chunk coverage IS document coverage (kills the silent-truncation dishonesty). *This is a deliberate behavior change* (today such docs index partially); call it out in `known-limitations.md` and BUILD_STATE. Existing partially-indexed docs are unaffected until re-indexed, at which point they fail with the actionable message.
 - **Tree teardown on re-index [H1/H2].** `processDocument` deletes+recreates chunks with fresh ids, orphaning the tree. In the **same** block where chunks/embeddings are replaced, add:
   `DELETE FROM tree_nodes WHERE document_id = ?` (edges cascade via `parent_id`), and set `tree_status` → `'stale'` if a tree existed (so the UI offers "rebuild"), else clear it. Extraction rows self-cascade via `chunk_id`. `reindexDocument` already clears `summary_json`; if that summary came from the root it is correctly invalidated. The expensive model outputs survive in `summary_cache` (keyed by text, not chunk id), so the post-re-index rebuild reuses every unchanged group's summary and only re-summarizes changed groups — cheap, and correct despite full chunk-id churn.
+
+### 3.6 Storage & scan-cost sizing [L4]
+- **Rows per fully-built doc:** ~`ceil(chunks / branching)` level-1 nodes + the higher levels ≈ **chunks/4** node rows (≈250 for a 1000-chunk doc), one node vector each (384×4 B ≈ 1.5 KB → ~0.4 MB of vectors), plus `summary_cache` entries (deduped across docs) and N `extraction_records`. Bounded by `MAX_CHUNKS_PER_DOCUMENT`, so per-doc storage is bounded.
+- **Scan cost:** node vectors live in `tree_nodes`, **out of** the chunk `embeddings` linear scan, so ordinary RAG retrieval is unaffected. The new node-cosine helper scans only one document's nodes at a time (compare-align) or the top levels (semi-global) — small. At collection scale this is per-member, so it grows with members, not with total chunks. If node search ever needs whole-collection breadth, it inherits the same ANN upgrade path noted for `VectorIndex` (`embeddings/index.ts` MVP comment).
 
 ---
 
@@ -362,7 +372,7 @@ Each phase is independently shippable, tests green + docs + BUILD_STATE per the 
 - **Q6 — Tier 1 returns the stored root verbatim (0 calls);** re-styling to a specific question is an explicit +1 call (§4.5).
 
 ### Critical/High audit findings — status
-**Fixed in this revision:** C1 (upload-cap rejection), C2 (single `MAX_CHUNKS_PER_DOCUMENT`), C3 (content cache vs node identity), H1/H2 (re-index teardown + warm cache rebuild), H3 (yielding background build), H4/H5 (node-vector search + staleness), H6 (collection-scope v1 behavior), H7 ("list every" honesty + closed-vocab mapping), H8 (symmetric-compare applicability). Medium items M1/M2/M3/M4/M5/M6/M7 are also addressed in the relevant sections; the Low items (L1 lease-free build, L2 breadth≠fidelity wording, L4 sizing, L5 reverse index) remain as noted-but-deferred polish.
+**Fixed in this revision:** C1 (upload-cap rejection), C2 (single `MAX_CHUNKS_PER_DOCUMENT`), C3 (content cache vs node identity), H1/H2 (re-index teardown + warm cache rebuild), H3 (yielding background build), H4/H5 (node-vector search + staleness, incl. the chat-hit/stale-embedding case in §3.1), H6 (collection-scope v1 behavior), H7 ("list every" honesty + closed-vocab mapping), H8 (symmetric-compare applicability). Medium M1/M2/M3/M4/M5/M6/M7 addressed in the relevant sections. Low items now also closed: L1 (lease-free build, §8 assumptions), L2 (breadth≠fidelity wording, §4.5), L4 (sizing, §3.6), L5 (reverse edge index, §3.1). No Critical/High/Medium/Low items remain open.
 
 ### Assumptions (flagging, not silently adopting)
 - Level 0 = the existing stored **chunks** (overlapping ~80 tokens); the overlap is harmless for summarization. After §3.5, the chunk set is the **whole** document (over-cap docs are rejected, not truncated), so chunk coverage == document coverage.
