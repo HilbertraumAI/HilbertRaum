@@ -29,7 +29,7 @@ import type {
   RuntimeChatOptions
 } from '../../src/main/services/runtime'
 
-// Whole-document-analysis Phase 1 (docs/whole-document-analysis-plan.md §6/§7): cap honesty
+// Whole-document-analysis Phase 1 (docs/rag-design.md §14.1–§14.3 — analysis design record): cap honesty
 // (C1/C2/C4/M13), the ingest-time summary tree (the yielding build + per-node transaction +
 // content cache), and the tree-first summary (M1). Mock runtime, no model, no network.
 

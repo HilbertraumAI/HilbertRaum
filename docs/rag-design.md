@@ -1,6 +1,6 @@
 # RAG design — HilbertRaum
 
-_Last updated: 2026-06-12 (docs housekeeping: absorbed the Phase-17 record into §10 and the Phase-21 design record as §12; Phase 21 — hybrid keyword retrieval + reranker, §11)_
+_Last updated: 2026-06-15 (whole-document-analysis closeout: the four-phase plan condensed into the §14 design record; Phases 1–4 shipped — summary tree, coverage meter, extract-then-aggregate, symmetric compare). Prior: 2026-06-12 docs housekeeping — Phase-17 record into §10, Phase-21 design record as §12._
 
 This document describes the local document → retrieval-augmented-generation pipeline.
 It is built up phase by phase:
@@ -764,3 +764,189 @@ whole-corpus diagnosis to the correct scoped one.
 The composite `DocumentScope` (incl. the empty "All documents") persists in `scope_v2_json` and survives
 restarts. A smart view (§7.6 — a query-time predicate, not a stored collection) is **not** storable *as*
 a scope in v1; a user can apply it to the listing and hand-add its current ids via "Specific documents…".
+
+## 14. Whole-document analysis beyond the context window — design record (Phases 1–4)
+
+_First-class analysis of documents that **vastly exceed** the 4k–8k chat window — covering the
+**whole** document, faithfully and honestly — by moving cost from query time to ingest time via a
+persistent hierarchical summary tree (RAPTOR-lite) plus structured extract-then-aggregate, routed by
+task type. All offline, **one model job at a time**, CPU-first. Condensed from
+`docs/whole-document-analysis-plan.md` at the Phase-4 closeout (2026-06-15); full original (incl. the
+three audit-remediation passes — C1–C4/H1–H11/M1–M13/L1–L7):
+`git show 4071685:docs/whole-document-analysis-plan.md`. **§14.x anchors are stable — code comments
+that cite "plan §3.x/§4.x" map here (§4.1→§14.3, §4.2→§14.5, §4.3→§14.6, §4.5→§14.4, §3.1→§14.2).** The
+data tables live in [`db.ts`](../apps/desktop/src/main/services/db.ts); everything inherits whole-file
+encryption. Summaries, the content cache, extraction records, and node vectors are **content** — never
+logged or audited; audit events stay ids/kinds/counts._
+
+### 14.1 Cap honesty + the `fully_chunked` invariant (C1/C2/C4/M13)
+
+The 1000-chunk-per-document cap used to **silently drop** an over-cap document's tail (the doc still
+reached `indexed`), so "the tree covers 100% of chunks" did **not** mean "covers the whole document".
+Fix: a single source-of-truth constant `MAX_CHUNKS_PER_DOCUMENT`
+([`chunker.ts`](../apps/desktop/src/main/services/ingestion/chunker.ts)); `processDocument` chunks with
+`maxChunks = cap + 1` and **rejects** an over-cap document with the persist-canonical
+`main.ingest.tooManyChunks` **before** the destructive `DELETE FROM chunks` (**M13** — a re-index of an
+over-cap doc keeps its existing searchable chunks; the gate fails **closed**). Every successful index
+stamps `documents.fully_chunked` at the **one** indexing-success site (all paths funnel through
+`processDocument` — C4), so "the stored chunks ARE the whole document" is provable. **Deep index, the
+extract pass, and any 100%-coverage claim are gated on `fully_chunked`**; a legacy (`fully_chunked IS
+NULL`, maybe-truncated) doc must **re-index first** (which fully chunks it, or fails over-cap). This is
+a deliberate behavior change (noted in `known-limitations.md`).
+
+### 14.2 Summary-tree schema + content cache (plan §3.1/§3.5)
+
+Additive tables in `SCHEMA` (no version bump; `ensureColumn` for the document columns):
+- **`tree_nodes`** — per-doc hierarchical summary nodes. `level` (1 = first summary layer, children are
+  chunks; 2+ summarize nodes; root = max level), `ordinal`, `parent_id`/`is_root`, `summary_text`,
+  `content_hash` (the **cache key**, sha256 over ORDERED child texts — *not* node identity), `model_id`
+  (chat model), and the node-vector columns `embedding_blob`/`dimensions`/`embedding_model_id`
+  (**NULL until Phase 4 fills them lazily** — §14.6, L6). `ON DELETE CASCADE` on `document_id`/`parent_id`.
+- **`tree_edges`** — ordered child edges; `child_id` is **polymorphic** (a chunk when `child_is_chunk=1`,
+  else a node) and carries **no FK to chunks**, so deleting chunks does NOT cascade — re-index tears the
+  tree down explicitly. `idx_tree_edges_child` gives the reverse chunk→node lookup (L5).
+- **`summary_cache`** — `(content_hash, model_id)` → `summary_text` (+ the node vector). Separate from
+  node identity: a tree always gets **one fresh `tree_nodes` row per structural position**, so identical
+  boilerplate yields two distinct nodes that merely share a cached summary (kills the C3 tree-collapse
+  bug). A rebuild/resume over a warm cache costs **0 chat calls** for unchanged groups despite full
+  chunk-id churn. Keyed by `model_id` so a model change never reuses an older model's summary (M5).
+- Columns: `documents.tree_status` (NULL|pending|building|ready|stale|failed), `tree_meta_json`
+  (`{rootId, levels, leafChunkCount, builtAt, modelId, embeddingModelId}`), `fully_chunked` (§14.1).
+  `reconcileStuckTrees` flips a stuck `building`→`pending` at startup.
+- **Re-index teardown [H1/H2]:** in the chunk-replacement block, `DELETE FROM tree_nodes` (edges cascade
+  via `parent_id`) + `tree_status`→`stale` if a tree existed; the warm `summary_cache` makes the rebuild
+  cheap. Extraction rows self-cascade via `chunk_id` (§14.5).
+
+### 14.3 Yielding tree build + the model-slot arbiter (plan §4.1, H3/H9/H10/H11/M8/M9/M12)
+
+[`tree-build.ts`](../apps/desktop/src/main/services/analysis/tree-build.ts) packs chunks (in
+`chunk_index` order) into groups ≤ `TREE_GROUP_TOKENS` (= the summary budget math, Q5), summarizes each
+group into **one fresh level-1 node**, and recurses over node summaries to a single root. Cost is **O(n)
+chat calls** paid once (~250 for a 1000-chunk doc), **zero embeds at build time** (node vectors deferred
+— §14.6).
+- **Yielding (H3/H9/H10):** a ~250-call build cannot block chat. The build commits **one node per
+  transaction** and, at each node boundary (synchronous, before the next `generate`), checks the
+  **`ModelSlotArbiter`** ([`model-slot-arbiter.ts`](../apps/desktop/src/main/services/analysis/model-slot-arbiter.ts)) —
+  the single in-process owner of the one chat-runtime slot. If chat asked for the slot the builder
+  **parks on `await arbiter.reacquire()`** (it does **not** return — a returning DocTask is marked `done`
+  and never resumes) and continues from the next node in-session when chat's stream ends. Chat's
+  `assertChatStreamReady` is **async**: for a yielding `tree`/`extract` task it sets `pauseRequested`,
+  **awaits** the builder's handoff, then claims the slot; a non-yielding task still refuses chat with
+  `DOC_TASK_BUSY_MESSAGE` (the guard branches on the running task's **kind**). One slot, one synchronous
+  claim, one awaited handoff ⇒ builder and chat never call `chatStream` concurrently.
+- **Per-node transaction with ROLLBACK [H11/M8]:** the repo had **zero** `BEGIN/COMMIT` and `node:sqlite`
+  has no `.transaction()` helper; the build introduces an explicit `try { BEGIN; inserts; COMMIT } catch
+  { ROLLBACK; rethrow }` scoped to one writer. The `generate`/embed `await`s happen **outside** `BEGIN`
+  (the transaction body is synchronous). The `ROLLBACK` is mandatory: one `DatabaseSync` is shared with
+  chat **and the concurrent import loop**, so a thrown insert that left `BEGIN` open would poison the
+  next writer. Finalize is a single atomic `UPDATE … tree_status='ready'`.
+- **Abort on lock/quit [M9]:** `lockWorkspace`/`will-quit` call `docTasks.abortActiveBuild()` (aborts the
+  task controller AND **rejects** the parked `reacquire`) **before** the sidecar teardown, so a
+  multi-minute build doesn't thrash the CPU while the vault re-encrypts. **Model switch [M12]:** the
+  build is pinned to `tree_meta.modelId`; resume restarts (not resumes) on a model change to avoid a
+  mixed-model tree (the warm cache keeps the restart cheap).
+- **Resume = discard + rebuild** from the warm cache (never half-wired parent pointers). DB-only writer
+  ⇒ lease-free (L1). Generated docs are skipped (M6). The **`extract` pass (§14.5) is the second yielding
+  build** — same arbiter handshake, cancel, and lock discipline.
+
+### 14.4 Coverage, provenance, tiers (plan §4.5, C1/L2/M1/M2)
+
+[`coverage.ts`](../apps/desktop/src/main/services/analysis/coverage.ts) is a pure DB reader (no model
+calls). `reachableLeafChunkIds` walks `tree_edges` root→leaf **chunks**; `documentLeafProvenance` turns
+those leaf SOURCE chunks into `[Sn]` `Citation[]` (**M2 — node summaries are derived context, NEVER
+citations**). `documentCoverage` reports two **separate** honest statements — **breadth** (reachable
+leaves ÷ chunk count; 100% only when `tree_status='ready'`, never while building/stale/pending — C1) and
+**depth/tier** (a Tier-1 root is abstractive/lossy — breadth ≠ fidelity, L2). **Tiers** in `runSummary`
+(`summarizeFromTree`, selected via the `summary` task `params.tier`; no-arg = Tier 1, unchanged):
+**Tier 1** = stored root verbatim (**0** calls, M1 — the one-click summary serves the ready tree root
+with `truncated:false`); **Tier 2** = one reduce over the root's children; **Tier 3** = all level-1
+nodes reduced in batches bounded by **node count**, not document size. All tiers cover the whole document.
+The renderer surface (`CoverageMeter`/`TierMenu`, the PreviewModal meter+selector+provenance, the chat
+"most relevant passages" relevance label, the "Build deep index"/"Re-index first" row action) honours the
+forbidden-UI-words policy: "deeply indexed"/"sections"/"passages", never chunk/node/tree/vector jargon.
+
+### 14.5 Structured extract-then-aggregate + the task router (plan §4.2/§3.3/§4.4, H7/H1/M3/M7)
+
+`list every X / how many` moves **off** top-k relevance onto a precomputed, provenance-backed SQL
+aggregation answered at **zero query-time model calls** — exhaustive **over indexed sections**, never
+"complete" (H7).
+- **Schema:** `extraction_records` (one item row per surfaced item + one `__scan__` marker row/chunk
+  recording `ok`/`unparsed`); `chunk_id` **FK ON DELETE CASCADE** ⇒ re-index self-invalidates (H1, a
+  free win the tree's polymorphic edges cannot have). `documents.extract_status` mirrors `tree_status`;
+  `reconcileStuckExtracts` mirrors the tree reconcile.
+- **Pass** ([`extract.ts`](../apps/desktop/src/main/services/analysis/extract.ts)): the **second**
+  yielding build — one `generate`/chunk over the fixed v1 type set (`generic|date|amount|party|
+  obligation`), strict JSON-array prompt at temp 0, tolerant `parseExtraction` + retry-once, then an
+  `unparsed` marker (the chunk is **surfaced, never dropped** — H7); same arbiter/cancel/lock discipline
+  + per-chunk `try{BEGIN…COMMIT}catch{ROLLBACK}` (H11); per-`(chunk_id, content_hash)` resume cache = **0**
+  calls on re-run. Gated on `fully_chunked` (C4). Manual-only (not auto-enqueued at import — avoids
+  surprise CPU spend).
+- **Aggregate:** `aggregateExtractions` GROUPs BY `normalized_value` through the shared
+  `buildScopeFilter('document_id')` (M3 — membership/id UNION + archived exclusion), **0** model calls;
+  returns items+counts+source-chunk provenance + scanned/total/unparsed + `fullyChunked`.
+- **Router** ([`router.ts`](../apps/desktop/src/main/services/analysis/router.ts), pure): EN+DE
+  classification (list/every/each/how many/count + jede/alle/wie viele/sämtliche/liste/zähl), fixed
+  precedence **explicit-button > compare(2 docs) > coverage-extract > tree-summary > relevance** (M7),
+  closed-vocab→type synonym map; **low-confidence / no-extract-data / compare-without-2-docs → labelled
+  relevance** (never an empty "no items" or a false "complete"). The `rag:ask` wiring streams the
+  deterministic listing ([`listing-answer.ts`](../apps/desktop/src/main/services/analysis/listing-answer.ts))
+  for a mapped pre-extracted type; everything else falls through to the existing relevance path
+  **byte-unchanged**. An unmapped/ad-hoc "{X}" falls back to labelled relevance in v1 (no live full-scan —
+  deferred), so the 0-call completeness claim is only ever made for a mapped type.
+
+### 14.6 Symmetric compare + lazy node vectors (Phase 4, plan §4.3/§3.1, H4/H5/H8/L6)
+
+Node vectors are **NULL** after the Phase-1 build; **Phase 4 — symmetric compare — is their first and
+only consumer**, so they are embedded **lazily** here, the first time a compare needs a tree's nodes.
+[`compare.ts`](../apps/desktop/src/main/services/doctasks/compare.ts) now distinguishes three modes:
+- **(a)** both full texts fit one pass — the existing single call over both, already symmetric.
+- **(c) symmetric both-trees** — when BOTH docs have a `ready` tree under the same active embedder AND
+  the smaller doc has ≤ `SYMMETRIC_COMPARE_CALL_CEILING` (24) level-1 sections. Align each tree's
+  **level-1 nodes** as non-overlapping sections by **node-vector cosine** (`alignNodes`, **greedy
+  mutual-best-match** with a **swap-invariant** tie-break — the canonical pair key — above
+  `SYMMETRIC_MATCH_MIN_SCORE`), diff each aligned pair with one `generate` call (Same/Different/Only-A/
+  Only-B), attribute unmatched-A→Only-A and unmatched-B→Only-B **with no model call** (their node
+  summaries are fed as notes — M2, never `[Sn]` citations), then one reduce into the four-section report.
+  **Acceptance — the mirror property:** swapping A and B yields the mirror-image diff (Only-A ↔ Only-B
+  swap; Same/Different stable). The diff/reduce live in the manager (`runCompareSymmetricTrees`); the
+  **pure `alignNodes`** lives in `compare.ts` so the mirror is unit-testable without the model.
+- **(b) asymmetric A-driven** (the existing section-matched map-reduce over `VectorIndex`-scoped doc-B
+  neighbours) — the labelled fallback when the two docs are **not** both deeply indexed. The materialized
+  report now carries `compareAsymmetricNotice` ("one-directional — may under-report content found only in
+  B; deeply index both for a complete two-way comparison"). v1 does **not** auto-build the missing tree —
+  it falls back, labelled, and the user has the per-doc "Build deep index" action (the default; flagged).
+
+**Lazy node embeddings + the H5 guard** ([`node-vectors.ts`](../apps/desktop/src/main/services/analysis/node-vectors.ts)):
+`ensureNodeEmbeddings(db, documentId, embedder)` embeds each node's `summary_text` on the **CPU embedder
+sidecar** (`--device none`, **not** the chat slot) in one batch, reusing the exact `encodeVector` Float32
+encoding, stores the raw LE blob in `tree_nodes.embedding_blob`/`dimensions`/`embedding_model_id`, and
+writes the vector back to `summary_cache` so a **rebuild refills from the cache** (0 sidecar calls — the
+rebuild mints fresh NULL-vector rows with the same `content_hash`). It is **scoped by
+`embedding_model_id`**: a node under a *different* embedder (mock↔real / model swap) is **re-embedded**
+under the active one — a mixed-embedder alignment **never silently happens** (H5); it stamps
+`tree_meta_json.embeddingModelId`. The pass runs **inside** the (non-yielding) compare DocTask, so it is
+still one model job at a time (chat is refused during compare) — **decision (c): folded into `runCompare`,
+not its own DocTaskKind**. The node-cosine primitives (`nodeVectorSearch`/`loadNodeVectors`) read **only
+`tree_nodes`** — never the chunk `embeddings` table — so citation-grade chunk retrieval is untouched
+(§3.6); they are **not** `VectorIndex`. The compare in-document notices (`compareAsymmetricNotice`,
+`compareTruncationNotice`, `compareAttributionLine`) stay **English literals** by the existing
+`compare.ts` precedent (the report body itself is in the documents' language — a D-L7 candidate, not a
+new i18n key).
+
+### 14.7 Storage/scan sizing + offline/privacy invariants (plan §3.6)
+
+Per fully-built doc: ≈ `chunks/4` node rows (≈250 for 1000 chunks), one node vector each **once Phase 4
+embeds them** (384×4 B ≈ 1.5 KB → ~0.4 MB; NULL before that), plus deduped `summary_cache` entries and N
+`extraction_records` — all bounded by `MAX_CHUNKS_PER_DOCUMENT`. Node vectors live in `tree_nodes`,
+**out of** the chunk `embeddings` linear scan, so ordinary RAG retrieval is unaffected; the node-cosine
+helper scans one document's nodes at a time. No new long-context single-shot path; every call stays
+within 4k–8k. The embedder is a **separate CPU process** from chat. Strict single-model-job, fully
+offline, no telemetry hold throughout.
+
+### 14.8 Deferred (not built in v1)
+
+The collection-level "tree of trees" (`tree_nodes.scope_key` reserved); a live full-scan extract for an
+**unmapped** ad-hoc "{X}" type; semi-global QA injecting upper-level node summaries as derived context
+(the router hook exists; node summaries would stay labelled "background", never `[Sn]`); node vectors in
+ordinary chunk retrieval/citations (deliberately excluded). A symmetric compare of two docs whose smaller
+side exceeds the 24-section ceiling falls back to the labelled asymmetric mode (b).

@@ -136,7 +136,7 @@ CREATE TABLE IF NOT EXISTS conversation_documents (
 CREATE INDEX IF NOT EXISTS idx_convdoc_conversation ON conversation_documents(conversation_id);
 CREATE INDEX IF NOT EXISTS idx_convdoc_document ON conversation_documents(document_id);
 
--- Whole-document analysis (docs/whole-document-analysis-plan.md §3.1). A persistent
+-- Whole-document analysis (docs/rag-design.md §14.2 — analysis design record). A persistent
 -- hierarchical summary tree (RAPTOR-lite) per document: level-1 nodes summarize groups of
 -- chunks, level-2+ summarize lower nodes, up to one root. Built at ingest time so a
 -- whole-document summary is a cheap read. Node summaries are CONTENT — never logged/audited.

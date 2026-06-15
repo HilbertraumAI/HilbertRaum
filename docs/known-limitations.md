@@ -242,13 +242,17 @@ password recovery — are documented in
 
 ## Document comparison (Phase 35, wave-3 plan §8)
 
-- **Section-matched comparison is A-driven (accepted asymmetry).** When two documents are
-  too long to compare in full, each section of document A is matched with the most
-  RELATED excerpts of document B (stored vectors, no new index). That direction makes
-  "only in A" findings reliable, but content that exists **only in document B** is seen
-  only when it happens to be retrieved as a neighbor — it can be missed. The reduce is
-  instructed to report only what the per-section notes support. A symmetric second pass
-  would double the model calls; revisit with evidence.
+- **Section-matched comparison is A-driven (asymmetric) UNLESS both documents are deeply
+  indexed.** When two documents are too long to compare in full AND both have a ready deep
+  index (and the smaller has ≤ 24 summary sections), the comparison is now **symmetric**:
+  each document's summary sections are aligned by similarity and diffed pair-by-pair, so
+  swapping A and B mirrors the result (rag-design §14.6). Otherwise it falls back to the
+  A-driven path — each section of document A is matched with the most RELATED excerpts of
+  document B (stored vectors, no new index) — which makes "only in A" findings reliable but
+  can MISS content that exists **only in document B**. That fallback now carries a visible
+  "one-directional — deeply index both for a complete two-way comparison" notice in the
+  report. (The symmetric path lazily embeds each tree's summary sections on the CPU embedder
+  sidecar the first time — once, then cached.)
 - **The report covers the BEGINNING of document A when it is very long.** The map ceiling
   (12 calls, the summary's bounded-latency rationale) caps coverage; the report itself
   carries a visible notice when that happens. Both documents stay fully searchable.

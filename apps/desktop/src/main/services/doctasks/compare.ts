@@ -1,5 +1,6 @@
 import { extname } from 'node:path'
 import { approxTokenCount, windowByTokens } from '../ingestion/chunker'
+import { cosineSimilarity } from '../embeddings'
 import { SUMMARY_TOKENS_PER_WORD } from './summary'
 
 // Compare window math + templates (split out of the former monolithic doctasks.ts —
@@ -13,6 +14,14 @@ import { SUMMARY_TOKENS_PER_WORD } from './summary'
 //       chunks are retrieved via the EXISTING VectorIndex scoped to doc B (the
 //       `documentIds` scoping; the vectors are already there — no new index), each
 //       matched pair is compared (map), and one reduce merges the notes into the report.
+//       Mode (b) is A-DRIVEN ⇒ asymmetric (see the honesty note below).
+//   (c) symmetric both-trees compare (Phase 4, plan §4.3, H8) — when BOTH documents have a
+//       ready deep index, align their level-1 summary SECTIONS by node-vector cosine
+//       (`alignNodes`, greedy mutual-best-match with a SWAP-INVARIANT tie-break), diff each
+//       aligned pair, and attribute unmatched sections to Only-A / Only-B. Swapping A and B
+//       yields the mirror-image report — the property mode (b) cannot give. The manager
+//       embeds the nodes lazily on first use (`ensureNodeEmbeddings`); the diff/reduce live
+//       in the manager. The pure alignment lives here so it is unit-testable for the mirror.
 //
 // Mode-(a) input: like the translation, mode (a) reads the parser's SEGMENTS
 // re-extracted from the stored copies — NOT the stored chunks. Two reasons:
@@ -270,4 +279,137 @@ export function compareDocumentTitle(titleA: string, titleB: string): string {
     return (ext ? t.slice(0, -ext.length) : t).trim() || 'document'
   }
   return `Comparison: ${base(titleA)} vs ${base(titleB)}.md`
+}
+
+// ---------------------------------------------------------------------------------------
+// Mode (c) — symmetric both-trees compare (Phase 4, plan §4.3 / H4 / H8). Pure pieces here;
+// the lazy node-embed + diff/reduce orchestration lives in the manager (it needs the runtime).
+// ---------------------------------------------------------------------------------------
+
+/**
+ * Cosine floor for two summary sections to count as the "same" aligned section. Below it a
+ * candidate pair is dropped (the sections are about different things → Only-A / Only-B). With
+ * the deterministic mock embedder, identical sections score 1.0 and unrelated ones score near
+ * 0, so 0.5 cleanly separates matched from unmatched in tests; on the real E5 embedder it is a
+ * conservative "clearly related" bar.
+ */
+export const SYMMETRIC_MATCH_MIN_SCORE = 0.5
+
+/**
+ * Hard ceiling on the number of aligned-section diff calls a symmetric compare will make
+ * (keeps the both-trees path CPU-bounded on weak hardware — one model job at a time). When the
+ * smaller document has more level-1 sections than this, the manager falls back to the labelled
+ * asymmetric mode (b) instead. The pair count never exceeds min(sectionsA, sectionsB).
+ */
+export const SYMMETRIC_COMPARE_CALL_CEILING = 24
+
+/** One node's vector for alignment (id + its L2-normalized summary vector). */
+export interface AlignNode {
+  id: string
+  vec: Float32Array
+}
+
+export interface NodeAlignment {
+  /** Mutually-best-matched A↔B section pairs (each id appears at most once). */
+  pairs: Array<{ aId: string; bId: string; score: number }>
+  /** A sections with no B counterpart ⇒ Only-A. */
+  unmatchedA: string[]
+  /** B sections with no A counterpart ⇒ Only-B. */
+  unmatchedB: string[]
+}
+
+/** Swap-invariant ordering key for a candidate pair (so swapping A/B yields the mirror). */
+function pairKey(aId: string, bId: string): string {
+  return aId < bId ? `${aId} ${bId}` : `${bId} ${aId}`
+}
+
+/**
+ * Greedy mutual-best-match alignment of two sets of node vectors by cosine similarity (plan
+ * §4.3, H4/H8). Candidate pairs at or above `minScore` are taken best-first, each node used at
+ * most once. The comparator's tie-break is the SWAP-INVARIANT canonical pair key, so swapping A
+ * and B produces the mirror alignment: the SAME matched set (with aId/bId swapped) and
+ * unmatched-A ↔ unmatched-B. Leftover nodes become unmatchedA / unmatchedB (Only-A / Only-B).
+ * Pure + deterministic ⇒ unit-testable for the mirror property without the model.
+ */
+export function alignNodes(
+  a: AlignNode[],
+  b: AlignNode[],
+  minScore: number = SYMMETRIC_MATCH_MIN_SCORE
+): NodeAlignment {
+  const candidates: Array<{ aId: string; bId: string; score: number; key: string }> = []
+  for (const an of a) {
+    for (const bn of b) {
+      if (an.vec.length !== bn.vec.length) continue
+      const score = cosineSimilarity(an.vec, bn.vec)
+      if (score >= minScore) {
+        candidates.push({ aId: an.id, bId: bn.id, score, key: pairKey(an.id, bn.id) })
+      }
+    }
+  }
+  candidates.sort((x, y) => y.score - x.score || (x.key < y.key ? -1 : x.key > y.key ? 1 : 0))
+  const usedA = new Set<string>()
+  const usedB = new Set<string>()
+  const pairs: NodeAlignment['pairs'] = []
+  for (const c of candidates) {
+    if (usedA.has(c.aId) || usedB.has(c.bId)) continue
+    usedA.add(c.aId)
+    usedB.add(c.bId)
+    pairs.push({ aId: c.aId, bId: c.bId, score: c.score })
+  }
+  return {
+    pairs,
+    unmatchedA: a.filter((n) => !usedA.has(n.id)).map((n) => n.id),
+    unmatchedB: b.filter((n) => !usedB.has(n.id)).map((n) => n.id)
+  }
+}
+
+/** Per-pair output cap so all aligned-section notes provably fit the reduce input budget. */
+export function comparePairOutputCap(contextTokens: number, pairCount: number): number {
+  const usableInputTokens = compareBudgetWords(contextTokens) * SUMMARY_TOKENS_PER_WORD
+  return Math.max(
+    128,
+    Math.min(COMPARE_OUTPUT_TOKENS, Math.floor(usableInputTokens / Math.max(1, pairCount)))
+  )
+}
+
+/**
+ * Mode (c) map: one aligned section of A against the matching section of B, on EQUAL footing
+ * (unlike the A-driven mode-(b) pair prompt, where B is "related excerpts"). Same Same/Different/
+ * Only-A/Only-B bullet format the reduce merges mechanically.
+ */
+export function compareNodePairPrompt(
+  titleA: string,
+  titleB: string,
+  part: number,
+  total: number,
+  sectionA: string,
+  sectionB: string
+): string {
+  return (
+    `You are comparing document A ("${titleA}") with document B ("${titleB}") section by ` +
+    `section. This is aligned section ${part} of ${total}: a section of A shown with the ` +
+    'matching section of B. List your findings as short bullets, each prefixed exactly like ' +
+    'this:\n' +
+    '- Same: a fact stated by both\n' +
+    '- Different: a fact where the two versions disagree (give both versions)\n' +
+    '- Only in A: something in the section of A with no counterpart in the section of B\n' +
+    '- Only in B: something in the section of B with no counterpart in the section of A\n' +
+    'Keep names, numbers, and dates exact. Do not mention sections. Reply with ONLY the bullets.' +
+    '\n\n' +
+    `Section of document A:\n${sectionA}\n\n` +
+    `Section of document B:\n${sectionB}`
+  )
+}
+
+/**
+ * The honesty label prepended to a mode-(b) ASYMMETRIC comparison (the two documents are not
+ * BOTH deeply indexed, so the pairing is A-driven and "only in B" is structurally weaker —
+ * H8). Human, jargon-free copy ("deeply index" is the user-facing name for a ready tree).
+ */
+export function compareAsymmetricNotice(titleB: string): string {
+  return (
+    '> ⚠ This comparison is one-directional — it may under-report content found only in ' +
+    `"${titleB}". For a complete two-way comparison, deeply index both documents first, ` +
+    'then compare again.'
+  )
 }

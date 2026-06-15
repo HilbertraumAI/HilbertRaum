@@ -39,6 +39,7 @@ import { ModelSlotArbiter } from '../analysis/model-slot-arbiter'
 import { buildTree } from '../analysis/tree-build'
 import { extractDocument } from '../analysis/extract'
 import { maxTreeLevel, nodeSummariesAtLevel } from '../analysis/coverage'
+import { ensureNodeEmbeddings, loadNodeVectors } from '../analysis/node-vectors'
 import type { AuditRecorder } from '../audit'
 import { log } from '../logging'
 import {
@@ -74,6 +75,11 @@ import {
   compareReducePrompt,
   compareAttributionLine,
   compareTruncationNotice,
+  compareAsymmetricNotice,
+  compareNodePairPrompt,
+  comparePairOutputCap,
+  alignNodes,
+  SYMMETRIC_COMPARE_CALL_CEILING,
   compareDocumentTitle
 } from './compare'
 
@@ -1017,8 +1023,9 @@ export class DocTaskManager {
 
     let report: string
     let truncated = false
+    let asymmetric = false
     if (compareFitsSinglePass(approxTokenCount(textA), approxTokenCount(textB), contextTokens)) {
-      // Mode (a): one structured-comparison call over both full texts.
+      // Mode (a): one structured-comparison call over both full texts — already symmetric.
       task.status.progress.stepsTotal = 2
       report = await this.generate(
         runtime,
@@ -1031,15 +1038,28 @@ export class DocTaskManager {
       if (report.length === 0) throw new Error(tMain('main.task.genericFailure'))
       task.status.progress.stepsDone = 1
     } else {
-      const sectionMatched = await this.runCompareSectionMatched(task, runtime, docA, docB)
-      report = sectionMatched.report
-      truncated = sectionMatched.truncated
+      // Large docs. Prefer the SYMMETRIC both-trees path when both documents are deeply
+      // indexed (plan §4.3, H8): align level-1 sections by node-vector cosine and diff each
+      // pair, so swapping A/B mirrors. Otherwise fall back to the A-driven mode (b), LABELLED
+      // asymmetric (it may under-report content unique to B — the existing honesty note).
+      const symmetric = this.bothTreesReadyForSymmetric(idA, idB)
+        ? await this.runCompareSymmetricTrees(task, runtime, docA, docB)
+        : null
+      if (symmetric) {
+        report = symmetric.report
+      } else {
+        const sectionMatched = await this.runCompareSectionMatched(task, runtime, docA, docB)
+        report = sectionMatched.report
+        truncated = sectionMatched.truncated
+        asymmetric = true
+      }
     }
 
-    // Materialize: attribution + (honest) truncation notice + report.
+    // Materialize: attribution + (honest) asymmetric/truncation notices + report.
     if (signal.aborted) throw new DOMException('Document task cancelled', 'AbortError')
     const markdown =
       `> ${compareAttributionLine(runtime.modelId)}\n\n` +
+      (asymmetric ? `${compareAsymmetricNotice(docB.title)}\n\n` : '') +
       (truncated ? `${compareTruncationNotice(docA.title)}\n\n` : '') +
       `${report}\n`
     const newDocId = await this.materializeDocument(
@@ -1212,6 +1232,126 @@ export class DocTaskManager {
     if (report.length === 0) throw new Error(tMain('main.task.genericFailure'))
     task.status.progress.stepsDone += 1
     return { report, truncated: plan.truncated }
+  }
+
+  /**
+   * Both documents have a ready deep index AND the smaller one has few enough level-1
+   * sections that a symmetric pair-by-pair diff stays CPU-bounded (the pair count never
+   * exceeds the smaller section count). Gates the SYMMETRIC mode (c); otherwise compare
+   * falls back to the labelled asymmetric mode (b).
+   */
+  private bothTreesReadyForSymmetric(idA: string, idB: string): boolean {
+    const db = this.deps.getDb()
+    const ready = (id: string): boolean => {
+      const row = db.prepare('SELECT tree_status FROM documents WHERE id = ?').get(id) as
+        | { tree_status: string | null }
+        | undefined
+      return row?.tree_status === 'ready'
+    }
+    if (!ready(idA) || !ready(idB)) return false
+    const level1Count = (id: string): number =>
+      (
+        db
+          .prepare('SELECT COUNT(*) AS n FROM tree_nodes WHERE document_id = ? AND level = 1')
+          .get(id) as unknown as { n: number }
+      ).n
+    return Math.min(level1Count(idA), level1Count(idB)) <= SYMMETRIC_COMPARE_CALL_CEILING
+  }
+
+  /**
+   * Mode (c) — SYMMETRIC both-trees compare (plan §4.3, H4/H8). Lazily embeds each tree's
+   * nodes under the active embedder (the FIRST consumer of node vectors — L6; reused +
+   * H5-staleness-guarded thereafter), aligns each document's level-1 summary SECTIONS by
+   * node-vector cosine (`alignNodes`, greedy mutual-best-match with a swap-invariant
+   * tie-break), diffs every aligned pair with one `generate` call, attributes unmatched
+   * sections to Only-A / Only-B (no model call — node summaries are derived context, never
+   * `[Sn]` citations, M2), and reduces the notes into the four-section report. Swapping A/B
+   * yields the mirror-image report. Returns null to signal "not applicable — fall back to the
+   * asymmetric path" (a degenerate tree with no level-1 vectors). The lazy embed runs on the
+   * CPU embedder sidecar, NOT the chat slot, inside the (non-yielding) compare task — still
+   * one model job at a time.
+   */
+  private async runCompareSymmetricTrees(
+    task: InternalTask,
+    runtime: ModelRuntime,
+    docA: { id: string; title: string },
+    docB: { id: string; title: string }
+  ): Promise<{ report: string } | null> {
+    const db = this.deps.getDb()
+    const signal = task.controller.signal
+    const contextTokens = this.deps.getContextTokens()
+
+    // Node vectors are required; the embedder must be present (same friendly copy as mode (b)).
+    const embedder = this.deps.getIngestionDeps().embedder
+    if (!embedder) throw new Error(tMain('main.task.compareReindex'))
+
+    // Lazy node embeddings [L6] under the active embedder; re-embeds any node under a
+    // different embedder [H5]; 0 sidecar calls on the warm path.
+    await ensureNodeEmbeddings(db, docA.id, embedder, signal)
+    await ensureNodeEmbeddings(db, docB.id, embedder, signal)
+    if (signal.aborted) throw new DOMException('Document task cancelled', 'AbortError')
+
+    const aNodes = loadNodeVectors(db, docA.id, 1, embedder.id)
+    const bNodes = loadNodeVectors(db, docB.id, 1, embedder.id)
+    if (aNodes.length === 0 || bNodes.length === 0) return null // degenerate → asymmetric fallback
+
+    const alignment = alignNodes(aNodes, bNodes)
+    // Diffs + reduce + the materialize step (consistent with mode (b)'s stepsTotal accounting).
+    task.status.progress.stepsTotal = alignment.pairs.length + 2
+
+    const aById = new Map(aNodes.map((n) => [n.id, n]))
+    const bById = new Map(bNodes.map((n) => [n.id, n]))
+    const pairCap = comparePairOutputCap(contextTokens, alignment.pairs.length)
+    const oneLine = (s: string): string => s.replace(/\s+/g, ' ').trim().slice(0, 400)
+
+    const partials: string[] = []
+    let part = 0
+    for (const pair of alignment.pairs) {
+      if (signal.aborted) throw new DOMException('Document task cancelled', 'AbortError')
+      const sectionA = aById.get(pair.aId)?.summaryText ?? ''
+      const sectionB = bById.get(pair.bId)?.summaryText ?? ''
+      part += 1
+      const note = await this.generate(
+        runtime,
+        compareSystemPrompt(),
+        compareNodePairPrompt(docA.title, docB.title, part, alignment.pairs.length, sectionA, sectionB),
+        pairCap,
+        COMPARE_TEMPERATURE,
+        signal
+      )
+      if (note.length > 0) partials.push(note)
+      task.status.progress.stepsDone += 1
+    }
+    // Unmatched sections → Only-A / Only-B notes with NO model call (M2-safe: the node
+    // summary is fed as a note for the reduce, never surfaced as a citation).
+    for (const id of alignment.unmatchedA) {
+      const s = aById.get(id)?.summaryText
+      if (s && s.trim().length > 0) partials.push(`- Only in A: ${oneLine(s)}`)
+    }
+    for (const id of alignment.unmatchedB) {
+      const s = bById.get(id)?.summaryText
+      if (s && s.trim().length > 0) partials.push(`- Only in B: ${oneLine(s)}`)
+    }
+    if (partials.length === 0) throw new Error(tMain('main.task.genericFailure'))
+
+    // Belt for the reduce input (the per-pair caps already size the notes, but a model that
+    // ignores maxTokens must still not overflow the reduce call's input budget).
+    const budgetWords = compareBudgetWords(contextTokens)
+    let reduceInput = partials
+    if (partials.reduce((n, p) => n + approxTokenCount(p), 0) > budgetWords) {
+      reduceInput = [truncateToApproxTokens(partials.join('\n\n'), budgetWords)]
+    }
+    const report = await this.generate(
+      runtime,
+      compareSystemPrompt(),
+      compareReducePrompt(docA.title, docB.title, reduceInput),
+      COMPARE_OUTPUT_TOKENS,
+      COMPARE_TEMPERATURE,
+      signal
+    )
+    if (report.length === 0) throw new Error(tMain('main.task.genericFailure'))
+    task.status.progress.stepsDone += 1
+    return { report }
   }
 
   /**

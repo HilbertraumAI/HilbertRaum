@@ -6,7 +6,74 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
-_Last updated: 2026-06-15 — **Whole-document analysis — Phase 3 (structured extract-then-aggregate).**
+_Last updated: 2026-06-15 — **Whole-document analysis — Phase 4 (symmetric compare + lazy node
+embeddings) + FEATURE CLOSEOUT.** Final phase of the whole-document-analysis plan (§6 Phase 4;
+mechanisms §4.3 symmetric compare, §3.1 node vectors). Completes the feature and folds the four-phase
+plan into a §-record. **The point:** make a long-document comparison HONEST and mirror-symmetric, and
+make node vectors (stored NULL since Phase 1 — L6) earn their keep as their first and only consumer.
+**(1) Lazy node embeddings + node-cosine helper** (new
+[`services/analysis/node-vectors.ts`](apps/desktop/src/main/services/analysis/node-vectors.ts)):
+`ensureNodeEmbeddings(db, documentId, embedder)` embeds each tree node's `summary_text` on the **CPU
+embedder sidecar** (`--device none`, NOT the chat slot) in one batch, reusing the exact `encodeVector`
+LE-Float32 encoding, stores the blob in `tree_nodes.embedding_blob`/`dimensions`/`embedding_model_id`,
+and writes it back to `summary_cache` so a **rebuild refills from the cache** (0 sidecar calls — the
+rebuild mints fresh NULL-vector rows with the same `content_hash`). **Scoped by `embedding_model_id`
+[H5]:** a node under a different embedder (mock↔real / model swap) is **re-embedded** under the active
+one — a mixed-embedder alignment NEVER silently happens; stamps `tree_meta_json.embeddingModelId`.
+`nodeVectorSearch`/`loadNodeVectors` read **only `tree_nodes`** (never the chunk `embeddings` table —
+node vectors stay out of citation-grade chunk retrieval, §3.6); they are NOT `VectorIndex` [H4].
+**(2) Pure alignment** ([`doctasks/compare.ts`](apps/desktop/src/main/services/doctasks/compare.ts)):
+`alignNodes(a, b)` — **greedy mutual-best-match** by node-vector cosine with a **swap-invariant**
+tie-break (the canonical pair key) above `SYMMETRIC_MATCH_MIN_SCORE` (0.5) → pairs + unmatched-A +
+unmatched-B; pure ⇒ the **mirror property** (swap A/B ⇒ Only-A ↔ Only-B, Same/Different stable) is
+unit-tested without the model [M11]. Plus `compareNodePairPrompt` (equal-footing diff),
+`comparePairOutputCap`, `compareAsymmetricNotice`, `SYMMETRIC_COMPARE_CALL_CEILING` (24).
+**(3) Symmetric compare** ([`doctasks/manager.ts`](apps/desktop/src/main/services/doctasks/manager.ts)):
+`runCompare` now picks a mode — **(a)** single-pass (already symmetric, unchanged); **(c)
+`runCompareSymmetricTrees`** when BOTH docs have a `ready` tree under the active embedder AND the smaller
+has ≤ ceiling level-1 sections (`bothTreesReadyForSymmetric`): lazily embed both trees' nodes, align
+level-1 sections, diff each pair with one `generate`, attribute unmatched sections to Only-A/Only-B with
+NO model call (node summaries fed as notes — M2, never `[Sn]` citations), reduce into the four-section
+report; **(b)** the existing A-driven section-matched map-reduce as the LABELLED asymmetric fallback
+(`compareAsymmetricNotice` materialized into the report when the two docs aren't both deeply indexed —
+H8). The node-embed pass runs INSIDE the (non-yielding) compare DocTask, so it's still one model job at
+a time (chat is refused during compare). **Data contracts (now real):** `tree_nodes.embedding_blob`/
+`dimensions`/`embedding_model_id` columns are POPULATED (were NULL since Phase 1); `tree_meta_json.
+embeddingModelId` records the active embedder for the staleness guard; the node-cosine helper + the
+symmetric compare strategy + the embedder-staleness re-embed are the new machinery.
+**Decisions flagged (not silently made):** (a) **lazy-embed on first compare**, not an explicit
+"prepare compare" action (Q-default); (b) **fall back to the labelled asymmetric mode (b)** when a tree
+is missing, offering the existing per-doc "Build deep index" action rather than auto-building or
+requiring it (Q4-default); (c) the node-embed pass is **folded into `runCompare`**, NOT its own
+DocTaskKind (it's a sidecar embed, not a chat-slot job; the compare task already serializes). The compare
+in-document notices stay **English literals** (the existing `compareTruncationNotice`/`compareAttributionLine`
+precedent — the report body itself is in the documents' language; a D-L7 candidate, NOT a new i18n key,
+so EN/DE parity is untouched). **NOT built (deferred):** the collection "tree of trees"; a live full-scan
+for unmapped extract types; semi-global QA (node summaries as derived context); node vectors in chunk
+retrieval/citations; a symmetric compare above the 24-section ceiling (→ labelled asymmetric). **Tests:**
+typecheck clean, build OK, `npm test` **1345 passed / 25 skipped** (+12: unit
+[`node-align.test.ts`](apps/desktop/tests/unit/node-align.test.ts) — alignNodes identical→pair/orthogonal→
+unmatched, the **mirror** property incl. tied scores [swap-invariant tie-break], match-floor + dim-mismatch
+skip, `comparePairOutputCap` bounds; integration
+[`whole-doc-compare.test.ts`](apps/desktop/tests/integration/whole-doc-compare.test.ts) — symmetric path
+taken + node vectors populated under the active embedder = node count, second compare reuses [0 extra
+node-embeds], rebuild refills from `summary_cache` [0 sidecar], H5 re-embed under a NEW embedder [never a
+silent empty align], labelled asymmetric fallback reached only without both trees, node vectors persist +
+decode after a DB reopen [whole-file-encrypted round-trip]). No version bump, no schema change (Phase 1's
+nullable node-vector columns suffice). **FEATURE CLOSEOUT (doc-lifecycle):** the whole four-phase
+`docs/whole-document-analysis-plan.md` is condensed into **[`docs/rag-design.md`](docs/rag-design.md) §14
+(analysis design record, §14.1–§14.8)** and the plan file is **deleted** (full original incl. all three
+audit passes: `git show 4071685:docs/whole-document-analysis-plan.md`). §14.x anchors are stable; the two
+in-code "plan §x" path pointers ([`db.ts`](apps/desktop/src/main/services/db.ts) → §14.2,
+[`whole-doc-analysis.test.ts`](apps/desktop/tests/integration/whole-doc-analysis.test.ts) → §14.1–§14.3)
+are repointed (inline "plan §x" comments resolve via git history, per the doc-org precedent);
+[`known-limitations.md`](docs/known-limitations.md) compare entry updated (symmetric-when-both-deeply-
+indexed, else labelled one-directional). **Risks / next:** the symmetric path is O(sections) `generate`
+calls (bounded by the 24-section ceiling → labelled asymmetric above it) — a heavy but user-initiated
+background task on weak CPUs; the mock embedder is structure-only so semantic diff quality is a manual/
+PAID smoke, not the mock suite. **The whole-document-analysis feature is COMPLETE (Phases 1–4 shipped).**_
+
+_(prior) 2026-06-15 — **Whole-document analysis — Phase 3 (structured extract-then-aggregate).**
 Third phase of [`docs/whole-document-analysis-plan.md`](docs/whole-document-analysis-plan.md) (§6 Phase 3;
 mechanisms §3.3 schema, §4.2 extract+aggregate, §4.4 router, §5.1 IPC). Moves "list every X / how many"
 off top-k relevance and onto a precomputed, provenance-backed SQL aggregation answered at **zero
