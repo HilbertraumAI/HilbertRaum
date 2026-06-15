@@ -403,6 +403,14 @@ let isShuttingDown = false
  * fire-and-forget would let Electron tear down mid-kill and orphan the children.
  */
 async function shutdown(): Promise<void> {
+  // Abort an in-flight deep-index build before stopping the sidecars (plan §4.1 M9): it is
+  // not in inFlightStreams, so nothing else would stop it, and it would keep using the
+  // runtime as it is torn down. Leaves the tree resumable (reconcileStuckTrees on relaunch).
+  try {
+    ctx?.docTasks?.abortActiveBuild()
+  } catch {
+    /* best-effort */
+  }
   try {
     await Promise.allSettled([
       ctx?.runtime.stop() ?? Promise.resolve(),

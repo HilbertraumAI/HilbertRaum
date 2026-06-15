@@ -6,7 +6,69 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
-_Last updated: 2026-06-15 — **Diagnostics copy/save + download resilience (beta-tester
+_Last updated: 2026-06-15 — **Whole-document analysis — Phase 1 (cap honesty + ingest-time
+summary tree).** First phase of [`docs/whole-document-analysis-plan.md`](docs/whole-document-analysis-plan.md)
+(§6 Phase 1; mechanisms §3.1–§3.5, §4.1, §5.1). Moves whole-document coverage from query time
+to ingest time via a persistent hierarchical summary tree (RAPTOR-lite), and makes the
+1 000-chunk cap HONEST. Offline, one model job at a time, node vectors deferred (NULL) to Phase 4.
+**(1) Cap honesty [C1/C2/C4/M13].** New single source of truth `MAX_CHUNKS_PER_DOCUMENT`
+([`chunker.ts`](apps/desktop/src/main/services/ingestion/chunker.ts)); `processDocument`
+([`ingestion/index.ts`](apps/desktop/src/main/services/ingestion/index.ts)) now chunks with
+`maxChunks = cap + 1` and **rejects an over-cap document** with a persist-canonical
+`main.ingest.tooManyChunks` **BEFORE** the destructive `DELETE FROM chunks` (M13 — a re-index of
+an over-cap doc keeps its existing searchable chunks; the gate fails closed), and stamps a
+`documents.fully_chunked` marker at the ONE indexing-success site (every path funnels through it —
+C4), so "the stored chunks ARE the whole document" is provable. A legacy `fully_chunked IS NULL`
+doc must re-index before any deep index / 100 %-coverage. **(2) Schema** ([`db.ts`](apps/desktop/src/main/services/db.ts)):
+additive `tree_nodes` / `tree_edges` (polymorphic `child_id`, NO FK to chunks) / `summary_cache`
+tables in `SCHEMA`; `documents.tree_status` / `tree_meta_json` / `fully_chunked` columns via
+`ensureColumn`; `reconcileStuckTrees` (mirror of `reconcileStuckDocuments`, flips a stuck
+`building` → `pending`); **tree teardown** in the chunk-replacement block (`DELETE FROM tree_nodes`,
+edges cascade via `parent_id`; `tree_status` → `stale` when a tree existed — H1/H2). Everything
+inherits whole-file encryption; node summaries / cache are CONTENT (never logged/audited).
+**(3) Model-slot arbiter [H9/H10/M9]** (new [`services/analysis/model-slot-arbiter.ts`](apps/desktop/src/main/services/analysis/model-slot-arbiter.ts)):
+the single in-process owner of the chat runtime slot for a YIELDING build — `shouldYield`/`reacquire`
+(builder PARKS, does NOT return) / `acquireForChat` (chat requests a pause, awaits the handoff,
+gets a release fn) / `abort` (rejects the parked reacquire on cancel/lock/quit). **(4) Yielding
+per-node build** (new [`services/analysis/tree-build.ts`](apps/desktop/src/main/services/analysis/tree-build.ts)):
+packs chunks → summarizes each group into one fresh node → recurses to one root; **one
+`try{BEGIN…COMMIT}catch{ROLLBACK;rethrow}` per node** (H11 — a thrown insert never poisons the
+shared connection); summary text from the content cache keyed `(content_hash, model_id)` (C3 — a
+rebuild/resume over a warm cache costs **0** chat calls; node identity is a fresh row per
+position so boilerplate can't collapse the tree); **node vectors NULL** (L6 — embedded lazily in
+Phase 4); resume = discard partial tree + rebuild from cache; model pinned via `tree_meta.modelId`
+(M12). **(5) DocTaskManager** ([`doctasks/manager.ts`](apps/desktop/src/main/services/doctasks/manager.ts)):
+new `tree` DocTaskKind (validates `fully_chunked`), `runTreeBuild` (registers/unregisters with the
+arbiter), `isYieldingBuildActive` / `acquireChatSlot` / `abortActiveBuild`, and
+`maybeEnqueueTreeBuild` (auto-offer, size-gated on `planSummaryWindows().truncated`, runtime-gated →
+`pending`). `runSummary` now **serves the ready tree root verbatim** (`truncated:false`, 0 extra
+calls — M1) and falls back to the capped map-reduce when there is no tree. **(6) Chat handoff**
+([`chat-stream.ts`](apps/desktop/src/main/ipc/chat-stream.ts) now **async** + branches on the
+running task's kind; `withChatStream` acquires the slot before any model call and releases it in
+`finally`; callers `registerChatIpc`/`registerRagIpc` await it). Lock/quit
+([`registerWorkspaceIpc.ts`](apps/desktop/src/main/ipc/registerWorkspaceIpc.ts), `index.ts`
+`shutdown`) call `abortActiveBuild()` before the sidecar teardown (M9); `listDocuments`
+([`registerDocsIpc.ts`](apps/desktop/src/main/ipc/registerDocsIpc.ts)) reconciles stuck trees when
+no task is live, and import/reindex call `maybeEnqueueTreeBuild`. **i18n:** `main.ingest.tooManyChunks`
++ `docs.task.treeBusy`/`treeBusyTitle` (EN+DE, type-enforced parity; "deep index" is the user word —
+no chunk/node/tree jargon; German flagged for the standing **D-L7** review); `tooManyChunks` added
+to the D-L4 display map. **Docs:** plan status banner → "Phase 1 shipped"; `known-limitations.md`
+(over-cap rejection behavior change + deep-index coverage note). **NOT built (Phases 2–4):** the
+coverage-meter UI, `extraction_records`/`extract.ts`, symmetric compare, node embeddings.
+**Tests:** typecheck clean, build OK, `npm test` **1284 passed / 25 skipped** (+21: 6 unit
+[`model-slot-arbiter.test.ts`](apps/desktop/tests/unit/model-slot-arbiter.test.ts) — pause/resume,
+last-chat-resumes, abort-rejects, no-hang-on-finish, idempotent release; 15 integration
+[`whole-doc-analysis.test.ts`](apps/desktop/tests/integration/whole-doc-analysis.test.ts) — over-cap
+rejection + never-partial, M13 re-index-fails-closed, `fully_chunked`, structural root→every-leaf
+incl. the last chunk [M11], tree-first summary [M1], tree-less fallback, warm-cache rebuild = 0
+calls + re-index→stale→cache reuse despite chunk-id churn [C3/H1/H2], C4 legacy gate, H11
+ROLLBACK + connection survives, H10 chat-pauses-build-resumes-in-session + cancel-rejects-parked,
+DB-reopen persistence, reconcileStuckTrees). No version bump. **Risks / next:** auto-enqueue runs
+a multi-minute serialized build on weak CPUs (size-gated to docs the capped summary can't cover);
+the chat↔chat double-send race in the now-async guard is theoretical (UI prevents it) and can't
+cause two model jobs; **Next:** Phase 2 — `CoverageInfo` + the coverage-meter/tier/provenance UI._
+
+_(prior) 2026-06-15 — **Diagnostics copy/save + download resilience (beta-tester
 feedback).** Three small improvements, rebased on top of the 0.1.21 document-organization wave.
 **(1) Copy buttons** on the Settings → "Diagnostics (advanced)" cards: **App & runtime**, **Hardware
 benchmark**, and **Logs** each gained a **Copy** button that writes a plain-text rendering of exactly

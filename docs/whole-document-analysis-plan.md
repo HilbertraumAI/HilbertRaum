@@ -1,8 +1,15 @@
 # Whole-document analysis beyond the context window — implementation plan
 
-> **Status: PLAN (working paper). Not yet implemented.** Per `CLAUDE.md` doc-lifecycle,
-> this file lives only while the work is open; once shipped it condenses into §-records in
-> `docs/rag-design.md` / `docs/architecture.md` and is deleted.
+> **Status: PLAN (working paper). Phase 1 SHIPPED (2026-06-15); Phases 2–4 open.** Per
+> `CLAUDE.md` doc-lifecycle, this file lives only while the work is open; once the WHOLE
+> feature ships it condenses into §-records in `docs/rag-design.md` / `docs/architecture.md`
+> and is deleted. Phase-1 record: cap honesty (C1/C2/C4/M13), the `tree_nodes`/`tree_edges`/
+> `summary_cache` schema, the model-slot **arbiter** (`services/analysis/model-slot-arbiter.ts`),
+> the yielding per-node build (`services/analysis/tree-build.ts`), the `tree` DocTask kind +
+> `maybeEnqueueTreeBuild`/`abortActiveBuild`, the async chat handoff (`chat-stream.ts`), and the
+> tree-first `runSummary` (M1) are all in `apps/desktop`; see `BUILD_STATE.md` for the entry.
+> Phase 2 (coverage meter UI), Phase 3 (`extraction_records`/`extract.ts`), and Phase 4
+> (symmetric compare + node embeddings) remain unbuilt — node vectors are stored NULL (L6).
 >
 > Goal: first-class analysis of documents (and collections) that **vastly exceed** the
 > 4k–8k model context — covering the **whole** document, faithfully and honestly — by

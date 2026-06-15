@@ -220,10 +220,12 @@ export const de: Record<keyof typeof en, string> = {
   'docs.task.translationBusy': 'Übersetzt…',
   'docs.task.compareBusy': 'Vergleicht…',
   'docs.task.ocrBusy': 'Liest den Scan…',
+  'docs.task.treeBusy': 'Erstellt einen Tiefenindex…',
   'docs.task.summaryBusyTitle': 'Die Zusammenfassung wird geschrieben',
   'docs.task.translationBusyTitle': 'Die Übersetzung wird geschrieben',
   'docs.task.compareBusyTitle': 'Der Vergleich wird geschrieben',
   'docs.task.ocrBusyTitle': 'Die gescannten Seiten werden gelesen',
+  'docs.task.treeBusyTitle': 'Für das ganze Dokument wird ein Tiefenindex erstellt',
   'docs.error.noSupported': 'In dieser Auswahl wurden keine unterstützten Dokumente gefunden.',
   'docs.removedDocFallback': 'einem entfernten Dokument',
   'docs.provenance.compareBefore': 'Vergleich von ',
@@ -842,6 +844,9 @@ export const de: Record<keyof typeof en, string> = {
   'main.ingest.fileTooLarge':
     'Diese Datei ist zu groß, um sie sicher zu importieren. Teile sie in kleinere Dateien ' +
     'auf und versuche es noch einmal.',
+  'main.ingest.tooManyChunks':
+    'Dieses Dokument ist zu groß, um es vollständig zu indexieren. Teile es in kleinere ' +
+    'Dateien auf und importiere die Teile.',
   'main.ingest.parseTimeout':
     'Diese Datei hat zu lange gebraucht und wurde übersprungen. Sie ist möglicherweise ' +
     'beschädigt oder extrem groß.',

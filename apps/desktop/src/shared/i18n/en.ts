@@ -202,10 +202,12 @@ export const en = {
   'docs.task.translationBusy': 'Translating…',
   'docs.task.compareBusy': 'Comparing…',
   'docs.task.ocrBusy': 'Reading the scan…',
+  'docs.task.treeBusy': 'Building a deep index…',
   'docs.task.summaryBusyTitle': 'The summary is being written',
   'docs.task.translationBusyTitle': 'The translation is being written',
   'docs.task.compareBusyTitle': 'The comparison is being written',
   'docs.task.ocrBusyTitle': 'The scanned pages are being read',
+  'docs.task.treeBusyTitle': 'A deep index is being built for the whole document',
   'docs.error.noSupported': 'No supported documents were found in that selection.',
   'docs.removedDocFallback': 'a removed document',
   // Provenance lines render around inline <b>title</b> elements.
@@ -787,6 +789,8 @@ export const en = {
   'main.ingest.interrupted': 'Ingestion was interrupted before it finished. Re-index to try again.',
   'main.ingest.fileTooLarge':
     'This file is too large to import safely. Split it into smaller files and try again.',
+  'main.ingest.tooManyChunks':
+    'This document is too large to fully index. Split it into smaller files and import the parts.',
   'main.ingest.parseTimeout':
     'This file took too long to process and was skipped. It may be damaged or extremely large.',
   'main.rag.noContext':

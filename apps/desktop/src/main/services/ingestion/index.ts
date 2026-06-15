@@ -36,7 +36,7 @@ import {
   type ParseContext
 } from './parsers'
 import { PDF_SCAN_DETECTED_MESSAGE } from './parsers/pdf'
-import { chunkSegments } from './chunker'
+import { chunkSegments, MAX_CHUNKS_PER_DOCUMENT } from './chunker'
 import { resolveIngestionLimits, withParseTimeout, type IngestionLimits } from './limits'
 
 // Ingestion service (spec §7.7). Owns the document lifecycle:
@@ -576,13 +576,41 @@ export async function processDocument(
         )
 
     setStatus(db, documentId, 'chunking')
-    const chunks = chunkSegments(parsed.segments)
+    // Over-cap gate (whole-document-analysis plan C1/C2/M13). Chunk with cap + 1 so an
+    // over-cap document is DETECTABLE, then reject it BEFORE the destructive chunk
+    // replacement below. Failing first keeps a re-index of an over-cap document (the C4
+    // legacy-re-index flow) from deleting its existing searchable chunks and ending up
+    // `failed`/zero-chunk — the gate fails CLOSED, preserving the prior index. A document
+    // that passes is fully chunked (the whole document), recorded by `fully_chunked` on
+    // indexing success below.
+    const chunks = chunkSegments(parsed.segments, { maxChunks: MAX_CHUNKS_PER_DOCUMENT + 1 })
+    if (chunks.length > MAX_CHUNKS_PER_DOCUMENT) {
+      // Persist-canonical English (i18n record §3.3 rule 1): the catch writes it into
+      // documents.error_message; the renderer display map translates it (D-L4).
+      throw new Error(t('en', 'main.ingest.tooManyChunks'))
+    }
 
     // Replace any prior chunks (supports re-indexing) then insert fresh.
     db.prepare('DELETE FROM embeddings WHERE chunk_id IN (SELECT id FROM chunks WHERE document_id = ?)').run(
       documentId
     )
     db.prepare('DELETE FROM chunks WHERE document_id = ?').run(documentId)
+    // Tear down a now-orphaned summary tree (whole-document-analysis plan H1/H2): re-index
+    // recreates chunks with fresh ids, so the tree's polymorphic chunk edges would dangle.
+    // Deleting the nodes cascades the edges (FK on parent_id); the expensive model output
+    // survives in `summary_cache` (keyed by text, not chunk id), so the next build reuses
+    // every unchanged group. `tree_status` → 'stale' when a tree existed (UI offers a
+    // rebuild), else clear it. extraction_records self-cascade via chunk_id (Phase 3).
+    const prevTree = (
+      db.prepare('SELECT tree_status FROM documents WHERE id = ?').get(documentId) as unknown as
+        | { tree_status: string | null }
+        | undefined
+    )?.tree_status
+    db.prepare('DELETE FROM tree_nodes WHERE document_id = ?').run(documentId)
+    db.prepare('UPDATE documents SET tree_status = ? WHERE id = ?').run(
+      prevTree ? 'stale' : null,
+      documentId
+    )
 
     const insert = db.prepare(
       `INSERT INTO chunks
@@ -612,6 +640,17 @@ export async function processDocument(
     }
 
     setStatus(db, documentId, 'indexed')
+    // C4: mark the document fully chunked. This is the ONE indexing-success site (every
+    // path — import loop, reindexDocument, OCR re-ingest, materializeDocument — funnels
+    // through here), and a success now always passed the over-cap gate above, so the
+    // marker proves "the stored chunks ARE the whole document". A NULL marker means a
+    // legacy (pre-Phase-1, maybe silently truncated) index; deep-index / 100%-coverage
+    // are gated on it (a legacy doc re-indexes first, which sets it or fails over-cap).
+    db.prepare('UPDATE documents SET fully_chunked = ?, updated_at = ? WHERE id = ?').run(
+      nowIso(),
+      nowIso(),
+      documentId
+    )
     return infoOrDeleted(db, documentId)
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
@@ -979,6 +1018,25 @@ export function reconcileStuckDocuments(db: Db, beforeIso: string): number {
     )
     // Persist-canonical English (i18n record §3.3 rule 1) — display-mapped at render.
     .run(t('en', 'main.ingest.interrupted'), nowIso(), beforeIso)
+  return Number(res.changes ?? 0)
+}
+
+/**
+ * Reset summary trees left `building` by a previous run (the app was killed or the
+ * workspace locked mid-build) to `pending` so the build can resume (discard the partial
+ * tree + rebuild from the warm `summary_cache`). Mirror of `reconcileStuckDocuments`:
+ * only rows last touched BEFORE `beforeIso` are affected, so a live in-session build —
+ * which bumps `updated_at` when it persists `building` — is protected, and the caller
+ * additionally gates on "no active task" (whole-document-analysis plan §3.2/§4.1).
+ * Returns the number reset. Content-free (ids/counts only).
+ */
+export function reconcileStuckTrees(db: Db, beforeIso: string): number {
+  const res = db
+    .prepare(
+      `UPDATE documents SET tree_status = 'pending', updated_at = ?
+       WHERE tree_status = 'building' AND updated_at < ?`
+    )
+    .run(nowIso(), beforeIso)
   return Number(res.changes ?? 0)
 }
 

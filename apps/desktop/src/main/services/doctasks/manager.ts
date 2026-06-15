@@ -34,6 +34,8 @@ import { ENCRYPTED_DOC_SUFFIX, shredFile } from '../workspace-vault'
 import { decodeVector, VectorIndex } from '../embeddings'
 import { isAbortError, stripThinkBlocks } from '../chat'
 import { collectionIdsForDocument } from '../collections'
+import { ModelSlotArbiter } from '../analysis/model-slot-arbiter'
+import { buildTree } from '../analysis/tree-build'
 import type { AuditRecorder } from '../audit'
 import { log } from '../logging'
 import {
@@ -170,8 +172,101 @@ export class DocTaskManager {
   private readonly tasks = new Map<string, InternalTask>()
   private queue: string[] = []
   private runningId: string | null = null
+  /**
+   * The single model-slot owner for a YIELDING tree build (plan §4.1, H9/H10). Only a
+   * running `tree` build registers with it; chat uses it to pause+hand-off, never to race.
+   */
+  private readonly arbiter = new ModelSlotArbiter()
 
   constructor(private readonly deps: DocTaskDeps) {}
+
+  /**
+   * True while a YIELDING build (currently `tree`) is running and holds the model slot.
+   * The chat guard branches on this: a yielding build is PAUSED (chat acquires the slot
+   * via `acquireChatSlot`); any other active task makes chat refuse with DOC_TASK_BUSY.
+   */
+  isYieldingBuildActive(): boolean {
+    return this.arbiter.isBuildActive()
+  }
+
+  /**
+   * Chat side: claim the model slot before streaming. If a yielding build holds it, this
+   * requests a pause and resolves once the builder parks (worst case ≈ one node); returns
+   * a release fn the caller MUST invoke when the stream ends (it resumes the build). With
+   * no build active it resolves immediately to a no-op. Idempotent release.
+   */
+  acquireChatSlot(): Promise<() => void> {
+    return this.arbiter.acquireForChat()
+  }
+
+  /**
+   * Abort the running yielding build (workspace lock / app quit / cancel): abort its task
+   * controller AND reject the arbiter's parked `reacquire`, so a build parked awaiting a
+   * chat handoff unwinds to a resumable `tree_status='building'` instead of a hung await
+   * (plan §4.1 M9/H10). No-op when the running task is not a yielding build.
+   */
+  abortActiveBuild(): void {
+    if (!this.runningId) return
+    const task = this.tasks.get(this.runningId)
+    if (!task || task.status.kind !== 'tree') return
+    log.info('Active deep-index build aborted', { jobId: task.status.jobId })
+    task.controller.abort()
+    this.arbiter.abort()
+  }
+
+  /**
+   * Auto-enqueue a deep-index (tree) build for a freshly-indexed document when it is worth
+   * it (plan Q1/Q4/§6). Gated and fire-and-forget — never throws into the import/reindex
+   * path: skips generated docs (M6), legacy not-`fully_chunked` docs (C4), already-built/
+   * building/pending trees, and documents the cheap capped summary already covers (size
+   * gate). With a chat runtime up it enqueues a `tree` task; otherwise it records
+   * `tree_status='pending'` for a later build. The build trigger UI is Phase 2.
+   */
+  maybeEnqueueTreeBuild(documentId: string): void {
+    try {
+      const db = this.deps.getDb()
+      const doc = getDocument(db, documentId)
+      if (!doc || doc.status !== 'indexed' || doc.chunkCount === 0) return
+      if (doc.origin) return // generated work-products are excluded from the corpus (M6)
+      const row = db
+        .prepare('SELECT fully_chunked, tree_status FROM documents WHERE id = ?')
+        .get(documentId) as unknown as
+        | { fully_chunked: string | null; tree_status: string | null }
+        | undefined
+      if (!row?.fully_chunked) return // legacy/truncated — must re-index first (C4)
+      if (row.tree_status === 'ready' || row.tree_status === 'building' || row.tree_status === 'pending') {
+        return
+      }
+      // Size gate (Q4): only docs the capped one-pass summary cannot fully cover benefit
+      // from a deep index. `planSummaryWindows().truncated` is exactly "too big for the
+      // 12-window ceiling" — the silent-truncation case the tree fixes.
+      const texts = (
+        db
+          .prepare('SELECT text FROM chunks WHERE document_id = ? ORDER BY chunk_index')
+          .all(documentId) as unknown as Array<{ text: string }>
+      )
+        .map((r) => r.text)
+        .filter((t) => t.trim().length > 0)
+      if (!planSummaryWindows(texts, this.deps.getContextTokens()).truncated) return
+
+      if (!this.deps.getRuntime()) {
+        db.prepare('UPDATE documents SET tree_status = ?, updated_at = ? WHERE id = ?').run(
+          'pending',
+          new Date().toISOString(),
+          documentId
+        )
+        return
+      }
+      this.startDocTask({ kind: 'tree', documentIds: [documentId] })
+    } catch (err) {
+      // Auto-enqueue is best-effort: a refused start (chat streaming) or any error leaves
+      // the doc without a tree (the user can build it manually). Never breaks ingestion.
+      log.info('Deep-index auto-enqueue skipped', {
+        documentId,
+        reason: err instanceof Error ? err.message : String(err)
+      })
+    }
+  }
 
   /**
    * Validate + enqueue a task. Throws friendly errors for the guards (chat
@@ -180,7 +275,13 @@ export class DocTaskManager {
    */
   startDocTask(req: StartDocTaskRequest): { jobId: string } {
     const kind = req?.kind as DocTaskKind
-    if (kind !== 'summary' && kind !== 'translation' && kind !== 'compare' && kind !== 'ocr') {
+    if (
+      kind !== 'summary' &&
+      kind !== 'translation' &&
+      kind !== 'compare' &&
+      kind !== 'ocr' &&
+      kind !== 'tree'
+    ) {
       throw new Error(tMain('main.task.unknownKind'))
     }
     // Translation targets are a closed set: de | en only — a free-text language
@@ -231,6 +332,16 @@ export class DocTaskManager {
         const doc = getDocument(this.deps.getDb(), id)
         if (!doc || doc.status !== 'indexed' || doc.chunkCount === 0) {
           throw new Error(tMain('main.task.documentNotReady'))
+        }
+        // Deep-index precondition (C4): only a FULLY chunked document may be tree-built, so
+        // "100% coverage" can never be claimed over a silently-truncated legacy chunk set.
+        // A legacy (NULL marker) doc must be re-indexed first (which sets it or fails over-cap).
+        if (kind === 'tree') {
+          const row = this.deps
+            .getDb()
+            .prepare('SELECT fully_chunked FROM documents WHERE id = ?')
+            .get(id) as unknown as { fully_chunked: string | null } | undefined
+          if (!row?.fully_chunked) throw new Error(tMain('main.task.documentNotReady'))
         }
       }
     }
@@ -291,6 +402,9 @@ export class DocTaskManager {
       return
     }
     task.controller.abort()
+    // A running tree build may be PARKED on the arbiter (yielded to chat); aborting its
+    // controller alone won't unstick that await, so reject the parked reacquire too.
+    if (task.status.kind === 'tree') this.arbiter.abort()
   }
 
   /** True while a task is running or queued — the chat-side busy guard reads this. */
@@ -347,7 +461,9 @@ export class DocTaskManager {
             ? await this.runCompare(task, runtime)
             : kind === 'translation'
               ? await this.runTranslation(task, runtime)
-              : await this.runSummary(task, runtime)
+              : kind === 'tree'
+                ? await this.runTreeBuild(task, runtime)
+                : await this.runSummary(task, runtime)
       }
       task.status.state = 'done'
       task.status.resultRef = { documentId: resultId }
@@ -373,12 +489,73 @@ export class DocTaskManager {
     }
   }
 
+  /**
+   * The deep-index (tree) build: the YIELDING background job that builds the document's
+   * hierarchical summary tree (plan §4.1). Registers with the model-slot arbiter for the
+   * duration so chat can pause it between nodes and it resumes in-session. Pins the build
+   * to the current chat model (M12 — the cache is keyed by it, so a model change can't
+   * yield a mixed-model tree). DB-only writer ⇒ no vault lease (L1).
+   */
+  private async runTreeBuild(task: InternalTask, runtime: ModelRuntime): Promise<string> {
+    const documentId = task.status.documentIds[0]
+    const signal = task.controller.signal
+    this.arbiter.registerBuild(task.status.jobId)
+    try {
+      await buildTree(documentId, {
+        db: this.deps.getDb(),
+        modelId: runtime.modelId,
+        contextTokens: this.deps.getContextTokens(),
+        signal,
+        arbiter: this.arbiter,
+        jobId: task.status.jobId,
+        generate: (systemPrompt, prompt, maxTokens, temperature, sig) =>
+          this.generate(runtime, systemPrompt, prompt, maxTokens, temperature, sig),
+        onProgress: (done, total) => {
+          task.status.progress.stepsDone = done
+          task.status.progress.stepsTotal = total
+        }
+      })
+    } finally {
+      // Always release the slot ownership — on success, abort, or error — so a later chat
+      // never waits on a handoff from a build that is gone.
+      this.arbiter.unregisterBuild(task.status.jobId)
+    }
+    return documentId
+  }
+
   /** The summary task: stored chunks in, `summary_json` out. */
   private async runSummary(task: InternalTask, runtime: ModelRuntime): Promise<string> {
     const db = this.deps.getDb()
     const documentId = task.status.documentIds[0]
     const doc = getDocument(db, documentId)
     if (!doc) throw new Error(tMain('main.task.documentNotReady'))
+
+    // Tree-first (plan M1): when a deep index is ready, serve its ROOT summary verbatim —
+    // a whole-document summary at 0 extra model calls (Tier 1, Q6), `truncated:false`. The
+    // existing summary_json / PreviewModal surface is unchanged. Falls through to the capped
+    // map-reduce below when there is no ready tree (the tree-less fallback).
+    const treeRow = db
+      .prepare('SELECT tree_status, tree_meta_json FROM documents WHERE id = ?')
+      .get(documentId) as unknown as
+      | { tree_status: string | null; tree_meta_json: string | null }
+      | undefined
+    if (treeRow?.tree_status === 'ready' && treeRow.tree_meta_json) {
+      const root = db
+        .prepare('SELECT summary_text, model_id FROM tree_nodes WHERE document_id = ? AND is_root = 1 LIMIT 1')
+        .get(documentId) as unknown as { summary_text: string; model_id: string | null } | undefined
+      if (root && root.summary_text.length > 0) {
+        const summary: DocumentSummary = {
+          text: root.summary_text,
+          modelId: root.model_id ?? runtime.modelId,
+          createdAt: new Date().toISOString(),
+          truncated: false
+        }
+        setDocumentSummary(this.deps.getDb(), documentId, summary)
+        task.status.progress.stepsTotal = 1
+        task.status.progress.stepsDone = 1
+        return documentId
+      }
+    }
 
     // Input = the document's stored CHUNKS, in order (no re-parse). Adjacent chunks
     // overlap by ~80 tokens (the chunker's retrieval overlap); the slight repetition

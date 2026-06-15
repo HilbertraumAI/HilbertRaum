@@ -582,8 +582,10 @@ export interface ConversationSearchResult {
 // ---- Document tasks (wave-3 plan §6) ----
 
 /** What a document task runs over stored documents — all kinds share one engine
- * (queue, cancel, polling IPC). */
-export type DocTaskKind = 'summary' | 'translation' | 'compare' | 'ocr'
+ * (queue, cancel, polling IPC). `tree` is the whole-document-analysis deep-index build:
+ * a YIELDING background job (cedes the model slot to chat between nodes), unlike the
+ * other kinds which run to completion and refuse chat while active. */
+export type DocTaskKind = 'summary' | 'translation' | 'compare' | 'ocr' | 'tree'
 
 /**
  * Translation targets, v1: the two eval-set languages only. A free-text language

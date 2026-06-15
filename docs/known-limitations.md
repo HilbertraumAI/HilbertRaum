@@ -154,9 +154,24 @@ password recovery — are documented in
   whole document remains searchable/answerable in RAG. A smaller `contextTokens` setting
   shrinks the per-call budget and hits the ceiling sooner.
 - **Summary input is the stored chunks, not a re-parse (D25).** Adjacent chunks overlap by
-  ~80 tokens, so stitched windows repeat a little text (harmless for summarization), and
-  text beyond the 1 000-chunk ingestion cap was never chunked — so it is not summarized
-  either (it is also not searchable; the same pre-existing cap).
+  ~80 tokens, so stitched windows repeat a little text (harmless for summarization).
+- **Over-cap documents are now REJECTED at index time, not silently truncated
+  (whole-document-analysis Phase 1, C1/C2/M13 — behavior change).** A document that would
+  exceed `MAX_CHUNKS_PER_DOCUMENT` (1 000) fails with a friendly "too large to fully index —
+  split it" message (`main.ingest.tooManyChunks`) instead of indexing only its first 1 000
+  chunks. So every *indexed* document is now the WHOLE document (recorded by the
+  `fully_chunked` marker), which is what lets a deep index honestly claim full coverage.
+  Consequence: a **legacy** document indexed before Phase 1 (which may have been silently
+  truncated) carries no `fully_chunked` marker — it is re-indexed before any deep-index /
+  100 %-coverage claim, and if it is genuinely over-cap that re-index fails **closed** (the
+  doc becomes `failed`/unsearchable and must be split into parts — the cap check runs before
+  the destructive chunk replacement, so it never half-deletes a previously searchable doc).
+- **A deep index ("ready" summary tree) gives a whole-document summary; without one the
+  capped map-reduce still applies.** When a document has a built tree (`tree_status='ready'`),
+  "Summarize" serves the tree root verbatim (full coverage, `truncated:false`) at no extra
+  model call. The build is a background, *yielding* job that cedes the model slot to chat
+  between nodes; it is auto-offered for documents the capped summary can't fully cover and
+  otherwise built on request. The coverage-meter UI is a later phase.
 - **Strictly one job at a time (D26).** While a summary runs, chat is refused with a
   friendly message + a cancel option, and vice versa — the one local model serves one
   request. The R-T1 probe confirmed the pinned b9585 WOULD serve concurrent requests on

@@ -135,6 +135,64 @@ CREATE TABLE IF NOT EXISTS conversation_documents (
 );
 CREATE INDEX IF NOT EXISTS idx_convdoc_conversation ON conversation_documents(conversation_id);
 CREATE INDEX IF NOT EXISTS idx_convdoc_document ON conversation_documents(document_id);
+
+-- Whole-document analysis (docs/whole-document-analysis-plan.md §3.1). A persistent
+-- hierarchical summary tree (RAPTOR-lite) per document: level-1 nodes summarize groups of
+-- chunks, level-2+ summarize lower nodes, up to one root. Built at ingest time so a
+-- whole-document summary is a cheap read. Node summaries are CONTENT — never logged/audited.
+CREATE TABLE IF NOT EXISTS tree_nodes (
+  id TEXT PRIMARY KEY,
+  document_id TEXT NOT NULL,          -- source document (per-doc tree)
+  scope_key TEXT,                     -- reserved for a collection-level tree (NULL in per-doc v1)
+  level INTEGER NOT NULL,             -- 1 = first summary level (children are chunks); 2+ summarize nodes
+  ordinal INTEGER NOT NULL,           -- order within (document_id, level)
+  parent_id TEXT,                     -- NULL for the root
+  is_root INTEGER NOT NULL DEFAULT 0,
+  summary_text TEXT NOT NULL,
+  embedding_blob BLOB,                -- raw LE Float32 (NULL in Phase 1 — embedded lazily in Phase 4)
+  dimensions INTEGER,
+  embedding_model_id TEXT,            -- the embedder that produced embedding_blob (node search scopes by this)
+  content_hash TEXT NOT NULL,         -- sha256 over ORDERED child texts — the summary_cache key (NOT node identity)
+  model_id TEXT,                      -- chat model that produced summary_text
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE,
+  FOREIGN KEY (parent_id)  REFERENCES tree_nodes(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_tree_nodes_doc ON tree_nodes(document_id, level, ordinal);
+
+-- A node's ordered children: chunks (level-1 nodes) or lower nodes (level >= 2). child_id is
+-- polymorphic (chunks.id when child_is_chunk=1, else tree_nodes.id), so it carries NO FK to
+-- chunks — deleting chunks does NOT cascade here; re-index tears the tree down explicitly
+-- (ingestion processDocument). Edges DO cascade when their parent node is deleted.
+CREATE TABLE IF NOT EXISTS tree_edges (
+  parent_id TEXT NOT NULL,
+  child_id  TEXT NOT NULL,
+  child_is_chunk INTEGER NOT NULL,
+  ordinal INTEGER NOT NULL,
+  PRIMARY KEY (parent_id, child_id),
+  FOREIGN KEY (parent_id) REFERENCES tree_nodes(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_tree_edges_parent ON tree_edges(parent_id);
+-- Reverse lookup "which node(s) contain chunk/node X" (chunk->node provenance).
+CREATE INDEX IF NOT EXISTS idx_tree_edges_child ON tree_edges(child_id, child_is_chunk);
+
+-- Content cache (plan C3): maps the exact summarize-input text to its computed summary so a
+-- rebuild — or a different document with identical boilerplate — skips the model call. This
+-- is SEPARATE from node identity: a tree always gets one fresh tree_nodes row per structural
+-- position, so repeated content can never collapse two positions into one node. Keyed by
+-- (content_hash, model_id) so a chat-model change doesn't reuse an older model's summary. The
+-- node vector (embedding_blob) is NULL in Phase 1 (no embed at build time — plan L6). Carries
+-- no document_id; survives node/tree deletion; pruned by size/age policy, never by FK.
+CREATE TABLE IF NOT EXISTS summary_cache (
+  content_hash TEXT NOT NULL,
+  model_id TEXT NOT NULL,             -- chat model that produced summary_text
+  summary_text TEXT NOT NULL,
+  embedding_blob BLOB,                -- node vector for this summary (NULL until Phase 4)
+  embedding_model_id TEXT,
+  dimensions INTEGER,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (content_hash, model_id)
+);
 `
 
 // Additive column migrations on top of the spec §8 base schema. `CREATE TABLE IF NOT
@@ -287,6 +345,15 @@ export function openDatabase(path: string): Db {
   ensureColumn(db, 'documents', 'expires_at', 'expires_at TEXT')
   ensureColumn(db, 'conversations', 'collection_id', 'collection_id TEXT')
   ensureColumn(db, 'conversations', 'scope_v2_json', 'scope_v2_json TEXT')
+  // Whole-document analysis (plan §3.2). All nullable (the ensureColumn DDL grammar forbids
+  // DEFAULT/NOT NULL, so NULL is the sentinel, coalesced in code).
+  //   tree_status   — NULL | 'pending' | 'building' | 'ready' | 'stale' | 'failed'
+  //   tree_meta_json — { rootId, levels, leafChunkCount, builtAt, modelId, embeddingModelId }
+  //   fully_chunked — set by processDocument on every successful index (C4); NULL = legacy
+  //                   (maybe truncated) ⇒ must re-index before deep-index / 100% coverage.
+  ensureColumn(db, 'documents', 'tree_status', 'tree_status TEXT')
+  ensureColumn(db, 'documents', 'tree_meta_json', 'tree_meta_json TEXT')
+  ensureColumn(db, 'documents', 'fully_chunked', 'fully_chunked TEXT')
   ensureChunksFts(db)
   ensureMessagesFts(db)
   seedCollections(db)

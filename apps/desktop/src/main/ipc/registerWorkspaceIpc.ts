@@ -221,6 +221,11 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
     // DB is still open); the E5 embedder + reranker restart lazily on next use, and the
     // chat runtime comes back via the unlock auto-start.
     for (const controller of inFlightStreams.values()) controller.abort()
+    // A multi-minute deep-index (tree) build is NOT in inFlightStreams (doc tasks never
+    // are), so it must be aborted explicitly or it would keep calling chatStream/getDb()
+    // while the vault re-encrypts (plan §4.1 M9). Aborts the build's controller AND rejects
+    // any parked arbiter reacquire; the tree is left `building` for reconcileStuckTrees.
+    ctx.docTasks?.abortActiveBuild()
     // `suspend()` (not `stop()`): the sidecars must come back lazily
     // after unlock — `stop()` latches permanently for the will-quit path and used to
     // leave every post-lock/unlock embed failing with "Embedder is stopped".

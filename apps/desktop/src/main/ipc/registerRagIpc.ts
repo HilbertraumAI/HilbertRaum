@@ -49,9 +49,9 @@ export function registerRagIpc(ctx: AppContext): void {
   ipcMain.handle(
     IPC.askDocuments,
     async (event: IpcMainInvokeEvent, conversationId: string, question: string): Promise<Message> => {
-      // Shared guard preamble (M-A2): conv exists, runtime active, no doc task / stream
-      // already in flight.
-      const { runtime } = assertChatStreamReady(ctx, conversationId)
+      // Shared guard preamble (M-A2): conv exists, runtime active, no blocking doc task /
+      // stream already in flight (a yielding deep-index build is paused, not refused).
+      const { runtime } = await assertChatStreamReady(ctx, conversationId)
 
       const text = question.trim()
       if (!text) throw new Error(tMain('main.chat.emptyQuestion'))
@@ -83,18 +83,23 @@ export function registerRagIpc(ctx: AppContext): void {
         }
       }
 
-      return withChatStream(event, conversationId, 'Document answer failed', (signal, sendToken) =>
-        generateGroundedAnswer(ctx.db, runtime, ctx.embedder, conversationId, text, settings, {
-          signal,
-          // Composite retrieval scope (plan §10.2): membership ∪ specific docs ∪ attachments,
-          // archived excluded by default. Also makes the empty-context re-index check
-          // scope-aware (M2). An empty resolved scope = whole corpus.
-          scope,
-          // Retrieval reranker: null when no reranker is provisioned — retrieval then
-          // keeps the unreranked ordering byte-identical.
-          reranker: ctx.reranker,
-          onToken: sendToken
-        })
+      return withChatStream(
+        event,
+        conversationId,
+        'Document answer failed',
+        (signal, sendToken) =>
+          generateGroundedAnswer(ctx.db, runtime, ctx.embedder, conversationId, text, settings, {
+            signal,
+            // Composite retrieval scope (plan §10.2): membership ∪ specific docs ∪ attachments,
+            // archived excluded by default. Also makes the empty-context re-index check
+            // scope-aware (M2). An empty resolved scope = whole corpus.
+            scope,
+            // Retrieval reranker: null when no reranker is provisioned — retrieval then
+            // keeps the unreranked ordering byte-identical.
+            reranker: ctx.reranker,
+            onToken: sendToken
+          }),
+        () => ctx.docTasks?.acquireChatSlot?.() ?? Promise.resolve(() => {})
       )
     }
   )

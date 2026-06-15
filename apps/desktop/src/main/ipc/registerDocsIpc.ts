@@ -26,6 +26,7 @@ import {
   processDocument,
   readStoredDocumentText,
   reconcileStuckDocuments,
+  reconcileStuckTrees,
   reindexDocument,
   summarizeImportPaths,
   type IngestionDeps
@@ -272,6 +273,9 @@ export function registerDocsIpc(ctx: AppContext): void {
               // in-session filing path; the crash-resume path (M1) files the same way from
               // `reindexDocument` (whoever drives a doc to `indexed` files it).
               fileFromPendingDestination(ctx.db, id)
+              // Offer a deep index for documents the cheap capped summary can't fully cover
+              // (whole-document-analysis Q1/Q4). Gated + fire-and-forget — never throws here.
+              ctx.docTasks?.maybeEnqueueTreeBuild(id)
             }
             // Audit: filename + counts only — never the document's text.
             ctx.audit?.('document_imported', `Document imported: ${info.title}`, {
@@ -315,6 +319,13 @@ export function registerDocsIpc(ctx: AppContext): void {
     if (!importActive && processing.size === 0) {
       const n = reconcileStuckDocuments(ctx.db, new Date().toISOString())
       if (n > 0) log.warn('Reconciled interrupted document ingestions', { count: n })
+      // Reset deep-index builds left `building` by a killed/locked session to `pending`
+      // (resumable) — but only when no doc task is live (a running build legitimately holds
+      // `building`); the `updated_at < now` clause additionally protects a live build.
+      if (!ctx.docTasks?.hasActiveTask()) {
+        const nt = reconcileStuckTrees(ctx.db, new Date().toISOString())
+        if (nt > 0) log.warn('Reconciled interrupted deep-index builds', { count: nt })
+      }
     }
     // Flag docs whose vectors were produced by a different embedder than the active one
     // (search is scoped to `ctx.embedder.id`), so the UI can prompt a re-index.
@@ -478,6 +489,9 @@ export function registerDocsIpc(ctx: AppContext): void {
         documentId,
         status: info.status
       })
+      // Re-index tore down any prior tree (→ stale); offer a fresh deep index where it
+      // helps. The warm summary_cache makes the rebuild cheap despite chunk-id churn.
+      if (info.status === 'indexed') ctx.docTasks?.maybeEnqueueTreeBuild(documentId)
       return info
     } finally {
       processing.delete(documentId)
