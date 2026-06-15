@@ -308,6 +308,11 @@ export const en = {
     'This document is long — the summary covers its beginning. The rest is still ' +
     'searchable and answerable in chat.',
   'docs.previewModal.regenerate': 'Regenerate',
+  'docs.previewModal.copy': 'Copy',
+  'docs.previewModal.save': 'Save',
+  'docs.previewModal.copied': 'Summary copied',
+  'docs.previewModal.copyFailed': 'Could not copy to the clipboard',
+  'docs.previewModal.savedTo': 'Summary saved to {path}',
   'docs.previewModal.noText': 'No text could be extracted from this document.',
   'docs.previewModal.page': 'Page {page}',
 
@@ -645,6 +650,7 @@ export const en = {
   'diag.audit.document_task_completed': 'Document task finished',
   'diag.audit.document_task_failed': 'Document task failed',
   'diag.audit.document_exported': 'Document exported',
+  'diag.audit.summary_exported': 'Summary exported',
   'diag.audit.conversation_deleted': 'Conversation deleted',
   'diag.audit.conversation_exported': 'Conversation exported',
   'diag.audit.workspace_created': 'Workspace created',
@@ -989,6 +995,7 @@ export const en = {
   'main.dialog.importDocuments': 'Import documents',
   'main.dialog.importFolder': 'Import a folder of documents',
   'main.dialog.exportDocument': 'Export document',
+  'main.dialog.exportSummary': 'Export summary',
   'main.dialog.exportChat': 'Export chat transcript',
   'main.dialog.exportAudit': 'Export activity log',
   'main.dialog.exportLog': 'Save diagnostic logs',

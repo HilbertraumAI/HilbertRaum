@@ -6,7 +6,24 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
-_Last updated: 2026-06-15 — **Documentation + code-comment audit (release 0.1.26).** A deep,
+_Last updated: 2026-06-15 — **Document-summary preview UI fixes (3 reported bugs).** The summary in
+the document preview modal ([`DocumentsScreen.tsx`](apps/desktop/src/renderer/screens/DocumentsScreen.tsx)
+`PreviewModal`) had three frontend problems, all fixed. **(1) Layout/scroll:** the summary `<details>`
+block sat ABOVE the single `.modal-body` scroll region, so a long summary grew past the dialog's
+`max-height` with no scrollbar — it's now moved INSIDE `.modal-body` (summary + extracted text share one
+scroll region) and `.modal-body` got `flex: 1 1 auto` so it absorbs the leftover height ([`styles.css`](apps/desktop/src/renderer/styles.css)).
+**(2) Copy + Save:** the summary action row now always offers **Copy** (→ `window.api.copyToClipboard`,
+the MAIN clipboard bridge) and **Save** (→ new `exportSummary` IPC: dialog + fs in MAIN, writes the
+summary as Markdown, audited as `summary_exported` with id-only metadata — the exportDocument pattern),
+alongside the existing Regenerate. **(3) Markdown:** the summary rendered as raw text (literal `**`); it
+now reuses the chat `AssistantMarkdown` (react-markdown + GFM, http(s)-only link sanitizer) under the
+`.msg-content.md` styles. New i18n keys (`docs.previewModal.copy/save/copied/copyFailed/savedTo`,
+`main.dialog.exportSummary`, `diag.audit.summary_exported`) in both en/de; new `summary_exported`
+AuditEventType. Typecheck clean; `npm test` **1346 passed** + 1 new DocumentSummary case (Markdown render
++ Copy/Save bridge calls). No schema change. **Next:** open work unchanged (Phase 30
+big-slot/embeddings — D38–D43; owner-gated doc-org Phase E.2)._
+
+_(prior) 2026-06-15 — **Documentation + code-comment audit (release 0.1.26).** A deep,
 whole-repo doc audit: every doc cross-checked against the code, plus a comment-quality sweep. No
 behavior change — docs/comments only (the 8 touched source files are comment-only edits; typecheck
 clean, `npm test` **1346 passed / 25 skipped**, unchanged from baseline). **Most consequential fixes

@@ -22,6 +22,8 @@ import {
   documentsDir,
   expandPathsWithSource,
   extractDocumentPreview,
+  getDocument,
+  getDocumentSummary,
   listDocuments,
   processDocument,
   readStoredDocumentText,
@@ -475,6 +477,39 @@ export function registerDocsIpc(ctx: AppContext): void {
     // Audit privacy rule: the id only — the chosen path is user-private
     // and the text is content.
     ctx.audit?.('document_exported', 'Document exported to a file', { documentId })
+    return filePath
+  })
+
+  // Save a document's persisted summary to a user-chosen Markdown file (the
+  // exportDocument pattern: dialog + fs in MAIN, never the renderer). The summary is
+  // CONTENT — only the id is audited, never the text or the chosen path. Resolves with
+  // the saved path, or null when the user cancelled or there is no summary.
+  ipcMain.handle(IPC.exportSummary, async (_e, documentId: string): Promise<string | null> => {
+    requireUnlocked()
+    requireNotProcessing(documentId)
+    const summary = getDocumentSummary(ctx.db, documentId)
+    if (!summary) return null
+    const title = getDocument(ctx.db, documentId)?.title ?? 'document'
+    const dot = title.lastIndexOf('.')
+    const baseName = (dot > 0 ? title.slice(0, dot) : title)
+      .replace(/[^\p{L}\p{N} ()_-]/gu, '')
+      .trim()
+      .slice(0, 60)
+    const filePath = await saveTextExport(
+      {
+        title: tMain('main.dialog.exportSummary'),
+        defaultPath: `${baseName || 'document'}-summary.md`,
+        filters: [
+          { name: 'Markdown', extensions: ['md'] },
+          { name: 'Text', extensions: ['txt'] }
+        ]
+      },
+      summary.text
+    )
+    if (!filePath) return null
+    log.info('Summary exported', { documentId })
+    // Audit privacy rule: the id only — the chosen path is user-private and the text is content.
+    ctx.audit?.('summary_exported', 'Document summary exported to a file', { documentId })
     return filePath
   })
 

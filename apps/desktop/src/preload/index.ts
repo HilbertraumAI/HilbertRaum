@@ -262,6 +262,10 @@ const api = {
    *  file; resolves with the path, or null on cancel. */
   exportDocument: (documentId: string): Promise<string | null> =>
     ipcRenderer.invoke(IPC.exportDocument, documentId),
+  /** Save a document's persisted summary (Markdown) to a user-chosen file;
+   *  resolves with the path, or null on cancel / when there is no summary. */
+  exportSummary: (documentId: string): Promise<string | null> =>
+    ipcRenderer.invoke(IPC.exportSummary, documentId),
 
   // ---- Document tasks ----
   /** Start a document task (summary; translation with `params.targetLang`; compare

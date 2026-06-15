@@ -1306,6 +1306,9 @@ export type AuditEventType =
   // A document's stored text saved to a user-chosen file. Metadata = { documentId }
   // only — never the path (user-chosen, content-adjacent) and never the text.
   | 'document_exported'
+  // A document's summary saved to a user-chosen file. Same privacy rule as
+  // document_exported: metadata = { documentId } only.
+  | 'summary_exported'
   | 'conversation_deleted'
   | 'conversation_exported'
   // Document-organization (plan §17): collection/membership/lifecycle changes. Metadata is

@@ -191,6 +191,34 @@ describe('DocumentsScreen — Summarize action (Phase 33)', () => {
     expect(startDocTask).toHaveBeenCalledWith({ kind: 'summary', documentIds: ['d1'] })
   })
 
+  it('renders the summary as Markdown (no literal **) and offers Copy + Save', async () => {
+    const user = userEvent.setup()
+    const copyToClipboard = vi.fn(async () => true)
+    const exportSummary = vi.fn(async () => '/tmp/contract-summary.md')
+    stubApi({
+      listDocuments: vi.fn(async () => [
+        doc({ summary: summary({ text: '**Bold point** and detail.' }) })
+      ]),
+      previewDocument: vi.fn(async () => preview),
+      copyToClipboard,
+      exportSummary
+    })
+    render(<DocumentsScreen />)
+    await screen.findByText('contract.pdf')
+    await user.click(screen.getByRole('button', { name: /^preview$/i }))
+
+    // Markdown is rendered: the bold text shows in a <strong>, the raw ** are gone.
+    const bold = await screen.findByText('Bold point')
+    expect(bold.tagName).toBe('STRONG')
+    expect(screen.queryByText(/\*\*Bold point\*\*/)).not.toBeInTheDocument()
+
+    // Copy sends the raw Markdown to the clipboard bridge; Save exports via the doc id.
+    await user.click(screen.getByRole('button', { name: /^copy$/i }))
+    expect(copyToClipboard).toHaveBeenCalledWith('**Bold point** and detail.')
+    await user.click(screen.getByRole('button', { name: /^save$/i }))
+    expect(exportSummary).toHaveBeenCalledWith('d1')
+  })
+
   it('shows the honest truncation note for a long document (the map-call ceiling)', async () => {
     const user = userEvent.setup()
     stubApi({

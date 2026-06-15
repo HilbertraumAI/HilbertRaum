@@ -849,7 +849,10 @@ code, pre, kbd { font-family: var(--font-mono); }
 }
 /* Dialog button row: primary action on the RIGHT (guidelines §1.6/§6). */
 .modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 8px; }
-.modal-body { overflow-y: auto; min-height: 0; padding-right: 6px; }
+/* The scroll region inside a content dialog. flex:1 + min-height:0 lets it absorb the
+   space the header/hints leave and scroll its own overflow — without flex:1 a long
+   summary grew past the dialog's max-height with no scrollbar (the reported bug). */
+.modal-body { flex: 1 1 auto; overflow-y: auto; min-height: 0; padding-right: 6px; }
 .preview-segment { margin-bottom: 12px; }
 .preview-label {
   font-size: 10px;
@@ -931,7 +934,7 @@ code, pre, kbd { font-family: var(--font-mono); }
    Send/Stop button (guidelines §6 — looks like one composer, not a detached button). */
 .composer-row {
   display: flex;
-  gap: 8px;
+  gap: 4px;
   align-items: flex-end;
   position: relative;
   background: var(--surface);
@@ -966,16 +969,21 @@ code, pre, kbd { font-family: var(--font-mono); }
 
 /* Voice-dictation mic: quiet ghost button beside Send; while recording it
    pulses so stopping is obvious (the OS mic indicator is the authoritative signal). */
-.dictation-btn { min-width: 44px; }
-/* Attach-files button: quiet ghost paperclip beside the mic/Send (plan §11.2). */
+.dictation-btn { min-width: 26px; padding-left: 3px; padding-right: 3px; }
+/* Attach-files button: quiet ghost paperclip beside the mic/Send (plan §11.2). The
+   icon is centered, so a wide box pushed it away from the mic — hug the glyph (the 24px
+   global button min keeps the hit target; height carries the vertical target). */
 .composer-attach {
   align-self: center;
-  min-width: 40px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 26px;
+  padding: 0 3px;
   height: 36px;
   border: none;
   background: transparent;
   color: var(--text-dim);
-  font-size: var(--text-lg);
   border-radius: var(--radius-sm);
   cursor: pointer;
 }

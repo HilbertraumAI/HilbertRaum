@@ -40,6 +40,7 @@ const AUDIT_TYPE_LABELS: Record<AuditEventType, MessageKey> = {
   document_task_completed: 'diag.audit.document_task_completed',
   document_task_failed: 'diag.audit.document_task_failed',
   document_exported: 'diag.audit.document_exported',
+  summary_exported: 'diag.audit.summary_exported',
   conversation_deleted: 'diag.audit.conversation_deleted',
   conversation_exported: 'diag.audit.conversation_exported',
   workspace_created: 'diag.audit.workspace_created',

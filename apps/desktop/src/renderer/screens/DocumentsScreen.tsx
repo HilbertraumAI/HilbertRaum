@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { ReactNode } from 'react'
-import { Badge, Banner, Button, ConfirmDialog, CoverageMeter, EmptyState, ErrorBanner, Modal, Progress, Spinner, TierMenu, type BadgeTone } from '../components'
+import { Badge, Banner, Button, ConfirmDialog, CoverageMeter, EmptyState, ErrorBanner, Modal, Progress, Spinner, TierMenu, useToast, type BadgeTone } from '../components'
 import { SourcesDisclosure } from '../chat/SourcesDisclosure'
+import { AssistantMarkdown } from '../chat'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import type {
   Collection,
@@ -1491,6 +1492,7 @@ function PreviewModal({
   onClose: () => void
 }): JSX.Element {
   const { t, tCount, lang } = useT()
+  const showToast = useToast()
   // Coverage + source provenance of the current summary (whole-document-analysis §5.1).
   // Read-only, no model call; refreshes whenever the shown summary changes.
   const [cov, setCov] = useState<DocumentCoverage | null>(null)
@@ -1513,6 +1515,25 @@ function PreviewModal({
       alive = false
     }
   }, [preview.id, summary])
+  // Copy the raw summary Markdown to the OS clipboard (via MAIN — the file://-loaded
+  // renderer can't use navigator.clipboard). Confirmation is a transient toast.
+  function onCopySummary(): void {
+    if (!summary) return
+    void Promise.resolve(window.api.copyToClipboard?.(summary.text))
+      .then((ok) => showToast(ok ? t('docs.previewModal.copied') : t('docs.previewModal.copyFailed')))
+      .catch(() => showToast(t('docs.previewModal.copyFailed')))
+  }
+  // Save the summary to a user-chosen Markdown file (dialog + fs run in MAIN). A
+  // cancelled dialog resolves null and shows no toast.
+  async function onSaveSummary(): Promise<void> {
+    if (!summary) return
+    try {
+      const path = await window.api.exportSummary?.(preview.id)
+      if (path) showToast(t('docs.previewModal.savedTo', { path }))
+    } catch {
+      // Export is cancellable from the OS dialog; a failure simply shows no toast.
+    }
+  }
   return (
     <Modal
       open
@@ -1535,44 +1556,56 @@ function PreviewModal({
           {originLine}
         </p>
       )}
-      {summary && (
-        <details className="doc-summary" open>
-          <summary>{t('docs.previewModal.summary')}</summary>
-          <div className="doc-summary-body">
-            <p className="hint" style={{ margin: 0 }}>
-              {summaryAttribution(summary, t, lang)}
-            </p>
-            {/* Coverage meter (whole-document-analysis §5.2): states breadth (whole document
-                vs the beginning) AND depth (tier) honestly — augments the truncated banner. */}
-            {cov && <CoverageMeter coverage={cov.coverage} />}
-            {summary.truncated && (
-              <Banner tone="warning">{t('docs.previewModal.truncated')}</Banner>
-            )}
-            {/* Coverage-tier selector — only with a ready deep index (Tier 2/3 read it). */}
-            {treeReady && onSelectTier && (
-              <TierMenu
-                value={summary.tier ?? 1}
-                disabled={regenerateDisabled}
-                onChange={onSelectTier}
-              />
-            )}
-            <div className="preview-text">{summary.text}</div>
-            {/* Source provenance behind a deep-index summary — the leaf SOURCE chunks (M2:
-                never node summaries). Reuses the chat sources disclosure. */}
-            {cov && cov.provenance.length > 0 && (
-              <SourcesDisclosure citations={cov.provenance} />
-            )}
-            {onRegenerate && (
-              <div className="actions" style={{ marginTop: 4 }}>
-                <Button size="sm" disabled={regenerateDisabled} onClick={onRegenerate}>
-                  {t('docs.previewModal.regenerate')}
-                </Button>
-              </div>
-            )}
-          </div>
-        </details>
-      )}
+      {/* Single scroll region (audit: a long summary sat above the scroll box and overflowed
+          with no scrollbar). Summary + extracted text now scroll together. */}
       <div className="modal-body">
+        {summary && (
+          <details className="doc-summary" open>
+            <summary>{t('docs.previewModal.summary')}</summary>
+            <div className="doc-summary-body">
+              <p className="hint" style={{ margin: 0 }}>
+                {summaryAttribution(summary, t, lang)}
+              </p>
+              {/* Coverage meter (whole-document-analysis §5.2): states breadth (whole document
+                  vs the beginning) AND depth (tier) honestly — augments the truncated banner. */}
+              {cov && <CoverageMeter coverage={cov.coverage} />}
+              {summary.truncated && (
+                <Banner tone="warning">{t('docs.previewModal.truncated')}</Banner>
+              )}
+              {/* Coverage-tier selector — only with a ready deep index (Tier 2/3 read it). */}
+              {treeReady && onSelectTier && (
+                <TierMenu
+                  value={summary.tier ?? 1}
+                  disabled={regenerateDisabled}
+                  onChange={onSelectTier}
+                />
+              )}
+              {/* Render the summary as Markdown (local models emit `**bold**`/lists/headings —
+                  the raw asterisks read as broken). Reuses the chat answer styling + sanitizer. */}
+              <div className="msg-content md">
+                <AssistantMarkdown text={summary.text} />
+              </div>
+              {/* Source provenance behind a deep-index summary — the leaf SOURCE chunks (M2:
+                  never node summaries). Reuses the chat sources disclosure. */}
+              {cov && cov.provenance.length > 0 && (
+                <SourcesDisclosure citations={cov.provenance} />
+              )}
+              <div className="actions" style={{ marginTop: 4 }}>
+                <Button size="sm" onClick={onCopySummary}>
+                  {t('docs.previewModal.copy')}
+                </Button>
+                <Button size="sm" onClick={() => void onSaveSummary()}>
+                  {t('docs.previewModal.save')}
+                </Button>
+                {onRegenerate && (
+                  <Button size="sm" disabled={regenerateDisabled} onClick={onRegenerate}>
+                    {t('docs.previewModal.regenerate')}
+                  </Button>
+                )}
+              </div>
+            </div>
+          </details>
+        )}
         {preview.segments.length === 0 && (
           <p className="hint">{t('docs.previewModal.noText')}</p>
         )}

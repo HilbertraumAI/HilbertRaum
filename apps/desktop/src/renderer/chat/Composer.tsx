@@ -32,8 +32,8 @@ interface ComposerProps {
   onDictationError?: (message: string) => void
   /** Test seam forwarded to DictationButton (real getUserMedia capture by default). */
   dictationCaptureImpl?: DictationCaptureStart
-  /** Attach files to the chat (plan §11.2 net-new intake). Renders a 📎 button when given;
-   *  the keyboard-reachable picker fallback for the chat-surface drag/drop target. */
+  /** Attach files to the chat (plan §11.2 net-new intake). Renders a paperclip button when
+   *  given; the keyboard-reachable picker fallback for the chat-surface drag/drop target. */
   onAttach?: () => void
 }
 
@@ -145,7 +145,7 @@ export function Composer({
             title={t('chat.attach.button')}
             onClick={onAttach}
           >
-            📎
+            <PaperclipIcon />
           </button>
         )}
         {dictationAvailable === true && (
@@ -170,5 +170,16 @@ export function Composer({
       </div>
       {footer != null && <div className="composer-footer">{footer}</div>}
     </div>
+  )
+}
+
+/** Inline upright paperclip glyph (Material attach_file). An inline SVG — not the 📎
+ *  emoji, which Windows renders tilted and mismatched against the SVG mic; currentColor
+ *  follows the button's quiet/hover state like MicIcon. */
+function PaperclipIcon(): JSX.Element {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden focusable="false">
+      <path d="M16.5 6v11.5c0 2.21-1.79 4-4 4s-4-1.79-4-4V5c0-1.38 1.12-2.5 2.5-2.5s2.5 1.12 2.5 2.5v10.5c0 .55-.45 1-1 1s-1-.45-1-1V6H10v9.5c0 1.38 1.12 2.5 2.5 2.5s2.5-1.12 2.5-2.5V5c0-2.21-1.79-4-4-4S7 2.79 7 5v12.5c0 3.04 2.46 5.5 5.5 5.5s5.5-2.46 5.5-5.5V6h-1.5z" />
+    </svg>
   )
 }

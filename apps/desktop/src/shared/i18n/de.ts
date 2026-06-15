@@ -336,6 +336,11 @@ export const de: Record<keyof typeof en, string> = {
     'Dieses Dokument ist lang — die Zusammenfassung deckt den Anfang ab. Der Rest bleibt ' +
     'durchsuchbar und im Chat befragbar.',
   'docs.previewModal.regenerate': 'Neu erstellen',
+  'docs.previewModal.copy': 'Kopieren',
+  'docs.previewModal.save': 'Speichern',
+  'docs.previewModal.copied': 'Zusammenfassung kopiert',
+  'docs.previewModal.copyFailed': 'Kopieren in die Zwischenablage nicht möglich',
+  'docs.previewModal.savedTo': 'Zusammenfassung gespeichert unter {path}',
   'docs.previewModal.noText': 'Aus diesem Dokument konnte kein Text extrahiert werden.',
   'docs.previewModal.page': 'Seite {page}',
 
@@ -683,6 +688,7 @@ export const de: Record<keyof typeof en, string> = {
   'diag.audit.document_task_completed': 'Dokumentaufgabe abgeschlossen',
   'diag.audit.document_task_failed': 'Dokumentaufgabe fehlgeschlagen',
   'diag.audit.document_exported': 'Dokument exportiert',
+  'diag.audit.summary_exported': 'Zusammenfassung exportiert',
   'diag.audit.conversation_deleted': 'Unterhaltung gelöscht',
   'diag.audit.conversation_exported': 'Unterhaltung exportiert',
   'diag.audit.workspace_created': 'Arbeitsbereich erstellt',
@@ -1078,6 +1084,7 @@ export const de: Record<keyof typeof en, string> = {
   'main.dialog.importDocuments': 'Dokumente importieren',
   'main.dialog.importFolder': 'Einen Ordner mit Dokumenten importieren',
   'main.dialog.exportDocument': 'Dokument exportieren',
+  'main.dialog.exportSummary': 'Zusammenfassung exportieren',
   'main.dialog.exportChat': 'Chat-Verlauf exportieren',
   'main.dialog.exportAudit': 'Aktivitätslog exportieren',
   'main.dialog.exportLog': 'Diagnose-Logs speichern',

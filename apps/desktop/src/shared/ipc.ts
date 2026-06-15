@@ -77,6 +77,9 @@ export const IPC = {
   /** Save a text document's stored content to a user-chosen file (the
    *  exportConversation pattern; enables exporting materialized translations). */
   exportDocument: 'docs:export',
+  /** Save a document's persisted summary (Markdown) to a user-chosen file
+   *  (the exportDocument pattern: dialog + fs in MAIN). */
+  exportSummary: 'docs:exportSummary',
   // Document tasks (async with polling, like imports/downloads)
   /** Start a document task (summary, translation; compare rides the same machine). */
   startDocTask: 'doctasks:start',
