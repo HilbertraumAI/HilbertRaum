@@ -172,6 +172,14 @@ password recovery — are documented in
   model call. The build is a background, *yielding* job that cedes the model slot to chat
   between nodes; it is auto-offered for documents the capped summary can't fully cover and
   otherwise built on request. The coverage-meter UI is a later phase.
+- **A background deep-index build cedes the slot to chat, but not to other document tasks.**
+  While an auto-started tree build runs (multi-minute on a weak CPU), an interactive chat
+  answer pauses it and is served within ~one node, then the build resumes. A user-started
+  Summarize/Translate/Compare, however, queues behind the build until it finishes — the build
+  yields only to chat. It is the active task, so it shows as "Building a deep index…" and can
+  be cancelled from the busy banner (which lets the queued task run); a cancelled build is
+  resumable from the warm cache. An explicit model Stop/switch also aborts it (it re-builds
+  under the new model). Finer task-vs-build prioritisation is a later phase.
 - **Strictly one job at a time (D26).** While a summary runs, chat is refused with a
   friendly message + a cancel option, and vice versa — the one local model serves one
   request. The R-T1 probe confirmed the pinned b9585 WOULD serve concurrent requests on

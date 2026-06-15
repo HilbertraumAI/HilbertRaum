@@ -194,7 +194,7 @@ export function registerChatIpc(ctx: AppContext): void {
             // sendReasoning emits the reasoning event AND buffers it for stream recovery.
             onReasoning: sendReasoning
           }),
-        () => ctx.docTasks?.acquireChatSlot?.() ?? Promise.resolve(() => {})
+        () => ctx.docTasks?.acquireChatSlot() ?? Promise.resolve(() => {})
       )
     }
   )

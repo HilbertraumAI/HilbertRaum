@@ -39,7 +39,7 @@ export async function assertChatStreamReady(
   // the slot (chat pauses it via the model-slot arbiter inside `withChatStream`, then it
   // resumes in-session). Any OTHER active task (summary/translate/compare/ocr, or a tree
   // build that is only queued, not yet holding the slot) still refuses chat (plan §4.1/H10).
-  if (ctx.docTasks?.hasActiveTask() && !(ctx.docTasks.isYieldingBuildActive?.() ?? false)) {
+  if (ctx.docTasks?.hasActiveTask() && !ctx.docTasks.isYieldingBuildActive()) {
     throw new Error(DOC_TASK_BUSY_MESSAGE)
   }
   // One active stream per conversation (shared registry across plain chat + RAG).

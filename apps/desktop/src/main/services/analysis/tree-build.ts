@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import type { Db } from '../db'
-import { approxTokenCount } from '../ingestion/chunker'
+import { approxTokenCount, truncateToApproxTokens } from '../ingestion/chunker'
 import {
   summaryBudgetWords,
   SUMMARY_OUTPUT_TOKENS,
@@ -206,9 +206,16 @@ export async function buildTree(documentId: string, deps: TreeBuildDeps): Promis
       SUMMARY_TEMPERATURE,
       signal
     )
-    const text = summary.length > 0 ? summary : joined.slice(0, 1)
-    cachePut.run(hash, modelId, text, nowIso())
-    return { text, hash }
+    if (summary.length > 0) {
+      cachePut.run(hash, modelId, summary, nowIso())
+      return { text: summary, hash }
+    }
+    // Empty generation (e.g. a reasoning model that emitted only a <think> block for a
+    // terse section): do NOT cache it — caching keys on (content_hash, model_id) and is read
+    // first on every build/resume, so a one-time empty result would PERMANENTLY poison this
+    // group (and, at the root, the whole-document summary). Fall back to a leading excerpt of
+    // the source so the node is still usable, and leave the cache cold so a rebuild retries.
+    return { text: truncateToApproxTokens(joined, SUMMARY_OUTPUT_TOKENS), hash }
   }
 
   /** Write one node + its ordered edges atomically (H11: ROLLBACK on any throw). */
@@ -257,7 +264,14 @@ export async function buildTree(documentId: string, deps: TreeBuildDeps): Promis
     if (signal.aborted) throw new DOMException('Tree build cancelled', 'AbortError')
     if (arbiter.shouldYield()) {
       db.prepare('UPDATE documents SET updated_at = ? WHERE id = ?').run(nowIso(), documentId)
-      await arbiter.reacquire(jobId) // resolves when chat releases; rejects on abort
+      try {
+        await arbiter.reacquire(jobId) // resolves when chat releases the slot
+      } catch {
+        // The only rejection is the arbiter tearing the slot down (cancel/lock/quit/switch).
+        // Normalize it to an AbortError so run() classifies the build as `cancelled` even if
+        // the task controller wasn't also aborted (robust to any abort caller).
+        throw new DOMException('Tree build cancelled', 'AbortError')
+      }
       if (signal.aborted) throw new DOMException('Tree build cancelled', 'AbortError')
     }
   }
@@ -286,8 +300,10 @@ export async function buildTree(documentId: string, deps: TreeBuildDeps): Promis
       })
       nextChildren.push({ id: nodeId, text, isChunk: false })
       stepsDone += 1
-      if (stepsDone > stepsTotal) deps.onProgress?.(stepsDone, stepsDone)
-      else deps.onProgress?.(stepsDone, stepsTotal)
+      // Clamp the denominator up to the numerator (the upper-level count is an estimate).
+      deps.onProgress?.(stepsDone, Math.max(stepsDone, stepsTotal))
+      // The root is the last node; no point yielding the slot just to finalize next.
+      if (isRootLevel) break
       // Node boundary == commit boundary == yield boundary.
       await maybeYield()
     }

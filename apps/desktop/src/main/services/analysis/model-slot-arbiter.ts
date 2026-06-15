@@ -48,10 +48,19 @@ export class ModelSlotArbiter {
     return this.activeBuild !== null
   }
 
-  /** The builder declares itself the slot owner when its run starts. */
+  /**
+   * The builder declares itself the slot owner when its run starts. Resets ALL transient
+   * handshake state — a prior build that ended while a chat still (briefly) held the slot
+   * could otherwise leave `chatHolders` > 0, which would make this build's first
+   * `reacquire` never resume (chatHolders never reaches 0). Each build starts clean.
+   */
   registerBuild(jobId: string): void {
     this.activeBuild = jobId
     this.pauseRequested = false
+    this.chatHolders = 0
+    this.handoffWaiters = []
+    this.reacquireResolve = null
+    this.reacquireReject = null
   }
 
   /**
@@ -101,10 +110,17 @@ export class ModelSlotArbiter {
       return () => {}
     }
     this.chatHolders += 1
-    this.pauseRequested = true
-    await new Promise<void>((resolve) => {
-      this.handoffWaiters.push(resolve)
-    })
+    // If the builder is ALREADY parked (a prior chat handed the slot off and the build is
+    // waiting to resume), the slot is free RIGHT NOW — a second concurrent chat must NOT
+    // wait for another handoff that will never come (the builder won't reach a new node
+    // boundary while parked). Proceed immediately. Only the chat(s) that arrive BEFORE the
+    // builder parks wait on the handoff (the builder wakes all of them at once when it parks).
+    if (this.reacquireReject === null) {
+      this.pauseRequested = true
+      await new Promise<void>((resolve) => {
+        this.handoffWaiters.push(resolve)
+      })
+    }
     let released = false
     return () => {
       if (released) return

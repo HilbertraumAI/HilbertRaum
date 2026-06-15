@@ -585,6 +585,11 @@ export async function processDocument(
     // indexing success below.
     const chunks = chunkSegments(parsed.segments, { maxChunks: MAX_CHUNKS_PER_DOCUMENT + 1 })
     if (chunks.length > MAX_CHUNKS_PER_DOCUMENT) {
+      // Clear any stale `fully_chunked` from a PRIOR successful index: the document now
+      // exceeds the cap, so its preserved (older, smaller) chunks are no longer "the whole
+      // document" — keeping the marker would let a future consumer over-claim coverage (C4).
+      // The throw fires before the chunk DELETE, so the old chunks stay searchable (M13).
+      db.prepare('UPDATE documents SET fully_chunked = NULL WHERE id = ?').run(documentId)
       // Persist-canonical English (i18n record §3.3 rule 1): the catch writes it into
       // documents.error_message; the renderer display map translates it (D-L4).
       throw new Error(t('en', 'main.ingest.tooManyChunks'))
@@ -646,9 +651,10 @@ export async function processDocument(
     // marker proves "the stored chunks ARE the whole document". A NULL marker means a
     // legacy (pre-Phase-1, maybe silently truncated) index; deep-index / 100%-coverage
     // are gated on it (a legacy doc re-indexes first, which sets it or fails over-cap).
+    const indexedAt = nowIso()
     db.prepare('UPDATE documents SET fully_chunked = ?, updated_at = ? WHERE id = ?').run(
-      nowIso(),
-      nowIso(),
+      indexedAt,
+      indexedAt,
       documentId
     )
     return infoOrDeleted(db, documentId)

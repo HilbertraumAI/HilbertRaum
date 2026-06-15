@@ -99,7 +99,7 @@ export function registerRagIpc(ctx: AppContext): void {
             reranker: ctx.reranker,
             onToken: sendToken
           }),
-        () => ctx.docTasks?.acquireChatSlot?.() ?? Promise.resolve(() => {})
+        () => ctx.docTasks?.acquireChatSlot() ?? Promise.resolve(() => {})
       )
     }
   )
