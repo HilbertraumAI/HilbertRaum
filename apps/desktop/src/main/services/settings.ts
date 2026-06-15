@@ -1,8 +1,9 @@
 import type { Db } from './db'
 import { DEFAULT_SETTINGS, type AppSettings } from '../../shared/types'
 
-/** Upper bound on a persisted string[] setting (e.g. `dismissedFilingSuggestions`) so a
- *  buggy/hostile renderer can't bloat the encrypted settings blob. */
+/** Upper bound on any persisted string[] setting so a buggy/hostile renderer can't bloat the
+ *  encrypted settings blob. (Defensive: no string[] setting ships today, but the element-wise
+ *  validation below stays generic for future ones.) */
 const MAX_SETTINGS_ARRAY = 10_000
 
 // Settings persistence on top of the key/value `settings` table (spec §8).
@@ -41,7 +42,7 @@ export function updateSettings(db: Db, patch: Partial<AppSettings>): AppSettings
     if (!(key in DEFAULT_SETTINGS)) continue
     const def = (DEFAULT_SETTINGS as unknown as Record<string, unknown>)[key]
     if (def !== null && value !== null && typeof value !== typeof def) continue
-    // Array-typed defaults (e.g. `dismissedFilingSuggestions: string[]`) pass the
+    // Array-typed defaults (any future `string[]` setting) pass the
     // `typeof === 'object'` check above, so validate them element-wise: require an actual
     // array, keep only string elements, and cap the length (SEC-1) — mirroring the
     // `safeIdArray`/`parseDocumentScope` pattern so a non-array/oversized renderer value is

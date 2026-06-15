@@ -127,67 +127,16 @@ describe('German render smokes (Phase 40)', () => {
     expect(
       screen.getAllByRole('button', { name: t('de', 'docs.import.files') }).length
     ).toBeGreaterThan(0)
-    // The document-organization section rail (plan §12) renders its German labels.
+    // The regrouped section rail (§11.6) renders its German group headers + labels: the
+    // Projects + Locations + Views headers, the system buckets under Locations, and the
+    // common smart views (always visible).
+    expect(screen.getByText(t('de', 'docs.section.projects'))).toBeInTheDocument()
+    expect(screen.getByText(t('de', 'docs.section.locations'))).toBeInTheDocument()
+    expect(screen.getByText(t('de', 'docs.smart.heading'))).toBeInTheDocument()
     expect(screen.getByRole('button', { name: t('de', 'docs.section.library') })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: t('de', 'docs.section.generated') })).toBeInTheDocument()
-    expect(screen.getByText(t('de', 'docs.section.projects'))).toBeInTheDocument()
-    // The Phase-E smart-view rail entries render their German labels (plan §7.6/§12.1).
-    expect(screen.getByText(t('de', 'docs.smart.heading'))).toBeInTheDocument()
     expect(screen.getByRole('button', { name: t('de', 'docs.smart.recentlyAdded') })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: t('de', 'docs.smart.unfiled') })).toBeInTheDocument()
-  })
-
-  it('DocumentsScreen renders the German filing-suggestion chip (plan §20 Phase F)', async () => {
-    stubApi({
-      listCollections: vi.fn(async () => [
-        {
-          id: 'tax',
-          name: 'Tax 2025',
-          type: 'project' as const,
-          description: null,
-          builtin: false,
-          color: null,
-          createdAt: '2026-01-01T00:00:00Z',
-          updatedAt: '2026-01-01T00:00:00Z',
-          archivedAt: null
-        }
-      ]),
-      listDocuments: vi.fn(async () => [
-        {
-          id: 'd1',
-          title: 'return.pdf',
-          originalPath: null,
-          mimeType: 'application/pdf',
-          sizeBytes: 1,
-          status: 'indexed' as const,
-          errorMessage: null,
-          chunkCount: 1,
-          sourceFolderLabel: 'Tax 2025',
-          createdAt: '2026-01-01T00:00:00Z',
-          updatedAt: '2026-01-01T00:00:00Z'
-        }
-      ]),
-      filingSuggestions: vi.fn(async () => [
-        {
-          documentId: 'd1',
-          suggestions: [
-            {
-              ruleId: 'folder-name-match' as const,
-              target: { kind: 'existingProject' as const, collectionId: 'tax' },
-              reasonKey: 'docs.suggest.reason.folder' as const,
-              reasonParams: { folder: 'Tax 2025' }
-            }
-          ]
-        }
-      ]),
-      getAppStatus: vi.fn(async () => appStatus())
-    })
-    render(german(<DocumentsScreen />))
-    expect(
-      await screen.findByText(t('de', 'docs.suggest.chipExisting', { name: 'Tax 2025' }))
-    ).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: t('de', 'docs.suggest.apply') })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: t('de', 'docs.suggest.dismiss') })).toBeInTheDocument()
   })
 
   it('DocumentsScreen renders the German deep-index action + coverage meter (whole-document-analysis §5.2)', async () => {

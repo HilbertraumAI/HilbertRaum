@@ -22,7 +22,7 @@ a future move to Tauri/Rust is a localized swap.
 │  services/   (~35 modules — see Module ↔ spec map below)        │
 │    workspace · db (node:sqlite) · models · runtime/ ·          │
 │    chat · ingestion/ · embeddings/ · rag · reranker/ ·         │
-│    doctasks/ · analysis/ · collections · filing-suggestions ·  │
+│    doctasks/ · analysis/ · collections ·                       │
 │    transcriber/ · ocr/ · benchmark · policy · audit ·          │
 │    downloads · logging · security/                             │
 └──────────┬──────────────────┬────────────────────┬───────────┘
@@ -283,8 +283,8 @@ encrypted mode (Phase 9) the whole DB file is encrypted at rest.
 - **IPC** (`ipc/registerDocsIpc.ts`): `pickDocuments`, `importDocuments`, `getImportJob`,
   `listDocuments`, `deleteDocument`, `reindexDocument`, `importPreflight` (Phase 36 — the
   size-aware audio confirm); plus the document-organization channels `previewDocument`,
-  `exportDocument`, `addToCollection`/`removeFromCollection`, `setLifecycle`, and
-  `filingSuggestions` (see the "Document organization" §5 IPC table). Full pipeline detail lives
+  `exportDocument`, `addToCollection`/`removeFromCollection`, and `setLifecycle` (see the
+  "Document organization" §5 IPC table). Full pipeline detail lives
   in [`rag-design.md`](rag-design.md).
 
 ## Audio transcription (Phase 36, wave-3 plan §9)
@@ -1153,10 +1153,11 @@ is in git history: `git show 477f803:docs/document-organization-plan.md`). A col
 layer over the existing ingestion/retrieval pipeline: one stored file, one chunk set, one vector set
 per document — organization is metadata. Five user-facing containers — **Library**, **Projects**,
 **Temporary**, **Generated** (a role/view, not a place), **Archive** — plus query-time **Smart
-views** and rule-based **filing suggestions**. Everything stays local + offline. **The retrieval /
+views**. (A rule-based **filing-suggestion** engine shipped in Phase F and was **removed
+2026-06-15** — see §4.) Everything stays local + offline. **The retrieval /
 scope half of this design lives in [`rag-design.md`](rag-design.md) §13** (resolveScope, the
-RetrievalScope union, collection-filtered search); this record is the **data model, IPC, audit, and
-filing-suggestion engine**. **§ numbers below are stable**; future code comments _should_ cite them
+RetrievalScope union, collection-filtered search); this record is the **data model, IPC, and
+audit** layer. **§ numbers below are stable**; future code comments _should_ cite them
 as "doc-org record §N" (existing comments still say "plan §x"; those resolve via git history above)._
 
 ### §1 Decisions (the locked ladder — D1/D2/D3 + the audit fixes)
@@ -1220,7 +1221,7 @@ conversation_documents(conversation_id, document_id, added_at)    -- C3 temp-att
   `origin_json IS NULL`** (the M1 status gate + the D3 generated-skip). Re-open is a no-op
   (membership-guarded). Generated rows get no membership (step is a no-op by construction).
 
-### §4 Services (`collections.ts` + `filing-suggestions.ts`)
+### §4 Services (`collections.ts`)
 
 - **`collections.ts`** (plain functions, no class) — CRUD (`createCollection`/`rename`/`setCollectionArchived`/
   `deleteCollection`), membership (`addToCollection`/`removeFromCollection`, idempotent),
@@ -1236,19 +1237,13 @@ conversation_documents(conversation_id, document_id, added_at)    -- C3 temp-att
   `linkConversationDocument` is **FK-guarded (N3)**:
   verifies the conversation still exists + try/catch the race; if gone, keep the doc in Temporary, drop
   only the link. `resolveScope` is documented in rag-design §13.
-- **Filing-suggestion engine (`filing-suggestions.ts`, Phase F)** — pure, LOCAL, deterministic (no
-  model, no network, no clock, no randomness). The IPC layer calls the batch
-  `suggestFilingForDocuments(docs, collections, allDocs)`, which runs the single-doc
-  `suggestFilingForDocument(doc, collections, allDocs)` per doc and de-dupes across the batch;
-  each returns ranked, de-duped `FilingSuggestion[]` via three rules, highest-confidence first:
-  **(1) folder-name match** (`source_folder_label` equals/contains an active project name),
-  **(2) same-source-folder cohort** (other docs from the same folder are filed in project X),
-  **(3) bilingual filename pattern** — small documented EN-canonical + German token tables
-  (invoice/receipt/bill/statement·Rechnung/Beleg/Quittung/Kontoauszug; contract/agreement·Vertrag/
-  Vereinbarung) ⇒ a matching existing project, else a `newProject` with a canonical English name. Each
-  suggestion carries a stable `ruleId` + an i18n reason **key + params** (never free text). **Subjects
-  excluded** (D3/§7): generated (`origin != null`), Temporary/archived lifecycle, already-project-filed;
-  archived projects are never targets. Tolerant (missing metadata ⇒ no suggestion, never throws).
+- **Filing-suggestion engine (`filing-suggestions.ts`, Phase F) — REMOVED 2026-06-15.** The
+  auto "suggested project" feature (the rule engine, the read-only `docs:filingSuggestions`
+  IPC, the per-row suggestion chip, and the `dismissedFilingSuggestions` setting) was removed
+  as an intentional product decision: it added a near-equal row affordance for a low-value
+  guess. Filing is now fully manual via the row **⋯** / selection toolbar (`addToCollection` /
+  `createCollection`). The full original lives in git history (`git show HEAD~1:apps/desktop/
+  src/main/services/filing-suggestions.ts`); `source_folder_label` import metadata is retained.
 
 ### §5 IPC / preload surface (additive, backward-compatible)
 
@@ -1259,7 +1254,6 @@ conversation_documents(conversation_id, document_id, added_at)    -- C3 temp-att
 | `docs:setLifecycle` | `(documentIds[], 'permanent'\|'temporary'\|'archived') ⇒ DocumentInfo[]` | `registerDocsIpc.ts` |
 | `docs:import` (extend) | `(paths[], options?: ImportOptions)` — `destination` persisted at queue time (M1) | `registerDocsIpc.ts` |
 | `docs:list` (extend) | `filter?: { collectionId?, lifecycle?, smart?: SmartListView }` — `smart` shares the pure `matchesSmartView` with the renderer rail | `registerDocsIpc.ts` |
-| `docs:filingSuggestions` (Phase F) | `() => FilingSuggestionResult[]` (read-only; Apply reuses addToCollection / collections:create) | `registerDocsIpc.ts` |
 | `chat:setScope` / `setCollection` / `listAttachments` | composite scope persist · creation anchor · the `conversation_documents` attachments | `registerChatIpc.ts` |
 
 Renderer-untrusted inputs are sanitized at the boundary (`sanitizeDestination` ⇒ Library fallback;
@@ -1331,7 +1325,7 @@ cosine top-k ⊕ FTS5 keyword top-k (RRF fusion) → optional rerank → build g
 | `services/reranker/` | 7.8 retrieval rerank (rag-design §11) |
 | `services/doctasks/` | async document tasks: summary/translation/compare/ocr/tree/extract |
 | `services/analysis/` | whole-document analysis: deep index, coverage, extract, symmetric compare (rag-design §14) |
-| `services/collections.ts` + `services/filing-suggestions.ts` | document organization (rag-design §13, architecture "Document organization") |
+| `services/collections.ts` | document organization (rag-design §13, architecture "Document organization") |
 | `services/transcriber/` | whisper.cpp sidecar — audio transcription / dictation (Phase 36) |
 | `services/ocr/` | tesseract OCR engine — scanned-PDF / photo text (Phase 38) |
 | `services/downloads.ts` + `services/runtime-download.ts` | in-app model + engine downloader (Phase 18) |

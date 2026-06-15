@@ -6,7 +6,50 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
-_Last updated: 2026-06-15 — **Documents-screen UI refinement — follow-up pass (renderer-only,
+_Last updated: 2026-06-15 — **Documents screen: suggested-project FEATURE REMOVAL + sub-nav
+regroup/collapse.** Two changes folded into [`design-guidelines.md`](docs/design-guidelines.md)
+**§11.6** (extended, §-anchor stable). **(A) Removed the auto "suggested project" feature** —
+an intentional product decision (it surfaced a near-equal row affordance for a low-value guess).
+Deleted across the stack: the per-row suggestion chip + Apply/Dismiss + renderer state
+([`DocumentsScreen.tsx`](apps/desktop/src/renderer/screens/DocumentsScreen.tsx)); the read-only
+`docs:filingSuggestions` IPC handler ([`registerDocsIpc.ts`](apps/desktop/src/main/ipc/registerDocsIpc.ts))
++ its preload bridge + the `IPC.filingSuggestions` channel; the pure rule engine
+`services/filing-suggestions.ts` (**deleted**); the `FilingRuleId`/`FilingTarget`/`FilingSuggestion`/
+`FilingSuggestionResult` types + the `AppSettings.dismissedFilingSuggestions` setting (+ default)
+([`shared/types.ts`](apps/desktop/src/shared/types.ts)); the `docs.suggest.*` i18n keys (EN+DE);
+the `.doc-suggest*` styles. Filing stays fully manual via the row **⋯** / selection toolbar
+(`addToCollection`/`createCollection`). `source_folder_label` import metadata is **retained**
+(generic ingestion metadata, not suggestion-specific); the generic string[]-setting sanitizer in
+[`settings.ts`](apps/desktop/src/main/services/settings.ts) stays as defensive code (comment
+generalized — no string[] setting ships today). Tests: removed `filing-suggestions.test.ts`,
+`filing-suggestions-ipc.test.ts`, the db-settings string[] case, the 4 DocumentsScreen suggestion
+cases, the GermanSmoke suggestion-chip case, and the audit-ipc FOLDER_SENTINEL; **added** a
+no-suggestion-renders guard + a `copy-tone` stale-phrase guard (EN+DE "Suggested project"/
+„Vorgeschlagenes…"). **(B) Sub-nav (`SectionRail`) regrouped + densified + collapsible.** Was
+~14 near-equal items; now four headed groups in order — **All documents** (default landing, no
+header, slightly-emphasized active fill) · **Projects** (header + "+", per-project "⋯") ·
+**Locations** (Library/Temporary/Generated/Archived under ONE header — presentation only, data
+model untouched) · **Views** (common filters Recently added/Unfiled/Needs re-index always
+visible; rare diagnostics Large files/Failed imports/Audio/Scanned-OCR behind a remembered
+**"More ▾"** disclosure [real `<button aria-expanded>`], and an empty rare view hidden entirely).
+Nav rows densified to ~36px, uniform hover; **active = `--row-selected-bg` fill + `aria-current`,
+not a ring**. The **whole panel collapses** ("«" hides → list full-width; "»" re-opens),
+remembered in localStorage (`hilbertraum.docs.railCollapsed`/`…viewsMoreOpen`), mirroring the
+chat `ConversationList` collapse. New i18n keys `docs.section.locations`/`docs.smart.more`/
+`docs.rail.hide`/`docs.rail.show` (EN+DE, type-enforced parity; German „Speicherorte"/„Mehr"/
+„Bereiche aus-/einblenden"). **RESOLVES the standing "sub-nav vs global-rail stacking" watch
+item** — the second column is now dismissable, not permanent. **Tests:** typecheck + `npm run
+build` clean; full vitest from `apps/desktop` **1344 passed / 25 skipped**. Playwright `_electron`
+eyeball walk in BOTH themes AND both locales (EN/DE): no suggestion banner; the regrouped sub-nav
+with "More" collapsed + expanded; the sub-nav collapsed (full-width) + expanded; active fill;
+German labels fit without hyphenation/overflow — captures in `docs/design-review/docs-subnav/`
+(`scripts/walk-docs-subnav.mjs`). **Watch item still open:** the **location-taxonomy** ambiguity
+(Library/Temporary/Generated/Archived mix collection membership / lifecycle / origin) — now
+grouped under one "Locations" header as PRESENTATION ONLY; the data model still needs a future
+pass to decide exclusive-locations vs additive-flags. **No version bump, no schema change. Next:**
+open work unchanged (Phase 30 big-slot/embeddings — D38–D43; owner-gated doc-org Phase E.2)._
+
+_(prior) 2026-06-15 — **Documents-screen UI refinement — follow-up pass (renderer-only,
 presentation only).** Four visual fixes after the compact-row restructure shipped; **no IPC,
 schema, persistence, or main-process changes**, document-task handlers untouched. Folded into
 [`design-guidelines.md`](docs/design-guidelines.md) **§11.6** (the same design record the prior

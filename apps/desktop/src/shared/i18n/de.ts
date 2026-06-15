@@ -1100,6 +1100,8 @@ export const de: Record<keyof typeof en, string> = {
   'docs.section.heading': 'Bereiche',
   'docs.section.library': 'Bibliothek',
   'docs.section.projects': 'Projekte',
+  // Gruppenüberschrift über den System-Ablagen (Bibliothek / Temporär / Erstellt / Archiviert), §11.6.
+  'docs.section.locations': 'Speicherorte',
   'docs.section.temporary': 'Temporär',
   'docs.section.generated': 'Erstellt',
   'docs.section.archived': 'Archiviert',
@@ -1107,6 +1109,9 @@ export const de: Record<keyof typeof en, string> = {
   'docs.section.noProjects': 'Noch keine Projekte',
   'docs.section.newProject': 'Neues Projekt',
   'docs.section.collapse': 'Bereiche',
+  // Die gesamte Dokumente-Unternavigation ein-/ausklappen (§11.6 — die Liste nutzt dann die volle Breite).
+  'docs.rail.hide': 'Bereiche ausblenden',
+  'docs.rail.show': 'Bereiche einblenden',
   'docs.project.createTitle': 'Projekt erstellen',
   'docs.project.namePlaceholder': 'Projektname',
   'docs.project.nameAria': 'Projektname',
@@ -1164,21 +1169,11 @@ export const de: Record<keyof typeof en, string> = {
   'docs.smart.failed': 'Fehlgeschlagen',
   'docs.smart.audio': 'Audio',
   'docs.smart.ocr': 'Gescannt / OCR',
+  // „Mehr“-Aufklappen der Ansichten: die selteneren Diagnose-Ansichten klappen dahinter auf (§11.6).
+  'docs.smart.more': 'Mehr',
   'docs.provenance.staleBadge': 'Veraltet',
   'docs.provenance.staleChanged': 'Eine Quelle hat sich seit der Erstellung geändert — zum Aktualisieren neu ausführen.',
   'docs.provenance.staleRemoved': 'Eine Quelle wurde seit der Erstellung entfernt — zum Aktualisieren neu ausführen.',
-
-  // ---- Ablagevorschläge (regelbasiert, nicht stillschweigend — Plan §20 Phase F). ----
-  // D-L7-Review erledigt (2026-06-14).
-  'docs.suggest.chipExisting': 'Vorgeschlagenes Projekt: {name}',
-  'docs.suggest.chipNew': 'Vorgeschlagenes neues Projekt: {name}',
-  'docs.suggest.apply': 'Übernehmen',
-  'docs.suggest.dismiss': 'Verwerfen',
-  'docs.suggest.applyTitle': 'Dieses Dokument in {name} ablegen',
-  'docs.suggest.dismissTitle': 'Ablagevorschläge für dieses Dokument ausblenden',
-  'docs.suggest.reason.folder': 'Es stammt aus einem Ordner namens „{folder}“.',
-  'docs.suggest.reason.cohort': 'Andere Dateien aus „{folder}“ sind dort abgelegt.',
-  'docs.suggest.reason.filename': 'Der Name deutet auf diese Art von Dokument hin.',
 
   // ---- Chat — zusammengesetzter Quellenbereich (Plan §13). D-L7-Review erledigt (2026-06-14). ----
   'chat.scope.using': 'Quelle: {sources}',

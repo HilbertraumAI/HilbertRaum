@@ -1085,16 +1085,36 @@ code, pre, kbd { font-family: var(--font-mono); }
    1fr track shrink so a long, unbreakable filename ellipsizes instead of widening the row and
    pushing the trailing Preview/⋯ off the edge. */
 .docs-screen { max-width: 1180px; }
-.docs-layout { display: grid; grid-template-columns: 200px 1fr; gap: 18px; align-items: start; }
+.docs-layout { display: grid; grid-template-columns: 220px 1fr; gap: 18px; align-items: start; }
+/* Collapsed sub-nav (§11.6): the rail is gone and the list takes the full width. */
+.docs-layout.rail-collapsed { grid-template-columns: 1fr; }
 .docs-main { min-width: 0; }
-.docs-rail { display: flex; flex-direction: column; gap: 2px; position: sticky; top: 0; }
+.docs-rail { display: flex; flex-direction: column; gap: 1px; position: sticky; top: 0; }
+/* Panel header: quiet title + the "«" collapse handle (mirrors the chat sidebar head). */
+.docs-rail-head { display: flex; gap: 6px; align-items: center; justify-content: space-between; padding: 0 2px 2px; }
+.docs-rail-title { font-size: var(--text-xs); font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-muted); }
+.docs-rail-collapse {
+  background: transparent; border: 1px solid transparent; color: var(--text-muted);
+  border-radius: var(--radius-sm); font-size: 14px; line-height: 1; cursor: pointer; padding: 3px 7px;
+}
+.docs-rail-collapse:hover { background: var(--surface-hover); color: var(--text); }
+/* "»" handle that re-opens the collapsed sub-nav, parked at the top-left of the list. */
+.docs-rail-show {
+  align-self: flex-start; background: transparent; border: 1px solid transparent; color: var(--text-muted);
+  border-radius: var(--radius-sm); font-size: 14px; line-height: 1; cursor: pointer; padding: 3px 7px; margin-bottom: 6px;
+}
+.docs-rail-show:hover { background: var(--surface-hover); color: var(--text); }
+/* Denser nav rows (§6 — ≥36px): a comfortable hit target with a hover highlight, uniform
+   across all groups. */
 .docs-rail-item {
-  text-align: left; background: none; border: none; color: var(--text-muted);
-  padding: 6px 10px; border-radius: 6px; font-size: 13px; cursor: pointer; width: 100%;
+  display: flex; align-items: center; min-height: 36px; text-align: left; background: none; border: none;
+  color: var(--text-muted); padding: 6px 10px; border-radius: 6px; font-size: 13px; cursor: pointer; width: 100%;
 }
 .docs-rail-item:hover { background: var(--surface-hover); color: var(--text); }
-.docs-rail-item.active { background: var(--surface-hover); color: var(--text); font-weight: 600; }
-.docs-rail-group { display: flex; flex-direction: column; gap: 2px; margin: 6px 0; }
+/* Active = a soft fill (the nav/history selection treatment, §11.6) + aria-current, NOT a ring
+   (:focus-visible keeps the ring, so selection stays distinct from focus). */
+.docs-rail-item.active { background: var(--row-selected-bg); color: var(--text); font-weight: 600; }
+.docs-rail-group { display: flex; flex-direction: column; gap: 1px; margin: 8px 0 2px; }
 .docs-rail-group-head { display: flex; align-items: center; justify-content: space-between; padding: 4px 10px; }
 .docs-rail-group-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); }
 .docs-rail-add { background: none; border: none; color: var(--text-muted); font-size: 16px; line-height: 1; cursor: pointer; padding: 0 4px; }
@@ -1102,17 +1122,19 @@ code, pre, kbd { font-family: var(--font-mono); }
 .docs-rail-empty { padding: 2px 10px; font-size: 12px; }
 .docs-rail-project { display: flex; align-items: center; }
 .docs-rail-project .docs-rail-project-name { flex: 1; }
-.docs-rail-project.active .docs-rail-project-name { background: var(--surface-hover); color: var(--text); font-weight: 600; border-radius: 6px; }
+.docs-rail-project.active .docs-rail-project-name { background: var(--row-selected-bg); color: var(--text); font-weight: 600; border-radius: 6px; }
 .docs-rail-project.archived .docs-rail-project-name { opacity: 0.6; font-style: italic; }
 .docs-rail-project-menu { background: none; border: none; color: var(--text-muted); cursor: pointer; padding: 2px 6px; border-radius: 6px; }
 .docs-rail-project-menu:hover:not(:disabled) { color: var(--text); background: var(--surface-hover); }
+/* Views "More" disclosure: a real quiet <button> (aria-expanded) — same height as a nav row. */
+.docs-rail-more {
+  display: flex; align-items: center; gap: 4px; min-height: 32px; text-align: left; background: none;
+  border: none; color: var(--text-muted); padding: 4px 10px; border-radius: 6px; font-size: 12px; cursor: pointer; width: 100%;
+}
+.docs-rail-more:hover { background: var(--surface-hover); color: var(--text); }
+.docs-rail-more-caret { font-size: 10px; }
 .doc-chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .doc-chip { font-size: 11px; padding: 1px 8px; border-radius: 999px; background: var(--surface-hover); color: var(--text-muted); border: 1px solid var(--border); }
-/* Filing suggestion (plan §20 Phase F) — a calm, dismissible chip; wraps so a narrow window
-   never forces horizontal page scroll (responsive discipline, plan §12 L4). */
-.doc-suggest { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-.doc-suggest-text { font-size: 13px; color: var(--text); }
-.doc-suggest-reason { font-size: 12px; }
 .text-input {
   width: 100%; padding: 8px 10px; border: 1px solid var(--border-strong); border-radius: 8px;
   background: var(--surface); color: var(--text); font-size: 14px;
@@ -1129,9 +1151,11 @@ code, pre, kbd { font-family: var(--font-mono); }
 .chat-proj-group-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); padding: 8px 10px 2px; font-weight: 600; }
 
 @media (max-width: 760px) {
-  /* The section rail collapses to a horizontal scrolling strip above the list (plan §12 L4). */
+  /* The section rail collapses to a horizontal scrolling strip above the list (plan §12 L4).
+     The panel header (title + "«" collapse) is dropped — collapse is a wide-screen affordance. */
   .docs-layout { grid-template-columns: 1fr; }
   .docs-rail { flex-direction: row; overflow-x: auto; gap: 6px; position: static; padding-bottom: 6px; }
+  .docs-rail-head { display: none; }
   .docs-rail-group { flex-direction: row; margin: 0; }
   .docs-rail-group-head { display: none; }
 }

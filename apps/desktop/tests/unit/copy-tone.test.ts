@@ -62,7 +62,12 @@ describe('stale phrases stay out of user-facing string literals', () => {
     'Stop generation',
     'Regenerate response',
     'Telemetry disabled',
-    'GPU acceleration auto-disabled'
+    'GPU acceleration auto-disabled',
+    // The auto "suggested project" feature was removed — no suggestion copy may remain (EN/DE).
+    'Suggested project',
+    'Suggested new project',
+    'Vorgeschlagenes Projekt',
+    'Vorgeschlagenes neues Projekt'
   ])('no string literal says %j', (phrase) => {
     expect(literalOccurrences(phrase)).toEqual([])
   })

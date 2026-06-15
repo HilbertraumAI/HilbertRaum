@@ -1013,6 +1013,8 @@ export const en = {
   'docs.section.heading': 'Sections',
   'docs.section.library': 'Library',
   'docs.section.projects': 'Projects',
+  // Group header over the system buckets (Library / Temporary / Generated / Archived), §11.6.
+  'docs.section.locations': 'Locations',
   'docs.section.temporary': 'Temporary',
   'docs.section.generated': 'Generated',
   'docs.section.archived': 'Archived',
@@ -1020,6 +1022,9 @@ export const en = {
   'docs.section.noProjects': 'No projects yet',
   'docs.section.newProject': 'New project',
   'docs.section.collapse': 'Sections',
+  // Collapse/expand the whole Documents sub-nav (§11.6 — the list then takes the full width).
+  'docs.rail.hide': 'Hide sections',
+  'docs.rail.show': 'Show sections',
   'docs.project.createTitle': 'Create a project',
   'docs.project.namePlaceholder': 'Project name',
   'docs.project.nameAria': 'Project name',
@@ -1077,25 +1082,13 @@ export const en = {
   'docs.smart.failed': 'Failed imports',
   'docs.smart.audio': 'Audio',
   'docs.smart.ocr': 'Scanned / OCR',
+  // Views "More" disclosure: the rare diagnostic views fold behind this (§11.6).
+  'docs.smart.more': 'More',
   // Staleness indicator on a generated document (plan §15.3). Quiet, non-blaming;
   // re-running the task is the only fix (snapshot semantics are unchanged).
   'docs.provenance.staleBadge': 'Outdated',
   'docs.provenance.staleChanged': 'A source changed since this was made — re-run to update.',
   'docs.provenance.staleRemoved': 'A source was removed since this was made — re-run to update.',
-
-  // ---- Filing suggestions (rule-based, non-silent — plan §20 Phase F) ----
-  // A quiet, dismissible per-row chip on an UNFILED document. Apply files it via the existing
-  // membership path; nothing is ever filed without that click. Reasons are keyed templates,
-  // not concatenated free text. German copy in de.ts reviewed in the D-L7 pass (2026-06-14).
-  'docs.suggest.chipExisting': 'Suggested project: {name}',
-  'docs.suggest.chipNew': 'Suggested new project: {name}',
-  'docs.suggest.apply': 'Apply',
-  'docs.suggest.dismiss': 'Dismiss',
-  'docs.suggest.applyTitle': 'File this document into {name}',
-  'docs.suggest.dismissTitle': 'Hide filing suggestions for this document',
-  'docs.suggest.reason.folder': 'It came from a folder named “{folder}”.',
-  'docs.suggest.reason.cohort': 'Other files from “{folder}” are filed there.',
-  'docs.suggest.reason.filename': 'Its name looks like this kind of document.',
 
   // ---- Chat — composite source scope (multi-select picker + footer union, plan §13) ----
   'chat.scope.using': 'Using {sources}',

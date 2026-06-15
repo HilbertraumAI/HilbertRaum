@@ -16,8 +16,9 @@ import type {
 // retrieval filters by). All local SQLite — no network, no model calls.
 //
 // The full document-organization feature (project-management IPC, the multi-select scope
-// picker, chat attachments via conversation_documents, filing suggestions) shipped across
-// Phases A–F; this module is its backend half. Delete-with-documents (shredding genuinely
+// picker, chat attachments via conversation_documents) shipped across Phases A–F; this module
+// is its backend half. (The Phase-F rule-based filing-suggestion engine was removed 2026-06-15
+// — filing is manual.) Delete-with-documents (shredding genuinely
 // project-only docs) is the one piece left out of v1 (rag-design.md §13.7). Built-ins
 // (Library/Temporary) are seeded in db.ts.
 

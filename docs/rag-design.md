@@ -672,9 +672,10 @@ Gate at ship: typecheck clean, 601 tests, build green; phase commit `b8feb46`.
 
 ## 13. Collection-scoped retrieval & composite scope — design record (document organization, Phases A–F)
 
-_The retrieval/scope half of the document-organization layer. The **data model, IPC, audit, and
-filing-suggestion engine** are in [`architecture.md`](architecture.md) "Document organization — design
-record" (§1–§8); this section is **how a chat's chosen sources become a retrieval filter**. Condensed
+_The retrieval/scope half of the document-organization layer. The **data model, IPC, and audit**
+layer is in [`architecture.md`](architecture.md) "Document organization — design
+record" (§1–§8; the Phase-F filing-suggestion engine documented there was removed 2026-06-15);
+this section is **how a chat's chosen sources become a retrieval filter**. Condensed
 from `docs/document-organization-plan.md` at the Phase-F closeout (2026-06-14); full original:
 `git show 477f803:docs/document-organization-plan.md`. **§13.x anchors are stable.**_
 

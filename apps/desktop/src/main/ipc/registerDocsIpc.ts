@@ -7,7 +7,6 @@ import type {
   DocumentInfo,
   DocumentLifecycle,
   DocumentPreview,
-  FilingSuggestionResult,
   ImportDestination,
   ImportJob,
   ImportJobStatus,
@@ -41,7 +40,6 @@ import {
   removeFromCollection,
   setDocumentsLifecycle
 } from '../services/collections'
-import { suggestFilingForDocuments } from '../services/filing-suggestions'
 import { supportedExtensions } from '../services/ingestion/parsers'
 import { tMain } from '../services/i18n'
 import { log } from '../services/logging'
@@ -418,18 +416,6 @@ export function registerDocsIpc(ctx: AppContext): void {
       return ids.map((id) => byId.get(id)).filter((d): d is DocumentInfo => d != null)
     }
   )
-
-  // Rule-based filing suggestions (plan §20 Phase F): read-only + LOCAL — the pure engine
-  // proposes a project for each unfiled document (folder name, source-folder cohort, bilingual
-  // filename pattern). NO model, NO network, NO new audit event (a suggestion is inert — the
-  // renderer files it via the existing addToCollection/createCollection channels on Apply, so
-  // only those record ids/counts; the suggestion REASON is never logged). Dismissals persist
-  // in AppSettings, filtered renderer-side.
-  ipcMain.handle(IPC.filingSuggestions, (): FilingSuggestionResult[] => {
-    requireUnlocked()
-    const docs = listDocuments(ctx.db, ctx.embedder.id)
-    return suggestFilingForDocuments(docs, listCollections(ctx.db))
-  })
 
   // Read-only in-app preview: re-extracts the stored copy's text. Guarded
   // against racing an in-flight ingestion of the same document (it rewrites the stored

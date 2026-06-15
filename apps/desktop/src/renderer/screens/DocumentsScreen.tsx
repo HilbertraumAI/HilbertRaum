@@ -14,8 +14,6 @@ import type {
   DocumentOcrInfo,
   DocumentPreview,
   DocumentSummary,
-  FilingSuggestion,
-  FilingSuggestionResult,
   IngestionStatus,
   TranslationTargetLang
 } from '@shared/types'
@@ -156,6 +154,12 @@ interface Props {
   onAskSelected?: (documentIds: string[]) => void
 }
 
+/** Remembered collapse state for the Documents sub-nav (section rail). A UI preference, not
+ *  user data → localStorage, outside the encrypted workspace. Exported for tests. */
+export const RAIL_COLLAPSED_KEY = 'hilbertraum.docs.railCollapsed'
+/** Remembered open/closed state of the Views "More" disclosure (rare diagnostic views). */
+export const VIEWS_MORE_KEY = 'hilbertraum.docs.viewsMoreOpen'
+
 export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
   const { t, tCount, lang } = useT()
   const [docs, setDocs] = useState<DocumentInfo[] | null>(null)
@@ -182,11 +186,16 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
   // Document-organization (plan §12): the section rail selection + the collections list.
   const [collections, setCollections] = useState<Collection[]>([])
   const [section, setSection] = useState<DocSection>({ kind: 'all' })
-  // Rule-based filing suggestions (plan §20 Phase F): the unfiled-doc suggestions from the
-  // read-only IPC + the user's persisted dismissals (AppSettings). A suggestion is inert — it
-  // only files on an explicit Apply; Dismiss hides the chip and sticks across a restart.
-  const [suggestions, setSuggestions] = useState<FilingSuggestionResult[]>([])
-  const [dismissedSuggestions, setDismissedSuggestions] = useState<ReadonlySet<string>>(new Set())
+  // Sub-nav (section rail) collapse, remembered across sessions (localStorage — a UI
+  // preference, NOT user data, so it may live outside the encrypted workspace). Mirrors the
+  // chat ConversationList collapse pattern (§11.6). Collapsed ⇒ the list takes the full width.
+  const [railCollapsed, setRailCollapsed] = useState<boolean>(() => {
+    try {
+      return window.localStorage.getItem(RAIL_COLLAPSED_KEY) === '1'
+    } catch {
+      return false
+    }
+  })
   // Project management dialogs.
   const [projectModal, setProjectModal] = useState<{ mode: 'create' | 'rename'; id?: string; name: string } | null>(null)
   const [deleteProject, setDeleteProject] = useState<Collection | null>(null)
@@ -216,34 +225,17 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
     }
   }, [])
 
-  // Filing suggestions + the persisted dismissal set (plan §20 Phase F). Tolerant: a partial
-  // test bridge / a read failure leaves the chips absent, never an error.
-  const refreshSuggestions = useCallback(async (): Promise<void> => {
-    try {
-      setSuggestions((await window.api.filingSuggestions?.()) ?? [])
-    } catch {
-      setSuggestions([])
-    }
-    try {
-      const s = await window.api.getSettings?.()
-      setDismissedSuggestions(new Set(s?.dismissedFilingSuggestions ?? []))
-    } catch {
-      /* keep the prior dismissal set */
-    }
-  }, [])
-
   const refresh = useCallback(async (): Promise<void> => {
     const next = await window.api.listDocuments()
     setDocs(next)
     void refreshCollections()
-    void refreshSuggestions()
     // Drop selected ids that no longer exist or are no longer indexed.
     setSelected((prev) => {
       const valid = new Set(next.filter((d) => d.status === 'indexed').map((d) => d.id))
       const kept = [...prev].filter((id) => valid.has(id))
       return kept.length === prev.size ? prev : new Set(kept)
     })
-  }, [refreshCollections, refreshSuggestions])
+  }, [refreshCollections])
 
   useEffect(() => {
     refresh().catch((e) => setError(friendlyIpcError(e)))
@@ -533,9 +525,6 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
   // Source lookup for the generated-staleness derivation (plan §15.3) — pure, off the
   // already-listed fields; no extra read, no hot-path write.
   const sourcesById = new Map((docs ?? []).map((d) => [d.id, d]))
-  // Top filing suggestion per document (plan §20 Phase F) — the renderer surfaces one quiet
-  // chip per row; the rest of the ranked list stays available for a later affordance.
-  const topSuggestionByDoc = new Map(suggestions.map((s) => [s.documentId, s.suggestions[0]]))
   const sectioned: DocumentInfo[] =
     docs == null
       ? []
@@ -627,43 +616,6 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
     await runOrg('org', () => window.api.setDocumentLifecycle([documentId], lifecycle))
   }
 
-  // ---- Filing suggestions: Apply (never auto-file) + Dismiss (plan §20 Phase F) ----------
-  // Apply reuses the existing membership path — existing project ⇒ addToCollection; new
-  // project ⇒ createCollection + addToCollection — then the refresh drops the now-filed doc
-  // out of Unfiled and clears its chip. A suggestion is NEVER applied without this click.
-  async function onApplySuggestion(documentId: string, sug: FilingSuggestion): Promise<void> {
-    await runOrg('suggest', async () => {
-      if (sug.target.kind === 'existingProject') {
-        await window.api.addToCollection([documentId], sug.target.collectionId)
-      } else {
-        const created = await window.api.createCollection(sug.target.suggestedName)
-        await window.api.addToCollection([documentId], created.id)
-      }
-    })
-  }
-
-  // Dismiss: hide the chip and persist the dismissal in AppSettings (NOT a new column) so it
-  // sticks across a restart. Optimistic + tolerant — a failed persist still hides it this
-  // session.
-  async function onDismissSuggestion(documentId: string): Promise<void> {
-    const next = new Set(dismissedSuggestions)
-    next.add(documentId)
-    setDismissedSuggestions(next)
-    try {
-      await window.api.updateSettings?.({ dismissedFilingSuggestions: [...next] })
-    } catch {
-      /* stays hidden this session even if the persist failed */
-    }
-  }
-
-  /** The display name of a suggestion's target project (existing ⇒ resolved; new ⇒ proposed).
-   *  Empty when an existing target no longer exists (then the chip is suppressed). */
-  function suggestionTargetName(sug: FilingSuggestion): string {
-    const target = sug.target
-    if (target.kind === 'newProject') return target.suggestedName
-    return collections.find((c) => c.id === target.collectionId)?.name ?? ''
-  }
-
   // Bulk delete the current selection (selection toolbar, §11.6): delete each one at a time
   // (same per-document IPC as the row), then clear the selection and refresh once.
   async function onBulkDelete(): Promise<void> {
@@ -712,6 +664,16 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
     return parts.join(' · ')
   }
 
+  // Collapse/expand the sub-nav and remember it across sessions (best-effort persist).
+  function setRailCollapsedPersistent(collapsed: boolean): void {
+    setRailCollapsed(collapsed)
+    try {
+      window.localStorage.setItem(RAIL_COLLAPSED_KEY, collapsed ? '1' : '0')
+    } catch {
+      // Remembering the preference is best-effort.
+    }
+  }
+
   function toggleSelected(id: string): void {
     setSelected((prev) => {
       const next = new Set(prev)
@@ -750,21 +712,43 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
       <h1>{t('docs.title')}</h1>
       <p className="lead">{t('docs.lead')}</p>
 
-      <div className="docs-layout">
-        <SectionRail
-          section={section}
-          onSelect={setSection}
-          collections={collections}
-          activeProjects={activeProjects}
-          archivedProjects={projects.filter((c) => c.archivedAt != null)}
-          busy={busy !== null}
-          onNewProject={() => setProjectModal({ mode: 'create', name: '' })}
-          onRenameProject={(p) => setProjectModal({ mode: 'rename', id: p.id, name: p.name })}
-          onArchiveProject={(p) => void onArchiveProject(p)}
-          onDeleteProject={(p) => setDeleteProject(p)}
-          t={t}
-        />
+      <div className={`docs-layout ${railCollapsed ? 'rail-collapsed' : ''}`}>
+        {!railCollapsed && (
+          <SectionRail
+            section={section}
+            onSelect={setSection}
+            collections={collections}
+            activeProjects={activeProjects}
+            archivedProjects={projects.filter((c) => c.archivedAt != null)}
+            rareCounts={{
+              large: docs?.filter((d) => matchesSmartView(d, 'large')).length ?? 0,
+              failed: docs?.filter((d) => matchesSmartView(d, 'failed')).length ?? 0,
+              audio: docs?.filter((d) => matchesSmartView(d, 'audio')).length ?? 0,
+              ocr: docs?.filter((d) => matchesSmartView(d, 'ocr')).length ?? 0
+            }}
+            busy={busy !== null}
+            onCollapse={() => setRailCollapsedPersistent(true)}
+            onNewProject={() => setProjectModal({ mode: 'create', name: '' })}
+            onRenameProject={(p) => setProjectModal({ mode: 'rename', id: p.id, name: p.name })}
+            onArchiveProject={(p) => void onArchiveProject(p)}
+            onDeleteProject={(p) => setDeleteProject(p)}
+            t={t}
+          />
+        )}
         <div className="docs-main">
+      {/* When the sub-nav is collapsed, a quiet "»" handle re-opens it (mirrors the chat
+          ConversationList collapse pattern, §11.6); the list takes the full width meanwhile. */}
+      {railCollapsed && (
+        <button
+          type="button"
+          className="docs-rail-show"
+          aria-label={t('docs.rail.show')}
+          title={t('docs.rail.show')}
+          onClick={() => setRailCollapsedPersistent(false)}
+        >
+          »
+        </button>
+      )}
 
       {/* Toolbar: Import files (Primary) + Import folder (Secondary) carry the screen;
           Refresh is a quiet icon button (§6/Task 7). Multi-document operations live in the
@@ -920,8 +904,6 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
         const canDeepIndex = canDocTasks && !d.origin && d.treeStatus !== 'ready'
         const showOcr = Boolean(d.scanDetected && ocrAvailable)
         const stale = d.origin ? generatedStaleness(d, sourcesById) : { stale: false as const }
-        const sug = dismissedSuggestions.has(d.id) ? undefined : topSuggestionByDoc.get(d.id)
-        const sugName = sug ? suggestionTargetName(sug) : ''
         const rowBusyLabel = rowTask
           ? `${t(TASK_BUSY_LABEL[rowTask.kind])}${
               rowTask.status && rowTask.status.progress.stepsTotal > 1
@@ -983,42 +965,6 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
                 </Banner>
               )}
               {d.staleEmbeddings && <Banner tone="warning">{t('docs.stale.banner')}</Banner>}
-              {/* Quiet, dismissible filing suggestion (plan §20 Phase F). Apply files via the
-                  existing membership path; nothing is filed without that click. */}
-              {sug && sugName && (() => {
-                const textId = `suggest-text-${d.id}`
-                const reasonId = `suggest-reason-${d.id}`
-                return (
-                  <div className="doc-suggest" role="group" aria-labelledby={textId}>
-                    <span className="doc-suggest-text" id={textId}>
-                      {t(sug.target.kind === 'newProject' ? 'docs.suggest.chipNew' : 'docs.suggest.chipExisting', {
-                        name: sugName
-                      })}
-                    </span>
-                    <span className="doc-suggest-reason hint" id={reasonId}>
-                      {t(sug.reasonKey, sug.reasonParams)}
-                    </span>
-                    <Button
-                      size="sm"
-                      variant="primary"
-                      disabled={busy !== null}
-                      title={t('docs.suggest.applyTitle', { name: sugName })}
-                      aria-describedby={reasonId}
-                      onClick={() => void onApplySuggestion(d.id, sug)}
-                    >
-                      {t('docs.suggest.apply')}
-                    </Button>
-                    <Button
-                      size="sm"
-                      disabled={busy !== null}
-                      title={t('docs.suggest.dismissTitle')}
-                      onClick={() => void onDismissSuggestion(d.id)}
-                    >
-                      {t('docs.suggest.dismiss')}
-                    </Button>
-                  </div>
-                )
-              })()}
             </div>
             {/* Trailing cluster (§11.6 refinement): right-aligned, shrink:0 — tag chips, then
                 status badges, then Preview + "⋯". The cluster never shrinks and the name column
@@ -1396,17 +1342,28 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
   )
 }
 
+/** The rare, diagnostic smart views — folded behind the Views "More" disclosure so the
+ *  common filters stay visible and empty diagnostics don't sit on screen. */
+type RareViewKind = 'large' | 'failed' | 'audio' | 'ocr'
+
 /**
- * Left section rail (plan §12.1): the saved-filter navigation — Library, each Project,
- * Temporary, Generated, Archived, All. Responsive collapse to a horizontal strip rides on
- * the existing 760px breakpoint (CSS, plan §12 L4). Project rows carry inline manage actions.
+ * Left section rail / Documents sub-nav (plan §12.1; regrouped §11.6). Four headed groups in
+ * order — **All documents** (default landing, no header) · **Projects** (user-primary, with a
+ * "+" add + per-project "⋯") · **Locations** (the system buckets Library / Temporary /
+ * Generated / Archived, grouped so they read as one set) · **Views** (the common smart filters
+ * always visible, the rare diagnostics behind a remembered "More" disclosure). The whole panel
+ * is collapsible (the "«" handle ⇒ `onCollapse`; the list then takes the full width — mirrors
+ * the chat ConversationList collapse pattern). Responsive collapse to a horizontal strip still
+ * rides on the 760px breakpoint (CSS, plan §12 L4).
  */
 function SectionRail({
   section,
   onSelect,
   activeProjects,
   archivedProjects,
+  rareCounts,
   busy,
+  onCollapse,
   onNewProject,
   onRenameProject,
   onArchiveProject,
@@ -1418,13 +1375,36 @@ function SectionRail({
   collections: Collection[]
   activeProjects: Collection[]
   archivedProjects: Collection[]
+  /** Document count per rare view, so an empty diagnostic view is hidden (presentation only). */
+  rareCounts: Record<RareViewKind, number>
   busy: boolean
+  onCollapse: () => void
   onNewProject: () => void
   onRenameProject: (p: Collection) => void
   onArchiveProject: (p: Collection) => void
   onDeleteProject: (p: Collection) => void
   t: I18n['t']
 }): JSX.Element {
+  // The "More" disclosure (rare diagnostic views) — a real <button> with aria-expanded,
+  // collapsed by default, remembered across sessions (§9 / WCAG 2.2 AA disclosure).
+  const [moreOpen, setMoreOpen] = useState<boolean>(() => {
+    try {
+      return window.localStorage.getItem(VIEWS_MORE_KEY) === '1'
+    } catch {
+      return false
+    }
+  })
+  function toggleMore(): void {
+    setMoreOpen((prev) => {
+      const next = !prev
+      try {
+        window.localStorage.setItem(VIEWS_MORE_KEY, next ? '1' : '0')
+      } catch {
+        // best-effort
+      }
+      return next
+    })
+  }
   const is = (s: DocSection): boolean =>
     section.kind === s.kind && (s.kind !== 'project' || (s as { id: string }).id === (section as { id: string }).id)
   const railBtn = (s: DocSection, label: string): JSX.Element => (
@@ -1437,9 +1417,35 @@ function SectionRail({
       {label}
     </button>
   )
+  // Rare diagnostic views: shown only when non-empty (empty diagnostics don't clutter the
+  // panel) OR when currently selected (never hide the active section out from under the user).
+  const rareViews: Array<{ kind: RareViewKind; label: string }> = [
+    { kind: 'large', label: t('docs.smart.largeFiles') },
+    { kind: 'failed', label: t('docs.smart.failed') },
+    { kind: 'audio', label: t('docs.smart.audio') },
+    { kind: 'ocr', label: t('docs.smart.ocr') }
+  ]
+  const visibleRare = rareViews.filter((v) => rareCounts[v.kind] > 0 || section.kind === v.kind)
   return (
     <nav className="docs-rail" aria-label={t('docs.section.heading')}>
-      {railBtn({ kind: 'library' }, t('docs.section.library'))}
+      {/* Panel header: a quiet title + the "«" collapse handle (§11.6). */}
+      <div className="docs-rail-head">
+        <span className="docs-rail-title">{t('docs.section.heading')}</span>
+        <button
+          type="button"
+          className="docs-rail-collapse"
+          aria-label={t('docs.rail.hide')}
+          title={t('docs.rail.hide')}
+          onClick={onCollapse}
+        >
+          «
+        </button>
+      </div>
+
+      {/* All documents — the default landing, slightly emphasized; no group header. */}
+      {railBtn({ kind: 'all' }, t('docs.section.all'))}
+
+      {/* PROJECTS — user-primary, kept near the top (header + "+"). */}
       <div className="docs-rail-group">
         <div className="docs-rail-group-head">
           <span className="docs-rail-group-label">{t('docs.section.projects')}</span>
@@ -1517,12 +1523,22 @@ function SectionRail({
           </div>
         ))}
       </div>
-      {railBtn({ kind: 'temporary' }, t('docs.section.temporary'))}
-      {railBtn({ kind: 'generated' }, t('docs.section.generated'))}
-      {railBtn({ kind: 'archived' }, t('docs.section.archived'))}
-      {railBtn({ kind: 'all' }, t('docs.section.all'))}
-      {/* Phase-E smart views (plan §7.6/§12.1): query-time filters, not stored collections.
-          Reuses the projects-group layout so the existing 760px reflow applies (L4). */}
+      {/* LOCATIONS — the system buckets, grouped under one header so they read as one set
+          (presentation only; the underlying data model / exclusivity is untouched, see the
+          location-taxonomy note in BUILD_STATE.md). */}
+      <div className="docs-rail-group">
+        <div className="docs-rail-group-head">
+          <span className="docs-rail-group-label">{t('docs.section.locations')}</span>
+        </div>
+        {railBtn({ kind: 'library' }, t('docs.section.library'))}
+        {railBtn({ kind: 'temporary' }, t('docs.section.temporary'))}
+        {railBtn({ kind: 'generated' }, t('docs.section.generated'))}
+        {railBtn({ kind: 'archived' }, t('docs.section.archived'))}
+      </div>
+
+      {/* VIEWS — query-time smart filters (plan §7.6/§12.1). The common ones stay visible; the
+          rare diagnostics fold behind a remembered "More" disclosure (and an empty diagnostic
+          view is hidden entirely). */}
       <div className="docs-rail-group">
         <div className="docs-rail-group-head">
           <span className="docs-rail-group-label">{t('docs.smart.heading')}</span>
@@ -1530,10 +1546,22 @@ function SectionRail({
         {railBtn({ kind: 'recent' }, t('docs.smart.recentlyAdded'))}
         {railBtn({ kind: 'unfiled' }, t('docs.smart.unfiled'))}
         {railBtn({ kind: 'needsReindex' }, t('docs.smart.needsReindex'))}
-        {railBtn({ kind: 'large' }, t('docs.smart.largeFiles'))}
-        {railBtn({ kind: 'failed' }, t('docs.smart.failed'))}
-        {railBtn({ kind: 'audio' }, t('docs.smart.audio'))}
-        {railBtn({ kind: 'ocr' }, t('docs.smart.ocr'))}
+        {visibleRare.length > 0 && (
+          <>
+            <button
+              type="button"
+              className="docs-rail-more"
+              aria-expanded={moreOpen}
+              onClick={toggleMore}
+            >
+              <span>{t('docs.smart.more')}</span>
+              <span className="docs-rail-more-caret" aria-hidden="true">
+                {moreOpen ? '▴' : '▾'}
+              </span>
+            </button>
+            {moreOpen && visibleRare.map((v) => railBtn({ kind: v.kind }, v.label))}
+          </>
+        )}
       </div>
     </nav>
   )

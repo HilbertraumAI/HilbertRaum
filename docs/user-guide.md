@@ -1,7 +1,8 @@
 # HilbertRaum — User Guide
 
 _Last updated: 2026-06-15 (added: deep index + coverage meter and tiers; drag-and-drop files into a
-chat; the composite source picker; filing suggestions; audio transcription, OCR and voice dictation)_
+chat; the composite source picker; regrouped + collapsible Documents sidebar; audio transcription,
+OCR and voice dictation)_
 
 HilbertRaum is a private AI workspace that runs **entirely on your laptop**, from
 a portable drive. Your prompts, documents, embeddings, and chat history stay local. There is
@@ -426,25 +427,30 @@ A few honest notes about recordings:
 ### Organize your documents (Library, Projects, Temporary)
 
 The **Documents** screen has a list of **sections** down the left so a one-off invoice never
-pollutes the same pile as your long-term records:
+pollutes the same pile as your long-term records. It reads as four groups:
 
-- **Library** — your long-term knowledge base. Everything you import lands here by default and
-  it is the default source when you ask your documents.
+- **All documents** (at the top) — everything, regardless of section. This is where you land.
 - **Projects** — focused folders you create (e.g. *"Tax 2025"*, *"Client Müller"*). Use the
   **+** next to **Projects** to make one; the **⋯** menu renames, archives, or deletes it. A
   document can be in a project **and** in your Library at the same time — it is the *same* file,
   not a copy, so it is never stored or indexed twice.
-- **Temporary** — one-off files you want to read *now* without adding them to your Library
-  (for example, a PDF you drop into a chat). They stay here, clearly visible, until you decide
-  what to do with them. Nothing is ever deleted automatically.
-- **Generated** — documents the app made for you (translations, comparisons). They show where
-  they came from and are kept out of your default answers (see below).
-- **Archived** — documents you've set aside: kept on the drive but left out of answers until
-  you un-archive them.
-- **All documents** — everything, regardless of section.
-- **Views** — handy filters: *Recently added*, *Unfiled*, *Needs re-index*, *Large files*,
-  *Audio*, *Scanned / OCR*, and *Failed imports*. These just filter the list; they don't move
-  anything.
+- **Locations** — the built-in places a document can live:
+  - **Library** — your long-term knowledge base. Everything you import lands here by default and
+    it is the default source when you ask your documents.
+  - **Temporary** — one-off files you want to read *now* without adding them to your Library
+    (for example, a PDF you drop into a chat). They stay here, clearly visible, until you decide
+    what to do with them. Nothing is ever deleted automatically.
+  - **Generated** — documents the app made for you (translations, comparisons). They show where
+    they came from and are kept out of your default answers (see below).
+  - **Archived** — documents you've set aside: kept on the drive but left out of answers until
+    you un-archive them.
+- **Views** — handy filters that just narrow the list (they don't move anything). The common
+  ones — *Recently added*, *Unfiled*, *Needs re-index* — are always shown; the rarer diagnostic
+  ones — *Large files*, *Failed imports*, *Audio*, *Scanned / OCR* — fold behind a **More**
+  toggle and only appear when there's something to show.
+
+Use the **«** handle at the top of the list to **collapse the whole sidebar** when you want the
+document list full-width; the **»** handle brings it back. Your choice is remembered.
 
 **Move things around.** Each document row's **⋯** menu files it into a
 project (**Add to project…**), **Keep in Library**, marks it **Temporary** or **Archived**, or
@@ -452,14 +458,6 @@ project (**Add to project…**), **Keep in Library**, marks it **Temporary** or 
 toolbar's **Add to project…** / **Delete** (or mark them Temporary/Archived) to do it in bulk. Deleting a *project* asks
 whether to keep its documents (they stay in your Library / other projects) or delete the ones
 that live *only* in that project — Library knowledge is never deleted by accident.
-
-**Suggested places to file things.** On unfiled documents the app may show a calm suggestion like
-**"Suggested project: Tax 2025"** (or **"Suggested new project: …"** when it would create one) with
-**Apply** and **Dismiss** buttons — based simply on the folder a file came from, where similar files
-are already filed, or a name that looks like an invoice/receipt (*Rechnung*, *Beleg*…). It is only
-ever a suggestion: **nothing is filed until you click Apply**, and **Dismiss** hides it for that
-document for good. No AI guessing, no automatic
-sorting — you stay in control.
 
 ### Choose which sources a chat uses
 
@@ -478,7 +476,7 @@ make one part of your knowledge, **Export it and re-import** it into the right p
 generated document's source later changes, its row shows a quiet **"Outdated — re-run to
 update"** note (the app never silently rewrites it; re-run the task when you want a fresh one).
 
-Everything here is local: organizing, suggesting, and scoping never call a model or the
+Everything here is local: organizing and scoping never call a model or the
 network, and the activity log records only counts and ids — never your project or folder names.
 
 ---

@@ -2,8 +2,13 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, cleanup, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { DocumentsScreen, friendlyMimeLabel } from '../../src/renderer/screens/DocumentsScreen'
-import type { Collection, DocumentInfo, FilingSuggestionResult } from '../../src/shared/types'
+import {
+  DocumentsScreen,
+  friendlyMimeLabel,
+  RAIL_COLLAPSED_KEY,
+  VIEWS_MORE_KEY
+} from '../../src/renderer/screens/DocumentsScreen'
+import type { Collection, DocumentInfo } from '../../src/shared/types'
 import { stubApi } from '../helpers/renderer'
 
 // Renderer test (jsdom + RTL) for the Documents screen: list rendering + status, the
@@ -117,13 +122,18 @@ describe('DocumentsScreen — organization', () => {
     })
     render(<DocumentsScreen />)
 
+    // "Failed imports" is a rare diagnostic view folded behind the Views "More" disclosure (§11.6).
+    await screen.findByRole('button', { name: 'Library' })
+    expect(screen.queryByRole('button', { name: 'Failed imports' })).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'More' }))
     // Failed imports → only the failed doc.
     await user.click(await screen.findByRole('button', { name: 'Failed imports' }))
     expect(screen.getByText('broken.xyz')).toBeInTheDocument()
     expect(screen.queryByText('libonly.pdf')).not.toBeInTheDocument()
     expect(screen.queryByText('filed.pdf')).not.toBeInTheDocument()
 
-    // Unfiled → the Library-only doc, never the project-filed one (Library isn't "filed").
+    // Unfiled is a common view, always visible (no "More" needed) → the Library-only doc,
+    // never the project-filed one (Library isn't "filed").
     await user.click(screen.getByRole('button', { name: 'Unfiled' }))
     expect(screen.getByText('libonly.pdf')).toBeInTheDocument()
     expect(screen.queryByText('filed.pdf')).not.toBeInTheDocument()
@@ -216,130 +226,21 @@ describe('DocumentsScreen — organization', () => {
     expect(removeFromCollection).toHaveBeenCalledWith(['d1'], 'temp')
   })
 
-  // ---- Phase F: filing suggestions (rule-based, non-silent — plan §20) ----------------
-  function existingSuggestion(documentId = 'd1', collectionId = 'tax'): FilingSuggestionResult {
-    return {
-      documentId,
-      suggestions: [
-        {
-          ruleId: 'folder-name-match',
-          target: { kind: 'existingProject', collectionId },
-          reasonKey: 'docs.suggest.reason.folder',
-          reasonParams: { folder: 'Tax 2025' }
-        }
-      ]
-    }
-  }
-
-  it('shows a quiet suggestion chip on an unfiled doc; Apply files it and the chip clears', async () => {
-    const user = userEvent.setup()
-    const library = coll({ id: 'lib', name: 'Library', type: 'library', builtin: true })
-    const tax = coll({ id: 'tax', name: 'Tax 2025' })
-    const unfiled = doc({
-      id: 'd1',
-      title: 'return.pdf',
-      sourceFolderLabel: 'Tax 2025',
-      collections: [{ id: 'lib', name: 'Library', type: 'library', role: 'source' }]
-    })
-    const filed = {
-      ...unfiled,
-      collections: [...(unfiled.collections ?? []), { id: 'tax', name: 'Tax 2025', type: 'project' as const, role: 'source' as const }]
-    }
-    const listDocuments = vi
-      .fn<() => Promise<DocumentInfo[]>>()
-      .mockResolvedValueOnce([unfiled])
-      .mockResolvedValue([filed])
-    const filingSuggestions = vi
-      .fn<() => Promise<FilingSuggestionResult[]>>()
-      .mockResolvedValueOnce([existingSuggestion()])
-      .mockResolvedValue([])
-    const addToCollection = vi.fn(async () => {})
-    stubApi({ listCollections: vi.fn(async () => [library, tax]), listDocuments, filingSuggestions, addToCollection })
-    render(<DocumentsScreen />)
-
-    expect(await screen.findByText('Suggested project: Tax 2025')).toBeInTheDocument()
-    // The reason is a localized keyed template, not free text.
-    expect(screen.getByText(/came from a folder named/i)).toBeInTheDocument()
-
-    await user.click(screen.getByRole('button', { name: 'Apply' }))
-    await waitFor(() => expect(addToCollection).toHaveBeenCalledWith(['d1'], 'tax'))
-    await waitFor(() =>
-      expect(screen.queryByText('Suggested project: Tax 2025')).not.toBeInTheDocument()
-    )
-  })
-
-  it('Apply on a "new project" suggestion creates the project then files the doc', async () => {
-    const user = userEvent.setup()
-    const created = coll({ id: 'inv', name: 'Invoices' })
-    const createCollection = vi.fn(async () => created)
-    const addToCollection = vi.fn(async () => {})
-    stubApi({
-      listCollections: vi.fn(async () => []),
-      listDocuments: vi.fn(async () => [doc({ id: 'd1', title: 'invoice.pdf' })]),
-      filingSuggestions: vi.fn(async () => [
-        {
-          documentId: 'd1',
-          suggestions: [
-            {
-              ruleId: 'filename-pattern',
-              target: { kind: 'newProject', suggestedName: 'Invoices' },
-              reasonKey: 'docs.suggest.reason.filename'
-            }
-          ]
-        } satisfies FilingSuggestionResult
-      ]),
-      createCollection,
-      addToCollection
-    })
-    render(<DocumentsScreen />)
-
-    expect(await screen.findByText('Suggested new project: Invoices')).toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: 'Apply' }))
-    await waitFor(() => expect(createCollection).toHaveBeenCalledWith('Invoices'))
-    await waitFor(() => expect(addToCollection).toHaveBeenCalledWith(['d1'], 'inv'))
-  })
-
-  it('Dismiss hides the chip, persists it to settings, and it stays hidden after a refresh', async () => {
-    const user = userEvent.setup()
-    let dismissed: string[] = []
-    const getSettings = vi.fn(async () => ({ dismissedFilingSuggestions: dismissed }) as never)
-    const updateSettings = vi.fn(async (patch: { dismissedFilingSuggestions?: string[] }) => {
-      dismissed = patch.dismissedFilingSuggestions ?? dismissed
-      return {} as never
-    })
+  // ---- Suggested-project feature REMOVED: no suggestion UI must remain (the IPC is gone from
+  //      the preload Api type, so a `filingSuggestions` stub would not even typecheck) --------
+  it('renders no project-suggestion chip on an unfiled doc that a rule would have matched', async () => {
     stubApi({
       listCollections: vi.fn(async () => [coll({ id: 'tax', name: 'Tax 2025' })]),
-      listDocuments: vi.fn(async () => [doc({ id: 'd1', title: 'return.pdf', sourceFolderLabel: 'Tax 2025' })]),
-      // The suggestion is ALWAYS returned — only the persisted dismissal hides the chip.
-      filingSuggestions: vi.fn(async () => [existingSuggestion()]),
-      getSettings,
-      updateSettings
+      // An unfiled doc whose folder label a folder-name rule WOULD have matched, to be sure
+      // nothing surfaces.
+      listDocuments: vi.fn(async () => [doc({ id: 'd1', title: 'return.pdf', sourceFolderLabel: 'Tax 2025' })])
     })
     render(<DocumentsScreen />)
-
-    await user.click(await screen.findByRole('button', { name: 'Dismiss' }))
-    await waitFor(() =>
-      expect(updateSettings).toHaveBeenCalledWith({ dismissedFilingSuggestions: ['d1'] })
-    )
-    await waitFor(() =>
-      expect(screen.queryByText('Suggested project: Tax 2025')).not.toBeInTheDocument()
-    )
-
-    // A refresh re-reads settings; the dismissal persisted, so the chip stays hidden.
-    await user.click(screen.getByRole('button', { name: 'Refresh' }))
-    await waitFor(() => expect(getSettings).toHaveBeenCalled())
-    expect(screen.queryByText('Suggested project: Tax 2025')).not.toBeInTheDocument()
-  })
-
-  it('a document with no suggestion shows no chip', async () => {
-    stubApi({
-      listCollections: vi.fn(async () => []),
-      listDocuments: vi.fn(async () => [doc({ id: 'd1', title: 'random.pdf' })]),
-      filingSuggestions: vi.fn(async () => [])
-    })
-    render(<DocumentsScreen />)
-    await screen.findByText('random.pdf')
-    expect(screen.queryByRole('button', { name: 'Apply' })).not.toBeInTheDocument()
+    await screen.findByText('return.pdf')
+    // No suggestion chip, no Apply/Dismiss affordance.
+    expect(screen.queryByText(/suggested project|suggested new project/i)).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^apply$/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^dismiss$/i })).not.toBeInTheDocument()
   })
 })
 
@@ -813,5 +714,120 @@ describe('DocumentsScreen — action overflow + selection toolbar (§11.6)', () 
     trigger.focus()
     expect(trigger).toHaveFocus()
     expect(trigger).not.toHaveAttribute('tabindex', '-1')
+  })
+})
+
+// ---- §11.6 sub-nav regroup: four headed groups, "More" disclosure, active aria-current,
+//      collapsible panel ----------------------------------------------------------------
+describe('DocumentsScreen — sub-nav (section rail) regroup', () => {
+  afterEach(() => {
+    try {
+      window.localStorage.clear()
+    } catch {
+      /* jsdom */
+    }
+  })
+
+  it('renders the four groups in order: All documents · Projects · Locations · Views', async () => {
+    stubApi({
+      listCollections: vi.fn(async () => [coll({ id: 'tax', name: 'Tax 2025' })]),
+      listDocuments: vi.fn(async () => [doc({})])
+    })
+    render(<DocumentsScreen />)
+    const all = await screen.findByRole('button', { name: 'All documents' })
+    const projects = screen.getByText('Projects')
+    const locations = screen.getByText('Locations')
+    const views = screen.getByText('Views')
+    // DOM order: All documents → Projects → Locations → Views (Node.DOCUMENT_POSITION_FOLLOWING = 4).
+    expect(all.compareDocumentPosition(projects) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(projects.compareDocumentPosition(locations) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(locations.compareDocumentPosition(views) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    // The system buckets live under Locations (all four present as nav rows).
+    for (const name of ['Library', 'Temporary', 'Generated', 'Archived']) {
+      expect(screen.getByRole('button', { name })).toBeInTheDocument()
+    }
+  })
+
+  it('the active item carries aria-current and uses the fill (not a ring); selection moves it', async () => {
+    const user = userEvent.setup()
+    stubApi({
+      listCollections: vi.fn(async () => [coll({ id: 'lib', name: 'Library', type: 'library', builtin: true })]),
+      listDocuments: vi.fn(async () => [doc({})])
+    })
+    render(<DocumentsScreen />)
+    // Default landing = All documents, marked current.
+    const all = await screen.findByRole('button', { name: 'All documents' })
+    expect(all).toHaveAttribute('aria-current', 'true')
+    expect(all).toHaveClass('active')
+    // Selecting Library moves aria-current there; All documents drops it.
+    await user.click(screen.getByRole('button', { name: 'Library' }))
+    expect(screen.getByRole('button', { name: 'Library' })).toHaveAttribute('aria-current', 'true')
+    expect(screen.getByRole('button', { name: 'All documents' })).not.toHaveAttribute('aria-current')
+  })
+
+  it('folds the rare views behind a "More" disclosure that toggles via keyboard with aria-expanded', async () => {
+    const user = userEvent.setup()
+    stubApi({
+      listCollections: vi.fn(async () => []),
+      // One large + one audio doc, so those rare views are non-empty (and thus offered).
+      listDocuments: vi.fn(async () => [
+        doc({ id: 'd1', sizeBytes: 200 * 1024 * 1024 }),
+        doc({ id: 'd2', title: 'talk.mp3', mimeType: 'audio/mpeg' })
+      ])
+    })
+    render(<DocumentsScreen />)
+    // Common views always visible; the rare ones are hidden until "More" is expanded.
+    expect(await screen.findByRole('button', { name: 'Recently added' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Needs re-index' })).toBeInTheDocument()
+    const more = screen.getByRole('button', { name: 'More' })
+    expect(more).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByRole('button', { name: 'Large files' })).not.toBeInTheDocument()
+    // Keyboard: focus + Enter expands.
+    more.focus()
+    await user.keyboard('{Enter}')
+    expect(more).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getByRole('button', { name: 'Large files' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Audio' })).toBeInTheDocument()
+    // The expanded state persists across sessions.
+    expect(window.localStorage.getItem(VIEWS_MORE_KEY)).toBe('1')
+    // Space collapses it again.
+    await user.keyboard(' ')
+    expect(more).toHaveAttribute('aria-expanded', 'false')
+    expect(window.localStorage.getItem(VIEWS_MORE_KEY)).toBe('0')
+  })
+
+  it('hides an empty rare view entirely (no Failed imports when nothing failed)', async () => {
+    const user = userEvent.setup()
+    stubApi({
+      listCollections: vi.fn(async () => []),
+      listDocuments: vi.fn(async () => [doc({ id: 'd1', sizeBytes: 200 * 1024 * 1024 })])
+    })
+    render(<DocumentsScreen />)
+    await user.click(await screen.findByRole('button', { name: 'More' }))
+    expect(screen.getByRole('button', { name: 'Large files' })).toBeInTheDocument()
+    // No failed / audio / scan docs ⇒ those rare views are not even offered.
+    expect(screen.queryByRole('button', { name: 'Failed imports' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Audio' })).not.toBeInTheDocument()
+  })
+
+  it('collapses and expands the whole sub-nav, remembering the state; collapsed → no rail', async () => {
+    const user = userEvent.setup()
+    stubApi({
+      listCollections: vi.fn(async () => []),
+      listDocuments: vi.fn(async () => [doc({})])
+    })
+    render(<DocumentsScreen />)
+    // Expanded by default: the rail and its "All documents" row are present.
+    expect(await screen.findByRole('button', { name: 'All documents' })).toBeInTheDocument()
+    // Collapse via the "«" handle.
+    await user.click(screen.getByRole('button', { name: 'Hide sections' }))
+    expect(screen.queryByRole('button', { name: 'All documents' })).not.toBeInTheDocument()
+    expect(window.localStorage.getItem(RAIL_COLLAPSED_KEY)).toBe('1')
+    // A "»" handle re-opens it.
+    const show = screen.getByRole('button', { name: 'Show sections' })
+    expect(show).toBeInTheDocument()
+    await user.click(show)
+    expect(screen.getByRole('button', { name: 'All documents' })).toBeInTheDocument()
+    expect(window.localStorage.getItem(RAIL_COLLAPSED_KEY)).toBe('0')
   })
 })

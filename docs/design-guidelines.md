@@ -532,6 +532,45 @@ ellipsizing cleanly with room beside it, the aligned Preview/"⋯" column, quiet
 button, Ready-green-only with neutral Summary/Deeply-indexed, the "⋯" menu open incl. Delete) —
 before/after captures in `docs/design-review/docs-refinement/{before,after}/`.
 
+**Follow-up — suggested-project removal + sub-nav regroup (2026-06-15).** Two changes to the
+Documents screen. **(A) The auto "suggested project" feature was REMOVED** (intentional product
+decision — it put a near-equal row affordance behind a low-value guess): the per-row suggestion
+chip + Apply/Dismiss, the renderer state, the read-only `docs:filingSuggestions` IPC + its
+preload bridge, the pure rule engine (`services/filing-suggestions.ts`), the `FilingSuggestion*`
+types, the `AppSettings.dismissedFilingSuggestions` setting, the `docs.suggest.*` i18n keys
+(EN+DE), and the `.doc-suggest*` styles are all gone (full original in git history). Filing
+stays fully manual via the row **⋯** / selection toolbar (`addToCollection`/`createCollection`);
+`source_folder_label` import metadata is retained. A `copy-tone` guard pins the removed strings
+out of the source. **(B) The Documents sub-nav (`SectionRail`) was regrouped + densified +
+made collapsible.** It was ~14 near-equal items with inconsistent grouping; now four headed
+groups in order — **All documents** (default landing, no header, the slightly-emphasized active
+fill) · **Projects** (header + "+", user-primary, per-project "⋯") · **Locations** (the system
+buckets Library / Temporary / Generated / Archived under ONE header so they read as one set —
+presentation only; the data model / exclusivity is untouched, see the location-taxonomy note in
+`BUILD_STATE.md`) · **Views** (the common smart filters Recently added / Unfiled / Needs
+re-index always visible; the rare diagnostics Large files / Failed imports / Audio / Scanned-OCR
+folded behind a remembered **"More ▾"** disclosure — a real `<button aria-expanded>` — and an
+empty rare view is hidden entirely so empty diagnostics don't sit on screen). Nav rows densified
+to ~36px with a uniform hover highlight; the **active** item uses the `--row-selected-bg` fill +
+`aria-current`, NOT a ring (so selection stays distinct from `:focus-visible`). The **whole
+panel is collapsible** — a "«" handle hides it (the list then takes the full width) and a "»"
+handle re-opens it, both remembered in localStorage (`hilbertraum.docs.railCollapsed` /
+`…viewsMoreOpen`) — mirroring the chat `ConversationList` collapse pattern (§12.1) and resolving
+the standing "sub-nav vs global-rail stacking" watch item: the second column is now dismissable,
+not permanent. **Files:** `renderer/screens/DocumentsScreen.tsx` (SectionRail rewrite, collapse
+state + "»" handle, suggestion removal), `renderer/styles.css` (`.docs-rail-head/-title/
+-collapse/-show/-more`, density, `--row-selected-bg` active fill, `.docs-layout.rail-collapsed`),
+`shared/i18n/{en,de}.ts` (+`docs.section.locations`, `docs.smart.more`, `docs.rail.hide/show`;
+−`docs.suggest.*`). Verification per §11.4: typecheck + build clean, full vitest from
+`apps/desktop` **1344 passed / 25 skipped** (suggestion tests/IPC/service/db-settings cases
+removed; added a no-suggestion-renders guard + four-groups-in-order, More-toggles-via-keyboard-
+with-aria-expanded, empty-rare-view-hidden, active-aria-current, and collapse-persists cases).
+Playwright `_electron` eyeball walk in BOTH themes AND both locales (EN/DE): populated list with
+no suggestion banner, the regrouped sub-nav with "More" collapsed + expanded, the sub-nav
+collapsed (list full-width) + expanded, the active-item fill — German headers/labels fit without
+hyphenation/overflow. Captures in `docs/design-review/docs-subnav/`
+(`scripts/walk-docs-subnav.mjs`).
+
 ---
 
 ## 12. Chat-UI polish pass — design record (IMPLEMENTED 2026-06-13)
