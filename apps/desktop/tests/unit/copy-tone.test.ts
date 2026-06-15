@@ -70,7 +70,11 @@ describe('stale phrases stay out of user-facing string literals', () => {
     'Suggested project',
     'Suggested new project',
     'Vorgeschlagenes Projekt',
-    'Vorgeschlagenes neues Projekt'
+    'Vorgeschlagenes neues Projekt',
+    // The AI Model demo affordance was de-jargoned (§3/§7): "mock runtime"/"Demo-Runtime"
+    // is developer-speak. The button + diagnostics label now say "demo mode" / „Demo-Modus".
+    'Start mock runtime',
+    'Demo-Runtime'
   ])('no string literal says %j', (phrase) => {
     expect(literalOccurrences(phrase)).toEqual([])
   })

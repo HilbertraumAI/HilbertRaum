@@ -5,6 +5,7 @@ import userEvent from '@testing-library/user-event'
 import {
   LocalIndicator,
   localIndicatorLabel,
+  localIndicatorShortLabel,
   localIndicatorDetail
 } from '../../src/renderer/components/LocalIndicator'
 import type { PolicyStatus } from '../../src/shared/types'
@@ -42,16 +43,29 @@ describe('localIndicator copy (pure)', () => {
     expect(localIndicatorLabel(false)).toBe('Local · Downloads allowed')
     expect(localIndicatorDetail(false)).toBe('Downloads allowed — chats and documents stay local.')
   })
+
+  it('uses a short, rail-width label for the sidebar variant', () => {
+    // The full "Local · …" form is too wide for the 100px rail (§12.1 #2): the rail shows
+    // the effective state in one word, the tooltip carries the full reassurance.
+    expect(localIndicatorShortLabel(true)).toBe('Offline')
+    expect(localIndicatorShortLabel(false)).toBe('Downloads on')
+  })
 })
 
 describe('LocalIndicator', () => {
-  it('shows "Local · Offline" when offline (controlled, sidebar variant)', () => {
+  it('shows the short "Offline" label when offline (rail-foot sidebar variant)', () => {
     stubApi({})
     render(<LocalIndicator variant="sidebar" offline onNavigate={vi.fn()} />)
-    expect(screen.getByRole('button', { name: 'Local · Offline' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Offline' })).toBeInTheDocument()
   })
 
-  it('shows the honest variant while downloads are enabled', () => {
+  it('shows the honest "Downloads on" label on the rail while downloads are enabled', () => {
+    stubApi({})
+    render(<LocalIndicator variant="sidebar" offline={false} onNavigate={vi.fn()} />)
+    expect(screen.getByRole('button', { name: 'Downloads on' })).toBeInTheDocument()
+  })
+
+  it('shows the full label for the header variant while downloads are enabled', () => {
     stubApi({})
     render(<LocalIndicator offline={false} onNavigate={vi.fn()} />)
     expect(screen.getByRole('button', { name: 'Local · Downloads allowed' })).toBeInTheDocument()

@@ -5,7 +5,7 @@ import { ModelsScreen } from './screens/ModelsScreen'
 import { ChatScreen } from './screens/ChatScreen'
 import { DocumentsScreen } from './screens/DocumentsScreen'
 import { WorkspaceGate } from './screens/WorkspaceGate'
-import { Banner, Button, Icon, ToastProvider, type IconName } from './components'
+import { Banner, Button, Icon, LocalIndicator, ToastProvider, type IconName } from './components'
 import { setThemeSetting } from './theme'
 import { I18nProvider, useT } from './i18n'
 import { resolveNavTarget, type ScreenId, type SettingsTab } from './navigation'
@@ -54,10 +54,12 @@ function AppShell(): JSX.Element {
   // The workspace lifecycle gate. Null = still loading; not 'unlocked' = show
   // the create-password / unlock gate before the normal app shell.
   const [workspace, setWorkspace] = useState<WorkspaceStateInfo | null>(null)
-  // Live offline state for the sidebar's ambient "Local · Offline" indicator
-  // (spec §3.6). Re-checked when the Settings screen is visited (network toggle
-  // may have changed). Policy detail ("disabled by policy" vs. off by choice)
-  // lives on the Privacy & data tab the indicator opens.
+  // Live EFFECTIVE offline state for the single rail-foot privacy indicator (§1.2/§12.1
+  // #2). `getPolicy().offlineMode` already folds the drive policy AND the network toggle,
+  // so a policy that forces downloads off reads "Offline" even with the toggle on.
+  // Re-checked when the Settings screen is visited (the toggle may have changed). Policy
+  // detail ("disabled by policy" vs. off by choice) lives on the Privacy & data tab the
+  // indicator opens.
   const [offline, setOffline] = useState(true)
   // Set when the backend never came up (getWorkspaceState rejected). Faking 'unlocked'
   // here would render the full shell with every screen surfacing raw IPC errors.
@@ -220,6 +222,11 @@ function AppShell(): JSX.Element {
             <span className="nav-label">{t('app.lockNow')}</span>
           </button>
         )}
+        {/* The single app-wide privacy signal (§1.2/§7/§12.1 #2): one quiet, honest
+            indicator at the foot of the rail, on EVERY screen. `offline` is the effective
+            policy state owned by App, so a drive policy that forces downloads off reads
+            "Offline" even with the toggle on. */}
+        <LocalIndicator variant="sidebar" offline={offline} onNavigate={navigate} t={t} />
       </nav>
 
       <main className="content">
@@ -243,7 +250,6 @@ function AppShell(): JSX.Element {
             onNavigate={navigate}
             initialMode={chatMode}
             initialScopeDocumentIds={chatScope}
-            offline={offline}
           />
         )}
         {screen === 'documents' && <DocumentsScreen onAskSelected={askSelectedDocuments} />}

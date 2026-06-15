@@ -66,6 +66,13 @@ export function HomeScreen({ onNavigate }: Props): JSX.Element {
   const modelRunning = runtime?.running === true
   const indexedCount = docs?.filter((d) => d.status === 'indexed').length ?? null
 
+  // The hero CTA is adaptive (D-UI3): it leads with the action that unblocks the user.
+  // `needsModel` is the SAME signal the model row's warning badge renders from (no model
+  // running AND none selected) — so the loud primary becomes "Choose a model" instead of
+  // a "Start chatting" that dead-ends at the no-model empty state. Guarded on a loaded
+  // status so we don't flash "Choose a model" before we know there isn't one.
+  const needsModel = status != null && !modelRunning && !status.activeModelId
+
   const headline = modelRunning
     ? t('home.headline.ready')
     : status?.activeModelId
@@ -204,15 +211,38 @@ export function HomeScreen({ onNavigate }: Props): JSX.Element {
         <ReadinessRow {...docsRow} />
       </div>
 
+      {/* One loud primary at a time (§6). When a model is needed, the unblocking action
+          ("Choose a model") leads and chatting demotes to secondary (still clickable —
+          the mock/demo runtime may allow it; never hard-disabled). Otherwise "Start
+          chatting" leads, as before. The model row keeps its own inline "Choose a model"
+          (a small Secondary), so the remediation isn't duplicated as a second loud button. */}
       <div className="actions">
-        <Button variant="primary" onClick={() => onNavigate('chat')}>
-          {t('home.actions.startChat')}
-        </Button>
-        {indexedCount !== 0 && (
-          <Button onClick={() => onNavigate('ask-documents')}>{t('home.actions.askDocs')}</Button>
-        )}
-        {indexedCount !== 0 && (
-          <Button onClick={() => onNavigate('documents')}>{t('home.docs.add')}</Button>
+        {needsModel ? (
+          <>
+            <Button variant="primary" onClick={() => onNavigate('models')}>
+              {t('home.model.choose')}
+            </Button>
+            <Button onClick={() => onNavigate('chat')}>{t('home.actions.startChat')}</Button>
+            {indexedCount !== 0 && (
+              <Button onClick={() => onNavigate('ask-documents')}>
+                {t('home.actions.askDocs')}
+              </Button>
+            )}
+          </>
+        ) : (
+          <>
+            <Button variant="primary" onClick={() => onNavigate('chat')}>
+              {t('home.actions.startChat')}
+            </Button>
+            {indexedCount !== 0 && (
+              <Button onClick={() => onNavigate('ask-documents')}>
+                {t('home.actions.askDocs')}
+              </Button>
+            )}
+            {indexedCount !== 0 && (
+              <Button onClick={() => onNavigate('documents')}>{t('home.docs.add')}</Button>
+            )}
+          </>
         )}
       </div>
     </div>

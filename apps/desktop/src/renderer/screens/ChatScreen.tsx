@@ -14,7 +14,7 @@ import { localizeServerCopy } from '../lib/displayMap'
 import { friendlyIpcError } from '../lib/errors'
 import { RUNTIME_POLL_MS, STREAM_RECOVER_POLL_MS } from '../lib/polling'
 import { useT } from '../i18n'
-import { Button, Chip, EmptyState, ErrorBanner, LocalIndicator, SegmentedControl, Spinner, useToast } from '../components'
+import { Button, Chip, EmptyState, ErrorBanner, SegmentedControl, Spinner, useToast } from '../components'
 import { Composer, ConversationList, DepthMenu, ScopePopover, Transcript } from '../chat'
 import type { MessageKey } from '@shared/i18n'
 
@@ -72,19 +72,12 @@ interface Props {
   initialMode?: Mode
   /** Retrieval scope for the NEXT documents conversation ("Ask these documents"). */
   initialScopeDocumentIds?: string[] | null
-  /**
-   * Effective offline state, owned by App (M-U4: one ambient truth, guidelines §7).
-   * Passed to the header LocalIndicator so it agrees with the sidebar instead of
-   * self-fetching the policy at its own mount.
-   */
-  offline?: boolean
 }
 
 export function ChatScreen({
   onNavigate,
   initialMode,
-  initialScopeDocumentIds,
-  offline
+  initialScopeDocumentIds
 }: Props): JSX.Element {
   const { t } = useT()
   const [conversations, setConversations] = useState<Conversation[]>([])
@@ -879,9 +872,8 @@ export function ChatScreen({
             disabled={busyStreaming}
           />
           <div className="chat-header-spacer" />
-          {/* Ambient "Local · Offline" signal (guidelines §7); offline owned by App
-              so the header and sidebar can never disagree (M-U4). */}
-          <LocalIndicator offline={offline} onNavigate={onNavigate} t={t} />
+          {/* The ambient privacy signal now lives once, app-wide, at the foot of the nav
+              rail (§12.1 #2) — no per-screen instance here. */}
           <DropdownMenu.Root>
             <DropdownMenu.Trigger asChild>
               <button

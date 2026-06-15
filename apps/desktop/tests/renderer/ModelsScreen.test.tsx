@@ -233,6 +233,36 @@ describe('ModelsScreen — automatic roles (Phase 36: reranker/transcriber)', ()
   })
 })
 
+describe('ModelsScreen — de-jargoned + tidy per-card buttons (§3/§7)', () => {
+  it('hides the disabled "Select" for a not-downloaded model — Download is the one clear action', async () => {
+    stub({ models: [model({ state: 'missing' })] })
+    render(<ModelsScreen />)
+    await screen.findByText('Qwen3 4B Instruct')
+    // Before the weights exist, "Select" / "Start runtime" are noise — not rendered.
+    expect(screen.queryByRole('button', { name: /^select$/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /start runtime/i })).not.toBeInTheDocument()
+    // The single clear action remains.
+    expect(screen.getByRole('button', { name: 'Download' })).toBeInTheDocument()
+  })
+
+  it('shows "Select" once the model is downloaded (installed)', async () => {
+    stub({ models: [model({ state: 'installed' })] })
+    render(<ModelsScreen />)
+    await screen.findByText('Qwen3 4B Instruct')
+    expect(screen.getByRole('button', { name: /^select$/i })).toBeInTheDocument()
+  })
+
+  it('labels the demo affordance "Try in demo mode" — no "mock runtime" jargon', async () => {
+    // Developer-only, gated in MAIN via `startableAsMock`; when offered it reads as the
+    // banner's "demo mode (visibly simulated answers)", not "Start mock runtime".
+    stub({ models: [model({ state: 'missing', startableAsMock: true })] })
+    render(<ModelsScreen />)
+    await screen.findByText('Qwen3 4B Instruct')
+    expect(screen.getByRole('button', { name: 'Try in demo mode' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /mock runtime/i })).not.toBeInTheDocument()
+  })
+})
+
 describe('ModelsScreen — per-download confirmation (plan §6.1 gate 3)', () => {
   it('confirms size, license, and URL before starting; approved license needs no checkbox', async () => {
     const downloadModel = vi.fn(async (): Promise<DownloadJob> => ({

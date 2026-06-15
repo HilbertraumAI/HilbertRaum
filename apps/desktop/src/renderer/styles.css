@@ -154,17 +154,31 @@ button { min-width: 24px; min-height: 24px; }
 /* Inline lock glyph — inherits the indicator's muted text color (not accent: this is an
    ambient signal, not an action). */
 .local-indicator-icon { width: 14px; height: 14px; flex-shrink: 0; }
-/* Sidebar variant (the old offline badge's spot, bottom of the nav rail). Its own
-   class name — `.sidebar` is the nav rail itself. */
+/* Rail-foot variant (§12.1 #2): the single app-wide privacy signal, at the foot of the
+   nav rail and styled to MATCH it — icon-over-short-label, centered, 12px floor, the
+   same column metrics as `.nav-item`. Quiet/ambient (muted, not the accent the nav icons
+   use): it is a state, not a destination. The short label can wrap cleanly at its space
+   ("Downloads on" → two lines) like "AI Model" does; the full reassurance is the tooltip. */
 .local-indicator-sidebar {
-  margin-top: 12px;
+  flex-direction: column;
+  gap: 3px;
   width: 100%;
-  justify-content: flex-start;
-  border-color: var(--border);
-  border-radius: 8px;
-  padding: 8px 10px;
+  margin-top: 2px;
+  padding: 8px 4px;
+  border-color: transparent;
+  border-radius: var(--radius-md);
+  text-align: center;
+  white-space: normal;
 }
-.local-indicator-sidebar:hover { border-color: var(--border-strong); }
+.local-indicator-sidebar:hover { background: var(--surface-hover); color: var(--text); border-color: transparent; }
+.local-indicator-sidebar .local-indicator-icon { width: 19px; height: 19px; }
+.local-indicator-sidebar .local-indicator-label {
+  display: block;
+  max-width: 100%;
+  hyphens: none;
+  overflow-wrap: normal;
+  word-break: normal;
+}
 
 /* Tooltip (Radix Tooltip content — the indicator's reassurance line, and nav-rail
    destination labels on narrow widths via title attributes). */

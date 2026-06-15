@@ -491,13 +491,12 @@ export const de: Record<keyof typeof en, string> = {
   'models.select': 'Auswählen',
   'models.stopRuntime': 'Modell stoppen',
   'models.startRuntime': 'Modell starten',
-  'models.startMock': 'Demo-Runtime starten',
+  'models.startMock': 'Im Demo-Modus testen',
   'models.starting': 'Wird gestartet…',
   'models.startingTitle': 'Dieses Modell wird geladen — bei großen Modellen kann das etwas dauern',
   'models.startTitle': 'Dieses Modell auf diesem Gerät starten',
   'models.startMockTitle':
-    'Keine Modell-Datei vorhanden — startet die eingebaute Demo-Runtime, damit du die App ' +
-    'ausprobieren kannst',
+    'Noch keine Modell-Datei — teste die App im Demo-Modus, mit sichtbar simulierten Antworten',
   'models.notPresentTitle': 'Modell-Datei nicht vorhanden',
   'models.tech.summary': 'Technische Details',
   'models.tech.id': 'Modell-ID',
@@ -717,7 +716,7 @@ export const de: Record<keyof typeof en, string> = {
   'diag.audit.document_lifecycle_changed': 'Dokumentstatus geändert',
   'diag.accel.gpuFallbackName': 'Grafikkarte',
   'diag.accel.gpu': '{name} (GPU)',
-  'diag.accel.mock': 'Eingebaute Demo-Runtime',
+  'diag.accel.mock': 'Eingebauter Demo-Modus',
   'diag.accel.cpu': 'CPU',
   'diag.accel.gpuAvailable': '{name} (GPU verfügbar)',
   'diag.app.title': 'App & Laufzeit',
@@ -826,6 +825,11 @@ export const de: Record<keyof typeof en, string> = {
   'indicator.offlineDetail':
     'Alles bleibt auf diesem Laufwerk. Es wird keine Internetverbindung verwendet.',
   'indicator.onlineDetail': 'Downloads erlaubt — Chats und Dokumente bleiben lokal.',
+  // Kurzlabels für die Anzeige am Fuß der App-Leiste (§12.1 #2) — die volle „Lokal · …"-Form
+  // ist zu breit für die 100px-Leiste; die Leiste zeigt nur den effektiven Zustand
+  // (Symbol + ein Wort), die volle Beruhigung steht im Tooltip.
+  'indicator.short.offline': 'Offline',
+  'indicator.short.online': 'Downloads an',
 
   // ---- Shared password copy ----
   'password.mismatch': 'Die Passwörter stimmen nicht überein.',

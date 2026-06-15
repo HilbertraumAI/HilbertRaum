@@ -337,32 +337,10 @@ describe('ChatScreen — no-model empty state (M-U3)', () => {
   })
 })
 
-describe('ChatScreen — offline indicator is App-controlled (M-U4)', () => {
-  it('shows the offline prop value in the header without self-fetching the policy', async () => {
-    // getPolicy is provided but should NOT drive the header when offline is passed in:
-    // even though the policy here says NOT offline, the App-owned offline=true wins.
-    const getPolicy = vi.fn(async () => ({ offlineMode: false }) as never)
-    stubApi({
-      listConversations: vi.fn(async () => [conv()]),
-      getRuntimeStatus: vi.fn(async () => runningStatus),
-      listMessages: vi.fn(async () => []),
-      getPolicy,
-      onToken: vi.fn(() => () => {}),
-      onReasoning: vi.fn(() => () => {}),
-      onScopeNotice: vi.fn(() => () => {})
-    })
-    render(
-      <ToastProvider>
-        <ChatScreen onNavigate={() => {}} offline={true} />
-      </ToastProvider>
-    )
-    await screen.findByText('My first chat')
-    // The header indicator reflects the controlled prop (Local · Offline), and the
-    // self-fetch path was skipped.
-    expect(screen.getByRole('button', { name: 'Local · Offline' })).toBeInTheDocument()
-    expect(getPolicy).not.toHaveBeenCalled()
-  })
-})
+// The ambient privacy indicator was moved out of the chat header to a single app-wide
+// rail-foot instance (§12.1 #2); the chat-header indicator + its `offline` prop are gone.
+// Coverage now lives in InformationArchitecture.test.tsx (the single rail-foot indicator)
+// and LocalIndicator.test.tsx (the short label + honest states).
 
 describe('groupConversations — date grouping', () => {
   it('buckets by recency relative to "now" and drops empty groups', () => {

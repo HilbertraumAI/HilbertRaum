@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach, beforeAll } from 'vitest'
-import { render, screen, cleanup, within } from '@testing-library/react'
+import { render, screen, cleanup, within, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { App } from '../../src/renderer/App'
 import { SettingsScreen } from '../../src/renderer/screens/SettingsScreen'
@@ -141,50 +141,46 @@ describe('App shell — 5-item nav (Phase 26)', () => {
     expect(within(nav).queryByText(/diagnostics/i)).not.toBeInTheDocument()
   })
 
-  it('keeps the ambient "Local · Offline" indicator OUT of the nav rail (dedup)', async () => {
-    // Chat-UI polish: the privacy signal lives only in the chat header now — the
-    // duplicate lower-left nav badge was removed (one primary persistent signal).
+  it('renders exactly ONE app-wide privacy indicator, at the foot of the nav rail', async () => {
+    // §12.1 #2: the single ambient signal moved from the chat-header to the rail foot, so
+    // it shows on every screen with no per-screen duplication. The offline policy → the
+    // short rail label "Offline".
     stubAppShell()
     render(<App />)
     const nav = await screen.findByRole('navigation')
-    expect(within(nav).queryByRole('button', { name: 'Local · Offline' })).not.toBeInTheDocument()
+    // Exactly one, and it lives inside the nav rail.
+    expect(screen.getAllByRole('button', { name: 'Offline' })).toHaveLength(1)
+    expect(within(nav).getByRole('button', { name: 'Offline' })).toBeInTheDocument()
   })
 
-  it('routes the chat-header "Local · Offline" indicator to Settings → Privacy & data', async () => {
-    // The ambient indicator (guidelines §7) now sits in the chat header; clicking it
-    // still opens Settings → Privacy & data (the route is unchanged).
-    const user = userEvent.setup()
+  it('shows the honest "Downloads on" label when the effective state allows downloads', async () => {
+    // The indicator reflects PolicyStatus.offlineMode (the EFFECTIVE state): downloads
+    // allowed → open padlock + "Downloads on". (A policy that forces downloads off keeps
+    // offlineMode=true, so the stubAppShell offline case above reads "Offline" honestly.)
     stubApi({
       getWorkspaceState: vi.fn(async () => unlockedWorkspace),
-      getPolicy: vi.fn(async () => offlinePolicy),
+      getPolicy: vi.fn(async () => ({ ...offlinePolicy, offlineMode: false }) as never),
       getSettings: vi.fn(async () => DEFAULT_SETTINGS),
       onRuntimeNotice: vi.fn(() => () => {}) as never,
-      onToken: vi.fn(() => () => {}) as never,
-      onReasoning: vi.fn(() => () => {}) as never,
-      onScopeNotice: vi.fn(() => () => {}) as never,
       getAppStatus: vi.fn(async () => ({
         appName: 'x',
         appVersion: '0',
-        offlineMode: true,
-        networkAllowed: false,
-        activeModelId: 'm',
+        offlineMode: false,
+        networkAllowed: true,
+        activeModelId: null,
         hardwareProfile: 'UNKNOWN' as const,
         workspaceMode: 'plaintext_dev' as const,
         workspaceReady: true,
         machineRamGb: 16,
         dictationAvailable: false
       })),
-      // A running runtime so the full chat layout (with the header indicator) renders.
       getRuntimeStatus: vi.fn(async () => ({
-        running: true,
-        modelId: 'm',
-        port: 1,
-        healthy: true,
-        message: 'ok',
-        supportsThinkingMode: false
+        running: false,
+        modelId: null,
+        port: null,
+        healthy: false,
+        message: 'Stopped'
       })),
-      listConversations: vi.fn(async () => []),
-      listMessages: vi.fn(async () => []),
       listDocuments: vi.fn(async () => []),
       runPreflight: vi.fn(async () => ({
         ok: true,
@@ -193,14 +189,24 @@ describe('App shell — 5-item nav (Phase 26)', () => {
         freeBytes: 1024 * 1024 * 1024,
         slowDriveWarning: null,
         problems: []
-      })),
-      getDriveStatus: vi.fn(async () => ({}) as never),
-      getRuntimeInstall: vi.fn(async () => null),
-      getLogTail: vi.fn(async () => [])
+      }))
     } as never)
     render(<App />)
-    await user.click(await screen.findByRole('button', { name: /Chat/ }))
-    await user.click(await screen.findByRole('button', { name: 'Local · Offline' }))
+    const nav = await screen.findByRole('navigation')
+    await waitFor(() =>
+      expect(within(nav).getByRole('button', { name: 'Downloads on' })).toBeInTheDocument()
+    )
+    expect(within(nav).queryByRole('button', { name: 'Offline' })).not.toBeInTheDocument()
+  })
+
+  it('routes the rail-foot privacy indicator to Settings → Privacy & data', async () => {
+    // Clicking the ambient indicator (guidelines §7) still opens Settings → Privacy & data
+    // (the settings:privacy route is unchanged).
+    const user = userEvent.setup()
+    stubAppShell()
+    render(<App />)
+    const nav = await screen.findByRole('navigation')
+    await user.click(within(nav).getByRole('button', { name: 'Offline' }))
 
     // The Settings screen opens with the Privacy & data tab selected…
     expect(await screen.findByRole('heading', { name: 'Settings' })).toBeInTheDocument()

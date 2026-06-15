@@ -466,12 +466,12 @@ export const en = {
   'models.select': 'Select',
   'models.stopRuntime': 'Stop runtime',
   'models.startRuntime': 'Start runtime',
-  'models.startMock': 'Start mock runtime',
+  'models.startMock': 'Try in demo mode',
   'models.starting': 'Starting…',
   'models.startingTitle': 'This model is loading — it can take a little while for large models',
   'models.startTitle': 'Start the local runtime for this model',
   'models.startMockTitle':
-    'No weights present — starts the built-in mock runtime so you can try the app',
+    'No model file yet — try the app in demo mode, with visibly simulated answers',
   'models.notPresentTitle': 'Model file not present',
   'models.tech.summary': 'Technical details',
   'models.tech.id': 'Model id',
@@ -683,7 +683,7 @@ export const en = {
   'diag.audit.document_lifecycle_changed': 'Document lifecycle changed',
   'diag.accel.gpuFallbackName': 'Graphics card',
   'diag.accel.gpu': '{name} (GPU)',
-  'diag.accel.mock': 'Built-in demo runtime',
+  'diag.accel.mock': 'Built-in demo mode',
   'diag.accel.cpu': 'CPU',
   'diag.accel.gpuAvailable': '{name} (GPU available)',
   'diag.app.title': 'App & runtime',
@@ -786,6 +786,11 @@ export const en = {
   'indicator.online': 'Local · Downloads allowed',
   'indicator.offlineDetail': 'Everything stays on this drive. No internet connection is used.',
   'indicator.onlineDetail': 'Downloads allowed — chats and documents stay local.',
+  // Short labels for the app-rail foot indicator (§12.1 #2): the full "Local · …" form
+  // is too wide for the 100px rail, so the rail shows just the effective state (icon +
+  // one word) with the full reassurance in the tooltip.
+  'indicator.short.offline': 'Offline',
+  'indicator.short.online': 'Downloads on',
 
   // ---- Shared password copy ----
   'password.mismatch': "Passwords don't match.",

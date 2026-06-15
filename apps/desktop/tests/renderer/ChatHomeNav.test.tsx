@@ -1,9 +1,11 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach, beforeAll } from 'vitest'
-import { render, screen, cleanup, waitFor } from '@testing-library/react'
+import { render, screen, cleanup, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { ChatScreen } from '../../src/renderer/screens/ChatScreen'
 import { HomeScreen } from '../../src/renderer/screens/HomeScreen'
+import { I18nProvider, UI_LANGUAGE_STORAGE_KEY } from '../../src/renderer/i18n'
+import { t } from '../../src/shared/i18n'
 import type { Conversation, Message, RuntimeStatus } from '../../src/shared/types'
 import { stubApi } from '../helpers/renderer'
 
@@ -311,9 +313,11 @@ describe('HomeScreen — readiness hub (Phase 26)', () => {
       running?: boolean
       docCount?: number
       problems?: string[]
+      lang?: 'en' | 'de'
     } = {}
   ): void {
     const docCount = opts.docCount ?? 2
+    if (opts.lang) window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, opts.lang)
     stubApi({
       getAppStatus: vi.fn(async () => ({
         appName: 'x',
@@ -347,22 +351,59 @@ describe('HomeScreen — readiness hub (Phase 26)', () => {
         problems: opts.problems ?? []
       }))
     })
-    render(<HomeScreen onNavigate={onNavigate} />)
+    render(
+      opts.lang ? <I18nProvider><HomeScreen onNavigate={onNavigate} /></I18nProvider> : <HomeScreen onNavigate={onNavigate} />
+    )
   }
 
-  it('"Start chatting" is the primary action and opens Chat', async () => {
+  /** The loud filled primary buttons currently on screen (Button variant="primary"). */
+  function loudPrimaries(): HTMLElement[] {
+    return [...document.querySelectorAll<HTMLElement>('button.btn.primary')]
+  }
+
+  it('when a model IS ready, "Start chatting" is the one loud primary and opens Chat', async () => {
     const user = userEvent.setup()
     const onNavigate = vi.fn()
-    renderHome(onNavigate)
-    await user.click(screen.getByRole('button', { name: /start chatting/i }))
+    renderHome(onNavigate, { activeModelId: 'm1', running: true })
+    const startChat = await screen.findByRole('button', { name: /start chatting/i })
+    // Exactly one loud primary, and it is "Start chatting".
+    await waitFor(() => expect(loudPrimaries()).toHaveLength(1))
+    expect(loudPrimaries()[0]).toBe(startChat)
+    await user.click(startChat)
     expect(onNavigate).toHaveBeenCalledWith('chat')
+  })
+
+  it('when readiness = needs-a-model, the loud primary becomes "Choose a model" (not "Start chatting")', async () => {
+    const user = userEvent.setup()
+    const onNavigate = vi.fn()
+    renderHome(onNavigate, { activeModelId: null, running: false })
+    // The hero's loud primary is the unblocking action; exactly one loud primary.
+    await waitFor(() => expect(loudPrimaries()).toHaveLength(1))
+    const primary = loudPrimaries()[0]
+    expect(primary).toHaveTextContent(t('en', 'home.model.choose')) // "Choose a model"
+    // "Start chatting" is still present but NOT the loud primary (it demoted to secondary).
+    const startChat = screen.getByRole('button', { name: /start chatting/i })
+    expect(startChat.className).not.toMatch(/\bprimary\b/)
+    // The loud primary routes to AI Model (no dead-end at the no-model empty state).
+    await user.click(primary)
+    expect(onNavigate).toHaveBeenCalledWith('models')
+  })
+
+  it('the needs-a-model loud primary is "Modell auswählen" in German', async () => {
+    const onNavigate = vi.fn()
+    renderHome(onNavigate, { activeModelId: null, running: false, lang: 'de' })
+    await waitFor(() => expect(loudPrimaries()).toHaveLength(1))
+    expect(loudPrimaries()[0]).toHaveTextContent(t('de', 'home.model.choose')) // „Modell auswählen"
   })
 
   it('"Ask my documents" opens the documents chat, not the import screen', async () => {
     const user = userEvent.setup()
     const onNavigate = vi.fn()
-    renderHome(onNavigate)
-    await user.click(await screen.findByRole('button', { name: /ask my documents/i }))
+    renderHome(onNavigate, { activeModelId: 'm1', running: true })
+    // Settle the ready state first (the adaptive hero swaps buttons as readiness resolves,
+    // so query AFTER it settles to avoid clicking a node React reused by position).
+    await screen.findByText('Ready to chat.')
+    await user.click(screen.getByRole('button', { name: /ask my documents/i }))
     expect(onNavigate).toHaveBeenCalledWith('ask-documents')
   })
 
@@ -385,12 +426,15 @@ describe('HomeScreen — readiness hub (Phase 26)', () => {
     ).toBeInTheDocument()
   })
 
-  it('points at the AI Model screen when no model is selected', async () => {
+  it('the model row points at the AI Model screen when no model is selected', async () => {
     const user = userEvent.setup()
     const onNavigate = vi.fn()
     renderHome(onNavigate, { activeModelId: null })
     expect(await screen.findByText('No model selected yet')).toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: /choose a model/i }))
+    // The inline row affordance (a Secondary button) also routes to AI Model. It is the
+    // non-loud "Choose a model": the loud hero primary is covered by the adaptive tests.
+    const card = document.querySelector('.readiness-card') as HTMLElement
+    await user.click(within(card).getByRole('button', { name: /choose a model/i }))
     expect(onNavigate).toHaveBeenCalledWith('models')
   })
 

@@ -3,16 +3,20 @@ import * as Tooltip from '@radix-ui/react-tooltip'
 import { Icon } from './Icon'
 import { englishTranslator, type Translator } from './translator'
 
-// Ambient privacy signal (guidelines §7): a quiet, persistent "Local ·
-// Offline" status — subtle glyph, neutral color, never an alarm. Hover/focus reveals
-// the reassurance ("Everything stays on this drive…"); clicking opens Settings →
-// Privacy & data, where the full posture is spelled out. When the user has enabled
-// network access for model downloads the signal says so honestly instead of
-// pretending to be offline.
+// Ambient privacy signal (guidelines §1.2/§7): a quiet, persistent state — subtle
+// glyph, neutral color, never an alarm. Hover/focus reveals the reassurance
+// ("Everything stays on this drive…"); clicking opens Settings → Privacy & data, where
+// the full posture is spelled out. When the user has enabled network access for model
+// downloads the signal says so honestly (open padlock + "Downloads on") instead of
+// pretending to be offline — it reflects the EFFECTIVE state (PolicyStatus.offlineMode),
+// so a drive policy that forces downloads off still reads "Offline" even with the
+// toggle on.
 //
-// Evolved from the old sidebar offline badge: the same component renders in the
-// sidebar (variant="sidebar", state passed in live by App) and in the chat header
-// (self-fetching — the screen remounts on navigation, so mount-time policy is fresh).
+// There is exactly ONE instance app-wide: variant="sidebar" at the foot of the app rail
+// (state passed in live by App), visible on every screen (§12.1 #2). The rail is narrow,
+// so the sidebar variant shows a SHORT label (the effective state in one word) with the
+// full "Local · …" reassurance in the tooltip. The header variant + self-fetching path
+// are retained for reuse/tests.
 
 export interface LocalIndicatorProps {
   /** Routes 'settings:privacy' through the app's navigate(). */
@@ -27,9 +31,17 @@ export interface LocalIndicatorProps {
   t?: Translator
 }
 
-/** The short status text (icon + word — never color alone, WCAG 1.4.1). */
+/** The status text (icon + word — never color alone, WCAG 1.4.1). */
 export function localIndicatorLabel(offline: boolean, t: Translator = englishTranslator): string {
   return offline ? t('indicator.offline') : t('indicator.online')
+}
+
+/** The one-word label for the narrow app rail (full reassurance lives in the tooltip). */
+export function localIndicatorShortLabel(
+  offline: boolean,
+  t: Translator = englishTranslator
+): string {
+  return offline ? t('indicator.short.offline') : t('indicator.short.online')
 }
 
 /** The reassurance line shown on hover/focus (guidelines §7, honest variant). */
@@ -63,16 +75,22 @@ export function LocalIndicator({
   }, [controlled])
 
   const isOffline = controlled ? offline : fetched
+  const sidebar = variant === 'sidebar'
+  // The rail shows the short one-word label; the header shows the full "Local · …" form.
+  const label = sidebar ? localIndicatorShortLabel(isOffline, t) : localIndicatorLabel(isOffline, t)
   return (
     <Tooltip.Provider delayDuration={200}>
       <Tooltip.Root>
         <Tooltip.Trigger asChild>
           <button
             type="button"
-            className={`local-indicator ${variant === 'sidebar' ? 'local-indicator-sidebar' : ''}`}
+            className={`local-indicator ${sidebar ? 'local-indicator-sidebar' : ''}`}
+            // Closed padlock = offline; open padlock = the honest "downloads allowed" state.
+            aria-label={label}
             onClick={() => onNavigate('settings:privacy')}
           >
-            <Icon name="lock" className="local-indicator-icon" /> {localIndicatorLabel(isOffline, t)}
+            <Icon name={isOffline ? 'lock' : 'lock-open'} className="local-indicator-icon" />{' '}
+            <span className="local-indicator-label">{label}</span>
           </button>
         </Tooltip.Trigger>
         <Tooltip.Portal>

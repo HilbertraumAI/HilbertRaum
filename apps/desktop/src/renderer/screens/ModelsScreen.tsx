@@ -442,54 +442,58 @@ export function ModelsScreen(): JSX.Element {
             {installed ? t('models.automatic.installed') : t('models.automatic.notInstalled')}
           </p>
         ) : (
-          <div className="model-actions">
-            <Button
-              size="sm"
-              variant="primary"
-              disabled={!installed || active || ramTooLow || busy !== null}
-              title={ramHint}
-              onClick={() => run(`select-${m.id}`, () => window.api.selectModel(m.id))}
-            >
-              {active ? t('models.selected') : t('models.select')}
-            </Button>
-            {m.state === 'running' ? (
-              <Button size="sm" disabled={busy !== null} onClick={() => run('stop', () => window.api.stopRuntime())}>
-                {t('models.stopRuntime')}
-              </Button>
-            ) : thisStarting ? (
-              // Server-truth "Starting…": disabled, and it survives leaving + revisiting
-              // the screen (the cause of the accidental restart).
-              <Button size="sm" disabled title={t('models.startingTitle')}>
-                <Spinner /> {t('models.starting')}
-              </Button>
-            ) : (
-              <Button
-                size="sm"
-                disabled={
-                  (!installed && !canMockStart) ||
-                  (installed && ramTooLow) ||
-                  busy !== null ||
-                  anyStarting // a different model is coming up — the runtime is single-slot
-                }
-                onClick={() => run(`start-${m.id}`, () => window.api.startRuntime(m.id))}
-                title={
-                  installed && ramTooLow
-                    ? ramHint
-                    : installed
-                      ? t('models.startTitle')
-                      : canMockStart
-                        ? t('models.startMockTitle')
-                        : t('models.notPresentTitle')
-                }
-              >
-                {installed
-                  ? t('models.startRuntime')
-                  : canMockStart
-                    ? t('models.startMock')
-                    : t('models.startRuntime')}
-              </Button>
-            )}
-          </div>
+          // A "Not downloaded" card shows ONE clear action — Download (rendered below) —
+          // plus, in demo-capable developer mode, "Try in demo mode". The disabled
+          // "Select" / "Start runtime" buttons are noise before the weights exist, so they
+          // are hidden until the model is downloaded (§3/§7 hide the machinery). Once
+          // installed, Select + Start runtime return.
+          (installed || canMockStart || thisStarting || m.state === 'running') && (
+            <div className="model-actions">
+              {installed && (
+                <Button
+                  size="sm"
+                  variant="primary"
+                  disabled={active || ramTooLow || busy !== null}
+                  title={ramHint}
+                  onClick={() => run(`select-${m.id}`, () => window.api.selectModel(m.id))}
+                >
+                  {active ? t('models.selected') : t('models.select')}
+                </Button>
+              )}
+              {m.state === 'running' ? (
+                <Button size="sm" disabled={busy !== null} onClick={() => run('stop', () => window.api.stopRuntime())}>
+                  {t('models.stopRuntime')}
+                </Button>
+              ) : thisStarting ? (
+                // Server-truth "Starting…": disabled, and it survives leaving + revisiting
+                // the screen (the cause of the accidental restart).
+                <Button size="sm" disabled title={t('models.startingTitle')}>
+                  <Spinner /> {t('models.starting')}
+                </Button>
+              ) : installed ? (
+                <Button
+                  size="sm"
+                  disabled={ramTooLow || busy !== null || anyStarting}
+                  onClick={() => run(`start-${m.id}`, () => window.api.startRuntime(m.id))}
+                  title={ramTooLow ? ramHint : t('models.startTitle')}
+                >
+                  {t('models.startRuntime')}
+                </Button>
+              ) : (
+                // Not installed but demo-capable (developer + policy gated in MAIN via
+                // `startableAsMock`): "Try in demo mode" lets the dev try the app with no
+                // weights. End users never reach this branch (the gate is off for them).
+                <Button
+                  size="sm"
+                  disabled={busy !== null || anyStarting}
+                  onClick={() => run(`start-${m.id}`, () => window.api.startRuntime(m.id))}
+                  title={t('models.startMockTitle')}
+                >
+                  {t('models.startMock')}
+                </Button>
+              )}
+            </div>
+          )
         )}
 
         {downloadSection(m)}

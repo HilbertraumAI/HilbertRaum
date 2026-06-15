@@ -357,7 +357,7 @@ housekeeping; the full original phased plan is in git history —
 |---|---|---|
 | D-UI1 | **Radix primitives, narrowly scoped** — `react-dialog@1.1.16`, `react-popover@1.1.16`, `react-dropdown-menu@2.1.17`, `react-tooltip@1.2.9`, pinned exact; 42 transitive packages license-reviewed (all MIT/pure-JS/no install scripts). Segmented control, switch, chips, badges, banners stay hand-rolled. | **EXECUTED** — Dialog (Phase 24), Popover + DropdownMenu (Phase 25), Tooltip (Phase 27, the ambient indicator). |
 | D-UI2 | Theme setting `'system' \| 'light' \| 'dark'`, default `'system'`. The pre-unlock gate cannot read settings (encrypted DB) → **the gate always follows the OS theme**. | **IMPLEMENTED** as written (Phase 23; `renderer/theme.ts`). |
-| D-UI3 | **Home stays**, rebuilt as the readiness hub. Re-evaluated after Phase 26: it does NOT duplicate the Chat empty state (Chat teaches *what to ask*; Home answers *is the system ready*), and the Phase-27 first-run flow did not absorb its remediation duties (the starter step only routes; Home keeps live status + preflight). | **RESOLVED — Home stays.** |
+| D-UI3 | **Home stays**, rebuilt as the readiness hub. Re-evaluated after Phase 26: it does NOT duplicate the Chat empty state (Chat teaches *what to ask*; Home answers *is the system ready*), and the Phase-27 first-run flow did not absorb its remediation duties (the starter step only routes; Home keeps live status + preflight). **Follow-up 2026-06-16 (§11.7): the hero CTA is now ADAPTIVE** — it leads with the top unmet prerequisite ("Choose a model" when a model is needed) instead of always "Start chatting", so it no longer dead-ends at the no-model empty state. | **RESOLVED — Home stays; hero adaptive.** |
 | D-UI4 | Depth-mode ids stay `fast\|balanced\|deep` in code/IPC/persistence; only UI labels are Quick/Balanced/Thorough. No data migration. | **EXECUTED** (Phase 25 `DepthMenu`; tests pin the label↔id mapping). |
 
 ### 11.2 Facts the wave rests on
@@ -613,6 +613,72 @@ rail on Home/Chat/Documents/AI Model/Settings with every label measured one-line
 friendly banner, Remove not Preview, compact banner), the "Failed imports" view — captures in
 `docs/design-review/rail-and-failed/` (`scripts/walk-rail-and-failed.mjs`).
 
+### 11.7 Adaptive Home CTA + app-wide privacy indicator + AI-Model de-jargon (IMPLEMENTED 2026-06-16)
+
+_A focused, **renderer + EN/DE i18n only** pass — no IPC/schema/data-contract/main-process logic
+changes (one scoped exception: user-facing string literals in the i18n catalogs). Three changes,
+each citing this section as **§11.7**._
+
+1. **Home hero CTA is now adaptive to the top unmet prerequisite (D-UI3).** Home used to lead
+   with a loud filled **"Start chatting"** even while the hub showed "⚠ Needs a model", so the
+   click dead-ended at the "No model is running" empty state. The hero buttons are now driven by
+   the SAME readiness signal the row badges render from (`needsModel = status != null &&
+   !modelRunning && !status.activeModelId` — the warning-badge condition). When a model is needed,
+   the loud primary becomes **"Choose a model" / „Modell auswählen"** (routes to AI Model) and
+   "Start chatting" + "Ask my documents" demote to **secondary** (still clickable — the demo/mock
+   runtime may allow chatting; never hard-disabled). When a model is ready (running, or selected +
+   loading), the loud primary is **"Start chatting" / „Chat starten"** as before. **Exactly one
+   loud primary at a time** (§6): the model row keeps its own *secondary* inline "Choose a model"
+   (the inline affordance), so the remediation isn't duplicated as a second loud button. No new
+   state — it reuses the hub's existing readiness reads.
+2. **One quiet, honest privacy indicator, app-wide (§1.2/§7).** The ambient signal moved from the
+   chat-header-only placement (§12.1 #2, now superseded) to a single **rail-foot** instance: the
+   dormant `LocalIndicator variant="sidebar"` + `.local-indicator-sidebar` CSS were revived and
+   restyled to MATCH the rail (icon-over-short-label, centered, 12px floor, the `.nav-item` column
+   metrics; quiet/muted, not the accent the nav icons use — it's a state, not a destination), and
+   the chat-header instance was **removed** so there is **exactly one** signal on EVERY screen. It
+   reflects the **EFFECTIVE** state (`PolicyStatus.offlineMode`, owned by App, which folds the
+   drive-policy ceiling AND the network toggle — so a `config/policy.json` that forces downloads
+   off reads "Offline" even with the toggle on): internet off → **closed padlock + "Offline" /
+   „Offline"**; internet allowed → **open padlock** (new `lock-open` `Icon` glyph) **+ "Downloads
+   on" / „Downloads an"**, tooltip "Downloads allowed — chats and documents stay local." The full
+   "Local · …" label is too wide for the 100px rail, so the sidebar variant shows the short
+   one-word label (new `indicator.short.*` keys; the full reassurance is the tooltip); the label
+   wraps cleanly at its space ("Downloads on" → two lines), the same discipline as the §12.1 #1
+   rail-label fix. Clicking still opens Settings → Privacy & data (`settings:privacy`, unchanged).
+3. **AI Model de-jargon (§3/§7 hide the machinery).** The developer-speak **"Start mock runtime"
+   / „Demo-Runtime starten"** button is relabeled **"Try in demo mode" / „Im Demo-Modus testen"**,
+   matching the page's existing "demo mode (visibly simulated answers)" banner; the start-title and
+   the Diagnostics accel label were de-jargoned the same way ("Built-in demo mode" / „Eingebauter
+   Demo-Modus"). The affordance is **already developer-gated in MAIN** (`startableAsMock = missing
+   ∧ chat ∧ developerMode`, `services/models.ts`), so end users never see it — relabeling makes it
+   honest even on the developer/demo path (chosen over hiding it, since it's a useful "try the app"
+   action there). **Per-card buttons tidied:** the disabled **"Select"** is **hidden until the
+   model is downloaded** (it's noise before the weights exist), and the not-installed-no-mock card
+   drops its disabled "Start runtime" too — so a "Not downloaded" card's one clear action is
+   **Download** (+ "Try in demo mode" on the dev path). Once downloaded, Select + Start runtime
+   return. "Technical details" stays the disclosure. A `copy-tone` guard now bans the stale
+   "Start mock runtime" / „Demo-Runtime" literals.
+
+**As built:** `renderer/screens/HomeScreen.tsx` (adaptive hero), `renderer/App.tsx` (rail-foot
+indicator; drop the ChatScreen `offline` prop pass), `renderer/screens/ChatScreen.tsx` (remove the
+header indicator + `offline` prop), `renderer/components/LocalIndicator.tsx`
+(`localIndicatorShortLabel`, lock-open glyph, rail-foot copy), `renderer/components/Icon.tsx`
+(`lock-open`), `renderer/screens/ModelsScreen.tsx` (hide disabled Select/Start when not downloaded;
+demo button via the relabeled key), `renderer/styles.css` (`.local-indicator-sidebar` rail
+metrics + `.local-indicator-label`), `shared/i18n/{en,de}.ts` (`indicator.short.offline/online`;
+relabeled `models.startMock`/`startMockTitle`/`diag.accel.mock`). **Verification per §11.4:**
+typecheck + `npm run build` clean; full vitest from `apps/desktop` **1365 passed / 25 skipped**
+(updated the `InformationArchitecture` indicator test to assert the single rail-foot indicator +
+the honest "Downloads on" state; `LocalIndicator` short-label + honest-state cases; `ChatHomeNav`
+adaptive-CTA cases incl. exactly-one-loud-primary + both locales; `ModelsScreen` no-disabled-Select
++ "Try in demo mode"; removed the obsolete chat-header-indicator test; copy-tone stale-literal
+guard). Playwright `_electron` eyeball walk in BOTH themes AND both locales (EN/DE): Home
+needs-a-model (loud "Choose a model") vs ready (loud "Start chatting"); the rail-foot indicator on
+Home/Chat/Documents/AI Model/Settings with internet OFF ("Offline") vs ON ("Downloads on"); AI
+Model cards (new "Try in demo mode" label, no disabled Select when not downloaded) — captures in
+`docs/design-review/home-privacy-aimodel/` (`scripts/walk-home-privacy-aimodel.mjs`).
+
 ---
 
 ## 12. Chat-UI polish pass — design record (IMPLEMENTED 2026-06-13)
@@ -642,8 +708,19 @@ backend/data-contract/IPC changes. Before/after eyeball captures live in
      (a single word can't wrap). Labels with a space or hyphen ("AI Model", "KI-Modell") may
      still wrap cleanly to two lines. Guard: `tests/unit/rail-labels.test.ts`.
 2. **One privacy signal.** The duplicate lower-left sidebar `LocalIndicator` was removed; the
-   ambient "Local · Offline" lives only in the chat header now (the `variant="sidebar"` path +
-   `.local-indicator-sidebar` CSS are dormant). The lock became a quiet rail button.
+   ambient "Local · Offline" lived only in the chat header (the `variant="sidebar"` path +
+   `.local-indicator-sidebar` CSS were dormant). The lock became a quiet rail button.
+   - **Superseded (follow-up 2026-06-16, §11.7).** The chat-header-only placement left
+     Home / Documents / AI Model / Settings with NO privacy signal, and the honest
+     "downloads allowed" state was surfaced nowhere. The single indicator now lives at the
+     **foot of the app rail** (`variant="sidebar"` revived) so it shows on EVERY screen, and
+     the chat-header instance was removed — still **exactly one signal app-wide**. It is
+     honest about the EFFECTIVE state (`PolicyStatus.offlineMode`, which folds the drive
+     policy ceiling AND the network toggle): internet off / policy forces off → closed
+     padlock + "Offline" / „Offline"; internet allowed → open padlock + "Downloads on" /
+     „Downloads an", tooltip "Downloads allowed — chats and documents stay local." The rail
+     is narrow, so the sidebar variant shows that SHORT one-word label (the full "Local · …"
+     reassurance is the tooltip), wrapping cleanly at its space like "AI Model" does.
 3. **History rows read as a calm list.** Selected = a soft *fill* on the row, never a border
    outline (a bordered selection read as keyboard focus). `:focus-visible` keeps the accent
    ring (the global baseline), so selection and focus are visually distinct. Rows are

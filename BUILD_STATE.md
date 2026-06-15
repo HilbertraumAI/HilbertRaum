@@ -6,7 +6,46 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
-_Last updated: 2026-06-15 — **Docs-screen-refinement polish: rail label hyphenation +
+_Last updated: 2026-06-16 — **Adaptive Home CTA + one app-wide privacy indicator + AI-Model
+de-jargon.** A **renderer + EN/DE i18n only** wave (no IPC/schema/data-contract/main-process logic
+changes), folded into [`design-guidelines.md`](docs/design-guidelines.md) **§11.7** (new record),
+**§11.3 D-UI3** (hero now adaptive), and **§12.1 #2** (single indicator moved, superseded note).
+**(A) Home hero CTA adaptive (D-UI3).** Home led with a loud "Start chatting" even while the hub
+showed "⚠ Needs a model", dead-ending at the no-model empty state. The hero is now driven by the
+SAME readiness signal as the row badges (`needsModel = status != null && !modelRunning &&
+!status.activeModelId`): needs-a-model → loud primary **"Choose a model" / „Modell auswählen"** (→
+AI Model), with "Start chatting"/"Ask my documents" demoted to secondary (still clickable, never
+hard-disabled); ready → loud **"Start chatting" / „Chat starten"**. Exactly one loud primary; the
+model row keeps its own *secondary* "Choose a model". No new state. **(B) One app-wide privacy
+indicator (§1.2/§7).** Reversed §12.1 #2 (chat-header-only, which left Home/Documents/AI
+Model/Settings with no signal). Revived the dormant `LocalIndicator variant="sidebar"` +
+`.local-indicator-sidebar` CSS at the **foot of the app rail** (restyled to match the rail —
+icon-over-short-label, 12px floor, quiet/muted), removed the chat-header instance → **exactly one**
+signal on every screen. Reflects the EFFECTIVE state (`PolicyStatus.offlineMode`, App-owned: folds
+the policy ceiling AND the network toggle — policy-forces-off reads "Offline" even with the toggle
+on): off → closed padlock + **"Offline"**; allowed → open padlock (new `lock-open` `Icon` glyph) +
+**"Downloads on" / „Downloads an"** (tooltip "Downloads allowed — chats and documents stay local").
+Short one-word rail labels (`indicator.short.*`); full reassurance in the tooltip; wraps at its
+space like "AI Model". Click → `settings:privacy` (unchanged). **(C) AI Model de-jargon (§3/§7).**
+"Start mock runtime" / „Demo-Runtime starten" → **"Try in demo mode" / „Im Demo-Modus testen"** (+
+de-jargoned start-title & `diag.accel.mock`); the affordance is already developer-gated in MAIN
+(`startableAsMock = missing ∧ chat ∧ developerMode`), so end users never see it — relabel chosen
+over hiding. Per-card tidy: the disabled **Select** (and the disabled Start-runtime on a no-mock
+card) is **hidden until downloaded** → a "Not downloaded" card's one clear action is **Download**
+(+ demo on the dev path); Select returns once installed. **Files:** `HomeScreen.tsx`, `App.tsx`,
+`ChatScreen.tsx` (drop header indicator + `offline` prop), `LocalIndicator.tsx`, `Icon.tsx`
+(`lock-open`), `ModelsScreen.tsx`, `styles.css`, `shared/i18n/{en,de}.ts`. **Tests:** typecheck +
+`npm run build` clean; full vitest from `apps/desktop` **1365 passed / 25 skipped** (IA single
+rail-foot indicator + honest "Downloads on"; `LocalIndicator` short-label/honest-state; `ChatHomeNav`
+adaptive-CTA incl. exactly-one-loud-primary + both locales; `ModelsScreen` no-disabled-Select +
+"Try in demo mode"; removed the obsolete chat-header-indicator test; copy-tone bans "Start mock
+runtime"/„Demo-Runtime"). Playwright `_electron` eyeball walk BOTH themes AND both locales (EN/DE):
+Home needs-a-model vs ready; rail-foot indicator on all five screens OFF vs ON; AI Model cards —
+captures in `docs/design-review/home-privacy-aimodel/` (`scripts/walk-home-privacy-aimodel.mjs`).
+**No version bump, no schema change. Next:** open work unchanged (Phase 30 big-slot/embeddings —
+D38–D43; owner-gated doc-org Phase E.2)._
+
+_(prior) 2026-06-15 — **Docs-screen-refinement polish: rail label hyphenation +
 import-failure copy + failed-row actions + sub-nav density.** A renderer-only wave (plus the one
 scoped main-process user-facing string exception, §11.2) on the Documents screen + app shell,
 folded into [`design-guidelines.md`](docs/design-guidelines.md) **§12.1 #1** (rail) and **§11.6**
