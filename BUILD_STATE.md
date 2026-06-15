@@ -6,7 +6,7 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
-_Last updated: 2026-06-15 — **Documentation + code-comment audit (release 0.1.25).** A deep,
+_Last updated: 2026-06-15 — **Documentation + code-comment audit (release 0.1.26).** A deep,
 whole-repo doc audit: every doc cross-checked against the code, plus a comment-quality sweep. No
 behavior change — docs/comments only (the 8 touched source files are comment-only edits; typecheck
 clean, `npm test` **1346 passed / 25 skipped**, unchanged from baseline). **Most consequential fixes
@@ -44,8 +44,10 @@ mock-runtime conditions, error-string heading), `design-guidelines.md` (D-L7 don
 note, contrast resolved, removed nonexistent "Reading your documents" copy), `packaging.md` (aria2c
 scope, Node-version guard, copy glob), `CONTRIBUTING`/`README`/`CLAUDE` (typecheck + Node in dev setup,
 dead plan path, Ministral-vs-4B default, `package:win`, "llama.cpp later"→done). **Version** bumped
-0.1.24 → **0.1.25**, tagged `v0.1.25`. No schema change. **Next:** open work is unchanged (Phase 30
-big-slot/embeddings — D38–D43; owner-gated doc-org Phase E.2)._
+0.1.24 → 0.1.25 → **0.1.26** (audit merged to master at v0.1.25, then a release-version increment to
+v0.1.26). No schema change. **Next:** open work is unchanged (Phase 30
+big-slot/embeddings — D38–D43; owner-gated doc-org Phase E.2). (Version 0.1.25 was tagged on the
+audit commit; this release-version increment to 0.1.26 supersedes it as the current release.)_
 
 _(prior) 2026-06-15 — **Whole-document analysis — second-pass review follow-up (2 fixes).** A
 high-effort re-review of the closeout diff surfaced two honesty gaps the first pass left, both now fixed in
