@@ -979,7 +979,7 @@ code, pre, kbd { font-family: var(--font-mono); }
   align-items: center;
   justify-content: center;
   min-width: 26px;
-  padding: 0 3px;
+  padding: 0 2px;
   height: 36px;
   border: none;
   background: transparent;
