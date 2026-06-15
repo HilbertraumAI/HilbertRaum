@@ -52,9 +52,13 @@ button { min-width: 24px; min-height: 24px; }
 
 .app-shell {
   display: grid;
-  /* A quiet, compact navigation RAIL (guidelines §2): icon + short label, ~80px,
-     so the conversation canvas is the centre of gravity, not the chrome. */
-  grid-template-columns: 80px 1fr;
+  /* A quiet, compact navigation RAIL (guidelines §2/§12.1): icon + short label, so the
+     conversation canvas is the centre of gravity, not the chrome. The column is 100px —
+     widened from 80px just enough that the longest SINGLE-word label in either locale
+     ("Einstellungen", DE) fits on ONE line at the 12px text floor (§4.4) with the rail's
+     padding, since labels never break mid-word (`.nav-label hyphens:none`). Still far
+     slimmer than the original ~220px panel. */
+  grid-template-columns: 100px 1fr;
   height: 100vh;
 }
 
@@ -97,7 +101,8 @@ button { min-width: 24px; min-height: 24px; }
   color: var(--text-muted);
   padding: 8px 4px;
   border-radius: var(--radius-md);
-  font-size: 11px;
+  /* §4.4 12px text floor — the rail label sits exactly on it (was 11px). */
+  font-size: 12px;
   line-height: 1.2;
   cursor: pointer;
   text-align: center;
@@ -111,14 +116,20 @@ button { min-width: 24px; min-height: 24px; }
    accent-blue in every state; selection is carried by the label weight + row fill, not
    by tinting the icon. 19px reads cleanly at the rail's stroke weight. */
 .nav-icon { width: 19px; height: 19px; color: var(--accent); flex-shrink: 0; }
-/* Long destination names ("Documents", "Dokumente", "Einstellungen") overflow the ~80px
-   rail. Electron's Chromium ships NO hyphenation dictionaries, so `hyphens: auto` does
-   nothing and a bare `break-word` splits mid-word with no hyphen ("Dokument" / "e"). So
-   the long labels instead carry explicit SOFT HYPHENS (U+00AD) in the i18n strings, honored
-   here via `hyphens: manual` — they wrap to a second line with a real hyphen at a sensible
-   point. `break-word` stays only as a last-resort net for any future label without one. The
-   button's title= still carries the full name. */
-.nav-label { display: block; max-width: 100%; hyphens: manual; overflow-wrap: break-word; }
+/* Rail labels must NEVER break mid-word ("Docu-ments" / "Doku-mente" / "Einstel-lungen"
+   read as broken). `hyphens: none` + `overflow-wrap: normal` + `word-break: normal` forbid
+   every soft/auto hyphen and mid-word split, so the rail grid column (`.app-shell`) is sized
+   to fit the longest SINGLE-word label in both locales on one line at the 12px floor
+   ("Einstellungen", DE). Labels that contain a space or an existing hyphen ("AI Model",
+   "KI-Modell") may still wrap cleanly to two lines at the space/hyphen. The button's title=
+   carries the full name as a tooltip regardless. */
+.nav-label {
+  display: block;
+  max-width: 100%;
+  hyphens: none;
+  overflow-wrap: normal;
+  word-break: normal;
+}
 /* Lock sits at the very bottom, slightly muted — a utility, not a destination. */
 .lock-btn { margin-top: 2px; }
 
@@ -1056,7 +1067,9 @@ code, pre, kbd { font-family: var(--font-mono); }
    nav rail, stack the key/value grids, and let the segmented switchers scroll so nothing
    on Home / AI Model / Documents / Settings / Diagnostics overflows the viewport. ---- */
 @media (max-width: 760px) {
-  .app-shell { grid-template-columns: 68px 1fr; }
+  /* The rail keeps its 100px label-fit width even on narrow windows: a single-word label
+     ("Einstellungen") can't break mid-word (§4.4 floor + `hyphens:none`), so shrinking the
+     column below the fit width would overflow it off-screen. Only the content gutters shrink. */
   .content { padding: 16px 14px; }
   /* Stack key/value rows so a fixed 140px label never squeezes long values off-screen. */
   .kv { grid-template-columns: 1fr; gap: 2px 0; }
@@ -1070,7 +1083,7 @@ code, pre, kbd { font-family: var(--font-mono); }
   .status-grid { gap: 10px; margin: 16px 0; }
 }
 @media (max-width: 520px) {
-  .app-shell { grid-template-columns: 60px 1fr; }
+  /* Rail stays at the 100px label-fit width (see the 760px note); only chrome tightens. */
   .content { padding: 12px 10px; }
   .card { padding: 14px; }
   h1 { font-size: 20px; }
@@ -1114,9 +1127,13 @@ code, pre, kbd { font-family: var(--font-mono); }
 /* Active = a soft fill (the nav/history selection treatment, §11.6) + aria-current, NOT a ring
    (:focus-visible keeps the ring, so selection stays distinct from focus). */
 .docs-rail-item.active { background: var(--row-selected-bg); color: var(--text); font-weight: 600; }
-.docs-rail-group { display: flex; flex-direction: column; gap: 1px; margin: 8px 0 2px; }
-.docs-rail-group-head { display: flex; align-items: center; justify-content: space-between; padding: 4px 10px; }
-.docs-rail-group-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); }
+/* Tighter vertical rhythm between the four sub-nav sections (§11.6 follow-up): the rows are
+   already ~36px, but the 8px inter-group margin read airy — 3px brings All documents / Projects
+   / Locations / Views closer without losing the grouping. */
+.docs-rail-group { display: flex; flex-direction: column; gap: 1px; margin: 3px 0 1px; }
+.docs-rail-group-head { display: flex; align-items: center; justify-content: space-between; padding: 2px 10px; }
+/* 12px floor (§4.4) — was 11px. */
+.docs-rail-group-label { font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); }
 .docs-rail-add { background: none; border: none; color: var(--text-muted); font-size: 16px; line-height: 1; cursor: pointer; padding: 0 4px; }
 .docs-rail-add:hover:not(:disabled) { color: var(--text); }
 .docs-rail-empty { padding: 2px 10px; font-size: 12px; }
@@ -1206,6 +1223,18 @@ code, pre, kbd { font-family: var(--font-mono); }
   white-space: nowrap;
 }
 .doc-row-cap { margin: 2px 0 0; }
+/* In-context row banners (a failed import's error, the stale-embeddings notice) are COMPACT
+   (§11.6 follow-up): the default banner padding/margin made a failed row tower over the clean
+   ~56px rows. Tighter padding + margin + --text-xs keep the semantic left border + icon (§6)
+   while the row stays close to its neighbours. */
+.doc-row-main .banner {
+  margin: 4px 0 0;
+  padding: 4px 8px;
+  gap: 6px;
+  font-size: var(--text-xs);
+  line-height: var(--line-xs);
+}
+.doc-row-main .banner-text p { margin: 0 0 3px; }
 /* Trailing cluster (§11.6 refinement): right-aligned, never shrinks. Holds, in order, the tag
    chips, the status badges, then Preview + "⋯". Because it is shrink:0 and the name column
    takes the flex space, the name breathes and the Preview/⋯ pair aligns in a column down the

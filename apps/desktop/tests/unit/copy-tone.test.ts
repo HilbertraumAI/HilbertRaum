@@ -63,6 +63,9 @@ describe('stale phrases stay out of user-facing string literals', () => {
     'Regenerate response',
     'Telemetry disabled',
     'GPU acceleration auto-disabled',
+    // The import-failure copy was localized + softened (§7): the raw English literal is gone,
+    // routed through `main.ingest.unsupportedType` ("This file type isn't supported (…)").
+    'Unsupported file type',
     // The auto "suggested project" feature was removed — no suggestion copy may remain (EN/DE).
     'Suggested project',
     'Suggested new project',

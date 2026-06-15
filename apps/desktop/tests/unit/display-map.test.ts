@@ -1,6 +1,11 @@
 import { describe, it, expect } from 'vitest'
 import { t, type MessageKey, type MessageParams } from '../../src/shared/i18n'
-import { DISPLAY_MAP_KEYS, localizeServerCopy } from '../../src/renderer/lib/displayMap'
+import {
+  DISPLAY_MAP_KEYS,
+  INTERPOLATED_MAP_KEYS,
+  localizeServerCopy,
+  unsupportedTypeExt
+} from '../../src/renderer/lib/displayMap'
 import { NO_DOCUMENT_CONTEXT_ANSWER, REINDEX_NEEDED_ANSWER } from '../../src/main/services/rag'
 import { DOC_TASK_BUSY_MESSAGE } from '../../src/shared/types'
 
@@ -28,8 +33,28 @@ describe('localizeServerCopy (D-L4)', () => {
   it('renders unknown strings as-is', () => {
     const raw = 'SQLITE_IOERR: disk I/O error'
     expect(localizeServerCopy(tDe, raw)).toBe(raw)
-    const interpolated = 'Unsupported file type: .xyz'
-    expect(localizeServerCopy(tDe, interpolated)).toBe(interpolated)
+  })
+
+  it('localizes the interpolated unsupported-file-type failure, keeping the extension', () => {
+    // The current persist-canonical English (interpolated) round-trips to German with {ext}.
+    const persisted = tEn('main.ingest.unsupportedType', { ext: '.xyz' })
+    const localized = localizeServerCopy(tDe, persisted)
+    expect(localized).toBe(tDe('main.ingest.unsupportedType', { ext: '.xyz' }))
+    expect(localized).toContain('.xyz')
+    expect(localized).not.toBe(persisted) // genuinely translated, not passed through
+    // English UI re-renders the same friendly English (identity round-trip).
+    expect(localizeServerCopy(tEn, persisted)).toBe(persisted)
+  })
+
+  it('localizes an OLD pre-i18n unsupported-type row (legacy literal), keeping the extension', () => {
+    const legacy = 'Unsupported file type: .heic'
+    expect(localizeServerCopy(tDe, legacy)).toBe(tDe('main.ingest.unsupportedType', { ext: '.heic' }))
+    expect(unsupportedTypeExt(legacy)).toBe('.heic')
+  })
+
+  it('unsupportedTypeExt returns null for an unrelated failure', () => {
+    expect(unsupportedTypeExt('SQLITE_IOERR: disk I/O error')).toBeNull()
+    expect(unsupportedTypeExt(tEn('main.ingest.fileTooLarge'))).toBeNull()
   })
 
   it('is the identity in an English UI', () => {
@@ -86,6 +111,16 @@ describe('localizeServerCopy (D-L4)', () => {
     // Every mapped English value must round-trip to its German catalog value.
     for (const key of persistCanonical) {
       expect(localizeServerCopy(tDe, t('en', key)), key).toBe(t('de', key))
+    }
+  })
+
+  it('covers the interpolated persist-canonical set (handled by regex, not exact match)', () => {
+    // Interpolated messages carry a value in the persisted string, so they live in
+    // INTERPOLATED_MAP_KEYS (reverse-matched by a template regex) rather than DISPLAY_MAP_KEYS.
+    expect([...INTERPOLATED_MAP_KEYS]).toEqual(['main.ingest.unsupportedType'])
+    for (const key of INTERPOLATED_MAP_KEYS) {
+      const en = t('en', key, { ext: '.xyz' })
+      expect(localizeServerCopy(tDe, en), key).toBe(t('de', key, { ext: '.xyz' }))
     }
   })
 })

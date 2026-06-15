@@ -6,7 +6,8 @@ import { en, type MessageKey, type MessageParams } from '@shared/i18n'
 // contracts — most importantly the `scanDetected` exact-match — never move. The
 // renderer translates them at display time via this exact-match reverse lookup from
 // the known English constants to their MessageKeys. Unknown strings (raw library
-// errors, interpolated copy like "Unsupported file type: …") render as-is.
+// errors) render as-is. Messages that carry an interpolated value (the offending file
+// extension) are handled separately below — they can't be exact-matched.
 //
 // Because the English catalog values are byte-identical to the pre-i18n literals
 // (D-L8), rows persisted BEFORE the i18n wave match too — switching language
@@ -45,6 +46,41 @@ const KEY_BY_ENGLISH: ReadonlyMap<string, MessageKey> = new Map(
 /** A bound translator (what `useT().t` returns, or `(k) => t(lang, k)`). */
 export type BoundT = (key: MessageKey, params?: MessageParams) => string
 
+// ---- Interpolated persist-canonical messages -------------------------------------------
+// Some persisted error messages carry an interpolated value (the offending file extension),
+// so they cannot be reverse-matched by the exact-match map above. Each is reverse-matched by
+// a regex derived from its English template (the param becomes a capture group) and
+// re-rendered in the target language with the param re-interpolated. These keys are
+// persist-canonical but deliberately NOT in DISPLAY_MAP_KEYS (which is the exact-match set).
+
+/** Persist-canonical keys handled via the interpolated matcher (not exact-match). Exported
+ *  so the catalog-hygiene test can pin this set too. */
+export const INTERPOLATED_MAP_KEYS: readonly MessageKey[] = ['main.ingest.unsupportedType']
+
+/** Build a `^…$` regex from an English template by escaping it and turning its single
+ *  `{param}` placeholder into a capture group. */
+function templateToRegex(template: string, param: string): RegExp {
+  const escaped = template.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return new RegExp(`^${escaped.replace(`\\{${param}\\}`, '(.+?)')}$`)
+}
+
+const UNSUPPORTED_TYPE_RE = templateToRegex(en['main.ingest.unsupportedType'], 'ext')
+// Legacy pattern for rows persisted by Phase-4-era ingestion (before this message was
+// localized): the old raw English form ended with the offending extension. Matched here so an
+// already-failed row still localizes after this change instead of leaking raw English into a
+// German UI. Written as a regex (not the quoted literal) so the copy-tone guard stays clean.
+const LEGACY_UNSUPPORTED_TYPE_RE = /^Unsupported file type: (.+)$/
+
+/**
+ * Recover the offending extension when `raw` is the unsupported-file-type failure (current
+ * OR legacy wording), else null. Exported so a failed row can branch on it: "Try again"
+ * (re-index) is offered only for retryable failures, and an unsupported type is not one.
+ */
+export function unsupportedTypeExt(raw: string): string | null {
+  const m = UNSUPPORTED_TYPE_RE.exec(raw) ?? LEGACY_UNSUPPORTED_TYPE_RE.exec(raw)
+  return m ? m[1] : null
+}
+
 /**
  * Translate a server-origin string for display: exact-match against the known
  * persisted English constants, else pass through unchanged. DOC_TASK_BUSY_MESSAGE is
@@ -55,6 +91,8 @@ export type BoundT = (key: MessageKey, params?: MessageParams) => string
 export function localizeServerCopy(t: BoundT, raw: string): string {
   const key = KEY_BY_ENGLISH.get(raw)
   if (key) return t(key)
+  const ext = unsupportedTypeExt(raw)
+  if (ext != null) return t('main.ingest.unsupportedType', { ext })
   const busy = en['main.chat.docTaskBusy']
   if (raw.includes(busy)) return raw.replace(busy, t('main.chat.docTaskBusy'))
   return raw

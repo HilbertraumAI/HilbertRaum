@@ -593,7 +593,9 @@ export async function processDocument(
 
     const parser = selectParser(row.title)
     if (!parser) {
-      throw new Error(`Unsupported file type: ${extname(row.title) || '(none)'}`)
+      // Persist-canonical English (i18n record §3.3 rule 1): the catch writes it into
+      // documents.error_message; the renderer display map localizes it (interpolated {ext}).
+      throw new Error(t('en', 'main.ingest.unsupportedType', { ext: extname(row.title) || '(none)' }))
     }
     // Prefer the per-extension MIME (identical to parser.mimeType for the text formats;
     // gives audio its real type — audio/wav vs the AudioParser's `audio/*` fallback).
@@ -806,7 +808,8 @@ export async function extractDocumentPreview(
   if (!row) throw new Error(`Unknown document: ${documentId}`)
   const parser = selectParser(row.title)
   if (!parser) {
-    throw new Error(`Unsupported file type: ${extname(row.title) || '(none)'}`)
+    // Emission (§3.3 rule 2): an IPC throw, never persisted — localized via tMain.
+    throw new Error(tMain('main.ingest.unsupportedType', { ext: extname(row.title) || '(none)' }))
   }
 
   // Audio: re-extraction reads the stored CHUNKS, not the file — re-parsing

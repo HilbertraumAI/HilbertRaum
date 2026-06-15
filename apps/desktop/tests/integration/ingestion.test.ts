@@ -177,7 +177,9 @@ describe('ingestion pipeline', () => {
     const queued = createQueuedDocument(db, src)
     const info = await processDocument(db, storeDir, queued.id)
     expect(info.status).toBe('failed')
-    expect(info.errorMessage).toContain('Unsupported file type')
+    // Persisted as the softened, localizable canonical English with the extension (§7).
+    expect(info.errorMessage).toContain("isn't supported")
+    expect(info.errorMessage).toContain('.xyz')
   })
 
   it('re-indexes a document, replacing its chunks', async () => {

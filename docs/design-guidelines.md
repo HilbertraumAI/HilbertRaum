@@ -571,6 +571,48 @@ collapsed (list full-width) + expanded, the active-item fill — German headers/
 hyphenation/overflow. Captures in `docs/design-review/docs-subnav/`
 (`scripts/walk-docs-subnav.mjs`).
 
+**Follow-up — import-failure copy + failed-row actions + sub-nav density (2026-06-15, renderer +
+one scoped main-process string).** Three Documents/shell polish fixes (+ a density nudge). **(A)
+Import-failure copy localized + softened (§7).** A failed import persisted (and showed) the raw
+English literal `Unsupported file type: .xyz` — leaking English into the German UI. It now routes
+through a new **interpolated** persist-canonical key `main.ingest.unsupportedType` with an `{ext}`
+param (EN: "This file type isn't supported (.xyz). Try TXT, PDF, DOCX, CSV, or a supported audio
+format."; DE informal „du", D-L7). The persist site ([`ingestion/index.ts`](../apps/desktop/src/main/services/ingestion/index.ts))
+writes canonical English via `t('en', …, { ext })` (the preview-path sibling throw uses `tMain`,
+rule 2); because the value carries the interpolated extension it can't be exact-matched, so the
+D-L4 display map ([`displayMap.ts`](../apps/desktop/src/renderer/lib/displayMap.ts)) gains an
+**interpolated matcher** — a regex derived from the English template recovers `{ext}` and
+re-renders in the target language. A **legacy matcher** (the old `Unsupported file type: …` form)
+localizes rows persisted before this change so old failures don't leak English either. The
+interpolated key is deliberately OUTSIDE `DISPLAY_MAP_KEYS` (the exact-match set) — it lives in the
+new `INTERPOLATED_MAP_KEYS`; the copy-tone guard now bans the raw "Unsupported file type" literal.
+**(B) Failed-row actions — Remove + Try again, never Preview.** A failed import never produced
+extracted text, so the inline **Preview** is meaningless on a failed row. Failed rows now show
+inline **Remove** (reuses the delete handler — clears the entry; works from both the All-documents
+list and the "Failed imports" view, same row markup) and, **only when the failure is retryable**
+(a transient read/parse error — `isRetryableFailure`, false for an unsupported type / file-too-
+large / too-many-sections), **Try again** (re-index). No "⋯" overflow on a failed row (Re-index =
+Try again, Delete = Remove are both inline). The red **Failed**/**Fehlgeschlagen** badge (icon +
+word, §6) and the in-context error banner stay; the banner is now **compact** (`.doc-row-main
+.banner` — tighter padding/margin + `--text-xs`) so a failed row no longer towers over the clean
+~56px rows. **(C) Sub-nav density.** The four sections sat airy despite the prior "densified"
+pass: inter-group margin `8px → 3px`, group-head padding `4px → 2px`, and the group label bumped
+`11px → 12px` (§4.4 floor) — rows stay ~36px with the hover highlight intact. **Files:**
+`shared/i18n/{en,de}.ts` (+`main.ingest.unsupportedType`, +`docs.failed.remove/removeTitle/retry/
+retryTitle`), `main/services/ingestion/index.ts`, `renderer/lib/displayMap.ts`
+(`INTERPOLATED_MAP_KEYS`, `unsupportedTypeExt`), `renderer/screens/DocumentsScreen.tsx`
+(`isRetryableFailure`, the failed-row action branch, the failed-row context-menu guard),
+`renderer/styles.css` (`.app-shell` 100px, `.nav-label` non-breaking + 12px, narrow breakpoints,
+`.doc-row-main .banner` compact, sub-nav density). Verification per §11.4: typecheck + `npm run
+build` clean; full vitest from `apps/desktop` **1356 passed / 25 skipped** (display-map
+interpolated + legacy + hygiene cases; DocumentsScreen failed-row Remove/Try-again/no-Preview +
+`isRetryableFailure`; new `rail-labels` guard; copy-tone stale-literal; ingestion persists the
+softened English). Playwright `_electron` eyeball walk in BOTH themes AND both locales (EN/DE): the
+rail on Home/Chat/Documents/AI Model/Settings with every label measured one-line/unclipped (longest
+"Einstellungen" 72px in the 100px column), a Documents list with a failed import (localized
+friendly banner, Remove not Preview, compact banner), the "Failed imports" view — captures in
+`docs/design-review/rail-and-failed/` (`scripts/walk-rail-and-failed.mjs`).
+
 ---
 
 ## 12. Chat-UI polish pass — design record (IMPLEMENTED 2026-06-13)
@@ -582,11 +624,23 @@ backend/data-contract/IPC changes. Before/after eyeball captures live in
 
 ### 12.1 What changed (decisions + the facts they rest on)
 
-1. **App nav is a compact rail, not a panel.** `.app-shell` grid → `80px 1fr`; nav items are
+1. **App nav is a compact rail, not a panel.** `.app-shell` grid → `100px 1fr`; nav items are
    icon-over-short-label with a `title` tooltip for the full name. The conversation is the
    centre of gravity (§1/§2). Active state is a **soft neutral fill** (`--surface-hover`) with
    weight, *not* an accent fill — accent blue is reserved for the focus ring, links, and the
    one primary button (§7, fixes accent overuse).
+   - **Rail labels never break mid-word** (follow-up 2026-06-15). The original rail wrapped
+     long labels via SOFT HYPHENS (U+00AD) baked into the i18n strings + `hyphens: manual`,
+     which rendered as "Docu-ments" / "Doku-mente" / "Einstel-lungen" — reads as broken. Fixed:
+     the soft hyphens are **stripped from the nav labels**, `.nav-label` sets
+     `hyphens: none; overflow-wrap: normal; word-break: normal` (no soft/auto break ever), and
+     the **grid column was widened 80px → 100px** so the longest SINGLE-word label in EITHER
+     locale ("Einstellungen", DE — ~72px) fits on one line at the **12px text floor** (§4.4; the
+     rail label was also bumped 11px → 12px). 100px is "just enough" (72px label + the rail's
+     ~26px padding/border ≈ 98px) and stays far slimmer than the original ~220px panel; the
+     narrow-window breakpoints (≤760/≤520px) no longer shrink the column below this fit width
+     (a single word can't wrap). Labels with a space or hyphen ("AI Model", "KI-Modell") may
+     still wrap cleanly to two lines. Guard: `tests/unit/rail-labels.test.ts`.
 2. **One privacy signal.** The duplicate lower-left sidebar `LocalIndicator` was removed; the
    ambient "Local · Offline" lives only in the chat header now (the `variant="sidebar"` path +
    `.local-indicator-sidebar` CSS are dormant). The lock became a quiet rail button.

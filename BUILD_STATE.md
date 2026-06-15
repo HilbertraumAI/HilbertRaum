@@ -6,7 +6,44 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
-_Last updated: 2026-06-15 — **Documents screen: suggested-project FEATURE REMOVAL + sub-nav
+_Last updated: 2026-06-15 — **Docs-screen-refinement polish: rail label hyphenation +
+import-failure copy + failed-row actions + sub-nav density.** A renderer-only wave (plus the one
+scoped main-process user-facing string exception, §11.2) on the Documents screen + app shell,
+folded into [`design-guidelines.md`](docs/design-guidelines.md) **§12.1 #1** (rail) and **§11.6**
+(extended, §-anchors stable). **No IPC/schema/data-contract changes.** **(A) Rail labels never
+break mid-word.** The compact app rail hyphenated long labels ("Docu-ments"/"Doku-mente"/
+"Einstel-lungen") via soft hyphens (U+00AD) baked into the i18n strings + `hyphens: manual`. Fixed:
+soft hyphens **stripped** from `nav.documents`/`nav.settings` (EN+DE); `.nav-label` →
+`hyphens: none; overflow-wrap: normal; word-break: normal`; the `.app-shell` grid column **widened
+80px → 100px** so the longest single-word label ("Einstellungen", DE, ~72px) fits one line at the
+**12px floor** (the label was also 11px → 12px); narrow breakpoints (≤760/≤520px) no longer shrink
+below the fit width. **(B) Import-failure copy localized + softened (§7).** The raw English
+`Unsupported file type: .xyz` (persisted + shown, leaking English into the German UI) now routes
+through a new **interpolated** persist-canonical key `main.ingest.unsupportedType` (`{ext}` param;
+EN "This file type isn't supported (.xyz). Try TXT, PDF, DOCX, CSV, or a supported audio format.",
+DE informal „du"). [`ingestion/index.ts`](apps/desktop/src/main/services/ingestion/index.ts) persists
+canonical English via `t('en', …, {ext})` (preview sibling uses `tMain`); the D-L4 display map
+([`displayMap.ts`](apps/desktop/src/renderer/lib/displayMap.ts)) gains an **interpolated matcher**
+(template→regex recovers `{ext}`, re-renders in-language) + a **legacy matcher** so pre-change rows
+still localize. The key is OUTSIDE `DISPLAY_MAP_KEYS` (exact set) → new `INTERPOLATED_MAP_KEYS`;
+copy-tone guard now bans the raw literal. **(C) Failed-row actions.** A failed import has no text →
+**Preview is meaningless**; failed rows now show inline **Remove** (reuses the delete handler;
+clearable from BOTH the All-docs list and "Failed imports" view) and **Try again** (re-index) ONLY
+when retryable (`isRetryableFailure` — false for unsupported-type/file-too-large/too-many-sections);
+no "⋯" on a failed row. The red Failed badge + in-context banner stay, banner now **compact**
+(`.doc-row-main .banner`). **(D) Sub-nav density** tightened (inter-group `8px→3px`, head `4px→2px`,
+group label `11px→12px`). **Files:** `shared/i18n/{en,de}.ts`, `ingestion/index.ts`, `displayMap.ts`,
+`DocumentsScreen.tsx`, `styles.css`. **Tests:** typecheck + `npm run build` clean; full vitest from
+`apps/desktop` **1356 passed / 25 skipped** (display-map interpolated/legacy/hygiene; DocumentsScreen
+failed-row Remove/Try-again/no-Preview + `isRetryableFailure`; new `rail-labels` guard; copy-tone
+stale-literal; ingestion softened-English; i18n soft-hyphen strip). Playwright `_electron` eyeball
+walk BOTH themes AND both locales (EN/DE): rail on all five screens (labels measured one-line/
+unclipped, longest "Einstellungen" 72px/100px col), failed import (localized banner, Remove not
+Preview, compact banner), "Failed imports" view — captures in `docs/design-review/rail-and-failed/`
+(`scripts/walk-rail-and-failed.mjs`). **No version bump, no schema change. Next:** open work
+unchanged (Phase 30 big-slot/embeddings — D38–D43; owner-gated doc-org Phase E.2)._
+
+_(prior) 2026-06-15 — **Documents screen: suggested-project FEATURE REMOVAL + sub-nav
 regroup/collapse.** Two changes folded into [`design-guidelines.md`](docs/design-guidelines.md)
 **§11.6** (extended, §-anchor stable). **(A) Removed the auto "suggested project" feature** —
 an intentional product decision (it surfaced a near-equal row affordance for a low-value guess).

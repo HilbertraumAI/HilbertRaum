@@ -14,7 +14,7 @@ export const en = {
   'nav.chat': 'Chat',
   // Soft hyphen (U+00AD) gives the narrow nav rail a clean break point ("Docu-/ments")
   // since Electron has no auto-hyphenation; invisible when the word fits or in the tooltip.
-  'nav.documents': 'Docu­ments',
+  'nav.documents': 'Documents',
   'nav.models': 'AI Model',
   'nav.settings': 'Settings',
   'app.lockNow': 'Lock now',
@@ -278,6 +278,14 @@ export const en = {
   'docs.reindexBusy': 'Re-indexing…',
   'docs.reindexTitle': 'Read and prepare the stored copy again',
   'docs.delete': 'Delete',
+  // Failed-import row actions (§11.6 follow-up): a failed import never produced text, so
+  // Preview is meaningless — the inline pair becomes Remove (clear the failed entry) and,
+  // only when re-indexing could help (a transient read/parse error, NOT an unsupported type),
+  // Try again.
+  'docs.failed.remove': 'Remove',
+  'docs.failed.removeTitle': 'Remove this failed import from the list',
+  'docs.failed.retry': 'Try again',
+  'docs.failed.retryTitle': 'Read and prepare this file again',
   // Per-row overflow ("⋯") menu (§11.6): one inline Preview + this menu carries the rest.
   // The trigger keeps an accessible name even though it is revealed on hover.
   'docs.moreActions': 'More actions for {title}',
@@ -866,6 +874,12 @@ export const en = {
     'This document is too large to fully index. Split it into smaller files and import the parts.',
   'main.ingest.parseTimeout':
     'This file took too long to process and was skipped. It may be damaged or extremely large.',
+  // Interpolated persist-canonical (the offending extension is part of the value), so this
+  // is NOT in the exact-match DISPLAY_MAP_KEYS set — the renderer display map reverse-matches
+  // it via a template-derived regex (renderer/lib/displayMap.ts) and re-interpolates {ext} in
+  // the target language. Friendly + calm per §7; lists the formats the user can actually use.
+  'main.ingest.unsupportedType':
+    "This file type isn't supported ({ext}). Try TXT, PDF, DOCX, CSV, or a supported audio format.",
   'main.rag.noContext':
     "I couldn't find this in your documents. Try rephrasing your question, or check which " +
     "documents you're asking about.",

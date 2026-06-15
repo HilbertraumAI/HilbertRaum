@@ -27,9 +27,25 @@ import {
   subscribeDocTask
 } from '../lib/doctasks'
 import { friendlyIpcError } from '../lib/errors'
-import { localizeServerCopy } from '../lib/displayMap'
+import { localizeServerCopy, unsupportedTypeExt } from '../lib/displayMap'
 import { useT, type I18n } from '../i18n'
-import type { MessageKey, UiLanguage } from '@shared/i18n'
+import { en, type MessageKey, type UiLanguage } from '@shared/i18n'
+
+/**
+ * A failed import is RETRYABLE when re-indexing could plausibly succeed (a transient read /
+ * parse error, an interrupted run). It is NOT retryable when the cause is intrinsic to the
+ * file — an unsupported type, or a file too large / too many sections to index — where a
+ * re-index would just fail the same way. Matched against the persist-canonical English in
+ * `documents.error_message` (the value the D-L4 display map localizes), so the offered action
+ * stays honest. Exported for the renderer test.
+ */
+export function isRetryableFailure(errorMessage: string | null | undefined): boolean {
+  const msg = errorMessage ?? ''
+  if (!msg) return true // unknown cause → let the user try again
+  if (unsupportedTypeExt(msg) != null) return false
+  if (msg === en['main.ingest.fileTooLarge'] || msg === en['main.ingest.tooManyChunks']) return false
+  return true
+}
 
 // Documents screen (spec §7.7). Import files or a folder via the OS picker
 // (opened in the main process), watch each file move through the ingestion statuses, and
@@ -916,8 +932,9 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
             className={`doc-row ${selected.has(d.id) ? 'selected' : ''}`}
             key={d.id}
             onContextMenu={(e) => {
-              // Right-click opens the same "⋯" overflow (mirrors the chat list).
-              if (rowTask) return
+              // Right-click opens the same "⋯" overflow (mirrors the chat list). A failed row
+              // has no overflow (just inline Remove / Try again), so leave the native menu.
+              if (rowTask || d.status === 'failed') return
               e.preventDefault()
               setMenuOpenId(d.id)
             }}
@@ -1015,6 +1032,32 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
                     title={t(rowTask.kind === 'ocr' ? 'docs.cancelOcrTitle' : 'docs.cancelTaskTitle')}
                   >
                     {t('docs.cancel')}
+                  </Button>
+                </>
+              ) : d.status === 'failed' ? (
+                // A failed import never produced extracted text, so Preview is meaningless
+                // (§11.6 follow-up). Inline Remove clears the failed entry (reuses the delete
+                // handler); Try again re-indexes — offered ONLY when the failure is retryable
+                // (a read/parse error), never for an unsupported type. Works in both the
+                // All-documents list and the "Failed imports" view (same row markup).
+                <>
+                  {isRetryableFailure(d.errorMessage) && (
+                    <Button
+                      size="sm"
+                      disabled={busy !== null}
+                      title={t('docs.failed.retryTitle')}
+                      onClick={() => void run(`reindex-${d.id}`, () => window.api.reindexDocument(d.id))}
+                    >
+                      {t('docs.failed.retry')}
+                    </Button>
+                  )}
+                  <Button
+                    size="sm"
+                    disabled={busy !== null}
+                    title={t('docs.failed.removeTitle')}
+                    onClick={() => void run(`delete-${d.id}`, () => window.api.deleteDocument(d.id))}
+                  >
+                    {t('docs.failed.remove')}
                   </Button>
                 </>
               ) : (

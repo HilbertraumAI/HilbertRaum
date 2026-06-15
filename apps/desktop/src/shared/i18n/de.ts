@@ -31,9 +31,9 @@ export const de: Record<keyof typeof en, string> = {
   // Soft hyphens (U+00AD) give the narrow nav rail clean break points ("Doku-/mente",
   // "Einstel-/lungen") — Electron ships no auto-hyphenation; invisible when the word fits
   // and in the button tooltip. "KI-Modell" already breaks at its real hyphen.
-  'nav.documents': 'Doku­mente',
+  'nav.documents': 'Dokumente',
   'nav.models': 'KI-Modell',
-  'nav.settings': 'Ein­stel­lungen',
+  'nav.settings': 'Einstellungen',
   'app.lockNow': 'Jetzt sperren',
   'app.lockNowTitle': 'Arbeitsbereich wieder verschlüsseln und sperren',
   'app.noticeDetails': 'Details',
@@ -302,6 +302,12 @@ export const de: Record<keyof typeof en, string> = {
   'docs.reindexBusy': 'Wird neu indexiert…',
   'docs.reindexTitle': 'Die gespeicherte Kopie erneut lesen und vorbereiten',
   'docs.delete': 'Löschen',
+  // Aktionen für eine fehlgeschlagene Zeile (§11.6): kein Vorschau-Knopf (es gibt keinen Text),
+  // sondern Entfernen und — nur wenn ein erneuter Versuch helfen kann — „Erneut versuchen".
+  'docs.failed.remove': 'Entfernen',
+  'docs.failed.removeTitle': 'Diesen fehlgeschlagenen Import aus der Liste entfernen',
+  'docs.failed.retry': 'Erneut versuchen',
+  'docs.failed.retryTitle': 'Diese Datei noch einmal einlesen und vorbereiten',
   'docs.moreActions': 'Weitere Aktionen für {title}',
   'docs.audioConfirm.title': 'Große Audiodateien importieren?',
   'docs.audioConfirm.confirm': 'Importieren und transkribieren',
@@ -918,6 +924,11 @@ export const de: Record<keyof typeof en, string> = {
   'main.ingest.parseTimeout':
     'Diese Datei hat zu lange gebraucht und wurde übersprungen. Sie ist möglicherweise ' +
     'beschädigt oder extrem groß.',
+  // Interpolierter persist-kanonischer Text ({ext}); kein Exakt-Match — die Display-Map
+  // im Renderer erkennt ihn per Vorlagen-Regex und setzt {ext} sprachabhängig ein.
+  'main.ingest.unsupportedType':
+    'Dieser Dateityp wird nicht unterstützt ({ext}). Versuch TXT, PDF, DOCX, CSV oder ein ' +
+    'unterstütztes Audioformat.',
   'main.rag.noContext':
     'Dazu habe ich in deinen Dokumenten nichts gefunden. Formuliere deine Frage anders oder ' +
     'prüf, welche Dokumente du gerade fragst.',

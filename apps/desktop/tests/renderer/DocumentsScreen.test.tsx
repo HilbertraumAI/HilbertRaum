@@ -5,9 +5,11 @@ import userEvent from '@testing-library/user-event'
 import {
   DocumentsScreen,
   friendlyMimeLabel,
+  isRetryableFailure,
   RAIL_COLLAPSED_KEY,
   VIEWS_MORE_KEY
 } from '../../src/renderer/screens/DocumentsScreen'
+import { t as translate } from '../../src/shared/i18n'
 import type { Collection, DocumentInfo } from '../../src/shared/types'
 import { stubApi } from '../helpers/renderer'
 
@@ -271,15 +273,55 @@ describe('DocumentsScreen', () => {
     expect(screen.queryByText(/different search model/i)).not.toBeInTheDocument()
   })
 
-  it('surfaces the error message for a failed document', async () => {
+  it('surfaces a localized, softened error for a failed import; offers Remove not Preview (Task B/C)', async () => {
     stubApi({
       listDocuments: vi.fn(async () => [
+        // The legacy raw literal is still recognized by the display map and re-rendered as the
+        // friendly copy (no raw English leak), keeping the offending extension.
         doc({ status: 'failed', errorMessage: 'Unsupported file type: .xyz', chunkCount: 0 })
       ])
     })
     render(<DocumentsScreen />)
-    expect(await screen.findByText(/Unsupported file type/i)).toBeInTheDocument()
+    // Softened §7 copy — the raw "Unsupported file type" phrasing is gone, the extension shows.
+    expect(await screen.findByText(/isn't supported/i)).toBeInTheDocument()
+    expect(screen.getByText(/\.xyz/)).toBeInTheDocument()
+    expect(screen.queryByText(/Unsupported file type/i)).not.toBeInTheDocument()
     expect(screen.getByText('Failed')).toBeInTheDocument()
+    // Failed rows expose Remove, never Preview/overflow; an unsupported type is NOT retryable.
+    expect(screen.getByRole('button', { name: 'Remove' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Preview' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Try again' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /More actions/ })).not.toBeInTheDocument()
+  })
+
+  it('offers Try again + Remove on a RETRYABLE failure; Remove clears it via the delete handler (Task C)', async () => {
+    const user = userEvent.setup()
+    const listDocuments = vi
+      .fn<() => Promise<DocumentInfo[]>>()
+      .mockResolvedValueOnce([
+        doc({ id: 'd9', title: 'broken.pdf', status: 'failed', errorMessage: 'EIO: i/o error, read', chunkCount: 0 })
+      ])
+      .mockResolvedValue([]) // after remove
+    const deleteDocument = vi.fn(async () => {})
+    stubApi({ listDocuments, deleteDocument })
+    render(<DocumentsScreen />)
+    await screen.findByText('broken.pdf')
+    // A transient read error IS retryable → Try again offered alongside Remove; never Preview.
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Preview' })).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Remove' }))
+    await waitFor(() => expect(deleteDocument).toHaveBeenCalledWith('d9'))
+  })
+
+  it('isRetryableFailure: intrinsic failures are not retryable, transient ones are', () => {
+    // Unsupported type (current + legacy wording) and size-cap failures are intrinsic → no retry.
+    expect(isRetryableFailure(translate('en', 'main.ingest.unsupportedType', { ext: '.xyz' }))).toBe(false)
+    expect(isRetryableFailure('Unsupported file type: .heic')).toBe(false)
+    expect(isRetryableFailure(translate('en', 'main.ingest.fileTooLarge'))).toBe(false)
+    expect(isRetryableFailure(translate('en', 'main.ingest.tooManyChunks'))).toBe(false)
+    // A read/parse error or an unknown cause → retryable.
+    expect(isRetryableFailure('EIO: i/o error, read')).toBe(true)
+    expect(isRetryableFailure(null)).toBe(true)
   })
 
   it('renders the empty state when there are no documents', async () => {
