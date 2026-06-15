@@ -247,7 +247,7 @@ D18). Granite 4.1 8B lost its tier (most 8B hallucinations, lowest F1).
   hybrid thinking, so Deep keeps working out of the box on low-end machines; 2507 is instruct-only.
 - **Promotions made LIVE via `recommendation_rank`** (the §6.2 follow-up, done same session):
   each manifest carries a rank (winner = higher) that the now quality-aware `recommendModelIdByRam`
-  uses as the tiebreak. Real-hardware effect: **≤12 GB → Qwen3-4B (default), 16 GB → Ministral,
+  uses as the tiebreak. Real-hardware effect: **≤12 GB → Qwen3-4B (default), 16–24 GB → Ministral,
   ≥32 GB → Gemma 4**; Granite + the 30B MoE are never auto-recommended. `recommended_profiles`
   stays `[]` (the picker is RAM-best-fit, not profile-based).
 - **Gemma `supports_thinking_mode` FLIPPED to `true`** (run #2, `tests/manual/gemma-thinking.test.ts`,
@@ -302,7 +302,7 @@ findings are §0–§6 of this document. Decision numbering continues the repo s
 | D18 | Incumbent refresh | Evaluate **Qwen3-4B-Instruct-2507** as a 4th Phase-28 manifest | Report data: the 2507 4B beats the *original* 8B on most axes. ⚠️ 2507 is instruct-only (no hybrid thinking) — interacts with Phase-20 depth modes |
 | D19 | Quality benchmark = judge-free, ours | Hand-rolled **German/English grounded-QA set** + deterministic string/F1/citation/abstain scoring; `llama-bench` for speed | No cloud judge (hard rule); tests exactly what the product does (RAG + citations + abstention); no new toolchain |
 | D20 | Benchmark form | **Manual protocol doc first** (this document + a results CSV convention); automate only if the manual loop proves annoying | One developer, 2–3 laptops; don't build automation before the protocol has run once |
-| D21 | Big/opt-in slot + embeddings | **Phase 30, outline only** — Gemma 4 26B-A4B vs the incumbent Qwen3 30B-A3B; Granite Embedding R2 small as the only near-drop-in embedder | MoE comparisons need Phase-29 numbers first; an embedder swap forces a reindex story — separate, later. Now drafted as [`big-slot-embeddings-plan.md`](big-slot-embeddings-plan.md) (D23–D28) |
+| D21 | Big/opt-in slot + embeddings | **Phase 30, outline only** — Gemma 4 26B-A4B vs the incumbent Qwen3 30B-A3B; Granite Embedding R2 small as the only near-drop-in embedder | MoE comparisons need Phase-29 numbers first; an embedder swap forces a reindex story — separate, later. Now drafted as [`big-slot-embeddings-plan.md`](big-slot-embeddings-plan.md) (D38–D43) |
 | D22 | License gate posture | Every new manifest lands with a **real `license_review` record** (approved, with source URLs) before merge | Licensing is the #1 disqualifier; the review work is cheap now (all picks verified Apache-2.0) and mandatory before any drive bundles them |
 
 **Outcomes (as built):** D16 — all three challengers shipped + license-reviewed. **D17
@@ -370,7 +370,7 @@ thinking-quality check (`tests/manual/gemma-thinking.test.ts`).
 
 | Risk | Mitigation |
 |---|---|
-| Eval set saturates EM (all models ~96–98 %) | Grow the set with harder/multi-hop + more distractor-heavy items before trusting accuracy deltas; per-item dumps are kept. Abstention already separates models. (= big-slot plan D27) |
+| Eval set saturates EM (all models ~96–98 %) | Grow the set with harder/multi-hop + more distractor-heavy items before trusting accuracy deltas; per-item dumps are kept. Abstention already separates models. (= big-slot plan D42) |
 | Benchmark machines too few/too similar | The protocol records machine facts; the GPU hardware-matrix machines double as benchmark hosts over time (run the dev-box sweep for the formal 2nd machine) |
 | HF repo layouts / filenames drift | Manifests pin exact URLs; first fetch + `verify-models --generate` catches drift loudly |
 | Phase-30 embedder swap forces a reindex | Surface via the Phase-17 re-index machinery; its own mini-plan before any swap (big-slot plan Track B) |

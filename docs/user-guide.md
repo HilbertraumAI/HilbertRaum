@@ -1,6 +1,7 @@
 # HilbertRaum — User Guide
 
-_Last updated: 2026-06-12 (added: asking by filename; the password eye button)_
+_Last updated: 2026-06-15 (added: deep index + coverage meter and tiers; drag-and-drop files into a
+chat; the composite source picker; filing suggestions; audio transcription, OCR and voice dictation)_
 
 HilbertRaum is a private AI workspace that runs **entirely on your laptop**, from
 a portable drive. Your prompts, documents, embeddings, and chat history stay local. There is
@@ -78,11 +79,10 @@ enter your password on a single unlock screen.
 ## 4. Finding your way around
 
 The sidebar has four everyday destinations — **Home**, **Chat**, **Documents**, and
-**AI Model** — plus **Settings** at the bottom. Privacy and Diagnostics live inside
-Settings as tabs (see §8).
+**AI Model** — plus **Settings** at the bottom. Settings has three tabs: **General**,
+**Privacy & data**, and **Diagnostics (advanced)** (see §8).
 
-A quiet **🔒 Local · Offline** status sits at the bottom of the sidebar and in the chat
-header. Hover it for the short version — *"Everything stays on this drive. No internet
+A quiet **🔒 Local · Offline** status sits in the chat header. Hover it for the short version — *"Everything stays on this drive. No internet
 connection is used."* — or click it to open the full privacy details. If you have enabled
 internet access for model downloads, it says so honestly: **Local · Downloads allowed**
 (your chats and documents stay local either way).
@@ -116,6 +116,9 @@ blocks you.
    - **Not downloaded** — the model file isn't on the drive (see Troubleshooting).
    - **Needs ≥N GB RAM** — this computer has less memory than the model's minimum, so it
      can't be selected or started here. Pick a smaller model — quality stays great.
+   - **Can't verify** — the file is present but its checksum didn't match; re-download it.
+   - **Unsupported** — this model can't run on this computer/build.
+   - **Not recommended** — runnable but not the best fit for this computer's memory.
 3. Click a model, then **Select** and **Start runtime**. The first start of a model can take a
    little while as it loads into memory.
 
@@ -185,8 +188,8 @@ with sources (see §7).
 2. While an answer is streaming, the send button becomes **Stop** — click it (or tab to it)
    to cancel.
 3. Hover over (or tab to) any answer for its actions: **Try again** regenerates the latest
-   answer, **Copy** copies it, and **Save** saves the conversation to a file of your choice.
-   A small "Copied" / "Saved" note confirms each one.
+   answer (plain Chat only — not in *Ask my documents*), **Copy** copies it, and **Save** saves the
+   conversation to a file of your choice. A small *"Copied"* / *"Saved to …"* note confirms each one.
 4. **Save this conversation** is also in the **⋯** menu at the top right of the chat. The
    file is written wherever you choose — nothing leaves the device otherwise.
 5. To remove a conversation, hover over it in the list and open its **⋯** menu (or
@@ -252,8 +255,8 @@ when the answer starts. It is a live view only: the saved conversation keeps jus
 answer, and saved files never include the thinking text.
 
 The choice sticks per conversation, and **Thorough is only offered when the active model
-supports it** (the Qwen3 models and Gemma have a thinking mode; Ministral, Granite, and
-the Qwen3-4B "2507" variant answer well but skip the thinking step). Document answers
+supports it** — the AI Model screen notes which models have a thinking mode; models without
+one answer well but skip the thinking step. Document answers
 (**Ask my documents**) always use Balanced — they are meant to be quick and literal about
 your files.
 
@@ -261,11 +264,12 @@ your files.
 
 ## 7. Ask your documents (RAG)
 
-1. Open **Documents** and **Import** files (txt, md, pdf, docx, csv — audio
+1. Open **Documents** and **Import files** (txt, md, pdf, docx, csv — audio
    recordings: wav, mp3, flac, ogg — and, when your drive has the OCR files, photos of
-   pages: png, jpg) or a folder.
+   pages: png, jpg) — or **Import folder** to bring in a whole directory at once.
 2. Each file shows a friendly status while it is prepared locally (Waiting → Reading →
-   Preparing → **Ready**).
+   Preparing → **Ready**; audio files show **Transcribing… N%**, and a file that can't be
+   read shows **Failed**).
    Imported files are **copied into your workspace**, so the drive stays self-contained.
    **Preview** opens a read-only view of a document's extracted text — exactly what
    document search and answers are based on. (It shows text, not the original layout: on
@@ -278,10 +282,13 @@ your files.
    page/section and the exact passage each citation came from. If the documents don't
    contain the answer, the app says so rather than guessing.
 
-**Ask only chosen documents.** Under the message box, **📄 Using N documents** shows which
-files answers come from — click it to narrow the question to specific documents, add more,
-or go back to **Use all documents**. You can also start from the **Documents** screen: tick
-the checkboxes next to the files you care about and click **Ask these documents**.
+**Ask only chosen documents.** Under the message box, a **📄** source button shows what answers
+come from — **Using all documents** when the whole library is in scope, **Using N documents** when
+you have narrowed it, or **No documents yet · Add documents** when there are none. Click it to open
+the source picker: tick your whole **Library**, any **projects**, and/or specific documents (the
+scope is the union of everything ticked). You can also start from the **Documents** screen: tick the
+checkboxes next to the files you care about and click **Ask these documents**. Files you drag
+straight into the chat are always included too, shown separately as **Files in this chat**.
 
 **Naming a file in your question works too.** If you haven't chosen documents and your
 question names one of your files — *"summarize the key dates in contract.pdf"* — the answer
@@ -316,16 +323,24 @@ and the result opens in the document's Preview, with a *"Generated by &lt;model&
 line so you always know where it came from. The summary is saved with the document and is
 still there after a restart; **Regenerate** (in the Preview) writes a fresh one.
 
+**Cover the whole document — Build deep index.** A plain summary covers the most relevant /
+opening part of a long document. For full coverage, use **Build deep index** on the document row:
+the app reads the whole document once (a one-time, can-be-minutes background pass on this drive) and
+builds a layered summary. Afterwards the Preview shows a **coverage meter** — *"Covers the whole
+document"* vs *"the most relevant passages"* — and a depth selector with three tiers: **Overview**,
+**Section by section**, and **Detailed**. The deep index can pause for a chat and resume on its own,
+so you are never locked out while it runs.
+
 A few honest notes:
 
 - A model must be **running** first (the AI Model screen), and the app runs one job at a
   time: while a summary is being written, chat asks you to wait or **cancel the task**, and
   vice versa. You can always cancel — the button is right on the document row.
-- For **very long documents** the summary covers the beginning of the document (the app
-  tells you when that happens). The whole document stays searchable and answerable in
-  *Ask my documents* regardless.
-- **Re-index** clears a document's summary (the file's content may have changed) — just
-  press Summarize again afterwards.
+- For **very long documents** *without* a deep index, the summary covers the beginning of the
+  document (the app tells you when that happens). Build a deep index for whole-document coverage. The
+  whole document stays searchable and answerable in *Ask my documents* regardless.
+- **Re-index** clears a document's summary and deep index (the file's content may have changed) —
+  just press Summarize / Build deep index again afterwards.
 - Summary quality depends on the model: small models summarize well; very small ones may
   be terse.
 
@@ -414,8 +429,10 @@ pollutes the same pile as your long-term records:
   they came from and are kept out of your default answers (see below).
 - **Archived** — documents you've set aside: kept on the drive but left out of answers until
   you un-archive them.
-- **Views** — handy filters like *Recently added*, *Unfiled*, *Large files*, *Scanned / OCR*,
-  *Failed imports*. These just filter the list; they don't move anything.
+- **All documents** — everything, regardless of section.
+- **Views** — handy filters: *Recently added*, *Unfiled*, *Needs re-index*, *Large files*,
+  *Audio*, *Scanned / OCR*, and *Failed imports*. These just filter the list; they don't move
+  anything.
 
 **Move things around.** Each document row has an **Add to project…** menu — file it into a
 project, **Keep in Library**, mark it **Temporary** or **Archived**, or (inside a project)
@@ -423,11 +440,12 @@ remove it from that project. Tick several documents to do it in bulk. Deleting a
 whether to keep its documents (they stay in your Library / other projects) or delete the ones
 that live *only* in that project — Library knowledge is never deleted by accident.
 
-**Suggested places to file things.** On unfiled documents the app may show a calm suggestion
-like **"Suggested project: Tax 2025 — Apply?"** — based simply on the folder a file came from,
-where similar files are already filed, or a name that looks like an invoice/receipt
-(*Rechnung*, *Beleg*…). It is only ever a suggestion: **nothing is filed until you click
-Apply**, and **Dismiss** hides it for that document for good. No AI guessing, no automatic
+**Suggested places to file things.** On unfiled documents the app may show a calm suggestion like
+**"Suggested project: Tax 2025"** (or **"Suggested new project: …"** when it would create one) with
+**Apply** and **Dismiss** buttons — based simply on the folder a file came from, where similar files
+are already filed, or a name that looks like an invoice/receipt (*Rechnung*, *Beleg*…). It is only
+ever a suggestion: **nothing is filed until you click Apply**, and **Dismiss** hides it for that
+document for good. No AI guessing, no automatic
 sorting — you stay in control.
 
 ### Choose which sources a chat uses
@@ -454,10 +472,12 @@ network, and the activity log records only counts and ids — never your project
 
 ## 8. Privacy & offline
 
-Open **Settings → Privacy & data** (or click the **🔒 Local · Offline** status at the bottom
-of the sidebar) to see where your data lives and confirm the app is offline. Network access is
-**off by default** and the app is fully usable with no internet. Logs are stored
-**locally** on the drive and never uploaded.
+Open **Settings → Privacy & data** (or click the **🔒 Local · Offline** status in the chat header)
+to see where your data lives and confirm the app's network state. Internet access is used **only**
+for optional model/engine downloads — it is on by default on a fresh install so you can fetch a model
+out of the box (a prepared commercial drive ships with it off), every download is explicit and
+confirmed, and the core app — chat, documents, search — never goes online. Logs are stored
+**locally** on the drive (encrypted on an encrypted workspace) and never uploaded.
 
 See [`PRIVACY.md`](../PRIVACY.md) for the full statement.
 

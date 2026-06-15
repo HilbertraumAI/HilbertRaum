@@ -21,7 +21,7 @@ import { invalidateChecksum, type HashStore } from './models'
 //
 // Invariants:
 // - GATES FIRST (all must hold): the policy ceiling (`network.allow_model_downloads`),
-//   the user's `allowNetwork` setting (default OFF), and a per-download confirmation in
+//   the user's `allowNetwork` setting (default ON, but gated by the policy ceiling above), and a per-download confirmation in
 //   the renderer (with an explicit license acknowledgement when the manifest's
 //   `license_review.status` is not `approved`). `start()` re-checks the first two in
 //   the main process — a renderer bug can never start an unsanctioned download.
@@ -39,7 +39,7 @@ import { invalidateChecksum, type HashStore } from './models'
 export interface DownloadGates {
   /** `policy.network.allowModelDownloads` — the authoritative ceiling. */
   policyAllows: boolean
-  /** The user's `allowNetwork` Settings toggle (spec §3.6, default off). */
+  /** The user's `allowNetwork` Settings toggle (spec §3.6, default on; gated by `policyAllows`). */
   settingAllows: boolean
 }
 

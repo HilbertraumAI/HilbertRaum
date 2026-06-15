@@ -1,6 +1,6 @@
 {
   "name": "@hilbertraum/desktop",
-  "version": "0.1.24",
+  "version": "0.1.25",
   "private": true,
   "description": "HilbertRaum desktop app (Electron).",
   "author": "HilbertRaum contributors",

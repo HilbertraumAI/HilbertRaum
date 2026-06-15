@@ -54,9 +54,10 @@ can confirm this on the **Privacy** screen.
 ## The answers look like placeholders / "echo" replies
 
 The app is running its built-in **mock** runtime — started via **Start mock runtime** on the
-AI Model screen, or selected automatically when the model's weight file or the `llama-server`
-binary is missing at start time. The mock lets you explore the interface, but it does not
-produce real AI answers.
+AI Model screen, or used as a first-run fallback on a **developer** build when no model weight is
+installed yet. (On a prepared drive without developer mode, a missing weight shows an error rather
+than falling back to the mock.) The mock lets you explore the interface, but it does not produce real
+AI answers.
 
 **Fix:** add a real model file:
 1. On the **AI Model** screen, note the model marked *Recommended*.
@@ -71,10 +72,11 @@ scripts (see [`packaging.md`](packaging.md)).
 
 ---
 
-## "The selected model is not installed on this drive."
+## "… can't be started — its model file isn't installed on this drive yet."
 
-The model's weight file is missing from the `models/` folder. Add the file (above), or choose
-a model shown as **Installed**. The app never downloads models for you — that keeps it offline.
+The model's weight file is missing from the `models/` folder (the AI Model screen shows it as
+**Not downloaded**). Add the file (above), or choose a model already shown as **Installed**. The app
+only downloads a model when you explicitly ask it to on the AI Model screen.
 
 ---
 
@@ -148,7 +150,7 @@ only — they are not detected as scans.
 Open **Documents** to see the per-file error. Common causes: an unsupported file type, a
 corrupted file, or a password-protected document. Supported types: txt, md, pdf, docx,
 csv/tsv, audio recordings (wav, mp3, flac, ogg — needs the speech model), and photos of
-pages (png, jpg — needs the OCR files). Other files in the same import still succeed.
+pages (png, jpg, jpeg — needs the OCR files). Other files in the same import still succeed.
 
 ---
 

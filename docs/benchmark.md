@@ -65,24 +65,29 @@ Adjustments, in order:
 
 ## Recommendation
 
-The profile is fed to the existing `recommendModelId(manifests, profile, 'chat')`, which
-matches a manifest whose `recommended_profiles` includes the profile. With the committed
-manifests:
+**Since Phase 29 the primary picker is RAM-best-fit, not profile lookup.** `runBenchmark` calls
+`recommendModelIdByRam(manifests, round(ramGb), 'chat')`, which chooses the largest model that fits the
+measured RAM, breaking ties on each manifest's `recommendation_rank`. The profile-based
+`recommendModelId(manifests, profile, 'chat')` is only the **fallback** when RAM can't be detected
+(`ramGb = 0`). With the committed manifests the live, real-hardware recommendations are:
 
-| Profile | Chat model |
+| Measured RAM | Chat model |
 |---|---|
-| TINY / LITE / UNKNOWN | `qwen3-4b-instruct-q4` |
-| BALANCED | `qwen3-8b-instruct-q4` |
-| PRO | `qwen3-14b-instruct-q4` (spec §7.3 "8B or 14B") |
+| ≤ 12 GB | `qwen3-4b-instruct-q4` (also the bundled default) |
+| 16–24 GB | `ministral3-8b-instruct-2512-q4` |
+| ≥ 32 GB | `gemma-4-12b` |
+
+The profile fallback maps TINY/LITE/UNKNOWN → `qwen3-4b-instruct-q4`, BALANCED → `qwen3-8b-instruct-q4`,
+PRO → `qwen3-14b-instruct-q4` (it matches a manifest whose `recommended_profiles` includes the profile).
+Full benchmark detail and the rank rationale: [`model-benchmarks.md`](model-benchmarks.md) §6.2.
 
 (`qwen3-1.7b-instruct-q4` was the TINY/UNKNOWN model in the original spec §7.3 table, but it was
 dropped — the official `Qwen/Qwen3-1.7B-GGUF` repo ships no Q4_K_M — so `qwen3-4b-instruct-q4`,
 the smallest bundled chat model, now also covers TINY + UNKNOWN. See BUILD_STATE §9.)
 
-The larger `qwen3-30b-a3b-q4` (MoE) carries an **empty** `recommended_profiles`, so it is never
+The larger `qwen3-30b-a3b-q4` (MoE) carries an **empty** `recommended_profiles` and is never
 auto-recommended — it stays selectable on the AI Model screen as a deliberate opt-in (it needs ~20 GB
-RAM but runs near-3B speed). Each profile is claimed by exactly one chat model, so the first-match
-`recommendModelId` is unambiguous.
+RAM but runs near-3B speed).
 
 ## Warnings (spec §11.3 + §11.4)
 

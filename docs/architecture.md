@@ -1,6 +1,6 @@
 # Architecture — HilbertRaum
 
-_Last updated: 2026-06-12 (docs housekeeping: absorbed the GPU §1–§8, downloader, audit-log and depth-mode design records; Phase 37 was the last feature change)_
+_Last updated: 2026-06-15. Absorbs the GPU §1–§8, downloader, audit-log and depth-mode design records. Feature changes since: Phase 38 (scanned-PDF/photo OCR) and the whole-document-analysis wave (Phases 1–4 — deep index, coverage meter, structured extract, symmetric compare), whose design record is [`rag-design.md`](rag-design.md) §14._
 
 ## Overview
 
@@ -19,17 +19,19 @@ a future move to Tauri/Rust is a localized swap.
 ┌───────────────┴───────────────────────────────▼──────────────┐
 │ Main process (the "backend")                                   │
 │  ipc/        → handlers mirroring spec §9.1                     │
-│  services/                                                      │
+│  services/   (~35 modules — see Module ↔ spec map below)        │
 │    workspace · db (node:sqlite) · models · runtime/ ·          │
-│    chat · ingestion/ · embeddings/ · rag · benchmark ·         │
-│    policy · logging · security/                                 │
-└───────────────┬───────────────────────────────┬──────────────┘
-                │ spawn (Phase 10)               │ files
-        ┌───────▼────────┐              ┌────────▼─────────┐
-        │ llama.cpp       │              │ Drive / workspace │
-        │ llama-server    │              │ models/ workspace/│
-        │ 127.0.0.1 only  │              │ logs/ config/     │
-        └────────────────┘              └──────────────────┘
+│    chat · ingestion/ · embeddings/ · rag · reranker/ ·         │
+│    doctasks/ · analysis/ · collections · filing-suggestions ·  │
+│    transcriber/ · ocr/ · benchmark · policy · audit ·          │
+│    downloads · logging · security/                             │
+└──────────┬──────────────────┬────────────────────┬───────────┘
+           │ spawn (Phase 10)  │ spawn (Phase 36)    │ files
+   ┌───────▼────────┐  ┌───────▼────────┐  ┌─────────▼─────────┐
+   │ llama.cpp       │  │ whisper.cpp     │  │ Drive / workspace │
+   │ llama-server    │  │ whisper-cli     │  │ models/ workspace/│
+   │ 127.0.0.1 only  │  │ per-file spawn  │  │ logs/ config/     │
+   └────────────────┘  └────────────────┘  └───────────────────┘
 ```
 
 ## Process model & security
@@ -47,7 +49,8 @@ a future move to Tauri/Rust is a localized swap.
 - `Reranker` — `LlamaReranker` **or null**, chosen by availability (Phase 21). Deliberately no mock:
   a mock reranker would invent an ordering; null keeps retrieval byte-identical to the
   vector-only pipeline.
-- `DocumentParser` — txt/md/pdf/docx/csv adapters (Phase 4).
+- `DocumentParser` — txt/md/pdf/docx/csv adapters (Phase 4); plus `AudioParser` (wav/mp3/flac/ogg
+  → whisper.cpp transcript, Phase 36) and `ImageParser` (png/jpg/jpeg → OCR, Phase 38).
 - `VectorIndex` — cosine over SQLite-stored vectors (Phase 5) → `sqlite-vec`/HNSW later;
   hybridized with an FTS5 keyword pass + RRF in `rag.retrieve` (Phase 21).
 
@@ -55,9 +58,12 @@ a future move to Tauri/Rust is a localized swap.
 `node:sqlite` — built into the Node bundled by **Electron ^37** (Node 22.x). It is loaded via
 `createRequire` in `services/db.ts` because the experimental module is absent from
 `module.builtinModules`, which otherwise makes bundlers try to resolve a non-existent `sqlite`
-package. One SQLite DB per workspace (`workspace/hilbertraum.sqlite`) holds the spec §8 tables (settings,
-conversations, messages, documents, chunks, embeddings, runtime_events). In encrypted mode (Phase 9)
-the whole DB file is encrypted at rest.
+package. One SQLite DB per workspace (`workspace/hilbertraum.sqlite`) holds the original spec §8 tables
+(settings, conversations, messages, documents, chunks, embeddings, runtime_events) **plus** additive
+tables for document organization (`collections`, `document_collections`, `conversation_documents`),
+whole-document analysis (`tree_nodes`, `tree_edges`, `summary_cache`, `extraction_records`), and the
+FTS5 virtual tables (`chunks_fts`, `messages_fts`). The authoritative schema is `services/db.ts`. In
+encrypted mode (Phase 9) the whole DB file is encrypted at rest.
 
 ## Models & runtime (Phase 2)
 - **Manifests** are local YAML under `model-manifests/` (committed; weights are not). The schema +
@@ -160,7 +166,10 @@ the whole DB file is encrypted at rest.
   incremental UI. The streaming id is the **conversation id** (one active stream per conversation).
   **Phase 20 added one ADDITIVE channel:** `chat:reasoning:<id>` (preload `onReasoning`) carries
   Deep-mode thinking deltas; token events still carry only answer text, and reasoning is a
-  live-display affordance that is never persisted.
+  live-display affordance that is never persisted. A further additive channel
+  `chat:scope:<id>` (`STREAM.scope`) carries a one-shot `ScopeNotice` — the filenames retrieval
+  was auto-restricted to — before the first token of a document answer when filename auto-scope
+  fires; informational only, never persisted.
 - **Answer-depth modes (Phase 20, spec §10.3).** `ChatOptions.mode` (`fast|balanced|deep`,
   per message, sticky per conversation in the renderer) threads through
   `generateAssistantMessage` → `RuntimeChatOptions.mode`. The mapping to request parameters
@@ -219,7 +228,9 @@ the whole DB file is encrypted at rest.
   heavy and surprising; the startup auto-start is a deliberate, bounded exception that reuses the
   same gated start path.
 - **IPC** (`ipc/registerChatIpc.ts`): `createConversation`, `listConversations`, `listMessages`,
-  `sendChatMessage` (streaming), `stopGeneration`, `deleteConversation`. Regenerate reuses
+  `sendChatMessage` (streaming), `stopGeneration`, `deleteConversation`, plus `getActiveStream`
+  (stream recovery after navigation), `searchConversations` (Phase 31 full-text), `exportConversation`
+  (save to Markdown), and the scope/anchor setters used by the composite source picker. Regenerate reuses
   `sendChatMessage` with `options.regenerate` — it deletes the last assistant message, then
   re-streams from history. `deleteConversation` removes a conversation (chat or document Q&A) and
   its messages; it refuses while a stream is in flight for that conversation (the persisted
@@ -271,7 +282,10 @@ the whole DB file is encrypted at rest.
   TEXT preview and not a `shell.openPath`.
 - **IPC** (`ipc/registerDocsIpc.ts`): `pickDocuments`, `importDocuments`, `getImportJob`,
   `listDocuments`, `deleteDocument`, `reindexDocument`, `importPreflight` (Phase 36 — the
-  size-aware audio confirm). Full pipeline detail lives in [`rag-design.md`](rag-design.md).
+  size-aware audio confirm); plus the document-organization channels `previewDocument`,
+  `exportDocument`, `addToCollection`/`removeFromCollection`, `setLifecycle`, and
+  `filingSuggestions` (see the "Document organization" §5 IPC table). Full pipeline detail lives
+  in [`rag-design.md`](rag-design.md).
 
 ## Audio transcription (Phase 36, wave-3 plan §9)
 
@@ -416,26 +430,33 @@ sentinel-tested), zero native deps.
   the hash IS the install state), fetched by `fetch-runtime --family ocr`,
   asserted by `assertCommercialDrive` (`ocrAssetsVerified`) + both script gates.
 
-## Document tasks (Phases 33–35, wave-3 plan §6/§7/§8)
-- **`services/doctasks.ts` — the shared task engine.** A job state machine on the Phase-4/18
+## Document tasks (Phases 33–35; OCR Phase 38; tree/extract = whole-document analysis, rag-design §14)
+- **`services/doctasks/` (barrel: `doctasks.ts`) — the shared task engine.** Split into a
+  `doctasks/` directory (audit M-A4): `manager.ts` (the `DocTaskManager` orchestration),
+  `summary.ts`, `translation.ts`, `compare.ts`. A job state machine on the Phase-4/18
   async-with-polling precedent: `startDocTask({ kind, documentIds, params }) → { jobId }`,
   `getDocTask(jobId) → { state, progress { stepsDone, stepsTotal }, error?, resultRef? }`,
   `cancelDocTask(jobId?)`. States: `queued → running → done | failed | cancelled`; unknown
-  job ids report a terminal status so pollers always stop. All three kinds are implemented
-  on the one machine: `summary` (Phase 33), `translation` (Phase 34), `compare` (Phase 35 —
-  exactly TWO distinct source documents; the others take one). Deps are injected (`getDb`,
-  `getRuntime`, `isChatStreaming`,
-  `getContextTokens`, `getStoreDir`, `getIngestionDeps`, `beginDocumentWork`, `audit`), so
-  the engine tests without Electron; `main/index.ts` wires it and exposes it as
-  `AppContext.docTasks`.
-- **Concurrency (D26, RESOLVED): strict one-at-a-time.** Tasks serialize among themselves
-  (one FIFO queue, one runner). A task **refuses to start while a chat answer streams**
-  (it reads the shared in-flight registry) but owns its own `AbortController` and is
-  NEVER an entry in the per-conversation map — `stopGeneration` cannot kill a task and a
-  task cannot block a conversation key (fact §2.8). The inverse guard lives in the
-  chat/RAG handlers: a message sent while a task is active throws the shared
-  `DOC_TASK_BUSY_MESSAGE`, which the chat screen renders with a "Cancel document task"
-  button (`cancelDocTask()` with no jobId cancels the active task). The **R-T1 probe**
+  job ids report a terminal status so pollers always stop. **Six `DocTaskKind`s** run on the
+  one machine: `summary` (Phase 33), `translation` (Phase 34), `compare` (Phase 35 — exactly
+  TWO distinct source documents; the others take one), `ocr` (Phase 38), and the two
+  whole-document-analysis builds `tree` (deep index) and `extract` (structured extract). Deps
+  are injected (`getDb`, `getRuntime`, `isChatStreaming`, `getContextTokens`, `getStoreDir`,
+  `getIngestionDeps`, `beginDocumentWork`, `audit`), so the engine tests without Electron;
+  `main/index.ts` wires it and exposes it as `AppContext.docTasks`.
+- **Concurrency (D26, RESOLVED): strict one-at-a-time, with one exception.** Tasks serialize
+  among themselves (one FIFO queue, one runner). A **non-yielding** task (`summary`,
+  `translation`, `compare`, `ocr`) **refuses to start while a chat answer streams** (it reads
+  the shared in-flight registry) but owns its own `AbortController` and is NEVER an entry in
+  the per-conversation map — `stopGeneration` cannot kill a task and a task cannot block a
+  conversation key (fact §2.8). The inverse guard lives in the chat/RAG handlers: a message
+  sent while a non-yielding task is active throws the shared `DOC_TASK_BUSY_MESSAGE`, which the
+  chat screen renders with a "Cancel document task" button (`cancelDocTask()` with no jobId
+  cancels the active task). **Exception — the yielding builds:** `tree` and `extract` are
+  long, resumable background builds that **cede the model slot to an incoming chat** via the
+  `ModelSlotArbiter` (`services/analysis/model-slot-arbiter.ts`): the builder parks after the
+  current node, chat acquires the slot (`acquireChatSlot`), streams, and the build resumes
+  in-session — so chat is not refused during a deep-index/extract build (rag-design §14.3). The **R-T1 probe**
   (`tests/manual/server-concurrency-probe.test.ts`, `HILBERTRAUM_CONCURRENCY_PROBE`) showed the
   pinned b9585 would serve two requests on PARALLEL slots at our default args — the
   app-side guard is the only serialization, which is exactly why it exists.
@@ -532,7 +553,11 @@ sentinel-tested), zero native deps.
   compare sources), and
   the freshly created OUTPUT document is appended to the task's `documentIds` at creation
   so the guard covers it before the import finishes.
-- **IPC + UI:** `doctasks:start/get/cancel` (+ preload mirrors); `docs:export` saves a
+- **IPC + UI:** `doctasks:start/get/cancel` (+ preload mirrors); the read-only analysis
+  channels `analysis:coverage` (a document's `DocumentCoverage` — breadth + depth of the current
+  summary, no model call) and `analysis:listAll` (structured extract aggregation, zero model
+  calls) are handled by the same `registerDocTasksIpc.ts` (design: rag-design §14.4/§14.5);
+  `docs:export` saves a
   text document's stored content via the main-process save dialog (the
   `exportConversation` pattern — built for materialized translations, which are always
   Markdown; audit ids-only). The renderer watcher (`renderer/lib/doctasks.ts`) lives at
@@ -1197,7 +1222,7 @@ conversation_documents(conversation_id, document_id, added_at)    -- C3 temp-att
 
 ### §4 Services (`collections.ts` + `filing-suggestions.ts`)
 
-- **`CollectionService` (`collections.ts`)** — CRUD (`createCollection`/`rename`/`setCollectionArchived`/
+- **`collections.ts`** (plain functions, no class) — CRUD (`createCollection`/`rename`/`setCollectionArchived`/
   `deleteCollection`), membership (`addToCollection`/`removeFromCollection`, idempotent),
   `setDocumentsLifecycle`, the **C2 predicate** `projectOnlyDocumentIds` (counts ALL memberships so a
   Library member is spared), and the indexing-success filing entry points
@@ -1212,8 +1237,10 @@ conversation_documents(conversation_id, document_id, added_at)    -- C3 temp-att
   verifies the conversation still exists + try/catch the race; if gone, keep the doc in Temporary, drop
   only the link. `resolveScope` is documented in rag-design §13.
 - **Filing-suggestion engine (`filing-suggestions.ts`, Phase F)** — pure, LOCAL, deterministic (no
-  model, no network, no clock, no randomness). `suggestFilingForDocument(doc, collections, allDocs)`
-  returns ranked, de-duped `FilingSuggestion[]` via three rules, highest-confidence first:
+  model, no network, no clock, no randomness). The IPC layer calls the batch
+  `suggestFilingForDocuments(docs, collections, allDocs)`, which runs the single-doc
+  `suggestFilingForDocument(doc, collections, allDocs)` per doc and de-dupes across the batch;
+  each returns ranked, de-duped `FilingSuggestion[]` via three rules, highest-confidence first:
   **(1) folder-name match** (`source_folder_label` equals/contains an active project name),
   **(2) same-source-folder cohort** (other docs from the same folder are filed in project X),
   **(3) bilingual filename pattern** — small documented EN-canonical + German token tables
@@ -1301,6 +1328,13 @@ cosine top-k ⊕ FTS5 keyword top-k (RRF fusion) → optional rerank → build g
 | `services/ingestion/` | 7.7 ingestion |
 | `services/embeddings/` | §6 embeddings |
 | `services/rag/index.ts` | 7.8 RAG |
+| `services/reranker/` | 7.8 retrieval rerank (rag-design §11) |
+| `services/doctasks/` | async document tasks: summary/translation/compare/ocr/tree/extract |
+| `services/analysis/` | whole-document analysis: deep index, coverage, extract, symmetric compare (rag-design §14) |
+| `services/collections.ts` + `services/filing-suggestions.ts` | document organization (rag-design §13, architecture "Document organization") |
+| `services/transcriber/` | whisper.cpp sidecar — audio transcription / dictation (Phase 36) |
+| `services/ocr/` | tesseract OCR engine — scanned-PDF / photo text (Phase 38) |
+| `services/downloads.ts` + `services/runtime-download.ts` | in-app model + engine downloader (Phase 18) |
 | `services/benchmark.ts` | 7.3 benchmarker |
 | `services/policy.ts` | 7.10 privacy/offline |
 | `services/logging.ts` | 7.11 diagnostics/logs |

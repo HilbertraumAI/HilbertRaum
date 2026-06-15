@@ -237,7 +237,8 @@ export class DocTaskManager {
    * path: skips generated docs (M6), legacy not-`fully_chunked` docs (C4), already-built/
    * building/pending trees, and documents the cheap capped summary already covers (size
    * gate). With a chat runtime up it enqueues a `tree` task; otherwise it records
-   * `tree_status='pending'` for a later build. The build trigger UI is Phase 2.
+   * `tree_status='pending'` for a later build. The "Build deep index" UI and coverage meter
+   * are in the renderer (rag-design.md §14.4).
    */
   maybeEnqueueTreeBuild(documentId: string): void {
     try {

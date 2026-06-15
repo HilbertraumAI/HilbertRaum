@@ -47,7 +47,7 @@ folder):
 ## Offline mode
 
 The app's **core path — chat, documents, indexing, search — always stays local** and makes no
-network calls. A visible indicator (in the sidebar and the chat header; clicking it opens
+network calls. A visible indicator (in the chat header; clicking it opens
 Settings → **Privacy & data**) tells you the current state honestly: **Local · Offline** when
 no network is permitted, or "Downloads allowed — chats and documents stay local" when it is. The
 only optional network feature is downloading/updating models + the AI engine. That setting is now
@@ -70,7 +70,8 @@ The **only** thing the app can use the internet for is fetching a model file you
 **Models** screen. Three things must all be true before a single byte moves:
 
 1. The drive's policy permits model downloads (prepared commercial drives ship with this **off**).
-2. You turned on the Settings checkbox above (it is **off** by default).
+2. You left the Settings checkbox above on (it is **on** by default for a fresh install, unless the
+   drive's policy disables it) — or turned it back on if you had switched it off.
 3. You confirmed that specific download in a dialog showing its size, license, and source address —
    including explicitly accepting the model's license when it hasn't been pre-reviewed.
 
@@ -89,7 +90,10 @@ export/delete controls are planned.
 ## Encryption
 
 An encrypted workspace option protects your data at rest with a password you choose. The password is
-**never stored**; only a salt and key-derivation parameters are kept.
+**never stored**. The unencrypted vault descriptor (`config/workspace.json`) holds only: a random
+salt, the key-derivation parameters, an authenticated verifier (a small known value sealed under the
+derived key, used to check your password before the database is touched), and a copy of the random
+data key sealed under your password. None of these reveal your password or your plaintext data.
 
 **What is encrypted** (encrypted workspace mode): the workspace database — chat history, extracted
 text, chunks, embeddings, settings — the **stored copies of your imported documents**
@@ -98,7 +102,10 @@ with the same vault key. The log never contains document contents or chat text, 
 file names or paths, which is why it is encrypted too. (Lines written *before* you unlock are kept
 in memory only and never reach disk.)
 
-**What is not encrypted:** the AI model files (public weights, not your data) and the app itself.
+**What is not encrypted:** the AI model files (public weights, not your data), the app itself, and
+the vault descriptor `config/workspace.json` (the salt, KDF parameters, verifier, and
+password-wrapped data key described under *Encryption* below — it must be readable before you unlock,
+and holds no password or plaintext data).
 While the workspace is **unlocked**, a decrypted working copy of the
 database exists on disk (and a transient decrypted copy of a document exists briefly during
 re-indexing); both are shredded on lock/quit, and any crash leftovers are shredded at next startup.

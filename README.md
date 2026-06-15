@@ -15,7 +15,7 @@ portable USB-C SSD. Your prompts, documents, embeddings, and chat history never 
 > The MVP is **feature-complete**, plus GPU acceleration, retrieval-quality, UI-polish, and
 > office-functionality waves (document tasks, translation, compare, audio transcription,
 > dictation, OCR). See **[`BUILD_STATE.md`](BUILD_STATE.md)** for current status; the original
-> phased plan (`docs/IMPLEMENTATION_PLAN.md`) was retired after completion and lives in git history.
+> phased plan document was retired after completion and lives in git history.
 
 ## Status
 
@@ -84,8 +84,10 @@ scripts/verify-models.sh  --target /Volumes/HILBERTRAUM --generate
 ```
 
 **To keep setup fast, `-WithAssets` downloads a small but complete default set** — not all ~11
-models. It fetches the default chat model (Ministral 3 8B, ~5 GB), the **embeddings** model (for
-document Q&A), the **reranker**, and the **Whisper** transcriber model, plus **both sidecar
+models. It fetches the benchmark-winning mid-tier chat model (Ministral 3 8B, ~5 GB; on a ≤12 GB
+machine you may prefer the smaller bundled Qwen3-4B — add it with `-AllModels` or from the AI Model
+screen), the **embeddings** model (for document Q&A), the **reranker**, and the **Whisper**
+transcriber model, plus **both sidecar
 runtimes** (`llama.cpp` for chat/embeddings, `whisper.cpp` for audio). That's enough to chat, ask
 questions about your documents, get higher-quality retrieval, and transcribe audio out of the box.
 You download any **other** models (larger chat models) **from inside the app** later, on demand. To

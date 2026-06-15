@@ -114,8 +114,11 @@ offlineMode            = !networkAllowed
 ```
 
 Consequences:
-- **The shipped default is offline.** `allowNetwork` defaults OFF, so a fresh install/drive makes no
-  network calls; while the workspace is locked the setting is unreadable and treated as off.
+- **The shipped default permits downloads, but only when a policy also allows them.** `allowNetwork`
+  defaults **ON** (`DEFAULT_SETTINGS`) so a fresh dev install can fetch models out of the box;
+  however a packaged commercial drive ships a `policy.json` with downloads disabled, which overrides
+  the user setting and keeps it offline (`networkAllowed = networkAllowedByPolicy && userSetting`).
+  While the workspace is locked the setting is unreadable and treated as off.
 - **Policy forbids → offline**, regardless of the user toggle ("Network access disabled by policy").
 - **Policy permits + user opts in → network allowed** — used exclusively by the Phase-18 in-app
   model downloader, which additionally requires a per-download confirmation (and an explicit
@@ -264,7 +267,7 @@ The workspace has two modes, owned by `services/workspace-vault.ts` (`WorkspaceC
   supported, so a vault created under the earlier scrypt default unlocks unchanged: `deriveKey`
   dispatches on the descriptor's recorded `algo`.
 - **Parameters (recorded in the descriptor):** Argon2id `m = 19456 KiB (≈ 19 MiB)`, `t = 2`, `p = 1`,
-  `keyLen = 32` (~0.5 s/unlock — a deliberate one-time cost); legacy scrypt `N = 2^15`, `r = 8`,
+  `keyLen = 32` (~0.5 s/unlock — a deliberate one-time cost); legacy scrypt `N = 32768 (2^15)`, `r = 8`,
   `p = 1`. Because the params are stored alongside the salt, unlock derives **exactly** the same key —
   derivation is deterministic. The params are tunable without changing the on-disk format.
 

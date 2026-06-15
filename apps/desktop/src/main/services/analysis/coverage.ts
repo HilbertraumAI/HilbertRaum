@@ -7,12 +7,11 @@ import type {
 } from '../../../shared/types'
 
 // Coverage + provenance reader for the deep-index summary tree (whole-document-analysis
-// plan §4.5/§5.1, Phase 2). Pure DB reads — no model calls. Two honest jobs:
+// plan §4.5/§5.1 → rag-design §14.4). Pure DB reads — no model calls. Two honest jobs:
 //
 //   1. PROVENANCE — `reachableLeafChunkIds` walks `tree_edges` from the root down to the
-//      leaf CHUNKS. This is the production reader the plan calls for (Phase 1 only had the
-//      same walk as a test helper). Node summaries are derived context, NEVER `[Sn]`
-//      citations (M2) — only the leaf SOURCE chunks become citations.
+//      leaf CHUNKS. Node summaries are derived context, NEVER `[Sn]` citations (M2) — only
+//      the leaf SOURCE chunks become citations.
 //
 //   2. COVERAGE — `documentCoverage` reports BREADTH (reachable leaves ÷ chunk count) and
 //      DEPTH (tier) as two separate statements (breadth ≠ fidelity, C1/L2). The whole-

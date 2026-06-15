@@ -31,7 +31,7 @@ heavily cited as a unit (`docs/functionality-wave-3-plan.md`).
 
 ## Stack (see BUILD_STATE §3 for rationale)
 - Electron + React + TypeScript + Vite (`electron-vite`), npm workspaces.
-- `node:sqlite` (built-in) for storage. Mock runtime + mock embedder first; real `llama.cpp` later.
+- `node:sqlite` (built-in) for storage. Mock runtime + mock embedder for dev/test; real `llama.cpp` runtime + embeddings integrated (Phase 10).
 
 ## Per-phase ritual (MANDATORY — spec-driven)
 At the end of every phase:
@@ -48,4 +48,5 @@ npm run build      # production build
 npm test           # unit + integration tests
 npm run typecheck  # TypeScript checking
 npm run package    # portable build via electron-builder (manual, network-touching — R2)
+npm run package:win # Windows portable .exe specifically
 ```

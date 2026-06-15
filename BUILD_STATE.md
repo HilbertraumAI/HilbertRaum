@@ -6,7 +6,48 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
-_Last updated: 2026-06-15 — **Whole-document analysis — second-pass review follow-up (2 fixes).** A
+_Last updated: 2026-06-15 — **Documentation + code-comment audit (release 0.1.25).** A deep,
+whole-repo doc audit: every doc cross-checked against the code, plus a comment-quality sweep. No
+behavior change — docs/comments only (the 8 touched source files are comment-only edits; typecheck
+clean, `npm test` **1346 passed / 25 skipped**, unchanged from baseline). **Most consequential fixes
+(security/privacy honesty):** `SECURITY.md` said the diagnostics log is "not encrypted" — it **is**
+(`app.log.enc` under the vault key); the "Phase 9" stamp was refreshed with the controls added since
+(deny-by-default permission handler, v2 vault envelope/O(1) password change, audit log, malicious-doc
+caps, fail-closed packaged policy). `PRIVACY.md` contradicted itself on the network default (one line
+"on by default", another "off") — `allowNetwork` is **ON by default** (policy-gated); also completed
+the vault-descriptor description (verifier + wrapped data key). `security-model.md` + `downloads.ts`
+comments corrected the same default-OFF→ON error. **Systemic fixes:** the deleted plan files
+(`whole-document-analysis-plan`, `document-organization-plan`) left ~80 inline `plan §x` comments —
+rather than churn them against the repo's "resolve via git history" convention, **completed the
+`rag-design.md` §14 anchor-mapping table** (added §3.2/§3.3/§4.4/§5.1/§5.2) so they all resolve, and
+fixed only the genuinely-misleading "Phase N = future / later phases / NULL until Phase 4" status
+comments (`collections.ts`, `doctasks/manager.ts`, `db.ts`, `tree-build.ts`, `node-vectors.ts`,
+`coverage.ts`, `CoverageMeter.tsx`); also dropped the false "`summary_cache` pruned by size/age"
+claim. **`architecture.md` was a feature-wave behind** — added the whole-document-analysis subsystem
+(`services/analysis/`, the `tree`/`extract` task kinds, 4 DB tables, the yielding `ModelSlotArbiter`
+concurrency model), the whisper.cpp sidecar, the ~35-service overview, the full table list,
+`analysis:`/`chat:scope` IPC, audio/image parsers, and corrected `CollectionService` (nonexistent) →
+`collections.ts`. **`user-guide.md`:** moved the Local indicator off the (removed) sidebar to the chat
+header (2 places); documented deep index/coverage/tiers, drag-drop into chat, the composite source
+picker, filing-suggestion new-project variant, the missing model/document statuses; replaced the
+hardcoded thinking-mode model list with the manifest-driven rule; corrected the network-default copy.
+**model/benchmark docs:** recommendation engine corrected to RAM-best-fit (`recommendModelIdByRam`)
+with the real-hardware matrix; Whisper added to the catalog + license line; E5 size 0.24→0.25;
+Ministral band aligned to 16–24 GB. **Decision-number collision:** the open `big-slot-embeddings-plan`
+used D23–D28 (colliding with the document-task wave's D23–D37) — renumbered to **D38–D43** and updated
+all cross-refs. **rag-design body:** removed the nonexistent `TREE_GROUP_TOKENS`; corrected the
+`assertChatStreamReady`/`acquireChatSlot` attribution, `buildScopeFilter` signature, `summary_cache`
+column list, node-count estimate, and the compound `idx_tree_edges_child`. **Smaller:**
+`known-limitations.md` (removed a misplaced "DONE" item, added the 5000-row audit cap, fixed the
+`ready`/`not_recommended` claim, noted symmetric truncation), `troubleshooting.md` (`.jpeg`,
+mock-runtime conditions, error-string heading), `design-guidelines.md` (D-L7 done, Phase-27 superseded
+note, contrast resolved, removed nonexistent "Reading your documents" copy), `packaging.md` (aria2c
+scope, Node-version guard, copy glob), `CONTRIBUTING`/`README`/`CLAUDE` (typecheck + Node in dev setup,
+dead plan path, Ministral-vs-4B default, `package:win`, "llama.cpp later"→done). **Version** bumped
+0.1.24 → **0.1.25**, tagged `v0.1.25`. No schema change. **Next:** open work is unchanged (Phase 30
+big-slot/embeddings — D38–D43; owner-gated doc-org Phase E.2)._
+
+_(prior) 2026-06-15 — **Whole-document analysis — second-pass review follow-up (2 fixes).** A
 high-effort re-review of the closeout diff surfaced two honesty gaps the first pass left, both now fixed in
 [`manager.ts`](apps/desktop/src/main/services/doctasks/manager.ts). **(1) Mode-(b) belt parity:**
 `runCompareSectionMatched`'s reduce-input belt was structurally identical to the one M-1 fixed in mode (c)
@@ -1096,7 +1137,7 @@ remaining work is **manual acceptance only** (§5). Consciously-accepted gaps li
 | 23–27 | UI polish wave (tokens/theming · components · chat restructure · IA regroup · microcopy/ambient signal/first-run) | 🟢 done, merged to master 2026-06-10 — `docs/design-guidelines.md` (+ its §11 rollout record) |
 | 28 | Model catalog wave 1 (challenger manifests, D16–D18/D22) | 🟢 done 2026-06-10 — 4 Apache-2.0 challengers, real hashes, all 10 catalog weights VERIFIED on `D:\`, bring-up smokes PASS |
 | 29 | Benchmark protocol + first comparison run (D19/D20) | 🟢 done 2026-06-11 — judge-free QA+speed+RSS protocol run on all 8 models; RAM mins recalibrated, recommender quality-aware (`recommendation_rank`), Gemma thinking flag ON. Optional dev-box speed sweep = completeness only |
-| 30 | Opt-in big slot + embeddings (D21 → D23–D28) | ⚪ not started — plan drafted (`docs/big-slot-embeddings-plan.md`) |
+| 30 | Opt-in big slot + embeddings (D21 → D38–D43) | ⚪ not started — plan drafted (`docs/big-slot-embeddings-plan.md`) |
 | 31 | Conversation search + permission-handler rider | 🟢 done 2026-06-11 — wave-3 record §4 |
 | 32 | Vault password change (descriptor v2 envelope) | 🟢 done 2026-06-11 — wave-3 record §5 |
 | 33 | Document tasks foundation + one-click summary | 🟢 done 2026-06-11 — wave-3 record §6 |
@@ -2543,9 +2584,9 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
    commercial pitch ("signed update bundles", spec §1.3) makes this the first priority once
    drives actually ship.
 4. **Phase 30 — opt-in big slot + embeddings:** working paper drafted
-   ([`docs/big-slot-embeddings-plan.md`](docs/big-slot-embeddings-plan.md), D23–D28): Track A
+   ([`docs/big-slot-embeddings-plan.md`](docs/big-slot-embeddings-plan.md), D38–D43): Track A
    (Gemma 4 26B-A4B etc. vs the incumbent Qwen3 30B-A3B, reusing the Phase-29 benchmark) +
-   Track B (a better embedder — the reindex-forcing swap; D27 eval-set hardening is the
+   Track B (a better embedder — the reindex-forcing swap; D42 eval-set hardening is the
    prerequisite). Key verified fact: the pinned b9585 already runs Gemma 4 — no runtime bump.
 5. **ANN vector index** only if a real corpus outgrows the linear scan (rag-design §12.2 D15 —
    explicitly not built).

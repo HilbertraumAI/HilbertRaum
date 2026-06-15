@@ -10,15 +10,16 @@ import type {
   RetrievalScope
 } from '../../shared/types'
 
-// Collection service (document-organization plan §7/§8/§10, Phase A). The backend
+// Collection service (document-organization — design record: rag-design.md §13). The backend
 // foundation: CRUD + membership over the additive `collections` / `document_collections`
 // tables, plus `resolveScope` (a conversation's stored scope → the `RetrievalScope` that
 // retrieval filters by). All local SQLite — no network, no model calls.
 //
-// Phase-A scope: this provides the primitives. Project-management IPC, the multi-select
-// scope picker, delete-with-documents, and chat attachments (conversation_documents) are
-// later phases; `resolveScope` already reads conversation_documents so it is complete when
-// those phases wire it up. Built-ins (Library/Temporary) are seeded in db.ts (plan §9).
+// The full document-organization feature (project-management IPC, the multi-select scope
+// picker, chat attachments via conversation_documents, filing suggestions) shipped across
+// Phases A–F; this module is its backend half. Delete-with-documents (shredding genuinely
+// project-only docs) is the one piece left out of v1 (rag-design.md §13.7). Built-ins
+// (Library/Temporary) are seeded in db.ts.
 
 function nowIso(): string {
   return new Date().toISOString()

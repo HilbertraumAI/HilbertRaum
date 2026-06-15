@@ -17,10 +17,12 @@ Thanks for your interest! This project values **privacy, portability, and boring
 5. Open a focused PR referencing the phase/milestone.
 
 ## Dev setup
+Requires **Node.js ≥ 22.5** (Node 24 recommended), per `package.json` `engines`.
 ```bash
 npm install
 npm run dev
 npm test
+npm run typecheck
 ```
 
 ## Code style

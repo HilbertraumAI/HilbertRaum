@@ -26,8 +26,9 @@ pinned to llama.cpp b9585; all license reviews approved)_
 | Chat challenger | Granite 4.1 8B Q4 | ~5.3 GB | 12 GB | — (not promoted) | Phase-29: lost its tier (most 8B hallucinations 3/15, lowest F1); kept selectable for its IBM provenance story |
 | Chat (winner, 12–14B) | Gemma 4 12B Instruct QAT Q4_0 | ~7.0 GB | 14 GB | — (rank‡) | **Phase-29 winner at 12–14B**: beats Qwen3 14B on every axis (fewer hallucinations, faster). `supports_thinking_mode` **flipped on** — only thinking-capable challenger |
 | Chat (better 4B) | Qwen3 4B Instruct 2507 Q4 | ~2.5 GB | 8 GB | — (deferred‡) | **Phase-29 (D18)**: beats the original 4B on every axis; the quality alternative at the 4B tier (orig 4B stays the bundled default for Deep). Instruct-only — no thinking |
-| Embeddings | Multilingual E5 Small (F16) | ~0.24 GB | 4 GB | all | Local document search (needed for Q&A) |
+| Embeddings | Multilingual E5 Small (F16) | ~0.25 GB | 4 GB | all | Local document search (needed for Q&A) |
 | Reranker (optional) | BGE Reranker v2 M3 (F16) | ~1.08 GB | 6 GB | LITE+ (never bundled by default) | Retrieval-quality pass over document search (Phase 21) — search works fully without it |
+| Transcriber | Whisper Small (multilingual) | ~0.49 GB | 4 GB | all (bundled) | Audio transcription + voice dictation (Phase 36); whisper.cpp GGML; MIT |
 
 > Qwen3 **1.7B** was in the original spec §7.3 (the TINY/UNKNOWN "small" model) but was **dropped**:
 > the official `Qwen/Qwen3-1.7B-GGUF` repo publishes no Q4_K_M. 4B now covers TINY/UNKNOWN too.
@@ -39,7 +40,7 @@ pinned to llama.cpp b9585; all license reviews approved)_
 > `gpustack/bge-reranker-v2-m3-GGUF` (also Apache-2.0, mechanical conversion — same provenance
 > posture as the E5 entry). `Qwen3-Reranker-0.6B` was rejected: no official GGUF.
 
-All models are **Apache-2.0** (Qwen3, the Phase-28 challengers, BGE reranker) / **MIT** (E5).
+All models are **Apache-2.0** (Qwen3, the Phase-28 challengers, BGE reranker) / **MIT** (E5, Whisper transcriber).
 Sizes/RAM come from each manifest
 (`size_on_disk_gb` / `recommended_min_ram_gb`); download URLs live in the manifests' `download.url`
 (catalog with source links in the [README](../README.md)). **Auto-tier** is the
@@ -50,7 +51,7 @@ Sizes/RAM come from each manifest
 > than mis-encode the **Phase-29** winners there, each manifest carries a `recommendation_rank`
 > (higher = preferred) that the picker now uses as the tiebreak among models that fit the
 > machine's RAM (the **quality-aware recommender** follow-up — `model-benchmarks.md` §6.2). Net
-> effect on real hardware: **≤12 GB → Qwen3-4B (default, keeps Deep), 16 GB → Ministral 8B,
+> effect on real hardware: **≤12 GB → Qwen3-4B (default, keeps Deep), 16–24 GB → Ministral 8B,
 > ≥32 GB → Gemma 4 12B**; Granite (loser) and the 30B MoE (opt-in) are never auto-recommended.
 > The "Auto-tier" column above is the declared `recommended_profiles` (kept as-is); the live
 > recommendation is `recommendation_rank` + RAM-best-fit.

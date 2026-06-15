@@ -4,7 +4,7 @@ import type { MessageKey } from '@shared/i18n'
 import { useT } from '../i18n'
 import { Badge, type BadgeTone } from './Badge'
 
-// Coverage meter (whole-document-analysis plan §5.2, Phase 2). The honesty differentiator
+// Coverage meter (whole-document-analysis plan §5.2 → rag-design §14.4). The honesty differentiator
 // rendered with summary/answer results. It states BREADTH and DEPTH as two SEPARATE things —
 // breadth ≠ fidelity [C1/L2]:
 //   - breadth: "Covers the whole document" vs "the most relevant passages" — and "100%"/whole

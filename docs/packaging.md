@@ -150,12 +150,13 @@ out on a fresh machine with no Node/npm); their layout + config shapes mirror th
 | `fetch-models.{ps1,sh}` | (Phase 12) Download + **resume** + **SHA-256-verify** each weight with a `download:` block to its `models/...` path. `-Only <id>`/`--only` for one model; `-AcceptLicense`/`--accept-license` for the license gate; `-DryRun`/`--dry-run`. Real-hash mismatch → delete partial + exit 1. Idempotent (present + verified → skip). |
 | `fetch-runtime.{ps1,sh}` | (Phase 12; GPU defaults Phase 14) Read `runtime-sources.yaml`, pick the host build (`-Os/-Arch/-Backend` overrides; **default = the first listed build: Vulkan on win/linux, Metal on mac**; `-Backend cpu` fetches the pure-CPU safety net into `runtime/llama.cpp/<os>/cpu/`), download + verify the archive, extract into the build's `extract_to` (`chmod +x` on mac/linux), and write a `.hilbertraum-runtime.json` install marker. Idempotent **via the marker** (version + backend must match — a missing/stale marker re-fetches, so a CPU-era drive actually upgrades); `-DryRun`/`--dry-run`. `-Family`/`--family` selects the asset family: `llama_cpp` (default), `whisper_cpp` (the transcriber CLI), or `ocr` (language files). |
 | `verify-models.{ps1,sh}` | SHA-256 each present weight vs its manifest hash (placeholder → *UNVERIFIED*; real mismatch → fail/exit 1). `-Generate`/`--generate` writes `config/checksums.json`. |
-| `setup-dev.{ps1,sh}` | Dev bootstrap: `NODE_OPTIONS=--use-system-ca npm install` (R6) + build + test smoke. |
+| `setup-dev.{ps1,sh}` | Dev bootstrap: `NODE_OPTIONS=--use-system-ca npm install` (R6, set only when Node ≥ 22.15 supports the flag; skipped gracefully otherwise) + build + test smoke. |
 
 The asset-planning + verify logic is mirrored from the unit-tested
 `apps/desktop/src/main/services/assets.ts` (the canonical reference — keep in sync), exactly as
 `prepare-drive` mirrors `drive.ts`. The scripts use the **OS-native downloader** (`curl` /
-`Invoke-WebRequest`, preferring `aria2c` if installed) — no new npm/script deps.
+`Invoke-WebRequest`) — no new npm/script deps. The `fetch-models` scripts additionally prefer
+`aria2c` when it is installed; `fetch-runtime` uses `curl`/`Invoke-WebRequest` only.
 
 **Resilient downloads (flaky-connection hardening).** `curl`'s own `--retry` does not retry a
 **mid-transfer drop** (exit 18/56/28) on older curl, so a beta tester whose link dropped during a
@@ -174,7 +175,7 @@ launch-ready drive; add `-AllModels` to pre-load every model (a fully provisione
 .\scripts\prepare-drive.ps1 -Target E:\ -WithAssets -AllModels -AcceptLicense  # layout + download + verify (all models)
 .\scripts\verify-models.ps1 -Target E:\ -Generate                              # record real hashes
 npm run package:win                                                            # build the portable .exe
-copy .\apps\desktop\release\*.exe E:\                                           # place the launcher on the drive
+copy ".\apps\desktop\release\HilbertRaum-*-portable.exe" E:\                    # place the launcher on the drive
 ```
 
 > ✅ **`runtime-sources.yaml` is pinned to a real release** (`ggml-org/llama.cpp` **b9585**, real

@@ -30,7 +30,8 @@ import type { ModelSlotArbiter } from './model-slot-arbiter'
 //     summary — the tree shape + leaf coverage stay correct. A warm cache makes a
 //     rebuild/resume cost 0 chat calls for unchanged groups.
 //   - NODE VECTORS ARE NULL (L6): no embedding at build time — node vectors are produced
-//     lazily by their only consumer (Phase 4). Phase 1 ships zero node embeds.
+//     lazily by their only consumer, symmetric compare (rag-design §14.6). The build itself
+//     writes zero node embeds.
 //   - RESUME = DISCARD + REBUILD: a build always tears down any partial tree first and
 //     rebuilds from the warm cache, so it never half-wires parent pointers and a
 //     model-switch can't yield a mixed-model tree (the cache is model-keyed — M12).

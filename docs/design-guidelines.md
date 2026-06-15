@@ -90,7 +90,7 @@ Where each existing control goes:
 | Depth selector | **"Answer detail"** — quiet dropdown in the composer footer (Quick · Balanced · Thorough). Defaults Balanced; not a prominent 3-way toggle. |
 | Scope chips | Single composer-footer affordance "📄 Using 3 documents ▾" → popover to add/remove. Only in documents mode. |
 | Doc-awareness hint banner | **Deleted.** Replaced by the teaching empty state + mode control. |
-| Thinking block | Single inline collapsed "Thinking…" line while generating (expand → "Reading your documents" / reasoning); auto-collapses when the answer streams. Stop stays available. ARIA live region for streaming. |
+| Thinking block | Single inline collapsed "Thinking…" line while generating (expand → the live reasoning text); auto-collapses when the answer streams. Stop stays available. ARIA live region for streaming. |
 | Citations | Inline, attached to the answer: "▸ Sources (3)" → source cards (name + page + snippet). No separate panel. |
 | Regenerate / Copy / Export | **Per-message action row** on hover/focus of an assistant answer ("Try again", "Copy", "Save"). Whole-conversation export → chat-header "⋯" overflow. |
 | Errors / notices | Inline, in context, dismissible, rare. Never stacked at the top. |
@@ -133,8 +133,8 @@ Two themes, same scales. All text/UI pairs contrast-checked (ratios noted).
 | `--warning-700` | `#8a5a00` | warning text on light (5.9:1) |
 | `--warning-500` | `#e0b341` | warning on dark (9.6:1) |
 
-⚠️ **Contrast fix:** the current accent `#4f8cff` as a button fill with white text is
-**3.22:1 — fails AA**. Filled buttons use `--accent-600 #2f6fed`; `#4f8cff` is reserved for
+✅ **Contrast fix (applied):** `#4f8cff` as a button fill with white text was **3.22:1 — fails AA**,
+so filled buttons now use `--accent-600 #2f6fed` (4.55:1) and `#4f8cff` is reserved for
 links/icons/focus on dark. Semantic color always pairs with a label or icon (WCAG 1.4.1).
 
 ### 4.3 Role tokens per theme
@@ -403,8 +403,9 @@ housekeeping; the full original phased plan is in git history —
     phrases.
   - *Ambient indicator:* `components/LocalIndicator.tsx` (Radix **Tooltip**) — quiet
     "🔒 Local · Offline" in the sidebar (replacing the offline badge; state passed live by
-    App) and the chat header (self-fetching). Hover/focus = reassurance line; click =
-    `settings:privacy`. Honest variant while downloads are enabled: "Local · Downloads
+    App) and the chat header (self-fetching). **(Superseded by Phase 12 — the sidebar instance
+    was removed; the indicator now lives only in the chat header. See §12.1, decision #2.)**
+    Hover/focus = reassurance line; click = `settings:privacy`. Honest variant while downloads are enabled: "Local · Downloads
     allowed" / "Downloads allowed — chats and documents stay local."
   - *First-run (create path only):* 3 full-window steps in `WorkspaceGate` — welcome/trust
     framing → create password (hand-rolled advisory strength meter that never blocks; only
@@ -498,4 +499,4 @@ rows, messages, composer shell, responsive media queries),
 (responsive collapse), `shared/i18n/{en,de}.ts`. Verification per §11.4: typecheck clean,
 build OK, vitest **1085 passed / 25 skipped** (the `InformationArchitecture` indicator test
 now drives the **header** indicator; scope + no-match copy assertions updated). German copy
-for the new/changed strings awaits the D-L7 human-review pass.
+for the new/changed strings was completed in the D-L7 review pass (2026-06-14).

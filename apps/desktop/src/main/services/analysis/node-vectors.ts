@@ -3,9 +3,9 @@ import type { Embedder } from '../embeddings'
 import { encodeVector, decodeVector, cosineSimilarity } from '../embeddings'
 
 // Lazy node embeddings + node-cosine search for the deep-index summary tree
-// (whole-document-analysis plan §3.1/§4.3, Phase 4). Node vectors are stored NULL by the
-// Phase-1 tree build [L6]; Phase 4 — symmetric compare — is their FIRST and only consumer,
-// so they are embedded HERE, lazily, the first time a compare needs a tree's nodes.
+// (whole-document-analysis plan §3.1/§4.3 → rag-design §14.6). Node vectors are stored NULL by
+// the tree build [L6]; symmetric compare is their FIRST and only consumer, so they are embedded
+// HERE, lazily, the first time a compare needs a tree's nodes.
 //
 // Discipline:
 //   - SIDECAR, NOT CHAT: node summaries are embedded on the CPU embedder sidecar

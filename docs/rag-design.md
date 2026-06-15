@@ -774,7 +774,9 @@ task type. All offline, **one model job at a time**, CPU-first. Condensed from
 `docs/whole-document-analysis-plan.md` at the Phase-4 closeout (2026-06-15); full original (incl. the
 three audit-remediation passes — C1–C4/H1–H11/M1–M13/L1–L7):
 `git show 4071685:docs/whole-document-analysis-plan.md`. **§14.x anchors are stable — code comments
-that cite "plan §3.x/§4.x" map here (§4.1→§14.3, §4.2→§14.5, §4.3→§14.6, §4.5→§14.4, §3.1→§14.2).** The
+that cite the old plan's "§3.x/§4.x/§5.x" map here: §3.1/§3.2/§3.5→§14.2, §3.3→§14.5, §4.1→§14.3,
+§4.2→§14.5, §4.3→§14.6, §4.4→§14.5, §4.5→§14.4, §5.1 (IPC)→§14.4 (coverage) & §14.5 (listAll),
+§5.2 (renderer)→§14.4.** The
 data tables live in [`db.ts`](../apps/desktop/src/main/services/db.ts); everything inherits whole-file
 encryption. Summaries, the content cache, extraction records, and node vectors are **content** — never
 logged or audited; audit events stay ids/kinds/counts._
@@ -804,8 +806,11 @@ Additive tables in `SCHEMA` (no version bump; `ensureColumn` for the document co
   (**NULL until Phase 4 fills them lazily** — §14.6, L6). `ON DELETE CASCADE` on `document_id`/`parent_id`.
 - **`tree_edges`** — ordered child edges; `child_id` is **polymorphic** (a chunk when `child_is_chunk=1`,
   else a node) and carries **no FK to chunks**, so deleting chunks does NOT cascade — re-index tears the
-  tree down explicitly. `idx_tree_edges_child` gives the reverse chunk→node lookup (L5).
-- **`summary_cache`** — `(content_hash, model_id)` → `summary_text` (+ the node vector). Separate from
+  tree down explicitly. `idx_tree_edges_child` (compound, on `(child_id, child_is_chunk)`) gives the
+  reverse chunk→node / node→node lookup (L5).
+- **`summary_cache`** — `(content_hash, model_id)` PK → `summary_text` plus the node-vector columns
+  `embedding_blob`/`embedding_model_id`/`dimensions` (NULL until the first symmetric compare embeds
+  them — §14.6) and `created_at`. Separate from
   node identity: a tree always gets **one fresh `tree_nodes` row per structural position**, so identical
   boilerplate yields two distinct nodes that merely share a cached summary (kills the C3 tree-collapse
   bug). A rebuild/resume over a warm cache costs **0 chat calls** for unchanged groups despite full
@@ -820,19 +825,22 @@ Additive tables in `SCHEMA` (no version bump; `ensureColumn` for the document co
 ### 14.3 Yielding tree build + the model-slot arbiter (plan §4.1, H3/H9/H10/H11/M8/M9/M12)
 
 [`tree-build.ts`](../apps/desktop/src/main/services/analysis/tree-build.ts) packs chunks (in
-`chunk_index` order) into groups ≤ `TREE_GROUP_TOKENS` (= the summary budget math, Q5), summarizes each
-group into **one fresh level-1 node**, and recurses over node summaries to a single root. Cost is **O(n)
-chat calls** paid once (~250 for a 1000-chunk doc), **zero embeds at build time** (node vectors deferred
-— §14.6).
-- **Yielding (H3/H9/H10):** a ~250-call build cannot block chat. The build commits **one node per
+`chunk_index` order) into groups bounded by `summaryBudgetWords(contextTokens)` (the same per-call word
+budget the summary windower uses — dynamic, not a named constant; Q5), summarizes each group into **one
+fresh level-1 node**, and recurses over node summaries to a single root. Cost is **O(n) chat calls**
+paid once — the node count is `estimateNodeCount` over the level-1 groups and the branching factor, so it
+scales with context-window size (roughly 50–300 nodes for a 1000-chunk doc at typical 4k–8k context) —
+**zero embeds at build time** (node vectors deferred — §14.6).
+- **Yielding (H3/H9/H10):** an O(n)-call build cannot block chat. The build commits **one node per
   transaction** and, at each node boundary (synchronous, before the next `generate`), checks the
   **`ModelSlotArbiter`** ([`model-slot-arbiter.ts`](../apps/desktop/src/main/services/analysis/model-slot-arbiter.ts)) —
   the single in-process owner of the one chat-runtime slot. If chat asked for the slot the builder
   **parks on `await arbiter.reacquire()`** (it does **not** return — a returning DocTask is marked `done`
   and never resumes) and continues from the next node in-session when chat's stream ends. Chat's
-  `assertChatStreamReady` is **async**: for a yielding `tree`/`extract` task it sets `pauseRequested`,
-  **awaits** the builder's handoff, then claims the slot; a non-yielding task still refuses chat with
-  `DOC_TASK_BUSY_MESSAGE` (the guard branches on the running task's **kind**). One slot, one synchronous
+  `assertChatStreamReady` throws `DOC_TASK_BUSY_MESSAGE` only for a non-yielding active task; for a
+  yielding `tree`/`extract` build it returns, and `withChatStream` then calls `acquireChatSlot()` (its
+  optional `acquireSlot` arg) which sets `pauseRequested` and **awaits** the builder's handoff before
+  claiming the slot (the guard branches on the running task's **kind**). One slot, one synchronous
   claim, one awaited handoff ⇒ builder and chat never call `chatStream` concurrently.
 - **Per-node transaction with ROLLBACK [H11/M8]:** the repo had **zero** `BEGIN/COMMIT` and `node:sqlite`
   has no `.transaction()` helper; the build introduces an explicit `try { BEGIN; inserts; COMMIT } catch
@@ -857,7 +865,8 @@ those leaf SOURCE chunks into `[Sn]` `Citation[]` (**M2 — node summaries are d
 citations**). `documentCoverage` reports two **separate** honest statements — **breadth** (reachable
 leaves ÷ chunk count; 100% only when `tree_status='ready'`, never while building/stale/pending — C1) and
 **depth/tier** (a Tier-1 root is abstractive/lossy — breadth ≠ fidelity, L2). **Tiers** in `runSummary`
-(`summarizeFromTree`, selected via the `summary` task `params.tier`; no-arg = Tier 1, unchanged):
+(the private `summarizeFromTree`, called by `runSummary` when a ready tree exists; the tier is parsed
+from the `summary` task `params.tier` in `startDocTask`, no-arg = Tier 1, unchanged):
 **Tier 1** = stored root verbatim (**0** calls, M1 — the one-click summary serves the ready tree root
 with `truncated:false`); **Tier 2** = one reduce over the root's children; **Tier 3** = all level-1
 nodes reduced in batches bounded by **node count**, not document size. All tiers cover the whole document.
@@ -882,7 +891,7 @@ aggregation answered at **zero query-time model calls** — exhaustive **over in
   calls on re-run. Gated on `fully_chunked` (C4). Manual-only (not auto-enqueued at import — avoids
   surprise CPU spend).
 - **Aggregate:** `aggregateExtractions` GROUPs BY `normalized_value` through the shared
-  `buildScopeFilter('document_id')` (M3 — membership/id UNION + archived exclusion), **0** model calls;
+  `buildScopeFilter(scope, 'document_id')` (M3 — membership/id UNION + archived exclusion), **0** model calls;
   returns items+counts+source-chunk provenance + scanned/total/unparsed + `fullyChunked`.
 - **Router** ([`router.ts`](../apps/desktop/src/main/services/analysis/router.ts), pure): EN+DE
   classification (list/every/each/how many/count + jede/alle/wie viele/sämtliche/liste/zähl), fixed

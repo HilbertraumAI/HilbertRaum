@@ -1,6 +1,6 @@
 # Known limitations & accepted trade-offs
 
-_Last updated: 2026-06-13 (Phase 42: added the Internationalization section)._
+_Last updated: 2026-06-15._
 
 The MVP (Phases 0–13) is feature-complete. Four post-MVP multi-persona audit rounds (2026-06-09)
 found and fixed every Critical, High, and Medium finding plus the actionable Lows — see
@@ -41,13 +41,6 @@ password recovery — are documented in
   cascade-removes the orphan rows instead of raising a foreign-key violation. Same accepted
   app-beside-data version-skew stance as the vault note above. (See `docs/architecture.md`
   "Document organization — design record" §3.)
-- **Document-organization a11y/i18n polish — DONE (2026-06-14 audit Low items + D-L7 pass).** All three
-  are now fixed: **UX-1** filing-suggestion chip is `role="group"` + reason tied to Apply via
-  `aria-describedby`; **UX-2** the doc-org German copy was recast informal-"du" in the D-L7 review (the
-  formal "Sie/Ihre" scope/delete strings, plus the reindex-all confirm); **UX-3** attachment
-  processing/added is announced via a polite `aria-live` status region in the chat surface (new
-  `chat.attach.added` string). The broader Phase 39–42 German copy still awaits the user's standing D-L7
-  sign-off, tracked separately in `architecture.md` (i18n record).
 - **Password-change edge: a post-commit swap interruption can briefly wedge one document.**
   If the one-time v1→v2 migration is interrupted AFTER its descriptor commit but mid file-swap
   (e.g. a transiently locked file on Windows), a not-yet-swapped document sidecar stays under
@@ -70,7 +63,9 @@ password recovery — are documented in
   "Chat & streaming"): the depth choice is per-conversation **per session** (not persisted
   to the DB), and document answers always run Balanced (deep-grounded answering is an open
   question).
-- **Model states `ready` / `not_recommended` are declared but never produced.**
+- **Model state `not_recommended` is declared but never produced** (no code path sets it; it exists
+  only in the display map). `ready` is declared and rendered, but the current runtime goes straight to
+  `running` after start, so `ready` (loaded-but-idle) is never produced either.
 - **Settings lacks the spec §10.6 Models/Performance/About sections** (Models has its own screen;
   Diagnostics shows version/runtime/model info).
 - **No `sample-contract.pdf` fixture** for the canonical spec §17 demo script.
@@ -117,7 +112,9 @@ password recovery — are documented in
   do not resolve when read from the drive.
 - **Audit log (Phase 19) accepted edges:** events recorded while the vault is locked are
   buffered in memory only — quitting the app before the next unlock drops them (bounded buffer,
-  oldest dropped past 100). Lock-on-**quit** and the implicit stop during a model *switch* are
+  oldest dropped past 100). The **persisted** audit log is also capped (`AUDIT_MAX_ROWS = 5000`,
+  pruned on every insert), so on a very active workspace the oldest events fall off over time.
+  Lock-on-**quit** and the implicit stop during a model *switch* are
   not audited (only the explicit "Lock now" / stop actions are). A download that completes
   against a placeholder manifest hash records no `model_download_verified` event (checksum
   honesty — the AI Model screen shows UNVERIFIED).
@@ -253,9 +250,11 @@ password recovery — are documented in
   "one-directional — deeply index both for a complete two-way comparison" notice in the
   report. (The symmetric path lazily embeds each tree's summary sections on the CPU embedder
   sidecar the first time — once, then cached.)
-- **The report covers the BEGINNING of document A when it is very long.** The map ceiling
-  (12 calls, the summary's bounded-latency rationale) caps coverage; the report itself
-  carries a visible notice when that happens. Both documents stay fully searchable.
+- **The report covers the BEGINNING of document A when it is very long.** In the asymmetric path the
+  map ceiling (12 calls, the summary's bounded-latency rationale) caps coverage; the report itself
+  carries a visible notice when that happens. (The symmetric path can also truncate — a lopsided pair
+  with many unmatched sections can overflow the reduce input — in which case it carries its own,
+  document-neutral truncation notice instead.) Both documents stay fully searchable.
 - **Report section headings are English even for German documents.** The four headings
   are dictated verbatim so the report structure is deterministic (R-T2-probed: the 4B
   keeps them); the findings under them follow the documents' language. Cosmetic, accepted
