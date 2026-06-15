@@ -249,6 +249,8 @@ export const en = {
   'docs.selectTitle': 'Select to ask only chosen documents',
   'docs.meta.size': 'Size',
   'docs.meta.sections': 'Sections',
+  'docs.meta.sectionsCount.one': '{count} section',
+  'docs.meta.sectionsCount.other': '{count} sections',
   'docs.meta.type': 'Type',
   'docs.meta.summary': 'Summary',
   'docs.scan.ocrOffer': 'Use "Make searchable (OCR)" below to read the pages on this drive.',
@@ -276,6 +278,9 @@ export const en = {
   'docs.reindexBusy': 'Re-indexing…',
   'docs.reindexTitle': 'Read and prepare the stored copy again',
   'docs.delete': 'Delete',
+  // Per-row overflow ("⋯") menu (§11.6): one inline Preview + this menu carries the rest.
+  // The trigger keeps an accessible name even though it is revealed on hover.
+  'docs.moreActions': 'More actions for {title}',
   'docs.audioConfirm.title': 'Import large audio?',
   'docs.audioConfirm.confirm': 'Import and transcribe',
   'docs.audioConfirm.contains.one': 'This selection contains {count} audio recording ({size}).',
@@ -1047,8 +1052,19 @@ export const en = {
   'docs.lifecycle.archived': 'Archived',
   'docs.chip.library': 'Library',
   'docs.chip.temporary': 'Temporary',
+  'docs.chip.generated': 'Generated',
+  'docs.chip.archived': 'Archived',
   'docs.bulk.selected.one': '{count} selected',
   'docs.bulk.selected.other': '{count} selected',
+  // Selection toolbar (§11.6): one sticky bar for the multi-document operations, so the
+  // per-row action set can stay minimal.
+  'docs.selectionAria': 'Actions for the selected documents',
+  'docs.bulk.delete': 'Delete',
+  'docs.bulk.deleteConfirm.title.one': 'Delete {count} document?',
+  'docs.bulk.deleteConfirm.title.other': 'Delete {count} documents?',
+  'docs.bulk.deleteConfirm.body':
+    'This permanently removes the selected documents, their extracted text, and their ' +
+    'search index from your workspace. The original files outside the workspace are not touched.',
   'docs.empty.section': 'Nothing here yet.',
 
   // ---- Document organization — smart views (plan §7.6/§12.1, Phase E) ----

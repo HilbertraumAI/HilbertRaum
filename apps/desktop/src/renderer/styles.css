@@ -313,6 +313,10 @@ h2 { font-size: 15px; margin: 0 0 12px; }
 /* Ghost: text only; hover/focus reveal a quiet surface. */
 .btn.ghost { background: transparent; border-color: transparent; }
 .btn.ghost:hover:not(:disabled) { background: var(--surface-hover); border-color: transparent; }
+/* Destructive secondary (selection-toolbar Delete): error-toned text + outline, paired with
+   the word "Delete" (never color alone, 1.4.1); the actual delete is behind a ConfirmDialog. */
+.btn.danger { color: var(--error); border-color: var(--error); }
+.btn.danger:hover:not(:disabled) { border-color: var(--error); background: var(--surface-hover); }
 
 .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 18px; margin-top: 16px; box-shadow: var(--shadow-1); }
 .card.muted { color: var(--text-muted); }
@@ -1125,15 +1129,108 @@ code, pre, kbd { font-family: var(--font-mono); }
   .docs-rail-group-head { display: none; }
 }
 
-/* Documents screen */
-.doc-card { display: flex; flex-direction: column; gap: 10px; }
-.doc-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
-.doc-select { width: 15px; height: 15px; accent-color: var(--accent-600); align-self: center; flex-shrink: 0; }
-.doc-title { font-size: 15px; font-weight: 600; word-break: break-all; flex: 1; }
-.doc-meta { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 4px 14px; font-size: 12px; color: var(--text-muted); }
-.doc-meta b { color: var(--text); font-weight: 500; }
-.doc-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
-.doc-error { color: var(--error); font-size: 12px; word-break: break-word; }
+/* Documents screen — compact list rows (§6 lists/tables; §11.6). Each row: checkbox ·
+   file-type icon · filename + muted meta · chips · status badges · inline Preview · "⋯".
+   Rows are ≥40px (target ~56px for the two-line name+meta) so ~3× more docs fit a screen. */
+.doc-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 56px;
+  padding: 8px 10px 8px 12px;
+  border-bottom: 1px solid var(--border);
+  /* The selected/left-bar treatment lives in a 3px inset border that is transparent until
+     the row is selected, so the row text never shifts when selection toggles. */
+  border-left: 3px solid transparent;
+}
+.doc-row:hover { background: var(--surface-hover); }
+/* Selected row: soft fill + accent left bar (the nav/history selection treatment, §12.1 #3),
+   NOT an outline ring — :focus-visible keeps the ring so focus stays distinct from selection. */
+.doc-row.selected { background: var(--row-selected-bg); border-left-color: var(--row-selected-bar); }
+.doc-select { width: 16px; height: 16px; accent-color: var(--accent-600); flex-shrink: 0; }
+.doc-row-icon { width: 22px; height: 22px; color: var(--text-muted); flex-shrink: 0; }
+.doc-row-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.doc-row-title {
+  font-size: var(--text-base);
+  font-weight: 600;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Technical meta strip is visually secondary (§6): muted, --text-xs. Ellipsizes (never
+   char-wraps) when a dense row's chips/badges squeeze the main column. */
+.doc-row-meta {
+  font-size: var(--text-xs);
+  line-height: var(--line-xs);
+  color: var(--text-muted);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.doc-row-cap { margin: 2px 0 0; }
+.doc-row-chips { display: flex; flex-wrap: wrap; gap: 6px; flex-shrink: 0; max-width: 38%; justify-content: flex-end; }
+.doc-row-badges { display: flex; flex-wrap: wrap; gap: 6px; flex-shrink: 0; justify-content: flex-end; }
+.doc-row-actions { display: flex; gap: 6px; align-items: center; flex-shrink: 0; }
+/* The "⋯" overflow trigger: revealed on hover/focus, but ALWAYS keyboard-focusable and
+   tabbable (the opacity never removes it from the tab order). ≥24px hit target (2.5.8). */
+.doc-row-menu-btn {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-muted);
+  min-width: 28px;
+  height: 28px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease);
+}
+.doc-row:hover .doc-row-menu-btn,
+.doc-row-menu-btn:focus-visible,
+.doc-row-menu-btn[data-state='open'] { opacity: 1; }
+.doc-row-menu-btn:hover:not(:disabled) { color: var(--text); background: var(--surface-hover); }
+.doc-row-menu-btn:disabled { cursor: not-allowed; }
+
+/* Quiet icon button (Refresh, §6/Task 7): no fill, ≥24px target, focus ring from baseline. */
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.icon-btn:hover:not(:disabled) { color: var(--text); background: var(--surface-hover); }
+.icon-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* Selection toolbar (Task 6): ONE sticky, non-stacking bar for the multi-document ops.
+   Reuses the selected-row fill so it reads as "these selected rows' actions". */
+.docs-selbar {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0 4px;
+  padding: 8px 12px;
+  background: var(--row-selected-bg);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--row-selected-bar);
+  border-radius: var(--radius-md);
+}
+.docs-selbar-count { font-size: var(--text-sm); color: var(--text-muted); margin-right: 4px; }
+
+/* Overflow menu separator (Radix DropdownMenu.Separator). */
+.menu-sep { height: 1px; background: var(--border); margin: 4px 6px; }
 
 /* Benchmark / diagnostics */
 .hint.error { color: var(--error); }

@@ -270,6 +270,8 @@ export const de: Record<keyof typeof en, string> = {
   'docs.selectTitle': 'Auswählen, um nur ausgewählte Dokumente zu fragen',
   'docs.meta.size': 'Größe',
   'docs.meta.sections': 'Abschnitte',
+  'docs.meta.sectionsCount.one': '{count} Abschnitt',
+  'docs.meta.sectionsCount.other': '{count} Abschnitte',
   'docs.meta.type': 'Typ',
   'docs.meta.summary': 'Zusammenfassung',
   'docs.scan.ocrOffer':
@@ -300,6 +302,7 @@ export const de: Record<keyof typeof en, string> = {
   'docs.reindexBusy': 'Wird neu indexiert…',
   'docs.reindexTitle': 'Die gespeicherte Kopie erneut lesen und vorbereiten',
   'docs.delete': 'Löschen',
+  'docs.moreActions': 'Weitere Aktionen für {title}',
   'docs.audioConfirm.title': 'Große Audiodateien importieren?',
   'docs.audioConfirm.confirm': 'Importieren und transkribieren',
   'docs.audioConfirm.contains.one': 'Diese Auswahl enthält {count} Audioaufnahme ({size}).',
@@ -1137,8 +1140,18 @@ export const de: Record<keyof typeof en, string> = {
   'docs.lifecycle.archived': 'Archiviert',
   'docs.chip.library': 'Bibliothek',
   'docs.chip.temporary': 'Temporär',
+  'docs.chip.generated': 'Erzeugt',
+  'docs.chip.archived': 'Archiviert',
   'docs.bulk.selected.one': '{count} ausgewählt',
   'docs.bulk.selected.other': '{count} ausgewählt',
+  'docs.selectionAria': 'Aktionen für die ausgewählten Dokumente',
+  'docs.bulk.delete': 'Löschen',
+  'docs.bulk.deleteConfirm.title.one': '{count} Dokument löschen?',
+  'docs.bulk.deleteConfirm.title.other': '{count} Dokumente löschen?',
+  'docs.bulk.deleteConfirm.body':
+    'Damit werden die ausgewählten Dokumente, ihr extrahierter Text und ihr Suchindex ' +
+    'dauerhaft aus deinem Arbeitsbereich entfernt. Die Originaldateien außerhalb des ' +
+    'Arbeitsbereichs bleiben unberührt.',
   'docs.empty.section': 'Hier ist noch nichts.',
 
   // ---- Dokumentorganisation — intelligente Ansichten (Plan §7.6/§12.1, Phase E). ----

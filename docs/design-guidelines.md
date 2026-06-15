@@ -435,6 +435,72 @@ clear localStorage after the first window, `emulateMedia` for theme/reduced-moti
 `config/policy.json` with `encryption_required: true` to exercise the gate). Suite grew
 644 → 669 tests (+6 manual skips) over the wave.
 
+### 11.6 Documents-screen refinement — design record (IMPLEMENTED 2026-06-15)
+
+_A focused, **renderer-only** pass on the Documents screen that extends the Phase 23–27 wave —
+no IPC, schema, persistence, or main-process changes. The document tasks (summarize, translate,
+compare, re-index, build deep index, OCR, add-to-project, delete) keep their existing
+handlers/IPC; only the **presentation** changed. Code/i18n comments cite this section as **§11.6**._
+
+**Decisions (the facts they rest on):**
+1. **Action bank → one inline Preview + a "⋯" overflow.** Each row had 6–7 equal-weight outline
+   buttons (Preview · Summarize · Translate · Re-index · Build deep index · Add to project… ·
+   Delete), violating §6 (three button levels, one primary per view) and §8 (control clutter /
+   equal-weight readouts). Now: **Preview** is the single inline Secondary button; everything
+   else lives in a **Radix `DropdownMenu`** ("⋯"), mirroring the chat `ConversationList` ⋯ +
+   `ConfirmDialog` pattern (decision D-UI1, `react-dropdown-menu@2.1.17`). The trigger is
+   `aria-label`led "More actions for <filename>", is keyboard-focusable/tabbable even though it
+   is revealed on hover, and right-clicking the row opens the same menu (one controlled
+   `menuOpenId`). Contextual items appear only when applicable ("Make searchable (OCR)" for a
+   scan, "Build deep index" until deeply indexed, "Export" for generated docs).
+2. **State = badges, not buttons.** The three scattered "done" signals — "✓ Ready" (top-right),
+   "Summary ✓" (metadata row), and "✓ Deeply indexed" (a green *button* in the action row) — are
+   consolidated into ONE right-aligned **Badge cluster** (`Badge`, icon + word, never color-only
+   — 1.4.1): a processing/ready status badge + small **Summary** (neutral) and **Deeply indexed**
+   (success) badges. "Build deep index" simply disappears from the overflow once the tree is
+   ready; Summarize↔Summarize again flips on `d.summary`. Provenance for generated docs
+   ("Translated from …", "Comparison of …") stays a quiet caption, not a badge.
+3. **Locations/projects = one uniform Chip.** Library / Temporary / Generated / Archived AND
+   project tags now all render as the SAME neutral `Chip`, grouped and visually separate from the
+   green status badges. The old blue-outlined "Temporary" badge is gone (it read like a
+   status/link and collided with the Temporary left-nav location). See the open risk in
+   `BUILD_STATE.md` on whether Library/Temporary/Generated/Archived are mutually-exclusive
+   locations vs additive flags — the data model was left untouched.
+4. **Compact list rows (§6 lists/tables).** The tall cards became compact rows (≥40px; ~56px for
+   the two-line name + muted meta): checkbox · file-type `Icon` · filename (`min-width:0` +
+   ellipsis) with a muted meta line · chips · status badges · inline **Preview** · **⋯**. Hover
+   highlights the row; selected rows reuse the nav/history selection treatment —
+   `--row-selected-bg` fill + a `--row-selected-bar` accent **left bar** (new role tokens per
+   theme), NOT an outline ring, so selection stays distinct from the `:focus-visible` ring (§9).
+   Result: ~3× more documents per screen.
+5. **MIME → friendly label (§7).** A pure, renderer-only `friendlyMimeLabel` maps the stored MIME
+   to a short label ("application/pdf" → "PDF", "text/markdown" → "Markdown", audio/* → "Audio",
+   …) — **display only**, the stored strings are unchanged (the copy-tone guard stays green). The
+   whole meta strip ("PDF · 2.0 KB · 7 sections") is `--text-xs` + `--text-muted` (technical
+   columns visually secondary, §6).
+6. **Selection toolbar for multi-doc ops (§6 banners — never stacked).** Ticking checkboxes
+   surfaces ONE sticky, non-stacking bar: **Ask these documents**, **Compare (2)** (enabled only
+   at exactly two), **Add to project…**, mark Temporary/Archived, and a **Delete** behind a
+   `ConfirmDialog` — keeping the per-row set minimal. The bar reuses the selected-row fill + left
+   bar.
+7. **Toolbar (Task 7).** **Refresh** became a quiet `icon-btn` (new `refresh` glyph in `Icon`,
+   `aria-label` "Refresh") so Import files (Primary) + Import folder (Secondary) carry the
+   toolbar.
+
+**As built:** `renderer/screens/DocumentsScreen.tsx` (compact rows, "⋯" overflow, badge
+cluster, uniform chips, selection toolbar, bulk-delete `ConfirmDialog`, `friendlyMimeLabel`),
+`renderer/components/Icon.tsx` (`refresh`), `renderer/tokens.css` (`--row-selected-bg` /
+`--row-selected-bar` per theme; reuse the ramp), `renderer/styles.css` (`.doc-row*`,
+`.docs-selbar`, `.doc-row-menu-btn`, `.icon-btn`, `.btn.danger`, `.menu-sep`),
+`shared/i18n/{en,de}.ts` (`docs.moreActions`, `docs.chip.generated/archived`,
+`docs.meta.sectionsCount`, `docs.bulk.delete*`, `docs.selectionAria`). Verification per §11.4:
+typecheck + build clean, full vitest from `apps/desktop` **1353 passed / 25 skipped** (+5;
+updated tests that asserted the old per-card button set / equal-weight Delete / "✓ Deeply
+indexed" button / blue "Temporary" badge / raw "application/pdf", and added overflow + MIME
+helper + selection-toolbar + status-as-Badge cases). Both themes contrast-checked; the new
+accent left bar reads ≥3:1 on both surfaces. German copy added in the same pass (D-L7 informal
+„du").
+
 ---
 
 ## 12. Chat-UI polish pass — design record (IMPLEMENTED 2026-06-13)

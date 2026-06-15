@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { ReactNode } from 'react'
-import { Badge, Banner, Button, ConfirmDialog, CoverageMeter, EmptyState, ErrorBanner, Modal, Progress, Spinner, TierMenu, useToast, type BadgeTone } from '../components'
+import { Badge, Banner, Button, Chip, ConfirmDialog, CoverageMeter, EmptyState, ErrorBanner, Icon, Modal, Progress, Spinner, TierMenu, useToast, type BadgeTone } from '../components'
 import { SourcesDisclosure } from '../chat/SourcesDisclosure'
 import { AssistantMarkdown } from '../chat'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
@@ -98,6 +98,39 @@ const TASK_BUSY_TITLE: Record<DocTaskKind, MessageKey> = {
   extract: 'docs.task.extractBusyTitle'
 }
 
+/**
+ * Map a stored MIME type to a short, friendly label (§7 — hide the machinery; show "PDF",
+ * not "application/pdf"). Display-only: the stored MIME string is never changed, so the
+ * copy-tone guard and the ingestion contracts are untouched. Pure ⇒ unit-tested directly.
+ */
+const MIME_LABELS: Record<string, string> = {
+  'application/pdf': 'PDF',
+  'text/markdown': 'Markdown',
+  'text/plain': 'Text',
+  'text/csv': 'CSV',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'Word',
+  'application/msword': 'Word',
+  'audio/mpeg': 'MP3',
+  'audio/wav': 'WAV',
+  'audio/x-wav': 'WAV',
+  'audio/flac': 'FLAC',
+  'audio/ogg': 'OGG',
+  'image/png': 'PNG',
+  'image/jpeg': 'JPEG'
+}
+
+export function friendlyMimeLabel(mime: string | null | undefined): string {
+  if (!mime) return '—'
+  const direct = MIME_LABELS[mime]
+  if (direct) return direct
+  if (mime.startsWith('audio/')) return 'Audio'
+  if (mime.startsWith('image/')) return 'Image'
+  if (mime.startsWith('text/')) return 'Text'
+  // Last resort: the subtype, upper-cased (e.g. application/zip → ZIP).
+  const sub = mime.split('/')[1] ?? mime
+  return sub.toUpperCase()
+}
+
 // Decimal separator follows the UI language (i18n record §5); units stay as-is.
 function formatSize(bytes: number | null, lang: UiLanguage): string {
   if (bytes == null) return '—'
@@ -165,6 +198,11 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
   const [reindexProgress, setReindexProgress] = useState<{ done: number; total: number } | null>(
     null
   )
+  // Bulk delete from the selection toolbar (§11.6) — behind a ConfirmDialog like single delete.
+  const [confirmBulkDelete, setConfirmBulkDelete] = useState(false)
+  // One controlled per-row "⋯" menu so right-click opens the same overflow (mirrors the
+  // chat ConversationList pattern). Holds the open row id, or null.
+  const [menuOpenId, setMenuOpenId] = useState<string | null>(null)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   // The single active document task — module-level store so a running summary's
   // busy/progress state survives navigating away and back.
@@ -626,6 +664,54 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
     return collections.find((c) => c.id === target.collectionId)?.name ?? ''
   }
 
+  // Bulk delete the current selection (selection toolbar, §11.6): delete each one at a time
+  // (same per-document IPC as the row), then clear the selection and refresh once.
+  async function onBulkDelete(): Promise<void> {
+    const ids = [...selected]
+    if (ids.length === 0) return
+    setBusy('bulk-delete')
+    setError(null)
+    try {
+      for (const id of ids) await window.api.deleteDocument(id)
+      setSelected(new Set())
+    } catch (e) {
+      setError(friendlyIpcError(e))
+    } finally {
+      setBusy(null)
+      await refresh().catch(() => undefined)
+    }
+  }
+
+  /**
+   * The uniform location/project chips for a row (Task 3): Library / Temporary / Generated /
+   * Archived AND project tags all render as the SAME neutral Chip — location is never a status
+   * badge or a blue pill. Deduped, in a stable order. Returns plain labels; the caller renders
+   * them as <Chip>.
+   */
+  function rowChips(d: DocumentInfo): string[] {
+    const labels: string[] = []
+    const push = (s: string): void => {
+      if (s && !labels.includes(s)) labels.push(s)
+    }
+    for (const c of d.collections ?? []) {
+      if (c.type === 'library') push(t('docs.chip.library'))
+      else if (c.type === 'temporary') push(t('docs.chip.temporary'))
+      else push(c.name)
+    }
+    if ((d.lifecycle ?? 'permanent') === 'temporary') push(t('docs.chip.temporary'))
+    if ((d.lifecycle ?? 'permanent') === 'archived') push(t('docs.chip.archived'))
+    if (d.origin) push(t('docs.chip.generated'))
+    return labels
+  }
+
+  /** Compact muted meta line: "PDF · 2.0 KB · 7 sections" (§5/§6 — technical, visually secondary). */
+  function metaLine(d: DocumentInfo): string {
+    const parts: string[] = [friendlyMimeLabel(d.mimeType)]
+    if (d.sizeBytes != null) parts.push(formatSize(d.sizeBytes, lang))
+    if (d.chunkCount > 0) parts.push(tCount('docs.meta.sectionsCount', d.chunkCount))
+    return parts.join(' · ')
+  }
+
   function toggleSelected(id: string): void {
     setSelected((prev) => {
       const next = new Set(prev)
@@ -680,7 +766,10 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
         />
         <div className="docs-main">
 
-      {/* When the list is empty the EmptyState below carries the primary action. */}
+      {/* Toolbar: Import files (Primary) + Import folder (Secondary) carry the screen;
+          Refresh is a quiet icon button (§6/Task 7). Multi-document operations live in the
+          selection toolbar below, not here, so the toolbar stays uncluttered. When the list
+          is empty the EmptyState carries the primary action instead. */}
       {!empty && (
         <div className="actions">
           <Button variant="primary" disabled={busy === 'import'} onClick={() => void onImport('files')}>
@@ -689,30 +778,19 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
           <Button disabled={busy === 'import'} onClick={() => void onImport('folder')}>
             {t('docs.import.folder')}
           </Button>
-          <Button size="sm" disabled={busy !== null} onClick={() => void refresh()}>
-            {t('docs.refresh')}
-          </Button>
-          {onAskSelected && selected.size > 0 && (
-            <Button
-              variant="primary"
-              disabled={busy !== null}
-              title={t('docs.askSelectedTitle')}
-              onClick={() => onAskSelected([...selected])}
-            >
-              {t('docs.askSelected', { count: selected.size })}
-            </Button>
-          )}
-          {selected.size === 2 && (
-            <Button
-              disabled={busy !== null || activeTask !== null}
-              title={t('docs.compareBtnTitle')}
-              onClick={() => void onCompare()}
-            >
-              {t('docs.compareBtn')}
-            </Button>
-          )}
+          <button
+            type="button"
+            className="icon-btn"
+            disabled={busy !== null}
+            aria-label={t('docs.refresh')}
+            title={t('docs.refresh')}
+            onClick={() => void refresh()}
+          >
+            <Icon name="refresh" size={18} />
+          </button>
           {staleDocs.length > 1 && (
             <Button
+              size="sm"
               disabled={busy !== null || anyActive}
               title={t('docs.reindexAllTitle')}
               onClick={() => setConfirmReindexAll(true)}
@@ -722,38 +800,61 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
                 : t('docs.reindexAll', { count: staleDocs.length })}
             </Button>
           )}
-          {/* Bulk organization actions on the current selection (plan §12.3). */}
-          {selected.size > 0 && activeProjects.length > 0 && (
+        </div>
+      )}
+
+      {/* Selection toolbar (Task 6): a single non-stacking sticky bar for the multi-document
+          operations — keeps them out of every row so the per-row set stays minimal. */}
+      {selected.size > 0 && (
+        <div className="docs-selbar" role="group" aria-label={t('docs.selectionAria')}>
+          <span className="docs-selbar-count">{tCount('docs.bulk.selected', selected.size)}</span>
+          {onAskSelected && (
+            <Button
+              size="sm"
+              variant="primary"
+              disabled={busy !== null}
+              title={t('docs.askSelectedTitle')}
+              onClick={() => onAskSelected([...selected])}
+            >
+              {t('docs.askSelected', { count: selected.size })}
+            </Button>
+          )}
+          {/* Compare is present whenever there is a selection, but enabled ONLY at exactly two. */}
+          <Button
+            size="sm"
+            disabled={busy !== null || activeTask !== null || selected.size !== 2}
+            title={t('docs.compareBtnTitle')}
+            onClick={() => void onCompare()}
+          >
+            {t('docs.compareBtn')}
+          </Button>
+          {activeProjects.length > 0 && (
             <Button size="sm" disabled={busy !== null} onClick={() => setAddToProjectFor([...selected])}>
               {t('docs.action.moveToProject')}
             </Button>
           )}
-          {selected.size > 0 && (
-            <Button
-              size="sm"
-              disabled={busy !== null}
-              onClick={() =>
-                void runOrg('org', () =>
-                  window.api.setDocumentLifecycle([...selected], 'temporary')
-                )
-              }
-            >
-              {t('docs.action.markTemporary')}
-            </Button>
-          )}
-          {selected.size > 0 && (
-            <Button
-              size="sm"
-              disabled={busy !== null}
-              onClick={() =>
-                void runOrg('org', () =>
-                  window.api.setDocumentLifecycle([...selected], 'archived')
-                )
-              }
-            >
-              {t('docs.action.archive')}
-            </Button>
-          )}
+          <Button
+            size="sm"
+            disabled={busy !== null}
+            onClick={() => void runOrg('org', () => window.api.setDocumentLifecycle([...selected], 'temporary'))}
+          >
+            {t('docs.action.markTemporary')}
+          </Button>
+          <Button
+            size="sm"
+            disabled={busy !== null}
+            onClick={() => void runOrg('org', () => window.api.setDocumentLifecycle([...selected], 'archived'))}
+          >
+            {t('docs.action.archive')}
+          </Button>
+          <Button
+            size="sm"
+            className="danger"
+            disabled={busy !== null}
+            onClick={() => setConfirmBulkDelete(true)}
+          >
+            {t('docs.bulk.delete')}
+          </Button>
         </div>
       )}
 
@@ -799,9 +900,42 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
         <p className="hint">{t('docs.empty.section')}</p>
       )}
 
-      {visibleDocs.map((d) => (
-        <div className="card doc-card" key={d.id}>
-          <div className="doc-head">
+      {visibleDocs.map((d) => {
+        // One task occupies the runtime at a time; while it targets THIS row, the row shows a
+        // busy/cancel pair instead of the Preview + "⋯" pair. `rowTask` is the active task (so
+        // it narrows) or null.
+        const rowTask =
+          activeTask != null &&
+          activeTask.documentIds.includes(d.id) &&
+          !isDocTaskTerminal(activeTask.status)
+            ? activeTask
+            : null
+        const status = badgeFor(d, t)
+        const chips = rowChips(d)
+        const canDocTasks = d.status === 'indexed' && d.chunkCount > 0
+        const canDeepIndex = canDocTasks && !d.origin && d.treeStatus !== 'ready'
+        const showOcr = Boolean(d.scanDetected && ocrAvailable)
+        const stale = d.origin ? generatedStaleness(d, sourcesById) : { stale: false as const }
+        const sug = dismissedSuggestions.has(d.id) ? undefined : topSuggestionByDoc.get(d.id)
+        const sugName = sug ? suggestionTargetName(sug) : ''
+        const rowBusyLabel = rowTask
+          ? `${t(TASK_BUSY_LABEL[rowTask.kind])}${
+              rowTask.status && rowTask.status.progress.stepsTotal > 1
+                ? ` (${rowTask.status.progress.stepsDone}/${rowTask.status.progress.stepsTotal})`
+                : ''
+            }`
+          : ''
+        return (
+          <div
+            className={`doc-row ${selected.has(d.id) ? 'selected' : ''}`}
+            key={d.id}
+            onContextMenu={(e) => {
+              // Right-click opens the same "⋯" overflow (mirrors the chat list).
+              if (rowTask) return
+              e.preventDefault()
+              setMenuOpenId(d.id)
+            }}
+          >
             {onAskSelected && d.status === 'indexed' && (
               <input
                 type="checkbox"
@@ -812,106 +946,18 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
                 onChange={() => toggleSelected(d.id)}
               />
             )}
-            <div className="doc-title" title={d.originalPath ?? d.title}>
-              {d.title}
-            </div>
-            {/* Lifecycle pill (Temporary / Archived) when not the default 'permanent'. */}
-            {d.lifecycle === 'temporary' && <Badge tone="accent">{t('docs.lifecycle.temporary')}</Badge>}
-            {d.lifecycle === 'archived' && <Badge tone="neutral">{t('docs.lifecycle.archived')}</Badge>}
-            <Badge tone={badgeFor(d, t).tone} icon={badgeFor(d, t).icon}>
-              {badgeFor(d, t).label}
-            </Badge>
-          </div>
-          {/* Collection/project membership chips (plan §12.2). */}
-          {(d.collections ?? []).length > 0 && (
-            <div className="doc-chips">
-              {(d.collections ?? []).map((c) => (
-                <span className="doc-chip" key={c.id}>
-                  {c.type === 'library'
-                    ? t('docs.chip.library')
-                    : c.type === 'temporary'
-                      ? t('docs.chip.temporary')
-                      : c.name}
-                </span>
-              ))}
-            </div>
-          )}
-          {/* Quiet, dismissible filing suggestion (plan §20 Phase F): a calm chip on an
-              unfiled doc — "Suggested project: Tax 2025 — Apply?". Apply files via the existing
-              membership path; nothing is ever filed without that click. Never shown once
-              dismissed (persisted) or when the target project has since vanished. */}
-          {!dismissedSuggestions.has(d.id) &&
-            (() => {
-              const sug = topSuggestionByDoc.get(d.id)
-              if (!sug) return null
-              const name = suggestionTargetName(sug)
-              if (!name) return null
-              // a11y (UX-1): group the chip and tie the rationale to Apply via
-              // aria-describedby, so a screen-reader user tabbing to Apply hears WHY the
-              // suggestion was made, not just its title. Ids are per-doc-row unique.
-              const textId = `suggest-text-${d.id}`
-              const reasonId = `suggest-reason-${d.id}`
-              return (
-                <div className="doc-suggest" role="group" aria-labelledby={textId}>
-                  <span className="doc-suggest-text" id={textId}>
-                    {t(sug.target.kind === 'newProject' ? 'docs.suggest.chipNew' : 'docs.suggest.chipExisting', {
-                      name
-                    })}
-                  </span>
-                  <span className="doc-suggest-reason hint" id={reasonId}>
-                    {t(sug.reasonKey, sug.reasonParams)}
-                  </span>
-                  <Button
-                    size="sm"
-                    variant="primary"
-                    disabled={busy !== null}
-                    title={t('docs.suggest.applyTitle', { name })}
-                    aria-describedby={reasonId}
-                    onClick={() => void onApplySuggestion(d.id, sug)}
-                  >
-                    {t('docs.suggest.apply')}
-                  </Button>
-                  <Button
-                    size="sm"
-                    disabled={busy !== null}
-                    title={t('docs.suggest.dismissTitle')}
-                    onClick={() => void onDismissSuggestion(d.id)}
-                  >
-                    {t('docs.suggest.dismiss')}
-                  </Button>
-                </div>
-              )
-            })()}
-          <div className="doc-meta">
-            <span>
-              {t('docs.meta.size')} <b>{formatSize(d.sizeBytes, lang)}</b>
-            </span>
-            <span>
-              {t('docs.meta.sections')} <b>{d.chunkCount}</b>
-            </span>
-            <span>
-              {t('docs.meta.type')} <b>{d.mimeType ?? '—'}</b>
-            </span>
-            {d.summary && (
-              <span>
-                {t('docs.meta.summary')} <b>✓</b>
-              </span>
-            )}
-          </div>
-          {d.origin && (
-            <p className="hint" style={{ margin: '2px 0 0' }}>
-              {provenanceLine(d)}
-            </p>
-          )}
-          {/* Quiet staleness indicator on a generated row (plan §15.3): a Badge (icon +
-              word, never color-only) plus copy when a source changed/was removed after this
-              output was generated. Re-running the task stays the only fix — no auto-update. */}
-          {d.origin &&
-            (() => {
-              const stale = generatedStaleness(d, sourcesById)
-              if (!stale.stale) return null
-              return (
-                <p className="hint" style={{ margin: '2px 0 0' }}>
+            <Icon name="file" className="doc-row-icon" />
+            <div className="doc-row-main">
+              <div className="doc-row-title" title={d.originalPath ?? d.title}>
+                {d.title}
+              </div>
+              <div className="doc-row-meta">{metaLine(d)}</div>
+              {/* Provenance for a generated document stays a quiet caption, not a badge (Task 2). */}
+              {d.origin && <p className="hint doc-row-cap">{provenanceLine(d)}</p>}
+              {/* Quiet staleness caption on a generated row (plan §15.3): a warning Badge (icon
+                  + word, never color-only) when a source changed/was removed after generation. */}
+              {stale.stale && (
+                <p className="hint doc-row-cap">
                   <Badge tone="warning" icon="⟳">
                     {t('docs.provenance.staleBadge')}
                   </Badge>{' '}
@@ -921,213 +967,225 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
                       : 'docs.provenance.staleChanged'
                   )}
                 </p>
-              )
-            })()}
-          {d.status === 'failed' && d.errorMessage && (
-            <Banner tone={d.scanDetected ? 'warning' : 'error'}>
-              {/* error_message is persisted canonical English; the D-L4 display map
-                  translates the known constants — unknown strings render as-is. */}
-              {localizeServerCopy(t, d.errorMessage)}
-              {d.scanDetected && (
-                <>
-                  {' '}
-                  {ocrAvailable ? t('docs.scan.ocrOffer') : t('docs.scan.ocrMissing')}
-                </>
               )}
-            </Banner>
-          )}
-          {d.staleEmbeddings && <Banner tone="warning">{t('docs.stale.banner')}</Banner>}
-          <div className="doc-actions">
-            <Button
-              size="sm"
-              disabled={busy !== null || previewLoading || ACTIVE_STATUSES.has(d.status)}
-              onClick={() => void onPreview(d)}
-              title={t('docs.previewTitle')}
-            >
-              {previewLoading ? t('docs.previewBusy') : t('docs.preview')}
-            </Button>
-            {/* "Make searchable (OCR)" for a detected scan. The same
-                slot shows the busy/cancel pair while the OCR task runs. */}
-            {d.scanDetected &&
-              ocrAvailable &&
-              (activeTask &&
-              activeTask.documentIds.includes(d.id) &&
-              !isDocTaskTerminal(activeTask.status) ? (
-                <>
-                  <Button size="sm" disabled title={t(TASK_BUSY_TITLE[activeTask.kind])}>
-                    <Spinner /> {t(TASK_BUSY_LABEL[activeTask.kind])}
-                    {activeTask.status && activeTask.status.progress.stepsTotal > 1
-                      ? ` (${activeTask.status.progress.stepsDone}/${activeTask.status.progress.stepsTotal})`
-                      : ''}
-                  </Button>
-                  <Button size="sm" onClick={() => void cancelActiveDocTask()} title={t('docs.cancelOcrTitle')}>
-                    {t('docs.cancel')}
-                  </Button>
-                </>
-              ) : (
-                <Button
-                  size="sm"
-                  disabled={busy !== null || activeTask !== null}
-                  onClick={() => void onMakeSearchable(d)}
-                  title={t('docs.makeSearchableTitle')}
-                >
-                  {t('docs.makeSearchable')}
-                </Button>
-              ))}
-            {d.status === 'indexed' &&
-              d.chunkCount > 0 &&
-              (activeTask &&
-              activeTask.documentIds.includes(d.id) &&
-              !isDocTaskTerminal(activeTask.status) ? (
-                <>
-                  <Button size="sm" disabled title={t(TASK_BUSY_TITLE[activeTask.kind])}>
-                    <Spinner /> {t(TASK_BUSY_LABEL[activeTask.kind])}
-                    {activeTask.status && activeTask.status.progress.stepsTotal > 1
-                      ? ` (${activeTask.status.progress.stepsDone}/${activeTask.status.progress.stepsTotal})`
-                      : ''}
-                  </Button>
-                  <Button size="sm" onClick={() => void cancelActiveDocTask()} title={t('docs.cancelTaskTitle')}>
-                    {t('docs.cancel')}
-                  </Button>
-                </>
-              ) : (
-                <>
-                  <Button
-                    size="sm"
-                    disabled={busy !== null || activeTask !== null}
-                    onClick={() => void onSummarize(d)}
-                    title={t('docs.summarizeTitle')}
-                  >
-                    {d.summary ? t('docs.summarizeAgain') : t('docs.summarize')}
-                  </Button>
-                  <Button
-                    size="sm"
-                    disabled={busy !== null || activeTask !== null}
-                    onClick={() => setTranslateDoc(d)}
-                    title={t('docs.translateTitle')}
-                  >
-                    {t('docs.translate')}
-                  </Button>
-                </>
-              ))}
-            {d.origin && (
-              <Button
-                size="sm"
-                disabled={busy !== null || ACTIVE_STATUSES.has(d.status)}
-                onClick={() => void onExport(d)}
-                title={t('docs.exportTitle')}
-              >
-                {t('docs.export')}
-              </Button>
+              {d.status === 'failed' && d.errorMessage && (
+                <Banner tone={d.scanDetected ? 'warning' : 'error'}>
+                  {/* error_message is persisted canonical English; the D-L4 display map
+                      translates the known constants — unknown strings render as-is. */}
+                  {localizeServerCopy(t, d.errorMessage)}
+                  {d.scanDetected && (
+                    <> {ocrAvailable ? t('docs.scan.ocrOffer') : t('docs.scan.ocrMissing')}</>
+                  )}
+                </Banner>
+              )}
+              {d.staleEmbeddings && <Banner tone="warning">{t('docs.stale.banner')}</Banner>}
+              {/* Quiet, dismissible filing suggestion (plan §20 Phase F). Apply files via the
+                  existing membership path; nothing is filed without that click. */}
+              {sug && sugName && (() => {
+                const textId = `suggest-text-${d.id}`
+                const reasonId = `suggest-reason-${d.id}`
+                return (
+                  <div className="doc-suggest" role="group" aria-labelledby={textId}>
+                    <span className="doc-suggest-text" id={textId}>
+                      {t(sug.target.kind === 'newProject' ? 'docs.suggest.chipNew' : 'docs.suggest.chipExisting', {
+                        name: sugName
+                      })}
+                    </span>
+                    <span className="doc-suggest-reason hint" id={reasonId}>
+                      {t(sug.reasonKey, sug.reasonParams)}
+                    </span>
+                    <Button
+                      size="sm"
+                      variant="primary"
+                      disabled={busy !== null}
+                      title={t('docs.suggest.applyTitle', { name: sugName })}
+                      aria-describedby={reasonId}
+                      onClick={() => void onApplySuggestion(d.id, sug)}
+                    >
+                      {t('docs.suggest.apply')}
+                    </Button>
+                    <Button
+                      size="sm"
+                      disabled={busy !== null}
+                      title={t('docs.suggest.dismissTitle')}
+                      onClick={() => void onDismissSuggestion(d.id)}
+                    >
+                      {t('docs.suggest.dismiss')}
+                    </Button>
+                  </div>
+                )
+              })()}
+            </div>
+            {/* Uniform location/project chips (Task 3): one neutral Chip style, never a blue
+                status pill — grouped, visually separate from the green status badges. */}
+            {chips.length > 0 && (
+              <div className="doc-row-chips">
+                {chips.map((label) => (
+                  <Chip key={label}>{label}</Chip>
+                ))}
+              </div>
             )}
-            <Button
-              size="sm"
-              disabled={
-                busy !== null || ACTIVE_STATUSES.has(d.status) || (activeTask?.documentIds.includes(d.id) ?? false)
-              }
-              onClick={() => void run(`reindex-${d.id}`, () => window.api.reindexDocument(d.id))}
-              title={t('docs.reindexTitle')}
-            >
-              {busy === `reindex-${d.id}` ? t('docs.reindexBusy') : t('docs.reindex')}
-            </Button>
-            {/* Deep index (whole-document-analysis §5.2): "Deeply indexed" once a
-                whole-document deep index is ready, else the build action. A building/pending
-                index surfaces through the busy block above, so the control is hidden then.
-                Generated work-products are excluded (no corpus deep index). C4: a not-fully-
-                chunked legacy doc offers "Re-index for deep index", never a dead 100% button. */}
-            {d.status === 'indexed' &&
-              d.chunkCount > 0 &&
-              !d.origin &&
-              !(
-                activeTask &&
-                activeTask.documentIds.includes(d.id) &&
-                !isDocTaskTerminal(activeTask.status)
-              ) &&
-              (d.treeStatus === 'ready' ? (
+            {/* Status badge cluster (Task 2): processing/ready + Summary + Deeply indexed all
+                read as Badges (icon + word), never as buttons. */}
+            <div className="doc-row-badges">
+              <Badge tone={status.tone} icon={status.icon}>
+                {status.label}
+              </Badge>
+              {d.summary && (
+                <Badge tone="neutral" icon="✓">
+                  {t('docs.meta.summary')}
+                </Badge>
+              )}
+              {d.treeStatus === 'ready' && !d.origin && (
                 <Badge tone="success" icon="✓" title={t('docs.deepIndex.readyTitle')}>
                   {t('docs.deepIndex.ready')}
                 </Badge>
-              ) : (
-                <Button
-                  size="sm"
-                  disabled={busy !== null || activeTask !== null}
-                  onClick={() => void onBuildDeepIndex(d)}
-                  title={t(
-                    d.fullyChunked === false
-                      ? 'docs.deepIndex.reindexFirstTitle'
-                      : 'docs.deepIndex.buildTitle'
-                  )}
-                >
-                  {t(d.fullyChunked === false ? 'docs.deepIndex.reindexFirst' : 'docs.deepIndex.build')}
-                </Button>
-              ))}
-            {/* Organize menu (plan §12.3): add to a project, keep in Library, change
-                lifecycle, or remove from the current project. Indexed docs only. */}
-            {d.status === 'indexed' && (
-              <DropdownMenu.Root>
-                <DropdownMenu.Trigger asChild>
-                  <Button size="sm" disabled={busy !== null} title={t('docs.action.addToProject')}>
-                    {t('docs.action.addToProject')}
+              )}
+            </div>
+            {/* Inline action + overflow (Task 1). While a task runs on this row, a busy/cancel
+                pair takes their place. */}
+            <div className="doc-row-actions">
+              {rowTask ? (
+                <>
+                  <Button size="sm" disabled title={t(TASK_BUSY_TITLE[rowTask.kind])}>
+                    <Spinner /> {rowBusyLabel}
                   </Button>
-                </DropdownMenu.Trigger>
-                <DropdownMenu.Portal>
-                  <DropdownMenu.Content className="menu" align="end" sideOffset={4}>
-                    {activeProjects.length > 0 ? (
-                      <DropdownMenu.Item className="menu-item" onSelect={() => setAddToProjectFor([d.id])}>
-                        {t('docs.action.moveToProject')}
-                      </DropdownMenu.Item>
-                    ) : (
-                      <DropdownMenu.Item className="menu-item" onSelect={() => setProjectModal({ mode: 'create', name: '' })}>
-                        {t('docs.section.newProject')}
-                      </DropdownMenu.Item>
-                    )}
-                    {!(d.collections ?? []).some((c) => c.type === 'library') && (
-                      <DropdownMenu.Item className="menu-item" onSelect={() => void onKeepInLibrary(d.id)}>
-                        {t('docs.action.addToLibrary')}
-                      </DropdownMenu.Item>
-                    )}
-                    {(d.lifecycle ?? 'permanent') !== 'temporary' ? (
-                      <DropdownMenu.Item className="menu-item" onSelect={() => void onSetLifecycle(d.id, 'temporary')}>
-                        {t('docs.action.markTemporary')}
-                      </DropdownMenu.Item>
-                    ) : (
-                      <DropdownMenu.Item className="menu-item" onSelect={() => void onSetLifecycle(d.id, 'permanent')}>
-                        {t('docs.action.markPermanent')}
-                      </DropdownMenu.Item>
-                    )}
-                    {(d.lifecycle ?? 'permanent') !== 'archived' ? (
-                      <DropdownMenu.Item className="menu-item" onSelect={() => void onSetLifecycle(d.id, 'archived')}>
-                        {t('docs.action.archive')}
-                      </DropdownMenu.Item>
-                    ) : (
-                      <DropdownMenu.Item className="menu-item" onSelect={() => void onSetLifecycle(d.id, 'permanent')}>
-                        {t('docs.action.unarchive')}
-                      </DropdownMenu.Item>
-                    )}
-                    {section.kind === 'project' && (d.collections ?? []).some((c) => c.id === section.id) && (
-                      <DropdownMenu.Item
-                        className="menu-item"
-                        onSelect={() => void onRemoveFromCollection(d.id, section.id)}
+                  <Button
+                    size="sm"
+                    onClick={() => void cancelActiveDocTask()}
+                    title={t(rowTask.kind === 'ocr' ? 'docs.cancelOcrTitle' : 'docs.cancelTaskTitle')}
+                  >
+                    {t('docs.cancel')}
+                  </Button>
+                </>
+              ) : (
+                <>
+                  <Button
+                    size="sm"
+                    disabled={busy !== null || previewLoading || ACTIVE_STATUSES.has(d.status)}
+                    onClick={() => void onPreview(d)}
+                    title={t('docs.previewTitle')}
+                  >
+                    {previewLoading ? t('docs.previewBusy') : t('docs.preview')}
+                  </Button>
+                  <DropdownMenu.Root
+                    open={menuOpenId === d.id}
+                    onOpenChange={(open) => setMenuOpenId(open ? d.id : null)}
+                  >
+                    <DropdownMenu.Trigger asChild>
+                      <button
+                        type="button"
+                        className="doc-row-menu-btn"
+                        disabled={busy !== null}
+                        aria-label={t('docs.moreActions', { title: d.title })}
                       >
-                        {t('docs.action.removeFromProject')}
-                      </DropdownMenu.Item>
-                    )}
-                  </DropdownMenu.Content>
-                </DropdownMenu.Portal>
-              </DropdownMenu.Root>
-            )}
-            <Button
-              size="sm"
-              disabled={
-                busy !== null || ACTIVE_STATUSES.has(d.status) || (activeTask?.documentIds.includes(d.id) ?? false)
-              }
-              onClick={() => setConfirmDelete(d)}
-            >
-              {t('docs.delete')}
-            </Button>
+                        ⋯
+                      </button>
+                    </DropdownMenu.Trigger>
+                    <DropdownMenu.Portal>
+                      <DropdownMenu.Content className="menu" align="end" sideOffset={4}>
+                        {canDocTasks && (
+                          <DropdownMenu.Item className="menu-item" disabled={activeTask !== null} onSelect={() => void onSummarize(d)}>
+                            {d.summary ? t('docs.summarizeAgain') : t('docs.summarize')}
+                          </DropdownMenu.Item>
+                        )}
+                        {canDocTasks && (
+                          <DropdownMenu.Item className="menu-item" disabled={activeTask !== null} onSelect={() => setTranslateDoc(d)}>
+                            {t('docs.translate')}
+                          </DropdownMenu.Item>
+                        )}
+                        {/* Contextual: make a detected scan searchable (OCR). */}
+                        {showOcr && (
+                          <DropdownMenu.Item className="menu-item" disabled={activeTask !== null} onSelect={() => void onMakeSearchable(d)}>
+                            {t('docs.makeSearchable')}
+                          </DropdownMenu.Item>
+                        )}
+                        {/* Build deep index — disappears once the doc is deeply indexed (Task 2);
+                            C4: a legacy not-fully-chunked doc offers "Re-index for deep index". */}
+                        {canDeepIndex && (
+                          <DropdownMenu.Item className="menu-item" disabled={activeTask !== null} onSelect={() => void onBuildDeepIndex(d)}>
+                            {t(d.fullyChunked === false ? 'docs.deepIndex.reindexFirst' : 'docs.deepIndex.build')}
+                          </DropdownMenu.Item>
+                        )}
+                        <DropdownMenu.Item
+                          className="menu-item"
+                          disabled={ACTIVE_STATUSES.has(d.status) || activeTask !== null}
+                          onSelect={() => void run(`reindex-${d.id}`, () => window.api.reindexDocument(d.id))}
+                        >
+                          {t('docs.reindex')}
+                        </DropdownMenu.Item>
+                        {d.origin && (
+                          <DropdownMenu.Item
+                            className="menu-item"
+                            disabled={ACTIVE_STATUSES.has(d.status)}
+                            onSelect={() => void onExport(d)}
+                          >
+                            {t('docs.export')}
+                          </DropdownMenu.Item>
+                        )}
+                        {/* Organize (plan §12.3): add to a project, keep in Library, lifecycle,
+                            or remove from the current project. Indexed docs only. */}
+                        {d.status === 'indexed' && (
+                          <>
+                            <DropdownMenu.Separator className="menu-sep" />
+                            {activeProjects.length > 0 ? (
+                              <DropdownMenu.Item className="menu-item" onSelect={() => setAddToProjectFor([d.id])}>
+                                {t('docs.action.moveToProject')}
+                              </DropdownMenu.Item>
+                            ) : (
+                              <DropdownMenu.Item className="menu-item" onSelect={() => setProjectModal({ mode: 'create', name: '' })}>
+                                {t('docs.section.newProject')}
+                              </DropdownMenu.Item>
+                            )}
+                            {!(d.collections ?? []).some((c) => c.type === 'library') && (
+                              <DropdownMenu.Item className="menu-item" onSelect={() => void onKeepInLibrary(d.id)}>
+                                {t('docs.action.addToLibrary')}
+                              </DropdownMenu.Item>
+                            )}
+                            {(d.lifecycle ?? 'permanent') !== 'temporary' ? (
+                              <DropdownMenu.Item className="menu-item" onSelect={() => void onSetLifecycle(d.id, 'temporary')}>
+                                {t('docs.action.markTemporary')}
+                              </DropdownMenu.Item>
+                            ) : (
+                              <DropdownMenu.Item className="menu-item" onSelect={() => void onSetLifecycle(d.id, 'permanent')}>
+                                {t('docs.action.markPermanent')}
+                              </DropdownMenu.Item>
+                            )}
+                            {(d.lifecycle ?? 'permanent') !== 'archived' ? (
+                              <DropdownMenu.Item className="menu-item" onSelect={() => void onSetLifecycle(d.id, 'archived')}>
+                                {t('docs.action.archive')}
+                              </DropdownMenu.Item>
+                            ) : (
+                              <DropdownMenu.Item className="menu-item" onSelect={() => void onSetLifecycle(d.id, 'permanent')}>
+                                {t('docs.action.unarchive')}
+                              </DropdownMenu.Item>
+                            )}
+                            {section.kind === 'project' && (d.collections ?? []).some((c) => c.id === section.id) && (
+                              <DropdownMenu.Item className="menu-item" onSelect={() => void onRemoveFromCollection(d.id, section.id)}>
+                                {t('docs.action.removeFromProject')}
+                              </DropdownMenu.Item>
+                            )}
+                          </>
+                        )}
+                        {/* Destructive Delete: separated, danger-styled, behind the ConfirmDialog
+                            (icon + word, never color alone). Never an equal-weight surface button. */}
+                        <DropdownMenu.Separator className="menu-sep" />
+                        <DropdownMenu.Item
+                          className="menu-item danger"
+                          disabled={ACTIVE_STATUSES.has(d.status)}
+                          onSelect={() => setConfirmDelete(d)}
+                        >
+                          <span aria-hidden="true">🗑</span> {t('docs.delete')}
+                        </DropdownMenu.Item>
+                      </DropdownMenu.Content>
+                    </DropdownMenu.Portal>
+                  </DropdownMenu.Root>
+                </>
+              )}
+            </div>
           </div>
-        </div>
-      ))}
+        )
+      })}
         </div>
       </div>{/* /docs-layout */}
 
@@ -1242,6 +1300,20 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
         onCancel={() => setConfirmDelete(null)}
       >
         <p className="hint">{t('docs.deleteConfirm.body')}</p>
+      </ConfirmDialog>
+
+      <ConfirmDialog
+        open={confirmBulkDelete}
+        title={tCount('docs.bulk.deleteConfirm.title', selected.size)}
+        confirmLabel={t('docs.bulk.delete')}
+        t={t}
+        onConfirm={() => {
+          setConfirmBulkDelete(false)
+          void onBulkDelete()
+        }}
+        onCancel={() => setConfirmBulkDelete(false)}
+      >
+        <p className="hint">{t('docs.bulk.deleteConfirm.body')}</p>
       </ConfirmDialog>
 
       <ConfirmDialog

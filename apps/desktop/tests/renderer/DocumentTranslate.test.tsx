@@ -81,7 +81,9 @@ describe('DocumentsScreen — Translate action (Phase 34)', () => {
     render(<DocumentsScreen />)
 
     await screen.findByText('contract.pdf')
-    await user.click(screen.getByRole('button', { name: /^translate$/i }))
+    // Translate now lives in the per-row "⋯" overflow (§11.6).
+    await user.click(screen.getByRole('button', { name: 'More actions for contract.pdf' }))
+    await user.click(await screen.findByRole('menuitem', { name: /^translate$/i }))
 
     // The target choice modal: v1 targets are German and English only.
     expect(await screen.findByText(/Translate "contract.pdf"/)).toBeInTheDocument()
@@ -119,7 +121,8 @@ describe('DocumentsScreen — Translate action (Phase 34)', () => {
     })
     render(<DocumentsScreen />)
     await screen.findByText('contract.pdf')
-    await user.click(screen.getByRole('button', { name: /^translate$/i }))
+    await user.click(screen.getByRole('button', { name: 'More actions for contract.pdf' }))
+    await user.click(await screen.findByRole('menuitem', { name: /^translate$/i }))
     await user.click(await screen.findByRole('button', { name: /to english/i }))
     expect(startDocTask).toHaveBeenCalledWith({
       kind: 'translation',
@@ -139,7 +142,8 @@ describe('DocumentsScreen — Translate action (Phase 34)', () => {
     })
     render(<DocumentsScreen />)
     await screen.findByText('contract.pdf')
-    await user.click(screen.getByRole('button', { name: /^translate$/i }))
+    await user.click(screen.getByRole('button', { name: 'More actions for contract.pdf' }))
+    await user.click(await screen.findByRole('menuitem', { name: /^translate$/i }))
     await user.click(await screen.findByRole('button', { name: /to german/i }))
     await user.click(await screen.findByRole('button', { name: /^cancel$/i }))
     expect(cancelDocTask).toHaveBeenCalled()
@@ -159,7 +163,8 @@ describe('DocumentsScreen — Translate action (Phase 34)', () => {
     })
     render(<DocumentsScreen />)
     await screen.findByText('contract.pdf')
-    await user.click(screen.getByRole('button', { name: /^translate$/i }))
+    await user.click(screen.getByRole('button', { name: 'More actions for contract.pdf' }))
+    await user.click(await screen.findByRole('menuitem', { name: /^translate$/i }))
     await user.click(await screen.findByRole('button', { name: /to german/i }))
     expect(
       await screen.findByText(/password is being changed/i, undefined, { timeout: 3000 })
@@ -178,10 +183,13 @@ describe('DocumentsScreen — Translate action (Phase 34)', () => {
     // Provenance names the source document.
     expect(screen.getByText(/Translated from/)).toBeInTheDocument()
     expect(screen.getByText('contract.pdf', { selector: 'b' })).toBeInTheDocument()
-    // Exactly one Export button (the materialized doc only).
-    const exportButtons = screen.getAllByRole('button', { name: /^export$/i })
-    expect(exportButtons).toHaveLength(1)
-    await user.click(exportButtons[0])
+    // Export lives in the generated doc's "⋯" overflow (§11.6); the source doc's overflow has none.
+    await user.click(screen.getByRole('button', { name: 'More actions for contract.pdf' }))
+    expect(screen.queryByRole('menuitem', { name: /^export$/i })).not.toBeInTheDocument()
+    await user.keyboard('{Escape}')
+    await user.click(screen.getByRole('button', { name: 'More actions for contract (Deutsch).md' }))
+    const exportItem = await screen.findByRole('menuitem', { name: /^export$/i })
+    await user.click(exportItem)
     expect(exportDocument).toHaveBeenCalledWith('d2')
   })
 

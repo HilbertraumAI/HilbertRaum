@@ -2,6 +2,7 @@
 import type { ReactNode } from 'react'
 import { describe, it, expect, vi, afterEach, beforeAll } from 'vitest'
 import { render, screen, cleanup } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { HomeScreen } from '../../src/renderer/screens/HomeScreen'
 import { ChatScreen } from '../../src/renderer/screens/ChatScreen'
 import { DocumentsScreen } from '../../src/renderer/screens/DocumentsScreen'
@@ -190,6 +191,7 @@ describe('German render smokes (Phase 40)', () => {
   })
 
   it('DocumentsScreen renders the German deep-index action + coverage meter (whole-document-analysis §5.2)', async () => {
+    const user = userEvent.setup()
     stubApi({
       listCollections: vi.fn(async () => []),
       listDocuments: vi.fn(async () => [
@@ -211,9 +213,11 @@ describe('German render smokes (Phase 40)', () => {
       getAppStatus: vi.fn(async () => appStatus())
     })
     render(german(<DocumentsScreen />))
-    // The "Build deep index" row action renders its German label (no tree/node jargon).
+    await screen.findByText('bericht.pdf')
+    // The "Build deep index" action renders its German label inside the "⋯" overflow (§11.6).
+    await user.click(screen.getByRole('button', { name: t('de', 'docs.moreActions', { title: 'bericht.pdf' }) }))
     expect(
-      await screen.findByRole('button', { name: t('de', 'docs.deepIndex.build') })
+      await screen.findByRole('menuitem', { name: t('de', 'docs.deepIndex.build') })
     ).toBeInTheDocument()
   })
 

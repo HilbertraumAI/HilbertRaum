@@ -177,7 +177,9 @@ describe('DocumentsScreen — Build deep index + C4 gate', () => {
     })
     render(<DocumentsScreen />)
     await screen.findByText('report.pdf')
-    await user.click(screen.getByRole('button', { name: t('en', 'docs.deepIndex.build') }))
+    // "Build deep index" now lives in the per-row "⋯" overflow (§11.6).
+    await user.click(screen.getByRole('button', { name: t('en', 'docs.moreActions', { title: 'report.pdf' }) }))
+    await user.click(await screen.findByRole('menuitem', { name: t('en', 'docs.deepIndex.build') }))
     expect(startDocTask).toHaveBeenCalledWith({ kind: 'tree', documentIds: ['d1'] })
   })
 
@@ -192,9 +194,10 @@ describe('DocumentsScreen — Build deep index + C4 gate', () => {
     })
     render(<DocumentsScreen />)
     await screen.findByText('report.pdf')
-    // The C4 gate surfaces "Re-index for deep index", NOT a build button.
-    expect(screen.queryByRole('button', { name: t('en', 'docs.deepIndex.build') })).not.toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: t('en', 'docs.deepIndex.reindexFirst') }))
+    await user.click(screen.getByRole('button', { name: t('en', 'docs.moreActions', { title: 'report.pdf' }) }))
+    // The C4 gate surfaces "Re-index for deep index", NOT a "Build deep index" item.
+    expect(screen.queryByRole('menuitem', { name: t('en', 'docs.deepIndex.build') })).not.toBeInTheDocument()
+    await user.click(await screen.findByRole('menuitem', { name: t('en', 'docs.deepIndex.reindexFirst') }))
     expect(reindexDocument).toHaveBeenCalledWith('d1')
     expect(startDocTask).not.toHaveBeenCalled()
   })

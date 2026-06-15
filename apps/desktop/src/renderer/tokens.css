@@ -61,6 +61,11 @@
   --warning: var(--warning-700);
   /* Hover/selected tint for flat rows (nav items, list rows). */
   --surface-hover: var(--n-100);
+  /* Selected list row (the nav/history selection treatment, §12.1 #3): a soft fill +
+     an accent left bar. Distinct from :focus-visible (which keeps the accent ring) and
+     from hover. Reused by the Documents list rows + selection toolbar (§11.6). */
+  --row-selected-bg: var(--n-100);
+  --row-selected-bar: var(--accent-600); /* 4.55:1 on the surface — UI ≥3:1 ✓ */
   /* Subdued technical surfaces (code blocks, log tails) inside cards. */
   --code-bg: var(--n-100);
 
@@ -126,5 +131,9 @@
   --error: var(--error-500);
   --warning: var(--warning-500);
   --surface-hover: var(--surface-2);
+  /* On dark, the selected fill matches hover (--surface-2); the accent left bar is what
+     distinguishes a selected row from a merely hovered one. */
+  --row-selected-bg: var(--surface-2);
+  --row-selected-bar: var(--accent-500); /* 4.6:1 on --surface dark — UI ≥3:1 ✓ */
   --code-bg: rgba(0, 0, 0, 0.3);
 }

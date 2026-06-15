@@ -2,7 +2,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, cleanup, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { DocumentsScreen } from '../../src/renderer/screens/DocumentsScreen'
+import { DocumentsScreen, friendlyMimeLabel } from '../../src/renderer/screens/DocumentsScreen'
 import type { Collection, DocumentInfo, FilingSuggestionResult } from '../../src/shared/types'
 import { stubApi } from '../helpers/renderer'
 
@@ -195,7 +195,8 @@ describe('DocumentsScreen — organization', () => {
     const { addToCollection, setDocumentLifecycle, removeFromCollection } = tempStubs()
     render(<DocumentsScreen />)
     await screen.findByText('invoice.pdf')
-    await user.click(screen.getByRole('button', { name: 'Add to project…' }))
+    // Organize actions now live in the per-row "⋯" overflow (§11.6).
+    await user.click(screen.getByRole('button', { name: 'More actions for invoice.pdf' }))
     await user.click(await screen.findByRole('menuitem', { name: 'Keep in Library' }))
     await waitFor(() => expect(addToCollection).toHaveBeenCalledWith(['d1'], 'lib'))
     expect(setDocumentLifecycle).toHaveBeenCalledWith(['d1'], 'permanent')
@@ -207,7 +208,7 @@ describe('DocumentsScreen — organization', () => {
     const { addToCollection, setDocumentLifecycle, removeFromCollection } = tempStubs()
     render(<DocumentsScreen />)
     await screen.findByText('invoice.pdf')
-    await user.click(screen.getByRole('button', { name: 'Add to project…' }))
+    await user.click(screen.getByRole('button', { name: 'More actions for invoice.pdf' }))
     await user.click(await screen.findByRole('menuitem', { name: 'Move to project…' }))
     await user.click(await screen.findByRole('button', { name: 'Tax 2025' }))
     await waitFor(() => expect(addToCollection).toHaveBeenCalledWith(['d1'], 'tax'))
@@ -347,8 +348,13 @@ describe('DocumentsScreen', () => {
     stubApi({ listDocuments: vi.fn(async () => [doc({})]) })
     render(<DocumentsScreen />)
     expect(await screen.findByText('contract.pdf')).toBeInTheDocument()
+    // Status reads as a Badge (icon + word), never a button (Task 2).
     expect(screen.getByText('Ready')).toBeInTheDocument()
-    expect(screen.getByText('7')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Ready' })).not.toBeInTheDocument()
+    // The muted meta strip shows the friendly type, size, and section count (Task 5).
+    expect(screen.getByText('PDF · 2.0 KB · 7 sections')).toBeInTheDocument()
+    // The raw MIME type is never shown.
+    expect(screen.queryByText('application/pdf')).not.toBeInTheDocument()
   })
 
   it('shows the re-index banner for a document with stale embeddings (M7)', async () => {
@@ -392,8 +398,10 @@ describe('DocumentsScreen', () => {
     render(<DocumentsScreen />)
 
     await screen.findByText('contract.pdf')
-    // Phase 24: destructive delete goes through a ConfirmDialog, never straight through.
-    await user.click(screen.getByRole('button', { name: /^delete$/i }))
+    // Delete is a destructive item inside the per-row "⋯" overflow (§11.6), and still goes
+    // through a ConfirmDialog (Phase 24) — never an equal-weight surface button.
+    await user.click(screen.getByRole('button', { name: 'More actions for contract.pdf' }))
+    await user.click(await screen.findByRole('menuitem', { name: /delete/i }))
     expect(deleteDocument).not.toHaveBeenCalled()
 
     const dialog = await screen.findByRole('dialog')
@@ -411,7 +419,8 @@ describe('DocumentsScreen', () => {
     render(<DocumentsScreen />)
 
     await screen.findByText('contract.pdf')
-    await user.click(screen.getByRole('button', { name: /^delete$/i }))
+    await user.click(screen.getByRole('button', { name: 'More actions for contract.pdf' }))
+    await user.click(await screen.findByRole('menuitem', { name: /delete/i }))
     await user.click(within(await screen.findByRole('dialog')).getByRole('button', { name: /cancel/i }))
 
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
@@ -624,5 +633,103 @@ describe('DocumentsScreen', () => {
     const dialog = within(await screen.findByRole('dialog'))
     await user.click(dialog.getByRole('button', { name: /cancel/i }))
     expect(reindexDocument).not.toHaveBeenCalled()
+  })
+})
+
+// ---- §11.6 refinement: action overflow, MIME→label, selection toolbar, status badges ----
+describe('DocumentsScreen — action overflow + selection toolbar (§11.6)', () => {
+  it('friendlyMimeLabel maps known MIME types to friendly labels', () => {
+    expect(friendlyMimeLabel('application/pdf')).toBe('PDF')
+    expect(friendlyMimeLabel('text/markdown')).toBe('Markdown')
+    expect(friendlyMimeLabel('text/csv')).toBe('CSV')
+    expect(friendlyMimeLabel('application/vnd.openxmlformats-officedocument.wordprocessingml.document')).toBe('Word')
+    expect(friendlyMimeLabel('audio/mpeg')).toBe('MP3')
+    expect(friendlyMimeLabel('image/png')).toBe('PNG')
+    expect(friendlyMimeLabel('audio/aac')).toBe('Audio')
+    expect(friendlyMimeLabel('application/zip')).toBe('ZIP')
+    expect(friendlyMimeLabel(null)).toBe('—')
+  })
+
+  it('the "⋯" overflow exposes Summarize/Translate/Re-index/Build deep index/Add to project + a destructive Delete that opens ConfirmDialog', async () => {
+    const user = userEvent.setup()
+    stubApi({
+      listCollections: vi.fn(async () => [coll({ id: 'tax', name: 'Tax 2025' })]),
+      listDocuments: vi.fn(async () => [doc({ fullyChunked: true, treeStatus: null })])
+    })
+    render(<DocumentsScreen />)
+    await screen.findByText('contract.pdf')
+    // Only ONE inline action (Preview) sits on the row; everything else is behind "⋯".
+    expect(screen.getByRole('button', { name: /^preview$/i })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^summarize$/i })).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'More actions for contract.pdf' }))
+    expect(await screen.findByRole('menuitem', { name: 'Summarize' })).toBeInTheDocument()
+    expect(screen.getByRole('menuitem', { name: 'Translate' })).toBeInTheDocument()
+    expect(screen.getByRole('menuitem', { name: 'Re-index' })).toBeInTheDocument()
+    expect(screen.getByRole('menuitem', { name: 'Build deep index' })).toBeInTheDocument()
+    expect(screen.getByRole('menuitem', { name: 'Move to project…' })).toBeInTheDocument()
+
+    const del = screen.getByRole('menuitem', { name: /delete/i })
+    expect(del).toBeInTheDocument()
+    await user.click(del)
+    expect(await screen.findByRole('dialog')).toHaveTextContent(/Delete "contract.pdf"\?/)
+  })
+
+  it('the selection toolbar appears only on selection and its bulk Delete confirms then deletes', async () => {
+    const user = userEvent.setup()
+    const listDocuments = vi
+      .fn<() => Promise<DocumentInfo[]>>()
+      .mockResolvedValueOnce([doc({ id: 'd1' }), doc({ id: 'd2', title: 'terms.docx' })])
+      .mockResolvedValue([doc({ id: 'd2', title: 'terms.docx' })])
+    const deleteDocument = vi.fn(async () => {})
+    stubApi({ listDocuments, deleteDocument })
+    render(<DocumentsScreen onAskSelected={() => {}} />)
+    await screen.findByText('contract.pdf')
+
+    expect(
+      screen.queryByRole('group', { name: /actions for the selected documents/i })
+    ).not.toBeInTheDocument()
+    await user.click(screen.getByRole('checkbox', { name: /select contract.pdf/i }))
+    const bar = await screen.findByRole('group', { name: /actions for the selected documents/i })
+    expect(within(bar).getByText('1 selected')).toBeInTheDocument()
+
+    await user.click(within(bar).getByRole('button', { name: /^delete$/i }))
+    const dialog = await screen.findByRole('dialog')
+    expect(dialog).toHaveTextContent(/Delete 1 document\?/)
+    expect(deleteDocument).not.toHaveBeenCalled()
+    await user.click(within(dialog).getByRole('button', { name: /^delete$/i }))
+    await waitFor(() => expect(deleteDocument).toHaveBeenCalledWith('d1'))
+  })
+
+  it('Compare in the selection toolbar is enabled ONLY at exactly two selections', async () => {
+    const user = userEvent.setup()
+    stubApi({
+      listDocuments: vi.fn(async () => [
+        doc({ id: 'd1' }),
+        doc({ id: 'd2', title: 'terms.docx' }),
+        doc({ id: 'd3', title: 'memo.pdf' })
+      ])
+    })
+    render(<DocumentsScreen onAskSelected={() => {}} />)
+    await screen.findByText('contract.pdf')
+
+    await user.click(screen.getByRole('checkbox', { name: /select contract.pdf/i }))
+    expect(screen.getByRole('button', { name: /compare \(2\)/i })).toBeDisabled()
+    await user.click(screen.getByRole('checkbox', { name: /select terms.docx/i }))
+    expect(screen.getByRole('button', { name: /compare \(2\)/i })).toBeEnabled()
+    await user.click(screen.getByRole('checkbox', { name: /select memo.pdf/i }))
+    expect(screen.getByRole('button', { name: /compare \(2\)/i })).toBeDisabled()
+  })
+
+  it('a ready deep index reads as the "Deeply indexed" badge (not a button), and Build is gone from the overflow', async () => {
+    const user = userEvent.setup()
+    stubApi({ listDocuments: vi.fn(async () => [doc({ fullyChunked: true, treeStatus: 'ready' })]) })
+    render(<DocumentsScreen />)
+    await screen.findByText('contract.pdf')
+    expect(screen.getByText('Deeply indexed')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Deeply indexed' })).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'More actions for contract.pdf' }))
+    await screen.findByRole('menuitem', { name: 'Summarize' })
+    expect(screen.queryByRole('menuitem', { name: 'Build deep index' })).not.toBeInTheDocument()
   })
 })

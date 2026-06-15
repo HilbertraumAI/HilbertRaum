@@ -6,7 +6,53 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
-_Last updated: 2026-06-15 — **Bugfix: translation import failed with `Embedding request failed:
+_Last updated: 2026-06-15 — **Documents-screen UI refinement (renderer-only; extends the Phase
+23–27 wave).** A presentation-only pass on the Documents screen — **no IPC, schema, persistence,
+or main-process changes**; every document task keeps its existing handler/IPC. Folded into
+[`design-guidelines.md`](docs/design-guidelines.md) **§11.6** (the design record; code/i18n
+comments cite it). **What changed:** (1) the per-card bank of 6–7 equal-weight buttons collapsed
+to **one inline Preview (Secondary) + a "⋯" Radix `DropdownMenu` overflow** (Summarize/again,
+Translate, Re-index, Build deep index [hidden once deeply indexed], Make searchable (OCR) for
+scans, Add to project…, Export for generated docs, and a separated **danger Delete** behind the
+existing `ConfirmDialog`) — mirrors the chat `ConversationList` ⋯ pattern; trigger `aria-label`
+"More actions for <filename>", keyboard-tabbable, right-click opens it too. (2) **All state reads
+as Badges** (icon + word, never buttons): one processing/ready status badge + small **Summary**
+(neutral) and **Deeply indexed** (success) badges in one right-aligned cluster — the green "✓
+Deeply indexed" *button* and the scattered "Summary ✓" meta + blue "Temporary" badge are gone.
+(3) **Library/Temporary/Generated/Archived + project tags all render as the SAME neutral `Chip`**,
+grouped, separate from the status badges. (4) **Tall cards → compact list rows** (≥40px, ~56px;
+ellipsized filename + muted `--text-xs` meta "PDF · 2.0 KB · 7 sections"); hover highlight +
+right-click menu; **selected rows reuse the nav/history selection treatment** — new role tokens
+**`--row-selected-bg`** fill + **`--row-selected-bar`** accent left bar (per theme, ramp-reused),
+not an outline ring. ~3× more docs per screen. (5) **`friendlyMimeLabel`** (pure, exported,
+display-only — stored MIME unchanged) maps "application/pdf"→"PDF" etc. (6) **A non-stacking
+sticky selection toolbar** (Ask these documents · Compare (2), enabled only at exactly two ·
+Add to project… · mark Temporary/Archived · Delete behind `ConfirmDialog`) carries the
+multi-document ops so rows stay minimal. (7) **Refresh → quiet icon button** (new `refresh` glyph
+in `Icon`); Import files (Primary) + Import folder (Secondary) carry the toolbar. **Files:**
+`renderer/screens/DocumentsScreen.tsx`, `renderer/components/Icon.tsx`, `renderer/tokens.css`,
+`renderer/styles.css`, `shared/i18n/{en,de}.ts` (+`docs.moreActions`/`chip.generated`/
+`chip.archived`/`meta.sectionsCount`/`bulk.delete*`/`selectionAria`, EN/DE parity, D-L7 informal
+„du"). **Tests:** typecheck + `npm run build` clean; full vitest from `apps/desktop` **1353
+passed / 25 skipped** (+5; updated the Summary/Translate/Compare/Coverage/GermanSmoke +
+DocumentsScreen suites off the old button set / equal-weight Delete / "Deeply indexed" button /
+blue "Temporary" badge / raw "application/pdf"; added overflow-exposes-actions, MIME-helper,
+selection-toolbar + Compare-at-exactly-two, and status-as-Badge cases). Playwright `_electron`
+eyeball walk of the Documents screen in BOTH themes (empty, populated, "⋯" open, Summary +
+Deeply-indexed badges, Temporary/Generated/Archived chips, selection toolbar with two selected →
+Compare enabled). **Risks / watch items:** (a) **Location taxonomy ambiguity** — Library /
+Temporary / Generated / Archived are rendered as additive chips, but the data model mixes
+collection memberships (library/temporary/project) with a lifecycle enum (permanent/temporary/
+archived) and `origin` (generated); whether these are meant to be mutually-exclusive *locations*
+vs additive *flags* is unresolved. The UI was made consistent (uniform chips) **without** touching
+the data — a future pass should decide the taxonomy. (b) **Sub-nav vs global-rail stacking** —
+checked: the 80px compact global rail + the 200px Documents sub-nav (`.docs-rail`) is one icon
+rail + a 200px filter column (it collapses to a horizontal strip ≤760px), NOT the two-fat-columns
+problem the chat refinement fixed; no redesign this pass, flagged only as a watch item. **No
+version bump, no schema change. Next:** open work unchanged (Phase 30 big-slot/embeddings —
+D38–D43; owner-gated doc-org Phase E.2)._
+
+_(prior) 2026-06-15 — **Bugfix: translation import failed with `Embedding request failed:
 HTTP 500` (beta-tester report).** Symptom: translating a document ran to completion, then the
 materialized output failed to import with `Embedding request failed: HTTP 500`
 ([`e5.ts`](apps/desktop/src/main/services/embeddings/e5.ts)), surfaced to the user as "The task could

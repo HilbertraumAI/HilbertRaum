@@ -77,13 +77,15 @@ describe('DocumentsScreen — Compare action (Phase 35)', () => {
     render(<DocumentsScreen onAskSelected={() => {}} />)
     await screen.findByText('contract-v1.pdf')
 
+    // The selection toolbar (§11.6) holds Compare; it is present whenever there is a
+    // selection, but ENABLED only at exactly two.
     expect(screen.queryByRole('button', { name: /compare \(2\)/i })).not.toBeInTheDocument()
     await user.click(screen.getByLabelText('Select contract-v1.pdf for asking'))
-    expect(screen.queryByRole('button', { name: /compare \(2\)/i })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /compare \(2\)/i })).toBeDisabled()
     await user.click(screen.getByLabelText('Select contract-v2.pdf for asking'))
-    expect(screen.getByRole('button', { name: /compare \(2\)/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /compare \(2\)/i })).toBeEnabled()
     await user.click(screen.getByLabelText('Select unrelated.pdf for asking'))
-    expect(screen.queryByRole('button', { name: /compare \(2\)/i })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /compare \(2\)/i })).toBeDisabled()
   })
 
   it('runs the busy flow on BOTH rows, then reveals the report with provenance and opens it', async () => {
@@ -193,9 +195,9 @@ describe('DocumentsScreen — Compare action (Phase 35)', () => {
     expect(screen.getByText(/Comparison of/)).toBeInTheDocument()
     expect(screen.getByText('contract-v1.pdf', { selector: 'b' })).toBeInTheDocument()
     expect(screen.getByText('contract-v2.pdf', { selector: 'b' })).toBeInTheDocument()
-    const exportButtons = screen.getAllByRole('button', { name: /^export$/i })
-    expect(exportButtons).toHaveLength(1)
-    await user.click(exportButtons[0])
+    // Export lives in the report's "⋯" overflow (§11.6).
+    await user.click(screen.getByRole('button', { name: 'More actions for Comparison: contract-v1 vs contract-v2.md' }))
+    await user.click(await screen.findByRole('menuitem', { name: /^export$/i }))
     expect(exportDocument).toHaveBeenCalledWith('d9')
   })
 

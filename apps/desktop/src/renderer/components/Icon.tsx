@@ -17,6 +17,7 @@ export type IconName =
   | 'brain'
   | 'settings'
   | 'lock'
+  | 'refresh'
 
 export interface IconProps extends Omit<SVGProps<SVGSVGElement>, 'name'> {
   name: IconName
@@ -102,6 +103,16 @@ const GLYPHS: Record<IconName, Glyph> = {
       <>
         <circle cx="12" cy="12" r="3.1" />
         <path d="M15.15 4.9 14.8 3.15H9.2L8.85 4.9c-.5.2-.98.48-1.43.82l-1.72-.6-2.8 4.85 1.38 1.15a7.25 7.25 0 0 0 0 1.76L2.9 14.03l2.8 4.85 1.72-.6c.45.34.93.62 1.43.82l.35 1.75h5.6l.35-1.75c.5-.2.98-.48 1.43-.82l1.72.6 2.8-4.85-1.38-1.15a7.25 7.25 0 0 0 0-1.76l1.38-1.15-2.8-4.85-1.72.6a7.4 7.4 0 0 0-1.43-.82Z" />
+      </>
+    )
+  },
+
+  // Circular refresh arrow (single-arc Feather idiom), 24-grid 1.65 stroke like the set.
+  refresh: {
+    body: (
+      <>
+        <path d="M20 11.5a8 8 0 1 1-2.3-5.45" />
+        <path d="M20 3.5v4.2h-4.2" />
       </>
     )
   },
