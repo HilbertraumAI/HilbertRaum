@@ -910,6 +910,12 @@ only consumer**, so they are embedded **lazily** here, the first time a compare 
   **Acceptance — the mirror property:** swapping A and B yields the mirror-image diff (Only-A ↔ Only-B
   swap; Same/Different stable). The diff/reduce live in the manager (`runCompareSymmetricTrees`); the
   **pure `alignNodes`** lives in `compare.ts` so the mirror is unit-testable without the model.
+  **Lopsided-pair honesty (post-merge review M-1):** the 24-ceiling bounds the number of `generate`
+  calls (pairs ≤ the *smaller* section count), but a lopsided pair (e.g. A=3, B=40) still emits many
+  free Only-B notes; when those overflow the reduce input budget the belt condenses the tail. That is
+  flagged — `runCompareSymmetricTrees` returns `truncated`, and the report materializes
+  `compareSymmetricTruncationNotice` ("some sections were condensed … may not list every section-level
+  detail") — so the symmetric report never silently implies a complete two-way comparison (H8).
 - **(b) asymmetric A-driven** (the existing section-matched map-reduce over `VectorIndex`-scoped doc-B
   neighbours) — the labelled fallback when the two docs are **not** both deeply indexed. The materialized
   report now carries `compareAsymmetricNotice` ("one-directional — may under-report content found only in
@@ -929,7 +935,7 @@ still one model job at a time (chat is refused during compare) — **decision (c
 not its own DocTaskKind**. The node-cosine primitives (`nodeVectorSearch`/`loadNodeVectors`) read **only
 `tree_nodes`** — never the chunk `embeddings` table — so citation-grade chunk retrieval is untouched
 (§3.6); they are **not** `VectorIndex`. The compare in-document notices (`compareAsymmetricNotice`,
-`compareTruncationNotice`, `compareAttributionLine`) stay **English literals** by the existing
+`compareTruncationNotice`, `compareSymmetricTruncationNotice`, `compareAttributionLine`) stay **English literals** by the existing
 `compare.ts` precedent (the report body itself is in the documents' language — a D-L7 candidate, not a
 new i18n key).
 

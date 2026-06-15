@@ -126,6 +126,13 @@ export async function ensureNodeEmbeddings(
       needEmbed.map((r) => r.summary_text),
       { signal }
     )
+    // The embedder contract is one vector per input; fail loudly and locally if it isn't,
+    // rather than letting an undefined `v` throw opaquely inside `encodeVector` below.
+    if (vectors.length !== needEmbed.length) {
+      throw new Error(
+        `Node embedder returned ${vectors.length} vectors for ${needEmbed.length} summaries`
+      )
+    }
     for (let i = 0; i < needEmbed.length; i++) {
       const v = vectors[i]
       embedded.push({ row: needEmbed[i], blob: encodeVector(v), dims: v.length })

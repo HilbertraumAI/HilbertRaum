@@ -75,6 +75,7 @@ import {
   compareReducePrompt,
   compareAttributionLine,
   compareTruncationNotice,
+  compareSymmetricTruncationNotice,
   compareAsymmetricNotice,
   compareNodePairPrompt,
   comparePairOutputCap,
@@ -1047,6 +1048,11 @@ export class DocTaskManager {
         : null
       if (symmetric) {
         report = symmetric.report
+        // A lopsided pair (few aligned sections but many Only-A/Only-B notes) can overflow
+        // the reduce input; the belt then drops the tail (the Only-B notes are last), so the
+        // symmetric report would silently under-report. Surface the same honest notice mode
+        // (b) uses rather than implying a complete two-way comparison (H8).
+        truncated = symmetric.truncated
       } else {
         const sectionMatched = await this.runCompareSectionMatched(task, runtime, docA, docB)
         report = sectionMatched.report
@@ -1060,7 +1066,9 @@ export class DocTaskManager {
     const markdown =
       `> ${compareAttributionLine(runtime.modelId)}\n\n` +
       (asymmetric ? `${compareAsymmetricNotice(docB.title)}\n\n` : '') +
-      (truncated ? `${compareTruncationNotice(docA.title)}\n\n` : '') +
+      (truncated
+        ? `${asymmetric ? compareTruncationNotice(docA.title) : compareSymmetricTruncationNotice()}\n\n`
+        : '') +
       `${report}\n`
     const newDocId = await this.materializeDocument(
       task,
@@ -1276,7 +1284,7 @@ export class DocTaskManager {
     runtime: ModelRuntime,
     docA: { id: string; title: string },
     docB: { id: string; title: string }
-  ): Promise<{ report: string } | null> {
+  ): Promise<{ report: string; truncated: boolean } | null> {
     const db = this.deps.getDb()
     const signal = task.controller.signal
     const contextTokens = this.deps.getContextTokens()
@@ -1338,8 +1346,14 @@ export class DocTaskManager {
     // ignores maxTokens must still not overflow the reduce call's input budget).
     const budgetWords = compareBudgetWords(contextTokens)
     let reduceInput = partials
+    // When the notes overflow the reduce budget, the belt cuts the tail — and the Only-B
+    // notes are appended last, so a lopsided pair would silently lose B-unique content.
+    // Flag it so the caller materializes the honest truncation notice (H8 — never imply a
+    // complete two-way comparison when content was dropped).
+    let truncated = false
     if (partials.reduce((n, p) => n + approxTokenCount(p), 0) > budgetWords) {
       reduceInput = [truncateToApproxTokens(partials.join('\n\n'), budgetWords)]
+      truncated = true
     }
     const report = await this.generate(
       runtime,
@@ -1351,7 +1365,7 @@ export class DocTaskManager {
     )
     if (report.length === 0) throw new Error(tMain('main.task.genericFailure'))
     task.status.progress.stepsDone += 1
-    return { report }
+    return { report, truncated }
   }
 
   /**

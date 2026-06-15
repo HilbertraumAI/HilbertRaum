@@ -272,6 +272,21 @@ export function compareTruncationNotice(titleA: string): string {
   )
 }
 
+/**
+ * Honest in-document notice for the SYMMETRIC mode (c) when the aligned-section notes
+ * overflowed the reduce budget and the tail was condensed: unlike mode (b) this is not
+ * "the beginning of A" — sections from either document may have been summarized away, so
+ * the wording stays document-neutral (H8 — never imply a complete two-way comparison when
+ * content was dropped). English literal, matching the `compareTruncationNotice` precedent.
+ */
+export function compareSymmetricTruncationNotice(): string {
+  return (
+    '> ⚠ These documents are long — some sections were condensed to fit, so this ' +
+    'comparison may not list every section-level detail. Both documents stay fully ' +
+    'searchable and answerable in chat.'
+  )
+}
+
 /** `"report.pdf" + "draft.docx"` → `"Comparison: report vs draft.md"`. */
 export function compareDocumentTitle(titleA: string, titleB: string): string {
   const base = (t: string): string => {

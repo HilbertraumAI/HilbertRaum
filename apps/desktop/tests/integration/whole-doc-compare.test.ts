@@ -10,7 +10,10 @@ import {
   type IngestionDeps
 } from '../../src/main/services/ingestion'
 import { DocTaskManager, type DocTaskDeps } from '../../src/main/services/doctasks'
-import { compareAsymmetricNotice } from '../../src/main/services/doctasks/compare'
+import {
+  compareAsymmetricNotice,
+  compareSymmetricTruncationNotice
+} from '../../src/main/services/doctasks/compare'
 import { decodeVector } from '../../src/main/services/embeddings'
 import { createMockEmbedder } from '../../src/main/services/embeddings/mock'
 import type { Embedder } from '../../src/main/services/embeddings'
@@ -227,6 +230,29 @@ describe('symmetric both-trees compare (mode c) — lazy node embeddings', () =>
     // Only the materialize embed (1) — node vectors refilled from summary_cache, not the sidecar.
     expect(embedder.embedCalls - before).toBe(1)
     expect(nodeRows(a).every((r) => r.embedding_blob !== null)).toBe(true)
+  })
+
+  it('labels the symmetric report truncated when a lopsided pair overflows the reduce budget (M-1)', async () => {
+    // A small doc A (few level-1 sections) vs a large doc B (many sections): the symmetric
+    // path is still taken (min sections ≤ ceiling), aligns min(A,B) pairs, and attributes the
+    // many leftover B sections to Only-B notes. Those notes overflow the small reduce budget,
+    // so the belt condenses the tail — which must surface the honest truncation notice rather
+    // than implying a complete two-way comparison (H8).
+    const a = await importDoc(1200, 'a.txt', 'alpha')
+    const b = await importDoc(12000, 'b.txt', 'beta')
+    const manager = makeManager({
+      runtime: scriptedRuntime(),
+      ingestionDeps: () => ({ embedder: createMockEmbedder() })
+    })
+    await buildTreeFor(manager, a)
+    await buildTreeFor(manager, b)
+
+    const r = await runCompare(manager, a, b)
+    expect(r.state).toBe('done')
+    // Still the SYMMETRIC path (not the A-driven asymmetric fallback) — no one-directional label.
+    expect(r.text).not.toContain('one-directional')
+    // …but honestly flagged as condensed.
+    expect(r.text).toContain(compareSymmetricTruncationNotice())
   })
 
   it('re-embeds under a NEW embedder (H5 staleness) — never a silent empty alignment', async () => {

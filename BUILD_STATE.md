@@ -6,7 +6,35 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
-_Last updated: 2026-06-15 — **Whole-document analysis — Phase 4 (symmetric compare + lazy node
+_Last updated: 2026-06-15 — **Whole-document analysis — post-merge code review closeout.** Reviewed the
+full wave diff (`6c27cef..f3ae4e4`) against the seven priority areas (shared-connection transactions,
+the arbiter handshake, H5 staleness, mirror symmetry, grounding honesty, offline/no-leak, compare cost).
+**No High/Critical findings** — the concurrency machinery, transaction discipline, and the
+H5/M2/M13/mirror invariants all held. **Fixed (M-1, Medium — honesty):** a *lopsided* symmetric compare
+(few aligned sections but many free Only-A/Only-B notes, e.g. A=3 vs B=40 — admitted by the min-section
+gate) could let the reduce-input belt condense the note tail (Only-B notes are last) and silently
+under-report B, with **no** truncation notice — exactly the H8 failure mode the asymmetric label exists to
+prevent. `runCompareSymmetricTrees` ([`manager.ts`](apps/desktop/src/main/services/doctasks/manager.ts))
+now returns `truncated` when the belt fires, and `runCompare` materializes the new
+**`compareSymmetricTruncationNotice`** ([`compare.ts`](apps/desktop/src/main/services/doctasks/compare.ts) —
+document-neutral wording, NOT mode-(b)'s "beginning of A"; English literal per the existing notice
+precedent, EN/DE parity untouched). **Fixed (L-3, Low — robustness):** `ensureNodeEmbeddings`
+([`node-vectors.ts`](apps/desktop/src/main/services/analysis/node-vectors.ts)) now throws a clear error if
+the sidecar returns a vector count ≠ the input count, instead of an opaque `encodeVector(undefined)` throw.
+**Deferred (acknowledged, not fixed):** L-2 (dedup identical node summaries before the sidecar batch —
+efficiency), L-4 (`nodeVectorSearch` is reserved/unused in prod — semi-global QA is §14.8-deferred), L-5
+(`stampMetaEmbedder` silently no-ops on missing/malformed `tree_meta_json` — bookkeeping only; the
+authoritative scoping is `tree_nodes.embedding_model_id`), L-6 (verify the embedder sidecar serializes
+concurrent `embed` from the import loop — pre-existing architecture), and a naming nit ("greedy
+mutual-best-match" is really greedy global-best-first). **Docs:** the M-1 fix folded into
+[`rag-design.md`](docs/rag-design.md) §14.6; the spent `docs/whole-doc-analysis-review-prompt.md`
+**deleted** (its own header said to). **Tests:** typecheck clean, build OK, `npm test` **1346 passed /
+25 skipped** (+1: `whole-doc-compare.test.ts` "labels the symmetric report truncated when a lopsided pair
+overflows the reduce budget (M-1)" — asserts the notice appears AND the symmetric path was still taken,
+not the asymmetric fallback). No version bump, no schema change. **The whole-document-analysis feature
+remains COMPLETE (Phases 1–4 shipped); this is the review closeout.**_
+
+_(prior) 2026-06-15 — **Whole-document analysis — Phase 4 (symmetric compare + lazy node
 embeddings) + FEATURE CLOSEOUT.** Final phase of the whole-document-analysis plan (§6 Phase 4;
 mechanisms §4.3 symmetric compare, §3.1 node vectors). Completes the feature and folds the four-phase
 plan into a §-record. **The point:** make a long-document comparison HONEST and mirror-symmetric, and
