@@ -84,6 +84,19 @@ export const IPC = {
   getDocTask: 'doctasks:get',
   /** Cancel a task; with no jobId, cancels the currently active one. */
   cancelDocTask: 'doctasks:cancel',
+  /**
+   * Read-only coverage + provenance of a document's current summary (whole-document-analysis
+   * plan §5.1): how much of the document it covers (breadth) at what depth (tier), and the
+   * source-chunk lineage behind a deep-index summary. No model call. Content stays in the DB.
+   */
+  documentCoverage: 'analysis:coverage',
+  /**
+   * Read-only "list every X" aggregation (whole-document-analysis plan §4.2/§5.1, Phase 3):
+   * a pure GROUP BY over the precomputed `extraction_records` for one record type within a
+   * scope — ZERO model calls. Returns the provenance-backed list + the honest coverage line
+   * inputs (sections scanned/total/unparsed). Content stays in the DB (never logged/audited).
+   */
+  listAllExtractions: 'analysis:listAll',
   askDocuments: 'rag:ask',
   // Voice dictation (request/response; bytes in, text out, nothing stored)
   /** Transcribe recorded composer audio (16 kHz mono WAV bytes) into plain text. The

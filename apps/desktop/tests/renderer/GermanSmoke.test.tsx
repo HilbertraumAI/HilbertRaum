@@ -8,7 +8,7 @@ import { DocumentsScreen } from '../../src/renderer/screens/DocumentsScreen'
 import { ModelsScreen } from '../../src/renderer/screens/ModelsScreen'
 import { PrivacyTab } from '../../src/renderer/screens/settings/PrivacyTab'
 import { DiagnosticsTab } from '../../src/renderer/screens/settings/DiagnosticsTab'
-import { Banner, PasswordField, type Translator } from '../../src/renderer/components'
+import { Banner, CoverageMeter, PasswordField, type Translator } from '../../src/renderer/components'
 import { I18nProvider, UI_LANGUAGE_STORAGE_KEY } from '../../src/renderer/i18n'
 import { t } from '../../src/shared/i18n'
 import type { AppStatus, RuntimeStatus } from '../../src/shared/types'
@@ -187,6 +187,59 @@ describe('German render smokes (Phase 40)', () => {
     ).toBeInTheDocument()
     expect(screen.getByRole('button', { name: t('de', 'docs.suggest.apply') })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: t('de', 'docs.suggest.dismiss') })).toBeInTheDocument()
+  })
+
+  it('DocumentsScreen renders the German deep-index action + coverage meter (whole-document-analysis §5.2)', async () => {
+    stubApi({
+      listCollections: vi.fn(async () => []),
+      listDocuments: vi.fn(async () => [
+        {
+          id: 'd1',
+          title: 'bericht.pdf',
+          originalPath: null,
+          mimeType: 'application/pdf',
+          sizeBytes: 4096,
+          status: 'indexed' as const,
+          errorMessage: null,
+          chunkCount: 40,
+          fullyChunked: true,
+          treeStatus: null,
+          createdAt: '2026-01-01T00:00:00Z',
+          updatedAt: '2026-01-01T00:00:00Z'
+        }
+      ]),
+      getAppStatus: vi.fn(async () => appStatus())
+    })
+    render(german(<DocumentsScreen />))
+    // The "Build deep index" row action renders its German label (no tree/node jargon).
+    expect(
+      await screen.findByRole('button', { name: t('de', 'docs.deepIndex.build') })
+    ).toBeInTheDocument()
+  })
+
+  it('CoverageMeter renders its German breadth + depth copy (honesty layer)', () => {
+    render(
+      german(
+        <CoverageMeter
+          coverage={{ mode: 'tree', treeStatus: 'ready', chunksCovered: 40, chunksTotal: 40, tier: 1 }}
+        />
+      )
+    )
+    expect(screen.getByText(t('de', 'coverage.tree.whole'))).toBeInTheDocument()
+    expect(
+      screen.getByText(t('de', 'coverage.depth', { label: t('de', 'coverage.tier.1') }))
+    ).toBeInTheDocument()
+  })
+
+  it('CoverageMeter renders the German extract-listing copy (Phase 3 honesty)', () => {
+    render(
+      german(
+        <CoverageMeter
+          coverage={{ mode: 'extract', chunksCovered: 12, chunksTotal: 12, fullyChunked: true }}
+        />
+      )
+    )
+    expect(screen.getByText(t('de', 'coverage.extract.whole', { scanned: 12 }))).toBeInTheDocument()
   })
 
   it('ChatScreen documents-mode renders the German source picker (plan §13)', async () => {

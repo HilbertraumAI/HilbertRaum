@@ -6,7 +6,263 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
-_Last updated: 2026-06-15 — **Diagnostics copy/save + download resilience (beta-tester
+_Last updated: 2026-06-15 — **Whole-document analysis — Phase 4 (symmetric compare + lazy node
+embeddings) + FEATURE CLOSEOUT.** Final phase of the whole-document-analysis plan (§6 Phase 4;
+mechanisms §4.3 symmetric compare, §3.1 node vectors). Completes the feature and folds the four-phase
+plan into a §-record. **The point:** make a long-document comparison HONEST and mirror-symmetric, and
+make node vectors (stored NULL since Phase 1 — L6) earn their keep as their first and only consumer.
+**(1) Lazy node embeddings + node-cosine helper** (new
+[`services/analysis/node-vectors.ts`](apps/desktop/src/main/services/analysis/node-vectors.ts)):
+`ensureNodeEmbeddings(db, documentId, embedder)` embeds each tree node's `summary_text` on the **CPU
+embedder sidecar** (`--device none`, NOT the chat slot) in one batch, reusing the exact `encodeVector`
+LE-Float32 encoding, stores the blob in `tree_nodes.embedding_blob`/`dimensions`/`embedding_model_id`,
+and writes it back to `summary_cache` so a **rebuild refills from the cache** (0 sidecar calls — the
+rebuild mints fresh NULL-vector rows with the same `content_hash`). **Scoped by `embedding_model_id`
+[H5]:** a node under a different embedder (mock↔real / model swap) is **re-embedded** under the active
+one — a mixed-embedder alignment NEVER silently happens; stamps `tree_meta_json.embeddingModelId`.
+`nodeVectorSearch`/`loadNodeVectors` read **only `tree_nodes`** (never the chunk `embeddings` table —
+node vectors stay out of citation-grade chunk retrieval, §3.6); they are NOT `VectorIndex` [H4].
+**(2) Pure alignment** ([`doctasks/compare.ts`](apps/desktop/src/main/services/doctasks/compare.ts)):
+`alignNodes(a, b)` — **greedy mutual-best-match** by node-vector cosine with a **swap-invariant**
+tie-break (the canonical pair key) above `SYMMETRIC_MATCH_MIN_SCORE` (0.5) → pairs + unmatched-A +
+unmatched-B; pure ⇒ the **mirror property** (swap A/B ⇒ Only-A ↔ Only-B, Same/Different stable) is
+unit-tested without the model [M11]. Plus `compareNodePairPrompt` (equal-footing diff),
+`comparePairOutputCap`, `compareAsymmetricNotice`, `SYMMETRIC_COMPARE_CALL_CEILING` (24).
+**(3) Symmetric compare** ([`doctasks/manager.ts`](apps/desktop/src/main/services/doctasks/manager.ts)):
+`runCompare` now picks a mode — **(a)** single-pass (already symmetric, unchanged); **(c)
+`runCompareSymmetricTrees`** when BOTH docs have a `ready` tree under the active embedder AND the smaller
+has ≤ ceiling level-1 sections (`bothTreesReadyForSymmetric`): lazily embed both trees' nodes, align
+level-1 sections, diff each pair with one `generate`, attribute unmatched sections to Only-A/Only-B with
+NO model call (node summaries fed as notes — M2, never `[Sn]` citations), reduce into the four-section
+report; **(b)** the existing A-driven section-matched map-reduce as the LABELLED asymmetric fallback
+(`compareAsymmetricNotice` materialized into the report when the two docs aren't both deeply indexed —
+H8). The node-embed pass runs INSIDE the (non-yielding) compare DocTask, so it's still one model job at
+a time (chat is refused during compare). **Data contracts (now real):** `tree_nodes.embedding_blob`/
+`dimensions`/`embedding_model_id` columns are POPULATED (were NULL since Phase 1); `tree_meta_json.
+embeddingModelId` records the active embedder for the staleness guard; the node-cosine helper + the
+symmetric compare strategy + the embedder-staleness re-embed are the new machinery.
+**Decisions flagged (not silently made):** (a) **lazy-embed on first compare**, not an explicit
+"prepare compare" action (Q-default); (b) **fall back to the labelled asymmetric mode (b)** when a tree
+is missing, offering the existing per-doc "Build deep index" action rather than auto-building or
+requiring it (Q4-default); (c) the node-embed pass is **folded into `runCompare`**, NOT its own
+DocTaskKind (it's a sidecar embed, not a chat-slot job; the compare task already serializes). The compare
+in-document notices stay **English literals** (the existing `compareTruncationNotice`/`compareAttributionLine`
+precedent — the report body itself is in the documents' language; a D-L7 candidate, NOT a new i18n key,
+so EN/DE parity is untouched). **NOT built (deferred):** the collection "tree of trees"; a live full-scan
+for unmapped extract types; semi-global QA (node summaries as derived context); node vectors in chunk
+retrieval/citations; a symmetric compare above the 24-section ceiling (→ labelled asymmetric). **Tests:**
+typecheck clean, build OK, `npm test` **1345 passed / 25 skipped** (+12: unit
+[`node-align.test.ts`](apps/desktop/tests/unit/node-align.test.ts) — alignNodes identical→pair/orthogonal→
+unmatched, the **mirror** property incl. tied scores [swap-invariant tie-break], match-floor + dim-mismatch
+skip, `comparePairOutputCap` bounds; integration
+[`whole-doc-compare.test.ts`](apps/desktop/tests/integration/whole-doc-compare.test.ts) — symmetric path
+taken + node vectors populated under the active embedder = node count, second compare reuses [0 extra
+node-embeds], rebuild refills from `summary_cache` [0 sidecar], H5 re-embed under a NEW embedder [never a
+silent empty align], labelled asymmetric fallback reached only without both trees, node vectors persist +
+decode after a DB reopen [whole-file-encrypted round-trip]). No version bump, no schema change (Phase 1's
+nullable node-vector columns suffice). **FEATURE CLOSEOUT (doc-lifecycle):** the whole four-phase
+`docs/whole-document-analysis-plan.md` is condensed into **[`docs/rag-design.md`](docs/rag-design.md) §14
+(analysis design record, §14.1–§14.8)** and the plan file is **deleted** (full original incl. all three
+audit passes: `git show 4071685:docs/whole-document-analysis-plan.md`). §14.x anchors are stable; the two
+in-code "plan §x" path pointers ([`db.ts`](apps/desktop/src/main/services/db.ts) → §14.2,
+[`whole-doc-analysis.test.ts`](apps/desktop/tests/integration/whole-doc-analysis.test.ts) → §14.1–§14.3)
+are repointed (inline "plan §x" comments resolve via git history, per the doc-org precedent);
+[`known-limitations.md`](docs/known-limitations.md) compare entry updated (symmetric-when-both-deeply-
+indexed, else labelled one-directional). **Risks / next:** the symmetric path is O(sections) `generate`
+calls (bounded by the 24-section ceiling → labelled asymmetric above it) — a heavy but user-initiated
+background task on weak CPUs; the mock embedder is structure-only so semantic diff quality is a manual/
+PAID smoke, not the mock suite. **The whole-document-analysis feature is COMPLETE (Phases 1–4 shipped).**_
+
+_(prior) 2026-06-15 — **Whole-document analysis — Phase 3 (structured extract-then-aggregate).**
+Third phase of [`docs/whole-document-analysis-plan.md`](docs/whole-document-analysis-plan.md) (§6 Phase 3;
+mechanisms §3.3 schema, §4.2 extract+aggregate, §4.4 router, §5.1 IPC). Moves "list every X / how many"
+off top-k relevance and onto a precomputed, provenance-backed SQL aggregation answered at **zero
+query-time model calls** — exhaustive OVER INDEXED SECTIONS, never "complete" [H7]. **(1) Schema**
+([`db.ts`](apps/desktop/src/main/services/db.ts)): additive `extraction_records` table (one item row per
+surfaced item + one `__scan__` marker row/chunk recording `ok`/`unparsed`; `chunk_id` **FK ON DELETE
+CASCADE** ⇒ re-index self-invalidates [H1 free win, under `PRAGMA foreign_keys = ON`]) + `idx_extract_doc_type`/
+`idx_extract_chunk`; `documents.extract_status` column via `ensureColumn` (NULL|pending|extracting|ready|stale|
+failed, mirrors `tree_status`); `reconcileStuckExtracts` (mirror of `reconcileStuckTrees`, `extracting`→
+`pending`); re-index resets `extract_status`→`stale` in the chunk-replacement block (rows cascade away).
+**(2) Extract pass** (new [`services/analysis/extract.ts`](apps/desktop/src/main/services/analysis/extract.ts)):
+`extractDocument` — the second YIELDING build (same arbiter handshake/park/cancel/lock discipline as the
+tree, [H3/H9/H10]); one `generate`/chunk over the fixed v1 type set (`generic|date|amount|party|obligation`),
+strict JSON-array prompt at temp 0, tolerant `parseExtraction` (recovers fenced/prose-wrapped arrays;
+`[]` is a valid empty parse) + **retry-once**, then an `unparsed` `__scan__` marker — **never drops the
+chunk** [H7]; per-`(chunk_id, content_hash)` **resume cache** = **0** calls on re-run; per-chunk
+`try{BEGIN…COMMIT}catch{ROLLBACK}` [H11]; `normalized_value` dedup; node vectors out of scope.
+`aggregateExtractions` — query-time GROUP BY `normalized_value` through the shared
+`buildScopeFilter('document_id')` [M3], **0** model calls, returns items+counts+source-chunk provenance +
+`scannedChunks`/`totalChunks`/`unparsedChunks`/`fullyChunked`. **(3) DocTaskManager**
+([`doctasks/manager.ts`](apps/desktop/src/main/services/doctasks/manager.ts)): new `extract` `DocTaskKind`
++ `runExtract` (registers/unregisters the arbiter like `runTreeBuild`), validated like `tree` (one doc,
+runtime required, **`fully_chunked` gate [C4]**); `isYieldingKind` makes `abortActiveBuild`/`cancelDocTask`
+arbiter-reject treat extract like tree (chat-stream's pause-vs-refuse already keys off the arbiter).
+**(4) Router** (new [`services/analysis/router.ts`](apps/desktop/src/main/services/analysis/router.ts),
+pure): `routeQuestion` — EN+DE classification (list/every/each/how many/count + jede/alle/wie viele/
+sämtliche/liste/zähl), fixed precedence **explicit-button > compare(2 docs) > coverage-extract >
+tree-summary > relevance** [M7], closed-vocab→type synonym map (`mapQuestionToRecordType`, EN+DE, default
+generic), **low-confidence / no-extract-data / compare-without-2-docs → labelled relevance** (never an
+empty "no items" or a false "complete"). **(5) rag:ask wiring**
+([`registerRagIpc.ts`](apps/desktop/src/main/ipc/registerRagIpc.ts)): after scope resolve + filename
+auto-scope, a `coverage-extract` decision over a mapped pre-extracted type streams the deterministic
+listing (new [`services/analysis/listing-answer.ts`](apps/desktop/src/main/services/analysis/listing-answer.ts)
+— coverage line + per-item provenance + caveat, built via `tMain`) at 0 model calls; **everything else
+falls through to the existing relevance path byte-unchanged**. **(6) IPC**: `analysis:listAll`
+([`registerDocTasksIpc.ts`](apps/desktop/src/main/ipc/registerDocTasksIpc.ts)) → `ExtractionListing|null`
+(read-only, content stays in DB); mirrored in [`preload`](apps/desktop/src/preload/index.ts); channel in
+[`shared/ipc.ts`](apps/desktop/src/shared/ipc.ts). **(7) Shared contracts**
+([`shared/types.ts`](apps/desktop/src/shared/types.ts)): `ExtractRecordType`/`EXTRACT_RECORD_TYPES`,
+`ExtractStatus`, `ExtractionListing`/`ExtractionListingItem`/`ExtractionListingRequest`; `DocTaskKind +=
+'extract'`; `CoverageMode += 'extract'` + `CoverageInfo.unparsedChunks`/`fullyChunked` (the reserved Phase-2
+field, now real); `DocumentInfo.extractStatus` (threaded via `DocumentRow`/`rowToInfo`). **(8) Renderer**:
+`CoverageMeter` ([`CoverageMeter.tsx`](apps/desktop/src/renderer/components/CoverageMeter.tsx)) gains the
+`extract` listing copy ("every match … N sections scanned (k unparsed)", whole-document wording gated on
+`fullyChunked`, NEVER "complete"). **i18n**: EN+DE `analysis.kind.*`/`analysis.listing.*`/`coverage.extract.*`/
+`docs.task.extract*` (type-enforced parity; forbidden-UI-words honoured — "sections", no chunk/record/extract
+jargon; German flagged **D-L7**). **Decisions flagged (not silently made):** (a) extract is **manual-only**
+(started via `startDocTask`), NOT auto-enqueued at import — avoids surprise multi-minute CPU spend (Q4
+default); (b) a **separate `extract_status` column** (NOT folded into a shared `deep_index_status`) — tree +
+extract run independently; (c) an unmapped/ad-hoc "{X}" falls back to **labelled relevance** in v1 (no live
+full-scan task — deferred), so the 0-call completeness claim is only ever made for a mapped pre-extracted
+type. The chat listing surfaces its honesty IN-TEXT (coverage line + caveat) rather than threading a new
+per-message `CoverageInfo` payload (avoids a `messages`-table change); the `extract` CoverageMeter mode is
+wired for the meter component + future preview use. **NOT built (Phase 4):** symmetric/both-trees compare,
+node-vector align, node embeddings (node vectors stay NULL — L6); the collection "tree of trees"; a live
+full-scan for unmapped types. **Tests:** typecheck clean, build OK, `npm test` **1333 passed / 25 skipped**
+(+27: unit [`extract-router.test.ts`](apps/desktop/tests/unit/extract-router.test.ts) — router classification/
+precedence/low-confidence→relevance/open-vocab→type EN+DE + `parseExtraction` JSON tolerance/empty-vs-unparsed/
+unknown-type-coerce; integration [`whole-doc-extract.test.ts`](apps/desktop/tests/integration/whole-doc-extract.test.ts)
+— O(n) calls + per-chunk markers, unparsed marker [H7], warm-cache re-run = 0 calls, per-chunk ROLLBACK +
+connection-survives + resumable [H11], aggregation GROUP BY via buildScopeFilter = 0 calls + ground-truth
+count + per-item provenance, archived-excluded [M3], re-index cascade→stale [H1], honest listing answer
+"sections scanned"+caveat + unparsed surfaced; renderer [`Coverage.test.tsx`](apps/desktop/tests/renderer/Coverage.test.tsx)
+— extract meter whole-vs-sections + unparsed, never "complete"; +1 GermanSmoke extract meter). No version
+bump, no schema-version (additive table/column). **Risks / next:** the extract pass is a multi-minute
+serialized CPU pass on weak hardware (manual, size-unbounded — a UI trigger + size gate like the deep index
+is a follow-up); per-chunk recall/dedup/overlap caveats are surfaced, not solved (the H7 honesty point);
+**Next:** Phase 4 — symmetric, coverage-oriented compare + lazy node embeddings._
+
+_(prior) 2026-06-15 — **Whole-document analysis — Phase 2 (coverage meter + tiers +
+provenance UI).** Second phase of [`docs/whole-document-analysis-plan.md`](docs/whole-document-analysis-plan.md)
+(§6 Phase 2; mechanisms §4.5 coverage tiers, §5.1 IPC + `CoverageInfo`, §5.2 renderer). The
+honesty layer over Phase 1's deep index: surface BREADTH (whole document vs the most relevant
+passages) and DEPTH (tier) as two separate, honest statements — **breadth ≠ fidelity [C1/L2]**,
+"100%"/"deeply indexed" shown ONLY for a `ready` tree, and node summaries are NEVER `[Sn]`
+citations [M2]. **(1) Shared contracts** ([`shared/types.ts`](apps/desktop/src/shared/types.ts)):
+new `CoverageInfo` (`mode:'tree'|'relevance'|'capped'`, `treeStatus?`, `chunksCovered/Total`,
+`treeLevels?`, `tier?`, `truncated?`; `unparsedChunks` reserved for Phase 3), `DocumentCoverage`
+(`{coverage, provenance: Citation[]}`), `TreeBuildStatus`, `CoverageTier`; `DocumentSummary.tier?`;
+`DocumentInfo.treeStatus`/`fullyChunked`/`treeLevels` (additive/optional, threaded via
+`DocumentRow`/`rowToInfo`/`listDocuments`/`getDocument` in
+[`ingestion/index.ts`](apps/desktop/src/main/services/ingestion/index.ts); `parseSummary` now keeps
+`tier`). **(2) Coverage + provenance reader** (new
+[`services/analysis/coverage.ts`](apps/desktop/src/main/services/analysis/coverage.ts)):
+`reachableLeafChunkIds` (the PRODUCTION `tree_edges`→leaf-chunk walk, replacing Phase 1's test-only
+helper), `documentLeafProvenance` (leaf SOURCE chunks → `Citation[]`, M2-safe), `documentCoverage`
+(breadth+depth — ready ⇒ whole-document at tier; building/stale/pending ⇒ partial fraction, never
+100%; no tree ⇒ capped/beginning), plus `maxTreeLevel`/`nodeSummariesAtLevel` for the tiers. Pure DB
+reads, no model call; all CONTENT-derived (never logged/audited). **(3) Coverage tiers** in
+`runSummary` ([`doctasks/manager.ts`](apps/desktop/src/main/services/doctasks/manager.ts) new
+`summarizeFromTree`): requested via the `summary` task `params.tier` (no-arg = **Tier 1**, so the
+one-click summary is byte-unchanged) — **Tier 1** = stored root verbatim (**0** model calls, Q6);
+**Tier 2** = ONE reduce over the root's children (the layer that fit the root's single budget group,
+so always one window); **Tier 3** = ALL level-1 nodes reduced in budget batches **bounded by node
+count**, never document size. All tiers cover the whole document (`truncated:false`). **(4) IPC**:
+`analysis:coverage(documentId)` ([`registerDocTasksIpc.ts`](apps/desktop/src/main/ipc/registerDocTasksIpc.ts))
+→ `DocumentCoverage|null` (read-only; provenance only for a `ready`-tree summary); mirrored in
+[`preload`](apps/desktop/src/preload/index.ts); channel in
+[`shared/ipc.ts`](apps/desktop/src/shared/ipc.ts). **(5) Renderer**: new
+[`components/CoverageMeter.tsx`](apps/desktop/src/renderer/components/CoverageMeter.tsx) — `CoverageMeter`
+(breadth pill + depth line) and `TierMenu` (reusing the `DepthMenu` Radix pattern); the
+PreviewModal ([`DocumentsScreen.tsx`](apps/desktop/src/renderer/screens/DocumentsScreen.tsx)) renders
+the meter (augmenting the truncated banner), the tier selector (only with a ready deep index), and
+`SourcesDisclosure` provenance — fetched via `documentCoverage` on open; the chat
+[`Transcript`](apps/desktop/src/renderer/chat/Transcript.tsx) labels every grounded (cited) answer
+mode `relevance` ("the most relevant passages — not the whole document"); a **"Build deep index"** /
+**"Re-index for deep index"** (C4) / **"Deeply indexed"** badge row action on `DocumentsScreen`
+(`onBuildDeepIndex`/`onSummarizeTier`). **i18n**: new EN+DE `coverage.*` + `docs.deepIndex.*` +
+`docs.previewModal.sources` (type-enforced parity; forbidden-UI-words honoured — "deeply indexed"/
+"sections"/"passages", no tree/node/chunk/vector/embedding leak; German flagged for **D-L7**). **NOT
+built (Phases 3–4):** `extraction_records`/`extract.ts`, the "list every X" router rule, symmetric
+compare, node embeddings (node vectors stay NULL — L6). **Tests:** typecheck clean, build OK,
+`npm test` **1306 passed / 25 skipped** (+22: 8 integration in
+[`whole-doc-analysis.test.ts`](apps/desktop/tests/integration/whole-doc-analysis.test.ts) — ready-tree
+whole-document coverage at tier, reachable-leaves==chunk-count + leaf provenance [M2], tree-less
+capped truncated/whole, building reports partial-not-ready [C1], Tier 1/2/3 = 0/1/bounded calls +
+absent-param-defaults-Tier-1; 10 renderer in
+[`Coverage.test.tsx`](apps/desktop/tests/renderer/Coverage.test.tsx) — meter honesty [relevance label,
+ready whole+tier, building never 100%, capped never complete], chat relevance label on/off, Build-deep-
+index starts a `tree` task, C4 "Re-index first" re-indexes not a dead build, ready "Deeply indexed"
+badge, PreviewModal meter+selector from `analysis:coverage`; +2 GermanSmoke — deep-index action +
+CoverageMeter German). No version bump, no schema change (Phase 1's columns/tables suffice). **Risks /
+next:** the row "Build deep index" is offered on any indexed non-generated doc without a ready tree
+(user-initiated, may be a multi-minute CPU build on weak hardware); **Next:** Phase 3 —
+`extraction_records`/`extract.ts` + the "list all/every/how many" router rule._
+
+_(prior) 2026-06-15 — **Whole-document analysis — Phase 1 (cap honesty + ingest-time
+summary tree).** First phase of [`docs/whole-document-analysis-plan.md`](docs/whole-document-analysis-plan.md)
+(§6 Phase 1; mechanisms §3.1–§3.5, §4.1, §5.1). Moves whole-document coverage from query time
+to ingest time via a persistent hierarchical summary tree (RAPTOR-lite), and makes the
+1 000-chunk cap HONEST. Offline, one model job at a time, node vectors deferred (NULL) to Phase 4.
+**(1) Cap honesty [C1/C2/C4/M13].** New single source of truth `MAX_CHUNKS_PER_DOCUMENT`
+([`chunker.ts`](apps/desktop/src/main/services/ingestion/chunker.ts)); `processDocument`
+([`ingestion/index.ts`](apps/desktop/src/main/services/ingestion/index.ts)) now chunks with
+`maxChunks = cap + 1` and **rejects an over-cap document** with a persist-canonical
+`main.ingest.tooManyChunks` **BEFORE** the destructive `DELETE FROM chunks` (M13 — a re-index of
+an over-cap doc keeps its existing searchable chunks; the gate fails closed), and stamps a
+`documents.fully_chunked` marker at the ONE indexing-success site (every path funnels through it —
+C4), so "the stored chunks ARE the whole document" is provable. A legacy `fully_chunked IS NULL`
+doc must re-index before any deep index / 100 %-coverage. **(2) Schema** ([`db.ts`](apps/desktop/src/main/services/db.ts)):
+additive `tree_nodes` / `tree_edges` (polymorphic `child_id`, NO FK to chunks) / `summary_cache`
+tables in `SCHEMA`; `documents.tree_status` / `tree_meta_json` / `fully_chunked` columns via
+`ensureColumn`; `reconcileStuckTrees` (mirror of `reconcileStuckDocuments`, flips a stuck
+`building` → `pending`); **tree teardown** in the chunk-replacement block (`DELETE FROM tree_nodes`,
+edges cascade via `parent_id`; `tree_status` → `stale` when a tree existed — H1/H2). Everything
+inherits whole-file encryption; node summaries / cache are CONTENT (never logged/audited).
+**(3) Model-slot arbiter [H9/H10/M9]** (new [`services/analysis/model-slot-arbiter.ts`](apps/desktop/src/main/services/analysis/model-slot-arbiter.ts)):
+the single in-process owner of the chat runtime slot for a YIELDING build — `shouldYield`/`reacquire`
+(builder PARKS, does NOT return) / `acquireForChat` (chat requests a pause, awaits the handoff,
+gets a release fn) / `abort` (rejects the parked reacquire on cancel/lock/quit). **(4) Yielding
+per-node build** (new [`services/analysis/tree-build.ts`](apps/desktop/src/main/services/analysis/tree-build.ts)):
+packs chunks → summarizes each group into one fresh node → recurses to one root; **one
+`try{BEGIN…COMMIT}catch{ROLLBACK;rethrow}` per node** (H11 — a thrown insert never poisons the
+shared connection); summary text from the content cache keyed `(content_hash, model_id)` (C3 — a
+rebuild/resume over a warm cache costs **0** chat calls; node identity is a fresh row per
+position so boilerplate can't collapse the tree); **node vectors NULL** (L6 — embedded lazily in
+Phase 4); resume = discard partial tree + rebuild from cache; model pinned via `tree_meta.modelId`
+(M12). **(5) DocTaskManager** ([`doctasks/manager.ts`](apps/desktop/src/main/services/doctasks/manager.ts)):
+new `tree` DocTaskKind (validates `fully_chunked`), `runTreeBuild` (registers/unregisters with the
+arbiter), `isYieldingBuildActive` / `acquireChatSlot` / `abortActiveBuild`, and
+`maybeEnqueueTreeBuild` (auto-offer, size-gated on `planSummaryWindows().truncated`, runtime-gated →
+`pending`). `runSummary` now **serves the ready tree root verbatim** (`truncated:false`, 0 extra
+calls — M1) and falls back to the capped map-reduce when there is no tree. **(6) Chat handoff**
+([`chat-stream.ts`](apps/desktop/src/main/ipc/chat-stream.ts) now **async** + branches on the
+running task's kind; `withChatStream` acquires the slot before any model call and releases it in
+`finally`; callers `registerChatIpc`/`registerRagIpc` await it). Lock/quit
+([`registerWorkspaceIpc.ts`](apps/desktop/src/main/ipc/registerWorkspaceIpc.ts), `index.ts`
+`shutdown`) call `abortActiveBuild()` before the sidecar teardown (M9); `listDocuments`
+([`registerDocsIpc.ts`](apps/desktop/src/main/ipc/registerDocsIpc.ts)) reconciles stuck trees when
+no task is live, and import/reindex call `maybeEnqueueTreeBuild`. **i18n:** `main.ingest.tooManyChunks`
++ `docs.task.treeBusy`/`treeBusyTitle` (EN+DE, type-enforced parity; "deep index" is the user word —
+no chunk/node/tree jargon; German flagged for the standing **D-L7** review); `tooManyChunks` added
+to the D-L4 display map. **Docs:** plan status banner → "Phase 1 shipped"; `known-limitations.md`
+(over-cap rejection behavior change + deep-index coverage note). **NOT built (Phases 2–4):** the
+coverage-meter UI, `extraction_records`/`extract.ts`, symmetric compare, node embeddings.
+**Tests:** typecheck clean, build OK, `npm test` **1284 passed / 25 skipped** (+21: 6 unit
+[`model-slot-arbiter.test.ts`](apps/desktop/tests/unit/model-slot-arbiter.test.ts) — pause/resume,
+last-chat-resumes, abort-rejects, no-hang-on-finish, idempotent release; 15 integration
+[`whole-doc-analysis.test.ts`](apps/desktop/tests/integration/whole-doc-analysis.test.ts) — over-cap
+rejection + never-partial, M13 re-index-fails-closed, `fully_chunked`, structural root→every-leaf
+incl. the last chunk [M11], tree-first summary [M1], tree-less fallback, warm-cache rebuild = 0
+calls + re-index→stale→cache reuse despite chunk-id churn [C3/H1/H2], C4 legacy gate, H11
+ROLLBACK + connection survives, H10 chat-pauses-build-resumes-in-session + cancel-rejects-parked,
+DB-reopen persistence, reconcileStuckTrees). No version bump. **Risks / next:** auto-enqueue runs
+a multi-minute serialized build on weak CPUs (size-gated to docs the capped summary can't cover);
+the chat↔chat double-send race in the now-async guard is theoretical (UI prevents it) and can't
+cause two model jobs; **Next:** Phase 2 — `CoverageInfo` + the coverage-meter/tier/provenance UI._
+
+_(prior) 2026-06-15 — **Diagnostics copy/save + download resilience (beta-tester
 feedback).** Three small improvements, rebased on top of the 0.1.21 document-organization wave.
 **(1) Copy buttons** on the Settings → "Diagnostics (advanced)" cards: **App & runtime**, **Hardware
 benchmark**, and **Logs** each gained a **Copy** button that writes a plain-text rendering of exactly

@@ -71,6 +71,7 @@ describe('localizeServerCopy (D-L4)', () => {
       'main.ingest.sourceMissing',
       'main.ingest.interrupted',
       'main.ingest.fileTooLarge',
+      'main.ingest.tooManyChunks',
       'main.ingest.parseTimeout',
       'main.rag.noContext',
       'main.rag.reindexNeeded',

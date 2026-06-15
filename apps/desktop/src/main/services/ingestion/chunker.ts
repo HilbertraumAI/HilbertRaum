@@ -32,11 +32,20 @@ export interface ChunkDefaults {
   maxChunks: number
 }
 
+/**
+ * The single source of truth for the per-document chunk cap (whole-document-analysis
+ * plan C2). It is referenced by `CHUNK_DEFAULTS.maxChunks`, the over-cap upload gate in
+ * `processDocument`, the (future) coverage math, and the test fixtures — change it in one
+ * place. A document that would exceed this is REJECTED at index time (plan C1), never
+ * silently truncated, so every indexed document is the WHOLE document (`fully_chunked`).
+ */
+export const MAX_CHUNKS_PER_DOCUMENT = 1000
+
 /** Spec §7.7 chunking defaults. */
 export const CHUNK_DEFAULTS: ChunkDefaults = {
   chunkSizeTokens: 500,
   chunkOverlapTokens: 80,
-  maxChunks: 1000
+  maxChunks: MAX_CHUNKS_PER_DOCUMENT
 }
 
 export type ChunkOptions = Partial<ChunkDefaults>
@@ -198,8 +207,15 @@ function coalesceSegments(segments: ExtractedSegment[]): ExtractedSegment[] {
 /**
  * Chunk extracted segments into overlapping windows. Each window is at most
  * `chunkSizeTokens` tokens; consecutive windows overlap by `chunkOverlapTokens`.
- * The global chunk count is capped at `maxChunks` (spec §7.7 MVP guard) — once the
- * cap is hit, remaining text is dropped (the document still reaches `indexed`).
+ * The global chunk count is capped at `maxChunks` (spec §7.7 MVP guard).
+ *
+ * NOTE (whole-document-analysis plan C1/M13): this function still STOPS at `maxChunks`
+ * as a memory guard, but it is no longer the honesty boundary. `processDocument` passes
+ * `maxChunks = MAX_CHUNKS_PER_DOCUMENT + 1` and REJECTS the document when the result
+ * exceeds the real cap — *before* the destructive chunk replacement — so an over-cap
+ * document is failed with a friendly "split it" message instead of being silently
+ * truncated to its beginning. Callers that pass no `maxChunks` keep the legacy
+ * truncate-at-1000 behaviour (tests only).
  */
 export function chunkSegments(
   segments: ExtractedSegment[],

@@ -1,0 +1,156 @@
+import { describe, it, expect } from 'vitest'
+import {
+  ModelSlotArbiter,
+  SlotAbortedError
+} from '../../src/main/services/analysis/model-slot-arbiter'
+
+// Whole-document-analysis plan §4.1 (H9/H10): the single model-slot arbiter that lets a
+// yielding tree build cede the one chat runtime slot to an interactive answer and resume
+// in-session — without ever both holding the slot. Tested in isolation (no DB/runtime).
+
+const tick = (): Promise<void> => new Promise((r) => setImmediate(r))
+
+describe('ModelSlotArbiter', () => {
+  it('reports no build active by default; chat acquire is an immediate no-op', async () => {
+    const a = new ModelSlotArbiter()
+    expect(a.isBuildActive()).toBe(false)
+    const release = await a.acquireForChat()
+    expect(typeof release).toBe('function')
+    release() // must not throw
+  })
+
+  it('hands the slot from builder to chat and resumes the builder on release', async () => {
+    const a = new ModelSlotArbiter()
+    a.registerBuild('job1')
+    expect(a.isBuildActive()).toBe(true)
+    expect(a.shouldYield()).toBe(false)
+
+    // Chat asks for the slot — it must WAIT for the builder to park.
+    let acquired = false
+    const acquire = a.acquireForChat().then((rel) => {
+      acquired = true
+      return rel
+    })
+    await tick()
+    expect(acquired).toBe(false) // builder has not yielded yet
+    expect(a.shouldYield()).toBe(true) // pause was requested
+
+    // Builder reaches its node boundary, parks.
+    let resumed = false
+    const parked = a.reacquire('job1').then(() => {
+      resumed = true
+    })
+    const release = await acquire
+    expect(acquired).toBe(true) // chat now holds the slot
+    expect(a.shouldYield()).toBe(false) // pause cleared on handoff
+
+    await tick()
+    expect(resumed).toBe(false) // builder still parked while chat streams
+
+    release() // chat stream ended
+    await parked
+    expect(resumed).toBe(true) // builder resumed in-session, no restart
+  })
+
+  it('resumes the builder only after the LAST concurrent chat releases', async () => {
+    const a = new ModelSlotArbiter()
+    a.registerBuild('job1')
+    const acquire1 = a.acquireForChat()
+    const acquire2 = a.acquireForChat()
+    await tick()
+    let resumed = false
+    const parked = a.reacquire('job1').then(() => (resumed = true))
+    const rel1 = await acquire1
+    const rel2 = await acquire2
+
+    rel1()
+    await tick()
+    expect(resumed).toBe(false) // one chat still holds the slot
+    rel2()
+    await parked
+    expect(resumed).toBe(true)
+  })
+
+  it('a second concurrent chat does not deadlock when the build is already parked', async () => {
+    const a = new ModelSlotArbiter()
+    a.registerBuild('job1')
+    // Chat A pauses the build and waits for the handoff.
+    const acquireA = a.acquireForChat()
+    await tick()
+    const parked = a.reacquire('job1') // builder parks (slot handed to chat A)
+    const relA = await acquireA
+
+    // Chat B arrives while the build is parked — it must proceed IMMEDIATELY (the slot is
+    // already away from the builder), not wait for a handoff that will never come.
+    let bAcquired = false
+    const relB = await a.acquireForChat().then((r) => {
+      bAcquired = true
+      return r
+    })
+    expect(bAcquired).toBe(true)
+
+    // The build resumes only after BOTH chats release.
+    let resumed = false
+    void parked.then(() => (resumed = true))
+    relA()
+    await tick()
+    expect(resumed).toBe(false)
+    relB()
+    await parked
+    expect(resumed).toBe(true)
+  })
+
+  it('a fresh build is not poisoned by a prior build s leftover handshake state', async () => {
+    const a = new ModelSlotArbiter()
+    // Simulate a prior build that left chatHolders > 0 (e.g. an unbalanced release path).
+    a.registerBuild('old')
+    void a.acquireForChat() // chatHolders -> 1 (never released)
+    await tick()
+    a.unregisterBuild('old')
+
+    // A new build must start clean: a pause/handoff/resume cycle works normally.
+    a.registerBuild('new')
+    const acquire = a.acquireForChat()
+    await tick()
+    let resumed = false
+    const parked = a.reacquire('new').then(() => (resumed = true))
+    const release = await acquire
+    release()
+    await parked
+    expect(resumed).toBe(true)
+  })
+
+  it('rejects a parked reacquire on abort (cancel/lock/quit) — no hung await', async () => {
+    const a = new ModelSlotArbiter()
+    a.registerBuild('job1')
+    const acquire = a.acquireForChat()
+    await tick()
+    const parked = a.reacquire('job1')
+    await acquire
+    a.abort()
+    await expect(parked).rejects.toBeInstanceOf(SlotAbortedError)
+  })
+
+  it('does not hang a chat acquire that races the build finishing', async () => {
+    const a = new ModelSlotArbiter()
+    a.registerBuild('job1')
+    const acquire = a.acquireForChat() // waits for a handoff that will never come
+    await tick()
+    a.unregisterBuild('job1') // build completed before yielding
+    const release = await acquire // must resolve (slot is free)
+    expect(a.isBuildActive()).toBe(false)
+    release()
+  })
+
+  it('release is idempotent', async () => {
+    const a = new ModelSlotArbiter()
+    a.registerBuild('job1')
+    const acquire = a.acquireForChat()
+    await tick()
+    const parked = a.reacquire('job1')
+    const release = await acquire
+    release()
+    release() // second call is a no-op, does not double-resume
+    await expect(parked).resolves.toBeUndefined()
+  })
+})

@@ -21,10 +21,10 @@ import { inFlightStreams, streamBuffers } from './inflight'
  * Throws the same friendly/ephemeral errors both handlers used. Returns the looked-up
  * conversation + the active runtime so the caller can proceed.
  */
-export function assertChatStreamReady(
+export async function assertChatStreamReady(
   ctx: AppContext,
   conversationId: string
-): { conv: Conversation; runtime: ModelRuntime } {
+): Promise<{ conv: Conversation; runtime: ModelRuntime }> {
   const conv = getConversation(ctx.db, conversationId)
   if (!conv) throw new Error(`Unknown conversation: ${conversationId}`)
 
@@ -35,8 +35,11 @@ export function assertChatStreamReady(
     throw new Error(tMain('main.noModelRunning'))
   }
   // Strict one-at-a-time vs document tasks: the one local model serves either a chat
-  // answer or a task, never both.
-  if (ctx.docTasks?.hasActiveTask()) {
+  // answer or a task, never both. A YIELDING deep-index build is the exception — it cedes
+  // the slot (chat pauses it via the model-slot arbiter inside `withChatStream`, then it
+  // resumes in-session). Any OTHER active task (summary/translate/compare/ocr, or a tree
+  // build that is only queued, not yet holding the slot) still refuses chat (plan §4.1/H10).
+  if (ctx.docTasks?.hasActiveTask() && !ctx.docTasks.isYieldingBuildActive()) {
     throw new Error(DOC_TASK_BUSY_MESSAGE)
   }
   // One active stream per conversation (shared registry across plain chat + RAG).
@@ -67,11 +70,20 @@ export async function withChatStream(
   event: IpcMainInvokeEvent,
   conversationId: string,
   logLabel: string,
-  runFn: (signal: AbortSignal, sendToken: SendToken, sendReasoning: SendReasoning) => Promise<Message>
+  runFn: (signal: AbortSignal, sendToken: SendToken, sendReasoning: SendReasoning) => Promise<Message>,
+  /**
+   * Optional model-slot claim (plan §4.1/H10): when a yielding deep-index build holds the
+   * one chat runtime, this requests a pause and resolves once the builder parks (≈ one
+   * node), returning a release fn that resumes the build. Called AFTER the in-flight entry
+   * is registered and ALWAYS released in `finally`, so a build can never be left paused by
+   * a failed/aborted chat turn. With no build active it resolves to a no-op immediately.
+   */
+  acquireSlot?: () => Promise<() => void>
 ): Promise<Message> {
   const controller = new AbortController()
   inFlightStreams.set(conversationId, controller)
   streamBuffers.set(conversationId, { content: '', reasoning: '' })
+  let releaseSlot: () => void = () => {}
   const sendToken: SendToken = (token) => {
     const buf = streamBuffers.get(conversationId)
     if (buf) buf.content += token
@@ -87,6 +99,8 @@ export async function withChatStream(
     }
   }
   try {
+    // Hand the model slot off from a yielding build before any model call (no-op when none).
+    if (acquireSlot) releaseSlot = await acquireSlot()
     const assistant = await runFn(controller.signal, sendToken, sendReasoning)
     if (!event.sender.isDestroyed()) {
       event.sender.send(STREAM.done(conversationId), assistant)
@@ -104,6 +118,8 @@ export async function withChatStream(
     }
     throw err
   } finally {
+    // Resume any paused deep-index build first (idempotent; no-op when none was paused).
+    releaseSlot()
     // Only clear our own entry — a later stream may already own this key. The buffer is
     // cleared in lockstep so `getActiveStream` reports "done" the instant the stream ends.
     if (inFlightStreams.get(conversationId) === controller) {

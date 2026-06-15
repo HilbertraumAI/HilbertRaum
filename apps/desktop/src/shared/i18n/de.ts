@@ -220,10 +220,15 @@ export const de: Record<keyof typeof en, string> = {
   'docs.task.translationBusy': 'Übersetzt…',
   'docs.task.compareBusy': 'Vergleicht…',
   'docs.task.ocrBusy': 'Liest den Scan…',
+  'docs.task.treeBusy': 'Erstellt einen Tiefenindex…',
+  'docs.task.extractBusy': 'Sucht nach Details…',
   'docs.task.summaryBusyTitle': 'Die Zusammenfassung wird geschrieben',
   'docs.task.translationBusyTitle': 'Die Übersetzung wird geschrieben',
   'docs.task.compareBusyTitle': 'Der Vergleich wird geschrieben',
   'docs.task.ocrBusyTitle': 'Die gescannten Seiten werden gelesen',
+  'docs.task.treeBusyTitle': 'Für das ganze Dokument wird ein Tiefenindex erstellt',
+  'docs.task.extractBusyTitle':
+    'Das ganze Dokument wird durchsucht, damit es „Liste alle…"-Fragen beantworten kann',
   'docs.error.noSupported': 'In dieser Auswahl wurden keine unterstützten Dokumente gefunden.',
   'docs.removedDocFallback': 'einem entfernten Dokument',
   'docs.provenance.compareBefore': 'Vergleich von ',
@@ -333,6 +338,62 @@ export const de: Record<keyof typeof en, string> = {
   'docs.previewModal.regenerate': 'Neu erstellen',
   'docs.previewModal.noText': 'Aus diesem Dokument konnte kein Text extrahiert werden.',
   'docs.previewModal.page': 'Seite {page}',
+
+  // ---- Tiefenindex + Abdeckung (whole-document-analysis plan §5.2) — D-L7-Review ausstehend ----
+  'docs.deepIndex.build': 'Tiefenindex erstellen',
+  'docs.deepIndex.buildTitle':
+    'Liest das ganze Dokument in einen Tiefenindex ein, damit Zusammenfassungen und ' +
+    'Antworten alles abdecken können — läuft auf diesem Laufwerk, nichts verlässt es',
+  'docs.deepIndex.reindexFirst': 'Für Tiefenindex neu indexieren',
+  'docs.deepIndex.reindexFirstTitle':
+    'Dieses Dokument wurde hinzugefügt, bevor es Tiefenindexe gab — indexiere es zuerst neu, ' +
+    'damit ein Tiefenindex das ganze Dokument abdecken kann',
+  'docs.deepIndex.ready': 'Tief indexiert',
+  'docs.deepIndex.readyTitle':
+    'Ein Tiefenindex für das ganze Dokument ist fertig — Zusammenfassungen können alles abdecken',
+  'coverage.relevance': 'Basiert auf den relevantesten Passagen — nicht auf dem ganzen Dokument',
+  'coverage.capped.whole': 'Deckt das ganze Dokument ab',
+  'coverage.capped.beginning': 'Deckt den Anfang des Dokuments ab',
+  'coverage.tree.whole': 'Deckt das ganze Dokument ab (tief indexiert)',
+  'coverage.tree.partial': 'Tiefenindex läuft — {covered} von {total} Abschnitten',
+  'coverage.tree.pending': 'Noch kein Tiefenindex',
+  'coverage.depth': 'Detailgrad: {label}',
+  'coverage.tier.1': 'Überblick',
+  'coverage.tier.2': 'Abschnitt für Abschnitt',
+  'coverage.tier.3': 'Ausführlich (volle Abdeckung)',
+  'coverage.tier.hint.1': 'Am schnellsten — der gespeicherte Überblick',
+  'coverage.tier.hint.2': 'Ein ausführlicherer Durchgang über die Abschnitte',
+  'coverage.tier.hint.3': 'Die meisten Details, über das ganze Dokument',
+  'coverage.tierSelect.trigger': 'Detailgrad: {label}',
+  // Abdeckung einer „Liste alle X"-Antwort (Phase 3). Vollständig über die durchsuchten
+  // Abschnitte — NIE „komplett" (H7). „Ganzes Dokument" nur, wenn alles indexiert ist.
+  // D-L7-Review ausstehend.
+  'coverage.extract.whole': 'Jeder Treffer im ganzen Dokument — {scanned} Abschnitte durchsucht',
+  'coverage.extract.wholeUnparsed':
+    'Jeder Treffer im ganzen Dokument — {scanned} Abschnitte durchsucht, {unparsed} nicht lesbar',
+  'coverage.extract.sections': 'Jeder Treffer in {scanned} durchsuchten Abschnitten',
+  'coverage.extract.sectionsUnparsed':
+    'Jeder Treffer in {scanned} durchsuchten Abschnitten, {unparsed} nicht lesbar',
+
+  // ---- „Liste alle X"-Antwort (Phase 3) — D-L7-Review ausstehend ----
+  'analysis.kind.generic': 'Einträge',
+  'analysis.kind.date': 'Daten',
+  'analysis.kind.amount': 'Beträge',
+  'analysis.kind.party': 'Parteien',
+  'analysis.kind.obligation': 'Pflichten',
+  'analysis.listing.coverageWhole':
+    '{count} {kind} im ganzen Dokument gefunden — {scanned} Abschnitte durchsucht{unparsed}:',
+  'analysis.listing.coverageSections':
+    '{count} {kind} in {scanned} durchsuchten Abschnitten gefunden{unparsed}:',
+  'analysis.listing.empty': 'Keine {kind} in {scanned} durchsuchten Abschnitten gefunden{unparsed}.',
+  'analysis.listing.unparsedSuffix': ' ({k} nicht lesbar)',
+  'analysis.listing.item': '- {value} (×{count})',
+  'analysis.listing.caveat':
+    'Diese Liste ist vollständig über die durchsuchten Abschnitte — nicht garantiert komplett ' +
+    '(ein kleines Modell kann einen Eintrag übersehen, und sehr ähnliche Einträge werden ' +
+    'zusammengefasst).',
+  'analysis.listing.refPage': 'S. {n}',
+  'analysis.listing.refSection': 'Abschnitt {n}',
 
   // ---- Models ----
   'models.title': 'KI-Modell',
@@ -842,6 +903,9 @@ export const de: Record<keyof typeof en, string> = {
   'main.ingest.fileTooLarge':
     'Diese Datei ist zu groß, um sie sicher zu importieren. Teile sie in kleinere Dateien ' +
     'auf und versuche es noch einmal.',
+  'main.ingest.tooManyChunks':
+    'Dieses Dokument ist zu groß, um es vollständig zu indexieren. Teile es in kleinere ' +
+    'Dateien auf und importiere die Teile.',
   'main.ingest.parseTimeout':
     'Diese Datei hat zu lange gebraucht und wurde übersprungen. Sie ist möglicherweise ' +
     'beschädigt oder extrem groß.',

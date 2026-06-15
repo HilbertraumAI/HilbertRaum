@@ -202,10 +202,15 @@ export const en = {
   'docs.task.translationBusy': 'Translating…',
   'docs.task.compareBusy': 'Comparing…',
   'docs.task.ocrBusy': 'Reading the scan…',
+  'docs.task.treeBusy': 'Building a deep index…',
+  'docs.task.extractBusy': 'Scanning for details…',
   'docs.task.summaryBusyTitle': 'The summary is being written',
   'docs.task.translationBusyTitle': 'The translation is being written',
   'docs.task.compareBusyTitle': 'The comparison is being written',
   'docs.task.ocrBusyTitle': 'The scanned pages are being read',
+  'docs.task.treeBusyTitle': 'A deep index is being built for the whole document',
+  'docs.task.extractBusyTitle':
+    'The whole document is being scanned so it can answer "list every…" questions',
   'docs.error.noSupported': 'No supported documents were found in that selection.',
   'docs.removedDocFallback': 'a removed document',
   // Provenance lines render around inline <b>title</b> elements.
@@ -305,6 +310,65 @@ export const en = {
   'docs.previewModal.regenerate': 'Regenerate',
   'docs.previewModal.noText': 'No text could be extracted from this document.',
   'docs.previewModal.page': 'Page {page}',
+
+  // ---- Deep index + coverage (whole-document-analysis plan §5.2) ----
+  // User words only: "deeply indexed" (a ready summary tree), "sections" (chunks),
+  // "passages" (retrieved excerpts). No tree/node/chunk/vector/embedding jargon.
+  'docs.deepIndex.build': 'Build deep index',
+  'docs.deepIndex.buildTitle':
+    'Read the whole document into a deep index so summaries and answers can cover all of ' +
+    'it — runs on this drive, nothing leaves it',
+  'docs.deepIndex.reindexFirst': 'Re-index for deep index',
+  'docs.deepIndex.reindexFirstTitle':
+    'This document was added before deep indexing was available — re-index it first so a ' +
+    'deep index can cover the whole document',
+  'docs.deepIndex.ready': 'Deeply indexed',
+  'docs.deepIndex.readyTitle':
+    'A whole-document deep index is ready — summaries can cover everything',
+  'coverage.relevance': 'Based on the most relevant passages — not the whole document',
+  'coverage.capped.whole': 'Covers the whole document',
+  'coverage.capped.beginning': 'Covers the beginning of the document',
+  'coverage.tree.whole': 'Covers the whole document (deeply indexed)',
+  'coverage.tree.partial': 'Deep index in progress — {covered} of {total} sections',
+  'coverage.tree.pending': 'No deep index yet',
+  'coverage.depth': 'Detail: {label}',
+  'coverage.tier.1': 'Overview',
+  'coverage.tier.2': 'Section by section',
+  'coverage.tier.3': 'Detailed (full coverage)',
+  'coverage.tier.hint.1': 'Fastest — the stored overview',
+  'coverage.tier.hint.2': 'A richer pass across the sections',
+  'coverage.tier.hint.3': 'The most detail, across the whole document',
+  'coverage.tierSelect.trigger': 'Detail: {label}',
+  // Structured-extract listing coverage (whole-document-analysis plan §4.2/§5.2, Phase 3).
+  // Exhaustive over the sections scanned — NEVER "complete" (H7). "Whole document" only when
+  // every in-scope document is fully indexed.
+  'coverage.extract.whole': 'Every match found across the whole document — {scanned} sections scanned',
+  'coverage.extract.wholeUnparsed':
+    'Every match found across the whole document — {scanned} sections scanned, {unparsed} could not be read',
+  'coverage.extract.sections': 'Every match found across {scanned} sections scanned',
+  'coverage.extract.sectionsUnparsed':
+    'Every match found across {scanned} sections scanned, {unparsed} could not be read',
+
+  // ---- "List every X" answer (whole-document-analysis plan §4.2, Phase 3) ----
+  // The deterministic listing answer (0 model calls). User words only — "sections", no
+  // chunk/record/extract jargon. Honest: exhaustive over the sections scanned, not "complete".
+  'analysis.kind.generic': 'items',
+  'analysis.kind.date': 'dates',
+  'analysis.kind.amount': 'amounts',
+  'analysis.kind.party': 'parties',
+  'analysis.kind.obligation': 'obligations',
+  'analysis.listing.coverageWhole':
+    'Found {count} {kind} across the whole document — {scanned} sections scanned{unparsed}:',
+  'analysis.listing.coverageSections':
+    'Found {count} {kind} across {scanned} sections scanned{unparsed}:',
+  'analysis.listing.empty': 'No {kind} found across {scanned} sections scanned{unparsed}.',
+  'analysis.listing.unparsedSuffix': ' ({k} could not be read)',
+  'analysis.listing.item': '- {value} (×{count})',
+  'analysis.listing.caveat':
+    'This list is exhaustive over the sections scanned — not guaranteed complete (a small ' +
+    'model can miss an item, and very similar entries may be merged).',
+  'analysis.listing.refPage': 'p. {n}',
+  'analysis.listing.refSection': 'section {n}',
 
   // ---- Models (ModelsScreen.tsx) ----
   'models.title': 'AI Model',
@@ -787,6 +851,8 @@ export const en = {
   'main.ingest.interrupted': 'Ingestion was interrupted before it finished. Re-index to try again.',
   'main.ingest.fileTooLarge':
     'This file is too large to import safely. Split it into smaller files and try again.',
+  'main.ingest.tooManyChunks':
+    'This document is too large to fully index. Split it into smaller files and import the parts.',
   'main.ingest.parseTimeout':
     'This file took too long to process and was skipped. It may be damaged or extremely large.',
   'main.rag.noContext':

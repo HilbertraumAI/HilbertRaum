@@ -154,9 +154,45 @@ password recovery — are documented in
   whole document remains searchable/answerable in RAG. A smaller `contextTokens` setting
   shrinks the per-call budget and hits the ceiling sooner.
 - **Summary input is the stored chunks, not a re-parse (D25).** Adjacent chunks overlap by
-  ~80 tokens, so stitched windows repeat a little text (harmless for summarization), and
-  text beyond the 1 000-chunk ingestion cap was never chunked — so it is not summarized
-  either (it is also not searchable; the same pre-existing cap).
+  ~80 tokens, so stitched windows repeat a little text (harmless for summarization).
+- **Over-cap documents are now REJECTED at index time, not silently truncated
+  (whole-document-analysis Phase 1, C1/C2/M13 — behavior change).** A document that would
+  exceed `MAX_CHUNKS_PER_DOCUMENT` (1 000) fails with a friendly "too large to fully index —
+  split it" message (`main.ingest.tooManyChunks`) instead of indexing only its first 1 000
+  chunks. So every *indexed* document is now the WHOLE document (recorded by the
+  `fully_chunked` marker), which is what lets a deep index honestly claim full coverage.
+  Consequence: a **legacy** document indexed before Phase 1 (which may have been silently
+  truncated) carries no `fully_chunked` marker — it is re-indexed before any deep-index /
+  100 %-coverage claim, and if it is genuinely over-cap that re-index fails **closed** (the
+  doc becomes `failed`/unsearchable and must be split into parts — the cap check runs before
+  the destructive chunk replacement, so it never half-deletes a previously searchable doc).
+- **A deep index ("ready" summary tree) gives a whole-document summary; without one the
+  capped map-reduce still applies.** When a document has a built tree (`tree_status='ready'`),
+  "Summarize" serves the tree root verbatim (full coverage, `truncated:false`) at no extra
+  model call. The build is a background, *yielding* job that cedes the model slot to chat
+  between nodes; it is auto-offered for documents the capped summary can't fully cover and
+  otherwise built on request. The coverage-meter UI is a later phase.
+- **A background deep-index build cedes the slot to chat, but not to other document tasks.**
+  While an auto-started tree build runs (multi-minute on a weak CPU), an interactive chat
+  answer pauses it and is served within ~one node, then the build resumes. A user-started
+  Summarize/Translate/Compare, however, queues behind the build until it finishes — the build
+  yields only to chat. It is the active task, so it shows as "Building a deep index…" and can
+  be cancelled from the busy banner (which lets the queued task run); a cancelled build is
+  resumable from the warm cache. An explicit model Stop/switch also aborts it (it re-builds
+  under the new model). Finer task-vs-build prioritisation is a later phase.
+- **"List every X" answers are exhaustive over the SECTIONS SCANNED — not guaranteed complete
+  (whole-document-analysis Phase 3, H7).** When a document has been through the structured-extract
+  pass (a manual, yielding background task like the deep index), a "list every / how many {X}"
+  question is answered from precomputed data at **zero model calls** with per-item provenance and
+  an honest coverage line ("N sections scanned (k unparsed)"). It is **not** a guaranteed-complete
+  list: a small model can miss an item, very similar values are merged, an item split across the
+  ~80-token section overlap can double-count, and a section whose reply was unparseable is counted
+  as "unparsed" (its items may be missing) rather than dropped. The "whole document" wording is
+  shown only when every in-scope document is fully indexed (`fully_chunked`). An **unmapped/ad-hoc
+  "{X}"** (no precomputed type) is **not** answered as a complete list — it falls back to a labelled
+  relevance answer ("based on the most relevant passages"). v1 has no live full-scan for unmapped
+  types and does not auto-run the extract pass at import (it is started on request) — both are later
+  phases. The extract pass, like the deep index, requires a fully-chunked (re-indexed if legacy) doc.
 - **Strictly one job at a time (D26).** While a summary runs, chat is refused with a
   friendly message + a cancel option, and vice versa — the one local model serves one
   request. The R-T1 probe confirmed the pinned b9585 WOULD serve concurrent requests on
@@ -206,13 +242,17 @@ password recovery — are documented in
 
 ## Document comparison (Phase 35, wave-3 plan §8)
 
-- **Section-matched comparison is A-driven (accepted asymmetry).** When two documents are
-  too long to compare in full, each section of document A is matched with the most
-  RELATED excerpts of document B (stored vectors, no new index). That direction makes
-  "only in A" findings reliable, but content that exists **only in document B** is seen
-  only when it happens to be retrieved as a neighbor — it can be missed. The reduce is
-  instructed to report only what the per-section notes support. A symmetric second pass
-  would double the model calls; revisit with evidence.
+- **Section-matched comparison is A-driven (asymmetric) UNLESS both documents are deeply
+  indexed.** When two documents are too long to compare in full AND both have a ready deep
+  index (and the smaller has ≤ 24 summary sections), the comparison is now **symmetric**:
+  each document's summary sections are aligned by similarity and diffed pair-by-pair, so
+  swapping A and B mirrors the result (rag-design §14.6). Otherwise it falls back to the
+  A-driven path — each section of document A is matched with the most RELATED excerpts of
+  document B (stored vectors, no new index) — which makes "only in A" findings reliable but
+  can MISS content that exists **only in document B**. That fallback now carries a visible
+  "one-directional — deeply index both for a complete two-way comparison" notice in the
+  report. (The symmetric path lazily embeds each tree's summary sections on the CPU embedder
+  sidecar the first time — once, then cached.)
 - **The report covers the BEGINNING of document A when it is very long.** The map ceiling
   (12 calls, the summary's bounded-latency rationale) caps coverage; the report itself
   carries a visible notice when that happens. Both documents stay fully searchable.

@@ -155,9 +155,10 @@ export function registerChatIpc(ctx: AppContext): void {
       options?: ChatOptions
     ): Promise<Message> => {
       // Shared guard preamble + stream lifecycle (M-A2): conv exists, runtime active,
-      // no doc task / stream in flight. The DOC_TASK_BUSY_MESSAGE stays canonical English
-      // on the wire (renderer exact-match + display map).
-      const { runtime } = assertChatStreamReady(ctx, conversationId)
+      // no blocking doc task / stream in flight. A yielding deep-index build is paused (not
+      // refused) via the slot arbiter inside withChatStream. DOC_TASK_BUSY_MESSAGE stays
+      // canonical English on the wire (renderer exact-match + display map).
+      const { runtime } = await assertChatStreamReady(ctx, conversationId)
 
       const regenerate = options?.regenerate === true
       if (regenerate) {
@@ -192,7 +193,8 @@ export function registerChatIpc(ctx: AppContext): void {
             onToken: sendToken,
             // sendReasoning emits the reasoning event AND buffers it for stream recovery.
             onReasoning: sendReasoning
-          })
+          }),
+        () => ctx.docTasks?.acquireChatSlot() ?? Promise.resolve(() => {})
       )
     }
   )

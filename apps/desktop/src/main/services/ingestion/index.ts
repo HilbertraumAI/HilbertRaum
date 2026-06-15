@@ -20,7 +20,9 @@ import type {
   DocumentSummary,
   GeneratedProvenance,
   ImportDestination,
-  IngestionStatus
+  IngestionStatus,
+  ExtractStatus,
+  TreeBuildStatus
 } from '../../../shared/types'
 import { sha256File } from '../models'
 import { docLifecycle, fileFromPendingDestination } from '../collections'
@@ -36,7 +38,7 @@ import {
   type ParseContext
 } from './parsers'
 import { PDF_SCAN_DETECTED_MESSAGE } from './parsers/pdf'
-import { chunkSegments } from './chunker'
+import { chunkSegments, MAX_CHUNKS_PER_DOCUMENT } from './chunker'
 import { resolveIngestionLimits, withParseTimeout, type IngestionLimits } from './limits'
 
 // Ingestion service (spec §7.7). Owns the document lifecycle:
@@ -147,6 +149,10 @@ interface DocumentRow {
   ocr_json: string | null
   lifecycle: string | null
   source_folder_label: string | null
+  tree_status: string | null
+  tree_meta_json: string | null
+  fully_chunked: string | null
+  extract_status: string | null
   created_at: string
   updated_at: string
 }
@@ -175,7 +181,9 @@ function parseSummary(json: string | null | undefined): DocumentSummary | null {
         text: v.text,
         modelId: typeof v.modelId === 'string' ? v.modelId : 'unknown',
         createdAt: typeof v.createdAt === 'string' ? v.createdAt : '',
-        truncated: v.truncated === true
+        truncated: v.truncated === true,
+        // Coverage tier when the summary came from a ready deep index (1/2/3), else absent.
+        ...(v.tier === 1 || v.tier === 2 || v.tier === 3 ? { tier: v.tier } : {})
       }
     }
   } catch {
@@ -315,8 +323,53 @@ function rowToInfo(row: DocumentRow, chunkCount: number, staleEmbeddings?: boole
     // (it has the db handle for the join); getDocument/createQueuedDocument leave it absent.
     lifecycle: docLifecycle(row.lifecycle),
     sourceFolderLabel: row.source_folder_label,
+    // Deep-index (summary-tree) state (whole-document-analysis plan §3.2/§5.2). Additive +
+    // optional — old callers that never read these are byte-identical. `treeLevels` comes
+    // from the ready tree's `tree_meta_json` (tolerant parse: a malformed blob ⇒ undefined).
+    treeStatus: treeStatusOf(row.tree_status),
+    fullyChunked: row.fully_chunked != null,
+    treeLevels: treeLevelsOf(row.tree_meta_json),
+    // Structured-extract pass state (Phase 3); same NULL-sentinel coalescing as tree_status.
+    extractStatus: extractStatusOf(row.extract_status),
     createdAt: row.created_at,
     updatedAt: row.updated_at
+  }
+}
+
+const TREE_BUILD_STATES: ReadonlySet<string> = new Set<TreeBuildStatus>([
+  'pending',
+  'building',
+  'ready',
+  'stale',
+  'failed'
+])
+
+/** Coalesce the stored `tree_status` to the typed union (unknown/NULL ⇒ undefined). */
+function treeStatusOf(raw: string | null): TreeBuildStatus | undefined {
+  return raw && TREE_BUILD_STATES.has(raw) ? (raw as TreeBuildStatus) : undefined
+}
+
+const EXTRACT_STATES: ReadonlySet<string> = new Set<ExtractStatus>([
+  'pending',
+  'extracting',
+  'ready',
+  'stale',
+  'failed'
+])
+
+/** Coalesce the stored `extract_status` to the typed union (unknown/NULL ⇒ undefined). */
+function extractStatusOf(raw: string | null): ExtractStatus | undefined {
+  return raw && EXTRACT_STATES.has(raw) ? (raw as ExtractStatus) : undefined
+}
+
+/** Levels from a ready tree's `tree_meta_json` (tolerant: malformed/absent ⇒ undefined). */
+function treeLevelsOf(raw: string | null): number | undefined {
+  if (!raw) return undefined
+  try {
+    const meta = JSON.parse(raw) as { levels?: unknown }
+    return typeof meta.levels === 'number' && Number.isFinite(meta.levels) ? meta.levels : undefined
+  } catch {
+    return undefined
   }
 }
 
@@ -576,13 +629,59 @@ export async function processDocument(
         )
 
     setStatus(db, documentId, 'chunking')
-    const chunks = chunkSegments(parsed.segments)
+    // Over-cap gate (whole-document-analysis plan C1/C2/M13). Chunk with cap + 1 so an
+    // over-cap document is DETECTABLE, then reject it BEFORE the destructive chunk
+    // replacement below. Failing first keeps a re-index of an over-cap document (the C4
+    // legacy-re-index flow) from deleting its existing searchable chunks and ending up
+    // `failed`/zero-chunk — the gate fails CLOSED, preserving the prior index. A document
+    // that passes is fully chunked (the whole document), recorded by `fully_chunked` on
+    // indexing success below.
+    const chunks = chunkSegments(parsed.segments, { maxChunks: MAX_CHUNKS_PER_DOCUMENT + 1 })
+    if (chunks.length > MAX_CHUNKS_PER_DOCUMENT) {
+      // Clear any stale `fully_chunked` from a PRIOR successful index: the document now
+      // exceeds the cap, so its preserved (older, smaller) chunks are no longer "the whole
+      // document" — keeping the marker would let a future consumer over-claim coverage (C4).
+      // The throw fires before the chunk DELETE, so the old chunks stay searchable (M13).
+      db.prepare('UPDATE documents SET fully_chunked = NULL WHERE id = ?').run(documentId)
+      // Persist-canonical English (i18n record §3.3 rule 1): the catch writes it into
+      // documents.error_message; the renderer display map translates it (D-L4).
+      throw new Error(t('en', 'main.ingest.tooManyChunks'))
+    }
 
     // Replace any prior chunks (supports re-indexing) then insert fresh.
     db.prepare('DELETE FROM embeddings WHERE chunk_id IN (SELECT id FROM chunks WHERE document_id = ?)').run(
       documentId
     )
     db.prepare('DELETE FROM chunks WHERE document_id = ?').run(documentId)
+    // Tear down a now-orphaned summary tree (whole-document-analysis plan H1/H2): re-index
+    // recreates chunks with fresh ids, so the tree's polymorphic chunk edges would dangle.
+    // Deleting the nodes cascades the edges (FK on parent_id); the expensive model output
+    // survives in `summary_cache` (keyed by text, not chunk id), so the next build reuses
+    // every unchanged group. `tree_status` → 'stale' when a tree existed (UI offers a
+    // rebuild), else clear it. extraction_records self-cascade via chunk_id (Phase 3).
+    const prevTree = (
+      db.prepare('SELECT tree_status FROM documents WHERE id = ?').get(documentId) as unknown as
+        | { tree_status: string | null }
+        | undefined
+    )?.tree_status
+    db.prepare('DELETE FROM tree_nodes WHERE document_id = ?').run(documentId)
+    db.prepare('UPDATE documents SET tree_status = ? WHERE id = ?').run(
+      prevTree ? 'stale' : null,
+      documentId
+    )
+    // The structured-extract rows (Phase 3) self-cascade via chunk_id ON DELETE CASCADE when
+    // the chunks are deleted above (H1 free win) — no manual DELETE needed. Reset the per-doc
+    // extract_status so the now-empty pass reads as 'stale' (UI offers a re-extract) rather
+    // than a stale 'ready' over zero rows.
+    const prevExtract = (
+      db.prepare('SELECT extract_status FROM documents WHERE id = ?').get(documentId) as unknown as
+        | { extract_status: string | null }
+        | undefined
+    )?.extract_status
+    db.prepare('UPDATE documents SET extract_status = ? WHERE id = ?').run(
+      prevExtract ? 'stale' : null,
+      documentId
+    )
 
     const insert = db.prepare(
       `INSERT INTO chunks
@@ -612,6 +711,18 @@ export async function processDocument(
     }
 
     setStatus(db, documentId, 'indexed')
+    // C4: mark the document fully chunked. This is the ONE indexing-success site (every
+    // path — import loop, reindexDocument, OCR re-ingest, materializeDocument — funnels
+    // through here), and a success now always passed the over-cap gate above, so the
+    // marker proves "the stored chunks ARE the whole document". A NULL marker means a
+    // legacy (pre-Phase-1, maybe silently truncated) index; deep-index / 100%-coverage
+    // are gated on it (a legacy doc re-indexes first, which sets it or fails over-cap).
+    const indexedAt = nowIso()
+    db.prepare('UPDATE documents SET fully_chunked = ?, updated_at = ? WHERE id = ?').run(
+      indexedAt,
+      indexedAt,
+      documentId
+    )
     return infoOrDeleted(db, documentId)
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
@@ -979,6 +1090,43 @@ export function reconcileStuckDocuments(db: Db, beforeIso: string): number {
     )
     // Persist-canonical English (i18n record §3.3 rule 1) — display-mapped at render.
     .run(t('en', 'main.ingest.interrupted'), nowIso(), beforeIso)
+  return Number(res.changes ?? 0)
+}
+
+/**
+ * Reset summary trees left `building` by a previous run (the app was killed or the
+ * workspace locked mid-build) to `pending` so the build can resume (discard the partial
+ * tree + rebuild from the warm `summary_cache`). Mirror of `reconcileStuckDocuments`:
+ * only rows last touched BEFORE `beforeIso` are affected, so a live in-session build —
+ * which bumps `updated_at` when it persists `building` — is protected, and the caller
+ * additionally gates on "no active task" (whole-document-analysis plan §3.2/§4.1).
+ * Returns the number reset. Content-free (ids/counts only).
+ */
+export function reconcileStuckTrees(db: Db, beforeIso: string): number {
+  const res = db
+    .prepare(
+      `UPDATE documents SET tree_status = 'pending', updated_at = ?
+       WHERE tree_status = 'building' AND updated_at < ?`
+    )
+    .run(nowIso(), beforeIso)
+  return Number(res.changes ?? 0)
+}
+
+/**
+ * Reset structured-extract passes left `extracting` by a previous run (killed/locked
+ * mid-pass) to `pending` so the pass can resume — the per-chunk extract pass is resumable
+ * (already-scanned chunks are skipped via their `__scan__` marker, 0 model calls; plan §3.3/
+ * §4.2, Phase 3). Mirror of `reconcileStuckTrees`: only rows last touched BEFORE `beforeIso`
+ * are affected (a live in-session pass bumps `updated_at`), and the caller gates on "no active
+ * task". Returns the number reset. Content-free (ids/counts only).
+ */
+export function reconcileStuckExtracts(db: Db, beforeIso: string): number {
+  const res = db
+    .prepare(
+      `UPDATE documents SET extract_status = 'pending', updated_at = ?
+       WHERE extract_status = 'extracting' AND updated_at < ?`
+    )
+    .run(nowIso(), beforeIso)
   return Number(res.changes ?? 0)
 }
 

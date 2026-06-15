@@ -4,6 +4,7 @@ import remarkGfm from 'remark-gfm'
 import type { Message } from '@shared/types'
 import { MessageActions } from './MessageActions'
 import { SourcesDisclosure } from './SourcesDisclosure'
+import { CoverageMeter } from '../components'
 import { localizeServerCopy } from '../lib/displayMap'
 import { useT } from '../i18n'
 
@@ -79,7 +80,15 @@ export function Transcript({
               ) : (
                 <div className="msg-content">{m.content}</div>
               )}
-              {m.citations && m.citations.length > 0 && <SourcesDisclosure citations={m.citations} />}
+              {m.citations && m.citations.length > 0 && (
+                <>
+                  <SourcesDisclosure citations={m.citations} />
+                  {/* Honesty (whole-document-analysis §4.5/§5.2): a grounded document answer
+                      is a RELEVANCE answer — based on the most relevant passages, NOT the whole
+                      document. Always labelled so a retrieval answer never reads as exhaustive. */}
+                  <CoverageMeter coverage={{ mode: 'relevance', chunksCovered: 0, chunksTotal: 0 }} />
+                </>
+              )}
             </div>
             {m.role === 'assistant' && (
               <MessageActions

@@ -181,13 +181,20 @@ export function registerModelIpc(ctx: AppContext): void {
     return state
   })
 
-  ipcMain.handle(IPC.startRuntime, (_e, modelId: string): Promise<RuntimeStatus> =>
-    startModelRuntime(ctx, modelId)
-  )
+  ipcMain.handle(IPC.startRuntime, (_e, modelId: string): Promise<RuntimeStatus> => {
+    // Starting/switching the runtime tears down the current llama-server. A yielding
+    // deep-index build holds that slot and is pinned to the current model (M12) — abort it
+    // first so it doesn't keep calling a stopped/replaced runtime, and a parked build (waiting
+    // on a chat handoff) doesn't hang. No-op when no build is running; the build is left
+    // resumable (it rebuilds from the warm cache under the new model).
+    ctx.docTasks?.abortActiveBuild()
+    return startModelRuntime(ctx, modelId)
+  })
 
   ipcMain.handle(IPC.stopRuntime, async (): Promise<void> => {
     log.info('Stop runtime')
     const modelId = ctx.runtime.activeModelId()
+    ctx.docTasks?.abortActiveBuild()
     await ctx.runtime.stop()
     if (modelId) {
       ctx.audit?.('runtime_stopped', `Model runtime stopped: ${modelId}`, { modelId })

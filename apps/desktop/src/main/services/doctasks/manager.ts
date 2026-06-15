@@ -5,6 +5,7 @@ import { t, type MessageKey } from '../../../shared/i18n'
 import { tMain } from '../i18n'
 import type { Db } from '../db'
 import type {
+  CoverageTier,
   DocTaskKind,
   DocTaskStatus,
   DocumentSummary,
@@ -34,9 +35,15 @@ import { ENCRYPTED_DOC_SUFFIX, shredFile } from '../workspace-vault'
 import { decodeVector, VectorIndex } from '../embeddings'
 import { isAbortError, stripThinkBlocks } from '../chat'
 import { collectionIdsForDocument } from '../collections'
+import { ModelSlotArbiter } from '../analysis/model-slot-arbiter'
+import { buildTree } from '../analysis/tree-build'
+import { extractDocument } from '../analysis/extract'
+import { maxTreeLevel, nodeSummariesAtLevel } from '../analysis/coverage'
+import { ensureNodeEmbeddings, loadNodeVectors } from '../analysis/node-vectors'
 import type { AuditRecorder } from '../audit'
 import { log } from '../logging'
 import {
+  packIntoWindows,
   planSummaryWindows,
   summaryBudgetWords,
   SUMMARY_OUTPUT_TOKENS,
@@ -68,6 +75,11 @@ import {
   compareReducePrompt,
   compareAttributionLine,
   compareTruncationNotice,
+  compareAsymmetricNotice,
+  compareNodePairPrompt,
+  comparePairOutputCap,
+  alignNodes,
+  SYMMETRIC_COMPARE_CALL_CEILING,
   compareDocumentTitle
 } from './compare'
 
@@ -162,6 +174,12 @@ interface InternalTask {
   controller: AbortController
   /** Validated translation target (kind === 'translation' only). */
   targetLang?: TranslationTargetLang
+  /**
+   * Coverage tier for a `summary` task over a ready deep index (whole-document-analysis plan
+   * §4.5). 1 (default) = the stored root verbatim, 0 model calls; 2 = one section-by-section
+   * reduce; 3 = a detailed full-coverage reduce in budget batches. Ignored without a tree.
+   */
+  summaryTier?: CoverageTier
 }
 
 const TERMINAL: ReadonlySet<DocTaskStatus['state']> = new Set(['done', 'failed', 'cancelled'])
@@ -170,8 +188,101 @@ export class DocTaskManager {
   private readonly tasks = new Map<string, InternalTask>()
   private queue: string[] = []
   private runningId: string | null = null
+  /**
+   * The single model-slot owner for a YIELDING tree build (plan §4.1, H9/H10). Only a
+   * running `tree` build registers with it; chat uses it to pause+hand-off, never to race.
+   */
+  private readonly arbiter = new ModelSlotArbiter()
 
   constructor(private readonly deps: DocTaskDeps) {}
+
+  /**
+   * True while a YIELDING build (currently `tree`) is running and holds the model slot.
+   * The chat guard branches on this: a yielding build is PAUSED (chat acquires the slot
+   * via `acquireChatSlot`); any other active task makes chat refuse with DOC_TASK_BUSY.
+   */
+  isYieldingBuildActive(): boolean {
+    return this.arbiter.isBuildActive()
+  }
+
+  /**
+   * Chat side: claim the model slot before streaming. If a yielding build holds it, this
+   * requests a pause and resolves once the builder parks (worst case ≈ one node); returns
+   * a release fn the caller MUST invoke when the stream ends (it resumes the build). With
+   * no build active it resolves immediately to a no-op. Idempotent release.
+   */
+  acquireChatSlot(): Promise<() => void> {
+    return this.arbiter.acquireForChat()
+  }
+
+  /**
+   * Abort the running yielding build (workspace lock / app quit / cancel): abort its task
+   * controller AND reject the arbiter's parked `reacquire`, so a build parked awaiting a
+   * chat handoff unwinds to a resumable `tree_status='building'` instead of a hung await
+   * (plan §4.1 M9/H10). No-op when the running task is not a yielding build.
+   */
+  abortActiveBuild(): void {
+    if (!this.runningId) return
+    const task = this.tasks.get(this.runningId)
+    if (!task || !isYieldingKind(task.status.kind)) return
+    log.info('Active deep-index build aborted', { jobId: task.status.jobId, kind: task.status.kind })
+    task.controller.abort()
+    this.arbiter.abort()
+  }
+
+  /**
+   * Auto-enqueue a deep-index (tree) build for a freshly-indexed document when it is worth
+   * it (plan Q1/Q4/§6). Gated and fire-and-forget — never throws into the import/reindex
+   * path: skips generated docs (M6), legacy not-`fully_chunked` docs (C4), already-built/
+   * building/pending trees, and documents the cheap capped summary already covers (size
+   * gate). With a chat runtime up it enqueues a `tree` task; otherwise it records
+   * `tree_status='pending'` for a later build. The build trigger UI is Phase 2.
+   */
+  maybeEnqueueTreeBuild(documentId: string): void {
+    try {
+      const db = this.deps.getDb()
+      const doc = getDocument(db, documentId)
+      if (!doc || doc.status !== 'indexed' || doc.chunkCount === 0) return
+      if (doc.origin) return // generated work-products are excluded from the corpus (M6)
+      const row = db
+        .prepare('SELECT fully_chunked, tree_status FROM documents WHERE id = ?')
+        .get(documentId) as unknown as
+        | { fully_chunked: string | null; tree_status: string | null }
+        | undefined
+      if (!row?.fully_chunked) return // legacy/truncated — must re-index first (C4)
+      if (row.tree_status === 'ready' || row.tree_status === 'building' || row.tree_status === 'pending') {
+        return
+      }
+      // Size gate (Q4): only docs the capped one-pass summary cannot fully cover benefit
+      // from a deep index. `planSummaryWindows().truncated` is exactly "too big for the
+      // 12-window ceiling" — the silent-truncation case the tree fixes.
+      const texts = (
+        db
+          .prepare('SELECT text FROM chunks WHERE document_id = ? ORDER BY chunk_index')
+          .all(documentId) as unknown as Array<{ text: string }>
+      )
+        .map((r) => r.text)
+        .filter((t) => t.trim().length > 0)
+      if (!planSummaryWindows(texts, this.deps.getContextTokens()).truncated) return
+
+      if (!this.deps.getRuntime()) {
+        db.prepare('UPDATE documents SET tree_status = ?, updated_at = ? WHERE id = ?').run(
+          'pending',
+          new Date().toISOString(),
+          documentId
+        )
+        return
+      }
+      this.startDocTask({ kind: 'tree', documentIds: [documentId] })
+    } catch (err) {
+      // Auto-enqueue is best-effort: a refused start (chat streaming) or any error leaves
+      // the doc without a tree (the user can build it manually). Never breaks ingestion.
+      log.info('Deep-index auto-enqueue skipped', {
+        documentId,
+        reason: err instanceof Error ? err.message : String(err)
+      })
+    }
+  }
 
   /**
    * Validate + enqueue a task. Throws friendly errors for the guards (chat
@@ -180,7 +291,14 @@ export class DocTaskManager {
    */
   startDocTask(req: StartDocTaskRequest): { jobId: string } {
     const kind = req?.kind as DocTaskKind
-    if (kind !== 'summary' && kind !== 'translation' && kind !== 'compare' && kind !== 'ocr') {
+    if (
+      kind !== 'summary' &&
+      kind !== 'translation' &&
+      kind !== 'compare' &&
+      kind !== 'ocr' &&
+      kind !== 'tree' &&
+      kind !== 'extract'
+    ) {
       throw new Error(tMain('main.task.unknownKind'))
     }
     // Translation targets are a closed set: de | en only — a free-text language
@@ -192,6 +310,14 @@ export class DocTaskManager {
         throw new Error(tMain('main.task.translationTarget'))
       }
       targetLang = raw
+    }
+    // Coverage tier for a summary (whole-document-analysis plan §4.5). Tolerant: any value
+    // other than 2 or 3 (incl. absent — the one-click summary) means Tier 1 (the default,
+    // 0 extra model calls when a tree is ready), so the existing call site is unchanged.
+    let summaryTier: CoverageTier | undefined
+    if (kind === 'summary') {
+      const raw = req.params?.tier
+      summaryTier = raw === 2 ? 2 : raw === 3 ? 3 : 1
     }
     if (this.deps.isChatStreaming()) {
       throw new Error(tMain('main.task.refusedChatStreaming'))
@@ -232,6 +358,17 @@ export class DocTaskManager {
         if (!doc || doc.status !== 'indexed' || doc.chunkCount === 0) {
           throw new Error(tMain('main.task.documentNotReady'))
         }
+        // Deep-index precondition (C4): only a FULLY chunked document may be tree-built or
+        // extract-scanned, so "whole document"/"100% coverage" can never be claimed over a
+        // silently-truncated legacy chunk set. A legacy (NULL marker) doc must be re-indexed
+        // first (which sets it or fails over-cap). Same gate for the extract pass (Phase 3).
+        if (kind === 'tree' || kind === 'extract') {
+          const row = this.deps
+            .getDb()
+            .prepare('SELECT fully_chunked FROM documents WHERE id = ?')
+            .get(id) as unknown as { fully_chunked: string | null } | undefined
+          if (!row?.fully_chunked) throw new Error(tMain('main.task.documentNotReady'))
+        }
       }
     }
 
@@ -247,7 +384,8 @@ export class DocTaskManager {
         resultRef: null
       },
       controller: new AbortController(),
-      targetLang
+      targetLang,
+      summaryTier
     }
     this.tasks.set(jobId, task)
     this.queue.push(jobId)
@@ -291,6 +429,9 @@ export class DocTaskManager {
       return
     }
     task.controller.abort()
+    // A running yielding build (tree/extract) may be PARKED on the arbiter (yielded to chat);
+    // aborting its controller alone won't unstick that await, so reject the parked reacquire too.
+    if (isYieldingKind(task.status.kind)) this.arbiter.abort()
   }
 
   /** True while a task is running or queued — the chat-side busy guard reads this. */
@@ -347,7 +488,11 @@ export class DocTaskManager {
             ? await this.runCompare(task, runtime)
             : kind === 'translation'
               ? await this.runTranslation(task, runtime)
-              : await this.runSummary(task, runtime)
+              : kind === 'tree'
+                ? await this.runTreeBuild(task, runtime)
+                : kind === 'extract'
+                  ? await this.runExtract(task, runtime)
+                  : await this.runSummary(task, runtime)
       }
       task.status.state = 'done'
       task.status.resultRef = { documentId: resultId }
@@ -373,12 +518,203 @@ export class DocTaskManager {
     }
   }
 
+  /**
+   * The deep-index (tree) build: the YIELDING background job that builds the document's
+   * hierarchical summary tree (plan §4.1). Registers with the model-slot arbiter for the
+   * duration so chat can pause it between nodes and it resumes in-session. Pins the build
+   * to the current chat model (M12 — the cache is keyed by it, so a model change can't
+   * yield a mixed-model tree). DB-only writer ⇒ no vault lease (L1).
+   */
+  private async runTreeBuild(task: InternalTask, runtime: ModelRuntime): Promise<string> {
+    const documentId = task.status.documentIds[0]
+    const signal = task.controller.signal
+    this.arbiter.registerBuild(task.status.jobId)
+    try {
+      await buildTree(documentId, {
+        db: this.deps.getDb(),
+        modelId: runtime.modelId,
+        contextTokens: this.deps.getContextTokens(),
+        signal,
+        arbiter: this.arbiter,
+        jobId: task.status.jobId,
+        generate: (systemPrompt, prompt, maxTokens, temperature, sig) =>
+          this.generate(runtime, systemPrompt, prompt, maxTokens, temperature, sig),
+        onProgress: (done, total) => {
+          task.status.progress.stepsDone = done
+          task.status.progress.stepsTotal = total
+        }
+      })
+    } finally {
+      // Always release the slot ownership — on success, abort, or error — so a later chat
+      // never waits on a handoff from a build that is gone.
+      this.arbiter.unregisterBuild(task.status.jobId)
+    }
+    return documentId
+  }
+
+  /**
+   * The structured-extract pass (whole-document-analysis plan §4.2, Phase 3): the second
+   * YIELDING background job. Per chunk it makes one model call to surface structured items,
+   * stored in `extraction_records` so a later "list every X" answer is a pure SQL aggregation
+   * (0 query-time model calls). Same arbiter handshake + yielding/cancel discipline as the
+   * tree build; resumable (already-scanned chunks are skipped via their `__scan__` marker).
+   * DB-only writer ⇒ no vault lease (L1). Content is never logged/audited.
+   */
+  private async runExtract(task: InternalTask, runtime: ModelRuntime): Promise<string> {
+    const documentId = task.status.documentIds[0]
+    const signal = task.controller.signal
+    this.arbiter.registerBuild(task.status.jobId)
+    try {
+      await extractDocument(documentId, {
+        db: this.deps.getDb(),
+        modelId: runtime.modelId,
+        signal,
+        arbiter: this.arbiter,
+        jobId: task.status.jobId,
+        generate: (systemPrompt, prompt, maxTokens, temperature, sig) =>
+          this.generate(runtime, systemPrompt, prompt, maxTokens, temperature, sig),
+        onProgress: (done, total) => {
+          task.status.progress.stepsDone = done
+          task.status.progress.stepsTotal = total
+        }
+      })
+    } finally {
+      this.arbiter.unregisterBuild(task.status.jobId)
+    }
+    return documentId
+  }
+
+  /**
+   * Serve a whole-document summary from a READY deep index at the chosen coverage tier
+   * (whole-document-analysis plan §4.5). All tiers cover the whole document (`truncated:false`)
+   * — they differ in DEPTH, not breadth. Returns the summary, or null to fall through to the
+   * capped path. One model job at a time (we run inside the serialized summary task).
+   * - Tier 1: the stored ROOT verbatim — 0 model calls (Q6).
+   * - Tier 2: the root's children (the layer below the root, which fit ONE budget window by
+   *   construction) reduced once → a richer section-by-section summary (1 model call).
+   * - Tier 3: ALL level-1 nodes (the deepest summary layer, full leaf coverage) reduced in
+   *   budget-bounded batches — bounded by NODE count, never by document size at query time.
+   */
+  private async summarizeFromTree(
+    task: InternalTask,
+    runtime: ModelRuntime,
+    documentId: string,
+    title: string,
+    tier: CoverageTier
+  ): Promise<DocumentSummary | null> {
+    const db = this.deps.getDb()
+    const root = db
+      .prepare('SELECT summary_text, model_id FROM tree_nodes WHERE document_id = ? AND is_root = 1 LIMIT 1')
+      .get(documentId) as unknown as { summary_text: string; model_id: string | null } | undefined
+    if (!root || root.summary_text.length === 0) return null
+    const now = (): string => new Date().toISOString()
+
+    // Tier 1: the stored root verbatim — no model call (Q6).
+    if (tier === 1) {
+      task.status.progress.stepsTotal = 1
+      task.status.progress.stepsDone = 1
+      return { text: root.summary_text, modelId: root.model_id ?? runtime.modelId, createdAt: now(), truncated: false, tier: 1 }
+    }
+
+    // Tier 2/3 read precomputed node summaries and reduce them.
+    const maxLevel = maxTreeLevel(db, documentId)
+    const nodeTexts =
+      tier === 3
+        ? nodeSummariesAtLevel(db, documentId, 1)
+        : maxLevel > 1
+          ? nodeSummariesAtLevel(db, documentId, maxLevel - 1)
+          : []
+    // Degenerate tree (a single level, or an empty layer): nothing richer than the root.
+    if (nodeTexts.length === 0) {
+      task.status.progress.stepsTotal = 1
+      task.status.progress.stepsDone = 1
+      return { text: root.summary_text, modelId: root.model_id ?? runtime.modelId, createdAt: now(), truncated: false, tier }
+    }
+
+    const contextTokens = this.deps.getContextTokens()
+    const budgetWords = summaryBudgetWords(contextTokens)
+    const windows = packIntoWindows(nodeTexts, budgetWords)
+    const signal = task.controller.signal
+    task.status.progress.stepsTotal = windows.length <= 1 ? 1 : windows.length + 1
+
+    let text: string
+    if (windows.length <= 1) {
+      // One reduce over the node summaries (Tier 2 always; Tier 3 when they fit one window).
+      text = await this.generate(
+        runtime,
+        SUMMARY_SYSTEM_PROMPT,
+        reducePrompt(title, windows.length === 1 ? [windows[0]] : nodeTexts),
+        SUMMARY_OUTPUT_TOKENS,
+        SUMMARY_TEMPERATURE,
+        signal
+      )
+      task.status.progress.stepsDone = 1
+    } else {
+      // Tier 3 deep tree: reduce each batch (map), then reduce the batch summaries — bounded
+      // by node count. Each batch was packed to fit the input budget.
+      const partials: string[] = []
+      for (const w of windows) {
+        const partial = await this.generate(
+          runtime,
+          SUMMARY_SYSTEM_PROMPT,
+          reducePrompt(title, [w]),
+          SUMMARY_OUTPUT_TOKENS,
+          SUMMARY_TEMPERATURE,
+          signal
+        )
+        if (partial.length > 0) partials.push(partial)
+        task.status.progress.stepsDone += 1
+      }
+      if (partials.length === 0) return null
+      let reduceInput = partials
+      const totalWords = partials.reduce((n, p) => n + approxTokenCount(p), 0)
+      if (totalWords > budgetWords) {
+        reduceInput = [truncateToApproxTokens(partials.join('\n\n'), budgetWords)]
+      }
+      text = await this.generate(
+        runtime,
+        SUMMARY_SYSTEM_PROMPT,
+        reducePrompt(title, reduceInput),
+        SUMMARY_OUTPUT_TOKENS,
+        SUMMARY_TEMPERATURE,
+        signal
+      )
+      task.status.progress.stepsDone += 1
+    }
+    if (text.length === 0) return null
+    return { text, modelId: runtime.modelId, createdAt: now(), truncated: false, tier }
+  }
+
   /** The summary task: stored chunks in, `summary_json` out. */
   private async runSummary(task: InternalTask, runtime: ModelRuntime): Promise<string> {
     const db = this.deps.getDb()
     const documentId = task.status.documentIds[0]
     const doc = getDocument(db, documentId)
     if (!doc) throw new Error(tMain('main.task.documentNotReady'))
+
+    // Tree-first (plan M1/§4.5): when a deep index is ready, serve from it at the requested
+    // coverage TIER — Tier 1 (default) returns the stored ROOT verbatim at 0 extra model
+    // calls (Q6), Tier 2/3 reduce precomputed node summaries (still whole-document, so
+    // `truncated:false`). The existing summary_json / PreviewModal surface is unchanged.
+    // Falls through to the capped map-reduce below when there is no ready tree (the fallback).
+    const treeRow = db
+      .prepare('SELECT tree_status, tree_meta_json FROM documents WHERE id = ?')
+      .get(documentId) as unknown as
+      | { tree_status: string | null; tree_meta_json: string | null }
+      | undefined
+    if (treeRow?.tree_status === 'ready' && treeRow.tree_meta_json) {
+      const built = await this.summarizeFromTree(
+        task,
+        runtime,
+        documentId,
+        doc.title,
+        task.summaryTier ?? 1
+      )
+      if (built) {
+        setDocumentSummary(this.deps.getDb(), documentId, built)
+        return documentId
+      }
+    }
 
     // Input = the document's stored CHUNKS, in order (no re-parse). Adjacent chunks
     // overlap by ~80 tokens (the chunker's retrieval overlap); the slight repetition
@@ -687,8 +1023,9 @@ export class DocTaskManager {
 
     let report: string
     let truncated = false
+    let asymmetric = false
     if (compareFitsSinglePass(approxTokenCount(textA), approxTokenCount(textB), contextTokens)) {
-      // Mode (a): one structured-comparison call over both full texts.
+      // Mode (a): one structured-comparison call over both full texts — already symmetric.
       task.status.progress.stepsTotal = 2
       report = await this.generate(
         runtime,
@@ -701,15 +1038,28 @@ export class DocTaskManager {
       if (report.length === 0) throw new Error(tMain('main.task.genericFailure'))
       task.status.progress.stepsDone = 1
     } else {
-      const sectionMatched = await this.runCompareSectionMatched(task, runtime, docA, docB)
-      report = sectionMatched.report
-      truncated = sectionMatched.truncated
+      // Large docs. Prefer the SYMMETRIC both-trees path when both documents are deeply
+      // indexed (plan §4.3, H8): align level-1 sections by node-vector cosine and diff each
+      // pair, so swapping A/B mirrors. Otherwise fall back to the A-driven mode (b), LABELLED
+      // asymmetric (it may under-report content unique to B — the existing honesty note).
+      const symmetric = this.bothTreesReadyForSymmetric(idA, idB)
+        ? await this.runCompareSymmetricTrees(task, runtime, docA, docB)
+        : null
+      if (symmetric) {
+        report = symmetric.report
+      } else {
+        const sectionMatched = await this.runCompareSectionMatched(task, runtime, docA, docB)
+        report = sectionMatched.report
+        truncated = sectionMatched.truncated
+        asymmetric = true
+      }
     }
 
-    // Materialize: attribution + (honest) truncation notice + report.
+    // Materialize: attribution + (honest) asymmetric/truncation notices + report.
     if (signal.aborted) throw new DOMException('Document task cancelled', 'AbortError')
     const markdown =
       `> ${compareAttributionLine(runtime.modelId)}\n\n` +
+      (asymmetric ? `${compareAsymmetricNotice(docB.title)}\n\n` : '') +
       (truncated ? `${compareTruncationNotice(docA.title)}\n\n` : '') +
       `${report}\n`
     const newDocId = await this.materializeDocument(
@@ -885,6 +1235,126 @@ export class DocTaskManager {
   }
 
   /**
+   * Both documents have a ready deep index AND the smaller one has few enough level-1
+   * sections that a symmetric pair-by-pair diff stays CPU-bounded (the pair count never
+   * exceeds the smaller section count). Gates the SYMMETRIC mode (c); otherwise compare
+   * falls back to the labelled asymmetric mode (b).
+   */
+  private bothTreesReadyForSymmetric(idA: string, idB: string): boolean {
+    const db = this.deps.getDb()
+    const ready = (id: string): boolean => {
+      const row = db.prepare('SELECT tree_status FROM documents WHERE id = ?').get(id) as
+        | { tree_status: string | null }
+        | undefined
+      return row?.tree_status === 'ready'
+    }
+    if (!ready(idA) || !ready(idB)) return false
+    const level1Count = (id: string): number =>
+      (
+        db
+          .prepare('SELECT COUNT(*) AS n FROM tree_nodes WHERE document_id = ? AND level = 1')
+          .get(id) as unknown as { n: number }
+      ).n
+    return Math.min(level1Count(idA), level1Count(idB)) <= SYMMETRIC_COMPARE_CALL_CEILING
+  }
+
+  /**
+   * Mode (c) — SYMMETRIC both-trees compare (plan §4.3, H4/H8). Lazily embeds each tree's
+   * nodes under the active embedder (the FIRST consumer of node vectors — L6; reused +
+   * H5-staleness-guarded thereafter), aligns each document's level-1 summary SECTIONS by
+   * node-vector cosine (`alignNodes`, greedy mutual-best-match with a swap-invariant
+   * tie-break), diffs every aligned pair with one `generate` call, attributes unmatched
+   * sections to Only-A / Only-B (no model call — node summaries are derived context, never
+   * `[Sn]` citations, M2), and reduces the notes into the four-section report. Swapping A/B
+   * yields the mirror-image report. Returns null to signal "not applicable — fall back to the
+   * asymmetric path" (a degenerate tree with no level-1 vectors). The lazy embed runs on the
+   * CPU embedder sidecar, NOT the chat slot, inside the (non-yielding) compare task — still
+   * one model job at a time.
+   */
+  private async runCompareSymmetricTrees(
+    task: InternalTask,
+    runtime: ModelRuntime,
+    docA: { id: string; title: string },
+    docB: { id: string; title: string }
+  ): Promise<{ report: string } | null> {
+    const db = this.deps.getDb()
+    const signal = task.controller.signal
+    const contextTokens = this.deps.getContextTokens()
+
+    // Node vectors are required; the embedder must be present (same friendly copy as mode (b)).
+    const embedder = this.deps.getIngestionDeps().embedder
+    if (!embedder) throw new Error(tMain('main.task.compareReindex'))
+
+    // Lazy node embeddings [L6] under the active embedder; re-embeds any node under a
+    // different embedder [H5]; 0 sidecar calls on the warm path.
+    await ensureNodeEmbeddings(db, docA.id, embedder, signal)
+    await ensureNodeEmbeddings(db, docB.id, embedder, signal)
+    if (signal.aborted) throw new DOMException('Document task cancelled', 'AbortError')
+
+    const aNodes = loadNodeVectors(db, docA.id, 1, embedder.id)
+    const bNodes = loadNodeVectors(db, docB.id, 1, embedder.id)
+    if (aNodes.length === 0 || bNodes.length === 0) return null // degenerate → asymmetric fallback
+
+    const alignment = alignNodes(aNodes, bNodes)
+    // Diffs + reduce + the materialize step (consistent with mode (b)'s stepsTotal accounting).
+    task.status.progress.stepsTotal = alignment.pairs.length + 2
+
+    const aById = new Map(aNodes.map((n) => [n.id, n]))
+    const bById = new Map(bNodes.map((n) => [n.id, n]))
+    const pairCap = comparePairOutputCap(contextTokens, alignment.pairs.length)
+    const oneLine = (s: string): string => s.replace(/\s+/g, ' ').trim().slice(0, 400)
+
+    const partials: string[] = []
+    let part = 0
+    for (const pair of alignment.pairs) {
+      if (signal.aborted) throw new DOMException('Document task cancelled', 'AbortError')
+      const sectionA = aById.get(pair.aId)?.summaryText ?? ''
+      const sectionB = bById.get(pair.bId)?.summaryText ?? ''
+      part += 1
+      const note = await this.generate(
+        runtime,
+        compareSystemPrompt(),
+        compareNodePairPrompt(docA.title, docB.title, part, alignment.pairs.length, sectionA, sectionB),
+        pairCap,
+        COMPARE_TEMPERATURE,
+        signal
+      )
+      if (note.length > 0) partials.push(note)
+      task.status.progress.stepsDone += 1
+    }
+    // Unmatched sections → Only-A / Only-B notes with NO model call (M2-safe: the node
+    // summary is fed as a note for the reduce, never surfaced as a citation).
+    for (const id of alignment.unmatchedA) {
+      const s = aById.get(id)?.summaryText
+      if (s && s.trim().length > 0) partials.push(`- Only in A: ${oneLine(s)}`)
+    }
+    for (const id of alignment.unmatchedB) {
+      const s = bById.get(id)?.summaryText
+      if (s && s.trim().length > 0) partials.push(`- Only in B: ${oneLine(s)}`)
+    }
+    if (partials.length === 0) throw new Error(tMain('main.task.genericFailure'))
+
+    // Belt for the reduce input (the per-pair caps already size the notes, but a model that
+    // ignores maxTokens must still not overflow the reduce call's input budget).
+    const budgetWords = compareBudgetWords(contextTokens)
+    let reduceInput = partials
+    if (partials.reduce((n, p) => n + approxTokenCount(p), 0) > budgetWords) {
+      reduceInput = [truncateToApproxTokens(partials.join('\n\n'), budgetWords)]
+    }
+    const report = await this.generate(
+      runtime,
+      compareSystemPrompt(),
+      compareReducePrompt(docA.title, docB.title, reduceInput),
+      COMPARE_OUTPUT_TOKENS,
+      COMPARE_TEMPERATURE,
+      signal
+    )
+    if (report.length === 0) throw new Error(tMain('main.task.genericFailure'))
+    task.status.progress.stepsDone += 1
+    return { report }
+  }
+
+  /**
    * Write the generated Markdown to a transient file and run it through the NORMAL
    * import path (`createQueuedDocument` + `processDocument`) so the new document is
    * chunked, embedded, searchable, citable, and `.enc`-encrypted automatically.
@@ -1046,6 +1516,12 @@ export class DocTaskManager {
     }
     return stripThinkBlocks(out).trim()
   }
+}
+
+/** The YIELDING build kinds (whole-document-analysis plan §4.1): they cede the model slot to
+ *  chat via the arbiter and resume in-session, rather than refusing chat while active. */
+function isYieldingKind(kind: DocTaskKind): boolean {
+  return kind === 'tree' || kind === 'extract'
 }
 
 /** Keys of the guard/validation copy that may pass through to the renderer on failure. */

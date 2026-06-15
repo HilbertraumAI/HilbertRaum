@@ -1192,6 +1192,16 @@ code, pre, kbd { font-family: var(--font-mono); }
 .pill-error { color: var(--error); border-color: var(--error); }
 .pill-accent { color: var(--accent); border-color: var(--accent); }
 
+/* Coverage meter (whole-document-analysis §5.2): breadth pill + a muted depth line. */
+.coverage-meter {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+}
+.coverage-depth { font-size: var(--text-xs); line-height: var(--line-xs); }
+
 /* Banner — persistent in-context notice: semantic left border + icon + text. */
 /* Visually-hidden, still in the a11y tree (screen-reader-only). Used by the streaming
    live region (audit L7) and any other off-screen announcement text. The standard

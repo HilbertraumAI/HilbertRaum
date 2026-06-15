@@ -73,7 +73,12 @@ function makeHarness(): Harness {
     runtime: { active: () => runtime, activeModelId: () => runtime.modelId },
     embedder: createMockEmbedder(),
     reranker: null,
-    docTasks: { isDocumentBusy: () => false, hasActiveTask: () => false },
+    docTasks: {
+      isDocumentBusy: () => false,
+      hasActiveTask: () => false,
+      isYieldingBuildActive: () => false,
+      acquireChatSlot: async () => () => {}
+    },
     audit: () => {}
   } as unknown as AppContext
   return { ctx, db, rootPath }

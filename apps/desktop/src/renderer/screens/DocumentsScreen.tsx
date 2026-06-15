@@ -1,10 +1,13 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { ReactNode } from 'react'
-import { Badge, Banner, Button, ConfirmDialog, EmptyState, ErrorBanner, Modal, Progress, Spinner, type BadgeTone } from '../components'
+import { Badge, Banner, Button, ConfirmDialog, CoverageMeter, EmptyState, ErrorBanner, Modal, Progress, Spinner, TierMenu, type BadgeTone } from '../components'
+import { SourcesDisclosure } from '../chat/SourcesDisclosure'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import type {
   Collection,
+  CoverageTier,
   DocTaskKind,
+  DocumentCoverage,
   DocumentInfo,
   DocumentLifecycle,
   DocumentOcrInfo,
@@ -81,13 +84,17 @@ const TASK_BUSY_LABEL: Record<DocTaskKind, MessageKey> = {
   summary: 'docs.task.summaryBusy',
   translation: 'docs.task.translationBusy',
   compare: 'docs.task.compareBusy',
-  ocr: 'docs.task.ocrBusy'
+  ocr: 'docs.task.ocrBusy',
+  tree: 'docs.task.treeBusy',
+  extract: 'docs.task.extractBusy'
 }
 const TASK_BUSY_TITLE: Record<DocTaskKind, MessageKey> = {
   summary: 'docs.task.summaryBusyTitle',
   translation: 'docs.task.translationBusyTitle',
   compare: 'docs.task.compareBusyTitle',
-  ocr: 'docs.task.ocrBusyTitle'
+  ocr: 'docs.task.ocrBusyTitle',
+  tree: 'docs.task.treeBusyTitle',
+  extract: 'docs.task.extractBusyTitle'
 }
 
 // Decimal separator follows the UI language (i18n record §5); units stay as-is.
@@ -331,6 +338,35 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
     setPreview(null)
     try {
       await startTask('summary', d.id)
+    } catch (e) {
+      setError(friendlyIpcError(e))
+    }
+  }
+
+  // Re-summarize at a chosen coverage tier (whole-document-analysis §4.5). Tier 1 = 0 model
+  // calls (root verbatim); Tier 2/3 reduce precomputed material. The done-task effect
+  // re-opens the preview with the fresh summary + coverage.
+  async function onSummarizeTier(d: DocumentInfo, tier: CoverageTier): Promise<void> {
+    setError(null)
+    setPreview(null)
+    try {
+      await startTask('summary', d.id, { tier })
+    } catch (e) {
+      setError(friendlyIpcError(e))
+    }
+  }
+
+  // Build a whole-document deep index (whole-document-analysis §5.2). C4 gate: a legacy
+  // (not fully-chunked) document must be re-indexed first so "100%" can never be claimed over
+  // a silently-truncated set — the row offers "Re-index for deep index" instead of a dead button.
+  async function onBuildDeepIndex(d: DocumentInfo): Promise<void> {
+    setError(null)
+    try {
+      if (d.fullyChunked === false) {
+        await run(`reindex-${d.id}`, () => window.api.reindexDocument(d.id))
+      } else {
+        await startTask('tree', d.id)
+      }
     } catch (e) {
       setError(friendlyIpcError(e))
     }
@@ -993,6 +1029,37 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
             >
               {busy === `reindex-${d.id}` ? t('docs.reindexBusy') : t('docs.reindex')}
             </Button>
+            {/* Deep index (whole-document-analysis §5.2): "Deeply indexed" once a
+                whole-document deep index is ready, else the build action. A building/pending
+                index surfaces through the busy block above, so the control is hidden then.
+                Generated work-products are excluded (no corpus deep index). C4: a not-fully-
+                chunked legacy doc offers "Re-index for deep index", never a dead 100% button. */}
+            {d.status === 'indexed' &&
+              d.chunkCount > 0 &&
+              !d.origin &&
+              !(
+                activeTask &&
+                activeTask.documentIds.includes(d.id) &&
+                !isDocTaskTerminal(activeTask.status)
+              ) &&
+              (d.treeStatus === 'ready' ? (
+                <Badge tone="success" icon="✓" title={t('docs.deepIndex.readyTitle')}>
+                  {t('docs.deepIndex.ready')}
+                </Badge>
+              ) : (
+                <Button
+                  size="sm"
+                  disabled={busy !== null || activeTask !== null}
+                  onClick={() => void onBuildDeepIndex(d)}
+                  title={t(
+                    d.fullyChunked === false
+                      ? 'docs.deepIndex.reindexFirstTitle'
+                      : 'docs.deepIndex.buildTitle'
+                  )}
+                >
+                  {t(d.fullyChunked === false ? 'docs.deepIndex.reindexFirst' : 'docs.deepIndex.build')}
+                </Button>
+              ))}
             {/* Organize menu (plan §12.3): add to a project, keep in Library, change
                 lifecycle, or remove from the current project. Indexed docs only. */}
             {d.status === 'indexed' && (
@@ -1218,6 +1285,7 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
           preview={preview}
           ocr={docs?.find((x) => x.id === preview.id)?.ocr ?? null}
           summary={docs?.find((x) => x.id === preview.id)?.summary ?? null}
+          treeReady={docs?.find((x) => x.id === preview.id)?.treeStatus === 'ready'}
           originLine={(() => {
             const d = docs?.find((x) => x.id === preview.id)
             return d ? provenanceLine(d) : null
@@ -1227,6 +1295,11 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
             const d = docs?.find((x) => x.id === preview.id)
             setPreview(null)
             if (d) void onSummarize(d)
+          }}
+          onSelectTier={(tier) => {
+            const d = docs?.find((x) => x.id === preview.id)
+            setPreview(null)
+            if (d) void onSummarizeTier(d, tier)
           }}
           onClose={() => setPreview(null)}
         />
@@ -1396,22 +1469,50 @@ function PreviewModal({
   preview,
   ocr,
   summary,
+  treeReady,
   originLine,
   regenerateDisabled,
   onRegenerate,
+  onSelectTier,
   onClose
 }: {
   preview: DocumentPreview
   /** Recognition metadata when the text came from local OCR, or null. */
   ocr?: DocumentOcrInfo | null
   summary?: DocumentSummary | null
+  /** A whole-document deep index is ready ⇒ the coverage-tier selector is offered. */
+  treeReady?: boolean
   /** Provenance line when this is a generated document, or null. */
   originLine?: ReactNode
   regenerateDisabled?: boolean
   onRegenerate?: () => void
+  /** Re-summarize at a coverage tier (whole-document-analysis §4.5); only when `treeReady`. */
+  onSelectTier?: (tier: CoverageTier) => void
   onClose: () => void
 }): JSX.Element {
   const { t, tCount, lang } = useT()
+  // Coverage + source provenance of the current summary (whole-document-analysis §5.1).
+  // Read-only, no model call; refreshes whenever the shown summary changes.
+  const [cov, setCov] = useState<DocumentCoverage | null>(null)
+  useEffect(() => {
+    let alive = true
+    if (!summary) {
+      setCov(null)
+      return
+    }
+    // Tolerant: a partial test bridge (or an older preload) may not provide the method —
+    // `Promise.resolve(undefined)` then yields null, never a crash.
+    void Promise.resolve(window.api.documentCoverage?.(preview.id))
+      .then((c) => {
+        if (alive) setCov(c ?? null)
+      })
+      .catch(() => {
+        if (alive) setCov(null)
+      })
+    return () => {
+      alive = false
+    }
+  }, [preview.id, summary])
   return (
     <Modal
       open
@@ -1441,10 +1542,26 @@ function PreviewModal({
             <p className="hint" style={{ margin: 0 }}>
               {summaryAttribution(summary, t, lang)}
             </p>
+            {/* Coverage meter (whole-document-analysis §5.2): states breadth (whole document
+                vs the beginning) AND depth (tier) honestly — augments the truncated banner. */}
+            {cov && <CoverageMeter coverage={cov.coverage} />}
             {summary.truncated && (
               <Banner tone="warning">{t('docs.previewModal.truncated')}</Banner>
             )}
+            {/* Coverage-tier selector — only with a ready deep index (Tier 2/3 read it). */}
+            {treeReady && onSelectTier && (
+              <TierMenu
+                value={summary.tier ?? 1}
+                disabled={regenerateDisabled}
+                onChange={onSelectTier}
+              />
+            )}
             <div className="preview-text">{summary.text}</div>
+            {/* Source provenance behind a deep-index summary — the leaf SOURCE chunks (M2:
+                never node summaries). Reuses the chat sources disclosure. */}
+            {cov && cov.provenance.length > 0 && (
+              <SourcesDisclosure citations={cov.provenance} />
+            )}
             {onRegenerate && (
               <div className="actions" style={{ marginTop: 4 }}>
                 <Button size="sm" disabled={regenerateDisabled} onClick={onRegenerate}>
