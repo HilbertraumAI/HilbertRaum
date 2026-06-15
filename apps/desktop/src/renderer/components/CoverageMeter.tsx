@@ -44,6 +44,28 @@ function breadthOf(coverage: CoverageInfo): Breadth {
       ? { tone: 'warning', icon: '◔', textKey: 'coverage.capped.beginning' }
       : { tone: 'neutral', icon: '○', textKey: 'coverage.capped.whole' }
   }
+  if (mode === 'extract') {
+    // A structured-extract listing (whole-document-analysis §4.2, Phase 3): EXHAUSTIVE OVER
+    // INDEXED SECTIONS with per-item provenance — NEVER "complete" (H7). "Whole document"
+    // wording is gated on `fullyChunked`; sections scanned + (k unparsed) keep it honest.
+    const scanned = chunksCovered
+    const unparsed = coverage.unparsedChunks ?? 0
+    const whole = coverage.fullyChunked === true
+    if (unparsed > 0) {
+      return {
+        tone: 'accent',
+        icon: '◑',
+        textKey: whole ? 'coverage.extract.wholeUnparsed' : 'coverage.extract.sectionsUnparsed',
+        params: { scanned, unparsed }
+      }
+    }
+    return {
+      tone: whole ? 'success' : 'accent',
+      icon: whole ? '●' : '◑',
+      textKey: whole ? 'coverage.extract.whole' : 'coverage.extract.sections',
+      params: { scanned }
+    }
+  }
   // mode === 'tree'. The whole-document/100% claim is made ONLY for a READY deep index — any
   // other state shows the partial fraction or "not built yet", NEVER 100% (C1/L2).
   if (treeStatus === 'ready' && chunksTotal > 0 && chunksCovered >= chunksTotal) {

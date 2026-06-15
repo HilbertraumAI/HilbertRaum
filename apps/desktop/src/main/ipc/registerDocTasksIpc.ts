@@ -2,9 +2,18 @@ import { ipcMain } from 'electron'
 import { IPC } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
 import { tMain } from '../services/i18n'
-import type { DocTaskStatus, DocumentCoverage, StartDocTaskRequest } from '../../shared/types'
+import {
+  EXTRACT_RECORD_TYPES,
+  type DocTaskStatus,
+  type DocumentCoverage,
+  type ExtractionListing,
+  type ExtractionListingRequest,
+  type RetrievalScope,
+  type StartDocTaskRequest
+} from '../../shared/types'
 import { getDocument } from '../services/ingestion'
 import { documentCoverage, documentLeafProvenance } from '../services/analysis/coverage'
+import { aggregateExtractions } from '../services/analysis/extract'
 
 // IPC for document tasks (wave-3 plan §6). Async with polling, like imports and
 // downloads: `startDocTask` validates + enqueues and returns a job id immediately;
@@ -60,6 +69,31 @@ export function registerDocTasksIpc(ctx: AppContext): void {
           ? documentLeafProvenance(ctx.db, documentId, doc.title)
           : []
       return { coverage, provenance }
+    }
+  )
+
+  // Read-only "list every X" aggregation (whole-document-analysis plan §4.2/§5.1, Phase 3): a
+  // pure GROUP BY over the precomputed `extraction_records` for one record type, scoped via the
+  // shared buildScopeFilter (M3). ZERO model calls. The aggregated values are CONTENT — never
+  // logged or audited (only the ids/counts of the precompute pass are).
+  ipcMain.handle(
+    IPC.listAllExtractions,
+    (_e, req: ExtractionListingRequest): ExtractionListing | null => {
+      requireUnlocked()
+      const recordType = req?.recordType
+      if (!recordType || !(EXTRACT_RECORD_TYPES as readonly string[]).includes(recordType)) {
+        return null
+      }
+      const sanitizeIds = (v: unknown): string[] | null =>
+        Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string' && x.length > 0) : null
+      const ids = sanitizeIds(req.documentIds)
+      const collIds = sanitizeIds(req.collectionIds)
+      const scope: RetrievalScope = {
+        documentIds: ids && ids.length > 0 ? ids : null,
+        collectionIds: collIds && collIds.length > 0 ? collIds : null,
+        includeArchived: req.includeArchived === true
+      }
+      return aggregateExtractions(ctx.db, scope, recordType)
     }
   )
 }

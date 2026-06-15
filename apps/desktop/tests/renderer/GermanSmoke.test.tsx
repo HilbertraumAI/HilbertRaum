@@ -231,6 +231,17 @@ describe('German render smokes (Phase 40)', () => {
     ).toBeInTheDocument()
   })
 
+  it('CoverageMeter renders the German extract-listing copy (Phase 3 honesty)', () => {
+    render(
+      german(
+        <CoverageMeter
+          coverage={{ mode: 'extract', chunksCovered: 12, chunksTotal: 12, fullyChunked: true }}
+        />
+      )
+    )
+    expect(screen.getByText(t('de', 'coverage.extract.whole', { scanned: 12 }))).toBeInTheDocument()
+  })
+
   it('ChatScreen documents-mode renders the German source picker (plan §13)', async () => {
     stubApi({
       listConversations: vi.fn(async () => []),

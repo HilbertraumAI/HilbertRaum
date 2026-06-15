@@ -582,10 +582,11 @@ export interface ConversationSearchResult {
 // ---- Document tasks (wave-3 plan §6) ----
 
 /** What a document task runs over stored documents — all kinds share one engine
- * (queue, cancel, polling IPC). `tree` is the whole-document-analysis deep-index build:
- * a YIELDING background job (cedes the model slot to chat between nodes), unlike the
- * other kinds which run to completion and refuse chat while active. */
-export type DocTaskKind = 'summary' | 'translation' | 'compare' | 'ocr' | 'tree'
+ * (queue, cancel, polling IPC). `tree` (deep-index summary tree) and `extract` (the
+ * per-chunk structured-extract pass, Phase 3) are the whole-document-analysis YIELDING
+ * background jobs — they cede the model slot to chat between units and resume in-session;
+ * the other kinds run to completion and refuse chat while active. */
+export type DocTaskKind = 'summary' | 'translation' | 'compare' | 'ocr' | 'tree' | 'extract'
 
 /**
  * Translation targets, v1: the two eval-set languages only. A free-text language
@@ -746,6 +747,11 @@ export type CoverageMode =
   | 'relevance'
   /** The capped map-reduce summary — covers the beginning when `truncated`. */
   | 'capped'
+  /** A structured-extract listing ("list every X") — exhaustive OVER INDEXED SECTIONS with
+   *  per-item provenance, NOT guaranteed complete (per-chunk model recall, dedup, overlap).
+   *  `chunksCovered`/`chunksTotal` are sections scanned/total; `unparsedChunks` is the count
+   *  scanned but unparseable. Never rendered as "complete" (H7). */
+  | 'extract'
 
 export interface CoverageInfo {
   mode: CoverageMode
@@ -763,7 +769,18 @@ export interface CoverageInfo {
   nodeIds?: string[]
   /** True when the result honestly covers only the beginning (capped) — never shown as complete. */
   truncated?: boolean
-  // unparsedChunks?: number  // reserved for Phase 3 (structured-extract coverage)
+  /**
+   * Sections scanned but unparseable by the extract pass (mode `extract`, Phase 3). Surfaced
+   * in the listing coverage line ("across N sections scanned (k unparsed)") so an item missed
+   * in an unparsed section is never silently dropped from a "list every X" answer (H7).
+   */
+  unparsedChunks?: number
+  /**
+   * True when EVERY in-scope document is fully chunked (the `fully_chunked` invariant). Gates
+   * the "whole document" wording of an extract listing — a legacy truncated doc says "sections
+   * scanned", never "whole document" (mode `extract`; H7/C4).
+   */
+  fullyChunked?: boolean
 }
 
 /**
@@ -775,6 +792,70 @@ export interface DocumentCoverage {
   coverage: CoverageInfo
   /** The leaf source chunks behind a ready-tree summary, as `[Sn]` citations (M2-safe). */
   provenance: Citation[]
+}
+
+// ---- Structured extract-then-aggregate (whole-document-analysis plan §3.3/§4.2, Phase 3) ----
+
+/**
+ * The fixed v1 extraction type set (plan Q3). The per-chunk extract pass surfaces items of
+ * these types; the router maps a user's "list every {X}" to one of them via a synonym table
+ * (defaulting to `generic`). Widen deliberately — a new type costs a re-extract.
+ */
+export type ExtractRecordType = 'generic' | 'date' | 'amount' | 'party' | 'obligation'
+
+/** The fixed v1 type set as a value (for the prompt + validation). */
+export const EXTRACT_RECORD_TYPES: readonly ExtractRecordType[] = [
+  'generic',
+  'date',
+  'amount',
+  'party',
+  'obligation'
+]
+
+/**
+ * Per-document structured-extract pass lifecycle, surfaced on `DocumentInfo.extractStatus`
+ * (plan §3.3). NULL in the DB ⇒ no extract pass yet. Mirrors `TreeBuildStatus`.
+ */
+export type ExtractStatus = 'pending' | 'extracting' | 'ready' | 'stale' | 'failed'
+
+/** Request shape for `analysis:listAll` — the record type + the scope to aggregate over. */
+export interface ExtractionListingRequest {
+  recordType: ExtractRecordType
+  /** Specific documents to scope to (null/absent = no id filter). */
+  documentIds?: string[] | null
+  /** Collections (projects/Library) to scope to (null/absent = no membership filter). */
+  collectionIds?: string[] | null
+  /** Include archived documents (default false). */
+  includeArchived?: boolean
+}
+
+/** One aggregated item in a "list every X" listing (plan §4.2 step 2). */
+export interface ExtractionListingItem {
+  /** A representative surfaced value for this normalized key. */
+  value: string
+  /** How many extracted occurrences share this normalized value (across in-scope docs). */
+  count: number
+  /** The source section (chunk) ids this item came from — per-item provenance (H7). */
+  sourceChunkIds: string[]
+}
+
+/**
+ * What `analysis:listAll(scope, recordType)` returns (plan §4.2/§5.1): the aggregated,
+ * provenance-backed list plus the honest coverage line inputs. Exhaustive OVER INDEXED
+ * SECTIONS — `scannedChunks`/`totalChunks`/`unparsedChunks` make that honest, never "complete".
+ * Zero query-time model calls (a pure GROUP BY over the precomputed `extraction_records`).
+ */
+export interface ExtractionListing {
+  recordType: ExtractRecordType
+  items: ExtractionListingItem[]
+  /** Sections the extract pass scanned (parsed OK or marked unparsed) within scope. */
+  scannedChunks: number
+  /** Sections scanned but unparseable (their items may be missing — surfaced, never dropped). */
+  unparsedChunks: number
+  /** Total sections in scope (the coverage denominator). */
+  totalChunks: number
+  /** True when every in-scope document is fully chunked (gates "whole document" wording). */
+  fullyChunked: boolean
 }
 
 /**
@@ -874,6 +955,12 @@ export interface DocumentInfo {
   fullyChunked?: boolean
   /** Levels in the ready deep-index tree (from `tree_meta_json`); display-internal. */
   treeLevels?: number
+  /**
+   * Structured-extract pass state (whole-document-analysis plan §3.3/Phase 3). NULL/undefined
+   * ⇒ no extract pass yet; `'ready'` ⇒ "list every X" answers from precomputed data at 0
+   * query-time model calls. Read from `documents.extract_status`.
+   */
+  extractStatus?: ExtractStatus | null
   createdAt: string
   updatedAt: string
 }

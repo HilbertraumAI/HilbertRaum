@@ -180,6 +180,19 @@ password recovery — are documented in
   be cancelled from the busy banner (which lets the queued task run); a cancelled build is
   resumable from the warm cache. An explicit model Stop/switch also aborts it (it re-builds
   under the new model). Finer task-vs-build prioritisation is a later phase.
+- **"List every X" answers are exhaustive over the SECTIONS SCANNED — not guaranteed complete
+  (whole-document-analysis Phase 3, H7).** When a document has been through the structured-extract
+  pass (a manual, yielding background task like the deep index), a "list every / how many {X}"
+  question is answered from precomputed data at **zero model calls** with per-item provenance and
+  an honest coverage line ("N sections scanned (k unparsed)"). It is **not** a guaranteed-complete
+  list: a small model can miss an item, very similar values are merged, an item split across the
+  ~80-token section overlap can double-count, and a section whose reply was unparseable is counted
+  as "unparsed" (its items may be missing) rather than dropped. The "whole document" wording is
+  shown only when every in-scope document is fully indexed (`fully_chunked`). An **unmapped/ad-hoc
+  "{X}"** (no precomputed type) is **not** answered as a complete list — it falls back to a labelled
+  relevance answer ("based on the most relevant passages"). v1 has no live full-scan for unmapped
+  types and does not auto-run the extract pass at import (it is started on request) — both are later
+  phases. The extract pass, like the deep index, requires a fully-chunked (re-indexed if legacy) doc.
 - **Strictly one job at a time (D26).** While a summary runs, chat is refused with a
   friendly message + a cancel option, and vice versa — the one local model serves one
   request. The R-T1 probe confirmed the pinned b9585 WOULD serve concurrent requests on

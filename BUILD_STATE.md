@@ -6,7 +6,77 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
-_Last updated: 2026-06-15 — **Whole-document analysis — Phase 2 (coverage meter + tiers +
+_Last updated: 2026-06-15 — **Whole-document analysis — Phase 3 (structured extract-then-aggregate).**
+Third phase of [`docs/whole-document-analysis-plan.md`](docs/whole-document-analysis-plan.md) (§6 Phase 3;
+mechanisms §3.3 schema, §4.2 extract+aggregate, §4.4 router, §5.1 IPC). Moves "list every X / how many"
+off top-k relevance and onto a precomputed, provenance-backed SQL aggregation answered at **zero
+query-time model calls** — exhaustive OVER INDEXED SECTIONS, never "complete" [H7]. **(1) Schema**
+([`db.ts`](apps/desktop/src/main/services/db.ts)): additive `extraction_records` table (one item row per
+surfaced item + one `__scan__` marker row/chunk recording `ok`/`unparsed`; `chunk_id` **FK ON DELETE
+CASCADE** ⇒ re-index self-invalidates [H1 free win, under `PRAGMA foreign_keys = ON`]) + `idx_extract_doc_type`/
+`idx_extract_chunk`; `documents.extract_status` column via `ensureColumn` (NULL|pending|extracting|ready|stale|
+failed, mirrors `tree_status`); `reconcileStuckExtracts` (mirror of `reconcileStuckTrees`, `extracting`→
+`pending`); re-index resets `extract_status`→`stale` in the chunk-replacement block (rows cascade away).
+**(2) Extract pass** (new [`services/analysis/extract.ts`](apps/desktop/src/main/services/analysis/extract.ts)):
+`extractDocument` — the second YIELDING build (same arbiter handshake/park/cancel/lock discipline as the
+tree, [H3/H9/H10]); one `generate`/chunk over the fixed v1 type set (`generic|date|amount|party|obligation`),
+strict JSON-array prompt at temp 0, tolerant `parseExtraction` (recovers fenced/prose-wrapped arrays;
+`[]` is a valid empty parse) + **retry-once**, then an `unparsed` `__scan__` marker — **never drops the
+chunk** [H7]; per-`(chunk_id, content_hash)` **resume cache** = **0** calls on re-run; per-chunk
+`try{BEGIN…COMMIT}catch{ROLLBACK}` [H11]; `normalized_value` dedup; node vectors out of scope.
+`aggregateExtractions` — query-time GROUP BY `normalized_value` through the shared
+`buildScopeFilter('document_id')` [M3], **0** model calls, returns items+counts+source-chunk provenance +
+`scannedChunks`/`totalChunks`/`unparsedChunks`/`fullyChunked`. **(3) DocTaskManager**
+([`doctasks/manager.ts`](apps/desktop/src/main/services/doctasks/manager.ts)): new `extract` `DocTaskKind`
++ `runExtract` (registers/unregisters the arbiter like `runTreeBuild`), validated like `tree` (one doc,
+runtime required, **`fully_chunked` gate [C4]**); `isYieldingKind` makes `abortActiveBuild`/`cancelDocTask`
+arbiter-reject treat extract like tree (chat-stream's pause-vs-refuse already keys off the arbiter).
+**(4) Router** (new [`services/analysis/router.ts`](apps/desktop/src/main/services/analysis/router.ts),
+pure): `routeQuestion` — EN+DE classification (list/every/each/how many/count + jede/alle/wie viele/
+sämtliche/liste/zähl), fixed precedence **explicit-button > compare(2 docs) > coverage-extract >
+tree-summary > relevance** [M7], closed-vocab→type synonym map (`mapQuestionToRecordType`, EN+DE, default
+generic), **low-confidence / no-extract-data / compare-without-2-docs → labelled relevance** (never an
+empty "no items" or a false "complete"). **(5) rag:ask wiring**
+([`registerRagIpc.ts`](apps/desktop/src/main/ipc/registerRagIpc.ts)): after scope resolve + filename
+auto-scope, a `coverage-extract` decision over a mapped pre-extracted type streams the deterministic
+listing (new [`services/analysis/listing-answer.ts`](apps/desktop/src/main/services/analysis/listing-answer.ts)
+— coverage line + per-item provenance + caveat, built via `tMain`) at 0 model calls; **everything else
+falls through to the existing relevance path byte-unchanged**. **(6) IPC**: `analysis:listAll`
+([`registerDocTasksIpc.ts`](apps/desktop/src/main/ipc/registerDocTasksIpc.ts)) → `ExtractionListing|null`
+(read-only, content stays in DB); mirrored in [`preload`](apps/desktop/src/preload/index.ts); channel in
+[`shared/ipc.ts`](apps/desktop/src/shared/ipc.ts). **(7) Shared contracts**
+([`shared/types.ts`](apps/desktop/src/shared/types.ts)): `ExtractRecordType`/`EXTRACT_RECORD_TYPES`,
+`ExtractStatus`, `ExtractionListing`/`ExtractionListingItem`/`ExtractionListingRequest`; `DocTaskKind +=
+'extract'`; `CoverageMode += 'extract'` + `CoverageInfo.unparsedChunks`/`fullyChunked` (the reserved Phase-2
+field, now real); `DocumentInfo.extractStatus` (threaded via `DocumentRow`/`rowToInfo`). **(8) Renderer**:
+`CoverageMeter` ([`CoverageMeter.tsx`](apps/desktop/src/renderer/components/CoverageMeter.tsx)) gains the
+`extract` listing copy ("every match … N sections scanned (k unparsed)", whole-document wording gated on
+`fullyChunked`, NEVER "complete"). **i18n**: EN+DE `analysis.kind.*`/`analysis.listing.*`/`coverage.extract.*`/
+`docs.task.extract*` (type-enforced parity; forbidden-UI-words honoured — "sections", no chunk/record/extract
+jargon; German flagged **D-L7**). **Decisions flagged (not silently made):** (a) extract is **manual-only**
+(started via `startDocTask`), NOT auto-enqueued at import — avoids surprise multi-minute CPU spend (Q4
+default); (b) a **separate `extract_status` column** (NOT folded into a shared `deep_index_status`) — tree +
+extract run independently; (c) an unmapped/ad-hoc "{X}" falls back to **labelled relevance** in v1 (no live
+full-scan task — deferred), so the 0-call completeness claim is only ever made for a mapped pre-extracted
+type. The chat listing surfaces its honesty IN-TEXT (coverage line + caveat) rather than threading a new
+per-message `CoverageInfo` payload (avoids a `messages`-table change); the `extract` CoverageMeter mode is
+wired for the meter component + future preview use. **NOT built (Phase 4):** symmetric/both-trees compare,
+node-vector align, node embeddings (node vectors stay NULL — L6); the collection "tree of trees"; a live
+full-scan for unmapped types. **Tests:** typecheck clean, build OK, `npm test` **1333 passed / 25 skipped**
+(+27: unit [`extract-router.test.ts`](apps/desktop/tests/unit/extract-router.test.ts) — router classification/
+precedence/low-confidence→relevance/open-vocab→type EN+DE + `parseExtraction` JSON tolerance/empty-vs-unparsed/
+unknown-type-coerce; integration [`whole-doc-extract.test.ts`](apps/desktop/tests/integration/whole-doc-extract.test.ts)
+— O(n) calls + per-chunk markers, unparsed marker [H7], warm-cache re-run = 0 calls, per-chunk ROLLBACK +
+connection-survives + resumable [H11], aggregation GROUP BY via buildScopeFilter = 0 calls + ground-truth
+count + per-item provenance, archived-excluded [M3], re-index cascade→stale [H1], honest listing answer
+"sections scanned"+caveat + unparsed surfaced; renderer [`Coverage.test.tsx`](apps/desktop/tests/renderer/Coverage.test.tsx)
+— extract meter whole-vs-sections + unparsed, never "complete"; +1 GermanSmoke extract meter). No version
+bump, no schema-version (additive table/column). **Risks / next:** the extract pass is a multi-minute
+serialized CPU pass on weak hardware (manual, size-unbounded — a UI trigger + size gate like the deep index
+is a follow-up); per-chunk recall/dedup/overlap caveats are surfaced, not solved (the H7 honesty point);
+**Next:** Phase 4 — symmetric, coverage-oriented compare + lazy node embeddings._
+
+_(prior) 2026-06-15 — **Whole-document analysis — Phase 2 (coverage meter + tiers +
 provenance UI).** Second phase of [`docs/whole-document-analysis-plan.md`](docs/whole-document-analysis-plan.md)
 (§6 Phase 2; mechanisms §4.5 coverage tiers, §5.1 IPC + `CoverageInfo`, §5.2 renderer). The
 honesty layer over Phase 1's deep index: surface BREADTH (whole document vs the most relevant

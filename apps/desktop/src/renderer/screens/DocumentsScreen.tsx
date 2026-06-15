@@ -85,14 +85,16 @@ const TASK_BUSY_LABEL: Record<DocTaskKind, MessageKey> = {
   translation: 'docs.task.translationBusy',
   compare: 'docs.task.compareBusy',
   ocr: 'docs.task.ocrBusy',
-  tree: 'docs.task.treeBusy'
+  tree: 'docs.task.treeBusy',
+  extract: 'docs.task.extractBusy'
 }
 const TASK_BUSY_TITLE: Record<DocTaskKind, MessageKey> = {
   summary: 'docs.task.summaryBusyTitle',
   translation: 'docs.task.translationBusyTitle',
   compare: 'docs.task.compareBusyTitle',
   ocr: 'docs.task.ocrBusyTitle',
-  tree: 'docs.task.treeBusyTitle'
+  tree: 'docs.task.treeBusyTitle',
+  extract: 'docs.task.extractBusyTitle'
 }
 
 // Decimal separator follows the UI language (i18n record §5); units stay as-is.

@@ -1,6 +1,6 @@
 # Whole-document analysis beyond the context window — implementation plan
 
-> **Status: PLAN (working paper). Phases 1–2 SHIPPED (2026-06-15); Phases 3–4 open.** Per
+> **Status: PLAN (working paper). Phases 1–3 SHIPPED (2026-06-15); Phase 4 open.** Per
 > `CLAUDE.md` doc-lifecycle, this file lives only while the work is open; once the WHOLE
 > feature ships it condenses into §-records in `docs/rag-design.md` / `docs/architecture.md`
 > and is deleted. Phase-1 record: cap honesty (C1/C2/C4/M13), the `tree_nodes`/`tree_edges`/
@@ -14,9 +14,22 @@
 > = 1 reduce, Tier 3 = batched), the `analysis:coverage` IPC, the `CoverageMeter`/`TierMenu`
 > renderer components (breadth ≠ fidelity, never 100% unless `ready` — C1/L2; node summaries are
 > never `[Sn]` citations — M2), the PreviewModal meter+selector+provenance, the chat relevance
-> label, and the "Build deep index"/"Re-index first" row action (C4 gate). Phase 3
-> (`extraction_records`/`extract.ts`) and Phase 4 (symmetric compare + node embeddings) remain
-> unbuilt — node vectors are stored NULL (L6).
+> label, and the "Build deep index"/"Re-index first" row action (C4 gate).
+> Phase-3 record: the `extraction_records` table + `extract_status` column + `reconcileStuckExtracts`
+> (mirror of the tree machinery; H1 cascade via `chunk_id`), the per-chunk yielding extract pass
+> (`services/analysis/extract.ts` — one model call/chunk over the fixed v1 type set, tolerant JSON
+> parse + retry-once + `__scan__` markers so an unparsed chunk is surfaced not dropped [H7], a
+> per-`(chunk_id, content_hash)` resume cache = 0 calls on re-run, per-chunk
+> `try{BEGIN…COMMIT}catch{ROLLBACK}` [H11]), the second yielding `extract` DocTaskKind
+> (`runExtract`, same arbiter handoff as `tree`), the query-time `aggregateExtractions` GROUP BY
+> through the shared `buildScopeFilter` [M3] + the `analysis:listAll` IPC, the pure task router
+> (`services/analysis/router.ts` — EN+DE classification + precedence + low-confidence→relevance +
+> closed-vocab→type map), the `rag:ask` wiring (a "list every X" over a mapped pre-extracted type
+> → 0-model-call listing; everything else byte-unchanged relevance), the deterministic listing
+> answer (`services/analysis/listing-answer.ts`), and `CoverageInfo.unparsedChunks`/`fullyChunked`
+> + the `extract` coverage mode/meter copy ("every match … N sections scanned (k unparsed)", never
+> "complete" [H7]). Phase 4 (symmetric compare + node embeddings) remains unbuilt — node vectors
+> are stored NULL (L6).
 >
 > Goal: first-class analysis of documents (and collections) that **vastly exceed** the
 > 4k–8k model context — covering the **whole** document, faithfully and honestly — by
@@ -412,9 +425,40 @@ Each phase is an **incrementally** shippable release in order (Phases 2/3/4 buil
   fraction; Tier 1/2/3 cost 0/1/few model calls (asserted); provenance walk returns exactly the leaf
   source chunks; the C4 legacy doc offers "Re-index first", not a dead build.
 
-### Phase 3 — Structured extract-then-aggregate
+### Phase 3 — Structured extract-then-aggregate — **SHIPPED (2026-06-15)**
 - `extraction_records` schema; `extract.ts`; `extract` ingest pass; router rule "list all/every/how many" → coverage; SQL aggregation answer.
-- **Acceptance:** "list every {X}" over a large doc returns a **complete, provenance-backed** list with **zero query-time model calls** after the extract pass; the count matches a manual ground-truth on the fixture; routing sends "how many…" to coverage, never top-k.
+- **Built:** `extraction_records` table + `idx_extract_doc_type`/`idx_extract_chunk` (FK `chunk_id ON DELETE
+  CASCADE` → re-index self-invalidates, H1) + `documents.extract_status` column + `reconcileStuckExtracts`
+  (all in `db.ts`/`ingestion/index.ts`, mirroring the tree machinery); `services/analysis/extract.ts` —
+  `extractDocument` (the per-chunk yielding pass: one `generate`/chunk over the fixed v1 type set
+  `generic|date|amount|party|obligation`, strict JSON-array prompt at temp 0, tolerant `parseExtraction`
+  + retry-once, a `__scan__` marker row per chunk recording `ok`/`unparsed` so an unparseable chunk is
+  **surfaced not dropped** [H7], a per-`(chunk_id, content_hash)` resume cache = **0** calls on re-run,
+  per-chunk `try{BEGIN…COMMIT}catch{ROLLBACK}` [H11], node vectors out of scope) + `aggregateExtractions`
+  (query-time GROUP BY `normalized_value` through the shared `buildScopeFilter('document_id')` [M3], **0**
+  model calls, returns items+counts+source-chunk provenance + scanned/total/unparsed + `fullyChunked`); the
+  second yielding **`extract`** `DocTaskKind` + `runExtract` (same arbiter handoff/cancel/lock discipline as
+  `tree`, gated on `fully_chunked` [C4]); `services/analysis/router.ts` (pure: EN+DE classification, fixed
+  precedence explicit-button > compare > coverage-extract > tree-summary > relevance [M7], closed-vocab→type
+  synonym map, low-confidence/no-extract-data → labelled relevance [H7]); the `rag:ask` wiring (a mapped
+  "list every X" → the 0-call SQL listing via `listing-answer.ts`; **normal relevance byte-unchanged**);
+  `analysis:listAll` IPC + preload; `CoverageInfo.unparsedChunks`/`fullyChunked` + the `extract` coverage
+  **mode** + the CoverageMeter listing copy; EN+DE `analysis.*`/`coverage.extract.*`/`docs.task.extract*`
+  keys (forbidden-UI-words honoured — "sections", never "chunk/record/extract" jargon; German flagged for
+  D-L7). **Decisions taken:** (a) the extract pass is **manual-only** (started via `startDocTask`), not
+  auto-enqueued at import — avoids surprise multi-minute CPU spend (Q4 default); (b) a **separate
+  `extract_status` column** (not folded into a shared `deep_index_status` with `tree_status`) — tree and
+  extract run independently; (c) an unmapped/ad-hoc "{X}" falls back to **labelled relevance** in v1 (no
+  live full-scan task — deferred), so the 0-call completeness claim is only ever made for a mapped,
+  pre-extracted type. The extract pass is gated on `fully_chunked` like the tree (legacy docs re-index first).
+- **Acceptance (met, tested):** the per-chunk pass costs O(n) `generate` calls; an unparseable chunk records
+  an `unparsed` marker (never dropped) — surfaced in the listing; a warm cache makes a re-run cost **0**
+  calls; the per-chunk `ROLLBACK` survives an injected insert failure (connection not poisoned, pass
+  resumable); `aggregateExtractions` GROUPs via `buildScopeFilter` at **0** query-time calls, excludes an
+  archived in-scope doc [M3], and the count matches a planted ground-truth; re-index cascades the rows away
+  [H1] and marks the pass `stale`; the router sends "how many…"/"list every…" to coverage (never top-k),
+  maps open-vocab→type (EN+DE), and falls back to relevance on low confidence / no extract data; the listing
+  answer + the CoverageMeter `extract` copy say "N sections scanned (k unparsed)", never "complete".
 
 ### Phase 4 — Symmetric, coverage-oriented compare
 - **Node embeddings land here [L6]:** the first compare over a pair of trees **lazily embeds** each tree's nodes under the active embedder (~250/doc, once, then cached in `tree_nodes`/`summary_cache`), since Phase 4 is the first consumer of node vectors. Subsequent compares reuse them; an embedder change re-embeds under the H5 staleness discipline.

@@ -1,11 +1,14 @@
 import { ipcMain, type IpcMainInvokeEvent } from 'electron'
 import { IPC, STREAM } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
-import { type Message, type RetrievalScope } from '../../shared/types'
+import { type ExtractRecordType, type Message, type RetrievalScope } from '../../shared/types'
 import { appendMessage, maybeSetTitleFromFirstMessage } from '../services/chat'
 import { resolveScope } from '../services/collections'
 import { buildScopeFilter } from '../services/retrieval-scope'
 import { detectFilenameScope, generateGroundedAnswer, ragSettingsFrom } from '../services/rag'
+import { aggregateExtractions, SCAN_MARKER_TYPE } from '../services/analysis/extract'
+import { routeQuestion } from '../services/analysis/router'
+import { buildListingAnswer } from '../services/analysis/listing-answer'
 import { getSettings } from '../services/settings'
 import { tMain } from '../services/i18n'
 import { assertChatStreamReady, withChatStream } from './chat-stream'
@@ -26,6 +29,32 @@ function documentsInScope(db: Db, scope: RetrievalScope): Array<{ id: string; ti
     )
     .all(...params) as Array<{ id: string; title: string }>
   return rows
+}
+
+/** Does any in-scope document have precomputed structured-extract data (a `__scan__` marker)?
+ *  Gates the router's coverage-extract branch — without it we cannot honestly claim a complete
+ *  list, so the question falls back to labelled relevance (plan §4.2/§4.4, H7). */
+function extractionsExistInScope(db: Db, scope: RetrievalScope): boolean {
+  const filter = buildScopeFilter(scope, 'document_id')
+  const where = filter ? ` AND ${filter.sql}` : ''
+  const row = db
+    .prepare(
+      `SELECT 1 FROM extraction_records WHERE record_type = ?${where} LIMIT 1`
+    )
+    .get(SCAN_MARKER_TYPE, ...(filter ? filter.params : [])) as unknown as { 1: number } | undefined
+  return row != null
+}
+
+/** Count in-scope documents with a READY deep-index tree (enables the tree-summary route). */
+function readyTreeCountInScope(db: Db, scope: RetrievalScope): number {
+  const filter = buildScopeFilter(scope, 'd.id')
+  const where = filter ? ` AND ${filter.sql}` : ''
+  const row = db
+    .prepare(
+      `SELECT COUNT(*) AS n FROM documents d WHERE d.tree_status = 'ready'${where}`
+    )
+    .get(...(filter ? filter.params : [])) as unknown as { n: number }
+  return row?.n ?? 0
 }
 
 // IPC for RAG chat with citations (spec §9.1, §7.8).
@@ -81,6 +110,40 @@ export function registerRagIpc(ctx: AppContext): void {
             event.sender.send(STREAM.scope(conversationId), { titles: detected.titles })
           }
         }
+      }
+
+      // Task router (whole-document-analysis plan §4.4, Phase 3): a "list every X / how many"
+      // question over a mapped, PRE-EXTRACTED type is answered by the precomputed SQL
+      // aggregation — exhaustive over indexed sections, with provenance, at ZERO query-time
+      // model calls. Anything else (incl. an unmapped/ad-hoc {X} with no precomputed table)
+      // falls through to the existing relevance path BYTE-UNCHANGED.
+      const decision = routeQuestion({
+        question: text,
+        documentCount: documentsInScope(ctx.db, scope).length,
+        treeAvailable: readyTreeCountInScope(ctx.db, scope) > 0,
+        extractAvailable: extractionsExistInScope(ctx.db, scope)
+      })
+      if (decision.engine === 'coverage-extract' && decision.recordType) {
+        const recordType: ExtractRecordType = decision.recordType
+        const listing = aggregateExtractions(ctx.db, scope, recordType)
+        const answer = buildListingAnswer(ctx.db, listing, (key, params) => tMain(key, params))
+        return withChatStream(
+          event,
+          conversationId,
+          'Document listing failed',
+          async (_signal, sendToken): Promise<Message> => {
+            // 0 model calls: emit the deterministic listing as one chunk, then persist it.
+            sendToken(answer)
+            return appendMessage(ctx.db, {
+              conversationId,
+              role: 'assistant',
+              content: answer
+            })
+          },
+          // Acquire the slot so a yielding deep-index build is paused/resumed cleanly even
+          // though we make no model call (keeps the single locked contract).
+          () => ctx.docTasks?.acquireChatSlot() ?? Promise.resolve(() => {})
+        )
       }
 
       return withChatStream(

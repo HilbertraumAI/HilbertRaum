@@ -37,6 +37,7 @@ import { isAbortError, stripThinkBlocks } from '../chat'
 import { collectionIdsForDocument } from '../collections'
 import { ModelSlotArbiter } from '../analysis/model-slot-arbiter'
 import { buildTree } from '../analysis/tree-build'
+import { extractDocument } from '../analysis/extract'
 import { maxTreeLevel, nodeSummariesAtLevel } from '../analysis/coverage'
 import type { AuditRecorder } from '../audit'
 import { log } from '../logging'
@@ -217,8 +218,8 @@ export class DocTaskManager {
   abortActiveBuild(): void {
     if (!this.runningId) return
     const task = this.tasks.get(this.runningId)
-    if (!task || task.status.kind !== 'tree') return
-    log.info('Active deep-index build aborted', { jobId: task.status.jobId })
+    if (!task || !isYieldingKind(task.status.kind)) return
+    log.info('Active deep-index build aborted', { jobId: task.status.jobId, kind: task.status.kind })
     task.controller.abort()
     this.arbiter.abort()
   }
@@ -289,7 +290,8 @@ export class DocTaskManager {
       kind !== 'translation' &&
       kind !== 'compare' &&
       kind !== 'ocr' &&
-      kind !== 'tree'
+      kind !== 'tree' &&
+      kind !== 'extract'
     ) {
       throw new Error(tMain('main.task.unknownKind'))
     }
@@ -350,10 +352,11 @@ export class DocTaskManager {
         if (!doc || doc.status !== 'indexed' || doc.chunkCount === 0) {
           throw new Error(tMain('main.task.documentNotReady'))
         }
-        // Deep-index precondition (C4): only a FULLY chunked document may be tree-built, so
-        // "100% coverage" can never be claimed over a silently-truncated legacy chunk set.
-        // A legacy (NULL marker) doc must be re-indexed first (which sets it or fails over-cap).
-        if (kind === 'tree') {
+        // Deep-index precondition (C4): only a FULLY chunked document may be tree-built or
+        // extract-scanned, so "whole document"/"100% coverage" can never be claimed over a
+        // silently-truncated legacy chunk set. A legacy (NULL marker) doc must be re-indexed
+        // first (which sets it or fails over-cap). Same gate for the extract pass (Phase 3).
+        if (kind === 'tree' || kind === 'extract') {
           const row = this.deps
             .getDb()
             .prepare('SELECT fully_chunked FROM documents WHERE id = ?')
@@ -420,9 +423,9 @@ export class DocTaskManager {
       return
     }
     task.controller.abort()
-    // A running tree build may be PARKED on the arbiter (yielded to chat); aborting its
-    // controller alone won't unstick that await, so reject the parked reacquire too.
-    if (task.status.kind === 'tree') this.arbiter.abort()
+    // A running yielding build (tree/extract) may be PARKED on the arbiter (yielded to chat);
+    // aborting its controller alone won't unstick that await, so reject the parked reacquire too.
+    if (isYieldingKind(task.status.kind)) this.arbiter.abort()
   }
 
   /** True while a task is running or queued — the chat-side busy guard reads this. */
@@ -481,7 +484,9 @@ export class DocTaskManager {
               ? await this.runTranslation(task, runtime)
               : kind === 'tree'
                 ? await this.runTreeBuild(task, runtime)
-                : await this.runSummary(task, runtime)
+                : kind === 'extract'
+                  ? await this.runExtract(task, runtime)
+                  : await this.runSummary(task, runtime)
       }
       task.status.state = 'done'
       task.status.resultRef = { documentId: resultId }
@@ -536,6 +541,38 @@ export class DocTaskManager {
     } finally {
       // Always release the slot ownership — on success, abort, or error — so a later chat
       // never waits on a handoff from a build that is gone.
+      this.arbiter.unregisterBuild(task.status.jobId)
+    }
+    return documentId
+  }
+
+  /**
+   * The structured-extract pass (whole-document-analysis plan §4.2, Phase 3): the second
+   * YIELDING background job. Per chunk it makes one model call to surface structured items,
+   * stored in `extraction_records` so a later "list every X" answer is a pure SQL aggregation
+   * (0 query-time model calls). Same arbiter handshake + yielding/cancel discipline as the
+   * tree build; resumable (already-scanned chunks are skipped via their `__scan__` marker).
+   * DB-only writer ⇒ no vault lease (L1). Content is never logged/audited.
+   */
+  private async runExtract(task: InternalTask, runtime: ModelRuntime): Promise<string> {
+    const documentId = task.status.documentIds[0]
+    const signal = task.controller.signal
+    this.arbiter.registerBuild(task.status.jobId)
+    try {
+      await extractDocument(documentId, {
+        db: this.deps.getDb(),
+        modelId: runtime.modelId,
+        signal,
+        arbiter: this.arbiter,
+        jobId: task.status.jobId,
+        generate: (systemPrompt, prompt, maxTokens, temperature, sig) =>
+          this.generate(runtime, systemPrompt, prompt, maxTokens, temperature, sig),
+        onProgress: (done, total) => {
+          task.status.progress.stepsDone = done
+          task.status.progress.stepsTotal = total
+        }
+      })
+    } finally {
       this.arbiter.unregisterBuild(task.status.jobId)
     }
     return documentId
@@ -1339,6 +1376,12 @@ export class DocTaskManager {
     }
     return stripThinkBlocks(out).trim()
   }
+}
+
+/** The YIELDING build kinds (whole-document-analysis plan §4.1): they cede the model slot to
+ *  chat via the arbiter and resume in-session, rather than refusing chat while active. */
+function isYieldingKind(kind: DocTaskKind): boolean {
+  return kind === 'tree' || kind === 'extract'
 }
 
 /** Keys of the guard/validation copy that may pass through to the renderer on failure. */

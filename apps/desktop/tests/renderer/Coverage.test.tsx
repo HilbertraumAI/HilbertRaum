@@ -72,6 +72,26 @@ describe('CoverageMeter — breadth ≠ fidelity honesty (C1/L2)', () => {
     expect(screen.getByText(t('en', 'coverage.capped.beginning'))).toBeInTheDocument()
     expect(screen.queryByText(t('en', 'coverage.tree.whole'))).not.toBeInTheDocument()
   })
+
+  // Phase 3 — structured-extract listing honesty (H7): "sections scanned (k unparsed)",
+  // gated whole-document wording, NEVER "complete".
+  it('an extract listing over a fully-indexed doc says "whole document", never "complete"', () => {
+    render(meter({ mode: 'extract', chunksCovered: 213, chunksTotal: 213, fullyChunked: true }))
+    expect(
+      screen.getByText(t('en', 'coverage.extract.whole', { scanned: 213 }))
+    ).toBeInTheDocument()
+    expect(screen.queryByText(/complete/i)).not.toBeInTheDocument()
+  })
+
+  it('an extract listing surfaces unparsed sections and never claims the whole document when not fully chunked', () => {
+    render(
+      meter({ mode: 'extract', chunksCovered: 50, chunksTotal: 50, unparsedChunks: 3, fullyChunked: false })
+    )
+    expect(
+      screen.getByText(t('en', 'coverage.extract.sectionsUnparsed', { scanned: 50, unparsed: 3 }))
+    ).toBeInTheDocument()
+    expect(screen.queryByText(t('en', 'coverage.extract.whole', { scanned: 50 }))).not.toBeInTheDocument()
+  })
 })
 
 describe('Transcript — a grounded answer is labelled relevance-based', () => {

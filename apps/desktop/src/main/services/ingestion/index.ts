@@ -21,6 +21,7 @@ import type {
   GeneratedProvenance,
   ImportDestination,
   IngestionStatus,
+  ExtractStatus,
   TreeBuildStatus
 } from '../../../shared/types'
 import { sha256File } from '../models'
@@ -151,6 +152,7 @@ interface DocumentRow {
   tree_status: string | null
   tree_meta_json: string | null
   fully_chunked: string | null
+  extract_status: string | null
   created_at: string
   updated_at: string
 }
@@ -327,6 +329,8 @@ function rowToInfo(row: DocumentRow, chunkCount: number, staleEmbeddings?: boole
     treeStatus: treeStatusOf(row.tree_status),
     fullyChunked: row.fully_chunked != null,
     treeLevels: treeLevelsOf(row.tree_meta_json),
+    // Structured-extract pass state (Phase 3); same NULL-sentinel coalescing as tree_status.
+    extractStatus: extractStatusOf(row.extract_status),
     createdAt: row.created_at,
     updatedAt: row.updated_at
   }
@@ -343,6 +347,19 @@ const TREE_BUILD_STATES: ReadonlySet<string> = new Set<TreeBuildStatus>([
 /** Coalesce the stored `tree_status` to the typed union (unknown/NULL ⇒ undefined). */
 function treeStatusOf(raw: string | null): TreeBuildStatus | undefined {
   return raw && TREE_BUILD_STATES.has(raw) ? (raw as TreeBuildStatus) : undefined
+}
+
+const EXTRACT_STATES: ReadonlySet<string> = new Set<ExtractStatus>([
+  'pending',
+  'extracting',
+  'ready',
+  'stale',
+  'failed'
+])
+
+/** Coalesce the stored `extract_status` to the typed union (unknown/NULL ⇒ undefined). */
+function extractStatusOf(raw: string | null): ExtractStatus | undefined {
+  return raw && EXTRACT_STATES.has(raw) ? (raw as ExtractStatus) : undefined
 }
 
 /** Levels from a ready tree's `tree_meta_json` (tolerant: malformed/absent ⇒ undefined). */
@@ -650,6 +667,19 @@ export async function processDocument(
     db.prepare('DELETE FROM tree_nodes WHERE document_id = ?').run(documentId)
     db.prepare('UPDATE documents SET tree_status = ? WHERE id = ?').run(
       prevTree ? 'stale' : null,
+      documentId
+    )
+    // The structured-extract rows (Phase 3) self-cascade via chunk_id ON DELETE CASCADE when
+    // the chunks are deleted above (H1 free win) — no manual DELETE needed. Reset the per-doc
+    // extract_status so the now-empty pass reads as 'stale' (UI offers a re-extract) rather
+    // than a stale 'ready' over zero rows.
+    const prevExtract = (
+      db.prepare('SELECT extract_status FROM documents WHERE id = ?').get(documentId) as unknown as
+        | { extract_status: string | null }
+        | undefined
+    )?.extract_status
+    db.prepare('UPDATE documents SET extract_status = ? WHERE id = ?').run(
+      prevExtract ? 'stale' : null,
       documentId
     )
 
@@ -1077,6 +1107,24 @@ export function reconcileStuckTrees(db: Db, beforeIso: string): number {
     .prepare(
       `UPDATE documents SET tree_status = 'pending', updated_at = ?
        WHERE tree_status = 'building' AND updated_at < ?`
+    )
+    .run(nowIso(), beforeIso)
+  return Number(res.changes ?? 0)
+}
+
+/**
+ * Reset structured-extract passes left `extracting` by a previous run (killed/locked
+ * mid-pass) to `pending` so the pass can resume — the per-chunk extract pass is resumable
+ * (already-scanned chunks are skipped via their `__scan__` marker, 0 model calls; plan §3.3/
+ * §4.2, Phase 3). Mirror of `reconcileStuckTrees`: only rows last touched BEFORE `beforeIso`
+ * are affected (a live in-session pass bumps `updated_at`), and the caller gates on "no active
+ * task". Returns the number reset. Content-free (ids/counts only).
+ */
+export function reconcileStuckExtracts(db: Db, beforeIso: string): number {
+  const res = db
+    .prepare(
+      `UPDATE documents SET extract_status = 'pending', updated_at = ?
+       WHERE extract_status = 'extracting' AND updated_at < ?`
     )
     .run(nowIso(), beforeIso)
   return Number(res.changes ?? 0)

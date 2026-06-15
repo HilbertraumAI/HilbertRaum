@@ -193,6 +193,32 @@ CREATE TABLE IF NOT EXISTS summary_cache (
   created_at TEXT NOT NULL,
   PRIMARY KEY (content_hash, model_id)
 );
+
+-- Structured extraction records (whole-document-analysis plan §3.3, Phase 3). One row per
+-- item surfaced by the per-chunk extract pass over the fixed v1 type set, plus exactly one
+-- bookkeeping "__scan__" marker row per scanned chunk (normalized_value 'ok' | 'unparsed')
+-- that records the scan outcome and is the per-chunk resume/cache key. Query-time aggregation
+-- GROUPs by normalized_value (scoped via buildScopeFilter) so "list every X" is 0 model calls.
+-- value_text/normalized_value are CONTENT — never logged/audited.
+-- [H1 free win] chunk_id has ON DELETE CASCADE, so re-index (which deletes+recreates chunks)
+-- drops a document's extraction rows automatically — extraction self-invalidates on re-index
+-- (under PRAGMA foreign_keys = ON, set in openDatabase).
+CREATE TABLE IF NOT EXISTS extraction_records (
+  id TEXT PRIMARY KEY,
+  document_id TEXT NOT NULL,
+  chunk_id TEXT NOT NULL,             -- provenance (which chunk this came from)
+  record_type TEXT NOT NULL,          -- 'generic'|'date'|'amount'|'party'|'obligation' | '__scan__' marker
+  value_text TEXT NOT NULL,           -- the surfaced item, verbatim-ish ('' for a marker)
+  normalized_value TEXT NOT NULL,     -- lowercased/trimmed dedup key ('ok'|'unparsed' for a marker)
+  attributes_json TEXT,               -- optional structured fields per type (NULL in v1)
+  model_id TEXT,                      -- chat model that produced the extraction
+  content_hash TEXT NOT NULL,         -- sha256(chunk text + type-set version) — per-chunk cache key
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE,
+  FOREIGN KEY (chunk_id)   REFERENCES chunks(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_extract_doc_type ON extraction_records(document_id, record_type, normalized_value);
+CREATE INDEX IF NOT EXISTS idx_extract_chunk ON extraction_records(chunk_id);
 `
 
 // Additive column migrations on top of the spec §8 base schema. `CREATE TABLE IF NOT
@@ -354,6 +380,9 @@ export function openDatabase(path: string): Db {
   ensureColumn(db, 'documents', 'tree_status', 'tree_status TEXT')
   ensureColumn(db, 'documents', 'tree_meta_json', 'tree_meta_json TEXT')
   ensureColumn(db, 'documents', 'fully_chunked', 'fully_chunked TEXT')
+  //   extract_status — NULL | 'pending' | 'extracting' | 'ready' | 'stale' | 'failed' (Phase 3,
+  //   the per-chunk structured-extract pass; mirrors tree_status, NULL-sentinel).
+  ensureColumn(db, 'documents', 'extract_status', 'extract_status TEXT')
   ensureChunksFts(db)
   ensureMessagesFts(db)
   seedCollections(db)

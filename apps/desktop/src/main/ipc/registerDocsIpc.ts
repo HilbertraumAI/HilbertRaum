@@ -27,6 +27,7 @@ import {
   readStoredDocumentText,
   reconcileStuckDocuments,
   reconcileStuckTrees,
+  reconcileStuckExtracts,
   reindexDocument,
   summarizeImportPaths,
   type IngestionDeps
@@ -325,6 +326,9 @@ export function registerDocsIpc(ctx: AppContext): void {
       if (!ctx.docTasks?.hasActiveTask()) {
         const nt = reconcileStuckTrees(ctx.db, new Date().toISOString())
         if (nt > 0) log.warn('Reconciled interrupted deep-index builds', { count: nt })
+        // Same treatment for structured-extract passes left `extracting` (Phase 3, resumable).
+        const ne = reconcileStuckExtracts(ctx.db, new Date().toISOString())
+        if (ne > 0) log.warn('Reconciled interrupted extract passes', { count: ne })
       }
     }
     // Flag docs whose vectors were produced by a different embedder than the active one

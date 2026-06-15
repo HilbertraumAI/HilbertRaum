@@ -21,6 +21,8 @@ import type {
   DriveStatus,
   EngineDownloadJob,
   EngineStatus,
+  ExtractionListing,
+  ExtractionListingRequest,
   ImportJob,
   ImportJobStatus,
   ImportOptions,
@@ -277,6 +279,10 @@ const api = {
    *  -analysis plan §5.1). No model call; null when the document is gone. */
   documentCoverage: (documentId: string): Promise<DocumentCoverage | null> =>
     ipcRenderer.invoke(IPC.documentCoverage, documentId),
+  /** Read-only "list every X" aggregation over precomputed structured extractions
+   *  (whole-document-analysis plan §4.2/§5.1). Zero model calls; null for an invalid type. */
+  listAllExtractions: (req: ExtractionListingRequest): Promise<ExtractionListing | null> =>
+    ipcRenderer.invoke(IPC.listAllExtractions, req),
 
   // ---- Document organization — collections (projects + built-ins, plan §16) ----
   /** All collections (built-ins first, then projects by name). */

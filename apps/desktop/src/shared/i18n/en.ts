@@ -203,11 +203,14 @@ export const en = {
   'docs.task.compareBusy': 'Comparing…',
   'docs.task.ocrBusy': 'Reading the scan…',
   'docs.task.treeBusy': 'Building a deep index…',
+  'docs.task.extractBusy': 'Scanning for details…',
   'docs.task.summaryBusyTitle': 'The summary is being written',
   'docs.task.translationBusyTitle': 'The translation is being written',
   'docs.task.compareBusyTitle': 'The comparison is being written',
   'docs.task.ocrBusyTitle': 'The scanned pages are being read',
   'docs.task.treeBusyTitle': 'A deep index is being built for the whole document',
+  'docs.task.extractBusyTitle':
+    'The whole document is being scanned so it can answer "list every…" questions',
   'docs.error.noSupported': 'No supported documents were found in that selection.',
   'docs.removedDocFallback': 'a removed document',
   // Provenance lines render around inline <b>title</b> elements.
@@ -336,6 +339,36 @@ export const en = {
   'coverage.tier.hint.2': 'A richer pass across the sections',
   'coverage.tier.hint.3': 'The most detail, across the whole document',
   'coverage.tierSelect.trigger': 'Detail: {label}',
+  // Structured-extract listing coverage (whole-document-analysis plan §4.2/§5.2, Phase 3).
+  // Exhaustive over the sections scanned — NEVER "complete" (H7). "Whole document" only when
+  // every in-scope document is fully indexed.
+  'coverage.extract.whole': 'Every match found across the whole document — {scanned} sections scanned',
+  'coverage.extract.wholeUnparsed':
+    'Every match found across the whole document — {scanned} sections scanned, {unparsed} could not be read',
+  'coverage.extract.sections': 'Every match found across {scanned} sections scanned',
+  'coverage.extract.sectionsUnparsed':
+    'Every match found across {scanned} sections scanned, {unparsed} could not be read',
+
+  // ---- "List every X" answer (whole-document-analysis plan §4.2, Phase 3) ----
+  // The deterministic listing answer (0 model calls). User words only — "sections", no
+  // chunk/record/extract jargon. Honest: exhaustive over the sections scanned, not "complete".
+  'analysis.kind.generic': 'items',
+  'analysis.kind.date': 'dates',
+  'analysis.kind.amount': 'amounts',
+  'analysis.kind.party': 'parties',
+  'analysis.kind.obligation': 'obligations',
+  'analysis.listing.coverageWhole':
+    'Found {count} {kind} across the whole document — {scanned} sections scanned{unparsed}:',
+  'analysis.listing.coverageSections':
+    'Found {count} {kind} across {scanned} sections scanned{unparsed}:',
+  'analysis.listing.empty': 'No {kind} found across {scanned} sections scanned{unparsed}.',
+  'analysis.listing.unparsedSuffix': ' ({k} could not be read)',
+  'analysis.listing.item': '- {value} (×{count})',
+  'analysis.listing.caveat':
+    'This list is exhaustive over the sections scanned — not guaranteed complete (a small ' +
+    'model can miss an item, and very similar entries may be merged).',
+  'analysis.listing.refPage': 'p. {n}',
+  'analysis.listing.refSection': 'section {n}',
 
   // ---- Models (ModelsScreen.tsx) ----
   'models.title': 'AI Model',
