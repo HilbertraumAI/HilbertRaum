@@ -25,6 +25,16 @@ npm test
 npm run typecheck
 ```
 
+**Don't put `node_modules` on an NTFS volume mounted on Linux.** `npm install` downloads
+Electron's ~100 MB platform binary and unpacks it with `extract-zip`; on an ntfs-3g/FUSE mount
+the unzip can *silently* drop the binary (you get an empty `dist/locales/` and nothing else),
+which later surfaces as electron-vite's opaque `Electron uninstall` error. The root
+`postinstall` (`scripts/verify-electron.mjs`) now detects this on **every** `npm install`,
+force-re-extracts from the cached download, and — if the mount genuinely can't hold the binary —
+fails with a clear message instead of letting the breakage surface later. The fix is to keep
+`node_modules` on a native filesystem (ext4/Btrfs/APFS); the portable HilbertRaum **drive** can
+still be NTFS. Override the check with `HILBERTRAUM_SKIP_ELECTRON_CHECK=1` if needed.
+
 ## Code style
 - TypeScript, strict mode. Prefer small, well-named modules.
 - Each backend service hides behind an interface (see spec §9.2) so it stays swappable.

@@ -8,6 +8,7 @@
     "apps/*"
   ],
   "scripts": {
+    "postinstall": "node scripts/verify-electron.mjs",
     "dev": "npm run dev --workspace apps/desktop",
     "build": "npm run build --workspace apps/desktop",
     "typecheck": "npm run typecheck --workspace apps/desktop",

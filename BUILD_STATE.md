@@ -6,7 +6,28 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
-_Last updated: 2026-06-16 — **Bugfix: chat/RAG failed with `HTTP 400 exceed_context_size_error`
+_Last updated: 2026-06-16 — **Dev-setup bugfix: Electron's platform binary silently fails to
+extract onto an NTFS-on-Linux mount (beta builder report).** A Linux dev setting up the drive on an
+NTFS (ntfs-3g/FUSE) volume hit electron-vite's opaque `Electron uninstall` ("binary not found"). Root
+cause: `npm install` ran Electron's postinstall, the ~113 MB download succeeded (valid zip in
+`~/.cache/electron`), but `extract-zip` **silently dropped the binary** when writing onto the NTFS
+mount — leaving only an empty `dist/locales/`. And because the lockfile then matched, npm considered
+electron installed and **never re-ran its postinstall**, so a repeat `npm install` couldn't repair it;
+the breakage only surfaced much later at launch. **Fix:** new root **`postinstall`**
+(`scripts/verify-electron.mjs`, cross-platform Node — NOT a `.ps1/.sh` mirror) that runs on EVERY
+`npm install` (cached deps or not). It mirrors `electron/index.js`'s own logic (read `path.txt` →
+`dist/version` → `dist/<binary>` exists & non-empty); on a healthy install it's a couple of stat()s
+and exits 0. When broken it removes the half-written `dist/`, force-re-runs `electron/install.js`
+(re-extract from the cached zip), re-verifies, and on persistent failure **exits non-zero with an
+actionable message** (put `node_modules` on a native fs — ext4/Btrfs/APFS; the portable DRIVE can
+stay NTFS) instead of letting the opaque error surface later. Honors `ELECTRON_SKIP_BINARY_DOWNLOAD` /
+`ELECTRON_OVERRIDE_DIST_PATH` / `HILBERTRAUM_SKIP_ELECTRON_CHECK`. **Files:** `package.json`
+(root `postinstall`), `scripts/verify-electron.mjs` (new). **Docs:** `CONTRIBUTING.md` (Dev setup
+warning), `docs/packaging.md` (scripts table row). **Tests:** detection logic exercised against
+half-extract / missing-binary / empty-binary / healthy fixtures (all correct); `npm run postinstall`
+green on the real (healthy) install. No version bump, no schema change._
+
+_(prior) 2026-06-16 — **Bugfix: chat/RAG failed with `HTTP 400 exceed_context_size_error`
 on a long analysis session + the friendly error never showed (beta-tester report).** Symptom: a
 tester analysing a 5-page bank statement hit `ChatRequestError: Chat request failed: HTTP 400 —
 request (9600 tokens) exceeds the available context size (8192 tokens)` — and saw that RAW string,
