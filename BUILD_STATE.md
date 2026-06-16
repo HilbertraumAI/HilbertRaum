@@ -6,7 +6,60 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
-_Last updated: 2026-06-16 — **Skills feature — durable design plan written (planning only, NO
+_Last updated: 2026-06-17 — **Skills Phase S2 SHIPPED — skill package schema & parser (pure,
+Electron-free).** New files: [`shared/skill-manifest.ts`](apps/desktop/src/shared/skill-manifest.ts)
+(the frozen type contract + `parseSkillMarkdown`/`validateSkillManifest`), plus main-side wrappers
+[`services/skills/manifest.ts`](apps/desktop/src/main/services/skills/manifest.ts) (single I/O point
+that reads SKILL.md + optional manifest.json and runs the shared validator — §8.1) and
+[`services/skills/limits.ts`](apps/desktop/src/main/services/skills/limits.ts) (env-overridable §6.4
+caps). 55 new unit tests (`tests/unit/skill-manifest.test.ts` + `skill-limits.test.ts`); full suite
+**1430 passed / 25 skipped**, typecheck + build clean. DB/IPC/UI untouched (S3+). See the **"Skills —
+S2 handoff"** block below for the four-field handoff. Next: Phase S3 (registry & persistence)._
+
+### Skills — S2 handoff (2026-06-17)
+
+**Contracts produced** (frozen — the spine every later phase imports, §18.0-B):
+- `shared/skill-manifest.ts` types: `SkillManifest`, `SkillPermissions`, `SkillTriggers`,
+  `SkillCompatibility`, `SkillKind` (`'instruction'|'tool'`), `SkillTrustedLevel` (`'app'|'user'`),
+  `SkillDocuments/Filesystem/NetworkPermission`, `SkillManifestValidation`, `SkillParseResult`,
+  `SkillParseOptions`. Functions: `parseSkillMarkdown(source, opts)`, `validateSkillManifest(raw)`.
+  Consts: `SKILL_ID_RE` (`^[a-z0-9][a-z0-9-]{1,62}$`), `SKILL_SEMVER_RE` (strict MAJOR.MINOR.PATCH),
+  `SKILL_V1_PERMISSION_CEILING`, `SKILL_KINDS`, `SKILL_TRUSTED_LEVELS`, `DEFAULT_SKILL_MAX_BODY_CHARS`.
+- `SkillManifest` carries `triggers` + `compatibility` and JSON-round-trips unchanged (audit **C2**
+  proved by test) — S3 caches it verbatim into `skills.manifest_json`. `trustedLevel` is NOT on the
+  manifest (app-assigned by the registry in S3); a self-declared `trust` field is ignored with a note.
+- `services/skills/manifest.ts`: `parseSkillManifestFromDir(dir, {limits?})` +
+  `parseSkillManifestSource(source, {limits?, manifestJson?})` — the main-side validation entry points.
+- `services/skills/limits.ts`: `SkillLimits`, `DEFAULT_SKILL_LIMITS`, `resolveSkillLimits(env?)`.
+- **New env caps** (§6.4, no doc change needed per §18.0-E — recorded here): `HILBERTRAUM_SKILL_MAX_FILE_BYTES`
+  (1 MiB), `_MAX_TOTAL_BYTES` (8 MiB), `_MAX_FILES` (200), `_MAX_PATH_LEN` (255), `_MAX_DEPTH` (4),
+  `_MAX_BODY` (64 KiB). Only `maxBodyChars` is enforced in S2 (the parser); the rest are consumed by
+  the S4 extractor.
+
+**Decisions taken or changed:**
+- **Permission ceiling resolves by CLAMPING, never failing** (DS6 / §6.7 / §17). The §6.6 frontmatter
+  comment "a non-'denied' network value *fails validation*" is superseded: a recognized-but-broader
+  value (e.g. `network: allowed`, `documents: all`) is clamped DOWN to the ceiling with a non-fatal
+  note; an absent or unrecognized value resolves to the ceiling (the default instruction posture — it
+  can never exceed the ceiling, so this is not an elevation). This matches DS6 "restrict-only" and the
+  §17 "permission-ceiling clamping" test wording. (Note kept here, not a plan edit, since the plan's
+  normative text already says clamp.)
+- Frontmatter accepts both camelCase (the §6.6 canonical form) and snake_case for multi-word keys
+  (`minAppVersion`/`min_app_version`, `mimeTypes`/`mime_types`, `filenamePatterns`/`filename_patterns`,
+  `allowedTools`/`allowed_tools`). Unknown keys are ignored. Required fields: `id`, `title`,
+  `description`, `version`; `kind` defaults to `instruction`.
+- `DEFAULT_SKILL_MAX_BODY_CHARS` lives in `shared/skill-manifest.ts`; `limits.ts` imports it so the
+  body cap has one source of truth.
+
+**Open landmines:** none (no `SL-#` opened in S2). The §22 items remain spec, not landmines.
+
+**What S3 consumes:** the `SkillManifest` shape + `parseSkillManifestFromDir` (registry discovers
+app-skills folders → parse → assign `trustedLevel` → upsert `skills` row with `manifest_json` =
+JSON.stringify(manifest)); `resolveSkillLimits()` for the loader/installer; `SKILL_ID_RE` for the
+on-disk-name safety check. S3 still owns the table, reconcile, loader, `DRIVE_LAYOUT_DIRS`/`app-skills`,
+and the `shredStalePlaintext` extension (audit A3/A4/C1).
+
+_(prior) 2026-06-16 — **Skills feature — durable design plan written (planning only, NO
 code).** New working paper [`docs/skills-plan.md`](docs/skills-plan.md): local, user-installable
 **Skills** (instruction packages that inject reviewed prompt text; Tier-2 app-owned tools designed
 but deferred; Tier-3 script execution excluded). Key decisions: files-on-disk are truth + `skills`
