@@ -33,9 +33,24 @@ conversation** — `messages.skill_id` per turn + `conversations.active_skill_id
 default; per-turn skill rides `ChatOptions.skillInstallId` on send (DS18, reframed from
 per-conversation). New schema: `skills` table (PK `install_id`) + nullable
 `conversations.active_skill_id` + `messages.skill_id`. A dedicated **Settings → Skills** screen with
-an **Import** button (pick → validate → encrypt → store) is the add-flow. Non-blocking impl-time
-items remain (OQ-1..4). **No version bump, no schema change, no runtime code touched.** Next: Phase
-S2 (package schema + parser)._
+an **Import** button (pick → validate → encrypt → store) is the add-flow. **Plan then AUDITED
+(4 personas, repo-grounded) and REMEDIATED in place — see skills-plan.md §22.** Headline fixes
+folded back: (A1) skills must reach BOTH chat IPC AND the separate `askDocuments` RAG channel via a
+shared `resolveTurnSkill()` (else document conversations silently drop the skill); (A2) **no
+reusable safe zip extractor exists** — `.skill.zip` needs a NEW member-by-member extractor and must
+never hit the validation-blind `tar -xf`; (A3) the crash-sweep is hard-scoped to
+`workspace/documents/` — extend `shredStalePlaintext` to `workspace/skills/` (the "crash-sweep
+covered" claim was false); (A4) `app-skills` must enter `DRIVE_LAYOUT_DIRS` + drive-layout.md in
+**S3**, not S9; (A5) `messages.skill_id` stamps the **assistant** row (OQ-4 resolved) — a 5–6
+call-site + `appendMessage` API change; (A6) the fence can't just append to the system message or it
+silently starves history. Precedent-claim corrections: `policy.ts` is a boolean AND not a 3-way
+`min()`; `buildSystemPrompt()` is an arg-less pass-through (needs a seam); untrusted skill text goes
+in the **user/data turn** (RAG) like excerpts, not `system`; "mark-unavailable" is a NEW helper, not
+a collections precedent. Coherence: user-skill blobs orphan on DB rebuild (added orphan-recovery
+reconcile); `manifest_json` MUST carry `triggers`; doc-menu "Use a skill…" deferred to Tier-2;
+bank-statement v1 stub body made guidance-honest. **Still S1 — plan only; no code, no schema, no
+version bump.** Non-blocking impl-time items remain (OQ-1..3; OQ-4 now resolved). Next: Phase S2
+(package schema + parser), carrying the §22 corrections into S3/S6/S7/§16._
 
 _(prior) 2026-06-16 — **Dev-setup bugfix: Electron's platform binary silently fails to
 extract onto an NTFS-on-Linux mount (beta builder report).** A Linux dev setting up the drive on an
