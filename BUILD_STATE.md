@@ -16,6 +16,26 @@ caps). 55 new unit tests (`tests/unit/skill-manifest.test.ts` + `skill-limits.te
 **1430 passed / 25 skipped**, typecheck + build clean. DB/IPC/UI untouched (S3+). See the **"Skills —
 S2 handoff"** block below for the four-field handoff. Next: Phase S3 (registry & persistence)._
 
+_**Skills — OWNER DECISION REVISION (2026-06-17), folded into [`docs/skills-plan.md`](docs/skills-plan.md)
+§0 (authoritative).** Skills are now stored **UNENCRYPTED as plain folders** — `<root>/app-skills/`
+(read-only) + `<root>/user-skills/` (read-write, power-user droppable), both outside `workspace/` —
+because a skill package is **non-secret task knowledge, not user content** (DS20). This **revokes
+DS11** (no encrypted blob / decrypt-transient / shred), **rewrites DS3/DS1** (disk-is-truth uniform
+reconcile for both sources), and **adds DS19** (a folder dropped into `user-skills/` is discovered but
+installs **DISABLED** until the user enables it; a deliberate zip-import via the view keeps DS7
+enabled-with-warning) and **DS20** (confidentiality boundary: secret material goes in an encrypted
+document, never a skill; `user-skills/` must be included in the workspace backup). **Dropped from the
+plan:** §22-**C1** orphan recovery (disk is truth), §22-**A3** crash-sweep extension (no encryption
+transients), and §22-**C2** downgraded from invariant to cache convenience. **§22-M2 (app-skill
+integrity) RESOLVED as accept + document** the drive-provisioning residual (a hash manifest on a
+writable drive is unanchored; real integrity = off-drive signing, a Tier-3 prerequisite — same
+residual already accepted for the engine binary). **Still mandatory:** the NEW safe member-by-member
+zip extractor (§22-A2) + `services/skills/limits.ts` — a view-imported `.skill.zip` is still
+attacker-supplied and is now unzipped straight to a real on-disk folder. **Impact on the shipped S2
+commit: none** — `shared/skill-manifest.ts` is storage-agnostic and `parseSkillManifestFromDir` is now
+the single read path for both sources. S3 spec, S4 spec, §7/§8/§9/§14/§17/§19/§20 + the §18 matrices
+updated accordingly._
+
 ### Skills — S2 handoff (2026-06-17)
 
 **Contracts produced** (frozen — the spine every later phase imports, §18.0-B):

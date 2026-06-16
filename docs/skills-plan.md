@@ -6,9 +6,68 @@ once the wave ships, this file is condensed into a §-numbered design record (fo
 plan file is deleted (the full original stays in git history). Decision ids are `DS#`; future
 code comments should cite them as "skills plan DS#"._
 
-_Last updated: 2026-06-16. Author: planning pass + multi-persona audit remediation. Grounded in
-the repo as of commit `683bb4f` (v0.1.29). **§22 logs the audit findings and how each was folded
-back into the design** — read it for the corrections to the original draft's precedent claims._
+_Last updated: 2026-06-17. Author: planning pass + multi-persona audit remediation + owner
+decision revision (below). Grounded in the repo as of commit `683bb4f` (v0.1.29). **§22 logs the
+audit findings and how each was folded into the design** — read it for the corrections to the
+original draft's precedent claims._
+
+---
+
+## 0. Decision revision (2026-06-17) — skills are stored UNENCRYPTED as plain folders (AUTHORITATIVE)
+
+> **This block supersedes any conflicting text below.** Where §7/§8/§9/§19/§22 still describe the
+> encrypted-blob model, this revision wins; the conflicting passages are being condensed at S12 and
+> are marked where edited. Decided with the owner.
+
+**The change.** A skill package is **non-secret task knowledge, not user content**, so user skills
+are stored **in the clear as plain folders**, exactly like app skills — *not* as encrypted blobs.
+This collapses the largest source of complexity in the original plan.
+
+**New storage model (replaces DS3/DS11/DS1's user-skill half):**
+- Two plain, non-encrypted folders, both **outside** `workspace/` (which keeps its identity as the
+  encrypted zone): `<root>/app-skills/` (shipped, read-only) and `<root>/user-skills/`
+  (read-write — the Skills view writes here on import, **and power users may drop a skill folder in
+  directly**; reconcile discovers it on next launch).
+- **Disk is the source of truth for BOTH sources** → one uniform disk-discovery reconcile (the
+  `services/models.ts` / collections shape). The DB `skills` table is a pure derived index + state
+  cache (enabled flag, trust level, `warning_ack`, cached `manifest_json`), re-derivable from disk.
+
+**What this DROPS from the plan (do not build):**
+- The encrypted blob, the decrypt→transient→shred-on-activation path, and the two-mode loader
+  (**DS11 gone**). `loader.ts` = "read the folder," one mode.
+- **Orphan recovery (§22-C1 / §7.4) — gone.** Disk is truth; a DB rebuild just re-reads folders.
+- **The `shredStalePlaintext` extension to `workspace/skills/` (§22-A3) — gone.** No encryption
+  plaintext to leak. A failed/partial import is just **deleted** (cleanup, not a shred).
+- **`manifest_json` carrying `triggers`/`compatibility` (§22-C2) — downgraded** from an *invariant*
+  to a *cache convenience* (re-derivable from disk; still cached for the fast picker index).
+
+**What STAYS (do NOT drop):**
+- **The new safe zip extractor (§22-A2) and `services/skills/limits.ts` (§6.4) are still mandatory.**
+  A `.skill.zip` imported via the Skills view is still attacker-supplied, and we now unzip it
+  **straight into a real on-disk folder**, so path-traversal / symlink / zip-bomb / nested-archive /
+  extension-allowlist / size-cap checks matter as much as ever.
+- **DS7 enabled-with-warning** for skills **imported via the view** (deliberate action + permission
+  summary shown before confirm).
+- **Decision 2 / §22-M2 (app-skill integrity)** — unchanged: *accept + document the residual* (a
+  hash manifest on a writable drive is unanchored; real integrity needs off-drive signing, a Tier-3
+  prerequisite). User-skills being writable adds no new risk — they are untrusted by definition.
+
+**New decisions (added to §19):**
+- **DS19 — drop-in discovery + default-disabled.** A skill folder a power user drops into
+  `user-skills/` is **discovered but installs DISABLED** (no import-time permission-summary
+  confirmation happened); the user enables it in the Skills view, which shows the summary. A
+  deliberate **zip-import via the view** keeps **DS7 enabled-with-warning**. This preserves "nothing
+  the user didn't choose shapes an answer" and blunts a local-malware-drops-a-folder vector (a
+  dropped skill still cannot *act* — structural ceilings + no auto-fire — and must not be silently
+  selectable either).
+- **DS20 — confidentiality boundary.** Skills are declared **non-confidential**; truly sensitive
+  material belongs in a **document** (which stays encrypted), never in a skill. This consciously
+  reverses the original "Lawyer" user story (#2). `user-skills/` is a separate top-level dir, so the
+  **workspace backup must also include it** (it no longer rides inside the encrypted `workspace/`).
+
+**Impact on already-shipped S2: none.** `shared/skill-manifest.ts` is storage-agnostic;
+`parseSkillManifestFromDir(dir)` is now the SINGLE read path for both app and user skills (instead
+of one of two modes); `limits.ts` still feeds the zip extractor. The S2 commit stands unchanged.
 
 ---
 
@@ -31,16 +90,13 @@ user data lives.
 
 **Core architectural decisions** (full list in §19):
 
-- **DS1 — Files are the source of truth *for app skills*; SQLite is an index + state cache.** A
-  skill is a folder/zip on disk. **App skills** (plain folders) follow the model pattern
-  (`services/models.ts` *discovers + validates from disk* and overlays computed state — note it
-  does still touch SQLite for the settings hash + active-model id, so the accurate framing is "no
-  model-*state* table / no DB reconcile", not "no DB"). **User skills are different:** they are
-  opaque encrypted blobs whose manifest is *not* re-derivable on a routine unlock (DS11), so the
-  `skills` row is the authoritative derived state for them — the DB, not the blob, is their source
-  of truth. The blob carries the portable/exportable package; losing the row orphans it (handled by
-  the orphan-recovery reconcile, §7.4). This split is deliberate and is the single most important
-  nuance in DS1.
+- **DS1 — Files are the source of truth; SQLite is an index + state cache.** _(Revised §0: this now
+  holds for BOTH sources — the original "user skills are opaque blobs, DB is their truth" half is
+  retired.)_ A skill is a **plain folder** on disk. Both **app skills** (`app-skills/`) and **user
+  skills** (`user-skills/`) follow the model pattern (`services/models.ts` *discovers + validates
+  from disk* and overlays computed state — note it does still touch SQLite for the settings hash +
+  active-model id, so the accurate framing is "no model-*state* table", not "no DB"). The `skills`
+  table is a re-derivable index/cache; a DB rebuild simply re-reads the folders (no orphan).
 - **DS2 — `SKILL.md` with YAML frontmatter is canonical; `manifest.json` is optional/derived.**
   One human-editable file holds instructions + metadata, mirroring `SKILL.md`-style systems and
   the repo's existing committed-YAML manifest culture.
@@ -327,6 +383,13 @@ anything broader is **clamped down**, surfaced honestly in the permission summar
 
 ## 7. Storage and drive layout
 
+> **⚠️ SUPERSEDED in part by §0 (2026-06-17).** This section still describes the encrypted-blob
+> model for user skills. The current model: **user skills are UNENCRYPTED plain folders in
+> `<root>/user-skills/`** (read-write, power-user droppable), app skills in `<root>/app-skills/`
+> (read-only) — both outside `workspace/`. Disregard below: `workspace/skills/`, the `.skill.zip.enc`
+> blob, decrypt→transient→shred, the crash-sweep extension, and orphan recovery (§7.4). The
+> **disk-is-truth, uniform-reconcile** framing still holds (now for both sources). Read §0 first.
+
 ### 7.1 Where skills live (DS3)
 
 ```
@@ -495,6 +558,14 @@ source of validation truth.)
 
 ### 8.2 SQLite additions (additive, `db.ts` SCHEMA + `ensureColumn` rules)
 
+> **Revised §0:** `skills.path` now points to a **plain folder** (`app-skills/<id>/` or
+> `user-skills/<id>/`), never a `.skill.zip.enc` blob. `manifest_json` is a pure **re-derivable
+> cache** (no longer the authoritative state for user skills). Since user-skill folders are named by
+> `id`, two same-`id` user skills can't coexist on disk, so the generated **`install_id` PK is now
+> optional** — `(source, id)` is a natural key; whether to keep `install_id` or key by `(source,id)`
+> is an **S3 implementation choice** (DS12's app-vs-user collision handling holds either way). The
+> `manifest_json MUST carry triggers` invariant (§22-C2) is downgraded to a cache convenience.
+
 New tables carry full SQL in the `SCHEMA` constant with `IF NOT EXISTS` (the established
 migration shape; §3 doc-org record). All would-be columns on existing tables are nullable.
 
@@ -598,6 +669,16 @@ follows **doc-org collections** (`collections.ts`), not `services/models.ts` (wh
 ---
 
 ## 9. Import / export lifecycle
+
+> **⚠️ SUPERSEDED in part by §0 (2026-06-17).** Install no longer zips + encrypts to a
+> `<install_id>.skill.zip.enc` blob: the validated tree is **unzipped/copied into `user-skills/<id>/`
+> as plain files**. The staging dir is **deleted** on failure (cleanup, not a shred — nothing
+> secret). **Delete** removes the folder + the DB row + clears refs (no shred-under-encryption). A
+> third install source is added: **a power user dropping a folder into `user-skills/`** (discovered,
+> installs DISABLED — DS19). Everything else in §9 — the **safe member-by-member extractor and its
+> full validation matrix (§9.2)**, duplicate/upgrade/downgrade rules (§9.3), export (§9.5),
+> additive migration (§9.6) — **still applies** (the extractor matters MORE now that we write to a
+> real folder).
 
 ### 9.1 Import sources
 
@@ -1109,18 +1190,19 @@ tool calls** — never through code, files, network, or scope it controls.
 | Unsupported / disguised file types | Extension allowlist (§6.3) **plus magic-byte sniff** to catch nested archives renamed `.csv` etc. |
 | Symlink attacks | Reject symlink members outright (via unix-mode/external attrs); re-check post-extract |
 | Sensitive content in logs/audit | id/type/count only; **extends to `previewSkillPackage`/`importSkill` IPC error payloads + loader logs** (no frontmatter values / body / filenames — §22-M1); sentinel-grep test pushes secret strings through and proves absence (Phase-19 rule) |
-| Plaintext leak on crash | Skill transients + `.skill-import-*` staging are swept by the **extended `shredStalePlaintext`** (now covers `workspace/skills/`, §22-A3) — the original "crash-sweep covered" was false; shred is single-pass best-effort (SSD caveat, `workspace-vault.ts:300`), not guaranteed secure erase |
+| Plaintext leak on crash | **N/A (revised §0)** — skills are stored unencrypted by design (DS20), so there is no decrypt transient to leak; a failed `.skill-import-*` staging dir is just deleted on next run |
+| Skill content readable on a lost/shared drive | **Accepted (DS20)** — skills are declared non-confidential task knowledge; confidential material belongs in an (encrypted) document, not a skill. Stated in `known-limitations.md` |
 | Skills claiming false permissions | `trust`/`permissions` are app-computed; self-declared elevation is ignored/clamped (§6.7). **In v1 `permissions.*` is a display string, not a gate** (no tools execute — §6.7/§22-M4); the real v1 control is "the loader is the only file reader and reads only the package" |
 | Skills requesting network | `network: denied` always; no network-capable tool token exists |
 | Skills requesting broad FS | v1: skills are inert text (no FS access object exists). Tier-2: `filesystem: skill_resources_only` enforced by `SkillToolContext`; no arbitrary-path tool token |
 | Confused-deputy / model over-reach | App-orchestrated tools, narrow `SkillToolContext`, output validation, user confirm for writes |
 | Model asking a tool to access too much | Tools take a fixed `documentIds` scope they cannot widen; per-call input validated |
 | Version downgrade / tampering | Downgrade refused by default — a **footgun/UX guard, NOT a tamper defence** (`version` is unsigned, attacker-controlled; §9.3/§22-E1); real integrity = signing (future) |
-| Untrusted-skill trust warnings | `user` skills install **enabled-with-warning** (DS7) — permission summary before confirm, persistent calm warning + `warning_ack`; structural ceilings mean an enabled untrusted skill still cannot *act* (§9.2/§15) |
-| App-shipped skill trust + **integrity** | Provisioned + verified on a commercial drive (`assertCommercialDrive` gains a skills check + **script parity** in `build-commercial-drive.{ps1,sh}`); read-only. **Caveat (§22-M2/M3):** "verified" today = build-time provisioning, NOT a runtime per-file hash; on a removable drive `app-skills/` is writable, and since `trusted_level:app` is assigned **by location** and unconditionally wins DS12 precedence, a tampered app skill auto-trusts. Either ship a hashed `app-skills` manifest checked at load, or document the drive-provisioning residual (the open model-sidecar audit item is the same residual) |
-| Encrypted-workspace implications | User skills `.enc` at rest; transient working files `.parse*`-swept + shredded (extended sweep, above) |
-| Read-only drive implications | Import disabled with friendly copy; app-skills already read-only |
-| User-skill blob orphaned on DB rebuild | One-time **orphan-recovery reconcile** (present-on-disk/absent-in-DB ⇒ decrypt+re-derive once, §7.4/§22-C1); without it the `.enc` blobs are unrecoverable since the manifest lives in the DB row |
+| Untrusted-skill trust warnings | `user` skills **imported via the view** install **enabled-with-warning** (DS7) — permission summary before confirm, persistent calm warning + `warning_ack`; **drop-ins install disabled (DS19)**; structural ceilings mean an enabled untrusted skill still cannot *act* (§9.2/§15) |
+| App-shipped skill trust + **integrity** | Provisioned + verified on a commercial drive (`assertCommercialDrive` gains a skills check + **script parity** in `build-commercial-drive.{ps1,sh}`); read-only at runtime. **Residual ACCEPTED + documented (§22-M2, 2026-06-17):** "verified" = build-time provisioning, not a runtime hash; on a removable drive `app-skills/` is writable and `trusted_level:app` is assigned by location. A hash manifest on the same writable drive is unanchored; real integrity needs off-drive signing (Tier-3). Same residual as the engine binary — documented in `security-model.md`/`known-limitations.md`, not papered over |
+| Local-malware drops a skill folder | A folder dropped into `user-skills/` installs **DISABLED (DS19)** and still cannot *act* (structural ceilings, no auto-fire); the user must deliberately enable it (seeing the permission summary) before it can shape any answer |
+| Read-only drive implications | Import disabled with friendly copy; app-skills already read-only; `user-skills/` writes disabled |
+| DB rebuild / corruption | **No data loss (revised §0)** — disk is the source of truth; reconcile re-reads every skill folder. No orphan, no recovery path needed (§22-C1 moot) |
 
 **v1 explicitly rejects** (structurally, not by request): arbitrary Python/shell/Node execution;
 remote downloads from skill packages; skills adding npm dependencies; skills reading arbitrary
@@ -1277,10 +1359,11 @@ possible (the graceful-fallback test culture).
   + user data.**
 - **Registry discovery / reconciliation:** app-skills vs user-skills, disk↔DB reconcile
   (insert/mark-unavailable/version-update), `install_id` keying with non-unique `id`.
-- **Encrypted-workspace:** user skills `.enc` at rest (scan blobs for plaintext SKILL.md
-  content absence), transient working files shredded **incl. a crash-window test** (kill between
-  decrypt and shred ⇒ next startup leaves no plaintext under `workspace/skills/`, §22-A3), **orphan
-  recovery** (blob present, row gone ⇒ one-time re-derive), locked ⇒ list unavailable cleanly.
+- **Plain-folder storage (revised §0):** user skills are unencrypted plain folders under
+  `user-skills/`; disk is the source of truth → a simulated **DB rebuild re-derives every skill from
+  disk** (no orphan); a folder added/removed between runs is reflected; **a dropped-in folder installs
+  DISABLED (DS19)**; mark-unavailable when a folder vanishes. _(Dropped: `.enc`-at-rest scan,
+  decrypt-transient shred, crash-window, orphan-recovery — §22-A3/C1 are moot.)_
 - **Read-only drive:** import disabled friendly.
 - **Cross-platform path tests (Windows-first):** backslash members, drive-letter absolutes,
   long paths.
@@ -1363,7 +1446,7 @@ handoff and the consumers re-checked. Treat S2's types as the spine.
 | Phase | Produces (key contracts) | Consumed by | Consumes ← |
 |---|---|---|---|
 | **S2** | `shared/skill-manifest.ts` types + parse/validate; `services/skills/{manifest,limits}.ts`; `HILBERTRAUM_SKILL_*` env caps | S3, S4, S7, S8, S10 | — |
-| **S3** | `skills` table + `conversations.active_skill_id` + `messages.skill_id`; `registry.ts` (reconcile, mark-unavailable, orphan-recovery); `loader.ts` + blob-write primitive; `AppContext.skills`; `DRIVE_LAYOUT_DIRS`+`app-skills`+`resolveAppSkillsDir`; extended `shredStalePlaintext` | S4, S5, S6, S7, S8, S9 | S2 |
+| **S3** | `skills` table + `conversations.active_skill_id` + `messages.skill_id`; `registry.ts` (uniform disk reconcile, mark-unavailable, **drop-in discovery → disabled**); `loader.ts` (read folder — both sources); `AppContext.skills`; `DRIVE_LAYOUT_DIRS`+`app-skills`+`user-skills`+`resolveAppSkillsDir`+`resolveUserSkillsDir`. _(revised §0: no blob-write primitive, no orphan-recovery, no `shredStalePlaintext` extension.)_ | S4, S5, S6, S7, S8, S9 | S2 |
 | **S4** | `installer.ts` (new extractor, validate, encrypt-blob, export, delete); `registerSkillsIpc.ts` + 8 channels; preload bridge; `skill_imported/deleted/enabled/disabled` audit events | S5, S6, S8 | S2, S3 |
 | **S5** | Settings → Skills UI (`SkillsTab`) + EN/DE catalogs + reusable rows/drawer | end users; S6 reuses components | S3, S4 |
 | **S6+S7** | `resolveTurnSkill()`; `ChatOptions.skillInstallId`; `askDocuments` skill arg; `appendMessage.skillId`; `prompt.ts` fence+budget; assistant glyph | S8 (suggestion → picker), S13 | S2, S3, S4 |
@@ -1394,12 +1477,13 @@ handoff and the consumers re-checked. Treat S2's types as the spine.
 |---|---|---|
 | A1 (both chat channels) | skill reaches plain-chat AND `askDocuments` turns | S6/S7 |
 | A2 (new extractor) | traversal / symlink / zip-bomb(inflated bytes) / nested-magic / never-`tar -xf` | S4 |
-| A3 (crash-sweep) | kill between decrypt and shred ⇒ no plaintext under `workspace/skills/` | S3 |
-| A4 (layout dir) | `DRIVE_LAYOUT_DIRS` contains `app-skills`; dev `resolveAppSkillsDir` falls back to repo | S3 |
+| A3 (crash-sweep) | **DROPPED (revised §0)** — skills unencrypted, no transients to shred | — |
+| A4 (layout dir) | `DRIVE_LAYOUT_DIRS` contains `app-skills`+`user-skills`; dev `resolve*SkillsDir` falls back to repo | S3 |
 | A5 (assistant stamp) | assistant-row stamped; regenerate re-stamps; no-context/coverage ⇒ NULL | S6 |
 | A6 (budget) | fence present + history not silently starved; base/final/excerpts never dropped | S7 |
-| C1 (orphan recovery) | blob present + row gone ⇒ one-time re-derive | S3 |
-| C2 (`triggers` cached) | `triggers`/`compatibility` round-trip into `manifest_json` | S2 |
+| C1 (orphan recovery) | **DROPPED (revised §0)** — disk is truth; DB rebuild re-reads folders | — |
+| C2 (`triggers` cached) | `triggers`/`compatibility` round-trip into the manifest (now a cache convenience) | S2 (done) |
+| DS19 (drop-in disabled) | a folder dropped into `user-skills/` is discovered DISABLED | S3 |
 | C3 (ref-clear) | delete clears refs in one txn; delete-during-stream guard | S4 |
 | C4 (`suggestSkills` scope) | scope resolved main-side from `conversationId`, not flat `documentIds` | S8 |
 | D1 (stub honesty) | shipped stub body makes no extraction/validation promise | S9 |
@@ -1421,7 +1505,7 @@ they are spec, not landmines)._
 | Phase | Topic docs touched (besides BUILD_STATE, always) |
 |---|---|
 | **S2** | none required (pure module); note new env caps in BUILD_STATE handoff |
-| **S3** | `drive-layout.md` (layouts + `DRIVE_LAYOUT_DIRS`), `architecture.md` (storage/registry), `security-model.md` (sweep extension) |
+| **S3** | `drive-layout.md` (layouts + `DRIVE_LAYOUT_DIRS` incl. `user-skills`), `architecture.md` (storage/registry — plaintext plain-folder model) _(revised §0: no `security-model.md` sweep-extension entry)_ |
 | **S4** | `security-model.md` (skill import defences + the new extractor), `architecture.md` (IPC surface) |
 | **S5** | `design-guidelines.md` only if a new UI pattern is introduced (else none) |
 | **S6+S7** | `architecture.md` (chat assembly + skill fence), `rag-design.md` (grounded assembly carries the fence) |
@@ -1445,35 +1529,42 @@ they are spec, not landmines)._
 - **Acceptance:** valid/invalid fixtures classified correctly; pure, Electron-free.
 - **Risks:** frontmatter edge cases (the i18n catalog-parity discipline helps).
 
-### Phase S3 — Registry & persistence
+### Phase S3 — Registry & persistence  _(revised §0 — plaintext plain-folder model)_
 - **Goal:** the `skills` table (NOT `skill_runs` — DS13) + `conversations.active_skill_id` +
-  `messages.skill_id`; discover + reconcile app-skills/user-skills (incl. **mark-unavailable** as a
-  new helper, and the **orphan-recovery** path §7.4/§22-C1); enable/disable; the **blob loader**
-  (DS11 — decrypt `<install_id>.skill.zip.enc` → transient → read → shred; app skills read the plain
-  folder); a low-level **blob-write primitive** (zip→`encryptFile`→blob) so S3 can write *and* read
-  a blob and the round-trip test is honest (S4 layers validation/IPC on top — §22-E3).
-- **Layout + sweep (audit A3/A4):** add `app-skills` to `DRIVE_LAYOUT_DIRS` and create
-  `workspace/skills/` in `ensureWorkspaceDirs`; add a `resolveAppSkillsDir()` (drive → repo-source
-  dev fallback); **extend `shredStalePlaintext` to sweep `workspace/skills/`** (incl. `.skill-import-*`).
+  `messages.skill_id`; **uniform disk discovery + reconcile** of `app-skills/` and `user-skills/`
+  (both plain folders — the `services/models.ts` / collections shape), incl. **mark-unavailable** as
+  a new helper and **drop-in discovery → installs DISABLED (DS19)**; enable/disable; a one-mode
+  `loader.ts` (**read the folder** — same path for both sources, no decrypt/transient/shred).
+- **Layout (audit A4):** add `app-skills` **and** `user-skills` to `DRIVE_LAYOUT_DIRS`; add
+  `resolveAppSkillsDir()` + `resolveUserSkillsDir()` (drive → repo-source dev fallback, the
+  `resolveManifestsDir` precedent). _(Revised §0: no `workspace/skills/`, no
+  `shredStalePlaintext` extension — skills live outside the vault, unencrypted.)_
 - **Files:** `db.ts` (SCHEMA + ensureColumn), `services/skills/registry.ts`,
-  `services/skills/loader.ts`, `services/drive.ts` (`DRIVE_LAYOUT_DIRS`, `resolveAppSkillsDir`),
-  `services/workspace-vault.ts` (sweep extension), `services/context.ts` (add `skills?` to
-  `AppContext`), `main/index.ts` (wire). **Docs:** `drive-layout.md` (both layout sketches + the
-  `DRIVE_LAYOUT_DIRS` note) — a required deliverable.
-- **IPC/UI:** none yet. **Tests:** reconcile idempotent, blob round-trip + shred, encrypted-at-rest
-  (scan blob for plaintext SKILL.md absence), **crash-window sweep** (kill between decrypt and shred
-  ⇒ no plaintext under `workspace/skills/`), orphan-recovery, locked-clean.
-- **Acceptance:** reconcile is idempotent; encrypted user skills round-trip; transients shredded
-  even after a simulated crash; orphan blob recovers.
+  `services/skills/loader.ts`, `services/drive.ts` (`DRIVE_LAYOUT_DIRS`, `resolve*SkillsDir`),
+  `services/context.ts` (add `skills?` to `AppContext`), `main/index.ts` (wire). **Docs:**
+  `drive-layout.md` (both layout sketches + the `DRIVE_LAYOUT_DIRS` note) — a required deliverable.
+- **IPC/UI:** none yet. **Tests:** reconcile idempotent; a folder added/removed on disk between
+  runs is reflected; **drop-in installs disabled (DS19)**; manifest re-derived from disk after a
+  simulated DB rebuild (no orphan); mark-unavailable when a folder vanishes; locked-clean. _(Dropped:
+  blob round-trip, encrypted-at-rest scan, crash-window shred, orphan-recovery.)_
+- **Acceptance:** reconcile is idempotent; a DB rebuild re-derives every skill from disk; a dropped-in
+  folder appears disabled.
 
-### Phase S4 — Import/export/install/delete lifecycle
-- **Goal:** the full §9 lifecycle behind IPC — incl. enabled-with-warning (DS7), reject-on-collision
-  (DS12), dev-mode-only downgrade (DS15), zip→encrypt-blob on install (DS11).
-- **Files:** `services/skills/installer.ts`, `ipc/registerSkillsIpc.ts`, `preload/index.ts`,
-  `shared/ipc.ts`, `shared/types.ts`, audit event types (`skill_imported/deleted/enabled/disabled`).
-- **DB:** none new. **UI:** none yet. **Tests:** the §9.2 validation matrix + export-excludes +
-  collision-rejected + downgrade-gated.
-- **Acceptance:** every reject case fails friendly with nothing persisted; staging shredded.
+### Phase S4 — Import/export/install/delete lifecycle  _(revised §0 — unzip to a plain folder)_
+- **Goal:** the full §9 lifecycle behind IPC — incl. enabled-with-warning for view-imports (DS7),
+  coexist-and-warn on id collision (DS12), dev-mode-only downgrade (DS15), and **validate →
+  unzip/copy into `user-skills/<id>/`** on install (NOT encrypt — revised §0). The **new
+  member-by-member safe extractor (§22-A2) is the security core of this phase** (traversal / symlink
+  / zip-bomb-on-inflated-bytes / nested-archive-magic-sniff / extension-allowlist / §6.4 caps), since
+  we now write attacker zip contents straight to disk. A failed import **deletes** the staging dir
+  (cleanup, not a shred — nothing secret).
+- **Files:** `services/skills/installer.ts` (extractor + validate + place + export + delete),
+  `ipc/registerSkillsIpc.ts`, `preload/index.ts`, `shared/ipc.ts`, `shared/types.ts`, audit event
+  types (`skill_imported/deleted/enabled/disabled`).
+- **DB:** none new. **UI:** none yet. **Tests:** the §9.2 validation/extractor matrix + assert
+  `.skill.zip` never hits `extractWithTar` + export-excludes + collision coexist/one-active +
+  downgrade-gated. **Acceptance:** every reject case fails friendly with nothing persisted; the
+  staging dir is removed.
 
 ### Phase S5 — Settings → Skills UI
 - **Goal:** list, import (with permission-summary preview), enable/disable, delete, export.
@@ -1538,10 +1629,11 @@ stamp/glyph until the prompt path is live.)
   assertion. (Layout-dir registration already done in S3 — §22-A4.)
 - **Files:** `app-skills/bank-statement/{SKILL.md,schemas,examples}` (committed), `services/drive.ts`
   (copy `app-skills/` in `prepare-drive`), `services/commercial-drive.ts` (assert app skills present
-  + no user skills) **plus script parity in `build-commercial-drive.{ps1,sh}`** (the OCR Phase-38
-  precedent — the scripts re-implement the gate, §22-E4), prepare-drive scripts (copy step, like
-  `model-manifests/`). *(Optional integrity hardening: a hashed `app-skills` manifest checked at
-  load — §22-M2; else document the drive-provisioning residual.)*
+  + **`user-skills/` empty**) **plus script parity in `build-commercial-drive.{ps1,sh}`** (the OCR
+  Phase-38 precedent — the scripts re-implement the gate, §22-E4), prepare-drive scripts (copy step,
+  like `model-manifests/`). *(Integrity: §22-M2 RESOLVED 2026-06-17 as **accept + document** — no
+  hashed manifest; **document the drive-provisioning residual** in `security-model.md` +
+  `known-limitations.md` as an S9 deliverable.)*
 - **Tests:** the stub loads + injects; commercial-drive gate covers it (both the TS gate and the
   scripts); the stub body makes no extraction promise.
 - **Acceptance:** end-to-end instruction path proven with a real bundled skill; the stub is
@@ -1567,8 +1659,9 @@ stamp/glyph until the prompt path is live.)
 - **Fold-map (audit E5 / §22-E5)** — which sections go where, so the condense doesn't re-derive it:
   §1–§13 + §16–§19 → a new **`architecture.md` "Skills — design record"** §; §14 + the
   security-relevant parts of §6.7/§9.2/§11.2 → **`security-model.md`**; the layout deltas →
-  **`drive-layout.md`** (already updated in S3); the orphan-recovery limitation (if recovery is *not*
-  built) → **`known-limitations.md`**. Code comments cite "skills record §N" once folded.
+  **`drive-layout.md`** (already updated in S3); the **DS20 confidentiality boundary** + the
+  **§22-M2 app-skill integrity residual** → **`known-limitations.md`** (both S9 deliverables).
+  Code comments cite "skills record §N" once folded.
 - **Acceptance:** no CRITICAL/HIGH open; records folded in.
 
 ### Phase S13 (post-v1) — Auto-fire triggers, behind an evaluation harness
@@ -1589,17 +1682,17 @@ stamp/glyph until the prompt path is live.)
 
 | ID | Decision | Why (short) |
 |---|---|---|
-| **DS1** | Files on disk are the source of truth; `skills` table is a derived index + state cache. **Reconcile differs by source:** app skills (plain folders) are fully re-derived from disk on unlock; user skills (opaque encrypted blobs) are DB-cached with presence-only reconcile, re-derived only at import/upgrade/activation (§7.4/§8.3) | Portable/exportable/re-discoverable. App-skill discovery mirrors `services/models.ts` (discover+validate+computed-state, *no DB*); the DB-index reconcile pattern follows **doc-org collections** (`collections.ts`), the repo's actual DB-reconcile precedent |
+| **DS1** | Files on disk are the source of truth; `skills` table is a derived index + state cache. **Reconcile is uniform for both sources (revised §0):** app skills AND user skills are plain folders, fully re-derived from disk on unlock. _(Superseded: the original "user skills are opaque blobs, DB-cached, presence-only reconcile" no longer applies.)_ | Portable/exportable/re-discoverable. Discovery mirrors `services/models.ts` (discover+validate+computed-state); the DB-index reconcile pattern follows **doc-org collections** (`collections.ts`) |
 | **DS2** | `SKILL.md` (YAML frontmatter + Markdown body) is canonical; `manifest.json` optional/non-authoritative; shared parser in `shared/skill-manifest.ts` | One human file, matches `SKILL.md`-style + the repo's `shared/manifest.ts` precedent; avoids drift |
-| **DS3** | User skills inside the encrypted workspace (`workspace/skills/`, `.enc`); app-shipped skills outside (`app-skills/`, read-only) | Private workflow knowledge encrypted like documents; app skills outside because they are **non-secret, read-only product content provisioned like models/manifests** — NOT for pre-unlock readability (corrected §22-D4) |
+| **DS3** | **(REVISED §0)** Skills are stored **UNENCRYPTED as plain folders**: app skills in `<root>/app-skills/` (read-only), user skills in `<root>/user-skills/` (read-write, power-user droppable), both **outside** `workspace/`. _(Superseded: user skills are no longer encrypted inside `workspace/skills/`.)_ | Skill packages are **non-secret task knowledge, not user content** (DS20); plaintext enables direct power-user management and removes the entire encrypt/decrypt/transient/shred surface |
 | **DS4** | v1 selection is deterministic/manual (picker + Settings + transparent heuristic; doc-menu entry deferred to Tier-2 §22-D2); no model-native tool calling required | Calm, predictable, no template/function-calling risk; reuses the doc-task orchestration model |
 | **DS5** | Skill text is injected as a fenced **data** block (RAG: in the user turn with excerpts; plain chat: app-bracketed) with fixed precedence below base + grounding rules + a guard line; **one skill per turn** | Prompt-injection containment; matches the app's own "untrusted text → user turn" stance (corrected §22-H2); no hidden conflicts; budgeted progressive disclosure |
 | **DS6** | Permissions are app-computed (restrict-only, the `policy.ts` `ceiling ∧ userSetting` shape); self-declared elevation is ignored/clamped. **In v1 `permissions.*` is a display string, not an enforced gate** (no tools execute); real enforcement is Tier-2 | The `services/policy.ts` "policy only restricts" invariant (a boolean AND, network-gated today — not a literal `min()`; corrected §22-B/M4) |
-| **DS7** | Imported user skills install **enabled, with a persistent warning** + the permission summary shown before confirm (resolved Q1) | Structural ceilings (§14) mean an enabled untrusted skill still cannot *act*; trades a click for the warning, not capability |
+| **DS7** | User skills **imported via the Skills view** install **enabled, with a persistent warning** + the permission summary shown before confirm (resolved Q1). **Skills dropped into `user-skills/` directly install DISABLED (DS19).** | Structural ceilings (§14) mean an enabled untrusted skill still cannot *act*; a deliberate import trades a click for the warning, but a passive drop-in had no confirmation step so it must not be silently selectable |
 | **DS8** | Tier-2 tools are app-authored, typed, validated, app-orchestrated, permissioned; the model requests, the app adjudicates; no raw SQL/FS/net handle | Confused-deputy + over-reach containment |
 | **DS9** | Tier-3 (arbitrary script execution) excluded from v1; requirements enumerated for later | Preserves the no-arbitrary-code / offline / no-supply-chain posture |
 | **DS10** | Additive-only schema (new tables full SQL; new column nullable); no CSP/permission/offline/packaging changes | The established migration + hard-rules discipline |
-| **DS11** | One encrypted blob per user skill (`<install_id>.skill.zip.enc`), decrypted + unpacked to a shredded transient on activation; app skills stay plain read-only folders (resolved Q3) | The "one `.enc` per logical unit" document-cache precedent; fewest encrypted files + smallest shred surface; manifest cache means startup never unpacks |
+| **DS11** | **REVOKED (revised §0).** No encrypted blob, no decrypt→transient→shred, no two-mode loader. Both app and user skills are plain folders; `loader.ts` reads the folder. _(Was: one `<install_id>.skill.zip.enc` blob per user skill.)_ | The encryption was justified by treating skills as private user data; DS20 reclassifies them as non-secret task knowledge, so the entire blob/shred surface is removed |
 | **DS12** | Duplicate declared `id`s **coexist with a warning; at most one active per id.** Effective skill resolved by **fixed precedence: (1) trust tier (app > user), then (2) highest version, then (3) newest install** — trust precedes version so a user skill cannot shadow a trusted app skill by version number. Table keyed by generated `install_id`; `id` non-unique (resolved Q2) | Gentler than hard-reject; trust-first precedence closes the id-shadowing hole; the PK shift to `install_id` is the price of "allow + warn" |
 | **DS13** | `skill_runs` is **not** created in v1 — added with the Tier-2 phase; v1 records only the `skill_selected` audit event (resolved Q5) | This repo adds tables per feature; no dead schema ships |
 | **DS14** | Heuristic suggestion **on by default, no settings key**, surfaced only inside the picker (never a canvas chip), as a single one-tap offer reusing the open picker — no extra row affordance (resolved Q6) | The no-new-key bias; applies the filing-suggestion-removal lesson (a low-value guess with its own near-equal affordance wasn't worth it) by adding *no* new affordance and deferring auto-fire behind an eval harness (§10.4) |
@@ -1607,6 +1700,8 @@ stamp/glyph until the prompt path is live.)
 | **DS16** | Everyday skill transparency = the "Using skill" indicator + a per-message skill glyph on the **assistant answer** (OQ-4 resolved, the `CoverageMeter` precedent; backed by `messages.skill_id`); the **literal assembled fence is developer-mode only** (resolved Q8) | "Hide the machinery" for non-developers; full transparency for power users; glyph annotates the artifact the skill shaped (§22-A5) |
 | **DS17** | App skills are **committed to the repo** (`app-skills/`, text-only) and **copied** onto the drive by `prepare-drive` — never network-fetched (resolved Q9) | Small versioned product content, like `model-manifests/`; no network |
 | **DS18** | **One skill per TURN, many per conversation** (resolved Q7). `messages.skill_id` stamps each turn; `conversations.active_skill_id` is the sticky default. A trigger is a **one-tap suggestion in v1; auto-fire deferred to a post-v1 wave gated on an evaluation harness** (§10.4) | Native per-message unit avoids the conflict class; enable/disable already bounds candidates, so auto-fire's gate is *quality/evaluation*, not security |
+| **DS19** | **Drop-in discovery + default-disabled (revised §0).** A skill folder dropped into `user-skills/` is discovered but installs **disabled** until the user enables it (which shows the permission summary); a deliberate zip-import via the view keeps DS7 enabled-with-warning | A passive drop-in had no confirmation step; default-disabled keeps "nothing the user didn't choose shapes an answer" and blunts a local-malware drop-in vector |
+| **DS20** | **Confidentiality boundary (revised §0).** Skills are declared **non-confidential**; secret material belongs in an (encrypted) document, never a skill. Consciously reverses the original Lawyer story (#2). `user-skills/` is a top-level dir → workspace backup must include it | Justifies plaintext storage (DS3); keeps the privacy model honest by drawing a clear line between non-secret task knowledge and encrypted user data |
 
 ---
 
@@ -1618,7 +1713,7 @@ stamp/glyph until the prompt path is live.)
 |---|---|---|
 | **Q1** | Imported user skills install **enabled, with a persistent warning** (permission summary before confirm) | DS7 |
 | **Q2** | Duplicate `id`s **coexist with a warning, one active per id** (table keyed by `install_id`) | DS12 |
-| **Q3** | **One encrypted blob per user skill** (`<install_id>.skill.zip.enc`), unpacked to a shredded transient on activation; app skills stay plain folders | DS11 |
+| **Q3** | **REVISED 2026-06-17 (§0):** skills are stored **unencrypted as plain folders** (`user-skills/<id>/` + `app-skills/<id>/`), not encrypted blobs — DS11 revoked, DS3 rewritten, DS19/DS20 added | DS3/DS19/DS20 |
 | **Q4** | Downgrade refused by default; **allowed only under developer mode** | DS15 |
 | **Q5** | **`skill_runs` not created in v1** — added with the Tier-2 phase; v1 uses the `skill_selected` audit event | DS13 |
 | **Q6** | Suggestion **on by default, no settings key**, surfaced only inside the picker | DS14 |
@@ -1689,9 +1784,10 @@ reflected (done) and reviewed.** IDs are referenced inline throughout the doc.
   `extract_to` guard (`assets.ts:187`) is in a different subsystem and never touches ingestion.
   **Fix:** §9.2 now specifies a **net-new member-by-member extractor**; `.skill.zip` must never hit
   `extractWithTar`; zip-bomb enforced on **actual inflated bytes** + magic-byte nested-archive sniff.
-- **A3 — Crash-sweep doesn't cover skill transients.** `shredStalePlaintext` is hard-scoped to
-  `workspace/documents/` — "crash-sweep covered" was false; a crash leaves decrypted skill plaintext
-  on disk. **Fix:** extend the sweep to `workspace/skills/` (+ `.skill-import-*`); crash-window test (§7.3/§9.2/S3).
+- **A3 — Crash-sweep doesn't cover skill transients. → MOOT (revised §0).** Skills are stored
+  unencrypted now, so there are no decrypt transients to leak; the `shredStalePlaintext` extension is
+  **dropped**. A failed/partial import is simply deleted (cleanup, not a shred). _(Original finding
+  retained for history.)_
 - **A4 — `app-skills/` read from S3 but created in S9; not in `DRIVE_LAYOUT_DIRS`; `drive-layout.md`
   untouched.** **Fix:** register the dir + create `workspace/skills/` in **S3**; add a
   `resolveAppSkillsDir()` dev fallback; `drive-layout.md` update is an S3 deliverable (§7.3/S3).
@@ -1718,10 +1814,13 @@ reflected (done) and reviewed.** IDs are referenced inline throughout the doc.
 
 ### C — Coherence gaps (now pinned)
 
-- **C1 — User-skill blobs orphan on DB rebuild** (DS1 "files are truth" only holds for app skills).
-  **Fix:** one-time orphan-recovery reconcile (§7.4/§14), or document the limitation.
-- **C2 — `manifest_json` MUST carry `triggers`/`compatibility`** or the index + selector break for
-  user skills — invariant + parser test added (§8.2/§11.3).
+- **C1 — User-skill blobs orphan on DB rebuild. → RESOLVED by removal (revised §0).** With user
+  skills stored as plain folders, disk is the source of truth; a DB rebuild re-reads the folders.
+  There is no orphan and **no orphan-recovery path to build**.
+- **C2 — `manifest_json` MUST carry `triggers`/`compatibility`. → DOWNGRADED (revised §0).** Still
+  *cached* for the fast picker index, but no longer an *invariant*: it is re-derivable from the
+  on-disk `SKILL.md`. (The S2 parser already preserves both and a test proves the round-trip — kept
+  as a convenience, not a correctness dependency.)
 - **C3 — "FK-safe" was backwards:** there is intentionally no FK; ref-clear is a transactional
   app-level sweep; delete-during-stream race needs a guard (§9.4).
 - **C4 — `suggestSkills` can't take `documentIds`** (the composer doesn't hold scope) — changed to
@@ -1746,8 +1845,11 @@ reflected (done) and reviewed.** IDs are referenced inline throughout the doc.
 - **E4 — `assertCommercialDrive` script parity** in `build-commercial-drive.{ps1,sh}` named in S9.
 - **E5 — Fold-map added** (which sections fold into which record) (S12).
 - **M1 — Content-class extends** to preview/import IPC error payloads + loader logs (§11.4/§14/§17).
-- **M2/M3 — App-skill integrity:** "verified" is build-time provisioning, not a runtime hash; a
-  writable on-drive `app-skills/` + trust-by-location lets a tampered app skill auto-win DS12.
-  Either ship a hashed manifest or document the residual (§14/S9).
+- **M2/M3 — App-skill integrity. → RESOLVED: accept + document (2026-06-17, owner).** A hash
+  manifest stored on a writable drive is unanchored (the attacker rewrites it too) and a bundled one
+  is only as trustworthy as the also-writable app binary; real integrity needs off-drive signing (a
+  Tier-3 prerequisite, §5.3). This is the **same residual already accepted for the engine binary**,
+  so the residual is **documented** in `security-model.md` + `known-limitations.md` (an S9
+  deliverable) rather than papered over with a half-measure. App-skills stay read-only at runtime.
 - **M4 — `permissions.*` is display-only in v1** (no tools execute) — not an enforced sandbox
   (§6.7/§14/DS6).
