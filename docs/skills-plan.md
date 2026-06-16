@@ -263,6 +263,13 @@ Rules:
 - A second authoritative `manifest.json` invites drift (the doc-lifecycle anti-pattern this
   repo actively fights).
 
+> **"Human-editable" applies to the package on disk before/after install, not in place.** Once
+> a **user** skill is installed it lives as an opaque `<install_id>.skill.zip.enc` blob (DS11),
+> so it cannot be edited in place. The edit path is **export → edit `SKILL.md` → re-import
+> (Upgrade)** (§9.3/§9.5); there is no in-vault editor in v1. App skills are edited at the repo
+> source and re-shipped. This is an accepted v1 limitation, not a contradiction of DS2: the
+> *format* stays one human file; only live editing is deferred.
+
 `manifest.json`, if present, is treated as an **optional, non-authoritative cache** the
 importer may read for speed but **always re-derives from `SKILL.md`** and overwrites; on
 conflict, `SKILL.md` wins and a note is logged (never surfaced as an error). The parser +
@@ -295,9 +302,13 @@ broader is **clamped down**, surfaced honestly in the permission summary, never 
 ```
 
 - **App-shipped skills → `<root>/app-skills/`, outside the encrypted workspace, read-only.**
-  They are non-secret product content (like `model-manifests/` and `models/`), must be
-  available for the picker's metadata **before unlock**, and ride the existing drive-build /
-  `assertCommercialDrive` provisioning machinery (§14). They are never written to at runtime.
+  They are non-secret product content (like `model-manifests/` and `models/`) and ride the
+  existing drive-build / `assertCommercialDrive` provisioning machinery (§14); they are never
+  written to at runtime. (Their *placement* outside the vault is justified by being non-secret,
+  read-only, and provisioned like other product content — **not** by pre-unlock readability:
+  v1 has no pre-unlock surface that consumes skill metadata, since the picker and Settings →
+  Skills are both post-unlock, §7.2. Being readable pre-unlock is a harmless property, not a v1
+  requirement; if a future pre-unlock surface ever wants app-skill metadata, it is available.)
 - **User-installed skills → `workspace/skills/`, inside the encrypted workspace.** A user skill
   may encode private company workflow knowledge (story #2), so it must be encrypted at rest
   exactly like documents and chats. Consequence: user skills are **unavailable before unlock**
@@ -356,10 +367,25 @@ broader is **clamped down**, surfaced honestly in the permission summary, never 
 
 The on-disk package is authoritative (portable, exportable, re-discoverable). The `skills`
 table is a **derived index + state cache** (enabled flag, trust level, cached manifest JSON,
-timestamps) the registry **reconciles against disk on each unlock** — exactly how
-`services/models.ts` discovers + validates manifests and overlays computed state, and how the
-doc-org backfill reconciles membership. A missing-on-disk row is marked unavailable, not
-deleted blindly.
+timestamps). **The reconcile model differs by source, because app skills are plain folders and
+user skills are opaque encrypted blobs:**
+
+- **App skills (`app-skills/`, plain folders) — full disk reconcile.** On unlock the registry
+  re-reads each `SKILL.md`, re-validates, and re-derives the manifest — disk is truth, exactly
+  the **discover + validate + overlay-computed-state** shape of `services/models.ts` (note:
+  `models.ts` is *stateless disk discovery*, NOT a DB reconcile — see DS1).
+- **User skills (`workspace/skills/<install_id>.skill.zip.enc`, encrypted blobs) — DB-cached,
+  presence-only reconcile.** The blob's filename carries only the `install_id` (no version, no
+  manifest), and DS11 promises startup never unpacks it. So reconcile **cannot** re-derive a
+  user skill's manifest or detect a version change from disk without decrypting — and must not.
+  For user skills the **`skills` row is the authoritative derived state**; reconcile only checks
+  blob *presence*. Manifest (re-)derivation happens at **import / upgrade / activation** only,
+  never on a routine unlock.
+
+The DB-index-reconciled-against-a-source-of-truth pattern (insert / mark-unavailable /
+clear-references) follows the **doc-org collections** precedent (`collections.ts` membership +
+the N3 FK-guard, §9.4), not `models.ts` (which keeps no DB). A missing-on-disk row is marked
+unavailable, not deleted blindly.
 
 ---
 
@@ -382,9 +408,14 @@ services/skills/
   tool-registry.ts   # Tier-2 DESIGN ONLY in v1: typed tool descriptors + permission gate (§12)
 ```
 
-The canonical frontmatter schema + validator live in **`shared/skill-manifest.ts`** (renderer
-and main share it — the `shared/manifest.ts` precedent), so the Settings UI validates the same
-way main does.
+The canonical frontmatter schema + types live in **`shared/skill-manifest.ts`** (the
+`shared/manifest.ts` precedent — placed in `shared/` for **type sharing**). Authoritative
+*validation* runs **main-side** via `previewSkillPackage`/`importSkill` (§9, §16); the renderer
+does not re-validate. (This corrects an earlier framing: the `shared/manifest.ts` precedent is
+imported by **main only**, not the renderer — the renderer reaches models through IPC, and
+skills follow the same shape. The validator may live in `shared/` so a future renderer-side
+pre-check *could* reuse it, but v1 has no such consumer: `previewSkillPackage` is the single
+source of validation truth.)
 
 ### 8.2 SQLite additions (additive, `db.ts` SCHEMA + `ensureColumn` rules)
 
@@ -455,10 +486,14 @@ CREATE INDEX IF NOT EXISTS idx_skill_runs_skill ON skill_runs(skill_install_id);
 | The skill that shaped each turn | **SQLite `messages.skill_id`** | Per-turn truth; powers the glyph + multi-skill-per-conversation (DS18) |
 
 App-shipped skills are **discovered from disk** (`app-skills/`), validated, and their state
-upserted into `skills` on reconcile; user skills the same from `workspace/skills/`. Reconcile
-rules: disk-present + DB-absent ⇒ insert (disabled if `user`); DB-present + disk-absent ⇒ mark
-unavailable (do not auto-delete — could be a transiently-unmounted state); version changed on
-disk ⇒ update + re-derive manifest. This is the `services/models.ts` discovery/state model.
+upserted into `skills` on reconcile. **App-skill** reconcile rules (folders, disk-truth):
+disk-present + DB-absent ⇒ insert; DB-present + disk-absent ⇒ mark unavailable (do not
+auto-delete — could be a transiently-unmounted state); version changed on disk ⇒ update +
+re-derive manifest. **User-skill** reconcile (encrypted blobs, DB-cached — §7.4): the row is
+authoritative; reconcile only verifies the `<install_id>.skill.zip.enc` blob still exists
+(mark unavailable if gone) and **never re-derives a manifest or compares version from the
+opaque blob** — that happens at import/upgrade/activation. The disk-truth-reconcile shape
+follows **doc-org collections** (`collections.ts`), not `services/models.ts` (which keeps no DB).
 
 ---
 
@@ -525,10 +560,12 @@ staging dir and persists nothing (the doc-task "fully succeeds or persists nothi
   both rows ("Two skills share the name '<id>'. Only one can be used at a time."), and
   **at most one per `id` is active**: enabling one offers to disable the other; the picker lists a
   duplicate only once (the effective one). The **effective** skill for an `id` is resolved
-  deterministically — **highest `version`, tie-break newest `installed_at`** — and the app-shipped
-  one is preferred when a user skill shadows an app id (trust). This is why the table is keyed by a
-  generated **`install_id`** with `id` non-unique (§8.2): rejecting was rejected (Q2) in favour of
-  the gentler coexist-and-warn.
+  deterministically by a **fixed precedence — (1) trust tier first: an `app` skill ALWAYS wins
+  over a `user` skill sharing its `id`; (2) then highest `version`; (3) tie-break newest
+  `installed_at`.** Trust precedes version deliberately: this is the id-shadowing case, so a
+  user skill must never be able to shadow a trusted app skill merely by declaring a higher
+  version number. This is why the table is keyed by a generated **`install_id`** with `id`
+  non-unique (§8.2): rejecting was rejected (Q2) in favour of the gentler coexist-and-warn.
 
 ### 9.4 Deletion / enable-disable
 
@@ -582,7 +619,12 @@ Three mechanisms, of which v1 ships the first two:
 
 1. **Manual (v1)** — the composer skill picker (`Skill: none ▾`): the user chooses a skill; it
    becomes the sticky default for following turns until changed. The Documents "⋯" overflow's
-   "Use a skill…" is the same act from the document side.
+   "Use a skill…" is the same act from the document side — **but note a v1 instruction-only skill
+   only shapes a *chat prompt*; it does nothing applied to a document in isolation.** So this
+   entry **opens (or focuses) a chat scoped to that document with the chosen skill pre-selected
+   for the first turn** — it does not "run" anything on the document. (A skill that *acts on* a
+   document is the Tier-2 tool path, §12/§13; if the doc-as-chat-seed flow is judged too indirect
+   for v1, the doc-menu entry can be deferred to Tier-2 without affecting the composer path.)
 2. **Suggested (v1) — a trigger is an OFFER, not an auto-fire (DS14, resolved Q6).** `selector.ts`
    scores enabled skills against the turn's context using **only** the declared `triggers`
    (keyword match in the input, mimeType/filename of the selected docs) — deterministic, no model.
@@ -602,10 +644,15 @@ in control of which instructions shape their answer, while we gather the real-pa
 needed to trust auto-fire. (Recommendation, with the owner's concurrence: leave auto-fire out now,
 add it later behind an evaluation harness — §10.4.)
 
-The suggestion surfaces **inside the picker**, never as a new canvas chip — the explicit lesson
-from the **removed doc-org filing-suggestion** (architecture.md doc-org §4); no `AppSettings`
-toggle (the availability-driven, no-new-key bias). If it ever proves noisy the lesson is *remove
-it*, not add a knob.
+The suggestion surfaces **inside the picker**, never as a new canvas chip, and no `AppSettings`
+toggle is added (the availability-driven, no-new-key bias). The relevant precedent is the
+**removed doc-org filing-suggestion** (architecture.md, removed 2026-06-15): its recorded lesson
+is that a *low-value automatic guess given its own near-equal row affordance* was not worth it,
+so filing went fully manual. We apply that lesson conservatively here — the suggestion is a
+**single one-tap offer reusing the picker the user already opened** (no extra affordance), and
+**auto-fire is deferred behind an eval harness** (§10.4) precisely because an unmeasured silent
+guess is the very thing that lesson warns against. If the in-picker offer ever proves noisy, the
+lesson is *remove it*, not add a knob.
 
 ### 10.3 Required answers
 
@@ -708,10 +755,18 @@ Skill instructions:
 - **On selection:** load the full `SKILL.md` body.
 - **Examples/resources:** loaded only if referenced AND the budget allows.
 - **Budget:** `prompt.ts` sizes the skill section against `contextTokens` with an explicit
-  reserve (the `fitMessagesToContext` / doctask-budget precedent). The skill section is trimmed
-  before history if needed, but the base preamble + the final user turn + (grounded) the
-  excerpt block are never sacrificed for skill text. **Never load all skills into every
+  reserve (the `fitMessagesToContext` / doctask-budget precedent). The skill section yields
+  budget **before history** if needed, but the base preamble + the final user turn + (grounded)
+  the excerpt block are never sacrificed for skill text. **Never load all skills into every
   prompt** — only the one skill in effect for this turn, only when one is set.
+- **Reduce by whole units, never mid-instruction.** When the section is over budget, drop in a
+  fixed order — optional examples/resources first, then the lower-priority body, and only then
+  the whole skill — rather than hard-truncating the `SKILL.md` body mid-text (a half-cut
+  instruction can read as a *changed* rule, worse than no skill). The body keeps a **guaranteed
+  minimum** (the framing + guard lines + at least the first instruction block); if even that
+  won't fit, the skill is dropped entirely and the turn notes "skill omitted (not enough room)"
+  rather than injecting a truncated fragment. (The §6.4 `SKILL.md` body cap of 64 KiB makes this
+  the rare case, but the rule is explicit so the implementation never silently mangles instructions.)
 
 ### 11.4 Interactions
 
@@ -866,7 +921,7 @@ tool calls** — never through code, files, network, or scope it controls.
 | Confused-deputy / model over-reach | App-orchestrated tools, narrow `SkillToolContext`, output validation, user confirm for writes |
 | Model asking a tool to access too much | Tools take a fixed `documentIds` scope they cannot widen; per-call input validated |
 | Version downgrade / tampering | Downgrade refused by default; version compared on import; (future) signing |
-| Untrusted-skill trust warnings | `user` skills install disabled, with a plain-language permission summary + warning (§15) |
+| Untrusted-skill trust warnings | `user` skills install **enabled-with-warning** (DS7) — the permission summary is shown **before** confirm, and a persistent calm warning + `warning_ack` follows; structural ceilings (this table) mean an enabled untrusted skill still cannot *act* (§9.2/§15) |
 | App-shipped skill trust | Provisioned + verified on a commercial drive (`assertCommercialDrive` gains a skills check); read-only |
 | Encrypted-workspace implications | User skills `.enc` at rest; transient working files `.parse*`-swept + shredded |
 | Read-only drive implications | Import disabled with friendly copy; app-skills already read-only |
@@ -890,8 +945,9 @@ Popover/DropdownMenu, Button/Badge/Banner/Modal/ConfirmDialog/EmptyState, design
 All copy is EN + DE (i18n D-L1; informal „du" D-L7) and routed through the catalogs.
 
 - **Skills management screen (resolved Q3) — the one place to see and add skills.** A dedicated
-  **Settings → Skills** surface (a Settings tab — keeps the 5-destination IA from design-guidelines
-  §2; a top-level nav entry was considered but rejected to avoid re-growing the rail). It is the
+  **Settings → Skills** surface (a Settings tab — keeps the "4 primary + 1 utility" nav IA from
+  design-guidelines §2 intact, Skills riding in as a Settings sub-page like Privacy/Diagnostics;
+  a top-level nav entry was considered but rejected to avoid re-growing the rail). It is the
   "which skills do I have / which are active" view the product needs:
   - **Installed skills list** — compact rows (≥40px, the Documents-screen §11.6 pattern): icon ·
     title · short description · `trustedLevel` chip (`App` / `Made by you`) · enable Switch · a
@@ -918,7 +974,10 @@ All copy is EN + DE (i18n D-L1; informal „du" D-L7) and routed through the cat
   was produced with a skill active (paired with a label/tooltip naming the skill — icon + word, not
   color-only, design-guidelines §6/1.4.1), so the transcript shows *where* a skill shaped an answer
   without the user re-checking the composer. Decorative-but-labelled; never alarming.
-- **Document action menu** — "Use a skill…" in the "⋯" overflow for applicable docs.
+- **Document action menu** — "Use a skill…" in the "⋯" overflow for applicable docs. In v1 this
+  **opens/focuses a chat scoped to the document with the skill pre-selected for the first turn**
+  (an instruction skill shapes the chat prompt, not the document itself — §10.2); it never "runs"
+  on the document. Deferrable to Tier-2 if judged too indirect.
 - **Developer/debug (Q8 — developer-mode only)** — under Settings → Diagnostics (advanced), gated
   by `developerMode`: show the **exact assembled skill fence** for the last answer (the literal
   injected text). Off the everyday path; never shown to non-developer users.
@@ -1080,24 +1139,35 @@ shippable.
 - **Tests:** renderer + EN/DE smoke; Playwright eyeball walk (the §11.4 verification pattern).
 - **Acceptance:** the calm flows of §15; both themes/locales.
 
-### Phase S6 — Manual skill activation in Chat (per-turn)
+### Phases S6 + S7 — Manual activation + prompt integration (ship together)
+**Sequencing constraint:** S6 and S7 are **one shippable unit**, not two. S6 stamps
+`messages.skill_id` and renders the per-message "a skill shaped this answer" glyph; S7 is what
+actually *makes* the skill shape the answer (the fence). Shipping S6 alone would show
+accountability UI for an effect that isn't wired yet — a direct violation of "quiet
+accountability / don't show machinery that isn't real" (design-guidelines §1). So the
+`messages.skill_id` **stamp + the glyph land in the same release as S7's fence assembly**.
+(The composer picker + sticky-default persistence may merge earlier as inert UI, but no
+stamp/glyph until the prompt path is live.)
+
+#### S6 — Manual skill activation in Chat (per-turn)
 - **Goal:** composer picker (sets the turn's skill + sticky default), the per-turn
   `ChatOptions.skillInstallId` on send, the "Using skill" chip + per-message glyph; document-menu
-  entry.
+  entry. **The stamp + glyph are gated on S7 (above).**
 - **Files:** `renderer/chat/Composer.tsx` (+ a SkillPicker popover), `registerChatIpc.ts`
   (`setConversationDefaultSkill`, resolve+stamp `messages.skill_id` on send), `ChatScreen.tsx`
   (per-message glyph), `shared/types.ts` (`ChatOptions.skillInstallId`), catalogs.
 - **DB:** uses `active_skill_id` + `messages.skill_id`. **Tests:** sticky default persists; per-turn
   override; multiple skills across turns; disabled/deleted note + glyph degrades.
 - **Acceptance:** a conversation can use different skills on different turns; past glyphs stay
-  correct after the default changes.
+  correct after the default changes; **a stamped glyph is only ever shown once S7's fence is live.**
 
-### Phase S7 — Prompt integration & progressive loading
+#### S7 — Prompt integration & progressive loading
 - **Goal:** `services/skills/prompt.ts` fence + precedence + budget; wire into
   `chat.ts`/`rag/index.ts` system assembly.
 - **Files:** `services/skills/prompt.ts`, `services/chat.ts`, `services/rag/index.ts`.
 - **Tests:** §17 prompt assembly + injection-boundary + budget.
-- **Acceptance:** precedence holds; base/grounded/excerpt invariants never sacrificed.
+- **Acceptance:** precedence holds; base/grounded/excerpt invariants never sacrificed; the glyph
+  from S6 corresponds 1:1 to a turn whose prompt actually carried the fence.
 
 ### Phase S8 — Skill selector heuristics
 - **Goal:** deterministic `triggers`-based suggestion surfaced **inside the picker** (DS14 — no
@@ -1152,7 +1222,7 @@ shippable.
 
 | ID | Decision | Why (short) |
 |---|---|---|
-| **DS1** | Files on disk are the source of truth; `skills` table is a derived index + state cache, reconciled on unlock | Portable/exportable/re-discoverable; mirrors `services/models.ts` manifest discovery |
+| **DS1** | Files on disk are the source of truth; `skills` table is a derived index + state cache. **Reconcile differs by source:** app skills (plain folders) are fully re-derived from disk on unlock; user skills (opaque encrypted blobs) are DB-cached with presence-only reconcile, re-derived only at import/upgrade/activation (§7.4/§8.3) | Portable/exportable/re-discoverable. App-skill discovery mirrors `services/models.ts` (discover+validate+computed-state, *no DB*); the DB-index reconcile pattern follows **doc-org collections** (`collections.ts`), the repo's actual DB-reconcile precedent |
 | **DS2** | `SKILL.md` (YAML frontmatter + Markdown body) is canonical; `manifest.json` optional/non-authoritative; shared parser in `shared/skill-manifest.ts` | One human file, matches `SKILL.md`-style + the repo's `shared/manifest.ts` precedent; avoids drift |
 | **DS3** | User skills inside the encrypted workspace (`workspace/skills/`, `.enc`); app-shipped skills outside (`app-skills/`, read-only) | Private workflow knowledge encrypted like documents; app skills non-secret + available pre-unlock |
 | **DS4** | v1 selection is deterministic/manual (picker + doc menu + Settings + transparent heuristic); no model-native tool calling required | Calm, predictable, no template/function-calling risk; reuses the doc-task orchestration model |
@@ -1163,9 +1233,9 @@ shippable.
 | **DS9** | Tier-3 (arbitrary script execution) excluded from v1; requirements enumerated for later | Preserves the no-arbitrary-code / offline / no-supply-chain posture |
 | **DS10** | Additive-only schema (new tables full SQL; new column nullable); no CSP/permission/offline/packaging changes | The established migration + hard-rules discipline |
 | **DS11** | One encrypted blob per user skill (`<install_id>.skill.zip.enc`), decrypted + unpacked to a shredded transient on activation; app skills stay plain read-only folders (resolved Q3) | The "one `.enc` per logical unit" document-cache precedent; fewest encrypted files + smallest shred surface; manifest cache means startup never unpacks |
-| **DS12** | Duplicate declared `id`s **coexist with a warning; at most one active per id** (effective = highest version, newest install, app-preferred). Table keyed by generated `install_id`; `id` non-unique (resolved Q2) | Gentler than hard-reject; the PK shift to `install_id` is the price of "allow + warn" |
+| **DS12** | Duplicate declared `id`s **coexist with a warning; at most one active per id.** Effective skill resolved by **fixed precedence: (1) trust tier (app > user), then (2) highest version, then (3) newest install** — trust precedes version so a user skill cannot shadow a trusted app skill by version number. Table keyed by generated `install_id`; `id` non-unique (resolved Q2) | Gentler than hard-reject; trust-first precedence closes the id-shadowing hole; the PK shift to `install_id` is the price of "allow + warn" |
 | **DS13** | `skill_runs` is **not** created in v1 — added with the Tier-2 phase; v1 records only the `skill_selected` audit event (resolved Q5) | This repo adds tables per feature; no dead schema ships |
-| **DS14** | Heuristic suggestion **on by default, no settings key**, surfaced only inside the picker (never a canvas chip) — quieter than the removed doc-org filing-suggestion (resolved Q6) | The no-new-key bias + the filing-suggestion-removal lesson |
+| **DS14** | Heuristic suggestion **on by default, no settings key**, surfaced only inside the picker (never a canvas chip), as a single one-tap offer reusing the open picker — no extra row affordance (resolved Q6) | The no-new-key bias; applies the filing-suggestion-removal lesson (a low-value guess with its own near-equal affordance wasn't worth it) by adding *no* new affordance and deferring auto-fire behind an eval harness (§10.4) |
 | **DS15** | Version downgrade refused by default, **allowed only under developer mode** (resolved Q4) | The gated unverified-models/plaintext precedent |
 | **DS16** | Everyday skill transparency = the "Using skill" indicator + a per-message skill glyph (backed by `messages.skill_id`); the **literal assembled fence is developer-mode only** (resolved Q8) | "Hide the machinery" for non-developers; full transparency for power users |
 | **DS17** | App skills are **committed to the repo** (`app-skills/`, text-only) and **copied** onto the drive by `prepare-drive` — never network-fetched (resolved Q9) | Small versioned product content, like `model-manifests/`; no network |
