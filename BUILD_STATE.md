@@ -6,7 +6,38 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
-_Last updated: 2026-06-16 — **Dev-setup bugfix: Electron's platform binary silently fails to
+_Last updated: 2026-06-16 — **Skills feature — durable design plan written (planning only, NO
+code).** New working paper [`docs/skills-plan.md`](docs/skills-plan.md): local, user-installable
+**Skills** (instruction packages that inject reviewed prompt text; Tier-2 app-owned tools designed
+but deferred; Tier-3 script execution excluded). Key decisions: files-on-disk are truth + `skills`
+table is a reconciled index (DS1, the `services/models.ts` pattern); `SKILL.md` YAML frontmatter
+canonical via a shared `shared/skill-manifest.ts` (DS2); **user skills live INSIDE the encrypted
+workspace (`workspace/skills/`, `.enc`), app skills OUTSIDE (`app-skills/`, read-only)** (DS3);
+v1 selection is manual/deterministic with no model-native tool calling (DS4); skill text is a
+fenced system section with fixed precedence below the base + grounding rules + a guard line (DS5);
+permissions are app-computed `min(declared, ceiling, grant)`, never self-granting (DS6). Additive
+schema only (`skills`/`skill_runs` tables + nullable `conversations.active_skill_id`); no CSP/
+permission/offline/packaging changes. Phased S1–S12 (S1 = this plan). **Q1–Q9 RESOLVED + refined
+with the owner (DS7–DS18):** imports install **enabled-with-warning** (DS7, `skills.warning_ack`);
+**one encrypted blob per user skill** `<install_id>.skill.zip.enc`, decrypted to a shredded
+transient on activation, app skills stay plain folders (DS11); **duplicate ids COEXIST with a
+warning, one active per id** — table keyed by generated `install_id`, declared `id` non-unique
+(DS12, revised from reject); **`skill_runs` not in v1** — added with Tier-2, v1 uses the
+`skill_selected` audit event (DS13); trigger = **one-tap suggestion inside the picker** in v1, no
+settings key (DS14) — **auto-fire deferred to Phase S13 behind an offline evaluation harness**
+(precision/recall over a labelled corpus + threshold + undo + opt-in; not a security blocker since
+enable/disable bounds candidates, §10.4); downgrade **dev-mode only** (DS15); literal assembled fence
+**developer-mode only** + a per-message glyph backed by `messages.skill_id` (DS16); app skills
+**committed to the repo, copied by prepare-drive** (DS17); **one skill per TURN, many per
+conversation** — `messages.skill_id` per turn + `conversations.active_skill_id` as the sticky
+default; per-turn skill rides `ChatOptions.skillInstallId` on send (DS18, reframed from
+per-conversation). New schema: `skills` table (PK `install_id`) + nullable
+`conversations.active_skill_id` + `messages.skill_id`. A dedicated **Settings → Skills** screen with
+an **Import** button (pick → validate → encrypt → store) is the add-flow. Non-blocking impl-time
+items remain (OQ-1..4). **No version bump, no schema change, no runtime code touched.** Next: Phase
+S2 (package schema + parser)._
+
+_(prior) 2026-06-16 — **Dev-setup bugfix: Electron's platform binary silently fails to
 extract onto an NTFS-on-Linux mount (beta builder report).** A Linux dev setting up the drive on an
 NTFS (ntfs-3g/FUSE) volume hit electron-vite's opaque `Electron uninstall` ("binary not found"). Root
 cause: `npm install` ran Electron's postinstall, the ~113 MB download succeeded (valid zip in
