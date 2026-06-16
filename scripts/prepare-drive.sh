@@ -68,6 +68,8 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 # Directory tree (must match drive.ts DRIVE_LAYOUT_DIRS / sidecar.ts llamaOsDir).
 DIRS=(
   workspace
+  app-skills
+  user-skills
   models/chat
   models/embeddings
   models/reranker

@@ -91,6 +91,8 @@ $RepoRoot = Split-Path -Parent $PSScriptRoot
 # Directory tree (must match drive.ts DRIVE_LAYOUT_DIRS / sidecar.ts llamaOsDir).
 $Dirs = @(
   'workspace',
+  'app-skills',
+  'user-skills',
   'models/chat',
   'models/embeddings',
   'models/reranker',

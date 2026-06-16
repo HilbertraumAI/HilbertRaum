@@ -220,6 +220,37 @@ CREATE TABLE IF NOT EXISTS extraction_records (
 );
 CREATE INDEX IF NOT EXISTS idx_extract_doc_type ON extraction_records(document_id, record_type, normalized_value);
 CREATE INDEX IF NOT EXISTS idx_extract_chunk ON extraction_records(chunk_id);
+
+-- Skills registry (docs/skills-plan.md §8.2, revised §0 — plaintext plain-folder model). A
+-- pure DERIVED INDEX + state cache over the on-disk skill folders (app-skills/ + user-skills/):
+-- disk is the source of truth (DS1), so a DB rebuild simply re-reads the folders and re-derives
+-- every row (no orphan, no recovery path). NOTE: there is deliberately NO foreign key FROM the
+-- core tables (conversations/messages) INTO skills (audit C3 / §9.4) — a real FK would block
+-- deletion and an older app must ignore the columns; references are cleared by an app-level sweep
+-- (S4), never a cascade.
+--
+-- install_id is the DETERMINISTIC natural key "<source>:<id>" (S3 decision), NOT a random uuid:
+-- user-skill folders are named by id so two same-id user skills can't coexist on disk, and a
+-- disk-derived key is STABLE across a DB rebuild — so conversations.active_skill_id /
+-- messages.skill_id keep resolving after a rebuild (a re-minted uuid would orphan them). Same-id
+-- app vs user skills get distinct keys ("app:x" vs "user:x"), so DS12's collision handling holds.
+CREATE TABLE IF NOT EXISTS skills (
+  install_id     TEXT PRIMARY KEY,          -- deterministic "<source>:<id>" (disk-derivable; stable across rebuilds)
+  id             TEXT NOT NULL,             -- declared kebab skill id (indexed, NON-unique across sources)
+  title          TEXT NOT NULL,
+  version        TEXT NOT NULL,
+  kind           TEXT NOT NULL,             -- 'instruction' | 'tool'
+  source         TEXT NOT NULL,             -- 'app' | 'user' (which folder it was discovered in)
+  path           TEXT NOT NULL,             -- on-disk folder BASENAME, relative to the source dir (portable, machine-independent)
+  enabled        INTEGER NOT NULL,          -- 0/1; app installs enabled, user drop-ins DISABLED (DS19)
+  warning_ack    INTEGER NOT NULL,          -- 0/1; untrusted-skill warning acknowledged (DS7; app=1, user drop-in=0)
+  trusted_level  TEXT NOT NULL,             -- 'app' | 'user' (APP-ASSIGNED, never self-declared)
+  manifest_json  TEXT NOT NULL,             -- cached parsed manifest (re-derivable cache; carries triggers + compatibility, §22-C2)
+  unavailable_at TEXT,                      -- NULL = folder present; ISO timestamp = folder vanished (mark-unavailable; never blind-deleted)
+  installed_at   TEXT NOT NULL,
+  updated_at     TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_skills_id ON skills(id);   -- duplicate-id lookups across sources (the DS12 warning)
 `
 
 // Additive column migrations on top of the spec §8 base schema. `CREATE TABLE IF NOT
@@ -384,6 +415,13 @@ export function openDatabase(path: string): Db {
   //   extract_status — NULL | 'pending' | 'extracting' | 'ready' | 'stale' | 'failed' (Phase 3,
   //   the per-chunk structured-extract pass; mirrors tree_status, NULL-sentinel).
   ensureColumn(db, 'documents', 'extract_status', 'extract_status TEXT')
+  // Skills (skills plan §8.2). Both nullable — NULL = no skill (the scope_v2_json NULL-sentinel
+  // convention). No FK into `skills` (audit C3): refs are cleared by an app-level sweep on delete
+  // (S4), so an older app can ignore these columns and skill deletion is never FK-blocked.
+  //   conversations.active_skill_id — the STICKY DEFAULT skill for new turns (DS18).
+  //   messages.skill_id             — the skill that shaped THIS turn; powers the per-message glyph (DS16/DS18).
+  ensureColumn(db, 'conversations', 'active_skill_id', 'active_skill_id TEXT')
+  ensureColumn(db, 'messages', 'skill_id', 'skill_id TEXT')
   ensureChunksFts(db)
   ensureMessagesFts(db)
   seedCollections(db)

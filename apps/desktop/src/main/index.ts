@@ -32,6 +32,8 @@ import { createCachedGpuProbe } from './services/runtime/gpu'
 import { EVENTS } from '../shared/ipc'
 import { rasterizePdfWithHiddenWindow } from './services/ocr/rasterizer'
 import { resolveManifestsDir } from './services/models'
+import { resolveAppSkillsDir, resolveUserSkillsDir } from './services/drive'
+import { createSkillRegistry } from './services/skills/registry'
 import { composeServices } from './services/compose-services'
 import type { AppContext } from './services/context'
 
@@ -226,6 +228,17 @@ function initBackend(): void {
     audit
   })
 
+  // Skill registry (skills plan §8): the uniform disk-reconcile over the plain app-skills/ +
+  // user-skills/ folders (outside the encrypted workspace). app-skills/ falls back to the repo
+  // source dir in a dev build (resolveAppSkillsDir, the manifests precedent). Reconcile needs an
+  // unlocked DB, so it is best-effort here (works in plaintext_dev; a locked encrypted DB defers
+  // to a later phase that re-runs it post-unlock — S3 has no skill-reading surface yet).
+  const skills = createSkillRegistry({
+    getDb: () => workspace.requireDb(),
+    appSkillsDir: resolveAppSkillsDir(paths.rootPath, app.getAppPath()),
+    userSkillsDir: resolveUserSkillsDir(paths.rootPath)
+  })
+
   // `db` is a getter over the controller: it throws while locked. DB-backed IPC is only
   // reachable after the renderer's unlock gate reports the workspace ready.
   ctx = {
@@ -243,7 +256,22 @@ function initBackend(): void {
     probeGpu: gpuProbe,
     isDev,
     audit,
-    docTasks
+    docTasks,
+    skills
+  }
+  // Best-effort first reconcile (skills plan §8). In plaintext_dev the DB is already open; in
+  // encrypted mode `requireDb()` throws while locked, so swallow it — a later phase reconciles on
+  // unlock, and S3 ships no surface that reads skills yet.
+  try {
+    const result = skills.reconcile()
+    log.info('Skill registry reconciled', {
+      present: result.present,
+      inserted: result.inserted,
+      updated: result.updated,
+      markedUnavailable: result.markedUnavailable
+    })
+  } catch {
+    /* workspace locked — reconcile deferred to a post-unlock pass in a later phase */
   }
   registerCoreIpc(ctx)
   registerWorkspaceIpc(ctx)

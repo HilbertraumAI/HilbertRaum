@@ -6,15 +6,27 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
-_Last updated: 2026-06-17 — **Skills Phase S2 SHIPPED — skill package schema & parser (pure,
-Electron-free).** New files: [`shared/skill-manifest.ts`](apps/desktop/src/shared/skill-manifest.ts)
-(the frozen type contract + `parseSkillMarkdown`/`validateSkillManifest`), plus main-side wrappers
+_Last updated: 2026-06-17 — **Skills Phase S3 SHIPPED — registry & persistence (plaintext plain-folder
+model).** New files: [`services/skills/registry.ts`](apps/desktop/src/main/services/skills/registry.ts)
+(uniform disk discovery + reconcile of `app-skills/` + `user-skills/`, `mark-unavailable`, drop-in →
+DISABLED, enable/disable, the `createSkillRegistry` handle) and
+[`services/skills/loader.ts`](apps/desktop/src/main/services/skills/loader.ts) (ONE mode — read the
+folder — for both sources). Schema: additive `skills` table + nullable `conversations.active_skill_id`
++ `messages.skill_id` (no FK into `skills`). [`services/drive.ts`](apps/desktop/src/main/services/drive.ts)
+gains `app-skills`+`user-skills` in `DRIVE_LAYOUT_DIRS` (+ both prepare-drive scripts, parity) and
+`resolveAppSkillsDir`/`resolveUserSkillsDir`; `AppContext.skills` wired in `main/index.ts` (best-effort
+startup reconcile). 17 new integration tests (`tests/integration/skills-registry.test.ts`); full suite
+**1447 passed / 25 skipped**, typecheck + build clean. No IPC/UI/prompt path (S4+). See the **"Skills —
+S3 handoff"** block below. Next: Phase S4 (import/export/install/delete lifecycle + IPC)._
+
+_(prior) 2026-06-17 — **Skills Phase S2 SHIPPED — skill package schema & parser (pure, Electron-free).**
+New files: [`shared/skill-manifest.ts`](apps/desktop/src/shared/skill-manifest.ts) (the frozen type
+contract + `parseSkillMarkdown`/`validateSkillManifest`), plus main-side wrappers
 [`services/skills/manifest.ts`](apps/desktop/src/main/services/skills/manifest.ts) (single I/O point
 that reads SKILL.md + optional manifest.json and runs the shared validator — §8.1) and
 [`services/skills/limits.ts`](apps/desktop/src/main/services/skills/limits.ts) (env-overridable §6.4
-caps). 55 new unit tests (`tests/unit/skill-manifest.test.ts` + `skill-limits.test.ts`); full suite
-**1430 passed / 25 skipped**, typecheck + build clean. DB/IPC/UI untouched (S3+). See the **"Skills —
-S2 handoff"** block below for the four-field handoff. Next: Phase S3 (registry & persistence)._
+caps). 55 new unit tests; suite was **1430 passed / 25 skipped** at S2. See the **"Skills — S2 handoff"**
+block below for the four-field handoff._
 
 _**Skills — OWNER DECISION REVISION (2026-06-17), folded into [`docs/skills-plan.md`](docs/skills-plan.md)
 §0 (authoritative).** Skills are now stored **UNENCRYPTED as plain folders** — `<root>/app-skills/`
@@ -35,6 +47,67 @@ attacker-supplied and is now unzipped straight to a real on-disk folder. **Impac
 commit: none** — `shared/skill-manifest.ts` is storage-agnostic and `parseSkillManifestFromDir` is now
 the single read path for both sources. S3 spec, S4 spec, §7/§8/§9/§14/§17/§19/§20 + the §18 matrices
 updated accordingly._
+
+### Skills — S3 handoff (2026-06-17)
+
+**Contracts produced** (what S4–S9 import):
+- **Schema** (`services/db.ts`): additive `skills` table (full SQL in `SCHEMA`, `IF NOT EXISTS`) +
+  nullable `conversations.active_skill_id` + `messages.skill_id` (ensureColumn). Columns:
+  `install_id` (PK), `id`, `title`, `version`, `kind`, `source`, `path`, `enabled`, `warning_ack`,
+  `trusted_level`, `manifest_json`, `unavailable_at`, `installed_at`, `updated_at`; `idx_skills_id`
+  on `id`. **No FK from any core table into `skills`** (audit C3) — refs are cleared by an app-level
+  sweep in S4, never a cascade.
+- **`services/skills/registry.ts`**: `reconcileSkills(db, {appSkillsDir, userSkillsDir, limits?, now?})
+  → ReconcileResult {inserted, updated, markedUnavailable, present, errors}`; `discoverSkillsInDir(dir,
+  source, {limits?})`; `listSkills(db)`, `getSkill(db, installId)`, `getSkillsByDeclaredId(db, id)`,
+  `setSkillEnabled(db, installId, enabled, now?)`, `markSkillUnavailable(db, installId, now?)`,
+  `skillInstallId(source, id)`. Types: `SkillRecord`, `SkillSource` (=`SkillTrustedLevel`),
+  `DiscoveredSkill`, `ReconcileResult`. The handle: `createSkillRegistry({getDb, appSkillsDir,
+  userSkillsDir, limits?}) → SkillRegistry {appSkillsDir, userSkillsDir, reconcile(), list(), get(),
+  setEnabled()}`.
+- **`services/skills/loader.ts`**: `loadSkillPackage(record, {appSkillsDir, userSkillsDir, limits?})
+  → SkillParseResult`; `loadSkillFromDir(dir, {limits?})`; `skillRecordDir(record, opts)`. ONE mode —
+  reuses S2's `parseSkillManifestFromDir`; no decrypt/transient/shred.
+- **`services/drive.ts`**: `DRIVE_LAYOUT_DIRS` now contains `app-skills`+`user-skills` (after
+  `workspace`); both `scripts/prepare-drive.{ps1,sh}` updated to match (script-drift parity).
+  `resolveAppSkillsDir(rootPath, appPath?)` (on-drive → repo-source dev fallback) +
+  `resolveUserSkillsDir(rootPath)` (always `<root>/user-skills`).
+- **`AppContext.skills?: SkillRegistry`** (`services/context.ts`), wired in `main/index.ts` with a
+  best-effort startup reconcile.
+
+**Decisions taken or changed:**
+- **PK = deterministic natural key `install_id = "<source>:<id>"`** (NOT a random uuid) — the OPEN
+  decision §0/§8.2 left to S3. Rationale: under revised §0 user-skill folders are named by `id`, so
+  two same-id user skills can't coexist on disk; a disk-derived key is **stable across a DB rebuild**,
+  so the FK-less `conversations.active_skill_id`/`messages.skill_id` refs keep resolving (a re-minted
+  uuid would orphan them — the very thing §0 promises against). Same-id app vs user → distinct keys
+  (`app:x` / `user:x`), so DS12's collision handling holds. `path` stores the folder **basename**
+  (relative to its source dir), resolved by the loader — portable, no machine-specific absolute path.
+- **Added column `skills.unavailable_at`** (NULL = present; ISO ts = folder vanished) — not in the
+  §8.2 sketch, but required to persist the "mark-unavailable, never blind-delete" flag (DS1/§7.4). The
+  NULL-sentinel convention (`scope_v2_json` precedent).
+- **Reconcile insert-vs-update split is load-bearing:** a NEW row applies the source default
+  (app → enabled+ack; user drop-in → disabled, DS19); an EXISTING row re-derives cached fields but
+  PRESERVES `enabled`/`warning_ack` and only writes when something actually changed (idempotent — no
+  spurious `updated_at` bumps). Consequence: a DB rebuild re-derives user skills as **disabled** (they
+  must be re-enabled) — consistent with DS19 (a rebuild is a fresh discovery, not a confirmed import).
+- **Discovery rejects** a folder whose name fails `SKILL_ID_RE` or whose SKILL.md fails validation
+  (error + skip); silently skips a folder with no SKILL.md; dedupes same-`id` within a source (first
+  wins). Trust is APP-assigned (app dir → `app`, user dir → `user`); a self-declared `trust` is already
+  ignored by the S2 parser.
+
+**Open landmines:** none new (no `SL-#` opened in S3). Known residuals remain spec, not landmines:
+the live **post-unlock reconcile for encrypted workspaces is not yet wired** — the startup reconcile is
+best-effort and no-ops while the DB is locked; S4/S5 (the first phases with a skills-reading surface)
+must trigger `ctx.skills.reconcile()` on unlock/first-list. §22-M2 (app-skill integrity residual) +
+DS20 confidentiality boundary stay documented-as-known-limitations for S9.
+
+**What S4 consumes:** the `skills` table + `SkillRecord`/registry functions (installer upserts via the
+same row shape, sets `enabled`+`warning_ack` for a view-import per DS7, clears refs on delete per C3);
+`resolveAppSkillsDir`/`resolveUserSkillsDir` + `resolveSkillLimits` for the new safe extractor that
+unzips a `.skill.zip` straight into `user-skills/<id>/`; `loadSkillPackage` for preview; `markSkill
+Unavailable`/`reconcileSkills` for the post-delete/post-import refresh. (S6/S7 consume `messages.skill_id`
++ `conversations.active_skill_id`; S8 consumes cached `manifest_json.triggers`.)
 
 ### Skills — S2 handoff (2026-06-17)
 

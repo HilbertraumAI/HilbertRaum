@@ -61,9 +61,25 @@ a future move to Tauri/Rust is a localized swap.
 package. One SQLite DB per workspace (`workspace/hilbertraum.sqlite`) holds the original spec §8 tables
 (settings, conversations, messages, documents, chunks, embeddings, runtime_events) **plus** additive
 tables for document organization (`collections`, `document_collections`, `conversation_documents`),
-whole-document analysis (`tree_nodes`, `tree_edges`, `summary_cache`, `extraction_records`), and the
+whole-document analysis (`tree_nodes`, `tree_edges`, `summary_cache`, `extraction_records`), Skills
+(`skills`, plus the nullable `conversations.active_skill_id` + `messages.skill_id` refs), and the
 FTS5 virtual tables (`chunks_fts`, `messages_fts`). The authoritative schema is `services/db.ts`. In
 encrypted mode (Phase 9) the whole DB file is encrypted at rest.
+
+**Skills registry (Skills plan §8 / S3, plaintext plain-folder model).** Skill packages are **non-secret
+task knowledge** (DS20), so — unlike documents — they live as **plain folders OUTSIDE the encrypted
+workspace**: `<root>/app-skills/` (read-only) + `<root>/user-skills/` (read-write) (see
+[`drive-layout.md`](drive-layout.md)). **Disk is the source of truth**; the `skills` table is a pure
+derived index + state cache (`services/skills/registry.ts`), reconciled from those folders the same way
+`services/models.ts` discovers manifests and doc-org `collections.ts` reconciles a DB index. Reconcile
+**inserts** new folders (app → enabled; a user drop-in → DISABLED, DS19), **updates** changed ones while
+preserving user state (enabled / `warning_ack`), and **marks unavailable** (never deletes) a row whose
+folder vanished — so a transiently-unmounted drive keeps the user's choices and the conversation/message
+references. A DB rebuild re-derives every row from disk (no orphan). The PK `install_id` is the
+deterministic natural key `"<source>:<id>"` (stable across rebuilds, so the FK-less
+`conversations`/`messages` refs keep resolving); there is deliberately **no FK into `skills`** (refs are
+cleared by an app-level sweep on delete, S4). `services/skills/loader.ts` has one mode — read the folder
+— for both sources (no decrypt/transient/shred; DS11 revoked).
 
 ## Models & runtime (Phase 2)
 - **Manifests** are local YAML under `model-manifests/` (committed; weights are not). The schema +

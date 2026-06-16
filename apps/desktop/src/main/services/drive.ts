@@ -1,4 +1,4 @@
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { existsSync, statSync } from 'node:fs'
 import type { ModelManifest } from '../../shared/manifest'
 import { isRealSha256 } from '../../shared/manifest'
@@ -34,6 +34,13 @@ export const DRIVE_FORMAT_VERSION = 1
  */
 export const DRIVE_LAYOUT_DIRS: readonly string[] = [
   'workspace',
+  // Skill packages (skills plan §0/§7 — plaintext plain folders, OUTSIDE the encrypted
+  // workspace). `app-skills/` is read-only product content (provisioned at drive-build, like
+  // model-manifests, populated by S9); `user-skills/` is the read-write area the Skills view
+  // writes to and power users may drop a folder into. Both are registered here in S3 (audit A4)
+  // so the registry never reads a directory the layout machinery forgot to create.
+  'app-skills',
+  'user-skills',
   'models/chat',
   'models/embeddings',
   'models/reranker',
@@ -55,6 +62,39 @@ export const DRIVE_LAYOUT_DIRS: readonly string[] = [
 /** Absolute directory paths to create for a prepared drive at `rootPath`. */
 export function driveLayoutDirs(rootPath: string): string[] {
   return DRIVE_LAYOUT_DIRS.map((rel) => join(rootPath, ...rel.split('/')))
+}
+
+/**
+ * Resolve the app-shipped skills directory (skills plan §7.3, the `resolveManifestsDir`
+ * precedent). Prefers `<root>/app-skills/` (where `prepare-drive` provisions it); in a dev build
+ * the on-drive copy may be absent, so fall back to the committed repo `app-skills/` source dir by
+ * walking up from `appPath` — exactly how model manifests resolve in dev. Returns the canonical
+ * `<root>/app-skills/` path even when nothing exists yet (discovery tolerates an absent dir),
+ * so the result is always a usable path. App skills are read-only and never created here.
+ */
+export function resolveAppSkillsDir(rootPath: string, appPath?: string): string {
+  const onDrive = join(rootPath, 'app-skills')
+  if (existsSync(onDrive)) return onDrive
+  if (appPath) {
+    let dir = appPath
+    for (let i = 0; i < 8; i++) {
+      const candidate = join(dir, 'app-skills')
+      if (existsSync(candidate) && statSync(candidate).isDirectory()) return candidate
+      const parent = dirname(dir)
+      if (parent === dir) break
+      dir = parent
+    }
+  }
+  return onDrive
+}
+
+/**
+ * Resolve the user-installed skills directory (skills plan §0/§7) — always `<root>/user-skills/`.
+ * It is a single read-write location (no dev/repo fallback: user skills are user-created, never
+ * committed). Pure resolution; the registry creates it on demand at reconcile time.
+ */
+export function resolveUserSkillsDir(rootPath: string): string {
+  return join(rootPath, 'user-skills')
 }
 
 // ---- config/drive.json (the prepared-drive marker, spec §6) -----------------------
