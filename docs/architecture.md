@@ -81,6 +81,23 @@ deterministic natural key `"<source>:<id>"` (stable across rebuilds, so the FK-l
 cleared by an app-level sweep on delete, S4). `services/skills/loader.ts` has one mode — read the folder
 — for both sources (no decrypt/transient/shred; DS11 revoked).
 
+**Skill import / export / delete lifecycle (Skills plan §9 / S4).** `services/skills/installer.ts`
+owns the lifecycle behind IPC. Import **validates** a `.skill.zip` or folder with a net-new
+dependency-free **member-by-member safe extractor** (built-in `node:zlib` + a central-directory
+parser; the full defence matrix is in [`security-model.md`](security-model.md) "Skill-import
+defences"), stages the whole tree, then **places it as plain files at `user-skills/<id>/`** (folder
+name == manifest id) and reconciles the row to **enabled-with-warning** (DS7) — unless an enabled
+app skill of the same id is already effective, in which case the import **coexists disabled**
+(trust-first precedence, DS12). A lower version is refused unless developer mode (DS15, a footgun
+guard — `version` is unsigned). **Delete** is an app-level **ref-clear sweep** (§22-C3): in one
+transaction it nulls `conversations.active_skill_id` + `messages.skill_id` pointing at the install
+id and deletes the row (there is no FK to cascade), then removes the folder; app skills refuse.
+**Enable** enforces **one-active-per-id** (enabling one disables same-id siblings). The registry
+handle reconciles disk→DB **once per session on the first read after unlock** (a
+`reconciledThisSession` guard inside `createSkillRegistry`, not an unlock hook); the importer/
+deleter call `reconcile()` explicitly after mutating disk. Audit events
+(`skill_imported`/`deleted`/`enabled`/`disabled`) carry **ids/counts only**.
+
 ## Models & runtime (Phase 2)
 - **Manifests** are local YAML under `model-manifests/` (committed; weights are not). The schema +
   validator live in `src/shared/manifest.ts` so renderer and main share one definition. YAML is
@@ -1289,6 +1306,10 @@ conversation_documents(conversation_id, document_id, added_at)    -- C3 temp-att
 | `docs:import` (extend) | `(paths[], options?: ImportOptions)` — `destination` persisted at queue time (M1) | `registerDocsIpc.ts` |
 | `docs:list` (extend) | `filter?: { collectionId?, lifecycle?, smart?: SmartListView }` — `smart` shares the pure `matchesSmartView` with the renderer rail | `registerDocsIpc.ts` |
 | `chat:setScope` / `setCollection` / `listAttachments` | composite scope persist · creation anchor · the `conversation_documents` attachments | `registerChatIpc.ts` |
+| `skills:list/get` | `() ⇒ SkillInfo[]` · `(installId) ⇒ SkillInfo \| null` (first read reconciles disk→DB) | `registerSkillsIpc.ts` |
+| `skills:pick/preview/import` | OS picker ⇒ path · `(source) ⇒ SkillPreview` (no write) · `(source) ⇒ SkillInfo` (validate→place→DS7) | `registerSkillsIpc.ts` |
+| `skills:export/delete` | save dialog ⇒ `.skill.zip` (package tree only) · ref-clear sweep + rm folder (app skills refuse) | `registerSkillsIpc.ts` |
+| `skills:enable/disable/acknowledgeWarning` | `(installId) ⇒ SkillInfo`; enable enforces one-active-per-id (DS12) | `registerSkillsIpc.ts` |
 
 Renderer-untrusted inputs are sanitized at the boundary (`sanitizeDestination` ⇒ Library fallback;
 `safeIdArray`). Every channel mirrors 1:1 in `preload/index.ts`. **Smart views** (§7.6) are query-time

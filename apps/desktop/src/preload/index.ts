@@ -34,6 +34,8 @@ import type {
   PreflightResult,
   RuntimeInstallInfo,
   RuntimeStatus,
+  SkillInfo,
+  SkillPreview,
   StartDocTaskRequest,
   WorkspaceActionResult,
   WorkspaceMode,
@@ -300,6 +302,31 @@ const api = {
   /** Delete a project — 'membershipOnly' keeps docs; 'withDocuments' deletes project-only docs (C2). */
   deleteCollection: (id: string, mode: 'membershipOnly' | 'withDocuments'): Promise<void> =>
     ipcRenderer.invoke(IPC.deleteCollection, id, mode),
+
+  // Skills (instruction packages; skills plan §16).
+  /** All installed skills (app first, then by title). */
+  listSkills: (): Promise<SkillInfo[]> => ipcRenderer.invoke(IPC.listSkills),
+  /** One skill by install id, or null. */
+  getSkill: (installId: string): Promise<SkillInfo | null> => ipcRenderer.invoke(IPC.getSkill, installId),
+  /** Open the OS picker for a `.skill.zip` file or a skill folder; returns the path or null. */
+  pickSkillPackage: (mode?: 'file' | 'folder'): Promise<string | null> =>
+    ipcRenderer.invoke(IPC.pickSkillPackage, mode),
+  /** Validate an import source fully, without writing — the permission-summary preview (§9.2). */
+  previewSkillPackage: (source: string): Promise<SkillPreview> =>
+    ipcRenderer.invoke(IPC.previewSkillPackage, source),
+  /** Install a validated skill (enabled-with-warning, DS7); rejects friendly on a bad package. */
+  importSkill: (source: string): Promise<SkillInfo> => ipcRenderer.invoke(IPC.importSkill, source),
+  /** Export a skill to a user-chosen `.skill.zip` (package tree only); null if cancelled. */
+  exportSkill: (installId: string): Promise<string | null> => ipcRenderer.invoke(IPC.exportSkill, installId),
+  /** Delete a user skill (app skills refuse). */
+  deleteSkill: (installId: string): Promise<void> => ipcRenderer.invoke(IPC.deleteSkill, installId),
+  /** Enable a skill (one-active-per-id). */
+  enableSkill: (installId: string): Promise<SkillInfo> => ipcRenderer.invoke(IPC.enableSkill, installId),
+  /** Disable a skill. */
+  disableSkill: (installId: string): Promise<SkillInfo> => ipcRenderer.invoke(IPC.disableSkill, installId),
+  /** Acknowledge a user skill's import warning (DS7). */
+  acknowledgeSkillWarning: (installId: string): Promise<SkillInfo> =>
+    ipcRenderer.invoke(IPC.acknowledgeSkillWarning, installId),
 
   /** Subscribe to streamed tokens for a request (= conversation id); returns an unsubscribe fn. */
   onToken: (requestId: string, cb: (token: string) => void): (() => void) => {

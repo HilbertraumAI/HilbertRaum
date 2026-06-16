@@ -6,7 +6,27 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
-_Last updated: 2026-06-17 — **Skills Phase S3 SHIPPED — registry & persistence (plaintext plain-folder
+_Last updated: 2026-06-17 — **Skills Phase S4 SHIPPED — import/export/install/delete lifecycle + IPC.**
+New files: [`services/skills/installer.ts`](apps/desktop/src/main/services/skills/installer.ts) (the
+lifecycle core + a NET-NEW dependency-free safe zip extractor — built-in `node:zlib` + a hand-rolled
+central-directory parser, NOT JSZip/tar; §22-A2) and
+[`ipc/registerSkillsIpc.ts`](apps/desktop/src/main/ipc/registerSkillsIpc.ts) (10 channels:
+list/get/pick/preview/import/export/delete/enable/disable/acknowledgeWarning). Import VALIDATES
+(traversal/symlink/zip-bomb-on-inflated-bytes/nested-archive-magic/extension-allowlist/§6.4 caps) →
+places PLAIN files at `user-skills/<id>/` → reconciles to enabled-with-warning (DS7); coexist-disabled
+when an enabled app skill shares the id (trust-first, DS12); downgrade dev-mode-gated (DS15); delete is
+a one-txn ref-clear sweep + rm folder (no FK, §22-C3); export writes the package tree only (§9.5). New
+shared types `SkillInfo`/`SkillPreview` + `summarizeSkillPermissions` (shared, structural) + audit
+events `skill_imported/deleted/enabled/disabled` (ids/counts only). `createSkillRegistry` now
+reconciles disk→DB once-per-session on first read (the ratified post-unlock lazy reconcile). Every
+reject is a fixed STRUCTURAL string (never echoes attacker content — §22-M1). 24 new tests
+(`tests/integration/skills-installer.test.ts` extractor matrix + lifecycle; `skills-ipc.test.ts`
+round-trip + sentinel-grep). Full suite **1471 passed / 25 skipped**, typecheck + build clean. Docs:
+security-model.md ("Skill-import defences") + architecture.md (lifecycle + IPC table). No Settings UI /
+prompt path / activation yet (S5+). See the **"Skills — S4 handoff"** block below. Next: Phase S5
+(Settings → Skills UI)._
+
+_(prior) 2026-06-17 — **Skills Phase S3 SHIPPED — registry & persistence (plaintext plain-folder
 model).** New files: [`services/skills/registry.ts`](apps/desktop/src/main/services/skills/registry.ts)
 (uniform disk discovery + reconcile of `app-skills/` + `user-skills/`, `mark-unavailable`, drop-in →
 DISABLED, enable/disable, the `createSkillRegistry` handle) and
@@ -47,6 +67,64 @@ attacker-supplied and is now unzipped straight to a real on-disk folder. **Impac
 commit: none** — `shared/skill-manifest.ts` is storage-agnostic and `parseSkillManifestFromDir` is now
 the single read path for both sources. S3 spec, S4 spec, §7/§8/§9/§14/§17/§19/§20 + the §18 matrices
 updated accordingly._
+
+### Skills — S4 handoff (2026-06-17)
+
+**Contracts produced** (what S5–S8 import):
+- **Shared types** (`shared/types.ts`): `SkillInfo` (decoded `skills` row + `permissionSummary` +
+  `duplicateId` + `unavailable`) and `SkillPreview` (manifest summary + permission summary +
+  collision/upgrade/downgrade/downgradeBlocked flags + structural `errors`/`notes`). **NEW frozen
+  contract** — S5 (list/import drawer), S6 (picker), S8 (selector) consume these. `shared/skill-manifest.ts`
+  gains `summarizeSkillPermissions(perms) → string` (pure, structural, shared with the renderer).
+- **IPC channels** (`shared/ipc.ts` + `preload/index.ts`, all 1:1): `skills:list` `()→SkillInfo[]`,
+  `skills:get` `(installId)→SkillInfo|null`, `skills:pick` `(mode?: 'file'|'folder')→path|null`,
+  `skills:preview` `(source)→SkillPreview` (NO write), `skills:import` `(source)→SkillInfo`,
+  `skills:export` `(installId)→path|null` (save dialog), `skills:delete` `(installId)→void`,
+  `skills:enable`/`skills:disable` `(installId)→SkillInfo`, `skills:acknowledgeWarning`
+  `(installId)→SkillInfo`. All DB-backed handlers `requireUnlocked` (friendly `main.skills.locked`);
+  validation is resolved MAIN-side only (preview is the single truth — the renderer never re-validates).
+- **`services/skills/installer.ts`** signatures: `previewSkillPackage(db, source, deps, {developerMode?})
+  → SkillPreview`; `importSkill(db, source, deps, {developerMode?}) → {info: SkillInfo, fileCount}`;
+  `exportSkill(db, installId, destPath, deps) → number`; `deleteSkill(db, installId, deps) →
+  {deleted}`; `recordToInfo(record, duplicateId)`/`skillInfo(db, record)`. `SkillInstallerDeps =
+  {appSkillsDir, userSkillsDir, limits?, now?}`. Exports `SkillImportError` + `SKILL_IMPORT_ERRORS`
+  (the fixed structural reason strings).
+- **Audit events** (`shared/types.ts` `AuditEventType`): `skill_imported`, `skill_deleted`,
+  `skill_enabled`, `skill_disabled` — metadata `{id, source[, fileCount]}` ONLY (ids/counts, §22-M1).
+  Diagnostics labels + EN/DE catalog keys added (`diag.audit.skill_*`).
+- **Registry change** (`services/skills/registry.ts`): `createSkillRegistry` now reconciles disk→DB
+  **once per session on the first `list()`/`get()`** (a `reconciledThisSession` guard set only on a
+  successful reconcile; a read while locked retries next call). `reconcile()` still forces it.
+
+**Decisions taken or changed:**
+- **ZIP MECHANISM (the §22-A2 contract): a net-new, DEPENDENCY-FREE extractor** — Node's built-in
+  `node:zlib` (`inflateRawSync` with `maxOutputLength` as the authoritative zip-bomb backstop) + a
+  hand-rolled zip **central-directory** reader (the `declaredZipInflatedSize` style). NOT JSZip, NOT
+  the validation-blind shell-tar path. Reads every entry from the central directory BEFORE inflating;
+  STORE+DEFLATE only; encrypted/ZIP64 refused. Export writes a minimal STORE-method zip the same way.
+  (JSZip appears ONLY in test fixtures, via the existing transitive dep — zero new runtime dependency.)
+- **Collision + DS7 interplay (refines DS12):** a view-import installs **enabled-with-warning**, BUT
+  if an **enabled app skill** shares the id it installs **disabled** (coexist) so a user skill can
+  never silently shadow trusted product content (trust-first). **Enable enforces one-active-per-id**
+  server-side (enabling X disables same-id siblings) — the "offer to disable the other" is realized as
+  an invariant the S5 UI just surfaces.
+- **Delete-during-active-stream:** handled by the documented rule "a stamp whose skill vanished
+  mid-turn resolves to NULL" + a single transaction (so a reader never sees a row-gone-but-refs-present
+  half state). The registerSkillsIpc layer has no in-flight set; S6's glyph read must tolerate a
+  missing skill (resolve→NULL). No SL opened.
+- **Export is not a distinct audit event** in v1 (plan §16 enumerates import/delete/enable/disable);
+  a local log line suffices (the chosen path is user-private).
+
+**Open landmines:** none new (no `SL-#` opened in S4). One carry-forward for S6: the glyph/turn-skill
+read MUST resolve a vanished/deleted `messages.skill_id` to NULL (the delete path relies on it; there
+is no FK and no stream guard in the skills IPC layer).
+
+**What S5 consumes:** `window.api.{listSkills,getSkill,pickSkillPackage,previewSkillPackage,importSkill,
+exportSkill,deleteSkill,enableSkill,disableSkill,acknowledgeSkillWarning}` + the `SkillInfo`/
+`SkillPreview` shapes + `summarizeSkillPermissions` for the permission-summary line; the import drawer
+shows `SkillPreview.permissionSummary` + collision/downgrade flags before calling `importSkill`; the
+list renders `SkillInfo.{enabled,warningAck,duplicateId,unavailable,permissionSummary}`. (S6 consumes
+the same enable/default surface + `messages.skill_id`; S8 consumes cached `manifest_json.triggers`.)
 
 ### Skills — S3 handoff (2026-06-17)
 

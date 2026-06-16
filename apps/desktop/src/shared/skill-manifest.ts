@@ -131,6 +131,31 @@ export const SKILL_V1_PERMISSION_CEILING: SkillPermissions = {
   filesystem: 'skill_resources_only'
 }
 
+/**
+ * Build the human permission summary shown before an import is confirmed (skills plan §9.2/§15)
+ * and carried on every `SkillInfo`/`SkillPreview`. STRUCTURAL ONLY — derived purely from the
+ * (already-clamped) permission values, never from skill content/file names, so it is safe to log
+ * or echo in an error payload (§22-M1). v1 instruction skills can only inject fenced text, so the
+ * summary is reassuring by construction. Pure + shared so main computes it and the renderer
+ * displays the same string without re-deriving.
+ */
+export function summarizeSkillPermissions(perms: SkillPermissions): string {
+  const parts: string[] = []
+  parts.push(
+    perms.documents === 'selected_only'
+      ? 'can read the documents you pick for a turn'
+      : 'has no access to your documents'
+  )
+  parts.push(perms.network === 'denied' ? 'cannot access the network' : 'may access the network')
+  parts.push(
+    perms.filesystem === 'skill_resources_only'
+      ? 'reads only its own bundled files'
+      : 'has no file access'
+  )
+  // "A; B; C." — a calm, fixed-order sentence (no content interpolated).
+  return parts.join('; ') + '.'
+}
+
 // Privilege ranks for clamping. A declared value above the ceiling is clamped DOWN (never up);
 // an unrecognized value is treated as the v1 default posture (the ceiling) with a note — it can
 // never exceed the ceiling either way. Ranks above the ceiling exist only so a too-broad request

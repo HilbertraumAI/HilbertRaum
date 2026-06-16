@@ -15,6 +15,7 @@ import { maybeAutoStartActiveModel, registerModelIpc } from './ipc/registerModel
 import { registerChatIpc } from './ipc/registerChatIpc'
 import { registerDocsIpc } from './ipc/registerDocsIpc'
 import { registerCollectionsIpc } from './ipc/registerCollectionsIpc'
+import { registerSkillsIpc } from './ipc/registerSkillsIpc'
 import { registerDocTasksIpc } from './ipc/registerDocTasksIpc'
 import { DocTaskManager } from './services/doctasks'
 import { documentsDir } from './services/ingestion'
@@ -279,6 +280,7 @@ function initBackend(): void {
   registerChatIpc(ctx)
   registerDocsIpc(ctx)
   registerCollectionsIpc(ctx)
+  registerSkillsIpc(ctx)
   registerDocTasksIpc(ctx)
   registerDictationIpc(ctx)
   registerDownloadIpc(ctx)

@@ -57,7 +57,11 @@ const AUDIT_TYPE_LABELS: Record<AuditEventType, MessageKey> = {
   collection_deleted: 'diag.audit.collection_deleted',
   documents_added_to_collection: 'diag.audit.documents_added_to_collection',
   documents_removed_from_collection: 'diag.audit.documents_removed_from_collection',
-  document_lifecycle_changed: 'diag.audit.document_lifecycle_changed'
+  document_lifecycle_changed: 'diag.audit.document_lifecycle_changed',
+  skill_imported: 'diag.audit.skill_imported',
+  skill_deleted: 'diag.audit.skill_deleted',
+  skill_enabled: 'diag.audit.skill_enabled',
+  skill_disabled: 'diag.audit.skill_disabled'
 }
 
 function auditLabel(type: AuditEventType, t: I18n['t']): string {

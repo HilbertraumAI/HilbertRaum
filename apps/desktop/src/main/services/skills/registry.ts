@@ -349,12 +349,40 @@ export interface SkillRegistryDeps {
 /** Build the registry handle (the `services/models.ts`/manager shape, deps injected for tests). */
 export function createSkillRegistry(deps: SkillRegistryDeps): SkillRegistry {
   const { getDb, appSkillsDir, userSkillsDir, limits } = deps
+
+  // Post-unlock lazy reconcile (the RATIFIED S3 guidance, implemented in S4). The startup
+  // reconcile in main/index.ts no-ops while an encrypted DB is locked; rather than hook the
+  // unlock critical path, the FIRST registry read after unlock reconciles disk→DB exactly once
+  // per session. The flag is set only on a SUCCESSFUL reconcile, so a read attempted while still
+  // locked (reconcile throws) simply retries on the next read. The S4 importer/deleter mutate
+  // disk and call `reconcile()` explicitly, which also arms the flag.
+  let reconciledThisSession = false
+  const doReconcile = (): ReconcileResult => {
+    const result = reconcileSkills(getDb(), { appSkillsDir, userSkillsDir, limits })
+    reconciledThisSession = true
+    return result
+  }
+  const ensureReconciled = (): void => {
+    if (reconciledThisSession) return
+    try {
+      doReconcile()
+    } catch {
+      /* DB still locked — leave the flag unset so the next read tries again */
+    }
+  }
+
   return {
     appSkillsDir,
     userSkillsDir,
-    reconcile: () => reconcileSkills(getDb(), { appSkillsDir, userSkillsDir, limits }),
-    list: () => listSkills(getDb()),
-    get: (installId) => getSkill(getDb(), installId),
+    reconcile: doReconcile,
+    list: () => {
+      ensureReconciled()
+      return listSkills(getDb())
+    },
+    get: (installId) => {
+      ensureReconciled()
+      return getSkill(getDb(), installId)
+    },
     setEnabled: (installId, enabled) => setSkillEnabled(getDb(), installId, enabled)
   }
 }

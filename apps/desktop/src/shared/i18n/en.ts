@@ -681,6 +681,10 @@ export const en = {
   'diag.audit.documents_added_to_collection': 'Documents added to a collection',
   'diag.audit.documents_removed_from_collection': 'Documents removed from a collection',
   'diag.audit.document_lifecycle_changed': 'Document lifecycle changed',
+  'diag.audit.skill_imported': 'Skill imported',
+  'diag.audit.skill_deleted': 'Skill deleted',
+  'diag.audit.skill_enabled': 'Skill enabled',
+  'diag.audit.skill_disabled': 'Skill disabled',
   'diag.accel.gpuFallbackName': 'Graphics card',
   'diag.accel.gpu': '{name} (GPU)',
   'diag.accel.mock': 'Built-in demo mode',
@@ -1025,7 +1029,12 @@ export const en = {
   'main.dialog.exportLog': 'Save diagnostic logs',
   'main.dialog.filterDocuments': 'Documents',
   'main.dialog.filterAll': 'All files',
+  'main.dialog.importSkill': 'Import a skill package',
+  'main.dialog.importSkillFolder': 'Import a skill folder',
+  'main.dialog.exportSkill': 'Export skill',
+  'main.dialog.filterSkill': 'Skill package',
   'main.collections.builtinUndeletable': 'The built-in Library and Temporary cannot be deleted.',
+  'main.skills.locked': 'Workspace is locked. Unlock it to manage skills.',
 
   // ---- Document organization — Documents screen sections + actions (plan §12) ----
   // German copy in de.ts reviewed in the D-L7 pass (2026-06-14).

@@ -427,6 +427,51 @@ A rejection surfaces as the friendly, persist-canonical `main.ingest.fileTooLarg
 `main.ingest.parseTimeout` on the document row (display-mapped at render, like the other ingestion
 failures). The downstream `maxChunks` cap still applies after parsing.
 
+## Skill-import defences — the safe extractor (skills plan §9.2 / §22-A2, Phase S4, 2026-06-17)
+
+A user-imported skill `.skill.zip` (or folder) is **attacker-supplied and unsigned**, and — unlike
+the original encrypted-blob design — it is now unzipped **straight into a plain on-disk folder**
+under `<root>/user-skills/<id>/` (revised plan §0). So the importer cannot lean on any existing
+machinery: the only other archive→disk path in the app is the validation-blind shell-tar extractor
+used for runtime downloads, whose safety rests on the archive being **SHA-verified against an
+app-controlled source list first** — the opposite trust model. A `.skill.zip` must **never** be
+routed through it (asserted by a test that greps the installer source).
+
+`services/skills/installer.ts` therefore ships a **net-new, dependency-free, member-by-member
+extractor** built on Node's built-in `node:zlib` + a hand-rolled zip central-directory parser (the
+same style as `ingestion/limits.ts` `declaredZipInflatedSize`). It reads the **central directory
+first** and validates every member **before inflating a byte**, then validates the whole tree in a
+staging dir and only places it on a clean pass. Each defence:
+
+- **Path traversal / absolute / drive-letter / UNC** — every member name is normalized to forward
+  slashes and rejected if it contains `..`/`.`, is absolute, or carries a drive letter; after the
+  final `join` the resolved path must still sit inside the target (belt-and-braces).
+- **Symlink rejection** — a member whose UNIX mode word (zip external attributes) is `S_IFLNK` is
+  refused outright (no "safe handling" in v1); the placed tree is re-walked with `lstat` afterwards
+  so no symlink can survive.
+- **Zip-bomb — two layers.** A cheap early reject sums the central-directory **declared**
+  uncompressed sizes against `HILBERTRAUM_SKILL_MAX_TOTAL_BYTES`; the **authoritative** backstop is
+  `zlib.inflateRawSync(member, { maxOutputLength })`, which aborts the moment a member's **actual**
+  inflated output exceeds `HILBERTRAUM_SKILL_MAX_FILE_BYTES` — a lying declared size cannot get
+  past it. Only STORE and DEFLATE are accepted; encrypted/ZIP64 archives are refused.
+- **Nested-archive sniff (E2)** — every inflated member's leading bytes are checked against archive
+  signatures (zip `PK`, gzip, xz, zstd, tar `ustar`), so a zip renamed `data.csv` is rejected even
+  though its extension is allowlisted.
+- **Extension allowlist (§6.3)** — `.md`/`.txt`/`.json`/`.csv` only.
+- **§6.4 caps** — per-file / total-uncompressed / file-count / path-length / folder-depth, all
+  env-overridable (`services/skills/limits.ts`), mirroring the malicious-document caps above.
+
+Every rejection is a **fixed, structural English string** (`SKILL_IMPORT_ERRORS`) — it never
+interpolates a member path, file name, or body text, so a malicious package can never echo its
+content into an IPC error payload, the audit log, or `app.log` (the content-class rule, §22-M1;
+proven by a sentinel-grep test). A failed/partial import **deletes** the staging dir and persists
+nothing — a plain cleanup, not a shred (nothing is secret under revised §0). Export writes the
+package tree (SKILL.md + `examples/schemas/prompts/resources`, never the `manifest.json` cache or
+run history) as a minimal STORE-method zip built the same dependency-free way. **App-shipped skills
+are read-only and cannot be deleted or overwritten** (the built-in-collection precedent); the
+residual that a hash manifest on a writable drive is unanchored (real integrity = off-drive
+signing) is the same one already accepted for the engine binary (§22-M2).
+
 ## Unverified-binary env overrides are dev-only (audit M-5, 2026-06-13)
 
 `HILBERTRAUM_LLAMA_BIN` and `HILBERTRAUM_WHISPER_BIN` point the sidecar resolvers at an explicit,

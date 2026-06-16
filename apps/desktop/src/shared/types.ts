@@ -3,6 +3,7 @@
 // Keep these in sync with the IPC handlers in src/main/ipc and the spec §9.1.
 
 import { t, type UiLanguageSetting } from './i18n'
+import type { SkillKind, SkillPermissions, SkillTrustedLevel } from './skill-manifest'
 
 export type HardwareProfile = 'TINY' | 'LITE' | 'BALANCED' | 'PRO' | 'UNKNOWN'
 
@@ -1241,6 +1242,83 @@ export interface BenchmarkResult {
  * workspaces) and is never uploaded anywhere. Privacy rule (hard): events carry ids,
  * model ids, filenames, and counts — NEVER chat content, document text, or passwords.
  */
+/**
+ * One installed skill over the IPC surface (skills plan §16) — a decoded `skills` row projected
+ * for the renderer. NEW shared contract in S4; S5 (Settings list), S6 (composer picker) and S8
+ * (selector) all consume it. STRUCTURAL fields only — `description`/`permissionSummary` come from
+ * the skill's own (clamped) manifest, never from injected body text.
+ */
+export interface SkillInfo {
+  /** Deterministic natural key `"<source>:<id>"` (the `skills` PK). */
+  installId: string
+  /** Declared skill id (kebab; non-unique across sources — DS12). */
+  id: string
+  title: string
+  description: string
+  version: string
+  kind: SkillKind
+  author: string
+  language: string
+  /** Source folder = assigned trust ('app' read-only | 'user' read-write). */
+  source: SkillTrustedLevel
+  trustedLevel: SkillTrustedLevel
+  enabled: boolean
+  /** DS7: a view-imported user skill carries a persistent "review what it can do" warning
+   *  (warningAck=false) until acknowledged. App skills are pre-acknowledged. */
+  warningAck: boolean
+  /** True once the on-disk folder has vanished (mark-unavailable; the row is kept). */
+  unavailable: boolean
+  /** Effective (already clamped) permissions (DS6). */
+  permissions: SkillPermissions
+  /** The calm human permission summary (structural; §9.2/§15). */
+  permissionSummary: string
+  /** True when another installed skill declares the same `id` (DS12 coexist-and-warn). */
+  duplicateId: boolean
+  installedAt: string
+  updatedAt: string
+}
+
+/**
+ * The result of validating an import source (a `.skill.zip` or a folder) FULLY in a transient
+ * staging dir BEFORE the user confirms (OQ-2, lean-yes; skills plan §16). NOTHING is persisted to
+ * produce this. On `ok: false`, `errors` carries friendly, STRUCTURAL-ONLY reasons (§22-M1: never
+ * the attacker's member paths or content). NEW shared contract in S4; S5's import drawer renders it.
+ */
+export interface SkillPreview {
+  ok: boolean
+  /** 'zip' (a `.skill.zip`) or 'folder' (a picked directory). */
+  sourceKind: 'zip' | 'folder'
+  // ---- manifest summary (present only when ok) ----
+  id?: string
+  title?: string
+  description?: string
+  version?: string
+  kind?: SkillKind
+  author?: string
+  permissions?: SkillPermissions
+  /** The calm human permission summary (always present — the ceiling default when not ok). */
+  permissionSummary: string
+  // ---- lifecycle flags (present when ok) ----
+  /** A user skill with this `id` is already installed (replace/upgrade/downgrade applies). */
+  collision?: boolean
+  /** Trust of the colliding installed skill, if any (an app skill shares this id). */
+  collisionWith?: SkillTrustedLevel | null
+  /** The currently-installed user-skill version for this id, if any. */
+  installedVersion?: string | null
+  /** Offered version is higher than the installed one. */
+  isUpgrade?: boolean
+  /** Offered version equals the installed one (a refresh/replace). */
+  isReplace?: boolean
+  /** Offered version is lower than the installed one. */
+  isDowngrade?: boolean
+  /** A downgrade the importer will REFUSE because developer mode is off (DS15). */
+  downgradeBlocked?: boolean
+  /** Friendly, structural-only validation problems (empty when ok). */
+  errors: string[]
+  /** Non-fatal advisories (permission clamps, ignored fields). */
+  notes: string[]
+}
+
 export type AuditEventType =
   | 'runtime_started'
   | 'runtime_stopped'
@@ -1276,6 +1354,13 @@ export type AuditEventType =
   | 'documents_added_to_collection'
   | 'documents_removed_from_collection'
   | 'document_lifecycle_changed'
+  // Skills (skills plan §16/§22-M1): lifecycle events. Metadata is IDS/COUNTS ONLY — the
+  // skill's declared id + source/trust + (for import) the file count — NEVER the package
+  // content, the SKILL.md body, or member file names that could carry user data.
+  | 'skill_imported'
+  | 'skill_deleted'
+  | 'skill_enabled'
+  | 'skill_disabled'
   | 'workspace_created'
   | 'workspace_unlocked'
   | 'workspace_locked'

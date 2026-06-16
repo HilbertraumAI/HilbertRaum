@@ -714,6 +714,10 @@ export const de: Record<keyof typeof en, string> = {
   'diag.audit.documents_added_to_collection': 'Dokumente zu einer Sammlung hinzugefügt',
   'diag.audit.documents_removed_from_collection': 'Dokumente aus einer Sammlung entfernt',
   'diag.audit.document_lifecycle_changed': 'Dokumentstatus geändert',
+  'diag.audit.skill_imported': 'Skill importiert',
+  'diag.audit.skill_deleted': 'Skill gelöscht',
+  'diag.audit.skill_enabled': 'Skill aktiviert',
+  'diag.audit.skill_disabled': 'Skill deaktiviert',
   'diag.accel.gpuFallbackName': 'Grafikkarte',
   'diag.accel.gpu': '{name} (GPU)',
   'diag.accel.mock': 'Eingebauter Demo-Modus',
@@ -1108,8 +1112,13 @@ export const de: Record<keyof typeof en, string> = {
   'main.dialog.exportLog': 'Diagnose-Logs speichern',
   'main.dialog.filterDocuments': 'Dokumente',
   'main.dialog.filterAll': 'Alle Dateien',
+  'main.dialog.importSkill': 'Ein Skill-Paket importieren',
+  'main.dialog.importSkillFolder': 'Einen Skill-Ordner importieren',
+  'main.dialog.exportSkill': 'Skill exportieren',
+  'main.dialog.filterSkill': 'Skill-Paket',
   'main.collections.builtinUndeletable':
     'Die integrierte Bibliothek und „Temporär“ können nicht gelöscht werden.',
+  'main.skills.locked': 'Der Arbeitsbereich ist gesperrt. Entsperre ihn, um Skills zu verwalten.',
 
   // ---- Dokumentorganisation — Bereiche + Aktionen (Plan §12). D-L7-Review erledigt (2026-06-14). ----
   'docs.section.heading': 'Bereiche',

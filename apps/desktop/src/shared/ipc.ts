@@ -145,6 +145,29 @@ export const IPC = {
   setCollectionArchived: 'collections:setArchived',
   /** Delete a project: 'membershipOnly' (keep docs) or 'withDocuments' (delete project-only docs — C2). */
   deleteCollection: 'collections:delete',
+  // Skills (instruction packages; skills plan §16). Handlers in registerSkillsIpc.ts; all
+  // DB-backed handlers requireUnlocked and resolve validation MAIN-side. Audit metadata is
+  // ids/counts only (§22-M1).
+  /** All installed skills (app first, then by title) — `SkillInfo[]`. */
+  listSkills: 'skills:list',
+  /** One skill by install id — `SkillInfo | null`. */
+  getSkill: 'skills:get',
+  /** Open the OS picker for a `.skill.zip` file or a skill folder; returns the chosen path or null. */
+  pickSkillPackage: 'skills:pick',
+  /** Validate an import source FULLY in a transient dir, WITHOUT writing — `SkillPreview` (§9.2/OQ-2). */
+  previewSkillPackage: 'skills:preview',
+  /** Validate → unzip/copy into user-skills/<id>/ → install enabled-with-warning (DS7) — `SkillInfo`. */
+  importSkill: 'skills:import',
+  /** Export a skill as a `.skill.zip` via the save dialog (package tree only — §9.5). */
+  exportSkill: 'skills:export',
+  /** Delete a user skill: rm folder + row + clear refs in one txn (C3). App skills refuse. */
+  deleteSkill: 'skills:delete',
+  /** Enable a skill (one-active-per-id: disables same-id siblings — DS12). */
+  enableSkill: 'skills:enable',
+  /** Disable a skill (invisible to the picker, never injected). */
+  disableSkill: 'skills:disable',
+  /** Acknowledge a user skill's import warning (DS7 — clears the persistent warning state). */
+  acknowledgeSkillWarning: 'skills:acknowledgeWarning',
   // Encrypted workspace lifecycle
   getWorkspaceState: 'workspace:getState',
   unlockWorkspace: 'workspace:unlock',
