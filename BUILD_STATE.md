@@ -96,18 +96,31 @@ updated accordingly._
   wins). Trust is APP-assigned (app dir → `app`, user dir → `user`); a self-declared `trust` is already
   ignored by the S2 parser.
 
-**Open landmines:** none new (no `SL-#` opened in S3). Known residuals remain spec, not landmines:
-the live **post-unlock reconcile for encrypted workspaces is not yet wired** — the startup reconcile is
-best-effort and no-ops while the DB is locked; S4/S5 (the first phases with a skills-reading surface)
-must trigger `ctx.skills.reconcile()` on unlock/first-list. §22-M2 (app-skill integrity residual) +
-DS20 confidentiality boundary stay documented-as-known-limitations for S9.
+**Open landmines:** none new (no `SL-#` opened in S3). Two residuals carry RATIFIED guidance (owner,
+2026-06-17) — spec for S4, not landmines:
+- **Post-unlock reconcile is not yet wired** (the startup reconcile is best-effort and no-ops while an
+  encrypted DB is locked). **Ratified approach for S4: lazy reconcile-once-per-session on first registry
+  read** — add a `reconciledThisSession` guard inside `createSkillRegistry` so the first `list()`/`get()`
+  after unlock reconciles, and have the S4 importer/deleter call `reconcile()` explicitly after they
+  mutate disk. NOT an unlock-handler hook (keeps skill I/O off the crowded unlock critical path; covers
+  plaintext + encrypted uniformly; chat resolves a sticky default via the persisted row regardless).
+- **A workspace DB rebuild resets user-skill `enabled`/`warning_ack` to the drop-in default (disabled).**
+  **Ratified: accept + document** — it is the safe direction (DS19), and persisting enable-state in a
+  per-folder marker would split state across disk+DB and break "the table is a pure cache." Add one line
+  to `known-limitations.md` at S9/S12: *"a workspace DB rebuild resets skill enable/acknowledgement
+  state; skills must be re-enabled."*
+
+§22-M2 (app-skill integrity residual) + DS20 confidentiality boundary stay documented-as-known-limitations
+for S9.
 
 **What S4 consumes:** the `skills` table + `SkillRecord`/registry functions (installer upserts via the
 same row shape, sets `enabled`+`warning_ack` for a view-import per DS7, clears refs on delete per C3);
 `resolveAppSkillsDir`/`resolveUserSkillsDir` + `resolveSkillLimits` for the new safe extractor that
-unzips a `.skill.zip` straight into `user-skills/<id>/`; `loadSkillPackage` for preview; `markSkill
-Unavailable`/`reconcileSkills` for the post-delete/post-import refresh. (S6/S7 consume `messages.skill_id`
-+ `conversations.active_skill_id`; S8 consumes cached `manifest_json.triggers`.)
+unzips a `.skill.zip` straight into `user-skills/<id>/` (**ratified: importer writes the folder named by
+`id` so folder-name == manifest `id` always agree; the drop-in path already tolerates a mismatch**);
+`loadSkillPackage` for preview; `markSkillUnavailable`/`reconcileSkills` for the post-delete/post-import
+refresh. (S6/S7 consume `messages.skill_id` + `conversations.active_skill_id`; S8 consumes cached
+`manifest_json.triggers`.)
 
 ### Skills — S2 handoff (2026-06-17)
 
