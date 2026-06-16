@@ -6,7 +6,38 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
-_Last updated: 2026-06-16 — **Adaptive Home CTA + one app-wide privacy indicator + AI-Model
+_Last updated: 2026-06-16 — **Bugfix: chat/RAG failed with `HTTP 400 exceed_context_size_error`
+on a long analysis session + the friendly error never showed (beta-tester report).** Symptom: a
+tester analysing a 5-page bank statement hit `ChatRequestError: Chat request failed: HTTP 400 —
+request (9600 tokens) exceeds the available context size (8192 tokens)` — and saw that RAW string,
+not the friendly copy. **Two distinct root causes.** (1) **Overflow:** `buildChatMessages`
+(plain chat) and `buildGroundedChatMessages` (RAG) replay the WHOLE persisted history with no
+budget against the model context — only the retrieval cap `ragMaxContextTokens` (2500) bounded the
+*retrieved chunks*, never the *total* prompt. An accumulating multi-turn conversation (history +
+a fresh chunk block + system + template) crept past `contextTokens` and llama-server rejected it
+before generation. The doc-task windows already sized inputs to `contextTokens`; the conversational
+path was the gap left by the 0.1.20 fix. (2) **Dead friendly mapping:** the overflow IS mapped to
+`main.model.contextExceeded` in `withChatStream`, but that text was sent only over the `chat:error`
+event — which the renderer's `stream()` never subscribes to. The renderer surfaces the invoke
+REJECTION, and `withChatStream` re-threw the RAW error; `friendlyIpcError` then only stripped an
+`Error:` prefix, not the `ChatRequestError:` subclass name → the raw HTTP 400 + class name leaked.
+**Fixes:** (1) new `fitMessagesToContext` (chat.ts, single owner) trims history to fit
+`contextTokens` — keeps leading system message(s) + the FINAL turn (current question/grounded
+prompt, never dropped), drops older turns oldest-first as a **contiguous tail** (role alternation
+preserved), with a `CHAT_RESPONSE_RESERVE_TOKENS` (1024) answer headroom. Both builders take an
+optional `contextTokens` (production passes `getSettings(db).contextTokens`; omitted = pure builder
+for tests); `generateAssistantMessage` + `generateGroundedAnswer` thread it. (2) `withChatStream`
+now THROWS the mapped friendly message on overflow (so the invoke rejection the renderer shows is
+friendly), and `friendlyIpcError` strips any `WordError:` class-name prefix. Raw reason still goes
+to the local log only. **Files:** `services/chat.ts`, `services/rag/index.ts`, `ipc/chat-stream.ts`,
+`renderer/lib/errors.ts`. **Docs:** `architecture.md` ("Chat & streaming" — history budget + error
+surfacing), `rag-design.md` (grounded assembly now whole-prompt budgeted), `known-limitations.md`
+(third instance of the token-budget class). **Tests:** typecheck clean, full vitest **1375 passed /
+25 skipped** (+10: `fitMessagesToContext` keep/trim/contiguous-tail/oversize-last, `buildChatMessages`
++ `buildGroundedChatMessages` trim, `withChatStream` overflow→friendly on event AND rejection,
+`friendlyIpcError` subclass-name stripping). No version bump, no schema change._
+
+_(prior) 2026-06-16 — **Adaptive Home CTA + one app-wide privacy indicator + AI-Model
 de-jargon.** A **renderer + EN/DE i18n only** wave (no IPC/schema/data-contract/main-process logic
 changes), folded into [`design-guidelines.md`](docs/design-guidelines.md) **§11.7** (new record),
 **§11.3 D-UI3** (hero now adaptive), and **§12.1 #2** (single indicator moved, superseded note).

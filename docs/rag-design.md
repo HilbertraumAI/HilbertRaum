@@ -328,7 +328,12 @@ The meta line is `| Page: N` when the chunk has a page, else `| Section: X`, els
 `buildGroundedChatMessages` then assembles the runtime message list: the base system prompt
 (spec §7.6), prior conversation history, and the **last user turn replaced by the grounded
 prompt**. The DB keeps the raw question for the transcript/title; only the model sees the
-grounded form.
+grounded form. The history is then **trimmed to the model context** via `fitMessagesToContext`
+(chat.ts; passed `getSettings(db).contextTokens`) — the grounded turn is the final message and
+is always kept, while older turns are dropped oldest-first. `maxContextTokens` bounds only the
+**retrieved-chunk block**; the context-window budget bounds the **whole prompt** (chunks +
+history + system), which is what prevents the multi-turn `HTTP 400 exceed_context_size_error`
+(fix 2026-06-16 — see architecture.md "Chat & streaming").
 
 ### Answer generation (`generateGroundedAnswer`) + `askDocuments` IPC
 

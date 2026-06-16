@@ -150,13 +150,31 @@ encrypted mode (Phase 9) the whole DB file is encrypted at rest.
   which forces strict user/assistant alternation after the system prompt by keeping the LATEST
   of any same-role run (stale orphan turns dropped) — so a conversation with earlier failures
   stays answerable.
-- **Surfaced runtime errors (fix 2026-06-14).** `LlamaRuntime.chatStream` throws a typed
-  `ChatRequestError` carrying the server's `{error:{message,type}}` body (previously the body
-  was discarded and only "HTTP <status>" survived). `isExceedContextError` recognizes the
-  `exceed_context_size_error` (an HTTP 400 — the prompt is larger than `contextTokens`); the
-  doctask manager and the chat/RAG stream wrapper map it to the friendly, localized
-  `main.model.contextExceeded` ("too large for this model — try a larger-context model or a
-  smaller document") instead of a raw code. The raw reason still goes to the local log only.
+- **History fits the context window (fix 2026-06-16).** The chat and grounded-answer message
+  lists replay the WHOLE persisted history, so an accumulating conversation (or a single
+  grounded turn carrying a large retrieved-chunk block) used to assemble a prompt larger than
+  the model's window — an `HTTP 400 exceed_context_size_error` that never reached generation.
+  `fitMessagesToContext` (in `services/chat.ts`, the single owner) now trims the history to fit
+  `contextTokens`: it always keeps the leading system message(s) and the FINAL turn (the
+  current question / grounded prompt — never dropped, so an unavoidable overflow is left to the
+  runtime to map), and drops older turns oldest-first, keeping a **contiguous recent tail** so
+  strict role alternation is preserved. A `CHAT_RESPONSE_RESERVE_TOKENS` (1024) headroom leaves
+  room to generate. `buildChatMessages`/`buildGroundedChatMessages` take an optional
+  `contextTokens` (the production callers pass `getSettings(db).contextTokens`; omitted = the
+  pure, untrimmed builder used by unit tests). This complements the doc-task window budgets
+  (`doctasks/summary.ts`), which already sized their inputs to `contextTokens` — the gap was
+  only the conversational path.
+- **Surfaced runtime errors (fix 2026-06-14, hardened 2026-06-16).** `LlamaRuntime.chatStream`
+  throws a typed `ChatRequestError` carrying the server's `{error:{message,type}}` body
+  (previously the body was discarded and only "HTTP <status>" survived). `isExceedContextError`
+  recognizes the `exceed_context_size_error` (an HTTP 400 — the prompt is larger than
+  `contextTokens`); the doctask manager and the chat/RAG stream wrapper map it to the friendly,
+  localized `main.model.contextExceeded` ("too large for this model — try a larger-context model
+  or a smaller document") instead of a raw code. The raw reason still goes to the local log only.
+  **The renderer surfaces the invoke REJECTION, not the `chat:error` event** — so `withChatStream`
+  now *throws the mapped friendly message* (not a raw rethrow) on overflow, and `friendlyIpcError`
+  strips any `WordError:` class-name prefix (not just `Error:`). Before this, the carefully-built
+  friendly copy was dead for the chat/RAG path and users saw the raw `ChatRequestError: … HTTP 400`.
 - **Streaming contract (LOCKED).** Main → renderer over per-conversation IPC event channels
   keyed by the conversation id: `chat:token:<id>` (one token per event), `chat:done:<id>`
   (the final assistant `Message`), `chat:error:<id>` (an error string) — helpers in

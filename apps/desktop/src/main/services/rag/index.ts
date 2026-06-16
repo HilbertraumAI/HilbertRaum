@@ -22,10 +22,12 @@ import {
   BASE_SYSTEM_PROMPT,
   collapseToAlternating,
   emptyAssistantMessage,
+  fitMessagesToContext,
   isAbortError,
   listMessages,
   stripThinkBlocks
 } from '../chat'
+import { getSettings } from '../settings'
 
 // RAG service (spec §7.8; pipeline design in rag-design §11). Turns a
 // question into a grounded, cited answer:
@@ -357,7 +359,8 @@ Answer:`
 export function buildGroundedChatMessages(
   db: Db,
   conversationId: string,
-  groundedUserContent: string
+  groundedUserContent: string,
+  contextTokens?: number
 ): ChatMessage[] {
   const history = listMessages(db, conversationId)
   const messages: ChatMessage[] = [{ role: 'system', content: BASE_SYSTEM_PROMPT }]
@@ -377,7 +380,11 @@ export function buildGroundedChatMessages(
   }
   // Drop orphan user turns from earlier failed answers so the roles still alternate
   // (a non-alternating history makes some chat templates raise — an HTTP 500).
-  return collapseToAlternating(messages)
+  const collapsed = collapseToAlternating(messages)
+  // Trim older history to the model context (the grounded turn carries the retrieved
+  // chunk block, so its prior turns are what overflow). The grounded turn is the final
+  // message, which fitMessagesToContext always keeps. Omitted ⇒ full history (pure builder).
+  return contextTokens == null ? collapsed : fitMessagesToContext(collapsed, contextTokens)
 }
 
 export interface GroundedAnswerOptions {
@@ -450,7 +457,15 @@ export async function generateGroundedAnswer(
   }
 
   const grounded = buildGroundedPrompt(question, chunks)
-  const messages = buildGroundedChatMessages(db, conversationId, grounded)
+  // Trim older history to the model context window so the grounded turn (which carries the
+  // retrieved-chunk block, up to settings.maxContextTokens) plus prior turns never overflow
+  // and trigger an HTTP 400 from the runtime.
+  const messages = buildGroundedChatMessages(
+    db,
+    conversationId,
+    grounded,
+    getSettings(db).contextTokens
+  )
   let content = ''
   // No `mode` is passed: document answers always run 'balanced' — grounded
   // answers should be fast + literal.

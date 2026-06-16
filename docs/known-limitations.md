@@ -218,7 +218,15 @@ password recovery — are documented in
   machine translation **into German** was imported. The embedder now truncates by
   `approxTokenCount` against a conservative real-BPE safety factor (2.2× for the *multilingual*
   E5), covering worst-case German with headroom; the embedding vector covers the chunk's head
-  (adjacent chunks overlap), so retrieval is unaffected in practice.
+  (adjacent chunks overlap), so retrieval is unaffected in practice. **NB (fix 2026-06-16):** a
+  third instance of the same class — the *chat/RAG conversation* path replayed the WHOLE history
+  unbudgeted, so a long multi-turn analysis (or a grounded turn carrying a large chunk block)
+  accumulated past the model window and the server rejected the request with the same `HTTP 400
+  exceed_context_size_error`. The history is now trimmed to `contextTokens` (`fitMessagesToContext`),
+  keeping the system prompt + the current turn and dropping older turns oldest-first. The retrieval
+  cap (`ragMaxContextTokens`) still bounds only the retrieved chunks; the new budget bounds the whole
+  prompt. Unavoidable overflow (a single oversize turn on a tiny-context model) now surfaces the
+  friendly `main.model.contextExceeded` copy on the invoke rejection, not the raw `HTTP 400`.
 
 ## Document translation (Phase 34, wave-3 plan §7)
 

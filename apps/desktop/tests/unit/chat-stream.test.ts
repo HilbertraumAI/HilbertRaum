@@ -1,7 +1,9 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import type { IpcMainInvokeEvent } from 'electron'
 import { withChatStream } from '../../src/main/ipc/chat-stream'
+import { ChatRequestError } from '../../src/main/services/runtime/llama'
 import { inFlightStreams, streamBuffers } from '../../src/main/ipc/inflight'
+import { t } from '../../src/shared/i18n'
 import { type Message } from '../../src/shared/types'
 
 // `assertChatStreamReady`'s guard preamble (unknown conversation, no runtime, doc-task
@@ -77,6 +79,29 @@ describe('withChatStream (M-A2)', () => {
     ).rejects.toThrow('boom')
 
     expect(sent).toEqual([{ channel: 'chat:error:c1', args: ['boom'] }])
+    expect(inFlightStreams.has('c1')).toBe(false)
+  })
+
+  it('maps a context-overflow HTTP 400 to the friendly copy on BOTH the error event and the rejection', async () => {
+    const { event, sent } = fakeEvent()
+    // The exact llama-server overflow the runtime now surfaces as a typed ChatRequestError.
+    const overflow = new ChatRequestError(
+      400,
+      'request (9600 tokens) exceeds the available context size (8192 tokens), try increasing it',
+      'exceed_context_size_error'
+    )
+    const friendly = t('en', 'main.model.contextExceeded')
+
+    const rejection = await withChatStream(event, 'c1', 'label', async () => {
+      throw overflow
+    }).catch((e: Error) => e.message)
+
+    // The renderer surfaces the invoke REJECTION — it must be the friendly copy, not the
+    // raw "Chat request failed: HTTP 400 — …" string (the bug this fixes).
+    expect(rejection).toBe(friendly)
+    expect(rejection).not.toMatch(/HTTP 400|9600/)
+    // The stream channel carries the same friendly text.
+    expect(sent).toEqual([{ channel: 'chat:error:c1', args: [friendly] }])
     expect(inFlightStreams.has('c1')).toBe(false)
   })
 

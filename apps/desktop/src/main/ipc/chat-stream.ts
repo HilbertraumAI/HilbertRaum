@@ -108,15 +108,21 @@ export async function withChatStream(
     return assistant
   } catch (err) {
     const raw = err instanceof Error ? err.message : String(err)
-    // A grounded answer whose retrieved context overflows the model is an HTTP 400; show
-    // the actionable "too large for this model" copy to the user (the raw reason still
-    // goes to the local log).
-    const message = isExceedContextError(err) ? tMain('main.model.contextExceeded') : raw
+    // A grounded/chat answer whose prompt overflows the model is an HTTP 400; show the
+    // actionable "too large for this model" copy to the user (the raw reason still goes to
+    // the local log).
+    const overflow = isExceedContextError(err)
+    const message = overflow ? tMain('main.model.contextExceeded') : raw
     log.error(logLabel, { conversationId, message: raw })
     if (!event.sender.isDestroyed()) {
       event.sender.send(STREAM.error(conversationId), message)
     }
-    throw err
+    // Reject the invoke with the SAME friendly text the stream channel carries: the
+    // renderer surfaces the invoke REJECTION (not the chat:error event), so a raw rethrow
+    // here is what leaked the unmapped "ChatRequestError: HTTP 400 …" string to users. For
+    // any other failure (incl. aborts) rethrow the original error untouched so its type and
+    // message are preserved upstream.
+    throw overflow ? new Error(message) : err
   } finally {
     // Resume any paused deep-index build first (idempotent; no-op when none was paused).
     releaseSlot()

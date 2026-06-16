@@ -14,6 +14,8 @@ import {
 } from '../../shared/types'
 import { parseDocumentScope } from './collections'
 import { buildFtsMatchQuery } from './fts'
+import { approxTokenCount } from './ingestion/chunker'
+import { getSettings } from './settings'
 import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from './runtime'
 
 // Chat service (spec §7.6): create conversations, append user/assistant messages,
@@ -507,8 +509,81 @@ export function exportTranscript(db: Db, conversationId: string): { title: strin
   return { title: conv.title, markdown: lines.join('\n') }
 }
 
-/** Build the runtime message list: system prompt + persisted history in order. */
-export function buildChatMessages(db: Db, conversationId: string): ChatMessage[] {
+// ---- Context-window budget (chat + RAG prompt assembly) -----------------------------
+// The chat and grounded-answer message lists replay the WHOLE persisted history. Left
+// unbounded, an accumulating conversation (or a single grounded turn carrying a large
+// retrieved-chunk block) eventually assembles a prompt larger than the model's context
+// window, and llama-server rejects the request with HTTP 400 `exceed_context_size_error`
+// — the prompt never even reaches generation. `fitMessagesToContext` is the single owner
+// of trimming the history to fit, used by both `buildChatMessages` (plain chat) and
+// `buildGroundedChatMessages` (RAG). Doc-task windows have their own context budgets
+// (doctasks/summary.ts); this covers the conversational path those budgets never touched.
+
+/** Model tokens reserved for the streamed answer + chat-template chrome (so a fitted
+ *  prompt still leaves room to generate; below this an answer would be truncated). */
+export const CHAT_RESPONSE_RESERVE_TOKENS = 1024
+/** Real-tokens-per-whitespace-word safety factor (matches the doctask + RAG budgets). */
+const CHAT_TOKENS_PER_WORD = 1.3
+/** Per-message overhead for role markers / delimiters the chat template adds. */
+const PER_MESSAGE_OVERHEAD_TOKENS = 8
+
+/** Estimated model tokens for one message (word estimate scaled up + template chrome). */
+function messageTokens(m: ChatMessage): number {
+  return Math.ceil(approxTokenCount(m.content) * CHAT_TOKENS_PER_WORD) + PER_MESSAGE_OVERHEAD_TOKENS
+}
+
+/**
+ * Trim an assembled (already role-alternating) message list to fit `contextTokens`,
+ * keeping a contiguous, most-recent suffix of the conversation. Invariants:
+ *   - Every leading `system` message is always kept (and counted) — the instructions.
+ *   - The FINAL turn is always kept, even if it alone exceeds the budget: it is the
+ *     user's current question (or the grounded prompt). Dropping it would answer the
+ *     wrong thing; an unavoidable overflow is left to the runtime, which surfaces the
+ *     friendly "too large for this model" error (chat-stream.ts).
+ *   - Older turns are dropped oldest-first until the estimate fits. Keeping a contiguous
+ *     tail preserves the strict user/assistant alternation the templates require.
+ * `reserveTokens` holds back room for the answer (CHAT_RESPONSE_RESERVE_TOKENS default).
+ */
+export function fitMessagesToContext(
+  messages: ChatMessage[],
+  contextTokens: number,
+  reserveTokens: number = CHAT_RESPONSE_RESERVE_TOKENS
+): ChatMessage[] {
+  const budget = Math.max(256, (Math.floor(contextTokens) || 0) - reserveTokens)
+  let firstNonSystem = 0
+  while (firstNonSystem < messages.length && messages[firstNonSystem].role === 'system') {
+    firstNonSystem++
+  }
+  const system = messages.slice(0, firstNonSystem)
+  const turns = messages.slice(firstNonSystem)
+  if (turns.length === 0) return messages
+
+  let used = system.reduce((sum, m) => sum + messageTokens(m), 0)
+  // The final turn is mandatory — add it first, then fill older turns newest→oldest.
+  const last = turns[turns.length - 1]
+  used += messageTokens(last)
+  const keptReversed: ChatMessage[] = [last]
+  for (let i = turns.length - 2; i >= 0; i--) {
+    const cost = messageTokens(turns[i])
+    if (used + cost > budget) break
+    used += cost
+    keptReversed.push(turns[i])
+  }
+  // Nothing was dropped → return the original array unchanged (cheap identity for tests).
+  if (keptReversed.length === turns.length) return messages
+  return [...system, ...keptReversed.reverse()]
+}
+
+/**
+ * Build the runtime message list: system prompt + persisted history in order. When
+ * `contextTokens` is given, the history is trimmed to fit the model context
+ * (`fitMessagesToContext`); omitted ⇒ the full history (the pure builder, for tests).
+ */
+export function buildChatMessages(
+  db: Db,
+  conversationId: string,
+  contextTokens?: number
+): ChatMessage[] {
   const history = listMessages(db, conversationId)
   const messages: ChatMessage[] = [{ role: 'system', content: buildSystemPrompt() }]
   for (const m of history) {
@@ -521,7 +596,8 @@ export function buildChatMessages(db: Db, conversationId: string): ChatMessage[]
       })
     }
   }
-  return collapseToAlternating(messages)
+  const collapsed = collapseToAlternating(messages)
+  return contextTokens == null ? collapsed : fitMessagesToContext(collapsed, contextTokens)
 }
 
 /**
@@ -572,7 +648,9 @@ export async function generateAssistantMessage(
   conversationId: string,
   opts: GenerateOptions = {}
 ): Promise<Message> {
-  const messages = buildChatMessages(db, conversationId)
+  // Trim history to the model's context window so an accumulating conversation never
+  // assembles a prompt the runtime rejects (HTTP 400 exceed_context_size_error).
+  const messages = buildChatMessages(db, conversationId, getSettings(db).contextTokens)
   let content = ''
   const stream = runtime.chatStream(messages, {
     signal: opts.signal,

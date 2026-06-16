@@ -10,6 +10,7 @@ import {
   collapseToAlternating,
   createConversation,
   deleteLastAssistantMessage,
+  fitMessagesToContext,
   generateAssistantMessage,
   listConversations,
   listMessages,
@@ -62,6 +63,69 @@ describe('collapseToAlternating (orphan turns from failed answers)', () => {
     appendMessage(db, { conversationId: conv.id, role: 'user', content: 'second' })
     const built = buildChatMessages(db, conv.id)
     expect(built.filter((m) => m.role === 'user')).toEqual([{ role: 'user', content: 'second' }])
+  })
+})
+
+// A block of `n` whitespace-separated words ≈ n approx-tokens (the prose path of
+// approxTokenCount), so message sizes in these tests are predictable.
+const words = (n: number): string => Array(n).fill('word').join(' ')
+
+describe('fitMessagesToContext (history budget vs the model context window)', () => {
+  const sys = { role: 'system' as const, content: words(10) }
+
+  it('returns the SAME array (no copy) when the whole history already fits', () => {
+    const msgs: ChatMessage[] = [
+      sys,
+      { role: 'user', content: words(5) },
+      { role: 'assistant', content: words(5) },
+      { role: 'user', content: words(5) }
+    ]
+    // Huge context → nothing to trim → identity (cheap, and asserts no needless churn).
+    expect(fitMessagesToContext(msgs, 8192)).toBe(msgs)
+  })
+
+  it('drops the OLDEST turns, keeping the system message + a contiguous recent tail', () => {
+    const turns: ChatMessage[] = []
+    for (let i = 0; i < 6; i++) {
+      turns.push({ role: i % 2 === 0 ? 'user' : 'assistant', content: words(200) })
+    }
+    const msgs: ChatMessage[] = [sys, ...turns]
+    // reserve 0 so the budget is exactly contextTokens; small ctx forces a trim.
+    const fitted = fitMessagesToContext(msgs, 900, 0)
+
+    expect(fitted.length).toBeLessThan(msgs.length)
+    expect(fitted[0]).toBe(sys) // system always kept
+    expect(fitted[fitted.length - 1]).toBe(turns[turns.length - 1]) // current turn always kept
+    // What survives is a contiguous suffix of the original turns (preserves alternation).
+    const keptTurns = fitted.slice(1)
+    expect(keptTurns).toEqual(turns.slice(turns.length - keptTurns.length))
+  })
+
+  it('keeps the final turn even when it ALONE exceeds the budget (runtime maps the overflow)', () => {
+    const old = { role: 'user' as const, content: words(20) }
+    const huge = { role: 'user' as const, content: words(5000) }
+    const fitted = fitMessagesToContext([sys, old, huge], 1000, 0)
+    // The oversize current question is never dropped; only the older turn is.
+    expect(fitted).toEqual([sys, huge])
+  })
+
+  it('buildChatMessages trims old history when given a small context window', () => {
+    const db = freshDb()
+    const conv = createConversation(db, { modelId: 'mock-chat' })
+    // A long, alternating conversation that would overflow a small context window.
+    for (let i = 0; i < 10; i++) {
+      appendMessage(db, { conversationId: conv.id, role: 'user', content: words(300) })
+      appendMessage(db, { conversationId: conv.id, role: 'assistant', content: words(300) })
+    }
+    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'FINAL QUESTION' })
+
+    const full = buildChatMessages(db, conv.id) // no budget → whole history
+    const fitted = buildChatMessages(db, conv.id, 2048) // budgeted to the model context
+
+    expect(fitted.length).toBeLessThan(full.length)
+    expect(fitted[0].role).toBe('system')
+    // The current question is always the last message the model sees.
+    expect(fitted[fitted.length - 1]).toEqual({ role: 'user', content: 'FINAL QUESTION' })
   })
 })
 

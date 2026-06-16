@@ -394,6 +394,27 @@ describe('generateGroundedAnswer', () => {
     const assistantTurn = messages.find((m) => m.role === 'assistant')
     expect(assistantTurn?.content).toBe('Earlier cited answer [S1].')
   })
+
+  it('buildGroundedChatMessages trims old history to the context window, always keeping the grounded turn', () => {
+    const db = freshDb()
+    const conv = createConversation(db, { mode: 'documents' })
+    const big = Array(300).fill('word').join(' ')
+    // A long prior conversation that, with a fresh grounded block on top, would overflow.
+    for (let i = 0; i < 10; i++) {
+      appendMessage(db, { conversationId: conv.id, role: 'user', content: big })
+      appendMessage(db, { conversationId: conv.id, role: 'assistant', content: big })
+    }
+    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'current question' })
+
+    const grounded = `GROUNDED BLOCK ${big}`
+    const full = buildGroundedChatMessages(db, conv.id, grounded) // no budget
+    const fitted = buildGroundedChatMessages(db, conv.id, grounded, 2048) // budgeted
+
+    expect(fitted.length).toBeLessThan(full.length)
+    expect(fitted[0].role).toBe('system')
+    // The grounded prompt (which replaced the last user turn) is always the final message.
+    expect(fitted.at(-1)?.content).toBe(grounded)
+  })
 })
 
 // ---- No-network guarantee across the whole ask path -----------------------------
