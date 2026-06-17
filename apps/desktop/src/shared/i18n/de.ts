@@ -173,6 +173,12 @@ export const de: Record<keyof typeof en, string> = {
   'chat.skill.suggested': 'Vorschlag: {title} – nutzen?',
   'chat.skill.used': 'Skill: {title}',
   'chat.skill.usedTitle': 'Diese Antwort wurde vom Skill „{title}“ geprägt.',
+  // S13c (D3) – eine automatisch angewandte Antwort: sichtbar („Beantwortet mit …“) + umkehrbar
+  // (ein Klick beantwortet dieselbe Frage ohne den Skill neu). Nie eine stille Überraschung.
+  'chat.skill.autoFired': 'Beantwortet mit {title}',
+  'chat.skill.autoFiredTitle':
+    'Die App hat den Skill „{title}“ automatisch auf diese Antwort angewandt. Du kannst ohne ihn antworten.',
+  'chat.skill.answerWithout': 'Ohne ihn antworten',
   // Tier-2-Tool-Lauf – die ruhige Aktion im Verlauf + Statuszeile + Bestätigungsdialog (skills plan §12.2/§15, S11b)
   'chat.skill.tool.extractTransactions': 'Transaktionen extrahieren',
   'chat.skill.tool.validateBalances': 'Salden prüfen',
@@ -674,6 +680,14 @@ export const de: Record<keyof typeof en, string> = {
   // ---- Skills (Rail-Ziel — SkillsScreen.tsx + settings/SkillsTab.tsx, Skills-Plan §15) ----
   'skills.title': 'Skills',
   'skills.intro': 'Skills bringen der KI bei, eine bestimmte Aufgabe zu erledigen. Sie ergänzen ihre Antworten um Hinweise – sie greifen nie auf das Internet oder andere Ordner auf deinem Computer zu.',
+  // S13c (D4) – der globale Auto-Anwenden-Schalter, standardmäßig aus. Der Hinweis erklärt klar, was
+  // das Einschalten bewirkt und dass jeder automatisch angewandte Skill sichtbar + umkehrbar bleibt.
+  'skills.autoFire.title': 'Passenden Skill automatisch anwenden',
+  'skills.autoFire.toggle': 'Passenden Skill automatisch anwenden',
+  'skills.autoFire.hint':
+    'Wenn eingeschaltet, darf die App einen eindeutig passenden App-Skill von sich aus auf eine Antwort anwenden, damit du ihn nicht selbst wählen musst. Nur App-Skills, nie selbst erstellte oder importierte. Du siehst immer, welcher Skill verwendet wurde, und kannst für diese Antwort ohne ihn antworten. Standardmäßig aus.',
+  'skills.autoFire.on': 'Automatische Skills an',
+  'skills.autoFire.off': 'Automatische Skills aus',
   'skills.import': 'Skill importieren…',
   'skills.import.menuAria': 'Einen Skill importieren',
   'skills.import.fromFile': 'Aus einer Datei (.skill.zip)…',

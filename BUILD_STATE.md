@@ -6,7 +6,41 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
-_Last updated: 2026-06-17 — **Skills Phase S13b SHIPPED — auto-fire MECHANICS, behind a default-off
+_Last updated: 2026-06-17 — **Skills Phase S13c SHIPPED — surprise-mitigation UX; S13 (auto-fire) is
+now FULLY CLOSED.** The S13b mechanics are now reachable by a user, behind the two ratified D3/D4
+surfaces, both EN/DE. **Shipped:** (1) **The opt-in toggle (D4):** a Switch in **Settings → Skills**
+([`SkillsTab.tsx`](apps/desktop/src/renderer/screens/settings/SkillsTab.tsx)) reads/writes the existing
+`skillsAutoFireEnabled` setting through the shared `updateSettings` patch path — **off by default**,
+hidden until settings load (never implies an unconfirmed state). This is the ONLY control that makes
+S13b reachable; until it ships auto-fire could not be enabled. (2) **The per-turn undo (D3):** an
+auto-fired turn stamps an **additive, nullable `messages.auto_fired` column**
+([`db.ts`](apps/desktop/src/main/services/db.ts)) — set only when the auto-fire path placed the skill
+AND the fence fit (the §22-A5 stamp-only-when-fenced precedent), so it lines up 1:1 with the glyph and a
+deleted skill drops glyph+undo together. Threaded additively via `TurnSkill.autoFired` (set by
+`resolveAutoFireSkill`) → `appendMessage`/both generators (`chat.ts` `generateAssistantMessage`,
+`rag/index.ts`) → `Message.autoFired` (read back in `rowToMessage`). The [`Transcript`](apps/desktop/src/renderer/chat/Transcript.tsx)
+glyph on an auto-fired turn reads **"Answered with `<skill>`"** + a one-click **"answer without it"** on
+the LAST assistant turn; tapping it ([`ChatScreen`](apps/desktop/src/renderer/screens/ChatScreen.tsx)
+`onAnswerWithoutSkill`) re-runs the SAME question with the skill **explicitly cleared
+(`skillInstallId: null`)** — the explicit per-turn clear stamps no skill AND suppresses a re-auto-fire.
+Reuses the regenerate path in BOTH modes; `askDocuments` gained a symmetric `regenerate` arg (drop the
+last assistant turn, re-use the existing last user turn — never a duplicate user row). Skill title
+localized via `skillI18n.ts`. **DECISION (recorded):** the renderer learns a turn was auto-fired via the
+additive `auto_fired` column (privacy-safe boolean, mirrors the additive-schema + stamp-only-when-fenced
+precedents) — chosen over "show the undo on every skill turn" (which would surface it on explicit picks,
+contradicting D3). **Safe-merge property INTACT:** default-off setting + no bundled skill declaring
+`triggers.autoFire` ⇒ a fresh install behaves identically to pre-S13. **§6/§14 ceilings unchanged:** the
+undo is a re-run not a new capability; no auto-fire path logs the question or adds an audit event; the
+S12 sentinel guard still holds. **Docs:** `docs/skills-s13-plan.md` **folded into
+`architecture.md` "Skills — design record" §18 (+ §6 cross-ref + legend rows) and DELETED** (doc-lifecycle
+rule; original in git history). **New contracts:** `messages.auto_fired` (additive nullable);
+`Message.autoFired` / `TurnSkill.autoFired`; `skillsAutoFireEnabled` is now user-toggleable;
+`askDocuments(convId, question, skillInstallId?, regenerate?)`. Full suite green (**1756 passed / 25
+skipped**, +9), typecheck + build clean. **NEXT ACTION: none — S13 is done.** Auto-fire is now
+user-enableable (default off) with a visible glyph + a per-turn undo; product opt-in (a bundled skill
+declaring `triggers.autoFire`) remains a later deliberate choice._
+
+_(prior) 2026-06-17 — **Skills Phase S13b SHIPPED — auto-fire MECHANICS, behind a default-off
 opt-in (INERT in production until S13c).** The ratified D1–D6 contract (§2.1) is now built; auto-fire
 fires only when a user opts in AND a skill declares it AND no skill is otherwise set. **Safe-merge
 property: with the new `skillsAutoFireEnabled` setting defaulting FALSE and no S13c toggle yet, S13b

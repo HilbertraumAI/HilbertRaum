@@ -235,8 +235,14 @@ describe('ChatScreen — per-message actions (Try again · Copy · Save)', () =>
     const tryAgain = screen.getAllByRole('button', { name: /try again/i })
     expect(tryAgain).toHaveLength(1)
     await user.click(tryAgain[0])
+    // A regenerate sends the resolved skill choice VERBATIM (S13c): no skill here ⇒ an explicit
+    // `skillInstallId: null` clear, so the re-run is pinned skill-free and never re-auto-fires.
     await waitFor(() =>
-      expect(sendChatMessage).toHaveBeenCalledWith('c1', '', { mode: 'balanced', regenerate: true })
+      expect(sendChatMessage).toHaveBeenCalledWith('c1', '', {
+        mode: 'balanced',
+        skillInstallId: null,
+        regenerate: true
+      })
     )
   })
 

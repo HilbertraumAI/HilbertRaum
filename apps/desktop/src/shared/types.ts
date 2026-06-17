@@ -553,6 +553,13 @@ export interface Message {
   skillId?: string | null
   /** The shaping skill's title, for the per-message glyph label (null when none / deleted). */
   skillTitle?: string | null
+  /**
+   * S13c — true only when the app AUTO-FIRED `skillId` (the user set no skill; the resolver filled the
+   * gap). Powers the per-turn "answer without it" undo, shown ONLY on an auto-fired turn. False on an
+   * explicit pick, a no-skill turn, or a turn whose stamped skill was later deleted (glyph + undo drop
+   * together). A boolean — never content.
+   */
+  autoFired?: boolean
 }
 
 /**

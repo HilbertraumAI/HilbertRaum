@@ -5,7 +5,7 @@ import userEvent from '@testing-library/user-event'
 import { SkillsTab } from '../../src/renderer/screens/settings/SkillsTab'
 import { I18nProvider } from '../../src/renderer/i18n'
 import { ToastProvider } from '../../src/renderer/components'
-import type { SkillInfo, SkillPreview } from '../../src/shared/types'
+import { DEFAULT_SETTINGS, type AppSettings, type SkillInfo, type SkillPreview } from '../../src/shared/types'
 import { stubApi } from '../helpers/renderer'
 
 // Phase S5 — Settings → Skills UI (skills plan §15/§18.1). The renderer is a thin view over
@@ -238,6 +238,45 @@ describe('SkillsTab — import preview (§15: permission summary before confirm)
     const dialog = within(await screen.findByRole('dialog'))
     expect(dialog.getByText('This skill package is missing its SKILL.md.')).toBeInTheDocument()
     expect(dialog.getByRole('button', { name: 'Add skill' })).toBeDisabled()
+  })
+})
+
+describe('SkillsTab — auto-fire opt-in (S13c/D4)', () => {
+  it('reflects the saved off state and turns auto-fire on through the shared Settings patch', async () => {
+    const user = userEvent.setup()
+    const updateSettings = vi.fn(async (p: Partial<AppSettings>) => ({ ...DEFAULT_SETTINGS, ...p }))
+    stubApi({
+      listSkills: vi.fn(async () => [skill()]),
+      getSettings: vi.fn(async () => ({ ...DEFAULT_SETTINGS, skillsAutoFireEnabled: false })),
+      updateSettings: updateSettings as never
+    })
+    renderTab()
+    const toggle = (await screen.findByRole('switch', {
+      name: 'Apply a matching skill automatically'
+    })) as HTMLInputElement
+    expect(toggle).not.toBeChecked() // off by default — the safe-merge property
+    await user.click(toggle)
+    expect(updateSettings).toHaveBeenCalledWith({ skillsAutoFireEnabled: true })
+  })
+
+  it('reflects a saved on state', async () => {
+    stubApi({
+      listSkills: vi.fn(async () => [skill()]),
+      getSettings: vi.fn(async () => ({ ...DEFAULT_SETTINGS, skillsAutoFireEnabled: true }))
+    })
+    renderTab()
+    expect(
+      await screen.findByRole('switch', { name: 'Apply a matching skill automatically' })
+    ).toBeChecked()
+  })
+
+  it('hides the toggle when settings cannot be read (never implies an unconfirmed state)', async () => {
+    stubApi({ listSkills: vi.fn(async () => [skill()]) }) // no getSettings stub ⇒ load fails silently
+    renderTab()
+    await screen.findByText('Bank statement helper')
+    expect(
+      screen.queryByRole('switch', { name: 'Apply a matching skill automatically' })
+    ).not.toBeInTheDocument()
   })
 })
 

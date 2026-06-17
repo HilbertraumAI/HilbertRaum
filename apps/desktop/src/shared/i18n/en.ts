@@ -155,6 +155,12 @@ export const en = {
   'chat.skill.suggested': 'Suggested: {title} — use it?',
   'chat.skill.used': 'Skill: {title}',
   'chat.skill.usedTitle': 'This answer was shaped by the skill “{title}”.',
+  // S13c (D3) — an AUTO-FIRED turn: visible (the glyph reads "Answered with …") + reversible (the
+  // one-click undo re-runs the same question without the skill). Never a silent surprise.
+  'chat.skill.autoFired': 'Answered with {title}',
+  'chat.skill.autoFiredTitle':
+    'The app applied the skill “{title}” to this answer automatically. You can answer without it.',
+  'chat.skill.answerWithout': 'Answer without it',
   // Tier-2 tool run — the calm transcript affordance + busy row + confirm modal (skills plan §12.2/§15, S11b)
   'chat.skill.tool.extractTransactions': 'Extract transactions',
   'chat.skill.tool.validateBalances': 'Check balances',
@@ -633,6 +639,14 @@ export const en = {
   // ---- Skills (rail destination — SkillsScreen.tsx + settings/SkillsTab.tsx, skills plan §15) ----
   'skills.title': 'Skills',
   'skills.intro': 'Skills teach the assistant how to do a specific task. They add guidance to its answers — they never reach the internet or other folders on your computer.',
+  // S13c (D4) — the global auto-fire opt-in, off by default. The hint explains plainly what turning
+  // it on does and that every auto-applied skill stays visible + reversible.
+  'skills.autoFire.title': 'Apply a matching skill automatically',
+  'skills.autoFire.toggle': 'Apply a matching skill automatically',
+  'skills.autoFire.hint':
+    'When on, the app may apply a clearly matching app skill to an answer on its own, so you don’t have to pick it. Only app skills, never ones you made or imported. You’ll always see which skill was used, and you can answer without it for that turn. Off by default.',
+  'skills.autoFire.on': 'Automatic skills on',
+  'skills.autoFire.off': 'Automatic skills off',
   'skills.import': 'Import skill…',
   'skills.import.menuAria': 'Import a skill',
   'skills.import.fromFile': 'From a file (.skill.zip)…',

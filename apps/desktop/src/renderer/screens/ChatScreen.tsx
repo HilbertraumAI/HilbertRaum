@@ -589,14 +589,18 @@ export function ChatScreen({
       }
     }
     try {
+      // On a regenerate, send the resolved skill choice VERBATIM — including `null` (an explicit
+      // per-turn clear) — so the re-run honours exactly that and never re-derives a sticky default or
+      // re-auto-fires. This is what keeps the S13c "answer without it" undo skill-free. On a fresh
+      // send, a null (no pick) maps to undefined so a no-skill turn keeps its plain shape and may still
+      // auto-fire.
+      const turnSkillArg = regenerate ? skillInstallId : (skillInstallId ?? undefined)
       if (mode === 'documents') {
-        await window.api.askDocuments(convId, content, skillInstallId ?? undefined)
+        await window.api.askDocuments(convId, content, turnSkillArg, regenerate)
       } else {
         await window.api.sendChatMessage(convId, content, {
           mode: depth,
-          // Include the skill only when one is set, so a no-skill turn keeps its plain options
-          // shape; a cleared skill is already persisted as the conversation's null sticky default.
-          ...(skillInstallId ? { skillInstallId } : {}),
+          ...(turnSkillArg !== undefined ? { skillInstallId: turnSkillArg } : {}),
           ...(regenerate ? { regenerate: true } : {})
         })
       }
@@ -654,6 +658,20 @@ export function ChatScreen({
       return last && last.role === 'assistant' ? prev.slice(0, -1) : prev
     })
     await stream(activeId, '', true, depthFor(activeId), skillFor(activeId, activeConversation))
+  }
+
+  // S13c (D3): the per-turn "answer without it" undo on an AUTO-FIRED turn. Re-runs the SAME user
+  // question with the skill explicitly cleared (null) — the explicit per-turn clear suppresses
+  // auto-fire and stamps no skill, so the answer is skill-free. Re-uses the regenerate path in BOTH
+  // modes (drop the last assistant turn from view; the main side deletes + re-answers it). The skill
+  // is cleared on this turn only — a never-set conversation default is untouched.
+  async function onAnswerWithoutSkill(): Promise<void> {
+    if (!activeId || busyStreaming) return
+    setMessages((prev) => {
+      const last = prev[prev.length - 1]
+      return last && last.role === 'assistant' ? prev.slice(0, -1) : prev
+    })
+    await stream(activeId, '', true, depthFor(activeId), null)
   }
 
   function onStop(): void {
@@ -1030,6 +1048,9 @@ export function ChatScreen({
           onThinkingOpenChange={setThinkingOpen}
           emptyState={emptyState}
           onTryAgain={canTryAgain ? () => void onTryAgain() : undefined}
+          // The undo's own placement gate (last auto-fired turn) lives in Transcript; here we only
+          // withhold it while a reply is streaming (it would re-run mid-answer).
+          onAnswerWithoutSkill={busyStreaming ? undefined : () => void onAnswerWithoutSkill()}
           onCopy={onCopyMessage}
           onSave={() => void onSaveConversation()}
           actionsDisabled={busyStreaming}

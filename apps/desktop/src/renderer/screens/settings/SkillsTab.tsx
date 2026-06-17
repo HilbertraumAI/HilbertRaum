@@ -14,7 +14,7 @@ import { useT } from '../../i18n'
 import { localizedSkillDescription, localizedSkillTitle } from '../../lib/skillI18n'
 import type { MessageKey } from '@shared/i18n'
 import type { SkillKind, SkillPermissions } from '@shared/skill-manifest'
-import type { SkillInfo, SkillPreview } from '@shared/types'
+import type { AppSettings, SkillInfo, SkillPreview } from '@shared/types'
 
 // Settings → Skills (skills plan §15 + §18.1). The one place to see and add skills.
 // Everything destructive/file-touching is resolved MAIN-side (S4): the renderer hands a
@@ -61,6 +61,9 @@ export function SkillsTab(): JSX.Element {
   const [confirmDelete, setConfirmDelete] = useState<SkillInfo | null>(null)
   // DS12: enabling a skill whose name is shared turns the other one off — confirm first.
   const [confirmReplace, setConfirmReplace] = useState<SkillInfo | null>(null)
+  // S13c (D4): the global auto-fire opt-in. Loaded best-effort; the toggle hides until it resolves so
+  // a failed read never shows a misleading "off". Mirrors the SettingsScreen patch pattern.
+  const [settings, setSettings] = useState<AppSettings | null>(null)
 
   const refresh = useCallback(async (): Promise<void> => {
     try {
@@ -76,6 +79,31 @@ export function SkillsTab(): JSX.Element {
   useEffect(() => {
     void refresh()
   }, [refresh])
+
+  // Load the auto-fire opt-in (S13c/D4). Best-effort: a failed read leaves `settings` null and the
+  // toggle simply doesn't render (rather than implying a state we couldn't confirm).
+  useEffect(() => {
+    void (async () => {
+      try {
+        const s = await window.api?.getSettings?.()
+        if (s) setSettings(s)
+      } catch {
+        setSettings(null)
+      }
+    })()
+  }, [])
+
+  // Flip the auto-fire opt-in, persisting through the shared Settings patch path (the saved value
+  // wins). Off by default; this is the ONLY control that makes S13b reachable for a user.
+  async function setAutoFire(on: boolean): Promise<void> {
+    try {
+      const next = await window.api.updateSettings({ skillsAutoFireEnabled: on })
+      setSettings(next)
+      toast(on ? t('skills.autoFire.on') : t('skills.autoFire.off'))
+    } catch {
+      toast(t('skills.loadFailed'))
+    }
+  }
 
   // Keep the open drawer in step with the freshest row data after a mutation.
   useEffect(() => {
@@ -186,6 +214,21 @@ export function SkillsTab(): JSX.Element {
         </div>
         {loadError && <Banner tone="error">{loadError}</Banner>}
       </div>
+
+      {/* S13c (D3/D4): the global auto-fire opt-in. Off by default — until this is on, the app never
+          applies a skill on its own. App skills only; an auto-applied skill is always visible (the
+          per-message glyph) and reversible (the per-turn "answer without it" undo). */}
+      {settings && (
+        <div className="card">
+          <h2>{t('skills.autoFire.title')}</h2>
+          <Switch
+            checked={settings.skillsAutoFireEnabled}
+            onChange={(on) => void setAutoFire(on)}
+            label={t('skills.autoFire.toggle')}
+          />
+          <p className="hint">{t('skills.autoFire.hint')}</p>
+        </div>
+      )}
 
       {skills === null ? (
         <p className="hint" role="status">

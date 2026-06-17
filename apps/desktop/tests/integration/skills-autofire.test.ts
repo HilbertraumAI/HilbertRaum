@@ -7,7 +7,12 @@ import { openDatabase, type Db } from '../../src/main/services/db'
 import { reconcileSkills, setSkillEnabled } from '../../src/main/services/skills/registry'
 import { resolveTurnSkill, resolveTurnSkillFromRegistry } from '../../src/main/services/skills/turn'
 import { resolveAutoFireSkill } from '../../src/main/services/skills/autofire'
-import { createConversation, setConversationDefaultSkill } from '../../src/main/services/chat'
+import {
+  appendMessage,
+  createConversation,
+  listMessages,
+  setConversationDefaultSkill
+} from '../../src/main/services/chat'
 import { updateSettings } from '../../src/main/services/settings'
 
 // Skills S13b — AUTO-FIRE mechanics (skills-s13-plan.md §2.1/§4). Proves the ratified contract:
@@ -236,5 +241,57 @@ describe('resolveTurnSkill plugs auto-fire into the single resolution path (§22
     // Off by default still inert through the registry wrapper.
     updateSettings(db, { skillsAutoFireEnabled: false })
     expect(resolveTurnSkillFromRegistry(db, registry, convId, undefined, Q_MATCH)).toBeNull()
+  })
+})
+
+// S13c — the auto-fire provenance round-trip + the per-turn "answer without it" undo. The resolver
+// marks an auto-fired skill so the assistant row is stamped `auto_fired` (powering the undo), and the
+// undo re-resolves the SAME turn skill-free via the explicit per-turn clear.
+describe('S13c — auto-fire provenance + the undo (skills-s13-plan.md §5/D3)', () => {
+  it('the auto-fire resolver marks the skill so the assistant row stamps auto_fired', () => {
+    const { db, dirs, convId } = envWithAutoFireSkill()
+    updateSettings(db, { skillsAutoFireEnabled: true })
+
+    const skill = resolveTurnSkill(db, dirs, convId, undefined, Q_MATCH)
+    expect(skill?.installId).toBe('app:autobank')
+    expect(skill?.autoFired).toBe(true) // the auto-fire path tags provenance; an explicit pick does not
+
+    appendMessage(db, { conversationId: convId, role: 'user', content: Q_MATCH })
+    appendMessage(db, {
+      conversationId: convId,
+      role: 'assistant',
+      content: 'auto-fired answer',
+      skillId: skill!.installId,
+      autoFired: skill!.autoFired
+    })
+    const last = listMessages(db, convId).at(-1)!
+    expect(last.skillId).toBe('app:autobank')
+    expect(last.autoFired).toBe(true) // round-trips through the additive messages.auto_fired column
+  })
+
+  it('an explicitly-picked skill never stamps auto_fired', () => {
+    const { db, dirs, convId } = envWithAutoFireSkill()
+    const skill = resolveTurnSkill(db, dirs, convId, 'app:autobank') // a per-turn pick, not auto-fire
+    expect(skill?.installId).toBe('app:autobank')
+    expect(skill?.autoFired).toBeUndefined()
+
+    appendMessage(db, {
+      conversationId: convId,
+      role: 'assistant',
+      content: 'picked answer',
+      skillId: skill!.installId,
+      autoFired: skill!.autoFired
+    })
+    expect(listMessages(db, convId).at(-1)!.autoFired).toBe(false)
+  })
+
+  it('the undo re-resolves the same turn SKILL-FREE (explicit per-turn clear)', () => {
+    const { db, dirs, convId } = envWithAutoFireSkill()
+    updateSettings(db, { skillsAutoFireEnabled: true })
+    // First the turn auto-fires…
+    expect(resolveTurnSkill(db, dirs, convId, undefined, Q_MATCH)?.installId).toBe('app:autobank')
+    // …then the undo re-runs it with the skill explicitly cleared (skillInstallId: null) — no skill,
+    // and crucially NO re-auto-fire even though the same question would otherwise score 3.
+    expect(resolveTurnSkill(db, dirs, convId, null, Q_MATCH)).toBeNull()
   })
 })

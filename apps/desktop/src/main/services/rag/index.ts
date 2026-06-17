@@ -520,6 +520,8 @@ export async function generateGroundedAnswer(
     role: 'assistant',
     content,
     citations,
-    skillId: skillFence ? (opts.skill?.installId ?? null) : null
+    skillId: skillFence ? (opts.skill?.installId ?? null) : null,
+    // Auto-fire provenance rides with the stamp (S13c) — only when the fence was placed (§22-A5).
+    autoFired: skillFence ? opts.skill?.autoFired === true : false
   })
 }

@@ -67,5 +67,7 @@ export function resolveAutoFireSkill(
   if (!record) return null
   const parsed = loadSkillPackage(record, deps)
   if (!parsed.ok || parsed.body == null) return null
-  return { installId: record.installId, title: record.title, body: parsed.body }
+  // `autoFired: true` marks this as the AUTO-FIRE path (vs. an explicit pick / sticky default) so the
+  // assistant row is stamped `auto_fired` and the per-turn "answer without it" undo (S13c) appears.
+  return { installId: record.installId, title: record.title, body: parsed.body, autoFired: true }
 }

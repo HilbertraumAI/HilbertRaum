@@ -548,6 +548,11 @@ export function openDatabase(path: string): Db {
   //   messages.skill_id             — the skill that shaped THIS turn; powers the per-message glyph (DS16/DS18).
   ensureColumn(db, 'conversations', 'active_skill_id', 'active_skill_id TEXT')
   ensureColumn(db, 'messages', 'skill_id', 'skill_id TEXT')
+  // S13c — auto-fire provenance (skills-s13-plan.md §5/D3). Additive + nullable (NULL/0 = the skill
+  // was an explicit pick or there was none; 1 = the app AUTO-FIRED it). Stamped on the assistant row
+  // only when the auto-fire path placed the skill, so the per-turn "answer without it" undo shows ONLY
+  // on an auto-fired turn. Privacy-safe: a boolean, never content. An older app simply ignores it.
+  ensureColumn(db, 'messages', 'auto_fired', 'auto_fired INTEGER')
   // Bank-transaction derived annotations (architecture.md "Skills — design record" §10, S11c). All nullable —
   // a row has no category/reconciled/confidence until a downstream tool computes one. CONTENT-CLASS
   // (a category id / reconcile verdict is derived from user figures): never logged/audited/exported.

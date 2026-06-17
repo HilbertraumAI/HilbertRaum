@@ -2,7 +2,12 @@ import { ipcMain, type IpcMainInvokeEvent } from 'electron'
 import { IPC, STREAM } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
 import { type ExtractRecordType, type Message, type RetrievalScope } from '../../shared/types'
-import { appendMessage, maybeSetTitleFromFirstMessage } from '../services/chat'
+import {
+  appendMessage,
+  deleteLastAssistantMessage,
+  listMessages,
+  maybeSetTitleFromFirstMessage
+} from '../services/chat'
 import { resolveScope } from '../services/collections'
 import { buildScopeFilter } from '../services/retrieval-scope'
 import { detectFilenameScope, generateGroundedAnswer, ragSettingsFrom } from '../services/rag'
@@ -82,16 +87,31 @@ export function registerRagIpc(ctx: AppContext): void {
       event: IpcMainInvokeEvent,
       conversationId: string,
       question: string,
-      skillInstallId?: string | null
+      skillInstallId?: string | null,
+      regenerate?: boolean
     ): Promise<Message> => {
       // Shared guard preamble (M-A2): conv exists, runtime active, no blocking doc task /
       // stream already in flight (a yielding deep-index build is paused, not refused).
       const { runtime } = await assertChatStreamReady(ctx, conversationId)
 
-      const text = question.trim()
-      if (!text) throw new Error(tMain('main.chat.emptyQuestion'))
-      appendMessage(ctx.db, { conversationId, role: 'user', content: text })
-      maybeSetTitleFromFirstMessage(ctx.db, conversationId, text)
+      // Re-answer the last document turn (S13c "answer without it" undo, symmetric to chat's
+      // regenerate): drop the previous assistant reply and RE-USE the existing last user turn as the
+      // question — never append a duplicate user row. The renderer passes `skillInstallId: null` to
+      // re-run skill-free; with no prior assistant reply there is nothing to regenerate.
+      let text: string
+      if (regenerate === true) {
+        if (!deleteLastAssistantMessage(ctx.db, conversationId)) {
+          throw new Error(tMain('main.chat.nothingToRegenerate'))
+        }
+        const history = listMessages(ctx.db, conversationId)
+        text = ([...history].reverse().find((m) => m.role === 'user')?.content ?? '').trim()
+        if (!text) throw new Error(tMain('main.chat.emptyQuestion'))
+      } else {
+        text = question.trim()
+        if (!text) throw new Error(tMain('main.chat.emptyQuestion'))
+        appendMessage(ctx.db, { conversationId, role: 'user', content: text })
+        maybeSetTitleFromFirstMessage(ctx.db, conversationId, text)
+      }
 
       // Resolve the one skill for this DOCUMENT turn too (audit A1/§22-A1 — both channels carry the
       // skill, else a documents conversation silently gets none). Same resolver as plain chat. The

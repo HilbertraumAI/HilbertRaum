@@ -33,6 +33,13 @@ export interface TurnSkill {
   installId: string
   title: string
   body: string
+  /**
+   * True only when the app AUTO-FIRED this skill (S13b/D3) — the user set no skill and the resolver
+   * filled the gap. `resolveAutoFireSkill` sets it; an explicit pick / sticky default leaves it
+   * undefined. Carried so the assistant row can be stamped (`messages.auto_fired`) and the per-turn
+   * "answer without it" undo (S13c) shows ONLY on an auto-fired turn.
+   */
+  autoFired?: boolean
 }
 
 // Chat service (spec §7.6): create conversations, append user/assistant messages,
@@ -170,6 +177,8 @@ interface MessageRow {
   skill_id: string | null
   /** From the LEFT JOIN on `skills`: NULL when the stamped skill no longer exists (deleted). */
   skill_title: string | null
+  /** S13c — 1 when the app auto-fired the stamped skill (else NULL/0). Powers the per-turn undo. */
+  auto_fired: number | null
 }
 
 /**
@@ -216,7 +225,10 @@ function rowToMessage(r: MessageRow): Message {
     tokenCount: r.token_count,
     citations,
     skillId: skillResolved ? r.skill_id : null,
-    skillTitle: skillResolved ? r.skill_title : null
+    skillTitle: skillResolved ? r.skill_title : null,
+    // Auto-fire provenance (S13c) only means anything when a skill actually shaped (and still resolves
+    // for) this turn; a deleted skill drops the glyph AND the undo together.
+    autoFired: skillResolved ? r.auto_fired === 1 : false
   }
 }
 
@@ -381,6 +393,11 @@ export interface AppendMessageInput {
    * skill leaves this id dangling and the glyph read resolves it to NULL.
    */
   skillId?: string | null
+  /**
+   * S13c — true only when the app AUTO-FIRED `skillId` (the user set no skill). Stamped only alongside
+   * a non-null `skillId`; surfaces the per-turn "answer without it" undo. Privacy-safe (a boolean).
+   */
+  autoFired?: boolean
 }
 
 /** Append a message and bump the conversation's updated_at. */
@@ -389,6 +406,8 @@ export function appendMessage(db: Db, input: AppendMessageInput): Message {
   const tokenCount = input.tokenCount ?? null
   const citationsJson = input.citations ? JSON.stringify(input.citations) : null
   const skillId = input.skillId ?? null
+  // Stamp auto-fire provenance only when a skill is actually stamped; 1 = auto-fired, NULL otherwise.
+  const autoFired = skillId != null && input.autoFired === true
   const msg: Message = {
     id: randomUUID(),
     conversationId: input.conversationId,
@@ -397,12 +416,23 @@ export function appendMessage(db: Db, input: AppendMessageInput): Message {
     createdAt: now,
     tokenCount,
     citations: input.citations ?? undefined,
-    skillId
+    skillId,
+    autoFired
   }
   db.prepare(
-    `INSERT INTO messages (id, conversation_id, role, content, created_at, token_count, citations_json, skill_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-  ).run(msg.id, msg.conversationId, msg.role, msg.content, msg.createdAt, tokenCount, citationsJson, skillId)
+    `INSERT INTO messages (id, conversation_id, role, content, created_at, token_count, citations_json, skill_id, auto_fired)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    msg.id,
+    msg.conversationId,
+    msg.role,
+    msg.content,
+    msg.createdAt,
+    tokenCount,
+    citationsJson,
+    skillId,
+    autoFired ? 1 : null
+  )
   db.prepare('UPDATE conversations SET updated_at = ? WHERE id = ?').run(now, input.conversationId)
   return msg
 }
@@ -768,7 +798,10 @@ export async function generateAssistantMessage(
     conversationId,
     role: 'assistant',
     content,
-    skillId: fence ? (opts.skill?.installId ?? null) : null
+    skillId: fence ? (opts.skill?.installId ?? null) : null,
+    // Carry auto-fire provenance only when the fence was placed (the skill shaped the answer) — so the
+    // S13c undo lines up 1:1 with the glyph (§22-A5).
+    autoFired: fence ? opts.skill?.autoFired === true : false
   })
 }
 

@@ -228,9 +228,10 @@ const api = {
   askDocuments: (
     conversationId: string,
     question: string,
-    skillInstallId?: string | null
+    skillInstallId?: string | null,
+    regenerate?: boolean
   ): Promise<Message> =>
-    ipcRenderer.invoke(IPC.askDocuments, conversationId, question, skillInstallId),
+    ipcRenderer.invoke(IPC.askDocuments, conversationId, question, skillInstallId, regenerate),
 
   // ---- Documents ----
   /** Open the OS picker for files (default) or a folder; returns selected paths. */

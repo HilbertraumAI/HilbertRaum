@@ -1335,7 +1335,7 @@ seeds a project-name + a folder-label (suggestion-reason) sentinel and proves ne
 (2026-06-14); the full original plan: `git show 477f803:docs/document-organization-plan.md`.
 
 
-## Skills — design record (Phases S2–S12, §1–§16)
+## Skills — design record (Phases S2–S13, §1–§18)
 
 A **Skill** is a self-contained, local task package (instructions + optional examples/schemas) the
 user selects to shape one turn. Two tiers shipped: **Tier 1 — instruction-only** (the body is injected
@@ -1451,7 +1451,9 @@ document signal never fires). `services/skills/suggest.ts` resolves the conversa
 **main-side from the conversationId** (§22-C4), gathers the signals, and returns at most **one** offer
 over `suggestSkills(conversationId, question?)`. The question is content: scored but **never logged**.
 The offer is surfaced **only inside the composer picker** (no canvas chip, no settings key) and is
-**inert until tapped** — never auto-applied (auto-fire is the deferred S13 wave).
+**inert until tapped**. **Auto-fire (S13)** is the opt-in extension of this same scorer that *does*
+apply a skill without a tap, behind a separate higher threshold + an opt-in + a per-turn undo — see
+**§18**.
 
 ### §7 Tier-2 tool gate (S10)
 
@@ -1790,12 +1792,76 @@ final-turn tokens), so the system prefix can shift turn-to-turn and defeat PERF-
 against a *fixed* user-turn reserve would keep it byte-stable, but it is a no-op for every shipped
 skill (none trim) and was left for a follow-up to avoid changing the §22-A6 budget contract.
 
+### §18 Auto-fire triggers (S13 — gated on an evaluation harness, 2026-06-17)
+
+S13 closes the one remaining skills *feature*: **auto-fire** — the app applying the right skill to a
+turn the user left *without* one, saving the tap. It is the opt-in extension of the §6 suggestion
+scorer, and it shipped in three gated sub-phases. The full original working paper (`docs/skills-s13-plan.md`,
+deleted at S13 close — text in git history) holds the baseline tables; this is the design as built.
+
+**The gate (S13a — harness + corpus + baseline).** Auto-fire ships only after an **offline,
+deterministic** harness proves a precision bar on a labelled corpus — a false fire (shaping an answer
+the user didn't ask for) is the costly event; a miss just falls back to the tap-offer. A synthetic,
+no-user-data corpus of 33 labelled turns (`tests/fixtures/skill-triggers/corpus.json`) is scored
+through the **real** `scoreSkillTriggers`/`selectSuggestion` (`tests/eval/skill-triggers.ts` +
+`.test.ts`) reporting precision/recall + a confusion matrix — no model, no network, no DB (DS4). The
+question is content: scored, never logged (a privacy guard extends the S12 sentinel posture).
+
+**The ratified contract (owner, 2026-06-17 — D1–D6).** D1 **≥ 95% precision**. D2 **`threshold-3`** —
+fire only when a keyword hit is corroborated by ≥ 1 doc signal (a separate `AUTOFIRE_SCORE_THRESHOLD = 3`,
+distinct from `SUGGEST_SCORE_THRESHOLD = 2`; a lone keyword = 2, a lone doc signal ≤ 2, so the gate
+structurally means "the user asked **and** a relevant doc is present"). D3 **silent apply + the
+existing glyph + a one-click undo** (never a confirm-before-firing dialog). D4 **opt-in, app-skills
+only in v1**. D5 **fire only when the turn has no skill set** (never override a sticky default or a
+per-turn pick/clear). D6 additive **`triggers.autoFire?: boolean`** (only `true` opts a skill in). On
+the §3.3.1 baseline threshold-3 clears 100% / 88.2% recall; the harness asserts the owner-set form
+**`fired-wrong == 0` AND `precision ≥ 0.95`** so it survives corpus growth.
+
+**The mechanics (S13b).** `triggers.autoFire?: boolean` is additive + lenient in
+`shared/skill-manifest.ts` (only boolean `true` opts in; absent/false leaves `manifest_json`
+byte-unchanged). `services/skills/autofire.ts` `resolveAutoFireSkill(db, deps, conversationId,
+question)`: candidates = **enabled + available + app-only (D4) + `triggers.autoFire === true` (D6) +
+compatible (§6.5/M1)**, scored via the existing scorer over the **factored-out** `scope-signals.ts`
+`inScopeDocSignals` (shared with `suggest.ts`, no duplication), gated at `AUTOFIRE_SCORE_THRESHOLD`.
+It reads the **`skillsAutoFireEnabled`** opt-in first and is a true no-op when off; it **logs nothing**
+(the question is content). It is plugged into the single resolution path `resolveTurnSkill`
+(`services/skills/turn.ts`) **only** in the would-return-null branch AND only when no per-turn pick was
+made (`requestedInstallId === undefined`) — both chat channels (`registerChatIpc` / `registerRagIpc`)
+pass the turn text, so a documents conversation auto-fires too.
+
+**The surprise-mitigation UX (S13c).** Two surfaces, both EN/DE:
+
+- **The opt-in toggle (D4).** A Switch in **Settings → Skills** (`SkillsTab.tsx`) reads/writes
+  `skillsAutoFireEnabled` through the shared `updateSettings` patch path, **off by default**, hidden
+  until the setting loads (never implies an unconfirmed state). This is the **only** control that
+  makes S13b reachable — until it ships, auto-fire cannot be enabled by a user.
+- **The per-turn undo (D3).** An auto-fired turn stamps an **additive, nullable `messages.auto_fired`
+  column** — set only when the auto-fire path placed the skill AND the fence was actually placed (the
+  §22-A5 stamp-only-when-fenced precedent), so it lines up 1:1 with the glyph and a **deleted** skill
+  drops glyph + undo together. Carried via an additive `TurnSkill.autoFired` + `Message.autoFired` (a
+  boolean — never content; the simpler "undo on every skill turn" alternative was rejected as it would
+  surface the undo on explicit picks too, contradicting D3). The `Transcript` glyph on an auto-fired
+  turn reads **"Answered with `<skill>`"** + a one-click **"answer without it"** on the *last*
+  assistant turn; tapping it re-runs the **same** user question with the skill **explicitly cleared
+  (`skillInstallId: null`)** — the explicit per-turn clear both stamps no skill and suppresses a
+  re-auto-fire. It reuses the regenerate path in **both** modes; `askDocuments` gained a symmetric
+  `regenerate` argument (drop the last assistant turn, re-use the existing last user turn — never a
+  duplicate user row).
+
+**Safe-merge property.** With `skillsAutoFireEnabled` default-false **and** no bundled app skill
+declaring `triggers.autoFire`, a fresh install behaves **identically** to pre-S13 — auto-fire only
+activates once a user opts in (S13c) AND a product skill opts in (a later deliberate choice). The §14
+ceilings + the S12 sentinel guard are unchanged: a wrong fire is at worst a worse answer + a one-click
+undo, never an unauthorized action; the undo is a re-run, not a new capability; no auto-fire path adds
+an audit event or logs the question.
+
 ### §-anchor legend (historical plan citations)
 
-The wave's two plan files were folded into this record (§1–§12) and `security-model.md`, but in-code
-comments and the kept docs still cite the **original plan's** section numbers (`skills plan §N`,
-`§22-*`). Those numbers were never renumbered into §1–§12; this legend keeps them **resolvable** (the
-doc-lifecycle "stable anchors" intent) without churning ~130 comments. Read a historical `§N` as:
+The wave's plan files were folded into this record (S2–S12 into §1–§12; **S13 into §18**) and
+`security-model.md`, but in-code comments and the kept docs still cite the **original plans'** section
+numbers (`skills plan §N`, `skills-s13-plan.md §N` / `§2.1` / `D1`–`D6`, `§22-*`). Those numbers were
+never renumbered; this legend keeps them **resolvable** (the doc-lifecycle "stable anchors" intent)
+without churning ~150 comments. Read a historical `§N` as:
 
 | Historical anchor | Meaning | Now lives in |
 |---|---|---|
@@ -1810,6 +1876,8 @@ doc-lifecycle "stable anchors" intent) without churning ~130 comments. Read a hi
 | §14 | The untrusted-skill-as-input threat model + structural ceilings | §2 + §7 + §12; security-model "Skill tool ceiling" |
 | §15 / §16 | Renderer surfaces / IPC surface | §9 + §11 |
 | §18.x | Phase/sub-phase breakdown (historical) | this record's phase tags (S2–S12) |
+| `skills-s13-plan.md` §2.1 / D1–D6 | Ratified auto-fire contract (precision bar, threshold-3, opt-in, app-only, no-override, schema) | §18 |
+| `skills-s13-plan.md` §3 / §4 / §5 | Eval harness + corpus (S13a) / auto-fire mechanics (S13b) / surprise-mitigation UX (S13c) | §18 |
 | §22-A1/A5/A6 | One skill-resolution path; stamp only when placed; fence pre-sized | §5 |
 | §22-C2 | Selector reads triggers from the cache, never unpacks a blob | §6 |
 | §22-C3/C4 | No FK into `skills` (app-level sweep); scope resolved main-side | §4 + §9 |
