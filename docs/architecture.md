@@ -1371,7 +1371,14 @@ provisioning…", "Skill tool ceiling (Tier-2)"), the **drive layout** in
   per-conversation default (`conversations.active_skill_id`); the per-message glyph marks the answer it
   shaped. Auto-fire is deferred to **S13**, gated on an evaluation harness.
 - **DS17** — app skills are committed to the repo (`app-skills/`, text only) and copied by
-  `prepare-drive` — never network-fetched.
+  `prepare-drive` — never network-fetched. **Two** bundled app skills now ship, one per tier:
+  **`bank-statement`** is the **Tier-2** reference (`kind: tool`, app-orchestrated tools through the
+  §7 gate), and **`meeting-protocol`** is the **Tier-1** reference (`kind: instruction`,
+  `allowedTools` empty / `reservesTools` false — it only injects fenced guidance). meeting-protocol
+  is also the **bilingual-trigger** reference: its `triggers.keywords` carry German and English terms,
+  with umlaut singular/plural pairs listed separately (`beschluss`/`beschlüsse`,
+  `aufgabe`/`aufgaben`) because §6 matching is case-insensitive *substring* (`question.includes`), so
+  an umlaut breaks the substring and each form must appear in its own right.
 
 ### §2 Hard rules (these bound every choice)
 

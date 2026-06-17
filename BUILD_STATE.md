@@ -6,7 +6,27 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
-_Last updated: 2026-06-17 — **Skills — frontend IA + modal follow-ups (manual-test fixes, no new phase).**
+_Last updated: 2026-06-17 — **Skills — second bundled app skill: `meeting-protocol` (content + tests
+only, no new phase).** A second app skill now ships in `app-skills/`, chosen to exercise the paths the
+bank-statement skill never touches. **`meeting-protocol`** is **Tier-1 instruction-only**
+(`kind: instruction`, `allowedTools` empty / `reservesTools` false — it only injects fenced guidance,
+no tools), and is the **bilingual-trigger** reference: its `triggers.keywords` carry German + English
+terms, with umlaut singular/plural pairs listed separately (`beschluss`/`beschlüsse`,
+`aufgabe`/`aufgaben`) because the §6 selector matches case-insensitive **substring**
+(`question.includes`), so an umlaut breaks the substring. Pure folder drop-in — discovery is the
+wholesale `resolveAppSkillsDir → listSkillFolders` scan, so **no IPC / shared-type / main-process
+change**. New tests: [`skills-meeting-protocol.test.ts`](apps/desktop/tests/integration/skills-meeting-protocol.test.ts)
+(parse → kind:instruction + `allowedTools===[]` + `reservesTools===false`; English+German trigger
+coverage incl. the umlaut pairs; reconcile-enabled; resolveTurnSkill → fence with `SKILL_GUARD_LINE`
+last) + a focused case in [`skills-suggest.test.ts`](apps/desktop/tests/integration/skills-suggest.test.ts)
+(a German "Erstelle bitte ein Protokoll dieser Besprechung" clears `SUGGEST_SCORE_THRESHOLD` and is the
+returned offer against the **real** selector; a neutral question returns none). Nothing pins the
+app-skill set (the bank-statement test asserts `toContain`, not equality; commercial-drive tests use
+synthetic temp fixtures). Design record: **architecture.md "Skills — design record" §1 / DS17**. Full
+suite green (one unrelated **flaky** `logging.test.ts` rekey timing assertion passes in isolation),
+typecheck + build clean._
+
+_(prior) 2026-06-17 — **Skills — frontend IA + modal follow-ups (manual-test fixes, no new phase).**
 Two issues found while eyeballing the running Skills surface, both fixed. **(1) Skills is now a top-level
 rail destination, not a Settings tab.** `ScreenId` gains `'skills'`; `SettingsTab` drops it; a thin
 [`SkillsScreen`](apps/desktop/src/renderer/screens/SkillsScreen.tsx) wraps the unchanged `SkillsTab`
