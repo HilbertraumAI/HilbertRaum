@@ -6,7 +6,27 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
-_Last updated: 2026-06-17 — **Skills Phase S5 SHIPPED — Settings → Skills UI.** New file:
+_Last updated: 2026-06-17 — **Skills Phases S6+S7 SHIPPED (one unit) — manual activation + prompt
+integration.** Skills now actually shape answers. New files:
+[`services/skills/prompt.ts`](apps/desktop/src/main/services/skills/prompt.ts) (the fenced data block
++ guard line + the pre-sized token budget — §11) and
+[`services/skills/turn.ts`](apps/desktop/src/main/services/skills/turn.ts) (`resolveTurnSkill` — the
+ONE resolver shared by both chat channels) +
+[`renderer/chat/SkillPicker.tsx`](apps/desktop/src/renderer/chat/SkillPicker.tsx) (composer footer
+"Skill: …" picker). `chat.ts` gains the `buildSystemPrompt(skillFence?)` seam, `appendMessage.skillId`,
+`getConversationDefaultSkill`/`setConversationDefaultSkill`, and a `listMessages` LEFT JOIN that
+resolves a **deleted** skill → NULL (carry-forward invariant, §22-C3); `rag/index.ts` places the fence
+in the **grounded user turn** (`buildGroundedPrompt(…, skillFence?)`), never `system` (§22-H2). Both
+`registerChatIpc.sendChatMessage` AND `registerRagIpc.askDocuments` resolve+stamp the skill (§22-A1);
+new IPC `setConversationDefaultSkill`. The assistant row is stamped **only when the fence was placed**
+(§22-A5/A6); the renderer shows a per-message skill glyph (Transcript) + the picker. `Conversation`
+gains `activeSkillId`, `Message` gains `skillId`/`skillTitle`, `ChatOptions` gains `skillInstallId`.
+~6 EN/DE keys. 27 new tests (skills-prompt 14, skills-turn 9, SkillChat 4). Full suite **1504 passed /
+25 skipped**, typecheck + build clean. Docs: architecture.md ("Chat & streaming" skill-selection
+paragraph) + rag-design.md (§8 grounded fence note). See the **"Skills — S6+S7 handoff"** block below.
+Next: Phase S8 (skill selector heuristics — the in-picker "Suggested: …" offer)._
+
+_(prior) 2026-06-17 — **Skills Phase S5 SHIPPED — Settings → Skills UI.** New file:
 [`renderer/screens/settings/SkillsTab.tsx`](apps/desktop/src/renderer/screens/settings/SkillsTab.tsx)
 (the installed-skills list with compact rows · `App`/`Made by you` trust chip · enable Switch ·
 duplicate-id / files-missing / `Review` chips · "⋯" overflow Export + Delete (Delete hidden for
@@ -86,6 +106,56 @@ attacker-supplied and is now unzipped straight to a real on-disk folder. **Impac
 commit: none** — `shared/skill-manifest.ts` is storage-agnostic and `parseSkillManifestFromDir` is now
 the single read path for both sources. S3 spec, S4 spec, §7/§8/§9/§14/§17/§19/§20 + the §18 matrices
 updated accordingly._
+
+### Skills — S6+S7 handoff (2026-06-17)
+
+**Contracts produced** (what S8 consumes):
+- **`services/skills/turn.ts`**: `resolveTurnSkill(db, {appSkillsDir,userSkillsDir,limits?}, conversationId,
+  requestedInstallId?) → TurnSkill | null` (requested `undefined`=sticky, `null`/`''`=none, string=that
+  skill; skips disabled/deleted/unavailable) + `resolveTurnSkillFromRegistry(db, registry|undefined, …)`
+  (the IPC wrapper). `TurnSkill = {installId, title, body}` (exported from `chat.ts`).
+- **`services/skills/prompt.ts`**: `buildSkillFence({title,body}, budgetTokens?) → {text|null, omitted,
+  trimmed}` (whole-paragraph reduction; omit-not-truncate); `skillFenceBudgetTokens({contextTokens,
+  reserveTokens,fixedTokens})`; `composeSystemPromptWithSkill(base, fence)`; `approxPromptTokens`;
+  `SKILL_GUARD_LINE`. Fence framing/guard are English (D-L6); body is author's language.
+- **`chat.ts`**: `buildSystemPrompt(skillFence?)`, `buildChatMessages(db, convId, contextTokens?,
+  skillFence?)`, `appendMessage({…, skillId?})`, `generateAssistantMessage(…, {skill?})`,
+  `getConversationDefaultSkill`/`setConversationDefaultSkill`. `listMessages` LEFT JOINs `skills`
+  (deleted → `skillId`/`skillTitle` NULL).
+- **`rag/index.ts`**: `buildGroundedPrompt(question, chunks, skillFence?)` (fence in the USER turn);
+  `generateGroundedAnswer(…, {skill?})` (stamps only when fence placed AND chunks found).
+- **Shared types**: `Conversation.activeSkillId?`, `Message.skillId?`/`skillTitle?`,
+  `ChatOptions.skillInstallId?`. **IPC**: `setConversationDefaultSkill(convId, installId|null)→void`;
+  `askDocuments` gained a 3rd `skillInstallId?` arg. Preload mirrors both.
+- **Renderer**: `renderer/chat/SkillPicker.tsx` (Radix RadioGroup, "None" + enabled skills) +
+  the Transcript per-message glyph (`.msg-skill`). `chat.skill.{trigger,none,used,usedTitle}` keys.
+
+**Decisions taken or changed:**
+- **Budget approach (a), pre-size in `prompt.ts`** (not the yieldable-second-message option (b)):
+  the fence is trimmed to `contextTokens − reserve − base − finalTurn (− excerpts)` BEFORE placement,
+  so `fitMessagesToContext` (unchanged) only drops older history; base/final/excerpts never starve.
+- **Stamp only when the fence was actually placed** (omitted-for-budget ⇒ no stamp), so the glyph is
+  1:1 with a prompt that carried the skill (§22-A5/A6). No-context/listing answers stamp NULL.
+- **Deleted-skill → NULL resolved at READ time via a LEFT JOIN in `listMessages`** (recommendation #2
+  bound into code + a test) — a *disabled/unavailable* skill still shows the past glyph (row exists);
+  only a truly deleted row drops it.
+- **Renderer includes `skillInstallId` in `sendChatMessage` options only when non-null** (a cleared
+  skill is the conversation's persisted null sticky default) — keeps no-skill turns' call shape and
+  avoids churning existing chat tests.
+- **`Conversation.activeSkillId` is OPTIONAL** in the type (additive; `rowToConversation` always
+  populates it) so existing conversation fixtures stay valid.
+
+**Open landmines:** none new (no `SL-#`). The S6 composer-picker **live eyeball was not captured**
+(the chat composer's visibility in the walk harness depends on runtime state); the picker is identical
+in styling to the shipped `DepthMenu` footer affordance and is covered by `SkillChat.test.tsx`
+(picker behavior) + the Transcript glyph test. Not a blocker; flagged for the S8 walk to re-capture
+once a model-running harness step is added.
+
+**What S8 consumes:** the same enable/default surface; the picker is where the S8 deterministic
+**"Suggested: …" one-tap offer** pins (DS14 — no settings key, no canvas chip). S8 adds
+`services/skills/selector.ts` + a `suggestSkills(conversationId, question?)` IPC (scope resolved
+main-side, §22-C4) scoring enabled skills' cached `manifest_json.triggers`; it is **inert until
+picked** (never auto-applies — auto-fire is the deferred S13 wave).
 
 ### Skills — S5 handoff (2026-06-17)
 

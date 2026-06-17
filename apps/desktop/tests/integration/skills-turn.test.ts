@@ -1,0 +1,213 @@
+import { describe, it, expect } from 'vitest'
+import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { randomUUID } from 'node:crypto'
+import { openDatabase, type Db } from '../../src/main/services/db'
+import { MockEmbedder } from '../../src/main/services/embeddings'
+import { createMockRuntime } from '../../src/main/services/runtime/mock'
+import { reconcileSkills, setSkillEnabled } from '../../src/main/services/skills/registry'
+import { resolveTurnSkill } from '../../src/main/services/skills/turn'
+import {
+  appendMessage,
+  buildChatMessages,
+  BASE_SYSTEM_PROMPT,
+  createConversation,
+  generateAssistantMessage,
+  listMessages,
+  setConversationDefaultSkill
+} from '../../src/main/services/chat'
+import { updateSettings } from '../../src/main/services/settings'
+import {
+  buildGroundedChatMessages,
+  buildGroundedPrompt,
+  generateGroundedAnswer,
+  ragSettingsFrom,
+  type RetrievedChunk
+} from '../../src/main/services/rag'
+import { SKILL_GUARD_LINE } from '../../src/main/services/skills/prompt'
+import { DEFAULT_SETTINGS } from '../../src/shared/types'
+
+// Skills plan S6+S7 — manual activation + prompt integration. Proves: resolveTurnSkill (sticky /
+// override / disabled / deleted → none), the fence placement (plain-chat system vs RAG user turn —
+// §22-H2), assistant-row stamping ONLY when the fence was placed (§22-A5), the no-context RAG turn
+// stamps NULL, and the carry-forward invariant — a DELETED skill resolves messages.skill_id → NULL.
+
+function tempDir(): string {
+  return mkdtempSync(join(tmpdir(), 'hilbertraum-skillturn-'))
+}
+function freshDb(): Db {
+  return openDatabase(join(tempDir(), 'test.sqlite'))
+}
+function makeDirs(): { appSkillsDir: string; userSkillsDir: string } {
+  const root = tempDir()
+  return { appSkillsDir: join(root, 'app-skills'), userSkillsDir: join(root, 'user-skills') }
+}
+function writeSkill(dir: string, id: string, body: string, version = '1.0.0'): void {
+  const d = join(dir, id)
+  mkdirSync(d, { recursive: true })
+  const md = [
+    '---',
+    `id: ${id}`,
+    `title: Skill ${id}`,
+    `description: Test skill ${id}`,
+    `version: ${version}`,
+    '---',
+    body
+  ].join('\n')
+  writeFileSync(join(d, 'SKILL.md'), md, 'utf8')
+}
+
+/** A db with one ENABLED user skill `bank` (body "Quote totals.") + its install_id. */
+function envWithSkill(): { db: Db; dirs: { appSkillsDir: string; userSkillsDir: string }; installId: string } {
+  const db = freshDb()
+  const dirs = makeDirs()
+  writeSkill(dirs.userSkillsDir, 'bank', 'Quote the printed totals.\n\nFlag anything you cannot verify.')
+  reconcileSkills(db, dirs)
+  const installId = 'user:bank'
+  setSkillEnabled(db, installId, true) // drop-ins install disabled (DS19) — enable it
+  return { db, dirs, installId }
+}
+
+function runtime() {
+  return createMockRuntime({ modelId: 'mock', modelPath: '/m.gguf', contextTokens: 2048 })
+}
+
+describe('resolveTurnSkill (skills plan §10.1/§10.3)', () => {
+  it('uses the conversation sticky default, and a per-turn arg overrides it', () => {
+    const { db, dirs, installId } = envWithSkill()
+    writeSkill(dirs.userSkillsDir, 'other', 'Other body.')
+    reconcileSkills(db, dirs)
+    setSkillEnabled(db, 'user:other', true)
+    const conv = createConversation(db, {})
+    setConversationDefaultSkill(db, conv.id, installId)
+
+    expect(resolveTurnSkill(db, dirs, conv.id)?.installId).toBe(installId)
+    // Per-turn override.
+    expect(resolveTurnSkill(db, dirs, conv.id, 'user:other')?.installId).toBe('user:other')
+    // Explicit null clears for the turn (without touching the default).
+    expect(resolveTurnSkill(db, dirs, conv.id, null)).toBeNull()
+    expect(resolveTurnSkill(db, dirs, conv.id)?.installId).toBe(installId)
+  })
+
+  it('resolves a disabled or deleted default to none (graceful degradation)', () => {
+    const { db, dirs, installId } = envWithSkill()
+    const conv = createConversation(db, {})
+    setConversationDefaultSkill(db, conv.id, installId)
+    expect(resolveTurnSkill(db, dirs, conv.id)).not.toBeNull()
+
+    setSkillEnabled(db, installId, false)
+    expect(resolveTurnSkill(db, dirs, conv.id)).toBeNull()
+
+    setSkillEnabled(db, installId, true)
+    db.prepare('DELETE FROM skills WHERE install_id = ?').run(installId)
+    expect(resolveTurnSkill(db, dirs, conv.id)).toBeNull()
+  })
+})
+
+describe('fence placement (§11.2/§22-H2)', () => {
+  it('plain chat brackets the fence in the SYSTEM message — base first, guard last', () => {
+    const { db } = envWithSkill()
+    const conv = createConversation(db, {})
+    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'Hello' })
+    const fence = '--- BEGIN LOCAL SKILL ---\nSkill instructions:\nDo it.\n--- END LOCAL SKILL ---\n' + SKILL_GUARD_LINE
+    const messages = buildChatMessages(db, conv.id, undefined, fence)
+    const system = messages[0]
+    expect(system.role).toBe('system')
+    expect(system.content.startsWith(BASE_SYSTEM_PROMPT)).toBe(true)
+    expect(system.content).toContain('BEGIN LOCAL SKILL')
+    expect(system.content.trimEnd().endsWith(SKILL_GUARD_LINE)).toBe(true)
+  })
+
+  it('grounded answers put the fence in the USER turn, never in system (untrusted reference text)', () => {
+    const { db } = envWithSkill()
+    const conv = createConversation(db, {})
+    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'What is the balance?' })
+    const chunks: RetrievedChunk[] = [
+      { id: 'c1', documentId: 'd1', sourceTitle: 'stmt.pdf', text: 'Closing balance 100.', label: 'S1', pageNumber: 1, sectionLabel: null, score: 1 } as unknown as RetrievedChunk
+    ]
+    const fence = 'FENCE-MARKER\n' + SKILL_GUARD_LINE
+    const grounded = buildGroundedPrompt('What is the balance?', chunks, fence)
+    expect(grounded).toContain('FENCE-MARKER')
+    expect(grounded).toContain('Document excerpts:')
+    // The grounding rules keep precedence (appear before the fence).
+    expect(grounded.indexOf('Use only the document excerpts')).toBeLessThan(grounded.indexOf('FENCE-MARKER'))
+
+    const messages = buildGroundedChatMessages(db, conv.id, grounded)
+    expect(messages[0].role).toBe('system')
+    expect(messages[0].content).toBe(BASE_SYSTEM_PROMPT) // no fence in system
+    expect(messages[messages.length - 1].content).toContain('FENCE-MARKER') // fence in the user turn
+  })
+})
+
+describe('assistant-row stamping (DS16/§22-A5) + the deleted→NULL invariant', () => {
+  it('stamps messages.skill_id when a skill shaped the plain-chat turn; resolves the title back', async () => {
+    const { db, installId } = envWithSkill()
+    const conv = createConversation(db, {})
+    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'Summarize.' })
+    await generateAssistantMessage(db, runtime(), conv.id, {
+      skill: { installId, title: 'Skill bank', body: 'Quote totals.' }
+    })
+    const msgs = listMessages(db, conv.id)
+    const assistant = msgs[msgs.length - 1]
+    expect(assistant.role).toBe('assistant')
+    expect(assistant.skillId).toBe(installId)
+    expect(assistant.skillTitle).toBe('Skill bank')
+  })
+
+  it('does NOT stamp a turn produced without a skill', async () => {
+    const { db } = envWithSkill()
+    const conv = createConversation(db, {})
+    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'Hi.' })
+    await generateAssistantMessage(db, runtime(), conv.id, {})
+    const msgs = listMessages(db, conv.id)
+    expect(msgs[msgs.length - 1].skillId ?? null).toBeNull()
+  })
+
+  it('resolves a DELETED skill back to NULL on read (the FK-less delete relies on it — §22-C3)', async () => {
+    const { db, installId } = envWithSkill()
+    const conv = createConversation(db, {})
+    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'Go.' })
+    await generateAssistantMessage(db, runtime(), conv.id, {
+      skill: { installId, title: 'Skill bank', body: 'Quote totals.' }
+    })
+    expect(listMessages(db, conv.id).at(-1)?.skillId).toBe(installId)
+    // Delete the skill row — the stamped id now dangles and must read back NULL.
+    db.prepare('DELETE FROM skills WHERE install_id = ?').run(installId)
+    const after = listMessages(db, conv.id).at(-1)
+    expect(after?.skillId ?? null).toBeNull()
+    expect(after?.skillTitle ?? null).toBeNull()
+  })
+
+  it('does NOT stamp when the fence is omitted for budget (a skill that did not shape the answer)', async () => {
+    const { db, installId } = envWithSkill()
+    // A tiny context window leaves no room for any fence → omitted → no stamp.
+    updateSettings(db, { contextTokens: 64 })
+    const conv = createConversation(db, {})
+    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'A long enough question to matter.' })
+    await generateAssistantMessage(db, runtime(), conv.id, {
+      skill: { installId, title: 'Skill bank', body: 'x'.repeat(4000) }
+    })
+    expect(listMessages(db, conv.id).at(-1)?.skillId ?? null).toBeNull()
+  })
+})
+
+describe('grounded (RAG) stamping carries the skill too (audit A1) — no-context stamps NULL', () => {
+  it('a no-context document turn does not stamp the skill (the model was never called)', async () => {
+    const { db, installId } = envWithSkill()
+    const embedder = new MockEmbedder()
+    const conv = createConversation(db, { mode: 'documents' })
+    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'Anything here?' })
+    // Empty corpus → retrieve finds nothing → fixed answer, model not called.
+    const msg = await generateGroundedAnswer(
+      db,
+      runtime(),
+      embedder,
+      conv.id,
+      'Anything here?',
+      ragSettingsFrom(DEFAULT_SETTINGS),
+      { skill: { installId, title: 'Skill bank', body: 'Quote totals.' } }
+    )
+    expect(msg.skillId ?? null).toBeNull()
+  })
+})

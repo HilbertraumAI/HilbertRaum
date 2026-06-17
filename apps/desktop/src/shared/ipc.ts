@@ -27,6 +27,8 @@ export const IPC = {
   listMessages: 'chat:listMessages',
   sendChatMessage: 'chat:send',
   stopGeneration: 'chat:stop',
+  /** Persist a conversation's sticky default skill (skills plan §10.1; null clears). */
+  setConversationDefaultSkill: 'chat:setDefaultSkill',
   /**
    * Snapshot of an in-flight generation for a conversation (accumulated answer +
    * reasoning), or null if none — lets a remounted Chat screen recover a reply that is

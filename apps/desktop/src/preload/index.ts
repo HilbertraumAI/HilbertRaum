@@ -171,6 +171,12 @@ const api = {
   ): Promise<Message> => ipcRenderer.invoke(IPC.sendChatMessage, conversationId, content, options),
   stopGeneration: (conversationId: string): Promise<void> =>
     ipcRenderer.invoke(IPC.stopGeneration, conversationId),
+  /** Persist a conversation's sticky default skill (skills plan §10.1). Null clears it. */
+  setConversationDefaultSkill: (
+    conversationId: string,
+    installId: string | null
+  ): Promise<void> =>
+    ipcRenderer.invoke(IPC.setConversationDefaultSkill, conversationId, installId),
   /** Snapshot of an in-flight generation (accumulated answer + reasoning), or null. Lets a
    *  remounted Chat screen recover a reply still streaming after navigating away + back. */
   getActiveStream: (conversationId: string): Promise<ActiveStreamSnapshot | null> =>
@@ -214,8 +220,12 @@ const api = {
   // ---- RAG / document Q&A ----
   /** Stream a document-grounded answer; resolves with the final assistant message
    *  (which carries `citations`). Tokens arrive via onToken, like sendChatMessage. */
-  askDocuments: (conversationId: string, question: string): Promise<Message> =>
-    ipcRenderer.invoke(IPC.askDocuments, conversationId, question),
+  askDocuments: (
+    conversationId: string,
+    question: string,
+    skillInstallId?: string | null
+  ): Promise<Message> =>
+    ipcRenderer.invoke(IPC.askDocuments, conversationId, question, skillInstallId),
 
   // ---- Documents ----
   /** Open the OS picker for files (default) or a folder; returns selected paths. */

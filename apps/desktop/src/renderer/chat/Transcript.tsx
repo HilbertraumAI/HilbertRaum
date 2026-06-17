@@ -4,7 +4,7 @@ import remarkGfm from 'remark-gfm'
 import type { Message } from '@shared/types'
 import { MessageActions } from './MessageActions'
 import { SourcesDisclosure } from './SourcesDisclosure'
-import { CoverageMeter } from '../components'
+import { CoverageMeter, Icon } from '../components'
 import { localizeServerCopy } from '../lib/displayMap'
 import { useT } from '../i18n'
 
@@ -88,6 +88,16 @@ export function Transcript({
                       document. Always labelled so a retrieval answer never reads as exhaustive. */}
                   <CoverageMeter coverage={{ mode: 'relevance', chunksCovered: 0, chunksTotal: 0 }} />
                 </>
+              )}
+              {/* Per-message skill glyph (skills plan §15/DS16/§22-A5): a quiet, labelled marker on
+                  the answer a skill shaped — icon + word, never colour-only (guidelines §9). The
+                  read resolves a DELETED skill to null (no skillTitle), so the glyph never points at
+                  a vanished skill. Decorative-but-labelled; never alarming. */}
+              {m.role === 'assistant' && m.skillTitle && (
+                <div className="msg-skill" title={t('chat.skill.usedTitle', { title: m.skillTitle })}>
+                  <Icon name="brain" className="msg-skill-icon" />
+                  <span>{t('chat.skill.used', { title: m.skillTitle })}</span>
+                </div>
               )}
             </div>
             {m.role === 'assistant' && (

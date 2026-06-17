@@ -503,6 +503,14 @@ export interface Conversation {
    * Persisted in `conversations.scope_v2_json`.
    */
   scope: DocumentScope | null
+  /**
+   * The sticky default skill for the next turn (skills plan §10.1) — the composer pre-fills it;
+   * any turn can override or clear it, and past turns keep their own `messages.skill_id`. Null when
+   * none. Persisted in `conversations.active_skill_id` (no FK — a deleted skill reads back as a
+   * stale id, which the resolver skips gracefully). Optional so existing conversation fixtures
+   * stay valid; `rowToConversation` always populates it (null when none).
+   */
+  activeSkillId?: string | null
 }
 
 export interface Citation {
@@ -525,6 +533,15 @@ export interface Message {
   createdAt: string
   tokenCount?: number | null
   citations?: Citation[]
+  /**
+   * The skill that shaped this assistant turn (skills plan §8.2/DS16) — the install_id stamped at
+   * generation. RESOLVED at read time: a DELETED skill (no matching row) reads back NULL (no FK —
+   * audit C3), so the per-message glyph never points at a vanished skill. Null on user turns and
+   * on turns produced without a skill.
+   */
+  skillId?: string | null
+  /** The shaping skill's title, for the per-message glyph label (null when none / deleted). */
+  skillTitle?: string | null
 }
 
 /**
@@ -540,6 +557,12 @@ export interface ChatOptions {
   useDocuments?: boolean
   /** Re-answer the last user turn: drop the previous assistant reply, then stream a fresh one. */
   regenerate?: boolean
+  /**
+   * The skill for THIS turn (skills plan §10.1): `undefined` ⇒ use the conversation's sticky
+   * default (`active_skill_id`); `null`/`''` ⇒ no skill this turn; a string ⇒ that skill. A
+   * disabled/missing skill resolves to none (graceful — §10.3). Carried on BOTH chat channels.
+   */
+  skillInstallId?: string | null
 }
 
 // ---- Conversation search ----

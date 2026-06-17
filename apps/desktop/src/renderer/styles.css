@@ -786,6 +786,19 @@ code, pre, kbd { font-family: var(--font-mono); }
 /* Chat body reads at --text-md (guidelines §4.4: chat/document reading size). */
 .msg-content { white-space: pre-wrap; word-break: break-word; font-size: var(--text-md); line-height: var(--line-md); }
 
+/* Per-message skill glyph (skills plan §15/DS16): a quiet, labelled marker under the answer a
+   skill shaped — icon + word (never colour-only, §9), muted so it never competes with the reply. */
+.msg-skill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 8px;
+  font-size: var(--text-xs);
+  line-height: var(--line-xs);
+  color: var(--text-muted);
+}
+.msg-skill-icon { width: 14px; height: 14px; flex-shrink: 0; }
+
 /* Markdown-rendered assistant replies: markdown supplies its own block spacing, so
    pre-wrap (which would double every blank line) is turned off. */
 .msg-content.md { white-space: normal; }

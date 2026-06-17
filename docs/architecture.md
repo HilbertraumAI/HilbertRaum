@@ -98,6 +98,29 @@ handle reconciles disk→DB **once per session on the first read after unlock** 
 deleter call `reconcile()` explicitly after mutating disk. Audit events
 (`skill_imported`/`deleted`/`enabled`/`disabled`) carry **ids/counts only**.
 
+**Skill selection + prompt integration (Skills plan §10/§11 / S6+S7).** A skill applies to **one
+turn**, not a whole conversation (DS18): `conversations.active_skill_id` is the **sticky default**
+the composer pre-fills, and each turn stamps its own `messages.skill_id`. A single shared
+**`resolveTurnSkill`** (`services/skills/turn.ts`) feeds **both** chat channels — `registerChatIpc`
+(`sendChatMessage`) **and** `registerRagIpc` (`askDocuments` gained a skill arg, §22-A1) — so a
+documents conversation gets the skill too; it reads the per-turn override or the sticky default and
+**skips a disabled/deleted/unavailable skill gracefully** (resolves to none, never an error).
+`services/skills/prompt.ts` builds the **fenced skill block** — a delimited DATA block (BEGIN/END
+framing + a guard line as the last app-authored line), never a system rule (§22-H2). Placement: in
+**plain chat** the fence is bracketed inside the system message after `BASE_SYSTEM_PROMPT` (the seam
+is `buildSystemPrompt(skillFence?)`); in **grounded answers** it rides the **user turn with the
+excerpts** (`buildGroundedPrompt(question, chunks, skillFence?)`), where the grounding/citation rules
+keep precedence. The fence is **pre-sized in `prompt.ts`** against the base preamble + final turn
+(+ grounded excerpts) so it can never starve them — `fitMessagesToContext` only drops older history
+(§22-A6); over budget it reduces by **whole paragraphs**, and if even the minimum won't fit it is
+**omitted entirely** rather than truncated mid-instruction. The assistant row is stamped with the
+install id **only when the fence was actually placed** (so the per-message glyph corresponds 1:1 to a
+prompt that carried the skill, §22-A5); a no-context/listing answer (model not called) stamps NULL.
+`listMessages` **LEFT JOINs `skills`**, so a **deleted** skill resolves `messages.skill_id` back to
+NULL (the FK-less delete relies on this — §22-C3). The renderer surfaces a quiet composer
+**"Skill: …" picker** (both modes) + a per-message **skill glyph** on the answer it shaped
+(icon + word, never colour-only).
+
 ## Models & runtime (Phase 2)
 - **Manifests** are local YAML under `model-manifests/` (committed; weights are not). The schema +
   validator live in `src/shared/manifest.ts` so renderer and main share one definition. YAML is

@@ -166,6 +166,12 @@ export const de: Record<keyof typeof en, string> = {
   'chat.depth.balancedHint': 'Der Standard für den Alltag',
   'chat.depth.deepHint': 'Denkt das Problem vor dem Antworten durch — dauert länger',
 
+  // ---- Chat: skill picker + per-message glyph (skills plan §10/§15) ----
+  'chat.skill.trigger': 'Skill: {label}',
+  'chat.skill.none': 'Kein Skill',
+  'chat.skill.used': 'Skill: {title}',
+  'chat.skill.usedTitle': 'Diese Antwort wurde vom Skill „{title}“ geprägt.',
+
   // ---- Chat: transcript + message actions ----
   'chat.role.user': 'Du',
   'chat.role.assistant': 'HilbertRaum',

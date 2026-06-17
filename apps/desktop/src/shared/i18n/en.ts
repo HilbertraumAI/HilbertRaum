@@ -148,6 +148,12 @@ export const en = {
   'chat.depth.balancedHint': 'The everyday default',
   'chat.depth.deepHint': 'Thinks the problem through before answering — takes longer',
 
+  // ---- Chat: skill picker + per-message glyph (skills plan §10/§15) ----
+  'chat.skill.trigger': 'Skill: {label}',
+  'chat.skill.none': 'No skill',
+  'chat.skill.used': 'Skill: {title}',
+  'chat.skill.usedTitle': 'This answer was shaped by the skill “{title}”.',
+
   // ---- Chat: transcript + message actions ----
   'chat.role.user': 'You',
   'chat.role.assistant': 'HilbertRaum',

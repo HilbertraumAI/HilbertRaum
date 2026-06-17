@@ -7,7 +7,8 @@ import {
   type Conversation,
   type DocumentInfo,
   type DocumentScope,
-  type Message
+  type Message,
+  type SkillInfo
 } from '@shared/types'
 import { cancelActiveDocTask } from '../lib/doctasks'
 import { localizeServerCopy } from '../lib/displayMap'
@@ -15,7 +16,7 @@ import { friendlyIpcError } from '../lib/errors'
 import { RUNTIME_POLL_MS, STREAM_RECOVER_POLL_MS } from '../lib/polling'
 import { useT } from '../i18n'
 import { Button, Chip, EmptyState, ErrorBanner, SegmentedControl, Spinner, useToast } from '../components'
-import { Composer, ConversationList, DepthMenu, ScopePopover, Transcript } from '../chat'
+import { Composer, ConversationList, DepthMenu, ScopePopover, SkillPicker, Transcript } from '../chat'
 import type { MessageKey } from '@shared/i18n'
 
 // Chat screen (spec §7.6 / §7.8; layout per design-guidelines §3). The
@@ -109,6 +110,11 @@ export function ChatScreen({
   const [supportsThinking, setSupportsThinking] = useState(false)
   /** Per-conversation answer depth for this session ('new' = no conversation yet). */
   const [depths, setDepths] = useState<Record<string, ChatDepthMode>>({})
+  /** Enabled, available skills for the composer picker (skills plan §10.2/§11.3 lightweight index). */
+  const [enabledSkills, setEnabledSkills] = useState<SkillInfo[]>([])
+  /** Per-conversation skill selection this session ('new' = no conversation yet). A key present
+   *  here overrides the conversation's persisted `activeSkillId`; null = explicitly no skill. */
+  const [skillByConv, setSkillByConv] = useState<Record<string, string | null>>({})
   const [error, setError] = useState<string | null>(null)
   // Imported documents — drives the scope popover's titles and the empty-state nudge.
   // Best-effort: a failed load just hides both affordances.
@@ -260,6 +266,15 @@ export function ChatScreen({
         setDictationAvailable(false)
       }
     })()
+    void (async () => {
+      try {
+        // Only ENABLED, available skills are pickable for a turn (skills plan §10.2/§11.3).
+        const all = (await window.api.listSkills?.()) ?? []
+        setEnabledSkills(all.filter((s) => s.enabled && !s.unavailable))
+      } catch {
+        setEnabledSkills([])
+      }
+    })()
   }, [refreshConversations, checkRuntime])
 
   // While no runtime is up, poll: the app may still be auto-starting the selected model
@@ -405,6 +420,13 @@ export function ChatScreen({
   async function ensureConversation(): Promise<string> {
     if (activeId) return activeId
     const conv = await createConversationInMode()
+    // Carry a skill picked while still on the 'new' composer onto the created conversation as its
+    // sticky default (skills plan §10.1), and re-key the session override to the new id.
+    if ('new' in skillByConv) {
+      const picked = skillByConv['new'] ?? null
+      void window.api.setConversationDefaultSkill?.(conv.id, picked)
+      setSkillByConv((prev) => ({ ...prev, [conv.id]: picked }))
+    }
     setActiveId(conv.id)
     await refreshConversations()
     return conv.id
@@ -430,11 +452,35 @@ export function ChatScreen({
     setDepths((prev) => ({ ...prev, [depthKey]: d }))
   }
 
+  // ---- Turn skill (skills plan §10) -------------------------------------------------
+  // The effective skill for a conversation key: a session override (the picker) wins, else the
+  // conversation's persisted sticky default (`activeSkillId`), else none. A skill that is no longer
+  // enabled/available is treated as none (graceful — §10.3), so a disabled default never lingers.
+  const activeConversation = activeId ? conversations.find((c) => c.id === activeId) ?? null : null
+  function skillFor(key: string, conv: Conversation | null): string | null {
+    const raw = key in skillByConv ? (skillByConv[key] ?? null) : (conv?.activeSkillId ?? null)
+    if (!raw) return null
+    return enabledSkills.some((s) => s.installId === raw) ? raw : null
+  }
+  const currentSkillId = skillFor(depthKey, activeConversation)
+  const currentSkill = currentSkillId
+    ? enabledSkills.find((s) => s.installId === currentSkillId) ?? null
+    : null
+
+  function selectSkill(installId: string | null): void {
+    if (busyStreaming) return
+    setSkillByConv((prev) => ({ ...prev, [depthKey]: installId }))
+    // Persist the sticky default the moment a conversation exists; a still-"new" pick is persisted
+    // when the conversation is created on send (ensureConversation).
+    if (activeId) void window.api.setConversationDefaultSkill?.(activeId, installId)
+  }
+
   async function stream(
     convId: string,
     content: string,
     regenerate: boolean,
-    depth: ChatDepthMode
+    depth: ChatDepthMode,
+    skillInstallId: string | null
   ): Promise<void> {
     setError(null)
     setStreaming(true)
@@ -474,10 +520,13 @@ export function ChatScreen({
     }
     try {
       if (mode === 'documents') {
-        await window.api.askDocuments(convId, content)
+        await window.api.askDocuments(convId, content, skillInstallId ?? undefined)
       } else {
         await window.api.sendChatMessage(convId, content, {
           mode: depth,
+          // Include the skill only when one is set, so a no-skill turn keeps its plain options
+          // shape; a cleared skill is already persisted as the conversation's null sticky default.
+          ...(skillInstallId ? { skillInstallId } : {}),
           ...(regenerate ? { regenerate: true } : {})
         })
       }
@@ -513,10 +562,13 @@ export function ChatScreen({
     try {
       // The 'new'-composer depth selection sticks to the conversation that gets created.
       const depth = depthFor(depthKey)
+      // Capture the turn's skill BEFORE ensureConversation re-keys the 'new' selection (the closure
+      // value is stable; the picker's effective resolution already dropped any disabled skill).
+      const turnSkill = currentSkillId
       const convId = await ensureConversation()
       setDepths((prev) => ({ ...prev, [convId]: depth }))
       setMessages((prev) => [...prev, optimisticUser(convId, text)])
-      await stream(convId, text, false, depth)
+      await stream(convId, text, false, depth, turnSkill)
     } catch (e) {
       setError(friendlyIpcError(e))
     }
@@ -531,7 +583,7 @@ export function ChatScreen({
       const last = prev[prev.length - 1]
       return last && last.role === 'assistant' ? prev.slice(0, -1) : prev
     })
-    await stream(activeId, '', true, depthFor(activeId))
+    await stream(activeId, '', true, depthFor(activeId), skillFor(activeId, activeConversation))
   }
 
   function onStop(): void {
@@ -953,32 +1005,44 @@ export function ChatScreen({
           onDictationError={setError}
           onAttach={() => void onPickAttach()}
           footer={
-            mode === 'documents' ? (
-              <span className="scope-footer-wrap">
-                {danglingProject && (
-                  <span className="scope-dangling hint">{t('chat.scope.archivedFallback')}</span>
-                )}
-                <ScopePopover
-                  docs={docs}
-                  collections={collections}
-                  scope={pickerScope}
+            <>
+              {mode === 'documents' ? (
+                <span className="scope-footer-wrap">
+                  {danglingProject && (
+                    <span className="scope-dangling hint">{t('chat.scope.archivedFallback')}</span>
+                  )}
+                  <ScopePopover
+                    docs={docs}
+                    collections={collections}
+                    scope={pickerScope}
+                    disabled={busyStreaming}
+                    onChangeScope={(next) => void onChangeScope(next)}
+                    onAddDocuments={() => onNavigate('documents')}
+                    attachments={attachments}
+                    pendingAttachmentNames={
+                      pendingImport && pendingImport.convId === activeId ? pendingImport.fileNames : []
+                    }
+                  />
+                </span>
+              ) : (
+                <DepthMenu
+                  value={currentDepth}
+                  onChange={selectDepth}
+                  supportsThinking={supportsThinking}
                   disabled={busyStreaming}
-                  onChangeScope={(next) => void onChangeScope(next)}
-                  onAddDocuments={() => onNavigate('documents')}
-                  attachments={attachments}
-                  pendingAttachmentNames={
-                    pendingImport && pendingImport.convId === activeId ? pendingImport.fileNames : []
-                  }
                 />
-              </span>
-            ) : (
-              <DepthMenu
-                value={currentDepth}
-                onChange={selectDepth}
-                supportsThinking={supportsThinking}
-                disabled={busyStreaming}
-              />
-            )
+              )}
+              {/* Skills shape BOTH plain-chat and document answers (audit A1), so the picker
+                  rides the footer in both modes. Hidden entirely when no skills are enabled. */}
+              {enabledSkills.length > 0 && (
+                <SkillPicker
+                  skills={enabledSkills}
+                  value={currentSkillId}
+                  onChange={selectSkill}
+                  disabled={busyStreaming}
+                />
+              )}
+            </>
           }
         />
       </section>

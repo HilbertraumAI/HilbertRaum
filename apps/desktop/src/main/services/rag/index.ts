@@ -20,13 +20,16 @@ import { log } from '../logging'
 import {
   appendMessage,
   BASE_SYSTEM_PROMPT,
+  CHAT_RESPONSE_RESERVE_TOKENS,
   collapseToAlternating,
   emptyAssistantMessage,
   fitMessagesToContext,
   isAbortError,
   listMessages,
-  stripThinkBlocks
+  stripThinkBlocks,
+  type TurnSkill
 } from '../chat'
+import { approxPromptTokens, buildSkillFence, skillFenceBudgetTokens } from '../skills/prompt'
 import { getSettings } from '../settings'
 
 // RAG service (spec §7.8; pipeline design in rag-design §11). Turns a
@@ -329,10 +332,19 @@ function sourceMeta(chunk: RetrievedChunk): string {
  * question, then the numbered source excerpts in the spec's source-context format
  * (`[S1] File: X | Page: 4` then the quoted chunk text). Pure + unit-testable.
  */
-export function buildGroundedPrompt(question: string, chunks: RetrievedChunk[]): string {
+export function buildGroundedPrompt(
+  question: string,
+  chunks: RetrievedChunk[],
+  skillFence?: string | null
+): string {
   const excerpts = chunks
     .map((c) => `[${c.label}] File: ${c.sourceTitle}${sourceMeta(c)}\n"${c.text}"`)
     .join('\n\n')
+  // The skill fence (skills plan §11.2/§22-H2) rides in the USER turn WITH the excerpts — the same
+  // untrusted-reference-text class — never in `system`. It sits AFTER the grounding rules + question
+  // (which keep precedence) and BEFORE the excerpts; the fence carries its own guard line. The
+  // grounding rules ("use only the excerpts", "cite [S1]…", "do not invent citations") always win.
+  const skillBlock = skillFence ? `\n${skillFence}\n` : ''
   return `You are answering a question using local documents.
 
 Rules:
@@ -344,7 +356,7 @@ Rules:
 
 Question:
 ${question}
-
+${skillBlock}
 Document excerpts:
 ${excerpts}
 
@@ -404,6 +416,12 @@ export interface GroundedAnswerOptions {
   scope?: RetrievalScope | null
   /** Optional retrieval reranker. Null/absent keeps the fused ordering. */
   reranker?: Reranker | null
+  /**
+   * The skill resolved for this turn (skills plan §10/§11, audit A1). Its fence rides in the
+   * grounded USER turn with the excerpts. The assistant row is stamped with the install_id only
+   * when chunks were found AND the fence fit — the no-context answer (model not called) stamps NULL.
+   */
+  skill?: TurnSkill | null
 }
 
 /**
@@ -456,16 +474,27 @@ export async function generateGroundedAnswer(
     })
   }
 
-  const grounded = buildGroundedPrompt(question, chunks)
+  // Pre-size the skill fence (§11.3/A6) against the fence-less grounded turn so it never starves
+  // the base preamble, the question, or the excerpts — only older history yields. The fence rides
+  // in the grounded USER turn (buildGroundedPrompt). Stamp only when the fence actually fit.
+  const groundedNoFence = buildGroundedPrompt(question, chunks)
+  const contextTokens = getSettings(db).contextTokens
+  let skillFence: string | null = null
+  if (opts.skill) {
+    const fixedTokens =
+      approxPromptTokens(BASE_SYSTEM_PROMPT) + approxPromptTokens(groundedNoFence) + 16
+    const budget = skillFenceBudgetTokens({
+      contextTokens,
+      reserveTokens: CHAT_RESPONSE_RESERVE_TOKENS,
+      fixedTokens
+    })
+    skillFence = buildSkillFence({ title: opts.skill.title, body: opts.skill.body }, budget).text
+  }
+  const grounded = skillFence ? buildGroundedPrompt(question, chunks, skillFence) : groundedNoFence
   // Trim older history to the model context window so the grounded turn (which carries the
   // retrieved-chunk block, up to settings.maxContextTokens) plus prior turns never overflow
   // and trigger an HTTP 400 from the runtime.
-  const messages = buildGroundedChatMessages(
-    db,
-    conversationId,
-    grounded,
-    getSettings(db).contextTokens
-  )
+  const messages = buildGroundedChatMessages(db, conversationId, grounded, contextTokens)
   let content = ''
   // No `mode` is passed: document answers always run 'balanced' — grounded
   // answers should be fast + literal.
@@ -484,6 +513,13 @@ export async function generateGroundedAnswer(
   content = stripThinkBlocks(content)
   // A stop before the first token produced nothing — persist nothing.
   if (content === '') return emptyAssistantMessage(conversationId)
-  // Persist the assistant turn with the computed citations (source of truth = retrieval).
-  return appendMessage(db, { conversationId, role: 'assistant', content, citations })
+  // Persist the assistant turn with the computed citations (source of truth = retrieval) and stamp
+  // the skill only when its fence was actually placed (DS16/§22-A5).
+  return appendMessage(db, {
+    conversationId,
+    role: 'assistant',
+    content,
+    citations,
+    skillId: skillFence ? (opts.skill?.installId ?? null) : null
+  })
 }

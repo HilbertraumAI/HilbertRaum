@@ -325,6 +325,16 @@ the numbered `Document excerpts:` in the spec's source-context format:
 ```
 
 The meta line is `| Page: N` when the chunk has a page, else `| Section: X`, else nothing.
+
+**Skill fence (Skills plan §11.2 / S7).** `buildGroundedPrompt` takes an optional `skillFence`: when
+a skill is active for the turn, its fenced instruction block is placed in **this user/data turn**
+(after the `Question:`, before the excerpts) — **never in `system`** (§22-H2): a skill is
+user-selected reference text, the same untrusted class as the excerpts, and the grounding + citation
+rules keep precedence. The fence is pre-sized by `services/skills/prompt.ts` against the fence-less
+grounded turn so the excerpts/question are never starved (§22-A6), and the assistant row is stamped
+with the skill only when the fence was actually placed **and** chunks were found — a no-context
+answer (model not called) stamps NULL. See architecture.md "Chat & streaming" / the skills design.
+
 `buildGroundedChatMessages` then assembles the runtime message list: the base system prompt
 (spec §7.6), prior conversation history, and the **last user turn replaced by the grounded
 prompt**. The DB keeps the raw question for the transcript/title; only the model sees the
