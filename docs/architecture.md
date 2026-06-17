@@ -1512,6 +1512,29 @@ three names; the controller / IPC / renderer stay domain-free (the renderer adds
 + the invoice `resultKind` copy). Content-class isolation holds: the new `invoices` / `invoice_line_items`
 tables + `skill_runs` never appear in any log/audit/export (audit stays `{skillId, toolName, documentCount}`).
 
+**The document-redaction skill is the THIRD Tier-2 reference** (`app-skills/document-redaction/`,
+`id:'document-redaction'`), and the **read-transform-export** shape the bank/invoice domains don't exercise:
+a single `redact_document` tool that reads the **whole** selected document (the same `readDocumentChunks`
+reach over the frozen scope), masks the personal data it can detect, and produces the redacted text +
+per-category counts — which the seam writes to a **user-chosen file** (the same confirm-gated `export-file`
+boundary as the CSVs). It has **no content-class data table and no `BEGIN…COMMIT`**: the deliverable is a
+file, not rows, so `services/skills/run.ts`'s `runDocumentRedaction` records only the `skill_runs` lifecycle
+row (started → terminal; `result_ref` stays **NULL**) and surfaces only `totalRedactions` (a count) + a
+content-free `resultKind` (`'redacted'` when something was masked, else `'clean'`, handled in the renderer
+like `validate`'s discriminator). Detection (`services/skills/tools/redaction.ts`) is **deterministic,
+offline, regex-only** — e-mail, URL, IBAN, date (validated via the shared `parseDate`), phone — applied in a
+**fixed order so masks never overlap** (`email → url → iban → date → phone`; e.g. dates are masked before
+phones so a dotted date can't be eaten by a 0-leading phone shape), each match replaced by a fixed category
+token so redaction is **idempotent**. It is the privacy-aligned skill and the **strongest** content boundary
+of the three: the detected values never reach any log/audit/`skill_runs` row, and the redacted text lands
+**only** in the user-chosen file. Honesty posture (recorded in [`known-limitations.md`](known-limitations.md)):
+regex redaction is **best-effort, not a guarantee** — there is no ML and no name detection, so it
+deliberately misses anything without a recognisable pattern and prefers a false negative over corrupting
+text; the SKILL.md body + the "done" copy tell the user to review the copy before sharing, and the app never
+implies "fully anonymized" or compliance. The dispatch (`tool-runs.ts`) wires the one name (null without the
+MAIN-side `saveTextFile`); the controller / IPC / renderer stay domain-free (the renderer adds only the tool
+label + the redaction `resultKind` copy).
+
 ### §9 The run trigger + UI (S11b/S11c)
 
 A run is started from a **user action**, never the model. A generic controller

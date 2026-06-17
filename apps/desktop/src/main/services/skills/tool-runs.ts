@@ -10,7 +10,8 @@ import {
   runBalanceValidation,
   runCashflowSummary,
   runCategorization,
-  runCsvExport
+  runCsvExport,
+  runDocumentRedaction
 } from './run'
 import { runInvoiceCsvExport, runInvoiceExtraction, runInvoiceTotalsValidation } from './invoice-run'
 import type { ToolRunner } from './run-controller'
@@ -37,7 +38,9 @@ const WIRED_TOOL_NAMES: readonly string[] = [
   // Invoice — the SECOND Tier-2 domain (same gate, same dispatch shape; the invoice-run.ts seam).
   'extract_invoice',
   'validate_invoice_totals',
-  'export_invoice_csv'
+  'export_invoice_csv',
+  // Redaction — the read-transform-export shape (confirm-gated `export-file`; no data table).
+  'redact_document'
 ]
 
 /** Canonical English audit messages for the ids/counts-only run events (the recorder needs one). */
@@ -222,6 +225,25 @@ export function buildToolRunner(
           saveTextFile: deps.saveTextFile!
         })
         return { ok: res.ok, transactionCount: res.count, cancelled: res.cancelled, errorCode: res.errorCode, error: res.error }
+      }
+    case 'redact_document':
+      if (!deps.saveTextFile) return null // cannot save the redacted copy without the MAIN-side capability
+      return async ({ signal, onProgress }) => {
+        const res = await runDocumentRedaction(db, seamArgs, {
+          audit,
+          signal,
+          onProgress,
+          confirmed: args.confirmed,
+          saveTextFile: deps.saveTextFile!
+        })
+        return {
+          ok: res.ok,
+          transactionCount: res.redactionCount,
+          resultKind: res.resultKind,
+          cancelled: res.cancelled,
+          errorCode: res.errorCode,
+          error: res.error
+        }
       }
     default:
       return null

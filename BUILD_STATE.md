@@ -6,7 +6,44 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
-_Last updated: 2026-06-17 — **Skills — second Tier-2 bundled app skill: `invoice` (content + tests, no
+_Last updated: 2026-06-17 — **Skills — third Tier-2 bundled app skill: `document-redaction` (content +
+tests, no new phase).** A FOURTH app skill ships in `app-skills/`: **`document-redaction`**
+(`id: document-redaction`, German "Anonymisierung"), the **third Tier-2 tool skill** and the
+**read-transform-export** shape the bank/invoice domains don't exercise. ONE tool in
+[`tools/redaction.ts`](apps/desktop/src/main/services/skills/tools/redaction.ts): `redact_document`
+(permissions `['read-selected-docs','export-file']` ⇒ confirm-gated) reads the **whole** selected document
+(the same `readDocumentChunks` reach over the frozen scope), masks personal data with **deterministic,
+offline, regex-only** detectors (email/url/iban/date/phone — each a small pure exported function; dates
+validated via the shared `parseDate`, IBANs by structure + per-country length, phones conservative
++country/0-leading shapes), applied in a **fixed order so masks never overlap**
+(`email → url → iban → date → phone`) with a fixed category token per match (so redaction is **idempotent**),
+and returns `{ redactedText, counts{email,phone,iban,date,url}, totalRedactions }` (JsonSchema-validated).
+**Data contract: NO content-class table and NO `BEGIN…COMMIT`** — the deliverable is a FILE: the seam
+[`runDocumentRedaction`](apps/desktop/src/main/services/skills/run.ts) records only the `skill_runs`
+lifecycle row (started → terminal; `result_ref` stays **NULL**), writes `redactedText` via the existing
+confirm-gated MAIN-side `saveTextFile('redacted.txt', …)` boundary, honours the cancelled-before-write
+guard (B2) + B4, and surfaces only `totalRedactions` (a count) + a content-free `resultKind`
+(`'redacted'`/`'clean'`). **Privacy (the strongest of the three):** the detected values never reach any
+log/audit/`skill_runs` row; the redacted text lands ONLY in the user-chosen file. **Honesty:** regex
+redaction is **best-effort, not a guarantee** (no ML, no name detection) — SKILL.md body + "done" copy say
+review the copy before sharing; `docs/known-limitations.md` records the limit. Wired name `redact_document`
+(`tool-registry.ts` REGISTRY + `tool-runs.ts` WIRED_TOOL_NAMES/buildToolRunner — null without
+`saveTextFile`). New i18n EN/DE keys (`chat.skill.tool.redactDocument`, `chat.skill.run.done.redacted.*` +
+`…redactedClean`); `SkillRunBar` gains the label + the redaction `resultKind` branch (handled like
+`validate`). **No IPC / shared-type / controller change.** New tests:
+[`skills-redaction-tool.test.ts`](apps/desktop/tests/unit/skills-redaction-tool.test.ts) (each detector
+in isolation incl. near-misses + the full pass + idempotence + cancellation + the gate),
+[`skills-redaction.test.ts`](apps/desktop/tests/integration/skills-redaction.test.ts) (committed SKILL.md
+parse → kind:tool + 1 allowedTool + reservesTools; reconcile-enabled; dispatch descriptor; the read→mask→
+write seam incl. clean/dismissed/throwing-save) + extensions to `skills-suggest.test.ts` (German "Bitte
+dieses Dokument anonymisieren" clears the threshold), `skills-privacy-guard.test.ts` (a secret email+IBAN
+through `redact_document` is **masked out of the saved copy** AND absent from audit/log/console/`skill_runs`),
+`skills-tool-run-ipc.test.ts` (the confirm-gated redaction IPC writes `redacted.txt`, count-only state), and
+the `skills-tool-registry.test.ts` registered-names list. Full suite green (1690 passed), typecheck + build
+clean. Design record: **architecture.md "Skills — design record" §8** (redaction as the read-transform-export
+Tier-2 reference, no data table — counts-only run row) + **known-limitations.md** (best-effort caveat)._
+
+_(prior) 2026-06-17 — **Skills — second Tier-2 bundled app skill: `invoice` (content + tests, no
 new phase).** A THIRD app skill ships in `app-skills/`: **`invoice`** (`id: invoice`), the **second
 Tier-2 tool skill** — it mirrors `bank-statement` layer-for-layer to prove the gate generalizes to a
 second content-class domain, with strong EN+DE coverage. Three tools in

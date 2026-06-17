@@ -24,12 +24,13 @@ const TOOL_LABEL_KEY: Record<string, MessageKey> = {
   export_transactions_csv: 'chat.skill.tool.exportCsv',
   extract_invoice: 'chat.skill.tool.extractInvoice',
   validate_invoice_totals: 'chat.skill.tool.validateInvoiceTotals',
-  export_invoice_csv: 'chat.skill.tool.exportInvoiceCsv'
+  export_invoice_csv: 'chat.skill.tool.exportInvoiceCsv',
+  redact_document: 'chat.skill.tool.redactDocument'
 }
 
 // Tool name → the count-pluralized "done" message base key (tCount appends .one/.other). Extract has
-// no entry — it keeps the legacy `chat.skill.run.done` base. validate_statement_balances is handled
-// separately (its outcome is a pass/fail discriminator, not a plain count).
+// no entry — it keeps the legacy `chat.skill.run.done` base. validate_statement_balances and
+// redact_document are handled separately (their outcome carries a discriminator, not a plain count).
 const TOOL_DONE_KEY: Record<string, CountMessageKey> = {
   categorize_transactions: 'chat.skill.run.done.categorize',
   summarize_cashflow: 'chat.skill.run.done.summarize',
@@ -89,6 +90,11 @@ export function SkillRunBar({
       if (state.resultKind === 'reconciled') return t('chat.skill.run.done.invoiceReconciled')
       if (state.resultKind === 'unchecked') return t('chat.skill.run.done.invoiceUnchecked')
       return tCount('chat.skill.run.done.invoiceUnreconciled', count)
+    }
+    if (state.toolName === 'redact_document') {
+      // 'clean' = nothing detected (a copy was still saved); 'redacted' = N items hidden.
+      if (state.resultKind === 'clean') return t('chat.skill.run.done.redactedClean')
+      return tCount('chat.skill.run.done.redacted', count)
     }
     const base = TOOL_DONE_KEY[state.toolName]
     return tCount(base ?? 'chat.skill.run.done', count)

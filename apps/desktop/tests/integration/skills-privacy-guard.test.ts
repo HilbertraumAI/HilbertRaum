@@ -17,7 +17,8 @@ import {
   runBankExtraction,
   runCashflowSummary,
   runCategorization,
-  runCsvExport
+  runCsvExport,
+  runDocumentRedaction
 } from '../../src/main/services/skills/run'
 import {
   runInvoiceCsvExport,
@@ -272,6 +273,48 @@ describe('skills privacy guard — one secret through every sink (S12 audit)', (
     const runs = db.prepare('SELECT * FROM skill_runs').all()
     expect(JSON.stringify(runs)).not.toContain(SENTINEL)
     expect(logged).not.toContain(SENTINEL)
+  })
+
+  it('redaction: the secret PII is REMOVED — absent from the saved copy AND every log/audit/run row', async () => {
+    // The strongest assertion of the three skills: redaction's whole point is that the personal data
+    // does not even reach the deliverable. We drive a real-shaped secret e-mail + IBAN through
+    // redact_document and assert they are masked out of the saved content AND never touch any sink.
+    const db = freshDb()
+    const skillInstallId = 'app:document-redaction'
+    const SECRET_EMAIL = 'whistleblower.secret@example.com'
+    const SECRET_IBAN = 'AT61 1904 3002 3457 3201'
+    const docId = seedDocWithChunks(db, [
+      { text: `Contact ${SECRET_EMAIL} regarding account ${SECRET_IBAN}.`, page: 1 }
+    ])
+    const { audit, events } = capturingAudit()
+    let saved = ''
+
+    const logged = await captureConsole(async () => {
+      const res = await runDocumentRedaction(db, { skillInstallId, documentId: docId }, {
+        audit,
+        confirmed: true,
+        saveTextFile: async (_name, content) => {
+          saved = content
+          return true
+        }
+      })
+      expect(res.ok).toBe(true)
+      expect(res.redactionCount).toBeGreaterThanOrEqual(2)
+    })
+
+    // The deliverable was written WITHOUT the secrets — they were masked (the privacy point).
+    expect(saved).toContain('[EMAIL]')
+    expect(saved).toContain('[IBAN]')
+    expect(saved).not.toContain(SECRET_EMAIL)
+    expect(saved).not.toContain(SECRET_IBAN)
+    // And the secrets never reach the audit stream, any skill_runs row, or any console stream.
+    expect(JSON.stringify(events)).not.toContain(SECRET_EMAIL)
+    expect(JSON.stringify(events)).not.toContain(SECRET_IBAN)
+    const runs = db.prepare('SELECT * FROM skill_runs').all()
+    expect(JSON.stringify(runs)).not.toContain(SECRET_EMAIL)
+    expect(JSON.stringify(runs)).not.toContain(SECRET_IBAN)
+    expect(logged).not.toContain(SECRET_EMAIL)
+    expect(logged).not.toContain(SECRET_IBAN)
   })
 
   it('IPC SkillRunState: the polled run snapshot is ids/counts only — never the secret', async () => {

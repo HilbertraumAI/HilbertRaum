@@ -63,6 +63,23 @@ function writeBankSkill(appSkillsDir: string): void {
   writeFileSync(join(d, 'SKILL.md'), lines.join('\n'), 'utf8')
 }
 
+function writeRedactionSkill(appSkillsDir: string): void {
+  const d = join(appSkillsDir, 'document-redaction')
+  mkdirSync(d, { recursive: true })
+  const lines = [
+    '---',
+    'id: document-redaction',
+    'title: Document redaction',
+    'description: Redacts personal data.',
+    'version: 1.0.0',
+    'kind: tool',
+    'allowedTools: [redact_document]',
+    '---',
+    'Best-effort redaction; review the copy.'
+  ]
+  writeFileSync(join(d, 'SKILL.md'), lines.join('\n'), 'utf8')
+}
+
 function seedDocWithChunks(db: Db, text: string): string {
   const now = new Date().toISOString()
   const docId = randomUUID()
@@ -105,6 +122,30 @@ function makeHarness(statementText: string): Harness {
   const docId = seedDocWithChunks(db, statementText)
   const conv = createConversation(db, { mode: 'documents', scope: { collectionIds: [], documentIds: [docId] } })
   return { db, conversationId: conv.id, skillInstallId: 'app:bank-statement' }
+}
+
+function makeRedactionHarness(docText: string): Harness {
+  const root = tempDir()
+  const appSkillsDir = join(root, 'app-skills')
+  const userSkillsDir = join(root, 'user-skills')
+  mkdirSync(appSkillsDir, { recursive: true })
+  mkdirSync(userSkillsDir, { recursive: true })
+  writeRedactionSkill(appSkillsDir)
+  const db = openDatabase(join(root, 'test.sqlite'))
+  seedSettings(db)
+  const audit = createAuditRecorder(() => db)
+  const skills = createSkillRegistry({ getDb: () => db, appSkillsDir, userSkillsDir })
+  const ctx = {
+    db,
+    workspace: { isUnlocked: () => true },
+    isDev: false,
+    audit,
+    skills
+  } as unknown as AppContext
+  registerSkillsIpc(ctx)
+  const docId = seedDocWithChunks(db, docText)
+  const conv = createConversation(db, { mode: 'documents', scope: { collectionIds: [], documentIds: [docId] } })
+  return { db, conversationId: conv.id, skillInstallId: 'app:document-redaction' }
 }
 
 const flush = (): Promise<void> => new Promise((r) => setTimeout(r, 0))
@@ -271,5 +312,46 @@ describe('skills export_transactions_csv IPC (S11c)', () => {
     // failure copy (the renderer shows the calm "cancelled" row, not a red error).
     expect(final.state).toBe('cancelled')
     expect(final.error).toBeUndefined()
+  })
+})
+
+describe('skills redact_document IPC (S11d)', () => {
+  const SECRET_EMAIL = 'leak.source@example.com'
+
+  it('listRunnableTools surfaces the single redaction tool, confirm-gated', async () => {
+    const { skillInstallId, conversationId } = makeRedactionHarness(`Contact ${SECRET_EMAIL} today.`)
+    const { result } = await invoke(handlers, IPC.listRunnableTools, skillInstallId, conversationId)
+    expect(result).toEqual<RunnableTool[]>([{ name: 'redact_document', requiresConfirmation: true }])
+  })
+
+  it('confirm-gates the redaction: refuses without confirmation, asking for it', async () => {
+    const { skillInstallId, conversationId } = makeRedactionHarness(`Contact ${SECRET_EMAIL} today.`)
+    const { result } = await invoke(handlers, IPC.startSkillRun, {
+      skillInstallId,
+      toolName: 'redact_document',
+      conversationId
+    })
+    expect(result).toEqual({ started: false, needsConfirmation: true })
+  })
+
+  it('confirmed + a chosen path → writes the redacted copy and reports the count (content-free)', async () => {
+    const { skillInstallId, conversationId } = makeRedactionHarness(
+      `Contact ${SECRET_EMAIL} on 2026-03-15 about IBAN AT61 1904 3002 3457 3201.`
+    )
+    const out = join(tempDir(), 'redacted.txt')
+    dialogState.saveResult = { canceled: false, filePath: out }
+    const final = await runTool(skillInstallId, conversationId, 'redact_document', true)
+    expect(final.state).toBe('done')
+    expect(final.resultKind).toBe('redacted')
+    expect(final.transactionCount).toBeGreaterThanOrEqual(3)
+    // The redacted copy really landed on disk WITH the personal data masked out (the privacy point).
+    expect(existsSync(out)).toBe(true)
+    const redacted = readFileSync(out, 'utf8')
+    expect(redacted).toContain('[EMAIL]')
+    expect(redacted).not.toContain(SECRET_EMAIL)
+    // …and the polled run state is ids/counts only — no figures/paths/secret.
+    const { result: stateRaw } = await invoke(handlers, IPC.getSkillRun, final.runHandle)
+    expect(JSON.stringify(stateRaw)).not.toContain(SECRET_EMAIL)
+    expect(JSON.stringify(stateRaw)).not.toContain(out)
   })
 })

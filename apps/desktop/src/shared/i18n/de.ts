@@ -182,6 +182,7 @@ export const de: Record<keyof typeof en, string> = {
   'chat.skill.tool.extractInvoice': 'Rechnung einlesen',
   'chat.skill.tool.validateInvoiceTotals': 'Beträge prüfen',
   'chat.skill.tool.exportInvoiceCsv': 'Als CSV exportieren',
+  'chat.skill.tool.redactDocument': 'Personenbezogene Daten schwärzen',
   'chat.skill.run.running.one': 'Läuft: {tool} für {count} Dokument…',
   'chat.skill.run.running.other': 'Läuft: {tool} für {count} Dokumente…',
   'chat.skill.run.cancel': 'Abbrechen',
@@ -207,6 +208,12 @@ export const de: Record<keyof typeof en, string> = {
   'chat.skill.run.done.invoiceUnreconciled.other':
     '{count} Beträge stimmen nicht überein – prüfe sie, bevor du dich darauf verlässt.',
   'chat.skill.run.done.invoiceUnchecked': 'Es waren keine Beträge zum Abgleichen abgedruckt.',
+  'chat.skill.run.done.redacted.one':
+    'Geschwärzte Kopie gespeichert – {count} Eintrag verborgen. Prüfe sie, bevor du sie weitergibst.',
+  'chat.skill.run.done.redacted.other':
+    'Geschwärzte Kopie gespeichert – {count} Einträge verborgen. Prüfe sie, bevor du sie weitergibst.',
+  'chat.skill.run.done.redactedClean':
+    'Keine personenbezogenen Daten erkannt; Kopie gespeichert. Prüfe sie, bevor du sie weitergibst.',
   'chat.skill.run.failedGeneric': 'Das hat nicht geklappt. Es wurde nichts geändert.',
   'chat.skill.run.error.unavailable': 'Dieses Werkzeug ist nicht verfügbar.',
   'chat.skill.run.error.needsExtraction': 'Lies zuerst das Dokument ein, dann führe dieses Werkzeug aus.',

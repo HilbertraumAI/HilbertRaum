@@ -103,7 +103,7 @@ describe('validateJsonSchema (subset)', () => {
 })
 
 describe('registry + resolveEffectiveTools', () => {
-  it('ships the reference tool + the bank tools + the invoice tools', () => {
+  it('ships the reference tool + the bank tools + the invoice tools + the redaction tool', () => {
     expect(listRegisteredToolNames()).toEqual([
       'count_selected_documents',
       'extract_transactions',
@@ -114,10 +114,13 @@ describe('registry + resolveEffectiveTools', () => {
       // Invoice — the SECOND Tier-2 domain (same gate, second content class).
       'extract_invoice',
       'validate_invoice_totals',
-      'export_invoice_csv'
+      'export_invoice_csv',
+      // Redaction — the read-transform-export shape (confirm-gated; no content-class table).
+      'redact_document'
     ])
     expect(getRegisteredTool('export_transactions_csv')).toBeDefined()
     expect(getRegisteredTool('extract_invoice')).toBeDefined()
+    expect(getRegisteredTool('redact_document')).toBeDefined()
     expect(getRegisteredTool('__proto__')).toBeUndefined() // own-property lookup only
   })
 

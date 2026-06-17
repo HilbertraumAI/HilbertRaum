@@ -151,4 +151,17 @@ describe('meeting-protocol — German triggers fire against the real selector', 
 
     expect(suggestSkillsForTurn(db, conv.id, 'Sag mir einen Witz')).toEqual([])
   })
+
+  it('offers document-redaction for a German anonymization question; nothing for a neutral one', () => {
+    const db = freshDb()
+    reconcileSkills(db, realDeps()) // app skills → enabled
+    const conv = createConversation(db, {})
+
+    // "anonymisieren" is a keyword (weight 2) → clears SUGGEST_SCORE_THRESHOLD on the real selector.
+    const offer = suggestSkillsForTurn(db, conv.id, 'Bitte dieses Dokument anonymisieren')
+    expect(offer).toHaveLength(1)
+    expect(offer[0].installId).toBe('app:document-redaction')
+
+    expect(suggestSkillsForTurn(db, conv.id, 'Wie spät ist es?')).toEqual([])
+  })
 })

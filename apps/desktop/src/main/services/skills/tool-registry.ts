@@ -13,6 +13,7 @@ import {
   validateStatementBalancesTool
 } from './tools/bank-statement'
 import { exportInvoiceCsvTool, extractInvoiceTool, validateInvoiceTotalsTool } from './tools/invoice'
+import { redactDocumentTool } from './tools/redaction'
 
 // Tier-2 skill tool registry + the validate→run→validate gate (skills plan §12, Phase S10).
 //
@@ -208,6 +209,9 @@ const countSelectedDocumentsTool: SkillTool = {
  * bank tools (validate/categorize/summarize read-only; export confirm-gated `export-file`). The
  * INVOICE tools (`tools/invoice.ts`) are the SECOND Tier-2 domain proving the gate generalizes —
  * same shape (extract read-only; validate read-only; export confirm-gated), a separate content class.
+ * REDACTION (`tools/redaction.ts`) is the read-transform-export shape: a single `redact_document`
+ * tool that reads the selected document and produces a masked copy the seam writes (confirm-gated
+ * `export-file`); it persists no rows (the deliverable is the file).
  */
 const REGISTRY: Record<string, SkillTool> = {
   [countSelectedDocumentsTool.name]: countSelectedDocumentsTool,
@@ -218,7 +222,8 @@ const REGISTRY: Record<string, SkillTool> = {
   [exportTransactionsCsvTool.name]: exportTransactionsCsvTool,
   [extractInvoiceTool.name]: extractInvoiceTool,
   [validateInvoiceTotalsTool.name]: validateInvoiceTotalsTool,
-  [exportInvoiceCsvTool.name]: exportInvoiceCsvTool
+  [exportInvoiceCsvTool.name]: exportInvoiceCsvTool,
+  [redactDocumentTool.name]: redactDocumentTool
 }
 
 /** Look up a registered tool by name (own-property only — never reaches `Object.prototype`). */

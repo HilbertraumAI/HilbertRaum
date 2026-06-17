@@ -11,6 +11,7 @@ import {
   type ReconcileResult,
   type TransactionInput
 } from './tools/bank-statement'
+import type { RedactDocumentOutput } from './tools/redaction'
 
 // The app-orchestrated run seam (architecture.md "Skills — design record" §8, Phase S11a). This is the exact
 // function S11b's IPC/UI will call: it is invoked by the APP from a user action (DS4), never by the
@@ -568,4 +569,134 @@ export async function runCsvExport(
   // result_ref stays NULL — the export produces no DB artifact, and the path is never recorded.
   finishRun(db, runId, 'done', completedAt, null, null)
   return { ok: true, runId, count: rowCount }
+}
+
+// =====================================================================================
+// S11d — document redaction: the read-transform-export Tier-2 shape (architecture.md "Skills —
+// design record" §8).
+//
+// Unlike the bank/invoice domains there is NO content-class data table and NO BEGIN/COMMIT: the
+// deliverable is a FILE, not rows, so the seam records only the `skill_runs` lifecycle row
+// (started → terminal; result_ref stays NULL) and writes the redacted text MAIN-side to a
+// user-chosen path. The tool reads the selected document's chunks (the only content reach) and
+// produces the redacted text + per-category counts; this seam writes that text via the SAME
+// `saveTextFile` boundary the CSV export uses, gated on the `export-file` confirm (the gate also
+// enforces it). PRIVACY: the redacted text is written ONLY to the user-chosen file (the deliberate,
+// user-initiated exception); the detected personal-data values never reach any log/audit/run row —
+// only the COUNT + a 'redacted'/'clean' discriminator are surfaced. The cancelled-before-write guard
+// (B2) reports a cancel and writes nothing; the 'started' row always reaches a terminal status (B4).
+// =====================================================================================
+
+const REDACT_TOOL_NAME = 'redact_document'
+
+export interface RedactionDeps extends BankExtractionDeps {
+  /**
+   * Save the redacted text to a user-chosen path (MAIN-side: a save dialog + write). Returns true
+   * once written, false if the user cancelled. The path + content are NEVER logged/audited — the
+   * seam only learns whether the user saved (ids/counts boundary, §9.5/§22-M1).
+   */
+  saveTextFile: (defaultFileName: string, content: string) => Promise<boolean>
+  /** True once the user accepted the write/export confirm modal (the gate also enforces it). */
+  confirmed?: boolean
+}
+
+export interface RedactionResult {
+  ok: boolean
+  /** The `skill_runs.id` (always created, even on failure, so the lifecycle is recorded). */
+  runId: string
+  /** The number of personal-data items masked (a content-free count the renderer surfaces). */
+  redactionCount?: number
+  /** A content-free outcome discriminator: 'redacted' when something was masked, else 'clean'. */
+  resultKind?: string
+  /** True when the run ended because it was CANCELLED (vs a genuine failure) — the seam is authority (B2). */
+  cancelled?: boolean
+  /** A content-free failure reason CODE the renderer localizes (I1). */
+  errorCode?: string
+  /** A friendly, content-free reason on failure. */
+  error?: string
+}
+
+/**
+ * `redact_document` — read the selected document, mask the detectable personal data (pure tool,
+ * confirm-gated `export-file`), and write the redacted copy MAIN-side to a user-chosen path. The
+ * redacted content + the chosen path never touch any log/audit; only "N items hidden" (a count) and a
+ * 'redacted'/'clean' discriminator are surfaced. A cancelled save persists nothing and reports it
+ * calmly. No data table, no BEGIN/COMMIT — only the `skill_runs` lifecycle row is recorded.
+ */
+export async function runDocumentRedaction(
+  db: Db,
+  args: BankExtractionArgs,
+  deps: RedactionDeps
+): Promise<RedactionResult> {
+  const now = deps.now ?? (() => new Date().toISOString())
+  const runId = randomUUID()
+  const documentIds = [args.documentId]
+
+  // Record the run as started BEFORE the gate; it always reaches a terminal status (B4).
+  db.prepare(
+    `INSERT INTO skill_runs (id, skill_install_id, conversation_id, document_ids_json, status, created_at)
+     VALUES (?, ?, ?, ?, 'started', ?)`
+  ).run(runId, args.skillInstallId, args.conversationId ?? null, JSON.stringify(documentIds), now())
+
+  try {
+    const tool = getRegisteredTool(REDACT_TOOL_NAME)
+    if (!tool) {
+      const msg = 'This tool is not available.'
+      finishRun(db, runId, 'failed', now(), null, msg)
+      return { ok: false, runId, errorCode: 'unavailable', error: msg }
+    }
+
+    const signal = deps.signal ?? new AbortController().signal
+    const ctx: SkillToolContext = {
+      documentIds,
+      readDocumentChunks: buildReadDocumentChunks(db, new Set(documentIds)),
+      signal,
+      onProgress: deps.onProgress,
+      audit: deps.audit
+    }
+
+    const result = await runSkillTool(tool, {
+      skillId: args.skillInstallId,
+      input: { documentId: args.documentId },
+      ctx,
+      confirmed: deps.confirmed
+    })
+    if (!result.ok) {
+      const cancelled = signal.aborted
+      finishRun(db, runId, cancelled ? 'cancelled' : 'failed', now(), null, result.error)
+      return { ok: false, runId, cancelled, error: result.error }
+    }
+
+    const output = result.output as RedactDocumentOutput
+    const resultKind = output.totalRedactions > 0 ? 'redacted' : 'clean'
+
+    // Cancelled after the tool produced the text but before the write — don't open the save dialog,
+    // and report it as cancelled (not failed), so nothing is written under a cancel (B2).
+    if (signal.aborted) {
+      finishRun(db, runId, 'cancelled', now(), null, null)
+      return { ok: false, runId, cancelled: true, error: 'Redaction cancelled. Nothing was saved.' }
+    }
+    let saved: boolean
+    try {
+      saved = await deps.saveTextFile('redacted.txt', output.redactedText)
+    } catch {
+      console.error('[skills] redaction failed to write')
+      const msg = 'The file could not be saved. Nothing was changed.'
+      finishRun(db, runId, 'failed', now(), null, msg)
+      return { ok: false, runId, errorCode: 'exportWriteFailed', error: msg }
+    }
+    if (!saved) {
+      // The user cancelled the save dialog — a calm, non-error outcome (B1).
+      finishRun(db, runId, 'cancelled', now(), null, null)
+      return { ok: false, runId, cancelled: true, error: 'Redaction cancelled. Nothing was saved.' }
+    }
+    // result_ref stays NULL — redaction produces no DB artifact, and the path is never recorded.
+    finishRun(db, runId, 'done', now(), null, null)
+    return { ok: true, runId, redactionCount: output.totalRedactions, resultKind }
+  } catch {
+    console.error('[skills] redaction failed unexpectedly')
+    const msg = 'This could not be saved. Nothing was changed.'
+    finishRun(db, runId, 'failed', now(), null, msg)
+    return { ok: false, runId, errorCode: 'persistFailed', error: msg }
+  }
 }

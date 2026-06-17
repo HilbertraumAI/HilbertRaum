@@ -97,6 +97,20 @@ password recovery — are documented in
   `selector.globToRegExp` refuses a glob with more than 10 `*` wildcards (it counts as a non-match), so
   a `*a*a…`-style pattern can no longer drive catastrophic backtracking on the synchronous main-side
   scoring. The residual is therefore closed in practice.
+- **Document redaction is best-effort, not a privacy/compliance guarantee (Skills S11d).** The
+  `document-redaction` skill's `redact_document` tool masks personal data with **deterministic,
+  offline regexes only** — e-mail addresses, phone numbers, IBANs, dates, and web links. There is **no
+  ML and no name detection**, so it deliberately **misses** anything without a recognisable pattern:
+  most names, postal addresses, unusual number formats, and any text inside images/scans (it sees only
+  the extracted chunk text). The detectors are intentionally conservative — they prefer a **false
+  negative** (leaving a borderline value) over corrupting ordinary text by over-matching. The redacted
+  copy is therefore a **starting point that still needs a human review** before it is shared; the
+  SKILL.md body and the run's "done" copy both say so, and the app never describes the output as "fully
+  anonymized" or as meeting any legal/GDPR-DSGVO standard. Privacy posture is otherwise the strongest
+  of the Tier-2 skills: the redacted text is written **only** to the user-chosen file, the detected
+  values never reach any log/audit/`skill_runs` row, and only per-category **counts** are surfaced
+  (architecture.md "Skills — design record" §8). A higher-recall redactor (NER, address/name lexicons)
+  is a deferred wave.
 
 ## Spec features intentionally not built (MVP scope)
 
