@@ -6,7 +6,26 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
-_Last updated: 2026-06-17 — **Skills Phase S4 SHIPPED — import/export/install/delete lifecycle + IPC.**
+_Last updated: 2026-06-17 — **Skills Phase S5 SHIPPED — Settings → Skills UI.** New file:
+[`renderer/screens/settings/SkillsTab.tsx`](apps/desktop/src/renderer/screens/settings/SkillsTab.tsx)
+(the installed-skills list with compact rows · `App`/`Made by you` trust chip · enable Switch ·
+duplicate-id / files-missing / `Review` chips · "⋯" overflow Export + Delete (Delete hidden for
+`source === 'app'`); a toolbar **Import skill…** dropdown → `pickSkillPackage(file|folder)` →
+`previewSkillPackage` → a ConfirmDialog showing the calm ✓/✕ permission block + collision/upgrade/
+downgrade banners (confirm BLOCKED when `downgradeBlocked` or `!ok`) → `importSkill`; a detail
+drawer (Modal) with metadata + the permission block + a tool-skill "guidance only" note (§13/D1) +
+a closed-by-default "Technical details" raw-structural disclosure; the DS7 review banner →
+`acknowledgeSkillWarning`; empty state). NO new IPC/shared types/main code — pure consumer of the
+S4 surface. Registered in `SettingsScreen` (tab order General · **Skills** · Privacy · Diagnostics),
+`'skills'` added to `SettingsTab` + nav alias `settings:skills`. ~70 EN/DE catalog keys (informal
+„du"); skill-row + permission-block CSS. 11 new renderer tests
+([`tests/renderer/SkillsTab.test.tsx`](apps/desktop/tests/renderer/SkillsTab.test.tsx)). Full suite
+**1482 passed / 25 skipped**, typecheck + build clean, Playwright eyeball walk green (list/drawer/
+empty in EN+DE × light/dark — `docs/design-review/skills-s5/`, untracked). No docs touched (no new
+broadly-reusable UI pattern — §18.0-E). See the **"Skills — S5 handoff"** block below. Next: Phases
+S6+S7 (manual activation + prompt integration, shipped together)._
+
+_(prior) 2026-06-17 — **Skills Phase S4 SHIPPED — import/export/install/delete lifecycle + IPC.**
 New files: [`services/skills/installer.ts`](apps/desktop/src/main/services/skills/installer.ts) (the
 lifecycle core + a NET-NEW dependency-free safe zip extractor — built-in `node:zlib` + a hand-rolled
 central-directory parser, NOT JSZip/tar; §22-A2) and
@@ -67,6 +86,58 @@ attacker-supplied and is now unzipped straight to a real on-disk folder. **Impac
 commit: none** — `shared/skill-manifest.ts` is storage-agnostic and `parseSkillManifestFromDir` is now
 the single read path for both sources. S3 spec, S4 spec, §7/§8/§9/§14/§17/§19/§20 + the §18 matrices
 updated accordingly._
+
+### Skills — S5 handoff (2026-06-17)
+
+**Contracts produced** (what S6 reuses):
+- **`renderer/screens/settings/SkillsTab.tsx`** — the Settings → Skills surface. Components S6
+  can reuse: `SkillRow`-style compact rows (icon · clickable title/desc · trailing chips/Switch/⋯),
+  the `PermissionBlock` (the calm ✓/✕ capability list, **derived from the already-clamped
+  `permissions` + `kind` — it localises the result, it never re-decides what a skill may do**), and
+  the detail `Modal` drawer. All internal to the file (no new exported component module — S6 lifts
+  what it needs).
+- **Nav:** `SettingsTab` (`renderer/navigation.ts`) gains `'skills'`; `resolveNavTarget`
+  resolves `settings:skills` → `{ screen: 'settings', settingsTab: 'skills' }`. `SettingsScreen`
+  `TAB_CHOICES` order is General · Skills · Privacy · Diagnostics.
+- **i18n:** ~70 `skills.*` keys + `settings.tab.skills` in BOTH catalogs (EN/DE, informal „du").
+  Parity test green.
+- **CSS:** `.skills-toolbar/.skills-intro/.skills-list/.skill-row*/.skill-perm*/.skill-import`
+  in `renderer/styles.css` (modelled on the Documents `.doc-row` pattern; tokens-only).
+
+**Decisions taken or changed:**
+- **Permission display is rendered from the structural `permissions` object + `kind`, NOT from the
+  `permissionSummary` string.** `summarizeSkillPermissions`/`permissionSummary` is a single English
+  sentence (computed main-side); the §15 spec mandates a localised ✓/✕ "can / cannot" block, so the
+  renderer maps the **already-clamped** enum values to EN/DE catalog copy. This is presentation, not
+  re-validation (DS6 clamping stays main-authoritative) — it keeps the German UI honest where the
+  raw `permissionSummary` would leak English. `permissionSummary` remains available on
+  `SkillInfo`/`SkillPreview` for any non-localised use (S6 picker tooltip, etc.).
+- **Import is a dropdown (file / folder), not a single button.** `pickSkillPackage` needs a `mode`
+  (Windows can't mix file+dir in one OS dialog — S4 §22-A2 note), so "Import skill…" opens a
+  Radix menu with **From a file (.skill.zip)…** + **From a folder…**, each calling `pick(mode)`.
+- **The detail drawer reads the row's `SkillInfo` directly** (it carries every field) rather than
+  round-tripping `getSkill` — fewer IPC calls, and the open drawer is re-synced to the freshest row
+  after any mutation via a `useEffect` keyed on the refreshed list. `getSkill` stays available but
+  unused by S5.
+- **Enable of a `duplicateId` skill shows a "replace the other?" ConfirmDialog first** (DS12), then
+  calls `enableSkill`; the server still enforces one-active-per-id, so the prompt only surfaces the
+  intent. Disable never prompts. Every mutation (`enable/disable/import/delete/acknowledge`)
+  re-`list()`s so sibling state (the disabled-other) reflects immediately.
+- **Confirm is blocked (button `disabled`) when `preview.ok === false` OR `downgradeBlocked`**
+  (DS15); the dialog still renders the structural `errors`/`notes` + the collision/upgrade/replace/
+  downgrade banners so the user sees *why*.
+- **No `design-guidelines.md` change** (§18.0-E): the skill row reuses the `.doc-row` §11.6 pattern
+  and the ✓/✕ block is a skill-specific content layout (Badge/list idioms), not a new broadly-
+  reusable pattern. Recorded here per the doc-map.
+
+**Open landmines:** none new (no `SL-#` opened in S5).
+
+**What S6 consumes:** the same `window.api` enable/default surface S4 produced; the `SkillInfo`
+shape + `PermissionBlock`/drawer presentation it can lift from `SkillsTab.tsx`; the
+`messages.skill_id` stamp (S6/S7) + the carry-forward invariant — **the glyph/turn-skill read MUST
+resolve a deleted/vanished `messages.skill_id` to NULL** (no FK; S4 delete relies on it). The
+composer picker, the "Using skill" chip, the per-message glyph, `resolveTurnSkill`, and the prompt
+fence are **S6/S7 — NOT built in S5**.
 
 ### Skills — S4 handoff (2026-06-17)
 

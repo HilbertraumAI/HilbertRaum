@@ -3,6 +3,7 @@
 //   - 'ask-documents'          → Chat screen opened in documents mode
 //   - 'settings:privacy'       → Settings, "Privacy & data" tab
 //   - 'settings:diagnostics'   → Settings, "Diagnostics (advanced)" tab
+//   - 'settings:skills'        → Settings, "Skills" tab
 //   - 'privacy' / 'diagnostics' → legacy aliases for the two above, from when these
 //     were real screens; every old entry point (offline badge, banners, screen hints)
 //     must keep working through them.
@@ -10,7 +11,7 @@
 
 export type ScreenId = 'home' | 'chat' | 'documents' | 'models' | 'settings'
 
-export type SettingsTab = 'general' | 'privacy' | 'diagnostics'
+export type SettingsTab = 'general' | 'privacy' | 'diagnostics' | 'skills'
 
 export interface NavResolution {
   screen: ScreenId
@@ -34,6 +35,8 @@ export function resolveNavTarget(target: string): NavResolution {
     case 'settings:diagnostics':
     case 'diagnostics':
       return { screen: 'settings', settingsTab: 'diagnostics' }
+    case 'settings:skills':
+      return { screen: 'settings', settingsTab: 'skills' }
     case 'home':
     case 'documents':
     case 'models':

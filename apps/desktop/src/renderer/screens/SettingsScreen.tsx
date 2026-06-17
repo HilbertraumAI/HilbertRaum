@@ -14,6 +14,7 @@ import { setThemeSetting } from '../theme'
 import { useT } from '../i18n'
 import { PrivacyTab } from './settings/PrivacyTab'
 import { DiagnosticsTab } from './settings/DiagnosticsTab'
+import { SkillsTab } from './settings/SkillsTab'
 import type { SettingsTab } from '../navigation'
 import type { MessageKey, UiLanguageSetting } from '@shared/i18n'
 import type { AppSettings, ThemeSetting } from '@shared/types'
@@ -30,6 +31,7 @@ import type { AppSettings, ThemeSetting } from '@shared/types'
 
 const TAB_CHOICES: Array<{ value: SettingsTab; labelKey: MessageKey }> = [
   { value: 'general', labelKey: 'settings.tab.general' },
+  { value: 'skills', labelKey: 'settings.tab.skills' },
   { value: 'privacy', labelKey: 'settings.tab.privacy' },
   { value: 'diagnostics', labelKey: 'settings.tab.diagnostics' }
 ]
@@ -77,6 +79,7 @@ export function SettingsScreen({ tab, onTabChange }: SettingsScreenProps): JSX.E
         />
       </div>
       {activeTab === 'general' && <GeneralTab />}
+      {activeTab === 'skills' && <SkillsTab />}
       {activeTab === 'privacy' && <PrivacyTab />}
       {activeTab === 'diagnostics' && <DiagnosticsTab />}
     </div>

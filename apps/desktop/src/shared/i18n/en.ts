@@ -515,6 +515,7 @@ export const en = {
   'settings.tab.general': 'General',
   'settings.tab.privacy': 'Privacy & data',
   'settings.tab.diagnostics': 'Diagnostics (advanced)',
+  'settings.tab.skills': 'Skills',
   'settings.loading': 'Loading settings…',
   'settings.saved': 'Saved',
   'settings.network.title': 'Privacy & Offline Mode',
@@ -577,6 +578,90 @@ export const en = {
   'settings.changePassword.submit': 'Change password',
   'settings.changePassword.submitBusy': 'Changing…',
   'settings.changePassword.toast': 'Password changed',
+
+  // ---- Settings → Skills tab (settings/SkillsTab.tsx — skills plan §15) ----
+  'skills.intro': 'Skills teach the assistant how to do a specific task. They add guidance to its answers — they never reach the internet or other folders on your computer.',
+  'skills.import': 'Import skill…',
+  'skills.import.menuAria': 'Import a skill',
+  'skills.import.fromFile': 'From a file (.skill.zip)…',
+  'skills.import.fromFolder': 'From a folder…',
+  'skills.loading': 'Loading skills…',
+  'skills.locked': 'Unlock your workspace to manage skills.',
+  'skills.loadFailed': 'Skills couldn’t be loaded.',
+  'skills.empty.title': 'No skills yet',
+  'skills.empty.line': 'Skills teach the assistant how to do a specific task. Add one to get started.',
+  // Trust chip (icon + word, never colour-only — guidelines §9).
+  'skills.trusted.app': 'App',
+  'skills.trusted.user': 'Made by you',
+  // Per-row enable switch. The label states what the switch controls; the checked
+  // state carries on/off. Each row's title gives the context.
+  'skills.row.enableLabel': 'Enabled',
+  'skills.row.on': 'Skill on',
+  'skills.row.off': 'Skill off',
+  // DS12 — two installed skills declare the same id; only one can be active.
+  'skills.dup.chip': 'Duplicate name',
+  'skills.dup.title': 'Another installed skill uses this name. Only one can be active at a time.',
+  // DS1/§7.4 — the on-disk folder vanished; the row is kept but can’t be used.
+  'skills.unavailable.chip': 'Files missing',
+  'skills.unavailable.title': 'This skill’s files are no longer on the drive.',
+  // DS7 — review chip + the calm acknowledge banner in the detail view.
+  'skills.review.chip': 'Review',
+  'skills.warn.title': 'Review what this skill can do',
+  'skills.warn.body': 'Made by you or imported. Check what it can do before you rely on it.',
+  'skills.warn.ack': 'Got it',
+  // Row overflow menu ("⋯").
+  'skills.menu.aria': 'Skill actions',
+  'skills.menu.export': 'Export…',
+  'skills.menu.delete': 'Delete',
+  'skills.export.done': 'Skill exported',
+  // Delete confirmation (DS-/§9.4 — chats that used it keep working; no FK).
+  'skills.delete.title': 'Delete this skill?',
+  'skills.delete.body': 'This removes the skill from the drive. Chats that already used it keep working.',
+  'skills.delete.confirm': 'Delete',
+  'skills.delete.done': 'Skill deleted',
+  // Detail drawer.
+  'skills.detail.aria': 'Skill details',
+  'skills.detail.version': 'Version',
+  'skills.detail.author': 'Author',
+  'skills.detail.language': 'Language',
+  'skills.detail.kind': 'Type',
+  'skills.kind.instruction': 'Guidance',
+  'skills.kind.tool': 'Uses tools',
+  // §13/§22-D1 — a tool-reserved skill adds guidance only in v1.
+  'skills.tool.note': 'For now this adds guidance only. The tools it describes arrive in a later version.',
+  // The permission block (skills plan §15 copy). Derived from the already-clamped
+  // permissions — the renderer localises the result, it does not re-decide it.
+  'skills.perm.heading': 'What this skill can do',
+  'skills.perm.canTitle': 'This skill can:',
+  'skills.perm.cannotTitle': 'This skill cannot:',
+  'skills.perm.can.instructions': 'Add instructions to AI answers',
+  'skills.perm.can.documents': 'Read only documents you choose',
+  'skills.perm.can.tools': 'Use approved local tools when you ask',
+  'skills.perm.cannot.network': 'Access the internet',
+  'skills.perm.cannot.files': 'Read other folders on your computer',
+  'skills.perm.cannot.scripts': 'Run scripts or install software',
+  // "Technical details" disclosure (raw structural metadata — not the assembled fence).
+  'skills.tech.summary': 'Technical details',
+  'skills.tech.id': 'Skill id',
+  'skills.tech.installId': 'Install id',
+  'skills.tech.source': 'Source',
+  'skills.tech.permissions': 'Permissions',
+  // Import preview / confirm dialog.
+  'skills.import.title': 'Add this skill?',
+  'skills.import.confirm': 'Add skill',
+  'skills.import.added': 'Skill added',
+  'skills.import.failedTitle': 'This skill can’t be added',
+  'skills.import.failed': 'This skill couldn’t be added.',
+  'skills.import.collision': 'A skill with this name is already installed. Adding this replaces it.',
+  'skills.import.collisionApp': 'An app skill already uses this name. Your skill is added but stays off while the app skill is on.',
+  'skills.import.upgrade': 'Updates the installed version ({from} → {to}).',
+  'skills.import.replace': 'Replaces the installed version ({version}).',
+  'skills.import.downgrade': 'This is older than the installed version ({installed}).',
+  'skills.import.downgradeBlocked': 'Installing an older version needs developer mode. Turn it on in Settings → General to allow this.',
+  // DS12 — enabling a skill whose name is shared turns the other one off.
+  'skills.replace.title': 'Use this skill instead?',
+  'skills.replace.body': 'Another skill with this name is on. Turning this one on turns the other one off.',
+  'skills.replace.confirm': 'Turn on',
 
   // ---- Settings → Privacy & data tab (PrivacyTab.tsx) ----
   'privacy.offlineOn': '● Offline Mode: ON',

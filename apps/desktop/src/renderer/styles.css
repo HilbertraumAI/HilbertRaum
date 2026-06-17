@@ -1329,6 +1329,67 @@ code, pre, kbd { font-family: var(--font-mono); }
 /* Overflow menu separator (Radix DropdownMenu.Separator). */
 .menu-sep { height: 1px; background: var(--border); margin: 4px 6px; }
 
+/* ---- Settings → Skills (skills plan §15) ---- */
+/* Toolbar: the intro line takes the flex space, the Import action stays right + shrink:0. */
+.skills-toolbar { display: flex; align-items: flex-start; gap: 16px; }
+.skills-intro { flex: 1; margin: 0; }
+.skills-toolbar > .btn { flex-shrink: 0; }
+/* The list is a card with hairline-separated rows (the Documents §11.6 row pattern). The
+   card already paints the border/shadow, so the rows only need separators. */
+.skills-list { padding: 4px 0; }
+/* Compact rows (≥40px): icon · clickable title/desc · trailing chips/switch/⋯. */
+.skill-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 48px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border);
+}
+.skill-row:last-child { border-bottom: none; }
+.skill-row-icon { width: 22px; height: 22px; color: var(--text-muted); flex-shrink: 0; }
+/* The title/description double as the drawer trigger — a plain text button, full row height. */
+.skill-row-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  background: transparent;
+  border: none;
+  padding: 4px 0;
+  text-align: left;
+  cursor: pointer;
+  color: inherit;
+}
+.skill-row-main:hover .skill-row-title { color: var(--accent); }
+.skill-row-title {
+  font-size: var(--text-base);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.skill-row-desc {
+  font-size: var(--text-xs);
+  line-height: var(--line-xs);
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.skill-row-trailing { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+/* The permission ✓/✕ block (calm, legible — guidelines §6). Marks are icon + word; the
+   word carries the meaning, the glyph is aria-hidden (§9). */
+.skill-perm-heading { font-size: var(--text-sm); margin: 16px 0 4px; }
+.skill-perm-title { font-size: var(--text-sm); font-weight: 600; margin: 10px 0 4px; }
+.skill-perm-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 4px; }
+.skill-perm-list li { display: flex; align-items: baseline; gap: 8px; font-size: var(--text-sm); }
+.skill-perm-mark { flex-shrink: 0; font-weight: 700; }
+.skill-perm-mark.can { color: var(--success); }
+.skill-perm-mark.cannot { color: var(--text-muted); }
+.skill-import { display: flex; flex-direction: column; gap: 10px; }
+
 /* Benchmark / diagnostics */
 .hint.error { color: var(--error); }
 .benchmark-warnings { list-style: none; padding: 0; margin: 12px 0 0; display: flex; flex-direction: column; gap: 8px; }
