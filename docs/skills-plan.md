@@ -1510,7 +1510,7 @@ they are spec, not landmines)._
 | **S5** | `design-guidelines.md` only if a new UI pattern is introduced (else none) |
 | **S6+S7** | `architecture.md` (chat assembly + skill fence), `rag-design.md` (grounded assembly carries the fence) |
 | **S8** | `architecture.md` (selector heuristic) |
-| **S9** | `drive-layout.md` (app-skills provisioning), `packaging.md` (`prepare-drive` step) |
+| **S9** | `drive-layout.md` (app-skills provisioning), `packaging.md` (`prepare-drive` step), `security-model.md` + `known-limitations.md` (the THREE ratified residuals — §22-M2 app-skill integrity, DS20 confidentiality boundary, and the DB-rebuild-resets-skill-enable/ack note; all three are S9 deliverables per the S3 handoff) |
 | **S10/S11** | `architecture.md` + `security-model.md` (tool registry / tools) |
 | **S12** | **fold this plan** → `architecture.md` "Skills — design record" + `security-model.md`; update `known-limitations.md` (orphan limit if recovery not built); then **delete `skills-plan.md`** (doc-lifecycle rule) |
 | **S13** | `architecture.md` (auto-fire + eval harness) |
@@ -1633,7 +1633,11 @@ stamp/glyph until the prompt path is live.)
   Phase-38 precedent — the scripts re-implement the gate, §22-E4), prepare-drive scripts (copy step,
   like `model-manifests/`). *(Integrity: §22-M2 RESOLVED 2026-06-17 as **accept + document** — no
   hashed manifest; **document the drive-provisioning residual** in `security-model.md` +
-  `known-limitations.md` as an S9 deliverable.)*
+  `known-limitations.md` as an S9 deliverable.)* **Also land in `known-limitations.md` (ratified,
+  S3 handoff): (a) the DS20 confidentiality boundary — secrets go in an encrypted document, never a
+  skill; `user-skills/` must be in the workspace backup; and (b) a workspace DB rebuild re-derives
+  user skills as DISABLED and clears `warning_ack` — skills must be re-enabled.** All three are one
+  edit; do them together here so they cannot slip to S12.
 - **Tests:** the stub loads + injects; commercial-drive gate covers it (both the TS gate and the
   scripts); the stub body makes no extraction promise.
 - **Acceptance:** end-to-end instruction path proven with a real bundled skill; the stub is
