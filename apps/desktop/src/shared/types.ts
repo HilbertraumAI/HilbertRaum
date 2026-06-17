@@ -1419,16 +1419,37 @@ export type ToolResult =
 export type SkillToolAudit = (type: AuditEventType, meta?: Record<string, unknown>) => void
 
 /**
+ * One page-addressable chunk of a selected document's stored text (skills plan §12 / S11a). It is
+ * the unit a tool reads through `SkillToolContext.readDocumentChunks` — chunk `text` plus its
+ * `page` provenance (fills `transaction.sourcePage`) and `index` (stable order). The `text` is
+ * CONTENT: it must never reach the audit log or the renderer un-summarized (§22-M1).
+ */
+export interface DocumentChunkRead {
+  /** The chunk's stored text (content). */
+  text: string
+  /** 1-based source page if known (the `chunks.page_number` provenance), else null. */
+  page: number | null
+  /** The chunk's `chunk_index` — stable read order within the document. */
+  index: number
+}
+
+/**
  * The NARROW, app-built context a tool runs inside (skills plan §12.1/§14). It is the WHOLE of a
  * tool's reach: a FIXED, read-only `documentIds` scope it cannot widen (the gate hands it a frozen
- * copy), an `AbortSignal`, optional progress, and the ids/counts-only audit sink. There is
- * DELIBERATELY no `Db`/SQL handle, no filesystem handle, and no network handle — confused-deputy and
- * model-over-reach containment is structural (§14), not policy. (S11 adds a NARROW, scope-bounded
- * content-read method here for the real bank-statement tools; S10 exposes only the id scope.)
+ * copy), a scope-bounded content read, an `AbortSignal`, optional progress, and the ids/counts-only
+ * audit sink. There is DELIBERATELY no `Db`/SQL handle, no filesystem handle, and no network handle —
+ * confused-deputy and model-over-reach containment is structural (§14), not policy.
  */
 export interface SkillToolContext {
   /** The selected-only document scope (ids only). Frozen by the gate; a tool cannot widen it. */
   documentIds: readonly string[]
+  /**
+   * The ONLY content reach a tool has (skills plan §12 / S11a): the page-addressable chunks of a
+   * document IN the frozen `documentIds` scope. An id outside the scope is refused (returns `[]`) —
+   * the read can never widen scope and is NOT a general `Db`/SQL/FS handle (§14). Supplied by the
+   * app's orchestration seam as a closure over a narrow per-document SELECT.
+   */
+  readDocumentChunks(documentId: string): DocumentChunkRead[]
   /** Cooperative cancellation (the chat/doc-task `stopGeneration`/`cancelDocTask` precedent). */
   signal: AbortSignal
   /** Optional progress, merged into the polling status by the app (no new event channel). */

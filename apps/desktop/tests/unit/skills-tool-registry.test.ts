@@ -36,6 +36,7 @@ function makeCtx(over: Partial<SkillToolContext> = {}): {
   const events: CapturedEvent[] = []
   const ctx: SkillToolContext = {
     documentIds: [],
+    readDocumentChunks: () => [],
     signal: new AbortController().signal,
     audit: (type, meta) => {
       events.push({ type, meta })
@@ -102,15 +103,17 @@ describe('validateJsonSchema (subset)', () => {
 })
 
 describe('registry + resolveEffectiveTools', () => {
-  it('ships exactly the one harmless reference tool (no bank-statement tools — S11)', () => {
-    expect(listRegisteredToolNames()).toEqual(['count_selected_documents'])
+  it('ships the reference tool + extract_transactions (S11a); other bank tools are S11c', () => {
+    expect(listRegisteredToolNames()).toEqual(['count_selected_documents', 'extract_transactions'])
     expect(getRegisteredTool('count_selected_documents')).toBeDefined()
-    expect(getRegisteredTool('extract_transactions')).toBeUndefined()
+    expect(getRegisteredTool('extract_transactions')).toBeDefined()
+    // The four S11c bank tools are not wired yet.
+    expect(getRegisteredTool('export_transactions_csv')).toBeUndefined()
     expect(getRegisteredTool('__proto__')).toBeUndefined() // own-property lookup only
   })
 
   it('intersects declared ∩ registry ∩ userGrant; drops unregistered + ungranted; dedups; keeps order', () => {
-    const declared = ['count_selected_documents', 'extract_transactions', 'count_selected_documents']
+    const declared = ['count_selected_documents', 'export_transactions_csv', 'count_selected_documents']
     const grant = ['count_selected_documents', 'export_transactions_csv']
     expect(resolveEffectiveTools(declared, grant)).toEqual(['count_selected_documents'])
     // A registered tool the user did not grant is dropped.
@@ -230,9 +233,10 @@ describe('runSkillTool — narrow context + cancellation', () => {
     const result = await runSkillTool(tool, { skillId: 's', input: { note: 'x' }, ctx })
     expect(result).toEqual({ ok: true, output: { length: 2 } }) // scope not widened
     expect(Object.isFrozen(captured!.documentIds)).toBe(true)
-    // The whole reach of a tool: documentIds + signal + audit (+ optional onProgress). No db/fs/net/sql.
+    // The whole reach of a tool: documentIds + the scope-bounded readDocumentChunks + signal + audit
+    // (+ optional onProgress). No db/fs/net/sql handle.
     const keys = Object.keys(captured!).sort()
-    expect(keys).toEqual(['audit', 'documentIds', 'signal'])
+    expect(keys).toEqual(['audit', 'documentIds', 'readDocumentChunks', 'signal'])
     for (const forbidden of ['db', 'fs', 'net', 'sql', 'fetch', 'exec']) {
       expect(keys).not.toContain(forbidden)
     }

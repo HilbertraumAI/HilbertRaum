@@ -251,6 +251,60 @@ CREATE TABLE IF NOT EXISTS skills (
   updated_at     TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_skills_id ON skills(id);   -- duplicate-id lookups across sources (the DS12 warning)
+
+-- Skill tool-run history (docs/skills-s11-plan.md §3.1 / skills-plan §8.2, S11a). One row PER
+-- app-orchestrated tool run (DS4), bracketed started → done|failed|cancelled. IDS/REFS ONLY —
+-- never document/chat content: document_ids_json is ids, result_ref is a bank_statements.id, and
+-- error is a friendly/technical reason. Excluded from every export (skills-plan §9.5). No FK INTO
+-- skills (same audit-C3 reasoning as conversations/messages — references cleared by app sweep, not
+-- a cascade), so a deleted skill never blocks or rewrites its run history.
+CREATE TABLE IF NOT EXISTS skill_runs (
+  id                TEXT PRIMARY KEY,
+  skill_install_id  TEXT NOT NULL,          -- skills.install_id ("<source>:<id>")
+  conversation_id   TEXT,                   -- nullable: a doc-action run may not be a chat
+  document_ids_json TEXT,                   -- ids only, never content
+  status            TEXT NOT NULL,          -- 'started' | 'done' | 'failed' | 'cancelled'
+  created_at        TEXT NOT NULL,
+  completed_at      TEXT,
+  result_ref        TEXT,                   -- e.g. a bank_statements.id; NEVER inline content
+  error             TEXT                    -- friendly/technical reason; NEVER document/chat text
+);
+CREATE INDEX IF NOT EXISTS idx_skill_runs_skill ON skill_runs(skill_install_id);
+
+-- Bank-statement data tables (docs/skills-s11-plan.md §3.2, S11a). CONTENT-CLASS: the extracted
+-- figures are user content, so they live ONLY here in the encrypted workspace DB (a workspace
+-- backup carries them — correct), are NEVER logged/audited (audit stays ids/counts), and are NEVER
+-- in the skill .skill.zip or conversation export. Distinct from the non-secret skill packages
+-- (DS20). S11a creates only what extract_transactions needs; categories/rules/corrections arrive
+-- additively with S11c (the tree_nodes-per-feature precedent — no overbuild, skills-plan §13).
+CREATE TABLE IF NOT EXISTS bank_statements (
+  id            TEXT PRIMARY KEY,
+  document_id   TEXT NOT NULL,              -- the source document (id only)
+  run_id        TEXT,                       -- the skill_runs.id that produced this extraction
+  period_start  TEXT,                       -- as printed, nullable
+  period_end    TEXT,
+  currency      TEXT,                       -- statement currency, nullable
+  created_at    TEXT NOT NULL,
+  FOREIGN KEY (document_id) REFERENCES documents(id)
+);
+CREATE INDEX IF NOT EXISTS idx_bank_statements_document ON bank_statements(document_id);
+
+CREATE TABLE IF NOT EXISTS bank_transactions (
+  id             TEXT PRIMARY KEY,
+  statement_id   TEXT NOT NULL,             -- references bank_statements.id
+  run_id         TEXT,
+  row_index      INTEGER NOT NULL,          -- stable order within the statement
+  date           TEXT NOT NULL,             -- content: booking date as printed (ISO)
+  value_date     TEXT,                      -- content
+  description    TEXT NOT NULL,             -- content
+  amount         REAL NOT NULL,             -- content: signed
+  currency       TEXT NOT NULL,
+  balance_after  REAL,                      -- content, nullable
+  source_page    INTEGER,                   -- provenance (1-based) for quoting
+  created_at     TEXT NOT NULL,
+  FOREIGN KEY (statement_id) REFERENCES bank_statements(id)
+);
+CREATE INDEX IF NOT EXISTS idx_bank_transactions_statement ON bank_transactions(statement_id);
 `
 
 // Additive column migrations on top of the spec §8 base schema. `CREATE TABLE IF NOT

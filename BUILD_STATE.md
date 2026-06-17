@@ -6,7 +6,30 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
-_Last updated: 2026-06-17 — **Skills — S6 composer-picker live eyeball CAPTURED (carry-forward
+_Last updated: 2026-06-17 — **Skills Phase S11a SHIPPED — `extract_transactions` + `skill_runs` +
+bank data tables behind the gate.** First Tier-2 *feature* slice (the plan doc
+[`docs/skills-s11-plan.md`](docs/skills-s11-plan.md) was authored + the scope cut RATIFIED by the owner
+first: ship `extract_transactions` only; defer `export_transactions_csv` to S11c; content-read =
+page-addressable chunks; runs are purely user-initiated). Adds to `SkillToolContext` the ONLY content
+reach a tool gets — `readDocumentChunks(documentId) → {text,page,index}[]`, scope-bounded to the frozen
+`documentIds` (out-of-scope id ⇒ `[]`; still no `Db`/SQL/FS/net handle). New
+[`tools/bank-statement.ts`](apps/desktop/src/main/services/skills/tools/bank-statement.ts) (deterministic
+offline parser — bank specifics OUT of the generic registry, §13) defines `extract_transactions`
+(read-only); it's listed in the static `REGISTRY` (gate unchanged). New
+[`services/skills/run.ts`](apps/desktop/src/main/services/skills/run.ts) `runBankExtraction` is the
+app-orchestrated seam (DS4, never model `tool_calls`): records a `skill_runs` lifecycle row (ids/refs
+only) → builds the narrow ctx → runs through `runSkillTool` → on success persists the **content-class**
+`bank_statements` + `bank_transactions` atomically (ROLLBACK ⇒ no partial rows). Additive DDL in
+`db.ts` (`skill_runs` per §8.2 + the two bank tables); content-class tables never logged/audited + NOT
+exported (§9.5). Bank skill **stays `kind: instruction`** (the flip + UI are S11b/S11c). 15 new tests
+(bank-statement-tool 9, skills-run 6 incl. the §22-M1 sentinel grep, migration, scope, cancel, export
+exclusion); the S10 registry test updated for the new tool + ctx key. Full suite **1563 passed / 25
+skipped**, typecheck + build clean. Docs: architecture.md (bank tools + run seam), security-model.md
+("Skill tool ceiling" S11a), `docs/skills-s11-plan.md` (the open working paper). SL log clean (no new
+`SL-#`). See the **"Skills — S11a handoff"** block below. Next: S11b (the user-action run trigger + the
+inline "Running: <tool>…" busy row + the write-confirm modal in the transcript)._
+
+_(prior) 2026-06-17 — **Skills — S6 composer-picker live eyeball CAPTURED (carry-forward
 closed).** The one open carry-forward from the Skills wave (every UI phase since S6 forwarded the
 chat-composer `SkillPicker` "live eyeball" as uncaptured, because the walk harness never brought up
 a running model) is now done. New committed walk
@@ -215,6 +238,55 @@ then revert the manifest), run, done; node_modules carries it uncommitted. The w
 build` first (it drives the BUILT bundle out/main, which vitest never exercises) and **strip
 `ELECTRON_RUN_AS_NODE`** from the child env (the VSCode host exports it). `docs/design-review/` also
 holds untracked `skills-s5/` PNGs from the S5 walk — unrelated to this chore, left as-is.
+
+### Skills — S11a handoff (2026-06-17)
+
+**Phase 0 (ratified before code):** authored [`docs/skills-s11-plan.md`](docs/skills-s11-plan.md) — the
+OPEN working-paper plan (folds into the §-records at S12). Owner ratification (AskUserQuestion):
+(1) first slice ships **`extract_transactions` only**; (2) **`export_transactions_csv` deferred to
+S11c**; (3) content-read = **page-addressable chunks**; (4) runs are **purely user-initiated** in v1.
+Sub-phases: **S11a** (tools behind the gate, no UI — this), **S11b** (run trigger + busy row +
+write-confirm modal), **S11c** (the other 4 tools + flip SKILL.md to `kind:'tool'` + reconcile body).
+
+**Contracts produced** (what S11b/S11c consume):
+- **`shared/types.ts`** — additive: `DocumentChunkRead = {text, page, index}` + a `readDocumentChunks(documentId)
+  → DocumentChunkRead[]` method on `SkillToolContext`. It is the WHOLE content reach a tool has:
+  scope-bounded to the frozen `documentIds` (out-of-scope id ⇒ `[]`), still **no `Db`/SQL/FS/net handle**.
+- **`db.ts`** — additive DDL (`IF NOT EXISTS`, no data migration): `skill_runs` (per §8.2 — ids/refs only:
+  `document_ids_json` ids, `status` started|done|failed|cancelled, `result_ref` a `bank_statements.id`,
+  `error` friendly/technical) + the **content-class** `bank_statements` + `bank_transactions` (real
+  figures — encrypted DB only, never logged/audited, NOT exported §9.5). Categories/rules/corrections are
+  additive at S11c (no overbuild, §13).
+- **`services/skills/tools/bank-statement.ts`** (new): `extractTransactionsTool` (read-only,
+  `read-selected-docs`) + the deterministic/offline parser (`parseDate`/`parseAmount`/`detectCurrency`/
+  `extractTransactionRows`, exported for unit tests). Drops ambiguous rows / never invents currency
+  (§22-D1 honesty). Bank logic kept OUT of the generic registry (§13).
+- **`tool-registry.ts`**: `REGISTRY` now lists `count_selected_documents` + `extract_transactions`; the
+  gate itself is **unchanged**.
+- **`services/skills/run.ts`** (new): `runBankExtraction(db, {skillInstallId, conversationId?, documentId},
+  {audit, signal?, onProgress?, now?}) → {ok, runId, statementId?, transactionCount?, error?}` — the exact
+  app-orchestrated seam S11b's IPC/UI will call. Builds the narrow ctx (incl. the `readDocumentChunks`
+  closure over a per-doc chunk SELECT), runs through the gate, persists atomically.
+
+**Decisions taken or changed:**
+- **The gate audits the TOOL run; the seam owns the `skill_runs` TABLE + bank data.** Two distinct sinks:
+  `runSkillTool` brackets the run on the ids/counts-only AUDIT sink; `run.ts` writes the run-history row
+  + content tables. Both stay content-free except the bank tables (content-class by design).
+- **Currency is required per row; a row with no detectable currency is DROPPED, not invented** (honesty).
+  A statement with no ISO code/symbol yields zero rows — acceptable for the deterministic v1 extractor
+  (parse quality is a known limitation that improves later, not an ML claim).
+- **No-partial-persist via `BEGIN…COMMIT`/ROLLBACK** (the `node-vectors.ts`/`tree-build.ts` precedent):
+  the `started` row is committed first; bank rows + the `done` update are one transaction; a write error
+  ROLLBACKs and the run is marked `failed` with a friendly error.
+
+**Open landmines:** none. SL log clean (no new `SL-#`). The bank skill stays `kind: instruction` — the
+flip to `kind:'tool'` (which makes `allowedTools` effective via the SL-1 parser path) + the reconcile
+body + the drawer/permission-line update are an explicit **S11c** sub-phase.
+
+**What S11b consumes:** the `run.ts` seam (wrap it in IPC — `requireUnlocked`, log nothing: the
+question/scope is content) + the `skill_runs`/bank tables for a results view; add the inline calm
+"Running: <tool> on <N> documents… (Cancel)" busy row (doc-task busy-row precedent) + the write/export
+confirm modal (model-download/lock-now precedent), EN/DE. The run is triggered from a USER action (DS4).
 
 ### Skills — S10 handoff (2026-06-17)
 

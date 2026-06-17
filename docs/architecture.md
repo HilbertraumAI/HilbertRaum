@@ -147,11 +147,25 @@ tool cannot widen the selected scope; (5) **validate output** against `outputSch
 **fails the run** so no half-trusted output reaches the model; (6) bracket the run with ids/counts-only
 audit (`skill_run_started`/`done`/`failed`, carrying `{skillId, toolName, documentCount}` only).
 Surfaced errors are friendly and content-free; technical reasons go to the local log; the gate persists
-nothing. The shipped registry holds **one harmless, read-only reference tool** (`count_selected_documents`,
-needs only `read-selected-docs`, no side effects) to prove the gate end-to-end — **no bank-statement
-tools, no `skill_runs` table, no data tables** (those land in S11). The `SkillToolContext` ceiling
-(narrow read scope, no fs/net/sql handle, confirm-for-writes) is detailed in
+nothing. The registry holds the harmless read-only reference tool (`count_selected_documents`) plus, from
+S11a, the first real bank tool (`extract_transactions`). The `SkillToolContext` ceiling (narrow read
+scope, no fs/net/sql handle, confirm-for-writes) is detailed in
 [`security-model.md`](security-model.md) "Skill tool ceiling (Tier-2)".
+
+**Bank-statement tools + the run seam (Skills plan §13 / S11 — `docs/skills-s11-plan.md`).** S11a wires
+the first Tier-2 *feature*: `extract_transactions` (read-only) reads a selected statement's
+page-addressable chunks through the **only content reach a tool has** — `SkillToolContext.readDocumentChunks`,
+a scope-bounded per-document chunk read (`{text, page, index}`, refusing any id outside the frozen scope;
+still no `Db`/SQL/FS/net handle). The bank specifics live in `services/skills/tools/bank-statement.ts`
+(a deterministic, offline line parser — bank logic stays out of the generic registry, §13). The
+**app-orchestrated run seam** `services/skills/run.ts` (`runBankExtraction`) is what a user action triggers
+(DS4 — never model `tool_calls`): it records a `skill_runs` lifecycle row (ids/refs only), builds the
+narrow context, runs the tool through the gate, and on success persists the extracted rows to the
+**content-class** `bank_statements` + `bank_transactions` tables atomically (a failed write ROLLBACKs — no
+partial rows). Those data tables hold real figures, so they live only in the encrypted workspace DB, are
+never logged/audited (audit stays ids/counts), and are excluded from every export (§9.5) — distinct from
+the non-secret skill packages. The remaining four bank tools + the chat/UI busy-row + write-confirm modal
+are S11b/S11c (the bank skill stays `kind: instruction` until the full set is wired).
 
 ## Models & runtime (Phase 2)
 - **Manifests** are local YAML under `model-manifests/` (committed; weights are not). The schema +

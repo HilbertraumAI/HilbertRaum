@@ -494,7 +494,7 @@ already accepted for the engine binary and the on-drive sidecars** — documente
 still only injected reference text behind the prompt-injection guard — it cannot run code, reach the
 network, read other files, or widen document scope (the structural ceilings, §14).
 
-## Skill tool ceiling (Tier-2) — the SkillToolContext + validate→run→validate gate (skills plan §12/§14, Phase S10, 2026-06-17)
+## Skill tool ceiling (Tier-2) — the SkillToolContext + validate→run→validate gate (skills plan §12/§14, Phases S10–S11a, 2026-06-17)
 
 Tier-2 is where a skill can finally *do* something beyond inject text — so S10 builds the **gate
 before the tools**. A skill still cannot register a tool: tools live only in the app's static
@@ -529,11 +529,29 @@ expose:
   documentCount}` only — never inputs, outputs, member names, or document/chat content (§22-M1, proven
   by a sentinel-grep test pushing a secret string through a successful run).
 
-S10 ships exactly **one harmless reference tool** (`count_selected_documents` — pure, offline,
-read-only over the frozen scope) to prove the gate. **No bank-statement tools and no `skill_runs`
-table exist yet** — those land with S11, where a real tool lifecycle gives the run table something to
-record. S11 will also add a narrow, scope-bounded content-read method to the context (still no raw
-`Db`/FS/net); S10 exposes only the id scope.
+S10 shipped the gate with **one harmless reference tool** (`count_selected_documents`). **S11a** adds
+the first real tool, the content reach it needs, and the run/data tables — without widening the ceiling:
+
+- **The only content reach is `readDocumentChunks`.** S11a adds one scope-bounded method to
+  `SkillToolContext`: `readDocumentChunks(documentId) → {text, page, index}[]`, the page-addressable
+  chunks of a document **in the frozen scope** (an out-of-scope id returns `[]`). It is supplied by the
+  app's run seam as a closure over a narrow per-document SELECT — still **no raw `Db`/SQL/FS/net
+  handle**. `extract_transactions` (read-only) is the first consumer; the bank parsing lives in
+  `services/skills/tools/bank-statement.ts`, kept out of the generic registry (§13).
+- **Run history + bank data are content-class and never leave the encrypted DB.** The `skill_runs`
+  table records the app-orchestrated run lifecycle with **ids/refs only** (`document_ids_json` is ids,
+  `result_ref` is a `bank_statements.id`, `error` is a friendly/technical reason — never content). The
+  extracted figures land in `bank_statements` + `bank_transactions`, which are **content-class**: they
+  live only in the encrypted workspace DB, are never logged/audited (audit stays ids/counts — the
+  sentinel-grep test proves a secret in a transaction description never reaches audit/log/`skill_runs`),
+  and are **excluded from every export** (§9.5). This is distinct from the non-secret skill packages
+  (DS20): a transaction row is as sensitive as a document; the SKILL.md is not.
+- **App-orchestrated, no-partial-persist.** `services/skills/run.ts` (`runBankExtraction`) is triggered
+  by a user action (DS4 — never model `tool_calls`); persistence is atomic (`BEGIN…COMMIT`, ROLLBACK on
+  any write error) so a failed run leaves no partial rows.
+
+The remaining four bank tools (incl. the confirm-gated `export_transactions_csv`) and the chat/UI are
+S11b/S11c; the ceiling above does not change for them.
 
 ## Unverified-binary env overrides are dev-only (audit M-5, 2026-06-13)
 
