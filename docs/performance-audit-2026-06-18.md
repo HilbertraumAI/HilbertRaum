@@ -9,6 +9,13 @@
 > seeks) and main-thread CPU are the scarce resources, so write-amplification, full
 > scans, synchronous main-process work, and prompt-prefill cost dominate.
 
+> **STATUS — Wave P1 IMPLEMENTED (2026-06-18, branch `performance-tuning`).** All six Wave P1
+> items below are shipped and verified (suite green, typecheck + build clean): **DB-1**, **DB-2**,
+> **DB-4/DB-6/DB-7** (run_id indexes deliberately omitted — see DB-7), **RAG-2/ING-1**,
+> **DB-3/ING-2**, **RT-1**. Lasting decisions are folded into `docs/architecture.md` "Performance —
+> design record (perf audit 2026-06-18, Wave P1)"; this report is retained as the findings record.
+> Waves P2–P4 remain open (§6). Implemented findings are tagged **✅ IMPLEMENTED** inline.
+
 ---
 
 ## 1. Method
@@ -97,25 +104,25 @@ work) that cause visible jank on CPU-only hardware.
 
 ### 4.1 Storage / SQLite
 
-#### DB-1 — Ingestion chunk + embedding inserts are not wrapped in a transaction · **Critical**
+#### DB-1 — Ingestion chunk + embedding inserts are not wrapped in a transaction · **Critical** · ✅ IMPLEMENTED
 - **Location:** `apps/desktop/src/main/services/ingestion/index.ts:688-706` (chunk inserts), `:780-788` (embedding inserts), DELETEs at `:654-657`.
 - **Evidence:** Hoisted `db.prepare(...)` then a bare `for … insert.run(...)` loop — no `BEGIN`/`COMMIT`. With WAL + default `synchronous=FULL`, each `run()` is its own auto-commit (WAL frame + fsync), and each chunk also fires the `chunks_fts_ai` FTS trigger (`db.ts:423`) inside that same commit.
 - **Impact:** Up to `MAX_CHUNKS_PER_DOCUMENT = 1000` chunk inserts + 1000 embedding inserts + 1000 FTS trigger writes ⇒ **~3000 individually fsync'd transactions per document**. On USB (fsync 5–20 ms) that is seconds-to-tens-of-seconds of pure commit overhead per file, dwarfing embed compute. This is the single biggest portable-drive win.
 - **Fix:** Wrap the delete-then-insert chunk phase and the embedding-insert phase each in `db.exec('BEGIN')` … `COMMIT` (`ROLLBACK` on throw) — the exact pattern in `tree-build.ts:148-164`. Keep the async `embed` `await` *outside* the transaction (the `node-vectors.ts:156` precedent). Collapses ~3000 commits → ~2.
 
-#### DB-2 — Missing performance PRAGMAs for a high-latency portable drive · **High**
+#### DB-2 — Missing performance PRAGMAs for a high-latency portable drive · **High** · ✅ IMPLEMENTED
 - **Location:** `apps/desktop/src/main/services/db.ts:512-516` (`openDatabase`).
 - **Evidence:** Only `journal_mode=WAL` and `foreign_keys=ON` are set. No `synchronous`, `busy_timeout`, `cache_size`, `mmap_size`, or `temp_store`.
 - **Impact:** Default `synchronous=FULL` fsyncs at every commit (compounds DB-1). No `busy_timeout` ⇒ the concurrent import loop vs chat/tree-build risks `SQLITE_BUSY` throws instead of a short wait. No `mmap_size` ⇒ the vector scan (RAG-1) goes through read syscalls instead of mapped pages.
 - **Fix:** After WAL, add: `PRAGMA synchronous = NORMAL;` (WAL-safe durability), `PRAGMA busy_timeout = 5000;`, `PRAGMA mmap_size = 268435456;` (256 MB), `PRAGMA cache_size = -16000;` (~16 MB), `PRAGMA temp_store = MEMORY;`. One-line, low-risk, directly targets the USB latency.
 
-#### DB-3 — `listDocuments` is 1+2N queries (chunk count + stale-check per row) · **High** ⊕
+#### DB-3 — `listDocuments` is 1+2N queries (chunk count + stale-check per row) · **High** ⊕ · ✅ IMPLEMENTED
 - **Location:** `apps/desktop/src/main/services/ingestion/index.ts:1142-1173`; helpers `chunkCountFor:398-403`, `chunksEmbeddedUnder:381-389`. (Corroborated by ingestion persona as ING-2.)
 - **Evidence:** Inside `rows.map(...)`, `chunkCountFor` runs `SELECT COUNT(*) FROM chunks WHERE document_id=?` per row, and `chunksEmbeddedUnder` runs a COUNT+JOIN per *indexed* row — while memberships three lines above (`:1148-1164`) were deliberately batched into one join.
 - **Impact:** Listing N docs fires up to **2N+1** queries; the list is polled during import. 200 docs ⇒ ~400 round-trips, the stale check hitting the unindexed `embedding_model_id` (compounds DB-4). Visible lag opening the Documents pane on USB.
 - **Fix:** Two grouped queries into `Map`s: `SELECT document_id, COUNT(*) FROM chunks GROUP BY document_id` and the embeddings JOIN `GROUP BY document_id` — mirroring the memberships pattern already present.
 
-#### DB-4 — No index on `embeddings.embedding_model_id` · **Medium** ⊕
+#### DB-4 — No index on `embeddings.embedding_model_id` · **Medium** ⊕ · ✅ IMPLEMENTED
 - **Location:** schema `db.ts:75-82` (only `chunk_id PRIMARY KEY`); query `embeddings/index.ts:163-184`. (Corroborated by RAG persona as RAG-4.)
 - **Evidence:** Every retrieval and stale-check filters `WHERE embedding_model_id = ?` with no supporting index.
 - **Impact:** Forces a full table scan / row-by-row filter; worst during/after a mock→E5 migration when stale rows are loaded across the SQL→JS boundary only to be discarded. Also slows the DB-3 stale check and the `hybrid.ts:81` keyword join.
@@ -127,16 +134,17 @@ work) that cause visible jank on CPU-only hardware.
 - **Impact:** Extra parse/plan CPU on the main thread per turn / per row; compounds DB-3.
 - **Fix:** Cache hot-path statements (module-level `WeakMap<Db, Stmt>` or a small per-Db cache). Prioritize `listMessages`, `appendMessage`, `resolveScope`, the DB-3 counters.
 
-#### DB-6 — `extraction_records` aggregation lacks an index for the unscoped path · **Medium**
+#### DB-6 — `extraction_records` aggregation lacks an index for the unscoped path · **Medium** · ✅ IMPLEMENTED
 - **Location:** `apps/desktop/src/main/services/analysis/extract.ts:305-345` (`aggregateExtractions`); only index is `idx_extract_doc_type(document_id, record_type, normalized_value)` (`db.ts:221`).
 - **Evidence:** Whole-corpus listings filter on `record_type` (and `record_type, normalized_value`) *without* a leading `document_id`, so the doc-leading index can't serve them ⇒ up to 4 scans of `extraction_records` per listing.
 - **Impact:** `extraction_records` (one `__scan__` marker per chunk + N items/chunk) is among the largest tables; an unscoped "list every date/amount" does multiple full scans synchronously on the answer path.
 - **Fix:** `CREATE INDEX idx_extract_type_nv ON extraction_records(record_type, normalized_value)` (the doc-leading index still serves scoped queries).
 
-#### DB-7 — FK / filter columns without supporting indexes · **Medium**
+#### DB-7 — FK / filter columns without supporting indexes · **Medium** · ✅ IMPLEMENTED (status + category_id; run_id omitted)
 - **Location:** `db.ts` — `documents.status` (filtered in `listDocuments:1144`, `rag/index.ts:144`, `extract.ts:353`), `bank_transactions.category_id` (`:562`), `*.run_id` (bank/invoice). SQLite does not auto-index FK child columns.
 - **Impact:** `documents.status` is scanned on every list + re-index honesty check; `category_id`/`run_id` joins scale with transaction volume. Cheap scans today, cheaper to remove.
 - **Fix:** `idx_documents_status(status)`, `idx_bank_transactions_category(category_id)`, and `run_id` indexes where downstream tools join.
+- **As implemented (2026-06-18):** `idx_documents_status` + `idx_bank_transactions_category` added. The `run_id` indexes were **deliberately omitted** — a code sweep confirmed `run_id` is only ever INSERTed (bank/invoice run tools), never joined or filtered, so an index would be pure write-amplification on USB with no read benefit. Documented inline in `db.ts`; add one alongside the first query that joins on `run_id`.
 
 #### DB-8 — `SELECT *` on wide rows that include large TEXT columns · **Low**
 - **Location:** `ingestion/index.ts:392` (`getRow`), `:1143-1145`, `collections.ts:62-72`, `chat.ts:356-363`.
@@ -154,7 +162,7 @@ work) that cause visible jank on CPU-only hardware.
 - **Impact:** Per query: `O(N_chunks × dims)` cosine + `O(N_chunks)` blob copies + sort. At the 1000-chunk cap, ~100 docs ⇒ ~100k vectors (~150 MB) read + scanned **on every question**, blocking all other IPC (token relays, UI). Documented MVP deferral (rag-design §12.2 D15) — but the blocking + constant factors are addressable now.
 - **Fix (cheap, now):** Vectors are stored **L2-normalized** (`e5.ts:213`; mock too), so cosine == raw **dot product** — drop the `na`/`nb` norm computation (`:86-91`) for ~2× fewer FLOPs/row. Add `mmap_size` (DB-2) so blob reads hit page cache. **Fix (with D15):** move the scan off the main thread (worker) and/or adopt sqlite-vec; keep decoded vectors resident in one contiguous `Float32Array` to kill the per-query re-decode (RAG-6).
 
-#### RAG-2 — Compare mode-(b) re-scans + re-decodes all of doc-B once per A-chunk · **High** ⊕
+#### RAG-2 — Compare mode-(b) re-scans + re-decodes all of doc-B once per A-chunk · **High** ⊕ · ✅ IMPLEMENTED
 - **Location:** `apps/desktop/src/main/services/doctasks/manager.ts:1145-1163` (loop), body in `embeddings/index.ts:157-197`. (Corroborated by ingestion persona as ING-1.)
 - **Evidence:** For each A-chunk, `index.search(vec, …)` re-runs `SELECT … FROM embeddings WHERE chunk_id IN (… doc B …)` and **re-decodes every doc-B vector** to cosine against one A-vector.
 - **Impact:** `O(N_A × N_B × dims)` with doc-B's BLOBs re-fetched and re-decoded `N_A` times. Two ~300-chunk docs ⇒ ~90k cosines but ~27M redundant decode ops + repeated SQLite reads, all on the main loop. The mode-(c) `alignNodes` path (`compare.ts:349`) already does this correctly (decode once, reuse).
@@ -296,7 +304,7 @@ work) that cause visible jank on CPU-only hardware.
 
 ### 4.5 LLM runtime / sidecar / startup
 
-#### RT-1 — Chat sidecar never sets `--batch-size`/`--ubatch-size`; default 512 throttles prefill · **High**
+#### RT-1 — Chat sidecar never sets `--batch-size`/`--ubatch-size`; default 512 throttles prefill · **High** · ✅ IMPLEMENTED
 - **Location:** `runtime/sidecar.ts:235-250` (`buildArgs`), `runtime/llama.ts:30` (`CHAT_SERVER_ARGS = --jinja --reasoning-format deepseek`).
 - **Evidence:** Chat passes only `--host --port --model --ctx-size --threads` + the two jinja args. No batch flags ⇒ llama-server's 512 default. The reranker (`reranker/llama.ts:96-115`) *deliberately* raises `--batch-size`/`--ubatch-size` to ctx size precisely because 512 throttles its inputs.
 - **Impact:** Prompt prefill (skill fence + RAG excerpts + history) — the dominant time-to-first-token cost, measured 3.5–15 s on CPU in Skills §17 — is processed in 512-token chunks; on GPU a larger ubatch materially improves prompt-processing throughput.
@@ -371,13 +379,15 @@ work) that cause visible jank on CPU-only hardware.
 
 ## 6. Recommended remediation roadmap
 
-**Wave P1 — high ROI, low risk (do first; mostly one-file changes):**
-1. **DB-1** — wrap ingestion chunk + embedding inserts in transactions (`ingestion/index.ts`). *Biggest USB import win.*
-2. **DB-2** — add `synchronous=NORMAL`, `busy_timeout`, `mmap_size`, `cache_size`, `temp_store` PRAGMAs (`db.ts`).
-3. **DB-4** — `idx_embeddings_model` (+ DB-6/DB-7 indexes while in `db.ts`).
-4. **RAG-2 / ING-1** — decode doc-B vectors once in compare mode-(b) (`doctasks/manager.ts`).
-5. **DB-3 / ING-2** — de-N+1 `listDocuments` into grouped queries (`ingestion/index.ts`).
-6. **RT-1** — set chat `--batch-size`/`--ubatch-size` (`runtime/sidecar.ts`) + arg test.
+**Wave P1 — high ROI, low risk — ✅ DONE (2026-06-18, branch `performance-tuning`):**
+1. ✅ **DB-1** — wrap ingestion chunk + embedding inserts in transactions (`ingestion/index.ts`). *Biggest USB import win.*
+2. ✅ **DB-2** — add `synchronous=NORMAL`, `busy_timeout`, `mmap_size`, `cache_size`, `temp_store` PRAGMAs (`db.ts`).
+3. ✅ **DB-4** — `idx_embeddings_model` (+ DB-6/DB-7 indexes while in `db.ts`; `run_id` indexes omitted — no join site).
+4. ✅ **RAG-2 / ING-1** — decode doc-B vectors once in compare mode-(b) (`doctasks/manager.ts`).
+5. ✅ **DB-3 / ING-2** — de-N+1 `listDocuments` into grouped queries (`ingestion/index.ts`).
+6. ✅ **RT-1** — set chat `--batch-size`/`--ubatch-size` (`runtime/sidecar.ts`) + arg test.
+
+Decisions folded into `docs/architecture.md` "Performance — design record (perf audit 2026-06-18, Wave P1)".
 
 **Wave P2 — renderer responsiveness (CPU-only hardware):**
 7. **FE-1** — memoize `MessageBlock`; render live `streamText` as plain text until completion.

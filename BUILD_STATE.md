@@ -6,7 +6,42 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
-_Last updated: 2026-06-17 — **Skills Phase S13c SHIPPED — surprise-mitigation UX; S13 (auto-fire) is
+_Last updated: 2026-06-18 — **Performance audit Wave P1 SHIPPED (branch `performance-tuning`).** Six
+high-ROI, low-risk, constant-factor/batching wins from `docs/performance-audit-2026-06-18.md` §6,
+targeting the two hottest user operations (import a document, ask a question) on the CPU-only USB
+target — no behavior change. **Shipped (one commit per finding):** (1) **DB-1 (Critical)** —
+`processDocument` was the lone batch writer not wrapping its inserts; the delete-then-insert chunk
+phase and the embedding-insert phase are each now one `BEGIN…COMMIT` (`ROLLBACK` on throw,
+`tree-build.ts` pattern), the async `embedder.embed()` await kept OUTSIDE the txn (`node-vectors.ts`
+precedent). Collapses ~3000 fsync'd auto-commits/doc (1000 chunks ×(insert+FTS trigger) + 1000
+embeddings) → 2. (2) **DB-2 (High)** — after WAL, `openDatabase` now sets `synchronous=NORMAL`,
+`busy_timeout=5000`, `mmap_size=268435456`, `cache_size=-16000`, `temp_store=MEMORY`. (3) **DB-4/6/7
+(Medium)** — additive `CREATE INDEX IF NOT EXISTS` (after `ensureColumn`): `idx_embeddings_model`,
+`idx_extract_type_nv(record_type, normalized_value)`, `idx_documents_status`,
+`idx_bank_transactions_category`; **`run_id` indexes deliberately OMITTED** — `run_id` is only ever
+INSERTed, never joined/filtered (would be pure USB write-amplification). (4) **RAG-2/ING-1 (High)** —
+compare mode-(b) now decodes doc-B's `(id,text,chunk_index,vector)` ONCE into a resident array and
+cosines in memory (local `nearestB()` reproducing `VectorIndex.search` ranking) instead of
+re-`search`ing + re-decoding all of doc-B per A-chunk and re-fetching B's text per window; mirrors
+`alignNodes` (`compare.ts`). (5) **DB-3/ING-2 (High)** — `listDocuments` per-row COUNT +
+per-indexed-row COUNT+JOIN (1+2N queries, polled at 400 ms during import) → two `GROUP BY document_id`
+queries into Maps (mirrors the memberships join beside it); removed the now-unused `chunksEmbeddedUnder`
+helper. (6) **RT-1 (High)** — chat sidecar left `--batch-size`/`--ubatch-size` at llama-server's 512
+default, throttling prompt prefill (the dominant TTFT cost, 3.5–15 s CPU per Skills §17); new opt-in
+`LlamaServerOptions.physicalBatchSize` (emitted by `buildArgs`) set by the chat runtime to
+`min(contextTokens, CHAT_MAX_PHYSICAL_BATCH=2048)` — embedder/reranker untouched (they set their own
+batch via `extraArgs`); new `llama-runtime.test.ts` arg assertion mirrors the reranker test. **New /
+changed data contracts:** PRAGMA `synchronous=NORMAL` (WAL-safe durability change — only the last txn
+is at risk on OS/power loss, never corruption) + the four other PRAGMAs; four new indexes; ingestion
+writes are now atomic per phase; new sidecar arg `physicalBatchSize` ⇒ chat spawns with
+`--batch-size`/`--ubatch-size`. **Docs:** lasting decisions folded into `docs/architecture.md`
+"Performance — design record (perf audit 2026-06-18, Wave P1)"; the audit report is RETAINED (findings
+record) with each P1 finding tagged **✅ IMPLEMENTED** and §6 Wave P1 checked off. **Verification:** full
+suite **1757 passed / 25 skipped** (+1, the RT-1 arg test), typecheck + build clean. **NEXT ACTION:**
+Wave P2 (renderer responsiveness — FE-1/FE-2/FE-7/FE-3-5) when picked up; Waves P3/P4 tracked in the
+audit §6._
+
+_(prior) 2026-06-17 — **Skills Phase S13c SHIPPED — surprise-mitigation UX; S13 (auto-fire) is
 now FULLY CLOSED.** The S13b mechanics are now reachable by a user, behind the two ratified D3/D4
 surfaces, both EN/DE. **Shipped:** (1) **The opt-in toggle (D4):** a Switch in **Settings → Skills**
 ([`SkillsTab.tsx`](apps/desktop/src/renderer/screens/settings/SkillsTab.tsx)) reads/writes the existing

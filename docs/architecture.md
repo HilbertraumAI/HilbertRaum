@@ -73,6 +73,61 @@ the bank-statement tools, and the run UI are consolidated in the **"Skills — d
 S2–S12)"** below (security model in [`security-model.md`](security-model.md), layout in
 [`drive-layout.md`](drive-layout.md)).
 
+## Performance — design record (perf audit 2026-06-18, Wave P1)
+Condensed from `docs/performance-audit-2026-06-18.md` after Wave P1 shipped (doc-lifecycle rule;
+the full findings report stays as the audit record). Target that shapes every choice: HilbertRaum
+runs **fully offline from a high-latency portable USB drive** on **commodity/CPU-only laptops**, so
+fsync/seek I/O and main-thread CPU are the scarce resources. The wins below are constant-factor /
+batching — no behavior change.
+
+**Storage write path (`services/db.ts`, `services/ingestion/index.ts`).**
+- **DB-1 — ingestion writes are transactional.** `processDocument` was the lone batch writer not
+  wrapping its inserts (every other — `tree-build`, `extract`, `node-vectors`, bank/invoice — does).
+  With WAL each bare `insert.run()` is its own fsync'd auto-commit, and each chunk insert also fires
+  the `chunks_fts_ai` FTS trigger inside that commit: up to ~3000 fsync'd commits per document. The
+  delete-then-insert chunk phase and the embedding-insert phase are each now one `BEGIN…COMMIT`
+  (`ROLLBACK` on throw, the `tree-build.ts` pattern). The async `embedder.embed()` await stays
+  **outside** the transaction (only synchronous inserts go inside — the `node-vectors.ts` precedent).
+- **DB-2 — portable-drive PRAGMAs.** After `journal_mode=WAL` + `foreign_keys=ON`, `openDatabase` now
+  also sets `synchronous=NORMAL` (WAL-safe durability, far fewer fsyncs), `busy_timeout=5000` (the
+  concurrent import-vs-chat path waits instead of throwing `SQLITE_BUSY`), `mmap_size=268435456`
+  (256 MB — the vector scan reads BLOBs via mapped pages), `cache_size=-16000` (~16 MB page cache),
+  `temp_store=MEMORY`. **These are a data-contract / durability change** (NORMAL is the WAL-recommended
+  setting; only the last txn is at risk on OS/power loss, never corruption).
+- **DB-4/6/7 — additive indexes** (created `CREATE INDEX IF NOT EXISTS` after `ensureColumn`, so the
+  migrated `category_id` column exists): `idx_embeddings_model` on `embeddings(embedding_model_id)`
+  (every retrieval + stale-check filters it); `idx_extract_type_nv` on
+  `extraction_records(record_type, normalized_value)` (the unscoped "list every date/amount" path the
+  doc-leading `idx_extract_doc_type` can't serve); `idx_documents_status` on `documents(status)`;
+  `idx_bank_transactions_category` on `bank_transactions(category_id)`. **`run_id` indexes deliberately
+  omitted** — `run_id` is only ever INSERTed, never joined/filtered, so an index would be pure
+  write-amplification on USB; add one alongside the first query that joins on it.
+- **DB-3/ING-2 — `listDocuments` de-N+1'd.** The per-row chunk COUNT + per-indexed-row stale-embeddings
+  COUNT+JOIN (up to 1+2N queries, polled at 400 ms during import) are now two grouped queries loaded
+  into Maps (`GROUP BY document_id`), mirroring the memberships join beside them. Benefits from
+  `idx_embeddings_model`.
+
+**Compare retrieval (`services/doctasks/manager.ts`).**
+- **RAG-2/ING-1 — decode doc-B once.** Section-matched compare (mode b) ran `VectorIndex.search` per
+  doc-A chunk, re-issuing the doc-B embeddings query and re-decoding every doc-B vector each time
+  (O(N_A × N_B) redundant decodes + N_A re-scans), then re-fetched doc-B's text per window. Doc-B's
+  `(id, text, chunk_index, vector)` is now loaded **once** into a resident array; cosine runs in memory
+  via a local `nearestB()` reproducing the search ranking. Mirrors the `alignNodes` precedent
+  (`doctasks/compare.ts`).
+
+**Chat runtime (`services/runtime/`).**
+- **RT-1 — chat prefill batch.** The chat sidecar left `--batch-size`/`--ubatch-size` at llama-server's
+  512 default, chunking prompt prefill (skill fence + RAG excerpts + history) — the dominant
+  time-to-first-token cost (3.5–15 s on CPU, Skills §17). `LlamaServerOptions.physicalBatchSize` (opt-in,
+  emitted by `buildArgs`) is set by the chat runtime to `min(contextTokens, CHAT_MAX_PHYSICAL_BATCH=2048)`;
+  the embedder/reranker don't set it (they tune their own batch via `extraArgs`, the reranker precedent
+  at `reranker/llama.ts`). Capping at the context never over-allocates — the whole prompt can't exceed
+  `n_ctx`.
+
+Deferred to later waves (tracked in the audit §6): renderer memoization/windowing (FE-*, Wave P2),
+the import & OCR pipelines (ING-3/5, Wave P3), `cache_prompt` grounding split (RT-2), and the
+main-thread linear vector scan / ANN index (RAG-1/RAG-6, Wave P4 — the documented D15 deferral).
+
 ## Models & runtime (Phase 2)
 - **Manifests** are local YAML under `model-manifests/` (committed; weights are not). The schema +
   validator live in `src/shared/manifest.ts` so renderer and main share one definition. YAML is
