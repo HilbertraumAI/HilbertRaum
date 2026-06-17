@@ -590,6 +590,21 @@ confidence`) are **content-class**: encrypted DB only, never logged/audited, nev
   retargets to `resolveEffectiveTools(allowedTools ∩ registry ∩ grant)`. The skill still **cannot register
   or self-grant** a tool — the registry is app-owned and the effective set only ever shrinks.
 
+**The invoice domain — a SECOND Tier-2 content class behind the SAME ceiling.** The bundled `invoice`
+skill (`kind:'tool'`) registers three tools (`extract_invoice` read-only, `validate_invoice_totals`
+read-only, `export_invoice_csv` confirm-gated) that mirror the bank tools exactly. The ceiling is
+unchanged: the tools are pure main-side TS (no `Db`/SQL/FS/net handle), the extractor's only content reach
+is `readDocumentChunks` over the frozen scope, the downstream tools take the already-extracted invoice as
+**structured input** (no new `SkillToolContext` accessor), persistence is atomic in the
+`invoice-run.ts` seam (ROLLBACK ⇒ no partial rows), and the CSV export is the same user-chosen,
+formula-injection-neutralized FS-write boundary (the neutralization is now the **shared** `csvField` in
+`tools/money.ts`, used by both domains). The new content-class tables `invoices` + `invoice_line_items`
+hold the real figures (vendor, line items, totals): **encrypted DB only, never logged/audited, never
+exported** (§9.5) — `skill_runs.result_ref` points at an `invoices.id`, never inline content. The
+consolidated `skills-privacy-guard.test.ts` drives one secret through the invoice extract→validate→export
+pipeline + a console spy and proves it lands ONLY in the `invoice_*` tables and the user-chosen CSV, never
+in the audit/log/console/`skill_runs` row.
+
 **S12 — the closing multi-persona audit of the whole skills surface (2026-06-17).** The repo's audit
 ritual ran end to end against the untrusted-skill-as-input threat principle (§14): import (zip-slip /
 symlink / zip-bomb / nested-archive / magic-byte), prompt-injection containment (the fenced data turn,

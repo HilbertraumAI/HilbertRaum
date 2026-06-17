@@ -12,6 +12,7 @@ import {
   runCategorization,
   runCsvExport
 } from './run'
+import { runInvoiceCsvExport, runInvoiceExtraction, runInvoiceTotalsValidation } from './invoice-run'
 import type { ToolRunner } from './run-controller'
 
 // The app-orchestrated tool-run DISPATCH (skills plan §6/§12.2, Phase S11b). This is the ONE place
@@ -21,8 +22,10 @@ import type { ToolRunner } from './run-controller'
 //
 // S11c wires all five bank tools: extract/validate/categorize/summarize (read-only, no confirm) +
 // export_transactions_csv (confirm-gated `export-file` — the SkillRunBar modal already gates it; the
-// MAIN-side save is supplied here as an opaque `saveTextFile`). The channel/controller/renderer are
-// unchanged — bank specifics stay in this dispatch + the `run.ts` seam (§13).
+// MAIN-side save is supplied here as an opaque `saveTextFile`). The INVOICE domain adds three more of
+// the same shape (extract/validate read-only + export_invoice_csv confirm-gated) behind the
+// `invoice-run.ts` seam. The channel/controller/renderer are unchanged — the per-domain specifics
+// stay in this dispatch + the `run.ts`/`invoice-run.ts` seams (§13).
 
 /** The tools whose run seam is wired (each has a `buildToolRunner` case below). */
 const WIRED_TOOL_NAMES: readonly string[] = [
@@ -30,7 +33,11 @@ const WIRED_TOOL_NAMES: readonly string[] = [
   'validate_statement_balances',
   'categorize_transactions',
   'summarize_cashflow',
-  'export_transactions_csv'
+  'export_transactions_csv',
+  // Invoice — the SECOND Tier-2 domain (same gate, same dispatch shape; the invoice-run.ts seam).
+  'extract_invoice',
+  'validate_invoice_totals',
+  'export_invoice_csv'
 ]
 
 /** Canonical English audit messages for the ids/counts-only run events (the recorder needs one). */
@@ -173,6 +180,41 @@ export function buildToolRunner(
       if (!deps.saveTextFile) return null // cannot export without the MAIN-side save capability
       return async ({ signal, onProgress }) => {
         const res = await runCsvExport(db, seamArgs, {
+          audit,
+          signal,
+          onProgress,
+          confirmed: args.confirmed,
+          saveTextFile: deps.saveTextFile!
+        })
+        return { ok: res.ok, transactionCount: res.count, cancelled: res.cancelled, errorCode: res.errorCode, error: res.error }
+      }
+    case 'extract_invoice':
+      return async ({ signal, onProgress }) => {
+        const res = await runInvoiceExtraction(db, seamArgs, { audit, signal, onProgress })
+        return {
+          ok: res.ok,
+          transactionCount: res.lineItemCount,
+          cancelled: res.cancelled,
+          errorCode: res.errorCode,
+          error: res.error
+        }
+      }
+    case 'validate_invoice_totals':
+      return async ({ signal, onProgress }) => {
+        const res = await runInvoiceTotalsValidation(db, seamArgs, { audit, signal, onProgress })
+        return {
+          ok: res.ok,
+          transactionCount: res.count,
+          resultKind: res.resultKind,
+          cancelled: res.cancelled,
+          errorCode: res.errorCode,
+          error: res.error
+        }
+      }
+    case 'export_invoice_csv':
+      if (!deps.saveTextFile) return null // cannot export without the MAIN-side save capability
+      return async ({ signal, onProgress }) => {
+        const res = await runInvoiceCsvExport(db, seamArgs, {
           audit,
           signal,
           onProgress,

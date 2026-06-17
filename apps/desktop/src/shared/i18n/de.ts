@@ -179,6 +179,9 @@ export const de: Record<keyof typeof en, string> = {
   'chat.skill.tool.categorize': 'Kategorisieren',
   'chat.skill.tool.summarize': 'Geldfluss zusammenfassen',
   'chat.skill.tool.exportCsv': 'Als CSV exportieren',
+  'chat.skill.tool.extractInvoice': 'Rechnung einlesen',
+  'chat.skill.tool.validateInvoiceTotals': 'Beträge prüfen',
+  'chat.skill.tool.exportInvoiceCsv': 'Als CSV exportieren',
   'chat.skill.run.running.one': 'Läuft: {tool} für {count} Dokument…',
   'chat.skill.run.running.other': 'Läuft: {tool} für {count} Dokumente…',
   'chat.skill.run.cancel': 'Abbrechen',
@@ -196,9 +199,17 @@ export const de: Record<keyof typeof en, string> = {
   'chat.skill.run.done.unreconciled.other':
     '{count} Zeilen stimmen nicht überein – prüfe sie, bevor du dich darauf verlässt.',
   'chat.skill.run.done.unchecked': 'Es war kein laufender Saldo zum Abgleichen abgedruckt.',
+  'chat.skill.run.done.extractInvoice.one': '{count} Position extrahiert.',
+  'chat.skill.run.done.extractInvoice.other': '{count} Positionen extrahiert.',
+  'chat.skill.run.done.invoiceReconciled': 'Die Rechnungsbeträge stimmen überein.',
+  'chat.skill.run.done.invoiceUnreconciled.one':
+    '{count} Betrag stimmt nicht überein – prüfe ihn, bevor du dich darauf verlässt.',
+  'chat.skill.run.done.invoiceUnreconciled.other':
+    '{count} Beträge stimmen nicht überein – prüfe sie, bevor du dich darauf verlässt.',
+  'chat.skill.run.done.invoiceUnchecked': 'Es waren keine Beträge zum Abgleichen abgedruckt.',
   'chat.skill.run.failedGeneric': 'Das hat nicht geklappt. Es wurde nichts geändert.',
   'chat.skill.run.error.unavailable': 'Dieses Werkzeug ist nicht verfügbar.',
-  'chat.skill.run.error.needsExtraction': 'Lies zuerst den Kontoauszug ein, dann führe dieses Werkzeug aus.',
+  'chat.skill.run.error.needsExtraction': 'Lies zuerst das Dokument ein, dann führe dieses Werkzeug aus.',
   'chat.skill.run.error.persistFailed': 'Das konnte nicht gespeichert werden. Es wurde nichts geändert.',
   'chat.skill.run.error.exportWriteFailed': 'Die Datei konnte nicht gespeichert werden. Es wurde nichts geändert.',
   'chat.skill.run.cancelled': 'Gestoppt. Es wurde nichts gespeichert.',

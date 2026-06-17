@@ -138,4 +138,17 @@ describe('meeting-protocol — German triggers fire against the real selector', 
 
     expect(suggestSkillsForTurn(db, conv.id, "What's the weather?")).toEqual([])
   })
+
+  it('offers invoice for a German invoice question; nothing for a neutral one', () => {
+    const db = freshDb()
+    reconcileSkills(db, realDeps()) // app skills → enabled
+    const conv = createConversation(db, {})
+
+    // "rechnung" is a keyword (weight 2) → clears SUGGEST_SCORE_THRESHOLD on the real selector.
+    const offer = suggestSkillsForTurn(db, conv.id, 'Prüfe die Beträge auf dieser Rechnung')
+    expect(offer).toHaveLength(1)
+    expect(offer[0].installId).toBe('app:invoice')
+
+    expect(suggestSkillsForTurn(db, conv.id, 'Sag mir einen Witz')).toEqual([])
+  })
 })

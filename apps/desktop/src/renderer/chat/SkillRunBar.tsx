@@ -21,7 +21,10 @@ const TOOL_LABEL_KEY: Record<string, MessageKey> = {
   validate_statement_balances: 'chat.skill.tool.validateBalances',
   categorize_transactions: 'chat.skill.tool.categorize',
   summarize_cashflow: 'chat.skill.tool.summarize',
-  export_transactions_csv: 'chat.skill.tool.exportCsv'
+  export_transactions_csv: 'chat.skill.tool.exportCsv',
+  extract_invoice: 'chat.skill.tool.extractInvoice',
+  validate_invoice_totals: 'chat.skill.tool.validateInvoiceTotals',
+  export_invoice_csv: 'chat.skill.tool.exportInvoiceCsv'
 }
 
 // Tool name → the count-pluralized "done" message base key (tCount appends .one/.other). Extract has
@@ -30,7 +33,9 @@ const TOOL_LABEL_KEY: Record<string, MessageKey> = {
 const TOOL_DONE_KEY: Record<string, CountMessageKey> = {
   categorize_transactions: 'chat.skill.run.done.categorize',
   summarize_cashflow: 'chat.skill.run.done.summarize',
-  export_transactions_csv: 'chat.skill.run.done.export'
+  export_transactions_csv: 'chat.skill.run.done.export',
+  extract_invoice: 'chat.skill.run.done.extractInvoice',
+  export_invoice_csv: 'chat.skill.run.done.export'
 }
 
 // Failure reason CODE (content-free, set by the run seam — I1) → localized copy key. An unmapped or
@@ -79,6 +84,11 @@ export function SkillRunBar({
       if (state.resultKind === 'reconciled') return t('chat.skill.run.done.reconciled')
       if (state.resultKind === 'unchecked') return t('chat.skill.run.done.unchecked')
       return tCount('chat.skill.run.done.unreconciled', count)
+    }
+    if (state.toolName === 'validate_invoice_totals') {
+      if (state.resultKind === 'reconciled') return t('chat.skill.run.done.invoiceReconciled')
+      if (state.resultKind === 'unchecked') return t('chat.skill.run.done.invoiceUnchecked')
+      return tCount('chat.skill.run.done.invoiceUnreconciled', count)
     }
     const base = TOOL_DONE_KEY[state.toolName]
     return tCount(base ?? 'chat.skill.run.done', count)

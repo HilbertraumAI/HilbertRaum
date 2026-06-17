@@ -12,6 +12,7 @@ import {
   summarizeCashflowTool,
   validateStatementBalancesTool
 } from './tools/bank-statement'
+import { exportInvoiceCsvTool, extractInvoiceTool, validateInvoiceTotalsTool } from './tools/invoice'
 
 // Tier-2 skill tool registry + the validate→run→validate gate (skills plan §12, Phase S10).
 //
@@ -204,7 +205,9 @@ const countSelectedDocumentsTool: SkillTool = {
  * The static, app-owned tool map. A skill can never add to it (skills plan §12.2). Bank-statement
  * tools are DEFINED in `tools/bank-statement.ts` (bank specifics stay out of the generic infra,
  * §13) and merely listed here. S11a wired `extract_transactions`; S11c adds the remaining four
- * bank tools (validate/categorize/summarize read-only; export confirm-gated `export-file`).
+ * bank tools (validate/categorize/summarize read-only; export confirm-gated `export-file`). The
+ * INVOICE tools (`tools/invoice.ts`) are the SECOND Tier-2 domain proving the gate generalizes —
+ * same shape (extract read-only; validate read-only; export confirm-gated), a separate content class.
  */
 const REGISTRY: Record<string, SkillTool> = {
   [countSelectedDocumentsTool.name]: countSelectedDocumentsTool,
@@ -212,7 +215,10 @@ const REGISTRY: Record<string, SkillTool> = {
   [validateStatementBalancesTool.name]: validateStatementBalancesTool,
   [categorizeTransactionsTool.name]: categorizeTransactionsTool,
   [summarizeCashflowTool.name]: summarizeCashflowTool,
-  [exportTransactionsCsvTool.name]: exportTransactionsCsvTool
+  [exportTransactionsCsvTool.name]: exportTransactionsCsvTool,
+  [extractInvoiceTool.name]: extractInvoiceTool,
+  [validateInvoiceTotalsTool.name]: validateInvoiceTotalsTool,
+  [exportInvoiceCsvTool.name]: exportInvoiceCsvTool
 }
 
 /** Look up a registered tool by name (own-property only — never reaches `Object.prototype`). */

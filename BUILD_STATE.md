@@ -6,7 +6,46 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
-_Last updated: 2026-06-17 — **Skills — second bundled app skill: `meeting-protocol` (content + tests
+_Last updated: 2026-06-17 — **Skills — second Tier-2 bundled app skill: `invoice` (content + tests, no
+new phase).** A THIRD app skill ships in `app-skills/`: **`invoice`** (`id: invoice`), the **second
+Tier-2 tool skill** — it mirrors `bank-statement` layer-for-layer to prove the gate generalizes to a
+second content-class domain, with strong EN+DE coverage. Three tools in
+[`tools/invoice.ts`](apps/desktop/src/main/services/skills/tools/invoice.ts): `extract_invoice`
+(read-only; reads the selected invoice's chunks → header + line items + totals, deterministic/offline,
+**conservative** — labeled-line header/totals, ambiguous data dropped, header fields optional),
+`validate_invoice_totals` (read-only; half-cent checks — line items→net, net+tax→gross, tax vs. rate —
+each ok/mismatch/unknown + a `reconciled` verdict + `resultKind`), and `export_invoice_csv`
+(confirm-gated `export-file`; line-items CSV). The deterministic money/date primitives + the CSV
+formula-injection `csvField` are now **shared** by both domains in
+[`tools/money.ts`](apps/desktop/src/main/services/skills/tools/money.ts) (bank-statement.ts re-exports
+them for compat; `detectCurrency` improved to scan all 3-letter tokens so an invoice number's "INV"
+never blocks a later "EUR"). The run seam is the sibling
+[`invoice-run.ts`](apps/desktop/src/main/services/skills/invoice-run.ts) (reuses `run.ts`'s
+`buildReadDocumentChunks`/`finishRun`): same `skill_runs` lifecycle, atomic persist
+(BEGIN…COMMIT/ROLLBACK), B2/B4 guards, latest-invoice-for-document downstream target, structured input
+(no new `SkillToolContext` accessor — §14 ceiling unchanged). **Data contract:** two new content-class
+tables — `invoices` (id, document_id, run_id, vendor, invoice_number, invoice_date, due_date, currency,
+net_total, tax_total, tax_rate, gross_total, totals_reconciled, created_at) + `invoice_line_items` (id,
+invoice_id, run_id, row_index, description, quantity, unit_price, line_total, currency, created_at),
+indexed by document_id / invoice_id; `skill_runs.result_ref` now points at a `bank_statements.id` **or**
+an `invoices.id`. Wired tool names: `extract_invoice` / `validate_invoice_totals` / `export_invoice_csv`
+(`tool-registry.ts` REGISTRY + `tool-runs.ts` WIRED_TOOL_NAMES + buildToolRunner). New i18n EN/DE keys
+(`chat.skill.tool.extractInvoice|validateInvoiceTotals|exportInvoiceCsv`, the invoice done/validate copy);
+`needsExtraction` copy genericized "statement"→"document"/"Dokument". `SkillRunBar` gains the three labels
++ the invoice `resultKind` branch. **No IPC / shared-type / controller change** (the generic infra already
+supports an arbitrary wired tool). New tests:
+[`skills-invoice-tool.test.ts`](apps/desktop/tests/unit/skills-invoice-tool.test.ts) (parsers + each tool
+through the gate + CSV formula-injection),
+[`skills-invoice.test.ts`](apps/desktop/tests/integration/skills-invoice.test.ts) (committed SKILL.md
+parse → kind:tool + 3 allowedTools + reservesTools; reconcile-enabled; dispatch descriptors; extract →
+validate → export seams; needs-extraction guard; cancelled-save calm path) + extensions to
+`skills-suggest.test.ts` (German "Prüfe die Beträge auf dieser Rechnung" clears the threshold),
+`skills-privacy-guard.test.ts` (a secret through invoice extract→validate→export reaches only the
+`invoice_*` tables + the CSV, never audit/log/console/`skill_runs`), and the `skills-tool-registry.test.ts`
+registered-names list. Full suite green (1662 passed), typecheck + build clean. Design record:
+**architecture.md "Skills — design record" §8/§10 + DS17**, **security-model.md** content-class list._
+
+_(prior) 2026-06-17 — **Skills — second bundled app skill: `meeting-protocol` (content + tests
 only, no new phase).** A second app skill now ships in `app-skills/`, chosen to exercise the paths the
 bank-statement skill never touches. **`meeting-protocol`** is **Tier-1 instruction-only**
 (`kind: instruction`, `allowedTools` empty / `reservesTools` false — it only injects fenced guidance,

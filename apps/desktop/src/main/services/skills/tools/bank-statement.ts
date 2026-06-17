@@ -4,6 +4,12 @@ import type {
   SkillTool,
   ToolResult
 } from '../../../../shared/types'
+import { MONEY_EPS, MONEY_RE, csvField, detectCurrency, parseAmount, parseDate } from './money'
+
+// The deterministic money/date/CSV parsing primitives are shared with the invoice tools (one parser
+// per locale rule, §8). Re-exported here so existing import sites (`tools/bank-statement`) and the
+// unit tests keep resolving `parseAmount`/`parseDate`/`detectCurrency` from this module.
+export { detectCurrency, parseAmount, parseDate } from './money'
 
 // Bank-statement Tier-2 tools (architecture.md "Skills — design record" §8, Phase S11a). Kept OUT of the generic
 // `tool-registry.ts` so bank specifics never leak into the skills infrastructure (skills-plan §13);
@@ -64,87 +70,7 @@ export interface ExtractTransactionsOutput {
   currency?: string
 }
 
-// ---- Deterministic parsing helpers (pure) ----
-
-const SYMBOL_TO_CODE: Record<string, string> = { '€': 'EUR', '$': 'USD', '£': 'GBP', '¥': 'JPY' }
-// A small allowlist so a random 3-letter word in a description is not mistaken for a currency code.
-const ISO_CODES: ReadonlySet<string> = new Set([
-  'EUR', 'USD', 'GBP', 'CHF', 'JPY', 'CAD', 'AUD', 'NZD', 'SEK', 'NOK', 'DKK', 'PLN', 'CZK', 'HUF'
-])
-
-// A money token MUST end in a 2-digit minor unit (e.g. ",56" / ".56"), so plain integers embedded
-// in a description are not mistaken for amounts. Optional leading sign / paren and trailing minus.
-const MONEY_RE = /[-+(]?\s*\d[\d.,]*[.,]\d{2}\s*\)?-?/g
-
-function pad2(n: number): string {
-  return String(n).padStart(2, '0')
-}
-
-function isValidYmd(y: number, m: number, d: number): boolean {
-  if (m < 1 || m > 12 || d < 1 || d > 31) return false
-  const dt = new Date(Date.UTC(y, m - 1, d))
-  return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d
-}
-
-/**
- * Normalize a printed date to ISO `YYYY-MM-DD`, or null if unsupported/invalid. ISO passes through;
- * dotted/slashed forms are read DAY-FIRST (the de-AT target locale). Two-digit years are unsupported
- * (dropped) rather than guessed.
- */
-export function parseDate(token: string): string | null {
-  const iso = /^(\d{4})-(\d{2})-(\d{2})$/.exec(token)
-  if (iso) return isValidYmd(+iso[1], +iso[2], +iso[3]) ? token : null
-  const dmy = /^(\d{1,2})[./](\d{1,2})[./](\d{4})$/.exec(token)
-  if (dmy) {
-    const d = +dmy[1]
-    const m = +dmy[2]
-    const y = +dmy[3]
-    return isValidYmd(y, m, d) ? `${y}-${pad2(m)}-${pad2(d)}` : null
-  }
-  return null
-}
-
-/**
- * Parse a printed money token to a signed number, or null. Handles leading/trailing sign,
- * parentheses-negative, and `.`/`,` thousand/decimal separators: with both present (or a single
- * separator followed by 1–2 digits) the LAST separator is the decimal point; a single separator
- * followed by exactly 3 digits is treated as a thousands separator.
- */
-export function parseAmount(raw: string): number | null {
-  const s = raw.trim()
-  if (!s) return null
-  const negative = /^\(.*\)$/.test(s) || /^[-]/.test(s) || /-\s*$/.test(s)
-  const digits = s.replace(/[^0-9.,]/g, '')
-  if (!/[0-9]/.test(digits)) return null
-  const lastDot = digits.lastIndexOf('.')
-  const lastComma = digits.lastIndexOf(',')
-  let normalized: string
-  if (lastDot === -1 && lastComma === -1) {
-    normalized = digits
-  } else {
-    const decPos = Math.max(lastDot, lastComma)
-    const trailing = digits.length - decPos - 1
-    if ((lastDot === -1 || lastComma === -1) && trailing === 3) {
-      // single separator type with 3 trailing digits ⇒ thousands, not a decimal point
-      normalized = digits.replace(/[.,]/g, '')
-    } else {
-      const intPart = digits.slice(0, decPos).replace(/[.,]/g, '')
-      const fracPart = digits.slice(decPos + 1).replace(/[.,]/g, '')
-      normalized = `${intPart}.${fracPart}`
-    }
-  }
-  const value = Number(normalized)
-  if (!Number.isFinite(value)) return null
-  return negative ? -Math.abs(value) : value
-}
-
-/** Detect an ISO-4217 currency from text (an allowlisted 3-letter code or a known symbol), else null. */
-export function detectCurrency(text: string): string | null {
-  const code = /\b([A-Z]{3})\b/.exec(text)
-  if (code && ISO_CODES.has(code[1])) return code[1]
-  for (const [sym, c] of Object.entries(SYMBOL_TO_CODE)) if (text.includes(sym)) return c
-  return null
-}
+// ---- Deterministic parsing helpers (the money/date primitives are shared via `./money`) ----
 
 function parseLine(line: string, page: number | null, statementCurrency: string | null): ExtractedTransaction | null {
   const m = /^(\S+)\s+(.*)$/.exec(line)
@@ -262,9 +188,6 @@ const TRANSACTIONS_INPUT_SCHEMA: JsonSchema = {
     transactions: { type: 'array', items: TRANSACTION_ROW_SCHEMA, maxItems: MAX_TRANSACTIONS }
   }
 }
-
-/** Money equality within half a cent (printed figures carry 2 minor digits). */
-const MONEY_EPS = 0.005
 
 // ---- validate_statement_balances (read-only; reconciles printed vs computed running balance) ----
 
@@ -520,25 +443,8 @@ export const summarizeCashflowTool: SkillTool = {
 
 // ---- export_transactions_csv (export-file; confirm-gated; the seam does the FS write) ----
 
-// A field that can be executed as a FORMULA when the CSV is opened in Excel / LibreOffice / Google
-// Sheets (CSV / spreadsheet "formula injection"). The extracted text is the user's OWN statement,
-// but a crafted document could embed a payload that only surfaces at the one real FS-write boundary,
-// so this seam neutralizes it (S12 audit, F4). Two shapes are caught: a leading control char
-// (`\t`/`\r`, the DDE/auto-exec vector), and a formula trigger (`= + - @`) after OPTIONAL leading
-// whitespace — some importers trim leading spaces before evaluating, so `"  =cmd"` is dangerous too.
-const CSV_FORMULA_LEAD = /^[\t\r]|^\s*[=+\-@]/
-
-/**
- * RFC-4180-ish field escaping with formula-injection neutralization. A value that begins with a
- * spreadsheet formula trigger (`= + - @`, tab, CR) is prefixed with a single quote so the cell is
- * read as text; then the value is quoted when it carries a comma, quote, or newline. Numeric columns
- * (amount/balance) are formatted separately and never pass through here, so a negative amount is
- * unaffected — only free-text fields (description et al.) are neutralized.
- */
-function csvField(value: string): string {
-  const safe = CSV_FORMULA_LEAD.test(value) ? `'${value}` : value
-  return /[",\n\r]/.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe
-}
+// `csvField` (the formula-injection neutralization) lives in `./money` — the export boundary is the
+// same for the bank and invoice CSVs, so the neutralization is one shared, audited function (S12 F4).
 
 /** Serialize the rows to CSV text (pure — no FS). Header + one line per row, stable column order. */
 export function transactionsToCsv(rows: TransactionInput[]): string {

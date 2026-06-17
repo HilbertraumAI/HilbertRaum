@@ -1371,14 +1371,16 @@ provisioning…", "Skill tool ceiling (Tier-2)"), the **drive layout** in
   per-conversation default (`conversations.active_skill_id`); the per-message glyph marks the answer it
   shaped. Auto-fire is deferred to **S13**, gated on an evaluation harness.
 - **DS17** — app skills are committed to the repo (`app-skills/`, text only) and copied by
-  `prepare-drive` — never network-fetched. **Two** bundled app skills now ship, one per tier:
-  **`bank-statement`** is the **Tier-2** reference (`kind: tool`, app-orchestrated tools through the
-  §7 gate), and **`meeting-protocol`** is the **Tier-1** reference (`kind: instruction`,
-  `allowedTools` empty / `reservesTools` false — it only injects fenced guidance). meeting-protocol
-  is also the **bilingual-trigger** reference: its `triggers.keywords` carry German and English terms,
-  with umlaut singular/plural pairs listed separately (`beschluss`/`beschlüsse`,
-  `aufgabe`/`aufgaben`) because §6 matching is case-insensitive *substring* (`question.includes`), so
-  an umlaut breaks the substring and each form must appear in its own right.
+  `prepare-drive` — never network-fetched. **Three** bundled app skills now ship:
+  **`bank-statement`** is the first **Tier-2** reference (`kind: tool`, app-orchestrated tools through
+  the §7 gate), **`meeting-protocol`** is the **Tier-1** reference (`kind: instruction`,
+  `allowedTools` empty / `reservesTools` false — it only injects fenced guidance), and **`invoice`** is
+  the **second Tier-2** reference (`kind: tool`), proving the gate generalizes to a second content
+  class. meeting-protocol and invoice are both **bilingual-trigger** references: their
+  `triggers.keywords` carry German and English terms, with umlaut/ending singular-plural pairs listed
+  separately (`beschluss`/`beschlüsse`, `rechnung`/`rechnungen`) because §6 matching is case-insensitive
+  *substring* (`question.includes`), so an ending/umlaut breaks the substring and each form must appear
+  in its own right (and short ambiguous tokens — `vat`/`ust`/`net`/`gross` — are deliberately avoided).
 
 ### §2 Hard rules (these bound every choice)
 
@@ -1489,6 +1491,27 @@ fields are neutralized against spreadsheet formula-injection (S12 fix). The bank
 `kind:'tool'`, which makes its declared `allowedTools` effective (the SL-1 parser path keeps the list only
 for `kind:'tool'`) and uses the reconcile/validate body.
 
+**The invoice skill is the SECOND Tier-2 reference** (`app-skills/invoice/`, `id:'invoice'`), proving the
+gate generalizes to a second content-class domain with strong EN+DE coverage. It mirrors bank-statement
+layer-for-layer: three tools in `services/skills/tools/invoice.ts` — `extract_invoice` (read-only; the
+same `readDocumentChunks` reach over the frozen scope), `validate_invoice_totals` (read-only; deterministic
+checks within a half-cent epsilon — line items → net, net + tax → gross, tax vs. rate — each
+`ok`/`mismatch`/`unknown`, an honest `reconciled` verdict + a `resultKind` discriminator like
+`validate_statement_balances`), and `export_invoice_csv` (confirm-gated `export-file`, the line-items CSV).
+Parsing is DETERMINISTIC + OFFLINE and CONSERVATIVE (invoice layouts vary — a known limitation that improves
+later): header fields and totals are read from **labeled lines only**, line items split a description from a
+trailing quantity + trailing unit-price/line-total money tokens, and anything that cannot be confidently
+parsed is **dropped** (header fields are individually optional, never guessed). The deterministic money/date
+primitives (`parseAmount`/`parseDate`/`detectCurrency`) and the CSV formula-injection neutralization
+(`csvField`) are now **shared** by both domains in `services/skills/tools/money.ts` — one parser per locale
+rule, one audited export boundary. The run seam is the sibling `services/skills/invoice-run.ts` (it reuses
+`run.ts`'s `buildReadDocumentChunks`/`finishRun`): same `skill_runs` lifecycle, same no-partial-persist
+(BEGIN…COMMIT/ROLLBACK), same B2/B4 guards, latest-invoice-for-document downstream target, structured input
+(no new `SkillToolContext` accessor — the §14 ceiling is unchanged). The dispatch (`tool-runs.ts`) wires the
+three names; the controller / IPC / renderer stay domain-free (the renderer adds only the three tool labels
++ the invoice `resultKind` copy). Content-class isolation holds: the new `invoices` / `invoice_line_items`
+tables + `skill_runs` never appear in any log/audit/export (audit stays `{skillId, toolName, documentCount}`).
+
 ### §9 The run trigger + UI (S11b/S11c)
 
 A run is started from a **user action**, never the model. A generic controller
@@ -1513,7 +1536,10 @@ string; the bank meaning lives only in the renderer's copy map).
 reason; S11a). The **content-class** bank tables `bank_statements` + `bank_transactions` (S11a) and
 `bank_categories` / `bank_category_rules` / `bank_corrections` + `bank_transactions.category_id/
 reconciled/confidence` (S11c) hold real figures: encrypted DB only, **never logged/audited, never
-exported** (§9.5) — distinct from the non-secret skill packages.
+exported** (§9.5) — distinct from the non-secret skill packages. The **invoice** domain adds the
+parallel content-class tables `invoices` (header + totals + a `totals_reconciled` flag) +
+`invoice_line_items` (the line-item rows), with the same isolation; `skill_runs.result_ref` points at a
+`bank_statements.id` **or** an `invoices.id`, never inline content.
 
 ### §11 IPC / audit surface
 

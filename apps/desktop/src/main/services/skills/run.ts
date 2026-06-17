@@ -70,7 +70,7 @@ export interface BankExtractionResult {
  * a tool's content reach: a per-document chunk read confined to the `allowed` id set — an id outside
  * the frozen scope returns `[]`. NOT a general Db/SQL/FS handle (the closure is the only capability).
  */
-function buildReadDocumentChunks(db: Db, allowed: ReadonlySet<string>): SkillToolContext['readDocumentChunks'] {
+export function buildReadDocumentChunks(db: Db, allowed: ReadonlySet<string>): SkillToolContext['readDocumentChunks'] {
   const stmt = db.prepare(
     'SELECT text, page_number AS page, chunk_index AS idx FROM chunks WHERE document_id = ? ORDER BY chunk_index'
   )
@@ -81,7 +81,7 @@ function buildReadDocumentChunks(db: Db, allowed: ReadonlySet<string>): SkillToo
   }
 }
 
-function finishRun(
+export function finishRun(
   db: Db,
   runId: string,
   status: 'done' | 'failed' | 'cancelled',

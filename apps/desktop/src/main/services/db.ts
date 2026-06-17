@@ -254,7 +254,8 @@ CREATE INDEX IF NOT EXISTS idx_skills_id ON skills(id);   -- duplicate-id lookup
 
 -- Skill tool-run history (architecture.md "Skills — design record" §10, S11a). One row PER
 -- app-orchestrated tool run (DS4), bracketed started → done|failed|cancelled. IDS/REFS ONLY —
--- never document/chat content: document_ids_json is ids, result_ref is a bank_statements.id, and
+-- never document/chat content: document_ids_json is ids, result_ref is a bank_statements.id or an
+-- invoices.id, and
 -- error is a friendly/technical reason. Excluded from every export (skills-plan §9.5). No FK INTO
 -- skills (same audit-C3 reasoning as conversations/messages — references cleared by app sweep, not
 -- a cascade), so a deleted skill never blocks or rewrites its run history.
@@ -266,7 +267,7 @@ CREATE TABLE IF NOT EXISTS skill_runs (
   status            TEXT NOT NULL,          -- 'started' | 'done' | 'failed' | 'cancelled'
   created_at        TEXT NOT NULL,
   completed_at      TEXT,
-  result_ref        TEXT,                   -- e.g. a bank_statements.id; NEVER inline content
+  result_ref        TEXT,                   -- e.g. a bank_statements.id / invoices.id; NEVER inline content
   error             TEXT                    -- friendly/technical reason; NEVER document/chat text
 );
 CREATE INDEX IF NOT EXISTS idx_skill_runs_skill ON skill_runs(skill_install_id);
@@ -337,6 +338,45 @@ CREATE TABLE IF NOT EXISTS bank_corrections (
   FOREIGN KEY (transaction_id) REFERENCES bank_transactions(id)
 );
 CREATE INDEX IF NOT EXISTS idx_bank_corrections_transaction ON bank_corrections(transaction_id);
+
+-- Invoice data tables (architecture.md "Skills — design record" §8/§10). The SECOND Tier-2
+-- content-class domain, mirroring the bank_* tables exactly: the extracted figures are user content,
+-- so they live ONLY here in the encrypted workspace DB (a workspace backup carries them — correct),
+-- are NEVER logged/audited (audit stays ids/counts), and are NEVER in the skill .skill.zip or
+-- conversation export. skill_runs.result_ref points at an invoices.id; it never inlines content.
+CREATE TABLE IF NOT EXISTS invoices (
+  id                TEXT PRIMARY KEY,
+  document_id       TEXT NOT NULL,          -- the source document (id only)
+  run_id            TEXT,                   -- the skill_runs.id that produced this extraction
+  vendor            TEXT,                   -- content: seller name as printed, nullable
+  invoice_number    TEXT,                   -- content, nullable
+  invoice_date      TEXT,                   -- content: ISO, nullable
+  due_date          TEXT,                   -- content: ISO, nullable
+  currency          TEXT,                   -- invoice currency, nullable
+  net_total         REAL,                   -- content, nullable
+  tax_total         REAL,                   -- content, nullable
+  tax_rate          REAL,                   -- content: tax rate percent, nullable
+  gross_total       REAL,                   -- content, nullable
+  totals_reconciled INTEGER,                -- 1 reconciled / 0 not / NULL unchecked (validate_invoice_totals)
+  created_at        TEXT NOT NULL,
+  FOREIGN KEY (document_id) REFERENCES documents(id)
+);
+CREATE INDEX IF NOT EXISTS idx_invoices_document ON invoices(document_id);
+
+CREATE TABLE IF NOT EXISTS invoice_line_items (
+  id           TEXT PRIMARY KEY,
+  invoice_id   TEXT NOT NULL,               -- references invoices.id
+  run_id       TEXT,
+  row_index    INTEGER NOT NULL,            -- stable order within the invoice
+  description  TEXT NOT NULL,               -- content
+  quantity     REAL,                        -- content, nullable
+  unit_price   REAL,                        -- content, nullable
+  line_total   REAL NOT NULL,               -- content
+  currency     TEXT NOT NULL,
+  created_at   TEXT NOT NULL,
+  FOREIGN KEY (invoice_id) REFERENCES invoices(id)
+);
+CREATE INDEX IF NOT EXISTS idx_invoice_line_items_invoice ON invoice_line_items(invoice_id);
 `
 
 // Additive column migrations on top of the spec §8 base schema. `CREATE TABLE IF NOT

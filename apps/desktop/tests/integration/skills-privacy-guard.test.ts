@@ -19,6 +19,11 @@ import {
   runCategorization,
   runCsvExport
 } from '../../src/main/services/skills/run'
+import {
+  runInvoiceCsvExport,
+  runInvoiceExtraction,
+  runInvoiceTotalsValidation
+} from '../../src/main/services/skills/invoice-run'
 import { buildToolRunner } from '../../src/main/services/skills/tool-runs'
 import { SkillRunController } from '../../src/main/services/skills/run-controller'
 import { buildSkillFence, composeSystemPromptWithSkill, SKILL_GUARD_LINE } from '../../src/main/services/skills/prompt'
@@ -215,6 +220,52 @@ describe('skills privacy guard — one secret through every sink (S12 audit)', (
     // Deliberate exceptions: the content-class table + the user-chosen CSV DO carry the secret.
     const tx = db.prepare('SELECT description FROM bank_transactions LIMIT 1').get() as { description: string }
     expect(tx.description).toContain(SENTINEL)
+    expect(csv).toContain(SENTINEL)
+    // The invariants: never the audit stream, never any skill_runs row, never any console stream.
+    expect(JSON.stringify(events)).not.toContain(SENTINEL)
+    const runs = db.prepare('SELECT * FROM skill_runs').all()
+    expect(JSON.stringify(runs)).not.toContain(SENTINEL)
+    expect(logged).not.toContain(SENTINEL)
+  })
+
+  it('every invoice tool run: the secret reaches the invoice_* tables + the CSV, never audit/log/console/skill_runs', async () => {
+    const db = freshDb()
+    const skillInstallId = 'app:invoice'
+    const docId = seedDocWithChunks(db, [
+      {
+        text: [
+          'Invoice',
+          'Vendor: ACME GmbH',
+          'Invoice Number: INV-1',
+          'Invoice Date: 2026-01-02',
+          'Currency EUR',
+          `${SENTINEL}   2   12,50   25,00`,
+          'Net Total   25,00'
+        ].join('\n'),
+        page: 1
+      }
+    ])
+    const { audit, events } = capturingAudit()
+    let csv = ''
+
+    const logged = await captureConsole(async () => {
+      const ex = await runInvoiceExtraction(db, { skillInstallId, documentId: docId }, { audit })
+      expect(ex.ok).toBe(true)
+      expect((await runInvoiceTotalsValidation(db, { skillInstallId, documentId: docId }, { audit })).ok).toBe(true)
+      const exp = await runInvoiceCsvExport(db, { skillInstallId, documentId: docId }, {
+        audit,
+        confirmed: true,
+        saveTextFile: async (_name, content) => {
+          csv = content
+          return true
+        }
+      })
+      expect(exp.ok).toBe(true)
+    })
+
+    // Deliberate exceptions: the content-class table + the user-chosen CSV DO carry the secret.
+    const li = db.prepare('SELECT description FROM invoice_line_items LIMIT 1').get() as { description: string }
+    expect(li.description).toContain(SENTINEL)
     expect(csv).toContain(SENTINEL)
     // The invariants: never the audit stream, never any skill_runs row, never any console stream.
     expect(JSON.stringify(events)).not.toContain(SENTINEL)
