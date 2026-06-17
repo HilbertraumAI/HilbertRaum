@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import type { ReactNode } from 'react'
 import { Badge, Banner, Button, Chip, ConfirmDialog, CoverageMeter, EmptyState, ErrorBanner, Icon, Modal, Progress, Spinner, TierMenu, useToast, type BadgeTone } from '../components'
 import { SourcesDisclosure } from '../chat/SourcesDisclosure'
@@ -168,6 +168,33 @@ type DocSection =
 interface Props {
   /** "Ask these documents" (spec §10.4): open Chat scoped to the selection. */
   onAskSelected?: (documentIds: string[]) => void
+}
+
+/**
+ * Whether a document belongs in the current (non-project) section (plan §12.1). Pure (off the
+ * already-listed fields) so the `visibleDocs` useMemo can call it without a per-render closure;
+ * the Phase-E smart views route through the shared `matchesSmartView` predicate to keep the rail
+ * in lockstep with the `docs:list` filter. 'all'/'recent'/'project' are handled by the caller.
+ */
+function inSection(d: DocumentInfo, section: DocSection): boolean {
+  const lifecycle = d.lifecycle ?? 'permanent'
+  switch (section.kind) {
+    case 'temporary':
+      return lifecycle === 'temporary' || (d.collections ?? []).some((c) => c.type === 'temporary')
+    case 'library':
+      return (d.collections ?? []).some((c) => c.type === 'library')
+    case 'generated':
+    case 'archived':
+    case 'unfiled':
+    case 'needsReindex':
+    case 'large':
+    case 'failed':
+    case 'audio':
+    case 'ocr':
+      return matchesSmartView(d, section.kind)
+    default:
+      return true
+  }
 }
 
 /** Remembered collapse state for the Documents sub-nav (section rail). A UI preference, not
@@ -505,53 +532,54 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
     )
   }
 
-  const anyActive = docs?.some((d) => ACTIVE_STATUSES.has(d.status)) ?? false
-  const staleDocs = docs?.filter((d) => d.staleEmbeddings) ?? []
+  // Derived collections (plan §12) — memoized so the render body (re-run on every 400 ms import
+  // poll + every unrelated state change: menu/hover/modal) doesn't re-filter the whole list each
+  // time (FE-2). Keyed only on the inputs each derivation actually reads.
+  const anyActive = useMemo(() => docs?.some((d) => ACTIVE_STATUSES.has(d.status)) ?? false, [docs])
+  const staleDocs = useMemo(() => docs?.filter((d) => d.staleEmbeddings) ?? [], [docs])
   const empty = docs != null && docs.length === 0
 
   // ---- Document-organization: section rail filtering + collection/project actions ----
-  const projects = collections.filter((c) => c.type === 'project')
-  const activeProjects = projects.filter((c) => c.archivedAt == null)
-  const libraryCollection = collections.find((c) => c.type === 'library') ?? null
-  const temporaryCollection = collections.find((c) => c.type === 'temporary') ?? null
-
-  /** Whether a document belongs in the current (non-project) section (plan §12.1). */
-  function inSection(d: DocumentInfo): boolean {
-    const lifecycle = d.lifecycle ?? 'permanent'
-    switch (section.kind) {
-      case 'temporary':
-        return lifecycle === 'temporary' || (d.collections ?? []).some((c) => c.type === 'temporary')
-      case 'library':
-        return (d.collections ?? []).some((c) => c.type === 'library')
-      // Phase-E query-time smart views (plan §7.6): the shared predicate keeps the rail
-      // in lockstep with the docs:list filter. ('generated'/'archived' route through it too.)
-      case 'generated':
-      case 'archived':
-      case 'unfiled':
-      case 'needsReindex':
-      case 'large':
-      case 'failed':
-      case 'audio':
-      case 'ocr':
-        return matchesSmartView(d, section.kind)
-      default:
-        return true // 'all' + 'recent' (ordered in visibleDocs) + 'project' (handled below)
+  const { activeProjects, archivedProjects, libraryCollection, temporaryCollection } = useMemo(() => {
+    const projects = collections.filter((c) => c.type === 'project')
+    return {
+      activeProjects: projects.filter((c) => c.archivedAt == null),
+      archivedProjects: projects.filter((c) => c.archivedAt != null),
+      libraryCollection: collections.find((c) => c.type === 'library') ?? null,
+      temporaryCollection: collections.find((c) => c.type === 'temporary') ?? null
     }
-  }
+  }, [collections])
+
   // Source lookup for the generated-staleness derivation (plan §15.3) — pure, off the
   // already-listed fields; no extra read, no hot-path write.
-  const sourcesById = new Map((docs ?? []).map((d) => [d.id, d]))
-  const sectioned: DocumentInfo[] =
-    docs == null
-      ? []
-      : section.kind === 'project'
+  const sourcesById = useMemo(() => new Map((docs ?? []).map((d) => [d.id, d])), [docs])
+
+  // The section-filtered, optionally-reordered list — recomputed only when the docs or the
+  // selected section change (FE-2). "Recently added" is an ordering, not a membership predicate
+  // (plan §7.6 — no new column).
+  const visibleDocs: DocumentInfo[] = useMemo(() => {
+    if (docs == null) return []
+    const sectioned =
+      section.kind === 'project'
         ? docs.filter((d) => (d.collections ?? []).some((c) => c.id === section.id))
-        : docs.filter(inSection)
-  // "Recently added" is an ordering, not a membership predicate (plan §7.6 — no new column).
-  const visibleDocs: DocumentInfo[] =
-    section.kind === 'recent'
+        : docs.filter((d) => inSection(d, section))
+    return section.kind === 'recent'
       ? [...sectioned].sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0))
       : sectioned
+  }, [docs, section])
+
+  // Rail counts for the rare diagnostic views — one bucketing pass over docs instead of the four
+  // independent `docs.filter` passes the render body used to run (FE-2).
+  const rareCounts = useMemo(() => {
+    const counts = { large: 0, failed: 0, audio: 0, ocr: 0 }
+    for (const d of docs ?? []) {
+      if (matchesSmartView(d, 'large')) counts.large++
+      if (matchesSmartView(d, 'failed')) counts.failed++
+      if (matchesSmartView(d, 'audio')) counts.audio++
+      if (matchesSmartView(d, 'ocr')) counts.ocr++
+    }
+    return counts
+  }, [docs])
 
   async function runOrg(key: string, fn: () => Promise<unknown>): Promise<void> {
     setBusy(key)
@@ -735,13 +763,8 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
             onSelect={setSection}
             collections={collections}
             activeProjects={activeProjects}
-            archivedProjects={projects.filter((c) => c.archivedAt != null)}
-            rareCounts={{
-              large: docs?.filter((d) => matchesSmartView(d, 'large')).length ?? 0,
-              failed: docs?.filter((d) => matchesSmartView(d, 'failed')).length ?? 0,
-              audio: docs?.filter((d) => matchesSmartView(d, 'audio')).length ?? 0,
-              ocr: docs?.filter((d) => matchesSmartView(d, 'ocr')).length ?? 0
-            }}
+            archivedProjects={archivedProjects}
+            rareCounts={rareCounts}
             busy={busy !== null}
             onCollapse={() => setRailCollapsedPersistent(true)}
             onNewProject={() => setProjectModal({ mode: 'create', name: '' })}
