@@ -132,6 +132,27 @@ question is content: it is scored but **never logged or audited**. The offer is 
 the composer picker** (pinned on top, no canvas chip, no settings key) and is **inert until tapped** —
 it never auto-applies (auto-fire is the deferred S13 wave, gated on an evaluation harness).
 
+**Tier-2 tool registry + the validate→run→validate gate (Skills plan §12 / S10 — DESIGNED, one
+reference tool).** `services/skills/tool-registry.ts` is the **static, app-owned** map of `SkillTool`s.
+A skill never registers a tool: it only *declares* names via `allowedTools`, and the effective set is
+the three-way intersection `declared ∩ registry ∩ userGrant` (`resolveEffectiveTools`) — a
+declared-but-unregistered or ungranted name is dropped. Runs are **app-orchestrated** (DS4/§2): the
+model never parses `tool_calls`; the app calls `runSkillTool(tool, {skillId, input, ctx, confirmed})`
+directly and the model only *explains* the structured result. The gate's fixed order: (1) refuse if the
+`AbortSignal` is already aborted; (2) **validate input** against the tool's `inputSchema` (a hand-rolled
+JSON-Schema subset — no validator dep, CLAUDE.md §0) and refuse **without calling the tool** on a bad
+shape; (3) refuse a write/export/destructive tool that lacks `confirmed:true` (`toolRequiresConfirmation`);
+(4) run inside a **narrow `SkillToolContext`** whose `documentIds` the gate hands over **frozen**, so the
+tool cannot widen the selected scope; (5) **validate output** against `outputSchema` — a wrong shape
+**fails the run** so no half-trusted output reaches the model; (6) bracket the run with ids/counts-only
+audit (`skill_run_started`/`done`/`failed`, carrying `{skillId, toolName, documentCount}` only).
+Surfaced errors are friendly and content-free; technical reasons go to the local log; the gate persists
+nothing. The shipped registry holds **one harmless, read-only reference tool** (`count_selected_documents`,
+needs only `read-selected-docs`, no side effects) to prove the gate end-to-end — **no bank-statement
+tools, no `skill_runs` table, no data tables** (those land in S11). The `SkillToolContext` ceiling
+(narrow read scope, no fs/net/sql handle, confirm-for-writes) is detailed in
+[`security-model.md`](security-model.md) "Skill tool ceiling (Tier-2)".
+
 ## Models & runtime (Phase 2)
 - **Manifests** are local YAML under `model-manifests/` (committed; weights are not). The schema +
   validator live in `src/shared/manifest.ts` so renderer and main share one definition. YAML is

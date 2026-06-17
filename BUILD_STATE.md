@@ -6,7 +6,26 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
-_Last updated: 2026-06-17 — **Skills Phase S9 SHIPPED — built-in bank-statement instruction stub.**
+_Last updated: 2026-06-17 — **Skills Phase S10 SHIPPED — Tier-2 tool-registry design + the
+validate→run→validate gate.** New file
+[`services/skills/tool-registry.ts`](apps/desktop/src/main/services/skills/tool-registry.ts): the
+static app-owned `SkillTool` map (a skill can never register a tool), the effective-set intersection
+`resolveEffectiveTools(declared, userGrant)` = `declared ∩ registry ∩ userGrant`, a dependency-free
+JSON-Schema-subset validator (`validateJsonSchema` — CLAUDE.md §0, no validator dep), and
+`runSkillTool` — the **app-orchestrated** gate (DS4/§2, NOT model `tool_calls`): abort-check →
+validate input (refuse before run) → confirm-gate for write/export tools → run inside a **narrow,
+frozen-scope `SkillToolContext`** → validate output (wrong shape fails the run) → ids/counts-only
+audit. Ships **one harmless reference tool** (`count_selected_documents`, read-only over the frozen
+`documentIds`) to prove the gate; **NO bank tools, NO `skill_runs` table, NO data tables** (all S11).
+Additive types in `shared/types.ts` (`JsonSchema`, `ToolPermission`, `ToolResult`, `SkillToolAudit`,
+`SkillToolContext`, `SkillTool`) + three `skill_run_*` audit events (+ DiagnosticsTab labels + EN/DE
+catalogs). 16 new tests (`tests/unit/skills-tool-registry.test.ts`, incl. the §22-M1 sentinel grep).
+Full suite **1548 passed / 25 skipped**, typecheck + build clean. Docs: architecture.md (tool registry
++ gate) + security-model.md ("Skill tool ceiling (Tier-2)"). SL log clean. See the **"Skills — S10
+handoff"** block below. Next: Phase S11 (bank-statement tools + `skill_runs` + data tables — likely
+its own follow-up plan doc)._
+
+_(prior) 2026-06-17 — **Skills Phase S9 SHIPPED — built-in bank-statement instruction stub.**
 The FIRST real app skill: committed [`app-skills/bank-statement/`](app-skills/bank-statement/)
 (`SKILL.md` + `schemas/transaction.schema.json` + `examples/reading-a-statement.md`, text-only product
 content — DS17). The body is **guidance-honest (§22-D1):** quote the statement's own printed figures,
@@ -141,6 +160,61 @@ attacker-supplied and is now unzipped straight to a real on-disk folder. **Impac
 commit: none** — `shared/skill-manifest.ts` is storage-agnostic and `parseSkillManifestFromDir` is now
 the single read path for both sources. S3 spec, S4 spec, §7/§8/§9/§14/§17/§19/§20 + the §18 matrices
 updated accordingly._
+
+### Skills — S10 handoff (2026-06-17)
+
+**Contracts produced** (what S11 consumes):
+- **`shared/types.ts`** — additive (the S2 spine is unchanged; these are net-new Tier-2 types):
+  - `JsonSchema` — the validated subset (type/properties/required/additionalProperties/items/enum/
+    min·maxLength/min·maximum/min·maxItems/pattern). Hand-rolled, no validator dep (CLAUDE.md §0).
+  - `ToolPermission = 'read-selected-docs' | 'write-generated-doc' | 'export-file'` — **no
+    `read_arbitrary_fs`/`network`/`raw_sql` token exists** (structural ceiling).
+  - `ToolResult = {ok:true,output,resultRef?} | {ok:false,error}` (friendly, content-free error).
+  - `SkillToolAudit = (type, meta?) => void` — ids/counts-only sink (no free-text message arg).
+  - `SkillToolContext = { documentIds: readonly string[]; signal; onProgress?; audit }` — **no
+    Db/SQL/FS/net handle**. The gate hands the tool a **frozen** `documentIds` (cannot widen scope).
+  - `SkillTool = { name; description; inputSchema; outputSchema?; permissions; run(input, ctx) }`.
+  - Three audit events: `skill_run_started` / `skill_run_done` / `skill_run_failed` — metadata
+    `{skillId, toolName, documentCount}` ONLY (+ DiagnosticsTab `AUDIT_TYPE_LABELS` + EN/DE catalogs).
+- **`services/skills/tool-registry.ts`** (new):
+  - `validateJsonSchema(schema, value, path?) → string[]` (structural errors, never echoes input
+    values — §22-M1), `validateToolInput` / `validateToolOutput`.
+  - `getRegisteredTool(name)` (own-property only), `listRegisteredToolNames()`,
+    `resolveEffectiveTools(declared, userGrant)` = `declared ∩ registry ∩ userGrant`
+    (unregistered/ungranted dropped, deduped, declared order preserved).
+  - `toolRequiresConfirmation(tool)` = true iff a write/export token is present.
+  - `runSkillTool(tool, {skillId, input, ctx, confirmed?}) → Promise<ToolResult>` — the gate
+    (abort → input-validate → confirm-gate → run-on-frozen-ctx → output-validate → audit).
+  - `count_selected_documents` — the ONE shipped reference tool (pure, offline, read-only, needs
+    only `read-selected-docs`, no confirm). It is the registry's only entry.
+
+**Decisions taken or changed:**
+- **SkillToolContext exposes NO raw `Db` (refines the §12.1 sketch toward the §12.2/§14 intent).**
+  The plan's §12.1 type sketch showed `db: Db`, but §12.2 + §14 require a *narrow read API, no
+  fs/net/sql handle*. S10 resolves this: the v1-of-Tier-2 context exposes only the frozen id scope
+  (+ signal/progress/audit). **S11 adds a NARROW, scope-bounded content-read method** (e.g.
+  `readDocumentText(id)` confined to `documentIds`) — still never a raw `Db`/SQL/FS/net handle. This
+  also keeps the tool types fully shared-safe (no `main/` import leaks into `shared/types.ts`).
+- **Pre-run refusals are NOT audited as runs.** Abort / invalid-input / missing-confirm return
+  `{ok:false}` *without* a `skill_run_*` event — the run audit log records actual runs only. An
+  actual run is bracketed `started → done|failed`. (The sentinel grep pushes a secret through a
+  *successful* run to prove the audit payload stays ids/counts-only.)
+- **The validator is a hand-rolled JSON-Schema subset, not a dep.** Honors CLAUDE.md §0 (no new
+  native deps / offline). It covers what tool I/O contracts need (incl. the committed
+  `transaction.schema.json` shape) and is the same dependency-free posture as `ingestion/limits.ts`.
+
+**Open landmines:** none. SL log stays clean (SL-1 was resolved in S9). Carry-forward (not S10's
+job): the S6 composer-picker live eyeball still uncaptured (needs a model-running walk; covered by
+`SkillChat.test.tsx`).
+
+**What S11 consumes:** the whole `tool-registry.ts` gate + types above. S11 adds the real
+bank-statement tools (`extract_transactions` et al.) into the registry, the `skill_runs` table + the
+bank-statement data tables, the narrow content-read method on `SkillToolContext`, and the
+app-orchestrated chat/UI integration (the inline "Running: <tool>…" busy row + the write-confirm
+modal wired into the transcript). The committed `schemas/transaction.schema.json` is the typed I/O
+contract those tools validate against; the bank-statement stub's `reservesTools`/`allowedTools`
+declaration names the tools the registry will wire (and its SKILL.md body swaps to the §6.6
+reconcile/validate body once the tools are effective for a `kind: 'tool'` skill).
 
 ### Skills — S9 handoff (2026-06-17)
 

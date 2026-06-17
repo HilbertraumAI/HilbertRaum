@@ -61,7 +61,10 @@ const AUDIT_TYPE_LABELS: Record<AuditEventType, MessageKey> = {
   skill_imported: 'diag.audit.skill_imported',
   skill_deleted: 'diag.audit.skill_deleted',
   skill_enabled: 'diag.audit.skill_enabled',
-  skill_disabled: 'diag.audit.skill_disabled'
+  skill_disabled: 'diag.audit.skill_disabled',
+  skill_run_started: 'diag.audit.skill_run_started',
+  skill_run_done: 'diag.audit.skill_run_done',
+  skill_run_failed: 'diag.audit.skill_run_failed'
 }
 
 function auditLabel(type: AuditEventType, t: I18n['t']): string {

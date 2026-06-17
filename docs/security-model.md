@@ -494,6 +494,47 @@ already accepted for the engine binary and the on-drive sidecars** — documente
 still only injected reference text behind the prompt-injection guard — it cannot run code, reach the
 network, read other files, or widen document scope (the structural ceilings, §14).
 
+## Skill tool ceiling (Tier-2) — the SkillToolContext + validate→run→validate gate (skills plan §12/§14, Phase S10, 2026-06-17)
+
+Tier-2 is where a skill can finally *do* something beyond inject text — so S10 builds the **gate
+before the tools**. A skill still cannot register a tool: tools live only in the app's static
+`services/skills/tool-registry.ts` map, and a skill merely *declares* names via `allowedTools`. The
+effective set is the three-way intersection `declared ∩ registry ∩ userGrant` — a name the registry
+doesn't know, or the user hasn't granted, is dropped. Runs are **app-orchestrated** (DS4/§2): the
+model never parses `tool_calls`; the app invokes `runSkillTool` and the model only *explains* the
+validated, structured result.
+
+The containment is **structural, not policy** — it rests on what the tool's context does and does not
+expose:
+
+- **No raw handle.** `SkillToolContext` carries a fixed read-only `documentIds` scope, an
+  `AbortSignal`, an optional progress callback, and an **ids/counts-only audit sink**. There is
+  **deliberately no `Db`/SQL handle, no filesystem handle, and no network handle** — and the
+  `ToolPermission` enum has **no `read_arbitrary_fs`, `network`, or `raw_sql` token**, so those
+  capabilities are unreachable by construction, not merely undeclared. This closes the
+  confused-deputy / model-over-reach rows of §14.
+- **Fixed, un-widenable scope.** The gate hands the tool a **frozen** copy of `documentIds`, so a tool
+  (or a model coaxing one) cannot reach beyond the documents the user selected for the turn.
+- **Validate → run → validate.** Input is checked against the tool's `inputSchema` **before** `run`
+  and refused without ever calling the tool on a bad shape; output is checked against `outputSchema`
+  **after**, and a wrong shape **fails the run** so no half-trusted output reaches the model. (The
+  validator is a hand-rolled JSON-Schema subset — no validator dependency, CLAUDE.md §0.)
+- **Confirm for writes.** Any tool whose permissions include a write/export/destructive token
+  (`toolRequiresConfirmation`) is refused unless the call carries `confirmed:true`; read-only tools
+  (`read-selected-docs`) run without a per-call prompt.
+- **Cancellable, no partial persist.** An already-aborted signal refuses the run; a thrown/aborted/
+  rejected run yields a **friendly, content-free** error (the technical reason to the local log only)
+  and persists nothing.
+- **ids/counts-only audit.** `skill_run_started`/`done`/`failed` carry `{skillId, toolName,
+  documentCount}` only — never inputs, outputs, member names, or document/chat content (§22-M1, proven
+  by a sentinel-grep test pushing a secret string through a successful run).
+
+S10 ships exactly **one harmless reference tool** (`count_selected_documents` — pure, offline,
+read-only over the frozen scope) to prove the gate. **No bank-statement tools and no `skill_runs`
+table exist yet** — those land with S11, where a real tool lifecycle gives the run table something to
+record. S11 will also add a narrow, scope-bounded content-read method to the context (still no raw
+`Db`/FS/net); S10 exposes only the id scope.
+
 ## Unverified-binary env overrides are dev-only (audit M-5, 2026-06-13)
 
 `HILBERTRAUM_LLAMA_BIN` and `HILBERTRAUM_WHISPER_BIN` point the sidecar resolvers at an explicit,

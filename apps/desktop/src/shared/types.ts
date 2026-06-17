@@ -1360,6 +1360,101 @@ export interface SkillSuggestion {
   title: string
 }
 
+// ---- Tier-2 skill tools (skills plan §12 — DESIGNED here in S10; the bank-statement tools land
+// in S11). A tool is an APP-AUTHORED, typed, app-orchestrated capability a skill may *declare* (via
+// `allowedTools`) but can never register or alter (§4/DS8). The model never executes a tool: the
+// app validates input → runs → validates output → the model only *explains* the structured result
+// (DS4/§2 — no model-native `tool_calls`). These types are net-new in S10 and additive to the S2
+// type spine (flagged in the S10 handoff). ----
+
+/**
+ * A tiny subset of JSON Schema (draft-07-ish) — enough to express AND validate a tool's I/O
+ * contract (skills plan §12.1). Hand-rolled rather than pulling a validator dependency (CLAUDE.md
+ * §0: no new native deps, offline). The gate validates input against `inputSchema` BEFORE `run`
+ * and output against `outputSchema` AFTER it.
+ */
+export interface JsonSchema {
+  type?: 'object' | 'array' | 'string' | 'number' | 'integer' | 'boolean' | 'null'
+  properties?: Record<string, JsonSchema>
+  required?: string[]
+  /** When `false`, properties not named in `properties` are rejected (the posture we ship). */
+  additionalProperties?: boolean
+  items?: JsonSchema
+  enum?: unknown[]
+  minLength?: number
+  maxLength?: number
+  minimum?: number
+  maximum?: number
+  minItems?: number
+  maxItems?: number
+  /** Standard JSON-Schema "contains" semantics (anchor with `^…$` for a full match). */
+  pattern?: string
+  description?: string
+}
+
+/**
+ * Enumerated capability tokens a tool may require (skills plan §12.2). There is DELIBERATELY no
+ * `read_arbitrary_fs`, `network`, or `raw_sql` token — those capabilities are unreachable by
+ * construction (the `SkillToolContext` carries no such handle), not merely undeclared (§14). A
+ * token implying a WRITE/EXPORT/destructive action forces a user-confirmation gate
+ * (`toolRequiresConfirmation`); `read-selected-docs` is read-only and runs without a per-call prompt.
+ */
+export type ToolPermission = 'read-selected-docs' | 'write-generated-doc' | 'export-file'
+
+/**
+ * The structured result of a tool run (skills plan §12.1). On success the `output` has ALREADY been
+ * validated against the tool's `outputSchema` by the gate — no half-trusted shape reaches the model.
+ * On failure the `error` is FRIENDLY and content-free (the technical reason goes to the local log
+ * only — §12.2); a failed run never persists a partial result.
+ */
+export type ToolResult =
+  | { ok: true; output: unknown; resultRef?: string }
+  | { ok: false; error: string }
+
+/**
+ * The ids/counts-only audit sink handed to a tool (skills plan §12.1/§22-M1). Narrower than the
+ * app's `AuditRecorder` — there is no free-text message argument, so a tool (or the gate) can only
+ * ever record `{skillId, toolName, documentCount}`, never inputs, outputs, or content.
+ */
+export type SkillToolAudit = (type: AuditEventType, meta?: Record<string, unknown>) => void
+
+/**
+ * The NARROW, app-built context a tool runs inside (skills plan §12.1/§14). It is the WHOLE of a
+ * tool's reach: a FIXED, read-only `documentIds` scope it cannot widen (the gate hands it a frozen
+ * copy), an `AbortSignal`, optional progress, and the ids/counts-only audit sink. There is
+ * DELIBERATELY no `Db`/SQL handle, no filesystem handle, and no network handle — confused-deputy and
+ * model-over-reach containment is structural (§14), not policy. (S11 adds a NARROW, scope-bounded
+ * content-read method here for the real bank-statement tools; S10 exposes only the id scope.)
+ */
+export interface SkillToolContext {
+  /** The selected-only document scope (ids only). Frozen by the gate; a tool cannot widen it. */
+  documentIds: readonly string[]
+  /** Cooperative cancellation (the chat/doc-task `stopGeneration`/`cancelDocTask` precedent). */
+  signal: AbortSignal
+  /** Optional progress, merged into the polling status by the app (no new event channel). */
+  onProgress?: (p: { done: number; total: number }) => void
+  /** ids/counts-only audit sink — never inputs, outputs, or content. */
+  audit: SkillToolAudit
+}
+
+/**
+ * An app-owned tool descriptor (skills plan §12.1). Lives ONLY in the app's static
+ * `services/skills/tool-registry.ts` map — a skill references a tool BY NAME via `allowedTools` and
+ * can never add or alter one. The gate validates `input` against `inputSchema` before `run`, and the
+ * returned `output` against `outputSchema` (if present) after.
+ */
+export interface SkillTool {
+  /** Stable id referenced by SKILL.md `allowedTools`. */
+  name: string
+  /** Human- + model-facing summary — promises nothing beyond what the gate actually enforces. */
+  description: string
+  inputSchema: JsonSchema
+  outputSchema?: JsonSchema
+  /** Capability tokens (§12.2). A write/export/destructive token ⇒ a user-confirmation gate. */
+  permissions: ToolPermission[]
+  run(input: unknown, ctx: SkillToolContext): Promise<ToolResult>
+}
+
 export type AuditEventType =
   | 'runtime_started'
   | 'runtime_stopped'
@@ -1402,6 +1497,12 @@ export type AuditEventType =
   | 'skill_deleted'
   | 'skill_enabled'
   | 'skill_disabled'
+  // Tier-2 tool runs (skills plan §12.2/§22-M1, S10): brackets one app-orchestrated tool run.
+  // Metadata is { skillId, toolName, documentCount } ONLY — NEVER the tool's input, output, or any
+  // document/chat content (the `SkillToolContext.audit` sink cannot carry a free-text message).
+  | 'skill_run_started'
+  | 'skill_run_done'
+  | 'skill_run_failed'
   | 'workspace_created'
   | 'workspace_unlocked'
   | 'workspace_locked'
