@@ -159,6 +159,44 @@ describe('LlamaRuntime', () => {
     await runtime.stop()
   })
 
+  it('sets --batch-size/--ubatch-size to min(ctx, 2048) on the chat sidecar (RT-1 prefill)', async () => {
+    // Without these flags llama-server defaults the physical batch to 512, chunking prompt
+    // prefill — the dominant time-to-first-token cost. The reranker raises its batch the same
+    // way for the same reason (reranker.test.ts asserts --batch-size 2048). ctx 4096 caps at 2048.
+    const { spawn, calls } = fakeSpawn()
+    const runtime = new LlamaRuntime(startOpts, {
+      binPath: '/bin/llama-server',
+      spawn,
+      fetchImpl: chatFetch({ frames: ['data: [DONE]\n\n'] }),
+      findPort: async () => 51020,
+      healthIntervalMs: 1
+    })
+    await runtime.start()
+    const joined = calls[0].args.join(' ')
+    expect(joined).toContain('--batch-size 2048')
+    expect(joined).toContain('--ubatch-size 2048')
+    await runtime.stop()
+
+    // A context BELOW the cap sizes the batch to the context (it is min(ctx, 2048), not a fixed
+    // 2048 — the whole prompt can't exceed n_ctx, so a larger physical batch would be wasted).
+    const { spawn: spawn2, calls: calls2 } = fakeSpawn()
+    const small = new LlamaRuntime(
+      { ...startOpts, contextTokens: 1024 },
+      {
+        binPath: '/bin/llama-server',
+        spawn: spawn2,
+        fetchImpl: chatFetch({ frames: ['data: [DONE]\n\n'] }),
+        findPort: async () => 51021,
+        healthIntervalMs: 1
+      }
+    )
+    await small.start()
+    const joined2 = calls2[0].args.join(' ')
+    expect(joined2).toContain('--batch-size 1024')
+    expect(joined2).toContain('--ubatch-size 1024')
+    await small.stop()
+  })
+
   it('throws when the chat request fails (non-ok HTTP)', async () => {
     const { spawn } = fakeSpawn()
     const runtime = new LlamaRuntime(startOpts, {

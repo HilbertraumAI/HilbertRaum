@@ -29,6 +29,16 @@ import { LlamaServer, type LlamaServerOptions } from './sidecar'
  */
 export const CHAT_SERVER_ARGS = ['--jinja', '--reasoning-format', 'deepseek'] as const
 
+/**
+ * Physical-batch cap for the chat sidecar's prompt prefill (RT-1, perf audit 2026-06-18).
+ * llama-server defaults `--batch-size`/`--ubatch-size` to 512, which chunks prefill — the
+ * dominant time-to-first-token cost — into 512-token pieces. We raise it to the context size
+ * but cap at 2048 (a low-risk validated start on the pinned b9585; the whole prompt can't exceed
+ * n_ctx anyway, so `min(ctx, 2048)` never over-allocates the batch). Mirrors the reranker, which
+ * raises its batch to the context for the same reason (reranker/llama.ts:96-115).
+ */
+export const CHAT_MAX_PHYSICAL_BATCH = 2048
+
 /** Per-runtime overrides; mostly test seams forwarded to `LlamaServer`. */
 export type LlamaRuntimeDeps = Pick<
   LlamaServerOptions,
@@ -166,6 +176,7 @@ export class LlamaRuntime implements ModelRuntime {
       binPath: deps.binPath,
       modelPath: opts.modelPath,
       contextTokens: opts.contextTokens,
+      physicalBatchSize: Math.min(opts.contextTokens, CHAT_MAX_PHYSICAL_BATCH),
       extraArgs: [...CHAT_SERVER_ARGS, ...(deps.extraArgs ?? [])],
       onUnexpectedExit: deps.onUnexpectedExit,
       spawn: deps.spawn,

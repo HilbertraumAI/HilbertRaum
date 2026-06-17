@@ -161,6 +161,15 @@ export interface LlamaServerOptions {
   /** Absolute path to the GGUF weight file. */
   modelPath: string
   contextTokens: number
+  /**
+   * Physical batch size for prompt prefill — emitted as `--batch-size`/`--ubatch-size`
+   * (RT-1, perf audit 2026-06-18). llama-server's 512 default chunks prefill into 512-token
+   * pieces; the dominant time-to-first-token cost (skill fence + RAG excerpts + history, 3.5–15s
+   * on CPU per Skills §17) is prefill, and a larger physical batch processes it in fewer passes
+   * (and materially improves prompt-processing throughput on GPU). Only the CHAT sidecar sets
+   * this; the embedder/reranker tune their own batch via extraArgs (reranker/llama.ts:96-115).
+   */
+  physicalBatchSize?: number
   /** Extra CLI args (e.g. `['--embedding']` for the embeddings server). */
   extraArgs?: string[]
   threads?: number
@@ -234,6 +243,18 @@ export class LlamaServer {
   /** The CLI args used to launch the server. LOCALHOST-ONLY: `--host 127.0.0.1`. */
   buildArgs(port: number): string[] {
     const threads = this.opts.threads ?? defaultThreadCount()
+    // RT-1: emit `--batch-size`/`--ubatch-size` only when a physical batch is requested (the
+    // chat sidecar). Unset ⇒ no flags ⇒ llama-server's 512 default, leaving the embedder and
+    // reranker (which set their own batch via extraArgs) untouched.
+    const batchArgs =
+      this.opts.physicalBatchSize != null
+        ? [
+            '--batch-size',
+            String(this.opts.physicalBatchSize),
+            '--ubatch-size',
+            String(this.opts.physicalBatchSize)
+          ]
+        : []
     return [
       '--host',
       this.host,
@@ -245,6 +266,7 @@ export class LlamaServer {
       String(this.opts.contextTokens),
       '--threads',
       String(threads),
+      ...batchArgs,
       ...(this.opts.extraArgs ?? [])
     ]
   }
