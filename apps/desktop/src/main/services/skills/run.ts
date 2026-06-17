@@ -54,6 +54,13 @@ export interface BankExtractionResult {
   /** The created `bank_statements.id` on success. */
   statementId?: string
   transactionCount?: number
+  /**
+   * True when the run ended because it was CANCELLED (vs a genuine failure). The seam is the
+   * authority on this — the controller must not re-derive it from a late `signal.aborted` (B2).
+   */
+  cancelled?: boolean
+  /** A content-free failure reason CODE the renderer localizes (I1) — e.g. 'unavailable'. */
+  errorCode?: string
   /** A friendly, content-free reason on failure. */
   error?: string
 }
@@ -106,83 +113,100 @@ export async function runBankExtraction(
      VALUES (?, ?, ?, ?, 'started', ?)`
   ).run(runId, args.skillInstallId, args.conversationId ?? null, JSON.stringify(documentIds), now())
 
-  const tool = getRegisteredTool(EXTRACT_TOOL_NAME)
-  if (!tool) {
-    // No run happened ⇒ no audit event (matches the gate's "pre-run refusals are not audited").
-    const msg = 'This tool is not available.'
-    finishRun(db, runId, 'failed', now(), null, msg)
-    return { ok: false, runId, error: msg }
-  }
-
-  const signal = deps.signal ?? new AbortController().signal
-  const ctx: SkillToolContext = {
-    documentIds,
-    readDocumentChunks: buildReadDocumentChunks(db, new Set(documentIds)),
-    signal,
-    onProgress: deps.onProgress,
-    audit: deps.audit
-  }
-
-  const result = await runSkillTool(tool, {
-    skillId: args.skillInstallId,
-    input: { documentId: args.documentId },
-    ctx
-  })
-
-  if (!result.ok) {
-    finishRun(db, runId, signal.aborted ? 'cancelled' : 'failed', now(), null, result.error)
-    return { ok: false, runId, error: result.error }
-  }
-
-  // Persist the schema-validated output atomically — a failed write leaves NO partial rows.
-  const output = result.output as ExtractTransactionsOutput
-  const statementId = randomUUID()
-  const completedAt = now()
+  // Everything after the 'started' insert is guarded: any UNEXPECTED throw (e.g. a transiently
+  // locked DB while building the chunk reader) must still drive a terminal status — never leave the
+  // run stranded at 'started' (B4). The expected paths (bad shape, cancel, persist failure) return
+  // their own terminal result inside; this outer catch is the safety net.
   try {
-    db.exec('BEGIN')
-    db.prepare(
-      `INSERT INTO bank_statements (id, document_id, run_id, period_start, period_end, currency, created_at)
-       VALUES (?, ?, ?, NULL, NULL, ?, ?)`
-    ).run(statementId, args.documentId, runId, output.currency ?? null, completedAt)
-    const insertTx = db.prepare(
-      `INSERT INTO bank_transactions
-        (id, statement_id, run_id, row_index, date, value_date, description, amount, currency, balance_after, source_page, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    )
-    output.transactions.forEach((t, i) => {
-      insertTx.run(
-        randomUUID(),
-        statementId,
-        runId,
-        i,
-        t.date,
-        t.valueDate ?? null,
-        t.description,
-        t.amount,
-        t.currency,
-        t.balanceAfter ?? null,
-        t.sourcePage ?? null,
-        completedAt
-      )
+    const tool = getRegisteredTool(EXTRACT_TOOL_NAME)
+    if (!tool) {
+      // No run happened ⇒ no audit event (matches the gate's "pre-run refusals are not audited").
+      const msg = 'This tool is not available.'
+      finishRun(db, runId, 'failed', now(), null, msg)
+      return { ok: false, runId, errorCode: 'unavailable', error: msg }
+    }
+
+    const signal = deps.signal ?? new AbortController().signal
+    const ctx: SkillToolContext = {
+      documentIds,
+      readDocumentChunks: buildReadDocumentChunks(db, new Set(documentIds)),
+      signal,
+      onProgress: deps.onProgress,
+      audit: deps.audit
+    }
+
+    const result = await runSkillTool(tool, {
+      skillId: args.skillInstallId,
+      input: { documentId: args.documentId },
+      ctx
     })
-    db.prepare(
-      `UPDATE skill_runs SET status = 'done', completed_at = ?, result_ref = ?, error = NULL WHERE id = ?`
-    ).run(completedAt, statementId, runId)
-    db.exec('COMMIT')
+
+    if (!result.ok) {
+      const cancelled = signal.aborted
+      finishRun(db, runId, cancelled ? 'cancelled' : 'failed', now(), null, result.error)
+      return { ok: false, runId, cancelled, error: result.error }
+    }
+
+    // Persist the schema-validated output atomically — a failed write leaves NO partial rows.
+    const output = result.output as ExtractTransactionsOutput
+    const statementId = randomUUID()
+    const completedAt = now()
+    try {
+      db.exec('BEGIN')
+      db.prepare(
+        `INSERT INTO bank_statements (id, document_id, run_id, period_start, period_end, currency, created_at)
+         VALUES (?, ?, ?, NULL, NULL, ?, ?)`
+      ).run(statementId, args.documentId, runId, output.currency ?? null, completedAt)
+      const insertTx = db.prepare(
+        `INSERT INTO bank_transactions
+          (id, statement_id, run_id, row_index, date, value_date, description, amount, currency, balance_after, source_page, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      output.transactions.forEach((t, i) => {
+        insertTx.run(
+          randomUUID(),
+          statementId,
+          runId,
+          i,
+          t.date,
+          t.valueDate ?? null,
+          t.description,
+          t.amount,
+          t.currency,
+          t.balanceAfter ?? null,
+          t.sourcePage ?? null,
+          completedAt
+        )
+      })
+      db.prepare(
+        `UPDATE skill_runs SET status = 'done', completed_at = ?, result_ref = ?, error = NULL WHERE id = ?`
+      ).run(completedAt, statementId, runId)
+      db.exec('COMMIT')
+    } catch {
+      try {
+        db.exec('ROLLBACK')
+      } catch {
+        /* keep the original failure */
+      }
+      // Technical reason to the local log only — never the renderer/audit (§22-M1).
+      console.error('[skills] bank extraction failed to persist')
+      const msg = 'This statement could not be saved. Nothing was changed.'
+      finishRun(db, runId, 'failed', now(), null, msg)
+      return { ok: false, runId, errorCode: 'persistFailed', error: msg }
+    }
+
+    return { ok: true, runId, statementId, transactionCount: output.transactions.length }
   } catch {
     try {
       db.exec('ROLLBACK')
     } catch {
-      /* keep the original failure */
+      /* no active transaction */
     }
-    // Technical reason to the local log only — never the renderer/audit (§22-M1).
-    console.error('[skills] bank extraction failed to persist')
+    console.error('[skills] bank extraction failed unexpectedly')
     const msg = 'This statement could not be saved. Nothing was changed.'
     finishRun(db, runId, 'failed', now(), null, msg)
-    return { ok: false, runId, error: msg }
+    return { ok: false, runId, errorCode: 'persistFailed', error: msg }
   }
-
-  return { ok: true, runId, statementId, transactionCount: output.transactions.length }
 }
 
 // =====================================================================================
@@ -216,6 +240,14 @@ export interface StatementToolResult {
   count?: number
   /** A content-free outcome discriminator (validate: 'reconciled'|'unreconciled'|'unchecked'). */
   resultKind?: string
+  /**
+   * True when the run ended because it was CANCELLED (vs a genuine failure) — e.g. the user
+   * dismissed the CSV save dialog, or Cancel landed before the work persisted (B1/B2). The
+   * controller surfaces this directly instead of re-deriving it from `signal.aborted`.
+   */
+  cancelled?: boolean
+  /** A content-free failure reason CODE the renderer localizes (I1) — e.g. 'needsExtraction'. */
+  errorCode?: string
   /** A friendly, content-free reason on failure. */
   error?: string
 }
@@ -301,43 +333,53 @@ async function prepareStatementRun(
      VALUES (?, ?, ?, ?, 'started', ?)`
   ).run(runId, args.skillInstallId, args.conversationId ?? null, JSON.stringify(documentIds), now())
 
-  const tool = getRegisteredTool(toolName)
-  if (!tool) {
-    const msg = 'This tool is not available.'
+  // Guarded like runBankExtraction (B4): an unexpected throw between the 'started' insert and a
+  // terminal result (e.g. a DB error in latestStatement/loadTransactions) must not strand the run.
+  try {
+    const tool = getRegisteredTool(toolName)
+    if (!tool) {
+      const msg = 'This tool is not available.'
+      finishRun(db, runId, 'failed', now(), null, msg)
+      return { failed: { ok: false, runId, errorCode: 'unavailable', error: msg } }
+    }
+
+    const statement = latestStatement(db, args.documentId)
+    if (!statement) {
+      // Honest, friendly: the downstream tools need an extraction first (no figure invented).
+      const msg = 'Read the statement first, then run this tool.'
+      finishRun(db, runId, 'failed', now(), null, msg)
+      return { failed: { ok: false, runId, errorCode: 'needsExtraction', error: msg } }
+    }
+
+    const transactions = loadTransactions(db, statement.id)
+    const signal = deps.signal ?? new AbortController().signal
+    const ctx: SkillToolContext = {
+      documentIds,
+      readDocumentChunks: buildReadDocumentChunks(db, new Set(documentIds)),
+      signal,
+      onProgress: deps.onProgress,
+      audit: deps.audit
+    }
+
+    const result = await runSkillTool(tool, {
+      skillId: args.skillInstallId,
+      input: toToolInput(transactions),
+      ctx,
+      confirmed
+    })
+    if (!result.ok) {
+      const cancelled = signal.aborted
+      finishRun(db, runId, cancelled ? 'cancelled' : 'failed', now(), null, result.error)
+      return { failed: { ok: false, runId, cancelled, error: result.error } }
+    }
+    return {
+      prepared: { runId, statementId: statement.id, transactions, output: result.output, completedAt: now() }
+    }
+  } catch {
+    console.error('[skills] statement run failed unexpectedly')
+    const msg = 'This could not be saved. Nothing was changed.'
     finishRun(db, runId, 'failed', now(), null, msg)
-    return { failed: { ok: false, runId, error: msg } }
-  }
-
-  const statement = latestStatement(db, args.documentId)
-  if (!statement) {
-    // Honest, friendly: the downstream tools need an extraction first (no figure invented).
-    const msg = 'Read the statement first, then run this tool.'
-    finishRun(db, runId, 'failed', now(), null, msg)
-    return { failed: { ok: false, runId, error: msg } }
-  }
-
-  const transactions = loadTransactions(db, statement.id)
-  const signal = deps.signal ?? new AbortController().signal
-  const ctx: SkillToolContext = {
-    documentIds,
-    readDocumentChunks: buildReadDocumentChunks(db, new Set(documentIds)),
-    signal,
-    onProgress: deps.onProgress,
-    audit: deps.audit
-  }
-
-  const result = await runSkillTool(tool, {
-    skillId: args.skillInstallId,
-    input: toToolInput(transactions),
-    ctx,
-    confirmed
-  })
-  if (!result.ok) {
-    finishRun(db, runId, signal.aborted ? 'cancelled' : 'failed', now(), null, result.error)
-    return { failed: { ok: false, runId, error: result.error } }
-  }
-  return {
-    prepared: { runId, statementId: statement.id, transactions, output: result.output, completedAt: now() }
+    return { failed: { ok: false, runId, errorCode: 'persistFailed', error: msg } }
   }
 }
 
@@ -351,7 +393,7 @@ function persistFailure(db: Db, runId: string, now: () => string): StatementTool
   console.error('[skills] statement tool failed to persist')
   const msg = 'This could not be saved. Nothing was changed.'
   finishRun(db, runId, 'failed', now(), null, msg)
-  return { ok: false, runId, error: msg }
+  return { ok: false, runId, errorCode: 'persistFailed', error: msg }
 }
 
 /**
@@ -502,6 +544,12 @@ export async function runCsvExport(
   if ('failed' in prep) return prep.failed
   const { runId, output, completedAt } = prep.prepared
   const { csv, rowCount } = output as { csv: string; rowCount: number }
+  // Cancelled after the tool produced the CSV but before the write — don't even open the save
+  // dialog, and report it as cancelled (not failed), so nothing is written under a cancel (B2).
+  if (deps.signal?.aborted) {
+    finishRun(db, runId, 'cancelled', now(), null, null)
+    return { ok: false, runId, cancelled: true, error: 'Export cancelled. Nothing was saved.' }
+  }
   let saved: boolean
   try {
     saved = await deps.saveTextFile('transactions.csv', csv)
@@ -509,12 +557,13 @@ export async function runCsvExport(
     console.error('[skills] CSV export failed to write')
     const msg = 'The file could not be saved. Nothing was changed.'
     finishRun(db, runId, 'failed', now(), null, msg)
-    return { ok: false, runId, error: msg }
+    return { ok: false, runId, errorCode: 'exportWriteFailed', error: msg }
   }
   if (!saved) {
-    // The user cancelled the save dialog — a calm, non-error outcome (history records it cancelled).
+    // The user cancelled the save dialog — a calm, non-error outcome (history records it cancelled,
+    // and the controller surfaces it as cancelled, not a failure — B1).
     finishRun(db, runId, 'cancelled', now(), null, null)
-    return { ok: false, runId, error: 'Export cancelled. Nothing was saved.' }
+    return { ok: false, runId, cancelled: true, error: 'Export cancelled. Nothing was saved.' }
   }
   // result_ref stays NULL — the export produces no DB artifact, and the path is never recorded.
   finishRun(db, runId, 'done', completedAt, null, null)

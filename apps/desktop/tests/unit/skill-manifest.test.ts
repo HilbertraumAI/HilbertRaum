@@ -135,6 +135,23 @@ describe('validateSkillManifest', () => {
       expect(res.manifest?.permissions.documents).toBe('selected_only')
       expect(res.notes.some((n) => n.includes('not recognized'))).toBe(true)
     })
+
+    it('never echoes the raw (attacker-supplied) permission value into the note (S1, §22-M1)', () => {
+      const secret = 'SECRET_PAYLOAD_xyz'
+      const res = validateSkillManifest(rawFront({ permissions: { documents: secret } }))
+      expect(res.ok).toBe(true)
+      expect(res.notes.join('\n')).not.toContain(secret) // content-free — no IPC-payload leak
+    })
+  })
+
+  it('bounds an over-long / over-count trigger list (S2 — ReDoS source-length cap)', () => {
+    const longPattern = '*'.repeat(5000) // a pathological glob source
+    const many = Array.from({ length: 200 }, (_, i) => `kw${i}`)
+    const res = validateSkillManifest(rawFront({ triggers: { keywords: many, filenamePatterns: [longPattern] } }))
+    expect(res.ok).toBe(true)
+    expect(res.manifest!.triggers.keywords.length).toBeLessThanOrEqual(64) // count cap
+    expect(res.manifest!.triggers.filenamePatterns).toEqual([]) // the 5000-char pattern is dropped
+    expect(res.notes.some((n) => n.includes('too long') || n.includes('more entries'))).toBe(true)
   })
 
   it('accepts but ignores allowedTools for an instruction skill (with a note), but flags reservesTools', () => {

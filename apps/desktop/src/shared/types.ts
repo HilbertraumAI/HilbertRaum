@@ -1345,6 +1345,12 @@ export interface SkillPreview {
   downgradeBlocked?: boolean
   /** Friendly, structural-only validation problems (empty when ok). */
   errors: string[]
+  /**
+   * Stable, content-free reason CODES paralleling `errors` (e.g. 'pathTraversal' | 'tooLarge' |
+   * 'invalidManifest'), which the renderer maps to localized copy so a German user never sees the
+   * English structural string. Same length/order as `errors`; an unrecognized message → 'unknown'.
+   */
+  errorCodes?: string[]
   /** Non-fatal advisories (permission clamps, ignored fields). */
   notes: string[]
 }
@@ -1539,7 +1545,15 @@ export interface SkillRunState {
    * it to copy; it is NEVER a figure or row content. Unset for count-only outcomes.
    */
   resultKind?: string
-  /** Friendly, content-free reason on failure. */
+  /**
+   * A content-free reason CODE for a failure (e.g. 'unavailable' | 'needsExtraction' |
+   * 'persistFailed' | 'exportWriteFailed'), which the renderer maps to localized copy — so a
+   * German user never sees an English failure string (the seam/controller stay i18n-free). Unset
+   * for a generic failure (the renderer falls back to the localized generic message).
+   */
+  errorCode?: string
+  /** Friendly, content-free reason on failure (English; kept for logging/back-compat — the
+   *  renderer prefers `errorCode`). */
   error?: string
 }
 

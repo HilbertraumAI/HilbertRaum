@@ -1512,9 +1512,11 @@ exported** (§9.5) — distinct from the non-secret skill packages.
 
 `skills:list/get/pick/preview/import/export/delete/enable/disable/acknowledgeWarning` +
 `suggestSkills` + the four `skills:*` tool-run channels (§9), all `requireUnlocked` for DB-backed work
-(the two in-memory controller channels `getSkillRun`/`cancelSkillRun` carry no content). Audit events:
-`skill_imported`/`deleted`/`enabled`/`disabled`/`selected` + `skill_run_started`/`done`/`failed`, all
-**ids/counts only**.
+(the two in-memory controller channels `getSkillRun`/`cancelSkillRun` carry no content). Audit events
+(the exact `AuditEventType` members): `skill_imported`/`skill_deleted`/`skill_enabled`/`skill_disabled`
++ `skill_run_started`/`skill_run_done`/`skill_run_failed`, all **ids/counts only**. (Selecting a skill
+is a sticky-default DB write and is deliberately **not** audited — there is no `skill_selected` event;
+the abandoned DS13 design that named one was never built.)
 
 ### §12 Trade-offs, residuals & the closing S12 audit
 
@@ -1524,12 +1526,80 @@ export boundary), and the scattered S10/S11 sentinel tests were consolidated int
 `skills-privacy-guard.test.ts` that drives one secret through every sink (import error, loader, all five
 tool runs, the CSV export, the IPC `SkillRunState`) **plus a console spy**. Accepted LOW residuals
 (documented in [`known-limitations.md`](known-limitations.md)): prompt text-injection is contained by the
-**structural ceiling**, not by escaping the fence delimiter; a user skill's `triggers.filenamePattern` is
-a bounded RegExp run only on a user action. **Deferred:** S13 auto-fire (gated on an evaluation harness);
-native model tool-calling (stays a future option behind the same gate); the app-skill integrity residual
-(by location, not signature — same as the engine binary, §22-M2). **History:** the wave shipped S2–S12
-(2026-06-17); the original plans: `git show <S12^>:docs/skills-plan.md` and
-`git show <S12^>:docs/skills-s11-plan.md`.
+**structural ceiling**, not by escaping the fence delimiter; a user skill's `triggers.filenamePatterns`
+compile to a bounded RegExp run only on a user action (and, post-S12, the entry length/count are capped
+at parse time + the selector refuses a wildcard-heavy glob — see §13 S2). **Deferred:** S13 auto-fire
+(gated on an evaluation harness); native model tool-calling (stays a future option behind the same gate);
+the app-skill integrity residual (by location, not signature — same as the engine binary, §22-M2).
+**History:** the wave shipped S2–S12 (2026-06-17); the original plans: `git show <S12^>:docs/skills-plan.md`
+and `git show <S12^>:docs/skills-s11-plan.md`.
+
+### §13 Post-S12 audit follow-ups (2026-06-17)
+
+A second multi-persona audit after the wave closed found **no CRITICAL/HIGH**; the fixes below landed
+behind the unchanged §14 ceiling (no new capability, still offline, audit still ids/counts-only):
+
+- **B1/B2 — cancel vs. outcome (run controller).** The seam is now the single authority on a run's
+  terminal status: a non-ok outcome carries an explicit `cancelled` flag (a dismissed CSV save dialog
+  is a **cancel**, not a failure), and a successful outcome is reported `done` even if Cancel landed
+  late (the work persisted — never reported "cancelled, nothing changed"). `runCsvExport` re-checks the
+  abort **before** the FS-write, so nothing is written under a cancel. `SkillRunController.finish`
+  reads `outcome.cancelled` (falling back to `signal.aborted` only when a runner threw).
+- **I1/I2 — localized failure copy.** The run seams return a content-free reason **code**
+  (`errorCode`: `unavailable` | `needsExtraction` | `persistFailed` | `exportWriteFailed`) and the
+  import preview returns parallel `errorCodes`; the renderer maps both to EN/DE copy, so a German user
+  never sees an English failure/import string. The seam/controller stay i18n-free (codes are
+  content-free tokens, like `resultKind`). EN/DE parity is **compile-enforced** (`de: Record<keyof
+  typeof en, string>`).
+- **S1 — content-free preview notes.** The clamp/`manifest.json`-conflict **notes** no longer echo the
+  raw (attacker-supplied) frontmatter value — only the fixed field name — closing the one §22-M1 gap
+  where attacker text could ride the `SkillPreview` IPC payload into the UI (notes share the path with
+  the already-clean structural errors).
+- **S2 — ReDoS guard on `filenamePatterns`.** Two layers: the parser caps each trigger entry's length
+  (≤200) and count (≤64), and `selector.globToRegExp` refuses a glob with >10 `*` wildcards (treated as
+  a non-match) so a `*a*a…`-style pattern can never hang the synchronous main-side scoring.
+- **B3 — `summarize_cashflow` self-consistency.** `net` is derived from the rounded `totalIn`/`totalOut`
+  so the three reported figures always satisfy `net === totalIn − totalOut`.
+- **B4 — no stranded `started` run.** `runBankExtraction` and `prepareStatementRun` now wrap everything
+  after the `skill_runs` 'started' insert in a guard, so an unexpected throw (e.g. a transiently locked
+  DB while building the chunk reader) still drives a terminal `failed` status instead of leaving the run
+  row at `started` forever.
+- **CSV leading-whitespace formula injection.** `CSV_FORMULA_LEAD` now also neutralizes a formula
+  trigger that hides behind leading whitespace (`"  =cmd"`) — some importers trim before evaluating —
+  in addition to the leading-control-char and bare-`= + - @` cases.
+- **Reconcile one-active-per-id (DS12 safety net).** `reconcileSkills` collapses the rare case where two
+  AVAILABLE rows of one declared id end up both enabled (a DB rebuild, or an app skill shipped after a
+  same-id user skill was enabled): it keeps the highest-precedence one (trust app > user → version →
+  recency) and disables the rest. The enable IPC + import already enforced this on their paths; reconcile
+  was the gap.
+
+### §-anchor legend (historical plan citations)
+
+The wave's two plan files were folded into this record (§1–§12) and `security-model.md`, but in-code
+comments and the kept docs still cite the **original plan's** section numbers (`skills plan §N`,
+`§22-*`). Those numbers were never renumbered into §1–§12; this legend keeps them **resolvable** (the
+doc-lifecycle "stable anchors" intent) without churning ~130 comments. Read a historical `§N` as:
+
+| Historical anchor | Meaning | Now lives in |
+|---|---|---|
+| §9.2 | Import safe-extractor defences | §4 + security-model "Skill-import defences" |
+| §9.3 | Collision / version / downgrade policy | §4 |
+| §9.4 | Delete = app-level ref-clear sweep | §4 |
+| §9.5 | Content-class data excluded from every export | §10 + security-model (Tier-2 ceiling) |
+| §10 / §10.1–§10.4 | Selection, prompt placement, suggestion heuristic | §5 + §6 |
+| §11 / §11.2 | Fenced-skill prompt integration | §5 |
+| §12 / §12.1 / §12.2 | Tier-2 tool gate (schema, validate→run→validate, confirm) | §7 + security-model "Skill tool ceiling (Tier-2)" |
+| §13 (plan) | Bank specifics kept out of the generic infra | §8 (note: §13 in THIS record is the post-S12 follow-ups above) |
+| §14 | The untrusted-skill-as-input threat model + structural ceilings | §2 + §7 + §12; security-model "Skill tool ceiling" |
+| §15 / §16 | Renderer surfaces / IPC surface | §9 + §11 |
+| §18.x | Phase/sub-phase breakdown (historical) | this record's phase tags (S2–S12) |
+| §22-A1/A5/A6 | One skill-resolution path; stamp only when placed; fence pre-sized | §5 |
+| §22-C2 | Selector reads triggers from the cache, never unpacks a blob | §6 |
+| §22-C3/C4 | No FK into `skills` (app-level sweep); scope resolved main-side | §4 + §9 |
+| §22-D1/D3 | Honesty posture (drop, don't invent); suggestion is an inert offer | §6 + §8 |
+| §22-M1 | Content-class rule — ids/counts only; no content in log/audit/IPC | §2 (the consolidated sentinel guard) |
+| §22-M2 | App-skill integrity by location, not signature (accepted residual) | §12 + security-model |
+| §22-M4 | v1 permissions are a display summary; nothing executes | §1 (DS6) |
 
 
 ## Data flow (RAG)

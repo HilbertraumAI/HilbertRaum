@@ -279,7 +279,69 @@ export function reconcileSkills(db: Db, opts: ReconcileOptions): ReconcileResult
     if (markSkillUnavailable(db, install_id, now)) markedUnavailable++
   }
 
+  // Safety net for the one-active-per-id invariant (DS12). The enable IPC + import already enforce
+  // it, but a DB rebuild — or an app skill shipped AFTER a user skill of the same id was enabled —
+  // could leave two AVAILABLE rows of one declared id enabled at once. Collapse to one here.
+  enforceOneActivePerId(db, now)
+
   return { inserted, updated, markedUnavailable, present: present.size, errors }
+}
+
+/** A row considered for the one-active-per-id check. */
+interface ActiveRow {
+  install_id: string
+  id: string
+  source: string
+  version: string
+  updated_at: string
+}
+
+/** Higher MAJOR.MINOR.PATCH first (−1 ⇒ a before b). Both are SKILL_SEMVER_RE-valid; coerce defensively. */
+function compareVersionDesc(a: string, b: string): number {
+  const pa = a.split('.').map(Number)
+  const pb = b.split('.').map(Number)
+  for (let i = 0; i < 3; i++) {
+    const x = pa[i] ?? 0
+    const y = pb[i] ?? 0
+    if (x !== y) return y - x
+  }
+  return 0
+}
+
+/**
+ * Enforce one active row per declared id across AVAILABLE rows (DS12). Among the enabled, available
+ * rows sharing a declared id, keep the highest-precedence one — trust (app > user) → higher version
+ * → most-recently updated → install_id — and disable the rest. Unavailable rows keep their enabled
+ * flag (so a remounted drive restores the user's choice) and are never treated as "active". Returns
+ * how many rows it disabled (0 in the common single-owner case — idempotent).
+ */
+function enforceOneActivePerId(db: Db, now: string): number {
+  const rows = db
+    .prepare(
+      'SELECT install_id, id, source, version, updated_at FROM skills WHERE enabled = 1 AND unavailable_at IS NULL'
+    )
+    .all() as unknown as ActiveRow[]
+  const byId = new Map<string, ActiveRow[]>()
+  for (const r of rows) {
+    const list = byId.get(r.id)
+    if (list) list.push(r)
+    else byId.set(r.id, [r])
+  }
+  let disabled = 0
+  for (const list of byId.values()) {
+    if (list.length <= 1) continue
+    list.sort(
+      (a, b) =>
+        (a.source === 'app' ? 0 : 1) - (b.source === 'app' ? 0 : 1) ||
+        compareVersionDesc(a.version, b.version) ||
+        (a.updated_at < b.updated_at ? 1 : a.updated_at > b.updated_at ? -1 : 0) ||
+        (a.install_id < b.install_id ? -1 : 1)
+    )
+    for (const loser of list.slice(1)) {
+      if (setSkillEnabled(db, loser.install_id, false, now)) disabled++
+    }
+  }
+  return disabled
 }
 
 /**

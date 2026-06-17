@@ -46,6 +46,29 @@ describe('SkillRunController (S11b)', () => {
     expect(await waitForTerminal(c, runHandle)).toBe('cancelled')
   })
 
+  it('a seam-reported cancel (no signal abort) is shown as cancelled, not failed (B1)', async () => {
+    // The CSV save-dialog dismissal: the run did not abort, but the seam reports it cancelled.
+    const c = new SkillRunController()
+    const runner: ToolRunner = async () => ({ ok: false, cancelled: true, error: 'Export cancelled. Nothing was saved.' })
+    const { runHandle } = c.start({ skillInstallId: 's', toolName: 'export_transactions_csv', documentCount: 1, runner })
+    expect(await waitForTerminal(c, runHandle)).toBe('cancelled')
+    expect(c.get(runHandle)!.error).toBeUndefined() // a calm cancel carries no failure copy
+  })
+
+  it('a successful outcome is done even if Cancel landed late (B2 — no false "cancelled")', async () => {
+    // The work persisted before the abort was observed: the controller must not claim "cancelled".
+    const c = new SkillRunController()
+    const runner: ToolRunner = ({ signal }) =>
+      new Promise((resolve) => {
+        // Abort AFTER the work has already succeeded — the seam still reports ok (it committed).
+        signal.addEventListener('abort', () => resolve({ ok: true, transactionCount: 3 }))
+      })
+    const { runHandle } = c.start({ skillInstallId: 's', toolName: 'extract_transactions', documentCount: 1, runner })
+    c.cancel(runHandle)
+    expect(await waitForTerminal(c, runHandle)).toBe('done')
+    expect(c.get(runHandle)!.transactionCount).toBe(3)
+  })
+
   it('refuses a second run while one is in flight (one-at-a-time)', () => {
     const c = new SkillRunController()
     const runner: ToolRunner = ({ signal }) =>

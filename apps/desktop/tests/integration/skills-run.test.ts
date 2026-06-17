@@ -90,6 +90,17 @@ describe('runBankExtraction (S11a)', () => {
     expect((events as Array<{ type: string }>).map((e) => e.type)).toEqual(['skill_run_started', 'skill_run_done'])
   })
 
+  it('a DB error before the gate still drives the run to a terminal state (B4 — no stranded "started")', async () => {
+    const db = freshDb()
+    const docId = seedDocWithChunks(db, [{ text: 'EUR\n2026-01-02 Coffee -3,50', page: 1 }])
+    db.exec('DROP TABLE chunks') // make buildReadDocumentChunks' prepare throw AFTER the started-insert
+    const { audit } = capturingAudit()
+    const res = await runBankExtraction(db, { skillInstallId: 'app:bank-statement', documentId: docId }, { audit })
+    expect(res.ok).toBe(false)
+    const run = db.prepare('SELECT status FROM skill_runs WHERE id = ?').get(res.runId) as { status: string }
+    expect(run.status).toBe('failed') // never left at 'started'
+  })
+
   it('only persists rows from the requested (in-scope) document', async () => {
     const db = freshDb()
     const docA = seedDocWithChunks(db, [{ text: 'EUR\n2026-01-02 FromA -10,00', page: 1 }])
@@ -171,6 +182,7 @@ describe('downstream statement seams (S11c)', () => {
     const res = await runCashflowSummary(db, { skillInstallId, documentId: docId }, { audit })
     expect(res.ok).toBe(false)
     expect(res.error).toMatch(/first/i)
+    expect(res.errorCode).toBe('needsExtraction') // content-free code the renderer localizes (I1)
     expect(events).toEqual([]) // no tool ran ⇒ no audit event
     const run = db.prepare('SELECT status FROM skill_runs WHERE id = ?').get(res.runId) as { status: string }
     expect(run.status).toBe('failed')
@@ -273,7 +285,31 @@ describe('downstream statement seams (S11c)', () => {
       confirmed: true
     })
     expect(res.ok).toBe(false)
+    expect(res.cancelled).toBe(true) // a dialog dismissal is a cancel, not a failure (B1)
     expect(res.error).toMatch(/cancel/i)
+    const run = db.prepare('SELECT status FROM skill_runs WHERE id = ?').get(res.runId) as { status: string }
+    expect(run.status).toBe('cancelled')
+  })
+
+  it('export already cancelled before the write opens no save dialog and persists nothing (B2)', async () => {
+    const db = freshDb()
+    const docId = await extractFirst(db)
+    const { audit } = capturingAudit()
+    const ac = new AbortController()
+    ac.abort() // Cancel landed before the export reached its FS-write boundary
+    let saveCalled = false
+    const res = await runCsvExport(db, { skillInstallId, documentId: docId }, {
+      audit,
+      signal: ac.signal,
+      saveTextFile: async () => {
+        saveCalled = true
+        return true
+      },
+      confirmed: true
+    })
+    expect(res.ok).toBe(false)
+    expect(res.cancelled).toBe(true)
+    expect(saveCalled).toBe(false) // nothing was written under a cancel
     const run = db.prepare('SELECT status FROM skill_runs WHERE id = ?').get(res.runId) as { status: string }
     expect(run.status).toBe('cancelled')
   })

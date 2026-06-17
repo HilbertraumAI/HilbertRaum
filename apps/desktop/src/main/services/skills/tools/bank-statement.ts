@@ -477,10 +477,14 @@ export function summarizeCashflow(rows: TransactionInput[]): CashflowSummary {
     currencies.add(row.currency)
   }
   const round = (n: number): number => Math.round(n * 100) / 100
+  // Round each total ONCE, then derive net from the rounded figures, so the three reported numbers
+  // are always self-consistent (net === totalIn − totalOut) rather than each independently rounded.
+  const inRounded = round(totalIn)
+  const outRounded = round(totalOut)
   const summary: CashflowSummary = {
-    totalIn: round(totalIn),
-    totalOut: round(totalOut),
-    net: round(totalIn - totalOut),
+    totalIn: inRounded,
+    totalOut: outRounded,
+    net: round(inRounded - outRounded),
     count: rows.length
   }
   if (currencies.size === 1) summary.currency = [...currencies][0]
@@ -516,11 +520,13 @@ export const summarizeCashflowTool: SkillTool = {
 
 // ---- export_transactions_csv (export-file; confirm-gated; the seam does the FS write) ----
 
-// A field whose first character is one of these can be executed as a FORMULA when the CSV is
-// opened in Excel / LibreOffice / Google Sheets (CSV / spreadsheet "formula injection"). The
-// extracted text is the user's OWN statement, but a crafted document could embed a payload that
-// only surfaces at the one real FS-write boundary, so this seam neutralizes it (S12 audit, F4).
-const CSV_FORMULA_LEAD = /^[=+\-@\t\r]/
+// A field that can be executed as a FORMULA when the CSV is opened in Excel / LibreOffice / Google
+// Sheets (CSV / spreadsheet "formula injection"). The extracted text is the user's OWN statement,
+// but a crafted document could embed a payload that only surfaces at the one real FS-write boundary,
+// so this seam neutralizes it (S12 audit, F4). Two shapes are caught: a leading control char
+// (`\t`/`\r`, the DDE/auto-exec vector), and a formula trigger (`= + - @`) after OPTIONAL leading
+// whitespace — some importers trim leading spaces before evaluating, so `"  =cmd"` is dangerous too.
+const CSV_FORMULA_LEAD = /^[\t\r]|^\s*[=+\-@]/
 
 /**
  * RFC-4180-ish field escaping with formula-injection neutralization. A value that begins with a

@@ -603,10 +603,25 @@ tool runs, the CSV export, the IPC `SkillRunState`) **plus a console spy** and p
 audit/log/console/run-metadata while confirming the deliberate exceptions (content-class tables + the
 user-chosen CSV). Two LOW residuals were accepted + documented in
 [`known-limitations.md`](known-limitations.md): prompt text-injection is contained by the structural
-ceiling (not by escaping the fence delimiter), and a user skill's `triggers.filenamePattern` is compiled
+ceiling (not by escaping the fence delimiter), and a user skill's `triggers.filenamePatterns` are compiled
 to a bounded RegExp run only on a user action (no auto-fire). The §14 **unchanged guarantees** held — CSP,
 the deny-by-default permission handler, the offline guard, the encryption posture, and packaging were not
 touched.
+
+**Post-S12 audit follow-ups (2026-06-17).** A second multi-persona audit found **no CRITICAL/HIGH**; the
+hardening landed behind this same ceiling (full record: architecture.md "Skills — design record" §13).
+Security-relevant items: **(S1)** the import-preview clamp/`manifest.json`-conflict **notes** no longer
+echo the raw frontmatter value — closing the one §22-M1 gap where attacker text could ride the
+`SkillPreview` IPC payload into the UI (the structural *errors* were already clean); **(S2)** the
+`filenamePatterns` residual above is now actively bounded — the parser caps each entry's length (≤200)
+and count (≤64) and `selector.globToRegExp` refuses a glob with >10 `*` wildcards, so the
+bounded-RegExp claim no longer rests on input being benign. The B1/B2 cancel-semantics and I1/I2
+localization fixes added no content to any log/audit and no new capability.
+
+> **§-anchor note.** This section cites the original skills-plan's section numbers (`§12`, `§14`,
+> `§9.5`, `§13`, `§22-*`); those were not renumbered into the design record's §1–§12. The
+> **§-anchor legend** at the end of architecture.md "Skills — design record" maps each to where it now
+> lives, so the references stay resolvable.
 
 ## Unverified-binary env overrides are dev-only (audit M-5, 2026-06-13)
 

@@ -23,7 +23,16 @@ export interface ToolRunOutcome {
    * copy map, never here (§13). Unset for tools whose result is just a count.
    */
   resultKind?: string
-  /** A friendly, content-free reason on failure. */
+  /**
+   * True when the run ended because it was CANCELLED rather than failing — e.g. the user dismissed
+   * the CSV save dialog, or Cancel landed before the work persisted. The seam is the authority here;
+   * `finish` surfaces it directly so a benign cancel is never shown as a failure (B1) and a cancel
+   * that lands AFTER the work committed is reported by its true outcome, not as "cancelled" (B2).
+   */
+  cancelled?: boolean
+  /** A content-free reason CODE the renderer maps to localized copy (the seam stays i18n-free). */
+  errorCode?: string
+  /** A friendly, content-free reason on failure (English; kept for logs — renderer prefers code). */
   error?: string
 }
 
@@ -96,18 +105,26 @@ export class SkillRunController {
     return { ...state, progress: { ...state.progress } }
   }
 
-  /** Map a runner outcome to the terminal state (cancel wins over a generic failure). */
+  /**
+   * Map a runner outcome to the terminal state. The SEAM is the authority on what actually happened
+   * to the data, so a successful outcome is reported `done` even if Cancel landed late (the work
+   * persisted — claiming "cancelled, nothing changed" would be a lie; B2). A non-ok outcome is
+   * `cancelled` when the seam says so (`outcome.cancelled`, e.g. a dismissed save dialog; B1) — or
+   * as a fallback when the runner threw mid-abort (no outcome flag, but the signal is aborted) — and
+   * `failed` otherwise.
+   */
   private finish(handle: string, controller: AbortController, outcome: ToolRunOutcome): void {
     if (this.active?.state.runHandle !== handle) return // a newer run replaced it
     const s = this.active.state
-    if (controller.signal.aborted) {
-      s.state = 'cancelled'
-    } else if (outcome.ok) {
+    if (outcome.ok) {
       s.state = 'done'
       s.transactionCount = outcome.transactionCount
       s.resultKind = outcome.resultKind
+    } else if (outcome.cancelled || controller.signal.aborted) {
+      s.state = 'cancelled'
     } else {
       s.state = 'failed'
+      s.errorCode = outcome.errorCode
       s.error = outcome.error ?? 'This tool could not finish. Nothing was changed.'
     }
   }

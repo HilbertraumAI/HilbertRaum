@@ -267,7 +267,9 @@ describe('skills export_transactions_csv IPC (S11c)', () => {
     await runTool(skillInstallId, conversationId, 'extract_transactions')
     dialogState.saveResult = { canceled: true } // user dismissed the save dialog
     const final = await runTool(skillInstallId, conversationId, 'export_transactions_csv', true)
-    expect(final.state).not.toBe('done')
-    expect(final.error).toMatch(/cancel/i)
+    // A dismissed dialog is a CANCEL, not a failure (B1) — the run reports it calmly, with no
+    // failure copy (the renderer shows the calm "cancelled" row, not a red error).
+    expect(final.state).toBe('cancelled')
+    expect(final.error).toBeUndefined()
   })
 })

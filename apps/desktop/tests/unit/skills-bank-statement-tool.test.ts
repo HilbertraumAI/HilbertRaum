@@ -297,6 +297,19 @@ describe('export_transactions_csv (S11c)', () => {
     expect(lines[2]).toContain(',-2.00,')
   })
 
+  it('neutralizes a formula hidden behind leading whitespace (post-S12 hardening)', () => {
+    // Some importers trim leading spaces before evaluating, so " =cmd" is dangerous too.
+    const csv = transactionsToCsv([
+      tx({ description: '  =1+1', amount: -1 }),
+      tx({ description: '\t@cmd', amount: -2 }),
+      tx({ description: 'safe text', amount: -3 })
+    ])
+    const lines = csv.trimEnd().split('\r\n')
+    expect(lines[1]).toBe('2026-01-02,,\'  =1+1,-1.00,EUR,,') // quote prefixed before the spaces
+    expect(lines[2]).toBe('2026-01-02,,\'\t@cmd,-2.00,EUR,,') // leading tab is neutralized (not a quote trigger)
+    expect(lines[3]).toBe('2026-01-02,,safe text,-3.00,EUR,,') // ordinary text untouched
+  })
+
   it('is the only confirm-gated tool: the gate refuses it without confirmation', async () => {
     const refused = await runSkillTool(exportTransactionsCsvTool, {
       skillId: 'app:bank-statement',

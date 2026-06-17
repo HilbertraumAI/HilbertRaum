@@ -102,6 +102,8 @@ describe('safe extractor — rejects (nothing persisted, friendly + structural)'
     const preview = previewSkillPackage(db, zip, deps)
     expect(preview.ok).toBe(false)
     expect(preview.errors).toContain(SKILL_IMPORT_ERRORS.pathTraversal)
+    // The parallel content-free code lets the renderer localize the banner (I2).
+    expect(preview.errorCodes).toEqual(['pathTraversal'])
     expect(() => importSkill(db, zip, deps)).toThrow(SKILL_IMPORT_ERRORS.pathTraversal)
     expect(existsSync(deps.userSkillsDir) ? readdirSync(deps.userSkillsDir) : []).toEqual([])
   })

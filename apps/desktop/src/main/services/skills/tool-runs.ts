@@ -139,22 +139,35 @@ export function buildToolRunner(
     case 'extract_transactions':
       return async ({ signal, onProgress }) => {
         const res = await runBankExtraction(db, seamArgs, { audit, signal, onProgress })
-        return { ok: res.ok, transactionCount: res.transactionCount, error: res.error }
+        return {
+          ok: res.ok,
+          transactionCount: res.transactionCount,
+          cancelled: res.cancelled,
+          errorCode: res.errorCode,
+          error: res.error
+        }
       }
     case 'validate_statement_balances':
       return async ({ signal, onProgress }) => {
         const res = await runBalanceValidation(db, seamArgs, { audit, signal, onProgress })
-        return { ok: res.ok, transactionCount: res.count, resultKind: res.resultKind, error: res.error }
+        return {
+          ok: res.ok,
+          transactionCount: res.count,
+          resultKind: res.resultKind,
+          cancelled: res.cancelled,
+          errorCode: res.errorCode,
+          error: res.error
+        }
       }
     case 'categorize_transactions':
       return async ({ signal, onProgress }) => {
         const res = await runCategorization(db, seamArgs, { audit, signal, onProgress })
-        return { ok: res.ok, transactionCount: res.count, error: res.error }
+        return { ok: res.ok, transactionCount: res.count, cancelled: res.cancelled, errorCode: res.errorCode, error: res.error }
       }
     case 'summarize_cashflow':
       return async ({ signal, onProgress }) => {
         const res = await runCashflowSummary(db, seamArgs, { audit, signal, onProgress })
-        return { ok: res.ok, transactionCount: res.count, error: res.error }
+        return { ok: res.ok, transactionCount: res.count, cancelled: res.cancelled, errorCode: res.errorCode, error: res.error }
       }
     case 'export_transactions_csv':
       if (!deps.saveTextFile) return null // cannot export without the MAIN-side save capability
@@ -166,7 +179,7 @@ export function buildToolRunner(
           confirmed: args.confirmed,
           saveTextFile: deps.saveTextFile!
         })
-        return { ok: res.ok, transactionCount: res.count, error: res.error }
+        return { ok: res.ok, transactionCount: res.count, cancelled: res.cancelled, errorCode: res.errorCode, error: res.error }
       }
     default:
       return null

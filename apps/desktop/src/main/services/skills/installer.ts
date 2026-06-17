@@ -86,6 +86,18 @@ export const SKILL_IMPORT_ERRORS = {
 /** Thrown by the installer; `message` is always one of the structural strings above. */
 export class SkillImportError extends Error {}
 
+/**
+ * Reverse map a structural error MESSAGE back to its stable key (for renderer localization, I2 —
+ * the renderer maps the code to localized copy instead of showing the English string). Built once
+ * from `SKILL_IMPORT_ERRORS`; an unrecognized message → 'unknown'.
+ */
+const ERROR_MESSAGE_TO_CODE: Record<string, string> = Object.fromEntries(
+  Object.entries(SKILL_IMPORT_ERRORS).map(([code, msg]) => [msg, code])
+)
+export function skillImportErrorCode(message: string): string {
+  return ERROR_MESSAGE_TO_CODE[message] ?? 'unknown'
+}
+
 // ---- allowlists / signatures (skills plan §6.3 / §9.2) -------------------------------
 
 /** §6.3 file-type allowlist (lowercased extensions). */
@@ -477,14 +489,22 @@ export function previewSkillPackage(
       filesystem: 'skill_resources_only'
     }),
     errors: [],
+    errorCodes: [],
     notes: []
   }
+  // A failed preview carrying ONE structural reason + its stable code (for renderer localization, I2).
+  const fail = (message: string, notes: string[] = []): SkillPreview => ({
+    ...base,
+    errors: [message],
+    errorCodes: [skillImportErrorCode(message)],
+    notes
+  })
 
   let staged: { kind: 'zip' | 'folder'; files: StagedFile[] }
   try {
     staged = stageSource(source, limits)
   } catch (e) {
-    return { ...base, errors: [e instanceof SkillImportError ? e.message : SKILL_IMPORT_ERRORS.unreadableZip] }
+    return fail(e instanceof SkillImportError ? e.message : SKILL_IMPORT_ERRORS.unreadableZip)
   }
   base.sourceKind = staged.kind
 
@@ -492,14 +512,14 @@ export function previewSkillPackage(
   const tmp = mkdtempSync(join(tmpdir(), 'hilbertraum-skill-preview-'))
   try {
     writeStaged(staged.files, tmp)
-    if (!existsSync(join(tmp, 'SKILL.md'))) return { ...base, errors: [SKILL_IMPORT_ERRORS.noSkillMd] }
+    if (!existsSync(join(tmp, 'SKILL.md'))) return fail(SKILL_IMPORT_ERRORS.noSkillMd)
     const parsed = parseSkillManifestFromDir(tmp, { limits })
     if (!parsed.ok || !parsed.manifest) {
-      return { ...base, errors: [SKILL_IMPORT_ERRORS.invalidManifest], notes: parsed.notes }
+      return fail(SKILL_IMPORT_ERRORS.invalidManifest, parsed.notes)
     }
     const m = parsed.manifest
     if (!SKILL_ID_RE.test(m.id) || !SKILL_SEMVER_RE.test(m.version)) {
-      return { ...base, errors: [SKILL_IMPORT_ERRORS.idMismatch], notes: parsed.notes }
+      return fail(SKILL_IMPORT_ERRORS.idMismatch, parsed.notes)
     }
 
     // Collision / version analysis against the installed skills sharing this id.

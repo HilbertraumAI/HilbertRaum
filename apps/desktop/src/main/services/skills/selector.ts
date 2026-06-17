@@ -25,8 +25,20 @@ const FILENAME_WEIGHT = 1
 /** A match must clear this to be offered (one keyword, or mime+filename together). */
 export const SUGGEST_SCORE_THRESHOLD = 2
 
-/** Turn a `*statement*`-style filename pattern into a case-insensitive anchored regex. */
-function globToRegExp(pattern: string): RegExp {
+/**
+ * Cap on `*` wildcards in a filename glob. A pattern like `*a*a*a…` compiles to `^.*a.*a…$` —
+ * the catastrophic-backtracking shape — and the selector runs it against every in-scope doc title
+ * on every turn (main-side, synchronous). Triggers are skill-controlled, so even though only an
+ * ENABLED skill is scored (a crafted document can never introduce one), an over-complex glob is
+ * refused outright rather than risk hanging the main process (S12-audit ReDoS guard; the parser
+ * also bounds the pattern length). Legitimate filename globs use a handful of wildcards.
+ */
+const MAX_GLOB_WILDCARDS = 10
+
+/** Turn a `*statement*`-style filename pattern into a case-insensitive anchored regex, or null if
+ *  it is too wildcard-heavy to be safe (the caller then treats it as a non-match). */
+function globToRegExp(pattern: string): RegExp | null {
+  if ((pattern.match(/\*/g)?.length ?? 0) > MAX_GLOB_WILDCARDS) return null
   const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.')
   return new RegExp(`^${escaped}$`, 'i')
 }
@@ -46,6 +58,7 @@ export function scoreSkillTriggers(triggers: SkillTriggers, ctx: SkillTriggerCon
     const pat = p.trim()
     if (!pat) return false
     const re = globToRegExp(pat)
+    if (!re) return false // too wildcard-heavy — refused (ReDoS guard), counts as no match
     return ctx.docTitles.some((t) => re.test(t))
   })
   return keywordHits * KEYWORD_WEIGHT + (mimeHit ? MIME_WEIGHT : 0) + (filenameHit ? FILENAME_WEIGHT : 0)

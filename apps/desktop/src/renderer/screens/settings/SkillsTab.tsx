@@ -23,6 +23,33 @@ import type { SkillInfo, SkillPreview } from '@shared/types'
 
 type ImportState = { path: string; preview: SkillPreview } | null
 
+// Import-error reason CODE (content-free, computed main-side — I2) → localized copy key, so a
+// German user never sees the English structural string. An unmapped code falls back to the raw
+// (English, structural) message the preview carried.
+const IMPORT_ERROR_KEY: Record<string, MessageKey> = {
+  notFound: 'skills.import.error.notFound',
+  notZipOrFolder: 'skills.import.error.notZipOrFolder',
+  unreadableZip: 'skills.import.error.unreadableZip',
+  encryptedZip: 'skills.import.error.encryptedZip',
+  unsupportedCompression: 'skills.import.error.unsupportedCompression',
+  pathTraversal: 'skills.import.error.pathTraversal',
+  absolutePath: 'skills.import.error.absolutePath',
+  symlink: 'skills.import.error.symlink',
+  tooDeep: 'skills.import.error.tooDeep',
+  pathTooLong: 'skills.import.error.pathTooLong',
+  tooManyFiles: 'skills.import.error.tooManyFiles',
+  tooLarge: 'skills.import.error.tooLarge',
+  fileTooLarge: 'skills.import.error.fileTooLarge',
+  badExtension: 'skills.import.error.badExtension',
+  nestedArchive: 'skills.import.error.nestedArchive',
+  noSkillMd: 'skills.import.error.noSkillMd',
+  invalidManifest: 'skills.import.error.invalidManifest',
+  idMismatch: 'skills.import.error.idMismatch',
+  downgradeBlocked: 'skills.import.error.downgradeBlocked',
+  appReadOnly: 'skills.import.error.appReadOnly',
+  locked: 'skills.import.error.locked'
+}
+
 export function SkillsTab(): JSX.Element {
   const { t } = useT()
   const toast = useToast()
@@ -471,12 +498,17 @@ function ImportDialog({
           <PermissionBlock permissions={preview.permissions} kind={preview.kind ?? 'instruction'} />
         )}
 
-        {/* Structural, content-free reasons computed main-side (§22-M1). */}
-        {preview.errors.map((msg, i) => (
-          <Banner key={`e${i}`} tone="error">
-            {msg}
-          </Banner>
-        ))}
+        {/* Structural, content-free reasons computed main-side (§22-M1) — shown localized via the
+            parallel reason code, falling back to the (English) structural message if unmapped (I2). */}
+        {preview.errors.map((msg, i) => {
+          const code = preview.errorCodes?.[i]
+          const key = code ? IMPORT_ERROR_KEY[code] : undefined
+          return (
+            <Banner key={`e${i}`} tone="error">
+              {key ? t(key) : msg}
+            </Banner>
+          )
+        })}
         {preview.notes.map((msg, i) => (
           <Banner key={`n${i}`} tone="info">
             {msg}

@@ -164,6 +164,20 @@ describe('skills registry — reconcile', () => {
     expect(both[0].source).toBe('app') // app first
   })
 
+  it('reconcile collapses two same-id rows left both enabled (DS12 one-active safety net)', () => {
+    const db = freshDb()
+    const dirs = makeDirs()
+    writeSkill(dirs.appSkillsDir, 'shared', { version: '2.0.0' })
+    writeSkill(dirs.userSkillsDir, 'shared', { version: '1.0.0' })
+    reconcileSkills(db, opts(dirs))
+    // Force the conflicting state the safety net exists for (e.g. a DB rebuild that left both on).
+    setSkillEnabled(db, 'app:shared', true)
+    setSkillEnabled(db, 'user:shared', true)
+    reconcileSkills(db, opts(dirs))
+    expect(getSkill(db, 'app:shared')!.enabled).toBe(true) // trust-first: the app skill stays active
+    expect(getSkill(db, 'user:shared')!.enabled).toBe(false) // the user duplicate is disabled
+  })
+
   it('caches triggers + compatibility into manifest_json (re-derivable cache, §22-C2)', () => {
     const db = freshDb()
     const dirs = makeDirs()

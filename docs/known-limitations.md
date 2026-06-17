@@ -87,14 +87,16 @@ password recovery — are documented in
   scope (§14). We deliberately do **not** sanitize/escape the body delimiter (it would mangle
   legitimate instructions for no real gain). See [`security-model.md`](security-model.md) ("Skill tool
   ceiling").
-- **A user skill's `triggers.filenamePattern` is compiled to a RegExp (Skills S12 audit — accepted
-  LOW).** The deterministic suggestion heuristic turns a `*statement*`-style pattern from a
-  user-installed skill into an anchored, case-insensitive regex matched against the in-scope
-  documents' filenames. The inputs are short and bounded (the §6.4 path/length caps; trigger entries
-  are trimmed metadata), the skill must already be **enabled by the user**, and the match runs only
-  on a user action (the picker) — there is **no auto-fire** (deferred to S13). A pathological pattern
-  could at worst slow one synchronous suggestion; a length-bounded matcher is future hardening, not a
-  v1 blocker.
+- **A user skill's `triggers.filenamePatterns` are compiled to a RegExp (Skills S12 audit — now
+  actively bounded, post-S12).** The deterministic suggestion heuristic turns a `*statement*`-style
+  pattern from a user-installed skill into an anchored, case-insensitive regex matched against the
+  in-scope documents' filenames. The skill must already be **enabled by the user**, and the match runs
+  only on a user action (the picker) — there is **no auto-fire** (deferred to S13). The earlier-noted
+  "length-bounded matcher is future hardening" **has now shipped** (architecture.md "Skills — design
+  record" §13, S2): the parser caps each trigger entry's length (≤200) and count (≤64), and
+  `selector.globToRegExp` refuses a glob with more than 10 `*` wildcards (it counts as a non-match), so
+  a `*a*a…`-style pattern can no longer drive catastrophic backtracking on the synchronous main-side
+  scoring. The residual is therefore closed in practice.
 
 ## Spec features intentionally not built (MVP scope)
 

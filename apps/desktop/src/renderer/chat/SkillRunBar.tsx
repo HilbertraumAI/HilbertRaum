@@ -33,6 +33,15 @@ const TOOL_DONE_KEY: Record<string, CountMessageKey> = {
   export_transactions_csv: 'chat.skill.run.done.export'
 }
 
+// Failure reason CODE (content-free, set by the run seam — I1) → localized copy key. An unmapped or
+// absent code falls back to the generic failure line, so a German user never sees an English string.
+const RUN_ERROR_KEY: Record<string, MessageKey> = {
+  unavailable: 'chat.skill.run.error.unavailable',
+  needsExtraction: 'chat.skill.run.error.needsExtraction',
+  persistFailed: 'chat.skill.run.error.persistFailed',
+  exportWriteFailed: 'chat.skill.run.error.exportWriteFailed'
+}
+
 export interface SkillRunBarProps {
   /** The active run, or null when none is in flight. */
   run: SkillRunState | null
@@ -75,6 +84,13 @@ export function SkillRunBar({
     return tCount(base ?? 'chat.skill.run.done', count)
   }
 
+  // The localized failure line — mapped from the content-free reason code (I1), never the raw
+  // English `run.error` (which stays for the local log only).
+  const failureMessage = (state: SkillRunState): string => {
+    const key = state.errorCode ? RUN_ERROR_KEY[state.errorCode] : undefined
+    return t(key ?? 'chat.skill.run.failedGeneric')
+  }
+
   const onClickTool = (tool: RunnableTool): void => {
     if (tool.requiresConfirmation) setConfirmTool(tool)
     else onRun(tool.name, false)
@@ -102,7 +118,7 @@ export function SkillRunBar({
         ? doneMessage(run)
         : run.state === 'cancelled'
           ? t('chat.skill.run.cancelled')
-          : run.error || t('chat.skill.run.failedGeneric')
+          : failureMessage(run)
     return (
       <div className="skill-run-bar" role="status" aria-live="polite">
         <span className="skill-run-status">{message}</span>

@@ -94,11 +94,12 @@ describe('SkillRunBar (S11b)', () => {
     expect(onDismiss).toHaveBeenCalled()
   })
 
-  it('RESULT: a failed run shows the friendly error, a cancelled run says nothing was saved', () => {
+  it('RESULT: a failed run shows the LOCALIZED error (mapped from errorCode, not the raw English), a cancelled run says nothing was saved', () => {
+    // The renderer localizes from the content-free errorCode (I1) — never the English run.error.
     const { rerender } = render(
       withI18n(
         <SkillRunBar
-          run={run({ state: 'failed', error: 'This statement could not be saved. Nothing was changed.' })}
+          run={run({ state: 'failed', errorCode: 'persistFailed', error: 'This statement could not be saved. Nothing was changed.' })}
           runnableTools={[]}
           onRun={vi.fn()}
           onCancel={vi.fn()}
@@ -106,7 +107,14 @@ describe('SkillRunBar (S11b)', () => {
         />
       )
     )
-    expect(screen.getByText(/could not be saved/)).toBeInTheDocument()
+    expect(screen.getByText("This couldn’t be saved. Nothing was changed.")).toBeInTheDocument()
+    // An unknown/absent code falls back to the localized generic line (never a raw English string).
+    rerender(
+      withI18n(
+        <SkillRunBar run={run({ state: 'failed' })} runnableTools={[]} onRun={vi.fn()} onCancel={vi.fn()} onDismiss={vi.fn()} />
+      )
+    )
+    expect(screen.getByText("That didn't work. Nothing was changed.")).toBeInTheDocument()
     rerender(
       withI18n(
         <SkillRunBar run={run({ state: 'cancelled' })} runnableTools={[]} onRun={vi.fn()} onCancel={vi.fn()} onDismiss={vi.fn()} />

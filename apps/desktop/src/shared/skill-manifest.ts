@@ -204,7 +204,9 @@ function clampPermission(
   const key = raw.trim().toLowerCase()
   const rank = rankMap[key]
   if (rank === undefined) {
-    notes.push(`"permissions.${field}" value "${raw}" is not recognized; using the v1 default "${canonicalByRank[ceilingRank]}"`)
+    // Content-free: never echo the raw (attacker-supplied) value — only the fixed field name and
+    // the app-derived default (§22-M1; the note rides the same IPC payload as a structural error).
+    notes.push(`"permissions.${field}" has a value that is not recognized; using the v1 default "${canonicalByRank[ceilingRank]}"`)
     return canonicalByRank[ceilingRank]
   }
   const eff = Math.min(rank, ceilingRank)
@@ -214,6 +216,15 @@ function clampPermission(
   return canonicalByRank[eff]
 }
 
+/**
+ * Caps on a `triggers` string list (keywords / mimeTypes / filenamePatterns). They bound the
+ * deterministic selector's work AND, for `filenamePatterns`, the SOURCE LENGTH of the glob the
+ * selector compiles to a RegExp — the parse-time half of the ReDoS guard (the selector caps the
+ * wildcard count too). A user skill's triggers are skill-controlled input, so they are bounded here.
+ */
+const MAX_TRIGGER_ITEMS = 64
+const MAX_TRIGGER_ITEM_LEN = 200
+
 /** Coerce a YAML value into a trimmed string[]; non-array / non-string members → note + []. */
 function stringArray(v: unknown, field: string, notes: string[]): string[] {
   if (v === undefined || v === null) return []
@@ -221,7 +232,14 @@ function stringArray(v: unknown, field: string, notes: string[]): string[] {
     notes.push(`"${field}" must be a list of strings; ignoring it`)
     return []
   }
-  return (v as string[]).map((x) => x.trim()).filter((x) => x !== '')
+  const items = (v as string[]).map((x) => x.trim()).filter((x) => x !== '')
+  const bounded = items.filter((x) => x.length <= MAX_TRIGGER_ITEM_LEN)
+  if (bounded.length < items.length) notes.push(`"${field}" has entries that are too long; ignoring them`)
+  if (bounded.length > MAX_TRIGGER_ITEMS) {
+    notes.push(`"${field}" has more entries than allowed; keeping the first ${MAX_TRIGGER_ITEMS}`)
+    return bounded.slice(0, MAX_TRIGGER_ITEMS)
+  }
+  return bounded
 }
 
 /**
@@ -479,7 +497,9 @@ function noteManifestJsonConflicts(canonical: SkillManifest, manifestJson: unkno
   for (const f of fields) {
     const mv = manifestJson[f]
     if (typeof mv === 'string' && mv.trim() !== '' && mv.trim() !== canonical[f]) {
-      notes.push(`manifest.json "${f}" ("${mv.trim()}") disagrees with SKILL.md ("${String(canonical[f])}"); using SKILL.md (DS2)`)
+      // Content-free: name only the (fixed) field — never the raw cache or manifest values, which
+      // are attacker-supplied and would otherwise ride the preview IPC payload into the UI (§22-M1).
+      notes.push(`manifest.json "${f}" disagrees with SKILL.md; using SKILL.md (DS2)`)
     }
   }
 }

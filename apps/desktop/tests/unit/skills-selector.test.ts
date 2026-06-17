@@ -54,6 +54,30 @@ describe('scoreSkillTriggers', () => {
       scoreSkillTriggers(triggers({ keywords: ['   '] }), { question: 'anything', ...NO_DOCS })
     ).toBe(0)
   })
+
+  it('refuses a wildcard-heavy glob (ReDoS guard) — no match, returns quickly (S2)', () => {
+    // A `*a*a*a…` glob compiles to the catastrophic-backtracking shape; the selector refuses it
+    // (>10 wildcards) and treats it as a non-match rather than risk hanging the main process.
+    const evil = '*a'.repeat(40) // 40 wildcards, far over the cap
+    const adversarialTitle = 'a'.repeat(60) // the input that would blow up an unguarded regex
+    const start = Date.now()
+    const score = scoreSkillTriggers(triggers({ filenamePatterns: [evil] }), {
+      question: 'hello',
+      docTitles: [adversarialTitle],
+      docMimeTypes: []
+    })
+    expect(score).toBe(0) // refused → no filename hit
+    expect(Date.now() - start).toBeLessThan(1000) // did not backtrack into a hang
+  })
+
+  it('still matches a normal handful-of-wildcards glob (the guard is generous)', () => {
+    const score = scoreSkillTriggers(triggers({ mimeTypes: ['text/csv'], filenamePatterns: ['*-statement-*.csv'] }), {
+      question: 'x',
+      docTitles: ['2024-statement-march.csv'],
+      docMimeTypes: ['text/csv']
+    })
+    expect(score).toBeGreaterThanOrEqual(SUGGEST_SCORE_THRESHOLD)
+  })
 })
 
 describe('selectSuggestion', () => {

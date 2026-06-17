@@ -6,7 +6,35 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
-_Last updated: 2026-06-17 — **Skills Phase S12 SHIPPED — security audit pass + plans folded into the
+_Last updated: 2026-06-17 — **Skills — post-S12 audit follow-ups SHIPPED (no new phase; the wave stays
+closed).** A second multi-persona audit of the whole skills surface (bugs + docs-vs-code) found **no
+CRITICAL/HIGH**; the fixes landed behind the unchanged §14 ceiling (no new capability, still offline,
+audit still ids/counts-only). Full design record: **architecture.md "Skills — design record" §13**.
+**Bugs:** **B1/B2** — the run controller no longer re-derives a run's outcome from `signal.aborted`; the
+seam is the authority (a dismissed CSV save dialog is a **cancel**, not a failure; a success that
+out-races a late Cancel is reported `done` — never "cancelled, nothing changed"; `runCsvExport`
+re-checks abort before the FS-write so nothing is written under a cancel). **B3** — `summarize_cashflow`
+`net` is derived from the rounded totals (self-consistent). **B4** — `runBankExtraction` /
+`prepareStatementRun` guard everything after the `skill_runs` 'started' insert, so an unexpected throw
+drives a terminal `failed` (never a stranded `started` row). **CSV leading-whitespace** formula
+injection (`"  =cmd"`) is now neutralized. **Reconcile one-active-per-id** (DS12) safety net: a DB
+rebuild / late app skill that leaves two same-id rows enabled is collapsed to one (trust→version→
+recency). **i18n:** **I1/I2** — run-failure copy and
+import-preview errors now carry content-free reason **codes** (`SkillRunState.errorCode` /
+`SkillPreview.errorCodes`) the renderer maps to EN/DE, so a German user never sees an English
+failure/import string; the seam/controller stay i18n-free; EN/DE parity is compile-enforced
+(`de: Record<keyof typeof en, string>` — the audit's "parity is convention-only" finding was wrong).
+**Security:** **S1** — clamp/`manifest.json`-conflict **notes** no longer echo the raw frontmatter value
+(closes the one §22-M1 gap where attacker text rode the `SkillPreview` IPC payload into the UI); **S2** —
+`filenamePatterns` ReDoS bounded (parser caps length ≤200 / count ≤64; `selector.globToRegExp` refuses
+>10 wildcards). **Docs:** **D1** removed the non-existent `skill_selected` audit event from §11; a new
+**§-anchor legend** in the design record makes the ~130 historical `skills plan §N` citations + the kept
+docs' `§9.5/§13/§14/§22-*` references resolvable (the fold had only retargeted the filename-style cites);
+the stale S1 plan snapshot below is marked **superseded** (revoked DS11 + never-built DS13). New/updated
+tests in `skill-manifest`, `skills-selector`, `skills-run`, `skills-installer`, `skills-tool-run-ipc`,
+`skills-run-controller`, `SkillRunBar`; full suite **green**, typecheck clean. **No open SL-#.**_
+
+_(prior) 2026-06-17 — **Skills Phase S12 SHIPPED — security audit pass + plans folded into the
 §-records. The ENTIRE Skills wave (S2→S12) is now CLOSED.** The repo's multi-persona audit ran end to
 end over the whole skills surface against the untrusted-skill-as-input threat principle (§14): import
 (zip-slip / symlink / zip-bomb / nested-archive / magic-byte), prompt-injection containment (fenced data
@@ -971,7 +999,14 @@ on-disk-name safety check. S3 still owns the table, reconcile, loader, `DRIVE_LA
 and the `shredStalePlaintext` extension (audit A3/A4/C1).
 
 _(prior) 2026-06-16 — **Skills feature — durable design plan written (planning only, NO
-code).** New working paper [`docs/skills-plan.md`](docs/skills-plan.md): local, user-installable
+code).** ⚠️ **HISTORICAL SNAPSHOT — partially SUPERSEDED. Do not treat as the current contract.** Two
+decisions in this block were later revoked and the as-built design lives in the architecture.md "Skills
+— design record (§1–§12)": **DS11 (encrypted blob per user skill, decrypted to a shredded transient)
+was REVOKED** — user skills are now plain unencrypted folders under `user-skills/` outside the workspace
+(DS3/DS19/DS20; the loader has one mode, no decrypt/shred); and the **`skill_selected` audit event (DS13)
+was never built** — selecting a skill is an unaudited sticky-default write (there is no such
+`AuditEventType`). The rest of the block (DS1/DS2/DS4–DS10/DS12/DS14–DS18) holds. New working paper
+[`docs/skills-plan.md`](docs/skills-plan.md): local, user-installable
 **Skills** (instruction packages that inject reviewed prompt text; Tier-2 app-owned tools designed
 but deferred; Tier-3 script execution excluded). Key decisions: files-on-disk are truth + `skills`
 table is a reconciled index (DS1, the `services/models.ts` pattern); `SKILL.md` YAML frontmatter
