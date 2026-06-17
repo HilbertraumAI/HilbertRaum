@@ -8,7 +8,8 @@ import {
   type DocumentInfo,
   type DocumentScope,
   type Message,
-  type SkillInfo
+  type SkillInfo,
+  type SkillSuggestion
 } from '@shared/types'
 import { cancelActiveDocTask } from '../lib/doctasks'
 import { localizeServerCopy } from '../lib/displayMap'
@@ -115,6 +116,8 @@ export function ChatScreen({
   /** Per-conversation skill selection this session ('new' = no conversation yet). A key present
    *  here overrides the conversation's persisted `activeSkillId`; null = explicitly no skill. */
   const [skillByConv, setSkillByConv] = useState<Record<string, string | null>>({})
+  /** The deterministic one-tap suggestion for the open picker (skills plan §10.2/S8), or null. */
+  const [skillSuggestion, setSkillSuggestion] = useState<SkillSuggestion | null>(null)
   const [error, setError] = useState<string | null>(null)
   // Imported documents — drives the scope popover's titles and the empty-state nudge.
   // Best-effort: a failed load just hides both affordances.
@@ -473,6 +476,17 @@ export function ChatScreen({
     // Persist the sticky default the moment a conversation exists; a still-"new" pick is persisted
     // when the conversation is created on send (ensureConversation).
     if (activeId) void window.api.setConversationDefaultSkill?.(activeId, installId)
+  }
+
+  // Recompute the deterministic suggestion when the picker OPENS (skills plan §10.2/S8) — the offer
+  // rides the picker the user already opened (no canvas chip). The draft question is scored
+  // main-side and never logged; scope is resolved there from the conversation id.
+  function onSkillPickerOpenChange(open: boolean): void {
+    if (!open) return
+    void window.api
+      .suggestSkills?.(activeId ?? '', input)
+      .then((s) => setSkillSuggestion(s[0] ?? null))
+      .catch(() => setSkillSuggestion(null))
   }
 
   async function stream(
@@ -1040,6 +1054,8 @@ export function ChatScreen({
                   value={currentSkillId}
                   onChange={selectSkill}
                   disabled={busyStreaming}
+                  suggestion={skillSuggestion}
+                  onOpenChange={onSkillPickerOpenChange}
                 />
               )}
             </>

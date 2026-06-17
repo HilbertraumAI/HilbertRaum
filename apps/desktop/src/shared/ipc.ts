@@ -29,6 +29,8 @@ export const IPC = {
   stopGeneration: 'chat:stop',
   /** Persist a conversation's sticky default skill (skills plan §10.1; null clears). */
   setConversationDefaultSkill: 'chat:setDefaultSkill',
+  /** Deterministic skill suggestion for the composer picker (skills plan §10.2/S8; logs nothing). */
+  suggestSkills: 'skills:suggest',
   /**
    * Snapshot of an in-flight generation for a conversation (accumulated answer +
    * reasoning), or null if none — lets a remounted Chat screen recover a reply that is

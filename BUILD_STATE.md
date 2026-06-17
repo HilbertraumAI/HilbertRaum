@@ -6,7 +6,21 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
-_Last updated: 2026-06-17 — **Skills Phases S6+S7 SHIPPED (one unit) — manual activation + prompt
+_Last updated: 2026-06-17 — **Skills Phase S8 SHIPPED — skill selector heuristics.** New files:
+[`services/skills/selector.ts`](apps/desktop/src/main/services/skills/selector.ts) (pure deterministic
+`triggers` scoring — keyword/MIME/filename, fixed threshold, tie-break by installId) and
+[`services/skills/suggest.ts`](apps/desktop/src/main/services/skills/suggest.ts)
+(`suggestSkillsForTurn` — resolves the conversation scope MAIN-side from the conversationId, §22-C4,
+scores ENABLED skills, returns ≤1 offer). New IPC `suggestSkills(conversationId, question?)→
+SkillSuggestion[]` (requireUnlocked; logs nothing — the question is content) + preload + the new
+`SkillSuggestion` shared type. The composer `SkillPicker` pins the offer **on top, in-picker only**
+(owner decision 2026-06-17: no canvas chip), **inert until tapped** (never auto-applies — auto-fire is
+the deferred S13 wave). 14 new tests (selector 8, suggest 5, picker 3 added to SkillChat). Full suite
+**1518 passed / 25 skipped**, typecheck + build clean. Docs: architecture.md (selector paragraph). See
+the **"Skills — S8 handoff"** block below. Next: Phase S9 (built-in Bank-Statement instruction stub +
+the three known-limitations.md entries)._
+
+_(prior) 2026-06-17 — **Skills Phases S6+S7 SHIPPED (one unit) — manual activation + prompt
 integration.** Skills now actually shape answers. New files:
 [`services/skills/prompt.ts`](apps/desktop/src/main/services/skills/prompt.ts) (the fenced data block
 + guard line + the pre-sized token budget — §11) and
@@ -106,6 +120,46 @@ attacker-supplied and is now unzipped straight to a real on-disk folder. **Impac
 commit: none** — `shared/skill-manifest.ts` is storage-agnostic and `parseSkillManifestFromDir` is now
 the single read path for both sources. S3 spec, S4 spec, §7/§8/§9/§14/§17/§19/§20 + the §18 matrices
 updated accordingly._
+
+### Skills — S8 handoff (2026-06-17)
+
+**Contracts produced** (what S9+ / a future S13 auto-fire consume):
+- **`services/skills/selector.ts`** (pure, no DB): `scoreSkillTriggers(triggers, {question, docTitles,
+  docMimeTypes}) → number`; `selectSuggestion(candidates, ctx) → SkillCandidate | null`;
+  `SUGGEST_SCORE_THRESHOLD` (=2). Weights: keyword ×2, mime +1, filename +1 — a lone document signal
+  is below threshold (never fires on "there's a PDF in scope" alone). Glob `*`/`?` filename matching,
+  case-insensitive. Deterministic tie-break by `installId` asc. **The S13 confidence threshold tunes
+  here; this same suite is its regression guard.**
+- **`services/skills/suggest.ts`**: `suggestSkillsForTurn(db, conversationId, question?) →
+  SkillSuggestion[]` — resolves scope via `resolveScope` + `buildScopeFilter` MAIN-side, candidates =
+  `listSkills(db).filter(enabled && !unavailableAt)`, returns ≤1. Empty-tolerant (unknown/locked conv →
+  keyword-only). **Read-only / inert** — never writes `active_skill_id`.
+- **IPC**: `suggestSkills(conversationId, question?) → SkillSuggestion[]` (`shared/ipc.ts`
+  `skills:suggest`, preload mirrored, handled in `registerSkillsIpc`; `requireUnlocked`; reconciles
+  once then suggests; **no log/audit** — reads aren't audited and the question is content).
+- **Shared type** `SkillSuggestion {installId, title}` (`shared/types.ts`) — structural only (§22-M1).
+- **Renderer**: `SkillPicker` gains `suggestion?`/`onOpenChange?`; ChatScreen recomputes the offer on
+  picker-open with the current draft + activeId. Key `chat.skill.suggested`; `.menu-item.skill-suggest`
+  accent style.
+
+**Decisions taken or changed:**
+- **In-picker only (owner decision 2026-06-17):** the offer rides the picker the user already opened —
+  no canvas chip, no `AppSettings` key (DS14/§22-D3). Recomputed on picker-open (one IPC per open with
+  the live draft), not on every keystroke.
+- **Threshold = 2 closes OQ-1** for v1: one keyword OR mime+filename together. Tunable in one constant.
+- **Auto-fire stays deferred to S13** behind the offline evaluation harness (§10.4) — S8 ships only the
+  inert one-tap offer. The selector is the harness's scoring unit when that lands.
+
+**Open landmines:** none new (no `SL-#`). (The S6 composer-picker live eyeball is still the one
+deferred capture — see the S6+S7 block; the picker incl. the new suggestion row is covered by
+`SkillChat.test.tsx`.)
+
+**What S9 consumes:** nothing from S8 directly — S9 commits the `app-skills/bank-statement/` instruction
+stub (guidance-honest body + the detail-drawer Tier-2 note), wires `prepare-drive` copy + the
+commercial-drive assert, and lands the **three ratified `known-limitations.md` entries** (§22-M2, DS20,
+DB-rebuild-resets-enable — now bound into the §18.1 S9 spec + the §18.0-E doc-map). A real bundled
+app skill will exercise the whole S2→S8 path end-to-end (its `triggers` make it the first real
+selector candidate).
 
 ### Skills — S6+S7 handoff (2026-06-17)
 

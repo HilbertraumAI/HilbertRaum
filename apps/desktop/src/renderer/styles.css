@@ -1342,6 +1342,10 @@ code, pre, kbd { font-family: var(--font-mono); }
 /* Overflow menu separator (Radix DropdownMenu.Separator). */
 .menu-sep { height: 1px; background: var(--border); margin: 4px 6px; }
 
+/* The deterministic skill suggestion pinned atop the composer picker (skills plan §10.2/S8): a calm
+   accent tint so it reads as an OFFER, not a warning. Still a plain menu item — one tap accepts. */
+.menu-item.skill-suggest { color: var(--accent); font-weight: 600; }
+
 /* ---- Settings → Skills (skills plan §15) ---- */
 /* Toolbar: the intro line takes the flex space, the Import action stays right + shrink:0. */
 .skills-toolbar { display: flex; align-items: flex-start; gap: 16px; }

@@ -169,6 +169,7 @@ export const de: Record<keyof typeof en, string> = {
   // ---- Chat: skill picker + per-message glyph (skills plan §10/§15) ----
   'chat.skill.trigger': 'Skill: {label}',
   'chat.skill.none': 'Kein Skill',
+  'chat.skill.suggested': 'Vorschlag: {title} – nutzen?',
   'chat.skill.used': 'Skill: {title}',
   'chat.skill.usedTitle': 'Diese Antwort wurde vom Skill „{title}“ geprägt.',
 

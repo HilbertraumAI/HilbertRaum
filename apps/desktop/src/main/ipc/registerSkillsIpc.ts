@@ -1,11 +1,12 @@
 import { BrowserWindow, dialog, ipcMain } from 'electron'
 import { IPC } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
-import type { SkillInfo, SkillPreview } from '../../shared/types'
+import type { SkillInfo, SkillPreview, SkillSuggestion } from '../../shared/types'
 import { getSettings } from '../services/settings'
 import { tMain } from '../services/i18n'
 import { log } from '../services/logging'
 import { getSkill, getSkillsByDeclaredId, setSkillEnabled } from '../services/skills/registry'
+import { suggestSkillsForTurn } from '../services/skills/suggest'
 import {
   deleteSkill,
   exportSkill,
@@ -63,6 +64,24 @@ export function registerSkillsIpc(ctx: AppContext): void {
     const record = ctx.skills!.get(installId)
     return record ? skillInfo(ctx.db, record) : null
   })
+
+  // Deterministic skill suggestion for the composer picker (skills plan §10.2/§16, S8). Scope is
+  // resolved MAIN-side from the conversationId (§22-C4); the draft `question` is content and is
+  // scored but NEVER logged or audited (reads aren't audited). Returns at most one OFFER — the
+  // picker pins it and the user taps to accept; nothing is applied here.
+  ipcMain.handle(
+    IPC.suggestSkills,
+    (_e, conversationId: string, question?: string): SkillSuggestion[] => {
+      requireUnlocked()
+      // First read also reconciles disk→DB (lazy post-unlock) so a just-enabled skill is a candidate.
+      ctx.skills!.list()
+      return suggestSkillsForTurn(
+        ctx.db,
+        typeof conversationId === 'string' ? conversationId : '',
+        typeof question === 'string' ? question : ''
+      )
+    }
+  )
 
   // Open the OS picker for a `.skill.zip` file OR a folder containing SKILL.md (the pickDocuments
   // precedent; renderer has no dialog access). Windows can't mix file+dir in one dialog, so the

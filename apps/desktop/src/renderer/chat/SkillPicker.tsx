@@ -1,6 +1,6 @@
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import { useT } from '../i18n'
-import type { SkillInfo } from '@shared/types'
+import type { SkillInfo, SkillSuggestion } from '@shared/types'
 
 // Composer skill picker (skills plan §10.2 #1 / §15): a quiet footer affordance — "Skill: none ▾"
 // — that sets the ONE skill for the next turn AND the conversation's sticky default. Mirrors the
@@ -17,14 +17,31 @@ interface SkillPickerProps {
   value: string | null
   onChange: (installId: string | null) => void
   disabled?: boolean
+  /** A deterministic one-tap suggestion (skills plan §10.2/DS14, S8) — pinned on top when present
+   *  and not already selected. An OFFER, never auto-applied. */
+  suggestion?: SkillSuggestion | null
+  /** Fired when the menu opens/closes — the screen recomputes the suggestion on open. */
+  onOpenChange?: (open: boolean) => void
 }
 
-export function SkillPicker({ skills, value, onChange, disabled }: SkillPickerProps): JSX.Element {
+export function SkillPicker({
+  skills,
+  value,
+  onChange,
+  disabled,
+  suggestion,
+  onOpenChange
+}: SkillPickerProps): JSX.Element {
   const { t } = useT()
   const selected = value ? skills.find((s) => s.installId === value) ?? null : null
   const triggerLabel = selected ? selected.title : t('chat.skill.none')
+  // Offer only a suggestion that is real, still enabled, and not already the active pick.
+  const offer =
+    suggestion && suggestion.installId !== value && skills.some((s) => s.installId === suggestion.installId)
+      ? suggestion
+      : null
   return (
-    <DropdownMenu.Root>
+    <DropdownMenu.Root onOpenChange={onOpenChange}>
       <DropdownMenu.Trigger asChild>
         <button type="button" className="footer-menu-btn" disabled={disabled}>
           {t('chat.skill.trigger', { label: triggerLabel })} <span aria-hidden="true">▾</span>
@@ -32,6 +49,19 @@ export function SkillPicker({ skills, value, onChange, disabled }: SkillPickerPr
       </DropdownMenu.Trigger>
       <DropdownMenu.Portal>
         <DropdownMenu.Content className="menu" align="start" sideOffset={6}>
+          {/* The one-tap suggestion rides the picker the user already opened (§22-D3): no canvas
+              chip, no settings key. Tapping it sets the skill; it never auto-applies. */}
+          {offer && (
+            <>
+              <DropdownMenu.Item
+                className="menu-item skill-suggest"
+                onSelect={() => onChange(offer.installId)}
+              >
+                {t('chat.skill.suggested', { title: offer.title })}
+              </DropdownMenu.Item>
+              <DropdownMenu.Separator className="menu-sep" />
+            </>
+          )}
           <DropdownMenu.RadioGroup
             value={value ?? NONE}
             onValueChange={(next) => onChange(next === NONE ? null : next)}

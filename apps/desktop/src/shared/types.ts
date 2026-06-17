@@ -1342,6 +1342,17 @@ export interface SkillPreview {
   notes: string[]
 }
 
+/**
+ * A deterministic skill suggestion for the composer picker (skills plan §10.2 #2/DS14, S8). An
+ * OFFER, never auto-applied: the picker pins it on top and the user taps to accept. STRUCTURAL only
+ * (id + title) — never the matched keyword, the question, or any document text (§22-M1). Produced by
+ * `suggestSkills(conversationId, question?)`; v1 returns at most one (the array keeps it future-proof).
+ */
+export interface SkillSuggestion {
+  installId: string
+  title: string
+}
+
 export type AuditEventType =
   | 'runtime_started'
   | 'runtime_stopped'

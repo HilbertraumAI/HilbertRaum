@@ -121,6 +121,17 @@ NULL (the FK-less delete relies on this — §22-C3). The renderer surfaces a qu
 **"Skill: …" picker** (both modes) + a per-message **skill glyph** on the answer it shaped
 (icon + word, never colour-only).
 
+**Skill suggestion (Skills plan §10.2/DS14 / S8).** `services/skills/selector.ts` scores each
+**enabled** skill's cached `triggers` against the turn — keyword hits in the draft question (the
+strong signal), plus the in-scope documents' MIME types / filename globs (supporting) — fully
+**deterministic, no model, no network**, with a fixed threshold (a lone document signal never fires).
+`services/skills/suggest.ts` resolves the conversation's scope **main-side from the conversationId**
+(§22-C4 — the renderer holds the draft question, not the doc scope), gathers the in-scope filename/MIME
+signals, and returns at most **one** offer over the `suggestSkills(conversationId, question?)` IPC. The
+question is content: it is scored but **never logged or audited**. The offer is surfaced **only inside
+the composer picker** (pinned on top, no canvas chip, no settings key) and is **inert until tapped** —
+it never auto-applies (auto-fire is the deferred S13 wave, gated on an evaluation harness).
+
 ## Models & runtime (Phase 2)
 - **Manifests** are local YAML under `model-manifests/` (committed; weights are not). The schema +
   validator live in `src/shared/manifest.ts` so renderer and main share one definition. YAML is

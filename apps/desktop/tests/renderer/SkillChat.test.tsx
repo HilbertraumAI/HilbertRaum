@@ -67,6 +67,44 @@ describe('SkillPicker (composer footer, skills plan §10.2)', () => {
     await user.click(screen.getByRole('menuitemradio', { name: /Bank statement helper/ }))
     expect(onChange).toHaveBeenCalledWith('user:bank')
   })
+
+  it('pins a one-tap suggestion on top and applies it only when tapped (S8 / DS14)', async () => {
+    const onChange = vi.fn()
+    const user = userEvent.setup()
+    render(
+      withI18n(
+        <SkillPicker
+          skills={[skill()]}
+          value={null}
+          onChange={onChange}
+          suggestion={{ installId: 'user:bank', title: 'Bank statement helper' }}
+        />
+      )
+    )
+    await user.click(screen.getByRole('button', { name: /No skill/ }))
+    const offer = screen.getByRole('menuitem', { name: /Suggested: Bank statement helper/ })
+    expect(offer).toBeInTheDocument()
+    // Inert until tapped — onChange not called just by surfacing the offer.
+    expect(onChange).not.toHaveBeenCalled()
+    await user.click(offer)
+    expect(onChange).toHaveBeenCalledWith('user:bank')
+  })
+
+  it('hides the suggestion when it is already the active skill', async () => {
+    const user = userEvent.setup()
+    render(
+      withI18n(
+        <SkillPicker
+          skills={[skill()]}
+          value="user:bank"
+          onChange={vi.fn()}
+          suggestion={{ installId: 'user:bank', title: 'Bank statement helper' }}
+        />
+      )
+    )
+    await user.click(screen.getByRole('button', { name: /Bank statement helper/ }))
+    expect(screen.queryByRole('menuitem', { name: /Suggested:/ })).not.toBeInTheDocument()
+  })
 })
 
 describe('per-message skill glyph (Transcript, DS16/§22-A5)', () => {

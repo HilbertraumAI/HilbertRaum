@@ -151,6 +151,7 @@ export const en = {
   // ---- Chat: skill picker + per-message glyph (skills plan §10/§15) ----
   'chat.skill.trigger': 'Skill: {label}',
   'chat.skill.none': 'No skill',
+  'chat.skill.suggested': 'Suggested: {title} — use it?',
   'chat.skill.used': 'Skill: {title}',
   'chat.skill.usedTitle': 'This answer was shaped by the skill “{title}”.',
 

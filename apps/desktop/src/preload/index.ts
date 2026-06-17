@@ -36,6 +36,7 @@ import type {
   RuntimeStatus,
   SkillInfo,
   SkillPreview,
+  SkillSuggestion,
   StartDocTaskRequest,
   WorkspaceActionResult,
   WorkspaceMode,
@@ -337,6 +338,11 @@ const api = {
   /** Acknowledge a user skill's import warning (DS7). */
   acknowledgeSkillWarning: (installId: string): Promise<SkillInfo> =>
     ipcRenderer.invoke(IPC.acknowledgeSkillWarning, installId),
+
+  /** Deterministic skill suggestion for the composer picker (skills plan §10.2/S8). The draft
+   *  question is content — the main handler scores it and logs nothing. Returns at most one. */
+  suggestSkills: (conversationId: string, question?: string): Promise<SkillSuggestion[]> =>
+    ipcRenderer.invoke(IPC.suggestSkills, conversationId, question),
 
   /** Subscribe to streamed tokens for a request (= conversation id); returns an unsubscribe fn. */
   onToken: (requestId: string, cb: (token: string) => void): (() => void) => {
