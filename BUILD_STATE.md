@@ -6,7 +6,28 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
-_Last updated: 2026-06-17 — **Skills — LOW / residual follow-ups (no new phase).** The four remaining
+_Last updated: 2026-06-17 — **Skills — per-locale DISPLAY localization (no new phase).** Skill content
+(title/description) was English-only in a German UI (the chrome is i18n'd, but the manifest carried a
+single title/description) — visible in the composer picker, the per-message glyph, and Settings →
+Skills. Fixed for the **display metadata** (the body stays single-language — the model is multilingual,
+D-L6). Design record: **architecture.md "Skills — design record" §16**. **Additive manifest block:**
+`SKILL.md` may carry `localized:` (locale → {title?, description?}), parsed in
+[`skill-manifest.ts`](apps/desktop/src/shared/skill-manifest.ts) (lenient: malformed/blank/over-long/
+multi-line → noted+skipped, never an error; ≤16 locales; keys lower-cased). `SkillManifest.localized` +
+`SkillInfo.localized` are optional/additive (manifest_json round-trips it); `recordToInfo` projects it.
+**Renderer pick:** a pure helper [`renderer/lib/skillI18n.ts`](apps/desktop/src/renderer/lib/skillI18n.ts)
+(`localizedSkillTitle`/`localizedSkillDescription` + `skillTitleResolver` for the glyph), used by
+`SkillPicker`, the Settings → Skills cards + detail, and the `Transcript` glyph (installId→title resolver
+threaded from `ChatScreen`, built from the full skills list with a stamped-title fallback); every pick
+falls back to canonical text. **Bundled skills:** all four (`bank-statement`/`invoice`/`document-redaction`/
+`meeting-protocol`) gained a `localized.de` title+description (triggers were already bilingual). Display
+only — nothing threads locale into `resolveTurnSkill`/the prompt, so the §7 gate + ceiling are unchanged
+and the injected body is byte-identical regardless of UI language. Tests: manifest parser (parse/lenient/
+bounds/single-line), the renderer helper (`skill-i18n.test.ts`), and the real bundled manifest's de
+override projected through `recordToInfo`. Full suite green (**1713 passed**), typecheck + build clean.
+EN/DE app-string parity still compile-enforced._
+
+_(prior) 2026-06-17 — **Skills — LOW / residual follow-ups (no new phase).** The four remaining
 LOW/residual items after the §14 audit, all fixed behind the unchanged §7 ceiling (no new capability,
 still offline, audit still ids/counts-only, EN/DE parity compile-enforced). Full design record:
 **architecture.md "Skills — design record" §15**. **(1) Docs:** [`user-guide.md`](docs/user-guide.md)

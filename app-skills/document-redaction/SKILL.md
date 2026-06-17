@@ -5,6 +5,10 @@ description: Use when the user wants to redact, anonymize, or remove personal da
 version: 1.0.0
 author: HilbertRaum
 language: en
+localized:                     # Per-locale DISPLAY overrides for title/description (additive; §16).
+  de:                          #   Shown when the app runs in German; the guidance body stays English.
+    title: Dokument schwärzen
+    description: Verwenden, wenn personenbezogene Daten in einem Dokument geschwärzt, anonymisiert oder entfernt werden sollen.
 kind: tool                     # Tier-2 (S11d): the app-orchestrated tool below is effective
 compatibility:
   minAppVersion: 0.1.29

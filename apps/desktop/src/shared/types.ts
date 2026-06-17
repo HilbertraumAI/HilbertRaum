@@ -1278,6 +1278,12 @@ export interface SkillInfo {
   id: string
   title: string
   description: string
+  /**
+   * Optional per-locale DISPLAY overrides for `title`/`description` (additive; keyed by a short locale
+   * tag e.g. 'de'). The renderer shows the running UI language's entry, falling back to
+   * `title`/`description`. Display only — never the prompt/body language (D-L6).
+   */
+  localized?: Record<string, { title?: string; description?: string }>
   version: string
   kind: SkillKind
   author: string

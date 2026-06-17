@@ -5,6 +5,10 @@ description: Use when the user wants to extract, categorize, reconcile, or summa
 version: 1.0.0
 author: HilbertRaum
 language: en
+localized:                     # Per-locale DISPLAY overrides for title/description (additive; §16).
+  de:                          #   Shown when the app runs in German; the guidance body stays English.
+    title: Kontoauszug-Analyse
+    description: Verwenden, wenn Transaktionen aus einem Kontoauszug extrahiert, kategorisiert, abgeglichen oder zusammengefasst werden sollen.
 kind: tool                     # Tier-2 (S11c): the app-orchestrated tools below are effective
 compatibility:
   minAppVersion: 0.1.29

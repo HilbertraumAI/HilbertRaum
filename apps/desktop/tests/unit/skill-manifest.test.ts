@@ -210,6 +210,62 @@ describe('validateSkillManifest', () => {
     })
   })
 
+  it('parses a per-locale localized title/description override (additive display block, §16)', () => {
+    const res = validateSkillManifest(
+      rawFront({
+        localized: {
+          de: {
+            title: 'Kontoauszug-Analyse',
+            description: 'Verwenden, wenn Transaktionen aus einem Kontoauszug extrahiert werden sollen.'
+          }
+        }
+      })
+    )
+    expect(res.ok).toBe(true)
+    expect(res.manifest?.localized).toEqual({
+      de: {
+        title: 'Kontoauszug-Analyse',
+        description: 'Verwenden, wenn Transaktionen aus einem Kontoauszug extrahiert werden sollen.'
+      }
+    })
+  })
+
+  it('localized: a locale key is lower-cased, and a title-only / description-only entry is kept', () => {
+    const res = validateSkillManifest(
+      rawFront({ localized: { DE: { title: 'Nur Titel' }, fr: { description: 'Seulement la description' } } })
+    )
+    expect(res.ok).toBe(true)
+    expect(res.manifest?.localized).toEqual({
+      de: { title: 'Nur Titel' },
+      fr: { description: 'Seulement la description' }
+    })
+  })
+
+  it('localized: ignores a malformed/blank/over-long override leniently (note, never an error)', () => {
+    const res = validateSkillManifest(
+      rawFront({
+        localized: {
+          de: { title: '   ', description: 'x'.repeat(9999) }, // blank title + over-long desc → both dropped
+          es: 'not-a-mapping' // wrong shape → dropped
+        }
+      })
+    )
+    expect(res.ok).toBe(true) // never fatal
+    expect(res.manifest?.localized).toBeUndefined() // nothing valid survived
+    expect(res.notes.length).toBeGreaterThan(0)
+  })
+
+  it('localized: a multi-line override title is rejected (display strings stay single-line)', () => {
+    const res = validateSkillManifest(rawFront({ localized: { de: { title: 'Zeile 1\nZeile 2' } } }))
+    expect(res.ok).toBe(true)
+    expect(res.manifest?.localized).toBeUndefined()
+  })
+
+  it('localized: absent block ⇒ undefined (no overrides)', () => {
+    const res = validateSkillManifest(rawFront())
+    expect(res.manifest?.localized).toBeUndefined()
+  })
+
   it('accepts snake_case trigger subfields', () => {
     const res = validateSkillManifest(
       rawFront({ triggers: { mime_types: ['text/csv'], filename_patterns: ['*kontoauszug*'] } })

@@ -1,5 +1,6 @@
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import { useT } from '../i18n'
+import { localizedSkillDescription, localizedSkillTitle } from '../lib/skillI18n'
 import type { SkillInfo, SkillSuggestion } from '@shared/types'
 
 // Composer skill picker (skills plan §10.2 #1 / §15): a quiet footer affordance — "Skill: none ▾"
@@ -32,13 +33,13 @@ export function SkillPicker({
   suggestion,
   onOpenChange
 }: SkillPickerProps): JSX.Element {
-  const { t } = useT()
+  const { t, lang } = useT()
   const selected = value ? skills.find((s) => s.installId === value) ?? null : null
-  const triggerLabel = selected ? selected.title : t('chat.skill.none')
+  const triggerLabel = selected ? localizedSkillTitle(selected, lang) : t('chat.skill.none')
   // Offer only a suggestion that is real, still enabled, and not already the active pick.
-  const offer =
-    suggestion && suggestion.installId !== value && skills.some((s) => s.installId === suggestion.installId)
-      ? suggestion
+  const offerSkill =
+    suggestion && suggestion.installId !== value
+      ? skills.find((s) => s.installId === suggestion.installId) ?? null
       : null
   return (
     <DropdownMenu.Root onOpenChange={onOpenChange}>
@@ -51,13 +52,13 @@ export function SkillPicker({
         <DropdownMenu.Content className="menu" align="start" sideOffset={6}>
           {/* The one-tap suggestion rides the picker the user already opened (§22-D3): no canvas
               chip, no settings key. Tapping it sets the skill; it never auto-applies. */}
-          {offer && (
+          {offerSkill && (
             <>
               <DropdownMenu.Item
                 className="menu-item skill-suggest"
-                onSelect={() => onChange(offer.installId)}
+                onSelect={() => onChange(offerSkill.installId)}
               >
-                {t('chat.skill.suggested', { title: offer.title })}
+                {t('chat.skill.suggested', { title: localizedSkillTitle(offerSkill, lang) })}
               </DropdownMenu.Item>
               <DropdownMenu.Separator className="menu-sep" />
             </>
@@ -82,8 +83,10 @@ export function SkillPicker({
                   <DropdownMenu.ItemIndicator>●</DropdownMenu.ItemIndicator>
                 </span>
                 <span>
-                  {s.title}
-                  {s.description && <span className="menu-item-hint">{s.description}</span>}
+                  {localizedSkillTitle(s, lang)}
+                  {localizedSkillDescription(s, lang) && (
+                    <span className="menu-item-hint">{localizedSkillDescription(s, lang)}</span>
+                  )}
                 </span>
               </DropdownMenu.RadioItem>
             ))}

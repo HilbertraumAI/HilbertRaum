@@ -446,6 +446,8 @@ export function recordToInfo(record: SkillRecord, duplicateId: boolean, appVersi
     id: record.id,
     title: record.title,
     description: record.manifest.description,
+    // Per-locale display overrides (additive) — the renderer picks the UI language's entry.
+    ...(record.manifest.localized ? { localized: record.manifest.localized } : {}),
     version: record.version,
     kind: record.kind,
     author: record.manifest.author,

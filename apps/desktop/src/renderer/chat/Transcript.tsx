@@ -32,6 +32,11 @@ interface TranscriptProps {
   onCopy: (content: string) => void
   onSave: () => void
   actionsDisabled: boolean
+  /**
+   * Resolve a skill's per-message glyph title in the UI language (installId → localized title),
+   * falling back to the stamped canonical title. Optional — when absent the stamped title is shown.
+   */
+  resolveSkillTitle?: (installId: string | null | undefined, fallbackTitle: string) => string
 }
 
 export function Transcript({
@@ -45,7 +50,8 @@ export function Transcript({
   onTryAgain,
   onCopy,
   onSave,
-  actionsDisabled
+  actionsDisabled,
+  resolveSkillTitle
 }: TranscriptProps): JSX.Element {
   const { t } = useT()
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -93,12 +99,19 @@ export function Transcript({
                   the answer a skill shaped — icon + word, never colour-only (guidelines §9). The
                   read resolves a DELETED skill to null (no skillTitle), so the glyph never points at
                   a vanished skill. Decorative-but-labelled; never alarming. */}
-              {m.role === 'assistant' && m.skillTitle && (
-                <div className="msg-skill" title={t('chat.skill.usedTitle', { title: m.skillTitle })}>
-                  <Icon name="brain" className="msg-skill-icon" />
-                  <span>{t('chat.skill.used', { title: m.skillTitle })}</span>
-                </div>
-              )}
+              {m.role === 'assistant' && m.skillTitle && (() => {
+                // Show the glyph title in the UI language when the skill carries a `localized`
+                // override; fall back to the stamped canonical title otherwise.
+                const glyphTitle = resolveSkillTitle
+                  ? resolveSkillTitle(m.skillId, m.skillTitle)
+                  : m.skillTitle
+                return (
+                  <div className="msg-skill" title={t('chat.skill.usedTitle', { title: glyphTitle })}>
+                    <Icon name="brain" className="msg-skill-icon" />
+                    <span>{t('chat.skill.used', { title: glyphTitle })}</span>
+                  </div>
+                )
+              })()}
             </div>
             {m.role === 'assistant' && (
               <MessageActions

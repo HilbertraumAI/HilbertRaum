@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type DragEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type DragEvent } from 'react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import {
   DOC_TASK_BUSY_MESSAGE,
@@ -21,6 +21,7 @@ import {
   subscribeSkillRun
 } from '../lib/skillruns'
 import { localizeServerCopy } from '../lib/displayMap'
+import { skillTitleResolver } from '../lib/skillI18n'
 import { friendlyIpcError } from '../lib/errors'
 import { RUNTIME_POLL_MS, STREAM_RECOVER_POLL_MS } from '../lib/polling'
 import { useT } from '../i18n'
@@ -89,7 +90,7 @@ export function ChatScreen({
   initialMode,
   initialScopeDocumentIds
 }: Props): JSX.Element {
-  const { t } = useT()
+  const { t, lang } = useT()
   const [conversations, setConversations] = useState<Conversation[]>([])
   const [activeId, setActiveId] = useState<string | null>(null)
   const [messages, setMessages] = useState<Message[]>([])
@@ -121,6 +122,8 @@ export function ChatScreen({
   const [depths, setDepths] = useState<Record<string, ChatDepthMode>>({})
   /** Enabled, available skills for the composer picker (skills plan §10.2/§11.3 lightweight index). */
   const [enabledSkills, setEnabledSkills] = useState<SkillInfo[]>([])
+  /** All installed skills — used to localize the per-message glyph title (incl. a now-disabled skill). */
+  const [allSkills, setAllSkills] = useState<SkillInfo[]>([])
   /** Per-conversation skill selection this session ('new' = no conversation yet). A key present
    *  here overrides the conversation's persisted `activeSkillId`; null = explicitly no skill. */
   const [skillByConv, setSkillByConv] = useState<Record<string, string | null>>({})
@@ -281,8 +284,10 @@ export function ChatScreen({
       try {
         // Only ENABLED, available skills are pickable for a turn (skills plan §10.2/§11.3).
         const all = (await window.api.listSkills?.()) ?? []
+        setAllSkills(all)
         setEnabledSkills(all.filter((s) => s.enabled && !s.unavailable))
       } catch {
+        setAllSkills([])
         setEnabledSkills([])
       }
     })()
@@ -462,6 +467,10 @@ export function ChatScreen({
     if (busyStreaming) return
     setDepths((prev) => ({ ...prev, [depthKey]: d }))
   }
+
+  // Per-message glyph title resolver (installId → localized title), rebuilt only when the loaded
+  // skills or the UI language change. Display-only localization (architecture.md "Skills" §16).
+  const resolveGlyphSkillTitle = useMemo(() => skillTitleResolver(allSkills, lang), [allSkills, lang])
 
   // ---- Turn skill (skills plan §10) -------------------------------------------------
   // The effective skill for a conversation key: a session override (the picker) wins, else the
@@ -1024,6 +1033,7 @@ export function ChatScreen({
           onCopy={onCopyMessage}
           onSave={() => void onSaveConversation()}
           actionsDisabled={busyStreaming}
+          resolveSkillTitle={resolveGlyphSkillTitle}
         />
 
         {/* Always-mounted alert region (audit M-U1) so the error is announced even on

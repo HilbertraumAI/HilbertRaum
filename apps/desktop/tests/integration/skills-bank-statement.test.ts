@@ -70,6 +70,12 @@ describe('S9 — bundled bank-statement skill: discovery + reconcile', () => {
     expect(record!.manifest.permissions.documents).toBe('selected_only')
     // Triggers make it the first real selector candidate.
     expect(record!.manifest.triggers?.keywords).toContain('bank statement')
+    // §16: the committed manifest carries a German DISPLAY override, projected into SkillInfo so the
+    // renderer can localize the title/description (the body language is unchanged).
+    expect(record!.manifest.localized?.de?.title).toBe('Kontoauszug-Analyse')
+    const info = recordToInfo(record!, false)
+    expect(info.localized?.de?.title).toBe('Kontoauszug-Analyse')
+    expect(info.localized?.de?.description).toMatch(/Kontoauszug/)
 
     // It is the only app skill committed for now (sanity: discovery isn't picking up junk).
     const appSkills = listSkills(db).filter((s) => s.source === 'app')

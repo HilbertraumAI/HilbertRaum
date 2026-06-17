@@ -11,6 +11,7 @@ import {
   useToast
 } from '../../components'
 import { useT } from '../../i18n'
+import { localizedSkillDescription, localizedSkillTitle } from '../../lib/skillI18n'
 import type { MessageKey } from '@shared/i18n'
 import type { SkillKind, SkillPermissions } from '@shared/skill-manifest'
 import type { SkillInfo, SkillPreview } from '@shared/types'
@@ -273,15 +274,17 @@ function SkillRow({
   onExport: () => void
   onDelete: () => void
 }): JSX.Element {
-  const { t } = useT()
+  const { t, lang } = useT()
   const needsReview = skill.source === 'user' && !skill.warningAck
   const isApp = skill.source === 'app'
+  const rowTitle = localizedSkillTitle(skill, lang)
+  const rowDesc = localizedSkillDescription(skill, lang)
   return (
     <div className="skill-row" role="listitem">
       <Icon name="brain" className="skill-row-icon" />
       <button type="button" className="skill-row-main" onClick={onOpen}>
-        <span className="skill-row-title">{skill.title}</span>
-        {skill.description && <span className="skill-row-desc">{skill.description}</span>}
+        <span className="skill-row-title">{rowTitle}</span>
+        {rowDesc && <span className="skill-row-desc">{rowDesc}</span>}
       </button>
       <div className="skill-row-trailing">
         <Badge tone="neutral">{t(TRUST_LABEL[skill.trustedLevel])}</Badge>
@@ -396,12 +399,14 @@ function SkillDetail({
   onClose: () => void
   onAcknowledge: (skill: SkillInfo) => void
 }): JSX.Element | null {
-  const { t } = useT()
+  const { t, lang } = useT()
   if (!skill) return null
   const needsReview = skill.source === 'user' && !skill.warningAck
+  const detailTitle = localizedSkillTitle(skill, lang)
+  const detailDesc = localizedSkillDescription(skill, lang)
   return (
-    <Modal open={skill !== null} onClose={onClose} title={skill.title} ariaLabel={t('skills.detail.aria')} t={t}>
-      {skill.description && <p className="lead">{skill.description}</p>}
+    <Modal open={skill !== null} onClose={onClose} title={detailTitle} ariaLabel={t('skills.detail.aria')} t={t}>
+      {detailDesc && <p className="lead">{detailDesc}</p>}
 
       {needsReview && (
         <Banner

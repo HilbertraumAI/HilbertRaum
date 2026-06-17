@@ -1335,7 +1335,7 @@ seeds a project-name + a folder-label (suggestion-reason) sentinel and proves ne
 (2026-06-14); the full original plan: `git show 477f803:docs/document-organization-plan.md`.
 
 
-## Skills — design record (Phases S2–S12, §1–§15)
+## Skills — design record (Phases S2–S12, §1–§16)
 
 A **Skill** is a self-contained, local task package (instructions + optional examples/schemas) the
 user selects to shape one turn. Two tiers shipped: **Tier 1 — instruction-only** (the body is injected
@@ -1705,6 +1705,35 @@ The four remaining LOW/residual items after the §14 audit, all fixed behind the
   already enabled is **skipped at turn-resolution, never suggested, and refused at run start** — even
   with a stale `enabled` flag. The threading is tolerant by default (absent / '' ⇒ compatible), so the
   seam-level/test callers are unaffected.
+
+### §16 Per-locale skill display localization (2026-06-17d)
+
+Skill **content** (title/description/body) was English-only — the UI chrome is fully i18n'd, but the
+manifest carried a single `title`/`description`, so a German UI showed English skill names in the
+composer picker, the per-message glyph, and the Settings → Skills cards/detail. Fixed for the **display
+metadata** (the chosen scope; the guidance **body** stays single-language — the model is multilingual
+and still answers in German, D-L6):
+
+- **Additive manifest block.** `SKILL.md` may carry a `localized:` map (locale → `{title?, description?}`),
+  parsed in `shared/skill-manifest.ts` (lenient like `triggers`/`language`: a malformed/blank/over-long/
+  multi-line entry is **noted and skipped**, never an error; locale keys are lower-cased and bounded; at
+  most `MAX_LOCALIZED_LOCALES` = 16). It rides the existing additive-schema posture (§2) and the
+  `manifest_json` cache round-trips it. `SkillManifest.localized` + `SkillInfo.localized` are both optional.
+- **Projection.** `installer.ts` `recordToInfo` copies `manifest.localized` into `SkillInfo` so the
+  renderer (which alone knows the resolved UI language via `useT().lang`) picks the entry; the main side
+  stays locale-agnostic.
+- **Renderer pick (display only).** A tiny pure helper `renderer/lib/skillI18n.ts`
+  (`localizedSkillTitle`/`localizedSkillDescription` + a `skillTitleResolver` for the glyph) is used by
+  the composer **`SkillPicker`** (trigger label, suggestion offer, each row), the **Settings → Skills**
+  cards + detail modal, and the per-message **glyph** in `Transcript` (an installId→localized-title
+  resolver threaded from `ChatScreen`, built from the full skills list so a now-disabled stamped skill
+  still localizes, with a stamped-title fallback). Every pick falls back to the canonical text.
+- **Bundled skills.** All four app skills (`bank-statement`, `invoice`, `document-redaction`,
+  `meeting-protocol`) gained a `localized.de` title + description. (The triggers were already bilingual,
+  which is why German questions already fired the suggestion — only the visible text was English.)
+
+Display-only by design: nothing here threads locale into `resolveTurnSkill`/the prompt, so the gate +
+ceiling are unchanged and the injected body is byte-identical regardless of UI language.
 
 ### §-anchor legend (historical plan citations)
 

@@ -62,6 +62,12 @@ export interface SkillCompatibility {
   minAppVersion?: string
 }
 
+/** Per-locale DISPLAY overrides for `title`/`description` only (additive). Body language is unaffected. */
+export interface SkillLocalizedText {
+  title?: string
+  description?: string
+}
+
 /** A fully-validated, canonical skill manifest (parsed from SKILL.md frontmatter). */
 export interface SkillManifest {
   id: string
@@ -72,6 +78,14 @@ export interface SkillManifest {
   language: string
   kind: SkillKind
   compatibility: SkillCompatibility
+  /**
+   * Optional per-locale DISPLAY overrides for `title`/`description` only (additive, keyed by a short
+   * locale tag e.g. 'de'). The app shows a locale's text when the UI runs in that language, falling
+   * back to the canonical `title`/`description`. Display only — it never changes the prompt/body
+   * language (D-L6: the body stays a single language; the model is multilingual). Optional/additive
+   * (older cached manifest_json may lack it → treated as "no overrides").
+   */
+  localized?: Record<string, SkillLocalizedText>
   /** Effective (already clamped) permissions — never exceed the v1 ceiling (DS6). */
   permissions: SkillPermissions
   /** Tier-2 reserved; always `[]` for an `instruction` skill in v1. */
@@ -152,6 +166,8 @@ const MAX_TITLE_LEN = 80
 const MAX_DESCRIPTION_LEN = 280
 const MAX_AUTHOR_LEN = 120
 const MAX_LANGUAGE_LEN = 35
+/** A bounded number of per-locale display overrides (additive `localized` block) — abuse guard. */
+const MAX_LOCALIZED_LOCALES = 16
 
 /**
  * The v1 permission ceiling for an instruction skill (skills plan §6.7). The effective
@@ -427,6 +443,46 @@ export function validateSkillManifest(raw: unknown): SkillManifestValidation {
     }
   }
 
+  // Optional per-locale DISPLAY overrides (title/description only — additive, lenient). A malformed
+  // entry is NOTED and skipped (never an error); only non-empty, single-line, length-bounded strings
+  // are kept. Display only — it never changes the prompt/body language (D-L6).
+  let localized: Record<string, SkillLocalizedText> | undefined
+  const locRaw = raw['localized']
+  if (locRaw !== undefined && locRaw !== null) {
+    if (!isObject(locRaw)) {
+      notes.push('"localized" must be a mapping of locale → {title, description}; ignoring it')
+    } else {
+      const out: Record<string, SkillLocalizedText> = {}
+      for (const loc of Object.keys(locRaw).slice(0, MAX_LOCALIZED_LOCALES)) {
+        const key = loc.trim().toLowerCase()
+        if (!key || key.length > MAX_LANGUAGE_LEN) {
+          notes.push('"localized" has an invalid locale key; ignoring that entry')
+          continue
+        }
+        const entryRaw = locRaw[loc]
+        if (!isObject(entryRaw)) {
+          notes.push(`"localized.${key}" must be a mapping; ignoring it`)
+          continue
+        }
+        const entry: SkillLocalizedText = {}
+        const lt = entryRaw['title']
+        if (typeof lt === 'string' && lt.trim() !== '' && !/[\r\n]/.test(lt) && lt.trim().length <= MAX_TITLE_LEN) {
+          entry.title = lt.trim()
+        } else if (lt !== undefined) {
+          notes.push(`"localized.${key}.title" was ignored (must be a short single line)`)
+        }
+        const ld = entryRaw['description']
+        if (typeof ld === 'string' && ld.trim() !== '' && !/[\r\n]/.test(ld) && ld.trim().length <= MAX_DESCRIPTION_LEN) {
+          entry.description = ld.trim()
+        } else if (ld !== undefined) {
+          notes.push(`"localized.${key}.description" was ignored (must be a short single line)`)
+        }
+        if (entry.title || entry.description) out[key] = entry
+      }
+      if (Object.keys(out).length > 0) localized = out
+    }
+  }
+
   // Self-declared trust is ignored — the app assigns trustedLevel (§6.5/§14).
   if (raw['trust'] !== undefined || raw['trustedLevel'] !== undefined || raw['trusted_level'] !== undefined) {
     notes.push('a "trust"/"trustedLevel" field in frontmatter is ignored; the app assigns trust (§14)')
@@ -449,6 +505,7 @@ export function validateSkillManifest(raw: unknown): SkillManifestValidation {
       language,
       kind,
       compatibility,
+      ...(localized ? { localized } : {}),
       permissions,
       allowedTools,
       reservesTools,

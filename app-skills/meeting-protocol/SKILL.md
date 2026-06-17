@@ -5,6 +5,10 @@ description: Use when the user shares meeting notes or a transcript and wants a 
 version: 1.0.0
 author: HilbertRaum
 language: en
+localized:                     # Per-locale DISPLAY overrides for title/description (additive; §16).
+  de:                          #   Shown when the app runs in German; the guidance body stays English.
+    title: Besprechungsprotokoll
+    description: Verwenden, wenn aus Besprechungsnotizen oder einem Transkript ein strukturiertes Protokoll erstellt werden soll – Beschlüsse, Aufgaben und offene Fragen.
 kind: instruction
 compatibility:
   minAppVersion: 0.1.29
