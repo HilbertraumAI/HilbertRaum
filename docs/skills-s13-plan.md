@@ -50,8 +50,10 @@ behaviour change. No model call, no network (consistent with DS4 — selection s
 ## 2. Decisions to ratify (OWNER sign-off — proposals + rationale)
 
 These are the choices that shape S13. Proposed defaults are the conservative reading of the wave's
-existing posture; **none is ratified yet.** Mirror of the S11 "ratified scope cut" — but here the
-table is the *agenda*, not a settled contract.
+existing posture. **RATIFIED by the owner 2026-06-17** from the §3.3.1 baseline — see the
+"Ratified" subsection below the table; the proposals stand with **one refinement to D2** (the literal
+"require a keyword" only reaches 81% precision and fails D1; the ratified gate is the stricter
+*keyword **and** a doc signal*).
 
 | # | Decision | Proposed default | Rationale / alternative |
 |---|---|---|---|
@@ -61,6 +63,36 @@ table is the *agenda*, not a settled contract.
 | **D4** | **Trust / opt-in gate** | **Opt-in, and APP-skills only in v1** of auto-fire | §14 says opt-in. App-only is the conservative default (a user/imported skill needs a deliberate tap); user-skill auto-fire can come later once trusted. Alternative: a per-skill `triggers.autoFire` flag + a global user toggle |
 | **D5** | **Precedence vs the sticky default** | **Auto-fire only when the turn has NO skill set** (no sticky default, no per-turn pick) | Never override an explicit user choice; auto-fire fills only the "user set nothing" gap. Simplest, least surprising |
 | **D6** | **Schema** | Add **`triggers.autoFire?: boolean`** to the SKILL.md frontmatter (author declares *eligibility*; the app still adjudicates via D1/D2/D4) | Additive, parser-validated (the `shared/skill-manifest.ts` precedent); a skill that doesn't declare it is never an auto-fire candidate |
+
+### 2.1 Ratified (owner, 2026-06-17)
+
+From the §3.3.1 baseline. These are now the settled contract S13b/S13c build against (no longer an agenda):
+
+- **D1 — precision bar: RATIFIED at ≥ 95% precision.** A false fire is the costly event; a miss falls
+  back to the tap-offer. (threshold-3 below clears it at 100% on the corpus.)
+- **D2 — confidence model: RATIFIED as `threshold-3` — fire only when a keyword hit is corroborated by
+  ≥ 1 doc signal (deterministic score ≥ 3).** This is a *refinement* of the proposed "require a keyword":
+  the literal keyword-only gate scores 81% precision (the 4 generic-substring adversarials survive) and
+  fails D1. Requiring a keyword **and** a doc signal scores 100% / 88.2% recall. Stays DS4 (no model,
+  offline, regression-testable). Implementation: a separate `AUTOFIRE_SCORE_THRESHOLD = 3` (distinct
+  from `SUGGEST_SCORE_THRESHOLD = 2`), since a lone doc signal maxes at 2 — so threshold-3 structurally
+  means "keyword + a corroborating doc signal."
+- **D3 — surprise UX: RATIFIED as proposed** — silent apply + the existing glyph + a one-click
+  "answer without the skill" undo (S13c).
+- **D4 — trust gate: RATIFIED as proposed** — opt-in, app-skills only in v1.
+- **D5 — precedence: RATIFIED as proposed** — auto-fire only when the turn has no skill set. Note this
+  composes cleanly with D2: threshold-3 implicitly requires a document in scope (a lone keyword = 2 < 3),
+  so auto-fire only ever fires on "the user asked **and** a relevant doc is present" — the most
+  conservative shape. The 2 keyword-only-no-doc "misses" in the baseline are therefore *by design*
+  (they fall back to the tap-offer), not a recall defect.
+- **D6 — schema: RATIFIED as proposed** — additive `triggers.autoFire?: boolean`, parser-validated;
+  only `autoFire: true` skills are candidates.
+- **Gate form for S13b (owner-set):** when the harness becomes a HARD test, assert **fired-wrong == 0
+  AND precision ≥ 0.95** (not a brittle `== 100%`), so it survives corpus growth. The corpus should grow
+  with real-world phrasings; the §3.3.1 100% is on 33 dense hand-authored items (illustrative absolute
+  rate, durable failure-mode signal). The substring-keyword false-fire ceiling (the 4 surviving a
+  keyword-only gate) is intrinsic to the deterministic model and explicitly **out of scope** for S13
+  (§8, OQ-1) — D2's doc-corroboration sidesteps it rather than fixing tokenization.
 
 ## 3. The evaluation harness (S13a) — the deliverable that proceeds NOW
 

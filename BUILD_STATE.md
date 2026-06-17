@@ -25,9 +25,17 @@ S12 sentinel posture — the question is content, §6). Runs as a MEASUREMENT, n
 substring false fires — the deterministic-keyword precision ceiling); **threshold-3** (keyword + ≥1 doc
 signal) **100%** / 88.2% (only 2 keyword-only misses, and a miss is cheap); threshold-4 100% / 70.6%
 (too strict). **Reading:** today's threshold is far below an auto-fire bar; a keyword gate alone can't
-close the substring false fires; threshold-3 is the natural D2 setting for a ≥95% D1 bar. **NEXT ACTION:
-the owner ratifies D1–D6** (precision bar + confidence model) from these numbers before ANY S13b/S13c
-code. `docs/skills-s13-plan.md` stays OPEN (deleted only when S13 fully closes). Full suite green
+close the substring false fires; threshold-3 is the natural D2 setting for a ≥95% D1 bar. **D1–D6 RATIFIED by the owner 2026-06-17**
+(recorded in `docs/skills-s13-plan.md` §2.1): D1 ≥95% precision; **D2 = `threshold-3` — fire only on a
+keyword hit corroborated by ≥1 doc signal** (the literal "require a keyword" was refined up, since it
+scores only 81%); D3/D4/D5/D6 as proposed (silent-apply + glyph + undo; opt-in, app-only; fire only when
+no skill is set; additive `triggers.autoFire?: boolean`). S13b's hard gate-assertion form is owner-set:
+**fired-wrong == 0 AND precision ≥ 0.95** (not a brittle `==100%`), and the corpus should grow with
+real-world phrasings. **NEXT ACTION: S13b (auto-fire mechanics)** — `AUTOFIRE_SCORE_THRESHOLD = 3`, the
+`triggers.autoFire` schema, `resolveAutoFireSkill` plugged into `resolveTurnSkill`/both chat channels
+(app-only + opt-in + only-when-no-skill-set), and flip the harness to the hard gate. Was deferred out of
+this session by directive; ready to start. `docs/skills-s13-plan.md` stays OPEN (deleted only when S13
+fully closes). Full suite green
 (**1726 passed / 25 skipped**), typecheck + build clean._
 
 _(prior) 2026-06-17 — **Skills — active-skill turn-latency: measured root cause + prefix-cache fix
