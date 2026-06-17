@@ -6,7 +6,23 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
-_Last updated: 2026-06-17 — **Skills Phase S10 SHIPPED — Tier-2 tool-registry design + the
+_Last updated: 2026-06-17 — **Skills — S6 composer-picker live eyeball CAPTURED (carry-forward
+closed).** The one open carry-forward from the Skills wave (every UI phase since S6 forwarded the
+chat-composer `SkillPicker` "live eyeball" as uncaptured, because the walk harness never brought up
+a running model) is now done. New committed walk
+[`scripts/walk-skills-composer.mjs`](apps/desktop/scripts/walk-skills-composer.mjs) starts a chat
+runtime with no weights present → the factory falls back to the **mock runtime** (clearing ChatScreen
+gate A), and the bundled `app-skills/bank-statement/` skill is installed-enabled in dev (gate B), so
+the composer + picker finally render for the camera. Captures **5 surfaces × light/dark × EN/DE = 20
+PNGs** into [`docs/design-review/skills-s6/`](docs/design-review/skills-s6/): closed picker
+("Skill: No skill"), open picker (None + the enabled skill + its description hint), the S8
+"Suggested: …" one-tap offer pinned on top, the active state after picking, and the per-message
+`.msg-skill` glyph on a mock-runtime answer. **No source behaviour changed** — the walk surfaced NO
+rendering/wiring defect (SL log stays clean); Playwright stays an ad-hoc dev tool (NOT in
+package.json). Suite still **1548 passed / 25 skipped**, typecheck + build clean. See the **"Skills —
+S6 eyeball capture"** block below. No open carry-forward._
+
+_(prior) 2026-06-17 — **Skills Phase S10 SHIPPED — Tier-2 tool-registry design + the
 validate→run→validate gate.** New file
 [`services/skills/tool-registry.ts`](apps/desktop/src/main/services/skills/tool-registry.ts): the
 static app-owned `SkillTool` map (a skill can never register a tool), the effective-set intersection
@@ -161,6 +177,45 @@ commit: none** — `shared/skill-manifest.ts` is storage-agnostic and `parseSkil
 the single read path for both sources. S3 spec, S4 spec, §7/§8/§9/§14/§17/§19/§20 + the §18 matrices
 updated accordingly._
 
+### Skills — S6 eyeball capture (2026-06-17)
+
+**What this closed.** The Skills wave's one open carry-forward: the S6 chat-composer `SkillPicker`
+"live eyeball" that every UI phase S6→S10 forwarded as uncaptured. It was never a bug or a missing
+feature — the picker's behaviour is covered by `SkillChat.test.tsx`; what was missing was the
+mandatory Playwright screenshot-walk artifact (design-guidelines §11.4), because the walk harness had
+never brought up a running model, so the composer (gated behind a RUNNING runtime) never rendered.
+
+**How.** New committed walk
+[`scripts/walk-skills-composer.mjs`](apps/desktop/scripts/walk-skills-composer.mjs) (mirrors the
+`walk-docs-subnav.mjs` shape: gate flow, `shotBoth(theme)`, per-locale loop, seeding via
+`window.api`). It clears **both** ChatScreen gates: (A) it calls `window.api.selectModel` +
+`startRuntime` on a chat manifest with **no weights on the fresh eyeball root**, so the start gate's
+developer-leniency path falls back to the built-in **mock runtime** (`registerModelIpc` →
+`services/runtime/mock.ts`), which both renders the composer AND streams a simulated reply; (B) the
+bundled `app-skills/bank-statement/` skill is discovered + installed-enabled in dev, so
+`enabledSkills.length > 0` for free. Plaintext-dev policy (no unlock gate), offline, window widened
+to 1360px so the conversation list (and its "New chat" reset between locales) is visible.
+
+**Captured** — `docs/design-review/skills-s6/`, **5 surfaces × light/dark × EN/DE = 20 PNGs**
+(committed alongside the script, per the `skills-s5/` precedent): `composer-<loc>-skill-none` (closed
+picker), `picker-<loc>-open` (None + the enabled skill + its description hint), `picker-<loc>-suggest`
+(the S8 "Suggested: Bank Statement Analysis — use it?" offer pinned on top, fired by the draft
+"reconcile this bank statement" scoring the `triggers`), `composer-<loc>-skill-active` (closed trigger
+now showing the picked skill's title), and `message-<loc>-skill-glyph` (the per-message `.msg-skill`
+"brain" glyph on a mock-runtime answer).
+
+**Findings.** The walk ran clean and exposed **NO** rendering/wiring defect — **SL log stays clean,
+no new `SL-#`.** Surfaces matched the unit-test expectations: the suggestion pins above the radio
+group only while unselected; the active footer + the glyph both stamp the skill title (English
+author-language) regardless of UI locale. No source behaviour was changed.
+
+**Process / tooling notes.** Playwright is an **ad-hoc dev tool, NOT in `package.json`** (CLAUDE.md
+§0 no-new-committed-deps bias) — install with `npm i playwright --no-save -w apps/desktop` (or `-D`
+then revert the manifest), run, done; node_modules carries it uncommitted. The walk must `npm run
+build` first (it drives the BUILT bundle out/main, which vitest never exercises) and **strip
+`ELECTRON_RUN_AS_NODE`** from the child env (the VSCode host exports it). `docs/design-review/` also
+holds untracked `skills-s5/` PNGs from the S5 walk — unrelated to this chore, left as-is.
+
 ### Skills — S10 handoff (2026-06-17)
 
 **Contracts produced** (what S11 consumes):
@@ -203,9 +258,9 @@ updated accordingly._
   native deps / offline). It covers what tool I/O contracts need (incl. the committed
   `transaction.schema.json` shape) and is the same dependency-free posture as `ingestion/limits.ts`.
 
-**Open landmines:** none. SL log stays clean (SL-1 was resolved in S9). Carry-forward (not S10's
-job): the S6 composer-picker live eyeball still uncaptured (needs a model-running walk; covered by
-`SkillChat.test.tsx`).
+**Open landmines:** none. SL log stays clean (SL-1 was resolved in S9). Carry-forward: **CLOSED** —
+the S6 composer-picker live eyeball was captured in the follow-up chore (see the **"Skills — S6
+eyeball capture"** block above this one); no open carry-forward remains.
 
 **What S11 consumes:** the whole `tool-registry.ts` gate + types above. S11 adds the real
 bank-statement tools (`extract_transactions` et al.) into the registry, the `skill_runs` table + the
