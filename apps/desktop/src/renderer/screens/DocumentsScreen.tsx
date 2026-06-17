@@ -294,13 +294,23 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
     }
   }, [refresh])
 
-  // Poll the job + document list until ingestion settles.
+  // Poll the import job until ingestion settles (FE-7). The 400 ms tick reads ONLY the small
+  // `getImportJob` status; the full `listDocuments` + collections refresh (which re-derives the
+  // whole screen) runs only when a file actually finishes — i.e. the job's completed/failed count
+  // changes — and once more at completion, instead of every tick. This is the ModelsScreen
+  // download-poll pattern (refresh on a status transition, not every poll). The visible list
+  // therefore updates at file-completion granularity rather than re-deriving 2.5×/s.
   const watchJob = useCallback(
     (jobId: string): void => {
       if (pollRef.current) clearInterval(pollRef.current)
+      let lastSettled = -1
       pollRef.current = setInterval(async () => {
         try {
-          const [job] = await Promise.all([window.api.getImportJob(jobId), refresh()])
+          const job = await window.api.getImportJob(jobId)
+          const settled = job.completed + job.failed
+          const transitioned = settled !== lastSettled
+          lastSettled = settled
+          if (transitioned || job.done) await refresh()
           if (job.done) {
             if (pollRef.current) clearInterval(pollRef.current)
             pollRef.current = null

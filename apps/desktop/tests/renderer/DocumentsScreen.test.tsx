@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { render, screen, cleanup, waitFor, within } from '@testing-library/react'
+import { render, screen, cleanup, waitFor, within, act } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import {
   DocumentsScreen,
@@ -560,6 +560,58 @@ describe('DocumentsScreen', () => {
     await waitFor(() =>
       expect(screen.queryByRole('button', { name: /re-index all/i })).not.toBeInTheDocument()
     )
+  })
+
+  // ---- FE-7: poll job status only during import; refresh the list on a transition -------
+  it('during import polls getImportJob each tick but refreshes the full list only on a file completion', async () => {
+    vi.useFakeTimers()
+    try {
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+      const listDocuments = vi.fn(async () => [doc({})])
+      let completed = 0
+      const getImportJob = vi.fn(async () => ({
+        jobId: 'j1',
+        total: 2,
+        completed,
+        failed: 0,
+        done: completed >= 2
+      }))
+      stubApi({
+        listDocuments,
+        pickDocuments: vi.fn(async () => ['/u/a.pdf', '/u/b.pdf']),
+        importPreflight: vi.fn(async () => ({ fileCount: 2, audioFileCount: 0, audioBytes: 0 })),
+        importDocuments: vi.fn(async () => ({ jobId: 'j1', documentIds: ['d1', 'd2'] })),
+        getImportJob
+      })
+      render(<DocumentsScreen />)
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0)
+      })
+      await user.click(screen.getByRole('button', { name: /import files/i }))
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0)
+      })
+      const listAfterStart = listDocuments.mock.calls.length
+      const jobAfterStart = getImportJob.mock.calls.length
+
+      // Three ticks with NO new completion: getImportJob keeps polling, but the heavy
+      // listDocuments refresh runs only once (the first tick's -1 → 0 transition), not per tick.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1200)
+      })
+      expect(getImportJob.mock.calls.length).toBeGreaterThanOrEqual(jobAfterStart + 3)
+      expect(listDocuments.mock.calls.length).toBe(listAfterStart + 1)
+
+      // A file finishes (completed 0 → 2): the next tick transitions, so the list refreshes again
+      // and, being done, the poll stops.
+      completed = 2
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(400)
+      })
+      expect(listDocuments.mock.calls.length).toBe(listAfterStart + 2)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('"Re-index all" can be cancelled without running anything (M-U6)', async () => {

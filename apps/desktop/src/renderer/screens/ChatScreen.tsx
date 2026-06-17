@@ -787,10 +787,18 @@ export function ChatScreen({
   // failed file surfaces the friendly per-file error and writes no link (N4).
   function watchAttachJob(jobId: string, convId: string, documentIds: string[], fileNames: string[]): void {
     if (attachPollRef.current) clearInterval(attachPollRef.current)
+    // FE-7: the 400 ms tick reads ONLY the small `getImportJob` status. The attachment list
+    // (and, at completion, the full document list) refreshes when a file actually finishes — the
+    // job's completed/failed count changes, which is exactly when the FK-guarded link row that
+    // reveals it as a "Files in this chat" entry is written — instead of re-fetching it every tick.
+    let lastSettled = -1
     attachPollRef.current = setInterval(async () => {
       try {
         const job = await window.api.getImportJob(jobId)
-        if (activeIdRef.current === convId) await refreshAttachments(convId)
+        const settled = job.completed + job.failed
+        const transitioned = settled !== lastSettled
+        lastSettled = settled
+        if ((transitioned || job.done) && activeIdRef.current === convId) await refreshAttachments(convId)
         if (!job.done) return
         if (attachPollRef.current) clearInterval(attachPollRef.current)
         attachPollRef.current = null
