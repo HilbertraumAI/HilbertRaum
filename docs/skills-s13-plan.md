@@ -100,6 +100,56 @@ it stands. Two outcomes, both useful:
 runs it green (as a measurement, not yet a gate-assertion). **Then the owner sets D1/D2 from real
 numbers.**
 
+### 3.3.1 Baseline — measured (S13a, 2026-06-17)
+
+**Shipped.** Corpus: 33 hand-authored synthetic turns under
+[`apps/desktop/tests/fixtures/skill-triggers/corpus.json`](../apps/desktop/tests/fixtures/skill-triggers/corpus.json)
+(17 skill-expected — de-AT + EN, keyword-only and doc-corroborated; 16 `none` — 5 doc-in-scope-but-
+unrelated, 2 filename-near-miss, 4 generic-substring adversarial, 5 neutral). Label space = the four
+real enabled app skills. Harness:
+[`apps/desktop/tests/eval/skill-triggers.ts`](../apps/desktop/tests/eval/skill-triggers.ts) +
+`skill-triggers.test.ts` — scores every turn through the **real** `scoreSkillTriggers` /
+`selectSuggestion` (a guard pins `threshold-2` ≡ `selectSuggestion` exactly), no model, no network, no
+DB (DS4). Numbers below are reproducible via `npx vitest run tests/eval/skill-triggers.test.ts`.
+
+Precision = fired-correct / (fired-correct + fired-wrong) — of the turns where it *fired*, how many
+were right. Recall = fired-correct / (fired-correct + missed). "fired-wrong" (the cost D1 is set
+against) folds together a fire where `none` was right and a fire of the wrong skill.
+
+| policy | precision | recall | fired-correct | fired-wrong | missed | correctly-abstained |
+|---|---|---|---|---|---|---|
+| **threshold-2** (today's selector: score ≥ 2 — one keyword **or** MIME+filename) | **60.7%** | 100.0% | 17 | **11** | 0 | 5 |
+| **keyword-required** (D2: keyword hit ≥ 1 — a lone doc signal never fires; a lone keyword still does) | **81.0%** | 100.0% | 17 | 4 | 0 | 12 |
+| **threshold-3** (score ≥ 3 — a keyword corroborated by ≥ 1 doc signal) | **100.0%** | 88.2% | 15 | 0 | 2 | 16 |
+| **threshold-4** (score ≥ 4 — two keywords, or keyword + both doc signals) | **100.0%** | 70.6% | 12 | 0 | 5 | 16 |
+
+**What the numbers say (for D1/D2):**
+- **Today's threshold (2) is nowhere near an auto-fire bar — 60.7% precision.** Its 11 false fires are
+  the lone-doc-signal traps (a statement/invoice/meeting-named file in scope + an unrelated question =
+  7) plus the generic-substring keyword hits (`balance` in "work-life balance", `bill` the name,
+  `minutes` of time, `Datenschutz`-erklärung = 4). Fine for an *inert in-picker offer* (a wrong offer
+  costs a glance); unacceptable for *silent auto-apply*.
+- **Requiring a keyword (D2) removes the lone-doc traps but not the substring ones → 81.0%.** The 4
+  residual false fires are exactly the adversarial substring cases — a deterministic keyword gate
+  **cannot** distinguish "balance" the bank term from "balance" the lifestyle word. This is the
+  **precision ceiling** of the current keyword model and the strongest argument that *keyword-alone is
+  not enough for auto-fire*.
+- **Requiring a keyword AND a doc signal (threshold-3) clears 100% precision at 88.2% recall on this
+  corpus.** The only cost is 2 missed keyword-only turns (the user asked but attached no document yet)
+  — and a miss is cheap (it just falls back to today's tap-offer, §1). This is the natural D2 setting
+  if the owner's D1 bar is ≥ 95%.
+- **threshold-4 buys nothing over threshold-3** (precision already 100%) while dropping recall to
+  70.6% — too strict.
+
+Caveats the owner should weigh before reading these as final: the corpus is **33 hand-authored items**,
+deliberately dense with hard cases, so the *absolute* rates are illustrative, not population estimates;
+the *ordering* and the *failure modes* are the durable signal. The substring-keyword ceiling (the 4
+that survive `keyword-required`) is intrinsic to the current deterministic model — closing it would
+need a tokenization/word-boundary change to `scoreSkillTriggers` (OQ-1 / out-of-scope §8), which the
+harness would then regression-measure. Recall here counts a keyword-only turn as a target; if the
+owner decides auto-fire *should* require a doc in scope (the conservative D5-adjacent reading), those 2
+"misses" are by-design and threshold-3's effective recall is 100%.
+
 ## 4. Auto-fire mechanics (S13b — GATED on §3 clearing D1)
 
 Once D1–D6 are ratified and the harness clears the bar:

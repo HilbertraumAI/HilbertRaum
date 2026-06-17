@@ -6,7 +6,31 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
-_Last updated: 2026-06-17 — **Skills — active-skill turn-latency: measured root cause + prefix-cache fix
+_Last updated: 2026-06-17 — **Skills Phase S13a SHIPPED — auto-fire EVALUATION HARNESS + corpus +
+baseline (NO runtime behaviour change).** S13 (auto-fire triggers) is gated: auto-fire ships only after
+an offline harness proves a precision bar on a labelled corpus. S13a is that harness + the baseline —
+pure measurement, no behaviour change; S13b (auto-fire mechanics) and S13c (UX) stay GATED and unstarted
+until the owner ratifies D1–D6 from these numbers. **Shipped:** (1) a **synthetic, no-user-data** corpus
+of **33 labelled turns** ([`apps/desktop/tests/fixtures/skill-triggers/corpus.json`](apps/desktop/tests/fixtures/skill-triggers/corpus.json))
+— de-AT + EN true positives, lone-doc-signal true negatives, filename-near-miss + generic-substring
+adversarials; label space = the four real enabled app skills. (2) a deterministic vitest harness
+([`apps/desktop/tests/eval/skill-triggers.ts`](apps/desktop/tests/eval/skill-triggers.ts) +
+`skill-triggers.test.ts`) that scores the corpus through the **real** `scoreSkillTriggers`/
+`selectSuggestion` (no model/network/DB — DS4) and reports precision/recall + the four-cell confusion
+matrix, sweeping a few higher thresholds (the D2 proposal). A faithfulness guard pins `threshold-2` ≡
+`selectSuggestion`; a privacy guard pins that no corpus question reaches any console stream (extends the
+S12 sentinel posture — the question is content, §6). Runs as a MEASUREMENT, not yet a gate-assertion
+(the bar lands in S13b). **Baseline** (recorded in `docs/skills-s13-plan.md` §3.3.1): threshold-2 (today)
+**60.7%** precision / 100% recall (11 false fires); keyword-required (D2) **81.0%** / 100% (4 residual
+substring false fires — the deterministic-keyword precision ceiling); **threshold-3** (keyword + ≥1 doc
+signal) **100%** / 88.2% (only 2 keyword-only misses, and a miss is cheap); threshold-4 100% / 70.6%
+(too strict). **Reading:** today's threshold is far below an auto-fire bar; a keyword gate alone can't
+close the substring false fires; threshold-3 is the natural D2 setting for a ≥95% D1 bar. **NEXT ACTION:
+the owner ratifies D1–D6** (precision bar + confidence model) from these numbers before ANY S13b/S13c
+code. `docs/skills-s13-plan.md` stays OPEN (deleted only when S13 fully closes). Full suite green
+(**1726 passed / 25 skipped**), typecheck + build clean._
+
+_(prior) 2026-06-17 — **Skills — active-skill turn-latency: measured root cause + prefix-cache fix
 (no new phase).** Report: "chat with a skill active feels slower than with no skill." **Measured before
 theorizing** (temporary content-free perf harness over the real bundled SKILL.md files + synthetic
 bodies, deleted after measuring — §22-M1). Findings: main side is **< 1 ms/turn** for a bundled skill

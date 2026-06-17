@@ -1,0 +1,248 @@
+{
+  "_about": [
+    "Skills S13a — labelled, SYNTHETIC trigger corpus (skills-s13-plan.md §3.1). Text only:",
+    "NO user data, no real bank statements, no telemetry — honours the offline/no-user-data rules.",
+    "Each item: { id, question, inScopeDocs: [{title, mimeType}], expected: <skillId | 'none'>, note }.",
+    "Label space = the four real ENABLED app skills' actual triggers:",
+    "bank-statement | invoice | meeting-protocol | document-redaction | none.",
+    "The `note` records WHY the label is what it is (the hard case it exercises); it is not scored.",
+    "Questions are CONTENT: the harness scores them, never logs them (skills-s13-plan.md §6)."
+  ],
+  "items": [
+    {
+      "id": "tp-bank-en-01",
+      "question": "Please extract and reconcile the transactions on my bank statement.",
+      "inScopeDocs": [{ "title": "march-statement.pdf", "mimeType": "application/pdf" }],
+      "expected": "bank-statement",
+      "note": "True positive — clear EN intent + a statement PDF in scope (keyword + doc signals)."
+    },
+    {
+      "id": "tp-bank-de-01",
+      "question": "Bitte kategorisiere die Buchungen aus meinem Kontoauszug.",
+      "inScopeDocs": [{ "title": "kontoauszug-maerz.pdf", "mimeType": "application/pdf" }],
+      "expected": "bank-statement",
+      "note": "True positive — clear de-AT intent ('Kontoauszug') + matching filename/MIME."
+    },
+    {
+      "id": "tp-bank-en-02",
+      "question": "Summarize the cashflow and check the closing balance.",
+      "inScopeDocs": [{ "title": "export.csv", "mimeType": "text/csv" }],
+      "expected": "bank-statement",
+      "note": "True positive — 'balance' keyword + a CSV in scope."
+    },
+    {
+      "id": "tp-bank-en-03",
+      "question": "List every transaction and the IBAN for this statement period.",
+      "inScopeDocs": [{ "title": "statement.pdf", "mimeType": "application/pdf" }],
+      "expected": "bank-statement",
+      "note": "True positive — several bank keywords ('transaction', 'IBAN', 'statement period')."
+    },
+    {
+      "id": "tp-bank-kwonly-01",
+      "question": "Can you reconcile my bank statement for me?",
+      "inScopeDocs": [],
+      "expected": "bank-statement",
+      "note": "True positive, KEYWORD-ONLY (no doc attached yet). Score is exactly the keyword weight — flips to 'missed' once the bar requires a corroborating doc signal (recall-vs-threshold demo)."
+    },
+    {
+      "id": "tp-invoice-en-01",
+      "question": "Check that the totals on this invoice add up.",
+      "inScopeDocs": [{ "title": "invoice-2026-04.pdf", "mimeType": "application/pdf" }],
+      "expected": "invoice",
+      "note": "True positive — EN 'invoice' keyword + matching filename/MIME."
+    },
+    {
+      "id": "tp-invoice-de-01",
+      "question": "Prüfe die Beträge und die Mehrwertsteuer auf dieser Rechnung.",
+      "inScopeDocs": [{ "title": "rechnung-042.pdf", "mimeType": "application/pdf" }],
+      "expected": "invoice",
+      "note": "True positive — de-AT 'Rechnung' + 'Mehrwertsteuer' keywords."
+    },
+    {
+      "id": "tp-invoice-de-02",
+      "question": "Wie hoch ist der Gesamtbetrag der Rechnung netto und brutto?",
+      "inScopeDocs": [{ "title": "rechnung.pdf", "mimeType": "application/pdf" }],
+      "expected": "invoice",
+      "note": "True positive — multiple German invoice keywords ('Rechnung', 'netto', 'brutto', 'Gesamtbetrag')."
+    },
+    {
+      "id": "tp-meeting-en-01",
+      "question": "Turn these meeting notes into a structured protocol with action items.",
+      "inScopeDocs": [{ "title": "standup-notes.txt", "mimeType": "text/plain" }],
+      "expected": "meeting-protocol",
+      "note": "True positive — EN 'meeting notes' / 'protocol' / 'action items' keywords."
+    },
+    {
+      "id": "tp-meeting-de-01",
+      "question": "Erstelle bitte ein Protokoll dieser Besprechung mit Beschlüssen und Aufgaben.",
+      "inScopeDocs": [{ "title": "besprechung-notizen.txt", "mimeType": "text/plain" }],
+      "expected": "meeting-protocol",
+      "note": "True positive — de-AT 'Protokoll' / 'Besprechung' / 'Beschlüsse' / 'Aufgaben'."
+    },
+    {
+      "id": "tp-meeting-mixed-01",
+      "question": "Please make a Protokoll of this meeting.",
+      "inScopeDocs": [{ "title": "call.md", "mimeType": "text/markdown" }],
+      "expected": "meeting-protocol",
+      "note": "True positive — MIXED-language phrasing ('Protokoll' + 'meeting')."
+    },
+    {
+      "id": "tp-redaction-en-01",
+      "question": "Please anonymize the personal data in this document before I share it.",
+      "inScopeDocs": [{ "title": "report.pdf", "mimeType": "application/pdf" }],
+      "expected": "document-redaction",
+      "note": "True positive — EN 'anonymize' keyword."
+    },
+    {
+      "id": "tp-redaction-de-01",
+      "question": "Bitte dieses Dokument anonymisieren und die personenbezogenen Daten schwärzen.",
+      "inScopeDocs": [{ "title": "bericht.pdf", "mimeType": "application/pdf" }],
+      "expected": "document-redaction",
+      "note": "True positive — de-AT 'anonymisieren' / 'personenbezogene Daten' / 'schwärzen'."
+    },
+    {
+      "id": "tp-redaction-en-02",
+      "question": "Remove all personal data for GDPR compliance.",
+      "inScopeDocs": [{ "title": "customers.txt", "mimeType": "text/plain" }],
+      "expected": "document-redaction",
+      "note": "True positive — 'remove personal data' / 'GDPR' keywords."
+    },
+    {
+      "id": "tp-redaction-kwonly-01",
+      "question": "Please anonymize this for me.",
+      "inScopeDocs": [],
+      "expected": "document-redaction",
+      "note": "True positive, KEYWORD-ONLY (no doc). 'anonymize' alone = the keyword weight; flips to 'missed' when the bar requires a corroborating doc signal."
+    },
+    {
+      "id": "tp-cross-bank-01",
+      "question": "Reconcile the bank statement transactions, please.",
+      "inScopeDocs": [{ "title": "invoice-april.pdf", "mimeType": "application/pdf" }],
+      "expected": "bank-statement",
+      "note": "Cross-skill: a strong BANK keyword question while an INVOICE doc is in scope — the keyword must win over the other skill's doc signal."
+    },
+    {
+      "id": "tp-cross-invoice-01",
+      "question": "What is the gross amount on this invoice?",
+      "inScopeDocs": [{ "title": "kontoauszug.pdf", "mimeType": "application/pdf" }],
+      "expected": "invoice",
+      "note": "Cross-skill: a strong INVOICE keyword while a BANK-named doc is in scope — invoice must win."
+    },
+
+    {
+      "id": "tn-doc-weather-01",
+      "question": "What's the weather like today?",
+      "inScopeDocs": [{ "title": "march-statement.pdf", "mimeType": "application/pdf" }],
+      "expected": "none",
+      "note": "True NEGATIVE — a statement PDF is in scope but the question is unrelated. The lone doc signal (filename+MIME) must NOT fire a skill."
+    },
+    {
+      "id": "tn-doc-joke-01",
+      "question": "Tell me a joke.",
+      "inScopeDocs": [{ "title": "invoice-2026.pdf", "mimeType": "application/pdf" }],
+      "expected": "none",
+      "note": "True NEGATIVE — invoice PDF in scope, unrelated question; lone doc signal must not fire."
+    },
+    {
+      "id": "tn-doc-translate-01",
+      "question": "Translate this sentence into French.",
+      "inScopeDocs": [{ "title": "besprechung-notizen.txt", "mimeType": "text/plain" }],
+      "expected": "none",
+      "note": "True NEGATIVE — meeting-named doc in scope, unrelated question."
+    },
+    {
+      "id": "tn-doc-capital-01",
+      "question": "What is the capital of France?",
+      "inScopeDocs": [{ "title": "kontoauszug.pdf", "mimeType": "application/pdf" }],
+      "expected": "none",
+      "note": "True NEGATIVE — bank-named doc in scope, unrelated question."
+    },
+    {
+      "id": "tn-doc-pasta-01",
+      "question": "How do I cook pasta?",
+      "inScopeDocs": [{ "title": "meeting-minutes.md", "mimeType": "text/markdown" }],
+      "expected": "none",
+      "note": "True NEGATIVE — meeting-named doc in scope, unrelated question."
+    },
+
+    {
+      "id": "nm-mission-statement-01",
+      "question": "Summarize the key points of this mission statement.",
+      "inScopeDocs": [{ "title": "mission-statement.pdf", "mimeType": "application/pdf" }],
+      "expected": "none",
+      "note": "Near-miss — a filename that merely CONTAINS 'statement' (a mission statement, not a bank statement) and no bank keyword. Lone doc signal must not fire."
+    },
+    {
+      "id": "nm-invoice-template-01",
+      "question": "Can you fix the formatting in this file?",
+      "inScopeDocs": [{ "title": "invoice-template-blank.pdf", "mimeType": "application/pdf" }],
+      "expected": "none",
+      "note": "Near-miss — a filename containing 'invoice' (a blank template) with a formatting question, no invoice keyword."
+    },
+
+    {
+      "id": "adv-balance-01",
+      "question": "I'm trying to find a better work-life balance these days.",
+      "inScopeDocs": [],
+      "expected": "none",
+      "note": "Adversarial — generic use of the trigger word 'balance' with no relevant doc. A substring keyword match fires even though there is no bank intent (the precision CEILING a keyword-required bar still cannot fix)."
+    },
+    {
+      "id": "adv-bill-01",
+      "question": "Bill called me yesterday about getting lunch.",
+      "inScopeDocs": [],
+      "expected": "none",
+      "note": "Adversarial — 'Bill' (a name) substring-matches the invoice keyword 'bill'."
+    },
+    {
+      "id": "adv-minutes-01",
+      "question": "It only takes a few minutes to walk to the office.",
+      "inScopeDocs": [],
+      "expected": "none",
+      "note": "Adversarial — 'minutes' (time) substring-matches the meeting keyword 'minutes'."
+    },
+    {
+      "id": "adv-datenschutz-01",
+      "question": "Wo finde ich die Datenschutzerklärung auf der Website?",
+      "inScopeDocs": [],
+      "expected": "none",
+      "note": "Adversarial (de) — 'Datenschutz' substring-matches the redaction keyword 'datenschutz', but the user only asks where to find the privacy policy."
+    },
+
+    {
+      "id": "neu-time-01",
+      "question": "What time is it?",
+      "inScopeDocs": [],
+      "expected": "none",
+      "note": "Neutral — no trigger word, no doc. Must correctly abstain."
+    },
+    {
+      "id": "neu-witz-01",
+      "question": "Sag mir einen Witz.",
+      "inScopeDocs": [],
+      "expected": "none",
+      "note": "Neutral (de) — must correctly abstain."
+    },
+    {
+      "id": "neu-poem-01",
+      "question": "Write me a poem about the sea.",
+      "inScopeDocs": [],
+      "expected": "none",
+      "note": "Neutral — must correctly abstain."
+    },
+    {
+      "id": "neu-hello-01",
+      "question": "Hello there, how are you?",
+      "inScopeDocs": [],
+      "expected": "none",
+      "note": "Neutral — must correctly abstain."
+    },
+    {
+      "id": "neu-doc-lonemime-01",
+      "question": "Give me three ideas for a birthday gift.",
+      "inScopeDocs": [{ "title": "notes.txt", "mimeType": "text/plain" }],
+      "expected": "none",
+      "note": "Neutral with a doc whose MIME alone is a SUPPORTING signal (no filename glob, no keyword) — a lone MIME signal must not clear the bar."
+    }
+  ]
+}

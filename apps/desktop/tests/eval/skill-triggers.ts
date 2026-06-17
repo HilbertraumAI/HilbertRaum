@@ -1,0 +1,228 @@
+// Skills S13a — the offline trigger-evaluation harness (skills-s13-plan.md §3.2/§3.3).
+//
+// Pure measurement: it scores a labelled SYNTHETIC corpus through the EXISTING deterministic
+// selector (`scoreSkillTriggers` / `selectSuggestion` in services/skills/selector.ts) and reports
+// precision, recall, and a confusion matrix. NO model, NO network, NO DB (DS4) — so it is a normal
+// vitest target and, once a bar is ratified (D1), becomes the regression gate for any selector change.
+//
+// It changes NO runtime behaviour. The only thing beyond the real selector is a THRESHOLD SWEEP: the
+// same `scoreSkillTriggers` scores, but the fire-gate is parameterized so the owner can see where a
+// higher bar (the D2 proposal — "require a keyword hit, not a lone doc signal") would land. At the
+// current threshold the harness must agree with `selectSuggestion` exactly (a faithfulness guard in
+// the test pins this).
+//
+// Privacy (skills-s13-plan.md §6): a question is CONTENT — it is scored here and NEVER logged. This
+// module returns ids/labels/counts only; nothing here writes the question text to any sink.
+
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import type { SkillTriggers } from '../../src/shared/skill-manifest'
+import { parseSkillManifestFromDir } from '../../src/main/services/skills/manifest'
+import {
+  scoreSkillTriggers,
+  selectSuggestion,
+  SUGGEST_SCORE_THRESHOLD,
+  type SkillCandidate,
+  type SkillTriggerContext
+} from '../../src/main/services/skills/selector'
+
+/** The repo root (…/AI_Drive), four levels up from tests/eval/. */
+const REPO_ROOT = join(fileURLToPath(new URL('.', import.meta.url)), '..', '..', '..', '..')
+/** The four real, enabled app skills whose ACTUAL triggers form the label space. */
+const APP_SKILL_IDS = ['bank-statement', 'invoice', 'meeting-protocol', 'document-redaction'] as const
+
+/** One in-scope document's matchable signals (filename + MIME). */
+export interface CorpusDoc {
+  title: string
+  mimeType: string
+}
+
+/** One labelled corpus turn (skills-s13-plan.md §3.1). `note` is documentation, never scored. */
+export interface CorpusItem {
+  id: string
+  question: string
+  inScopeDocs: CorpusDoc[]
+  /** The ground-truth skill id, or 'none' if no skill should fire. */
+  expected: string
+  note?: string
+}
+
+/** Load the committed synthetic corpus (text only — no user data). */
+export function loadCorpus(): CorpusItem[] {
+  const path = join(REPO_ROOT, 'apps', 'desktop', 'tests', 'fixtures', 'skill-triggers', 'corpus.json')
+  const parsed = JSON.parse(readFileSync(path, 'utf8')) as { items: CorpusItem[] }
+  return parsed.items
+}
+
+/** Load the real app skills' triggers as selector candidates (installId = the skill id). */
+export function loadSkillCandidates(): SkillCandidate[] {
+  return APP_SKILL_IDS.map((id) => {
+    const res = parseSkillManifestFromDir(join(REPO_ROOT, 'app-skills', id))
+    if (!res.ok || !res.manifest) {
+      throw new Error(`could not parse app skill '${id}': ${res.errors.join('; ')}`)
+    }
+    return { installId: res.manifest.id, title: res.manifest.title, triggers: res.manifest.triggers }
+  })
+}
+
+/** Turn a corpus item into the selector's turn context (the renderer→main scope shape). */
+export function toContext(item: CorpusItem): SkillTriggerContext {
+  return {
+    question: item.question,
+    docTitles: item.inScopeDocs.map((d) => d.title),
+    docMimeTypes: item.inScopeDocs.map((d) => d.mimeType).filter((m) => m.length > 0)
+  }
+}
+
+/** How many of a skill's keywords substring-match the question (the selector's own definition). */
+function keywordHits(triggers: SkillTriggers, question: string): number {
+  const q = question.toLowerCase()
+  return triggers.keywords.filter((k) => {
+    const kw = k.trim().toLowerCase()
+    return kw.length > 0 && q.includes(kw)
+  }).length
+}
+
+/**
+ * A fire policy: given a candidate's deterministic score and its keyword-hit count, decide whether
+ * it is ELIGIBLE to fire. The score always comes from the real `scoreSkillTriggers`; the policy only
+ * moves the gate. This is what the D2 sweep varies.
+ */
+export interface FirePolicy {
+  name: string
+  /** Short human description for the baseline report. */
+  description: string
+  eligible: (score: number, kwHits: number) => boolean
+}
+
+/**
+ * The policies the baseline sweeps. `threshold-2` reproduces today's `selectSuggestion` exactly
+ * (the faithfulness guard pins this). The rest are the D2 "higher bar" candidates the owner weighs.
+ *
+ * Note a lone doc signal maxes at MIME(1)+filename(1)=2, so any score ≥ 3 already implies a keyword
+ * hit — `threshold-3` is therefore "a keyword corroborated by ≥1 doc signal". `keyword-required` is
+ * the literal D2 proposal: require a keyword hit (≥1), reject a lone doc signal, but still accept a
+ * lone strong keyword.
+ */
+export const POLICIES: FirePolicy[] = [
+  {
+    name: 'threshold-2',
+    description: 'current selector (score ≥ 2): one keyword, OR MIME+filename together',
+    eligible: (score) => score >= 2
+  },
+  {
+    name: 'keyword-required',
+    description: 'D2: require a keyword hit (≥1) — a lone doc signal never fires; a lone keyword still does',
+    eligible: (score, kwHits) => kwHits >= 1 && score >= 2
+  },
+  {
+    name: 'threshold-3',
+    description: 'score ≥ 3 — a keyword corroborated by ≥1 doc signal (no lone keyword, no lone doc)',
+    eligible: (score) => score >= 3
+  },
+  {
+    name: 'threshold-4',
+    description: 'score ≥ 4 — two keywords, or a keyword + both doc signals',
+    eligible: (score) => score >= 4
+  }
+]
+
+/**
+ * Pick the single best candidate that is ELIGIBLE under `policy`, mirroring `selectSuggestion`'s
+ * deterministic tie-break (higher score wins; ties break by installId ascending). Returns the skill
+ * id, or 'none'.
+ */
+export function predict(candidates: SkillCandidate[], ctx: SkillTriggerContext, policy: FirePolicy): string {
+  let best: SkillCandidate | null = null
+  let bestScore = 0
+  for (const c of candidates) {
+    const score = scoreSkillTriggers(c.triggers, ctx)
+    if (!policy.eligible(score, keywordHits(c.triggers, ctx.question))) continue
+    if (score > bestScore || (score === bestScore && best != null && c.installId < best.installId)) {
+      best = c
+      bestScore = score
+    }
+  }
+  return best ? best.installId : 'none'
+}
+
+/** The four-cell confusion matrix (skills-s13-plan.md §3.2). */
+export interface Confusion {
+  firedCorrect: number
+  firedWrong: number
+  missed: number
+  correctlyAbstained: number
+}
+
+export interface PolicyResult {
+  policy: string
+  description: string
+  confusion: Confusion
+  /** firedCorrect / (firedCorrect + firedWrong); null when nothing fired. */
+  precision: number | null
+  /** firedCorrect / (firedCorrect + missed); null when nothing was expected to fire. */
+  recall: number | null
+  /** Per-item ids+labels (NO question text) for an auditable trail. */
+  perItem: Array<{ id: string; expected: string; predicted: string }>
+}
+
+/** Score the whole corpus under one policy. Deterministic, content-free output. */
+export function scoreCorpus(items: CorpusItem[], candidates: SkillCandidate[], policy: FirePolicy): PolicyResult {
+  const confusion: Confusion = { firedCorrect: 0, firedWrong: 0, missed: 0, correctlyAbstained: 0 }
+  const perItem: PolicyResult['perItem'] = []
+  for (const item of items) {
+    const predicted = predict(candidates, toContext(item), policy)
+    const expected = item.expected
+    if (predicted !== 'none' && predicted === expected) confusion.firedCorrect++
+    else if (predicted !== 'none') confusion.firedWrong++ // wrong skill OR a fire where 'none' was right
+    else if (expected !== 'none') confusion.missed++
+    else confusion.correctlyAbstained++
+    perItem.push({ id: item.id, expected, predicted })
+  }
+  const fired = confusion.firedCorrect + confusion.firedWrong
+  const wanted = confusion.firedCorrect + confusion.missed
+  return {
+    policy: policy.name,
+    description: policy.description,
+    confusion,
+    precision: fired > 0 ? confusion.firedCorrect / fired : null,
+    recall: wanted > 0 ? confusion.firedCorrect / wanted : null,
+    perItem
+  }
+}
+
+/** Run every policy over the corpus. */
+export function runBaseline(items: CorpusItem[], candidates: SkillCandidate[]): PolicyResult[] {
+  return POLICIES.map((p) => scoreCorpus(items, candidates, p))
+}
+
+const pct = (v: number | null): string => (v == null ? '  n/a' : `${(v * 100).toFixed(1)}%`)
+
+/**
+ * A human-readable baseline report (metrics + confusion only — NO question text). This is what gets
+ * transcribed into skills-s13-plan.md §3.3 for the owner to set D1/D2.
+ */
+export function formatReport(results: PolicyResult[], corpusSize: number): string {
+  const lines: string[] = []
+  lines.push(`Skills S13a baseline — ${corpusSize} synthetic turns, 4 app skills as the label space`)
+  lines.push('')
+  lines.push('policy            precision  recall   fired-correct  fired-wrong  missed  abstained')
+  for (const r of results) {
+    const c = r.confusion
+    lines.push(
+      [
+        r.policy.padEnd(17),
+        pct(r.precision).padStart(8),
+        pct(r.recall).padStart(8),
+        String(c.firedCorrect).padStart(14),
+        String(c.firedWrong).padStart(12),
+        String(c.missed).padStart(7),
+        String(c.correctlyAbstained).padStart(10)
+      ].join(' ')
+    )
+  }
+  lines.push('')
+  for (const r of results) lines.push(`  ${r.policy}: ${r.description}`)
+  return lines.join('\n')
+}
