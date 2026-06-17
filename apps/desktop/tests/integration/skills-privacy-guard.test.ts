@@ -28,6 +28,11 @@ import {
 import { buildToolRunner } from '../../src/main/services/skills/tool-runs'
 import { SkillRunController } from '../../src/main/services/skills/run-controller'
 import { buildSkillFence, composeSystemPromptWithSkill, SKILL_GUARD_LINE } from '../../src/main/services/skills/prompt'
+import { reconcileSkills } from '../../src/main/services/skills/registry'
+import { resolveAutoFireSkill } from '../../src/main/services/skills/autofire'
+import { createConversation } from '../../src/main/services/chat'
+import { updateSettings } from '../../src/main/services/settings'
+import { mkdirSync } from 'node:fs'
 import type { AuditEventType, SkillToolAudit } from '../../src/shared/types'
 
 // Phase S12 — the CONSOLIDATED skills privacy / prompt-injection guard.
@@ -333,6 +338,57 @@ describe('skills privacy guard — one secret through every sink (S12 audit)', (
     expect(snapshot.state).toBe('done')
     expect(snapshot.transactionCount).toBe(1)
     expect(JSON.stringify(snapshot)).not.toContain(SENTINEL)
+  })
+})
+
+describe('skills privacy guard — the S13b auto-fire path scores the question but never logs it (§6)', () => {
+  // Auto-fire scores the question (CONTENT) main-side to pick a skill. Like suggest.ts it must LOG
+  // NOTHING and never let the question ride into its return value (ids/title/body only). Extends the
+  // S12 sentinel posture to the new path: drive a sentinel question through resolveAutoFireSkill.
+  it('a sentinel in the question reaches no console stream and never the resolved skill', async () => {
+    const db = freshDb()
+    const deps = makeDeps()
+    // An ENABLED app skill that opts into auto-fire, with a keyword + a doc signal (score 3).
+    const skillDir = join(deps.appSkillsDir, 'autobank')
+    mkdirSync(skillDir, { recursive: true })
+    writeFileSync(
+      join(skillDir, 'SKILL.md'),
+      [
+        '---',
+        'id: autobank',
+        'title: Auto Bank',
+        'description: Auto-fire bank skill for the privacy guard.',
+        'version: 1.0.0',
+        'triggers:',
+        '  keywords: [bank statement]',
+        '  mimeTypes: [application/pdf]',
+        '  autoFire: true',
+        '---',
+        'Quote the printed totals.'
+      ].join('\n'),
+      'utf8'
+    )
+    reconcileSkills(db, { appSkillsDir: deps.appSkillsDir, userSkillsDir: deps.userSkillsDir }) // app → enabled
+    updateSettings(db, { skillsAutoFireEnabled: true }) // tests force the opt-in on to exercise the path
+
+    const docId = seedDocWithChunks(db, [{ text: 'closing balance', page: 1 }]) // 'Statement', application/pdf
+    const conv = createConversation(db, {
+      mode: 'documents',
+      scope: { collectionIds: [], documentIds: [docId] }
+    })
+    const question = `please reconcile my bank statement for account ${SENTINEL}`
+
+    let skill: ReturnType<typeof resolveAutoFireSkill> = null
+    const logged = await captureConsole(() => {
+      skill = resolveAutoFireSkill(db, { appSkillsDir: deps.appSkillsDir, userSkillsDir: deps.userSkillsDir }, conv.id, question)
+    })
+
+    // The keyword + the in-scope PDF clear the auto-fire bar → it picks the skill…
+    expect(skill).not.toBeNull()
+    expect(skill!.installId).toBe('app:autobank')
+    // …but the SENTINEL (carried only by the question) never rides into the result, and nothing logs.
+    expect(JSON.stringify(skill)).not.toContain(SENTINEL)
+    expect(logged).not.toContain(SENTINEL)
   })
 })
 

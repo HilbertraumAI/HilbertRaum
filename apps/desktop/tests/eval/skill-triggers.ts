@@ -23,6 +23,7 @@ import {
   scoreSkillTriggers,
   selectSuggestion,
   SUGGEST_SCORE_THRESHOLD,
+  AUTOFIRE_SCORE_THRESHOLD,
   type SkillCandidate,
   type SkillTriggerContext
 } from '../../src/main/services/skills/selector'
@@ -109,17 +110,20 @@ export const POLICIES: FirePolicy[] = [
   {
     name: 'threshold-2',
     description: 'current selector (score ≥ 2): one keyword, OR MIME+filename together',
-    eligible: (score) => score >= 2
+    eligible: (score) => score >= SUGGEST_SCORE_THRESHOLD
   },
   {
     name: 'keyword-required',
     description: 'D2: require a keyword hit (≥1) — a lone doc signal never fires; a lone keyword still does',
-    eligible: (score, kwHits) => kwHits >= 1 && score >= 2
+    eligible: (score, kwHits) => kwHits >= 1 && score >= SUGGEST_SCORE_THRESHOLD
   },
   {
+    // The RATIFIED auto-fire gate (D2): score ≥ AUTOFIRE_SCORE_THRESHOLD ⇒ "a keyword corroborated
+    // by ≥1 doc signal". The harness and the runtime (`resolveAutoFireSkill`) share the constant, so
+    // the gate-assertion below measures exactly the production threshold.
     name: 'threshold-3',
-    description: 'score ≥ 3 — a keyword corroborated by ≥1 doc signal (no lone keyword, no lone doc)',
-    eligible: (score) => score >= 3
+    description: `auto-fire gate (score ≥ ${AUTOFIRE_SCORE_THRESHOLD}): a keyword corroborated by ≥1 doc signal`,
+    eligible: (score) => score >= AUTOFIRE_SCORE_THRESHOLD
   },
   {
     name: 'threshold-4',

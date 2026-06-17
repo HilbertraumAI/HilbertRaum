@@ -214,6 +214,15 @@ export interface AppSettings {
    * `navigator.language`.
    */
   uiLanguage: UiLanguageSetting
+  // ---- Skills (skills-s13-plan.md §2.1 D4) ----
+  /**
+   * Whether the app may AUTO-FIRE an app skill on a turn the user left without one (S13b). The D4
+   * opt-in gate: DEFAULT FALSE, so auto-fire is INERT in production until a user deliberately turns
+   * it on (the Settings → Skills toggle is S13c). With this off, `resolveAutoFireSkill` is a no-op,
+   * so S13b changes nothing observable. Even when on, only enabled + app + `triggers.autoFire` skills
+   * are candidates and only when no skill is otherwise set (D5).
+   */
+  skillsAutoFireEnabled: boolean
 }
 
 /** Appearance setting (see `AppSettings.theme`). */
@@ -252,7 +261,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   autoStartActiveModel: true,
   checksumCache: {},
   theme: 'system',
-  uiLanguage: 'system'
+  uiLanguage: 'system',
+  // Auto-fire is OPT-IN: off by default so S13b ships inert (the toggle to flip it is S13c).
+  skillsAutoFireEnabled: false
 }
 
 // ---- GPU probe ----

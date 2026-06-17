@@ -6,7 +6,47 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
-_Last updated: 2026-06-17 — **Skills Phase S13a SHIPPED — auto-fire EVALUATION HARNESS + corpus +
+_Last updated: 2026-06-17 — **Skills Phase S13b SHIPPED — auto-fire MECHANICS, behind a default-off
+opt-in (INERT in production until S13c).** The ratified D1–D6 contract (§2.1) is now built; auto-fire
+fires only when a user opts in AND a skill declares it AND no skill is otherwise set. **Safe-merge
+property: with the new `skillsAutoFireEnabled` setting defaulting FALSE and no S13c toggle yet, S13b
+changes NOTHING in production behaviour** — `resolveAutoFireSkill` is a true no-op when off, and no
+bundled app skill declares `triggers.autoFire` yet, so the candidate set is empty regardless. **Shipped:**
+(1) **Schema (D6):** `triggers.autoFire?: boolean` in [`skill-manifest.ts`](apps/desktop/src/shared/skill-manifest.ts)
+— additive + lenient (only boolean `true` opts in; non-boolean noted+clamped to false; absent/false →
+`undefined` so existing `manifest_json` is byte-unchanged), parser-validated (camelCase + `auto_fire`),
+round-trip tested; mirrors the `localized`/`reservesTools` precedent. (2) **Threshold (D2):**
+`AUTOFIRE_SCORE_THRESHOLD = 3` in [`selector.ts`](apps/desktop/src/main/services/skills/selector.ts)
+(distinct from `SUGGEST_SCORE_THRESHOLD = 2` — suggestion UNCHANGED) + `selectAutoFire` sharing a
+`selectByThreshold` helper with `selectSuggestion` (differ only in the gate). Score ≥ 3 structurally =
+"keyword + ≥1 doc signal". (3) **Decision path:** new [`autofire.ts`](apps/desktop/src/main/services/skills/autofire.ts)
+`resolveAutoFireSkill(db, deps, conversationId, question)` — candidates = enabled + available +
+**app-only** (`source==='app'`, D4) + **`triggers.autoFire===true`** (D6) + **compatible**
+(`skillNeedsNewerApp`, §6.5/M1), scored via the existing `scoreSkillTriggers`, gated at the new
+threshold, deterministic installId tie-break. Shares the **factored-out**
+[`scope-signals.ts`](apps/desktop/src/main/services/skills/scope-signals.ts) `inScopeDocSignals` with
+`suggest.ts` (no duplication). LOGS NOTHING (question is content — §6). (4) **Opt-in (D4):** persisted
+`skillsAutoFireEnabled` boolean in `AppSettings`/`DEFAULT_SETTINGS` (default **false**); the resolver
+reads it first and no-ops when off. (5) **Plumbing (D5/§22-A1):** `resolveTurnSkill`(+`FromRegistry`)
+gains an optional `question` and calls auto-fire **only** in the would-return-null branch AND only when
+`requestedInstallId === undefined` (so a sticky default, a per-turn pick, and an explicit per-turn
+clear `null`/`''` are all respected); both chat channels (`registerChatIpc`/`registerRagIpc`) pass the
+turn text so a documents conversation auto-fires too. (6) **Harness is now the GATE:**
+[`skill-triggers.test.ts`](apps/desktop/tests/eval/skill-triggers.test.ts) asserts the `threshold-3`
+policy (sharing `AUTOFIRE_SCORE_THRESHOLD`) clears D1 as **`fired-wrong == 0` AND `precision ≥ 0.95`**
+(owner-set form, survives corpus growth) ALONGSIDE the kept baseline printout. (7) **Privacy guard
+extended:** the S12 sentinel test drives a sentinel-bearing question through `resolveAutoFireSkill` —
+reaches no console stream, never the resolved skill object. **New contracts:** `AUTOFIRE_SCORE_THRESHOLD = 3`;
+`resolveAutoFireSkill`; setting key `skillsAutoFireEnabled` (default false); the harness-as-gate
+(fired-wrong==0 ∧ precision≥0.95). `docs/skills-s13-plan.md` §4 folded to "implemented" but STAYS OPEN
+(deleted only when S13c closes). Full suite green (**1747 passed / 25 skipped**, +21), typecheck + build
+clean. **NEXT ACTION: S13c (surprise-mitigation UX)** — the Settings → Skills opt-in TOGGLE (flips
+`skillsAutoFireEnabled`, off by default) + the per-turn "Answered with <skill> — answer without it"
+UNDO affordance (re-runs the turn skill-free, the regenerate precedent), EN/DE copy. The glyph already
+stamps an auto-fired turn (visible). Until S13c ships the toggle, auto-fire cannot be enabled by a
+user, so S13b is inert._
+
+_(prior) 2026-06-17 — **Skills Phase S13a SHIPPED — auto-fire EVALUATION HARNESS + corpus +
 baseline (NO runtime behaviour change).** S13 (auto-fire triggers) is gated: auto-fire ships only after
 an offline harness proves a precision bar on a labelled corpus. S13a is that harness + the baseline —
 pure measurement, no behaviour change; S13b (auto-fire mechanics) and S13c (UX) stay GATED and unstarted

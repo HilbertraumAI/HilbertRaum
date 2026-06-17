@@ -182,17 +182,52 @@ harness would then regression-measure. Recall here counts a keyword-only turn as
 owner decides auto-fire *should* require a doc in scope (the conservative D5-adjacent reading), those 2
 "misses" are by-design and threshold-3's effective recall is 100%.
 
-## 4. Auto-fire mechanics (S13b — GATED on §3 clearing D1)
+## 4. Auto-fire mechanics (S13b — IMPLEMENTED 2026-06-17, behind a default-off opt-in)
 
-Once D1–D6 are ratified and the harness clears the bar:
-- **Schema (D6):** `shared/skill-manifest.ts` gains `triggers.autoFire?: boolean` (additive, clamped,
-  parser-validated + a round-trip test). Only `autoFire: true` skills are candidates.
-- **The decision path:** a new `resolveAutoFireSkill(db, conversationId, question)` — same main-side
-  scope resolution as `suggest.ts` (§22-C4), the **separate higher threshold** (D2), **app-skills
-  only** + the user opt-in (D4), firing **only when `resolveTurnSkill` would otherwise return null**
-  (D5). It plugs into `resolveTurnSkill` / both chat channels so a documents conversation auto-fires
-  too (the §22-A1 single-resolution-path invariant).
-- **The harness becomes the gate assertion** (the bar is now a hard test).
+**Shipped** (D1–D6 ratified §2.1; the harness cleared the bar). The build, as delivered:
+
+- **Schema (D6):** [`shared/skill-manifest.ts`](../apps/desktop/src/shared/skill-manifest.ts) gains
+  `triggers.autoFire?: boolean` — additive + lenient (only an explicit boolean `true` opts in; a
+  non-boolean is noted + clamped to false; absent/false leaves it `undefined` so an existing skill's
+  cached `manifest_json` is byte-unchanged). Parser-validated (camelCase + `auto_fire`), with a
+  `manifest.json` round-trip test, mirroring the `localized`/`reservesTools` additive precedent. A
+  skill that doesn't declare it is never a candidate. **No bundled app skill declares it yet** — so
+  the auto-fire candidate set is empty in production (the safe-merge property below; product opt-in is
+  a later, deliberate choice alongside S13c).
+- **The threshold (D2):** [`selector.ts`](../apps/desktop/src/main/services/skills/selector.ts) gains
+  `AUTOFIRE_SCORE_THRESHOLD = 3` (distinct from `SUGGEST_SCORE_THRESHOLD = 2` — suggestion is
+  unchanged) + a `selectAutoFire` mirroring `selectSuggestion`'s deterministic tie-break (a shared
+  `selectByThreshold` so the two differ ONLY in the gate). Score ≥ 3 structurally means "a keyword
+  corroborated by ≥ 1 doc signal".
+- **The decision path:** [`autofire.ts`](../apps/desktop/src/main/services/skills/autofire.ts) —
+  `resolveAutoFireSkill(db, deps, conversationId, question)`. Same main-side scope resolution as
+  `suggest.ts` via the **factored-out** [`scope-signals.ts`](../apps/desktop/src/main/services/skills/scope-signals.ts)
+  `inScopeDocSignals` (no duplication, §22-C4). Candidates = enabled + available + **app-only** (D4,
+  `source === 'app'`) + **`triggers.autoFire === true`** (D6) + **compatible** (`skillNeedsNewerApp`,
+  §6.5/M1), scored via the existing `scoreSkillTriggers`, gated at `AUTOFIRE_SCORE_THRESHOLD`. Returns
+  the loaded `TurnSkill` (body via the same graceful `loadSkillPackage` path) or null. **LOGS
+  NOTHING** — the question is content, scored never logged (the `suggest.ts` posture).
+- **The opt-in (D4):** a persisted boolean setting `skillsAutoFireEnabled` (`shared/types.ts`
+  `AppSettings` + `DEFAULT_SETTINGS`), **DEFAULT FALSE**. `resolveAutoFireSkill` reads it first and is
+  a true no-op when off. **Safe-merge property:** with the default-off setting and no S13c toggle yet,
+  S13b changes **nothing** in production behaviour — auto-fire only activates once a user opts in
+  (which needs S13c) AND a skill declares `autoFire`. Tests force the setting on to exercise the path.
+- **The plumbing (D5 / §22-A1):** `resolveTurnSkill` (+ `resolveTurnSkillFromRegistry`) gains an
+  optional `question` and calls `resolveAutoFireSkill` **only** in the branch where it would otherwise
+  return null **and** only when the caller made no per-turn pick (`requestedInstallId === undefined`)
+  — so a sticky default, a per-turn pick, and an explicit per-turn clear (`null`/`''`) are all
+  respected. Both chat channels (`registerChatIpc.sendChatMessage`, `registerRagIpc.askDocuments`)
+  pass the turn text, so a documents conversation auto-fires too. On regenerate `content` is empty ⇒
+  no auto-fire (conservative).
+- **The harness is now the gate assertion:** [`tests/eval/skill-triggers.test.ts`](../apps/desktop/tests/eval/skill-triggers.test.ts)
+  asserts the `threshold-3` policy (sharing `AUTOFIRE_SCORE_THRESHOLD`) clears D1 as the owner-set
+  form — **`fired-wrong == 0` AND `precision ≥ 0.95`** — alongside the kept baseline printout. Any
+  change to `scoreSkillTriggers` or the threshold re-runs it and fails on a precision regression.
+- **Privacy guard extended (§6):** the S12 sentinel test drives a sentinel-bearing question through
+  `resolveAutoFireSkill` and asserts it reaches no console stream and never the resolved skill object.
+
+Still **GATED** and NOT built this session: S13c (the Settings → Skills opt-in toggle UI + the
+per-turn "Answered with <skill> — answer without it" undo, EN/DE). This file stays OPEN until S13c.
 
 ## 5. Surprise-mitigation UX (S13c — GATED)
 
@@ -218,9 +253,9 @@ DE copy.
 - **S13a — the eval harness + corpus + baseline** *(proceeds now; the "in-depth testing" deliverable)*:
   the fixture corpus, the precision/recall harness, the baseline measurement of the current selector.
   **No behaviour change.** Output: numbers the owner uses to ratify D1/D2.
-- **S13b — auto-fire mechanics** *(GATED on S13a clearing D1 + D1–D6 ratified)*: the `triggers.autoFire`
-  schema, `resolveAutoFireSkill`, the decision path in `resolveTurnSkill`/both channels, the harness as
-  a hard gate-assertion.
+- **S13b — auto-fire mechanics** *(IMPLEMENTED 2026-06-17 — see §4)*: the `triggers.autoFire` schema,
+  `resolveAutoFireSkill`, the decision path in `resolveTurnSkill`/both channels, the `skillsAutoFireEnabled`
+  opt-in (default off), the harness as a hard gate-assertion. Inert in production until S13c (opt-in off).
 - **S13c — surprise-mitigation UX** *(GATED)*: the glyph (exists) + the "answer without the skill" undo
   + the opt-in toggle, EN/DE.
 

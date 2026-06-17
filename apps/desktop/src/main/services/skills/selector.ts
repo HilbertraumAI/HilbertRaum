@@ -26,6 +26,16 @@ const FILENAME_WEIGHT = 1
 export const SUGGEST_SCORE_THRESHOLD = 2
 
 /**
+ * The SEPARATE, higher bar an auto-fire (S13b) must clear — the ratified D2 setting
+ * (skills-s13-plan.md §2.1). A lone doc signal maxes at MIME(1)+filename(1)=2, so a score ≥ 3
+ * STRUCTURALLY means "a keyword hit corroborated by ≥ 1 doc signal" — never a lone keyword and never
+ * a lone doc signal. Kept distinct from `SUGGEST_SCORE_THRESHOLD` (the inert in-picker offer stays at
+ * 2): auto-fire silently shapes a turn, so it demands the stricter, baseline-proven (100% precision)
+ * gate. The §3.3.1 baseline harness asserts this threshold clears the D1 ≥ 95% precision bar.
+ */
+export const AUTOFIRE_SCORE_THRESHOLD = 3
+
+/**
  * Cap on `*` wildcards in a filename glob. A pattern like `*a*a*a…` compiles to `^.*a.*a…$` —
  * the catastrophic-backtracking shape — and the selector runs it against every in-scope doc title
  * on every turn (main-side, synchronous). Triggers are skill-controlled, so even though only an
@@ -71,22 +81,48 @@ export interface SkillCandidate {
 }
 
 /**
- * Pick the single best-scoring candidate at or above the threshold, or null. Ties break
- * deterministically by `installId` (ascending) so the offer is stable across runs.
+ * Pick the single best-scoring candidate at or above `threshold`, or null. Ties break
+ * deterministically by `installId` (ascending) so the choice is stable across runs. Shared by the
+ * suggestion offer and the S13b auto-fire decision — the ONLY difference between them is the gate.
  */
-export function selectSuggestion(
+function selectByThreshold(
   candidates: SkillCandidate[],
-  ctx: SkillTriggerContext
+  ctx: SkillTriggerContext,
+  threshold: number
 ): SkillCandidate | null {
   let best: SkillCandidate | null = null
   let bestScore = 0
   for (const c of candidates) {
     const score = scoreSkillTriggers(c.triggers, ctx)
-    if (score < SUGGEST_SCORE_THRESHOLD) continue
+    if (score < threshold) continue
     if (score > bestScore || (score === bestScore && best != null && c.installId < best.installId)) {
       best = c
       bestScore = score
     }
   }
   return best
+}
+
+/**
+ * Pick the single best-scoring candidate at or above the SUGGESTION threshold, or null. The inert
+ * in-picker offer (DS14) — never auto-applied.
+ */
+export function selectSuggestion(
+  candidates: SkillCandidate[],
+  ctx: SkillTriggerContext
+): SkillCandidate | null {
+  return selectByThreshold(candidates, ctx, SUGGEST_SCORE_THRESHOLD)
+}
+
+/**
+ * Pick the single best AUTO-FIRE candidate at or above `AUTOFIRE_SCORE_THRESHOLD`, or null (S13b).
+ * Same deterministic scoring + tie-break as `selectSuggestion`; only the gate is stricter (D2). The
+ * caller (`resolveAutoFireSkill`) has already narrowed candidates to enabled + compatible + app-only
+ * + `triggers.autoFire` and checked the user opt-in.
+ */
+export function selectAutoFire(
+  candidates: SkillCandidate[],
+  ctx: SkillTriggerContext
+): SkillCandidate | null {
+  return selectByThreshold(candidates, ctx, AUTOFIRE_SCORE_THRESHOLD)
 }

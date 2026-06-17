@@ -2,6 +2,7 @@ import type { Db } from '../db'
 import type { SkillLimits } from './limits'
 import { getSkill } from './registry'
 import { loadSkillPackage } from './loader'
+import { resolveAutoFireSkill } from './autofire'
 import { skillNeedsNewerApp } from '../../../shared/skill-manifest'
 import { getConversationDefaultSkill, type TurnSkill } from '../chat'
 
@@ -28,19 +29,31 @@ export interface TurnSkillDeps {
  *   - `undefined` → use the conversation's sticky default (`active_skill_id`).
  *   - `null` / `''` → no skill this turn (an explicit clear for the turn; does NOT touch the default).
  *   - a string → that skill for this turn.
- * Returns the minimal `TurnSkill` (installId + title + body) the generators need, or null.
+ * `question` is the turn's draft text — passed ONLY so the §22 single-resolution path can offer an
+ * S13b AUTO-FIRE when (and only when) the turn has no skill set (D5). It is CONTENT: scored, never
+ * logged. Returns the minimal `TurnSkill` (installId + title + body) the generators need, or null.
  */
 export function resolveTurnSkill(
   db: Db,
   deps: TurnSkillDeps,
   conversationId: string,
-  requestedInstallId?: string | null
+  requestedInstallId?: string | null,
+  question?: string
 ): TurnSkill | null {
   const installId =
     requestedInstallId !== undefined
       ? requestedInstallId
       : getConversationDefaultSkill(db, conversationId)
-  if (!installId) return null
+  if (!installId) {
+    // D5: the turn has NO skill set. Auto-fire may fill ONLY this gap — and only when the caller made
+    // no per-turn pick (`requestedInstallId === undefined`): an explicit per-turn clear (null/'') is a
+    // deliberate "no skill" choice and is respected. Off by default (the D4 opt-in inside
+    // resolveAutoFireSkill), so this is a no-op in production until S13c.
+    if (requestedInstallId === undefined && question) {
+      return resolveAutoFireSkill(db, deps, conversationId, question)
+    }
+    return null
+  }
 
   const record = getSkill(db, installId)
   // Skip a default that is disabled, deleted, or whose folder vanished (mark-unavailable).
@@ -64,7 +77,8 @@ export function resolveTurnSkillFromRegistry(
   db: Db,
   registry: { appSkillsDir: string; userSkillsDir: string; appVersion?: string } | undefined,
   conversationId: string,
-  requestedInstallId?: string | null
+  requestedInstallId?: string | null,
+  question?: string
 ): TurnSkill | null {
   if (!registry) return null
   return resolveTurnSkill(
@@ -75,6 +89,7 @@ export function resolveTurnSkillFromRegistry(
       appVersion: registry.appVersion
     },
     conversationId,
-    requestedInstallId
+    requestedInstallId,
+    question
   )
 }

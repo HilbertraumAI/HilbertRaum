@@ -280,6 +280,39 @@ describe('validateSkillManifest', () => {
     expect(res.manifest?.triggers.keywords).toEqual([])
     expect(res.notes.length).toBeGreaterThan(0)
   })
+
+  // D6 (skills-s13-plan.md §2.1): triggers.autoFire is additive + lenient. Only an explicit boolean
+  // `true` opts the skill in as an auto-fire candidate; everything else is `false` (never an error).
+  it('parses triggers.autoFire: true (the auto-fire eligibility opt-in, D6)', () => {
+    const res = validateSkillManifest(rawFront({ triggers: { keywords: ['bank'], autoFire: true } }))
+    expect(res.ok).toBe(true)
+    expect(res.manifest?.triggers.autoFire).toBe(true)
+  })
+
+  it('triggers.autoFire absent/false ⇒ not opted in (undefined), additive (no manifest_json change)', () => {
+    // Absent: a skill that doesn't declare it is never a candidate, and its manifest is byte-unchanged.
+    expect(validateSkillManifest(rawFront({ triggers: { keywords: ['bank'] } })).manifest?.triggers.autoFire)
+      .toBeUndefined()
+    // Explicit false: same posture (left undefined — the `=== true` gate reads it as not opted in).
+    expect(
+      validateSkillManifest(rawFront({ triggers: { keywords: ['bank'], autoFire: false } })).manifest?.triggers
+        .autoFire
+    ).toBeUndefined()
+  })
+
+  it('triggers.autoFire: a non-boolean is clamped to false leniently (note, never an error)', () => {
+    const res = validateSkillManifest(rawFront({ triggers: { keywords: ['bank'], autoFire: 'yes' } }))
+    expect(res.ok).toBe(true)
+    expect(res.manifest?.triggers.autoFire).toBeUndefined()
+    expect(res.notes.some((n) => n.includes('triggers.autoFire'))).toBe(true)
+  })
+
+  it('accepts snake_case auto_fire', () => {
+    expect(
+      validateSkillManifest(rawFront({ triggers: { keywords: ['bank'], auto_fire: true } })).manifest?.triggers
+        .autoFire
+    ).toBe(true)
+  })
 })
 
 describe('parseSkillMarkdown', () => {
@@ -365,5 +398,15 @@ describe('manifest cache round-trip (audit C2)', () => {
     expect(restored).toEqual(res.manifest)
     expect(restored.triggers.keywords).toEqual(['iban'])
     expect(restored.compatibility.minAppVersion).toBe('0.1.29')
+  })
+
+  it('survives JSON.stringify/parse with triggers.autoFire intact (D6 cache round-trip)', () => {
+    const res = parseSkillMarkdown(
+      skillMd(rawFront({ triggers: { keywords: ['bank statement'], mimeTypes: ['application/pdf'], autoFire: true } }))
+    )
+    expect(res.ok).toBe(true)
+    const restored = JSON.parse(JSON.stringify(res.manifest)) as SkillManifest
+    expect(restored).toEqual(res.manifest)
+    expect(restored.triggers.autoFire).toBe(true)
   })
 })

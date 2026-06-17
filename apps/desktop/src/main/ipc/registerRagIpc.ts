@@ -94,8 +94,10 @@ export function registerRagIpc(ctx: AppContext): void {
       maybeSetTitleFromFirstMessage(ctx.db, conversationId, text)
 
       // Resolve the one skill for this DOCUMENT turn too (audit A1/§22-A1 — both channels carry the
-      // skill, else a documents conversation silently gets none). Same resolver as plain chat.
-      const skill = resolveTurnSkillFromRegistry(ctx.db, ctx.skills, conversationId, skillInstallId)
+      // skill, else a documents conversation silently gets none). Same resolver as plain chat. The
+      // question is passed so the resolver can S13b AUTO-FIRE when the turn has no skill set (content —
+      // scored, not logged; off by default).
+      const skill = resolveTurnSkillFromRegistry(ctx.db, ctx.skills, conversationId, skillInstallId, text)
 
       const settings = ragSettingsFrom(getSettings(ctx.db))
 

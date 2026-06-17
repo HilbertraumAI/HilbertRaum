@@ -202,12 +202,15 @@ export function registerChatIpc(ctx: AppContext): void {
 
       // Resolve the one skill for this turn (skills plan §10): the per-turn override or the sticky
       // default. A disabled/missing skill resolves to none (graceful). Shared with the RAG channel
-      // via resolveTurnSkill so both carry the skill (audit A1).
+      // via resolveTurnSkill so both carry the skill (audit A1). The message text is passed so the
+      // resolver can S13b AUTO-FIRE when the turn has no skill set (it is content — scored, not
+      // logged; off by default). On regenerate `content` is empty ⇒ no auto-fire (conservative).
       const skill = resolveTurnSkillFromRegistry(
         ctx.db,
         ctx.skills,
         conversationId,
-        options?.skillInstallId
+        options?.skillInstallId,
+        content
       )
 
       return withChatStream(

@@ -54,6 +54,14 @@ export interface SkillTriggers {
   keywords: string[]
   mimeTypes: string[]
   filenamePatterns: string[]
+  /**
+   * D6 (skills-s13-plan.md §2.1/§4): the author OPTS the skill IN as an auto-fire candidate. The app
+   * still adjudicates every fire (the ratified `AUTOFIRE_SCORE_THRESHOLD`, app-only, the user opt-in,
+   * only-when-no-skill-set) — this flag is merely *eligibility*. Additive + lenient: absent / blank /
+   * non-boolean → treated as `false` (never an error), so a skill that doesn't declare it is never a
+   * candidate. Optional/additive (older cached manifest_json may lack it → treated as not opted in).
+   */
+  autoFire?: boolean
 }
 
 /** Optional compatibility gate; a skill needing a newer app is listed but disabled (§6.5). */
@@ -440,6 +448,15 @@ export function validateSkillManifest(raw: unknown): SkillManifestValidation {
         'triggers.filenamePatterns',
         notes
       )
+      // D6 auto-fire eligibility (additive, lenient). Only an explicit boolean `true` opts in; a
+      // non-boolean value is NOTED and clamped to `false`; absent/false leaves it undefined (treated
+      // as not opted in everywhere) so an existing skill's cached manifest_json is byte-unchanged.
+      const afRaw = trigRaw['autoFire'] ?? trigRaw['auto_fire']
+      if (afRaw === true) {
+        triggers.autoFire = true
+      } else if (afRaw !== undefined && afRaw !== null && typeof afRaw !== 'boolean') {
+        notes.push('"triggers.autoFire" must be true or false; treating it as false')
+      }
     }
   }
 

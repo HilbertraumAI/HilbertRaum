@@ -128,8 +128,9 @@ describe('S13a privacy — the harness scores questions but never logs them (§6
   })
 })
 
-// MEASUREMENT (not a gate): print the baseline so `npm test` surfaces the numbers for D1/D2. This
-// block has no behavioural assertion — the bar assertion is deferred to S13b per the plan's gate.
+// MEASUREMENT: print the baseline so `npm test` surfaces the numbers (still transcribed into
+// skills-s13-plan.md §3.3). KEPT as a measurement — the hard gate-assertion lives in its own block
+// below so the printout survives even if the bar regresses.
 describe('S13a baseline — measured (recorded in skills-s13-plan.md §3.3)', () => {
   it('prints the precision/recall/confusion sweep', () => {
     const corpus = loadCorpus()
@@ -138,5 +139,25 @@ describe('S13a baseline — measured (recorded in skills-s13-plan.md §3.3)', ()
     // eslint-disable-next-line no-console
     console.log('\n' + formatReport(results, corpus.length) + '\n')
     expect(results.length).toBe(POLICIES.length)
+  })
+})
+
+// S13b — the HARD GATE (owner-set form, skills-s13-plan.md §2.1): the ratified auto-fire policy
+// (`threshold-3` ≡ AUTOFIRE_SCORE_THRESHOLD) must clear D1 on the corpus. Asserted as
+// `fired-wrong == 0 AND precision ≥ 0.95` (NOT a brittle `== 100%`) so it survives corpus growth.
+// Any change to `scoreSkillTriggers` or the threshold now re-runs this and fails if it regresses
+// the precision bar — the harness is the ship gate the plan promised.
+describe('S13b gate — the auto-fire policy clears the ratified D1 precision bar', () => {
+  it('threshold-3 (AUTOFIRE_SCORE_THRESHOLD) fires nothing wrong AND precision ≥ 0.95 (D1)', () => {
+    const corpus = loadCorpus()
+    const candidates = loadSkillCandidates()
+    const t3 = POLICIES.find((p) => p.name === 'threshold-3')!
+    const result = scoreCorpus(corpus, candidates, t3)
+    // A false fire is the costly event D1 is set against — there must be none on the corpus.
+    expect(result.confusion.firedWrong).toBe(0)
+    // And precision must clear the ratified ≥ 95% bar (it actually fired ≥ once, so precision != null).
+    expect(result.confusion.firedCorrect).toBeGreaterThan(0)
+    expect(result.precision).not.toBeNull()
+    expect(result.precision!).toBeGreaterThanOrEqual(0.95)
   })
 })
