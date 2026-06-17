@@ -44,7 +44,11 @@ interface TranscriptProps {
   resolveSkillTitle?: (installId: string | null | undefined, fallbackTitle: string) => string
 }
 
-export function Transcript({
+// Memoized (perf audit FE-3): ChatScreen re-renders on every keystroke (input state) and every
+// ~40 ms streaming flush. With stable props from the parent (useCallback'd handlers + a memoized
+// emptyState), the transcript — and its per-message Markdown parsing — is skipped on a keystroke
+// and only re-renders for genuine transcript/stream changes.
+export const Transcript = memo(function Transcript({
   messages,
   streamingHere,
   streamText,
@@ -159,7 +163,7 @@ export function Transcript({
       </div>
     </div>
   )
-}
+})
 
 /**
  * One persisted message (user or assistant). Memoized (React.memo) and keyed by message id so a

@@ -85,6 +85,20 @@ interface Props {
   initialScopeDocumentIds?: string[] | null
 }
 
+/**
+ * Stable-identity wrapper for an event handler (perf audit FE-3). Returns a function whose
+ * identity never changes but which always invokes the LATEST closure passed in — so a handler can
+ * be passed to a `React.memo` child without busting the memo on every keystroke / streaming flush,
+ * yet never captures stale state. The standard "latest ref" pattern.
+ */
+function useEventCallback<A extends unknown[]>(fn: (...args: A) => unknown): (...args: A) => void {
+  const ref = useRef(fn)
+  ref.current = fn
+  return useCallback((...args: A) => {
+    ref.current(...args)
+  }, [])
+}
+
 export function ChatScreen({
   onNavigate,
   initialMode,
@@ -472,6 +486,50 @@ export function ChatScreen({
   // skills or the UI language change. Display-only localization (architecture.md "Skills" §16).
   const resolveGlyphSkillTitle = useMemo(() => skillTitleResolver(allSkills, lang), [allSkills, lang])
 
+  // Stable handler identities for the memoized Transcript / ConversationList children (perf audit
+  // FE-3): the latest-ref wrappers keep each handler's identity constant across keystroke +
+  // streaming-flush re-renders (so the memoized children skip them) while still calling the current
+  // closure. The impl functions below are hoisted declarations, so referencing them here is fine.
+  const handleCopyMessage = useEventCallback(onCopyMessage)
+  const handleSaveConversation = useEventCallback(onSaveConversation)
+  const handleTryAgain = useEventCallback(onTryAgain)
+  const handleAnswerWithoutSkill = useEventCallback(onAnswerWithoutSkill)
+  const handleSelectConversation = useEventCallback(onSelectConversation)
+  const handleNewChat = useEventCallback(onNewChat)
+  const handleDeleteConversation = useEventCallback(onDeleteConversation)
+  const handleCollapseList = useEventCallback(collapseList)
+  const fillComposerStable = useEventCallback(fillComposer)
+
+  // Teaching empty state (guidelines §3): a friendly line, example prompts that fill the composer,
+  // and — when nothing is imported yet — a nudge toward Documents. Memoized so it is a STABLE prop
+  // for the memoized Transcript (FE-3): it depends only on the mode + whether anything is indexed,
+  // never on `input`, so a keystroke doesn't rebuild it (which would re-render the transcript).
+  const emptyState = useMemo(
+    () => (
+      <div className="chat-empty">
+        <EmptyState
+          title={t('chat.empty.title')}
+          line={mode === 'documents' ? t('chat.empty.lineDocuments') : t('chat.empty.lineChat')}
+          action={
+            <>
+              {(mode === 'documents' ? DOC_EXAMPLE_KEYS : CHAT_EXAMPLE_KEYS).map((key) => (
+                <Chip key={key} onClick={() => fillComposerStable(t(key))} title={t('chat.empty.fillTitle')}>
+                  {t(key)}
+                </Chip>
+              ))}
+              {docs.filter((d) => d.status === 'indexed').length === 0 && (
+                <Button size="sm" onClick={() => onNavigate('documents')}>
+                  {t('chat.empty.addDocs')}
+                </Button>
+              )}
+            </>
+          }
+        />
+      </div>
+    ),
+    [mode, t, docs, onNavigate, fillComposerStable]
+  )
+
   // ---- Turn skill (skills plan §10) -------------------------------------------------
   // The effective skill for a conversation key: a session override (the picker) wins, else the
   // conversation's persisted sticky default (`activeSkillId`), else none. A skill that is no longer
@@ -744,7 +802,6 @@ export function ChatScreen({
   }
 
   const canTryAgain = !busyStreaming && mode === 'chat' && messages.some((m) => m.role === 'assistant')
-  const indexedDocCount = docs.filter((d) => d.status === 'indexed').length
 
   const activeConv = activeId ? conversations.find((c) => c.id === activeId) : undefined
 
@@ -939,31 +996,6 @@ export function ChatScreen({
     )
   }
 
-  // Teaching empty state (guidelines §3): a friendly line, example prompts that fill
-  // the composer, and — when nothing is imported yet — a nudge toward Documents.
-  const emptyState = (
-    <div className="chat-empty">
-      <EmptyState
-        title={t('chat.empty.title')}
-        line={mode === 'documents' ? t('chat.empty.lineDocuments') : t('chat.empty.lineChat')}
-        action={
-          <>
-            {(mode === 'documents' ? DOC_EXAMPLE_KEYS : CHAT_EXAMPLE_KEYS).map((key) => (
-              <Chip key={key} onClick={() => fillComposer(t(key))} title={t('chat.empty.fillTitle')}>
-                {t(key)}
-              </Chip>
-            ))}
-            {indexedDocCount === 0 && (
-              <Button size="sm" onClick={() => onNavigate('documents')}>
-                {t('chat.empty.addDocs')}
-              </Button>
-            )}
-          </>
-        }
-      />
-    </div>
-  )
-
   return (
     <div className={`chat-layout ${effectiveCollapsed ? 'list-collapsed' : ''}`}>
       {!effectiveCollapsed && (
@@ -973,10 +1005,10 @@ export function ChatScreen({
           streaming={busyStreaming}
           mode={mode}
           collections={collections}
-          onSelect={onSelectConversation}
-          onNew={() => void onNewChat()}
-          onDelete={(c) => void onDeleteConversation(c)}
-          onCollapse={collapseList}
+          onSelect={handleSelectConversation}
+          onNew={handleNewChat}
+          onDelete={handleDeleteConversation}
+          onCollapse={handleCollapseList}
         />
       )}
 
@@ -1055,12 +1087,12 @@ export function ChatScreen({
           thinkingOpen={thinkingOpen}
           onThinkingOpenChange={setThinkingOpen}
           emptyState={emptyState}
-          onTryAgain={canTryAgain ? () => void onTryAgain() : undefined}
+          onTryAgain={canTryAgain ? handleTryAgain : undefined}
           // The undo's own placement gate (last auto-fired turn) lives in Transcript; here we only
           // withhold it while a reply is streaming (it would re-run mid-answer).
-          onAnswerWithoutSkill={busyStreaming ? undefined : () => void onAnswerWithoutSkill()}
-          onCopy={onCopyMessage}
-          onSave={() => void onSaveConversation()}
+          onAnswerWithoutSkill={busyStreaming ? undefined : handleAnswerWithoutSkill}
+          onCopy={handleCopyMessage}
+          onSave={handleSaveConversation}
           actionsDisabled={busyStreaming}
           resolveSkillTitle={resolveGlyphSkillTitle}
         />
