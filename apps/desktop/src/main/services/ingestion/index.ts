@@ -373,21 +373,6 @@ function treeLevelsOf(raw: string | null): number | undefined {
   }
 }
 
-/**
- * Count a document's chunks that carry a vector under `modelId`. Used to detect an
- * embedding-model mismatch: an indexed document with chunks but zero vectors under the
- * active model is unreachable by search until re-indexed.
- */
-function chunksEmbeddedUnder(db: Db, documentId: string, modelId: string): number {
-  const r = db
-    .prepare(
-      `SELECT COUNT(*) AS n FROM embeddings e JOIN chunks c ON e.chunk_id = c.id
-       WHERE c.document_id = ? AND e.embedding_model_id = ?`
-    )
-    .get(documentId, modelId) as unknown as { n: number }
-  return r.n
-}
-
 function getRow(db: Db, id: string): DocumentRow | null {
   const row = db.prepare('SELECT * FROM documents WHERE id = ?').get(id) as unknown as
     | DocumentRow
@@ -1193,11 +1178,34 @@ export function listDocuments(db: Db, activeEmbeddingModelId?: string | null): D
     })
     memberships.set(m.documentId, list)
   }
+  // DB-3/ING-2 (perf audit 2026-06-18): chunk counts + the per-doc stale-embeddings check in TWO
+  // grouped queries loaded into Maps, NOT a per-row COUNT + COUNT-JOIN (the old 1+2N pattern,
+  // polled during import) — mirroring the memberships join just above. A document absent from a
+  // map has zero (no chunks / nothing embedded under the active model).
+  const chunkCounts = new Map<string, number>()
+  for (const c of db
+    .prepare('SELECT document_id AS documentId, COUNT(*) AS n FROM chunks GROUP BY document_id')
+    .all() as Array<{ documentId: string; n: number }>) {
+    chunkCounts.set(c.documentId, c.n)
+  }
+  const embeddedCounts = new Map<string, number>()
+  if (activeEmbeddingModelId) {
+    for (const e of db
+      .prepare(
+        `SELECT c.document_id AS documentId, COUNT(*) AS n
+         FROM embeddings e JOIN chunks c ON e.chunk_id = c.id
+         WHERE e.embedding_model_id = ?
+         GROUP BY c.document_id`
+      )
+      .all(activeEmbeddingModelId) as Array<{ documentId: string; n: number }>) {
+      embeddedCounts.set(e.documentId, e.n)
+    }
+  }
   return rows.map((r) => {
-    const chunkCount = chunkCountFor(db, r.id)
+    const chunkCount = chunkCounts.get(r.id) ?? 0
     let stale: boolean | undefined
     if (activeEmbeddingModelId && r.status === 'indexed' && chunkCount > 0) {
-      stale = chunksEmbeddedUnder(db, r.id, activeEmbeddingModelId) === 0
+      stale = (embeddedCounts.get(r.id) ?? 0) === 0
     }
     return { ...rowToInfo(r, chunkCount, stale), collections: memberships.get(r.id) ?? [] }
   })
