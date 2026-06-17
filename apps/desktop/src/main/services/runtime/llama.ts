@@ -211,6 +211,13 @@ export class LlamaRuntime implements ModelRuntime {
       messages: messages.map((m) => ({ role: m.role, content: m.content })),
       stream: true,
       chat_template_kwargs: { enable_thinking: mode.enableThinking },
+      // Reuse the slot's KV cache for the longest common token prefix across turns instead of
+      // re-prefilling the whole prompt every request. We set this EXPLICITLY rather than relying
+      // on the llama-server default (which has changed across releases): with a stable system
+      // prefix — e.g. the skill fence bracketed in `system` for plain chat (skills §5/§22-A6) —
+      // the injected fence is prefilled once and then cached, so toggling a skill on costs one
+      // prefill, not one per turn. Loopback-only, no telemetry — purely a local compute hint.
+      cache_prompt: true,
       ...(maxTokens != null ? { max_tokens: maxTokens } : {}),
       ...(temperature != null ? { temperature } : {})
     })

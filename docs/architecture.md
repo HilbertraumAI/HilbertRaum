@@ -1735,6 +1735,61 @@ and still answers in German, D-L6):
 Display-only by design: nothing here threads locale into `resolveTurnSkill`/the prompt, so the gate +
 ceiling are unchanged and the injected body is byte-identical regardless of UI language.
 
+### §17 Active-skill turn-latency: measured root cause + the prefix-cache fix (2026-06-17e)
+
+A regression report — "chat with a skill active feels noticeably slower than with no skill" — was
+**measured before being theorized** (a temporary, content-free perf harness over the real bundled
+SKILL.md files + synthetic bodies up to the 64 KB cap; deleted after measuring, §22-M1: ids/counts/
+durations only). The numbers localized the cost and refuted the "main-side prompt assembly is slow"
+guess:
+
+- **Main side is negligible for the shipped skills.** The full per-turn `resolveTurnSkill` path —
+  disk read + YAML parse + validate (`loadSkillPackage`) plus fence assembly + the paragraph-growth
+  sizing loop (`buildSkillFence`) — measured **< 1 ms/turn** for a ~1.5 KB bundled skill (`load`
+  ≈ 0.65 ms, `fence` ≈ 0.06 ms) on an OS-cached SSD. **Not** perceptible.
+- **The injected body is the driver, and it's a *prefill* cost.** The bundled skills inject a
+  **measured 288–381-token** body (≈ 447 tokens including the BEGIN/END framing + guard line); the
+  system prompt grows from ~94 to ~541 tokens. That delta is paid in **prefill**, whose wall-clock is
+  hardware-bound: derived from the measured token count, ~290–450 tokens is sub-100 ms on GPU
+  (~3 k tok/s) but **~3.5–15 s on a laptop CPU** (~30–80 tok/s) — which fully explains a "noticeably
+  slower" feel and why the effect differs CPU vs GPU.
+- **Whether that prefill is one-time or per-turn is governed by KV-cache prefix reuse — and the app
+  was leaving it to the server default.** Plain chat brackets the fence in the **stable system
+  prefix** (§5), so it *should* be prefilled once and then reused; grounded rides the fence in the
+  **per-turn user turn** with the varying excerpts (§5/§22-H2), so its +447 tokens are genuinely
+  re-prefilled every turn by design. The chat request sent **no `cache_prompt`**, relying on
+  llama-server's default (which has flipped across releases) — so plain chat's "prefill once" was not
+  guaranteed, and any prefix shift (toggling the skill, a large user skill whose fence trims to a
+  question-dependent budget, or history dropping under context pressure) forces a **full re-prefill**.
+
+**Decisions / fixes as built** (both behind the unchanged §7 ceiling — no new capability, fully
+offline, audit still ids/counts-only; no i18n surface touched):
+
+- **PERF-1 — `cache_prompt: true` is now explicit** (`runtime/llama.ts` `chatStream`). The KV slot
+  reuses the longest common token prefix instead of re-prefilling the whole prompt, set explicitly
+  rather than inherited from a release-dependent default. With the stable plain-chat system prefix
+  this makes the fence a **one-time** prefill (toggle-on cost), not per-turn. Loopback-only compute
+  hint, no telemetry. Asserted in `llama-runtime.test.ts`.
+- **PERF-2 — the per-turn load is cached** (`skills/loader.ts` `loadSkillPackage`). `resolveTurnSkill`
+  hit disk + re-ran the YAML parse/validate **every turn**; the result only changes when SKILL.md
+  changes, so it is now cached keyed by the file's **(mtime, size)** (+ the `maxBodyChars` limit).
+  Measured **~33 µs** cache hit vs **~650 µs** uncached (~20×) on SSD — and the win is far larger on
+  the **portable drive** HilbertRaum targets, where a per-turn read dominates, and for a large user
+  skill that re-parses + re-sizes (the sizing loop is O(paragraphs²): measured **~19 ms** at the
+  64 KB cap). DS1/DS2 honoured — an on-disk edit (mtime/size change) re-parses on the next turn — and
+  the **reconcile/installer paths call `parseSkillManifestFromDir` directly**, bypassing the cache, so
+  disk→DB reconciliation always reads fresh. Content-class clean (in-memory parsed result only).
+  Covered by `skills-loader-cache.test.ts`.
+
+**Recommended, not implemented** (deliberately out of this low-risk scope, recorded so the trade-off
+is visible): (a) the **grounded** fence is per-turn prefill by *placement* (§22-H2 keeps it in the
+user turn so the grounding rules retain precedence) — the honest mitigation is to keep skill bodies
+small, not to move the fence into `system`; (b) for a **large user skill near the budget**, the
+plain-chat fence trim depends on the current question's length (`buildTurnFence` subtracts the live
+final-turn tokens), so the system prefix can shift turn-to-turn and defeat PERF-1 — sizing the fence
+against a *fixed* user-turn reserve would keep it byte-stable, but it is a no-op for every shipped
+skill (none trim) and was left for a follow-up to avoid changing the §22-A6 budget contract.
+
 ### §-anchor legend (historical plan citations)
 
 The wave's two plan files were folded into this record (§1–§12) and `security-model.md`, but in-code

@@ -280,6 +280,11 @@ describe('answer-depth mode → request mapping (D4)', () => {
     expect(args.join(' ')).toContain('--reasoning-format deepseek')
   })
 
+  it('sends cache_prompt:true so the slot KV prefix is reused across turns (skill-fence prefill is one-time)', async () => {
+    const { body } = await captureBody()
+    expect(body.cache_prompt).toBe(true)
+  })
+
   it('fast → thinking off + temperature 0.7 + modest max_tokens', async () => {
     const { body } = await captureBody({ mode: 'fast' })
     expect(body.chat_template_kwargs).toEqual({ enable_thinking: false })

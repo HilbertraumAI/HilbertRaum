@@ -6,7 +6,32 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
-_Last updated: 2026-06-17 — **Skills — per-locale DISPLAY localization (no new phase).** Skill content
+_Last updated: 2026-06-17 — **Skills — active-skill turn-latency: measured root cause + prefix-cache fix
+(no new phase).** Report: "chat with a skill active feels slower than with no skill." **Measured before
+theorizing** (temporary content-free perf harness over the real bundled SKILL.md files + synthetic
+bodies, deleted after measuring — §22-M1). Findings: main side is **< 1 ms/turn** for a bundled skill
+(`loadSkillPackage` ≈ 0.65 ms, `buildSkillFence` ≈ 0.06 ms) — NOT the cause. The real driver is the
+**measured 288–381-token** body (≈ 447 tokens with framing/guard) injected per skill, paid in **prefill**:
+sub-100 ms on GPU but **~3.5–15 s on a laptop CPU** — explains the "noticeably slower" feel and the
+CPU/GPU difference. Whether that prefill is one-time (plain chat, fence in the **stable system prefix**)
+or per-turn (grounded, fence rides the **varying user turn** by §22-H2 placement) is governed by KV-cache
+prefix reuse — which the app was leaving to the llama-server default. **Two low-risk fixes (behind the
+unchanged §7 ceiling — offline, audit ids/counts-only, no i18n surface):** **(PERF-1)** the chat request
+now sends **`cache_prompt: true` explicitly** ([`runtime/llama.ts`](apps/desktop/src/main/services/runtime/llama.ts)
+`chatStream`) so the slot reuses the longest common prefix instead of relying on a release-dependent
+default → plain-chat fence is a **one-time** prefill, not per-turn (asserted in `llama-runtime.test.ts`).
+**(PERF-2)** the per-turn `loadSkillPackage` ([`skills/loader.ts`](apps/desktop/src/main/services/skills/loader.ts))
+is **cached by SKILL.md (mtime,size)** — measured **~33 µs hit vs ~650 µs** uncached (~20×; far more on a
+slow portable drive, and it elides the O(paragraphs²) ~19 ms re-size for a 64 KB user skill). DS1/DS2
+honoured (an on-disk edit re-parses); reconcile/installer call `parseSkillManifestFromDir` **directly**,
+bypassing the cache, so disk→DB stays fresh (new `skills-loader-cache.test.ts`). **Recommended, not done**
+(scope/risk, recorded in the design record): grounded fence stays per-turn by placement (keep bodies
+small); a large user skill's question-dependent fence trim can shift the plain-chat prefix and defeat
+PERF-1 — a fixed user-turn reserve would stabilize it but changes the §22-A6 budget contract (no-op for
+every shipped skill). Design record: **architecture.md "Skills — design record" §17**. Full suite green
+(**1718 passed**), typecheck + build clean._
+
+_(prior) 2026-06-17 — **Skills — per-locale DISPLAY localization (no new phase).** Skill content
 (title/description) was English-only in a German UI (the chrome is i18n'd, but the manifest carried a
 single title/description) — visible in the composer picker, the per-message glyph, and Settings →
 Skills. Fixed for the **display metadata** (the body stays single-language — the model is multilingual,
