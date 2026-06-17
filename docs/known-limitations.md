@@ -54,6 +54,63 @@ password recovery — are documented in
   is attacker-forgeable anyway). Mitigations: the AI Model screen's **Verify checksum** forces a real
   re-hash, and the ship-time gates (`verify-models --strict`, `assertCommercialDrive`) always hash
   fully.
+- **App-skill integrity is by location, not signature (Skills §22-M2 — accept + document).** A
+  shipped skill's `trusted_level: app` is assigned because it sits in `app-skills/`, copied there at
+  drive-build. On a removable drive `app-skills/` is writable, so "verified" means build-time
+  provisioning, not a runtime hash; an attacker with physical write access could alter a shipped
+  skill. A hash manifest on the same writable drive would be unanchored (rewritten too), so real
+  integrity needs **off-drive signing** (a Tier-3 prerequisite, not in scope) — the **same residual
+  already accepted for the engine binary and on-drive sidecars**. Blast radius is bounded: a tampered
+  instruction skill is still only injected reference text behind the prompt-injection guard (it cannot
+  run code, reach the network, read other files, or widen document scope). See
+  [`security-model.md`](security-model.md) ("App-skill provisioning…").
+- **Skills are non-confidential by design (DS20).** A skill package is task knowledge, **not** secret
+  user content: `app-skills/` and `user-skills/` are plain (unencrypted) folders **outside** the
+  encrypted `workspace/`. Truly sensitive material belongs in a **document** (which stays encrypted),
+  never in a skill. Two consequences: a skill is readable on a lost/shared drive, and because
+  `user-skills/` is a top-level directory (not inside `workspace/`), a **workspace backup must also
+  include `user-skills/`** or imported user skills are lost.
+- **A workspace DB rebuild re-derives user skills as DISABLED and clears the acknowledgement.** The
+  `skills` table is a pure derived cache; disk (the skill folders) is the source of truth. A DB
+  rebuild/corruption re-discovers every `user-skills/` folder, but a re-discovered drop-in installs
+  **disabled with `warning_ack` cleared** (the DS19 safe default — a rebuild is a fresh discovery, not
+  a confirmed import). No skill content is lost; the user simply **re-enables** each user skill (and
+  re-acknowledges its warning) in Settings → Skills. App skills are unaffected (they re-derive enabled).
+- **Prompt-injection in a skill body is contained structurally, not by delimiter purity (Skills S12
+  audit).** The selected skill's instructions are injected as a fenced **data** block and the
+  app-authored guard line is the last line, but the body is inserted verbatim — a hostile body can
+  forge the fence's own `--- END LOCAL SKILL ---` delimiter or shout "ignore previous instructions".
+  The guard line still wins structurally (it is appended after the whole block; a consolidated test
+  pins this), and the real defence is the **structural ceiling**: an instruction skill can only emit
+  text, and a Tier-2 tool sees a frozen `documentIds` scope with no `Db`/SQL/FS/net handle — so even a
+  "successful" text-level injection cannot run code, reach the network, read other files, or widen
+  scope (§14). We deliberately do **not** sanitize/escape the body delimiter (it would mangle
+  legitimate instructions for no real gain). See [`security-model.md`](security-model.md) ("Skill tool
+  ceiling").
+- **A user skill's `triggers.filenamePatterns` are compiled to a RegExp (Skills S12 audit — now
+  actively bounded, post-S12).** The deterministic suggestion heuristic turns a `*statement*`-style
+  pattern from a user-installed skill into an anchored, case-insensitive regex matched against the
+  in-scope documents' filenames. The skill must already be **enabled by the user**, and the match runs
+  only on a user action (the picker) — there is **no auto-fire** (deferred to S13). The earlier-noted
+  "length-bounded matcher is future hardening" **has now shipped** (architecture.md "Skills — design
+  record" §13, S2): the parser caps each trigger entry's length (≤200) and count (≤64), and
+  `selector.globToRegExp` refuses a glob with more than 10 `*` wildcards (it counts as a non-match), so
+  a `*a*a…`-style pattern can no longer drive catastrophic backtracking on the synchronous main-side
+  scoring. The residual is therefore closed in practice.
+- **Document redaction is best-effort, not a privacy/compliance guarantee (Skills S11d).** The
+  `document-redaction` skill's `redact_document` tool masks personal data with **deterministic,
+  offline regexes only** — e-mail addresses, phone numbers, IBANs, dates, and web links. There is **no
+  ML and no name detection**, so it deliberately **misses** anything without a recognisable pattern:
+  most names, postal addresses, unusual number formats, and any text inside images/scans (it sees only
+  the extracted chunk text). The detectors are intentionally conservative — they prefer a **false
+  negative** (leaving a borderline value) over corrupting ordinary text by over-matching. The redacted
+  copy is therefore a **starting point that still needs a human review** before it is shared; the
+  SKILL.md body and the run's "done" copy both say so, and the app never describes the output as "fully
+  anonymized" or as meeting any legal/GDPR-DSGVO standard. Privacy posture is otherwise the strongest
+  of the Tier-2 skills: the redacted text is written **only** to the user-chosen file, the detected
+  values never reach any log/audit/`skill_runs` row, and only per-category **counts** are surfaced
+  (architecture.md "Skills — design record" §8). A higher-recall redactor (NER, address/name lexicons)
+  is a deferred wave.
 
 ## Spec features intentionally not built (MVP scope)
 

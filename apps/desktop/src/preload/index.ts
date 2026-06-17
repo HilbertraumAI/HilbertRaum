@@ -33,8 +33,15 @@ import type {
   PolicyStatus,
   PreflightResult,
   RuntimeInstallInfo,
+  RunnableTool,
   RuntimeStatus,
+  SkillInfo,
+  SkillPreview,
+  SkillRunState,
+  SkillSuggestion,
   StartDocTaskRequest,
+  StartSkillRunRequest,
+  StartSkillRunResult,
   WorkspaceActionResult,
   WorkspaceMode,
   WorkspaceStateInfo
@@ -169,6 +176,12 @@ const api = {
   ): Promise<Message> => ipcRenderer.invoke(IPC.sendChatMessage, conversationId, content, options),
   stopGeneration: (conversationId: string): Promise<void> =>
     ipcRenderer.invoke(IPC.stopGeneration, conversationId),
+  /** Persist a conversation's sticky default skill (skills plan §10.1). Null clears it. */
+  setConversationDefaultSkill: (
+    conversationId: string,
+    installId: string | null
+  ): Promise<void> =>
+    ipcRenderer.invoke(IPC.setConversationDefaultSkill, conversationId, installId),
   /** Snapshot of an in-flight generation (accumulated answer + reasoning), or null. Lets a
    *  remounted Chat screen recover a reply still streaming after navigating away + back. */
   getActiveStream: (conversationId: string): Promise<ActiveStreamSnapshot | null> =>
@@ -212,8 +225,13 @@ const api = {
   // ---- RAG / document Q&A ----
   /** Stream a document-grounded answer; resolves with the final assistant message
    *  (which carries `citations`). Tokens arrive via onToken, like sendChatMessage. */
-  askDocuments: (conversationId: string, question: string): Promise<Message> =>
-    ipcRenderer.invoke(IPC.askDocuments, conversationId, question),
+  askDocuments: (
+    conversationId: string,
+    question: string,
+    skillInstallId?: string | null,
+    regenerate?: boolean
+  ): Promise<Message> =>
+    ipcRenderer.invoke(IPC.askDocuments, conversationId, question, skillInstallId, regenerate),
 
   // ---- Documents ----
   /** Open the OS picker for files (default) or a folder; returns selected paths. */
@@ -300,6 +318,53 @@ const api = {
   /** Delete a project — 'membershipOnly' keeps docs; 'withDocuments' deletes project-only docs (C2). */
   deleteCollection: (id: string, mode: 'membershipOnly' | 'withDocuments'): Promise<void> =>
     ipcRenderer.invoke(IPC.deleteCollection, id, mode),
+
+  // Skills (instruction packages; skills plan §16).
+  /** All installed skills (app first, then by title). */
+  listSkills: (): Promise<SkillInfo[]> => ipcRenderer.invoke(IPC.listSkills),
+  /** One skill by install id, or null. */
+  getSkill: (installId: string): Promise<SkillInfo | null> => ipcRenderer.invoke(IPC.getSkill, installId),
+  /** Open the OS picker for a `.skill.zip` file or a skill folder; returns the path or null. */
+  pickSkillPackage: (mode?: 'file' | 'folder'): Promise<string | null> =>
+    ipcRenderer.invoke(IPC.pickSkillPackage, mode),
+  /** Validate an import source fully, without writing — the permission-summary preview (§9.2). */
+  previewSkillPackage: (source: string): Promise<SkillPreview> =>
+    ipcRenderer.invoke(IPC.previewSkillPackage, source),
+  /** Install a validated skill (enabled-with-warning, DS7); rejects friendly on a bad package. */
+  importSkill: (source: string): Promise<SkillInfo> => ipcRenderer.invoke(IPC.importSkill, source),
+  /** Export a skill to a user-chosen `.skill.zip` (package tree only); null if cancelled. */
+  exportSkill: (installId: string): Promise<string | null> => ipcRenderer.invoke(IPC.exportSkill, installId),
+  /** Delete a user skill (app skills refuse). */
+  deleteSkill: (installId: string): Promise<void> => ipcRenderer.invoke(IPC.deleteSkill, installId),
+  /** Enable a skill (one-active-per-id). */
+  enableSkill: (installId: string): Promise<SkillInfo> => ipcRenderer.invoke(IPC.enableSkill, installId),
+  /** Disable a skill. */
+  disableSkill: (installId: string): Promise<SkillInfo> => ipcRenderer.invoke(IPC.disableSkill, installId),
+  /** Acknowledge a user skill's import warning (DS7). */
+  acknowledgeSkillWarning: (installId: string): Promise<SkillInfo> =>
+    ipcRenderer.invoke(IPC.acknowledgeSkillWarning, installId),
+
+  /** Deterministic skill suggestion for the composer picker (skills plan §10.2/S8). The draft
+   *  question is content — the main handler scores it and logs nothing. Returns at most one. */
+  suggestSkills: (conversationId: string, question?: string): Promise<SkillSuggestion[]> =>
+    ipcRenderer.invoke(IPC.suggestSkills, conversationId, question),
+
+  /** Wired, runnable Tier-2 tools for the active skill in this conversation's scope (skills plan
+   *  §12.2/§16, S11b). Empty when none apply. Logs nothing — the scope is content (§22-C4). */
+  listRunnableTools: (skillInstallId: string, conversationId: string): Promise<RunnableTool[]> =>
+    ipcRenderer.invoke(IPC.listRunnableTools, skillInstallId, conversationId),
+  /** Start an app-orchestrated tool run from a user action (DS4). Returns ids/counts only. */
+  startSkillRun: (req: StartSkillRunRequest): Promise<StartSkillRunResult> =>
+    ipcRenderer.invoke(IPC.startSkillRun, req),
+  /** Poll one run's ids/counts-only state/progress (the doc-task polling precedent). */
+  getSkillRun: (runHandle: string): Promise<SkillRunState | null> =>
+    ipcRenderer.invoke(IPC.getSkillRun, runHandle),
+  /** Cancel a run; with no handle, the active run. */
+  cancelSkillRun: (runHandle?: string): Promise<void> =>
+    ipcRenderer.invoke(IPC.cancelSkillRun, runHandle),
+  /** Drop a terminal run main-side once its outcome has been shown (the acknowledge handshake). */
+  clearSkillRun: (runHandle?: string): Promise<void> =>
+    ipcRenderer.invoke(IPC.clearSkillRun, runHandle),
 
   /** Subscribe to streamed tokens for a request (= conversation id); returns an unsubscribe fn. */
   onToken: (requestId: string, cb: (token: string) => void): (() => void) => {

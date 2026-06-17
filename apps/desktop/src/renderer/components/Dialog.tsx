@@ -68,7 +68,10 @@ export function Modal({
               <Button size="sm">{t('common.close')}</Button>
             </RadixDialog.Close>
           </div>
-          {children}
+          {/* The body is the scroll region (.modal-body: flex:1 + min-height:0 + overflow-y)
+              so a tall content dialog — e.g. a skill's expanded "Technical details" — scrolls
+              inside the dialog's max-height instead of overflowing past it with no scrollbar. */}
+          <div className="modal-body">{children}</div>
         </RadixDialog.Content>
       </RadixDialog.Portal>
     </RadixDialog.Root>

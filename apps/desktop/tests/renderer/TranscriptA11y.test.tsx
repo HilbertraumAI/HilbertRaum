@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
 import { useState } from 'react'
-import { describe, it, expect, afterEach, beforeAll } from 'vitest'
+import { describe, it, expect, afterEach, beforeAll, vi } from 'vitest'
 import { render, screen, cleanup, fireEvent } from '@testing-library/react'
 import { AssistantMarkdown, Transcript } from '../../src/renderer/chat/Transcript'
+import { I18nProvider } from '../../src/renderer/i18n'
+import type { Message } from '../../src/shared/types'
 
 // Two a11y/safety fixes in Transcript:
 // L1 — the markdown `a` renderer whitelists http(s); a model-emitted javascript:/data:
@@ -68,5 +70,75 @@ describe('Transcript Thinking disclosure (L15)', () => {
     fireEvent.click(toggle)
     expect(toggle).toHaveAttribute('aria-expanded', 'true')
     expect(screen.getByText('reasoning about the question')).toBeVisible()
+  })
+})
+
+// S13c (D3): the per-turn "answer without it" undo shows ONLY on an auto-fired turn — and only on the
+// LAST assistant turn (re-running drops it). An explicitly-picked skill keeps the plain glyph, no undo.
+describe('Transcript auto-fire undo (S13c/D3)', () => {
+  function msg(over: Partial<Message>): Message {
+    return {
+      id: 'a1',
+      conversationId: 'c1',
+      role: 'assistant',
+      content: 'an answer',
+      createdAt: '2026-06-17T00:00:00.000Z',
+      ...over
+    }
+  }
+
+  function renderTranscript(messages: Message[], onAnswerWithoutSkill?: () => void): void {
+    render(
+      <I18nProvider>
+        <Transcript
+          messages={messages}
+          streamingHere={false}
+          streamText=""
+          streamThinking=""
+          thinkingOpen={false}
+          onThinkingOpenChange={noop}
+          emptyState={null}
+          onAnswerWithoutSkill={onAnswerWithoutSkill}
+          onCopy={noop}
+          onSave={noop}
+          actionsDisabled={false}
+        />
+      </I18nProvider>
+    )
+  }
+
+  it('shows "Answered with …" + a working undo on an auto-fired last turn', () => {
+    const undo = vi.fn()
+    renderTranscript(
+      [msg({ skillId: 'app:bank', skillTitle: 'Bank statement helper', autoFired: true })],
+      undo
+    )
+    expect(screen.getByText('Answered with Bank statement helper')).toBeInTheDocument()
+    const button = screen.getByRole('button', { name: 'Answer without it' })
+    fireEvent.click(button)
+    expect(undo).toHaveBeenCalledTimes(1)
+  })
+
+  it('shows the plain glyph and NO undo on an explicitly-picked turn', () => {
+    renderTranscript(
+      [msg({ skillId: 'app:bank', skillTitle: 'Bank statement helper', autoFired: false })],
+      vi.fn()
+    )
+    expect(screen.getByText('Skill: Bank statement helper')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Answer without it' })).not.toBeInTheDocument()
+  })
+
+  it('shows no undo on an auto-fired turn that is not the last assistant turn', () => {
+    renderTranscript(
+      [
+        msg({ id: 'a1', skillId: 'app:bank', skillTitle: 'Bank statement helper', autoFired: true }),
+        msg({ id: 'u1', role: 'user', content: 'another question' }),
+        msg({ id: 'a2', content: 'a later answer' })
+      ],
+      vi.fn()
+    )
+    // The auto-fire glyph stays visible (provenance), but the undo only rides the LAST assistant turn.
+    expect(screen.getByText('Answered with Bank statement helper')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Answer without it' })).not.toBeInTheDocument()
   })
 })

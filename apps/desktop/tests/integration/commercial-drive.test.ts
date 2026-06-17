@@ -58,6 +58,16 @@ function writePolicy(root: string, json: unknown): void {
   writeFileSync(join(root, 'config', 'policy.json'), JSON.stringify(json))
 }
 
+/** Provision a trusted product skill under app-skills/ (skills plan S9) — a sold drive ships one. */
+function provisionAppSkill(root: string, id = 'bank-statement'): void {
+  const dir = join(root, 'app-skills', id)
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(
+    join(dir, 'SKILL.md'),
+    ['---', `id: ${id}`, `title: ${id}`, `description: ${id} skill`, 'version: 1.0.0', '---', 'Guidance.'].join('\n')
+  )
+}
+
 describe('planCommercialDrive', () => {
   it('produces the ordered build steps with signing flagged manual', () => {
     const steps = planCommercialDrive({ target: 'E:\\', acceptLicense: true })
@@ -112,6 +122,7 @@ describe('assertCommercialDrive', () => {
   it('passes on a verified, commercial-posture drive with no user data', async () => {
     const root = tempDir('hilbertraum-commercial-ok-')
     writePolicy(root, buildPolicyJson()) // commercial default
+    provisionAppSkill(root)
     const chat = writeVerifiedWeight(root, 'chat', 'models/chat/qwen.gguf', 'chat-weights')
     const embed = writeVerifiedWeight(root, 'embed', 'models/embeddings/e5.gguf', 'embed-weights')
 
@@ -126,8 +137,48 @@ describe('assertCommercialDrive', () => {
       licensesApproved: true,
       noUserData: true,
       runtimeCurrent: true,
-      ocrAssetsVerified: true
+      ocrAssetsVerified: true,
+      appSkillsPresent: true,
+      userSkillsEmpty: true
     })
+  })
+
+  // Skills plan S9 / §14: a sold drive must ship at least one trusted product skill.
+  it('fails when no app skills are provisioned', async () => {
+    const root = tempDir('hilbertraum-commercial-noskill-')
+    writePolicy(root, buildPolicyJson())
+    const chat = writeVerifiedWeight(root, 'chat', 'models/chat/qwen.gguf', 'chat-weights')
+    const res = await assertCommercialDrive(root, [chat])
+    expect(res.ok).toBe(false)
+    expect(res.checks.appSkillsPresent).toBe(false)
+    expect(res.problems.some((p) => /no app skills provisioned/i.test(p))).toBe(true)
+  })
+
+  // Skills plan S9 / §14: user-skills/ must ship empty (only trusted product skills are sold).
+  it('fails when a user skill is present (user-skills/ must ship empty)', async () => {
+    const root = tempDir('hilbertraum-commercial-userskill-')
+    writePolicy(root, buildPolicyJson())
+    provisionAppSkill(root)
+    const chat = writeVerifiedWeight(root, 'chat', 'models/chat/qwen.gguf', 'chat-weights')
+    mkdirSync(join(root, 'user-skills', 'my-imported'), { recursive: true })
+    writeFileSync(join(root, 'user-skills', 'my-imported', 'SKILL.md'), 'x')
+    const res = await assertCommercialDrive(root, [chat])
+    expect(res.ok).toBe(false)
+    expect(res.checks.userSkillsEmpty).toBe(false)
+    expect(res.checks.appSkillsPresent).toBe(true) // ONLY the user-skills gate failed
+    expect(res.problems.some((p) => /user-skills\/my-imported/.test(p))).toBe(true)
+  })
+
+  // An empty user-skills/ directory (created by prepare-drive) is NOT a problem.
+  it('an EMPTY user-skills/ directory is allowed', async () => {
+    const root = tempDir('hilbertraum-commercial-emptyuser-')
+    writePolicy(root, buildPolicyJson())
+    provisionAppSkill(root)
+    const chat = writeVerifiedWeight(root, 'chat', 'models/chat/qwen.gguf', 'chat-weights')
+    mkdirSync(join(root, 'user-skills'), { recursive: true }) // empty
+    const res = await assertCommercialDrive(root, [chat])
+    expect(res.ok).toBe(true)
+    expect(res.checks.userSkillsEmpty).toBe(true)
   })
 
   // M11 (audit round 4): a sold drive requires every license_review APPROVED (spec §13).
@@ -262,6 +313,7 @@ describe('assertCommercialDrive', () => {
   it('an EMPTY workspace/documents/ directory is NOT user data', async () => {
     const root = tempDir('hilbertraum-commercial-emptydocs-')
     writePolicy(root, buildPolicyJson())
+    provisionAppSkill(root)
     const chat = writeVerifiedWeight(root, 'chat', 'models/chat/qwen.gguf', 'chat-weights')
     mkdirSync(join(root, 'workspace', 'documents'), { recursive: true }) // empty
     const res = await assertCommercialDrive(root, [chat])
@@ -316,6 +368,7 @@ describe('assertCommercialDrive', () => {
     it('passes when every pinned build has a binary + matching marker', async () => {
       const root = tempDir('hilbertraum-commercial-rt-ok-')
       writePolicy(root, buildPolicyJson())
+      provisionAppSkill(root)
       const chat = writeVerifiedWeight(root, 'chat', 'models/chat/qwen.gguf', 'chat-weights')
       writeInstalls(root)
       const res = await assertCommercialDrive(root, [chat], sources())
@@ -369,6 +422,7 @@ describe('assertCommercialDrive', () => {
     it('skips the marker check when no runtimeSources are passed (runtimeCurrent stays true)', async () => {
       const root = tempDir('hilbertraum-commercial-rt-skip-')
       writePolicy(root, buildPolicyJson())
+      provisionAppSkill(root)
       const chat = writeVerifiedWeight(root, 'chat', 'models/chat/qwen.gguf', 'chat-weights')
       const res = await assertCommercialDrive(root, [chat])
       expect(res.ok).toBe(true)
@@ -420,6 +474,7 @@ describe('assertCommercialDrive', () => {
     it('passes when the whisper pin has a whisper-cli binary + matching marker', async () => {
       const root = tempDir('hilbertraum-commercial-wh-ok-')
       writePolicy(root, buildPolicyJson())
+      provisionAppSkill(root)
       const chat = writeVerifiedWeight(root, 'chat', 'models/chat/qwen.gguf', 'chat-weights')
       writeInstalls(root)
       writeWhisperInstall(root)

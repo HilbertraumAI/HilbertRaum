@@ -1,6 +1,6 @@
 # HilbertRaum — Troubleshooting
 
-_Last updated: 2026-06-13 (scanned-PDF answer updated for the OCR feature; supported types extended for audio + photos)_
+_Last updated: 2026-06-17 (added Skills entries: drop-ins install disabled, import rejections, the "Needs newer app" badge, and "the skill tool found nothing"; previously: scanned-PDF answer updated for the OCR feature; supported types extended for audio + photos)_
 
 Quick answers to common situations. Everything here is normal, local, and offline — none of
 these steps require the internet.
@@ -164,6 +164,64 @@ pages (png, jpg, jpeg — needs the OCR files). Other files in the same import s
 - Check that the drive has free space and is writable. The app shows a friendly note on the Home
   screen if the drive is read-only, low on space, or slow (none of these block you).
 - If the drive was just prepared, confirm `config/drive.json` exists at the drive root.
+
+---
+
+## A skill I dropped into the drive isn't doing anything
+
+A skill you add yourself — by copying a folder into the drive's `user-skills/` — **installs switched
+off** on purpose, so nothing a file added can run without your say-so. Open **Settings → Skills**,
+find it in the list, and turn it **on**. (Built-in skills are on already.) If it isn't listed at all,
+check that the folder contains a `SKILL.md` file at its top level, then reopen the Skills tab — the
+app re-scans the folder when you open it after unlocking.
+
+---
+
+## "Import" rejected my skill package
+
+The app validates a skill package **before** it installs anything, and tells you the reason rather
+than installing something unsafe — nothing is written when an import is refused. Common reasons:
+
+- **"A skill must be a .skill.zip file or a folder containing SKILL.md."** — you picked something that
+  isn't a skill. Choose a `.skill.zip` file, or a **folder** that has a `SKILL.md` at its top level.
+- **"The package does not contain a SKILL.md file."** — the zip/folder is missing the one required
+  file. Every skill needs a `SKILL.md`.
+- **"The skill manifest is invalid."** / **"The skill id is not a valid name."** — the `SKILL.md`
+  header is malformed or the skill's id has unexpected characters. Fix the header and re-import.
+- **The package "could not be read as a valid zip…"**, "uses an unsupported … zip format", "contains
+  a file whose path escapes the package folder", "a symbolic link", "an embedded archive", or is
+  larger / deeper / has more files than allowed — these are the app's **safety checks** on an
+  untrusted package. A trustworthy skill won't trip them; re-export it from a reliable source.
+- **"A newer version of this skill is already installed…"** — you're importing an **older** version
+  over a newer one. The app refuses a downgrade unless **developer mode** is on (Settings).
+- **"App-provided skills cannot be changed or deleted."** — the built-in skills are read-only; you can
+  turn them off, but not import over or delete them.
+
+---
+
+## A skill shows "Needs newer app"
+
+That skill was built for a **newer version of HilbertRaum** than the one you're running, so its toggle
+is greyed out — it stays listed but can't be switched on, suggested, or run. **Update the app** to the
+version the skill needs and it becomes available. This is a courtesy check, not an error: nothing is
+broken, and your other skills are unaffected.
+
+---
+
+## The skill tool found nothing in my document
+
+A tool like *Bank statement* or *Invoice* reads only what it can **confidently** recognise, and it
+**won't invent figures** — if a document doesn't look like the kind it expects, it honestly reports
+nothing rather than guessing. A few things to check:
+
+- **Run the reading step first.** Validate / categorise / export work on what was **read** from the
+  statement or invoice — if you haven't run the read step yet, the tool will ask you to. Read it
+  first, then run the others.
+- **The document needs real text.** A scanned PDF (an image) has no text to read — use the document's
+  **Make searchable (OCR)** action first (see *Importing a PDF didn't extract any text* above).
+- **Unusual layouts read conservatively.** Bank/invoice formats vary a lot; the tools quote only the
+  rows and totals they can parse cleanly and skip the rest. That's deliberate honesty, not a failure —
+  a partial result is better than a wrong one.
 
 ---
 

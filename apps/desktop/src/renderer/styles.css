@@ -786,6 +786,46 @@ code, pre, kbd { font-family: var(--font-mono); }
 /* Chat body reads at --text-md (guidelines §4.4: chat/document reading size). */
 .msg-content { white-space: pre-wrap; word-break: break-word; font-size: var(--text-md); line-height: var(--line-md); }
 
+/* Per-message skill glyph (skills plan §15/DS16): a quiet, labelled marker under the answer a
+   skill shaped — icon + word (never colour-only, §9), muted so it never competes with the reply. */
+.msg-skill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 8px;
+  font-size: var(--text-xs);
+  line-height: var(--line-xs);
+  color: var(--text-muted);
+}
+.msg-skill-icon { width: 14px; height: 14px; flex-shrink: 0; }
+/* S13c (D3): the per-turn "answer without it" undo on an auto-fired turn — a quiet inline link, not a
+   loud button, so an auto-applied skill is reversible without shouting. */
+.msg-skill-undo {
+  background: none;
+  border: none;
+  padding: 0;
+  margin-left: 2px;
+  font: inherit;
+  color: var(--accent, var(--text-muted));
+  text-decoration: underline;
+  cursor: pointer;
+}
+.msg-skill-undo:hover:not(:disabled) { color: var(--text); }
+.msg-skill-undo:disabled { cursor: default; opacity: 0.6; }
+
+/* Tier-2 tool-run bar (skills plan §12.2/§15, S11b): a calm row above the composer carrying the
+   offer / busy / result. Quiet by default — muted text, a hairline top border, no alarm colour. */
+.skill-run-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 8px 4px 0;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+.skill-run-status { display: inline-flex; align-items: center; gap: 8px; }
+
 /* Markdown-rendered assistant replies: markdown supplies its own block spacing, so
    pre-wrap (which would double every blank line) is turned off. */
 .msg-content.md { white-space: normal; }
@@ -1328,6 +1368,71 @@ code, pre, kbd { font-family: var(--font-mono); }
 
 /* Overflow menu separator (Radix DropdownMenu.Separator). */
 .menu-sep { height: 1px; background: var(--border); margin: 4px 6px; }
+
+/* The deterministic skill suggestion pinned atop the composer picker (skills plan §10.2/S8): a calm
+   accent tint so it reads as an OFFER, not a warning. Still a plain menu item — one tap accepts. */
+.menu-item.skill-suggest { color: var(--accent); font-weight: 600; }
+
+/* ---- Settings → Skills (skills plan §15) ---- */
+/* Toolbar: the intro line takes the flex space, the Import action stays right + shrink:0. */
+.skills-toolbar { display: flex; align-items: flex-start; gap: 16px; }
+.skills-intro { flex: 1; margin: 0; }
+.skills-toolbar > .btn { flex-shrink: 0; }
+/* The list is a card with hairline-separated rows (the Documents §11.6 row pattern). The
+   card already paints the border/shadow, so the rows only need separators. */
+.skills-list { padding: 4px 0; }
+/* Compact rows (≥40px): icon · clickable title/desc · trailing chips/switch/⋯. */
+.skill-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 48px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border);
+}
+.skill-row:last-child { border-bottom: none; }
+.skill-row-icon { width: 22px; height: 22px; color: var(--text-muted); flex-shrink: 0; }
+/* The title/description double as the drawer trigger — a plain text button, full row height. */
+.skill-row-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  background: transparent;
+  border: none;
+  padding: 4px 0;
+  text-align: left;
+  cursor: pointer;
+  color: inherit;
+}
+.skill-row-main:hover .skill-row-title { color: var(--accent); }
+.skill-row-title {
+  font-size: var(--text-base);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.skill-row-desc {
+  font-size: var(--text-xs);
+  line-height: var(--line-xs);
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.skill-row-trailing { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+/* The permission ✓/✕ block (calm, legible — guidelines §6). Marks are icon + word; the
+   word carries the meaning, the glyph is aria-hidden (§9). */
+.skill-perm-heading { font-size: var(--text-sm); margin: 16px 0 4px; }
+.skill-perm-title { font-size: var(--text-sm); font-weight: 600; margin: 10px 0 4px; }
+.skill-perm-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 4px; }
+.skill-perm-list li { display: flex; align-items: baseline; gap: 8px; font-size: var(--text-sm); }
+.skill-perm-mark { flex-shrink: 0; font-weight: 700; }
+.skill-perm-mark.can { color: var(--success); }
+.skill-perm-mark.cannot { color: var(--text-muted); }
+.skill-import { display: flex; flex-direction: column; gap: 10px; }
 
 /* Benchmark / diagnostics */
 .hint.error { color: var(--error); }

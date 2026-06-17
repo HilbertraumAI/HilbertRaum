@@ -159,6 +159,21 @@ done
 if [[ -d "$TARGET/workspace/documents" ]] && [[ -n "$(ls -A "$TARGET/workspace/documents" 2>/dev/null)" ]]; then
   PROBLEMS+=("user data present: workspace/documents/*")
 fi
+# App skills present + user-skills empty (assertCommercialDrive parity, skills plan S9 / §14):
+# a sold drive ships trusted PRODUCT skills under app-skills/ (a folder with a SKILL.md) and an
+# EMPTY user-skills/ (the buyer fills it). Mirrors commercial-drive.ts listSkillFolders.
+app_skill_count=0
+if [[ -d "$TARGET/app-skills" ]]; then
+  for sd in "$TARGET/app-skills"/*/; do
+    [[ -f "${sd}SKILL.md" ]] && app_skill_count=$((app_skill_count + 1))
+  done
+fi
+[[ $app_skill_count -eq 0 ]] && PROBLEMS+=("no app skills provisioned (a sold drive ships trusted product skills under app-skills/)")
+if [[ -d "$TARGET/user-skills" ]]; then
+  while IFS= read -r us; do
+    [[ -n "$us" ]] && PROBLEMS+=("user skill present on a drive meant to ship empty: user-skills/$us")
+  done < <(ls -A "$TARGET/user-skills" 2>/dev/null)
+fi
 # License gate (assertCommercialDrive parity, spec 13): every shipped model's
 # license_review.status must be 'approved'. --accept-license is download-time acceptance,
 # NEVER a substitute for the redistribution review a sold drive needs.

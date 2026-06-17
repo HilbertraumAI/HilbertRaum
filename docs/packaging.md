@@ -146,7 +146,7 @@ out on a fresh machine with no Node/npm); their layout + config shapes mirror th
 
 | Script | Purpose |
 |---|---|
-| `prepare-drive.{ps1,sh}` | Create the directory tree, copy manifests + user docs, generate `config/{drive,policy}.json`. `-DryRun`/`--dry-run` prints the plan. `-Dev`/`--dev` → a plaintext developer drive. **`-WithAssets`/`--with-assets`** (Phase 12) then runs `fetch-models` + `fetch-runtime` (forwarding `-AcceptLicense`/`--accept-license`) for a launch-ready drive — by default fetching a small **default set** (chat model Ministral 3 8B + embeddings + reranker + Whisper transcriber) **plus both sidecar runtimes** (`llama.cpp` + `whisper.cpp`, the latter Windows-only/best-effort); **`-AllModels`/`--all-models`** fetches every model instead (runtimes either way). |
+| `prepare-drive.{ps1,sh}` | Create the directory tree, copy manifests + **the committed `app-skills/` product skills** (wholesale, like manifests — S9; `user-skills/` is left empty) + user docs, generate `config/{drive,policy}.json`. `-DryRun`/`--dry-run` prints the plan. `-Dev`/`--dev` → a plaintext developer drive. **`-WithAssets`/`--with-assets`** (Phase 12) then runs `fetch-models` + `fetch-runtime` (forwarding `-AcceptLicense`/`--accept-license`) for a launch-ready drive — by default fetching a small **default set** (chat model Ministral 3 8B + embeddings + reranker + Whisper transcriber) **plus both sidecar runtimes** (`llama.cpp` + `whisper.cpp`, the latter Windows-only/best-effort); **`-AllModels`/`--all-models`** fetches every model instead (runtimes either way). |
 | `fetch-models.{ps1,sh}` | (Phase 12) Download + **resume** + **SHA-256-verify** each weight with a `download:` block to its `models/...` path. `-Only <id>`/`--only` for one model; `-AcceptLicense`/`--accept-license` for the license gate; `-DryRun`/`--dry-run`. Real-hash mismatch → delete partial + exit 1. Idempotent (present + verified → skip). |
 | `fetch-runtime.{ps1,sh}` | (Phase 12; GPU defaults Phase 14) Read `runtime-sources.yaml`, pick the host build (`-Os/-Arch/-Backend` overrides; **default = the first listed build: Vulkan on win/linux, Metal on mac**; `-Backend cpu` fetches the pure-CPU safety net into `runtime/llama.cpp/<os>/cpu/`), download + verify the archive, extract into the build's `extract_to` (`chmod +x` on mac/linux), and write a `.hilbertraum-runtime.json` install marker. Idempotent **via the marker** (version + backend must match — a missing/stale marker re-fetches, so a CPU-era drive actually upgrades); `-DryRun`/`--dry-run`. `-Family`/`--family` selects the asset family: `llama_cpp` (default), `whisper_cpp` (the transcriber CLI), or `ocr` (language files). |
 | `verify-models.{ps1,sh}` | SHA-256 each present weight vs its manifest hash (placeholder → *UNVERIFIED*; real mismatch → fail/exit 1). `-Generate`/`--generate` writes `config/checksums.json`. |
@@ -279,6 +279,7 @@ copy launcher + portable app + user docs -> drive root
 verify-models  --generate         # capture real hashes -> config/checksums.json
 final check: commercial posture (encrypted, network denied) + all weights VERIFIED
              + runtime install markers match the pin (Phase 14) + no user data
+             + app skills provisioned (app-skills/) + user-skills/ empty (Skills S9)
 ```
 
 ```powershell
@@ -293,8 +294,9 @@ scripts/build-commercial-drive.sh --target /Volumes/HILBERTRAUM --accept-license
 
 The final automated check asserts the **commercial posture** (`policy.json`: encryption required,
 plaintext off, models must verify, network denied) **and** that **every weight is VERIFIED** **and**
-that **no user data is present** (spec §12.2) — the canonical gate is `assertCommercialDrive(...)`; the
-scripts add a native cross-check of the same invariants. **Remaining manual acceptance (R5/R7):** a
+that **no user data is present** (spec §12.2) **and** that **at least one trusted product skill is
+provisioned under `app-skills/` while `user-skills/` ships empty** (Skills S9) — the canonical gate is
+`assertCommercialDrive(...)`; the scripts add a native cross-check of the same invariants. **Remaining manual acceptance (R5/R7):** a
 real signed build + notarization + a USB-drive §17 demo on a fresh laptop with Wi-Fi off, and the
 second-laptop continuity check.
 

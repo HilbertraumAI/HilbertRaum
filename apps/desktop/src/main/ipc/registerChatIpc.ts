@@ -21,9 +21,11 @@ import {
   maybeSetTitleFromFirstMessage,
   searchMessages,
   setConversationCollection,
+  setConversationDefaultSkill,
   setScope,
   updateConversationScope
 } from '../services/chat'
+import { resolveTurnSkillFromRegistry } from '../services/skills/turn'
 import { conversationAttachmentIds } from '../services/collections'
 import { listDocuments } from '../services/ingestion'
 import type { DocumentInfo } from '../../shared/types'
@@ -122,6 +124,22 @@ export function registerChatIpc(ctx: AppContext): void {
     }
   )
 
+  // Persist a conversation's sticky default skill (skills plan §10.1 — the composer picker). Null
+  // clears it. Validated against the registry: an unknown/disabled/unavailable id is rejected to
+  // null so a stale pick never becomes the default (the resolver also skips it, but keep the
+  // persisted value honest). App + user skills are both selectable.
+  ipcMain.handle(
+    IPC.setConversationDefaultSkill,
+    (_e, conversationId: string, installId: string | null): void => {
+      let next: string | null = null
+      if (typeof installId === 'string' && installId.length > 0 && ctx.skills) {
+        const record = ctx.skills.get(installId)
+        if (record && record.enabled && record.unavailableAt == null) next = record.installId
+      }
+      setConversationDefaultSkill(ctx.db, conversationId, next)
+    }
+  )
+
   ipcMain.handle(IPC.listConversations, (): Conversation[] => listConversations(ctx.db))
 
   // A conversation's temporary chat attachments (plan C3/§16 — `conversation_documents`):
@@ -182,6 +200,19 @@ export function registerChatIpc(ctx: AppContext): void {
           ? options.mode
           : undefined
 
+      // Resolve the one skill for this turn (skills plan §10): the per-turn override or the sticky
+      // default. A disabled/missing skill resolves to none (graceful). Shared with the RAG channel
+      // via resolveTurnSkill so both carry the skill (audit A1). The message text is passed so the
+      // resolver can S13b AUTO-FIRE when the turn has no skill set (it is content — scored, not
+      // logged; off by default). On regenerate `content` is empty ⇒ no auto-fire (conservative).
+      const skill = resolveTurnSkillFromRegistry(
+        ctx.db,
+        ctx.skills,
+        conversationId,
+        options?.skillInstallId,
+        content
+      )
+
       return withChatStream(
         event,
         conversationId,
@@ -190,6 +221,7 @@ export function registerChatIpc(ctx: AppContext): void {
           generateAssistantMessage(ctx.db, runtime, conversationId, {
             signal,
             mode,
+            skill,
             onToken: sendToken,
             // sendReasoning emits the reasoning event AND buffers it for stream recovery.
             onReasoning: sendReasoning

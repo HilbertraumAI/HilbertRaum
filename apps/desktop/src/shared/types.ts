@@ -3,6 +3,7 @@
 // Keep these in sync with the IPC handlers in src/main/ipc and the spec §9.1.
 
 import { t, type UiLanguageSetting } from './i18n'
+import type { SkillKind, SkillPermissions, SkillTrustedLevel } from './skill-manifest'
 
 export type HardwareProfile = 'TINY' | 'LITE' | 'BALANCED' | 'PRO' | 'UNKNOWN'
 
@@ -213,6 +214,15 @@ export interface AppSettings {
    * `navigator.language`.
    */
   uiLanguage: UiLanguageSetting
+  // ---- Skills (skills-s13-plan.md §2.1 D4) ----
+  /**
+   * Whether the app may AUTO-FIRE an app skill on a turn the user left without one (S13b). The D4
+   * opt-in gate: DEFAULT FALSE, so auto-fire is INERT in production until a user deliberately turns
+   * it on (the Settings → Skills toggle is S13c). With this off, `resolveAutoFireSkill` is a no-op,
+   * so S13b changes nothing observable. Even when on, only enabled + app + `triggers.autoFire` skills
+   * are candidates and only when no skill is otherwise set (D5).
+   */
+  skillsAutoFireEnabled: boolean
 }
 
 /** Appearance setting (see `AppSettings.theme`). */
@@ -251,7 +261,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   autoStartActiveModel: true,
   checksumCache: {},
   theme: 'system',
-  uiLanguage: 'system'
+  uiLanguage: 'system',
+  // Auto-fire is OPT-IN: off by default so S13b ships inert (the toggle to flip it is S13c).
+  skillsAutoFireEnabled: false
 }
 
 // ---- GPU probe ----
@@ -502,6 +514,14 @@ export interface Conversation {
    * Persisted in `conversations.scope_v2_json`.
    */
   scope: DocumentScope | null
+  /**
+   * The sticky default skill for the next turn (skills plan §10.1) — the composer pre-fills it;
+   * any turn can override or clear it, and past turns keep their own `messages.skill_id`. Null when
+   * none. Persisted in `conversations.active_skill_id` (no FK — a deleted skill reads back as a
+   * stale id, which the resolver skips gracefully). Optional so existing conversation fixtures
+   * stay valid; `rowToConversation` always populates it (null when none).
+   */
+  activeSkillId?: string | null
 }
 
 export interface Citation {
@@ -524,6 +544,22 @@ export interface Message {
   createdAt: string
   tokenCount?: number | null
   citations?: Citation[]
+  /**
+   * The skill that shaped this assistant turn (skills plan §8.2/DS16) — the install_id stamped at
+   * generation. RESOLVED at read time: a DELETED skill (no matching row) reads back NULL (no FK —
+   * audit C3), so the per-message glyph never points at a vanished skill. Null on user turns and
+   * on turns produced without a skill.
+   */
+  skillId?: string | null
+  /** The shaping skill's title, for the per-message glyph label (null when none / deleted). */
+  skillTitle?: string | null
+  /**
+   * S13c — true only when the app AUTO-FIRED `skillId` (the user set no skill; the resolver filled the
+   * gap). Powers the per-turn "answer without it" undo, shown ONLY on an auto-fired turn. False on an
+   * explicit pick, a no-skill turn, or a turn whose stamped skill was later deleted (glyph + undo drop
+   * together). A boolean — never content.
+   */
+  autoFired?: boolean
 }
 
 /**
@@ -539,6 +575,12 @@ export interface ChatOptions {
   useDocuments?: boolean
   /** Re-answer the last user turn: drop the previous assistant reply, then stream a fresh one. */
   regenerate?: boolean
+  /**
+   * The skill for THIS turn (skills plan §10.1): `undefined` ⇒ use the conversation's sticky
+   * default (`active_skill_id`); `null`/`''` ⇒ no skill this turn; a string ⇒ that skill. A
+   * disabled/missing skill resolves to none (graceful — §10.3). Carried on BOTH chat channels.
+   */
+  skillInstallId?: string | null
 }
 
 // ---- Conversation search ----
@@ -1241,6 +1283,311 @@ export interface BenchmarkResult {
  * workspaces) and is never uploaded anywhere. Privacy rule (hard): events carry ids,
  * model ids, filenames, and counts — NEVER chat content, document text, or passwords.
  */
+/**
+ * One installed skill over the IPC surface (skills plan §16) — a decoded `skills` row projected
+ * for the renderer. NEW shared contract in S4; S5 (Settings list), S6 (composer picker) and S8
+ * (selector) all consume it. STRUCTURAL fields only — `description`/`permissionSummary` come from
+ * the skill's own (clamped) manifest, never from injected body text.
+ */
+export interface SkillInfo {
+  /** Deterministic natural key `"<source>:<id>"` (the `skills` PK). */
+  installId: string
+  /** Declared skill id (kebab; non-unique across sources — DS12). */
+  id: string
+  title: string
+  description: string
+  /**
+   * Optional per-locale DISPLAY overrides for `title`/`description` (additive; keyed by a short locale
+   * tag e.g. 'de'). The renderer shows the running UI language's entry, falling back to
+   * `title`/`description`. Display only — never the prompt/body language (D-L6).
+   */
+  localized?: Record<string, { title?: string; description?: string }>
+  version: string
+  kind: SkillKind
+  author: string
+  language: string
+  /** Source folder = assigned trust ('app' read-only | 'user' read-write). */
+  source: SkillTrustedLevel
+  trustedLevel: SkillTrustedLevel
+  enabled: boolean
+  /** DS7: a view-imported user skill carries a persistent "review what it can do" warning
+   *  (warningAck=false) until acknowledged. App skills are pre-acknowledged. */
+  warningAck: boolean
+  /** True once the on-disk folder has vanished (mark-unavailable; the row is kept). */
+  unavailable: boolean
+  /**
+   * True when the skill declares a `compatibility.minAppVersion` NEWER than this app (§6.5): it is
+   * listed but cannot be enabled/suggested/run until the app is updated. Optional/additive.
+   */
+  incompatible?: boolean
+  /** The declared `compatibility.minAppVersion`, when present — shown alongside `incompatible`. */
+  minAppVersion?: string | null
+  /** Effective (already clamped) permissions (DS6). */
+  permissions: SkillPermissions
+  /** The calm human permission summary (structural; §9.2/§15). */
+  permissionSummary: string
+  /** True when another installed skill declares the same `id` (DS12 coexist-and-warn). */
+  duplicateId: boolean
+  /**
+   * True when the skill RESERVES Tier-2 tools (a non-empty `allowedTools`). In v1 the tools do
+   * not execute (the list is ignored with a note, §6.5), but the flag lets the detail view show
+   * the honest "adds guidance only; tools arrive with Tier-2" note for a tool-reserved
+   * instruction skill (the bank-statement stub — skills plan §13/§22-D1). Optional/additive.
+   */
+  reservesTools?: boolean
+  installedAt: string
+  updatedAt: string
+}
+
+/**
+ * The result of validating an import source (a `.skill.zip` or a folder) FULLY in a transient
+ * staging dir BEFORE the user confirms (OQ-2, lean-yes; skills plan §16). NOTHING is persisted to
+ * produce this. On `ok: false`, `errors` carries friendly, STRUCTURAL-ONLY reasons (§22-M1: never
+ * the attacker's member paths or content). NEW shared contract in S4; S5's import drawer renders it.
+ */
+export interface SkillPreview {
+  ok: boolean
+  /** 'zip' (a `.skill.zip`) or 'folder' (a picked directory). */
+  sourceKind: 'zip' | 'folder'
+  // ---- manifest summary (present only when ok) ----
+  id?: string
+  title?: string
+  description?: string
+  version?: string
+  kind?: SkillKind
+  author?: string
+  permissions?: SkillPermissions
+  /** The calm human permission summary (always present — the ceiling default when not ok). */
+  permissionSummary: string
+  // ---- lifecycle flags (present when ok) ----
+  /** A user skill with this `id` is already installed (replace/upgrade/downgrade applies). */
+  collision?: boolean
+  /** Trust of the colliding installed skill, if any (an app skill shares this id). */
+  collisionWith?: SkillTrustedLevel | null
+  /** The currently-installed user-skill version for this id, if any. */
+  installedVersion?: string | null
+  /** Offered version is higher than the installed one. */
+  isUpgrade?: boolean
+  /** Offered version equals the installed one (a refresh/replace). */
+  isReplace?: boolean
+  /** Offered version is lower than the installed one. */
+  isDowngrade?: boolean
+  /** A downgrade the importer will REFUSE because developer mode is off (DS15). */
+  downgradeBlocked?: boolean
+  /** Friendly, structural-only validation problems (empty when ok). */
+  errors: string[]
+  /**
+   * Stable, content-free reason CODES paralleling `errors` (e.g. 'pathTraversal' | 'tooLarge' |
+   * 'invalidManifest'), which the renderer maps to localized copy so a German user never sees the
+   * English structural string. Same length/order as `errors`; an unrecognized message → 'unknown'.
+   */
+  errorCodes?: string[]
+  /** Non-fatal advisories (permission clamps, ignored fields). */
+  notes: string[]
+}
+
+/**
+ * A deterministic skill suggestion for the composer picker (skills plan §10.2 #2/DS14, S8). An
+ * OFFER, never auto-applied: the picker pins it on top and the user taps to accept. STRUCTURAL only
+ * (id + title) — never the matched keyword, the question, or any document text (§22-M1). Produced by
+ * `suggestSkills(conversationId, question?)`; v1 returns at most one (the array keeps it future-proof).
+ */
+export interface SkillSuggestion {
+  installId: string
+  title: string
+}
+
+// ---- Tier-2 skill tools (skills plan §12 — DESIGNED here in S10; the bank-statement tools land
+// in S11). A tool is an APP-AUTHORED, typed, app-orchestrated capability a skill may *declare* (via
+// `allowedTools`) but can never register or alter (§4/DS8). The model never executes a tool: the
+// app validates input → runs → validates output → the model only *explains* the structured result
+// (DS4/§2 — no model-native `tool_calls`). These types are net-new in S10 and additive to the S2
+// type spine (flagged in the S10 handoff). ----
+
+/**
+ * A tiny subset of JSON Schema (draft-07-ish) — enough to express AND validate a tool's I/O
+ * contract (skills plan §12.1). Hand-rolled rather than pulling a validator dependency (CLAUDE.md
+ * §0: no new native deps, offline). The gate validates input against `inputSchema` BEFORE `run`
+ * and output against `outputSchema` AFTER it.
+ */
+export interface JsonSchema {
+  type?: 'object' | 'array' | 'string' | 'number' | 'integer' | 'boolean' | 'null'
+  properties?: Record<string, JsonSchema>
+  required?: string[]
+  /** When `false`, properties not named in `properties` are rejected (the posture we ship). */
+  additionalProperties?: boolean
+  items?: JsonSchema
+  enum?: unknown[]
+  minLength?: number
+  maxLength?: number
+  minimum?: number
+  maximum?: number
+  minItems?: number
+  maxItems?: number
+  /** Standard JSON-Schema "contains" semantics (anchor with `^…$` for a full match). */
+  pattern?: string
+  description?: string
+}
+
+/**
+ * Enumerated capability tokens a tool may require (skills plan §12.2). There is DELIBERATELY no
+ * `read_arbitrary_fs`, `network`, or `raw_sql` token — those capabilities are unreachable by
+ * construction (the `SkillToolContext` carries no such handle), not merely undeclared (§14). A
+ * token implying a WRITE/EXPORT/destructive action forces a user-confirmation gate
+ * (`toolRequiresConfirmation`); `read-selected-docs` is read-only and runs without a per-call prompt.
+ */
+export type ToolPermission = 'read-selected-docs' | 'write-generated-doc' | 'export-file'
+
+/**
+ * The structured result of a tool run (skills plan §12.1). On success the `output` has ALREADY been
+ * validated against the tool's `outputSchema` by the gate — no half-trusted shape reaches the model.
+ * On failure the `error` is FRIENDLY and content-free (the technical reason goes to the local log
+ * only — §12.2); a failed run never persists a partial result.
+ */
+export type ToolResult =
+  | { ok: true; output: unknown; resultRef?: string }
+  | { ok: false; error: string }
+
+/**
+ * The ids/counts-only audit sink handed to a tool (skills plan §12.1/§22-M1). Narrower than the
+ * app's `AuditRecorder` — there is no free-text message argument, so a tool (or the gate) can only
+ * ever record `{skillId, toolName, documentCount}`, never inputs, outputs, or content.
+ */
+export type SkillToolAudit = (type: AuditEventType, meta?: Record<string, unknown>) => void
+
+/**
+ * One page-addressable chunk of a selected document's stored text (skills plan §12 / S11a). It is
+ * the unit a tool reads through `SkillToolContext.readDocumentChunks` — chunk `text` plus its
+ * `page` provenance (fills `transaction.sourcePage`) and `index` (stable order). The `text` is
+ * CONTENT: it must never reach the audit log or the renderer un-summarized (§22-M1).
+ */
+export interface DocumentChunkRead {
+  /** The chunk's stored text (content). */
+  text: string
+  /** 1-based source page if known (the `chunks.page_number` provenance), else null. */
+  page: number | null
+  /** The chunk's `chunk_index` — stable read order within the document. */
+  index: number
+}
+
+/**
+ * The NARROW, app-built context a tool runs inside (skills plan §12.1/§14). It is the WHOLE of a
+ * tool's reach: a FIXED, read-only `documentIds` scope it cannot widen (the gate hands it a frozen
+ * copy), a scope-bounded content read, an `AbortSignal`, optional progress, and the ids/counts-only
+ * audit sink. There is DELIBERATELY no `Db`/SQL handle, no filesystem handle, and no network handle —
+ * confused-deputy and model-over-reach containment is structural (§14), not policy.
+ */
+export interface SkillToolContext {
+  /** The selected-only document scope (ids only). Frozen by the gate; a tool cannot widen it. */
+  documentIds: readonly string[]
+  /**
+   * The ONLY content reach a tool has (skills plan §12 / S11a): the page-addressable chunks of a
+   * document IN the frozen `documentIds` scope. An id outside the scope is refused (returns `[]`) —
+   * the read can never widen scope and is NOT a general `Db`/SQL/FS handle (§14). Supplied by the
+   * app's orchestration seam as a closure over a narrow per-document SELECT.
+   */
+  readDocumentChunks(documentId: string): DocumentChunkRead[]
+  /** Cooperative cancellation (the chat/doc-task `stopGeneration`/`cancelDocTask` precedent). */
+  signal: AbortSignal
+  /** Optional progress, merged into the polling status by the app (no new event channel). */
+  onProgress?: (p: { done: number; total: number }) => void
+  /** ids/counts-only audit sink — never inputs, outputs, or content. */
+  audit: SkillToolAudit
+}
+
+/**
+ * An app-owned tool descriptor (skills plan §12.1). Lives ONLY in the app's static
+ * `services/skills/tool-registry.ts` map — a skill references a tool BY NAME via `allowedTools` and
+ * can never add or alter one. The gate validates `input` against `inputSchema` before `run`, and the
+ * returned `output` against `outputSchema` (if present) after.
+ */
+export interface SkillTool {
+  /** Stable id referenced by SKILL.md `allowedTools`. */
+  name: string
+  /** Human- + model-facing summary — promises nothing beyond what the gate actually enforces. */
+  description: string
+  inputSchema: JsonSchema
+  outputSchema?: JsonSchema
+  /** Capability tokens (§12.2). A write/export/destructive token ⇒ a user-confirmation gate. */
+  permissions: ToolPermission[]
+  run(input: unknown, ctx: SkillToolContext): Promise<ToolResult>
+}
+
+/**
+ * A wired, runnable tool offered to the renderer for the active skill (skills plan §12.2/§16, S11b).
+ * The renderer renders a calm "run" affordance per descriptor and never needs to know tool names or
+ * bank specifics — main resolves WHICH tools apply (the run dispatch ∩ what the skill reserves) and
+ * whether each needs a confirm modal. Carries NO content (no document ids, no figures).
+ */
+export interface RunnableTool {
+  /** The registry tool name (e.g. `extract_transactions`). */
+  name: string
+  /** True for a write/export tool ⇒ the renderer raises the confirm modal before starting (S11c). */
+  requiresConfirmation: boolean
+}
+
+/**
+ * Start an app-orchestrated tool run from a USER action (skills plan §6/§16, DS4, S11b). The model
+ * never emits this — a transcript/composer affordance does. The document scope is resolved MAIN-side
+ * from `conversationId` (§22-C4); the renderer never assembles document ids.
+ */
+export interface StartSkillRunRequest {
+  /** The active skill's install_id (`<source>:<id>`). */
+  skillInstallId: string
+  /** The registry tool to run (must be wired in the run dispatch). */
+  toolName: string
+  /** The conversation whose scope provides the target document(s). */
+  conversationId: string
+  /** True once the user confirmed a write/export tool; read-only tools ignore it. */
+  confirmed?: boolean
+}
+
+/**
+ * The result of asking to start a run (skills plan §16, S11b). `needsConfirmation` means a
+ * write/export tool was requested without `confirmed: true` — the renderer raises the confirm modal
+ * and retries. Both `error` and the run are FRIENDLY + content-free (ids/counts only).
+ */
+export type StartSkillRunResult =
+  | { started: true; run: SkillRunState }
+  | { started: false; needsConfirmation: true }
+  | { started: false; error: string }
+
+/**
+ * The ids/counts-only snapshot of one app-orchestrated tool run, polled by the renderer's busy row
+ * (skills plan §12.2, S11b — the doc-task polling-status precedent, no new event channel). It is the
+ * WHOLE of what the renderer learns about a run: state + progress + counts, NEVER the extracted rows
+ * (those stay content-class in the workspace DB — §9.5). `error` is friendly + content-free.
+ */
+export interface SkillRunState {
+  /** An opaque poll/cancel handle (NOT the `skill_runs.id`, which the renderer never sees). */
+  runHandle: string
+  skillInstallId: string
+  toolName: string
+  /** How many documents the run processes (the busy row's "on N documents"). */
+  documentCount: number
+  state: 'running' | 'done' | 'failed' | 'cancelled'
+  /** Merged from the tool's `onProgress` (no new event channel). */
+  progress: { done: number; total: number }
+  /** A COUNT the run touched (rows extracted/categorized/summarized/saved, or rows not reconciling). */
+  transactionCount?: number
+  /**
+   * A small, content-free outcome discriminator for tools whose result is more than a count (e.g.
+   * `validate_statement_balances` → 'reconciled' | 'unreconciled' | 'unchecked'). The renderer maps
+   * it to copy; it is NEVER a figure or row content. Unset for count-only outcomes.
+   */
+  resultKind?: string
+  /**
+   * A content-free reason CODE for a failure (e.g. 'unavailable' | 'needsExtraction' |
+   * 'persistFailed' | 'exportWriteFailed'), which the renderer maps to localized copy — so a
+   * German user never sees an English failure string (the seam/controller stay i18n-free). Unset
+   * for a generic failure (the renderer falls back to the localized generic message).
+   */
+  errorCode?: string
+  /** Friendly, content-free reason on failure (English; kept for logging/back-compat — the
+   *  renderer prefers `errorCode`). */
+  error?: string
+}
+
 export type AuditEventType =
   | 'runtime_started'
   | 'runtime_stopped'
@@ -1276,6 +1623,19 @@ export type AuditEventType =
   | 'documents_added_to_collection'
   | 'documents_removed_from_collection'
   | 'document_lifecycle_changed'
+  // Skills (skills plan §16/§22-M1): lifecycle events. Metadata is IDS/COUNTS ONLY — the
+  // skill's declared id + source/trust + (for import) the file count — NEVER the package
+  // content, the SKILL.md body, or member file names that could carry user data.
+  | 'skill_imported'
+  | 'skill_deleted'
+  | 'skill_enabled'
+  | 'skill_disabled'
+  // Tier-2 tool runs (skills plan §12.2/§22-M1, S10): brackets one app-orchestrated tool run.
+  // Metadata is { skillId, toolName, documentCount } ONLY — NEVER the tool's input, output, or any
+  // document/chat content (the `SkillToolContext.audit` sink cannot carry a free-text message).
+  | 'skill_run_started'
+  | 'skill_run_done'
+  | 'skill_run_failed'
   | 'workspace_created'
   | 'workspace_unlocked'
   | 'workspace_locked'

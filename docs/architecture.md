@@ -61,9 +61,17 @@ a future move to Tauri/Rust is a localized swap.
 package. One SQLite DB per workspace (`workspace/hilbertraum.sqlite`) holds the original spec §8 tables
 (settings, conversations, messages, documents, chunks, embeddings, runtime_events) **plus** additive
 tables for document organization (`collections`, `document_collections`, `conversation_documents`),
-whole-document analysis (`tree_nodes`, `tree_edges`, `summary_cache`, `extraction_records`), and the
+whole-document analysis (`tree_nodes`, `tree_edges`, `summary_cache`, `extraction_records`), Skills
+(`skills`, plus the nullable `conversations.active_skill_id` + `messages.skill_id` refs), and the
 FTS5 virtual tables (`chunks_fts`, `messages_fts`). The authoritative schema is `services/db.ts`. In
 encrypted mode (Phase 9) the whole DB file is encrypted at rest.
+
+**Skills** (`skills` table + the nullable `conversations.active_skill_id` / `messages.skill_id` refs)
+are a derived index over **plain folders outside the encrypted workspace** (`app-skills/` read-only +
+`user-skills/` read-write); the registry, import/lifecycle, prompt integration, the Tier-2 tool gate,
+the bank-statement tools, and the run UI are consolidated in the **"Skills — design record (Phases
+S2–S12)"** below (security model in [`security-model.md`](security-model.md), layout in
+[`drive-layout.md`](drive-layout.md)).
 
 ## Models & runtime (Phase 2)
 - **Manifests** are local YAML under `model-manifests/` (committed; weights are not). The schema +
@@ -1273,6 +1281,10 @@ conversation_documents(conversation_id, document_id, added_at)    -- C3 temp-att
 | `docs:import` (extend) | `(paths[], options?: ImportOptions)` — `destination` persisted at queue time (M1) | `registerDocsIpc.ts` |
 | `docs:list` (extend) | `filter?: { collectionId?, lifecycle?, smart?: SmartListView }` — `smart` shares the pure `matchesSmartView` with the renderer rail | `registerDocsIpc.ts` |
 | `chat:setScope` / `setCollection` / `listAttachments` | composite scope persist · creation anchor · the `conversation_documents` attachments | `registerChatIpc.ts` |
+| `skills:list/get` | `() ⇒ SkillInfo[]` · `(installId) ⇒ SkillInfo \| null` (first read reconciles disk→DB) | `registerSkillsIpc.ts` |
+| `skills:pick/preview/import` | OS picker ⇒ path · `(source) ⇒ SkillPreview` (no write) · `(source) ⇒ SkillInfo` (validate→place→DS7) | `registerSkillsIpc.ts` |
+| `skills:export/delete` | save dialog ⇒ `.skill.zip` (package tree only) · ref-clear sweep + rm folder (app skills refuse) | `registerSkillsIpc.ts` |
+| `skills:enable/disable/acknowledgeWarning` | `(installId) ⇒ SkillInfo`; enable enforces one-active-per-id (DS12) | `registerSkillsIpc.ts` |
 
 Renderer-untrusted inputs are sanitized at the boundary (`sanitizeDestination` ⇒ Library fallback;
 `safeIdArray`). Every channel mirrors 1:1 in `preload/index.ts`. **Smart views** (§7.6) are query-time
@@ -1321,6 +1333,558 @@ seeds a project-name + a folder-label (suggestion-reason) sentinel and proves ne
 
 **History:** Phases A–F = commits `5c70021`, `7bcd4a1`, `39531e8`, `e0bff6b`, `499c3ab`, `477f803`
 (2026-06-14); the full original plan: `git show 477f803:docs/document-organization-plan.md`.
+
+
+## Skills — design record (Phases S2–S13, §1–§18)
+
+A **Skill** is a self-contained, local task package (instructions + optional examples/schemas) the
+user selects to shape one turn. Two tiers shipped: **Tier 1 — instruction-only** (the body is injected
+as fenced reference text) and **Tier 2 — app-tools** (the bundled bank-statement skill runs typed,
+app-orchestrated tools through a validate→run→validate gate). Tier 3 (sandboxed scripts) is
+explicitly out of v1. This record consolidates the two working-paper plans (`docs/skills-plan.md`
+§1–§19 + `docs/skills-s11-plan.md`, both deleted at S12 — full text in git history); the **security**
+model lives in [`security-model.md`](security-model.md) ("Skill-import defences", "App-skill
+provisioning…", "Skill tool ceiling (Tier-2)"), the **drive layout** in
+[`drive-layout.md`](drive-layout.md), and the accepted **residuals** in
+[`known-limitations.md`](known-limitations.md).
+
+### §1 Decisions (the ones that bind as built)
+
+- **DS1/DS2** — files on disk are the source of truth; the `skills` table is a derived index/state
+  cache. `SKILL.md` (YAML frontmatter + Markdown body) is canonical; `manifest.json` is an optional,
+  non-authoritative cache (SKILL.md wins). The shared parser is `shared/skill-manifest.ts`.
+- **DS3/DS19/DS20** — skills are **non-secret task knowledge**, stored **unencrypted as plain folders
+  outside `workspace/`**: `app-skills/` (read-only) + `user-skills/` (read-write). A folder dropped
+  into `user-skills/` installs **disabled** (DS19); secret material belongs in an encrypted document,
+  never a skill (DS20). _(The original encrypted-blob model — DS11 — was revoked.)_
+- **DS4** — selection is deterministic/manual (picker + Settings + a one-tap suggestion); tools are
+  **app-orchestrated** — the model never parses `tool_calls`; it only *explains* a validated result.
+- **DS5** — the skill body is injected as a fenced **data** block with fixed precedence below the base
+  preamble + grounding rules + a guard line; **one skill per turn**.
+- **DS6/DS8** — permissions are app-computed (restrict-only, clamp-down); in v1 `permissions.*` is a
+  display string (nothing executes), real enforcement is the Tier-2 ceiling. A skill can never register
+  or self-grant a tool.
+- **DS7/DS12/DS15** — a deliberate view-import installs **enabled-with-warning**; duplicate ids coexist
+  with **one active per id** by trust-then-version-then-recency precedence; a downgrade is refused
+  outside developer mode (a footgun guard — `version` is unsigned).
+- **DS16/DS18** — a skill applies to **one turn** (`messages.skill_id`) with a sticky
+  per-conversation default (`conversations.active_skill_id`); the per-message glyph marks the answer it
+  shaped. Auto-fire is deferred to **S13**, gated on an evaluation harness.
+- **DS17** — app skills are committed to the repo (`app-skills/`, text only) and copied by
+  `prepare-drive` — never network-fetched. **Three** bundled app skills now ship:
+  **`bank-statement`** is the first **Tier-2** reference (`kind: tool`, app-orchestrated tools through
+  the §7 gate), **`meeting-protocol`** is the **Tier-1** reference (`kind: instruction`,
+  `allowedTools` empty / `reservesTools` false — it only injects fenced guidance), and **`invoice`** is
+  the **second Tier-2** reference (`kind: tool`), proving the gate generalizes to a second content
+  class. meeting-protocol and invoice are both **bilingual-trigger** references: their
+  `triggers.keywords` carry German and English terms, with umlaut/ending singular-plural pairs listed
+  separately (`beschluss`/`beschlüsse`, `rechnung`/`rechnungen`) because §6 matching is case-insensitive
+  *substring* (`question.includes`), so an ending/umlaut breaks the substring and each form must appear
+  in its own right (and short ambiguous tokens — `vat`/`ust`/`net`/`gross` — are deliberately avoided).
+
+### §2 Hard rules (these bound every choice)
+
+Additive-only schema (new tables full SQL, new columns nullable; DS10). **No** change to CSP, the
+deny-by-default permission handler, the offline guard, the encryption posture, or packaging (§14 —
+the loader is pure main-side file I/O + DB; no new renderer capability, no new network path). No new
+native dependency, fully offline (CLAUDE.md §0). Audit + logs carry **ids/counts only**; content
+(skill bodies, the draft question, extracted figures) is never logged/audited (the content-class rule,
+proven by the consolidated sentinel guard, §12).
+
+### §3 Storage & registry (S3)
+
+Skill packages live as **plain folders OUTSIDE the encrypted workspace** (`<root>/app-skills/`
+read-only + `<root>/user-skills/` read-write). **Disk is the source of truth**; the `skills` table is a
+pure derived index + state cache (`services/skills/registry.ts`), reconciled from those folders the
+same way `services/models.ts` discovers manifests and doc-org `collections.ts` reconciles a DB index.
+Reconcile **inserts** new folders (app → enabled; a user drop-in → DISABLED, DS19), **updates** changed
+ones while preserving user state (enabled / `warning_ack`), and **marks unavailable** (never deletes) a
+row whose folder vanished — so a transiently-unmounted drive keeps the user's choices and the
+conversation/message references. A DB rebuild re-derives every row from disk (no orphan). The PK
+`install_id` is the deterministic natural key `"<source>:<id>"` (stable across rebuilds, so the FK-less
+`conversations`/`messages` refs keep resolving); there is deliberately **no FK into `skills`** (refs are
+cleared by an app-level sweep on delete, §4). `services/skills/loader.ts` has one mode — read the
+folder — for both sources (no decrypt/transient/shred).
+
+### §4 Import / export / delete lifecycle (S4)
+
+`services/skills/installer.ts` owns the lifecycle behind IPC. Import **validates** a `.skill.zip` or
+folder with a net-new dependency-free **member-by-member safe extractor** (built-in `node:zlib` + a
+central-directory parser; full defence matrix in [`security-model.md`](security-model.md)), stages the
+whole tree, then **places it as plain files at `user-skills/<id>/`** (folder name == manifest id) and
+reconciles the row to **enabled-with-warning** (DS7) — unless an enabled app skill of the same id is
+already effective, in which case the import **coexists disabled** (trust-first precedence, DS12). A
+lower version is refused unless developer mode (DS15). **Delete** is an app-level **ref-clear sweep**:
+in one transaction it nulls `conversations.active_skill_id` + `messages.skill_id` pointing at the
+install id and deletes the row (no FK to cascade), then removes the folder; app skills refuse. **Enable**
+enforces **one-active-per-id**. The registry handle reconciles disk→DB **once per session on the first
+read after unlock** (a `reconciledThisSession` guard, not an unlock hook); the importer/deleter call
+`reconcile()` explicitly after mutating disk. Audit events
+(`skill_imported`/`deleted`/`enabled`/`disabled`) carry **ids/counts only**.
+
+### §5 Selection & prompt integration (S6+S7)
+
+A single shared **`resolveTurnSkill`** (`services/skills/turn.ts`) feeds **both** chat channels —
+`registerChatIpc` (`sendChatMessage`) **and** `registerRagIpc` (`askDocuments` gained a skill arg,
+§22-A1) — so a documents conversation gets the skill too; it reads the per-turn override or the sticky
+default and **skips a disabled/deleted/unavailable skill gracefully** (resolves to none, never an
+error). `services/skills/prompt.ts` builds the **fenced skill block** — a delimited DATA block
+(BEGIN/END framing + the guard line `SKILL_GUARD_LINE` as the last app-authored line), never a system
+rule (§22-H2). Placement: in **plain chat** the fence is bracketed inside the system message after
+`BASE_SYSTEM_PROMPT` (`buildSystemPrompt(skillFence?)`); in **grounded answers** it rides the **user
+turn with the excerpts** (`buildGroundedPrompt(question, chunks, skillFence?)`), where the
+grounding/citation rules keep precedence. The fence is **pre-sized in `prompt.ts`** against the base
+preamble + final turn (+ grounded excerpts) so it can never starve them — `fitMessagesToContext` only
+drops older history (§22-A6); over budget it reduces by **whole paragraphs**, and if even the minimum
+won't fit it is **omitted entirely** rather than truncated mid-instruction. The assistant row is
+stamped with the install id **only when the fence was actually placed** (§22-A5); a no-context answer
+stamps NULL, and `listMessages` LEFT JOINs `skills` so a **deleted** skill resolves `messages.skill_id`
+back to NULL. The renderer surfaces a quiet composer **"Skill: …" picker** + a per-message **skill
+glyph** on the answer it shaped (icon + word, never colour-only).
+
+### §6 Suggestion heuristic (S8)
+
+`services/skills/selector.ts` scores each **enabled** skill's cached `triggers` against the turn —
+keyword hits in the draft question (the strong signal) + the in-scope documents' MIME types / filename
+globs (supporting) — fully **deterministic, no model, no network**, with a fixed threshold (a lone
+document signal never fires). `services/skills/suggest.ts` resolves the conversation's scope
+**main-side from the conversationId** (§22-C4), gathers the signals, and returns at most **one** offer
+over `suggestSkills(conversationId, question?)`. The question is content: scored but **never logged**.
+The offer is surfaced **only inside the composer picker** (no canvas chip, no settings key) and is
+**inert until tapped**. **Auto-fire (S13)** is the opt-in extension of this same scorer that *does*
+apply a skill without a tap, behind a separate higher threshold + an opt-in + a per-turn undo — see
+**§18**.
+
+### §7 Tier-2 tool gate (S10)
+
+`services/skills/tool-registry.ts` is the **static, app-owned** map of `SkillTool`s. A skill never
+registers a tool: it only *declares* names via `allowedTools`, and the effective set is the three-way
+intersection `declared ∩ registry ∩ userGrant` (`resolveEffectiveTools`). Runs are **app-orchestrated**
+(DS4): the app calls `runSkillTool(tool, {skillId, input, ctx, confirmed})` directly. The gate's fixed
+order: (1) refuse if the `AbortSignal` is already aborted; (2) **validate input** against `inputSchema`
+(a hand-rolled JSON-Schema subset — no validator dep) and refuse **without calling the tool** on a bad
+shape; (3) refuse a write/export tool lacking `confirmed:true`; (4) run inside a narrow
+`SkillToolContext` whose `documentIds` the gate hands over **frozen** (un-widenable scope), with no
+`Db`/SQL/FS/net handle; (5) **validate output** against `outputSchema` — a wrong shape **fails the run**;
+(6) bracket with ids/counts-only audit (`skill_run_started`/`done`/`failed` = `{skillId, toolName,
+documentCount}`). S10 shipped the gate with one harmless reference tool (`count_selected_documents`).
+The full ceiling rationale is in [`security-model.md`](security-model.md) "Skill tool ceiling (Tier-2)".
+
+### §8 Bank-statement tools + the run seam (S11)
+
+S11 wires the first Tier-2 *feature*. The bank specifics live in
+`services/skills/tools/bank-statement.ts` (deterministic, offline parsers — kept out of the generic
+registry, §13); five tools are registered: `extract_transactions` (read-only; reads a statement's
+**page-addressable chunks** through the **only content reach a tool has**,
+`SkillToolContext.readDocumentChunks` — scope-bounded, still no raw handle),
+`validate_statement_balances` (printed vs computed running balance → a per-row `reconciled` flag, honest
+ok/mismatch/unknown), `categorize_transactions` (deterministic rules → `category_id`, seeding the
+built-in categories/rules), `summarize_cashflow` (read-only inflow/outflow/net totals — figures are
+content, not surfaced in v1), and `export_transactions_csv` (confirm-gated `export-file`). The
+**app-orchestrated run seam** `services/skills/run.ts` is what a user action triggers (DS4): it records a
+`skill_runs` lifecycle row (ids/refs only), builds the narrow context, runs the tool through the gate,
+and persists atomically (ROLLBACK ⇒ no partial rows). The four downstream tools operate on the
+**already-extracted** rows — the seam loads the **latest statement** for the in-scope document and passes
+them as **structured input**, so the tools stay pure and the §7 ceiling is unchanged (no new accessor).
+**The CSV export is the first FS-write from a skill tool:** the pure tool only *produces* the CSV string;
+the seam writes it main-side to a **user-chosen path** via a save dialog, gated on the `export-file`
+confirm — the path + content never touch any log/audit (only "saved N rows" is surfaced), and free-text
+fields are neutralized against spreadsheet formula-injection (S12 fix). The bank `SKILL.md` is
+`kind:'tool'`, which makes its declared `allowedTools` effective (the SL-1 parser path keeps the list only
+for `kind:'tool'`) and uses the reconcile/validate body.
+
+**The invoice skill is the SECOND Tier-2 reference** (`app-skills/invoice/`, `id:'invoice'`), proving the
+gate generalizes to a second content-class domain with strong EN+DE coverage. It mirrors bank-statement
+layer-for-layer: three tools in `services/skills/tools/invoice.ts` — `extract_invoice` (read-only; the
+same `readDocumentChunks` reach over the frozen scope), `validate_invoice_totals` (read-only; deterministic
+checks within a half-cent epsilon — line items → net, net + tax → gross, tax vs. rate — each
+`ok`/`mismatch`/`unknown`, an honest `reconciled` verdict + a `resultKind` discriminator like
+`validate_statement_balances`), and `export_invoice_csv` (confirm-gated `export-file`, the line-items CSV).
+Parsing is DETERMINISTIC + OFFLINE and CONSERVATIVE (invoice layouts vary — a known limitation that improves
+later): header fields and totals are read from **labeled lines only**, line items split a description from a
+trailing quantity + trailing unit-price/line-total money tokens, and anything that cannot be confidently
+parsed is **dropped** (header fields are individually optional, never guessed). The deterministic money/date
+primitives (`parseAmount`/`parseDate`/`detectCurrency`) and the CSV formula-injection neutralization
+(`csvField`) are now **shared** by both domains in `services/skills/tools/money.ts` — one parser per locale
+rule, one audited export boundary. The run seam is the sibling `services/skills/invoice-run.ts` (it reuses
+`run.ts`'s `buildReadDocumentChunks`/`finishRun`): same `skill_runs` lifecycle, same no-partial-persist
+(BEGIN…COMMIT/ROLLBACK), same B2/B4 guards, latest-invoice-for-document downstream target, structured input
+(no new `SkillToolContext` accessor — the §14 ceiling is unchanged). The dispatch (`tool-runs.ts`) wires the
+three names; the controller / IPC / renderer stay domain-free (the renderer adds only the three tool labels
++ the invoice `resultKind` copy). Content-class isolation holds: the new `invoices` / `invoice_line_items`
+tables + `skill_runs` never appear in any log/audit/export (audit stays `{skillId, toolName, documentCount}`).
+
+**The document-redaction skill is the THIRD Tier-2 reference** (`app-skills/document-redaction/`,
+`id:'document-redaction'`), and the **read-transform-export** shape the bank/invoice domains don't exercise:
+a single `redact_document` tool that reads the **whole** selected document (the same `readDocumentChunks`
+reach over the frozen scope), masks the personal data it can detect, and produces the redacted text +
+per-category counts — which the seam writes to a **user-chosen file** (the same confirm-gated `export-file`
+boundary as the CSVs). It has **no content-class data table and no `BEGIN…COMMIT`**: the deliverable is a
+file, not rows, so `services/skills/run.ts`'s `runDocumentRedaction` records only the `skill_runs` lifecycle
+row (started → terminal; `result_ref` stays **NULL**) and surfaces only `totalRedactions` (a count) + a
+content-free `resultKind` (`'redacted'` when something was masked, else `'clean'`, handled in the renderer
+like `validate`'s discriminator). Detection (`services/skills/tools/redaction.ts`) is **deterministic,
+offline, regex-only** — e-mail, URL, IBAN, date (validated via the shared `parseDate`), phone — applied in a
+**fixed order so masks never overlap** (`email → url → iban → date → phone`; e.g. dates are masked before
+phones so a dotted date can't be eaten by a 0-leading phone shape), each match replaced by a fixed category
+token so redaction is **idempotent**. It is the privacy-aligned skill and the **strongest** content boundary
+of the three: the detected values never reach any log/audit/`skill_runs` row, and the redacted text lands
+**only** in the user-chosen file. Honesty posture (recorded in [`known-limitations.md`](known-limitations.md)):
+regex redaction is **best-effort, not a guarantee** — there is no ML and no name detection, so it
+deliberately misses anything without a recognisable pattern and prefers a false negative over corrupting
+text; the SKILL.md body + the "done" copy tell the user to review the copy before sharing, and the app never
+implies "fully anonymized" or compliance. The dispatch (`tool-runs.ts`) wires the one name (null without the
+MAIN-side `saveTextFile`); the controller / IPC / renderer stay domain-free (the renderer adds only the tool
+label + the redaction `resultKind` copy).
+
+### §9 The run trigger + UI (S11b/S11c)
+
+A run is started from a **user action**, never the model. A generic controller
+`services/skills/run-controller.ts` owns the single active run's lifecycle (state/progress/cancel,
+one-at-a-time) and knows nothing about banks; the bank seam is handed in as an opaque runner by the
+dispatch `services/skills/tool-runs.ts` (the one place allowed to map a tool name to `run.ts` — §13).
+Four generic `skills:*` IPC channels (`listRunnableTools` / `startSkillRun` / `getSkillRun` /
+`cancelSkillRun`) wrap it: all `requireUnlocked`, the document scope resolved **main-side** (§22-C4),
+the run returning **ids/counts only** (`SkillRunState` = state/progress/counts, never the rows). The
+renderer's calm `SkillRunBar` (a `lib/skillruns.ts` polling store — no new event channel) shows the
+offer, the busy row ("Running: `<tool>` on `<N>` documents… Cancel"), and the result; write/export tools
+are gated by a `ConfirmDialog` before the run starts. The renderer maps each tool to its done copy and
+renders `validate_statement_balances` from a content-free `resultKind` discriminator ('reconciled' |
+'unreconciled' | 'unchecked') — the controller/IPC stay bank-free (the discriminator is an opaque
+string; the bank meaning lives only in the renderer's copy map).
+
+### §10 Data model (additive `db.ts`)
+
+`skills` (the registry index, keyed by `install_id`) + nullable `conversations.active_skill_id` /
+`messages.skill_id` refs (S3). `skill_runs` (the run-history lifecycle — **ids/refs only**:
+`document_ids_json` is ids, `result_ref` is a `bank_statements.id`, `error` is a friendly/technical
+reason; S11a). The **content-class** bank tables `bank_statements` + `bank_transactions` (S11a) and
+`bank_categories` / `bank_category_rules` / `bank_corrections` + `bank_transactions.category_id/
+reconciled/confidence` (S11c) hold real figures: encrypted DB only, **never logged/audited, never
+exported** (§9.5) — distinct from the non-secret skill packages. The **invoice** domain adds the
+parallel content-class tables `invoices` (header + totals + a `totals_reconciled` flag) +
+`invoice_line_items` (the line-item rows), with the same isolation; `skill_runs.result_ref` points at a
+`bank_statements.id` **or** an `invoices.id`, never inline content.
+
+### §11 IPC / audit surface
+
+`skills:list/get/pick/preview/import/export/delete/enable/disable/acknowledgeWarning` +
+`suggestSkills` + the four `skills:*` tool-run channels (§9), all `requireUnlocked` for DB-backed work
+(the two in-memory controller channels `getSkillRun`/`cancelSkillRun` carry no content). Audit events
+(the exact `AuditEventType` members): `skill_imported`/`skill_deleted`/`skill_enabled`/`skill_disabled`
++ `skill_run_started`/`skill_run_done`/`skill_run_failed`, all **ids/counts only**. (Selecting a skill
+is a sticky-default DB write and is deliberately **not** audited — there is no `skill_selected` event;
+the abandoned DS13 design that named one was never built.)
+
+### §12 Trade-offs, residuals & the closing S12 audit
+
+S12 ran the repo's multi-persona audit over the whole surface against the untrusted-skill-as-input
+threat principle (§14). **No CRITICAL/HIGH.** One LOW was fixed (CSV spreadsheet formula-injection at the
+export boundary), and the scattered S10/S11 sentinel tests were consolidated into a single
+`skills-privacy-guard.test.ts` that drives one secret through every sink (import error, loader, all five
+tool runs, the CSV export, the IPC `SkillRunState`) **plus a console spy**. Accepted LOW residuals
+(documented in [`known-limitations.md`](known-limitations.md)): prompt text-injection is contained by the
+**structural ceiling**, not by escaping the fence delimiter; a user skill's `triggers.filenamePatterns`
+compile to a bounded RegExp run only on a user action (and, post-S12, the entry length/count are capped
+at parse time + the selector refuses a wildcard-heavy glob — see §13 S2). **Deferred:** S13 auto-fire
+(gated on an evaluation harness); native model tool-calling (stays a future option behind the same gate);
+the app-skill integrity residual (by location, not signature — same as the engine binary, §22-M2).
+**History:** the wave shipped S2–S12 (2026-06-17); the original plans: `git show <S12^>:docs/skills-plan.md`
+and `git show <S12^>:docs/skills-s11-plan.md`.
+
+### §13 Post-S12 audit follow-ups (2026-06-17)
+
+A second multi-persona audit after the wave closed found **no CRITICAL/HIGH**; the fixes below landed
+behind the unchanged §14 ceiling (no new capability, still offline, audit still ids/counts-only):
+
+- **B1/B2 — cancel vs. outcome (run controller).** The seam is now the single authority on a run's
+  terminal status: a non-ok outcome carries an explicit `cancelled` flag (a dismissed CSV save dialog
+  is a **cancel**, not a failure), and a successful outcome is reported `done` even if Cancel landed
+  late (the work persisted — never reported "cancelled, nothing changed"). `runCsvExport` re-checks the
+  abort **before** the FS-write, so nothing is written under a cancel. `SkillRunController.finish`
+  reads `outcome.cancelled` (falling back to `signal.aborted` only when a runner threw).
+- **I1/I2 — localized failure copy.** The run seams return a content-free reason **code**
+  (`errorCode`: `unavailable` | `needsExtraction` | `persistFailed` | `exportWriteFailed`) and the
+  import preview returns parallel `errorCodes`; the renderer maps both to EN/DE copy, so a German user
+  never sees an English failure/import string. The seam/controller stay i18n-free (codes are
+  content-free tokens, like `resultKind`). EN/DE parity is **compile-enforced** (`de: Record<keyof
+  typeof en, string>`).
+- **S1 — content-free preview notes.** The clamp/`manifest.json`-conflict **notes** no longer echo the
+  raw (attacker-supplied) frontmatter value — only the fixed field name — closing the one §22-M1 gap
+  where attacker text could ride the `SkillPreview` IPC payload into the UI (notes share the path with
+  the already-clean structural errors).
+- **S2 — ReDoS guard on `filenamePatterns`.** Two layers: the parser caps each trigger entry's length
+  (≤200) and count (≤64), and `selector.globToRegExp` refuses a glob with >10 `*` wildcards (treated as
+  a non-match) so a `*a*a…`-style pattern can never hang the synchronous main-side scoring.
+- **B3 — `summarize_cashflow` self-consistency.** `net` is derived from the rounded `totalIn`/`totalOut`
+  so the three reported figures always satisfy `net === totalIn − totalOut`.
+- **B4 — no stranded `started` run.** `runBankExtraction` and `prepareStatementRun` now wrap everything
+  after the `skill_runs` 'started' insert in a guard, so an unexpected throw (e.g. a transiently locked
+  DB while building the chunk reader) still drives a terminal `failed` status instead of leaving the run
+  row at `started` forever. The downstream `runCashflowSummary` is the one seam with no surrounding
+  transaction (it persists no figures), so its terminal `finishRun('done')` is itself wrapped in a
+  guard that falls back to `persistFailure` — closing the last path that could strand the row at
+  `started`.
+- **CSV leading-whitespace formula injection.** `CSV_FORMULA_LEAD` now also neutralizes a formula
+  trigger that hides behind leading whitespace (`"  =cmd"`) — some importers trim before evaluating —
+  in addition to the leading-control-char and bare-`= + - @` cases.
+- **Reconcile one-active-per-id (DS12 safety net).** `reconcileSkills` collapses the rare case where two
+  AVAILABLE rows of one declared id end up both enabled (a DB rebuild, or an app skill shipped after a
+  same-id user skill was enabled): it keeps the highest-precedence one (trust app > user → version →
+  recency) and disables the rest. The enable IPC + import already enforced this on their paths; reconcile
+  was the gap.
+
+### §14 Content-reach + compatibility audit fixes (2026-06-17b)
+
+A follow-up audit (bugs + docs-vs-code) found one HIGH and the MEDIUMs below; all fixed behind the
+unchanged §7 ceiling (no new capability, still offline, audit still ids/counts-only).
+
+- **H1 — the content-reading tools read VERBATIM segments, not retrieval chunks (the fix that makes
+  Tier-2 actually work).** `extract_transactions` / `extract_invoice` / `redact_document` reach document
+  text through `SkillToolContext.readDocumentChunks`. That had been backed by the stored `chunks` table —
+  but those are **retrieval windows**: the chunker collapses every newline to a space (`atomize`→space-join)
+  and overlaps consecutive windows by ~80 tokens. So the **line-oriented** bank/invoice extractors saw one
+  giant "line" (≈0 rows) and the redaction copy came out de-formatted with duplicated overlap regions — on
+  ACTUALLY-ingested documents. (The unit/integration tests masked it by seeding a single chunk whose text
+  carried real `\n`.) The fix: the IPC injects a `readDocumentSegments` capability (the same
+  `extractDocumentPreview` the doc-tasks use — ordered, non-overlapping, newline-preserving parser
+  segments, re-extracted from the stored copy), and the run seams build the tool's reader from it
+  (`run.ts` `resolveDocumentReader`). The §7 ceiling is unchanged: the **seam**, not the tool, holds the
+  FS/cipher capability (a closure), the reach stays frozen to the single in-scope id, and a failed
+  re-extraction surfaces through the tool's own content-free "could not be read" path. The legacy
+  chunk-table reader remains as the fallback for callers that don't inject the capability (the seam-level
+  tests that seed `chunks` directly); the IPC always injects the verbatim one, and the tool-run IPC tests
+  now seed a REAL stored `.txt` so they exercise the production path end-to-end.
+- **M1 — the §6.5 `minAppVersion` gate is now ENFORCED (was parsed-but-ignored).** A pure shared
+  `skillNeedsNewerApp(minAppVersion, appVersion)` (`shared/skill-manifest.ts`) drives it. An app skill that
+  needs a newer app reconciles in DISABLED (not auto-enabled); an import installs it disabled; the enable
+  IPC refuses it (`main.skills.incompatible`); `SkillInfo` gains `incompatible` + `minAppVersion`, and the
+  Skills tab shows a "Needs newer app" badge with the toggle disabled. The app version is threaded from
+  `app.getVersion()` through the registry + installer deps + IPC. (Originally a residual remained: a skill
+  edited on disk to need a newer app *while already enabled* stayed effective, because reconcile preserves
+  the `enabled` flag and the use-sites gated only on `enabled`. **§15 closed it** — the gate is now airtight:
+  the use-sites gate on *compatibility*, not just `enabled`.)
+- **M2 — the Tier-2 "active tools" note is domain-free.** `skills.tool.note.active` no longer enumerates
+  bank tools (it had shown bank copy for the invoice + redaction skills too); it now reads "run approved
+  local tools on a document you choose…", true for every `kind:'tool'` skill.
+- **M3 — the terminal-run acknowledge handshake is wired.** A new `skills:clearToolRun` IPC + preload
+  method lets the renderer's `acknowledgeSkillRun()` release the controller's terminal run main-side
+  (`SkillRunController.clear` was previously dead code; the comment promising the handshake is now true).
+
+### §15 LOW / residual follow-ups (2026-06-17c)
+
+The four remaining LOW/residual items after the §14 audit, all fixed behind the unchanged §7 ceiling
+(no new capability, still offline, audit still ids/counts-only; EN/DE parity still compile-enforced):
+
+- **Docs — user-facing Skills coverage.** [`user-guide.md`](user-guide.md) gained a **§8 "Skills"**
+  section (the composer picker, the per-message glyph, the one-tap suggestion, tool skills + the run
+  bar + confirm/cancel, and Settings → Skills: import/enable/delete, drop-ins install disabled, the
+  "Needs newer app" badge), and [`troubleshooting.md`](troubleshooting.md) gained four entries
+  (drop-in installs disabled DS19; the structural import-rejection reasons; the "Needs newer app"
+  badge §14/M1; and "the skill tool found nothing in my document" — read-step-first / OCR / conservative
+  parsing). Docs-only.
+- **`reconcileBalances` over-reporting (honesty).** The lone **baseline** row (the first row, or any
+  row whose predecessor printed no balance) is now `unknown`, not `ok` — it has nothing to compare
+  against, so it is not a genuine check. `reconciled` is true only when no row mismatched **and at
+  least one row was actually compared against a predecessor** (`okCount > 0`). A single-transaction
+  statement therefore reports `reconciled: false` / `resultKind: 'unchecked'` (it verified nothing)
+  instead of a false "reconciled". `validate_statement_balances`' downstream `resultKind` was already
+  keyed off `unknown`, so it flowed through unchanged; the baseline row now persists `reconciled =
+  NULL` (unchecked) rather than `1`. The invoice path (`validateInvoiceTotals`) has **no** baseline
+  concept — each of its three checks is a genuine figure-to-figure comparison — so it needed no change.
+- **Cancel-during-run audit consistency.** When the abort signal has fired, the gate
+  (`tool-registry.ts`) now **suppresses** the `skill_run_failed` audit event (a cancelled run audits
+  as started-then-no-terminal-event), so the audit agrees with the `skill_runs` row the seam records
+  as `cancelled` — the audit surface has no `skill_run_cancelled` event (it stays ids/counts-only,
+  §11). A genuine non-cancel `!ok` still audits `skill_run_failed` unchanged.
+- **minAppVersion gate made airtight (the §14/M1 residual).** The use-sites now gate on
+  **compatibility**, not just `enabled`, reusing the shared `skillNeedsNewerApp` helper
+  (`shared/skill-manifest.ts`). The app version (already threaded via `app.getVersion()` in §14) is
+  carried into `resolveTurnSkill` (`turn.ts`, via `TurnSkillDeps.appVersion` + the registry handle's
+  new `appVersion` field), `suggestSkillsForTurn` (`suggest.ts`), and `runnableToolNames` /
+  `runnableToolsForSkill` (`tool-runs.ts`, threaded from the IPC's `appVersion` at both the
+  `listRunnableTools` and `startSkillRun` sites). So a skill edited on disk to need a newer app while
+  already enabled is **skipped at turn-resolution, never suggested, and refused at run start** — even
+  with a stale `enabled` flag. The threading is tolerant by default (absent / '' ⇒ compatible), so the
+  seam-level/test callers are unaffected.
+
+### §16 Per-locale skill display localization (2026-06-17d)
+
+Skill **content** (title/description/body) was English-only — the UI chrome is fully i18n'd, but the
+manifest carried a single `title`/`description`, so a German UI showed English skill names in the
+composer picker, the per-message glyph, and the Settings → Skills cards/detail. Fixed for the **display
+metadata** (the chosen scope; the guidance **body** stays single-language — the model is multilingual
+and still answers in German, D-L6):
+
+- **Additive manifest block.** `SKILL.md` may carry a `localized:` map (locale → `{title?, description?}`),
+  parsed in `shared/skill-manifest.ts` (lenient like `triggers`/`language`: a malformed/blank/over-long/
+  multi-line entry is **noted and skipped**, never an error; locale keys are lower-cased and bounded; at
+  most `MAX_LOCALIZED_LOCALES` = 16). It rides the existing additive-schema posture (§2) and the
+  `manifest_json` cache round-trips it. `SkillManifest.localized` + `SkillInfo.localized` are both optional.
+- **Projection.** `installer.ts` `recordToInfo` copies `manifest.localized` into `SkillInfo` so the
+  renderer (which alone knows the resolved UI language via `useT().lang`) picks the entry; the main side
+  stays locale-agnostic.
+- **Renderer pick (display only).** A tiny pure helper `renderer/lib/skillI18n.ts`
+  (`localizedSkillTitle`/`localizedSkillDescription` + a `skillTitleResolver` for the glyph) is used by
+  the composer **`SkillPicker`** (trigger label, suggestion offer, each row), the **Settings → Skills**
+  cards + detail modal, and the per-message **glyph** in `Transcript` (an installId→localized-title
+  resolver threaded from `ChatScreen`, built from the full skills list so a now-disabled stamped skill
+  still localizes, with a stamped-title fallback). Every pick falls back to the canonical text.
+- **Bundled skills.** All four app skills (`bank-statement`, `invoice`, `document-redaction`,
+  `meeting-protocol`) gained a `localized.de` title + description. (The triggers were already bilingual,
+  which is why German questions already fired the suggestion — only the visible text was English.)
+
+Display-only by design: nothing here threads locale into `resolveTurnSkill`/the prompt, so the gate +
+ceiling are unchanged and the injected body is byte-identical regardless of UI language.
+
+### §17 Active-skill turn-latency: measured root cause + the prefix-cache fix (2026-06-17e)
+
+A regression report — "chat with a skill active feels noticeably slower than with no skill" — was
+**measured before being theorized** (a temporary, content-free perf harness over the real bundled
+SKILL.md files + synthetic bodies up to the 64 KB cap; deleted after measuring, §22-M1: ids/counts/
+durations only). The numbers localized the cost and refuted the "main-side prompt assembly is slow"
+guess:
+
+- **Main side is negligible for the shipped skills.** The full per-turn `resolveTurnSkill` path —
+  disk read + YAML parse + validate (`loadSkillPackage`) plus fence assembly + the paragraph-growth
+  sizing loop (`buildSkillFence`) — measured **< 1 ms/turn** for a ~1.5 KB bundled skill (`load`
+  ≈ 0.65 ms, `fence` ≈ 0.06 ms) on an OS-cached SSD. **Not** perceptible.
+- **The injected body is the driver, and it's a *prefill* cost.** The bundled skills inject a
+  **measured 288–381-token** body (≈ 447 tokens including the BEGIN/END framing + guard line); the
+  system prompt grows from ~94 to ~541 tokens. That delta is paid in **prefill**, whose wall-clock is
+  hardware-bound: derived from the measured token count, ~290–450 tokens is sub-100 ms on GPU
+  (~3 k tok/s) but **~3.5–15 s on a laptop CPU** (~30–80 tok/s) — which fully explains a "noticeably
+  slower" feel and why the effect differs CPU vs GPU.
+- **Whether that prefill is one-time or per-turn is governed by KV-cache prefix reuse — and the app
+  was leaving it to the server default.** Plain chat brackets the fence in the **stable system
+  prefix** (§5), so it *should* be prefilled once and then reused; grounded rides the fence in the
+  **per-turn user turn** with the varying excerpts (§5/§22-H2), so its +447 tokens are genuinely
+  re-prefilled every turn by design. The chat request sent **no `cache_prompt`**, relying on
+  llama-server's default (which has flipped across releases) — so plain chat's "prefill once" was not
+  guaranteed, and any prefix shift (toggling the skill, a large user skill whose fence trims to a
+  question-dependent budget, or history dropping under context pressure) forces a **full re-prefill**.
+
+**Decisions / fixes as built** (both behind the unchanged §7 ceiling — no new capability, fully
+offline, audit still ids/counts-only; no i18n surface touched):
+
+- **PERF-1 — `cache_prompt: true` is now explicit** (`runtime/llama.ts` `chatStream`). The KV slot
+  reuses the longest common token prefix instead of re-prefilling the whole prompt, set explicitly
+  rather than inherited from a release-dependent default. With the stable plain-chat system prefix
+  this makes the fence a **one-time** prefill (toggle-on cost), not per-turn. Loopback-only compute
+  hint, no telemetry. Asserted in `llama-runtime.test.ts`.
+- **PERF-2 — the per-turn load is cached** (`skills/loader.ts` `loadSkillPackage`). `resolveTurnSkill`
+  hit disk + re-ran the YAML parse/validate **every turn**; the result only changes when SKILL.md
+  changes, so it is now cached keyed by the file's **(mtime, size)** (+ the `maxBodyChars` limit).
+  Measured **~33 µs** cache hit vs **~650 µs** uncached (~20×) on SSD — and the win is far larger on
+  the **portable drive** HilbertRaum targets, where a per-turn read dominates, and for a large user
+  skill that re-parses + re-sizes (the sizing loop is O(paragraphs²): measured **~19 ms** at the
+  64 KB cap). DS1/DS2 honoured — an on-disk edit (mtime/size change) re-parses on the next turn — and
+  the **reconcile/installer paths call `parseSkillManifestFromDir` directly**, bypassing the cache, so
+  disk→DB reconciliation always reads fresh. Content-class clean (in-memory parsed result only).
+  Covered by `skills-loader-cache.test.ts`.
+
+**Recommended, not implemented** (deliberately out of this low-risk scope, recorded so the trade-off
+is visible): (a) the **grounded** fence is per-turn prefill by *placement* (§22-H2 keeps it in the
+user turn so the grounding rules retain precedence) — the honest mitigation is to keep skill bodies
+small, not to move the fence into `system`; (b) for a **large user skill near the budget**, the
+plain-chat fence trim depends on the current question's length (`buildTurnFence` subtracts the live
+final-turn tokens), so the system prefix can shift turn-to-turn and defeat PERF-1 — sizing the fence
+against a *fixed* user-turn reserve would keep it byte-stable, but it is a no-op for every shipped
+skill (none trim) and was left for a follow-up to avoid changing the §22-A6 budget contract.
+
+### §18 Auto-fire triggers (S13 — gated on an evaluation harness, 2026-06-17)
+
+S13 closes the one remaining skills *feature*: **auto-fire** — the app applying the right skill to a
+turn the user left *without* one, saving the tap. It is the opt-in extension of the §6 suggestion
+scorer, and it shipped in three gated sub-phases. The full original working paper (`docs/skills-s13-plan.md`,
+deleted at S13 close — text in git history) holds the baseline tables; this is the design as built.
+
+**The gate (S13a — harness + corpus + baseline).** Auto-fire ships only after an **offline,
+deterministic** harness proves a precision bar on a labelled corpus — a false fire (shaping an answer
+the user didn't ask for) is the costly event; a miss just falls back to the tap-offer. A synthetic,
+no-user-data corpus of 33 labelled turns (`tests/fixtures/skill-triggers/corpus.json`) is scored
+through the **real** `scoreSkillTriggers`/`selectSuggestion` (`tests/eval/skill-triggers.ts` +
+`.test.ts`) reporting precision/recall + a confusion matrix — no model, no network, no DB (DS4). The
+question is content: scored, never logged (a privacy guard extends the S12 sentinel posture).
+
+**The ratified contract (owner, 2026-06-17 — D1–D6).** D1 **≥ 95% precision**. D2 **`threshold-3`** —
+fire only when a keyword hit is corroborated by ≥ 1 doc signal (a separate `AUTOFIRE_SCORE_THRESHOLD = 3`,
+distinct from `SUGGEST_SCORE_THRESHOLD = 2`; a lone keyword = 2, a lone doc signal ≤ 2, so the gate
+structurally means "the user asked **and** a relevant doc is present"). D3 **silent apply + the
+existing glyph + a one-click undo** (never a confirm-before-firing dialog). D4 **opt-in, app-skills
+only in v1**. D5 **fire only when the turn has no skill set** (never override a sticky default or a
+per-turn pick/clear). D6 additive **`triggers.autoFire?: boolean`** (only `true` opts a skill in). On
+the §3.3.1 baseline threshold-3 clears 100% / 88.2% recall; the harness asserts the owner-set form
+**`fired-wrong == 0` AND `precision ≥ 0.95`** so it survives corpus growth.
+
+**The mechanics (S13b).** `triggers.autoFire?: boolean` is additive + lenient in
+`shared/skill-manifest.ts` (only boolean `true` opts in; absent/false leaves `manifest_json`
+byte-unchanged). `services/skills/autofire.ts` `resolveAutoFireSkill(db, deps, conversationId,
+question)`: candidates = **enabled + available + app-only (D4) + `triggers.autoFire === true` (D6) +
+compatible (§6.5/M1)**, scored via the existing scorer over the **factored-out** `scope-signals.ts`
+`inScopeDocSignals` (shared with `suggest.ts`, no duplication), gated at `AUTOFIRE_SCORE_THRESHOLD`.
+It reads the **`skillsAutoFireEnabled`** opt-in first and is a true no-op when off; it **logs nothing**
+(the question is content). It is plugged into the single resolution path `resolveTurnSkill`
+(`services/skills/turn.ts`) **only** in the would-return-null branch AND only when no per-turn pick was
+made (`requestedInstallId === undefined`) — both chat channels (`registerChatIpc` / `registerRagIpc`)
+pass the turn text, so a documents conversation auto-fires too.
+
+**The surprise-mitigation UX (S13c).** Two surfaces, both EN/DE:
+
+- **The opt-in toggle (D4).** A Switch in **Settings → Skills** (`SkillsTab.tsx`) reads/writes
+  `skillsAutoFireEnabled` through the shared `updateSettings` patch path, **off by default**, hidden
+  until the setting loads (never implies an unconfirmed state). This is the **only** control that
+  makes S13b reachable — until it ships, auto-fire cannot be enabled by a user.
+- **The per-turn undo (D3).** An auto-fired turn stamps an **additive, nullable `messages.auto_fired`
+  column** — set only when the auto-fire path placed the skill AND the fence was actually placed (the
+  §22-A5 stamp-only-when-fenced precedent), so it lines up 1:1 with the glyph and a **deleted** skill
+  drops glyph + undo together. Carried via an additive `TurnSkill.autoFired` + `Message.autoFired` (a
+  boolean — never content; the simpler "undo on every skill turn" alternative was rejected as it would
+  surface the undo on explicit picks too, contradicting D3). The `Transcript` glyph on an auto-fired
+  turn reads **"Answered with `<skill>`"** + a one-click **"answer without it"** on the *last*
+  assistant turn; tapping it re-runs the **same** user question with the skill **explicitly cleared
+  (`skillInstallId: null`)** — the explicit per-turn clear both stamps no skill and suppresses a
+  re-auto-fire. It reuses the regenerate path in **both** modes; `askDocuments` gained a symmetric
+  `regenerate` argument (drop the last assistant turn, re-use the existing last user turn — never a
+  duplicate user row).
+
+**Safe-merge property.** With `skillsAutoFireEnabled` default-false **and** no bundled app skill
+declaring `triggers.autoFire`, a fresh install behaves **identically** to pre-S13 — auto-fire only
+activates once a user opts in (S13c) AND a product skill opts in (a later deliberate choice). The §14
+ceilings + the S12 sentinel guard are unchanged: a wrong fire is at worst a worse answer + a one-click
+undo, never an unauthorized action; the undo is a re-run, not a new capability; no auto-fire path adds
+an audit event or logs the question.
+
+### §-anchor legend (historical plan citations)
+
+The wave's plan files were folded into this record (S2–S12 into §1–§12; **S13 into §18**) and
+`security-model.md`, but in-code comments and the kept docs still cite the **original plans'** section
+numbers (`skills plan §N`, `skills-s13-plan.md §N` / `§2.1` / `D1`–`D6`, `§22-*`). Those numbers were
+never renumbered; this legend keeps them **resolvable** (the doc-lifecycle "stable anchors" intent)
+without churning ~150 comments. Read a historical `§N` as:
+
+| Historical anchor | Meaning | Now lives in |
+|---|---|---|
+| §9.2 | Import safe-extractor defences | §4 + security-model "Skill-import defences" |
+| §9.3 | Collision / version / downgrade policy | §4 |
+| §9.4 | Delete = app-level ref-clear sweep | §4 |
+| §9.5 | Content-class data excluded from every export | §10 + security-model (Tier-2 ceiling) |
+| §10 / §10.1–§10.4 | Selection, prompt placement, suggestion heuristic | §5 + §6 |
+| §11 / §11.2 | Fenced-skill prompt integration | §5 |
+| §12 / §12.1 / §12.2 | Tier-2 tool gate (schema, validate→run→validate, confirm) | §7 + security-model "Skill tool ceiling (Tier-2)" |
+| §13 (plan) | Bank specifics kept out of the generic infra | §8 (note: §13 in THIS record is the post-S12 follow-ups above) |
+| §14 | The untrusted-skill-as-input threat model + structural ceilings | §2 + §7 + §12; security-model "Skill tool ceiling" |
+| §15 / §16 | Renderer surfaces / IPC surface | §9 + §11 |
+| §18.x | Phase/sub-phase breakdown (historical) | this record's phase tags (S2–S12) |
+| `skills-s13-plan.md` §2.1 / D1–D6 | Ratified auto-fire contract (precision bar, threshold-3, opt-in, app-only, no-override, schema) | §18 |
+| `skills-s13-plan.md` §3 / §4 / §5 | Eval harness + corpus (S13a) / auto-fire mechanics (S13b) / surprise-mitigation UX (S13c) | §18 |
+| §22-A1/A5/A6 | One skill-resolution path; stamp only when placed; fence pre-sized | §5 |
+| §22-C2 | Selector reads triggers from the cache, never unpacks a blob | §6 |
+| §22-C3/C4 | No FK into `skills` (app-level sweep); scope resolved main-side | §4 + §9 |
+| §22-D1/D3 | Honesty posture (drop, don't invent); suggestion is an inert offer | §6 + §8 |
+| §22-M1 | Content-class rule — ids/counts only; no content in log/audit/IPC | §2 (the consolidated sentinel guard) |
+| §22-M2 | App-skill integrity by location, not signature (accepted residual) | §12 + security-model |
+| §22-M4 | v1 permissions are a display summary; nothing executes | §1 (DS6) |
 
 
 ## Data flow (RAG)

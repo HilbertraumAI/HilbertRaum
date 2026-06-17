@@ -10,7 +10,7 @@ import {
   runtimeBinaryPresent,
   WHISPER_BINARY_BASE
 } from './assets'
-import { verifyDriveModels, type ModelVerifyResult } from './drive'
+import { verifyDriveModels, listSkillFolders, type ModelVerifyResult } from './drive'
 
 // Commercial-drive pipeline + final posture assertion (spec §12.2).
 //
@@ -232,6 +232,17 @@ export interface CommercialAssertion {
      * true when no `ocrSources` were passed).
      */
     ocrAssetsVerified: boolean
+    /**
+     * At least one trusted product skill is provisioned under `app-skills/` (skills plan S9 /
+     * §7.3). A sold drive ships product skills like the bank-statement stub. (Integrity of those
+     * skills is the accepted §22-M2 residual: trust is by drive location, not signature.)
+     */
+    appSkillsPresent: boolean
+    /**
+     * `user-skills/` is empty (skills plan S9 / §14): a sellable drive ships only trusted product
+     * skills and no user-installed ones — the same "ships empty" rule as the workspace.
+     */
+    userSkillsEmpty: boolean
   }
   /** The per-weight verification detail (for surfacing which weight failed). */
   modelResults: ModelVerifyResult[]
@@ -415,6 +426,32 @@ export async function assertCommercialDrive(
     }
   }
 
+  // --- App skills provisioned + user-skills empty (skills plan S9 / §7.3, §14) ---
+  // A sellable drive ships trusted PRODUCT skills under app-skills/ (e.g. the bank-statement
+  // stub) and NO user skills — user-skills/ is the read-write area a buyer fills, so it must be
+  // empty at ship time (the same "ships empty" rule as workspace/). Trust of app-skills/ is by
+  // LOCATION on a writable drive, not a signature — the accepted §22-M2 residual (documented in
+  // security-model.md / known-limitations.md), the same residual as the engine binary.
+  const appSkillsPresent = listSkillFolders(join(rootPath, 'app-skills')).length > 0
+  if (!appSkillsPresent) {
+    problems.push(
+      'no app skills provisioned (a sold drive ships trusted product skills under app-skills/)'
+    )
+  }
+  let userSkillsEmpty = true
+  try {
+    const userDir = join(rootPath, 'user-skills')
+    const userEntries = existsSync(userDir) ? readdirSync(userDir) : []
+    if (userEntries.length > 0) {
+      userSkillsEmpty = false
+      for (const name of userEntries) {
+        problems.push(`user skill present on a drive meant to ship empty: user-skills/${name}`)
+      }
+    }
+  } catch {
+    /* unreadable → treat as empty; the policy/weight/app-skill gates still apply */
+  }
+
   return {
     ok: problems.length === 0,
     problems,
@@ -425,7 +462,9 @@ export async function assertCommercialDrive(
       licensesApproved,
       noUserData,
       runtimeCurrent,
-      ocrAssetsVerified
+      ocrAssetsVerified,
+      appSkillsPresent,
+      userSkillsEmpty
     },
     modelResults
   }

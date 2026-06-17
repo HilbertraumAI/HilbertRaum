@@ -2,10 +2,16 @@ import { ipcMain, type IpcMainInvokeEvent } from 'electron'
 import { IPC, STREAM } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
 import { type ExtractRecordType, type Message, type RetrievalScope } from '../../shared/types'
-import { appendMessage, maybeSetTitleFromFirstMessage } from '../services/chat'
+import {
+  appendMessage,
+  deleteLastAssistantMessage,
+  listMessages,
+  maybeSetTitleFromFirstMessage
+} from '../services/chat'
 import { resolveScope } from '../services/collections'
 import { buildScopeFilter } from '../services/retrieval-scope'
 import { detectFilenameScope, generateGroundedAnswer, ragSettingsFrom } from '../services/rag'
+import { resolveTurnSkillFromRegistry } from '../services/skills/turn'
 import { aggregateExtractions, SCAN_MARKER_TYPE } from '../services/analysis/extract'
 import { routeQuestion } from '../services/analysis/router'
 import { buildListingAnswer } from '../services/analysis/listing-answer'
@@ -77,15 +83,41 @@ function readyTreeCountInScope(db: Db, scope: RetrievalScope): number {
 export function registerRagIpc(ctx: AppContext): void {
   ipcMain.handle(
     IPC.askDocuments,
-    async (event: IpcMainInvokeEvent, conversationId: string, question: string): Promise<Message> => {
+    async (
+      event: IpcMainInvokeEvent,
+      conversationId: string,
+      question: string,
+      skillInstallId?: string | null,
+      regenerate?: boolean
+    ): Promise<Message> => {
       // Shared guard preamble (M-A2): conv exists, runtime active, no blocking doc task /
       // stream already in flight (a yielding deep-index build is paused, not refused).
       const { runtime } = await assertChatStreamReady(ctx, conversationId)
 
-      const text = question.trim()
-      if (!text) throw new Error(tMain('main.chat.emptyQuestion'))
-      appendMessage(ctx.db, { conversationId, role: 'user', content: text })
-      maybeSetTitleFromFirstMessage(ctx.db, conversationId, text)
+      // Re-answer the last document turn (S13c "answer without it" undo, symmetric to chat's
+      // regenerate): drop the previous assistant reply and RE-USE the existing last user turn as the
+      // question — never append a duplicate user row. The renderer passes `skillInstallId: null` to
+      // re-run skill-free; with no prior assistant reply there is nothing to regenerate.
+      let text: string
+      if (regenerate === true) {
+        if (!deleteLastAssistantMessage(ctx.db, conversationId)) {
+          throw new Error(tMain('main.chat.nothingToRegenerate'))
+        }
+        const history = listMessages(ctx.db, conversationId)
+        text = ([...history].reverse().find((m) => m.role === 'user')?.content ?? '').trim()
+        if (!text) throw new Error(tMain('main.chat.emptyQuestion'))
+      } else {
+        text = question.trim()
+        if (!text) throw new Error(tMain('main.chat.emptyQuestion'))
+        appendMessage(ctx.db, { conversationId, role: 'user', content: text })
+        maybeSetTitleFromFirstMessage(ctx.db, conversationId, text)
+      }
+
+      // Resolve the one skill for this DOCUMENT turn too (audit A1/§22-A1 — both channels carry the
+      // skill, else a documents conversation silently gets none). Same resolver as plain chat. The
+      // question is passed so the resolver can S13b AUTO-FIRE when the turn has no skill set (content —
+      // scored, not logged; off by default).
+      const skill = resolveTurnSkillFromRegistry(ctx.db, ctx.skills, conversationId, skillInstallId, text)
 
       const settings = ragSettingsFrom(getSettings(ctx.db))
 
@@ -160,6 +192,9 @@ export function registerRagIpc(ctx: AppContext): void {
             // Retrieval reranker: null when no reranker is provisioned — retrieval then
             // keeps the unreranked ordering byte-identical.
             reranker: ctx.reranker,
+            // The turn's skill: its fence rides in the grounded user turn; the assistant row is
+            // stamped only when the fence fit AND chunks were found (no-context ⇒ NULL).
+            skill,
             onToken: sendToken
           }),
         () => ctx.docTasks?.acquireChatSlot() ?? Promise.resolve(() => {})

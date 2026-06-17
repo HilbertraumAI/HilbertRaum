@@ -1,6 +1,6 @@
 # Drive & Workspace Layout
 
-_Last updated: 2026-06-11 (Phase 38: the `ocr/` language-file asset class)_
+_Last updated: 2026-06-17 (Skills S9: `prepare-drive` copies `app-skills/`; the commercial gate asserts app skills present + `user-skills/` empty)_
 
 ## How the app finds its data
 
@@ -20,11 +20,27 @@ From the root, these paths are derived and created (idempotently) on first run:
 │   ├── hilbertraum.sqlite        # all app data (spec §8 tables) — hilbertraum.sqlite.enc at rest in
 │   │                      # encrypted mode (decrypted to hilbertraum.sqlite only while unlocked)
 │   └── documents/         # stored copies of imported files (<id><ext>.enc in encrypted mode)
+├── app-skills/            # app-shipped Skills (read-only, PLAIN folders — NOT encrypted; Skills S3/S9)
+│   └── <id>/SKILL.md      #   non-secret product content, provisioned like model-manifests
+├── user-skills/           # user-installed/dropped-in Skills (read-write, PLAIN folders — NOT encrypted; S3)
+│   └── <id>/SKILL.md      #   non-secret task knowledge (DS20); a drop-in installs DISABLED until enabled
 ├── models/                # GGUF weights (git-ignored, never committed)
 ├── logs/
 │   └── app.log[.enc]      # local rotating logs (never uploaded; .enc on an encrypted workspace)
 └── config/                # drive.json / policy.json / checksums.json / workspace.json (vault descriptor)
 ```
+
+> **Skills live OUTSIDE `workspace/`, in the clear (Skills plan §0/§7, revised 2026-06-17).** A skill
+> package is **non-secret task knowledge, not user content** (DS20), so both `app-skills/` (read-only)
+> and `user-skills/` (read-write) are plain folders, not part of the encrypted vault — keeping
+> `workspace/` as the single encrypted zone. **Disk is the source of truth:** the `skills` table is a
+> derived index re-built from these folders on every reconcile, so a DB rebuild loses no skill. A
+> folder a power user drops into `user-skills/` is discovered but installs **disabled** (DS19); a
+> deliberate zip-import via Settings → Skills installs enabled-with-warning (DS7). Because
+> `user-skills/` is a top-level dir (not inside `workspace/`), a **workspace backup must include it**
+> (DS20). `app-skills/` is empty on a normal install until `prepare-drive` populates it; in a **dev
+> build** it falls back to the committed repo `app-skills/` source dir (`resolveAppSkillsDir`, the
+> `resolveManifestsDir` precedent).
 
 `buildDriveStatus()` reports root/workspace/models/logs paths, prepared-drive flag, writability,
 free space, and OS/arch — surfaced on the **Diagnostics** screen.
@@ -51,11 +67,29 @@ PRIVATE_AI_DRIVE/
 ├── ocr/                                        # OCR language files (Phase 38): {deu,eng}.traineddata.gz — plain sha256-verified, git-ignored
 ├── model-manifests/{chat,embeddings,reranker,transcriber}/ # committed YAML (the only model metadata in git)
 │   └── runtime-sources.yaml                     # sidecar download manifest (Phase 12; + whisper_cpp block Phase 36; + ocr block Phase 38)
+├── app-skills/                                 # app-shipped Skills (read-only PLAIN folders; provisioned + asserted, S3/S9)
+├── user-skills/                                # user Skills (read-write PLAIN folders) — EMPTY on a sold drive
 ├── workspace/                                  # hilbertraum.sqlite (encrypted or plaintext) — EMPTY on a sold drive
 ├── logs/
 ├── docs/                                       # user guide, privacy, troubleshooting
 └── config/{drive.json,policy.json,checksums.json}
 ```
+
+> **Skills on a commercial drive (S3 lays the dirs; S9 provisions + asserts).** `app-skills/` carries
+> the bundled product skills (four today: `bank-statement`, `invoice`, `document-redaction` — all
+> Tier-2 `kind:'tool'` — and `meeting-protocol`, Tier-1 instruction), **copied wholesale from
+> the committed repo `app-skills/` tree by `prepare-drive`**, the same copy step as `model-manifests/`
+> (DS17 — text-only, never network-fetched); `user-skills/` is created empty. The S9 commercial-drive
+> gate (`assertCommercialDrive` + the build scripts) **verifies at least one app skill is present
+> (a folder with a `SKILL.md`) and asserts `user-skills/` is empty** on a sold drive — the "no user
+> data" invariant, extended to the plaintext skills area. Both dirs are plain (unencrypted) by design:
+> a skill is non-secret task knowledge (DS20).
+>
+> **Integrity residual (accepted, §22-M2).** On a removable drive `app-skills/` is writable, so a
+> shipped skill's `trusted_level: app` is assigned by **location**, not a signature — "verified" means
+> build-time provisioning, not a runtime hash. A hash manifest on the same writable drive would be
+> unanchored; real integrity needs off-drive signing (a Tier-3 prerequisite). This is the same
+> accepted residual as the engine binary — see `security-model.md` / `known-limitations.md`.
 
 > **Launchers (Phase 13).** The `Start HilbertRaum.*` files sit at the drive root beside the
 > portable app and set `HILBERTRAUM_DRIVE_ROOT` from **their own location** every launch — never a hardcoded

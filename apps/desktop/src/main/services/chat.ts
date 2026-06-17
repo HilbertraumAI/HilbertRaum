@@ -16,7 +16,31 @@ import { parseDocumentScope } from './collections'
 import { buildFtsMatchQuery } from './fts'
 import { approxTokenCount } from './ingestion/chunker'
 import { getSettings } from './settings'
+import {
+  approxPromptTokens,
+  buildSkillFence,
+  composeSystemPromptWithSkill,
+  skillFenceBudgetTokens
+} from './skills/prompt'
 import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from './runtime'
+
+/**
+ * The ONE skill resolved for a turn (skills plan §10) — the minimal shape the chat/RAG
+ * generators need to assemble the fence + stamp `messages.skill_id`. Built by
+ * `resolveTurnSkill` (services/skills/turn.ts); structurally compatible without an import.
+ */
+export interface TurnSkill {
+  installId: string
+  title: string
+  body: string
+  /**
+   * True only when the app AUTO-FIRED this skill (S13b/D3) — the user set no skill and the resolver
+   * filled the gap. `resolveAutoFireSkill` sets it; an explicit pick / sticky default leaves it
+   * undefined. Carried so the assistant row can be stamped (`messages.auto_fired`) and the per-turn
+   * "answer without it" undo (S13c) shows ONLY on an auto-fired turn.
+   */
+  autoFired?: boolean
+}
 
 // Chat service (spec §7.6): create conversations, append user/assistant messages,
 // build the system prompt + message list for the runtime, stream the response, and
@@ -39,9 +63,14 @@ When using provided document context, answer only from the context when the ques
 If the context is insufficient, say what is missing.
 For document answers, include citations using the provided source labels.`
 
-/** Build the plain-chat system prompt (document answers compose their own in rag/). */
-export function buildSystemPrompt(): string {
-  return BASE_SYSTEM_PROMPT
+/**
+ * Build the plain-chat system prompt (document answers compose their own in rag/). When a
+ * skill fence is supplied it is bracketed AFTER the base preamble — the base rules above, the
+ * fence's own guard line as the last app-authored line below — so the untrusted skill text never
+ * reads as a top-level rule (skills plan §11.2). `skillFence` null/omitted ⇒ the base preamble.
+ */
+export function buildSystemPrompt(skillFence?: string | null): string {
+  return composeSystemPromptWithSkill(BASE_SYSTEM_PROMPT, skillFence ?? null)
 }
 
 /**
@@ -86,6 +115,7 @@ interface ConversationRow {
   scope_json: string | null
   collection_id: string | null
   scope_v2_json: string | null
+  active_skill_id: string | null
 }
 
 /** Parse a stored scope: a JSON array of document-id strings, else null (whole corpus). */
@@ -131,7 +161,8 @@ function rowToConversation(r: ConversationRow): Conversation {
     scopeDocumentIds: parseScope(r.scope_json),
     collectionId: r.collection_id ?? null,
     // Composite scope (D1) — tolerant parse, malformed ⇒ null (legacy fallback applies).
-    scope: parseDocumentScope(r.scope_v2_json)
+    scope: parseDocumentScope(r.scope_v2_json),
+    activeSkillId: r.active_skill_id ?? null
   }
 }
 
@@ -143,6 +174,11 @@ interface MessageRow {
   created_at: string
   token_count: number | null
   citations_json: string | null
+  skill_id: string | null
+  /** From the LEFT JOIN on `skills`: NULL when the stamped skill no longer exists (deleted). */
+  skill_title: string | null
+  /** S13c — 1 when the app auto-fired the stamped skill (else NULL/0). Powers the per-turn undo. */
+  auto_fired: number | null
 }
 
 /**
@@ -176,6 +212,10 @@ function parseCitations(json: string | null): Citation[] | undefined {
 
 function rowToMessage(r: MessageRow): Message {
   const citations = parseCitations(r.citations_json)
+  // Resolve the stamped skill (DS16/§22-A5): the LEFT JOIN yields skill_title only while the skill
+  // row still exists. A DELETED skill (no join) ⇒ skillId/skillTitle NULL, so the glyph never
+  // points at a vanished skill (the FK-less delete relies on this — audit C3).
+  const skillResolved = r.skill_id != null && r.skill_title != null
   return {
     id: r.id,
     conversationId: r.conversation_id,
@@ -183,7 +223,12 @@ function rowToMessage(r: MessageRow): Message {
     content: r.content,
     createdAt: r.created_at,
     tokenCount: r.token_count,
-    citations
+    citations,
+    skillId: skillResolved ? r.skill_id : null,
+    skillTitle: skillResolved ? r.skill_title : null,
+    // Auto-fire provenance (S13c) only means anything when a skill actually shaped (and still resolves
+    // for) this turn; a deleted skill drops the glyph AND the undo together.
+    autoFired: skillResolved ? r.auto_fired === 1 : false
   }
 }
 
@@ -226,7 +271,8 @@ export function createConversation(db: Db, opts: CreateConversationOptions = {})
     mode: opts.mode ?? 'chat',
     scopeDocumentIds: scope,
     collectionId,
-    scope: compositeScope
+    scope: compositeScope,
+    activeSkillId: null
   }
   db.prepare(
     `INSERT INTO conversations (id, title, created_at, updated_at, model_id, mode, scope_json, collection_id, scope_v2_json)
@@ -326,7 +372,9 @@ export function getConversation(db: Db, conversationId: string): Conversation | 
 export function listMessages(db: Db, conversationId: string): Message[] {
   const rows = db
     .prepare(
-      'SELECT * FROM messages WHERE conversation_id = ? ORDER BY created_at ASC, rowid ASC'
+      `SELECT m.*, s.title AS skill_title
+       FROM messages m LEFT JOIN skills s ON s.install_id = m.skill_id
+       WHERE m.conversation_id = ? ORDER BY m.created_at ASC, m.rowid ASC`
     )
     .all(conversationId) as unknown as MessageRow[]
   return rows.map(rowToMessage)
@@ -338,6 +386,18 @@ export interface AppendMessageInput {
   content: string
   tokenCount?: number | null
   citations?: Citation[] | null
+  /**
+   * The skill that shaped THIS turn (skills plan §8.2/DS16) — stamped on the ASSISTANT row only,
+   * and only when the fence was actually placed (the glyph corresponds 1:1 to a turn whose prompt
+   * carried the skill — §22-A5). Omitted/null ⇒ no skill. No FK into `skills` (audit C3): a deleted
+   * skill leaves this id dangling and the glyph read resolves it to NULL.
+   */
+  skillId?: string | null
+  /**
+   * S13c — true only when the app AUTO-FIRED `skillId` (the user set no skill). Stamped only alongside
+   * a non-null `skillId`; surfaces the per-turn "answer without it" undo. Privacy-safe (a boolean).
+   */
+  autoFired?: boolean
 }
 
 /** Append a message and bump the conversation's updated_at. */
@@ -345,6 +405,9 @@ export function appendMessage(db: Db, input: AppendMessageInput): Message {
   const now = nowIso()
   const tokenCount = input.tokenCount ?? null
   const citationsJson = input.citations ? JSON.stringify(input.citations) : null
+  const skillId = input.skillId ?? null
+  // Stamp auto-fire provenance only when a skill is actually stamped; 1 = auto-fired, NULL otherwise.
+  const autoFired = skillId != null && input.autoFired === true
   const msg: Message = {
     id: randomUUID(),
     conversationId: input.conversationId,
@@ -352,14 +415,54 @@ export function appendMessage(db: Db, input: AppendMessageInput): Message {
     content: input.content,
     createdAt: now,
     tokenCount,
-    citations: input.citations ?? undefined
+    citations: input.citations ?? undefined,
+    skillId,
+    autoFired
   }
   db.prepare(
-    `INSERT INTO messages (id, conversation_id, role, content, created_at, token_count, citations_json)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`
-  ).run(msg.id, msg.conversationId, msg.role, msg.content, msg.createdAt, tokenCount, citationsJson)
+    `INSERT INTO messages (id, conversation_id, role, content, created_at, token_count, citations_json, skill_id, auto_fired)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    msg.id,
+    msg.conversationId,
+    msg.role,
+    msg.content,
+    msg.createdAt,
+    tokenCount,
+    citationsJson,
+    skillId,
+    autoFired ? 1 : null
+  )
   db.prepare('UPDATE conversations SET updated_at = ? WHERE id = ?').run(now, input.conversationId)
   return msg
+}
+
+/**
+ * Read a conversation's STICKY DEFAULT skill (`conversations.active_skill_id`, skills plan §10.1) —
+ * the install_id pre-filled for the next turn, or null when none is set. Not a hard pin: any turn
+ * can override or clear it, and past turns keep their own stamped `messages.skill_id`.
+ */
+export function getConversationDefaultSkill(db: Db, conversationId: string): string | null {
+  const row = db
+    .prepare('SELECT active_skill_id FROM conversations WHERE id = ?')
+    .get(conversationId) as unknown as { active_skill_id: string | null } | undefined
+  return row?.active_skill_id ?? null
+}
+
+/**
+ * Persist a conversation's sticky default skill (skills plan §10.1). Null clears it. No existence
+ * check on the skill here — the resolver (`resolveTurnSkill`) skips a disabled/missing default
+ * gracefully, and the IPC layer validates before calling this.
+ */
+export function setConversationDefaultSkill(
+  db: Db,
+  conversationId: string,
+  installId: string | null
+): void {
+  db.prepare('UPDATE conversations SET active_skill_id = ? WHERE id = ?').run(
+    installId ?? null,
+    conversationId
+  )
 }
 
 /**
@@ -582,10 +685,11 @@ export function fitMessagesToContext(
 export function buildChatMessages(
   db: Db,
   conversationId: string,
-  contextTokens?: number
+  contextTokens?: number,
+  skillFence?: string | null
 ): ChatMessage[] {
   const history = listMessages(db, conversationId)
-  const messages: ChatMessage[] = [{ role: 'system', content: buildSystemPrompt() }]
+  const messages: ChatMessage[] = [{ role: 'system', content: buildSystemPrompt(skillFence) }]
   for (const m of history) {
     if (m.role === 'user' || m.role === 'assistant') {
       // Assistant turns are scrubbed of think blocks before being replayed —
@@ -634,6 +738,13 @@ export interface GenerateOptions {
   /** Called with each reasoning delta (Deep mode) — live display only, never persisted. */
   onReasoning?: (delta: string) => void
   runtimeOptions?: Pick<RuntimeChatOptions, 'maxTokens' | 'temperature'>
+  /**
+   * The skill resolved for this turn (skills plan §10/§11). When set, its instructions are
+   * assembled into a budgeted, guard-bracketed fence in the system message, and the assistant row
+   * is stamped with the install_id — but ONLY when the fence actually fit (omitted-for-budget ⇒ no
+   * fence, no stamp, so the glyph corresponds 1:1 to a prompt that carried the skill — §22-A5/A6).
+   */
+  skill?: TurnSkill | null
 }
 
 /**
@@ -650,7 +761,12 @@ export async function generateAssistantMessage(
 ): Promise<Message> {
   // Trim history to the model's context window so an accumulating conversation never
   // assembles a prompt the runtime rejects (HTTP 400 exceed_context_size_error).
-  const messages = buildChatMessages(db, conversationId, getSettings(db).contextTokens)
+  const contextTokens = getSettings(db).contextTokens
+  // Pre-size the skill fence (§11.3/A6) BEFORE it goes in the system message so it can never
+  // starve the base preamble or the final user turn — fitMessagesToContext only drops older
+  // history. Stamp the assistant row only when the fence actually fit (skill shaped the answer).
+  const fence = buildTurnFence(db, conversationId, opts.skill, contextTokens)
+  const messages = buildChatMessages(db, conversationId, contextTokens, fence)
   let content = ''
   const stream = runtime.chatStream(messages, {
     signal: opts.signal,
@@ -676,7 +792,44 @@ export async function generateAssistantMessage(
   // assistant bubble in the transcript otherwise) and return an unpersisted, empty
   // message to keep the resolve contract.
   if (content === '') return emptyAssistantMessage(conversationId)
-  return appendMessage(db, { conversationId, role: 'assistant', content })
+  // Stamp the skill only when its fence was actually placed (DS16/§22-A5) — an omitted-for-budget
+  // skill did not shape this answer, so it gets no glyph.
+  return appendMessage(db, {
+    conversationId,
+    role: 'assistant',
+    content,
+    skillId: fence ? (opts.skill?.installId ?? null) : null,
+    // Carry auto-fire provenance only when the fence was placed (the skill shaped the answer) — so the
+    // S13c undo lines up 1:1 with the glyph (§22-A5).
+    autoFired: fence ? opts.skill?.autoFired === true : false
+  })
+}
+
+/**
+ * Build the plain-chat skill fence for a turn, pre-sized to leave room for the base preamble + the
+ * final user turn (audit A6). Returns the fence string, or null when there is no skill or the fence
+ * was omitted for budget. Shared between the initial call site and the stamp decision so they
+ * cannot disagree.
+ */
+function buildTurnFence(
+  db: Db,
+  conversationId: string,
+  skill: TurnSkill | null | undefined,
+  contextTokens: number
+): string | null {
+  if (!skill) return null
+  const history = listMessages(db, conversationId)
+  const finalTurn = history.length > 0 ? history[history.length - 1].content : ''
+  const fixedTokens =
+    approxPromptTokens(BASE_SYSTEM_PROMPT) +
+    approxPromptTokens(finalTurn) +
+    2 * PER_MESSAGE_OVERHEAD_TOKENS
+  const budget = skillFenceBudgetTokens({
+    contextTokens,
+    reserveTokens: CHAT_RESPONSE_RESERVE_TOKENS,
+    fixedTokens
+  })
+  return buildSkillFence({ title: skill.title, body: skill.body }, budget).text
 }
 
 /** An UNPERSISTED empty assistant message (the zero-token-stop case — see above). */

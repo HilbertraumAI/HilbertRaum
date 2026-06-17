@@ -27,6 +27,10 @@ export const IPC = {
   listMessages: 'chat:listMessages',
   sendChatMessage: 'chat:send',
   stopGeneration: 'chat:stop',
+  /** Persist a conversation's sticky default skill (skills plan §10.1; null clears). */
+  setConversationDefaultSkill: 'chat:setDefaultSkill',
+  /** Deterministic skill suggestion for the composer picker (skills plan §10.2/S8; logs nothing). */
+  suggestSkills: 'skills:suggest',
   /**
    * Snapshot of an in-flight generation for a conversation (accumulated answer +
    * reasoning), or null if none — lets a remounted Chat screen recover a reply that is
@@ -145,6 +149,43 @@ export const IPC = {
   setCollectionArchived: 'collections:setArchived',
   /** Delete a project: 'membershipOnly' (keep docs) or 'withDocuments' (delete project-only docs — C2). */
   deleteCollection: 'collections:delete',
+  // Skills (instruction packages; skills plan §16). Handlers in registerSkillsIpc.ts; all
+  // DB-backed handlers requireUnlocked and resolve validation MAIN-side. Audit metadata is
+  // ids/counts only (§22-M1).
+  /** All installed skills (app first, then by title) — `SkillInfo[]`. */
+  listSkills: 'skills:list',
+  /** One skill by install id — `SkillInfo | null`. */
+  getSkill: 'skills:get',
+  /** Open the OS picker for a `.skill.zip` file or a skill folder; returns the chosen path or null. */
+  pickSkillPackage: 'skills:pick',
+  /** Validate an import source FULLY in a transient dir, WITHOUT writing — `SkillPreview` (§9.2/OQ-2). */
+  previewSkillPackage: 'skills:preview',
+  /** Validate → unzip/copy into user-skills/<id>/ → install enabled-with-warning (DS7) — `SkillInfo`. */
+  importSkill: 'skills:import',
+  /** Export a skill as a `.skill.zip` via the save dialog (package tree only — §9.5). */
+  exportSkill: 'skills:export',
+  /** Delete a user skill: rm folder + row + clear refs in one txn (C3). App skills refuse. */
+  deleteSkill: 'skills:delete',
+  /** Enable a skill (one-active-per-id: disables same-id siblings — DS12). */
+  enableSkill: 'skills:enable',
+  /** Disable a skill (invisible to the picker, never injected). */
+  disableSkill: 'skills:disable',
+  /** Acknowledge a user skill's import warning (DS7 — clears the persistent warning state). */
+  acknowledgeSkillWarning: 'skills:acknowledgeWarning',
+  // Tier-2 app-orchestrated tool runs (skills plan §12.2/§16, S11b). Generic `skills:*` shape (NOT
+  // bank-named) so S11c's tools slot in with no renderer/IPC change; bank specifics stay in the
+  // `tool-runs.ts` dispatch + `run.ts` seam (§13). All requireUnlocked; the document scope is
+  // resolved MAIN-side from the conversation (§22-C4) and NOTHING content-bearing is logged.
+  /** Wired, runnable tools for the active skill in this conversation's scope (empty when none apply). */
+  listRunnableTools: 'skills:listRunnableTools',
+  /** Start a run from a user action; returns the initial state or a needs-confirmation/error signal. */
+  startSkillRun: 'skills:startToolRun',
+  /** Poll one run's ids/counts-only state/progress (the doc-task polling precedent). */
+  getSkillRun: 'skills:getToolRun',
+  /** Cancel a run (aborts its `AbortSignal`); with no handle, the active run. */
+  cancelSkillRun: 'skills:cancelToolRun',
+  /** Drop a terminal run main-side once the renderer has shown its outcome (the acknowledge handshake). */
+  clearSkillRun: 'skills:clearToolRun',
   // Encrypted workspace lifecycle
   getWorkspaceState: 'workspace:getState',
   unlockWorkspace: 'workspace:unlock',

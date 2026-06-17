@@ -26,10 +26,11 @@ beforeAll(() => {
 })
 
 describe('resolveNavTarget — virtual targets + legacy aliases', () => {
-  it('maps the five real destinations to themselves', () => {
+  it('maps the six real destinations to themselves', () => {
     expect(resolveNavTarget('home')).toEqual({ screen: 'home' })
     expect(resolveNavTarget('documents')).toEqual({ screen: 'documents' })
     expect(resolveNavTarget('models')).toEqual({ screen: 'models' })
+    expect(resolveNavTarget('skills')).toEqual({ screen: 'skills' })
     expect(resolveNavTarget('chat')).toEqual({ screen: 'chat', chatMode: 'chat' })
     expect(resolveNavTarget('settings')).toEqual({ screen: 'settings', settingsTab: 'general' })
   })
@@ -40,6 +41,12 @@ describe('resolveNavTarget — virtual targets + legacy aliases', () => {
       screen: 'settings',
       settingsTab: 'diagnostics'
     })
+  })
+
+  it('keeps the legacy settings:skills target working, now routed to the Skills screen', () => {
+    // Skills graduated from a Settings tab to a top-level rail destination; the old
+    // settings:skills entry point still resolves (now to the standalone screen).
+    expect(resolveNavTarget('settings:skills')).toEqual({ screen: 'skills' })
   })
 
   it('keeps the legacy privacy/diagnostics targets working as aliases', () => {
@@ -120,7 +127,7 @@ function stubAppShell(): void {
 }
 
 describe('App shell — 5-item nav (Phase 26)', () => {
-  it('renders exactly Home · Chat · Documents · AI Model ‖ Settings — no Privacy/Diagnostics items', async () => {
+  it('renders exactly Home · Chat · Documents · AI Model · Skills ‖ Settings — no Privacy/Diagnostics items', async () => {
     stubAppShell()
     render(<App />)
     const nav = await screen.findByRole('navigation')
@@ -135,6 +142,7 @@ describe('App shell — 5-item nav (Phase 26)', () => {
       'Chat',
       'Documents',
       'AI Model',
+      'Skills',
       'Settings'
     ])
     expect(within(nav).queryByText(/privacy/i)).not.toBeInTheDocument()

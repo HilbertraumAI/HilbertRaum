@@ -1,8 +1,9 @@
 # HilbertRaum — User Guide
 
-_Last updated: 2026-06-15 (added: deep index + coverage meter and tiers; drag-and-drop files into a
-chat; the composite source picker; regrouped + collapsible Documents sidebar; audio transcription,
-OCR and voice dictation)_
+_Last updated: 2026-06-17 (added: Skills — the composer picker, the per-message skill glyph, skills
+that run local tools, and Settings → Skills; previously: deep index + coverage meter and tiers;
+drag-and-drop files into a chat; the composite source picker; regrouped + collapsible Documents
+sidebar; audio transcription, OCR and voice dictation)_
 
 HilbertRaum is a private AI workspace that runs **entirely on your laptop**, from
 a portable drive. Your prompts, documents, embeddings, and chat history stay local. There is
@@ -481,7 +482,62 @@ network, and the activity log records only counts and ids — never your project
 
 ---
 
-## 8. Privacy & offline
+## 8. Skills
+
+A **skill** is a small, local task pack — a set of instructions (and sometimes app tools) that points
+one answer at a particular job: reconciling a bank statement, writing up a meeting protocol, checking
+an invoice's totals, or redacting personal data from a document. Skills are **task knowledge, not
+secrets** — they're plain files on the drive, they never call a model or the internet on their own,
+and like everything else they stay on the drive. The app ships with a few built-in skills, and you
+can add your own.
+
+### Pick a skill for an answer
+
+Under the message box there's a quiet **Skill:** picker. Choose a skill and it shapes your **next
+answer**; the app remembers it as that conversation's default until you change it (pick **None** to
+clear it). When a skill shaped an answer, that message carries a small **skill glyph** — an icon and
+the skill's name — so you can see at a glance which one was used.
+
+Now and then the picker shows a **one-tap suggestion** ("Use *Bank statement*?") when your question
+or the documents in scope look like a fit. It is only ever an offer — nothing is applied until you
+tap it.
+
+### Skills that run tools
+
+Some skills — like **Bank statement**, **Invoice**, and **Document redaction** — can run small,
+approved **local tools** on a document you choose: reading it, checking its figures, or producing a
+redacted copy. When one runs you'll see a calm run bar — **Running: `<tool>` on `<N>` documents…
+Cancel**. A tool that **writes or exports a file** (for example "save as CSV", or "save the redacted
+copy") always asks you to **confirm first** and lets you choose where the file goes, and you can
+**Cancel** at any point. Everything a tool sees is just the one document you picked — it can't reach
+anything else on the drive.
+
+> Redaction is **best-effort**, not a guarantee: it hides the patterns it recognises (e-mails, phone
+> numbers, IBANs, and the like) but can miss anything without a clear pattern. Always review the
+> redacted copy before you share it.
+
+### Manage skills (Settings → Skills)
+
+Open **Settings → Skills** to see every installed skill, turn each one **on or off**, and **Import**
+or **Delete** your own.
+
+- **Import** takes a `.skill.zip` file *or* a folder that contains a `SKILL.md`. The app checks the
+  package safely before it installs anything; if something is wrong it tells you why and installs
+  nothing.
+- A skill you **drop into the drive's `user-skills/` folder yourself installs switched off** — open
+  this tab and toggle it on when you're ready. (A quick safety step, so nothing a file added can run
+  without your say-so.)
+- Built-in skills can be turned on or off but **not deleted**.
+- A skill may show a **"Needs newer app"** badge with its toggle greyed out — it was built for a newer
+  version of HilbertRaum than the one you're running. Update the app to use it; until then it stays
+  listed but inactive (it can't be switched on, suggested, or run).
+
+Skills never run by themselves — you always pick or confirm. And as everywhere else, the activity log
+records only ids and counts, never your documents' contents or a skill's figures.
+
+---
+
+## 9. Privacy & offline
 
 Open **Settings → Privacy & data** (or click the **🔒 Local · Offline** status in the chat header)
 to see where your data lives and confirm the app's network state. Internet access is used **only**
@@ -505,7 +561,7 @@ password — only names, ids, and counts. It keeps the most recent 5,000 entries
 
 ---
 
-## 9. Appearance (light and dark)
+## 10. Appearance (light and dark)
 
 The app follows your operating system's light/dark preference by default. To pick one
 explicitly, open **Settings → Appearance** and choose **System**, **Light**, or **Dark** —
@@ -516,7 +572,7 @@ inside the encrypted workspace, so before you unlock it the app can't know your 
 
 ---
 
-## 10. Lock / quit
+## 11. Lock / quit
 
 - **Lock now** (encrypted workspaces) re-locks your data without quitting. It also shuts down
   the AI model so nothing you typed stays in memory; after unlocking, your selected model loads
@@ -541,7 +597,7 @@ is unlocked. Enter your current password, then the new one twice — the same st
 
 ---
 
-## 11. Move between laptops
+## 12. Move between laptops
 
 Because everything lives on the drive, you can unplug it and plug it into another laptop —
 your models, documents, and chat history come with you. Eject the drive safely before

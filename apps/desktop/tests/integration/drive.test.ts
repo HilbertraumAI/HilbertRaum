@@ -129,6 +129,8 @@ describe('planPrepareDrive (dry-run)', () => {
     expect(plan.manifestsToCopy.sort()).toEqual(['embed.yaml', 'qwen3-4b-instruct-q4.yaml'])
     expect(plan.weightDestinations).toContain('models/chat/qwen3-4b-instruct-q4.gguf')
     expect(plan.weightDestinations).toContain('models/embeddings/e5.gguf')
+    // No app-skills source supplied → nothing listed to copy (the scripts copy wholesale).
+    expect(plan.appSkillsToCopy).toEqual([])
     expect(plan.configWouldOverwrite).toBe(false)
     // Generated JSON parses + round-trips.
     const drive = JSON.parse(plan.filesToWrite[0].contents)
@@ -141,6 +143,20 @@ describe('planPrepareDrive (dry-run)', () => {
     writeFileSync(join(root, 'config', 'drive.json'), '{}')
     const plan = planPrepareDrive(root, [asManifest()])
     expect(plan.configWouldOverwrite).toBe(true)
+  })
+
+  // S9: when the repo app-skills/ source is supplied, the plan lists its product skills to copy
+  // (a folder with a SKILL.md). A bare folder with no SKILL.md is not a skill and is skipped.
+  it('lists app skills to copy from the supplied app-skills source', () => {
+    const root = tempDir('hilbertraum-plan-')
+    const appSkillsDir = join(tempDir('hilbertraum-appskills-'), 'app-skills')
+    for (const id of ['bank-statement', 'contract-review']) {
+      mkdirSync(join(appSkillsDir, id), { recursive: true })
+      writeFileSync(join(appSkillsDir, id, 'SKILL.md'), `---\nid: ${id}\ntitle: ${id}\ndescription: d\nversion: 1.0.0\n---\nb`)
+    }
+    mkdirSync(join(appSkillsDir, 'not-a-skill'), { recursive: true }) // no SKILL.md → skipped
+    const plan = planPrepareDrive(root, [asManifest()], { appSkillsDir })
+    expect(plan.appSkillsToCopy).toEqual(['bank-statement', 'contract-review'])
   })
 })
 

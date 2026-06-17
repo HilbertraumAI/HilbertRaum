@@ -9,6 +9,7 @@ import type { OcrEngine } from './ocr'
 import type { CachedGpuProbe } from './runtime/gpu'
 import type { AuditRecorder } from './audit'
 import type { DocTaskManager } from './doctasks'
+import type { SkillRegistry } from './skills/registry'
 
 // Shared application context assembled at startup and passed to IPC handlers.
 export interface AppContext {
@@ -70,4 +71,11 @@ export interface AppContext {
    * handlers guard with `ctx.docTasks?.hasActiveTask()`.
    */
   docTasks?: DocTaskManager
+  /**
+   * Skill registry (skills plan §8): the uniform disk-reconcile + state cache over the plain
+   * app-skills/ + user-skills/ folders. Optional so partial test contexts stay valid. `reconcile`
+   * needs an unlocked DB, so the live wiring reconciles best-effort at startup (plaintext_dev) and
+   * later phases re-run it post-unlock; tests drive `reconcileSkills`/the handle directly.
+   */
+  skills?: SkillRegistry
 }

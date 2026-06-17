@@ -1,0 +1,44 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://hilbertraum.local/skills/bank-statement/transaction.schema.json",
+  "title": "Bank statement transaction row",
+  "description": "Tier-2 I/O contract for one transaction extracted from a bank statement. Present early as a reference contract; NO tool reads or produces it in this instruction-only v1 (skills plan §13).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["date", "description", "amount", "currency"],
+  "properties": {
+    "date": {
+      "type": "string",
+      "description": "Booking date as printed on the statement, ISO 8601 (YYYY-MM-DD).",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+    },
+    "valueDate": {
+      "type": "string",
+      "description": "Value date, if the statement prints one separately (ISO 8601).",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+    },
+    "description": {
+      "type": "string",
+      "description": "The transaction description exactly as printed.",
+      "minLength": 1
+    },
+    "amount": {
+      "type": "number",
+      "description": "Signed amount: negative for debits/withdrawals, positive for credits/deposits."
+    },
+    "currency": {
+      "type": "string",
+      "description": "ISO 4217 currency code as printed (e.g. EUR, USD).",
+      "pattern": "^[A-Z]{3}$"
+    },
+    "balanceAfter": {
+      "type": "number",
+      "description": "Running balance after this transaction, only if the statement prints it on the row."
+    },
+    "sourcePage": {
+      "type": "integer",
+      "description": "1-based page of the statement the row appears on (provenance for quoting).",
+      "minimum": 1
+    }
+  }
+}

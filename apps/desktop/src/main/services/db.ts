@@ -220,6 +220,163 @@ CREATE TABLE IF NOT EXISTS extraction_records (
 );
 CREATE INDEX IF NOT EXISTS idx_extract_doc_type ON extraction_records(document_id, record_type, normalized_value);
 CREATE INDEX IF NOT EXISTS idx_extract_chunk ON extraction_records(chunk_id);
+
+-- Skills registry (architecture.md "Skills — design record" §3/§10, revised §0 — plaintext plain-folder model). A
+-- pure DERIVED INDEX + state cache over the on-disk skill folders (app-skills/ + user-skills/):
+-- disk is the source of truth (DS1), so a DB rebuild simply re-reads the folders and re-derives
+-- every row (no orphan, no recovery path). NOTE: there is deliberately NO foreign key FROM the
+-- core tables (conversations/messages) INTO skills (audit C3 / §9.4) — a real FK would block
+-- deletion and an older app must ignore the columns; references are cleared by an app-level sweep
+-- (S4), never a cascade.
+--
+-- install_id is the DETERMINISTIC natural key "<source>:<id>" (S3 decision), NOT a random uuid:
+-- user-skill folders are named by id so two same-id user skills can't coexist on disk, and a
+-- disk-derived key is STABLE across a DB rebuild — so conversations.active_skill_id /
+-- messages.skill_id keep resolving after a rebuild (a re-minted uuid would orphan them). Same-id
+-- app vs user skills get distinct keys ("app:x" vs "user:x"), so DS12's collision handling holds.
+CREATE TABLE IF NOT EXISTS skills (
+  install_id     TEXT PRIMARY KEY,          -- deterministic "<source>:<id>" (disk-derivable; stable across rebuilds)
+  id             TEXT NOT NULL,             -- declared kebab skill id (indexed, NON-unique across sources)
+  title          TEXT NOT NULL,
+  version        TEXT NOT NULL,
+  kind           TEXT NOT NULL,             -- 'instruction' | 'tool'
+  source         TEXT NOT NULL,             -- 'app' | 'user' (which folder it was discovered in)
+  path           TEXT NOT NULL,             -- on-disk folder BASENAME, relative to the source dir (portable, machine-independent)
+  enabled        INTEGER NOT NULL,          -- 0/1; app installs enabled, user drop-ins DISABLED (DS19)
+  warning_ack    INTEGER NOT NULL,          -- 0/1; untrusted-skill warning acknowledged (DS7; app=1, user drop-in=0)
+  trusted_level  TEXT NOT NULL,             -- 'app' | 'user' (APP-ASSIGNED, never self-declared)
+  manifest_json  TEXT NOT NULL,             -- cached parsed manifest (re-derivable cache; carries triggers + compatibility, §22-C2)
+  unavailable_at TEXT,                      -- NULL = folder present; ISO timestamp = folder vanished (mark-unavailable; never blind-deleted)
+  installed_at   TEXT NOT NULL,
+  updated_at     TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_skills_id ON skills(id);   -- duplicate-id lookups across sources (the DS12 warning)
+
+-- Skill tool-run history (architecture.md "Skills — design record" §10, S11a). One row PER
+-- app-orchestrated tool run (DS4), bracketed started → done|failed|cancelled. IDS/REFS ONLY —
+-- never document/chat content: document_ids_json is ids, result_ref is a bank_statements.id or an
+-- invoices.id, and
+-- error is a friendly/technical reason. Excluded from every export (skills-plan §9.5). No FK INTO
+-- skills (same audit-C3 reasoning as conversations/messages — references cleared by app sweep, not
+-- a cascade), so a deleted skill never blocks or rewrites its run history.
+CREATE TABLE IF NOT EXISTS skill_runs (
+  id                TEXT PRIMARY KEY,
+  skill_install_id  TEXT NOT NULL,          -- skills.install_id ("<source>:<id>")
+  conversation_id   TEXT,                   -- nullable: a doc-action run may not be a chat
+  document_ids_json TEXT,                   -- ids only, never content
+  status            TEXT NOT NULL,          -- 'started' | 'done' | 'failed' | 'cancelled'
+  created_at        TEXT NOT NULL,
+  completed_at      TEXT,
+  result_ref        TEXT,                   -- e.g. a bank_statements.id / invoices.id; NEVER inline content
+  error             TEXT                    -- friendly/technical reason; NEVER document/chat text
+);
+CREATE INDEX IF NOT EXISTS idx_skill_runs_skill ON skill_runs(skill_install_id);
+
+-- Bank-statement data tables (architecture.md "Skills — design record" §10, S11a). CONTENT-CLASS: the extracted
+-- figures are user content, so they live ONLY here in the encrypted workspace DB (a workspace
+-- backup carries them — correct), are NEVER logged/audited (audit stays ids/counts), and are NEVER
+-- in the skill .skill.zip or conversation export. Distinct from the non-secret skill packages
+-- (DS20). S11a creates only what extract_transactions needs; categories/rules/corrections arrive
+-- additively with S11c (the tree_nodes-per-feature precedent — no overbuild, skills-plan §13).
+CREATE TABLE IF NOT EXISTS bank_statements (
+  id            TEXT PRIMARY KEY,
+  document_id   TEXT NOT NULL,              -- the source document (id only)
+  run_id        TEXT,                       -- the skill_runs.id that produced this extraction
+  period_start  TEXT,                       -- as printed, nullable
+  period_end    TEXT,
+  currency      TEXT,                       -- statement currency, nullable
+  created_at    TEXT NOT NULL,
+  FOREIGN KEY (document_id) REFERENCES documents(id)
+);
+CREATE INDEX IF NOT EXISTS idx_bank_statements_document ON bank_statements(document_id);
+
+CREATE TABLE IF NOT EXISTS bank_transactions (
+  id             TEXT PRIMARY KEY,
+  statement_id   TEXT NOT NULL,             -- references bank_statements.id
+  run_id         TEXT,
+  row_index      INTEGER NOT NULL,          -- stable order within the statement
+  date           TEXT NOT NULL,             -- content: booking date as printed (ISO)
+  value_date     TEXT,                      -- content
+  description    TEXT NOT NULL,             -- content
+  amount         REAL NOT NULL,             -- content: signed
+  currency       TEXT NOT NULL,
+  balance_after  REAL,                      -- content, nullable
+  source_page    INTEGER,                   -- provenance (1-based) for quoting
+  created_at     TEXT NOT NULL,
+  FOREIGN KEY (statement_id) REFERENCES bank_statements(id)
+);
+CREATE INDEX IF NOT EXISTS idx_bank_transactions_statement ON bank_transactions(statement_id);
+
+-- Categorization + reconciliation + user-correction tables (architecture.md "Skills — design record" §10 full
+-- future DDL, created additively at S11c — the tree_nodes-per-feature precedent). All CONTENT-CLASS
+-- (a category name / a corrected figure is user content): encrypted workspace DB only, NEVER
+-- logged/audited, NEVER exported (skills-plan §9.5). bank_corrections is created now but only
+-- written by a future correction UI (out of S11c scope, §8) — the schema is ratified, so it lands
+-- additively rather than as a later migration.
+CREATE TABLE IF NOT EXISTS bank_categories (
+  id          TEXT PRIMARY KEY,
+  name        TEXT NOT NULL,             -- content: the category label (e.g. "Income", "Fees")
+  builtin     INTEGER NOT NULL DEFAULT 0,-- 1 = a built-in deterministic-rule category
+  created_at  TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS bank_category_rules (
+  id          TEXT PRIMARY KEY,
+  category_id TEXT NOT NULL,             -- references bank_categories.id
+  match_kind  TEXT NOT NULL,            -- 'description-substring' | 'amount-sign'
+  pattern     TEXT NOT NULL,            -- the substring, or 'positive'|'negative' for amount-sign
+  created_at  TEXT NOT NULL,
+  FOREIGN KEY (category_id) REFERENCES bank_categories(id)
+);
+CREATE INDEX IF NOT EXISTS idx_bank_category_rules_category ON bank_category_rules(category_id);
+CREATE TABLE IF NOT EXISTS bank_corrections (
+  id             TEXT PRIMARY KEY,
+  transaction_id TEXT NOT NULL,          -- references bank_transactions.id
+  field          TEXT NOT NULL,          -- which column the user corrected
+  old_value      TEXT,                   -- content
+  new_value      TEXT,                   -- content
+  created_at     TEXT NOT NULL,
+  FOREIGN KEY (transaction_id) REFERENCES bank_transactions(id)
+);
+CREATE INDEX IF NOT EXISTS idx_bank_corrections_transaction ON bank_corrections(transaction_id);
+
+-- Invoice data tables (architecture.md "Skills — design record" §8/§10). The SECOND Tier-2
+-- content-class domain, mirroring the bank_* tables exactly: the extracted figures are user content,
+-- so they live ONLY here in the encrypted workspace DB (a workspace backup carries them — correct),
+-- are NEVER logged/audited (audit stays ids/counts), and are NEVER in the skill .skill.zip or
+-- conversation export. skill_runs.result_ref points at an invoices.id; it never inlines content.
+CREATE TABLE IF NOT EXISTS invoices (
+  id                TEXT PRIMARY KEY,
+  document_id       TEXT NOT NULL,          -- the source document (id only)
+  run_id            TEXT,                   -- the skill_runs.id that produced this extraction
+  vendor            TEXT,                   -- content: seller name as printed, nullable
+  invoice_number    TEXT,                   -- content, nullable
+  invoice_date      TEXT,                   -- content: ISO, nullable
+  due_date          TEXT,                   -- content: ISO, nullable
+  currency          TEXT,                   -- invoice currency, nullable
+  net_total         REAL,                   -- content, nullable
+  tax_total         REAL,                   -- content, nullable
+  tax_rate          REAL,                   -- content: tax rate percent, nullable
+  gross_total       REAL,                   -- content, nullable
+  totals_reconciled INTEGER,                -- 1 reconciled / 0 not / NULL unchecked (validate_invoice_totals)
+  created_at        TEXT NOT NULL,
+  FOREIGN KEY (document_id) REFERENCES documents(id)
+);
+CREATE INDEX IF NOT EXISTS idx_invoices_document ON invoices(document_id);
+
+CREATE TABLE IF NOT EXISTS invoice_line_items (
+  id           TEXT PRIMARY KEY,
+  invoice_id   TEXT NOT NULL,               -- references invoices.id
+  run_id       TEXT,
+  row_index    INTEGER NOT NULL,            -- stable order within the invoice
+  description  TEXT NOT NULL,               -- content
+  quantity     REAL,                        -- content, nullable
+  unit_price   REAL,                        -- content, nullable
+  line_total   REAL NOT NULL,               -- content
+  currency     TEXT NOT NULL,
+  created_at   TEXT NOT NULL,
+  FOREIGN KEY (invoice_id) REFERENCES invoices(id)
+);
+CREATE INDEX IF NOT EXISTS idx_invoice_line_items_invoice ON invoice_line_items(invoice_id);
 `
 
 // Additive column migrations on top of the spec §8 base schema. `CREATE TABLE IF NOT
@@ -384,6 +541,27 @@ export function openDatabase(path: string): Db {
   //   extract_status — NULL | 'pending' | 'extracting' | 'ready' | 'stale' | 'failed' (Phase 3,
   //   the per-chunk structured-extract pass; mirrors tree_status, NULL-sentinel).
   ensureColumn(db, 'documents', 'extract_status', 'extract_status TEXT')
+  // Skills (skills plan §8.2). Both nullable — NULL = no skill (the scope_v2_json NULL-sentinel
+  // convention). No FK into `skills` (audit C3): refs are cleared by an app-level sweep on delete
+  // (S4), so an older app can ignore these columns and skill deletion is never FK-blocked.
+  //   conversations.active_skill_id — the STICKY DEFAULT skill for new turns (DS18).
+  //   messages.skill_id             — the skill that shaped THIS turn; powers the per-message glyph (DS16/DS18).
+  ensureColumn(db, 'conversations', 'active_skill_id', 'active_skill_id TEXT')
+  ensureColumn(db, 'messages', 'skill_id', 'skill_id TEXT')
+  // S13c — auto-fire provenance (skills-s13-plan.md §5/D3). Additive + nullable (NULL/0 = the skill
+  // was an explicit pick or there was none; 1 = the app AUTO-FIRED it). Stamped on the assistant row
+  // only when the auto-fire path placed the skill, so the per-turn "answer without it" undo shows ONLY
+  // on an auto-fired turn. Privacy-safe: a boolean, never content. An older app simply ignores it.
+  ensureColumn(db, 'messages', 'auto_fired', 'auto_fired INTEGER')
+  // Bank-transaction derived annotations (architecture.md "Skills — design record" §10, S11c). All nullable —
+  // a row has no category/reconciled/confidence until a downstream tool computes one. CONTENT-CLASS
+  // (a category id / reconcile verdict is derived from user figures): never logged/audited/exported.
+  //   bank_transactions.category_id — the assigned bank_categories.id (categorize_transactions).
+  //   bank_transactions.reconciled  — 0/1 balance-reconcile verdict (validate_statement_balances).
+  //   bank_transactions.confidence  — extraction/categorization confidence, 0..1 (future use).
+  ensureColumn(db, 'bank_transactions', 'category_id', 'category_id TEXT')
+  ensureColumn(db, 'bank_transactions', 'reconciled', 'reconciled INTEGER')
+  ensureColumn(db, 'bank_transactions', 'confidence', 'confidence REAL')
   ensureChunksFts(db)
   ensureMessagesFts(db)
   seedCollections(db)

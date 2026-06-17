@@ -68,6 +68,8 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 # Directory tree (must match drive.ts DRIVE_LAYOUT_DIRS / sidecar.ts llamaOsDir).
 DIRS=(
   workspace
+  app-skills
+  user-skills
   models/chat
   models/embeddings
   models/reranker
@@ -119,6 +121,23 @@ if [[ -d "$REPO_ROOT/model-manifests" ]]; then
   fi
 else
   echo "  WARNING: $REPO_ROOT/model-manifests not found (run from a repo clone)"
+fi
+echo
+
+# Copy the committed product skills (text-only: SKILL.md + JSON schemas + examples) from the
+# repo app-skills/ tree onto the drive, the same wholesale copy as model-manifests/ (skills
+# plan S9 / DS17). user-skills/ is left EMPTY (the buyer fills it). Canonical reference:
+# drive.ts listSkillFolders / planPrepareDrive.appSkillsToCopy.
+echo "App skills:"
+if [[ -d "$REPO_ROOT/app-skills" ]]; then
+  if [[ $DRY_RUN -eq 1 ]]; then
+    echo "  copy $REPO_ROOT/app-skills -> $TARGET/app-skills (product skills)"
+  else
+    cp -R "$REPO_ROOT/app-skills/." "$TARGET/app-skills/"
+    echo "  copied app skills to app-skills/"
+  fi
+else
+  echo "  WARNING: $REPO_ROOT/app-skills not found (run from a repo clone)"
 fi
 echo
 
