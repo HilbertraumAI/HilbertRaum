@@ -175,28 +175,51 @@ function downstreamCtx(): SkillToolContext {
 }
 
 describe('validate_statement_balances (S11c)', () => {
-  it('reconcileBalances: ok when each printed balance matches the computed running balance', () => {
+  it('reconcileBalances: baseline row is unknown, only a genuine predecessor-comparison is ok', () => {
     const rows = [
       tx({ amount: -45.9, balanceAfter: 1954.1 }),
       tx({ amount: 2500, balanceAfter: 4454.1 })
     ]
     const res = reconcileBalances(rows)
+    // The first row has nothing to compare against (baseline → unknown); the second row IS a genuine
+    // check against its predecessor's printed balance, so it reconciles.
     expect(res.reconciled).toBe(true)
-    expect(res.rows.map((r) => r.status)).toEqual(['ok', 'ok'])
+    expect(res.rows.map((r) => r.status)).toEqual(['unknown', 'ok'])
+  })
+
+  it('reconcileBalances: a single-transaction statement verifies nothing ⇒ not reconciled (honesty)', () => {
+    // The lone printed balance is a baseline with no predecessor — it must NOT count as a pass, or
+    // the statement would claim `reconciled: true` having checked nothing (the fix for over-reporting).
+    const res = reconcileBalances([tx({ amount: -45.9, balanceAfter: 1954.1 })])
+    expect(res.reconciled).toBe(false)
+    expect(res.rows.map((r) => r.status)).toEqual(['unknown'])
   })
 
   it('reconcileBalances: flags a mismatch and an unknown (no printed balance), never invents', () => {
     const rows = [
       tx({ amount: -45.9, balanceAfter: 1954.1 }),
-      tx({ amount: 2500, balanceAfter: 9999.99 }), // wrong running balance
+      tx({ amount: 2500, balanceAfter: 9999.99 }), // wrong running balance vs predecessor
       tx({ amount: -5, balanceAfter: undefined }) // no balance printed → unknown
     ]
     const res = reconcileBalances(rows)
     expect(res.reconciled).toBe(false)
-    expect(res.rows.map((r) => r.status)).toEqual(['ok', 'mismatch', 'unknown'])
+    // Row 0 is the baseline (unknown); row 1 is a genuine comparison that disagrees (mismatch).
+    expect(res.rows.map((r) => r.status)).toEqual(['unknown', 'mismatch', 'unknown'])
   })
 
-  it('reconcileBalances: all-unknown ⇒ not reconciled (nothing could be checked)', () => {
+  it('reconcileBalances: genuine mismatch alone ⇒ not reconciled', () => {
+    const rows = [
+      tx({ amount: 100, balanceAfter: 100 }),
+      tx({ amount: 50, balanceAfter: 999 }) // expected 150 → mismatch
+    ]
+    const res = reconcileBalances(rows)
+    expect(res.reconciled).toBe(false)
+    expect(res.rows.map((r) => r.status)).toEqual(['unknown', 'mismatch'])
+  })
+
+  it('reconcileBalances: all-baseline (no predecessor ever has a balance) ⇒ not reconciled', () => {
+    // Every row prints no balance, so there is never a predecessor balance to compare against — the
+    // whole statement is unchecked, never silently "reconciled".
     const res = reconcileBalances([tx(), tx()])
     expect(res.reconciled).toBe(false)
     expect(res.rows.every((r) => r.status === 'unknown')).toBe(true)

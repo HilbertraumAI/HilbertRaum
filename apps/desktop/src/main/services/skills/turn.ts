@@ -2,6 +2,7 @@ import type { Db } from '../db'
 import type { SkillLimits } from './limits'
 import { getSkill } from './registry'
 import { loadSkillPackage } from './loader'
+import { skillNeedsNewerApp } from '../../../shared/skill-manifest'
 import { getConversationDefaultSkill, type TurnSkill } from '../chat'
 
 // resolveTurnSkill — the SINGLE place that decides which skill (if any) shapes a turn, shared by
@@ -14,6 +15,12 @@ export interface TurnSkillDeps {
   appSkillsDir: string
   userSkillsDir: string
   limits?: SkillLimits
+  /**
+   * The running app version, for the §6.5 minAppVersion gate (§14/M1). Gating the USE-SITE (not just
+   * enable) keeps the gate airtight: a skill edited on disk to need a newer app while already enabled
+   * is skipped here regardless of its stale `enabled` flag. Absent / '' ⇒ treated as compatible.
+   */
+  appVersion?: string
 }
 
 /**
@@ -38,6 +45,9 @@ export function resolveTurnSkill(
   const record = getSkill(db, installId)
   // Skip a default that is disabled, deleted, or whose folder vanished (mark-unavailable).
   if (!record || !record.enabled || record.unavailableAt != null) return null
+  // §6.5/M1 gate at the use-site: skip a skill that now needs a newer app even if its `enabled` flag
+  // is stale (edited on disk after it was enabled). Reuses the shared, version-tolerant helper.
+  if (skillNeedsNewerApp(record.manifest.compatibility.minAppVersion, deps.appVersion ?? '')) return null
 
   const parsed = loadSkillPackage(record, deps)
   if (!parsed.ok || parsed.body == null) return null
@@ -52,14 +62,18 @@ export function resolveTurnSkill(
  */
 export function resolveTurnSkillFromRegistry(
   db: Db,
-  registry: { appSkillsDir: string; userSkillsDir: string } | undefined,
+  registry: { appSkillsDir: string; userSkillsDir: string; appVersion?: string } | undefined,
   conversationId: string,
   requestedInstallId?: string | null
 ): TurnSkill | null {
   if (!registry) return null
   return resolveTurnSkill(
     db,
-    { appSkillsDir: registry.appSkillsDir, userSkillsDir: registry.userSkillsDir },
+    {
+      appSkillsDir: registry.appSkillsDir,
+      userSkillsDir: registry.userSkillsDir,
+      appVersion: registry.appVersion
+    },
     conversationId,
     requestedInstallId
   )

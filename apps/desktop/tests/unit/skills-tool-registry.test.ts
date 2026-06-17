@@ -272,6 +272,38 @@ describe('runSkillTool — narrow context + cancellation', () => {
     expect(ran).toBe(false)
     expect(events).toEqual([])
   })
+
+  it('a tool returning !ok AFTER the abort fired audits no skill_run_failed (cancel ⇄ row consistency)', async () => {
+    // A mid-run cancel: the signal fires while the tool is working, then the tool returns !ok. The
+    // run seam records the `skill_runs` row as `cancelled`; the gate must NOT audit it as
+    // `skill_run_failed`, or the audit would contradict the row. Expect started-then-no-terminal.
+    const ac = new AbortController()
+    const { ctx, events } = makeCtx({ signal: ac.signal, documentIds: ['d1'] })
+    const cancelTool: SkillTool = {
+      ...noteTool,
+      async run() {
+        ac.abort() // the user cancelled mid-run
+        return { ok: false, error: 'This action was cancelled.' }
+      }
+    }
+    const result = await runSkillTool(cancelTool, { skillId: 's', input: { note: 'x' }, ctx })
+    expect(result.ok).toBe(false)
+    expect(events.map((e) => e.type)).toEqual(['skill_run_started'])
+    expect(events.map((e) => e.type)).not.toContain('skill_run_failed')
+  })
+
+  it('a genuine !ok with NO abort still audits skill_run_failed (the non-cancel path is unchanged)', async () => {
+    const { ctx, events } = makeCtx({ documentIds: ['d1'] })
+    const failTool: SkillTool = {
+      ...noteTool,
+      async run() {
+        return { ok: false, error: 'This tool could not finish.' }
+      }
+    }
+    const result = await runSkillTool(failTool, { skillId: 's', input: { note: 'x' }, ctx })
+    expect(result.ok).toBe(false)
+    expect(events.map((e) => e.type)).toEqual(['skill_run_started', 'skill_run_failed'])
+  })
 })
 
 describe('runSkillTool — content-class sentinel grep (§22-M1)', () => {

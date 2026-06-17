@@ -213,6 +213,67 @@ describe('skills tool-run IPC (S11b)', () => {
     expect(result).toEqual([])
   })
 
+  it('excludes an enabled-but-incompatible skill from listRunnableTools AND startSkillRun (§6.5/M1 airtight)', async () => {
+    // The third use-site: a tool skill that needs a far newer app than the test app (0.0.0-test).
+    // Reconcile installs it disabled; we then force-enable it to simulate a SKILL.md edited on disk
+    // upward AFTER it was enabled (reconcile preserves the enabled flag). The use-site gate must
+    // still exclude it — both from the runnable list and from being startable.
+    const root = tempDir()
+    const appSkillsDir = join(root, 'app-skills')
+    const userSkillsDir = join(root, 'user-skills')
+    mkdirSync(appSkillsDir, { recursive: true })
+    mkdirSync(userSkillsDir, { recursive: true })
+    const skillDir = join(appSkillsDir, 'bank-statement')
+    mkdirSync(skillDir, { recursive: true })
+    writeFileSync(
+      join(skillDir, 'SKILL.md'),
+      [
+        '---',
+        'id: bank-statement',
+        'title: Bank statement',
+        'description: Reads statements.',
+        'version: 1.0.0',
+        'kind: tool',
+        'allowedTools: [extract_transactions]',
+        'compatibility:',
+        '  minAppVersion: 99.0.0',
+        '---',
+        'Quote the printed figures.'
+      ].join('\n'),
+      'utf8'
+    )
+    const db = openDatabase(join(root, 'test.sqlite'))
+    seedSettings(db)
+    const audit = createAuditRecorder(() => db)
+    const skills = createSkillRegistry({ getDb: () => db, appSkillsDir, userSkillsDir })
+    const ctx = {
+      db,
+      paths: { workspacePath: root },
+      workspace: { isUnlocked: () => true, documentCipher: () => null },
+      isDev: false,
+      audit,
+      skills,
+      ocrEngine: undefined
+    } as unknown as AppContext
+    registerSkillsIpc(ctx)
+    const docId = seedDocWithChunks(db, 'EUR\n2026-01-02 Grocery -45,90')
+    const conv = createConversation(db, { mode: 'documents', scope: { collectionIds: [], documentIds: [docId] } })
+
+    // Drive the disk reconcile once (installs disabled), then force-enable to model the stale flag.
+    skills.list()
+    db.prepare('UPDATE skills SET enabled = 1 WHERE install_id = ?').run('app:bank-statement')
+
+    const { result: tools } = await invoke(handlers, IPC.listRunnableTools, 'app:bank-statement', conv.id)
+    expect(tools).toEqual([]) // incompatible → no runnable tools even though enabled
+
+    const { result: startRaw } = await invoke(handlers, IPC.startSkillRun, {
+      skillInstallId: 'app:bank-statement',
+      toolName: 'extract_transactions',
+      conversationId: conv.id
+    })
+    expect((startRaw as StartSkillRunResult).started).toBe(false) // refuses to run
+  })
+
   it('startSkillRun → getSkillRun runs end-to-end and reports the count only', async () => {
     const { skillInstallId, conversationId } = makeHarness(
       'Statement EUR\n2026-01-02 Grocery -45,90 1.954,10\n2026-01-03 Salary 2.500,00 4.454,10'

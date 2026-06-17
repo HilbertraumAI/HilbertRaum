@@ -6,7 +6,36 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
-_Last updated: 2026-06-17 — **Skills — content-reach + compatibility audit fixes (no new phase).**
+_Last updated: 2026-06-17 — **Skills — LOW / residual follow-ups (no new phase).** The four remaining
+LOW/residual items after the §14 audit, all fixed behind the unchanged §7 ceiling (no new capability,
+still offline, audit still ids/counts-only, EN/DE parity compile-enforced). Full design record:
+**architecture.md "Skills — design record" §15**. **(1) Docs:** [`user-guide.md`](docs/user-guide.md)
+gained a §8 "Skills" section (composer picker, per-message glyph, one-tap suggestion, tool skills +
+run bar + confirm/cancel, Settings → Skills with import/enable/delete, drop-ins install disabled, the
+"Needs newer app" badge) and [`troubleshooting.md`](docs/troubleshooting.md) gained four entries
+(drop-in disabled DS19, structural import-rejection reasons, the "Needs newer app" badge, "the skill
+tool found nothing"). **(2) `reconcileBalances` honesty:** the lone **baseline** row (first row, or any
+row whose predecessor printed no balance) is now `unknown`, not `ok` — `reconciled` needs ≥1 row
+genuinely compared against a predecessor (`okCount > 0`), so a single-transaction statement reports
+`reconciled: false` / `resultKind: 'unchecked'` instead of "reconciled having verified nothing". The
+downstream `resultKind` logic was already keyed off `unknown` (unchanged); the baseline now persists
+`reconciled = NULL`. Invoice (`validateInvoiceTotals`) has no baseline concept → no change.
+**(3) Cancel ⇄ audit consistency:** when `ctx.signal.aborted`, the gate
+([`tool-registry.ts`](apps/desktop/src/main/services/skills/tool-registry.ts)) suppresses the
+`skill_run_failed` audit event (a cancelled run audits as started-then-no-terminal), so it agrees with
+the `skill_runs` row the seam records as `cancelled`; a genuine non-cancel `!ok` still audits failed.
+**(4) minAppVersion gate airtight (the §14/M1 residual):** the use-sites now gate on **compatibility**,
+not just `enabled`, reusing `skillNeedsNewerApp`. App version (already threaded via `app.getVersion()`
+in §14) carried into `resolveTurnSkill` (`turn.ts` + the registry handle's new `appVersion` field),
+`suggestSkillsForTurn` (`suggest.ts`), and `runnableToolNames`/`runnableToolsForSkill` (`tool-runs.ts`,
+threaded at both the `listRunnableTools` and `startSkillRun` IPC sites) — so a skill edited on disk to
+need a newer app while already enabled is skipped at turn-resolution, never suggested, and refused at
+run start. Tests added/extended for each fix (bank-statement unit: single-row/all-baseline/genuine
+match+mismatch; tool-registry unit: mid-run-cancel emits no `skill_run_failed`; turn/suggest/tool-run-IPC
+integration: enabled-but-incompatible excluded from all three use-sites). Full suite green, typecheck +
+build clean._
+
+_(prior) 2026-06-17 — **Skills — content-reach + compatibility audit fixes (no new phase).**
 A follow-up audit of the whole skills surface (bugs + docs-vs-code) found one HIGH + three MEDIUMs,
 all fixed behind the unchanged §7 ceiling. **H1 (the headline fix):** the Tier-2 content-reading tools
 (`extract_transactions`/`extract_invoice`/`redact_document`) had been reading the stored `chunks` table

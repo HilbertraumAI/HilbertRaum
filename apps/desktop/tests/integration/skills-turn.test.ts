@@ -103,6 +103,41 @@ describe('resolveTurnSkill (skills plan §10.1/§10.3)', () => {
     db.prepare('DELETE FROM skills WHERE install_id = ?').run(installId)
     expect(resolveTurnSkill(db, dirs, conv.id)).toBeNull()
   })
+
+  it('skips an enabled-but-incompatible skill at the use-site (§6.5/M1 airtight gate)', () => {
+    // An enabled skill whose SKILL.md was edited on disk to require a newer app than is running. The
+    // `enabled` flag is stale (reconcile preserves it); the use-site gate must still exclude it.
+    const db = freshDb()
+    const dirs = makeDirs()
+    const d = join(dirs.userSkillsDir, 'futureskill')
+    mkdirSync(d, { recursive: true })
+    writeFileSync(
+      join(d, 'SKILL.md'),
+      [
+        '---',
+        'id: futureskill',
+        'title: Future Skill',
+        'description: Needs a newer app',
+        'version: 1.0.0',
+        'compatibility:',
+        '  minAppVersion: 99.0.0',
+        '---',
+        'Body that should never reach a turn while the app is too old.'
+      ].join('\n'),
+      'utf8'
+    )
+    reconcileSkills(db, dirs)
+    setSkillEnabled(db, 'user:futureskill', true) // force-enable (simulate stale enabled flag)
+    const conv = createConversation(db, {})
+    setConversationDefaultSkill(db, conv.id, 'user:futureskill')
+
+    // Too old → skipped even though enabled.
+    expect(resolveTurnSkill(db, { ...dirs, appVersion: '1.2.3' }, conv.id)).toBeNull()
+    // New enough → resolves normally.
+    expect(resolveTurnSkill(db, { ...dirs, appVersion: '99.0.0' }, conv.id)?.installId).toBe('user:futureskill')
+    // No appVersion supplied ⇒ tolerant (treated as compatible) — the existing callers' default.
+    expect(resolveTurnSkill(db, dirs, conv.id)?.installId).toBe('user:futureskill')
+  })
 })
 
 describe('fence placement (§11.2/§22-H2)', () => {

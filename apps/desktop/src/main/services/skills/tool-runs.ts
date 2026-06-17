@@ -5,6 +5,7 @@ import type { SkillRecord } from './registry'
 import { resolveScope } from '../collections'
 import { buildScopeFilter } from '../retrieval-scope'
 import { getRegisteredTool, resolveEffectiveTools, toolRequiresConfirmation } from './tool-registry'
+import { skillNeedsNewerApp } from '../../../shared/skill-manifest'
 import {
   runBankExtraction,
   runBalanceValidation,
@@ -90,15 +91,19 @@ export function resolveInScopeDocumentIds(db: Db, conversationId: string): strin
  * — SL-1). The effective set is `declared ∩ registry ∩ grant`; v1 has no per-tool grant UI, so
  * enabling a `kind:'tool'` skill grants its declared tools (grant = declared). We then keep only the
  * tools actually wired to a `run.ts` seam below. An instruction skill (allowedTools []) gets none.
+ *
+ * §6.5/M1 gate at the use-site: a skill that now needs a newer app runs NO tools, even if its
+ * `enabled` flag is stale (edited on disk after it was enabled). `appVersion` absent / '' ⇒ compatible.
  */
-export function runnableToolNames(skill: SkillRecord): string[] {
+export function runnableToolNames(skill: SkillRecord, appVersion = ''): string[] {
+  if (skillNeedsNewerApp(skill.manifest.compatibility.minAppVersion, appVersion)) return []
   const effective = resolveEffectiveTools(skill.manifest.allowedTools, skill.manifest.allowedTools)
   return effective.filter((n) => WIRED_TOOL_NAMES.includes(n))
 }
 
 /** The `RunnableTool` descriptors for a skill (name + whether the renderer must confirm first). */
-export function runnableToolsForSkill(skill: SkillRecord): RunnableTool[] {
-  return runnableToolNames(skill).map((name) => ({
+export function runnableToolsForSkill(skill: SkillRecord, appVersion = ''): RunnableTool[] {
+  return runnableToolNames(skill, appVersion).map((name) => ({
     name,
     requiresConfirmation: toolRequiresConfirmation(getRegisteredTool(name)!)
   }))

@@ -400,6 +400,8 @@ export function setSkillEnabled(db: Db, installId: string, enabled: boolean, now
 export interface SkillRegistry {
   readonly appSkillsDir: string
   readonly userSkillsDir: string
+  /** The running app version (for the §6.5 minAppVersion gate at the use-sites). '' ⇒ compatible. */
+  readonly appVersion: string
   reconcile(): ReconcileResult
   list(): SkillRecord[]
   get(installId: string): SkillRecord | null
@@ -444,6 +446,7 @@ export function createSkillRegistry(deps: SkillRegistryDeps): SkillRegistry {
   return {
     appSkillsDir,
     userSkillsDir,
+    appVersion: appVersion ?? '',
     reconcile: doReconcile,
     list: () => {
       ensureReconciled()

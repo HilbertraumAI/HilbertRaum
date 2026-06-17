@@ -139,7 +139,8 @@ export function registerSkillsIpc(ctx: AppContext): void {
       return suggestSkillsForTurn(
         ctx.db,
         typeof conversationId === 'string' ? conversationId : '',
-        typeof question === 'string' ? question : ''
+        typeof question === 'string' ? question : '',
+        appVersion
       )
     }
   )
@@ -280,11 +281,12 @@ export function registerSkillsIpc(ctx: AppContext): void {
       ctx.skills!.list() // lazy post-unlock reconcile so a just-enabled skill is considered
       const skill = ctx.skills!.get(skillInstallId)
       if (!skill || skill.unavailableAt != null || !skill.enabled) return []
-      if (runnableToolNames(skill).length === 0) return []
+      // §6.5/M1 gate at the use-site (airtight): an enabled-but-incompatible skill offers no tools.
+      if (runnableToolNames(skill, appVersion).length === 0) return []
       // Only offer when there is at least one indexed document in scope to run against.
       const docIds = resolveInScopeDocumentIds(ctx.db, typeof conversationId === 'string' ? conversationId : '')
       if (docIds.length === 0) return []
-      return runnableToolsForSkill(skill)
+      return runnableToolsForSkill(skill, appVersion)
     }
   )
 
@@ -299,7 +301,9 @@ export function registerSkillsIpc(ctx: AppContext): void {
     if (!skill || skill.unavailableAt != null || !skill.enabled) {
       return { started: false, error: tMain('main.skills.run.unavailable') }
     }
-    if (!runnableToolNames(skill).includes(toolName)) {
+    // §6.5/M1 gate at the use-site (airtight): an enabled-but-incompatible skill refuses to run —
+    // `runnableToolNames` returns [] for it, so the tool is not in the wired set.
+    if (!runnableToolNames(skill, appVersion).includes(toolName)) {
       return { started: false, error: tMain('main.skills.run.unavailable') }
     }
     // Confirm-gate write/export tools (read-only tools run without a per-call prompt — §12.2).

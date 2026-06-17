@@ -91,6 +91,40 @@ describe('suggestSkillsForTurn (S8)', () => {
     expect(suggestSkillsForTurn(db, conv.id, 'bank statement please')).toEqual([])
   })
 
+  it('never suggests an enabled-but-incompatible skill (§6.5/M1 airtight gate)', () => {
+    const db = freshDb()
+    const d = dirs()
+    const dir = join(d.userSkillsDir, 'futurebank')
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(
+      join(dir, 'SKILL.md'),
+      [
+        '---',
+        'id: futurebank',
+        'title: Skill futurebank',
+        'description: needs a newer app',
+        'version: 1.0.0',
+        'compatibility:',
+        '  minAppVersion: 99.0.0',
+        'triggers:',
+        '  keywords: [bank statement]',
+        '---',
+        'Instructions for futurebank.'
+      ].join('\n'),
+      'utf8'
+    )
+    reconcileSkills(db, d)
+    setSkillEnabled(db, 'user:futurebank', true) // force-enable (simulate a stale enabled flag)
+    const conv = createConversation(db, {})
+    const q = 'please reconcile my bank statement'
+    // Too old → not offered even though enabled and a strong keyword match.
+    expect(suggestSkillsForTurn(db, conv.id, q, '1.2.3')).toEqual([])
+    // New enough → offered normally.
+    expect(suggestSkillsForTurn(db, conv.id, q, '99.0.0')).toEqual([
+      { installId: 'user:futurebank', title: 'Skill futurebank' }
+    ])
+  })
+
   it('is INERT — suggesting never sets the conversation default (never auto-applies)', () => {
     const db = freshDb()
     const d = dirs()

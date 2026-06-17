@@ -301,25 +301,35 @@ export async function runSkillTool(tool: SkillTool, args: RunSkillToolArgs): Pro
   // A FROZEN shallow copy: the tool sees the fixed scope and cannot widen it (§14).
   const safeCtx: SkillToolContext = { ...ctx, documentIds: Object.freeze([...ctx.documentIds]) }
 
+  // A run that did not finish because it was CANCELLED is recorded by the seam as `cancelled` (the
+  // `skill_runs` row), NOT a failure. The audit surface has no `skill_run_cancelled` event (it is
+  // ids/counts-only — §11), so to keep the audit consistent with the row we SUPPRESS the
+  // `skill_run_failed` event whenever the abort signal has fired: a cancelled run audits as
+  // started-then-no-terminal-event, never as a failure (the cancel-vs-outcome consistency, B1/B2).
+  const auditTerminalFailure = (): void => {
+    if (ctx.signal.aborted) return
+    ctx.audit('skill_run_failed', auditMeta)
+  }
+
   let result: ToolResult
   try {
     result = await tool.run(input, safeCtx)
   } catch {
     // Technical reason to the LOCAL log only — never the renderer, never the audit (§12.2/§22-M1).
     console.error(`[skills] tool "${tool.name}" threw during run`)
-    ctx.audit('skill_run_failed', auditMeta)
+    auditTerminalFailure()
     return { ok: false, error: 'This tool could not finish. Nothing was changed.' }
   }
 
   if (!result.ok) {
-    ctx.audit('skill_run_failed', auditMeta)
+    auditTerminalFailure()
     return result // the tool's own friendly, content-free error
   }
 
   if (validateToolOutput(tool, result.output).length > 0) {
     // Wrong-shape output is NOT half-trusted into the model — the run fails (§12.2).
     console.error(`[skills] tool "${tool.name}" returned output failing its schema`)
-    ctx.audit('skill_run_failed', auditMeta)
+    auditTerminalFailure()
     return { ok: false, error: 'This tool produced an unexpected result and was stopped.' }
   }
 

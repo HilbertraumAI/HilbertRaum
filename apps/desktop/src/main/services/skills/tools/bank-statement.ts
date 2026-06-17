@@ -206,10 +206,15 @@ export interface ReconcileResult {
 
 /**
  * Reconcile each row's printed running balance against the computed one (pure, deterministic).
- * For a row i with a printed `balanceAfter`, the expected balance is `balanceAfter[i-1] + amount[i]`
- * (the first row's baseline is its own `balanceAfter - amount`). A row is `ok` when the printed and
- * computed balances agree within half a cent, `mismatch` when they disagree, and `unknown` when the
- * row (or its predecessor) prints no balance to check — flagged, never silently treated as correct.
+ * For a row i with a printed `balanceAfter`, the expected balance is `balanceAfter[i-1] + amount[i]`,
+ * so a row is `ok` only when its printed balance agrees with the computed one within half a cent, and
+ * `mismatch` when they disagree. A row is `unknown` when it (or its predecessor) prints no balance —
+ * including the **baseline** row (the first row, or any row whose predecessor printed no balance):
+ * with nothing to compare against, the baseline has NOT been genuinely checked, so it is `unknown`,
+ * never counted as `ok`. Counting the baseline as a pass would let a single-transaction statement
+ * report `reconciled: true` having verified nothing — at odds with the §22-D1 "say so plainly /
+ * don't paper over" honesty posture. `reconciled` is therefore true only when no row mismatched AND
+ * at least one row was actually compared against a predecessor (`okCount > 0`).
  */
 export function reconcileBalances(rows: TransactionInput[]): ReconcileResult {
   const out: ReconcileRow[] = []
@@ -221,10 +226,10 @@ export function reconcileBalances(rows: TransactionInput[]): ReconcileResult {
     let status: ReconcileStatus
     if (printed === undefined) {
       status = 'unknown'
-    } else if (i === 0 || prevBalance === null) {
-      // First checkable row: nothing to compare against yet — accept it as the baseline.
-      status = 'ok'
-      okCount++
+    } else if (prevBalance === null) {
+      // Baseline row: a printed balance with no predecessor balance to compare against. NOT a
+      // genuine check — flagged `unknown` so a lone baseline can never report `reconciled: true`.
+      status = 'unknown'
     } else {
       const expected = prevBalance + row.amount
       if (Math.abs(printed - expected) < MONEY_EPS) {

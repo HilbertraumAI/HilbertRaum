@@ -1335,7 +1335,7 @@ seeds a project-name + a folder-label (suggestion-reason) sentinel and proves ne
 (2026-06-14); the full original plan: `git show 477f803:docs/document-organization-plan.md`.
 
 
-## Skills — design record (Phases S2–S12, §1–§12)
+## Skills — design record (Phases S2–S12, §1–§15)
 
 A **Skill** is a self-contained, local task package (instructions + optional examples/schemas) the
 user selects to shape one turn. Two tiers shipped: **Tier 1 — instruction-only** (the body is injected
@@ -1657,17 +1657,54 @@ unchanged §7 ceiling (no new capability, still offline, audit still ids/counts-
   `skillNeedsNewerApp(minAppVersion, appVersion)` (`shared/skill-manifest.ts`) drives it. An app skill that
   needs a newer app reconciles in DISABLED (not auto-enabled); an import installs it disabled; the enable
   IPC refuses it (`main.skills.incompatible`); `SkillInfo` gains `incompatible` + `minAppVersion`, and the
-  Skills tab shows a "Needs newer app" badge with the toggle disabled. Because turn-resolution, the
-  suggestion heuristic, and the run start all already gate on `enabled`, an incompatible skill is excluded
-  everywhere by construction. The app version is threaded from `app.getVersion()` through the registry +
-  installer deps + IPC. (Residual: editing an already-enabled skill's `minAppVersion` upward on disk is not
-  retroactively disabled — same unsigned-version courtesy posture as the downgrade guard.)
+  Skills tab shows a "Needs newer app" badge with the toggle disabled. The app version is threaded from
+  `app.getVersion()` through the registry + installer deps + IPC. (Originally a residual remained: a skill
+  edited on disk to need a newer app *while already enabled* stayed effective, because reconcile preserves
+  the `enabled` flag and the use-sites gated only on `enabled`. **§15 closed it** — the gate is now airtight:
+  the use-sites gate on *compatibility*, not just `enabled`.)
 - **M2 — the Tier-2 "active tools" note is domain-free.** `skills.tool.note.active` no longer enumerates
   bank tools (it had shown bank copy for the invoice + redaction skills too); it now reads "run approved
   local tools on a document you choose…", true for every `kind:'tool'` skill.
 - **M3 — the terminal-run acknowledge handshake is wired.** A new `skills:clearToolRun` IPC + preload
   method lets the renderer's `acknowledgeSkillRun()` release the controller's terminal run main-side
   (`SkillRunController.clear` was previously dead code; the comment promising the handshake is now true).
+
+### §15 LOW / residual follow-ups (2026-06-17c)
+
+The four remaining LOW/residual items after the §14 audit, all fixed behind the unchanged §7 ceiling
+(no new capability, still offline, audit still ids/counts-only; EN/DE parity still compile-enforced):
+
+- **Docs — user-facing Skills coverage.** [`user-guide.md`](user-guide.md) gained a **§8 "Skills"**
+  section (the composer picker, the per-message glyph, the one-tap suggestion, tool skills + the run
+  bar + confirm/cancel, and Settings → Skills: import/enable/delete, drop-ins install disabled, the
+  "Needs newer app" badge), and [`troubleshooting.md`](troubleshooting.md) gained four entries
+  (drop-in installs disabled DS19; the structural import-rejection reasons; the "Needs newer app"
+  badge §14/M1; and "the skill tool found nothing in my document" — read-step-first / OCR / conservative
+  parsing). Docs-only.
+- **`reconcileBalances` over-reporting (honesty).** The lone **baseline** row (the first row, or any
+  row whose predecessor printed no balance) is now `unknown`, not `ok` — it has nothing to compare
+  against, so it is not a genuine check. `reconciled` is true only when no row mismatched **and at
+  least one row was actually compared against a predecessor** (`okCount > 0`). A single-transaction
+  statement therefore reports `reconciled: false` / `resultKind: 'unchecked'` (it verified nothing)
+  instead of a false "reconciled". `validate_statement_balances`' downstream `resultKind` was already
+  keyed off `unknown`, so it flowed through unchanged; the baseline row now persists `reconciled =
+  NULL` (unchecked) rather than `1`. The invoice path (`validateInvoiceTotals`) has **no** baseline
+  concept — each of its three checks is a genuine figure-to-figure comparison — so it needed no change.
+- **Cancel-during-run audit consistency.** When the abort signal has fired, the gate
+  (`tool-registry.ts`) now **suppresses** the `skill_run_failed` audit event (a cancelled run audits
+  as started-then-no-terminal-event), so the audit agrees with the `skill_runs` row the seam records
+  as `cancelled` — the audit surface has no `skill_run_cancelled` event (it stays ids/counts-only,
+  §11). A genuine non-cancel `!ok` still audits `skill_run_failed` unchanged.
+- **minAppVersion gate made airtight (the §14/M1 residual).** The use-sites now gate on
+  **compatibility**, not just `enabled`, reusing the shared `skillNeedsNewerApp` helper
+  (`shared/skill-manifest.ts`). The app version (already threaded via `app.getVersion()` in §14) is
+  carried into `resolveTurnSkill` (`turn.ts`, via `TurnSkillDeps.appVersion` + the registry handle's
+  new `appVersion` field), `suggestSkillsForTurn` (`suggest.ts`), and `runnableToolNames` /
+  `runnableToolsForSkill` (`tool-runs.ts`, threaded from the IPC's `appVersion` at both the
+  `listRunnableTools` and `startSkillRun` sites). So a skill edited on disk to need a newer app while
+  already enabled is **skipped at turn-resolution, never suggested, and refused at run start** — even
+  with a stale `enabled` flag. The threading is tolerant by default (absent / '' ⇒ compatible), so the
+  seam-level/test callers are unaffected.
 
 ### §-anchor legend (historical plan citations)
 

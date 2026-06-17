@@ -249,7 +249,9 @@ describe('downstream statement seams (S11c)', () => {
     const flags = (db.prepare('SELECT reconciled FROM bank_transactions ORDER BY row_index').all() as Array<{
       reconciled: number | null
     }>).map((r) => r.reconciled)
-    expect(flags).toEqual([1, 1])
+    // The first row is the baseline (no predecessor balance to check) → NULL/unchecked; only the
+    // second row is a genuine comparison against its predecessor → reconciled (1).
+    expect(flags).toEqual([null, 1])
   })
 
   it('categorize seeds built-in categories/rules and assigns category_id', async () => {
