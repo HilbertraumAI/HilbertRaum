@@ -47,11 +47,19 @@ live in [`shared/types.ts`](../apps/desktop/src/shared/types.ts). **No** bank to
   `extract_transactions` in the `REGISTRY`; a thin main-side **orchestration seam**
   (`services/skills/run.ts`: build narrow ctx → `runSkillTool` → persist) proven by tests. **No IPC,
   no renderer.** SKILL.md **stays `kind: instruction`** (no flip).
-- **S11b — the app-orchestrated run trigger + UI**: a user action in the transcript starts a run
-  (DS4 trigger, decision #4); the inline calm **"Running: `<tool>` on `<N>` documents… (Cancel)"**
-  busy row (the doc-task busy-row precedent); the **write/export confirm modal** (the
-  model-download / lock-now precedent), wired so S11c's export tool can use it. IPC
+- **S11b — the app-orchestrated run trigger + UI** *(SHIPPED 2026-06-17)*: a user action in the chat
+  surface starts a run (DS4 trigger, decision #4); the inline calm **"Running: `<tool>` on `<N>`
+  documents… (Cancel)"** busy row (the doc-task busy-row precedent); the **write/export confirm modal**
+  (the model-download / lock-now precedent), wired so S11c's export tool can use it. IPC
   (`requireUnlocked`, logs nothing — the question/scope is content) + preload + renderer + EN/DE.
+  - **As built:** four generic `skills:*` channels (`listRunnableTools` / `startSkillRun` /
+    `getSkillRun` / `cancelSkillRun`) over a generic `run-controller.ts` (single active run, polling,
+    cancel) + a `tool-runs.ts` dispatch (the one place that maps a tool name → the `run.ts` seam, §13).
+    Renderer: `lib/skillruns.ts` polling store + `chat/SkillRunBar.tsx` (offer → busy → result + the
+    `ConfirmDialog` path). The trigger keys off `reservesTools` (instruction-kind discards declared
+    names, S9/SL-1); the confirm modal is exercised by a synthetic write tool (controller + renderer
+    tests). **Carry-forward:** the running-model Playwright eyeball of the busy row + confirm modal is
+    deferred (needs a seeded doc + run; the S6-style walk forwarding).
 - **S11c — the remaining tools + the flip**: `validate_statement_balances`,
   `categorize_transactions`, `summarize_cashflow`, `export_transactions_csv` (confirm-gated
   `export-file`); the additive categories/rules/corrections/reconciliation tables those need; **then

@@ -172,6 +172,19 @@ export const de: Record<keyof typeof en, string> = {
   'chat.skill.suggested': 'Vorschlag: {title} – nutzen?',
   'chat.skill.used': 'Skill: {title}',
   'chat.skill.usedTitle': 'Diese Antwort wurde vom Skill „{title}“ geprägt.',
+  // Tier-2-Tool-Lauf – die ruhige Aktion im Verlauf + Statuszeile + Bestätigungsdialog (skills plan §12.2/§15, S11b)
+  'chat.skill.tool.extractTransactions': 'Transaktionen extrahieren',
+  'chat.skill.run.running.one': 'Läuft: {tool} für {count} Dokument…',
+  'chat.skill.run.running.other': 'Läuft: {tool} für {count} Dokumente…',
+  'chat.skill.run.cancel': 'Abbrechen',
+  'chat.skill.run.done.one': '{count} Transaktion extrahiert.',
+  'chat.skill.run.done.other': '{count} Transaktionen extrahiert.',
+  'chat.skill.run.failedGeneric': 'Das hat nicht geklappt. Es wurde nichts geändert.',
+  'chat.skill.run.cancelled': 'Gestoppt. Es wurde nichts gespeichert.',
+  'chat.skill.run.dismiss': 'Schließen',
+  'chat.skill.confirm.title': 'Dieses Tool ausführen?',
+  'chat.skill.confirm.body': 'Dabei wird aus den Dokumenten auf diesem Laufwerk eine Datei erstellt oder exportiert.',
+  'chat.skill.confirm.ok': 'Ausführen',
 
   // ---- Chat: transcript + message actions ----
   'chat.role.user': 'Du',
@@ -1199,6 +1212,10 @@ export const de: Record<keyof typeof en, string> = {
   'main.collections.builtinUndeletable':
     'Die integrierte Bibliothek und „Temporär“ können nicht gelöscht werden.',
   'main.skills.locked': 'Der Arbeitsbereich ist gesperrt. Entsperre ihn, um Skills zu verwalten.',
+  // Tier-2-Tool-Läufe (skills plan §12.2, S11b) – freundlich, ohne Inhalte.
+  'main.skills.run.unavailable': 'Das Tool dieses Skills ist gerade nicht verfügbar.',
+  'main.skills.run.noDocument': 'Füge diesem Chat zuerst ein Dokument hinzu und versuche es dann erneut.',
+  'main.skills.run.busy': 'Ein Skill arbeitet bereits. Lass ihn fertig werden oder brich ihn ab.',
 
   // ---- Dokumentorganisation — Bereiche + Aktionen (Plan §12). D-L7-Review erledigt (2026-06-14). ----
   'docs.section.heading': 'Bereiche',

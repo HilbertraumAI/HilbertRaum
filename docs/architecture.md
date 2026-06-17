@@ -164,8 +164,23 @@ narrow context, runs the tool through the gate, and on success persists the extr
 **content-class** `bank_statements` + `bank_transactions` tables atomically (a failed write ROLLBACKs — no
 partial rows). Those data tables hold real figures, so they live only in the encrypted workspace DB, are
 never logged/audited (audit stays ids/counts), and are excluded from every export (§9.5) — distinct from
-the non-secret skill packages. The remaining four bank tools + the chat/UI busy-row + write-confirm modal
-are S11b/S11c (the bank skill stays `kind: instruction` until the full set is wired).
+the non-secret skill packages. The remaining four bank tools are S11c (the bank skill stays
+`kind: instruction` until the full set is wired).
+
+**The app-orchestrated run trigger + UI (S11b).** A run is started from a **user action** in the chat
+surface, never the model. A generic controller `services/skills/run-controller.ts` owns the single
+active run's lifecycle (state/progress/cancel) and knows nothing about banks; the bank seam is handed in
+as an opaque runner by the dispatch `services/skills/tool-runs.ts` (the one place allowed to map a tool
+name to `run.ts` — §13). Four generic `skills:*` IPC channels (`listRunnableTools` /
+`startSkillRun` / `getSkillRun` / `cancelSkillRun`) wrap it: all `requireUnlocked`, the document scope
+is resolved **main-side** from the conversation (§22-C4), and the run returns **ids/counts only** (never
+the extracted rows). The renderer's calm `SkillRunBar` (a `lib/skillruns.ts` polling store, the doc-task
+precedent — no new event channel) shows the offer ("Extract transactions"), the busy row ("Running:
+`<tool>` on `<N>` documents… Cancel"), and the result ("Extracted N transactions"). Write/export tools
+(S11c) are gated by a `ConfirmDialog` before the run starts — read-only `extract_transactions` runs
+without a prompt but is still surfaced. The trigger keys off the skill's `reservesTools` signal (the
+S5-drawer mechanism) because the instruction-kind parser discards declared tool names (S9/SL-1); at the
+S11c flip it switches to the effective `allowedTools ∩ registry ∩ grant` set without renderer change.
 
 ## Models & runtime (Phase 2)
 - **Manifests** are local YAML under `model-manifests/` (committed; weights are not). The schema +

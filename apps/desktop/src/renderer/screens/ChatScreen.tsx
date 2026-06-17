@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type DragEvent } from 'react'
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type DragEvent } from 'react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import {
   DOC_TASK_BUSY_MESSAGE,
@@ -8,16 +8,24 @@ import {
   type DocumentInfo,
   type DocumentScope,
   type Message,
+  type RunnableTool,
   type SkillInfo,
   type SkillSuggestion
 } from '@shared/types'
 import { cancelActiveDocTask } from '../lib/doctasks'
+import {
+  acknowledgeSkillRun,
+  cancelActiveSkillRun,
+  getActiveSkillRun,
+  startSkillRun,
+  subscribeSkillRun
+} from '../lib/skillruns'
 import { localizeServerCopy } from '../lib/displayMap'
 import { friendlyIpcError } from '../lib/errors'
 import { RUNTIME_POLL_MS, STREAM_RECOVER_POLL_MS } from '../lib/polling'
 import { useT } from '../i18n'
 import { Button, Chip, EmptyState, ErrorBanner, SegmentedControl, Spinner, useToast } from '../components'
-import { Composer, ConversationList, DepthMenu, ScopePopover, SkillPicker, Transcript } from '../chat'
+import { Composer, ConversationList, DepthMenu, ScopePopover, SkillPicker, SkillRunBar, Transcript } from '../chat'
 import type { MessageKey } from '@shared/i18n'
 
 // Chat screen (spec §7.6 / §7.8; layout per design-guidelines §3). The
@@ -487,6 +495,45 @@ export function ChatScreen({
       .suggestSkills?.(activeId ?? '', input)
       .then((s) => setSkillSuggestion(s[0] ?? null))
       .catch(() => setSkillSuggestion(null))
+  }
+
+  // ---- Tier-2 tool runs (skills plan §12.2/§15, S11b) ------------------------------------------
+  // The single active run survives screen unmounts (the doc-task store precedent), polled main-side.
+  const activeSkillRun = useSyncExternalStore(subscribeSkillRun, getActiveSkillRun)
+  // Wired, runnable tools for the active skill in THIS conversation's scope — empty unless the skill
+  // reserves Tier-2 tools AND there is an in-scope document. Main resolves the scope (§22-C4); the
+  // renderer stays bank-free (it renders whatever descriptors come back).
+  const [runnableTools, setRunnableTools] = useState<RunnableTool[]>([])
+  useEffect(() => {
+    if (!currentSkillId || !activeId || !window.api.listRunnableTools) {
+      setRunnableTools([])
+      return
+    }
+    let live = true
+    void window.api
+      .listRunnableTools(currentSkillId, activeId)
+      .then((tools) => {
+        if (live) setRunnableTools(tools)
+      })
+      .catch(() => {
+        if (live) setRunnableTools([])
+      })
+    return () => {
+      live = false
+    }
+  }, [currentSkillId, activeId, messages.length])
+
+  // Start a tool run from the calm transcript affordance (DS4 — a USER action, never the model).
+  function onRunTool(toolName: string, confirmed: boolean): void {
+    if (!currentSkillId || !activeId) return
+    setError(null)
+    void startSkillRun({ skillInstallId: currentSkillId, toolName, conversationId: activeId, confirmed })
+      .then((outcome) => {
+        // `needsConfirmation` is handled inside SkillRunBar (it raises the modal before calling with
+        // confirmed:true); reaching it here would mean a write tool slipped the modal — surface it.
+        if (!outcome.started && 'error' in outcome) setError(outcome.error)
+      })
+      .catch((e) => setError(friendlyIpcError(e)))
   }
 
   async function stream(
@@ -1005,6 +1052,17 @@ export function ChatScreen({
             </>
           )}
         </ErrorBanner>
+
+        {/* Tier-2 tool run (skills plan §12.2/§15, S11b): a calm offer / busy row / result, all
+            content-free. Hidden entirely when no run is active and no tool is offered. */}
+        <SkillRunBar
+          run={activeSkillRun}
+          runnableTools={runnableTools}
+          onRun={onRunTool}
+          onCancel={() => void cancelActiveSkillRun()}
+          onDismiss={acknowledgeSkillRun}
+          disabled={busyStreaming}
+        />
 
         <Composer
           value={input}

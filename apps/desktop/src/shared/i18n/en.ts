@@ -154,6 +154,19 @@ export const en = {
   'chat.skill.suggested': 'Suggested: {title} — use it?',
   'chat.skill.used': 'Skill: {title}',
   'chat.skill.usedTitle': 'This answer was shaped by the skill “{title}”.',
+  // Tier-2 tool run — the calm transcript affordance + busy row + confirm modal (skills plan §12.2/§15, S11b)
+  'chat.skill.tool.extractTransactions': 'Extract transactions',
+  'chat.skill.run.running.one': 'Running: {tool} on {count} document…',
+  'chat.skill.run.running.other': 'Running: {tool} on {count} documents…',
+  'chat.skill.run.cancel': 'Cancel',
+  'chat.skill.run.done.one': 'Extracted {count} transaction.',
+  'chat.skill.run.done.other': 'Extracted {count} transactions.',
+  'chat.skill.run.failedGeneric': "That didn't work. Nothing was changed.",
+  'chat.skill.run.cancelled': 'Stopped. Nothing was saved.',
+  'chat.skill.run.dismiss': 'Dismiss',
+  'chat.skill.confirm.title': 'Run this tool?',
+  'chat.skill.confirm.body': 'This creates or exports a file from the documents on this drive.',
+  'chat.skill.confirm.ok': 'Run',
 
   // ---- Chat: transcript + message actions ----
   'chat.role.user': 'You',
@@ -1130,6 +1143,10 @@ export const en = {
   'main.dialog.filterSkill': 'Skill package',
   'main.collections.builtinUndeletable': 'The built-in Library and Temporary cannot be deleted.',
   'main.skills.locked': 'Workspace is locked. Unlock it to manage skills.',
+  // Tier-2 tool runs (skills plan §12.2, S11b) — friendly, content-free.
+  'main.skills.run.unavailable': "This skill's tool isn't available right now.",
+  'main.skills.run.noDocument': 'Add a document to this chat first, then try again.',
+  'main.skills.run.busy': 'A skill is already working. Let it finish or cancel it first.',
 
   // ---- Document organization — Documents screen sections + actions (plan §12) ----
   // German copy in de.ts reviewed in the D-L7 pass (2026-06-14).

@@ -172,6 +172,18 @@ export const IPC = {
   disableSkill: 'skills:disable',
   /** Acknowledge a user skill's import warning (DS7 — clears the persistent warning state). */
   acknowledgeSkillWarning: 'skills:acknowledgeWarning',
+  // Tier-2 app-orchestrated tool runs (skills plan §12.2/§16, S11b). Generic `skills:*` shape (NOT
+  // bank-named) so S11c's tools slot in with no renderer/IPC change; bank specifics stay in the
+  // `tool-runs.ts` dispatch + `run.ts` seam (§13). All requireUnlocked; the document scope is
+  // resolved MAIN-side from the conversation (§22-C4) and NOTHING content-bearing is logged.
+  /** Wired, runnable tools for the active skill in this conversation's scope (empty when none apply). */
+  listRunnableTools: 'skills:listRunnableTools',
+  /** Start a run from a user action; returns the initial state or a needs-confirmation/error signal. */
+  startSkillRun: 'skills:startToolRun',
+  /** Poll one run's ids/counts-only state/progress (the doc-task polling precedent). */
+  getSkillRun: 'skills:getToolRun',
+  /** Cancel a run (aborts its `AbortSignal`); with no handle, the active run. */
+  cancelSkillRun: 'skills:cancelToolRun',
   // Encrypted workspace lifecycle
   getWorkspaceState: 'workspace:getState',
   unlockWorkspace: 'workspace:unlock',

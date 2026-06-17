@@ -6,7 +6,33 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
-_Last updated: 2026-06-17 — **Skills Phase S11a SHIPPED — `extract_transactions` + `skill_runs` +
+_Last updated: 2026-06-17 — **Skills Phase S11b SHIPPED — app-orchestrated run trigger + busy row +
+write-confirm modal.** The S11a `run.ts` seam is now startable from a USER action (DS4 — never the
+model). New generic, bank-free [`services/skills/run-controller.ts`](apps/desktop/src/main/services/skills/run-controller.ts)
+(`SkillRunController`: single active run, polling state, Cancel via `AbortSignal`, one-at-a-time) +
+[`services/skills/tool-runs.ts`](apps/desktop/src/main/services/skills/tool-runs.ts) — the ONE place
+that maps a tool name → the `run.ts` seam (bank specifics stay out of the generic infra, §13), resolves
+the in-scope document(s) MAIN-side from the conversation (§22-C4), and bridges the app `AuditRecorder`
+down to the ids/counts-only `SkillToolAudit`. Four GENERIC `skills:*` IPC channels (`listRunnableTools` /
+`startSkillRun` / `getSkillRun` / `cancelSkillRun` — NOT bank-named, so S11c slots its tools in with no
+renderer/IPC change), all `requireUnlocked`, **logging NOTHING content-bearing** (scope is content;
+responses are ids/counts only) + preload. Renderer: [`renderer/lib/skillruns.ts`](apps/desktop/src/renderer/lib/skillruns.ts)
+(the doc-task polling-store precedent — no new event channel) + [`renderer/chat/SkillRunBar.tsx`](apps/desktop/src/renderer/chat/SkillRunBar.tsx)
+(calm OFFER "Extract transactions" → RUNNING "Running: `<tool>` on `<N>` documents… Cancel" → RESULT
+"Extracted N transactions"; the **`ConfirmDialog` write/export path** built now even though the read-only
+`extract_transactions` skips it), wired into ChatScreen. The trigger keys off the skill's `reservesTools`
+signal (the instruction-kind parser discards declared tool NAMES, S9/SL-1) — it switches to the effective
+`allowedTools ∩ registry ∩ grant` set at the S11c flip with no renderer change. EN+DE („du"). The bank
+skill **stays `kind: instruction`** (the flip + the other 4 tools + reconcile body are S11c). 17 new tests
+(run-controller 6 incl. cancel + the synthetic-write-tool confirm gate, tool-run-ipc 5 incl. the "logs
+nothing" sentinel, SkillRunBar 6). Full suite **1580 passed / 25 skipped**, typecheck + build clean.
+Docs: architecture.md ("Bank-statement tools + the run seam" → the S11b trigger/UI paragraph),
+security-model.md ("Skill tool ceiling" — the run trigger + IPC add no content to the log), this plan §2.
+SL log clean (no new `SL-#`). **Carry-forward:** the running-model Playwright eyeball of the busy row +
+confirm modal is deferred (the S6-style walk; needs a seeded doc + a live run). See the **"Skills — S11b
+handoff"** block below. Next: S11c (the other 4 tools + flip SKILL.md to `kind:'tool'` + reconcile body)._
+
+_(prior) 2026-06-17 — **Skills Phase S11a SHIPPED — `extract_transactions` + `skill_runs` +
 bank data tables behind the gate.** First Tier-2 *feature* slice (the plan doc
 [`docs/skills-s11-plan.md`](docs/skills-s11-plan.md) was authored + the scope cut RATIFIED by the owner
 first: ship `extract_transactions` only; defer `export_transactions_csv` to S11c; content-read =
@@ -238,6 +264,53 @@ then revert the manifest), run, done; node_modules carries it uncommitted. The w
 build` first (it drives the BUILT bundle out/main, which vitest never exercises) and **strip
 `ELECTRON_RUN_AS_NODE`** from the child env (the VSCode host exports it). `docs/design-review/` also
 holds untracked `skills-s5/` PNGs from the S5 walk — unrelated to this chore, left as-is.
+
+### Skills — S11b handoff (2026-06-17)
+
+**What this phase added** (UI/IPC only — NO new tools, tables, or SKILL.md flip):
+- **`services/skills/run-controller.ts`** (new, GENERIC — no bank knowledge): `SkillRunController` —
+  one active run, `start(runner)` kicks off without awaiting + returns the `running` snapshot,
+  `get(handle)` polls a copy, `cancel(handle?)` aborts the `AbortSignal`, `clear(handle)` drops a
+  terminal run; merges the tool's `onProgress` into the polled `SkillRunState`. One-at-a-time.
+- **`services/skills/tool-runs.ts`** (new, the DISPATCH — allowed to know bank, like the tool file):
+  `buildToolRunner(db, toolName, …, audit)` maps `extract_transactions` → `runBankExtraction`;
+  `runnableToolsForSkill`/`runnableToolNames` (gated on `reservesTools`); `resolveInScopeDocumentIds`
+  (scope resolved MAIN-side from the conversation, §22-C4); `toolRunNeedsConfirmation` (registry-
+  driven); `toSkillToolAudit` (bridges the 3-arg `AuditRecorder` → the 2-arg ids/counts-only sink).
+- **IPC (`registerSkillsIpc.ts`)**: four generic `skills:*` channels — `listRunnableTools` (offer),
+  `startSkillRun` (→ `{started, run} | {needsConfirmation} | {error}`), `getSkillRun`, `cancelSkillRun`
+  — all `requireUnlocked`, logging nothing content-bearing. A closure-held controller (no AppContext
+  plumbing — at most one run). + preload methods + `main.skills.run.*` EN/DE copy.
+- **Renderer**: `lib/skillruns.ts` (module-level polling store, the `doctasks.ts` precedent) +
+  `chat/SkillRunBar.tsx` (offer/busy/result + the `ConfirmDialog` write/export path) + ChatScreen
+  wiring (`useSyncExternalStore`, `listRunnableTools` effect, `onRunTool`) + `.skill-run-bar` CSS +
+  `chat.skill.run.*`/`chat.skill.tool.*`/`chat.skill.confirm.*` EN/DE keys.
+
+**Decisions taken (record):**
+- **Channel shape = GENERIC `skills:*`, not bank-named.** Rationale: S11c adds `export_transactions_csv`
+  et al. by adding a `buildToolRunner` case + a wired-tool entry — the channel/controller/renderer/
+  preload do not change. Bank specifics are confined to `tool-runs.ts` + `run.ts` (§13).
+- **The trigger keys off `reservesTools`, not the effective tool set.** The instruction-kind parser
+  empties `allowedTools` (S9/SL-1), so the declared tool NAMES are gone for the bank stub; v1 offers the
+  wired registry tools to any `reservesTools` skill (in v1 only the bank skill qualifies, and
+  `extract_transactions` safely no-ops on a non-statement). At the **S11c flip to `kind:'tool'`**, switch
+  `runnableToolNames` to the effective `allowedTools ∩ registry ∩ grant` — renderer unchanged.
+- **Confirmation is decided up-front by the renderer from `RunnableTool.requiresConfirmation`** (main-
+  computed, authoritative) and **enforced defensively by the gate** (`runSkillTool` confirm-gate +
+  the `startSkillRun` `needsConfirmation` guard). For v1 (read-only only) the modal never fires in
+  production; the path is proven by a synthetic write tool (controller + renderer tests).
+- **No `run.ts`/gate change was needed** — the seam already exposes `signal`/`onProgress`/`audit`.
+
+**Open landmines:** none. SL log clean (no new `SL-#`). **Carry-forward:** the running-model Playwright
+eyeball of the busy row + confirm modal is uncaptured (needs a seeded indexed doc + a live extract run;
+the S6-style walk). SkillRunBar.test.tsx covers every visual state; the walk is the only gap.
+
+**What S11c consumes:** add the remaining 4 tools to the `REGISTRY` + `tools/bank-statement.ts`; add a
+`buildToolRunner` case per tool (`export_transactions_csv` is confirm-gated `export-file` — the
+`SkillRunBar` modal already gates it); add the categories/rules/corrections/reconciliation tables; then
+**flip `app-skills/bank-statement/SKILL.md` to `kind:'tool'`** (makes `allowedTools` effective) + swap to
+the §6.6 reconcile body + update the S5 drawer note to the real tool list + the "✓ Use approved local
+tools" line. When flipped, retarget `runnableToolNames` to `resolveEffectiveTools`.
 
 ### Skills — S11a handoff (2026-06-17)
 

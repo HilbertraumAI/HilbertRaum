@@ -494,7 +494,7 @@ already accepted for the engine binary and the on-drive sidecars** — documente
 still only injected reference text behind the prompt-injection guard — it cannot run code, reach the
 network, read other files, or widen document scope (the structural ceilings, §14).
 
-## Skill tool ceiling (Tier-2) — the SkillToolContext + validate→run→validate gate (skills plan §12/§14, Phases S10–S11a, 2026-06-17)
+## Skill tool ceiling (Tier-2) — the SkillToolContext + validate→run→validate gate (skills plan §12/§14, Phases S10–S11b, 2026-06-17)
 
 Tier-2 is where a skill can finally *do* something beyond inject text — so S10 builds the **gate
 before the tools**. A skill still cannot register a tool: tools live only in the app's static
@@ -550,8 +550,19 @@ the first real tool, the content reach it needs, and the run/data tables — wit
   by a user action (DS4 — never model `tool_calls`); persistence is atomic (`BEGIN…COMMIT`, ROLLBACK on
   any write error) so a failed run leaves no partial rows.
 
-The remaining four bank tools (incl. the confirm-gated `export_transactions_csv`) and the chat/UI are
-S11b/S11c; the ceiling above does not change for them.
+**The run trigger + IPC add no content to the log (S11b).** The four `skills:*` tool-run channels
+(`listRunnableTools` / `startSkillRun` / `getSkillRun` / `cancelSkillRun`) all `requireUnlocked` and
+carry **no content**: the renderer passes a `skillInstallId` + `toolName` + `conversationId` (the scope
+is resolved main-side, §22-C4 — the renderer never assembles document ids), and every response is
+**ids/counts only** (`RunnableTool` = name + a confirm flag; `SkillRunState` = state/progress/counts —
+never the extracted rows). The handlers log nothing (the question/scope/figures are content); the only
+record is the existing gate audit (`skill_run_*`, ids/counts), proven by the S11b "logs nothing"
+sentinel test. The generic `SkillRunController` never touches content (the bank seam runs behind an
+opaque runner — §13). **Read-only tools (`extract_transactions`) run without a per-call prompt but are
+surfaced (the busy row); write/export tools are confirm-gated** (`toolRunNeedsConfirmation`, registry-
+driven) before any run starts — the gate also enforces it defensively. The remaining four bank tools
+(incl. the confirm-gated `export_transactions_csv`) and the SKILL.md flip are S11c; the ceiling above
+does not change for them.
 
 ## Unverified-binary env overrides are dev-only (audit M-5, 2026-06-13)
 

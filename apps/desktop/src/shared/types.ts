@@ -1476,6 +1476,67 @@ export interface SkillTool {
   run(input: unknown, ctx: SkillToolContext): Promise<ToolResult>
 }
 
+/**
+ * A wired, runnable tool offered to the renderer for the active skill (skills plan §12.2/§16, S11b).
+ * The renderer renders a calm "run" affordance per descriptor and never needs to know tool names or
+ * bank specifics — main resolves WHICH tools apply (the run dispatch ∩ what the skill reserves) and
+ * whether each needs a confirm modal. Carries NO content (no document ids, no figures).
+ */
+export interface RunnableTool {
+  /** The registry tool name (e.g. `extract_transactions`). */
+  name: string
+  /** True for a write/export tool ⇒ the renderer raises the confirm modal before starting (S11c). */
+  requiresConfirmation: boolean
+}
+
+/**
+ * Start an app-orchestrated tool run from a USER action (skills plan §6/§16, DS4, S11b). The model
+ * never emits this — a transcript/composer affordance does. The document scope is resolved MAIN-side
+ * from `conversationId` (§22-C4); the renderer never assembles document ids.
+ */
+export interface StartSkillRunRequest {
+  /** The active skill's install_id (`<source>:<id>`). */
+  skillInstallId: string
+  /** The registry tool to run (must be wired in the run dispatch). */
+  toolName: string
+  /** The conversation whose scope provides the target document(s). */
+  conversationId: string
+  /** True once the user confirmed a write/export tool; read-only tools ignore it. */
+  confirmed?: boolean
+}
+
+/**
+ * The result of asking to start a run (skills plan §16, S11b). `needsConfirmation` means a
+ * write/export tool was requested without `confirmed: true` — the renderer raises the confirm modal
+ * and retries. Both `error` and the run are FRIENDLY + content-free (ids/counts only).
+ */
+export type StartSkillRunResult =
+  | { started: true; run: SkillRunState }
+  | { started: false; needsConfirmation: true }
+  | { started: false; error: string }
+
+/**
+ * The ids/counts-only snapshot of one app-orchestrated tool run, polled by the renderer's busy row
+ * (skills plan §12.2, S11b — the doc-task polling-status precedent, no new event channel). It is the
+ * WHOLE of what the renderer learns about a run: state + progress + counts, NEVER the extracted rows
+ * (those stay content-class in the workspace DB — §9.5). `error` is friendly + content-free.
+ */
+export interface SkillRunState {
+  /** An opaque poll/cancel handle (NOT the `skill_runs.id`, which the renderer never sees). */
+  runHandle: string
+  skillInstallId: string
+  toolName: string
+  /** How many documents the run processes (the busy row's "on N documents"). */
+  documentCount: number
+  state: 'running' | 'done' | 'failed' | 'cancelled'
+  /** Merged from the tool's `onProgress` (no new event channel). */
+  progress: { done: number; total: number }
+  /** A COUNT on a successful extraction — never the rows themselves. */
+  transactionCount?: number
+  /** Friendly, content-free reason on failure. */
+  error?: string
+}
+
 export type AuditEventType =
   | 'runtime_started'
   | 'runtime_stopped'

@@ -33,11 +33,15 @@ import type {
   PolicyStatus,
   PreflightResult,
   RuntimeInstallInfo,
+  RunnableTool,
   RuntimeStatus,
   SkillInfo,
   SkillPreview,
+  SkillRunState,
   SkillSuggestion,
   StartDocTaskRequest,
+  StartSkillRunRequest,
+  StartSkillRunResult,
   WorkspaceActionResult,
   WorkspaceMode,
   WorkspaceStateInfo
@@ -343,6 +347,20 @@ const api = {
    *  question is content — the main handler scores it and logs nothing. Returns at most one. */
   suggestSkills: (conversationId: string, question?: string): Promise<SkillSuggestion[]> =>
     ipcRenderer.invoke(IPC.suggestSkills, conversationId, question),
+
+  /** Wired, runnable Tier-2 tools for the active skill in this conversation's scope (skills plan
+   *  §12.2/§16, S11b). Empty when none apply. Logs nothing — the scope is content (§22-C4). */
+  listRunnableTools: (skillInstallId: string, conversationId: string): Promise<RunnableTool[]> =>
+    ipcRenderer.invoke(IPC.listRunnableTools, skillInstallId, conversationId),
+  /** Start an app-orchestrated tool run from a user action (DS4). Returns ids/counts only. */
+  startSkillRun: (req: StartSkillRunRequest): Promise<StartSkillRunResult> =>
+    ipcRenderer.invoke(IPC.startSkillRun, req),
+  /** Poll one run's ids/counts-only state/progress (the doc-task polling precedent). */
+  getSkillRun: (runHandle: string): Promise<SkillRunState | null> =>
+    ipcRenderer.invoke(IPC.getSkillRun, runHandle),
+  /** Cancel a run; with no handle, the active run. */
+  cancelSkillRun: (runHandle?: string): Promise<void> =>
+    ipcRenderer.invoke(IPC.cancelSkillRun, runHandle),
 
   /** Subscribe to streamed tokens for a request (= conversation id); returns an unsubscribe fn. */
   onToken: (requestId: string, cb: (token: string) => void): (() => void) => {

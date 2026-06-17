@@ -799,6 +799,19 @@ code, pre, kbd { font-family: var(--font-mono); }
 }
 .msg-skill-icon { width: 14px; height: 14px; flex-shrink: 0; }
 
+/* Tier-2 tool-run bar (skills plan §12.2/§15, S11b): a calm row above the composer carrying the
+   offer / busy / result. Quiet by default — muted text, a hairline top border, no alarm colour. */
+.skill-run-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 8px 4px 0;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+.skill-run-status { display: inline-flex; align-items: center; gap: 8px; }
+
 /* Markdown-rendered assistant replies: markdown supplies its own block spacing, so
    pre-wrap (which would double every blank line) is turned off. */
 .msg-content.md { white-space: normal; }

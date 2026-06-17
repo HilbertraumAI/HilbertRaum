@@ -1,12 +1,29 @@
 import { BrowserWindow, dialog, ipcMain } from 'electron'
 import { IPC } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
-import type { SkillInfo, SkillPreview, SkillSuggestion } from '../../shared/types'
+import type {
+  RunnableTool,
+  SkillInfo,
+  SkillPreview,
+  SkillRunState,
+  SkillSuggestion,
+  StartSkillRunRequest,
+  StartSkillRunResult
+} from '../../shared/types'
 import { getSettings } from '../services/settings'
 import { tMain } from '../services/i18n'
 import { log } from '../services/logging'
 import { getSkill, getSkillsByDeclaredId, setSkillEnabled } from '../services/skills/registry'
 import { suggestSkillsForTurn } from '../services/skills/suggest'
+import { SkillRunController } from '../services/skills/run-controller'
+import {
+  buildToolRunner,
+  resolveInScopeDocumentIds,
+  runnableToolNames,
+  runnableToolsForSkill,
+  toSkillToolAudit,
+  toolRunNeedsConfirmation
+} from '../services/skills/tool-runs'
 import {
   deleteSkill,
   exportSkill,
@@ -32,6 +49,12 @@ export function registerSkillsIpc(ctx: AppContext): void {
   const requireUnlocked = (): void => {
     if (!ctx.workspace.isUnlocked()) throw new Error(tMain('main.skills.locked'))
   }
+
+  // The single app-orchestrated tool-run lifecycle (skills plan §12.2, S11b). Held in this closure
+  // (at most one run at a time) — no AppContext plumbing needed. Generic: it knows nothing about
+  // banks; the `tool-runs.ts` dispatch supplies the bank seam as an opaque runner.
+  const runController = new SkillRunController()
+  const runAudit = toSkillToolAudit(ctx.audit)
 
   // Developer mode (the model-leniency precedent): the user toggle OR a dev build. Gates the
   // downgrade override (DS15) only — never a security control (version is unsigned).
@@ -197,5 +220,75 @@ export function registerSkillsIpc(ctx: AppContext): void {
     )
     const updated = getSkill(ctx.db, installId)!
     return skillInfo(ctx.db, updated)
+  })
+
+  // ---- Tier-2 app-orchestrated tool runs (skills plan §6/§12.2/§16, S11b) -------------------------
+  // DS4: a run is started by the APP from a USER action, never by the model parsing `tool_calls`.
+  // requireUnlocked + LOGS NOTHING content-bearing — the conversation/document scope is content
+  // (§22-C4), resolved MAIN-side here; only the run's ids/counts reach the renderer + the audit.
+
+  // The wired, runnable tools for a skill in a conversation's scope (empty when none apply — e.g. no
+  // in-scope documents, or the skill reserves no tools). Drives the calm transcript run affordance.
+  ipcMain.handle(
+    IPC.listRunnableTools,
+    (_e, skillInstallId: string, conversationId: string): RunnableTool[] => {
+      requireUnlocked()
+      if (typeof skillInstallId !== 'string' || skillInstallId.length === 0) return []
+      ctx.skills!.list() // lazy post-unlock reconcile so a just-enabled skill is considered
+      const skill = ctx.skills!.get(skillInstallId)
+      if (!skill || skill.unavailableAt != null || !skill.enabled) return []
+      if (runnableToolNames(skill).length === 0) return []
+      // Only offer when there is at least one indexed document in scope to run against.
+      const docIds = resolveInScopeDocumentIds(ctx.db, typeof conversationId === 'string' ? conversationId : '')
+      if (docIds.length === 0) return []
+      return runnableToolsForSkill(skill)
+    }
+  )
+
+  // Start a run. Resolves the document scope MAIN-side, confirm-gates write/export tools, and hands a
+  // content-free runner to the controller. Returns ids/counts only (never the extracted rows).
+  ipcMain.handle(IPC.startSkillRun, (_e, req: StartSkillRunRequest): StartSkillRunResult => {
+    requireUnlocked()
+    const skillInstallId = typeof req?.skillInstallId === 'string' ? req.skillInstallId : ''
+    const toolName = typeof req?.toolName === 'string' ? req.toolName : ''
+    const conversationId = typeof req?.conversationId === 'string' ? req.conversationId : ''
+    const skill = skillInstallId ? ctx.skills!.get(skillInstallId) : undefined
+    if (!skill || skill.unavailableAt != null || !skill.enabled) {
+      return { started: false, error: tMain('main.skills.run.unavailable') }
+    }
+    if (!runnableToolNames(skill).includes(toolName)) {
+      return { started: false, error: tMain('main.skills.run.unavailable') }
+    }
+    // Confirm-gate write/export tools (read-only tools run without a per-call prompt — §12.2).
+    if (toolRunNeedsConfirmation(toolName) && req?.confirmed !== true) {
+      return { started: false, needsConfirmation: true }
+    }
+    // The v1 tools are single-document (plan §8): run on the first in-scope indexed document.
+    const docIds = resolveInScopeDocumentIds(ctx.db, conversationId)
+    if (docIds.length === 0) {
+      return { started: false, error: tMain('main.skills.run.noDocument') }
+    }
+    const runner = buildToolRunner(
+      ctx.db,
+      toolName,
+      { skillInstallId, conversationId, documentId: docIds[0], confirmed: req?.confirmed },
+      runAudit
+    )
+    if (!runner) return { started: false, error: tMain('main.skills.run.unavailable') }
+    try {
+      const run = runController.start({ skillInstallId, toolName, documentCount: 1, runner })
+      return { started: true, run }
+    } catch {
+      // One-at-a-time: a run is already in flight. Friendly, content-free.
+      return { started: false, error: tMain('main.skills.run.busy') }
+    }
+  })
+
+  ipcMain.handle(IPC.getSkillRun, (_e, runHandle: string): SkillRunState | null =>
+    runController.get(typeof runHandle === 'string' ? runHandle : '')
+  )
+
+  ipcMain.handle(IPC.cancelSkillRun, (_e, runHandle?: string | null): void => {
+    runController.cancel(typeof runHandle === 'string' && runHandle.length > 0 ? runHandle : null)
   })
 }
