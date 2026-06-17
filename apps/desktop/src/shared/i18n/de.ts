@@ -33,6 +33,7 @@ export const de: Record<keyof typeof en, string> = {
   // and in the button tooltip. "KI-Modell" already breaks at its real hyphen.
   'nav.documents': 'Dokumente',
   'nav.models': 'KI-Modell',
+  'nav.skills': 'Skills',
   'nav.settings': 'Einstellungen',
   'app.lockNow': 'Jetzt sperren',
   'app.lockNowTitle': 'Arbeitsbereich wieder verschlüsseln und sperren',
@@ -581,7 +582,6 @@ export const de: Record<keyof typeof en, string> = {
   'settings.tab.general': 'Allgemein',
   'settings.tab.privacy': 'Privatsphäre & Daten',
   'settings.tab.diagnostics': 'Diagnose (erweitert)',
-  'settings.tab.skills': 'Skills',
   'settings.loading': 'Einstellungen werden geladen…',
   'settings.saved': 'Gespeichert',
   'settings.network.title': 'Privatsphäre & Offline-Modus',
@@ -653,7 +653,8 @@ export const de: Record<keyof typeof en, string> = {
   'settings.changePassword.submitBusy': 'Wird geändert…',
   'settings.changePassword.toast': 'Passwort geändert',
 
-  // ---- Settings → Skills-Tab (settings/SkillsTab.tsx — Skills-Plan §15) ----
+  // ---- Skills (Rail-Ziel — SkillsScreen.tsx + settings/SkillsTab.tsx, Skills-Plan §15) ----
+  'skills.title': 'Skills',
   'skills.intro': 'Skills bringen der KI bei, eine bestimmte Aufgabe zu erledigen. Sie ergänzen ihre Antworten um Hinweise – sie greifen nie auf das Internet oder andere Ordner auf deinem Computer zu.',
   'skills.import': 'Skill importieren…',
   'skills.import.menuAria': 'Einen Skill importieren',

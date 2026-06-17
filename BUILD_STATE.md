@@ -6,7 +6,22 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
-_Last updated: 2026-06-17 — **Skills — post-S12 audit follow-ups SHIPPED (no new phase; the wave stays
+_Last updated: 2026-06-17 — **Skills — frontend IA + modal follow-ups (manual-test fixes, no new phase).**
+Two issues found while eyeballing the running Skills surface, both fixed. **(1) Skills is now a top-level
+rail destination, not a Settings tab.** `ScreenId` gains `'skills'`; `SettingsTab` drops it; a thin
+[`SkillsScreen`](apps/desktop/src/renderer/screens/SkillsScreen.tsx) wraps the unchanged `SkillsTab`
+body in `.screen` chrome (h1 = `skills.title`). `App.tsx` `NAV_TOP` adds `{ id:'skills', icon:'puzzle' }`
+(new Lucide puzzle glyph in `Icon.tsx`) → rail is now Home · Chat · Documents · AI Model · **Skills** ‖
+Settings. `resolveNavTarget('skills')` → the screen; the legacy `settings:skills` alias still resolves
+(now to `{ screen:'skills' }`). New i18n `nav.skills` + `skills.title` (EN/DE); the unused
+`settings.tab.skills` key removed. design-guidelines §2 updated (5 primary + 1 utility). **(2) The content
+`Modal` now scrolls.** `Modal` wrapped its `{children}` directly in `.dialog`, so a tall body — e.g. a
+skill's expanded "Technical details" — overflowed the dialog's `max-height` with no scrollbar (broken
+layout). Children now sit in the existing `.modal-body` scroll region (flex:1 + min-height:0 + overflow-y),
+matching `ConfirmDialog`. Tests updated (`InformationArchitecture`, `rail-labels`); full suite **1625
+passed / 25 skipped**, typecheck + build clean._
+
+_(prior) 2026-06-17 — **Skills — post-S12 audit follow-ups SHIPPED (no new phase; the wave stays
 closed).** A second multi-persona audit of the whole skills surface (bugs + docs-vs-code) found **no
 CRITICAL/HIGH**; the fixes landed behind the unchanged §14 ceiling (no new capability, still offline,
 audit still ids/counts-only). Full design record: **architecture.md "Skills — design record" §13**.
@@ -249,7 +264,8 @@ drawer (Modal) with metadata + the permission block + a tool-skill "guidance onl
 a closed-by-default "Technical details" raw-structural disclosure; the DS7 review banner →
 `acknowledgeSkillWarning`; empty state). NO new IPC/shared types/main code — pure consumer of the
 S4 surface. Registered in `SettingsScreen` (tab order General · **Skills** · Privacy · Diagnostics),
-`'skills'` added to `SettingsTab` + nav alias `settings:skills`. ~70 EN/DE catalog keys (informal
+`'skills'` added to `SettingsTab` + nav alias `settings:skills`. **[superseded — see the top
+entry: Skills graduated to a top-level rail destination; it is no longer a Settings tab.]** ~70 EN/DE catalog keys (informal
 „du"); skill-row + permission-block CSS. 11 new renderer tests
 ([`tests/renderer/SkillsTab.test.tsx`](apps/desktop/tests/renderer/SkillsTab.test.tsx)). Full suite
 **1482 passed / 25 skipped**, typecheck + build clean, Playwright eyeball walk green (list/drawer/
@@ -782,7 +798,9 @@ picked** (never auto-applies — auto-fire is the deferred S13 wave).
   what it needs).
 - **Nav:** `SettingsTab` (`renderer/navigation.ts`) gains `'skills'`; `resolveNavTarget`
   resolves `settings:skills` → `{ screen: 'settings', settingsTab: 'skills' }`. `SettingsScreen`
-  `TAB_CHOICES` order is General · Skills · Privacy · Diagnostics.
+  `TAB_CHOICES` order is General · Skills · Privacy · Diagnostics. **[superseded — Skills is now a
+  top-level rail destination (`ScreenId 'skills'`), not a Settings tab; `settings:skills` is kept as a
+  legacy alias resolving to `{ screen:'skills' }`. See the top status entry.]**
 - **i18n:** ~70 `skills.*` keys + `settings.tab.skills` in BOTH catalogs (EN/DE, informal „du").
   Parity test green.
 - **CSS:** `.skills-toolbar/.skills-intro/.skills-list/.skill-row*/.skill-perm*/.skill-import`

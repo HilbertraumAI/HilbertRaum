@@ -16,6 +16,7 @@ export const en = {
   // since Electron has no auto-hyphenation; invisible when the word fits or in the tooltip.
   'nav.documents': 'Documents',
   'nav.models': 'AI Model',
+  'nav.skills': 'Skills',
   'nav.settings': 'Settings',
   'app.lockNow': 'Lock now',
   'app.lockNowTitle': 'Re-encrypt and lock the workspace',
@@ -553,7 +554,6 @@ export const en = {
   'settings.tab.general': 'General',
   'settings.tab.privacy': 'Privacy & data',
   'settings.tab.diagnostics': 'Diagnostics (advanced)',
-  'settings.tab.skills': 'Skills',
   'settings.loading': 'Loading settings…',
   'settings.saved': 'Saved',
   'settings.network.title': 'Privacy & Offline Mode',
@@ -617,7 +617,8 @@ export const en = {
   'settings.changePassword.submitBusy': 'Changing…',
   'settings.changePassword.toast': 'Password changed',
 
-  // ---- Settings → Skills tab (settings/SkillsTab.tsx — skills plan §15) ----
+  // ---- Skills (rail destination — SkillsScreen.tsx + settings/SkillsTab.tsx, skills plan §15) ----
+  'skills.title': 'Skills',
   'skills.intro': 'Skills teach the assistant how to do a specific task. They add guidance to its answers — they never reach the internet or other folders on your computer.',
   'skills.import': 'Import skill…',
   'skills.import.menuAria': 'Import a skill',

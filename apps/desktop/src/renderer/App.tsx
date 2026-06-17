@@ -4,6 +4,7 @@ import { SettingsScreen } from './screens/SettingsScreen'
 import { ModelsScreen } from './screens/ModelsScreen'
 import { ChatScreen } from './screens/ChatScreen'
 import { DocumentsScreen } from './screens/DocumentsScreen'
+import { SkillsScreen } from './screens/SkillsScreen'
 import { WorkspaceGate } from './screens/WorkspaceGate'
 import { Banner, Button, Icon, LocalIndicator, ToastProvider, type IconName } from './components'
 import { setThemeSetting } from './theme'
@@ -18,14 +19,16 @@ interface NavItem {
   icon: IconName
 }
 
-// Information architecture (design-guidelines §2): 4 everyday destinations on top,
+// Information architecture (design-guidelines §2): 5 everyday destinations on top,
 // Settings as the single bottom utility. Privacy and Diagnostics live INSIDE Settings
-// as tabs — they are no longer nav destinations.
+// as tabs — they are no longer nav destinations. Skills is a top-level destination of its
+// own (no longer a Settings tab) — it is a first-class capability surface, not a setting.
 const NAV_TOP: NavItem[] = [
   { id: 'home', labelKey: 'nav.home', icon: 'home' },
   { id: 'chat', labelKey: 'nav.chat', icon: 'chat' },
   { id: 'documents', labelKey: 'nav.documents', icon: 'file' },
-  { id: 'models', labelKey: 'nav.models', icon: 'brain' }
+  { id: 'models', labelKey: 'nav.models', icon: 'brain' },
+  { id: 'skills', labelKey: 'nav.skills', icon: 'puzzle' }
 ]
 
 const NAV_BOTTOM: NavItem[] = [{ id: 'settings', labelKey: 'nav.settings', icon: 'settings' }]
@@ -254,6 +257,7 @@ function AppShell(): JSX.Element {
         )}
         {screen === 'documents' && <DocumentsScreen onAskSelected={askSelectedDocuments} />}
         {screen === 'models' && <ModelsScreen />}
+        {screen === 'skills' && <SkillsScreen />}
         {screen === 'settings' && <SettingsScreen tab={settingsTab} onTabChange={setSettingsTab} />}
       </main>
     </div>
