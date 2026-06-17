@@ -184,7 +184,7 @@ export interface LlamaServerOptions {
   killGraceMs?: number
 }
 
-const DEFAULT_HEALTH_TIMEOUT_MS = 60_000
+const DEFAULT_HEALTH_TIMEOUT_MS = 180_000
 const DEFAULT_HEALTH_INTERVAL_MS = 250
 const DEFAULT_KILL_GRACE_MS = 2_000
 /** Per-probe timeout so a hung (accepts-but-never-responds) server can't stall the poll. */
