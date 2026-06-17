@@ -75,10 +75,12 @@ function makeHarness(): Harness {
   const skills = createSkillRegistry({ getDb: () => db, appSkillsDir, userSkillsDir })
   const ctx = {
     db,
-    workspace: { isUnlocked: () => true },
+    paths: { workspacePath: root },
+    workspace: { isUnlocked: () => true, documentCipher: () => null },
     isDev: false,
     audit,
-    skills
+    skills,
+    ocrEngine: undefined
   } as unknown as AppContext
   registerSkillsIpc(ctx)
   return { ctx, db, appSkillsDir, userSkillsDir }
@@ -173,9 +175,11 @@ describe('skills IPC — round-trip lifecycle', () => {
     })
     const ctx = {
       db,
-      workspace: { isUnlocked: () => false },
+      paths: { workspacePath: root },
+      workspace: { isUnlocked: () => false, documentCipher: () => null },
       isDev: false,
-      skills
+      skills,
+      ocrEngine: undefined
     } as unknown as AppContext
     registerSkillsIpc(ctx)
     await expect(invoke(handlers, IPC.listSkills)).rejects.toThrow(/locked/i)

@@ -119,6 +119,32 @@ export const SKILL_ID_RE = /^[a-z0-9][a-z0-9-]{1,62}$/
 /** Strict semver core MAJOR.MINOR.PATCH (drives upgrade/downgrade comparison — §6.5/§9). */
 export const SKILL_SEMVER_RE = /^\d+\.\d+\.\d+$/
 
+/** Parse the leading MAJOR.MINOR.PATCH of a version, ignoring any `-prerelease`/`+build` suffix. */
+function parseSemverCore(v: string): [number, number, number] | null {
+  const m = /^(\d+)\.(\d+)\.(\d+)/.exec(v.trim())
+  return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null
+}
+
+/**
+ * The §6.5 compatibility gate, finally enforced: true when a skill's declared
+ * `compatibility.minAppVersion` is NEWER than the running app, so the skill must be listed but kept
+ * DISABLED (it cannot be enabled, suggested, or run until the app is new enough). Pure + shared so
+ * main computes it and the renderer can label it the same way. Tolerant by design — a missing
+ * requirement, or an unparseable version on either side, is treated as compatible (this is a DS6
+ * courtesy gate, never a security control; versions are unsigned). The app version's
+ * `-prerelease`/`+build` suffix is ignored (only the MAJOR.MINOR.PATCH core is compared).
+ */
+export function skillNeedsNewerApp(minAppVersion: string | undefined, appVersion: string): boolean {
+  if (!minAppVersion) return false
+  const need = parseSemverCore(minAppVersion)
+  const have = parseSemverCore(appVersion)
+  if (!need || !have) return false
+  for (let i = 0; i < 3; i++) {
+    if (have[i] !== need[i]) return have[i] < need[i]
+  }
+  return false
+}
+
 /** Default SKILL.md body cap (64 KiB of chars). The `limits.ts` default references this. */
 export const DEFAULT_SKILL_MAX_BODY_CHARS = 64 * 1024
 

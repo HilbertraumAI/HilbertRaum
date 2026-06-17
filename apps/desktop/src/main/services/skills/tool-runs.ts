@@ -1,6 +1,6 @@
 import type { Db } from '../db'
 import type { AuditRecorder } from '../audit'
-import type { AuditEventType, RunnableTool, SkillToolAudit } from '../../../shared/types'
+import type { AuditEventType, DocumentChunkRead, RunnableTool, SkillToolAudit } from '../../../shared/types'
 import type { SkillRecord } from './registry'
 import { resolveScope } from '../collections'
 import { buildScopeFilter } from '../retrieval-scope'
@@ -126,6 +126,14 @@ export interface ToolRunDeps {
    * FS-write boundary (skills-plan §9.5/§22-M1). The IPC layer supplies it; tests inject a stub.
    */
   saveTextFile?: (defaultFileName: string, content: string) => Promise<boolean>
+  /**
+   * Re-extract a document's ordered, non-overlapping, newline-preserving parser SEGMENTS (the IPC
+   * supplies `extractDocumentPreview`). This is the FAITHFUL content reach for the extract/redaction
+   * tools — the stored `chunks` table collapses newlines and overlaps ~80 tokens, which breaks the
+   * line-oriented extractors and the redaction copy (`run.ts` resolveDocumentReader). Tests may omit
+   * it to exercise the legacy chunk-table reader against seeded chunks.
+   */
+  readDocumentSegments?: (documentId: string) => Promise<DocumentChunkRead[]>
 }
 
 /**
@@ -148,7 +156,12 @@ export function buildToolRunner(
   switch (toolName) {
     case 'extract_transactions':
       return async ({ signal, onProgress }) => {
-        const res = await runBankExtraction(db, seamArgs, { audit, signal, onProgress })
+        const res = await runBankExtraction(db, seamArgs, {
+          audit,
+          signal,
+          onProgress,
+          readDocumentSegments: deps.readDocumentSegments
+        })
         return {
           ok: res.ok,
           transactionCount: res.transactionCount,
@@ -193,7 +206,12 @@ export function buildToolRunner(
       }
     case 'extract_invoice':
       return async ({ signal, onProgress }) => {
-        const res = await runInvoiceExtraction(db, seamArgs, { audit, signal, onProgress })
+        const res = await runInvoiceExtraction(db, seamArgs, {
+          audit,
+          signal,
+          onProgress,
+          readDocumentSegments: deps.readDocumentSegments
+        })
         return {
           ok: res.ok,
           transactionCount: res.lineItemCount,
@@ -234,7 +252,8 @@ export function buildToolRunner(
           signal,
           onProgress,
           confirmed: args.confirmed,
-          saveTextFile: deps.saveTextFile!
+          saveTextFile: deps.saveTextFile!,
+          readDocumentSegments: deps.readDocumentSegments
         })
         return {
           ok: res.ok,

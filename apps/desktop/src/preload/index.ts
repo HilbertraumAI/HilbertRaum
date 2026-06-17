@@ -361,6 +361,9 @@ const api = {
   /** Cancel a run; with no handle, the active run. */
   cancelSkillRun: (runHandle?: string): Promise<void> =>
     ipcRenderer.invoke(IPC.cancelSkillRun, runHandle),
+  /** Drop a terminal run main-side once its outcome has been shown (the acknowledge handshake). */
+  clearSkillRun: (runHandle?: string): Promise<void> =>
+    ipcRenderer.invoke(IPC.clearSkillRun, runHandle),
 
   /** Subscribe to streamed tokens for a request (= conversation id); returns an unsubscribe fn. */
   onToken: (requestId: string, cb: (token: string) => void): (() => void) => {

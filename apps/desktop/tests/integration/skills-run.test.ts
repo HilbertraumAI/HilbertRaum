@@ -90,6 +90,56 @@ describe('runBankExtraction (S11a)', () => {
     expect((events as Array<{ type: string }>).map((e) => e.type)).toEqual(['skill_run_started', 'skill_run_done'])
   })
 
+  it('reads the injected VERBATIM segments, not the (newline-collapsed) chunks table', async () => {
+    const db = freshDb()
+    // Simulate the PRODUCTION chunk shape: the retrieval windows collapse every newline to a space,
+    // so the line-oriented parser reading THIS would see one giant "line" → at most one garbled row.
+    const collapsed = 'Statement EUR 2026-01-02 Grocery -45,90 1.954,10 2026-01-03 Salary 2.500,00 4.454,10'
+    const docId = seedDocWithChunks(db, [{ text: collapsed, page: 1 }])
+    // The faithful, newline-preserving segments the IPC supplies via extractDocumentPreview.
+    const segments = [
+      {
+        text: 'Statement EUR\n2026-01-02 Grocery -45,90 1.954,10\n2026-01-03 Salary 2.500,00 4.454,10',
+        page: 1,
+        index: 0
+      }
+    ]
+    const { audit } = capturingAudit()
+    const res = await runBankExtraction(
+      db,
+      { skillInstallId: 'app:bank-statement', documentId: docId },
+      { audit, readDocumentSegments: async () => segments }
+    )
+    expect(res.ok).toBe(true)
+    // Both rows parse from the verbatim segments; the collapsed chunk text would have yielded ≤1.
+    expect(res.transactionCount).toBe(2)
+    const descs = (
+      db.prepare('SELECT description FROM bank_transactions ORDER BY row_index').all() as Array<{
+        description: string
+      }>
+    ).map((r) => r.description)
+    expect(descs).toEqual(['Grocery', 'Salary'])
+  })
+
+  it('a failing verbatim re-extraction surfaces as a terminal failed run (B4)', async () => {
+    const db = freshDb()
+    const docId = seedDocWithChunks(db, [{ text: 'EUR\n2026-01-02 Coffee -3,50', page: 1 }])
+    const { audit } = capturingAudit()
+    const res = await runBankExtraction(
+      db,
+      { skillInstallId: 'app:bank-statement', documentId: docId },
+      {
+        audit,
+        readDocumentSegments: async () => {
+          throw new Error('stored copy is gone')
+        }
+      }
+    )
+    expect(res.ok).toBe(false)
+    const run = db.prepare('SELECT status FROM skill_runs WHERE id = ?').get(res.runId) as { status: string }
+    expect(run.status).toBe('failed')
+  })
+
   it('a DB error before the gate still drives the run to a terminal state (B4 — no stranded "started")', async () => {
     const db = freshDb()
     const docId = seedDocWithChunks(db, [{ text: 'EUR\n2026-01-02 Coffee -3,50', page: 1 }])

@@ -76,7 +76,8 @@ PRIVATE_AI_DRIVE/
 ```
 
 > **Skills on a commercial drive (S3 lays the dirs; S9 provisions + asserts).** `app-skills/` carries
-> the bundled product skills (the `bank-statement` instruction stub today), **copied wholesale from
+> the bundled product skills (four today: `bank-statement`, `invoice`, `document-redaction` — all
+> Tier-2 `kind:'tool'` — and `meeting-protocol`, Tier-1 instruction), **copied wholesale from
 > the committed repo `app-skills/` tree by `prepare-drive`**, the same copy step as `model-manifests/`
 > (DS17 — text-only, never network-fetched); `user-skills/` is created empty. The S9 commercial-drive
 > gate (`assertCommercialDrive` + the build scripts) **verifies at least one app skill is present

@@ -172,7 +172,8 @@ describe('SkillsTab — detail drawer', () => {
     await user.click(await screen.findByText('Bank statement helper'))
     const dialog = within(screen.getByRole('dialog'))
     expect(dialog.queryByText(/adds guidance only/i)).not.toBeInTheDocument()
-    expect(dialog.getByText(/extract transactions/i)).toBeInTheDocument()
+    // Generic (domain-free) active-tools note — applies to every kind:'tool' skill, not just bank.
+    expect(dialog.getByText(/run approved local tools on a document you choose/i)).toBeInTheDocument()
     expect(dialog.getByText('Use approved local tools when you ask')).toBeInTheDocument()
   })
 })

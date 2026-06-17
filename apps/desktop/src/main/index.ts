@@ -237,7 +237,8 @@ function initBackend(): void {
   const skills = createSkillRegistry({
     getDb: () => workspace.requireDb(),
     appSkillsDir: resolveAppSkillsDir(paths.rootPath, app.getAppPath()),
-    userSkillsDir: resolveUserSkillsDir(paths.rootPath)
+    userSkillsDir: resolveUserSkillsDir(paths.rootPath),
+    appVersion: app.getVersion()
   })
 
   // `db` is a getter over the controller: it throws while locked. DB-backed IPC is only

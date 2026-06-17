@@ -656,6 +656,8 @@ export const en = {
   // DS1/§7.4 — the on-disk folder vanished; the row is kept but can’t be used.
   'skills.unavailable.chip': 'Files missing',
   'skills.unavailable.title': 'This skill’s files are no longer on the drive.',
+  'skills.incompatible.chip': 'Needs newer app',
+  'skills.incompatible.title': 'This skill needs a newer version of the app; update to enable it.',
   // DS7 — review chip + the calm acknowledge banner in the detail view.
   'skills.review.chip': 'Review',
   'skills.warn.title': 'Review what this skill can do',
@@ -683,7 +685,7 @@ export const en = {
   'skills.tool.note': 'For now this adds guidance only. The tools it describes arrive in a later version.',
   // S11c — a kind:'tool' skill names its real, app-orchestrated tools; nothing runs on its own.
   'skills.tool.note.active':
-    'When you ask, this skill can run approved local tools on a statement you choose: extract transactions, check balances, categorize, summarize cashflow, and export to CSV. Tools run only when you start them, and exporting a file always asks first.',
+    'When you ask, this skill can run approved local tools on a document you choose. The tools run only when you start them, they see only that document, and exporting a file always asks you first.',
   // The permission block (skills plan §15 copy). Derived from the already-clamped
   // permissions — the renderer localises the result, it does not re-decide it.
   'skills.perm.heading': 'What this skill can do',
@@ -1202,6 +1204,7 @@ export const en = {
   'main.dialog.filterCsv': 'CSV file',
   'main.collections.builtinUndeletable': 'The built-in Library and Temporary cannot be deleted.',
   'main.skills.locked': 'Workspace is locked. Unlock it to manage skills.',
+  'main.skills.incompatible': 'This skill needs a newer version of the app. Update to use it.',
   // Tier-2 tool runs (skills plan §12.2, S11b) — friendly, content-free.
   'main.skills.run.unavailable': "This skill's tool isn't available right now.",
   'main.skills.run.noDocument': 'Add a document to this chat first, then try again.',

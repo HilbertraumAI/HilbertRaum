@@ -23,13 +23,13 @@
 
 import * as zlib from 'node:zlib'
 import {
-  cpSync,
   existsSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
+  renameSync,
   rmSync,
   statSync,
   writeFileSync
@@ -40,6 +40,7 @@ import type { Db } from '../db'
 import {
   SKILL_ID_RE,
   SKILL_SEMVER_RE,
+  skillNeedsNewerApp,
   summarizeSkillPermissions,
   type SkillManifest
 } from '../../../shared/skill-manifest'
@@ -430,10 +431,16 @@ export interface SkillInstallerDeps {
   limits?: SkillLimits
   /** Injectable clock for deterministic tests. */
   now?: () => string
+  /** The running app version, for the §6.5 minAppVersion gate. Absent ⇒ treated as compatible. */
+  appVersion?: string
 }
 
-/** Project a registry record to the IPC `SkillInfo` shape (adds the structural summary + dup flag). */
-export function recordToInfo(record: SkillRecord, duplicateId: boolean): SkillInfo {
+/**
+ * Project a registry record to the IPC `SkillInfo` shape (adds the structural summary + dup flag).
+ * `appVersion` drives the §6.5 compatibility flag — absent ⇒ compatible (the legacy/test default).
+ */
+export function recordToInfo(record: SkillRecord, duplicateId: boolean, appVersion = ''): SkillInfo {
+  const minAppVersion = record.manifest.compatibility.minAppVersion ?? null
   return {
     installId: record.installId,
     id: record.id,
@@ -448,6 +455,8 @@ export function recordToInfo(record: SkillRecord, duplicateId: boolean): SkillIn
     enabled: record.enabled,
     warningAck: record.warningAck,
     unavailable: record.unavailableAt !== null,
+    incompatible: skillNeedsNewerApp(minAppVersion ?? undefined, appVersion),
+    minAppVersion,
     permissions: record.manifest.permissions,
     permissionSummary: summarizeSkillPermissions(record.manifest.permissions),
     duplicateId,
@@ -461,9 +470,9 @@ export function recordToInfo(record: SkillRecord, duplicateId: boolean): SkillIn
 }
 
 /** Build a SkillInfo for a record, computing duplicateId from the DB. */
-export function skillInfo(db: Db, record: SkillRecord): SkillInfo {
+export function skillInfo(db: Db, record: SkillRecord, appVersion = ''): SkillInfo {
   const dup = getSkillsByDeclaredId(db, record.id).length > 1
-  return recordToInfo(record, dup)
+  return recordToInfo(record, dup, appVersion)
 }
 
 // ---- preview (no write; OQ-2 lean-yes) -----------------------------------------------
@@ -616,26 +625,51 @@ export function importSkill(
       }
     }
 
-    // 4) Place at user-skills/<id>/, replacing any existing user folder (replace/upgrade).
+    // 4) Place at user-skills/<id>/ via ATOMIC renames (the staging dir is a mkdtemp on the SAME
+    //    filesystem as the destination). Move any existing user folder ASIDE first, then rename
+    //    staging into place, then drop the backup — so a mid-place failure can NEVER leave the user
+    //    with neither the old nor a valid new skill (M1). The prior `rmSync(finalDir)` + `cpSync`
+    //    could destroy the working install and then leave a half-copied folder if the copy threw
+    //    partway. On a placement failure the backup is restored. The `.skill-backup-*` name fails
+    //    SKILL_ID_RE, so reconcile skips a crash-leftover backup the same way it skips staging.
     const finalDir = join(deps.userSkillsDir, manifest.id)
-    if (existsSync(finalDir)) rmSync(finalDir, { recursive: true, force: true })
-    cpSync(stagingDir, finalDir, { recursive: true })
+    let backupDir: string | null = null
+    if (existsSync(finalDir)) {
+      backupDir = join(deps.userSkillsDir, `.skill-backup-${manifest.id}`)
+      rmSync(backupDir, { recursive: true, force: true }) // clear any stale crash leftover
+      renameSync(finalDir, backupDir)
+    }
+    try {
+      renameSync(stagingDir, finalDir)
+    } catch (e) {
+      // Placement failed — restore the prior install so the user is never left with neither.
+      if (backupDir && !existsSync(finalDir)) renameSync(backupDir, finalDir)
+      throw e
+    }
+    if (backupDir) rmSync(backupDir, { recursive: true, force: true })
   } finally {
-    // Staging is always removed — on success (copied out) and on failure (cleanup, not a shred).
+    // A successful rename already consumed the staging dir; on the failure paths it may still exist.
+    // `force: true` makes this a no-op when it is already gone (cleanup, not a shred).
     rmSync(stagingDir, { recursive: true, force: true })
   }
 
   // 5) Reconcile so the row exists (a new user skill inserts DISABLED), then apply DS7. The folder
   //    is named by id, so the install id is deterministic — no re-discovery needed.
-  reconcileSkills(db, { appSkillsDir: deps.appSkillsDir, userSkillsDir: deps.userSkillsDir, limits, now })
+  reconcileSkills(db, {
+    appSkillsDir: deps.appSkillsDir,
+    userSkillsDir: deps.userSkillsDir,
+    limits,
+    now,
+    appVersion: deps.appVersion
+  })
   const installId = skillInstallId('user', manifestId)
   const record = getSkill(db, installId)
   if (!record) throw new SkillImportError(SKILL_IMPORT_ERRORS.invalidManifest)
-  applyImportEnableState(db, record, now())
+  applyImportEnableState(db, record, now(), deps.appVersion ?? '')
 
   const finalRecord = getSkill(db, installId)
   if (!finalRecord) throw new SkillImportError(SKILL_IMPORT_ERRORS.invalidManifest)
-  return { info: skillInfo(db, finalRecord), fileCount: staged.files.length }
+  return { info: skillInfo(db, finalRecord, deps.appVersion ?? ''), fileCount: staged.files.length }
 }
 
 /**
@@ -645,7 +679,14 @@ export function importSkill(
  * silently shadow trusted product content (trust-first precedence, §9.3). When it does enable,
  * one-active-per-id is enforced by disabling any same-id sibling that was enabled.
  */
-function applyImportEnableState(db: Db, record: SkillRecord, now: string): void {
+function applyImportEnableState(db: Db, record: SkillRecord, now: string, appVersion: string): void {
+  // §6.5 gate: a skill needing a newer app is installed but kept DISABLED (it cannot shape a turn
+  // or run a tool until the app is updated) — it still coexists/lists, just never enabled here.
+  if (skillNeedsNewerApp(record.manifest.compatibility.minAppVersion, appVersion)) {
+    setSkillEnabled(db, record.installId, false, now)
+    db.prepare('UPDATE skills SET warning_ack = 0, updated_at = ? WHERE install_id = ?').run(now, record.installId)
+    return
+  }
   const siblings = getSkillsByDeclaredId(db, record.id).filter((s) => s.installId !== record.installId)
   const enabledApp = siblings.find((s) => s.source === 'app' && s.enabled)
   if (enabledApp) {

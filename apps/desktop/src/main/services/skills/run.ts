@@ -46,6 +46,13 @@ export interface BankExtractionDeps {
   onProgress?: (p: { done: number; total: number }) => void
   /** Clock seam for deterministic tests. */
   now?: () => string
+  /**
+   * The verbatim content reach: a document's ordered, non-overlapping, newline-preserving parser
+   * segments (the IPC injects `extractDocumentPreview`). Required for a FAITHFUL extraction — the
+   * stored `chunks` table collapses newlines and overlaps (`resolveDocumentReader`). Absent ⇒ the
+   * legacy chunk-table reader (the integration tests that seed `chunks` directly).
+   */
+  readDocumentSegments?: (documentId: string) => Promise<DocumentChunkRead[]>
 }
 
 export interface BankExtractionResult {
@@ -80,6 +87,38 @@ export function buildReadDocumentChunks(db: Db, allowed: ReadonlySet<string>): S
     const rows = stmt.all(documentId) as unknown as Array<{ text: string; page: number | null; idx: number }>
     return rows.map((r) => ({ text: r.text, page: r.page ?? null, index: r.idx }))
   }
+}
+
+/**
+ * Resolve a content-reading tool's `readDocumentChunks`. The CORRECT source is the document's
+ * ordered, non-overlapping, newline-preserving parser SEGMENTS (`readDocumentSegments`, injected by
+ * the IPC via `extractDocumentPreview`). The stored `chunks` table is the WRONG source for these
+ * tools: those are retrieval windows that collapse every newline into a space and overlap by ~80
+ * tokens, so the line-oriented bank/invoice extractors see one giant "line" (near-zero rows) and the
+ * redaction copy comes out de-formatted with duplicated overlap regions. When no segment reader is
+ * injected (legacy/test callers that seed the `chunks` table directly), fall back to the chunk-table
+ * reader. Either way the reach stays FROZEN to the single in-scope id (the §14 ceiling is unchanged —
+ * the seam, not the tool, holds the FS/cipher capability via the injected closure).
+ */
+export async function resolveDocumentReader(
+  db: Db,
+  documentId: string,
+  deps: { readDocumentSegments?: (documentId: string) => Promise<DocumentChunkRead[]> }
+): Promise<SkillToolContext['readDocumentChunks']> {
+  if (!deps.readDocumentSegments) return buildReadDocumentChunks(db, new Set([documentId]))
+  let segments: DocumentChunkRead[]
+  try {
+    segments = await deps.readDocumentSegments(documentId)
+  } catch {
+    // Re-extraction failed (the stored copy is gone, or encrypted with no cipher). Surface it
+    // through the tool's OWN "could not be read" path: a reader that refuses the in-scope id, so
+    // the tool returns its friendly content-free error and the seam records a terminal 'failed'.
+    return (id: string): DocumentChunkRead[] => {
+      if (id === documentId) throw new Error('document re-extraction failed')
+      return []
+    }
+  }
+  return (id: string): DocumentChunkRead[] => (id === documentId ? segments : [])
 }
 
 export function finishRun(
@@ -130,7 +169,7 @@ export async function runBankExtraction(
     const signal = deps.signal ?? new AbortController().signal
     const ctx: SkillToolContext = {
       documentIds,
-      readDocumentChunks: buildReadDocumentChunks(db, new Set(documentIds)),
+      readDocumentChunks: await resolveDocumentReader(db, args.documentId, deps),
       signal,
       onProgress: deps.onProgress,
       audit: deps.audit
@@ -515,7 +554,15 @@ export async function runCashflowSummary(
   const { runId, statementId, output, completedAt } = prep.prepared
   const summary = output as CashflowSummary
   // No data table for a summary (no overbuild, §13) — record the run done, persist no figures.
-  finishRun(db, runId, 'done', completedAt, statementId, null)
+  // Guard the terminal write: `prepareStatementRun` leaves the row at 'started', so an unexpected
+  // throw here (e.g. a transiently-locked DB) must still drive a terminal 'failed' status rather
+  // than stranding the run at 'started' forever (B4 — the invariant the sibling seams hold via
+  // persistFailure; this is the one downstream seam with no surrounding transaction).
+  try {
+    finishRun(db, runId, 'done', completedAt, statementId, null)
+  } catch {
+    return persistFailure(db, runId, now)
+  }
   return { ok: true, runId, count: summary.count }
 }
 
@@ -649,7 +696,7 @@ export async function runDocumentRedaction(
     const signal = deps.signal ?? new AbortController().signal
     const ctx: SkillToolContext = {
       documentIds,
-      readDocumentChunks: buildReadDocumentChunks(db, new Set(documentIds)),
+      readDocumentChunks: await resolveDocumentReader(db, args.documentId, deps),
       signal,
       onProgress: deps.onProgress,
       audit: deps.audit

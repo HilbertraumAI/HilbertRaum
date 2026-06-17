@@ -18,6 +18,7 @@ import { join } from 'node:path'
 import type { Db } from '../db'
 import {
   SKILL_ID_RE,
+  skillNeedsNewerApp,
   type SkillKind,
   type SkillManifest,
   type SkillTrustedLevel
@@ -78,6 +79,8 @@ export interface ReconcileOptions {
   limits?: SkillLimits
   /** Injectable clock for deterministic tests. */
   now?: () => string
+  /** The running app version, for the §6.5 minAppVersion gate. Absent ⇒ treated as compatible. */
+  appVersion?: string
 }
 
 /** The deterministic natural key for a skill (skills plan §8.2). */
@@ -213,8 +216,11 @@ export function reconcileSkills(db: Db, opts: ReconcileOptions): ReconcileResult
 
     if (!existing) {
       // New discovery. A drop-in had no import-time permission confirmation, so user skills
-      // install DISABLED (DS19); app skills are trusted product content and install enabled.
-      const enabled = d.source === 'app' ? 1 : 0
+      // install DISABLED (DS19); app skills are trusted product content and install enabled —
+      // UNLESS the skill declares a newer minAppVersion than this app (§6.5), in which case it is
+      // listed but kept DISABLED until the app is updated.
+      const needsNewerApp = skillNeedsNewerApp(d.manifest.compatibility.minAppVersion, opts.appVersion ?? '')
+      const enabled = d.source === 'app' && !needsNewerApp ? 1 : 0
       const warningAck = d.source === 'app' ? 1 : 0
       db.prepare(
         `INSERT INTO skills (install_id, id, title, version, kind, source, path, enabled,
@@ -406,11 +412,13 @@ export interface SkillRegistryDeps {
   appSkillsDir: string
   userSkillsDir: string
   limits?: SkillLimits
+  /** The running app version, for the §6.5 minAppVersion gate (passed into reconcile). */
+  appVersion?: string
 }
 
 /** Build the registry handle (the `services/models.ts`/manager shape, deps injected for tests). */
 export function createSkillRegistry(deps: SkillRegistryDeps): SkillRegistry {
-  const { getDb, appSkillsDir, userSkillsDir, limits } = deps
+  const { getDb, appSkillsDir, userSkillsDir, limits, appVersion } = deps
 
   // Post-unlock lazy reconcile (the RATIFIED S3 guidance, implemented in S4). The startup
   // reconcile in main/index.ts no-ops while an encrypted DB is locked; rather than hook the
@@ -420,7 +428,7 @@ export function createSkillRegistry(deps: SkillRegistryDeps): SkillRegistry {
   // disk and call `reconcile()` explicitly, which also arms the flag.
   let reconciledThisSession = false
   const doReconcile = (): ReconcileResult => {
-    const result = reconcileSkills(getDb(), { appSkillsDir, userSkillsDir, limits })
+    const result = reconcileSkills(getDb(), { appSkillsDir, userSkillsDir, limits, appVersion })
     reconciledThisSession = true
     return result
   }

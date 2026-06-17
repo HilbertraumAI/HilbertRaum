@@ -6,7 +6,32 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
-_Last updated: 2026-06-17 — **Skills — third Tier-2 bundled app skill: `document-redaction` (content +
+_Last updated: 2026-06-17 — **Skills — content-reach + compatibility audit fixes (no new phase).**
+A follow-up audit of the whole skills surface (bugs + docs-vs-code) found one HIGH + three MEDIUMs,
+all fixed behind the unchanged §7 ceiling. **H1 (the headline fix):** the Tier-2 content-reading tools
+(`extract_transactions`/`extract_invoice`/`redact_document`) had been reading the stored `chunks` table
+through `readDocumentChunks` — but those are RETRIEVAL windows (newlines collapsed to spaces, ~80-token
+overlap), so the line-oriented extractors got ≈0 rows and the redaction copy was de-formatted/duplicated
+on actually-ingested documents (the tests masked it by seeding single chunks with real `\n`). Fix: the IPC
+now injects a `readDocumentSegments` capability (the same `extractDocumentPreview` the doc-tasks use —
+ordered, non-overlapping, newline-preserving parser segments re-extracted from the stored copy), and the
+run seams build the tool reader from it via [`resolveDocumentReader`](apps/desktop/src/main/services/skills/run.ts);
+the legacy chunk-table reader stays as the no-injection fallback. Ceiling unchanged — the SEAM holds the
+FS/cipher closure, the reach stays frozen to the in-scope id, a failed re-extraction surfaces through the
+tool's own "could not be read" path. The tool-run IPC tests now seed a REAL stored `.txt` so they exercise
+the production path end-to-end (+ new bank/redaction seam tests prove the injected verbatim reader is
+preferred over collapsed chunks). **M1:** the §6.5 `minAppVersion` gate is now ENFORCED (was parsed but
+ignored) via a pure [`skillNeedsNewerApp`](apps/desktop/src/shared/skill-manifest.ts) — incompatible app
+skills reconcile DISABLED, imports install disabled, the enable IPC refuses (`main.skills.incompatible`),
+`SkillInfo` gains `incompatible`/`minAppVersion`, and the Skills tab shows a "Needs newer app" badge with
+the toggle off; app version threaded from `app.getVersion()` through registry+installer deps+IPC. **M2:**
+`skills.tool.note.active` is now domain-free (it had shown bank-tool copy for the invoice + redaction
+skills). **M3:** the terminal-run acknowledge handshake is wired (`skills:clearToolRun` IPC + preload →
+`SkillRunController.clear`, previously dead code). Full suite green (**1693 passed**, 25 skipped),
+typecheck clean. Design record: **architecture.md "Skills — design record" §14**; drive-layout.md
+"instruction stub" line corrected (four bundled skills). EN/DE i18n parity kept (compile-enforced)._
+
+_(prior) 2026-06-17 — **Skills — third Tier-2 bundled app skill: `document-redaction` (content +
 tests, no new phase).** A FOURTH app skill ships in `app-skills/`: **`document-redaction`**
 (`id: document-redaction`, German "Anonymisierung"), the **third Tier-2 tool skill** and the
 **read-transform-export** shape the bank/invoice domains don't exercise. ONE tool in

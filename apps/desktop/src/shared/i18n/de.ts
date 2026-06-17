@@ -692,6 +692,8 @@ export const de: Record<keyof typeof en, string> = {
   'skills.dup.title': 'Ein anderer installierter Skill nutzt diesen Namen. Es kann immer nur einer aktiv sein.',
   'skills.unavailable.chip': 'Dateien fehlen',
   'skills.unavailable.title': 'Die Dateien dieses Skills sind nicht mehr auf dem Laufwerk.',
+  'skills.incompatible.chip': 'Neuere App nötig',
+  'skills.incompatible.title': 'Dieser Skill benötigt eine neuere Version der App; aktualisiere sie, um ihn zu aktivieren.',
   'skills.review.chip': 'Prüfen',
   'skills.warn.title': 'Prüfe, was dieser Skill darf',
   'skills.warn.body': 'Von dir erstellt oder importiert. Prüfe, was er darf, bevor du dich darauf verlässt.',
@@ -713,7 +715,7 @@ export const de: Record<keyof typeof en, string> = {
   'skills.kind.tool': 'Nutzt Werkzeuge',
   'skills.tool.note': 'Vorerst ergänzt dies nur Hinweise. Die beschriebenen Werkzeuge kommen in einer späteren Version.',
   'skills.tool.note.active':
-    'Wenn du darum bittest, kann dieser Skill zugelassene lokale Werkzeuge auf einem von dir gewählten Kontoauszug ausführen: Transaktionen extrahieren, Salden prüfen, kategorisieren, den Geldfluss zusammenfassen und als CSV exportieren. Werkzeuge laufen nur, wenn du sie startest, und ein Datei-Export fragt immer vorher nach.',
+    'Wenn du darum bittest, kann dieser Skill zugelassene lokale Werkzeuge auf einem von dir gewählten Dokument ausführen. Die Werkzeuge laufen nur, wenn du sie startest, sehen nur dieses Dokument, und ein Datei-Export fragt dich immer vorher.',
   'skills.perm.heading': 'Was dieser Skill darf',
   'skills.perm.canTitle': 'Dieser Skill kann:',
   'skills.perm.cannotTitle': 'Dieser Skill kann nicht:',
@@ -1277,6 +1279,7 @@ export const de: Record<keyof typeof en, string> = {
   'main.collections.builtinUndeletable':
     'Die integrierte Bibliothek und „Temporär“ können nicht gelöscht werden.',
   'main.skills.locked': 'Der Arbeitsbereich ist gesperrt. Entsperre ihn, um Skills zu verwalten.',
+  'main.skills.incompatible': 'Dieser Skill benötigt eine neuere Version der App. Aktualisiere sie, um ihn zu nutzen.',
   // Tier-2-Tool-Läufe (skills plan §12.2, S11b) – freundlich, ohne Inhalte.
   'main.skills.run.unavailable': 'Das Tool dieses Skills ist gerade nicht verfügbar.',
   'main.skills.run.noDocument': 'Füge diesem Chat zuerst ein Dokument hinzu und versuche es dann erneut.',

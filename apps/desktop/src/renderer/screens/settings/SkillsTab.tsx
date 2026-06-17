@@ -290,6 +290,11 @@ function SkillRow({
             {t('skills.unavailable.chip')}
           </Badge>
         )}
+        {skill.incompatible && (
+          <Badge tone="warning" icon="⚠" title={t('skills.incompatible.title')}>
+            {t('skills.incompatible.chip')}
+          </Badge>
+        )}
         {skill.duplicateId && (
           <Badge tone="warning" icon="⚠" title={t('skills.dup.title')}>
             {t('skills.dup.chip')}
@@ -302,7 +307,7 @@ function SkillRow({
         )}
         <Switch
           checked={skill.enabled}
-          disabled={skill.unavailable}
+          disabled={skill.unavailable || skill.incompatible}
           onChange={onToggle}
           label={t('skills.row.enableLabel')}
         />

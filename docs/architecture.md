@@ -1619,7 +1619,10 @@ behind the unchanged §14 ceiling (no new capability, still offline, audit still
 - **B4 — no stranded `started` run.** `runBankExtraction` and `prepareStatementRun` now wrap everything
   after the `skill_runs` 'started' insert in a guard, so an unexpected throw (e.g. a transiently locked
   DB while building the chunk reader) still drives a terminal `failed` status instead of leaving the run
-  row at `started` forever.
+  row at `started` forever. The downstream `runCashflowSummary` is the one seam with no surrounding
+  transaction (it persists no figures), so its terminal `finishRun('done')` is itself wrapped in a
+  guard that falls back to `persistFailure` — closing the last path that could strand the row at
+  `started`.
 - **CSV leading-whitespace formula injection.** `CSV_FORMULA_LEAD` now also neutralizes a formula
   trigger that hides behind leading whitespace (`"  =cmd"`) — some importers trim before evaluating —
   in addition to the leading-control-char and bare-`= + - @` cases.
@@ -1628,6 +1631,43 @@ behind the unchanged §14 ceiling (no new capability, still offline, audit still
   same-id user skill was enabled): it keeps the highest-precedence one (trust app > user → version →
   recency) and disables the rest. The enable IPC + import already enforced this on their paths; reconcile
   was the gap.
+
+### §14 Content-reach + compatibility audit fixes (2026-06-17b)
+
+A follow-up audit (bugs + docs-vs-code) found one HIGH and the MEDIUMs below; all fixed behind the
+unchanged §7 ceiling (no new capability, still offline, audit still ids/counts-only).
+
+- **H1 — the content-reading tools read VERBATIM segments, not retrieval chunks (the fix that makes
+  Tier-2 actually work).** `extract_transactions` / `extract_invoice` / `redact_document` reach document
+  text through `SkillToolContext.readDocumentChunks`. That had been backed by the stored `chunks` table —
+  but those are **retrieval windows**: the chunker collapses every newline to a space (`atomize`→space-join)
+  and overlaps consecutive windows by ~80 tokens. So the **line-oriented** bank/invoice extractors saw one
+  giant "line" (≈0 rows) and the redaction copy came out de-formatted with duplicated overlap regions — on
+  ACTUALLY-ingested documents. (The unit/integration tests masked it by seeding a single chunk whose text
+  carried real `\n`.) The fix: the IPC injects a `readDocumentSegments` capability (the same
+  `extractDocumentPreview` the doc-tasks use — ordered, non-overlapping, newline-preserving parser
+  segments, re-extracted from the stored copy), and the run seams build the tool's reader from it
+  (`run.ts` `resolveDocumentReader`). The §7 ceiling is unchanged: the **seam**, not the tool, holds the
+  FS/cipher capability (a closure), the reach stays frozen to the single in-scope id, and a failed
+  re-extraction surfaces through the tool's own content-free "could not be read" path. The legacy
+  chunk-table reader remains as the fallback for callers that don't inject the capability (the seam-level
+  tests that seed `chunks` directly); the IPC always injects the verbatim one, and the tool-run IPC tests
+  now seed a REAL stored `.txt` so they exercise the production path end-to-end.
+- **M1 — the §6.5 `minAppVersion` gate is now ENFORCED (was parsed-but-ignored).** A pure shared
+  `skillNeedsNewerApp(minAppVersion, appVersion)` (`shared/skill-manifest.ts`) drives it. An app skill that
+  needs a newer app reconciles in DISABLED (not auto-enabled); an import installs it disabled; the enable
+  IPC refuses it (`main.skills.incompatible`); `SkillInfo` gains `incompatible` + `minAppVersion`, and the
+  Skills tab shows a "Needs newer app" badge with the toggle disabled. Because turn-resolution, the
+  suggestion heuristic, and the run start all already gate on `enabled`, an incompatible skill is excluded
+  everywhere by construction. The app version is threaded from `app.getVersion()` through the registry +
+  installer deps + IPC. (Residual: editing an already-enabled skill's `minAppVersion` upward on disk is not
+  retroactively disabled — same unsigned-version courtesy posture as the downgrade guard.)
+- **M2 — the Tier-2 "active tools" note is domain-free.** `skills.tool.note.active` no longer enumerates
+  bank tools (it had shown bank copy for the invoice + redaction skills too); it now reads "run approved
+  local tools on a document you choose…", true for every `kind:'tool'` skill.
+- **M3 — the terminal-run acknowledge handshake is wired.** A new `skills:clearToolRun` IPC + preload
+  method lets the renderer's `acknowledgeSkillRun()` release the controller's terminal run main-side
+  (`SkillRunController.clear` was previously dead code; the comment promising the handshake is now true).
 
 ### §-anchor legend (historical plan citations)
 

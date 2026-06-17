@@ -1,8 +1,9 @@
-import { BrowserWindow, dialog, ipcMain } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain } from 'electron'
 import { writeFile } from 'node:fs/promises'
 import { IPC } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
 import type {
+  DocumentChunkRead,
   RunnableTool,
   SkillInfo,
   SkillPreview,
@@ -11,9 +12,11 @@ import type {
   StartSkillRunRequest,
   StartSkillRunResult
 } from '../../shared/types'
+import { documentsDir, extractDocumentPreview } from '../services/ingestion'
 import { getSettings } from '../services/settings'
 import { tMain } from '../services/i18n'
 import { log } from '../services/logging'
+import { skillNeedsNewerApp } from '../../shared/skill-manifest'
 import { getSkill, getSkillsByDeclaredId, setSkillEnabled } from '../services/skills/registry'
 import { suggestSkillsForTurn } from '../services/skills/suggest'
 import { SkillRunController } from '../services/skills/run-controller'
@@ -74,6 +77,21 @@ export function registerSkillsIpc(ctx: AppContext): void {
     return true
   }
 
+  // The FAITHFUL content reach for the extract/redaction tools: the document's ordered,
+  // non-overlapping, newline-preserving parser segments, re-extracted from the stored copy (the
+  // same `extractDocumentPreview` the doc-tasks use). The stored `chunks` table is retrieval
+  // windows — newlines collapsed, ~80-token overlap — which would give the line-oriented extractors
+  // near-zero rows and a de-formatted redaction copy. Page numbers carry through for `sourcePage`.
+  // Content stays main-side: only the tool (inside the gate) ever sees this text.
+  const storeDir = documentsDir(ctx.paths.workspacePath)
+  const readDocumentSegments = async (documentId: string): Promise<DocumentChunkRead[]> => {
+    const preview = await extractDocumentPreview(ctx.db, storeDir, documentId, {
+      cipher: ctx.workspace.documentCipher(),
+      ocrEngine: ctx.ocrEngine
+    })
+    return preview.segments.map((s, index) => ({ text: s.text, page: s.pageNumber, index }))
+  }
+
   // Developer mode (the model-leniency precedent): the user toggle OR a dev build. Gates the
   // downgrade override (DS15) only — never a security control (version is unsigned).
   const developerMode = (): boolean => {
@@ -84,9 +102,11 @@ export function registerSkillsIpc(ctx: AppContext): void {
     }
   }
 
+  const appVersion = app.getVersion()
   const installerDeps = () => ({
     appSkillsDir: ctx.skills!.appSkillsDir,
-    userSkillsDir: ctx.skills!.userSkillsDir
+    userSkillsDir: ctx.skills!.userSkillsDir,
+    appVersion
   })
 
   ipcMain.handle(IPC.listSkills, (): SkillInfo[] => {
@@ -97,13 +117,13 @@ export function registerSkillsIpc(ctx: AppContext): void {
     // Count declared ids in one pass so duplicateId is O(n), not O(n²).
     const idCounts = new Map<string, number>()
     for (const r of records) idCounts.set(r.id, (idCounts.get(r.id) ?? 0) + 1)
-    return records.map((r) => recordToInfo(r, (idCounts.get(r.id) ?? 0) > 1))
+    return records.map((r) => recordToInfo(r, (idCounts.get(r.id) ?? 0) > 1, appVersion))
   })
 
   ipcMain.handle(IPC.getSkill, (_e, installId: string): SkillInfo | null => {
     requireUnlocked()
     const record = ctx.skills!.get(installId)
-    return record ? skillInfo(ctx.db, record) : null
+    return record ? skillInfo(ctx.db, record, appVersion) : null
   })
 
   // Deterministic skill suggestion for the composer picker (skills plan §10.2/§16, S8). Scope is
@@ -207,13 +227,18 @@ export function registerSkillsIpc(ctx: AppContext): void {
     requireUnlocked()
     const record = getSkill(ctx.db, installId)
     if (!record) throw new Error(SKILL_IMPORT_ERRORS.notFound)
+    // §6.5 gate: a skill needing a newer app stays listed-but-disabled — refuse to enable it (the
+    // renderer also disables the toggle off `info.incompatible`; this is the defensive backstop).
+    if (skillNeedsNewerApp(record.manifest.compatibility.minAppVersion, appVersion)) {
+      throw new Error(tMain('main.skills.incompatible'))
+    }
     setSkillEnabled(ctx.db, installId, true)
     for (const sib of getSkillsByDeclaredId(ctx.db, record.id)) {
       if (sib.installId !== installId && sib.enabled) setSkillEnabled(ctx.db, sib.installId, false)
     }
     ctx.audit?.('skill_enabled', 'Skill enabled', { id: record.id, source: record.source })
     const updated = getSkill(ctx.db, installId)!
-    return skillInfo(ctx.db, updated)
+    return skillInfo(ctx.db, updated, appVersion)
   })
 
   ipcMain.handle(IPC.disableSkill, (_e, installId: string): SkillInfo => {
@@ -223,7 +248,7 @@ export function registerSkillsIpc(ctx: AppContext): void {
     setSkillEnabled(ctx.db, installId, false)
     ctx.audit?.('skill_disabled', 'Skill disabled', { id: record.id, source: record.source })
     const updated = getSkill(ctx.db, installId)!
-    return skillInfo(ctx.db, updated)
+    return skillInfo(ctx.db, updated, appVersion)
   })
 
   // Acknowledge a user skill's import warning (DS7) — clears the persistent "review what it can do"
@@ -237,7 +262,7 @@ export function registerSkillsIpc(ctx: AppContext): void {
       installId
     )
     const updated = getSkill(ctx.db, installId)!
-    return skillInfo(ctx.db, updated)
+    return skillInfo(ctx.db, updated, appVersion)
   })
 
   // ---- Tier-2 app-orchestrated tool runs (skills plan §6/§12.2/§16, S11b) -------------------------
@@ -291,7 +316,7 @@ export function registerSkillsIpc(ctx: AppContext): void {
       toolName,
       { skillInstallId, conversationId, documentId: docIds[0], confirmed: req?.confirmed },
       runAudit,
-      { saveTextFile }
+      { saveTextFile, readDocumentSegments }
     )
     if (!runner) return { started: false, error: tMain('main.skills.run.unavailable') }
     try {
@@ -309,5 +334,11 @@ export function registerSkillsIpc(ctx: AppContext): void {
 
   ipcMain.handle(IPC.cancelSkillRun, (_e, runHandle?: string | null): void => {
     runController.cancel(typeof runHandle === 'string' && runHandle.length > 0 ? runHandle : null)
+  })
+
+  // Drop a terminal run once the renderer has shown its outcome (the acknowledge handshake — the
+  // controller keeps a terminal run readable until this clears it). No-op on a still-running handle.
+  ipcMain.handle(IPC.clearSkillRun, (_e, runHandle?: string | null): void => {
+    runController.clear(typeof runHandle === 'string' && runHandle.length > 0 ? runHandle : null)
   })
 }

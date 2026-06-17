@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto'
 import type { Db } from '../db'
-import type { SkillToolAudit, SkillToolContext } from '../../../shared/types'
+import type { DocumentChunkRead, SkillToolAudit, SkillToolContext } from '../../../shared/types'
 import { getRegisteredTool, runSkillTool } from './tool-registry'
-import { buildReadDocumentChunks, finishRun } from './run'
+import { finishRun, resolveDocumentReader } from './run'
 import type {
   ExtractInvoiceOutput,
   InvoiceInput,
@@ -42,6 +42,13 @@ export interface InvoiceRunDeps {
   onProgress?: (p: { done: number; total: number }) => void
   /** Clock seam for deterministic tests. */
   now?: () => string
+  /**
+   * The verbatim content reach: a document's ordered, non-overlapping, newline-preserving parser
+   * segments (the IPC injects `extractDocumentPreview`). Required for a FAITHFUL extraction — the
+   * stored `chunks` table collapses newlines and overlaps (`resolveDocumentReader`). Absent ⇒ the
+   * legacy chunk-table reader (the integration tests that seed `chunks` directly).
+   */
+  readDocumentSegments?: (documentId: string) => Promise<DocumentChunkRead[]>
 }
 
 export interface InvoiceExtractionResult {
@@ -104,7 +111,7 @@ export async function runInvoiceExtraction(
     const signal = deps.signal ?? new AbortController().signal
     const ctx: SkillToolContext = {
       documentIds,
-      readDocumentChunks: buildReadDocumentChunks(db, new Set(documentIds)),
+      readDocumentChunks: await resolveDocumentReader(db, args.documentId, deps),
       signal,
       onProgress: deps.onProgress,
       audit: deps.audit
@@ -315,7 +322,9 @@ async function prepareInvoiceRun(
     const signal = deps.signal ?? new AbortController().signal
     const ctx: SkillToolContext = {
       documentIds,
-      readDocumentChunks: buildReadDocumentChunks(db, new Set(documentIds)),
+      // Downstream invoice tools take structured rows and never read chunks; the reader is built
+      // for ceiling-uniformity only (resolves to the verbatim/legacy reader, frozen to this id).
+      readDocumentChunks: await resolveDocumentReader(db, args.documentId, deps),
       signal,
       onProgress: deps.onProgress,
       audit: deps.audit

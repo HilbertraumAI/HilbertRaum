@@ -465,7 +465,12 @@ Every rejection is a **fixed, structural English string** (`SKILL_IMPORT_ERRORS`
 interpolates a member path, file name, or body text, so a malicious package can never echo its
 content into an IPC error payload, the audit log, or `app.log` (the content-class rule, §22-M1;
 proven by a sentinel-grep test). A failed/partial import **deletes** the staging dir and persists
-nothing — a plain cleanup, not a shred (nothing is secret under revised §0). Export writes the
+nothing — a plain cleanup, not a shred (nothing is secret under revised §0). Placement into
+`user-skills/<id>/` is **atomic**: the staging dir is a `mkdtemp` on the same filesystem, so the
+importer moves any existing install aside to a `.skill-backup-<id>` dir, `renameSync`es staging into
+place, then drops the backup — restoring the backup if the rename fails — so a mid-place error can
+never leave the user with neither the old nor a valid new skill (the earlier `rmSync` + `cpSync`
+could). Export writes the
 package tree (SKILL.md + `examples/schemas/prompts/resources`, never the `manifest.json` cache or
 run history) as a minimal STORE-method zip built the same dependency-free way. **App-shipped skills
 are read-only and cannot be deleted or overwritten** (the built-in-collection precedent); the

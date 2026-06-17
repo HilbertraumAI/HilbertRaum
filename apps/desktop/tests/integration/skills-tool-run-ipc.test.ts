@@ -83,10 +83,17 @@ function writeRedactionSkill(appSkillsDir: string): void {
 function seedDocWithChunks(db: Db, text: string): string {
   const now = new Date().toISOString()
   const docId = randomUUID()
+  // A REAL stored .txt copy: the run seam re-extracts VERBATIM segments from the stored file via
+  // extractDocumentPreview (the faithful content reach the IPC injects) — NOT the newline-collapsed,
+  // overlapping `chunks`. TxtParser returns the file as one newline-preserving segment, so the
+  // line-oriented extractor sees the rows exactly as written. (The chunk row is still seeded so the
+  // doc is "indexed"; it is no longer the content source.)
+  const storedPath = join(mkdtempSync(join(tmpdir(), 'hilbertraum-toolrun-doc-')), 'document.txt')
+  writeFileSync(storedPath, text, 'utf8')
   db.prepare(
-    `INSERT INTO documents (id, title, status, mime_type, created_at, updated_at)
-     VALUES (?, 'Statement', 'indexed', 'application/pdf', ?, ?)`
-  ).run(docId, now, now)
+    `INSERT INTO documents (id, title, stored_path, status, mime_type, created_at, updated_at)
+     VALUES (?, 'document.txt', ?, 'indexed', 'text/plain', ?, ?)`
+  ).run(docId, storedPath, now, now)
   db.prepare(
     `INSERT INTO chunks (id, document_id, chunk_index, text, source_label, page_number, created_at)
      VALUES (?, ?, 0, ?, 'p', 1, ?)`
@@ -113,10 +120,12 @@ function makeHarness(statementText: string): Harness {
   const skills = createSkillRegistry({ getDb: () => db, appSkillsDir, userSkillsDir })
   const ctx = {
     db,
-    workspace: { isUnlocked: () => true },
+    paths: { workspacePath: root },
+    workspace: { isUnlocked: () => true, documentCipher: () => null },
     isDev: false,
     audit,
-    skills
+    skills,
+    ocrEngine: undefined
   } as unknown as AppContext
   registerSkillsIpc(ctx)
   const docId = seedDocWithChunks(db, statementText)
@@ -137,10 +146,12 @@ function makeRedactionHarness(docText: string): Harness {
   const skills = createSkillRegistry({ getDb: () => db, appSkillsDir, userSkillsDir })
   const ctx = {
     db,
-    workspace: { isUnlocked: () => true },
+    paths: { workspacePath: root },
+    workspace: { isUnlocked: () => true, documentCipher: () => null },
     isDev: false,
     audit,
-    skills
+    skills,
+    ocrEngine: undefined
   } as unknown as AppContext
   registerSkillsIpc(ctx)
   const docId = seedDocWithChunks(db, docText)

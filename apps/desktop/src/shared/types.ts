@@ -1291,6 +1291,13 @@ export interface SkillInfo {
   warningAck: boolean
   /** True once the on-disk folder has vanished (mark-unavailable; the row is kept). */
   unavailable: boolean
+  /**
+   * True when the skill declares a `compatibility.minAppVersion` NEWER than this app (§6.5): it is
+   * listed but cannot be enabled/suggested/run until the app is updated. Optional/additive.
+   */
+  incompatible?: boolean
+  /** The declared `compatibility.minAppVersion`, when present — shown alongside `incompatible`. */
+  minAppVersion?: string | null
   /** Effective (already clamped) permissions (DS6). */
   permissions: SkillPermissions
   /** The calm human permission summary (structural; §9.2/§15). */

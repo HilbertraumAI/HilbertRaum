@@ -184,6 +184,8 @@ export const IPC = {
   getSkillRun: 'skills:getToolRun',
   /** Cancel a run (aborts its `AbortSignal`); with no handle, the active run. */
   cancelSkillRun: 'skills:cancelToolRun',
+  /** Drop a terminal run main-side once the renderer has shown its outcome (the acknowledge handshake). */
+  clearSkillRun: 'skills:clearToolRun',
   // Encrypted workspace lifecycle
   getWorkspaceState: 'workspace:getState',
   unlockWorkspace: 'workspace:unlock',

@@ -174,6 +174,32 @@ describe('document-redaction — the run seam (read → mask → write) on a rea
     expect((events as Array<{ type: string }>).map((e) => e.type)).toEqual(['skill_run_started', 'skill_run_done'])
   })
 
+  it('writes a FAITHFUL copy from the verbatim segments — newlines preserved, no collapsed chunk text', async () => {
+    const db = freshDb()
+    // Production chunk text collapses newlines to spaces; saving THAT would hand the user a
+    // de-formatted single-line "redacted copy". The injected verbatim segments keep the layout.
+    const docId = seedDocWithChunks(db, PII_TEXT.replace(/\n/g, ' '))
+    const segments = PII_TEXT.split('\n').map((text, index) => ({ text, page: 1, index }))
+    const { audit } = capturingAudit()
+    let written: { name: string; content: string } | null = null
+    const res = await runDocumentRedaction(db, { skillInstallId, documentId: docId }, {
+      audit,
+      confirmed: true,
+      readDocumentSegments: async () => segments,
+      saveTextFile: async (name, content) => {
+        written = { name, content }
+        return true
+      }
+    })
+    expect(res.ok).toBe(true)
+    expect(res.redactionCount).toBe(5)
+    // The saved copy keeps the three lines (verbatim segments joined by newline), masked — not the
+    // single-line collapsed chunk text the seam would otherwise have read.
+    expect(written!.content.split('\n')).toHaveLength(3)
+    expect(written!.content).toContain('[EMAIL]')
+    expect(written!.content).not.toContain('jane.doe@example.com')
+  })
+
   it('a clean document still saves a copy and reports resultKind clean', async () => {
     const db = freshDb()
     const docId = seedDocWithChunks(db, 'A plain memo about the roadmap. Nothing sensitive here.')

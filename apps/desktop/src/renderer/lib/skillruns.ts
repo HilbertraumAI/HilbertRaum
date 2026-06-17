@@ -100,11 +100,14 @@ export async function cancelActiveSkillRun(): Promise<void> {
   if (active) await window.api.cancelSkillRun(active.runHandle)
 }
 
-/** Dismiss a finished (terminal) run after a screen has shown its outcome. */
+/** Dismiss a finished (terminal) run after a screen has shown its outcome. Also releases the
+ *  terminal run main-side (the acknowledge handshake) so the controller doesn't hold stale state. */
 export function acknowledgeSkillRun(): void {
-  if (isSkillRunTerminal(active)) {
+  if (active && isSkillRunTerminal(active)) {
+    const handle = active.runHandle
     stopPolling()
     setActive(null)
+    void window.api.clearSkillRun(handle)
   }
 }
 
