@@ -175,6 +175,26 @@ if (Test-Path $ManifestSrc) {
 }
 Write-Host ''
 
+# --- App skills ---------------------------------------------------------------------
+# Copy the committed product skills (text-only: SKILL.md + JSON schemas + examples) from the
+# repo app-skills/ tree onto the drive, the same wholesale copy as model-manifests/ (skills
+# plan S9 / DS17). user-skills/ is left EMPTY (the buyer fills it). Canonical reference:
+# drive.ts listSkillFolders / planPrepareDrive.appSkillsToCopy.
+$AppSkillSrc = Join-Path $RepoRoot 'app-skills'
+$AppSkillDst = Join-DrivePath 'app-skills'
+Write-Host 'App skills:'
+if (Test-Path $AppSkillSrc) {
+  if ($DryRun) {
+    Write-Host "  copy $AppSkillSrc -> $AppSkillDst (product skills)"
+  } else {
+    Copy-Item -Path (Join-Path $AppSkillSrc '*') -Destination $AppSkillDst -Recurse -Force
+    Write-Host "  copied app skills to app-skills/"
+  }
+} else {
+  Write-Host "  WARNING: $AppSkillSrc not found (run from a repo clone)" -ForegroundColor Yellow
+}
+Write-Host ''
+
 # --- User docs ----------------------------------------------------------------------
 $DocsDst = Join-DrivePath 'docs'
 $DocFiles = @('docs/user-guide.md', 'docs/troubleshooting.md', 'PRIVACY.md')

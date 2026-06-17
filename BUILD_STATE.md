@@ -6,7 +6,28 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
-_Last updated: 2026-06-17 — **Skills Phase S8 SHIPPED — skill selector heuristics.** New files:
+_Last updated: 2026-06-17 — **Skills Phase S9 SHIPPED — built-in bank-statement instruction stub.**
+The FIRST real app skill: committed [`app-skills/bank-statement/`](app-skills/bank-statement/)
+(`SKILL.md` + `schemas/transaction.schema.json` + `examples/reading-a-statement.md`, text-only product
+content — DS17). The body is **guidance-honest (§22-D1):** quote the statement's own printed figures,
+decline to derive unstated ones, flag what can't be confirmed — it makes **no** extraction/reconcile
+promise (the §6.6 reconcile body returns with the Tier-2 tools at S11). `kind: instruction`; it
+**reserves** its five Tier-2 tools via `allowedTools` (declared intent). **SL-1 (resolved):** the S2
+parser empties `allowedTools` for instruction skills (a frozen contract test), so the "tool-reserved"
+signal can't ride `allowedTools` — added an **additive `SkillManifest.reservesTools`** (parser sets it
+from the *declared* list for any kind; `allowedTools` still `[]` for instruction) + additive
+`SkillInfo.reservesTools`; the S5 detail drawer's Tier-2 note now triggers on `reservesTools || kind
+=== 'tool'` (was `kind === 'tool'`), so the instruction stub shows "tools arrive with Tier-2" while its
+permission block stays kind-gated (no false "can use tools"). `prepare-drive.{ps1,sh}` now **copy
+`app-skills/` wholesale** (like `model-manifests/`; `planPrepareDrive.appSkillsToCopy` is the dry-run
+reference via `drive.ts listSkillFolders`); `assertCommercialDrive` + `build-commercial-drive.{ps1,sh}`
+now **assert ≥1 app skill present + `user-skills/` empty** (`checks.appSkillsPresent`/`userSkillsEmpty`).
+14 new tests (skills-bank-statement 8 + commercial 3 + manifest 2 + drive 1; SkillsTab note retargeted).
+Full suite **1532 passed / 25 skipped**, typecheck + build clean. Docs: drive-layout.md, packaging.md,
+security-model.md, known-limitations.md (the THREE ratified residuals). See the **"Skills — S9
+handoff"** block below. Next: Phase S10 (Tier-2 tool-registry design — no heavy tools)._
+
+_(prior) 2026-06-17 — **Skills Phase S8 SHIPPED — skill selector heuristics.** New files:
 [`services/skills/selector.ts`](apps/desktop/src/main/services/skills/selector.ts) (pure deterministic
 `triggers` scoring — keyword/MIME/filename, fixed threshold, tie-break by installId) and
 [`services/skills/suggest.ts`](apps/desktop/src/main/services/skills/suggest.ts)
@@ -120,6 +141,55 @@ attacker-supplied and is now unzipped straight to a real on-disk folder. **Impac
 commit: none** — `shared/skill-manifest.ts` is storage-agnostic and `parseSkillManifestFromDir` is now
 the single read path for both sources. S3 spec, S4 spec, §7/§8/§9/§14/§17/§19/§20 + the §18 matrices
 updated accordingly._
+
+### Skills — S9 handoff (2026-06-17)
+
+**Contracts produced** (what S10/S11 + the sell pipeline consume):
+- **`app-skills/bank-statement/`** (committed): `SKILL.md` (`kind: instruction`, guidance-honest body,
+  `allowedTools` reserving the 5 Tier-2 tools, `triggers`), `schemas/transaction.schema.json` (the
+  Tier-2 row contract, present early — S11 reads it), `examples/reading-a-statement.md` (honest worked
+  example). InstallId resolves to **`app:bank-statement`** (deterministic natural key, S3).
+- **`shared/skill-manifest.ts`**: additive `SkillManifest.reservesTools?: boolean` — the parser sets it
+  `true` whenever the frontmatter DECLARES a non-empty tool list, **for any kind**; `allowedTools`
+  still stays `[]` for an instruction skill (the frozen S2 contract — it cannot USE tools in v1). This
+  is the durable "tool-reserved" display signal that survives reconcile (cached in `manifest_json`).
+- **`shared/types.ts`**: additive `SkillInfo.reservesTools?: boolean` (`recordToInfo` sets it from
+  `manifest.reservesTools`).
+- **`services/drive.ts`**: `listSkillFolders(dir) → string[]` (subdirs containing a `SKILL.md`, sorted)
+  — shared by the prepare plan + the commercial gate; `PreparePlan.appSkillsToCopy` +
+  `PreparePlanOptions.appSkillsDir` (dry-run reference for the wholesale copy).
+- **`services/commercial-drive.ts`**: `assertCommercialDrive` gains `checks.appSkillsPresent` (≥1 app
+  skill under `app-skills/`) + `checks.userSkillsEmpty` (`user-skills/` empty) — both always-on; a
+  missing app skill OR any `user-skills/` entry flips `ok` to false with a `problems[]` line.
+- **Scripts:** `prepare-drive.{ps1,sh}` copy `app-skills/` wholesale; `build-commercial-drive.{ps1,sh}`
+  natively cross-check the same app-skills-present + user-skills-empty invariants (parity).
+
+**Decisions taken or changed:**
+- **DS17/drawer-note tension resolved — keep `kind: instruction`, trigger the note off
+  `reservesTools` (not `kind`).** The stub is instruction-only (§2/§6.6), so it can't be `kind: 'tool'`;
+  but the drawer's Tier-2 note must show. Since the parser empties `allowedTools` for instruction
+  skills, the signal is the new `reservesTools` flag. The permission-block "✓ Use approved local
+  tools" line stays `kind === 'tool'`-gated, so the instruction stub honestly shows NO current tool
+  capability while still surfacing "tools arrive with Tier-2".
+- **Commercial gate checks are ALWAYS-ON** (not opt-in like the runtime/ocr pins): they need only
+  `rootPath`. The 5 existing `ok:true` commercial tests were updated to provision an app skill; the
+  exact-shape `checks` assertion gained the two keys. (Suite stays green; count grows.)
+- **`minAppVersion: 0.1.29`** in the stub matches the running app (no version-gate disable; the
+  registry does not enforce `compatibility` anyway in v1).
+- **Integrity residual = accept + document (§22-M2):** the gate proves *provisioning*, not a runtime
+  hash; trust is by drive location. Real integrity = off-drive signing (Tier-3). Same as the engine
+  binary. Documented in security-model.md + known-limitations.md (with the DS20 confidentiality
+  boundary + the DB-rebuild-resets-enable note — all three ratified entries landed together).
+
+**Open landmines:** **SL-1 — RESOLVED in S9** (the instruction-skill `allowedTools` empties to `[]`, so
+the tool-reserved signal needed the additive `reservesTools` flag rather than reading `allowedTools`).
+No open `SL-#`. Carry-forward (not S9's job): the S6 composer-picker live eyeball still uncaptured
+(needs a model-running walk step); covered by `SkillChat.test.tsx`.
+
+**What S10 consumes:** the committed `schemas/transaction.schema.json` (the typed Tier-2 I/O contract
+the tool registry validates against) + the `reservesTools`/`allowedTools` declaration on the stub (the
+tool names the registry will wire); when the Tier-2 tools land (S11) the SKILL.md body is swapped to the
+§6.6 reconcile/validate body and `allowedTools` becomes effective for a `kind: 'tool'` skill.
 
 ### Skills — S8 handoff (2026-06-17)
 

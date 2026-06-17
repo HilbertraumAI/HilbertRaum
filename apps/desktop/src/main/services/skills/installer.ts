@@ -439,6 +439,10 @@ export function recordToInfo(record: SkillRecord, duplicateId: boolean): SkillIn
     permissions: record.manifest.permissions,
     permissionSummary: summarizeSkillPermissions(record.manifest.permissions),
     duplicateId,
+    // Tool-reserved signal (skills plan §13/§22-D1): the frontmatter declared Tier-2 tools (even
+    // for an instruction stub, whose effective allowedTools stays []). The tools don't execute in
+    // v1, but the detail view shows the honest "tools arrive with Tier-2" note off this flag.
+    reservesTools: record.manifest.reservesTools ?? false,
     installedAt: record.installedAt,
     updatedAt: record.updatedAt
   }

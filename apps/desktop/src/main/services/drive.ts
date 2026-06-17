@@ -1,5 +1,5 @@
 import { dirname, join } from 'node:path'
-import { existsSync, statSync } from 'node:fs'
+import { existsSync, readdirSync, statSync } from 'node:fs'
 import type { ModelManifest } from '../../shared/manifest'
 import { isRealSha256 } from '../../shared/manifest'
 import { sha256File, verifyChecksum, weightPath } from './models'
@@ -36,9 +36,12 @@ export const DRIVE_LAYOUT_DIRS: readonly string[] = [
   'workspace',
   // Skill packages (skills plan §0/§7 — plaintext plain folders, OUTSIDE the encrypted
   // workspace). `app-skills/` is read-only product content (provisioned at drive-build, like
-  // model-manifests, populated by S9); `user-skills/` is the read-write area the Skills view
-  // writes to and power users may drop a folder into. Both are registered here in S3 (audit A4)
-  // so the registry never reads a directory the layout machinery forgot to create.
+  // model-manifests); the committed repo `app-skills/` tree (e.g. bank-statement/) is COPIED
+  // onto the drive by prepare-drive in S9, the same wholesale copy step as model-manifests/.
+  // `user-skills/` is the read-write area the Skills view writes to and power users may drop a
+  // folder into — it ships EMPTY on a sold drive (commercial-drive asserts both, §14). Both are
+  // registered here in S3 (audit A4) so the registry never reads a directory the layout
+  // machinery forgot to create.
   'app-skills',
   'user-skills',
   'models/chat',
@@ -95,6 +98,26 @@ export function resolveAppSkillsDir(rootPath: string, appPath?: string): string 
  */
 export function resolveUserSkillsDir(rootPath: string): string {
   return join(rootPath, 'user-skills')
+}
+
+/**
+ * List the skill folder names under a skills directory (a sub-directory that contains a
+ * `SKILL.md`). Used to (a) compute what `prepare-drive` copies from the repo `app-skills/`
+ * source and (b) assert a sold drive ships at least one trusted product skill
+ * (`assertCommercialDrive`). Returns `[]` for an absent/unreadable directory — discovery
+ * tolerates an empty skills area. Sorted for stable, testable output.
+ */
+export function listSkillFolders(dir: string): string[] {
+  if (!existsSync(dir)) return []
+  try {
+    return readdirSync(dir, { withFileTypes: true })
+      .filter((e) => e.isDirectory())
+      .map((e) => e.name)
+      .filter((name) => existsSync(join(dir, name, 'SKILL.md')))
+      .sort()
+  } catch {
+    return []
+  }
 }
 
 // ---- config/drive.json (the prepared-drive marker, spec §6) -----------------------
@@ -322,6 +345,13 @@ export interface PreparePlan {
   filesToWrite: PreparePlanFile[]
   /** Manifest filenames to copy from the repo `model-manifests/` onto the drive. */
   manifestsToCopy: string[]
+  /**
+   * App-skill folder names to copy from the repo `app-skills/` source onto the drive (S9). The
+   * whole tree is copied wholesale (like model-manifests/); this lists the discovered skills so a
+   * dry-run/test can confirm the bundled product skill is provisioned. Empty when no source dir
+   * is supplied (the scripts copy wholesale regardless — drive.ts is the dry-run reference).
+   */
+  appSkillsToCopy: string[]
   /** Weight destinations the user must populate (resolved from manifests). */
   weightDestinations: string[]
   /** Whether `config/*.json` would be overwritten (they already exist). */
@@ -331,6 +361,11 @@ export interface PreparePlan {
 export interface PreparePlanOptions extends DriveJsonOptions, PolicyJsonOptions {
   /** Forces config regeneration even if files already exist. */
   force?: boolean
+  /**
+   * The repo `app-skills/` source directory (resolveAppSkillsDir on a dev clone). When supplied,
+   * the plan lists its skill folders as `appSkillsToCopy` (S9). Omitted ⇒ `[]`.
+   */
+  appSkillsDir?: string
 }
 
 const CONFIG_INDENT = 2
@@ -363,6 +398,7 @@ export function planPrepareDrive(
     dirsToCreate,
     filesToWrite,
     manifestsToCopy: manifests.map((m) => `${m.id}.yaml`),
+    appSkillsToCopy: opts.appSkillsDir ? listSkillFolders(opts.appSkillsDir) : [],
     weightDestinations: manifests.map((m) => m.localPath),
     configWouldOverwrite
   }
@@ -379,6 +415,11 @@ export function formatPlan(plan: PreparePlan): string {
   lines.push('Config files to write:')
   for (const f of plan.filesToWrite) lines.push(`  + ${f.relPath}`)
   if (plan.configWouldOverwrite) lines.push('  (existing config/*.json present — use --force to overwrite)')
+  if (plan.appSkillsToCopy.length > 0) {
+    lines.push('')
+    lines.push('App skills to copy from the repo app-skills/ source:')
+    for (const s of plan.appSkillsToCopy) lines.push(`  + app-skills/${s}/`)
+  }
   lines.push('')
   lines.push('Model weights you must add (git-ignored, not provisioned by this script):')
   for (const w of plan.weightDestinations) lines.push(`  · ${w}`)

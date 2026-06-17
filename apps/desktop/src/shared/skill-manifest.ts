@@ -76,6 +76,13 @@ export interface SkillManifest {
   permissions: SkillPermissions
   /** Tier-2 reserved; always `[]` for an `instruction` skill in v1. */
   allowedTools: string[]
+  /**
+   * True when the frontmatter DECLARED a non-empty tool list — i.e. the skill RESERVES Tier-2
+   * tools, even though `allowedTools` is emptied for an instruction skill (the tools don't
+   * execute in v1, §6.5). Lets the UI honestly show "tools arrive with Tier-2" for a
+   * tool-reserved instruction stub (the bank-statement skill — skills plan §13/§22-D1). Optional/
+   * additive (older cached manifest_json may lack it → treat as false). */
+  reservesTools?: boolean
   triggers: SkillTriggers
 }
 
@@ -338,16 +345,24 @@ export function validateSkillManifest(raw: unknown): SkillManifestValidation {
   // Optional allowedTools — Tier-2 reserved. For an instruction skill in v1 it is accepted but
   // the list is ignored with a note (skills plan §6.5).
   let allowedTools: string[] = []
+  let reservesTools = false
   const toolsRaw = raw['allowedTools'] ?? raw['allowed_tools']
   if (toolsRaw !== undefined && toolsRaw !== null) {
     if (!Array.isArray(toolsRaw) || !toolsRaw.every((t) => typeof t === 'string')) {
       errors.push('"allowedTools" must be a list of tool-name strings when present')
-    } else if (kind === 'instruction') {
-      if (toolsRaw.length > 0) {
-        notes.push('"allowedTools" is ignored for an instruction skill in v1 (Tier-2 only)')
-      }
     } else {
-      allowedTools = (toolsRaw as string[]).map((t) => t.trim()).filter((t) => t !== '')
+      const declared = (toolsRaw as string[]).map((t) => t.trim()).filter((t) => t !== '')
+      // The declared list means the skill RESERVES Tier-2 tools (display signal), regardless of
+      // kind. For an instruction skill the effective allowedTools still stays [] (it cannot USE
+      // tools in v1) — the list is accepted but ignored with a note (§6.5).
+      reservesTools = declared.length > 0
+      if (kind === 'instruction') {
+        if (declared.length > 0) {
+          notes.push('"allowedTools" is ignored for an instruction skill in v1 (Tier-2 only)')
+        }
+      } else {
+        allowedTools = declared
+      }
     }
   }
 
@@ -392,6 +407,7 @@ export function validateSkillManifest(raw: unknown): SkillManifestValidation {
       compatibility,
       permissions,
       allowedTools,
+      reservesTools,
       triggers
     }
   }

@@ -177,6 +177,21 @@ $docsDir = Join-Path $Target 'workspace/documents'
 if ((Test-Path $docsDir) -and (Get-ChildItem -Force $docsDir -ErrorAction SilentlyContinue | Select-Object -First 1)) {
   $problems += 'user data present: workspace/documents/*'
 }
+# App skills present + user-skills empty (assertCommercialDrive parity, skills plan S9 / §14):
+# a sold drive ships trusted PRODUCT skills under app-skills/ (a folder with a SKILL.md) and an
+# EMPTY user-skills/ (the buyer fills it). Mirrors commercial-drive.ts listSkillFolders.
+$appSkillsDir = Join-Path $Target 'app-skills'
+$appSkillCount = 0
+if (Test-Path $appSkillsDir) {
+  $appSkillCount = @(Get-ChildItem -Directory $appSkillsDir -ErrorAction SilentlyContinue | Where-Object { Test-Path (Join-Path $_.FullName 'SKILL.md') }).Count
+}
+if ($appSkillCount -eq 0) { $problems += 'no app skills provisioned (a sold drive ships trusted product skills under app-skills/)' }
+$userSkillsDir = Join-Path $Target 'user-skills'
+if (Test-Path $userSkillsDir) {
+  foreach ($us in @(Get-ChildItem -Force $userSkillsDir -ErrorAction SilentlyContinue)) {
+    $problems += "user skill present on a drive meant to ship empty: user-skills/$($us.Name)"
+  }
+}
 # License gate (assertCommercialDrive parity, spec 13): every shipped model's
 # license_review.status must be 'approved'. -AcceptLicense is download-time acceptance,
 # NEVER a substitute for the redistribution review a sold drive needs.

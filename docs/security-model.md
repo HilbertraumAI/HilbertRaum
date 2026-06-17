@@ -472,6 +472,28 @@ are read-only and cannot be deleted or overwritten** (the built-in-collection pr
 residual that a hash manifest on a writable drive is unanchored (real integrity = off-drive
 signing) is the same one already accepted for the engine binary (§22-M2).
 
+### App-skill provisioning + the accepted integrity residual (skills plan §22-M2, Phase S9, 2026-06-17)
+
+App-shipped skills are **non-secret, read-only product content**, committed to the repo under
+`app-skills/` (text only — `SKILL.md` + JSON schemas + Markdown examples) and **copied wholesale onto
+the drive by `prepare-drive`**, exactly like `model-manifests/` (no network — DS17). On a sold drive
+the commercial gate (`assertCommercialDrive` + the native cross-check in
+`build-commercial-drive.{ps1,sh}`) **requires at least one app skill present** (a folder with a
+`SKILL.md`) and **asserts `user-skills/` is empty** — a sellable drive ships only trusted product
+skills, the "ships empty / no user data" rule extended to the plaintext skills area.
+
+**Accepted residual (§22-M2, resolved 2026-06-17 as *accept + document*).** A skill's
+`trusted_level: app` is assigned by **disk location** (it sits in `app-skills/`), not by a signature.
+On a removable drive `app-skills/` is writable, so "verified" means *build-time provisioning*, not a
+runtime hash check — an attacker with physical write access to the drive could alter a shipped skill,
+exactly as they could alter the engine binary or any on-drive asset. A hash manifest stored on the
+same writable drive would be **unanchored** (the attacker rewrites it too), so it buys nothing; real
+integrity needs **off-drive signing**, a Tier-3 prerequisite not in scope. This is the **same residual
+already accepted for the engine binary and the on-drive sidecars** — documented here and in
+`known-limitations.md`, not papered over. The blast radius is bounded: a tampered instruction skill is
+still only injected reference text behind the prompt-injection guard — it cannot run code, reach the
+network, read other files, or widen document scope (the structural ceilings, §14).
+
 ## Unverified-binary env overrides are dev-only (audit M-5, 2026-06-13)
 
 `HILBERTRAUM_LLAMA_BIN` and `HILBERTRAUM_WHISPER_BIN` point the sidecar resolvers at an explicit,

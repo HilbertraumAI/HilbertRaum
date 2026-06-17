@@ -54,6 +54,28 @@ password recovery — are documented in
   is attacker-forgeable anyway). Mitigations: the AI Model screen's **Verify checksum** forces a real
   re-hash, and the ship-time gates (`verify-models --strict`, `assertCommercialDrive`) always hash
   fully.
+- **App-skill integrity is by location, not signature (Skills §22-M2 — accept + document).** A
+  shipped skill's `trusted_level: app` is assigned because it sits in `app-skills/`, copied there at
+  drive-build. On a removable drive `app-skills/` is writable, so "verified" means build-time
+  provisioning, not a runtime hash; an attacker with physical write access could alter a shipped
+  skill. A hash manifest on the same writable drive would be unanchored (rewritten too), so real
+  integrity needs **off-drive signing** (a Tier-3 prerequisite, not in scope) — the **same residual
+  already accepted for the engine binary and on-drive sidecars**. Blast radius is bounded: a tampered
+  instruction skill is still only injected reference text behind the prompt-injection guard (it cannot
+  run code, reach the network, read other files, or widen document scope). See
+  [`security-model.md`](security-model.md) ("App-skill provisioning…").
+- **Skills are non-confidential by design (DS20).** A skill package is task knowledge, **not** secret
+  user content: `app-skills/` and `user-skills/` are plain (unencrypted) folders **outside** the
+  encrypted `workspace/`. Truly sensitive material belongs in a **document** (which stays encrypted),
+  never in a skill. Two consequences: a skill is readable on a lost/shared drive, and because
+  `user-skills/` is a top-level directory (not inside `workspace/`), a **workspace backup must also
+  include `user-skills/`** or imported user skills are lost.
+- **A workspace DB rebuild re-derives user skills as DISABLED and clears the acknowledgement.** The
+  `skills` table is a pure derived cache; disk (the skill folders) is the source of truth. A DB
+  rebuild/corruption re-discovers every `user-skills/` folder, but a re-discovered drop-in installs
+  **disabled with `warning_ack` cleared** (the DS19 safe default — a rebuild is a fresh discovery, not
+  a confirmed import). No skill content is lost; the user simply **re-enables** each user skill (and
+  re-acknowledges its warning) in Settings → Skills. App skills are unaffected (they re-derive enabled).
 
 ## Spec features intentionally not built (MVP scope)
 

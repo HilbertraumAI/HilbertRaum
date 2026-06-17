@@ -141,14 +141,26 @@ describe('SkillsTab — detail drawer', () => {
     expect(acknowledgeSkillWarning).toHaveBeenCalledWith('user:bank-statement')
   })
 
-  it('shows the guidance-only note for a tool-reserved skill', async () => {
+  // The honest Tier-2 note triggers off reservesTools (a kind:'instruction' stub that reserves
+  // its Tier-2 tools), NOT off kind:'tool' — the bank-statement v1 stub is instruction-only (DS17).
+  it('shows the guidance-only note for a tool-reserved instruction skill', async () => {
     const user = userEvent.setup()
-    stubApi({ listSkills: vi.fn(async () => [skill({ kind: 'tool' })]) })
+    stubApi({ listSkills: vi.fn(async () => [skill({ kind: 'instruction', reservesTools: true })]) })
     renderTab()
     await user.click(await screen.findByText('Bank statement helper'))
     const dialog = within(screen.getByRole('dialog'))
     expect(dialog.getByText(/adds guidance only/i)).toBeInTheDocument()
-    expect(dialog.getByText('Use approved local tools when you ask')).toBeInTheDocument()
+    // An instruction stub does NOT claim it can use tools today (that ✓ line is kind:'tool' only).
+    expect(dialog.queryByText('Use approved local tools when you ask')).not.toBeInTheDocument()
+  })
+
+  it('does not show the guidance-only note for a plain instruction skill', async () => {
+    const user = userEvent.setup()
+    stubApi({ listSkills: vi.fn(async () => [skill({ kind: 'instruction', reservesTools: false })]) })
+    renderTab()
+    await user.click(await screen.findByText('Bank statement helper'))
+    const dialog = within(screen.getByRole('dialog'))
+    expect(dialog.queryByText(/adds guidance only/i)).not.toBeInTheDocument()
   })
 })
 

@@ -1,6 +1,6 @@
 # Drive & Workspace Layout
 
-_Last updated: 2026-06-17 (Skills S3: the `app-skills/` + `user-skills/` plain-folder classes)_
+_Last updated: 2026-06-17 (Skills S9: `prepare-drive` copies `app-skills/`; the commercial gate asserts app skills present + `user-skills/` empty)_
 
 ## How the app finds its data
 
@@ -76,11 +76,19 @@ PRIVATE_AI_DRIVE/
 ```
 
 > **Skills on a commercial drive (S3 lays the dirs; S9 provisions + asserts).** `app-skills/` carries
-> the bundled product skills (copied by `prepare-drive`, like `model-manifests/`); `user-skills/` is
-> created empty. The S9 commercial-drive gate (`assertCommercialDrive` + the build scripts) will
-> verify the app skills are present and assert **no user skills** on a sold drive — the
-> "no user data" invariant, extended to the plaintext skills area. Both dirs are plain (unencrypted)
-> by design: a skill is non-secret task knowledge (DS20).
+> the bundled product skills (the `bank-statement` instruction stub today), **copied wholesale from
+> the committed repo `app-skills/` tree by `prepare-drive`**, the same copy step as `model-manifests/`
+> (DS17 — text-only, never network-fetched); `user-skills/` is created empty. The S9 commercial-drive
+> gate (`assertCommercialDrive` + the build scripts) **verifies at least one app skill is present
+> (a folder with a `SKILL.md`) and asserts `user-skills/` is empty** on a sold drive — the "no user
+> data" invariant, extended to the plaintext skills area. Both dirs are plain (unencrypted) by design:
+> a skill is non-secret task knowledge (DS20).
+>
+> **Integrity residual (accepted, §22-M2).** On a removable drive `app-skills/` is writable, so a
+> shipped skill's `trusted_level: app` is assigned by **location**, not a signature — "verified" means
+> build-time provisioning, not a runtime hash. A hash manifest on the same writable drive would be
+> unanchored; real integrity needs off-drive signing (a Tier-3 prerequisite). This is the same
+> accepted residual as the engine binary — see `security-model.md` / `known-limitations.md`.
 
 > **Launchers (Phase 13).** The `Start HilbertRaum.*` files sit at the drive root beside the
 > portable app and set `HILBERTRAUM_DRIVE_ROOT` from **their own location** every launch — never a hardcoded

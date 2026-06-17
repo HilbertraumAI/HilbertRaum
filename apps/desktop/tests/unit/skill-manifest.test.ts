@@ -137,16 +137,25 @@ describe('validateSkillManifest', () => {
     })
   })
 
-  it('accepts but ignores allowedTools for an instruction skill (with a note)', () => {
+  it('accepts but ignores allowedTools for an instruction skill (with a note), but flags reservesTools', () => {
     const res = validateSkillManifest(rawFront({ allowedTools: ['extract_transactions'] }))
     expect(res.ok).toBe(true)
+    // The effective list stays [] (an instruction skill cannot USE tools in v1)...
     expect(res.manifest?.allowedTools).toEqual([])
     expect(res.notes.some((n) => n.includes('allowedTools'))).toBe(true)
+    // ...but the DECLARATION is preserved as a display signal (S9 / §13/§22-D1).
+    expect(res.manifest?.reservesTools).toBe(true)
   })
 
-  it('keeps allowedTools for a tool skill', () => {
+  it('reservesTools is false when no tools are declared', () => {
+    const res = validateSkillManifest(rawFront({}))
+    expect(res.manifest?.reservesTools).toBe(false)
+  })
+
+  it('keeps allowedTools for a tool skill (and flags reservesTools)', () => {
     const res = validateSkillManifest(rawFront({ kind: 'tool', allowedTools: ['extract_transactions'] }))
     expect(res.manifest?.allowedTools).toEqual(['extract_transactions'])
+    expect(res.manifest?.reservesTools).toBe(true)
   })
 
   it('ignores a self-declared trust field with a note', () => {

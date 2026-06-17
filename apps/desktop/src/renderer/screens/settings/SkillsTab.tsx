@@ -405,7 +405,12 @@ function SkillDetail({
         )}
       </dl>
 
-      {skill.kind === 'tool' && <Banner tone="info">{t('skills.tool.note')}</Banner>}
+      {/* Honest Tier-2 note (skills plan §13/§22-D1): shown when the skill RESERVES tools (a
+          non-empty allowedTools) OR is a kind:'tool' skill. The bank-statement v1 stub is
+          kind:'instruction' but reserves its Tier-2 tools, so it triggers off reservesTools. */}
+      {(skill.reservesTools || skill.kind === 'tool') && (
+        <Banner tone="info">{t('skills.tool.note')}</Banner>
+      )}
 
       <h3 className="skill-perm-heading">{t('skills.perm.heading')}</h3>
       <PermissionBlock permissions={skill.permissions} kind={skill.kind} />

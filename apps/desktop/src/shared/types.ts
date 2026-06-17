@@ -1297,6 +1297,13 @@ export interface SkillInfo {
   permissionSummary: string
   /** True when another installed skill declares the same `id` (DS12 coexist-and-warn). */
   duplicateId: boolean
+  /**
+   * True when the skill RESERVES Tier-2 tools (a non-empty `allowedTools`). In v1 the tools do
+   * not execute (the list is ignored with a note, §6.5), but the flag lets the detail view show
+   * the honest "adds guidance only; tools arrive with Tier-2" note for a tool-reserved
+   * instruction skill (the bank-statement stub — skills plan §13/§22-D1). Optional/additive.
+   */
+  reservesTools?: boolean
   installedAt: string
   updatedAt: string
 }
