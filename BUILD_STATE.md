@@ -6,7 +6,38 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
-_Last updated: 2026-06-17 — **Skills Phase S11c SHIPPED — remaining bank tools + data tables +
+_Last updated: 2026-06-17 — **Skills Phase S12 SHIPPED — security audit pass + plans folded into the
+§-records. The ENTIRE Skills wave (S2→S12) is now CLOSED.** The repo's multi-persona audit ran end to
+end over the whole skills surface against the untrusted-skill-as-input threat principle (§14): import
+(zip-slip / symlink / zip-bomb / nested-archive / magic-byte), prompt-injection containment (fenced data
+turn + the guard line winning + base/grounding always winning), the Tier-2 gate (frozen `documentIds`, no
+`Db`/SQL/FS/net handle, input+output validation, confirm-gating, the CSV FS-write boundary), content-class
+isolation (`bank_*` + `skill_runs` never logged/audited/exported), ids/counts-only audit, and
+`requireUnlocked` on every DB-backed channel. **No CRITICAL/HIGH.** ONE LOW fixed: spreadsheet
+**formula-injection** in `export_transactions_csv` — `transactionsToCsv` now prefixes a leading
+`= + - @`/tab/CR free-text field with `'` so a crafted statement can't execute on CSV open (numeric
+columns untouched; unit-tested). The scattered S10/S11 sentinel tests were **consolidated** into a new
+[`tests/integration/skills-privacy-guard.test.ts`](apps/desktop/tests/integration/skills-privacy-guard.test.ts):
+one secret driven through every sink (import error, loader, all five tool runs, the CSV export, the IPC
+`SkillRunState`) **plus a console spy**, proving absence in audit/log/console/run-metadata while confirming
+the deliberate exceptions (content-class tables + the user-chosen CSV); a prompt-injection containment test
+proves the guard line stays structurally last even with a hostile body forging the fence delimiter. Two LOW
+residuals accepted + documented in `known-limitations.md` (prompt text-injection contained by the structural
+ceiling not delimiter-escaping; a user skill's `filenamePattern` is a bounded RegExp run only on a user
+action). **Fold (doc-lifecycle rule):** a NEW **"Skills — design record (Phases S2–S12, §1–§12)"** in
+`architecture.md` consolidates `skills-plan.md` §1–§19 + `skills-s11-plan.md` (Storage narrative trimmed to a
+pointer); the security bits extend `security-model.md` ("Skill tool ceiling" + the S12 audit note + the
+CSV-injection note); the 14 in-code/test plan-FILE citations now cite "Skills — design record §N"; **BOTH
+plan files deleted** (`git rm`; originals in git history). 8 new tests; full suite **1614 passed / 25
+skipped**, typecheck + build clean. **No open SL-#.** **Carry-forward (RESIDUAL, forwarded one last time):**
+the running-model Playwright eyeball of the run surfaces (busy row + the now-production-firing export confirm
+modal + the result rows) was NOT captured — it needs a seeded indexed statement + a live run + a stubbed
+native save dialog, not reliably author-and-verifiable here; the residual + a concrete recipe live in
+[`docs/design-review/skills-s12/README.md`](docs/design-review/skills-s12/README.md), and every visual state
+is unit-covered by `SkillRunBar.test.tsx`. See the **"Skills — S12 handoff"** block below. **The Skills wave
+is done.**_
+
+_(prior) 2026-06-17 — **Skills Phase S11c SHIPPED — remaining bank tools + data tables +
 SKILL.md flip to `kind:'tool'`.** The LAST sub-phase of S11. Adds the four downstream bank tools to
 `tools/bank-statement.ts` + the `REGISTRY`: `validate_statement_balances` (reconciles each row's
 printed vs computed running balance → a per-row `reconciled` flag; honest 'ok'/'mismatch'/'unknown'
@@ -259,6 +290,72 @@ attacker-supplied and is now unzipped straight to a real on-disk folder. **Impac
 commit: none** — `shared/skill-manifest.ts` is storage-agnostic and `parseSkillManifestFromDir` is now
 the single read path for both sources. S3 spec, S4 spec, §7/§8/§9/§14/§17/§19/§20 + the §18 matrices
 updated accordingly._
+
+### Skills — S12 handoff (2026-06-17) — THE WAVE IS CLOSED
+
+**What this phase did** (the closing phase: the security audit ritual + the doc fold — primarily
+hardening + documentation, no new feature):
+
+**(A) Multi-persona security audit of the whole skills surface.** Personas: import/extractor security,
+prompt-injection containment, the Tier-2 gate + data-flow privacy, audit/log privacy. **No CRITICAL,
+no HIGH.** The shipped gate was NOT redesigned — the audit added tests + one small hardening fix.
+- **Fixed (LOW) — CSV spreadsheet formula-injection (F4).** `transactionsToCsv` (`tools/bank-statement.ts`)
+  now neutralizes a free-text field whose first char is a formula trigger (`= + - @`, tab, CR) by
+  prefixing `'`, so a crafted statement description can't execute when the exported CSV is opened in
+  Excel/Sheets/LibreOffice. Numeric columns (amount/balance) are formatted separately and untouched.
+  This is the one real FS-write boundary, so it earns the hardening. + a unit test.
+- **Consolidated sentinel guard (NEW `tests/integration/skills-privacy-guard.test.ts`, 7 tests).** One
+  secret driven through EVERY sink — import error payload, loader, all five tool runs, the CSV export,
+  the IPC `SkillRunState` — **plus a console spy** (the gap the per-layer S10/S11 sentinels lacked),
+  proving absence in audit/log/console/run-metadata while confirming the deliberate exceptions land
+  (the content-class `bank_transactions` + the user-chosen CSV — correct). Plus a **prompt-injection
+  containment** pair: a hostile body that forges the `--- END LOCAL SKILL ---` delimiter and shouts
+  "ignore previous instructions" cannot displace the guard line (it is structurally last) — and per
+  §14 the structural ceiling means a text-level injection can't act anyway.
+- **Accepted LOW residuals (documented in `known-limitations.md`):** (1) prompt text-injection is
+  contained by the **structural ceiling**, not by escaping the fence delimiter (we deliberately don't
+  sanitize the body); (2) a user skill's `triggers.filenamePattern` compiles to a bounded RegExp, run
+  only on a user action (no auto-fire). Verified the existing S9 residuals (DS20 confidentiality, the
+  §22-M2 app-skill integrity-by-location, the DB-rebuild-resets-enable) — present, not duplicated.
+
+**(B) Folded the two plans into the §-records, then deleted them (doc-lifecycle rule).**
+- **NEW `architecture.md` "Skills — design record (Phases S2–S12, §1–§12)"** consolidates
+  `skills-plan.md` §1–§19 + `skills-s11-plan.md` (§1 Decisions, §2 Hard rules, §3 Storage/registry,
+  §4 Import lifecycle, §5 Selection/prompt, §6 Suggestion, §7 Tier-2 gate, §8 Bank tools + run seam,
+  §9 Run trigger/UI, §10 Data model, §11 IPC/audit, §12 Trade-offs + the S12 audit). The long Storage
+  narrative was **trimmed to a one-paragraph pointer** (condense, not duplicate).
+- **`security-model.md`** — the "Skill tool ceiling" record gained the CSV-injection-neutralization
+  note + a closing **"S12 — the closing multi-persona audit"** paragraph (no CRITICAL/HIGH, the one
+  fix, the consolidated guard, the residuals, the §14 unchanged guarantees held). The "Skill-import
+  defences" + "App-skill provisioning…" records were already complete.
+- **In-code citations:** the 14 plan-FILE references (`docs/skills-s11-plan.md §…` / `docs/skills-plan.md
+  §…`) in `db.ts`, `run.ts`, `tools/bank-statement.ts` + four test headers now cite
+  **"Skills — design record §N"** (data model → §10, run seam/tools → §8, controller → §9). The §-anchors
+  are stable so future code can keep citing them.
+- **Deleted `docs/skills-plan.md` + `docs/skills-s11-plan.md`** (`git rm`; full originals in git history —
+  `git show <S12^>:docs/skills-plan.md`).
+
+**Non-negotiable invariants HELD (§14 "unchanged guarantees"):** CSP, the deny-by-default permission
+handler, the offline guard, the encryption posture, and packaging were **not touched**. App-orchestrated
+only (DS4). Audit stays ids/counts-only. No new native dep, offline. No user data/weights/generated files
+committed. The untracked `docs/design-review/skills-s5/` was left out of the commit.
+
+**Tests/build:** 8 new tests (privacy-guard 7 + the CSV-injection unit). Full suite **1614 passed / 25
+skipped**, `npm run typecheck` + `npm run build` clean.
+
+**Open landmines:** **none. SL log final — no open `SL-#`** (SL-1 was resolved in S9). **Carry-forward
+(RESIDUAL — forwarded one final time, NOT faked):** the running-model Playwright eyeball of the
+`SkillRunBar` run surfaces (OFFER → busy row → result rows for extract/validate/categorize/summarize +
+the now-production-firing export confirm modal, EN/DE × light/dark) was **not captured**. It needs a
+seeded **indexed** statement (so `listRunnableTools` is non-empty) + a live extract→export run + a stubbed
+native save dialog — which couldn't be authored-and-verified in this headless/no-Playwright/de-AT dev
+environment without risking a broken committed harness, and a fake capture is worse than an honest gap.
+Every visual state is unit-covered by `tests/renderer/SkillRunBar.test.tsx`; the residual + a concrete
+capture recipe live in `docs/design-review/skills-s12/README.md`. (The composer-picker half was captured
+live at S6 — `docs/design-review/skills-s6/`.)
+
+**What's next:** nothing in the Skills wave — it is **CLOSED**. The only deferred skills work is the
+post-v1 **S13** (auto-fire triggers, gated on an evaluation harness) and the standing residuals above.
 
 ### Skills — S6 eyeball capture (2026-06-17)
 

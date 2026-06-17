@@ -221,7 +221,7 @@ CREATE TABLE IF NOT EXISTS extraction_records (
 CREATE INDEX IF NOT EXISTS idx_extract_doc_type ON extraction_records(document_id, record_type, normalized_value);
 CREATE INDEX IF NOT EXISTS idx_extract_chunk ON extraction_records(chunk_id);
 
--- Skills registry (docs/skills-plan.md §8.2, revised §0 — plaintext plain-folder model). A
+-- Skills registry (architecture.md "Skills — design record" §3/§10, revised §0 — plaintext plain-folder model). A
 -- pure DERIVED INDEX + state cache over the on-disk skill folders (app-skills/ + user-skills/):
 -- disk is the source of truth (DS1), so a DB rebuild simply re-reads the folders and re-derives
 -- every row (no orphan, no recovery path). NOTE: there is deliberately NO foreign key FROM the
@@ -252,7 +252,7 @@ CREATE TABLE IF NOT EXISTS skills (
 );
 CREATE INDEX IF NOT EXISTS idx_skills_id ON skills(id);   -- duplicate-id lookups across sources (the DS12 warning)
 
--- Skill tool-run history (docs/skills-s11-plan.md §3.1 / skills-plan §8.2, S11a). One row PER
+-- Skill tool-run history (architecture.md "Skills — design record" §10, S11a). One row PER
 -- app-orchestrated tool run (DS4), bracketed started → done|failed|cancelled. IDS/REFS ONLY —
 -- never document/chat content: document_ids_json is ids, result_ref is a bank_statements.id, and
 -- error is a friendly/technical reason. Excluded from every export (skills-plan §9.5). No FK INTO
@@ -271,7 +271,7 @@ CREATE TABLE IF NOT EXISTS skill_runs (
 );
 CREATE INDEX IF NOT EXISTS idx_skill_runs_skill ON skill_runs(skill_install_id);
 
--- Bank-statement data tables (docs/skills-s11-plan.md §3.2, S11a). CONTENT-CLASS: the extracted
+-- Bank-statement data tables (architecture.md "Skills — design record" §10, S11a). CONTENT-CLASS: the extracted
 -- figures are user content, so they live ONLY here in the encrypted workspace DB (a workspace
 -- backup carries them — correct), are NEVER logged/audited (audit stays ids/counts), and are NEVER
 -- in the skill .skill.zip or conversation export. Distinct from the non-secret skill packages
@@ -306,7 +306,7 @@ CREATE TABLE IF NOT EXISTS bank_transactions (
 );
 CREATE INDEX IF NOT EXISTS idx_bank_transactions_statement ON bank_transactions(statement_id);
 
--- Categorization + reconciliation + user-correction tables (docs/skills-s11-plan.md §3.2 full
+-- Categorization + reconciliation + user-correction tables (architecture.md "Skills — design record" §10 full
 -- future DDL, created additively at S11c — the tree_nodes-per-feature precedent). All CONTENT-CLASS
 -- (a category name / a corrected figure is user content): encrypted workspace DB only, NEVER
 -- logged/audited, NEVER exported (skills-plan §9.5). bank_corrections is created now but only
@@ -508,7 +508,7 @@ export function openDatabase(path: string): Db {
   //   messages.skill_id             — the skill that shaped THIS turn; powers the per-message glyph (DS16/DS18).
   ensureColumn(db, 'conversations', 'active_skill_id', 'active_skill_id TEXT')
   ensureColumn(db, 'messages', 'skill_id', 'skill_id TEXT')
-  // Bank-transaction derived annotations (docs/skills-s11-plan.md §3.2, S11c). All nullable —
+  // Bank-transaction derived annotations (architecture.md "Skills — design record" §10, S11c). All nullable —
   // a row has no category/reconciled/confidence until a downstream tool computes one. CONTENT-CLASS
   // (a category id / reconcile verdict is derived from user figures): never logged/audited/exported.
   //   bank_transactions.category_id — the assigned bank_categories.id (categorize_transactions).

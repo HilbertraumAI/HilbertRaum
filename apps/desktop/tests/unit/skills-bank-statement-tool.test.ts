@@ -21,7 +21,7 @@ import {
 import { runSkillTool, validateToolOutput } from '../../src/main/services/skills/tool-registry'
 import type { AuditEventType, DocumentChunkRead, SkillToolContext } from '../../src/shared/types'
 
-// docs/skills-s11-plan.md §5 (S11a) — the bank-statement extract_transactions tool, proven in
+// architecture.md "Skills — design record" §8 (S11a) — the bank-statement extract_transactions tool, proven in
 // isolation: the deterministic/offline parser (dates, amounts, currency), the honest "drop ambiguous
 // rows" posture, and the tool running THROUGH the gate with schema-valid output. No DB, no Electron.
 
@@ -154,7 +154,7 @@ describe('extract_transactions through the gate', () => {
   })
 })
 
-// docs/skills-s11-plan.md §2 (S11c) — the downstream tools, proven as PURE functions + through the
+// architecture.md "Skills — design record" §8 (S11c) — the downstream tools, proven as PURE functions + through the
 // gate with schema-valid output. They take the extracted rows as structured input (no DB/Electron).
 
 const tx = (over: Partial<TransactionInput> = {}): TransactionInput => ({
@@ -277,6 +277,24 @@ describe('export_transactions_csv (S11c)', () => {
     expect(lines[0]).toBe('date,valueDate,description,amount,currency,balanceAfter,sourcePage')
     expect(lines[1]).toBe('2026-01-02,,"Café, Vienna",-4.50,EUR,100.00,') // comma field quoted; nulls blank
     expect(lines[2]).toBe('2026-01-03,2026-01-03,Salary,2500.00,EUR,,2')
+  })
+
+  it('neutralizes spreadsheet formula injection in text fields (S12 audit F4)', () => {
+    // A description beginning with a formula trigger is prefixed with a single quote so a
+    // spreadsheet reads the cell as text — and a leading-= field with a comma is also quoted.
+    const csv = transactionsToCsv([
+      tx({ description: '=HYPERLINK("http://evil","click")', amount: -1 }),
+      tx({ description: '+1+2', amount: -2 }),
+      tx({ description: '@cmd', amount: -3 }),
+      tx({ description: '-leading minus, with comma', amount: -4 })
+    ])
+    const lines = csv.trimEnd().split('\r\n')
+    expect(lines[1]).toBe('2026-01-02,,"\'=HYPERLINK(""http://evil"",""click"")",-1.00,EUR,,')
+    expect(lines[2]).toBe("2026-01-02,,'+1+2,-2.00,EUR,,")
+    expect(lines[3]).toBe("2026-01-02,,'@cmd,-3.00,EUR,,")
+    expect(lines[4]).toBe('2026-01-02,,"\'-leading minus, with comma",-4.00,EUR,,')
+    // The numeric amount column is formatted separately and is never neutralized.
+    expect(lines[2]).toContain(',-2.00,')
   })
 
   it('is the only confirm-gated tool: the gate refuses it without confirmation', async () => {

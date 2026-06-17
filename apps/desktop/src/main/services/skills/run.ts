@@ -12,7 +12,7 @@ import {
   type TransactionInput
 } from './tools/bank-statement'
 
-// The app-orchestrated run seam (docs/skills-s11-plan.md §6, Phase S11a). This is the exact
+// The app-orchestrated run seam (architecture.md "Skills — design record" §8, Phase S11a). This is the exact
 // function S11b's IPC/UI will call: it is invoked by the APP from a user action (DS4), never by the
 // model parsing tool_calls. It builds the NARROW `SkillToolContext` (frozen scope + the only content
 // reach, `readDocumentChunks`), runs `extract_transactions` THROUGH the S10 gate (`runSkillTool` —
@@ -189,7 +189,7 @@ export async function runBankExtraction(
 // S11c — the downstream run seams (validate / categorize / summarize / export).
 //
 // These tools operate on the ALREADY-EXTRACTED rows, not document chunks. The seam loads the
-// LATEST statement for the in-scope document (deterministic target — docs/skills-s11-plan.md §2
+// LATEST statement for the in-scope document (deterministic target — architecture.md "Skills — design record" §8
 // S11c) and passes the rows to the PURE tool as STRUCTURED INPUT (no new SkillToolContext accessor;
 // the §14 ceiling is unchanged). Persistence (reconciled flags / category assignments) stays here,
 // atomically (no-partial-persist). `summarize_cashflow` is read-only (no persist). The CSV export

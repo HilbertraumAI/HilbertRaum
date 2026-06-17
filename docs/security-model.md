@@ -580,10 +580,33 @@ confidence`) are **content-class**: encrypted DB only, never logged/audited, nev
   (a count) is surfaced; a cancelled save persists nothing. The sentinel-grep test pushes a secret through
   a successful export and proves it lands in the user-chosen CSV (correct) + the content-class tables but
   **never** the audit/log/`skill_runs` row/IPC `SkillRunState` payload.
+  - **Spreadsheet formula-injection is neutralized at the write boundary (S12 audit, F4).** The CSV
+    carries the user's own extracted statement text, but a crafted document could embed a cell that
+    begins with a formula trigger (`= + - @`, tab, CR) and execute when opened in Excel/Sheets/
+    LibreOffice. `transactionsToCsv` prefixes any such free-text field with a single quote so the cell
+    reads as text; numeric columns (amount/balance) are formatted separately and never neutralized.
 - **The `kind:'tool'` flip makes `allowedTools` effective.** The bank `SKILL.md` is now `kind:'tool'`, so
   the S2 parser keeps its declared tool list (an instruction skill's stays `[]` — SL-1); the run dispatch
   retargets to `resolveEffectiveTools(allowedTools ∩ registry ∩ grant)`. The skill still **cannot register
   or self-grant** a tool — the registry is app-owned and the effective set only ever shrinks.
+
+**S12 — the closing multi-persona audit of the whole skills surface (2026-06-17).** The repo's audit
+ritual ran end to end against the untrusted-skill-as-input threat principle (§14): import (zip-slip /
+symlink / zip-bomb / nested-archive / magic-byte), prompt-injection containment (the fenced data turn,
+the guard line winning, base + grounding always winning), the Tier-2 gate (frozen `documentIds`, no
+`Db`/SQL/FS/net handle, input+output validation, confirm-gating for write/export, the CSV FS-write
+boundary), content-class isolation (`bank_*` + `skill_runs` never logged/audited/exported), ids/counts-
+only audit, and `requireUnlocked` on every DB-backed channel. **No CRITICAL/HIGH.** One LOW was fixed
+(the CSV formula-injection above); the scattered S10/S11 sentinel tests were consolidated into a single
+`skills-privacy-guard.test.ts` that drives one secret through every sink (import error, loader, all five
+tool runs, the CSV export, the IPC `SkillRunState`) **plus a console spy** and proves absence in
+audit/log/console/run-metadata while confirming the deliberate exceptions (content-class tables + the
+user-chosen CSV). Two LOW residuals were accepted + documented in
+[`known-limitations.md`](known-limitations.md): prompt text-injection is contained by the structural
+ceiling (not by escaping the fence delimiter), and a user skill's `triggers.filenamePattern` is compiled
+to a bounded RegExp run only on a user action (no auto-fire). The §14 **unchanged guarantees** held — CSP,
+the deny-by-default permission handler, the offline guard, the encryption posture, and packaging were not
+touched.
 
 ## Unverified-binary env overrides are dev-only (audit M-5, 2026-06-13)
 

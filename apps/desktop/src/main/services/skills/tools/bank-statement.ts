@@ -5,7 +5,7 @@ import type {
   ToolResult
 } from '../../../../shared/types'
 
-// Bank-statement Tier-2 tools (docs/skills-s11-plan.md §5, Phase S11a). Kept OUT of the generic
+// Bank-statement Tier-2 tools (architecture.md "Skills — design record" §8, Phase S11a). Kept OUT of the generic
 // `tool-registry.ts` so bank specifics never leak into the skills infrastructure (skills-plan §13);
 // the registry merely imports the finished `SkillTool` and lists it. S11a ships ONLY
 // `extract_transactions`; validate/categorize/summarize/export arrive at S11c.
@@ -232,7 +232,7 @@ export const extractTransactionsTool: SkillTool = {
 // =====================================================================================
 // S11c — the downstream bank tools (validate / categorize / summarize / export).
 //
-// DESIGN (recorded in docs/skills-s11-plan.md §2 S11c + the BUILD_STATE handoff): these tools
+// DESIGN (recorded in architecture.md "Skills — design record" §8 + the BUILD_STATE handoff): these tools
 // operate on the ALREADY-EXTRACTED transactions, not on document chunks. The orchestration seam
 // (`run.ts`) loads the latest statement's rows and passes them as STRUCTURED INPUT — so the tools
 // stay PURE (no new `SkillToolContext` accessor; the §14 ceiling is unchanged) and remain trivially
@@ -516,9 +516,22 @@ export const summarizeCashflowTool: SkillTool = {
 
 // ---- export_transactions_csv (export-file; confirm-gated; the seam does the FS write) ----
 
-/** RFC-4180-ish field escaping: quote when the value carries a comma, quote, or newline. */
+// A field whose first character is one of these can be executed as a FORMULA when the CSV is
+// opened in Excel / LibreOffice / Google Sheets (CSV / spreadsheet "formula injection"). The
+// extracted text is the user's OWN statement, but a crafted document could embed a payload that
+// only surfaces at the one real FS-write boundary, so this seam neutralizes it (S12 audit, F4).
+const CSV_FORMULA_LEAD = /^[=+\-@\t\r]/
+
+/**
+ * RFC-4180-ish field escaping with formula-injection neutralization. A value that begins with a
+ * spreadsheet formula trigger (`= + - @`, tab, CR) is prefixed with a single quote so the cell is
+ * read as text; then the value is quoted when it carries a comma, quote, or newline. Numeric columns
+ * (amount/balance) are formatted separately and never pass through here, so a negative amount is
+ * unaffected — only free-text fields (description et al.) are neutralized.
+ */
 function csvField(value: string): string {
-  return /[",\n\r]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value
+  const safe = CSV_FORMULA_LEAD.test(value) ? `'${value}` : value
+  return /[",\n\r]/.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe
 }
 
 /** Serialize the rows to CSV text (pure — no FS). Header + one line per row, stable column order. */

@@ -14,7 +14,7 @@ import {
 } from '../../src/main/services/skills/run'
 import type { AuditEventType } from '../../src/shared/types'
 
-// docs/skills-s11-plan.md §6/§7 (S11a) — the app-orchestrated run seam end-to-end on a real DB:
+// architecture.md "Skills — design record" §8 (S11a) — the app-orchestrated run seam end-to-end on a real DB:
 // build the narrow context → run extract_transactions through the gate → persist. Proves the
 // skill_runs lifecycle, the content-class bank tables, frozen scope, the no-partial-persist on
 // cancel, the ids/counts-only audit (sentinel grep), and the export exclusion (§9.5).
@@ -146,7 +146,7 @@ describe('runBankExtraction (S11a)', () => {
   })
 })
 
-// docs/skills-s11-plan.md §2 (S11c) — the downstream run seams: they load the LATEST statement for
+// architecture.md "Skills — design record" §8 (S11c) — the downstream run seams: they load the LATEST statement for
 // the in-scope document, run the PURE tool through the gate with structured input, and persist
 // atomically. The export seam is the first FS-write (a stub save here; the real save is the IPC test).
 

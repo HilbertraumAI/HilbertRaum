@@ -3,7 +3,7 @@ import { SkillRunController, type ToolRunner } from '../../src/main/services/ski
 import { runSkillTool } from '../../src/main/services/skills/tool-registry'
 import type { SkillTool, SkillToolContext } from '../../src/shared/types'
 
-// docs/skills-s11-plan.md §6/§2 (S11b) — the GENERIC tool-run lifecycle controller: running →
+// architecture.md "Skills — design record" §9 (S11b) — the GENERIC tool-run lifecycle controller: running →
 // terminal, progress merge, Cancel via the AbortSignal, one-at-a-time, and the write/export
 // CONFIRM gate exercised end-to-end with a SYNTHETIC write tool (proving S11c's export tool gates).
 

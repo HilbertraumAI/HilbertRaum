@@ -76,6 +76,25 @@ password recovery — are documented in
   **disabled with `warning_ack` cleared** (the DS19 safe default — a rebuild is a fresh discovery, not
   a confirmed import). No skill content is lost; the user simply **re-enables** each user skill (and
   re-acknowledges its warning) in Settings → Skills. App skills are unaffected (they re-derive enabled).
+- **Prompt-injection in a skill body is contained structurally, not by delimiter purity (Skills S12
+  audit).** The selected skill's instructions are injected as a fenced **data** block and the
+  app-authored guard line is the last line, but the body is inserted verbatim — a hostile body can
+  forge the fence's own `--- END LOCAL SKILL ---` delimiter or shout "ignore previous instructions".
+  The guard line still wins structurally (it is appended after the whole block; a consolidated test
+  pins this), and the real defence is the **structural ceiling**: an instruction skill can only emit
+  text, and a Tier-2 tool sees a frozen `documentIds` scope with no `Db`/SQL/FS/net handle — so even a
+  "successful" text-level injection cannot run code, reach the network, read other files, or widen
+  scope (§14). We deliberately do **not** sanitize/escape the body delimiter (it would mangle
+  legitimate instructions for no real gain). See [`security-model.md`](security-model.md) ("Skill tool
+  ceiling").
+- **A user skill's `triggers.filenamePattern` is compiled to a RegExp (Skills S12 audit — accepted
+  LOW).** The deterministic suggestion heuristic turns a `*statement*`-style pattern from a
+  user-installed skill into an anchored, case-insensitive regex matched against the in-scope
+  documents' filenames. The inputs are short and bounded (the §6.4 path/length caps; trigger entries
+  are trimmed metadata), the skill must already be **enabled by the user**, and the match runs only
+  on a user action (the picker) — there is **no auto-fire** (deferred to S13). A pathological pattern
+  could at worst slow one synchronous suggestion; a length-bounded matcher is future hardening, not a
+  v1 blocker.
 
 ## Spec features intentionally not built (MVP scope)
 
