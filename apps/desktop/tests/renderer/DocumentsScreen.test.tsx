@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { render, screen, cleanup, waitFor, within, act } from '@testing-library/react'
+import { render, screen, cleanup, waitFor, within, act, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import {
   DocumentsScreen,
@@ -566,7 +566,8 @@ describe('DocumentsScreen', () => {
   it('during import polls getImportJob each tick but refreshes the full list only on a file completion', async () => {
     vi.useFakeTimers()
     try {
-      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+      // fireEvent + advanceTimersByTimeAsync only — NO userEvent here (userEvent's internal real
+      // delays fight fake timers and can hang, leaking fake timers into the rest of the file).
       const listDocuments = vi.fn(async () => [doc({})])
       let completed = 0
       const getImportJob = vi.fn(async () => ({
@@ -583,14 +584,17 @@ describe('DocumentsScreen', () => {
         importDocuments: vi.fn(async () => ({ jobId: 'j1', documentIds: ['d1', 'd2'] })),
         getImportJob
       })
+      const flush = async (): Promise<void> => {
+        await act(async () => {
+          for (let i = 0; i < 8; i++) await vi.advanceTimersByTimeAsync(0)
+        })
+      }
       render(<DocumentsScreen />)
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(0)
-      })
-      await user.click(screen.getByRole('button', { name: /import files/i }))
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(0)
-      })
+      await flush() // mount refresh + ocr status
+      // Start the import (synchronous click; the async pick → preflight → import → watchJob chain
+      // is flushed below).
+      fireEvent.click(screen.getByRole('button', { name: /import files/i }))
+      await flush()
       const listAfterStart = listDocuments.mock.calls.length
       const jobAfterStart = getImportJob.mock.calls.length
 
