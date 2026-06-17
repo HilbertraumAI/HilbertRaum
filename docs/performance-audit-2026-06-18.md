@@ -9,12 +9,16 @@
 > seeks) and main-thread CPU are the scarce resources, so write-amplification, full
 > scans, synchronous main-process work, and prompt-prefill cost dominate.
 
-> **STATUS — Wave P1 IMPLEMENTED (2026-06-18, branch `performance-tuning`).** All six Wave P1
-> items below are shipped and verified (suite green, typecheck + build clean): **DB-1**, **DB-2**,
-> **DB-4/DB-6/DB-7** (run_id indexes deliberately omitted — see DB-7), **RAG-2/ING-1**,
-> **DB-3/ING-2**, **RT-1**. Lasting decisions are folded into `docs/architecture.md` "Performance —
-> design record (perf audit 2026-06-18, Wave P1)"; this report is retained as the findings record.
-> Waves P2–P4 remain open (§6). Implemented findings are tagged **✅ IMPLEMENTED** inline.
+> **STATUS — Waves P1 + P2 IMPLEMENTED (2026-06-18, branch `performance-tuning`).** Wave P1 (six
+> storage/retrieval/runtime items): **DB-1**, **DB-2**, **DB-4/DB-6/DB-7** (run_id indexes
+> deliberately omitted — see DB-7), **RAG-2/ING-1**, **DB-3/ING-2**, **RT-1**. Wave P2 (renderer
+> responsiveness): **FE-1**, **FE-2**, **FE-7**, **FE-3**, **FE-4** shipped; **FE-5** (list
+> windowing) and the heaviest sub-parts of FE-3/FE-4 (Composer/`input` move, `DocRow` extraction)
+> are **deferred** under the behavior-preserving mandate (see those findings + §6). All shipped
+> items verified (suite green, typecheck + build clean). Lasting decisions are folded into
+> `docs/architecture.md` "Performance — design record" (Wave P1 + Wave P2 sections); this report is
+> retained as the findings record. Waves P3–P4 remain open (§6). Implemented findings are tagged
+> **✅ IMPLEMENTED** inline.
 
 ---
 
@@ -249,33 +253,36 @@ work) that cause visible jank on CPU-only hardware.
 
 ### 4.4 Renderer / React / IPC
 
-#### FE-1 — Streaming re-renders the whole transcript and re-parses all Markdown every ~40 ms flush · **High**
+#### FE-1 — Streaming re-renders the whole transcript and re-parses all Markdown every ~40 ms flush · **High** · ✅ IMPLEMENTED
 - **Location:** `renderer/chat/Transcript.tsx:81-157` (`messages.map`), `:193-201` (live bubble), `:277-300` (`AssistantMarkdown`); driver `ChatScreen.tsx:222-238` (`STREAM_FLUSH_MS=40`).
 - **Evidence:** `setStreamText(prev => prev + chunk)` every 40 ms; `streamText` is a prop of the **unmemoized** `Transcript` (zero `memo`/`useMemo`/`useCallback` in `renderer/chat`). So each flush: (1) re-maps + re-`AssistantMarkdown`-parses every *prior* message (none changed); (2) re-parses the **entire growing live buffer** from scratch — O(n²) over reply length; (3) recomputes `[...messages].reverse().find(...)` (`:75`).
 - **Impact:** Every 40 ms the app re-parses Markdown for all messages + the whole live answer. On CPU-only hardware this competes with token generation ⇒ visible jank / dropped frames during streaming, worsening with both transcript and answer length.
 - **Fix:** (a) memoized `MessageBlock` (`React.memo`, keyed by `m.id`/`m.content`) so persisted messages don't re-parse; (b) `useMemo` `lastAssistantId`; (c) render `streamText` as plain text (or incremental) during streaming, doing the full Markdown parse once on completion when it re-renders from `messages`.
 
-#### FE-2 — DocumentsScreen does all filter/sort/count/Map work in the render body, polled at 400 ms · **High**
+#### FE-2 — DocumentsScreen does all filter/sort/count/Map work in the render body, polled at 400 ms · **High** · ✅ IMPLEMENTED
 - **Location:** `DocumentsScreen.tsx:508-554` (derivations), `:740-744` (4 rail-count passes), `:543` (`sourcesById` Map), `:551-554` (sort), import poll `:274-288` (`setInterval(…,400)` → `refresh()` → `setDocs`).
 - **Evidence:** Every render runs `docs.some`, multiple `docs.filter`, `collections.filter` ×4, `new Map(docs.map(...))`, `docs.filter(inSection)`, `[...sectioned].sort(...)`, and **four** `docs.filter(matchesSmartView)` for rail counts — none memoized. The 400 ms import poll replaces the whole array and re-runs all of it + re-renders every row.
 - **Impact:** During import (when the list is most active) the screen recomputes 5+ array passes + a Map rebuild every 400 ms with a large library; also recomputes on every unrelated state change (menu/hover/modal).
 - **Fix:** `useMemo` the derived collections, `sourcesById`, `sectioned`, `visibleDocs`, and the rail counts (one bucketing pass) keyed on `[docs, section]`/`collections`. Widen/replace the import poll (see FE-7).
 
-#### FE-3 — Chat & document children unmemoized; ChatScreen passes fresh closures every render · **Medium**
+#### FE-3 — Chat & document children unmemoized; ChatScreen passes fresh closures every render · **Medium** · ✅ IMPLEMENTED (Transcript + ConversationList; Composer/input-move deferred)
 - **Location:** `ChatScreen.tsx:1042-1058` (`<Transcript>`), `:962-972` (`<ConversationList>`), `:1098-1152` (`<Composer>` + inline `footer` JSX).
 - **Evidence:** No `React.memo`; props like `onTryAgain`, `onAnswerWithoutSkill`, `onCopy`, and the `footer={<>…</>}` are new references each render. ChatScreen re-renders on every keystroke (`input` state) and every flush.
 - **Impact:** Typing re-renders `ConversationList` (re-running `groupByProject`/`groupConversations`) and `Transcript`; multiplies FE-1.
 - **Fix:** `React.memo` the three; `useCallback` the handlers; `useMemo`/extract the footer; move `input` into the `Composer` so per-keystroke state doesn't re-render the screen.
+- **As implemented (Wave P2):** `Transcript` + `ConversationList` are `React.memo`'d; the handlers passed to them are stabilized via a `useEventCallback` (latest-ref) wrapper and `emptyState` is `useMemo`'d, so a keystroke/flush no longer re-renders either (compounding FE-1). **Deferred:** memoizing `Composer` + moving `input` into it — the footer (`ScopePopover`/`DepthMenu`/`SkillPicker`) handlers must be stabilized first (notably the suggest-on-open handler that reads the live draft), a larger refactor; without it, memoizing Composer is moot (the footer prop changes every render). Tracked for a Wave P2b/P3 follow-up.
 
-#### FE-4 — Document & conversation rows unmemoized; one-row interaction re-renders all rows · **Medium**
+#### FE-4 — Document & conversation rows unmemoized; one-row interaction re-renders all rows · **Medium** · ✅ IMPLEMENTED (ConvRow; DocRow deferred)
 - **Location:** `DocumentsScreen.tsx:907-1191` (inline row closures), `ConversationList.tsx:199-260`.
 - **Evidence:** Rows built inline with per-row `rowChips(d)`, `badgeFor`, fresh `onContextMenu`/`onChange` closures; opening one `⋯` menu (`menuOpenId`) re-renders all rows. `renderRow`/grouping recreated each render.
 - **Fix:** Extract memoized `DocRow`/`ConvRow` with stable `useCallback(onToggle(id))`; `useMemo` the grouping.
+- **As implemented (Wave P2):** `ConvRow` (React.memo) with stable per-row callbacks — opening one conversation's ⋯ menu no longer re-renders every conversation row. **Deferred:** the `DocumentsScreen` `DocRow` extraction — a ~25-prop memoized row (every doc-task handler + `busy`/`activeTask`/`section`/lifecycle state) with a high stale-closure surface; held back under the behavior-preserving mandate, tracked for a follow-up.
 
-#### FE-5 — No list virtualization (document list, transcript, conversation list) · **Medium** (High at scale)
+#### FE-5 — No list virtualization (document list, transcript, conversation list) · **Medium** (High at scale) · ⏳ PARTIAL (scroll-thrash fixed; windowing deferred)
 - **Location:** `DocumentsScreen.tsx:906-1192`, `Transcript.tsx:79-205`, `ConversationList.tsx:336-353`.
 - **Evidence:** Straight `.map` into the DOM; the transcript is worst (each item carries a `react-markdown` render + disclosures). The scroll-to-bottom effect (`Transcript.tsx:71-73`) runs on every `streamText` change, forcing layout over the whole tree each flush.
 - **Fix:** Window the transcript first, then the document list; gate the scroll effect so it doesn't run on every flush when scrolled up.
+- **As implemented (Wave P2):** the **scroll-thrash half is done** under FE-1 — the scroll-to-bottom effect is gated on an `atBottomRef`, so a streaming flush only forces layout + scroll while the user is pinned to the bottom. **Deferred:** the actual list windowing (transcript + document list) — no virtualization library is in deps, and windowing variable-height Markdown items while preserving scroll-to-bottom, find-in-page, and a11y is a behavior-sensitive change; tracked for when transcript/list length actually bites.
 
 #### FE-6 — PreviewModal renders the entire extracted document text synchronously over IPC · **Medium**
 - **Location:** `DocumentsScreen.tsx:1770-1781` (`preview.segments.map`), IPC `previewDocument` (`preload/index.ts:272`).
@@ -283,10 +290,11 @@ work) that cause visible jank on CPU-only hardware.
 - **Impact:** A large PDF/transcript crosses the bridge as one big JSON and mounts at once — multi-hundred-ms hitch + high modal memory.
 - **Fix:** Paginate/window the preview; have `previewDocument` return a bounded first page + cursor.
 
-#### FE-7 — IPC chattiness: 400 ms full-list polling during import/attach; 300 ms stream-recover poll · **Medium**
+#### FE-7 — IPC chattiness: 400 ms full-list polling during import/attach; 300 ms stream-recover poll · **Medium** · ✅ IMPLEMENTED (import/attach polls; stream-recover poll unchanged)
 - **Location:** `DocumentsScreen.tsx:274-288` (`watchJob` → `refresh()` → `listDocuments()` + `refreshCollections()`), `ChatScreen.tsx:790-820` (`watchAttachJob`), `:349-399` + `polling.ts:13` (300 ms).
 - **Evidence:** `watchJob` pulls the **entire** `DocumentInfo[]` 2.5×/s for the import duration and re-derives everything (FE-2).
 - **Fix:** Poll **job status only** (`getImportJob`) at 400 ms; refresh the full list only on a status transition/completion — the pattern `ModelsScreen.tsx:169-182` already uses. Better: push import progress from main via an event channel (the stream channels already demonstrate it).
+- **As implemented (Wave P2):** both import watchers (DocumentsScreen `watchJob`, ChatScreen `watchAttachJob`) now read only `getImportJob` on the 400 ms tick and refresh the full list (+ attachments) only when `completed + failed` changes (a file finished) and once at completion — the ModelsScreen download-poll pattern. The list updates at file-completion granularity instead of re-deriving 2.5×/s. The event-push channel is the better fix but was out of scope (not cheap). The 300 ms stream-recover poll (`ChatScreen.tsx`) is left as-is — it polls a single small snapshot, not the full list.
 
 #### FE-8 — Render-body linear `docs.find` lookups (preview/provenance) · **Low**
 - **Location:** `DocumentsScreen.tsx:1363-1368` (four `docs.find` for one preview), `:471` (`titleOf` per provenance line), `:606`.
@@ -389,11 +397,14 @@ work) that cause visible jank on CPU-only hardware.
 
 Decisions folded into `docs/architecture.md` "Performance — design record (perf audit 2026-06-18, Wave P1)".
 
-**Wave P2 — renderer responsiveness (CPU-only hardware):**
-7. **FE-1** — memoize `MessageBlock`; render live `streamText` as plain text until completion.
-8. **FE-2** — `useMemo` the DocumentsScreen derivations + rail counts.
-9. **FE-7** — poll job status only during import; refresh the list on transition (or push events).
-10. **FE-3/FE-4/FE-5** — `React.memo` chat/doc/conv children + row components; window the transcript.
+**Wave P2 — renderer responsiveness (CPU-only hardware) — ✅ DONE (2026-06-18; FE-5 + heaviest
+FE-3/4 sub-parts deferred):**
+7. ✅ **FE-1** — memoized `MessageBlock` + `AssistantMarkdown`; live `streamText` renders as plain text until completion; gated scroll effect.
+8. ✅ **FE-2** — `useMemo` the DocumentsScreen derivations + one-pass rail counts.
+9. ✅ **FE-7** — poll `getImportJob` only during import/attach; refresh the list on a completion transition.
+10. ✅/⏳ **FE-3/FE-4/FE-5** — `React.memo` Transcript/ConversationList + ConvRow with stable handlers (done); **deferred:** Composer/`input` move, `DocRow` extraction, list windowing (FE-5; the scroll-thrash half landed under FE-1).
+
+Decisions folded into `docs/architecture.md` "Performance — design record (perf audit 2026-06-18, Wave P2)".
 
 **Wave P3 — pipeline throughput & latency:**
 11. **ING-3** — 1-deep parse/embed import pipeline.

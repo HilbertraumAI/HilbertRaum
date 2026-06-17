@@ -6,7 +6,44 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
-_Last updated: 2026-06-18 — **Performance audit Wave P1 SHIPPED (branch `performance-tuning`).** Six
+_Last updated: 2026-06-18 — **Performance audit Wave P2 SHIPPED (branch `performance-tuning`).**
+Renderer responsiveness on the CPU-only target (audit `docs/performance-audit-2026-06-18.md` §6 Wave
+P2) — the chat transcript and the Documents screen re-did O(list) work and re-parsed Markdown on a
+40 ms / 400 ms cadence, competing with token generation. All behavior-preserving (no visible UI
+change except less jank) save the one streaming decision below. **Shipped (one commit per finding):**
+(1) **FE-1 (High)** — streaming no longer re-parses the whole transcript. Each persisted turn is a
+memoized `MessageBlock` (React.memo, keyed by id) and `AssistantMarkdown` is itself `React.memo`'d
+(keyed by text); the live answer now **renders as PLAIN TEXT** (`.msg-content` pre-wrap) during the
+stream with the full Markdown parse run ONCE on completion (the only visible effect: raw `**markers**`
+show during streaming, snap to formatted on completion — audit-sanctioned). `lastAssistantId` is
+`useMemo`'d; the scroll-to-bottom effect is gated on an `atBottomRef` (also the cheap half of FE-5).
+(2) **FE-2 (High)** — DocumentsScreen `useMemo`s the derived collections, `sourcesById`,
+`visibleDocs` (section filter + recent ordering; `inSection` now a pure module helper),
+`anyActive`/`staleDocs`, and the four rail counts collapsed into one bucketing pass. (3) **FE-7
+(Medium)** — both import watchers (`watchJob`, `watchAttachJob`) poll only the small `getImportJob`
+on the 400 ms tick and refresh the full list (+ attachments) only when `completed + failed` changes
+(a file finished) and at completion — the ModelsScreen download-poll pattern; the list updates at
+file-completion granularity instead of re-deriving 2.5×/s. (4) **FE-3/FE-4 (Medium)** — `Transcript`
++ `ConversationList` `React.memo`'d with stable handler identities via a new `useEventCallback`
+(latest-ref) wrapper + `useMemo`'d `emptyState`, so a keystroke/flush no longer re-renders them;
+`ConvRow` extracted + memoized so opening one ⋯ menu doesn't re-render every row. **New / changed
+data contracts:** none on the wire — `getImportJob` (existing IPC) is now the per-tick poll, with
+`listDocuments` refreshed on a status transition instead of every tick (behavioral: import list
+updates at file-completion granularity). **DECISION (recorded):** the live streaming answer is plain
+text until completion (kills the O(n²) per-flush Markdown re-parse). **Deferred within P2** (under the
+behavior-preserving mandate; tracked in the audit): the rest of FE-3 (memoize `Composer` + move
+`input` into it — needs the footer handlers stabilized), the FE-4 `DocRow` extraction (~25-prop row,
+high stale-closure surface), and **FE-5** list windowing (only the scroll-thrash half landed).
+**Docs:** lasting decisions folded into `docs/architecture.md` "Performance — design record (perf
+audit 2026-06-18, Wave P2)"; audit P2 items tagged **✅ IMPLEMENTED** (FE-5 ⏳ PARTIAL) and §6 Wave P2
+checked off. **New renderer tests:** `TranscriptMemo` (live answer never hits react-markdown; a prior
+message isn't re-parsed when only `streamText` changes) + a DocumentsScreen FE-7 poll test
+(`getImportJob` each tick, `listDocuments` only on a completion transition). **Verification:** full
+suite **1760 passed / 25 skipped** (+3), typecheck + build clean. **NEXT ACTION:** Wave P3 (ING-3/5
+pipelines, RT-2/RT-3, RAG-1 dot-product) when picked up; the deferred P2 sub-parts (Composer/input,
+DocRow, FE-5 windowing) tracked in the audit. **(prior P1 entry below.)**_
+
+_2026-06-18 — **Performance audit Wave P1 SHIPPED (branch `performance-tuning`).** Six
 high-ROI, low-risk, constant-factor/batching wins from `docs/performance-audit-2026-06-18.md` §6,
 targeting the two hottest user operations (import a document, ask a question) on the CPU-only USB
 target — no behavior change. **Shipped (one commit per finding):** (1) **DB-1 (Critical)** —

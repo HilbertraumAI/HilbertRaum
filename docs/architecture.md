@@ -124,9 +124,61 @@ batching — no behavior change.
   at `reranker/llama.ts`). Capping at the context never over-allocates — the whole prompt can't exceed
   `n_ctx`.
 
-Deferred to later waves (tracked in the audit §6): renderer memoization/windowing (FE-*, Wave P2),
-the import & OCR pipelines (ING-3/5, Wave P3), `cache_prompt` grounding split (RT-2), and the
-main-thread linear vector scan / ANN index (RAG-1/RAG-6, Wave P4 — the documented D15 deferral).
+Deferred to later waves (tracked in the audit §6): the import & OCR pipelines (ING-3/5, Wave P3),
+`cache_prompt` grounding split (RT-2), and the main-thread linear vector scan / ANN index
+(RAG-1/RAG-6, Wave P4 — the documented D15 deferral).
+
+## Performance — design record (perf audit 2026-06-18, Wave P2)
+Renderer responsiveness on the CPU-only target. The chat transcript and the Documents screen were
+re-doing O(list) work and re-parsing Markdown on a 40 ms / 400 ms cadence, competing with token
+generation and causing visible jank. All changes are memoization / polling and are
+**behavior-preserving** (no visible UI change except less jank) save the one streaming decision
+noted below.
+
+**Chat transcript (`renderer/chat/Transcript.tsx`, `renderer/screens/ChatScreen.tsx`).**
+- **FE-1 — streaming no longer re-parses the whole transcript.** Each persisted turn is a memoized
+  `MessageBlock` (React.memo, keyed by message id) and `AssistantMarkdown` is itself `React.memo`'d
+  (keyed by its text), so a ~40 ms `streamText` flush never re-parses a prior, unchanged message's
+  Markdown. **DECISION — the live answer streams as PLAIN TEXT** (`.msg-content`, `white-space:
+  pre-wrap`), not Markdown: re-parsing the growing buffer every flush was O(n²) over the reply
+  length. The full Markdown parse runs **once on completion**, when the turn re-renders from
+  `messages` as a `MessageBlock`. The only visible effect is that raw `**markers**` show literally
+  during the stream and snap to formatted on completion — accepted (audit-sanctioned). The visible
+  text stays non-live (audit L7); `StreamAnnouncer` still announces sentence-by-sentence.
+  `lastAssistantId` is `useMemo`'d (was a per-flush `[...messages].reverse().find`), and the
+  scroll-to-bottom effect is gated on an `atBottomRef` so a flush only forces layout + scroll while
+  the user is pinned to the bottom (also addresses the FE-5 scroll-thrash note).
+- **FE-3 — chat children memoized; stable handler identities.** `Transcript` and `ConversationList`
+  are `React.memo`'d. ChatScreen re-renders on every keystroke (input state) + every flush; a
+  `useEventCallback` (latest-ref) wrapper gives the handlers passed to those children
+  (`onCopy`/`onSave`/`onTryAgain`/`onAnswerWithoutSkill`, `onSelect`/`onNew`/`onDelete`/`onCollapse`)
+  **constant identities without stale captures**, and the teaching `emptyState` is `useMemo`'d
+  (keyed on mode/docs, never on `input`). So a keystroke no longer re-renders the transcript
+  (compounding FE-1) or re-runs `groupByProject`/`groupConversations`.
+- **FE-4 — conversation rows memoized.** `ConvRow` (React.memo) with stable per-row callbacks, so
+  opening one row's ⋯ menu (which flips the parent `menuOpenId`) no longer re-renders every row.
+
+**Documents screen (`renderer/screens/DocumentsScreen.tsx`).**
+- **FE-2 — derivations memoized.** The render body — re-run on every 400 ms import poll and every
+  unrelated state change (menu/hover/modal) — did 5+ array passes + a Map build each time. The
+  derived collections, `sourcesById`, `visibleDocs` (section filter + recent ordering; `inSection`
+  is now a pure module helper), `anyActive`/`staleDocs`, and the four rail counts (now one bucketing
+  pass) are `useMemo`'d on `[docs]`/`[collections]`/`[docs, section]`.
+- **FE-7 — poll the import job, not the whole list.** **CONTRACT/behavioral note:** both import
+  watchers (DocumentsScreen `watchJob`, ChatScreen `watchAttachJob`) now read only the small
+  `getImportJob` status on the 400 ms tick; the full `listDocuments` (+ attachment) refresh runs
+  only when the job's `completed + failed` count changes (a file finished) and once at completion —
+  the ModelsScreen download-poll pattern. The list therefore updates at **file-completion
+  granularity** instead of re-deriving the whole screen 2.5×/s. For attachments this is exactly when
+  the FK-guarded `conversation_documents` link row appears, so the "Files in this chat" reveal is
+  unchanged.
+
+**Deferred within Wave P2** (lower-confidence under the behavior-preserving mandate; tracked in the
+audit §6 / §4.4): the remainder of FE-3 (memoizing `Composer` + moving `input` state into it —
+needs the footer's `ScopePopover`/`DepthMenu`/`SkillPicker` handlers stabilized first, a larger
+refactor); the FE-4 `DocRow` extraction (a ~25-prop memoized row — high stale-closure surface); and
+**FE-5** list windowing of the transcript + document list (needs a measured approach to preserve
+scroll-to-bottom + a11y; the cheap scroll-thrash half of FE-5 is already done under FE-1).
 
 ## Models & runtime (Phase 2)
 - **Manifests** are local YAML under `model-manifests/` (committed; weights are not). The schema +
