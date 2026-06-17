@@ -305,6 +305,38 @@ CREATE TABLE IF NOT EXISTS bank_transactions (
   FOREIGN KEY (statement_id) REFERENCES bank_statements(id)
 );
 CREATE INDEX IF NOT EXISTS idx_bank_transactions_statement ON bank_transactions(statement_id);
+
+-- Categorization + reconciliation + user-correction tables (docs/skills-s11-plan.md §3.2 full
+-- future DDL, created additively at S11c — the tree_nodes-per-feature precedent). All CONTENT-CLASS
+-- (a category name / a corrected figure is user content): encrypted workspace DB only, NEVER
+-- logged/audited, NEVER exported (skills-plan §9.5). bank_corrections is created now but only
+-- written by a future correction UI (out of S11c scope, §8) — the schema is ratified, so it lands
+-- additively rather than as a later migration.
+CREATE TABLE IF NOT EXISTS bank_categories (
+  id          TEXT PRIMARY KEY,
+  name        TEXT NOT NULL,             -- content: the category label (e.g. "Income", "Fees")
+  builtin     INTEGER NOT NULL DEFAULT 0,-- 1 = a built-in deterministic-rule category
+  created_at  TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS bank_category_rules (
+  id          TEXT PRIMARY KEY,
+  category_id TEXT NOT NULL,             -- references bank_categories.id
+  match_kind  TEXT NOT NULL,            -- 'description-substring' | 'amount-sign'
+  pattern     TEXT NOT NULL,            -- the substring, or 'positive'|'negative' for amount-sign
+  created_at  TEXT NOT NULL,
+  FOREIGN KEY (category_id) REFERENCES bank_categories(id)
+);
+CREATE INDEX IF NOT EXISTS idx_bank_category_rules_category ON bank_category_rules(category_id);
+CREATE TABLE IF NOT EXISTS bank_corrections (
+  id             TEXT PRIMARY KEY,
+  transaction_id TEXT NOT NULL,          -- references bank_transactions.id
+  field          TEXT NOT NULL,          -- which column the user corrected
+  old_value      TEXT,                   -- content
+  new_value      TEXT,                   -- content
+  created_at     TEXT NOT NULL,
+  FOREIGN KEY (transaction_id) REFERENCES bank_transactions(id)
+);
+CREATE INDEX IF NOT EXISTS idx_bank_corrections_transaction ON bank_corrections(transaction_id);
 `
 
 // Additive column migrations on top of the spec §8 base schema. `CREATE TABLE IF NOT
@@ -476,6 +508,15 @@ export function openDatabase(path: string): Db {
   //   messages.skill_id             — the skill that shaped THIS turn; powers the per-message glyph (DS16/DS18).
   ensureColumn(db, 'conversations', 'active_skill_id', 'active_skill_id TEXT')
   ensureColumn(db, 'messages', 'skill_id', 'skill_id TEXT')
+  // Bank-transaction derived annotations (docs/skills-s11-plan.md §3.2, S11c). All nullable —
+  // a row has no category/reconciled/confidence until a downstream tool computes one. CONTENT-CLASS
+  // (a category id / reconcile verdict is derived from user figures): never logged/audited/exported.
+  //   bank_transactions.category_id — the assigned bank_categories.id (categorize_transactions).
+  //   bank_transactions.reconciled  — 0/1 balance-reconcile verdict (validate_statement_balances).
+  //   bank_transactions.confidence  — extraction/categorization confidence, 0..1 (future use).
+  ensureColumn(db, 'bank_transactions', 'category_id', 'category_id TEXT')
+  ensureColumn(db, 'bank_transactions', 'reconciled', 'reconciled INTEGER')
+  ensureColumn(db, 'bank_transactions', 'confidence', 'confidence REAL')
   ensureChunksFts(db)
   ensureMessagesFts(db)
   seedCollections(db)

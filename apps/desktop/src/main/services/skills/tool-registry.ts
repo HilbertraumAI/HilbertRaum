@@ -5,7 +5,13 @@ import type {
   ToolPermission,
   ToolResult
 } from '../../../shared/types'
-import { extractTransactionsTool } from './tools/bank-statement'
+import {
+  categorizeTransactionsTool,
+  exportTransactionsCsvTool,
+  extractTransactionsTool,
+  summarizeCashflowTool,
+  validateStatementBalancesTool
+} from './tools/bank-statement'
 
 // Tier-2 skill tool registry + the validate→run→validate gate (skills plan §12, Phase S10).
 //
@@ -197,12 +203,16 @@ const countSelectedDocumentsTool: SkillTool = {
 /**
  * The static, app-owned tool map. A skill can never add to it (skills plan §12.2). Bank-statement
  * tools are DEFINED in `tools/bank-statement.ts` (bank specifics stay out of the generic infra,
- * §13) and merely listed here. S11a wires `extract_transactions`; the other four bank tools arrive
- * at S11c.
+ * §13) and merely listed here. S11a wired `extract_transactions`; S11c adds the remaining four
+ * bank tools (validate/categorize/summarize read-only; export confirm-gated `export-file`).
  */
 const REGISTRY: Record<string, SkillTool> = {
   [countSelectedDocumentsTool.name]: countSelectedDocumentsTool,
-  [extractTransactionsTool.name]: extractTransactionsTool
+  [extractTransactionsTool.name]: extractTransactionsTool,
+  [validateStatementBalancesTool.name]: validateStatementBalancesTool,
+  [categorizeTransactionsTool.name]: categorizeTransactionsTool,
+  [summarizeCashflowTool.name]: summarizeCashflowTool,
+  [exportTransactionsCsvTool.name]: exportTransactionsCsvTool
 }
 
 /** Look up a registered tool by name (own-property only — never reaches `Object.prototype`). */

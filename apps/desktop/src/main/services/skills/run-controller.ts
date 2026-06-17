@@ -14,8 +14,15 @@ import type { SkillRunState } from '../../../shared/types'
 /** The content-free outcome a runner resolves to — counts only, never the extracted rows. */
 export interface ToolRunOutcome {
   ok: boolean
-  /** A COUNT on a successful extraction (surfaced as "Extracted N transactions"). */
+  /** A COUNT the run touched (rows extracted/categorized/summarized/saved, or rows not reconciling). */
   transactionCount?: number
+  /**
+   * A small, content-free outcome discriminator the renderer maps to copy when a count alone is
+   * ambiguous (e.g. `validate_statement_balances` → 'reconciled' | 'unreconciled' | 'unchecked').
+   * Generic: the controller treats it as an opaque token — the bank meaning lives in the renderer's
+   * copy map, never here (§13). Unset for tools whose result is just a count.
+   */
+  resultKind?: string
   /** A friendly, content-free reason on failure. */
   error?: string
 }
@@ -98,6 +105,7 @@ export class SkillRunController {
     } else if (outcome.ok) {
       s.state = 'done'
       s.transactionCount = outcome.transactionCount
+      s.resultKind = outcome.resultKind
     } else {
       s.state = 'failed'
       s.error = outcome.error ?? 'This tool could not finish. Nothing was changed.'

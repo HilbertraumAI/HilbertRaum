@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import type { MessageKey } from '@shared/i18n'
+import type { CountMessageKey, MessageKey } from '@shared/i18n'
 import type { RunnableTool, SkillRunState } from '@shared/types'
 import { useT } from '../i18n'
 import { Button, ConfirmDialog, Spinner } from '../components'
@@ -17,7 +17,20 @@ import { Button, ConfirmDialog, Spinner } from '../components'
 // Tool name → display-label catalog key. A small label map (not logic) keeps copy in the catalogs
 // and the rest of the bar generic; an unmapped tool falls back to its raw name.
 const TOOL_LABEL_KEY: Record<string, MessageKey> = {
-  extract_transactions: 'chat.skill.tool.extractTransactions'
+  extract_transactions: 'chat.skill.tool.extractTransactions',
+  validate_statement_balances: 'chat.skill.tool.validateBalances',
+  categorize_transactions: 'chat.skill.tool.categorize',
+  summarize_cashflow: 'chat.skill.tool.summarize',
+  export_transactions_csv: 'chat.skill.tool.exportCsv'
+}
+
+// Tool name → the count-pluralized "done" message base key (tCount appends .one/.other). Extract has
+// no entry — it keeps the legacy `chat.skill.run.done` base. validate_statement_balances is handled
+// separately (its outcome is a pass/fail discriminator, not a plain count).
+const TOOL_DONE_KEY: Record<string, CountMessageKey> = {
+  categorize_transactions: 'chat.skill.run.done.categorize',
+  summarize_cashflow: 'chat.skill.run.done.summarize',
+  export_transactions_csv: 'chat.skill.run.done.export'
 }
 
 export interface SkillRunBarProps {
@@ -50,6 +63,18 @@ export function SkillRunBar({
     return key ? t(key) : name
   }
 
+  // The calm "done" line per tool (content-free — a count and/or a pass/fail discriminator only).
+  const doneMessage = (state: SkillRunState): string => {
+    const count = state.transactionCount ?? 0
+    if (state.toolName === 'validate_statement_balances') {
+      if (state.resultKind === 'reconciled') return t('chat.skill.run.done.reconciled')
+      if (state.resultKind === 'unchecked') return t('chat.skill.run.done.unchecked')
+      return tCount('chat.skill.run.done.unreconciled', count)
+    }
+    const base = TOOL_DONE_KEY[state.toolName]
+    return tCount(base ?? 'chat.skill.run.done', count)
+  }
+
   const onClickTool = (tool: RunnableTool): void => {
     if (tool.requiresConfirmation) setConfirmTool(tool)
     else onRun(tool.name, false)
@@ -74,7 +99,7 @@ export function SkillRunBar({
   if (run) {
     const message =
       run.state === 'done'
-        ? tCount('chat.skill.run.done', run.transactionCount ?? 0)
+        ? doneMessage(run)
         : run.state === 'cancelled'
           ? t('chat.skill.run.cancelled')
           : run.error || t('chat.skill.run.failedGeneric')

@@ -1,4 +1,5 @@
 import { BrowserWindow, dialog, ipcMain } from 'electron'
+import { writeFile } from 'node:fs/promises'
 import { IPC } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
 import type {
@@ -55,6 +56,23 @@ export function registerSkillsIpc(ctx: AppContext): void {
   // banks; the `tool-runs.ts` dispatch supplies the bank seam as an opaque runner.
   const runController = new SkillRunController()
   const runAudit = toSkillToolAudit(ctx.audit)
+
+  // The MAIN-side CSV write for `export_transactions_csv` (skills plan §9.5, S11c — the first
+  // FS-write from a skill tool). The tool only PRODUCES the CSV; this saves it to a user-chosen path
+  // via a save dialog (the exportSkill/exportConversation precedent). Returns whether the user saved;
+  // the path + CSV content are NEVER logged or audited (only "saved N rows" surfaces — §22-M1).
+  const saveTextFile = async (defaultFileName: string, content: string): Promise<boolean> => {
+    const win = BrowserWindow.getFocusedWindow()
+    const options = {
+      title: tMain('main.dialog.exportCsv'),
+      defaultPath: defaultFileName,
+      filters: [{ name: tMain('main.dialog.filterCsv'), extensions: ['csv'] }]
+    }
+    const result = win ? await dialog.showSaveDialog(win, options) : await dialog.showSaveDialog(options)
+    if (result.canceled || !result.filePath) return false
+    await writeFile(result.filePath, content, 'utf8')
+    return true
+  }
 
   // Developer mode (the model-leniency precedent): the user toggle OR a dev build. Gates the
   // downgrade override (DS15) only — never a security control (version is unsigned).
@@ -272,7 +290,8 @@ export function registerSkillsIpc(ctx: AppContext): void {
       ctx.db,
       toolName,
       { skillInstallId, conversationId, documentId: docIds[0], confirmed: req?.confirmed },
-      runAudit
+      runAudit,
+      { saveTextFile }
     )
     if (!runner) return { started: false, error: tMain('main.skills.run.unavailable') }
     try {

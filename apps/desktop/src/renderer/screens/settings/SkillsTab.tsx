@@ -405,11 +405,13 @@ function SkillDetail({
         )}
       </dl>
 
-      {/* Honest Tier-2 note (skills plan §13/§22-D1): shown when the skill RESERVES tools (a
-          non-empty allowedTools) OR is a kind:'tool' skill. The bank-statement v1 stub is
-          kind:'instruction' but reserves its Tier-2 tools, so it triggers off reservesTools. */}
-      {(skill.reservesTools || skill.kind === 'tool') && (
-        <Banner tone="info">{t('skills.tool.note')}</Banner>
+      {/* Tier-2 note (skills plan §13/§22-D1). A `kind:'tool'` skill (S11c flip) names its real,
+          app-orchestrated tools; an instruction skill that merely RESERVES tools shows the honest
+          "tools arrive with Tier-2" note. Either way the permission line below stays kind-gated. */}
+      {skill.kind === 'tool' ? (
+        <Banner tone="info">{t('skills.tool.note.active')}</Banner>
+      ) : (
+        skill.reservesTools && <Banner tone="info">{t('skills.tool.note')}</Banner>
       )}
 
       <h3 className="skill-perm-heading">{t('skills.perm.heading')}</h3>

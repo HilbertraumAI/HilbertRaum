@@ -4,8 +4,14 @@ import type { AuditEventType, RunnableTool, SkillToolAudit } from '../../../shar
 import type { SkillRecord } from './registry'
 import { resolveScope } from '../collections'
 import { buildScopeFilter } from '../retrieval-scope'
-import { getRegisteredTool, toolRequiresConfirmation } from './tool-registry'
-import { runBankExtraction } from './run'
+import { getRegisteredTool, resolveEffectiveTools, toolRequiresConfirmation } from './tool-registry'
+import {
+  runBankExtraction,
+  runBalanceValidation,
+  runCashflowSummary,
+  runCategorization,
+  runCsvExport
+} from './run'
 import type { ToolRunner } from './run-controller'
 
 // The app-orchestrated tool-run DISPATCH (skills plan §6/§12.2, Phase S11b). This is the ONE place
@@ -13,11 +19,19 @@ import type { ToolRunner } from './run-controller'
 // specifics — exactly as `tools/bank-statement.ts` is (§13). The generic infra (the run controller,
 // registerSkillsIpc, the renderer) stays bank-free and talks only in `RunnableTool`/handles.
 //
-// S11b wires ONLY `extract_transactions` (read-only, no confirm). S11c adds the write/export tools
-// (e.g. `export_transactions_csv`) by adding a case here — the channel/controller/renderer don't change.
+// S11c wires all five bank tools: extract/validate/categorize/summarize (read-only, no confirm) +
+// export_transactions_csv (confirm-gated `export-file` — the SkillRunBar modal already gates it; the
+// MAIN-side save is supplied here as an opaque `saveTextFile`). The channel/controller/renderer are
+// unchanged — bank specifics stay in this dispatch + the `run.ts` seam (§13).
 
-/** The tools whose run seam is wired in this phase. S11c extends this set. */
-const WIRED_TOOL_NAMES: readonly string[] = ['extract_transactions']
+/** The tools whose run seam is wired (each has a `buildToolRunner` case below). */
+const WIRED_TOOL_NAMES: readonly string[] = [
+  'extract_transactions',
+  'validate_statement_balances',
+  'categorize_transactions',
+  'summarize_cashflow',
+  'export_transactions_csv'
+]
 
 /** Canonical English audit messages for the ids/counts-only run events (the recorder needs one). */
 const SKILL_RUN_MESSAGE: Partial<Record<AuditEventType, string>> = {
@@ -61,18 +75,15 @@ export function resolveInScopeDocumentIds(db: Db, conversationId: string): strin
 }
 
 /**
- * The wired tool names a skill may run (skills plan §12.2, S11b). A skill that RESERVES Tier-2 tools
- * (the honest `reservesTools` signal — the same one the S5 detail-drawer note triggers on) is offered
- * the wired tools. The instruction-kind parser discards the DECLARED tool *names* (S9/SL-1), so v1
- * cannot intersect per-skill; in v1 the bank-statement skill is the only `reservesTools` skill and
- * `extract_transactions` safely no-ops on a non-statement (it drops every row it can't parse). When
- * S11c flips the skill to `kind:'tool'`, switch this to the effective `allowedTools ∩ registry ∩
- * userGrant` set (`resolveEffectiveTools`).
+ * The wired tool names a skill may run (skills plan §12.2, S11c). The S11c flip makes the bank skill
+ * `kind:'tool'`, so the S2 parser KEEPS its declared `allowedTools` (an instruction skill's stays []
+ * — SL-1). The effective set is `declared ∩ registry ∩ grant`; v1 has no per-tool grant UI, so
+ * enabling a `kind:'tool'` skill grants its declared tools (grant = declared). We then keep only the
+ * tools actually wired to a `run.ts` seam below. An instruction skill (allowedTools []) gets none.
  */
 export function runnableToolNames(skill: SkillRecord): string[] {
-  const reserves = skill.manifest.reservesTools === true || skill.manifest.allowedTools.length > 0
-  if (!reserves) return []
-  return WIRED_TOOL_NAMES.filter((n) => getRegisteredTool(n) !== undefined)
+  const effective = resolveEffectiveTools(skill.manifest.allowedTools, skill.manifest.allowedTools)
+  return effective.filter((n) => WIRED_TOOL_NAMES.includes(n))
 }
 
 /** The `RunnableTool` descriptors for a skill (name + whether the renderer must confirm first). */
@@ -97,31 +108,67 @@ export interface BuildRunnerArgs {
   confirmed?: boolean
 }
 
+/** MAIN-side capabilities the dispatch needs but cannot import (kept out so this stays testable). */
+export interface ToolRunDeps {
+  /**
+   * Save CSV text to a user-chosen path (save dialog + write). Returns true once written, false if
+   * the user cancelled. The path + content are NEVER logged/audited — `export_transactions_csv`'s
+   * FS-write boundary (skills-plan §9.5/§22-M1). The IPC layer supplies it; tests inject a stub.
+   */
+  saveTextFile?: (defaultFileName: string, content: string) => Promise<boolean>
+}
+
 /**
- * Build the `ToolRunner` for a wired tool (or `null` if the tool is not wired this phase). The runner
- * closes over the right `run.ts` seam + the ids/counts-only audit and resolves to a content-free
- * outcome. The controller never sees content — persistence + the extracted rows stay in the seam.
+ * Build the `ToolRunner` for a wired tool (or `null` if the tool is not wired). The runner closes
+ * over the right `run.ts` seam + the ids/counts-only audit and resolves to a content-free outcome.
+ * The controller never sees content — persistence + the extracted/derived rows stay in the seam.
  */
 export function buildToolRunner(
   db: Db,
   toolName: string,
   args: BuildRunnerArgs,
-  audit: SkillToolAudit
+  audit: SkillToolAudit,
+  deps: ToolRunDeps = {}
 ): ToolRunner | null {
-  if (toolName === 'extract_transactions') {
-    return async ({ signal, onProgress }) => {
-      const res = await runBankExtraction(
-        db,
-        {
-          skillInstallId: args.skillInstallId,
-          conversationId: args.conversationId,
-          documentId: args.documentId
-        },
-        { audit, signal, onProgress }
-      )
-      return { ok: res.ok, transactionCount: res.transactionCount, error: res.error }
-    }
+  const seamArgs = {
+    skillInstallId: args.skillInstallId,
+    conversationId: args.conversationId,
+    documentId: args.documentId
   }
-  // S11c: export_transactions_csv et al. plug in here (confirm-gated via toolRunNeedsConfirmation).
-  return null
+  switch (toolName) {
+    case 'extract_transactions':
+      return async ({ signal, onProgress }) => {
+        const res = await runBankExtraction(db, seamArgs, { audit, signal, onProgress })
+        return { ok: res.ok, transactionCount: res.transactionCount, error: res.error }
+      }
+    case 'validate_statement_balances':
+      return async ({ signal, onProgress }) => {
+        const res = await runBalanceValidation(db, seamArgs, { audit, signal, onProgress })
+        return { ok: res.ok, transactionCount: res.count, resultKind: res.resultKind, error: res.error }
+      }
+    case 'categorize_transactions':
+      return async ({ signal, onProgress }) => {
+        const res = await runCategorization(db, seamArgs, { audit, signal, onProgress })
+        return { ok: res.ok, transactionCount: res.count, error: res.error }
+      }
+    case 'summarize_cashflow':
+      return async ({ signal, onProgress }) => {
+        const res = await runCashflowSummary(db, seamArgs, { audit, signal, onProgress })
+        return { ok: res.ok, transactionCount: res.count, error: res.error }
+      }
+    case 'export_transactions_csv':
+      if (!deps.saveTextFile) return null // cannot export without the MAIN-side save capability
+      return async ({ signal, onProgress }) => {
+        const res = await runCsvExport(db, seamArgs, {
+          audit,
+          signal,
+          onProgress,
+          confirmed: args.confirmed,
+          saveTextFile: deps.saveTextFile!
+        })
+        return { ok: res.ok, transactionCount: res.count, error: res.error }
+      }
+    default:
+      return null
+  }
 }

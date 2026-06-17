@@ -6,7 +6,41 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
-_Last updated: 2026-06-17 — **Skills Phase S11b SHIPPED — app-orchestrated run trigger + busy row +
+_Last updated: 2026-06-17 — **Skills Phase S11c SHIPPED — remaining bank tools + data tables +
+SKILL.md flip to `kind:'tool'`.** The LAST sub-phase of S11. Adds the four downstream bank tools to
+`tools/bank-statement.ts` + the `REGISTRY`: `validate_statement_balances` (reconciles each row's
+printed vs computed running balance → a per-row `reconciled` flag; honest 'ok'/'mismatch'/'unknown'
+status, never invented), `categorize_transactions` (deterministic rule-based → `category_id`, seeding
+the built-in `bank_categories`/`bank_category_rules`), `summarize_cashflow` (read-only inflow/outflow/
+net totals), `export_transactions_csv` (confirm-gated `export-file`). **Design (recorded):** the
+three downstream tools operate on the ALREADY-EXTRACTED rows, which the seam loads (the LATEST
+`bank_statements` for the in-scope doc) and passes as STRUCTURED INPUT — tools stay pure, **no new
+`SkillToolContext` accessor** (the §14 ceiling is unchanged). New seam fns in `run.ts`
+(`runBalanceValidation`/`runCategorization`/`runCashflowSummary`/`runCsvExport`) persist atomically
+(BEGIN…COMMIT/ROLLBACK, no-partial-persist). **The CSV export is the first FS-write from a skill
+tool:** the pure tool only *produces* the CSV; the IPC layer's `saveTextFile` writes it MAIN-side to a
+user-chosen path (save dialog + `writeFile`), gated on `export-file` + the confirm — **path + content
+never logged/audited** (only "saved N rows" surfaces). Additive content-class DDL in `db.ts`
+(`bank_categories`/`bank_category_rules`/`bank_corrections` + `bank_transactions.category_id/reconciled/
+confidence`; never logged/audited/exported). `tool-runs.ts`: `buildToolRunner` gains a case per tool
+(+ an opaque `saveTextFile` dep) and `runnableToolNames` is **retargeted** from the `reservesTools`
+gate to `resolveEffectiveTools(allowedTools ∩ registry ∩ grant)` now that the flip makes `allowedTools`
+effective. **The flip:** `app-skills/bank-statement/SKILL.md` → `kind:'tool'` (SL-1 path keeps the
+declared list) + the §6.6 reconcile body; S5 drawer note → the real tool list (`skills.tool.note.active`)
++ the kind-gated "✓ Use approved local tools" line. Generic infra gained ONE content-free field
+(`SkillRunState.resultKind` — validate's 'reconciled'/'unreconciled'/'unchecked' verdict; the bank
+meaning lives only in the renderer's copy map). EN+DE („du"). 26 new tests (downstream tool units 13,
+run-seam integration incl. the export sentinel/cancel/no-confirm 7, IPC export confirm→save 4, the DDL
++ flip-contract + resolveEffectiveTools retarget + SkillRunBar outcome tests). Full suite **1606
+passed / 25 skipped**, typecheck + build clean. Docs: architecture.md + security-model.md (the S11c
+tool set + the CSV FS-write boundary), `docs/skills-s11-plan.md` (§2 S11c done; status → CLOSED, ready
+to fold at S12). SL log clean (no new `SL-#`). **Carry-forward:** the running-model Playwright eyeball
+of the busy row + the (now production-firing) export confirm modal is still uncaptured (the S6-style
+walk needs a seeded indexed statement + a live run). See the **"Skills — S11c handoff"** block below.
+Next: **S12** (fold `docs/skills-s11-plan.md` into the §-records per the §18 fold-map, then delete it;
+the skills security hardening/audit pass)._
+
+_(prior) 2026-06-17 — **Skills Phase S11b SHIPPED — app-orchestrated run trigger + busy row +
 write-confirm modal.** The S11a `run.ts` seam is now startable from a USER action (DS4 — never the
 model). New generic, bank-free [`services/skills/run-controller.ts`](apps/desktop/src/main/services/skills/run-controller.ts)
 (`SkillRunController`: single active run, polling state, Cancel via `AbortSignal`, one-at-a-time) +
@@ -264,6 +298,63 @@ then revert the manifest), run, done; node_modules carries it uncommitted. The w
 build` first (it drives the BUILT bundle out/main, which vitest never exercises) and **strip
 `ELECTRON_RUN_AS_NODE`** from the child env (the VSCode host exports it). `docs/design-review/` also
 holds untracked `skills-s5/` PNGs from the S5 walk — unrelated to this chore, left as-is.
+
+### Skills — S11c handoff (2026-06-17)
+
+**What this phase added** (the last S11 sub-phase — the remaining tools + tables + the flip):
+- **`tools/bank-statement.ts`** — four new PURE tools + exported helpers (unit-tested without DB/
+  Electron): `validate_statement_balances` (`reconcileBalances` → per-row `ok`/`mismatch`/`unknown`,
+  overall verdict = a checkable row exists AND no mismatch), `categorize_transactions`
+  (`categorizeRow`/`categorizeRows` over `BUILTIN_CATEGORY_RULES`; sign fallback Spending/
+  Uncategorized), `summarize_cashflow` (`summarizeCashflow` — currency only when uniform, honest),
+  `export_transactions_csv` (`transactionsToCsv` — RFC-4180 quoting, fixed-dp amounts, blanks for
+  nulls). All deterministic/offline, §22-D1 honest. Registered in `tool-registry.ts` `REGISTRY`.
+- **`db.ts`** — additive content-class DDL: `bank_categories`, `bank_category_rules`, `bank_corrections`
+  (created now, written by a future correction UI — out of S11c scope) + `ensureColumn`
+  `bank_transactions.category_id/reconciled/confidence`. Never logged/audited/exported (§9.5).
+- **`run.ts`** — `runBalanceValidation` / `runCategorization` / `runCashflowSummary` / `runCsvExport`
+  over a shared `prepareStatementRun` prefix (begin run → locate the **latest** statement → load rows
+  → run the pure tool through the gate with structured input). Persistence atomic + no-partial-persist;
+  `ensureBuiltinCategories` seeds categories + rules once. `runCsvExport` takes an injected
+  `saveTextFile` (no FS handle in the seam itself); a cancelled save → run `cancelled`, friendly copy.
+- **`tool-runs.ts`** — `buildToolRunner` is now a switch with a case per tool (+ a `ToolRunDeps`
+  carrying `saveTextFile`; the export case returns `null` if it's absent). `runnableToolNames`
+  retargeted to `resolveEffectiveTools(skill.manifest.allowedTools, skill.manifest.allowedTools)`
+  filtered to wired names (grant = declared; no per-tool UI in v1). `WIRED_TOOL_NAMES` lists all five.
+- **`registerSkillsIpc.ts`** — a closure `saveTextFile` (focused-window save dialog → `writeFile`,
+  logging NOTHING) passed into `buildToolRunner`. The channels/preload are otherwise unchanged.
+- **Generic infra** — ONE additive content-free field: `ToolRunOutcome.resultKind` + `SkillRunState
+  .resultKind` (an opaque discriminator; the controller copies it on success). The bank meaning lives
+  only in the renderer's copy map.
+- **Renderer** — `SkillRunBar.tsx` gains `TOOL_LABEL_KEY`/`TOOL_DONE_KEY` entries + a `doneMessage`
+  that keys per-tool copy and renders validate from `resultKind`. `SkillsTab.tsx` shows
+  `skills.tool.note.active` (the real tool list) for `kind:'tool'` (the "arrive with Tier-2" note now
+  only for a reservesTools *instruction* skill); the "✓ Use approved local tools" line is already
+  kind-gated in `PermissionBlock`, so the flip lights it up. EN+DE catalogs extended.
+- **The flip** — `app-skills/bank-statement/SKILL.md` → `kind:'tool'` + the §6.6 reconcile body
+  (honest: app-orchestrated only, never invents a figure, work from the extracted table).
+
+**Decisions taken (record):**
+- **Downstream tools take STRUCTURED INPUT, not a new context accessor** (the seam loads the rows). The
+  §14 ceiling is unchanged — a tool still has only the frozen `documentIds` + `readDocumentChunks`.
+- **A run targets the LATEST `bank_statements` for the in-scope document** (`ORDER BY created_at DESC,
+  id DESC`); no statement ⇒ a friendly "read the statement first" failure (no figure invented).
+- **CSV write is MAIN-side to a user-chosen path; path + content are never logged/audited.** Only
+  "saved N rows" surfaces; a cancelled save persists nothing. Gated on `export-file` + the confirm.
+- **`summarize_cashflow` figures are NOT surfaced in v1** (content; the busy row stays ids/counts) —
+  the run reports a count; a dedicated view / the model-explains step surfaces the totals later.
+- **Permissions:** validate/categorize/summarize are `read-selected-docs` (no per-call prompt) — they
+  persist only DERIVED annotations (reconciled flag / category id), the same content-class posture as
+  extract; only the FS-writing `export_transactions_csv` is `export-file` (confirm-gated).
+
+**Open landmines:** none. SL log clean (no new `SL-#`). **Carry-forward:** the running-model Playwright
+eyeball (busy row + the now-production-firing export confirm modal, EN/DE × light/dark) is still
+uncaptured — the S6-style walk needs a seeded indexed statement + a live extract→export run.
+
+**What S12 consumes:** S11 is CLOSED. Fold `docs/skills-s11-plan.md` into the §-records per its §18
+fold-map (tools/registry/run orchestration → architecture.md "Skills — design record"; the tool
+ceiling + content-class data + the CSV FS-write boundary → security-model.md), then **delete the plan
+file** (the original stays in git history). Then the skills security hardening/audit pass.
 
 ### Skills — S11b handoff (2026-06-17)
 

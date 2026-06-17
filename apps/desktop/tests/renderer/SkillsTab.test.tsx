@@ -162,6 +162,19 @@ describe('SkillsTab — detail drawer', () => {
     const dialog = within(screen.getByRole('dialog'))
     expect(dialog.queryByText(/adds guidance only/i)).not.toBeInTheDocument()
   })
+
+  // S11c: a kind:'tool' skill names its real tools (not the "arrive later" note) AND its permission
+  // block gains the "Use approved local tools" line.
+  it('shows the real-tools note + the approved-tools permission line for a kind:tool skill', async () => {
+    const user = userEvent.setup()
+    stubApi({ listSkills: vi.fn(async () => [skill({ kind: 'tool', reservesTools: true })]) })
+    renderTab()
+    await user.click(await screen.findByText('Bank statement helper'))
+    const dialog = within(screen.getByRole('dialog'))
+    expect(dialog.queryByText(/adds guidance only/i)).not.toBeInTheDocument()
+    expect(dialog.getByText(/extract transactions/i)).toBeInTheDocument()
+    expect(dialog.getByText('Use approved local tools when you ask')).toBeInTheDocument()
+  })
 })
 
 describe('SkillsTab — import preview (§15: permission summary before confirm)', () => {

@@ -114,4 +114,45 @@ describe('SkillRunBar (S11b)', () => {
     )
     expect(screen.getByText('Stopped. Nothing was saved.')).toBeInTheDocument()
   })
+
+  // S11c — per-tool done copy + validate's pass/fail discriminator (resultKind), content-free.
+  it('RESULT: per-tool done messages (categorize / summarize / export)', () => {
+    const cases: Array<[SkillRunState['toolName'], number, string]> = [
+      ['categorize_transactions', 3, 'Categorized 3 transactions.'],
+      ['summarize_cashflow', 3, 'Summarized 3 transactions.'],
+      ['export_transactions_csv', 2, 'Saved 2 rows.']
+    ]
+    for (const [toolName, count, text] of cases) {
+      cleanup()
+      render(
+        withI18n(
+          <SkillRunBar
+            run={run({ toolName, state: 'done', transactionCount: count })}
+            runnableTools={[]}
+            onRun={vi.fn()}
+            onCancel={vi.fn()}
+            onDismiss={vi.fn()}
+          />
+        )
+      )
+      expect(screen.getByText(text)).toBeInTheDocument()
+    }
+  })
+
+  it('RESULT: validate reconcile verdicts key off resultKind', () => {
+    const v = (resultKind: string, count = 0): SkillRunState =>
+      run({ toolName: 'validate_statement_balances', state: 'done', resultKind, transactionCount: count })
+    const { rerender } = render(
+      withI18n(<SkillRunBar run={v('reconciled')} runnableTools={[]} onRun={vi.fn()} onCancel={vi.fn()} onDismiss={vi.fn()} />)
+    )
+    expect(screen.getByText('Balances reconcile.')).toBeInTheDocument()
+    rerender(
+      withI18n(<SkillRunBar run={v('unreconciled', 2)} runnableTools={[]} onRun={vi.fn()} onCancel={vi.fn()} onDismiss={vi.fn()} />)
+    )
+    expect(screen.getByText(/2 rows don't reconcile/)).toBeInTheDocument()
+    rerender(
+      withI18n(<SkillRunBar run={v('unchecked')} runnableTools={[]} onRun={vi.fn()} onCancel={vi.fn()} onDismiss={vi.fn()} />)
+    )
+    expect(screen.getByText(/No running balance/)).toBeInTheDocument()
+  })
 })

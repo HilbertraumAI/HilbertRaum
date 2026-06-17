@@ -1531,8 +1531,14 @@ export interface SkillRunState {
   state: 'running' | 'done' | 'failed' | 'cancelled'
   /** Merged from the tool's `onProgress` (no new event channel). */
   progress: { done: number; total: number }
-  /** A COUNT on a successful extraction — never the rows themselves. */
+  /** A COUNT the run touched (rows extracted/categorized/summarized/saved, or rows not reconciling). */
   transactionCount?: number
+  /**
+   * A small, content-free outcome discriminator for tools whose result is more than a count (e.g.
+   * `validate_statement_balances` → 'reconciled' | 'unreconciled' | 'unchecked'). The renderer maps
+   * it to copy; it is NEVER a figure or row content. Unset for count-only outcomes.
+   */
+  resultKind?: string
   /** Friendly, content-free reason on failure. */
   error?: string
 }

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
@@ -10,13 +10,20 @@ import { randomUUID } from 'node:crypto'
 // the audit). Mirrors the registerSkillsIpc test harness (mocked electron + the invoke helper).
 
 const ipcState = vi.hoisted(() => ({ handlers: new Map<string, unknown>() }))
+// Mutable save-dialog result so a test can drive the export CSV write (default = user cancelled).
+const dialogState = vi.hoisted(() => ({
+  saveResult: { canceled: true } as { canceled: boolean; filePath?: string }
+}))
 vi.mock('electron', () => ({
   ipcMain: {
     handle: (channel: string, fn: unknown) => ipcState.handlers.set(channel, fn),
     removeHandler: (channel: string) => ipcState.handlers.delete(channel)
   },
   BrowserWindow: { getFocusedWindow: () => null },
-  dialog: { showOpenDialog: async () => ({ canceled: true, filePaths: [] }), showSaveDialog: async () => ({ canceled: true }) },
+  dialog: {
+    showOpenDialog: async () => ({ canceled: true, filePaths: [] }),
+    showSaveDialog: async () => dialogState.saveResult
+  },
   app: { getVersion: () => '0.0.0-test' }
 }))
 
@@ -41,13 +48,15 @@ function tempDir(): string {
 function writeBankSkill(appSkillsDir: string): void {
   const d = join(appSkillsDir, 'bank-statement')
   mkdirSync(d, { recursive: true })
+  // S11c: kind:'tool' so the declared allowedTools become effective (the SL-1 parser path).
   const lines = [
     '---',
     'id: bank-statement',
     'title: Bank statement',
     'description: Reads statements.',
     'version: 1.0.0',
-    'allowedTools: [extract_transactions]',
+    'kind: tool',
+    'allowedTools: [extract_transactions, validate_statement_balances, categorize_transactions, summarize_cashflow, export_transactions_csv]',
     '---',
     'Quote the printed figures.'
   ]
@@ -109,13 +118,40 @@ async function pollUntilTerminal(runHandle: string): Promise<SkillRunState> {
   throw new Error('run did not terminate')
 }
 
-beforeEach(() => ipcState.handlers.clear())
+beforeEach(() => {
+  ipcState.handlers.clear()
+  dialogState.saveResult = { canceled: true }
+})
+
+/** Run a tool to a terminal state via the IPC channels (returns the final ids/counts-only state). */
+async function runTool(
+  skillInstallId: string,
+  conversationId: string,
+  toolName: string,
+  confirmed?: boolean
+): Promise<SkillRunState> {
+  const { result: startRaw } = await invoke(handlers, IPC.startSkillRun, {
+    skillInstallId,
+    toolName,
+    conversationId,
+    confirmed
+  })
+  const start = startRaw as StartSkillRunResult
+  if (!start.started) throw new Error('expected the run to start')
+  return pollUntilTerminal(start.run.runHandle)
+}
 
 describe('skills tool-run IPC (S11b)', () => {
-  it('listRunnableTools surfaces the wired read-only tool for the bank skill in scope', async () => {
+  it('listRunnableTools surfaces all five wired tools (export confirm-gated) in declared order', async () => {
     const { skillInstallId, conversationId } = makeHarness('EUR\n2026-01-02 Grocery -45,90')
     const { result } = await invoke(handlers, IPC.listRunnableTools, skillInstallId, conversationId)
-    expect(result).toEqual<RunnableTool[]>([{ name: 'extract_transactions', requiresConfirmation: false }])
+    expect(result).toEqual<RunnableTool[]>([
+      { name: 'extract_transactions', requiresConfirmation: false },
+      { name: 'validate_statement_balances', requiresConfirmation: false },
+      { name: 'categorize_transactions', requiresConfirmation: false },
+      { name: 'summarize_cashflow', requiresConfirmation: false },
+      { name: 'export_transactions_csv', requiresConfirmation: true }
+    ])
   })
 
   it('listRunnableTools is empty with no in-scope document', async () => {
@@ -143,11 +179,12 @@ describe('skills tool-run IPC (S11b)', () => {
     expect(final.transactionCount).toBe(2)
   })
 
-  it('refuses an unwired tool with a friendly, content-free error', async () => {
+  it('refuses a tool the skill does not declare with a friendly, content-free error', async () => {
     const { skillInstallId, conversationId } = makeHarness('EUR\n2026-01-02 Grocery -45,90')
+    // count_selected_documents is registered but NOT in the skill's allowedTools → unavailable.
     const { result } = await invoke(handlers, IPC.startSkillRun, {
       skillInstallId,
-      toolName: 'summarize_cashflow',
+      toolName: 'count_selected_documents',
       conversationId
     })
     expect((result as StartSkillRunResult).started).toBe(false)
@@ -173,5 +210,64 @@ describe('skills tool-run IPC (S11b)', () => {
     // …and the run state the renderer polls carries no content either.
     const { result: stateRaw } = await invoke(handlers, IPC.getSkillRun, start.run.runHandle)
     expect(JSON.stringify(stateRaw)).not.toContain(SENTINEL)
+  })
+})
+
+describe('skills export_transactions_csv IPC (S11c)', () => {
+  it('confirm-gates the export: refuses without confirmation, asking for it', async () => {
+    const { skillInstallId, conversationId } = makeHarness('Statement EUR\n2026-01-02 Grocery -45,90 1.954,10')
+    await runTool(skillInstallId, conversationId, 'extract_transactions')
+    const { result } = await invoke(handlers, IPC.startSkillRun, {
+      skillInstallId,
+      toolName: 'export_transactions_csv',
+      conversationId
+    })
+    expect(result).toEqual({ started: false, needsConfirmation: true })
+  })
+
+  it('confirmed + a chosen path → writes the CSV and reports "saved N rows" (content-free)', async () => {
+    const { skillInstallId, conversationId } = makeHarness(
+      'Statement EUR\n2026-01-02 Grocery -45,90 1.954,10\n2026-01-03 Salary 2.500,00 4.454,10'
+    )
+    await runTool(skillInstallId, conversationId, 'extract_transactions')
+    const out = join(tempDir(), 'export.csv')
+    dialogState.saveResult = { canceled: false, filePath: out }
+    const final = await runTool(skillInstallId, conversationId, 'export_transactions_csv', true)
+    expect(final.state).toBe('done')
+    expect(final.transactionCount).toBe(2)
+    // The CSV really landed on disk with the rows (content-class — that is correct).
+    expect(existsSync(out)).toBe(true)
+    const csv = readFileSync(out, 'utf8')
+    expect(csv).toMatch(/^date,valueDate,description,amount,currency,balanceAfter,sourcePage/)
+    expect(csv).toContain('Grocery')
+    expect(csv).toContain('Salary')
+    // …but the run state the renderer polls is ids/counts only — no figures/paths.
+    const { result: stateRaw } = await invoke(handlers, IPC.getSkillRun, final.runHandle)
+    expect(JSON.stringify(stateRaw)).not.toContain('Grocery')
+    expect(JSON.stringify(stateRaw)).not.toContain(out)
+  })
+
+  it('export content never reaches the audit log (sentinel, ids/counts only)', async () => {
+    const { db, skillInstallId, conversationId } = makeHarness(`Statement EUR\n2026-01-02 ${SENTINEL} -12,00 1.000,00`)
+    await runTool(skillInstallId, conversationId, 'extract_transactions')
+    const out = join(tempDir(), 'export.csv')
+    dialogState.saveResult = { canceled: false, filePath: out }
+    await runTool(skillInstallId, conversationId, 'export_transactions_csv', true)
+    // The secret IS in the user-chosen CSV (correct) but never in the audit stream.
+    expect(readFileSync(out, 'utf8')).toContain(SENTINEL)
+    const auditText = listAuditEvents(db, { limit: 5000 })
+      .map((e) => `${e.type} ${e.message} ${JSON.stringify(e.metadata)}`)
+      .join('\n')
+    expect(auditText).toContain('skill_run_done')
+    expect(auditText).not.toContain(SENTINEL)
+  })
+
+  it('a cancelled save persists no file and reports it calmly', async () => {
+    const { skillInstallId, conversationId } = makeHarness('Statement EUR\n2026-01-02 Grocery -45,90 1.954,10')
+    await runTool(skillInstallId, conversationId, 'extract_transactions')
+    dialogState.saveResult = { canceled: true } // user dismissed the save dialog
+    const final = await runTool(skillInstallId, conversationId, 'export_transactions_csv', true)
+    expect(final.state).not.toBe('done')
+    expect(final.error).toMatch(/cancel/i)
   })
 })

@@ -1,9 +1,10 @@
 # Skills Phase S11 — Tool-enabled bank-statement skill (working-paper plan)
 
-> **Status: OPEN working paper** (doc-lifecycle rule). S11 is the first Tier-2 *feature* wave: the
-> real bank-statement tools running through the S10 gate, the run-history + bank data tables, and the
-> app-orchestrated chat/UI that drives them. This file stays open until S11 closes (after S11c), then
-> folds into the §-records at **S12** (per the §18 fold-map: the tool registry/tools + run
+> **Status: CLOSED — ready to fold at S12** (doc-lifecycle rule). S11 was the first Tier-2 *feature*
+> wave: the real bank-statement tools running through the S10 gate, the run-history + bank data tables,
+> and the app-orchestrated chat/UI that drives them. **All three sub-phases (S11a/S11b/S11c) shipped
+> 2026-06-17.** This file now folds into the §-records at **S12** (per the §18 fold-map: the tool
+> registry/tools + run
 > orchestration → `architecture.md` "Skills — design record"; the tool ceiling + content-class data →
 > `security-model.md`; this file is then deleted, the original kept in git history).
 >
@@ -60,12 +61,35 @@ live in [`shared/types.ts`](../apps/desktop/src/shared/types.ts). **No** bank to
     names, S9/SL-1); the confirm modal is exercised by a synthetic write tool (controller + renderer
     tests). **Carry-forward:** the running-model Playwright eyeball of the busy row + confirm modal is
     deferred (needs a seeded doc + run; the S6-style walk forwarding).
-- **S11c — the remaining tools + the flip**: `validate_statement_balances`,
+- **S11c — the remaining tools + the flip** *(SHIPPED 2026-06-17)*: `validate_statement_balances`,
   `categorize_transactions`, `summarize_cashflow`, `export_transactions_csv` (confirm-gated
   `export-file`); the additive categories/rules/corrections/reconciliation tables those need; **then
   flip `app-skills/bank-statement/SKILL.md` to `kind: 'tool'`** and swap its body to the §6.6
   reconcile/validate body; update the S5 detail-drawer note from "tools arrive with Tier-2" to the
   real tool list + the **"✓ Use approved local tools"** permission line.
+  - **As built:** the four tools live in `tools/bank-statement.ts` as PURE functions; the downstream
+    three operate on the **already-extracted** rows, which the seam (`run.ts`) loads from the LATEST
+    statement for the in-scope document and passes as **structured input** (decision recorded below —
+    no new `SkillToolContext` accessor; the §14 ceiling is unchanged). Persistence (reconciled flags /
+    `category_id`, seeding the built-in categories/rules) is atomic in the seam. `summarize_cashflow`
+    is read-only (its figures are content and are NOT surfaced in v1 — a future view / model-explains
+    step shows them; the run reports a count). `export_transactions_csv` is the first FS-write: the
+    pure tool produces the CSV, the IPC layer's `saveTextFile` writes it main-side to a user-chosen
+    path (gated on `export-file` + the confirm), path+content never logged. The bank skill is now
+    `kind:'tool'`, `runnableToolNames` retargeted to `resolveEffectiveTools`, and the generic infra
+    gained ONE content-free field (`SkillRunState.resultKind`) for validate's pass/fail verdict.
+  - **S11 is now CLOSED — ready to fold at S12** (per the §18 fold-map): the tools/registry/run
+    orchestration → `architecture.md` "Skills — design record"; the tool ceiling + content-class data
+    + the CSV FS-write boundary → `security-model.md`; then delete this file.
+
+**Design decisions resolved in S11c (recorded, not silently picked):**
+1. **Downstream tool input = structured input, tools stay pure.** The seam loads the statement's
+   transactions and passes them to the tool; no `readStatementTransactions` accessor was added (the
+   §14 ceiling stays minimal — a tool still has only the frozen `documentIds` + `readDocumentChunks`).
+2. **A run targets the LATEST `bank_statements` row for the in-scope document** (`ORDER BY created_at
+   DESC, id DESC LIMIT 1`); if none exists the tool fails friendly ("Read the statement first").
+3. **The CSV is written main-side to a user-chosen path; path + content are never logged/audited.**
+   The tool produces the content; the seam writes via a save dialog. Only "saved N rows" surfaces.
 
 ### Why the flip is S11c, not S11a (the SL-1 path)
 The S2 parser empties `allowedTools` to `[]` for a `kind: instruction` skill (a frozen contract

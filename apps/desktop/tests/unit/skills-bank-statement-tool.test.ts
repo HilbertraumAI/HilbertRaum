@@ -5,7 +5,18 @@ import {
   parseAmount,
   parseDate,
   detectCurrency,
-  type ExtractTransactionsOutput
+  reconcileBalances,
+  categorizeRow,
+  categorizeRows,
+  summarizeCashflow,
+  transactionsToCsv,
+  validateStatementBalancesTool,
+  categorizeTransactionsTool,
+  summarizeCashflowTool,
+  exportTransactionsCsvTool,
+  UNCATEGORIZED,
+  type ExtractTransactionsOutput,
+  type TransactionInput
 } from '../../src/main/services/skills/tools/bank-statement'
 import { runSkillTool, validateToolOutput } from '../../src/main/services/skills/tool-registry'
 import type { AuditEventType, DocumentChunkRead, SkillToolContext } from '../../src/shared/types'
@@ -140,5 +151,148 @@ describe('extract_transactions through the gate', () => {
     })
     expect(result.ok).toBe(true)
     if (result.ok) expect((result.output as ExtractTransactionsOutput).transactions).toEqual([])
+  })
+})
+
+// docs/skills-s11-plan.md §2 (S11c) — the downstream tools, proven as PURE functions + through the
+// gate with schema-valid output. They take the extracted rows as structured input (no DB/Electron).
+
+const tx = (over: Partial<TransactionInput> = {}): TransactionInput => ({
+  date: '2026-01-02',
+  description: 'Row',
+  amount: -10,
+  currency: 'EUR',
+  ...over
+})
+
+function downstreamCtx(): SkillToolContext {
+  return {
+    documentIds: ['d1'],
+    readDocumentChunks: () => [],
+    signal: new AbortController().signal,
+    audit: () => {}
+  }
+}
+
+describe('validate_statement_balances (S11c)', () => {
+  it('reconcileBalances: ok when each printed balance matches the computed running balance', () => {
+    const rows = [
+      tx({ amount: -45.9, balanceAfter: 1954.1 }),
+      tx({ amount: 2500, balanceAfter: 4454.1 })
+    ]
+    const res = reconcileBalances(rows)
+    expect(res.reconciled).toBe(true)
+    expect(res.rows.map((r) => r.status)).toEqual(['ok', 'ok'])
+  })
+
+  it('reconcileBalances: flags a mismatch and an unknown (no printed balance), never invents', () => {
+    const rows = [
+      tx({ amount: -45.9, balanceAfter: 1954.1 }),
+      tx({ amount: 2500, balanceAfter: 9999.99 }), // wrong running balance
+      tx({ amount: -5, balanceAfter: undefined }) // no balance printed → unknown
+    ]
+    const res = reconcileBalances(rows)
+    expect(res.reconciled).toBe(false)
+    expect(res.rows.map((r) => r.status)).toEqual(['ok', 'mismatch', 'unknown'])
+  })
+
+  it('reconcileBalances: all-unknown ⇒ not reconciled (nothing could be checked)', () => {
+    const res = reconcileBalances([tx(), tx()])
+    expect(res.reconciled).toBe(false)
+    expect(res.rows.every((r) => r.status === 'unknown')).toBe(true)
+  })
+
+  it('runs through the gate with schema-valid output', async () => {
+    const result = await runSkillTool(validateStatementBalancesTool, {
+      skillId: 'app:bank-statement',
+      input: { transactions: [tx({ amount: -45.9, balanceAfter: 1954.1 })] },
+      ctx: downstreamCtx()
+    })
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(validateToolOutput(validateStatementBalancesTool, result.output)).toEqual([])
+  })
+})
+
+describe('categorize_transactions (S11c)', () => {
+  it('categorizeRow applies deterministic rules (EN + DE keywords), sign fallback', () => {
+    expect(categorizeRow(tx({ description: 'Monthly account fee', amount: -3 }))).toBe('Fees')
+    expect(categorizeRow(tx({ description: 'Kontoführungsgebühr', amount: -3 }))).toBe('Fees')
+    expect(categorizeRow(tx({ description: 'Salary March', amount: 2500 }))).toBe('Income')
+    expect(categorizeRow(tx({ description: 'SEPA Überweisung', amount: -100 }))).toBe('Transfer')
+    expect(categorizeRow(tx({ description: 'ATM withdrawal', amount: -50 }))).toBe('Cash')
+    expect(categorizeRow(tx({ description: 'Unknown shop', amount: -12 }))).toBe('Spending')
+    expect(categorizeRow(tx({ description: 'Mystery credit', amount: 7 }))).toBe('Income') // positive ⇒ Income
+    expect(categorizeRow(tx({ description: 'Zero', amount: 0 }))).toBe(UNCATEGORIZED)
+  })
+
+  it('categorizeRows returns one assignment per row, in order', () => {
+    const out = categorizeRows([tx({ amount: 5 }), tx({ description: 'fee', amount: -1 })])
+    expect(out).toEqual([
+      { index: 0, category: 'Income' },
+      { index: 1, category: 'Fees' }
+    ])
+  })
+
+  it('runs through the gate with schema-valid output', async () => {
+    const result = await runSkillTool(categorizeTransactionsTool, {
+      skillId: 'app:bank-statement',
+      input: { transactions: [tx()] },
+      ctx: downstreamCtx()
+    })
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(validateToolOutput(categorizeTransactionsTool, result.output)).toEqual([])
+  })
+})
+
+describe('summarize_cashflow (S11c)', () => {
+  it('summarizeCashflow totals inflows/outflows/net and reports currency only when uniform', () => {
+    const s = summarizeCashflow([tx({ amount: 2500 }), tx({ amount: -45.9 }), tx({ amount: -4.1 })])
+    expect(s).toEqual({ totalIn: 2500, totalOut: 50, net: 2450, count: 3, currency: 'EUR' })
+  })
+
+  it('summarizeCashflow omits currency for a mixed-currency statement (honesty)', () => {
+    const s = summarizeCashflow([tx({ amount: 10, currency: 'EUR' }), tx({ amount: -5, currency: 'USD' })])
+    expect(s.currency).toBeUndefined()
+    expect(s.net).toBe(5)
+  })
+
+  it('runs through the gate with schema-valid output', async () => {
+    const result = await runSkillTool(summarizeCashflowTool, {
+      skillId: 'app:bank-statement',
+      input: { transactions: [tx({ amount: 5 })] },
+      ctx: downstreamCtx()
+    })
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(validateToolOutput(summarizeCashflowTool, result.output)).toEqual([])
+  })
+})
+
+describe('export_transactions_csv (S11c)', () => {
+  it('transactionsToCsv writes a header + escaped rows, fixed-dp amounts, blanks for nulls', () => {
+    const csv = transactionsToCsv([
+      tx({ date: '2026-01-02', description: 'Café, Vienna', amount: -4.5, balanceAfter: 100 }),
+      tx({ date: '2026-01-03', description: 'Salary', amount: 2500, valueDate: '2026-01-03', sourcePage: 2 })
+    ])
+    const lines = csv.trimEnd().split('\r\n')
+    expect(lines[0]).toBe('date,valueDate,description,amount,currency,balanceAfter,sourcePage')
+    expect(lines[1]).toBe('2026-01-02,,"Café, Vienna",-4.50,EUR,100.00,') // comma field quoted; nulls blank
+    expect(lines[2]).toBe('2026-01-03,2026-01-03,Salary,2500.00,EUR,,2')
+  })
+
+  it('is the only confirm-gated tool: the gate refuses it without confirmation', async () => {
+    const refused = await runSkillTool(exportTransactionsCsvTool, {
+      skillId: 'app:bank-statement',
+      input: { transactions: [tx()] },
+      ctx: downstreamCtx()
+    })
+    expect(refused.ok).toBe(false)
+    const ok = await runSkillTool(exportTransactionsCsvTool, {
+      skillId: 'app:bank-statement',
+      input: { transactions: [tx()] },
+      ctx: downstreamCtx(),
+      confirmed: true
+    })
+    expect(ok.ok).toBe(true)
+    if (ok.ok) expect(validateToolOutput(exportTransactionsCsvTool, ok.output)).toEqual([])
   })
 })

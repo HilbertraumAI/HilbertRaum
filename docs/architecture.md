@@ -164,8 +164,24 @@ narrow context, runs the tool through the gate, and on success persists the extr
 **content-class** `bank_statements` + `bank_transactions` tables atomically (a failed write ROLLBACKs — no
 partial rows). Those data tables hold real figures, so they live only in the encrypted workspace DB, are
 never logged/audited (audit stays ids/counts), and are excluded from every export (§9.5) — distinct from
-the non-secret skill packages. The remaining four bank tools are S11c (the bank skill stays
-`kind: instruction` until the full set is wired).
+the non-secret skill packages.
+
+**S11c completes the bank tool set + flips the skill to `kind: 'tool'`.** Four more tools join the
+registry: `validate_statement_balances` (reconciles each row's printed running balance vs the computed
+one → a per-row `reconciled` flag), `categorize_transactions` (deterministic, rule-based → a `category_id`,
+seeding the built-in `bank_categories`/`bank_category_rules`), `summarize_cashflow` (read-only inflow/
+outflow/net totals — read-only, persists nothing), and `export_transactions_csv` (confirm-gated
+`export-file`). These four operate on the **already-extracted** rows, not document chunks: the seam loads
+the **latest statement** for the in-scope document and passes its rows to the tool as **structured input**,
+so the tools stay pure and the `SkillToolContext` ceiling is unchanged (no new accessor). Persistence
+(reconciled flags / categories) is atomic in the seam (no-partial-persist). The additive
+categorization/reconciliation/correction tables (`bank_categories`, `bank_category_rules`,
+`bank_corrections` + `bank_transactions.category_id/reconciled/confidence`) are all content-class — never
+logged/audited, never exported. **The CSV export is the first FS-write from a skill tool:** the pure tool
+only *produces* the CSV string; the seam writes it main-side to a **user-chosen path** via a save dialog,
+gated on the `export-file` confirm — the path + content never touch any log/audit (only "saved N rows", a
+count, is surfaced). The bank `SKILL.md` is now `kind: 'tool'`, which makes its declared `allowedTools`
+effective (the SL-1 parser path) and swaps its body to the reconcile/validate instruction set (§6.6).
 
 **The app-orchestrated run trigger + UI (S11b).** A run is started from a **user action** in the chat
 surface, never the model. A generic controller `services/skills/run-controller.ts` owns the single
@@ -177,10 +193,13 @@ is resolved **main-side** from the conversation (§22-C4), and the run returns *
 the extracted rows). The renderer's calm `SkillRunBar` (a `lib/skillruns.ts` polling store, the doc-task
 precedent — no new event channel) shows the offer ("Extract transactions"), the busy row ("Running:
 `<tool>` on `<N>` documents… Cancel"), and the result ("Extracted N transactions"). Write/export tools
-(S11c) are gated by a `ConfirmDialog` before the run starts — read-only `extract_transactions` runs
-without a prompt but is still surfaced. The trigger keys off the skill's `reservesTools` signal (the
-S5-drawer mechanism) because the instruction-kind parser discards declared tool names (S9/SL-1); at the
-S11c flip it switches to the effective `allowedTools ∩ registry ∩ grant` set without renderer change.
+are gated by a `ConfirmDialog` before the run starts — read-only tools run
+without a prompt but are still surfaced. **As of S11c** the trigger keys off the effective
+`allowedTools ∩ registry ∩ grant` set (`resolveEffectiveTools`) now that the bank skill is `kind: 'tool'`,
+so all five tools are offered (export confirm-gated). The renderer maps each tool to its done copy
+(extract/categorize/summarize/export) and renders `validate_statement_balances` from a content-free
+`resultKind` discriminator ('reconciled' | 'unreconciled' | 'unchecked'); the generic controller/IPC stay
+bank-free (the discriminator is an opaque string, the bank meaning lives only in the renderer's copy map).
 
 ## Models & runtime (Phase 2)
 - **Manifests** are local YAML under `model-manifests/` (committed; weights are not). The schema +

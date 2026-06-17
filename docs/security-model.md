@@ -560,9 +560,30 @@ record is the existing gate audit (`skill_run_*`, ids/counts), proven by the S11
 sentinel test. The generic `SkillRunController` never touches content (the bank seam runs behind an
 opaque runner — §13). **Read-only tools (`extract_transactions`) run without a per-call prompt but are
 surfaced (the busy row); write/export tools are confirm-gated** (`toolRunNeedsConfirmation`, registry-
-driven) before any run starts — the gate also enforces it defensively. The remaining four bank tools
-(incl. the confirm-gated `export_transactions_csv`) and the SKILL.md flip are S11c; the ceiling above
-does not change for them.
+driven) before any run starts — the gate also enforces it defensively.
+
+**S11c — the full bank tool set, the FS-write boundary, and the `kind:'tool'` flip.** Four more tools
+ship behind the unchanged ceiling: `validate_statement_balances`, `categorize_transactions`,
+`summarize_cashflow` (all read-only, no per-call prompt) and `export_transactions_csv` (confirm-gated).
+They operate on the **already-extracted rows**, which the seam loads (the latest statement for the
+in-scope document) and passes as **structured input** — so the `SkillToolContext` gains **no new accessor**
+and the §14 ceiling is exactly as before (no raw `Db`/SQL/FS/net handle in a tool). The S11c data tables
+(`bank_categories`, `bank_category_rules`, `bank_corrections`, + `bank_transactions.category_id/reconciled/
+confidence`) are **content-class**: encrypted DB only, never logged/audited, never exported (§9.5).
+- **The CSV export is the first real FS-write from a skill tool — kept main-side and off every log.** The
+  pure tool only *produces* the CSV string (validated against its `outputSchema`); the **seam** does the
+  write, via a main-side `dialog.showSaveDialog` + `writeFile` to a **user-chosen path** — the deliberate
+  user-export-of-content precedent (`exportConversation`/`exportSkill`). There is **no FS handle in the
+  `SkillToolContext`**; the save capability is injected into the dispatch as an opaque `saveTextFile`. It is
+  gated twice: the `export-file` permission ⇒ the renderer's confirm modal ⇒ `confirmed: true` ⇒ the gate
+  runs the tool. **The chosen path and the CSV content are NEVER logged or audited** — only "saved N rows"
+  (a count) is surfaced; a cancelled save persists nothing. The sentinel-grep test pushes a secret through
+  a successful export and proves it lands in the user-chosen CSV (correct) + the content-class tables but
+  **never** the audit/log/`skill_runs` row/IPC `SkillRunState` payload.
+- **The `kind:'tool'` flip makes `allowedTools` effective.** The bank `SKILL.md` is now `kind:'tool'`, so
+  the S2 parser keeps its declared tool list (an instruction skill's stays `[]` — SL-1); the run dispatch
+  retargets to `resolveEffectiveTools(allowedTools ∩ registry ∩ grant)`. The skill still **cannot register
+  or self-grant** a tool — the registry is app-owned and the effective set only ever shrinks.
 
 ## Unverified-binary env overrides are dev-only (audit M-5, 2026-06-13)
 

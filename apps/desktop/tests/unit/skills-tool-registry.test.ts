@@ -103,19 +103,27 @@ describe('validateJsonSchema (subset)', () => {
 })
 
 describe('registry + resolveEffectiveTools', () => {
-  it('ships the reference tool + extract_transactions (S11a); other bank tools are S11c', () => {
-    expect(listRegisteredToolNames()).toEqual(['count_selected_documents', 'extract_transactions'])
-    expect(getRegisteredTool('count_selected_documents')).toBeDefined()
-    expect(getRegisteredTool('extract_transactions')).toBeDefined()
-    // The four S11c bank tools are not wired yet.
-    expect(getRegisteredTool('export_transactions_csv')).toBeUndefined()
+  it('ships the reference tool + all five bank tools (S11c)', () => {
+    expect(listRegisteredToolNames()).toEqual([
+      'count_selected_documents',
+      'extract_transactions',
+      'validate_statement_balances',
+      'categorize_transactions',
+      'summarize_cashflow',
+      'export_transactions_csv'
+    ])
+    expect(getRegisteredTool('export_transactions_csv')).toBeDefined()
     expect(getRegisteredTool('__proto__')).toBeUndefined() // own-property lookup only
   })
 
   it('intersects declared ∩ registry ∩ userGrant; drops unregistered + ungranted; dedups; keeps order', () => {
     const declared = ['count_selected_documents', 'export_transactions_csv', 'count_selected_documents']
     const grant = ['count_selected_documents', 'export_transactions_csv']
-    expect(resolveEffectiveTools(declared, grant)).toEqual(['count_selected_documents'])
+    // Both are registered + granted now → both survive, dedup, declared order preserved.
+    expect(resolveEffectiveTools(declared, grant)).toEqual([
+      'count_selected_documents',
+      'export_transactions_csv'
+    ])
     // A registered tool the user did not grant is dropped.
     expect(resolveEffectiveTools(['count_selected_documents'], [])).toEqual([])
     // A declared-but-unregistered tool is dropped even if "granted" (a skill can't register a tool).

@@ -156,11 +156,25 @@ export const en = {
   'chat.skill.usedTitle': 'This answer was shaped by the skill “{title}”.',
   // Tier-2 tool run — the calm transcript affordance + busy row + confirm modal (skills plan §12.2/§15, S11b)
   'chat.skill.tool.extractTransactions': 'Extract transactions',
+  'chat.skill.tool.validateBalances': 'Check balances',
+  'chat.skill.tool.categorize': 'Categorize',
+  'chat.skill.tool.summarize': 'Summarize cashflow',
+  'chat.skill.tool.exportCsv': 'Export to CSV',
   'chat.skill.run.running.one': 'Running: {tool} on {count} document…',
   'chat.skill.run.running.other': 'Running: {tool} on {count} documents…',
   'chat.skill.run.cancel': 'Cancel',
   'chat.skill.run.done.one': 'Extracted {count} transaction.',
   'chat.skill.run.done.other': 'Extracted {count} transactions.',
+  'chat.skill.run.done.categorize.one': 'Categorized {count} transaction.',
+  'chat.skill.run.done.categorize.other': 'Categorized {count} transactions.',
+  'chat.skill.run.done.summarize.one': 'Summarized {count} transaction.',
+  'chat.skill.run.done.summarize.other': 'Summarized {count} transactions.',
+  'chat.skill.run.done.export.one': 'Saved {count} row.',
+  'chat.skill.run.done.export.other': 'Saved {count} rows.',
+  'chat.skill.run.done.reconciled': 'Balances reconcile.',
+  'chat.skill.run.done.unreconciled.one': "{count} row doesn't reconcile — check it before relying on it.",
+  'chat.skill.run.done.unreconciled.other': "{count} rows don't reconcile — check them before relying on them.",
+  'chat.skill.run.done.unchecked': 'No running balance was printed to check against.',
   'chat.skill.run.failedGeneric': "That didn't work. Nothing was changed.",
   'chat.skill.run.cancelled': 'Stopped. Nothing was saved.',
   'chat.skill.run.dismiss': 'Dismiss',
@@ -649,6 +663,9 @@ export const en = {
   'skills.kind.tool': 'Uses tools',
   // §13/§22-D1 — a tool-reserved skill adds guidance only in v1.
   'skills.tool.note': 'For now this adds guidance only. The tools it describes arrive in a later version.',
+  // S11c — a kind:'tool' skill names its real, app-orchestrated tools; nothing runs on its own.
+  'skills.tool.note.active':
+    'When you ask, this skill can run approved local tools on a statement you choose: extract transactions, check balances, categorize, summarize cashflow, and export to CSV. Tools run only when you start them, and exporting a file always asks first.',
   // The permission block (skills plan §15 copy). Derived from the already-clamped
   // permissions — the renderer localises the result, it does not re-decide it.
   'skills.perm.heading': 'What this skill can do',
@@ -1141,6 +1158,8 @@ export const en = {
   'main.dialog.importSkillFolder': 'Import a skill folder',
   'main.dialog.exportSkill': 'Export skill',
   'main.dialog.filterSkill': 'Skill package',
+  'main.dialog.exportCsv': 'Export transactions',
+  'main.dialog.filterCsv': 'CSV file',
   'main.collections.builtinUndeletable': 'The built-in Library and Temporary cannot be deleted.',
   'main.skills.locked': 'Workspace is locked. Unlock it to manage skills.',
   // Tier-2 tool runs (skills plan §12.2, S11b) — friendly, content-free.

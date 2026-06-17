@@ -53,12 +53,16 @@ describe('S9 — bundled bank-statement skill: discovery + reconcile', () => {
     expect(record!.enabled).toBe(true)
     expect(record!.source).toBe('app')
     expect(record!.trustedLevel).toBe('app')
-    // DS17: the v1 stub is instruction-only (NOT a kind:'tool' skill).
-    expect(record!.kind).toBe('instruction')
-    // It RESERVES its Tier-2 tools (declared intent) → the detail-view note. The effective
-    // allowedTools stays [] for an instruction skill (it cannot USE tools in v1), but the
-    // reservesTools flag survives reconcile via the cached manifest.
-    expect(record!.manifest.allowedTools).toEqual([])
+    // S11c: the skill is FLIPPED to kind:'tool', which makes its declared allowedTools effective
+    // (the SL-1 parser keeps the list only for a tool skill — an instruction skill's stays []).
+    expect(record!.kind).toBe('tool')
+    expect(record!.manifest.allowedTools).toEqual([
+      'extract_transactions',
+      'validate_statement_balances',
+      'categorize_transactions',
+      'summarize_cashflow',
+      'export_transactions_csv'
+    ])
     expect(record!.manifest.reservesTools).toBe(true)
     expect(recordToInfo(record!, false).reservesTools).toBe(true)
     // v1 permission ceiling: network always denied; documents at most selected_only.
@@ -97,26 +101,26 @@ describe('S9 — bundled bank-statement skill: reaches the prompt (S6/S7 fence p
   })
 })
 
-describe('S9 — stub honesty (§22-D1): the committed body promises no extraction/validation', () => {
+describe('S11c — the committed body is the reconcile body and stays §22-D1 honest', () => {
   // The body after the frontmatter (what the fence injects).
   const body = BANK_SKILL_MD.split(/\n---\n/).slice(1).join('\n---\n')
 
-  it('declares itself guidance-only and declines to derive unstated figures', () => {
-    expect(body).toMatch(/guidance only/i)
-    expect(body).toMatch(/does not (extract|total)/i)
-    expect(body).toMatch(/quote/i)
+  it('carries the Tier-2 reconcile rules (the §6.6 body returns with the tools)', () => {
+    expect(body).toMatch(/reconcile/i)
+    expect(body).toMatch(/extracted transaction table/i)
+    expect(body).toMatch(/uncertain or unreconciled rows/i)
   })
 
-  it('does NOT carry the Tier-2 reconcile body (no compute/reconcile promise)', () => {
-    // The §6.6 reconcile body returns only when the Tier-2 tools exist (S11).
-    expect(body).not.toMatch(/\breconcile\b/i)
-    expect(body).not.toMatch(/always use the transaction table/i)
-    expect(body).not.toMatch(/\bcalculate\b/i)
+  it('stays honest: app-orchestrated only + never invents a figure (§22-D1)', () => {
+    // The tools run only on a user action (DS4) — the body must not imply the model acts alone.
+    expect(body).toMatch(/only when the user starts them/i)
+    expect(body).toMatch(/do not invent a figure/i)
+    expect(body).toMatch(/quote the statement's own printed figures/i)
   })
 
-  it('declares kind: instruction in the committed frontmatter (DS17)', () => {
+  it('declares kind: tool in the committed frontmatter (the S11c flip)', () => {
     const frontmatter = BANK_SKILL_MD.split(/\n---\n/)[0]
-    expect(frontmatter).toMatch(/^kind:\s*instruction\b/m)
+    expect(frontmatter).toMatch(/^kind:\s*tool\b/m)
   })
 })
 
