@@ -194,7 +194,17 @@ export interface LlamaServerOptions {
 }
 
 const DEFAULT_HEALTH_TIMEOUT_MS = 180_000
+/**
+ * Steady-state CAP for the readiness poll. RT-5: `waitForHealthy` backs off from
+ * `INITIAL_HEALTH_INTERVAL_MS` up to this value rather than polling at a fixed 250 ms —
+ * a sidecar that becomes ready quickly (a small model / warm page cache) is detected in
+ * tens of ms instead of paying up to a full interval of dead time on every start / model
+ * switch, while a slow multi-GB load still settles to this gentle cap instead of hammering
+ * `/health`. The overall timeout budget (`healthTimeoutMs`) is unchanged.
+ */
 const DEFAULT_HEALTH_INTERVAL_MS = 250
+/** First readiness-poll delay; the interval doubles each miss up to `healthIntervalMs`. */
+const INITIAL_HEALTH_INTERVAL_MS = 50
 const DEFAULT_KILL_GRACE_MS = 2_000
 /** Per-probe timeout so a hung (accepts-but-never-responds) server can't stall the poll. */
 const HEALTH_PROBE_TIMEOUT_MS = 3_000
@@ -354,6 +364,10 @@ export class LlamaServer {
 
   private async waitForHealthy(): Promise<void> {
     const deadline = Date.now() + this.healthTimeoutMs
+    // RT-5: start small and back off (×2) up to the configured cap, so a fast-ready
+    // sidecar is picked up promptly instead of waiting a full fixed interval. Tests that
+    // pass a tiny `healthIntervalMs` (e.g. 1) cap the initial too, keeping them fast.
+    let interval = Math.min(INITIAL_HEALTH_INTERVAL_MS, this.healthIntervalMs)
     for (;;) {
       if (this.spawnError) {
         const message = this.spawnError.message
@@ -375,7 +389,8 @@ export class LlamaServer {
           `llama-server did not become healthy within ${this.healthTimeoutMs}ms${this.stderrSuffix()}`
         )
       }
-      await delay(this.healthIntervalMs)
+      await delay(interval)
+      interval = Math.min(interval * 2, this.healthIntervalMs)
     }
   }
 
