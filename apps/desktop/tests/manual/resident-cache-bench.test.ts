@@ -1,0 +1,123 @@
+import { describe, it } from 'vitest'
+import { mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { openDatabase, type Db } from '../../src/main/services/db'
+import {
+  VectorIndex,
+  encodeVector,
+  decodeVector,
+  dotProduct,
+  invalidateResidentVectors
+} from '../../src/main/services/embeddings'
+
+// RAG-1 / RAG-6 (Wave P4) before/after micro-benchmark — the synthetic-corpus measurement that
+// confirms the resident decoded-vector cache is the win, and whether the residual synchronous
+// scan still warrants the deferred off-main-thread move (P4b). Mock-only (no sidecar); real
+// E5-runtime numbers via the PAID smoke drive are flagged PENDING in the design record.
+//
+// Manual: gated behind RUN_RESIDENT_BENCH=1 so it never runs in the normal suite.
+//   RUN_RESIDENT_BENCH=1 npx vitest run tests/manual/resident-cache-bench.test.ts
+const RUN = process.env.RUN_RESIDENT_BENCH === '1'
+const DIMS = 384
+const N = Number(process.env.RESIDENT_BENCH_N ?? 100_000)
+const QUERIES = 20
+
+function randUnit(): Float32Array {
+  const v = new Float32Array(DIMS)
+  let norm = 0
+  for (let i = 0; i < DIMS; i++) {
+    v[i] = Math.random() * 2 - 1
+    norm += v[i] * v[i]
+  }
+  const inv = 1 / Math.sqrt(norm)
+  for (let i = 0; i < DIMS; i++) v[i] *= inv
+  return v
+}
+
+function seedCorpus(db: Db, n: number): void {
+  const now = new Date().toISOString()
+  db.prepare(
+    `INSERT INTO documents (id, title, status, created_at, updated_at) VALUES ('d', 'd', 'indexed', ?, ?)`
+  ).run(now, now)
+  const insChunk = db.prepare(
+    `INSERT INTO chunks (id, document_id, chunk_index, text, source_label, token_count, created_at)
+     VALUES (?, 'd', ?, 'x', 'd', 1, ?)`
+  )
+  const insEmb = db.prepare(
+    `INSERT INTO embeddings (chunk_id, embedding_model_id, vector_blob, dimensions, created_at)
+     VALUES (?, 'bench-model', ?, ?, ?)`
+  )
+  db.exec('BEGIN')
+  for (let i = 0; i < n; i++) {
+    const id = `c${i}`
+    insChunk.run(id, i, now)
+    insEmb.run(id, encodeVector(randUnit()), DIMS, now)
+  }
+  db.exec('COMMIT')
+}
+
+/** The OLD path: SELECT every blob, decode per row, dot-product, sort, slice. */
+function oldScan(db: Db, query: Float32Array, topK: number): { chunkId: string; score: number }[] {
+  const rows = db
+    .prepare('SELECT chunk_id, vector_blob, dimensions FROM embeddings WHERE embedding_model_id = ?')
+    .all('bench-model') as unknown as Array<{ chunk_id: string; vector_blob: Uint8Array; dimensions: number }>
+  const hits: { chunkId: string; score: number }[] = []
+  for (const row of rows) {
+    if (row.dimensions !== query.length) continue
+    if (row.vector_blob.length < row.dimensions * 4) continue
+    const vec = decodeVector(row.vector_blob, row.dimensions)
+    hits.push({ chunkId: row.chunk_id, score: dotProduct(query, vec) })
+  }
+  hits.sort((a, b) => b.score - a.score)
+  return hits.slice(0, topK)
+}
+
+function median(xs: number[]): number {
+  const s = [...xs].sort((a, b) => a - b)
+  return s[Math.floor(s.length / 2)]
+}
+
+describe.skipIf(!RUN)('resident cache benchmark', () => {
+  it(`old decode-every-query vs cached, N=${N}`, () => {
+    const db = openDatabase(join(mkdtempSync(join(tmpdir(), 'hilbertraum-bench-')), 'b.sqlite'))
+    const t0 = performance.now()
+    seedCorpus(db, N)
+    // eslint-disable-next-line no-console
+    console.log(`\nseed ${N} vectors: ${(performance.now() - t0).toFixed(0)} ms`)
+
+    const queries = Array.from({ length: QUERIES }, () => randUnit())
+
+    // OLD path: decode every blob every query.
+    const oldTimes: number[] = []
+    for (const q of queries) {
+      const t = performance.now()
+      oldScan(db, q, 12)
+      oldTimes.push(performance.now() - t)
+    }
+
+    // NEW path: resident cache. First query pays the one-time build; the rest are warm.
+    invalidateResidentVectors(db)
+    const index = new VectorIndex(db, { id: 'bench-model', dimensions: DIMS } as never, {
+      embeddingModelId: 'bench-model'
+    })
+    const tb = performance.now()
+    index.search(queries[0], 12) // cold: builds the resident cache
+    const coldMs = performance.now() - tb
+    const warmTimes: number[] = []
+    for (const q of queries.slice(1)) {
+      const t = performance.now()
+      index.search(q, 12)
+      warmTimes.push(performance.now() - t)
+    }
+
+    /* eslint-disable no-console */
+    console.log(`OLD  decode-every-query : median ${median(oldTimes).toFixed(2)} ms/query`)
+    console.log(`NEW  cold (build+scan)  : ${coldMs.toFixed(2)} ms (one-time per mutation)`)
+    console.log(`NEW  warm (cached scan) : median ${median(warmTimes).toFixed(2)} ms/query`)
+    console.log(
+      `speedup (warm vs old)   : ${(median(oldTimes) / median(warmTimes)).toFixed(1)}×\n`
+    )
+    /* eslint-enable no-console */
+  }, 120_000)
+})

@@ -250,11 +250,16 @@ class VectorIndex {
 }
 ```
 
-MVP = **linear scan**: decode every `embeddings` row, compute cosine similarity to the query
-vector, sort descending, take `topK`. Rows whose `dimensions` differ from the query (e.g.
-mid-migration) are skipped, not compared. The query is embedded with the **same** embedder, so
-a query equal to a chunk's text scores ≈ 1.0 and ranks first. **Upgrade path:** an ANN index
-(sqlite-vec / HNSW) behind this same `search` signature when corpora grow.
+MVP = **linear scan**: score every stored chunk vector by dot product against the query vector
+(stored + query vectors are L2-normalized, so dot == cosine — RAG-1), sort descending, take `topK`.
+Rows whose `dimensions` differ from the query (e.g. mid-migration) are skipped, not compared. The
+query is embedded with the **same** embedder, so a query equal to a chunk's text scores ≈ 1.0 and
+ranks first. The decoded vectors are held **process-resident** (`embeddings/resident-cache.ts`, perf
+audit Wave P4) so a query reads no `vector_blob` and re-decodes nothing — the cache invalidates on a
+cheap whole-table `(count, maxRowid)` signature + explicit hooks at the `embeddings` write sites, and
+is purged on workspace lock (vectors derive from chunk text). **Upgrade path** (still behind this same
+`search` signature, D15): an off-main-thread worker scan and/or an ANN index (sqlite-vec / HNSW) when a
+corpus outgrows the linear scan.
 
 > Phase 6 consumes `VectorIndex.search` to build the `[S1]…` grounded prompt + citations
 > (`askDocuments`). Phase 5 ships retrieval primitives only — no prompt/citation layer yet.
@@ -666,7 +671,7 @@ spread the distribution and make a floor meaningful; revisit only with a prefix 
 | D12 | `minSimilarity` pre- vs post-rerank | **PRE-rerank, cosine-only** (status quo site + meaning): applied to vector hits before fusion. Rerank `relevance_score` is an unbounded logit — never compared to the floor. Keyword hits carry no cosine and bypass the floor by design. R3 measured ⇒ default stays 0 |
 | D13 | FTS index shape + sync + fusion | Self-contained `fts5(text, chunk_id UNINDEXED)` (NOT external-content on the implicit rowid — VACUUM foot-gun); 3 sync triggers; guarded additive migration + backfill (scope_json precedent). Fusion = **RRF, k = 60**, sanitized phrase-OR MATCH. **Visibility rule: keyword hits require a vector under the active embedder** — `REINDEX_NEEDED_ANSWER` semantics intact |
 | D14 | Settings surface | **Availability-driven (embedder precedent): no new `AppSettings` keys, no toggle, no UI.** Hybrid always-on (pure SQLite); reranker active iff binary + weights present; the Phase-18 downloader covers the GGUF |
-| D15 | ANN index | **NOT built** (evidence rule): sqlite-vec/HNSW are native deps against the project theme; no measured corpus outgrows the linear scan. `VectorIndex.search` stays the upgrade path |
+| D15 | ANN index | **PARTIALLY RESOLVED (perf audit Wave P4, 2026-06-18).** The *re-decode-every-query* half is now fixed: `VectorIndex.search` reads from a **process-resident decoded-vector cache** (`embeddings/resident-cache.ts`) — vectors decoded once, no per-query `vector_blob` re-read, behind the unchanged `search` signature; ranking byte-identical (see architecture.md "Performance — design record … Wave P4"). The scan is **still synchronous + linear**: measured ≤~50 ms @ ≤10k chunks (fine), ~580 ms @ the 100k upper bound. An **ANN index stays NOT built** (evidence rule): sqlite-vec/HNSW are native deps against the project theme; no realistic corpus yet outgrows the cached linear scan. The off-main-thread worker scan + ANN remain the upgrade path (P4b/P4c), triggered when a representative corpus measures the cached main-thread scan over ~100 ms routinely |
 
 ### 12.3 Resource budget (8 GB machines) + measured validation
 

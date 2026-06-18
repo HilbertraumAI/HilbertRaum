@@ -26,7 +26,7 @@ import type {
 } from '../../../shared/types'
 import { sha256File } from '../models'
 import { docLifecycle, fileFromPendingDestination } from '../collections'
-import { type Embedder, encodeVector } from '../embeddings'
+import { type Embedder, encodeVector, invalidateResidentVectors } from '../embeddings'
 import { ENCRYPTED_DOC_SUFFIX, shredFile, type DocumentCipher } from '../workspace-vault'
 import type { Transcriber } from '../transcriber'
 import type { OcrEngine, OcrPage } from '../ocr'
@@ -724,6 +724,11 @@ export async function prepareDocument(
       }
       throw err
     }
+    // RAG-6 (Wave P4) belt: the chunk-phase transaction above DELETEd this doc's stale
+    // embeddings (re-index path), so drop the resident decoded-vector cache. The signature
+    // check would also catch it; this is the explicit hook that closes the delete-then-equal-
+    // reinsert blind spot and keeps the cache robust to any write through this path.
+    invalidateResidentVectors(db)
 
     // ING-3 pipeline boundary: chunks are now persisted and the document is in `embedding`.
     // The embed phase (finalizeDocument) reads the chunks back from the DB, so this phase is
@@ -868,6 +873,10 @@ async function embedChunks(
     }
     throw err
   }
+  // RAG-6 (Wave P4) belt: fresh vectors were just INSERTed — drop the resident decoded-vector
+  // cache so the next search rebuilds it including them (the signature check also catches the
+  // raised row count / maxRowid; this is the explicit hook).
+  invalidateResidentVectors(db)
 }
 
 /**
@@ -1300,6 +1309,9 @@ export function deleteDocument(db: Db, id: string): void {
   // Membership (document_collections) + chat-attachment (conversation_documents) rows
   // cascade away via ON DELETE CASCADE (plan C4) — no manual cleanup needed here.
   db.prepare('DELETE FROM documents WHERE id = ?').run(id)
+  // RAG-6 (Wave P4) belt: this doc's vectors were just DELETEd — drop the resident
+  // decoded-vector cache (closes the delete-then-equal-reinsert signature blind spot).
+  invalidateResidentVectors(db)
 }
 
 /**

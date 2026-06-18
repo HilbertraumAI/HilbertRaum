@@ -1,5 +1,6 @@
 import type { Db } from '../db'
 import { buildScopeFilter } from '../retrieval-scope'
+import { getResidentVectors } from './resident-cache'
 
 // Embeddings + vector search (spec §6, §7.8, §9.2). The `Embedder` interface keeps
 // the mock embedder and the real on-device embedder interchangeable behind one
@@ -51,20 +52,9 @@ export interface VectorSearchHit {
   score: number
 }
 
-/** Encode a vector to the raw Float32 bytes stored in `embeddings.vector_blob`. */
-export function encodeVector(vec: Float32Array): Buffer {
-  return Buffer.from(vec.buffer, vec.byteOffset, vec.byteLength)
-}
-
-/**
- * Decode a stored BLOB back into a `Float32Array` of `dimensions` floats.
- * SQLite blobs can land on an unaligned byte offset, so we copy into a fresh,
- * 4-byte-aligned buffer before viewing it as Float32 (avoids a RangeError).
- */
-export function decodeVector(blob: Uint8Array, dimensions: number): Float32Array {
-  const bytes = Uint8Array.prototype.slice.call(blob, 0, dimensions * 4) // copy → offset 0, aligned
-  return new Float32Array(bytes.buffer, bytes.byteOffset, dimensions)
-}
+// The vector ↔ BLOB codec lives in `./codec` (kept out of this barrel so `resident-cache.ts`
+// can decode without an import cycle) and is re-exported here for existing barrel callers.
+export { encodeVector, decodeVector } from './codec'
 
 /**
  * Cosine similarity of two equal-length vectors. Returns 0 if either is all-zero.
@@ -115,18 +105,20 @@ export function dotProduct(a: Float32Array, b: Float32Array): number {
   return dot
 }
 
-interface EmbeddingRow {
+/** A scope-filtered candidate row — only the id; the vector comes from the resident cache. */
+interface ChunkIdRow {
   chunk_id: string
-  vector_blob: Uint8Array
-  dimensions: number
 }
 
 /**
  * Cosine vector search over the `embeddings` table.
  *
  * MVP = linear scan over all stored chunk vectors (the 1000-chunk-per-file cap
- * bounds the work). Upgrade path: an ANN index (sqlite-vec / HNSW) behind this
- * same `search` signature when corpora grow.
+ * bounds the work). The vectors are kept **decoded and process-resident** (RAG-6, Wave P4;
+ * see `resident-cache.ts`) so a query reads no BLOBs and re-decodes nothing — the scan is a
+ * flat dot product over the cached `Float32Array`s. Upgrade path (still deferred behind this
+ * same `search` signature, D15): an off-main-thread worker scan (P4b) and/or an ANN index
+ * (P4c — sqlite-vec/HNSW) when corpora outgrow the linear scan.
  */
 export interface VectorIndexOptions {
   /**
@@ -202,18 +194,26 @@ export class VectorIndex {
       where.push(`chunk_id IN (SELECT c.id FROM chunks c WHERE ${scopeFilter.sql})`)
       params.push(...scopeFilter.params)
     }
+    // RAG-6 (Wave P4): project ONLY `chunk_id` — the scope-filtered candidate set — and pull
+    // each vector from the process-resident decoded-vector cache (`resident-cache.ts`). This
+    // keeps the WHERE composition (model id + scope/archived) byte-identical to the old scan,
+    // so every scope filter behaves exactly as before, while reading NO `vector_blob` from
+    // SQLite (the ~150 MB-per-query read is gone) and re-decoding nothing (the cache holds the
+    // already-decoded `Float32Array`s — RAG-6's per-query allocation churn is gone too).
     const sql =
-      'SELECT chunk_id, vector_blob, dimensions FROM embeddings' +
+      'SELECT chunk_id FROM embeddings' +
       (where.length > 0 ? ` WHERE ${where.join(' AND ')}` : '')
-    const rows = this.db.prepare(sql).all(...params) as unknown as EmbeddingRow[]
+    const rows = this.db.prepare(sql).all(...params) as unknown as ChunkIdRow[]
+    const resident = getResidentVectors(this.db)
     const hits: VectorSearchHit[] = []
     for (const row of rows) {
-      // Skip vectors from a different model/dimensionality (e.g. mid-migration).
-      if (row.dimensions !== queryVector.length) continue
-      // Skip a physically truncated blob rather than letting decodeVector throw a
-      // RangeError and abort the whole query — one corrupt row must not break all search.
-      if (row.vector_blob.length < row.dimensions * 4) continue
-      const vec = decodeVector(row.vector_blob, row.dimensions)
+      const vec = resident.get(row.chunk_id)
+      // Absent ⇒ the row was a physically truncated blob skipped at cache-build time (the old
+      // per-row truncated-blob guard, now enforced once). Skip it rather than crash the query.
+      if (vec === undefined) continue
+      // Skip vectors of a different dimensionality (e.g. mid-migration) — the old dimension
+      // guard, unchanged: mock and E5 vectors are both 384-dim but a stray model could differ.
+      if (vec.length !== queryVector.length) continue
       // RAG-1 fast path: stored vectors and the query vector are both L2-normalized
       // (`e5.ts` `l2normalize`, mock embedder too), so cosine == raw dot product — skip
       // the two norm accumulators per row for ~2× fewer FLOPs. Ranking is identical.
@@ -230,6 +230,11 @@ export class VectorIndex {
   }
 }
 
+export {
+  getResidentVectors,
+  invalidateResidentVectors,
+  purgeResidentVectors
+} from './resident-cache'
 export { MockEmbedder, createMockEmbedder, MOCK_EMBEDDING_DIMENSIONS, MOCK_EMBEDDING_MODEL_ID } from './mock'
 export { E5Embedder, createE5Embedder } from './e5'
 export type { E5EmbedderOptions } from './e5'

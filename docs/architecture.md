@@ -258,9 +258,67 @@ contract. Condensed from `docs/performance-audit-2026-06-18.md` §4.2/§4.3/§4.
   by a test). **The off-main-thread / ANN scan stays Wave P4** (the documented D15 deferral) — this is
   only the constant-factor slice.
 
-Deferred to Wave P4 (the D15 ANN trigger): moving the linear vector scan off the main thread / a
-sqlite-vec or HNSW index with a resident contiguous `Float32Array` (RAG-1/RAG-6 beyond the dot
+Implemented in Wave P4 (below): the per-query BLOB re-read + re-decode (RAG-1/RAG-6 beyond the dot
 product). Still deferred from P2: Composer/`input` move, `DocRow` extraction, FE-5 windowing.
+
+## Performance — design record (perf audit 2026-06-18, Wave P4)
+The real fix for the synchronous main-thread vector scan (RAG-1/RAG-6) — the documented MVP deferral
+D15. Condensed from `docs/performance-audit-2026-06-18.md` §4.2 after Wave P4 shipped. Stays behind the
+**unchanged `VectorIndex.search(queryVector, topK)` signature**, so `rag/index.ts retrieve()` and every
+scope filter are untouched. The sibling scans in `analysis/node-vectors.ts` (the summary-tree
+`node_vectors` table) and `doctasks/manager.ts` (compare's one-shot doc-B load) are NOT `VectorIndex`
+and are out of scope.
+
+**RAG-1 / RAG-6 — process-resident decoded-vector cache (`services/embeddings/resident-cache.ts`).**
+The scan SELECTed all matching `embeddings` rows **including `vector_blob`** (~150 MB at the heavy
+100-doc × 1000-chunk bound) and `decodeVector` + `dotProduct`'d every row in one uninterruptible
+main-process loop — **re-reading and re-decoding the same BLOBs on every question**. Now every stored
+vector is decoded **once** into a process-resident `Map<chunkId, Float32Array>` (one cache per open
+`Db`, `WeakMap`-keyed). A query keeps the **exact same scope-filtered WHERE** but projects only
+`chunk_id` (no blob read), then looks each vector up in the resident map — zero per-row allocation,
+zero re-decode. **Ranking is byte-identical** (same `dotProduct`, same sort); the dimension-mismatch
+skip and the truncated-blob skip are preserved (a short blob is excluded at build time, so the chunk is
+simply absent from the map). The vector ↔ BLOB codec moved to `embeddings/codec.ts` so the cache can
+decode without an `index ↔ resident-cache` import cycle (re-exported from the barrel).
+
+**Invalidation contract (the highest-risk surface — a stale buffer silently corrupts ranking).**
+Belt-and-suspenders:
+- **Staleness (primary):** a cheap whole-table signature `(COUNT(*), MAX(rowid))` is recomputed at the
+  top of every `search`; any change rebuilds the map. `MAX(rowid)` is O(1) (rightmost btree leaf) and
+  `COUNT(*)` is a fast index count — negligible vs the scan they gate. Catches inserts (import),
+  deletes (doc delete), and reindex (delete+insert raises `maxRowid`) — i.e. **every `embeddings`
+  mutation, including direct SQL writes that bypass the hooks** (so test seeding stays correct).
+- **Explicit (belt):** `invalidateResidentVectors(db)` is also called at the three `embeddings` write
+  sites — `ingestion/index.ts` finalize-insert + reindex chunk-phase delete + `deleteDocument`. This
+  closes the one signature blind spot (delete the single max-rowid row, then insert exactly one row
+  reusing that rowid → `(count, maxRowid)` unchanged).
+- **Security (lock):** `purgeResidentVectors(db)` drops the map outright on workspace LOCK
+  (`registerWorkspaceIpc`, beside the embedder's `suspend()`). The vectors are derived from chunk text
+  and must not linger in main-process RAM after the vault re-encrypts — a requirement the staleness
+  signature does NOT cover (the table is unchanged on lock). No embedder-switch purge is needed: the
+  cache is per-`Db` and per-chunk (model-agnostic), the SQL model-id filter scopes results, and unlock
+  reopens the `Db` → a fresh (empty) cache.
+
+**Measurement (mock embedder, synthetic corpus — real E5-runtime numbers PENDING the PAID drive).**
+Warm cached scan vs the old decode-every-query path: ~14 ms vs 23 ms @ 5k chunks (1.7×), ~50 ms vs
+70 ms @ 10k (1.4×), ~167 ms vs 211 ms @ 30k (1.3×), ~580 ms vs 755 ms @ 100k (1.3×). The cold rebuild
+(once per mutation, not per query) is ~33 ms @ 5k … ~1.3 s @ 100k. The win is the removed per-query
+BLOB re-read + re-decode (RAG-6 — also a real GC/memory-pressure win the wall-clock under-reports); the
+**residual is now SQLite→JS row marshalling + the dot-product scan + sort, not decode**.
+
+**Why the worker (P4b) and ANN (P4c) stay DEFERRED — evidence-based.** At realistic MVP corpora
+(≤~10k chunks ≈ ≤~10–50 documents) the cached scan is ≤~50 ms — fine on the main thread and dwarfed by
+the preceding query-embed sidecar round-trip + the reranker (seconds). Only the heavy ~100k-chunk upper
+bound (~580 ms) still blocks — the narrowed remaining D15 cliff.
+- **P4b (off-main-thread worker).** Genuine fix for the event-loop block at scale, but heavy
+  (`SharedArrayBuffer` for the vectors, a second read-only DB handle or id-set hand-off, abort/cancel,
+  writer-race avoidance) — all of which must stay offline. **Trigger:** a representative corpus measures
+  the cached main-thread scan over ~100 ms routinely. The resident cache is the substrate a worker
+  would scan via `SharedArrayBuffer`, so P4a is also P4b's groundwork.
+- **P4c (ANN — sqlite-vec / pure-JS HNSW).** sqlite-vec is a **native loadable SQLite extension**, which
+  is against the no-native-build / portable cross-OS packaging posture that put the embedder in a
+  llama.cpp sidecar rather than `onnxruntime-node` (D15's reasoning). Not adopted; a pure-JS HNSW would
+  be reconsidered only if a linear scan over the resident buffer (even off-thread) still bites.
 
 ## Models & runtime (Phase 2)
 - **Manifests** are local YAML under `model-manifests/` (committed; weights are not). The schema +

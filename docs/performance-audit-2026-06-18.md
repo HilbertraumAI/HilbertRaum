@@ -9,6 +9,23 @@
 > seeks) and main-thread CPU are the scarce resources, so write-amplification, full
 > scans, synchronous main-process work, and prompt-prefill cost dominate.
 
+> **STATUS — Waves P1 + P2 + P3 + P4 IMPLEMENTED (2026-06-18, branch `performance-tuning`).** Wave P4
+> (the documented D15 deferral): **RAG-1 / RAG-6** — the synchronous main-thread vector scan now reads
+> from a **process-resident decoded-vector cache** (`embeddings/resident-cache.ts`) instead of
+> re-`SELECT`ing every `vector_blob` (~150 MB at the heavy 100-doc bound) and re-decoding it per query.
+> Behind the unchanged `VectorIndex.search` signature; ranking byte-identical; all scope filters
+> preserved. Invalidation = a cheap whole-table `(count, maxRowid)` signature (primary) + explicit
+> `invalidate` at the three `embeddings` write sites + a hard `purge` on workspace lock (security).
+> **MEASURED** (mock, synthetic corpus): warm cached scan ~14 ms @ 5k chunks, ~50 ms @ 10k, ~167 ms @
+> 30k, ~580 ms @ 100k (1.3–1.7× vs decode-every-query). The residual is now SQLite→JS row marshalling +
+> the dot-product scan, not decode — so at realistic MVP corpora (≤~10k chunks) the scan is ≤~50 ms
+> (fine on the main thread, dwarfed by the query-embed await + reranker) and only the 100k upper bound
+> bites. **The off-main-thread worker scan (P4b) and an ANN index (P4c / sqlite-vec) stay DEFERRED**
+> with that number: P4b's trigger is "a representative corpus measures the cached main-thread scan over
+> ~100 ms routinely"; sqlite-vec stays rejected as a native loadable extension against the
+> no-native-build / portable-packaging posture (D15). The resident cache is also the substrate a future
+> worker would scan via `SharedArrayBuffer`. Real E5-runtime numbers PENDING (mock-measured).
+>
 > **STATUS — Waves P1 + P2 + P3 IMPLEMENTED (2026-06-18, branch `performance-tuning`).** Wave P1 (six
 > storage/retrieval/runtime items): **DB-1**, **DB-2**, **DB-4/DB-6/DB-7** (run_id indexes
 > deliberately omitted — see DB-7), **RAG-2/ING-1**, **DB-3/ING-2**, **RT-1**. Wave P2 (renderer
@@ -87,11 +104,18 @@ work) that cause visible jank on CPU-only hardware.
    is the lone exception, and it's the hottest. (DB-1, DB-2)
 
 2. **Synchronous full scans on the main process (query path).** `node:sqlite` is
-   synchronous and runs on the Electron main process. The vector search decodes every
-   embedding BLOB and computes cosine in JS, uninterruptibly, on every question — and the
-   `embedding_model_id` filter has no index, so even the filtered path is a full scan.
+   synchronous and runs on the Electron main process. The vector search decoded every
+   embedding BLOB and computed cosine in JS, uninterruptibly, on every question — and the
+   `embedding_model_id` filter had no index, so even the filtered path was a full scan.
    This is a documented MVP deferral (ANN, D15) but the *event-loop-blocking* aspect and a
-   couple of cheap constant-factor wins are not. (RAG-1, RAG-3/DB-4)
+   couple of cheap constant-factor wins were not. (RAG-1, RAG-3/DB-4)
+   **Update (Waves P1/P3/P4):** the model-id index (DB-4) + mmap (DB-2) landed in P1, the
+   dot-product slice in P3, and the per-query BLOB re-read + re-decode are now gone in P4 (the
+   resident decoded-vector cache, RAG-1/RAG-6). The scan is **still synchronous and still linear**:
+   at realistic corpora (≤~10k chunks) the cached scan is ≤~50 ms (acceptable), and only the heavy
+   ~100k-chunk bound (~580 ms) still blocks — the residual the deferred worker (P4b) / ANN (P4c)
+   target. So the *re-decode-every-query* waste is fixed; the *linear-scan-at-scale* cliff is the
+   narrowed remaining D15 item.
 
 3. **N+1 query patterns where a grouped query exists three lines away.** `listDocuments`
    does per-row COUNT + stale-check despite the memberships join right beside it being
@@ -164,7 +188,7 @@ work) that cause visible jank on CPU-only hardware.
 
 ### 4.2 RAG / vector search / embeddings
 
-#### RAG-1 — Brute-force vector scan decodes every BLOB and computes cosine in JS, synchronously on the main process · **High** · ✅ IMPLEMENTED (dot-product slice; ANN/worker stays Wave P4)
+#### RAG-1 — Brute-force vector scan decodes every BLOB and computes cosine in JS, synchronously on the main process · **High** · ✅ IMPLEMENTED (dot-product slice in P3; resident decoded-vector cache in P4; worker/ANN deferred with a measured number)
 - **Location:** `apps/desktop/src/main/services/embeddings/index.ts:157-197` (`VectorIndex.search`), via `rag/index.ts:219`.
 - **Evidence:** `db.prepare(sql).all()` loads all matching rows + blobs; a `for` loop calls `decodeVector` (a `slice` copy, `:64-67`) and `cosineSimilarity` (3-accumulator loop over all 384 dims, `:77-92`) per row; then `sort` + `slice(topK)`. No `await` between the query and the end of the scan ⇒ one uninterruptible main-process CPU block.
 - **Impact:** Per query: `O(N_chunks × dims)` cosine + `O(N_chunks)` blob copies + sort. At the 1000-chunk cap, ~100 docs ⇒ ~100k vectors (~150 MB) read + scanned **on every question**, blocking all other IPC (token relays, UI). Documented MVP deferral (rag-design §12.2 D15) — but the blocking + constant factors are addressable now.
@@ -189,10 +213,10 @@ work) that cause visible jank on CPU-only hardware.
 - **Impact:** Re-asking / retries / the re-index re-check all re-embed from scratch (one HTTP + forward pass each). Cheap relative to reranker. Ingestion batching is already correct.
 - **Fix:** Optional small LRU on normalized query → `Float32Array`, cleared on embedder change.
 
-#### RAG-6 — Per-row BLOB copy + `Float32Array` allocation churn in the scan · **Low**
+#### RAG-6 — Per-row BLOB copy + `Float32Array` allocation churn in the scan · **Low** · ✅ IMPLEMENTED (Wave P4)
 - **Location:** `embeddings/index.ts:64-67` (`decodeVector`), per row at `:192`.
-- **Evidence:** The `slice` copy is *required* for alignment safety, but every full scan allocates `N_chunks` short-lived `Float32Array`s, all GC'd after the cosine.
-- **Fix:** Resolved by the resident contiguous buffer recommended in RAG-1's D15 fix; not worth a standalone change first.
+- **Evidence:** The `slice` copy is *required* for alignment safety, but every full scan allocated `N_chunks` short-lived `Float32Array`s, all GC'd after the cosine.
+- **As implemented (Wave P4):** resolved together with RAG-1 by the process-resident decoded-vector cache (`embeddings/resident-cache.ts`) — vectors are decoded **once** into a `Map<chunkId, Float32Array>` and reused across queries, so a query allocates nothing per row and reads no `vector_blob` (the `search` SQL now projects only `chunk_id`). See RAG-1 and the "Performance — design record … Wave P4" section in `docs/architecture.md`.
 
 #### RAG-7 — Context assembly re-counts tokens by re-scanning strings per turn · **Low**
 - **Location:** `chat.ts:634-636` (`messageTokens`), `:650-678` (`fitMessagesToContext`); `rag/index.ts:299-305`, `:485`.
@@ -420,8 +444,21 @@ Decisions folded into `docs/architecture.md` "Performance — design record (per
 Decisions folded into `docs/architecture.md` "Performance — design record (perf audit 2026-06-18, Wave
 P3)"; RT-2 also folded into `docs/rag-design.md` §8 (grounded prompt) + architecture.md §17.
 
-**Wave P4 — when the D15 ANN trigger fires (deferred, tracked):**
-16. **RAG-1 / RAG-6** — ANN index (sqlite-vec) or worker-thread scan with resident contiguous vectors; this is the real fix for the synchronous main-thread vector scan as the corpus grows.
+**Wave P4 — resident vector cache shipped; worker/ANN deferred with a measured number — ✅ DONE
+(2026-06-18, branch `performance-tuning`):**
+16. ✅ **RAG-1 / RAG-6** — the synchronous main-thread vector scan now reads from a process-resident
+    decoded-vector cache (`embeddings/resident-cache.ts`), behind the unchanged `VectorIndex.search`
+    signature: per-query `vector_blob` re-reads (~150 MB at the heavy bound) and per-row re-decode are
+    gone; ranking byte-identical; all scope filters preserved. Invalidation = whole-table
+    `(count, maxRowid)` signature + explicit `invalidate` at the 3 write sites + a `purge` on lock.
+    **Deferred (measured):** the off-main-thread worker scan (P4b — trigger: a representative corpus
+    measures the cached main-thread scan over ~100 ms routinely; the resident cache is its
+    `SharedArrayBuffer` substrate) and an ANN index (P4c — sqlite-vec stays rejected as a native
+    loadable extension against the no-native-build rule, D15). Numbers in the STATUS banner + the
+    architecture.md "Performance — design record … Wave P4" section.
+
+Decisions folded into `docs/architecture.md` "Performance — design record (perf audit 2026-06-18, Wave
+P4)"; `docs/rag-design.md` §12.2 D15 updated (deferral partially resolved).
 
 Plus the **Low** items (DB-5/DB-8, RAG-5/RAG-7/RAG-8, ING-6/7/8/9/10, FE-8/9/10, RT-6/7/8/9) opportunistically when touching those files.
 

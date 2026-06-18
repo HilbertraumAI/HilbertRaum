@@ -6,7 +6,52 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
-_Last updated: 2026-06-18 — **Performance audit Wave P3 SHIPPED (branch `performance-tuning`).**
+_Last updated: 2026-06-18 — **Performance audit Wave P4 SHIPPED (branch `performance-tuning`) — the
+final, deferred wave; the documented MVP deferral D15.** RAG-1/RAG-6: the synchronous main-thread
+vector scan (`VectorIndex.search`, `apps/desktop/src/main/services/embeddings/index.ts`) no longer
+re-`SELECT`s every `vector_blob` (~150 MB at the heavy 100-doc bound) and re-decodes it per query.
+**Shipped (P4a, one feature):** a **process-resident decoded-vector cache**
+(`embeddings/resident-cache.ts`) — every stored vector is decoded **once** into a
+`Map<chunkId, Float32Array>` (one cache per open `Db`, `WeakMap`-keyed) and reused across queries. The
+`search` SQL keeps the **byte-identical scope-filtered WHERE** but projects only `chunk_id` (no blob
+read), then looks each vector up in the resident map — zero per-row allocation, zero re-decode. **Behind
+the unchanged `VectorIndex.search(queryVector, topK)` signature** (so `rag/index.ts retrieve()` + every
+scope filter are untouched); ranking byte-identical (same `dotProduct`, same sort); the
+dimension-mismatch + truncated-blob skips preserved. The vector↔BLOB codec moved to
+`embeddings/codec.ts` to break the `index ↔ resident-cache` import cycle (re-exported from the barrel).
+**Invalidation contract (highest-risk surface, belt-and-suspenders):** (1) a cheap whole-table
+`(COUNT(*), MAX(rowid))` **signature** recomputed at the top of every search — rebuilds on any mutation
+incl. direct SQL writes (so test seeding stays correct); (2) explicit `invalidateResidentVectors(db)`
+at the **3 `embeddings` write sites** (`ingestion/index.ts` finalize-insert + reindex chunk-phase delete
++ `deleteDocument`) — closes the delete-max-rowid-then-equal-reinsert blind spot; (3) `purgeResidentVectors(db)`
+on **workspace LOCK** (`registerWorkspaceIpc`, beside `embedder.suspend()`) — SECURITY: the vectors
+derive from chunk text and must not linger in RAM after the vault re-encrypts (the signature can't catch
+this — the table is unchanged). No embedder-switch purge needed (per-`Db`, per-chunk, model-agnostic;
+the SQL model-id filter scopes results; unlock reopens the `Db` → fresh cache). **MEASURED** (mock,
+synthetic): warm cached scan ~14 ms @ 5k chunks, ~50 ms @ 10k, ~167 ms @ 30k, ~580 ms @ 100k (1.3–1.7×
+vs decode-every-query; cold rebuild once per mutation ~33 ms@5k…~1.3 s@100k). The residual is now
+SQLite→JS row marshalling + the dot-product scan + sort, **not** decode. **DECISION — P4b (off-main-thread
+worker) + P4c (ANN) DEFERRED with the number:** at realistic MVP corpora (≤~10k chunks ≈ ≤~10–50 docs)
+the scan is ≤~50 ms (fine, dwarfed by the query-embed await + reranker); only the 100k upper bound bites.
+P4b's trigger = "a representative corpus measures the cached main-thread scan over ~100 ms routinely"
+(the resident cache is its `SharedArrayBuffer` substrate); P4c/sqlite-vec stays rejected as a **native
+loadable extension** against the no-native-build / portable-packaging rule (D15). **New data contracts:**
+new exports `getResidentVectors`/`invalidateResidentVectors`/`purgeResidentVectors` (+ the cache
+invalidation contract above); `encodeVector`/`decodeVector` now live in `embeddings/codec.ts`
+(re-exported from the `embeddings` barrel — callers unchanged). **Docs:** folded into
+`docs/architecture.md` "Performance — design record … Wave P4"; `docs/rag-design.md` §6 (resident cache)
++ §12.2 **D15 → partially resolved**; audit RAG-1/RAG-6 → ✅ IMPLEMENTED, §6 Wave P4 checked off, STATUS
+banner + §3.2 theme updated. **New tests:** `tests/integration/resident-cache.test.ts` (+8: ranking
+equivalence vs a from-scratch oracle, signature catches direct INSERT/DELETE after build, invalidate +
+lock-purge rebuild, scope-filter composition incl. archived, ingestion import→reindex→delete lifecycle,
+offline guarantee through the cached path) + a gated manual `tests/manual/resident-cache-bench.test.ts`.
+**Verification:** full suite **1784 passed / 26 skipped** (+8, +1 skipped manual bench), typecheck +
+build clean. Real E5-runtime numbers PENDING the PAID drive. **NEXT ACTION:** Wave P4 core done — the
+perf audit's four waves are all shipped. Still open (out of P4 core, tracked in the audit): RT-9
+(byte-stable plain-chat fence), the deferred P2 renderer items (Composer/`input` move, `DocRow`,
+FE-5 windowing), and the audit Low items. **(prior P3 entry below.)**_
+
+_2026-06-18 — **Performance audit Wave P3 SHIPPED (branch `performance-tuning`).**
 Pipeline throughput & latency on the two hottest operations (import a document, ask a question) plus
 runtime-startup knobs (audit `docs/performance-audit-2026-06-18.md` §6 Wave P3). Unlike P2 (pure
 memoization), several items are **structural**, each preserving a stated correctness contract.

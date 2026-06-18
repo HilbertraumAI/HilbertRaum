@@ -7,6 +7,7 @@ import { maybeAutoStartActiveModel } from './registerModelIpc'
 import { inFlightStreams } from './inflight'
 import { applyUiLanguageSetting, tMain } from '../services/i18n'
 import { getSettings } from '../services/settings'
+import { purgeResidentVectors } from '../services/embeddings'
 import { log, attachVaultKey, detachVaultKey, usesPlaintextLog, rekeyVaultLog } from '../services/logging'
 import type {
   WorkspaceActionResult,
@@ -238,6 +239,13 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
       // shreds the decrypted transient). Per-file CLI — next use just respawns.
       ctx.transcriber?.suspend?.() ?? Promise.resolve()
     ])
+    // RAG-6 (Wave P4) — SECURITY purge: drop the resident decoded-vector cache from main-process
+    // RAM. The vectors are derived from chunk text, so like the sidecars' in-memory recent text
+    // they must not linger after the vault re-encrypts. The staleness signature does NOT cover
+    // this (the table is unchanged on lock), so this explicit purge is a hard requirement. Done
+    // while `ctx.db` is still open (before `lock()` makes it unreachable). The next search after
+    // unlock rebuilds the cache from the re-opened DB.
+    purgeResidentVectors(ctx.db)
     // Recorded BEFORE the vault closes — afterwards the DB is unreachable.
     ctx.audit?.('workspace_locked', 'Workspace locked')
     // Flush the encrypted diagnostics log while the key is still live, then drop it —
