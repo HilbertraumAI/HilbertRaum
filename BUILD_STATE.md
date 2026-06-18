@@ -6,6 +6,22 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-18 — **Three minor UI adjustments (Models screen + Document preview).**
+(1) **Models screen** (`renderer/screens/ModelsScreen.tsx`): the "Other models" picker (non-active
+chat models) now sorts installed models first — `isInstalled` ranks `installed`/`running`/`ready`
+ahead of the rest, stable within each group (manifest order preserved). Already-usable models lead;
+not-yet-downloaded ones sink. (2) **Translated/Markdown documents render formatted in preview**
+(`renderer/screens/DocumentsScreen.tsx` `PreviewModal`): per-page extracted text was rendered as plain
+text, so a machine-translated `.md`'s `**bold**`/lists showed raw. The segment text now renders via
+`AssistantMarkdown` (same component+sanitizer as chat answers/summaries) when `preview.mimeType`
+contains `markdown`; non-markdown formats keep the plain `pre-wrap` `.preview-text`. (3) **Extracted
+text collapsed behind a disclosure**: for large documents the per-page list buried the summary. The
+segments now live in a `<details className="doc-summary doc-rawtext">` (reusing the summary container
+chrome) titled "Document text" (`docs.previewModal.documentText`, en+de) — `open` by default ONLY when
+there's no summary, so the preview never looks empty. New CSS `.doc-rawtext .doc-summary-body
+.preview-segment { margin-bottom: 0 }`. **No data-contract changes.** Typecheck + build clean; full
+suite **1784 passed / 27 skipped** (unchanged). **(prior entries below.)**_
+
 _Last updated: 2026-06-18 — **Wave P4 real-drive measurement CLOSED (branch `performance-tuning`).**
 The one open P4 item — "real E5-runtime numbers PENDING the PAID drive" — is done now that the real
 HilbertRaum drive (D:, real `multilingual-e5-small-q8` + the b9585 `llama-server`) is attached. Two

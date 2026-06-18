@@ -416,6 +416,7 @@ export const de: Record<keyof typeof en, string> = {
   'docs.previewModal.copyFailed': 'Kopieren in die Zwischenablage nicht möglich',
   'docs.previewModal.savedTo': 'Zusammenfassung gespeichert unter {path}',
   'docs.previewModal.noText': 'Aus diesem Dokument konnte kein Text extrahiert werden.',
+  'docs.previewModal.documentText': 'Dokumenttext',
   'docs.previewModal.page': 'Seite {page}',
 
   // ---- Tiefenindex + Abdeckung (whole-document-analysis plan §5.2) — D-L7-Review ausstehend ----

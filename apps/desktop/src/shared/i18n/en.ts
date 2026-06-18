@@ -385,6 +385,7 @@ export const en = {
   'docs.previewModal.copyFailed': 'Could not copy to the clipboard',
   'docs.previewModal.savedTo': 'Summary saved to {path}',
   'docs.previewModal.noText': 'No text could be extracted from this document.',
+  'docs.previewModal.documentText': 'Document text',
   'docs.previewModal.page': 'Page {page}',
 
   // ---- Deep index + coverage (whole-document-analysis plan §5.2) ----

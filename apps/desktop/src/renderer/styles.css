@@ -948,6 +948,9 @@ code, pre, kbd { font-family: var(--font-mono); }
   line-height: var(--line-sm);
 }
 .doc-summary-body { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+/* Extracted-text disclosure reuses the summary container chrome; collapse the
+   per-segment bottom margin since the flex `gap` already spaces them. */
+.doc-rawtext .doc-summary-body .preview-segment { margin-bottom: 0; }
 
 /* Small inline loading spinner (Models checksum check, runtime warm-up hints). */
 .spinner {

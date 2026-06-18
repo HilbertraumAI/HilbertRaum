@@ -287,8 +287,15 @@ export function ModelsScreen(): JSX.Element {
   const others = models.filter((m) => m.role !== 'chat' && m.role !== 'embeddings')
 
   // The active chat model leads the screen (guidelines §2); the rest are the picker.
+  // Within the picker, already-installed models come first — they're usable right now,
+  // whereas not-yet-downloaded ones need a download. Stable sort keeps manifest order
+  // within each group.
+  const isInstalled = (m: ModelInfo): boolean =>
+    m.state === 'installed' || m.state === 'running' || m.state === 'ready'
   const activeChat = chat.find(isActive) ?? null
-  const otherChat = chat.filter((m) => m !== activeChat)
+  const otherChat = chat
+    .filter((m) => m !== activeChat)
+    .sort((a, b) => Number(isInstalled(b)) - Number(isInstalled(a)))
 
   // Download gates: the drive policy is the ceiling, the Settings toggle the
   // switch. The copy distinguishes the two — "disabled by policy" vs. "turn it on in

@@ -1800,18 +1800,40 @@ function PreviewModal({
         {preview.segments.length === 0 && (
           <p className="hint">{t('docs.previewModal.noText')}</p>
         )}
-        {preview.segments.map((s, i) => (
-          <div key={i} className="preview-segment">
-            {(s.pageNumber != null || s.sectionLabel) && (
-              <div className="preview-label">
-                {s.pageNumber != null
-                  ? t('docs.previewModal.page', { page: s.pageNumber })
-                  : s.sectionLabel}
-              </div>
-            )}
-            <div className="preview-text">{s.text}</div>
-          </div>
-        ))}
+        {/* The extracted text is collapsed behind a disclosure: for a large document the
+            per-page list runs very long and buries the summary above. Open by default only
+            when there's no summary, so the preview never looks empty. Markdown documents
+            (e.g. machine-translated .md) render formatted — the raw `**bold**`/lists read
+            as broken otherwise — reusing the chat answer styling + sanitizer. */}
+        {preview.segments.length > 0 &&
+          (() => {
+            const isMarkdown = (preview.mimeType ?? '').includes('markdown')
+            return (
+              <details className="doc-summary doc-rawtext" open={!summary}>
+                <summary>{t('docs.previewModal.documentText')}</summary>
+                <div className="doc-summary-body">
+                  {preview.segments.map((s, i) => (
+                    <div key={i} className="preview-segment">
+                      {(s.pageNumber != null || s.sectionLabel) && (
+                        <div className="preview-label">
+                          {s.pageNumber != null
+                            ? t('docs.previewModal.page', { page: s.pageNumber })
+                            : s.sectionLabel}
+                        </div>
+                      )}
+                      {isMarkdown ? (
+                        <div className="msg-content md">
+                          <AssistantMarkdown text={s.text} />
+                        </div>
+                      ) : (
+                        <div className="preview-text">{s.text}</div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </details>
+            )
+          })()}
       </div>
     </Modal>
   )
