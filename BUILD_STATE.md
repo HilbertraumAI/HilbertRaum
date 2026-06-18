@@ -6,6 +6,23 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-18 — **New chat model added: Qwen3.5 4B (UD-Q4_K_XL)** (user request). Manifest-only
+addition (model-policy.md "adding a model is manifest-only"):
+[`model-manifests/chat/qwen3.5-4b-ud-q4kxl.yaml`](model-manifests/chat/qwen3.5-4b-ud-q4kxl.yaml).
+Quant **UD-Q4_K_XL** (unsloth Dynamic 2.0 — better quality than plain Q4_K_M at ~same footprint;
+user decision). Apache-2.0; `supports_thinking_mode: true` (Qwen3.5 thinks by default → Deep applies);
+~2.9 GB, 8 GB-RAM tier. **Real SHA-256 captured** by fetching the upstream weight 2026-06-18
+(`b252c5610a42ca82d20fe2a12813e9d069eed89292907e26c783eeb0bc961bc7`; bytes matched `download.size_bytes`
+exactly = 2,912,109,728) and promoted into both the top-level `sha256` and `download.sha256`. Weight
+was hashed from a TEMP copy and deleted — **not committed** (hard rule: no weights in git). **NOT
+auto-recommended** (`recommendation_rank: 0`, `recommended_profiles: []`) and **not bundled**
+(`bundled_on_preconfigured_drive: false`) — not yet benchmarked. ⚠️ **RUNTIME-COMPAT UNVERIFIED:**
+runtime is pinned to llama.cpp **b9585** (2026-06-10); Qwen3.5 is a newer architecture and may not load
+until the pin is bumped in `runtime-sources.yaml` — appears in the list but start could fail. Upstream
+is a vision model; the `.gguf` runs text-only (no mmproj shipped), which is all the chat pipeline uses.
+**Tests:** `models.test.ts` green (51) — the suite walks the real manifests dir, so the new file
+parses+validates. **Docs:** row added to `docs/model-policy.md`. **(prior entries below.)**_
+
 _2026-06-18 — **document-redaction is the first skill to opt into auto-fire (S13b D6).** A user
 reported "I want to anonymize my attached document" not auto-firing the redaction skill even with the
 `skillsAutoFireEnabled` opt-in on and a document selected. Root cause: the **D6** author-opt-in was

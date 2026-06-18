@@ -1,0 +1,49 @@
+id: qwen3.5-4b-ud-q4kxl
+display_name: Qwen3.5 4B (UD-Q4_K_XL)
+family: qwen3.5
+role: chat
+format: gguf
+runtime: llama_cpp
+license: apache-2.0
+size_on_disk_gb: 2.9
+recommended_min_ram_gb: 8
+recommended_ram_gb: 16
+# Default 0: NOT auto-recommended yet. Two reasons — (1) it has not been through a benchmark
+# run like the Phase-29 models, and (2) the RUNTIME-COMPATIBILITY RISK below is unverified.
+# Selectable manual pick; promote with a real `recommendation_rank` only after it is both
+# benchmarked AND confirmed to load on the pinned llama.cpp build.
+recommendation_rank: 0
+recommended_context_tokens: 4096
+# Qwen3.5 operates in thinking mode by default (emits <think>...</think>), so the chat
+# template honours `enable_thinking` → the Deep answer mode applies (like the original 4B).
+supports_thinking_mode: true
+supports_tools: true
+local_path: models/chat/qwen3.5-4b-ud-q4kxl.gguf
+# Real hash captured 2026-06-18 by fetching the upstream weight and computing SHA-256
+# (file bytes matched download.size_bytes exactly: 2,912,109,728).
+sha256: b252c5610a42ca82d20fe2a12813e9d069eed89292907e26c783eeb0bc961bc7
+# Quantization choice (user decision 2026-06-18): unsloth's "Dynamic 2.0" UD-Q4_K_XL — keeps the
+# precision-sensitive layers at higher bit depth and squeezes the rest, so it beats plain Q4_K_M
+# on quality at almost the same footprint (2.91 vs 2.74 GB; both stay in the 8 GB-RAM tier). For a
+# small 4B model the bit depth bites harder than at 8–14B, so the richer Q4 is worth +0.17 GB.
+# The Qwen org publishes no official GGUF for the 3.5 refresh → established-quantizer fallback
+# (the same posture as the qwen3-4b-instruct-2507-q4 entry): unsloth, the most-used source.
+download:
+  url: https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/Qwen3.5-4B-UD-Q4_K_XL.gguf?download=true
+  sha256: b252c5610a42ca82d20fe2a12813e9d069eed89292907e26c783eeb0bc961bc7
+  size_bytes: 2912109728
+  license_url: https://huggingface.co/Qwen/Qwen3.5-4B/blob/main/LICENSE
+bundled_on_preconfigured_drive: false
+# ⚠️ RUNTIME-COMPATIBILITY RISK (unverified): the runtime is pinned to llama.cpp b9585
+# (2026-06-10, runtime-sources.yaml). Qwen3.5 is a newer architecture than that build and may
+# fail to load on b9585 ("unknown architecture" / unsupported) — in which case this model shows
+# in the list but cannot start until the runtime pin is bumped. The manifest is harmless either
+# way; do NOT assume it runs until verified on a real drive. NOTE ALSO: upstream is a VISION
+# model; this `.gguf` runs TEXT-ONLY (the mmproj projector is not shipped), which is all our
+# chat pipeline uses.
+recommended_profiles: []
+license_review:
+  status: approved
+  reviewed_by: "project maintainer (Claude-assisted review, HF card verification)"
+  reviewed_at: "2026-06-18"
+  notes: "APPROVED 2026-06-18: base model Qwen/Qwen3.5-4B is apache-2.0 (per the unsloth GGUF model card; LICENSE blob expected at download.license_url). QUANTIZATION PROVENANCE: the Qwen org publishes no official GGUF for the 3.5 refresh, so this manifest pins the established quantizer unsloth (https://huggingface.co/unsloth/Qwen3.5-4B-GGUF, card tag apache-2.0) — a third-party requant of apache-2.0 weights, NOT a vendor GGUF; same posture as the qwen3-4b-instruct-2507-q4 entry. Apache-2.0 permits commercial redistribution; ship the LICENSE/NOTICE attribution with the drive. NOT yet bundled (bundled_on_preconfigured_drive: false) and not benchmarked; runtime-compatibility on the pinned b9585 build is UNVERIFIED (see comment above)."
