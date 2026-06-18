@@ -36,6 +36,25 @@ const DEFAULT_CONTEXT_TOKENS = 512
 const REAL_TOKENS_PER_APPROX_TOKEN = 2.2
 /** Embed in bounded batches instead of one giant request (up to 1000 chunks). */
 const DEFAULT_EMBED_BATCH_SIZE = 32
+/**
+ * RT-4 — physical batch (`--batch-size`/`--ubatch-size`) for the embedding sidecar.
+ *
+ * In embedding mode llama-server FORCES `n_batch = n_ubatch` and DEFAULTS both to 512
+ * (it logs "embeddings enabled with n_batch (2048) > n_ubatch (512) … setting
+ * n_batch = n_ubatch = 512"). We POST `DEFAULT_EMBED_BATCH_SIZE` (32) inputs per request,
+ * each truncated to at most the context, so with the 512 default only ~1 full-length
+ * sequence co-decodes per physical batch — the 32-input request is processed in many
+ * micro-batches instead of packing several short sequences into one decode.
+ *
+ * Sizing the physical batch above the context lets multiple in-context sequences co-decode
+ * per ubatch (each input ≤ `contextTokens` < this value, so every sequence still fits one
+ * ubatch — required because mean pooling cannot split a sequence across ubatches). 2048
+ * mirrors the chat sidecar's `CHAT_MAX_PHYSICAL_BATCH` (RT-1); for the 384-dim E5 the extra
+ * compute buffer is negligible. We take `max(ctx, …)` so a raised context never exceeds the
+ * batch. The reranker raises its batch for the same n_batch=n_ubatch reason
+ * (`reranker/llama.ts`), but to fit ONE big query+doc sequence rather than to pack many.
+ */
+const EMBED_PHYSICAL_BATCH_TOKENS = 2048
 /** Per-request bound so a wedged sidecar fails the document instead of hanging it. */
 const DEFAULT_REQUEST_TIMEOUT_MS = 120_000
 
@@ -101,16 +120,32 @@ export class E5Embedder implements Embedder {
     if (this.startFailed) throw this.startFailed
     if (this.server) return this.server
     if (!this.starting) {
+      const ctx = this.opts.contextTokens ?? DEFAULT_CONTEXT_TOKENS
+      // RT-4: size the physical batch above the context so multiple in-context inputs of a
+      // 32-input request co-decode per ubatch instead of the 512 embedding-mode default
+      // processing them ~1 at a time. `max(ctx, …)` keeps batch ≥ ctx for raised contexts.
+      const physicalBatch = Math.max(ctx, EMBED_PHYSICAL_BATCH_TOKENS)
       const server = new LlamaServer({
         binPath: this.opts.binPath,
         modelPath: this.opts.modelPath,
-        contextTokens: this.opts.contextTokens ?? DEFAULT_CONTEXT_TOKENS,
+        contextTokens: ctx,
         // `--embedding` switches llama-server to the embeddings endpoint; mean pooling
         // is what E5 expects. `--device none` PINS the embedder to CPU
         // (architecture.md GPU record §7): the 384-dim model gains little from a GPU,
         // and pinning keeps ingestion immune to driver flakiness and VRAM contention
-        // with the chat model.
-        extraArgs: ['--embedding', '--pooling', 'mean', '--device', 'none'],
+        // with the chat model. `--batch-size`/`--ubatch-size` raise the physical batch
+        // for multi-sequence throughput (RT-4; see EMBED_PHYSICAL_BATCH_TOKENS).
+        extraArgs: [
+          '--embedding',
+          '--pooling',
+          'mean',
+          '--device',
+          'none',
+          '--batch-size',
+          String(physicalBatch),
+          '--ubatch-size',
+          String(physicalBatch)
+        ],
         spawn: this.opts.spawn,
         fetchImpl: this.opts.fetchImpl,
         findPort: this.opts.findPort,
