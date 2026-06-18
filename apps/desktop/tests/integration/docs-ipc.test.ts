@@ -375,11 +375,11 @@ describe('registerDocsIpc', () => {
     const embedder: Embedder = {
       id: mock.id,
       dimensions: mock.dimensions,
-      embed: async (texts, opts) => {
+      embed: async (texts) => {
         if (texts.some((t) => t.includes('FAILMARKER'))) {
           throw new Error('embed boom (simulated mid-batch failure)')
         }
-        return mock.embed(texts, opts)
+        return mock.embed(texts)
       }
     }
     registerDocsIpc(ctxWith(db, workspacePath, embedder, /* unlocked */ true))
@@ -398,7 +398,8 @@ describe('registerDocsIpc', () => {
 
     // The aggregate job status: two completed, one failed — the failing file did not abort
     // the batch or the third file's import.
-    const { result: status } = await invoke(handlers, IPC.getImportJob, (job as { jobId: string }).jobId)
+    const jobId = (job as unknown as ImportJob).jobId
+    const { result: status } = await invoke(handlers, IPC.getImportJob, jobId)
     expect(status).toMatchObject({ done: true, completed: 2, failed: 1 })
 
     // Per-file statuses by id (the source of truth): a + c indexed, b failed.

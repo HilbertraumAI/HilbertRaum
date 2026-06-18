@@ -6,9 +6,9 @@ import { pipelinePages } from '../../src/main/services/ocr/pipeline'
 // the render(N+1)↔recognize(N) overlap, and cancellation without a hidden window.
 
 /** A deferred promise we can resolve from the test to drive timing precisely. */
-function deferred<T = void>(): { promise: Promise<T>; resolve: (v: T) => void } {
-  let resolve!: (v: T) => void
-  const promise = new Promise<T>((r) => (resolve = r))
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void
+  const promise = new Promise<void>((r) => (resolve = () => r()))
   return { promise, resolve }
 }
 
@@ -61,13 +61,13 @@ describe('pipelinePages (ING-5 OCR look-ahead)', () => {
     expect(maxRendered).toBe(2) // never rendered more than one ahead (page 3 not yet)
 
     // Release recognitions one at a time; the pipeline advances by one each time.
-    gates.get(1)!.resolve(undefined)
+    gates.get(1)!.resolve()
     await Promise.resolve()
     await Promise.resolve()
-    gates.get(2)!.resolve(undefined)
+    gates.get(2)!.resolve()
     await Promise.resolve()
     await Promise.resolve()
-    gates.get(3)!.resolve(undefined)
+    gates.get(3)!.resolve()
     await run
 
     expect(recognizeStarted).toEqual([1, 2, 3])
