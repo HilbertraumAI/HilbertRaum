@@ -98,7 +98,10 @@ export function WorkspaceGate({ state, onUnlocked }: Props): JSX.Element {
       })
     )
     try {
-      const models = await window.api.listModels()
+      // RT-3: lazy verification on the gate-into-chat path — hash only the active model on
+      // a cold cache, not every multi-GB GGUF. The gate only needs to know a chat model is
+      // present/usable; the start gate re-verifies the model it actually launches.
+      const models = await window.api.listModels(true)
       const hasChatModel = models.some(
         (m) => m.role === 'chat' && (m.state === 'installed' || m.state === 'ready' || m.state === 'running')
       )
