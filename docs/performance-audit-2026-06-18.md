@@ -9,16 +9,20 @@
 > seeks) and main-thread CPU are the scarce resources, so write-amplification, full
 > scans, synchronous main-process work, and prompt-prefill cost dominate.
 
-> **STATUS — Waves P1 + P2 IMPLEMENTED (2026-06-18, branch `performance-tuning`).** Wave P1 (six
+> **STATUS — Waves P1 + P2 + P3 IMPLEMENTED (2026-06-18, branch `performance-tuning`).** Wave P1 (six
 > storage/retrieval/runtime items): **DB-1**, **DB-2**, **DB-4/DB-6/DB-7** (run_id indexes
 > deliberately omitted — see DB-7), **RAG-2/ING-1**, **DB-3/ING-2**, **RT-1**. Wave P2 (renderer
 > responsiveness): **FE-1**, **FE-2**, **FE-7**, **FE-3**, **FE-4** shipped; **FE-5** (list
 > windowing) and the heaviest sub-parts of FE-3/FE-4 (Composer/`input` move, `DocRow` extraction)
-> are **deferred** under the behavior-preserving mandate (see those findings + §6). All shipped
-> items verified (suite green, typecheck + build clean). Lasting decisions are folded into
-> `docs/architecture.md` "Performance — design record" (Wave P1 + Wave P2 sections); this report is
-> retained as the findings record. Waves P3–P4 remain open (§6). Implemented findings are tagged
-> **✅ IMPLEMENTED** inline.
+> are **deferred** under the behavior-preserving mandate (see those findings + §6). Wave P3 (pipeline
+> throughput & latency): **ING-3** (split-phase import pipeline), **ING-5** (OCR look-ahead), **RT-2**
+> (grounding rules → cacheable system prompt), **RT-3** (lazy chat-path model hashing), **RT-4**
+> (embedder batch, verified on b9585), **RT-5** (readiness-poll backoff), **RAG-1** (dot-product slice
+> only — the ANN/worker scan stays **Wave P4**, the documented D15 deferral). All shipped items
+> verified (suite green, typecheck + build clean). Lasting decisions are folded into
+> `docs/architecture.md` "Performance — design record" (Wave P1/P2/P3 sections) + `docs/rag-design.md`
+> §8 (RT-2); this report is retained as the findings record. Wave P4 remains open (§6). Implemented
+> findings are tagged **✅ IMPLEMENTED** inline.
 
 ---
 
@@ -160,7 +164,7 @@ work) that cause visible jank on CPU-only hardware.
 
 ### 4.2 RAG / vector search / embeddings
 
-#### RAG-1 — Brute-force vector scan decodes every BLOB and computes cosine in JS, synchronously on the main process · **High**
+#### RAG-1 — Brute-force vector scan decodes every BLOB and computes cosine in JS, synchronously on the main process · **High** · ✅ IMPLEMENTED (dot-product slice; ANN/worker stays Wave P4)
 - **Location:** `apps/desktop/src/main/services/embeddings/index.ts:157-197` (`VectorIndex.search`), via `rag/index.ts:219`.
 - **Evidence:** `db.prepare(sql).all()` loads all matching rows + blobs; a `for` loop calls `decodeVector` (a `slice` copy, `:64-67`) and `cosineSimilarity` (3-accumulator loop over all 384 dims, `:77-92`) per row; then `sort` + `slice(topK)`. No `await` between the query and the end of the scan ⇒ one uninterruptible main-process CPU block.
 - **Impact:** Per query: `O(N_chunks × dims)` cosine + `O(N_chunks)` blob copies + sort. At the 1000-chunk cap, ~100 docs ⇒ ~100k vectors (~150 MB) read + scanned **on every question**, blocking all other IPC (token relays, UI). Documented MVP deferral (rag-design §12.2 D15) — but the blocking + constant factors are addressable now.
@@ -207,7 +211,7 @@ work) that cause visible jank on CPU-only hardware.
 #### ING-1 — (see RAG-2) Compare mode-(b) re-scan · **High** ⊕ — folded into RAG-2.
 #### ING-2 — (see DB-3) `listDocuments` N+1 · **High** ⊕ — folded into DB-3.
 
-#### ING-3 — Document import is fully serialized; embed (I/O) never overlaps next-file parse (CPU) · **High**
+#### ING-3 — Document import is fully serialized; embed (I/O) never overlaps next-file parse (CPU) · **High** · ✅ IMPLEMENTED
 - **Location:** `apps/desktop/src/main/ipc/registerDocsIpc.ts:253-266`; `processDocument` `ingestion/index.ts:500-728`.
 - **Evidence:** `for (const id …) await processDocument(...)` — parse → chunk → **embed (sidecar round-trips)** → write, fully awaited before the next file. Embed is I/O wait during which CPU + parser idle.
 - **Impact:** A 200-file folder takes the *sum* of every file's parse+embed+write. Parse of file N+1 is independent of embed of file N but left on the table; a 1-deep pipeline could cut wall-clock materially.
@@ -219,7 +223,7 @@ work) that cause visible jank on CPU-only hardware.
 - **Impact:** A large picked tree is synchronously walked 2–3× on the event loop; on USB each `statSync` is a real seek and the UI freezes during the walk.
 - **Fix:** Walk once, cache `ExpandedFile[]` + sizes, reuse for both preflight and import. Use `readdirSync(dir, {withFileTypes:true})` (one syscall/entry instead of two).
 
-#### ING-5 — OCR renders and recognizes strictly one page at a time (no render/recognize overlap) · **Medium**
+#### ING-5 — OCR renders and recognizes strictly one page at a time (no render/recognize overlap) · **Medium** · ✅ IMPLEMENTED
 - **Location:** `doctasks/manager.ts:821-827`, `ocr/rasterizer.ts:171-179`, `ocr/tesseract.ts:117-133`.
 - **Evidence:** `onPage` awaits `engine.recognize(png)` before the next page renders (queue capped at 0). Render (pdfjs in hidden window) and recognize (WASM tesseract) are different engines that could overlap.
 - **Impact:** Strictly serial render→recognize roughly doubles wall-clock for a multi-hundred-page scan. The backpressure is correct for *memory* but conservative for *throughput*.
@@ -318,25 +322,25 @@ work) that cause visible jank on CPU-only hardware.
 - **Impact:** Prompt prefill (skill fence + RAG excerpts + history) — the dominant time-to-first-token cost, measured 3.5–15 s on CPU in Skills §17 — is processed in 512-token chunks; on GPU a larger ubatch materially improves prompt-processing throughput.
 - **Fix:** Set `--batch-size`/`--ubatch-size` on the chat sidecar to `min(ctxSize, ~2048)` (1024 is a low-risk start), validated on pinned b9585; mind VRAM on GPU. Add a `llama-runtime.test.ts` arg assertion mirroring the reranker's.
 
-#### RT-2 — Grounded (RAG) answers re-prefill the whole excerpt block every turn · **Medium**
+#### RT-2 — Grounded (RAG) answers re-prefill the whole excerpt block every turn · **Medium** · ✅ IMPLEMENTED (stable rules → system; per-turn excerpts inherently still re-prefill)
 - **Location:** `rag/index.ts:335-364` (`buildGroundedPrompt`), `:493-501`; design note `architecture.md:1786-1793` (§17 "recommended, not implemented (a)").
 - **Evidence:** The skill fence *and* excerpts ride in the per-turn **user** message, so `cache_prompt`'s longest-common-prefix reuse stops at the system prompt — the whole excerpt block (up to `ragMaxContextTokens`) re-prefills every documents question, even follow-ups.
 - **Impact:** On CPU, a 1–2k-token excerpt block is several seconds of prefill *per* documents turn — the largest recurring documents-mode latency. Acknowledged, not mitigated.
 - **Fix:** Keep stable grounding rules + preface in `system` (cacheable), put only excerpts in the user turn (preserving precedence); and/or cap `ragMaxContextTokens` harder on CPU profiles. Surface a measured number in rag-design.
 
-#### RT-3 — First-run weight hashing of multi-GB GGUFs is on the `listModels` IPC (Chat-mount) critical path · **Medium**
+#### RT-3 — First-run weight hashing of multi-GB GGUFs is on the `listModels` IPC (Chat-mount) critical path · **Medium** · ✅ IMPLEMENTED
 - **Location:** `main/ipc/registerModelIpc.ts:130-155` → `models.ts:498-587` (`buildModelList` → `computeInstallState` → `sha256FileCached`); cache note `models.ts:171-180`.
 - **Evidence:** `listModels` (fired on Models-screen visit *and* Chat-screen mount) SHA-256-hashes each present weight on a cache miss (L1 mem + L2 settings store, keyed path+size+mtime). First run / cold cache hashes every multi-GB GGUF — "minutes of USB I/O" — awaited by the renderer IPC.
 - **Impact:** First Chat/Models mount can block on whole-corpus weight hashing. Mitigated steady-state by the cache + progress streaming; the cost is first-run / cold-cache (e.g. encrypted workspace before the store is warm).
 - **Fix:** Hash lazily — only the *active* model on the chat path, the full set only on explicit Models-screen visits; ensure the L2 cache is warm before the first Chat-mount `listModels`.
 
-#### RT-4 — Embeddings sidecar relies on default n_batch 512 while batching 32 inputs · **Medium**
+#### RT-4 — Embeddings sidecar relies on default n_batch 512 while batching 32 inputs · **Medium** · ✅ IMPLEMENTED (verified on b9585)
 - **Location:** `embeddings/e5.ts:113` (extraArgs), `:38` (`DEFAULT_EMBED_BATCH_SIZE=32`), `:17` (ctx 512).
 - **Evidence:** Spawns `--embedding --pooling mean --device none` with no `--batch-size`; embedding mode forces `n_batch=n_ubatch` (default 512) while POSTing 32-input batches.
 - **Impact:** Fewer sequences co-decode per physical batch than the context allows ⇒ more round-trips ⇒ slower large-corpus ingestion (already slow on USB).
 - **Fix:** Set `--batch-size`/`--ubatch-size` explicitly (matching the reranker's reasoning) and/or raise per-request batching to pack more short inputs; verify on b9585 that embedding mode honors a raised batch for multi-sequence throughput.
 
-#### RT-5 — Health readiness is a fixed 250 ms poll, not event-driven · **Low**
+#### RT-5 — Health readiness is a fixed 250 ms poll, not event-driven · **Low** · ✅ IMPLEMENTED
 - **Location:** `runtime/sidecar.ts:188` (`DEFAULT_HEALTH_INTERVAL_MS=250`), `:333-358` (`waitForHealthy`).
 - **Impact:** Up to ~250 ms dead time on every sidecar start (chat/embedder/reranker), recurring on every model switch.
 - **Fix:** Drop the interval to ~50–100 ms (cheap loopback GET) or exponential backoff from small.
@@ -406,12 +410,15 @@ FE-3/4 sub-parts deferred):**
 
 Decisions folded into `docs/architecture.md` "Performance — design record (perf audit 2026-06-18, Wave P2)".
 
-**Wave P3 — pipeline throughput & latency:**
-11. **ING-3** — 1-deep parse/embed import pipeline.
-12. **ING-5** — 1-deep OCR render/recognize look-ahead.
-13. **RT-2** — move stable grounding rules to the cacheable system prompt; cap RAG context on CPU.
-14. **RT-3** — hash only the active model on the chat path; full set only on Models-screen visits.
-15. **RT-4** — set embedder batch size; **RT-5** tighten health poll; **RAG-1** dot-product fast path.
+**Wave P3 — pipeline throughput & latency — ✅ DONE (2026-06-18, branch `performance-tuning`):**
+11. ✅ **ING-3** — 1-deep parse/embed import pipeline (`processDocument` split into `prepareDocument` + `finalizeDocument`).
+12. ✅ **ING-5** — 1-deep OCR render/recognize look-ahead (`ocr/pipeline.ts` `pipelinePages`).
+13. ✅ **RT-2** — stable grounding rules moved to the cacheable `GROUNDED_SYSTEM_PROMPT` (§17 (a) → implemented).
+14. ✅ **RT-3** — hash only the active model on the chat path (`buildModelList` `onlyVerifyModelId`); full set only on Models-screen visits.
+15. ✅ **RT-4** — embedder `--batch-size`/`--ubatch-size` = `max(ctx, 2048)` (verified on b9585); ✅ **RT-5** readiness-poll backoff; ✅ **RAG-1** dot-product fast path (constant-factor slice; ANN/worker stays P4).
+
+Decisions folded into `docs/architecture.md` "Performance — design record (perf audit 2026-06-18, Wave
+P3)"; RT-2 also folded into `docs/rag-design.md` §8 (grounded prompt) + architecture.md §17.
 
 **Wave P4 — when the D15 ANN trigger fires (deferred, tracked):**
 16. **RAG-1 / RAG-6** — ANN index (sqlite-vec) or worker-thread scan with resident contiguous vectors; this is the real fix for the synchronous main-thread vector scan as the corpus grows.

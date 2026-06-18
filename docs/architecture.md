@@ -180,6 +180,88 @@ refactor); the FE-4 `DocRow` extraction (a ~25-prop memoized row — high stale-
 **FE-5** list windowing of the transcript + document list (needs a measured approach to preserve
 scroll-to-bottom + a11y; the cheap scroll-thrash half of FE-5 is already done under FE-1).
 
+## Performance — design record (perf audit 2026-06-18, Wave P3)
+Pipeline throughput & latency on the two hottest operations — **import a document** and **ask a
+question** — plus runtime-startup knobs. Unlike P2 (pure memoization), several P3 items are
+**structural** (concurrency, prompt layout, runtime flags), so each preserves a stated correctness
+contract. Condensed from `docs/performance-audit-2026-06-18.md` §4.2/§4.3/§4.5 after Wave P3 shipped.
+
+**Import pipeline (`services/ingestion/index.ts`, `ipc/registerDocsIpc.ts`).**
+- **ING-3 — 1-deep parse/embed pipeline.** Import was fully serialized: per file, parse → chunk →
+  embed (sidecar round-trips) → write, each fully awaited, so file N+1's parse (CPU) never overlapped
+  file N's embed (I/O wait). `processDocument` is now split at the **already-DB-mediated chunk↔embed
+  boundary** into `prepareDocument` (setup → parse → chunk → persist chunks, leaving the doc in
+  `embedding`) and `finalizeDocument` (embed the persisted chunks → mark `indexed`); `processDocument`
+  is their back-to-back composition, so the reindex / OCR re-ingest / materialize callers are
+  behavior-identical. The import loop runs `prepareDocument(N+1)` **while** `finalizeDocument(N)`
+  embeds. **The embed sidecar is the single contended resource, so embeds are NEVER parallelized** —
+  only the next file's parse overlaps the prior embed. Per-file `ImportJobStatus` counts, ordering,
+  per-file error isolation (each phase self-captures failure on the row), the DB-1 per-phase
+  transactions, and lock-mid-job are all preserved (the look-ahead is drained + de-registered from
+  `processing` on a lock break so the post-job reconcile still fires). Transients (decrypted working
+  copies) shred at the **end of prepare** — the embed phase reads chunk text from the DB, not the
+  files — strictly shortening plaintext lifetime. **New data contract:** `prepareDocument` /
+  `finalizeDocument` / `PreparedDocument` are exported alongside `processDocument`.
+
+**OCR (`services/ocr/pipeline.ts`, `services/ocr/rasterizer.ts`).**
+- **ING-5 — 1-deep render/recognize look-ahead.** OCR rendered page N (pdfjs, hidden window) then
+  awaited recognize(N) (WASM tesseract) before rendering N+1 — two different engines run strictly
+  serially. A new pure `pipelinePages(pageCount, renderPage, onPage, opts)` helper renders page N+1
+  **while** page N recognizes, keeping recognitions serial and in order. Memory stays bounded (at most
+  one extra rendered PNG resident); page ordering, progress %, and cancellation are unchanged. The
+  helper is Electron-free so it is unit-testable with fake render/recognize functions.
+
+**Grounded-answer prompt (`services/rag/index.ts`).**
+- **RT-2 — cacheable grounding prompt (updates §17 (a) to implemented).** The stable grounding rules +
+  preface rode in the per-turn USER message, so `cache_prompt`'s longest-common-prefix reuse stopped
+  at `BASE_SYSTEM_PROMPT` and re-prefilled the whole rules block on every documents turn (the prior
+  user turn is replayed as the RAW question, so the grounded prefix never matched). They now live in a
+  new **`GROUNDED_SYSTEM_PROMPT`** (`BASE_SYSTEM_PROMPT` + the rules); the user turn carries only the
+  per-turn question + excerpts (+ the skill fence, which stays in the user turn as **untrusted
+  reference text** — never `system`, skills plan §11.2). ~58 approx tokens of rules now sit in the
+  always-reused system prefix instead of re-prefilling per follow-up. **Correctness preserved:**
+  precedence is unchanged/strengthened (rules in `system` ≥ the user turn, still outrank the fence);
+  the `[Sn]` citation contract and the no-context refusal path are untouched; the skill-fence
+  budget is sized against `GROUNDED_SYSTEM_PROMPT` so the total fixed-token reserve is unchanged.
+  A test asserts the system prefix is **byte-stable across two turns** (the precondition for reuse).
+
+**Model verification on the chat path (`services/models.ts`, `ipc/registerModelIpc.ts`).**
+- **RT-3 — lazy model hashing.** `listModels` fired on both the Models-screen visit and the workspace
+  gate into Chat, SHA-256-hashing every present multi-GB GGUF on a cold cache (minutes of USB I/O) on
+  the awaited IPC. `buildModelList` gains an additive **`onlyVerifyModelId`**: when present, only that
+  model is hashed on a cold cache; other present weights are reported `installed` **without** hashing
+  (display-only) — a live cached hash is still served for free, so a known `checksum_failed` still
+  surfaces. Threaded via a new optional `lazyVerify` arg on the `listModels` IPC: the `WorkspaceGate`
+  (chat path) passes `true` with the active model id; the Models screen omits it and hashes the full
+  set. **The §7.4 gate is intact** — `startModelRuntime` re-verifies the model it actually launches,
+  and `verify-models --strict` / `assertCommercialDrive` still hash fully.
+
+**Sidecars (`services/runtime/sidecar.ts`, `services/embeddings/e5.ts`).**
+- **RT-4 — embedder physical batch.** In `--embedding` mode llama-server forces `n_batch = n_ubatch`
+  and defaults both to 512, so a 32-input embed request co-decodes ~1 full-length sequence per physical
+  batch. The embedder now sets `--batch-size`/`--ubatch-size` to `max(ctx, 2048)`, packing multiple
+  in-context inputs per ubatch (each input ≤ ctx still fits one ubatch — required because mean pooling
+  cannot split a sequence). Mirrors the chat 2048 (RT-1) and the reranker's raise (different reason —
+  one big query+doc sequence). **Verified on the pinned b9585 binary** (PAID smoke drive): with both
+  flags at 2048 the "`n_batch (2048) > n_ubatch (512) … setting n_batch = n_ubatch = 512`" downgrade
+  warning does not fire and a multi-input `/v1/embeddings` request returns correctly.
+- **RT-5 — readiness-poll backoff.** `waitForHealthy` polled `/health` at a fixed 250 ms, so a
+  fast-ready sidecar paid up to a full interval of dead time on every start / model switch. It now
+  starts at 50 ms and doubles each miss up to the configured cap (`healthIntervalMs`, default 250 ms);
+  the overall timeout budget is unchanged, and a tiny test interval caps the initial too.
+
+**Vector search (`services/embeddings/index.ts`).**
+- **RAG-1 — dot-product fast path (cheap slice only).** Stored vectors and the query vector are both
+  L2-normalized (`e5.ts` `l2normalize`; the mock embedder too), so cosine == raw dot product. A new
+  `dotProduct` helper replaces `cosineSimilarity` in `VectorIndex.search`, dropping the two per-row
+  norm accumulators (~2× fewer FLOPs/row); ranking is identical to floating-point tolerance (asserted
+  by a test). **The off-main-thread / ANN scan stays Wave P4** (the documented D15 deferral) — this is
+  only the constant-factor slice.
+
+Deferred to Wave P4 (the D15 ANN trigger): moving the linear vector scan off the main thread / a
+sqlite-vec or HNSW index with a resident contiguous `Float32Array` (RAG-1/RAG-6 beyond the dot
+product). Still deferred from P2: Composer/`input` move, `DocRow` extraction, FE-5 windowing.
+
 ## Models & runtime (Phase 2)
 - **Manifests** are local YAML under `model-manifests/` (committed; weights are not). The schema +
   validator live in `src/shared/manifest.ts` so renderer and main share one definition. YAML is
@@ -1890,14 +1972,24 @@ offline, audit still ids/counts-only; no i18n surface touched):
   disk→DB reconciliation always reads fresh. Content-class clean (in-memory parsed result only).
   Covered by `skills-loader-cache.test.ts`.
 
-**Recommended, not implemented** (deliberately out of this low-risk scope, recorded so the trade-off
-is visible): (a) the **grounded** fence is per-turn prefill by *placement* (§22-H2 keeps it in the
-user turn so the grounding rules retain precedence) — the honest mitigation is to keep skill bodies
-small, not to move the fence into `system`; (b) for a **large user skill near the budget**, the
-plain-chat fence trim depends on the current question's length (`buildTurnFence` subtracts the live
-final-turn tokens), so the system prefix can shift turn-to-turn and defeat PERF-1 — sizing the fence
-against a *fixed* user-turn reserve would keep it byte-stable, but it is a no-op for every shipped
-skill (none trim) and was left for a follow-up to avoid changing the §22-A6 budget contract.
+**(a) — IMPLEMENTED in Wave P3 (RT-2, 2026-06-18).** The grounded answer's **stable grounding rules +
+preface** now ride in a cacheable system prompt (`GROUNDED_SYSTEM_PROMPT` = `BASE_SYSTEM_PROMPT` + the
+rules) instead of the per-turn user message, so `cache_prompt`'s prefix reuse no longer stops at
+`BASE_SYSTEM_PROMPT` and re-prefills them every documents turn (the prior user turn is replayed as the
+RAW question, so the grounded prefix never matched). The per-turn user message keeps only the question
++ excerpts. **The skill fence still rides in the user turn deliberately** — it is untrusted reference
+text and must never read as a top-level rule (§22-H2), so this is the grounding-RULES move, not a fence
+move; the excerpts themselves are inherently per-turn and still re-prefill. ~58 approx tokens of rules
+now sit in the always-reused prefix; precedence is unchanged/strengthened (rules in `system` ≥ user,
+still outrank the fence) and the `[Sn]` + no-context contracts are untouched. See "Performance — design
+record … Wave P3" (RT-2).
+
+**Recommended, not implemented** (deliberately out of scope, recorded so the trade-off is visible):
+(b) for a **large user skill near the budget**, the plain-chat fence trim depends on the current
+question's length (`buildTurnFence` subtracts the live final-turn tokens), so the system prefix can
+shift turn-to-turn and defeat PERF-1 — sizing the fence against a *fixed* user-turn reserve would keep
+it byte-stable, but it is a no-op for every shipped skill (none trim) and was left for a follow-up to
+avoid changing the §22-A6 budget contract (RT-9, still open).
 
 ### §18 Auto-fire triggers (S13 — gated on an evaluation harness, 2026-06-17)
 

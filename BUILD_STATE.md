@@ -6,7 +6,57 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
-_Last updated: 2026-06-18 — **Performance audit Wave P2 SHIPPED (branch `performance-tuning`).**
+_Last updated: 2026-06-18 — **Performance audit Wave P3 SHIPPED (branch `performance-tuning`).**
+Pipeline throughput & latency on the two hottest operations (import a document, ask a question) plus
+runtime-startup knobs (audit `docs/performance-audit-2026-06-18.md` §6 Wave P3). Unlike P2 (pure
+memoization), several items are **structural**, each preserving a stated correctness contract.
+**Shipped (one commit per finding id):** (1) **RAG-1 (High, slice only)** — `VectorIndex.search` uses
+a new `dotProduct` helper instead of `cosineSimilarity`: stored + query vectors are L2-normalized
+(`e5.ts` `l2normalize`, mock too) so cosine == dot, dropping the two per-row norm accumulators (~2×
+fewer FLOPs/row); ranking identical to float tolerance. **The ANN/worker scan stays Wave P4 (D15).**
+(2) **RT-5 (Low)** — `waitForHealthy` backs off from 50 ms ×2 up to the `healthIntervalMs` cap
+(default 250) instead of a fixed 250 ms poll; overall timeout budget unchanged. (3) **RT-4 (Medium)**
+— the embedder sidecar now sets `--batch-size`/`--ubatch-size` to `max(ctx, 2048)` (was the
+embedding-mode 512 default), packing multiple of a 32-input batch's sequences per ubatch. **VERIFIED
+on the pinned b9585 binary** (PAID smoke drive attached): with both flags at 2048 the "n_batch (2048)
+> n_ubatch (512) … setting n_batch = n_ubatch = 512" downgrade warning does NOT fire and a multi-input
+`/v1/embeddings` request returns correctly. Arg-assertion test added. (4) **RT-3 (Medium)** —
+`buildModelList` gains an additive **`onlyVerifyModelId`**; the `listModels` IPC gains an optional
+**`lazyVerify`** arg. The WorkspaceGate (chat path) passes `lazyVerify:true` → only the active model
+is SHA-256-hashed on a cold cache (the others reported `installed` unhashed, display-only); the Models
+screen omits it and hashes the full set. §7.4 gate intact — `startModelRuntime` re-verifies the model
+it launches; a live cached hash is still served for free. (5) **RT-2 (Medium, correctness-critical)**
+— the stable grounding rules + preface moved from the per-turn USER message into a new cacheable
+**`GROUNDED_SYSTEM_PROMPT`** (= `BASE_SYSTEM_PROMPT` + rules); the user turn keeps only question +
+excerpts (+ the skill fence, which STAYS in the user turn as untrusted reference text). ~58 approx
+tokens of rules now sit in the always-reused `cache_prompt` prefix instead of re-prefilling every
+documents turn. Precedence preserved/strengthened (rules in system ≥ user), `[Sn]` + no-context
+contracts untouched; a test asserts the system prefix is byte-stable across two turns. (6) **ING-5
+(Medium)** — new Electron-free `ocr/pipeline.ts` `pipelinePages` renders page N+1 WHILE page N
+recognizes (1-deep look-ahead); recognitions stay serial + in order, memory bounded to one extra PNG;
+ordering/progress/cancellation unchanged. (7) **ING-3 (High, highest risk, done LAST)** —
+`processDocument` split at the already-DB-mediated chunk↔embed boundary into **`prepareDocument`**
+(parse+chunk) + **`finalizeDocument`** (embed+mark); `processDocument` is now their composition (so
+reindex/OCR/materialize are behavior-identical). The import loop runs `prepareDocument(N+1)` WHILE
+`finalizeDocument(N)` embeds — **embeds are NEVER parallelized** (the sidecar is the single contended
+resource); only parse(N+1) overlaps embed(N). Per-file statuses/ordering/error-isolation, the DB-1
+per-phase transactions, and lock-mid-job all preserved (look-ahead drained + de-registered on a lock
+break). **New / changed data contracts:** new exports `prepareDocument`/`finalizeDocument`/
+`PreparedDocument`; `buildModelList({ onlyVerifyModelId })` (additive, behind the locked `listModels`
+contract); `listModels(lazyVerify?)` IPC arg; the grounded system prompt is now
+`GROUNDED_SYSTEM_PROMPT` (exported); embedder spawns with `--batch-size`/`--ubatch-size`. **Docs:**
+folded into `docs/architecture.md` "Performance — design record … Wave P3" + §17 (a)→implemented, and
+`docs/rag-design.md` §8 (grounded prompt split); audit P3 items tagged **✅ IMPLEMENTED**, §6 Wave P3
+checked off, STATUS banner updated. **New tests:** `dotProduct` ranking equivalence (embeddings.test),
+e5-embedder RT-4 arg assertion, RT-3 lazy/full hashing (models.test, +WorkspaceGate passing lazy),
+RT-2 rules-in-system + byte-stable-prefix (rag.test, skills-turn.test updated), `ocr-pipeline.test`
+(ordering/overlap/one-ahead/cancel), ING-3 mid-batch-failure isolation (docs-ipc.test).
+**Verification:** full suite **1776 passed / 25 skipped** (+16), typecheck + build clean.
+**NEXT ACTION:** Wave P4 — the off-main-thread / ANN vector scan (RAG-1/RAG-6 beyond the dot product,
+the D15 trigger). Still deferred from P2: Composer/`input` move, `DocRow` extraction, FE-5 windowing.
+**(prior P2 entry below.)**_
+
+_2026-06-18 — **Performance audit Wave P2 SHIPPED (branch `performance-tuning`).**
 Renderer responsiveness on the CPU-only target (audit `docs/performance-audit-2026-06-18.md` §6 Wave
 P2) — the chat transcript and the Documents screen re-did O(list) work and re-parsed Markdown on a
 40 ms / 400 ms cadence, competing with token generation. All behavior-preserving (no visible UI

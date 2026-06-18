@@ -311,10 +311,12 @@ persistence + UI). Each `Citation` carries a truncated `snippet` (≤ `SNIPPET_M
 600) of the chunk text so the renderer's source-snippet panel can show what was cited
 without a second lookup.
 
-### Grounded prompt (`buildGroundedPrompt`)
+### Grounded prompt (`buildGroundedPrompt` + `GROUNDED_SYSTEM_PROMPT`)
 
-A pure function emitting the spec §7.8 template verbatim — the rules, the `Question:`, then
-the numbered `Document excerpts:` in the spec's source-context format:
+The grounded prompt is split across two messages. The **stable** grounding rules + preface live in
+`GROUNDED_SYSTEM_PROMPT` (= `BASE_SYSTEM_PROMPT` + the rules block); `buildGroundedPrompt` is a pure
+function emitting only the **per-turn** content — the `Question:`, then the numbered
+`Document excerpts:` in the spec §7.8 source-context format:
 
 ```text
 [S1] File: Contract.pdf | Page: 4
@@ -326,18 +328,30 @@ the numbered `Document excerpts:` in the spec's source-context format:
 
 The meta line is `| Page: N` when the chunk has a page, else `| Section: X`, else nothing.
 
+**RT-2 — the rules ride in the cacheable system prompt (perf audit 2026-06-18, Wave P3).** The rules
++ preface USED to ride in this per-turn user message, so `cache_prompt`'s longest-common-prefix reuse
+stopped at `BASE_SYSTEM_PROMPT` and **re-prefilled the whole rules block every documents turn** — even
+follow-ups, because the prior user turn is replayed as the *raw* question (the DB never stores the
+grounded form), so the grounded prefix never matched across turns. Moving the rules into the byte-stable
+`GROUNDED_SYSTEM_PROMPT` puts them in the always-reused prefix: **~58 approx tokens** of rules that no
+longer re-prefill per follow-up (on CPU, prefill is ~30–80 tok/s — see architecture.md §17). Precedence
+is unchanged/strengthened (rules in `system` ≥ the user turn); the `[Sn]` citation contract and the
+no-context refusal path are untouched. A test asserts the system prefix is byte-stable across two turns.
+
 **Skill fence (Skills plan §11.2 / S7).** `buildGroundedPrompt` takes an optional `skillFence`: when
 a skill is active for the turn, its fenced instruction block is placed in **this user/data turn**
 (after the `Question:`, before the excerpts) — **never in `system`** (§22-H2): a skill is
 user-selected reference text, the same untrusted class as the excerpts, and the grounding + citation
-rules keep precedence. The fence is pre-sized by `services/skills/prompt.ts` against the fence-less
-grounded turn so the excerpts/question are never starved (§22-A6), and the assistant row is stamped
-with the skill only when the fence was actually placed **and** chunks were found — a no-context
-answer (model not called) stamps NULL. See architecture.md "Chat & streaming" / the skills design.
+rules keep precedence. (RT-2 moves only the stable grounding RULES to `system`, NOT the fence.) The
+fence is pre-sized by `services/skills/prompt.ts` against the fence-less grounded turn — now measured
+as `GROUNDED_SYSTEM_PROMPT` + the rules-less user turn, an unchanged total — so the excerpts/question
+are never starved (§22-A6), and the assistant row is stamped with the skill only when the fence was
+actually placed **and** chunks were found — a no-context answer (model not called) stamps NULL. See
+architecture.md "Chat & streaming" / the skills design.
 
-`buildGroundedChatMessages` then assembles the runtime message list: the base system prompt
-(spec §7.6), prior conversation history, and the **last user turn replaced by the grounded
-prompt**. The DB keeps the raw question for the transcript/title; only the model sees the
+`buildGroundedChatMessages` then assembles the runtime message list: the **`GROUNDED_SYSTEM_PROMPT`**
+(base preamble + grounding rules), prior conversation history, and the **last user turn replaced by
+the grounded prompt**. The DB keeps the raw question for the transcript/title; only the model sees the
 grounded form. The history is then **trimmed to the model context** via `fitMessagesToContext`
 (chat.ts; passed `getSettings(db).contextTokens`) — the grounded turn is the final message and
 is always kept, while older turns are dropped oldest-first. `maxContextTokens` bounds only the
