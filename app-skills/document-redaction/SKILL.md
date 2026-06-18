@@ -19,6 +19,10 @@ permissions:                   # DECLARED INTENT only — the app is authoritati
 allowedTools:                  # The app-owned tools this skill may run (declared ∩ registry ∩ grant);
   - redact_document            #   it reads the selected document and asks before saving the copy.
 triggers:                      # OPTIONAL — drives the deterministic suggestion heuristic (§10).
+  autoFire: true               # S13b D6 opt-in: eligible for auto-fire (still gated by the user opt-in
+                               #   D4, app-only, §6.5 compatibility, and the score ≥ 3 bar — a keyword
+                               #   corroborated by ≥1 in-scope doc signal). Proven at 100% precision on
+                               #   the S13a corpus (skills-s13-plan.md §3.3 / eval threshold-3 gate).
   # Bilingual + full words only: matching is case-insensitive question.includes(keyword), so short
   # ambiguous tokens are avoided (no bare "mask"→"unmask", "pii", or "vat"); German singular+plural
   # are listed where an umlaut/ending breaks the substring.

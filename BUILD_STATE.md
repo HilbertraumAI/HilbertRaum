@@ -6,6 +6,24 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-18 — **document-redaction is the first skill to opt into auto-fire (S13b D6).** A user
+reported "I want to anonymize my attached document" not auto-firing the redaction skill even with the
+`skillsAutoFireEnabled` opt-in on and a document selected. Root cause: the **D6** author-opt-in was
+never set — `document-redaction/SKILL.md` had keywords but no `triggers.autoFire`, so the candidate
+set in `resolveAutoFireSkill` was empty (no bundled skill declared it). **Fix:** added
+`triggers.autoFire: true` to [`app-skills/document-redaction/SKILL.md`](app-skills/document-redaction/SKILL.md).
+Now, with the user opt-in on, "anonymize/redact"-style turn (keyword, score 2) over a **selected**
+pdf/plain/markdown document (in-scope-doc MIME, +1) = 3 clears `AUTOFIRE_SCORE_THRESHOLD` and fires.
+"Selected" = in the conversation's persisted scope, which `inScopeDocSignals` resolves main-side
+(§22-C4) — verified: the same phrase with no doc in scope (score 2) does NOT fire. **No code/contract
+change** — only the skill manifest + docs; the autoFire flag doesn't enter the eval harness scoring, so
+the `threshold-3` D1 gate stays **100% precision** on the S13a corpus. **Tests:** 4 new in
+[`skills-autofire.test.ts`](apps/desktop/tests/integration/skills-autofire.test.ts) exercising the REAL
+redaction skill end-to-end (fires on the reported phrase + a selected PDF; inert keyword-only,
+non-redactable MIME, and opt-in-off) — file 17→21, suite green. **Docs:** architecture §18 safe-merge
+paragraph corrected (the property now rests on the default-false opt-in alone, not on "no skill
+declares autoFire") + a "first opted-in product skill" note added. **(prior entries below.)**_
+
 _2026-06-18 — **Three minor UI adjustments (Models screen + Document preview).**
 (1) **Models screen** (`renderer/screens/ModelsScreen.tsx`): the "Other models" picker (non-active
 chat models) now sorts installed models first — `isInstalled` ranks `installed`/`running`/`ready`

@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { randomUUID } from 'node:crypto'
 import { openDatabase, type Db } from '../../src/main/services/db'
 import { reconcileSkills, setSkillEnabled } from '../../src/main/services/skills/registry'
@@ -293,5 +294,63 @@ describe('S13c — auto-fire provenance + the undo (skills-s13-plan.md §5/D3)',
     // …then the undo re-runs it with the skill explicitly cleared (skillInstallId: null) — no skill,
     // and crucially NO re-auto-fire even though the same question would otherwise score 3.
     expect(resolveTurnSkill(db, dirs, convId, null, Q_MATCH)).toBeNull()
+  })
+})
+
+// The REAL committed document-redaction skill auto-fires end-to-end (regression for the user-reported
+// "anonymize my attached document" miss). Reconciling the repo's app-skills/ installs it ENABLED with
+// the autoFire opt-in (D6) now set; a SELECTED document is in the conversation's persisted scope, so
+// `inScopeDocSignals` surfaces its MIME (the §22-C4 main-side resolution). "anonymize" (keyword, 2) +
+// an in-scope PDF (mime, 1) = 3 ⇒ clears AUTOFIRE_SCORE_THRESHOLD and fires.
+describe('document-redaction auto-fires against the real selector (S13b D6 opt-in)', () => {
+  const REPO_ROOT = join(fileURLToPath(new URL('.', import.meta.url)), '..', '..', '..', '..')
+  function realDirs(): { appSkillsDir: string; userSkillsDir: string } {
+    return { appSkillsDir: join(REPO_ROOT, 'app-skills'), userSkillsDir: join(tempDir(), 'user-skills') }
+  }
+  const Q_ANON = 'I want to anonymize my attached document' // keyword "anonymize" (2)
+
+  it('opted in + a selected PDF in scope (score 3) ⇒ auto-fires document-redaction', () => {
+    const db = freshDb()
+    const dirs = realDirs()
+    reconcileSkills(db, dirs) // app skills install ENABLED
+    updateSettings(db, { skillsAutoFireEnabled: true })
+    // A "selected" document is a document in the conversation's scope — exactly what the user had.
+    const docId = seedIndexedDoc(db, 'contract.pdf', 'application/pdf')
+    const conv = createConversation(db, { mode: 'documents', scope: { collectionIds: [], documentIds: [docId] } })
+
+    const skill = resolveAutoFireSkill(db, dirs, conv.id, Q_ANON)
+    expect(skill?.installId).toBe('app:document-redaction')
+    expect(skill?.autoFired).toBe(true)
+  })
+
+  it('the SAME phrase with NO doc selected (keyword-only, score 2) does NOT fire', () => {
+    const db = freshDb()
+    const dirs = realDirs()
+    reconcileSkills(db, dirs)
+    updateSettings(db, { skillsAutoFireEnabled: true })
+    // No document in scope ⇒ inScopeDocSignals is empty ⇒ "anonymize" alone scores 2 < 3.
+    const conv = createConversation(db, {})
+    expect(resolveAutoFireSkill(db, dirs, conv.id, Q_ANON)).toBeNull()
+  })
+
+  it('a selected NON-redactable MIME (no mime hit) does NOT fire on the keyword alone', () => {
+    const db = freshDb()
+    const dirs = realDirs()
+    reconcileSkills(db, dirs)
+    updateSettings(db, { skillsAutoFireEnabled: true })
+    // The skill's mimeTypes are pdf/plain/markdown; a spreadsheet gives no mime signal ⇒ score 2 < 3.
+    const docId = seedIndexedDoc(db, 'numbers.xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+    const conv = createConversation(db, { mode: 'documents', scope: { collectionIds: [], documentIds: [docId] } })
+    expect(resolveAutoFireSkill(db, dirs, conv.id, Q_ANON)).toBeNull()
+  })
+
+  it('still inert when the user opt-in (D4) is off, even with the perfect match', () => {
+    const db = freshDb()
+    const dirs = realDirs()
+    reconcileSkills(db, dirs)
+    // skillsAutoFireEnabled left at its default (false) — the production safe-merge posture.
+    const docId = seedIndexedDoc(db, 'contract.pdf', 'application/pdf')
+    const conv = createConversation(db, { mode: 'documents', scope: { collectionIds: [], documentIds: [docId] } })
+    expect(resolveAutoFireSkill(db, dirs, conv.id, Q_ANON)).toBeNull()
   })
 })

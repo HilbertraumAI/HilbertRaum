@@ -2124,12 +2124,19 @@ pass the turn text, so a documents conversation auto-fires too.
   `regenerate` argument (drop the last assistant turn, re-use the existing last user turn — never a
   duplicate user row).
 
-**Safe-merge property.** With `skillsAutoFireEnabled` default-false **and** no bundled app skill
-declaring `triggers.autoFire`, a fresh install behaves **identically** to pre-S13 — auto-fire only
-activates once a user opts in (S13c) AND a product skill opts in (a later deliberate choice). The §14
-ceilings + the S12 sentinel guard are unchanged: a wrong fire is at worst a worse answer + a one-click
-undo, never an unauthorized action; the undo is a re-run, not a new capability; no auto-fire path adds
-an audit event or logs the question.
+**Safe-merge property.** With `skillsAutoFireEnabled` **default-false**, a fresh install behaves
+**identically** to pre-S13 regardless of which skills opt in — auto-fire only activates once a user
+turns it on (S13c). The §14 ceilings + the S12 sentinel guard are unchanged: a wrong fire is at worst
+a worse answer + a one-click undo, never an unauthorized action; the undo is a re-run, not a new
+capability; no auto-fire path adds an audit event or logs the question.
+
+**First opted-in product skill (D6).** `document-redaction` declares `triggers.autoFire: true` (the
+only bundled skill to do so). Once a user enables auto-fire, an "anonymize/redact"-style turn over a
+selected pdf/plain/markdown document auto-applies it: keyword (2) + the in-scope-doc MIME signal (1) =
+3, clearing `AUTOFIRE_SCORE_THRESHOLD`. It is proven at 100% precision on the S13a corpus (the
+`threshold-3` gate). A "selected" document is one in the conversation's persisted scope, so
+`inScopeDocSignals` surfaces its MIME main-side (§22-C4) — the same phrase with no document in scope
+scores 2 and does **not** fire (regression-tested in `skills-autofire.test.ts`).
 
 ### §-anchor legend (historical plan citations)
 
