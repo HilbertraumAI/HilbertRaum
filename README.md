@@ -170,5 +170,5 @@ See [`PRIVACY.md`](PRIVACY.md). Short version: nothing you type or import is sen
 
 ## License
 
-[Apache-2.0](LICENSE) for the software core. Model weights are **not** included and carry their own
+[GPL-3.0-or-later](LICENSE) for the software core. Model weights are **not** included and carry their own
 licenses (see [`docs/model-policy.md`](docs/model-policy.md)).
