@@ -24,7 +24,9 @@ import {
   getDocument,
   getDocumentSummary,
   listDocuments,
-  processDocument,
+  prepareDocument,
+  finalizeDocument,
+  type PreparedDocument,
   readStoredDocumentText,
   reconcileStuckDocuments,
   reconcileStuckTrees,
@@ -250,20 +252,50 @@ export function registerDocsIpc(ctx: AppContext): void {
     jobs.set(jobId, status)
     log.info('Import started', { jobId, files: documentIds.length })
 
-    // Process sequentially in the background; do not block the invoke return.
+    // Process in the background; do not block the invoke return.
+    //
+    // ING-3 — 1-deep parse/embed pipeline. Import was fully serialized (parse → chunk →
+    // embed → write, awaited per file), so file N+1's parse (CPU) never overlapped file N's
+    // embed (sidecar I/O wait). Now `prepareDocument` (parse+chunk, CPU/disk) of file N+1
+    // runs WHILE `finalizeDocument` (embed+mark, sidecar) of file N runs. The embed sidecar
+    // is the single contended resource, so embeds are NEVER parallelized — only prepare(N+1)
+    // overlaps finalize(N). Per-file statuses, ordering, per-file error isolation, the DB-1
+    // per-phase transactions, and the lock-mid-job behavior are all preserved: prepare/
+    // finalize are just `processDocument` split at the already-DB-mediated chunk↔embed
+    // boundary, and each captures its own failure on the row.
     void (async () => {
+      type Pending = { id: string; promise: Promise<PreparedDocument> }
+      // Start the parse+chunk of `documentIds[idx]` (the look-ahead). Skipped (null) past the
+      // end or once the workspace is locked. Adds the id to `processing` so reconciliation and
+      // the busy gate see it from the moment its parse begins; the consumer removes it.
+      const startPrepare = (idx: number): Pending | null => {
+        if (idx >= documentIds.length || !ctx.workspace.isUnlocked()) return null
+        const id = documentIds[idx]
+        processing.add(id)
+        return { id, promise: prepareDocument(ctx.db, storeDir, id, ingestionDeps()) }
+      }
+      let pending = startPrepare(0)
       try {
-        for (const id of documentIds) {
-          // Lock-while-importing: the vault can close mid-job ("Lock now"). Stop the
-          // loop cleanly — the remaining rows stay non-terminal inside the encrypted
-          // snapshot and are reconciled to `failed` (re-indexable) after the next unlock.
+        for (let i = 0; i < documentIds.length; i++) {
+          // Lock-while-importing: the vault can close mid-job ("Lock now"). Stop the loop
+          // cleanly — the remaining rows stay non-terminal inside the encrypted snapshot and
+          // are reconciled to `failed` (re-indexable) after the next unlock.
           if (!ctx.workspace.isUnlocked()) {
             log.warn('Import stopped: workspace locked mid-job', { jobId })
             break
           }
-          processing.add(id)
+          const id = documentIds[i]
+          // `pending` holds prepare(i): kicked off as the prior iteration's look-ahead, or
+          // pre-loop for i=0. It is always prepare(i) (the loop never skips an index); if a
+          // transient lock left it null, start it inline now.
+          const current = pending ?? startPrepare(i)
+          // Look ahead: start file i+1's parse so it overlaps file i's embed below.
+          pending = startPrepare(i + 1)
           try {
-            const info = await processDocument(ctx.db, storeDir, id, ingestionDeps())
+            const prepared = current
+              ? await current.promise
+              : await prepareDocument(ctx.db, storeDir, id, ingestionDeps())
+            const info = await finalizeDocument(ctx.db, id, ingestionDeps(), prepared)
             if (info.status === 'failed') status.failed += 1
             else {
               status.completed += 1
@@ -291,6 +323,19 @@ export function registerDocsIpc(ctx: AppContext): void {
             processing.delete(id)
             transcribing.delete(id)
           }
+        }
+        // A look-ahead prepare may be in flight when the loop broke early (mid-job lock).
+        // Drain it so its row settles and its `processing` entry is cleaned up before the job
+        // is marked done — otherwise the post-job reconcile (gated on `processing.size === 0`)
+        // would never fire. The drained doc is left non-terminal and reconciled after unlock.
+        if (pending) {
+          try {
+            await pending.promise
+          } catch {
+            /* prepareDocument self-captures failures on the row */
+          }
+          processing.delete(pending.id)
+          transcribing.delete(pending.id)
         }
       } finally {
         releaseDocWork()

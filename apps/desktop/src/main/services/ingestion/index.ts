@@ -478,16 +478,34 @@ export function createQueuedDocument(
 }
 
 /**
- * Run the full ingestion pipeline for one already-`queued` document. Never throws:
- * any failure is captured on the document row as `failed` + `error_message`, and the
- * resulting DocumentInfo is returned so the caller can report it.
+ * Result of the parse+chunk phase (`prepareDocument`), the front half of the ING-3 import
+ * pipeline. `ready: true` ⇒ chunks are persisted and the document is in `embedding`; the
+ * embed phase (`finalizeDocument`) may proceed. `ready: false` ⇒ prepare already captured a
+ * failure on the row (`failed` + `error_message`), so the embed phase must be skipped.
  */
-export async function processDocument(
+export interface PreparedDocument {
+  documentId: string
+  ready: boolean
+}
+
+/**
+ * Parse + chunk phase (ING-3 pipeline, front half). Runs setup → parse → chunk → persist
+ * chunks, leaving the document in `embedding`. CPU- and disk-bound; independent of the embed
+ * sidecar (the embed phase reads the chunks back from the DB), so the import loop overlaps
+ * one file's `prepareDocument` with the previous file's `finalizeDocument`. Never throws: a
+ * failure is captured on the row and returned as `ready: false`.
+ *
+ * Splitting `processDocument` here is behavior-preserving: `processDocument` is just
+ * `prepareDocument` then `finalizeDocument` back-to-back, and the split point is the
+ * already-DB-mediated chunk↔embed boundary. Transient decrypted copies are shredded at the
+ * end of THIS phase (the embed phase needs only the DB), strictly reducing plaintext lifetime.
+ */
+export async function prepareDocument(
   db: Db,
   storeDir: string,
   documentId: string,
   deps: IngestionDeps = {}
-): Promise<DocumentInfo> {
+): Promise<PreparedDocument> {
   const row = getRow(db, documentId)
   if (!row) throw new Error(`Unknown document: ${documentId}`)
 
@@ -707,9 +725,41 @@ export async function processDocument(
       throw err
     }
 
-    // Embedding step: vectorize each chunk and persist to `embeddings`.
-    // The DELETE above already cleared stale vectors, so re-index re-embeds cleanly.
+    // ING-3 pipeline boundary: chunks are now persisted and the document is in `embedding`.
+    // The embed phase (finalizeDocument) reads the chunks back from the DB, so this phase is
+    // independent of the embed sidecar — the import loop overlaps prepare(N+1) with
+    // finalizeDocument(N). The DELETE above already cleared stale vectors, so a re-index
+    // re-embeds cleanly.
     setStatus(db, documentId, 'embedding')
+    return { documentId, ready: true }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    setStatus(db, documentId, 'failed', message)
+    return { documentId, ready: false }
+  } finally {
+    // Shred transient decrypted copies whether parse succeeded or failed — the embed phase
+    // reads chunk text from the DB, not these files, so they are no longer needed.
+    for (const t of transients) shredFile(t)
+  }
+}
+
+/**
+ * Embed + finalize phase (ING-3 pipeline, back half). Embeds the chunks `prepareDocument`
+ * persisted (the embed sidecar is the single contended resource — never run two of these
+ * concurrently) and marks the document `indexed`. Never throws: an embed failure is captured
+ * on the row as `failed` + `error_message`. A `prepared.ready === false` input means prepare
+ * already failed the document, so this is a no-op that returns the failed info.
+ */
+export async function finalizeDocument(
+  db: Db,
+  documentId: string,
+  deps: IngestionDeps,
+  prepared: PreparedDocument
+): Promise<DocumentInfo> {
+  if (!prepared.ready) return infoOrDeleted(db, documentId)
+  try {
+    // Embedding step: vectorize each chunk and persist to `embeddings`. prepareDocument's
+    // DELETE already cleared stale vectors, so re-index re-embeds cleanly.
     if (deps.embedder) {
       await embedChunks(db, documentId, deps.embedder, deps.embeddingModelId ?? deps.embedder.id)
     }
@@ -732,10 +782,26 @@ export async function processDocument(
     const message = err instanceof Error ? err.message : String(err)
     setStatus(db, documentId, 'failed', message)
     return infoOrDeleted(db, documentId)
-  } finally {
-    // Shred transient decrypted copies whether the pipeline succeeded or failed.
-    for (const t of transients) shredFile(t)
   }
+}
+
+/**
+ * Run the full ingestion pipeline for one already-`queued` document. Never throws:
+ * any failure is captured on the document row as `failed` + `error_message`, and the
+ * resulting DocumentInfo is returned so the caller can report it.
+ *
+ * Single-shot composition of the two ING-3 phases (`prepareDocument` then
+ * `finalizeDocument`); behavior-identical to the pre-split monolith. The import loop calls
+ * the two phases directly to pipeline them; reindex / OCR re-ingest / materialize use this.
+ */
+export async function processDocument(
+  db: Db,
+  storeDir: string,
+  documentId: string,
+  deps: IngestionDeps = {}
+): Promise<DocumentInfo> {
+  const prepared = await prepareDocument(db, storeDir, documentId, deps)
+  return finalizeDocument(db, documentId, deps, prepared)
 }
 
 /**
