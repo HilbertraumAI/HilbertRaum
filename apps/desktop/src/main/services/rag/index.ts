@@ -328,9 +328,36 @@ function sourceMeta(chunk: RetrievedChunk): string {
 }
 
 /**
- * Build the grounded answer prompt, verbatim to the spec §7.8 template: the rules, the
- * question, then the numbered source excerpts in the spec's source-context format
- * (`[S1] File: X | Page: 4` then the quoted chunk text). Pure + unit-testable.
+ * RT-2 — the STABLE grounding rules + preface, hoisted out of the per-turn USER message into
+ * the cacheable SYSTEM prompt (`GROUNDED_SYSTEM_PROMPT`). Keeping them in the user turn meant
+ * `cache_prompt`'s longest-common-prefix reuse stopped at `BASE_SYSTEM_PROMPT` and re-prefilled
+ * this whole rules block on every documents turn (the prior user turn is replayed as the RAW
+ * question, so the grounded prefix never matched). With the rules in `system` — byte-stable
+ * across turns — they sit in the always-reused prefix and only the per-turn excerpts re-prefill.
+ *
+ * Precedence is preserved/strengthened: these rules are now in `system` (≥ the user turn) and
+ * still outrank the skill fence, which stays in the user turn (untrusted reference text, never
+ * `system` — skills plan §11.2/§22-H2). The [Sn] citation contract is unchanged: the rules name
+ * the labels, the excerpts carry them. Wording is unchanged except "excerpts below" →
+ * "excerpts provided" now that the excerpts live in the user message that follows.
+ */
+const GROUNDING_RULES = `You are answering a question using local documents.
+
+Rules:
+- Use only the document excerpts provided when the question is about the documents.
+- If the excerpts do not contain enough information, say so.
+- Do not invent citations.
+- Cite sources inline using [S1], [S2], etc.
+- Keep the answer concise unless the user asks for detail.`
+
+/** The grounded-answer SYSTEM prompt: the base preamble + the stable grounding rules (RT-2). */
+export const GROUNDED_SYSTEM_PROMPT = `${BASE_SYSTEM_PROMPT}\n\n${GROUNDING_RULES}`
+
+/**
+ * Build the grounded answer USER turn: the question, the optional skill fence, then the
+ * numbered source excerpts in the spec §7.8 source-context format (`[S1] File: X | Page: 4`
+ * then the quoted chunk text). The stable grounding rules now live in `GROUNDED_SYSTEM_PROMPT`
+ * (RT-2), so this carries only the per-turn content. Pure + unit-testable.
  */
 export function buildGroundedPrompt(
   question: string,
@@ -341,20 +368,11 @@ export function buildGroundedPrompt(
     .map((c) => `[${c.label}] File: ${c.sourceTitle}${sourceMeta(c)}\n"${c.text}"`)
     .join('\n\n')
   // The skill fence (skills plan §11.2/§22-H2) rides in the USER turn WITH the excerpts — the same
-  // untrusted-reference-text class — never in `system`. It sits AFTER the grounding rules + question
-  // (which keep precedence) and BEFORE the excerpts; the fence carries its own guard line. The
-  // grounding rules ("use only the excerpts", "cite [S1]…", "do not invent citations") always win.
+  // untrusted-reference-text class — never in `system`. It sits AFTER the question and BEFORE the
+  // excerpts; the fence carries its own guard line. The grounding rules in GROUNDED_SYSTEM_PROMPT
+  // ("use only the excerpts", "cite [S1]…", "do not invent citations") always win.
   const skillBlock = skillFence ? `\n${skillFence}\n` : ''
-  return `You are answering a question using local documents.
-
-Rules:
-- Use only the document excerpts below when the question is about the documents.
-- If the excerpts do not contain enough information, say so.
-- Do not invent citations.
-- Cite sources inline using [S1], [S2], etc.
-- Keep the answer concise unless the user asks for detail.
-
-Question:
+  return `Question:
 ${question}
 ${skillBlock}
 Document excerpts:
@@ -375,7 +393,9 @@ export function buildGroundedChatMessages(
   contextTokens?: number
 ): ChatMessage[] {
   const history = listMessages(db, conversationId)
-  const messages: ChatMessage[] = [{ role: 'system', content: BASE_SYSTEM_PROMPT }]
+  // RT-2: the grounded system prompt carries the stable grounding rules so cache_prompt
+  // reuses them across documents turns (byte-stable prefix).
+  const messages: ChatMessage[] = [{ role: 'system', content: GROUNDED_SYSTEM_PROMPT }]
   for (let i = 0; i < history.length; i++) {
     const m = history[i]
     if (m.role !== 'user' && m.role !== 'assistant') continue
@@ -481,8 +501,12 @@ export async function generateGroundedAnswer(
   const contextTokens = getSettings(db).contextTokens
   let skillFence: string | null = null
   if (opts.skill) {
+    // RT-2: the grounding rules moved into the system prompt, so size the fence against
+    // GROUNDED_SYSTEM_PROMPT (+ the now-rules-less grounded user turn). The total fixed
+    // content is unchanged — text moved from the user turn to system — so the fence budget
+    // is preserved.
     const fixedTokens =
-      approxPromptTokens(BASE_SYSTEM_PROMPT) + approxPromptTokens(groundedNoFence) + 16
+      approxPromptTokens(GROUNDED_SYSTEM_PROMPT) + approxPromptTokens(groundedNoFence) + 16
     const budget = skillFenceBudgetTokens({
       contextTokens,
       reserveTokens: CHAT_RESPONSE_RESERVE_TOKENS,

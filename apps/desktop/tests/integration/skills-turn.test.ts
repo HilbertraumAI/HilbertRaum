@@ -21,6 +21,7 @@ import { updateSettings } from '../../src/main/services/settings'
 import {
   buildGroundedChatMessages,
   buildGroundedPrompt,
+  GROUNDED_SYSTEM_PROMPT,
   generateGroundedAnswer,
   ragSettingsFrom,
   type RetrievedChunk
@@ -165,12 +166,18 @@ describe('fence placement (§11.2/§22-H2)', () => {
     const grounded = buildGroundedPrompt('What is the balance?', chunks, fence)
     expect(grounded).toContain('FENCE-MARKER')
     expect(grounded).toContain('Document excerpts:')
-    // The grounding rules keep precedence (appear before the fence).
-    expect(grounded.indexOf('Use only the document excerpts')).toBeLessThan(grounded.indexOf('FENCE-MARKER'))
+    // RT-2: the grounding rules keep precedence by living in the SYSTEM prompt (≥ the user
+    // turn), no longer inline in the user prompt before the fence.
+    expect(GROUNDED_SYSTEM_PROMPT).toContain('Use only the document excerpts')
+    expect(grounded).not.toContain('Use only the document excerpts')
 
     const messages = buildGroundedChatMessages(db, conv.id, grounded)
     expect(messages[0].role).toBe('system')
-    expect(messages[0].content).toBe(BASE_SYSTEM_PROMPT) // no fence in system
+    // The fence is NOT in system (untrusted reference text); the grounded system prompt is
+    // the base preamble + the stable grounding rules (RT-2), and starts with the base.
+    expect(messages[0].content).toBe(GROUNDED_SYSTEM_PROMPT)
+    expect(messages[0].content.startsWith(BASE_SYSTEM_PROMPT)).toBe(true)
+    expect(messages[0].content).not.toContain('FENCE-MARKER') // no fence in system
     expect(messages[messages.length - 1].content).toContain('FENCE-MARKER') // fence in the user turn
   })
 })
