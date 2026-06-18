@@ -2,6 +2,7 @@ import { join } from 'node:path'
 import { BrowserWindow, ipcMain } from 'electron'
 import { OCR_RASTER } from '../../../shared/ipc'
 import { log } from '../logging'
+import { pipelinePages } from './pipeline'
 
 // PDF → page-PNG rasterizer: rendering a PDF page
 // to pixels needs a canvas, the main process has none, node-canvas
@@ -11,16 +12,22 @@ import { log } from '../logging'
 // PNG bytes. Recognition stays main-side; the window is created per task and
 // destroyed afterwards (or on cancel).
 //
-// Pull-based backpressure: the next page is only requested after the caller's
-// `onPage` (the recognition of the previous page) has finished — a 500-page scan
-// never queues 500 page images in memory.
+// Bounded 1-deep look-ahead (ING-5): render (pdfjs in the hidden window) and recognize
+// (the caller's `onPage`, e.g. WASM tesseract) are different engines, so page N+1 is
+// rendered WHILE page N is recognized — the two pipeline instead of running strictly
+// serially. Memory stays bounded: at most one extra page PNG is resident (the just-rendered
+// N+1 while N recognizes), so a 500-page scan never queues 500 images. Recognitions stay
+// serial and in order (one engine, one in flight), so progress %, ordering, and cancellation
+// are unchanged from the old strictly-serial loop. See `pipelinePages`.
 
 export interface RasterizePdfOptions {
   /** Called once, as soon as the page count is known. */
   onPageCount?: (pageCount: number) => void
   /**
-   * Called per page, in order. The NEXT page is not rendered until the returned
-   * promise resolves (backpressure). A throw aborts the run.
+   * Called per page, in order, recognitions serialized. The rasterizer renders ONE page
+   * ahead while this promise is pending (1-deep look-ahead), but never starts the next
+   * `onPage` until this one resolves — so memory holds at most one extra PNG. A throw
+   * aborts the run.
    */
   onPage: (pageNumber: number, png: Buffer) => void | Promise<void>
   /** Abort: destroys the hidden window; the promise rejects with AbortError. */
@@ -168,15 +175,22 @@ export async function rasterizePdfWithHiddenWindow(
     }
     opts.onPageCount?.(pageCount)
 
-    for (let pageNumber = 1; pageNumber <= pageCount; pageNumber++) {
-      if (opts.signal?.aborted) throw abortError()
-      const pageP = expect(OCR_RASTER.page)
-      win.webContents.send(OCR_RASTER.render, { pageNumber })
-      const msg = await withTimeout(pageP)
-      const png = msg.png
-      if (!(png instanceof Uint8Array)) throw new Error('The rendered page was empty')
-      await opts.onPage(pageNumber, Buffer.from(png))
-    }
+    // ING-5: render page N+1 while page N recognizes (1-deep look-ahead). The render itself
+    // stays sequential on the shared channel (one `expect`/`send` in flight); only render and
+    // recognize — different engines — overlap. See `pipelinePages`.
+    await pipelinePages(
+      pageCount,
+      async (pageNumber) => {
+        const pageP = expect(OCR_RASTER.page)
+        win.webContents.send(OCR_RASTER.render, { pageNumber })
+        const msg = await withTimeout(pageP)
+        const png = msg.png
+        if (!(png instanceof Uint8Array)) throw new Error('The rendered page was empty')
+        return Buffer.from(png)
+      },
+      opts.onPage,
+      { signal: opts.signal, abortError }
+    )
     return { pageCount }
   } finally {
     inUse = false
