@@ -6,7 +6,28 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
-_Last updated: 2026-06-18 — **Performance audit Wave P4 SHIPPED (branch `performance-tuning`) — the
+_Last updated: 2026-06-18 — **Wave P4 real-drive measurement CLOSED (branch `performance-tuning`).**
+The one open P4 item — "real E5-runtime numbers PENDING the PAID drive" — is done now that the real
+HilbertRaum drive (D:, real `multilingual-e5-small-q8` + the b9585 `llama-server`) is attached. Two
+drive-gated manual benchmarks (no production code changed): (1) `tests/manual/resident-cache-bench.test.ts`
+gained a `RESIDENT_BENCH_DIR` override + multi-size loop so the bench DB — and thus the cold-build
+SELECT — lives on real USB I/O; (2) new `tests/manual/resident-cache-real.test.ts` embeds a realistic
+corpus through the **real E5 sidecar**, stores genuine E5 vectors via the production codec on the drive,
+and times cold build + warm cached scan + full `searchText` (E5 query-embed + scan). **Findings:** scan
+scaling on the drive (synthetic vectors — the scan is data-independent: N dot-products of 384-dim Float32
++ sort) warm 13.6/52.5/164.6/605 ms @ 5k/10k/30k/100k, cold rebuild 33 ms…1.48 s — **matching the prior
+mock projection within noise** (mmap, DB-2, keeps the cold build off USB cheap). Real-E5 end-to-end:
+@2k chunks (a realistic ≤~10-doc corpus) warm scan **5.8 ms**, full query **17.8 ms** — the E5
+query-embed round-trip **dwarfs the scan 3.1×**; @10k warm scan 73 ms, full query 102 ms (scan ≈ embed,
+both dwarfed by the reranker's seconds). **DECISION CONFIRMED (no change):** at realistic MVP corpora the
+synchronous scan is NOT the bottleneck, so P4b (worker) + P4c (ANN) stay deferred with the documented
+~100 ms trigger; the 100k bound (~605 ms) remains the narrowed D15 cliff. **Docs:** real numbers folded
+into `docs/architecture.md` "Performance — design record … Wave P4" (measurement + why-deferred),
+`docs/performance-audit-2026-06-18.md` STATUS banner, and this file's P4 entry — every "PENDING the PAID
+drive" marker retired. **Verification:** both manual benches green on D:; the gated tests stay skipped in
+the normal suite. **(prior P4-ship entry below.)**_
+
+_2026-06-18 — **Performance audit Wave P4 SHIPPED (branch `performance-tuning`) — the
 final, deferred wave; the documented MVP deferral D15.** RAG-1/RAG-6: the synchronous main-thread
 vector scan (`VectorIndex.search`, `apps/desktop/src/main/services/embeddings/index.ts`) no longer
 re-`SELECT`s every `vector_blob` (~150 MB at the heavy 100-doc bound) and re-decodes it per query.
@@ -27,10 +48,13 @@ at the **3 `embeddings` write sites** (`ingestion/index.ts` finalize-insert + re
 on **workspace LOCK** (`registerWorkspaceIpc`, beside `embedder.suspend()`) — SECURITY: the vectors
 derive from chunk text and must not linger in RAM after the vault re-encrypts (the signature can't catch
 this — the table is unchanged). No embedder-switch purge needed (per-`Db`, per-chunk, model-agnostic;
-the SQL model-id filter scopes results; unlock reopens the `Db` → fresh cache). **MEASURED** (mock,
-synthetic): warm cached scan ~14 ms @ 5k chunks, ~50 ms @ 10k, ~167 ms @ 30k, ~580 ms @ 100k (1.3–1.7×
-vs decode-every-query; cold rebuild once per mutation ~33 ms@5k…~1.3 s@100k). The residual is now
-SQLite→JS row marshalling + the dot-product scan + sort, **not** decode. **DECISION — P4b (off-main-thread
+the SQL model-id filter scopes results; unlock reopens the `Db` → fresh cache). **MEASURED — confirmed
+on the PAID drive (D:, b9585):** scan scaling on the real drive (synthetic vectors — scan is
+data-independent) warm cached scan 13.6 ms @ 5k chunks, 52.5 ms @ 10k, 164.6 ms @ 30k, 605 ms @ 100k
+(1.2–1.7× vs decode-every-query; cold rebuild once per mutation 33 ms@5k…1.48 s@100k) — tracks the mock
+projection within noise; real-E5 end-to-end on the drive @2k chunks warm scan 5.8 ms / full query (E5
+embed + scan) 17.8 ms (query-embed dwarfs the scan 3.1×), @10k warm scan 73 ms / full query 102 ms. The
+residual is now SQLite→JS row marshalling + the dot-product scan + sort, **not** decode. **DECISION — P4b (off-main-thread
 worker) + P4c (ANN) DEFERRED with the number:** at realistic MVP corpora (≤~10k chunks ≈ ≤~10–50 docs)
 the scan is ≤~50 ms (fine, dwarfed by the query-embed await + reranker); only the 100k upper bound bites.
 P4b's trigger = "a representative corpus measures the cached main-thread scan over ~100 ms routinely"
@@ -46,7 +70,8 @@ equivalence vs a from-scratch oracle, signature catches direct INSERT/DELETE aft
 lock-purge rebuild, scope-filter composition incl. archived, ingestion import→reindex→delete lifecycle,
 offline guarantee through the cached path) + a gated manual `tests/manual/resident-cache-bench.test.ts`.
 **Verification:** full suite **1784 passed / 26 skipped** (+8, +1 skipped manual bench), typecheck +
-build clean. Real E5-runtime numbers PENDING the PAID drive. **NEXT ACTION:** Wave P4 core done — the
+build clean. Real E5-runtime numbers now CLOSED on the PAID drive (see the dated closeout entry above).
+**NEXT ACTION:** Wave P4 core done — the
 perf audit's four waves are all shipped. Still open (out of P4 core, tracked in the audit): RT-9
 (byte-stable plain-chat fence), the deferred P2 renderer items (Composer/`input` move, `DocRow`,
 FE-5 windowing), and the audit Low items. **(prior P3 entry below.)**_

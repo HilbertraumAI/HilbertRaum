@@ -16,15 +16,20 @@
 > Behind the unchanged `VectorIndex.search` signature; ranking byte-identical; all scope filters
 > preserved. Invalidation = a cheap whole-table `(count, maxRowid)` signature (primary) + explicit
 > `invalidate` at the three `embeddings` write sites + a hard `purge` on workspace lock (security).
-> **MEASURED** (mock, synthetic corpus): warm cached scan ~14 ms @ 5k chunks, ~50 ms @ 10k, ~167 ms @
-> 30k, ~580 ms @ 100k (1.3–1.7× vs decode-every-query). The residual is now SQLite→JS row marshalling +
-> the dot-product scan, not decode — so at realistic MVP corpora (≤~10k chunks) the scan is ≤~50 ms
-> (fine on the main thread, dwarfed by the query-embed await + reranker) and only the 100k upper bound
-> bites. **The off-main-thread worker scan (P4b) and an ANN index (P4c / sqlite-vec) stay DEFERRED**
-> with that number: P4b's trigger is "a representative corpus measures the cached main-thread scan over
-> ~100 ms routinely"; sqlite-vec stays rejected as a native loadable extension against the
-> no-native-build / portable-packaging posture (D15). The resident cache is also the substrate a future
-> worker would scan via `SharedArrayBuffer`. Real E5-runtime numbers PENDING (mock-measured).
+> **MEASURED — confirmed on the PAID drive (D:, b9585).** Scan scaling, DB on the real drive: warm
+> cached scan 13.6 ms @ 5k chunks, 52.5 ms @ 10k, 164.6 ms @ 30k, 605 ms @ 100k (1.2–1.7× vs
+> decode-every-query) — tracking the earlier mock projection within noise (mmap keeps the cold build off
+> USB cheap). Real-E5 end-to-end on the drive (genuine `multilingual-e5-small-q8` outputs queried via
+> `searchText`): @2k chunks warm scan **5.8 ms**, full query (E5 embed + scan) **17.8 ms** — the
+> query-embed dwarfs the scan 3.1×; @10k warm scan 73 ms, full query 102 ms (scan ≈ embed, both dwarfed
+> by the reranker's seconds). The residual is now SQLite→JS row marshalling + the dot-product scan, not
+> decode — so at realistic MVP corpora (≤~10k chunks) the scan is ≤~70 ms (fine on the main thread, not
+> the bottleneck) and only the 100k upper bound bites. **The off-main-thread worker scan (P4b) and an
+> ANN index (P4c / sqlite-vec) stay DEFERRED** with that number: P4b's trigger is "a representative
+> corpus measures the cached main-thread scan over ~100 ms routinely"; sqlite-vec stays rejected as a
+> native loadable extension against the no-native-build / portable-packaging posture (D15). The resident
+> cache is also the substrate a future worker would scan via `SharedArrayBuffer`. Real E5-runtime
+> numbers now CLOSED (`tests/manual/resident-cache-{bench,real}.test.ts`, drive-gated).
 >
 > **STATUS — Waves P1 + P2 + P3 IMPLEMENTED (2026-06-18, branch `performance-tuning`).** Wave P1 (six
 > storage/retrieval/runtime items): **DB-1**, **DB-2**, **DB-4/DB-6/DB-7** (run_id indexes

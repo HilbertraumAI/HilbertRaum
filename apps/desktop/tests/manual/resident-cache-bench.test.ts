@@ -1,5 +1,5 @@
 import { describe, it } from 'vitest'
-import { mkdtempSync } from 'node:fs'
+import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { openDatabase, type Db } from '../../src/main/services/db'
@@ -18,9 +18,21 @@ import {
 //
 // Manual: gated behind RUN_RESIDENT_BENCH=1 so it never runs in the normal suite.
 //   RUN_RESIDENT_BENCH=1 npx vitest run tests/manual/resident-cache-bench.test.ts
+//
+// REAL-DRIVE numbers (the PAID-drive measurement the design record flagged PENDING): point
+// RESIDENT_BENCH_DIR at the portable drive so the bench DB — and thus the cold-build SELECT —
+// lives on real USB I/O instead of the OS temp SSD. The scan itself is data-independent (N
+// dot-products of 384-dim Float32 + sort), so synthetic unit vectors give the same warm-scan
+// timing as real E5 outputs; the cold build is the only term real-drive I/O changes.
+//   RUN_RESIDENT_BENCH=1 RESIDENT_BENCH_DIR=D:\ RESIDENT_BENCH_N=5000,10000,30000,100000 \
+//     npx vitest run tests/manual/resident-cache-bench.test.ts
 const RUN = process.env.RUN_RESIDENT_BENCH === '1'
 const DIMS = 384
-const N = Number(process.env.RESIDENT_BENCH_N ?? 100_000)
+const SIZES = (process.env.RESIDENT_BENCH_N ?? '100000')
+  .split(',')
+  .map((s) => Number(s.trim()))
+  .filter((n) => Number.isFinite(n) && n > 0)
+const BENCH_DIR = process.env.RESIDENT_BENCH_DIR?.trim()
 const QUERIES = 20
 
 function randUnit(): Float32Array {
@@ -78,13 +90,17 @@ function median(xs: number[]): number {
   return s[Math.floor(s.length / 2)]
 }
 
-describe.skipIf(!RUN)('resident cache benchmark', () => {
-  it(`old decode-every-query vs cached, N=${N}`, () => {
-    const db = openDatabase(join(mkdtempSync(join(tmpdir(), 'hilbertraum-bench-')), 'b.sqlite'))
+function runSize(n: number): void {
+  // DB on the portable drive (real USB I/O for the cold-build SELECT) when RESIDENT_BENCH_DIR
+  // is set; otherwise the OS temp dir. A fresh dir per size keeps the WAL/page cache cold-ish.
+  const baseDir = BENCH_DIR ? BENCH_DIR : tmpdir()
+  const dir = mkdtempSync(join(baseDir, 'hilbertraum-bench-'))
+  const dbPath = join(dir, 'b.sqlite')
+  const db = openDatabase(dbPath)
+  try {
     const t0 = performance.now()
-    seedCorpus(db, N)
-    // eslint-disable-next-line no-console
-    console.log(`\nseed ${N} vectors: ${(performance.now() - t0).toFixed(0)} ms`)
+    seedCorpus(db, n)
+    const seedMs = performance.now() - t0
 
     const queries = Array.from({ length: QUERIES }, () => randUnit())
 
@@ -112,12 +128,25 @@ describe.skipIf(!RUN)('resident cache benchmark', () => {
     }
 
     /* eslint-disable no-console */
+    console.log(`\n===== N=${n} (db: ${BENCH_DIR ? 'REAL DRIVE ' + baseDir : 'tmp'}) =====`)
+    console.log(`seed ${n} vectors      : ${seedMs.toFixed(0)} ms`)
     console.log(`OLD  decode-every-query : median ${median(oldTimes).toFixed(2)} ms/query`)
     console.log(`NEW  cold (build+scan)  : ${coldMs.toFixed(2)} ms (one-time per mutation)`)
     console.log(`NEW  warm (cached scan) : median ${median(warmTimes).toFixed(2)} ms/query`)
-    console.log(
-      `speedup (warm vs old)   : ${(median(oldTimes) / median(warmTimes)).toFixed(1)}×\n`
-    )
+    console.log(`speedup (warm vs old)   : ${(median(oldTimes) / median(warmTimes)).toFixed(1)}×`)
     /* eslint-enable no-console */
-  }, 120_000)
+  } finally {
+    db.close()
+    try {
+      rmSync(dir, { recursive: true, force: true })
+    } catch {
+      /* best-effort cleanup */
+    }
+  }
+}
+
+describe.skipIf(!RUN)('resident cache benchmark', () => {
+  it(`old decode-every-query vs cached, sizes=${SIZES.join(',')}`, () => {
+    for (const n of SIZES) runSize(n)
+  }, 600_000)
 })
