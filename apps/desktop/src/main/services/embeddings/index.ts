@@ -91,6 +91,30 @@ export function cosineSimilarity(a: Float32Array, b: Float32Array): number {
   return dot / (Math.sqrt(na) * Math.sqrt(nb))
 }
 
+/**
+ * Raw dot product of two equal-length vectors (RAG-1 fast path).
+ *
+ * INVARIANT this rests on: every vector that reaches `VectorIndex.search` is already
+ * **L2-normalized** — the embedder normalizes its output (`e5.ts:213` `l2normalize`; the
+ * mock embedder too) and the query vector comes from that same `embed()` path. For unit
+ * vectors `‖a‖=‖b‖=1`, so `cosine = dot/(‖a‖·‖b‖) = dot` exactly (to floating-point
+ * tolerance) — computing the two norm accumulators per row is wasted work (~2× the FLOPs).
+ * Ranking is therefore identical to `cosineSimilarity` on normalized inputs.
+ *
+ * Do NOT use this on un-normalized vectors (it would not be a cosine). Returns 0 only when
+ * the dot is genuinely 0 (e.g. an all-zero empty-text vector), matching cosine's behaviour
+ * for that degenerate case.
+ */
+export function dotProduct(a: Float32Array, b: Float32Array): number {
+  if (a.length !== b.length) {
+    throw new RangeError(`dotProduct length mismatch: ${a.length} vs ${b.length}`)
+  }
+  const n = a.length
+  let dot = 0
+  for (let i = 0; i < n; i++) dot += a[i] * b[i]
+  return dot
+}
+
 interface EmbeddingRow {
   chunk_id: string
   vector_blob: Uint8Array
@@ -190,7 +214,10 @@ export class VectorIndex {
       // RangeError and abort the whole query — one corrupt row must not break all search.
       if (row.vector_blob.length < row.dimensions * 4) continue
       const vec = decodeVector(row.vector_blob, row.dimensions)
-      hits.push({ chunkId: row.chunk_id, score: cosineSimilarity(queryVector, vec) })
+      // RAG-1 fast path: stored vectors and the query vector are both L2-normalized
+      // (`e5.ts` `l2normalize`, mock embedder too), so cosine == raw dot product — skip
+      // the two norm accumulators per row for ~2× fewer FLOPs. Ranking is identical.
+      hits.push({ chunkId: row.chunk_id, score: dotProduct(queryVector, vec) })
     }
     hits.sort((a, b) => b.score - a.score)
     return hits.slice(0, topK)
