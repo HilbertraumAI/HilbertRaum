@@ -448,6 +448,101 @@ describe('buildModelList — RAM gate', () => {
   })
 })
 
+// RT-3 lazy verification (the chat path): on a cold cache, the chat path
+// (`onlyVerifyModelId`) must hash ONLY the active model, while the Models-screen path
+// (no `onlyVerifyModelId`) hashes the full set. Inactive present weights are still reported
+// `installed` (display-only — the start gate re-verifies what it launches).
+describe('buildModelList — RT-3 lazy verification', () => {
+  function manifestsDirWith(...objs: Array<Record<string, unknown>>): string {
+    const dir = tempDir('hilbertraum-manifests-')
+    for (const [i, o] of objs.entries()) writeFileSync(join(dir, `m${i}.yaml`), stringify(o))
+    return dir
+  }
+  function writeWeight(rootPath: string, relPath: string, content: string): string {
+    const p = join(rootPath, relPath)
+    mkdirSync(parse(p).dir, { recursive: true })
+    writeFileSync(p, content)
+    return createHash('sha256').update(content).digest('hex')
+  }
+  function twoModels(): { dir: string; root: string } {
+    const root = tempDir('hilbertraum-root-')
+    const hA = writeWeight(root, 'models/chat/a.gguf', 'AAAA')
+    const hB = writeWeight(root, 'models/chat/b.gguf', 'BBBBBBBB')
+    const dir = manifestsDirWith(
+      manifestObj({ id: 'a', local_path: 'models/chat/a.gguf', sha256: hA }),
+      manifestObj({ id: 'b', local_path: 'models/chat/b.gguf', sha256: hB })
+    )
+    return { dir, root }
+  }
+
+  it('chat path (cold cache) hashes ONLY the active model; both still report installed', async () => {
+    const { dir, root } = twoModels()
+    clearChecksumCache()
+    const before = checksumCacheStats.computed
+    const { models } = await buildModelList({
+      manifestsDir: dir,
+      rootPath: root,
+      profile: 'UNKNOWN',
+      developerMode: false,
+      onlyVerifyModelId: 'a' // the active model on the chat path
+    })
+    // Exactly one weight (the active 'a') was hashed — not the full set.
+    expect(checksumCacheStats.computed).toBe(before + 1)
+    const byId = Object.fromEntries(models.map((m) => [m.id, m.state]))
+    expect(byId['a']).toBe('installed') // hashed + verified
+    expect(byId['b']).toBe('installed') // present, reported without hashing (display-only)
+  })
+
+  it('Models-screen path (cold cache) hashes the FULL set', async () => {
+    const { dir, root } = twoModels()
+    clearChecksumCache()
+    const before = checksumCacheStats.computed
+    await buildModelList({
+      manifestsDir: dir,
+      rootPath: root,
+      profile: 'UNKNOWN',
+      developerMode: false
+      // onlyVerifyModelId omitted ⇒ full hash
+    })
+    expect(checksumCacheStats.computed).toBe(before + 2)
+  })
+
+  it('lazy with no active model (null) hashes nothing', async () => {
+    const { dir, root } = twoModels()
+    clearChecksumCache()
+    const before = checksumCacheStats.computed
+    const { models } = await buildModelList({
+      manifestsDir: dir,
+      rootPath: root,
+      profile: 'UNKNOWN',
+      developerMode: false,
+      onlyVerifyModelId: null
+    })
+    expect(checksumCacheStats.computed).toBe(before)
+    expect(models.every((m) => m.state === 'installed')).toBe(true)
+  })
+
+  it('still serves a cached hash for an inactive model (honest checksum_failed)', async () => {
+    const { dir, root } = twoModels()
+    clearChecksumCache()
+    // Warm the cache for both (full pass), then corrupt 'b' on disk WITHOUT changing the
+    // cache: a later lazy pass should still surface the cached hash for free (and 'b' is
+    // installed because its cached hash matched at warm time).
+    await buildModelList({ manifestsDir: dir, rootPath: root, profile: 'UNKNOWN', developerMode: false })
+    const before = checksumCacheStats.computed
+    const { models } = await buildModelList({
+      manifestsDir: dir,
+      rootPath: root,
+      profile: 'UNKNOWN',
+      developerMode: false,
+      onlyVerifyModelId: 'a'
+    })
+    // Cache hits ⇒ no new hashing for either model.
+    expect(checksumCacheStats.computed).toBe(before)
+    expect(models.find((m) => m.id === 'b')?.state).toBe('installed')
+  })
+})
+
 // First-run verification progress (architecture.md "Model verification progress"): the
 // `listModels`/`buildModelList` path streams a byte-weighted progress signal so the gate +
 // Models screen can show a determinate bar instead of an opaque spinner while multi-GB

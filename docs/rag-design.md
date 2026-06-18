@@ -250,11 +250,16 @@ class VectorIndex {
 }
 ```
 
-MVP = **linear scan**: decode every `embeddings` row, compute cosine similarity to the query
-vector, sort descending, take `topK`. Rows whose `dimensions` differ from the query (e.g.
-mid-migration) are skipped, not compared. The query is embedded with the **same** embedder, so
-a query equal to a chunk's text scores ≈ 1.0 and ranks first. **Upgrade path:** an ANN index
-(sqlite-vec / HNSW) behind this same `search` signature when corpora grow.
+MVP = **linear scan**: score every stored chunk vector by dot product against the query vector
+(stored + query vectors are L2-normalized, so dot == cosine — RAG-1), sort descending, take `topK`.
+Rows whose `dimensions` differ from the query (e.g. mid-migration) are skipped, not compared. The
+query is embedded with the **same** embedder, so a query equal to a chunk's text scores ≈ 1.0 and
+ranks first. The decoded vectors are held **process-resident** (`embeddings/resident-cache.ts`, perf
+audit Wave P4) so a query reads no `vector_blob` and re-decodes nothing — the cache invalidates on a
+cheap whole-table `(count, maxRowid)` signature + explicit hooks at the `embeddings` write sites, and
+is purged on workspace lock (vectors derive from chunk text). **Upgrade path** (still behind this same
+`search` signature, D15): an off-main-thread worker scan and/or an ANN index (sqlite-vec / HNSW) when a
+corpus outgrows the linear scan.
 
 > Phase 6 consumes `VectorIndex.search` to build the `[S1]…` grounded prompt + citations
 > (`askDocuments`). Phase 5 ships retrieval primitives only — no prompt/citation layer yet.
@@ -311,10 +316,12 @@ persistence + UI). Each `Citation` carries a truncated `snippet` (≤ `SNIPPET_M
 600) of the chunk text so the renderer's source-snippet panel can show what was cited
 without a second lookup.
 
-### Grounded prompt (`buildGroundedPrompt`)
+### Grounded prompt (`buildGroundedPrompt` + `GROUNDED_SYSTEM_PROMPT`)
 
-A pure function emitting the spec §7.8 template verbatim — the rules, the `Question:`, then
-the numbered `Document excerpts:` in the spec's source-context format:
+The grounded prompt is split across two messages. The **stable** grounding rules + preface live in
+`GROUNDED_SYSTEM_PROMPT` (= `BASE_SYSTEM_PROMPT` + the rules block); `buildGroundedPrompt` is a pure
+function emitting only the **per-turn** content — the `Question:`, then the numbered
+`Document excerpts:` in the spec §7.8 source-context format:
 
 ```text
 [S1] File: Contract.pdf | Page: 4
@@ -326,18 +333,30 @@ the numbered `Document excerpts:` in the spec's source-context format:
 
 The meta line is `| Page: N` when the chunk has a page, else `| Section: X`, else nothing.
 
+**RT-2 — the rules ride in the cacheable system prompt (perf audit 2026-06-18, Wave P3).** The rules
++ preface USED to ride in this per-turn user message, so `cache_prompt`'s longest-common-prefix reuse
+stopped at `BASE_SYSTEM_PROMPT` and **re-prefilled the whole rules block every documents turn** — even
+follow-ups, because the prior user turn is replayed as the *raw* question (the DB never stores the
+grounded form), so the grounded prefix never matched across turns. Moving the rules into the byte-stable
+`GROUNDED_SYSTEM_PROMPT` puts them in the always-reused prefix: **~58 approx tokens** of rules that no
+longer re-prefill per follow-up (on CPU, prefill is ~30–80 tok/s — see architecture.md §17). Precedence
+is unchanged/strengthened (rules in `system` ≥ the user turn); the `[Sn]` citation contract and the
+no-context refusal path are untouched. A test asserts the system prefix is byte-stable across two turns.
+
 **Skill fence (Skills plan §11.2 / S7).** `buildGroundedPrompt` takes an optional `skillFence`: when
 a skill is active for the turn, its fenced instruction block is placed in **this user/data turn**
 (after the `Question:`, before the excerpts) — **never in `system`** (§22-H2): a skill is
 user-selected reference text, the same untrusted class as the excerpts, and the grounding + citation
-rules keep precedence. The fence is pre-sized by `services/skills/prompt.ts` against the fence-less
-grounded turn so the excerpts/question are never starved (§22-A6), and the assistant row is stamped
-with the skill only when the fence was actually placed **and** chunks were found — a no-context
-answer (model not called) stamps NULL. See architecture.md "Chat & streaming" / the skills design.
+rules keep precedence. (RT-2 moves only the stable grounding RULES to `system`, NOT the fence.) The
+fence is pre-sized by `services/skills/prompt.ts` against the fence-less grounded turn — now measured
+as `GROUNDED_SYSTEM_PROMPT` + the rules-less user turn, an unchanged total — so the excerpts/question
+are never starved (§22-A6), and the assistant row is stamped with the skill only when the fence was
+actually placed **and** chunks were found — a no-context answer (model not called) stamps NULL. See
+architecture.md "Chat & streaming" / the skills design.
 
-`buildGroundedChatMessages` then assembles the runtime message list: the base system prompt
-(spec §7.6), prior conversation history, and the **last user turn replaced by the grounded
-prompt**. The DB keeps the raw question for the transcript/title; only the model sees the
+`buildGroundedChatMessages` then assembles the runtime message list: the **`GROUNDED_SYSTEM_PROMPT`**
+(base preamble + grounding rules), prior conversation history, and the **last user turn replaced by
+the grounded prompt**. The DB keeps the raw question for the transcript/title; only the model sees the
 grounded form. The history is then **trimmed to the model context** via `fitMessagesToContext`
 (chat.ts; passed `getSettings(db).contextTokens`) — the grounded turn is the final message and
 is always kept, while older turns are dropped oldest-first. `maxContextTokens` bounds only the
@@ -652,7 +671,7 @@ spread the distribution and make a floor meaningful; revisit only with a prefix 
 | D12 | `minSimilarity` pre- vs post-rerank | **PRE-rerank, cosine-only** (status quo site + meaning): applied to vector hits before fusion. Rerank `relevance_score` is an unbounded logit — never compared to the floor. Keyword hits carry no cosine and bypass the floor by design. R3 measured ⇒ default stays 0 |
 | D13 | FTS index shape + sync + fusion | Self-contained `fts5(text, chunk_id UNINDEXED)` (NOT external-content on the implicit rowid — VACUUM foot-gun); 3 sync triggers; guarded additive migration + backfill (scope_json precedent). Fusion = **RRF, k = 60**, sanitized phrase-OR MATCH. **Visibility rule: keyword hits require a vector under the active embedder** — `REINDEX_NEEDED_ANSWER` semantics intact |
 | D14 | Settings surface | **Availability-driven (embedder precedent): no new `AppSettings` keys, no toggle, no UI.** Hybrid always-on (pure SQLite); reranker active iff binary + weights present; the Phase-18 downloader covers the GGUF |
-| D15 | ANN index | **NOT built** (evidence rule): sqlite-vec/HNSW are native deps against the project theme; no measured corpus outgrows the linear scan. `VectorIndex.search` stays the upgrade path |
+| D15 | ANN index | **PARTIALLY RESOLVED (perf audit Wave P4, 2026-06-18).** The *re-decode-every-query* half is now fixed: `VectorIndex.search` reads from a **process-resident decoded-vector cache** (`embeddings/resident-cache.ts`) — vectors decoded once, no per-query `vector_blob` re-read, behind the unchanged `search` signature; ranking byte-identical (see architecture.md "Performance — design record … Wave P4"). The scan is **still synchronous + linear**: measured ≤~50 ms @ ≤10k chunks (fine), ~580 ms @ the 100k upper bound. An **ANN index stays NOT built** (evidence rule): sqlite-vec/HNSW are native deps against the project theme; no realistic corpus yet outgrows the cached linear scan. The off-main-thread worker scan + ANN remain the upgrade path (P4b/P4c), triggered when a representative corpus measures the cached main-thread scan over ~100 ms routinely |
 
 ### 12.3 Resource budget (8 GB machines) + measured validation
 

@@ -256,6 +256,24 @@ async function sha256FileCached(
   return actual
 }
 
+/**
+ * Is there a LIVE cached hash (L1 memory or L2 store) for this file, matching its current
+ * size+mtime? RT-3 uses this so the lazy/chat path still serves a cached checksum for free
+ * (honest state) and only SKIPS the multi-GB hash for genuinely un-cached weights.
+ */
+function cachedHashFor(filePath: string, store?: HashStore): boolean {
+  let st: ReturnType<typeof statSync>
+  try {
+    st = statSync(filePath)
+  } catch {
+    return false
+  }
+  const hit = hashCache.get(filePath)
+  if (hit && hit.size === st.size && hit.mtimeMs === st.mtimeMs) return true
+  const persisted = store?.get(filePath)
+  return !!persisted && persisted.size === st.size && persisted.mtimeMs === st.mtimeMs
+}
+
 /** Verify a weight file against its expected SHA-256 (cached by size+mtime). */
 export async function verifyChecksum(
   filePath: string,
@@ -299,6 +317,16 @@ export interface InstallStateOptions {
    * weight is actually hashed (a real, present, non-cached file); drives the first-run bar.
    */
   onProgress?: (bytesHashed: number) => void
+  /**
+   * RT-3 lazy verification: when true, a present weight with a real expected hash is
+   * reported `installed` WITHOUT hashing it. Used on the chat path (`buildModelList`'s
+   * lazy mode) to report the inactive models for display without paying minutes of USB
+   * I/O to SHA-256 every multi-GB GGUF on a cold cache. The §7.4 verification gate is
+   * NOT relaxed: `startModelRuntime` re-verifies the model it actually launches, and the
+   * Models-screen visit + the ship-time gates (verify-models --strict /
+   * assertCommercialDrive) still hash fully. A cached hash is still used when present.
+   */
+  skipHash?: boolean
 }
 
 /**
@@ -322,6 +350,13 @@ export async function computeInstallState(
   // as installed.
   if (!isRealSha256(manifest.sha256)) {
     return opts.developerMode ? 'installed' : 'checksum_failed'
+  }
+
+  // RT-3: on the lazy (chat) path, report a present weight as installed without hashing —
+  // unless a live cache hit can answer for free. The start gate re-verifies the launched
+  // model, so an unhashed-but-present non-active model is display-only here.
+  if (opts.skipHash && !cachedHashFor(path, opts.hashStore)) {
+    return 'installed'
   }
 
   const check = await verifyChecksum(path, manifest.sha256, opts.hashStore, opts.onProgress)
@@ -487,6 +522,15 @@ export interface BuildModelListOptions {
    * hash this pass (all cached) and NO events are emitted. Omitted ⇒ no overhead.
    */
   onProgress?: (p: ModelVerifyProgress) => void
+  /**
+   * RT-3 lazy verification (the chat path). When this property is PRESENT, only the model
+   * whose id matches is hashed on a cold cache; every other present weight is reported
+   * `installed` without hashing (display-only — the start gate re-verifies what it
+   * launches). Pass the active model id (or `null` to hash nothing) on the chat path; OMIT
+   * the property entirely (the default) on an explicit Models-screen visit to hash the full
+   * set. Distinguishes "lazy, no active model" (`null`) from "full hash" (absent).
+   */
+  onlyVerifyModelId?: string | null
 }
 
 export interface ModelListResult {
@@ -510,15 +554,23 @@ export async function buildModelList(opts: BuildModelListOptions): Promise<Model
       ? recommendModelIdByRam(all, ram, 'embeddings')
       : recommendModelId(all, opts.profile, 'embeddings')
 
+  // RT-3 lazy mode: when `onlyVerifyModelId` is present, hash only that model; report every
+  // other present weight without hashing. `'onlyVerifyModelId' in opts` distinguishes a
+  // provided `null` (lazy, no active model → hash nothing) from an absent property (full).
+  const lazyVerify = 'onlyVerifyModelId' in opts
+  const skipHashFor = (id: string): boolean => lazyVerify && id !== opts.onlyVerifyModelId
+
   // Verification-progress pre-pass (no hashing): which models will actually be hashed,
   // and the total bytes — the byte denominator for a determinate first-run bar. Cheap
   // (statSync + cache lookup per weight). Skipped entirely when no sink is wired.
   const willHash = opts.onProgress
     ? manifests.map(({ manifest }) =>
-        pendingHashBytes(manifest, opts.rootPath, {
-          developerMode: opts.developerMode,
-          hashStore: opts.hashStore
-        })
+        skipHashFor(manifest.id)
+          ? 0
+          : pendingHashBytes(manifest, opts.rootPath, {
+              developerMode: opts.developerMode,
+              hashStore: opts.hashStore
+            })
       )
     : []
   const overallBytesTotal = willHash.reduce((a, b) => a + b, 0)
@@ -540,6 +592,7 @@ export async function buildModelList(opts: BuildModelListOptions): Promise<Model
     let state = await computeInstallState(manifest, opts.rootPath, {
       developerMode: opts.developerMode,
       hashStore: opts.hashStore,
+      skipHash: skipHashFor(manifest.id),
       onProgress:
         emit && thisHashes
           ? (bytesHashed) =>

@@ -73,6 +73,272 @@ the bank-statement tools, and the run UI are consolidated in the **"Skills — d
 S2–S12)"** below (security model in [`security-model.md`](security-model.md), layout in
 [`drive-layout.md`](drive-layout.md)).
 
+## Performance — design record (perf audit 2026-06-18, Wave P1)
+Condensed from `docs/performance-audit-2026-06-18.md` after Wave P1 shipped (doc-lifecycle rule;
+the full findings report stays as the audit record). Target that shapes every choice: HilbertRaum
+runs **fully offline from a high-latency portable USB drive** on **commodity/CPU-only laptops**, so
+fsync/seek I/O and main-thread CPU are the scarce resources. The wins below are constant-factor /
+batching — no behavior change.
+
+**Storage write path (`services/db.ts`, `services/ingestion/index.ts`).**
+- **DB-1 — ingestion writes are transactional.** `processDocument` was the lone batch writer not
+  wrapping its inserts (every other — `tree-build`, `extract`, `node-vectors`, bank/invoice — does).
+  With WAL each bare `insert.run()` is its own fsync'd auto-commit, and each chunk insert also fires
+  the `chunks_fts_ai` FTS trigger inside that commit: up to ~3000 fsync'd commits per document. The
+  delete-then-insert chunk phase and the embedding-insert phase are each now one `BEGIN…COMMIT`
+  (`ROLLBACK` on throw, the `tree-build.ts` pattern). The async `embedder.embed()` await stays
+  **outside** the transaction (only synchronous inserts go inside — the `node-vectors.ts` precedent).
+- **DB-2 — portable-drive PRAGMAs.** After `journal_mode=WAL` + `foreign_keys=ON`, `openDatabase` now
+  also sets `synchronous=NORMAL` (WAL-safe durability, far fewer fsyncs), `busy_timeout=5000` (the
+  concurrent import-vs-chat path waits instead of throwing `SQLITE_BUSY`), `mmap_size=268435456`
+  (256 MB — the vector scan reads BLOBs via mapped pages), `cache_size=-16000` (~16 MB page cache),
+  `temp_store=MEMORY`. **These are a data-contract / durability change** (NORMAL is the WAL-recommended
+  setting; only the last txn is at risk on OS/power loss, never corruption).
+- **DB-4/6/7 — additive indexes** (created `CREATE INDEX IF NOT EXISTS` after `ensureColumn`, so the
+  migrated `category_id` column exists): `idx_embeddings_model` on `embeddings(embedding_model_id)`
+  (every retrieval + stale-check filters it); `idx_extract_type_nv` on
+  `extraction_records(record_type, normalized_value)` (the unscoped "list every date/amount" path the
+  doc-leading `idx_extract_doc_type` can't serve); `idx_documents_status` on `documents(status)`;
+  `idx_bank_transactions_category` on `bank_transactions(category_id)`. **`run_id` indexes deliberately
+  omitted** — `run_id` is only ever INSERTed, never joined/filtered, so an index would be pure
+  write-amplification on USB; add one alongside the first query that joins on it.
+- **DB-3/ING-2 — `listDocuments` de-N+1'd.** The per-row chunk COUNT + per-indexed-row stale-embeddings
+  COUNT+JOIN (up to 1+2N queries, polled at 400 ms during import) are now two grouped queries loaded
+  into Maps (`GROUP BY document_id`), mirroring the memberships join beside them. Benefits from
+  `idx_embeddings_model`.
+
+**Compare retrieval (`services/doctasks/manager.ts`).**
+- **RAG-2/ING-1 — decode doc-B once.** Section-matched compare (mode b) ran `VectorIndex.search` per
+  doc-A chunk, re-issuing the doc-B embeddings query and re-decoding every doc-B vector each time
+  (O(N_A × N_B) redundant decodes + N_A re-scans), then re-fetched doc-B's text per window. Doc-B's
+  `(id, text, chunk_index, vector)` is now loaded **once** into a resident array; cosine runs in memory
+  via a local `nearestB()` reproducing the search ranking. Mirrors the `alignNodes` precedent
+  (`doctasks/compare.ts`).
+
+**Chat runtime (`services/runtime/`).**
+- **RT-1 — chat prefill batch.** The chat sidecar left `--batch-size`/`--ubatch-size` at llama-server's
+  512 default, chunking prompt prefill (skill fence + RAG excerpts + history) — the dominant
+  time-to-first-token cost (3.5–15 s on CPU, Skills §17). `LlamaServerOptions.physicalBatchSize` (opt-in,
+  emitted by `buildArgs`) is set by the chat runtime to `min(contextTokens, CHAT_MAX_PHYSICAL_BATCH=2048)`;
+  the embedder/reranker don't set it (they tune their own batch via `extraArgs`, the reranker precedent
+  at `reranker/llama.ts`). Capping at the context never over-allocates — the whole prompt can't exceed
+  `n_ctx`.
+
+Deferred to later waves (tracked in the audit §6): the import & OCR pipelines (ING-3/5, Wave P3),
+`cache_prompt` grounding split (RT-2), and the main-thread linear vector scan / ANN index
+(RAG-1/RAG-6, Wave P4 — the documented D15 deferral).
+
+## Performance — design record (perf audit 2026-06-18, Wave P2)
+Renderer responsiveness on the CPU-only target. The chat transcript and the Documents screen were
+re-doing O(list) work and re-parsing Markdown on a 40 ms / 400 ms cadence, competing with token
+generation and causing visible jank. All changes are memoization / polling and are
+**behavior-preserving** (no visible UI change except less jank) save the one streaming decision
+noted below.
+
+**Chat transcript (`renderer/chat/Transcript.tsx`, `renderer/screens/ChatScreen.tsx`).**
+- **FE-1 — streaming no longer re-parses the whole transcript.** Each persisted turn is a memoized
+  `MessageBlock` (React.memo, keyed by message id) and `AssistantMarkdown` is itself `React.memo`'d
+  (keyed by its text), so a ~40 ms `streamText` flush never re-parses a prior, unchanged message's
+  Markdown. **DECISION — the live answer streams as PLAIN TEXT** (`.msg-content`, `white-space:
+  pre-wrap`), not Markdown: re-parsing the growing buffer every flush was O(n²) over the reply
+  length. The full Markdown parse runs **once on completion**, when the turn re-renders from
+  `messages` as a `MessageBlock`. The only visible effect is that raw `**markers**` show literally
+  during the stream and snap to formatted on completion — accepted (audit-sanctioned). The visible
+  text stays non-live (audit L7); `StreamAnnouncer` still announces sentence-by-sentence.
+  `lastAssistantId` is `useMemo`'d (was a per-flush `[...messages].reverse().find`), and the
+  scroll-to-bottom effect is gated on an `atBottomRef` so a flush only forces layout + scroll while
+  the user is pinned to the bottom (also addresses the FE-5 scroll-thrash note).
+- **FE-3 — chat children memoized; stable handler identities.** `Transcript` and `ConversationList`
+  are `React.memo`'d. ChatScreen re-renders on every keystroke (input state) + every flush; a
+  `useEventCallback` (latest-ref) wrapper gives the handlers passed to those children
+  (`onCopy`/`onSave`/`onTryAgain`/`onAnswerWithoutSkill`, `onSelect`/`onNew`/`onDelete`/`onCollapse`)
+  **constant identities without stale captures**, and the teaching `emptyState` is `useMemo`'d
+  (keyed on mode/docs, never on `input`). So a keystroke no longer re-renders the transcript
+  (compounding FE-1) or re-runs `groupByProject`/`groupConversations`.
+- **FE-4 — conversation rows memoized.** `ConvRow` (React.memo) with stable per-row callbacks, so
+  opening one row's ⋯ menu (which flips the parent `menuOpenId`) no longer re-renders every row.
+
+**Documents screen (`renderer/screens/DocumentsScreen.tsx`).**
+- **FE-2 — derivations memoized.** The render body — re-run on every 400 ms import poll and every
+  unrelated state change (menu/hover/modal) — did 5+ array passes + a Map build each time. The
+  derived collections, `sourcesById`, `visibleDocs` (section filter + recent ordering; `inSection`
+  is now a pure module helper), `anyActive`/`staleDocs`, and the four rail counts (now one bucketing
+  pass) are `useMemo`'d on `[docs]`/`[collections]`/`[docs, section]`.
+- **FE-7 — poll the import job, not the whole list.** **CONTRACT/behavioral note:** both import
+  watchers (DocumentsScreen `watchJob`, ChatScreen `watchAttachJob`) now read only the small
+  `getImportJob` status on the 400 ms tick; the full `listDocuments` (+ attachment) refresh runs
+  only when the job's `completed + failed` count changes (a file finished) and once at completion —
+  the ModelsScreen download-poll pattern. The list therefore updates at **file-completion
+  granularity** instead of re-deriving the whole screen 2.5×/s. For attachments this is exactly when
+  the FK-guarded `conversation_documents` link row appears, so the "Files in this chat" reveal is
+  unchanged.
+
+**Deferred within Wave P2** (lower-confidence under the behavior-preserving mandate; tracked in the
+audit §6 / §4.4): the remainder of FE-3 (memoizing `Composer` + moving `input` state into it —
+needs the footer's `ScopePopover`/`DepthMenu`/`SkillPicker` handlers stabilized first, a larger
+refactor); the FE-4 `DocRow` extraction (a ~25-prop memoized row — high stale-closure surface); and
+**FE-5** list windowing of the transcript + document list (needs a measured approach to preserve
+scroll-to-bottom + a11y; the cheap scroll-thrash half of FE-5 is already done under FE-1).
+
+## Performance — design record (perf audit 2026-06-18, Wave P3)
+Pipeline throughput & latency on the two hottest operations — **import a document** and **ask a
+question** — plus runtime-startup knobs. Unlike P2 (pure memoization), several P3 items are
+**structural** (concurrency, prompt layout, runtime flags), so each preserves a stated correctness
+contract. Condensed from `docs/performance-audit-2026-06-18.md` §4.2/§4.3/§4.5 after Wave P3 shipped.
+
+**Import pipeline (`services/ingestion/index.ts`, `ipc/registerDocsIpc.ts`).**
+- **ING-3 — 1-deep parse/embed pipeline.** Import was fully serialized: per file, parse → chunk →
+  embed (sidecar round-trips) → write, each fully awaited, so file N+1's parse (CPU) never overlapped
+  file N's embed (I/O wait). `processDocument` is now split at the **already-DB-mediated chunk↔embed
+  boundary** into `prepareDocument` (setup → parse → chunk → persist chunks, leaving the doc in
+  `embedding`) and `finalizeDocument` (embed the persisted chunks → mark `indexed`); `processDocument`
+  is their back-to-back composition, so the reindex / OCR re-ingest / materialize callers are
+  behavior-identical. The import loop runs `prepareDocument(N+1)` **while** `finalizeDocument(N)`
+  embeds. **The embed sidecar is the single contended resource, so embeds are NEVER parallelized** —
+  only the next file's parse overlaps the prior embed. Per-file `ImportJobStatus` counts, ordering,
+  per-file error isolation (each phase self-captures failure on the row), the DB-1 per-phase
+  transactions, and lock-mid-job are all preserved (the look-ahead is drained + de-registered from
+  `processing` on a lock break so the post-job reconcile still fires). Transients (decrypted working
+  copies) shred at the **end of prepare** — the embed phase reads chunk text from the DB, not the
+  files — strictly shortening plaintext lifetime. **New data contract:** `prepareDocument` /
+  `finalizeDocument` / `PreparedDocument` are exported alongside `processDocument`.
+
+**OCR (`services/ocr/pipeline.ts`, `services/ocr/rasterizer.ts`).**
+- **ING-5 — 1-deep render/recognize look-ahead.** OCR rendered page N (pdfjs, hidden window) then
+  awaited recognize(N) (WASM tesseract) before rendering N+1 — two different engines run strictly
+  serially. A new pure `pipelinePages(pageCount, renderPage, onPage, opts)` helper renders page N+1
+  **while** page N recognizes, keeping recognitions serial and in order. Memory stays bounded (at most
+  one extra rendered PNG resident); page ordering, progress %, and cancellation are unchanged. The
+  helper is Electron-free so it is unit-testable with fake render/recognize functions.
+
+**Grounded-answer prompt (`services/rag/index.ts`).**
+- **RT-2 — cacheable grounding prompt (updates §17 (a) to implemented).** The stable grounding rules +
+  preface rode in the per-turn USER message, so `cache_prompt`'s longest-common-prefix reuse stopped
+  at `BASE_SYSTEM_PROMPT` and re-prefilled the whole rules block on every documents turn (the prior
+  user turn is replayed as the RAW question, so the grounded prefix never matched). They now live in a
+  new **`GROUNDED_SYSTEM_PROMPT`** (`BASE_SYSTEM_PROMPT` + the rules); the user turn carries only the
+  per-turn question + excerpts (+ the skill fence, which stays in the user turn as **untrusted
+  reference text** — never `system`, skills plan §11.2). ~58 approx tokens of rules now sit in the
+  always-reused system prefix instead of re-prefilling per follow-up. **Correctness preserved:**
+  precedence is unchanged/strengthened (rules in `system` ≥ the user turn, still outrank the fence);
+  the `[Sn]` citation contract and the no-context refusal path are untouched; the skill-fence
+  budget is sized against `GROUNDED_SYSTEM_PROMPT` so the total fixed-token reserve is unchanged.
+  A test asserts the system prefix is **byte-stable across two turns** (the precondition for reuse).
+
+**Model verification on the chat path (`services/models.ts`, `ipc/registerModelIpc.ts`).**
+- **RT-3 — lazy model hashing.** `listModels` fired on both the Models-screen visit and the workspace
+  gate into Chat, SHA-256-hashing every present multi-GB GGUF on a cold cache (minutes of USB I/O) on
+  the awaited IPC. `buildModelList` gains an additive **`onlyVerifyModelId`**: when present, only that
+  model is hashed on a cold cache; other present weights are reported `installed` **without** hashing
+  (display-only) — a live cached hash is still served for free, so a known `checksum_failed` still
+  surfaces. Threaded via a new optional `lazyVerify` arg on the `listModels` IPC: the `WorkspaceGate`
+  (chat path) passes `true` with the active model id; the Models screen omits it and hashes the full
+  set. **The §7.4 gate is intact** — `startModelRuntime` re-verifies the model it actually launches,
+  and `verify-models --strict` / `assertCommercialDrive` still hash fully.
+
+**Sidecars (`services/runtime/sidecar.ts`, `services/embeddings/e5.ts`).**
+- **RT-4 — embedder physical batch.** In `--embedding` mode llama-server forces `n_batch = n_ubatch`
+  and defaults both to 512, so a 32-input embed request co-decodes ~1 full-length sequence per physical
+  batch. The embedder now sets `--batch-size`/`--ubatch-size` to `max(ctx, 2048)`, packing multiple
+  in-context inputs per ubatch (each input ≤ ctx still fits one ubatch — required because mean pooling
+  cannot split a sequence). Mirrors the chat 2048 (RT-1) and the reranker's raise (different reason —
+  one big query+doc sequence). **Verified on the pinned b9585 binary** (PAID smoke drive): with both
+  flags at 2048 the "`n_batch (2048) > n_ubatch (512) … setting n_batch = n_ubatch = 512`" downgrade
+  warning does not fire and a multi-input `/v1/embeddings` request returns correctly.
+- **RT-5 — readiness-poll backoff.** `waitForHealthy` polled `/health` at a fixed 250 ms, so a
+  fast-ready sidecar paid up to a full interval of dead time on every start / model switch. It now
+  starts at 50 ms and doubles each miss up to the configured cap (`healthIntervalMs`, default 250 ms);
+  the overall timeout budget is unchanged, and a tiny test interval caps the initial too.
+
+**Vector search (`services/embeddings/index.ts`).**
+- **RAG-1 — dot-product fast path (cheap slice only).** Stored vectors and the query vector are both
+  L2-normalized (`e5.ts` `l2normalize`; the mock embedder too), so cosine == raw dot product. A new
+  `dotProduct` helper replaces `cosineSimilarity` in `VectorIndex.search`, dropping the two per-row
+  norm accumulators (~2× fewer FLOPs/row); ranking is identical to floating-point tolerance (asserted
+  by a test). **The off-main-thread / ANN scan stays Wave P4** (the documented D15 deferral) — this is
+  only the constant-factor slice.
+
+Implemented in Wave P4 (below): the per-query BLOB re-read + re-decode (RAG-1/RAG-6 beyond the dot
+product). Still deferred from P2: Composer/`input` move, `DocRow` extraction, FE-5 windowing.
+
+## Performance — design record (perf audit 2026-06-18, Wave P4)
+The real fix for the synchronous main-thread vector scan (RAG-1/RAG-6) — the documented MVP deferral
+D15. Condensed from `docs/performance-audit-2026-06-18.md` §4.2 after Wave P4 shipped. Stays behind the
+**unchanged `VectorIndex.search(queryVector, topK)` signature**, so `rag/index.ts retrieve()` and every
+scope filter are untouched. The sibling scans in `analysis/node-vectors.ts` (the summary-tree
+`node_vectors` table) and `doctasks/manager.ts` (compare's one-shot doc-B load) are NOT `VectorIndex`
+and are out of scope.
+
+**RAG-1 / RAG-6 — process-resident decoded-vector cache (`services/embeddings/resident-cache.ts`).**
+The scan SELECTed all matching `embeddings` rows **including `vector_blob`** (~150 MB at the heavy
+100-doc × 1000-chunk bound) and `decodeVector` + `dotProduct`'d every row in one uninterruptible
+main-process loop — **re-reading and re-decoding the same BLOBs on every question**. Now every stored
+vector is decoded **once** into a process-resident `Map<chunkId, Float32Array>` (one cache per open
+`Db`, `WeakMap`-keyed). A query keeps the **exact same scope-filtered WHERE** but projects only
+`chunk_id` (no blob read), then looks each vector up in the resident map — zero per-row allocation,
+zero re-decode. **Ranking is byte-identical** (same `dotProduct`, same sort); the dimension-mismatch
+skip and the truncated-blob skip are preserved (a short blob is excluded at build time, so the chunk is
+simply absent from the map). The vector ↔ BLOB codec moved to `embeddings/codec.ts` so the cache can
+decode without an `index ↔ resident-cache` import cycle (re-exported from the barrel).
+
+**Invalidation contract (the highest-risk surface — a stale buffer silently corrupts ranking).**
+Belt-and-suspenders:
+- **Staleness (primary):** a cheap whole-table signature `(COUNT(*), MAX(rowid))` is recomputed at the
+  top of every `search`; any change rebuilds the map. `MAX(rowid)` is O(1) (rightmost btree leaf) and
+  `COUNT(*)` is a fast index count — negligible vs the scan they gate. Catches inserts (import),
+  deletes (doc delete), and reindex (delete+insert raises `maxRowid`) — i.e. **every `embeddings`
+  mutation, including direct SQL writes that bypass the hooks** (so test seeding stays correct).
+- **Explicit (belt):** `invalidateResidentVectors(db)` is also called at the three `embeddings` write
+  sites — `ingestion/index.ts` finalize-insert + reindex chunk-phase delete + `deleteDocument`. This
+  closes the one signature blind spot (delete the single max-rowid row, then insert exactly one row
+  reusing that rowid → `(count, maxRowid)` unchanged).
+- **Security (lock):** `purgeResidentVectors(db)` drops the map outright on workspace LOCK
+  (`registerWorkspaceIpc`, beside the embedder's `suspend()`). The vectors are derived from chunk text
+  and must not linger in main-process RAM after the vault re-encrypts — a requirement the staleness
+  signature does NOT cover (the table is unchanged on lock). No embedder-switch purge is needed: the
+  cache is per-`Db` and per-chunk (model-agnostic), the SQL model-id filter scopes results, and unlock
+  reopens the `Db` → a fresh (empty) cache.
+
+**Measurement — confirmed on the PAID drive (D:, b9585; the "real E5-runtime numbers PENDING" item is
+now closed).** Two legs, because the scan is **data-independent** (N dot-products of 384-dim Float32 +
+sort — identical timing for random unit vectors and real E5 outputs); only the cold-build I/O and the
+query-embed round-trip are real-hardware variables.
+- **Scan scaling, DB on the real drive (synthetic vectors).** Warm cached scan vs the old
+  decode-every-query path: 13.6 ms vs 22.4 ms @ 5k chunks (1.7×), 52.5 ms vs 63.3 ms @ 10k (1.2×),
+  164.6 ms vs 225 ms @ 30k (1.4×), 605 ms vs 753 ms @ 100k (1.2×). Cold rebuild (once per mutation,
+  not per query) 33 ms @ 5k … 1.48 s @ 100k. These track the earlier mock/SSD projection (~14/50/167/
+  580 ms) within noise — mmap (DB-2) keeps the cold build off USB cheap, so the drive does not move the
+  numbers.
+- **Real E5 vectors, end-to-end on the drive** (genuine `multilingual-e5-small-q8` outputs from the
+  b9585 sidecar, stored through the production codec, queried via `searchText`): @2k chunks (a realistic
+  ≤~10-doc corpus) warm scan **5.8 ms**, cold build 17.7 ms, full query (E5 embed round-trip + cached
+  scan) **17.8 ms** — the **query-embed dominates the scan 3.1×**; @10k chunks warm scan 73 ms, cold
+  build 317 ms, full query 102 ms (embed still dominates 1.4×). Real-E5 warm-scan timing matches the
+  synthetic table at the same N, confirming data-independence.
+
+The win is the removed per-query BLOB re-read + re-decode (RAG-6 — also a real GC/memory-pressure win
+the wall-clock under-reports); the **residual is now SQLite→JS row marshalling + the dot-product scan +
+sort, not decode**. The measurements live in `tests/manual/resident-cache-bench.test.ts` (scan scaling,
+`RESIDENT_BENCH_DIR` points the DB at the drive) and `tests/manual/resident-cache-real.test.ts` (real-E5
+end-to-end, `HILBERTRAUM_RESIDENT_REAL` points at the drive root).
+
+**Why the worker (P4b) and ANN (P4c) stay DEFERRED — evidence-based (now real-drive confirmed).** At
+realistic MVP corpora (≤~10k chunks ≈ ≤~10–50 documents) the cached scan is single-digit-to-~70 ms on
+the real drive — fine on the main thread. The measured query path is the proof: at 2k chunks the scan is
+5.8 ms and the **query-embed round-trip dwarfs it 3.1×**; at 10k the scan (73 ms) and embed (~29 ms) are
+comparable, and **both are dwarfed by the reranker (seconds)** when engaged. So nothing in the realistic
+range makes the synchronous scan the bottleneck. Only the heavy ~100k-chunk upper bound (~605 ms on the
+drive) still blocks — the narrowed remaining D15 cliff.
+- **P4b (off-main-thread worker).** Genuine fix for the event-loop block at scale, but heavy
+  (`SharedArrayBuffer` for the vectors, a second read-only DB handle or id-set hand-off, abort/cancel,
+  writer-race avoidance) — all of which must stay offline. **Trigger:** a representative corpus measures
+  the cached main-thread scan over ~100 ms routinely. The resident cache is the substrate a worker
+  would scan via `SharedArrayBuffer`, so P4a is also P4b's groundwork.
+- **P4c (ANN — sqlite-vec / pure-JS HNSW).** sqlite-vec is a **native loadable SQLite extension**, which
+  is against the no-native-build / portable cross-OS packaging posture that put the embedder in a
+  llama.cpp sidecar rather than `onnxruntime-node` (D15's reasoning). Not adopted; a pure-JS HNSW would
+  be reconsidered only if a linear scan over the resident buffer (even off-thread) still bites.
+
 ## Models & runtime (Phase 2)
 - **Manifests** are local YAML under `model-manifests/` (committed; weights are not). The schema +
   validator live in `src/shared/manifest.ts` so renderer and main share one definition. YAML is
@@ -1783,14 +2049,24 @@ offline, audit still ids/counts-only; no i18n surface touched):
   disk→DB reconciliation always reads fresh. Content-class clean (in-memory parsed result only).
   Covered by `skills-loader-cache.test.ts`.
 
-**Recommended, not implemented** (deliberately out of this low-risk scope, recorded so the trade-off
-is visible): (a) the **grounded** fence is per-turn prefill by *placement* (§22-H2 keeps it in the
-user turn so the grounding rules retain precedence) — the honest mitigation is to keep skill bodies
-small, not to move the fence into `system`; (b) for a **large user skill near the budget**, the
-plain-chat fence trim depends on the current question's length (`buildTurnFence` subtracts the live
-final-turn tokens), so the system prefix can shift turn-to-turn and defeat PERF-1 — sizing the fence
-against a *fixed* user-turn reserve would keep it byte-stable, but it is a no-op for every shipped
-skill (none trim) and was left for a follow-up to avoid changing the §22-A6 budget contract.
+**(a) — IMPLEMENTED in Wave P3 (RT-2, 2026-06-18).** The grounded answer's **stable grounding rules +
+preface** now ride in a cacheable system prompt (`GROUNDED_SYSTEM_PROMPT` = `BASE_SYSTEM_PROMPT` + the
+rules) instead of the per-turn user message, so `cache_prompt`'s prefix reuse no longer stops at
+`BASE_SYSTEM_PROMPT` and re-prefills them every documents turn (the prior user turn is replayed as the
+RAW question, so the grounded prefix never matched). The per-turn user message keeps only the question
++ excerpts. **The skill fence still rides in the user turn deliberately** — it is untrusted reference
+text and must never read as a top-level rule (§22-H2), so this is the grounding-RULES move, not a fence
+move; the excerpts themselves are inherently per-turn and still re-prefill. ~58 approx tokens of rules
+now sit in the always-reused prefix; precedence is unchanged/strengthened (rules in `system` ≥ user,
+still outrank the fence) and the `[Sn]` + no-context contracts are untouched. See "Performance — design
+record … Wave P3" (RT-2).
+
+**Recommended, not implemented** (deliberately out of scope, recorded so the trade-off is visible):
+(b) for a **large user skill near the budget**, the plain-chat fence trim depends on the current
+question's length (`buildTurnFence` subtracts the live final-turn tokens), so the system prefix can
+shift turn-to-turn and defeat PERF-1 — sizing the fence against a *fixed* user-turn reserve would keep
+it byte-stable, but it is a no-op for every shipped skill (none trim) and was left for a follow-up to
+avoid changing the §22-A6 budget contract (RT-9, still open).
 
 ### §18 Auto-fire triggers (S13 — gated on an evaluation harness, 2026-06-17)
 

@@ -127,7 +127,7 @@ export function maybeAutoStartActiveModel(ctx: AppContext): void {
 
 export function registerModelIpc(ctx: AppContext): void {
 
-  ipcMain.handle(IPC.listModels, async (event): Promise<ModelInfo[]> => {
+  ipcMain.handle(IPC.listModels, async (event, lazyVerify?: boolean): Promise<ModelInfo[]> => {
     if (!ctx.manifestsDir) {
       log.warn('No model-manifests directory found; returning empty model list')
       return []
@@ -141,6 +141,11 @@ export function registerModelIpc(ctx: AppContext): void {
       runningModelId: ctx.runtime.activeModelId(),
       hashStore: createSettingsHashStore(ctx.db),
       machineRamGb: machineRamGb(),
+      // RT-3: the chat path (the workspace gate into Chat) passes lazyVerify so only the
+      // active model is hashed on a cold cache — the full corpus of multi-GB GGUFs is
+      // hashed only on an explicit Models-screen visit. Display-only; the start gate
+      // (startModelRuntime) re-verifies the model it actually launches.
+      ...(lazyVerify ? { onlyVerifyModelId: s.activeModelId } : {}),
       // First-run weight hashing can take a while on a fresh drive — stream progress back
       // to the calling renderer so the gate + Models screen show a determinate bar. Guard
       // against a closed/destroyed window (navigation away mid-hash).

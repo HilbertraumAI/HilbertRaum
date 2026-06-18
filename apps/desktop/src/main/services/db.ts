@@ -513,6 +513,21 @@ export function openDatabase(path: string): Db {
   const db = new DatabaseSync(path)
   db.exec('PRAGMA journal_mode = WAL;')
   db.exec('PRAGMA foreign_keys = ON;')
+  // DB-2 — portable-drive performance PRAGMAs (perf audit 2026-06-18). HilbertRaum runs from a
+  // high-latency USB drive where every fsync is 5–20 ms, so the durability/throughput trade-offs
+  // that suit a fixed SSD are wrong here.
+  //   synchronous=NORMAL — WAL-safe: still durable across app crashes, only risks the last txn on
+  //                        an OS/power loss, in exchange for far fewer fsyncs (compounds DB-1).
+  //   busy_timeout=5000  — the concurrent import loop vs chat/tree-build waits briefly instead of
+  //                        throwing SQLITE_BUSY.
+  //   mmap_size=256 MB   — the linear vector scan (RAG-1) reads BLOBs via mapped pages, not syscalls.
+  //   cache_size=-16 MB  — negative = KiB of page cache (~16 MB), not page count.
+  //   temp_store=MEMORY  — keep transient sorts/temp B-trees off the slow drive.
+  db.exec('PRAGMA synchronous = NORMAL;')
+  db.exec('PRAGMA busy_timeout = 5000;')
+  db.exec('PRAGMA mmap_size = 268435456;')
+  db.exec('PRAGMA cache_size = -16000;')
+  db.exec('PRAGMA temp_store = MEMORY;')
   db.exec(SCHEMA)
   ensureColumn(db, 'conversations', 'scope_json', 'scope_json TEXT')
   ensureColumn(db, 'documents', 'summary_json', 'summary_json TEXT')
@@ -562,6 +577,30 @@ export function openDatabase(path: string): Db {
   ensureColumn(db, 'bank_transactions', 'category_id', 'category_id TEXT')
   ensureColumn(db, 'bank_transactions', 'reconciled', 'reconciled INTEGER')
   ensureColumn(db, 'bank_transactions', 'confidence', 'confidence REAL')
+  // Additive performance indexes (perf audit 2026-06-18, Wave P1 — DB-4/DB-6/DB-7). CREATE INDEX
+  // IF NOT EXISTS is the same additive-migration idiom as the inline SCHEMA indexes; these live
+  // here (after ensureColumn) because idx_bank_transactions_category indexes a migrated column.
+  db.exec(
+    // DB-4/RAG-4: every retrieval + stale-check filters embeddings WHERE embedding_model_id = ?.
+    'CREATE INDEX IF NOT EXISTS idx_embeddings_model ON embeddings(embedding_model_id);'
+  )
+  db.exec(
+    // DB-6: unscoped "list every date/amount" filters on record_type (and record_type,
+    // normalized_value) with no leading document_id — the doc-leading idx_extract_doc_type can't
+    // serve it. The doc-leading index still serves the scoped (per-document) queries.
+    'CREATE INDEX IF NOT EXISTS idx_extract_type_nv ON extraction_records(record_type, normalized_value);'
+  )
+  db.exec(
+    // DB-7: documents.status is filtered on every list + the re-index honesty check.
+    'CREATE INDEX IF NOT EXISTS idx_documents_status ON documents(status);'
+  )
+  db.exec(
+    // DB-7: bank_transactions.category_id (a migrated column) — joined as transaction volume grows.
+    'CREATE INDEX IF NOT EXISTS idx_bank_transactions_category ON bank_transactions(category_id);'
+  )
+  // run_id indexes (DB-7) deliberately OMITTED: run_id is only ever INSERTed, never joined or
+  // filtered anywhere in the codebase, so an index would be pure write-amplification on USB with
+  // no read benefit. Add one alongside the first query that joins on run_id.
   ensureChunksFts(db)
   ensureMessagesFts(db)
   seedCollections(db)

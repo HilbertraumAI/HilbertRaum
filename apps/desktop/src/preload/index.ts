@@ -81,7 +81,10 @@ const api = {
     ipcRenderer.invoke(IPC.changeWorkspacePassword, currentPassword, nextPassword),
 
   // ---- Models + runtime ----
-  listModels: (): Promise<ModelInfo[]> => ipcRenderer.invoke(IPC.listModels),
+  // `lazyVerify` (RT-3): the chat path (workspace gate) passes true so only the active
+  // model is hashed on a cold cache; the Models screen omits it to hash the full set.
+  listModels: (lazyVerify?: boolean): Promise<ModelInfo[]> =>
+    ipcRenderer.invoke(IPC.listModels, lazyVerify),
   selectModel: (
     modelId: string
   ): Promise<{ activeModelId: string | null; activeEmbeddingModelId: string | null }> =>

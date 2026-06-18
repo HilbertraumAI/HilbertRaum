@@ -11,6 +11,7 @@ import { MockEmbedder, encodeVector } from '../../src/main/services/embeddings'
 import {
   buildGroundedChatMessages,
   buildGroundedPrompt,
+  GROUNDED_SYSTEM_PROMPT,
   detectFilenameScope,
   generateGroundedAnswer,
   ragSettingsFrom,
@@ -115,13 +116,17 @@ describe('buildGroundedPrompt', () => {
     }
   ]
 
-  it('matches the spec §7.8 template: rules, question, numbered excerpts, source format', () => {
+  it('carries the spec §7.8 source format; the rules live in the system prompt (RT-2)', () => {
     const p = buildGroundedPrompt('What is the liability cap?', chunks)
-    expect(p).toContain('You are answering a question using local documents.')
-    expect(p).toContain('Rules:')
-    expect(p).toContain('- Cite sources inline using [S1], [S2], etc.')
-    expect(p).toContain('- Do not invent citations.')
-    // Question section carries the verbatim user question.
+    // RT-2: the stable grounding rules + preface moved to GROUNDED_SYSTEM_PROMPT, NOT the
+    // per-turn user message — so cache_prompt reuses them across documents turns.
+    expect(p).not.toContain('Rules:')
+    expect(p).not.toContain('You are answering a question using local documents.')
+    expect(GROUNDED_SYSTEM_PROMPT).toContain('You are answering a question using local documents.')
+    expect(GROUNDED_SYSTEM_PROMPT).toContain('Rules:')
+    expect(GROUNDED_SYSTEM_PROMPT).toContain('- Cite sources inline using [S1], [S2], etc.')
+    expect(GROUNDED_SYSTEM_PROMPT).toContain('- Do not invent citations.')
+    // The user turn still carries the verbatim question + the numbered excerpts.
     expect(p).toContain('Question:\nWhat is the liability cap?')
     // Source-context format: "[Sn] File: X | Page: 4" then the quoted chunk text.
     expect(p).toContain('[S1] File: Contract.pdf | Page: 4')
@@ -129,6 +134,21 @@ describe('buildGroundedPrompt', () => {
     // Page-less chunks fall back to the section label.
     expect(p).toContain('[S2] File: Terms.docx | Section: Termination')
     expect(p.trimEnd().endsWith('Answer:')).toBe(true)
+  })
+
+  it('the system prefix is byte-stable across turns so cache_prompt reuses it (RT-2)', () => {
+    // The grounded SYSTEM prompt must NOT depend on the question or excerpts — otherwise the
+    // longest-common-prefix cache reuse would break every turn. Build two unrelated turns and
+    // assert the system message is byte-identical.
+    const sys1 = buildGroundedChatMessages(freshDb(), 'no-conv', buildGroundedPrompt('Q1', chunks))[0]
+    const sys2 = buildGroundedChatMessages(
+      freshDb(),
+      'no-conv',
+      buildGroundedPrompt('a totally different question', [chunks[1]])
+    )[0]
+    expect(sys1.role).toBe('system')
+    expect(sys1.content).toBe(GROUNDED_SYSTEM_PROMPT)
+    expect(sys2.content).toBe(sys1.content) // byte-stable ⇒ reused prefix
   })
 
   it('omits the meta suffix when a chunk has neither page nor section', () => {

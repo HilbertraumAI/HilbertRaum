@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { memo, useCallback, useEffect, useState } from 'react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import {
   SEARCH_MARK_END,
@@ -8,7 +8,7 @@ import {
   type ConversationSearchResult
 } from '@shared/types'
 import { Button, ConfirmDialog, Icon } from '../components'
-import { useT } from '../i18n'
+import { useT, type I18n } from '../i18n'
 import { localizeServerCopy } from '../lib/displayMap'
 import type { MessageKey } from '@shared/i18n'
 
@@ -143,7 +143,10 @@ interface Props {
   onCollapse: () => void
 }
 
-export function ConversationList({
+// Memoized (perf audit FE-3): ChatScreen re-renders on every keystroke + streaming flush. With
+// stable props from the parent (useCallback'd onSelect/onNew/onDelete/onCollapse), the list — and
+// its groupByProject/groupConversations passes — is skipped on a keystroke.
+export const ConversationList = memo(function ConversationList({
   conversations,
   activeId,
   streaming,
@@ -195,58 +198,26 @@ export function ConversationList({
     setQuery('')
   }
 
+  // Stable row callbacks so a ConvRow's React.memo holds when an UNRELATED row's menu opens
+  // (menuOpenId is local state): opening one ⋯ menu no longer re-renders every row (FE-4).
+  const handleMenuOpenChange = useCallback((id: string, open: boolean): void => {
+    setMenuOpenId(open ? id : null)
+  }, [])
+  const handleRequestDelete = useCallback((c: Conversation): void => setPendingDelete(c), [])
+
   // One conversation row (title + doc-meta + the ⋯ menu). Shared by date and project groups.
   const renderRow = (c: Conversation): JSX.Element => (
-    <div
+    <ConvRow
       key={c.id}
-      className={`chat-conv-row ${c.id === activeId ? 'active' : ''}`}
-      onContextMenu={(e) => {
-        e.preventDefault()
-        if (!streaming) setMenuOpenId(c.id)
-      }}
-    >
-      <button
-        className={`chat-conv ${c.id === activeId ? 'active' : ''}`}
-        aria-current={c.id === activeId ? 'true' : undefined}
-        disabled={streaming && c.id !== activeId}
-        onClick={() => onSelect(c)}
-        title={localizeServerCopy(t, c.title)}
-      >
-        {/* Titles are user data, but the persisted DEFAULT title is canonical English
-            (D-L4) — the display map translates it, all else passes. */}
-        <span className="chat-conv-title">{localizeServerCopy(t, c.title)}</span>
-        {/* Quiet metadata line: a small document glyph + "Documents" for a document Q&A
-            thread (replacing the loud DOC badge), else nothing. Never color-only
-            (WCAG 1.4.1) — the glyph pairs with the word. */}
-        {c.mode === 'documents' && (
-          <span className="chat-conv-meta">
-            <Icon name="file" className="chat-conv-meta-icon" /> {t('chat.list.docMeta')}
-          </span>
-        )}
-      </button>
-      <DropdownMenu.Root
-        open={menuOpenId === c.id}
-        onOpenChange={(open) => setMenuOpenId(open ? c.id : null)}
-      >
-        <DropdownMenu.Trigger asChild>
-          <button
-            className="chat-conv-menu-btn"
-            disabled={streaming}
-            aria-label={t('chat.list.rowOptionsAria', { title: localizeServerCopy(t, c.title) })}
-            title={t('chat.convOptions')}
-          >
-            ⋯
-          </button>
-        </DropdownMenu.Trigger>
-        <DropdownMenu.Portal>
-          <DropdownMenu.Content className="menu" align="start" sideOffset={4}>
-            <DropdownMenu.Item className="menu-item danger" onSelect={() => setPendingDelete(c)}>
-              {t('chat.delete.menuItem')}
-            </DropdownMenu.Item>
-          </DropdownMenu.Content>
-        </DropdownMenu.Portal>
-      </DropdownMenu.Root>
-    </div>
+      c={c}
+      active={c.id === activeId}
+      streaming={streaming}
+      menuOpen={menuOpenId === c.id}
+      onMenuOpenChange={handleMenuOpenChange}
+      onSelect={onSelect}
+      onRequestDelete={handleRequestDelete}
+      t={t}
+    />
   )
 
   // Date-grouped rows (Today / Yesterday / …) — the existing grouping, reused inside each
@@ -367,4 +338,78 @@ export function ConversationList({
       </ConfirmDialog>
     </aside>
   )
-}
+})
+
+/**
+ * One conversation row (title + doc-meta + the ⋯ menu), memoized (perf audit FE-4). With stable
+ * callbacks from the parent, a row re-renders only when ITS own props change — so opening one
+ * row's overflow menu (which flips the parent's `menuOpenId`) no longer re-renders every row.
+ */
+const ConvRow = memo(function ConvRow({
+  c,
+  active,
+  streaming,
+  menuOpen,
+  onMenuOpenChange,
+  onSelect,
+  onRequestDelete,
+  t
+}: {
+  c: Conversation
+  active: boolean
+  streaming: boolean
+  menuOpen: boolean
+  onMenuOpenChange: (id: string, open: boolean) => void
+  onSelect: (c: Conversation) => void
+  onRequestDelete: (c: Conversation) => void
+  t: I18n['t']
+}): JSX.Element {
+  return (
+    <div
+      className={`chat-conv-row ${active ? 'active' : ''}`}
+      onContextMenu={(e) => {
+        e.preventDefault()
+        if (!streaming) onMenuOpenChange(c.id, true)
+      }}
+    >
+      <button
+        className={`chat-conv ${active ? 'active' : ''}`}
+        aria-current={active ? 'true' : undefined}
+        disabled={streaming && !active}
+        onClick={() => onSelect(c)}
+        title={localizeServerCopy(t, c.title)}
+      >
+        {/* Titles are user data, but the persisted DEFAULT title is canonical English
+            (D-L4) — the display map translates it, all else passes. */}
+        <span className="chat-conv-title">{localizeServerCopy(t, c.title)}</span>
+        {/* Quiet metadata line: a small document glyph + "Documents" for a document Q&A
+            thread (replacing the loud DOC badge), else nothing. Never color-only
+            (WCAG 1.4.1) — the glyph pairs with the word. */}
+        {c.mode === 'documents' && (
+          <span className="chat-conv-meta">
+            <Icon name="file" className="chat-conv-meta-icon" /> {t('chat.list.docMeta')}
+          </span>
+        )}
+      </button>
+      <DropdownMenu.Root open={menuOpen} onOpenChange={(open) => onMenuOpenChange(c.id, open)}>
+        <DropdownMenu.Trigger asChild>
+          <button
+            className="chat-conv-menu-btn"
+            disabled={streaming}
+            aria-label={t('chat.list.rowOptionsAria', { title: localizeServerCopy(t, c.title) })}
+            title={t('chat.convOptions')}
+          >
+            ⋯
+          </button>
+        </DropdownMenu.Trigger>
+        <DropdownMenu.Portal>
+          <DropdownMenu.Content className="menu" align="start" sideOffset={4}>
+            <DropdownMenu.Item className="menu-item danger" onSelect={() => onRequestDelete(c)}>
+              {t('chat.delete.menuItem')}
+            </DropdownMenu.Item>
+          </DropdownMenu.Content>
+        </DropdownMenu.Portal>
+      </DropdownMenu.Root>
+    </div>
+  )
+})

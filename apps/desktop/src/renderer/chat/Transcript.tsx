@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { Message } from '@shared/types'
@@ -6,7 +6,7 @@ import { MessageActions } from './MessageActions'
 import { SourcesDisclosure } from './SourcesDisclosure'
 import { CoverageMeter, Icon } from '../components'
 import { localizeServerCopy } from '../lib/displayMap'
-import { useT } from '../i18n'
+import { useT, type I18n } from '../i18n'
 
 // Transcript (guidelines §3): the conversation IS the canvas — centered,
 // max-width 720px, --text-md body (CSS). Assistant answers carry an inline
@@ -44,7 +44,11 @@ interface TranscriptProps {
   resolveSkillTitle?: (installId: string | null | undefined, fallbackTitle: string) => string
 }
 
-export function Transcript({
+// Memoized (perf audit FE-3): ChatScreen re-renders on every keystroke (input state) and every
+// ~40 ms streaming flush. With stable props from the parent (useCallback'd handlers + a memoized
+// emptyState), the transcript — and its per-message Markdown parsing — is skipped on a keystroke
+// and only re-renders for genuine transcript/stream changes.
+export const Transcript = memo(function Transcript({
   messages,
   streamingHere,
   streamText,
@@ -61,99 +65,51 @@ export function Transcript({
 }: TranscriptProps): JSX.Element {
   const { t } = useT()
   const scrollRef = useRef<HTMLDivElement>(null)
-
-  // Localized role chip; unknown roles (defensive) render as-is.
-  function roleLabel(role: string): string {
-    return role === 'user' ? t('chat.role.user') : role === 'assistant' ? t('chat.role.assistant') : role
+  // Whether the viewport is pinned to the bottom. We only auto-scroll on new content while the
+  // user is already near the bottom, so a ~40 ms streaming flush no longer forces a layout +
+  // scroll when the user has scrolled up to read an earlier turn (perf audit FE-1/FE-5).
+  const atBottomRef = useRef(true)
+  function onScroll(): void {
+    const el = scrollRef.current
+    if (!el) return
+    atBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80
   }
 
-  // Keep the transcript scrolled to the newest content.
+  // Keep the transcript scrolled to the newest content — but only while pinned to the bottom,
+  // so a streaming flush never yanks a user who scrolled up to read.
   useEffect(() => {
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight })
+    if (atBottomRef.current) scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight })
   }, [messages, streamText, streamThinking])
 
-  const lastAssistantId = [...messages].reverse().find((m) => m.role === 'assistant')?.id
+  // Id of the last assistant turn — drives the regenerate / "answer without it" affordances.
+  // Memoized so a 40 ms streaming flush doesn't re-scan the whole transcript (perf audit FE-1).
+  const lastAssistantId = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role === 'assistant') return messages[i].id
+    }
+    return undefined
+  }, [messages])
 
   return (
-    <div className="chat-transcript" ref={scrollRef}>
+    <div className="chat-transcript" ref={scrollRef} onScroll={onScroll}>
       <div className="chat-transcript-inner">
         {messages.length === 0 && !streamingHere && emptyState}
+        {/* Each persisted message is a memoized MessageBlock keyed by id (its content is stamped
+            once and never mutates), so a streaming flush — which only changes `streamText` on the
+            live bubble below — never re-parses a prior message's Markdown (perf audit FE-1). */}
         {messages.map((m) => (
-          <div key={m.id} className={`msg-block ${m.role}`}>
-            <div className={`msg ${m.role}`}>
-              <div className="msg-role">{roleLabel(m.role)}</div>
-              {m.role === 'assistant' ? (
-                <div className="msg-content md">
-                  {/* The fixed RAG answers (no-context / reindex-needed) are persisted
-                      canonical English; the D-L4 display map translates them at render
-                      — exact match only, real model output passes through untouched. */}
-                  <AssistantMarkdown text={localizeServerCopy(t, m.content)} />
-                </div>
-              ) : (
-                <div className="msg-content">{m.content}</div>
-              )}
-              {m.citations && m.citations.length > 0 && (
-                <>
-                  <SourcesDisclosure citations={m.citations} />
-                  {/* Honesty (whole-document-analysis §4.5/§5.2): a grounded document answer
-                      is a RELEVANCE answer — based on the most relevant passages, NOT the whole
-                      document. Always labelled so a retrieval answer never reads as exhaustive. */}
-                  <CoverageMeter coverage={{ mode: 'relevance', chunksCovered: 0, chunksTotal: 0 }} />
-                </>
-              )}
-              {/* Per-message skill glyph (skills plan §15/DS16/§22-A5): a quiet, labelled marker on
-                  the answer a skill shaped — icon + word, never colour-only (guidelines §9). The
-                  read resolves a DELETED skill to null (no skillTitle), so the glyph never points at
-                  a vanished skill. Decorative-but-labelled; never alarming. */}
-              {m.role === 'assistant' && m.skillTitle && (() => {
-                // Show the glyph title in the UI language when the skill carries a `localized`
-                // override; fall back to the stamped canonical title otherwise.
-                const glyphTitle = resolveSkillTitle
-                  ? resolveSkillTitle(m.skillId, m.skillTitle)
-                  : m.skillTitle
-                // S13c (D3): an AUTO-FIRED turn reads "Answered with <skill>" and — on the last
-                // assistant turn — carries a one-click "answer without it" undo that re-runs the same
-                // question skill-free. An explicitly-picked turn keeps the plain "Skill: <title>" glyph
-                // (no undo). Either way the glyph keeps the auto-fire visible, never silent.
-                if (m.autoFired) {
-                  const canUndo = m.id === lastAssistantId && onAnswerWithoutSkill != null
-                  return (
-                    <div
-                      className="msg-skill msg-skill-auto"
-                      title={t('chat.skill.autoFiredTitle', { title: glyphTitle })}
-                    >
-                      <Icon name="brain" className="msg-skill-icon" />
-                      <span>{t('chat.skill.autoFired', { title: glyphTitle })}</span>
-                      {canUndo && (
-                        <button
-                          type="button"
-                          className="msg-skill-undo"
-                          onClick={onAnswerWithoutSkill}
-                          disabled={actionsDisabled}
-                        >
-                          {t('chat.skill.answerWithout')}
-                        </button>
-                      )}
-                    </div>
-                  )
-                }
-                return (
-                  <div className="msg-skill" title={t('chat.skill.usedTitle', { title: glyphTitle })}>
-                    <Icon name="brain" className="msg-skill-icon" />
-                    <span>{t('chat.skill.used', { title: glyphTitle })}</span>
-                  </div>
-                )
-              })()}
-            </div>
-            {m.role === 'assistant' && (
-              <MessageActions
-                onTryAgain={m.id === lastAssistantId ? onTryAgain : undefined}
-                onCopy={() => onCopy(m.content)}
-                onSave={onSave}
-                disabled={actionsDisabled}
-              />
-            )}
-          </div>
+          <MessageBlock
+            key={m.id}
+            m={m}
+            t={t}
+            isLast={m.id === lastAssistantId}
+            onTryAgain={onTryAgain}
+            onAnswerWithoutSkill={onAnswerWithoutSkill}
+            onCopy={onCopy}
+            onSave={onSave}
+            actionsDisabled={actionsDisabled}
+            resolveSkillTitle={resolveSkillTitle}
+          />
         ))}
         {streamingHere && (
           <div className="msg-block assistant">
@@ -186,14 +142,16 @@ export function Transcript({
                   </div>
                 </div>
               )}
-              {/* The visible markdown is NOT a live region (audit L7): re-rendering the
-                  whole buffer on every ~40 ms flush made role="log" either re-read the
-                  full answer or fall silent. Announcement is delegated to a separate
-                  plain-text region below, throttled to sentence boundaries. */}
-              <div className="msg-content md">
-                {/* The fixed RAG answers arrive as one onToken chunk — map the live
-                    bubble too so they never flash English before persisting. */}
-                <AssistantMarkdown text={localizeServerCopy(t, streamText)} />
+              {/* The live answer renders as PLAIN TEXT while streaming (perf audit FE-1): re-parsing
+                  the whole growing Markdown buffer on every ~40 ms flush is O(n²) over the reply
+                  length and competes with token generation on CPU-only hardware. The full Markdown
+                  parse runs ONCE on completion, when the turn re-renders from `messages` as a
+                  persisted MessageBlock. `.msg-content` without `.md` keeps white-space: pre-wrap so
+                  newlines survive; the fixed RAG answers (one onToken chunk) read fine as plain text
+                  too. The visible text is NOT a live region (audit L7) — announcement is delegated to
+                  the separate sentence-throttled StreamAnnouncer below. */}
+              <div className="msg-content">
+                {localizeServerCopy(t, streamText)}
                 <span className="cursor" aria-hidden="true">
                   ▋
                 </span>
@@ -205,6 +163,117 @@ export function Transcript({
       </div>
     </div>
   )
+})
+
+/**
+ * One persisted message (user or assistant). Memoized (React.memo) and keyed by message id so a
+ * ~40 ms streaming flush — which only updates the live bubble's `streamText` — never re-renders
+ * or re-parses the Markdown of prior, unchanged turns (perf audit FE-1). The memo is fully
+ * effective once the parent passes stable callbacks (perf audit FE-3); even before that, the
+ * memoized `AssistantMarkdown` below keeps identical text from being re-parsed.
+ */
+const MessageBlock = memo(function MessageBlock({
+  m,
+  t,
+  isLast,
+  onTryAgain,
+  onAnswerWithoutSkill,
+  onCopy,
+  onSave,
+  actionsDisabled,
+  resolveSkillTitle
+}: {
+  m: Message
+  t: I18n['t']
+  /** True on the last assistant turn — gates the regenerate + "answer without it" affordances. */
+  isLast: boolean
+  onTryAgain?: () => void
+  onAnswerWithoutSkill?: () => void
+  onCopy: (content: string) => void
+  onSave: () => void
+  actionsDisabled: boolean
+  resolveSkillTitle?: (installId: string | null | undefined, fallbackTitle: string) => string
+}): JSX.Element {
+  return (
+    <div className={`msg-block ${m.role}`}>
+      <div className={`msg ${m.role}`}>
+        <div className="msg-role">{roleLabel(m.role, t)}</div>
+        {m.role === 'assistant' ? (
+          <div className="msg-content md">
+            {/* The fixed RAG answers (no-context / reindex-needed) are persisted
+                canonical English; the D-L4 display map translates them at render
+                — exact match only, real model output passes through untouched. */}
+            <AssistantMarkdown text={localizeServerCopy(t, m.content)} />
+          </div>
+        ) : (
+          <div className="msg-content">{m.content}</div>
+        )}
+        {m.citations && m.citations.length > 0 && (
+          <>
+            <SourcesDisclosure citations={m.citations} />
+            {/* Honesty (whole-document-analysis §4.5/§5.2): a grounded document answer
+                is a RELEVANCE answer — based on the most relevant passages, NOT the whole
+                document. Always labelled so a retrieval answer never reads as exhaustive. */}
+            <CoverageMeter coverage={{ mode: 'relevance', chunksCovered: 0, chunksTotal: 0 }} />
+          </>
+        )}
+        {/* Per-message skill glyph (skills plan §15/DS16/§22-A5): a quiet, labelled marker on
+            the answer a skill shaped — icon + word, never colour-only (guidelines §9). The
+            read resolves a DELETED skill to null (no skillTitle), so the glyph never points at
+            a vanished skill. Decorative-but-labelled; never alarming. */}
+        {m.role === 'assistant' && m.skillTitle && (() => {
+          // Show the glyph title in the UI language when the skill carries a `localized`
+          // override; fall back to the stamped canonical title otherwise.
+          const glyphTitle = resolveSkillTitle ? resolveSkillTitle(m.skillId, m.skillTitle) : m.skillTitle
+          // S13c (D3): an AUTO-FIRED turn reads "Answered with <skill>" and — on the last
+          // assistant turn — carries a one-click "answer without it" undo that re-runs the same
+          // question skill-free. An explicitly-picked turn keeps the plain "Skill: <title>" glyph
+          // (no undo). Either way the glyph keeps the auto-fire visible, never silent.
+          if (m.autoFired) {
+            const canUndo = isLast && onAnswerWithoutSkill != null
+            return (
+              <div
+                className="msg-skill msg-skill-auto"
+                title={t('chat.skill.autoFiredTitle', { title: glyphTitle })}
+              >
+                <Icon name="brain" className="msg-skill-icon" />
+                <span>{t('chat.skill.autoFired', { title: glyphTitle })}</span>
+                {canUndo && (
+                  <button
+                    type="button"
+                    className="msg-skill-undo"
+                    onClick={onAnswerWithoutSkill}
+                    disabled={actionsDisabled}
+                  >
+                    {t('chat.skill.answerWithout')}
+                  </button>
+                )}
+              </div>
+            )
+          }
+          return (
+            <div className="msg-skill" title={t('chat.skill.usedTitle', { title: glyphTitle })}>
+              <Icon name="brain" className="msg-skill-icon" />
+              <span>{t('chat.skill.used', { title: glyphTitle })}</span>
+            </div>
+          )
+        })()}
+      </div>
+      {m.role === 'assistant' && (
+        <MessageActions
+          onTryAgain={isLast ? onTryAgain : undefined}
+          onCopy={() => onCopy(m.content)}
+          onSave={onSave}
+          disabled={actionsDisabled}
+        />
+      )}
+    </div>
+  )
+})
+
+/** Localized role chip; unknown roles (defensive) render as-is. */
+function roleLabel(role: string, t: I18n['t']): string {
+  return role === 'user' ? t('chat.role.user') : role === 'assistant' ? t('chat.role.assistant') : role
 }
 
 /**
@@ -274,7 +343,7 @@ function stripMarkdown(s: string): string {
  * Links open in the OS browser via `target="_blank"` (the main process's window-open
  * handler allows http(s) only); user turns stay plain text — they are not Markdown.
  */
-export function AssistantMarkdown({ text }: { text: string }): JSX.Element {
+export const AssistantMarkdown = memo(function AssistantMarkdown({ text }: { text: string }): JSX.Element {
   return (
     <Markdown
       remarkPlugins={[remarkGfm]}
@@ -297,7 +366,7 @@ export function AssistantMarkdown({ text }: { text: string }): JSX.Element {
       {text}
     </Markdown>
   )
-}
+})
 
 /** True only for absolute http(s) URLs — the one scheme allowed in rendered model links. */
 function isSafeHttpUrl(href: string | undefined): boolean {

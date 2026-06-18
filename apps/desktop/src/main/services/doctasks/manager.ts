@@ -32,7 +32,7 @@ import { isPdfPath } from '../ingestion/parsers'
 import type { OcrEngine, OcrPage } from '../ocr'
 import type { RasterizePdf } from '../ocr/rasterizer'
 import { ENCRYPTED_DOC_SUFFIX, shredFile } from '../workspace-vault'
-import { decodeVector, VectorIndex } from '../embeddings'
+import { cosineSimilarity, decodeVector } from '../embeddings'
 import { isAbortError, stripThinkBlocks } from '../chat'
 import { collectionIdsForDocument } from '../collections'
 import { ModelSlotArbiter } from '../analysis/model-slot-arbiter'
@@ -1083,8 +1083,7 @@ export class DocTaskManager {
 
   /**
    * Mode (b) — section-matched compare: window doc A's stored chunks, retrieve each
-   * window's nearest doc-B chunks via the EXISTING VectorIndex scoped to doc B
-   * (the `documentIds` scoping — the vectors are already there, no new index),
+   * window's nearest doc-B chunks (cosine over doc-B's stored vectors, decoded ONCE),
    * compare each matched pair (map), then reduce the notes into the report.
    */
   private async runCompareSectionMatched(
@@ -1142,10 +1141,44 @@ export class DocTaskManager {
     const vectorByChunk = new Map(
       aRows.map((r) => [r.id, decodeVector(r.vector_blob, r.dimensions)])
     )
-    const index = new VectorIndex(db, embedder, {
-      embeddingModelId: embedder.id,
-      documentIds: [docB.id]
-    })
+    // RAG-2/ING-1 (perf audit 2026-06-18): load doc-B's chunks ONCE — text, chunk_index AND
+    // vector together — and decode each B vector a single time. The previous code ran
+    // VectorIndex.search per A-chunk, which re-issued `SELECT … FROM embeddings WHERE chunk_id
+    // IN (…doc B…)` and re-decoded EVERY doc-B vector for each A-chunk (O(N_A × N_B) redundant
+    // decodes + N_A full re-scans), then re-fetched B's text with a fresh IN(…) per window.
+    // Mirrors the alignNodes approach (compare.ts:349): pre-decode both sides, cosine in memory.
+    const bChunks = (
+      db
+        .prepare(
+          `SELECT c.id, c.text, c.chunk_index, e.vector_blob, e.dimensions
+           FROM chunks c JOIN embeddings e ON e.chunk_id = c.id AND e.embedding_model_id = ?
+           WHERE c.document_id = ? ORDER BY c.chunk_index`
+        )
+        .all(embedder.id, docB.id) as unknown as Array<{
+        id: string
+        text: string
+        chunk_index: number
+        vector_blob: Uint8Array
+        dimensions: number
+      }>
+    ).map((r) => ({
+      id: r.id,
+      text: r.text,
+      chunkIndex: r.chunk_index,
+      vec: decodeVector(r.vector_blob, r.dimensions)
+    }))
+    const bById = new Map(bChunks.map((b) => [b.id, b]))
+    // Top-`topK` doc-B neighbors of one A-vector, scored against the resident decoded vectors —
+    // same ranking VectorIndex.search produced (descending cosine, slice topK), no DB round-trip.
+    const nearestB = (vec: Float32Array, topK: number): Array<{ chunkId: string; score: number }> => {
+      const hits: Array<{ chunkId: string; score: number }> = []
+      for (const b of bChunks) {
+        if (b.vec.length !== vec.length) continue
+        hits.push({ chunkId: b.id, score: cosineSimilarity(vec, b.vec) })
+      }
+      hits.sort((x, y) => y.score - x.score)
+      return hits.slice(0, topK)
+    }
 
     const partials: string[] = []
     for (let i = 0; i < plan.windows.length; i++) {
@@ -1156,7 +1189,7 @@ export class DocTaskManager {
       for (const chunkId of window.chunkIds) {
         const vec = vectorByChunk.get(chunkId)
         if (!vec) continue
-        for (const hit of index.search(vec, COMPARE_NEIGHBORS_PER_CHUNK)) {
+        for (const hit of nearestB(vec, COMPARE_NEIGHBORS_PER_CHUNK)) {
           const prev = scoreByB.get(hit.chunkId)
           if (prev === undefined || hit.score > prev) scoreByB.set(hit.chunkId, hit.score)
         }
@@ -1166,25 +1199,13 @@ export class DocTaskManager {
       )
       // Fill the B side best-first up to its word budget; present the picked excerpts
       // in doc-B document order (readability). The first excerpt always fits — a
-      // degenerate tiny context hard-truncates it rather than sending nothing.
-      const bTexts = new Map<string, { text: string; chunkIndex: number }>()
-      if (candidates.length > 0) {
-        const rows = db
-          .prepare(
-            `SELECT id, text, chunk_index FROM chunks
-             WHERE id IN (${candidates.map(() => '?').join(', ')})`
-          )
-          .all(...candidates.map(([id]) => id)) as unknown as Array<{
-          id: string
-          text: string
-          chunk_index: number
-        }>
-        for (const r of rows) bTexts.set(r.id, { text: r.text, chunkIndex: r.chunk_index })
-      }
+      // degenerate tiny context hard-truncates it rather than sending nothing. The text +
+      // chunk_index come from the resident `bById` map loaded once above (RAG-2: no per-window
+      // IN(…) re-fetch).
       const picked: Array<{ text: string; chunkIndex: number }> = []
       let usedWords = 0
       for (const [chunkId] of candidates) {
-        const row = bTexts.get(chunkId)
+        const row = bById.get(chunkId)
         if (!row) continue
         const rowWords = approxTokenCount(row.text)
         if (picked.length === 0 && rowWords > plan.pairBudgetWords) {

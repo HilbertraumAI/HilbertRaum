@@ -10,6 +10,7 @@ import {
   MockEmbedder,
   VectorIndex,
   cosineSimilarity,
+  dotProduct,
   encodeVector,
   decodeVector,
   MOCK_EMBEDDING_DIMENSIONS
@@ -79,6 +80,47 @@ describe('cosineSimilarity', () => {
     const a = new Float32Array([1, 0, 0])
     const b = new Float32Array([1, 0, 0, 0])
     expect(() => cosineSimilarity(a, b)).toThrow(RangeError)
+  })
+})
+
+// ---- dotProduct fast path (RAG-1) -----------------------------------------------
+
+describe('dotProduct (RAG-1 search fast path)', () => {
+  it('throws on a length mismatch like cosineSimilarity', () => {
+    const a = new Float32Array([1, 0, 0])
+    const b = new Float32Array([1, 0, 0, 0])
+    expect(() => dotProduct(a, b)).toThrow(RangeError)
+  })
+
+  it('equals cosineSimilarity on L2-normalized vectors (the search invariant)', async () => {
+    // VectorIndex.search relies on cosine == dot for normalized inputs. Embed real
+    // (normalized) vectors and assert the two scorers agree to float tolerance.
+    const embedder = new MockEmbedder()
+    const vecs = await embedder.embed([
+      'photosynthesis converts sunlight into chemical energy',
+      'the stock market rallied on strong earnings',
+      'a recipe for sourdough bread'
+    ])
+    for (const a of vecs) {
+      for (const b of vecs) {
+        expect(dotProduct(a, b)).toBeCloseTo(cosineSimilarity(a, b), 5)
+      }
+    }
+  })
+
+  it('produces the SAME ranking the search uses (sorted dot == sorted cosine)', async () => {
+    const embedder = new MockEmbedder()
+    const corpus = await embedder.embed(['alpha topic', 'beta topic', 'gamma topic', 'delta topic'])
+    const [query] = await embedder.embed(['beta topic'])
+    const byDot = corpus
+      .map((v, i) => ({ i, s: dotProduct(query, v) }))
+      .sort((x, y) => y.s - x.s)
+      .map((h) => h.i)
+    const byCos = corpus
+      .map((v, i) => ({ i, s: cosineSimilarity(query, v) }))
+      .sort((x, y) => y.s - x.s)
+      .map((h) => h.i)
+    expect(byDot).toEqual(byCos)
   })
 })
 

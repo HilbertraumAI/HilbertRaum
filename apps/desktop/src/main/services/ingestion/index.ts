@@ -26,7 +26,7 @@ import type {
 } from '../../../shared/types'
 import { sha256File } from '../models'
 import { docLifecycle, fileFromPendingDestination } from '../collections'
-import { type Embedder, encodeVector } from '../embeddings'
+import { type Embedder, encodeVector, invalidateResidentVectors } from '../embeddings'
 import { ENCRYPTED_DOC_SUFFIX, shredFile, type DocumentCipher } from '../workspace-vault'
 import type { Transcriber } from '../transcriber'
 import type { OcrEngine, OcrPage } from '../ocr'
@@ -373,21 +373,6 @@ function treeLevelsOf(raw: string | null): number | undefined {
   }
 }
 
-/**
- * Count a document's chunks that carry a vector under `modelId`. Used to detect an
- * embedding-model mismatch: an indexed document with chunks but zero vectors under the
- * active model is unreachable by search until re-indexed.
- */
-function chunksEmbeddedUnder(db: Db, documentId: string, modelId: string): number {
-  const r = db
-    .prepare(
-      `SELECT COUNT(*) AS n FROM embeddings e JOIN chunks c ON e.chunk_id = c.id
-       WHERE c.document_id = ? AND e.embedding_model_id = ?`
-    )
-    .get(documentId, modelId) as unknown as { n: number }
-  return r.n
-}
-
 function getRow(db: Db, id: string): DocumentRow | null {
   const row = db.prepare('SELECT * FROM documents WHERE id = ?').get(id) as unknown as
     | DocumentRow
@@ -493,16 +478,34 @@ export function createQueuedDocument(
 }
 
 /**
- * Run the full ingestion pipeline for one already-`queued` document. Never throws:
- * any failure is captured on the document row as `failed` + `error_message`, and the
- * resulting DocumentInfo is returned so the caller can report it.
+ * Result of the parse+chunk phase (`prepareDocument`), the front half of the ING-3 import
+ * pipeline. `ready: true` ⇒ chunks are persisted and the document is in `embedding`; the
+ * embed phase (`finalizeDocument`) may proceed. `ready: false` ⇒ prepare already captured a
+ * failure on the row (`failed` + `error_message`), so the embed phase must be skipped.
  */
-export async function processDocument(
+export interface PreparedDocument {
+  documentId: string
+  ready: boolean
+}
+
+/**
+ * Parse + chunk phase (ING-3 pipeline, front half). Runs setup → parse → chunk → persist
+ * chunks, leaving the document in `embedding`. CPU- and disk-bound; independent of the embed
+ * sidecar (the embed phase reads the chunks back from the DB), so the import loop overlaps
+ * one file's `prepareDocument` with the previous file's `finalizeDocument`. Never throws: a
+ * failure is captured on the row and returned as `ready: false`.
+ *
+ * Splitting `processDocument` here is behavior-preserving: `processDocument` is just
+ * `prepareDocument` then `finalizeDocument` back-to-back, and the split point is the
+ * already-DB-mediated chunk↔embed boundary. Transient decrypted copies are shredded at the
+ * end of THIS phase (the embed phase needs only the DB), strictly reducing plaintext lifetime.
+ */
+export async function prepareDocument(
   db: Db,
   storeDir: string,
   documentId: string,
   deps: IngestionDeps = {}
-): Promise<DocumentInfo> {
+): Promise<PreparedDocument> {
   const row = getRow(db, documentId)
   if (!row) throw new Error(`Unknown document: ${documentId}`)
 
@@ -650,64 +653,118 @@ export async function processDocument(
       throw new Error(t('en', 'main.ingest.tooManyChunks'))
     }
 
-    // Replace any prior chunks (supports re-indexing) then insert fresh.
-    db.prepare('DELETE FROM embeddings WHERE chunk_id IN (SELECT id FROM chunks WHERE document_id = ?)').run(
-      documentId
-    )
-    db.prepare('DELETE FROM chunks WHERE document_id = ?').run(documentId)
-    // Tear down a now-orphaned summary tree (whole-document-analysis plan H1/H2): re-index
-    // recreates chunks with fresh ids, so the tree's polymorphic chunk edges would dangle.
-    // Deleting the nodes cascades the edges (FK on parent_id); the expensive model output
-    // survives in `summary_cache` (keyed by text, not chunk id), so the next build reuses
-    // every unchanged group. `tree_status` → 'stale' when a tree existed (UI offers a
-    // rebuild), else clear it. extraction_records self-cascade via chunk_id (Phase 3).
-    const prevTree = (
-      db.prepare('SELECT tree_status FROM documents WHERE id = ?').get(documentId) as unknown as
-        | { tree_status: string | null }
-        | undefined
-    )?.tree_status
-    db.prepare('DELETE FROM tree_nodes WHERE document_id = ?').run(documentId)
-    db.prepare('UPDATE documents SET tree_status = ? WHERE id = ?').run(
-      prevTree ? 'stale' : null,
-      documentId
-    )
-    // The structured-extract rows (Phase 3) self-cascade via chunk_id ON DELETE CASCADE when
-    // the chunks are deleted above (H1 free win) — no manual DELETE needed. Reset the per-doc
-    // extract_status so the now-empty pass reads as 'stale' (UI offers a re-extract) rather
-    // than a stale 'ready' over zero rows.
-    const prevExtract = (
-      db.prepare('SELECT extract_status FROM documents WHERE id = ?').get(documentId) as unknown as
-        | { extract_status: string | null }
-        | undefined
-    )?.extract_status
-    db.prepare('UPDATE documents SET extract_status = ? WHERE id = ?').run(
-      prevExtract ? 'stale' : null,
-      documentId
-    )
-
-    const insert = db.prepare(
-      `INSERT INTO chunks
-         (id, document_id, chunk_index, text, source_label, page_number, section_label, token_count, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    )
-    const created = nowIso()
-    for (const c of chunks) {
-      insert.run(
-        randomUUID(),
-        documentId,
-        c.chunkIndex,
-        c.text,
-        row.title,
-        c.pageNumber,
-        c.sectionLabel,
-        c.tokenCount,
-        created
+    // Replace any prior chunks (supports re-indexing) then insert fresh. DB-1: wrap the whole
+    // delete-then-insert phase in ONE transaction. With WAL + synchronous=NORMAL each bare
+    // run() is otherwise its own fsync'd auto-commit, and every chunk also fires the
+    // `chunks_fts_ai` FTS trigger inside that commit — up to ~1000 chunk inserts + their FTS
+    // writes = ~2000 individually fsync'd commits per document on USB. One BEGIN…COMMIT
+    // collapses that to a single commit. Pattern: tree-build.ts:148-164 / node-vectors.ts:156
+    // (synchronous inserts only inside; the async embed await stays outside, below).
+    db.exec('BEGIN')
+    try {
+      db.prepare(
+        'DELETE FROM embeddings WHERE chunk_id IN (SELECT id FROM chunks WHERE document_id = ?)'
+      ).run(documentId)
+      db.prepare('DELETE FROM chunks WHERE document_id = ?').run(documentId)
+      // Tear down a now-orphaned summary tree (whole-document-analysis plan H1/H2): re-index
+      // recreates chunks with fresh ids, so the tree's polymorphic chunk edges would dangle.
+      // Deleting the nodes cascades the edges (FK on parent_id); the expensive model output
+      // survives in `summary_cache` (keyed by text, not chunk id), so the next build reuses
+      // every unchanged group. `tree_status` → 'stale' when a tree existed (UI offers a
+      // rebuild), else clear it. extraction_records self-cascade via chunk_id (Phase 3).
+      const prevTree = (
+        db.prepare('SELECT tree_status FROM documents WHERE id = ?').get(documentId) as unknown as
+          | { tree_status: string | null }
+          | undefined
+      )?.tree_status
+      db.prepare('DELETE FROM tree_nodes WHERE document_id = ?').run(documentId)
+      db.prepare('UPDATE documents SET tree_status = ? WHERE id = ?').run(
+        prevTree ? 'stale' : null,
+        documentId
       )
-    }
+      // The structured-extract rows (Phase 3) self-cascade via chunk_id ON DELETE CASCADE when
+      // the chunks are deleted above (H1 free win) — no manual DELETE needed. Reset the per-doc
+      // extract_status so the now-empty pass reads as 'stale' (UI offers a re-extract) rather
+      // than a stale 'ready' over zero rows.
+      const prevExtract = (
+        db.prepare('SELECT extract_status FROM documents WHERE id = ?').get(documentId) as unknown as
+          | { extract_status: string | null }
+          | undefined
+      )?.extract_status
+      db.prepare('UPDATE documents SET extract_status = ? WHERE id = ?').run(
+        prevExtract ? 'stale' : null,
+        documentId
+      )
 
-    // Embedding step: vectorize each chunk and persist to `embeddings`.
-    // The DELETE above already cleared stale vectors, so re-index re-embeds cleanly.
+      const insert = db.prepare(
+        `INSERT INTO chunks
+           (id, document_id, chunk_index, text, source_label, page_number, section_label, token_count, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      const created = nowIso()
+      for (const c of chunks) {
+        insert.run(
+          randomUUID(),
+          documentId,
+          c.chunkIndex,
+          c.text,
+          row.title,
+          c.pageNumber,
+          c.sectionLabel,
+          c.tokenCount,
+          created
+        )
+      }
+      db.exec('COMMIT')
+    } catch (err) {
+      try {
+        db.exec('ROLLBACK')
+      } catch {
+        /* connection may already be clean */
+      }
+      throw err
+    }
+    // RAG-6 (Wave P4) belt: the chunk-phase transaction above DELETEd this doc's stale
+    // embeddings (re-index path), so drop the resident decoded-vector cache. The signature
+    // check would also catch it; this is the explicit hook that closes the delete-then-equal-
+    // reinsert blind spot and keeps the cache robust to any write through this path.
+    invalidateResidentVectors(db)
+
+    // ING-3 pipeline boundary: chunks are now persisted and the document is in `embedding`.
+    // The embed phase (finalizeDocument) reads the chunks back from the DB, so this phase is
+    // independent of the embed sidecar — the import loop overlaps prepare(N+1) with
+    // finalizeDocument(N). The DELETE above already cleared stale vectors, so a re-index
+    // re-embeds cleanly.
     setStatus(db, documentId, 'embedding')
+    return { documentId, ready: true }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    setStatus(db, documentId, 'failed', message)
+    return { documentId, ready: false }
+  } finally {
+    // Shred transient decrypted copies whether parse succeeded or failed — the embed phase
+    // reads chunk text from the DB, not these files, so they are no longer needed.
+    for (const t of transients) shredFile(t)
+  }
+}
+
+/**
+ * Embed + finalize phase (ING-3 pipeline, back half). Embeds the chunks `prepareDocument`
+ * persisted (the embed sidecar is the single contended resource — never run two of these
+ * concurrently) and marks the document `indexed`. Never throws: an embed failure is captured
+ * on the row as `failed` + `error_message`. A `prepared.ready === false` input means prepare
+ * already failed the document, so this is a no-op that returns the failed info.
+ */
+export async function finalizeDocument(
+  db: Db,
+  documentId: string,
+  deps: IngestionDeps,
+  prepared: PreparedDocument
+): Promise<DocumentInfo> {
+  if (!prepared.ready) return infoOrDeleted(db, documentId)
+  try {
+    // Embedding step: vectorize each chunk and persist to `embeddings`. prepareDocument's
+    // DELETE already cleared stale vectors, so re-index re-embeds cleanly.
     if (deps.embedder) {
       await embedChunks(db, documentId, deps.embedder, deps.embeddingModelId ?? deps.embedder.id)
     }
@@ -730,10 +787,26 @@ export async function processDocument(
     const message = err instanceof Error ? err.message : String(err)
     setStatus(db, documentId, 'failed', message)
     return infoOrDeleted(db, documentId)
-  } finally {
-    // Shred transient decrypted copies whether the pipeline succeeded or failed.
-    for (const t of transients) shredFile(t)
   }
+}
+
+/**
+ * Run the full ingestion pipeline for one already-`queued` document. Never throws:
+ * any failure is captured on the document row as `failed` + `error_message`, and the
+ * resulting DocumentInfo is returned so the caller can report it.
+ *
+ * Single-shot composition of the two ING-3 phases (`prepareDocument` then
+ * `finalizeDocument`); behavior-identical to the pre-split monolith. The import loop calls
+ * the two phases directly to pipeline them; reindex / OCR re-ingest / materialize use this.
+ */
+export async function processDocument(
+  db: Db,
+  storeDir: string,
+  documentId: string,
+  deps: IngestionDeps = {}
+): Promise<DocumentInfo> {
+  const prepared = await prepareDocument(db, storeDir, documentId, deps)
+  return finalizeDocument(db, documentId, deps, prepared)
 }
 
 /**
@@ -776,16 +849,34 @@ async function embedChunks(
     .all(documentId) as unknown as Array<{ id: string; text: string }>
   if (rows.length === 0) return
 
+  // The async embed runs OUTSIDE the transaction (node-vectors.ts:156 precedent) — only the
+  // synchronous inserts go inside. DB-1: one BEGIN…COMMIT collapses up to ~1000 individually
+  // fsync'd embedding-insert auto-commits into a single commit (the dominant USB import cost).
   const vectors = await embedder.embed(rows.map((r) => r.text))
   const insert = db.prepare(
     `INSERT INTO embeddings (chunk_id, embedding_model_id, vector_blob, dimensions, created_at)
      VALUES (?, ?, ?, ?, ?)`
   )
   const created = nowIso()
-  for (let i = 0; i < rows.length; i++) {
-    const vec = vectors[i]
-    insert.run(rows[i].id, embeddingModelId, encodeVector(vec), vec.length, created)
+  db.exec('BEGIN')
+  try {
+    for (let i = 0; i < rows.length; i++) {
+      const vec = vectors[i]
+      insert.run(rows[i].id, embeddingModelId, encodeVector(vec), vec.length, created)
+    }
+    db.exec('COMMIT')
+  } catch (err) {
+    try {
+      db.exec('ROLLBACK')
+    } catch {
+      /* connection may already be clean */
+    }
+    throw err
   }
+  // RAG-6 (Wave P4) belt: fresh vectors were just INSERTed — drop the resident decoded-vector
+  // cache so the next search rebuilds it including them (the signature check also catches the
+  // raised row count / maxRowid; this is the explicit hook).
+  invalidateResidentVectors(db)
 }
 
 /**
@@ -1162,11 +1253,34 @@ export function listDocuments(db: Db, activeEmbeddingModelId?: string | null): D
     })
     memberships.set(m.documentId, list)
   }
+  // DB-3/ING-2 (perf audit 2026-06-18): chunk counts + the per-doc stale-embeddings check in TWO
+  // grouped queries loaded into Maps, NOT a per-row COUNT + COUNT-JOIN (the old 1+2N pattern,
+  // polled during import) — mirroring the memberships join just above. A document absent from a
+  // map has zero (no chunks / nothing embedded under the active model).
+  const chunkCounts = new Map<string, number>()
+  for (const c of db
+    .prepare('SELECT document_id AS documentId, COUNT(*) AS n FROM chunks GROUP BY document_id')
+    .all() as Array<{ documentId: string; n: number }>) {
+    chunkCounts.set(c.documentId, c.n)
+  }
+  const embeddedCounts = new Map<string, number>()
+  if (activeEmbeddingModelId) {
+    for (const e of db
+      .prepare(
+        `SELECT c.document_id AS documentId, COUNT(*) AS n
+         FROM embeddings e JOIN chunks c ON e.chunk_id = c.id
+         WHERE e.embedding_model_id = ?
+         GROUP BY c.document_id`
+      )
+      .all(activeEmbeddingModelId) as Array<{ documentId: string; n: number }>) {
+      embeddedCounts.set(e.documentId, e.n)
+    }
+  }
   return rows.map((r) => {
-    const chunkCount = chunkCountFor(db, r.id)
+    const chunkCount = chunkCounts.get(r.id) ?? 0
     let stale: boolean | undefined
     if (activeEmbeddingModelId && r.status === 'indexed' && chunkCount > 0) {
-      stale = chunksEmbeddedUnder(db, r.id, activeEmbeddingModelId) === 0
+      stale = (embeddedCounts.get(r.id) ?? 0) === 0
     }
     return { ...rowToInfo(r, chunkCount, stale), collections: memberships.get(r.id) ?? [] }
   })
@@ -1195,6 +1309,9 @@ export function deleteDocument(db: Db, id: string): void {
   // Membership (document_collections) + chat-attachment (conversation_documents) rows
   // cascade away via ON DELETE CASCADE (plan C4) — no manual cleanup needed here.
   db.prepare('DELETE FROM documents WHERE id = ?').run(id)
+  // RAG-6 (Wave P4) belt: this doc's vectors were just DELETEd — drop the resident
+  // decoded-vector cache (closes the delete-then-equal-reinsert signature blind spot).
+  invalidateResidentVectors(db)
 }
 
 /**

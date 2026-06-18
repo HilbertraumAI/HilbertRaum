@@ -363,4 +363,69 @@ describe('registerDocsIpc', () => {
     await new Promise((r) => setTimeout(r, 0))
     expect(leaseDelta).toBe(0)
   })
+
+  // ING-3 — the 1-deep parse/embed pipeline. A multi-file import must keep per-file
+  // statuses correct, preserve ordering, and isolate one failing file mid-batch (the embed
+  // phase, now pipelined behind the next file's parse, is where the failure is injected).
+  it('keeps per-file statuses correct and survives one failing file mid-batch (ING-3)', async () => {
+    const { db, workspacePath } = freshWorkspace()
+    const mock = createMockEmbedder()
+    // An embedder that throws when a chunk batch carries the sentinel — simulates one file's
+    // embed (finalize) phase failing while the other files succeed.
+    const embedder: Embedder = {
+      id: mock.id,
+      dimensions: mock.dimensions,
+      embed: async (texts) => {
+        if (texts.some((t) => t.includes('FAILMARKER'))) {
+          throw new Error('embed boom (simulated mid-batch failure)')
+        }
+        return mock.embed(texts)
+      }
+    }
+    registerDocsIpc(ctxWith(db, workspacePath, embedder, /* unlocked */ true))
+
+    const dir = mkdtempSync(join(tmpdir(), 'hilbertraum-ing3-'))
+    const f1 = join(dir, 'a.txt')
+    const f2 = join(dir, 'b.txt')
+    const f3 = join(dir, 'c.txt')
+    writeFileSync(f1, 'alpha beta gamma the good first file with enough words to chunk')
+    writeFileSync(f2, 'this middle file carries the FAILMARKER and must fail to embed')
+    writeFileSync(f3, 'delta epsilon zeta the good third file with enough words to chunk')
+
+    const job = await runImport([f1, f2, f3])
+    // Ordering preserved: the queued ids follow the input order (a, b, c).
+    expect(job.documentIds).toHaveLength(3)
+
+    // The aggregate job status: two completed, one failed — the failing file did not abort
+    // the batch or the third file's import.
+    const jobId = (job as unknown as ImportJob).jobId
+    const { result: status } = await invoke(handlers, IPC.getImportJob, jobId)
+    expect(status).toMatchObject({ done: true, completed: 2, failed: 1 })
+
+    // Per-file statuses by id (the source of truth): a + c indexed, b failed.
+    const { result: docsRes } = await invoke(handlers, IPC.listDocuments)
+    const docs = docsRes as DocumentInfo[]
+    const byId = new Map(docs.map((d) => [d.id, d]))
+    const [idA, idB, idC] = job.documentIds
+    expect(byId.get(idA)?.title).toBe('a.txt')
+    expect(byId.get(idA)?.status).toBe('indexed')
+    expect(byId.get(idB)?.title).toBe('b.txt')
+    expect(byId.get(idB)?.status).toBe('failed')
+    expect(byId.get(idC)?.title).toBe('c.txt')
+    expect(byId.get(idC)?.status).toBe('indexed') // the file AFTER the failure still indexed
+
+    // The two good files got embeddings; the failed one did not (its chunks may exist, but
+    // no vectors were written) — so search only sees the survivors.
+    const vectorCount = (id: string): number =>
+      (
+        db
+          .prepare(
+            'SELECT COUNT(*) AS n FROM embeddings e JOIN chunks c ON c.id = e.chunk_id WHERE c.document_id = ?'
+          )
+          .get(id) as { n: number }
+      ).n
+    expect(vectorCount(idA)).toBeGreaterThan(0)
+    expect(vectorCount(idC)).toBeGreaterThan(0)
+    expect(vectorCount(idB)).toBe(0)
+  })
 })

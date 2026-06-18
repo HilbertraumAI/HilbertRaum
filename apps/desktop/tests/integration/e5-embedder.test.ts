@@ -65,6 +65,25 @@ describe('E5Embedder', () => {
     await embedder.stop()
   })
 
+  // RT-4: the embedding sidecar must raise --batch-size/--ubatch-size above the context so
+  // multiple inputs of a 32-input request co-decode per physical batch instead of the 512
+  // embedding-mode default processing them ~1 at a time. Mirrors the reranker's arg test.
+  it('spawns with --embedding + CPU pin and a raised physical batch (RT-4)', async () => {
+    const { spawn, calls } = fakeSpawn()
+    const embedder = new E5Embedder({ ...base, spawn, fetchImpl: embedFetch([[3, 4]]) })
+    await embedder.embed(['hello'])
+    expect(calls).toHaveLength(1)
+    const args = calls[0].args.join(' ')
+    expect(args).toContain('--embedding')
+    expect(args).toContain('--pooling mean')
+    expect(args).toContain('--device none') // CPU-pinned
+    expect(args).not.toContain('-ngl')
+    // Physical batch raised to 2048 (> the 512 ctx) for multi-sequence throughput.
+    expect(args).toContain('--batch-size 2048')
+    expect(args).toContain('--ubatch-size 2048')
+    await embedder.stop()
+  })
+
   it('preserves input order even if the server returns shuffled indices', async () => {
     const { spawn } = fakeSpawn()
     const embedder = new E5Embedder({

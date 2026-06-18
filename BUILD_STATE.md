@@ -6,7 +6,199 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
-_Last updated: 2026-06-17 — **Skills Phase S13c SHIPPED — surprise-mitigation UX; S13 (auto-fire) is
+_Last updated: 2026-06-18 — **Wave P4 real-drive measurement CLOSED (branch `performance-tuning`).**
+The one open P4 item — "real E5-runtime numbers PENDING the PAID drive" — is done now that the real
+HilbertRaum drive (D:, real `multilingual-e5-small-q8` + the b9585 `llama-server`) is attached. Two
+drive-gated manual benchmarks (no production code changed): (1) `tests/manual/resident-cache-bench.test.ts`
+gained a `RESIDENT_BENCH_DIR` override + multi-size loop so the bench DB — and thus the cold-build
+SELECT — lives on real USB I/O; (2) new `tests/manual/resident-cache-real.test.ts` embeds a realistic
+corpus through the **real E5 sidecar**, stores genuine E5 vectors via the production codec on the drive,
+and times cold build + warm cached scan + full `searchText` (E5 query-embed + scan). **Findings:** scan
+scaling on the drive (synthetic vectors — the scan is data-independent: N dot-products of 384-dim Float32
++ sort) warm 13.6/52.5/164.6/605 ms @ 5k/10k/30k/100k, cold rebuild 33 ms…1.48 s — **matching the prior
+mock projection within noise** (mmap, DB-2, keeps the cold build off USB cheap). Real-E5 end-to-end:
+@2k chunks (a realistic ≤~10-doc corpus) warm scan **5.8 ms**, full query **17.8 ms** — the E5
+query-embed round-trip **dwarfs the scan 3.1×**; @10k warm scan 73 ms, full query 102 ms (scan ≈ embed,
+both dwarfed by the reranker's seconds). **DECISION CONFIRMED (no change):** at realistic MVP corpora the
+synchronous scan is NOT the bottleneck, so P4b (worker) + P4c (ANN) stay deferred with the documented
+~100 ms trigger; the 100k bound (~605 ms) remains the narrowed D15 cliff. **Docs:** real numbers folded
+into `docs/architecture.md` "Performance — design record … Wave P4" (measurement + why-deferred),
+`docs/performance-audit-2026-06-18.md` STATUS banner, and this file's P4 entry — every "PENDING the PAID
+drive" marker retired. **Verification:** both manual benches green on D:; the gated tests stay skipped in
+the normal suite. **(prior P4-ship entry below.)**_
+
+_2026-06-18 — **Performance audit Wave P4 SHIPPED (branch `performance-tuning`) — the
+final, deferred wave; the documented MVP deferral D15.** RAG-1/RAG-6: the synchronous main-thread
+vector scan (`VectorIndex.search`, `apps/desktop/src/main/services/embeddings/index.ts`) no longer
+re-`SELECT`s every `vector_blob` (~150 MB at the heavy 100-doc bound) and re-decodes it per query.
+**Shipped (P4a, one feature):** a **process-resident decoded-vector cache**
+(`embeddings/resident-cache.ts`) — every stored vector is decoded **once** into a
+`Map<chunkId, Float32Array>` (one cache per open `Db`, `WeakMap`-keyed) and reused across queries. The
+`search` SQL keeps the **byte-identical scope-filtered WHERE** but projects only `chunk_id` (no blob
+read), then looks each vector up in the resident map — zero per-row allocation, zero re-decode. **Behind
+the unchanged `VectorIndex.search(queryVector, topK)` signature** (so `rag/index.ts retrieve()` + every
+scope filter are untouched); ranking byte-identical (same `dotProduct`, same sort); the
+dimension-mismatch + truncated-blob skips preserved. The vector↔BLOB codec moved to
+`embeddings/codec.ts` to break the `index ↔ resident-cache` import cycle (re-exported from the barrel).
+**Invalidation contract (highest-risk surface, belt-and-suspenders):** (1) a cheap whole-table
+`(COUNT(*), MAX(rowid))` **signature** recomputed at the top of every search — rebuilds on any mutation
+incl. direct SQL writes (so test seeding stays correct); (2) explicit `invalidateResidentVectors(db)`
+at the **3 `embeddings` write sites** (`ingestion/index.ts` finalize-insert + reindex chunk-phase delete
++ `deleteDocument`) — closes the delete-max-rowid-then-equal-reinsert blind spot; (3) `purgeResidentVectors(db)`
+on **workspace LOCK** (`registerWorkspaceIpc`, beside `embedder.suspend()`) — SECURITY: the vectors
+derive from chunk text and must not linger in RAM after the vault re-encrypts (the signature can't catch
+this — the table is unchanged). No embedder-switch purge needed (per-`Db`, per-chunk, model-agnostic;
+the SQL model-id filter scopes results; unlock reopens the `Db` → fresh cache). **MEASURED — confirmed
+on the PAID drive (D:, b9585):** scan scaling on the real drive (synthetic vectors — scan is
+data-independent) warm cached scan 13.6 ms @ 5k chunks, 52.5 ms @ 10k, 164.6 ms @ 30k, 605 ms @ 100k
+(1.2–1.7× vs decode-every-query; cold rebuild once per mutation 33 ms@5k…1.48 s@100k) — tracks the mock
+projection within noise; real-E5 end-to-end on the drive @2k chunks warm scan 5.8 ms / full query (E5
+embed + scan) 17.8 ms (query-embed dwarfs the scan 3.1×), @10k warm scan 73 ms / full query 102 ms. The
+residual is now SQLite→JS row marshalling + the dot-product scan + sort, **not** decode. **DECISION — P4b (off-main-thread
+worker) + P4c (ANN) DEFERRED with the number:** at realistic MVP corpora (≤~10k chunks ≈ ≤~10–50 docs)
+the scan is ≤~50 ms (fine, dwarfed by the query-embed await + reranker); only the 100k upper bound bites.
+P4b's trigger = "a representative corpus measures the cached main-thread scan over ~100 ms routinely"
+(the resident cache is its `SharedArrayBuffer` substrate); P4c/sqlite-vec stays rejected as a **native
+loadable extension** against the no-native-build / portable-packaging rule (D15). **New data contracts:**
+new exports `getResidentVectors`/`invalidateResidentVectors`/`purgeResidentVectors` (+ the cache
+invalidation contract above); `encodeVector`/`decodeVector` now live in `embeddings/codec.ts`
+(re-exported from the `embeddings` barrel — callers unchanged). **Docs:** folded into
+`docs/architecture.md` "Performance — design record … Wave P4"; `docs/rag-design.md` §6 (resident cache)
++ §12.2 **D15 → partially resolved**; audit RAG-1/RAG-6 → ✅ IMPLEMENTED, §6 Wave P4 checked off, STATUS
+banner + §3.2 theme updated. **New tests:** `tests/integration/resident-cache.test.ts` (+8: ranking
+equivalence vs a from-scratch oracle, signature catches direct INSERT/DELETE after build, invalidate +
+lock-purge rebuild, scope-filter composition incl. archived, ingestion import→reindex→delete lifecycle,
+offline guarantee through the cached path) + a gated manual `tests/manual/resident-cache-bench.test.ts`.
+**Verification:** full suite **1784 passed / 26 skipped** (+8, +1 skipped manual bench), typecheck +
+build clean. Real E5-runtime numbers now CLOSED on the PAID drive (see the dated closeout entry above).
+**NEXT ACTION:** Wave P4 core done — the
+perf audit's four waves are all shipped. Still open (out of P4 core, tracked in the audit): RT-9
+(byte-stable plain-chat fence), the deferred P2 renderer items (Composer/`input` move, `DocRow`,
+FE-5 windowing), and the audit Low items. **(prior P3 entry below.)**_
+
+_2026-06-18 — **Performance audit Wave P3 SHIPPED (branch `performance-tuning`).**
+Pipeline throughput & latency on the two hottest operations (import a document, ask a question) plus
+runtime-startup knobs (audit `docs/performance-audit-2026-06-18.md` §6 Wave P3). Unlike P2 (pure
+memoization), several items are **structural**, each preserving a stated correctness contract.
+**Shipped (one commit per finding id):** (1) **RAG-1 (High, slice only)** — `VectorIndex.search` uses
+a new `dotProduct` helper instead of `cosineSimilarity`: stored + query vectors are L2-normalized
+(`e5.ts` `l2normalize`, mock too) so cosine == dot, dropping the two per-row norm accumulators (~2×
+fewer FLOPs/row); ranking identical to float tolerance. **The ANN/worker scan stays Wave P4 (D15).**
+(2) **RT-5 (Low)** — `waitForHealthy` backs off from 50 ms ×2 up to the `healthIntervalMs` cap
+(default 250) instead of a fixed 250 ms poll; overall timeout budget unchanged. (3) **RT-4 (Medium)**
+— the embedder sidecar now sets `--batch-size`/`--ubatch-size` to `max(ctx, 2048)` (was the
+embedding-mode 512 default), packing multiple of a 32-input batch's sequences per ubatch. **VERIFIED
+on the pinned b9585 binary** (PAID smoke drive attached): with both flags at 2048 the "n_batch (2048)
+> n_ubatch (512) … setting n_batch = n_ubatch = 512" downgrade warning does NOT fire and a multi-input
+`/v1/embeddings` request returns correctly. Arg-assertion test added. (4) **RT-3 (Medium)** —
+`buildModelList` gains an additive **`onlyVerifyModelId`**; the `listModels` IPC gains an optional
+**`lazyVerify`** arg. The WorkspaceGate (chat path) passes `lazyVerify:true` → only the active model
+is SHA-256-hashed on a cold cache (the others reported `installed` unhashed, display-only); the Models
+screen omits it and hashes the full set. §7.4 gate intact — `startModelRuntime` re-verifies the model
+it launches; a live cached hash is still served for free. (5) **RT-2 (Medium, correctness-critical)**
+— the stable grounding rules + preface moved from the per-turn USER message into a new cacheable
+**`GROUNDED_SYSTEM_PROMPT`** (= `BASE_SYSTEM_PROMPT` + rules); the user turn keeps only question +
+excerpts (+ the skill fence, which STAYS in the user turn as untrusted reference text). ~58 approx
+tokens of rules now sit in the always-reused `cache_prompt` prefix instead of re-prefilling every
+documents turn. Precedence preserved/strengthened (rules in system ≥ user), `[Sn]` + no-context
+contracts untouched; a test asserts the system prefix is byte-stable across two turns. (6) **ING-5
+(Medium)** — new Electron-free `ocr/pipeline.ts` `pipelinePages` renders page N+1 WHILE page N
+recognizes (1-deep look-ahead); recognitions stay serial + in order, memory bounded to one extra PNG;
+ordering/progress/cancellation unchanged. (7) **ING-3 (High, highest risk, done LAST)** —
+`processDocument` split at the already-DB-mediated chunk↔embed boundary into **`prepareDocument`**
+(parse+chunk) + **`finalizeDocument`** (embed+mark); `processDocument` is now their composition (so
+reindex/OCR/materialize are behavior-identical). The import loop runs `prepareDocument(N+1)` WHILE
+`finalizeDocument(N)` embeds — **embeds are NEVER parallelized** (the sidecar is the single contended
+resource); only parse(N+1) overlaps embed(N). Per-file statuses/ordering/error-isolation, the DB-1
+per-phase transactions, and lock-mid-job all preserved (look-ahead drained + de-registered on a lock
+break). **New / changed data contracts:** new exports `prepareDocument`/`finalizeDocument`/
+`PreparedDocument`; `buildModelList({ onlyVerifyModelId })` (additive, behind the locked `listModels`
+contract); `listModels(lazyVerify?)` IPC arg; the grounded system prompt is now
+`GROUNDED_SYSTEM_PROMPT` (exported); embedder spawns with `--batch-size`/`--ubatch-size`. **Docs:**
+folded into `docs/architecture.md` "Performance — design record … Wave P3" + §17 (a)→implemented, and
+`docs/rag-design.md` §8 (grounded prompt split); audit P3 items tagged **✅ IMPLEMENTED**, §6 Wave P3
+checked off, STATUS banner updated. **New tests:** `dotProduct` ranking equivalence (embeddings.test),
+e5-embedder RT-4 arg assertion, RT-3 lazy/full hashing (models.test, +WorkspaceGate passing lazy),
+RT-2 rules-in-system + byte-stable-prefix (rag.test, skills-turn.test updated), `ocr-pipeline.test`
+(ordering/overlap/one-ahead/cancel), ING-3 mid-batch-failure isolation (docs-ipc.test).
+**Verification:** full suite **1776 passed / 25 skipped** (+16), typecheck + build clean.
+**NEXT ACTION:** Wave P4 — the off-main-thread / ANN vector scan (RAG-1/RAG-6 beyond the dot product,
+the D15 trigger). Still deferred from P2: Composer/`input` move, `DocRow` extraction, FE-5 windowing.
+**(prior P2 entry below.)**_
+
+_2026-06-18 — **Performance audit Wave P2 SHIPPED (branch `performance-tuning`).**
+Renderer responsiveness on the CPU-only target (audit `docs/performance-audit-2026-06-18.md` §6 Wave
+P2) — the chat transcript and the Documents screen re-did O(list) work and re-parsed Markdown on a
+40 ms / 400 ms cadence, competing with token generation. All behavior-preserving (no visible UI
+change except less jank) save the one streaming decision below. **Shipped (one commit per finding):**
+(1) **FE-1 (High)** — streaming no longer re-parses the whole transcript. Each persisted turn is a
+memoized `MessageBlock` (React.memo, keyed by id) and `AssistantMarkdown` is itself `React.memo`'d
+(keyed by text); the live answer now **renders as PLAIN TEXT** (`.msg-content` pre-wrap) during the
+stream with the full Markdown parse run ONCE on completion (the only visible effect: raw `**markers**`
+show during streaming, snap to formatted on completion — audit-sanctioned). `lastAssistantId` is
+`useMemo`'d; the scroll-to-bottom effect is gated on an `atBottomRef` (also the cheap half of FE-5).
+(2) **FE-2 (High)** — DocumentsScreen `useMemo`s the derived collections, `sourcesById`,
+`visibleDocs` (section filter + recent ordering; `inSection` now a pure module helper),
+`anyActive`/`staleDocs`, and the four rail counts collapsed into one bucketing pass. (3) **FE-7
+(Medium)** — both import watchers (`watchJob`, `watchAttachJob`) poll only the small `getImportJob`
+on the 400 ms tick and refresh the full list (+ attachments) only when `completed + failed` changes
+(a file finished) and at completion — the ModelsScreen download-poll pattern; the list updates at
+file-completion granularity instead of re-deriving 2.5×/s. (4) **FE-3/FE-4 (Medium)** — `Transcript`
++ `ConversationList` `React.memo`'d with stable handler identities via a new `useEventCallback`
+(latest-ref) wrapper + `useMemo`'d `emptyState`, so a keystroke/flush no longer re-renders them;
+`ConvRow` extracted + memoized so opening one ⋯ menu doesn't re-render every row. **New / changed
+data contracts:** none on the wire — `getImportJob` (existing IPC) is now the per-tick poll, with
+`listDocuments` refreshed on a status transition instead of every tick (behavioral: import list
+updates at file-completion granularity). **DECISION (recorded):** the live streaming answer is plain
+text until completion (kills the O(n²) per-flush Markdown re-parse). **Deferred within P2** (under the
+behavior-preserving mandate; tracked in the audit): the rest of FE-3 (memoize `Composer` + move
+`input` into it — needs the footer handlers stabilized), the FE-4 `DocRow` extraction (~25-prop row,
+high stale-closure surface), and **FE-5** list windowing (only the scroll-thrash half landed).
+**Docs:** lasting decisions folded into `docs/architecture.md` "Performance — design record (perf
+audit 2026-06-18, Wave P2)"; audit P2 items tagged **✅ IMPLEMENTED** (FE-5 ⏳ PARTIAL) and §6 Wave P2
+checked off. **New renderer tests:** `TranscriptMemo` (live answer never hits react-markdown; a prior
+message isn't re-parsed when only `streamText` changes) + a DocumentsScreen FE-7 poll test
+(`getImportJob` each tick, `listDocuments` only on a completion transition). **Verification:** full
+suite **1760 passed / 25 skipped** (+3), typecheck + build clean. **NEXT ACTION:** Wave P3 (ING-3/5
+pipelines, RT-2/RT-3, RAG-1 dot-product) when picked up; the deferred P2 sub-parts (Composer/input,
+DocRow, FE-5 windowing) tracked in the audit. **(prior P1 entry below.)**_
+
+_2026-06-18 — **Performance audit Wave P1 SHIPPED (branch `performance-tuning`).** Six
+high-ROI, low-risk, constant-factor/batching wins from `docs/performance-audit-2026-06-18.md` §6,
+targeting the two hottest user operations (import a document, ask a question) on the CPU-only USB
+target — no behavior change. **Shipped (one commit per finding):** (1) **DB-1 (Critical)** —
+`processDocument` was the lone batch writer not wrapping its inserts; the delete-then-insert chunk
+phase and the embedding-insert phase are each now one `BEGIN…COMMIT` (`ROLLBACK` on throw,
+`tree-build.ts` pattern), the async `embedder.embed()` await kept OUTSIDE the txn (`node-vectors.ts`
+precedent). Collapses ~3000 fsync'd auto-commits/doc (1000 chunks ×(insert+FTS trigger) + 1000
+embeddings) → 2. (2) **DB-2 (High)** — after WAL, `openDatabase` now sets `synchronous=NORMAL`,
+`busy_timeout=5000`, `mmap_size=268435456`, `cache_size=-16000`, `temp_store=MEMORY`. (3) **DB-4/6/7
+(Medium)** — additive `CREATE INDEX IF NOT EXISTS` (after `ensureColumn`): `idx_embeddings_model`,
+`idx_extract_type_nv(record_type, normalized_value)`, `idx_documents_status`,
+`idx_bank_transactions_category`; **`run_id` indexes deliberately OMITTED** — `run_id` is only ever
+INSERTed, never joined/filtered (would be pure USB write-amplification). (4) **RAG-2/ING-1 (High)** —
+compare mode-(b) now decodes doc-B's `(id,text,chunk_index,vector)` ONCE into a resident array and
+cosines in memory (local `nearestB()` reproducing `VectorIndex.search` ranking) instead of
+re-`search`ing + re-decoding all of doc-B per A-chunk and re-fetching B's text per window; mirrors
+`alignNodes` (`compare.ts`). (5) **DB-3/ING-2 (High)** — `listDocuments` per-row COUNT +
+per-indexed-row COUNT+JOIN (1+2N queries, polled at 400 ms during import) → two `GROUP BY document_id`
+queries into Maps (mirrors the memberships join beside it); removed the now-unused `chunksEmbeddedUnder`
+helper. (6) **RT-1 (High)** — chat sidecar left `--batch-size`/`--ubatch-size` at llama-server's 512
+default, throttling prompt prefill (the dominant TTFT cost, 3.5–15 s CPU per Skills §17); new opt-in
+`LlamaServerOptions.physicalBatchSize` (emitted by `buildArgs`) set by the chat runtime to
+`min(contextTokens, CHAT_MAX_PHYSICAL_BATCH=2048)` — embedder/reranker untouched (they set their own
+batch via `extraArgs`); new `llama-runtime.test.ts` arg assertion mirrors the reranker test. **New /
+changed data contracts:** PRAGMA `synchronous=NORMAL` (WAL-safe durability change — only the last txn
+is at risk on OS/power loss, never corruption) + the four other PRAGMAs; four new indexes; ingestion
+writes are now atomic per phase; new sidecar arg `physicalBatchSize` ⇒ chat spawns with
+`--batch-size`/`--ubatch-size`. **Docs:** lasting decisions folded into `docs/architecture.md`
+"Performance — design record (perf audit 2026-06-18, Wave P1)"; the audit report is RETAINED (findings
+record) with each P1 finding tagged **✅ IMPLEMENTED** and §6 Wave P1 checked off. **Verification:** full
+suite **1757 passed / 25 skipped** (+1, the RT-1 arg test), typecheck + build clean. **NEXT ACTION:**
+Wave P2 (renderer responsiveness — FE-1/FE-2/FE-7/FE-3-5) when picked up; Waves P3/P4 tracked in the
+audit §6._
+
+_(prior) 2026-06-17 — **Skills Phase S13c SHIPPED — surprise-mitigation UX; S13 (auto-fire) is
 now FULLY CLOSED.** The S13b mechanics are now reachable by a user, behind the two ratified D3/D4
 surfaces, both EN/DE. **Shipped:** (1) **The opt-in toggle (D4):** a Switch in **Settings → Skills**
 ([`SkillsTab.tsx`](apps/desktop/src/renderer/screens/settings/SkillsTab.tsx)) reads/writes the existing
