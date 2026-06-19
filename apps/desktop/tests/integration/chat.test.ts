@@ -10,6 +10,7 @@ import {
   collapseToAlternating,
   createConversation,
   deleteLastAssistantMessage,
+  effectiveContextWindow,
   fitMessagesToContext,
   generateAssistantMessage,
   listConversations,
@@ -31,6 +32,22 @@ function runtime() {
   const r = createMockRuntime({ modelId: 'mock-chat', modelPath: '/m.gguf', contextTokens: 2048 })
   return r
 }
+
+describe('effectiveContextWindow (§L0 — budget against the real launched window)', () => {
+  it('uses the window the runtime reports over settings.contextTokens', () => {
+    const runtime = { contextWindow: () => 8192 }
+    expect(effectiveContextWindow(runtime, { contextTokens: 4096 })).toBe(8192)
+  })
+
+  it('falls back to settings.contextTokens when the runtime reports no window', () => {
+    // A bare runtime without the optional accessor (an old test stub).
+    expect(effectiveContextWindow({}, { contextTokens: 4096 })).toBe(4096)
+  })
+
+  it('falls back to settings when the reported window is zero/non-positive', () => {
+    expect(effectiveContextWindow({ contextWindow: () => 0 }, { contextTokens: 4096 })).toBe(4096)
+  })
+})
 
 describe('collapseToAlternating (orphan turns from failed answers)', () => {
   const sys = { role: 'system' as const, content: 's' }

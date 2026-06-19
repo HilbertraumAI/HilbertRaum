@@ -22,13 +22,17 @@ import {
   BASE_SYSTEM_PROMPT,
   CHAT_RESPONSE_RESERVE_TOKENS,
   collapseToAlternating,
+  compactionSummaryPair,
+  effectiveContextWindow,
   emptyAssistantMessage,
   fitMessagesToContext,
+  getLatestCheckpoint,
   isAbortError,
-  listMessages,
+  listConversationTurns,
   stripThinkBlocks,
   type TurnSkill
 } from '../chat'
+import { ensureCompacted } from '../chat/compaction'
 import { approxPromptTokens, buildSkillFence, skillFenceBudgetTokens } from '../skills/prompt'
 import { getSettings } from '../settings'
 
@@ -392,13 +396,19 @@ export function buildGroundedChatMessages(
   groundedUserContent: string,
   contextTokens?: number
 ): ChatMessage[] {
-  const history = listMessages(db, conversationId)
   // RT-2: the grounded system prompt carries the stable grounding rules so cache_prompt
   // reuses them across documents turns (byte-stable prefix).
   const messages: ChatMessage[] = [{ role: 'system', content: GROUNDED_SYSTEM_PROMPT }]
+  // L2 (context compaction): when a checkpoint exists, inject its summary as a synthetic
+  // user→assistant pair (§4.5) and replay only the turns AFTER it; otherwise replay the whole
+  // history (byte-identical to before). The checkpoint is built from the STORED RAW turns
+  // (R-RAG) — never this transient grounded prompt — and the live final grounded turn below stays
+  // mandatory in fitMessagesToContext, so the question + [Sn] excerpts are always present.
+  const checkpoint = getLatestCheckpoint(db, conversationId)
+  if (checkpoint) messages.push(...compactionSummaryPair(checkpoint.summary))
+  const history = listConversationTurns(db, conversationId, checkpoint?.coversThroughRowid ?? 0)
   for (let i = 0; i < history.length; i++) {
     const m = history[i]
-    if (m.role !== 'user' && m.role !== 'assistant') continue
     const isLast = i === history.length - 1
     if (isLast && m.role === 'user') {
       messages.push({ role: 'user', content: groundedUserContent })
@@ -442,6 +452,11 @@ export interface GroundedAnswerOptions {
    * when chunks were found AND the fence fit — the no-context answer (model not called) stamps NULL.
    */
   skill?: TurnSkill | null
+  /**
+   * Fired exactly once if the context-compaction pre-pass starts a summarization for this turn.
+   * Phase 1 only plumbs the callback; the `STREAM.compaction` UX channel is Phase 2.
+   */
+  onCompactionStart?: () => void
 }
 
 /**
@@ -498,7 +513,17 @@ export async function generateGroundedAnswer(
   // the base preamble, the question, or the excerpts — only older history yields. The fence rides
   // in the grounded USER turn (buildGroundedPrompt). Stamp only when the fence actually fit.
   const groundedNoFence = buildGroundedPrompt(question, chunks)
-  const contextTokens = getSettings(db).contextTokens
+  // Budget against the REAL launched context window the runtime reports (§L0), not
+  // settings.contextTokens (which can diverge from the model's actual --ctx-size).
+  const contextTokens = effectiveContextWindow(runtime, getSettings(db))
+  // L2 (context compaction): summarize older raw turns into a cached checkpoint when the history
+  // approaches the window, BEFORE assembly. The checkpoint is built from the stored raw turns, never
+  // this grounded prompt (R-RAG). A no-op below threshold; any failure/abort falls back to L1 with no
+  // error. Runs after the no-context early return (no model call ⇒ nothing to compact for).
+  await ensureCompacted(db, runtime, conversationId, contextTokens, {
+    signal: opts.signal,
+    onStart: opts.onCompactionStart
+  })
   let skillFence: string | null = null
   if (opts.skill) {
     // RT-2: the grounding rules moved into the system prompt, so size the fence against

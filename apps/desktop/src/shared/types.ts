@@ -1714,4 +1714,13 @@ export interface RuntimeStatus {
    * `getRuntimeStatus` IPC handler from the manifest; absent when not running.
    */
   supportsThinkingMode?: boolean
+  /**
+   * The model's REAL context window — the token count the active runtime was launched
+   * with as llama-server's `--ctx-size` (`manifest.recommendedContextTokens || settings.
+   * contextTokens`, sidecar.ts). This is the authoritative budget the chat/RAG prompt
+   * assembly trims against (context-compaction record §L0): `settings.contextTokens` can
+   * diverge from the launched window, so trimming against it risks an over-window 400 or
+   * wastes capacity. Reported by `ModelRuntime.contextWindow()`; absent when not running.
+   */
+  contextWindow?: number
 }

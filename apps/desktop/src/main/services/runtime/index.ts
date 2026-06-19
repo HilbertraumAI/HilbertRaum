@@ -67,6 +67,15 @@ export interface ModelRuntime {
   health(): Promise<HealthStatus>
   /** Stream assistant tokens (answer text only — reasoning goes via `onReasoning`). */
   chatStream(messages: ChatMessage[], options?: RuntimeChatOptions): AsyncGenerator<string, void, unknown>
+  /**
+   * The token window the runtime was launched with (llama-server's `--ctx-size`) — the
+   * real budget chat/RAG assembly trims against (context-compaction record §L0). Optional:
+   * a runtime that can't report one (e.g. a bare test stub) lets callers fall back to
+   * `settings.contextTokens` via `effectiveContextWindow`. The three production runtimes
+   * (llama, mock, ladder) all report it; it is fixed for a runtime's lifetime (the window
+   * is set at start and never changes without a restart).
+   */
+  contextWindow?(): number
 }
 
 export type RuntimeFactory = (opts: RuntimeStartOptions) => ModelRuntime
@@ -193,6 +202,9 @@ export class RuntimeManager {
       message: this.last?.message ?? 'Running',
       backend: this.current.backend ?? UNLABELLED_BACKEND,
       gpuName: this.current.gpuName ?? null,
+      // The real launched context window (§L0) — the budget chat/RAG assembly trims
+      // against. Absent for a runtime that can't report one.
+      contextWindow: this.current.contextWindow?.(),
       // A start in flight for a DIFFERENT model than the running one = a switch underway.
       startingModelId: startingModelId !== this.current.modelId ? startingModelId : null
     }

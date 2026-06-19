@@ -200,6 +200,14 @@ class LadderRuntime implements ModelRuntime {
     if (!this.inner) throw new Error('Runtime is not started')
     return this.inner.chatStream(messages, options)
   }
+
+  /**
+   * The launched context window (§L0). Every rung (and the mock fallback) starts with the
+   * SAME `opts.contextTokens`, so this is rung-independent and valid before/after `start()`.
+   */
+  contextWindow(): number {
+    return this.opts.contextTokens
+  }
 }
 
 /**

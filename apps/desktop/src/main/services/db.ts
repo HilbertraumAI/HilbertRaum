@@ -487,7 +487,7 @@ function ensureMessagesFts(db: Db): void {
   db.exec(`
 CREATE VIRTUAL TABLE messages_fts USING fts5(content, message_id UNINDEXED);
 
-CREATE TRIGGER messages_fts_ai AFTER INSERT ON messages BEGIN
+CREATE TRIGGER messages_fts_ai AFTER INSERT ON messages WHEN new.kind IS NOT 'compaction' BEGIN
   INSERT INTO messages_fts(content, message_id) VALUES (new.content, new.id);
 END;
 
@@ -500,7 +500,29 @@ CREATE TRIGGER messages_fts_au AFTER UPDATE OF content ON messages BEGIN
   INSERT INTO messages_fts(content, message_id) VALUES (new.content, new.id);
 END;
 
-INSERT INTO messages_fts(content, message_id) SELECT content, id FROM messages;
+INSERT INTO messages_fts(content, message_id) SELECT content, id FROM messages WHERE kind IS NOT 'compaction';
+`)
+}
+
+/**
+ * R8 (context-compaction-plan §8) — keep compaction checkpoint rows (`kind='compaction'`) out of
+ * conversation search and snippets. `ensureMessagesFts` builds the AFTER INSERT trigger with the kind
+ * guard for fresh DBs; this upgrades a DB created BEFORE context compaction, whose `messages_fts_ai`
+ * indexed every insert. Idempotent: rewrites only when the live trigger lacks the guard, and prunes
+ * any checkpoint row that had already been indexed (none exist pre-feature, but the prune is correct
+ * and future-proof). Runs after `ensureMessagesFts` so the table + the `kind` column already exist.
+ */
+function ensureMessagesFtsKindFilter(db: Db): void {
+  const row = db
+    .prepare("SELECT sql FROM sqlite_master WHERE type='trigger' AND name='messages_fts_ai'")
+    .get() as unknown as { sql: string } | undefined
+  if (!row || row.sql.includes('new.kind')) return
+  db.exec(`
+DROP TRIGGER messages_fts_ai;
+CREATE TRIGGER messages_fts_ai AFTER INSERT ON messages WHEN new.kind IS NOT 'compaction' BEGIN
+  INSERT INTO messages_fts(content, message_id) VALUES (new.content, new.id);
+END;
+DELETE FROM messages_fts WHERE message_id IN (SELECT id FROM messages WHERE kind = 'compaction');
 `)
 }
 
@@ -607,6 +629,12 @@ export function openDatabase(path: string): Db {
   // relevance label, so an older app simply ignores the column and the badge is byte-identical. Holds
   // a JSON-serialized `CoverageInfo` (mode + sections covered/total); CONTENT-free (only counts/mode).
   ensureColumn(db, 'messages', 'coverage_json', 'coverage_json TEXT')
+  // Context compaction (context-compaction-plan §4.4, R13). Additive + nullable: `kind` NULL = a
+  // plain 'message' (the NULL-sentinel convention, coalesced in code), 'compaction' marks a summary
+  // checkpoint row; `covers_through_rowid` is the max messages.rowid that checkpoint subsumes (NULL on
+  // plain rows). An older app ignores both columns and reads every row as a message — no behaviour change.
+  ensureColumn(db, 'messages', 'kind', 'kind TEXT')
+  ensureColumn(db, 'messages', 'covers_through_rowid', 'covers_through_rowid INTEGER')
   // Bank-transaction derived annotations (architecture.md "Skills — design record" §10, S11c). All nullable —
   // a row has no category/reconciled/confidence until a downstream tool computes one. CONTENT-CLASS
   // (a category id / reconcile verdict is derived from user figures): never logged/audited/exported.
@@ -642,6 +670,7 @@ export function openDatabase(path: string): Db {
   // no read benefit. Add one alongside the first query that joins on run_id.
   ensureChunksFts(db)
   ensureMessagesFts(db)
+  ensureMessagesFtsKindFilter(db)
   seedCollections(db)
   return db
 }

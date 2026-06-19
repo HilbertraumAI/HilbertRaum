@@ -24,6 +24,7 @@ import {
   skillFenceBudgetTokens
 } from './skills/prompt'
 import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from './runtime'
+import { ensureCompacted } from './chat/compaction'
 
 /**
  * The ONE skill resolved for a turn (skills plan §10) — the minimal shape the chat/RAG
@@ -412,15 +413,118 @@ export function getConversation(db: Db, conversationId: string): Conversation | 
 /**
  * List a conversation's messages in insertion order. `created_at` may collide at
  * millisecond resolution, so `rowid` is the tiebreaker that guarantees turn order.
+ *
+ * Compaction checkpoint rows (`kind='compaction'`, context-compaction-plan §4.4) are
+ * EXCLUDED: they are machine context, not user turns, so the renderer transcript, export,
+ * and skill-fence sizing all see only real user/assistant messages (R8). The summary they
+ * hold reaches the model only as the synthetic pair `buildChatMessages` injects.
  */
 export function listMessages(db: Db, conversationId: string): Message[] {
   const rows = prepareCached(
     db,
     `SELECT m.*, s.title AS skill_title
        FROM messages m LEFT JOIN skills s ON s.install_id = m.skill_id
-       WHERE m.conversation_id = ? ORDER BY m.created_at ASC, m.rowid ASC`
+       WHERE m.conversation_id = ? AND m.kind IS NOT 'compaction'
+       ORDER BY m.created_at ASC, m.rowid ASC`
   ).all(conversationId) as unknown as MessageRow[]
   return rows.map(rowToMessage)
+}
+
+/** One stored user/assistant turn with its `rowid` — the assembly/compaction unit (§4.4). */
+export interface ConversationTurn {
+  rowid: number
+  role: 'user' | 'assistant'
+  content: string
+}
+
+/**
+ * A compaction checkpoint (context-compaction-plan §4.4): the cached summary of the older turns
+ * it subsumes. `coversThroughRowid` is the max `messages.rowid` the summary replaces — assembly
+ * replays only turns after it, and the next compaction folds this summary in (chained, §4.7).
+ */
+export interface Checkpoint {
+  rowid: number
+  summary: string
+  coversThroughRowid: number
+}
+
+/**
+ * Read a conversation's user/assistant turns (checkpoint rows excluded) in order, optionally only
+ * those with `rowid > afterRowid` — the post-checkpoint replay window. Raw stored content (think
+ * blocks are scrubbed by the caller at assembly/summarization time). Powers both the assembly path
+ * and the compaction pre-pass; the checkpoint is always built from these STORED RAW turns (R-RAG),
+ * never a transient grounded prompt.
+ */
+export function listConversationTurns(
+  db: Db,
+  conversationId: string,
+  afterRowid = 0
+): ConversationTurn[] {
+  const rows = prepareCached(
+    db,
+    `SELECT m.rowid AS rowid, m.role AS role, m.content AS content
+       FROM messages m
+       WHERE m.conversation_id = ? AND m.rowid > ? AND m.kind IS NOT 'compaction'
+       ORDER BY m.created_at ASC, m.rowid ASC`
+  ).all(conversationId, afterRowid) as unknown as Array<{
+    rowid: number
+    role: string
+    content: string
+  }>
+  return rows
+    .filter((r) => r.role === 'user' || r.role === 'assistant')
+    .map((r) => ({ rowid: r.rowid, role: r.role as 'user' | 'assistant', content: r.content }))
+}
+
+/** The latest compaction checkpoint for a conversation, or null when none has been cut. */
+export function getLatestCheckpoint(db: Db, conversationId: string): Checkpoint | null {
+  const row = prepareCached(
+    db,
+    `SELECT m.rowid AS rowid, m.content AS content, m.covers_through_rowid AS covers
+       FROM messages m
+       WHERE m.conversation_id = ? AND m.kind = 'compaction'
+       ORDER BY m.rowid DESC LIMIT 1`
+  ).get(conversationId) as unknown as
+    | { rowid: number; content: string; covers: number | null }
+    | undefined
+  if (!row) return null
+  return { rowid: row.rowid, summary: row.content, coversThroughRowid: row.covers ?? 0 }
+}
+
+/**
+ * Persist a compaction checkpoint (context-compaction-plan §4.4). A dedicated `kind='compaction'`
+ * row (role `system` semantics, never skill-stamped — R3) so history replay is a pure read. Does
+ * NOT bump `conversations.updated_at`: a checkpoint is internal context, not a user action, and
+ * must not reorder the sidebar.
+ */
+export function writeCheckpoint(
+  db: Db,
+  input: { conversationId: string; summary: string; coversThroughRowid: number }
+): void {
+  prepareCached(
+    db,
+    `INSERT INTO messages
+       (id, conversation_id, role, content, created_at, token_count, citations_json,
+        skill_id, auto_fired, coverage_json, kind, covers_through_rowid)
+     VALUES (?, ?, 'system', ?, ?, NULL, NULL, NULL, NULL, NULL, 'compaction', ?)`
+  ).run(randomUUID(), input.conversationId, input.summary, nowIso(), input.coversThroughRowid)
+}
+
+// §4.5 — a compaction summary is injected into the assembled prompt as a synthetic user→assistant
+// pair, NOT a second leading `system` message (several local chat templates accept only one leading
+// system block, and `collapseToAlternating` assumes leading-system-then-strict-alternation). The
+// pair is alternation-safe and keeps the real leading system prompt BYTE-stable so its KV cache
+// (`cache_prompt`, RT-2) is still reused. It is built at request time, NEVER persisted as real
+// messages, and never skill-stamped (R3). Internal prompt text → English (not user-facing copy).
+export const COMPACTION_SUMMARY_INTRO = 'Here is a summary of our earlier conversation so far:'
+export const COMPACTION_SUMMARY_ACK = "Understood — I'll continue with that context in mind."
+
+/** Build the synthetic summary pair (§4.5) injected at the start of the retained window. */
+export function compactionSummaryPair(summary: string): ChatMessage[] {
+  return [
+    { role: 'user', content: `${COMPACTION_SUMMARY_INTRO}\n\n${summary}` },
+    { role: 'assistant', content: COMPACTION_SUMMARY_ACK }
+  ]
 }
 
 export interface AppendMessageInput {
@@ -689,8 +793,25 @@ const CHAT_TOKENS_PER_WORD = 1.3
 const PER_MESSAGE_OVERHEAD_TOKENS = 8
 
 /** Estimated model tokens for one message (word estimate scaled up + template chrome). */
-function messageTokens(m: ChatMessage): number {
+export function messageTokens(m: ChatMessage): number {
   return Math.ceil(approxTokenCount(m.content) * CHAT_TOKENS_PER_WORD) + PER_MESSAGE_OVERHEAD_TOKENS
+}
+
+/**
+ * The REAL context-window budget for prompt assembly (§L0). The runtime is launched with
+ * `manifest.recommendedContextTokens || settings.contextTokens` as llama-server's
+ * `--ctx-size`, which can DIVERGE from `settings.contextTokens` — trimming against the
+ * setting alone risks an over-window HTTP 400 (window larger than the setting → we'd trim
+ * too tight, wasting capacity) or, the other way, an overflow. So we budget against the
+ * value the runtime actually reports, falling back to the setting only when the runtime
+ * can't report one (a bare test stub without `contextWindow()`).
+ */
+export function effectiveContextWindow(
+  runtime: Pick<ModelRuntime, 'contextWindow'>,
+  settings: { contextTokens: number }
+): number {
+  const reported = runtime.contextWindow?.()
+  return reported != null && reported > 0 ? reported : settings.contextTokens
 }
 
 /**
@@ -746,17 +867,20 @@ export function buildChatMessages(
   contextTokens?: number,
   skillFence?: string | null
 ): ChatMessage[] {
-  const history = listMessages(db, conversationId)
   const messages: ChatMessage[] = [{ role: 'system', content: buildSystemPrompt(skillFence) }]
-  for (const m of history) {
-    if (m.role === 'user' || m.role === 'assistant') {
-      // Assistant turns are scrubbed of think blocks before being replayed —
-      // replayed reasoning confuses the model (see stripThinkBlocks).
-      messages.push({
-        role: m.role,
-        content: m.role === 'assistant' ? stripThinkBlocks(m.content) : m.content
-      })
-    }
+  // L2 (context compaction): when a checkpoint exists, inject its summary as a synthetic
+  // user→assistant pair (§4.5) and replay only the turns AFTER it — the cached summary stands in
+  // for everything older. No checkpoint ⇒ replay the whole history, byte-identical to before. The
+  // checkpoint row itself is never a turn (kind-filtered by listConversationTurns).
+  const checkpoint = getLatestCheckpoint(db, conversationId)
+  if (checkpoint) messages.push(...compactionSummaryPair(checkpoint.summary))
+  for (const turn of listConversationTurns(db, conversationId, checkpoint?.coversThroughRowid ?? 0)) {
+    // Assistant turns are scrubbed of think blocks before being replayed —
+    // replayed reasoning confuses the model (see stripThinkBlocks).
+    messages.push({
+      role: turn.role,
+      content: turn.role === 'assistant' ? stripThinkBlocks(turn.content) : turn.content
+    })
   }
   const collapsed = collapseToAlternating(messages)
   return contextTokens == null ? collapsed : fitMessagesToContext(collapsed, contextTokens)
@@ -803,6 +927,12 @@ export interface GenerateOptions {
    * fence, no stamp, so the glyph corresponds 1:1 to a prompt that carried the skill — §22-A5/A6).
    */
   skill?: TurnSkill | null
+  /**
+   * Fired exactly once if the context-compaction pre-pass starts a summarization for this turn
+   * (it adds latency before the first answer token). Phase 1 only plumbs the callback; the
+   * `STREAM.compaction` UX channel that consumes it is Phase 2.
+   */
+  onCompactionStart?: () => void
 }
 
 /**
@@ -818,8 +948,19 @@ export async function generateAssistantMessage(
   opts: GenerateOptions = {}
 ): Promise<Message> {
   // Trim history to the model's context window so an accumulating conversation never
-  // assembles a prompt the runtime rejects (HTTP 400 exceed_context_size_error).
-  const contextTokens = getSettings(db).contextTokens
+  // assembles a prompt the runtime rejects (HTTP 400 exceed_context_size_error). Budget
+  // against the REAL launched window the runtime reports (§L0), not settings.contextTokens
+  // (which can diverge from the model's actual --ctx-size).
+  const contextTokens = effectiveContextWindow(runtime, getSettings(db))
+  // L2 (context compaction): when the history approaches the window, summarize the older turns into
+  // a cached checkpoint so assembly replays a compact summary + recent turns instead of dropping the
+  // old ones outright. A no-op below threshold; any failure/abort falls back to today's L1 trim with
+  // no user-visible error. Runs on the already-claimed chat slot as part of this turn (R4), honouring
+  // the turn's AbortSignal, BEFORE assembly so buildChatMessages picks up any fresh checkpoint.
+  await ensureCompacted(db, runtime, conversationId, contextTokens, {
+    signal: opts.signal,
+    onStart: opts.onCompactionStart
+  })
   // Pre-size the skill fence (§11.3/A6) BEFORE it goes in the system message so it can never
   // starve the base preamble or the final user turn — fitMessagesToContext only drops older
   // history. Stamp the assistant row only when the fence actually fit (skill shaped the answer).

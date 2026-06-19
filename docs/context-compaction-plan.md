@@ -315,14 +315,19 @@ our "honest, local, nothing hidden" posture. Keys: `chat.compaction.markerLabel`
 
 ## 6. Implementation phases & file-by-file changes
 
-**Phase 0 — window source of truth (S, independently valuable).**
+**Phase 0 — window source of truth (S, independently valuable). ✅ SHIPPED 2026-06-19.**
 - `shared/types.ts`: `RuntimeStatus.contextWindow?`. `services/runtime/index.ts`: `contextWindow()` on
   the `ModelRuntime` interface; implement in `runtime/llama.ts` + `runtime/mock.ts`.
 - `ipc/registerModelIpc.ts` (or the status handler): populate `contextWindow`.
 - `services/chat.ts` + `services/rag/index.ts`: budget via `effectiveContextWindow(...)`.
 - Tests: estimate/budget uses the launched window; mock reports its value.
+- _As built:_ `contextWindow?()` made OPTIONAL on the interface (so the ~15 `ModelRuntime` test-literal
+  stubs stay valid; `effectiveContextWindow` falls back to `settings.contextTokens` when unreported/≤0).
+  `LadderRuntime` also implements it (returns its fixed `opts.contextTokens`). The window is populated in
+  `RuntimeManager.status()` (the natural owner of `this.current`), not the IPC handler. `npm test` 1863 / 29
+  skipped, typecheck clean.
 
-**Phase 1 — compaction core (M, the real work).**
+**Phase 1 — compaction core (M, the real work). ✅ SHIPPED 2026-06-19.**
 - New `services/chat/compaction.ts`: `ensureCompacted`, `COMPACT_THRESHOLD`, `KEEP_RECENT_TURNS`,
   `selfSummaryPrompt`, the summarizer call (reusing `doctasks/summary.ts` helpers).
 - `services/db.ts`: additive migration — `messages.kind`, `messages.covers_through_rowid`; a
@@ -331,6 +336,39 @@ our "honest, local, nothing hidden" posture. Keys: `chat.compaction.markerLabel`
 - `services/chat.ts`: `buildChatMessages` injects the summary pair + replays post-checkpoint turns;
   `generateAssistantMessage` awaits `ensureCompacted` before assembly.
 - `services/rag/index.ts`: same for `buildGroundedChatMessages` / `generateGroundedAnswer`.
+- _As built:_
+  - **Migration in `db.ts`** (additive/idempotent, R13): `ensureColumn(messages,'kind')` +
+    `ensureColumn(messages,'covers_through_rowid')`; old rows read as plain messages (NULL-sentinel).
+    **R8** — the `messages_fts_ai` AFTER INSERT trigger now carries `WHEN new.kind IS NOT 'compaction'`
+    (fresh DBs), and `ensureMessagesFtsKindFilter` idempotently rewrites the trigger on a pre-feature DB
+    + prunes any indexed checkpoint row; the FTS backfill SELECT also excludes `kind='compaction'`.
+  - **Message-table SQL stays in `chat.ts`** (the existing owner of `listMessages`/`appendMessage`), NOT
+    `db.ts` — least-disruptive deviation from the plan's letter. New there: `listConversationTurns(db,
+    convId, afterRowid)` (rowid-aware, kind-filtered assembly reader), `getLatestCheckpoint` /
+    `writeCheckpoint`, `compactionSummaryPair` + the `COMPACTION_SUMMARY_INTRO/_ACK` constants, and a
+    `kind IS NOT 'compaction'` filter ON `listMessages` (so renderer/export/fence-sizing auto-skip
+    checkpoints — R8). `messageTokens` is now exported (compaction reuses the estimate). `writeCheckpoint`
+    deliberately does NOT bump `conversations.updated_at` (internal context, not a user action).
+  - **`buildChatMessages` / `buildGroundedChatMessages`**: when a checkpoint exists, inject the §4.5
+    synthetic `user→assistant` pair and replay only `rowid > coversThroughRowid` turns; else byte-identical
+    to before. The leading system prompt stays byte-stable (RT-2 cache prefix). RAG's live final grounded
+    turn (question + `[Sn]`) is still mandatory in `fitMessagesToContext` (R-RAG).
+  - **Trigger estimate** (the "summarize once" guarantee): `ensureCompacted` budgets on the ASSEMBLED view
+    (existing-checkpoint summary-pair tokens + post-checkpoint turns), so a fresh checkpoint drops the next
+    turn below threshold and the summarizer is not re-called until NEW turns re-cross it; chained
+    re-compaction folds the prior summary in and map-reduces (doctasks windowing) if it overflows.
+  - **Summary call**: `mode:'balanced'` (⇒ `enable_thinking:false`) + explicit `temperature:0.2`,
+    `maxTokens:700`. Any failure/abort ⇒ no checkpoint, turn proceeds via L1, no user-visible error (R4/R6).
+  - **`KEEP_RECENT_TURNS=6`, `MIN_COMPACTABLE_TURNS=6`, `SUMMARY_MAX_TOKENS=700`, `COMPACT_THRESHOLD=0.85`**
+    (D-d: the §4 starting points kept; golden-trace tuning deferred to the eval gate before the wave closes).
+  - **`onCompactionStart`** plumbed through `GenerateOptions` / `GroundedAnswerOptions` → `ensureCompacted`'s
+    `onStart` (the `STREAM.compaction` UX wiring is Phase 2). The Phase-2 settings toggle is not yet read, so
+    compaction is effectively always-on (= the settled D-a default ON).
+  - **Tests:** new `tests/integration/chat-compaction.test.ts` (15 cases) — trigger boundaries, one
+    checkpoint reused (summarize-once), chained fold, `covers_through_rowid`, post-checkpoint assembly +
+    byte-stable system prompt + alternation-safe pair + L1 still fits, summarizer throw/abort fallback, RAG
+    raw-turn checkpoint with live citations, and an old-DB migration + R8 FTS-exclusion round-trip.
+    `npm test` **1878 passed / 29 skipped** (+15), typecheck + `npm run build` clean.
 
 **Phase 2 — UX (M).**
 - `shared/ipc.ts`: `STREAM.compaction`. `preload/index.ts`: `onCompaction`.
