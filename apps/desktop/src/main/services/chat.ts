@@ -9,6 +9,7 @@ import {
   type Conversation,
   type ConversationSearchHit,
   type ConversationSearchResult,
+  type CoverageInfo,
   type DocumentScope,
   type Message
 } from '../../shared/types'
@@ -179,6 +180,8 @@ interface MessageRow {
   skill_title: string | null
   /** S13c — 1 when the app auto-fired the stamped skill (else NULL/0). Powers the per-turn undo. */
   auto_fired: number | null
+  /** Full-doc-skills Phase 1 — JSON-serialized `CoverageInfo` (D48), or NULL (legacy/no coverage). */
+  coverage_json: string | null
 }
 
 /**
@@ -210,8 +213,50 @@ function parseCitations(json: string | null): Citation[] | undefined {
   }
 }
 
+/**
+ * Parse stored coverage: a JSON object carrying at least a `mode` string, else undefined. Mirrors
+ * `parseCitations` — a malformed/legacy (NULL) payload must never break rendering a conversation, so
+ * it degrades to undefined and the renderer falls back to the relevance badge. Counts default to 0 so
+ * a partially-shaped payload still satisfies the `CoverageInfo` contract.
+ */
+function parseCoverage(json: string | null): CoverageInfo | undefined {
+  if (!json) return undefined
+  try {
+    const v = JSON.parse(json) as unknown
+    if (typeof v !== 'object' || v === null) return undefined
+    const c = v as Record<string, unknown>
+    if (typeof c.mode !== 'string') return undefined
+    // Preserve any extra optional fields (treeStatus, tier, unparsedChunks, …) as-stored, but
+    // guarantee the three required keys so a partial payload still satisfies the contract.
+    return {
+      ...(c as unknown as CoverageInfo),
+      mode: c.mode as CoverageInfo['mode'],
+      chunksCovered: typeof c.chunksCovered === 'number' ? c.chunksCovered : 0,
+      chunksTotal: typeof c.chunksTotal === 'number' ? c.chunksTotal : 0
+    }
+  } catch {
+    // A malformed payload must never break rendering a conversation — drop the coverage.
+    return undefined
+  }
+}
+
+/**
+ * Serialize coverage for `messages.coverage_json` (the write side of `parseCoverage`). Null/omitted ⇒
+ * NULL (the relevance fallback). Tolerant: a value that cannot stringify (cyclic/exotic) degrades to
+ * NULL rather than failing the whole append — the answer itself must always persist.
+ */
+function serializeCoverage(coverage: CoverageInfo | null | undefined): string | null {
+  if (!coverage) return null
+  try {
+    return JSON.stringify(coverage)
+  } catch {
+    return null
+  }
+}
+
 function rowToMessage(r: MessageRow): Message {
   const citations = parseCitations(r.citations_json)
+  const coverage = parseCoverage(r.coverage_json)
   // Resolve the stamped skill (DS16/§22-A5): the LEFT JOIN yields skill_title only while the skill
   // row still exists. A DELETED skill (no join) ⇒ skillId/skillTitle NULL, so the glyph never
   // points at a vanished skill (the FK-less delete relies on this — audit C3).
@@ -228,7 +273,8 @@ function rowToMessage(r: MessageRow): Message {
     skillTitle: skillResolved ? r.skill_title : null,
     // Auto-fire provenance (S13c) only means anything when a skill actually shaped (and still resolves
     // for) this turn; a deleted skill drops the glyph AND the undo together.
-    autoFired: skillResolved ? r.auto_fired === 1 : false
+    autoFired: skillResolved ? r.auto_fired === 1 : false,
+    coverage
   }
 }
 
@@ -398,6 +444,12 @@ export interface AppendMessageInput {
    * a non-null `skillId`; surfaces the per-turn "answer without it" undo. Privacy-safe (a boolean).
    */
   autoFired?: boolean
+  /**
+   * The honest breadth behind an assistant answer (full-doc-skills plan §3.3/D48), persisted to
+   * `messages.coverage_json`. Omitted/null ⇒ NULL, and the renderer falls back to the relevance
+   * badge — so today's plain retrieval turns stay byte-identical. Counts/mode only, never content.
+   */
+  coverage?: CoverageInfo | null
 }
 
 /** Append a message and bump the conversation's updated_at. */
@@ -405,6 +457,9 @@ export function appendMessage(db: Db, input: AppendMessageInput): Message {
   const now = nowIso()
   const tokenCount = input.tokenCount ?? null
   const citationsJson = input.citations ? JSON.stringify(input.citations) : null
+  // Coverage is best-effort metadata: a serialization fault must never block persisting the answer
+  // itself (the round-trip read is already tolerant). Stringify defensively → NULL on any failure.
+  const coverageJson = serializeCoverage(input.coverage)
   const skillId = input.skillId ?? null
   // Stamp auto-fire provenance only when a skill is actually stamped; 1 = auto-fired, NULL otherwise.
   const autoFired = skillId != null && input.autoFired === true
@@ -417,11 +472,12 @@ export function appendMessage(db: Db, input: AppendMessageInput): Message {
     tokenCount,
     citations: input.citations ?? undefined,
     skillId,
-    autoFired
+    autoFired,
+    coverage: input.coverage ?? undefined
   }
   db.prepare(
-    `INSERT INTO messages (id, conversation_id, role, content, created_at, token_count, citations_json, skill_id, auto_fired)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO messages (id, conversation_id, role, content, created_at, token_count, citations_json, skill_id, auto_fired, coverage_json)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     msg.id,
     msg.conversationId,
@@ -431,7 +487,8 @@ export function appendMessage(db: Db, input: AppendMessageInput): Message {
     tokenCount,
     citationsJson,
     skillId,
-    autoFired ? 1 : null
+    autoFired ? 1 : null,
+    coverageJson
   )
   db.prepare('UPDATE conversations SET updated_at = ? WHERE id = ?').run(now, input.conversationId)
   return msg

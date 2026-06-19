@@ -6,6 +6,30 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-19 — **Full-doc-skills Phase 1 landed — per-message coverage is now data-driven (D48).**
+Branch `fix-use-full-doc-for-skills`; plan [`docs/full-doc-skills-plan.md`](docs/full-doc-skills-plan.md)
+Phase 1 of 4 (still a working paper — Phases 2–4 open). **Why:** a `kind:tool` skill answers a chat
+question via top-k RAG, so the coverage badge was **hardcoded** `mode:'relevance'` at
+`Transcript.tsx` regardless of what happened — making "if we analysed the full document, show that"
+(D48) impossible to express. Phase 1 is **pure plumbing, zero behaviour change**: it persists a real
+`CoverageInfo` per assistant message so later phases can render the truth. **New data contract:**
+**`messages.coverage_json`** — additive + nullable `ensureColumn` migration ([`db.ts`](apps/desktop/src/main/services/db.ts),
+after `auto_fired`). Holds a JSON-serialized `CoverageInfo` (mode + sections covered/total — counts/mode
+only, never content); NULL = legacy/pre-migration row OR a turn that recorded no coverage. An older app
+ignores the column. **Round-trip** in [`chat.ts`](apps/desktop/src/main/services/chat.ts): `appendMessage`
+gained `coverage?: CoverageInfo | null` → `serializeCoverage` (tolerant — a stringify fault degrades to
+NULL, never blocks the append); `rowToMessage` → `parseCoverage` (NULL/malformed → undefined; the three
+required keys coalesced so a partial payload still satisfies the contract), mirroring the existing
+`citations_json` model. **Type:** `Message.coverage?: CoverageInfo` in [`shared/types.ts`](apps/desktop/src/shared/types.ts).
+**Renderer:** [`Transcript.tsx`](apps/desktop/src/renderer/chat/Transcript.tsx) now reads
+`m.coverage ?? { mode:'relevance', chunksCovered:0, chunksTotal:0 }` — every pre-migration message AND the
+unchanged relevance path render **byte-identically** (R5). The relevance path persists no coverage (stays
+NULL). **Tests:** 4 new — round-trip + no-coverage→undefined + malformed→undefined in
+[`chat.test.ts`](apps/desktop/tests/integration/chat.test.ts); a data-driven `extract` coverage renders +
+NULL→relevance fallback in [`Coverage.test.tsx`](apps/desktop/tests/renderer/Coverage.test.tsx). Suite
+**1792 green**; typecheck + production build clean. **Next:** Phase 2 (analysis-handler seam + bank
+handler) — NOT started. **(prior entries below.)**_
+
 _2026-06-18 — **New chat model added: Qwen3.5 4B (UD-Q4_K_XL)** (user request). Manifest-only
 addition (model-policy.md "adding a model is manifest-only"):
 [`model-manifests/chat/qwen3.5-4b-ud-q4kxl.yaml`](model-manifests/chat/qwen3.5-4b-ud-q4kxl.yaml).

@@ -560,6 +560,13 @@ export interface Message {
    * together). A boolean — never content.
    */
   autoFired?: boolean
+  /**
+   * The honest breadth behind this assistant answer (full-doc-skills plan §3.3/D48). Persisted as
+   * `messages.coverage_json`; the renderer falls back to a `relevance` badge when absent, so a
+   * pre-migration row (NULL) or a plain retrieval turn reads exactly as before. Counts/mode only —
+   * never content. Undefined on user turns and turns that recorded no coverage.
+   */
+  coverage?: CoverageInfo
 }
 
 /**

@@ -568,6 +568,11 @@ export function openDatabase(path: string): Db {
   // only when the auto-fire path placed the skill, so the per-turn "answer without it" undo shows ONLY
   // on an auto-fired turn. Privacy-safe: a boolean, never content. An older app simply ignores it.
   ensureColumn(db, 'messages', 'auto_fired', 'auto_fired INTEGER')
+  // Full-doc-skills plan Phase 1 — per-message coverage breadth (D48). Additive + nullable: NULL =
+  // legacy/pre-migration row OR a turn that recorded no coverage; the renderer coalesces NULL to the
+  // relevance label, so an older app simply ignores the column and the badge is byte-identical. Holds
+  // a JSON-serialized `CoverageInfo` (mode + sections covered/total); CONTENT-free (only counts/mode).
+  ensureColumn(db, 'messages', 'coverage_json', 'coverage_json TEXT')
   // Bank-transaction derived annotations (architecture.md "Skills — design record" §10, S11c). All nullable —
   // a row has no category/reconciled/confidence until a downstream tool computes one. CONTENT-CLASS
   // (a category id / reconcile verdict is derived from user figures): never logged/audited/exported.

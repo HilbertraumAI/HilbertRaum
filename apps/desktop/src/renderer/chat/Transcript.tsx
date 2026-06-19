@@ -211,10 +211,14 @@ const MessageBlock = memo(function MessageBlock({
         {m.citations && m.citations.length > 0 && (
           <>
             <SourcesDisclosure citations={m.citations} />
-            {/* Honesty (whole-document-analysis §4.5/§5.2): a grounded document answer
-                is a RELEVANCE answer — based on the most relevant passages, NOT the whole
-                document. Always labelled so a retrieval answer never reads as exhaustive. */}
-            <CoverageMeter coverage={{ mode: 'relevance', chunksCovered: 0, chunksTotal: 0 }} />
+            {/* Honesty (whole-document-analysis §4.5/§5.2; full-doc-skills §3.3/D48): render the
+                answer's PERSISTED coverage when we have it, else fall back to the relevance label —
+                "based on the most relevant passages, NOT the whole document". A pre-migration row
+                (NULL coverage) and a plain retrieval turn both hit the fallback, so the badge reads
+                byte-identically to before; only a turn that recorded richer coverage shows it. */}
+            <CoverageMeter
+              coverage={m.coverage ?? { mode: 'relevance', chunksCovered: 0, chunksTotal: 0 }}
+            />
           </>
         )}
         {/* Per-message skill glyph (skills plan §15/DS16/§22-A5): a quiet, labelled marker on

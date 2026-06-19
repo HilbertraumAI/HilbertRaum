@@ -20,6 +20,7 @@ import {
 import { createMockRuntime } from '../../src/main/services/runtime/mock'
 import type { Db } from '../../src/main/services/db'
 import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../../src/main/services/runtime'
+import type { CoverageInfo } from '../../src/shared/types'
 
 function freshDb(): Db {
   const dir = mkdtempSync(join(tmpdir(), 'hilbertraum-chat-'))
@@ -188,6 +189,42 @@ describe('message ordering', () => {
     appendMessage(db, { conversationId: b.id, role: 'user', content: 'in-b' })
     expect(listMessages(db, a.id).map((m) => m.content)).toEqual(['in-a'])
     expect(listMessages(db, b.id).map((m) => m.content)).toEqual(['in-b'])
+  })
+})
+
+// ---- Per-message coverage round-trip (full-doc-skills plan Phase 1, D48) -----------
+// Phase 1 is pure plumbing: appendMessage persists a `CoverageInfo` to messages.coverage_json
+// and rowToMessage parses it back; a message that recorded no coverage (NULL) reads back
+// undefined so the renderer falls back to the relevance badge — today's behaviour, unchanged.
+describe('message coverage persistence (full-doc-skills D48)', () => {
+  it('round-trips a CoverageInfo through appendMessage → listMessages', () => {
+    const db = freshDb()
+    const conv = createConversation(db, {})
+    const coverage: CoverageInfo = {
+      mode: 'extract',
+      chunksCovered: 213,
+      chunksTotal: 213,
+      unparsedChunks: 2,
+      fullyChunked: true
+    }
+    appendMessage(db, { conversationId: conv.id, role: 'assistant', content: 'analysed', coverage })
+    expect(listMessages(db, conv.id).at(-1)?.coverage).toEqual(coverage)
+  })
+
+  it('a message that recorded no coverage reads back undefined (NULL → relevance fallback)', () => {
+    const db = freshDb()
+    const conv = createConversation(db, {})
+    appendMessage(db, { conversationId: conv.id, role: 'assistant', content: 'plain answer' })
+    expect(listMessages(db, conv.id).at(-1)?.coverage).toBeUndefined()
+  })
+
+  it('a malformed/legacy coverage_json degrades to undefined (never breaks the conversation)', () => {
+    const db = freshDb()
+    const conv = createConversation(db, {})
+    const msg = appendMessage(db, { conversationId: conv.id, role: 'assistant', content: 'a' })
+    // Simulate a hand-edited / pre-contract row: non-JSON garbage in the column.
+    db.prepare('UPDATE messages SET coverage_json = ? WHERE id = ?').run('{not json', msg.id)
+    expect(listMessages(db, conv.id).at(-1)?.coverage).toBeUndefined()
   })
 })
 

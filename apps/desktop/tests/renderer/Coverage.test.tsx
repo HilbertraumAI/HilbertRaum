@@ -129,6 +129,26 @@ describe('Transcript — a grounded answer is labelled relevance-based', () => {
     expect(screen.getByText(t('en', 'coverage.relevance'))).toBeInTheDocument()
   })
 
+  // Full-doc-skills Phase 1 (D48): the meter is data-driven. A message carrying a PERSISTED
+  // coverage renders THAT breadth; a citation-bearing message with no coverage (NULL / pre-migration)
+  // still falls back to the relevance label — byte-identical to the pre-Phase-1 hardcoded behaviour.
+  it('renders the PERSISTED coverage when a message carries one (extract → whole document)', () => {
+    const messages: Message[] = [
+      {
+        id: 'm1',
+        conversationId: 'c1',
+        role: 'assistant',
+        content: 'There are 213 transactions [S1].',
+        createdAt: '2026-01-01T00:00:00Z',
+        citations: [{ label: 'S1', sourceTitle: 'statement.pdf', snippet: 'row' }],
+        coverage: { mode: 'extract', chunksCovered: 213, chunksTotal: 213, fullyChunked: true }
+      }
+    ]
+    render(transcript(messages))
+    expect(screen.getByText(t('en', 'coverage.extract.whole', { scanned: 213 }))).toBeInTheDocument()
+    expect(screen.queryByText(t('en', 'coverage.relevance'))).not.toBeInTheDocument()
+  })
+
   it('does not label a plain (citation-free) answer', () => {
     const messages: Message[] = [
       { id: 'm1', conversationId: 'c1', role: 'assistant', content: 'Hello there.', createdAt: '2026-01-01T00:00:00Z' }
