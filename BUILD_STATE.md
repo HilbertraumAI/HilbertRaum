@@ -6,6 +6,48 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-19 — **Full-doc-skills Phase 4 landed — invoice adoption + the plan folded into the design
+records + plan file deleted. The feature is now FULLY CLOSED OUT.** Branch `fix-use-full-doc-for-skills`.
+**Why:** Phase 3 wired the seam into chat with bank-statement as the first adopter; the seam is general
+(D44), so the closing phase proves it with a second content class and discharges the doc-lifecycle rule.
+**Invoice handler** ([`analysis/invoice.ts`](apps/desktop/src/main/services/skills/analysis/invoice.ts),
+D49 fast-follow): `INVOICE_INSTALL_ID = skillInstallId('app','invoice')`; `applies()` = a single in-scope
+doc (`singleInScopeDocument`/`buildScopeFilter`, mirroring bank) + an invoice-shaped EN+DE keyword set
+(substring-ambiguous tokens — `vat`/`ust`/bare `net` — deliberately avoided per the §1 DS17 caution).
+`run()` auto-runs the READ-ONLY tools through the existing run seam (`runInvoiceExtraction` →
+`runInvoiceTotalsValidation`) for their `skill_runs` lifecycle + ids/counts audit, then reads the
+PERSISTED `invoices`/`invoice_line_items` rows (a local `loadInvoice` mirroring `invoice-run.ts`) and
+computes the answer's figures via the PURE `validateInvoiceTotals` — the seams surface only counts.
+**`runInvoiceCsvExport` is never imported** (export stays confirm-gated). The deterministic, localized
+Markdown answer honours [`app-skills/invoice/SKILL.md`](app-skills/invoice/SKILL.md): leads with the
+line-item count, surfaces any FAILED reconciliation check (line-items→net, net+tax→gross, tax-vs-rate)
+**before** the headline gross, prints only the figures the invoice states (a field that couldn't be
+parsed is left out — never invented). Real `[Sn]` citations are the document's leading source chunks
+(the invoice schema records no per-figure source page, unlike `bank_transactions.source_page`; still
+M2-safe — real chunks, never the synthesised total). Coverage is the same
+`{ mode:'extract', chunksCovered=chunksTotal, chunksTotal, fullyChunked }` shape as bank (D48).
+**Registration:** `registerBuiltinSkillAnalysisHandlers()` now registers BOTH bank + invoice;
+`document-redaction` is intentionally NOT registered (it is an action skill — a one-line comment in the
+barrel records why). **No chat-router change** — registering the handler is the entire wiring the
+generic Phase-3 `askDocuments` path needs (R5: the bank, relevance, and coverage-extract paths are
+byte-identical). **i18n:** `skills.invoiceAnalysis.*` added to en.ts + de.ts (parity), reusing the
+shared `coverage.extract.*` meter + the Phase-3 `skills.analysis.refusePartial` refuse copy.
+**Docs fold (doc-lifecycle rule):** architecture.md gained **§19** ("Full-document analysis for tool
+skills", D44–D49 + the seam / per-message coverage contract / routing+refuse gate / bank+invoice
+adoption); rag-design.md gained **§14.9** (the coverage half — per-message `CoverageInfo` is now
+data-driven, cross-linked to §19); known-limitations.md records the **third coverage state** (a
+`kind:tool` skill answers exhaustively over a fully-chunked doc or refuses, never partially). The plan
+file **`docs/full-doc-skills-plan.md` is deleted** (full text in git history). **Tests:** 13 new in
+[`skills-analysis-invoice.test.ts`](apps/desktop/tests/integration/skills-analysis-invoice.test.ts)
+(handler-level: `applies()` pre-flight, exhaustive figures from rows, failed check surfaced before the
+gross, figures quoted not invented, export never auto-run, coverage `fullyChunked` true/false, real
+source citations, registry round-trip) + 3 new in
+[`rag-skill-analysis-invoice.test.ts`](apps/desktop/tests/integration/rag-skill-analysis-invoice.test.ts)
+(IPC-level over the REAL `askDocuments`: exhaustive path `coverage.mode==='extract'`+0 model calls+export
+never auto-run, refuse path, relevance byte-unchanged). Suite **1828 green**; typecheck + production build
+clean. **Next:** the feature is closed; the branch is ready to merge to `master`. **(prior entries
+below.)**_
+
 _2026-06-19 — **Full-doc-skills Phase 3 landed — the analysis handler is now WIRED into chat
 (`askDocuments`) with the fully-chunked refuse gate.** Branch `fix-use-full-doc-for-skills`; plan
 [`docs/full-doc-skills-plan.md`](docs/full-doc-skills-plan.md) Phase 3 of 4 (still a working paper —

@@ -247,6 +247,20 @@ password recovery — are documented in
   relevance answer ("based on the most relevant passages"). v1 has no live full-scan for unmapped
   types and does not auto-run the extract pass at import (it is started on request) — both are later
   phases. The extract pass, like the deep index, requires a fully-chunked (re-indexed if legacy) doc.
+- **A `kind:tool` skill answers from its whole-document tools — or refuses, never partially
+  (full-doc-skills, D44–D49; architecture.md "Skills — design record" §19).** This is the third
+  coverage state, distinct from the two above. When a tool skill (bank-statement, invoice) is the
+  resolved turn skill and the question is analysis-shaped over a **single, fully-chunked** in-scope
+  document, the chat turn does **not** take the top-k relevance path: it auto-runs the skill's
+  **read-only** whole-document tools (export stays confirm-gated), computes the figures
+  deterministically from the extracted table (zero model calls), and stamps a real `extract` coverage
+  whose "whole document" wording is gated on `fully_chunked` (D48 — coverage is now persisted per
+  message, not hardcoded `relevance`). If any in-scope doc is **not** fully chunked the turn is
+  **refused** with a fixed message pointing at Documents → Re-index — no partial answer, no model call
+  (D45) — rather than silently answering from a few passages (for accounting, a partial read is a wrong
+  total). A tool skill answering an **off-topic** question, or over a multi-doc scope, keeps the
+  ordinary relevance path unchanged. `document-redaction` is an action skill and never registers a
+  handler, so it is never force-routed (D49).
 - **Strictly one job at a time (D26).** While a summary runs, chat is refused with a
   friendly message + a cancel option, and vice versa — the one local model serves one
   request. The R-T1 probe confirmed the pinned b9585 WOULD serve concurrent requests on

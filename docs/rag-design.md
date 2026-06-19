@@ -1006,3 +1006,20 @@ The collection-level "tree of trees" (`tree_nodes.scope_key` reserved); a live f
 (the router hook exists; node summaries would stay labelled "background", never `[Sn]`); node vectors in
 ordinary chunk retrieval/citations (deliberately excluded). A symmetric compare of two docs whose smaller
 side exceeds the 24-section ceiling falls back to the labelled asymmetric mode (b).
+
+### 14.9 Per-message coverage is now data-driven (D48; 2026-06-19)
+
+The coverage meter (§14.4) was computed for the analysis modes but **not persisted on chat messages** —
+the renderer hardcoded `mode:'relevance'` for every citation-bearing answer. As of the full-doc-skills
+work it is real: `messages.coverage_json` (nullable, additive) carries a `CoverageInfo` per message,
+`appendMessage` serializes it tolerantly (NULL on fault) and the renderer falls back to `relevance` when
+NULL — so every legacy/relevance turn renders byte-identically, while an exhaustive turn records and shows
+its true breadth. This is what makes "if we analysed the full document, show that" expressible.
+
+The first consumer is the **`kind:tool` skill analysis path**: a tool skill answers a plain chat question
+**exhaustively** from its whole-document tools (the §8 run seam) over a single, **fully-chunked** doc, and
+stamps a real `{ mode:'extract', chunksCovered=chunksTotal, chunksTotal, fullyChunked }` (the same
+`fully_chunked` invariant as §14.1); when the doc isn't fully chunked it **refuses** rather than answering
+partially (no breadth claim → NULL coverage → the relevance fallback). The seam, the routing/refuse gate,
+and the bank + invoice adopters are recorded in [`architecture.md`](architecture.md) "Skills — design
+record" §19 (D44–D49); this subsection is the coverage-half cross-link.

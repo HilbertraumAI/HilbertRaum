@@ -468,6 +468,33 @@ export const en = {
   'skills.bankAnalysis.caveat':
     'These figures are the statement’s own printed amounts, read across the whole document — ' +
     'nothing here is added up from prose or invented.',
+
+  // ---- Invoice analysis answer (full-doc-skills plan §3.1, Phase 4 / D49) ----
+  // The deterministic, whole-document answer the invoice analysis handler synthesises from the
+  // extracted invoice (0 model calls). Honours SKILL.md: quote the printed figures, surface any
+  // failed totals check BEFORE the headline gross, never invent a field the invoice doesn't state.
+  // Amounts/dates/currency are CONTENT and pass through verbatim as params.
+  'skills.invoiceAnalysis.count': 'I read the whole invoice — **{count}** line items.',
+  'skills.invoiceAnalysis.empty':
+    'I read the whole invoice but couldn’t find any line items or totals to report.',
+  'skills.invoiceAnalysis.couldNotRead': 'I couldn’t read this invoice, so I can’t analyse it.',
+  'skills.invoiceAnalysis.unreconciledHeading':
+    'Check these totals first — they don’t reconcile:',
+  'skills.invoiceAnalysis.checkLineItemsSumToNet': 'the line items don’t add up to the printed net total',
+  'skills.invoiceAnalysis.checkNetPlusTaxIsGross': 'net plus tax doesn’t match the printed gross total',
+  'skills.invoiceAnalysis.checkTaxMatchesRate': 'the tax amount doesn’t match the stated tax rate',
+  'skills.invoiceAnalysis.unreconciledItem': '- {check}',
+  'skills.invoiceAnalysis.totalsHeading': 'Totals, exactly as printed:',
+  'skills.invoiceAnalysis.net': '- Net: **{amount} {currency}**',
+  'skills.invoiceAnalysis.tax': '- Tax: **{amount} {currency}**',
+  'skills.invoiceAnalysis.taxWithRate': '- Tax ({rate}%): **{amount} {currency}**',
+  'skills.invoiceAnalysis.gross': '- Gross total (amount due): **{amount} {currency}**',
+  'skills.invoiceAnalysis.noTotals':
+    'The invoice doesn’t print a net, tax, or gross total I could read.',
+  'skills.invoiceAnalysis.caveat':
+    'These figures are the invoice’s own printed amounts, read across the whole document — ' +
+    'nothing here is added up from prose or invented.',
+
   // Full-doc-skills Phase 3 (§3.2/D45): the refuse-partial notice. A tool skill can only answer
   // exhaustively over a FULLY-INDEXED document; a legacy/partly-chunked doc is refused (no partial
   // answer, no model call) and the user is pointed at the existing Re-index affordance. Content-free.

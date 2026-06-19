@@ -496,6 +496,33 @@ export const de: Record<keyof typeof en, string> = {
   'skills.bankAnalysis.caveat':
     'Diese Zahlen sind die im Auszug gedruckten Beträge, gelesen über das ganze Dokument — ' +
     'nichts davon wird aus Fließtext zusammengerechnet oder erfunden.',
+
+  // ---- Rechnungsauswertung (full-doc-skills Plan §3.1, Phase 4 / D49) ----
+  // Die deterministische Antwort über das ganze Dokument, die der Analyse-Handler aus der
+  // extrahierten Rechnung erzeugt (0 Modellaufrufe). Beträge/Daten/Währung sind Inhalt und werden
+  // unverändert als Parameter durchgereicht.
+  'skills.invoiceAnalysis.count': 'Ich habe die ganze Rechnung gelesen — **{count}** Positionen.',
+  'skills.invoiceAnalysis.empty':
+    'Ich habe die ganze Rechnung gelesen, aber keine Positionen oder Beträge zum Auswerten gefunden.',
+  'skills.invoiceAnalysis.couldNotRead':
+    'Ich konnte diese Rechnung nicht lesen und kann sie daher nicht auswerten.',
+  'skills.invoiceAnalysis.unreconciledHeading':
+    'Bitte diese Beträge zuerst prüfen — sie stimmen nicht überein:',
+  'skills.invoiceAnalysis.checkLineItemsSumToNet': 'die Positionen ergeben nicht den gedruckten Nettobetrag',
+  'skills.invoiceAnalysis.checkNetPlusTaxIsGross': 'netto plus Steuer ergibt nicht den gedruckten Bruttobetrag',
+  'skills.invoiceAnalysis.checkTaxMatchesRate': 'der Steuerbetrag passt nicht zum angegebenen Steuersatz',
+  'skills.invoiceAnalysis.unreconciledItem': '- {check}',
+  'skills.invoiceAnalysis.totalsHeading': 'Beträge, genau wie gedruckt:',
+  'skills.invoiceAnalysis.net': '- Netto: **{amount} {currency}**',
+  'skills.invoiceAnalysis.tax': '- Steuer: **{amount} {currency}**',
+  'skills.invoiceAnalysis.taxWithRate': '- Steuer ({rate}%): **{amount} {currency}**',
+  'skills.invoiceAnalysis.gross': '- Bruttobetrag (Zahlbetrag): **{amount} {currency}**',
+  'skills.invoiceAnalysis.noTotals':
+    'Die Rechnung druckt keinen Netto-, Steuer- oder Bruttobetrag, den ich lesen konnte.',
+  'skills.invoiceAnalysis.caveat':
+    'Diese Zahlen sind die auf der Rechnung gedruckten Beträge, gelesen über das ganze Dokument — ' +
+    'nichts davon wird aus Fließtext zusammengerechnet oder erfunden.',
+
   // Full-doc-skills Phase 3 (§3.2/D45): Hinweis bei Verweigerung einer Teilantwort.
   'skills.analysis.refusePartial':
     'Das kann ich nur genau über das ganze Dokument beantworten, und dieses ist noch nicht ' +
