@@ -792,8 +792,9 @@ only non-renderer touches were the vendored brand image assets, the `generate-ic
 pipeline, and the dark-theme pre-paint colour was deliberately left alone. The app stays fully
 offline (assets vendored same-origin, no web fonts). This record condenses the former
 `docs/brand-refresh-plan.md` (full original in git history); code/comments cite it as **§13**.
-Shipped in six gated phases BR1–BR6; before/after captures in
-`docs/design-review/brand-refresh/{br2,br3,br4,br5}/`._
+Shipped in six gated phases BR1–BR6; the eyeball captures were reviewed then removed to keep the
+repo lean — they are reproducible any time via `apps/desktop/scripts/walk-brand-refresh.mjs`
+(after `npm run build`)._
 
 ### 13.1 The brand in one line
 
