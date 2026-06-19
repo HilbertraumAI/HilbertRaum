@@ -1,11 +1,15 @@
 // Playwright _electron eyeball walk for the brand refresh (docs/brand-refresh-plan).
-// BR2 scope: confirm the teal token swap reads calm and AA-safe — accent/link/focus teal,
-// the teal-fill + dark-ink primary button, the switch-on track, the selected-row teal bar —
-// across a few representative screens in BOTH themes. The full six-screen / both-locale walk
-// is BR4/BR6. (The in-app brand MARK is still the ◈ placeholder until BR3.)
+// Confirms the refresh end to end: the sealed-room BrandMark (rail + gate, theme-flipped),
+// the teal token swap (accent/link/focus, teal-fill + dark-ink primary, switch-on track,
+// selected-row teal bar), with no teal-on-light text and semantics still green/amber/red —
+// across ALL six screens in BOTH themes AND both locales (EN/DE).
 //
 // Run from apps/desktop AFTER `npm run build` (Playwright is an ad-hoc dev tool per §11.4):
-//   node scripts/walk-brand-refresh.mjs
+//   node scripts/walk-brand-refresh.mjs   (BR_PHASE overrides the output subfolder)
+//
+// Gate note: policy.json is parsed NESTED (policy.workspace.encryption_required) — a flat key
+// is ignored and the isDev build falls back to plaintext_dev, skipping the gate. We drive the
+// gate by CSS/input type because the dev machine boots German, not English.
 import { _electron as electron } from 'playwright'
 import { mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
@@ -57,7 +61,7 @@ async function shotBoth(name) {
   console.log('captured', name)
 }
 
-const NAV = { home: 0, chat: 1, documents: 2, models: 3 }
+const NAV = { home: 0, chat: 1, documents: 2, models: 3, skills: 4 }
 async function goto(screen) {
   if (screen === 'settings') await page.locator('.nav-bottom .nav-item').first().click()
   else await page.locator('.nav-list .nav-item').nth(NAV[screen]).click()
@@ -90,18 +94,43 @@ if (await pwFields.count().catch(() => 0)) {
 }
 await sleep(400)
 
-// ---- Home: adaptive hero (teal primary), nav icons teal, rail-foot indicator ----
-await goto('home')
-await shotBoth('home')
+// ---- All six screens, both themes, both locales ----
+async function setLocale(locale) {
+  await page.evaluate(async (l) => {
+    await window.api.updateSettings?.({ uiLanguage: l })
+    localStorage.setItem('hilbertraum.uiLanguage', l)
+  }, locale)
+  await page.reload()
+  await page.waitForLoadState('domcontentloaded')
+  await sleep(500)
+}
 
-// ---- Chat empty state: focus ring/send accent teal; no mark in transcript ----
-await goto('chat')
-await shotBoth('chat-empty')
-
-// ---- Settings: Appearance segmented control, switches (teal-on track), links ----
-await goto('settings')
-await sleep(200)
-await shotBoth('settings')
+for (const locale of ['en', 'de']) {
+  await setLocale(locale)
+  // Home — adaptive hero (teal primary), teal nav icons, rail-foot indicator.
+  await goto('home')
+  await shotBoth(`home-${locale}`)
+  // Chat — focus ring / send accent teal; NO brand mark in the transcript.
+  await goto('chat')
+  await shotBoth(`chat-${locale}`)
+  // Documents — selected-row teal bar; green readiness badge stays green; neutral chips.
+  await goto('documents')
+  await shotBoth(`documents-${locale}`)
+  // AI Model — cards + "Technical details"; download progress uses theme-aware --accent
+  // (light dark-teal on a light track, dark bright-teal on a dark track — both ≥3:1).
+  await goto('models')
+  await shotBoth(`models-${locale}`)
+  // Skills — capability library, teal-accented affordances.
+  await goto('skills')
+  await shotBoth(`skills-${locale}`)
+  // Settings — Appearance segmented control, switches (teal-on track), links.
+  await goto('settings')
+  await shotBoth(`settings-${locale}`)
+  // Settings → Privacy & data (reassuring, not theatrical).
+  await page.locator('[role="tab"]').nth(1).click().catch(() => {})
+  await sleep(200)
+  await shotBoth(`settings-privacy-${locale}`)
+}
 
 await app.close()
 console.log('DONE — screenshots in', OUT)

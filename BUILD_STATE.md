@@ -6,6 +6,32 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-19 — **Brand refresh BR4 landed — full screen pass; every screen inherits the teal cleanly,
+one leaked blue fixed.** Branch `design-adjustments`; plan
+[`docs/brand-refresh-plan.md`](docs/brand-refresh-plan.md) phase BR4 of BR1–BR6 (WORKING PAPER — BR5/BR6
+next). **Scope:** verification + one tiny renderer fix; no token/component changes were needed (the BR2
+role swap propagated through `styles.css` as designed). **Only leak found + fixed:** a grep for hard hex
+in the renderer surfaced ONE — [`chat/Waveform.tsx`](apps/desktop/src/renderer/chat/Waveform.tsx) (the
+dictation visualizer) read `--accent` from computed style but had a hardcoded BLUE fallback `#6aa0ff`;
+changed to the brand teal `#57d0a4` (only used if `--accent` ever resolves empty). Everything else is
+token-driven — zero other hard colours in the renderer. **Progress bars** use theme-aware `--accent`
+(light = dark teal `#1B7F5F` on a light track, dark = bright teal on a dark track — both ≥3:1; no
+light-track weak-teal problem because light never uses the bright teal). **Eyeball walk
+([`scripts/walk-brand-refresh.mjs`](apps/desktop/scripts/walk-brand-refresh.mjs), now ALL six screens ×
+both themes × both locales EN/DE, captures in `docs/design-review/brand-refresh/br4/`):** Home (teal
+adaptive primary), Chat (teal primary, NO mark in the content), Documents (teal "Import files", neutral
+active sub-nav), AI Model (teal "Install AI engine"/"Download", amber warning banner, neutral status
+badges, "Technical details" intact), Skills (teal "Import skill…", dark-teal "Enabled" switches), Settings
+(segmented controls neutral, switch-on dark-teal track), Privacy (calm, no red/alarm). Confirmed against
+§7 acceptance: teal restrained (no teal surfaces), **success stays green / warnings amber / errors red**,
+no teal text on a light surface (links are the dark teal), marks correct + undistorted, dark-bg nudge
+clean, DE labels fit. **Walk now loops locales** via `updateSettings({uiLanguage})` + reload (EN applies
+correctly post-unlock; the gate itself is OS-locale-bound pre-unlock). **Verify:** typecheck + build
+clean; full vitest from `apps/desktop` **1852 passed / 27 skipped** (no test changes — the Waveform
+fallback isn't asserted). **Next: BR5** — package icon/favicon smoke (consumes BR1 output; confirm
+`build/icon.ico` opens with all sizes + the favicon shows), then **BR6** — fold the condensed brand-refresh
+record into `design-guidelines.md`, update this file, delete the plan file. **(prior entries below.)**_
+
 _2026-06-19 — **Brand refresh BR3 landed — the `◈` placeholder is gone; the sealed-room `BrandMark`
 is wired into the rail + gate.** Branch `design-adjustments`; plan
 [`docs/brand-refresh-plan.md`](docs/brand-refresh-plan.md) phase BR3 of BR1–BR6 (WORKING PAPER — BR4
