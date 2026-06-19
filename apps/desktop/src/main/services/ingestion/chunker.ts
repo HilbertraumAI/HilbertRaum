@@ -101,6 +101,22 @@ export function approxTokenCount(text: string): number {
   return tokens
 }
 
+/**
+ * Approx token cost of a single whitespace-free WORD (ING-10, perf audit 2026-06-18).
+ * A word has no internal whitespace, so when it contains no space-less-script char it is
+ * exactly ONE token group: `len <= ONE_TOKEN_WORD_CHARS ? 1 : ceil(len / CHARS_PER_TOKEN)` —
+ * byte-identical to `approxTokenCount(word)` but skipping its `replace()` + `split()` passes
+ * (the per-word path runs once per word across a whole document). A word that DOES contain a
+ * space-less char (mixed-script, rare) falls back to the full counter so the estimate stays
+ * exactly the same. The single `match()` here is the same one `approxTokenCount` runs first.
+ */
+function wordTokenCount(word: string): number {
+  if (word.match(SPACELESS_SCRIPT_RE) === null) {
+    return word.length <= ONE_TOKEN_WORD_CHARS ? 1 : Math.ceil(word.length / CHARS_PER_TOKEN)
+  }
+  return approxTokenCount(word)
+}
+
 /** One atom of text for windowing: a substring plus its approx token cost. */
 interface TokenAtom {
   text: string
@@ -118,7 +134,7 @@ function atomize(text: string, maxAtomTokens: number): TokenAtom[] {
   const atoms: TokenAtom[] = []
   for (const word of text.split(/\s+/)) {
     if (word.length === 0) continue
-    const tokens = approxTokenCount(word)
+    const tokens = wordTokenCount(word)
     if (tokens <= cap) {
       atoms.push({ text: word, tokens })
       continue
@@ -189,6 +205,14 @@ function clampInt(value: number, min: number, max: number): number {
 /** Merge consecutive segments that share the same page/section labels (see module note). */
 function coalesceSegments(segments: ExtractedSegment[]): ExtractedSegment[] {
   const out: ExtractedSegment[] = []
+  // ING-9 (perf audit 2026-06-18): accumulate each group's parts in a string[] and `join`
+  // ONCE when the group ends, instead of `prev.text = prev.text + '\n\n' + segment.text` per
+  // member (an O(total chars) reallocation per group — accumulate-by-concat). Byte-identical:
+  // `[a, b, c].join('\n\n')` === `a + '\n\n' + b + '\n\n' + c`.
+  let parts: string[] = []
+  const flush = (): void => {
+    if (out.length > 0 && parts.length > 1) out[out.length - 1].text = parts.join('\n\n')
+  }
   for (const segment of segments) {
     const prev = out[out.length - 1]
     if (
@@ -196,11 +220,14 @@ function coalesceSegments(segments: ExtractedSegment[]): ExtractedSegment[] {
       (prev.pageNumber ?? null) === (segment.pageNumber ?? null) &&
       (prev.sectionLabel ?? null) === (segment.sectionLabel ?? null)
     ) {
-      prev.text = `${prev.text}\n\n${segment.text}`
+      parts.push(segment.text)
     } else {
+      flush()
       out.push({ ...segment })
+      parts = [segment.text]
     }
   }
+  flush()
   return out
 }
 

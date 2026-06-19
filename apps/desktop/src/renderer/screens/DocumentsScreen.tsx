@@ -528,9 +528,12 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
     }
   }
 
-  /** A source document's title for a provenance line (the source may be gone). */
+  /** A source document's title for a provenance line (the source may be gone). FE-8: resolve via
+   *  the `sourcesById` Map instead of a linear `docs.find` per provenance line (called once per
+   *  generated row + the preview modal). Only ever invoked during row/modal render, after the
+   *  `sourcesById` const below is initialized. */
   function titleOf(id: string): string {
-    return docs?.find((x) => x.id === id)?.title ?? t('docs.removedDocFallback')
+    return sourcesById.get(id)?.title ?? t('docs.removedDocFallback')
   }
 
   /**
@@ -588,6 +591,13 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
   // Source lookup for the generated-staleness derivation (plan §15.3) — pure, off the
   // already-listed fields; no extra read, no hot-path write.
   const sourcesById = useMemo(() => new Map((docs ?? []).map((d) => [d.id, d])), [docs])
+
+  // FE-8 (perf audit 2026-06-18): resolve the previewed document ONCE (Map lookup) instead of six
+  // linear `docs.find(x => x.id === preview.id)` scans across the PreviewModal props below.
+  const previewDoc = useMemo(
+    () => (preview ? (sourcesById.get(preview.id) ?? null) : null),
+    [preview, sourcesById]
+  )
 
   // The section-filtered, optionally-reordered list — recomputed only when the docs or the
   // selected section change (FE-2). "Recently added" is an ordering, not a membership predicate
@@ -1418,24 +1428,19 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
       {preview && (
         <PreviewModal
           preview={preview}
-          ocr={docs?.find((x) => x.id === preview.id)?.ocr ?? null}
-          summary={docs?.find((x) => x.id === preview.id)?.summary ?? null}
-          treeReady={docs?.find((x) => x.id === preview.id)?.treeStatus === 'ready'}
-          originLine={(() => {
-            const d = docs?.find((x) => x.id === preview.id)
-            return d ? provenanceLine(d) : null
-          })()}
+          ocr={previewDoc?.ocr ?? null}
+          summary={previewDoc?.summary ?? null}
+          treeReady={previewDoc?.treeStatus === 'ready'}
+          originLine={previewDoc ? provenanceLine(previewDoc) : null}
           regenerateDisabled={busy !== null || activeTask !== null}
           onLoadMore={onPreviewLoadMore}
           onRegenerate={() => {
-            const d = docs?.find((x) => x.id === preview.id)
             setPreview(null)
-            if (d) void onSummarize(d)
+            if (previewDoc) void onSummarize(previewDoc)
           }}
           onSelectTier={(tier) => {
-            const d = docs?.find((x) => x.id === preview.id)
             setPreview(null)
-            if (d) void onSummarizeTier(d, tier)
+            if (previewDoc) void onSummarizeTier(previewDoc, tier)
           }}
           onClose={() => setPreview(null)}
         />

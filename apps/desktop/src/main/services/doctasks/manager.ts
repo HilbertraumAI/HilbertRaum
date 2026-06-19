@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { t, type MessageKey } from '../../../shared/i18n'
 import { tMain } from '../i18n'
@@ -809,7 +810,7 @@ export class DocTaskManager {
     if (!doc) throw new Error(tMain('main.task.ocrNotAScan'))
     const signal = task.controller.signal
 
-    const pdf = this.readStoredPdfBytes(documentId)
+    const pdf = await this.readStoredPdfBytes(documentId)
     const pages: OcrPage[] = []
     try {
       await rasterize(pdf, {
@@ -879,7 +880,7 @@ export class DocTaskManager {
    * to a `.parse-ocr.pdf` transient (covered by the startup crash sweep) that is
    * shredded before returning — only the in-memory Buffer leaves this method.
    */
-  private readStoredPdfBytes(documentId: string): Buffer {
+  private async readStoredPdfBytes(documentId: string): Promise<Buffer> {
     const db = this.deps.getDb()
     const row = db
       .prepare('SELECT title, stored_path, original_path FROM documents WHERE id = ?')
@@ -889,21 +890,23 @@ export class DocTaskManager {
     if (!row) throw new Error(tMain('main.task.sourceUnreadable'))
     const cipher = this.deps.getIngestionDeps().cipher ?? null
     try {
+      // ING-8 (perf audit 2026-06-18): read the (potentially huge, up to ~1 GiB) PDF with async
+      // `readFile` so the bytes stream off the main event loop instead of a blocking `readFileSync`.
       if (row.stored_path && existsSync(row.stored_path)) {
         if (row.stored_path.endsWith(ENCRYPTED_DOC_SUFFIX)) {
           if (!cipher) throw new Error(tMain('main.task.sourceUnreadable'))
           const transient = join(this.deps.getStoreDir(), `${documentId}.parse-ocr.pdf`)
           try {
             cipher.decryptFile(row.stored_path, transient)
-            return readFileSync(transient)
+            return await readFile(transient)
           } finally {
             shredFile(transient)
           }
         }
-        return readFileSync(row.stored_path)
+        return await readFile(row.stored_path)
       }
       if (row.original_path && existsSync(row.original_path)) {
-        return readFileSync(row.original_path)
+        return await readFile(row.original_path)
       }
     } catch (err) {
       log.warn('OCR source read failed', {
@@ -1452,6 +1455,13 @@ export class DocTaskManager {
     const tempPath = join(storeDir, `${task.status.jobId}.parse.md`)
     let newDocId: string | null = null
     try {
+      // ING-6 (perf audit 2026-06-18): the in-RAM `markdown` is written to a temp `.parse.md`
+      // and re-read/re-parsed/re-chunked by the canonical import path below. This disk round-trip
+      // + redundant parse is DELIBERATE, not an oversight: routing the generated output through
+      // the SAME `createQueuedDocument` → `processDocument` pipeline gets encryption-at-rest, the
+      // FTS trigger, citations, and the crash-safe queue-time provenance stamp (DM-2) for free,
+      // and keeps ONE import code path. An in-memory ingestion entry would duplicate all of that;
+      // add it only if profiling shows this round-trip matters (the embed pass dominates anyway).
       writeFileSync(tempPath, markdown, 'utf8')
       // Stamp the generated provenance AT QUEUE TIME, before processDocument can flip the
       // row to `indexed`. A process kill between `indexed` and a later origin-write would
