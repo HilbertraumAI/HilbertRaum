@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { t } from '../../shared/i18n'
-import type { Db } from './db'
+import { type Db, prepareCached } from './db'
 import {
   SEARCH_MARK_END,
   SEARCH_MARK_START,
@@ -398,15 +398,13 @@ export function updateConversationScope(
 
 /** List conversations, most recently updated first. */
 export function listConversations(db: Db): Conversation[] {
-  const rows = db
-    .prepare('SELECT * FROM conversations ORDER BY updated_at DESC, rowid DESC')
+  const rows = prepareCached(db, 'SELECT * FROM conversations ORDER BY updated_at DESC, rowid DESC')
     .all() as unknown as ConversationRow[]
   return rows.map(rowToConversation)
 }
 
 export function getConversation(db: Db, conversationId: string): Conversation | null {
-  const row = db
-    .prepare('SELECT * FROM conversations WHERE id = ?')
+  const row = prepareCached(db, 'SELECT * FROM conversations WHERE id = ?')
     .get(conversationId) as unknown as ConversationRow | undefined
   return row ? rowToConversation(row) : null
 }
@@ -416,13 +414,12 @@ export function getConversation(db: Db, conversationId: string): Conversation | 
  * millisecond resolution, so `rowid` is the tiebreaker that guarantees turn order.
  */
 export function listMessages(db: Db, conversationId: string): Message[] {
-  const rows = db
-    .prepare(
-      `SELECT m.*, s.title AS skill_title
+  const rows = prepareCached(
+    db,
+    `SELECT m.*, s.title AS skill_title
        FROM messages m LEFT JOIN skills s ON s.install_id = m.skill_id
        WHERE m.conversation_id = ? ORDER BY m.created_at ASC, m.rowid ASC`
-    )
-    .all(conversationId) as unknown as MessageRow[]
+  ).all(conversationId) as unknown as MessageRow[]
   return rows.map(rowToMessage)
 }
 
@@ -475,7 +472,8 @@ export function appendMessage(db: Db, input: AppendMessageInput): Message {
     autoFired,
     coverage: input.coverage ?? undefined
   }
-  db.prepare(
+  prepareCached(
+    db,
     `INSERT INTO messages (id, conversation_id, role, content, created_at, token_count, citations_json, skill_id, auto_fired, coverage_json)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
@@ -490,7 +488,10 @@ export function appendMessage(db: Db, input: AppendMessageInput): Message {
     autoFired ? 1 : null,
     coverageJson
   )
-  db.prepare('UPDATE conversations SET updated_at = ? WHERE id = ?').run(now, input.conversationId)
+  prepareCached(db, 'UPDATE conversations SET updated_at = ? WHERE id = ?').run(
+    now,
+    input.conversationId
+  )
   return msg
 }
 

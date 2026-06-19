@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import type { Db } from './db'
+import { type Db, prepareCached } from './db'
 import type {
   Collection,
   CollectionType,
@@ -448,9 +448,10 @@ interface ScopeRow {
  * attachment. An empty composed scope (explicit "All documents") ⇒ whole corpus.
  */
 export function resolveScope(db: Db, conversationId: string): RetrievalScope {
-  const row = db
-    .prepare('SELECT scope_v2_json, scope_json, collection_id FROM conversations WHERE id = ?')
-    .get(conversationId) as unknown as ScopeRow | undefined
+  const row = prepareCached(
+    db,
+    'SELECT scope_v2_json, scope_json, collection_id FROM conversations WHERE id = ?'
+  ).get(conversationId) as unknown as ScopeRow | undefined
 
   let collectionIds: string[] = []
   let documentIds: string[] = []
@@ -479,9 +480,10 @@ export function resolveScope(db: Db, conversationId: string): RetrievalScope {
 
   // Rule 1: chat attachments are always unioned in (after the hasExplicitDocSelection flag
   // is fixed, so an attachment never masquerades as a hand-pick — N2).
-  const attachments = db
-    .prepare('SELECT document_id FROM conversation_documents WHERE conversation_id = ?')
-    .all(conversationId) as unknown as Array<{ document_id: string }>
+  const attachments = prepareCached(
+    db,
+    'SELECT document_id FROM conversation_documents WHERE conversation_id = ?'
+  ).all(conversationId) as unknown as Array<{ document_id: string }>
   for (const a of attachments) {
     if (!documentIds.includes(a.document_id)) documentIds.push(a.document_id)
   }

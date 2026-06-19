@@ -10,7 +10,7 @@ import {
 import { basename, extname, isAbsolute, join, relative, sep } from 'node:path'
 import { t } from '../../../shared/i18n'
 import { tMain } from '../i18n'
-import type { Db } from '../db'
+import { type Db, prepareCached } from '../db'
 import type {
   DocumentCollectionMembership,
   DocumentInfo,
@@ -1231,18 +1231,18 @@ export function reconcileStuckExtracts(db: Db, beforeIso: string): number {
  * unsearchable until re-indexed).
  */
 export function listDocuments(db: Db, activeEmbeddingModelId?: string | null): DocumentInfo[] {
-  const rows = db
-    .prepare("SELECT * FROM documents WHERE status != 'deleted' ORDER BY created_at DESC, rowid DESC")
-    .all() as unknown as DocumentRow[]
+  const rows = prepareCached(
+    db,
+    "SELECT * FROM documents WHERE status != 'deleted' ORDER BY created_at DESC, rowid DESC"
+  ).all() as unknown as DocumentRow[]
   // One join for every membership (document-organization plan §16/§18 — one extra indexed
   // join, not N+1), grouped by document for the per-row `collections` chips.
   const memberships = new Map<string, DocumentCollectionMembership[]>()
-  const memberRows = db
-    .prepare(
-      `SELECT dc.document_id AS documentId, c.id AS id, c.name AS name, c.type AS type, dc.role AS role
+  const memberRows = prepareCached(
+    db,
+    `SELECT dc.document_id AS documentId, c.id AS id, c.name AS name, c.type AS type, dc.role AS role
        FROM document_collections dc JOIN collections c ON c.id = dc.collection_id`
-    )
-    .all() as Array<{ documentId: string; id: string; name: string; type: string; role: string }>
+  ).all() as Array<{ documentId: string; id: string; name: string; type: string; role: string }>
   for (const m of memberRows) {
     const list = memberships.get(m.documentId) ?? []
     list.push({
@@ -1258,21 +1258,21 @@ export function listDocuments(db: Db, activeEmbeddingModelId?: string | null): D
   // polled during import) — mirroring the memberships join just above. A document absent from a
   // map has zero (no chunks / nothing embedded under the active model).
   const chunkCounts = new Map<string, number>()
-  for (const c of db
-    .prepare('SELECT document_id AS documentId, COUNT(*) AS n FROM chunks GROUP BY document_id')
-    .all() as Array<{ documentId: string; n: number }>) {
+  for (const c of prepareCached(
+    db,
+    'SELECT document_id AS documentId, COUNT(*) AS n FROM chunks GROUP BY document_id'
+  ).all() as Array<{ documentId: string; n: number }>) {
     chunkCounts.set(c.documentId, c.n)
   }
   const embeddedCounts = new Map<string, number>()
   if (activeEmbeddingModelId) {
-    for (const e of db
-      .prepare(
-        `SELECT c.document_id AS documentId, COUNT(*) AS n
+    for (const e of prepareCached(
+      db,
+      `SELECT c.document_id AS documentId, COUNT(*) AS n
          FROM embeddings e JOIN chunks c ON e.chunk_id = c.id
          WHERE e.embedding_model_id = ?
          GROUP BY c.document_id`
-      )
-      .all(activeEmbeddingModelId) as Array<{ documentId: string; n: number }>) {
+    ).all(activeEmbeddingModelId) as Array<{ documentId: string; n: number }>) {
       embeddedCounts.set(e.documentId, e.n)
     }
   }

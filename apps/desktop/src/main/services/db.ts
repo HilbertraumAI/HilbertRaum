@@ -15,6 +15,40 @@ const { DatabaseSync } = nodeRequire('node:sqlite') as typeof import('node:sqlit
 
 export type Db = InstanceType<typeof DatabaseSync>
 
+/** A compiled, reusable statement — `node:sqlite`'s `StatementSync`. */
+export type Stmt = ReturnType<Db['prepare']>
+
+// DB-5 — hot-path prepared-statement cache (perf audit 2026-06-18, Wave P5).
+//
+// node:sqlite re-parses AND re-plans the SQL text on every `db.prepare()`. The hottest read/
+// write paths run that parse+plan per chat turn (chat.ts listMessages/appendMessage/
+// getConversation/listConversations, collections.ts resolveScope ~2×/turn, the listDocuments
+// grouped counters), re-compiling the SAME static SQL each call. This caches one compiled
+// `StatementSync` per (Db, sql-text), keyed by the literal SQL string, so the compile happens
+// once per connection. A `StatementSync` is freely re-runnable with new bind params and `.all()`
+// fully materializes, so reuse is safe across calls. The WeakMap on `Db` lets the statements GC
+// with their connection (no leak across open/close of encrypted workspaces).
+//
+// HARD CONSTRAINT — call this ONLY with a CONSTANT SQL string. A statement whose text varies per
+// call (a dynamic `IN (?, ?, …)` arity, or any interpolated fragment) MUST stay on `db.prepare()`:
+// caching those would leak an unbounded number of cache entries AND bind the wrong arity. The
+// cache is keyed by exact text, so a one-off dynamic string would never even be reused.
+const statementCaches = new WeakMap<Db, Map<string, Stmt>>()
+
+export function prepareCached(db: Db, sql: string): Stmt {
+  let perDb = statementCaches.get(db)
+  if (!perDb) {
+    perDb = new Map<string, Stmt>()
+    statementCaches.set(db, perDb)
+  }
+  let stmt = perDb.get(sql)
+  if (!stmt) {
+    stmt = db.prepare(sql)
+    perDb.set(sql, stmt)
+  }
+  return stmt
+}
+
 // Schema mirrors spec §8. `IF NOT EXISTS` makes migration idempotent.
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS settings (
