@@ -6,6 +6,20 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-19 — **Context budgeting + conversation compaction — MERGED to `master`.**
+`git merge --no-ff context-window-compaction` (merge commit, master was the merge-base so the merge was
+conflict-free) brought Phases 0–2 + the close-out onto `master`: the merged 5 commits are `ae22ba6` (plan,
+since deleted), `37bc6aa` (Phases 0–1), `4dca3e3` (Phase 2 UX), `964e647` (the onCompaction test-mock
+typecheck fix), `279af21` (close-out + rag-design.md §15 record). **Verified on the merged tip:** `npm test`
+**1890 passed / 29 skipped (168 files)**, `npm run typecheck` + `npm run build` clean. **Harness note (not a
+regression):** vitest intermittently drops ~4 test files (32 tests) from a run under parallel-pool load —
+**silently, no error, the total just reads lower** (some feature-branch runs showed 1858/164 instead of the
+complete 1890/168). The true file total is 168 (all under `apps/desktop/tests`; 15 are env-gated
+`tests/manual` smoke skips). Every observed run was all-green; the swing is collection flakiness, pre-existing
+and branch-independent — but worth fixing the harness (e.g. pin the pool / fail on under-collection) so a
+future genuinely-dropped suite can't pass unnoticed. **NOT pushed; the `context-window-compaction` branch is
+left intact** (not deleted) per the user. **(prior entries below.)**_
+
 _2026-06-19 — **Context budgeting + conversation compaction — FEATURE CLOSED OUT (Phase 3 deferred per D-c).**
 Branch `context-window-compaction`. **Decision (with the user): do NOT build Phase 3 now** — the optional
 `/tokenize`-backed exact-count-near-threshold upgrade. Rationale: the word estimate is safe-biased (R9 —
