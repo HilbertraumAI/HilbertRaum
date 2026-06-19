@@ -6,6 +6,40 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-19 — **Brand refresh BR1 landed — sealed-room brand artwork vendored + the icon pipeline
+rewritten.** Branch `design-adjustments`; plan [`docs/brand-refresh-plan.md`](docs/brand-refresh-plan.md)
+phase BR1 of BR1–BR6 (still a WORKING PAPER — BR2 next). **Scope:** static brand assets + the
+`generate-icons.mjs` pipeline only; **no UI wiring yet** (the `◈` placeholder in `App.tsx:211` /
+`WorkspaceGate.tsx:155` stays until BR3), no tokens yet (BR2), no backend/IPC/schema/CSP touch.
+**§11 open questions resolved** (defaults per the plan): dark-bg nudge `#0f1115→#0E1319` = YES in BR2
+(drop only if a dark pairing regresses the new contrast test); `--brand-teal-dark` starts `#1B7F5F`,
+final hex picked by the BR2 token-contrast test; **commit `build/icon.{png,ico}`** (matches repo;
+packaging mustn't depend on running the generator); lockup-on-Home DEFERRED to the BR4 eyeball; og/PWA
+assets SKIPPED (web-only). **Assets:** the user dropped the kit SVGs into
+[`public/brand/`](apps/desktop/src/renderer/public/brand/); each was opened and the actual fill/stroke
+confirmed before the mandatory semantic rename (kit names are background-inverted — `mark-dark.svg` is a
+LIGHT square FOR dark bg). Final set in `public/brand/`: `mark-on-{light,dark}.svg` (in-app mark — dark
+ink `#11171F` / light ink `#E8EDF2` square + always-teal `#57D0A4` dot), `lockup-on-{light,dark}.svg`
+(mark + "Hilbert"+teal "Raum" wordmark), `mark-mono-{ink,white}.svg` (single-colour). The favicon →
+[`public/icon.svg`](apps/desktop/src/renderer/public/icon.svg) (filename + `index.html` `<link>`
+unchanged; theme-adaptive via an internal `@media prefers-color-scheme` that flips the square ink, dot
+always teal); the app-icon → [`build/icon.svg`](apps/desktop/build/icon.svg) (light square + teal dot on
+OPAQUE brand surface `#0E1319` — the OS icon carries its own background). **Pipeline rewrite:**
+[`scripts/generate-icons.mjs`](apps/desktop/scripts/generate-icons.mjs) dropped the `diamond()` /
+`ACCENT='#2f6fed'` geometry for a rounded-square (`arcTo` corners) + centre-dot render ported from the
+512-unit `build/icon.svg`, on the opaque surface; KEPT the offline `@napi-rs/canvas` draw + hand-assembled
+PNG-embedded `.ico` + `[16,24,32,48,64,128,256]` size set; regenerated + committed `build/icon.png` (512)
+and `build/icon.ico` (7 sizes, validated: type 1, PNG sig at first dir offset). `electron-builder.yml`
+needed NO change (filenames preserved). **Verify:** generator runs OFFLINE & writes a valid ico/png;
+512 PNG eyeballed (light square + teal dot on `#0E1319`); brand assets + favicon copied into the build
+output (`out/renderer/{brand/*,icon.svg}`); `npm run typecheck` + `npm run build` clean; full vitest from
+`apps/desktop` **1828 passed / 27 skipped** (incl. `packaging.test.ts` green after the pipeline change —
+its `@napi-rs/canvas` exclusion is unaffected). No screen-level visual change in BR1 → the Playwright
+eyeball walk is deferred (BR5 = the dedicated icon/favicon-in-window smoke). **Next: BR2** — add brand
+primitives to `tokens.css`, re-point `--accent*`/`--link`/`--focus`/`--row-selected-bar` to teal-derived
+values, teal-fill+dark-ink primary button, optional dark-bg nudge, + a NEW `token-contrast.test.ts` that
+pins every role pairing in both themes. **(prior entries below.)**_
+
 _2026-06-19 — **Full-doc-skills Phase 4 landed — invoice adoption + the plan folded into the design
 records + plan file deleted. The feature is now FULLY CLOSED OUT.** Branch `fix-use-full-doc-for-skills`.
 **Why:** Phase 3 wired the seam into chat with bank-statement as the first adopter; the seam is general

@@ -1,8 +1,10 @@
-<!-- HilbertRaum app icon — the brand mark (◈): a blue diamond outline with a small
-     filled diamond at its center, on a TRANSPARENT background (the blue reads on both
-     light and dark taskbars). Source of truth for the generated icon.png / icon.ico
-     (apps/desktop/scripts/generate-icons.mjs) and the renderer favicon. -->
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
-  <path d="M32 6 L58 32 L32 58 L6 32 Z" fill="none" stroke="#2f6fed" stroke-width="5" stroke-linejoin="round" />
-  <path d="M32 21 L43 32 L32 43 L21 32 Z" fill="#2f6fed" />
+<!-- HilbertRaum app icon — the brand mark in its app-icon treatment: a teal dot #57D0A4
+     at the centre of a sealed rounded square (light ink #E8EDF2) on an OPAQUE brand
+     surface #0E1319 (the OS icon carries its own background, unlike the transparent
+     in-app mark/favicon). Source of truth for the generated icon.png / icon.ico
+     (apps/desktop/scripts/generate-icons.mjs). Mirrors public/brand/app-icon.svg. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" fill="#0e1319"/>
+  <rect x="146" y="146" width="220" height="220" rx="66" fill="none" stroke="#e8edf2" stroke-width="26"/>
+  <circle cx="256" cy="256" r="29" fill="#57d0a4"/>
 </svg>
