@@ -215,6 +215,16 @@ export const en = {
   'chat.actions.save': 'Save',
   'chat.actions.saveTitle': 'Save this conversation as a file (stays local)',
 
+  // ---- Chat: context compaction (context-compaction plan §5.1–§5.3) ----
+  // The one-shot "summarizing…" status above the streaming bubble (§5.2).
+  'chat.compaction.inProgress': 'Summarizing earlier messages to free up context…',
+  // The transcript summary marker (§5.3, D-b) — a subtle divider, expandable to read the summary.
+  'chat.compaction.markerLabel': 'Earlier messages summarized',
+  'chat.compaction.viewSummary': 'Show the summary of earlier messages',
+  // The context-usage meter tooltip (§5.1). {used}/{window} are compact token counts ("6.4k").
+  'chat.context.usageTooltip': 'Context: {used} / {window} tokens (approximate)',
+  'chat.context.willSummarize': 'Older messages will be summarized to make room.',
+
   // ---- Chat: document scope (ScopePopover.tsx) ----
   // Truthful, calm scope copy: never "Using all 0 documents". Zero documents routes to
   // a "No documents yet · Add documents" affordance; "all" never shows a count.
@@ -663,6 +673,13 @@ export const en = {
   'settings.performance.autoStartHint':
     'On by default. The model selected on the AI Model screen is loaded in the background at ' +
     'launch (after unlock on encrypted workspaces) so Chat is ready without extra clicks.',
+  // ---- Settings: Chat / conversation compaction (context-compaction plan §5.4) ----
+  'settings.chat.title': 'Chat',
+  'settings.chatCompaction.label': 'Summarize older messages to free up context',
+  'settings.chatCompaction.help':
+    'On by default. When a long conversation approaches the model’s context limit, the older ' +
+    'messages are summarized once into a compact note — kept on this drive — instead of being ' +
+    'silently dropped. Turn off to keep only the most recent messages that fit.',
   'settings.developer.title': 'Developer',
   'settings.developer.toggle': 'Developer mode (allows plaintext workspace, unverified models)',
   'settings.developer.hint':

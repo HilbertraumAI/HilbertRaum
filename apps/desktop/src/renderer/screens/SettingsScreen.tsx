@@ -158,6 +158,16 @@ function GeneralTab(): JSX.Element {
       </div>
 
       <div className="card">
+        <h2>{t('settings.chat.title')}</h2>
+        <Switch
+          checked={settings.chatCompactionEnabled !== false}
+          onChange={(on) => void patch({ chatCompactionEnabled: on })}
+          label={t('settings.chatCompaction.label')}
+        />
+        <p className="hint">{t('settings.chatCompaction.help')}</p>
+      </div>
+
+      <div className="card">
         <h2>{t('settings.developer.title')}</h2>
         <Switch
           checked={settings.developerMode}

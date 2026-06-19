@@ -240,6 +240,13 @@ export const de: Record<keyof typeof en, string> = {
   'chat.actions.save': 'Speichern',
   'chat.actions.saveTitle': 'Diese Unterhaltung als Datei speichern (bleibt lokal)',
 
+  // ---- Chat: Kontext-Komprimierung (context-compaction plan §5.1–§5.3) ----
+  'chat.compaction.inProgress': 'Frühere Nachrichten werden zusammengefasst, um Platz zu schaffen…',
+  'chat.compaction.markerLabel': 'Frühere Nachrichten zusammengefasst',
+  'chat.compaction.viewSummary': 'Zusammenfassung der früheren Nachrichten anzeigen',
+  'chat.context.usageTooltip': 'Kontext: {used} / {window} Tokens (ungefähr)',
+  'chat.context.willSummarize': 'Ältere Nachrichten werden zusammengefasst, um Platz zu schaffen.',
+
   // ---- Chat: document scope ----
   'chat.scope.usingAll': 'Nutzt alle Dokumente',
   'chat.scope.usingSome.one': 'Nutzt {count} Dokument',
@@ -698,6 +705,14 @@ export const de: Record<keyof typeof en, string> = {
     'Standardmäßig an. Das im KI-Modell-Bereich ausgewählte Modell wird beim Start im ' +
     'Hintergrund geladen (bei verschlüsselten Arbeitsbereichen nach dem Entsperren), damit ' +
     'der Chat ohne weitere Klicks bereit ist.',
+  // ---- Einstellungen: Chat / Kontext-Komprimierung (context-compaction plan §5.4) ----
+  'settings.chat.title': 'Chat',
+  'settings.chatCompaction.label': 'Ältere Nachrichten zusammenfassen, um Kontext freizugeben',
+  'settings.chatCompaction.help':
+    'Standardmäßig an. Wenn eine lange Unterhaltung an die Kontextgrenze des Modells stößt, ' +
+    'werden die älteren Nachrichten einmalig zu einer kompakten Notiz zusammengefasst — auf ' +
+    'diesem Laufwerk gespeichert — statt unbemerkt verworfen zu werden. Schalte es aus, um nur ' +
+    'die neuesten Nachrichten zu behalten, die hineinpassen.',
   'settings.developer.title': 'Entwickler',
   'settings.developer.toggle':
     'Entwicklermodus (erlaubt unverschlüsselten Arbeitsbereich, ungeprüfte Modelle)',

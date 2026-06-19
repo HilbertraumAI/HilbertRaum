@@ -6,6 +6,42 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-19 — **Context budgeting + conversation compaction — Phase 2 (UX) landed.**
+Branch `context-window-compaction`. Implementing [`docs/context-compaction-plan.md`](docs/context-compaction-plan.md)
+(WORKING PAPER — Phase 3 optional `/tokenize` still open; §6 Phase 2 marked ✅ with the full as-built).
+Phase 2 is **additive UX + one settings gate** over the Phase-1 L2 mechanism — the summary pair /
+checkpoints are UNCHANGED. **As-built (files):** `shared/ipc.ts` — `STREAM.compaction(requestId)` +
+`CompactionNotice {phase:'start'}` (mirrors `STREAM.scope`), new read channels
+`getConversationContextUsage` + `getConversationSummary`. `ipc/chat-stream.ts` — `withChatStream`'s
+`runFn` gained a 4th arg `sendCompaction` (a `SendCompaction` notifier) beside `sendToken`/
+`sendReasoning`: isDestroyed-guarded but **NEVER buffered into `streamBuffers`** (R14, ephemeral); both
+IPC handlers wire it as `onCompactionStart` (`registerRagIpc` only on the grounded path). `preload` —
+`onCompaction` (mirrors `onScopeNotice`) + `getConversationContextUsage`/`getConversationSummary`.
+`services/chat.ts` — `compactionEnabled(db)` (the §5.4 gate), `getConversationContextUsage(db,
+runtime|null, convId)` (pure read: assembles via `buildChatMessages` over `effectiveContextWindow`, sums
+`messageTokens`; window falls back to `settings.contextTokens` with no runtime), `getConversationSummaryMarker`
+(computes `beforeMessageId` = first turn `rowid > coversThroughRowid`, since `Message` has no rowid).
+`shared/types.ts` — `ContextUsage`, `ConversationSummaryMarker`, `AppSettings.chatCompactionEnabled`
+(default **true**; the defaults-merge IS the migration — no schema change). Renderer: new
+`chat/ContextMeter.tsx` (thin composer-footer bar, calm/amber/near-full, approximate tooltip),
+`Transcript` gained an expandable `SummaryMarker` + the "summarizing…" notice above the streaming bubble,
+`ChatScreen` subscribes `onCompaction` (clears on first answer token + in `finally`) and refreshes the
+meter/marker on switch + post-turn, `SettingsScreen` General gained a "Chat" card with the toggle.
+en+de i18n keys added (parity green). **Data contracts:** `STREAM.compaction(id)`→`CompactionNotice`;
+`getConversationContextUsage(convId)`→`ContextUsage|null`; `getConversationSummary(convId)`→
+`ConversationSummaryMarker|null`. **§5.4 gate behaviour (chosen + documented):** `chatCompactionEnabled=false`
+⇒ no new checkpoints AND assembly + the marker reader IGNORE any existing checkpoint (full-history replay,
+pure L1) = byte-identical to the pre-feature app. **§5.1 deviation (documented):** the usage rides the
+resting IPC for BOTH the resting state and the post-turn refresh (the renderer awaits the invoke + re-reads
+history, never consumes `onDone`, and `done` is the locked Message contract) — the locked streaming
+contract is left untouched. **Invariants held:** no new network surface; the compaction notice is
+ephemeral (R14); all user-visible strings via `shared/i18n` (en+de), internal prompts English.
+**Verification:** `npm test` **1890 passed / 29 skipped** (+12: new
+`tests/integration/chat-compaction-ux.test.ts`, `tests/integration/chat-compaction-ipc.test.ts`,
+`tests/renderer/ChatCompaction.test.tsx`); typecheck + `npm run build` clean. NOT committed (awaiting the
+user's go). **Next: Phase 3 (optional)** — `/tokenize`-backed exact counts near the threshold. **(prior
+entries below.)**_
+
 _2026-06-19 — **Context budgeting + conversation compaction — Phase 1 (compaction core) landed.**
 Branch `context-window-compaction`. Implementing [`docs/context-compaction-plan.md`](docs/context-compaction-plan.md)
 (WORKING PAPER — Phases 2–3 still open; §6 Phase 1 marked ✅ with the full as-built). **L2 — summary

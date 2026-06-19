@@ -6,6 +6,8 @@ import {
   type ChatOptions,
   type Conversation,
   type ConversationSearchResult,
+  type ConversationSummaryMarker,
+  type ContextUsage,
   type DocumentScope,
   type Message
 } from '../../shared/types'
@@ -16,6 +18,9 @@ import {
   deleteLastAssistantMessage,
   exportTranscript,
   generateAssistantMessage,
+  getConversation,
+  getConversationContextUsage,
+  getConversationSummaryMarker,
   listConversations,
   listMessages,
   maybeSetTitleFromFirstMessage,
@@ -164,6 +169,27 @@ export function registerChatIpc(ctx: AppContext): void {
     listMessages(ctx.db, conversationId)
   )
 
+  // Resting-state context-window usage for the composer meter (context-compaction plan §5.1).
+  // Read-only, no model call: the assembled-prompt estimate over the launched window. Falls back to
+  // settings.contextTokens when no runtime is up. Returns null for an unknown conversation so the
+  // renderer hides the meter rather than showing a system-prompt-only sliver for a vanished chat.
+  ipcMain.handle(
+    IPC.getConversationContextUsage,
+    (_e, conversationId: string): ContextUsage | null => {
+      if (!getConversation(ctx.db, conversationId)) return null
+      return getConversationContextUsage(ctx.db, ctx.runtime.active(), conversationId)
+    }
+  )
+
+  // The transcript summary marker (context-compaction plan §5.3, D-b): the latest checkpoint's
+  // summary + where the divider sits, or null when none / compaction is disabled. The summary is
+  // local context — this read is never logged or audited (chat content, like listMessages).
+  ipcMain.handle(
+    IPC.getConversationSummary,
+    (_e, conversationId: string): ConversationSummaryMarker | null =>
+      getConversationSummaryMarker(ctx.db, conversationId)
+  )
+
   ipcMain.handle(
     IPC.sendChatMessage,
     async (
@@ -217,14 +243,17 @@ export function registerChatIpc(ctx: AppContext): void {
         event,
         conversationId,
         'Chat generation failed',
-        (signal, sendToken, sendReasoning) =>
+        (signal, sendToken, sendReasoning, sendCompaction) =>
           generateAssistantMessage(ctx.db, runtime, conversationId, {
             signal,
             mode,
             skill,
             onToken: sendToken,
             // sendReasoning emits the reasoning event AND buffers it for stream recovery.
-            onReasoning: sendReasoning
+            onReasoning: sendReasoning,
+            // Fires the one-shot ephemeral "summarizing…" notice when the compaction pre-pass
+            // starts (§5.2); isDestroyed-guarded inside withChatStream, never buffered (R14).
+            onCompactionStart: sendCompaction
           }),
         () => ctx.docTasks?.acquireChatSlot() ?? Promise.resolve(() => {})
       )

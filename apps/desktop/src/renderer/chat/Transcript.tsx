@@ -1,10 +1,10 @@
-import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { Fragment, memo, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import type { Message } from '@shared/types'
+import type { ConversationSummaryMarker, Message } from '@shared/types'
 import { MessageActions } from './MessageActions'
 import { SourcesDisclosure } from './SourcesDisclosure'
-import { CoverageMeter, Icon } from '../components'
+import { CoverageMeter, Icon, Spinner } from '../components'
 import { localizeServerCopy } from '../lib/displayMap'
 import { useT, type I18n } from '../i18n'
 
@@ -42,6 +42,18 @@ interface TranscriptProps {
    * falling back to the stamped canonical title. Optional — when absent the stamped title is shown.
    */
   resolveSkillTitle?: (installId: string | null | undefined, fallbackTitle: string) => string
+  /**
+   * True while the context-compaction pre-pass is summarizing earlier messages for THIS turn
+   * (context-compaction plan §5.2) — a quiet status line above the streaming bubble. Ephemeral:
+   * cleared by the parent on the first answer token.
+   */
+  compacting?: boolean
+  /**
+   * The latest compaction summary + where its transcript marker sits (context-compaction §5.3,
+   * D-b). The "⌄ Earlier messages summarized" divider renders before the message whose id matches
+   * `beforeMessageId`; expandable to read the summary. Absent/null ⇒ no marker.
+   */
+  summaryMarker?: ConversationSummaryMarker | null
 }
 
 // Memoized (perf audit FE-3): ChatScreen re-renders on every keystroke (input state) and every
@@ -61,7 +73,9 @@ export const Transcript = memo(function Transcript({
   onCopy,
   onSave,
   actionsDisabled,
-  resolveSkillTitle
+  resolveSkillTitle,
+  compacting,
+  summaryMarker
 }: TranscriptProps): JSX.Element {
   const { t } = useT()
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -98,19 +112,32 @@ export const Transcript = memo(function Transcript({
             once and never mutates), so a streaming flush — which only changes `streamText` on the
             live bubble below — never re-parses a prior message's Markdown (perf audit FE-1). */}
         {messages.map((m) => (
-          <MessageBlock
-            key={m.id}
-            m={m}
-            t={t}
-            isLast={m.id === lastAssistantId}
-            onTryAgain={onTryAgain}
-            onAnswerWithoutSkill={onAnswerWithoutSkill}
-            onCopy={onCopy}
-            onSave={onSave}
-            actionsDisabled={actionsDisabled}
-            resolveSkillTitle={resolveSkillTitle}
-          />
+          <Fragment key={m.id}>
+            {/* The summary divider (§5.3, D-b) renders just before the first turn the checkpoint
+                does NOT subsume — "everything above was condensed for the model; below is verbatim". */}
+            {summaryMarker && summaryMarker.beforeMessageId === m.id && (
+              <SummaryMarker summary={summaryMarker.summary} t={t} />
+            )}
+            <MessageBlock
+              m={m}
+              t={t}
+              isLast={m.id === lastAssistantId}
+              onTryAgain={onTryAgain}
+              onAnswerWithoutSkill={onAnswerWithoutSkill}
+              onCopy={onCopy}
+              onSave={onSave}
+              actionsDisabled={actionsDisabled}
+              resolveSkillTitle={resolveSkillTitle}
+            />
+          </Fragment>
         ))}
+        {/* §5.2: quiet "summarizing earlier messages…" status above the streaming bubble; the parent
+            clears `compacting` on the first answer token. Uses the spinner status vocabulary. */}
+        {compacting && streamingHere && (
+          <div className="chat-compaction-notice" role="status">
+            <Spinner /> {t('chat.compaction.inProgress')}
+          </div>
+        )}
         {streamingHere && (
           <div className="msg-block assistant">
             <div className="msg assistant">
@@ -274,6 +301,35 @@ const MessageBlock = memo(function MessageBlock({
     </div>
   )
 })
+
+/**
+ * The transcript summary marker (context-compaction plan §5.3, D-b): a subtle, non-bubble divider
+ * where a compaction checkpoint sits — "⌄ Earlier messages summarized" — expandable to read the
+ * checkpoint summary text. Makes the compression visible + auditable (the user confirms context was
+ * condensed, not lost), matching the honest/local/nothing-hidden posture. The summary is the same
+ * conversation-language text the model received; it never leaves the device. An aria-expanded
+ * button (the SourcesDisclosure pattern), not a native <details>.
+ */
+function SummaryMarker({ summary, t }: { summary: string; t: I18n['t'] }): JSX.Element {
+  const [open, setOpen] = useState(false)
+  return (
+    <div className="chat-summary-marker">
+      <button
+        type="button"
+        className="chat-summary-marker-toggle"
+        aria-expanded={open}
+        title={t('chat.compaction.viewSummary')}
+        onClick={() => setOpen((v) => !v)}
+      >
+        <span className="chat-summary-marker-chevron" aria-hidden="true">
+          {open ? '⌄' : '›'}
+        </span>
+        <span className="chat-summary-marker-label">{t('chat.compaction.markerLabel')}</span>
+      </button>
+      {open && <div className="chat-summary-marker-text">{summary}</div>}
+    </div>
+  )
+}
 
 /** Localized role chip; unknown roles (defensive) render as-is. */
 function roleLabel(role: string, t: I18n['t']): string {

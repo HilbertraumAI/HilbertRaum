@@ -22,6 +22,7 @@ import {
   BASE_SYSTEM_PROMPT,
   CHAT_RESPONSE_RESERVE_TOKENS,
   collapseToAlternating,
+  compactionEnabled,
   compactionSummaryPair,
   effectiveContextWindow,
   emptyAssistantMessage,
@@ -403,8 +404,9 @@ export function buildGroundedChatMessages(
   // user→assistant pair (§4.5) and replay only the turns AFTER it; otherwise replay the whole
   // history (byte-identical to before). The checkpoint is built from the STORED RAW turns
   // (R-RAG) — never this transient grounded prompt — and the live final grounded turn below stays
-  // mandatory in fitMessagesToContext, so the question + [Sn] excerpts are always present.
-  const checkpoint = getLatestCheckpoint(db, conversationId)
+  // mandatory in fitMessagesToContext, so the question + [Sn] excerpts are always present. The §5.4
+  // toggle gates the read too: when off, any existing checkpoint is ignored (full-history replay).
+  const checkpoint = compactionEnabled(db) ? getLatestCheckpoint(db, conversationId) : null
   if (checkpoint) messages.push(...compactionSummaryPair(checkpoint.summary))
   const history = listConversationTurns(db, conversationId, checkpoint?.coversThroughRowid ?? 0)
   for (let i = 0; i < history.length; i++) {
@@ -519,11 +521,14 @@ export async function generateGroundedAnswer(
   // L2 (context compaction): summarize older raw turns into a cached checkpoint when the history
   // approaches the window, BEFORE assembly. The checkpoint is built from the stored raw turns, never
   // this grounded prompt (R-RAG). A no-op below threshold; any failure/abort falls back to L1 with no
-  // error. Runs after the no-context early return (no model call ⇒ nothing to compact for).
-  await ensureCompacted(db, runtime, conversationId, contextTokens, {
-    signal: opts.signal,
-    onStart: opts.onCompactionStart
-  })
+  // error. Runs after the no-context early return (no model call ⇒ nothing to compact for). Gated by
+  // the §5.4 toggle: when off, no checkpoint is created and assembly ignores any existing one.
+  if (compactionEnabled(db)) {
+    await ensureCompacted(db, runtime, conversationId, contextTokens, {
+      signal: opts.signal,
+      onStart: opts.onCompactionStart
+    })
+  }
   let skillFence: string | null = null
   if (opts.skill) {
     // RT-2: the grounding rules moved into the system prompt, so size the fence against

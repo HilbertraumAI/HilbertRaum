@@ -4,7 +4,9 @@ import {
   DOC_TASK_BUSY_MESSAGE,
   type ChatDepthMode,
   type Collection,
+  type ContextUsage,
   type Conversation,
+  type ConversationSummaryMarker,
   type DocumentInfo,
   type DocumentScope,
   type Message,
@@ -26,7 +28,7 @@ import { friendlyIpcError } from '../lib/errors'
 import { RUNTIME_POLL_MS, STREAM_RECOVER_POLL_MS } from '../lib/polling'
 import { useT } from '../i18n'
 import { Button, Chip, EmptyState, ErrorBanner, SegmentedControl, Spinner, useToast } from '../components'
-import { Composer, ConversationList, DepthMenu, ScopePopover, SkillPicker, SkillRunBar, Transcript } from '../chat'
+import { Composer, ContextMeter, ConversationList, DepthMenu, ScopePopover, SkillPicker, SkillRunBar, Transcript } from '../chat'
 import type { MessageKey } from '@shared/i18n'
 
 // Chat screen (spec §7.6 / §7.8; layout per design-guidelines §3). The
@@ -120,6 +122,15 @@ export function ChatScreen({
   /** Which conversation the live stream belongs to: the bubble renders, and the
    *  completion refresh applies, only when this still matches the visible conversation. */
   const [streamConvId, setStreamConvId] = useState<string | null>(null)
+  /** True while the context-compaction pre-pass is summarizing earlier messages for the live turn
+   *  (context-compaction §5.2). Ephemeral: set on the STREAM.compaction notice, cleared on the
+   *  first answer token + in the stream's finally. Never persisted, lost on remount (R14). */
+  const [compacting, setCompacting] = useState(false)
+  /** Resting context-window usage for the composer meter (§5.1); null hides it. Refreshed on
+   *  conversation switch + after each completed turn. */
+  const [contextUsage, setContextUsage] = useState<ContextUsage | null>(null)
+  /** The latest compaction summary + its transcript marker position (§5.3, D-b); null hides it. */
+  const [summaryMarker, setSummaryMarker] = useState<ConversationSummaryMarker | null>(null)
   // True while RECOVERING an in-flight generation that this component instance did not
   // start — the user sent a message, navigated away (unmounting the screen + its token
   // listeners), and came back while the model is still responding. Drives the same
@@ -318,6 +329,31 @@ export function ChatScreen({
     return () => clearInterval(timer)
   }, [runtimeRunning, checkRuntime])
 
+  // Context-window meter + transcript summary marker (context-compaction §5.1/§5.3). Both are
+  // resting-state reads, refreshed on conversation switch and after each completed turn (live is
+  // not required). Best-effort: a failed read (or an older preload missing the channel) just hides
+  // the affordance. `getConversationContextUsage`/`getConversationSummary` may be absent on an old
+  // bridge — the optional-call guard + a null result both fall through to "hidden".
+  const refreshContextInfo = useCallback(async (convId: string | null): Promise<void> => {
+    if (!convId) {
+      setContextUsage(null)
+      setSummaryMarker(null)
+      return
+    }
+    try {
+      const usage = (await window.api.getConversationContextUsage?.(convId)) ?? null
+      setContextUsage(usage)
+    } catch {
+      setContextUsage(null)
+    }
+    try {
+      const marker = (await window.api.getConversationSummary?.(convId)) ?? null
+      setSummaryMarker(marker)
+    } catch {
+      setSummaryMarker(null)
+    }
+  }, [])
+
   // Load history when the active conversation changes.
   useEffect(() => {
     if (!activeId) {
@@ -328,7 +364,8 @@ export function ChatScreen({
       .listMessages(activeId)
       .then(setMessages)
       .catch((e) => setError(friendlyIpcError(e)))
-  }, [activeId])
+    void refreshContextInfo(activeId)
+  }, [activeId, refreshContextInfo])
 
   // Load the conversation's chat attachments (plan C3) when it changes. Best-effort: a
   // failed load (or an older preload without the channel) just hides the affordance.
@@ -395,6 +432,8 @@ export function ChatScreen({
                 if (!cancelled && activeIdRef.current === activeId) setMessages(m)
               })
               .catch(() => undefined)
+            // A recovered turn may have cut a fresh checkpoint / changed fullness — refresh both.
+            void refreshContextInfo(activeId)
             setStreamConvId(null)
             setStreamText('')
             setStreamThinking('')
@@ -410,7 +449,7 @@ export function ChatScreen({
       cancelled = true
       stopPolling()
     }
-  }, [activeId, streaming])
+  }, [activeId, streaming, refreshContextInfo])
 
   function setListCollapsedPersistent(collapsed: boolean): void {
     setListCollapsed(collapsed)
@@ -616,17 +655,24 @@ export function ChatScreen({
     setStreamText('')
     setStreamThinking('')
     setThinkingOpen(false)
+    setCompacting(false)
     answerStarted.current = false
     stopped.current = false
     const unsubscribe = window.api.onToken(convId, (token) => {
-      // The first answer token auto-collapses an expanded Thinking… line.
+      // The first answer token auto-collapses an expanded Thinking… line and clears the
+      // "summarizing…" notice (§5.2 — the summary, if any, is done once tokens flow).
       if (!answerStarted.current) {
         answerStarted.current = true
         setThinkingOpen(false)
+        setCompacting(false)
       }
       pendingTokens.current += token
       scheduleFlush()
     })
+    // One-shot ephemeral "summarizing earlier messages…" notice (§5.2). The optional-chained CALL
+    // tolerates an older bridge; the result is unused there (no unsubscribe needed). Cleared on the
+    // first token (above) and in finally. Never recovered on remount (R14).
+    const unsubscribeCompaction = window.api.onCompaction?.(convId, () => setCompacting(true))
     // Deep-mode reasoning deltas feed the live "Thinking…" line. They are
     // a separate channel from answer tokens and are never part of the persisted reply.
     const unsubscribeReasoning = window.api.onReasoning(convId, (delta) => {
@@ -665,6 +711,8 @@ export function ChatScreen({
       // Re-read the persisted history (includes the user turn + final assistant reply).
       await refreshIfVisible()
       await refreshConversations()
+      // The turn may have cut a fresh checkpoint and changed fullness — refresh the meter + marker.
+      if (activeIdRef.current === convId) await refreshContextInfo(convId)
     } catch (e) {
       if (activeIdRef.current === convId) setError(friendlyIpcError(e))
       // Refresh so a partial (stopped) reply that was persisted still shows.
@@ -674,11 +722,13 @@ export function ChatScreen({
       unsubscribe()
       unsubscribeReasoning()
       unsubscribeScope()
+      unsubscribeCompaction?.()
       clearStreamBuffers()
       setStreaming(false)
       setStreamConvId(null)
       setStreamText('')
       setStreamThinking('')
+      setCompacting(false)
       // M-U2: confirm a user-requested stop so a truncated reply is not mistaken for a
       // complete one. Only when looking at THIS conversation (a background stream`s toast
       // would be confusing) and only if no error already explained the early end.
@@ -1095,6 +1145,8 @@ export function ChatScreen({
           onSave={handleSaveConversation}
           actionsDisabled={busyStreaming}
           resolveSkillTitle={resolveGlyphSkillTitle}
+          compacting={compacting && streamConvId === activeId}
+          summaryMarker={summaryMarker}
         />
 
         {/* Always-mounted alert region (audit M-U1) so the error is announced even on
@@ -1186,6 +1238,14 @@ export function ChatScreen({
                   suggestion={skillSuggestion}
                   onOpenChange={onSkillPickerOpenChange}
                 />
+              )}
+              {/* Context-window usage meter (§5.1): pushed to the right of the footer's quiet
+                  affordances. Shown for an existing conversation once usage is known; applies to
+                  both Chat and document answers. */}
+              {contextUsage && (
+                <span className="composer-footer-spacer">
+                  <ContextMeter usage={contextUsage} />
+                </span>
               )}
             </>
           }

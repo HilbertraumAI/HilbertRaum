@@ -223,6 +223,16 @@ export interface AppSettings {
    * are candidates and only when no skill is otherwise set (D5).
    */
   skillsAutoFireEnabled: boolean
+  // ---- Conversation compaction (context-compaction plan §5.4) ----
+  /**
+   * Whether the chat history is COMPACTED as it approaches the model's context window —
+   * older turns summarized once into a cached checkpoint and replayed as a compact note,
+   * instead of silently dropped (the L1 trim floor). DEFAULT TRUE: a visible, auditable
+   * summary is strictly better than silent forgetting, and every path fails safe to the L1
+   * floor. When false, behaviour is byte-identical to the pre-feature app — no checkpoints are
+   * created AND assembly ignores any existing checkpoint (pure L1, full-history replay).
+   */
+  chatCompactionEnabled: boolean
 }
 
 /** Appearance setting (see `AppSettings.theme`). */
@@ -263,7 +273,10 @@ export const DEFAULT_SETTINGS: AppSettings = {
   theme: 'system',
   uiLanguage: 'system',
   // Auto-fire is OPT-IN: off by default so S13b ships inert (the toggle to flip it is S13c).
-  skillsAutoFireEnabled: false
+  skillsAutoFireEnabled: false,
+  // Compaction is ON by default (D-a): silent drop-oldest is strictly worse than a visible,
+  // auditable summary, and every new path fails safe to today's L1 trim.
+  chatCompactionEnabled: true
 }
 
 // ---- GPU probe ----
@@ -1723,4 +1736,28 @@ export interface RuntimeStatus {
    * wastes capacity. Reported by `ModelRuntime.contextWindow()`; absent when not running.
    */
   contextWindow?: number
+}
+
+/**
+ * Context-window usage for the composer meter (context-compaction plan §5.1). `usedTokens` is the
+ * assembled-prompt ESTIMATE (the word-based over-counting estimate, sum over the final assembled
+ * message list — deliberately approximate, labelled as such in the UI); `window` is the real
+ * launched context window (`effectiveContextWindow`). The renderer derives the % + calm/amber/
+ * near-full tone from the two.
+ */
+export interface ContextUsage {
+  usedTokens: number
+  window: number
+}
+
+/**
+ * The transcript summary marker (context-compaction plan §5.3, D-b): the latest checkpoint's
+ * summary text plus `beforeMessageId` — the id of the first RENDERED turn the summary does not
+ * subsume, i.e. where the "⌄ Earlier messages summarized" divider sits (the renderer places it
+ * before that message). Null when no checkpoint has been cut. `beforeMessageId` is null only in the
+ * degenerate case where the checkpoint covers every currently-rendered turn.
+ */
+export interface ConversationSummaryMarker {
+  summary: string
+  beforeMessageId: string | null
 }

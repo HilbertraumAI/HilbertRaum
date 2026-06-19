@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import { EVENTS, IPC, STREAM, type ScopeNotice } from '../shared/ipc'
+import { EVENTS, IPC, STREAM, type CompactionNotice, type ScopeNotice } from '../shared/ipc'
 import type {
   ActiveStreamSnapshot,
   AppSettings,
@@ -8,8 +8,10 @@ import type {
   BenchmarkResult,
   ChatOptions,
   Collection,
+  ContextUsage,
   Conversation,
   ConversationSearchResult,
+  ConversationSummaryMarker,
   DocTaskStatus,
   DocumentCoverage,
   DocumentInfo,
@@ -199,6 +201,14 @@ const api = {
    *  conversation, best match first; snippets carry SEARCH_MARK_* highlight markers. */
   searchConversations: (query: string): Promise<ConversationSearchResult[]> =>
     ipcRenderer.invoke(IPC.searchConversations, query),
+  /** Resting-state context-window usage for the composer meter (context-compaction §5.1). The
+   *  assembled-prompt estimate over the launched window; null for an unknown conversation. */
+  getConversationContextUsage: (conversationId: string): Promise<ContextUsage | null> =>
+    ipcRenderer.invoke(IPC.getConversationContextUsage, conversationId),
+  /** The latest compaction summary + where its transcript marker sits (context-compaction §5.3),
+   *  or null when no checkpoint has been cut / compaction is disabled. */
+  getConversationSummary: (conversationId: string): Promise<ConversationSummaryMarker | null> =>
+    ipcRenderer.invoke(IPC.getConversationSummary, conversationId),
   /** Tail of the local log file (Diagnostics, spec §7.11). Local-only. */
   getLogTail: (): Promise<string[]> => ipcRenderer.invoke(IPC.getLogTail),
   /** Save the full local log to a user-chosen file (plaintext); path, or null on cancel. */
@@ -411,6 +421,14 @@ const api = {
   onScopeNotice: (requestId: string, cb: (notice: ScopeNotice) => void): (() => void) => {
     const ch = STREAM.scope(requestId)
     const handler = (_e: unknown, notice: ScopeNotice) => cb(notice)
+    ipcRenderer.on(ch, handler)
+    return () => ipcRenderer.removeListener(ch, handler)
+  },
+  /** Subscribe to the one-shot "summarizing earlier messages…" notice fired when the context
+   *  -compaction pre-pass starts for this turn (ephemeral, never persisted; §5.2). */
+  onCompaction: (requestId: string, cb: (notice: CompactionNotice) => void): (() => void) => {
+    const ch = STREAM.compaction(requestId)
+    const handler = (_e: unknown, notice: CompactionNotice) => cb(notice)
     ipcRenderer.on(ch, handler)
     return () => ipcRenderer.removeListener(ch, handler)
   },

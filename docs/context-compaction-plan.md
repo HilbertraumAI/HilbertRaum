@@ -370,7 +370,7 @@ our "honest, local, nothing hidden" posture. Keys: `chat.compaction.markerLabel`
     raw-turn checkpoint with live citations, and an old-DB migration + R8 FTS-exclusion round-trip.
     `npm test` **1878 passed / 29 skipped** (+15), typecheck + `npm run build` clean.
 
-**Phase 2 — UX (M).**
+**Phase 2 — UX (M). ✅ SHIPPED 2026-06-19.**
 - `shared/ipc.ts`: `STREAM.compaction`. `preload/index.ts`: `onCompaction`.
 - `ipc/chat-stream.ts`: thread an `onStart` notifier into the run fns (or pass `event` down) with the
   `isDestroyed()` guard.
@@ -379,6 +379,48 @@ our "honest, local, nothing hidden" posture. Keys: `chat.compaction.markerLabel`
 - Renderer: composer-footer meter, the inline "summarizing…" status line in `ChatScreen` +
   `Transcript`, the transcript summary marker, the settings toggle.
 - `shared/i18n/{en,de}.ts`: all keys from §5.
+- _As built:_
+  - **`STREAM.compaction(requestId)` + `CompactionNotice {phase:'start'}`** (`shared/ipc.ts`) mirror
+    `STREAM.scope`. `withChatStream` (`ipc/chat-stream.ts`) gained a 4th `runFn` arg `sendCompaction`
+    (a `SendCompaction` notifier) alongside `sendToken`/`sendReasoning` — isDestroyed-guarded, but
+    **never written to `streamBuffers`** (R14, ephemeral). Both IPC handlers pass it as
+    `onCompactionStart` into the Phase-1 plumbing (`registerChatIpc` plain chat; `registerRagIpc` the
+    grounded path only — the refusal/listing runFns make no model call so never fire it). Preload:
+    `onCompaction(requestId, cb)` mirrors `onScopeNotice`.
+  - **Context meter (§5.1).** New `ContextUsage {usedTokens, window}` (`shared/types.ts`) +
+    `getConversationContextUsage(db, runtime|null, convId)` (`chat.ts`): a pure read that assembles
+    via `buildChatMessages` over `effectiveContextWindow` (window falls back to `settings.contextTokens`
+    when no runtime) and sums `messageTokens` — the same over-counting estimate, labelled approximate.
+    Surfaced through the resting IPC `getConversationContextUsage`; the renderer refreshes it on
+    conversation switch + after each completed turn (the §5.1 "resting + post-turn refresh"). New
+    `renderer/chat/ContextMeter.tsx`: a thin footer bar, calm <75% / amber 75–90% / near-full ≥90%,
+    tooltip "Context: 6.4k / 8k tokens (approximate)" + the will-summarize line from the amber band.
+    **Deviation (documented):** §5.1 offers the usage on the `STREAM.done` payload OR the resting IPC;
+    chose the resting IPC for BOTH surfaces (the renderer awaits the invoke + re-reads history and does
+    not consume `onDone`, and `done` is the locked Message contract) — the locked streaming contract is
+    untouched.
+  - **Transcript marker (§5.3, D-b).** New `ConversationSummaryMarker {summary, beforeMessageId}` +
+    `getConversationSummaryMarker(db, convId)` (`chat.ts`): main computes `beforeMessageId` (the first
+    rendered turn with `rowid > coversThroughRowid`) since `Message` carries no rowid; null when no
+    checkpoint OR compaction disabled. Resting IPC `getConversationSummary`. `Transcript` renders an
+    expandable `SummaryMarker` (aria-expanded button, the SourcesDisclosure pattern) before that
+    message — reads the checkpoint text.
+  - **Settings toggle (§5.4).** `AppSettings.chatCompactionEnabled` default **true** (the defaults-merge
+    is the migration — no schema change). `compactionEnabled(db)` gates BOTH the `ensureCompacted`
+    pre-pass (no new checkpoints when off) AND the checkpoint READ in `buildChatMessages` /
+    `buildGroundedChatMessages` / `getConversationSummaryMarker` — **chosen behaviour: when off, any
+    existing checkpoint is ignored and the FULL history replays (pure L1) = byte-identical to the
+    pre-feature app**. Settings → General gains a "Chat" card with the toggle. The explicit
+    `contextTokens` cap is already respected (`effectiveContextWindow` only ever falls BACK to it).
+  - **i18n:** `chat.compaction.inProgress/markerLabel/viewSummary`, `chat.context.usageTooltip/
+    willSummarize`, `settings.chat.title`, `settings.chatCompaction.label/help` — en + de (parity test
+    green). Internal prompts stay English (Phase 1).
+  - **Tests:** `tests/integration/chat-compaction-ux.test.ts` (usage shape + growth + null-runtime
+    fallback; marker boundary/none/disabled; toggle-off assembly ignores the checkpoint + no checkpoint
+    created), `tests/integration/chat-compaction-ipc.test.ts` (`STREAM.compaction` fires exactly once
+    when summarizing, never below threshold), `tests/renderer/ChatCompaction.test.tsx` (meter tooltip/
+    tone, marker expand, notice shows + clears on first token). `npm test` **1890 passed / 29 skipped**
+    (+12), typecheck + `npm run build` clean.
 
 **Phase 3 — accuracy & polish (S, optional).**
 - `/tokenize`-backed exact counts near threshold, cached on `messages.token_count`.

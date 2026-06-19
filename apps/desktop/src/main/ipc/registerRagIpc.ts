@@ -296,9 +296,12 @@ export function registerRagIpc(ctx: AppContext): void {
         event,
         conversationId,
         'Document answer failed',
-        (signal, sendToken) =>
+        (signal, sendToken, _sendReasoning, sendCompaction) =>
           generateGroundedAnswer(ctx.db, runtime, ctx.embedder, conversationId, text, settings, {
             signal,
+            // One-shot ephemeral "summarizing…" notice when the compaction pre-pass starts (§5.2);
+            // isDestroyed-guarded inside withChatStream, never buffered (R14).
+            onCompactionStart: sendCompaction,
             // Composite retrieval scope (plan §10.2): membership ∪ specific docs ∪ attachments,
             // archived excluded by default. Also makes the empty-context re-index check
             // scope-aware (M2). An empty resolved scope = whole corpus.

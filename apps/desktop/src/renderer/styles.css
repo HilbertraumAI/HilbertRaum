@@ -1054,6 +1054,79 @@ code, pre, kbd { font-family: var(--font-mono); }
    flex-end left them sitting low against the field's bottom edge. */
 .composer-row .btn { align-self: center; }
 .composer-footer { display: flex; gap: 12px; align-items: center; min-height: 26px; padding: 0 4px; }
+/* Push the context-window meter to the right edge of the footer (context-compaction §5.1). */
+.composer-footer-spacer { margin-left: auto; display: inline-flex; align-items: center; }
+
+/* Context-window usage meter (context-compaction §5.1): a thin, quiet bar. Tone is the only
+   signal that changes (calm → amber → near-full); calm stays neutral so it never reads as a
+   warning at normal fullness. */
+.context-meter {
+  display: inline-flex;
+  align-items: center;
+  width: 56px;
+  cursor: default;
+}
+.context-meter-track {
+  position: relative;
+  width: 100%;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--row-selected-bar, var(--border));
+  opacity: 0.5;
+  overflow: hidden;
+}
+.context-meter-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--text-dim);
+  transition: width 160ms ease;
+}
+.context-meter-amber .context-meter-fill { background: var(--warning, #b8860b); }
+.context-meter-near-full .context-meter-fill { background: var(--error, #c0392b); }
+
+/* "Summarizing earlier messages…" status above the streaming bubble (context-compaction §5.2).
+   Quiet, dim, matches the no-model spinner hint vocabulary. */
+.chat-compaction-notice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0 8px;
+  color: var(--text-dim);
+  font-size: var(--text-sm);
+}
+
+/* Transcript summary marker (context-compaction §5.3, D-b): a subtle, non-bubble divider with an
+   expandable summary. Centered, low-contrast — it documents the compression without shouting. */
+.chat-summary-marker {
+  margin: 10px 0;
+  text-align: center;
+}
+.chat-summary-marker-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 10px;
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: var(--text-sm);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.chat-summary-marker-toggle:hover { color: var(--text); }
+.chat-summary-marker-chevron { font-size: 0.9em; }
+.chat-summary-marker-text {
+  margin: 6px auto 0;
+  max-width: 640px;
+  text-align: left;
+  white-space: pre-wrap;
+  color: var(--text-dim);
+  font-size: var(--text-sm);
+  border-left: 2px solid var(--border);
+  padding: 4px 0 4px 12px;
+}
 
 /* Voice-dictation mic: quiet ghost button beside Send; while recording it
    pulses so stopping is obvious (the OS mic indicator is the authoritative signal). */

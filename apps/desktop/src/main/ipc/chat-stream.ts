@@ -1,5 +1,5 @@
 import type { IpcMainInvokeEvent } from 'electron'
-import { STREAM } from '../../shared/ipc'
+import { STREAM, type CompactionNotice } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
 import { DOC_TASK_BUSY_MESSAGE, type Conversation, type Message } from '../../shared/types'
 import { getConversation } from '../services/chat'
@@ -53,6 +53,13 @@ export async function assertChatStreamReady(
 export type SendToken = (token: string) => void
 /** A guarded reasoning-delta sender (Deep mode); buffers like `SendToken`. */
 export type SendReasoning = (delta: string) => void
+/**
+ * A guarded one-shot "summarizing earlier messages…" notifier (context-compaction plan §5.2).
+ * Fired from the compaction pre-pass's `onStart`. Unlike the token/reasoning senders it is EPHEMERAL
+ * (R14): never buffered into `streamBuffers`, so a screen that remounts mid-stream simply misses the
+ * transient hint — acceptable, the answer still streams.
+ */
+export type SendCompaction = () => void
 
 /**
  * Run a streaming generation under the LOCKED streaming contract: register an
@@ -70,7 +77,12 @@ export async function withChatStream(
   event: IpcMainInvokeEvent,
   conversationId: string,
   logLabel: string,
-  runFn: (signal: AbortSignal, sendToken: SendToken, sendReasoning: SendReasoning) => Promise<Message>,
+  runFn: (
+    signal: AbortSignal,
+    sendToken: SendToken,
+    sendReasoning: SendReasoning,
+    sendCompaction: SendCompaction
+  ) => Promise<Message>,
   /**
    * Optional model-slot claim (plan §4.1/H10): when a yielding deep-index build holds the
    * one chat runtime, this requests a pause and resolves once the builder parks (≈ one
@@ -98,10 +110,16 @@ export async function withChatStream(
       event.sender.send(STREAM.reasoning(conversationId), delta)
     }
   }
+  // One-shot, EPHEMERAL (R14): no `streamBuffers` write, isDestroyed-guarded like the senders.
+  const sendCompaction: SendCompaction = () => {
+    if (!event.sender.isDestroyed()) {
+      event.sender.send(STREAM.compaction(conversationId), { phase: 'start' } satisfies CompactionNotice)
+    }
+  }
   try {
     // Hand the model slot off from a yielding build before any model call (no-op when none).
     if (acquireSlot) releaseSlot = await acquireSlot()
-    const assistant = await runFn(controller.signal, sendToken, sendReasoning)
+    const assistant = await runFn(controller.signal, sendToken, sendReasoning, sendCompaction)
     if (!event.sender.isDestroyed()) {
       event.sender.send(STREAM.done(conversationId), assistant)
     }

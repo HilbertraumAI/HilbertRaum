@@ -8,6 +8,7 @@ import {
   type Citation,
   type Conversation,
   type ConversationSearchHit,
+  type ContextUsage,
   type ConversationSearchResult,
   type CoverageInfo,
   type DocumentScope,
@@ -510,6 +511,39 @@ export function writeCheckpoint(
   ).run(randomUUID(), input.conversationId, input.summary, nowIso(), input.coversThroughRowid)
 }
 
+/**
+ * Whether conversation compaction is enabled (context-compaction plan §5.4 / D-a, default true).
+ * Gates BOTH the `ensureCompacted` pre-pass (no new checkpoints when off) and checkpoint reads in
+ * assembly (`buildChatMessages` / `buildGroundedChatMessages` ignore any existing checkpoint when
+ * off), so disabling reproduces the pre-feature L1-only behaviour exactly.
+ */
+export function compactionEnabled(db: Db): boolean {
+  return getSettings(db).chatCompactionEnabled !== false
+}
+
+/**
+ * Where the transcript summary marker sits (context-compaction plan §5.3, D-b). Returns the latest
+ * checkpoint's summary text plus the id of the first RENDERED turn it does NOT subsume (the marker
+ * renders before that message), or null when no checkpoint exists OR compaction is disabled (so the
+ * marker never shows for a checkpoint the assembly is ignoring). `beforeMessageId` is null only when
+ * the checkpoint covers every currently-rendered turn (degenerate; the renderer then omits it).
+ */
+export function getConversationSummaryMarker(
+  db: Db,
+  conversationId: string
+): { summary: string; beforeMessageId: string | null } | null {
+  if (!compactionEnabled(db)) return null
+  const checkpoint = getLatestCheckpoint(db, conversationId)
+  if (!checkpoint) return null
+  const row = prepareCached(
+    db,
+    `SELECT id FROM messages
+       WHERE conversation_id = ? AND kind IS NOT 'compaction' AND rowid > ?
+       ORDER BY rowid ASC LIMIT 1`
+  ).get(conversationId, checkpoint.coversThroughRowid) as unknown as { id: string } | undefined
+  return { summary: checkpoint.summary, beforeMessageId: row?.id ?? null }
+}
+
 // §4.5 — a compaction summary is injected into the assembled prompt as a synthetic user→assistant
 // pair, NOT a second leading `system` message (several local chat templates accept only one leading
 // system block, and `collapseToAlternating` assumes leading-system-then-strict-alternation). The
@@ -815,6 +849,27 @@ export function effectiveContextWindow(
 }
 
 /**
+ * Resting-state context-window usage for the composer meter (context-compaction plan §5.1). Pure
+ * read, no model call: assembles the conversation exactly as a turn would (`buildChatMessages` —
+ * which honours the compaction toggle + any checkpoint) over the real launched `window`, then sums
+ * the per-message ESTIMATE. `usedTokens` is therefore the same over-counting estimate the budget
+ * uses (labelled approximate in the UI). `runtime` may be null (no model running) — the window then
+ * falls back to `settings.contextTokens`. The skill fence is intentionally omitted: at rest there is
+ * no pending turn/skill, and the meter is approximate.
+ */
+export function getConversationContextUsage(
+  db: Db,
+  runtime: Pick<ModelRuntime, 'contextWindow'> | null,
+  conversationId: string
+): ContextUsage {
+  const settings = getSettings(db)
+  const window = runtime ? effectiveContextWindow(runtime, settings) : settings.contextTokens
+  const messages = buildChatMessages(db, conversationId, window)
+  const usedTokens = messages.reduce((sum, m) => sum + messageTokens(m), 0)
+  return { usedTokens, window }
+}
+
+/**
  * Trim an assembled (already role-alternating) message list to fit `contextTokens`,
  * keeping a contiguous, most-recent suffix of the conversation. Invariants:
  *   - Every leading `system` message is always kept (and counted) — the instructions.
@@ -871,8 +926,10 @@ export function buildChatMessages(
   // L2 (context compaction): when a checkpoint exists, inject its summary as a synthetic
   // user→assistant pair (§4.5) and replay only the turns AFTER it — the cached summary stands in
   // for everything older. No checkpoint ⇒ replay the whole history, byte-identical to before. The
-  // checkpoint row itself is never a turn (kind-filtered by listConversationTurns).
-  const checkpoint = getLatestCheckpoint(db, conversationId)
+  // checkpoint row itself is never a turn (kind-filtered by listConversationTurns). The §5.4 toggle
+  // gates the READ as well as the write (compactionEnabled): when off, any existing checkpoint is
+  // ignored and the FULL history replays — byte-identical to the pre-feature L1-only app.
+  const checkpoint = compactionEnabled(db) ? getLatestCheckpoint(db, conversationId) : null
   if (checkpoint) messages.push(...compactionSummaryPair(checkpoint.summary))
   for (const turn of listConversationTurns(db, conversationId, checkpoint?.coversThroughRowid ?? 0)) {
     // Assistant turns are scrubbed of think blocks before being replayed —
@@ -956,11 +1013,14 @@ export async function generateAssistantMessage(
   // a cached checkpoint so assembly replays a compact summary + recent turns instead of dropping the
   // old ones outright. A no-op below threshold; any failure/abort falls back to today's L1 trim with
   // no user-visible error. Runs on the already-claimed chat slot as part of this turn (R4), honouring
-  // the turn's AbortSignal, BEFORE assembly so buildChatMessages picks up any fresh checkpoint.
-  await ensureCompacted(db, runtime, conversationId, contextTokens, {
-    signal: opts.signal,
-    onStart: opts.onCompactionStart
-  })
+  // the turn's AbortSignal, BEFORE assembly so buildChatMessages picks up any fresh checkpoint. Gated
+  // by the §5.4 toggle: when off, no checkpoint is created and assembly ignores any existing one.
+  if (compactionEnabled(db)) {
+    await ensureCompacted(db, runtime, conversationId, contextTokens, {
+      signal: opts.signal,
+      onStart: opts.onCompactionStart
+    })
+  }
   // Pre-size the skill fence (§11.3/A6) BEFORE it goes in the system message so it can never
   // starve the base preamble or the final user turn — fitMessagesToContext only drops older
   // history. Stamp the assistant row only when the fence actually fit (skill shaped the answer).
