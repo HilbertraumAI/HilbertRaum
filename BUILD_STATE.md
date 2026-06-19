@@ -6,6 +6,29 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-19 — **Vitest harness hardened against silent file-drop (follow-up to the merge note below).**
+The merge note flagged that vitest's parallel pool can, under heavy machine load, **silently drop a
+test file** — a worker fails to collect it and the run reports a *lower* file total (e.g. 168 instead
+of 169) with **no error and a green exit**. A dropped suite that "passes" by not running is a false
+green. **Fix (two parts):** (1) **`tests/full-suite-guard.ts`** — a vitest `Reporter` whose
+`onFinished` walks the test tree on disk (`listTestFiles`) and asserts vitest collected **every**
+file; any missing → it **throws**, which is the *only* mechanism that reliably forces a non-zero exit
+(verified: a throw from `onFinished` exits 1; setting `process.exitCode` there does **not** stick).
+It self-gates: `vitest.config.ts` passes the expected file list **only on an unfiltered full run**
+(argv after the `run` subcommand is flags-only; any positional ⇒ subset ⇒ guard handed `null` ⇒
+no-op), so `npm test -- tests/unit` / watch mode never false-fail. The expected count is computed
+from disk each run, so it auto-tracks as suites are added/removed (no hardcoded 168). (2) **Pool
+pinned explicitly** (`pool: 'forks'`) so collection behaviour is deterministic across vitest
+upgrades; `forks` is required anyway because parts of the suite touch native bindings (node:sqlite,
+llama) that don't share across threads. `testTimeout: 15_000` unchanged. **Verification:** full
+`npx vitest run` → **1895 passed / 29 skipped (169 files)**, exit 0, guard active. **Forced-drop proof:**
+`vitest run --exclude=tests/unit/chunker.test.ts` (stays "full" via the `=`-form, drops 1 file) → guard
+**throws naming the dropped file, exit 1** (was a silent green before). Filtered subset run → guard
+no-ops, exit 0 (no false-fail). `npm run typecheck` + `npm run build` clean. New file count is **169**
+(added `tests/full-suite-guard.ts` [not a `.test`, not collected] + `tests/unit/full-suite-guard.test.ts`
+[+5 tests]). NOT committed (awaiting the user's go); push to origin/master pending after confirmation.
+**(prior entries below.)**_
+
 _2026-06-19 — **Context budgeting + conversation compaction — MERGED to `master`.**
 `git merge --no-ff context-window-compaction` (merge commit, master was the merge-base so the merge was
 conflict-free) brought Phases 0–2 + the close-out onto `master`: the merged 5 commits are `ae22ba6` (plan,
