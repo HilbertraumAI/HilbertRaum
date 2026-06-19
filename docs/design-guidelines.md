@@ -122,12 +122,17 @@ Two themes, same scales. All text/UI pairs contrast-checked (ratios noted).
 
 ### 4.2 Accent + semantic ramps
 
+> **Superseded by the brand refresh (§13).** The blue accent ramp below was retired in 2026-06;
+> the accent is now the HilbertRaum teal. The brand primitives + contrast facts are in §13.2;
+> this row set is kept only as the historical record of the pre-refresh palette.
+
 | Token | Hex | Use |
 |---|---|---|
-| `--accent-700` | `#2257c9` | link text on light; pressed fill |
-| `--accent-600` | `#2f6fed` | **primary button fill** (white text = 4.55:1 ✓) |
-| `--accent-500` | `#4f8cff` | accent/link on dark; focus ring |
-| `--accent-300` | `#8fb4ff` | subtle accent backgrounds |
+| `--brand-teal` | `#57D0A4` | the dot; primary-button fill (with dark-ink text); accent/link/focus on **dark** |
+| `--brand-teal-dark` | `#1B7F5F` | accent/link/focus on **light** (4.9:1 on bg); solid-control fill w/ a white marker |
+| `--brand-ink-dark` | `#11171F` | square ink on light; **text on teal fills** |
+| `--brand-ink-light` | `#E8EDF2` | square ink on dark |
+| _(retired)_ `--accent-700/600/500/300` | _blue_ | pre-refresh accent ramp (`#2257c9`/`#2f6fed`/`#4f8cff`/`#8fb4ff`) |
 | `--success-600` | `#1a7f4b` | success text on light (5.0:1) |
 | `--success-500` | `#3fbf7f` | success on dark (8.1:1) |
 | `--error-600` | `#c0362c` | error text on light (5.5:1) |
@@ -135,9 +140,10 @@ Two themes, same scales. All text/UI pairs contrast-checked (ratios noted).
 | `--warning-700` | `#8a5a00` | warning text on light (5.9:1) |
 | `--warning-500` | `#e0b341` | warning on dark (9.6:1) |
 
-✅ **Contrast fix (applied):** `#4f8cff` as a button fill with white text was **3.22:1 — fails AA**,
-so filled buttons now use `--accent-600 #2f6fed` (4.55:1) and `#4f8cff` is reserved for
-links/icons/focus on dark. Semantic color always pairs with a label or icon (WCAG 1.4.1).
+✅ **Contrast fix (historical):** `#4f8cff` as a button fill with white text was **3.22:1 — fails AA**,
+so pre-refresh filled buttons used `--accent-600 #2f6fed` (4.55:1). **Superseded by §13:** the primary
+button is now teal fill + dark-ink text (`#57D0A4` on `#11171F`, ≈9.98:1). Semantic color always pairs
+with a label or icon (WCAG 1.4.1).
 
 ### 4.3 Role tokens per theme
 
@@ -146,15 +152,17 @@ constant.
 
 | Role | Light | Dark |
 |---|---|---|
-| `--bg` | `#f7f8fa` | `#0f1115` |
+| `--bg` | `#f7f8fa` | `#0E1319` (§13: brand-exact, was `#0f1115`) |
 | `--surface` | `#ffffff` | `#171a21` |
 | `--surface-2` | `#ffffff` + shadow | `#1d212a` |
 | `--border` (hairline) | `#e2e5ea` | `#2a2f3a` |
 | `--border-strong` (inputs) | `#9aa3b2` | `#4a515f` |
 | `--text` | `#1b1f27` (16.5:1) | `#e6e8ec` (15.4:1) |
 | `--text-muted` | `#5c6675` (5.8:1) | `#9aa3b2` (7.4:1) |
-| `--link` | `#2257c9` (6.4:1) | `#4f8cff` (5.9:1) |
-| `--focus` | `#2f6fed` | `#4f8cff` |
+| `--link` | `#1B7F5F` (4.9:1) | `#57D0A4` (10.4:1) |
+| `--focus` | `#1B7F5F` | `#57D0A4` |
+| `--accent` | `#1B7F5F` | `#57D0A4` |
+| `--row-selected-bar` | `#1B7F5F` | `#57D0A4` |
 
 ### 4.4 Typography
 
@@ -208,10 +216,10 @@ The current dark palette survives as the dark theme (lightly tuned per §4.3).
 
 ## 6. Component guidelines
 
-- **Buttons.** Three levels only: Primary (`--accent-600` fill, white text — **one per
-  view**), Secondary (surface + `--border-strong` outline), Ghost (text only). Focus =
-  2px `--focus` ring with 2px offset via `:focus-visible`. Min height 36px; hit targets
-  ≥24×24 (WCAG 2.5.8). Disabled = 50% opacity.
+- **Buttons.** Three levels only: Primary (`--brand-teal` fill + **dark-ink** `--brand-ink-dark`
+  text — **one per view**; teal+white fails contrast, see §13), Secondary (surface +
+  `--border-strong` outline), Ghost (text only). Focus = 2px `--focus` ring with 2px offset via
+  `:focus-visible`. Min height 36px; hit targets ≥24×24 (WCAG 2.5.8). Disabled = 50% opacity.
 - **Inputs / composer.** Surface fill, 1px `--border-strong`, `--radius-sm`, 36–40px min
   height. Composer auto-grows; Enter = send, Shift+Enter = newline. Never remove the focus
   outline.
@@ -235,8 +243,9 @@ The current dark palette survives as the dark theme (lightly tuned per §4.3).
   Chat). Used on Chat, Documents, AI Model.
 - **Lists / tables.** Rows ≥40px, hover highlight, hover "⋯" + right-click for actions.
   Technical columns visually secondary.
-- **Toggles.** Switch for binary settings (track `--accent-600` when on), checkbox for
-  multi-select; 24×24 min target; clickable label; focus ring.
+- **Toggles.** Switch for binary settings (track `--brand-teal-dark` when on — the white thumb
+  needs ≥3:1, which bright teal fails; §13), checkbox for multi-select; 24×24 min target;
+  clickable label; focus ring.
 
 ---
 
@@ -769,3 +778,95 @@ rows, messages, composer shell, responsive media queries),
 build OK, vitest **1085 passed / 25 skipped** (the `InformationArchitecture` indicator test
 now drives the **header** indicator; scope + no-match copy assertions updated). German copy
 for the new/changed strings was completed in the D-L7 review pass (2026-06-14).
+
+---
+
+## 13. Brand refresh — design record (IMPLEMENTED 2026-06-19)
+
+_Branch `design-adjustments`. Applied the HilbertRaum brand kit (Logo 02 "the closed room",
+v1 · 2026-06) to the app: the accent moved from generic blue to the brand **teal**, and the
+placeholder blue-diamond `◈` became the **sealed-room mark** (a rounded square holding a
+single centre dot). **Renderer + static-assets + design-token work only** — no backend, IPC,
+persistence, schema, security, CSP, permission, encryption, or packaging-runtime changes; the
+only non-renderer touches were the vendored brand image assets, the `generate-icons.mjs`
+pipeline, and the dark-theme pre-paint colour was deliberately left alone. The app stays fully
+offline (assets vendored same-origin, no web fonts). This record condenses the former
+`docs/brand-refresh-plan.md` (full original in git history); code/comments cite it as **§13**.
+Shipped in six gated phases BR1–BR6; before/after captures in
+`docs/design-review/brand-refresh/{br2,br3,br4,br5}/`._
+
+### 13.1 The brand in one line
+
+A **sealed rounded square** (the private room) **holding a single teal dot** (your data) —
+offline, contained, calm. The **dot is always teal `#57D0A4`**; the **square ink flips with the
+background** (dark ink `#11171F` on light, light ink `#E8EDF2` on dark). Teal means "the user's
+stuff staying put", so it stays **rare** — a role accent, never a surface.
+
+### 13.2 Token decisions + the contrast facts they rest on
+
+- **Brand primitives (theme-constant, `tokens.css`):** `--brand-teal #57D0A4`,
+  `--brand-teal-hover #48BE92`, `--brand-teal-active #3DAE84`, `--brand-teal-dark #1B7F5F`,
+  `--brand-ink-dark #11171F`, `--brand-ink-light #E8EDF2`, `--brand-surface-dark #0E1319`.
+- **The central constraint:** bright teal `#57D0A4` on white is **~1.98:1** — it FAILS both the
+  4.5:1 text and the 3:1 UI thresholds. So bright teal is **never** text/link/focus/a thin
+  boundary on a light surface; light roles use the derived **`--brand-teal-dark #1B7F5F`**.
+- **Role re-point** (the old blue ramp `--accent-700/600/500/300` is fully RETIRED):
+  `--accent`/`--link`/`--focus`/`--row-selected-bar` = `#1B7F5F` on light, `#57D0A4` on dark.
+- **Primary button — the one deliberate exception:** teal fill + **dark-ink** text in BOTH
+  themes (not routed through `--accent`, which differs per theme). `#57D0A4`+`#11171F` ≈ **9.98:1**
+  (hover `#48BE92` 8.2:1, active `#3DAE84` 6.8:1). **Teal + white is forbidden** (1.98:1).
+- **Filled controls:** checkbox/`<progress>` use theme-aware `--accent` (Chromium auto-contrasts
+  the checkmark; light dark-teal on a light track / dark bright-teal on a dark track, both ≥3:1).
+  The custom **switch-on track** uses `--brand-teal-dark` in BOTH themes because the thumb is
+  white `--n-0` — white on dark teal is **5.2:1** (white on bright teal would be 1.98:1).
+- **Dark `--bg` nudged `#0f1115 → #0E1319`** (brand-exact; `--text` on it ≈16.9:1). Light surfaces
+  unchanged. **Semantic success/error/warning are untouched** — teal never replaces a status colour.
+- **Measured ratios (light bg `#f7f8fa` / dark bg `#0E1319`):** link/focus/accent 4.9:1 (light) /
+  10.4:1 (dark); selected-bar ≥3:1 both; primary fill+ink 9.98:1; switch-on+thumb 5.2:1.
+- **Pinned by a test:** `tests/unit/token-contrast.test.ts` parses `tokens.css`, resolves every
+  `var()` chain per theme, and asserts each role pairing AA in both themes — INCLUDING the
+  forbidden bright-teal-on-white < 3:1, so the value can't silently drift off the bright hex.
+
+### 13.3 The mark — assets + component
+
+- **Vendored same-origin under `public/brand/`** (offline CSP): `mark-on-{light,dark}.svg`,
+  `lockup-on-{light,dark}.svg`, `mark-mono-{ink,white}.svg`. Kit names are **background-inverted**
+  (`mark-dark.svg` = a LIGHT square FOR dark bg) — each was opened and its fill confirmed before
+  the mandatory semantic rename. Favicon → `public/icon.svg` (theme-adaptive square ink via an
+  internal `@media prefers-color-scheme`); app-icon → `build/icon.svg` (light square + teal dot on
+  the opaque `#0E1319` surface).
+- **`components/BrandMark.tsx`** (`BrandMark` + `BrandLockup`): the theme-correct asset is chosen
+  by a **CSS `[data-theme]` pair toggle** (both `<img>` render; `.brand-img-light`/`-dark` show
+  one) — **not** a JS theme read, so it works **pre-unlock in the gate** (which follows the OS
+  theme via the `data-theme` attribute set at startup). `BrandMark` clamps size ≥16 (dev-warns
+  below; the kit's raster floor), bakes clear-space ≥ the dot diameter, and is decorative by
+  default. **Asset `src` MUST be RELATIVE** (`brand/…`, not `/brand/…`): the production renderer is
+  `loadFile`'d over `file://`, where an absolute path resolves to the filesystem root and renders
+  broken; the single-page renderer has no router, so a relative path resolves next to `index.html`
+  under both dev (`http://localhost`) and prod (`file://`).
+- **Placements:** rail brand slot (`App.tsx`, `size 24`) and the gate (`WorkspaceGate.tsx`,
+  `size 36`, above the "HilbertRaum Lite" edition line). **Never inside the chat transcript** — the
+  conversation stays the centre of gravity. The `◈` glyph is gone from `src/` entirely.
+
+### 13.4 Icon pipeline
+
+`scripts/generate-icons.mjs` renders the rounded-square + centre-dot (`arcTo` corners) on the
+opaque `#0E1319` surface (geometry ported from the 512-unit `build/icon.svg`), keeping the offline
+`@napi-rs/canvas` draw + the hand-assembled PNG-embedded `.ico` + the `[16,24,32,48,64,128,256]`
+size set. `build/icon.{png,ico}` are committed (packaging mustn't depend on running a generator);
+`electron-builder.yml` is unchanged (filenames preserved). The window/taskbar icon is
+`build/icon.png` via the BrowserWindow `icon` option (dev/Linux) / the embedded `.ico` (packaged
+Windows) — not the document favicon.
+
+### 13.5 Verification pattern (this wave)
+
+Per phase: `npm run typecheck` + full vitest from `apps/desktop` (`npm test` — repo-root runs
+break renderer matchers) + `npm run build`, then the Playwright `_electron` eyeball walk
+(`scripts/walk-brand-refresh.mjs`) across all six screens in BOTH themes AND both locales (EN/DE).
+**Eyeball-harness note:** `policy.json` is parsed NESTED at `policy.workspace.encryption_required`
+— a flat `{encryption_required}` (as the old §11.4 recipe wrote) is ignored, so the unpackaged
+(isDev) build falls back to `plaintext_dev` and BYPASSES the gate; force it with the nested shape
+and drive the gate by CSS/`input[type=password]` (locale-independent — the dev machine boots
+German). New guards added: `token-contrast.test.ts` (§13.2) and `tests/renderer/BrandMark.test.tsx`
+(theme-asset choice, relative src, min-size clamp, clear-space, a11y, asset existence). Final suite:
+**1852 passed / 27 skipped**; typecheck + build clean.

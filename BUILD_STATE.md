@@ -6,6 +6,30 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-19 — **Brand refresh BR6 landed — the wave is CLOSED OUT.** Branch `design-adjustments`. **The
+HilbertRaum brand refresh is fully shipped (BR1–BR6).** **Why BR6:** discharge the doc-lifecycle rule —
+fold the durable decisions into the binding guidelines and retire the plan file. **Docs fold:**
+[`docs/design-guidelines.md`](docs/design-guidelines.md) gained **§13** ("Brand refresh — design record":
+the one-line brand, §13.2 token decisions + the contrast facts + the pinning test, §13.3 mark
+assets/component incl. the gate-safe CSS theme toggle + the relative-`src`/`file://` gotcha, §13.4 icon
+pipeline, §13.5 verification + the nested-`policy.json` harness note); the LIVE token tables were updated
+to match the code (§4.2 accent ramp → brand teal primitives + "retired" row; §4.3 `--link`/`--focus`/
+`--accent`/`--row-selected-bar` → teal per theme + dark `--bg #0E1319`; §6 Primary button → teal fill +
+dark-ink, Toggles → `--brand-teal-dark` track; the §4.2 contrast-fix note marked superseded). Historical
+§11/§12 records left as-is (they describe past waves). **Plan file
+`docs/brand-refresh-plan.md` DELETED** (full original in git history). **Final verification:** typecheck +
+`npm run build` clean; full vitest from `apps/desktop` **1852 passed / 27 skipped**. **As-built (whole
+wave):** `tokens.css` (brand primitives + role re-point + dark-bg nudge), `styles.css` (teal primary +
+brand-img toggle, filled-control teal), `components/BrandMark.tsx` (+barrel), `App.tsx` + `WorkspaceGate.tsx`
+(mark wired, `◈` removed), `chat/Waveform.tsx` (blue fallback → teal), `scripts/generate-icons.mjs`
+(sealed-room geometry), `public/brand/*` + `public/icon.svg` + `build/icon.{svg,png,ico}` (artwork),
+`shared/i18n` UNCHANGED (no copy changed), new `tests/unit/token-contrast.test.ts` +
+`tests/renderer/BrandMark.test.tsx`. Captures in `docs/design-review/brand-refresh/{br2,br3,br4,br5}/`.
+**Acceptance (plan §7) all met:** light+dark pass the contrast test; mark ink flips by background; dot
+always teal; no teal text/links on a light surface; primary teal+dark-ink; teal stays rare; success
+green / errors red; no CSP/offline/schema/IPC change; calm/premium. **Next:** the branch
+`design-adjustments` is ready to merge to `master`. **(prior entries below.)**_
+
 _2026-06-19 — **Brand refresh BR5 landed — package icon/favicon smoke; the produced icon set is correct
 end-to-end.** Branch `design-adjustments`; plan
 [`docs/brand-refresh-plan.md`](docs/brand-refresh-plan.md) phase BR5 of BR1–BR6 (WORKING PAPER — BR6 next,
