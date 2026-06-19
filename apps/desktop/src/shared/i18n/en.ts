@@ -447,6 +447,28 @@ export const en = {
   'analysis.listing.refPage': 'p. {n}',
   'analysis.listing.refSection': 'section {n}',
 
+  // ---- Bank-statement analysis answer (full-doc-skills plan §3.1, Phase 2) ----
+  // The deterministic, whole-document answer the bank-statement analysis handler synthesises
+  // from the extracted transaction table (0 model calls). Honours SKILL.md: quote the printed
+  // figures, lead with the count, surface unreconciled rows BEFORE the total, never invent a
+  // number. Amounts/dates/currency are CONTENT and pass through verbatim as params.
+  'skills.bankAnalysis.count': 'I read **{count}** transactions across the whole statement.',
+  'skills.bankAnalysis.empty':
+    'I read the whole statement but couldn’t find any transactions to total.',
+  'skills.bankAnalysis.couldNotRead': 'I couldn’t read this statement, so I can’t analyse it.',
+  'skills.bankAnalysis.unreconciledHeading':
+    'Check these rows first — their printed running balance doesn’t reconcile with the amounts:',
+  'skills.bankAnalysis.unreconciledItem': '- {date} · {description} · {amount} {currency}',
+  'skills.bankAnalysis.totals':
+    'Money in: **{inAmount} {currency}** · Money out: **{outAmount} {currency}** · Net change: **{netAmount} {currency}**.',
+  'skills.bankAnalysis.noCurrency':
+    'These transactions use more than one currency, so there is no single combined total — a total would have to be split per currency.',
+  'skills.bankAnalysis.categoryHeading': 'By category:',
+  'skills.bankAnalysis.categoryItem': '- {category}: {amount} {currency} ({count})',
+  'skills.bankAnalysis.caveat':
+    'These figures are the statement’s own printed amounts, read across the whole document — ' +
+    'nothing here is added up from prose or invented.',
+
   // ---- Models (ModelsScreen.tsx) ----
   'models.title': 'AI Model',
   'models.lead':

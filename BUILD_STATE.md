@@ -6,6 +6,43 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-19 — **Full-doc-skills Phase 2 landed — the analysis-handler seam + bank handler (NOT yet
+wired into chat).** Branch `fix-use-full-doc-for-skills`; plan
+[`docs/full-doc-skills-plan.md`](docs/full-doc-skills-plan.md) Phase 2 of 4 (still a working paper —
+Phases 3–4 open). **Why:** a `kind:tool` skill's exhaustive, deterministic whole-document tools are
+bypassed the moment a user just *asks* about a document (the chat path runs top-k RAG, not the tools).
+Phase 2 builds the bridge a chat turn will (Phase 3) call: a per-skill **analysis handler** that
+auto-runs the read-only tools and synthesises a grounded answer + honest coverage. **New module**
+[`apps/desktop/src/main/services/skills/analysis/`](apps/desktop/src/main/services/skills/analysis/):
+`types.ts` (`SkillAnalysisHandler` = `applies()` cheap pre-flight + `run(ctx)`; `SkillAnalysisContext`;
+`SkillAnalysisResult { answer; citations; coverage }` — reuses the chat path's real `RetrievalScope`
+and the shared `Citation`/`CoverageInfo`), `registry.ts` (`register`/`get` keyed by skill `install_id`,
+**no import-time side effects** — precedent `tool-registry.ts`), `bank-statement.ts` (the
+`app:bank-statement` handler), `index.ts` (`registerBuiltinSkillAnalysisHandlers()` — the EXPLICIT
+registration Phase 3 calls once at app init). **Additive + standalone:** `registerRagIpc.ts`,
+`router.ts`, `rag/index.ts` are **untouched** — nothing is wired into chat, so the relevance path stays
+byte-identical (R5) trivially. **Handler behaviour:** `applies()` is conservative — a single in-scope
+doc (`buildScopeFilter`, mirroring `registerRagIpc.documentsInScope`) **and** an analysis-shaped keyword
+(EN+DE); off-topic keeps relevance; the refuse / not-fully-chunked routing gate is **Phase 3**. `run()`
+drives the existing run seams (`runBankExtraction` → `runCashflowSummary` + `runBalanceValidation`, +
+`runCategorization` only when the question is category-shaped) for their `skill_runs` lifecycle +
+persistence + ids/counts audit, then computes the answer's **figures from the persisted rows** via the
+PURE exported functions (`summarizeCashflow`/`reconcileBalances`/`categorizeRow`) — the seams surface
+only counts. **`runCsvExport` is never imported** (export excluded by construction; stays confirm-gated).
+The answer is deterministic, localized Markdown (precedent `analysis/listing-answer.ts`) honouring
+`SKILL.md`: count → unreconciled rows BEFORE the total → totals (or an honest "no single total" on mixed
+currency) → optional per-category breakdown → caveat; figures quoted, never invented. **Citations** are
+real `chunks` rows narrowed to the transactions' `sourcePage` (`[Sn]`, M2-safe — never the synthesised
+total). **Coverage** = `{ mode:'extract', chunksCovered=chunksTotal, chunksTotal, fullyChunked }`
+(`documentChunkCount` + `documents.fully_chunked`; NULL → false), gating the "whole document" wording
+(D48). **New i18n:** `skills.bankAnalysis.*` (EN + DE parity). **Tests:** 15 new in
+[`skills-analysis-bank.test.ts`](apps/desktop/tests/integration/skills-analysis-bank.test.ts) — applies()
+pre-flight (single doc / no doc / multi-doc / off-topic), exhaustive math, unreconciled-before-total,
+mixed-currency no-total, figures-not-invented, export-never-auto-run, category-shaped gating, coverage
+fullyChunked true/false, citations are real source chunks, registry round-trip. Suite **1807 green**;
+typecheck + production build clean. **Next:** Phase 3 (router wiring in `registerRagIpc` + the
+fully_chunked refuse-partial gate (D45) + i18n for the refuse notice). **(prior entries below.)**_
+
 _2026-06-19 — **Full-doc-skills Phase 1 landed — per-message coverage is now data-driven (D48).**
 Branch `fix-use-full-doc-for-skills`; plan [`docs/full-doc-skills-plan.md`](docs/full-doc-skills-plan.md)
 Phase 1 of 4 (still a working paper — Phases 2–4 open). **Why:** a `kind:tool` skill answers a chat

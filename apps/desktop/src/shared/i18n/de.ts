@@ -475,6 +475,28 @@ export const de: Record<keyof typeof en, string> = {
   'analysis.listing.refPage': 'S. {n}',
   'analysis.listing.refSection': 'Abschnitt {n}',
 
+  // ---- Kontoauszug-Auswertung (full-doc-skills Plan §3.1, Phase 2) ----
+  // Die deterministische Antwort über das ganze Dokument, die der Analyse-Handler aus der
+  // extrahierten Buchungstabelle erzeugt (0 Modellaufrufe). Beträge/Daten/Währung sind Inhalt
+  // und werden unverändert als Parameter durchgereicht.
+  'skills.bankAnalysis.count': 'Ich habe **{count}** Buchungen über den ganzen Auszug gelesen.',
+  'skills.bankAnalysis.empty':
+    'Ich habe den ganzen Auszug gelesen, aber keine Buchungen zum Summieren gefunden.',
+  'skills.bankAnalysis.couldNotRead':
+    'Ich konnte diesen Auszug nicht lesen und kann ihn daher nicht auswerten.',
+  'skills.bankAnalysis.unreconciledHeading':
+    'Bitte diese Zeilen zuerst prüfen — ihr gedruckter Saldo stimmt nicht mit den Beträgen überein:',
+  'skills.bankAnalysis.unreconciledItem': '- {date} · {description} · {amount} {currency}',
+  'skills.bankAnalysis.totals':
+    'Eingänge: **{inAmount} {currency}** · Ausgänge: **{outAmount} {currency}** · Saldoänderung: **{netAmount} {currency}**.',
+  'skills.bankAnalysis.noCurrency':
+    'Diese Buchungen verwenden mehr als eine Währung, daher gibt es keinen einzelnen Gesamtbetrag — eine Summe müsste je Währung getrennt werden.',
+  'skills.bankAnalysis.categoryHeading': 'Nach Kategorie:',
+  'skills.bankAnalysis.categoryItem': '- {category}: {amount} {currency} ({count})',
+  'skills.bankAnalysis.caveat':
+    'Diese Zahlen sind die im Auszug gedruckten Beträge, gelesen über das ganze Dokument — ' +
+    'nichts davon wird aus Fließtext zusammengerechnet oder erfunden.',
+
   // ---- Models ----
   'models.title': 'KI-Modell',
   'models.lead':

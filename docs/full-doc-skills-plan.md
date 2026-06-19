@@ -178,13 +178,36 @@ This is what makes requirement 1 ("if we analysed the full document, show that")
   satisfies the contract). The relevance path persists no coverage (stays NULL), so every existing
   and pre-migration message renders byte-identically via the renderer fallback (R5).
 
-### Phase 2 — The analysis-handler seam + bank handler
+### Phase 2 — The analysis-handler seam + bank handler ✅ DONE (2026-06-19)
 - `services/skills/analysis/` — the handler registry + `SkillAnalysisHandler` types; reuse
   `runBankExtraction` machinery. Bank handler: extract → summarize → reconcile (+ categorize) →
   deterministic answer builder honouring SKILL.md; emits `{ answer, citations, coverage }`.
 - Auto-run read-only tools only (export excluded by construction).
 - Unit tests: exhaustive math (totals/net/count), unreconciled rows surfaced before totals, mixed
   currency reported as no-total, figures quoted not invented, export never auto-run.
+- **As built:** new module [`apps/desktop/src/main/services/skills/analysis/`](../apps/desktop/src/main/services/skills/analysis/)
+  — `types.ts` (`SkillAnalysisHandler`/`SkillAnalysisContext`/`SkillAnalysisResult`, reusing the chat
+  path's real `RetrievalScope` + the shared `Citation`/`CoverageInfo`), `registry.ts` (`register`/`get`
+  keyed by `install_id`, **no import-time side effects** — precedent `tool-registry.ts`),
+  `bank-statement.ts` (the `app:bank-statement` handler), `index.ts` (`registerBuiltinSkillAnalysisHandlers()`,
+  the EXPLICIT registration Phase 3 calls once at app init). **NOT wired into chat** — `registerRagIpc.ts`/
+  `router.ts`/`rag/index.ts` are untouched, so the relevance path is byte-identical (R5) trivially.
+  `applies()` is conservative: a single in-scope doc (`buildScopeFilter`, mirroring
+  `registerRagIpc.documentsInScope`) **and** an analysis-shaped keyword (EN+DE) — off-topic keeps
+  relevance (§3.2); the refuse / not-fully-chunked routing gate is Phase 3. `run()` drives the run
+  seams (`runBankExtraction` → `runCashflowSummary` + `runBalanceValidation`, + `runCategorization`
+  only when category-shaped) for their `skill_runs` lifecycle + persistence + ids/counts audit, then
+  computes the answer's FIGURES from the persisted rows via the PURE exported functions
+  (`summarizeCashflow`/`reconcileBalances`/`categorizeRow`) — the run seams surface only counts.
+  `runCsvExport` is never imported (export excluded by construction). The answer is deterministic,
+  localized Markdown (precedent `analysis/listing-answer.ts`): count → unreconciled rows BEFORE the
+  total → totals (or an honest "no single total" on mixed currency) → optional per-category breakdown →
+  caveat. Citations are real `chunks` rows narrowed to the transactions' `sourcePage` (`[Sn]`, M2-safe —
+  never the synthesised total). Coverage is `{ mode:'extract', chunksCovered=chunksTotal, chunksTotal,
+  fullyChunked }` (`documentChunkCount` + the `documents.fully_chunked` column; NULL → false), gating
+  the "whole document" wording (D48). New i18n: `skills.bankAnalysis.*` (EN + DE parity). 15 new tests
+  in [`skills-analysis-bank.test.ts`](../apps/desktop/tests/integration/skills-analysis-bank.test.ts);
+  suite **1807 green**, typecheck + build clean.
 
 ### Phase 3 — Router wiring + refuse-partial + i18n
 - `registerRagIpc`: route tool-skill analysis turns to the handler; enforce the `fully_chunked`
