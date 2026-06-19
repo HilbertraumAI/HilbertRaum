@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { mkdtempSync, writeFileSync, existsSync, mkdirSync, rmSync } from 'node:fs'
+import { mkdtempSync, writeFileSync, existsSync, mkdirSync, rmSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { openDatabase, type Db } from '../../src/main/services/db'
@@ -311,5 +311,42 @@ describe('expandPaths', () => {
     expect(files.some((f) => f.endsWith('nested.md'))).toBe(true)
     expect(files.filter((f) => f.endsWith('ignore.xyz'))).toHaveLength(0)
     expect(files.filter((f) => f.endsWith('explicit.xyz'))).toHaveLength(1)
+  })
+
+  // ING-4 (Wave P5): the walk switched to readdir withFileTypes (one syscall/entry), but a
+  // Dirent does not follow symlinks, so symlinks fall back to statSync to keep the old
+  // link-following expansion set. These prove that set is unchanged. Symlink creation needs a
+  // privilege on Windows (Developer Mode / admin), so skip cleanly where it isn't available.
+  const symlinkOk = ((): boolean => {
+    try {
+      const base = mkdtempSync(join(tmpdir(), 'hilbertraum-symtest-'))
+      writeFileSync(join(base, 't.txt'), 'x')
+      symlinkSync(join(base, 't.txt'), join(base, 'l.txt'))
+      return true
+    } catch {
+      return false
+    }
+  })()
+
+  it.skipIf(!symlinkOk)('follows a symlink to a supported file during the walk', () => {
+    const root = join(dir(), 'root')
+    mkdirSync(root)
+    const target = write('target.md', '# hi') // lives OUTSIDE root
+    symlinkSync(target, join(root, 'linked.md'))
+    const files = expandPaths([root])
+    // linked.md is only reachable by following the symlink → proves the link is followed + added.
+    expect(files.some((f) => f.endsWith('linked.md'))).toBe(true)
+  })
+
+  it.skipIf(!symlinkOk)('follows a symlink to a directory during the walk', () => {
+    const root = join(dir(), 'root')
+    mkdirSync(root)
+    const realDir = join(dir(), 'realdir') // OUTSIDE root
+    mkdirSync(realDir)
+    writeFileSync(join(realDir, 'inside.txt'), 'x')
+    symlinkSync(realDir, join(root, 'linkdir'), 'dir')
+    const files = expandPaths([root])
+    // inside.txt is only reachable by walking through the directory symlink.
+    expect(files.some((f) => f.endsWith('inside.txt'))).toBe(true)
   })
 })

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import {
   copyFileSync,
+  type Dirent,
   existsSync,
   mkdirSync,
   readdirSync,
@@ -1331,23 +1332,40 @@ export function expandPaths(paths: string[]): string[] {
     }
   }
 
+  // ING-4 (perf audit 2026-06-18, Wave P5): walk with `withFileTypes` so dir-vs-file is known
+  // from the readdir syscall itself — ONE syscall per entry instead of readdir + a per-entry
+  // statSync. On USB each statSync is a real seek, so for a large tree this halves the walk's
+  // syscalls (the common, non-symlink case). SUBTLETY: a Dirent does NOT follow symlinks (a
+  // symlink reports isSymbolicLink(), never isDirectory()/isFile()), whereas the old statSync
+  // DID follow them — a symlink to a directory was walked, a symlink to a supported file was
+  // added (intentional, audit L3/L5). So only plain dirs/files use the cheap Dirent type;
+  // anything else (a symlink, or a special entry) falls back to statSync(full) to reproduce the
+  // exact follow-the-link expansion set. Net: same set of files, fewer syscalls in the common case.
   const walk = (dir: string): void => {
-    let entries: string[]
+    let entries: Dirent[]
     try {
-      entries = readdirSync(dir)
+      entries = readdirSync(dir, { withFileTypes: true })
     } catch {
       return
     }
-    for (const name of entries) {
-      const full = join(dir, name)
-      let stat
-      try {
-        stat = statSync(full)
-      } catch {
-        continue
+    for (const entry of entries) {
+      const full = join(dir, entry.name)
+      if (entry.isDirectory()) {
+        walk(full)
+      } else if (entry.isFile()) {
+        if (supported.has(extname(full).toLowerCase())) add(full)
+      } else {
+        // Symlink or special entry — resolve it the old (link-following) way so the expanded
+        // set is byte-identical to the pre-ING-4 statSync walk.
+        let stat
+        try {
+          stat = statSync(full)
+        } catch {
+          continue
+        }
+        if (stat.isDirectory()) walk(full)
+        else if (supported.has(extname(full).toLowerCase())) add(full)
       }
-      if (stat.isDirectory()) walk(full)
-      else if (supported.has(extname(full).toLowerCase())) add(full)
     }
   }
 
