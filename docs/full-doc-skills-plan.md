@@ -1,6 +1,6 @@
 # Full-document analysis for tool skills — plan
 
-_Status: **WORKING PAPER — not started (created 2026-06-19).** Branch
+_Status: **WORKING PAPER — Phases 1–3 of 4 DONE (2026-06-19); Phase 4 open.** Branch
 `fix-use-full-doc-for-skills`. Triggered by an MVP test report: a user ran the **Kontoauszug-Analyse**
 (`bank-statement`) skill in chat and got an answer badged "Basiert auf den relevantesten Passagen —
 nicht auf dem ganzen Dokument" (the `coverage.relevance` meter). The answer was honest but **partial**
@@ -209,13 +209,44 @@ This is what makes requirement 1 ("if we analysed the full document, show that")
   in [`skills-analysis-bank.test.ts`](../apps/desktop/tests/integration/skills-analysis-bank.test.ts);
   suite **1807 green**, typecheck + build clean.
 
-### Phase 3 — Router wiring + refuse-partial + i18n
+### Phase 3 — Router wiring + refuse-partial + i18n ✅ DONE (2026-06-19)
 - `registerRagIpc`: route tool-skill analysis turns to the handler; enforce the `fully_chunked`
   precondition with the **refuse** answer + re-index action (D45); stamp whole-document coverage.
 - EN + DE strings for the refuse notice and any new copy; reuse existing `coverage.extract.*`.
 - Integration tests: exhaustive path (coverage = whole), refuse path (not fully chunked → no model
   call, honest message), relevance path for non-analysis questions byte-unchanged, export still gated,
   single-slot contract preserved.
+- **As built:** `registerBuiltinSkillAnalysisHandlers()` is now called once at app init in
+  [`main/index.ts`](../apps/desktop/src/main/index.ts) (right after the startup skill reconcile,
+  BEFORE any `register*Ipc`), so the registry is populated before the first chat turn. The chat wiring
+  lives in [`registerRagIpc.ts`](../apps/desktop/src/main/ipc/registerRagIpc.ts): after the turn skill
+  resolves + scope/filename auto-scope, and BEFORE the `routeQuestion`/`generateGroundedAnswer`
+  decision, a new branch looks up `getSkillAnalysisHandler(skill.installId)` (the registry **is** the
+  opt-in — a registered handler implies `kind:tool`, no separate kind check) and, when
+  `handler.applies({ question, scope, db })`, takes over the turn. The exhaustiveness gate is a new
+  `allInScopeDocsFullyChunked(db, scope)` helper alongside `documentsInScope`/`readyTreeCountInScope`
+  (same `buildScopeFilter` style; reads `documents.fully_chunked IS NULL` at TURN TIME — R4, not a
+  cached flag). **Not fully chunked ⇒ REFUSE**: a fixed localized `skills.analysis.refusePartial`
+  message (EN+DE) emitted over the locked chat slot (one `sendToken` → `appendMessage`), NO model call,
+  NULL coverage (a refusal makes no breadth claim — the renderer's relevance fallback applies), skill
+  stamped (A1). The copy points the user at the existing **Documents → Re-index** affordance (the same
+  surface `REINDEX_NEEDED_ANSWER` uses — no new UI). **Fully chunked ⇒ `handler.run(ctx)`** with a
+  production `SkillAnalysisContext`: `audit = toSkillToolAudit(ctx.audit)` (the skills-run adapter, not
+  a new sink), `readDocumentSegments` = the same `extractDocumentPreview`-backed faithful reader the
+  skills-run IPC injects (newline-preserving parser segments, not the overlap-collapsing `chunks`),
+  `tr = tMain`, and the chat slot's abort `signal` (Cancel stops the auto-run). The deterministic
+  answer + real `[Sn]` citations + `coverage: result.coverage` (the extract/whole breadth — D48) are
+  persisted via `appendMessage`, skill + `autoFired` stamped exactly as the relevance path. Both
+  outcomes acquire the slot via `withChatStream` (R3 — same progress/lifecycle as the coverage-extract
+  branch); when no handler is registered or `applies()` is false the whole block is skipped and the
+  relevance + coverage-extract paths run **byte-unchanged** (R5). **Tests:** 5 new in
+  [`rag-skill-analysis.test.ts`](../apps/desktop/tests/integration/rag-skill-analysis.test.ts) driving
+  the real `askDocuments` IPC over an ingested statement + an enabled `app:bank-statement` skill —
+  exhaustive path (real figures, `coverage.mode==='extract'` + `fullyChunked`, citations, no model
+  call, skill stamped), refuse path (fixed message, no model call, no tool run, no partial answer),
+  relevance path byte-unchanged for an off-topic question, export never auto-run, single-locked-slot
+  contract (token+done emitted, registry cleared, exactly user+assistant rows). Suite **1812 green**;
+  typecheck + production build clean.
 
 ### Phase 4 — Generalise + docs
 - Confirm `invoice` registers a handler on the same seam; `document-redaction` intentionally does not.

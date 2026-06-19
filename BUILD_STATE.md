@@ -6,6 +6,51 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-19 — **Full-doc-skills Phase 3 landed — the analysis handler is now WIRED into chat
+(`askDocuments`) with the fully-chunked refuse gate.** Branch `fix-use-full-doc-for-skills`; plan
+[`docs/full-doc-skills-plan.md`](docs/full-doc-skills-plan.md) Phase 3 of 4 (still a working paper —
+**Phase 4 open**). **Why:** Phases 1–2 built the data contract + the standalone bank analysis handler
+but nothing called it; a `kind:tool` skill's exhaustive whole-document tools were still bypassed on the
+chat path. Phase 3 routes the turn to the handler. **App init:** `registerBuiltinSkillAnalysisHandlers()`
+is now called once in [`main/index.ts`](apps/desktop/src/main/index.ts) (right after the startup skill
+reconcile, BEFORE every `register*Ipc`) so the registry is populated before the first chat turn — no
+import-time side effects, opt-in per skill (D49). **Chat wiring**
+([`registerRagIpc.ts`](apps/desktop/src/main/ipc/registerRagIpc.ts)): after the turn skill resolves +
+scope/filename auto-scope and BEFORE the `routeQuestion`/`generateGroundedAnswer` decision, a new branch
+looks up `getSkillAnalysisHandler(skill.installId)` — **the registry IS the opt-in**, a registered
+handler implies `kind:tool` (no separate kind check) — and when `handler.applies({ question, scope, db })`
+takes over the turn. **Exhaustiveness gate (D45/R4):** a new `allInScopeDocsFullyChunked(db, scope)`
+helper (alongside `documentsInScope`/`readyTreeCountInScope`, same `buildScopeFilter` style) reads
+`documents.fully_chunked IS NULL` at TURN TIME (not a cached flag). **Not fully chunked ⇒ REFUSE:** a
+fixed localized **`skills.analysis.refusePartial`** message (EN+DE) over the locked chat slot (one
+`sendToken` → `appendMessage`), **NO model call, no partial answer, no tool run**, NULL coverage (a
+refusal makes no breadth claim → renderer relevance fallback), skill stamped (A1); the copy points at
+the existing **Documents → Re-index** affordance (same surface as `REINDEX_NEEDED_ANSWER` — no new UI).
+**Fully chunked ⇒ `handler.run(ctx)`** with a production `SkillAnalysisContext`: `audit =
+toSkillToolAudit(ctx.audit)` (the skills-run adapter, NOT a new sink — ids/counts only),
+`readDocumentSegments` = the same `extractDocumentPreview`-backed faithful reader the skills-run IPC
+injects (newline-preserving parser segments, not the overlap-collapsing `chunks`), `tr = tMain`, and the
+chat slot's abort `signal` (Cancel stops the auto-run). The deterministic answer + real `[Sn]` citations
++ `coverage: result.coverage` (the extract/whole breadth — **D48**, what makes the meter show the truth)
+are persisted via `appendMessage`, skill + `autoFired` stamped exactly as the relevance path. Both
+outcomes acquire the slot via `withChatStream` (R3 — same lifecycle as the coverage-extract branch).
+**R5:** when no handler is registered for the turn skill, or `applies()` is false (off-topic / multi-doc),
+the whole block is skipped and the relevance + coverage-extract paths run **byte-unchanged** (verified by
+the off-topic test). **No new capability reach:** the only content handles are the audit + segment reader
+the skills-run IPC already uses; `runCsvExport` is never imported (export stays confirm-gated). **i18n:**
+`skills.analysis.refusePartial` added to en.ts + de.ts (parity). **Tests:** 5 new in
+[`rag-skill-analysis.test.ts`](apps/desktop/tests/integration/rag-skill-analysis.test.ts) driving the
+REAL `askDocuments` IPC over an ingested statement + an enabled `app:bank-statement` skill — exhaustive
+(real figures, `coverage.mode==='extract'`+`fullyChunked`, citations, 0 model calls, skill stamped),
+refuse (fixed message, 0 model calls, 0 tool runs, no partial), relevance byte-unchanged for an off-topic
+question, export never auto-run, single-locked-slot contract (token+done emitted, in-flight registry
+cleared, exactly user+assistant rows). Suite **1812 green**; typecheck + production build clean. **Next —
+Phase 4 (open):** confirm `invoice` registers a handler on the same seam (`document-redaction`
+intentionally does not); fold this plan into [`architecture.md`](docs/architecture.md) "Skills — design
+record" + the coverage half into [`rag-design.md`](docs/rag-design.md) §14; update
+[`known-limitations.md`](docs/known-limitations.md) (third coverage state: tool-skill exhaustive); then
+**delete the plan file**. **(prior entries below.)**_
+
 _2026-06-19 — **Full-doc-skills Phase 2 landed — the analysis-handler seam + bank handler (NOT yet
 wired into chat).** Branch `fix-use-full-doc-for-skills`; plan
 [`docs/full-doc-skills-plan.md`](docs/full-doc-skills-plan.md) Phase 2 of 4 (still a working paper —

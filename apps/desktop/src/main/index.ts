@@ -16,6 +16,7 @@ import { registerChatIpc } from './ipc/registerChatIpc'
 import { registerDocsIpc } from './ipc/registerDocsIpc'
 import { registerCollectionsIpc } from './ipc/registerCollectionsIpc'
 import { registerSkillsIpc } from './ipc/registerSkillsIpc'
+import { registerBuiltinSkillAnalysisHandlers } from './services/skills/analysis'
 import { registerDocTasksIpc } from './ipc/registerDocTasksIpc'
 import { DocTaskManager } from './services/doctasks'
 import { documentsDir } from './services/ingestion'
@@ -275,6 +276,10 @@ function initBackend(): void {
   } catch {
     /* workspace locked — reconcile deferred to a post-unlock pass in a later phase */
   }
+  // Full-doc-skills Phase 3 (§3.2/D49): populate the analysis-handler registry once, BEFORE any IPC
+  // (so `askDocuments` can consult it on the very first chat turn). No import-time side effects — the
+  // registry is opt-in per skill; an unregistered skill keeps the relevance path verbatim (R5).
+  registerBuiltinSkillAnalysisHandlers()
   registerCoreIpc(ctx)
   registerWorkspaceIpc(ctx)
   registerModelIpc(ctx)

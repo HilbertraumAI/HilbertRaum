@@ -468,6 +468,12 @@ export const en = {
   'skills.bankAnalysis.caveat':
     'These figures are the statement’s own printed amounts, read across the whole document — ' +
     'nothing here is added up from prose or invented.',
+  // Full-doc-skills Phase 3 (§3.2/D45): the refuse-partial notice. A tool skill can only answer
+  // exhaustively over a FULLY-INDEXED document; a legacy/partly-chunked doc is refused (no partial
+  // answer, no model call) and the user is pointed at the existing Re-index affordance. Content-free.
+  'skills.analysis.refusePartial':
+    'I can only answer this accurately from the whole document, and this one isn’t fully indexed ' +
+    'yet. Open the Documents screen and choose Re-index, then ask again.',
 
   // ---- Models (ModelsScreen.tsx) ----
   'models.title': 'AI Model',

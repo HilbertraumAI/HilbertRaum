@@ -496,6 +496,10 @@ export const de: Record<keyof typeof en, string> = {
   'skills.bankAnalysis.caveat':
     'Diese Zahlen sind die im Auszug gedruckten Beträge, gelesen über das ganze Dokument — ' +
     'nichts davon wird aus Fließtext zusammengerechnet oder erfunden.',
+  // Full-doc-skills Phase 3 (§3.2/D45): Hinweis bei Verweigerung einer Teilantwort.
+  'skills.analysis.refusePartial':
+    'Das kann ich nur genau über das ganze Dokument beantworten, und dieses ist noch nicht ' +
+    'vollständig indexiert. Öffne den Dokumente-Bildschirm, wähle „Neu indexieren" und frage dann erneut.',
 
   // ---- Models ----
   'models.title': 'KI-Modell',
