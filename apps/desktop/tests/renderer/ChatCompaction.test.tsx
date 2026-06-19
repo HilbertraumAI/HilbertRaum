@@ -4,6 +4,7 @@ import { render, screen, cleanup, waitFor, act } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { ChatScreen } from '../../src/renderer/screens/ChatScreen'
 import type { Conversation, Message, RuntimeStatus } from '../../src/shared/types'
+import type { CompactionNotice } from '../../src/shared/ipc'
 import { stubApi } from '../helpers/renderer'
 
 // Phase 2 UX (context-compaction plan §5.1–§5.3): the composer context-usage meter, the transcript
@@ -91,7 +92,7 @@ describe('ChatScreen — "summarizing…" notice (§5.2)', () => {
   it('shows on the compaction notice and clears on the first answer token', async () => {
     const user = userEvent.setup()
     let tokenCb: ((t: string) => void) | undefined
-    let compactionCb: (() => void) | undefined
+    let compactionCb: ((notice: CompactionNotice) => void) | undefined
     let resolveSend: (() => void) | undefined
     const sendChatMessage = vi.fn(
       () =>
@@ -110,7 +111,7 @@ describe('ChatScreen — "summarizing…" notice (§5.2)', () => {
       }),
       onReasoning: vi.fn(() => () => {}),
       onScopeNotice: vi.fn(() => () => {}),
-      onCompaction: vi.fn((_id: string, cb: () => void) => {
+      onCompaction: vi.fn((_id: string, cb: (notice: CompactionNotice) => void) => {
         compactionCb = cb
         return () => {}
       })
@@ -122,7 +123,7 @@ describe('ChatScreen — "summarizing…" notice (§5.2)', () => {
 
     // The stream is in flight (sendChatMessage pending) and the subscriptions are registered.
     await waitFor(() => expect(compactionCb).toBeTypeOf('function'))
-    act(() => compactionCb!())
+    act(() => compactionCb!({ phase: 'start' }))
     expect(await screen.findByText(/summarizing earlier messages/i)).toBeInTheDocument()
 
     // The first answer token clears the notice.
