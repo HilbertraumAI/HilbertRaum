@@ -1,7 +1,8 @@
 import { forwardRef, type ButtonHTMLAttributes } from 'react'
 
-// Button (guidelines §6): exactly three levels — Primary (--accent-600 fill, ONE per
-// view), Secondary (surface + --border-strong outline, the default), Ghost (text only).
+// Button (guidelines §6): exactly three levels — Primary (--brand-teal fill + dark-ink
+// text, ONE per view), Secondary (surface + --border-strong outline, the default),
+// Ghost (text only).
 // Focus ring + hit targets come from the global CSS baseline; `type` defaults to
 // "button" so a Button inside a <form> never submits by accident.
 

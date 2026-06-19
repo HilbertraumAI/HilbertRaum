@@ -6,6 +6,44 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-19 — **Brand refresh BR2 landed — design tokens swapped from blue to the sealed-room teal,
+with a new contrast guard.** Branch `design-adjustments`; plan
+[`docs/brand-refresh-plan.md`](docs/brand-refresh-plan.md) phase BR2 of BR1–BR6 (WORKING PAPER — BR3
+next). **Scope:** `tokens.css` + the handful of `styles.css` rules that consumed the blue accent ramp,
+the new contrast test, and two stale code comments — no backend/IPC/schema/CSP touch; the in-app `◈`
+mark is still a placeholder (BR3 replaces it). **Brand primitives (new, theme-constant in `:root`):**
+`--brand-teal #57D0A4` (the dot; primary fill; accent/link/focus on DARK), `--brand-teal-hover #48BE92`,
+`--brand-teal-active #3DAE84`, `--brand-teal-dark #1B7F5F` (accent/link/focus on LIGHT + solid-control
+fill carrying a white marker), `--brand-ink-dark #11171F`, `--brand-ink-light #E8EDF2`,
+`--brand-surface-dark #0E1319`. **The old blue accent ramp (`--accent-700/600/500/300`) is fully
+RETIRED** — every reference re-pointed or removed (grep-verified: zero `accent-NNN` / `2f6fed` / `4f8cff`
+/ `2257c9` left in the renderer). **Role re-point:** `--accent`/`--link`/`--focus`/`--row-selected-bar`
+→ `--brand-teal-dark` on light, `--brand-teal` on dark; `--bg` (dark) nudged `#0f1115 → #0E1319` via the
+new primitive (§11 Q1 = YES). **Primary button (the one deliberate departure, §3.4):** explicit
+`.btn.primary` = `--brand-teal` fill + `--brand-ink-dark` text in BOTH themes (≈9.98:1) with
+hover/active = `--brand-teal-hover`/`-active`; NOT routed through `--accent` (which differs per theme).
+**Filled controls:** checkbox/`<progress>` `accent-color` → theme-aware `--accent` (Chromium auto-picks
+a contrasting checkmark); the custom **switch-on track** → `--brand-teal-dark` in BOTH themes because the
+thumb is white `--n-0` (white on bright teal = 1.9:1 fails; on dark teal = 5.22:1 ✓). **Semantic
+colours (success/error/warning) UNTOUCHED** — teal never replaces a status colour. **§11 answers
+settled:** Q1 dark-bg nudge done; Q2 `--brand-teal-dark` kept at `#1B7F5F` (computes **4.92:1** on light
+bg / 5.22:1 on white — comfortable AA headroom, no darkening needed). **New guard:**
+[`tests/unit/token-contrast.test.ts`](apps/desktop/tests/unit/token-contrast.test.ts) parses `tokens.css`,
+resolves every `var()` chain per theme, and computes WCAG contrast for all role pairings in BOTH themes
+(text ≥4.5, UI ≥3) — it both verifies AND PINS the derived teal (incl. asserting the FORBIDDEN
+bright-teal-on-white < 3:1, so the value can't drift off the bright hex). The repo had no contrast test
+before — this is the most valuable new guard. **Measured ratios:** light link/focus/accent 4.92:1 (bg) /
+5.22:1 (surface); dark 10.42:1 (bg) / 9.62:1 (surface); dark text on nudged bg 16.92:1; primary fill+ink
+9.98:1 (hover 8.20, active 6.84); switch-on+thumb 5.22:1. **Verify:** `npm run typecheck` + `npm run
+build` clean; full vitest from `apps/desktop` **1840 passed / 27 skipped** (+12 contrast cases;
+`Theme.test.tsx`/`Components.test.tsx` unchanged — neither pins a hex). BR2 eyeball spot-check
+([`scripts/walk-brand-refresh.mjs`](apps/desktop/scripts/walk-brand-refresh.mjs), Home/Chat/Settings both
+themes, captures in `docs/design-review/brand-refresh/br2/`): teal reads calm/restrained, no teal
+surfaces, switch-on + segmented controls correct, warning stays amber, dark-bg nudge clean. The full
+six-screen / both-locale walk is BR4. **Next: BR3** — `BrandMark`/`BrandLockup` components (theme-pair
+CSS toggle, gate-safe pre-unlock) wired into the rail + gate, remove the `◈`, + a `BrandMark.test.tsx`.
+**(prior entries below.)**_
+
 _2026-06-19 — **Brand refresh BR1 landed — sealed-room brand artwork vendored + the icon pipeline
 rewritten.** Branch `design-adjustments`; plan [`docs/brand-refresh-plan.md`](docs/brand-refresh-plan.md)
 phase BR1 of BR1–BR6 (still a WORKING PAPER — BR2 next). **Scope:** static brand assets + the
