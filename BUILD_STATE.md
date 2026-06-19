@@ -6,6 +6,39 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-19 — **Performance Wave P5 landed — the three remaining Medium findings shipped + CLOSED OUT.**
+Branch `performance-tuning-continuation` (off the P1–P4 `performance-tuning` work). Three bounded,
+behavior-preserving wins on hot/felt paths, one commit each:
+- **DB-5** — `prepareCached(db, sql)` in [`db.ts`](apps/desktop/src/main/services/db.ts): a
+  `WeakMap<Db, Map<sql, Stmt>>` compiling each distinct CONSTANT SQL once per connection (statements GC
+  with the `Db`). Routed the hot per-turn callers: `chat.ts` listMessages/appendMessage/getConversation/
+  listConversations, `collections.ts` resolveScope (2 prepares), the four `listDocuments` grouped
+  counters. **Constraint:** dynamic-`IN(?,…)` prepares left on `db.prepare()` (caching them would leak /
+  bind wrong arity). New unit test `tests/unit/db-prepare-cache.test.ts`.
+- **ING-4** — the import-selection `walk()` now uses `readdirSync(dir, { withFileTypes: true })` (one
+  syscall/entry instead of readdir + per-entry `statSync`). Symlinks (a `Dirent` doesn't follow them)
+  fall back to `statSync` so the link-following expansion set is byte-identical; two new symlink tests
+  (skip where the OS denies symlink creation — this Windows box does, EPERM). The **cross-call expansion
+  cache was SKIPPED** (preflight↔import staleness risk for a modest gain).
+- **FE-6** — paginated document preview. `DocumentPreview` gained OPTIONAL `totalSegments`/`nextOffset`;
+  new `extractDocumentPreviewPage(offset,limit)` (default 50) slices the UNCHANGED
+  `extractDocumentPreview`; `previewDocument` returns the first page, new `previewDocumentPage` IPC
+  serves the rest behind a modal "Show more" + "Showing X of N". **The internal full-text consumers
+  (skills, compare/translate, RAG) still call `extractDocumentPreview` and get every segment.**
+  Trade-off: no partial parse, so subsequent pages re-extract + slice (bounded to one parse/interaction).
+  New service + renderer tests.
+
+**Data contracts:** `DocumentPreview.totalSegments?`/`nextOffset?` (optional; absent ⇒ whole doc) +
+the new `previewDocumentPage(id, offset, limit)` IPC; `prepareCached`/`Stmt` exported from `db.ts`;
+`extractDocumentPreviewPage`/`DEFAULT_PREVIEW_PAGE_SIZE` exported from `ingestion`. **Verification:**
+`npm test` 1858 passed / 29 skipped, typecheck clean, `npm run build` clean. **Docs:** folded into
+[`docs/architecture.md`](docs/architecture.md) "Performance — design record … Wave P5"; DB-5/ING-4/FE-6
+tagged ✅ IMPLEMENTED inline + §6 in [`docs/performance-audit-2026-06-18.md`](docs/performance-audit-2026-06-18.md).
+**Open residuals:** only the deferred-with-unmet-triggers items — P4b worker scan (trigger: cached
+main-thread scan >100 ms routinely; measured ≤70 ms @10k), P4c ANN/sqlite-vec (rejected, D15), and the
+behavior-sensitive renderer tail FE-5/FE-3/FE-4. **Next:** branch ready to merge into `performance-tuning`
+/ `master`. **(prior entries below.)**_
+
 _2026-06-19 — **Brand refresh BR6 landed — the wave is CLOSED OUT.** Branch `design-adjustments`. **The
 HilbertRaum brand refresh is fully shipped (BR1–BR6).** **Why BR6:** discharge the doc-lifecycle rule —
 fold the durable decisions into the binding guidelines and retire the plan file. **Docs fold:**

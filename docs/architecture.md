@@ -339,6 +339,63 @@ drive) still blocks — the narrowed remaining D15 cliff.
   llama.cpp sidecar rather than `onnxruntime-node` (D15's reasoning). Not adopted; a pure-JS HNSW would
   be reconsidered only if a linear scan over the resident buffer (even off-thread) still bites.
 
+## Performance — design record (perf audit 2026-06-18, Wave P5)
+Three remaining Medium findings on hot/felt paths, all bounded and **behavior-preserving**.
+Condensed from `docs/performance-audit-2026-06-18.md` §4 after Wave P5 shipped (doc-lifecycle rule).
+
+**Hot-path prepared statements (`services/db.ts`, `chat.ts`, `collections.ts`, `ingestion/index.ts`).**
+- **DB-5 — cache compiled statements per connection.** `node:sqlite` re-parses AND re-plans the SQL
+  text on every `db.prepare()`, and the hottest per-chat-turn read/write paths re-compiled the same
+  STATIC SQL each call. A new **`prepareCached(db, sql)`** (a module-level `WeakMap<Db, Map<sql, Stmt>>`)
+  compiles each distinct SQL string once per connection and reuses the `StatementSync`; the `WeakMap`
+  lets the statements GC with their `Db` (no leak across encrypted-workspace open/close). Routed
+  through it: `chat.ts` `listMessages` / `appendMessage` (insert + the `updated_at` bump) /
+  `getConversation` / `listConversations`; `collections.ts` `resolveScope` (the scope-row select +
+  the attachments select, ~2×/turn); the four `listDocuments` DB-3 grouped-counter prepares. **HARD
+  CONSTRAINT:** only CONSTANT-SQL callers use it — any prepare built with a dynamic `IN (?, …)` arity
+  (or otherwise per-call-varying text) stays on `db.prepare()`, since caching those would leak
+  unbounded entries and/or bind the wrong arity. Results and ordering are unchanged; a unit test
+  asserts statement-object reuse for identical SQL, distinctness for different SQL, per-`Db` isolation,
+  and unchanged results across reuse.
+
+**Import selection walk (`services/ingestion/index.ts`).**
+- **ING-4 — halve the walk's syscalls.** `expandPaths` walked the picked tree with `readdirSync(dir)`
+  **plus a `statSync` per entry**, and the tree is walked twice (the preflight IPC
+  `summarizeImportPaths`, then again on import via `expandPathsWithSource`). On USB each `statSync` is a
+  real seek on the synchronous event loop. `walk()` now uses `readdirSync(dir, { withFileTypes: true })`,
+  so directory-vs-file is known from the readdir syscall itself — one syscall/entry instead of two.
+  **Symlink subtlety (behavior-preserving):** a `Dirent` does NOT follow symlinks (it reports
+  `isSymbolicLink()`, never `isDirectory()/isFile()`), whereas the old `statSync` DID — a symlink to a
+  dir was walked, a symlink to a supported file added (intentional, audit L3/L5). So only plain
+  dirs/files take the cheap `Dirent` path; a symlink (or any special entry) falls back to
+  `statSync(full)`, reproducing the exact link-following expansion set. Tests prove a dir-symlink is
+  still walked and a file-symlink still added (skipped where the OS denies symlink creation, e.g.
+  Windows without the privilege). **SKIPPED — the optional cross-call cache** (reuse the preflight's
+  expansion on import to avoid the second walk): preflight and import are separate IPC calls and the
+  filesystem can change between them, so a cross-call cache carries a real staleness risk for a modest
+  gain; the per-walk syscall win is the safe, unconditional part.
+
+**Document preview pagination (`shared/types.ts` + `ipc.ts`, `ingestion/index.ts`, `ipc/registerDocsIpc.ts`, `preload`, `DocumentsScreen.tsx`).**
+- **FE-6 — paginate the preview.** The preview returned the whole extracted document as one IPC payload
+  and mounted every segment synchronously (a large PDF/transcript crossed the bridge as one giant JSON
+  blob and hitched the modal). `DocumentPreview` gains **OPTIONAL** `totalSegments` + `nextOffset`;
+  absent ⇒ the payload is the whole document (so internal consumers and old mocks are unaffected). A new
+  service wrapper **`extractDocumentPreviewPage(offset, limit)`** (`DEFAULT_PREVIEW_PAGE_SIZE = 50`)
+  slices the UNCHANGED `extractDocumentPreview` and sets the cursor; `previewDocument` now returns the
+  first page and a new `previewDocumentPage` IPC serves the rest. The modal accumulates pages behind a
+  "Show more" control + a "Showing X of N" hint. **HARD CONSTRAINT preserved:** the internal full-text
+  consumers — `registerSkillsIpc`, `doctasks/manager` (compare/translate), `registerRagIpc` — keep
+  calling `extractDocumentPreview` and get ALL segments (their tests pass unchanged). **TRADE-OFF:**
+  there is no partial parse, so each page re-extracts + slices; the common single-glance case is strictly
+  better (same one parse, tiny payload), and only reading a huge doc page-by-page re-parses per "Show
+  more" — bounded to one parse per interaction (what the old code paid up front). `requireNotProcessing`
+  + deterministic parse keep `totalSegments`/slices stable across page calls.
+
+Deferred with explicit, unmet triggers (recorded, not built): P4b worker/`SharedArrayBuffer` scan
+(trigger: cached main-thread scan >100 ms routinely; measured ≤70 ms @10k chunks), P4c ANN/sqlite-vec
+(rejected — native loadable extension vs the no-native-build posture, D15), and the behavior-sensitive
+renderer items FE-5 list windowing / FE-3 Composer-`input` move / FE-4 `DocRow` extraction.
+
 ## Models & runtime (Phase 2)
 - **Manifests** are local YAML under `model-manifests/` (committed; weights are not). The schema +
   validator live in `src/shared/manifest.ts` so renderer and main share one definition. YAML is

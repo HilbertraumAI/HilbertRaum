@@ -9,6 +9,16 @@
 > seeks) and main-thread CPU are the scarce resources, so write-amplification, full
 > scans, synchronous main-process work, and prompt-prefill cost dominate.
 
+> **STATUS — Wave P5 IMPLEMENTED (2026-06-19, branch `performance-tuning-continuation`).** The three
+> remaining Medium findings on hot/felt paths, all behavior-preserving: **DB-5** (per-connection
+> prepared-statement cache `prepareCached` on the hot per-turn STATIC-SQL callers), **ING-4** (import
+> walk via `readdirSync withFileTypes` — one syscall/entry, symlinks fall back to `statSync` to keep the
+> link-following set; cross-call cache skipped), **FE-6** (paginated document preview — bounded first
+> page + cursor + modal "Show more"; internal full-text consumers unchanged). Suite green, typecheck +
+> build clean. Decisions folded into `docs/architecture.md` "Performance — design record … Wave P5";
+> these three are tagged ✅ IMPLEMENTED inline + in §6. Open residuals are now only the
+> deferred-with-unmet-triggers items (P4b worker scan, P4c ANN, FE-3/4/5 renderer tail).
+>
 > **STATUS — Waves P1 + P2 + P3 + P4 IMPLEMENTED (2026-06-18, branch `performance-tuning`).** Wave P4
 > (the documented D15 deferral): **RAG-1 / RAG-6** — the synchronous main-thread vector scan now reads
 > from a **process-resident decoded-vector cache** (`embeddings/resident-cache.ts`) instead of
@@ -165,11 +175,12 @@ work) that cause visible jank on CPU-only hardware.
 - **Impact:** Forces a full table scan / row-by-row filter; worst during/after a mock→E5 migration when stale rows are loaded across the SQL→JS boundary only to be discarded. Also slows the DB-3 stale check and the `hybrid.ts:81` keyword join.
 - **Fix:** `CREATE INDEX idx_embeddings_model ON embeddings(embedding_model_id)` (additive migration, precedent throughout `db.ts`).
 
-#### DB-5 — Prepared statements re-compiled on every call on hot read paths · **Medium**
+#### DB-5 — Prepared statements re-compiled on every call on hot read paths · **Medium** · ✅ IMPLEMENTED (Wave P5)
 - **Location:** Pervasive `db.prepare(...).get()/.all()/.run()` one-liners. Hot: `chat.ts:372-379` (`listMessages`, per turn), `chat.ts:404-436` (`appendMessage`), `collections.ts:450-484` (`resolveScope`, 2/turn), the DB-3 counters.
 - **Evidence:** `node:sqlite` `prepare()` parses+plans each call; none memoized. Batch-insert sites correctly hoist the prepare — the per-call readers don't.
 - **Impact:** Extra parse/plan CPU on the main thread per turn / per row; compounds DB-3.
 - **Fix:** Cache hot-path statements (module-level `WeakMap<Db, Stmt>` or a small per-Db cache). Prioritize `listMessages`, `appendMessage`, `resolveScope`, the DB-3 counters.
+- **As implemented (Wave P5):** `prepareCached(db, sql)` in `db.ts` — a `WeakMap<Db, Map<sql, Stmt>>` compiling each distinct CONSTANT SQL once per connection (statements GC with the `Db`). Routed: `chat.ts` listMessages/appendMessage/getConversation/listConversations, `collections.ts` resolveScope (2 prepares), the four `listDocuments` grouped counters. Dynamic-`IN(?,…)` prepares deliberately left on `db.prepare()` (caching them would leak / bind wrong arity). See architecture.md "Performance — design record … Wave P5".
 
 #### DB-6 — `extraction_records` aggregation lacks an index for the unscoped path · **Medium** · ✅ IMPLEMENTED
 - **Location:** `apps/desktop/src/main/services/analysis/extract.ts:305-345` (`aggregateExtractions`); only index is `idx_extract_doc_type(document_id, record_type, normalized_value)` (`db.ts:221`).
@@ -246,11 +257,12 @@ work) that cause visible jank on CPU-only hardware.
 - **Impact:** A 200-file folder takes the *sum* of every file's parse+embed+write. Parse of file N+1 is independent of embed of file N but left on the table; a 1-deep pipeline could cut wall-clock materially.
 - **Fix:** Shallow producer/consumer — parse+chunk N+1 while N embeds (the embed sidecar is the single contended resource; parse is not). At minimum document the trade-off. (Pairs with DB-1: batch the writes too.)
 
-#### ING-4 — Selection is walked & `statSync`'d 2–3× (preflight + import expansion) · **Medium**
+#### ING-4 — Selection is walked & `statSync`'d 2–3× (preflight + import expansion) · **Medium** · ✅ IMPLEMENTED (Wave P5 — per-walk syscall win; cross-call cache skipped)
 - **Location:** `ingestion/index.ts:902-916` (`summarizeImportPaths` → `expandPaths`), `:1271` (import → `expandPathsWithSource` → `expandPaths` again), walker `:1205-1248`.
 - **Evidence:** Recursive `readdirSync`/`statSync` walk run by preflight, then again by the import, plus per-audio-file `statSync`.
 - **Impact:** A large picked tree is synchronously walked 2–3× on the event loop; on USB each `statSync` is a real seek and the UI freezes during the walk.
 - **Fix:** Walk once, cache `ExpandedFile[]` + sizes, reuse for both preflight and import. Use `readdirSync(dir, {withFileTypes:true})` (one syscall/entry instead of two).
+- **As implemented (Wave P5):** `walk()` switched to `readdirSync(dir, { withFileTypes: true })` — one syscall/entry instead of readdir + a per-entry `statSync`. Symlinks (which a `Dirent` does NOT follow, unlike the old link-following `statSync`) fall back to `statSync(full)`, so the expanded set is byte-identical (tests cover a symlinked dir + file). The **cross-call cache was SKIPPED** — preflight and import are separate IPC calls and the filesystem can change between them, so reusing the expansion carries a staleness risk for a modest gain; the per-walk syscall win is unconditional and safe. See architecture.md Wave P5.
 
 #### ING-5 — OCR renders and recognizes strictly one page at a time (no render/recognize overlap) · **Medium** · ✅ IMPLEMENTED
 - **Location:** `doctasks/manager.ts:821-827`, `ocr/rasterizer.ts:171-179`, `ocr/tesseract.ts:117-133`.
@@ -317,11 +329,12 @@ work) that cause visible jank on CPU-only hardware.
 - **Fix:** Window the transcript first, then the document list; gate the scroll effect so it doesn't run on every flush when scrolled up.
 - **As implemented (Wave P2):** the **scroll-thrash half is done** under FE-1 — the scroll-to-bottom effect is gated on an `atBottomRef`, so a streaming flush only forces layout + scroll while the user is pinned to the bottom. **Deferred:** the actual list windowing (transcript + document list) — no virtualization library is in deps, and windowing variable-height Markdown items while preserving scroll-to-bottom, find-in-page, and a11y is a behavior-sensitive change; tracked for when transcript/list length actually bites.
 
-#### FE-6 — PreviewModal renders the entire extracted document text synchronously over IPC · **Medium**
+#### FE-6 — PreviewModal renders the entire extracted document text synchronously over IPC · **Medium** · ✅ IMPLEMENTED (Wave P5)
 - **Location:** `DocumentsScreen.tsx:1770-1781` (`preview.segments.map`), IPC `previewDocument` (`preload/index.ts:272`).
 - **Evidence:** `previewDocument(id)` returns the full document text as one serialized payload; all segments mounted in one synchronous render.
 - **Impact:** A large PDF/transcript crosses the bridge as one big JSON and mounts at once — multi-hundred-ms hitch + high modal memory.
 - **Fix:** Paginate/window the preview; have `previewDocument` return a bounded first page + cursor.
+- **As implemented (Wave P5):** `DocumentPreview` gained OPTIONAL `totalSegments`/`nextOffset`; a new `extractDocumentPreviewPage(offset, limit)` (default 50) slices the UNCHANGED `extractDocumentPreview`, `previewDocument` returns the first page, and a new `previewDocumentPage` IPC serves the rest behind a modal "Show more". The internal FULL-text consumers (skills, compare/translate, RAG) still call `extractDocumentPreview` and get every segment. Trade-off: no partial parse, so subsequent pages re-extract + slice (bounded to one parse/interaction). See architecture.md Wave P5.
 
 #### FE-7 — IPC chattiness: 400 ms full-list polling during import/attach; 300 ms stream-recover poll · **Medium** · ✅ IMPLEMENTED (import/attach polls; stream-recover poll unchanged)
 - **Location:** `DocumentsScreen.tsx:274-288` (`watchJob` → `refresh()` → `listDocuments()` + `refreshCollections()`), `ChatScreen.tsx:790-820` (`watchAttachJob`), `:349-399` + `polling.ts:13` (300 ms).
@@ -465,7 +478,24 @@ P3)"; RT-2 also folded into `docs/rag-design.md` §8 (grounded prompt) + archite
 Decisions folded into `docs/architecture.md` "Performance — design record (perf audit 2026-06-18, Wave
 P4)"; `docs/rag-design.md` §12.2 D15 updated (deferral partially resolved).
 
-Plus the **Low** items (DB-5/DB-8, RAG-5/RAG-7/RAG-8, ING-6/7/8/9/10, FE-8/9/10, RT-6/7/8/9) opportunistically when touching those files.
+**Wave P5 — three remaining Medium findings on hot/felt paths — ✅ DONE (2026-06-19, branch
+`performance-tuning-continuation`):**
+17. ✅ **DB-5** — `prepareCached(db, sql)` per-connection statement cache; routed the hot per-turn
+    STATIC-SQL callers (chat listMessages/appendMessage/getConversation/listConversations, collections
+    resolveScope, the listDocuments grouped counters). Dynamic-`IN(?,…)` prepares left as-is.
+18. ✅ **ING-4** — `readdirSync(dir, { withFileTypes: true })` in the import walk (one syscall/entry;
+    symlinks fall back to `statSync` to preserve the link-following set). The cross-call expansion
+    cache was **skipped** (preflight↔import staleness risk).
+19. ✅ **FE-6** — paginated document preview: bounded first page + `nextOffset` cursor + a modal "Show
+    more"; the internal full-text consumers (skills, compare/translate, RAG) keep getting all segments.
+
+Decisions folded into `docs/architecture.md` "Performance — design record (perf audit 2026-06-18, Wave
+P5)". Remaining open: the deferred-with-triggers items only — **P4b** worker scan (trigger: cached
+main-thread scan >100 ms routinely; not met), **P4c** ANN/sqlite-vec (rejected, D15), and the
+behavior-sensitive renderer tail **FE-5** (list windowing) / **FE-3** (Composer-`input` move) / **FE-4**
+(`DocRow` extraction).
+
+Plus the **Low** items (DB-8, RAG-5/RAG-7/RAG-8, ING-6/7/8/9/10, FE-8/9/10, RT-6/7/8/9) opportunistically when touching those files.
 
 ---
 
