@@ -6,6 +6,132 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-19 — **Context budgeting + conversation compaction — FEATURE CLOSED OUT (Phase 3 deferred per D-c).**
+Branch `context-window-compaction`. **Decision (with the user): do NOT build Phase 3 now** — the optional
+`/tokenize`-backed exact-count-near-threshold upgrade. Rationale: the word estimate is safe-biased (R9 —
+over-counting only summarizes *early*, harmless; the L1 `fitMessagesToContext` floor still guarantees fit
+if it triggers late), so Phase 3 only earns its keep if the threshold proves *jumpy in real use*, which has
+not been observed (the feature isn't in real use yet). It also isn't free — llama-server's `/tokenize` does
+NOT apply the chat template, so even the "exact" path would tokenize per-message content + a per-message
+overhead fudge, trading a known safe over-count for a new approximation + an HTTP round-trip + a new
+optional interface method. `messages.token_count` stays NULL. Revisit only if the boundary proves jumpy.
+**Doc-lifecycle close-out done (per CLAUDE.md):** the working-paper plan `docs/context-compaction-plan.md`
+is condensed into a §-numbered **design record** [`docs/rag-design.md`](docs/rag-design.md) **§15**
+(15.1 L0 window source-of-truth · 15.2 token accounting + trigger · 15.3 L2 pre-pass + checkpoint
+persistence · 15.4 summary representation + summarizer call · 15.5 UX meter/notice/marker/toggle ·
+15.6 deferred Phase-3 + R7/R10 guardrails), with a stable **anchor map** so the existing code/test comments
+that cite the old plan (`§L0`, `§4.x`, `§5.x`, `Rn`, `D-x`) resolve into §15.x. Cross-reference added from
+[`docs/architecture.md`](docs/architecture.md) "Chat & streaming" (a new "Conversation compaction (L2)"
+bullet → §15). **Plan file DELETED** (`git rm`); full original preserved at
+`git show 4dca3e3:docs/context-compaction-plan.md`. **One pre-existing typecheck defect fixed (not from
+this step):** committed Phase-2 test `tests/renderer/ChatCompaction.test.tsx` typed its `onCompaction`
+mock callback `() => void` while the real preload signature is `(notice: CompactionNotice) => void` —
+`npm test` (esbuild, no typecheck) passed so it slipped the Phase-2 "typecheck clean" claim. Fixed to the
+real signature (import `CompactionNotice`, call `compactionCb!({ phase: 'start' })`); behaviour unchanged.
+**Verification:** `npm test` **1890 passed / 29 skipped**, `npm run typecheck` clean (was failing on the
+above before the fix), `npm run build` clean. NOT committed (awaiting the user's go). The feature
+(Phases 0–2) is complete and recorded; this branch is ready to commit/merge. **(prior entries below.)**_
+
+_2026-06-19 — **Context budgeting + conversation compaction — Phase 2 (UX) landed.**
+Branch `context-window-compaction`. Implementing [`docs/context-compaction-plan.md`](docs/context-compaction-plan.md)
+(WORKING PAPER — Phase 3 optional `/tokenize` still open; §6 Phase 2 marked ✅ with the full as-built).
+Phase 2 is **additive UX + one settings gate** over the Phase-1 L2 mechanism — the summary pair /
+checkpoints are UNCHANGED. **As-built (files):** `shared/ipc.ts` — `STREAM.compaction(requestId)` +
+`CompactionNotice {phase:'start'}` (mirrors `STREAM.scope`), new read channels
+`getConversationContextUsage` + `getConversationSummary`. `ipc/chat-stream.ts` — `withChatStream`'s
+`runFn` gained a 4th arg `sendCompaction` (a `SendCompaction` notifier) beside `sendToken`/
+`sendReasoning`: isDestroyed-guarded but **NEVER buffered into `streamBuffers`** (R14, ephemeral); both
+IPC handlers wire it as `onCompactionStart` (`registerRagIpc` only on the grounded path). `preload` —
+`onCompaction` (mirrors `onScopeNotice`) + `getConversationContextUsage`/`getConversationSummary`.
+`services/chat.ts` — `compactionEnabled(db)` (the §5.4 gate), `getConversationContextUsage(db,
+runtime|null, convId)` (pure read: assembles via `buildChatMessages` over `effectiveContextWindow`, sums
+`messageTokens`; window falls back to `settings.contextTokens` with no runtime), `getConversationSummaryMarker`
+(computes `beforeMessageId` = first turn `rowid > coversThroughRowid`, since `Message` has no rowid).
+`shared/types.ts` — `ContextUsage`, `ConversationSummaryMarker`, `AppSettings.chatCompactionEnabled`
+(default **true**; the defaults-merge IS the migration — no schema change). Renderer: new
+`chat/ContextMeter.tsx` (thin composer-footer bar, calm/amber/near-full, approximate tooltip),
+`Transcript` gained an expandable `SummaryMarker` + the "summarizing…" notice above the streaming bubble,
+`ChatScreen` subscribes `onCompaction` (clears on first answer token + in `finally`) and refreshes the
+meter/marker on switch + post-turn, `SettingsScreen` General gained a "Chat" card with the toggle.
+en+de i18n keys added (parity green). **Data contracts:** `STREAM.compaction(id)`→`CompactionNotice`;
+`getConversationContextUsage(convId)`→`ContextUsage|null`; `getConversationSummary(convId)`→
+`ConversationSummaryMarker|null`. **§5.4 gate behaviour (chosen + documented):** `chatCompactionEnabled=false`
+⇒ no new checkpoints AND assembly + the marker reader IGNORE any existing checkpoint (full-history replay,
+pure L1) = byte-identical to the pre-feature app. **§5.1 deviation (documented):** the usage rides the
+resting IPC for BOTH the resting state and the post-turn refresh (the renderer awaits the invoke + re-reads
+history, never consumes `onDone`, and `done` is the locked Message contract) — the locked streaming
+contract is left untouched. **Invariants held:** no new network surface; the compaction notice is
+ephemeral (R14); all user-visible strings via `shared/i18n` (en+de), internal prompts English.
+**Verification:** `npm test` **1890 passed / 29 skipped** (+12: new
+`tests/integration/chat-compaction-ux.test.ts`, `tests/integration/chat-compaction-ipc.test.ts`,
+`tests/renderer/ChatCompaction.test.tsx`); typecheck + `npm run build` clean. NOT committed (awaiting the
+user's go). **Next: Phase 3 (optional)** — `/tokenize`-backed exact counts near the threshold. **(prior
+entries below.)**_
+
+_2026-06-19 — **Context budgeting + conversation compaction — Phase 1 (compaction core) landed.**
+Branch `context-window-compaction`. Implementing [`docs/context-compaction-plan.md`](docs/context-compaction-plan.md)
+(WORKING PAPER — Phases 2–3 still open; §6 Phase 1 marked ✅ with the full as-built). **L2 — summary
+compaction** now sits as an `await ensureCompacted(...)` pre-pass inside BOTH chokepoints
+(`generateAssistantMessage`, `generateGroundedAnswer`), right after the window is resolved (§L0
+`effectiveContextWindow`) and BEFORE assembly. When the assembled history reaches `COMPACT_THRESHOLD`
+(0.85) × window and ≥ `MIN_COMPACTABLE_TURNS` (6) turns sit older than the protected `KEEP_RECENT_TURNS`
+(6) tail, it summarizes the older region ONCE into a cached **checkpoint** and assembly thereafter replays
+a synthetic summary pair + only the post-checkpoint turns. **Fail-safe by construction:** below threshold
+⇒ no model call; any summarizer failure/abort ⇒ NO checkpoint, the turn proceeds via the unchanged L1
+`fitMessagesToContext` floor with no user-visible error; with no checkpoint, behaviour is byte-identical
+to before. **As-built (files):** NEW
+[`services/chat/compaction.ts`](apps/desktop/src/main/services/chat/compaction.ts) (`ensureCompacted`,
+constants, `selfSummaryPrompt` VERBATIM §4.8, the non-thinking `mode:'balanced'`+temp 0.2+maxTokens 700
+summarizer, chained re-compaction via `doctasks/summary.ts` windowing).
+[`db.ts`](apps/desktop/src/main/services/db.ts): additive `ensureColumn(messages,'kind')` +
+`covers_through_rowid` (R13, NULL-sentinel = plain message) and the R8 FTS fix — `messages_fts_ai` gains
+`WHEN new.kind IS NOT 'compaction'` (fresh DBs) + idempotent `ensureMessagesFtsKindFilter` rewrite/prune for
+pre-feature DBs, backfill SELECT also kind-filtered. [`chat.ts`](apps/desktop/src/main/services/chat.ts):
+checkpoint writer/reader + `listConversationTurns` (rowid-aware, kind-filtered) **kept here** (the existing
+message-SQL owner, not `db.ts` — least-disruptive deviation), `compactionSummaryPair` (§4.5
+`user→assistant`, NEVER persisted, never skill-stamped — R3), `kind`-filter on `listMessages` (renderer/
+export/fence auto-skip checkpoints — R8), `messageTokens` exported; `buildChatMessages` injects the pair +
+post-checkpoint replay; `onCompactionStart` plumbed. [`rag/index.ts`](apps/desktop/src/main/services/rag/index.ts):
+same for `buildGroundedChatMessages`/`generateGroundedAnswer` — checkpoint built from STORED RAW turns, the
+live final grounded turn (question + `[Sn]`) untouched + mandatory (R-RAG). **Data contracts:**
+`messages.kind TEXT` (NULL|'message'|'compaction') + `messages.covers_through_rowid INTEGER` (max subsumed
+rowid); a `kind='compaction'` row (role `system`, `skill_id` NULL) holds the summary; `Checkpoint
+{ rowid, summary, coversThroughRowid }`; `ConversationTurn { rowid, role, content }`. **Summarize-once**
+guaranteed: the trigger estimates the ASSEMBLED view (existing summary-pair + post-checkpoint turns), so a
+fresh checkpoint drops the next turn below threshold; re-compaction only fires after NEW turns re-cross it,
+folding the prior summary. **Settled product decisions unchanged:** D-a default ON (Phase-2 toggle not yet
+read ⇒ effectively always-on now), D-b expandable transcript (Phase 2). **Verification:** `npm test`
+**1878 passed / 29 skipped** (+15, new `tests/integration/chat-compaction.test.ts`); typecheck + `npm run
+build` clean. NOT committed (awaiting the user's go). **Next: Phase 2** — UX: `STREAM.compaction` channel +
+`onCompaction` preload + the "summarizing…" status line, the composer context-usage meter, the
+`chatCompactionEnabled` settings toggle, the expandable transcript summary marker, en+de i18n. **(prior
+entries below.)**_
+
+_2026-06-19 — **Context budgeting + conversation compaction — Phase 0 (window source of truth) landed.**
+Branch `context-window-compaction`. Implementing [`docs/context-compaction-plan.md`](docs/context-compaction-plan.md)
+(WORKING PAPER — Phases 1–3 open). **Product decisions settled with the user:** D-a `chatCompactionEnabled`
+defaults **ON** (silent drop-oldest is strictly worse than a visible summary; all new paths fail safe to
+today's behaviour); D-b the transcript shows an **expandable** summary (auditable — the user can read the
+checkpoint text), not just a marker. **Phase 0 scope (§L0 — fix G1):** chat/RAG prompt assembly now budgets
+against the REAL launched context window (llama-server's `--ctx-size` = `manifest.recommendedContextTokens ||
+settings.contextTokens`), not `settings.contextTokens` (which can diverge → too-tight trim wastes capacity,
+too-loose risks the 400). **As-built:** new OPTIONAL `ModelRuntime.contextWindow(): number` accessor —
+implemented on the three production runtimes (`LlamaRuntime` stores `opts.contextTokens`; `MockRuntime` and the
+delegating `LadderRuntime` return theirs; window is fixed for a runtime's lifetime). Made OPTIONAL so the ~15
+`ModelRuntime` test-literal stubs stay valid. `RuntimeManager.status()` surfaces it as the new
+`RuntimeStatus.contextWindow?` (absent when not running). New exported helper `effectiveContextWindow(runtime,
+settings)` in [`chat.ts`](apps/desktop/src/main/services/chat.ts) = `runtime.contextWindow?.() ?? settings.contextTokens`
+(falls back when ≤0 or unreported); `generateAssistantMessage` + `generateGroundedAnswer` now budget through it.
+**Data contract:** `RuntimeStatus.contextWindow?: number`; `ModelRuntime.contextWindow?(): number`. **No
+behaviour change today** — for the shipped Qwen models `recommendedContextTokens` IS the launched window, so the
+budget is the same or larger; this just stops trimming against the wrong number and gives Phase 1/2 the authoritative
+window. **Verification:** `npm test` **1863 passed / 29 skipped** (+5: 3 `effectiveContextWindow`, 2 runtime
+window/status); typecheck clean. **Files:** `shared/types.ts`, `runtime/{index,llama,mock,factory}.ts`,
+`services/chat.ts`, `services/rag/index.ts`, tests `unit/runtime.test.ts` + `integration/chat.test.ts`. **Next:
+Phase 1** — compaction core (`services/chat/compaction.ts`, the additive `messages.kind`/`covers_through_rowid`
+migration, checkpoint writer/reader, summary user→assistant pair on both chat + RAG paths). NOT committed (awaiting
+the user's go). **(prior entries below.)**_
+
 _2026-06-19 — **Performance Wave P5 landed — the three remaining Medium findings shipped + CLOSED OUT.**
 Branch `performance-tuning-continuation` (off the P1–P4 `performance-tuning` work). Three bounded,
 behavior-preserving wins on hot/felt paths, one commit each:

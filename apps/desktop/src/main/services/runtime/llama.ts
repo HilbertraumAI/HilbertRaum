@@ -169,9 +169,12 @@ export async function* readChatSSE(
 export class LlamaRuntime implements ModelRuntime {
   readonly modelId: string
   private readonly server: LlamaServer
+  /** The `--ctx-size` this server was launched with — the real context window (§L0). */
+  private readonly ctxTokens: number
 
   constructor(opts: RuntimeStartOptions, deps: LlamaRuntimeDeps) {
     this.modelId = opts.modelId
+    this.ctxTokens = opts.contextTokens
     this.server = new LlamaServer({
       binPath: deps.binPath,
       modelPath: opts.modelPath,
@@ -199,6 +202,11 @@ export class LlamaRuntime implements ModelRuntime {
 
   async health(): Promise<HealthStatus> {
     return this.server.health()
+  }
+
+  /** The launched context window (`--ctx-size`) — the budget chat/RAG assembly trims against (§L0). */
+  contextWindow(): number {
+    return this.ctxTokens
   }
 
   /**

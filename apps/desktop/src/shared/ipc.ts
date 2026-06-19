@@ -51,6 +51,20 @@ export const IPC = {
   exportConversation: 'chat:export',
   /** Full-text search across conversations. Queries are content: never logged/audited. */
   searchConversations: 'chat:search',
+  /**
+   * Resting-state context-window usage for a conversation (context-compaction plan §5.1): the
+   * assembled-prompt token ESTIMATE over the model's launched window. Read-only, no model call;
+   * recomputed on conversation load + after each turn (live is not required). Returns null for an
+   * unknown conversation.
+   */
+  getConversationContextUsage: 'chat:contextUsage',
+  /**
+   * The latest compaction checkpoint's summary + where its marker sits in the rendered transcript
+   * (context-compaction plan §5.3, D-b): `{ summary, beforeMessageId }` — the id of the first
+   * rendered turn the summary does NOT subsume (the marker renders before it), or null when no
+   * checkpoint has been cut. Read-only; the summary is local context, never leaves the device.
+   */
+  getConversationSummary: 'chat:conversationSummary',
   /** Tail of the local log for Diagnostics (spec §7.11). Never uploaded. */
   getLogTail: 'logs:tail',
   /** Save the full local log to a user-chosen file (plaintext, a deliberate user action). */
@@ -209,12 +223,26 @@ export const STREAM = {
   reasoning: (requestId: string) => `chat:reasoning:${requestId}`,
   // ADDITIVE: a one-shot ephemeral notice fired before a document answer when retrieval
   // was auto-scoped to the file(s) the question named (never persisted — a live hint).
-  scope: (requestId: string) => `chat:scope:${requestId}`
+  scope: (requestId: string) => `chat:scope:${requestId}`,
+  // ADDITIVE: a one-shot ephemeral notice fired the moment the context-compaction pre-pass
+  // starts summarizing the older history for THIS turn (it adds latency before the first answer
+  // token — context-compaction plan §5.2). Never persisted, not in `streamBuffers` (R14 — a
+  // transient hint, fine to miss on remount); cleared in the renderer when answer tokens begin.
+  compaction: (requestId: string) => `chat:compaction:${requestId}`
 } as const
 
 /** Payload of the `scope` channel — the filenames retrieval was auto-restricted to. */
 export interface ScopeNotice {
   titles: string[]
+}
+
+/**
+ * Payload of the `compaction` channel (context-compaction plan §5.2). One-shot; `'start'` is the
+ * only phase today (`'done'` is implicit when answer tokens begin), but the object shape leaves
+ * room to grow without breaking the additive streaming contract.
+ */
+export interface CompactionNotice {
+  phase: 'start'
 }
 
 /**

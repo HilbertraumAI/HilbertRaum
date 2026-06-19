@@ -18,6 +18,22 @@ describe('RuntimeManager + MockRuntime', () => {
     expect(mgr.activeModelId()).toBe('qwen3-4b-instruct-q4')
   })
 
+  it('reports the launched context window on status (§L0) and clears it when stopped', async () => {
+    const mgr = new RuntimeManager(createMockRuntime)
+    // Not running → no window to report.
+    expect(mgr.status().contextWindow).toBeUndefined()
+    await mgr.start({ modelId: 'a', modelPath: '/a.gguf', contextTokens: 7777 })
+    // The runtime echoes the exact value it was launched with (its --ctx-size).
+    expect(mgr.status().contextWindow).toBe(7777)
+    await mgr.stop()
+    expect(mgr.status().contextWindow).toBeUndefined()
+  })
+
+  it('the mock runtime reports its configured context window', () => {
+    const runtime = createMockRuntime({ modelId: 'a', modelPath: '/a.gguf', contextTokens: 3210 })
+    expect(runtime.contextWindow()).toBe(3210)
+  })
+
   it('switches models by restarting the runtime', async () => {
     const mgr = new RuntimeManager(createMockRuntime)
     await mgr.start({ modelId: 'a', modelPath: '/a.gguf', contextTokens: 2048 })

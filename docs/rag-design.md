@@ -1023,3 +1023,166 @@ stamps a real `{ mode:'extract', chunksCovered=chunksTotal, chunksTotal, fullyCh
 partially (no breadth claim → NULL coverage → the relevance fallback). The seam, the routing/refuse gate,
 and the bank + invoice adopters are recorded in [`architecture.md`](architecture.md) "Skills — design
 record" §19 (D44–D49); this subsection is the coverage-half cross-link.
+
+## 15. Context budgeting + conversation compaction — design record (Phases 0–2)
+
+_When a conversation approaches the model's context window, summarize the **older** turns once into a
+cached, auditable checkpoint and replay only the recent turns verbatim — instead of silently
+**dropping** the oldest turns (the prior `fitMessagesToContext` behaviour). All offline, on the
+**already-running** local chat model, **summarize-once-and-cache**, every new path **fail-safe to the
+old behaviour**. Condensed from `docs/context-compaction-plan.md` at closeout (2026-06-19); full
+original incl. the risk table R1–R14 and open-decision rationale:
+`git show 4dca3e3:docs/context-compaction-plan.md`. Cross-ref: [`architecture.md`](architecture.md)
+"Chat & streaming" (the chat-pipeline owner). **§15.x anchors are stable — code/test comments that cite
+the old plan map here:** §L0/§4.1→§15.1; §4.2/§4.3/R9→§15.2; §4.4/§4.7/R8/R13→§15.3;
+§4.5/§4.6/§4.8/R3/R4/R6/R11/R-RAG→§15.4; §5.1→§15.5; §5.2/R14→§15.5; §5.3/D-b→§15.5; §5.4/D-a→§15.5;
+the deferred Phase-3 `/tokenize` (D-c) + R7/R10 guardrails→§15.6. **The summary text and the checkpoint
+row are content** — model context, never logged or audited; a German chat is summarized in German (R12).
+Nothing leaves the device: summarization is a local chat-model call, no new network surface (R12)._
+
+### 15.1 L0 — the context window source of truth (§L0/§4.1, fix G1)
+
+Prompt assembly used to trim against `settings.contextTokens` (default 4096), but the sidecar is
+launched with `manifest.recommendedContextTokens || settings.contextTokens` as `--ctx-size` — the two
+can diverge, so we trimmed to the wrong window (too-tight wastes capacity; too-loose risks the 400).
+Fix: a new **OPTIONAL** `ModelRuntime.contextWindow(): number` accessor
+([`runtime/index.ts`](../apps/desktop/src/main/services/runtime/index.ts)) reports the launched window —
+implemented on the three production runtimes (`LlamaRuntime` stores `opts.contextTokens`; `MockRuntime`
+and the delegating `LadderRuntime` return theirs; fixed for a runtime's lifetime). **Optional on purpose**
+(like `contextWindow?()`'s sibling accessors): the ~15 `ModelRuntime` test-literal stubs stay valid, and a
+runtime that can't report one degrades gracefully. `RuntimeManager.status()` surfaces it as
+`RuntimeStatus.contextWindow?` (absent when not running). The exported helper
+`effectiveContextWindow(runtime, settings)` ([`chat.ts`](../apps/desktop/src/main/services/chat.ts)) =
+`runtime.contextWindow?.() ?? settings.contextTokens` (falls back when unreported/≤0); both
+`generateAssistantMessage` and `generateGroundedAnswer` budget through it. `assemblyBudget = window −
+CHAT_RESPONSE_RESERVE_TOKENS` (reserve = 1024, unchanged). For the shipped Qwen models
+`recommendedContextTokens` IS the launched window, so the budget is unchanged today — this just stops
+trimming against the wrong number and gives L2 the authoritative window.
+
+### 15.2 Token accounting + the compaction trigger (§4.2/§4.3, R9)
+
+Budgeting uses the cheap word estimate `messageTokens` (`approxTokenCount × CHAT_TOKENS_PER_WORD(1.3) +
+8/msg`, exported from `chat.ts`) — **deliberately biased to over-count**, the safe direction for a budget.
+`ensureCompacted` ([`chat/compaction.ts`](../apps/desktop/src/main/services/chat/compaction.ts)) triggers
+when the **assembled-history** estimate ≥ `COMPACT_THRESHOLD (0.85) × window` **and** at least
+`MIN_COMPACTABLE_TURNS (6)` turns sit older than the protected `KEEP_RECENT_TURNS (6)` tail. Below
+threshold ⇒ **no model call** (the common path stays free). **R9 — estimate error at the boundary is
+benign:** over-counting only triggers *earlier* (one wasted local summarization, harmless) and the L1
+`fitMessagesToContext` floor still guarantees fit if we trigger late. The constants are the §4 starting
+points (D-d: golden-trace tuning deferred). Phase 3's `/tokenize`-exact count near the boundary was
+**deferred** — see §15.6.
+
+### 15.3 L2 — the compaction pre-pass + checkpoint persistence (§4.4/§4.7, R13/R8)
+
+`ensureCompacted(db, runtime, conversationId, window, {signal, onStart})` is awaited inside BOTH
+chokepoints (`generateAssistantMessage`, `generateGroundedAnswer`) right after the window is resolved and
+**before** assembly. Algorithm: load the turns newer than the last checkpoint; estimate the **assembled**
+view (existing summary-pair tokens + post-checkpoint turns); if under threshold or too few → return;
+else summarize the region older than the protected tail (folding the prior checkpoint summary in for
+**chained re-compaction**, §4.7) and persist **one** checkpoint.
+- **Summarize-once guarantee:** estimating the *assembled* view means a fresh checkpoint drops the next
+  turn below threshold, so the summarizer is not called again until enough NEW turns re-cross it (a single
+  rolling checkpoint, never an unbounded stack).
+- **Persistence (R13, additive/idempotent migration in
+  [`db.ts`](../apps/desktop/src/main/services/db.ts)):** `ensureColumn(messages,'kind')` (NULL|`'message'`
+  |`'compaction'`; NULL-sentinel = a plain message, so old DBs read correctly) + `covers_through_rowid
+  INTEGER NULL` (the max `rowid` the summary subsumes). A checkpoint is one `kind='compaction'` row
+  (role `system`, `skill_id` NULL) holding the summary in `content`. The message-table SQL stays in
+  `chat.ts` (the existing `listMessages`/`appendMessage` owner — least-disruptive deviation from the plan's
+  letter, which suggested `db.ts`): `getLatestCheckpoint`/`writeCheckpoint`, the rowid-aware kind-filtered
+  `listConversationTurns(db, convId, afterRowid)`, and a `kind IS NOT 'compaction'` filter on
+  `listMessages` so the renderer/export/fence-sizing auto-skip checkpoints. `writeCheckpoint` deliberately
+  does NOT bump `conversations.updated_at` (internal context, not a user action).
+- **R8 — keep checkpoints out of search/export:** the `messages_fts_ai` AFTER INSERT trigger carries
+  `WHEN new.kind IS NOT 'compaction'` (fresh DBs); `ensureMessagesFtsKindFilter` idempotently rewrites the
+  trigger on a pre-feature DB and prunes any already-indexed checkpoint row; the FTS backfill SELECT is
+  also kind-filtered.
+
+### 15.4 Summary representation + the summarizer call (§4.5/§4.6/§4.8, R3/R4/R6/R11/R-RAG)
+
+**Template-safe representation (§4.5, R3):** the summary is injected at assembly time as a synthetic
+`user → assistant` pair (`COMPACTION_SUMMARY_INTRO` "Here is a summary of our earlier conversation so
+far: …" → `COMPACTION_SUMMARY_ACK` "Understood — I'll continue with that context in mind.") at the start
+of the retained window, NOT as a second mid-history `system` block (several local templates accept only
+one leading system block, and `collapseToAlternating` assumes leading-system-then-strict-alternation).
+The pair is **constructed at assembly only, never persisted and never skill-stamped** (R3); the leading
+**system prompt stays byte-stable** so its `cache_prompt: true` KV prefix is reused (it shifts for exactly
+one turn after a new checkpoint — accepted, that turn already paid for summarization). `buildChatMessages`/
+`buildGroundedChatMessages` inject the pair + replay only `rowid > coversThroughRowid` turns when a
+checkpoint exists; byte-identical to before when none does.
+- **The summarizer call (§4.6):** reuses the active runtime as a plain sequential `chatStream` call on the
+  already-claimed slot, run **before** `withChatStream` opens the answer stream — so it is *part of* the
+  chat turn, not a competing DocTask, and cannot deadlock the model-slot arbiter (R4). Config:
+  `mode:'balanced'` (⇒ `enable_thinking:false`; a non-thinking model just ignores the kwarg — R11),
+  explicit `temperature:0.2` + `maxTokens:700`. When the input overflows the summarizer's own window it
+  map-reduces over `packIntoWindows`/`summaryBudgetWords` (reused from `doctasks/summary.ts`, §4.7) so a
+  chained re-compaction can never itself overflow.
+- **R-RAG — the RAG path** builds the checkpoint from the **stored raw turns**, never the transient
+  grounded prompt; the live final grounded turn (the question + `[Sn]` citations) is untouched and stays
+  mandatory in `fitMessagesToContext`.
+- **The prompt (§4.8, R6):** `selfSummaryPrompt` is an exported English constant (internal context — the
+  summary *content* comes out in the conversation's language). Structured sections act as a preservation
+  checklist; explicit "copy identifiers/numbers/`[Sn]` exactly" + "write 'unclear' rather than guess" rules
+  + low temperature + the §15.5 marker (the user can read/verify the summary) guard against a hallucinated
+  fact poisoning every later turn (R6). The dev-time golden-trace LLM-as-judge eval gate is deferred with
+  the constant tuning (D-d).
+- **Fail-safe (R4/R6):** any summarizer failure or abort ⇒ NO checkpoint, no user-visible error, the turn
+  proceeds via the unchanged L1 floor. A cancel mid-summary abandons it and releases the slot via the
+  existing `finally`.
+
+### 15.5 UX — meter, "summarizing…" notice, transcript marker, settings toggle (§5.1–§5.4, R14, D-a/D-b)
+
+All user-visible strings go through `shared/i18n` (en + de, parity test enforced); internal prompts stay
+English (R12).
+- **Context meter (§5.1).** `ContextUsage {usedTokens, window}` (`shared/types.ts`) +
+  `getConversationContextUsage(db, runtime|null, convId)` — a pure read that assembles via
+  `buildChatMessages` over `effectiveContextWindow` (falls back to `settings.contextTokens` with no
+  runtime) and sums `messageTokens`. Surfaced through the resting IPC `getConversationContextUsage`; the
+  renderer refreshes on conversation switch + after each completed turn. `renderer/chat/ContextMeter.tsx`
+  is a thin composer-footer bar: calm <75% / amber 75–90% / near-full ≥90%, tooltip "Context: 6.4k / 8k
+  tokens (approximate)" + a will-summarize line in the amber band. **Labelled approximate** (it reflects
+  the over-counting estimate — honesty over false precision). **Deviation (documented):** §5.1 offered the
+  usage on `STREAM.done` OR a resting IPC; chose the resting IPC for BOTH surfaces (the renderer awaits the
+  invoke + re-reads history and never consumes `onDone`; `done` is the locked `Message` contract — left
+  untouched).
+- **"Summarizing…" notice (§5.2, R14).** `STREAM.compaction(requestId)` → `CompactionNotice {phase:'start'}`
+  (`shared/ipc.ts`) mirrors `STREAM.scope`. `withChatStream` gained a 4th `runFn` arg `sendCompaction` (a
+  `SendCompaction` notifier beside `sendToken`/`sendReasoning`): isDestroyed-guarded but **never written to
+  `streamBuffers`** (R14 — ephemeral; a remount may miss it, accepted). Both IPC handlers pass it as
+  `onCompactionStart` (`registerRagIpc` only on the grounded path — the refuse/listing runFns make no model
+  call). Preload `onCompaction` mirrors `onScopeNotice`; `ChatScreen` shows a quiet status line above the
+  streaming bubble and clears it on the first answer token (+ in `finally`).
+- **Transcript marker (§5.3, D-b — expandable, for auditability).** `ConversationSummaryMarker {summary,
+  beforeMessageId}` + `getConversationSummaryMarker(db, convId)` (main computes `beforeMessageId` = the
+  first rendered turn with `rowid > coversThroughRowid`, since `Message` carries no rowid; null with no
+  checkpoint or when compaction is off). Resting IPC `getConversationSummary`; `Transcript` renders an
+  expandable `SummaryMarker` (the SourcesDisclosure pattern) before that message, reading the checkpoint
+  text so the user can confirm context was condensed, not lost.
+- **Settings toggle (§5.4, D-a — default ON).** `AppSettings.chatCompactionEnabled` default **true** (the
+  defaults-merge IS the migration — no schema change; silent drop-oldest is strictly worse than a visible
+  summary). `compactionEnabled(db)` gates BOTH the `ensureCompacted` pre-pass AND the checkpoint READ in
+  assembly + the marker reader — **chosen behaviour: when off, any existing checkpoint is ignored and the
+  FULL history replays (pure L1) = byte-identical to the pre-feature app.** An explicit user
+  `contextTokens` cap is always respected (`effectiveContextWindow` only ever falls BACK to it).
+
+### 15.6 Deferred — Phase 3 `/tokenize` (D-c) + the R7/R10 guardrails
+
+**Phase 3 (`/tokenize`-backed exact counts near the threshold, cached on the unused `messages.token_count`
+column) was deliberately NOT built** (decision 2026-06-19, confirming D-c). Rationale: the word estimate
+is safe-biased (R9) — over-counting only summarizes early (harmless) and the L1 floor guarantees fit if it
+triggers late — so Phase 3 only earns its keep if the threshold proves *jumpy in real use*, which has not
+been observed (the feature is not yet in real use). It also is not truly free: llama-server's `/tokenize`
+does **not** apply the chat template, so even the "exact" path would tokenize per-message content + a
+per-message overhead constant, trading a known safe over-count for a new approximation plus an HTTP
+round-trip and a new optional interface method. Revisit only if the boundary proves jumpy in practice.
+`messages.token_count` remains written NULL.
+
+**Guardrails noted (not yet code, no triggering feature exists):**
+- **R7 — stale checkpoint on edit/delete.** If a future message-edit/delete feature mutates a turn at/below
+  a checkpoint's `covers_through_rowid`, the summary may describe content that no longer exists. The fix
+  when that feature lands: invalidate (delete) checkpoints whose covered range intersects the change; the
+  next over-threshold turn re-summarizes. (The app has no edit/delete-history feature today.)
+- **R10 — a single oversized turn.** Summarizing *older* turns can't shrink one giant pasted turn;
+  unchanged from before — `fitMessagesToContext` keeps the final turn and the runtime's 400 path surfaces
+  the friendly "too large for this model" message. Head+tail truncation of a giant single turn is out of
+  scope.

@@ -495,6 +495,16 @@ renderer items FE-5 list windowing / FE-3 Composer-`input` move / FE-4 `DocRow` 
   pure, untrimmed builder used by unit tests). This complements the doc-task window budgets
   (`doctasks/summary.ts`), which already sized their inputs to `contextTokens` — the gap was
   only the conversational path.
+- **Conversation compaction (L2, above the L1 floor).** When history approaches the **launched** context
+  window (`RuntimeStatus.contextWindow?` / `effectiveContextWindow`, not `settings.contextTokens`),
+  `ensureCompacted` (`services/chat/compaction.ts`) summarizes the OLDER turns **once** into a cached
+  `kind='compaction'` checkpoint row and assembly thereafter replays a synthetic `user→assistant` summary
+  pair + only the post-checkpoint turns — instead of silently dropping the oldest. `fitMessagesToContext`
+  still runs after and still guarantees fit; below threshold (or with the `chatCompactionEnabled` setting
+  off) behaviour is byte-identical to drop-oldest. Every new path fails safe (any summarizer failure ⇒ no
+  checkpoint, turn proceeds). UX: a composer context-usage meter, a one-shot "summarizing…" notice
+  (`STREAM.compaction`), and an expandable transcript summary marker. Full design record (L0/L1/L2 +
+  trigger + summarizer + UX, with the deferred Phase-3 `/tokenize`): [`rag-design.md`](rag-design.md) §15.
 - **Surfaced runtime errors (fix 2026-06-14, hardened 2026-06-16).** `LlamaRuntime.chatStream`
   throws a typed `ChatRequestError` carrying the server's `{error:{message,type}}` body
   (previously the body was discarded and only "HTTP <status>" survived). `isExceedContextError`

@@ -47,6 +47,11 @@ export class MockRuntime implements ModelRuntime {
     this.started = false
   }
 
+  /** The configured context window (§L0) — the mock reports its `--ctx-size` like a real runtime. */
+  contextWindow(): number {
+    return this.opts.contextTokens
+  }
+
   async health(): Promise<HealthStatus> {
     return {
       healthy: this.started,
