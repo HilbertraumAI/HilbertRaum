@@ -963,6 +963,45 @@ export async function extractDocumentPreview(
   }
 }
 
+/** FE-6: default preview page size — segments returned per renderer-facing page request. */
+export const DEFAULT_PREVIEW_PAGE_SIZE = 50
+
+/**
+ * FE-6 (perf audit 2026-06-18, Wave P5): the RENDERER-facing preview reader — returns a BOUNDED
+ * page of segments (`offset .. offset+limit`) plus a cursor, so a large PDF/transcript no longer
+ * crosses the IPC bridge as one giant JSON blob nor mounts every segment at once. Internal
+ * full-text callers (skills, compare/translate) keep using `extractDocumentPreview` and get ALL
+ * segments — this is a thin paging wrapper around it and changes nothing for them.
+ *
+ * TRADE-OFF (documented): there is no partial parse, so each page request re-extracts the whole
+ * document and slices. The common case — a user glancing at the first page — is strictly better
+ * than before (same single parse, tiny payload); only a user reading a huge document page-by-page
+ * pays a re-parse per "show more", bounded to one parse per interaction (what the old code paid
+ * up front anyway). `requireNotProcessing` guards the doc against concurrent re-ingestion, and the
+ * parse is deterministic, so `totalSegments` and the slices are stable across page calls.
+ */
+export async function extractDocumentPreviewPage(
+  db: Db,
+  storeDir: string,
+  documentId: string,
+  offset: number,
+  limit: number,
+  deps: Pick<IngestionDeps, 'cipher' | 'ocrEngine'> = {}
+): Promise<DocumentPreview> {
+  const full = await extractDocumentPreview(db, storeDir, documentId, deps)
+  const safeOffset = Math.max(0, Math.floor(offset))
+  const safeLimit = Math.max(1, Math.floor(limit))
+  const end = safeOffset + safeLimit
+  return {
+    id: full.id,
+    title: full.title,
+    mimeType: full.mimeType,
+    segments: full.segments.slice(safeOffset, end),
+    totalSegments: full.segments.length,
+    nextOffset: end < full.segments.length ? end : null
+  }
+}
+
 /**
  * A transcript document's segments, rebuilt from its stored chunks (see the audio
  * branch in `extractDocumentPreview` for why this is exact for audio only).

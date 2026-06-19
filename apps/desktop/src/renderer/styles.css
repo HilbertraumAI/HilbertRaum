@@ -945,6 +945,8 @@ code, pre, kbd { font-family: var(--font-mono); }
   margin-bottom: 4px;
 }
 .preview-text { white-space: pre-wrap; word-break: break-word; font-size: 13px; line-height: 1.55; }
+/* FE-6: the "Show more" control + "Showing X of N" hint at the foot of a paginated preview. */
+.preview-more { display: flex; align-items: center; gap: 10px; margin-top: 12px; }
 /* Document summary disclosure inside the preview: collapsible, open by
    default when a summary exists, visually separated from the extracted text below. */
 .doc-summary {

@@ -473,6 +473,16 @@ export interface DocumentPreview {
   title: string
   mimeType: string | null
   segments: DocumentPreviewSegment[]
+  /**
+   * FE-6 pagination (perf audit 2026-06-18, Wave P5). When the renderer-facing IPC returns a
+   * BOUNDED page, `totalSegments` is the whole document's segment count and `nextOffset` is the
+   * offset to request the next page (null on the last page). Both are ABSENT when `segments`
+   * holds the whole document — i.e. the internal full-text reader (`extractDocumentPreview`,
+   * consumed by skills + compare/translate) leaves them undefined, so those callers are
+   * unaffected and a `nextOffset` of `undefined` simply means "no more pages".
+   */
+  totalSegments?: number
+  nextOffset?: number | null
 }
 
 export interface DocumentPreviewSegment {

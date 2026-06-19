@@ -20,7 +20,8 @@ import {
   deleteDocument,
   documentsDir,
   expandPathsWithSource,
-  extractDocumentPreview,
+  extractDocumentPreviewPage,
+  DEFAULT_PREVIEW_PAGE_SIZE,
   getDocument,
   getDocumentSummary,
   listDocuments,
@@ -470,12 +471,34 @@ export function registerDocsIpc(ctx: AppContext): void {
     requireUnlocked()
     requireNotProcessing(documentId)
     log.info('Preview document', { documentId })
-    return extractDocumentPreview(ctx.db, storeDir, documentId, {
+    // FE-6: return the BOUNDED first page (+ cursor), never the whole document in one payload.
+    return extractDocumentPreviewPage(ctx.db, storeDir, documentId, 0, DEFAULT_PREVIEW_PAGE_SIZE, {
       cipher: ctx.workspace.documentCipher(),
       // Photos re-recognize on preview; OCR'd PDFs read their stored pages.
       ocrEngine: ctx.ocrEngine
     })
   })
+
+  // FE-6: a subsequent bounded page of a preview (the modal's "Show more"). Same guards as the
+  // first page; returns the slice at [offset, offset+limit) plus the next cursor.
+  ipcMain.handle(
+    IPC.previewDocumentPage,
+    async (_e, documentId: string, offset: number, limit: number): Promise<DocumentPreview> => {
+      requireUnlocked()
+      requireNotProcessing(documentId)
+      return extractDocumentPreviewPage(
+        ctx.db,
+        storeDir,
+        documentId,
+        offset ?? 0,
+        limit ?? DEFAULT_PREVIEW_PAGE_SIZE,
+        {
+          cipher: ctx.workspace.documentCipher(),
+          ocrEngine: ctx.ocrEngine
+        }
+      )
+    }
+  )
 
   // Save a TEXT document's stored content to a user-chosen file (the
   // exportConversation pattern: dialog + fs in MAIN, never the renderer). Built for

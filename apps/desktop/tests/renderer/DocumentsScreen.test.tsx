@@ -398,6 +398,45 @@ describe('DocumentsScreen', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
   })
 
+  it('paginates the preview: reveals the next page on "Show more" (FE-6)', async () => {
+    const user = userEvent.setup()
+    // First page carries a cursor (nextOffset) + the true total; page 2 exhausts it.
+    const previewDocument = vi.fn(async () => ({
+      id: 'd1',
+      title: 'contract.pdf',
+      mimeType: 'application/pdf',
+      segments: [{ text: 'First page clause.', pageNumber: 1, sectionLabel: null }],
+      totalSegments: 2,
+      nextOffset: 1
+    }))
+    const previewDocumentPage = vi.fn(async () => ({
+      id: 'd1',
+      title: 'contract.pdf',
+      mimeType: 'application/pdf',
+      segments: [{ text: 'Second page clause.', pageNumber: 2, sectionLabel: null }],
+      totalSegments: 2,
+      nextOffset: null
+    }))
+    stubApi({ listDocuments: vi.fn(async () => [doc({})]), previewDocument, previewDocumentPage })
+    render(<DocumentsScreen />)
+
+    await screen.findByText('contract.pdf')
+    await user.click(screen.getByRole('button', { name: /preview/i }))
+
+    expect(await screen.findByText(/First page clause/)).toBeInTheDocument()
+    // The second page is NOT mounted yet — that's the whole point of FE-6.
+    expect(screen.queryByText(/Second page clause/)).not.toBeInTheDocument()
+    expect(screen.getByText('Showing 1 of 2')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /show more/i }))
+
+    expect(previewDocumentPage).toHaveBeenCalledWith('d1', 1, 50)
+    expect(await screen.findByText(/Second page clause/)).toBeInTheDocument()
+    // The first page stays mounted (accumulated), and the exhausted cursor hides the button.
+    expect(screen.getByText(/First page clause/)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /show more/i })).not.toBeInTheDocument()
+  })
+
   it('surfaces a preview failure as the screen error', async () => {
     const user = userEvent.setup()
     stubApi({

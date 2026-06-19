@@ -9,6 +9,7 @@ import {
   reindexDocument,
   deleteDocument,
   extractDocumentPreview,
+  extractDocumentPreviewPage,
   listDocuments,
   reconcileStuckDocuments,
   expandPaths,
@@ -293,6 +294,37 @@ describe('extractDocumentPreview', () => {
 
   it('throws on an unknown document id', async () => {
     await expect(extractDocumentPreview(freshDb(), store(), 'nope')).rejects.toThrow(/Unknown document/)
+  })
+
+  // FE-6 (Wave P5): the renderer-facing reader returns a BOUNDED page + a cursor, while the
+  // internal full reader stays unpaginated for skills + compare/translate.
+  it('extractDocumentPreviewPage returns a bounded first page + an advancing cursor', async () => {
+    const db = freshDb()
+    const storeDir = store()
+    const src = write('paged.md', '# A\nalpha\n\n# B\nbeta\n\n# C\ngamma')
+    const q = createQueuedDocument(db, src)
+    await processDocument(db, storeDir, q.id)
+
+    const full = await extractDocumentPreview(db, storeDir, q.id)
+    const total = full.segments.length
+    expect(total).toBeGreaterThanOrEqual(2)
+    // The internal full reader carries NO pagination metadata, so its consumers are unaffected.
+    expect(full.totalSegments).toBeUndefined()
+    expect(full.nextOffset).toBeUndefined()
+
+    // Page 1: a bounded slice, the true total, and a cursor to the next offset.
+    const limit = total - 1
+    const page1 = await extractDocumentPreviewPage(db, storeDir, q.id, 0, limit)
+    expect(page1.segments).toEqual(full.segments.slice(0, limit))
+    expect(page1.totalSegments).toBe(total)
+    expect(page1.nextOffset).toBe(limit)
+
+    // Page 2 from the cursor: the remaining segments; cursor null on the last page.
+    expect(page1.nextOffset).not.toBeNull()
+    const page2 = await extractDocumentPreviewPage(db, storeDir, q.id, page1.nextOffset!, limit)
+    expect(page2.segments).toEqual(full.segments.slice(limit))
+    expect(page2.totalSegments).toBe(total)
+    expect(page2.nextOffset).toBeNull()
   })
 })
 

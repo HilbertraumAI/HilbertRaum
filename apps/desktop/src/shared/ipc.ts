@@ -73,8 +73,10 @@ export const IPC = {
   setDocumentLifecycle: 'docs:setLifecycle',
   deleteDocument: 'docs:delete',
   reindexDocument: 'docs:reindex',
-  /** Read-only in-app preview: re-extract the stored copy's text. */
+  /** Read-only in-app preview: re-extract the stored copy's text (FE-6: the BOUNDED first page). */
   previewDocument: 'docs:preview',
+  /** FE-6: a subsequent bounded page of a document preview (offset/limit + cursor). */
+  previewDocumentPage: 'docs:preview-page',
   /** Save a text document's stored content to a user-chosen file (the
    *  exportConversation pattern; enables exporting materialized translations). */
   exportDocument: 'docs:export',

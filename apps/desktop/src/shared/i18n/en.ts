@@ -387,6 +387,9 @@ export const en = {
   'docs.previewModal.noText': 'No text could be extracted from this document.',
   'docs.previewModal.documentText': 'Document text',
   'docs.previewModal.page': 'Page {page}',
+  'docs.previewModal.showMore': 'Show more',
+  'docs.previewModal.loadingMore': 'Loading…',
+  'docs.previewModal.segmentProgress': 'Showing {shown} of {total}',
 
   // ---- Deep index + coverage (whole-document-analysis plan §5.2) ----
   // User words only: "deeply indexed" (a ready summary tree), "sections" (chunks),

@@ -94,6 +94,9 @@ function badgeFor(d: DocumentInfo, t: I18n['t']): { label: string; tone: BadgeTo
  */
 const LARGE_AUDIO_CONFIRM_BYTES = 50 * 1024 * 1024
 
+// FE-6: how many preview segments to fetch per page (first page + each "Show more").
+const PREVIEW_PAGE_SIZE = 50
+
 // Per-kind busy copy for the row spinner (guidelines §7 — speak human, no jargon).
 const TASK_BUSY_LABEL: Record<DocTaskKind, MessageKey> = {
   summary: 'docs.task.summaryBusy',
@@ -382,11 +385,33 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
     setError(null)
     setPreviewLoading(true)
     try {
+      // FE-6: this is the BOUNDED first page (+ cursor), not the whole document.
       setPreview(await window.api.previewDocument(d.id))
     } catch (e) {
       setError(friendlyIpcError(e))
     } finally {
       setPreviewLoading(false)
+    }
+  }
+
+  // FE-6: append the next preview page (the modal's "Show more"). Reads the cursor off the
+  // current `preview` and merges the new slice onto the accumulated segments. A guarded no-op
+  // once `nextOffset` is null (last page). Tolerant of a partial test bridge missing the method.
+  async function onPreviewLoadMore(): Promise<void> {
+    if (!preview || preview.nextOffset == null || !window.api.previewDocumentPage) return
+    try {
+      const next = await window.api.previewDocumentPage(
+        preview.id,
+        preview.nextOffset,
+        PREVIEW_PAGE_SIZE
+      )
+      setPreview((cur) =>
+        cur && cur.id === next.id
+          ? { ...next, segments: [...cur.segments, ...next.segments] }
+          : next
+      )
+    } catch (e) {
+      setError(friendlyIpcError(e))
     }
   }
 
@@ -1401,6 +1426,7 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
             return d ? provenanceLine(d) : null
           })()}
           regenerateDisabled={busy !== null || activeTask !== null}
+          onLoadMore={onPreviewLoadMore}
           onRegenerate={() => {
             const d = docs?.find((x) => x.id === preview.id)
             setPreview(null)
@@ -1664,6 +1690,7 @@ function PreviewModal({
   treeReady,
   originLine,
   regenerateDisabled,
+  onLoadMore,
   onRegenerate,
   onSelectTier,
   onClose
@@ -1677,6 +1704,8 @@ function PreviewModal({
   /** Provenance line when this is a generated document, or null. */
   originLine?: ReactNode
   regenerateDisabled?: boolean
+  /** FE-6: fetch + append the next preview page; offered only when `preview.nextOffset != null`. */
+  onLoadMore?: () => Promise<void>
   onRegenerate?: () => void
   /** Re-summarize at a coverage tier (whole-document-analysis §4.5); only when `treeReady`. */
   onSelectTier?: (tier: CoverageTier) => void
@@ -1684,6 +1713,17 @@ function PreviewModal({
 }): JSX.Element {
   const { t, tCount, lang } = useT()
   const showToast = useToast()
+  // FE-6: guards the "Show more" button while a page is in flight.
+  const [loadingMore, setLoadingMore] = useState(false)
+  async function loadMore(): Promise<void> {
+    if (!onLoadMore || loadingMore) return
+    setLoadingMore(true)
+    try {
+      await onLoadMore()
+    } finally {
+      setLoadingMore(false)
+    }
+  }
   // Coverage + source provenance of the current summary (whole-document-analysis §5.1).
   // Read-only, no model call; refreshes whenever the shown summary changes.
   const [cov, setCov] = useState<DocumentCoverage | null>(null)
@@ -1830,6 +1870,25 @@ function PreviewModal({
                       )}
                     </div>
                   ))}
+                  {/* FE-6: the preview arrives a page at a time; reveal the rest on demand
+                      instead of mounting a whole large document at once. */}
+                  {preview.nextOffset != null && (
+                    <div className="preview-more">
+                      <Button size="sm" disabled={loadingMore} onClick={() => void loadMore()}>
+                        {loadingMore
+                          ? t('docs.previewModal.loadingMore')
+                          : t('docs.previewModal.showMore')}
+                      </Button>
+                      {preview.totalSegments != null && (
+                        <span className="hint">
+                          {t('docs.previewModal.segmentProgress', {
+                            shown: preview.segments.length,
+                            total: preview.totalSegments
+                          })}
+                        </span>
+                      )}
+                    </div>
+                  )}
                 </div>
               </details>
             )

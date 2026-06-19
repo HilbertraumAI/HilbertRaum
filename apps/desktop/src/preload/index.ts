@@ -271,9 +271,17 @@ const api = {
     ipcRenderer.invoke(IPC.deleteDocument, documentId),
   reindexDocument: (documentId: string): Promise<DocumentInfo> =>
     ipcRenderer.invoke(IPC.reindexDocument, documentId),
-  /** Read-only in-app preview: the document's extracted text segments. */
+  /** Read-only in-app preview: the document's extracted text — FE-6 returns the BOUNDED first
+   *  page (+ a `nextOffset` cursor when there is more). */
   previewDocument: (documentId: string): Promise<DocumentPreview> =>
     ipcRenderer.invoke(IPC.previewDocument, documentId),
+  /** FE-6: fetch a subsequent preview page (the modal's "Show more"). */
+  previewDocumentPage: (
+    documentId: string,
+    offset: number,
+    limit: number
+  ): Promise<DocumentPreview> =>
+    ipcRenderer.invoke(IPC.previewDocumentPage, documentId, offset, limit),
   /** Save a text document's stored content (e.g. a translation) to a user-chosen
    *  file; resolves with the path, or null on cancel. */
   exportDocument: (documentId: string): Promise<string | null> =>

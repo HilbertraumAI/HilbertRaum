@@ -418,6 +418,9 @@ export const de: Record<keyof typeof en, string> = {
   'docs.previewModal.noText': 'Aus diesem Dokument konnte kein Text extrahiert werden.',
   'docs.previewModal.documentText': 'Dokumenttext',
   'docs.previewModal.page': 'Seite {page}',
+  'docs.previewModal.showMore': 'Mehr anzeigen',
+  'docs.previewModal.loadingMore': 'Wird geladen…',
+  'docs.previewModal.segmentProgress': '{shown} von {total} werden angezeigt',
 
   // ---- Tiefenindex + Abdeckung (whole-document-analysis plan §5.2) — D-L7-Review ausstehend ----
   'docs.deepIndex.build': 'Tiefenindex erstellen',
