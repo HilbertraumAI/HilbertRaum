@@ -12,14 +12,23 @@ import { join } from 'node:path'
 import os from 'node:os'
 
 const ROOT = join(os.tmpdir(), 'hilbertraum-eyeball')
-const OUT = join(process.cwd(), '..', '..', 'docs', 'design-review', 'brand-refresh', 'br2')
+const PHASE = process.env.BR_PHASE ?? 'br3'
+const OUT = join(process.cwd(), '..', '..', 'docs', 'design-review', 'brand-refresh', PHASE)
 const PW = 'eyeball-pass-123'
 
 rmSync(ROOT, { recursive: true, force: true })
 mkdirSync(join(ROOT, 'config'), { recursive: true })
+// NOTE: policy.json is NESTED (parsed at policy.workspace.encryption_required) — a FLAT
+// { encryption_required } is silently ignored and the dev build falls back to plaintext_dev,
+// bypassing the gate. encryption_required:true is an absolute veto on plaintext_dev, so this
+// forces the encrypted create/unlock gate even in the unpackaged (isDev) eyeball build.
 writeFileSync(
   join(ROOT, 'config', 'policy.json'),
-  JSON.stringify({ encryption_required: true, allow_network: false }, null, 2)
+  JSON.stringify(
+    { workspace: { encryption_required: true, allow_plaintext_dev_mode: false } },
+    null,
+    2
+  )
 )
 mkdirSync(OUT, { recursive: true })
 
@@ -55,23 +64,31 @@ async function goto(screen) {
   await sleep(250)
 }
 
-// ---- Gate (theme-aware, pre-unlock): the ◈ mark colour + the teal primary button ----
-await shotBoth('gate-welcome')
+// ---- Gate (theme-aware, pre-unlock via CSS): the BrandMark + the teal primary button ----
+// The build may boot in any locale (the dev machine is German), so drive the gate by CSS /
+// input type, NOT by localized button text.
+await page.waitForSelector('.gate-brand', { timeout: 8000 }).catch(() => {})
+await shotBoth('gate-welcome') // BrandMark above "HilbertRaum Lite", theme-flipped
 
-const start = page.getByRole('button', { name: 'Get started' })
-if (await start.isVisible().catch(() => false)) {
-  await start.click()
-  await sleep(200)
+// Welcome → create: the welcome screen's primary advances to the password step.
+const primary = () => page.locator('.gate-card .btn.primary, .gate-actions .btn.primary').first()
+await primary().click().catch(() => {})
+await sleep(300)
+const pwFields = page.locator('.gate-card input[type="password"]')
+if (await pwFields.count().catch(() => 0)) {
   await shotBoth('gate-create') // teal primary "Create workspace" + strength meter (semantic, untouched)
-  await page.getByPlaceholder('Password', { exact: true }).first().fill(PW)
-  await page.getByPlaceholder('Confirm password').fill(PW)
-  await page.getByRole('button', { name: 'Create workspace' }).click()
-  for (const label of ['Skip — take me to the app', 'Skip for now']) {
-    const b = page.getByRole('button', { name: label })
-    if (await b.isVisible().catch(() => false)) await b.click().catch(() => {})
+  await pwFields.nth(0).fill(PW)
+  await pwFields.nth(1).fill(PW)
+  await primary().click().catch(() => {}) // Create workspace
+  await sleep(500)
+  // Optional starter step → advance/skip via any remaining gate button to reach the shell.
+  for (let i = 0; i < 2; i++) {
+    const btn = page.locator('.gate-card .btn, .gate-actions .btn').first()
+    if (await btn.isVisible().catch(() => false)) await btn.click().catch(() => {})
+    await sleep(300)
   }
-  await sleep(400)
 }
+await sleep(400)
 
 // ---- Home: adaptive hero (teal primary), nav icons teal, rail-foot indicator ----
 await goto('home')

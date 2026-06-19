@@ -76,7 +76,14 @@ button { min-width: 24px; min-height: 24px; }
 /* Just the brand mark on the rail — the wordmark sits behind a tooltip so the rail
    stays quiet and narrow. */
 .brand { display: flex; justify-content: center; padding: 6px 0 14px; }
-.brand-mark { font-size: 22px; color: var(--accent); }
+/* Brand mark / lockup (components/BrandMark.tsx): both images render; the CSS pair toggle
+   shows the theme-correct one via [data-theme] — no JS theme read, so it works pre-unlock in
+   the gate. The dot is always teal; the square ink flips with the background. */
+.brand-img, .brand-lockup { display: inline-flex; align-items: center; justify-content: center; line-height: 0; }
+.brand-img-light { display: block; }
+.brand-img-dark { display: none; }
+[data-theme='dark'] .brand-img-light { display: none; }
+[data-theme='dark'] .brand-img-dark { display: block; }
 .brand-name {
   /* Visually hidden on the rail; the title attribute carries the tooltip. */
   position: absolute;
@@ -226,7 +233,6 @@ button { min-width: 24px; min-height: 24px; }
   gap: 4px;
   margin-bottom: 22px;
 }
-.gate-brand-mark { font-size: 34px; line-height: 1; color: var(--accent); }
 .gate-brand-edition {
   font-size: var(--text-xs);
   line-height: var(--line-xs);

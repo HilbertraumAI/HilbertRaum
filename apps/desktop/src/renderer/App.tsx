@@ -6,7 +6,7 @@ import { ChatScreen } from './screens/ChatScreen'
 import { DocumentsScreen } from './screens/DocumentsScreen'
 import { SkillsScreen } from './screens/SkillsScreen'
 import { WorkspaceGate } from './screens/WorkspaceGate'
-import { Banner, Button, Icon, LocalIndicator, ToastProvider, type IconName } from './components'
+import { Banner, BrandMark, Button, Icon, LocalIndicator, ToastProvider, type IconName } from './components'
 import { setThemeSetting } from './theme'
 import { I18nProvider, useT } from './i18n'
 import { resolveNavTarget, type ScreenId, type SettingsTab } from './navigation'
@@ -208,7 +208,7 @@ function AppShell(): JSX.Element {
     <div className="app-shell">
       <nav className="sidebar" aria-label={t('nav.aria')}>
         <div className="brand" title="HilbertRaum">
-          <span className="brand-mark" aria-hidden="true">◈</span>
+          <BrandMark size={24} />
           <span className="brand-name">HilbertRaum</span>
         </div>
         <ul className="nav-list">{NAV_TOP.map(navButton)}</ul>

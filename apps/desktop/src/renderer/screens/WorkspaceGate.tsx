@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react'
 import {
   Banner,
+  BrandMark,
   Button,
   PasswordField,
   PasswordStrengthMeter,
@@ -147,12 +148,13 @@ export function WorkspaceGate({ state, onUnlocked }: Props): JSX.Element {
     }
   }
 
-  // Vertical brand lockup (guidelines §7): the diamond sits centered above the edition
-  // word so "Lite" reads as part of the mark, not a loose label beside it. The full
-  // wordmark stays in the a11y tree (visually hidden) so the brand is announced.
+  // Vertical brand lockup (guidelines §7): the sealed-room mark sits centered above the
+  // edition word so "Lite" reads as part of the mark, not a loose label beside it. The mark
+  // is theme-aware via CSS (gate-safe pre-unlock); the visible "HilbertRaum Lite" edition
+  // line announces the brand, so the mark itself stays decorative.
   const brand = (
     <div className="gate-brand">
-      <span className="gate-brand-mark" aria-hidden="true">◈</span>
+      <BrandMark size={36} />
       <span className="gate-brand-edition">HilbertRaum Lite</span>
     </div>
   )

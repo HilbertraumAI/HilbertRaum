@@ -6,6 +6,45 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-19 — **Brand refresh BR3 landed — the `◈` placeholder is gone; the sealed-room `BrandMark`
+is wired into the rail + gate.** Branch `design-adjustments`; plan
+[`docs/brand-refresh-plan.md`](docs/brand-refresh-plan.md) phase BR3 of BR1–BR6 (WORKING PAPER — BR4
+next). **Scope:** renderer-only (new component + two call sites + CSS + a test); no backend/IPC/schema
+touch. **New component**
+[`components/BrandMark.tsx`](apps/desktop/src/renderer/components/BrandMark.tsx) exports `BrandMark`
++ `BrandLockup` (barrelled in `components/index.ts`). **Theme selection is CSS, not JS** (plan §4.2
+option 1): BOTH theme images render and a `[data-theme]` pair-toggle shows the correct one
+(`.brand-img-light`/`.brand-img-dark` in `styles.css`) — so it works **pre-unlock in the gate**, which
+can't read settings and follows the OS theme via the `data-theme` attribute set at startup
+(`main.tsx`→`initTheme`). The dot is always teal; the square ink flips with the background. `BrandMark`
+clamps size ≥16 (dev-warns below), bakes clear-space ≥ the dot diameter as wrapper padding, and is
+decorative by default (labelled when `decorative={false}`). **CRITICAL asset-path gotcha (C-BR3):** the
+production renderer is `loadFile`'d over **`file://`**, so an absolute `/brand/…` src resolves to the
+filesystem root and renders a BROKEN image (caught by the eyeball walk; vitest can't see it). The src
+must be **RELATIVE** (`brand/mark-on-light.svg`) — the renderer is a single `index.html` with no router,
+so a relative path resolves next to it under both dev `http://localhost` and prod `file://`. (The
+favicon `index.html` `href="/icon.svg"` has the same latent issue but isn't shown in the Electron window
+frame; left as-is.) **Wiring:** rail brand slot (`App.tsx`) `◈ → <BrandMark size={24}/>` (keeps the
+visually-hidden `.brand-name` + `title` for a11y); gate (`WorkspaceGate.tsx`) `◈ → <BrandMark size={36}/>`
+above the existing "HilbertRaum Lite" edition line (mark decorative — the edition text announces the
+brand). Dead `.brand-mark`/`.gate-brand-mark` glyph CSS removed; `◈` is gone from `src/` entirely.
+**New guard:** [`tests/renderer/BrandMark.test.tsx`](apps/desktop/tests/renderer/BrandMark.test.tsx)
+(12 cases): both theme assets chosen, relative src, min-size clamp + dev-warn, clear-space padding,
+decorative vs labelled a11y, and an asset-existence check for `public/brand/*` + `icon.svg`.
+`WorkspaceGate.test.tsx`/`rail-labels.test.ts` stay green (neither pins the mark). **Verify:**
+typecheck + build clean; full vitest from `apps/desktop` **1852 passed / 27 skipped** (+12 BrandMark).
+Eyeball walk ([`scripts/walk-brand-refresh.mjs`](apps/desktop/scripts/walk-brand-refresh.mjs), now at
+`br3/`): rail mark flips light↔dark correctly; **gate mark flips correctly PRE-UNLOCK** in both themes
+(dark-ink square on light, light-ink on dark), above "HILBERTRAUM LITE", with the teal+dark-ink primary.
+**Eyeball-harness fix recorded:** the §11.4 recipe's `policy.json {encryption_required:true}` is **flat
+and STALE** — the file is parsed NESTED at `policy.workspace.encryption_required`; a flat key is ignored
+and the unpackaged (isDev) build falls back to `plaintext_dev`, bypassing the gate. The brand walk now
+writes `{ workspace: { encryption_required: true, allow_plaintext_dev_mode: false } }` and drives the
+gate by CSS/`input[type=password]` (locale-independent — the dev machine boots German). **Next: BR4** —
+screen pass (Home/Chat/Documents/AI Model/Skills/Settings inherit cleanly; teal progress-bar contrast;
+fix any leaked hard colours), full six-screen walk in both themes + both locales. **(prior entries
+below.)**_
+
 _2026-06-19 — **Brand refresh BR2 landed — design tokens swapped from blue to the sealed-room teal,
 with a new contrast guard.** Branch `design-adjustments`; plan
 [`docs/brand-refresh-plan.md`](docs/brand-refresh-plan.md) phase BR2 of BR1–BR6 (WORKING PAPER — BR3
