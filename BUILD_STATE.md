@@ -6,6 +6,32 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-19 — **Context budgeting + conversation compaction — FEATURE CLOSED OUT (Phase 3 deferred per D-c).**
+Branch `context-window-compaction`. **Decision (with the user): do NOT build Phase 3 now** — the optional
+`/tokenize`-backed exact-count-near-threshold upgrade. Rationale: the word estimate is safe-biased (R9 —
+over-counting only summarizes *early*, harmless; the L1 `fitMessagesToContext` floor still guarantees fit
+if it triggers late), so Phase 3 only earns its keep if the threshold proves *jumpy in real use*, which has
+not been observed (the feature isn't in real use yet). It also isn't free — llama-server's `/tokenize` does
+NOT apply the chat template, so even the "exact" path would tokenize per-message content + a per-message
+overhead fudge, trading a known safe over-count for a new approximation + an HTTP round-trip + a new
+optional interface method. `messages.token_count` stays NULL. Revisit only if the boundary proves jumpy.
+**Doc-lifecycle close-out done (per CLAUDE.md):** the working-paper plan `docs/context-compaction-plan.md`
+is condensed into a §-numbered **design record** [`docs/rag-design.md`](docs/rag-design.md) **§15**
+(15.1 L0 window source-of-truth · 15.2 token accounting + trigger · 15.3 L2 pre-pass + checkpoint
+persistence · 15.4 summary representation + summarizer call · 15.5 UX meter/notice/marker/toggle ·
+15.6 deferred Phase-3 + R7/R10 guardrails), with a stable **anchor map** so the existing code/test comments
+that cite the old plan (`§L0`, `§4.x`, `§5.x`, `Rn`, `D-x`) resolve into §15.x. Cross-reference added from
+[`docs/architecture.md`](docs/architecture.md) "Chat & streaming" (a new "Conversation compaction (L2)"
+bullet → §15). **Plan file DELETED** (`git rm`); full original preserved at
+`git show 4dca3e3:docs/context-compaction-plan.md`. **One pre-existing typecheck defect fixed (not from
+this step):** committed Phase-2 test `tests/renderer/ChatCompaction.test.tsx` typed its `onCompaction`
+mock callback `() => void` while the real preload signature is `(notice: CompactionNotice) => void` —
+`npm test` (esbuild, no typecheck) passed so it slipped the Phase-2 "typecheck clean" claim. Fixed to the
+real signature (import `CompactionNotice`, call `compactionCb!({ phase: 'start' })`); behaviour unchanged.
+**Verification:** `npm test` **1890 passed / 29 skipped**, `npm run typecheck` clean (was failing on the
+above before the fix), `npm run build` clean. NOT committed (awaiting the user's go). The feature
+(Phases 0–2) is complete and recorded; this branch is ready to commit/merge. **(prior entries below.)**_
+
 _2026-06-19 — **Context budgeting + conversation compaction — Phase 2 (UX) landed.**
 Branch `context-window-compaction`. Implementing [`docs/context-compaction-plan.md`](docs/context-compaction-plan.md)
 (WORKING PAPER — Phase 3 optional `/tokenize` still open; §6 Phase 2 marked ✅ with the full as-built).
