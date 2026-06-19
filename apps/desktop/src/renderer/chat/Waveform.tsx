@@ -30,8 +30,9 @@ export function Waveform({ analyser }: WaveformProps): JSX.Element | null {
 
     const data = new Uint8Array(analyser.fftSize)
     // The accent colour is theme-driven; read it once from the canvas's computed style.
+    // Fallback is the brand teal (only used if --accent somehow resolves empty).
     const accent =
-      getComputedStyle(canvas).getPropertyValue('--accent').trim() || '#6aa0ff'
+      getComputedStyle(canvas).getPropertyValue('--accent').trim() || '#57d0a4'
 
     let raf = 0
 

@@ -6,6 +6,187 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-19 — **Brand refresh BR6 landed — the wave is CLOSED OUT.** Branch `design-adjustments`. **The
+HilbertRaum brand refresh is fully shipped (BR1–BR6).** **Why BR6:** discharge the doc-lifecycle rule —
+fold the durable decisions into the binding guidelines and retire the plan file. **Docs fold:**
+[`docs/design-guidelines.md`](docs/design-guidelines.md) gained **§13** ("Brand refresh — design record":
+the one-line brand, §13.2 token decisions + the contrast facts + the pinning test, §13.3 mark
+assets/component incl. the gate-safe CSS theme toggle + the relative-`src`/`file://` gotcha, §13.4 icon
+pipeline, §13.5 verification + the nested-`policy.json` harness note); the LIVE token tables were updated
+to match the code (§4.2 accent ramp → brand teal primitives + "retired" row; §4.3 `--link`/`--focus`/
+`--accent`/`--row-selected-bar` → teal per theme + dark `--bg #0E1319`; §6 Primary button → teal fill +
+dark-ink, Toggles → `--brand-teal-dark` track; the §4.2 contrast-fix note marked superseded). Historical
+§11/§12 records left as-is (they describe past waves). **Plan file
+`docs/brand-refresh-plan.md` DELETED** (full original in git history). **Final verification:** typecheck +
+`npm run build` clean; full vitest from `apps/desktop` **1852 passed / 27 skipped**. **As-built (whole
+wave):** `tokens.css` (brand primitives + role re-point + dark-bg nudge), `styles.css` (teal primary +
+brand-img toggle, filled-control teal), `components/BrandMark.tsx` (+barrel), `App.tsx` + `WorkspaceGate.tsx`
+(mark wired, `◈` removed), `chat/Waveform.tsx` (blue fallback → teal), `scripts/generate-icons.mjs`
+(sealed-room geometry), `public/brand/*` + `public/icon.svg` + `build/icon.{svg,png,ico}` (artwork),
+`shared/i18n` UNCHANGED (no copy changed), new `tests/unit/token-contrast.test.ts` +
+`tests/renderer/BrandMark.test.tsx`. Captures in `docs/design-review/brand-refresh/{br2,br3,br4,br5}/`.
+**Acceptance (plan §7) all met:** light+dark pass the contrast test; mark ink flips by background; dot
+always teal; no teal text/links on a light surface; primary teal+dark-ink; teal stays rare; success
+green / errors red; no CSP/offline/schema/IPC change; calm/premium. **Next:** the branch
+`design-adjustments` is ready to merge to `master`. **(prior entries below.)**_
+
+_2026-06-19 — **Brand refresh BR5 landed — package icon/favicon smoke; the produced icon set is correct
+end-to-end.** Branch `design-adjustments`; plan
+[`docs/brand-refresh-plan.md`](docs/brand-refresh-plan.md) phase BR5 of BR1–BR6 (WORKING PAPER — BR6 next,
+the closer). **Scope:** verification only — no code changes (consumes the BR1 output). **ICO deep-validated:**
+`build/icon.ico` = type 1, 7 entries; **every entry's embedded PNG decodes to its declared size**
+(16/24/32/48/64/128/256, IHDR width/height match the directory entry, all PNG sigs valid); `build/icon.png`
+is 512×512. Extracted the 256px + 32px entries and eyeballed them (captures in
+`docs/design-review/brand-refresh/br5/`): the sealed-room mark (light-ink rounded square + teal dot on the
+opaque `#0E1319` surface) renders cleanly at 256 and stays legible at 32 (taskbar size). **Window/taskbar
+icon wiring confirmed:** `createWindow()` sets the BrowserWindow `icon` to `build/icon.png` (dev + Linux);
+packaged Windows embeds `build/icon.ico` via electron-builder — so the OS icon shows the new mark. (The
+document favicon `index.html href="/icon.svg"` is broken under the prod `file://` load, same root cause as
+C-BR3, but it's IRRELEVANT — Electron uses the BrowserWindow icon, not the document favicon; left as-is.)
+**Out-of-scope nicety noted, deferred:** the main-process pre-paint `backgroundColor` for dark is still
+`#0f1115` (not the BR2-nudged `#0E1319`) — an imperceptible ~1-LSB flash colour; left untouched to respect
+the renderer-only boundary. **Manual/deferred:** `npm run package:win` (network-touching, R2) for a
+packaging owner. **Next: BR6** — write `walk-brand-refresh.mjs` (done; lives in-repo), fold the condensed
+brand-refresh record into `design-guidelines.md` as a §-numbered section, finalize this file, and DELETE
+the plan file per the doc-lifecycle rule. **(prior entries below.)**_
+
+_2026-06-19 — **Brand refresh BR4 landed — full screen pass; every screen inherits the teal cleanly,
+one leaked blue fixed.** Branch `design-adjustments`; plan
+[`docs/brand-refresh-plan.md`](docs/brand-refresh-plan.md) phase BR4 of BR1–BR6 (WORKING PAPER — BR5/BR6
+next). **Scope:** verification + one tiny renderer fix; no token/component changes were needed (the BR2
+role swap propagated through `styles.css` as designed). **Only leak found + fixed:** a grep for hard hex
+in the renderer surfaced ONE — [`chat/Waveform.tsx`](apps/desktop/src/renderer/chat/Waveform.tsx) (the
+dictation visualizer) read `--accent` from computed style but had a hardcoded BLUE fallback `#6aa0ff`;
+changed to the brand teal `#57d0a4` (only used if `--accent` ever resolves empty). Everything else is
+token-driven — zero other hard colours in the renderer. **Progress bars** use theme-aware `--accent`
+(light = dark teal `#1B7F5F` on a light track, dark = bright teal on a dark track — both ≥3:1; no
+light-track weak-teal problem because light never uses the bright teal). **Eyeball walk
+([`scripts/walk-brand-refresh.mjs`](apps/desktop/scripts/walk-brand-refresh.mjs), now ALL six screens ×
+both themes × both locales EN/DE, captures in `docs/design-review/brand-refresh/br4/`):** Home (teal
+adaptive primary), Chat (teal primary, NO mark in the content), Documents (teal "Import files", neutral
+active sub-nav), AI Model (teal "Install AI engine"/"Download", amber warning banner, neutral status
+badges, "Technical details" intact), Skills (teal "Import skill…", dark-teal "Enabled" switches), Settings
+(segmented controls neutral, switch-on dark-teal track), Privacy (calm, no red/alarm). Confirmed against
+§7 acceptance: teal restrained (no teal surfaces), **success stays green / warnings amber / errors red**,
+no teal text on a light surface (links are the dark teal), marks correct + undistorted, dark-bg nudge
+clean, DE labels fit. **Walk now loops locales** via `updateSettings({uiLanguage})` + reload (EN applies
+correctly post-unlock; the gate itself is OS-locale-bound pre-unlock). **Verify:** typecheck + build
+clean; full vitest from `apps/desktop` **1852 passed / 27 skipped** (no test changes — the Waveform
+fallback isn't asserted). **Next: BR5** — package icon/favicon smoke (consumes BR1 output; confirm
+`build/icon.ico` opens with all sizes + the favicon shows), then **BR6** — fold the condensed brand-refresh
+record into `design-guidelines.md`, update this file, delete the plan file. **(prior entries below.)**_
+
+_2026-06-19 — **Brand refresh BR3 landed — the `◈` placeholder is gone; the sealed-room `BrandMark`
+is wired into the rail + gate.** Branch `design-adjustments`; plan
+[`docs/brand-refresh-plan.md`](docs/brand-refresh-plan.md) phase BR3 of BR1–BR6 (WORKING PAPER — BR4
+next). **Scope:** renderer-only (new component + two call sites + CSS + a test); no backend/IPC/schema
+touch. **New component**
+[`components/BrandMark.tsx`](apps/desktop/src/renderer/components/BrandMark.tsx) exports `BrandMark`
++ `BrandLockup` (barrelled in `components/index.ts`). **Theme selection is CSS, not JS** (plan §4.2
+option 1): BOTH theme images render and a `[data-theme]` pair-toggle shows the correct one
+(`.brand-img-light`/`.brand-img-dark` in `styles.css`) — so it works **pre-unlock in the gate**, which
+can't read settings and follows the OS theme via the `data-theme` attribute set at startup
+(`main.tsx`→`initTheme`). The dot is always teal; the square ink flips with the background. `BrandMark`
+clamps size ≥16 (dev-warns below), bakes clear-space ≥ the dot diameter as wrapper padding, and is
+decorative by default (labelled when `decorative={false}`). **CRITICAL asset-path gotcha (C-BR3):** the
+production renderer is `loadFile`'d over **`file://`**, so an absolute `/brand/…` src resolves to the
+filesystem root and renders a BROKEN image (caught by the eyeball walk; vitest can't see it). The src
+must be **RELATIVE** (`brand/mark-on-light.svg`) — the renderer is a single `index.html` with no router,
+so a relative path resolves next to it under both dev `http://localhost` and prod `file://`. (The
+favicon `index.html` `href="/icon.svg"` has the same latent issue but isn't shown in the Electron window
+frame; left as-is.) **Wiring:** rail brand slot (`App.tsx`) `◈ → <BrandMark size={24}/>` (keeps the
+visually-hidden `.brand-name` + `title` for a11y); gate (`WorkspaceGate.tsx`) `◈ → <BrandMark size={36}/>`
+above the existing "HilbertRaum Lite" edition line (mark decorative — the edition text announces the
+brand). Dead `.brand-mark`/`.gate-brand-mark` glyph CSS removed; `◈` is gone from `src/` entirely.
+**New guard:** [`tests/renderer/BrandMark.test.tsx`](apps/desktop/tests/renderer/BrandMark.test.tsx)
+(12 cases): both theme assets chosen, relative src, min-size clamp + dev-warn, clear-space padding,
+decorative vs labelled a11y, and an asset-existence check for `public/brand/*` + `icon.svg`.
+`WorkspaceGate.test.tsx`/`rail-labels.test.ts` stay green (neither pins the mark). **Verify:**
+typecheck + build clean; full vitest from `apps/desktop` **1852 passed / 27 skipped** (+12 BrandMark).
+Eyeball walk ([`scripts/walk-brand-refresh.mjs`](apps/desktop/scripts/walk-brand-refresh.mjs), now at
+`br3/`): rail mark flips light↔dark correctly; **gate mark flips correctly PRE-UNLOCK** in both themes
+(dark-ink square on light, light-ink on dark), above "HILBERTRAUM LITE", with the teal+dark-ink primary.
+**Eyeball-harness fix recorded:** the §11.4 recipe's `policy.json {encryption_required:true}` is **flat
+and STALE** — the file is parsed NESTED at `policy.workspace.encryption_required`; a flat key is ignored
+and the unpackaged (isDev) build falls back to `plaintext_dev`, bypassing the gate. The brand walk now
+writes `{ workspace: { encryption_required: true, allow_plaintext_dev_mode: false } }` and drives the
+gate by CSS/`input[type=password]` (locale-independent — the dev machine boots German). **Next: BR4** —
+screen pass (Home/Chat/Documents/AI Model/Skills/Settings inherit cleanly; teal progress-bar contrast;
+fix any leaked hard colours), full six-screen walk in both themes + both locales. **(prior entries
+below.)**_
+
+_2026-06-19 — **Brand refresh BR2 landed — design tokens swapped from blue to the sealed-room teal,
+with a new contrast guard.** Branch `design-adjustments`; plan
+[`docs/brand-refresh-plan.md`](docs/brand-refresh-plan.md) phase BR2 of BR1–BR6 (WORKING PAPER — BR3
+next). **Scope:** `tokens.css` + the handful of `styles.css` rules that consumed the blue accent ramp,
+the new contrast test, and two stale code comments — no backend/IPC/schema/CSP touch; the in-app `◈`
+mark is still a placeholder (BR3 replaces it). **Brand primitives (new, theme-constant in `:root`):**
+`--brand-teal #57D0A4` (the dot; primary fill; accent/link/focus on DARK), `--brand-teal-hover #48BE92`,
+`--brand-teal-active #3DAE84`, `--brand-teal-dark #1B7F5F` (accent/link/focus on LIGHT + solid-control
+fill carrying a white marker), `--brand-ink-dark #11171F`, `--brand-ink-light #E8EDF2`,
+`--brand-surface-dark #0E1319`. **The old blue accent ramp (`--accent-700/600/500/300`) is fully
+RETIRED** — every reference re-pointed or removed (grep-verified: zero `accent-NNN` / `2f6fed` / `4f8cff`
+/ `2257c9` left in the renderer). **Role re-point:** `--accent`/`--link`/`--focus`/`--row-selected-bar`
+→ `--brand-teal-dark` on light, `--brand-teal` on dark; `--bg` (dark) nudged `#0f1115 → #0E1319` via the
+new primitive (§11 Q1 = YES). **Primary button (the one deliberate departure, §3.4):** explicit
+`.btn.primary` = `--brand-teal` fill + `--brand-ink-dark` text in BOTH themes (≈9.98:1) with
+hover/active = `--brand-teal-hover`/`-active`; NOT routed through `--accent` (which differs per theme).
+**Filled controls:** checkbox/`<progress>` `accent-color` → theme-aware `--accent` (Chromium auto-picks
+a contrasting checkmark); the custom **switch-on track** → `--brand-teal-dark` in BOTH themes because the
+thumb is white `--n-0` (white on bright teal = 1.9:1 fails; on dark teal = 5.22:1 ✓). **Semantic
+colours (success/error/warning) UNTOUCHED** — teal never replaces a status colour. **§11 answers
+settled:** Q1 dark-bg nudge done; Q2 `--brand-teal-dark` kept at `#1B7F5F` (computes **4.92:1** on light
+bg / 5.22:1 on white — comfortable AA headroom, no darkening needed). **New guard:**
+[`tests/unit/token-contrast.test.ts`](apps/desktop/tests/unit/token-contrast.test.ts) parses `tokens.css`,
+resolves every `var()` chain per theme, and computes WCAG contrast for all role pairings in BOTH themes
+(text ≥4.5, UI ≥3) — it both verifies AND PINS the derived teal (incl. asserting the FORBIDDEN
+bright-teal-on-white < 3:1, so the value can't drift off the bright hex). The repo had no contrast test
+before — this is the most valuable new guard. **Measured ratios:** light link/focus/accent 4.92:1 (bg) /
+5.22:1 (surface); dark 10.42:1 (bg) / 9.62:1 (surface); dark text on nudged bg 16.92:1; primary fill+ink
+9.98:1 (hover 8.20, active 6.84); switch-on+thumb 5.22:1. **Verify:** `npm run typecheck` + `npm run
+build` clean; full vitest from `apps/desktop` **1840 passed / 27 skipped** (+12 contrast cases;
+`Theme.test.tsx`/`Components.test.tsx` unchanged — neither pins a hex). BR2 eyeball spot-check
+([`scripts/walk-brand-refresh.mjs`](apps/desktop/scripts/walk-brand-refresh.mjs), Home/Chat/Settings both
+themes, captures in `docs/design-review/brand-refresh/br2/`): teal reads calm/restrained, no teal
+surfaces, switch-on + segmented controls correct, warning stays amber, dark-bg nudge clean. The full
+six-screen / both-locale walk is BR4. **Next: BR3** — `BrandMark`/`BrandLockup` components (theme-pair
+CSS toggle, gate-safe pre-unlock) wired into the rail + gate, remove the `◈`, + a `BrandMark.test.tsx`.
+**(prior entries below.)**_
+
+_2026-06-19 — **Brand refresh BR1 landed — sealed-room brand artwork vendored + the icon pipeline
+rewritten.** Branch `design-adjustments`; plan [`docs/brand-refresh-plan.md`](docs/brand-refresh-plan.md)
+phase BR1 of BR1–BR6 (still a WORKING PAPER — BR2 next). **Scope:** static brand assets + the
+`generate-icons.mjs` pipeline only; **no UI wiring yet** (the `◈` placeholder in `App.tsx:211` /
+`WorkspaceGate.tsx:155` stays until BR3), no tokens yet (BR2), no backend/IPC/schema/CSP touch.
+**§11 open questions resolved** (defaults per the plan): dark-bg nudge `#0f1115→#0E1319` = YES in BR2
+(drop only if a dark pairing regresses the new contrast test); `--brand-teal-dark` starts `#1B7F5F`,
+final hex picked by the BR2 token-contrast test; **commit `build/icon.{png,ico}`** (matches repo;
+packaging mustn't depend on running the generator); lockup-on-Home DEFERRED to the BR4 eyeball; og/PWA
+assets SKIPPED (web-only). **Assets:** the user dropped the kit SVGs into
+[`public/brand/`](apps/desktop/src/renderer/public/brand/); each was opened and the actual fill/stroke
+confirmed before the mandatory semantic rename (kit names are background-inverted — `mark-dark.svg` is a
+LIGHT square FOR dark bg). Final set in `public/brand/`: `mark-on-{light,dark}.svg` (in-app mark — dark
+ink `#11171F` / light ink `#E8EDF2` square + always-teal `#57D0A4` dot), `lockup-on-{light,dark}.svg`
+(mark + "Hilbert"+teal "Raum" wordmark), `mark-mono-{ink,white}.svg` (single-colour). The favicon →
+[`public/icon.svg`](apps/desktop/src/renderer/public/icon.svg) (filename + `index.html` `<link>`
+unchanged; theme-adaptive via an internal `@media prefers-color-scheme` that flips the square ink, dot
+always teal); the app-icon → [`build/icon.svg`](apps/desktop/build/icon.svg) (light square + teal dot on
+OPAQUE brand surface `#0E1319` — the OS icon carries its own background). **Pipeline rewrite:**
+[`scripts/generate-icons.mjs`](apps/desktop/scripts/generate-icons.mjs) dropped the `diamond()` /
+`ACCENT='#2f6fed'` geometry for a rounded-square (`arcTo` corners) + centre-dot render ported from the
+512-unit `build/icon.svg`, on the opaque surface; KEPT the offline `@napi-rs/canvas` draw + hand-assembled
+PNG-embedded `.ico` + `[16,24,32,48,64,128,256]` size set; regenerated + committed `build/icon.png` (512)
+and `build/icon.ico` (7 sizes, validated: type 1, PNG sig at first dir offset). `electron-builder.yml`
+needed NO change (filenames preserved). **Verify:** generator runs OFFLINE & writes a valid ico/png;
+512 PNG eyeballed (light square + teal dot on `#0E1319`); brand assets + favicon copied into the build
+output (`out/renderer/{brand/*,icon.svg}`); `npm run typecheck` + `npm run build` clean; full vitest from
+`apps/desktop` **1828 passed / 27 skipped** (incl. `packaging.test.ts` green after the pipeline change —
+its `@napi-rs/canvas` exclusion is unaffected). No screen-level visual change in BR1 → the Playwright
+eyeball walk is deferred (BR5 = the dedicated icon/favicon-in-window smoke). **Next: BR2** — add brand
+primitives to `tokens.css`, re-point `--accent*`/`--link`/`--focus`/`--row-selected-bar` to teal-derived
+values, teal-fill+dark-ink primary button, optional dark-bg nudge, + a NEW `token-contrast.test.ts` that
+pins every role pairing in both themes. **(prior entries below.)**_
+
 _2026-06-19 — **Full-doc-skills Phase 4 landed — invoice adoption + the plan folded into the design
 records + plan file deleted. The feature is now FULLY CLOSED OUT.** Branch `fix-use-full-doc-for-skills`.
 **Why:** Phase 3 wired the seam into chat with bank-statement as the first adopter; the seam is general

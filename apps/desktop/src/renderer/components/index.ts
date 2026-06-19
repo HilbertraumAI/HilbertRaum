@@ -2,6 +2,7 @@
 // is tokens-only (tokens.css role tokens) so both themes work without theme checks.
 
 export { englishTranslator, type Translator } from './translator'
+export { BrandMark, BrandLockup, type BrandMarkProps, type BrandLockupProps } from './BrandMark'
 export { Button, type ButtonProps, type ButtonVariant } from './Button'
 export { Badge, type BadgeProps, type BadgeTone } from './Badge'
 export { Icon, type IconName, type IconProps } from './Icon'

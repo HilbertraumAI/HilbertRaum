@@ -26,11 +26,21 @@
   --n-900: #171a21;
   --n-950: #0f1115;
 
-  /* ---- §4.2 Accent + semantic ramps (shared) ---- */
-  --accent-700: #2257c9; /* link text on light; pressed fill */
-  --accent-600: #2f6fed; /* primary button fill (white text = 4.55:1 AA) */
-  --accent-500: #4f8cff; /* accent/link on dark; focus ring — NEVER a filled-button bg */
-  --accent-300: #8fb4ff; /* subtle accent backgrounds */
+  /* ---- Brand primitives (shared, theme-constant) — the sealed-room palette
+     (docs/design-guidelines brand-refresh record). The dot is ALWAYS teal; the square
+     ink flips with the background. Bright teal #57D0A4 FAILS contrast on light surfaces
+     (~1.9:1 on white) so it is NEVER text/link/focus/thin-border there — light roles use
+     the derived --brand-teal-dark. tests/unit/token-contrast.test.ts re-verifies (and
+     pins) every pairing in both themes. ---- */
+  --brand-teal: #57d0a4; /* the dot; primary-button fill (with dark ink); accent/link/focus on DARK */
+  --brand-teal-hover: #48be92; /* primary fill hover (dark-ink text ≥7:1) */
+  --brand-teal-active: #3dae84; /* primary fill pressed (dark-ink text ≥7:1) */
+  --brand-teal-dark: #1b7f5f; /* accent/link/focus on LIGHT (4.6:1 on #f7f8fa); solid-control fill carrying a white marker */
+  --brand-ink-dark: #11171f; /* square on light; the text on teal fills */
+  --brand-ink-light: #e8edf2; /* square on dark */
+  --brand-surface-dark: #0e1319; /* brand icon/social background; the dark-theme --bg */
+
+  /* ---- §4.2 Semantic ramps (shared) ---- */
   --success-600: #1a7f4b; /* success text on light (5.0:1) */
   --success-500: #3fbf7f; /* success on dark (8.1:1) */
   --error-600: #c0362c; /* error text on light (5.5:1) */
@@ -50,12 +60,14 @@
   --border-strong: var(--n-500); /* inputs / secondary-button outlines */
   --text: #1b1f27; /* 16.5:1 */
   --text-muted: #5c6675; /* 5.8:1 */
-  --link: #2257c9; /* 6.4:1 */
-  --focus: #2f6fed;
-  /* Semantic + accent role aliases: each theme picks its AA-passing ramp step (§4.2),
-     so styles.css never hardcodes a ramp step for text/border accents. Filled controls
-     keep --accent-600 explicitly in both themes (the only fill with AA white text). */
-  --accent: var(--accent-600);
+  --link: var(--brand-teal-dark); /* 4.6:1 on light — bright teal would fail (1.9:1) */
+  --focus: var(--brand-teal-dark);
+  /* Semantic + accent role aliases: each theme picks its AA-passing value, so styles.css
+     never hardcodes a colour for text/border accents. The accent is now the brand teal:
+     the derived dark teal on LIGHT (passes as text/link/focus), bright teal on DARK. The
+     primary BUTTON is the one deliberate exception — it uses --brand-teal fill +
+     --brand-ink-dark text directly (not --accent), in both themes. */
+  --accent: var(--brand-teal-dark);
   --success: var(--success-600);
   --error: var(--error-600);
   --warning: var(--warning-700);
@@ -65,7 +77,7 @@
      an accent left bar. Distinct from :focus-visible (which keeps the accent ring) and
      from hover. Reused by the Documents list rows + selection toolbar (§11.6). */
   --row-selected-bg: var(--n-100);
-  --row-selected-bar: var(--accent-600); /* 4.55:1 on the surface — UI ≥3:1 ✓ */
+  --row-selected-bar: var(--brand-teal-dark); /* teal on light — UI ≥3:1 ✓ (bright teal would fail) */
   /* Subdued technical surfaces (code blocks, log tails) inside cards. */
   --code-bg: var(--n-100);
 
@@ -115,7 +127,9 @@
    --surface-2 lightening + borders (shadows read weakly on dark). ---- */
 [data-theme='dark'] {
   color-scheme: dark;
-  --bg: #0f1115;
+  /* Brand-exact dark surface (#0E1319, a ~1-LSB nudge from the old #0f1115 — --text
+     #e6e8ec still ≈15.6:1). The contrast test re-verifies; drop the nudge if it regresses. */
+  --bg: var(--brand-surface-dark);
   --surface: #171a21;
   --surface-2: #1d212a;
   --border: #2a2f3a;
@@ -124,9 +138,9 @@
   --border-strong: var(--n-500);
   --text: #e6e8ec; /* 15.4:1 */
   --text-muted: #9aa3b2; /* 7.4:1 */
-  --link: #4f8cff; /* 5.9:1 */
-  --focus: #4f8cff;
-  --accent: var(--accent-500);
+  --link: var(--brand-teal); /* 9.8:1 on the dark surface */
+  --focus: var(--brand-teal);
+  --accent: var(--brand-teal);
   --success: var(--success-500);
   --error: var(--error-500);
   --warning: var(--warning-500);
@@ -134,6 +148,6 @@
   /* On dark, the selected fill matches hover (--surface-2); the accent left bar is what
      distinguishes a selected row from a merely hovered one. */
   --row-selected-bg: var(--surface-2);
-  --row-selected-bar: var(--accent-500); /* 4.6:1 on --surface dark — UI ≥3:1 ✓ */
+  --row-selected-bar: var(--brand-teal); /* bright teal on --surface dark — UI ≥3:1 ✓ */
   --code-bg: rgba(0, 0, 0, 0.3);
 }

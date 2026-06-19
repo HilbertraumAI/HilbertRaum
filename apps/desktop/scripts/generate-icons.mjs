@@ -1,7 +1,10 @@
-// Generate the app icons from the brand mark (◈) — a blue diamond outline with a small
-// filled diamond on a TRANSPARENT background (matches build/icon.svg and the in-app gate
-// mark). Produces build/icon.png (512×512, used by electron-builder for mac/Linux and as
-// the dev BrowserWindow icon) and build/icon.ico (multi-size, used for the Windows .exe).
+// Generate the app icons from the brand mark — the sealed rounded square (the private
+// room) holding a single teal dot at its exact centre (your data), in its app-icon
+// treatment: light-ink square (#E8EDF2) + teal dot (#57D0A4) on an OPAQUE brand surface
+// (#0E1319). Unlike the transparent in-app mark/favicon, the OS icon carries its own
+// background. Geometry mirrors build/icon.svg (512-unit viewBox). Produces build/icon.png
+// (512×512, used by electron-builder for mac/Linux and as the dev BrowserWindow icon) and
+// build/icon.ico (multi-size, used for the Windows .exe).
 //
 // Fully offline: renders with @napi-rs/canvas (already present as a pdfjs transitive dep)
 // and hand-assembles a PNG-embedded ICO container — no network, no extra tooling.
@@ -14,34 +17,44 @@ import { createCanvas } from '@napi-rs/canvas'
 
 const buildDir = join(dirname(fileURLToPath(import.meta.url)), '..', 'build')
 
-const ACCENT = '#2f6fed'
+// Brand colours (docs/design-guidelines brand-refresh record / build/icon.svg).
+const SURFACE = '#0e1319' // opaque brand surface (OS icon background)
+const INK = '#e8edf2' // light square — reads on the dark surface
+const DOT = '#57d0a4' // the teal dot, always
 
-/** Render the brand mark at `size`×`size` and return the PNG bytes. Transparent canvas;
- *  geometry is the build/icon.svg path data scaled from its 64-unit viewBox. */
+/** Trace a rounded rectangle path (x,y,w,h with corner radius r). */
+function roundRectPath(ctx, x, y, w, h, r) {
+  ctx.beginPath()
+  ctx.moveTo(x + r, y)
+  ctx.arcTo(x + w, y, x + w, y + h, r)
+  ctx.arcTo(x + w, y + h, x, y + h, r)
+  ctx.arcTo(x, y + h, x, y, r)
+  ctx.arcTo(x, y, x + w, y, r)
+  ctx.closePath()
+}
+
+/** Render the brand mark at `size`×`size` and return the PNG bytes. Geometry is the
+ *  build/icon.svg path data scaled from its 512-unit viewBox. */
 function renderPng(size) {
   const canvas = createCanvas(size, size)
   const ctx = canvas.getContext('2d')
-  const k = size / 64
-  const diamond = (cx, cy, r) => {
-    ctx.beginPath()
-    ctx.moveTo(cx, cy - r)
-    ctx.lineTo(cx + r, cy)
-    ctx.lineTo(cx, cy + r)
-    ctx.lineTo(cx - r, cy)
-    ctx.closePath()
-  }
+  const k = size / 512
 
-  const cx = 32 * k
-  const cy = 32 * k
-  // Outer diamond outline.
+  // Opaque brand surface.
+  ctx.fillStyle = SURFACE
+  ctx.fillRect(0, 0, size, size)
+
+  // Sealed rounded square (light ink, stroke only).
   ctx.lineJoin = 'round'
-  ctx.lineWidth = 5 * k
-  ctx.strokeStyle = ACCENT
-  diamond(cx, cy, 26 * k)
+  ctx.lineWidth = 26 * k
+  ctx.strokeStyle = INK
+  roundRectPath(ctx, 146 * k, 146 * k, 220 * k, 220 * k, 66 * k)
   ctx.stroke()
-  // Inner filled diamond.
-  ctx.fillStyle = ACCENT
-  diamond(cx, cy, 11 * k)
+
+  // The teal dot at the exact centre.
+  ctx.fillStyle = DOT
+  ctx.beginPath()
+  ctx.arc(256 * k, 256 * k, 29 * k, 0, Math.PI * 2)
   ctx.fill()
 
   return canvas.toBuffer('image/png')
