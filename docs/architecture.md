@@ -1601,7 +1601,7 @@ seeds a project-name + a folder-label (suggestion-reason) sentinel and proves ne
 (2026-06-14); the full original plan: `git show 477f803:docs/document-organization-plan.md`.
 
 
-## Skills — design record (Phases S2–S13, §1–§18)
+## Skills — design record (Phases S2–S13, §1–§19)
 
 A **Skill** is a self-contained, local task package (instructions + optional examples/schemas) the
 user selects to shape one turn. Two tiers shipped: **Tier 1 — instruction-only** (the body is injected
@@ -2137,6 +2137,96 @@ selected pdf/plain/markdown document auto-applies it: keyword (2) + the in-scope
 `threshold-3` gate). A "selected" document is one in the conversation's persisted scope, so
 `inScopeDocSignals` surfaces its MIME main-side (§22-C4) — the same phrase with no document in scope
 scores 2 and does **not** fire (regression-tested in `skills-autofire.test.ts`).
+
+### §19 Full-document analysis for tool skills (2026-06-19, D44–D49)
+
+**The bug this closes.** A `kind:tool` skill ships deterministic whole-document tools (the §7/§8
+gate), but when a user just *asked* about a document in chat the turn took the ordinary top-k RAG path
+(`generateGroundedAnswer`) with the SKILL.md body as a fenced reference — answering from ~5 retrieved
+passages, not the whole document. For accounting (the bank-statement test case) a partial read means
+wrong totals; the coverage badge correctly said "based on the most relevant passages," but the
+*analysis* was still partial. (Folded from `docs/full-doc-skills-plan.md`, deleted at this phase; full
+text in git history. Coverage half cross-linked from [`rag-design.md`](rag-design.md) §14.7.)
+
+**Decisions (locked with the user 2026-06-19, continuing the global series after D38–D43):**
+
+- **D44** — the fix is a **general `kind:tool` mechanism**, not a bank-only patch: the bug is a class
+  (any tool skill's correctness guarantees are bypassed on the chat path). Bank-statement is the first
+  adopter + the test case; invoice the second.
+- **D45** — when a doc can't be analysed exhaustively (any in-scope doc not fully chunked), **refuse the
+  partial answer** with a fixed, localized message pointing at the existing Documents → Re-index
+  affordance — no model call, no partial answer (honesty posture §22-D1). A silent partial accounting
+  answer is worse than a clear "not yet."
+- **D46** — a plain chat question **auto-runs the skill's READ-ONLY tools** (export stays
+  confirm-gated). Read-only, deterministic, no side effects — a question should give exhaustive results
+  without an extra click. This narrows the "tools run only when the user starts them" contract to
+  **read-only** tools.
+- **D47** — the answer is **synthesised from the structured tool output** (the compact extracted table),
+  never by prompt-stuffing every chunk: the structured result fits context trivially; top-k RAG exists
+  *because* raw documents overflow it.
+- **D48** — coverage stops being **hardcoded** `relevance`: a real `CoverageInfo` is persisted per
+  message and the renderer shows the truth. Requirement "if we analysed the full document, show that"
+  is inexpressible until the meter is data-driven.
+- **D49** — adoption is **per-skill**: `bank-statement` + `invoice` both register an analysis handler;
+  `document-redaction` does **not** (it is an action skill — it redacts a document — not an
+  analysis-question skill, so a plain question is never force-routed through it).
+
+**The seam (`main/services/skills/analysis/`).** A small registry keyed by skill `install_id` →
+`SkillAnalysisHandler` (`applies({question,scope,db}): boolean` + `run(ctx): Promise<SkillAnalysisResult>`),
+following `tool-registry.ts`: **no import-time side effects**, app-owned, populated by an explicit
+`registerBuiltinSkillAnalysisHandlers()` called once at app init (`main/index.ts`, before any
+`register*Ipc`). `SkillAnalysisResult = { answer; citations; coverage }`. A handler's only content
+reach is the **same run seam** the doc-action path uses (`run.ts` / `invoice-run.ts` over the faithful
+`extractDocumentPreview` segment reader) — the §7/§14 ceiling is unchanged: it adds no new DB/FS/net
+handle, and the export tier is excluded **by construction** (the CSV-export run fns are never
+imported).
+
+**Per-message coverage contract (D48).** `messages.coverage_json TEXT` (nullable, additive
+`ensureColumn`; old rows = NULL); `Message.coverage?: CoverageInfo`; `appendMessage` serializes it
+tolerantly (a stringify fault degrades to NULL, never blocks the append) and `rowToMessage` parses it
+(NULL/malformed → undefined). The relevance path persists **no** coverage (stays NULL); the renderer
+falls back to `{ mode:'relevance' }` so every pre-migration message and every non-re-routed turn
+renders byte-identically (R5). The skill-analysis path stamps a real `{ mode:'extract', chunksCovered,
+chunksTotal, fullyChunked }`, where `fullyChunked` gates the "whole document" meter wording.
+
+**Chat routing + the refuse gate (in `registerRagIpc.askDocuments`).** After the turn skill resolves +
+scope/filename auto-scope, and BEFORE the `routeQuestion`/`generateGroundedAnswer` decision, the turn
+looks up `getSkillAnalysisHandler(skill.installId)` (the registry **is** the opt-in — a registered
+handler implies `kind:tool`; no separate kind check). When `handler.applies(...)`:
+`allInScopeDocsFullyChunked(db, scope)` reads `documents.fully_chunked` at **turn time** (R4, not a
+cached flag) — not fully chunked ⇒ **refuse** (`skills.analysis.refusePartial`, NULL coverage, no
+model call, skill stamped); fully chunked ⇒ `handler.run(ctx)` with a production context (the skills
+audit adapter, the `extractDocumentPreview` reader, `tMain`, the chat slot's abort signal). Both
+outcomes acquire the chat slot via `withChatStream` exactly as the coverage-extract branch (R3, the
+single-locked-slot contract). When no handler is registered or `applies()` is false the whole block is
+skipped and the relevance + coverage-extract paths run **byte-unchanged** (R5).
+
+**Per-skill adoption.** Each handler's `applies()` is conservative: a single in-scope document (R2 —
+multi-doc keeps relevance) **and** an analysis-shaped keyword set (EN+DE, substring-ambiguous tokens
+avoided per §1's DS17 caution). `run()` auto-runs the read-only tools through the run seam for their
+`skill_runs` lifecycle + ids/counts audit, then computes the answer's **figures from the persisted
+rows** via the **pure** tool functions (the seams surface only counts). The answer is deterministic,
+localized Markdown honouring the SKILL.md honesty posture (quote printed figures; surface flagged rows
+**before** the headline; never invent), with real `[Sn]` source-chunk citations (M2-safe, never the
+synthesised total).
+
+- **`bank-statement`** (`analysis/bank-statement.ts`): `extract_transactions` →
+  `summarize_cashflow` + `validate_statement_balances` (+ `categorize_transactions` only when the
+  question is category-shaped). Leads with the count, surfaces unreconciled rows before the totals,
+  reports mixed currency as "no single total." Citations narrow to the transactions' `source_page`.
+- **`invoice`** (`analysis/invoice.ts`): `extract_invoice` → `validate_invoice_totals`. Surfaces any
+  failed reconciliation check (line-items→net, net+tax→gross, tax-vs-rate) **before** the headline
+  gross; prints only the figures the invoice states (a field that couldn't be parsed is left out).
+  The invoice schema records no per-figure source page, so citations are the document's leading
+  source chunks (still real chunks, M2-safe). i18n: `skills.invoiceAnalysis.*` (EN+DE parity), reusing
+  the shared `coverage.extract.*` meter + `skills.analysis.refusePartial` refuse copy.
+
+**Tests.** `skills-analysis-bank.test.ts` + `skills-analysis-invoice.test.ts` (handler-level:
+`applies()` pre-flight, exhaustive math from rows, flagged check surfaced before the headline, figures
+quoted not invented, export never auto-run, coverage `fullyChunked` true/false, real source citations);
+`rag-skill-analysis.test.ts` + `rag-skill-analysis-invoice.test.ts` (IPC-level over the real
+`askDocuments`: exhaustive path with `coverage.mode==='extract'` + no model call, refuse path, relevance
+path byte-unchanged, single-locked-slot contract).
 
 ### §-anchor legend (historical plan citations)
 

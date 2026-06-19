@@ -1,7 +1,12 @@
 import { ipcMain, type IpcMainInvokeEvent } from 'electron'
 import { IPC, STREAM } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
-import { type ExtractRecordType, type Message, type RetrievalScope } from '../../shared/types'
+import {
+  type DocumentChunkRead,
+  type ExtractRecordType,
+  type Message,
+  type RetrievalScope
+} from '../../shared/types'
 import {
   appendMessage,
   deleteLastAssistantMessage,
@@ -12,6 +17,9 @@ import { resolveScope } from '../services/collections'
 import { buildScopeFilter } from '../services/retrieval-scope'
 import { detectFilenameScope, generateGroundedAnswer, ragSettingsFrom } from '../services/rag'
 import { resolveTurnSkillFromRegistry } from '../services/skills/turn'
+import { getSkillAnalysisHandler } from '../services/skills/analysis'
+import { toSkillToolAudit } from '../services/skills/tool-runs'
+import { documentsDir, extractDocumentPreview } from '../services/ingestion'
 import { aggregateExtractions, SCAN_MARKER_TYPE } from '../services/analysis/extract'
 import { routeQuestion } from '../services/analysis/router'
 import { buildListingAnswer } from '../services/analysis/listing-answer'
@@ -51,6 +59,28 @@ function extractionsExistInScope(db: Db, scope: RetrievalScope): boolean {
   return row != null
 }
 
+/**
+ * Exhaustiveness precondition for a tool-skill analysis turn (full-doc-skills §3.2/D45/R4): is EVERY
+ * indexed, answerable in-scope document `fully_chunked` RIGHT NOW? `documents.fully_chunked` is TEXT;
+ * non-NULL = fully chunked (NULL = legacy/partly-chunked). Read at turn time (not a cached flag) so a
+ * doc later edited stale refuses honestly. Mirrors the `documentsInScope` membership/index filter so
+ * the set checked is exactly the set the handler would analyse. `applies()` already requires a single
+ * in-scope doc, so this is effectively "is that one doc fully chunked".
+ */
+function allInScopeDocsFullyChunked(db: Db, scope: RetrievalScope): boolean {
+  const filter = buildScopeFilter(scope, 'd.id')
+  const where = filter ? ` AND ${filter.sql}` : ''
+  const row = db
+    .prepare(
+      `SELECT COUNT(*) AS n FROM documents d
+       WHERE d.status = 'indexed'
+         AND EXISTS (SELECT 1 FROM chunks c WHERE c.document_id = d.id)
+         AND d.fully_chunked IS NULL${where}`
+    )
+    .get(...(filter ? filter.params : [])) as unknown as { n: number }
+  return (row?.n ?? 0) === 0
+}
+
 /** Count in-scope documents with a READY deep-index tree (enables the tree-summary route). */
 function readyTreeCountInScope(db: Db, scope: RetrievalScope): number {
   const filter = buildScopeFilter(scope, 'd.id')
@@ -81,6 +111,20 @@ function readyTreeCountInScope(db: Db, scope: RetrievalScope): number {
 // the "start a model" empty state.
 
 export function registerRagIpc(ctx: AppContext): void {
+  // The FAITHFUL content reach a tool-skill analysis handler needs (full-doc-skills §3.2): a
+  // document's ordered, non-overlapping, newline-preserving parser segments, re-extracted from the
+  // stored copy — the SAME `extractDocumentPreview` reader the skills-run IPC injects. The `chunks`
+  // table is retrieval windows (newlines collapsed, ~80-token overlap), which would give the
+  // line-oriented extractors near-zero rows. Content stays main-side: only the tool ever sees it.
+  const storeDir = documentsDir(ctx.paths.workspacePath)
+  const readDocumentSegments = async (documentId: string): Promise<DocumentChunkRead[]> => {
+    const preview = await extractDocumentPreview(ctx.db, storeDir, documentId, {
+      cipher: ctx.workspace.documentCipher(),
+      ocrEngine: ctx.ocrEngine
+    })
+    return preview.segments.map((s, index) => ({ text: s.text, page: s.pageNumber, index }))
+  }
+
   ipcMain.handle(
     IPC.askDocuments,
     async (
@@ -142,6 +186,76 @@ export function registerRagIpc(ctx: AppContext): void {
             event.sender.send(STREAM.scope(conversationId), { titles: detected.titles })
           }
         }
+      }
+
+      // Full-doc-skills Phase 3 (§3.2/D44/D46/D47): a `kind:tool` skill with a REGISTERED analysis
+      // handler that APPLIES to this question over this scope answers EXHAUSTIVELY via its
+      // whole-document read-only tools, not top-k RAG. The registry is the opt-in (D49) — a registered
+      // handler implies `kind:tool`, so no separate kind check is needed. When no handler is
+      // registered for the turn skill, or `applies()` is false (off-topic / multi-doc), this whole
+      // block is skipped and the relevance + coverage-extract paths below run BYTE-UNCHANGED (R5).
+      const analysisHandler = skill ? getSkillAnalysisHandler(skill.installId) : undefined
+      if (skill && analysisHandler && analysisHandler.applies({ question: text, scope, db: ctx.db })) {
+        const turnSkill = skill
+        // Exhaustiveness precondition (D45/R4): every in-scope doc must be FULLY chunked at turn time.
+        // A legacy/partly-chunked doc cannot be analysed exhaustively, so we REFUSE — a fixed,
+        // localized message + the existing Re-index affordance, no model call, no partial answer.
+        if (!allInScopeDocsFullyChunked(ctx.db, scope)) {
+          const refusal = tMain('skills.analysis.refusePartial')
+          return withChatStream(
+            event,
+            conversationId,
+            'Document analysis refused',
+            async (_signal, sendToken): Promise<Message> => {
+              sendToken(refusal)
+              // Honest coverage on a refusal: NULL (omitted) — we make NO breadth claim. Stamp the
+              // skill (A1) so the re-routed turn still carries its glyph + auto-fire provenance.
+              return appendMessage(ctx.db, {
+                conversationId,
+                role: 'assistant',
+                content: refusal,
+                skillId: turnSkill.installId,
+                autoFired: turnSkill.autoFired === true
+              })
+            },
+            () => ctx.docTasks?.acquireChatSlot() ?? Promise.resolve(() => {})
+          )
+        }
+        // Auto-run the read-only whole-document tools (D46) and persist the exhaustive answer with its
+        // honest extract/whole coverage (D48) + real citations. NO model call — the answer is
+        // deterministic, localized copy synthesised from the structured tool output (D47).
+        return withChatStream(
+          event,
+          conversationId,
+          'Document analysis failed',
+          async (signal, sendToken): Promise<Message> => {
+            const result = await analysisHandler.run({
+              db: ctx.db,
+              question: text,
+              scope,
+              skillInstallId: turnSkill.installId,
+              conversationId,
+              // The app's real ids/counts-only audit sink (the skills-run adapter — never invent one).
+              audit: toSkillToolAudit(ctx.audit),
+              // Thread the chat slot's abort signal so Cancel stops the auto-run.
+              signal,
+              tr: (key, params) => tMain(key, params),
+              // Faithful newline-preserving segments (not the overlap-collapsing chunks table).
+              readDocumentSegments
+            })
+            sendToken(result.answer)
+            return appendMessage(ctx.db, {
+              conversationId,
+              role: 'assistant',
+              content: result.answer,
+              citations: result.citations,
+              coverage: result.coverage,
+              skillId: turnSkill.installId,
+              autoFired: turnSkill.autoFired === true
+            })
+          },
+          () => ctx.docTasks?.acquireChatSlot() ?? Promise.resolve(() => {})
+        )
       }
 
       // Task router (whole-document-analysis plan §4.4, Phase 3): a "list every X / how many"
