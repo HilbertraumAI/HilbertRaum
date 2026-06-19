@@ -6,6 +6,26 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-19 — **Brand refresh BR5 landed — package icon/favicon smoke; the produced icon set is correct
+end-to-end.** Branch `design-adjustments`; plan
+[`docs/brand-refresh-plan.md`](docs/brand-refresh-plan.md) phase BR5 of BR1–BR6 (WORKING PAPER — BR6 next,
+the closer). **Scope:** verification only — no code changes (consumes the BR1 output). **ICO deep-validated:**
+`build/icon.ico` = type 1, 7 entries; **every entry's embedded PNG decodes to its declared size**
+(16/24/32/48/64/128/256, IHDR width/height match the directory entry, all PNG sigs valid); `build/icon.png`
+is 512×512. Extracted the 256px + 32px entries and eyeballed them (captures in
+`docs/design-review/brand-refresh/br5/`): the sealed-room mark (light-ink rounded square + teal dot on the
+opaque `#0E1319` surface) renders cleanly at 256 and stays legible at 32 (taskbar size). **Window/taskbar
+icon wiring confirmed:** `createWindow()` sets the BrowserWindow `icon` to `build/icon.png` (dev + Linux);
+packaged Windows embeds `build/icon.ico` via electron-builder — so the OS icon shows the new mark. (The
+document favicon `index.html href="/icon.svg"` is broken under the prod `file://` load, same root cause as
+C-BR3, but it's IRRELEVANT — Electron uses the BrowserWindow icon, not the document favicon; left as-is.)
+**Out-of-scope nicety noted, deferred:** the main-process pre-paint `backgroundColor` for dark is still
+`#0f1115` (not the BR2-nudged `#0E1319`) — an imperceptible ~1-LSB flash colour; left untouched to respect
+the renderer-only boundary. **Manual/deferred:** `npm run package:win` (network-touching, R2) for a
+packaging owner. **Next: BR6** — write `walk-brand-refresh.mjs` (done; lives in-repo), fold the condensed
+brand-refresh record into `design-guidelines.md` as a §-numbered section, finalize this file, and DELETE
+the plan file per the doc-lifecycle rule. **(prior entries below.)**_
+
 _2026-06-19 — **Brand refresh BR4 landed — full screen pass; every screen inherits the teal cleanly,
 one leaked blue fixed.** Branch `design-adjustments`; plan
 [`docs/brand-refresh-plan.md`](docs/brand-refresh-plan.md) phase BR4 of BR1–BR6 (WORKING PAPER — BR5/BR6
