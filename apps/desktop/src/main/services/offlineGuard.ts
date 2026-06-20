@@ -97,7 +97,11 @@ export interface OfflinePosture {
 
 export interface AssertOfflinePostureDeps {
   posture: OfflinePosture
-  /** Whether to install the live connect tripwire (gated to dev / developer mode). */
+  /**
+   * Whether to install the live connect tripwire. Production wiring (main/index.ts) installs
+   * it in ALL builds; tests pass `false` to opt out. (It is a loopback-exempt safety net, not
+   * a dev-only diagnostic.)
+   */
   installGuard: boolean
   log: (msg: string, meta?: unknown) => void
   warn: (msg: string, meta?: unknown) => void

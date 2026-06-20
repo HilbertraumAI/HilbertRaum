@@ -74,10 +74,11 @@ The canvas is the *conversation*. Everything else is (a) a quiet persistent affo
 │ Home │ ── Today ──    │ │  transcript, centered, max-width 720px    │ │
 │ Chat │ · Contract…    │ │                                           │ │
 │ Docs │ · Q3 figures   │ │  ┌ assistant answer ────────────────────┐ │ │
-│ Model│ ── Earlier ──  │ │  │ …answer text…                        │ │ │
-│      │ · Lease notes  │ │  │ ▸ Sources (3)                        │ │ │
-│ ──── │                │ │  └──────────────────────────────────────┘ │ │
-│ Set. │ (collapsible)  │ │   ↺ Try again · Copy · Save (hover/focus) │ │
+│ Imgs │ ── Earlier ──  │ │  │ …answer text…                        │ │ │
+│ Model│ · Lease notes  │ │  │ ▸ Sources (3)                        │ │ │
+│ Skill│                │ │  └──────────────────────────────────────┘ │ │
+│ ──── │                │ │   ↺ Try again · Copy · Save (hover/focus) │ │
+│ Set. │ (collapsible)  │ │                                           │ │
 │      │                │ └───────────────────────────────────────────┘ │
 │      │                │ ┌───────────────────────────────────────────┐ │
 │      │                │ │ Message…                            [ ➤ ] │ │

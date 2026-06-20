@@ -1,7 +1,7 @@
 # Security model — HilbertRaum
 
-_Last updated: 2026-06-11 (Phase 37 — voice dictation: the scoped microphone permission
-exception + the dictation temp-file posture)_
+_Last updated: 2026-06-20 (Image-understanding V8 — encrypted, deletable image-analysis history;
+its write/read temps now joined the startup crash sweep)_
 
 This document describes the local threat model, the security baseline (spec §3.5), the offline
 posture (spec §3.6), how the privacy policy is loaded and enforced, and the **encrypted workspace**
@@ -224,10 +224,14 @@ exposed to logging via `WorkspaceController.encryptionKey()` (the same data key 
 
 ## Audit log data class (Phase 19)
 
-`services/audit.ts` records app activity (model starts/stops, downloads, document
-imports/deletes, workspace lock/unlock, privacy-relevant settings changes, policy warnings,
-offline-guard detections) into the spec §8 `runtime_events` table. Its data class is defined by
-a **hard privacy rule**:
+`services/audit.ts` records app activity into the spec §8 `runtime_events` table. The recorded
+families (`AuditEventType` in `shared/types.ts`) span model starts/stops and downloads; document
+imports/deletes and lifecycle/collection changes (`document_lifecycle_changed`, `collection_*`);
+document tasks and exports (`document_task_*`, `document_exported`/`summary_exported`); conversation
+lifecycle (`conversation_*`); skill management and runs (`skill_imported`/`deleted`/`enabled`/
+`disabled`, `skill_run_*`); workspace lock/unlock; privacy-relevant settings changes; policy
+warnings; and offline-guard detections. (`shared/types.ts` is the authoritative enum.) Its data
+class is defined by a **hard privacy rule**:
 
 - Events carry **ids, model ids, filenames, and counts only** — NEVER chat content, document
   text, or passwords. A chat transcript export records only the conversation id (even the
@@ -305,7 +309,9 @@ every imported document readable on a lost drive.
 - **Re-index:** the stored `.enc` is decrypted to a **transient** working file
   (`<id>.parse<ext>`) for the parser and **shredded** when parsing finishes (success or failure).
 - **Crash recovery:** `shredStalePlaintext` (startup, encrypted vaults) also sweeps stray
-  `*.parse*`/`*.tmp` transients under `workspace/documents/` and the DB's `.tmp` write-temp.
+  `*.parse*`/`*.tmp` transients under `workspace/documents/` **and `workspace/images/`** plus the
+  DB's `.tmp` write-temp (the stored copies — `<id><ext>.enc` — match neither pattern, so they
+  survive).
 - **Legacy migration:** a document imported before this existed (or in plaintext mode) keeps its
   plaintext stored copy until **re-indexed**, which upgrades it to `.enc` in place and shreds the
   plaintext.
@@ -323,9 +329,13 @@ sidecar and writes no temp; only the history copy lands on disk).
   `MAGIC | iv | tag | ciphertext` framing, same vault key, fresh IV per file) via the same
   `DocumentCipher`. The Q&A turns live in the `image_turns` table (so they are covered by the
   encrypted DB). `plaintext_dev` workspaces store a raw `<id><ext>` copy (`encrypted=0`), as labelled.
-- **Write path:** the bytes are written to a short-lived plaintext temp, `encryptFile`-d to the
-  `.enc` sidecar, and the temp **shredded** — the same transient-then-shred posture as document parse.
-- **Read path (open an entry):** the `.enc` is decrypted to a transient temp, read, then **shredded**.
+- **Write path:** the bytes are written to a short-lived plaintext temp (`<id>.tmp`), `encryptFile`-d
+  to the `.enc` sidecar, and the temp **shredded** — the same transient-then-shred posture as document
+  parse.
+- **Read path (open an entry):** the `.enc` is decrypted to a transient temp (`<id>.read-<pid>.tmp`),
+  read, then **shredded**.
+- **Crash recovery:** both temps end in `.tmp`, so the startup `shredStalePlaintext` sweep of
+  `workspace/images/` removes any leftover from a process killed mid-write or mid-read.
 - **Delete:** removing a history entry **shreds** the stored image and cascade-removes its turns
   (`image_turns.session_id` FK `ON DELETE CASCADE`); shredding is best-effort (a missing/locked copy
   never blocks the DB cleanup), matching `deleteDocument`.

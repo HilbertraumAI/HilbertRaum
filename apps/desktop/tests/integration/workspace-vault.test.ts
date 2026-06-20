@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { mkdtempSync, mkdirSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, dirname } from 'node:path'
 import http from 'node:http'
 import https from 'node:https'
 import net from 'node:net'
@@ -347,6 +347,31 @@ describe('WorkspaceController', () => {
     expect(existsSync(vp.dbPath)).toBe(false)
     expect(existsSync(`${vp.dbPath}-wal`)).toBe(false)
     expect(existsSync(`${vp.dbPath}-shm`)).toBe(false)
+  })
+
+  it('shredStalePlaintext sweeps crash-left .parse/.tmp transients under documents/ AND images/, keeping stored copies', () => {
+    const vp = freshVault()
+    const workspaceDir = dirname(vp.dbPath)
+    const docsDir = join(workspaceDir, 'documents')
+    const imagesDir = join(workspaceDir, 'images')
+    mkdirSync(docsDir, { recursive: true })
+    mkdirSync(imagesDir, { recursive: true })
+
+    // Transient plaintext copies a killed run can leave behind.
+    writeFileSync(join(docsDir, 'doc1.parsepdf'), 'x') // re-index parse temp
+    writeFileSync(join(imagesDir, 'img1.tmp'), 'x') // image-history write temp
+    writeFileSync(join(imagesDir, 'img2.read-1234.tmp'), 'x') // image-history read temp
+    // Stored encrypted copies must SURVIVE the sweep (they match neither pattern).
+    writeFileSync(join(docsDir, 'doc1.pdf.enc'), 'x')
+    writeFileSync(join(imagesDir, 'img1.png.enc'), 'x')
+
+    shredStalePlaintext(vp)
+
+    expect(existsSync(join(docsDir, 'doc1.parsepdf'))).toBe(false)
+    expect(existsSync(join(imagesDir, 'img1.tmp'))).toBe(false)
+    expect(existsSync(join(imagesDir, 'img2.read-1234.tmp'))).toBe(false)
+    expect(existsSync(join(docsDir, 'doc1.pdf.enc'))).toBe(true)
+    expect(existsSync(join(imagesDir, 'img1.png.enc'))).toBe(true)
   })
 })
 

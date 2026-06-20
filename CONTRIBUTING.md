@@ -16,8 +16,15 @@ Thanks for your interest! This project values **privacy, portability, and boring
 4. **Update docs and `BUILD_STATE.md` at the end of each phase** (mandatory ritual).
 5. Open a focused PR referencing the phase/milestone.
 
+## Commits & pull requests
+- Commit messages follow **Conventional Commits** (`feat:`, `fix:`, `chore:`, `docs:`, …), often
+  scoped (e.g. `feat(image-understanding): …`). Keep each PR a focused vertical slice.
+- A PR is not done until: `npm test` is green, `npm run typecheck` is clean, affected `docs/` are
+  updated, and `BUILD_STATE.md` records the change (the mandatory per-phase ritual).
+
 ## Dev setup
-Requires **Node.js ≥ 22.5** (Node 24 recommended), per `package.json` `engines`.
+Requires **Node.js ≥ 22.5** (Node 24 recommended), per `package.json` `engines`. For the repo layout
+and a map of the docs, see the **[README](README.md)** ("For developers" + "Documentation").
 ```bash
 npm install
 npm run dev

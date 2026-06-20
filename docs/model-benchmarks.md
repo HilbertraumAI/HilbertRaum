@@ -127,7 +127,7 @@ peak RSS in GiB and a suggested `recommended_min_ram_gb` (**peak RSS + 3 GiB OS/
 rounded up). Linux = `/usr/bin/time -v` (Maximum resident set size); macOS = `/usr/bin/time -l`.
 
 **This measurement REPLACES the pre-measurement estimates** in each manifest's `recommended_min_ram_gb` /
-`recommended_max_ram_gb` — update the manifests with the measured tier on the highest-RAM
+`recommended_ram_gb` — update the manifests with the measured tier on the highest-RAM
 machine that ran it.
 
 ---
@@ -165,7 +165,8 @@ accumulate dead multi-GB downloads. Then update:
 
 ## 6. First-run findings (2026-06-11 — i7-1185G7, CPU; QA half only)
 
-First QA execution: all 8 catalog chat models on the i7-1185G7 laptop (CPU/Vulkan-DL build),
+First QA execution: the 8 benchmarked catalog chat models on the i7-1185G7 laptop (CPU/Vulkan-DL build;
+the 9th chat manifest, `qwen3.5-4b-ud-q4kxl`, shipped later and is not yet benchmarked),
 plus a single-model reproducibility check on the dev box. Speed (Part B) + peak-RSS (Part C)
 followed later the same day — **§6.1**. Authoritative QA numbers are the
 **`*-quality-rescored.csv`** (see below).
@@ -175,7 +176,7 @@ followed later the same day — **§6.1**. Authoritative QA numbers are the
   deterministic, so QA quality is machine-independent and one machine suffices for it (the 2nd
   machine matters for speed/RAM, not quality).
 - **Grounded accuracy saturates → it does NOT separate the catalog.** EM 95–98% for every model,
-  German ≈ English (em_de ≈ 0.94–0.96, em_en = 1.00). All eight are competent grounded
+  German ≈ English (em_de ≈ 0.94–0.96, em_en = 1.00). All eight benchmarked models are competent grounded
   extractors; the catalog separates on *hallucination-resistance*, not accuracy.
 - **`citation_correct_rate` is a flat 0.9882 for every model — it is a RETRIEVAL property, not a
   model one.** `generateGroundedAnswer` persists the citations computed by retrieval (not parsed

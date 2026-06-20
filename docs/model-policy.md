@@ -85,7 +85,8 @@ vision role + mmproj projector" below). Unknown extra keys (e.g. `supports_tools
   `models/chat/foo.gguf` points at `<drive-root>/models/chat/foo.gguf`.
 - **`sha256`** is lower-case hex (64 chars). A non-hex placeholder (e.g. `REPLACE_WITH_REAL_HASH`)
   marks a model whose hash is not yet known; such a file is only usable in developer mode.
-- **`runtime`/`format`**: currently `llama_cpp` + `gguf` are supported; anything else yields the
+- **`runtime`/`format`**: the supported pairs are `llama_cpp`/`gguf` (chat, embeddings, reranker,
+  vision) and `whisper_cpp`/`ggml` (the transcriber); any other runtime/format pair yields the
   `unsupported` state.
 - **`supports_thinking_mode`** (optional boolean, default `false`) is **load-bearing since
   Phase 20**: it declares that the model's chat template implements the `enable_thinking`

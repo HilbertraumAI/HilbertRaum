@@ -19,7 +19,8 @@ a future move to Tauri/Rust is a localized swap.
 ┌───────────────┴───────────────────────────────▼──────────────┐
 │ Main process (the "backend")                                   │
 │  ipc/        → handlers mirroring spec §9.1                     │
-│  services/   (~35 modules — see Module ↔ spec map below)        │
+│  services/   (~30 top-level modules + subsystem dirs —          │
+│              see Module ↔ spec map below)                        │
 │    workspace · db (node:sqlite) · models · runtime/ ·          │
 │    chat · ingestion/ · embeddings/ · rag · reranker/ ·         │
 │    doctasks/ · analysis/ · collections ·                       │
@@ -2679,3 +2680,9 @@ cosine top-k ⊕ FTS5 keyword top-k (RRF fusion) → optional rerank → build g
 | `services/drive.ts` + `services/assets.ts` | §6 drive layout, §12 packaging |
 | `services/launcher.ts` + `services/preflight.ts` | §6 launchers, §11.4 first-run check |
 | `services/commercial-drive.ts` | §12.2 sellable-drive gate, §13 license reviews |
+| `services/context.ts` | §9 DI service context (`ctx`) wiring all services together |
+| `services/compose-services.ts` | composes/constructs the service graph at startup |
+| `services/resolve-model.ts` | 7.4 resolves which installed model/file backs a role (availability) |
+| `services/select-sidecar-backed.ts` | 7.5 selects the sidecar-backed runtime for an available model |
+| `services/retrieval-scope.ts` | 7.8 builds the SQL scope filter for retrieval (collection/document scoping) |
+| `services/settings.ts` | §8 persisted user settings access |

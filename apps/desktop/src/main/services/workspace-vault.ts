@@ -342,11 +342,11 @@ export function cleanSidecars(dbPath: string): void {
 /**
  * Crash recovery for an encrypted vault: shred every leftover plaintext artifact a
  * killed run can leave behind — the working DB, its WAL/SHM sidecars, the atomic-write
- * `.tmp` files of encrypt/decryptFile, and transient decrypted document copies
- * (`*.parse*` under `workspace/documents/`, used while re-indexing an encrypted copy).
- * For an encrypted vault these are all derived from the `.enc` artifacts (the source of
- * truth), so shredding loses nothing. MUST NOT be called for `plaintext_dev`, where the
- * working file IS the database.
+ * `.tmp` files of encrypt/decryptFile, and transient decrypted document/image copies
+ * (`*.parse*`/`*.tmp` under `workspace/documents/` and `workspace/images/`, written while
+ * re-indexing or decrypting an encrypted copy). For an encrypted vault these are all derived
+ * from the `.enc` artifacts (the source of truth), so shredding loses nothing. MUST NOT be
+ * called for `plaintext_dev`, where the working file IS the database.
  */
 export function shredStalePlaintext(vaultPaths: VaultPaths): void {
   shredFile(vaultPaths.dbPath)
@@ -354,16 +354,21 @@ export function shredStalePlaintext(vaultPaths: VaultPaths): void {
   // a crash inside that window leaves the entire decrypted database under this name.
   shredFile(`${vaultPaths.dbPath}.tmp`)
   cleanSidecars(vaultPaths.dbPath)
-  // Transient plaintext document copies (encrypted-mode re-index decrypts the stored
-  // `.enc` to `<id>.parse<ext>` while parsing). Never touches the stored copies
-  // themselves — only the clearly-transient `.parse`/`.tmp` names.
-  const docsDir = join(dirname(vaultPaths.dbPath), 'documents')
-  try {
-    for (const name of readdirSync(docsDir)) {
-      if (name.includes('.parse') || name.endsWith('.tmp')) shredFile(join(docsDir, name))
+  // Transient plaintext copies derived from encrypted `.enc` stores: documents/ holds
+  // re-index `<id>.parse<ext>` copies; images/ holds the image-history encrypt/decrypt temps
+  // (`<id>.tmp` on write, `<id>.read-<pid>.tmp` on read — vision/history.ts). Never touches
+  // the stored copies themselves — only the clearly-transient `.parse`/`.tmp` names (the
+  // stored image is `<id><ext>.enc`, which matches neither).
+  const workspaceDir = dirname(vaultPaths.dbPath)
+  for (const sub of ['documents', 'images']) {
+    const dir = join(workspaceDir, sub)
+    try {
+      for (const name of readdirSync(dir)) {
+        if (name.includes('.parse') || name.endsWith('.tmp')) shredFile(join(dir, name))
+      }
+    } catch {
+      /* dir not created yet */
     }
-  } catch {
-    /* no documents dir yet */
   }
 }
 

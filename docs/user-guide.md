@@ -81,8 +81,8 @@ enter your password on a single unlock screen.
 
 ## 4. Finding your way around
 
-The sidebar has five everyday destinations — **Home**, **Chat**, **Documents**, **Images**, and
-**AI Model** — plus **Settings** at the bottom. Settings has three tabs: **General**,
+The sidebar has six everyday destinations — **Home**, **Chat**, **Documents**, **Images**,
+**AI Model**, and **Skills** — plus **Settings** at the bottom. Settings has three tabs: **General**,
 **Privacy & data**, and **Diagnostics (advanced)** (see §10).
 
 A quiet **🔒 Local · Offline** status sits in the chat header. Hover it for the short version — *"Everything stays on this drive. No internet
@@ -554,9 +554,9 @@ anything else on the drive.
 > numbers, IBANs, and the like) but can miss anything without a clear pattern. Always review the
 > redacted copy before you share it.
 
-### Manage skills (Settings → Skills)
+### Manage skills (open **Skills** in the sidebar)
 
-Open **Settings → Skills** to see every installed skill, turn each one **on or off**, and **Import**
+Open **Skills** in the sidebar to see every installed skill, turn each one **on or off**, and **Import**
 or **Delete** your own.
 
 - **Import** takes a `.skill.zip` file *or* a folder that contains a `SKILL.md`. The app checks the

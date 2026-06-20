@@ -47,7 +47,7 @@ should not appear at all.
 
 **No. That is the intended state.** HilbertRaum runs the AI model on your laptop and
 keeps your data local. It does not need the internet and network access is off by default. You
-can confirm this on the **Privacy** screen.
+can confirm this in **Settings → Privacy & data**.
 
 ---
 
@@ -108,13 +108,13 @@ it, the data **cannot be recovered** — this is by design. Create a new workspa
 ## The app feels slow
 
 - **Slow drive:** running from a slow USB stick makes model loading and indexing sluggish. Use
-  a fast USB 3 / SSD drive, or copy the drive's contents to your computer. The **Diagnostics**
-  screen reports your drive's read/write speed and warns if it's slow.
+  a fast USB 3 / SSD drive, or copy the drive's contents to your computer. **Settings →
+  Diagnostics (advanced)** reports your drive's read/write speed and warns if it's slow.
 - **Heavy model for your laptop:** pick the **Recommended** model on the AI Model screen. The
   benchmark suggests a model that suits your RAM/CPU. Larger models are more capable but slower.
 - **First start of a model** is always slower (it loads into memory); later prompts are faster.
 - **Graphics acceleration:** on most computers with a graphics card, responses are
-  automatically accelerated — nothing to configure. The **Diagnostics** screen's
+  automatically accelerated — nothing to configure. The **Settings → Diagnostics (advanced)**
   *Acceleration* line shows whether your graphics card is being used.
 
 ---
@@ -128,8 +128,8 @@ Everything keeps working; responses may just be a bit slower.
 
 - You don't have to do anything. The app remembers this choice so it doesn't retry on every
   start.
-- If you update your graphics driver later, open **Diagnostics → Try GPU again** to let the
-  app use the graphics card again.
+- If you update your graphics driver later, open **Settings → Diagnostics (advanced) → Try GPU
+  again** to let the app use the graphics card again.
 - You can also turn acceleration off yourself under **Settings → Use GPU acceleration**
   (it is on by default).
 
@@ -170,7 +170,7 @@ pages (png, jpg, jpeg — needs the OCR files). Other files in the same import s
 ## A skill I dropped into the drive isn't doing anything
 
 A skill you add yourself — by copying a folder into the drive's `user-skills/` — **installs switched
-off** on purpose, so nothing a file added can run without your say-so. Open **Settings → Skills**,
+off** on purpose, so nothing a file added can run without your say-so. Open **Skills** in the sidebar,
 find it in the list, and turn it **on**. (Built-in skills are on already.) If it isn't listed at all,
 check that the folder contains a `SKILL.md` file at its top level, then reopen the Skills tab — the
 app re-scans the folder when you open it after unlocking.

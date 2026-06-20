@@ -1,6 +1,6 @@
 # Privacy Notice — HilbertRaum
 
-_Last updated: 2026-06-11 (Phase 37 — voice dictation)_
+_Last updated: 2026-06-20 (Image understanding — local vision analysis + encrypted, deletable history)_
 
 HilbertRaum runs AI models **locally** on your laptop. This document explains, in plain
 language, what the app does and does not do with your data.
@@ -27,6 +27,9 @@ This app does not send your data to cloud AI providers.
   recording. Dictations are not saved, not logged, and never sent anywhere — the message itself
   is only sent to the local model when you press Send.
 - **No scan or photo upload.** Reading scanned PDFs and photos of pages (OCR) happens **on this device** with a local recognition engine and language files stored on the drive — no cloud OCR service is ever involved, and the app never fetches language data at run time.
+- **No image upload.** When you ask questions about a picture (the **Images** screen), the image is
+  analyzed **on this device** by a local vision model — the bytes are never sent off-device, and no
+  cloud image service is ever involved.
 - **No embedding upload.** Vector indexes stay local.
 - **No automatic model downloads** unless you explicitly opt in.
 
@@ -40,6 +43,8 @@ folder):
 - Extracted text and document chunks (for recordings: the locally produced transcript; for scans/photos: the locally recognized text)
 - Embeddings / the local vector index
 - Chat history (conversations and messages)
+- Image-analysis history (each picture you analyze on the **Images** screen, plus its questions and
+  answers, is saved so you can revisit it — stored in `workspace/images/`; deletable at any time)
 - Generated outputs
 - Local debug/audit logs
 - App settings
@@ -83,9 +88,12 @@ app will use it.
 
 ## Deleting your data
 
-Your data lives in your workspace directory. To delete everything, delete the `workspace/` folder
-(and, if you want, the `models/` and `logs/` folders) on your drive or app-data location. In-app
-export/delete controls are planned.
+Your data lives in your workspace directory. **In-app deletion** is available for individual items:
+you can delete documents, conversations, and image analyses from within the app — on an encrypted
+workspace this **shreds** the stored encrypted copy. You can also **export** outputs (document
+summaries/translations, chat transcripts) through an explicit save dialog. To delete **everything**
+at once, delete the `workspace/` folder (and, if you want, the `models/` and `logs/` folders) on
+your drive or app-data location.
 
 ## Encryption
 
@@ -97,8 +105,8 @@ data key sealed under your password. None of these reveal your password or your 
 
 **What is encrypted** (encrypted workspace mode): the workspace database — chat history, extracted
 text, chunks, embeddings, settings — the **stored copies of your imported documents**
-(`workspace/documents/`), and the **local diagnostics log** (`logs/app.log.enc`) — all encrypted
-with the same vault key. The log never contains document contents or chat text, but may contain
+(`workspace/documents/`), the **analyzed-image history** (`workspace/images/`), and the **local
+diagnostics log** (`logs/app.log.enc`) — all encrypted with the same vault key. The log never contains document contents or chat text, but may contain
 file names or paths, which is why it is encrypted too. (Lines written *before* you unlock are kept
 in memory only and never reach disk.)
 
@@ -107,7 +115,8 @@ the vault descriptor `config/workspace.json` (the salt, KDF parameters, verifier
 password-wrapped data key described under *Encryption* below — it must be readable before you unlock,
 and holds no password or plaintext data).
 While the workspace is **unlocked**, a decrypted working copy of the
-database exists on disk (and a transient decrypted copy of a document exists briefly during
-re-indexing); both are shredded on lock/quit, and any crash leftovers are shredded at next startup.
+database exists on disk (and a transient decrypted copy of a document or image exists briefly during
+re-indexing or when you open an image-analysis entry); these are shredded on lock/quit, and any
+crash leftovers under `workspace/documents/` and `workspace/images/` are shredded at next startup.
 Documents imported **before** encryption support existed (or into a plaintext workspace) remain
 plaintext until re-indexed. See [`docs/security-model.md`](docs/security-model.md).

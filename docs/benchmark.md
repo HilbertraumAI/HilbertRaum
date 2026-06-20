@@ -75,7 +75,7 @@ measured RAM, breaking ties on each manifest's `recommendation_rank`. The profil
 |---|---|
 | ≤ 12 GB | `qwen3-4b-instruct-q4` (also the bundled default) |
 | 16–24 GB | `ministral3-8b-instruct-2512-q4` |
-| ≥ 32 GB | `gemma-4-12b` |
+| ≥ 32 GB | `gemma4-12b-it-qat-q4` |
 
 The profile fallback maps TINY/LITE/UNKNOWN → `qwen3-4b-instruct-q4`, BALANCED → `qwen3-8b-instruct-q4`,
 PRO → `qwen3-14b-instruct-q4` (it matches a manifest whose `recommended_profiles` includes the profile).

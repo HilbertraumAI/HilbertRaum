@@ -91,10 +91,15 @@ heavy libraries are imported lazily inside `parse()`.
 | `.pdf` | `PdfParser` | `pdfjs-dist` (legacy build) | one segment per page | `pageNumber` (1-based) |
 | `.docx` | `DocxParser` | `mammoth` (raw text) | one segment per paragraph | — |
 | `.csv`/`.tsv` | `CsvParser` | `papaparse` | whole table = 1 segment | — (rows → `header: value` lines) |
+| `audio/*` (`.wav`/`.mp3`/`.flac`/`.ogg`) | `AudioParser` | injected transcriber engine | transcript packed into paragraph-sized segments | `sectionLabel` = time range `mm:ss–mm:ss` → `Citation.section` |
+| `image/*` (`.png`/`.jpg`/`.jpeg`) | `ImageParser` | injected OCR engine | whole photo = 1 segment | — |
 
 A parser returns `{ segments: ExtractedSegment[], mimeType }`, where each segment carries its
 optional `pageNumber` / `sectionLabel`. The chunker copies that structure onto every chunk it
-derives, so a chunk can always cite the page/section it came from.
+derives, so a chunk can always cite the page/section it came from. Parsers also receive an
+optional `ParseContext` carrying the injected `transcriber` / `ocrEngine` (the text parsers
+ignore it) plus `maxPages` and `maxInflatedBytes` (PDF page-count + DOCX zip-bomb caps, security
+audit M-2/M-3).
 
 **PDF note (BUILD_STATE R3):** pdfjs-dist's **legacy** build (`pdfjs-dist/legacy/build/pdf.mjs`)
 runs in the Electron/Node main process with **no Web Worker and no DOM** — validated in
@@ -260,6 +265,12 @@ cheap whole-table `(count, maxRowid)` signature + explicit hooks at the `embeddi
 is purged on workspace lock (vectors derive from chunk text). **Upgrade path** (still behind this same
 `search` signature, D15): an off-main-thread worker scan and/or an ANN index (sqlite-vec / HNSW) when a
 corpus outgrows the linear scan.
+
+`searchText` embeds the query through `embedQueryCached` (RAG-5): a small per-embedder LRU
+(`QUERY_VECTOR_CACHE_MAX = 32`, keyed by exact query string, held in a `WeakMap` by embedder
+instance) memoizes query text → embedding vector, so a repeat ask / "try again" / the re-index
+honesty re-check skips the dominant embed round-trip. Swapping the embedder starts from an empty
+cache automatically.
 
 > Phase 6 consumes `VectorIndex.search` to build the `[S1]…` grounded prompt + citations
 > (`askDocuments`). Phase 5 ships retrieval primitives only — no prompt/citation layer yet.
@@ -524,7 +535,7 @@ grounding guard is untouched: empty retrieval still never calls the model.
 1. embed question → cosine topKInitial      (scoped: embedder id + documentIds)
 2. drop vector hits < minSimilarity         (cosine floor, PRE-fusion/PRE-rerank — D12)
 3. FTS5 keyword search topKInitial          (scoped: documentIds + visibility join)
-4. RRF fusion (k = 60)                      (rank-based; scales never mix)
+4. RRF fusion (k = 60)                      (rank-based; scales never mix; ties → best rank, then chunkId)
 5. join → chunks rows
 6. rerank when a reranker is active         (reorder by relevance_score; failure ⇒ fused order)
 7. dedup by (document_id, page)             (unchanged)
@@ -537,6 +548,11 @@ pre-Phase-21 result (ordering and scores). `RetrievedChunk.score` is stage-depen
 cosine for vector candidates, RRF score for keyword-only candidates, the reranker's
 relevance logit after a rerank. Citations never persist scores (locked).
 
+`rrfFuse` is deterministic: equal RRF scores break on the chunk's best individual rank
+`min(vectorRank, keywordRank)`, then on `chunkId` (M-C4). The `min` (rather than vector rank
+alone) keeps a #1 keyword-only exact-match hit — invoice numbers / codes, the case hybrid search
+exists to catch — from always losing an RRF tie to a #1 vector hit.
+
 ### Keyword index (`chunks_fts`)
 
 Self-contained FTS5 table `fts5(text, chunk_id UNINDEXED)` — NOT external-content on
@@ -545,8 +561,9 @@ the index; the duplicated text lives in the same workspace DB, encrypted at rest
 it). Synced by three triggers on `chunks` (insert/delete/update-of-text), so
 ingest/re-index/delete can never miss it; created + backfilled by a guarded additive
 migration in `openDatabase` (the `scope_json` precedent). Questions are sanitized into
-`MATCH` queries in JS (quoted phrase tokens OR-ed, capped at 32 — FTS5 operator syntax
-in user text never reaches MATCH raw); ranking is `bm25()`.
+`MATCH` queries by `fts.ts` `buildFtsMatchQuery` (shared with conversation search, re-exported
+from `rag/hybrid.ts`): quoted phrase tokens OR-ed, capped at 32 — FTS5 operator syntax in user
+text never reaches MATCH raw; ranking is `bm25()`.
 
 **Embedder-visibility rule (the §10 honesty story, reconciled):** keyword hits are
 restricted to chunks that have a vector under the ACTIVE embedder. Hybrid search can
@@ -669,7 +686,7 @@ spread the distribution and make a floor meaningful; revisit only with a prefix 
 | D10 | Resource budget (8 GB) | ~1.3 GB RSS when active; lazy + opt-in-by-provisioning + CPU-pinned ⇒ 8 GB worst case ≈ 5.3 GB. NOT bundled for TINY. Latency bounded by candidate cap + word truncation (q ≤ 160, doc ≤ 320); real numbers in §12.3 |
 | D11 | Rerank placement + topKInitial | Between fusion and dedup — dedup keeps the best-by-rerank chunk per page. **`topKInitial` does NOT rise** when a reranker is active (CPU latency linear in candidates; the fused union already reaches ≤ 2×topKInitial; the settings knob remains for tuning) |
 | D12 | `minSimilarity` pre- vs post-rerank | **PRE-rerank, cosine-only** (status quo site + meaning): applied to vector hits before fusion. Rerank `relevance_score` is an unbounded logit — never compared to the floor. Keyword hits carry no cosine and bypass the floor by design. R3 measured ⇒ default stays 0 |
-| D13 | FTS index shape + sync + fusion | Self-contained `fts5(text, chunk_id UNINDEXED)` (NOT external-content on the implicit rowid — VACUUM foot-gun); 3 sync triggers; guarded additive migration + backfill (scope_json precedent). Fusion = **RRF, k = 60**, sanitized phrase-OR MATCH. **Visibility rule: keyword hits require a vector under the active embedder** — `REINDEX_NEEDED_ANSWER` semantics intact |
+| D13 | FTS index shape + sync + fusion | Self-contained `fts5(text, chunk_id UNINDEXED)` (NOT external-content on the implicit rowid — VACUUM foot-gun); 3 sync triggers; guarded additive migration + backfill (scope_json precedent). Fusion = **RRF, k = 60**, sanitized phrase-OR MATCH (`fts.ts` `buildFtsMatchQuery`, shared with conversation search). **Visibility rule: keyword hits require a vector under the active embedder** — `REINDEX_NEEDED_ANSWER` semantics intact |
 | D14 | Settings surface | **Availability-driven (embedder precedent): no new `AppSettings` keys, no toggle, no UI.** Hybrid always-on (pure SQLite); reranker active iff binary + weights present; the Phase-18 downloader covers the GGUF |
 | D15 | ANN index | **PARTIALLY RESOLVED (perf audit Wave P4, 2026-06-18).** The *re-decode-every-query* half is now fixed: `VectorIndex.search` reads from a **process-resident decoded-vector cache** (`embeddings/resident-cache.ts`) — vectors decoded once, no per-query `vector_blob` re-read, behind the unchanged `search` signature; ranking byte-identical (see architecture.md "Performance — design record … Wave P4"). The scan is **still synchronous + linear**: measured ≤~50 ms @ ≤10k chunks (fine), ~580 ms @ the 100k upper bound. An **ANN index stays NOT built** (evidence rule): sqlite-vec/HNSW are native deps against the project theme; no realistic corpus yet outgrows the cached linear scan. The off-main-thread worker scan + ANN remain the upgrade path (P4b/P4c), triggered when a representative corpus measures the cached main-thread scan over ~100 ms routinely |
 

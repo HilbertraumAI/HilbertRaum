@@ -165,7 +165,9 @@ out on a fresh machine with no Node/npm); their layout + config shapes mirror th
 
 The asset-planning + verify logic is mirrored from the unit-tested
 `apps/desktop/src/main/services/assets.ts` (the canonical reference — keep in sync), exactly as
-`prepare-drive` mirrors `drive.ts`. The scripts use the **OS-native downloader** (`curl` /
+`prepare-drive` mirrors `drive.ts`. (`scripts/` also holds two **benchmark/RAM-calibration** helpers
+that are NOT part of drive prep — `benchmark-speed.ps1` (decode speed) and `measure-peak-rss.ps1`
+(co-resident peak RSS); see [`model-benchmarks.md`](model-benchmarks.md) for how they are run.) The scripts use the **OS-native downloader** (`curl` /
 `Invoke-WebRequest`) — no new npm/script deps. The `fetch-models` scripts additionally prefer
 `aria2c` when it is installed; `fetch-runtime` uses `curl`/`Invoke-WebRequest` only.
 

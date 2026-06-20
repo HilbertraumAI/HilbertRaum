@@ -450,11 +450,15 @@ password recovery — are documented in
   the idle teardown (default 2 min) reclaims the ~4.6 GB once the user stops asking, but during active
   use the peak stands. Vision is realistically co-resident **only with a small chat model, or after
   the chat sidecar idles out** — not "12B chat + vision simultaneously" (model-benchmarks §8.4).
-- **One image at a time; PNG/JPEG only; nothing is persisted.** The Images screen takes a single
-  image (no multi-image compare, no video, no camera); WEBP is deliberately out of MVP (no native dep
-  to prove it safe in the import stack). The image, question, thread, and answer live **only in
-  renderer screen state** — gone on navigation away / image removal / app close. No DB writes, no
-  auto-OCR, no corpus indexing.
+- **One image at a time; PNG/JPEG only; single-turn-thread per session; persisted but NOT
+  searchable.** The Images screen takes a single image (no multi-image compare, no video, no camera);
+  WEBP is deliberately out of MVP (no native dep to prove it safe in the import stack). As of the
+  2026-06-20 change, an analyzed image and its Q&A turns are **persisted automatically** — the image
+  rows live in `image_sessions`/`image_turns` and the bytes rest **encrypted at rest** under the SAME
+  `DocumentCipher` as the document cache (`workspace/images/<id><ext>.enc`), browsable in an Images
+  history list and **user-deletable** (delete shreds the image + cascade-removes its turns). What is
+  still NOT true: this history is **not added to the RAG/document corpus** — it is a separate
+  browsable history, never indexed for retrieval/search — and there is no auto-OCR.
 - **Image understanding is NOT OCR and NOT image generation.** It reads/interprets one image with a
   vision-language model; scanned **documents** still belong to Documents → "Make searchable (OCR)"
   (tesseract.js), which is untouched. The Images screen never silently OCRs or routes to OCR, and the
