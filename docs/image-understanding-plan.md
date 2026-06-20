@@ -624,8 +624,15 @@ Under `renderer/screens/ImagesScreen.tsx` + a small `renderer/images/` folder (m
   (`dataTransfer.files.length > 1` → the `decodeFailed`-adjacent "Drop one image at a time." Banner,
   §5.6) rather than silently taking `files[0]`; for a single drop it reads bytes from that `File`
   **directly** (no `imageReadBytes` round-trip — IPC-1). The "choose an image" button goes through the
-  picker: `imageChooseImage` → `imageReadBytes(path)`. Validates type/size client-side first (friendly
-  Banner before any IPC); a `createImageBitmap` decode failure → `decodeFailed` Banner (§5.6).
+  picker: `imageChooseImage` → `imageReadBytes(path)`. **Both paths converge on the same byte-level
+  pipeline** (the decode/downscale/EXIF algorithm below): drag-drop feeds it the `File`'s bytes, the
+  picker feeds it the `imageReadBytes` result — neither path skips the decode, so `decodeFailed` and the
+  EXIF/downscale normalization apply identically regardless of source. Validates type/size client-side
+  first (friendly Banner before any IPC): the picker can reject early using the `sizeBytes` from
+  `imageChooseImage` (cheap, before `readBytes`), and `imageReadBytes`/`analyze` re-validate the cap in
+  **main** as the authoritative guard (SEC-3) — the two checks are deliberate (fast client reject +
+  trusted main-side enforcement), not redundant. A `createImageBitmap` decode failure → `decodeFailed`
+  Banner (§5.6).
 - **`ImagePreview.tsx`** — renders the selected image via a **`data:` URL** (`canvas.toDataURL` from the
   decoded/downscaled bitmap, or a `FileReader.readAsDataURL` of the bytes). **Not `URL.createObjectURL`
   / `blob:`** — the prod CSP `img-src 'self' data:` (`main/index.ts:367-369`) does not list `blob:`, so
@@ -637,7 +644,9 @@ Under `renderer/screens/ImagesScreen.tsx` + a small `renderer/images/` folder (m
 - **`VisionUnavailable.tsx`** — the `EmptyState` availability card (§5.1), reason-adaptive, CTA →
   `onNavigate('models')`.
 
-**Image decode/downscale/EXIF (no native dep) — the explicit algorithm (UX-3):**
+**Image decode/downscale/EXIF (no native dep) — the explicit algorithm (UX-3).** Input is a `Blob`:
+drag-drop passes the `File` (already a `Blob`); the picker wraps its `Uint8Array` as
+`new Blob([bytes], { type: mimeType })`. From there the steps are identical:
 1. Decode: `const bitmap = await createImageBitmap(blob, { imageOrientation: 'from-image' })`.
    **If this throws → `decodeFailed`** (corrupt / HEIC-as-jpg / animated-PNG the decoder rejects /
    zero-byte). `{ imageOrientation: 'from-image' }` requests EXIF-corrected orientation at decode.
