@@ -6,6 +6,53 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-20 — **Image-understanding Phase V1 (research gate) PASSED on the real pinned b9585 — V2–V5 UNBLOCKED.**
+Branch `image-understanding`. Ran the V1 gate against the real binary on the PAID smoke drive
+(`F:\paid-gpu-smoke-drive`, runtime `b9585 (d73cd0767)`, vulkan build + `cpu/` net). **No app feature code yet
+— research only.** All multi-GB weights live OFF-repo on the smoke drive (`models/vision/`, never committed); the
+**only repo change is `apps/desktop/tests/fixtures/vision/vision-sse-sample.txt`** (a verbatim real SSE capture for
+the CI parser regression). **GATE OUTCOME — §7 gate #1, branch #1 (the best case): Option A confirmed, NO runtime-pin
+bump needed.** `llama-server --mmproj` on b9585 **loads multimodal cleanly** and **answers `/v1/chat/completions`
+with a base64 `image_url` data-URL — no disk write** (the temp-file fallback / Option C / pin-bump branches are all
+avoided). **Multimodal CLIs are also bundled** (`llama-mtmd-cli.exe`, `llama-llava-cli.exe`, `llama-gemma3-cli.exe`,
+`llama-minicpmv-cli.exe`) — Option C remains available as a fallback, unused.
+
+**Resolved runtime args (RUNTIME-2 — the vision sidecar composes `LlamaServer` DIRECTLY, does NOT inherit
+`CHAT_SERVER_ARGS`):** flag spelling **`--mmproj <file>`** (alias `-mm`, env `LLAMA_ARG_MMPROJ`); **`--jinja` is
+default-ENABLED on b9585** (`--help`: "--jinja, --no-jinja … (default: enabled)") so vision gets the jinja chat-template
+path without inheriting it — passing it explicitly is optional/harmless; **`--reasoning-format` MUST be left at default
+(do NOT pass `deepseek`)** — Qwen2.5-VL is non-reasoning, emits no `reasoning_content` frames; CPU-pin via **`--device
+none`** works (mirrors `e5.ts` embedder). Request shape: OpenAI `content:[{type:'text'},{type:'image_url',image_url:{url:'data:<mime>;base64,…'}}]`.
+**`cache_prompt:true` → the image prefill is CACHED across follow-ups** (measured `cache_n:2812, prompt_n:1` on the 2nd
+question of the same image) — the per-image thread (§2 follow-ups) pays the image prefill ONCE, not per question; set it
+like `llama.ts:239`. **SSE reuse CONFIRMED → streaming-by-default (§19.10) STANDS:** the streamed frames are byte-identical
+to text chat (`data: {…chat.completion.chunk…}` with `choices[0].delta.content`, role-first `content:null` frame, terminal
+`finish_reason` + `data: [DONE]`) — **`readChatSSE` (`runtime/llama.ts`) parses them unchanged**, no vision-specific reader
+needed; the contingency poll-fallback is NOT triggered. Fixture captures the partial-UTF-8-across-frames case too.
+
+**CHOSEN PRODUCTION CANDIDATE — Qwen2.5-VL-3B-Instruct (ggml-org GGUF, Apache-2.0, the §19.4 default):** loads + answers
+on b9585.
+  - GGUF `Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf` — size `1929901056` (1.93 GB) — sha256 `d02fe9b69ad8cadbbd228e387667af66612c44bed29ffc8eb1e7caf9ac486c12`
+  - mmproj `mmproj-Qwen2.5-VL-3B-Instruct-f16.gguf` — size `1338428128` (1.34 GB) — sha256 `b9160fe9d814d1fadf68395677468534778b39ac33c2e7561b7b218626e60d5e`
+  - combined `size_on_disk_gb` ≈ **3.27 GB**; **measured peak RSS ≈ 4.6 GB** (sidecar alone, CPU-pinned, ctx 4096; `PeakWorkingSet64` 4597 MB / private 5126 MB).
+  - **Capability check passed:** on the real `german-scan.png` it answered *"This is an invoice from Müller & Söhne GmbH, and it is in German."* — correct doc-type AND read the German text (the 256M reference garbled it).
+  - From `https://huggingface.co/ggml-org/Qwen2.5-VL-3B-Instruct-GGUF` (official llama.cpp org). Repo license `apache-2.0` (HF API). `license_review` to be filled in V5 against the upstream base `Qwen/Qwen2.5-VL-3B-Instruct`.
+**Reference (fast mechanics-proof) artifact — SmolVLM-256M-Instruct (ggml-org, Apache-2.0):** also loads/answers; RSS ~402 MB.
+  GGUF `SmolVLM-256M-Instruct-Q8_0.gguf` sha256 `2a31195d3769c0b0fd0a4906201666108834848db768af11de1d2cef7cd35e65` (175054528);
+  mmproj `mmproj-SmolVLM-256M-Instruct-Q8_0.gguf` sha256 `7e943f7c53f0382a6fc41b6ee0c2def63ba4fded9ab8ed039cc9e2ab905e0edd` (103769856).
+
+**KNOWN LIMITS / RISKS (record in `known-limitations.md` + `model-benchmarks.md` at V5):** (1) **CPU prefill of a full-res
+image is SLOW** — the high-res scan was **2813 image tokens → ~52 s prefill** on CPU off USB (~18.5 ms/tok prefill,
+decode ~12 tok/s). This makes the §11 **client downscale-to-1536px a real latency lever, not just a payload optimization**
+(fewer image tokens ⇒ proportionally less prefill), and keeps **GPU as the §19.11 optimization lever** if CPU TTFA fails the
+bar. The `cache_prompt` reuse blunts it for follow-ups but the FIRST question per image pays it. (2) **PROD-1 co-residency
+confirmed:** vision peak ~4.6 GB + a 12B chat (~7 GB) + E5 embedder ⇒ **>16 GB**; the manifest `recommended_min_ram_gb`/RAM
+gate must keep vision off small tiers. (3) ctx capped at 4096 vs train 128000 (fine for MVP). **Data contracts:** none changed
+(no code). **Verification:** docs + one fixture file only; `npm test` (apps/desktop) re-run to honor the per-phase ritual.
+**Next:** V2 backend skeleton — `vision` role + `mmproj` validation in `shared/manifest.ts`, `services/vision/status.ts`
+(both-files-verified), the `images:*` IPC + `STREAM.imgToken/imgDone/imgError` contract, types — all per the (now
+gate-cleared) plan. **(prior entries below.)**_
+
 _2026-06-20 — **Image-understanding plan REVISED to clear its multi-persona audit.** Branch
 `image-understanding` (planning only — **no feature code**). Reworked
 [`docs/image-understanding-plan.md`](docs/image-understanding-plan.md) to fix **every finding** of the

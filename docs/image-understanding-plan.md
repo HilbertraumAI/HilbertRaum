@@ -812,6 +812,17 @@ capability bar above.
   Output: this plan.
 
 ### Phase V1 — model/runtime research gate (no user-facing feature). **Everything downstream (V2–V5) is BLOCKED until V1 returns.**
+
+> **✅ V1 RESOLVED 2026-06-20 (full findings + SHAs in `BUILD_STATE.md`).** Ran on the real pinned **b9585** (PAID smoke
+> drive). **§7 gate #1, branch #1 — Option A, base64 `image_url`, NO disk write, NO pin bump.** `llama-server --mmproj`
+> loads multimodal + answers `/v1/chat/completions` cleanly. **Args (RUNTIME-2):** `--mmproj <file>`; `--jinja` is
+> default-ENABLED on b9585; **do NOT pass `--reasoning-format deepseek`** (non-reasoning VLM); CPU-pin `--device none`;
+> set `cache_prompt:true` (image prefill cached across follow-ups). **SSE reuse CONFIRMED** — frames byte-identical to
+> text chat, `readChatSSE` parses unchanged ⇒ streaming-by-default stands (poll-fallback NOT needed); verbatim sample at
+> `apps/desktop/tests/fixtures/vision/vision-sse-sample.txt`. **Chosen model:** Qwen2.5-VL-3B-Instruct (ggml-org,
+> Apache-2.0) Q4_K_M + mmproj-f16 (~3.27 GB on disk, **peak RSS ~4.6 GB** CPU/ctx4096; correctly read a real German
+> invoice). **Latency caveat:** a full-res image = ~2800 image tokens ⇒ **~52 s CPU prefill** off USB — the §11 downscale
+> is a real latency lever and GPU is the §19.11 lever. V2 may now proceed.
 1. **FIRST TASK (TEST-1): locate a license-clean GGUF + mmproj that actually LOADS on the pinned b9585.**
    The whole plan assumes such an artifact exists and loads on the *pinned* runtime — that is
    **unverified**, and `model-policy.md:29` already records newer-arch vision models that "may not load
