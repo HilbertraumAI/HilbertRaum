@@ -673,27 +673,21 @@ export async function prepareDocument(
       // survives in `summary_cache` (keyed by text, not chunk id), so the next build reuses
       // every unchanged group. `tree_status` → 'stale' when a tree existed (UI offers a
       // rebuild), else clear it. extraction_records self-cascade via chunk_id (Phase 3).
-      const prevTree = (
-        db.prepare('SELECT tree_status FROM documents WHERE id = ?').get(documentId) as unknown as
-          | { tree_status: string | null }
-          | undefined
-      )?.tree_status
+      // ING-7 (perf audit 2026-06-18): read tree_status + extract_status in ONE SELECT and reset
+      // both in ONE UPDATE, instead of a separate read+write per column (four statements → two)
+      // inside this hot re-index transaction. The structured-extract rows (Phase 3) self-cascade
+      // via chunk_id ON DELETE CASCADE when the chunks are deleted above (H1 free win) — no manual
+      // DELETE needed. Each status → 'stale' when one existed (UI offers a rebuild/re-extract over
+      // the now-empty pass) rather than a stale 'ready' over zero rows, else clear it.
+      const prev = db
+        .prepare('SELECT tree_status, extract_status FROM documents WHERE id = ?')
+        .get(documentId) as unknown as
+        | { tree_status: string | null; extract_status: string | null }
+        | undefined
       db.prepare('DELETE FROM tree_nodes WHERE document_id = ?').run(documentId)
-      db.prepare('UPDATE documents SET tree_status = ? WHERE id = ?').run(
-        prevTree ? 'stale' : null,
-        documentId
-      )
-      // The structured-extract rows (Phase 3) self-cascade via chunk_id ON DELETE CASCADE when
-      // the chunks are deleted above (H1 free win) — no manual DELETE needed. Reset the per-doc
-      // extract_status so the now-empty pass reads as 'stale' (UI offers a re-extract) rather
-      // than a stale 'ready' over zero rows.
-      const prevExtract = (
-        db.prepare('SELECT extract_status FROM documents WHERE id = ?').get(documentId) as unknown as
-          | { extract_status: string | null }
-          | undefined
-      )?.extract_status
-      db.prepare('UPDATE documents SET extract_status = ? WHERE id = ?').run(
-        prevExtract ? 'stale' : null,
+      db.prepare('UPDATE documents SET tree_status = ?, extract_status = ? WHERE id = ?').run(
+        prev?.tree_status ? 'stale' : null,
+        prev?.extract_status ? 'stale' : null,
         documentId
       )
 
@@ -1091,7 +1085,11 @@ export function setDocumentSummary(db: Db, documentId: string, summary: Document
 
 /** Read a document's persisted summary, or null (missing document included). */
 export function getDocumentSummary(db: Db, documentId: string): DocumentSummary | null {
-  const row = getRow(db, documentId)
+  // DB-8 (perf audit 2026-06-18): project ONLY `summary_json` — the targeted getters must not
+  // pull the whole wide row (esp. the potentially large `ocr_json`) just to read one TEXT field.
+  const row = db
+    .prepare('SELECT summary_json FROM documents WHERE id = ?')
+    .get(documentId) as unknown as { summary_json: string | null } | undefined
   return row ? parseSummary(row.summary_json) : null
 }
 
@@ -1124,7 +1122,11 @@ export function setDocumentOcr(
 
 /** Read a document's stored per-page recognition, or null. The text is CONTENT. */
 export function getDocumentOcrPages(db: Db, documentId: string): OcrPage[] | null {
-  const row = getRow(db, documentId)
+  // DB-8: project ONLY `ocr_json` (this getter is the one that genuinely needs the big column;
+  // projecting still avoids reading summary_json/origin_json/… alongside it).
+  const row = db
+    .prepare('SELECT ocr_json FROM documents WHERE id = ?')
+    .get(documentId) as unknown as { ocr_json: string | null } | undefined
   const stored = row ? parseOcr(row.ocr_json) : null
   return stored ? stored.pages : null
 }
@@ -1144,7 +1146,11 @@ export function setDocumentOrigin(db: Db, documentId: string, origin: DocumentOr
 
 /** Read a document's provenance, or null (missing document / malformed JSON included). */
 export function getDocumentOrigin(db: Db, documentId: string): DocumentOrigin | null {
-  const row = getRow(db, documentId)
+  // DB-8: project ONLY `origin_json` — `getDocumentOrigin` is on per-compare/per-doc paths and
+  // never needs the wide row (the old `SELECT *` pulled `ocr_json` for nothing).
+  const row = db
+    .prepare('SELECT origin_json FROM documents WHERE id = ?')
+    .get(documentId) as unknown as { origin_json: string | null } | undefined
   return row ? parseOrigin(row.origin_json) : null
 }
 

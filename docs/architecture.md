@@ -396,6 +396,94 @@ Deferred with explicit, unmet triggers (recorded, not built): P4b worker/`Shared
 (rejected — native loadable extension vs the no-native-build posture, D15), and the behavior-sensitive
 renderer items FE-5 list windowing / FE-3 Composer-`input` move / FE-4 `DocRow` extraction.
 
+## Performance — design record (perf audit 2026-06-18, Wave P6 — Low backlog)
+The opportunistic **Low** findings, resolved as a closing wave (branch `performance-low-backlog`). All
+are **behavior-preserving** internal optimizations — no change to ranking, query results, parse output,
+or visible UX. This section folds in the audit's §4 Low items and **retires the audit report**
+(`docs/performance-audit-2026-06-18.md` deleted; the High/Medium records already live in the Wave P1–P5
+sections above, the full original stays in git history). The deferred-with-trigger items (P4b/P4c/FE-3/
+FE-4/FE-5) are unchanged — see Wave P4/P5 above.
+
+**Shipped (✅):**
+- **DB-8 — project columns on the targeted document getters** (`ingestion/index.ts`). `getDocumentOrigin`,
+  `getDocumentSummary`, `getDocumentOcrPages` now `SELECT` only the one TEXT column each needs instead of
+  the shared `getRow` `SELECT *`, so a provenance/summary read no longer also deserializes the potentially
+  large `ocr_json`. Output identical (same `parseOrigin`/`parseSummary`/`parseOcr`).
+- **RAG-5 — per-embedder query-vector LRU** (`embeddings/index.ts`). `searchText` serves the query
+  embedding from a small LRU (`QUERY_VECTOR_CACHE_MAX = 32`) in a `WeakMap` keyed by embedder INSTANCE, so
+  re-asking / "try again" / the re-index honesty re-check skip the embed round-trip that DOMINATES the scan
+  at realistic corpora (Wave P4 measurement). Keyed by the EXACT query string (no lossy normalization ⇒ a
+  hit returns precisely the embedder's vector — byte-identical results); a model swap is a new embedder
+  instance ⇒ a fresh empty cache ("cleared on embedder change"). Tested: one embed per repeated query,
+  cache shared across `VectorIndex` instances over one embedder, fresh per new embedder.
+- **RAG-7 — read persisted token counts; memoize message tokens** (`rag/index.ts`, `chat.ts`). The
+  retrieval budget loop reads `chunks.token_count` (which IS `approxTokenCount(text)` by construction in
+  the chunker, with a recompute fallback for a legacy NULL) instead of re-scanning each candidate's text;
+  carried in a side `Map<chunkId>` so it never rides the returned `RetrievedChunk` shape. `messageTokens`
+  is memoized by message-object identity (`WeakMap`) — a pure function of `m.content`, summed repeatedly
+  per turn (`fitMessagesToContext` then `getConversationContextUsage`). Both byte-identical.
+- **ING-6 — flagged, not rewritten** (`doctasks/manager.ts`). The `materializeDocument` write-temp →
+  re-parse → re-embed round-trip is DELIBERATE (it reuses the canonical import path for encryption, FTS,
+  citations, and the crash-safe queue-time provenance stamp); documented in a comment so it is not mistaken
+  for an oversight.
+- **ING-7 — coalesce the re-index status read/write** (`ingestion/index.ts`). The chunk-replace
+  transaction read `tree_status` then `extract_status` (two `SELECT`s) and reset each in its own `UPDATE`;
+  now one `SELECT` of both + one combined `UPDATE` (four statements → two). The other audit-cited
+  per-doc reads in `doctasks/manager.ts` were already single multi-column `SELECT`s — left as-is.
+- **ING-8 — async OCR PDF read** (`doctasks/manager.ts`). `readStoredPdfBytes` now uses `await readFile`
+  (node:fs/promises) instead of a blocking `readFileSync` on a PDF up to ~1 GiB, so the bytes stream off
+  the main event loop; the method became `async` and its single `runOcr` caller awaits it.
+- **ING-9 — `coalesceSegments` joins once** (`ingestion/chunker.ts`). Each merged page/section group
+  accumulates its parts in a `string[]` and `join('\n\n')`s once at group end, replacing the
+  `prev.text = prev.text + '\n\n' + …` accumulate-by-concat (O(total chars) realloc per group).
+- **ING-10 — per-word token fast path** (`ingestion/chunker.ts`). `atomize` uses a new `wordTokenCount`:
+  a whitespace-free word with no space-less-script char is exactly one token group
+  (`len <= ONE_TOKEN_WORD_CHARS ? 1 : ceil(len / CHARS_PER_TOKEN)`), skipping `approxTokenCount`'s
+  `replace()` + `split()` passes; mixed-script words fall back to the full counter. Byte-identical.
+- **FE-8 — resolve the previewed doc once; titles via the Map** (`DocumentsScreen.tsx`). A `useMemo`'d
+  `previewDoc` (from the existing `sourcesById` Map) replaces six linear `docs.find` scans across the
+  PreviewModal props, and `titleOf` routes through `sourcesById` instead of a per-provenance-line `find`.
+- **FE-10 — narrow the runnable-tools effect deps** (`ChatScreen.tsx`). `listRunnableTools` derives its
+  result from the skill + the conversation's in-scope documents, NOT the message count, so the effect now
+  keys on `[currentSkillId, activeId]` only; the old `messages.length` dep just re-fired the IPC after
+  every turn for an identical answer (the new-conversation transition is already covered by `activeId`).
+- **RAG-8 — noted, not changed** (`doctasks/compare.ts`). `alignNodes`' O(|A|×|B|) cosine product is over
+  level-1 summary sections (tens) with pre-decoded vectors; a comment records the per-A top-K cap to add
+  only if the tree's branching factor is ever lowered enough for section counts to grow.
+
+**Accepted residuals (deferred with reason, not built):**
+- **DB-8 (listDocuments `ocr_json`).** The document list's OCR badge needs `pageCount`/`languages`/
+  `engineId`, which live ONLY inside `ocr_json`, and the list's summary preview needs `summary_json` —
+  both large TEXT. Dropping the read requires either a schema migration with backfill (a behavior-risk for
+  existing-data badges, beyond a Low fix) or duplicating `parseOcr`'s malformed-page validation in SQL
+  JSON functions (not byte-identical). The disk page is read either way; only the targeted-getter
+  projections are safely shippable now.
+- **FE-9 (single chat-bootstrap IPC / shared list cache).** Post-DB-3 `listDocuments` is cheap, so the
+  per-screen mount fetch is a minor cost; a cross-screen shared cache risks showing a stale list (each
+  screen deliberately re-fetches on its own events) and a batched `getChatBootstrap` IPC is a non-trivial
+  new IPC surface (channel + preload + handler + types + tests) for a marginal saving. Revisit if mount
+  latency is ever felt.
+- **RT-6 (`n_threads = cores/2`).** Reasonable default; tuning (physical cores for chat, a smaller budget
+  for the CPU-pinned embedder/reranker) needs measurement on representative hybrid hardware first, and an
+  over-eager bump risks oversubscription when ingesting while chatting (three CPU-pinned sidecars).
+- **RT-7 (KV cache lost on GPU→CPU fallback).** A full cold prefill after a mid-session GPU crash is
+  bounded to one event; `--slot-save-path` + restore is real complexity/disk weighed against a rare path.
+  Accepted residual for v1.
+- **RT-8 (first-run benchmark token-probe steal).** Already mitigated by startup ordering: the benchmark
+  fires before `maybeAutoStartActiveModel`, so `runtime.active()` is null and the 64-token probe is skipped
+  at true first-run; the steal only occurs in the rare warm-runtime + immediate-chat race, is bounded to
+  one first-run event, and a precise in-flight gate needs a streaming signal not cheaply available here.
+- **RT-9 (§17(b) fixed user-turn fence reserve).** The `cache_prompt` prefix-reuse win is LATENT — no
+  shipped skill trims its fence, so the current live-final-turn term never actually shifts the fence text —
+  while switching to a fixed reserve changes the fence-SIZING formula, a prompt-assembly change that could
+  alter the fence (and thus the output) for a near-budget skill. Disallowed under the behavior-preserving
+  mandate; revisit when a trimming skill ships (§17).
+- **FE-3 / FE-4 / FE-5 (renderer tail).** Unchanged from Wave P2/P5: Composer-`input` move (needs footer
+  handler stabilization first), `DocRow` extraction (a ~25-prop memoized row with a high stale-closure
+  surface), and list windowing (no virtualization lib in deps; windowing variable-height Markdown while
+  preserving scroll-to-bottom, find-in-page, and a11y is behavior-sensitive). Left deferred — not
+  confidently safe under the behavior-preserving mandate.
+
 ## Models & runtime (Phase 2)
 - **Manifests** are local YAML under `model-manifests/` (committed; weights are not). The schema +
   validator live in `src/shared/manifest.ts` so renderer and main share one definition. YAML is

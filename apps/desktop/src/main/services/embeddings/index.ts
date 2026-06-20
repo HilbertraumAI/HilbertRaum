@@ -225,10 +225,46 @@ export class VectorIndex {
 
   /** Embed `query` with the same embedder, then run the cosine search. */
   async searchText(query: string, topK: number, signal?: AbortSignal): Promise<VectorSearchHit[]> {
+    return this.search(await this.embedQueryCached(query, signal), topK)
+  }
+
+  /**
+   * Embed a query vector, served from a small per-embedder LRU (RAG-5, perf audit 2026-06-18).
+   * Re-asking the same question, a "try again", and the re-index honesty re-check all embed the
+   * SAME text — and the query-embed round-trip DOMINATES the scan at realistic corpora (Wave P4
+   * measurement). The cache is keyed by the EXACT query string (no lossy normalization, so a hit
+   * returns precisely the vector the embedder would have produced — byte-identical results) and
+   * lives in a `WeakMap` by embedder INSTANCE, so swapping the embedder (model change) starts from
+   * an empty cache automatically ("cleared on embedder change"). Bounded to QUERY_VECTOR_CACHE_MAX
+   * entries (LRU by Map insertion order). A cache hit needs no round-trip, so `signal` is moot.
+   */
+  private async embedQueryCached(query: string, signal?: AbortSignal): Promise<Float32Array> {
+    let cache = queryVectorCache.get(this.embedder)
+    if (!cache) {
+      cache = new Map<string, Float32Array>()
+      queryVectorCache.set(this.embedder, cache)
+    }
+    const hit = cache.get(query)
+    if (hit) {
+      // LRU bump: re-insert so this entry is the most-recently used (evicted last).
+      cache.delete(query)
+      cache.set(query, hit)
+      return hit
+    }
     const [queryVector] = await this.embedder.embed([query], { signal })
-    return this.search(queryVector, topK)
+    cache.set(query, queryVector)
+    if (cache.size > QUERY_VECTOR_CACHE_MAX) {
+      // Evict the least-recently used (the first key in insertion order).
+      cache.delete(cache.keys().next().value as string)
+    }
+    return queryVector
   }
 }
+
+/** Max cached query→vector entries per embedder (RAG-5). Small: queries repeat in bursts. */
+const QUERY_VECTOR_CACHE_MAX = 32
+/** Per-embedder query-vector LRU. WeakMap by embedder instance ⇒ an embedder swap starts fresh. */
+const queryVectorCache = new WeakMap<Embedder, Map<string, Float32Array>>()
 
 export {
   getResidentVectors,

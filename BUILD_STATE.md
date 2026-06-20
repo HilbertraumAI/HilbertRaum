@@ -6,6 +6,32 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-19 — **Performance Wave P6 landed — the Low opportunistic backlog closed; audit report RETIRED.**
+Branch `performance-low-backlog` (off `master`). The closing pass over the perf audit's **Low** §4 findings,
+all behavior-preserving internal optimizations. **Shipped (✅):** DB-8 (targeted document getters
+`getDocumentOrigin`/`getDocumentSummary`/`getDocumentOcrPages` project one TEXT column each, not `SELECT *`),
+RAG-5 (per-embedder query-vector LRU in `embeddings/index.ts` — keyed by exact query, `WeakMap` by embedder
+instance ⇒ fresh on model swap; +4 tests), RAG-7 (retrieval budget reads persisted `chunks.token_count`;
+`messageTokens` memoized by message identity), ING-6 (comment — `materializeDocument`'s disk round-trip is a
+deliberate canonical-import-path reuse), ING-7 (re-index status read/write coalesced: 4 statements → 2),
+ING-8 (OCR `readStoredPdfBytes` → async `readFile`, method now `async`), ING-9 (`coalesceSegments` joins
+once), ING-10 (`wordTokenCount` per-word fast path in `chunker.ts`), FE-8 (`useMemo` `previewDoc` + `titleOf`
+via the `sourcesById` Map — kills six `docs.find` per preview), FE-10 (runnable-tools effect keys on
+`[skill, conversation]`, drops `messages.length`), RAG-8 (comment only — `alignNodes` O(n²) is over tens of
+sections). **Accepted residuals (deferred, reasons in architecture.md Wave P6):** DB-8 `listDocuments`
+`ocr_json` (badge metadata lives only in that column; removing it needs a schema migration or non-byte-
+identical SQL-JSON), FE-9 (post-DB-3 `listDocuments` is cheap; a shared cache risks staleness / a bootstrap
+IPC is a non-trivial new surface), RT-6/7/8 (measure-first / already-mitigated-by-ordering / bounded one-event),
+RT-9 (§17(b) is a latent-only win but a behavior-sensitive fence-sizing change), and the renderer tail
+FE-3/FE-4/FE-5 (not confidently safe under the behavior-preserving mandate). **Data contracts:** none changed
+(every fix is internal; `RetrievedChunk`/`DocumentPreview`/IPC shapes untouched). **Verification:** `npm test`
+**1899 passed / 29 skipped** (+4 RAG-5 tests), typecheck + `npm run build` clean. **Docs:** decisions folded
+into [`docs/architecture.md`](docs/architecture.md) "Performance — design record … Wave P6 — Low backlog";
+**`docs/performance-audit-2026-06-18.md` DELETED** per the doc-lifecycle rule (High/Medium records already in
+the Wave P1–P5 sections; full original in git history). **Open residuals:** only the deferred-with-trigger
+items above — P4b worker scan (trigger unmet), P4c ANN/sqlite-vec (rejected, D15), FE-3/4/5 renderer tail.
+**Next:** branch ready to merge. **(prior entries below.)**_
+
 _2026-06-19 — **Vitest harness hardened against silent file-drop (follow-up to the merge note below).**
 The merge note flagged that vitest's parallel pool can, under heavy machine load, **silently drop a
 test file** — a worker fails to collect it and the run reports a *lower* file total (e.g. 168 instead

@@ -237,6 +237,84 @@ describe('VectorIndex', () => {
   })
 })
 
+// ---- Query-vector cache (RAG-5) -------------------------------------------------
+
+describe('VectorIndex query-vector cache (RAG-5)', () => {
+  async function seed(db: Db, embedder: MockEmbedder): Promise<void> {
+    const now = new Date().toISOString()
+    db.prepare(
+      `INSERT INTO documents (id, title, status, created_at, updated_at)
+       VALUES ('doc', 'doc.txt', 'indexed', ?, ?)`
+    ).run(now, now)
+    const texts = ['alpha topic', 'beta topic', 'gamma topic']
+    const vectors = await embedder.embed(texts)
+    for (let i = 0; i < texts.length; i++) {
+      db.prepare(
+        `INSERT INTO chunks (id, document_id, chunk_index, text, source_label, token_count, created_at)
+         VALUES (?, 'doc', ?, ?, 'doc.txt', 1, ?)`
+      ).run(`c${i}`, i, texts[i], now)
+      db.prepare(
+        `INSERT INTO embeddings (chunk_id, embedding_model_id, vector_blob, dimensions, created_at)
+         VALUES (?, ?, ?, ?, ?)`
+      ).run(`c${i}`, embedder.id, encodeVector(vectors[i]), vectors[i].length, now)
+    }
+  }
+
+  it('embeds an identical query only once across repeated searches (cache hit)', async () => {
+    const db = freshDb()
+    const embedder = new MockEmbedder()
+    await seed(db, embedder)
+    const index = new VectorIndex(db, embedder)
+    const spy = vi.spyOn(embedder, 'embed') // count ONLY post-seed query embeds
+
+    const first = await index.searchText('beta topic', 3)
+    const second = await index.searchText('beta topic', 3)
+
+    expect(spy).toHaveBeenCalledTimes(1) // second query served from the cache
+    // A cache hit must return byte-identical ranking + scores.
+    expect(second.map((h) => h.chunkId)).toEqual(first.map((h) => h.chunkId))
+    expect(second.map((h) => h.score)).toEqual(first.map((h) => h.score))
+  })
+
+  it('re-embeds a different query string (key is the exact query)', async () => {
+    const db = freshDb()
+    const embedder = new MockEmbedder()
+    await seed(db, embedder)
+    const index = new VectorIndex(db, embedder)
+    const spy = vi.spyOn(embedder, 'embed')
+
+    await index.searchText('beta topic', 3)
+    await index.searchText('gamma topic', 3)
+
+    expect(spy).toHaveBeenCalledTimes(2)
+  })
+
+  it('shares the cache across VectorIndex instances over the same embedder', async () => {
+    const db = freshDb()
+    const embedder = new MockEmbedder()
+    await seed(db, embedder)
+    const spy = vi.spyOn(embedder, 'embed')
+
+    await new VectorIndex(db, embedder).searchText('beta topic', 3)
+    await new VectorIndex(db, embedder).searchText('beta topic', 3)
+
+    expect(spy).toHaveBeenCalledTimes(1) // cache is keyed by embedder instance, not the index
+  })
+
+  it('starts fresh for a different embedder instance (cleared on embedder change)', async () => {
+    const db = freshDb()
+    const embedderA = new MockEmbedder()
+    await seed(db, embedderA)
+    await new VectorIndex(db, embedderA).searchText('beta topic', 3)
+
+    // A swapped embedder (model change) is a new instance ⇒ empty cache ⇒ a real embed.
+    const embedderB = new MockEmbedder()
+    const spyB = vi.spyOn(embedderB, 'embed')
+    await new VectorIndex(db, embedderB).searchText('beta topic', 3)
+    expect(spyB).toHaveBeenCalledTimes(1)
+  })
+})
+
 // ---- Ingestion writes embeddings ------------------------------------------------
 
 describe('ingestion embedding step', () => {

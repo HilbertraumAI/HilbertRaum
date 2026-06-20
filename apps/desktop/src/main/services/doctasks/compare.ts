@@ -351,6 +351,10 @@ export function alignNodes(
   b: AlignNode[],
   minScore: number = SYMMETRIC_MATCH_MIN_SCORE
 ): NodeAlignment {
+  // RAG-8 (perf audit 2026-06-18): this is an O(|A|×|B|) cosine cartesian product, but `n` here is
+  // the count of LEVEL-1 summary sections (tens, not thousands) and the vectors are pre-decoded, so
+  // it is left as-is. Cap candidate generation (per-A top-K) ONLY if the tree's branching factor is
+  // ever lowered enough that section counts grow large.
   const candidates: Array<{ aId: string; bId: string; score: number; key: string }> = []
   for (const an of a) {
     for (const bn of b) {

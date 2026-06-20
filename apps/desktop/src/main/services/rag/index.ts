@@ -172,6 +172,7 @@ interface ChunkRow {
   source_label: string | null
   page_number: number | null
   section_label: string | null
+  token_count: number | null
 }
 
 /**
@@ -241,14 +242,21 @@ export async function retrieve(
   // cosine as `score` (pass-through guarantee); a keyword-only candidate carries its
   // RRF score (no cosine exists for it).
   let candidates: Array<Omit<RetrievedChunk, 'label'>> = []
+  // RAG-7: persisted per-chunk token counts (chunkId → token_count), filled with the candidate rows.
+  let tokenCounts = new Map<string, number | null>()
   if (fused.length > 0) {
     const rows = db
       .prepare(
-        'SELECT id, document_id, text, source_label, page_number, section_label ' +
+        'SELECT id, document_id, text, source_label, page_number, section_label, token_count ' +
           `FROM chunks WHERE id IN (${fused.map(() => '?').join(', ')})`
       )
       .all(...fused.map((c) => c.chunkId)) as unknown as ChunkRow[]
     const rowById = new Map(rows.map((r) => [r.id, r]))
+    // RAG-7 (perf audit 2026-06-18): the persisted `chunks.token_count` is exactly
+    // `approxTokenCount(text)` (chunker.ts), so the budget loop below reads it instead of
+    // re-scanning each candidate's text. Keyed by chunkId in a side-map so it never rides the
+    // returned `RetrievedChunk` shape. A legacy NULL falls back to a recompute (identical value).
+    tokenCounts = new Map(rows.map((r) => [r.id, r.token_count]))
     for (const cand of fused) {
       const row = rowById.get(cand.chunkId)
       if (!row) continue
@@ -303,7 +311,8 @@ export async function retrieve(
   let usedTokens = 0
   for (const c of deduped) {
     if (selected.length >= settings.topKFinal) break
-    const tokens = Math.ceil(approxTokenCount(c.text) * TOKENS_PER_WORD)
+    // RAG-7: persisted token_count (== approxTokenCount(text)) when present, else recompute.
+    const tokens = Math.ceil((tokenCounts.get(c.chunkId) ?? approxTokenCount(c.text)) * TOKENS_PER_WORD)
     if (selected.length > 0 && usedTokens + tokens > settings.maxContextTokens) break
     selected.push(c)
     usedTokens += tokens

@@ -826,9 +826,22 @@ const CHAT_TOKENS_PER_WORD = 1.3
 /** Per-message overhead for role markers / delimiters the chat template adds. */
 const PER_MESSAGE_OVERHEAD_TOKENS = 8
 
-/** Estimated model tokens for one message (word estimate scaled up + template chrome). */
+/**
+ * Estimated model tokens for one message (word estimate scaled up + template chrome).
+ *
+ * RAG-7 (perf audit 2026-06-18): memoized by message-object identity. The count is a pure
+ * function of `m.content` (never mutated), and the same `ChatMessage` objects are summed several
+ * times within one turn — `fitMessagesToContext` costs each, then `getConversationContextUsage`
+ * re-sums the SAME objects it returns — so a `WeakMap` cache skips the repeated `approxTokenCount`
+ * regex/split scans while staying byte-identical (and GC'ing with the messages).
+ */
+const messageTokenCache = new WeakMap<ChatMessage, number>()
 export function messageTokens(m: ChatMessage): number {
-  return Math.ceil(approxTokenCount(m.content) * CHAT_TOKENS_PER_WORD) + PER_MESSAGE_OVERHEAD_TOKENS
+  const cached = messageTokenCache.get(m)
+  if (cached !== undefined) return cached
+  const tokens = Math.ceil(approxTokenCount(m.content) * CHAT_TOKENS_PER_WORD) + PER_MESSAGE_OVERHEAD_TOKENS
+  messageTokenCache.set(m, tokens)
+  return tokens
 }
 
 /**

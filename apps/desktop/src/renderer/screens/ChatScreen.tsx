@@ -627,7 +627,12 @@ export function ChatScreen({
     return () => {
       live = false
     }
-  }, [currentSkillId, activeId, messages.length])
+    // FE-10 (perf audit 2026-06-18): key only on (skill, conversation). `listRunnableTools` derives
+    // the tool set from the skill + the conversation's in-scope documents — NOT the message count —
+    // so a new turn never changes the result (the prior `messages.length` dep just re-fired the IPC
+    // after every turn for an identical answer). The new-conversation transition is covered by
+    // `activeId` (null → created id).
+  }, [currentSkillId, activeId])
 
   // Start a tool run from the calm transcript affordance (DS4 — a USER action, never the model).
   function onRunTool(toolName: string, confirmed: boolean): void {
