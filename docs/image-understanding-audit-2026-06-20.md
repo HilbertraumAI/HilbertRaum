@@ -1,8 +1,12 @@
 # Image Understanding plan — multi-persona audit
 
 _Date: 2026-06-20. Target: [`image-understanding-plan.md`](image-understanding-plan.md).
-Branch: `image-understanding`. Status: UNREMEDIATED (findings open; a follow-up session revises
-the plan to address them)._
+Branch: `image-understanding`. Status: **REMEDIATED 2026-06-20** — every finding below
+(RUNTIME-1…4, DIST-1, SEC-1/3, IPC-1/2/3, UX-1/2/3, PROD-1/2, TEST-1) is now addressed in the plan
+text and traceable to its ID; the "Confirmations to preserve" were left intact. The plan remains an
+open `*-plan.md` (the feature is unbuilt; V1 is still the gate). This audit is kept (not deleted) so
+the plan's `(SEC-1)`/`(RUNTIME-2)`-style back-references resolve; it can be deleted once the plan
+ships and is folded into the topic docs (git history preserves it)._
 
 This is an adversarial, multi-viewpoint audit of the **plan** (not the code — no feature is built
 yet). Its job is to find issues, gaps, contradictions, and unverified assumptions that would block

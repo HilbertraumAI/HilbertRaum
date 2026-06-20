@@ -6,6 +6,28 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-20 — **Image-understanding plan REVISED to clear its multi-persona audit.** Branch
+`image-understanding` (planning only — **no feature code**). Reworked
+[`docs/image-understanding-plan.md`](docs/image-understanding-plan.md) to fix every finding in
+[`docs/image-understanding-audit-2026-06-20.md`](docs/image-understanding-audit-2026-06-20.md) (now
+marked **REMEDIATED**). **Blockers fixed:** SEC-1 — deleted the false "`blob:` already permitted" CSP
+claim; preview is **`data:`-only** (prod CSP `img-src 'self' data:`, `main/index.ts:367-369`, lists no
+`blob:`), §11/§13 made consistent. RUNTIME-1/2 — Option A downgraded to **candidate pending V1**, V2–V5
+**blocked on V1**; the vision sidecar composes `LlamaServer` directly so does **NOT** inherit
+`CHAT_SERVER_ARGS` (`--jinja`/`--reasoning-format`) — V1 now must resolve the exact arg set + the
+"`--mmproj` works but template path differs" branch. DIST-1 — two-file download reframed honestly
+(weightPath/computeInstallState/DownloadJob/downloads.ts/assets.ts/fetch-models.sh are all
+single-file); topology **decided = two `DownloadJob`s sharing one `modelId`**. **HIGH/MED:** vision is a
+**separate** sidecar needing its **own** one-job serialization (chat+embedder+vision = 3 co-resident,
+RUNTIME-3); net-new idle-teardown interlock spelled out (RUNTIME-4); `readBytes` dropped on the
+drag-drop path (IPC-1); **busy-reject** chosen over queue (IPC-3); honest 6th-nav-destination framing
+(UX-1); `decodeFailed` error code + multi-drop/EXIF/downscale algorithm (UX-3); 12–16 GB bar qualified
+against a 14 GB-tier chat model (PROD-1); "locate a license-clean GGUF+mmproj that loads on b9585" made
+the literal first V1 task (TEST-1); plus the LOW tightenings (IPC-2/SEC-3/PROD-2/UX-2) and a §19 that
+now reads every load-bearing choice as a real decision with a default + cost. **Data contracts:** none
+changed (plan only). **Verification:** docs-only edit, no code touched ⇒ `npm test` not required.
+**Next:** the plan is build-ready behind its V1 research gate. **(prior entries below.)**_
+
 _2026-06-19 — **Performance Wave P6 landed — the Low opportunistic backlog closed; audit report RETIRED.**
 Branch `performance-low-backlog` (off `master`). The closing pass over the perf audit's **Low** §4 findings,
 all behavior-preserving internal optimizations. **Shipped (✅):** DB-8 (targeted document getters
