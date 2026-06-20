@@ -8,9 +8,11 @@
 
 _2026-06-20 — **Image-understanding plan REVISED to clear its multi-persona audit.** Branch
 `image-understanding` (planning only — **no feature code**). Reworked
-[`docs/image-understanding-plan.md`](docs/image-understanding-plan.md) to fix every finding in
-[`docs/image-understanding-audit-2026-06-20.md`](docs/image-understanding-audit-2026-06-20.md) (now
-marked **REMEDIATED**). **Blockers fixed:** SEC-1 — deleted the false "`blob:` already permitted" CSP
+[`docs/image-understanding-plan.md`](docs/image-understanding-plan.md) to fix **every finding** of the
+multi-persona audit `docs/image-understanding-audit-2026-06-20.md`, then **deleted that audit** (fully
+remediated; recoverable in git history at the remediation commit, per the CLAUDE.md doc-lifecycle rule).
+The plan now carries each decision's rationale inline; its `(SEC-1)`/`(RUNTIME-2)`-style tags are
+traceability labels back to the (git-preserved) audit. **Blockers fixed:** SEC-1 — deleted the false "`blob:` already permitted" CSP
 claim; preview is **`data:`-only** (prod CSP `img-src 'self' data:`, `main/index.ts:367-369`, lists no
 `blob:`), §11/§13 made consistent. RUNTIME-1/2 — Option A downgraded to **candidate pending V1**, V2–V5
 **blocked on V1**; the vision sidecar composes `LlamaServer` directly so does **NOT** inherit
