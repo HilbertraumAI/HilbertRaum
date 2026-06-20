@@ -67,6 +67,45 @@ function writeWeight(root: string, m: ModelManifest, content: string): void {
   writeFileSync(dest, content)
 }
 
+/** A `role: vision` manifest (GGUF + mmproj projector, each with its own download — DIST-1). */
+function visionManifest(overrides: Record<string, unknown> = {}): ModelManifest {
+  const raw: Record<string, unknown> = {
+    id: 'test-vlm',
+    display_name: 'Test VLM',
+    family: 'qwen2.5-vl',
+    role: 'vision',
+    format: 'gguf',
+    runtime: 'llama_cpp',
+    license: 'apache-2.0',
+    size_on_disk_gb: 3.3,
+    recommended_min_ram_gb: 8,
+    recommended_ram_gb: 16,
+    recommended_context_tokens: 4096,
+    local_path: 'models/vision/vlm.gguf',
+    sha256: 'REPLACE_WITH_REAL_HASH',
+    license_review: { status: 'approved', reviewed_by: 'me', reviewed_at: '2026-01-01', notes: '' },
+    download: {
+      url: 'https://example.test/vlm.gguf',
+      sha256: 'REPLACE_WITH_REAL_HASH',
+      size_bytes: 1_930_000_000,
+      license_url: 'https://example.test/license'
+    },
+    mmproj: {
+      local_path: 'models/vision/vlm-mmproj.gguf',
+      sha256: 'REPLACE_WITH_REAL_HASH',
+      download: {
+        url: 'https://example.test/vlm-mmproj.gguf',
+        sha256: 'REPLACE_WITH_REAL_HASH',
+        size_bytes: 1_340_000_000
+      }
+    },
+    ...overrides
+  }
+  const res = validateManifest(raw)
+  if (!res.manifest) throw new Error('vision fixture invalid: ' + res.errors.join(', '))
+  return res.manifest
+}
+
 const runtimeSources = (): RuntimeSources => {
   const res = validateRuntimeSources({
     llama_cpp: {
@@ -170,6 +209,39 @@ describe('planModelDownloads', () => {
     const b = manifest({ id: 'b', local_path: 'models/chat/b.gguf' })
     const tasks = await planModelDownloads(root, [a, b], { acceptLicense: true, only: 'b' })
     expect(tasks.map((t) => t.id)).toEqual(['b'])
+  })
+
+  // DIST-1: a vision model is TWO DownloadJobs sharing one modelId (GGUF + mmproj projector).
+  it('plans BOTH the GGUF and the mmproj projector for a vision model (two tasks, one modelId)', async () => {
+    const root = tempDir('hilbertraum-assets-')
+    const tasks = await planModelDownloads(root, [visionManifest()], { acceptLicense: true })
+    expect(tasks).toHaveLength(2)
+    expect(tasks.map((t) => t.id)).toEqual(['test-vlm', 'test-vlm'])
+    expect(tasks.map((t) => t.relPath)).toEqual([
+      'models/vision/vlm.gguf',
+      'models/vision/vlm-mmproj.gguf'
+    ])
+    expect(tasks[1].url).toBe('https://example.test/vlm-mmproj.gguf')
+    expect(tasks[1].dest).toBe(join(root, 'models', 'vision', 'vlm-mmproj.gguf'))
+    // The projector inherits the model's (approved) license.
+    expect(tasks[1].license).toBe('apache-2.0')
+    expect(tasks[1].status).toBe('download')
+  })
+
+  it('plans the mmproj download even when the GGUF is already present + verified', async () => {
+    const root = tempDir('hilbertraum-assets-')
+    const content = 'vlm-gguf-bytes'
+    const hash = sha256(content)
+    const m = visionManifest({
+      sha256: hash,
+      download: { url: 'https://example.test/vlm.gguf', sha256: hash, size_bytes: 1, license_url: null }
+    })
+    writeWeight(root, m, content) // GGUF present + verified; mmproj still absent
+    const tasks = await planModelDownloads(root, [m], { acceptLicense: true })
+    expect(tasks).toHaveLength(2)
+    expect(tasks[0].status).toBe('present-verified') // GGUF
+    expect(tasks[1].status).toBe('download') // mmproj must still be fetched
+    expect(tasks[1].relPath).toBe('models/vision/vlm-mmproj.gguf')
   })
 })
 

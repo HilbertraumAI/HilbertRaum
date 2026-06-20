@@ -10,7 +10,7 @@ import {
   VisionService,
   type VisionStreamEmitter
 } from '../services/vision'
-import { isSupportedImagePath, VISION_MAX_IMAGE_BYTES } from '../services/vision/limits'
+import { imageExtensionOf, isSupportedImagePath, VISION_MAX_IMAGE_BYTES } from '../services/vision/limits'
 import { tMain } from '../services/i18n'
 import { log } from '../services/logging'
 
@@ -96,7 +96,10 @@ export function registerImagesIpc(ctx: AppContext, service?: VisionService): voi
     try {
       size = statSync(path).size
     } catch (err) {
-      log.warn('Vision readBytes stat failed', { error: String(err) })
+      // SEC-1 / §12: keep vision logs to a content-free minimum — the file EXTENSION and the
+      // errno code only. `String(err)` of an fs error embeds the full path; never log that.
+      const code = err instanceof Error ? (err as NodeJS.ErrnoException).code : undefined
+      log.warn('Vision readBytes stat failed', { ext: imageExtensionOf(path), code })
       throw new Error(IMAGE_UNSUPPORTED_MESSAGE)
     }
     if (size > VISION_MAX_IMAGE_BYTES) throw new Error(IMAGE_TOO_LARGE_MESSAGE)

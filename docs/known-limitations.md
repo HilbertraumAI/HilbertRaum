@@ -463,11 +463,12 @@ password recovery — are documented in
   image + a short question/thread in MVP; long multi-turn threads about one image are not a v1 promise.
 - **The caller-supplied-path caveat applies to `imageReadBytes(path)`** — the same accepted stance as
   `importDocuments` (the renderer is sandboxed; main re-validates the extension + byte cap, SEC-3).
-- **No vision model ships on a commercial drive yet, so `assertCommercialDrive` does not verify the
-  mmproj projector.** The sell gate verifies each manifest's GGUF but not the projector file; since no
-  `role: vision` manifest is bundled on a sold drive, extending the gate now would be half-wired. When
-  the first vision model is curated onto a sold drive, extend the gate to verify the projector
-  alongside the GGUF (recorded in the architecture design record §8).
+- **No vision model ships on a commercial drive yet, but the sell gate already verifies BOTH files
+  (DIST-2).** `assertCommercialDrive` → `verifyDriveModels` iterates the same `manifestFiles` set
+  (GGUF + mmproj) that `computeInstallState` requires, so a half-installed vision drive (good GGUF,
+  missing/corrupt projector) fails `weightsVerified`. The remaining DIY-only gap: the in-app
+  `DownloadManager` still drives only `tasks[0]` (the GGUF); the projector is fetched by the
+  `fetch-models.{sh,ps1}` scripts (the canonical two-file path) until a vision drive ships.
 
 ## Internationalization (Phases 39–42, [`architecture.md`](architecture.md) i18n record)
 

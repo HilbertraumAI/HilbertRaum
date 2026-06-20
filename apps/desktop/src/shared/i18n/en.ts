@@ -1465,7 +1465,6 @@ export const en = {
   'images.answer.copy': 'Copy',
   'images.answer.copied': 'Copied',
   'images.answer.tryAgain': 'Try again',
-  'images.answer.clear': 'New image',
   'images.answer.reading': 'Reading the image…',
   'images.answer.starting': 'Starting the vision model…',
   'images.answer.stop': 'Stop',

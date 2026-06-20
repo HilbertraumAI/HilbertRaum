@@ -1,5 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { EventEmitter } from 'node:events'
+import { mkdtempSync, readdirSync, existsSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import * as ocrFactory from '../../src/main/services/ocr/factory'
 
 // Security sentinel for the vision path (image-understanding plan §13/§17, CLAUDE.md §0):
 //   1. LOOPBACK ONLY — the sidecar fetch must only ever connect to 127.0.0.1; no remote host is
@@ -62,9 +66,9 @@ function sseBody(answer: string): ReadableStream<Uint8Array> {
 
 const AVAILABLE: VisionStatus = { available: true, modelId: 'vlm', modelDisplayName: 'VLM' }
 
-function ctxFor(audit: ReturnType<typeof vi.fn>): AppContext {
+function ctxFor(audit: ReturnType<typeof vi.fn>, rootPath = '/r'): AppContext {
   return {
-    paths: { rootPath: '/r' },
+    paths: { rootPath },
     manifestsDir: null,
     isDev: false,
     workspace: { isUnlocked: () => true },
@@ -89,17 +93,23 @@ async function waitForTerminal(jobId: string): Promise<ImageJob> {
 }
 
 let logCalls: string[]
+/** The raw (method, msg, meta) of every diagnostics-log call — lets a test assert the exact
+ *  SHAPE of a log line (e.g. that a warn carries ONLY {jobId, error}, no content field). */
+let logRecords: Array<{ method: 'info' | 'warn' | 'error'; msg: string; meta?: unknown }>
 const logSpies: Array<{ mockRestore: () => void }> = []
 
 beforeEach(() => {
   ipcState.handlers.clear()
   logCalls = []
+  logRecords = []
   // Capture every diagnostics-log argument WITHOUT writing anything (no real sink needed).
-  const record = (msg: string, meta?: unknown): void => {
-    logCalls.push(meta === undefined ? msg : `${msg} ${JSON.stringify(meta)}`)
-  }
   for (const method of ['info', 'warn', 'error'] as const) {
-    logSpies.push(vi.spyOn(log, method).mockImplementation(record))
+    logSpies.push(
+      vi.spyOn(log, method).mockImplementation((msg: string, meta?: unknown): void => {
+        logCalls.push(meta === undefined ? msg : `${msg} ${JSON.stringify(meta)}`)
+        logRecords.push({ method, msg, meta })
+      })
+    )
   }
 })
 
@@ -190,5 +200,94 @@ describe('vision security sentinel', () => {
 
     expect(logCalls.join('\n')).not.toContain('ZZSENTINELZZ')
     expect(audit).not.toHaveBeenCalled()
+  })
+
+  // TEST-1 (non-vacuous): the answer ACTUALLY flows through the system (streamed via onToken),
+  // then the analyze fails — so we exercise the REAL `index.ts` catch→log.warn path with content
+  // present, and assert the warn carries ONLY a content-free {jobId, error}. A regression that
+  // logged `req.question` or the answer (an extra meta key, or a content-bearing error) reddens.
+  it('a failure AFTER the answer streamed logs ONLY a content-free {jobId, error}', async () => {
+    const audit = vi.fn()
+    const service = new VisionService({
+      getStatus: async () => AVAILABLE,
+      // Allowed test seam: the answer really flows through onToken, then a content-free throw.
+      createRuntime: () => ({
+        analyze: async (o: { onToken?: (d: string) => void }) => {
+          o.onToken?.(SENTINEL_ANSWER)
+          throw new Error('Vision request failed: HTTP 500') // content-free, like the real runtime
+        }
+      })
+    })
+    registerImagesIpc(ctxFor(audit), service)
+
+    const initial = (await invoke(handlers, IPC.imageAnalyze, sentinelReq())).result as ImageJob
+    const terminal = await waitForTerminal(initial.jobId)
+    expect(terminal.state).toBe('failed')
+    expect(terminal.error).toBe('runtimeFailed')
+
+    const warns = logRecords.filter((r) => r.method === 'warn' && r.msg === 'Vision analyze failed')
+    expect(warns).toHaveLength(1)
+    const meta = warns[0].meta as Record<string, unknown>
+    // The meta shape is EXACTLY {jobId, error} — no `question`/`answer`/`imageBytes` smuggled in.
+    expect(Object.keys(meta).sort()).toEqual(['error', 'jobId'])
+    expect(meta.jobId).toBe(initial.jobId)
+    expect(JSON.stringify(meta)).not.toContain('ZZSENTINELZZ')
+    expect(logCalls.join('\n')).not.toContain('ZZSENTINELZZ')
+    expect(audit).not.toHaveBeenCalled()
+  })
+
+  it('logs NOTHING containing content on the SUCCESS path (the answer exists but never reaches a log)', async () => {
+    const audit = vi.fn()
+    const service = new VisionService({
+      getStatus: async () => AVAILABLE,
+      createRuntime: () => ({
+        analyze: async (o: { onToken?: (d: string) => void }) => {
+          o.onToken?.(SENTINEL_ANSWER)
+          return SENTINEL_ANSWER
+        }
+      })
+    })
+    registerImagesIpc(ctxFor(audit), service)
+
+    const event = makeEvent()
+    const initial = (await invokeWithEvent(handlers, IPC.imageAnalyze, event, sentinelReq())) as ImageJob
+    const done = await waitForTerminal(initial.jobId)
+    expect(done.state).toBe('done')
+    expect(done.answer).toBe(SENTINEL_ANSWER) // the answer genuinely exists in the system…
+
+    // …yet NO diagnostics-log call (any level) carries the prompt or the answer.
+    for (const r of logRecords) {
+      expect(`${r.msg} ${JSON.stringify(r.meta ?? {})}`).not.toContain('ZZSENTINELZZ')
+    }
+    expect(logCalls.join('\n')).not.toContain('ZZSENTINELZZ')
+    expect(audit).not.toHaveBeenCalled()
+  })
+
+  // TEST-3 / plan §17 row 11: Images is cleanly separate from OCR/Documents. A vision analyze must
+  // NOT construct the OCR engine and must write NOTHING to disk (bytes are base64-inlined, §12).
+  it('never invokes the OCR engine and writes no documents/ocr_json (OCR isolation)', async () => {
+    const ocrSpy = vi.spyOn(ocrFactory, 'createSelectedOcrEngine')
+    const root = mkdtempSync(join(tmpdir(), 'hilbertraum-vision-iso-'))
+    const audit = vi.fn()
+    const service = new VisionService({
+      getStatus: async () => AVAILABLE,
+      createRuntime: () => ({
+        analyze: async (o: { onToken?: (d: string) => void }) => {
+          o.onToken?.('a bar chart')
+          return 'a bar chart'
+        }
+      })
+    })
+    registerImagesIpc(ctxFor(audit, root), service)
+
+    const initial = (await invoke(handlers, IPC.imageAnalyze, sentinelReq())).result as ImageJob
+    const done = await waitForTerminal(initial.jobId)
+    expect(done.state).toBe('done')
+
+    expect(ocrSpy).not.toHaveBeenCalled() // no OCR engine ever built on the vision path
+    expect(readdirSync(root)).toEqual([]) // base64-inline: vision wrote nothing under the drive root
+    expect(existsSync(join(root, 'documents'))).toBe(false)
+    expect(existsSync(join(root, 'ocr_json'))).toBe(false)
+    ocrSpy.mockRestore()
   })
 })

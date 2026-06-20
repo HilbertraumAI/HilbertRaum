@@ -511,8 +511,9 @@ A few honest notes:
 - **The first question about a big image can take a while** — reading a full-resolution picture is
   real work for a laptop processor. Follow-up questions about the *same* image are quicker. A
   graphics card speeds it up where available.
-- **One image at a time**, **PNG or JPEG**, and **one question runs at a time** (a second question
-  waits until the first finishes). It answers from what's **visible** and says so when text is
+- **One image at a time**, **PNG or JPEG**, and **one question runs at a time** — wait for the
+  current answer (or press **Stop**) before asking the next; a question asked while one is still
+  running is declined, not queued. It answers from what's **visible** and says so when text is
   unclear — it won't invent hidden details.
 - **It's not OCR.** For a scanned PDF or a long document you want to search, use **Make searchable
   (OCR)** under Documents (§7) instead.

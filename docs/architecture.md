@@ -2565,13 +2565,15 @@ unchanged (no new binary on the recommended path).
 - **MVP scope:** single image only (no compare/video/camera), ephemeral (no persistence), PNG/JPEG
   only (WEBP deferred), ctx capped at 4096 (vs train 128000). Full list in `known-limitations.md`.
 
-**Commercial-drive gate (deferred — no vision model ships on a sold drive yet).** `assertCommercialDrive`
-verifies each manifest's GGUF (`verifyDriveModels`) but **not** the `mmproj` projector. No `role: vision`
-manifest is committed and none is bundled on a sellable drive, so extending the gate now would be a
-half-wired check with nothing to verify. **Decision: defer** — when the first vision model is curated
-onto a sold drive, extend `assertCommercialDrive` (+ the `build-commercial-drive.{ps1,sh}` cross-checks)
-to verify the projector file alongside the GGUF, the same two-file install-state rule `computeInstallState`
-already enforces (§5).
+**Commercial-drive gate (closed — verifies BOTH files; DIST-2).** `assertCommercialDrive` →
+`verifyDriveModels` now iterates the same `manifestFiles` set (GGUF + `mmproj`) that
+`computeInstallState` requires, folding to one per-model row that reports the FIRST non-`verified`
+file — so a half-installed vision drive (good GGUF, missing/corrupt projector) fails `weightsVerified`
+and cannot pass the sell gate. `buildChecksumsJson` likewise captures one entry per file. The download
+side matches: `planModelDownloads` + `fetch-models.{ps1,sh}` fetch both files (DIST-1). Residual: the
+in-app `DownloadManager` (UI) still drives only `tasks[0]` (the GGUF); the projector is the DIY scripts'
+job until a `role: vision` manifest ships. No `role: vision` manifest is committed yet, so nothing
+vision actually ships today.
 
 ### §9 §-anchor legend (historical plan citations)
 
@@ -2584,6 +2586,7 @@ anchor as:
 |---|---|---|
 | plan §7 / §10 | Option A sidecar + the `services/vision/` module design | §1 + §5 |
 | plan §9 / §9.1–§9.4 | IPC/preload surface + the job pattern (busy-reject) | §5 (+ IPC-1/2/3) |
+| plan §5.1–§5.6 | The renderer component anchors cited in `screens/images/*.tsx` (VisionUnavailable §5.1, ImageDropZone §5.2, ImagePreview/QuestionComposer §5.3, AnswerThread §5.4, the §5.6 state matrix) | §5 / the §4 state matrix |
 | plan §11 | Renderer components + decode/downscale/EXIF algorithm | §5 |
 | plan §12 / §13 | Privacy posture (ephemeral, no content in log/audit) + security model | §2 + §7 |
 | plan §14 | Caps + RAM co-residency | §8 |

@@ -6,6 +6,39 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-20 — **Image-understanding V6 — pre-merge audit remediation SHIPPED (the V5 audit `docs/image-understanding-audit-2026-06-20-v5.md`).**
+Branch `image-understanding`. The V5 audit verdict was "safe to merge, no CRITICAL, no active HIGH"; this entry closes the two LATENT
+HIGHs + the MEDIUM/LOW/NIT quality gaps so the branch is clean before a real vision drive ships. **No §0 redline touched; suite green
+with zero vision models. As built:**
+- **DIST-1 (HIGH, latent) — the download side now fetches BOTH files of a vision model.** `assets.ts` `planModelDownloads` emits a SECOND
+  `ModelDownloadTask` (same `modelId`) from `manifest.mmproj.download → mmproj.local_path`, verified against `mmproj.sha256` (the "two
+  DownloadJobs sharing one modelId" topology, plan §8.3) — factored through a shared `planOneFile` so the GGUF + projector share one
+  license-gate/present-verified state machine. `scripts/fetch-models.{sh,ps1}` taught the same: a block-scoped `mmproj:` parse + a
+  per-file `handle_file`/`Invoke-HandleFile` that mirrors the atomic `.part`-stage verify-before-trust; the model-level license gate now
+  fires once and only when a file actually needs the network. **In-app `downloads.ts` still drives `tasks[0]` (the GGUF) only** — the
+  projector is the DIY-scripts' job (the canonical two-file path); documented as a residual since no vision manifest ships yet.
+- **DIST-2 (HIGH, latent) — the verify/generate side iterates both files.** `models.ts` `manifestFiles` is now EXPORTED (GGUF + mmproj,
+  each `{path, sha, localPath}`); `drive.ts` `verifyDriveModels` folds per-file results to one per-model row reporting the FIRST
+  non-`verified` file (so a half-installed vision drive — good GGUF, missing/corrupt projector — fails `weightsVerified`), and
+  `buildChecksumsJson` emits one entry PER FILE. `assertCommercialDrive` is unchanged (it delegates to `verifyDriveModels`).
+- **TEST-1/2/3/4 (test strength).** TEST-1: the security sentinel is now non-vacuous — the answer actually streams through the system
+  then the analyze fails, asserting the real `index.ts` catch logs ONLY a content-free `{jobId, error}` (exact key set), plus a
+  success-path "answer exists but never reaches a log" check. TEST-2: a NET-NEW injectable idle clock (`IdleClock`/`idleClock` option,
+  default real `setTimeout`) makes the RUNTIME-4 races DETERMINISTIC — fire the teardown on demand + gate a child's exit to hold the
+  soft-teardown window open; the (b) mid-teardown cold-start, (c) `stop()`-awaits-`idleTeardownPromise`, (e) `unref`, and (a) stale-fire
+  inFlight-guard branches now redden if the guard is removed. TEST-3: a vision analyze invokes no OCR engine (`createSelectedOcrEngine`
+  spy) and writes nothing under the drive root. TEST-4: a new jsdom `decode.test.ts` covers the client `unsupportedType` (null MIME) +
+  over-dimension `tooLarge` rejects.
+- **SEC-1 / UX-NIT-1 / DOC-1 / DOC-2 (LOW/NIT).** SEC-1: the `readBytes` stat-failure log now carries `{ext, code}` (errno), never the
+  path-bearing `String(err)`. UX-NIT-1: the dead `images.answer.clear` key dropped from `en.ts` + `de.ts`. DOC-1: `user-guide.md` +
+  `troubleshooting.md` corrected — a second question is busy-REJECTED (declined, not queued). DOC-2: a `plan §5.1–§5.6` row added to the
+  `architecture.md` §9 anchor legend.
+**Data contracts (new):** a vision model's `planModelDownloads` now returns TWO tasks (GGUF first, then mmproj); `manifestFiles` is the
+shared exported GGUF+mmproj file set used by install AND verify; `buildChecksumsJson` emits one entry per file. **Residual risk:** the
+in-app `DownloadManager` remains single-file for vision (GGUF via `tasks[0]`) — the `fetch-models` scripts are the two-file path until a
+vision drive ships. **Verification:** `npm test` **1984 passed / 30 skipped (162 files)**; `npm run typecheck` clean; both fetch-models
+scripts dry-run-verified on a synthetic vision manifest (plan both files). **Next:** branch `image-understanding` ready to merge. **(prior entries below.)**_
+
 _2026-06-20 — **Image-understanding Phase V5 (evaluation, hardening, docs — the FINAL phase) SHIPPED — the feature is COMPLETE; branch ready to merge. There is no V6.**
 Branch `image-understanding`, implementing the (now-folded) image-understanding plan §16 Phase V5. **The closeout: the env-gated
 manual smoke harness + a tiny synthetic fixture, the idle-timeout tuned from the V1 numbers, the §17 matrix re-verified, and the

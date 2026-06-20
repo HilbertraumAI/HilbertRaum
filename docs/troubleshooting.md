@@ -248,8 +248,9 @@ That's expected the first time, and on the first question about a large picture:
   On a machine with limited RAM, close other heavy apps, or use a smaller chat model while you work
   with images. If your laptop is tight on memory, the AI Model screen won't offer a vision model it
   can't run.
-- **One image, one question at a time.** A second question waits until the first finishes; pick
-  **Stop** to cancel the current one. The picture and answers are never saved — they clear when you
+- **One image, one question at a time.** You can only ask one question at a time — wait for the
+  current answer (or press **Stop**) before asking the next; a question asked while one is still
+  running is declined, not queued. The picture and answers are never saved — they clear when you
   remove the image or leave the screen.
 
 ---

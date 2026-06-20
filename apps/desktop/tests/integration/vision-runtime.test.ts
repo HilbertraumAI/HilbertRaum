@@ -264,3 +264,147 @@ describe('VisionRuntime — idle-teardown interlock (RUNTIME-4)', () => {
     expect(children.length).toBe(1)
   })
 })
+
+// TEST-2: the same interlock, but DETERMINISTIC. Instead of `sleep`-ordering a real idle timer,
+// we inject a controllable clock (fire the teardown ON DEMAND) and a child whose exit we GATE
+// (hold the soft-teardown window open). This races the exact guard branches the design comments
+// emphasize: removing a guard (`this.starting`/`inFlight`, the synchronous `this.server = null`,
+// the `stop()` await of `idleTeardownPromise`, the `unref`) reddens a test here.
+describe('VisionRuntime — idle-teardown interlock, deterministic (RUNTIME-4 / TEST-2)', () => {
+  /** A child whose 'exit' we control: `hold=true` makes kill() NOT emit, `release()` emits it. */
+  class GatedChild extends EventEmitter implements ChildProcessLike {
+    pid = 9
+    killed = false
+    hold = false
+    kill(): boolean {
+      this.killed = true
+      if (!this.hold) queueMicrotask(() => this.emit('exit', 0, null))
+      return true
+    }
+    release(): void {
+      queueMicrotask(() => this.emit('exit', 0, null))
+    }
+  }
+
+  function gatedSpawn() {
+    const calls: Array<{ args: string[] }> = []
+    const children: GatedChild[] = []
+    const spawn = (_c: string, args: string[]): ChildProcessLike => {
+      calls.push({ args })
+      const child = new GatedChild()
+      children.push(child)
+      return child
+    }
+    return { spawn, calls, children }
+  }
+
+  /** A controllable idle clock: captures the latest scheduled cb (fire it by hand) + unref count. */
+  function fakeClock() {
+    const state = { fire: null as (() => void) | null, setCount: 0, unrefCount: 0 }
+    const clock = {
+      set(cb: () => void) {
+        state.setCount++
+        state.fire = cb
+        return {
+          clear: () => {
+            if (state.fire === cb) state.fire = null
+          },
+          unref: () => {
+            state.unrefCount++
+          }
+        }
+      }
+    }
+    return { clock, state }
+  }
+
+  const tick = (): Promise<void> => new Promise((r) => setTimeout(r, 0))
+
+  it('(b) an analyze mid-soft-teardown cold-starts a fresh child (this.server nulled synchronously)', async () => {
+    const { spawn, calls, children } = gatedSpawn()
+    const { fetchImpl } = visionFetch()
+    const { clock, state } = fakeClock()
+    const rt = new VisionRuntime({ ...base, spawn, fetchImpl, idleClock: clock })
+
+    await rt.analyze(analyzeOpts) // child0 live; the idle cb is captured
+    expect(calls.length).toBe(1)
+    children[0].hold = true // hold child0's exit so the soft teardown stays IN FLIGHT
+    state.fire!() // fire the idle teardown: nulls this.server synchronously, kills child0 (gated)
+    expect(children[0].killed).toBe(true)
+
+    // server === null while the old child is still stopping → this analyze cold-starts a NEW child.
+    const answer = await rt.analyze(analyzeOpts)
+    expect(answer).toBe(FIXTURE_ANSWER)
+    expect(calls.length).toBe(2)
+    expect(children.length).toBe(2)
+
+    children[0].release() // let the held teardown finish
+    await rt.stop()
+  })
+
+  it('(c) stop() during an in-flight soft teardown AWAITS it (no orphan)', async () => {
+    const { spawn, children } = gatedSpawn()
+    const { fetchImpl } = visionFetch()
+    const { clock, state } = fakeClock()
+    const rt = new VisionRuntime({ ...base, spawn, fetchImpl, idleClock: clock })
+
+    await rt.analyze(analyzeOpts)
+    children[0].hold = true
+    state.fire!() // soft teardown now in flight (gated open)
+    expect(children[0].killed).toBe(true)
+
+    let stopResolved = false
+    const stopP = rt.stop().then(() => {
+      stopResolved = true
+    })
+    await tick()
+    await tick()
+    expect(stopResolved).toBe(false) // stop() is AWAITING idleTeardownPromise — cannot have resolved
+
+    children[0].release() // unblock the teardown
+    await stopP
+    expect(stopResolved).toBe(true)
+    expect(children.length).toBe(1) // no orphan, no extra child spawned
+  })
+
+  it("(e) the idle timer is unref'd so it can never block a clean quit", async () => {
+    const { spawn } = gatedSpawn()
+    const { fetchImpl } = visionFetch()
+    const { clock, state } = fakeClock()
+    const rt = new VisionRuntime({ ...base, spawn, fetchImpl, idleClock: clock })
+    await rt.analyze(analyzeOpts) // settles → arms the idle timer
+    expect(state.setCount).toBeGreaterThan(0)
+    expect(state.unrefCount).toBe(state.setCount) // every armed idle timer was unref'd
+    await rt.stop()
+  })
+
+  it('(a) a stale idle fire is a no-op while a job is in flight (the inFlight guard)', async () => {
+    const { spawn, calls, children } = gatedSpawn()
+    let chatCount = 0
+    const gate: { release: (() => void) | null } = { release: null }
+    const gatedFetch = (async (url: string | URL) => {
+      const u = String(url)
+      if (u.endsWith('/health')) return { ok: true, status: 200 } as Response
+      chatCount++
+      if (chatCount >= 2) await new Promise<void>((resolve) => (gate.release = resolve))
+      return { ok: true, status: 200, body: sseBody(FIXTURE_SSE) } as unknown as Response
+    }) as typeof fetch
+    const { clock, state } = fakeClock()
+    const rt = new VisionRuntime({ ...base, spawn, fetchImpl: gatedFetch, idleClock: clock })
+
+    await rt.analyze(analyzeOpts) // chat #1 completes → child0; an idle cb is armed (state.fire)
+    const staleCb = state.fire! // capture it BEFORE the next analyze cancels the timer
+    const p2 = rt.analyze(analyzeOpts) // chat #2 gates → inFlight=1, child0 reused
+    while (!gate.release) await tick()
+
+    // Simulate a timer that FIRED racing the cancel (cb already dispatched): idleTeardown must
+    // SKIP because a job is in flight (inFlight>0) and never tear down the live sidecar.
+    staleCb()
+    expect(children[0].killed).toBe(false)
+    expect(calls.length).toBe(1) // the in-flight job's sidecar was never torn down
+
+    gate.release()
+    expect(await p2).toBe(FIXTURE_ANSWER)
+    await rt.stop()
+  })
+})

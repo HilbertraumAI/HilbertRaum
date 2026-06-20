@@ -326,15 +326,35 @@ function safeDrivePath(rootPath: string, relPath: string): string {
   return full
 }
 
+/** One verifiable file a manifest carries (the GGUF, or a vision model's mmproj projector). */
+export interface ManifestFile {
+  /** Absolute, escape-guarded path on the drive. */
+  path: string
+  /** Expected SHA-256 (lower-case hex; may be a placeholder). */
+  sha: string
+  /** Drive-relative path (forward slashes) for honest reporting (which file failed). */
+  localPath: string
+}
+
 /**
  * The verifiable weight files a manifest carries: always the language GGUF, plus the mmproj
  * projector for a `role: vision` model (image-understanding plan §8.2). Install state requires
  * BOTH present + verified. Each entry has its own expected hash; the checksum cache keys by
- * (path, size, mtime) per file so the projector is hashed once like the GGUF.
+ * (path, size, mtime) per file so the projector is hashed once like the GGUF. Exported so the
+ * drive-build verify side (`verifyDriveModels`/`buildChecksumsJson`, DIST-2) iterates exactly
+ * the same set the install side does — a vision drive can never half-pass with only the GGUF.
  */
-function manifestFiles(rootPath: string, manifest: ModelManifest): Array<{ path: string; sha: string }> {
-  const files = [{ path: weightPath(rootPath, manifest), sha: manifest.sha256 }]
-  if (manifest.mmproj) files.push({ path: mmprojPath(rootPath, manifest), sha: manifest.mmproj.sha256 })
+export function manifestFiles(rootPath: string, manifest: ModelManifest): ManifestFile[] {
+  const files: ManifestFile[] = [
+    { path: weightPath(rootPath, manifest), sha: manifest.sha256, localPath: manifest.localPath }
+  ]
+  if (manifest.mmproj) {
+    files.push({
+      path: mmprojPath(rootPath, manifest),
+      sha: manifest.mmproj.sha256,
+      localPath: manifest.mmproj.localPath
+    })
+  }
   return files
 }
 

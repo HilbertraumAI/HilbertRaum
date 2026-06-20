@@ -1523,7 +1523,6 @@ export const de: Record<keyof typeof en, string> = {
   'images.answer.copy': 'Kopieren',
   'images.answer.copied': 'Kopiert',
   'images.answer.tryAgain': 'Erneut versuchen',
-  'images.answer.clear': 'Neues Bild',
   'images.answer.reading': 'Bild wird gelesen…',
   'images.answer.starting': 'KI-Bildmodell wird gestartet…',
   'images.answer.stop': 'Stopp',

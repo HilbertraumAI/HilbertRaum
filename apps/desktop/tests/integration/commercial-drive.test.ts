@@ -255,6 +255,34 @@ describe('assertCommercialDrive', () => {
     expect(res.modelResults[0].status).toBe('mismatch')
   })
 
+  // DIST-2: a vision drive whose GGUF is fine but whose mmproj projector is missing/corrupt must
+  // NOT pass the sell gate (it would ship a vision model that cannot start).
+  it('fails a vision drive whose GGUF verifies but whose mmproj projector is MISSING', async () => {
+    const root = tempDir('hilbertraum-commercial-vision-')
+    writePolicy(root, buildPolicyJson())
+    provisionAppSkill(root)
+    const ggufContent = 'vlm-gguf'
+    const dest = join(root, 'models', 'vision', 'vlm.gguf')
+    mkdirSync(join(dest, '..'), { recursive: true })
+    writeFileSync(dest, ggufContent)
+    const ggufSha = createHash('sha256').update(ggufContent).digest('hex')
+    const vision = asManifest({
+      id: 'vlm',
+      role: 'vision',
+      family: 'qwen2.5-vl',
+      local_path: 'models/vision/vlm.gguf',
+      sha256: ggufSha,
+      // mmproj projector declared but its file never written → the model is half-installed.
+      mmproj: { local_path: 'models/vision/vlm-mmproj.gguf', sha256: createHash('sha256').update('proj').digest('hex') }
+    })
+
+    const res = await assertCommercialDrive(root, [vision])
+    expect(res.ok).toBe(false)
+    expect(res.checks.weightsVerified).toBe(false)
+    expect(res.modelResults[0].status).toBe('missing')
+    expect(res.modelResults[0].localPath).toBe('models/vision/vlm-mmproj.gguf')
+  })
+
   it('fails when there are no weights to verify (a sold drive ships weights pre-loaded)', async () => {
     const root = tempDir('hilbertraum-commercial-noweights-')
     writePolicy(root, buildPolicyJson())

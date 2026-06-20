@@ -54,7 +54,23 @@ sha256_of() {
 # Inline YAML comments (whitespace + '#' + rest) are stripped before unquoting (M17).
 field() { sed -n "s/^[[:space:]]*$2[[:space:]]*:[[:space:]]*//p" "$1" | head -n1 | sed 's/[[:space:]][[:space:]]*#.*$//' | tr -d '"'"'"'' | sed 's/[[:space:]]*$//'; }
 
+# Same flat parse, but over a string (a YAML sub-block) instead of a file — used to read the
+# mmproj projector block's local_path/sha256/url (the SECOND file of a vision model, DIST-1).
+field_in() { printf '%s\n' "$1" | sed -n "s/^[[:space:]]*$2[[:space:]]*:[[:space:]]*//p" | head -n1 | sed 's/[[:space:]][[:space:]]*#.*$//' | tr -d '"'"'"'' | sed 's/[[:space:]]*$//'; }
+
+# Extract the indented body of a top-level `mmproj:` mapping (lines until the next column-0 key).
+mmproj_block_of() { awk '/^mmproj:[[:space:]]*$/{f=1;next} /^[^[:space:]]/{f=0} f' "$1"; }
+
 is_real_sha() { [[ "$1" =~ ^[a-f0-9]{64}$ ]]; }
+
+# Classify a destination file against its expected hash: verified|placeholder|mismatch|absent.
+file_state() {
+  local dest="$1" sha="$2"
+  if [[ ! -f "$dest" ]]; then echo absent; return; fi
+  if is_real_sha "$sha"; then
+    if [[ "$(sha256_of "$dest")" == "$sha" ]]; then echo verified; else echo mismatch; fi
+  else echo placeholder; fi
+}
 
 # Resilient curl (mirrors fetch-runtime.sh): curl --retry alone does not retry a mid-transfer
 # DROP on older curl, so an OUTER loop RESUMES the partial file (-C -) on each attempt — a
@@ -100,6 +116,36 @@ download() {
   fi
 }
 
+# Fetch + verify ONE file (the GGUF, or a vision model's mmproj projector), given its already-
+# computed state. Mirrors assets.ts `planOneFile` + the atomic verify-before-trust contract.
+# Args: id label dest sha url relpath state. Updates the global fetched/skipped/had_failure.
+handle_file() {
+  local id="$1" label="$2" dest="$3" sha="$4" url="$5" rel="$6" state="$7"
+  case "$state" in
+    verified)    printf '  skip   %s%s (present + verified)\n' "$id" "$label"; skipped=$((skipped + 1)); return 0 ;;
+    placeholder) printf '  skip   %s%s (present; placeholder hash — cannot verify)\n' "$id" "$label"; skipped=$((skipped + 1)); return 0 ;;
+    mismatch)    printf '  redo   %s%s (present but checksum mismatch — re-downloading)\n' "$id" "$label" ;;
+  esac
+  if [[ $DRY_RUN -eq 1 ]]; then
+    printf '  fetch  %s%s\n           %s\n           -> %s\n' "$id" "$label" "$url" "$rel"; return 0
+  fi
+  printf '  fetch  %s%s ...\n' "$id" "$label"
+  if ! download "$url" "$dest"; then
+    printf '  FAIL   %s%s: download error\n' "$id" "$label" >&2; had_failure=1; return 1
+  fi
+  if is_real_sha "$sha"; then
+    local actual; actual="$(sha256_of "$dest")"
+    if [[ "$actual" == "$sha" ]]; then
+      printf '  ok     %s%s (VERIFIED)\n' "$id" "$label"; fetched=$((fetched + 1))
+    else
+      printf '  FAIL   %s%s: checksum mismatch (expected %s, got %s) — deleting partial\n' "$id" "$label" "$sha" "$actual" >&2
+      rm -f "$dest" "$dest.aria2"; had_failure=1
+    fi
+  else
+    printf '  ok     %s%s (UNVERIFIED — placeholder hash; run verify-models --generate)\n' "$id" "$label"; fetched=$((fetched + 1))
+  fi
+}
+
 MANIFEST_FILES=()
 while IFS= read -r mf; do
   [ -n "$mf" ] && MANIFEST_FILES+=("$mf")
@@ -133,51 +179,42 @@ for mf in "${MANIFEST_FILES[@]}"; do
 
   dest="$TARGET/$local_path"
 
-  # Idempotent skip.
-  if [[ -f "$dest" ]]; then
-    if is_real_sha "$sha"; then
-      if [[ "$(sha256_of "$dest")" == "$sha" ]]; then
-        printf '  skip   %s (present + verified)\n' "$id"; skipped=$((skipped + 1)); continue
-      fi
-      printf '  redo   %s (present but checksum mismatch — re-downloading)\n' "$id"
-    else
-      printf '  skip   %s (present; placeholder hash — cannot verify)\n' "$id"; skipped=$((skipped + 1)); continue
+  # A vision model is TWO files: the language GGUF (above) + the mmproj projector (DIST-1). Parse
+  # the projector's own block (its local_path/sha256/download.url) — absent for non-vision models.
+  mmproj_block="$(mmproj_block_of "$mf")"
+  mmproj_local="$(field_in "$mmproj_block" local_path)"
+  mmproj_sha="$(field_in "$mmproj_block" sha256 | tr '[:upper:]' '[:lower:]')"
+  mmproj_url="$(field_in "$mmproj_block" url)"
+  has_mmproj=0
+  [[ -n "$mmproj_url" && -n "$mmproj_local" ]] && has_mmproj=1
+  mmproj_dest="$TARGET/$mmproj_local"
+
+  # Classify each file ONCE (a present multi-GB weight is hashed at most once).
+  gguf_state="$(file_state "$dest" "$sha")"
+  mmproj_state=""
+  [[ $has_mmproj -eq 1 ]] && mmproj_state="$(file_state "$mmproj_dest" "$mmproj_sha")"
+
+  # Does anything need the network? (absent / checksum-mismatch). A model already fully present
+  # is skipped WITHOUT a license prompt (the license is only relevant to an actual download).
+  needs_fetch=0
+  [[ "$gguf_state" == absent || "$gguf_state" == mismatch ]] && needs_fetch=1
+  [[ $has_mmproj -eq 1 && ( "$mmproj_state" == absent || "$mmproj_state" == mismatch ) ]] && needs_fetch=1
+
+  if [[ $needs_fetch -eq 1 ]]; then
+    # License gate (spec §13) — only when something will actually be fetched.
+    if [[ "$review_status" != "approved" && $ACCEPT_LICENSE -eq 0 ]]; then
+      printf '  BLOCK  %s: license "%s" not approved.\n' "$id" "$license" >&2
+      [[ -n "$license_url" ]] && printf '         License: %s\n' "$license_url" >&2
+      echo   '         Re-run with --accept-license to accept and continue.' >&2
+      had_failure=1; continue
+    fi
+    if [[ "$review_status" != "approved" ]]; then
+      printf '  note   %s: license "%s" accepted via --accept-license (%s)\n' "$id" "$license" "$license_url"
     fi
   fi
 
-  # License gate.
-  if [[ "$review_status" != "approved" && $ACCEPT_LICENSE -eq 0 ]]; then
-    printf '  BLOCK  %s: license "%s" not approved.\n' "$id" "$license" >&2
-    [[ -n "$license_url" ]] && printf '         License: %s\n' "$license_url" >&2
-    echo   '         Re-run with --accept-license to accept and continue.' >&2
-    had_failure=1; continue
-  fi
-  if [[ "$review_status" != "approved" ]]; then
-    printf '  note   %s: license "%s" accepted via --accept-license (%s)\n' "$id" "$license" "$license_url"
-  fi
-
-  if [[ $DRY_RUN -eq 1 ]]; then
-    printf '  fetch  %s\n           %s\n           -> %s\n' "$id" "$url" "$local_path"; continue
-  fi
-
-  printf '  fetch  %s ...\n' "$id"
-  if ! download "$url" "$dest"; then
-    printf '  FAIL   %s: download error\n' "$id" >&2; had_failure=1; continue
-  fi
-
-  if is_real_sha "$sha"; then
-    actual="$(sha256_of "$dest")"
-    if [[ "$actual" == "$sha" ]]; then
-      printf '  ok     %s (VERIFIED)\n' "$id"; fetched=$((fetched + 1))
-    else
-      printf '  FAIL   %s: checksum mismatch (expected %s, got %s) — deleting partial\n' "$id" "$sha" "$actual" >&2
-      # Also drop a stale aria2 control file, which would corrupt the next resume.
-      rm -f "$dest" "$dest.aria2"; had_failure=1
-    fi
-  else
-    printf '  ok     %s (UNVERIFIED — placeholder hash; run verify-models --generate)\n' "$id"
-    fetched=$((fetched + 1))
-  fi
+  handle_file "$id" "" "$dest" "$sha" "$url" "$local_path" "$gguf_state"
+  [[ $has_mmproj -eq 1 ]] && handle_file "$id" " (mmproj)" "$mmproj_dest" "$mmproj_sha" "$mmproj_url" "$mmproj_local" "$mmproj_state"
 done
 
 echo

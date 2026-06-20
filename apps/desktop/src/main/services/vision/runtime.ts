@@ -57,6 +57,31 @@ function readIdleTimeoutMs(): number {
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : DEFAULT_VISION_IDLE_MS
 }
 
+/** A scheduled idle-teardown timer handle (the global `setTimeout`'s, or a test's fake clock). */
+export interface IdleTimerHandle {
+  /** Cancel the pending fire. */
+  clear(): void
+  /** Detach from the event loop so it can never block a clean quit (the real timer's `unref`). */
+  unref?(): void
+}
+
+/**
+ * The idle-teardown clock (RUNTIME-4). Production uses the global timer; tests inject a
+ * controllable clock so the teardown interleavings are DETERMINISTIC (fire on demand) instead
+ * of `sleep`-ordered — the `this.starting`/`inFlight` guard branches can then be raced exactly.
+ */
+export interface IdleClock {
+  set(cb: () => void, ms: number): IdleTimerHandle
+}
+
+/** The default clock — a real `setTimeout`, unref'd so it never keeps the process alive. */
+const REAL_IDLE_CLOCK: IdleClock = {
+  set(cb, ms) {
+    const t = setTimeout(cb, ms)
+    return { clear: () => clearTimeout(t), unref: () => void t.unref?.() }
+  }
+}
+
 export type VisionRuntimeDeps = Pick<
   LlamaServerOptions,
   'spawn' | 'fetchImpl' | 'findPort' | 'threads' | 'healthTimeoutMs' | 'healthIntervalMs' | 'host'
@@ -75,6 +100,8 @@ export interface VisionRuntimeOptions extends VisionRuntimeDeps {
   requestTimeoutMs?: number
   /** Idle-teardown timeout in ms (default `HILBERTRAUM_VISION_IDLE_MS` / 120 000 — §19.13, tuned V5). */
   idleTimeoutMs?: number
+  /** Idle-teardown clock (default: the global `setTimeout`). Tests inject a controllable clock. */
+  idleClock?: IdleClock
 }
 
 export interface VisionAnalyzeOptions {
@@ -100,15 +127,17 @@ export class VisionRuntime {
   /** Number of analyses currently using the sidecar. Guards the idle teardown (RUNTIME-4):
    *  while >0 a job is running and the sidecar must NOT be torn down. */
   private inFlight = 0
-  /** The pending idle-teardown timer (armed only when `inFlight===0`), or null. */
-  private idleTimer: ReturnType<typeof setTimeout> | null = null
+  /** The pending idle-teardown timer handle (armed only when `inFlight===0`), or null. */
+  private idleHandle: IdleTimerHandle | null = null
   /** An in-flight SOFT idle teardown, tracked so `stop()` can await it (no orphan on quit). */
   private idleTeardownPromise: Promise<void> | null = null
   private readonly idleTimeoutMs: number
+  private readonly idleClock: IdleClock
 
   constructor(private readonly opts: VisionRuntimeOptions) {
     this.modelId = opts.modelId
     this.idleTimeoutMs = opts.idleTimeoutMs ?? readIdleTimeoutMs()
+    this.idleClock = opts.idleClock ?? REAL_IDLE_CLOCK
   }
 
   /** Lazily spawn the vision sidecar (once). Concurrent callers share one start (single-flight). */
@@ -233,9 +262,9 @@ export class VisionRuntime {
   // ---- Idle-teardown interlock (RUNTIME-4) --------------------------------------------
 
   private cancelIdleTimer(): void {
-    if (this.idleTimer) {
-      clearTimeout(this.idleTimer)
-      this.idleTimer = null
+    if (this.idleHandle) {
+      this.idleHandle.clear()
+      this.idleHandle = null
     }
   }
 
@@ -243,12 +272,12 @@ export class VisionRuntime {
   private armIdleTimer(): void {
     this.cancelIdleTimer()
     if (this.stopped || this.starting || this.inFlight > 0 || !this.server) return
-    this.idleTimer = setTimeout(() => {
-      this.idleTimer = null
+    this.idleHandle = this.idleClock.set(() => {
+      this.idleHandle = null
       void this.idleTeardown()
     }, this.idleTimeoutMs)
     // Never let the idle timer keep the process alive (it would block a clean quit).
-    this.idleTimer.unref?.()
+    this.idleHandle.unref?.()
   }
 
   /**
