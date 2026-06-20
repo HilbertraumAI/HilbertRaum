@@ -22,6 +22,12 @@ import { DocTaskManager } from './services/doctasks'
 import { documentsDir } from './services/ingestion'
 import { inFlightStreams } from './ipc/inflight'
 import { registerDictationIpc } from './ipc/registerDictationIpc'
+import { registerImagesIpc } from './ipc/registerImagesIpc'
+import {
+  createVisionRuntimeFromContext,
+  getVisionStatus,
+  VisionService
+} from './services/vision'
 import { registerDownloadIpc } from './ipc/registerDownloadIpc'
 import { registerEngineIpc } from './ipc/registerEngineIpc'
 import { registerRagIpc } from './ipc/registerRagIpc'
@@ -262,6 +268,13 @@ function initBackend(): void {
     docTasks,
     skills
   }
+  // The vision sidecar orchestrator (image-understanding plan §10). Built here — not inside
+  // registerImagesIpc — so the workspace-lock + quit teardown paths can reach it via `ctx.vision`.
+  // Lazy: it spawns nothing until the first analyze of an available model.
+  ctx.vision = new VisionService({
+    getStatus: () => getVisionStatus(ctx as AppContext),
+    createRuntime: (status) => createVisionRuntimeFromContext(ctx as AppContext, status)
+  })
   // Best-effort first reconcile (skills plan §8). In plaintext_dev the DB is already open; in
   // encrypted mode `requireDb()` throws while locked, so swallow it — a later phase reconciles on
   // unlock, and S3 ships no surface that reads skills yet.
@@ -289,6 +302,7 @@ function initBackend(): void {
   registerSkillsIpc(ctx)
   registerDocTasksIpc(ctx)
   registerDictationIpc(ctx)
+  registerImagesIpc(ctx, ctx.vision)
   registerDownloadIpc(ctx)
   registerEngineIpc(ctx)
   registerRagIpc(ctx)
@@ -453,7 +467,10 @@ async function shutdown(): Promise<void> {
       ctx?.embedder.stop?.() ?? Promise.resolve(),
       ctx?.reranker?.stop?.() ?? Promise.resolve(),
       ctx?.transcriber?.stop?.() ?? Promise.resolve(),
-      ctx?.ocrEngine?.stop?.() ?? Promise.resolve()
+      ctx?.ocrEngine?.stop?.() ?? Promise.resolve(),
+      // The vision sidecar is a 4th co-resident llama-server (PROD-1) — kill it too so no
+      // child orphans on quit.
+      ctx?.vision?.stop() ?? Promise.resolve()
     ])
   } catch (err) {
     log.error('Error stopping sidecars on quit', String(err))

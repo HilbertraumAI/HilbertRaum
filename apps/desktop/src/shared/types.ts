@@ -318,7 +318,7 @@ export interface ModelInfo {
   id: string
   displayName: string
   family: string
-  role: 'chat' | 'embeddings' | 'reranker' | 'transcriber'
+  role: 'chat' | 'embeddings' | 'reranker' | 'transcriber' | 'vision'
   format: string
   runtime: string
   license: string
@@ -472,6 +472,66 @@ export interface EngineStatus {
   backend: string | null
   /** Engine families with a host build but no binary yet (e.g. `llama_cpp`, `whisper_cpp`). */
   missingFamilies: string[]
+}
+
+// ---- Image understanding (vision) — image-understanding plan §9.3 ----
+//
+// A separate, lazily-started `llama-server --mmproj` sidecar answers a question about ONE
+// image (PNG/JPEG). The bytes are base64-inlined into the loopback request (no disk write,
+// V1-resolved). Nothing is persisted; the screen state and these DTOs are the whole surface.
+
+/** Why image understanding is unavailable. NO `'locked'` reason (PROD-2): `getVisionStatus`
+ *  is WORKSPACE-AGNOSTIC — vision weights aren't encrypted, so status doesn't fail on lock;
+ *  the SCREEN owns the lock gate (it reads `workspaceReady`), and the sidecar is torn down on
+ *  lock independently (§13). Status can read `available:true` while the screen shows locked. */
+export type VisionUnavailableReason = 'no-model' | 'no-runtime' | 'incompatible'
+
+export interface VisionStatus {
+  available: boolean
+  /** Present iff `!available`. */
+  reason?: VisionUnavailableReason
+  /** The installed + verified vision model, if any. */
+  modelId?: string
+  /** Human label for the screen (no jargon — never "mmproj"/quantization). */
+  modelDisplayName?: string
+}
+
+export interface ImageAnalyzeRequest {
+  /** The (possibly downscaled / EXIF-normalized) PNG or JPEG bytes. */
+  imageBytes: Uint8Array
+  mimeType: 'image/png' | 'image/jpeg'
+  question: string
+}
+
+/**
+ * Lifecycle of one analyze job. `queued` is only the brief pre-`starting` state of the
+ * SINGLE accepted job — never a backlog (a second analyze is busy-REJECTED, not queued,
+ * IPC-3). Terminal: `done | failed | cancelled`.
+ */
+export type ImageJobState = 'queued' | 'starting' | 'analyzing' | 'done' | 'failed' | 'cancelled'
+
+/**
+ * A small enum the renderer maps to friendly localized copy — the technical reason stays in
+ * the local log only (the chat `friendlyIpcError` precedent). `decodeFailed` is raised
+ * CLIENT-side when `createImageBitmap` throws (corrupt / HEIC-as-jpg / animated-PNG / zero
+ * byte). `busy` is a busy-REJECT (never a queue — §9.4).
+ */
+export type VisionErrorCode =
+  | 'tooLarge'
+  | 'unsupportedType'
+  | 'decodeFailed'
+  | 'runtimeFailed'
+  | 'emptyResponse'
+  | 'cancelled'
+  | 'busy'
+
+export interface ImageJob {
+  jobId: string
+  state: ImageJobState
+  /** Populated on `done` (or accumulated live via the STREAM.img* channels). */
+  answer?: string
+  /** A CODE, never raw model/runtime text (mapped to friendly copy). */
+  error?: VisionErrorCode | null
 }
 
 // ---- Document preview (post-MVP) ----

@@ -294,7 +294,26 @@ export async function verifyChecksum(
  * `llama-server --model` argument pointing at an arbitrary file.
  */
 export function weightPath(rootPath: string, manifest: ModelManifest): string {
-  const full = join(rootPath, manifest.localPath)
+  return safeDrivePath(rootPath, manifest.localPath)
+}
+
+/**
+ * Absolute path of a vision model's mmproj projector file (image-understanding plan §8.2).
+ * Same drive-root escape guard as `weightPath` (the projector path also becomes a
+ * `llama-server --mmproj` argument). Throws if the manifest carries no `mmproj` block.
+ */
+export function mmprojPath(rootPath: string, manifest: ModelManifest): string {
+  if (!manifest.mmproj) throw new Error(`Model "${manifest.id}" has no mmproj projector`)
+  return safeDrivePath(rootPath, manifest.mmproj.localPath)
+}
+
+/**
+ * Join a manifest-relative path onto the drive root, rejecting one that escapes the root
+ * (`..`/absolute) before it could become a `llama-server --model`/`--mmproj` argument
+ * pointing at an arbitrary file. Shared by `weightPath` + `mmprojPath`.
+ */
+function safeDrivePath(rootPath: string, relPath: string): string {
+  const full = join(rootPath, relPath)
   const base = resolve(rootPath)
   const resolved = resolve(full)
   // A bare drive root (e.g. `D:\`) already ends in the separator, so `base + sep` would
@@ -302,9 +321,41 @@ export function weightPath(rootPath: string, manifest: ModelManifest): string {
   // base does not already end in one.
   const prefix = base.endsWith(sep) ? base : base + sep
   if (resolved !== base && !resolved.startsWith(prefix)) {
-    throw new Error(`Manifest local_path escapes the drive root: ${manifest.localPath}`)
+    throw new Error(`Manifest path escapes the drive root: ${relPath}`)
   }
   return full
+}
+
+/** One verifiable file a manifest carries (the GGUF, or a vision model's mmproj projector). */
+export interface ManifestFile {
+  /** Absolute, escape-guarded path on the drive. */
+  path: string
+  /** Expected SHA-256 (lower-case hex; may be a placeholder). */
+  sha: string
+  /** Drive-relative path (forward slashes) for honest reporting (which file failed). */
+  localPath: string
+}
+
+/**
+ * The verifiable weight files a manifest carries: always the language GGUF, plus the mmproj
+ * projector for a `role: vision` model (image-understanding plan §8.2). Install state requires
+ * BOTH present + verified. Each entry has its own expected hash; the checksum cache keys by
+ * (path, size, mtime) per file so the projector is hashed once like the GGUF. Exported so the
+ * drive-build verify side (`verifyDriveModels`/`buildChecksumsJson`, DIST-2) iterates exactly
+ * the same set the install side does — a vision drive can never half-pass with only the GGUF.
+ */
+export function manifestFiles(rootPath: string, manifest: ModelManifest): ManifestFile[] {
+  const files: ManifestFile[] = [
+    { path: weightPath(rootPath, manifest), sha: manifest.sha256, localPath: manifest.localPath }
+  ]
+  if (manifest.mmproj) {
+    files.push({
+      path: mmprojPath(rootPath, manifest),
+      sha: manifest.mmproj.sha256,
+      localPath: manifest.mmproj.localPath
+    })
+  }
+  return files
 }
 
 export interface InstallStateOptions {
@@ -341,26 +392,49 @@ export async function computeInstallState(
   if (!SUPPORTED_RUNTIME_FORMATS.get(manifest.runtime)?.has(manifest.format)) {
     return 'unsupported'
   }
-  const path = weightPath(rootPath, manifest)
-  if (!existsSync(path)) return 'missing'
+  // A vision model is TWO files (GGUF + mmproj); install state requires BOTH present +
+  // verified (image-understanding plan §8.2). Non-vision models have exactly one file, so
+  // this loop is byte-identical to the old single-file behaviour for them.
+  const files = manifestFiles(rootPath, manifest)
+  for (const f of files) {
+    if (!existsSync(f.path)) return 'missing'
+  }
 
   // A placeholder hash can never verify, so hashing the (multi-GB) file would be pure
   // wasted I/O — decide from the manifest alone. Outside developer mode an unverifiable
   // file is treated as a checksum failure (spec §7.4 gate); in developer mode it counts
-  // as installed.
-  if (!isRealSha256(manifest.sha256)) {
+  // as installed. With two files, any placeholder hash short-circuits the same way.
+  if (files.some((f) => !isRealSha256(f.sha))) {
     return opts.developerMode ? 'installed' : 'checksum_failed'
   }
 
   // RT-3: on the lazy (chat) path, report a present weight as installed without hashing —
-  // unless a live cache hit can answer for free. The start gate re-verifies the launched
-  // model, so an unhashed-but-present non-active model is display-only here.
-  if (opts.skipHash && !cachedHashFor(path, opts.hashStore)) {
+  // unless a live cache hit can answer for ALL files for free. The start gate re-verifies the
+  // launched model, so an unhashed-but-present non-active model is display-only here.
+  if (opts.skipHash && !files.every((f) => cachedHashFor(f.path, opts.hashStore))) {
     return 'installed'
   }
 
-  const check = await verifyChecksum(path, manifest.sha256, opts.hashStore, opts.onProgress)
-  if (check.matched === false) return 'checksum_failed'
+  // Verify each file, accumulating the progress byte offset across files so the first-run
+  // bar advances monotonically (a cached file contributes 0 bytes and fires no progress).
+  let hashedBase = 0
+  for (const f of files) {
+    const willHash = isRealSha256(f.sha) && !cachedHashFor(f.path, opts.hashStore)
+    const check = await verifyChecksum(
+      f.path,
+      f.sha,
+      opts.hashStore,
+      willHash && opts.onProgress ? (b) => opts.onProgress!(hashedBase + b) : undefined
+    )
+    if (check.matched === false) return 'checksum_failed'
+    if (willHash) {
+      try {
+        hashedBase += statSync(f.path).size
+      } catch {
+        /* file vanished mid-verify — the next existsSync pass will report it missing */
+      }
+    }
+  }
   return 'installed'
 }
 
@@ -377,25 +451,31 @@ function pendingHashBytes(
   opts: { developerMode: boolean; hashStore?: HashStore }
 ): number {
   if (!SUPPORTED_RUNTIME_FORMATS.get(manifest.runtime)?.has(manifest.format)) return 0
-  if (!isRealSha256(manifest.sha256)) return 0
-  let path: string
+  let files: Array<{ path: string; sha: string }>
   try {
-    path = weightPath(rootPath, manifest)
+    files = manifestFiles(rootPath, manifest)
   } catch {
-    return 0 // an escaping local_path never reaches a hash
+    return 0 // an escaping local_path/mmproj path never reaches a hash
   }
-  let st: ReturnType<typeof statSync>
-  try {
-    st = statSync(path)
-  } catch {
-    return 0 // missing
+  // Any placeholder hash makes `computeInstallState` short-circuit before verifying ANY
+  // file — so nothing hashes this pass.
+  if (files.some((f) => !isRealSha256(f.sha))) return 0
+  let total = 0
+  for (const f of files) {
+    let st: ReturnType<typeof statSync>
+    try {
+      st = statSync(f.path)
+    } catch {
+      return 0 // a missing file → 'missing' before any verify
+    }
+    // A live cache hit (memory or store, matching size+mtime) means this file won't hash.
+    const hit = hashCache.get(f.path)
+    if (hit && hit.size === st.size && hit.mtimeMs === st.mtimeMs) continue
+    const persisted = opts.hashStore?.get(f.path)
+    if (persisted && persisted.size === st.size && persisted.mtimeMs === st.mtimeMs) continue
+    total += st.size
   }
-  // A live cache hit (memory or store, matching size+mtime) means no hashing this pass.
-  const hit = hashCache.get(path)
-  if (hit && hit.size === st.size && hit.mtimeMs === st.mtimeMs) return 0
-  const persisted = opts.hashStore?.get(path)
-  if (persisted && persisted.size === st.size && persisted.mtimeMs === st.mtimeMs) return 0
-  return st.size
+  return total
 }
 
 /** Recommend a model id for a hardware profile + role (spec §7.3). */

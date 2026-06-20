@@ -2,7 +2,7 @@ import { dirname, join } from 'node:path'
 import { existsSync, readdirSync, statSync } from 'node:fs'
 import type { ModelManifest } from '../../shared/manifest'
 import { isRealSha256 } from '../../shared/manifest'
-import { sha256File, verifyChecksum, weightPath } from './models'
+import { manifestFiles, sha256File, verifyChecksum } from './models'
 
 // Drive preparation logic (spec §6 / §12).
 //
@@ -48,7 +48,13 @@ export const DRIVE_LAYOUT_DIRS: readonly string[] = [
   'models/embeddings',
   'models/reranker',
   'models/transcriber',
+  // Vision (image-understanding) weights: the language GGUF + its mmproj projector
+  // (image-understanding plan §8.4). Git-ignored like all weights; opt-in download.
+  'models/vision',
   'model-manifests',
+  // Committed vision manifests are discovered recursively under model-manifests/; the
+  // sub-dir keeps the role's YAML tidy (resolveManifestsDir walks recursively, no code change).
+  'model-manifests/vision',
   ...DRIVE_OS_DIRS.map((os) => `runtime/llama.cpp/${os}`),
   // Second sidecar family: the whisper.cpp transcriber CLI. Upstream ships
   // a prebuilt Windows build only; the mac/linux dirs exist for the documented
@@ -247,7 +253,6 @@ export async function verifyDriveModels(
 ): Promise<ModelVerifyResult[]> {
   const out: ModelVerifyResult[] = []
   for (const manifest of manifests) {
-    const path = weightPath(rootPath, manifest)
     if (!SUPPORTED_RUNTIMES.has(manifest.runtime) || !SUPPORTED_FORMATS.has(manifest.format)) {
       out.push({
         id: manifest.id,
@@ -259,19 +264,33 @@ export async function verifyDriveModels(
       })
       continue
     }
-    const check = await verifyChecksum(path, manifest.sha256)
-    let status: ModelVerifyStatus
-    if (!check.exists) status = 'missing'
-    else if (!isRealSha256(manifest.sha256)) status = 'unverified_placeholder'
-    else status = check.matched ? 'verified' : 'mismatch'
-    out.push({
-      id: manifest.id,
-      localPath: manifest.localPath,
-      status,
-      expected: manifest.sha256,
-      actual: check.actual,
-      sizeBytes: check.exists ? safeSize(path) : null
-    })
+    // DIST-2: a vision model is GGUF + mmproj. Verify EVERY file the install side requires
+    // (`manifestFiles`) and fold to ONE per-model row, reporting the FIRST file that is not
+    // `verified` so a half-installed vision drive (good GGUF, missing/corrupt projector) can
+    // never pass the sell gate. Single-file (non-vision) models keep the old behaviour exactly.
+    const files = manifestFiles(rootPath, manifest)
+    let chosen: ModelVerifyResult | null = null
+    for (const f of files) {
+      const check = await verifyChecksum(f.path, f.sha)
+      let status: ModelVerifyStatus
+      if (!check.exists) status = 'missing'
+      else if (!isRealSha256(f.sha)) status = 'unverified_placeholder'
+      else status = check.matched ? 'verified' : 'mismatch'
+      const result: ModelVerifyResult = {
+        id: manifest.id,
+        localPath: f.localPath,
+        status,
+        expected: f.sha,
+        actual: check.actual,
+        sizeBytes: check.exists ? safeSize(f.path) : null
+      }
+      // Default to the first file (the GGUF); the FIRST non-`verified` file then wins so the
+      // report stably surfaces the least-healthy file (GGUF before mmproj).
+      if (chosen === null || (chosen.status === 'verified' && status !== 'verified')) {
+        chosen = result
+      }
+    }
+    out.push(chosen as ModelVerifyResult)
   }
   return out
 }
@@ -311,15 +330,18 @@ export async function buildChecksumsJson(
 ): Promise<ChecksumsJson> {
   const entries: ChecksumsJson['entries'] = []
   for (const manifest of manifests) {
-    const path = weightPath(rootPath, manifest)
-    const present = existsSync(path)
-    entries.push({
-      id: manifest.id,
-      local_path: manifest.localPath,
-      sha256: present ? await sha256File(path) : null,
-      size_bytes: present ? safeSize(path) : null,
-      present
-    })
+    // DIST-2: capture EVERY file (GGUF + a vision model's mmproj), one entry per file, so the
+    // generated manifest records the projector's hash too — not just the language weight.
+    for (const f of manifestFiles(rootPath, manifest)) {
+      const present = existsSync(f.path)
+      entries.push({
+        id: manifest.id,
+        local_path: f.localPath,
+        sha256: present ? await sha256File(f.path) : null,
+        size_bytes: present ? safeSize(f.path) : null,
+        present
+      })
+    }
   }
   return {
     drive_format_version: DRIVE_FORMAT_VERSION,

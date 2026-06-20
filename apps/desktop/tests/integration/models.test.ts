@@ -313,6 +313,64 @@ describe('computeInstallState', () => {
   })
 })
 
+// Image-understanding plan §8.2: a vision model is TWO files (GGUF + mmproj); install state
+// requires BOTH present + verified.
+describe('computeInstallState — vision (both files verified)', () => {
+  function visionManifest(overrides: Record<string, unknown> = {}): ModelManifest {
+    return asManifest({
+      id: 'qwen2.5-vl-3b-instruct-q4',
+      role: 'vision',
+      family: 'qwen2.5-vl',
+      local_path: 'models/vision/vl.gguf',
+      mmproj: { local_path: 'models/vision/mmproj.gguf', sha256: 'REPLACE_WITH_REAL_HASH' },
+      ...overrides
+    })
+  }
+  function writeFile(root: string, rel: string, content: string): void {
+    const dest = join(root, ...rel.split('/'))
+    mkdirSync(join(dest, '..'), { recursive: true })
+    writeFileSync(dest, content)
+  }
+
+  it('is missing when the GGUF is present but the mmproj is absent', async () => {
+    const root = tempDir('hilbertraum-vision-')
+    writeFile(root, 'models/vision/vl.gguf', 'lm')
+    expect(await computeInstallState(visionManifest(), root, { developerMode: true })).toBe('missing')
+  })
+
+  it('is installed (dev) when both files are present with placeholder hashes', async () => {
+    const root = tempDir('hilbertraum-vision-')
+    writeFile(root, 'models/vision/vl.gguf', 'lm')
+    writeFile(root, 'models/vision/mmproj.gguf', 'proj')
+    expect(await computeInstallState(visionManifest(), root, { developerMode: true })).toBe('installed')
+  })
+
+  it('is installed when both files are present and BOTH hashes match', async () => {
+    const root = tempDir('hilbertraum-vision-')
+    writeFile(root, 'models/vision/vl.gguf', 'lm-bytes')
+    writeFile(root, 'models/vision/mmproj.gguf', 'proj-bytes')
+    const m = visionManifest({
+      sha256: createHash('sha256').update('lm-bytes').digest('hex'),
+      mmproj: {
+        local_path: 'models/vision/mmproj.gguf',
+        sha256: createHash('sha256').update('proj-bytes').digest('hex')
+      }
+    })
+    expect(await computeInstallState(m, root, { developerMode: false })).toBe('installed')
+  })
+
+  it('is checksum_failed when the mmproj hash does NOT match (the GGUF is fine)', async () => {
+    const root = tempDir('hilbertraum-vision-')
+    writeFile(root, 'models/vision/vl.gguf', 'lm-bytes')
+    writeFile(root, 'models/vision/mmproj.gguf', 'proj-bytes')
+    const m = visionManifest({
+      sha256: createHash('sha256').update('lm-bytes').digest('hex'),
+      mmproj: { local_path: 'models/vision/mmproj.gguf', sha256: 'a'.repeat(64) }
+    })
+    expect(await computeInstallState(m, root, { developerMode: false })).toBe('checksum_failed')
+  })
+})
+
 describe('recommendModelId', () => {
   const tiny = asManifest({ id: 'tiny', recommended_profiles: ['TINY', 'UNKNOWN'] })
   const lite = asManifest({ id: 'lite', recommended_profiles: ['LITE'] })

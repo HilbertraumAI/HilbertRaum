@@ -63,7 +63,9 @@ describe('drive layout', () => {
     expect(rels).toContain('models/chat')
     expect(rels).toContain('models/embeddings')
     expect(rels).toContain('models/reranker') // Phase 21
+    expect(rels).toContain('models/vision') // image-understanding §8.4
     expect(rels).toContain('model-manifests')
+    expect(rels).toContain('model-manifests/vision') // image-understanding §8.4
     expect(rels).toContain('logs')
     expect(rels).toContain('config')
     for (const os of DRIVE_OS_DIRS) {
@@ -190,7 +192,85 @@ describe('verifyDriveModels', () => {
   })
 })
 
+// DIST-2: a vision model is GGUF + mmproj; the verify/generate side must iterate BOTH so a
+// half-installed vision drive (good GGUF, missing/corrupt projector) cannot pass the sell gate.
+function visionManifest(gguf: { sha: string }, mmproj: { sha: string }): ModelManifest {
+  const res = validateManifest({
+    id: 'vlm',
+    display_name: 'Test VLM',
+    family: 'qwen2.5-vl',
+    role: 'vision',
+    format: 'gguf',
+    runtime: 'llama_cpp',
+    license: 'apache-2.0',
+    size_on_disk_gb: 3.3,
+    recommended_min_ram_gb: 8,
+    recommended_ram_gb: 16,
+    recommended_context_tokens: 4096,
+    local_path: 'models/vision/vlm.gguf',
+    sha256: gguf.sha,
+    license_review: { status: 'approved', reviewed_by: 'me', reviewed_at: '2026-01-01', notes: '' },
+    mmproj: { local_path: 'models/vision/vlm-mmproj.gguf', sha256: mmproj.sha }
+  })
+  if (!res.manifest) throw new Error('vision fixture invalid: ' + res.errors.join(', '))
+  return res.manifest
+}
+
+function writeFileAt(root: string, relPath: string, content: string): void {
+  const dest = join(root, ...relPath.split('/'))
+  mkdirSync(join(dest, '..'), { recursive: true })
+  writeFileSync(dest, content)
+}
+
+describe('verifyDriveModels — vision two-file fold (DIST-2)', () => {
+  it('FAILS the model when the GGUF verifies but the mmproj projector is missing', async () => {
+    const root = tempDir('hilbertraum-verify-vision-')
+    const ggufHash = createHash('sha256').update('gguf').digest('hex')
+    const m = visionManifest({ sha: ggufHash }, { sha: createHash('sha256').update('proj').digest('hex') })
+    writeFileAt(root, 'models/vision/vlm.gguf', 'gguf') // GGUF good; projector absent
+    const [r] = await verifyDriveModels(root, [m])
+    expect(r.status).toBe('missing') // the projector decides — not a false 'verified'
+    expect(r.localPath).toBe('models/vision/vlm-mmproj.gguf')
+  })
+
+  it('FAILS the model when the mmproj is present but its hash mismatches', async () => {
+    const root = tempDir('hilbertraum-verify-vision-')
+    const ggufHash = createHash('sha256').update('gguf').digest('hex')
+    const m = visionManifest({ sha: ggufHash }, { sha: 'a'.repeat(64) })
+    writeFileAt(root, 'models/vision/vlm.gguf', 'gguf')
+    writeFileAt(root, 'models/vision/vlm-mmproj.gguf', 'wrong-projector-bytes')
+    const [r] = await verifyDriveModels(root, [m])
+    expect(r.status).toBe('mismatch')
+    expect(r.localPath).toBe('models/vision/vlm-mmproj.gguf')
+  })
+
+  it('VERIFIES the model only when BOTH files match', async () => {
+    const root = tempDir('hilbertraum-verify-vision-')
+    const ggufHash = createHash('sha256').update('gguf').digest('hex')
+    const projHash = createHash('sha256').update('proj').digest('hex')
+    const m = visionManifest({ sha: ggufHash }, { sha: projHash })
+    writeFileAt(root, 'models/vision/vlm.gguf', 'gguf')
+    writeFileAt(root, 'models/vision/vlm-mmproj.gguf', 'proj')
+    const [r] = await verifyDriveModels(root, [m])
+    expect(r.status).toBe('verified')
+  })
+})
+
 describe('buildChecksumsJson (generate mode)', () => {
+  it('captures BOTH the GGUF and the mmproj of a vision model (DIST-2)', async () => {
+    const root = tempDir('hilbertraum-sums-vision-')
+    const ggufHash = createHash('sha256').update('gguf').digest('hex')
+    const projHash = createHash('sha256').update('proj').digest('hex')
+    const m = visionManifest({ sha: ggufHash }, { sha: projHash })
+    writeFileAt(root, 'models/vision/vlm.gguf', 'gguf')
+    writeFileAt(root, 'models/vision/vlm-mmproj.gguf', 'proj')
+    const sums = await buildChecksumsJson(root, [m], '2026-06-20T00:00:00Z')
+    const paths = sums.entries.map((e) => e.local_path)
+    expect(paths).toEqual(['models/vision/vlm.gguf', 'models/vision/vlm-mmproj.gguf'])
+    expect(sums.entries.every((e) => e.present)).toBe(true)
+    expect(sums.entries.find((e) => e.local_path.endsWith('mmproj.gguf'))!.sha256).toBe(projHash)
+  })
+
   it('captures real hashes for present weights and null for absent', async () => {
     const root = tempDir('hilbertraum-sums-')
     const present = asManifest({ id: 'present', local_path: 'models/chat/present.gguf' })

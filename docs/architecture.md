@@ -1,6 +1,6 @@
 # Architecture — HilbertRaum
 
-_Last updated: 2026-06-15. Absorbs the GPU §1–§8, downloader, audit-log and depth-mode design records. Feature changes since: Phase 38 (scanned-PDF/photo OCR) and the whole-document-analysis wave (Phases 1–4 — deep index, coverage meter, structured extract, symmetric compare), whose design record is [`rag-design.md`](rag-design.md) §14._
+_Last updated: 2026-06-20. Absorbs the GPU §1–§8, downloader, audit-log and depth-mode design records. Feature changes since: Phase 38 (scanned-PDF/photo OCR), the whole-document-analysis wave (Phases 1–4 — deep index, coverage meter, structured extract, symmetric compare; record in [`rag-design.md`](rag-design.md) §14), and **image understanding** (the Images screen — Phases V1–V5; design record "Image understanding — design record" below)._
 
 ## Overview
 
@@ -11,8 +11,8 @@ a future move to Tauri/Rust is a localized swap.
 ```
 ┌──────────────────────────────────────────────────────────────┐
 │ Renderer (React, sandboxed)                                    │
-│  Screens: Onboarding · Home · Chat · Documents · AI Model ·    │
-│           Settings (General / Privacy & data / Diagnostics)    │
+│  Screens: Onboarding · Home · Chat · Documents · Images ·      │
+│           AI Model · Settings (General/Privacy & data/Diag.)   │
 │  No Node / no network access — only window.api (typed bridge)  │
 └───────────────▲───────────────────────────────┬──────────────┘
                 │ contextBridge (preload)        │ IPC events (streams)
@@ -53,6 +53,9 @@ a future move to Tauri/Rust is a localized swap.
   → whisper.cpp transcript, Phase 36) and `ImageParser` (png/jpg/jpeg → OCR, Phase 38).
 - `VectorIndex` — cosine over SQLite-stored vectors (Phase 5) → `sqlite-vec`/HNSW later;
   hybridized with an FTS5 keyword pass + RRF in `rag.retrieve` (Phase 21).
+- `VisionAnalyzer` — the lazy vision sidecar (`services/vision/`) **or** absent: with no vision
+  model the Images screen shows a calm unavailable state. A dedicated multimodal `llama-server`
+  (own `LlamaServer`, NOT the chat `RuntimeManager`) — see "Image understanding — design record".
 
 ## Storage
 `node:sqlite` — built into the Node bundled by **Electron ^37** (Node 22.x). It is loaded via
@@ -2415,6 +2418,197 @@ without churning ~150 comments. Read a historical `§N` as:
 | §22-M4 | v1 permissions are a display summary; nothing executes | §1 (DS6) |
 
 
+## Image understanding — design record (Phases V1–V5, §1–§9)
+
+_Formerly `docs/image-understanding-plan.md` (folded in here at the Phase-V5 closeout,
+2026-06-20, per the CLAUDE.md doc-lifecycle rule; the full original working paper — every option,
+the four-branch V1 gate, the per-phase task lists — is in git history via `git log --follow` on
+that path). IMPLEMENTED 2026-06-20 across five phases on branch `image-understanding`: V1 research
+gate → V2 backend skeleton → V3 Images screen → V4 real runtime + idle teardown → V5 eval/docs.
+**§ numbers below are this record's; the in-code comments still cite the original PLAN's `§N` and
+its `RUNTIME-*`/`SEC-*`/`PROD-*`/`IPC-*`/`DIST-*` traceability tags — the §9 legend keeps those
+resolvable.** The feature: a 6th primary screen, **Images**, that answers a question about ONE
+local PNG/JPEG using a local vision-language model. It is **visual understanding**, distinct from
+OCR (tesseract.js, Documents) and from any image generation (never built)._
+
+### §1 Decisions
+
+| Decision | Choice | Why (short) |
+|---|---|---|
+| Runtime topology | **Dedicated lazy vision sidecar** (`services/vision/`, own `LlamaServer`) — Option A | Mirrors the embedder/reranker, keeps Chat undisturbed; composes `LlamaServer` directly so it does NOT inherit `CHAT_SERVER_ARGS` (RUNTIME-2). Option B (swap chat to multimodal) + Option C (mtmd CLI) rejected — §4 |
+| Image transport | **base64 `image_url` data-URL inlined into the loopback request — NO disk write, NO pin bump** | V1 gate #1 best case: `llama-server --mmproj` on b9585 answers `/v1/chat/completions` with a base64 image; the temp-file fallback (§12 of the plan) was NOT built |
+| Vision arg set (V1-resolved) | `--mmproj <projector>` + `--device none`; `--jinja` left default-ON; **`--reasoning-format` NOT passed** | Qwen2.5-VL is non-reasoning (emits no reasoning frames); CPU-pin avoids VRAM contention. `cache_prompt:true` caches the image prefill across follow-ups |
+| SSE reader | **Reuse `readChatSSE` unchanged** | V1: the streamed frames are byte-identical to text chat — streaming-by-default stands (no vision-specific reader, no poll fallback) |
+| Serialization | **Vision's OWN one-job latch + busy-REJECT** (not the chat slot arbiter) | A separate sidecar is not covered by `model-slot-arbiter`; chat + embedder + vision = 3 co-resident (RUNTIME-3). A 2nd analyze returns `busy`, never queued (IPC-3) |
+| Idle teardown | **Net-new SOFT idle teardown, default 120 000 ms** (2 min, §19.13 band; tuned V5) | The idle ~4.6 GB must not sit co-resident forever; cache_prompt makes the warm-window value small, so reclaim RAM promptly (RUNTIME-4 / model-benchmarks §8.3) |
+| Preview encoding | **`data:` URL only — NOT `blob:`** | Prod CSP `img-src 'self' data:` lists no `blob:` (`main/index.ts`); `data:` needs NO CSP change (SEC-1). ~33% base64 inflation, mitigated by downscaling first |
+| Image decode/downscale | **Browser APIs in the sandbox, no native dep** (`createImageBitmap` → 1536 px → re-encode) | No `sharp`/`jimp`; downscale is a real LATENCY lever (fewer image tokens ⇒ less CPU prefill) AND normalizes EXIF orientation |
+| Download topology | **Two atomic single-file `DownloadJob`s sharing one `modelId`** | Install = both GGUF + mmproj present + verified; avoids inventing cross-file progress / two-phase verify (DIST-1) |
+| Persistence | **Ephemeral renderer state only** — no DB writes, no auto-OCR, no corpus indexing | The image/question/answer live only in screen state (§3 non-goals); never persisted |
+| Model | **Qwen2.5-VL-3B-Instruct Q4_K_M + f16 mmproj** (Apache-2.0) | V1 winner: loads on b9585, reads a real German invoice; ~3.27 GB on disk, ~4.6 GB peak RSS (model-benchmarks §8.2) |
+
+### §2 Hard rules (these bound every choice)
+
+- **No cloud/telemetry; fully offline.** No hosted-AI API; the sidecar binds **`127.0.0.1` only**
+  (the offline guard exempts loopback). The green gate holds with **zero vision models** ⇒
+  `available:false`, the app launches, the full suite passes.
+- **No new native npm dependency.** Image decode/preview/downscale use only browser APIs in the
+  sandboxed renderer (`contextIsolation`/`sandbox` untouched; CSP unchanged — `data:`-only preview).
+- **No image/prompt/answer/OCR content in logs or audit.** The vision path writes **zero** audit
+  rows; errors to the renderer are friendly `VisionErrorCode`s, technical reasons to the local log
+  only (asserted by the §17-plan security sentinel, `tests/integration/vision-security.test.ts`).
+- **Never crash on missing assets.** No runtime / no model / incompatible ⇒ a calm unavailable
+  state. Status is **workspace-agnostic** (PROD-2 — no `'locked'` reason; weights aren't encrypted).
+
+### §3 b9585 facts this design relies on (V1, verified live on the PAID smoke drive)
+
+(Verified 2026-06-20 against the pinned tag; re-verify on the next pin bump.)
+
+- `llama-server --mmproj <file>` **loads multimodal cleanly** and answers `/v1/chat/completions`
+  with a **base64 `image_url` data-URL — no disk write** (gate #1, the best of the four branches).
+- `--jinja` is **default-ENABLED** on b9585, so the multimodal chat-template path is taken without
+  inheriting `CHAT_SERVER_ARGS`; `--reasoning-format` must be **left at default** for a non-reasoning
+  VLM; `--device none` CPU-pins (the embedder precedent).
+- The streamed frames are **byte-identical to text chat** → `readChatSSE` parses them unchanged
+  (verbatim sample pinned at `tests/fixtures/vision/vision-sse-sample.txt`; CI regression in
+  `tests/unit/vision-sse.test.ts`).
+- `cache_prompt:true` ⇒ the image prefill is **cached across follow-ups** (`cache_n:2812,
+  prompt_n:1` measured on the 2nd question) — the per-image thread pays the (slow CPU) prefill once.
+- Multimodal CLIs (`llama-mtmd-cli` etc.) are **also bundled** — Option C remains an unused fallback.
+
+### §4 Alternatives considered (and why not)
+
+| Alternative | Verdict |
+|---|---|
+| **Option B — swap the chat `RuntimeManager` to a multimodal chat model** | Rejected: disrupts Chat (stop/restart), forces the *chat* model to be multimodal, couples two features. Revisit only if one bundled model serves both well |
+| **Option C — one-shot `llama-mtmd-cli` per spawn** (transcriber-style) | Fallback only if server `--mmproj` lacked multimodal; needs a temp image file (CLI takes a path) + the `.parse-vision` shred posture. V1 made it unnecessary (Option A works) |
+| **Runtime-pin bump** | Avoided — gate #1 succeeded on the existing pin; a bump would be a major reviewed change (`model-policy.md` "To bump the release") |
+| **`blob:` preview** (`URL.createObjectURL`) | Rejected: CSP-blocked (no `blob:` in `img-src`); would need a reviewed dev+prod CSP edit (a §0 red line). `data:` chosen (SEC-1) |
+| **Queue a 2nd analyze** | Rejected: busy-REJECT keeps `ImageJobState` + the §5.6 copy simple for marginal benefit (IPC-3) |
+| **One download job, two files** | Rejected: needs cross-file progress aggregation + two-phase verify + partial-failure recovery that `downloads.ts` lacks (DIST-1) |
+| **A native image lib** (`sharp`/`jimp`/`canvas`) | Rejected: browser APIs cover decode/downscale/EXIF in the sandbox with zero deps |
+
+### §5 Design as built (the module map + the flow)
+
+- **`shared/manifest.ts`** — `vision` role; an optional **`mmproj` projector sub-block** (`MmprojSpec`,
+  required iff `role: vision`); the top-level `download` + `mmproj.download` validation share one
+  `validateDownloadSubBlock` (https-only, a real download hash equals the real file hash); optional
+  informational `input_modalities`. Unknown keys ignored ⇒ older builds treat a vision manifest as
+  `unsupported` (forward-compatible).
+- **`services/models.ts`** — vision install state = **both files present + verified**: `mmprojPath` +
+  `manifestFiles` thread through `computeInstallState` (precedence `unsupported → missing → checksum_failed
+  → installed`), the lazy `skipHash` path, and the `(path,size,mtime)` two-tier checksum cache.
+- **`services/vision/`** — `status.ts` (`getVisionStatus`: no-runtime → no-model → incompatible →
+  available; cheap, lazy, lock-safe), `limits.ts` (byte cap ~20 MiB env-overridable + extension/MIME
+  guards + `validateAnalyzeRequest` — the SEC-3 main-side re-validation `importDocuments` lacks),
+  `runtime.ts` (`VisionRuntime` on `LlamaServer` directly with the §1 args; lazy single-flight
+  `ensureStarted`; `analyze` builds the base64 `image_url` request + `readChatSSE`; the §6
+  idle-teardown interlock), `index.ts` (`VisionService`: ephemeral job map, own one-job
+  serialization, busy-reject, cancel via AbortController, lock/quit `stop()`).
+- **`ipc/registerImagesIpc.ts`** — `images:getStatus|chooseImage|readBytes|analyze|cancel|getJob` +
+  `STREAM.imgToken/imgDone/imgError(jobId)`. `getStatus` needs no unlock; file/runtime handlers
+  `requireUnlocked`. `chooseImage` returns `{path,name,sizeBytes}` (IPC-2); `readBytes`/`analyze`
+  re-validate extension + byte cap in MAIN (SEC-3). `imageReadBytes` is the PICKER path only —
+  drag-drop reads the `File` bytes directly (IPC-1).
+- **Renderer** — `renderer/screens/ImagesScreen.tsx` (the §5.6-plan state machine + the ephemeral
+  per-image thread, Chat-style stream subscribe/unsubscribe, busy-reject, focus re-check) and
+  `renderer/images/` (`ImageDropZone`, `ImagePreview` = `data:` URL, `QuestionComposer`,
+  `AnswerThread`, `VisionUnavailable`, `decode.ts` = `createImageBitmap({imageOrientation:'from-image'})`
+  → downscale longest side to 1536 → re-encode to the input MIME on `OffscreenCanvas`/`<canvas>` →
+  `data:` URL, EXIF stripped by the draw, best-effort fallback to original bytes). Images is the
+  **6th primary nav destination** — `design-guidelines.md §2` updated to "6 primary + 1 utility".
+- **Lifecycle wiring** — `ctx.vision` built once in `main/index.ts`; torn down on `will-quit` and on
+  workspace **LOCK** (in `registerWorkspaceIpc`, beside `ctx.embedder.suspend()` — its KV cache holds
+  the decoded image, so it must die before the vault re-encrypts).
+
+**Flow:** drop/choose a PNG/JPEG → renderer decodes/downscales (EXIF-normalized) → `imageAnalyze`
+ships the bytes to main once → `VisionService` validates + serializes → `VisionRuntime` lazily starts
+the sidecar (cold) → base64-inlines the image into one loopback request → streams the answer back via
+`STREAM.img*` → idle teardown reclaims the RAM after 2 min.
+
+### §6 The idle-teardown interlock (RUNTIME-4 — the net-new V4 work)
+
+`e5.ts` is the precedent for lazy-start/`startFailed`/no-orphan, but it has **no idle timer**, so the
+interlock is genuinely new (and races: a teardown firing concurrently with `ensureStarted`/`analyze`).
+As built in `runtime.ts`:
+
+- An `inFlight` counter + an `idleTimer` + an `idleTeardownPromise`. The timer is **cancelled on every
+  `ensureStarted()`/`analyze()` entry** and **rearmed only when the LAST in-flight analyze settles**
+  (`inFlight===0`).
+- The idle teardown is **SOFT** — it kills the child + nulls `this.server` but does **NOT** latch
+  `stopped`, so the next analyze cold-starts cleanly. It is **guarded** against `stopped`/`starting`/
+  `inFlight>0` (never tears down under a running job); an analyze arriving mid-teardown sees
+  `server===null` and cold-starts a fresh, independent child (the old one finishes stopping on its own).
+- `stop()` (permanent — lock/quit/cancel) cancels the timer + **awaits an in-flight soft teardown** so
+  no child orphans on quit; the timer is `unref()`-ed so it never blocks a clean exit.
+- Default **120 000 ms** (tuned V5 — model-benchmarks §8.3), env `HILBERTRAUM_VISION_IDLE_MS`.
+
+### §7 Security & privacy posture (additive within the boundaries)
+
+Renderer stays sandboxed (no Node/network); main owns all file I/O + the sidecar call. **CSP
+unchanged** (`data:`-only preview, SEC-1). Sidecar **loopback-only**; no remote origin in
+`connect-src`/`img-src`. **No image/prompt/answer content in logs/audit** — the vision path records
+**zero** audit rows (the `audit-ipc.test.ts`-style sentinel proves it on success + failure paths).
+The image is attacker-controllable, so the byte/extension/dimension caps mirror `ingestion/limits.ts`;
+the path-trust stance matches `importDocuments` (accepted residual) but the extension+cap re-check is
+net-new code (SEC-3). No temp file on the recommended path ⇒ no shred concern. Engine-binary trust is
+unchanged (no new binary on the recommended path).
+
+### §8 Limits & RAM (PROD-1 / known-limitations)
+
+- **CPU prefill of a full-res image is SLOW** (~52 s for ~2800 image tokens off USB, ~12 tok/s
+  decode) — the §1 downscale-to-1536 is a real latency lever, GPU is the §19.11 lever; `cache_prompt`
+  blunts follow-ups but the FIRST question per image pays it.
+- **RAM peak is co-resident** — chat + E5 + vision = three sidecars; the idle teardown bounds the
+  *window*, not the active-use peak. A 12B chat (~7 GB) + vision (~4.6 GB) + embedder ⇒ **>16 GB**;
+  the `recommended_min_ram_gb` / RAM-best-fit gate keeps vision off small tiers (model-benchmarks §8.4).
+- **MVP scope:** single image only (no compare/video/camera), ephemeral (no persistence), PNG/JPEG
+  only (WEBP deferred), ctx capped at 4096 (vs train 128000). Full list in `known-limitations.md`.
+
+**Commercial-drive gate (closed — verifies BOTH files; DIST-2).** `assertCommercialDrive` →
+`verifyDriveModels` now iterates the same `manifestFiles` set (GGUF + `mmproj`) that
+`computeInstallState` requires, folding to one per-model row that reports the FIRST non-`verified`
+file — so a half-installed vision drive (good GGUF, missing/corrupt projector) fails `weightsVerified`
+and cannot pass the sell gate. `buildChecksumsJson` likewise captures one entry per file. The download
+side matches: `planModelDownloads` + `fetch-models.{ps1,sh}` fetch both files (DIST-1). Residual: the
+in-app `DownloadManager` (UI) still drives only `tasks[0]` (the GGUF); the projector is the DIY scripts'
+job until a `role: vision` manifest ships. No `role: vision` manifest is committed yet, so nothing
+vision actually ships today.
+
+### §9 §-anchor legend (historical plan citations)
+
+The plan was folded into §1–§8 above, but in-code comments + the kept docs still cite the **original
+plan's** `§N` and its bracketed traceability tags. Those were never renumbered; this legend keeps them
+resolvable (the doc-lifecycle "stable anchors" intent) without churning the comments. Read a historical
+anchor as:
+
+| Historical anchor | Meaning | Now lives in |
+|---|---|---|
+| plan §7 / §10 | Option A sidecar + the `services/vision/` module design | §1 + §5 |
+| plan §9 / §9.1–§9.4 | IPC/preload surface + the job pattern (busy-reject) | §5 (+ IPC-1/2/3) |
+| plan §5.1–§5.6 | The renderer component anchors cited in `screens/images/*.tsx` (VisionUnavailable §5.1, ImageDropZone §5.2, ImagePreview/QuestionComposer §5.3, AnswerThread §5.4, the §5.6 state matrix) | §5 / the §4 state matrix |
+| plan §11 | Renderer components + decode/downscale/EXIF algorithm | §5 |
+| plan §12 / §13 | Privacy posture (ephemeral, no content in log/audit) + security model | §2 + §7 |
+| plan §14 | Caps + RAM co-residency | §8 |
+| plan §15 / §17 | Eval/benchmark + the test plan | model-benchmarks §8 + the vision test suite |
+| plan §19.10 | Streaming-by-default (the SSE channels) | §1 + §3 |
+| plan §19.11 | GPU vs CPU lever | §1 + §8 |
+| plan §19.13 | Idle-teardown timeout (2–5 min → tuned 120 s) | §1 + §6 |
+| `RUNTIME-2` | Composes `LlamaServer` directly; V1-resolved arg set | §1 + §3 |
+| `RUNTIME-3` | Vision's own one-job serialization (3 co-resident sidecars) | §1 + §5 |
+| `RUNTIME-4` | The net-new idle-teardown interlock + its races | §6 |
+| `SEC-1` | `data:`-only preview; CSP unchanged | §1 + §7 |
+| `SEC-3` | Main-side extension+cap re-validation (net-new) | §5 + §7 |
+| `PROD-1` | RAM co-residency peak (idle bounds the window, not the peak) | §8 |
+| `PROD-2` | Workspace-agnostic status (no `'locked'` reason) | §2 |
+| `IPC-1/2/3` | Drag-drop skips `readBytes`; `{path,name,sizeBytes}`; busy-reject | §5 |
+| `DIST-1` | Two download jobs share one modelId | §1 + §5 |
+
+**History:** Phases V1–V5 on branch `image-understanding` (2026-06-20); commits `1917f55` (V1 gate),
+`6d66e16` (V2), `688d49b` (V3), `27ff275` (V4), + the V5 closeout. Full original plan:
+`git log --follow docs/image-understanding-plan.md`.
+
+
 ## Data flow (RAG)
 import → extract text → chunk → embed (local) → store vectors → on question: embed query →
 cosine top-k ⊕ FTS5 keyword top-k (RRF fusion) → optional rerank → build grounded prompt with
@@ -2438,6 +2632,7 @@ cosine top-k ⊕ FTS5 keyword top-k (RRF fusion) → optional rerank → build g
 | `services/collections.ts` | document organization (rag-design §13, architecture "Document organization") |
 | `services/transcriber/` | whisper.cpp sidecar — audio transcription / dictation (Phase 36) |
 | `services/ocr/` | tesseract OCR engine — scanned-PDF / photo text (Phase 38) |
+| `services/vision/` | dedicated multimodal llama.cpp sidecar — Images screen (image understanding, V1–V5) |
 | `services/downloads.ts` + `services/runtime-download.ts` | in-app model + engine downloader (Phase 18) |
 | `services/benchmark.ts` | 7.3 benchmarker |
 | `services/policy.ts` | 7.10 privacy/offline |

@@ -1,6 +1,6 @@
 # HilbertRaum — Troubleshooting
 
-_Last updated: 2026-06-17 (added Skills entries: drop-ins install disabled, import rejections, the "Needs newer app" badge, and "the skill tool found nothing"; previously: scanned-PDF answer updated for the OCR feature; supported types extended for audio + photos)_
+_Last updated: 2026-06-20 (added Images entries: the screen needs a vision model; asking about an image is slow). Previously: Skills entries (drop-ins install disabled, import rejections, the "Needs newer app" badge, "the skill tool found nothing"); scanned-PDF answer updated for the OCR feature; supported types extended for audio + photos)_
 
 Quick answers to common situations. Everything here is normal, local, and offline — none of
 these steps require the internet.
@@ -222,6 +222,36 @@ nothing rather than guessing. A few things to check:
 - **Unusual layouts read conservatively.** Bank/invoice formats vary a lot; the tools quote only the
   rows and totals they can parse cleanly and skip the rest. That's deliberate honesty, not a failure —
   a partial result is better than a wrong one.
+
+---
+
+## The Images screen says it needs a vision model
+
+The **Images** screen ("ask about an image") uses a separate **vision model** that may not be on
+your drive. If the screen shows a calm *"Image understanding needs a local vision model on this
+drive"* card, open **AI Model** (the screen's button takes you there) and add a vision model — it's
+an optional download, like the larger chat models, so internet access must be enabled in Settings
+(see the User Guide §5). This is **not** OCR: for a scanned PDF or a document you want to search,
+use the document's **Make searchable (OCR)** action instead (above).
+
+---
+
+## Asking about an image is slow / "Starting the vision model…"
+
+That's expected the first time, and on the first question about a large picture:
+
+- **The first question** loads the vision model into memory (a few seconds) and then reads the whole
+  picture — reading a full-resolution image is real work for a laptop processor. **Follow-up**
+  questions about the *same* image are quicker.
+- **A graphics card speeds it up** where available; otherwise it runs on the processor.
+- **Memory matters.** The vision model needs about **4–5 GB** on its own, on top of your chat model.
+  On a machine with limited RAM, close other heavy apps, or use a smaller chat model while you work
+  with images. If your laptop is tight on memory, the AI Model screen won't offer a vision model it
+  can't run.
+- **One image, one question at a time.** You can only ask one question at a time — wait for the
+  current answer (or press **Stop**) before asking the next; a question asked while one is still
+  running is declined, not queued. The picture and answers are never saved — they clear when you
+  remove the image or leave the screen.
 
 ---
 

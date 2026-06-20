@@ -6,6 +6,286 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-20 — **Image-understanding V6 — pre-merge audit remediation SHIPPED (the V5 audit `docs/image-understanding-audit-2026-06-20-v5.md`).**
+Branch `image-understanding`. The V5 audit verdict was "safe to merge, no CRITICAL, no active HIGH"; this entry closes the two LATENT
+HIGHs + the MEDIUM/LOW/NIT quality gaps so the branch is clean before a real vision drive ships. **No §0 redline touched; suite green
+with zero vision models. As built:**
+- **DIST-1 (HIGH, latent) — the download side now fetches BOTH files of a vision model.** `assets.ts` `planModelDownloads` emits a SECOND
+  `ModelDownloadTask` (same `modelId`) from `manifest.mmproj.download → mmproj.local_path`, verified against `mmproj.sha256` (the "two
+  DownloadJobs sharing one modelId" topology, plan §8.3) — factored through a shared `planOneFile` so the GGUF + projector share one
+  license-gate/present-verified state machine. `scripts/fetch-models.{sh,ps1}` taught the same: a block-scoped `mmproj:` parse + a
+  per-file `handle_file`/`Invoke-HandleFile` that mirrors the atomic `.part`-stage verify-before-trust; the model-level license gate now
+  fires once and only when a file actually needs the network. **In-app `downloads.ts` still drives `tasks[0]` (the GGUF) only** — the
+  projector is the DIY-scripts' job (the canonical two-file path); documented as a residual since no vision manifest ships yet.
+- **DIST-2 (HIGH, latent) — the verify/generate side iterates both files.** `models.ts` `manifestFiles` is now EXPORTED (GGUF + mmproj,
+  each `{path, sha, localPath}`); `drive.ts` `verifyDriveModels` folds per-file results to one per-model row reporting the FIRST
+  non-`verified` file (so a half-installed vision drive — good GGUF, missing/corrupt projector — fails `weightsVerified`), and
+  `buildChecksumsJson` emits one entry PER FILE. `assertCommercialDrive` is unchanged (it delegates to `verifyDriveModels`).
+  The no-Node DIY mirror `verify-models.{sh,ps1}` was taught the same (block-scoped `mmproj:` parse → a per-file `verify_file`/
+  `Write-WeightResult`; `--strict`/`-Strict` now requires BOTH files VERIFIED; `--generate`/`-Generate` emits an entry per file).
+- **TEST-1/2/3/4 (test strength).** TEST-1: the security sentinel is now non-vacuous — the answer actually streams through the system
+  then the analyze fails, asserting the real `index.ts` catch logs ONLY a content-free `{jobId, error}` (exact key set), plus a
+  success-path "answer exists but never reaches a log" check. TEST-2: a NET-NEW injectable idle clock (`IdleClock`/`idleClock` option,
+  default real `setTimeout`) makes the RUNTIME-4 races DETERMINISTIC — fire the teardown on demand + gate a child's exit to hold the
+  soft-teardown window open; the (b) mid-teardown cold-start, (c) `stop()`-awaits-`idleTeardownPromise`, (e) `unref`, and (a) stale-fire
+  inFlight-guard branches now redden if the guard is removed. TEST-3: a vision analyze invokes no OCR engine (`createSelectedOcrEngine`
+  spy) and writes nothing under the drive root. TEST-4: a new jsdom `decode.test.ts` covers the client `unsupportedType` (null MIME) +
+  over-dimension `tooLarge` rejects.
+- **SEC-1 / UX-NIT-1 / DOC-1 / DOC-2 (LOW/NIT).** SEC-1: the `readBytes` stat-failure log now carries `{ext, code}` (errno), never the
+  path-bearing `String(err)`. UX-NIT-1: the dead `images.answer.clear` key dropped from `en.ts` + `de.ts`. DOC-1: `user-guide.md` +
+  `troubleshooting.md` corrected — a second question is busy-REJECTED (declined, not queued). DOC-2: a `plan §5.1–§5.6` row added to the
+  `architecture.md` §9 anchor legend.
+**Data contracts (new):** a vision model's `planModelDownloads` now returns TWO tasks (GGUF first, then mmproj); `manifestFiles` is the
+shared exported GGUF+mmproj file set used by install AND verify; `buildChecksumsJson` emits one entry per file; the `fetch-models` +
+`verify-models` scripts (both `.sh`/`.ps1`) all handle both files. **Residual risk:** the in-app `DownloadManager` (UI) remains
+single-file for vision (GGUF via `tasks[0]`) — the `fetch-models` scripts are the two-file download path until a vision drive ships; this
+is the ONLY remaining single-file spot, and it's latent (no `role:vision` manifest committed). **Verification:** `npm test`
+**1984 passed / 30 skipped (162 files)**; `npm run typecheck` clean; all four scripts smoke-verified on a synthetic vision manifest
+(`fetch-models` plans both files; `verify-models --strict` fails a missing projector, passes when both present, `--generate` emits two
+entries). **Next:** branch `image-understanding` ready to merge. **(prior entries below.)**_
+
+_2026-06-20 — **Image-understanding Phase V5 (evaluation, hardening, docs — the FINAL phase) SHIPPED — the feature is COMPLETE; branch ready to merge. There is no V6.**
+Branch `image-understanding`, implementing the (now-folded) image-understanding plan §16 Phase V5. **The closeout: the env-gated
+manual smoke harness + a tiny synthetic fixture, the idle-timeout tuned from the V1 numbers, the §17 matrix re-verified, and the
+plan folded into `architecture.md` + deleted — all V1–V4 decisions consumed, not re-litigated; no production code behaviour change
+beyond the tuned constant.** **As built:**
+- **`tests/manual/vision-smoke.test.ts` — the `HILBERTRAUM_VISION_SMOKE` manual harness (NET-NEW).** Env-gated exactly like
+  `gpu-smoke`/`rerank-smoke` (`describe.skipIf(!enabled)`): **SKIPPED — and green — when the env var is unset**, so CI/the green-gate
+  never spawns a real binary. When pointed at a drive root (the PAID smoke drive) it finds the off-repo `models/vision/` GGUF + mmproj,
+  builds a REAL `VisionRuntime`, and drives it end-to-end: cold start (`--mmproj` loads multimodal) → analyze the committed fixture →
+  STREAM the answer (real SSE → `readChatSSE`) → warm follow-up (the `cache_prompt` reuse) → RUNTIME-4 idle teardown (small test idle
+  window) → cold restart. Logs the headline numbers (cold-start+TTFA, decode tok/s); peak RSS co-resident stays the
+  `scripts/measure-peak-rss.ps1` job. **No multi-GB weights / user images committed.**
+- **`tests/fixtures/vision/chart.png` (1734 bytes) + `make-fixtures.mjs` — the ONLY new repo image bytes.** A SYNTHETIC, content-free
+  320×240 bar chart drawn procedurally by the committed generator (license-clean by construction — we author it; no PII, no real
+  document). `.gitattributes` already treats `tests/fixtures/**` + `*.png` as binary.
+- **Idle-timeout TUNED: `DEFAULT_VISION_IDLE_MS` 180 000 → 120 000 ms (2 min — the LOWER end of the §19.13 2–5 min band).** Rationale
+  (now in the constant's doc comment + `model-benchmarks.md` §8.3): the follow-up prefill is already `cache_prompt`-cached, so a warm
+  sidecar only saves the seconds-scale model *load* — while the idle ~4.6 GB sits co-resident with a 12B chat (PROD-1 pushes a real
+  machine >16 GB), so reclaiming it sooner is the higher-value trade. `runtime.ts` constant + the `idleTimeoutMs` option doc updated;
+  no test asserted the old default (every test passes `idleTimeoutMs` explicitly), so the change is behaviour-safe.
+- **§17 matrix re-verified, NOT duplicated.** Status/limits/manifest/IPC/preload/renderer/SSE-fixture/security-sentinel are all covered
+  V2–V4 (the V4 `vision-security.test.ts` loopback + no-content-in-log/audit sentinel satisfies §17's security row on success + failure
+  paths); the ONLY genuinely missing §17 item was the env-gated runtime smoke — now added. No new CI test was needed or written.
+- **Docs — the doc-lifecycle execution.** The plan was **condensed into `architecture.md` "Image understanding — design record"
+  §1–§9** (decisions table · hard rules · the V1-resolved b9585 facts · alternatives · design-as-built module map+flow · the RUNTIME-4
+  idle interlock · security/privacy · limits+RAM+the commercial-gate deferral · **a §9 §-anchor legend** keeping the in-code `§N`/
+  `RUNTIME-*`/`SEC-*`/`PROD-*`/`IPC-*`/`DIST-*` citations resolvable, the Skills-record precedent) and **`docs/image-understanding-plan.md`
+  DELETED** (`git rm`; full original in history). Overview screen list + Swappable-interfaces (`VisionAnalyzer`) + the module map gained
+  vision. **`model-policy.md`:** the `vision` role + `mmproj` projector schema + RAM tiering + the **Qwen2.5-VL-3B-Instruct
+  `license_review` = approved (Apache-2.0)** against the upstream base `Qwen/Qwen2.5-VL-3B-Instruct` (ggml-org GGUF, mechanical-conversion
+  provenance posture). **`drive-layout.md`** (`models/vision/` + `model-manifests/vision/` in both layout sketches), **`packaging.md`**
+  (the two-`DownloadJob`-sharing-one-`modelId` topology + the `vision-smoke` harness-matrix row + a pre-ship checklist item), **`known-limitations.md`**
+  (CPU prefill latency + the 1536 downscale lever, RAM co-residency PROD-1 >16 GB, single-image/no-persistence, OCR-vs-vision separation,
+  ctx-4096, the mmproj-not-yet-in-the-sell-gate note), **`user-guide.md`** (new **§8 "Ask about an image"**, subsequent sections renumbered
+  9–13, the nav + cross-ref fixed), **`troubleshooting.md`** (two Images entries), **`model-benchmarks.md` §8** (the V1-measured numbers +
+  the harness protocol). **Commercial-drive gate: DEFERRED, not half-wired** — no `role: vision` manifest ships on a sold drive, so
+  `assertCommercialDrive` is unchanged; the decision + the future extension (verify the projector alongside the GGUF) is recorded in the
+  design record §8 + known-limitations.
+**§0 honored:** no cloud/telemetry; the harness is env-gated + skipped in CI (no real binary spawned in a CI-run test); only a tiny
+synthetic license-clean fixture committed (never weights/user data); loopback-only + no-content-in-log/audit unchanged (the V4 sentinel
+still passes). **Data contracts:** none changed. **Verification:** `npm test` (apps/desktop) **1965 passed / 30 skipped (177 files)** —
+full-suite-guard active (the new manual file is collected + skipped), **green-gate holds with zero vision models** (`available:false`,
+app launches); `npm run typecheck` + `npm run build` clean. **Next:** the image-understanding feature is **CLOSED OUT** — branch
+`image-understanding` ready to merge to `master`. **(prior entries below.)**_
+
+_2026-06-20 — **Image-understanding Phase V4 (real local vision runtime — hardening + wiring) SHIPPED — V5 (eval/benchmark/docs) is next.**
+Branch `image-understanding`, implementing [`docs/image-understanding-plan.md`](docs/image-understanding-plan.md) §16
+Phase V4. **A hardened, tested local vision sidecar with the net-new idle-teardown interlock + lock/quit/cancel teardown
+wired, the green-gate intact (zero vision models ⇒ `available:false` and the suite stays green).** All V1-resolved
+decisions are consumed, not re-litigated; no renderer change. **As built:**
+- **`services/vision/runtime.ts` — the heart of V4 (RUNTIME-4 idle-teardown interlock, NET-NEW; `e5.ts` has no idle
+  timer).** Real `ensureStarted` single-flight (concurrent callers share one start promise) keeps the V2 `startFailed`
+  latch + `stopped` guard; `analyze` is unchanged on the wire (base64 `image_url` data-URL, `cache_prompt:true`,
+  `readChatSSE` reused — V1-confirmed) but now wrapped by `runAnalyze` so the public `analyze` can drive the interlock.
+  **Interlock:** an `inFlight` counter + an `idleTimer` (default **~3 min**, env `HILBERTRAUM_VISION_IDLE_MS`, §19.13
+  tune-later) + an `idleTeardownPromise`. The timer is **cancelled on every `ensureStarted()`/`analyze()` entry** and
+  **rearmed only when the LAST in-flight analyze settles** (`inFlight===0`). The idle teardown is a **SOFT** teardown
+  (kills the child, nulls `this.server`, but does **NOT** latch `stopped`) so the next analyze cold-starts cleanly; it is
+  **guarded** against `stopped`/`starting`/`inFlight>0` so it can never fire under a running job, and an analyze arriving
+  mid-teardown sees `server===null` and cold-starts a **fresh, independent** child (the old one finishes stopping on its
+  own). `stop()` (permanent — lock/quit/cancel) now also **cancels the idle timer + awaits an in-flight soft teardown**
+  so no child orphans on quit; the idle timer is `unref()`-ed so it never blocks a clean exit. The §12 temp-file fallback
+  was **not** built (V1 = base64 no-disk).
+- **`services/vision/index.ts`** — `VisionService.stop()` now **aborts any in-flight job FIRST** (so it ends `cancelled`,
+  not a scary `runtimeFailed`) then tears the runtime down via a typed optional `VisionAnalyzer.stop?()`; the orchestrator
+  discards the runtime, so the next analyze rebuilds a fresh one (no `suspend()`/latch distinction needed — RUNTIME-3
+  one-job latch + IPC-3 busy-reject from V2 are unchanged and re-verified under the real path).
+- **Lifecycle wiring** — `context.ts` gains `ctx.vision?: VisionService`; `main/index.ts` **builds it once** (so the
+  teardown paths can reach it) + adds `ctx?.vision?.stop()` to the `will-quit` `Promise.allSettled`; `registerWorkspaceIpc`
+  **stops it on workspace LOCK** beside `ctx.embedder.suspend()` (its llama-server KV cache holds the decoded image + prompt,
+  so it must die before the vault re-encrypts). `getVisionStatus` stays **workspace-agnostic** (PROD-2 — no `'locked'`
+  reason); the screen owns the lock gate, the sidecar teardown is independent.
+- **Caps** — the renderer dimension cap (V3 `decode.ts`, 4096 hard / 1536 downscale) + the main-side byte/extension cap
+  (`limits.ts`, SEC-3) are both already on the real path; not duplicated.
+**§0 honored:** loopback-only (sentinel asserts every fetch host is 127.0.0.1), **no image/prompt/answer content in
+logs/audit** (sentinel asserts absence + that vision writes ZERO audit rows), no native dep, CSP untouched.
+**Data contracts:** none changed (`ctx.vision` is an internal main-process handle; `images:*` IPC + `STREAM.img*` +
+`VisionStatus`/`ImageJob` as-is). **Verification:** `npm test` (apps/desktop) **1965 passed / 29 skipped (176 files)** —
+full-suite-guard active, green-gate holds; `npm run typecheck` + `npm run build` clean. New tests:
+`tests/integration/vision-runtime.test.ts` (9 — single-flight, startFailed latch, cancel-aborts-fetch, no-orphan-on-stop,
+idle teardown + cold restart, no-teardown-while-running, timer-reset, stop-cancels-timer), `tests/unit/vision-sse.test.ts`
+(2 — SSE regression on the V1 fixture + partial-UTF-8-across-frames), `tests/integration/vision-security.test.ts` (2 —
+loopback-only + no-content-in-log/audit sentinel, success + failure paths), + a lock-teardown case in `workspace-ipc.test.ts`
+and a `service.stop()` abort case in `images-ipc.test.ts`. **Risks/notes:** the idle-timeout default (180 000 ms) is a
+placeholder in the §19.13 2–5 min band — tune in V5 with real numbers; the RUNTIME-4 races are covered by deterministic
+small-timeout tests (the documented vitest load-flakiness can surface a transient unrelated failure under heavy parallel
+load — a re-run is green). **Next:** V5 — benchmark fixtures + the `HILBERTRAUM_VISION_SMOKE` manual harness, model-policy/
+known-limitations docs, fold the plan into `architecture.md` + delete the plan file, commercial-drive gates. **(prior entries below.)**_
+
+_2026-06-20 — **Image-understanding Phase V3 (Images screen UI) SHIPPED — V4 (real runtime hardening) is next.**
+Branch `image-understanding`, implementing [`docs/image-understanding-plan.md`](docs/image-understanding-plan.md)
+§16 Phase V3. **A wired, tested Images screen that drives the V2 backend and shows the calm unavailable state
+with zero vision models present — renderer UI only, no V4 runtime work.** All V1/V2 locked decisions are encoded.
+**As built:**
+- **Nav / routing / glyph / IA** — `'images'` added to `ScreenId` + `resolveNavTarget` (`renderer/navigation.ts`);
+  `{ id:'images', labelKey:'nav.images', icon:'image' }` added to `NAV_TOP` **after Documents, before AI Model**
+  + the render branch `{screen==='images' && <ImagesScreen onNavigate={navigate}/>}` (`renderer/App.tsx`); a new
+  `'image'` glyph (Feather frame+sun+mountain) in `IconName`/`GLYPHS` (`renderer/components/Icon.tsx`). **IA
+  honesty:** this is a genuine **6th primary destination** — `docs/design-guidelines.md` §2 updated to "6 primary +
+  1 utility" (was 5); `InformationArchitecture.test.tsx` (7 real destinations, nav list now Home·Chat·Documents·
+  **Images**·AI Model·Skills‖Settings) + `rail-labels.test.ts` (nav.images, Images/Bilder fit) updated.
+- **i18n** — `nav.images` (EN "Images" / DE „Bilder") + the full `images.*` block (title/body, reason-adaptive
+  `avail.*`, `locked`, `drop.*`, `preview.*`, the six `chip.*` label+prompt pairs, `composer.*`, `answer.*`,
+  `err.*`) added to **both** `shared/i18n/en.ts` and `de.ts` (German informal „du", glossary-consistent; parity
+  green — typecheck enforces it).
+- **`renderer/screens/ImagesScreen.tsx`** — owns the §5.6 state machine (unavailable/empty/selected/
+  starting/analyzing/answered + every error row) and the **ephemeral** per-image thread; fetches
+  `imageGetStatus()` on mount + **re-checks on window `focus`** (a model may have been installed via AI Model);
+  defensive `getAppStatus().workspaceReady` lock posture (the app shell already gates lock globally). Streaming
+  mirrors Chat: `imageAnalyze` → subscribe `onImageToken`/`onImageDone`/`onImageError`, busy-reject (no enqueue),
+  Stop=`imageCancel`, new-image-mid-analysis cancels + resets the thread, unmount tears down. Friendly codes only
+  (no raw model/runtime text); `data:`-preview only (CSP untouched).
+- **`renderer/images/`** (mirrors `renderer/chat/`) — `ImageDropZone` (drag-drop + "choose an image", multi-drop
+  reject, keyboard-activatable), `ImagePreview` (`data:` URL, filename/dims/size, Remove/Replace), `QuestionComposer`
+  (auto-grow textarea, Enter=send/Shift+Enter=newline, suggestion Chips fill-don't-auto-send), `AnswerThread`
+  (ephemeral turns, ambient "Generated locally…" note, streaming caret + Stop, friendly error/stopped rows),
+  `VisionUnavailable` (§5.1 reason-adaptive `EmptyState`, CTA→`onNavigate('models')`, OCR pointer), `decode.ts`
+  (the §11 algorithm — `createImageBitmap({imageOrientation:'from-image'})` → downscale longest side to 1536 →
+  re-encode to input MIME (JPEG q0.9) on `OffscreenCanvas`/`<canvas>` → `data:` URL; EXIF stripped by the canvas
+  draw; best-effort fallback to original bytes; **no native dep**; injectable as the `decodeImpl` test seam), +
+  `index.ts` barrel. CSS for the drop zone + two-pane workspace added to `renderer/styles.css`.
+**§0 honored:** no cloud/telemetry, **no new native npm dep** (browser APIs only), sandbox/CSP untouched
+(`img-src 'self' data:`), no image/prompt/answer content in logs. **Data contracts:** none changed (consumes the
+V2 `images:*` IPC + `STREAM.img*` + `VisionStatus`/`ImageAnalyzeRequest`/`ImageJob` as-is). **Verification:**
+`npm test` (apps/desktop) **1950 passed / 29 skipped (173 files)** — full-suite-guard active; **green-gate holds
+with zero vision models** (the screen shows the calm `VisionUnavailable` card and the app launches); `npm run
+typecheck` + `npm run build` clean. New test: `tests/renderer/ImagesScreen.test.tsx` (12 — unavailable/empty/
+selected/streaming/error/empty-response/chip-fills-composer/Remove-resets/new-image-cancels/Stop), plus the
+IA + rail-labels updates. **Next:** V4 — real `VisionRuntime` `ensureStarted`/`analyze` (V1-resolved args),
+idle-teardown interlock, lock-teardown wiring, renderer dimension cap. **(prior entries below.)**_
+
+_2026-06-20 — **Image-understanding Phase V2 (backend skeleton) SHIPPED — V3 (renderer UI) is next.**
+Branch `image-understanding`, implementing the (V1-cleared) [`docs/image-understanding-plan.md`](docs/image-understanding-plan.md)
+§16 Phase V2. **A wired, tested backend skeleton that reports `available:false` with no vision model present — no
+renderer UI yet.** All V1 locked decisions are encoded, not re-litigated. **As built:**
+- **`shared/manifest.ts`** — `vision` added to the role set; a new optional **`mmproj` projector sub-block**
+  (`MmprojSpec`: `local_path`/`sha256`/optional `download`), validated when present and **required iff
+  `role: vision`**; the top-level `download` + `mmproj.download` validation is now one shared
+  `validateDownloadSubBlock` (https-only L-2; a real `mmproj.download.sha256` must equal a real
+  `mmproj.sha256`); optional informational `input_modalities`. Unknown keys still ignored (forward-compatible).
+- **`services/models.ts`** — vision install state = **both files present + verified**. New `mmprojPath` +
+  `manifestFiles` (GGUF + projector) thread through `computeInstallState` (precedence unchanged: unsupported →
+  missing(either) → checksum_failed(either) → installed), the lazy `skipHash`/RT-3 path, and `pendingHashBytes`;
+  the two-tier checksum cache keys each file by `(path,size,mtime)`, so the projector is hashed once like the GGUF.
+- **`services/drive.ts`** + both `prepare-drive.{ps1,sh}` — `models/vision/` + `model-manifests/vision/` added to
+  `DRIVE_LAYOUT_DIRS` / the script dir lists (manifests still discovered recursively — no discovery change).
+- **`shared/types.ts`** — `VisionStatus` (`VisionUnavailableReason = no-model|no-runtime|incompatible`, **NO
+  `'locked'` — workspace-agnostic, PROD-2**), `ImageAnalyzeRequest`, `ImageJobState`, `ImageJob`, `VisionErrorCode`
+  (`tooLarge|unsupportedType|decodeFailed|runtimeFailed|emptyResponse|cancelled|busy`). `ModelInfo.role` gains `vision`.
+- **`shared/ipc.ts` + `preload/index.ts`** — `images:getStatus|chooseImage|readBytes|analyze|cancel|getJob`
+  channels, `STREAM.imgToken/imgDone/imgError(jobId)`, and the typed `window.api` methods + the three `onImage*`
+  subscribers (`PreloadApi` extends automatically).
+- **`services/vision/`** — `status.ts` (`getVisionStatus`: no-runtime → no-model → incompatible → available;
+  cheap, lazy, **lock-safe**), `limits.ts` (`VISION_MAX_IMAGE_BYTES` ~20 MiB env-overridable + extension/MIME
+  guards + `validateAnalyzeRequest`), `runtime.ts` (`VisionRuntime` composing `LlamaServer` DIRECTLY — does NOT
+  inherit `CHAT_SERVER_ARGS`; V1 args `extraArgs:['--mmproj',proj,'--device','none']`, NO `--reasoning-format`,
+  base64 `image_url` data-URL request with `cache_prompt:true`, `readChatSSE` reused; the idle-timer/lock teardown
+  are V4), `index.ts` (`VisionService`: ephemeral job map, vision's **OWN** one-job serialization — RUNTIME-3 —
+  busy-**REJECT** not queue (IPC-3), cancel via AbortController, unknown jobId ⇒ terminal failed).
+- **`ipc/registerImagesIpc.ts`** (registered in `main/index.ts`) — `getStatus` (no unlock), file/runtime handlers
+  `requireUnlocked`; `chooseImage` returns **`{path,name,sizeBytes}`** (IPC-2, new shape); `readBytes`/`analyze`
+  **re-validate extension + byte cap in MAIN** (SEC-3, net-new). Two i18n dialog keys added (en+de parity).
+**§0 honored:** no cloud/telemetry, no native npm dep, sandbox/CSP untouched, loopback-only, no image/prompt/answer
+content in logs/audit. **Data contracts (new):** `images:*` IPC + `ImageJob`/`VisionStatus`/`ImageAnalyzeRequest`
++ `STREAM.img*`; manifest gains `mmproj`/`input_modalities`. **Verification:** `npm test` (apps/desktop) **1937
+passed / 29 skipped (172 files)** — full-suite-guard active; **green-gate holds with zero vision models**;
+`npm run typecheck` + `npm run build` clean. New tests: `vision-status.test.ts`, `images-ipc.test.ts`,
+`preload-vision.test.ts`, + vision/mmproj cases in `manifest.test.ts`/`models.test.ts`/`drive.test.ts`.
+**Next:** V3 — the Images nav item + `ImagesScreen` (states §5.6), drop zone/picker, client decode/downscale,
+wired to the V2 backend (friendly unavailable when no model). **(prior entries below.)**_
+
+_2026-06-20 — **Image-understanding Phase V1 (research gate) PASSED on the real pinned b9585 — V2–V5 UNBLOCKED.**
+Branch `image-understanding`. Ran the V1 gate against the real binary on the PAID smoke drive
+(`F:\paid-gpu-smoke-drive`, runtime `b9585 (d73cd0767)`, vulkan build + `cpu/` net). **No app feature code yet
+— research only.** All multi-GB weights live OFF-repo on the smoke drive (`models/vision/`, never committed); the
+**only repo change is `apps/desktop/tests/fixtures/vision/vision-sse-sample.txt`** (a verbatim real SSE capture for
+the CI parser regression). **GATE OUTCOME — §7 gate #1, branch #1 (the best case): Option A confirmed, NO runtime-pin
+bump needed.** `llama-server --mmproj` on b9585 **loads multimodal cleanly** and **answers `/v1/chat/completions`
+with a base64 `image_url` data-URL — no disk write** (the temp-file fallback / Option C / pin-bump branches are all
+avoided). **Multimodal CLIs are also bundled** (`llama-mtmd-cli.exe`, `llama-llava-cli.exe`, `llama-gemma3-cli.exe`,
+`llama-minicpmv-cli.exe`) — Option C remains available as a fallback, unused.
+
+**Resolved runtime args (RUNTIME-2 — the vision sidecar composes `LlamaServer` DIRECTLY, does NOT inherit
+`CHAT_SERVER_ARGS`):** flag spelling **`--mmproj <file>`** (alias `-mm`, env `LLAMA_ARG_MMPROJ`); **`--jinja` is
+default-ENABLED on b9585** (`--help`: "--jinja, --no-jinja … (default: enabled)") so vision gets the jinja chat-template
+path without inheriting it — passing it explicitly is optional/harmless; **`--reasoning-format` MUST be left at default
+(do NOT pass `deepseek`)** — Qwen2.5-VL is non-reasoning, emits no `reasoning_content` frames; CPU-pin via **`--device
+none`** works (mirrors `e5.ts` embedder). Request shape: OpenAI `content:[{type:'text'},{type:'image_url',image_url:{url:'data:<mime>;base64,…'}}]`.
+**`cache_prompt:true` → the image prefill is CACHED across follow-ups** (measured `cache_n:2812, prompt_n:1` on the 2nd
+question of the same image) — the per-image thread (§2 follow-ups) pays the image prefill ONCE, not per question; set it
+like `llama.ts:239`. **SSE reuse CONFIRMED → streaming-by-default (§19.10) STANDS:** the streamed frames are byte-identical
+to text chat (`data: {…chat.completion.chunk…}` with `choices[0].delta.content`, role-first `content:null` frame, terminal
+`finish_reason` + `data: [DONE]`) — **`readChatSSE` (`runtime/llama.ts`) parses them unchanged**, no vision-specific reader
+needed; the contingency poll-fallback is NOT triggered. Fixture captures the partial-UTF-8-across-frames case too.
+
+**CHOSEN PRODUCTION CANDIDATE — Qwen2.5-VL-3B-Instruct (ggml-org GGUF, Apache-2.0, the §19.4 default):** loads + answers
+on b9585.
+  - GGUF `Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf` — size `1929901056` (1.93 GB) — sha256 `d02fe9b69ad8cadbbd228e387667af66612c44bed29ffc8eb1e7caf9ac486c12`
+  - mmproj `mmproj-Qwen2.5-VL-3B-Instruct-f16.gguf` — size `1338428128` (1.34 GB) — sha256 `b9160fe9d814d1fadf68395677468534778b39ac33c2e7561b7b218626e60d5e`
+  - combined `size_on_disk_gb` ≈ **3.27 GB**; **measured peak RSS ≈ 4.6 GB** (sidecar alone, CPU-pinned, ctx 4096; `PeakWorkingSet64` 4597 MB / private 5126 MB).
+  - **Capability check passed:** on the real `german-scan.png` it answered *"This is an invoice from Müller & Söhne GmbH, and it is in German."* — correct doc-type AND read the German text (the 256M reference garbled it).
+  - From `https://huggingface.co/ggml-org/Qwen2.5-VL-3B-Instruct-GGUF` (official llama.cpp org). Repo license `apache-2.0` (HF API). `license_review` to be filled in V5 against the upstream base `Qwen/Qwen2.5-VL-3B-Instruct`.
+**Reference (fast mechanics-proof) artifact — SmolVLM-256M-Instruct (ggml-org, Apache-2.0):** also loads/answers; RSS ~402 MB.
+  GGUF `SmolVLM-256M-Instruct-Q8_0.gguf` sha256 `2a31195d3769c0b0fd0a4906201666108834848db768af11de1d2cef7cd35e65` (175054528);
+  mmproj `mmproj-SmolVLM-256M-Instruct-Q8_0.gguf` sha256 `7e943f7c53f0382a6fc41b6ee0c2def63ba4fded9ab8ed039cc9e2ab905e0edd` (103769856).
+
+**KNOWN LIMITS / RISKS (record in `known-limitations.md` + `model-benchmarks.md` at V5):** (1) **CPU prefill of a full-res
+image is SLOW** — the high-res scan was **2813 image tokens → ~52 s prefill** on CPU off USB (~18.5 ms/tok prefill,
+decode ~12 tok/s). This makes the §11 **client downscale-to-1536px a real latency lever, not just a payload optimization**
+(fewer image tokens ⇒ proportionally less prefill), and keeps **GPU as the §19.11 optimization lever** if CPU TTFA fails the
+bar. The `cache_prompt` reuse blunts it for follow-ups but the FIRST question per image pays it. (2) **PROD-1 co-residency
+confirmed:** vision peak ~4.6 GB + a 12B chat (~7 GB) + E5 embedder ⇒ **>16 GB**; the manifest `recommended_min_ram_gb`/RAM
+gate must keep vision off small tiers. (3) ctx capped at 4096 vs train 128000 (fine for MVP). **Data contracts:** none changed
+(no code). **Verification:** docs + one fixture file only; `npm test` (apps/desktop) re-run to honor the per-phase ritual.
+**Next:** V2 backend skeleton — `vision` role + `mmproj` validation in `shared/manifest.ts`, `services/vision/status.ts`
+(both-files-verified), the `images:*` IPC + `STREAM.imgToken/imgDone/imgError` contract, types — all per the (now
+gate-cleared) plan. **(prior entries below.)**_
+
+_2026-06-20 — **Image-understanding plan REVISED to clear its multi-persona audit.** Branch
+`image-understanding` (planning only — **no feature code**). Reworked
+[`docs/image-understanding-plan.md`](docs/image-understanding-plan.md) to fix **every finding** of the
+multi-persona audit `docs/image-understanding-audit-2026-06-20.md`, then **deleted that audit** (fully
+remediated; recoverable in git history at the remediation commit, per the CLAUDE.md doc-lifecycle rule).
+The plan now carries each decision's rationale inline; its `(SEC-1)`/`(RUNTIME-2)`-style tags are
+traceability labels back to the (git-preserved) audit. **Blockers fixed:** SEC-1 — deleted the false "`blob:` already permitted" CSP
+claim; preview is **`data:`-only** (prod CSP `img-src 'self' data:`, `main/index.ts:367-369`, lists no
+`blob:`), §11/§13 made consistent. RUNTIME-1/2 — Option A downgraded to **candidate pending V1**, V2–V5
+**blocked on V1**; the vision sidecar composes `LlamaServer` directly so does **NOT** inherit
+`CHAT_SERVER_ARGS` (`--jinja`/`--reasoning-format`) — V1 now must resolve the exact arg set + the
+"`--mmproj` works but template path differs" branch. DIST-1 — two-file download reframed honestly
+(weightPath/computeInstallState/DownloadJob/downloads.ts/assets.ts/fetch-models.sh are all
+single-file); topology **decided = two `DownloadJob`s sharing one `modelId`**. **HIGH/MED:** vision is a
+**separate** sidecar needing its **own** one-job serialization (chat+embedder+vision = 3 co-resident,
+RUNTIME-3); net-new idle-teardown interlock spelled out (RUNTIME-4); `readBytes` dropped on the
+drag-drop path (IPC-1); **busy-reject** chosen over queue (IPC-3); honest 6th-nav-destination framing
+(UX-1); `decodeFailed` error code + multi-drop/EXIF/downscale algorithm (UX-3); 12–16 GB bar qualified
+against a 14 GB-tier chat model (PROD-1); "locate a license-clean GGUF+mmproj that loads on b9585" made
+the literal first V1 task (TEST-1); plus the LOW tightenings (IPC-2/SEC-3/PROD-2/UX-2) and a §19 that
+now reads every load-bearing choice as a real decision with a default + cost. **Data contracts:** none
+changed (plan only). **Verification:** docs-only edit, no code touched ⇒ `npm test` not required.
+**Next:** the plan is build-ready behind its V1 research gate. **(prior entries below.)**_
+
 _2026-06-19 — **Performance Wave P6 landed — the Low opportunistic backlog closed; audit report RETIRED.**
 Branch `performance-low-backlog` (off `master`). The closing pass over the perf audit's **Low** §4 findings,
 all behavior-preserving internal optimizations. **Shipped (✅):** DB-8 (targeted document getters

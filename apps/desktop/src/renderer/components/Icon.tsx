@@ -14,6 +14,7 @@ export type IconName =
   | 'home'
   | 'chat'
   | 'file'
+  | 'image'
   | 'brain'
   | 'settings'
   | 'lock'
@@ -78,6 +79,19 @@ const GLYPHS: Record<IconName, Glyph> = {
         <path d="M8.75 12.5h6.5" />
         <path d="M8.75 16h4.75" />
       </g>
+    )
+  },
+
+  // Image (Feather/Lucide idiom): a rounded frame with a sun and a mountain — the
+  // universal "picture" glyph, distinct from `file`. 24-grid, 1.65 stroke like the set;
+  // the sun + mountain are stroked (not filled) so it stays calm and low-chroma.
+  image: {
+    body: (
+      <>
+        <rect x="3" y="4.5" width="18" height="15" rx="2.5" />
+        <circle cx="8.5" cy="9.5" r="1.6" />
+        <path d="M4 17.5l4.5-4.5a2 2 0 0 1 2.8 0l3.2 3.2a2 2 0 0 0 2.8 0L20 14.5" />
+      </>
     )
   },
 

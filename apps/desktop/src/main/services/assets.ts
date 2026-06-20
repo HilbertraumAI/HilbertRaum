@@ -3,9 +3,9 @@ import { createWriteStream, existsSync, readFileSync, statSync, writeFileSync } 
 import { mkdir, rm } from 'node:fs/promises'
 import { dirname, join, resolve, sep } from 'node:path'
 import { Readable } from 'node:stream'
-import { isHttpsUrl, isRealSha256, type ModelManifest } from '../../shared/manifest'
+import { isHttpsUrl, isRealSha256, type DownloadSpec, type ModelManifest } from '../../shared/manifest'
 import type { OcrSources, RuntimeBuild, RuntimeOs, RuntimeSources } from '../../shared/runtime-sources'
-import { sha256File, verifyChecksum, weightPath, type HashStore } from './models'
+import { mmprojPath, sha256File, verifyChecksum, weightPath, type HashStore } from './models'
 
 // Asset loader — the CANONICAL, unit-tested reference for the DIY `fetch-*` scripts
 // (see docs/packaging.md).
@@ -71,42 +71,88 @@ export async function planModelDownloads(
 ): Promise<ModelDownloadTask[]> {
   const tasks: ModelDownloadTask[] = []
   for (const manifest of manifests) {
-    if (!manifest.download) continue
     if (opts.only && manifest.id !== opts.only) continue
 
-    const dest = weightPath(rootPath, manifest)
-    const expectedSha256 = manifest.sha256
-    const placeholderHash = !isRealSha256(expectedSha256)
-    const licenseApproved = manifest.licenseReview.status === 'approved'
-
-    // Is the weight already present + verifiable?
-    const check = await verifyChecksum(dest, expectedSha256, opts.hashStore)
-    let status: ModelTaskStatus
-    if (check.exists && check.matched === true) {
-      status = 'present-verified'
-    } else if (check.exists && check.matched === null) {
-      // Present but the manifest hash is a placeholder — can't verify, don't re-fetch.
-      status = 'present-unverified'
-    } else {
-      // Absent, or present-but-mismatched → must (re)fetch. Gate on the license first.
-      status = licenseApproved || opts.acceptLicense ? 'download' : 'license-blocked'
+    // The language GGUF (top-level `download`).
+    if (manifest.download) {
+      tasks.push(
+        await planOneFile(
+          rootPath,
+          manifest,
+          weightPath(rootPath, manifest),
+          manifest.localPath,
+          manifest.sha256,
+          manifest.download,
+          opts
+        )
+      )
     }
 
-    tasks.push({
-      id: manifest.id,
-      url: manifest.download.url,
-      dest,
-      relPath: manifest.localPath,
-      expectedSha256,
-      placeholderHash,
-      sizeBytes: manifest.download.sizeBytes,
-      license: manifest.license,
-      licenseUrl: manifest.download.licenseUrl,
-      licenseApproved,
-      status
-    })
+    // DIST-1: the mmproj projector is the SECOND DownloadJob of a vision model — same modelId,
+    // its own URL/path/hash (image-understanding plan §8.3). The install side already requires
+    // both files (`manifestFiles`/`computeInstallState`); without this the projector could never
+    // be fetched through the planner and a vision model could never reach `installed`.
+    if (manifest.mmproj?.download) {
+      tasks.push(
+        await planOneFile(
+          rootPath,
+          manifest,
+          mmprojPath(rootPath, manifest),
+          manifest.mmproj.localPath,
+          manifest.mmproj.sha256,
+          manifest.mmproj.download,
+          opts
+        )
+      )
+    }
   }
   return tasks
+}
+
+/**
+ * Plan one downloadable file (the GGUF, or a vision model's mmproj projector). Shared by both
+ * jobs of the two-file vision topology so the license gate + present/verified/placeholder state
+ * machine has ONE definition. The license is the MODEL's (a vision projector inherits the same
+ * `license_review` as its GGUF — they are one model).
+ */
+async function planOneFile(
+  rootPath: string,
+  manifest: ModelManifest,
+  dest: string,
+  relPath: string,
+  expectedSha256: string,
+  download: DownloadSpec,
+  opts: PlanModelOptions
+): Promise<ModelDownloadTask> {
+  const placeholderHash = !isRealSha256(expectedSha256)
+  const licenseApproved = manifest.licenseReview.status === 'approved'
+
+  // Is the file already present + verifiable?
+  const check = await verifyChecksum(dest, expectedSha256, opts.hashStore)
+  let status: ModelTaskStatus
+  if (check.exists && check.matched === true) {
+    status = 'present-verified'
+  } else if (check.exists && check.matched === null) {
+    // Present but the manifest hash is a placeholder — can't verify, don't re-fetch.
+    status = 'present-unverified'
+  } else {
+    // Absent, or present-but-mismatched → must (re)fetch. Gate on the license first.
+    status = licenseApproved || opts.acceptLicense ? 'download' : 'license-blocked'
+  }
+
+  return {
+    id: manifest.id,
+    url: download.url,
+    dest,
+    relPath,
+    expectedSha256,
+    placeholderHash,
+    sizeBytes: download.sizeBytes,
+    license: manifest.license,
+    licenseUrl: download.licenseUrl,
+    licenseApproved,
+    status
+  }
 }
 
 // ---- Runtime build selection -------------------------------------------------------

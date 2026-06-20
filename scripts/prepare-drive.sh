@@ -74,7 +74,9 @@ DIRS=(
   models/embeddings
   models/reranker
   models/transcriber
+  models/vision
   model-manifests
+  model-manifests/vision
   runtime/llama.cpp/win
   runtime/llama.cpp/mac
   runtime/llama.cpp/linux

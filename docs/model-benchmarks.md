@@ -374,3 +374,74 @@ thinking-quality check (`tests/manual/gemma-thinking.test.ts`).
 | Benchmark machines too few/too similar | The protocol records machine facts; the GPU hardware-matrix machines double as benchmark hosts over time (run the dev-box sweep for the formal 2nd machine) |
 | HF repo layouts / filenames drift | Manifests pin exact URLs; first fetch + `verify-models --generate` catches drift loudly |
 | Phase-30 embedder swap forces a reindex | Surface via the Phase-17 re-index machinery; its own mini-plan before any swap (big-slot plan Track B) |
+
+---
+
+## 8. Image understanding (vision) — V1 measurements + the V5 smoke protocol
+
+The vision sidecar (image-understanding feature; design record in
+[`architecture.md`](architecture.md) "Image understanding — design record") is a SEPARATE
+benchmark axis from the chat catalog above — a different role (`vision`), a two-file model
+(language GGUF + `mmproj` projector), and a CPU-bound multimodal prefill. Numbers below are the
+**real V1 measurements** on the pinned **b9585** (PAID smoke drive `F:\paid-gpu-smoke-drive`),
+captured during the V1 research gate (BUILD_STATE V1); the **V5 manual harness re-runs them live**.
+
+### 8.1 The manual smoke harness (`HILBERTRAUM_VISION_SMOKE`)
+
+`tests/manual/vision-smoke.test.ts`, the same env-gated pattern as `gpu-smoke`/`rerank-smoke`
+(skipped in CI — the green gate stays zero-binary/zero-model/zero-network):
+
+```powershell
+$env:HILBERTRAUM_VISION_SMOKE = "F:\paid-gpu-smoke-drive"   # root with runtime/llama.cpp/<os>/llama-server + models/vision/*.gguf
+cd apps\desktop
+npx vitest run tests/manual/vision-smoke.test.ts
+```
+
+It drives the REAL `VisionRuntime` end-to-end against the off-repo weights: cold start (`--mmproj`
+loads multimodal), analyze the committed synthetic fixture (`tests/fixtures/vision/chart.png` — a
+content-free, license-clean bar chart drawn by `make-fixtures.mjs`), STREAM the answer (real SSE →
+`readChatSSE`), a warm follow-up (the `cache_prompt` reuse), then the RUNTIME-4 idle teardown +
+cold restart. Peak RSS co-resident is captured separately with `scripts/measure-peak-rss.ps1`
+(§C) against the running sidecar. **No multi-GB weights or user images are committed** — only the
+~1.7 KB synthetic fixture.
+
+### 8.2 Chosen production candidate — Qwen2.5-VL-3B-Instruct (V1, real)
+
+| Datum | Value | Source / note |
+|---|---|---|
+| LM weight | `Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf` — 1.93 GB | ggml-org GGUF, Apache-2.0 (`sha256 d02fe9…486c12`) |
+| Projector | `mmproj-Qwen2.5-VL-3B-Instruct-f16.gguf` — 1.34 GB | the `--mmproj` CLIP projector (`sha256 b9160f…e60d5e`) |
+| Combined on disk | **≈ 3.27 GB** | both files; install = both present + verified |
+| **Peak RSS (sidecar alone)** | **≈ 4.6 GB** | CPU-pinned, ctx 4096; `PeakWorkingSet64` 4597 MB / private 5126 MB |
+| Cold start | seconds (large GGUF off USB) | "Starting the vision model…"; idle teardown re-pays it later |
+| Image tokens (full-res scan) | **2813** | a high-res page; the §11 downscale-to-1536 cuts this ~proportionally |
+| **CPU prefill (full-res)** | **≈ 52 s** (~18.5 ms/image-token) | the headline latency risk — CPU off USB; downscale + GPU are the levers |
+| Decode | **≈ 12 tok/s** | CPU-pinned |
+| `cache_prompt` reuse | `cache_n:2812, prompt_n:1` on the 2nd question | the per-image thread pays the image prefill ONCE, not per follow-up |
+| Capability | read a real German invoice correctly (doc-type + the German text) | the 256M reference garbled it |
+
+Reference (fast mechanics-proof, not the product model) — **SmolVLM-256M-Instruct** (ggml-org,
+Apache-2.0): also loads/answers; RSS ~402 MB (`sha256`s in BUILD_STATE V1).
+
+### 8.3 The two levers + the tuned idle timeout
+
+- **`--device none` / CPU-pin is the MVP default** (§19.11): GPU is the optimization lever **only
+  if** CPU TTFA fails the bar — it adds VRAM contention with chat + driver-flakiness. The ~52 s
+  full-res prefill is the number that decides this per machine.
+- **Client downscale to 1536 px (§11) is a real LATENCY lever, not just payload** — fewer image
+  tokens ⇒ proportionally less CPU prefill — and it normalizes EXIF orientation. Already on the
+  real path (renderer `decode.ts`).
+- **Idle-teardown default TUNED to 120 000 ms (2 min)** — the lower end of the §19.13 2–5 min
+  band (`DEFAULT_VISION_IDLE_MS`, env `HILBERTRAUM_VISION_IDLE_MS`). Rationale: the follow-up
+  prefill is already `cache_prompt`-cached, so a warm sidecar only saves the seconds-scale model
+  *load*; meanwhile the idle ~4.6 GB sits co-resident with a 12B chat (PROD-1 pushes a real
+  machine >16 GB), so reclaiming it sooner is the higher-value trade. 2 min spans a burst of
+  follow-ups, then frees the RAM; the next image cold-restarts cleanly.
+
+### 8.4 RAM co-residency (PROD-1) — the acceptance bar, honestly qualified
+
+Vision peak ~4.6 GB + a 12B chat (~7 GB) + the E5 embedder ⇒ **>16 GB** — three `llama-server`
+processes at peak. The idle teardown bounds the *window*, **not the active-use peak**. So vision
+is realistically co-resident **only with a small chat model, or after the chat sidecar idles out**;
+the manifest `recommended_min_ram_gb` / RAM-best-fit gate keeps a vision model off machines that
+can't hold it. Recorded in [`known-limitations.md`](known-limitations.md).

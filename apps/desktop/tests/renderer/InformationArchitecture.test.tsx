@@ -26,9 +26,10 @@ beforeAll(() => {
 })
 
 describe('resolveNavTarget — virtual targets + legacy aliases', () => {
-  it('maps the six real destinations to themselves', () => {
+  it('maps the seven real destinations to themselves', () => {
     expect(resolveNavTarget('home')).toEqual({ screen: 'home' })
     expect(resolveNavTarget('documents')).toEqual({ screen: 'documents' })
+    expect(resolveNavTarget('images')).toEqual({ screen: 'images' })
     expect(resolveNavTarget('models')).toEqual({ screen: 'models' })
     expect(resolveNavTarget('skills')).toEqual({ screen: 'skills' })
     expect(resolveNavTarget('chat')).toEqual({ screen: 'chat', chatMode: 'chat' })
@@ -126,8 +127,8 @@ function stubAppShell(): void {
   } as never)
 }
 
-describe('App shell — 5-item nav (Phase 26)', () => {
-  it('renders exactly Home · Chat · Documents · AI Model · Skills ‖ Settings — no Privacy/Diagnostics items', async () => {
+describe('App shell — 6-item nav (image-understanding adds Images)', () => {
+  it('renders exactly Home · Chat · Documents · Images · AI Model · Skills ‖ Settings — no Privacy/Diagnostics items', async () => {
     stubAppShell()
     render(<App />)
     const nav = await screen.findByRole('navigation')
@@ -141,6 +142,7 @@ describe('App shell — 5-item nav (Phase 26)', () => {
       'Home',
       'Chat',
       'Documents',
+      'Images',
       'AI Model',
       'Skills',
       'Settings'

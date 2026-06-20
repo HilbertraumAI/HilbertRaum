@@ -47,11 +47,36 @@ sha256_of() {
 # are stripped before unquoting (M17).
 field() { sed -n "s/^[[:space:]]*$2[[:space:]]*:[[:space:]]*//p" "$1" | head -n1 | sed 's/[[:space:]][[:space:]]*#.*$//' | tr -d '"'"'"'' | sed 's/[[:space:]]*$//'; }
 
+# Same flat parse over a string (a YAML sub-block) — reads the mmproj projector's local_path/sha256
+# (the SECOND file of a vision model, DIST-2: verify BOTH files, mirroring services/models.ts).
+field_in() { printf '%s\n' "$1" | sed -n "s/^[[:space:]]*$2[[:space:]]*:[[:space:]]*//p" | head -n1 | sed 's/[[:space:]][[:space:]]*#.*$//' | tr -d '"'"'"'' | sed 's/[[:space:]]*$//'; }
+
+# Extract the indented body of a top-level `mmproj:` mapping (lines until the next column-0 key).
+mmproj_block_of() { awk '/^mmproj:[[:space:]]*$/{f=1;next} /^[^[:space:]]/{f=0} f' "$1"; }
+
 is_real_sha() { [[ "$1" =~ ^[a-f0-9]{64}$ ]]; }
 
 had_mismatch=0
 total_weights=0
 verified_weights=0
+
+# Verify ONE file (the GGUF, or a vision model's mmproj projector) against its expected hash,
+# updating the counters. Mirrors services/models.ts verifyChecksum + drive.ts verifyDriveModels.
+verify_file() {
+  local id="$1" label="$2" weight="$3" sha="$4" status actual
+  if [[ ! -f "$weight" ]]; then
+    status="MISSING"
+  else
+    actual="$(sha256_of "$weight")"
+    if ! is_real_sha "$sha"; then status="UNVERIFIED"
+    elif [[ "$actual" == "$sha" ]]; then status="VERIFIED"
+    else status="MISMATCH"; had_mismatch=1; fi
+  fi
+  total_weights=$((total_weights + 1))
+  [[ "$status" == "VERIFIED" ]] && verified_weights=$((verified_weights + 1))
+  [[ $STRICT -eq 1 && "$status" != "VERIFIED" ]] && echo "STRICT: $id$label is $status (must be VERIFIED)" >&2
+  printf '  %-12s %s\n' "$status" "$id$label"
+}
 # Collect manifest paths WITHOUT `mapfile` (a Bash 4+ builtin absent from macOS's stock
 # Bash 3.2) and WITHOUT `sort -z` (not on BSD/macOS sort). Newline-delimited read is
 # portable; manifest filenames are controlled and contain no newlines.
@@ -75,25 +100,42 @@ for mf in "${MANIFEST_FILES[@]}"; do
   runtime="$(field "$mf" runtime)"
   format="$(field "$mf" format)"
   [[ -z "$local_path" ]] && continue
-  weight="$TARGET/$local_path"
+
+  # A vision model is TWO files: the language GGUF + the mmproj projector (DIST-2).
+  mmproj_block="$(mmproj_block_of "$mf")"
+  mmproj_local="$(field_in "$mmproj_block" local_path)"
+  mmproj_sha="$(field_in "$mmproj_block" sha256 | tr '[:upper:]' '[:lower:]')"
 
   if [[ "$runtime" != "llama_cpp" && "$runtime" != "llama.cpp" ]] || [[ "$format" != "gguf" ]]; then
-    status="UNSUPPORTED"
-  elif [[ ! -f "$weight" ]]; then
-    status="MISSING"
-  else
-    actual="$(sha256_of "$weight")"
-    if ! is_real_sha "$sha"; then status="UNVERIFIED"
-    elif [[ "$actual" == "$sha" ]]; then status="VERIFIED"
-    else status="MISMATCH"; had_mismatch=1; fi
+    total_weights=$((total_weights + 1))
+    [[ $STRICT -eq 1 ]] && echo "STRICT: $id is UNSUPPORTED (must be VERIFIED)" >&2
+    printf '  %-12s %s\n' "UNSUPPORTED" "$id"
+    continue
   fi
-  total_weights=$((total_weights + 1))
-  if [[ "$status" == "VERIFIED" ]]; then verified_weights=$((verified_weights + 1)); fi
-  if [[ $STRICT -eq 1 && "$status" != "VERIFIED" ]]; then
-    echo "STRICT: $id is $status (must be VERIFIED)" >&2
-  fi
-  printf '  %-12s %s\n' "$status" "$id"
+
+  verify_file "$id" "" "$TARGET/$local_path" "$sha"
+  [[ -n "$mmproj_local" ]] && verify_file "$id" " (mmproj)" "$TARGET/$mmproj_local" "$mmproj_sha"
 done
+
+# Emit one checksums.json entry per FILE (the GGUF, and a vision model's mmproj — DIST-2).
+# Uses the block-scoped `first` (comma separator) set in the --generate command group below.
+emit_entry() {
+  local id="$1" lp="$2" weight="$TARGET/$2" sha_json size_json present sha size
+  if [[ -f "$weight" ]]; then
+    sha="$(sha256_of "$weight")"; size="$(wc -c < "$weight" | tr -d ' ')"
+    present=true; sha_json="\"$sha\""; size_json="$size"
+  else
+    present=false; sha_json='null'; size_json='null'
+  fi
+  [[ $first -eq 0 ]] && echo '    },'
+  first=0
+  echo '    {'
+  echo "      \"id\": \"$id\","
+  echo "      \"local_path\": \"$lp\","
+  echo "      \"sha256\": $sha_json,"
+  echo "      \"size_bytes\": $size_json,"
+  echo "      \"present\": $present"
+}
 
 if [[ $GENERATE -eq 1 ]]; then
   mkdir -p "$TARGET/config"
@@ -108,21 +150,9 @@ if [[ $GENERATE -eq 1 ]]; then
     for mf in "${MANIFEST_FILES[@]}"; do
       id="$(field "$mf" id)"; local_path="$(field "$mf" local_path)"
       [[ -z "$local_path" ]] && continue
-      weight="$TARGET/$local_path"
-      if [[ -f "$weight" ]]; then
-        sha="$(sha256_of "$weight")"; size="$(wc -c < "$weight" | tr -d ' ')"; present=true
-        sha_json="\"$sha\""; size_json="$size"
-      else
-        present=false; sha_json='null'; size_json='null'
-      fi
-      [[ $first -eq 0 ]] && echo '    },'
-      first=0
-      echo '    {'
-      echo "      \"id\": \"$id\","
-      echo "      \"local_path\": \"$local_path\","
-      echo "      \"sha256\": $sha_json,"
-      echo "      \"size_bytes\": $size_json,"
-      echo "      \"present\": $present"
+      mmproj_local="$(field_in "$(mmproj_block_of "$mf")" local_path)"
+      emit_entry "$id" "$local_path"
+      [[ -n "$mmproj_local" ]] && emit_entry "$id" "$mmproj_local"
     done
     [[ $first -eq 0 ]] && echo '    }'
     echo '  ]'

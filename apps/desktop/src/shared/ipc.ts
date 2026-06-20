@@ -139,6 +139,22 @@ export const IPC = {
   getEngineJob: 'engine:getJob',
   /** Cancel an in-flight engine download. */
   cancelEngineDownload: 'engine:cancel',
+  // Image understanding (vision) — image-understanding plan §9.1. A separate lazy
+  // `llama-server --mmproj` sidecar answers a question about ONE image. Async-with-streaming
+  // (the STREAM.img* channels below); `getStatus` is workspace-agnostic, the file/runtime
+  // handlers requireUnlocked. No image/prompt/answer content is logged or audited.
+  /** Is image understanding available (runtime + a verified vision model + projector)? */
+  imageGetStatus: 'images:getStatus',
+  /** Open the OS picker filtered to png/jpg/jpeg; returns `{ path, name, sizeBytes }` or null. */
+  imageChooseImage: 'images:chooseImage',
+  /** Read a picked image's bytes (main owns file I/O); re-validates extension + byte cap. */
+  imageReadBytes: 'images:readBytes',
+  /** Start a one-at-a-time analyze (validates extension/cap/question); a second one is busy. */
+  imageAnalyze: 'images:analyze',
+  /** Cancel an in-flight analyze (AbortController). */
+  imageCancel: 'images:cancel',
+  /** Poll one analyze job's state (unknown jobId ⇒ terminal failed). */
+  imageGetJob: 'images:getJob',
   // Benchmark
   runBenchmark: 'benchmark:run',
   /**
@@ -228,7 +244,14 @@ export const STREAM = {
   // starts summarizing the older history for THIS turn (it adds latency before the first answer
   // token — context-compaction plan §5.2). Never persisted, not in `streamBuffers` (R14 — a
   // transient hint, fine to miss on remount); cleared in the renderer when answer tokens begin.
-  compaction: (requestId: string) => `chat:compaction:${requestId}`
+  compaction: (requestId: string) => `chat:compaction:${requestId}`,
+  // Image understanding (vision) per-job streaming (image-understanding plan §9.1). Mirrors the
+  // chat token/done/error contract, keyed by analyze jobId: the vision sidecar emits SSE
+  // byte-identical to chat (V1-confirmed), so `readChatSSE` forwards the deltas as imgToken.
+  // imgDone carries the terminal ImageJob; imgError the failed ImageJob (a code, never content).
+  imgToken: (jobId: string) => `images:token:${jobId}`,
+  imgDone: (jobId: string) => `images:done:${jobId}`,
+  imgError: (jobId: string) => `images:error:${jobId}`
 } as const
 
 /** Payload of the `scope` channel — the filenames retrieval was auto-restricted to. */

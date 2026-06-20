@@ -237,7 +237,12 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
       // Kill any in-flight whisper-cli child (it is reading decrypted audio;
       // the failing parse marks that document `failed`, and processDocument's finally
       // shreds the decrypted transient). Per-file CLI — next use just respawns.
-      ctx.transcriber?.suspend?.() ?? Promise.resolve()
+      ctx.transcriber?.suspend?.() ?? Promise.resolve(),
+      // The vision sidecar keeps the decoded image + its prompt in the llama-server KV cache,
+      // so it too must die before the vault re-encrypts. `stop()` aborts any in-flight analyze
+      // and kills the child; the orchestrator rebuilds a fresh runtime (cold start) on the next
+      // analyze, so this needs no `suspend()`/latch distinction (the runtime instance is discarded).
+      ctx.vision?.stop() ?? Promise.resolve()
     ])
     // RAG-6 (Wave P4) — SECURITY purge: drop the resident decoded-vector cache from main-process
     // RAM. The vectors are derived from chunk text, so like the sidecars' in-memory recent text

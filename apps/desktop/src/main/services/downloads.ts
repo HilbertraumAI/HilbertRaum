@@ -133,6 +133,10 @@ export class DownloadManager {
       acceptLicense: opts.licenseAccepted,
       hashStore: opts.hashStore
     })
+    // `tasks[0]` is the language GGUF (the planner emits it before a vision model's mmproj
+    // task — DIST-1). The in-app per-model downloader drives the GGUF; the mmproj projector is
+    // provisioned by the DIY `fetch-models` scripts (the canonical two-file path). No committed
+    // vision manifest ships yet, so this single-file UI flow is never exercised on vision today.
     const task = tasks[0]
     if (!task) {
       throw new Error(tMain('main.download.noSource', { modelId: opts.manifest.id }))

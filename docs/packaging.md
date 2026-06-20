@@ -1,6 +1,6 @@
 # Packaging — portable build, sidecars & model weights
 
-_Last updated: 2026-06-12 (docs housekeeping: absorbed the Phases-12/13 distribution decision record)_
+_Last updated: 2026-06-20 (image understanding V5: the two-file vision download topology — GGUF + mmproj sharing one modelId — and the `vision-smoke` manual harness). Prior: 2026-06-12 (docs housekeeping: absorbed the Phases-12/13 distribution decision record)_
 
 This documents **how the app is packaged into a portable build**, **where the runtime binaries and
 model weights live on the drive**, and that those artifacts are **not** in the git repository.
@@ -33,6 +33,7 @@ master pipeline** that produces a finished, sellable drive (see the last section
     chat/        qwen3-4b-instruct-q4.gguf  …
     embeddings/  multilingual-e5-small-q8.gguf
     reranker/    transcriber/               (optional reranker GGUF; whisper GGML .bin)
+    vision/      qwen2.5-vl-3b-…q4.gguf + mmproj-…f16.gguf   (optional; the LM GGUF + its mmproj projector — TWO files)
   ocr/           {deu,eng}.traineddata.gz   (OCR language files, sha256-verified)
   model-manifests/   (committed YAML — the only model metadata in git)
   workspace/   config/   logs/
@@ -64,6 +65,15 @@ master pipeline** that produces a finished, sellable drive (see the last section
   built by Phase 11's prepare-drive scripts (and verified against the manifest `sha256`). The bundled
   Qwen3 + E5 manifests now carry **real pinned hashes**; a model you add yourself starts as a
   `REPLACE_WITH_REAL_HASH` placeholder until you capture it with `verify-models --generate`.
+- **Vision models are TWO files sharing one `modelId` (image understanding V1–V5).** A `role: vision`
+  manifest names the language GGUF (top-level `local_path`/`sha256`/`download`) **plus** an `mmproj`
+  projector sub-block (its own `local_path`/`sha256`/`download`, resolved by `mmprojPath(...)`). The
+  download topology is **two already-atomic single-file `DownloadJob`s under one `modelId`** (DIST-1):
+  each is `.part`-staged + verify-before-rename by the existing single-file machinery — no cross-file
+  progress aggregation, no two-phase verify. **Install = BOTH files present + SHA-256-verified**
+  (`computeInstallState`). Vision is **opt-in**: `--with-assets`/`prepare-drive` does NOT fetch it by
+  default; `--only <vision-id>` or `--all-models` pulls both files. See
+  [`model-policy.md`](model-policy.md) "The vision role + mmproj projector".
 
 ## How the app uses them at runtime (Phase 10)
 - The **runtime factory** (`createSelectingRuntimeFactory`) and the **embedder factory**
@@ -323,6 +333,9 @@ run one real-model session covering:
    NVIDIA/AMD happy paths, Iris-Xe-only laptop (no profile bump), no-GPU/RDP silent CPU,
    pre-Vulkan-1.2 degradation, the mid-generation driver-crash auto-fallback, and the
    machine-move re-probe (1↔4). Measured tok/s feed the release notes.
+8. **(If a vision model ships)** open **Images**, analyze a **PNG** and a **JPEG** from the
+   produced `.exe` (the `vision-smoke` harness covers the runtime mechanics; this is the
+   packaged-app pass) and confirm the calm unavailable state on a drive with **no** vision model.
 
 ### The `HILBERTRAUM_*` manual harness matrix — a REQUIRED pre-release gate (audit M-A5)
 
@@ -345,6 +358,7 @@ Treat this as part of the gate, not optional polish:
 | `rerank-smoke` | `HILBERTRAUM_RERANK_SMOKE` | the reranker sidecar reorders retrieval |
 | `whisper-smoke` / `dictation-smoke` | `HILBERTRAUM_WHISPER_SMOKE` / `HILBERTRAUM_DICTATION_SMOKE` | whisper-cli transcription + dictation |
 | `ocr-smoke` | `HILBERTRAUM_OCR_SMOKE` | WASM OCR over a real scan |
+| `vision-smoke` | `HILBERTRAUM_VISION_SMOKE` | the vision sidecar (`--mmproj`) cold-starts, analyzes a fixture image, streams, reuses the prefill, idle-tears-down + cold-restarts |
 | `compare-smoke` / `translation-smoke` | `HILBERTRAUM_COMPARE_SMOKE` / `HILBERTRAUM_TRANSLATION_SMOKE` | the doc-task pipelines end-to-end |
 | `rag-quality` / `minsim-measure` | `HILBERTRAUM_RAG_QUALITY` / `HILBERTRAUM_MINSIM_MEASURE` | retrieval quality + the similarity floor |
 | `server-concurrency-probe` | `HILBERTRAUM_CONCURRENCY_PROBE` | the one-at-a-time sidecar invariant |

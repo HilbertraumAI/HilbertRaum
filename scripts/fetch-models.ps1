@@ -122,6 +122,71 @@ function Invoke-Download([string]$url, [string]$dest) {
   }
 }
 
+# Extract the indented body of a top-level `mmproj:` mapping (the SECOND file of a vision model,
+# DIST-1) — lines from `mmproj:` until the next column-0 key. Get-ManifestField then parses it.
+function Get-MmprojBlock([string]$text) {
+  $out = New-Object System.Collections.Generic.List[string]
+  $inBlk = $false
+  foreach ($line in ($text -split "`n")) {
+    if (-not $inBlk) {
+      if ($line -match '^mmproj:\s*$') { $inBlk = $true }
+    } elseif ($line -match '^\S') {
+      break
+    } else {
+      $out.Add($line)
+    }
+  }
+  return ($out -join "`n")
+}
+
+# Classify a destination file against its expected hash: verified|placeholder|mismatch|absent.
+function Get-FileState([string]$dest, [string]$sha) {
+  if (-not (Test-Path $dest)) { return 'absent' }
+  if (& $IsRealSha $sha) {
+    if ((Get-Sha256 $dest) -eq $sha) { return 'verified' } else { return 'mismatch' }
+  }
+  return 'placeholder'
+}
+
+# Fetch + verify ONE file (the GGUF, or a vision model's mmproj projector), given its already-
+# computed state. Mirrors assets.ts `planOneFile` + the atomic verify-before-trust contract.
+function Invoke-HandleFile([string]$id, [string]$label, [string]$dest, [string]$sha, [string]$url, [string]$rel, [string]$state) {
+  switch ($state) {
+    'verified'    { Write-Host ("  skip   {0}{1} (present + verified)" -f $id, $label) -ForegroundColor Green; $script:skipped++; return }
+    'placeholder' { Write-Host ("  skip   {0}{1} (present; placeholder hash -- cannot verify)" -f $id, $label) -ForegroundColor DarkYellow; $script:skipped++; return }
+    'mismatch'    { Write-Host ("  redo   {0}{1} (present but checksum mismatch -- re-downloading)" -f $id, $label) -ForegroundColor Yellow }
+  }
+  if ($DryRun) {
+    Write-Host ("  fetch  {0}{1}" -f $id, $label)
+    Write-Host ("           {0}" -f $url)
+    Write-Host ("           -> {0}" -f $rel)
+    return
+  }
+  Write-Host ("  fetch  {0}{1} ..." -f $id, $label)
+  try {
+    Invoke-Download $url $dest
+  } catch {
+    Write-Host ("  FAIL   {0}{1}: {2}" -f $id, $label, $_.Exception.Message) -ForegroundColor Red
+    $script:hadFailure = $true
+    return
+  }
+  if (& $IsRealSha $sha) {
+    $actual = Get-Sha256 $dest
+    if ($actual -eq $sha) {
+      Write-Host ("  ok     {0}{1} (VERIFIED)" -f $id, $label) -ForegroundColor Green
+      $script:fetched++
+    } else {
+      Write-Host ("  FAIL   {0}{1}: checksum mismatch (expected {2}, got {3}) -- deleting partial" -f $id, $label, $sha, $actual) -ForegroundColor Red
+      Remove-Item -Force -Path $dest -ErrorAction SilentlyContinue
+      Remove-Item -Force -Path "$dest.aria2" -ErrorAction SilentlyContinue
+      $script:hadFailure = $true
+    }
+  } else {
+    Write-Host ("  ok     {0}{1} (UNVERIFIED -- placeholder hash; run verify-models -Generate)" -f $id, $label) -ForegroundColor Yellow
+    $script:fetched++
+  }
+}
+
 $manifestFiles = Get-ChildItem -Path $ManifestsDir -Recurse -Include *.yaml, *.yml |
   Where-Object { $_.Name -notin @('runtime-sources.yaml', 'runtime-sources.yml') }
 
@@ -150,64 +215,42 @@ foreach ($mf in $manifestFiles) {
 
   $dest = Join-Path $Target ($localPath -replace '/', [IO.Path]::DirectorySeparatorChar)
 
-  # Idempotent skip: present + (real hash matches OR placeholder we can't verify).
-  if (Test-Path $dest) {
-    if (& $IsRealSha $sha) {
-      if ((Get-Sha256 $dest) -eq $sha) {
-        Write-Host ("  skip   {0} (present + verified)" -f $id) -ForegroundColor Green
-        $skipped++; continue
-      }
-      Write-Host ("  redo   {0} (present but checksum mismatch -- re-downloading)" -f $id) -ForegroundColor Yellow
-    } else {
-      Write-Host ("  skip   {0} (present; placeholder hash -- cannot verify)" -f $id) -ForegroundColor DarkYellow
-      $skipped++; continue
-    }
-  }
+  # A vision model is TWO files: the language GGUF (above) + the mmproj projector (DIST-1). Parse
+  # the projector's own block (its local_path/sha256/download.url) -- absent for non-vision models.
+  $mmprojBlock = Get-MmprojBlock $text
+  $mmprojLocal = Get-ManifestField $mmprojBlock 'local_path'
+  $mmprojSha = (Get-ManifestField $mmprojBlock 'sha256'); if ($mmprojSha) { $mmprojSha = $mmprojSha.ToLower() }
+  $mmprojUrl = Get-ManifestField $mmprojBlock 'url'
+  $hasMmproj = [bool]($mmprojUrl -and $mmprojLocal)
+  $mmprojDest = if ($hasMmproj) { Join-Path $Target ($mmprojLocal -replace '/', [IO.Path]::DirectorySeparatorChar) } else { $null }
 
-  # License gate.
-  $approved = ($reviewStatus -eq 'approved')
-  if (-not $approved -and -not $AcceptLicense) {
-    Write-Host ("  BLOCK  {0}: license '{1}' not approved." -f $id, $license) -ForegroundColor Red
-    if ($licenseUrl) { Write-Host ("         License: {0}" -f $licenseUrl) }
-    Write-Host "         Re-run with -AcceptLicense to accept and continue." -ForegroundColor Red
-    $hadFailure = $true
-    continue
-  }
-  if (-not $approved) {
-    Write-Host ("  note   {0}: license '{1}' accepted via -AcceptLicense ({2})" -f $id, $license, $licenseUrl)
-  }
+  # Classify each file ONCE (a present multi-GB weight is hashed at most once).
+  $ggufState = Get-FileState $dest $sha
+  $mmprojState = if ($hasMmproj) { Get-FileState $mmprojDest $mmprojSha } else { $null }
 
-  if ($DryRun) {
-    Write-Host ("  fetch  {0}" -f $id)
-    Write-Host ("           {0}" -f $url)
-    Write-Host ("           -> {0}" -f $localPath)
-    continue
-  }
+  # Does anything need the network? (absent / checksum-mismatch). A model already fully present is
+  # skipped WITHOUT a license prompt (the license is only relevant to an actual download).
+  $needsFetch = ($ggufState -eq 'absent' -or $ggufState -eq 'mismatch') -or
+    ($hasMmproj -and ($mmprojState -eq 'absent' -or $mmprojState -eq 'mismatch'))
 
-  Write-Host ("  fetch  {0} ..." -f $id)
-  try {
-    Invoke-Download $url $dest
-  } catch {
-    Write-Host ("  FAIL   {0}: {1}" -f $id, $_.Exception.Message) -ForegroundColor Red
-    $hadFailure = $true
-    continue
-  }
-
-  if (& $IsRealSha $sha) {
-    $actual = Get-Sha256 $dest
-    if ($actual -eq $sha) {
-      Write-Host ("  ok     {0} (VERIFIED)" -f $id) -ForegroundColor Green
-      $fetched++
-    } else {
-      Write-Host ("  FAIL   {0}: checksum mismatch (expected {1}, got {2}) -- deleting partial" -f $id, $sha, $actual) -ForegroundColor Red
-      Remove-Item -Force -Path $dest -ErrorAction SilentlyContinue
-      # A stale aria2 control file would corrupt the next resume of the re-download.
-      Remove-Item -Force -Path "$dest.aria2" -ErrorAction SilentlyContinue
+  if ($needsFetch) {
+    # License gate (spec section 13) -- only when something will actually be fetched.
+    $approved = ($reviewStatus -eq 'approved')
+    if (-not $approved -and -not $AcceptLicense) {
+      Write-Host ("  BLOCK  {0}: license '{1}' not approved." -f $id, $license) -ForegroundColor Red
+      if ($licenseUrl) { Write-Host ("         License: {0}" -f $licenseUrl) }
+      Write-Host "         Re-run with -AcceptLicense to accept and continue." -ForegroundColor Red
       $hadFailure = $true
+      continue
     }
-  } else {
-    Write-Host ("  ok     {0} (UNVERIFIED -- placeholder hash; run verify-models -Generate)" -f $id) -ForegroundColor Yellow
-    $fetched++
+    if (-not $approved) {
+      Write-Host ("  note   {0}: license '{1}' accepted via -AcceptLicense ({2})" -f $id, $license, $licenseUrl)
+    }
+  }
+
+  Invoke-HandleFile $id '' $dest $sha $url $localPath $ggufState
+  if ($hasMmproj) {
+    Invoke-HandleFile $id ' (mmproj)' $mmprojDest $mmprojSha $mmprojUrl $mmprojLocal $mmprojState
   }
 }
 
