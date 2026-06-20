@@ -45,12 +45,17 @@ function freshVault(): VaultPaths {
 
 function ctxWith(
   ctrl: WorkspaceController,
-  sidecars?: { stopRuntime?: () => Promise<void>; stopEmbedder?: () => Promise<void> }
+  sidecars?: {
+    stopRuntime?: () => Promise<void>
+    stopEmbedder?: () => Promise<void>
+    stopVision?: () => Promise<void>
+  }
 ): AppContext {
   return {
     workspace: ctrl,
     runtime: { stop: sidecars?.stopRuntime ?? (async () => {}), activeModelId: () => null },
-    embedder: { stop: sidecars?.stopEmbedder ?? (async () => {}) }
+    embedder: { stop: sidecars?.stopEmbedder ?? (async () => {}) },
+    ...(sidecars?.stopVision ? { vision: { stop: sidecars.stopVision } } : {})
   } as unknown as AppContext
 }
 
@@ -164,6 +169,20 @@ describe('registerWorkspaceIpc', () => {
     expect(stopEmbedder).toHaveBeenCalledTimes(1)
     // Both sidecars were stopped (order between them doesn't matter, but both ran).
     expect(order.sort()).toEqual(['embedder', 'runtime'])
+  })
+
+  it('lockWorkspace stops the vision sidecar too (its KV cache holds the image + prompt)', async () => {
+    const vp = freshVault()
+    createEncryptedVaultOnDisk(vp, 'right-password', FAST_KDF)
+    const ctrl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctrl.init()
+    ctrl.unlock('right-password')
+    const stopVision = vi.fn(async () => {})
+    registerWorkspaceIpc(ctxWith(ctrl, { stopVision }))
+
+    const { result } = await invoke(handlers, IPC.lockWorkspace)
+    expect(result).toMatchObject({ state: 'locked' })
+    expect(stopVision).toHaveBeenCalledTimes(1)
   })
 
   it('lockWorkspace still locks when a sidecar stop fails (allSettled)', async () => {

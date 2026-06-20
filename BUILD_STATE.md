@@ -6,6 +6,50 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-20 — **Image-understanding Phase V4 (real local vision runtime — hardening + wiring) SHIPPED — V5 (eval/benchmark/docs) is next.**
+Branch `image-understanding`, implementing [`docs/image-understanding-plan.md`](docs/image-understanding-plan.md) §16
+Phase V4. **A hardened, tested local vision sidecar with the net-new idle-teardown interlock + lock/quit/cancel teardown
+wired, the green-gate intact (zero vision models ⇒ `available:false` and the suite stays green).** All V1-resolved
+decisions are consumed, not re-litigated; no renderer change. **As built:**
+- **`services/vision/runtime.ts` — the heart of V4 (RUNTIME-4 idle-teardown interlock, NET-NEW; `e5.ts` has no idle
+  timer).** Real `ensureStarted` single-flight (concurrent callers share one start promise) keeps the V2 `startFailed`
+  latch + `stopped` guard; `analyze` is unchanged on the wire (base64 `image_url` data-URL, `cache_prompt:true`,
+  `readChatSSE` reused — V1-confirmed) but now wrapped by `runAnalyze` so the public `analyze` can drive the interlock.
+  **Interlock:** an `inFlight` counter + an `idleTimer` (default **~3 min**, env `HILBERTRAUM_VISION_IDLE_MS`, §19.13
+  tune-later) + an `idleTeardownPromise`. The timer is **cancelled on every `ensureStarted()`/`analyze()` entry** and
+  **rearmed only when the LAST in-flight analyze settles** (`inFlight===0`). The idle teardown is a **SOFT** teardown
+  (kills the child, nulls `this.server`, but does **NOT** latch `stopped`) so the next analyze cold-starts cleanly; it is
+  **guarded** against `stopped`/`starting`/`inFlight>0` so it can never fire under a running job, and an analyze arriving
+  mid-teardown sees `server===null` and cold-starts a **fresh, independent** child (the old one finishes stopping on its
+  own). `stop()` (permanent — lock/quit/cancel) now also **cancels the idle timer + awaits an in-flight soft teardown**
+  so no child orphans on quit; the idle timer is `unref()`-ed so it never blocks a clean exit. The §12 temp-file fallback
+  was **not** built (V1 = base64 no-disk).
+- **`services/vision/index.ts`** — `VisionService.stop()` now **aborts any in-flight job FIRST** (so it ends `cancelled`,
+  not a scary `runtimeFailed`) then tears the runtime down via a typed optional `VisionAnalyzer.stop?()`; the orchestrator
+  discards the runtime, so the next analyze rebuilds a fresh one (no `suspend()`/latch distinction needed — RUNTIME-3
+  one-job latch + IPC-3 busy-reject from V2 are unchanged and re-verified under the real path).
+- **Lifecycle wiring** — `context.ts` gains `ctx.vision?: VisionService`; `main/index.ts` **builds it once** (so the
+  teardown paths can reach it) + adds `ctx?.vision?.stop()` to the `will-quit` `Promise.allSettled`; `registerWorkspaceIpc`
+  **stops it on workspace LOCK** beside `ctx.embedder.suspend()` (its llama-server KV cache holds the decoded image + prompt,
+  so it must die before the vault re-encrypts). `getVisionStatus` stays **workspace-agnostic** (PROD-2 — no `'locked'`
+  reason); the screen owns the lock gate, the sidecar teardown is independent.
+- **Caps** — the renderer dimension cap (V3 `decode.ts`, 4096 hard / 1536 downscale) + the main-side byte/extension cap
+  (`limits.ts`, SEC-3) are both already on the real path; not duplicated.
+**§0 honored:** loopback-only (sentinel asserts every fetch host is 127.0.0.1), **no image/prompt/answer content in
+logs/audit** (sentinel asserts absence + that vision writes ZERO audit rows), no native dep, CSP untouched.
+**Data contracts:** none changed (`ctx.vision` is an internal main-process handle; `images:*` IPC + `STREAM.img*` +
+`VisionStatus`/`ImageJob` as-is). **Verification:** `npm test` (apps/desktop) **1965 passed / 29 skipped (176 files)** —
+full-suite-guard active, green-gate holds; `npm run typecheck` + `npm run build` clean. New tests:
+`tests/integration/vision-runtime.test.ts` (9 — single-flight, startFailed latch, cancel-aborts-fetch, no-orphan-on-stop,
+idle teardown + cold restart, no-teardown-while-running, timer-reset, stop-cancels-timer), `tests/unit/vision-sse.test.ts`
+(2 — SSE regression on the V1 fixture + partial-UTF-8-across-frames), `tests/integration/vision-security.test.ts` (2 —
+loopback-only + no-content-in-log/audit sentinel, success + failure paths), + a lock-teardown case in `workspace-ipc.test.ts`
+and a `service.stop()` abort case in `images-ipc.test.ts`. **Risks/notes:** the idle-timeout default (180 000 ms) is a
+placeholder in the §19.13 2–5 min band — tune in V5 with real numbers; the RUNTIME-4 races are covered by deterministic
+small-timeout tests (the documented vitest load-flakiness can surface a transient unrelated failure under heavy parallel
+load — a re-run is green). **Next:** V5 — benchmark fixtures + the `HILBERTRAUM_VISION_SMOKE` manual harness, model-policy/
+known-limitations docs, fold the plan into `architecture.md` + delete the plan file, commercial-drive gates. **(prior entries below.)**_
+
 _2026-06-20 — **Image-understanding Phase V3 (Images screen UI) SHIPPED — V4 (real runtime hardening) is next.**
 Branch `image-understanding`, implementing [`docs/image-understanding-plan.md`](docs/image-understanding-plan.md)
 §16 Phase V3. **A wired, tested Images screen that drives the V2 backend and shows the calm unavailable state

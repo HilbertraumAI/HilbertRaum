@@ -10,6 +10,7 @@ import type { CachedGpuProbe } from './runtime/gpu'
 import type { AuditRecorder } from './audit'
 import type { DocTaskManager } from './doctasks'
 import type { SkillRegistry } from './skills/registry'
+import type { VisionService } from './vision'
 
 // Shared application context assembled at startup and passed to IPC handlers.
 export interface AppContext {
@@ -78,4 +79,11 @@ export interface AppContext {
    * later phases re-run it post-unlock; tests drive `reconcileSkills`/the handle directly.
    */
   skills?: SkillRegistry
+  /**
+   * Image-understanding (vision) sidecar orchestrator: a SEPARATE lazy llama-server with the
+   * mmproj projector (image-understanding plan §10). Optional so partial test contexts stay
+   * valid. Owns its own idle teardown; the lock/quit handlers also call `stop()` so its
+   * in-memory image/prompt context never outlives a lock and no child orphans on quit.
+   */
+  vision?: VisionService
 }

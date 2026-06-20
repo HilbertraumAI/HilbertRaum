@@ -37,6 +37,8 @@ export interface VisionAnalyzer {
     signal?: AbortSignal
     onToken?: (delta: string) => void
   }): Promise<string>
+  /** Optional teardown (the real `VisionRuntime` has one; test fakes may omit it). */
+  stop?(): Promise<void>
 }
 
 export interface VisionServiceDeps {
@@ -165,13 +167,19 @@ export class VisionService {
     return { ...existing }
   }
 
-  /** Tear down the lazily-built runtime (wired to lock/quit in V4). */
+  /**
+   * Tear down the lazily-built runtime — wired to workspace LOCK (registerWorkspaceIpc) and
+   * QUIT (will-quit), and a safe no-op when nothing was ever built. Any in-flight job is
+   * aborted FIRST so its sidecar fetch unwinds as `cancelled` (not a scary `runtimeFailed`)
+   * before the child is killed; the next analyze rebuilds a fresh runtime (cold start).
+   */
   async stop(): Promise<void> {
+    for (const controller of this.controllers.values()) {
+      if (!controller.signal.aborted) controller.abort()
+    }
     const runtime = this.runtime
     this.runtime = null
-    if (runtime && 'stop' in runtime && typeof (runtime as VisionRuntime).stop === 'function') {
-      await (runtime as VisionRuntime).stop()
-    }
+    await runtime?.stop?.()
   }
 
   private set(jobId: string, job: ImageJob): void {

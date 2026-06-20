@@ -189,6 +189,40 @@ describe('registerImagesIpc — analyze job contract', () => {
     const cancelled = (await invoke(handlers, IPC.imageCancel, job.jobId)).result as ImageJob
     expect(cancelled.state).toBe('cancelled')
   })
+
+  // V4 lock/quit teardown mechanism: service.stop() aborts any in-flight job (so it ends
+  // `cancelled`, not a scary `runtimeFailed`) AND tears the runtime down so a fresh analyze
+  // cold-starts. This is exactly what registerWorkspaceIpc (lock) + will-quit call.
+  it('stop() aborts the in-flight job and tears down the runtime (lock/quit path)', async () => {
+    let runtimeStopped = false
+    let sawSignal: AbortSignal | undefined
+    const analyzer = {
+      async analyze(opts: { signal?: AbortSignal }) {
+        sawSignal = opts.signal
+        await new Promise<void>((_resolve, reject) => {
+          opts.signal?.addEventListener('abort', () =>
+            reject(new DOMException('Aborted', 'AbortError'))
+          )
+        })
+        return 'never reached'
+      },
+      async stop() {
+        runtimeStopped = true
+      }
+    }
+    const service = new VisionService({ getStatus: async () => AVAILABLE, createRuntime: () => analyzer })
+    registerImagesIpc(ctxFor(mkdtempSync(join(tmpdir(), 'hr-img-'))), service)
+
+    const job = (await invoke(handlers, IPC.imageAnalyze, goodReq())).result as ImageJob
+    expect(job.state).toBe('queued')
+    while (!sawSignal) await new Promise((r) => setTimeout(r, 1)) // analyze is now in flight
+
+    await service.stop()
+    expect(runtimeStopped).toBe(true)
+    expect(sawSignal?.aborted).toBe(true)
+    const terminal = await waitForTerminal(job.jobId)
+    expect(terminal.state).toBe('cancelled')
+  })
 })
 
 describe('registerImagesIpc — readBytes main-side re-validation (SEC-3)', () => {

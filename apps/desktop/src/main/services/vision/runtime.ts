@@ -13,9 +13,20 @@ import { readChatSSE } from '../runtime/llama'
 // with `cache_prompt:true` (the image prefill is cached across follow-ups), streamed back as SSE
 // byte-identical to chat — so `readChatSSE` parses the frames unchanged (V1-confirmed).
 //
-// V2 SCOPE: this wires the real LlamaServer seam + the V1-resolved request. The idle-teardown
-// timer (RUNTIME-4), the workspace-lock teardown wiring, and the dimension cap are V4 — this
-// class deliberately stops at lazy start + analyze + stop, with no idle timer.
+// V4 SCOPE: this is the hardened runtime. Besides the V2 lazy start + analyze + stop it now
+// owns the NET-NEW idle-teardown interlock (RUNTIME-4): the sidecar is torn down after an idle
+// timeout so it does not sit co-resident with the chat model + E5 embedder forever (PROD-1
+// bounds the WINDOW, not the active-use peak). The interlock is the heart of V4 —
+//   • every `ensureStarted()`/`analyze()` entry CANCELS the pending idle timer;
+//   • the timer is (re)armed only when the LAST in-flight analyze settles (inFlight===0);
+//   • the idle teardown is a SOFT teardown (unlike `stop()`): it kills the child but does NOT
+//     latch `stopped`, so the next `analyze()` re-pays a clean cold start;
+//   • the teardown is GUARDED against a `starting`/in-flight job (`this.starting`/`inFlight>0`)
+//     so it can never tear down under a running analyze; an analyze arriving mid-teardown just
+//     sees `this.server === null` and cold-starts a fresh child (the two server instances are
+//     independent — the old one finishes stopping while the new one starts).
+// e5.ts is the precedent for the lazy-start/`startFailed`/no-orphan plumbing but has NO idle
+// timer, so the interlock above is genuinely new code, not a copy.
 
 /** The vision sidecar's extra CLI args BESIDES `--mmproj <path>` (V1-resolved, RUNTIME-2). */
 export const VISION_DEVICE_ARGS = ['--device', 'none'] as const
@@ -24,6 +35,19 @@ export const VISION_DEVICE_ARGS = ['--device', 'none'] as const
 const DEFAULT_VISION_CONTEXT_TOKENS = 4096
 /** Per-analyze bound so a wedged sidecar fails the job instead of hanging it. */
 const DEFAULT_REQUEST_TIMEOUT_MS = 300_000
+
+/**
+ * Idle-teardown timeout default (RUNTIME-4 / plan §19.13: 2–5 min, tuned later). The window
+ * the sidecar may sit idle, co-resident with the chat + embedder sidecars, before it is torn
+ * down to give the RAM back. Env-overridable (`HILBERTRAUM_VISION_IDLE_MS`) for tuning/tests.
+ */
+const DEFAULT_VISION_IDLE_MS = 180_000
+
+function readIdleTimeoutMs(): number {
+  const raw = process.env.HILBERTRAUM_VISION_IDLE_MS?.trim()
+  const n = raw ? Number(raw) : NaN
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : DEFAULT_VISION_IDLE_MS
+}
 
 export type VisionRuntimeDeps = Pick<
   LlamaServerOptions,
@@ -41,6 +65,8 @@ export interface VisionRuntimeOptions extends VisionRuntimeDeps {
   contextTokens?: number
   /** Per-analyze timeout in ms (default 300 000 — CPU prefill of a full image is slow). */
   requestTimeoutMs?: number
+  /** Idle-teardown timeout in ms (default `HILBERTRAUM_VISION_IDLE_MS` / 180 000). */
+  idleTimeoutMs?: number
 }
 
 export interface VisionAnalyzeOptions {
@@ -63,13 +89,25 @@ export class VisionRuntime {
   /** Failed-start latch (the reranker/embedder pattern) — a corrupt GGUF mustn't re-spawn +
    *  re-await the full health timeout on every analyze. Cleared by `stop()`. */
   private startFailed: Error | null = null
+  /** Number of analyses currently using the sidecar. Guards the idle teardown (RUNTIME-4):
+   *  while >0 a job is running and the sidecar must NOT be torn down. */
+  private inFlight = 0
+  /** The pending idle-teardown timer (armed only when `inFlight===0`), or null. */
+  private idleTimer: ReturnType<typeof setTimeout> | null = null
+  /** An in-flight SOFT idle teardown, tracked so `stop()` can await it (no orphan on quit). */
+  private idleTeardownPromise: Promise<void> | null = null
+  private readonly idleTimeoutMs: number
 
   constructor(private readonly opts: VisionRuntimeOptions) {
     this.modelId = opts.modelId
+    this.idleTimeoutMs = opts.idleTimeoutMs ?? readIdleTimeoutMs()
   }
 
   /** Lazily spawn the vision sidecar (once). Concurrent callers share one start (single-flight). */
   private async ensureStarted(): Promise<LlamaServer> {
+    // Any use of the sidecar resets the idle clock (RUNTIME-4): a teardown must never fire
+    // out from under an imminent request.
+    this.cancelIdleTimer()
     if (this.stopped) throw new Error('Vision runtime is stopped')
     if (this.startFailed) throw this.startFailed
     if (this.server) return this.server
@@ -114,6 +152,21 @@ export class VisionRuntime {
    * `signal` (a user "Stop") combined with the per-request timeout.
    */
   async analyze(opts: VisionAnalyzeOptions): Promise<string> {
+    // RUNTIME-4: cancel the idle timer and mark a job in flight BEFORE the (possibly slow,
+    // cold-start) `ensureStarted` await, so a teardown can't fire during the start either.
+    this.cancelIdleTimer()
+    this.inFlight++
+    try {
+      return await this.runAnalyze(opts)
+    } finally {
+      this.inFlight--
+      // The last job to settle re-arms the idle clock; a still-running job leaves it disarmed
+      // (its own finally will arm it when it finishes).
+      if (this.inFlight === 0) this.armIdleTimer()
+    }
+  }
+
+  private async runAnalyze(opts: VisionAnalyzeOptions): Promise<string> {
     const server = await this.ensureStarted()
     const dataUrl = `data:${opts.mimeType};base64,${Buffer.from(opts.imageBytes).toString('base64')}`
     const body = JSON.stringify({
@@ -155,12 +208,56 @@ export class VisionRuntime {
   }
 
   /** Kill the sidecar (no-op if never started). Permanent for this instance; the orchestrator
-   *  builds a fresh runtime on the next analyze if it cleared its reference. */
+   *  builds a fresh runtime on the next analyze if it cleared its reference. Used by the
+   *  workspace-lock / quit / cancel teardown wiring (VisionService.stop). */
   async stop(): Promise<void> {
     this.stopped = true
+    this.cancelIdleTimer()
+    // Wait out an in-flight lazy start (e5.ts no-orphan precedent) AND an in-flight soft idle
+    // teardown, so neither leaves an orphaned child after the app quits.
     if (this.starting) await this.starting.catch(() => undefined)
+    if (this.idleTeardownPromise) await this.idleTeardownPromise.catch(() => undefined)
     const server = this.server
     this.server = null
     if (server) await server.stop()
+  }
+
+  // ---- Idle-teardown interlock (RUNTIME-4) --------------------------------------------
+
+  private cancelIdleTimer(): void {
+    if (this.idleTimer) {
+      clearTimeout(this.idleTimer)
+      this.idleTimer = null
+    }
+  }
+
+  /** Arm the idle teardown — but only when there is a live, idle sidecar to reclaim. */
+  private armIdleTimer(): void {
+    this.cancelIdleTimer()
+    if (this.stopped || this.starting || this.inFlight > 0 || !this.server) return
+    this.idleTimer = setTimeout(() => {
+      this.idleTimer = null
+      void this.idleTeardown()
+    }, this.idleTimeoutMs)
+    // Never let the idle timer keep the process alive (it would block a clean quit).
+    this.idleTimer.unref?.()
+  }
+
+  /**
+   * SOFT teardown fired by the idle timer: kill the child but do NOT latch `stopped`, so the
+   * next `analyze()` cold-starts cleanly. Guarded so it can never run under a `starting`/
+   * in-flight job (RUNTIME-4) — if a job slipped in after the timer fired, we simply skip and
+   * that job's `finally` re-arms the clock.
+   */
+  private async idleTeardown(): Promise<void> {
+    if (this.stopped || this.starting || this.inFlight > 0 || !this.server) return
+    const server = this.server
+    // Null the reference SYNCHRONOUSLY before awaiting the kill: an `analyze()` arriving
+    // mid-teardown then sees `server === null` and cold-starts a fresh, independent child.
+    this.server = null
+    this.idleTeardownPromise = server.stop().finally(() => {
+      this.idleTeardownPromise = null
+    })
+    await this.idleTeardownPromise
   }
 }

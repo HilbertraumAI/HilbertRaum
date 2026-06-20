@@ -888,6 +888,25 @@ capability bar above.
    unavailable otherwise).
 
 ### Phase V4 — real local vision runtime (uses the V1-resolved arg set + request shape, not assumptions)
+
+> **✅ V4 SHIPPED 2026-06-20 (branch `image-understanding`; full record in `BUILD_STATE.md`).** The hardened,
+> tested local vision runtime is in `services/vision/runtime.ts` (real `ensureStarted` single-flight + the
+> V1-resolved `--mmproj`/`--device none` args, `analyze` base64 `image_url` + `cache_prompt:true` + `readChatSSE`,
+> `startFailed` latch, no-orphan `stop()`, **plus the NET-NEW idle-teardown interlock RUNTIME-4**), `services/vision/
+> index.ts` (`VisionService.stop()` now aborts the in-flight job + tears the runtime down — the lock/quit mechanism),
+> and the lifecycle wiring (`context.ts` `ctx.vision`, `main/index.ts` builds it + tears it down on `will-quit`,
+> `registerWorkspaceIpc` stops it on workspace LOCK beside the embedder `suspend()`). **RUNTIME-4 as built:** a SOFT
+> idle teardown (kills the child but does NOT latch `stopped`, so the next analyze cold-starts) on a `~3 min` default
+> (`HILBERTRAUM_VISION_IDLE_MS`, §19.13); the idle timer is cancelled on every `ensureStarted()`/`analyze()` entry and
+> rearmed only when the LAST in-flight analyze settles (`inFlight===0`); teardown is guarded against a `starting`/
+> in-flight job; an analyze arriving mid-teardown sees `server===null` and cold-starts a fresh, independent child. The
+> §12 temp-file fallback was NOT built (V1 = base64 no-disk). **Green-gate holds** (zero vision models ⇒ `available:false`,
+> app launches, suite green). `npm test` 1965 passed / 29 skipped (176 files); typecheck + build clean. New tests:
+> `tests/integration/vision-runtime.test.ts` (single-flight, startFailed latch, cancel-aborts-fetch, no-orphan, the
+> RUNTIME-4 idle races), `tests/unit/vision-sse.test.ts` (SSE regression on the V1 fixture incl. partial-UTF-8),
+> `tests/integration/vision-security.test.ts` (loopback-only + no content in log/audit sentinel), + lock-teardown and
+> `service.stop()` cases in `workspace-ipc`/`images-ipc`. **V5 (eval/benchmark/docs/plan-fold) not started.** The numbered
+> list below is the as-built checklist.
 1. `VisionRuntime` real `ensureStarted` (`--mmproj` + the **V1-resolved** `visionServerArgs`, loopback)
    + `analyze` (the V1-resolved request shape; `readChatSSE` **only if** V1 confirmed it parses),
    single-flight, lock/quit/cancel teardown, **plus the net-new idle-timer interlock (RUNTIME-4):**
