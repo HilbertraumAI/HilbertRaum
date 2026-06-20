@@ -6,6 +6,31 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-20 — **Image-understanding V7 — first `role: vision` manifest shipped + the three in-app vision gaps it exposed CLOSED.**
+A user tried the Images screen with no vision model, so the **Qwen2.5-VL-3B-Instruct Q4 + f16 mmproj** manifest was authored into the
+catalog (`model-manifests/vision/qwen2.5-vl-3b-instruct-q4.yaml`, Apache-2.0, opt-in: `recommended_profiles: []`/rank 0, real GGUF+mmproj
+hashes from `model-policy.md`). That made vision discoverable + downloadable in-app for the first time — which exercised three paths the
+V6 entry had marked latent/residual. **As built (suite green):**
+- **DIST-1 in-app residual CLOSED — `downloads.ts` now fetches ALL of a model's files, not just `tasks[0]`.** `DownloadManager.start()`
+  plans every task, gates the model-level license once, and downloads each file that is absent/stale under ONE job; a model whose GGUF is
+  already present+verified but whose mmproj is missing fetches JUST the projector (the user's exact half-installed case). `run()` became a
+  sequential orchestrator over a new per-file `runOne()` with COMBINED received/total (`sumSizes` helper, null-safe → Content-Length
+  refines mid-run); the job is `done` only when every file verifies, and one placeholder hash taints the whole model UNVERIFIED. Tests:
+  `downloads.test.ts` "DownloadManager vision (two files)" — both-files, finish-a-partial, fully-present-refused.
+- **Models-screen vision card FIXED — vision is now availability-driven (`automatic`), like the embedder.** It was wrongly treated as a
+  chat model and showed Select/Start, which throw for a non-`chat` role (`registerModelIpc`). Added `vision` to the `automatic` set (no
+  Select/Start, no Active badge) + a vision-specific hint `models.vision.installed/notInstalled` (EN+DE) pointing at the Images tab.
+  Download-before-install + Installed-after still correct. Tests added in `ModelsScreen.test.tsx` (missing + installed vision cards).
+- **Progress-bar height bug FIXED (unrelated, same session).** `.download-progress progress { flex: 1 1 160px }` was written for a row
+  flex child, but the `Progress` component wraps `<progress>` in a `flex-direction: column` `.progress`, so `flex-basis: 160px` became the
+  bar HEIGHT (~160px tall). Dropped the obsolete rule; `.progress progress` now `height: 8px` (consistent across download/verify/engine bars).
+**Docs:** `architecture.md` image-understanding design record updated — the "Download topology" row, the rejected "one job, two files"
+alternative, and the DIST-1 "Residual" paragraph now record the in-app downloader as multi-file (the residual is closed). **Verification:**
+`npm run typecheck` clean; the touched suites green (downloads incl. 3 new vision cases, ModelsScreen incl. 2 new, vision-status,
+GermanSmoke, models, commercial-drive). The installed vision card was eyeball-verified via an Electron screenshot of the real component DOM
+against the real CSS. **Note:** weights are NOT committed (§0) — the user downloads them in-app; the GGUF+mmproj live on their D: drive only.
+**(prior V6 entry below — its "in-app DownloadManager remains single-file for vision" residual is now resolved.)**_
+
 _2026-06-20 — **Image-understanding V6 — pre-merge audit remediation SHIPPED (the V5 audit `docs/image-understanding-audit-2026-06-20-v5.md`).**
 Branch `image-understanding`. The V5 audit verdict was "safe to merge, no CRITICAL, no active HIGH"; this entry closes the two LATENT
 HIGHs + the MEDIUM/LOW/NIT quality gaps so the branch is clean before a real vision drive ships. **No §0 redline touched; suite green

@@ -128,50 +128,63 @@ export class DownloadManager {
       throw new Error(tMain('main.download.noSource', { modelId: opts.manifest.id }))
     }
 
-    // Reuse the canonical planner: license gate + present/verified/unverified states.
+    // Reuse the canonical planner: license gate + present/verified/unverified states. A vision
+    // model plans TWO tasks — the language GGUF then its `mmproj` projector (DIST-1); every other
+    // role plans one. The downloader fetches ALL of them as one logical job: `computeInstallState`
+    // requires both files present + verified, so a GGUF-only download would never reach `installed`.
     const tasks = await planModelDownloads(opts.rootPath, [opts.manifest], {
       acceptLicense: opts.licenseAccepted,
       hashStore: opts.hashStore
     })
-    // `tasks[0]` is the language GGUF (the planner emits it before a vision model's mmproj
-    // task — DIST-1). The in-app per-model downloader drives the GGUF; the mmproj projector is
-    // provisioned by the DIY `fetch-models` scripts (the canonical two-file path). No committed
-    // vision manifest ships yet, so this single-file UI flow is never exercised on vision today.
-    const task = tasks[0]
-    if (!task) {
+    if (tasks.length === 0) {
       throw new Error(tMain('main.download.noSource', { modelId: opts.manifest.id }))
     }
-    if (task.status === 'present-verified') {
-      throw new Error(tMain('main.download.alreadyVerified'))
+    // The license gate is the MODEL's (a vision projector inherits its GGUF's review), so a single
+    // blocked file blocks the whole model.
+    const blocked = tasks.find((t) => t.status === 'license-blocked')
+    if (blocked) {
+      throw new Error(tMain('main.download.licenseFirst', { license: blocked.license ?? '' }))
     }
-    if (task.status === 'present-unverified') {
-      throw new Error(tMain('main.download.presentUnverified'))
-    }
-    if (task.status === 'license-blocked') {
-      throw new Error(tMain('main.download.licenseFirst', { license: task.license ?? '' }))
+    // Fetch only the files actually absent/stale — a model whose GGUF is already present + verified
+    // but whose mmproj is missing downloads JUST the projector (the common "finish the vision model"
+    // case). When nothing is left to fetch, distinguish "fully verified" from "present-but-placeholder".
+    const toDownload = tasks.filter((t) => t.status === 'download')
+    if (toDownload.length === 0) {
+      throw new Error(
+        tasks.every((t) => t.status === 'present-verified')
+          ? tMain('main.download.alreadyVerified')
+          : tMain('main.download.presentUnverified')
+      )
     }
 
+    const modelId = tasks[0].id
+    const plannedTotal = sumSizes(toDownload)
     const job: DownloadJob = {
       jobId: randomUUID(),
-      modelId: task.id,
+      modelId,
       status: 'queued',
       receivedBytes: 0,
-      totalBytes: task.sizeBytes,
+      totalBytes: plannedTotal,
       unverified: false,
       error: null
     }
     this.jobs.set(job.jobId, job)
     const controller = new AbortController()
     this.active = { jobId: job.jobId, controller }
-    this.deps.log?.('Model download started', { modelId: task.id, jobId: job.jobId })
-    this.deps.audit?.('model_download_started', `Model download started: ${task.id}`, {
-      modelId: task.id,
+    this.deps.log?.('Model download started', {
+      modelId,
       jobId: job.jobId,
-      sizeBytes: task.sizeBytes
+      files: toDownload.length
+    })
+    this.deps.audit?.('model_download_started', `Model download started: ${modelId}`, {
+      modelId,
+      jobId: job.jobId,
+      sizeBytes: plannedTotal,
+      files: toDownload.length
     })
 
     // Background run — the invoke returns immediately; the renderer polls for progress.
-    void this.run(job, task, controller, opts.hashStore).finally(() => {
+    void this.run(job, toDownload, controller, opts.hashStore).finally(() => {
       if (this.active?.jobId === job.jobId) this.active = null
     })
     return { ...job }
@@ -231,12 +244,59 @@ export class DownloadManager {
     return live ? job.jobId : null
   }
 
+  /**
+   * Download + verify every file of the model in order (a vision model's GGUF then its mmproj
+   * projector; one file for every other role). The job's `receivedBytes`/`totalBytes` are the
+   * COMBINED progress across the files. The job is `done` only once ALL files are in place +
+   * verified; the first file to cancel or fail stops the run and the later files are skipped.
+   */
   private async run(
     job: DownloadJob,
-    task: ModelDownloadTask,
+    tasks: ModelDownloadTask[],
     controller: AbortController,
     hashStore?: HashStore
   ): Promise<void> {
+    let completedBytes = 0
+    for (let i = 0; i < tasks.length; i++) {
+      // What is still queued after this file — keeps the combined total honest mid-download.
+      const remainingPlanned = sumSizes(tasks.slice(i + 1))
+      const ok = await this.runOne(job, tasks[i], controller, hashStore, completedBytes, remainingPlanned)
+      if (!ok) return // cancelled or failed — job already marked; later files are skipped
+      completedBytes = job.receivedBytes
+    }
+
+    // Every file of the model is in place + verified (or placeholder-complete).
+    job.status = 'done'
+    this.deps.log?.('Model download complete', {
+      modelId: job.modelId,
+      verified: !job.unverified
+    })
+    // Checksum honesty extends to the audit log: only a REAL hash match (no placeholder file in
+    // the set) records "verified" — otherwise the model reports UNVERIFIED on the Models screen.
+    if (!job.unverified) {
+      this.deps.audit?.('model_download_verified', `Model download verified: ${job.modelId}`, {
+        modelId: job.modelId,
+        jobId: job.jobId,
+        bytes: job.receivedBytes
+      })
+    }
+  }
+
+  /**
+   * Download + verify ONE file into place. Returns true to continue to the next file, false when
+   * the job reached a terminal state (cancelled or failed) and the run must stop. `baseBytes` is
+   * the byte total of already-finished files; `remainingPlanned` is the planned size of the files
+   * after this one — together they keep the job's combined received/total accurate across a
+   * multi-file (GGUF + mmproj) download.
+   */
+  private async runOne(
+    job: DownloadJob,
+    task: ModelDownloadTask,
+    controller: AbortController,
+    hashStore: HashStore | undefined,
+    baseBytes: number,
+    remainingPlanned: number | null
+  ): Promise<boolean> {
     const part = partPath(task.dest)
     try {
       // Best-effort Range resume: a kept `.part` (cancelled/crashed earlier attempt)
@@ -244,7 +304,7 @@ export class DownloadManager {
       const resumeFrom = existsSync(part) ? statSync(part).size : 0
       let prefix = resumeFrom
       job.status = 'downloading'
-      job.receivedBytes = prefix
+      job.receivedBytes = baseBytes + prefix
       const result = await downloadToFile(task.url, part, {
         fetchImpl: this.deps.fetchImpl,
         signal: controller.signal,
@@ -252,11 +312,16 @@ export class DownloadManager {
         onResponse: ({ status, contentLength }) => {
           // A 200 means the server ignored the Range request → the file restarts.
           prefix = status === 206 ? resumeFrom : 0
-          job.receivedBytes = prefix
-          if (contentLength != null) job.totalBytes = prefix + contentLength
+          job.receivedBytes = baseBytes + prefix
+          // Combined total = finished files + this file (Content-Length) + the files still queued.
+          // Any unknown size collapses the total to null (the bar then shows the byte count only).
+          job.totalBytes =
+            contentLength != null && remainingPlanned != null
+              ? baseBytes + prefix + contentLength + remainingPlanned
+              : null
         },
         onProgress: (received) => {
-          job.receivedBytes = prefix + received
+          job.receivedBytes = baseBytes + prefix + received
         }
       })
       this.deps.log?.('Model download finished, verifying', {
@@ -267,7 +332,7 @@ export class DownloadManager {
 
       // A cancel that raced the final bytes: cancel() aborts our controller, so the
       // signal is the explicit cancel flag (no status-narrowing cast needed).
-      if (controller.signal.aborted) return // keep the .part for resume
+      if (controller.signal.aborted) return false // keep the .part for resume
 
       job.status = 'verifying'
       const verify = await verifyDownloadedFile(part, task.expectedSha256)
@@ -286,7 +351,7 @@ export class DownloadManager {
           jobId: job.jobId,
           reason: 'checksum mismatch — file discarded'
         })
-        return
+        return false
       }
       if (verify.reason === 'missing') {
         job.status = 'failed'
@@ -296,36 +361,25 @@ export class DownloadManager {
           jobId: job.jobId,
           reason: 'file missing before verification'
         })
-        return
+        return false
       }
 
       // ok (verified) or placeholder (cannot verify — checksum honesty): the bytes are
       // complete either way, so move the file into place and refresh install state.
       renameSync(part, task.dest)
       invalidateChecksum(task.dest, hashStore)
-      job.unverified = verify.reason === 'placeholder'
-      job.status = 'done'
-      this.deps.log?.('Model download complete', {
-        modelId: job.modelId,
-        verified: !job.unverified
-      })
-      // Checksum honesty extends to the audit log: only a REAL hash match records
-      // "verified" (a placeholder-hash completion stays unrecorded — the model itself
-      // reports UNVERIFIED on the Models screen).
-      if (!job.unverified) {
-        this.deps.audit?.('model_download_verified', `Model download verified: ${job.modelId}`, {
-          modelId: job.modelId,
-          jobId: job.jobId,
-          bytes: job.receivedBytes
-        })
-      }
+      // A single placeholder-hash file taints the whole model as UNVERIFIED (never silently pass).
+      if (verify.reason === 'placeholder') job.unverified = true
+      // Pin the combined received total to this file's true on-disk size before the next file.
+      job.receivedBytes = baseBytes + statSync(task.dest).size
+      return true
     } catch (err) {
       if (job.status === 'cancelled') {
         // The abort we asked for — the kept `.part` resumes next time.
         this.deps.log?.('Model download stopped after cancel; partial kept for resume', {
           modelId: job.modelId
         })
-        return
+        return false
       }
       job.status = 'failed'
       job.error = friendlyDownloadError(err)
@@ -335,8 +389,19 @@ export class DownloadManager {
         jobId: job.jobId,
         reason: String(err).slice(0, 300)
       })
+      return false
     }
   }
+}
+
+/** Null-safe sum of task byte sizes — null if ANY size is unknown (the bar drops the total). */
+function sumSizes(tasks: ModelDownloadTask[]): number | null {
+  let total = 0
+  for (const t of tasks) {
+    if (t.sizeBytes == null) return null
+    total += t.sizeBytes
+  }
+  return total
 }
 
 /** Map a low-level fetch/stream error to spec §11.4-toned copy (never blame, stay plain). */

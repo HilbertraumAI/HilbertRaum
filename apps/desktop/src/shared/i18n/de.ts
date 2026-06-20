@@ -617,6 +617,10 @@ export const de: Record<keyof typeof en, string> = {
     'Installiert — wird automatisch verwendet. Es gibt nichts zu starten.',
   'models.automatic.notInstalled':
     'Wird nach der Installation automatisch verwendet — keine Einrichtung nötig.',
+  'models.vision.installed':
+    'Installiert — bereit im Tab „Bilder". Hier gibt es nichts zu starten.',
+  'models.vision.notInstalled':
+    'Nach der Installation im Tab „Bilder" verfügbar — keine Einrichtung nötig.',
   'models.selected': 'Ausgewählt',
   'models.select': 'Auswählen',
   'models.stopRuntime': 'Modell stoppen',

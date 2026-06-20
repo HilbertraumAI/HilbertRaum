@@ -213,6 +213,48 @@ describe('ModelsScreen — automatic roles (Phase 36: reranker/transcriber)', ()
     expect(screen.getByText(/Turns audio recordings into searchable text/)).toBeInTheDocument()
   })
 
+  it('offers Download for a missing vision model — never Select/Start', async () => {
+    stub({
+      models: [
+        model({
+          id: 'qwen2.5-vl-3b-instruct-q4',
+          displayName: 'Qwen2.5-VL 3B Instruct Q4',
+          role: 'vision',
+          state: 'missing'
+        })
+      ]
+    })
+    render(<ModelsScreen />)
+    await screen.findByText('Qwen2.5-VL 3B Instruct Q4')
+    // Downloadable in-app, and explained as a Images-tab capability — not the chat slot.
+    expect(screen.getByRole('button', { name: /download/i })).toBeInTheDocument()
+    expect(screen.getByText(/available in the Images tab once installed/i)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^select$/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /start.*runtime/i })).not.toBeInTheDocument()
+  })
+
+  it('an installed vision model points to the Images tab — never Select/Start', async () => {
+    stub({
+      models: [
+        model({
+          id: 'qwen2.5-vl-3b-instruct-q4',
+          displayName: 'Qwen2.5-VL 3B Instruct Q4',
+          role: 'vision',
+          state: 'installed',
+          download: undefined
+        })
+      ]
+    })
+    render(<ModelsScreen />)
+    await screen.findByText('Qwen2.5-VL 3B Instruct Q4')
+    expect(screen.getByText('Installed')).toBeInTheDocument()
+    expect(screen.getByText(/ready in the Images tab/i)).toBeInTheDocument()
+    // Selecting/starting a vision model would claim the CHAT runtime slot and throw
+    // (registerModelIpc rejects a non-chat role) — those actions must not exist here.
+    expect(screen.queryByRole('button', { name: /^select$/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /start.*runtime/i })).not.toBeInTheDocument()
+  })
+
   it('the reranker card gets the same automatic treatment', async () => {
     stub({
       models: [

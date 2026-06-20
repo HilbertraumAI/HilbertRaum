@@ -590,6 +590,8 @@ export const en = {
   'models.badge.ramNeeded': 'Needs ≥{min} GB RAM',
   'models.automatic.installed': 'Installed — used automatically. There is nothing to start.',
   'models.automatic.notInstalled': 'Used automatically once installed — no setup needed.',
+  'models.vision.installed': 'Installed — ready in the Images tab. Nothing to start here.',
+  'models.vision.notInstalled': 'Available in the Images tab once installed — no setup needed.',
   'models.selected': 'Selected',
   'models.select': 'Select',
   'models.stopRuntime': 'Stop runtime',

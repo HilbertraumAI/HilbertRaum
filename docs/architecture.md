@@ -2443,7 +2443,7 @@ OCR (tesseract.js, Documents) and from any image generation (never built)._
 | Idle teardown | **Net-new SOFT idle teardown, default 120 000 ms** (2 min, §19.13 band; tuned V5) | The idle ~4.6 GB must not sit co-resident forever; cache_prompt makes the warm-window value small, so reclaim RAM promptly (RUNTIME-4 / model-benchmarks §8.3) |
 | Preview encoding | **`data:` URL only — NOT `blob:`** | Prod CSP `img-src 'self' data:` lists no `blob:` (`main/index.ts`); `data:` needs NO CSP change (SEC-1). ~33% base64 inflation, mitigated by downscaling first |
 | Image decode/downscale | **Browser APIs in the sandbox, no native dep** (`createImageBitmap` → 1536 px → re-encode) | No `sharp`/`jimp`; downscale is a real LATENCY lever (fewer image tokens ⇒ less CPU prefill) AND normalizes EXIF orientation |
-| Download topology | **Two atomic single-file `DownloadJob`s sharing one `modelId`** | Install = both GGUF + mmproj present + verified; avoids inventing cross-file progress / two-phase verify (DIST-1) |
+| Download topology | **Two atomic single-file planner tasks sharing one `modelId`**, fetched under one UI job | Install = both GGUF + mmproj present + verified. The planner (`planModelDownloads`) and the scripts always emitted both; the in-app `DownloadManager` later grew to run all of a model's tasks sequentially under one job with COMBINED progress (DIST-1) |
 | Persistence | **Ephemeral renderer state only** — no DB writes, no auto-OCR, no corpus indexing | The image/question/answer live only in screen state (§3 non-goals); never persisted |
 | Model | **Qwen2.5-VL-3B-Instruct Q4_K_M + f16 mmproj** (Apache-2.0) | V1 winner: loads on b9585, reads a real German invoice; ~3.27 GB on disk, ~4.6 GB peak RSS (model-benchmarks §8.2) |
 
@@ -2485,7 +2485,7 @@ OCR (tesseract.js, Documents) and from any image generation (never built)._
 | **Runtime-pin bump** | Avoided — gate #1 succeeded on the existing pin; a bump would be a major reviewed change (`model-policy.md` "To bump the release") |
 | **`blob:` preview** (`URL.createObjectURL`) | Rejected: CSP-blocked (no `blob:` in `img-src`); would need a reviewed dev+prod CSP edit (a §0 red line). `data:` chosen (SEC-1) |
 | **Queue a 2nd analyze** | Rejected: busy-REJECT keeps `ImageJobState` + the §5.6 copy simple for marginal benefit (IPC-3) |
-| **One download job, two files** | Rejected: needs cross-file progress aggregation + two-phase verify + partial-failure recovery that `downloads.ts` lacks (DIST-1) |
+| **One download job, two files** | Originally deferred (cross-file progress aggregation + per-file verify + partial-failure recovery `downloads.ts` then lacked); the planner stayed two-task. Later BUILT in the UI downloader when the vision manifest shipped — one job runs each task in turn with combined progress (DIST-1) |
 | **A native image lib** (`sharp`/`jimp`/`canvas`) | Rejected: browser APIs cover decode/downscale/EXIF in the sandbox with zero deps |
 
 ### §5 Design as built (the module map + the flow)
@@ -2570,10 +2570,13 @@ unchanged (no new binary on the recommended path).
 `computeInstallState` requires, folding to one per-model row that reports the FIRST non-`verified`
 file — so a half-installed vision drive (good GGUF, missing/corrupt projector) fails `weightsVerified`
 and cannot pass the sell gate. `buildChecksumsJson` likewise captures one entry per file. The download
-side matches: `planModelDownloads` + `fetch-models.{ps1,sh}` fetch both files (DIST-1). Residual: the
-in-app `DownloadManager` (UI) still drives only `tasks[0]` (the GGUF); the projector is the DIY scripts'
-job until a `role: vision` manifest ships. No `role: vision` manifest is committed yet, so nothing
-vision actually ships today.
+side matches: `planModelDownloads` + `fetch-models.{ps1,sh}` fetch both files (DIST-1), and the in-app
+`DownloadManager` (UI) now does too — `start()` plans every task for the model and `run()` fetches each
+one sequentially under a single job (skipping files already present + verified, so a half-installed
+vision model downloads JUST the missing projector), reporting the COMBINED received/total. The job is
+`done` only once every file is verified; one placeholder hash taints the whole model UNVERIFIED. (This
+closed the original "GGUF-only" residual once a `role: vision` manifest was committed — see
+`tests/integration/downloads.test.ts` "DownloadManager vision (two files)".)
 
 ### §9 §-anchor legend (historical plan citations)
 

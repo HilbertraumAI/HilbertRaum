@@ -390,12 +390,17 @@ export function ModelsScreen(): JSX.Element {
 
   function card(m: ModelInfo): JSX.Element {
     const installed = m.state === 'installed' || m.state === 'running' || m.state === 'ready'
-    // Embeddings/reranker/transcriber are availability-driven (they work automatically once
-    // installed — the embedder/reranker/transcriber pick their model by presence, not a UI
-    // selection): there is nothing to select or start, so neither those actions NOR the
-    // "Active" badge are shown (only the chat model has a user-chosen active slot). Starting
-    // a non-chat model would claim the CHAT runtime slot and throw.
-    const automatic = m.role === 'embeddings' || m.role === 'reranker' || m.role === 'transcriber'
+    // Embeddings/reranker/transcriber/vision are availability-driven (they work once installed
+    // by PRESENCE, not a UI selection — the embedder/reranker/transcriber pick by presence; a
+    // vision model is used on demand by the Images screen). There is nothing to select or start,
+    // so neither those actions NOR the "Active" badge are shown (only the chat model has a
+    // user-chosen active slot). Starting a non-chat model claims the CHAT runtime slot and throws
+    // (`registerModelIpc` rejects a non-`chat` role), so these roles must never reach Select/Start.
+    const automatic =
+      m.role === 'embeddings' ||
+      m.role === 'reranker' ||
+      m.role === 'transcriber' ||
+      m.role === 'vision'
     const active = !automatic && isActive(m)
     // Zero-weights first run: the MAIN process computes whether this (missing, chat)
     // model may start the built-in mock (developer + policy gates).
@@ -446,7 +451,13 @@ export function ModelsScreen(): JSX.Element {
 
         {automatic ? (
           <p className="hint" style={{ margin: '4px 0 0' }}>
-            {installed ? t('models.automatic.installed') : t('models.automatic.notInstalled')}
+            {m.role === 'vision'
+              ? installed
+                ? t('models.vision.installed')
+                : t('models.vision.notInstalled')
+              : installed
+                ? t('models.automatic.installed')
+                : t('models.automatic.notInstalled')}
           </p>
         ) : (
           // A "Not downloaded" card shows ONE clear action — Download (rendered below) —

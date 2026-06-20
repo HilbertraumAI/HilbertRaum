@@ -10,7 +10,7 @@ import {
   type DownloadGates
 } from '../../src/main/services/downloads'
 import type { FetchFn } from '../../src/main/services/assets'
-import { weightPath, type HashStore } from '../../src/main/services/models'
+import { weightPath, mmprojPath, type HashStore } from '../../src/main/services/models'
 import { validateManifest, type ModelManifest } from '../../src/shared/manifest'
 import type { DownloadJob } from '../../src/shared/types'
 
@@ -114,6 +114,45 @@ function hangingFetch(firstChunk: string): FetchFn {
   }) as unknown as FetchFn
 }
 
+/** A vision manifest: language GGUF + mmproj projector, each hashed to the real hash of its body. */
+function visionManifest(ggufBody: string, mmprojBody: string): ModelManifest {
+  return manifest({
+    role: 'vision',
+    input_modalities: ['text', 'image'],
+    local_path: 'models/vision/vl.gguf',
+    sha256: sha256(ggufBody),
+    download: {
+      url: 'https://example.test/vl.gguf',
+      sha256: sha256(ggufBody),
+      size_bytes: ggufBody.length,
+      license_url: 'https://example.test/license'
+    },
+    mmproj: {
+      local_path: 'models/vision/vl-mmproj.gguf',
+      sha256: sha256(mmprojBody),
+      download: {
+        url: 'https://example.test/vl-mmproj.gguf',
+        sha256: sha256(mmprojBody),
+        size_bytes: mmprojBody.length,
+        license_url: 'https://example.test/license'
+      }
+    }
+  })
+}
+
+/** Fake fetch that serves a body per URL (404 for any unrouted URL); records every URL asked for. */
+function routedFetch(routes: Record<string, string>): { fetch: FetchFn; urls: string[] } {
+  const urls: string[] = []
+  const fetch = (async (url: unknown) => {
+    const u = String(url)
+    urls.push(u)
+    const body = routes[u]
+    if (body == null) return new Response(null, { status: 404 })
+    return new Response(body, { status: 200, headers: { 'content-length': String(body.length) } })
+  }) as unknown as FetchFn
+  return { fetch, urls }
+}
+
 async function waitFor(cond: () => boolean, ms = 5000): Promise<void> {
   const start = Date.now()
   while (!cond()) {
@@ -188,6 +227,68 @@ describe('download gates', () => {
     const dest = weightPath(root, m)
     mkdirSync(join(dest, '..'), { recursive: true })
     writeFileSync(dest, body)
+    const mgr = new DownloadManager({ fetchImpl: vi.fn() as unknown as FetchFn })
+    await expect(mgr.start({ rootPath: root, manifest: m, gates: OPEN })).rejects.toThrow(
+      /already downloaded/
+    )
+  })
+})
+
+// ---- vision: a model is TWO files (GGUF + mmproj projector, DIST-1) ------------------
+
+describe('DownloadManager vision (two files)', () => {
+  it('fetches BOTH files, verifies each, and reports the COMBINED progress', async () => {
+    const gguf = 'the-language-gguf-bytes'
+    const mmproj = 'the-mmproj-projector-bytes'
+    const m = visionManifest(gguf, mmproj)
+    const root = tempRoot()
+    const { fetch, urls } = routedFetch({
+      'https://example.test/vl.gguf': gguf,
+      'https://example.test/vl-mmproj.gguf': mmproj
+    })
+    const mgr = new DownloadManager({ fetchImpl: fetch })
+    const job = await mgr.start({ rootPath: root, manifest: m, gates: OPEN })
+    expect(job.totalBytes).toBe(gguf.length + mmproj.length)
+
+    const finished = await waitForTerminal(mgr, job.jobId)
+    expect(finished.status).toBe('done')
+    expect(finished.unverified).toBe(false)
+    expect(finished.receivedBytes).toBe(gguf.length + mmproj.length)
+    // The GGUF is fetched before the projector, and both land verified on disk.
+    expect(urls).toEqual([
+      'https://example.test/vl.gguf',
+      'https://example.test/vl-mmproj.gguf'
+    ])
+    expect(readFileSync(weightPath(root, m), 'utf8')).toBe(gguf)
+    expect(readFileSync(mmprojPath(root, m), 'utf8')).toBe(mmproj)
+  })
+
+  it('finishes a half-downloaded vision model: GGUF already present → fetches JUST the mmproj', async () => {
+    const gguf = 'already-here-gguf'
+    const mmproj = 'still-missing-mmproj'
+    const m = visionManifest(gguf, mmproj)
+    const root = tempRoot()
+    // The GGUF arrived + verified in a prior run; the mmproj never did (the reported bug).
+    const ggufDest = weightPath(root, m)
+    mkdirSync(join(ggufDest, '..'), { recursive: true })
+    writeFileSync(ggufDest, gguf)
+    const { fetch, urls } = routedFetch({ 'https://example.test/vl-mmproj.gguf': mmproj })
+    const mgr = new DownloadManager({ fetchImpl: fetch })
+    const job = await mgr.start({ rootPath: root, manifest: m, gates: OPEN })
+    const finished = await waitForTerminal(mgr, job.jobId)
+    expect(finished.status).toBe('done')
+    expect(urls).toEqual(['https://example.test/vl-mmproj.gguf']) // the present GGUF is NOT re-fetched
+    expect(readFileSync(mmprojPath(root, m), 'utf8')).toBe(mmproj)
+  })
+
+  it('a fully present + verified vision model is refused (both files in place)', async () => {
+    const gguf = 'gguf-bytes'
+    const mmproj = 'mmproj-bytes'
+    const m = visionManifest(gguf, mmproj)
+    const root = tempRoot()
+    mkdirSync(join(weightPath(root, m), '..'), { recursive: true })
+    writeFileSync(weightPath(root, m), gguf)
+    writeFileSync(mmprojPath(root, m), mmproj)
     const mgr = new DownloadManager({ fetchImpl: vi.fn() as unknown as FetchFn })
     await expect(mgr.start({ rootPath: root, manifest: m, gates: OPEN })).rejects.toThrow(
       /already downloaded/
