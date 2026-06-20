@@ -155,6 +155,12 @@ export const IPC = {
   imageCancel: 'images:cancel',
   /** Poll one analyze job's state (unknown jobId ⇒ terminal failed). */
   imageGetJob: 'images:getJob',
+  /** List saved image-analysis history entries (newest first; no image bytes). */
+  imageListSessions: 'images:listSessions',
+  /** Open one history entry: metadata + DECRYPTED image bytes + all turns. */
+  imageGetSession: 'images:getSession',
+  /** Delete one history entry: shred the stored image + cascade-remove its turns. */
+  imageDeleteSession: 'images:deleteSession',
   // Benchmark
   runBenchmark: 'benchmark:run',
   /**

@@ -19,7 +19,8 @@ From the root, these paths are derived and created (idempotently) on first run:
 ├── workspace/
 │   ├── hilbertraum.sqlite        # all app data (spec §8 tables) — hilbertraum.sqlite.enc at rest in
 │   │                      # encrypted mode (decrypted to hilbertraum.sqlite only while unlocked)
-│   └── documents/         # stored copies of imported files (<id><ext>.enc in encrypted mode)
+│   ├── documents/         # stored copies of imported files (<id><ext>.enc in encrypted mode)
+│   └── images/            # saved image-analysis history copies (<id><ext>.enc in encrypted mode)
 ├── app-skills/            # app-shipped Skills (read-only, PLAIN folders — NOT encrypted; Skills S3/S9)
 │   └── <id>/SKILL.md      #   non-secret product content, provisioned like model-manifests
 ├── user-skills/           # user-installed/dropped-in Skills (read-write, PLAIN folders — NOT encrypted; S3)

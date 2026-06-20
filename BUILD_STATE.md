@@ -6,6 +6,35 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-20 — **Image-understanding V8 — answer markdown FIXED + encrypted, deletable analysis HISTORY added (user-requested).**
+Two user-reported gaps on the Images screen. **(1) Formatting:** the streamed answer rendered raw markdown (literal `**bold**`, `1.`
+lists). `AnswerThread` now renders through the SAME shared `AssistantMarkdown` (`react-markdown` + `remark-gfm`) Chat/Documents use — the
+`.image-turn-text.md` container reuses the existing `.msg-content.md` rules; the stream caret is a sibling of the markdown block.
+**(2) History (the headline change — INTENTIONALLY reverses the V1–V5 "nothing persists" posture):** each analyzed image is now AUTOMATICALLY
+saved (image + Q&A turns), browsable like documents/chat, and **deleting an entry shreds the stored image**; everything rests **encrypted at
+rest** under the same `DocumentCipher` as the document cache. Decisions confirmed with the user: **automatic save** (lazily on the first
+completed answer — no turnless sessions) + a **text-row history list** (no thumbnails; the image is only decrypted when an entry is opened).
+**As built (suite green — 2003 passed / 30 skipped):**
+- **Schema (`db.ts`):** new `image_sessions` (`title`, `stored_name` [relative], `mime_type`, `size_bytes`, `width`/`height`, `encrypted`,
+  timestamps) + `image_turns` (`session_id` FK **ON DELETE CASCADE**, `question`, `answer`, `created_at`). Additive (`IF NOT EXISTS`).
+- **Service (`services/vision/history.ts`):** mirrors the document cache — `imagesDir()`, `createImageSession` (encrypt-to-`.enc` via a
+  shred-after temp, or raw copy in plaintext mode), `addImageTurn`, `listImageSessions` (newest-first; `turn_count` + first question;
+  `rowid`-ordered to dodge ms-tie nondeterminism), `getImageSession` (decrypt-to-temp → read → shred), `deleteImageSession` (shred + cascade).
+- **IPC/preload:** `images:listSessions|getSession|deleteSession` (all `requireUnlocked()`); `imageAnalyze` creates the session lazily in the
+  `done` wrapper + persists the turn, surfacing `sessionId` on the initial job AND the `STREAM.imgDone` event so follow-ups reuse the session.
+  `ImageAnalyzeRequest` gained `name`/`width`/`height`/`sessionId`; `ImageJob` gained `sessionId`; new `ImageSessionSummary`/`Detail` DTOs.
+- **UI:** `renderer/images/ImageHistory.tsx` (text-row list under the drop zone; delete via `ConfirmDialog`); `ImagesScreen` loads the list on
+  unlock, opens an entry (decrypt → replay turns → continue asking same session), and refreshes on save/delete. `images.history.*` keys (EN+DE).
+- **Security test re-aimed:** `vision-security.test.ts` TEST-3's "writes nothing to disk" guarantee was **deliberately replaced** by "the
+  stored copy rests ENCRYPTED under `images/` (no plaintext image bytes on disk)"; loopback-only + no-content-in-log/audit are unchanged.
+**Data contracts (new):** `image_sessions`/`image_turns` tables; `images/<id><ext>.enc` (or raw `<id><ext>` in plaintext_dev) under workspace;
+the three `images:*Session(s)` IPCs. **Docs:** `architecture.md` image-understanding record gains **§10** (history); `security-model.md` gains
+an "Encrypted image-analysis history" section; `drive-layout.md` adds `workspace/images/`. **Verification:** `npm run typecheck` clean;
+`npm test` **2003 passed / 30 skipped**. New/updated tests: `image-history.test.ts` (encrypted no-leak + round-trip + cascade-delete shred),
+`images-ipc.test.ts` history-persistence block (persist-on-done, follow-up append, busy persists nothing, list/get/delete, locked reject),
+`vision-security.test.ts` (encrypted-at-rest), `AnswerThread.test.tsx` (markdown), `ImagesScreen.test.tsx` (history list/open/delete).
+**(prior V7 entry below.)**_
+
 _2026-06-20 — **Image-understanding V7 — first `role: vision` manifest shipped + the three in-app vision gaps it exposed CLOSED.**
 A user tried the Images screen with no vision model, so the **Qwen2.5-VL-3B-Instruct Q4 + f16 mmproj** manifest was authored into the
 catalog (`model-manifests/vision/qwen2.5-vl-3b-instruct-q4.yaml`, Apache-2.0, opt-in: `recommended_profiles: []`/rank 0, real GGUF+mmproj

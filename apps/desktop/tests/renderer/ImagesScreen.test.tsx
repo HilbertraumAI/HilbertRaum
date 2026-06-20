@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { render, screen, cleanup, waitFor, act } from '@testing-library/react'
+import { render, screen, cleanup, waitFor, act, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { ImagesScreen } from '../../src/renderer/screens/ImagesScreen'
 import type { DecodedImage, DecodeImage } from '../../src/renderer/images'
@@ -262,6 +262,83 @@ describe('ImagesScreen — reset + cancel (§5.6)', () => {
     await user.click(screen.getByRole('button', { name: 'Stop' }))
     expect(s.cancel).toHaveBeenCalledWith('j1')
     expect(await screen.findByText('Stopped.')).toBeInTheDocument()
+  })
+})
+
+describe('ImagesScreen — history (image-understanding history)', () => {
+  const summary = (over?: Record<string, unknown>) => ({
+    id: 's1',
+    title: 'receipt.png',
+    mimeType: 'image/png',
+    sizeBytes: 4,
+    width: 120,
+    height: 90,
+    turnCount: 2,
+    firstQuestion: 'What is this?',
+    createdAt: '2026-06-20T00:00:00Z',
+    updatedAt: '2026-06-20T00:00:00Z',
+    ...over
+  })
+
+  it('lists saved analyses on the landing view (file name + question count)', async () => {
+    stubApi({
+      imageGetStatus: vi.fn(async () => AVAILABLE),
+      listImageSessions: vi.fn(async () => [summary()])
+    } as never)
+    render(<ImagesScreen onNavigate={vi.fn()} decodeImpl={fakeDecode} />)
+    expect(await screen.findByText('History')).toBeInTheDocument()
+    expect(await screen.findByText('receipt.png')).toBeInTheDocument()
+    expect(screen.getByText('2 questions')).toBeInTheDocument()
+  })
+
+  it('opening a saved analysis decrypts the image and replays its turns', async () => {
+    const getImageSession = vi.fn(async () => ({
+      id: 's1',
+      title: 'receipt.png',
+      mimeType: 'image/png',
+      sizeBytes: 4,
+      width: 120,
+      height: 90,
+      imageBytes: new Uint8Array([1, 2, 3, 4]),
+      turns: [{ id: 't1', question: 'What is this?', answer: 'A receipt.', createdAt: '2026-06-20T00:00:00Z' }],
+      createdAt: '2026-06-20T00:00:00Z',
+      updatedAt: '2026-06-20T00:00:00Z'
+    }))
+    const user = userEvent.setup()
+    stubApi({
+      imageGetStatus: vi.fn(async () => AVAILABLE),
+      listImageSessions: vi.fn(async () => [summary()]),
+      getImageSession
+    } as never)
+    render(<ImagesScreen onNavigate={vi.fn()} decodeImpl={fakeDecode} />)
+
+    await user.click(await screen.findByText('receipt.png'))
+    expect(getImageSession).toHaveBeenCalledWith('s1')
+    // The stored answer is replayed and the image is loaded into the workspace.
+    expect(await screen.findByText('A receipt.')).toBeInTheDocument()
+    expect(screen.getByAltText('Selected image')).toBeInTheDocument()
+  })
+
+  it('deleting a saved analysis confirms, calls deleteImageSession, and refreshes the list', async () => {
+    const deleteImageSession = vi.fn(async () => {})
+    let calls = 0
+    const listImageSessions = vi.fn(async () => (calls++ === 0 ? [summary()] : []))
+    const user = userEvent.setup()
+    stubApi({
+      imageGetStatus: vi.fn(async () => AVAILABLE),
+      listImageSessions,
+      deleteImageSession
+    } as never)
+    render(<ImagesScreen onNavigate={vi.fn()} decodeImpl={fakeDecode} />)
+
+    await screen.findByText('receipt.png')
+    // The row's Delete opens a ConfirmDialog; confirm inside the dialog (avoids the row button).
+    await user.click(screen.getByRole('button', { name: 'Delete' }))
+    const dialog = await screen.findByRole('dialog')
+    await user.click(within(dialog).getByRole('button', { name: 'Delete' }))
+
+    await waitFor(() => expect(deleteImageSession).toHaveBeenCalledWith('s1'))
+    await waitFor(() => expect(screen.queryByText('receipt.png')).not.toBeInTheDocument())
   })
 })
 

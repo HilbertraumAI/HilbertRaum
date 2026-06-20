@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { randomBytes } from 'node:crypto'
 
 // IPC-layer tests for registerImagesIpc (image-understanding plan §9/§17): the images:*
 // handlers return the right DTOs, an unknown jobId is a terminal failed, a second analyze is
@@ -26,8 +27,16 @@ import {
 } from '../../src/main/ipc/registerImagesIpc'
 import { VisionService, type VisionAnalyzer } from '../../src/main/services/vision'
 import { IPC, STREAM } from '../../src/shared/ipc'
-import type { ImageAnalyzeRequest, ImageJob, VisionStatus } from '../../src/shared/types'
+import type {
+  ImageAnalyzeRequest,
+  ImageJob,
+  ImageSessionDetail,
+  ImageSessionSummary,
+  VisionStatus
+} from '../../src/shared/types'
 import type { AppContext } from '../../src/main/services/context'
+import { openDatabase, type Db } from '../../src/main/services/db'
+import { encryptFile, decryptFile } from '../../src/main/services/workspace-vault'
 import { invoke, invokeWithEvent, makeEvent, type IpcHandlers } from '../helpers/ipc'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
@@ -68,6 +77,16 @@ function gatedAnalyzer(answer = 'a local answer'): {
         await gate
         return answer
       }
+    }
+  }
+}
+
+/** An ungated analyzer that streams one token and resolves immediately (no release needed). */
+function immediateAnalyzer(answer = 'a local answer'): VisionAnalyzer {
+  return {
+    async analyze(opts) {
+      opts.onToken?.('tok ')
+      return answer
     }
   }
 }
@@ -276,5 +295,141 @@ describe('registerImagesIpc — chooseImage', () => {
     registerImagesIpc(ctxFor(dir))
     const { result } = await invoke(handlers, IPC.imageChooseImage)
     expect(result).toEqual({ path: file, name: 'chosen.png', sizeBytes: 5 })
+  })
+})
+
+// Image-analysis history (image-understanding history): analyze persists the image (encrypted)
+// + the completed turn; a follow-up reuses the session; the list/get/delete handlers behave;
+// a busy reject persists nothing; and everything requires an unlocked workspace.
+describe('registerImagesIpc — history persistence', () => {
+  const SENTINEL = new Uint8Array([0xab, 0xcd, 0xef, 0x10, 0x20, 0x30, 0x40, 0x50])
+
+  function ctxWithDb(unlocked = true): { ctx: AppContext; db: Db; workspacePath: string; imagesPath: string } {
+    const workspacePath = mkdtempSync(join(tmpdir(), 'hr-imghist-'))
+    const db = openDatabase(join(workspacePath, 'hilbertraum.sqlite'))
+    const key = randomBytes(32)
+    const ctx = {
+      paths: { rootPath: workspacePath, workspacePath },
+      db,
+      manifestsDir: null,
+      isDev: false,
+      workspace: {
+        isUnlocked: () => unlocked,
+        documentCipher: () => ({
+          encryptFile: (s: string, d: string) => encryptFile(s, d, key),
+          decryptFile: (s: string, d: string) => decryptFile(s, d, key)
+        })
+      }
+    } as unknown as AppContext
+    return { ctx, db, workspacePath, imagesPath: join(workspacePath, 'images') }
+  }
+
+  const histReq = (over: Partial<ImageAnalyzeRequest> = {}): ImageAnalyzeRequest => ({
+    imageBytes: SENTINEL,
+    mimeType: 'image/png',
+    question: 'What is in this image?',
+    name: 'pic.png',
+    ...over
+  })
+
+  it('persists the image (encrypted) + a turn on done, and surfaces the sessionId', async () => {
+    const { analyzer, release } = gatedAnalyzer('a local answer')
+    const service = new VisionService({ getStatus: async () => AVAILABLE, createRuntime: () => analyzer })
+    const { ctx, imagesPath } = ctxWithDb()
+    registerImagesIpc(ctx, service)
+
+    const event = makeEvent()
+    const initial = (await invokeWithEvent(handlers, IPC.imageAnalyze, event, histReq())) as ImageJob
+    release()
+    const done = await waitForTerminal(initial.jobId)
+    expect(done.state).toBe('done')
+
+    // The streamed done EVENT carries the sessionId (the renderer's contract for follow-ups).
+    const doneSend = event.sender.send.mock.calls.find(
+      (c: unknown[]) => c[0] === STREAM.imgDone(initial.jobId)
+    )
+    expect(typeof (doneSend?.[1] as ImageJob | undefined)?.sessionId).toBe('string')
+
+    // One session listed, with the turn recorded.
+    const list = (await invoke(handlers, IPC.imageListSessions)).result as ImageSessionSummary[]
+    expect(list).toHaveLength(1)
+    expect(list[0].title).toBe('pic.png')
+    expect(list[0].turnCount).toBe(1)
+    expect(list[0].firstQuestion).toBe('What is in this image?')
+
+    // Encrypted at rest: a .enc copy with no plaintext image bytes on disk.
+    const stored = readdirSync(imagesPath)
+    expect(stored).toHaveLength(1)
+    expect(stored[0]).toMatch(/\.enc$/)
+    expect(readFileSync(join(imagesPath, stored[0])).includes(Buffer.from(SENTINEL))).toBe(false)
+
+    // Open it back: decrypted bytes + the turn.
+    const detail = (await invoke(handlers, IPC.imageGetSession, list[0].id)).result as ImageSessionDetail
+    expect(Buffer.from(detail.imageBytes).equals(Buffer.from(SENTINEL))).toBe(true)
+    expect(detail.turns).toHaveLength(1)
+    expect(detail.turns[0].answer).toBe('a local answer')
+  })
+
+  it('a follow-up analyze with the sessionId APPENDS (one session, one stored image)', async () => {
+    const service = new VisionService({ getStatus: async () => AVAILABLE, createRuntime: () => immediateAnalyzer('ans') })
+    const { ctx, imagesPath } = ctxWithDb()
+    registerImagesIpc(ctx, service)
+
+    const first = (await invoke(handlers, IPC.imageAnalyze, histReq())).result as ImageJob
+    expect((await waitForTerminal(first.jobId)).state).toBe('done')
+    const afterFirst = (await invoke(handlers, IPC.imageListSessions)).result as ImageSessionSummary[]
+    expect(afterFirst).toHaveLength(1)
+    const sessionId = afterFirst[0].id
+
+    const second = (await invoke(handlers, IPC.imageAnalyze, histReq({ question: 'and now?', sessionId })))
+      .result as ImageJob
+    await waitForTerminal(second.jobId)
+
+    const list = (await invoke(handlers, IPC.imageListSessions)).result as ImageSessionSummary[]
+    expect(list).toHaveLength(1)
+    expect(list[0].turnCount).toBe(2)
+    // Still a single stored image (the follow-up reused the session).
+    expect(readdirSync(imagesPath)).toHaveLength(1)
+  })
+
+  it('a busy-REJECTED analyze persists nothing', async () => {
+    const { analyzer, release } = gatedAnalyzer()
+    const service = new VisionService({ getStatus: async () => AVAILABLE, createRuntime: () => analyzer })
+    const { ctx } = ctxWithDb()
+    registerImagesIpc(ctx, service)
+
+    const first = (await invoke(handlers, IPC.imageAnalyze, histReq())).result as ImageJob
+    const busy = (await invoke(handlers, IPC.imageAnalyze, histReq())).result as ImageJob
+    expect(busy.error).toBe('busy')
+    release()
+    await waitForTerminal(first.jobId)
+
+    // Only the first (completed) analyze created a session.
+    const list = (await invoke(handlers, IPC.imageListSessions)).result as ImageSessionSummary[]
+    expect(list).toHaveLength(1)
+  })
+
+  it('deleteImageSession removes the entry and shreds the stored image', async () => {
+    const service = new VisionService({ getStatus: async () => AVAILABLE, createRuntime: () => immediateAnalyzer('a') })
+    const { ctx, imagesPath } = ctxWithDb()
+    registerImagesIpc(ctx, service)
+
+    const job = (await invoke(handlers, IPC.imageAnalyze, histReq())).result as ImageJob
+    await waitForTerminal(job.jobId)
+    const list = (await invoke(handlers, IPC.imageListSessions)).result as ImageSessionSummary[]
+    expect(readdirSync(imagesPath)).toHaveLength(1)
+
+    await invoke(handlers, IPC.imageDeleteSession, list[0].id)
+    expect((await invoke(handlers, IPC.imageListSessions)).result).toHaveLength(0)
+    expect(existsSync(imagesPath) ? readdirSync(imagesPath) : []).toHaveLength(0)
+  })
+
+  it('the history handlers reject a locked workspace', async () => {
+    const service = new VisionService({ getStatus: async () => AVAILABLE, createRuntime: () => gatedAnalyzer().analyzer })
+    const { ctx } = ctxWithDb(false)
+    registerImagesIpc(ctx, service)
+    await expect(invoke(handlers, IPC.imageListSessions)).rejects.toThrow()
+    await expect(invoke(handlers, IPC.imageGetSession, 'x')).rejects.toThrow()
+    await expect(invoke(handlers, IPC.imageDeleteSession, 'x')).rejects.toThrow()
   })
 })

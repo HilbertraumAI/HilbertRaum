@@ -411,6 +411,35 @@ CREATE TABLE IF NOT EXISTS invoice_line_items (
   FOREIGN KEY (invoice_id) REFERENCES invoices(id)
 );
 CREATE INDEX IF NOT EXISTS idx_invoice_line_items_invoice ON invoice_line_items(invoice_id);
+
+-- Image-understanding history (docs/architecture.md image-understanding record). Each
+-- analyzed image becomes a session: the image bytes are stored under workspace/images/
+-- (encrypted-at-rest when the vault is encrypted — same DocumentCipher as documents) and
+-- the Q&A turns are appended here. Deleting a session shreds the stored image (in the
+-- service) and CASCADE-removes its turns. stored_name is a RELATIVE filename (resolved
+-- against imagesDir at call time) so the drive stays portable across OSes.
+CREATE TABLE IF NOT EXISTS image_sessions (
+  id          TEXT PRIMARY KEY,
+  title       TEXT NOT NULL,                  -- original file name
+  stored_name TEXT NOT NULL,                  -- relative filename under images/ (never absolute)
+  mime_type   TEXT NOT NULL,
+  size_bytes  INTEGER NOT NULL,
+  width       INTEGER,
+  height      INTEGER,
+  encrypted   INTEGER NOT NULL DEFAULT 0,     -- 1 when stored as a .enc sidecar
+  created_at  TEXT NOT NULL,
+  updated_at  TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS image_turns (
+  id          TEXT PRIMARY KEY,
+  session_id  TEXT NOT NULL,
+  question    TEXT NOT NULL,
+  answer      TEXT NOT NULL,
+  created_at  TEXT NOT NULL,
+  FOREIGN KEY (session_id) REFERENCES image_sessions(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_image_turns_session ON image_turns(session_id);
 `
 
 // Additive column migrations on top of the spec §8 base schema. `CREATE TABLE IF NOT

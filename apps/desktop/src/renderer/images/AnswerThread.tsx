@@ -1,4 +1,5 @@
 import { Banner, Button, Spinner } from '../components'
+import { AssistantMarkdown } from '../chat'
 import { useT } from '../i18n'
 import type { MessageKey } from '@shared/i18n'
 import type { VisionErrorCode } from '@shared/types'
@@ -50,10 +51,10 @@ export function AnswerThread({
             <p className="image-turn-question">{turn.question}</p>
             <div className="image-turn-answer">
               {turn.answer && (
-                <p className="image-turn-text">
-                  {turn.answer}
+                <div className="image-turn-text md">
+                  <AssistantMarkdown text={turn.answer} />
                   {running && <span className="stream-caret" aria-hidden="true">▍</span>}
-                </p>
+                </div>
               )}
               {running && (
                 <div className="image-turn-running" role="status">

@@ -1479,5 +1479,17 @@ export const en = {
   'images.err.multiDrop': 'Drop one image at a time.',
   'images.err.runtimeFailed': "The vision model couldn't start. Try again, or pick another model.",
   'images.err.emptyResponse': 'No answer came back for that image. Try rephrasing your question.',
-  'images.err.busy': 'Working on the previous question…'
+  'images.err.busy': 'Working on the previous question…',
+  // History (image-understanding history): saved analyses, encrypted at rest, deletable.
+  'images.history.title': 'History',
+  'images.history.empty': 'Images you analyze will appear here.',
+  'images.history.turns.one': '{count} question',
+  'images.history.turns.other': '{count} questions',
+  'images.history.open': 'Open',
+  'images.history.delete': 'Delete',
+  'images.history.deleted': 'Removed from history',
+  'images.history.delete.title': 'Delete this image?',
+  'images.history.delete.confirm': 'Delete',
+  'images.history.delete.body':
+    '“{title}” and its answers will be permanently removed from this drive.'
 } as const

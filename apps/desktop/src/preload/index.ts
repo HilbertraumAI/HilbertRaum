@@ -26,6 +26,8 @@ import type {
   ExtractionListingRequest,
   ImageAnalyzeRequest,
   ImageJob,
+  ImageSessionDetail,
+  ImageSessionSummary,
   ImportJob,
   ImportJobStatus,
   ImportOptions,
@@ -168,6 +170,15 @@ const api = {
     ipcRenderer.on(ch, handler)
     return () => ipcRenderer.removeListener(ch, handler)
   },
+  /** List saved image-analysis history entries (newest first; no image bytes). */
+  listImageSessions: (): Promise<ImageSessionSummary[]> =>
+    ipcRenderer.invoke(IPC.imageListSessions),
+  /** Open one history entry: metadata + DECRYPTED image bytes + all turns (null if missing). */
+  getImageSession: (id: string): Promise<ImageSessionDetail | null> =>
+    ipcRenderer.invoke(IPC.imageGetSession, id),
+  /** Delete one history entry: shred the stored image + cascade-remove its turns. */
+  deleteImageSession: (id: string): Promise<void> =>
+    ipcRenderer.invoke(IPC.imageDeleteSession, id),
 
   // ---- Hardware benchmark ----
   /** Detect hardware + measure drive speed, persist + return the result. Strictly local. */

@@ -1,8 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { EventEmitter } from 'node:events'
-import { mkdtempSync, readdirSync, existsSync } from 'node:fs'
+import { mkdtempSync, readdirSync, readFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { randomBytes } from 'node:crypto'
 import * as ocrFactory from '../../src/main/services/ocr/factory'
 
 // Security sentinel for the vision path (image-understanding plan §13/§17, CLAUDE.md §0):
@@ -23,6 +24,8 @@ vi.mock('electron', () => ({
 }))
 
 import { registerImagesIpc } from '../../src/main/ipc/registerImagesIpc'
+import { openDatabase } from '../../src/main/services/db'
+import { encryptFile, decryptFile } from '../../src/main/services/workspace-vault'
 import { VisionService } from '../../src/main/services/vision'
 import { VisionRuntime } from '../../src/main/services/vision/runtime'
 import { log } from '../../src/main/services/logging'
@@ -66,12 +69,26 @@ function sseBody(answer: string): ReadableStream<Uint8Array> {
 
 const AVAILABLE: VisionStatus = { available: true, modelId: 'vlm', modelDisplayName: 'VLM' }
 
-function ctxFor(audit: ReturnType<typeof vi.fn>, rootPath = '/r'): AppContext {
+// A real (temp) workspace + db + cipher so the NEW history persistence runs for real (the
+// content-free-log + no-audit guarantees must hold even WITH persistence — see TEST-3, which
+// asserts the stored image rests ENCRYPTED). A fresh temp root per call keeps tests isolated.
+function ctxFor(
+  audit: ReturnType<typeof vi.fn>,
+  rootPath = mkdtempSync(join(tmpdir(), 'hilbertraum-vision-sec-'))
+): AppContext {
+  const key = randomBytes(32)
   return {
-    paths: { rootPath },
+    paths: { rootPath, workspacePath: rootPath },
+    db: openDatabase(join(rootPath, 'hilbertraum.sqlite')),
     manifestsDir: null,
     isDev: false,
-    workspace: { isUnlocked: () => true },
+    workspace: {
+      isUnlocked: () => true,
+      documentCipher: () => ({
+        encryptFile: (s: string, d: string) => encryptFile(s, d, key),
+        decryptFile: (s: string, d: string) => decryptFile(s, d, key)
+      })
+    },
     audit
   } as unknown as AppContext
 }
@@ -263,9 +280,12 @@ describe('vision security sentinel', () => {
     expect(audit).not.toHaveBeenCalled()
   })
 
-  // TEST-3 / plan §17 row 11: Images is cleanly separate from OCR/Documents. A vision analyze must
-  // NOT construct the OCR engine and must write NOTHING to disk (bytes are base64-inlined, §12).
-  it('never invokes the OCR engine and writes no documents/ocr_json (OCR isolation)', async () => {
+  // TEST-3 / plan §17 row 11: Images is cleanly separate from OCR/Documents — a vision analyze
+  // must NOT construct the OCR engine and must NOT touch documents/ocr_json. The image-history
+  // feature DOES persist the analyzed image, but ENCRYPTED AT REST (the old "writes nothing to
+  // disk" guarantee is intentionally replaced — see security-model.md): the stored copy is a
+  // .enc sidecar under images/ and the raw image bytes never appear in plaintext on disk.
+  it('never invokes the OCR engine; stores the image ENCRYPTED under images/ (no plaintext leak)', async () => {
     const ocrSpy = vi.spyOn(ocrFactory, 'createSelectedOcrEngine')
     const root = mkdtempSync(join(tmpdir(), 'hilbertraum-vision-iso-'))
     const audit = vi.fn()
@@ -285,9 +305,16 @@ describe('vision security sentinel', () => {
     expect(done.state).toBe('done')
 
     expect(ocrSpy).not.toHaveBeenCalled() // no OCR engine ever built on the vision path
-    expect(readdirSync(root)).toEqual([]) // base64-inline: vision wrote nothing under the drive root
-    expect(existsSync(join(root, 'documents'))).toBe(false)
+    expect(existsSync(join(root, 'documents'))).toBe(false) // never the documents pipeline
     expect(existsSync(join(root, 'ocr_json'))).toBe(false)
+
+    // The image rests encrypted: a .enc sidecar under images/, no transient temp, no plaintext.
+    const imagesPath = join(root, 'images')
+    expect(existsSync(imagesPath)).toBe(true)
+    const stored = readdirSync(imagesPath)
+    expect(stored).toHaveLength(1)
+    expect(stored[0]).toMatch(/\.enc$/)
+    expect(readFileSync(join(imagesPath, stored[0])).includes(Buffer.from(SENTINEL_BYTES))).toBe(false)
     ocrSpy.mockRestore()
   })
 })

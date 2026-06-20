@@ -501,6 +501,16 @@ export interface ImageAnalyzeRequest {
   imageBytes: Uint8Array
   mimeType: 'image/png' | 'image/jpeg'
   question: string
+  /** Original file name, stored as the history entry's title (older callers omit it). */
+  name?: string
+  /** Decoded pixel dimensions, persisted with the history session so a reopened entry can
+   *  render the preview without re-decoding. Optional (older callers omit them). */
+  width?: number
+  height?: number
+  /** History session this analyze belongs to. Absent ⇒ main CREATES a new session (storing
+   *  the image, encrypted at rest) and returns its id on the job; present ⇒ the turn is
+   *  APPENDED to that session (same loaded image — "try again" / a follow-up question). */
+  sessionId?: string | null
 }
 
 /**
@@ -532,6 +542,48 @@ export interface ImageJob {
   answer?: string
   /** A CODE, never raw model/runtime text (mapped to friendly copy). */
   error?: VisionErrorCode | null
+  /** The history session this job persists into. Set by main when a session is created or
+   *  reused; the renderer captures it so follow-up turns reuse the same session/stored image. */
+  sessionId?: string | null
+}
+
+/** One persisted history entry (no image bytes — kept light for the list; the row label
+ *  uses the first question). The image is only decrypted when the entry is OPENED. */
+export interface ImageSessionSummary {
+  id: string
+  title: string
+  mimeType: string
+  sizeBytes: number
+  width: number | null
+  height: number | null
+  turnCount: number
+  /** The first question asked of the image, for the list row subtitle (may be empty). */
+  firstQuestion: string
+  createdAt: string
+  updatedAt: string
+}
+
+/** One persisted history turn (a completed question + answer). */
+export interface ImageHistoryTurn {
+  id: string
+  question: string
+  answer: string
+  createdAt: string
+}
+
+/** A fully reopened history entry: metadata + the decrypted image bytes + all turns. */
+export interface ImageSessionDetail {
+  id: string
+  title: string
+  mimeType: string
+  sizeBytes: number
+  width: number | null
+  height: number | null
+  /** The decrypted image bytes (the renderer builds a Blob/data URL). */
+  imageBytes: Uint8Array
+  turns: ImageHistoryTurn[]
+  createdAt: string
+  updatedAt: string
 }
 
 // ---- Document preview (post-MVP) ----

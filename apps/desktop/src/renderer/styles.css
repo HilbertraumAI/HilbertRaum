@@ -840,31 +840,36 @@ code, pre, kbd { font-family: var(--font-mono); }
 .skill-run-status { display: inline-flex; align-items: center; gap: 8px; }
 
 /* Markdown-rendered assistant replies: markdown supplies its own block spacing, so
-   pre-wrap (which would double every blank line) is turned off. */
-.msg-content.md { white-space: normal; }
-.msg-content.md > :first-child { margin-top: 0; }
-.msg-content.md > :last-child { margin-bottom: 0; }
-.msg-content.md p { margin: 0 0 10px; }
+   pre-wrap (which would double every blank line) is turned off. The image-understanding
+   answer (.image-turn-text.md) reuses the exact same rules — same shared renderer. */
+.msg-content.md, .image-turn-text.md { white-space: normal; }
+.msg-content.md > :first-child, .image-turn-text.md > :first-child { margin-top: 0; }
+.msg-content.md > :last-child, .image-turn-text.md > :last-child { margin-bottom: 0; }
+.msg-content.md p, .image-turn-text.md p { margin: 0 0 10px; }
 .msg-content.md h1, .msg-content.md h2, .msg-content.md h3,
-.msg-content.md h4, .msg-content.md h5, .msg-content.md h6 {
+.msg-content.md h4, .msg-content.md h5, .msg-content.md h6,
+.image-turn-text.md h1, .image-turn-text.md h2, .image-turn-text.md h3,
+.image-turn-text.md h4, .image-turn-text.md h5, .image-turn-text.md h6 {
   margin: 14px 0 8px;
   line-height: 1.3;
 }
-.msg-content.md h1 { font-size: 18px; }
-.msg-content.md h2 { font-size: 16px; }
-.msg-content.md h3 { font-size: 15px; }
-.msg-content.md h4, .msg-content.md h5, .msg-content.md h6 { font-size: 14px; }
-.msg-content.md ul, .msg-content.md ol { margin: 0 0 10px; padding-left: 22px; }
-.msg-content.md li { margin: 3px 0; }
-.msg-content.md li > p { margin: 0; }
-.msg-content.md code {
+.msg-content.md h1, .image-turn-text.md h1 { font-size: 18px; }
+.msg-content.md h2, .image-turn-text.md h2 { font-size: 16px; }
+.msg-content.md h3, .image-turn-text.md h3 { font-size: 15px; }
+.msg-content.md h4, .msg-content.md h5, .msg-content.md h6,
+.image-turn-text.md h4, .image-turn-text.md h5, .image-turn-text.md h6 { font-size: 14px; }
+.msg-content.md ul, .msg-content.md ol,
+.image-turn-text.md ul, .image-turn-text.md ol { margin: 0 0 10px; padding-left: 22px; }
+.msg-content.md li, .image-turn-text.md li { margin: 3px 0; }
+.msg-content.md li > p, .image-turn-text.md li > p { margin: 0; }
+.msg-content.md code, .image-turn-text.md code {
   background: var(--code-bg);
   border: 1px solid var(--border);
   border-radius: 4px;
   padding: 1px 5px;
   font-size: 13px;
 }
-.msg-content.md pre {
+.msg-content.md pre, .image-turn-text.md pre {
   background: var(--code-bg);
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -872,23 +877,24 @@ code, pre, kbd { font-family: var(--font-mono); }
   margin: 0 0 10px;
   overflow-x: auto;
 }
-.msg-content.md pre code { background: transparent; border: none; padding: 0; }
-.msg-content.md blockquote {
+.msg-content.md pre code, .image-turn-text.md pre code { background: transparent; border: none; padding: 0; }
+.msg-content.md blockquote, .image-turn-text.md blockquote {
   border-left: 3px solid var(--border-strong);
   margin: 0 0 10px;
   padding: 2px 0 2px 12px;
   color: var(--text-muted);
 }
-.msg-content.md table { border-collapse: collapse; margin: 0 0 10px; max-width: 100%; }
-.msg-content.md th, .msg-content.md td {
+.msg-content.md table, .image-turn-text.md table { border-collapse: collapse; margin: 0 0 10px; max-width: 100%; }
+.msg-content.md th, .msg-content.md td,
+.image-turn-text.md th, .image-turn-text.md td {
   border: 1px solid var(--border);
   padding: 4px 10px;
   text-align: left;
 }
-.msg-content.md th { background: var(--code-bg); }
-.msg-content.md a { color: var(--link); }
-.msg-content.md hr { border: none; border-top: 1px solid var(--border); margin: 12px 0; }
-.msg-content.md img { max-width: 100%; }
+.msg-content.md th, .image-turn-text.md th { background: var(--code-bg); }
+.msg-content.md a, .image-turn-text.md a { color: var(--link); }
+.msg-content.md hr, .image-turn-text.md hr { border: none; border-top: 1px solid var(--border); margin: 12px 0; }
+.msg-content.md img, .image-turn-text.md img { max-width: 100%; }
 .cursor { color: var(--accent); animation: blink 1s steps(2, start) infinite; }
 @keyframes blink { to { visibility: hidden; } }
 
@@ -1368,6 +1374,37 @@ code, pre, kbd { font-family: var(--font-mono); }
 .image-turn-actions { display: flex; gap: 8px; }
 .image-local-note { margin: 0; }
 .stream-caret { opacity: 0.6; }
+
+/* Image-analysis history (image-understanding history): a light text-row list under the drop
+   zone — file name + question count, plus a delete that confirms via ConfirmDialog. */
+.image-history { margin-top: 24px; max-width: 640px; }
+.image-history-title { font-size: 15px; margin: 0 0 8px; }
+.image-history-empty { margin: 0; }
+.image-history-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.image-history-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 8px 10px;
+}
+.image-history-open {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  background: none;
+  border: none;
+  text-align: left;
+  cursor: pointer;
+  min-width: 0;
+  color: inherit;
+  font: inherit;
+}
+.image-history-open:hover .image-history-name { text-decoration: underline; }
+.image-history-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.image-history-meta { font-size: 12px; color: var(--text-muted); }
 
 @media (max-width: 760px) {
   .image-workspace { grid-template-columns: 1fr; }

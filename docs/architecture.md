@@ -2418,7 +2418,7 @@ without churning ~150 comments. Read a historical `§N` as:
 | §22-M4 | v1 permissions are a display summary; nothing executes | §1 (DS6) |
 
 
-## Image understanding — design record (Phases V1–V5, §1–§9)
+## Image understanding — design record (Phases V1–V5, §1–§10)
 
 _Formerly `docs/image-understanding-plan.md` (folded in here at the Phase-V5 closeout,
 2026-06-20, per the CLAUDE.md doc-lifecycle rule; the full original working paper — every option,
@@ -2551,8 +2551,9 @@ unchanged** (`data:`-only preview, SEC-1). Sidecar **loopback-only**; no remote 
 **zero** audit rows (the `audit-ipc.test.ts`-style sentinel proves it on success + failure paths).
 The image is attacker-controllable, so the byte/extension/dimension caps mirror `ingestion/limits.ts`;
 the path-trust stance matches `importDocuments` (accepted residual) but the extension+cap re-check is
-net-new code (SEC-3). No temp file on the recommended path ⇒ no shred concern. Engine-binary trust is
-unchanged (no new binary on the recommended path).
+net-new code (SEC-3). The ANALYZE call itself still keeps no temp file (bytes are base64-inlined);
+the only on-disk bytes are the **history** copy, which is **encrypted at rest** (§10). Engine-binary
+trust is unchanged (no new binary on the recommended path).
 
 ### §8 Limits & RAM (PROD-1 / known-limitations)
 
@@ -2562,8 +2563,10 @@ unchanged (no new binary on the recommended path).
 - **RAM peak is co-resident** — chat + E5 + vision = three sidecars; the idle teardown bounds the
   *window*, not the active-use peak. A 12B chat (~7 GB) + vision (~4.6 GB) + embedder ⇒ **>16 GB**;
   the `recommended_min_ram_gb` / RAM-best-fit gate keeps vision off small tiers (model-benchmarks §8.4).
-- **MVP scope:** single image only (no compare/video/camera), ephemeral (no persistence), PNG/JPEG
-  only (WEBP deferred), ctx capped at 4096 (vs train 128000). Full list in `known-limitations.md`.
+- **MVP scope:** single image only (no compare/video/camera), PNG/JPEG only (WEBP deferred), ctx
+  capped at 4096 (vs train 128000). Full list in `known-limitations.md`. (The original "ephemeral,
+  no persistence" scope was **lifted 2026-06-20** — analyses are now saved to an encrypted, deletable
+  history, §10.)
 
 **Commercial-drive gate (closed — verifies BOTH files; DIST-2).** `assertCommercialDrive` →
 `verifyDriveModels` now iterates the same `manifestFiles` set (GGUF + `mmproj`) that
@@ -2607,9 +2610,40 @@ anchor as:
 | `IPC-1/2/3` | Drag-drop skips `readBytes`; `{path,name,sizeBytes}`; busy-reject | §5 |
 | `DIST-1` | Two download jobs share one modelId | §1 + §5 |
 
+### §10 Analysis history (encrypted-at-rest, deletable — added 2026-06-20)
+
+The V1–V5 "ephemeral, nothing persists" posture was **intentionally lifted**: analyzed images are now
+saved to a local **history** (the user asked for parity with the documents/chat history), encrypted at
+rest exactly like the document cache. Markdown rendering of the answer was fixed in the same change
+(the `AnswerThread` answer now uses the shared `AssistantMarkdown` — `react-markdown` + `remark-gfm` —
+instead of plain `pre-wrap` text).
+
+- **Data model** (`db.ts`): `image_sessions` (one per analyzed image — `title`, `stored_name`,
+  `mime_type`, `size_bytes`, `width`/`height`, `encrypted`, timestamps) + `image_turns`
+  (`session_id` FK **ON DELETE CASCADE**, `question`, `answer`, `created_at`). `stored_name` is a
+  **relative** filename (drive-portability), resolved against `imagesDir(workspacePath)` at call time.
+- **Storage + crypto** (`services/vision/history.ts`): mirrors the document cache. When the vault is
+  encrypted (`ctx.workspace.documentCipher()` ≠ null) the image is written to a short-lived plaintext
+  temp, `cipher.encryptFile`-d to `workspace/images/<id><ext>.enc`, and the temp `shredFile`-d; in
+  plaintext mode a raw `<id><ext>` copy is written (same as documents). `getImageSession` decrypts to a
+  temp, reads, shreds; `deleteImageSession` shreds the stored image then deletes the row (turns
+  cascade). Turn order uses SQLite `rowid` (monotonic insertion order), not the ms-resolution timestamp.
+- **Save trigger:** AUTOMATIC, like chat — the session is created **lazily on the first completed
+  answer** (the `done` wrapper in `registerImagesIpc`), so a busy/failed/cancelled/empty job persists
+  **nothing** (no turnless sessions). `ImageAnalyzeRequest` carries `name`/`width`/`height`/`sessionId`;
+  the new session id rides back on the initial job + the `STREAM.imgDone` event so a follow-up question
+  reuses the SAME session/stored image. New IPC: `images:listSessions|getSession|deleteSession`
+  (all `requireUnlocked()`-gated).
+- **UI:** a text-row history list (`renderer/images/ImageHistory.tsx`, no thumbnails — the image is
+  only decrypted when an entry is opened) under the drop zone; opening replays the stored turns and
+  reloads the image; delete confirms via `ConfirmDialog`.
+- **Security:** the `vision-security.test.ts` "writes nothing to disk" guarantee was **replaced** by
+  "the stored copy rests **encrypted** under `images/` (no plaintext image bytes on disk)"; the
+  loopback-only + **no content in logs/audit** guarantees are unchanged and still asserted.
+
 **History:** Phases V1–V5 on branch `image-understanding` (2026-06-20); commits `1917f55` (V1 gate),
-`6d66e16` (V2), `688d49b` (V3), `27ff275` (V4), + the V5 closeout. Full original plan:
-`git log --follow docs/image-understanding-plan.md`.
+`6d66e16` (V2), `688d49b` (V3), `27ff275` (V4), + the V5 closeout. Markdown-fix + encrypted analysis
+history added 2026-06-20 (§10). Full original plan: `git log --follow docs/image-understanding-plan.md`.
 
 
 ## Data flow (RAG)

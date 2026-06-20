@@ -313,6 +313,26 @@ every imported document readable on a lost drive.
   non-null only for an unlocked encrypted workspace (`plaintext_dev` keeps plaintext copies, as
   labelled).
 
+### Encrypted image-analysis history (added 2026-06-20)
+The Images screen used to persist **nothing** (analyses were ephemeral). It now saves an automatic
+**history** — the analyzed image plus its Q&A turns — so it rests under the **same encryption contract
+as the document cache** (the analyze request itself still base64-inlines the bytes to the loopback
+sidecar and writes no temp; only the history copy lands on disk).
+
+- **At rest:** the image is stored under `workspace/images/` as `<id><ext>.enc` (same
+  `MAGIC | iv | tag | ciphertext` framing, same vault key, fresh IV per file) via the same
+  `DocumentCipher`. The Q&A turns live in the `image_turns` table (so they are covered by the
+  encrypted DB). `plaintext_dev` workspaces store a raw `<id><ext>` copy (`encrypted=0`), as labelled.
+- **Write path:** the bytes are written to a short-lived plaintext temp, `encryptFile`-d to the
+  `.enc` sidecar, and the temp **shredded** — the same transient-then-shred posture as document parse.
+- **Read path (open an entry):** the `.enc` is decrypted to a transient temp, read, then **shredded**.
+- **Delete:** removing a history entry **shreds** the stored image and cascade-removes its turns
+  (`image_turns.session_id` FK `ON DELETE CASCADE`); shredding is best-effort (a missing/locked copy
+  never blocks the DB cleanup), matching `deleteDocument`.
+- **Logging/audit unchanged:** the vision path still records **zero** audit rows and never logs
+  image/prompt/answer content — asserted by `tests/integration/vision-security.test.ts` (whose former
+  "writes nothing to disk" check now asserts the stored copy is **encrypted**, no plaintext leak).
+
 ### Vault descriptor (the only pre-unlock artifact)
 Settings — including `workspaceMode` — live **inside** the encrypted DB, so the app cannot read them
 before unlocking. A small **unencrypted** descriptor at **`config/workspace.json`** is the only thing

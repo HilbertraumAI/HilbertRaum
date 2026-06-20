@@ -1540,5 +1540,17 @@ export const de: Record<keyof typeof en, string> = {
     'Das KI-Bildmodell konnte nicht starten. Versuch es erneut oder wähle ein anderes Modell.',
   'images.err.emptyResponse':
     'Für dieses Bild kam keine Antwort zurück. Formulier deine Frage anders.',
-  'images.err.busy': 'Die vorige Frage wird noch bearbeitet…'
+  'images.err.busy': 'Die vorige Frage wird noch bearbeitet…',
+  // Verlauf (Bildverständnis-Verlauf): gespeicherte Analysen, verschlüsselt, löschbar.
+  'images.history.title': 'Verlauf',
+  'images.history.empty': 'Analysierte Bilder erscheinen hier.',
+  'images.history.turns.one': '{count} Frage',
+  'images.history.turns.other': '{count} Fragen',
+  'images.history.open': 'Öffnen',
+  'images.history.delete': 'Löschen',
+  'images.history.deleted': 'Aus dem Verlauf entfernt',
+  'images.history.delete.title': 'Dieses Bild löschen?',
+  'images.history.delete.confirm': 'Löschen',
+  'images.history.delete.body':
+    '„{title}“ und die zugehörigen Antworten werden dauerhaft von diesem Laufwerk entfernt.'
 }

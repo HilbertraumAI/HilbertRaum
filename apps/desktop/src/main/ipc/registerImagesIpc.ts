@@ -3,13 +3,27 @@ import { basename } from 'node:path'
 import { BrowserWindow, dialog, ipcMain } from 'electron'
 import { IPC, STREAM } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
-import type { ImageAnalyzeRequest, ImageJob, VisionStatus } from '../../shared/types'
+import type {
+  ImageAnalyzeRequest,
+  ImageJob,
+  ImageSessionDetail,
+  ImageSessionSummary,
+  VisionStatus
+} from '../../shared/types'
 import {
   createVisionRuntimeFromContext,
   getVisionStatus,
   VisionService,
   type VisionStreamEmitter
 } from '../services/vision'
+import {
+  addImageTurn,
+  createImageSession,
+  deleteImageSession,
+  getImageSession,
+  imagesDir,
+  listImageSessions
+} from '../services/vision/history'
 import { imageExtensionOf, isSupportedImagePath, VISION_MAX_IMAGE_BYTES } from '../services/vision/limits'
 import { tMain } from '../services/i18n'
 import { log } from '../services/logging'
@@ -106,11 +120,62 @@ export function registerImagesIpc(ctx: AppContext, service?: VisionService): voi
     return readFileSync(path)
   })
 
+  // Content-free error code for the (rare) history-persistence failure path — NEVER the
+  // image/prompt/answer (§12). A persistence failure must not break the live analysis.
+  const errCode = (err: unknown): string | undefined =>
+    err instanceof Error ? ((err as NodeJS.ErrnoException).code ?? err.name) : undefined
+
   ipcMain.handle(IPC.imageAnalyze, (event, req: ImageAnalyzeRequest): ImageJob => {
     requireUnlocked()
+
+    // History persistence (image-understanding history): a NEW image (no sessionId) stores the
+    // image encrypted-at-rest and creates a session; a follow-up reuses it. The session is
+    // created lazily and at most once; a busy/failed reject persists nothing. Persistence is
+    // best-effort — any failure is logged content-free and the live analysis still runs.
+    let sessionId: string | null = typeof req.sessionId === 'string' ? req.sessionId : null
+    const ensureSession = (): string | null => {
+      if (sessionId) return sessionId
+      try {
+        sessionId = createImageSession(
+          ctx.db,
+          imagesDir(ctx.paths.workspacePath),
+          req,
+          ctx.workspace.documentCipher()
+        )
+      } catch (err) {
+        log.warn('Vision history create failed', { code: errCode(err) })
+        sessionId = null
+      }
+      return sessionId
+    }
+
+    const base = emitterFor(event)
+    const emitter: VisionStreamEmitter = {
+      token: base.token,
+      done: (jobId, job) => {
+        const answer = job.answer
+        if (answer && answer.trim()) {
+          const sid = ensureSession()
+          if (sid) {
+            try {
+              addImageTurn(ctx.db, sid, req.question, answer)
+            } catch (err) {
+              log.warn('Vision history append failed', { code: errCode(err) })
+            }
+          }
+        }
+        base.done(jobId, { ...job, sessionId })
+      },
+      error: (jobId, job) => base.error(jobId, { ...job, sessionId })
+    }
+
     // The service validates (extension/MIME, cap, question), enforces one-at-a-time +
     // busy-reject, and returns the initial job immediately; tokens stream via the emitter.
-    return vision.analyze(req, emitterFor(event))
+    // The session is created lazily on the FIRST completed answer (see the `done` wrapper), so
+    // a busy/failed/cancelled/empty job persists nothing — no turnless sessions. The renderer
+    // captures the id from the `done` event for any follow-up turn.
+    const job = vision.analyze(req, emitter)
+    return { ...job, sessionId }
   })
 
   ipcMain.handle(IPC.imageGetJob, (_e, jobId: unknown): ImageJob => {
@@ -119,5 +184,27 @@ export function registerImagesIpc(ctx: AppContext, service?: VisionService): voi
 
   ipcMain.handle(IPC.imageCancel, (_e, jobId: unknown): ImageJob => {
     return vision.cancel(typeof jobId === 'string' ? jobId : '')
+  })
+
+  // --- Image-analysis history (local-only, encrypted at rest, user-deletable) ---
+  ipcMain.handle(IPC.imageListSessions, (): ImageSessionSummary[] => {
+    requireUnlocked()
+    return listImageSessions(ctx.db)
+  })
+
+  ipcMain.handle(IPC.imageGetSession, (_e, id: unknown): ImageSessionDetail | null => {
+    requireUnlocked()
+    if (typeof id !== 'string') return null
+    return getImageSession(
+      ctx.db,
+      imagesDir(ctx.paths.workspacePath),
+      id,
+      ctx.workspace.documentCipher()
+    )
+  })
+
+  ipcMain.handle(IPC.imageDeleteSession, (_e, id: unknown): void => {
+    requireUnlocked()
+    if (typeof id === 'string') deleteImageSession(ctx.db, imagesDir(ctx.paths.workspacePath), id)
   })
 }

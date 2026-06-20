@@ -3,6 +3,7 @@ import { Banner, EmptyState, useToast } from '../components'
 import {
   AnswerThread,
   ImageDropZone,
+  ImageHistory,
   ImagePreview,
   QuestionComposer,
   VisionUnavailable,
@@ -19,7 +20,7 @@ import {
 } from '../images'
 import { useT } from '../i18n'
 import type { MessageKey } from '@shared/i18n'
-import type { VisionErrorCode, VisionStatus } from '@shared/types'
+import type { ImageSessionSummary, VisionErrorCode, VisionStatus } from '@shared/types'
 
 // Images screen (image-understanding §5/§11, Phase V3). Load ONE local PNG/JPEG, ask a
 // question in plain language, get an answer from a local vision model (the V2 backend).
@@ -92,6 +93,12 @@ export function ImagesScreen({
   const [composer, setComposer] = useState('')
   const [decoding, setDecoding] = useState(false)
   const [screenError, setScreenError] = useState<ClientImageError | null>(null)
+  // Image-analysis history (image-understanding history). The list shown on the landing view;
+  // `sessionRef` is the session the loaded image persists into (null ⇒ a fresh image whose
+  // FIRST analyze creates a new session in main). A ref so the async analyze closure reads the
+  // latest id without re-subscribing.
+  const [sessions, setSessions] = useState<ImageSessionSummary[]>([])
+  const sessionRef = useRef<string | null>(null)
 
   // Streaming bookkeeping (refs so the async analyze closure + unmount cleanup see latest).
   const activeJobRef = useRef<string | null>(null)
@@ -115,6 +122,17 @@ export function ImagesScreen({
     }
   }, [])
 
+  // Refresh the saved-analysis history list (workspace must be unlocked — a locked read throws
+  // and is swallowed, keeping the current list).
+  const loadSessions = useCallback(async (): Promise<void> => {
+    try {
+      const list = await window.api?.listImageSessions?.()
+      if (list) setSessions(list)
+    } catch {
+      // Keep the current list (locked / partial bridge).
+    }
+  }, [])
+
   // Fetch status on mount; re-check on window focus (a vision model may have been installed
   // on the AI Model screen and the user navigated back).
   useEffect(() => {
@@ -123,6 +141,11 @@ export function ImagesScreen({
     window.addEventListener('focus', onFocus)
     return () => window.removeEventListener('focus', onFocus)
   }, [checkStatus])
+
+  // Load (and reload on unlock) the history list.
+  useEffect(() => {
+    if (!locked) void loadSessions()
+  }, [locked, loadSessions])
 
   // Tear down any in-flight analyze on unmount (navigate-away / close). Nothing persists.
   useEffect(
@@ -148,6 +171,8 @@ export function ImagesScreen({
       void window.api?.imageCancel?.(activeJobRef.current)?.catch?.(() => {})
       endStream()
     }
+    // A freshly selected image starts a NEW history session on its first analyze.
+    sessionRef.current = null
     setTurns([])
     setComposer('')
     setScreenError(null)
@@ -159,10 +184,74 @@ export function ImagesScreen({
       void window.api?.imageCancel?.(activeJobRef.current)?.catch?.(() => {})
       endStream()
     }
+    sessionRef.current = null
     setSelected(null)
     setTurns([])
     setComposer('')
     setScreenError(null)
+    void loadSessions()
+  }
+
+  // Open a saved history entry: decrypt + reload the image and replay its stored turns. The
+  // composer stays live so a follow-up question appends to the SAME session.
+  async function openSession(id: string): Promise<void> {
+    let detail
+    try {
+      detail = (await window.api?.getImageSession?.(id)) ?? null
+    } catch {
+      detail = null
+    }
+    if (!detail) {
+      // The entry vanished (deleted elsewhere / missing file) — resync the list.
+      void loadSessions()
+      return
+    }
+    if (activeJobRef.current) {
+      void window.api?.imageCancel?.(activeJobRef.current)?.catch?.(() => {})
+      endStream()
+    }
+    setScreenError(null)
+    const mime: ImageMime = detail.mimeType === 'image/jpeg' ? 'image/jpeg' : 'image/png'
+    try {
+      const blob = new Blob([detail.imageBytes as unknown as BlobPart], { type: mime })
+      const decoded = await decodeImpl(blob, mime)
+      sessionRef.current = detail.id
+      setComposer('')
+      setSelected({ decoded, name: detail.title, sizeBytes: detail.sizeBytes })
+      setTurns(
+        detail.turns.map((tn, i) => ({
+          id: `hist-${detail.id}-${i}`,
+          question: tn.question,
+          answer: tn.answer,
+          state: 'done' as const,
+          error: null
+        }))
+      )
+    } catch (e) {
+      setScreenError(e instanceof ImageDecodeError ? e.code : 'decodeFailed')
+    }
+  }
+
+  // Delete a saved entry: main shreds the stored image + cascade-removes its turns. If the
+  // deleted entry is the one on screen, return to the landing view.
+  async function deleteSession(id: string): Promise<void> {
+    try {
+      await window.api?.deleteImageSession?.(id)
+    } catch {
+      // Best-effort; the list refresh below reflects the true state either way.
+    }
+    if (sessionRef.current === id) {
+      if (activeJobRef.current) {
+        void window.api?.imageCancel?.(activeJobRef.current)?.catch?.(() => {})
+        endStream()
+      }
+      sessionRef.current = null
+      setSelected(null)
+      setTurns([])
+      setComposer('')
+    }
+    await loadSessions()
+    showToast(t('images.history.deleted'))
   }
 
   async function handleFile(file: File): Promise<void> {
@@ -256,7 +345,11 @@ export function ImagesScreen({
       job = await window.api.imageAnalyze({
         imageBytes: sel.decoded.bytes,
         mimeType: sel.decoded.mimeType,
-        question: q
+        question: q,
+        name: sel.name,
+        width: sel.decoded.width,
+        height: sel.decoded.height,
+        sessionId: sessionRef.current
       })
     } catch {
       setTurns((prev) => patchTurn(prev, turnId, { state: 'failed', error: 'runtimeFailed' }))
@@ -271,6 +364,10 @@ export function ImagesScreen({
       setAnalyzing(false)
       return
     }
+
+    // Main creates the history session on first analyze and returns its id; reuse it for any
+    // follow-up turn on the same loaded image.
+    if (job.sessionId) sessionRef.current = job.sessionId
 
     activeJobRef.current = job.jobId
     activeTurnRef.current = turnId
@@ -289,14 +386,22 @@ export function ImagesScreen({
     )
     unsubs.push(
       window.api?.onImageDone?.(job.jobId, (doneJob) => {
+        // Main creates the history session on the first completed answer and returns its id on
+        // the done job; reuse it for any follow-up turn on this same loaded image.
+        if (doneJob.sessionId) sessionRef.current = doneJob.sessionId
+        let saved = false
         setTurns((prev) =>
           patchTurn(prev, turnId, (tn) => {
             const answer = doneJob.answer ?? tn.answer
-            return answer.trim()
-              ? { answer, state: 'done', error: null }
-              : { state: 'failed', error: 'emptyResponse' }
+            if (answer.trim()) {
+              saved = true
+              return { answer, state: 'done', error: null }
+            }
+            return { state: 'failed', error: 'emptyResponse' }
           })
         )
+        // A completed turn was persisted in main — refresh the history list so it's current.
+        if (saved) void loadSessions()
         endStream()
       })
     )
@@ -346,7 +451,16 @@ export function ImagesScreen({
       return <VisionUnavailable reason={status.reason ?? 'no-model'} onNavigate={onNavigate} />
     }
     if (!selected) {
-      return <ImageDropZone onDropFiles={onDropFiles} onChoose={handleChoose} busy={decoding} />
+      return (
+        <>
+          <ImageDropZone onDropFiles={onDropFiles} onChoose={handleChoose} busy={decoding} />
+          <ImageHistory
+            sessions={sessions}
+            onOpen={(id) => void openSession(id)}
+            onDelete={(id) => void deleteSession(id)}
+          />
+        </>
+      )
     }
     return (
       <div className="image-workspace">
