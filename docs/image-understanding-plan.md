@@ -843,6 +843,22 @@ capability bar above.
    fixture policy). **No app feature yet.**
 
 ### Phase V2 — backend skeleton
+
+> **✅ V2 SHIPPED 2026-06-20 (branch `image-understanding`).** The wired, tested backend skeleton is in:
+> `shared/manifest.ts` (`vision` role + `mmproj`/`input_modalities` validation, shared `validateDownloadSubBlock`),
+> `shared/types.ts` (`VisionStatus`/`ImageAnalyzeRequest`/`ImageJob`/`ImageJobState`/`VisionErrorCode`),
+> `shared/ipc.ts` (`images:*` channels + `STREAM.imgToken/imgDone/imgError`), `preload/index.ts` (typed
+> methods + the three `onImage*` subscribers), `services/models.ts` (two-file install state: `mmprojPath` +
+> `manifestFiles`, both-present-and-verified, lazy/cache extended to the projector), `services/drive.ts` +
+> both `prepare-drive` scripts (`models/vision`, `model-manifests/vision`), `services/vision/`
+> (`status.ts` real workspace-agnostic detection, `limits.ts` byte/extension cap, `runtime.ts` `VisionRuntime`
+> on the real `LlamaServer` seam with the V1-resolved args, `index.ts` `VisionService` orchestration —
+> own one-job serialization + busy-reject + cancel + ephemeral job map), and `ipc/registerImagesIpc.ts`
+> (registered in `main/index.ts`). **Green-gate holds:** zero vision models ⇒ `available:false` and the full
+> suite passes. Tests: `tests/unit/manifest.test.ts` (+vision/mmproj), `tests/integration/models.test.ts`
+> (+two-file install state), `tests/integration/vision-status.test.ts`, `tests/integration/images-ipc.test.ts`,
+> `tests/unit/preload-vision.test.ts`, `tests/integration/drive.test.ts` (+vision dirs). **V3 (renderer UI)
+> not started.** The numbered list below is the as-built checklist.
 1. Manifest: add `vision` role + `mmproj` validation to `shared/manifest.ts` (+ unit tests).
 2. `models.ts`: vision state (both files verified); `models/vision/` + `model-manifests/vision/` in
    `drive.ts`/`prepare-drive`.

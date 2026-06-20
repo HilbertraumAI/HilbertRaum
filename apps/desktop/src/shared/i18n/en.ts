@@ -1286,6 +1286,8 @@ export const en = {
   'main.dialog.exportLog': 'Save diagnostic logs',
   'main.dialog.filterDocuments': 'Documents',
   'main.dialog.filterAll': 'All files',
+  'main.dialog.chooseImage': 'Choose an image',
+  'main.dialog.filterImages': 'Images',
   'main.dialog.importSkill': 'Import a skill package',
   'main.dialog.importSkillFolder': 'Import a skill folder',
   'main.dialog.exportSkill': 'Export skill',

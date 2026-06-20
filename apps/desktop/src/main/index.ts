@@ -22,6 +22,7 @@ import { DocTaskManager } from './services/doctasks'
 import { documentsDir } from './services/ingestion'
 import { inFlightStreams } from './ipc/inflight'
 import { registerDictationIpc } from './ipc/registerDictationIpc'
+import { registerImagesIpc } from './ipc/registerImagesIpc'
 import { registerDownloadIpc } from './ipc/registerDownloadIpc'
 import { registerEngineIpc } from './ipc/registerEngineIpc'
 import { registerRagIpc } from './ipc/registerRagIpc'
@@ -289,6 +290,7 @@ function initBackend(): void {
   registerSkillsIpc(ctx)
   registerDocTasksIpc(ctx)
   registerDictationIpc(ctx)
+  registerImagesIpc(ctx)
   registerDownloadIpc(ctx)
   registerEngineIpc(ctx)
   registerRagIpc(ctx)

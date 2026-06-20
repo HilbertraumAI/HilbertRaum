@@ -24,6 +24,8 @@ import type {
   EngineStatus,
   ExtractionListing,
   ExtractionListingRequest,
+  ImageAnalyzeRequest,
+  ImageJob,
   ImportJob,
   ImportJobStatus,
   ImportOptions,
@@ -37,6 +39,7 @@ import type {
   RuntimeInstallInfo,
   RunnableTool,
   RuntimeStatus,
+  VisionStatus,
   SkillInfo,
   SkillPreview,
   SkillRunState,
@@ -126,6 +129,45 @@ const api = {
   /** Cancel an in-flight engine download. */
   cancelEngineDownload: (jobId: string): Promise<EngineDownloadJob> =>
     ipcRenderer.invoke(IPC.cancelEngineDownload, jobId),
+
+  // ---- Image understanding (vision) ----
+  /** Is image understanding available (runtime + a verified vision model + projector)? */
+  imageGetStatus: (): Promise<VisionStatus> => ipcRenderer.invoke(IPC.imageGetStatus),
+  /** Open the OS picker filtered to png/jpg/jpeg; returns path + name + sizeBytes, or null. */
+  imageChooseImage: (): Promise<{ path: string; name: string; sizeBytes: number } | null> =>
+    ipcRenderer.invoke(IPC.imageChooseImage),
+  /** Read a PICKED image's bytes (main owns file I/O; re-validates extension + cap). Drag-drop
+   *  reads bytes from the File directly and never calls this (IPC-1). */
+  imageReadBytes: (path: string): Promise<Uint8Array> =>
+    ipcRenderer.invoke(IPC.imageReadBytes, path),
+  /** Start a one-at-a-time analyze; resolves with the initial job (a second one returns busy). */
+  imageAnalyze: (req: ImageAnalyzeRequest): Promise<ImageJob> =>
+    ipcRenderer.invoke(IPC.imageAnalyze, req),
+  /** Poll one analyze job's state (unknown jobId ⇒ terminal failed). */
+  imageGetJob: (jobId: string): Promise<ImageJob> => ipcRenderer.invoke(IPC.imageGetJob, jobId),
+  /** Cancel an in-flight analyze. */
+  imageCancel: (jobId: string): Promise<ImageJob> => ipcRenderer.invoke(IPC.imageCancel, jobId),
+  /** Subscribe to streamed answer tokens for an analyze job; returns an unsubscribe fn. */
+  onImageToken: (jobId: string, cb: (token: string) => void): (() => void) => {
+    const ch = STREAM.imgToken(jobId)
+    const handler = (_e: unknown, token: string) => cb(token)
+    ipcRenderer.on(ch, handler)
+    return () => ipcRenderer.removeListener(ch, handler)
+  },
+  /** Subscribe to analyze completion; the terminal ImageJob (with `answer`) is delivered. */
+  onImageDone: (jobId: string, cb: (job: ImageJob) => void): (() => void) => {
+    const ch = STREAM.imgDone(jobId)
+    const handler = (_e: unknown, job: ImageJob) => cb(job)
+    ipcRenderer.on(ch, handler)
+    return () => ipcRenderer.removeListener(ch, handler)
+  },
+  /** Subscribe to analyze failure; the failed ImageJob (a code, never content) is delivered. */
+  onImageError: (jobId: string, cb: (job: ImageJob) => void): (() => void) => {
+    const ch = STREAM.imgError(jobId)
+    const handler = (_e: unknown, job: ImageJob) => cb(job)
+    ipcRenderer.on(ch, handler)
+    return () => ipcRenderer.removeListener(ch, handler)
+  },
 
   // ---- Hardware benchmark ----
   /** Detect hardware + measure drive speed, persist + return the result. Strictly local. */

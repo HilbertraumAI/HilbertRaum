@@ -1356,6 +1356,8 @@ export const de: Record<keyof typeof en, string> = {
   'main.dialog.exportLog': 'Diagnose-Logs speichern',
   'main.dialog.filterDocuments': 'Dokumente',
   'main.dialog.filterAll': 'Alle Dateien',
+  'main.dialog.chooseImage': 'Bild auswählen',
+  'main.dialog.filterImages': 'Bilder',
   'main.dialog.importSkill': 'Ein Skill-Paket importieren',
   'main.dialog.importSkillFolder': 'Einen Skill-Ordner importieren',
   'main.dialog.exportSkill': 'Skill exportieren',

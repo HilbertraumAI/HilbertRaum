@@ -10,7 +10,7 @@
 
 import type { HardwareProfile } from './types'
 
-export type ModelRole = 'chat' | 'embeddings' | 'reranker' | 'transcriber'
+export type ModelRole = 'chat' | 'embeddings' | 'reranker' | 'transcriber' | 'vision'
 
 export interface LicenseReview {
   status: 'pending' | 'approved' | 'rejected'
@@ -38,6 +38,24 @@ export interface DownloadSpec {
   sizeBytes: number | null
   /** URL of the model license, shown at the license-acceptance prompt. */
   licenseUrl: string | null
+}
+
+/**
+ * The multimodal projector sub-block for a `role: vision` model (image-understanding plan
+ * §8.1). A vision model is TWO files: the language GGUF (the top-level `local_path`/`sha256`/
+ * `download`) plus this CLIP/`mmproj` projector that `llama-server --mmproj` loads. Validated
+ * only when present, and REQUIRED when `role: vision` (so an older build that doesn't know
+ * `vision` simply treats the manifest as `unsupported` — forward-compatible, like
+ * `supports_tools`). Its own `download` block lets the two-job downloader (DIST-1) fetch the
+ * projector with the same atomic single-file machinery as the GGUF.
+ */
+export interface MmprojSpec {
+  /** Path of the projector file relative to the DRIVE ROOT (e.g. `models/vision/x-mmproj.gguf`). */
+  localPath: string
+  /** Expected SHA-256 (lower-case hex). May be a placeholder until a real drive is built. */
+  sha256: string
+  /** Optional upstream source for the projector (the second `DownloadJob` of a vision model). */
+  download?: DownloadSpec
 }
 
 /** A fully-validated manifest. Field names are camelCased from the YAML snake_case. */
@@ -76,6 +94,17 @@ export interface ModelManifest {
   licenseReview: LicenseReview
   /** Optional download metadata. Absent on manifests with no upstream source. */
   download?: DownloadSpec
+  /**
+   * Informational input modalities (`input_modalities`, e.g. `[text, image]` for a vision
+   * model). Default `[]` when omitted; never load-bearing — capability comes from `role` +
+   * `mmproj`, not this list. Parsed so it round-trips rather than being silently dropped.
+   */
+  inputModalities?: string[]
+  /**
+   * The multimodal projector (`mmproj`) sub-block. Present (and required) only for
+   * `role: vision` models (image-understanding plan §8.1). See {@link MmprojSpec}.
+   */
+  mmproj?: MmprojSpec
 }
 
 export interface ValidationResult {
@@ -84,7 +113,7 @@ export interface ValidationResult {
   errors: string[]
 }
 
-const ROLES: ModelRole[] = ['chat', 'embeddings', 'reranker', 'transcriber']
+const ROLES: ModelRole[] = ['chat', 'embeddings', 'reranker', 'transcriber', 'vision']
 const PROFILES: HardwareProfile[] = ['TINY', 'LITE', 'BALANCED', 'PRO', 'UNKNOWN']
 const REVIEW_STATUSES = ['pending', 'approved', 'rejected'] as const
 
@@ -106,6 +135,64 @@ export function isHttpsUrl(value: string): boolean {
 
 function isObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v)
+}
+
+/**
+ * Validate a `download:`-shaped sub-block (url/sha256/size_bytes/license_url), collecting
+ * errors. Shared by the top-level `download` block and the `mmproj.download` block so the
+ * rules (https-only URL, L-2; a real download hash must equal the real FILE hash) have one
+ * definition. `fileSha` is the hash of the file this block fetches (the top-level `sha256`
+ * for `download`, the `mmproj.sha256` for `mmproj.download`); `label` prefixes every message.
+ */
+function validateDownloadSubBlock(
+  dl: unknown,
+  fileSha: string,
+  errors: string[],
+  label: 'download' | 'mmproj.download'
+): DownloadSpec | undefined {
+  if (!isObject(dl)) {
+    errors.push(`"${label}" must be a mapping (url/sha256/size_bytes/license_url)`)
+    return undefined
+  }
+  const url = dl['url']
+  if (typeof url !== 'string' || url.trim() === '') {
+    errors.push(`"${label}.url" is required and must be a non-empty string`)
+  } else if (!isHttpsUrl(url)) {
+    // L-2: cleartext http:// leaks which model is fetched and is downgrade-friendly.
+    errors.push(`"${label}.url" must be an https:// URL`)
+  }
+  const dlShaRaw = dl['sha256']
+  if (typeof dlShaRaw !== 'string' || dlShaRaw.trim() === '') {
+    errors.push(`"${label}.sha256" is required and must be a string (hash or placeholder)`)
+  }
+  const dlSha = typeof dlShaRaw === 'string' ? dlShaRaw.trim().toLowerCase() : ''
+  // A real download hash must equal the real expected hash of the same file.
+  if (isRealSha256(dlSha) && isRealSha256(fileSha) && dlSha !== fileSha) {
+    errors.push(
+      label === 'download'
+        ? '"download.sha256" must equal the top-level "sha256" when both are real hashes'
+        : '"mmproj.download.sha256" must equal the "mmproj.sha256" when both are real hashes'
+    )
+  }
+  const sizeRaw = dl['size_bytes']
+  let sizeBytes: number | null = null
+  if (sizeRaw !== undefined && sizeRaw !== null) {
+    if (typeof sizeRaw !== 'number' || !Number.isFinite(sizeRaw) || sizeRaw < 0) {
+      errors.push(`"${label}.size_bytes" must be a non-negative number when present`)
+    } else {
+      sizeBytes = sizeRaw
+    }
+  }
+  const licenseUrlRaw = dl['license_url']
+  if (licenseUrlRaw !== undefined && licenseUrlRaw !== null && typeof licenseUrlRaw !== 'string') {
+    errors.push(`"${label}.license_url" must be a string when present`)
+  }
+  return {
+    url: typeof url === 'string' ? url.trim() : '',
+    sha256: dlSha,
+    sizeBytes,
+    licenseUrl: typeof licenseUrlRaw === 'string' ? licenseUrlRaw.trim() : null
+  }
 }
 
 /**
@@ -212,50 +299,53 @@ export function validateManifest(raw: unknown): ValidationResult {
   }
 
   // Optional download block. Validated only when present, so existing
-  // manifests with no `download:` stay valid. Sub-fields are checked individually.
+  // manifests with no `download:` stay valid.
   let download: DownloadSpec | undefined
-  const dl = raw['download']
-  if (dl !== undefined) {
-    if (!isObject(dl)) {
-      errors.push('"download" must be a mapping (url/sha256/size_bytes/license_url)')
+  if (raw['download'] !== undefined) {
+    download = validateDownloadSubBlock(raw['download'], sha256, errors, 'download')
+  }
+
+  // Optional informational input modalities (e.g. [text, image] for a vision model).
+  let inputModalities: string[] | undefined
+  const im = raw['input_modalities']
+  if (im !== undefined) {
+    if (!Array.isArray(im) || !im.every((x) => typeof x === 'string')) {
+      errors.push('"input_modalities" must be a list of strings when present')
     } else {
-      const url = dl['url']
-      if (typeof url !== 'string' || url.trim() === '') {
-        errors.push('"download.url" is required and must be a non-empty string')
-      } else if (!isHttpsUrl(url)) {
-        // L-2: cleartext http:// leaks which model is fetched and is downgrade-friendly.
-        // SHA-256 still protects integrity (for real hashes), but the transport must be TLS.
-        errors.push('"download.url" must be an https:// URL')
-      }
-      const dlShaRaw = dl['sha256']
-      if (typeof dlShaRaw !== 'string' || dlShaRaw.trim() === '') {
-        errors.push('"download.sha256" is required and must be a string (hash or placeholder)')
-      }
-      const dlSha = typeof dlShaRaw === 'string' ? dlShaRaw.trim().toLowerCase() : ''
-      // A real download hash must equal the real top-level hash (same file).
-      if (isRealSha256(dlSha) && isRealSha256(sha256) && dlSha !== sha256) {
-        errors.push('"download.sha256" must equal the top-level "sha256" when both are real hashes')
-      }
-      const sizeRaw = dl['size_bytes']
-      let sizeBytes: number | null = null
-      if (sizeRaw !== undefined && sizeRaw !== null) {
-        if (typeof sizeRaw !== 'number' || !Number.isFinite(sizeRaw) || sizeRaw < 0) {
-          errors.push('"download.size_bytes" must be a non-negative number when present')
-        } else {
-          sizeBytes = sizeRaw
-        }
-      }
-      const licenseUrlRaw = dl['license_url']
-      if (licenseUrlRaw !== undefined && licenseUrlRaw !== null && typeof licenseUrlRaw !== 'string') {
-        errors.push('"download.license_url" must be a string when present')
-      }
-      download = {
-        url: typeof url === 'string' ? url.trim() : '',
-        sha256: dlSha,
-        sizeBytes,
-        licenseUrl: typeof licenseUrlRaw === 'string' ? licenseUrlRaw.trim() : null
-      }
+      inputModalities = im as string[]
     }
+  }
+
+  // Optional multimodal projector block (image-understanding plan §8.1). Validated only when
+  // present, and REQUIRED when `role: vision`. Unknown to older builds → those treat the
+  // manifest as `unsupported` (forward-compatible), exactly like a new role.
+  let mmproj: MmprojSpec | undefined
+  const mp = raw['mmproj']
+  if (mp !== undefined) {
+    if (!isObject(mp)) {
+      errors.push('"mmproj" must be a mapping (local_path/sha256/download)')
+    } else {
+      const mpLocalRaw = mp['local_path']
+      let mpLocal = ''
+      if (typeof mpLocalRaw !== 'string' || mpLocalRaw.trim() === '') {
+        errors.push('"mmproj.local_path" is required and must be a non-empty string')
+      } else {
+        mpLocal = mpLocalRaw.trim()
+      }
+      const mpShaRaw = mp['sha256']
+      if (typeof mpShaRaw !== 'string' || mpShaRaw.trim() === '') {
+        errors.push('"mmproj.sha256" is required and must be a string (hash or placeholder)')
+      }
+      const mpSha = typeof mpShaRaw === 'string' ? mpShaRaw.trim().toLowerCase() : ''
+      let mpDownload: DownloadSpec | undefined
+      if (mp['download'] !== undefined) {
+        mpDownload = validateDownloadSubBlock(mp['download'], mpSha, errors, 'mmproj.download')
+      }
+      mmproj = { localPath: mpLocal, sha256: mpSha, ...(mpDownload ? { download: mpDownload } : {}) }
+    }
+  }
+  if (roleRaw === 'vision' && mmproj === undefined) {
+    errors.push('"mmproj" projector block is required when role is "vision"')
   }
 
   if (errors.length > 0) {
@@ -283,7 +373,9 @@ export function validateManifest(raw: unknown): ValidationResult {
       recommendedProfiles,
       recommendationRank,
       licenseReview,
-      ...(download ? { download } : {})
+      ...(download ? { download } : {}),
+      ...(inputModalities ? { inputModalities } : {}),
+      ...(mmproj ? { mmproj } : {})
     }
   }
 }

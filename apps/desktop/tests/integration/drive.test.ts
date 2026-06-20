@@ -63,7 +63,9 @@ describe('drive layout', () => {
     expect(rels).toContain('models/chat')
     expect(rels).toContain('models/embeddings')
     expect(rels).toContain('models/reranker') // Phase 21
+    expect(rels).toContain('models/vision') // image-understanding §8.4
     expect(rels).toContain('model-manifests')
+    expect(rels).toContain('model-manifests/vision') // image-understanding §8.4
     expect(rels).toContain('logs')
     expect(rels).toContain('config')
     for (const os of DRIVE_OS_DIRS) {

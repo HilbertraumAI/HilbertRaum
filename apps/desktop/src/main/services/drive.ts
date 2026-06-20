@@ -48,7 +48,13 @@ export const DRIVE_LAYOUT_DIRS: readonly string[] = [
   'models/embeddings',
   'models/reranker',
   'models/transcriber',
+  // Vision (image-understanding) weights: the language GGUF + its mmproj projector
+  // (image-understanding plan §8.4). Git-ignored like all weights; opt-in download.
+  'models/vision',
   'model-manifests',
+  // Committed vision manifests are discovered recursively under model-manifests/; the
+  // sub-dir keeps the role's YAML tidy (resolveManifestsDir walks recursively, no code change).
+  'model-manifests/vision',
   ...DRIVE_OS_DIRS.map((os) => `runtime/llama.cpp/${os}`),
   // Second sidecar family: the whisper.cpp transcriber CLI. Upstream ships
   // a prebuilt Windows build only; the mac/linux dirs exist for the documented

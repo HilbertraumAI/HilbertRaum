@@ -6,6 +6,46 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-20 — **Image-understanding Phase V2 (backend skeleton) SHIPPED — V3 (renderer UI) is next.**
+Branch `image-understanding`, implementing the (V1-cleared) [`docs/image-understanding-plan.md`](docs/image-understanding-plan.md)
+§16 Phase V2. **A wired, tested backend skeleton that reports `available:false` with no vision model present — no
+renderer UI yet.** All V1 locked decisions are encoded, not re-litigated. **As built:**
+- **`shared/manifest.ts`** — `vision` added to the role set; a new optional **`mmproj` projector sub-block**
+  (`MmprojSpec`: `local_path`/`sha256`/optional `download`), validated when present and **required iff
+  `role: vision`**; the top-level `download` + `mmproj.download` validation is now one shared
+  `validateDownloadSubBlock` (https-only L-2; a real `mmproj.download.sha256` must equal a real
+  `mmproj.sha256`); optional informational `input_modalities`. Unknown keys still ignored (forward-compatible).
+- **`services/models.ts`** — vision install state = **both files present + verified**. New `mmprojPath` +
+  `manifestFiles` (GGUF + projector) thread through `computeInstallState` (precedence unchanged: unsupported →
+  missing(either) → checksum_failed(either) → installed), the lazy `skipHash`/RT-3 path, and `pendingHashBytes`;
+  the two-tier checksum cache keys each file by `(path,size,mtime)`, so the projector is hashed once like the GGUF.
+- **`services/drive.ts`** + both `prepare-drive.{ps1,sh}` — `models/vision/` + `model-manifests/vision/` added to
+  `DRIVE_LAYOUT_DIRS` / the script dir lists (manifests still discovered recursively — no discovery change).
+- **`shared/types.ts`** — `VisionStatus` (`VisionUnavailableReason = no-model|no-runtime|incompatible`, **NO
+  `'locked'` — workspace-agnostic, PROD-2**), `ImageAnalyzeRequest`, `ImageJobState`, `ImageJob`, `VisionErrorCode`
+  (`tooLarge|unsupportedType|decodeFailed|runtimeFailed|emptyResponse|cancelled|busy`). `ModelInfo.role` gains `vision`.
+- **`shared/ipc.ts` + `preload/index.ts`** — `images:getStatus|chooseImage|readBytes|analyze|cancel|getJob`
+  channels, `STREAM.imgToken/imgDone/imgError(jobId)`, and the typed `window.api` methods + the three `onImage*`
+  subscribers (`PreloadApi` extends automatically).
+- **`services/vision/`** — `status.ts` (`getVisionStatus`: no-runtime → no-model → incompatible → available;
+  cheap, lazy, **lock-safe**), `limits.ts` (`VISION_MAX_IMAGE_BYTES` ~20 MiB env-overridable + extension/MIME
+  guards + `validateAnalyzeRequest`), `runtime.ts` (`VisionRuntime` composing `LlamaServer` DIRECTLY — does NOT
+  inherit `CHAT_SERVER_ARGS`; V1 args `extraArgs:['--mmproj',proj,'--device','none']`, NO `--reasoning-format`,
+  base64 `image_url` data-URL request with `cache_prompt:true`, `readChatSSE` reused; the idle-timer/lock teardown
+  are V4), `index.ts` (`VisionService`: ephemeral job map, vision's **OWN** one-job serialization — RUNTIME-3 —
+  busy-**REJECT** not queue (IPC-3), cancel via AbortController, unknown jobId ⇒ terminal failed).
+- **`ipc/registerImagesIpc.ts`** (registered in `main/index.ts`) — `getStatus` (no unlock), file/runtime handlers
+  `requireUnlocked`; `chooseImage` returns **`{path,name,sizeBytes}`** (IPC-2, new shape); `readBytes`/`analyze`
+  **re-validate extension + byte cap in MAIN** (SEC-3, net-new). Two i18n dialog keys added (en+de parity).
+**§0 honored:** no cloud/telemetry, no native npm dep, sandbox/CSP untouched, loopback-only, no image/prompt/answer
+content in logs/audit. **Data contracts (new):** `images:*` IPC + `ImageJob`/`VisionStatus`/`ImageAnalyzeRequest`
++ `STREAM.img*`; manifest gains `mmproj`/`input_modalities`. **Verification:** `npm test` (apps/desktop) **1937
+passed / 29 skipped (172 files)** — full-suite-guard active; **green-gate holds with zero vision models**;
+`npm run typecheck` + `npm run build` clean. New tests: `vision-status.test.ts`, `images-ipc.test.ts`,
+`preload-vision.test.ts`, + vision/mmproj cases in `manifest.test.ts`/`models.test.ts`/`drive.test.ts`.
+**Next:** V3 — the Images nav item + `ImagesScreen` (states §5.6), drop zone/picker, client decode/downscale,
+wired to the V2 backend (friendly unavailable when no model). **(prior entries below.)**_
+
 _2026-06-20 — **Image-understanding Phase V1 (research gate) PASSED on the real pinned b9585 — V2–V5 UNBLOCKED.**
 Branch `image-understanding`. Ran the V1 gate against the real binary on the PAID smoke drive
 (`F:\paid-gpu-smoke-drive`, runtime `b9585 (d73cd0767)`, vulkan build + `cpu/` net). **No app feature code yet

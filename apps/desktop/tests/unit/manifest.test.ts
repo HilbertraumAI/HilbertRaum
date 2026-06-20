@@ -172,6 +172,120 @@ describe('validateManifest — optional download block (Phase 12)', () => {
   })
 })
 
+describe('validateManifest — vision role + mmproj projector (image-understanding §8.1)', () => {
+  const mmprojBlock = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
+    local_path: 'models/vision/qwen2.5-vl-3b-mmproj-f16.gguf',
+    sha256: 'REPLACE_WITH_REAL_HASH',
+    ...overrides
+  })
+  const visionRaw = (overrides: Record<string, unknown> = {}): Record<string, unknown> =>
+    rawManifest({
+      id: 'qwen2.5-vl-3b-instruct-q4',
+      role: 'vision',
+      family: 'qwen2.5-vl',
+      local_path: 'models/vision/qwen2.5-vl-3b-instruct-q4.gguf',
+      input_modalities: ['text', 'image'],
+      mmproj: mmprojBlock(),
+      ...overrides
+    })
+
+  it('accepts the vision role with a well-formed mmproj block and camelCases it', () => {
+    const res = validateManifest(visionRaw())
+    expect(res.ok).toBe(true)
+    expect(res.manifest?.role).toBe('vision')
+    expect(res.manifest?.mmproj?.localPath).toContain('mmproj')
+    expect(res.manifest?.mmproj?.sha256).toBe('replace_with_real_hash')
+    expect(res.manifest?.inputModalities).toEqual(['text', 'image'])
+  })
+
+  it('requires the mmproj block when role is vision', () => {
+    const raw = visionRaw()
+    delete raw.mmproj
+    const res = validateManifest(raw)
+    expect(res.ok).toBe(false)
+    expect(res.errors.some((e) => e.includes('mmproj'))).toBe(true)
+  })
+
+  it('leaves non-vision manifests unaffected (no mmproj needed)', () => {
+    const res = validateManifest(rawManifest())
+    expect(res.ok).toBe(true)
+    expect(res.manifest?.mmproj).toBeUndefined()
+  })
+
+  it('rejects an mmproj block with an empty local_path', () => {
+    const res = validateManifest(visionRaw({ mmproj: mmprojBlock({ local_path: '' }) }))
+    expect(res.ok).toBe(false)
+    expect(res.errors.some((e) => e.includes('mmproj.local_path'))).toBe(true)
+  })
+
+  it('rejects a non-mapping mmproj block', () => {
+    const res = validateManifest(visionRaw({ mmproj: 'nope' }))
+    expect(res.ok).toBe(false)
+    expect(res.errors.some((e) => e.includes('"mmproj"'))).toBe(true)
+  })
+
+  it('accepts an mmproj.download block and validates its https url', () => {
+    const res = validateManifest(
+      visionRaw({
+        mmproj: mmprojBlock({
+          download: {
+            url: 'https://huggingface.co/ggml-org/x/resolve/main/mmproj-f16.gguf?download=true',
+            sha256: 'REPLACE_WITH_REAL_HASH',
+            size_bytes: 1338428128
+          }
+        })
+      })
+    )
+    expect(res.ok).toBe(true)
+    expect(res.manifest?.mmproj?.download?.sizeBytes).toBe(1338428128)
+  })
+
+  it('rejects a non-https mmproj.download.url (L-2)', () => {
+    const res = validateManifest(
+      visionRaw({
+        mmproj: mmprojBlock({ download: { url: 'http://x/y.gguf', sha256: 'REPLACE_WITH_REAL_HASH' } })
+      })
+    )
+    expect(res.ok).toBe(false)
+    expect(res.errors.some((e) => e.includes('mmproj.download.url'))).toBe(true)
+  })
+
+  it('rejects a real mmproj.download.sha256 that differs from a real mmproj.sha256', () => {
+    const res = validateManifest(
+      visionRaw({
+        mmproj: mmprojBlock({
+          sha256: 'a'.repeat(64),
+          download: { url: 'https://x/y.gguf', sha256: 'b'.repeat(64) }
+        })
+      })
+    )
+    expect(res.ok).toBe(false)
+    expect(res.errors.some((e) => e.includes('mmproj.download.sha256'))).toBe(true)
+  })
+
+  it('accepts matching real hashes on the mmproj file + its download', () => {
+    const hash = 'd'.repeat(64)
+    const res = validateManifest(
+      visionRaw({
+        mmproj: mmprojBlock({ sha256: hash, download: { url: 'https://x/y.gguf', sha256: hash } })
+      })
+    )
+    expect(res.ok).toBe(true)
+    expect(res.manifest?.mmproj?.sha256).toBe(hash)
+  })
+
+  it('still ignores unknown keys on a vision manifest (forward-compatible)', () => {
+    const res = validateManifest(visionRaw({ some_future_key: 'whatever' }))
+    expect(res.ok).toBe(true)
+  })
+
+  it('rejects a non-list input_modalities', () => {
+    const res = validateManifest(visionRaw({ input_modalities: 'text' }))
+    expect(res.ok).toBe(false)
+    expect(res.errors.some((e) => e.includes('input_modalities'))).toBe(true)
+  })
+})
+
 describe('isRealSha256', () => {
   it('accepts a 64-char lower-case hex string', () => {
     expect(isRealSha256('a'.repeat(64))).toBe(true)
