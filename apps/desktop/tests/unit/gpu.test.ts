@@ -30,7 +30,7 @@ const RTX_3080TI_OUTPUT = `Available devices:
 
 describe('parseListDevices', () => {
   it('parses the captured real b9585 --list-devices fixture (L19 regression)', () => {
-    // The on-disk capture still carries the tool`s native CRLF line endings — the parser
+    // The on-disk capture still carries the tool's native CRLF line endings — the parser
     // must split on /\r?\n/ and land the same device a hand-written string would.
     expect(LIST_DEVICES_B9585).toContain('\r\n')
     expect(parseListDevices(LIST_DEVICES_B9585)).toEqual([

@@ -103,8 +103,8 @@ export function buildSkillFence(input: SkillFenceInput, budgetTokens?: number): 
   }
 
   // Grow the body paragraph-by-paragraph while the WHOLE assembled fence fits the budget. The
-  // first paragraph is the guaranteed minimum — kept even if it overflows budget alone would be
-  // a contradiction, so when the minimum itself doesn't fit we OMIT rather than truncate.
+  // first paragraph is the guaranteed minimum; when even that minimum doesn't fit we OMIT rather
+  // than truncate.
   const minimum = assemble(title, paragraphs[0])
   if (approxPromptTokens(minimum) > budgetTokens) {
     return { text: null, omitted: true, trimmed: false }

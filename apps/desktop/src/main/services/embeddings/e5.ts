@@ -189,7 +189,7 @@ export class E5Embedder implements Embedder {
 
   /**
    * Embed texts → L2-normalized `Float32Array`s, one per input, in order. Inputs are
-   * truncated to the sidecar context (see TOKENS_PER_WORD_ESTIMATE), sent in bounded
+   * truncated to the sidecar context (see REAL_TOKENS_PER_APPROX_TOKEN), sent in bounded
    * batches, and each request carries a timeout so a wedged sidecar cannot park a
    * document in `embedding` forever. `opts.signal` (a user "Stop") is combined with
    * the timeout so query embedding cancels promptly (M-C5).

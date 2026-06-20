@@ -121,7 +121,7 @@ describe('withChatStream (M-A2)', () => {
     const { event } = fakeEvent()
     const later = new AbortController()
     await withChatStream(event, 'c1', 'label', async () => {
-      // Simulate a second stream taking over the key before this one`s finally runs.
+      // Simulate a second stream taking over the key before this one's finally runs.
       inFlightStreams.set('c1', later)
       return msg('x')
     })

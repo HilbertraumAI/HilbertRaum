@@ -1408,15 +1408,6 @@ export class DocTaskManager {
   }
 
   /**
-   * Write the generated Markdown to a transient file and run it through the NORMAL
-   * import path (`createQueuedDocument` + `processDocument`) so the new document is
-   * chunked, embedded, searchable, citable, and `.enc`-encrypted automatically.
-   * Holds the vault lease for exactly this step — it writes `.enc` sidecars
-   * (`VaultBusyError` from a concurrent password change propagates as a friendly task
-   * failure). The transient uses the `.parse` infix so the startup crash sweep shreds
-   * it if we die mid-step; otherwise it is shredded here, success or failure.
-   */
-  /**
    * Build the structured provenance (plan §15.1) a materialized output carries: the
    * generation kind, its source ids, the model that produced it, and a snapshot of the
    * source(s)' collection memberships at creation time. NEW generations write this
@@ -1443,6 +1434,15 @@ export class DocTaskManager {
     return prov
   }
 
+  /**
+   * Write the generated Markdown to a transient file and run it through the NORMAL
+   * import path (`createQueuedDocument` + `processDocument`) so the new document is
+   * chunked, embedded, searchable, citable, and `.enc`-encrypted automatically.
+   * Holds the vault lease for exactly this step — it writes `.enc` sidecars
+   * (`VaultBusyError` from a concurrent password change propagates as a friendly task
+   * failure). The transient uses the `.parse` infix so the startup crash sweep shreds
+   * it if we die mid-step; otherwise it is shredded here, success or failure.
+   */
   private async materializeDocument(
     task: InternalTask,
     markdown: string,

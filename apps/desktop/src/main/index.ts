@@ -446,9 +446,9 @@ app.whenReady().then(() => {
 let isShuttingDown = false
 
 /**
- * Graceful shutdown: stop the runtime + embedder sidecars and AWAIT their exit so no
- * orphaned `llama-server` process survives, then
- * re-encrypt + shred the plaintext working DB (encrypted vault only). `runtime.stop()`
+ * Graceful shutdown: stop the sidecars and AWAIT their exit so no orphaned
+ * `llama-server` process survives, then re-encrypt + shred the plaintext working
+ * DB (encrypted vault only). `runtime.stop()`
  * waits up to a couple of seconds for the child to die, so this MUST be awaited — a
  * fire-and-forget would let Electron tear down mid-kill and orphan the children.
  */

@@ -338,7 +338,7 @@ describe('expandPaths', () => {
     const explicit = write('explicit.xyz', 'x') // unsupported but explicitly chosen
 
     const files = expandPaths([dir(), explicit])
-    // Folder walk keeps supported files only; the explicit png is still included.
+    // Folder walk keeps supported files only; the explicit .xyz is still included.
     expect(files.some((f) => f.endsWith('top.txt'))).toBe(true)
     expect(files.some((f) => f.endsWith('nested.md'))).toBe(true)
     expect(files.filter((f) => f.endsWith('ignore.xyz'))).toHaveLength(0)

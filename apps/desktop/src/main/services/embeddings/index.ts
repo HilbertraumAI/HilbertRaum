@@ -85,7 +85,7 @@ export function cosineSimilarity(a: Float32Array, b: Float32Array): number {
  * Raw dot product of two equal-length vectors (RAG-1 fast path).
  *
  * INVARIANT this rests on: every vector that reaches `VectorIndex.search` is already
- * **L2-normalized** — the embedder normalizes its output (`e5.ts:213` `l2normalize`; the
+ * **L2-normalized** — the embedder normalizes its output (`e5.ts` `l2normalize`; the
  * mock embedder too) and the query vector comes from that same `embed()` path. For unit
  * vectors `‖a‖=‖b‖=1`, so `cosine = dot/(‖a‖·‖b‖) = dot` exactly (to floating-point
  * tolerance) — computing the two norm accumulators per row is wasted work (~2× the FLOPs).

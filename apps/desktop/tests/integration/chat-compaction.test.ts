@@ -255,7 +255,7 @@ describe('assembly after a checkpoint (§4.5 synthetic pair)', () => {
     const { db, convId } = withCheckpoint()
     const turns = listConversationTurns(db, convId)
     const built = buildChatMessages(db, convId)
-    // system + summary pair (2) + the 6 post-checkpoint turns.
+    // system + summary pair (2) + the 7 post-checkpoint turns.
     const replayed = built.slice(3)
     expect(replayed).toHaveLength(turns.length - 4)
   })

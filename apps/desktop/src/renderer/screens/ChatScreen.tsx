@@ -239,7 +239,7 @@ export function ChatScreen({
   const pendingTokens = useRef('')
   const pendingThinking = useRef('')
   const answerStarted = useRef(false)
-  // M-U2: set when the user presses Stop during a stream, so the stream`s finally can
+  // M-U2: set when the user presses Stop during a stream, so the stream's finally can
   // confirm the interruption (a stopped partial reply otherwise looks like a normal turn).
   const stopped = useRef(false)
   const flushTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -735,7 +735,7 @@ export function ChatScreen({
       setStreamThinking('')
       setCompacting(false)
       // M-U2: confirm a user-requested stop so a truncated reply is not mistaken for a
-      // complete one. Only when looking at THIS conversation (a background stream`s toast
+      // complete one. Only when looking at THIS conversation (a background stream's toast
       // would be confusing) and only if no error already explained the early end.
       if (stopped.current && activeIdRef.current === convId) showToast(t('chat.stopped'))
       stopped.current = false

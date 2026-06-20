@@ -130,7 +130,7 @@ export const REINDEX_NEEDED_ANSWER = t('en', 'main.rag.reindexNeeded')
  * still retrieves from the visible documents and stays on the normal path.
  *
  * `scope` (document-organization plan M2): when given, the SAME membership / id-union /
- * archived filter retrieval applies is applied here, so the re-index honesty story is
+ * archived filter retrieval applies is applied here too, so the re-index honesty story is
  * correct under collection scope. This distinguishes, WITHIN the active scope, an
  * empty scope (no indexed docs ⇒ false ⇒ `NO_DOCUMENT_CONTEXT_ANSWER`, re-index wouldn't
  * help) from a stale scope (indexed docs, none visible to the embedder ⇒ true ⇒
@@ -506,7 +506,7 @@ export async function generateGroundedAnswer(
     // Distinguish "nothing relevant" from "the corpus is invisible to the active
     // embedder": the latter needs a re-index, not a rephrase. Either way the model is
     // never called without context (grounding rule). The check uses the SAME scope retrieval
-    // used (`scopeArg`, normalized) — composite OR legacy doc-id — so the re-index honesty
+    // uses (`scopeArg`, normalized) — composite OR legacy doc-id — so the re-index honesty
     // story holds on both paths (M2/RAG-1): a stale scope reports REINDEX_NEEDED, an empty
     // scope reports NO_DOCUMENT_CONTEXT, never the whole-corpus answer when retrieval was scoped.
     const answer = corpusNeedsReindex(db, embedder.id, normalizeScope(scopeArg))
