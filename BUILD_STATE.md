@@ -6,6 +6,51 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-20 — **Image-understanding Phase V5 (evaluation, hardening, docs — the FINAL phase) SHIPPED — the feature is COMPLETE; branch ready to merge. There is no V6.**
+Branch `image-understanding`, implementing the (now-folded) image-understanding plan §16 Phase V5. **The closeout: the env-gated
+manual smoke harness + a tiny synthetic fixture, the idle-timeout tuned from the V1 numbers, the §17 matrix re-verified, and the
+plan folded into `architecture.md` + deleted — all V1–V4 decisions consumed, not re-litigated; no production code behaviour change
+beyond the tuned constant.** **As built:**
+- **`tests/manual/vision-smoke.test.ts` — the `HILBERTRAUM_VISION_SMOKE` manual harness (NET-NEW).** Env-gated exactly like
+  `gpu-smoke`/`rerank-smoke` (`describe.skipIf(!enabled)`): **SKIPPED — and green — when the env var is unset**, so CI/the green-gate
+  never spawns a real binary. When pointed at a drive root (the PAID smoke drive) it finds the off-repo `models/vision/` GGUF + mmproj,
+  builds a REAL `VisionRuntime`, and drives it end-to-end: cold start (`--mmproj` loads multimodal) → analyze the committed fixture →
+  STREAM the answer (real SSE → `readChatSSE`) → warm follow-up (the `cache_prompt` reuse) → RUNTIME-4 idle teardown (small test idle
+  window) → cold restart. Logs the headline numbers (cold-start+TTFA, decode tok/s); peak RSS co-resident stays the
+  `scripts/measure-peak-rss.ps1` job. **No multi-GB weights / user images committed.**
+- **`tests/fixtures/vision/chart.png` (1734 bytes) + `make-fixtures.mjs` — the ONLY new repo image bytes.** A SYNTHETIC, content-free
+  320×240 bar chart drawn procedurally by the committed generator (license-clean by construction — we author it; no PII, no real
+  document). `.gitattributes` already treats `tests/fixtures/**` + `*.png` as binary.
+- **Idle-timeout TUNED: `DEFAULT_VISION_IDLE_MS` 180 000 → 120 000 ms (2 min — the LOWER end of the §19.13 2–5 min band).** Rationale
+  (now in the constant's doc comment + `model-benchmarks.md` §8.3): the follow-up prefill is already `cache_prompt`-cached, so a warm
+  sidecar only saves the seconds-scale model *load* — while the idle ~4.6 GB sits co-resident with a 12B chat (PROD-1 pushes a real
+  machine >16 GB), so reclaiming it sooner is the higher-value trade. `runtime.ts` constant + the `idleTimeoutMs` option doc updated;
+  no test asserted the old default (every test passes `idleTimeoutMs` explicitly), so the change is behaviour-safe.
+- **§17 matrix re-verified, NOT duplicated.** Status/limits/manifest/IPC/preload/renderer/SSE-fixture/security-sentinel are all covered
+  V2–V4 (the V4 `vision-security.test.ts` loopback + no-content-in-log/audit sentinel satisfies §17's security row on success + failure
+  paths); the ONLY genuinely missing §17 item was the env-gated runtime smoke — now added. No new CI test was needed or written.
+- **Docs — the doc-lifecycle execution.** The plan was **condensed into `architecture.md` "Image understanding — design record"
+  §1–§9** (decisions table · hard rules · the V1-resolved b9585 facts · alternatives · design-as-built module map+flow · the RUNTIME-4
+  idle interlock · security/privacy · limits+RAM+the commercial-gate deferral · **a §9 §-anchor legend** keeping the in-code `§N`/
+  `RUNTIME-*`/`SEC-*`/`PROD-*`/`IPC-*`/`DIST-*` citations resolvable, the Skills-record precedent) and **`docs/image-understanding-plan.md`
+  DELETED** (`git rm`; full original in history). Overview screen list + Swappable-interfaces (`VisionAnalyzer`) + the module map gained
+  vision. **`model-policy.md`:** the `vision` role + `mmproj` projector schema + RAM tiering + the **Qwen2.5-VL-3B-Instruct
+  `license_review` = approved (Apache-2.0)** against the upstream base `Qwen/Qwen2.5-VL-3B-Instruct` (ggml-org GGUF, mechanical-conversion
+  provenance posture). **`drive-layout.md`** (`models/vision/` + `model-manifests/vision/` in both layout sketches), **`packaging.md`**
+  (the two-`DownloadJob`-sharing-one-`modelId` topology + the `vision-smoke` harness-matrix row + a pre-ship checklist item), **`known-limitations.md`**
+  (CPU prefill latency + the 1536 downscale lever, RAM co-residency PROD-1 >16 GB, single-image/no-persistence, OCR-vs-vision separation,
+  ctx-4096, the mmproj-not-yet-in-the-sell-gate note), **`user-guide.md`** (new **§8 "Ask about an image"**, subsequent sections renumbered
+  9–13, the nav + cross-ref fixed), **`troubleshooting.md`** (two Images entries), **`model-benchmarks.md` §8** (the V1-measured numbers +
+  the harness protocol). **Commercial-drive gate: DEFERRED, not half-wired** — no `role: vision` manifest ships on a sold drive, so
+  `assertCommercialDrive` is unchanged; the decision + the future extension (verify the projector alongside the GGUF) is recorded in the
+  design record §8 + known-limitations.
+**§0 honored:** no cloud/telemetry; the harness is env-gated + skipped in CI (no real binary spawned in a CI-run test); only a tiny
+synthetic license-clean fixture committed (never weights/user data); loopback-only + no-content-in-log/audit unchanged (the V4 sentinel
+still passes). **Data contracts:** none changed. **Verification:** `npm test` (apps/desktop) **1965 passed / 30 skipped (177 files)** —
+full-suite-guard active (the new manual file is collected + skipped), **green-gate holds with zero vision models** (`available:false`,
+app launches); `npm run typecheck` + `npm run build` clean. **Next:** the image-understanding feature is **CLOSED OUT** — branch
+`image-understanding` ready to merge to `master`. **(prior entries below.)**_
+
 _2026-06-20 — **Image-understanding Phase V4 (real local vision runtime — hardening + wiring) SHIPPED — V5 (eval/benchmark/docs) is next.**
 Branch `image-understanding`, implementing [`docs/image-understanding-plan.md`](docs/image-understanding-plan.md) §16
 Phase V4. **A hardened, tested local vision sidecar with the net-new idle-teardown interlock + lock/quit/cancel teardown

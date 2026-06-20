@@ -37,11 +37,19 @@ const DEFAULT_VISION_CONTEXT_TOKENS = 4096
 const DEFAULT_REQUEST_TIMEOUT_MS = 300_000
 
 /**
- * Idle-teardown timeout default (RUNTIME-4 / plan §19.13: 2–5 min, tuned later). The window
- * the sidecar may sit idle, co-resident with the chat + embedder sidecars, before it is torn
- * down to give the RAM back. Env-overridable (`HILBERTRAUM_VISION_IDLE_MS`) for tuning/tests.
+ * Idle-teardown timeout default (RUNTIME-4 / plan §19.13). The window the sidecar may sit idle,
+ * co-resident with the chat + embedder sidecars, before it is torn down to give the RAM back.
+ * Env-overridable (`HILBERTRAUM_VISION_IDLE_MS`) for tuning/tests.
+ *
+ * TUNED to 120 000 ms (2 min — the LOWER end of the §19.13 2–5 min band) in Phase V5 against the
+ * V1 numbers (BUILD_STATE / model-benchmarks §8): the per-image follow-up prefill is already
+ * CACHED across questions (`cache_prompt:true`), so a warm sidecar's only saved cost is the model
+ * *load* (seconds off USB), a cheap re-pay — whereas an idle sidecar holds ~4.6 GB co-resident
+ * with a 12B chat (PROD-1 pushes a real machine >16 GB), so reclaiming that RAM promptly is the
+ * higher-value trade. 2 min comfortably spans a burst of follow-ups about one image, then frees
+ * the RAM once the user moves on; the next image cold-restarts cleanly (a soft teardown).
  */
-const DEFAULT_VISION_IDLE_MS = 180_000
+const DEFAULT_VISION_IDLE_MS = 120_000
 
 function readIdleTimeoutMs(): number {
   const raw = process.env.HILBERTRAUM_VISION_IDLE_MS?.trim()
@@ -65,7 +73,7 @@ export interface VisionRuntimeOptions extends VisionRuntimeDeps {
   contextTokens?: number
   /** Per-analyze timeout in ms (default 300 000 — CPU prefill of a full image is slow). */
   requestTimeoutMs?: number
-  /** Idle-teardown timeout in ms (default `HILBERTRAUM_VISION_IDLE_MS` / 180 000). */
+  /** Idle-teardown timeout in ms (default `HILBERTRAUM_VISION_IDLE_MS` / 120 000 — §19.13, tuned V5). */
   idleTimeoutMs?: number
 }
 

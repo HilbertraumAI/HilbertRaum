@@ -1,6 +1,6 @@
 # Known limitations & accepted trade-offs
 
-_Last updated: 2026-06-15._
+_Last updated: 2026-06-20 (added the Image understanding section — CPU prefill latency, RAM co-residency, single-image/no-persistence, OCR-vs-vision separation)._
 
 The MVP (Phases 0–13) is feature-complete. Four post-MVP multi-persona audit rounds (2026-06-09)
 found and fixed every Critical, High, and Medium finding plus the actionable Lows — see
@@ -433,6 +433,41 @@ password recovery — are documented in
   cannot load scripts from inside `app.asar`). Wired in `electron-builder.yml`;
   verifying a real OCR run from the produced portable .exe is a release-acceptance
   item (the green gate never packages — the R2 posture).
+
+## Image understanding (Phases V1–V5, [`architecture.md`](architecture.md) "Image understanding — design record")
+
+- **The first question about a full-resolution image is SLOW on CPU.** CPU prefill of a high-res
+  image is ~52 s for ~2800 image tokens off USB (~12 tok/s decode) — measured on b9585 (V1). The
+  client **downscale-to-1536 px** (`renderer/images/decode.ts`) is a real latency lever (fewer image
+  tokens ⇒ proportionally less prefill), and `cache_prompt` reuse means **follow-up** questions about
+  the same image skip the prefill — but the FIRST question per image pays it. GPU is the optimization
+  lever (§19.11) if CPU time-to-first-answer is unacceptable; MVP runs CPU-pinned (`--device none`).
+- **RAM peak is co-resident, and the idle teardown bounds the window, NOT the active-use peak
+  (PROD-1).** The vision sidecar is a SEPARATE `llama-server` (not the chat slot), so at peak you can
+  have **chat + E5 embedder + vision = three** processes. Vision peak ~4.6 GB + a 12B chat (~7 GB) +
+  the embedder ⇒ **>16 GB** — a **12 GB machine will likely OOM and even 16 GB is tight**. The
+  `recommended_min_ram_gb` / RAM-best-fit gate keeps a vision model off machines that can't hold it;
+  the idle teardown (default 2 min) reclaims the ~4.6 GB once the user stops asking, but during active
+  use the peak stands. Vision is realistically co-resident **only with a small chat model, or after
+  the chat sidecar idles out** — not "12B chat + vision simultaneously" (model-benchmarks §8.4).
+- **One image at a time; PNG/JPEG only; nothing is persisted.** The Images screen takes a single
+  image (no multi-image compare, no video, no camera); WEBP is deliberately out of MVP (no native dep
+  to prove it safe in the import stack). The image, question, thread, and answer live **only in
+  renderer screen state** — gone on navigation away / image removal / app close. No DB writes, no
+  auto-OCR, no corpus indexing.
+- **Image understanding is NOT OCR and NOT image generation.** It reads/interprets one image with a
+  vision-language model; scanned **documents** still belong to Documents → "Make searchable (OCR)"
+  (tesseract.js), which is untouched. The Images screen never silently OCRs or routes to OCR, and the
+  feature never generates/edits images (a permanent non-goal).
+- **Context is capped at 4096 tokens** (vs the model's 128 000 train context) — fine for a single
+  image + a short question/thread in MVP; long multi-turn threads about one image are not a v1 promise.
+- **The caller-supplied-path caveat applies to `imageReadBytes(path)`** — the same accepted stance as
+  `importDocuments` (the renderer is sandboxed; main re-validates the extension + byte cap, SEC-3).
+- **No vision model ships on a commercial drive yet, so `assertCommercialDrive` does not verify the
+  mmproj projector.** The sell gate verifies each manifest's GGUF but not the projector file; since no
+  `role: vision` manifest is bundled on a sold drive, extending the gate now would be half-wired. When
+  the first vision model is curated onto a sold drive, extend the gate to verify the projector
+  alongside the GGUF (recorded in the architecture design record §8).
 
 ## Internationalization (Phases 39–42, [`architecture.md`](architecture.md) i18n record)
 

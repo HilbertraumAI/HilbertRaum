@@ -1,6 +1,6 @@
 # Drive & Workspace Layout
 
-_Last updated: 2026-06-17 (Skills S9: `prepare-drive` copies `app-skills/`; the commercial gate asserts app skills present + `user-skills/` empty)_
+_Last updated: 2026-06-20 (image understanding V2/V5: `models/vision/` + `model-manifests/vision/` added to the layout — a vision model is the GGUF + its mmproj projector). Prior: 2026-06-17 (Skills S9: `prepare-drive` copies `app-skills/`; the commercial gate asserts app skills present + `user-skills/` empty)_
 
 ## How the app finds its data
 
@@ -24,7 +24,8 @@ From the root, these paths are derived and created (idempotently) on first run:
 │   └── <id>/SKILL.md      #   non-secret product content, provisioned like model-manifests
 ├── user-skills/           # user-installed/dropped-in Skills (read-write, PLAIN folders — NOT encrypted; S3)
 │   └── <id>/SKILL.md      #   non-secret task knowledge (DS20); a drop-in installs DISABLED until enabled
-├── models/                # GGUF weights (git-ignored, never committed)
+├── models/                # GGUF weights (git-ignored, never committed); per role: chat/ embeddings/
+│                          #   reranker/ transcriber/ vision/ (vision = the GGUF + its mmproj projector)
 ├── logs/
 │   └── app.log[.enc]      # local rotating logs (never uploaded; .enc on an encrypted workspace)
 └── config/                # drive.json / policy.json / checksums.json / workspace.json (vault descriptor)
@@ -63,9 +64,9 @@ PRIVATE_AI_DRIVE/
 │   └── cpu/                                     # pure-CPU safety-net build + its own marker (win/linux only, Phase 14)
 ├── runtime/whisper.cpp/{win,mac,linux}/        # SECOND sidecar family (Phase 36): the whisper-cli transcriber
 │   └── .hilbertraum-runtime.json                       # same marker scheme; win = upstream prebuilt, mac/linux = source-build (see below)
-├── models/{chat,embeddings,reranker,transcriber}/ # weights (git-ignored; transcriber/ holds the whisper GGML .bin)
+├── models/{chat,embeddings,reranker,transcriber,vision}/ # weights (git-ignored; transcriber/ = whisper GGML .bin; vision/ = the GGUF + its mmproj projector, image understanding V1–V5)
 ├── ocr/                                        # OCR language files (Phase 38): {deu,eng}.traineddata.gz — plain sha256-verified, git-ignored
-├── model-manifests/{chat,embeddings,reranker,transcriber}/ # committed YAML (the only model metadata in git)
+├── model-manifests/{chat,embeddings,reranker,transcriber,vision}/ # committed YAML (the only model metadata in git)
 │   └── runtime-sources.yaml                     # sidecar download manifest (Phase 12; + whisper_cpp block Phase 36; + ocr block Phase 38)
 ├── app-skills/                                 # app-shipped Skills (read-only PLAIN folders; provisioned + asserted, S3/S9)
 ├── user-skills/                                # user Skills (read-write PLAIN folders) — EMPTY on a sold drive

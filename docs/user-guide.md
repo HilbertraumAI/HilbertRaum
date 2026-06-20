@@ -1,7 +1,8 @@
 # HilbertRaum — User Guide
 
-_Last updated: 2026-06-17 (added: Skills — the composer picker, the per-message skill glyph, skills
-that run local tools, and Settings → Skills; previously: deep index + coverage meter and tiers;
+_Last updated: 2026-06-20 (added §8 "Ask about an image" — the Images screen; subsequent sections
+renumbered). Previously: Skills — the composer picker, the per-message skill glyph, skills
+that run local tools, and Settings → Skills; deep index + coverage meter and tiers;
 drag-and-drop files into a chat; the composite source picker; regrouped + collapsible Documents
 sidebar; audio transcription, OCR and voice dictation)_
 
@@ -80,9 +81,9 @@ enter your password on a single unlock screen.
 
 ## 4. Finding your way around
 
-The sidebar has four everyday destinations — **Home**, **Chat**, **Documents**, and
+The sidebar has five everyday destinations — **Home**, **Chat**, **Documents**, **Images**, and
 **AI Model** — plus **Settings** at the bottom. Settings has three tabs: **General**,
-**Privacy & data**, and **Diagnostics (advanced)** (see §8).
+**Privacy & data**, and **Diagnostics (advanced)** (see §10).
 
 A quiet **🔒 Local · Offline** status sits in the chat header. Hover it for the short version — *"Everything stays on this drive. No internet
 connection is used."* — or click it to open the full privacy details. If you have enabled
@@ -482,7 +483,43 @@ network, and the activity log records only counts and ids — never your project
 
 ---
 
-## 8. Skills
+## 8. Ask about an image
+
+The **Images** screen lets you ask a question about **one picture** — a screenshot, a chart, a
+form, a receipt, or a photo of a page — and get an answer written **on this drive**. It is a
+different tool from reading scanned documents (that's **Make searchable (OCR)** under Documents,
+§7) and it never creates or edits pictures — it only *looks at* the one you give it.
+
+1. Open **Images** from the sidebar (between **Documents** and **AI Model**).
+2. **Drop an image** onto the screen, or click **choose an image** — **PNG or JPEG**. A preview
+   appears with its name, size, and dimensions; **Remove / Replace** swaps it.
+3. Type a question, or tap one of the **suggestion chips** (*Summarize this image*, *Extract
+   visible text*, *Explain this chart*, *Read this form*, …) to fill the box — you can still edit
+   it before sending. Press **Enter** to send.
+4. The answer streams in, with a quiet *"Generated locally from the selected image."* note,
+   **Copy**, and **Try again**. Ask **follow-up** questions about the same image and they stack up
+   as a short thread; **Remove** the image (or pick a new one) clears the thread.
+
+Everything stays on the drive — the picture, your question, and the answer are never uploaded and
+**are not saved**: they live only on the screen and are gone when you remove the image or leave.
+
+A few honest notes:
+
+- **It needs a vision model on the drive.** If there isn't one, the screen explains what's missing
+  and offers **Go to AI Model** (vision models are an optional download, like the larger chat
+  models). Without one, the rest of the app is unaffected.
+- **The first question about a big image can take a while** — reading a full-resolution picture is
+  real work for a laptop processor. Follow-up questions about the *same* image are quicker. A
+  graphics card speeds it up where available.
+- **One image at a time**, **PNG or JPEG**, and **one question runs at a time** (a second question
+  waits until the first finishes). It answers from what's **visible** and says so when text is
+  unclear — it won't invent hidden details.
+- **It's not OCR.** For a scanned PDF or a long document you want to search, use **Make searchable
+  (OCR)** under Documents (§7) instead.
+
+---
+
+## 9. Skills
 
 A **skill** is a small, local task pack — a set of instructions (and sometimes app tools) that points
 one answer at a particular job: reconciling a bank statement, writing up a meeting protocol, checking
@@ -537,7 +574,7 @@ records only ids and counts, never your documents' contents or a skill's figures
 
 ---
 
-## 9. Privacy & offline
+## 10. Privacy & offline
 
 Open **Settings → Privacy & data** (or click the **🔒 Local · Offline** status in the chat header)
 to see where your data lives and confirm the app's network state. Internet access is used **only**
@@ -561,7 +598,7 @@ password — only names, ids, and counts. It keeps the most recent 5,000 entries
 
 ---
 
-## 10. Appearance (light and dark)
+## 11. Appearance (light and dark)
 
 The app follows your operating system's light/dark preference by default. To pick one
 explicitly, open **Settings → Appearance** and choose **System**, **Light**, or **Dark** —
@@ -572,7 +609,7 @@ inside the encrypted workspace, so before you unlock it the app can't know your 
 
 ---
 
-## 11. Lock / quit
+## 12. Lock / quit
 
 - **Lock now** (encrypted workspaces) re-locks your data without quitting. It also shuts down
   the AI model so nothing you typed stays in memory; after unlocking, your selected model loads
@@ -597,7 +634,7 @@ is unlocked. Enter your current password, then the new one twice — the same st
 
 ---
 
-## 12. Move between laptops
+## 13. Move between laptops
 
 Because everything lives on the drive, you can unplug it and plug it into another laptop —
 your models, documents, and chat history come with you. Eject the drive safely before

@@ -1,6 +1,8 @@
 # Model Policy — HilbertRaum
 
-_Last updated: 2026-06-11 (Phase 29: first benchmark run — Ministral/Gemma/Qwen3-2507 promoted,
+_Last updated: 2026-06-20 (image understanding V5: the `vision` role + `mmproj` projector + the
+Qwen2.5-VL-3B-Instruct license review — see "The vision role + mmproj projector" below). Prior:
+2026-06-11 (Phase 29: first benchmark run — Ministral/Gemma/Qwen3-2507 promoted,
 Granite held, min-RAM recalibrated from measured peak RSS; see
 [`model-benchmarks.md`](model-benchmarks.md) §6. Phase 28: four challenger manifests added per
 decisions D16–D18 — design record in [`model-benchmarks.md`](model-benchmarks.md) §7; runtime
@@ -30,6 +32,7 @@ pinned to llama.cpp b9585; all license reviews approved)_
 | Embeddings | Multilingual E5 Small (F16) | ~0.25 GB | 4 GB | all | Local document search (needed for Q&A) |
 | Reranker (optional) | BGE Reranker v2 M3 (F16) | ~1.08 GB | 6 GB | LITE+ (never bundled by default) | Retrieval-quality pass over document search (Phase 21) — search works fully without it |
 | Transcriber | Whisper Small (multilingual) | ~0.49 GB | 4 GB | all (bundled) | Audio transcription + voice dictation (Phase 36); whisper.cpp GGML; MIT |
+| Vision (optional) | Qwen2.5-VL 3B Instruct Q4 + f16 mmproj | ~3.27 GB (2 files) | 12 GB | — (opt-in, never bundled by default) | Image understanding — the Images screen (Phases V1–V5). Two files: GGUF + the `mmproj` projector. CPU-pinned; ~4.6 GB peak RSS. **Co-resident with a 12B chat ⇒ >16 GB (PROD-1)** — see "The vision role" below. Apache-2.0 |
 
 > Qwen3 **1.7B** was in the original spec §7.3 (the TINY/UNKNOWN "small" model) but was **dropped**:
 > the official `Qwen/Qwen3-1.7B-GGUF` repo publishes no Q4_K_M. 4B now covers TINY/UNKNOWN too.
@@ -73,8 +76,10 @@ recommended_min_ram_gb, recommended_ram_gb, recommended_context_tokens, local_pa
 `license_review` block. Optional: `recommended_profiles` (a list of hardware profiles — the legacy
 no-RAM picker), `recommendation_rank` (integer, default 0; higher = preferred among models that fit
 the machine's RAM — the Phase-29 quality-aware tiebreak in `recommendModelIdByRam`),
-`supports_thinking_mode` (below), and a `download` block (Phase 12, below). Unknown extra keys (e.g.
-`supports_tools`, `dimensions`, `bundled_on_preconfigured_drive`) are ignored by the validator.
+`supports_thinking_mode` (below), a `download` block (Phase 12, below), and — for a `role: vision`
+model — an **`mmproj` projector sub-block** + an informational `input_modalities` list (see "The
+vision role + mmproj projector" below). Unknown extra keys (e.g. `supports_tools`, `dimensions`,
+`bundled_on_preconfigured_drive`) are ignored by the validator.
 
 - **`local_path`** is resolved **relative to the drive root**, so a value of
   `models/chat/foo.gguf` points at `<drive-root>/models/chat/foo.gguf`.
@@ -300,3 +305,51 @@ upstream):
 |---|---|---|
 | `ocr/deu.traineddata.gz` | `306c4280d0cbed46fbff727486bd43b92730181bae80f56941a091f363bdf28b` | 1.27 MB |
 | `ocr/eng.traineddata.gz` | `45b4cb346724ac1774f1c36f42f182b887bcdb28ebe63e6fff90ac41f3fcff91` | 2.82 MB |
+
+## The vision role + mmproj projector (image understanding, Phases V1–V5)
+
+The `vision` role powers the **Images** screen (design record: [`architecture.md`](architecture.md)
+"Image understanding — design record"). A vision model is **two files** — the language GGUF (the
+top-level `local_path`/`sha256`/`download`, like any model) **plus** a multimodal **`mmproj`
+projector** that `llama-server --mmproj` loads. The schema additions (`shared/manifest.ts`):
+
+```yaml
+role: vision
+input_modalities: [text, image]        # informational only — capability comes from role + mmproj
+local_path: models/vision/qwen2.5-vl-3b-instruct-q4.gguf
+sha256: d02fe9b69ad8cadbbd228e387667af66612c44bed29ffc8eb1e7caf9ac486c12
+mmproj:                                 # REQUIRED iff role: vision
+  local_path: models/vision/mmproj-qwen2.5-vl-3b-instruct-f16.gguf
+  sha256: b9160fe9d814d1fadf68395677468534778b39ac33c2e7561b7b218626e60d5e
+  download:                             # same atomic single-file fetch as the GGUF (two jobs, one modelId)
+    url: https://huggingface.co/ggml-org/Qwen2.5-VL-3B-Instruct-GGUF/resolve/main/mmproj-Qwen2.5-VL-3B-Instruct-f16.gguf?download=true
+    sha256: b9160fe9d814d1fadf68395677468534778b39ac33c2e7561b7b218626e60d5e
+download:
+  url: https://huggingface.co/ggml-org/Qwen2.5-VL-3B-Instruct-GGUF/resolve/main/Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf?download=true
+  sha256: d02fe9b69ad8cadbbd228e387667af66612c44bed29ffc8eb1e7caf9ac486c12
+```
+
+Validator rules (added in `shared/manifest.ts`): `mmproj` is **required iff `role: vision`**;
+`mmproj.local_path` non-empty; `mmproj.sha256` a real lower-case hash or `REPLACE_WITH_REAL_HASH`;
+a **real** `mmproj.download.sha256` must equal a **real** `mmproj.sha256` (same file). Install state
+(`services/models.ts`) requires **both** files present + SHA-256-verified. An older build that
+doesn't know `vision`/`mmproj` simply treats the manifest as `unsupported` (forward-compatible).
+
+**RAM tiering (PROD-1).** Min RAM is **12 GB** for the model alone (~4.6 GB peak RSS), but the
+honest co-residency bar is higher: vision + a 12B chat (~7 GB) + the E5 embedder = three
+`llama-server` processes ⇒ **>16 GB** at peak. The idle teardown bounds the *window*, not the
+active-use peak (model-benchmarks §8.4). So vision is realistically co-resident only with a small
+chat model, or after the chat sidecar idles out; the `recommended_min_ram_gb` / RAM-best-fit gate
+keeps it off machines that can't hold it. **Opt-in only** — `fetch-models`/`prepare-drive
+--with-assets` does NOT pull a vision model by default (like the larger chat models); `--only
+<vision-id>` or `--all-models` pulls both files.
+
+**License-review record — Qwen2.5-VL-3B-Instruct (status: approved, reviewed 2026-06-20):** the base
+model **`Qwen/Qwen2.5-VL-3B-Instruct` is Apache-2.0** (the all-permissive posture — same as the Qwen3
+chat catalog and the E5/reranker entries). The shipped GGUF + f16 `mmproj` come from
+**`ggml-org/Qwen2.5-VL-3B-Instruct-GGUF`** — the official llama.cpp org — which declares `apache-2.0`
+via its HF card tag (mechanical GGUF/projector conversion, the same provenance posture as the E5 and
+reranker GGUF entries). No new license class enters the product. Live-loaded on the pinned **b9585**
+during the V1 gate (it read a real German invoice correctly); the runtime-arg resolution + the SSE
+reuse are in the architecture design record §3. The reference mechanics-proof artifact **SmolVLM-256M**
+(ggml-org, Apache-2.0) is recorded in BUILD_STATE V1 but is **not** a product candidate.
