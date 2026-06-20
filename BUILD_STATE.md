@@ -21,6 +21,8 @@ with zero vision models. As built:**
   each `{path, sha, localPath}`); `drive.ts` `verifyDriveModels` folds per-file results to one per-model row reporting the FIRST
   non-`verified` file (so a half-installed vision drive — good GGUF, missing/corrupt projector — fails `weightsVerified`), and
   `buildChecksumsJson` emits one entry PER FILE. `assertCommercialDrive` is unchanged (it delegates to `verifyDriveModels`).
+  The no-Node DIY mirror `verify-models.{sh,ps1}` was taught the same (block-scoped `mmproj:` parse → a per-file `verify_file`/
+  `Write-WeightResult`; `--strict`/`-Strict` now requires BOTH files VERIFIED; `--generate`/`-Generate` emits an entry per file).
 - **TEST-1/2/3/4 (test strength).** TEST-1: the security sentinel is now non-vacuous — the answer actually streams through the system
   then the analyze fails, asserting the real `index.ts` catch logs ONLY a content-free `{jobId, error}` (exact key set), plus a
   success-path "answer exists but never reaches a log" check. TEST-2: a NET-NEW injectable idle clock (`IdleClock`/`idleClock` option,
@@ -34,10 +36,13 @@ with zero vision models. As built:**
   `troubleshooting.md` corrected — a second question is busy-REJECTED (declined, not queued). DOC-2: a `plan §5.1–§5.6` row added to the
   `architecture.md` §9 anchor legend.
 **Data contracts (new):** a vision model's `planModelDownloads` now returns TWO tasks (GGUF first, then mmproj); `manifestFiles` is the
-shared exported GGUF+mmproj file set used by install AND verify; `buildChecksumsJson` emits one entry per file. **Residual risk:** the
-in-app `DownloadManager` remains single-file for vision (GGUF via `tasks[0]`) — the `fetch-models` scripts are the two-file path until a
-vision drive ships. **Verification:** `npm test` **1984 passed / 30 skipped (162 files)**; `npm run typecheck` clean; both fetch-models
-scripts dry-run-verified on a synthetic vision manifest (plan both files). **Next:** branch `image-understanding` ready to merge. **(prior entries below.)**_
+shared exported GGUF+mmproj file set used by install AND verify; `buildChecksumsJson` emits one entry per file; the `fetch-models` +
+`verify-models` scripts (both `.sh`/`.ps1`) all handle both files. **Residual risk:** the in-app `DownloadManager` (UI) remains
+single-file for vision (GGUF via `tasks[0]`) — the `fetch-models` scripts are the two-file download path until a vision drive ships; this
+is the ONLY remaining single-file spot, and it's latent (no `role:vision` manifest committed). **Verification:** `npm test`
+**1984 passed / 30 skipped (162 files)**; `npm run typecheck` clean; all four scripts smoke-verified on a synthetic vision manifest
+(`fetch-models` plans both files; `verify-models --strict` fails a missing projector, passes when both present, `--generate` emits two
+entries). **Next:** branch `image-understanding` ready to merge. **(prior entries below.)**_
 
 _2026-06-20 — **Image-understanding Phase V5 (evaluation, hardening, docs — the FINAL phase) SHIPPED — the feature is COMPLETE; branch ready to merge. There is no V6.**
 Branch `image-understanding`, implementing the (now-folded) image-understanding plan §16 Phase V5. **The closeout: the env-gated

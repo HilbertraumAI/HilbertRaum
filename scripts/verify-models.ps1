@@ -72,6 +72,45 @@ function Get-ManifestField([string]$text, [string]$key) {
 
 $IsRealSha = { param($h) $h -match '^[a-f0-9]{64}$' }
 
+# Extract the indented body of a top-level `mmproj:` mapping (the SECOND file of a vision model,
+# DIST-2: verify BOTH files). Get-ManifestField then reads its local_path/sha256.
+function Get-MmprojBlock([string]$text) {
+  $out = New-Object System.Collections.Generic.List[string]
+  $inBlk = $false
+  foreach ($line in ($text -split "`n")) {
+    if (-not $inBlk) {
+      if ($line -match '^mmproj:\s*$') { $inBlk = $true }
+    } elseif ($line -match '^\S') {
+      break
+    } else {
+      $out.Add($line)
+    }
+  }
+  return ($out -join "`n")
+}
+
+# Classify one weight file against its expected hash (mirrors services/models.ts verifyChecksum).
+function Get-WeightStatus([string]$weight, [string]$sha) {
+  if (-not (Test-Path $weight)) { return 'MISSING' }
+  $actual = (Get-FileHash -Path $weight -Algorithm SHA256).Hash.ToLower()
+  if (-not (& $IsRealSha $sha)) { return 'UNVERIFIED' }
+  if ($actual -eq $sha) { return 'VERIFIED' }
+  $script:hadMismatch = $true
+  return 'MISMATCH'
+}
+
+# Record + print one file's result (the GGUF, or a vision model's mmproj projector).
+function Write-WeightResult([string]$id, [string]$label, [string]$status) {
+  $script:results += [pscustomobject]@{ id = "$id$label"; status = $status }
+  $color = switch ($status) {
+    'VERIFIED' { 'Green' }
+    'MISMATCH' { 'Red' }
+    'MISSING' { 'Yellow' }
+    default { 'Gray' }
+  }
+  Write-Host ("  {0,-12} {1}" -f $status, "$id$label") -ForegroundColor $color
+}
+
 # Exclude the runtime-sources manifest (it describes the sidecar, not a model). It has
 # no local_path today, but mirroring fetch-models' explicit exclusion removes the
 # fragility if it ever gains one.
@@ -90,33 +129,22 @@ foreach ($mf in $manifestFiles) {
   $format = Get-ManifestField $text 'format'
   if (-not $localPath) { continue }
 
-  $weight = Join-Path $Target ($localPath -replace '/', [IO.Path]::DirectorySeparatorChar)
-  $status = ''
-  $actual = $null
+  # A vision model is TWO files: the language GGUF + the mmproj projector (DIST-2).
+  $mmprojBlock = Get-MmprojBlock $text
+  $mmprojLocal = Get-ManifestField $mmprojBlock 'local_path'
+  $mmprojSha = (Get-ManifestField $mmprojBlock 'sha256'); if ($mmprojSha) { $mmprojSha = $mmprojSha.ToLower() }
 
   if ($runtime -notin @('llama_cpp', 'llama.cpp') -or $format -ne 'gguf') {
-    $status = 'UNSUPPORTED'
-  } elseif (-not (Test-Path $weight)) {
-    $status = 'MISSING'
-  } else {
-    $actual = (Get-FileHash -Path $weight -Algorithm SHA256).Hash.ToLower()
-    if (-not (& $IsRealSha $sha)) {
-      $status = 'UNVERIFIED'
-    } elseif ($actual -eq $sha) {
-      $status = 'VERIFIED'
-    } else {
-      $status = 'MISMATCH'; $hadMismatch = $true
-    }
+    Write-WeightResult $id '' 'UNSUPPORTED'
+    continue
   }
 
-  $results += [pscustomobject]@{ id = $id; local_path = $localPath; status = $status; actual = $actual }
-  $color = switch ($status) {
-    'VERIFIED' { 'Green' }
-    'MISMATCH' { 'Red' }
-    'MISSING' { 'Yellow' }
-    default { 'Gray' }
+  $weight = Join-Path $Target ($localPath -replace '/', [IO.Path]::DirectorySeparatorChar)
+  Write-WeightResult $id '' (Get-WeightStatus $weight $sha)
+  if ($mmprojLocal) {
+    $mmprojWeight = Join-Path $Target ($mmprojLocal -replace '/', [IO.Path]::DirectorySeparatorChar)
+    Write-WeightResult $id ' (mmproj)' (Get-WeightStatus $mmprojWeight $mmprojSha)
   }
-  Write-Host ("  {0,-12} {1}" -f $status, $id) -ForegroundColor $color
 }
 
 if ($Generate) {
@@ -125,14 +153,20 @@ if ($Generate) {
     $id = Get-ManifestField $text 'id'
     $localPath = Get-ManifestField $text 'local_path'
     if (-not $localPath) { continue }
-    $weight = Join-Path $Target ($localPath -replace '/', [IO.Path]::DirectorySeparatorChar)
-    $present = Test-Path $weight
-    [ordered]@{
-      id         = $id
-      local_path = $localPath
-      sha256     = if ($present) { (Get-FileHash -Path $weight -Algorithm SHA256).Hash.ToLower() } else { $null }
-      size_bytes = if ($present) { (Get-Item $weight).Length } else { $null }
-      present    = [bool]$present
+    # One entry per FILE: the GGUF, plus a vision model's mmproj projector (DIST-2).
+    $paths = @($localPath)
+    $mmprojLocal = Get-ManifestField (Get-MmprojBlock $text) 'local_path'
+    if ($mmprojLocal) { $paths += $mmprojLocal }
+    foreach ($lp in $paths) {
+      $weight = Join-Path $Target ($lp -replace '/', [IO.Path]::DirectorySeparatorChar)
+      $present = Test-Path $weight
+      [ordered]@{
+        id         = $id
+        local_path = $lp
+        sha256     = if ($present) { (Get-FileHash -Path $weight -Algorithm SHA256).Hash.ToLower() } else { $null }
+        size_bytes = if ($present) { (Get-Item $weight).Length } else { $null }
+        present    = [bool]$present
+      }
     }
   }
   $checksums = [ordered]@{
