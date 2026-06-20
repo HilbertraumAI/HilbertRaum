@@ -32,6 +32,7 @@ export const de: Record<keyof typeof en, string> = {
   // "Einstel-/lungen") — Electron ships no auto-hyphenation; invisible when the word fits
   // and in the button tooltip. "KI-Modell" already breaks at its real hyphen.
   'nav.documents': 'Dokumente',
+  'nav.images': 'Bilder',
   'nav.models': 'KI-Modell',
   'nav.skills': 'Skills',
   'nav.settings': 'Einstellungen',
@@ -1478,5 +1479,63 @@ export const de: Record<keyof typeof en, string> = {
   'chat.attach.processing': '{name} wird verarbeitet…',
   'chat.attach.added': '{name} zu diesem Chat hinzugefügt',
   'chat.attach.newDocChat': 'Neuer Dokument-Chat für {name} gestartet',
-  'chat.attach.failed': '{name} konnte diesem Chat nicht hinzugefügt werden.'
+  'chat.attach.failed': '{name} konnte diesem Chat nicht hinzugefügt werden.',
+
+  // ---- Bilder — „Frag ein Bild" (image-understanding §5/§11, Phase V3) ----
+  // Visuelles Verstehen EINES lokalen PNG/JPEG über ein lokales KI-Modell — getrennt von
+  // OCR (Dokumente) und von jeder Bildgenerierung (nie gebaut). Nichts wird gespeichert.
+  'images.title': 'Ein Bild verstehen',
+  'images.empty.body':
+    'Stell Fragen zu einem Screenshot, Diagramm, Formular, Beleg oder Foto. Alles bleibt lokal.',
+  'images.avail.noModel': 'Bildverständnis braucht ein lokales KI-Bildmodell auf diesem Laufwerk.',
+  'images.avail.noRuntime': 'Bildverständnis braucht zuerst die installierte KI-Engine.',
+  'images.avail.incompatible': 'Das KI-Bildmodell dieses Laufwerks braucht eine neuere KI-Engine.',
+  'images.avail.cta': 'Zum KI-Modell',
+  'images.avail.ocrPointer': 'Gescannte Dokumente? Nutze „Durchsuchbar machen (OCR)" unter Dokumente.',
+  'images.locked': 'Entsperre deinen Arbeitsbereich, um ein Bild zu verstehen.',
+  'images.drop.title': 'Bild hier ablegen',
+  'images.drop.choose': 'oder ein Bild auswählen',
+  'images.drop.types': 'PNG oder JPEG',
+  'images.preview.remove': 'Entfernen',
+  'images.preview.replace': 'Ersetzen',
+  'images.preview.alt': 'Ausgewähltes Bild',
+  'images.chip.summarize': 'Dieses Bild zusammenfassen',
+  'images.chip.summarize.prompt':
+    'Fasse den sichtbaren Inhalt dieses Bildes zusammen. Nenne alles Wichtige oder Ungewöhnliche.',
+  'images.chip.extractText': 'Sichtbaren Text erfassen',
+  'images.chip.extractText.prompt':
+    'Erfasse den sichtbaren Text, den du lesen kannst. Erhalte Zeilenumbrüche, wo es hilft. Sag, wenn Text unklar ist.',
+  'images.chip.explainChart': 'Dieses Diagramm erklären',
+  'images.chip.explainChart.prompt':
+    'Erkläre, was dieses Diagramm zu zeigen scheint. Nenne Achsen, Beschriftungen, Trends und jede Unsicherheit.',
+  'images.chip.readForm': 'Dieses Formular lesen',
+  'images.chip.readForm.prompt':
+    'Nenne die wichtigsten sichtbaren Felder und Werte in diesem Formular. Schreibe „unklar", wo du etwas nicht lesen kannst.',
+  'images.chip.importantDetails': 'Wichtige Details finden',
+  'images.chip.importantDetails.prompt':
+    'Liste die wichtigsten sichtbaren Details auf. Leite nichts ab, was nicht sichtbar ist.',
+  'images.chip.whatNotice': 'Worauf sollte ich achten?',
+  'images.chip.whatNotice.prompt':
+    'Worauf sollte ich in diesem Bild achten? Nenne nur die auffälligsten sichtbaren Elemente.',
+  'images.composer.placeholder': 'Frag etwas zu diesem Bild…',
+  'images.composer.ask': 'Fragen',
+  'images.answer.localNote': 'Lokal aus dem ausgewählten Bild erzeugt.',
+  'images.answer.copy': 'Kopieren',
+  'images.answer.copied': 'Kopiert',
+  'images.answer.tryAgain': 'Erneut versuchen',
+  'images.answer.clear': 'Neues Bild',
+  'images.answer.reading': 'Bild wird gelesen…',
+  'images.answer.starting': 'KI-Bildmodell wird gestartet…',
+  'images.answer.stop': 'Stopp',
+  'images.answer.stopped': 'Gestoppt.',
+  'images.err.tooLarge': 'Dieses Bild ist zu groß zum Analysieren. Versuch ein kleineres Bild.',
+  'images.err.unsupported': 'Dieser Dateityp wird nicht unterstützt. Wähle ein PNG oder JPEG.',
+  'images.err.decodeFailed':
+    'Dieses Bild konnte nicht geöffnet werden. Es ist vielleicht beschädigt oder hat ein nicht unterstütztes Format.',
+  'images.err.multiDrop': 'Leg immer nur ein Bild ab.',
+  'images.err.runtimeFailed':
+    'Das KI-Bildmodell konnte nicht starten. Versuch es erneut oder wähle ein anderes Modell.',
+  'images.err.emptyResponse':
+    'Für dieses Bild kam keine Antwort zurück. Formulier deine Frage anders.',
+  'images.err.busy': 'Die vorige Frage wird noch bearbeitet…'
 }

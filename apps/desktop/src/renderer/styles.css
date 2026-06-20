@@ -1323,6 +1323,58 @@ code, pre, kbd { font-family: var(--font-mono); }
   .docs-rail-group-head { display: none; }
 }
 
+/* ---- Images screen (image-understanding §5/§11, Phase V3) ---- */
+.images-screen { max-width: 1100px; }
+/* Drop zone (§5.2): a large, calm, focusable target. Dashed border, centered stack, with a
+   clear drag-over highlight and the standard focus ring. */
+.image-dropzone {
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px;
+  min-height: 260px; padding: 32px; margin-top: 8px;
+  border: 2px dashed var(--border-strong); border-radius: var(--radius-md);
+  background: var(--surface); color: var(--text-muted); cursor: pointer; text-align: center;
+}
+.image-dropzone:hover { background: var(--surface-hover); }
+.image-dropzone.drag-over { border-color: var(--focus); background: var(--surface-hover); color: var(--text); }
+.image-dropzone-title { font-size: var(--text-lg); line-height: var(--line-lg); font-weight: 600; color: var(--text); margin: 0; }
+.image-dropzone-types { margin: 0; }
+/* Two-pane workspace (§5.3): preview left, work pane right. */
+.image-workspace { display: grid; grid-template-columns: minmax(0, 360px) 1fr; gap: 24px; align-items: start; margin-top: 12px; }
+.image-pane-left { min-width: 0; position: sticky; top: 0; }
+.image-pane-right { min-width: 0; display: flex; flex-direction: column; gap: 16px; }
+/* Preview pane: contained image, capped height, then filename + meta + actions. */
+.image-preview { display: flex; flex-direction: column; gap: 8px; }
+.image-preview-frame {
+  display: flex; align-items: center; justify-content: center;
+  border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface);
+  padding: 8px; max-height: 420px; overflow: hidden;
+}
+.image-preview-img { max-width: 100%; max-height: 400px; object-fit: contain; border-radius: var(--radius-sm); }
+.image-preview-name { font-family: var(--font-mono, monospace); font-size: var(--text-sm); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.image-preview-meta { color: var(--text-muted); font-size: var(--text-sm); }
+.image-preview-actions { display: flex; gap: 8px; }
+/* Question composer (§5.3/§5.5): chips above, then the auto-grow composer row (reuses the
+   chat .composer-row / .chat-input shell, but full-width — not centered). */
+.image-composer { display: flex; flex-direction: column; gap: 8px; }
+.image-composer .composer-row { width: 100%; }
+.image-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+/* Answer thread (§5.4): ephemeral turns, each a quiet question + an answer block. */
+.image-thread { display: flex; flex-direction: column; gap: 16px; }
+.image-turn { display: flex; flex-direction: column; gap: 6px; }
+.image-turn-question { font-weight: 600; margin: 0; }
+.image-turn-answer { display: flex; flex-direction: column; gap: 8px; }
+.image-turn-text { margin: 0; white-space: pre-wrap; line-height: var(--line-base); }
+.image-turn-running { display: flex; align-items: center; gap: 12px; }
+.image-turn-reading { display: inline-flex; align-items: center; gap: 8px; color: var(--text-muted); }
+.image-turn-stopped { margin: 0; }
+.image-turn-actions { display: flex; gap: 8px; }
+.image-local-note { margin: 0; }
+.stream-caret { opacity: 0.6; }
+
+@media (max-width: 760px) {
+  .image-workspace { grid-template-columns: 1fr; }
+  .image-pane-left { position: static; }
+}
+
 /* Documents screen — compact list rows (§6 lists/tables; §11.6). Each row: checkbox ·
    file-type icon · filename + muted meta · [trailing cluster: chips · status badges ·
    inline Preview · "⋯"]. Rows are ≥40px (target ~56px for the two-line name+meta) so ~3×

@@ -4,6 +4,7 @@ import { SettingsScreen } from './screens/SettingsScreen'
 import { ModelsScreen } from './screens/ModelsScreen'
 import { ChatScreen } from './screens/ChatScreen'
 import { DocumentsScreen } from './screens/DocumentsScreen'
+import { ImagesScreen } from './screens/ImagesScreen'
 import { SkillsScreen } from './screens/SkillsScreen'
 import { WorkspaceGate } from './screens/WorkspaceGate'
 import { Banner, BrandMark, Button, Icon, LocalIndicator, ToastProvider, type IconName } from './components'
@@ -19,14 +20,20 @@ interface NavItem {
   icon: IconName
 }
 
-// Information architecture (design-guidelines §2): 5 everyday destinations on top,
+// Information architecture (design-guidelines §2): 6 everyday destinations on top,
 // Settings as the single bottom utility. Privacy and Diagnostics live INSIDE Settings
 // as tabs — they are no longer nav destinations. Skills is a top-level destination of its
 // own (no longer a Settings tab) — it is a first-class capability surface, not a setting.
+// Images (image-understanding §6) is the 6th primary — a distinct visual-understanding task
+// surface parallel to Documents/Chat.
 const NAV_TOP: NavItem[] = [
   { id: 'home', labelKey: 'nav.home', icon: 'home' },
   { id: 'chat', labelKey: 'nav.chat', icon: 'chat' },
   { id: 'documents', labelKey: 'nav.documents', icon: 'file' },
+  // Images is a genuine 6th primary destination — a first-class task surface parallel to
+  // Documents/Chat, not a sub-mode (image-understanding §6; design-guidelines §2 updated to
+  // "6 primary + 1 utility"). Sits after Documents, before AI Model.
+  { id: 'images', labelKey: 'nav.images', icon: 'image' },
   { id: 'models', labelKey: 'nav.models', icon: 'brain' },
   { id: 'skills', labelKey: 'nav.skills', icon: 'puzzle' }
 ]
@@ -256,6 +263,7 @@ function AppShell(): JSX.Element {
           />
         )}
         {screen === 'documents' && <DocumentsScreen onAskSelected={askSelectedDocuments} />}
+        {screen === 'images' && <ImagesScreen onNavigate={navigate} />}
         {screen === 'models' && <ModelsScreen />}
         {screen === 'skills' && <SkillsScreen />}
         {screen === 'settings' && <SettingsScreen tab={settingsTab} onTabChange={setSettingsTab} />}

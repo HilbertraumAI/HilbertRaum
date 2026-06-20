@@ -870,6 +870,17 @@ capability bar above.
 6. `ipc/registerImagesIpc.ts` + register in `main/index.ts`. Missing assets ⇒ friendly unavailable.
 
 ### Phase V3 — Images screen UI (wired to status + a guarded/dev backend)
+
+> **✅ V3 SHIPPED 2026-06-20 (branch `image-understanding`; full record in `BUILD_STATE.md`).** The wired, tested
+> Images screen is in: nav/routing/glyph (`renderer/navigation.ts`, `renderer/App.tsx`, `renderer/components/Icon.tsx`),
+> i18n (`nav.images` + the `images.*` block in `shared/i18n/en.ts`+`de.ts`), `renderer/screens/ImagesScreen.tsx`
+> (the §5.6 state machine + ephemeral thread + Chat-style stream subscribe/unsubscribe + busy-reject + cancel +
+> focus re-check), and `renderer/images/` (`ImageDropZone`, `ImagePreview`, `QuestionComposer`, `AnswerThread`,
+> `VisionUnavailable`, `decode.ts` = the §11 decode/downscale/EXIF algorithm with no native dep + a `decodeImpl`
+> test seam). **IA made honest:** Images is the 6th primary — `design-guidelines.md` §2 now reads "6 primary +
+> 1 utility". **Green-gate holds** (zero vision models ⇒ the calm `VisionUnavailable` card; app launches; suite
+> green). `npm test` 1950/29 (173 files), typecheck + build clean. New test `tests/renderer/ImagesScreen.test.tsx`
+> (+ IA/rail-labels updates). **V4 (real runtime hardening) not started.** The numbered list below is the as-built checklist.
 1. Nav item + route + Icon glyph + i18n keys.
 2. `ImagesScreen` with all states (§5.6): unavailable/empty/selected/running/answer/error.
 3. Drop zone + file picker (`chooseImage`/`readBytes`), preview, composer, chips, thread.

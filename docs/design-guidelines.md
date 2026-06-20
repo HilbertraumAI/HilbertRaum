@@ -37,13 +37,16 @@ Audience: non-technical professionals (lawyers, doctors, accountants, consultant
 
 ## 2. Information architecture
 
-Collapse 7 nav destinations into 5 primary + 1 utility:
+Collapse the nav destinations into 6 primary + 1 utility:
 
 - **Top group (everyday):** Home (genuine status hub: ready? model running? doc count? one
-  big "Start chatting") · Chat · Documents · **AI Model** (reframed from "Models" — singular
-  mental model; checksums/quantization behind a "Technical details" disclosure) · **Skills**
-  (the user's capability library — manage, import, enable; a first-class destination, *not* a
-  Settings tab, since it is a thing the user builds up over time, not a knob).
+  big "Start chatting") · Chat · Documents · **Images** (visual understanding of one local
+  image via a local vision model — a first-class task surface parallel to Documents/Chat,
+  distinct from OCR and from any image generation; image-understanding §6) · **AI Model**
+  (reframed from "Models" — singular mental model; checksums/quantization behind a "Technical
+  details" disclosure) · **Skills** (the user's capability library — manage, import, enable;
+  a first-class destination, *not* a Settings tab, since it is a thing the user builds up over
+  time, not a knob).
 - **Bottom group (utility):** **Settings**, with **Privacy and Diagnostics folded in as
   sub-pages/tabs** ("Privacy & data", "Diagnostics (advanced)"). Privacy is a posture
   expressed everywhere, not a destination; Diagnostics is a support surface.

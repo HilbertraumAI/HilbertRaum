@@ -15,6 +15,7 @@ export const en = {
   // Soft hyphen (U+00AD) gives the narrow nav rail a clean break point ("Docu-/ments")
   // since Electron has no auto-hyphenation; invisible when the word fits or in the tooltip.
   'nav.documents': 'Documents',
+  'nav.images': 'Images',
   'nav.models': 'AI Model',
   'nav.skills': 'Skills',
   'nav.settings': 'Settings',
@@ -1412,5 +1413,70 @@ export const en = {
   // `processing` in an aria-live region so attaching a file is audibly acknowledged.
   'chat.attach.added': 'Added {name} to this chat',
   'chat.attach.newDocChat': 'Started a new document chat for {name}',
-  'chat.attach.failed': "Couldn't add {name} to this chat."
+  'chat.attach.failed': "Couldn't add {name} to this chat.",
+
+  // ---- Images — "Ask about an image" (image-understanding §5/§11, Phase V3) ----
+  // Visual understanding of ONE local PNG/JPEG via a local vision model — distinct from OCR
+  // (Documents) and from any image generation/editing (never built). Nothing is persisted.
+  'images.title': 'Understand an image',
+  'images.empty.body':
+    'Ask questions about a screenshot, chart, form, receipt, or photo. Everything stays local.',
+  // Availability card (§5.1) — reason-adaptive note + a CTA to AI Model + an OCR pointer.
+  'images.avail.noModel': 'Image understanding needs a local vision model on this drive.',
+  'images.avail.noRuntime': 'Image understanding needs the AI engine installed first.',
+  'images.avail.incompatible': "This drive's vision model needs a newer AI engine.",
+  'images.avail.cta': 'Go to AI Model',
+  'images.avail.ocrPointer': 'Scanned documents? Use Make searchable (OCR) under Documents.',
+  // Locked posture (§5.6). The app shell normally gates the whole app behind the unlock
+  // screen, so this is a calm defensive fallback.
+  'images.locked': 'Unlock your workspace to understand an image.',
+  // Drop zone (§5.2) — a large, focusable target; the "choose" button is the non-drag path.
+  'images.drop.title': 'Drop an image here',
+  'images.drop.choose': 'or choose an image',
+  'images.drop.types': 'PNG or JPEG',
+  // Preview pane (§5.3).
+  'images.preview.remove': 'Remove',
+  'images.preview.replace': 'Replace',
+  'images.preview.alt': 'Selected image',
+  // Suggestion chips (§5.5): clicking FILLS the composer (no auto-send) so the user can edit.
+  'images.chip.summarize': 'Summarize this image',
+  'images.chip.summarize.prompt':
+    'Summarize the visible content of this image. Mention anything important or unusual.',
+  'images.chip.extractText': 'Extract visible text',
+  'images.chip.extractText.prompt':
+    'Extract the visible text you can read. Preserve line breaks where helpful. Say if any text is unclear.',
+  'images.chip.explainChart': 'Explain this chart',
+  'images.chip.explainChart.prompt':
+    'Explain what this chart appears to show. Mention axes, labels, trends, and any uncertainty.',
+  'images.chip.readForm': 'Read this form',
+  'images.chip.readForm.prompt':
+    "Identify the key fields and values visible in this form. Use 'unclear' where you cannot read something.",
+  'images.chip.importantDetails': 'Find important details',
+  'images.chip.importantDetails.prompt':
+    'List the most important visible details. Do not infer anything that is not visible.',
+  'images.chip.whatNotice': 'What should I notice?',
+  'images.chip.whatNotice.prompt':
+    'What should I notice in this image? Point out the most salient visible elements only.',
+  // Question composer (§5.3).
+  'images.composer.placeholder': 'Ask about this image…',
+  'images.composer.ask': 'Ask',
+  // Answer thread (§5.4).
+  'images.answer.localNote': 'Generated locally from the selected image.',
+  'images.answer.copy': 'Copy',
+  'images.answer.copied': 'Copied',
+  'images.answer.tryAgain': 'Try again',
+  'images.answer.clear': 'New image',
+  'images.answer.reading': 'Reading the image…',
+  'images.answer.starting': 'Starting the vision model…',
+  'images.answer.stop': 'Stop',
+  'images.answer.stopped': 'Stopped.',
+  // Friendly error rows (§5.6) — a CODE is mapped here; raw model/runtime text never shows.
+  'images.err.tooLarge': 'This image is too large to analyze. Try a smaller image.',
+  'images.err.unsupported': "That file type isn't supported. Choose a PNG or JPEG.",
+  'images.err.decodeFailed':
+    "That image couldn't be opened. It may be damaged or in an unsupported format.",
+  'images.err.multiDrop': 'Drop one image at a time.',
+  'images.err.runtimeFailed': "The vision model couldn't start. Try again, or pick another model.",
+  'images.err.emptyResponse': 'No answer came back for that image. Try rephrasing your question.',
+  'images.err.busy': 'Working on the previous question…'
 } as const

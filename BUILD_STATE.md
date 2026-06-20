@@ -6,6 +6,48 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-20 — **Image-understanding Phase V3 (Images screen UI) SHIPPED — V4 (real runtime hardening) is next.**
+Branch `image-understanding`, implementing [`docs/image-understanding-plan.md`](docs/image-understanding-plan.md)
+§16 Phase V3. **A wired, tested Images screen that drives the V2 backend and shows the calm unavailable state
+with zero vision models present — renderer UI only, no V4 runtime work.** All V1/V2 locked decisions are encoded.
+**As built:**
+- **Nav / routing / glyph / IA** — `'images'` added to `ScreenId` + `resolveNavTarget` (`renderer/navigation.ts`);
+  `{ id:'images', labelKey:'nav.images', icon:'image' }` added to `NAV_TOP` **after Documents, before AI Model**
+  + the render branch `{screen==='images' && <ImagesScreen onNavigate={navigate}/>}` (`renderer/App.tsx`); a new
+  `'image'` glyph (Feather frame+sun+mountain) in `IconName`/`GLYPHS` (`renderer/components/Icon.tsx`). **IA
+  honesty:** this is a genuine **6th primary destination** — `docs/design-guidelines.md` §2 updated to "6 primary +
+  1 utility" (was 5); `InformationArchitecture.test.tsx` (7 real destinations, nav list now Home·Chat·Documents·
+  **Images**·AI Model·Skills‖Settings) + `rail-labels.test.ts` (nav.images, Images/Bilder fit) updated.
+- **i18n** — `nav.images` (EN "Images" / DE „Bilder") + the full `images.*` block (title/body, reason-adaptive
+  `avail.*`, `locked`, `drop.*`, `preview.*`, the six `chip.*` label+prompt pairs, `composer.*`, `answer.*`,
+  `err.*`) added to **both** `shared/i18n/en.ts` and `de.ts` (German informal „du", glossary-consistent; parity
+  green — typecheck enforces it).
+- **`renderer/screens/ImagesScreen.tsx`** — owns the §5.6 state machine (unavailable/empty/selected/
+  starting/analyzing/answered + every error row) and the **ephemeral** per-image thread; fetches
+  `imageGetStatus()` on mount + **re-checks on window `focus`** (a model may have been installed via AI Model);
+  defensive `getAppStatus().workspaceReady` lock posture (the app shell already gates lock globally). Streaming
+  mirrors Chat: `imageAnalyze` → subscribe `onImageToken`/`onImageDone`/`onImageError`, busy-reject (no enqueue),
+  Stop=`imageCancel`, new-image-mid-analysis cancels + resets the thread, unmount tears down. Friendly codes only
+  (no raw model/runtime text); `data:`-preview only (CSP untouched).
+- **`renderer/images/`** (mirrors `renderer/chat/`) — `ImageDropZone` (drag-drop + "choose an image", multi-drop
+  reject, keyboard-activatable), `ImagePreview` (`data:` URL, filename/dims/size, Remove/Replace), `QuestionComposer`
+  (auto-grow textarea, Enter=send/Shift+Enter=newline, suggestion Chips fill-don't-auto-send), `AnswerThread`
+  (ephemeral turns, ambient "Generated locally…" note, streaming caret + Stop, friendly error/stopped rows),
+  `VisionUnavailable` (§5.1 reason-adaptive `EmptyState`, CTA→`onNavigate('models')`, OCR pointer), `decode.ts`
+  (the §11 algorithm — `createImageBitmap({imageOrientation:'from-image'})` → downscale longest side to 1536 →
+  re-encode to input MIME (JPEG q0.9) on `OffscreenCanvas`/`<canvas>` → `data:` URL; EXIF stripped by the canvas
+  draw; best-effort fallback to original bytes; **no native dep**; injectable as the `decodeImpl` test seam), +
+  `index.ts` barrel. CSS for the drop zone + two-pane workspace added to `renderer/styles.css`.
+**§0 honored:** no cloud/telemetry, **no new native npm dep** (browser APIs only), sandbox/CSP untouched
+(`img-src 'self' data:`), no image/prompt/answer content in logs. **Data contracts:** none changed (consumes the
+V2 `images:*` IPC + `STREAM.img*` + `VisionStatus`/`ImageAnalyzeRequest`/`ImageJob` as-is). **Verification:**
+`npm test` (apps/desktop) **1950 passed / 29 skipped (173 files)** — full-suite-guard active; **green-gate holds
+with zero vision models** (the screen shows the calm `VisionUnavailable` card and the app launches); `npm run
+typecheck` + `npm run build` clean. New test: `tests/renderer/ImagesScreen.test.tsx` (12 — unavailable/empty/
+selected/streaming/error/empty-response/chip-fills-composer/Remove-resets/new-image-cancels/Stop), plus the
+IA + rail-labels updates. **Next:** V4 — real `VisionRuntime` `ensureStarted`/`analyze` (V1-resolved args),
+idle-teardown interlock, lock-teardown wiring, renderer dimension cap. **(prior entries below.)**_
+
 _2026-06-20 — **Image-understanding Phase V2 (backend skeleton) SHIPPED — V3 (renderer UI) is next.**
 Branch `image-understanding`, implementing the (V1-cleared) [`docs/image-understanding-plan.md`](docs/image-understanding-plan.md)
 §16 Phase V2. **A wired, tested backend skeleton that reports `available:false` with no vision model present — no

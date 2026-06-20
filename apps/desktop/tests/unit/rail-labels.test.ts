@@ -9,7 +9,7 @@ import { t, type MessageKey } from '../../src/shared/i18n'
 // (`hyphens: none`) while the `.app-shell` grid column is widened so the longest single-word
 // label in either locale fits on one line at the 12px text floor.
 
-const NAV_KEYS: MessageKey[] = ['nav.home', 'nav.chat', 'nav.documents', 'nav.models', 'nav.skills', 'nav.settings']
+const NAV_KEYS: MessageKey[] = ['nav.home', 'nav.chat', 'nav.documents', 'nav.images', 'nav.models', 'nav.skills', 'nav.settings']
 const STYLES = readFileSync(join(__dirname, '..', '..', 'src', 'renderer', 'styles.css'), 'utf8')
 
 describe('rail nav labels — no mid-word hyphenation (Task A)', () => {
@@ -29,6 +29,15 @@ describe('rail nav labels — no mid-word hyphenation (Task A)', () => {
     // Labels that DO contain a space / hyphen may wrap cleanly to two lines (never a concern).
     expect(t('en', 'nav.models')).toBe('AI Model')
     expect(t('de', 'nav.models')).toBe('KI-Modell')
+  })
+
+  it('the new Images rail label is a short single word that fits within the sized width', () => {
+    // image-understanding §6: "Images"/"Bilder" are short, so the 6th destination fits the
+    // existing rail (sized for the longer "Einstellungen") with no reflow.
+    expect(t('en', 'nav.images')).toBe('Images')
+    expect(t('de', 'nav.images')).toBe('Bilder')
+    expect(t('en', 'nav.images').length).toBeLessThan('Einstellungen'.length)
+    expect(t('de', 'nav.images').length).toBeLessThan('Einstellungen'.length)
   })
 })
 
