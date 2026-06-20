@@ -467,7 +467,7 @@ imageCancel:     'images:cancel',
 imageGetJob:     'images:getJob',
 ```
 
-Streaming (optional, RECOMMENDED for a live answer — reuse the SSE the sidecar already emits): per-job
+Streaming (the **decided default** — §19.10; reuse the SSE the sidecar already emits): per-job
 channels keyed like chat, added to `STREAM`:
 
 ```ts
@@ -476,8 +476,9 @@ imgDone:  (jobId) => `images:done:${jobId}`,
 imgError: (jobId) => `images:error:${jobId}`,
 ```
 
-(If a streaming UI is judged too much for MVP, `images:analyze` can resolve once with the full answer
-and `getJob` polls state; the streaming channels are the preferred UX but droppable — open decision.)
+(Contingency only, per §19.10: if V1 shows `readChatSSE` does **not** parse the vision sidecar's frames
+cleanly, MVP falls back to `images:analyze` resolving once with the full answer + `getJob` polling, and
+streaming is added later. Plan to stream; finalize after the V1 SSE check, before V2 fixes the contract.)
 
 ### 9.2 Preload (`preload/index.ts`)
 
@@ -943,11 +944,17 @@ installed** (the green-gate posture). Cover:
 9. **Vision install UI in AI Model in v1** — default: lists under its role with a human "Vision" label,
    no special group; revisit if confusing.
 10. **Streaming the answer** — *load-bearing for the IPC surface, not a cosmetic default.*
-    **Recommended: stream** via per-job SSE channels (`STREAM.imgToken/imgDone/imgError`) for a live
-    answer. **Cost of streaming:** the three extra STREAM channels + subscribe/unsubscribe plumbing in
-    preload and renderer. **Cost of the alternative** (single-resolve + `getJob` poll): simpler IPC, but
-    a worse UX (no token-by-token; the user stares at an indeterminate state for the whole analysis).
-    Decide before V2 fixes the `images:*` contract.
+    **DECISION: stream by default, confirmed in V1.** Build the per-job SSE channels
+    (`STREAM.imgToken/imgDone/imgError`) so V2's `images:*` contract includes them. Rationale: the
+    feature is a CPU-bound VLM whose headline risk is *slowness* (§14/PROD-1), and token-by-token
+    feedback matters most exactly when answers are slow; the stream already exists (the sidecar emits
+    SSE, reuse `readChatSSE`), so this forwards tokens rather than generating them, and it mirrors Chat.
+    **Cost:** three STREAM channels + subscribe/unsubscribe plumbing in preload and renderer (already
+    drafted in §9.1). **Contingency (RUNTIME-2):** streaming presumes `readChatSSE` parses the vision
+    sidecar's frames with the V1-resolved arg set. If V1 shows the frame shape differs enough that a
+    vision-specific reader is non-trivial, **fall back to single-resolve + `getJob` poll for MVP** (a
+    worse UX — an indeterminate state for the whole analysis — but a smaller surface) and add streaming
+    later. So: plan to stream; finalize once V1 proves the SSE parses, before V2 fixes the contract.
 11. **GPU vs CPU for vision** — *load-bearing for the acceptance bar, not a free default.* **Recommended:
     CPU-pinned (`--device none`)** for MVP (the embedder/reranker precedent) to avoid VRAM contention +
     GPU-crash complexity. **Cost:** TTFA on a 3B VLM on a CPU laptop may be too slow — that is exactly
