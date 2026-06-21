@@ -83,6 +83,9 @@ export class VisionService {
     this.activeJobId = jobId
     const controller = new AbortController()
     this.controllers.set(jobId, controller)
+    // Content-free lifecycle log (§12/§13 — jobId only, never image/prompt/answer). A started
+    // analysis was previously invisible in the log; the run() terminal-state logs below close it.
+    log.info('Vision analyze started', { jobId })
     // `req` is validated above — narrow for the background closure.
     void this.run(jobId, req as ImageAnalyzeRequest, controller.signal, emit)
     return { ...job }
@@ -128,6 +131,7 @@ export class VisionService {
       const done: ImageJob = { jobId, state: 'done', answer }
       this.jobs.set(jobId, done)
       this.evictOldJobs()
+      log.info('Vision analyze done', { jobId })
       emit.done(jobId, done)
     } catch (err) {
       if (signal.aborted) {

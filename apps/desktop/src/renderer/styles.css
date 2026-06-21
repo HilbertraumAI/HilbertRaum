@@ -1404,7 +1404,11 @@ code, pre, kbd { font-family: var(--font-mono); }
 }
 .image-history-open:hover .image-history-name { text-decoration: underline; }
 .image-history-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.image-history-meta { font-size: 12px; color: var(--text-muted); }
+.image-history-meta { font-size: 12px; color: var(--text-muted); display: flex; align-items: center; gap: 6px; }
+/* The live in-flight analysis row: tinted so it reads as active, not a saved entry. */
+.image-history-row-running { border-color: var(--accent, var(--border)); background: var(--surface); }
+/* Detail-view back link, above the preview. */
+.image-back { margin-bottom: 8px; padding-left: 0; }
 
 @media (max-width: 760px) {
   .image-workspace { grid-template-columns: 1fr; }

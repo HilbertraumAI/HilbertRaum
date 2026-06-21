@@ -3,6 +3,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, cleanup, waitFor, act, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { ImagesScreen } from '../../src/renderer/screens/ImagesScreen'
+import { resetVisionSessionForTests } from '../../src/renderer/lib/visionSession'
 import type { DecodedImage, DecodeImage } from '../../src/renderer/images'
 import type { ImageJob, VisionStatus } from '../../src/shared/types'
 import { stubApi } from '../helpers/renderer'
@@ -12,7 +13,12 @@ import { stubApi } from '../helpers/renderer'
 // fake decode is injected via the `decodeImpl` seam. Streaming is driven by capturing the
 // onImage* subscriber callbacks and invoking them, mirroring the Chat screen lifecycle.
 
-afterEach(cleanup)
+// The active analysis lives in a module-level store (so it survives navigation); reset it between
+// tests so a prior test's loaded image / thread doesn't leak into the next render.
+afterEach(() => {
+  cleanup()
+  resetVisionSessionForTests()
+})
 
 function decoded(over?: Partial<DecodedImage>): DecodedImage {
   return {
@@ -262,6 +268,62 @@ describe('ImagesScreen — reset + cancel (§5.6)', () => {
     await user.click(screen.getByRole('button', { name: 'Stop' }))
     expect(s.cancel).toHaveBeenCalledWith('j1')
     expect(await screen.findByText('Stopped.')).toBeInTheDocument()
+  })
+})
+
+describe('ImagesScreen — survives navigation (running analysis recovery)', () => {
+  it('lands on the list with a running row after unmount + remount; clicking it shows the live stream', async () => {
+    const user = userEvent.setup()
+    const s = streamStubs()
+    stubApi({ ...s.api, ...pickStubs() } as never)
+    const { unmount } = render(<ImagesScreen onNavigate={vi.fn()} decodeImpl={fakeDecode} />)
+    await selectImageViaPicker(user)
+    await user.type(screen.getByPlaceholderText('Ask about this image…'), 'What is this?')
+    await user.click(screen.getByRole('button', { name: 'Ask' }))
+    await waitFor(() => expect(s.token.fn).toBeDefined())
+    await act(async () => s.token.fn?.('Partial so far'))
+
+    // Navigate away: the screen unmounts WITHOUT cancelling the in-flight job.
+    unmount()
+    expect(s.cancel).not.toHaveBeenCalled()
+
+    // Come back: we land on the landing view (NOT the result view), and the running analysis is
+    // surfaced as a row in the previous-results list.
+    render(<ImagesScreen onNavigate={vi.fn()} decodeImpl={fakeDecode} />)
+    expect(await screen.findByText('Analysis running…')).toBeInTheDocument()
+    expect(screen.getByText('receipt.png')).toBeInTheDocument()
+    // The upload is disabled while one runs (vision is one-at-a-time).
+    expect(screen.getByRole('button', { name: 'or choose an image' })).toBeDisabled()
+
+    // Clicking the running row opens the live detail view — the partial answer is intact.
+    await user.click(screen.getByText('Analysis running…'))
+    expect(await screen.findByText(/Partial so far/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Stop' })).toBeInTheDocument()
+
+    // The analysis completes, and the answer finalizes.
+    await act(async () => s.done.fn?.({ jobId: 'j1', state: 'done', answer: 'Partial so far — done.' }))
+    expect(await screen.findByText('Partial so far — done.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Copy' })).toBeInTheDocument()
+  })
+
+  it('Back returns to the list (analysis keeps running) without cancelling', async () => {
+    const user = userEvent.setup()
+    const s = streamStubs()
+    stubApi({ ...s.api, ...pickStubs() } as never)
+    render(<ImagesScreen onNavigate={vi.fn()} decodeImpl={fakeDecode} />)
+    await selectImageViaPicker(user)
+    await user.type(screen.getByPlaceholderText('Ask about this image…'), 'What is this?')
+    await user.click(screen.getByRole('button', { name: 'Ask' }))
+    await waitFor(() => expect(s.token.fn).toBeDefined())
+    await act(async () => s.token.fn?.('Half'))
+
+    await user.click(screen.getByRole('button', { name: '‹ Back to analyses' }))
+    // On the list: the job was NOT cancelled, and it shows as the running row + the busy hint.
+    expect(s.cancel).not.toHaveBeenCalled()
+    expect(await screen.findByText('Analysis running…')).toBeInTheDocument()
+    expect(
+      screen.getByText('An analysis is running. Wait for it to finish to start another.')
+    ).toBeInTheDocument()
   })
 })
 

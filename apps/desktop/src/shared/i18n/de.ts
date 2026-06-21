@@ -1500,6 +1500,8 @@ export const de: Record<keyof typeof en, string> = {
   'images.drop.title': 'Bild hier ablegen',
   'images.drop.choose': 'oder ein Bild auswählen',
   'images.drop.types': 'PNG oder JPEG',
+  'images.drop.busy': 'Eine Analyse läuft. Warten Sie, bis sie fertig ist, um eine neue zu starten.',
+  'images.back': 'Zurück zu den Analysen',
   'images.preview.remove': 'Entfernen',
   'images.preview.replace': 'Ersetzen',
   'images.preview.alt': 'Ausgewähltes Bild',
@@ -1544,6 +1546,8 @@ export const de: Record<keyof typeof en, string> = {
   // Verlauf (Bildverständnis-Verlauf): gespeicherte Analysen, verschlüsselt, löschbar.
   'images.history.title': 'Verlauf',
   'images.history.empty': 'Analysierte Bilder erscheinen hier.',
+  'images.history.running': 'Analyse läuft…',
+  'images.history.runningOpen': 'Laufende Analyse ansehen',
   'images.history.turns.one': '{count} Frage',
   'images.history.turns.other': '{count} Fragen',
   'images.history.open': 'Öffnen',

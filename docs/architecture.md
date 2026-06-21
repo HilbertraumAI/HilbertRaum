@@ -2517,12 +2517,25 @@ OCR (tesseract.js, Documents) and from any image generation (never built)._
   `requireUnlocked`. `chooseImage` returns `{path,name,sizeBytes}` (IPC-2); `readBytes`/`analyze`
   re-validate extension + byte cap in MAIN (SEC-3). `imageReadBytes` is the PICKER path only —
   drag-drop reads the `File` bytes directly (IPC-1).
-- **Renderer** — `renderer/screens/ImagesScreen.tsx` (the §5.6-plan state machine + the ephemeral
-  per-image thread, Chat-style stream subscribe/unsubscribe, busy-reject, focus re-check) and
-  `renderer/images/` (`ImageDropZone`, `ImagePreview` = `data:` URL, `QuestionComposer`,
-  `AnswerThread`, `VisionUnavailable`, `decode.ts` = `createImageBitmap({imageOrientation:'from-image'})`
+- **Renderer** — `renderer/screens/ImagesScreen.tsx` (the §5.6-plan state machine, busy-reject,
+  focus re-check) reads the active analysis from `renderer/lib/visionSession.ts` — a **module-level
+  store** (the `doctasks.ts`/`skillruns.ts` "survives screen unmount" precedent) that holds the
+  loaded image + the Q&A thread and **owns the `onImage*` stream listeners**. Because the store, not
+  the component, owns the in-flight job, a running analysis **survives navigating away and back**
+  (still streaming, partial answer intact) instead of being cancelled on unmount; the screen only
+  drops it on workspace **LOCK** (`clearVisionSession()`, parity with main purging the job map).
+  The screen has two views toggled by a screen-local `viewingDetail` (default **list**, so every
+  return to Images lands on the "new analysis" view — a finished analysis never strands the user on
+  the result view): the **list** (upload drop zone + previous-results history) and the
+  single-analysis **detail** (preview + composer + thread, with a "‹ Back to analyses" link that
+  leaves WITHOUT cancelling). While an analysis runs the upload is **disabled** (vision is
+  one-at-a-time) and the in-flight job shows as a distinct "Analysis running…" top row of the
+  results list (`ImageHistory`'s `running` prop) that re-opens the live detail view on click.
+  Building blocks in `renderer/images/`: `ImageDropZone`, `ImagePreview` = `data:` URL,
+  `QuestionComposer`, `AnswerThread`, `VisionUnavailable`,
+  `decode.ts` = `createImageBitmap({imageOrientation:'from-image'})`
   → downscale longest side to 1536 → re-encode to the input MIME on `OffscreenCanvas`/`<canvas>` →
-  `data:` URL, EXIF stripped by the draw, best-effort fallback to original bytes). Images is the
+  `data:` URL, EXIF stripped by the draw, best-effort fallback to original bytes. Images is the
   **6th primary nav destination** — `design-guidelines.md §2` updated to "6 primary + 1 utility".
 - **Lifecycle wiring** — `ctx.vision` built once in `main/index.ts`; torn down on `will-quit` and on
   workspace **LOCK** (in `registerWorkspaceIpc`, beside `ctx.embedder.suspend()` — its KV cache holds
@@ -2556,6 +2569,9 @@ Renderer stays sandboxed (no Node/network); main owns all file I/O + the sidecar
 unchanged** (`data:`-only preview, SEC-1). Sidecar **loopback-only**; no remote origin in
 `connect-src`/`img-src`. **No image/prompt/answer content in logs/audit** — the vision path records
 **zero** audit rows (the `audit-ipc.test.ts`-style sentinel proves it on success + failure paths).
+The only vision log lines are **content-free job lifecycle** (`Vision analyze started`/`done`/`failed`,
+`{jobId}` + the friendly error CODE only — so a started analysis is visible in the log without ever
+emitting image/prompt/answer text; the security sentinel asserts the failure-line shape).
 The image is attacker-controllable, so the byte/extension/dimension caps mirror `ingestion/limits.ts`;
 the path-trust stance matches `importDocuments` (accepted residual) but the extension+cap re-check is
 net-new code (SEC-3). The ANALYZE call itself still keeps no temp file (bytes are base64-inlined);

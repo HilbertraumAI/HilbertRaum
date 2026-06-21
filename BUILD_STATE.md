@@ -6,6 +6,32 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-22 — **Image analysis survives navigation + content-free lifecycle logging (two test-found bugs).** Found while testing:
+(1) starting a picture analysis, navigating to another screen, and returning showed an idle screen — the running analysis was invisible
+(Chat already recovers its in-flight stream); (2) a started analysis left NO trace in the log. **As built (full suite green — 2087 passed /
+30 skipped, +1 test; typecheck + build clean):**
+- **New `renderer/lib/visionSession.ts` store** — the active analysis (loaded image + Q&A thread + live answer) + the `onImage*` stream
+  listeners now live in a **module-level store** (the `doctasks.ts`/`skillruns.ts` "survives screen unmount" precedent), NOT in
+  `ImagesScreen`. `ImagesScreen` reads it via `useSyncExternalStore` and keeps only screen-local concerns (availability, composer draft,
+  history list, transient errors). Because the store owns the in-flight job, navigating away **no longer cancels it** (removed the
+  unmount→`imageCancel` effect); on return the screen re-renders the image + the still-streaming partial answer, lossless (the listeners
+  kept firing into the store). No main-side recovery/snapshot needed — unlike Chat's `getActiveStream`, the decoded image is renderer-only,
+  so keeping listeners alive in the store is both simpler and lossless. Workspace **LOCK** calls `clearVisionSession()` so resident
+  image/answer content is dropped in lockstep with main purging the job map (privacy parity).
+- **Content-free lifecycle logs** in `services/vision/index.ts`: `Vision analyze started` (on accept) + `Vision analyze done` (on success),
+  `{jobId}` only — never image/prompt/answer. The existing `Vision analyze failed` warn (raw reason → local log) is unchanged, so the
+  security sentinel (`vision-security.test.ts`) stays green.
+- **List vs detail view (same wave, second report).** A finished analysis used to STRAND the user on the result view (couldn't upload a
+  new picture). `ImagesScreen` now has a screen-local `viewingDetail` (default **list**): the landing **list** = upload drop zone +
+  previous-results history; the **detail** = preview + composer + thread with a "‹ Back to analyses" link that leaves WITHOUT cancelling.
+  `viewingDetail` is per-mount, so navigating back to Images always returns to the new-analysis view. **While an analysis runs**: the upload
+  (drop zone + picker) is **disabled** (vision is one-at-a-time) with a hint, and the in-flight job is a distinct **"Analysis running…"** top
+  row of the results list (`ImageHistory`'s new `running` prop — no DB row yet, so clicking re-opens the live detail view from the store).
+- **Tests/docs:** `ImagesScreen.test.tsx` — "survives navigation" now asserts remount lands on the LIST with a running row + disabled upload,
+  clicking it opens the live stream; new "Back returns to the list (analysis keeps running) without cancelling"; store reset between renderer
+  tests (`resetVisionSessionForTests`). New i18n keys `images.drop.busy`/`images.back`/`images.history.running`/`runningOpen` (EN+DE).
+  `architecture.md` image-understanding record §5 (Renderer) + §7 (privacy posture) updated._
+
 _2026-06-21 — **Professional Documents skills wave — Meeting Minutes upgrade + four new Tier-1 instruction skills (SKILLS-ONLY,
 no runtime/schema/tool/network change).** The bundled `app-skills/` set grew from four to **nine**, all honest, calm, document-grounded
 workflows with bilingual (EN+DE) triggers and German `localized.de` display metadata. **As built (suite green — 2083 passed / 30 skipped,

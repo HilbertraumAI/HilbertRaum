@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { Banner, EmptyState, useToast } from '../components'
+import { useCallback, useEffect, useState, useSyncExternalStore } from 'react'
+import { Banner, Button, EmptyState, useToast } from '../components'
 import {
   AnswerThread,
   ImageDropZone,
@@ -13,31 +13,33 @@ import {
   ImageDecodeError,
   MAX_IMAGE_BYTES,
   type ComposerChip,
-  type DecodedImage,
   type DecodeImage,
-  type ImageMime,
-  type ImageTurn
+  type ImageMime
 } from '../images'
+import {
+  analyze as analyzeImage,
+  clearVisionSession,
+  getVisionSession,
+  loadSession as loadVisionSession,
+  removeImage as removeVisionImage,
+  selectImage as selectVisionImage,
+  stopActive as stopVisionActive,
+  subscribeVisionPersisted,
+  subscribeVisionSession,
+  type SelectedImage
+} from '../lib/visionSession'
 import { useT } from '../i18n'
 import type { MessageKey } from '@shared/i18n'
 import type { ImageSessionSummary, VisionErrorCode, VisionStatus } from '@shared/types'
 
 // Images screen (image-understanding §5/§11, Phase V3). Load ONE local PNG/JPEG, ask a
 // question in plain language, get an answer from a local vision model (the V2 backend).
-// Everything is ephemeral renderer state — the image, question, thread, and answer live
-// only here and are gone on navigate-away / remove / close. Nothing is persisted; no OCR,
-// no auto-import, no documents/chunks/embeddings writes (§3/§12).
 //
-// Mirrors DocumentsScreen structure (useT, window.api?.…, local useState, the component
-// kit) and the Chat screen's subscribe/unsubscribe streaming lifecycle (analyze is
-// streaming by default — onImageToken for live tokens, onImageDone for the terminal job).
-
-/** The selected image plus its display metadata (all ephemeral screen state). */
-interface SelectedImage {
-  decoded: DecodedImage
-  name: string
-  sizeBytes: number
-}
+// The loaded image, the Q&A thread, and the live streaming answer live in the module-level
+// `lib/visionSession` store (the doc-task / skill-run precedent), NOT in this component — so a
+// running analysis SURVIVES navigating to another screen and back, still streaming, instead of
+// being cancelled on unmount. Screen-only concerns (vision availability, the composer draft, the
+// history list, transient errors) stay in local state and are re-read on mount.
 
 // Suggestion chips (§5.5): label + the prompt it fills the composer with (no auto-send).
 const CHIP_KEYS: { labelKey: MessageKey; promptKey: MessageKey }[] = [
@@ -62,20 +64,6 @@ const CLIENT_ERR_KEY: Partial<Record<ClientImageError, MessageKey>> = {
   busy: 'images.err.busy'
 }
 
-let turnCounter = 0
-function nextTurnId(): string {
-  turnCounter += 1
-  return `img-turn-${turnCounter}`
-}
-
-function patchTurn(
-  turns: ImageTurn[],
-  id: string,
-  patch: Partial<ImageTurn> | ((t: ImageTurn) => Partial<ImageTurn>)
-): ImageTurn[] {
-  return turns.map((t) => (t.id === id ? { ...t, ...(typeof patch === 'function' ? patch(t) : patch) } : t))
-}
-
 export function ImagesScreen({
   onNavigate,
   /** Test seam: inject a fake decode (jsdom has no createImageBitmap/OffscreenCanvas). */
@@ -88,23 +76,19 @@ export function ImagesScreen({
   const showToast = useToast()
   const [status, setStatus] = useState<VisionStatus | null>(null)
   const [locked, setLocked] = useState(false)
-  const [selected, setSelected] = useState<SelectedImage | null>(null)
-  const [turns, setTurns] = useState<ImageTurn[]>([])
   const [composer, setComposer] = useState('')
   const [decoding, setDecoding] = useState(false)
   const [screenError, setScreenError] = useState<ClientImageError | null>(null)
-  // Image-analysis history (image-understanding history). The list shown on the landing view;
-  // `sessionRef` is the session the loaded image persists into (null ⇒ a fresh image whose
-  // FIRST analyze creates a new session in main). A ref so the async analyze closure reads the
-  // latest id without re-subscribing.
+  // Image-analysis history (image-understanding history): the list shown on the landing view.
   const [sessions, setSessions] = useState<ImageSessionSummary[]>([])
-  const sessionRef = useRef<string | null>(null)
+  // Which view: the landing list (upload + previous results) or the single-analysis detail. Local
+  // (not in the store) and defaults to the list, so navigating back to Images always returns to the
+  // "new analysis" view — a running analysis is then reachable as a row in the results list.
+  const [viewingDetail, setViewingDetail] = useState(false)
 
-  // Streaming bookkeeping (refs so the async analyze closure + unmount cleanup see latest).
-  const activeJobRef = useRef<string | null>(null)
-  const activeTurnRef = useRef<string | null>(null)
-  const cleanupRef = useRef<(() => void) | null>(null)
-  const [analyzing, setAnalyzing] = useState(false)
+  // The active analysis (loaded image + Q&A thread + live answer) lives in the module-level
+  // store so it survives navigating away and back (the running analysis keeps streaming there).
+  const { selected, turns, analyzing } = useSyncExternalStore(subscribeVisionSession, getVisionSession)
 
   const checkStatus = useCallback(async (): Promise<void> => {
     try {
@@ -147,47 +131,38 @@ export function ImagesScreen({
     if (!locked) void loadSessions()
   }, [locked, loadSessions])
 
-  // Tear down any in-flight analyze on unmount (navigate-away / close). Nothing persists.
-  useEffect(
-    () => () => {
-      if (activeJobRef.current) void window.api?.imageCancel?.(activeJobRef.current)?.catch?.(() => {})
-      cleanupRef.current?.()
-    },
-    []
-  )
+  // A completed turn persists a session in main — refresh the list (works even when the analysis
+  // finished while this screen was unmounted: the store fires on the next mount's subscription).
+  useEffect(() => subscribeVisionPersisted(() => void loadSessions()), [loadSessions])
 
-  function endStream(): void {
-    cleanupRef.current?.()
-    cleanupRef.current = null
-    activeJobRef.current = null
-    activeTurnRef.current = null
-    setAnalyzing(false)
-  }
+  // Workspace LOCK: main has aborted the vision job and re-encrypted the vault, so drop the
+  // resident image/answer content here in lockstep (privacy parity with main's job-map purge).
+  useEffect(() => {
+    if (locked) clearVisionSession()
+  }, [locked])
 
-  // Select a freshly decoded image. A new image mid-analysis cancels the old job and resets
-  // the thread (§5.6) — the image, question, and answer are per-image and ephemeral.
+  // Select a freshly decoded image. A new image mid-analysis cancels the old job and resets the
+  // thread (§5.6); the store starts a NEW history session on its first analyze. A fresh image
+  // opens the detail view so the user can ask a question.
   function selectImage(sel: SelectedImage): void {
-    if (activeJobRef.current) {
-      void window.api?.imageCancel?.(activeJobRef.current)?.catch?.(() => {})
-      endStream()
-    }
-    // A freshly selected image starts a NEW history session on its first analyze.
-    sessionRef.current = null
-    setTurns([])
+    selectVisionImage(sel)
     setComposer('')
     setScreenError(null)
-    setSelected(sel)
+    setViewingDetail(true)
   }
 
   function removeImage(): void {
-    if (activeJobRef.current) {
-      void window.api?.imageCancel?.(activeJobRef.current)?.catch?.(() => {})
-      endStream()
-    }
-    sessionRef.current = null
-    setSelected(null)
-    setTurns([])
+    removeVisionImage()
     setComposer('')
+    setScreenError(null)
+    setViewingDetail(false)
+    void loadSessions()
+  }
+
+  // Leave the detail view for the landing list WITHOUT touching the analysis — a running job keeps
+  // streaming in the store and stays reachable as the list's "Analysis running…" row.
+  function backToList(): void {
+    setViewingDetail(false)
     setScreenError(null)
     void loadSessions()
   }
@@ -206,27 +181,24 @@ export function ImagesScreen({
       void loadSessions()
       return
     }
-    if (activeJobRef.current) {
-      void window.api?.imageCancel?.(activeJobRef.current)?.catch?.(() => {})
-      endStream()
-    }
     setScreenError(null)
     const mime: ImageMime = detail.mimeType === 'image/jpeg' ? 'image/jpeg' : 'image/png'
     try {
       const blob = new Blob([detail.imageBytes as unknown as BlobPart], { type: mime })
       const decoded = await decodeImpl(blob, mime)
-      sessionRef.current = detail.id
       setComposer('')
-      setSelected({ decoded, name: detail.title, sizeBytes: detail.sizeBytes })
-      setTurns(
+      loadVisionSession(
+        { decoded, name: detail.title, sizeBytes: detail.sizeBytes },
         detail.turns.map((tn, i) => ({
           id: `hist-${detail.id}-${i}`,
           question: tn.question,
           answer: tn.answer,
           state: 'done' as const,
           error: null
-        }))
+        })),
+        detail.id
       )
+      setViewingDetail(true)
     } catch (e) {
       setScreenError(e instanceof ImageDecodeError ? e.code : 'decodeFailed')
     }
@@ -240,15 +212,10 @@ export function ImagesScreen({
     } catch {
       // Best-effort; the list refresh below reflects the true state either way.
     }
-    if (sessionRef.current === id) {
-      if (activeJobRef.current) {
-        void window.api?.imageCancel?.(activeJobRef.current)?.catch?.(() => {})
-        endStream()
-      }
-      sessionRef.current = null
-      setSelected(null)
-      setTurns([])
+    if (getVisionSession().sessionId === id) {
+      removeVisionImage()
       setComposer('')
+      setViewingDetail(false)
     }
     await loadSessions()
     showToast(t('images.history.deleted'))
@@ -330,100 +297,15 @@ export function ImagesScreen({
     }
   }
 
-  // Run one analyze, streaming the answer into a fresh turn. A second analyze while one runs
-  // is busy-rejected by the backend (IPC-3) and never enqueued; we also guard client-side.
-  async function runAnalyze(question: string): Promise<void> {
-    const sel = selected
-    const q = question.trim()
-    if (!sel || !q || activeJobRef.current) return
-
-    const turnId = nextTurnId()
-    setTurns((prev) => [...prev, { id: turnId, question: q, answer: '', state: 'starting' }])
-    setAnalyzing(true)
-
-    let job
-    try {
-      job = await window.api.imageAnalyze({
-        imageBytes: sel.decoded.bytes,
-        mimeType: sel.decoded.mimeType,
-        question: q,
-        name: sel.name,
-        width: sel.decoded.width,
-        height: sel.decoded.height,
-        sessionId: sessionRef.current
-      })
-    } catch {
-      setTurns((prev) => patchTurn(prev, turnId, { state: 'failed', error: 'runtimeFailed' }))
-      setAnalyzing(false)
-      return
-    }
-
-    if (job.error === 'busy' || job.state === 'failed' || job.state === 'cancelled') {
-      setTurns((prev) =>
-        patchTurn(prev, turnId, { state: 'failed', error: job.error ?? 'runtimeFailed' })
-      )
-      setAnalyzing(false)
-      return
-    }
-
-    // Main creates the history session on first analyze and returns its id; reuse it for any
-    // follow-up turn on the same loaded image.
-    if (job.sessionId) sessionRef.current = job.sessionId
-
-    activeJobRef.current = job.jobId
-    activeTurnRef.current = turnId
-
-    const unsubs: Array<(() => void) | undefined> = []
-    cleanupRef.current = () => {
-      for (const u of unsubs) u?.()
-    }
-
-    unsubs.push(
-      window.api?.onImageToken?.(job.jobId, (token: string) => {
-        setTurns((prev) =>
-          patchTurn(prev, turnId, (tn) => ({ answer: tn.answer + token, state: 'analyzing' }))
-        )
-      })
-    )
-    unsubs.push(
-      window.api?.onImageDone?.(job.jobId, (doneJob) => {
-        // Main creates the history session on the first completed answer and returns its id on
-        // the done job; reuse it for any follow-up turn on this same loaded image.
-        if (doneJob.sessionId) sessionRef.current = doneJob.sessionId
-        let saved = false
-        setTurns((prev) =>
-          patchTurn(prev, turnId, (tn) => {
-            const answer = doneJob.answer ?? tn.answer
-            if (answer.trim()) {
-              saved = true
-              return { answer, state: 'done', error: null }
-            }
-            return { state: 'failed', error: 'emptyResponse' }
-          })
-        )
-        // A completed turn was persisted in main — refresh the history list so it's current.
-        if (saved) void loadSessions()
-        endStream()
-      })
-    )
-    unsubs.push(
-      window.api?.onImageError?.(job.jobId, (errJob) => {
-        const code = errJob.error ?? 'runtimeFailed'
-        setTurns((prev) =>
-          patchTurn(prev, turnId, code === 'cancelled' ? { state: 'cancelled' } : { state: 'failed', error: code })
-        )
-        endStream()
-      })
-    )
+  // Run one analyze (the store streams the answer into a fresh turn and keeps streaming even if
+  // this screen unmounts). A second analyze while one runs is busy-rejected by the backend
+  // (IPC-3) and guarded in the store; the history-list refresh rides the persisted subscription.
+  function runAnalyze(question: string): void {
+    void analyzeImage(question)
   }
 
   function onStop(): void {
-    const jobId = activeJobRef.current
-    const turnId = activeTurnRef.current
-    if (!jobId) return
-    void window.api?.imageCancel?.(jobId)?.catch?.(() => {})
-    if (turnId) setTurns((prev) => patchTurn(prev, turnId, { state: 'cancelled' }))
-    endStream()
+    stopVisionActive()
   }
 
   function onCopy(text: string): void {
@@ -451,12 +333,18 @@ export function ImagesScreen({
     if (!status.available) {
       return <VisionUnavailable reason={status.reason ?? 'no-model'} onNavigate={onNavigate} />
     }
-    if (!selected) {
+    // Landing view (the "new analysis" view): upload + previous results. Shown by default and on
+    // every return to the screen, so a finished analysis never strands the user on the result view.
+    // While an analysis runs, the upload is disabled (vision is one-at-a-time) and the running job
+    // is surfaced as the top row of the results list (clicking it re-opens the live detail view).
+    if (!viewingDetail || !selected) {
       return (
         <>
-          <ImageDropZone onDropFiles={onDropFiles} onChoose={handleChoose} busy={decoding} />
+          {analyzing && <p className="hint">{t('images.drop.busy')}</p>}
+          <ImageDropZone onDropFiles={onDropFiles} onChoose={handleChoose} busy={decoding || analyzing} />
           <ImageHistory
             sessions={sessions}
+            running={analyzing && selected ? { title: selected.name, onOpen: () => setViewingDetail(true) } : null}
             onOpen={(id) => void openSession(id)}
             onDelete={(id) => void deleteSession(id)}
           />
@@ -466,6 +354,9 @@ export function ImagesScreen({
     return (
       <div className="image-workspace">
         <div className="image-pane-left">
+          <Button size="sm" variant="ghost" className="image-back" onClick={backToList}>
+            ‹ {t('images.back')}
+          </Button>
           <ImagePreview
             dataUrl={selected.decoded.dataUrl}
             name={selected.name}

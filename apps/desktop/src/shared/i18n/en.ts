@@ -1436,6 +1436,10 @@ export const en = {
   'images.drop.title': 'Drop an image here',
   'images.drop.choose': 'or choose an image',
   'images.drop.types': 'PNG or JPEG',
+  // Shown while an analysis is running: a new upload is disabled (vision is one-at-a-time).
+  'images.drop.busy': 'An analysis is running. Wait for it to finish to start another.',
+  // Detail view → back to the upload + previous-results view.
+  'images.back': 'Back to analyses',
   // Preview pane (§5.3).
   'images.preview.remove': 'Remove',
   'images.preview.replace': 'Replace',
@@ -1483,6 +1487,9 @@ export const en = {
   // History (image-understanding history): saved analyses, encrypted at rest, deletable.
   'images.history.title': 'History',
   'images.history.empty': 'Images you analyze will appear here.',
+  // The in-flight analysis, shown as the top row of the results list while it runs.
+  'images.history.running': 'Analysis running…',
+  'images.history.runningOpen': 'View the running analysis',
   'images.history.turns.one': '{count} question',
   'images.history.turns.other': '{count} questions',
   'images.history.open': 'Open',
