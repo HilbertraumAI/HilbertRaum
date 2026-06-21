@@ -418,8 +418,12 @@ if (-not (Test-Path $binaryPath)) {
 if (Test-Path $binaryPath) {
   # Record exactly which build is installed (UTF-8 without BOM -- PS 5.1 Set-Content
   # would prepend one and break Node's JSON.parse). Mirrors assets.ts writeRuntimeMarker.
+  # `binaries` records the extracted binary's own SHA-256 so the app can re-hash it
+  # immediately before spawn (vuln-scan B / binary-verifier.ts). The key is the binary's
+  # name relative to the extract dir (here it sits at the root after the flatten above).
   $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-  $markerJson = '{"version":"' + $version + '","backend":"' + $build.backend + '","os":"' + $build.os + '","arch":"' + $build.arch + '"}'
+  $binSha = (Get-FileHash -Path $binaryPath -Algorithm SHA256).Hash.ToLower()
+  $markerJson = '{"version":"' + $version + '","backend":"' + $build.backend + '","os":"' + $build.os + '","arch":"' + $build.arch + '","binaries":{"' + $binaryName + '":"' + $binSha + '"}}'
   [System.IO.File]::WriteAllText($markerPath, $markerJson, $utf8NoBom)
   Write-Host "  extracted $binaryName (+ .hilbertraum-runtime.json install marker)" -ForegroundColor Green
   if ($build.os -ne 'win') {
