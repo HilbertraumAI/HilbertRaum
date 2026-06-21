@@ -740,6 +740,60 @@ loop wraps `computeInstallState` in try/catch, so any manifest that still throws
 entry rather than failing the whole list — mirroring the existing `pendingHashBytes` pre-pass.
 `weightPath`/`safeDrivePath` keep their own runtime escape guard (defense in depth).
 
+## Least-privilege hardening of the renderer↔main file/network seams (vuln-scan 2026-06-21, option D)
+
+The renderer is the **untrusted** boundary (M-S2) and threat #1 is a hostile imported doc/skill
+achieving code-exec in the context-isolated renderer. Four main-side IPC seams trusted renderer
+input more than that model allows; all four are now tightened (`registerDocsIpc.ts`,
+`registerImagesIpc.ts`, `services/assets.ts`, `services/vision/limits.ts`).
+
+### D1 — `importDocuments` is bound to a picker capability token (not raw renderer paths)
+`importDocuments(paths)` accepted arbitrary renderer-controlled absolute paths and `expandPaths`
+did no base-dir containment, so a code-exec'd renderer could use main as a **confused deputy** to
+read any supported-type file anywhere on disk (the text is then reachable via
+`previewDocument`/`exportDocument`/RAG). The OS picker is owned by **main**, so:
+- `pickDocuments` mints a **one-time token** per dialog (`randomUUID`, a bounded map, single-use)
+  bound to the exact paths it returned, and returns `{ token, paths }` (paths are renderer
+  **display/preflight only**).
+- A PICKER import passes `options.pickerToken`; main **resolves+consumes** it to those exact paths
+  and **ignores** the renderer-supplied `paths`. A forged/replayed/unknown token imports nothing.
+- **Drag-drop residual (documented, accepted):** a native OS drop is delivered to the *renderer*,
+  so main cannot mint a token for it. That seam still passes raw paths but is now **hardened** —
+  each top-level path is `lstat`-checked and a **symlink is rejected**, then `realpathSync`-
+  canonicalized (a `.pdf`-named symlink can't reach a sensitive target through the importer). A
+  compromised renderer can still drive this seam with on-disk paths, but the offline guarantee
+  means there is **no network sink to exfiltrate** read content, and the dominant picker surface is
+  now non-forgeable. `importPreflight` still takes raw paths (counts/sizes only — lower impact).
+
+### D2 — `imageReadBytes` takes an opaque token, never a renderer path
+`imageChooseImage` now returns `{ token, name, sizeBytes }` — the absolute path stays in main,
+keyed by a one-time bounded token. `imageReadBytes(token)` resolves+consumes it and reads with an
+**open→fstat→read on the same fd** (the byte cap is authoritative for those exact bytes — closes
+the prior `stat`→`read` TOCTOU). A renderer can no longer name a path, so the `.png`-named-symlink /
+arbitrary-read confused-deputy vector is gone. (Drag-drop decodes the `File` in the renderer and
+never calls this.)
+
+### D3 — `downloadToFile` re-validates every redirect hop + caps the body
+TLS was enforced only on the **initial** URL; `fetch` then followed redirects automatically, so a
+30x from a compromised/hostile origin could **SSRF to a LAN/loopback host** (e.g.
+`http://169.254.169.254/…`) or **downgrade to cleartext http**, and there was no streamed-size cap
+(disk-fill). Now redirects are `redirect: 'manual'` and each hop (initial + every `Location`) is
+re-checked by `assertSafeDownloadUrl`: **https-only** *and* a **loopback/private-range deny**
+(127/8, 10/8, 172.16/12, 192.168/16, 169.254/16, `localhost`, IPv6 `::1`/`fe80:`/`fc`/`fd`), with a
+**max-redirect** cap. The body is rejected once it exceeds the smallest of {`Content-Length`,
+caller `maxBytes`} + margin (the model downloader passes the manifest's planned size), with a
+generous global backstop when neither is known. All callers (model weights, runtime sidecar, OCR
+files) get this for free because they share the seam.
+
+### D4 — the authoritative vision guard now bounds decoded pixels, not just bytes
+`validateAnalyzeRequest` (SEC-3) capped bytes but not decoded dimensions, and `runtime.ts` inlines
+the **original** bytes to the sidecar — so a small (<20 MiB) **decompression bomb** PNG/JPEG that
+decodes to billions of pixels passed the guard and OOM'd the sidecar. The renderer's `MAX_DIMENSION`
+downscale is display-only and doesn't bound what the sidecar decodes. The main guard now parses the
+image **header** (PNG IHDR / JPEG SOF) for `width*height` — no full decode — and rejects above a
+**pixel budget** (`VISION_MAX_IMAGE_PIXELS`, ~50 MP default, env-overridable) as `tooLarge`. Unknown
+dimensions fall through to the byte cap.
+
 ## Open item: re-hash sidecar binaries before spawn (vuln-scan 2026-06-21, DEFERRED)
 
 The scan re-raised the tracked TOCTOU on `llama-server` / `whisper-cli` / the `--list-devices` GPU

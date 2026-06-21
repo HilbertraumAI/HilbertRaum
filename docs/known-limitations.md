@@ -20,9 +20,12 @@ password recovery — are documented in
   app-wide risks breaking loopback IPC and the sidecars). Electron's own `net` module would bypass
   it. The offline guarantee is a property of the code + CSP + deny-by-default policy; the guard is
   a tripwire, not an enforcement layer.
-- **`importDocuments` accepts caller-supplied paths.** The IPC handler trusts renderer-supplied
-  file paths rather than honouring only picker-returned ones. Hardening against a compromised
-  renderer is deferred (the renderer is already sandboxed with context isolation).
+- **`importDocuments` picker imports are token-bound; drag-drop trusts caller paths (accepted).**
+  A PICKER import is bound to a one-time `pickDocuments` capability token (main imports exactly what
+  it returned), so a compromised renderer can't forge a picker-origin read of an arbitrary file
+  (vuln-scan-2026-06-21 / `security-model.md` D1). A native OS drag-drop is delivered to the
+  *renderer*, so main can't tokenize it — that seam still accepts raw paths but rejects symlinks and
+  canonicalizes them, and there is no network sink to exfiltrate read content (offline).
 - **Archive extraction trusts verified archives.** `fetch-runtime` rejects `extract_to` escapes,
   and archives are SHA-256-verified before extraction — but member paths inside an archive are only
   as trustworthy as the pinned hash in `runtime-sources.yaml`.
@@ -469,8 +472,10 @@ password recovery — are documented in
   feature never generates/edits images (a permanent non-goal).
 - **Context is capped at 4096 tokens** (vs the model's 128 000 train context) — fine for a single
   image + a short question/thread in MVP; long multi-turn threads about one image are not a v1 promise.
-- **The caller-supplied-path caveat applies to `imageReadBytes(path)`** — the same accepted stance as
-  `importDocuments` (the renderer is sandboxed; main re-validates the extension + byte cap, SEC-3).
+- **`imageReadBytes` takes an opaque token, not a path** (vuln-scan-2026-06-21 / `security-model.md`
+  D2). `imageChooseImage` returns a one-time token; the absolute path stays in main, so the renderer
+  can't make main read an arbitrary file. The byte cap is re-checked on the open fd (no TOCTOU), and
+  the main-side guard also rejects decompression bombs by a decoded-pixel budget (D4).
 - **No vision model ships on a commercial drive yet, but the sell gate already verifies BOTH files
   (DIST-2).** `assertCommercialDrive` → `verifyDriveModels` iterates the same `manifestFiles` set
   (GGUF + mmproj) that `computeInstallState` requires, so a half-installed vision drive (good GGUF,

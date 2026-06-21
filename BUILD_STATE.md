@@ -6,6 +6,38 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-21 — **Vuln-scan remediation — defense-in-depth / least-privilege gaps (option D).** The four MEDIUM items that are
+deviations from the app's own trust model (renderer = UNTRUSTED; threat #1 = code-exec'd renderer). Confirmed two IPC-contract
+choices with the user: **D1 = picker token + harden drag-drop**, **D2 = opaque token**. **As built (suite green — 2043 passed /
+30 skipped; typecheck clean), one coherent commit each:**
+- **D1 — `importDocuments` bound to a picker capability token** (`registerDocsIpc.ts`, `shared/types.ts`, preload, ChatScreen +
+  DocumentsScreen, `docs-ipc.test.ts`). Raw renderer paths were a confused-deputy arbitrary-file read (text reachable via
+  preview/export/RAG). `pickDocuments` now returns `{ token, paths }` (one-time `randomUUID`, bounded map, single-use, bound to
+  the OS-vetted paths); a PICKER import passes `options.pickerToken` and main **resolves+consumes it, ignoring the renderer
+  `paths`**. Forged/replayed/unknown token ⇒ imports nothing. **Drag-drop residual (accepted, documented):** an OS drop is
+  delivered to the *renderer* (untokenizable) — that seam still passes raw paths but is hardened (`lstat`-reject symlink →
+  `realpathSync`); no network exfil sink exists. `importPreflight` stays on raw paths (counts/sizes, lower impact). 4 regression
+  tests (token binding, forged-token, single-use, drop symlink-reject).
+- **D2 — `imageReadBytes` takes an opaque token, never a path** (`registerImagesIpc.ts`, preload, ImagesScreen, `images-ipc.test.ts`).
+  `imageChooseImage` now returns `{ token, name, sizeBytes }` (path stays in main, bounded one-time map); `imageReadBytes(token)`
+  resolves+consumes and reads via **open→fstat→read on one fd** (cap authoritative; closes the `stat`→`read` TOCTOU). Closes the
+  `.png`-named-symlink / arbitrary-read vector. 3 new tests (non-token path refused, single-use, choose returns no `path`).
+- **D3 — `downloadToFile` per-hop redirect re-validation + body cap** (`assets.ts`, `downloads.ts`, `assets.test.ts`). Was
+  `redirect:'follow'` with TLS checked only on the initial URL → SSRF to LAN/loopback (`169.254.169.254`), https→http downgrade,
+  and unbounded disk-fill. Now `redirect:'manual'`; each hop (initial + every `Location`) re-checked by `assertSafeDownloadUrl`
+  (**https-only + loopback/private-range deny** + max-redirect cap), and the body is capped at min{`Content-Length`, caller
+  `maxBytes`}+margin (model downloader passes the manifest size) with a global backstop. All seam users (weights/runtime/OCR)
+  inherit it. 5 new tests (follow-public, http-downgrade reject, private-host reject, redirect-loop, size-cap).
+- **D4 — vision guard bounds decoded pixels, not just bytes** (`vision/limits.ts`, `vision-limits.test.ts`). A <20 MiB
+  decompression-bomb PNG/JPEG decoded to billions of px and OOM'd the sidecar (runtime.ts inlines the ORIGINAL bytes; the
+  renderer `MAX_DIMENSION` is display-only). `validateAnalyzeRequest` now parses the **header** (PNG IHDR / JPEG SOF) for
+  `width*height` — no full decode — and rejects above `VISION_MAX_IMAGE_PIXELS` (~50 MP default, `HILBERTRAUM_MAX_IMAGE_PIXELS`)
+  as `tooLarge`; unknown dims fall through to the byte cap. New `tests/unit/vision-limits.test.ts` (8 cases incl. PNG/JPEG bombs).
+**Docs:** `security-model.md` gains a "Least-privilege hardening of the renderer↔main file/network seams" §-section (D1–D4).
+**OPTION D COMPLETE.** **STILL OPEN:** B — sidecar re-hash-before-spawn (DEFERRED; design in `security-model.md`). That is the
+only remaining triaged item from this scan.
+**(Option C entry below.)**_
+
 _2026-06-21 — **Vuln-scan remediation, Tier 2 — robustness BUGs (option C).** Working the report's 8 BUG-severity items
 (one, the malformed-manifest `buildModelList` crash, was already closed in Tier 1). Each is a robustness/correctness defect,
 not an attacker-reachable vulnerability; fixed as small coherent commits with regression tests. **Closed so far:**
