@@ -27,7 +27,13 @@ not an attacker-reachable vulnerability; fixed as small coherent commits with re
   history handlers); plus a stale `startFailed` "Cleared by stop()" comment corrected (it's intentionally sticky — a stopped
   runtime is discarded). Tests: 3 new in `vision-security.test.ts` (stop() purges the answer, the map is bounded, locked handlers
   reject). Docs: `security-model.md` "Encrypted image-analysis history" gains the unique-read-temp + lock-residue-purge notes.
-**STILL OPEN in option C:** downloads `start()` TOCTOU race; workspace-vault partial `applyPendingRekey`.
+- **`downloads.ts` `start()` single-flight TOCTOU (BUG).** The `activeJob()` guard and the `this.active` assignment straddled
+  `await planModelDownloads(...)`, so two near-simultaneous `start()` invokes both passed the guard → two concurrent runs, and the
+  second overwrote `this.active`, orphaning the FIRST job's AbortController (an un-cancellable download). Added a synchronous
+  `starting` latch set right after the guard and cleared in a `finally` (by which point `this.active` is set), so the second
+  invoke rejects with `alreadyRunning`. Verified before/never-trust boundary is untouched (the garbled `.part` still fails SHA-256).
+  Test: two un-awaited `start()`s in one tick — the second rejects, exactly one active job remains.
+**STILL OPEN in option C:** workspace-vault partial `applyPendingRekey`.
 **(Tier-2 HIGH_BUG entry below; Tier-1 entry under that.)**_
 
 _2026-06-21 — **Vuln-scan remediation, Tier 2 — the HIGH_BUG: summary-tree build could loop forever / block the doc-task queue.**
