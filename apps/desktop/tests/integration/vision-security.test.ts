@@ -74,7 +74,8 @@ const AVAILABLE: VisionStatus = { available: true, modelId: 'vlm', modelDisplayN
 // asserts the stored image rests ENCRYPTED). A fresh temp root per call keeps tests isolated.
 function ctxFor(
   audit: ReturnType<typeof vi.fn>,
-  rootPath = mkdtempSync(join(tmpdir(), 'hilbertraum-vision-sec-'))
+  rootPath = mkdtempSync(join(tmpdir(), 'hilbertraum-vision-sec-')),
+  unlocked = true
 ): AppContext {
   const key = randomBytes(32)
   return {
@@ -83,7 +84,7 @@ function ctxFor(
     manifestsDir: null,
     isDev: false,
     workspace: {
-      isUnlocked: () => true,
+      isUnlocked: () => unlocked,
       documentCipher: () => ({
         encryptFile: (s: string, d: string) => encryptFile(s, d, key),
         decryptFile: (s: string, d: string) => decryptFile(s, d, key)
@@ -316,5 +317,66 @@ describe('vision security sentinel', () => {
     expect(stored[0]).toMatch(/\.enc$/)
     expect(readFileSync(join(imagesPath, stored[0])).includes(Buffer.from(SENTINEL_BYTES))).toBe(false)
     ocrSpy.mockRestore()
+  })
+
+  // MEDIUM vuln-scan-2026-06-21: a completed answer (content derived from the private image)
+  // must not linger in the per-process job map after the workspace locks. stop() (wired to lock)
+  // must purge it, like the lock path purges resident RAG vectors and zeroes the vault key.
+  it('stop() purges completed-answer residue from the job map (lock-time RAM purge)', async () => {
+    const audit = vi.fn()
+    const service = new VisionService({
+      getStatus: async () => AVAILABLE,
+      createRuntime: () => ({
+        analyze: async (o: { onToken?: (d: string) => void }) => {
+          o.onToken?.(SENTINEL_ANSWER)
+          return SENTINEL_ANSWER
+        }
+      })
+    })
+    registerImagesIpc(ctxFor(audit), service)
+
+    const initial = (await invoke(handlers, IPC.imageAnalyze, sentinelReq())).result as ImageJob
+    const done = await waitForTerminal(initial.jobId)
+    expect(done.answer).toBe(SENTINEL_ANSWER) // the answer is resident…
+
+    await service.stop() // …workspace lock / quit teardown
+    const after = service.getJob(initial.jobId)
+    expect(after.state).toBe('failed') // unknown job ⇒ purged
+    expect(after.answer).toBeUndefined() // no answer text survives the lock
+  })
+
+  // BUG vuln-scan-2026-06-21: terminal jobs (each holding its answer) accumulated for the
+  // process lifetime. The map is now bounded — old terminal jobs are evicted.
+  it('bounds the job map: old terminal jobs are evicted (no unbounded growth)', async () => {
+    const audit = vi.fn()
+    const service = new VisionService({
+      getStatus: async () => AVAILABLE,
+      createRuntime: () => ({ analyze: async () => 'ok' })
+    })
+    registerImagesIpc(ctxFor(audit), service)
+
+    const ids: string[] = []
+    for (let i = 0; i < 20; i++) {
+      const initial = (await invoke(handlers, IPC.imageAnalyze, sentinelReq())).result as ImageJob
+      await waitForTerminal(initial.jobId)
+      ids.push(initial.jobId)
+    }
+    // The earliest jobs were evicted (cap 16); the most recent are still retained.
+    expect(service.getJob(ids[0]).state).toBe('failed') // evicted ⇒ unknown
+    expect(service.getJob(ids[ids.length - 1]).state).toBe('done') // recent ⇒ kept
+  })
+
+  // MEDIUM vuln-scan-2026-06-21: imageGetJob/imageCancel are gated on unlock, like imageAnalyze
+  // and the history handlers — a locked workspace exposes no job (or its answer) over IPC.
+  it('imageGetJob/imageCancel refuse while the workspace is locked', async () => {
+    const audit = vi.fn()
+    const service = new VisionService({
+      getStatus: async () => AVAILABLE,
+      createRuntime: () => ({ analyze: async () => 'ok' })
+    })
+    registerImagesIpc(ctxFor(audit, undefined, false), service) // locked
+
+    await expect(invoke(handlers, IPC.imageGetJob, 'any-job-id')).rejects.toThrow()
+    await expect(invoke(handlers, IPC.imageCancel, 'any-job-id')).rejects.toThrow()
   })
 })

@@ -18,6 +18,16 @@ not an attacker-reachable vulnerability; fixed as small coherent commits with re
   to the newest page, so a client paging toward older events looped / showed duplicates. Now returns an EMPTY page (terminates
   pagination); the Diagnostics "earlier" button hides cleanly (`page.length === PAGE_SIZE` ⇒ false). Doc comment + the existing
   audit.test pagination test updated to the new contract.
+- **Vision service cluster (`vision/index.ts`, `vision/history.ts`, `vision/runtime.ts`, `registerImagesIpc.ts`).** Four items,
+  one commit: (1) **residue-after-lock (MEDIUM)** — `VisionService.stop()` (wired to lock/quit) now CLEARS the job map +
+  controllers after teardown, so a completed answer (content from the private image) doesn't survive the vault re-encrypt;
+  (2) **unbounded job map (BUG)** — terminal jobs are evicted past `VISION_MAX_JOB_HISTORY=16`; (3) **history read-temp collision
+  (BUG)** — the decrypt temp is now per-call unique (`<id>.read-<pid>-<uuid>.tmp`) so two concurrent reads of one session can't
+  interleave/shred each other; (4) **`imageGetJob`/`imageCancel` gated on `requireUnlocked`** (consistent with imageAnalyze +
+  history handlers); plus a stale `startFailed` "Cleared by stop()" comment corrected (it's intentionally sticky — a stopped
+  runtime is discarded). Tests: 3 new in `vision-security.test.ts` (stop() purges the answer, the map is bounded, locked handlers
+  reject). Docs: `security-model.md` "Encrypted image-analysis history" gains the unique-read-temp + lock-residue-purge notes.
+**STILL OPEN in option C:** downloads `start()` TOCTOU race; workspace-vault partial `applyPendingRekey`.
 **(Tier-2 HIGH_BUG entry below; Tier-1 entry under that.)**_
 
 _2026-06-21 — **Vuln-scan remediation, Tier 2 — the HIGH_BUG: summary-tree build could loop forever / block the doc-task queue.**

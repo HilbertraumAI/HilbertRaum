@@ -127,6 +127,7 @@ export class VisionService {
       }
       const done: ImageJob = { jobId, state: 'done', answer }
       this.jobs.set(jobId, done)
+      this.evictOldJobs()
       emit.done(jobId, done)
     } catch (err) {
       if (signal.aborted) {
@@ -162,6 +163,7 @@ export class VisionService {
       const cancelled: ImageJob = { jobId, state: 'cancelled', error: 'cancelled' }
       this.jobs.set(jobId, cancelled)
       if (this.activeJobId === jobId) this.activeJobId = null
+      this.evictOldJobs()
       return cancelled
     }
     return { ...existing }
@@ -180,6 +182,15 @@ export class VisionService {
     const runtime = this.runtime
     this.runtime = null
     await runtime?.stop?.()
+    // Purge per-process residue at lock/quit (MEDIUM vuln-scan-2026-06-21). Completed-answer
+    // text — content derived from the user's private image — must not survive the vault
+    // re-encrypt, consistent with the lock path purging resident RAG vectors and zeroing the
+    // vault key. Done AFTER the teardown await so an aborting in-flight run() that resumes mid-
+    // await can't repopulate the map (and even then it re-records only a content-free terminal
+    // job). The orchestrator rebuilds a fresh runtime on the next analyze.
+    this.jobs.clear()
+    this.controllers.clear()
+    this.activeJobId = null
   }
 
   private set(jobId: string, job: ImageJob): void {
@@ -192,9 +203,29 @@ export class VisionService {
     if (this.jobs.get(jobId)?.state === 'cancelled') return
     const job: ImageJob = { jobId, state: 'failed', error }
     this.jobs.set(jobId, job)
+    this.evictOldJobs()
     emit.error(jobId, job)
   }
+
+  /** Bound the job map: drop the oldest non-active entries past `VISION_MAX_JOB_HISTORY`
+   *  (insertion order; the active job is never evicted). */
+  private evictOldJobs(): void {
+    if (this.jobs.size <= VISION_MAX_JOB_HISTORY) return
+    for (const id of this.jobs.keys()) {
+      if (this.jobs.size <= VISION_MAX_JOB_HISTORY) break
+      if (id === this.activeJobId) continue
+      this.jobs.delete(id)
+    }
+  }
 }
+
+/**
+ * Cap on retained jobs (BUG vuln-scan-2026-06-21). Vision is one-at-a-time, so terminal jobs
+ * (each holding its full answer string) accumulated unbounded for the process lifetime. The
+ * renderer reads a completed answer from the streamed `done` event, then polls `getJob` a few
+ * times — a small history is plenty; older terminal entries are evicted.
+ */
+const VISION_MAX_JOB_HISTORY = 16
 
 /** A terminal failed job with a code, NOT tracked (validation reject / busy reject). */
 function failedJob(error: VisionErrorCode): ImageJob {

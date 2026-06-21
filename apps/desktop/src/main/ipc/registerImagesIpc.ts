@@ -178,11 +178,16 @@ export function registerImagesIpc(ctx: AppContext, service?: VisionService): voi
     return { ...job, sessionId }
   })
 
+  // Gated on unlock (MEDIUM vuln-scan-2026-06-21), consistent with imageAnalyze and the history
+  // handlers: a job (and its answer) is workspace-scoped, so it must not be reachable once the
+  // vault is locked. (stop() also clears the job map at lock, so there is nothing to return.)
   ipcMain.handle(IPC.imageGetJob, (_e, jobId: unknown): ImageJob => {
+    requireUnlocked()
     return vision.getJob(typeof jobId === 'string' ? jobId : '')
   })
 
   ipcMain.handle(IPC.imageCancel, (_e, jobId: unknown): ImageJob => {
+    requireUnlocked()
     return vision.cancel(typeof jobId === 'string' ? jobId : '')
   })
 

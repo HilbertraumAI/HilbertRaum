@@ -332,8 +332,15 @@ sidecar and writes no temp; only the history copy lands on disk).
 - **Write path:** the bytes are written to a short-lived plaintext temp (`<id>.tmp`), `encryptFile`-d
   to the `.enc` sidecar, and the temp **shredded** — the same transient-then-shred posture as document
   parse.
-- **Read path (open an entry):** the `.enc` is decrypted to a transient temp (`<id>.read-<pid>.tmp`),
-  read, then **shredded**.
+- **Read path (open an entry):** the `.enc` is decrypted to a **per-call unique** transient temp
+  (`<id>.read-<pid>-<uuid>.tmp`), read, then **shredded**. The uuid (added vuln-scan-2026-06-21) keeps two
+  concurrent reads of the same session — e.g. a double-click — from colliding on one staging file.
+- **In-memory residue at lock:** `VisionService.stop()` (wired to workspace lock + quit) aborts in-flight
+  jobs, tears down the sidecar, AND **clears the per-process job map** so a completed answer (content
+  derived from the private image) does not survive the vault re-encrypt — consistent with the lock path
+  purging resident RAG vectors and zeroing the vault key (added vuln-scan-2026-06-21). The map is also
+  bounded (`VISION_MAX_JOB_HISTORY`) so terminal jobs don't accumulate across a session, and
+  `imageGetJob`/`imageCancel` are gated on unlock like the other vision handlers.
 - **Crash recovery:** both temps end in `.tmp`, so the startup `shredStalePlaintext` sweep of
   `workspace/images/` removes any leftover from a process killed mid-write or mid-read.
 - **Delete:** removing a history entry **shreds** the stored image and cascade-removes its turns
