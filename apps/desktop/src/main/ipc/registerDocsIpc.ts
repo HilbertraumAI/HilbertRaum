@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { BrowserWindow, dialog, ipcMain } from 'electron'
 import { IPC } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
-import { statSync } from 'node:fs'
+import { lstatSync, realpathSync, statSync } from 'node:fs'
 import type {
   DocumentInfo,
   DocumentLifecycle,
@@ -12,6 +12,7 @@ import type {
   ImportJobStatus,
   ImportOptions,
   ImportPreflight,
+  PickDocumentsResult,
   SmartListView
 } from '../../shared/types'
 import { matchesSmartView } from '../../shared/types'
@@ -135,6 +136,55 @@ export function registerDocsIpc(ctx: AppContext): void {
     }
   }
 
+  // D1 (vuln-scan-2026-06-21) — picker capability tokens. The renderer is the untrusted
+  // boundary (M-S2) and threat #1 is a code-exec'd renderer using main as a confused deputy to
+  // read arbitrary supported-type files via `importDocuments(paths)`. The OS picker is owned by
+  // MAIN, so we bind each `pickDocuments` dialog to a one-time token and have `importDocuments`
+  // resolve picker imports from it — the renderer can't name a path it didn't pick. (Drag-drop
+  // can't be tokenized — the OS hands the drop to the renderer — so that seam is hardened
+  // instead; see `hardenDroppedPaths`. Residual documented in security-model.md.)
+  const PICKER_TOKEN_CAP = 16
+  const pickerTokens = new Map<string, string[]>()
+  const mintPickerToken = (paths: string[]): string => {
+    const token = randomUUID()
+    pickerTokens.set(token, paths)
+    while (pickerTokens.size > PICKER_TOKEN_CAP) {
+      const oldest = pickerTokens.keys().next().value
+      if (oldest === undefined) break
+      pickerTokens.delete(oldest)
+    }
+    return token
+  }
+  /** Resolve+consume a picker token to the exact paths main returned; [] for unknown/stale. */
+  const consumePickerToken = (token: unknown): string[] => {
+    if (typeof token !== 'string' || token === '') return []
+    const paths = pickerTokens.get(token)
+    if (paths === undefined) return []
+    pickerTokens.delete(token)
+    return paths
+  }
+  /**
+   * Harden the DRAG-DROP seam (D1): the OS delivers a native drop to the renderer, so main can't
+   * vouch for these paths via a token. Keep only existing, non-symlink entries and canonicalize
+   * them — a renderer can't use a `.pdf`-named symlink to read a sensitive target through the
+   * importer, and a deleted/garbage entry simply drops. (A directory is still walked downstream
+   * by `expandPaths`, whose internal link-following is intentional per audit L3/L5.)
+   */
+  const hardenDroppedPaths = (paths: unknown): string[] => {
+    const arr = Array.isArray(paths) ? paths.filter((p): p is string => typeof p === 'string') : []
+    const out: string[] = []
+    for (const p of arr) {
+      try {
+        // lstat (does NOT follow links): reject a symlinked top-level entry outright.
+        if (lstatSync(p).isSymbolicLink()) continue
+        out.push(realpathSync(p))
+      } catch {
+        // Missing/unreadable — drop it (it would fail to import anyway).
+      }
+    }
+    return out
+  }
+
   const requireNotProcessing = (documentId: string): void => {
     if (processing.has(documentId)) {
       throw new Error(tMain('main.docs.processing'))
@@ -175,28 +225,34 @@ export function registerDocsIpc(ctx: AppContext): void {
   // Open the OS file/folder picker in the main process (renderer has no dialog access).
   // Windows cannot mix file + directory selection in one dialog, so the caller chooses a
   // mode: 'files' (default) or 'folder'.
-  ipcMain.handle(IPC.pickDocuments, async (_e, mode?: 'files' | 'folder'): Promise<string[]> => {
-    const exts = supportedExtensions().map((e) => e.replace(/^\./, ''))
-    const options =
-      mode === 'folder'
-        ? {
-            title: tMain('main.dialog.importFolder'),
-            properties: ['openDirectory'] as Array<'openDirectory'>
-          }
-        : {
-            title: tMain('main.dialog.importDocuments'),
-            properties: ['openFile', 'multiSelections'] as Array<'openFile' | 'multiSelections'>,
-            filters: [
-              { name: tMain('main.dialog.filterDocuments'), extensions: exts },
-              { name: tMain('main.dialog.filterAll'), extensions: ['*'] }
-            ]
-          }
-    const win = BrowserWindow.getFocusedWindow()
-    const result = win
-      ? await dialog.showOpenDialog(win, options)
-      : await dialog.showOpenDialog(options)
-    return result.canceled ? [] : result.filePaths
-  })
+  ipcMain.handle(
+    IPC.pickDocuments,
+    async (_e, mode?: 'files' | 'folder'): Promise<PickDocumentsResult> => {
+      const exts = supportedExtensions().map((e) => e.replace(/^\./, ''))
+      const options =
+        mode === 'folder'
+          ? {
+              title: tMain('main.dialog.importFolder'),
+              properties: ['openDirectory'] as Array<'openDirectory'>
+            }
+          : {
+              title: tMain('main.dialog.importDocuments'),
+              properties: ['openFile', 'multiSelections'] as Array<'openFile' | 'multiSelections'>,
+              filters: [
+                { name: tMain('main.dialog.filterDocuments'), extensions: exts },
+                { name: tMain('main.dialog.filterAll'), extensions: ['*'] }
+              ]
+            }
+      const win = BrowserWindow.getFocusedWindow()
+      const result = win
+        ? await dialog.showOpenDialog(win, options)
+        : await dialog.showOpenDialog(options)
+      const paths = result.canceled ? [] : result.filePaths
+      // D1: bind these exact main-vetted paths to a one-time token. The renderer gets `paths`
+      // for display/preflight, but `importDocuments` only trusts the token (not the paths).
+      return { token: paths.length > 0 ? mintPickerToken(paths) : '', paths }
+    }
+  )
 
   ipcMain.handle(IPC.importDocuments, (_e, paths: string[], options?: ImportOptions): ImportJob => {
     requireUnlocked()
@@ -210,11 +266,17 @@ export function registerDocsIpc(ctx: AppContext): void {
     // session with no import in flight to explain it.
     let documentIds: string[]
     try {
-      // M-S2: the renderer is the untrusted boundary — accept only an array of strings.
-      // A non-array (or non-string elements) would otherwise crash expandPaths with the
-      // lease held. Element strings are still server-validated downstream (expandPathsWithSource
-      // filters to existing, supported files).
-      const safePaths = Array.isArray(paths) ? paths.filter((p): p is string => typeof p === 'string') : []
+      // M-S2 / D1: the renderer is the untrusted boundary. A PICKER import carries
+      // `options.pickerToken`; main resolves it to the exact paths the OS dialog returned and
+      // IGNORES the renderer-supplied `paths`, so a code-exec'd renderer can't forge a
+      // picker-origin import of an arbitrary file. With NO token this is the drag-drop seam
+      // (the OS hands the drop to the renderer, untokenizable) — keep only existing, non-symlink
+      // canonicalized paths. Either way, strings are still server-validated downstream
+      // (expandPathsWithSource filters to existing, supported files).
+      const safePaths =
+        typeof options?.pickerToken === 'string' && options.pickerToken
+          ? consumePickerToken(options.pickerToken)
+          : hardenDroppedPaths(paths)
       // Destination (plan §11.3): persisted per queued doc and applied on indexing success.
       // No options ⇒ Library default, byte-for-byte with the pre-Phase-C behaviour.
       const destination: ImportDestination = sanitizeDestination(options?.destination)

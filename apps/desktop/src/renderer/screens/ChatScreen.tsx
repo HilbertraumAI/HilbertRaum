@@ -944,7 +944,9 @@ export function ChatScreen({
   // in-progress PLAIN chat is never mutated — a new documents conversation is created and
   // committed BEFORE the import references its id (N3 ordering), then focused with a toast;
   // an empty chat switches in place to a documents conversation (nothing to lose).
-  async function attachFiles(paths: string[]): Promise<void> {
+  // `pickerToken` (D1): present for the picker path (main imports exactly what was picked,
+  // ignoring `paths`); absent for drag-drop (main hardens the raw OS paths instead).
+  async function attachFiles(paths: string[], pickerToken?: string): Promise<void> {
     if (paths.length === 0 || busyStreaming) return
     setError(null)
     const fileNames = paths.map(fileBaseName)
@@ -971,7 +973,8 @@ export function ChatScreen({
         await refreshConversations()
       }
       const job = await window.api.importDocuments(paths, {
-        destination: { kind: 'conversation', conversationId: convId }
+        destination: { kind: 'conversation', conversationId: convId },
+        ...(pickerToken ? { pickerToken } : {})
       })
       setPendingImport({ jobId: job.jobId, convId, documentIds: job.documentIds, fileNames })
       setAttachStatus(t('chat.attach.processing', { name: fileNames.join(', ') }))
@@ -985,8 +988,8 @@ export function ChatScreen({
   async function onPickAttach(): Promise<void> {
     if (busyStreaming) return
     try {
-      const paths = await window.api.pickDocuments('files')
-      if (paths.length > 0) await attachFiles(paths)
+      const { token, paths } = await window.api.pickDocuments('files')
+      if (paths.length > 0) await attachFiles(paths, token)
     } catch (e) {
       setError(friendlyIpcError(e))
     }

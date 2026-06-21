@@ -279,10 +279,11 @@ export function ImagesScreen({
     void handleFile(files[0])
   }
 
-  // Picker path: imageChooseImage → imageReadBytes(path) → the same decode pipeline (IPC-1).
+  // Picker path: imageChooseImage → imageReadBytes(token) → the same decode pipeline (IPC-1).
+  // D2: main returns an opaque token, never the absolute path; we hand the token straight back.
   async function handleChoose(): Promise<void> {
     setScreenError(null)
-    let chosen: { path: string; name: string; sizeBytes: number } | null
+    let chosen: { token: string; name: string; sizeBytes: number } | null
     try {
       chosen = (await window.api?.imageChooseImage?.()) ?? null
     } catch {
@@ -301,7 +302,7 @@ export function ImagesScreen({
     }
     setDecoding(true)
     try {
-      const bytes = await window.api.imageReadBytes(chosen.path)
+      const bytes = await window.api.imageReadBytes(chosen.token)
       const blob = new Blob([bytes as unknown as BlobPart], { type: mime })
       const decoded = await decodeImpl(blob, mime)
       selectImage({ decoded, name: chosen.name, sizeBytes: chosen.sizeBytes })

@@ -218,6 +218,8 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
   // Large-audio import confirmation: pending paths + their preflight.
   const [confirmAudio, setConfirmAudio] = useState<{
     paths: string[]
+    /** D1 picker capability token to carry through the confirm dialog into the actual import. */
+    token: string
     audioFileCount: number
     audioBytes: number
   } | null>(null)
@@ -330,10 +332,12 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
     [refresh]
   )
 
-  async function startImport(paths: string[]): Promise<void> {
+  // `token` (D1) is the picker capability from `pickDocuments`; main imports exactly what was
+  // picked and ignores the `paths` we pass (kept only so an old test/caller still type-checks).
+  async function startImport(paths: string[], token: string): Promise<void> {
     try {
       setBusy('import')
-      const job = await window.api.importDocuments(paths)
+      const job = await window.api.importDocuments(paths, { pickerToken: token })
       await refresh()
       if (job.documentIds.length === 0) {
         setBusy(null)
@@ -350,16 +354,16 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
   async function onImport(mode: 'files' | 'folder'): Promise<void> {
     setError(null)
     try {
-      const paths = await window.api.pickDocuments(mode)
+      const { token, paths } = await window.api.pickDocuments(mode)
       if (paths.length === 0) return
       // Size-aware audio gate: large recordings cost drive space
       // (the workspace copy) and real transcription time — ask first.
       const pre = await window.api.importPreflight(paths)
       if (pre.audioBytes >= LARGE_AUDIO_CONFIRM_BYTES) {
-        setConfirmAudio({ paths, audioFileCount: pre.audioFileCount, audioBytes: pre.audioBytes })
+        setConfirmAudio({ paths, token, audioFileCount: pre.audioFileCount, audioBytes: pre.audioBytes })
         return
       }
-      await startImport(paths)
+      await startImport(paths, token)
     } catch (e) {
       setBusy(null)
       setError(friendlyIpcError(e))
@@ -1343,7 +1347,7 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
         onConfirm={() => {
           const pending = confirmAudio
           setConfirmAudio(null)
-          if (pending) void startImport(pending.paths)
+          if (pending) void startImport(pending.paths, pending.token)
         }}
         onCancel={() => setConfirmAudio(null)}
       >
