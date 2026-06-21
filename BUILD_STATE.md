@@ -6,6 +6,34 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-21 — **Vuln-scan remediation, Tier 2 — the HIGH_BUG: summary-tree build could loop forever / block the doc-task queue.**
+`analysis/tree-build.ts` `buildTree()` reduces a document's summary tree level-by-level in a `for(;;)` that halts only when a
+level collapses to one root group. `groupByBudget` never splits an over-budget child, and the loop relied on the (FALSE-at-small-
+budget) assumption that a node summary is "far below a group budget". `summaryBudgetWords` floors at 200 words but a node summary is
+capped at `SUMMARY_OUTPUT_TOKENS`(512), so at a low `contextTokens` (renderer-controlled, previously **unvalidated for a minimum**)
+every node summary exceeded a budget window → each sat alone → the upper levels never reduced → **infinite loop issuing unbounded
+`generate()` calls; `tree_status` stuck `building`; and since `DocTaskManager.pump()` only advances when `runningId` clears, the
+WHOLE single-slot doc-task queue (summary/translate/compare/ocr/extract) permanently blocked.** **As built (suite green — 2018 passed
+/ 30 skipped; typecheck clean):**
+- **Provable termination, independent of model output size.** `groupByBudget(children, budgetWords, minPerGroup=1)` gains a
+  minimum-branching lever; the **node-reduction levels (≥2) pass `minPerGroup=2`**, so a group is flushed only once it holds ≥2
+  children and every level bar a final remainder strictly shrinks — the build halts in ≤`leaves.length` levels no matter how large
+  the summaries are. **Level 1 (chunks→summaries) keeps `minPerGroup=1`** (it may legitimately be 1:1 — a 500-tok chunk exceeds a
+  small budget — but it runs exactly once; the reduction happens at the node levels above). A backstop guard throws
+  `TREE_BUILD_NO_PROGRESS` (+ a `maxLevels = leaves.length+1` cap) if a node level ever fails to shrink, turning a would-be hang into
+  a clean task failure (run() → generic-failure copy, raw to local log only; doc left resumable `building`).
+- **`contextTokens` floor.** `updateSettings` (settings.ts) now clamps `contextTokens` **UP** to `MIN_CONTEXT_TOKENS=2048` (clamps,
+  never drops; non-finite → floor) so a buggy/hostile renderer patch can't starve the budget below a single summary's size. 2048
+  always fits ≥2 node summaries + the prompt/output reserve in one reduce window. (Renderer reaches it via the generic `settings:update`
+  IPC; the Settings screen only displays the value.)
+- **Tests + docs.** New regression `whole-doc-analysis.test.ts` → "tree build termination": direct `buildTree` at `contextTokens:1024`
+  with a model emitting 400-word (>budget) summaries now **completes** (ready, full leaf coverage, bounded calls) — it would hang
+  before the fix. New `db-settings.test.ts` clamp test (512/1024→2048, 8192 passthrough, NaN→floor). `password-change.test.ts`
+  persistence-marker values raised above the floor (777/1234 were arbitrary markers, now 8192/3072). Design record folded into
+  `rag-design.md` §14.3 ("Provable termination").
+**NEXT (asked of user):** B sidecar re-hash-before-spawn / C the 8 robustness BUGs / D defense-in-depth gaps.
+**(prior Tier-1 entry below.)**_
+
 _2026-06-21 — **Vuln-scan remediation, Tier 1 (true-positive security; ReDoS + extraction + manifest hardening).**
 Worked the `.deepsec/.../report.md` scan (28 findings; many scanner-confirmed false positives). This pass fixed the
 **attacker-reachable** items — the rest are triaged below. **As built (suite green — 2016 passed / 30 skipped; typecheck clean):**
