@@ -309,7 +309,12 @@ export function ImagesScreen({
   }
 
   function onCopy(text: string): void {
-    void navigator.clipboard?.writeText?.(text)?.then?.(() => showToast(t('images.answer.copied')))
+    // Copy via MAIN (preload → clipboard:write), not navigator.clipboard — the latter needs a
+    // secure context + focused document and is denied (`clipboard-sanitized-write`) in the
+    // file://-loaded renderer. Mirrors ChatScreen.onCopyMessage.
+    void window.api?.copyToClipboard?.(text)?.then?.((ok) => {
+      if (ok) showToast(t('images.answer.copied'))
+    })
   }
 
   function onChip(prompt: string): void {

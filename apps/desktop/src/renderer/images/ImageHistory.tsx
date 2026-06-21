@@ -1,7 +1,29 @@
 import { useState } from 'react'
 import { Button, ConfirmDialog, Spinner } from '../components'
 import { useT } from '../i18n'
+import type { UiLanguage } from '@shared/i18n'
 import type { ImageSessionSummary } from '@shared/types'
+
+// A calm picture glyph, anchoring each row visually (no thumbnails — keeps the list light and
+// never decrypts a stored image just to draw the list). `currentColor` so it follows the theme.
+function ImageGlyph(): JSX.Element {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="3" y="3" width="18" height="18" rx="2" />
+      <circle cx="8.5" cy="8.5" r="1.5" />
+      <path d="M21 15l-5-5L5 21" />
+    </svg>
+  )
+}
+
+/** Short localized date for a saved analysis (decimal/format follows the UI language). */
+function formatDate(iso: string, lang: UiLanguage): string {
+  const d = new Date(iso)
+  return Number.isNaN(d.getTime())
+    ? ''
+    : d.toLocaleDateString(lang, { year: 'numeric', month: 'short', day: 'numeric' })
+}
 
 // Image-analysis history (image-understanding history). A light text-row list (mirrors the
 // chat ConversationList shape, no thumbnails): each saved analysis shows its file name + the
@@ -24,7 +46,7 @@ export function ImageHistory({
   onOpen: (id: string) => void
   onDelete: (id: string) => void
 }): JSX.Element {
-  const { t, tCount } = useT()
+  const { t, tCount, lang } = useT()
   const [pendingDelete, setPendingDelete] = useState<ImageSessionSummary | null>(null)
 
   return (
@@ -42,9 +64,14 @@ export function ImageHistory({
                 onClick={running.onOpen}
                 title={t('images.history.runningOpen')}
               >
-                <span className="image-history-name">{running.title}</span>
-                <span className="image-history-meta">
-                  <Spinner /> {t('images.history.running')}
+                <span className="image-history-icon" aria-hidden="true">
+                  <ImageGlyph />
+                </span>
+                <span className="image-history-text">
+                  <span className="image-history-name">{running.title}</span>
+                  <span className="image-history-meta">
+                    <Spinner /> {t('images.history.running')}
+                  </span>
                 </span>
               </button>
             </li>
@@ -57,13 +84,26 @@ export function ImageHistory({
                 onClick={() => onOpen(s.id)}
                 title={s.title}
               >
-                <span className="image-history-name">{s.title}</span>
-                <span className="image-history-meta">
-                  {tCount('images.history.turns', s.turnCount)}
+                <span className="image-history-icon" aria-hidden="true">
+                  <ImageGlyph />
+                </span>
+                <span className="image-history-text">
+                  <span className="image-history-name">{s.title}</span>
+                  <span className="image-history-meta">
+                    <span>{tCount('images.history.turns', s.turnCount)}</span>
+                    {formatDate(s.updatedAt, lang) && (
+                      <>
+                        <span className="image-history-dot" aria-hidden="true">·</span>
+                        <span>{formatDate(s.updatedAt, lang)}</span>
+                      </>
+                    )}
+                  </span>
                 </span>
               </button>
               <Button
+                variant="ghost"
                 size="sm"
+                className="image-history-delete"
                 onClick={() => setPendingDelete(s)}
                 aria-label={t('images.history.delete')}
               >

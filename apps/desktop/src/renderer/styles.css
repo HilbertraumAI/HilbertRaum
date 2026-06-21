@@ -1377,23 +1377,28 @@ code, pre, kbd { font-family: var(--font-mono); }
 
 /* Image-analysis history (image-understanding history): a light text-row list under the drop
    zone — file name + question count, plus a delete that confirms via ConfirmDialog. */
-.image-history { margin-top: 24px; max-width: 640px; }
-.image-history-title { font-size: 15px; margin: 0 0 8px; }
+.image-history { margin-top: 24px; max-width: 720px; }
+.image-history-title { font-size: 15px; margin: 0 0 10px; }
 .image-history-empty { margin: 0; }
-.image-history-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.image-history-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
 .image-history-row {
   display: flex;
   align-items: center;
   gap: 8px;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  padding: 8px 10px;
+  background: var(--surface);
+  padding: 10px 12px;
+  box-shadow: var(--shadow-1);
+  transition: border-color 0.12s ease, background 0.12s ease;
 }
+.image-history-row:hover { border-color: var(--accent); }
+/* The clickable body: icon tile + (name / meta) text column. */
 .image-history-open {
   flex: 1;
   display: flex;
-  flex-direction: column;
-  gap: 2px;
+  align-items: center;
+  gap: 12px;
   background: none;
   border: none;
   text-align: left;
@@ -1401,12 +1406,30 @@ code, pre, kbd { font-family: var(--font-mono); }
   min-width: 0;
   color: inherit;
   font: inherit;
+  padding: 0;
 }
+.image-history-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
+  border-radius: var(--radius-md);
+  background: var(--surface-2);
+  color: var(--accent);
+}
+.image-history-text { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .image-history-open:hover .image-history-name { text-decoration: underline; }
 .image-history-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .image-history-meta { font-size: 12px; color: var(--text-muted); display: flex; align-items: center; gap: 6px; }
-/* The live in-flight analysis row: tinted so it reads as active, not a saved entry. */
-.image-history-row-running { border-color: var(--accent, var(--border)); background: var(--surface); }
+.image-history-dot { opacity: 0.6; }
+/* Quiet delete: a subdued ghost that turns to the error tone only on hover/focus. */
+.image-history-delete { flex-shrink: 0; color: var(--text-muted); }
+.image-history-delete:hover:not(:disabled),
+.image-history-delete:focus-visible:not(:disabled) { color: var(--error); border-color: var(--error); }
+/* The live in-flight analysis row: accent-tinted so it reads as active, not a saved entry. */
+.image-history-row-running { border-color: var(--accent); background: var(--surface-2); }
 /* Detail-view back link, above the preview. */
 .image-back { margin-bottom: 8px; padding-left: 0; }
 

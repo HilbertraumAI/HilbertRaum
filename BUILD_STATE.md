@@ -32,6 +32,14 @@ _2026-06-22 — **Image analysis survives navigation + content-free lifecycle lo
   tests (`resetVisionSessionForTests`). New i18n keys `images.drop.busy`/`images.back`/`images.history.running`/`runningOpen` (EN+DE).
   `architecture.md` image-understanding record §5 (Renderer) + §7 (privacy posture) updated._
 
+_2026-06-22 — **Images screen: Copy fix + history-row redesign (third test report).** (1) **Copy answer** did nothing — `ImagesScreen.onCopy`
+used `navigator.clipboard.writeText`, which the file://-loaded renderer denies (`clipboard-sanitized-write` permission-request WARN in the
+log). Now routes through MAIN via `window.api.copyToClipboard` (clipboard:write), exactly like `ChatScreen.onCopyMessage`. +1 regression test
+(Copy → `copyToClipboard` called with the answer text). (2) **Verlauf (history) rows redesigned** in `ImageHistory.tsx` + `styles.css`: each row
+is now a surface card (shadow, accent border on hover) with a picture-glyph icon tile, a name/meta text column (question count **·** localized
+date — `formatDate`, the count wrapped in its own span so the exact-text test still matches), and a quieter ghost **Delete** that turns to the
+error tone on hover/focus. The "Analysis running…" row reuses the same shape (accent-tinted). Full suite green — 2089 passed / 30 skipped._
+
 _2026-06-21 — **Professional Documents skills wave — Meeting Minutes upgrade + four new Tier-1 instruction skills (SKILLS-ONLY,
 no runtime/schema/tool/network change).** The bundled `app-skills/` set grew from four to **nine**, all honest, calm, document-grounded
 workflows with bilingual (EN+DE) triggers and German `localized.de` display metadata. **As built (suite green — 2083 passed / 30 skipped,

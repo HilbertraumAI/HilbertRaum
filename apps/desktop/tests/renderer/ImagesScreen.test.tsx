@@ -46,15 +46,18 @@ function streamStubs(): {
   error: { fn?: (j: ImageJob) => void }
   api: Record<string, unknown>
   cancel: ReturnType<typeof vi.fn>
+  copyToClipboard: ReturnType<typeof vi.fn>
 } {
   const token: { fn?: (t: string) => void } = {}
   const done: { fn?: (j: ImageJob) => void } = {}
   const error: { fn?: (j: ImageJob) => void } = {}
   const cancel = vi.fn(async () => ({ jobId: 'j1', state: 'cancelled' }) as ImageJob)
+  const copyToClipboard = vi.fn(async () => true)
   const api = {
     imageGetStatus: vi.fn(async () => AVAILABLE),
     imageAnalyze: vi.fn(async () => ({ jobId: 'j1', state: 'starting' }) as ImageJob),
     imageCancel: cancel,
+    copyToClipboard,
     onImageToken: vi.fn((_id: string, cb: (t: string) => void) => {
       token.fn = cb
       return () => {}
@@ -68,7 +71,7 @@ function streamStubs(): {
       return () => {}
     })
   }
-  return { token, done, error, api, cancel }
+  return { token, done, error, api, cancel, copyToClipboard }
 }
 
 /** Choose-path stubs: the picker returns a token (D2); readBytes returns bytes; decode faked. */
@@ -182,6 +185,21 @@ describe('ImagesScreen — chips + analyze streaming (§5.4/§5.5)', () => {
     expect(screen.getByText('Generated locally from the selected image.')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Copy' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument()
+  })
+
+  it('Copy uses the main-process clipboard (not navigator.clipboard, which the renderer denies)', async () => {
+    const user = userEvent.setup()
+    const s = streamStubs()
+    stubApi({ ...s.api, ...pickStubs() } as never)
+    render(<ImagesScreen onNavigate={vi.fn()} decodeImpl={fakeDecode} />)
+    await selectImageViaPicker(user)
+    await user.type(screen.getByPlaceholderText('Ask about this image…'), 'What is this?')
+    await user.click(screen.getByRole('button', { name: 'Ask' }))
+    await waitFor(() => expect(s.done.fn).toBeDefined())
+    await act(async () => s.done.fn?.({ jobId: 'j1', state: 'done', answer: 'It is a receipt.' }))
+
+    await user.click(screen.getByRole('button', { name: 'Copy' }))
+    expect(s.copyToClipboard).toHaveBeenCalledWith('It is a receipt.')
   })
 
   it('shows a friendly runtime-failure banner (never raw output)', async () => {
