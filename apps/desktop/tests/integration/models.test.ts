@@ -192,9 +192,11 @@ describe('weightPath', () => {
   })
 
   it('rejects a local_path that escapes the drive root', () => {
-    expect(() => weightPath('/drive', asManifest({ local_path: '../../etc/passwd' }))).toThrow(
-      /escapes the drive root/
-    )
+    // weightPath keeps its OWN runtime escape guard (defense in depth). validateManifest now
+    // rejects such a path up front (vuln-scan 2026-06-21), so build the manifest object
+    // directly to exercise weightPath's independent guard rather than the validation layer.
+    const escaping: ModelManifest = { ...asManifest(), localPath: '../../etc/passwd' }
+    expect(() => weightPath('/drive', escaping)).toThrow(/escapes the drive root/)
   })
 
   it('accepts a bare drive/filesystem root that already ends in a separator', () => {

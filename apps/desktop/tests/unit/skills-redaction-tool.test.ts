@@ -127,6 +127,18 @@ describe('redactText (the full deterministic pass)', () => {
     expect(twice.totalRedactions).toBe(0)
     expect(twice.text).toBe(once.text)
   })
+
+  it('ReDoS regression: a giant `a.a.a…` run is scanned linearly (no main-process freeze)', () => {
+    // vuln-scan-2026-06-21: EMAIL_RE used to backtrack quadratically (O(N²)) on a long `a.a.a.…`
+    // run with no `@` — `.` is both a `\b`-restart point and a local-part char, so every offset
+    // re-scanned the whole run. redactText joins ALL chunks into one string, so a hostile document
+    // could freeze the main process. The length-bounded class makes the scan linear.
+    const giant = 'a.'.repeat(100_000) // 200k chars, no '@' anywhere
+    const start = Date.now()
+    const { totalRedactions } = redactText(giant)
+    expect(totalRedactions).toBe(0) // nothing is a real e-mail — and importantly, fast
+    expect(Date.now() - start).toBeLessThan(1000)
+  })
 })
 
 describe('redact_document through the gate', () => {

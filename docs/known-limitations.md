@@ -93,10 +93,14 @@ password recovery — are documented in
   in-scope documents' filenames. The skill must already be **enabled by the user**, and the match runs
   only on a user action (the picker) — there is **no auto-fire** (deferred to S13). The earlier-noted
   "length-bounded matcher is future hardening" **has now shipped** (architecture.md "Skills — design
-  record" §13, S2): the parser caps each trigger entry's length (≤200) and count (≤64), and
-  `selector.globToRegExp` refuses a glob with more than 10 `*` wildcards (it counts as a non-match), so
-  a `*a*a…`-style pattern can no longer drive catastrophic backtracking on the synchronous main-side
-  scoring. The residual is therefore closed in practice.
+  record" §13, S2): the parser caps each trigger entry's length (≤200) and count (≤64). The earlier
+  guard — a regex compiled from the glob with a cap of 10 `*` wildcards — was **replaced (vuln-scan
+  2026-06-21) by a linear, non-backtracking two-pointer matcher** (`selector.globMatches`): the old cap
+  counted only `*`, so a `*?*?…` pattern (≤10 stars, `?` interleaved) still compiled to a degree-10
+  backtracking regex that could freeze the synchronous main-side scoring on a moderately-long document
+  title. The two-pointer matcher cannot backtrack at all (and no longer refuses legitimate
+  wildcard-heavy globs), so catastrophic backtracking is now **structurally impossible**, not merely
+  bounded.
 - **Document redaction is best-effort, not a privacy/compliance guarantee (Skills S11d).** The
   `document-redaction` skill's `redact_document` tool masks personal data with **deterministic,
   offline regexes only** — e-mail addresses, phone numbers, IBANs, dates, and web links. There is **no

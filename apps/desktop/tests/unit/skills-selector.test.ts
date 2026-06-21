@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
+  globMatches,
   scoreSkillTriggers,
   selectSuggestion,
   SUGGEST_SCORE_THRESHOLD,
@@ -55,19 +56,36 @@ describe('scoreSkillTriggers', () => {
     ).toBe(0)
   })
 
-  it('refuses a wildcard-heavy glob (ReDoS guard) — no match, returns quickly (S2)', () => {
-    // A `*a*a*a…` glob compiles to the catastrophic-backtracking shape; the selector refuses it
-    // (>10 wildcards) and treats it as a non-match rather than risk hanging the main process.
-    const evil = '*a'.repeat(40) // 40 wildcards, far over the cap
-    const adversarialTitle = 'a'.repeat(60) // the input that would blow up an unguarded regex
+  it('ReDoS regression: the `*?*?…#` payload over a long title returns fast and does not match', () => {
+    // The vuln-scan-2026-06-21 payload: exactly 10 `*` interleaved with `?` and a trailing literal
+    // (`#`) absent from real titles. Under the old wildcard-count cap this slipped through (the cap
+    // counted only `*`) and compiled to `.*..*..*…`, freezing the main process via degree-10
+    // polynomial backtracking on a moderately-long title. The linear matcher cannot backtrack, so it
+    // resolves the non-match in microseconds.
+    const payload = '*?'.repeat(10) + '#'
+    const adversarialTitle = '2024-Q3-Financial-Statement-ACME-Corporation.pdf' // ~48 chars, no '#'
     const start = Date.now()
-    const score = scoreSkillTriggers(triggers({ filenamePatterns: [evil] }), {
+    const score = scoreSkillTriggers(triggers({ filenamePatterns: [payload] }), {
       question: 'hello',
       docTitles: [adversarialTitle],
       docMimeTypes: []
     })
-    expect(score).toBe(0) // refused → no filename hit
-    expect(Date.now() - start).toBeLessThan(1000) // did not backtrack into a hang
+    expect(score).toBe(0) // the trailing '#' is absent from the title → no filename hit
+    expect(Date.now() - start).toBeLessThan(1000) // no catastrophic backtracking
+  })
+
+  it('a wildcard-heavy glob is now safely MATCHED (no longer refused) and returns fast', () => {
+    // The old guard refused any `*a*a…` glob with > 10 stars outright; the linear matcher makes it
+    // safe, so a legitimate wildcard-heavy pattern that genuinely matches now contributes a hit.
+    const heavy = '*a'.repeat(40) // 40 stars — far over the retired cap
+    const start = Date.now()
+    const score = scoreSkillTriggers(triggers({ filenamePatterns: [heavy] }), {
+      question: 'hello',
+      docTitles: ['a'.repeat(60)], // 60 'a's — matches `*a` × 40
+      docMimeTypes: []
+    })
+    expect(score).toBeGreaterThanOrEqual(1) // filename hit now counts (was wrongly refused before)
+    expect(Date.now() - start).toBeLessThan(1000)
   })
 
   it('still matches a normal handful-of-wildcards glob (the guard is generous)', () => {
@@ -106,5 +124,25 @@ describe('selectSuggestion', () => {
     const a: SkillCandidate = { installId: 'user:a', title: 'A', triggers: triggers({ keywords: ['x'] }) }
     const b: SkillCandidate = { installId: 'user:b', title: 'B', triggers: triggers({ keywords: ['x'] }) }
     expect(selectSuggestion([b, a], { question: 'x', ...NO_DOCS })?.installId).toBe('user:a')
+  })
+})
+
+describe('globMatches (the linear, non-backtracking glob matcher)', () => {
+  it('matches `*`/`?` with literal, full-string, case-insensitive semantics', () => {
+    expect(globMatches('*statement*', 'march-statement.pdf')).toBe(true)
+    expect(globMatches('*KONTOAUSZUG*', '2024-kontoauszug.csv')).toBe(true) // case-insensitive
+    expect(globMatches('????.pdf', 'abcd.pdf')).toBe(true) // ? = exactly one char each
+    expect(globMatches('????.pdf', 'abc.pdf')).toBe(false) // too few chars for the four '?'
+    expect(globMatches('report.pdf', 'reportXpdf')).toBe(false) // '.' is a literal, not any-char
+    expect(globMatches('*.csv', 'data.csv')).toBe(true)
+    expect(globMatches('*.csv', 'data.csv.txt')).toBe(false) // anchored at both ends
+  })
+
+  it('handles edge cases (empty, lone star) without throwing', () => {
+    expect(globMatches('*', 'anything-at-all')).toBe(true)
+    expect(globMatches('*', '')).toBe(true)
+    expect(globMatches('', '')).toBe(true)
+    expect(globMatches('', 'x')).toBe(false)
+    expect(globMatches('a*b*c', 'axxbxxc')).toBe(true)
   })
 })

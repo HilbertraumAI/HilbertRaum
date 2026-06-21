@@ -110,6 +110,18 @@ describe('extractTransactionRows', () => {
     const rows = extractTransactionRows([chunk('2026-01-02 Coffee -3,50', null)], 'EUR')
     expect(rows[0].sourcePage).toBeUndefined()
   })
+
+  it('ReDoS regression: a giant digit/separator run is scanned linearly (no main-process freeze)', () => {
+    // vuln-scan-2026-06-21: the shared MONEY_RE used to backtrack quadratically (O(N²)) on a long
+    // run of digits/separators with no valid `[.,]\d{2}` tail — a hostile statement whose chunk is
+    // one giant line could freeze the main process for seconds-to-minutes. The bounded quantifiers
+    // make the scan linear, so even a 200k-char adversarial line resolves in well under a second.
+    const giant = '2026-01-02 Payment ' + '0'.repeat(200_000) // no decimal tail anywhere
+    const start = Date.now()
+    const rows = extractTransactionRows([chunk(giant, 1)], 'EUR')
+    expect(rows).toEqual([]) // nothing parses (no valid amount) — and importantly, fast
+    expect(Date.now() - start).toBeLessThan(1000)
+  })
 })
 
 describe('extract_transactions through the gate', () => {

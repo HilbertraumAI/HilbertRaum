@@ -6,6 +6,32 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-21 — **Vuln-scan remediation, Tier 1 (true-positive security; ReDoS + extraction + manifest hardening).**
+Worked the `.deepsec/.../report.md` scan (28 findings; many scanner-confirmed false positives). This pass fixed the
+**attacker-reachable** items — the rest are triaged below. **As built (suite green — 2016 passed / 30 skipped; typecheck clean):**
+- **Parsing-DoS → made provably LINEAR (threat #1: resource exhaustion while parsing a hostile document/skill).** Three
+  synchronous main-process regexes backtracked super-linearly: `skills/tools/money.ts` `MONEY_RE` (shared by bank-statement +
+  invoice; `\d[\d.,]*` → bounded `\d[\d.,]{0,30}`, and `\s*`→`\s{0,4}`), `skills/tools/redaction.ts` `EMAIL_RE`
+  (local/domain bounded to RFC 64/255), and `skills/selector.ts` (glob→RegExp **replaced** by a linear two-pointer
+  `globMatches` — the old `*`-only wildcard cap let `*?*?…` through). Token/parse behaviour unchanged for realistic input;
+  added 200k-char "< 1 s" regression tests to bank-statement/redaction/selector suites.
+- **Engine extractor pins an ABSOLUTE `tar`** (`runtime-download.ts` `resolveTarBinary`) — a bare `spawn('tar')` let a
+  CWD-planted `tar.exe` hijack the interpreter on Windows ([rce]). Falls back to the bare name only on an exotic host; spawns
+  with a controlled `cwd`. New `resolveTarBinary` unit tests (win/posix/fallback).
+- **Hostile manifest can no longer break the whole Models list** — `validateManifest` now rejects an absolute/`..`
+  `local_path`/`mmproj.local_path` (so `discoverManifests` records+skips it), AND `buildModelList`'s loop wraps
+  `computeInstallState` in try/catch (one bad manifest → an errored entry, not a dead Models screen). `weightPath` keeps its own
+  runtime guard. Tests added to `manifest.test.ts`; `models.test.ts` weightPath-guard test rebuilt to bypass validation.
+**DEFERRED (documented, not fixed):** the sidecar **re-hash-before-spawn** TOCTOU (`llama-server`/`whisper-cli`/GPU probe) —
+no per-binary hash is recorded today (marker has version/backend only), it needs cross-language script sync, and a non-breaking
+"verify-when-present" rollout; design + rollout written into `security-model.md` ("Open item: re-hash sidecar binaries before
+spawn"). Other lower-tier items (importDocuments/imageReadBytes renderer-path trust, downloadToFile redirect SSRF, vision
+job-map residue/leak, decompression-bomb dimension cap, and the 8 robustness BUGs) remain open per the user's "Tier 1 first" scope.
+**Docs:** `security-model.md` gains four §-sections (parsing-DoS, absolute-`tar`, manifest-list, the deferred re-hash design);
+`known-limitations.md` glob-ReDoS note updated (linear matcher, not a wildcard cap). **Verification:** `npm test` 2016 passed /
+30 skipped; `npm run typecheck` clean.
+**(prior V8 entry below.)**_
+
 _2026-06-20 — **Image-understanding V8 — answer markdown FIXED + encrypted, deletable analysis HISTORY added (user-requested).**
 Two user-reported gaps on the Images screen. **(1) Formatting:** the streamed answer rendered raw markdown (literal `**bold**`, `1.`
 lists). `AnswerThread` now renders through the SAME shared `AssistantMarkdown` (`react-markdown` + `remark-gfm`) Chat/Documents use — the

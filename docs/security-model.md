@@ -465,7 +465,9 @@ under `<root>/user-skills/<id>/` (revised plan §0). So the importer cannot lean
 machinery: the only other archive→disk path in the app is the validation-blind shell-tar extractor
 used for runtime downloads, whose safety rests on the archive being **SHA-verified against an
 app-controlled source list first** — the opposite trust model. A `.skill.zip` must **never** be
-routed through it (asserted by a test that greps the installer source).
+routed through it (asserted by a test that greps the installer source). (That extractor now also
+resolves `tar` to an **absolute** OS path — see "Engine extraction pins an absolute `tar`" below — so
+a `tar.exe` planted in the process CWD cannot hijack the interpreter.)
 
 `services/skills/installer.ts` therefore ships a **net-new, dependency-free, member-by-member
 extractor** built on Node's built-in `node:zlib` + a hand-rolled zip central-directory parser (the
@@ -681,8 +683,77 @@ localization fixes added no content to any log/audit and no new capability.
 ignore + log), and `isDev` is threaded through the runtime / embedder / reranker / transcriber
 factories and the benchmark probe. In a packaged build the override is ignored and resolution falls
 back to the on-drive `runtime/<family>/<os>/` location, so process environment alone cannot make the
-app spawn an arbitrary binary. (Hash-verifying the on-drive sidecar against `runtime-sources.yaml`
-before spawn remains a possible future hardening; today trust rests on drive provisioning.)
+app spawn an arbitrary binary. (Hash-verifying the on-drive sidecar **before spawn** remains a
+possible future hardening; today trust rests on drive provisioning — see the design + rollout note in
+"Open item: re-hash sidecar binaries before spawn" below.)
+
+## Parsing-DoS hardening — the content tools' regexes are now linear (vuln-scan 2026-06-21)
+
+The #1 attacker goal in this app's threat model is **resource exhaustion while parsing a hostile
+document** (or an enabled, attacker-authored `.skill.zip`). A vuln scan found three regexes that
+backtracked **super-linearly** on adversarial input and ran **synchronously on the main process**, so
+a single crafted document/skill could freeze the whole app. All three were made **provably linear** by
+bounding their quantifiers (the accepted token set is unchanged for every realistic input; the unit
+suites pin the parse behaviour, and each carries a 200k-char "returns in < 1 s" regression test):
+
+- **`skills/tools/money.ts` `MONEY_RE`** (shared by the bank-statement + invoice extractors) — the
+  unbounded `\s*\d[\d.,]*` backtracked O(N²) on a long digit/separator run with no decimal tail. Now
+  `\s{0,4}\d[\d.,]{0,30}[.,]\d{2}` — a 30-char integer/grouping bound is ~10²³, far beyond any printed
+  amount, so each match attempt is O(1) and the global scan is O(N).
+- **`skills/tools/redaction.ts` `EMAIL_RE`** — the unbounded local-part/domain runs backtracked O(N²)
+  on a long `a.a.a.…` string (no `@`). Now length-bounded to the RFC limits (local ≤ 64, domain ≤ 255).
+- **`skills/selector.ts`** — the glob→RegExp compile is replaced by a **linear two-pointer matcher**
+  (see the known-limitations note); a `*?*?…` trigger pattern can no longer backtrack.
+
+These are DoS (polynomial, never RCE) and are local-only, but the project treats main-process freezes
+from hostile content as in-scope, so the hardening is principled (linearize the algorithm) rather than
+a length cap that would silently drop legitimate content.
+
+## Engine extraction pins an absolute `tar` (vuln-scan 2026-06-21)
+
+The in-app engine installer's default extractor used `spawn('tar', …)` with a **bare** command name.
+On Windows, libuv resolves a separator-less command against the process **current directory before**
+System32/PATH, so a `tar.exe` planted in an attacker-influenced CWD (plausible for a portable-drive
+app) would execute in our place with the main process's privileges on an engine install — and the
+archive SHA-256 protects the *contents*, not the *interpreter*. `runtime-download.ts` now resolves
+`tar` to its **absolute OS location** (`%SystemRoot%\System32\tar.exe`, `/usr/bin/tar`, `/bin/tar`)
+via `resolveTarBinary`, falling back to the bare name only when none exist (an exotic host), and spawns
+with a controlled `cwd`. Mirrors the absolute-path discipline already used for the sidecar spawns.
+
+## Hostile model manifests can't break the whole Models list (vuln-scan 2026-06-21)
+
+`model-manifests/` is user-writable (the threat model's #1 attacker surface). A manifest with an
+escaping `local_path` (e.g. `../../../../etc/passwd`) passed `validateManifest` (which only checked
+non-empty) and was caught later by `safeDrivePath`'s **throw** — but that throw was unhandled on the
+`IPC.listModels` path, so **one** bad manifest errored the entire Models screen. Two defenses now:
+**(1)** `validateManifest` rejects any `local_path`/`mmproj.local_path` that is absolute (leading `/`,
+a `C:`-style drive letter, a UNC root) or contains a `..` segment, so `discoverManifests` records it in
+`errors` and **skips** it (the rest of the list still renders); **(2)** `buildModelList`'s per-manifest
+loop wraps `computeInstallState` in try/catch, so any manifest that still throws becomes an errored
+entry rather than failing the whole list — mirroring the existing `pendingHashBytes` pre-pass.
+`weightPath`/`safeDrivePath` keep their own runtime escape guard (defense in depth).
+
+## Open item: re-hash sidecar binaries before spawn (vuln-scan 2026-06-21, DEFERRED)
+
+The scan re-raised the tracked TOCTOU on `llama-server` / `whisper-cli` / the `--list-devices` GPU
+probe: each binary is SHA-256-verified at **download/install** time but **not re-hashed immediately
+before `spawn`**, so a local adversary who can overwrite `runtime/<family>/<os>/<bin>` between install
+and the next launch gets code execution at the app's privileges. This is a real deviation from the
+stated re-hash-before-exec policy, but it is **deferred, not fixed**, because a safe implementation is a
+cross-cutting, startup-critical change that must not be rushed:
+- **No expected binary hash is recorded today.** The runtime manifest carries the **archive** hash; the
+  install marker (`.hilbertraum-runtime.json`) records `version/backend/os/arch` only. Re-verification
+  requires first **recording the extracted binary's own SHA-256** in the marker at install time.
+- **Cross-language sync.** The DIY `fetch-runtime.{ps1,sh}` scripts and the commercial pipeline write
+  the same marker; they must record the binary hash too, or script-provisioned (i.e. shipped) drives
+  get **zero** protection until rebuilt.
+- **Non-breaking rollout.** Existing drives have no binary hash, so enforcement must be **"verify when a
+  hash is present, in packaged builds; skip+log in dev; tolerate a legacy marker"** — otherwise every
+  current drive would refuse to start. A bug in this gate would spuriously drop a legitimate drive to
+  MockRuntime, so it warrants dedicated design + tests rather than a Tier-1 batch edit.
+
+Until then, trust rests on drive provisioning + filesystem integrity (and the report notes an attacker
+with write access to the runtime dir can usually also tamper the app's own Electron code).
 
 ## Out of scope (MVP)
 - OS-level firewall enforcement (offline is by design + policy/UX, not a hard network block).
