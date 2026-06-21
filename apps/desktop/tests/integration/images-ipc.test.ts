@@ -209,10 +209,11 @@ describe('registerImagesIpc — analyze job contract', () => {
     expect(cancelled.state).toBe('cancelled')
   })
 
-  // V4 lock/quit teardown mechanism: service.stop() aborts any in-flight job (so it ends
-  // `cancelled`, not a scary `runtimeFailed`) AND tears the runtime down so a fresh analyze
-  // cold-starts. This is exactly what registerWorkspaceIpc (lock) + will-quit call.
-  it('stop() aborts the in-flight job and tears down the runtime (lock/quit path)', async () => {
+  // V4 lock/quit teardown mechanism: service.stop() aborts any in-flight job AND tears the
+  // runtime down so a fresh analyze cold-starts. Since vuln-scan-2026-06-21 it ALSO purges the
+  // job map (no answer residue survives lock), so a job is no longer queryable after stop().
+  // This is exactly what registerWorkspaceIpc (lock) + will-quit call.
+  it('stop() aborts the in-flight job, tears down the runtime, and purges the job map (lock/quit path)', async () => {
     let runtimeStopped = false
     let sawSignal: AbortSignal | undefined
     const analyzer = {
@@ -239,8 +240,11 @@ describe('registerImagesIpc — analyze job contract', () => {
     await service.stop()
     expect(runtimeStopped).toBe(true)
     expect(sawSignal?.aborted).toBe(true)
-    const terminal = await waitForTerminal(job.jobId)
-    expect(terminal.state).toBe('cancelled')
+    // The in-flight analyze was aborted, and stop() purged the job map — so the job is no longer
+    // queryable (unknown ⇒ failed) and no answer text lingers past the lock.
+    const purged = (await invoke(handlers, IPC.imageGetJob, job.jobId)).result as ImageJob
+    expect(purged.state).toBe('failed')
+    expect(purged.answer).toBeUndefined()
   })
 })
 
