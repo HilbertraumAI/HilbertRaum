@@ -244,7 +244,7 @@ ai_drive/
 │  └─ src/main/services # chat, rag, embeddings, reranker, vision, ocr, skills, …
 ├─ docs/                # architecture, rag, security, packaging, … (see above)
 ├─ model-manifests/     # per-model YAML (chat, embeddings, reranker, transcriber, vision)
-├─ app-skills/          # bundled skills (bank-statement, invoice, meeting-protocol, redaction)
+├─ app-skills/          # bundled skills (bank-statement, invoice, redaction + Professional Documents: meeting-minutes, contract-brief, deadlines, what-changed, share-safe)
 ├─ scripts/             # prepare-drive / fetch-models / fetch-runtime / verify-models / …
 ├─ launchers/           # double-click launcher templates for a prepared drive
 └─ eval/                # retrieval/quality evaluation fixtures

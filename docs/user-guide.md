@@ -529,6 +529,28 @@ secrets** — they're plain files on the drive, they never call a model or the i
 and like everything else they stay on the drive. The app ships with a few built-in skills, and you
 can add your own.
 
+### Professional Documents
+
+A set of built-in skills for everyday document work. They're calm, structured workflows — they read
+only the documents you pick, ground their answers in what the text actually says, cite where they
+found things, and stay honest when something isn't there. None of them give legal advice or promise
+compliance.
+
+- **Meeting Minutes** (*Besprechungsprotokoll*) — turns a transcript, rough notes, or an agenda into
+  clean minutes: summary, decisions, action items with owners and deadlines, open questions, and a
+  polished formal version.
+- **Contract Brief** (*Vertragsübersicht*) — a plain-language brief of a contract: parties, key
+  dates, obligations, payment and termination terms, risk clauses, and questions to ask before
+  signing. Not legal advice.
+- **Deadline & Obligation Finder** (*Fristen & Pflichten*) — pulls out deadlines, notice periods,
+  renewal and payment dates, and obligations: what to do, by when, and what happens if you miss it.
+- **What Changed?** (*Was hat sich geändert?*) — compares two versions of a document and highlights
+  the changes that matter, in business language. Pick exactly two documents or versions.
+- **Share-Safe Review** (*Sicher teilen prüfen*) — reviews a document before you share it, flagging
+  visible sensitive information and practical risks. Advisory only: it warns that files can hold
+  hidden metadata and that scans/images may need a separate look, and it can point you to the
+  Document Redaction skill — it never claims a document is anonymized or safe to publish.
+
 ### Pick a skill for an answer
 
 Under the message box there's a quiet **Skill:** picker. Choose a skill and it shapes your **next

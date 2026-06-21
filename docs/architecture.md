@@ -1796,12 +1796,18 @@ provisioning…", "Skill tool ceiling (Tier-2)"), the **drive layout** in
   per-conversation default (`conversations.active_skill_id`); the per-message glyph marks the answer it
   shaped. Auto-fire is deferred to **S13**, gated on an evaluation harness.
 - **DS17** — app skills are committed to the repo (`app-skills/`, text only) and copied by
-  `prepare-drive` — never network-fetched. **Three** bundled app skills now ship:
-  **`bank-statement`** is the first **Tier-2** reference (`kind: tool`, app-orchestrated tools through
-  the §7 gate), **`meeting-protocol`** is the **Tier-1** reference (`kind: instruction`,
-  `allowedTools` empty / `reservesTools` false — it only injects fenced guidance), and **`invoice`** is
-  the **second Tier-2** reference (`kind: tool`), proving the gate generalizes to a second content
-  class. meeting-protocol and invoice are both **bilingual-trigger** references: their
+  `prepare-drive` — never network-fetched. **Nine** bundled app skills now ship. Three are **Tier-2**
+  tool references — **`bank-statement`** (the first, `kind: tool`, app-orchestrated tools through the
+  §7 gate), **`invoice`** (the second Tier-2, proving the gate generalizes to a second content class),
+  and **`document-redaction`** (read-transform-export). The rest are **Tier-1 instruction** skills
+  (`kind: instruction`, `allowedTools` empty / `reservesTools` false — they only inject fenced
+  guidance): **`meeting-protocol`** (titled *Meeting Minutes*, the Tier-1 reference) plus the
+  **Professional Documents** wave — **`contract-brief`**, **`deadline-obligation-finder`**,
+  **`what-changed`**, and **`share-safe-review`** (advisory; it points at the redaction *tool* but
+  declares none and creates nothing). The Professional Documents skills are honest by construction:
+  no legal/compliance certainty, no "fully anonymized" claim, and "ask exactly two documents" /
+  "this is not a complete compliance calendar" guards where coverage is partial. meeting-protocol and
+  invoice are both **bilingual-trigger** references: their
   `triggers.keywords` carry German and English terms, with umlaut/ending singular-plural pairs listed
   separately (`beschluss`/`beschlüsse`, `rechnung`/`rechnungen`) because §6 matching is case-insensitive
   *substring* (`question.includes`), so an ending/umlaut breaks the substring and each form must appear

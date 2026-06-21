@@ -1,14 +1,14 @@
 ---
 id: meeting-protocol
-title: Meeting Protocol
-description: Use when the user shares meeting notes or a transcript and wants a structured protocol — decisions, action items, and open questions.
-version: 1.0.0
+title: Meeting Minutes
+description: Use when the user shares a meeting transcript, rough notes, or agenda and wants clean, structured minutes — decisions, action items, and open questions.
+version: 1.1.0
 author: HilbertRaum
 language: en
 localized:                     # Per-locale DISPLAY overrides for title/description (additive; §16).
   de:                          #   Shown when the app runs in German; the guidance body stays English.
     title: Besprechungsprotokoll
-    description: Verwenden, wenn aus Besprechungsnotizen oder einem Transkript ein strukturiertes Protokoll erstellt werden soll – Beschlüsse, Aufgaben und offene Fragen.
+    description: Verwenden, wenn aus einem Besprechungstranskript, Notizen oder einer Tagesordnung ein sauberes, strukturiertes Protokoll entstehen soll – Beschlüsse, Aufgaben und offene Fragen.
 kind: instruction
 compatibility:
   minAppVersion: 0.1.29
@@ -16,40 +16,73 @@ permissions:
   documents: selected_only
   network: denied
   filesystem: skill_resources_only
-triggers:
-  keywords: [meeting, meeting notes, minutes, protocol, agenda, action item, action items,
-             besprechung, besprechungsprotokoll, protokoll, sitzung, sitzungsprotokoll,
-             notizen, tagesordnung, beschluss, beschlüsse, aufgabe, aufgaben]
+triggers:                      # OPTIONAL — drives the deterministic suggestion heuristic (§10).
+  # Bilingual + full words only: matching is case-insensitive question.includes(keyword). German
+  # umlaut/ending pairs are listed separately (beschluss/beschlüsse); short ambiguous tokens avoided.
+  keywords: [meeting minutes, meeting notes, meeting protocol, meeting transcript, meeting,
+             action item, action items, decisions made, formal minutes, write minutes,
+             summarize meeting, minutes from this meeting, minutes, protocol, agenda,
+             besprechungsprotokoll, sitzungsprotokoll, meetingprotokoll, gesprächsprotokoll,
+             protokoll, besprechung, sitzung, notizen, tagesordnung, aktionspunkte,
+             aufgabe, aufgaben, beschluss, beschlüsse, entscheidungen, offene punkte,
+             zusammenfassung der besprechung]
   mimeTypes: [text/plain, text/markdown, application/pdf]
-  filenamePatterns: ["*protokoll*", "*minutes*", "*meeting*", "*besprechung*", "*sitzung*"]
+  filenamePatterns: ["*meeting*", "*minutes*", "*transcript*", "*protokoll*", "*besprechung*", "*sitzung*"]
 ---
 
-# Meeting Protocol
+# Meeting Minutes
 
-Use this skill when the user shares meeting notes, a transcript, or a recording summary and
-wants it turned into a clean, structured protocol.
+Use this skill when the user shares a meeting transcript, rough notes, an agenda, or an audio
+transcript and wants professional meeting minutes. Work **only** from the selected material — never
+add facts, names, dates, or decisions the source does not contain.
 
-Read only the documents the user has selected for this turn, and produce the protocol in this
-order. Omit a section entirely if the source genuinely contains nothing for it — never pad it
-with a guess.
+Produce the minutes in this order. Omit a section only if the source genuinely has nothing for it;
+never pad it with a guess.
 
-1. **Header** — meeting title, date, and attendees, exactly as written in the source.
-2. **Decisions** — each decision as a single clear statement. Where the notes attribute a
-   decision to a person or a vote, keep that attribution.
-3. **Action items** — one per line as *owner → task → due date*. If an owner or a date is not
-   stated, write "owner: not stated" / "due: not stated" rather than inventing one.
-4. **Open questions** — anything raised but left unresolved.
-5. **Notes** — any remaining context worth keeping, kept brief.
+## 1. Short summary
+2–5 factual bullets. No invented decisions.
 
-Hold to these rules:
+## 2. Meeting context
+Only items present in the source — date/time, attendees, organization/project, meeting purpose.
+Write "Not stated" for anything absent.
 
-- **Work only from the selected documents.** Do not add facts, names, dates, or decisions that
-  the notes do not contain. A detail you would have to assume is not a detail the meeting recorded.
-- **Quote wording that carries weight** (a decision, a commitment, a deadline) close to how it
-  was written, so the user can verify it against the original.
+## 3. Topics discussed
+Grouped by topic, concise.
+
+## 4. Decisions made
+| Decision | Decided by / owner | Details | Source |
+If no decision is explicit, write "No explicit decisions found in the provided material."
+
+## 5. Action items
+| Task | Owner | Deadline | Status / dependency | Source |
+- Owner must be explicitly stated, else "Not stated"; same for the deadline.
+- Do not turn a general idea into an action item unless the source clearly assigns an action.
+- "We should maybe…" is an open question or a proposal, not an action item.
+
+## 6. Open questions
+Unresolved questions, parking-lot items, missing decisions.
+
+## 7. Risks / follow-ups
+Only source-grounded concerns.
+
+## 8. Formal minutes version
+A polished version that can be pasted into an email or record.
+
+**Formal motions/votes.** If — and only if — the source uses formal motion language, record for each
+motion: the motion text; the mover and seconder if stated; the result (passed / failed / tabled /
+referred / postponed / unknown); and the vote tally if stated. A motion is distinct from general
+discussion and is normally disposed of as passed, defeated, tabled, referred, or postponed. Never
+invent parliamentary detail the source does not contain.
+
+**Honesty rules**
+
 - **Separate what was decided from what was merely discussed.** If the notes are ambiguous about
   whether something was agreed, say so plainly instead of resolving it yourself.
-- **Keep every date, name, and figure exactly as printed**, including the date format.
+- Do not infer attendees from first names unless they are clearly attendees; do not infer deadlines;
+  do not infer agreement from silence.
+- Keep every date, name, and figure exactly as printed, including the date format, and quote wording
+  that carries weight (a decision, a commitment, a deadline) close to the original so the user can
+  verify it. Cite the source for document-grounded items.
 
-Answer in the user's language. If the meeting notes are in German, write the protocol in German
-(Beschlüsse, Aufgaben, offene Fragen); if in English, write it in English.
+Answer in the user's language: German notes → German minutes (Beschlüsse, Aufgaben, offene Fragen);
+English notes → English minutes.

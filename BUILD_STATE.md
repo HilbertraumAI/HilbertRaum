@@ -6,6 +6,40 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-21 — **Professional Documents skills wave — Meeting Minutes upgrade + four new Tier-1 instruction skills (SKILLS-ONLY,
+no runtime/schema/tool/network change).** The bundled `app-skills/` set grew from four to **nine**, all honest, calm, document-grounded
+workflows with bilingual (EN+DE) triggers and German `localized.de` display metadata. **As built (suite green — 2083 passed / 30 skipped,
++19 tests; typecheck clean):**
+- **`meeting-protocol` upgraded in place → titled *Meeting Minutes* (id UNCHANGED for backward compat; version 1.0.0 → 1.1.0).**
+  Expanded the instruction body to the 8-section structure (summary · context · topics · decisions table · action-items table · open
+  questions · risks · formal version), added formal-motion/vote handling (only when the source uses motion language), and broadened the
+  bilingual keyword set. Kept the "Separate what was decided from what was merely discussed" line the existing integration test pins.
+- **Four NEW Tier-1 instruction skills** (`kind: instruction`, `allowedTools: []`, `reservesTools: false`, v1 permission ceiling):
+  `contract-brief` (Vertragsübersicht — plain-language brief, explicitly *not* legal advice), `deadline-obligation-finder`
+  (Fristen & Pflichten — deadlines/obligations, "not a complete compliance calendar"), `what-changed` (Was hat sich geändert? — version
+  compare, "select exactly two documents"), `share-safe-review` (Sicher teilen prüfen — advisory pre-share review; warns about hidden
+  metadata + scans/OCR, points at the redaction *tool* but declares no tool and creates nothing; never "fully anonymized"/GDPR claims).
+- **Trigger precision.** High-precision, multi-word bilingual keywords + umlaut/plural pairs; the pure redaction verbs
+  (anonymize/schwärzen/redact) are deliberately LEFT to `document-redaction` so an "anonymize this" turn still suggests the redaction
+  tool, not the share-safe advisory. No cross-fire (meeting/invoice questions never suggest contract review). **Post-audit fixes:**
+  dropped the deadline keyword `termine` (substring-matches the common English word "deter**mine**") and tightened `what-changed`'s
+  filename patterns to version-markers only (`*redline*`, `*-v1*`, `*_v2*`, `*draft*`, …) — the bare generics `*final*`/`*new*`/`*old*`/
+  `*version*` cleared the mime+filename suggest bar on very common unrelated files. Added the deadline stem `frist` (covers
+  `befristet`/`fristlos`/`Fristverlängerung` and tips the `kündigungsfrist` tie from Contract Brief → Deadline finder). Kept contract's
+  `agb` keyword (rare "Schlagball" collision, accepted like the pre-existing `bill`/"Bill" precision ceiling in the S13a corpus). +3
+  regression tests (Kündigungsfrist→deadline; tightened what-changed filenames don't auto-fire on `final-report.pdf`; version-marked
+  file still offers something) — suite now +22 tests overall. The S13a auto-fire eval
+  harness loads only the original four candidates, so its threshold-3 100%-precision gate is unaffected; the expanded meeting keywords add
+  no ≥3 wrong fire on the corpus.
+- **Tests:** new `skills-professional-documents.test.ts` (19 tests): all five parse as valid bundled skills, the four new ones are
+  instruction/no-tools/German-localized, `meeting-protocol` id stays stable + title is *Meeting Minutes*, EN+DE triggers fire the right
+  skill on the REAL selector, redaction request still → `document-redaction`, neutral/ambiguous inputs fire nothing. Existing
+  `skills-meeting-protocol` / `skills-suggest` / `skill-triggers` (eval gate) stay green.
+- **Docs:** `user-guide.md` §9 gained a "Professional Documents" subsection; `architecture.md` DS17 + `drive-layout.md` skills note now
+  say nine bundled skills; `README.md` tree comment updated. **Caveat/follow-up:** these are SUGGEST-only (no `autoFire` opt-in — only
+  `document-redaction` declares it); the auto-fire eval corpus + `APP_SKILL_IDS` still cover only the original four, so the new skills'
+  suggestion precision is asserted by the new targeted tests, not the synthetic corpus sweep._
+
 _2026-06-21 — **Vuln-scan remediation — item B: re-hash sidecar binaries before spawn (the LAST open finding; scan now FULLY
 remediated).** The tracked TOCTOU (= audit-2026-06-14 "engine-binary not re-hashed before spawn"): `llama-server` / `whisper-cli` /
 the `--list-devices` GPU probe were SHA-256-verified at install but NOT re-hashed before `spawn`, so a local adversary overwriting
