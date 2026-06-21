@@ -456,12 +456,40 @@ export function stageRekey(vaultPaths: VaultPaths, db: Db, oldKey: Buffer, dataK
  * Phase 2 (after the descriptor commit): swap every staged file in — shred the old
  * ciphertext (its key may be a compromised password's), rename `.new` into place.
  * Idempotent: already-swapped files have no `.new` left, so crash-and-rerun completes.
+ *
+ * Best-effort + one retry pass (BUG vuln-scan-2026-06-21): a transient failure on ONE sidecar
+ * (e.g. a momentarily locked file on Windows) must NOT abandon the remaining swaps. The old
+ * code threw on the first failure, leaving every later sidecar under the RETIRED key while the
+ * controller had already swapped the in-memory key to the new one — so many documents (not just
+ * the locked one) decrypted to a GCM-tag failure until `recoverPendingRekey` finished them on the
+ * next unlock. We now attempt all files, retry the stragglers once, and only then throw — so at
+ * most a genuinely-stuck file is deferred to recovery, never the whole tail of the list.
  */
 export function applyPendingRekey(vaultPaths: VaultPaths): void {
-  for (const staged of stagedRekeyFiles(vaultPaths)) {
+  const swapOne = (staged: string): void => {
     const target = staged.slice(0, -REKEY_SUFFIX.length)
     shredFile(target)
     renameSync(staged, target)
+  }
+  let pending = stagedRekeyFiles(vaultPaths)
+  let lastErr: unknown = null
+  for (let attempt = 0; attempt < 2 && pending.length > 0; attempt++) {
+    const failed: string[] = []
+    for (const staged of pending) {
+      try {
+        swapOne(staged)
+      } catch (err) {
+        lastErr = err
+        failed.push(staged)
+      }
+    }
+    pending = failed
+  }
+  // Anything still unswapped (a persistently locked file) is left staged for recoverPendingRekey
+  // on the next unlock; surface the failure so the caller logs it (the swap is old-or-new per
+  // file, never mixed within a file).
+  if (pending.length > 0) {
+    throw lastErr instanceof Error ? lastErr : new Error('applyPendingRekey: incomplete swap')
   }
 }
 
@@ -906,9 +934,10 @@ export class WorkspaceController {
         try {
           applyPendingRekey(this.vaultPaths)
         } catch {
-          // Not fatal post-commit (e.g. a transiently locked file on Windows): any
-          // staged file left behind rolls forward via recoverPendingRekey on the next
-          // startup/unlock — the journal guarantees old-or-new, never mixed.
+          // Not fatal post-commit: applyPendingRekey is now best-effort + retry, so it throws
+          // only when a file stays persistently locked (e.g. on Windows) AFTER swapping every
+          // other sidecar. That lone file rolls forward via recoverPendingRekey on the next
+          // startup/unlock — the journal guarantees old-or-new per file, never mixed.
         }
       }
       return this.getState()

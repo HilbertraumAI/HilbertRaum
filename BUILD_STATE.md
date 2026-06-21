@@ -33,7 +33,15 @@ not an attacker-reachable vulnerability; fixed as small coherent commits with re
   `starting` latch set right after the guard and cleared in a `finally` (by which point `this.active` is set), so the second
   invoke rejects with `alreadyRunning`. Verified before/never-trust boundary is untouched (the garbled `.part` still fails SHA-256).
   Test: two un-awaited `start()`s in one tick — the second rejects, exactly one active job remains.
-**STILL OPEN in option C:** workspace-vault partial `applyPendingRekey`.
+- **`workspace-vault.ts` `applyPendingRekey` partial-failure resilience (BUG).** Post-commit (the in-memory key already swapped
+  to the new data key), the swap loop threw on the FIRST sidecar rename failure (e.g. a transiently locked file on Windows),
+  abandoning every LATER staged sidecar under the RETIRED key → many documents decrypted to a GCM-tag failure mid-session until
+  `recoverPendingRekey` finished them on the next unlock. Now best-effort + one retry pass: attempt all files, retry the
+  stragglers, and only then throw — so at most a genuinely-stuck file is deferred to recovery, never the whole tail. Idempotent /
+  crash-safe contract unchanged. Test: a staged sidecar whose target is a non-empty dir (forced rename failure) — the other
+  sidecars still swap; the stuck one stays staged.
+**OPTION C COMPLETE** — all 7 remaining robustness BUGs fixed (the 8th, malformed-manifest list crash, closed in Tier 1).
+**NEXT (asked of user):** B sidecar re-hash-before-spawn / D defense-in-depth gaps.
 **(Tier-2 HIGH_BUG entry below; Tier-1 entry under that.)**_
 
 _2026-06-21 — **Vuln-scan remediation, Tier 2 — the HIGH_BUG: summary-tree build could loop forever / block the doc-task queue.**

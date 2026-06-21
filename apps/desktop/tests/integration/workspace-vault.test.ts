@@ -18,6 +18,8 @@ import {
   encryptFile,
   decryptFile,
   shredFile,
+  applyPendingRekey,
+  REKEY_SUFFIX,
   WorkspaceController,
   WrongPasswordError,
   type VaultPaths
@@ -372,6 +374,35 @@ describe('WorkspaceController', () => {
     expect(existsSync(join(imagesDir, 'img2.read-1234.tmp'))).toBe(false)
     expect(existsSync(join(docsDir, 'doc1.pdf.enc'))).toBe(true)
     expect(existsSync(join(imagesDir, 'img1.png.enc'))).toBe(true)
+  })
+
+  it('applyPendingRekey swaps every swappable sidecar even when one is stuck (BUG vuln-scan-2026-06-21)', () => {
+    const vp = freshVault()
+    const docsDir = join(dirname(vp.dbPath), 'documents')
+    mkdirSync(docsDir, { recursive: true })
+    // Two normal staged sidecars: target = old ciphertext, `.new` = the freshly re-keyed one.
+    writeFileSync(join(docsDir, `a.enc`), 'OLD-A')
+    writeFileSync(join(docsDir, `a.enc${REKEY_SUFFIX}`), 'NEW-A')
+    writeFileSync(join(docsDir, `c.enc`), 'OLD-C')
+    writeFileSync(join(docsDir, `c.enc${REKEY_SUFFIX}`), 'NEW-C')
+    // A staged sidecar whose target is a NON-EMPTY DIRECTORY ⇒ renameSync fails for THIS file
+    // only (shredFile's non-recursive rmSync can't remove a non-empty dir either). Simulates a
+    // persistently locked/unswappable file mid-rekey.
+    mkdirSync(join(docsDir, `bad.enc`))
+    writeFileSync(join(docsDir, `bad.enc`, 'keep'), 'x')
+    writeFileSync(join(docsDir, `bad.enc${REKEY_SUFFIX}`), 'NEW-BAD')
+
+    // It surfaces the incomplete swap (the caller logs/recovers) …
+    expect(() => applyPendingRekey(vp)).toThrow()
+
+    // … but the swappable sidecars completed — the old code abandoned them after the first
+    // failure, leaving them under the retired key (transiently undecryptable mid-session).
+    expect(readFileSync(join(docsDir, `a.enc`), 'utf8')).toBe('NEW-A')
+    expect(existsSync(join(docsDir, `a.enc${REKEY_SUFFIX}`))).toBe(false)
+    expect(readFileSync(join(docsDir, `c.enc`), 'utf8')).toBe('NEW-C')
+    expect(existsSync(join(docsDir, `c.enc${REKEY_SUFFIX}`))).toBe(false)
+    // The stuck file stays staged for recoverPendingRekey on the next unlock (old-or-new, never mixed).
+    expect(existsSync(join(docsDir, `bad.enc${REKEY_SUFFIX}`))).toBe(true)
   })
 })
 
