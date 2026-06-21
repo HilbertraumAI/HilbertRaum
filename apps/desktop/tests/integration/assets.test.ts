@@ -346,6 +346,36 @@ describe('runtime install marker (.hilbertraum-runtime.json, Phase 14)', () => {
     })
   })
 
+  it('round-trips a marker WITH per-binary hashes (vuln-scan B)', () => {
+    const root = tempDir('hilbertraum-marker-')
+    writeRuntimeMarker(root, {
+      version: 'b9585',
+      backend: 'vulkan',
+      os: 'win',
+      arch: 'x64',
+      binaries: { 'llama-server.exe': 'a'.repeat(64), 'cpu/llama-server.exe': 'b'.repeat(64) }
+    })
+    expect(readRuntimeMarker(root)?.binaries).toEqual({
+      'llama-server.exe': 'a'.repeat(64),
+      'cpu/llama-server.exe': 'b'.repeat(64)
+    })
+  })
+
+  it('readRuntimeMarker drops a malformed `binaries` field (tamper-tolerant)', () => {
+    const root = tempDir('hilbertraum-marker-')
+    // Non-string values are dropped; an all-bad map leaves `binaries` absent entirely.
+    writeFileSync(
+      runtimeMarkerPath(root),
+      JSON.stringify({ version: 'b9585', backend: 'cpu', os: 'win', arch: 'x64', binaries: { x: 5, y: 'ok' } })
+    )
+    expect(readRuntimeMarker(root)?.binaries).toEqual({ y: 'ok' })
+    writeFileSync(
+      runtimeMarkerPath(root),
+      JSON.stringify({ version: 'b9585', backend: 'cpu', os: 'win', arch: 'x64', binaries: ['not', 'a', 'map'] })
+    )
+    expect(readRuntimeMarker(root)?.binaries).toBeUndefined()
+  })
+
   it('readRuntimeMarker never throws: missing or malformed → null', () => {
     const root = tempDir('hilbertraum-marker-')
     expect(readRuntimeMarker(root)).toBeNull()

@@ -43,6 +43,7 @@ import { resolveManifestsDir } from './services/models'
 import { resolveAppSkillsDir, resolveUserSkillsDir } from './services/drive'
 import { createSkillRegistry } from './services/skills/registry'
 import { composeServices } from './services/compose-services'
+import { initBinaryVerification } from './services/binary-verifier'
 import type { AppContext } from './services/context'
 
 // HilbertRaum — Electron main process (the "backend").
@@ -50,6 +51,11 @@ import type { AppContext } from './services/context'
 // sandboxed renderer, and NO network code in the core path.
 
 const isDev = !app.isPackaged
+
+// Re-hash sidecar binaries before spawn (vuln-scan B): enforce in packaged builds, skip in
+// dev. Set once here so every spawn seam (chat/embedder/reranker/vision sidecars, the GPU
+// probe, whisper-cli) shares one decision.
+initBinaryVerification(isDev)
 
 let mainWindow: BrowserWindow | null = null
 let ctx: AppContext | null = null

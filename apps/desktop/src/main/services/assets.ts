@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { createWriteStream, existsSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { mkdir, rm } from 'node:fs/promises'
-import { dirname, join, resolve, sep } from 'node:path'
+import { dirname, join, relative, resolve, sep } from 'node:path'
 import { Readable } from 'node:stream'
 import { isHttpsUrl, isRealSha256, type DownloadSpec, type ModelManifest } from '../../shared/manifest'
 import type { OcrSources, RuntimeBuild, RuntimeOs, RuntimeSources } from '../../shared/runtime-sources'
@@ -631,11 +631,31 @@ export interface RuntimeInstallMarker {
   backend: string
   os: RuntimeOs
   arch: string
+  /**
+   * SHA-256 of each extracted, spawnable binary, keyed by its path RELATIVE to the
+   * extraction dir (posix `/` separators; e.g. `llama-server.exe`, `cpu/llama-server`).
+   * Recorded at install time so the binary can be re-hashed immediately before `spawn`
+   * (the re-hash-before-exec control — see `binary-verifier.ts` / security-model.md).
+   * OPTIONAL: legacy markers (pre-2026-06-21 drives, or those written by an older
+   * fetch-runtime) omit it, and the verifier then tolerates the binary (skip + log)
+   * rather than refusing to start.
+   */
+  binaries?: Record<string, string>
 }
 
 /** Path of the install marker inside a build's extraction dir. */
 export function runtimeMarkerPath(extractTo: string): string {
   return join(extractTo, RUNTIME_MARKER_FILE)
+}
+
+/**
+ * Marker key for an extracted binary: its path relative to the extraction dir, always
+ * with posix `/` separators so a marker written on Windows and read on another OS (a
+ * portable drive) agrees. `runtime/llama.cpp/win/llama-server.exe` under
+ * `runtime/llama.cpp/win` → `llama-server.exe`; the cpu safety-net → `cpu/llama-server.exe`.
+ */
+export function markerBinaryKey(extractTo: string, binaryPath: string): string {
+  return relative(extractTo, binaryPath).split(sep).join('/')
 }
 
 /** Read + parse an install marker. Never throws: missing/malformed → null. */
@@ -649,12 +669,24 @@ export function readRuntimeMarker(extractTo: string): RuntimeInstallMarker | nul
       typeof raw.os === 'string' &&
       typeof raw.arch === 'string'
     ) {
-      return {
+      const marker: RuntimeInstallMarker = {
         version: raw.version,
         backend: raw.backend,
         os: raw.os as RuntimeOs,
         arch: raw.arch
       }
+      // `binaries` is optional (legacy markers omit it). Accept only a plain object of
+      // string→string hashes; drop anything malformed so a tampered marker can't crash
+      // the read. Only attach the field when at least one valid entry survives, so a
+      // hash-less marker still deep-equals the historical { version, backend, os, arch }.
+      if (raw.binaries && typeof raw.binaries === 'object' && !Array.isArray(raw.binaries)) {
+        const binaries: Record<string, string> = {}
+        for (const [key, value] of Object.entries(raw.binaries as Record<string, unknown>)) {
+          if (typeof value === 'string') binaries[key] = value
+        }
+        if (Object.keys(binaries).length > 0) marker.binaries = binaries
+      }
+      return marker
     }
     return null
   } catch {

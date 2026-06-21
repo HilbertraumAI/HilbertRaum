@@ -158,6 +158,26 @@ const WHISPER_JSON = {
 }
 
 describe('WhisperCliTranscriber (fake spawn)', () => {
+  it('REFUSES to spawn a tampered whisper-cli (pre-spawn re-hash, vuln-scan B)', async () => {
+    const workDir = mkdtempSync(join(tmpdir(), 'hilbertraum-whisper-tamper-'))
+    let spawned = false
+    const transcriber = createWhisperCliTranscriber({
+      id: 'whisper-small-multilingual',
+      binPath: 'C:/fake/whisper-cli.exe',
+      modelPath: 'C:/fake/ggml-small.bin',
+      spawnImpl: (_cmd, _args, _o): ChildProcess => {
+        spawned = true
+        return makeFakeChild() as unknown as ChildProcess
+      },
+      verifyBinary: async () => 'mismatch'
+    })
+    await expect(transcriber.transcribe('C:/audio/meeting.mp3', { workDir })).rejects.toThrow(
+      /pre-spawn integrity verification/
+    )
+    expect(spawned).toBe(false)
+    expect(readdirSync(workDir)).toEqual([]) // no transient left behind
+  })
+
   it('parses the -oj JSON into ordered ms segments and shreds the transient', async () => {
     const workDir = mkdtempSync(join(tmpdir(), 'hilbertraum-whisper-work-'))
     const { transcriber, spawned } = fakeCliTranscriber({ json: WHISPER_JSON })

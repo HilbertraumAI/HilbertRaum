@@ -4,6 +4,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { llamaOsDir, defaultThreadCount, type ResolveBinOptions } from '../runtime/sidecar'
+import { verifyBinaryBeforeSpawn, type BinaryVerifyResult } from '../binary-verifier'
 import { shredFile } from '../workspace-vault'
 import { log } from '../logging'
 import type { TranscribeOptions, Transcriber, TranscriptSegment } from './index'
@@ -72,6 +73,13 @@ export interface WhisperCliOptions {
   threads?: number
   /** Injected spawn for tests (no real process). */
   spawnImpl?: (command: string, args: string[], options: SpawnOptions) => ChildProcess
+  /**
+   * Re-hash the `whisper-cli` binary against its install marker before each spawn
+   * (vuln-scan B). Defaults to the shared `verifyBinaryBeforeSpawn` (inert in dev / before
+   * init). On a packaged-build `mismatch` the transcription is refused. The dev-only
+   * `HILBERTRAUM_WHISPER_BIN` override is never hash-gated (dev resolves `skip-dev`).
+   */
+  verifyBinary?: (binPath: string) => Promise<BinaryVerifyResult>
 }
 
 export class WhisperCliTranscriber implements Transcriber {
@@ -80,6 +88,7 @@ export class WhisperCliTranscriber implements Transcriber {
   private readonly modelPath: string
   private readonly threads: number
   private readonly spawnImpl: (command: string, args: string[], options: SpawnOptions) => ChildProcess
+  private readonly verifyBinary: (binPath: string) => Promise<BinaryVerifyResult>
   /**
    * In-flight CLI children mapped to a promise that resolves when that child has fully
    * exited AND its `transcribe()` cleanup (the transient-transcript shred) has run.
@@ -96,6 +105,7 @@ export class WhisperCliTranscriber implements Transcriber {
     this.modelPath = opts.modelPath
     this.threads = opts.threads ?? defaultThreadCount()
     this.spawnImpl = opts.spawnImpl ?? nodeSpawn
+    this.verifyBinary = opts.verifyBinary ?? verifyBinaryBeforeSpawn
   }
 
   async transcribe(filePath: string, opts: TranscribeOptions = {}): Promise<TranscriptSegment[]> {
@@ -160,11 +170,17 @@ export class WhisperCliTranscriber implements Transcriber {
   }
 
   /** Spawn the CLI and resolve on exit, surfacing progress + a bounded stderr tail. */
-  private run(
+  private async run(
     args: string[],
     opts: TranscribeOptions,
     onChild: (child: ChildProcess) => void
   ): Promise<{ code: number | null; stderrTail: string }> {
+    // Re-hash whisper-cli against its install marker before spawn (vuln-scan B). A
+    // packaged-build tamper is refused; the audio import then fails per-file with the
+    // generic failure copy (the raw reason stays in the local log only).
+    if ((await this.verifyBinary(this.binPath)) === 'mismatch') {
+      throw new Error('whisper-cli failed pre-spawn integrity verification')
+    }
     return new Promise((resolve, reject) => {
       const child = this.spawnImpl(this.binPath, args, { stdio: ['ignore', 'pipe', 'pipe'] })
       onChild(child) // register in `active` so suspend()/stop() can kill + await its cleanup

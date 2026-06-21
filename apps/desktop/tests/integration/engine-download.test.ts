@@ -192,6 +192,10 @@ describe('EngineDownloadManager install flow', () => {
       readFileSync(runtimeMarkerPath(join(rootPath, 'runtime', 'llama.cpp', HOST_OS)), 'utf8')
     )
     expect(marker).toMatchObject({ version: 'btest', backend: 'cpu', os: HOST_OS })
+    // vuln-scan B: the marker also records the extracted binary's own SHA-256 (keyed by
+    // its name relative to the extract dir) so it can be re-hashed before spawn. fakeExtract
+    // writes the bytes 'binary'.
+    expect(marker.binaries).toEqual({ [BIN_NAME]: createHash('sha256').update('binary').digest('hex') })
     // The archive is removed after extraction.
     expect(engineStatus(rootPath, manifestsDir).installed).toBe(true)
   })

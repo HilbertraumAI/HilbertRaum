@@ -4,6 +4,7 @@ import { cpus } from 'node:os'
 import { join } from 'node:path'
 import net from 'node:net'
 import { log } from '../logging'
+import { verifyBinaryBeforeSpawn, type BinaryVerifyResult } from '../binary-verifier'
 import type { HealthStatus } from './index'
 
 // Sidecar discovery + lifecycle (spec §6, §7.5). Locates the prebuilt `llama-server`
@@ -185,6 +186,13 @@ export interface LlamaServerOptions {
    * (architecture.md GPU record §5.3) hangs off this hook.
    */
   onUnexpectedExit?: (info: UnexpectedExitInfo) => void
+  /**
+   * Re-hash the binary against its install marker immediately before spawn (vuln-scan B).
+   * Defaults to the shared `verifyBinaryBeforeSpawn` (session-cached; inert in dev / before
+   * init). On a `mismatch` (packaged tamper) `start()` throws so the ladder falls to the
+   * next rung / MockRuntime. Injected by tests to assert the refusal without a real binary.
+   */
+  verifyBinary?: (binPath: string) => Promise<BinaryVerifyResult>
   // Test seams:
   spawn?: SpawnFn
   fetchImpl?: FetchFn
@@ -236,6 +244,7 @@ export class LlamaServer {
   private readonly spawn: SpawnFn
   private readonly fetchImpl: FetchFn
   private readonly findPort: (host: string) => Promise<number>
+  private readonly verifyBinary: (binPath: string) => Promise<BinaryVerifyResult>
   private readonly healthTimeoutMs: number
   private readonly healthIntervalMs: number
   private readonly killGraceMs: number
@@ -245,6 +254,7 @@ export class LlamaServer {
     this.spawn = opts.spawn ?? realSpawn
     this.fetchImpl = opts.fetchImpl ?? fetch
     this.findPort = opts.findPort ?? findFreePort
+    this.verifyBinary = opts.verifyBinary ?? verifyBinaryBeforeSpawn
     this.healthTimeoutMs = opts.healthTimeoutMs ?? DEFAULT_HEALTH_TIMEOUT_MS
     this.healthIntervalMs = opts.healthIntervalMs ?? DEFAULT_HEALTH_INTERVAL_MS
     this.killGraceMs = opts.killGraceMs ?? DEFAULT_KILL_GRACE_MS
@@ -294,6 +304,14 @@ export class LlamaServer {
   /** Spawn the server and block until it is healthy (or throw on timeout/crash). */
   async start(): Promise<void> {
     if (this.child) return
+    // Re-hash the binary against its install marker BEFORE we spawn it (vuln-scan B). A
+    // packaged-build tamper (`mismatch`) throws here, before any port/child is allocated,
+    // so the ladder cleanly falls to the next rung / MockRuntime. Dev + legacy drives
+    // resolve skip-* and proceed. Covers the chat runtime, embedder, reranker, and vision
+    // — every llama-server spawn funnels through this method.
+    if ((await this.verifyBinary(this.opts.binPath)) === 'mismatch') {
+      throw new Error('llama-server failed pre-spawn integrity verification')
+    }
     this.spawnError = null
     this.exited = false
     this.exitCode = null

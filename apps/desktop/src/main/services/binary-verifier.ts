@@ -1,0 +1,124 @@
+import { dirname } from 'node:path'
+import { log } from './logging'
+import { markerBinaryKey, readRuntimeMarker, type RuntimeInstallMarker } from './assets'
+import { sha256File } from './models'
+
+// Re-hash a sidecar binary immediately before spawn (vuln-scan 2026-06-21, item B;
+// long-tracked audit-2026-06-14 "engine-binary not re-hashed before spawn").
+//
+// THREAT: every sidecar (`llama-server`, `whisper-cli`, the `--list-devices` GPU probe)
+// is SHA-256-verified at download/install time, but on a portable offline drive a local
+// adversary who overwrites `runtime/<family>/<os>/<bin>` BETWEEN install and the next
+// launch gets code-exec at the app's privileges. The install marker now records each
+// extracted binary's own hash (`RuntimeInstallMarker.binaries`); this module re-checks
+// that hash on the resolved path right before we spawn it.
+//
+// ROLLOUT (non-breaking — the gate must never spuriously drop a real drive to MockRuntime):
+//   - DEV / un-initialised → NOT enforced ⇒ `skip-dev` (no hashing, no FS). The on-drive
+//     binary may be a local build, and the `HILBERTRAUM_*_BIN` dev override points at an
+//     explicitly UNVERIFIED path — neither should be hash-gated.
+//   - PACKAGED → enforced. A binary WITH a recorded hash is verified (`ok`/`mismatch`); a
+//     binary with NO recorded hash (legacy drive, or one provisioned by an older
+//     fetch-runtime) is TOLERATED ⇒ `skip-legacy` (logged) so it still launches.
+//
+// The result is SESSION-CACHED per resolved binary path: the GPU probe and the server
+// start race for the very same path (factory.ts kicks the probe concurrently with the
+// start), and both must read one consistent decision off a single hash.
+
+/** The four verification outcomes. Only `mismatch` blocks a spawn. */
+export type BinaryVerifyResult = 'ok' | 'skip-legacy' | 'skip-dev' | 'mismatch'
+
+/** True only after `initBinaryVerification(false)` (a packaged build). */
+let enforced = false
+
+/** Session cache: one verification (one hash) per resolved binary path. */
+const cache = new Map<string, Promise<BinaryVerifyResult>>()
+
+/**
+ * Configure enforcement once at startup (`index.ts`). Packaged builds (`isDev === false`)
+ * enforce; dev builds skip. Until this is called the verifier is inert (`skip-dev`), which
+ * keeps the headless unit suite — which constructs sidecars with fake paths and never
+ * provisions a marker — entirely unaffected.
+ */
+export function initBinaryVerification(isDev: boolean): void {
+  enforced = !isDev
+}
+
+/** Test-only: reset enforcement + drop the session cache between cases. */
+export function _resetBinaryVerificationForTests(): void {
+  enforced = false
+  cache.clear()
+}
+
+/** Injectable I/O for `computeBinaryVerification` (real fs by default). */
+export interface BinaryVerificationIo {
+  readMarkerAt?: (dir: string) => RuntimeInstallMarker | null
+  hashFile?: (path: string) => Promise<string>
+}
+
+/**
+ * Pure verification of one binary against its install marker — no enforcement gate, no
+ * cache. Walks UP from the binary's directory to the nearest install marker (so the
+ * `cpu/` safety-net binary finds the family marker one level above when its own dir has
+ * none), looks up the recorded hash for that binary, and compares. Never throws: an
+ * unreadable binary fails SAFE as `mismatch`. Exposed for unit testing; production code
+ * calls `verifyBinaryBeforeSpawn`.
+ */
+export async function computeBinaryVerification(
+  binPath: string,
+  io: BinaryVerificationIo = {}
+): Promise<BinaryVerifyResult> {
+  const readMarkerAt = io.readMarkerAt ?? readRuntimeMarker
+  const hashFile = io.hashFile ?? sha256File
+
+  const dir = dirname(binPath)
+  // The marker lives at the family/extract-dir root. The main binary sits there; the
+  // cpu safety-net sits one level down (and may carry its own marker). Check the binary's
+  // own dir first, then its parent — first marker found wins.
+  let markerDir: string | null = null
+  let marker: RuntimeInstallMarker | null = null
+  for (const candidate of [dir, dirname(dir)]) {
+    const found = readMarkerAt(candidate)
+    if (found) {
+      markerDir = candidate
+      marker = found
+      break
+    }
+  }
+
+  const expected = marker && markerDir ? marker.binaries?.[markerBinaryKey(markerDir, binPath)] : undefined
+  if (!expected) {
+    // No marker, no recorded hash for this binary, or a legacy (hash-less) marker — a
+    // drive provisioned before this control shipped. Tolerate it (content-free log).
+    log.info('No recorded hash for sidecar binary — skipping pre-spawn verification (legacy drive)')
+    return 'skip-legacy'
+  }
+
+  let actual: string
+  try {
+    actual = await hashFile(binPath)
+  } catch {
+    log.warn('Could not hash sidecar binary before spawn — refusing to run it')
+    return 'mismatch'
+  }
+  if (actual.toLowerCase() !== expected.toLowerCase()) {
+    log.warn('Sidecar binary hash does not match its install marker — refusing to spawn (tamper)')
+    return 'mismatch'
+  }
+  return 'ok'
+}
+
+/**
+ * Production entry point used at every spawn seam. Honours the enforcement gate and the
+ * per-path session cache. In dev / before init it resolves `skip-dev` without touching the
+ * filesystem. Never rejects.
+ */
+export function verifyBinaryBeforeSpawn(binPath: string): Promise<BinaryVerifyResult> {
+  if (!enforced) return Promise.resolve('skip-dev')
+  let pending = cache.get(binPath)
+  if (!pending) {
+    pending = computeBinaryVerification(binPath)
+    cache.set(binPath, pending)
+  }
+  return pending
+}

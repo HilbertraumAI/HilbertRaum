@@ -16,6 +16,7 @@ import {
 import { llamaOsDir } from './runtime/sidecar'
 import {
   downloadToFile,
+  markerBinaryKey,
   planRuntimeDownload,
   runtimeInstallCurrent,
   selectRuntimeBuild,
@@ -25,6 +26,7 @@ import {
   type FetchFn,
   type RuntimeDownloadPlan
 } from './assets'
+import { sha256File } from './models'
 import { assertDownloadAllowed, type DownloadGates } from './downloads'
 
 // In-app engine (prebuilt sidecar binary) downloader. The model downloader fetches model
@@ -437,11 +439,21 @@ export class EngineDownloadManager {
           /* best-effort; a non-executable bit surfaces on the next start */
         }
       }
+      // Record the extracted binary's own SHA-256 so it can be re-hashed before spawn
+      // (vuln-scan B). Best-effort: a hashing failure must not fail an otherwise-good
+      // install — the marker is simply written without the hash (→ verifier skip-legacy).
+      let binaries: Record<string, string> | undefined
+      try {
+        binaries = { [markerBinaryKey(plan.extractTo, plan.binaryPath)]: await sha256File(plan.binaryPath) }
+      } catch (err) {
+        this.deps.log?.('Could not hash the installed binary for the marker', { error: String(err) })
+      }
       writeRuntimeMarker(plan.extractTo, {
         version: plan.version,
         backend: plan.backend,
         os: plan.os,
-        arch: plan.arch
+        arch: plan.arch,
+        ...(binaries ? { binaries } : {})
       })
       this.deps.log?.('Engine installed', { binaryPath: plan.binaryPath })
       return 'done'
