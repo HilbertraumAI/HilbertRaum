@@ -57,6 +57,14 @@ password recovery — are documented in
   is attacker-forgeable anyway). Mitigations: the AI Model screen's **Verify checksum** forces a real
   re-hash, and the ship-time gates (`verify-models --strict`, `assertCommercialDrive`) always hash
   fully.
+- **Sidecar binaries built by an OLD `fetch-runtime` carry no pre-spawn hash (accept + document).**
+  The re-hash-before-spawn control (vuln-scan B, [`security-model.md`](security-model.md) "Re-hash
+  sidecar binaries before spawn") re-verifies `llama-server` / `whisper-cli` against a SHA-256 the
+  install marker now records. A drive provisioned by a `fetch-runtime.{ps1,sh}` predating that change
+  has no recorded hash, so the verifier **tolerates** the binary (`skip-legacy`) rather than refusing to
+  start — it stays unprotected until the runtime is re-fetched (the commercial sell-gate forces this for
+  sold drives, but a self-built DIY drive does not). Trust there still rests on drive provisioning +
+  filesystem integrity, the same residual already accepted for on-drive sidecars and app skills.
 - **App-skill integrity is by location, not signature (Skills §22-M2 — accept + document).** A
   shipped skill's `trusted_level: app` is assigned because it sits in `app-skills/`, copied there at
   drive-build. On a removable drive `app-skills/` is writable, so "verified" means build-time

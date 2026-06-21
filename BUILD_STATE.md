@@ -6,6 +6,33 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-21 — **Vuln-scan remediation — item B: re-hash sidecar binaries before spawn (the LAST open finding; scan now FULLY
+remediated).** The tracked TOCTOU (= audit-2026-06-14 "engine-binary not re-hashed before spawn"): `llama-server` / `whisper-cli` /
+the `--list-devices` GPU probe were SHA-256-verified at install but NOT re-hashed before `spawn`, so a local adversary overwriting
+`runtime/<family>/<os>/<bin>` between install and launch got code-exec. The spawns are arg-array (no shell) so the residual was
+purely the missing re-verification. **As built (suite green — 2062 passed / 30 skipped, +19 tests; typecheck clean), coherent commits:**
+- **Install marker now records each binary's own SHA-256.** `RuntimeInstallMarker` gained optional `binaries: Record<relPath,sha256>`
+  (`assets.ts`), keyed by the binary's path relative to the extract dir, posix `/` (`markerBinaryKey`). `readRuntimeMarker` parses it
+  **tolerantly** (malformed → dropped; hash-less marker still deep-equals the legacy shape). Written by ALL three marker writers: the
+  in-app installer (`runtime-download.ts`, best-effort hash of `plan.binaryPath`) + the DIY `fetch-runtime.{ps1,sh}` scripts.
+- **One shared, session-cached verifier** (`binary-verifier.ts`): `verifyBinaryBeforeSpawn(binPath)` → `ok|skip-legacy|skip-dev|mismatch`.
+  Walks UP from the binary's dir to the nearest marker (covers the `cpu/` safety-net), re-hashes, compares; **cached per resolved path**
+  (the probe + start race the same path). Unreadable binary fails SAFE (`mismatch`). `initBinaryVerification(isDev)` once in `index.ts`:
+  **packaged enforces, dev skips**; a binary with a recorded hash is verified, one WITHOUT (legacy/un-upgraded drive) is TOLERATED
+  (`skip-legacy`, never refuses). Inert before init → headless unit suite unaffected.
+- **Wired at the spawn seams (a `mismatch` only fires packaged):** `LlamaServer.start()` (`sidecar.ts`) **throws before port/child**
+  → ladder falls to next rung / **MockRuntime** (covers chat + embedder + reranker + vision — all funnel through `start()`); GPU probe
+  (`gpu.ts`) resolves **`[]`** (never throws); whisper `run()` (`cli.ts`) **refuses** → per-file friendly failure. Dev-only
+  `HILBERTRAUM_*_BIN` overrides are NOT hash-gated (dev → skip).
+- **Commercial sell-gate** (`commercial-drive.ts`): `assertCommercialDrive` now REQUIRES the marker hash present + matching the on-disk
+  binary — a drive built by a pre-B `fetch-runtime`, or a binary modified after install, **fails the gate** (forces rebuild).
+- **Tests:** new `binary-verifier.test.ts` (markerKey, matrix match/mismatch/missing-hash/no-marker/unreadable/cpu-walk-up, gate +
+  session-cache); sidecar/gpu/whisper tamper-refusal; assets marker round-trip WITH hashes + malformed-`binaries` drop; engine-download
+  asserts the install writes the hash; commercial-drive no-hash + post-install-tamper fail the gate. **Docs:** `security-model.md`
+  DEFERRED section → as-built design record; M-5 forward-ref updated; `known-limitations.md` residual (pre-B DIY drives unprotected
+  until rebuilt). **ITEM B DONE → the .deepsec vuln-scan 2026-06-21 is now FULLY remediated** (Tier-1 + HIGH_BUG + option C + option D + B).
+**(Option D entry below.)**_
+
 _2026-06-21 — **Vuln-scan remediation — defense-in-depth / least-privilege gaps (option D).** The four MEDIUM items that are
 deviations from the app's own trust model (renderer = UNTRUSTED; threat #1 = code-exec'd renderer). Confirmed two IPC-contract
 choices with the user: **D1 = picker token + harden drag-drop**, **D2 = opaque token**. **As built (suite green — 2043 passed /

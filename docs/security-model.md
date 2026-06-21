@@ -690,9 +690,9 @@ localization fixes added no content to any log/audit and no new capability.
 ignore + log), and `isDev` is threaded through the runtime / embedder / reranker / transcriber
 factories and the benchmark probe. In a packaged build the override is ignored and resolution falls
 back to the on-drive `runtime/<family>/<os>/` location, so process environment alone cannot make the
-app spawn an arbitrary binary. (Hash-verifying the on-drive sidecar **before spawn** remains a
-possible future hardening; today trust rests on drive provisioning — see the design + rollout note in
-"Open item: re-hash sidecar binaries before spawn" below.)
+app spawn an arbitrary binary. (The on-drive sidecar is now **re-hashed before spawn** in packaged
+builds — see "Re-hash sidecar binaries before spawn" below; the dev-only env overrides are deliberately
+NOT hash-gated, since they point at an explicitly unverified path.)
 
 ## Parsing-DoS hardening — the content tools' regexes are now linear (vuln-scan 2026-06-21)
 
@@ -794,27 +794,62 @@ image **header** (PNG IHDR / JPEG SOF) for `width*height` — no full decode —
 **pixel budget** (`VISION_MAX_IMAGE_PIXELS`, ~50 MP default, env-overridable) as `tooLarge`. Unknown
 dimensions fall through to the byte cap.
 
-## Open item: re-hash sidecar binaries before spawn (vuln-scan 2026-06-21, DEFERRED)
+## Re-hash sidecar binaries before spawn (vuln-scan 2026-06-21, item B — design record)
 
-The scan re-raised the tracked TOCTOU on `llama-server` / `whisper-cli` / the `--list-devices` GPU
-probe: each binary is SHA-256-verified at **download/install** time but **not re-hashed immediately
-before `spawn`**, so a local adversary who can overwrite `runtime/<family>/<os>/<bin>` between install
-and the next launch gets code execution at the app's privileges. This is a real deviation from the
-stated re-hash-before-exec policy, but it is **deferred, not fixed**, because a safe implementation is a
-cross-cutting, startup-critical change that must not be rushed:
-- **No expected binary hash is recorded today.** The runtime manifest carries the **archive** hash; the
-  install marker (`.hilbertraum-runtime.json`) records `version/backend/os/arch` only. Re-verification
-  requires first **recording the extracted binary's own SHA-256** in the marker at install time.
-- **Cross-language sync.** The DIY `fetch-runtime.{ps1,sh}` scripts and the commercial pipeline write
-  the same marker; they must record the binary hash too, or script-provisioned (i.e. shipped) drives
-  get **zero** protection until rebuilt.
-- **Non-breaking rollout.** Existing drives have no binary hash, so enforcement must be **"verify when a
-  hash is present, in packaged builds; skip+log in dev; tolerate a legacy marker"** — otherwise every
-  current drive would refuse to start. A bug in this gate would spuriously drop a legitimate drive to
-  MockRuntime, so it warrants dedicated design + tests rather than a Tier-1 batch edit.
+Each sidecar (`llama-server`, `whisper-cli`, the `--list-devices` GPU probe) was SHA-256-verified at
+**download/install** time but **not re-hashed immediately before `spawn`**. On a portable offline drive a
+local adversary who can overwrite `runtime/<family>/<os>/<bin>` between install and the next launch gets
+code-exec at the app's privileges — a TOCTOU deviation from the stated re-hash-before-exec policy. The
+spawns are arg-array (no shell), so the only residual was the missing pre-spawn re-verification, now
+closed. (The long-tracked audit-2026-06-14 "engine-binary not re-hashed before spawn" is the same item.)
 
-Until then, trust rests on drive provisioning + filesystem integrity (and the report notes an attacker
-with write access to the runtime dir can usually also tamper the app's own Electron code).
+**The fix rests on three facts the deferral called out, each now addressed:**
+
+1. **The install marker records each binary's own SHA-256.** `RuntimeInstallMarker` gained an optional
+   `binaries: Record<relPath, sha256>` field (`assets.ts`), keyed by the binary's path **relative to the
+   extract dir** with posix `/` separators (`markerBinaryKey`) so a marker written on Windows reads the
+   same on another OS. `readRuntimeMarker` parses it **tolerantly** — a malformed map is dropped, and a
+   marker with no valid entry deep-equals the historical `{version,backend,os,arch}` so legacy reads are
+   unchanged. The hash is recorded by **all three** marker writers: the in-app installer
+   (`runtime-download.ts`, hashing `plan.binaryPath` after the flatten — best-effort, a hash failure
+   still writes a usable hash-less marker), and the DIY `fetch-runtime.{ps1,sh}` scripts.
+
+2. **One shared, session-cached verifier.** `binary-verifier.ts` exposes
+   `verifyBinaryBeforeSpawn(binPath)` → `ok | skip-legacy | skip-dev | mismatch`. It walks **up** from the
+   binary's directory to the nearest install marker (so the `cpu/` safety-net binary finds the family
+   marker one level above when its own dir has none), looks up the recorded hash for that binary, and
+   re-hashes the on-disk bytes. The result is **cached per resolved path for the session** — the GPU probe
+   and the server start race for the very same path (`factory.ts` kicks the probe concurrently with the
+   start), so both read one consistent decision off a single hash. An unreadable binary fails **safe**
+   (`mismatch`).
+
+3. **Non-breaking, fail-safe rollout.** `initBinaryVerification(isDev)` is called once at startup
+   (`index.ts`): packaged builds **enforce**, dev builds **skip** (`skip-dev`) — the on-drive binary may
+   be a local build and the dev-only `HILBERTRAUM_*_BIN` overrides point at an explicitly unverified path,
+   so neither is hash-gated (consistent with audit M-5 above). A binary **with** a recorded hash is
+   verified; a binary with **no** recorded hash (a drive provisioned before this shipped) is **tolerated**
+   (`skip-legacy`, logged) so it still launches. Before init the verifier is inert, which keeps the
+   headless unit suite — which constructs sidecars with fake paths and no marker — unaffected.
+
+**Behaviour at each spawn seam (a `mismatch` only ever fires in a packaged build):**
+- **`LlamaServer.start()` (`sidecar.ts`)** — throws before allocating a port/child, so the start **ladder
+  falls to the next rung / MockRuntime** with a content-free tamper warning to the local log. This one
+  method funnels **every** llama-server spawn (chat runtime, embedder, reranker, vision), so all are
+  covered by the single check.
+- **`probeGpuDevices()` (`gpu.ts`)** — resolves **`[]`** (reads as "no GPU"); the probe's contract is that
+  it never throws, so a tampered binary is simply never executed for enumeration.
+- **`WhisperCliTranscriber.run()` (`transcriber/cli.ts`)** — refuses before spawn; the audio import fails
+  per-file with the generic failure copy (raw reason to the local log only).
+
+**Commercial sell-gate (`commercial-drive.ts`).** `assertCommercialDrive` now **requires** the marker to
+carry the binary's hash and to match the on-disk bytes — a drive provisioned by a `fetch-runtime` that
+predates this field, or whose binary was modified after install, **fails the gate** (forcing a rebuild),
+so a sold drive always ships re-verifiable binaries.
+
+Logs are content-free (no paths/hashes/secrets). **Residual:** a drive provisioned by a `fetch-runtime`
+predating this change has no recorded hash and is tolerated (`skip-legacy`) until rebuilt — trust there
+still rests on drive provisioning + filesystem integrity (and an attacker who can write the runtime dir
+can usually also tamper the app's own Electron code). See `known-limitations.md`.
 
 ## Out of scope (MVP)
 - OS-level firewall enforcement (offline is by design + policy/UX, not a hard network block).
