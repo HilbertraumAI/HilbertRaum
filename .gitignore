@@ -4,6 +4,9 @@ node_modules/
 # External SSD Volume Data
 System Volume Information/
 
+#deepsec
+.deepsec
+
 # Build output
 dist/
 out/
