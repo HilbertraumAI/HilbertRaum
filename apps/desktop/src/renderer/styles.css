@@ -833,6 +833,11 @@ code, pre, kbd { font-family: var(--font-mono); }
   align-items: center;
   gap: 10px;
   flex-wrap: wrap;
+  /* Share the centered 720px conversation column so the offer/run row lines up with the
+     composer + transcript above it (not flush-left against the full chat-main width). */
+  max-width: 720px;
+  width: 100%;
+  margin: 0 auto;
   padding: 8px 4px 0;
   font-size: var(--text-sm);
   color: var(--text-muted);
@@ -1377,7 +1382,8 @@ code, pre, kbd { font-family: var(--font-mono); }
 
 /* Image-analysis history (image-understanding history): a light text-row list under the drop
    zone — file name + question count, plus a delete that confirms via ConfirmDialog. */
-.image-history { margin-top: 24px; max-width: 720px; }
+/* Full-width, matching the upload drop zone above it (both fill the .images-screen column). */
+.image-history { margin-top: 24px; }
 .image-history-title { font-size: 15px; margin: 0 0 10px; }
 .image-history-empty { margin: 0; }
 .image-history-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }

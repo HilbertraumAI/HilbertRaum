@@ -40,6 +40,12 @@ is now a surface card (shadow, accent border on hover) with a picture-glyph icon
 date — `formatDate`, the count wrapped in its own span so the exact-text test still matches), and a quieter ghost **Delete** that turns to the
 error tone on hover/focus. The "Analysis running…" row reuses the same shape (accent-tinted). Full suite green — 2089 passed / 30 skipped._
 
+_2026-06-22 — **Two alignment nits (CSS-only).** (1) Images `Verlauf`/history list dropped its `max-width` so it spans the same full width as
+the upload drop zone above it (both fill the `.images-screen` column). (2) Chat `.skill-run-bar` (the Tier-2 tool OFFER/RUN row, e.g. the
+"Personenbezogene Daten schwärzen" tag above the composer) now shares the centered **720px conversation column** (`max-width:720px; margin:0
+auto`) like the composer + transcript — it was flush-left against the full `chat-main` width, so the offer chip sat left of the composer box.
+Build clean._
+
 _2026-06-21 — **Professional Documents skills wave — Meeting Minutes upgrade + four new Tier-1 instruction skills (SKILLS-ONLY,
 no runtime/schema/tool/network change).** The bundled `app-skills/` set grew from four to **nine**, all honest, calm, document-grounded
 workflows with bilingual (EN+DE) triggers and German `localized.de` display metadata. **As built (suite green — 2083 passed / 30 skipped,
