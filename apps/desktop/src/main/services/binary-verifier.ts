@@ -23,10 +23,22 @@ import { sha256File } from './models'
 //
 // The result is SESSION-CACHED per resolved binary path: the GPU probe and the server
 // start race for the very same path (factory.ts kicks the probe concurrently with the
-// start), and both must read one consistent decision off a single hash.
+// start), and both must read one consistent decision off a single hash. EXCEPTION: a
+// transient read failure (the binary couldn't be hashed — e.g. a Windows AV/indexer lock
+// holding the file for a moment) is NEVER cached. It still fails safe THIS attempt
+// (`mismatch` → MockRuntime / refuse), but the next spawn re-hashes, so a self-healing
+// lock doesn't strand the whole session on the mock runtime. Only a definitive verdict
+// (ok / skip-* / a real hash mismatch = tamper) sticks.
 
 /** The four verification outcomes. Only `mismatch` blocks a spawn. */
 export type BinaryVerifyResult = 'ok' | 'skip-legacy' | 'skip-dev' | 'mismatch'
+
+/**
+ * Internal verdict — like `BinaryVerifyResult` but distinguishes a TRANSIENT read failure
+ * (`unreadable`) from a definitive hash mismatch. Both surface to callers as `mismatch`
+ * (fail-safe), but only the definitive verdicts are session-cached (see `verifyBinaryBeforeSpawn`).
+ */
+type RawVerifyResult = BinaryVerifyResult | 'unreadable'
 
 /** True only after `initBinaryVerification(false)` (a packaged build). */
 let enforced = false
@@ -57,17 +69,17 @@ export interface BinaryVerificationIo {
 }
 
 /**
- * Pure verification of one binary against its install marker — no enforcement gate, no
- * cache. Walks UP from the binary's directory to the nearest install marker (so the
- * `cpu/` safety-net binary finds the family marker one level above when its own dir has
- * none), looks up the recorded hash for that binary, and compares. Never throws: an
- * unreadable binary fails SAFE as `mismatch`. Exposed for unit testing; production code
- * calls `verifyBinaryBeforeSpawn`.
+ * The raw verification, distinguishing a transient `unreadable` from a definitive verdict.
+ * Walks UP from the binary's directory to the nearest install marker (so the `cpu/`
+ * safety-net binary finds the family marker one level above when its own dir has none),
+ * looks up the recorded hash for that binary, and compares. Never throws: a binary that
+ * can't be hashed right now resolves `unreadable` (the caller still fails safe, but the
+ * cache layer won't persist it).
  */
-export async function computeBinaryVerification(
+async function computeRawVerification(
   binPath: string,
   io: BinaryVerificationIo = {}
-): Promise<BinaryVerifyResult> {
+): Promise<RawVerifyResult> {
   const readMarkerAt = io.readMarkerAt ?? readRuntimeMarker
   const hashFile = io.hashFile ?? sha256File
 
@@ -98,8 +110,11 @@ export async function computeBinaryVerification(
   try {
     actual = await hashFile(binPath)
   } catch {
-    log.warn('Could not hash sidecar binary before spawn — refusing to run it')
-    return 'mismatch'
+    // Couldn't read the binary to hash it (e.g. a transient Windows AV/indexer lock).
+    // Fail safe for THIS spawn, but signal `unreadable` so the verdict is not cached and
+    // the next spawn re-hashes once the lock clears.
+    log.warn('Could not hash sidecar binary before spawn — refusing this attempt (will re-check next spawn)')
+    return 'unreadable'
   }
   if (actual.toLowerCase() !== expected.toLowerCase()) {
     log.warn('Sidecar binary hash does not match its install marker — refusing to spawn (tamper)')
@@ -109,16 +124,42 @@ export async function computeBinaryVerification(
 }
 
 /**
+ * Pure verification of one binary against its install marker — no enforcement gate, no
+ * cache. An unreadable binary fails SAFE as `mismatch` (the transient `unreadable` case is
+ * an internal-only distinction the cache layer uses). Exposed for unit testing; production
+ * code calls `verifyBinaryBeforeSpawn`.
+ */
+export async function computeBinaryVerification(
+  binPath: string,
+  io: BinaryVerificationIo = {}
+): Promise<BinaryVerifyResult> {
+  const raw = await computeRawVerification(binPath, io)
+  return raw === 'unreadable' ? 'mismatch' : raw
+}
+
+/**
  * Production entry point used at every spawn seam. Honours the enforcement gate and the
  * per-path session cache. In dev / before init it resolves `skip-dev` without touching the
- * filesystem. Never rejects.
+ * filesystem. Never rejects. A transient `unreadable` result is mapped to `mismatch` for
+ * the caller but EVICTED from the cache, so the next spawn re-hashes (a self-healing AV /
+ * indexer lock won't strand the session on MockRuntime). The `io` param is a test seam.
  */
-export function verifyBinaryBeforeSpawn(binPath: string): Promise<BinaryVerifyResult> {
+export function verifyBinaryBeforeSpawn(
+  binPath: string,
+  io?: BinaryVerificationIo
+): Promise<BinaryVerifyResult> {
   if (!enforced) return Promise.resolve('skip-dev')
-  let pending = cache.get(binPath)
-  if (!pending) {
-    pending = computeBinaryVerification(binPath)
-    cache.set(binPath, pending)
-  }
+  const cached = cache.get(binPath)
+  if (cached) return cached
+  const pending: Promise<BinaryVerifyResult> = computeRawVerification(binPath, io).then((raw) => {
+    if (raw === 'unreadable') {
+      // Don't let a transient read failure stick for the whole session — drop it so the
+      // next spawn re-hashes. Identity-guard the delete so we never evict a newer entry.
+      if (cache.get(binPath) === pending) cache.delete(binPath)
+      return 'mismatch'
+    }
+    return raw
+  })
+  cache.set(binPath, pending)
   return pending
 }

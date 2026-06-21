@@ -31,6 +31,12 @@ purely the missing re-verification. **As built (suite green — 2062 passed / 30
   asserts the install writes the hash; commercial-drive no-hash + post-install-tamper fail the gate. **Docs:** `security-model.md`
   DEFERRED section → as-built design record; M-5 forward-ref updated; `known-limitations.md` residual (pre-B DIY drives unprotected
   until rebuilt). **ITEM B DONE → the .deepsec vuln-scan 2026-06-21 is now FULLY remediated** (Tier-1 + HIGH_BUG + option C + option D + B).
+**Follow-up (post-audit robustness):** the pre-spawn verifier no longer session-caches a TRANSIENT read failure.
+`computeRawVerification` distinguishes `unreadable` (couldn't hash — e.g. a Windows AV/indexer lock) from a real
+hash `mismatch` (tamper); both still fail safe THIS spawn, but `verifyBinaryBeforeSpawn` evicts an `unreadable`
+result from the cache (identity-guarded) so the next spawn re-hashes — a self-healing lock no longer strands the
+session on MockRuntime, while a real tamper verdict stays sticky. +2 tests in `binary-verifier.test.ts`
+(unreadable-then-recover, tamper-stays-cached). Suite still green.
 **(Option D entry below.)**_
 
 _2026-06-21 — **Vuln-scan remediation — defense-in-depth / least-privilege gaps (option D).** The four MEDIUM items that are

@@ -140,6 +140,55 @@ describe('verifyBinaryBeforeSpawn (enforcement gate + session cache)', () => {
     expect(await verifyBinaryBeforeSpawn(bin)).toBe('skip-legacy')
   })
 
+  it('does NOT cache a transient unreadable-binary failure — the next spawn re-hashes (Windows AV/indexer lock)', async () => {
+    initBinaryVerification(false)
+    const dir = tmp()
+    const bin = join(dir, 'llama-server.exe')
+    writeFileSync(bin, 'real')
+    const good = await sha256File(bin)
+    writeRuntimeMarker(dir, {
+      version: 'b9585',
+      backend: 'vulkan',
+      os: 'win',
+      arch: 'x64',
+      binaries: { [markerBinaryKey(dir, bin)]: good }
+    })
+    // First attempt: the file is momentarily locked (hash throws) → fails safe as mismatch.
+    expect(await verifyBinaryBeforeSpawn(bin, { hashFile: async () => { throw new Error('EBUSY') } })).toBe(
+      'mismatch'
+    )
+    // The lock cleared: because the failure was NOT cached, the next attempt re-hashes the
+    // real file and succeeds — the session is not stranded on MockRuntime.
+    expect(await verifyBinaryBeforeSpawn(bin)).toBe('ok')
+    // And THAT definitive verdict now sticks (cached), even if the bytes later change.
+    writeFileSync(bin, 'tampered-after-verify')
+    expect(await verifyBinaryBeforeSpawn(bin)).toBe('ok')
+  })
+
+  it('caches a real hash mismatch (tamper) for the session — only unreadable is retried', async () => {
+    initBinaryVerification(false)
+    const dir = tmp()
+    const bin = join(dir, 'llama-server.exe')
+    writeFileSync(bin, 'real')
+    writeRuntimeMarker(dir, {
+      version: 'b9585',
+      backend: 'vulkan',
+      os: 'win',
+      arch: 'x64',
+      binaries: { [markerBinaryKey(dir, bin)]: 'd'.repeat(64) } // recorded hash ≠ bytes
+    })
+    expect(await verifyBinaryBeforeSpawn(bin)).toBe('mismatch')
+    // Even fixing the marker can't un-stick a cached tamper verdict this session.
+    writeRuntimeMarker(dir, {
+      version: 'b9585',
+      backend: 'vulkan',
+      os: 'win',
+      arch: 'x64',
+      binaries: { [markerBinaryKey(dir, bin)]: await sha256File(bin) }
+    })
+    expect(await verifyBinaryBeforeSpawn(bin)).toBe('mismatch')
+  })
+
   it('caches one decision per path for the session (probe + start race the same path)', async () => {
     initBinaryVerification(false)
     const dir = tmp()
