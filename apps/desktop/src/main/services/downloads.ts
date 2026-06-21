@@ -323,6 +323,9 @@ export class DownloadManager {
       const result = await downloadToFile(task.url, part, {
         fetchImpl: this.deps.fetchImpl,
         signal: controller.signal,
+        // D3: cap the body to the manifest's planned size so a redirected/hostile endpoint
+        // can't stream past it and fill the drive (the SHA verify already rejects wrong bytes).
+        ...(task.sizeBytes != null ? { maxBytes: task.sizeBytes } : {}),
         ...(resumeFrom > 0 ? { headers: { Range: `bytes=${resumeFrom}-` }, append: true } : {}),
         onResponse: ({ status, contentLength }) => {
           // A 200 means the server ignored the Range request → the file restarts.

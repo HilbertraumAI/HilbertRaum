@@ -370,6 +370,13 @@ export interface DownloadDeps {
   append?: boolean
   /** Called once with the response metadata before any body bytes stream. */
   onResponse?: (info: { status: number; contentLength: number | null }) => void
+  /**
+   * D3 (vuln-scan-2026-06-21) — hard ceiling on the COMPLETE file size (bytes). Pass the
+   * manifest's planned size so a redirected/hostile endpoint can't stream past it and fill the
+   * drive. The effective per-response cap is the smallest of {this, the response Content-Length}
+   * plus a small margin; with neither known a generous global backstop applies.
+   */
+  maxBytes?: number
 }
 
 export interface DownloadToFileResult {
@@ -381,29 +388,100 @@ export interface DownloadToFileResult {
   contentLength: number | null
 }
 
+// D3 (vuln-scan-2026-06-21) — redirect/SSRF + disk-fill hardening for `downloadToFile`.
+const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308])
+/** Max redirect hops before giving up (a redirect loop / chain-to-internal-host defence). */
+const MAX_REDIRECTS = 5
+/** Tolerance over the known size for header rounding / multipart framing. */
+const SIZE_CAP_MARGIN = 1024 * 1024
+/** Backstop when NOTHING bounds the body (no Content-Length AND no caller `maxBytes`). */
+const DOWNLOAD_HARD_MAX_BYTES = 64 * 1024 * 1024 * 1024
+
+/**
+ * True for a hostname that must never be a download target: loopback, RFC-1918 private ranges,
+ * link-local (incl. the `169.254.169.254` cloud-metadata IP), and the IPv6 equivalents. Literal
+ * host matching only (no DNS resolution — DNS-rebinding is out of scope), which is enough to stop
+ * a hostile redirect `Location: http://169.254.169.254/...` or `http://router.local/`.
+ */
+function isPrivateOrLoopbackHost(hostname: string): boolean {
+  const h = hostname.toLowerCase().replace(/^\[/, '').replace(/\]$/, '')
+  if (h === 'localhost' || h.endsWith('.localhost')) return true
+  const v4 = h.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/)
+  if (v4) {
+    const a = Number(v4[1])
+    const b = Number(v4[2])
+    if (a === 0 || a === 127 || a === 10) return true // this-host / loopback / private
+    if (a === 169 && b === 254) return true // link-local (incl. 169.254.169.254 metadata)
+    if (a === 192 && b === 168) return true // private
+    if (a === 172 && b >= 16 && b <= 31) return true // private
+    return false
+  }
+  if (h === '::1' || h === '::') return true // IPv6 loopback / unspecified
+  if (h.startsWith('fe80:')) return true // IPv6 link-local
+  if (h.startsWith('fc') || h.startsWith('fd')) return true // IPv6 unique-local fc00::/7
+  const mapped = h.match(/^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/)
+  if (mapped) return isPrivateOrLoopbackHost(mapped[1])
+  return false
+}
+
+/**
+ * Re-validate a download URL — the INITIAL request AND every redirect target (D3). L-2: must be
+ * https (cleartext leaks which asset is fetched + is downgrade-friendly); plus a loopback/
+ * private-range deny so a 30x can't redirect the desktop host into an SSRF GET against its LAN.
+ */
+function assertSafeDownloadUrl(raw: string): void {
+  if (!isHttpsUrl(raw)) {
+    throw new Error(`Refusing a non-HTTPS download URL: ${raw}`)
+  }
+  let host: string
+  try {
+    host = new URL(raw).hostname
+  } catch {
+    throw new Error(`Refusing a malformed download URL: ${raw}`)
+  }
+  if (isPrivateOrLoopbackHost(host)) {
+    throw new Error(`Refusing a download to a private/loopback host: ${host}`)
+  }
+}
+
 /**
  * Stream a URL to a destination file (creating parent dirs). This is the network seam;
  * the DIY scripts use the OS-native downloader instead, while the in-app downloader
  * (`downloads.ts`) and the tests drive this with an injected `fetchImpl`.
  * Throws on a non-OK HTTP status. Overwrites by default; see `DownloadDeps.append` for
  * the Range-resume mode (the native scripts resume via `curl -C -` instead).
+ *
+ * D3: redirects are followed MANUALLY (`redirect: 'manual'`) so every hop is re-validated by
+ * `assertSafeDownloadUrl` (no auto-follow to http:// or a LAN/loopback address), and the body is
+ * capped so a hostile endpoint can't stream unbounded bytes onto the drive.
  */
 export async function downloadToFile(
   url: string,
   dest: string,
   deps: DownloadDeps = {}
 ): Promise<DownloadToFileResult> {
-  // L-2: enforce TLS at the network seam — this covers model weights, the runtime
-  // sidecar, AND the OCR language files (only model URLs pass through validateManifest's
-  // https check). Cleartext http:// is downgrade-friendly and leaks which asset is fetched.
-  if (!isHttpsUrl(url)) {
-    throw new Error(`Refusing a non-HTTPS download URL: ${url}`)
-  }
   const doFetch = deps.fetchImpl ?? fetch
-  const res = await doFetch(url, {
-    ...(deps.headers ? { headers: deps.headers } : {}),
-    ...(deps.signal ? { signal: deps.signal } : {})
-  })
+  let currentUrl = url
+  let res!: Awaited<ReturnType<FetchFn>>
+  for (let hop = 0; ; hop++) {
+    // Re-validate scheme + host on the INITIAL URL and on EACH redirect target before fetching.
+    assertSafeDownloadUrl(currentUrl)
+    res = await doFetch(currentUrl, {
+      redirect: 'manual',
+      ...(deps.headers ? { headers: deps.headers } : {}),
+      ...(deps.signal ? { signal: deps.signal } : {})
+    })
+    if (!REDIRECT_STATUSES.has(res.status)) break
+    if (hop >= MAX_REDIRECTS) {
+      throw new Error(`Download failed: too many redirects for ${url}`)
+    }
+    const location = res.headers?.get?.('location')
+    if (!location) {
+      throw new Error(`Download failed: redirect with no Location for ${currentUrl}`)
+    }
+    // Resolve a relative Location against the current URL; the loop re-validates it next.
+    currentUrl = new URL(location, currentUrl).toString()
+  }
   if (!res.ok) {
     throw new Error(`Download failed: HTTP ${res.status} for ${url}`)
   }
@@ -415,6 +493,13 @@ export async function downloadToFile(
     ? Number(lengthHeader)
     : null
   deps.onResponse?.({ status: res.status, contentLength })
+  // Effective cap for THIS response body: the smallest known bound + a margin, else the global
+  // backstop. (For a 206 resume, contentLength is the remaining bytes and `received` excludes the
+  // on-disk prefix, so capping `received` against the smaller of the two bounds is correct.)
+  const bounds: number[] = []
+  if (contentLength != null) bounds.push(contentLength)
+  if (typeof deps.maxBytes === 'number' && deps.maxBytes > 0) bounds.push(deps.maxBytes)
+  const cap = bounds.length > 0 ? Math.min(...bounds) + SIZE_CAP_MARGIN : DOWNLOAD_HARD_MAX_BYTES
   await mkdir(dirname(dest), { recursive: true })
   // Append only when the caller asked to resume AND the server actually honoured the
   // Range request — appending a full 200 body onto a partial file would corrupt it.
@@ -423,24 +508,33 @@ export async function downloadToFile(
   let received = 0
   const nodeStream = Readable.fromWeb(res.body as Parameters<typeof Readable.fromWeb>[0])
   await new Promise<void>((resolvePromise, reject) => {
-    nodeStream.on('data', (chunk: Buffer) => {
-      received += chunk.length
-      deps.onProgress?.(received)
-    })
-    // On either side failing (incl. an abort), close BOTH streams so no fd stays open
-    // on the partial file — a later resume/rename must not contend with a stale handle.
-    // `end()` (not `destroy()`) flushes the bytes that DID arrive: they are the resume
-    // prefix. The reject below settles the promise first, so the eventual 'finish' from
-    // end() is a no-op.
-    nodeStream.on('error', (err) => {
+    let settled = false
+    // On any failure (abort, stream error, OR the size cap), close BOTH streams so no fd stays
+    // open on the partial file — a later resume/rename must not contend with a stale handle.
+    // `end()` (not `destroy()`) flushes the bytes that DID arrive: they are the resume prefix.
+    const fail = (err: Error): void => {
+      if (settled) return
+      settled = true
+      nodeStream.destroy()
       out.end()
       reject(err)
+    }
+    nodeStream.on('data', (chunk: Buffer) => {
+      received += chunk.length
+      if (received > cap) {
+        fail(new Error(`Download exceeded the ${cap}-byte size cap for ${currentUrl}`))
+        return
+      }
+      deps.onProgress?.(received)
     })
+    nodeStream.on('error', fail)
     out.on('error', (err) => {
       nodeStream.destroy()
-      reject(err)
+      fail(err)
     })
-    out.on('finish', resolvePromise)
+    out.on('finish', () => {
+      if (!settled) resolvePromise()
+    })
     nodeStream.pipe(out)
   })
   return { status: res.status, received, contentLength }
