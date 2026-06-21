@@ -4,12 +4,14 @@ import type { ModelManifest } from '../../shared/manifest'
 import type { OcrSources, RuntimeSources } from '../../shared/runtime-sources'
 import { loadPolicy } from './policy'
 import {
+  markerBinaryKey,
   planOcrDownloads,
   planRuntimeDownload,
   readRuntimeMarker,
   runtimeBinaryPresent,
   WHISPER_BINARY_BASE
 } from './assets'
+import { sha256File } from './models'
 import { verifyDriveModels, listSkillFolders, type ModelVerifyResult } from './drive'
 
 // Commercial-drive pipeline + final posture assertion (spec §12.2).
@@ -366,16 +368,18 @@ export async function assertCommercialDrive(
   // after the default moved to vulkan) and must be re-provisioned. The same
   // check runs for the whisper family (binary `whisper-cli`) when its pin is passed.
   let runtimeCurrent = true
-  const checkFamily = (sources: RuntimeSources, family: string, binaryBase: string): void => {
+  const checkFamily = async (sources: RuntimeSources, family: string, binaryBase: string): Promise<void> => {
     for (const build of sources.builds) {
       const label = `${family} build ${build.os}/${build.arch} ${build.backend}`
       // planRuntimeDownload escape-guards extract_to (the yaml on the DRIVE is
       // user-writable) — a tampered path is a failed check, not a crash.
       let binaryOk = false
       let extractTo: string
+      let binaryPath: string
       try {
         const plan = planRuntimeDownload(rootPath, build, sources.version, binaryBase)
         extractTo = plan.extractTo
+        binaryPath = plan.binaryPath
         binaryOk = runtimeBinaryPresent(plan)
       } catch (err) {
         runtimeCurrent = false
@@ -404,11 +408,30 @@ export async function assertCommercialDrive(
             `${marker.version}/${marker.backend} does not match the pinned ` +
             `${sources.version}/${build.backend} — re-run fetch-runtime`
         )
+      } else {
+        // Version + backend match — now require the marker to carry the binary's SHA-256
+        // and to MATCH the on-disk binary (vuln-scan B). A sold drive must ship this hash
+        // so the app can re-verify it before spawn; a drive provisioned by a fetch-runtime
+        // predating that field fails the gate and must be re-run.
+        const expected = marker.binaries?.[markerBinaryKey(extractTo, binaryPath)]
+        if (!expected) {
+          runtimeCurrent = false
+          problems.push(
+            `${label}: install marker records no SHA-256 for ${binaryBase} — re-run ` +
+              'fetch-runtime so the binary can be re-verified before spawn'
+          )
+        } else if ((await sha256File(binaryPath)).toLowerCase() !== expected.toLowerCase()) {
+          runtimeCurrent = false
+          problems.push(
+            `${label}: ${binaryBase} does not match the SHA-256 recorded in the install ` +
+              'marker — the binary was modified after install; re-run fetch-runtime'
+          )
+        }
       }
     }
   }
-  if (runtimeSources) checkFamily(runtimeSources, 'runtime', 'llama-server')
-  if (whisperSources) checkFamily(whisperSources, 'whisper', WHISPER_BINARY_BASE)
+  if (runtimeSources) await checkFamily(runtimeSources, 'runtime', 'llama-server')
+  if (whisperSources) await checkFamily(whisperSources, 'whisper', WHISPER_BINARY_BASE)
 
   // --- OCR language files present + verified (opt-in) ---
   // Plain files: the hash IS the install state (no marker — mirrors planOcrDownloads).
