@@ -106,6 +106,10 @@ const MAX_TERMINAL_JOBS = 20
 export class DownloadManager {
   private jobs = new Map<string, DownloadJob>()
   private active: { jobId: string; controller: AbortController } | null = null
+  /** Synchronous single-flight latch covering the check-then-set window in `start()` that
+   *  straddles an `await` (BUG vuln-scan-2026-06-21). True from passing the guard until
+   *  `this.active` is set (or the start aborts/throws). */
+  private starting = false
   private deps: DownloadManagerDeps
 
   constructor(deps: DownloadManagerDeps = {}) {
@@ -121,73 +125,84 @@ export class DownloadManager {
   async start(opts: StartDownloadOptions): Promise<DownloadJob> {
     this.pruneTerminalJobs()
     assertDownloadAllowed(opts.gates)
-    if (this.activeJob() !== null) {
+    // Single-flight: `activeJob()` and the `this.active` assignment below straddle the
+    // `await planModelDownloads(...)`, so two near-simultaneous start() invokes both observed
+    // `activeJob() === null` and both launched a run (orphaning the first AbortController). The
+    // synchronous `starting` latch closes that window (BUG vuln-scan-2026-06-21).
+    if (this.activeJob() !== null || this.starting) {
       throw new Error(tMain('main.download.alreadyRunning'))
     }
-    if (!opts.manifest.download) {
-      throw new Error(tMain('main.download.noSource', { modelId: opts.manifest.id }))
-    }
+    this.starting = true
+    try {
+      if (!opts.manifest.download) {
+        throw new Error(tMain('main.download.noSource', { modelId: opts.manifest.id }))
+      }
 
-    // Reuse the canonical planner: license gate + present/verified/unverified states. A vision
-    // model plans TWO tasks — the language GGUF then its `mmproj` projector (DIST-1); every other
-    // role plans one. The downloader fetches ALL of them as one logical job: `computeInstallState`
-    // requires both files present + verified, so a GGUF-only download would never reach `installed`.
-    const tasks = await planModelDownloads(opts.rootPath, [opts.manifest], {
-      acceptLicense: opts.licenseAccepted,
-      hashStore: opts.hashStore
-    })
-    if (tasks.length === 0) {
-      throw new Error(tMain('main.download.noSource', { modelId: opts.manifest.id }))
-    }
-    // The license gate is the MODEL's (a vision projector inherits its GGUF's review), so a single
-    // blocked file blocks the whole model.
-    const blocked = tasks.find((t) => t.status === 'license-blocked')
-    if (blocked) {
-      throw new Error(tMain('main.download.licenseFirst', { license: blocked.license ?? '' }))
-    }
-    // Fetch only the files actually absent/stale — a model whose GGUF is already present + verified
-    // but whose mmproj is missing downloads JUST the projector (the common "finish the vision model"
-    // case). When nothing is left to fetch, distinguish "fully verified" from "present-but-placeholder".
-    const toDownload = tasks.filter((t) => t.status === 'download')
-    if (toDownload.length === 0) {
-      throw new Error(
-        tasks.every((t) => t.status === 'present-verified')
-          ? tMain('main.download.alreadyVerified')
-          : tMain('main.download.presentUnverified')
-      )
-    }
+      // Reuse the canonical planner: license gate + present/verified/unverified states. A vision
+      // model plans TWO tasks — the language GGUF then its `mmproj` projector (DIST-1); every other
+      // role plans one. The downloader fetches ALL of them as one logical job: `computeInstallState`
+      // requires both files present + verified, so a GGUF-only download would never reach `installed`.
+      const tasks = await planModelDownloads(opts.rootPath, [opts.manifest], {
+        acceptLicense: opts.licenseAccepted,
+        hashStore: opts.hashStore
+      })
+      if (tasks.length === 0) {
+        throw new Error(tMain('main.download.noSource', { modelId: opts.manifest.id }))
+      }
+      // The license gate is the MODEL's (a vision projector inherits its GGUF's review), so a single
+      // blocked file blocks the whole model.
+      const blocked = tasks.find((t) => t.status === 'license-blocked')
+      if (blocked) {
+        throw new Error(tMain('main.download.licenseFirst', { license: blocked.license ?? '' }))
+      }
+      // Fetch only the files actually absent/stale — a model whose GGUF is already present + verified
+      // but whose mmproj is missing downloads JUST the projector (the common "finish the vision model"
+      // case). When nothing is left to fetch, distinguish "fully verified" from "present-but-placeholder".
+      const toDownload = tasks.filter((t) => t.status === 'download')
+      if (toDownload.length === 0) {
+        throw new Error(
+          tasks.every((t) => t.status === 'present-verified')
+            ? tMain('main.download.alreadyVerified')
+            : tMain('main.download.presentUnverified')
+        )
+      }
 
-    const modelId = tasks[0].id
-    const plannedTotal = sumSizes(toDownload)
-    const job: DownloadJob = {
-      jobId: randomUUID(),
-      modelId,
-      status: 'queued',
-      receivedBytes: 0,
-      totalBytes: plannedTotal,
-      unverified: false,
-      error: null
-    }
-    this.jobs.set(job.jobId, job)
-    const controller = new AbortController()
-    this.active = { jobId: job.jobId, controller }
-    this.deps.log?.('Model download started', {
-      modelId,
-      jobId: job.jobId,
-      files: toDownload.length
-    })
-    this.deps.audit?.('model_download_started', `Model download started: ${modelId}`, {
-      modelId,
-      jobId: job.jobId,
-      sizeBytes: plannedTotal,
-      files: toDownload.length
-    })
+      const modelId = tasks[0].id
+      const plannedTotal = sumSizes(toDownload)
+      const job: DownloadJob = {
+        jobId: randomUUID(),
+        modelId,
+        status: 'queued',
+        receivedBytes: 0,
+        totalBytes: plannedTotal,
+        unverified: false,
+        error: null
+      }
+      this.jobs.set(job.jobId, job)
+      const controller = new AbortController()
+      this.active = { jobId: job.jobId, controller }
+      this.deps.log?.('Model download started', {
+        modelId,
+        jobId: job.jobId,
+        files: toDownload.length
+      })
+      this.deps.audit?.('model_download_started', `Model download started: ${modelId}`, {
+        modelId,
+        jobId: job.jobId,
+        sizeBytes: plannedTotal,
+        files: toDownload.length
+      })
 
-    // Background run — the invoke returns immediately; the renderer polls for progress.
-    void this.run(job, toDownload, controller, opts.hashStore).finally(() => {
-      if (this.active?.jobId === job.jobId) this.active = null
-    })
-    return { ...job }
+      // Background run — the invoke returns immediately; the renderer polls for progress.
+      void this.run(job, toDownload, controller, opts.hashStore).finally(() => {
+        if (this.active?.jobId === job.jobId) this.active = null
+      })
+      return { ...job }
+    } finally {
+      // Clear the latch only once `this.active` is set (success) or the start aborted (throw) —
+      // by here `activeJob()` covers any subsequent caller, so there is no gap.
+      this.starting = false
+    }
   }
 
   /** Job snapshot for polling. Unknown/expired ids report a terminal state. */
@@ -308,6 +323,9 @@ export class DownloadManager {
       const result = await downloadToFile(task.url, part, {
         fetchImpl: this.deps.fetchImpl,
         signal: controller.signal,
+        // D3: cap the body to the manifest's planned size so a redirected/hostile endpoint
+        // can't stream past it and fill the drive (the SHA verify already rejects wrong bytes).
+        ...(task.sizeBytes != null ? { maxBytes: task.sizeBytes } : {}),
         ...(resumeFrom > 0 ? { headers: { Range: `bytes=${resumeFrom}-` }, append: true } : {}),
         onResponse: ({ status, contentLength }) => {
           // A 200 means the server ignored the Range request → the file restarts.

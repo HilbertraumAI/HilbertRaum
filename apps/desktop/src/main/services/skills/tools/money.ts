@@ -30,7 +30,16 @@ export function detectCurrency(text: string): string | null {
 
 // A money token MUST end in a 2-digit minor unit (e.g. ",56" / ".56"), so plain integers embedded
 // in a description are not mistaken for amounts. Optional leading sign / paren and trailing minus.
-export const MONEY_RE = /[-+(]?\s*\d[\d.,]*[.,]\d{2}\s*\)?-?/g
+//
+// ReDoS hardening (S12 audit / vuln-scan 2026-06-21): every repeating quantifier is BOUNDED so the
+// scan is provably linear. The earlier `\s*\d[\d.,]*` form backtracked quadratically (O(N²)) on a
+// long digit/separator (or whitespace) run lacking a valid decimal tail — a hostile statement/invoice
+// whose chunk is one giant line could freeze the main process. Bounding the integer/grouping run to 30
+// chars (a 30-digit figure is ~10²³ — far beyond any real printed amount) and the leading gap to 4
+// spaces makes each match attempt O(1), so the global `matchAll` is O(N). The trailing `\s*` is left
+// unbounded: only OPTIONAL atoms follow it, so it can never drive a failure-backtrack. The accepted
+// token set is unchanged for every realistic figure (the unit tests pin the parse behaviour).
+export const MONEY_RE = /[-+(]?\s{0,4}\d[\d.,]{0,30}[.,]\d{2}\s*\)?-?/g
 
 /** Money equality within half a cent (printed figures carry 2 minor digits). */
 export const MONEY_EPS = 0.005

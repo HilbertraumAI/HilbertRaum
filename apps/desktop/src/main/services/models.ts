@@ -669,25 +669,37 @@ export async function buildModelList(opts: BuildModelListOptions): Promise<Model
     const thisHashes = willHash[i] > 0
     if (emit && thisHashes) stepIndex++
     const stepAt = stepIndex // capture for this model's throttled callbacks
-    let state = await computeInstallState(manifest, opts.rootPath, {
-      developerMode: opts.developerMode,
-      hashStore: opts.hashStore,
-      skipHash: skipHashFor(manifest.id),
-      onProgress:
-        emit && thisHashes
-          ? (bytesHashed) =>
-              emit({
-                runId,
-                modelIndex: stepAt,
-                modelCount: hashCount,
-                modelId: manifest.id,
-                displayName: manifest.displayName,
-                overallBytesHashed: completedBytes + bytesHashed,
-                overallBytesTotal,
-                done: false
-              })
-          : undefined
-    })
+    let state: ModelState
+    try {
+      state = await computeInstallState(manifest, opts.rootPath, {
+        developerMode: opts.developerMode,
+        hashStore: opts.hashStore,
+        skipHash: skipHashFor(manifest.id),
+        onProgress:
+          emit && thisHashes
+            ? (bytesHashed) =>
+                emit({
+                  runId,
+                  modelIndex: stepAt,
+                  modelCount: hashCount,
+                  modelId: manifest.id,
+                  displayName: manifest.displayName,
+                  overallBytesHashed: completedBytes + bytesHashed,
+                  overallBytesTotal,
+                  done: false
+                })
+            : undefined
+      })
+    } catch (err) {
+      // ONE manifest must never break the whole Models list. validateManifest now rejects an
+      // escaping local_path up front, but a manifest that still throws here (e.g. a future
+      // safeDrivePath case, or an I/O error) is recorded and SKIPPED rather than rejecting the
+      // entire `IPC.listModels` handler — mirroring the pendingHashBytes() pre-pass, which
+      // already tolerates the same throw, and discoverManifests' error channel (vuln-scan
+      // 2026-06-21 [uncaught-exception-dos]).
+      errors.push(`${manifest.id}: ${err instanceof Error ? err.message : String(err)}`)
+      continue
+    }
     if (emit && thisHashes) completedBytes += willHash[i]
     if (opts.runningModelId && manifest.id === opts.runningModelId && state === 'installed') {
       state = 'running'

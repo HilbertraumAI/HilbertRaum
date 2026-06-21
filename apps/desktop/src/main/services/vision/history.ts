@@ -174,7 +174,12 @@ export function getImageSession(
     // Decrypt to a short-lived temp, read it, then shred — mirrors document preview. Without
     // a cipher (vault somehow plaintext now) an encrypted entry cannot be read.
     if (!cipher) return null
-    const tmp = join(dir, `${id}.read-${process.pid}.tmp`)
+    // Per-CALL unique temp (BUG vuln-scan-2026-06-21): two concurrent reads of the SAME session
+    // (e.g. a double-click) keyed only by id+pid collided on one staging file — interleaved
+    // writes / a premature shred yielded corrupted bytes or an ENOENT. The randomUUID makes each
+    // read (and `decryptFile`'s own `<tmp>.tmp` stage) collision-free; both are still swept by
+    // shredStalePlaintext on crash.
+    const tmp = join(dir, `${id}.read-${process.pid}-${randomUUID()}.tmp`)
     try {
       cipher.decryptFile(stored, tmp)
       imageBytes = readFileSync(tmp)

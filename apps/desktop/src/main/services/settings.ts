@@ -6,6 +6,13 @@ import { DEFAULT_SETTINGS, type AppSettings } from '../../shared/types'
  *  validation below stays generic for future ones.) */
 const MAX_SETTINGS_ARRAY = 10_000
 
+/** Floor for `contextTokens` (HIGH_BUG vuln-scan-2026-06-21). The doc-task window budget is
+ *  derived from this; below this floor the summary-tree builder's per-level node summaries can
+ *  exceed a single budget window and the build cannot reduce. 2048 always fits >= 2 node
+ *  summaries (each <= SUMMARY_OUTPUT_TOKENS) plus the prompt/output reserve in one reduce
+ *  window. A renderer-supplied value below it is clamped UP, never dropped. */
+const MIN_CONTEXT_TOKENS = 2048
+
 // Settings persistence on top of the key/value `settings` table (spec §8).
 // Each AppSettings field is stored as its own row so partial updates are clean.
 // The table lives inside the workspace database, so on an encrypted workspace the
@@ -55,6 +62,13 @@ export function updateSettings(db: Db, patch: Partial<AppSettings>): AppSettings
     // Enum-valued keys get an exact-value check (a renderer bug must not persist junk
     // like `gpuMode: 'banana'` — readers treat anything !== 'auto' as off, which fails
     // safe, but junk must not be stored either).
+    // contextTokens floor: clamp UP a too-small value so the doc-task budget can never drop
+    // below a single summary's size (else the tree builder cannot reduce — HIGH_BUG). A
+    // non-finite value falls back to the floor rather than persisting NaN.
+    if (key === 'contextTokens') {
+      const n = typeof value === 'number' && Number.isFinite(value) ? Math.floor(value) : MIN_CONTEXT_TOKENS
+      toStore = Math.max(MIN_CONTEXT_TOKENS, n)
+    }
     if (key === 'gpuMode' && value !== 'auto' && value !== 'off') continue
     if (key === 'theme' && value !== 'system' && value !== 'light' && value !== 'dark') continue
     if (key === 'uiLanguage' && value !== 'system' && value !== 'en' && value !== 'de') continue

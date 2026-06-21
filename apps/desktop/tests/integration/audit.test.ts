@@ -47,7 +47,7 @@ describe('recordEvent / listAuditEvents', () => {
     expect(recordEvent(db, 'model_selected', 'after close')).toBe(false)
   })
 
-  it('pages newest-first with limit + the beforeId cursor; unknown cursor reads from the top', () => {
+  it('pages newest-first with limit + the beforeId cursor; an unresolved cursor ENDS pagination (BUG vuln-scan-2026-06-21)', () => {
     const db = freshDb()
     for (let i = 1; i <= 5; i++) recordEvent(db, 'model_selected', `event ${i}`, undefined, at(i))
     const page1 = listAuditEvents(db, { limit: 2 })
@@ -56,10 +56,10 @@ describe('recordEvent / listAuditEvents', () => {
     expect(page2.map((e) => e.message)).toEqual(['event 3', 'event 2'])
     const page3 = listAuditEvents(db, { limit: 2, beforeId: page2[1].id })
     expect(page3.map((e) => e.message)).toEqual(['event 1'])
-    expect(listAuditEvents(db, { limit: 2, beforeId: 'no-such-id' }).map((e) => e.message)).toEqual([
-      'event 5',
-      'event 4'
-    ])
+    // A cursor whose anchor row is gone (e.g. pruned between fetches) returns an EMPTY page so
+    // a paging client terminates — it must NOT silently restart at the newest events (which
+    // looped / duplicated the newest page).
+    expect(listAuditEvents(db, { limit: 2, beforeId: 'no-such-id' })).toEqual([])
   })
 
   it('breaks equal-timestamp ties by insertion order (rowid)', () => {

@@ -1399,6 +1399,22 @@ export interface ImportOptions {
    * import (N12). Default true for a folder import, false otherwise; display-only.
    */
   preserveRelativePaths?: boolean
+  /**
+   * D1 (vuln-scan-2026-06-21) — picker capability token. A PICKER import passes the one-time
+   * token from `pickDocuments`; main resolves it to the exact paths it returned from the OS
+   * dialog and IGNORES the renderer-supplied `paths`, so a code-exec'd renderer cannot forge a
+   * picker-origin import of an arbitrary file (confused deputy, threat #1). Absent ⇒ the
+   * drag-drop seam: main can't mint a token for an OS drop, so it hardens the raw paths
+   * (canonicalize + reject symlinks) and the residual is documented in security-model.md.
+   */
+  pickerToken?: string
+}
+
+/** Result of `pickDocuments` (D1): the selected paths (renderer display only) + a one-time
+ *  capability token to pass back to `importDocuments`. Empty selection ⇒ empty token+paths. */
+export interface PickDocumentsResult {
+  token: string
+  paths: string[]
 }
 
 // ---- Benchmark ----

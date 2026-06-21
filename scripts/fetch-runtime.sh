@@ -418,9 +418,13 @@ fi
 
 if [[ -f "$BIN_PATH" ]]; then
   chmod +x "$BIN_PATH" 2>/dev/null || true
-  # Record exactly which build is installed (mirrors assets.ts writeRuntimeMarker).
-  printf '{"version":"%s","backend":"%s","os":"%s","arch":"%s"}' \
-    "$VERSION" "${B_BACKEND[$SEL]}" "${B_OS[$SEL]}" "${B_ARCH[$SEL]}" > "$MARKER_PATH"
+  # Record exactly which build is installed (mirrors assets.ts writeRuntimeMarker). The
+  # `binaries` map records the extracted binary's own SHA-256 (keyed by its name relative
+  # to the extract dir — it sits at the root after the flatten above) so the app can
+  # re-hash it immediately before spawn (vuln-scan B / binary-verifier.ts).
+  BIN_SHA="$(sha256_of "$BIN_PATH")"
+  printf '{"version":"%s","backend":"%s","os":"%s","arch":"%s","binaries":{"%s":"%s"}}' \
+    "$VERSION" "${B_BACKEND[$SEL]}" "${B_OS[$SEL]}" "${B_ARCH[$SEL]}" "$BIN_NAME" "$BIN_SHA" > "$MARKER_PATH"
   echo "  extracted + chmod +x $BIN_NAME (+ .hilbertraum-runtime.json install marker)"
   exit 0
 fi

@@ -192,6 +192,18 @@ describe('probeGpuDevices', () => {
     }
     expect(await probeGpuDevices('/bin/llama-server', { spawn })).toEqual([])
   })
+
+  it('resolves [] WITHOUT spawning when the binary fails pre-spawn verification (vuln-scan B)', async () => {
+    // The probe must NEVER throw — a tampered binary reads as "no GPU", same as a missing one.
+    let spawned = false
+    const spawn: SpawnFn = () => {
+      spawned = true
+      return new FakeProbeChild()
+    }
+    const devices = await probeGpuDevices('/bin/llama-server', { spawn, verify: async () => 'mismatch' })
+    expect(devices).toEqual([])
+    expect(spawned).toBe(false)
+  })
 })
 
 describe('createCachedGpuProbe', () => {

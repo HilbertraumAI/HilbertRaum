@@ -63,8 +63,14 @@ export interface RedactDocumentOutput {
 // design: a regex that would prefer to MISS a borderline value over EATING ordinary text. The order
 // in which `redactText` applies them is fixed so masks never overlap (see redactText).
 
-// E-mail: the conventional local@domain.tld shape.
-const EMAIL_RE = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g
+// E-mail: the conventional local@domain.tld shape. The local-part and domain runs are length-BOUNDED
+// (RFC limits: local ≤ 64, domain ≤ 255) so the scan is provably linear. The earlier unbounded
+// `[..]+@[..]+` form backtracked quadratically (O(N²)) on a long `a.a.a.…` run with no `@`/no final
+// `.tld` — because `.` is both a non-word char (so `\b` permits a restart at every letter) and a
+// class member, every start position re-scanned the whole run. On a hostile imported document this
+// froze the main process (vuln-scan 2026-06-21). Bounding the two runs makes each attempt O(1); a
+// real address never exceeds these limits, so detection is unchanged.
+const EMAIL_RE = /\b[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]{1,255}\.[A-Za-z]{2,}\b/g
 
 // URL: http(s):// or www. forms, stopping at whitespace or a sentence separator so trailing prose is
 // left alone. (Case-insensitive scheme.)

@@ -65,10 +65,10 @@ function streamStubs(): {
   return { token, done, error, api, cancel }
 }
 
-/** Choose-path stubs: the picker returns a path; readBytes returns bytes; decode is faked. */
+/** Choose-path stubs: the picker returns a token (D2); readBytes returns bytes; decode faked. */
 function pickStubs(name = 'receipt.png') {
   return {
-    imageChooseImage: vi.fn(async () => ({ path: `/u/${name}`, name, sizeBytes: 4 })),
+    imageChooseImage: vi.fn(async () => ({ token: `tok-${name}`, name, sizeBytes: 4 })),
     imageReadBytes: vi.fn(async () => new Uint8Array([1, 2, 3, 4]))
   }
 }

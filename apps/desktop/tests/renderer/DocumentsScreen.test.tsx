@@ -511,7 +511,7 @@ describe('DocumentsScreen', () => {
     const importDocuments = vi.fn(async () => ({ jobId: 'j1', documentIds: ['d9'] }))
     stubApi({
       listDocuments: vi.fn(async () => [doc({})]),
-      pickDocuments: vi.fn(async () => ['/u/long-meeting.wav']),
+      pickDocuments: vi.fn(async () => ({ token: 'tok1', paths: ['/u/long-meeting.wav'] })),
       importPreflight: vi.fn(async () => ({
         fileCount: 1,
         audioFileCount: 1,
@@ -531,7 +531,10 @@ describe('DocumentsScreen', () => {
     expect(importDocuments).not.toHaveBeenCalled()
 
     await user.click(within(dialog).getByRole('button', { name: /import and transcribe/i }))
-    await waitFor(() => expect(importDocuments).toHaveBeenCalledWith(['/u/long-meeting.wav']))
+    // D1: the picker capability token is carried through the confirm dialog into the import.
+    await waitFor(() =>
+      expect(importDocuments).toHaveBeenCalledWith(['/u/long-meeting.wav'], { pickerToken: 'tok1' })
+    )
   })
 
   it('cancelling the large-audio confirm imports nothing', async () => {
@@ -539,7 +542,7 @@ describe('DocumentsScreen', () => {
     const importDocuments = vi.fn(async () => ({ jobId: 'j1', documentIds: [] }))
     stubApi({
       listDocuments: vi.fn(async () => [doc({})]),
-      pickDocuments: vi.fn(async () => ['/u/long-meeting.wav']),
+      pickDocuments: vi.fn(async () => ({ token: 'tok1', paths: ['/u/long-meeting.wav'] })),
       importPreflight: vi.fn(async () => ({
         fileCount: 1,
         audioFileCount: 1,
@@ -560,7 +563,7 @@ describe('DocumentsScreen', () => {
     const importDocuments = vi.fn(async () => ({ jobId: 'j1', documentIds: ['d9'] }))
     stubApi({
       listDocuments: vi.fn(async () => [doc({})]),
-      pickDocuments: vi.fn(async () => ['/u/note.txt']),
+      pickDocuments: vi.fn(async () => ({ token: 'tok2', paths: ['/u/note.txt'] })),
       importPreflight: vi.fn(async () => ({ fileCount: 1, audioFileCount: 0, audioBytes: 0 })),
       importDocuments,
       getImportJob: vi.fn(async () => ({ jobId: 'j1', total: 1, completed: 1, failed: 0, done: true }))
@@ -568,7 +571,9 @@ describe('DocumentsScreen', () => {
     render(<DocumentsScreen />)
     await screen.findByText('contract.pdf')
     await user.click(screen.getByRole('button', { name: /import files/i }))
-    await waitFor(() => expect(importDocuments).toHaveBeenCalledWith(['/u/note.txt']))
+    await waitFor(() =>
+      expect(importDocuments).toHaveBeenCalledWith(['/u/note.txt'], { pickerToken: 'tok2' })
+    )
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   })
 
@@ -618,7 +623,7 @@ describe('DocumentsScreen', () => {
       }))
       stubApi({
         listDocuments,
-        pickDocuments: vi.fn(async () => ['/u/a.pdf', '/u/b.pdf']),
+        pickDocuments: vi.fn(async () => ({ token: 'tok3', paths: ['/u/a.pdf', '/u/b.pdf'] })),
         importPreflight: vi.fn(async () => ({ fileCount: 2, audioFileCount: 0, audioBytes: 0 })),
         importDocuments: vi.fn(async () => ({ jobId: 'j1', documentIds: ['d1', 'd2'] })),
         getImportJob

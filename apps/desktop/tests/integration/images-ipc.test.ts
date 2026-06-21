@@ -209,10 +209,11 @@ describe('registerImagesIpc — analyze job contract', () => {
     expect(cancelled.state).toBe('cancelled')
   })
 
-  // V4 lock/quit teardown mechanism: service.stop() aborts any in-flight job (so it ends
-  // `cancelled`, not a scary `runtimeFailed`) AND tears the runtime down so a fresh analyze
-  // cold-starts. This is exactly what registerWorkspaceIpc (lock) + will-quit call.
-  it('stop() aborts the in-flight job and tears down the runtime (lock/quit path)', async () => {
+  // V4 lock/quit teardown mechanism: service.stop() aborts any in-flight job AND tears the
+  // runtime down so a fresh analyze cold-starts. Since vuln-scan-2026-06-21 it ALSO purges the
+  // job map (no answer residue survives lock), so a job is no longer queryable after stop().
+  // This is exactly what registerWorkspaceIpc (lock) + will-quit call.
+  it('stop() aborts the in-flight job, tears down the runtime, and purges the job map (lock/quit path)', async () => {
     let runtimeStopped = false
     let sawSignal: AbortSignal | undefined
     const analyzer = {
@@ -239,27 +240,40 @@ describe('registerImagesIpc — analyze job contract', () => {
     await service.stop()
     expect(runtimeStopped).toBe(true)
     expect(sawSignal?.aborted).toBe(true)
-    const terminal = await waitForTerminal(job.jobId)
-    expect(terminal.state).toBe('cancelled')
+    // The in-flight analyze was aborted, and stop() purged the job map — so the job is no longer
+    // queryable (unknown ⇒ failed) and no answer text lingers past the lock.
+    const purged = (await invoke(handlers, IPC.imageGetJob, job.jobId)).result as ImageJob
+    expect(purged.state).toBe('failed')
+    expect(purged.answer).toBeUndefined()
   })
 })
 
-describe('registerImagesIpc — readBytes main-side re-validation (SEC-3)', () => {
-  it('reads a supported picked image and returns its bytes', async () => {
+describe('registerImagesIpc — readBytes token + main-side re-validation (SEC-3 / D2)', () => {
+  // Mint a one-time picker token for `file` via the chooseImage handler (the only producer).
+  async function tokenFor(file: string): Promise<string> {
+    dialogState.result = { canceled: false, filePaths: [file] }
+    const chosen = (await invoke(handlers, IPC.imageChooseImage)).result as { token: string } | null
+    if (!chosen) throw new Error('chooseImage returned null')
+    return chosen.token
+  }
+
+  it('reads a supported picked image (by its token) and returns its bytes', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'hr-img-'))
     const file = join(dir, 'pic.png')
     writeFileSync(file, Buffer.from([9, 8, 7]))
     registerImagesIpc(ctxFor(dir))
-    const { result } = await invoke(handlers, IPC.imageReadBytes, file)
+    const token = await tokenFor(file)
+    const { result } = await invoke(handlers, IPC.imageReadBytes, token)
     expect(Buffer.from(result as Uint8Array).equals(Buffer.from([9, 8, 7]))).toBe(true)
   })
 
-  it('refuses an unsupported extension', async () => {
+  it('refuses an unsupported extension (even via a real token)', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'hr-img-'))
     const file = join(dir, 'note.txt')
     writeFileSync(file, 'hi')
     registerImagesIpc(ctxFor(dir))
-    await expect(invoke(handlers, IPC.imageReadBytes, file)).rejects.toThrow(IMAGE_UNSUPPORTED_MESSAGE)
+    const token = await tokenFor(file)
+    await expect(invoke(handlers, IPC.imageReadBytes, token)).rejects.toThrow(IMAGE_UNSUPPORTED_MESSAGE)
   })
 
   it('refuses an over-cap image (the cap is the default 20 MiB constant)', async () => {
@@ -268,7 +282,8 @@ describe('registerImagesIpc — readBytes main-side re-validation (SEC-3)', () =
     // Just over the 20 MiB default `VISION_MAX_IMAGE_BYTES`.
     writeFileSync(file, Buffer.alloc(20 * 1024 * 1024 + 1))
     registerImagesIpc(ctxFor(dir))
-    await expect(invoke(handlers, IPC.imageReadBytes, file)).rejects.toThrow(IMAGE_TOO_LARGE_MESSAGE)
+    const token = await tokenFor(file)
+    await expect(invoke(handlers, IPC.imageReadBytes, token)).rejects.toThrow(IMAGE_TOO_LARGE_MESSAGE)
   })
 
   it('refuses readBytes when the workspace is locked', async () => {
@@ -276,7 +291,28 @@ describe('registerImagesIpc — readBytes main-side re-validation (SEC-3)', () =
     const file = join(dir, 'pic.jpg')
     writeFileSync(file, Buffer.from([1]))
     registerImagesIpc(ctxFor(dir, false))
-    await expect(invoke(handlers, IPC.imageReadBytes, file)).rejects.toThrow()
+    await expect(invoke(handlers, IPC.imageReadBytes, 'any-token')).rejects.toThrow()
+  })
+
+  // D2 regression: the confused-deputy gap is closed. A code-exec'd renderer handing back an
+  // arbitrary ABSOLUTE PATH (not a main-minted token) reads NOTHING — even an existing,
+  // supported-extension file is refused because it was never vetted through the picker.
+  it('refuses an arbitrary (non-token) path — the confused-deputy gap is closed', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'hr-img-'))
+    const file = join(dir, 'real.png')
+    writeFileSync(file, Buffer.from([1, 2, 3]))
+    registerImagesIpc(ctxFor(dir))
+    await expect(invoke(handlers, IPC.imageReadBytes, file)).rejects.toThrow(IMAGE_UNSUPPORTED_MESSAGE)
+  })
+
+  it('treats a token as single-use (a replay reads nothing)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'hr-img-'))
+    const file = join(dir, 'once.png')
+    writeFileSync(file, Buffer.from([5, 6]))
+    registerImagesIpc(ctxFor(dir))
+    const token = await tokenFor(file)
+    await invoke(handlers, IPC.imageReadBytes, token) // consumes it
+    await expect(invoke(handlers, IPC.imageReadBytes, token)).rejects.toThrow(IMAGE_UNSUPPORTED_MESSAGE)
   })
 })
 
@@ -287,14 +323,21 @@ describe('registerImagesIpc — chooseImage', () => {
     expect(result).toBeNull()
   })
 
-  it('returns {path,name,sizeBytes} for a chosen file (IPC-2)', async () => {
+  it('returns {token,name,sizeBytes} for a chosen file (IPC-2 / D2 — token, not path)', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'hr-img-'))
     const file = join(dir, 'chosen.png')
     writeFileSync(file, Buffer.from([1, 2, 3, 4, 5]))
     dialogState.result = { canceled: false, filePaths: [file] }
     registerImagesIpc(ctxFor(dir))
-    const { result } = await invoke(handlers, IPC.imageChooseImage)
-    expect(result).toEqual({ path: file, name: 'chosen.png', sizeBytes: 5 })
+    const { result } = (await invoke(handlers, IPC.imageChooseImage)) as {
+      result: { token: string; name: string; sizeBytes: number }
+    }
+    expect(result.name).toBe('chosen.png')
+    expect(result.sizeBytes).toBe(5)
+    expect(typeof result.token).toBe('string')
+    expect(result.token.length).toBeGreaterThan(0)
+    // The absolute path must NOT leak to the renderer.
+    expect(result).not.toHaveProperty('path')
   })
 })
 

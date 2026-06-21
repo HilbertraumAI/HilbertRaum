@@ -36,21 +36,49 @@ export const SUGGEST_SCORE_THRESHOLD = 2
 export const AUTOFIRE_SCORE_THRESHOLD = 3
 
 /**
- * Cap on `*` wildcards in a filename glob. A pattern like `*a*a*a…` compiles to `^.*a.*a…$` —
- * the catastrophic-backtracking shape — and the selector runs it against every in-scope doc title
- * on every turn (main-side, synchronous). Triggers are skill-controlled, so even though only an
- * ENABLED skill is scored (a crafted document can never introduce one), an over-complex glob is
- * refused outright rather than risk hanging the main process (S12-audit ReDoS guard; the parser
- * also bounds the pattern length). Legitimate filename globs use a handful of wildcards.
+ * Match a `*statement*`-style filename glob against a title with a LINEAR, non-backtracking matcher
+ * (case-insensitive, full-string). `*` matches any run, `?` matches any single char, every other
+ * char is literal — identical semantics to the old `^…$`/`i` regex form, but with NO regex engine,
+ * so catastrophic backtracking is structurally impossible.
+ *
+ * ReDoS history (S12-audit guard → vuln-scan 2026-06-21): the previous `globToRegExp` compiled the
+ * skill-controlled pattern into a backtracking RegExp and merely capped the number of `*`. That cap
+ * (a) counted only `*`, not `?`, so a `*?*?*?…` pattern with ≤ 10 stars slipped through and compiled
+ * to `.*..*..*.…` — ten greedy groups separated by `.` — yielding degree-10 polynomial backtracking
+ * that froze the main process on a single moderately-long document title; and (b) refused otherwise
+ * legitimate wildcard-heavy globs. This greedy two-pointer algorithm (the classic `*`/`?` wildcard
+ * match) runs in O(title × pattern) with bounded inputs (the manifest parser caps a pattern at 200
+ * chars / 64 entries) and never backtracks exponentially, so the cap is no longer needed and every
+ * valid glob now matches.
  */
-const MAX_GLOB_WILDCARDS = 10
-
-/** Turn a `*statement*`-style filename pattern into a case-insensitive anchored regex, or null if
- *  it is too wildcard-heavy to be safe (the caller then treats it as a non-match). */
-function globToRegExp(pattern: string): RegExp | null {
-  if ((pattern.match(/\*/g)?.length ?? 0) > MAX_GLOB_WILDCARDS) return null
-  const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.')
-  return new RegExp(`^${escaped}$`, 'i')
+export function globMatches(pattern: string, title: string): boolean {
+  const pat = pattern.toLowerCase()
+  const text = title.toLowerCase()
+  let p = 0
+  let t = 0
+  // The last place a `*` was open, so a later mismatch can resume by letting that `*` eat one more
+  // char — the bounded "remembered star" that keeps the scan linear instead of recursive.
+  let starP = -1
+  let starT = 0
+  while (t < text.length) {
+    if (p < pat.length && (pat[p] === '?' || pat[p] === text[t])) {
+      p++
+      t++
+    } else if (p < pat.length && pat[p] === '*') {
+      starP = p
+      starT = t
+      p++ // tentatively let `*` match zero chars; the fallback below extends it if needed
+    } else if (starP !== -1) {
+      p = starP + 1
+      starT++
+      t = starT // backtrack: the remembered `*` absorbs one more char
+    } else {
+      return false
+    }
+  }
+  // Any trailing pattern must be all `*` to match the empty remainder of the title.
+  while (p < pat.length && pat[p] === '*') p++
+  return p === pat.length
 }
 
 /**
@@ -67,9 +95,7 @@ export function scoreSkillTriggers(triggers: SkillTriggers, ctx: SkillTriggerCon
   const filenameHit = triggers.filenamePatterns.some((p) => {
     const pat = p.trim()
     if (!pat) return false
-    const re = globToRegExp(pat)
-    if (!re) return false // too wildcard-heavy — refused (ReDoS guard), counts as no match
-    return ctx.docTitles.some((t) => re.test(t))
+    return ctx.docTitles.some((t) => globMatches(pat, t))
   })
   return keywordHits * KEYWORD_WEIGHT + (mimeHit ? MIME_WEIGHT : 0) + (filenameHit ? FILENAME_WEIGHT : 0)
 }

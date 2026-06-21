@@ -36,6 +36,7 @@ import type {
   ModelInfo,
   ModelState,
   ModelVerifyProgress,
+  PickDocumentsResult,
   PolicyStatus,
   PreflightResult,
   RuntimeInstallInfo,
@@ -135,13 +136,15 @@ const api = {
   // ---- Image understanding (vision) ----
   /** Is image understanding available (runtime + a verified vision model + projector)? */
   imageGetStatus: (): Promise<VisionStatus> => ipcRenderer.invoke(IPC.imageGetStatus),
-  /** Open the OS picker filtered to png/jpg/jpeg; returns path + name + sizeBytes, or null. */
-  imageChooseImage: (): Promise<{ path: string; name: string; sizeBytes: number } | null> =>
+  /** Open the OS picker filtered to png/jpg/jpeg; returns an opaque token + name + sizeBytes,
+   *  or null. The absolute path stays in MAIN (D2) — readBytes takes only the token. */
+  imageChooseImage: (): Promise<{ token: string; name: string; sizeBytes: number } | null> =>
     ipcRenderer.invoke(IPC.imageChooseImage),
-  /** Read a PICKED image's bytes (main owns file I/O; re-validates extension + cap). Drag-drop
-   *  reads bytes from the File directly and never calls this (IPC-1). */
-  imageReadBytes: (path: string): Promise<Uint8Array> =>
-    ipcRenderer.invoke(IPC.imageReadBytes, path),
+  /** Read a PICKED image's bytes by the one-time token from chooseImage (main owns the path +
+   *  re-validates extension/cap on the open fd). Drag-drop reads bytes from the File directly
+   *  and never calls this (IPC-1). */
+  imageReadBytes: (token: string): Promise<Uint8Array> =>
+    ipcRenderer.invoke(IPC.imageReadBytes, token),
   /** Start a one-at-a-time analyze; resolves with the initial job (a second one returns busy). */
   imageAnalyze: (req: ImageAnalyzeRequest): Promise<ImageJob> =>
     ipcRenderer.invoke(IPC.imageAnalyze, req),
@@ -300,11 +303,14 @@ const api = {
     ipcRenderer.invoke(IPC.askDocuments, conversationId, question, skillInstallId, regenerate),
 
   // ---- Documents ----
-  /** Open the OS picker for files (default) or a folder; returns selected paths. */
-  pickDocuments: (mode?: 'files' | 'folder'): Promise<string[]> =>
+  /** Open the OS picker for files (default) or a folder; returns the selected paths (display)
+   *  + a one-time capability token to pass back as `importDocuments`' `options.pickerToken`. */
+  pickDocuments: (mode?: 'files' | 'folder'): Promise<PickDocumentsResult> =>
     ipcRenderer.invoke(IPC.pickDocuments, mode),
   /** Import files. `options.destination` routes them (Library / a project / Temporary / a
-   *  chat attachment, plan §11.3); omitted ⇒ Library, byte-for-byte with old callers. */
+   *  chat attachment, plan §11.3); omitted ⇒ Library, byte-for-byte with old callers. For a
+   *  PICKER import pass `options.pickerToken` from `pickDocuments` (D1) — main then ignores
+   *  `paths` and imports exactly what was picked. Drag-drop omits the token (hardened in main). */
   importDocuments: (paths: string[], options?: ImportOptions): Promise<ImportJob> =>
     ipcRenderer.invoke(IPC.importDocuments, paths, options),
   /** What a picked selection contains — drives the audio size confirm. */

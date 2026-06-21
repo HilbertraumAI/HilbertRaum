@@ -16,6 +16,7 @@ import {
 import { llamaOsDir } from './runtime/sidecar'
 import {
   downloadToFile,
+  markerBinaryKey,
   planRuntimeDownload,
   runtimeInstallCurrent,
   selectRuntimeBuild,
@@ -25,6 +26,7 @@ import {
   type FetchFn,
   type RuntimeDownloadPlan
 } from './assets'
+import { sha256File } from './models'
 import { assertDownloadAllowed, type DownloadGates } from './downloads'
 
 // In-app engine (prebuilt sidecar binary) downloader. The model downloader fetches model
@@ -170,14 +172,47 @@ export function engineStatus(
 export type ExtractFn = (archivePath: string, destDir: string) => Promise<void>
 
 /**
- * Default extractor: `tar -xf <archive> -C <dir>`. One command covers every host because
- * each platform's archive is one its `tar` understands — Windows 10+ ships bsdtar (handles
- * the .zip release assets), macOS bsdtar + GNU tar both auto-detect the .tar.gz gzip. The
- * DIY scripts use the same native tools (unzip/ditto/tar); this is the in-app equivalent.
+ * Resolve `tar` to an ABSOLUTE path. A BARE `spawn('tar', …)` is unsafe on Windows: libuv
+ * resolves a command name without a path separator against the process CURRENT DIRECTORY
+ * BEFORE System32/PATH, so a malicious `tar.exe` planted in the app's CWD (plausible for a
+ * portable-drive app whose CWD may be the drive or a world-writable launch dir) would run in
+ * our place with the main process's privileges — arbitrary code execution on an engine
+ * install (vuln-scan 2026-06-21 [rce]). The archive SHA-256 protects the CONTENTS, not the
+ * `tar` interpreter. We pin the OS-provided bsdtar/GNU tar at its known absolute location;
+ * only when none of those exist (an exotic host) do we fall back to the bare name so install
+ * still works there. Mirrors the absolute-path discipline already used for the sidecar spawns.
+ */
+export function resolveTarBinary(
+  platform: NodeJS.Platform = process.platform,
+  env: NodeJS.ProcessEnv = process.env,
+  fileExists: (p: string) => boolean = existsSync
+): string {
+  const candidates =
+    platform === 'win32'
+      ? [join(env.SystemRoot || env.windir || 'C:\\Windows', 'System32', 'tar.exe')]
+      : ['/usr/bin/tar', '/bin/tar']
+  for (const candidate of candidates) {
+    if (fileExists(candidate)) return candidate
+  }
+  return 'tar'
+}
+
+/**
+ * Default extractor: `tar -xf <archive> -C <dir>` via the OS's pinned `tar` (see
+ * `resolveTarBinary`). One command covers every host because each platform's archive is one
+ * its `tar` understands — Windows 10+ ships bsdtar (handles the .zip release assets), macOS
+ * bsdtar + GNU tar both auto-detect the .tar.gz gzip. The DIY scripts use the same native
+ * tools (unzip/ditto/tar); this is the in-app equivalent.
  */
 export const extractWithTar: ExtractFn = (archivePath, destDir) =>
   new Promise<void>((resolvePromise, reject) => {
-    const child = spawn('tar', ['-xf', archivePath, '-C', destDir], { stdio: 'ignore' })
+    const child = spawn(resolveTarBinary(), ['-xf', archivePath, '-C', destDir], {
+      stdio: 'ignore',
+      // Don't inherit a possibly attacker-influenced CWD for the child; the archive path is
+      // absolute so this only pins where the (absolute) interpreter is launched from.
+      cwd: destDir,
+      windowsHide: true
+    })
     child.on('error', reject)
     child.on('close', (code) =>
       code === 0 ? resolvePromise() : reject(new Error(`tar exited with code ${code}`))
@@ -404,11 +439,21 @@ export class EngineDownloadManager {
           /* best-effort; a non-executable bit surfaces on the next start */
         }
       }
+      // Record the extracted binary's own SHA-256 so it can be re-hashed before spawn
+      // (vuln-scan B). Best-effort: a hashing failure must not fail an otherwise-good
+      // install — the marker is simply written without the hash (→ verifier skip-legacy).
+      let binaries: Record<string, string> | undefined
+      try {
+        binaries = { [markerBinaryKey(plan.extractTo, plan.binaryPath)]: await sha256File(plan.binaryPath) }
+      } catch (err) {
+        this.deps.log?.('Could not hash the installed binary for the marker', { error: String(err) })
+      }
       writeRuntimeMarker(plan.extractTo, {
         version: plan.version,
         backend: plan.backend,
         os: plan.os,
-        arch: plan.arch
+        arch: plan.arch,
+        ...(binaries ? { binaries } : {})
       })
       this.deps.log?.('Engine installed', { binaryPath: plan.binaryPath })
       return 'done'

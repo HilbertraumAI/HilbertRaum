@@ -102,10 +102,10 @@ describe('vault descriptor v2 (envelope)', () => {
     expect(d.dataKey).toBeTruthy()
 
     const { db, key } = unlockEncryptedVault(vp, 'first-password')
-    updateSettings(db, { contextTokens: 1234 })
+    updateSettings(db, { contextTokens: 3072 }) // arbitrary >= the 2048 floor
     lockEncryptedVault(vp, db, key)
     const again = unlockEncryptedVault(vp, 'first-password')
-    expect(getSettings(again.db).contextTokens).toBe(1234)
+    expect(getSettings(again.db).contextTokens).toBe(3072)
     again.db.close()
   })
 
@@ -147,7 +147,7 @@ describe('changePassword — change-then-unlock-with-new (both legacy KDFs)', ()
       const vp = freshVault()
       const ctl = unlockedController(vp, 'old-password', kdf, { legacyV1: true })
       expect(readVaultDescriptor(vp.descriptorPath)!.version).toBe(VAULT_VERSION)
-      updateSettings(ctl.requireDb(), { contextTokens: 777 })
+      updateSettings(ctl.requireDb(), { contextTokens: 8192 }) // arbitrary >= the 2048 floor
       const enc = addEncryptedDoc(ctl, vp, 'doc-a', 'hello vault')
 
       const state = ctl.changePassword('old-password', 'new-password', FAST_ARGON)
@@ -169,7 +169,7 @@ describe('changePassword — change-then-unlock-with-new (both legacy KDFs)', ()
       expect(() => ctl.unlock('old-password')).toThrow(WrongPasswordError)
       const unlocked = ctl.unlock('new-password')
       expect(unlocked.state).toBe('unlocked')
-      expect(getSettings(ctl.requireDb()).contextTokens).toBe(777)
+      expect(getSettings(ctl.requireDb()).contextTokens).toBe(8192)
       expect(readEncryptedDoc(ctl, enc)).toBe('hello vault')
       ctl.lock()
     })

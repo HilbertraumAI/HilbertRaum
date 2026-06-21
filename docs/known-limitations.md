@@ -20,9 +20,12 @@ password recovery — are documented in
   app-wide risks breaking loopback IPC and the sidecars). Electron's own `net` module would bypass
   it. The offline guarantee is a property of the code + CSP + deny-by-default policy; the guard is
   a tripwire, not an enforcement layer.
-- **`importDocuments` accepts caller-supplied paths.** The IPC handler trusts renderer-supplied
-  file paths rather than honouring only picker-returned ones. Hardening against a compromised
-  renderer is deferred (the renderer is already sandboxed with context isolation).
+- **`importDocuments` picker imports are token-bound; drag-drop trusts caller paths (accepted).**
+  A PICKER import is bound to a one-time `pickDocuments` capability token (main imports exactly what
+  it returned), so a compromised renderer can't forge a picker-origin read of an arbitrary file
+  (vuln-scan-2026-06-21 / `security-model.md` D1). A native OS drag-drop is delivered to the
+  *renderer*, so main can't tokenize it — that seam still accepts raw paths but rejects symlinks and
+  canonicalizes them, and there is no network sink to exfiltrate read content (offline).
 - **Archive extraction trusts verified archives.** `fetch-runtime` rejects `extract_to` escapes,
   and archives are SHA-256-verified before extraction — but member paths inside an archive are only
   as trustworthy as the pinned hash in `runtime-sources.yaml`.
@@ -54,6 +57,14 @@ password recovery — are documented in
   is attacker-forgeable anyway). Mitigations: the AI Model screen's **Verify checksum** forces a real
   re-hash, and the ship-time gates (`verify-models --strict`, `assertCommercialDrive`) always hash
   fully.
+- **Sidecar binaries built by an OLD `fetch-runtime` carry no pre-spawn hash (accept + document).**
+  The re-hash-before-spawn control (vuln-scan B, [`security-model.md`](security-model.md) "Re-hash
+  sidecar binaries before spawn") re-verifies `llama-server` / `whisper-cli` against a SHA-256 the
+  install marker now records. A drive provisioned by a `fetch-runtime.{ps1,sh}` predating that change
+  has no recorded hash, so the verifier **tolerates** the binary (`skip-legacy`) rather than refusing to
+  start — it stays unprotected until the runtime is re-fetched (the commercial sell-gate forces this for
+  sold drives, but a self-built DIY drive does not). Trust there still rests on drive provisioning +
+  filesystem integrity, the same residual already accepted for on-drive sidecars and app skills.
 - **App-skill integrity is by location, not signature (Skills §22-M2 — accept + document).** A
   shipped skill's `trusted_level: app` is assigned because it sits in `app-skills/`, copied there at
   drive-build. On a removable drive `app-skills/` is writable, so "verified" means build-time
@@ -93,10 +104,14 @@ password recovery — are documented in
   in-scope documents' filenames. The skill must already be **enabled by the user**, and the match runs
   only on a user action (the picker) — there is **no auto-fire** (deferred to S13). The earlier-noted
   "length-bounded matcher is future hardening" **has now shipped** (architecture.md "Skills — design
-  record" §13, S2): the parser caps each trigger entry's length (≤200) and count (≤64), and
-  `selector.globToRegExp` refuses a glob with more than 10 `*` wildcards (it counts as a non-match), so
-  a `*a*a…`-style pattern can no longer drive catastrophic backtracking on the synchronous main-side
-  scoring. The residual is therefore closed in practice.
+  record" §13, S2): the parser caps each trigger entry's length (≤200) and count (≤64). The earlier
+  guard — a regex compiled from the glob with a cap of 10 `*` wildcards — was **replaced (vuln-scan
+  2026-06-21) by a linear, non-backtracking two-pointer matcher** (`selector.globMatches`): the old cap
+  counted only `*`, so a `*?*?…` pattern (≤10 stars, `?` interleaved) still compiled to a degree-10
+  backtracking regex that could freeze the synchronous main-side scoring on a moderately-long document
+  title. The two-pointer matcher cannot backtrack at all (and no longer refuses legitimate
+  wildcard-heavy globs), so catastrophic backtracking is now **structurally impossible**, not merely
+  bounded.
 - **Document redaction is best-effort, not a privacy/compliance guarantee (Skills S11d).** The
   `document-redaction` skill's `redact_document` tool masks personal data with **deterministic,
   offline regexes only** — e-mail addresses, phone numbers, IBANs, dates, and web links. There is **no
@@ -465,8 +480,10 @@ password recovery — are documented in
   feature never generates/edits images (a permanent non-goal).
 - **Context is capped at 4096 tokens** (vs the model's 128 000 train context) — fine for a single
   image + a short question/thread in MVP; long multi-turn threads about one image are not a v1 promise.
-- **The caller-supplied-path caveat applies to `imageReadBytes(path)`** — the same accepted stance as
-  `importDocuments` (the renderer is sandboxed; main re-validates the extension + byte cap, SEC-3).
+- **`imageReadBytes` takes an opaque token, not a path** (vuln-scan-2026-06-21 / `security-model.md`
+  D2). `imageChooseImage` returns a one-time token; the absolute path stays in main, so the renderer
+  can't make main read an arbitrary file. The byte cap is re-checked on the open fd (no TOCTOU), and
+  the main-side guard also rejects decompression bombs by a decoded-pixel budget (D4).
 - **No vision model ships on a commercial drive yet, but the sell gate already verifies BOTH files
   (DIST-2).** `assertCommercialDrive` → `verifyDriveModels` iterates the same `manifestFiles` set
   (GGUF + mmproj) that `computeInstallState` requires, so a half-installed vision drive (good GGUF,

@@ -883,6 +883,20 @@ fresh level-1 node**, and recurses over node summaries to a single root. Cost is
 paid once — the node count is `estimateNodeCount` over the level-1 groups and the branching factor, so it
 scales with context-window size (roughly 50–300 nodes for a 1000-chunk doc at typical 4k–8k context) —
 **zero embeds at build time** (node vectors deferred — §14.6).
+- **Provable termination [vuln-scan-2026-06-21 HIGH_BUG]:** the level-by-level `for(;;)` reduces until one
+  root group remains, so it must shrink each level. `summaryBudgetWords` is floored at 200 words, but a
+  node summary is capped at `SUMMARY_OUTPUT_TOKENS`(512) — so at a tiny `contextTokens` a single summary
+  can **exceed** a budget window, and the old "a child is far below the budget" assumption was false: the
+  upper levels never reduced (each over-budget summary sat alone), looping forever and issuing unbounded
+  `generate()` calls that **permanently blocked the single-slot doc-task queue**. Fix: `groupByBudget`
+  takes a `minPerGroup`; the **node-reduction levels (≥2) pass `minPerGroup=2`** so every group bar a final
+  remainder holds ≥2 children and the node count **strictly shrinks regardless of summary size** — the
+  build halts in ≤`leaves.length` levels. Level 1 (chunks→summaries, which may legitimately be 1:1) keeps
+  `minPerGroup=1` and runs exactly once. A backstop guard (`TREE_BUILD_NO_PROGRESS`) + a `maxLevels` cap
+  turn any future regression into a clean task failure instead of a hang. Independently, **`updateSettings`
+  clamps `contextTokens` UP to a 2048 floor** (`MIN_CONTEXT_TOKENS`, settings.ts) so a renderer-supplied
+  value can't drop the budget below a single summary's size — 2048 always fits ≥2 node summaries + reserve
+  in one reduce window.
 - **Yielding (H3/H9/H10):** an O(n)-call build cannot block chat. The build commits **one node per
   transaction** and, at each node boundary (synchronous, before the next `generate`), checks the
   **`ModelSlotArbiter`** ([`model-slot-arbiter.ts`](../apps/desktop/src/main/services/analysis/model-slot-arbiter.ts)) —

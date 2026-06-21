@@ -6,6 +6,163 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-21 — **Vuln-scan remediation — item B: re-hash sidecar binaries before spawn (the LAST open finding; scan now FULLY
+remediated).** The tracked TOCTOU (= audit-2026-06-14 "engine-binary not re-hashed before spawn"): `llama-server` / `whisper-cli` /
+the `--list-devices` GPU probe were SHA-256-verified at install but NOT re-hashed before `spawn`, so a local adversary overwriting
+`runtime/<family>/<os>/<bin>` between install and launch got code-exec. The spawns are arg-array (no shell) so the residual was
+purely the missing re-verification. **As built (suite green — 2062 passed / 30 skipped, +19 tests; typecheck clean), coherent commits:**
+- **Install marker now records each binary's own SHA-256.** `RuntimeInstallMarker` gained optional `binaries: Record<relPath,sha256>`
+  (`assets.ts`), keyed by the binary's path relative to the extract dir, posix `/` (`markerBinaryKey`). `readRuntimeMarker` parses it
+  **tolerantly** (malformed → dropped; hash-less marker still deep-equals the legacy shape). Written by ALL three marker writers: the
+  in-app installer (`runtime-download.ts`, best-effort hash of `plan.binaryPath`) + the DIY `fetch-runtime.{ps1,sh}` scripts.
+- **One shared, session-cached verifier** (`binary-verifier.ts`): `verifyBinaryBeforeSpawn(binPath)` → `ok|skip-legacy|skip-dev|mismatch`.
+  Walks UP from the binary's dir to the nearest marker (covers the `cpu/` safety-net), re-hashes, compares; **cached per resolved path**
+  (the probe + start race the same path). Unreadable binary fails SAFE (`mismatch`). `initBinaryVerification(isDev)` once in `index.ts`:
+  **packaged enforces, dev skips**; a binary with a recorded hash is verified, one WITHOUT (legacy/un-upgraded drive) is TOLERATED
+  (`skip-legacy`, never refuses). Inert before init → headless unit suite unaffected.
+- **Wired at the spawn seams (a `mismatch` only fires packaged):** `LlamaServer.start()` (`sidecar.ts`) **throws before port/child**
+  → ladder falls to next rung / **MockRuntime** (covers chat + embedder + reranker + vision — all funnel through `start()`); GPU probe
+  (`gpu.ts`) resolves **`[]`** (never throws); whisper `run()` (`cli.ts`) **refuses** → per-file friendly failure. Dev-only
+  `HILBERTRAUM_*_BIN` overrides are NOT hash-gated (dev → skip).
+- **Commercial sell-gate** (`commercial-drive.ts`): `assertCommercialDrive` now REQUIRES the marker hash present + matching the on-disk
+  binary — a drive built by a pre-B `fetch-runtime`, or a binary modified after install, **fails the gate** (forces rebuild).
+- **Tests:** new `binary-verifier.test.ts` (markerKey, matrix match/mismatch/missing-hash/no-marker/unreadable/cpu-walk-up, gate +
+  session-cache); sidecar/gpu/whisper tamper-refusal; assets marker round-trip WITH hashes + malformed-`binaries` drop; engine-download
+  asserts the install writes the hash; commercial-drive no-hash + post-install-tamper fail the gate. **Docs:** `security-model.md`
+  DEFERRED section → as-built design record; M-5 forward-ref updated; `known-limitations.md` residual (pre-B DIY drives unprotected
+  until rebuilt). **ITEM B DONE → the .deepsec vuln-scan 2026-06-21 is now FULLY remediated** (Tier-1 + HIGH_BUG + option C + option D + B).
+**Follow-up (post-audit robustness):** the pre-spawn verifier no longer session-caches a TRANSIENT read failure.
+`computeRawVerification` distinguishes `unreadable` (couldn't hash — e.g. a Windows AV/indexer lock) from a real
+hash `mismatch` (tamper); both still fail safe THIS spawn, but `verifyBinaryBeforeSpawn` evicts an `unreadable`
+result from the cache (identity-guarded) so the next spawn re-hashes — a self-healing lock no longer strands the
+session on MockRuntime, while a real tamper verdict stays sticky. +2 tests in `binary-verifier.test.ts`
+(unreadable-then-recover, tamper-stays-cached). Suite still green.
+**(Option D entry below.)**_
+
+_2026-06-21 — **Vuln-scan remediation — defense-in-depth / least-privilege gaps (option D).** The four MEDIUM items that are
+deviations from the app's own trust model (renderer = UNTRUSTED; threat #1 = code-exec'd renderer). Confirmed two IPC-contract
+choices with the user: **D1 = picker token + harden drag-drop**, **D2 = opaque token**. **As built (suite green — 2043 passed /
+30 skipped; typecheck clean), one coherent commit each:**
+- **D1 — `importDocuments` bound to a picker capability token** (`registerDocsIpc.ts`, `shared/types.ts`, preload, ChatScreen +
+  DocumentsScreen, `docs-ipc.test.ts`). Raw renderer paths were a confused-deputy arbitrary-file read (text reachable via
+  preview/export/RAG). `pickDocuments` now returns `{ token, paths }` (one-time `randomUUID`, bounded map, single-use, bound to
+  the OS-vetted paths); a PICKER import passes `options.pickerToken` and main **resolves+consumes it, ignoring the renderer
+  `paths`**. Forged/replayed/unknown token ⇒ imports nothing. **Drag-drop residual (accepted, documented):** an OS drop is
+  delivered to the *renderer* (untokenizable) — that seam still passes raw paths but is hardened (`lstat`-reject symlink →
+  `realpathSync`); no network exfil sink exists. `importPreflight` stays on raw paths (counts/sizes, lower impact). 4 regression
+  tests (token binding, forged-token, single-use, drop symlink-reject).
+- **D2 — `imageReadBytes` takes an opaque token, never a path** (`registerImagesIpc.ts`, preload, ImagesScreen, `images-ipc.test.ts`).
+  `imageChooseImage` now returns `{ token, name, sizeBytes }` (path stays in main, bounded one-time map); `imageReadBytes(token)`
+  resolves+consumes and reads via **open→fstat→read on one fd** (cap authoritative; closes the `stat`→`read` TOCTOU). Closes the
+  `.png`-named-symlink / arbitrary-read vector. 3 new tests (non-token path refused, single-use, choose returns no `path`).
+- **D3 — `downloadToFile` per-hop redirect re-validation + body cap** (`assets.ts`, `downloads.ts`, `assets.test.ts`). Was
+  `redirect:'follow'` with TLS checked only on the initial URL → SSRF to LAN/loopback (`169.254.169.254`), https→http downgrade,
+  and unbounded disk-fill. Now `redirect:'manual'`; each hop (initial + every `Location`) re-checked by `assertSafeDownloadUrl`
+  (**https-only + loopback/private-range deny** + max-redirect cap), and the body is capped at min{`Content-Length`, caller
+  `maxBytes`}+margin (model downloader passes the manifest size) with a global backstop. All seam users (weights/runtime/OCR)
+  inherit it. 5 new tests (follow-public, http-downgrade reject, private-host reject, redirect-loop, size-cap).
+- **D4 — vision guard bounds decoded pixels, not just bytes** (`vision/limits.ts`, `vision-limits.test.ts`). A <20 MiB
+  decompression-bomb PNG/JPEG decoded to billions of px and OOM'd the sidecar (runtime.ts inlines the ORIGINAL bytes; the
+  renderer `MAX_DIMENSION` is display-only). `validateAnalyzeRequest` now parses the **header** (PNG IHDR / JPEG SOF) for
+  `width*height` — no full decode — and rejects above `VISION_MAX_IMAGE_PIXELS` (~50 MP default, `HILBERTRAUM_MAX_IMAGE_PIXELS`)
+  as `tooLarge`; unknown dims fall through to the byte cap. New `tests/unit/vision-limits.test.ts` (8 cases incl. PNG/JPEG bombs).
+**Docs:** `security-model.md` gains a "Least-privilege hardening of the renderer↔main file/network seams" §-section (D1–D4).
+**OPTION D COMPLETE.** **STILL OPEN:** B — sidecar re-hash-before-spawn (DEFERRED; design in `security-model.md`). That is the
+only remaining triaged item from this scan.
+**(Option C entry below.)**_
+
+_2026-06-21 — **Vuln-scan remediation, Tier 2 — robustness BUGs (option C).** Working the report's 8 BUG-severity items
+(one, the malformed-manifest `buildModelList` crash, was already closed in Tier 1). Each is a robustness/correctness defect,
+not an attacker-reachable vulnerability; fixed as small coherent commits with regression tests. **Closed so far:**
+- **`analysis/coverage.ts` `reachableLeafChunkIds` cyclic-tree guard.** The iterative DFS tracked a `seen` set only for leaf
+  CHUNK ids; node→node edges recursed unconditionally, so a cycle (DB corruption / a future builder bug) would overflow the stack
+  and crash the coverage read. Now tracks visited NODE ids (seeded with the root) and skips already-visited nodes. buildTree still
+  writes a strictly acyclic tree, so this is purely defensive. Test: whole-doc-analysis injects a node→root back-edge and asserts
+  the walk terminates with leaf coverage intact.
+- **`audit.ts` `listAuditEvents` pagination cursor.** A supplied `beforeId` whose anchor row was pruned (retention) fell through
+  to the newest page, so a client paging toward older events looped / showed duplicates. Now returns an EMPTY page (terminates
+  pagination); the Diagnostics "earlier" button hides cleanly (`page.length === PAGE_SIZE` ⇒ false). Doc comment + the existing
+  audit.test pagination test updated to the new contract.
+- **Vision service cluster (`vision/index.ts`, `vision/history.ts`, `vision/runtime.ts`, `registerImagesIpc.ts`).** Four items,
+  one commit: (1) **residue-after-lock (MEDIUM)** — `VisionService.stop()` (wired to lock/quit) now CLEARS the job map +
+  controllers after teardown, so a completed answer (content from the private image) doesn't survive the vault re-encrypt;
+  (2) **unbounded job map (BUG)** — terminal jobs are evicted past `VISION_MAX_JOB_HISTORY=16`; (3) **history read-temp collision
+  (BUG)** — the decrypt temp is now per-call unique (`<id>.read-<pid>-<uuid>.tmp`) so two concurrent reads of one session can't
+  interleave/shred each other; (4) **`imageGetJob`/`imageCancel` gated on `requireUnlocked`** (consistent with imageAnalyze +
+  history handlers); plus a stale `startFailed` "Cleared by stop()" comment corrected (it's intentionally sticky — a stopped
+  runtime is discarded). Tests: 3 new in `vision-security.test.ts` (stop() purges the answer, the map is bounded, locked handlers
+  reject). Docs: `security-model.md` "Encrypted image-analysis history" gains the unique-read-temp + lock-residue-purge notes.
+- **`downloads.ts` `start()` single-flight TOCTOU (BUG).** The `activeJob()` guard and the `this.active` assignment straddled
+  `await planModelDownloads(...)`, so two near-simultaneous `start()` invokes both passed the guard → two concurrent runs, and the
+  second overwrote `this.active`, orphaning the FIRST job's AbortController (an un-cancellable download). Added a synchronous
+  `starting` latch set right after the guard and cleared in a `finally` (by which point `this.active` is set), so the second
+  invoke rejects with `alreadyRunning`. Verified before/never-trust boundary is untouched (the garbled `.part` still fails SHA-256).
+  Test: two un-awaited `start()`s in one tick — the second rejects, exactly one active job remains.
+- **`workspace-vault.ts` `applyPendingRekey` partial-failure resilience (BUG).** Post-commit (the in-memory key already swapped
+  to the new data key), the swap loop threw on the FIRST sidecar rename failure (e.g. a transiently locked file on Windows),
+  abandoning every LATER staged sidecar under the RETIRED key → many documents decrypted to a GCM-tag failure mid-session until
+  `recoverPendingRekey` finished them on the next unlock. Now best-effort + one retry pass: attempt all files, retry the
+  stragglers, and only then throw — so at most a genuinely-stuck file is deferred to recovery, never the whole tail. Idempotent /
+  crash-safe contract unchanged. Test: a staged sidecar whose target is a non-empty dir (forced rename failure) — the other
+  sidecars still swap; the stuck one stays staged.
+**OPTION C COMPLETE** — all 7 remaining robustness BUGs fixed (the 8th, malformed-manifest list crash, closed in Tier 1).
+**NEXT (asked of user):** B sidecar re-hash-before-spawn / D defense-in-depth gaps.
+**(Tier-2 HIGH_BUG entry below; Tier-1 entry under that.)**_
+
+_2026-06-21 — **Vuln-scan remediation, Tier 2 — the HIGH_BUG: summary-tree build could loop forever / block the doc-task queue.**
+`analysis/tree-build.ts` `buildTree()` reduces a document's summary tree level-by-level in a `for(;;)` that halts only when a
+level collapses to one root group. `groupByBudget` never splits an over-budget child, and the loop relied on the (FALSE-at-small-
+budget) assumption that a node summary is "far below a group budget". `summaryBudgetWords` floors at 200 words but a node summary is
+capped at `SUMMARY_OUTPUT_TOKENS`(512), so at a low `contextTokens` (renderer-controlled, previously **unvalidated for a minimum**)
+every node summary exceeded a budget window → each sat alone → the upper levels never reduced → **infinite loop issuing unbounded
+`generate()` calls; `tree_status` stuck `building`; and since `DocTaskManager.pump()` only advances when `runningId` clears, the
+WHOLE single-slot doc-task queue (summary/translate/compare/ocr/extract) permanently blocked.** **As built (suite green — 2018 passed
+/ 30 skipped; typecheck clean):**
+- **Provable termination, independent of model output size.** `groupByBudget(children, budgetWords, minPerGroup=1)` gains a
+  minimum-branching lever; the **node-reduction levels (≥2) pass `minPerGroup=2`**, so a group is flushed only once it holds ≥2
+  children and every level bar a final remainder strictly shrinks — the build halts in ≤`leaves.length` levels no matter how large
+  the summaries are. **Level 1 (chunks→summaries) keeps `minPerGroup=1`** (it may legitimately be 1:1 — a 500-tok chunk exceeds a
+  small budget — but it runs exactly once; the reduction happens at the node levels above). A backstop guard throws
+  `TREE_BUILD_NO_PROGRESS` (+ a `maxLevels = leaves.length+1` cap) if a node level ever fails to shrink, turning a would-be hang into
+  a clean task failure (run() → generic-failure copy, raw to local log only; doc left resumable `building`).
+- **`contextTokens` floor.** `updateSettings` (settings.ts) now clamps `contextTokens` **UP** to `MIN_CONTEXT_TOKENS=2048` (clamps,
+  never drops; non-finite → floor) so a buggy/hostile renderer patch can't starve the budget below a single summary's size. 2048
+  always fits ≥2 node summaries + the prompt/output reserve in one reduce window. (Renderer reaches it via the generic `settings:update`
+  IPC; the Settings screen only displays the value.)
+- **Tests + docs.** New regression `whole-doc-analysis.test.ts` → "tree build termination": direct `buildTree` at `contextTokens:1024`
+  with a model emitting 400-word (>budget) summaries now **completes** (ready, full leaf coverage, bounded calls) — it would hang
+  before the fix. New `db-settings.test.ts` clamp test (512/1024→2048, 8192 passthrough, NaN→floor). `password-change.test.ts`
+  persistence-marker values raised above the floor (777/1234 were arbitrary markers, now 8192/3072). Design record folded into
+  `rag-design.md` §14.3 ("Provable termination").
+**NEXT (asked of user):** B sidecar re-hash-before-spawn / C the 8 robustness BUGs / D defense-in-depth gaps.
+**(prior Tier-1 entry below.)**_
+
+_2026-06-21 — **Vuln-scan remediation, Tier 1 (true-positive security; ReDoS + extraction + manifest hardening).**
+Worked the `.deepsec/.../report.md` scan (28 findings; many scanner-confirmed false positives). This pass fixed the
+**attacker-reachable** items — the rest are triaged below. **As built (suite green — 2016 passed / 30 skipped; typecheck clean):**
+- **Parsing-DoS → made provably LINEAR (threat #1: resource exhaustion while parsing a hostile document/skill).** Three
+  synchronous main-process regexes backtracked super-linearly: `skills/tools/money.ts` `MONEY_RE` (shared by bank-statement +
+  invoice; `\d[\d.,]*` → bounded `\d[\d.,]{0,30}`, and `\s*`→`\s{0,4}`), `skills/tools/redaction.ts` `EMAIL_RE`
+  (local/domain bounded to RFC 64/255), and `skills/selector.ts` (glob→RegExp **replaced** by a linear two-pointer
+  `globMatches` — the old `*`-only wildcard cap let `*?*?…` through). Token/parse behaviour unchanged for realistic input;
+  added 200k-char "< 1 s" regression tests to bank-statement/redaction/selector suites.
+- **Engine extractor pins an ABSOLUTE `tar`** (`runtime-download.ts` `resolveTarBinary`) — a bare `spawn('tar')` let a
+  CWD-planted `tar.exe` hijack the interpreter on Windows ([rce]). Falls back to the bare name only on an exotic host; spawns
+  with a controlled `cwd`. New `resolveTarBinary` unit tests (win/posix/fallback).
+- **Hostile manifest can no longer break the whole Models list** — `validateManifest` now rejects an absolute/`..`
+  `local_path`/`mmproj.local_path` (so `discoverManifests` records+skips it), AND `buildModelList`'s loop wraps
+  `computeInstallState` in try/catch (one bad manifest → an errored entry, not a dead Models screen). `weightPath` keeps its own
+  runtime guard. Tests added to `manifest.test.ts`; `models.test.ts` weightPath-guard test rebuilt to bypass validation.
+**DEFERRED (documented, not fixed):** the sidecar **re-hash-before-spawn** TOCTOU (`llama-server`/`whisper-cli`/GPU probe) —
+no per-binary hash is recorded today (marker has version/backend only), it needs cross-language script sync, and a non-breaking
+"verify-when-present" rollout; design + rollout written into `security-model.md` ("Open item: re-hash sidecar binaries before
+spawn"). Other lower-tier items (importDocuments/imageReadBytes renderer-path trust, downloadToFile redirect SSRF, vision
+job-map residue/leak, decompression-bomb dimension cap, and the 8 robustness BUGs) remain open per the user's "Tier 1 first" scope.
+**Docs:** `security-model.md` gains four §-sections (parsing-DoS, absolute-`tar`, manifest-list, the deferred re-hash design);
+`known-limitations.md` glob-ReDoS note updated (linear matcher, not a wildcard cap). **Verification:** `npm test` 2016 passed /
+30 skipped; `npm run typecheck` clean.
+**(prior V8 entry below.)**_
+
 _2026-06-20 — **Image-understanding V8 — answer markdown FIXED + encrypted, deletable analysis HISTORY added (user-requested).**
 Two user-reported gaps on the Images screen. **(1) Formatting:** the streamed answer rendered raw markdown (literal `**bold**`, `1.`
 lists). `AnswerThread` now renders through the SAME shared `AssistantMarkdown` (`react-markdown` + `remark-gfm`) Chat/Documents use — the

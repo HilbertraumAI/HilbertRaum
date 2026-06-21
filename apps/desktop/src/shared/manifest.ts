@@ -199,6 +199,23 @@ function validateDownloadSubBlock(
  * Validate a parsed YAML object into a ModelManifest, collecting all errors.
  * Pure (no I/O) so it is trivial to unit-test.
  */
+/**
+ * Reject a manifest path that is not a contained, drive-RELATIVE path: an absolute path
+ * (leading `/`, a `C:`-style drive letter, or a UNC root) or one with a `..` segment that
+ * could escape the drive root. The runtime escape guard (`safeDrivePath`/`weightPath`)
+ * already THROWS on such a path before it could ever reach a `--model` argument, but that
+ * throw is unhandled on the model-LIST path, so a single hostile manifest (the threat
+ * model's #1 attacker — `model-manifests/` is user-writable) could break the whole Models
+ * screen. Rejecting it here at the source means `discoverManifests` records it in `errors`
+ * and SKIPS it, so the rest of the list still renders (vuln-scan 2026-06-21 [path-traversal]).
+ */
+function isUnsafeManifestPath(p: string): boolean {
+  const norm = p.replace(/\\/g, '/')
+  if (norm.startsWith('/')) return true // POSIX-absolute or a UNC `\\server\share` root
+  if (/^[A-Za-z]:/.test(norm)) return true // Windows drive-letter absolute (`C:/…`)
+  return norm.split('/').some((seg) => seg === '..')
+}
+
 export function validateManifest(raw: unknown): ValidationResult {
   const errors: string[] = []
   if (!isObject(raw)) {
@@ -238,6 +255,9 @@ export function validateManifest(raw: unknown): ValidationResult {
   const recommendedRamGb = num('recommended_ram_gb')
   const recommendedContextTokens = num('recommended_context_tokens')
   const localPath = str('localPath', 'local_path')
+  if (localPath && isUnsafeManifestPath(localPath)) {
+    errors.push('"local_path" must be a drive-relative path (no leading "/", drive letter, or ".." segment)')
+  }
   const sha256 = str('sha256', 'sha256').toLowerCase()
 
   // Optional capability flag: must be a boolean when present.
@@ -331,6 +351,9 @@ export function validateManifest(raw: unknown): ValidationResult {
         errors.push('"mmproj.local_path" is required and must be a non-empty string')
       } else {
         mpLocal = mpLocalRaw.trim()
+        if (isUnsafeManifestPath(mpLocal)) {
+          errors.push('"mmproj.local_path" must be a drive-relative path (no leading "/", drive letter, or ".." segment)')
+        }
       }
       const mpShaRaw = mp['sha256']
       if (typeof mpShaRaw !== 'string' || mpShaRaw.trim() === '') {

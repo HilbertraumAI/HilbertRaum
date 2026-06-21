@@ -286,6 +286,49 @@ describe('summary tree build', () => {
   })
 })
 
+// ---- HIGH_BUG vuln-scan-2026-06-21: provable termination at a starved budget ---------
+
+describe('tree build termination (HIGH_BUG vuln-scan-2026-06-21)', () => {
+  it('terminates with bounded model calls when every node summary EXCEEDS the budget window', async () => {
+    // The pathological case: a tiny contextTokens (1024 ⇒ ~200-word budget) and a model that
+    // emits summaries far larger than the budget. Before the fix, the upper levels never
+    // reduced (each over-budget summary sat alone), so the for(;;) loop summarised the same
+    // node count forever — an infinite loop issuing unbounded generate() calls that
+    // permanently blocked the single-slot doc-task queue. With minPerGroup=2 at the
+    // node-reduction levels the count strictly shrinks, so this build PROVABLY halts. If the
+    // fix regresses, this test hangs (times out) instead of passing.
+    const id = await importWords(4000)
+    const leafCount = chunkIds(id).length
+    expect(leafCount).toBeGreaterThan(1)
+
+    let calls = 0
+    // A summary much larger than the ~200-word budget, distinct per call (no trivial cache
+    // collapse that would mask the call count).
+    const bigSummary = (): string => {
+      calls += 1
+      return Array.from({ length: 400 }, (_, i) => `lorem${i}`).join(' ') + ` #${calls}`
+    }
+
+    const meta = await buildTree(id, {
+      db,
+      modelId: 'm',
+      contextTokens: 1024, // direct call bypasses the settings clamp ⇒ exercises the loop guard
+      signal: new AbortController().signal,
+      arbiter: new ModelSlotArbiter(),
+      jobId: 'job-terminate',
+      generate: async () => bigSummary()
+    })
+
+    expect(treeStatus(id)).toBe('ready')
+    expect(meta.levels).toBeGreaterThan(1) // it actually reduced across multiple levels
+    // The root reaches every leaf — no chunk dropped despite the forced pairing.
+    expect(reachableLeafChunks(id).size).toBe(leafCount)
+    // Bounded work: each level at least halves the node count, so total nodes (hence calls)
+    // is O(leaves), nowhere near the unbounded loop the bug produced.
+    expect(calls).toBeLessThan(leafCount * 4)
+  })
+})
+
 // ---- Resume + cache (C3) + re-index invalidation (H1/H2) ----------------------------
 
 describe('content cache, resume, and re-index invalidation', () => {
@@ -565,6 +608,26 @@ describe('coverage math + provenance', () => {
     expect(wholeCov.mode).toBe('capped')
     expect(wholeCov.truncated).toBe(false)
     expect(wholeCov.chunksCovered).toBe(total)
+  })
+
+  it('reachableLeafChunkIds terminates on a cyclic tree instead of overflowing the stack (BUG vuln-scan-2026-06-21)', async () => {
+    const id = await buildReadyTree()
+    const total = documentChunkCount(db, id)
+    expect(reachableLeafChunkIds(db, id).length).toBe(total)
+    // Inject a node→node back-edge (DB corruption / a hypothetical builder bug): a descendant
+    // node points back at the root, forming a cycle. An unguarded DFS would recurse forever
+    // and crash the read; the visited-node guard makes it terminate with leaf coverage intact.
+    const root = db
+      .prepare('SELECT id FROM tree_nodes WHERE document_id = ? AND is_root = 1')
+      .get(id) as { id: string }
+    const deep = db
+      .prepare('SELECT id FROM tree_nodes WHERE document_id = ? AND is_root = 0 ORDER BY level LIMIT 1')
+      .get(id) as { id: string } | undefined
+    expect(deep).toBeTruthy()
+    db.prepare(
+      'INSERT INTO tree_edges (parent_id, child_id, child_is_chunk, ordinal) VALUES (?, ?, 0, 999)'
+    ).run(deep!.id, root.id)
+    expect(reachableLeafChunkIds(db, id).length).toBe(total) // terminates, no double-count
   })
 
   it('a building tree reports tree state (labelled building, NOT ready/100% — C1)', async () => {

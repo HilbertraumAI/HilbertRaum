@@ -232,6 +232,23 @@ describe('download gates', () => {
       /already downloaded/
     )
   })
+
+  it('rejects a concurrent start() — single-flight latch closes the check-then-set window (BUG vuln-scan-2026-06-21)', async () => {
+    const body = 'hello-world-weights'
+    const m = verifiedManifest(body)
+    const root = tempRoot()
+    const mgr = new DownloadManager({ fetchImpl: hangingFetch('hello-') })
+    // Fire two starts in the same tick: the first sets the `starting` latch synchronously
+    // before its `await planModelDownloads`, so the second must reject rather than launch a
+    // second concurrent run (which previously orphaned the first AbortController).
+    const p1 = mgr.start({ rootPath: root, manifest: m, gates: OPEN })
+    const p2 = mgr.start({ rootPath: root, manifest: m, gates: OPEN })
+    await expect(p2).rejects.toThrow(/already running/i)
+    const job1 = await p1
+    expect(['queued', 'downloading']).toContain(job1.status)
+    expect(mgr.activeJob()).toBe(job1.jobId) // exactly one active job
+    mgr.cancel(job1.jobId) // unwind the hanging fetch
+  })
 })
 
 // ---- vision: a model is TWO files (GGUF + mmproj projector, DIST-1) ------------------

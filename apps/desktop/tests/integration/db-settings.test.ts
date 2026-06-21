@@ -64,6 +64,19 @@ describe('settings persistence', () => {
     expect(updateSettings(db, { theme: 'system' }).theme).toBe('system')
   })
 
+  it('clamps contextTokens UP to the 2048 floor so the tree-build budget can never starve (HIGH_BUG vuln-scan-2026-06-21)', () => {
+    const db = freshDb()
+    seedSettings(db)
+    // A buggy/hostile renderer patch below the floor is clamped up, not dropped.
+    expect(updateSettings(db, { contextTokens: 512 }).contextTokens).toBe(2048)
+    expect(updateSettings(db, { contextTokens: 1024 }).contextTokens).toBe(2048)
+    expect(getSettings(db).contextTokens).toBe(2048) // persisted clamped
+    // A value at/above the floor passes through unchanged.
+    expect(updateSettings(db, { contextTokens: 8192 }).contextTokens).toBe(8192)
+    // A non-finite value falls back to the floor rather than persisting NaN.
+    expect(updateSettings(db, { contextTokens: Number.NaN as number }).contextTokens).toBe(2048)
+  })
+
   it('uiLanguage defaults to system, accepts the enum, and drops junk values (Phase 39)', () => {
     const db = freshDb()
     seedSettings(db)

@@ -332,8 +332,15 @@ sidecar and writes no temp; only the history copy lands on disk).
 - **Write path:** the bytes are written to a short-lived plaintext temp (`<id>.tmp`), `encryptFile`-d
   to the `.enc` sidecar, and the temp **shredded** — the same transient-then-shred posture as document
   parse.
-- **Read path (open an entry):** the `.enc` is decrypted to a transient temp (`<id>.read-<pid>.tmp`),
-  read, then **shredded**.
+- **Read path (open an entry):** the `.enc` is decrypted to a **per-call unique** transient temp
+  (`<id>.read-<pid>-<uuid>.tmp`), read, then **shredded**. The uuid (added vuln-scan-2026-06-21) keeps two
+  concurrent reads of the same session — e.g. a double-click — from colliding on one staging file.
+- **In-memory residue at lock:** `VisionService.stop()` (wired to workspace lock + quit) aborts in-flight
+  jobs, tears down the sidecar, AND **clears the per-process job map** so a completed answer (content
+  derived from the private image) does not survive the vault re-encrypt — consistent with the lock path
+  purging resident RAG vectors and zeroing the vault key (added vuln-scan-2026-06-21). The map is also
+  bounded (`VISION_MAX_JOB_HISTORY`) so terminal jobs don't accumulate across a session, and
+  `imageGetJob`/`imageCancel` are gated on unlock like the other vision handlers.
 - **Crash recovery:** both temps end in `.tmp`, so the startup `shredStalePlaintext` sweep of
   `workspace/images/` removes any leftover from a process killed mid-write or mid-read.
 - **Delete:** removing a history entry **shreds** the stored image and cascade-removes its turns
@@ -465,7 +472,9 @@ under `<root>/user-skills/<id>/` (revised plan §0). So the importer cannot lean
 machinery: the only other archive→disk path in the app is the validation-blind shell-tar extractor
 used for runtime downloads, whose safety rests on the archive being **SHA-verified against an
 app-controlled source list first** — the opposite trust model. A `.skill.zip` must **never** be
-routed through it (asserted by a test that greps the installer source).
+routed through it (asserted by a test that greps the installer source). (That extractor now also
+resolves `tar` to an **absolute** OS path — see "Engine extraction pins an absolute `tar`" below — so
+a `tar.exe` planted in the process CWD cannot hijack the interpreter.)
 
 `services/skills/installer.ts` therefore ships a **net-new, dependency-free, member-by-member
 extractor** built on Node's built-in `node:zlib` + a hand-rolled zip central-directory parser (the
@@ -681,8 +690,166 @@ localization fixes added no content to any log/audit and no new capability.
 ignore + log), and `isDev` is threaded through the runtime / embedder / reranker / transcriber
 factories and the benchmark probe. In a packaged build the override is ignored and resolution falls
 back to the on-drive `runtime/<family>/<os>/` location, so process environment alone cannot make the
-app spawn an arbitrary binary. (Hash-verifying the on-drive sidecar against `runtime-sources.yaml`
-before spawn remains a possible future hardening; today trust rests on drive provisioning.)
+app spawn an arbitrary binary. (The on-drive sidecar is now **re-hashed before spawn** in packaged
+builds — see "Re-hash sidecar binaries before spawn" below; the dev-only env overrides are deliberately
+NOT hash-gated, since they point at an explicitly unverified path.)
+
+## Parsing-DoS hardening — the content tools' regexes are now linear (vuln-scan 2026-06-21)
+
+The #1 attacker goal in this app's threat model is **resource exhaustion while parsing a hostile
+document** (or an enabled, attacker-authored `.skill.zip`). A vuln scan found three regexes that
+backtracked **super-linearly** on adversarial input and ran **synchronously on the main process**, so
+a single crafted document/skill could freeze the whole app. All three were made **provably linear** by
+bounding their quantifiers (the accepted token set is unchanged for every realistic input; the unit
+suites pin the parse behaviour, and each carries a 200k-char "returns in < 1 s" regression test):
+
+- **`skills/tools/money.ts` `MONEY_RE`** (shared by the bank-statement + invoice extractors) — the
+  unbounded `\s*\d[\d.,]*` backtracked O(N²) on a long digit/separator run with no decimal tail. Now
+  `\s{0,4}\d[\d.,]{0,30}[.,]\d{2}` — a 30-char integer/grouping bound is ~10²³, far beyond any printed
+  amount, so each match attempt is O(1) and the global scan is O(N).
+- **`skills/tools/redaction.ts` `EMAIL_RE`** — the unbounded local-part/domain runs backtracked O(N²)
+  on a long `a.a.a.…` string (no `@`). Now length-bounded to the RFC limits (local ≤ 64, domain ≤ 255).
+- **`skills/selector.ts`** — the glob→RegExp compile is replaced by a **linear two-pointer matcher**
+  (see the known-limitations note); a `*?*?…` trigger pattern can no longer backtrack.
+
+These are DoS (polynomial, never RCE) and are local-only, but the project treats main-process freezes
+from hostile content as in-scope, so the hardening is principled (linearize the algorithm) rather than
+a length cap that would silently drop legitimate content.
+
+## Engine extraction pins an absolute `tar` (vuln-scan 2026-06-21)
+
+The in-app engine installer's default extractor used `spawn('tar', …)` with a **bare** command name.
+On Windows, libuv resolves a separator-less command against the process **current directory before**
+System32/PATH, so a `tar.exe` planted in an attacker-influenced CWD (plausible for a portable-drive
+app) would execute in our place with the main process's privileges on an engine install — and the
+archive SHA-256 protects the *contents*, not the *interpreter*. `runtime-download.ts` now resolves
+`tar` to its **absolute OS location** (`%SystemRoot%\System32\tar.exe`, `/usr/bin/tar`, `/bin/tar`)
+via `resolveTarBinary`, falling back to the bare name only when none exist (an exotic host), and spawns
+with a controlled `cwd`. Mirrors the absolute-path discipline already used for the sidecar spawns.
+
+## Hostile model manifests can't break the whole Models list (vuln-scan 2026-06-21)
+
+`model-manifests/` is user-writable (the threat model's #1 attacker surface). A manifest with an
+escaping `local_path` (e.g. `../../../../etc/passwd`) passed `validateManifest` (which only checked
+non-empty) and was caught later by `safeDrivePath`'s **throw** — but that throw was unhandled on the
+`IPC.listModels` path, so **one** bad manifest errored the entire Models screen. Two defenses now:
+**(1)** `validateManifest` rejects any `local_path`/`mmproj.local_path` that is absolute (leading `/`,
+a `C:`-style drive letter, a UNC root) or contains a `..` segment, so `discoverManifests` records it in
+`errors` and **skips** it (the rest of the list still renders); **(2)** `buildModelList`'s per-manifest
+loop wraps `computeInstallState` in try/catch, so any manifest that still throws becomes an errored
+entry rather than failing the whole list — mirroring the existing `pendingHashBytes` pre-pass.
+`weightPath`/`safeDrivePath` keep their own runtime escape guard (defense in depth).
+
+## Least-privilege hardening of the renderer↔main file/network seams (vuln-scan 2026-06-21, option D)
+
+The renderer is the **untrusted** boundary (M-S2) and threat #1 is a hostile imported doc/skill
+achieving code-exec in the context-isolated renderer. Four main-side IPC seams trusted renderer
+input more than that model allows; all four are now tightened (`registerDocsIpc.ts`,
+`registerImagesIpc.ts`, `services/assets.ts`, `services/vision/limits.ts`).
+
+### D1 — `importDocuments` is bound to a picker capability token (not raw renderer paths)
+`importDocuments(paths)` accepted arbitrary renderer-controlled absolute paths and `expandPaths`
+did no base-dir containment, so a code-exec'd renderer could use main as a **confused deputy** to
+read any supported-type file anywhere on disk (the text is then reachable via
+`previewDocument`/`exportDocument`/RAG). The OS picker is owned by **main**, so:
+- `pickDocuments` mints a **one-time token** per dialog (`randomUUID`, a bounded map, single-use)
+  bound to the exact paths it returned, and returns `{ token, paths }` (paths are renderer
+  **display/preflight only**).
+- A PICKER import passes `options.pickerToken`; main **resolves+consumes** it to those exact paths
+  and **ignores** the renderer-supplied `paths`. A forged/replayed/unknown token imports nothing.
+- **Drag-drop residual (documented, accepted):** a native OS drop is delivered to the *renderer*,
+  so main cannot mint a token for it. That seam still passes raw paths but is now **hardened** —
+  each top-level path is `lstat`-checked and a **symlink is rejected**, then `realpathSync`-
+  canonicalized (a `.pdf`-named symlink can't reach a sensitive target through the importer). A
+  compromised renderer can still drive this seam with on-disk paths, but the offline guarantee
+  means there is **no network sink to exfiltrate** read content, and the dominant picker surface is
+  now non-forgeable. `importPreflight` still takes raw paths (counts/sizes only — lower impact).
+
+### D2 — `imageReadBytes` takes an opaque token, never a renderer path
+`imageChooseImage` now returns `{ token, name, sizeBytes }` — the absolute path stays in main,
+keyed by a one-time bounded token. `imageReadBytes(token)` resolves+consumes it and reads with an
+**open→fstat→read on the same fd** (the byte cap is authoritative for those exact bytes — closes
+the prior `stat`→`read` TOCTOU). A renderer can no longer name a path, so the `.png`-named-symlink /
+arbitrary-read confused-deputy vector is gone. (Drag-drop decodes the `File` in the renderer and
+never calls this.)
+
+### D3 — `downloadToFile` re-validates every redirect hop + caps the body
+TLS was enforced only on the **initial** URL; `fetch` then followed redirects automatically, so a
+30x from a compromised/hostile origin could **SSRF to a LAN/loopback host** (e.g.
+`http://169.254.169.254/…`) or **downgrade to cleartext http**, and there was no streamed-size cap
+(disk-fill). Now redirects are `redirect: 'manual'` and each hop (initial + every `Location`) is
+re-checked by `assertSafeDownloadUrl`: **https-only** *and* a **loopback/private-range deny**
+(127/8, 10/8, 172.16/12, 192.168/16, 169.254/16, `localhost`, IPv6 `::1`/`fe80:`/`fc`/`fd`), with a
+**max-redirect** cap. The body is rejected once it exceeds the smallest of {`Content-Length`,
+caller `maxBytes`} + margin (the model downloader passes the manifest's planned size), with a
+generous global backstop when neither is known. All callers (model weights, runtime sidecar, OCR
+files) get this for free because they share the seam.
+
+### D4 — the authoritative vision guard now bounds decoded pixels, not just bytes
+`validateAnalyzeRequest` (SEC-3) capped bytes but not decoded dimensions, and `runtime.ts` inlines
+the **original** bytes to the sidecar — so a small (<20 MiB) **decompression bomb** PNG/JPEG that
+decodes to billions of pixels passed the guard and OOM'd the sidecar. The renderer's `MAX_DIMENSION`
+downscale is display-only and doesn't bound what the sidecar decodes. The main guard now parses the
+image **header** (PNG IHDR / JPEG SOF) for `width*height` — no full decode — and rejects above a
+**pixel budget** (`VISION_MAX_IMAGE_PIXELS`, ~50 MP default, env-overridable) as `tooLarge`. Unknown
+dimensions fall through to the byte cap.
+
+## Re-hash sidecar binaries before spawn (vuln-scan 2026-06-21, item B — design record)
+
+Each sidecar (`llama-server`, `whisper-cli`, the `--list-devices` GPU probe) was SHA-256-verified at
+**download/install** time but **not re-hashed immediately before `spawn`**. On a portable offline drive a
+local adversary who can overwrite `runtime/<family>/<os>/<bin>` between install and the next launch gets
+code-exec at the app's privileges — a TOCTOU deviation from the stated re-hash-before-exec policy. The
+spawns are arg-array (no shell), so the only residual was the missing pre-spawn re-verification, now
+closed. (The long-tracked audit-2026-06-14 "engine-binary not re-hashed before spawn" is the same item.)
+
+**The fix rests on three facts the deferral called out, each now addressed:**
+
+1. **The install marker records each binary's own SHA-256.** `RuntimeInstallMarker` gained an optional
+   `binaries: Record<relPath, sha256>` field (`assets.ts`), keyed by the binary's path **relative to the
+   extract dir** with posix `/` separators (`markerBinaryKey`) so a marker written on Windows reads the
+   same on another OS. `readRuntimeMarker` parses it **tolerantly** — a malformed map is dropped, and a
+   marker with no valid entry deep-equals the historical `{version,backend,os,arch}` so legacy reads are
+   unchanged. The hash is recorded by **all three** marker writers: the in-app installer
+   (`runtime-download.ts`, hashing `plan.binaryPath` after the flatten — best-effort, a hash failure
+   still writes a usable hash-less marker), and the DIY `fetch-runtime.{ps1,sh}` scripts.
+
+2. **One shared, session-cached verifier.** `binary-verifier.ts` exposes
+   `verifyBinaryBeforeSpawn(binPath)` → `ok | skip-legacy | skip-dev | mismatch`. It walks **up** from the
+   binary's directory to the nearest install marker (so the `cpu/` safety-net binary finds the family
+   marker one level above when its own dir has none), looks up the recorded hash for that binary, and
+   re-hashes the on-disk bytes. The result is **cached per resolved path for the session** — the GPU probe
+   and the server start race for the very same path (`factory.ts` kicks the probe concurrently with the
+   start), so both read one consistent decision off a single hash. An unreadable binary fails **safe**
+   (`mismatch`).
+
+3. **Non-breaking, fail-safe rollout.** `initBinaryVerification(isDev)` is called once at startup
+   (`index.ts`): packaged builds **enforce**, dev builds **skip** (`skip-dev`) — the on-drive binary may
+   be a local build and the dev-only `HILBERTRAUM_*_BIN` overrides point at an explicitly unverified path,
+   so neither is hash-gated (consistent with audit M-5 above). A binary **with** a recorded hash is
+   verified; a binary with **no** recorded hash (a drive provisioned before this shipped) is **tolerated**
+   (`skip-legacy`, logged) so it still launches. Before init the verifier is inert, which keeps the
+   headless unit suite — which constructs sidecars with fake paths and no marker — unaffected.
+
+**Behaviour at each spawn seam (a `mismatch` only ever fires in a packaged build):**
+- **`LlamaServer.start()` (`sidecar.ts`)** — throws before allocating a port/child, so the start **ladder
+  falls to the next rung / MockRuntime** with a content-free tamper warning to the local log. This one
+  method funnels **every** llama-server spawn (chat runtime, embedder, reranker, vision), so all are
+  covered by the single check.
+- **`probeGpuDevices()` (`gpu.ts`)** — resolves **`[]`** (reads as "no GPU"); the probe's contract is that
+  it never throws, so a tampered binary is simply never executed for enumeration.
+- **`WhisperCliTranscriber.run()` (`transcriber/cli.ts`)** — refuses before spawn; the audio import fails
+  per-file with the generic failure copy (raw reason to the local log only).
+
+**Commercial sell-gate (`commercial-drive.ts`).** `assertCommercialDrive` now **requires** the marker to
+carry the binary's hash and to match the on-disk bytes — a drive provisioned by a `fetch-runtime` that
+predates this field, or whose binary was modified after install, **fails the gate** (forcing a rebuild),
+so a sold drive always ships re-verifiable binaries.
+
+Logs are content-free (no paths/hashes/secrets). **Residual:** a drive provisioned by a `fetch-runtime`
+predating this change has no recorded hash and is tolerated (`skip-legacy`) until rebuilt — trust there
+still rests on drive provisioning + filesystem integrity (and an attacker who can write the runtime dir
+can usually also tamper the app's own Electron code). See `known-limitations.md`.
 
 ## Out of scope (MVP)
 - OS-level firewall enforcement (offline is by design + policy/UX, not a hard network block).

@@ -1,5 +1,6 @@
 import { spawn as nodeSpawn } from 'node:child_process'
 import type { GpuDevice } from '../../../shared/types'
+import { verifyBinaryBeforeSpawn, type BinaryVerifyResult } from '../binary-verifier'
 import type { ChildProcessLike, SpawnFn } from './sidecar'
 
 // GPU device probe (architecture.md GPU record §5.1). Spawns the drive's OWN
@@ -83,16 +84,33 @@ export interface GpuProbeDeps {
   /** Injected spawn (the same `SpawnFn` seam the sidecar uses) — tests fake it. */
   spawn?: SpawnFn
   timeoutMs?: number
+  /**
+   * Re-hash the binary before the probe spawns it (vuln-scan B). Defaults to the shared
+   * `verifyBinaryBeforeSpawn`. A `mismatch` resolves `[]` (no GPU) — the probe's contract
+   * is that it NEVER throws — so a tampered binary is simply never executed for the probe.
+   */
+  verify?: (binPath: string) => Promise<BinaryVerifyResult>
 }
 
 /**
  * Spawn `<binPath> --list-devices`, parse stdout, and resolve the device list. Bounded
  * by a kill-timeout; NEVER throws/rejects — a missing binary, spawn error, non-zero
- * exit, or timeout all resolve to `[]` (which simply reads as "no usable GPU").
+ * exit, timeout, or a failed pre-spawn integrity check all resolve to `[]` (which simply
+ * reads as "no usable GPU").
  */
-export function probeGpuDevices(binPath: string, deps: GpuProbeDeps = {}): Promise<GpuDevice[]> {
+export async function probeGpuDevices(binPath: string, deps: GpuProbeDeps = {}): Promise<GpuDevice[]> {
   const spawn = deps.spawn ?? ((cmd, args, opts) => nodeSpawn(cmd, args, opts))
   const timeoutMs = deps.timeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS
+  const verify = deps.verify ?? verifyBinaryBeforeSpawn
+
+  // Refuse a tampered binary the same way a missing one reads: no GPU. Never throws.
+  let verification: BinaryVerifyResult
+  try {
+    verification = await verify(binPath)
+  } catch {
+    return []
+  }
+  if (verification === 'mismatch') return []
 
   return new Promise((resolve) => {
     let child: ChildProcessLike

@@ -65,7 +65,12 @@ export interface ListAuditEventsOptions {
   beforeId?: string | null
 }
 
-/** Read audit events newest-first. An unknown `beforeId` reads from the newest. */
+/**
+ * Read audit events newest-first. A supplied `beforeId` whose anchor row no longer exists
+ * (e.g. the cursor event was pruned by retention between page fetches) returns an EMPTY page,
+ * terminating pagination — NOT the newest page, which made a client paging toward older events
+ * loop / show duplicates (BUG vuln-scan-2026-06-21).
+ */
 export function listAuditEvents(db: Db, opts: ListAuditEventsOptions = {}): AuditEvent[] {
   const limit = Math.max(1, Math.min(Math.floor(opts.limit ?? 100), AUDIT_MAX_ROWS))
   let where = ''
@@ -74,10 +79,11 @@ export function listAuditEvents(db: Db, opts: ListAuditEventsOptions = {}): Audi
     const anchor = db
       .prepare('SELECT created_at, rowid FROM runtime_events WHERE id = ?')
       .get(opts.beforeId) as { created_at: string; rowid: number } | undefined
-    if (anchor) {
-      where = 'WHERE created_at < ? OR (created_at = ? AND rowid < ?)'
-      params.push(anchor.created_at, anchor.created_at, anchor.rowid)
-    }
+    // An unresolved cursor means "older than a row that's gone" — there is nothing newer we
+    // should honestly return, so stop here rather than restarting at the top.
+    if (!anchor) return []
+    where = 'WHERE created_at < ? OR (created_at = ? AND rowid < ?)'
+    params.push(anchor.created_at, anchor.created_at, anchor.rowid)
   }
   const rows = db
     .prepare(

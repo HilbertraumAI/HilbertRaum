@@ -11,6 +11,7 @@ import {
   hostRuntimeArch,
   hostRuntimeOs,
   loadRuntimeSources,
+  resolveTarBinary,
   selectHostBuild,
   type ExtractFn
 } from '../../src/main/services/runtime-download'
@@ -191,6 +192,10 @@ describe('EngineDownloadManager install flow', () => {
       readFileSync(runtimeMarkerPath(join(rootPath, 'runtime', 'llama.cpp', HOST_OS)), 'utf8')
     )
     expect(marker).toMatchObject({ version: 'btest', backend: 'cpu', os: HOST_OS })
+    // vuln-scan B: the marker also records the extracted binary's own SHA-256 (keyed by
+    // its name relative to the extract dir) so it can be re-hashed before spawn. fakeExtract
+    // writes the bytes 'binary'.
+    expect(marker.binaries).toEqual({ [BIN_NAME]: createHash('sha256').update('binary').digest('hex') })
     // The archive is removed after extraction.
     expect(engineStatus(rootPath, manifestsDir).installed).toBe(true)
   })
@@ -261,5 +266,26 @@ describe('EngineDownloadManager install flow', () => {
     expect(existsSync(join(rootPath, 'runtime', 'llama.cpp', HOST_OS, BIN_NAME))).toBe(false)
     // The chat engine is still missing.
     expect(engineStatus(rootPath, manifestsDir).missingFamilies).toEqual(['llama_cpp'])
+  })
+})
+
+describe('resolveTarBinary (CWD-binary-planting hardening, vuln-scan 2026-06-21)', () => {
+  it('pins the absolute System32 tar.exe on Windows (never a bare, CWD-resolvable name)', () => {
+    const resolved = resolveTarBinary('win32', { SystemRoot: 'C:\\Windows' }, () => true)
+    expect(resolved).toBe('C:\\Windows\\System32\\tar.exe')
+    // Critically, it must contain a path separator so libuv never searches the CWD first.
+    expect(resolved).toContain('\\')
+  })
+
+  it('pins the absolute /usr/bin/tar on POSIX hosts', () => {
+    expect(resolveTarBinary('linux', {}, (p) => p === '/usr/bin/tar')).toBe('/usr/bin/tar')
+    expect(resolveTarBinary('darwin', {}, (p) => p === '/usr/bin/tar')).toBe('/usr/bin/tar')
+    // Falls through to /bin/tar when /usr/bin/tar is absent.
+    expect(resolveTarBinary('linux', {}, (p) => p === '/bin/tar')).toBe('/bin/tar')
+  })
+
+  it('falls back to the bare name only when no known absolute tar exists (exotic host)', () => {
+    expect(resolveTarBinary('linux', {}, () => false)).toBe('tar')
+    expect(resolveTarBinary('win32', { SystemRoot: 'C:\\Windows' }, () => false)).toBe('tar')
   })
 })

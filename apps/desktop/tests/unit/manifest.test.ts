@@ -95,6 +95,26 @@ describe('validateManifest', () => {
     expect(res.ok).toBe(false)
     expect(res.errors.some((e) => e.includes('supports_thinking_mode'))).toBe(true)
   })
+
+  // vuln-scan-2026-06-21 [path-traversal]: a hostile manifest's local_path is rejected at the
+  // source so discoverManifests records it in errors and SKIPS it — the throw on the model-list
+  // path (which broke the whole Models screen) can no longer be reached by these shapes.
+  it('rejects a local_path that escapes the drive root (.. segment)', () => {
+    const res = validateManifest(rawManifest({ local_path: '../../../../etc/passwd' }))
+    expect(res.ok).toBe(false)
+    expect(res.errors.some((e) => e.includes('local_path'))).toBe(true)
+  })
+
+  it('rejects an absolute local_path (POSIX and Windows drive-letter forms)', () => {
+    expect(validateManifest(rawManifest({ local_path: '/etc/shadow' })).ok).toBe(false)
+    expect(validateManifest(rawManifest({ local_path: 'C:/Windows/system32/x' })).ok).toBe(false)
+    expect(validateManifest(rawManifest({ local_path: 'C:\\Windows\\system32\\x' })).ok).toBe(false)
+  })
+
+  it('still accepts a normal drive-relative local_path (forward slashes)', () => {
+    const res = validateManifest(rawManifest({ local_path: 'models/chat/ok.gguf' }))
+    expect(res.ok).toBe(true)
+  })
 })
 
 describe('validateManifest — optional download block (Phase 12)', () => {
@@ -214,6 +234,12 @@ describe('validateManifest — vision role + mmproj projector (image-understandi
 
   it('rejects an mmproj block with an empty local_path', () => {
     const res = validateManifest(visionRaw({ mmproj: mmprojBlock({ local_path: '' }) }))
+    expect(res.ok).toBe(false)
+    expect(res.errors.some((e) => e.includes('mmproj.local_path'))).toBe(true)
+  })
+
+  it('rejects an mmproj.local_path that escapes the drive root (vuln-scan 2026-06-21)', () => {
+    const res = validateManifest(visionRaw({ mmproj: mmprojBlock({ local_path: '../../secret.gguf' }) }))
     expect(res.ok).toBe(false)
     expect(res.errors.some((e) => e.includes('mmproj.local_path'))).toBe(true)
   })

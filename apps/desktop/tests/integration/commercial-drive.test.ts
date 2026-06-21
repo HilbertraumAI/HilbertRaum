@@ -380,11 +380,18 @@ describe('assertCommercialDrive', () => {
       return res.sources
     }
 
-    /** A marker alone is not an install (audit fix): write the binary too. */
+    /**
+     * A marker alone is not an install (audit fix): write the binary too. The marker also
+     * records the binary's SHA-256 so the re-hash-before-spawn gate (vuln-scan B) passes —
+     * unless the caller overrides `binaries` (the stale tests fail earlier, on version).
+     */
     function writeInstall(dir: string, marker: Parameters<typeof writeRuntimeMarker>[1]): void {
       mkdirSync(dir, { recursive: true })
       writeFileSync(join(dir, 'llama-server.exe'), 'fake-binary')
-      writeRuntimeMarker(dir, marker)
+      writeRuntimeMarker(dir, {
+        binaries: { 'llama-server.exe': createHash('sha256').update('fake-binary').digest('hex') },
+        ...marker
+      })
     }
 
     function writeInstalls(root: string): void {
@@ -447,6 +454,39 @@ describe('assertCommercialDrive', () => {
       expect(res.problems.some((p) => /does not match the pinned/.test(p))).toBe(true)
     })
 
+    it('fails when the marker records NO binary hash (a drive built before vuln-scan B)', async () => {
+      const root = tempDir('hilbertraum-commercial-rt-nohash-')
+      writePolicy(root, buildPolicyJson())
+      provisionAppSkill(root)
+      const chat = writeVerifiedWeight(root, 'chat', 'models/chat/qwen.gguf', 'chat-weights')
+      writeInstalls(root)
+      // Rewrite the win default marker WITHOUT a `binaries` hash (old fetch-runtime output).
+      writeRuntimeMarker(join(root, 'runtime', 'llama.cpp', 'win'), {
+        version: 'b9585',
+        backend: 'vulkan',
+        os: 'win',
+        arch: 'x64'
+      })
+      const res = await assertCommercialDrive(root, [chat], sources())
+      expect(res.ok).toBe(false)
+      expect(res.checks.runtimeCurrent).toBe(false)
+      expect(res.problems.some((p) => /records no SHA-256/.test(p))).toBe(true)
+    })
+
+    it('fails when the binary was modified after install (recorded hash no longer matches)', async () => {
+      const root = tempDir('hilbertraum-commercial-rt-tamper-')
+      writePolicy(root, buildPolicyJson())
+      provisionAppSkill(root)
+      const chat = writeVerifiedWeight(root, 'chat', 'models/chat/qwen.gguf', 'chat-weights')
+      writeInstalls(root)
+      // The marker still records sha256('fake-binary'); overwrite the binary with new bytes.
+      writeFileSync(join(root, 'runtime', 'llama.cpp', 'win', 'llama-server.exe'), 'TAMPERED')
+      const res = await assertCommercialDrive(root, [chat], sources())
+      expect(res.ok).toBe(false)
+      expect(res.checks.runtimeCurrent).toBe(false)
+      expect(res.problems.some((p) => /does not match the SHA-256 recorded/.test(p))).toBe(true)
+    })
+
     it('skips the marker check when no runtimeSources are passed (runtimeCurrent stays true)', async () => {
       const root = tempDir('hilbertraum-commercial-rt-skip-')
       writePolicy(root, buildPolicyJson())
@@ -496,7 +536,13 @@ describe('assertCommercialDrive', () => {
       const dir = join(root, 'runtime', 'whisper.cpp', 'win')
       mkdirSync(dir, { recursive: true })
       writeFileSync(join(dir, 'whisper-cli.exe'), 'fake-whisper')
-      writeRuntimeMarker(dir, { version: 'v1.8.6', backend: 'cpu', os: 'win', arch: 'x64' })
+      writeRuntimeMarker(dir, {
+        version: 'v1.8.6',
+        backend: 'cpu',
+        os: 'win',
+        arch: 'x64',
+        binaries: { 'whisper-cli.exe': createHash('sha256').update('fake-whisper').digest('hex') }
+      })
     }
 
     it('passes when the whisper pin has a whisper-cli binary + matching marker', async () => {

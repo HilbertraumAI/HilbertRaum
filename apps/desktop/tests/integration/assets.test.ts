@@ -346,6 +346,36 @@ describe('runtime install marker (.hilbertraum-runtime.json, Phase 14)', () => {
     })
   })
 
+  it('round-trips a marker WITH per-binary hashes (vuln-scan B)', () => {
+    const root = tempDir('hilbertraum-marker-')
+    writeRuntimeMarker(root, {
+      version: 'b9585',
+      backend: 'vulkan',
+      os: 'win',
+      arch: 'x64',
+      binaries: { 'llama-server.exe': 'a'.repeat(64), 'cpu/llama-server.exe': 'b'.repeat(64) }
+    })
+    expect(readRuntimeMarker(root)?.binaries).toEqual({
+      'llama-server.exe': 'a'.repeat(64),
+      'cpu/llama-server.exe': 'b'.repeat(64)
+    })
+  })
+
+  it('readRuntimeMarker drops a malformed `binaries` field (tamper-tolerant)', () => {
+    const root = tempDir('hilbertraum-marker-')
+    // Non-string values are dropped; an all-bad map leaves `binaries` absent entirely.
+    writeFileSync(
+      runtimeMarkerPath(root),
+      JSON.stringify({ version: 'b9585', backend: 'cpu', os: 'win', arch: 'x64', binaries: { x: 5, y: 'ok' } })
+    )
+    expect(readRuntimeMarker(root)?.binaries).toEqual({ y: 'ok' })
+    writeFileSync(
+      runtimeMarkerPath(root),
+      JSON.stringify({ version: 'b9585', backend: 'cpu', os: 'win', arch: 'x64', binaries: ['not', 'a', 'map'] })
+    )
+    expect(readRuntimeMarker(root)?.binaries).toBeUndefined()
+  })
+
   it('readRuntimeMarker never throws: missing or malformed → null', () => {
     const root = tempDir('hilbertraum-marker-')
     expect(readRuntimeMarker(root)).toBeNull()
@@ -630,6 +660,75 @@ describe('downloadToFile + fetchAndVerify (injected fetch — no real network)',
       )
     ).rejects.toThrow(/mismatch/)
     expect(existsSync(dest)).toBe(false)
+  })
+
+  // D3 (vuln-scan-2026-06-21): redirects are followed MANUALLY and re-validated per hop, and the
+  // body is size-capped — so a hostile/compromised origin can't SSRF to the LAN, downgrade to
+  // http, or fill the drive.
+  describe('D3 — redirect re-validation + size cap', () => {
+    /** A fetch fake that dispatches by URL (so a redirect target gets a different response). */
+    const routeFetch = (route: (url: string) => Response): FetchFn =>
+      (async (u: unknown) => route(String(u))) as unknown as FetchFn
+    const redirectTo = (location: string, status = 302): Response =>
+      new Response(null, { status, headers: { location } })
+
+    it('follows an https redirect to a public host and writes the final body', async () => {
+      const root = tempDir('hilbertraum-dl-')
+      const dest = join(root, 'x.gguf')
+      await downloadToFile('https://cdn.example.test/a', dest, {
+        fetchImpl: routeFetch((url) =>
+          url.endsWith('/a') ? redirectTo('https://cdn.example.test/b') : new Response('final-bytes')
+        )
+      })
+      expect(readFileSync(dest, 'utf8')).toBe('final-bytes')
+    })
+
+    it('refuses a redirect that downgrades to http:// (L-2)', async () => {
+      const root = tempDir('hilbertraum-dl-')
+      const dest = join(root, 'x.gguf')
+      await expect(
+        downloadToFile('https://cdn.example.test/a', dest, {
+          fetchImpl: routeFetch(() => redirectTo('http://cdn.example.test/b'))
+        })
+      ).rejects.toThrow(/non-HTTPS/)
+      expect(existsSync(dest)).toBe(false)
+    })
+
+    it('refuses a redirect to a private/loopback host (SSRF)', async () => {
+      const root = tempDir('hilbertraum-dl-')
+      const dest = join(root, 'x.gguf')
+      await expect(
+        downloadToFile('https://cdn.example.test/a', dest, {
+          // The classic cloud-metadata SSRF target.
+          fetchImpl: routeFetch(() => redirectTo('https://169.254.169.254/latest/meta-data'))
+        })
+      ).rejects.toThrow(/private\/loopback/)
+      expect(existsSync(dest)).toBe(false)
+    })
+
+    it('gives up after too many redirects', async () => {
+      const root = tempDir('hilbertraum-dl-')
+      const dest = join(root, 'x.gguf')
+      let n = 0
+      await expect(
+        downloadToFile('https://cdn.example.test/r0', dest, {
+          fetchImpl: routeFetch(() => redirectTo(`https://cdn.example.test/r${++n}`))
+        })
+      ).rejects.toThrow(/too many redirects/)
+    })
+
+    it('rejects a body that streams past the maxBytes cap (disk-fill)', async () => {
+      const root = tempDir('hilbertraum-dl-')
+      const dest = join(root, 'x.gguf')
+      // 2 MiB body but the manifest planned only a few bytes → over the cap (+1 MiB margin).
+      const big = 'z'.repeat(2 * 1024 * 1024)
+      await expect(
+        downloadToFile('https://cdn.example.test/big', dest, {
+          fetchImpl: routeFetch(() => new Response(big)),
+          maxBytes: 100
+        })
+      ).rejects.toThrow(/size cap/)
+    })
   })
 })
 

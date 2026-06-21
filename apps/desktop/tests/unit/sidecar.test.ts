@@ -151,6 +151,44 @@ describe('findFreePort', () => {
 // ---- LlamaServer lifecycle ------------------------------------------------------
 
 describe('LlamaServer', () => {
+  it('REFUSES to spawn a tampered binary (pre-spawn re-hash, vuln-scan B)', async () => {
+    const { spawn, calls } = fakeSpawn()
+    const { fetchImpl } = healthFetch(0)
+    const server = new LlamaServer({
+      binPath: '/bin/llama-server',
+      modelPath: '/models/x.gguf',
+      contextTokens: 4096,
+      spawn,
+      fetchImpl,
+      findPort: async () => 51234,
+      healthIntervalMs: 1,
+      verifyBinary: async () => 'mismatch' // the install marker's hash no longer matches
+    })
+    await expect(server.start()).rejects.toThrow(/pre-spawn integrity verification/)
+    expect(calls).toHaveLength(0) // the child process was never spawned
+    // A throw here is what makes the ladder fall to the next rung / MockRuntime.
+  })
+
+  it('proceeds normally when verification passes / skips (ok / skip-legacy / skip-dev)', async () => {
+    for (const verdict of ['ok', 'skip-legacy', 'skip-dev'] as const) {
+      const { spawn, calls } = fakeSpawn()
+      const { fetchImpl } = healthFetch(0)
+      const server = new LlamaServer({
+        binPath: '/bin/s',
+        modelPath: '/m.gguf',
+        contextTokens: 2048,
+        spawn,
+        fetchImpl,
+        findPort: async () => 50000,
+        healthIntervalMs: 1,
+        verifyBinary: async () => verdict
+      })
+      await server.start()
+      expect(calls).toHaveLength(1)
+      await server.stop()
+    }
+  })
+
   it('spawns bound to 127.0.0.1 ONLY (never 0.0.0.0 / a routable host)', async () => {
     const { spawn, calls } = fakeSpawn()
     const { fetchImpl } = healthFetch(0)

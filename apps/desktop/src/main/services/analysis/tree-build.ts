@@ -36,6 +36,14 @@ import type { ModelSlotArbiter } from './model-slot-arbiter'
 //     rebuilds from the warm cache, so it never half-wires parent pointers and a
 //     model-switch can't yield a mixed-model tree (the cache is model-keyed — M12).
 
+/**
+ * Thrown if a node-reduction level fails to shrink (see the termination note in buildTree's
+ * loop). Unreachable while `minPerGroup=2` guarantees structural progress; it is a backstop
+ * that turns a would-be infinite loop into a clean task failure. run() maps any non-friendly
+ * error to the generic failure copy; the raw string goes to the local log only.
+ */
+export const TREE_BUILD_NO_PROGRESS = 'Tree build made no progress at a reduction level'
+
 /** A child fed into a group: a chunk (level 1) or a lower node (level >= 2). */
 interface BuildChild {
   id: string
@@ -80,19 +88,33 @@ function contentHashOf(texts: string[]): string {
 
 /**
  * Greedy budget packing of `children` (in order) into groups whose combined approx token
- * count fits `budgetWords`. Mirrors `packIntoWindows`, but tracks the child ids so the
- * tree edges can be written. A single child never exceeds the budget (a chunk is
- * <= chunkSizeTokens, a node summary <= SUMMARY_OUTPUT_TOKENS, both far below a group
- * budget), so each child lands in exactly one group — no child is ever split or dropped.
+ * count fits `budgetWords`, tracking child ids so the tree edges can be written. No child is
+ * ever split or dropped — a child larger than the budget sits alone in its own group.
+ *
+ * `minPerGroup` is the structural-progress lever (HIGH_BUG vuln-scan-2026-06-21). The old
+ * code assumed "a node summary <= SUMMARY_OUTPUT_TOKENS, far below a group budget" so each
+ * level always shrank; that invariant is FALSE at small budgets (a ~512-token summary
+ * exceeds a 200-word floor budget), which let the upper levels never reduce → infinite loop.
+ * At the node-reduction levels the caller passes `minPerGroup=2`: a group is flushed only
+ * once it holds >= `minPerGroup` children, so every group except the final remainder holds
+ * at least two and the level's node count STRICTLY shrinks regardless of summary size. The
+ * budget still governs once the minimum is met, so a roomy budget packs many per group
+ * exactly as before — `minPerGroup` only bites when a single summary already blows the
+ * budget (the pathological small-context case that used to hang).
  */
-function groupByBudget(children: BuildChild[], budgetWords: number): BuildChild[][] {
+function groupByBudget(
+  children: BuildChild[],
+  budgetWords: number,
+  minPerGroup = 1
+): BuildChild[][] {
   const budget = Math.max(1, Math.floor(budgetWords))
+  const minGroup = Math.max(1, Math.floor(minPerGroup))
   const groups: BuildChild[][] = []
   let current: BuildChild[] = []
   let currentTokens = 0
   for (const child of children) {
     const tokens = approxTokenCount(child.text)
-    if (current.length > 0 && currentTokens + tokens > budget) {
+    if (current.length >= minGroup && currentTokens + tokens > budget) {
       groups.push(current)
       current = []
       currentTokens = 0
@@ -278,11 +300,25 @@ export async function buildTree(documentId: string, deps: TreeBuildDeps): Promis
   }
 
   // Build level by level until one root remains.
+  //
+  // TERMINATION (HIGH_BUG vuln-scan-2026-06-21). Level 1 (chunks → summaries) may be 1:1 — a
+  // chunk can exceed a small budget and sit alone — but it runs EXACTLY ONCE. Every higher
+  // level reduces nodes against other nodes with `minPerGroup=2`, so each group holds >= 2
+  // children (bar a final remainder) and the node count STRICTLY shrinks, independent of
+  // model output size. The build therefore halts in <= leaves.length levels. The guard and
+  // level cap below are belt-and-suspenders against a future regression of that invariant:
+  // a non-shrinking node level would otherwise loop forever, issue unbounded generate()
+  // calls, and — because the doc-task queue is single-slot — permanently block it.
   let currentChildren = leaves
   let level = 1
   let rootId: string | null = null
+  const maxLevels = leaves.length + 1
   for (;;) {
-    const groups = groupByBudget(currentChildren, budgetWords)
+    const minPerGroup = level === 1 ? 1 : 2
+    const groups = groupByBudget(currentChildren, budgetWords, minPerGroup)
+    if ((level > 1 && groups.length >= currentChildren.length) || level > maxLevels) {
+      throw new Error(TREE_BUILD_NO_PROGRESS)
+    }
     const isRootLevel = groups.length === 1
     const nextChildren: BuildChild[] = []
     for (let ordinal = 0; ordinal < groups.length; ordinal++) {

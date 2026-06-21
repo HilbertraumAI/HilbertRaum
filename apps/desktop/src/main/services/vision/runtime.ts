@@ -122,7 +122,10 @@ export class VisionRuntime {
   /** Set by `stop()`; a racing lazy start must not resurrect the sidecar after teardown. */
   private stopped = false
   /** Failed-start latch (the reranker/embedder pattern) — a corrupt GGUF mustn't re-spawn +
-   *  re-await the full health timeout on every analyze. Cleared by `stop()`. */
+   *  re-await the full health timeout on every analyze. INTENTIONALLY sticky: `stop()` makes
+   *  the instance permanently dead (the orchestrator discards it and builds a fresh runtime),
+   *  so the latch is never cleared/reused — `ensureStarted` checks `stopped` first regardless
+   *  (corrected from a stale "Cleared by stop()" note — BUG vuln-scan-2026-06-21). */
   private startFailed: Error | null = null
   /** Number of analyses currently using the sidecar. Guards the idle teardown (RUNTIME-4):
    *  while >0 a job is running and the sidecar must NOT be torn down. */

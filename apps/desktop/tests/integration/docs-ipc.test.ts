@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -9,13 +9,14 @@ import { join } from 'node:path'
 // stale-embedding flag surfaces (M7).
 
 const ipcState = vi.hoisted(() => ({ handlers: new Map<string, unknown>() }))
+const dialogState = vi.hoisted(() => ({ result: { canceled: true, filePaths: [] as string[] } }))
 vi.mock('electron', () => ({
   ipcMain: {
     handle: (channel: string, fn: unknown) => ipcState.handlers.set(channel, fn),
     removeHandler: (channel: string) => ipcState.handlers.delete(channel)
   },
   BrowserWindow: { getFocusedWindow: () => null },
-  dialog: { showOpenDialog: async () => ({ canceled: true, filePaths: [] }) }
+  dialog: { showOpenDialog: async () => dialogState.result }
 }))
 
 import { registerDocsIpc } from '../../src/main/ipc/registerDocsIpc'
@@ -82,7 +83,10 @@ async function runImport(
   return job
 }
 
-beforeEach(() => ipcState.handlers.clear())
+beforeEach(() => {
+  ipcState.handlers.clear()
+  dialogState.result = { canceled: true, filePaths: [] }
+})
 
 describe('registerDocsIpc', () => {
   it('rejects DB-backed handlers with a clear message while the workspace is locked (M6)', async () => {
@@ -427,5 +431,81 @@ describe('registerDocsIpc', () => {
     expect(vectorCount(idA)).toBeGreaterThan(0)
     expect(vectorCount(idC)).toBeGreaterThan(0)
     expect(vectorCount(idB)).toBe(0)
+  })
+})
+
+// D1 (vuln-scan-2026-06-21): importDocuments must not be a confused-deputy arbitrary-file
+// reader. A PICKER import is bound to the one-time token pickDocuments minted (main imports
+// exactly what it returned, ignoring the renderer's `paths`); a forged/replayed token imports
+// nothing; the drag-drop seam (no token) is hardened (real file kept, symlink rejected).
+describe('registerDocsIpc — import path binding (D1)', () => {
+  const ctx = (db: Db, workspacePath: string): AppContext =>
+    ctxWith(db, workspacePath, createMockEmbedder(), /* unlocked */ true)
+
+  async function pick(files: string[]): Promise<{ token: string; paths: string[] }> {
+    dialogState.result = { canceled: false, filePaths: files }
+    const { result } = await invoke(handlers, IPC.pickDocuments, 'files')
+    return result as { token: string; paths: string[] }
+  }
+
+  it('binds a PICKER import to the pickDocuments token (raw paths are ignored)', async () => {
+    const { db, workspacePath } = freshWorkspace()
+    registerDocsIpc(ctx(db, workspacePath))
+    const dir = mkdtempSync(join(tmpdir(), 'hr-pick-'))
+    const file = join(dir, 'picked.txt')
+    writeFileSync(file, 'a picked library note with enough words to index here please')
+    const { token, paths } = await pick([file])
+    expect(paths).toContain(file)
+    expect(token).not.toBe('')
+    // Pass an EMPTY paths arg with the token: main imports what was picked, not what we passed.
+    const job = await runImport([], { pickerToken: token })
+    expect(job.documentIds).toHaveLength(1)
+  })
+
+  it('imports nothing for a forged/unknown token — even when raw paths name a real file', async () => {
+    const { db, workspacePath } = freshWorkspace()
+    registerDocsIpc(ctx(db, workspacePath))
+    const dir = mkdtempSync(join(tmpdir(), 'hr-forge-'))
+    const file = join(dir, 'secret.txt')
+    writeFileSync(file, 'a real, existing, supported-type file a renderer should not read at will')
+    // A code-exec'd renderer supplies a real path + a bogus picker token → nothing imported.
+    const job = await runImport([file], { pickerToken: 'not-a-real-token' })
+    expect(job.documentIds).toEqual([])
+  })
+
+  it('treats a picker token as single-use (a replay imports nothing)', async () => {
+    const { db, workspacePath } = freshWorkspace()
+    registerDocsIpc(ctx(db, workspacePath))
+    const dir = mkdtempSync(join(tmpdir(), 'hr-once-'))
+    const file = join(dir, 'once.txt')
+    writeFileSync(file, 'a one-shot picked note with enough words to index here please now')
+    const { token } = await pick([file])
+    expect((await runImport([], { pickerToken: token })).documentIds).toHaveLength(1)
+    expect((await runImport([], { pickerToken: token })).documentIds).toEqual([])
+  })
+
+  it('hardens the drag-drop seam (no token): keeps a real file, rejects a symlink', async () => {
+    const { db, workspacePath } = freshWorkspace()
+    registerDocsIpc(ctx(db, workspacePath))
+    const dir = mkdtempSync(join(tmpdir(), 'hr-drop-'))
+    const real = join(dir, 'real.txt')
+    writeFileSync(real, 'a genuinely dropped file with several indexable words here right now')
+    // A real dropped file imports (drag-drop is a user gesture; only the token is absent).
+    expect((await runImport([real])).documentIds).toHaveLength(1)
+    // A `.txt`-named symlink to a sensitive target is rejected by the hardening. Symlink
+    // creation can be unprivileged-blocked on Windows — skip the assertion if so.
+    const target = join(dir, 'target.txt')
+    writeFileSync(target, 'a sensitive target a renderer tried to reach through a .txt symlink')
+    const link = join(dir, 'link.txt')
+    let linked = false
+    try {
+      symlinkSync(target, link)
+      linked = true
+    } catch {
+      /* no symlink privilege on this host — the hardening still runs in production */
+    }
+    if (linked) {
+      expect((await runImport([link])).documentIds).toEqual([])
+    }
   })
 })
