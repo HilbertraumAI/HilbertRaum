@@ -6,6 +6,20 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-21 — **Vuln-scan remediation, Tier 2 — robustness BUGs (option C).** Working the report's 8 BUG-severity items
+(one, the malformed-manifest `buildModelList` crash, was already closed in Tier 1). Each is a robustness/correctness defect,
+not an attacker-reachable vulnerability; fixed as small coherent commits with regression tests. **Closed so far:**
+- **`analysis/coverage.ts` `reachableLeafChunkIds` cyclic-tree guard.** The iterative DFS tracked a `seen` set only for leaf
+  CHUNK ids; node→node edges recursed unconditionally, so a cycle (DB corruption / a future builder bug) would overflow the stack
+  and crash the coverage read. Now tracks visited NODE ids (seeded with the root) and skips already-visited nodes. buildTree still
+  writes a strictly acyclic tree, so this is purely defensive. Test: whole-doc-analysis injects a node→root back-edge and asserts
+  the walk terminates with leaf coverage intact.
+- **`audit.ts` `listAuditEvents` pagination cursor.** A supplied `beforeId` whose anchor row was pruned (retention) fell through
+  to the newest page, so a client paging toward older events looped / showed duplicates. Now returns an EMPTY page (terminates
+  pagination); the Diagnostics "earlier" button hides cleanly (`page.length === PAGE_SIZE` ⇒ false). Doc comment + the existing
+  audit.test pagination test updated to the new contract.
+**(Tier-2 HIGH_BUG entry below; Tier-1 entry under that.)**_
+
 _2026-06-21 — **Vuln-scan remediation, Tier 2 — the HIGH_BUG: summary-tree build could loop forever / block the doc-task queue.**
 `analysis/tree-build.ts` `buildTree()` reduces a document's summary tree level-by-level in a `for(;;)` that halts only when a
 level collapses to one root group. `groupByBudget` never splits an over-budget child, and the loop relied on the (FALSE-at-small-

@@ -58,6 +58,11 @@ export function reachableLeafChunkIds(db: Db, documentId: string): string[] {
     'SELECT child_id, child_is_chunk FROM tree_edges WHERE parent_id = ? ORDER BY ordinal'
   )
   const seen = new Set<string>()
+  // Visited NODE ids (BUG vuln-scan-2026-06-21). buildTree writes a strictly acyclic tree, so
+  // this is defensive: should `tree_edges` ever hold a node→node cycle (DB corruption, or a
+  // future builder bug), an unguarded recurse would overflow the stack and crash the read.
+  // Skipping already-visited nodes makes the walk terminate (and tolerate a DAG) regardless.
+  const visitedNodes = new Set<string>([root])
   const ordered: string[] = []
   // Iterative DFS in ordinal order so leaves come out in document order. A tree is shallow
   // (~log of chunk count) and bounded by MAX_CHUNKS_PER_DOCUMENT, so the walk is cheap.
@@ -72,7 +77,8 @@ export function reachableLeafChunkIds(db: Db, documentId: string): string[] {
           seen.add(e.child_id)
           ordered.push(e.child_id)
         }
-      } else {
+      } else if (!visitedNodes.has(e.child_id)) {
+        visitedNodes.add(e.child_id)
         walk(e.child_id)
       }
     }

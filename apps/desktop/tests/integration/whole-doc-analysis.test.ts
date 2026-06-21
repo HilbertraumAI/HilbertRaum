@@ -610,6 +610,26 @@ describe('coverage math + provenance', () => {
     expect(wholeCov.chunksCovered).toBe(total)
   })
 
+  it('reachableLeafChunkIds terminates on a cyclic tree instead of overflowing the stack (BUG vuln-scan-2026-06-21)', async () => {
+    const id = await buildReadyTree()
+    const total = documentChunkCount(db, id)
+    expect(reachableLeafChunkIds(db, id).length).toBe(total)
+    // Inject a node→node back-edge (DB corruption / a hypothetical builder bug): a descendant
+    // node points back at the root, forming a cycle. An unguarded DFS would recurse forever
+    // and crash the read; the visited-node guard makes it terminate with leaf coverage intact.
+    const root = db
+      .prepare('SELECT id FROM tree_nodes WHERE document_id = ? AND is_root = 1')
+      .get(id) as { id: string }
+    const deep = db
+      .prepare('SELECT id FROM tree_nodes WHERE document_id = ? AND is_root = 0 ORDER BY level LIMIT 1')
+      .get(id) as { id: string } | undefined
+    expect(deep).toBeTruthy()
+    db.prepare(
+      'INSERT INTO tree_edges (parent_id, child_id, child_is_chunk, ordinal) VALUES (?, ?, 0, 999)'
+    ).run(deep!.id, root.id)
+    expect(reachableLeafChunkIds(db, id).length).toBe(total) // terminates, no double-count
+  })
+
   it('a building tree reports tree state (labelled building, NOT ready/100% — C1)', async () => {
     const id = await buildReadyTree()
     db.prepare("UPDATE documents SET tree_status = 'building' WHERE id = ?").run(id)
