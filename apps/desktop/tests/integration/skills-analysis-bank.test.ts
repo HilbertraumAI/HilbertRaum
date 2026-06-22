@@ -197,18 +197,18 @@ describe('bank-statement analysis handler — run()', () => {
     const db = freshDb()
     const id = seedDoc(db, CLEAN, { fullyChunked: true })
     const res = await bankStatementAnalysisHandler.run(ctxFor(db, { documentIds: [id] }, 'summary'))
-    expect(res.coverage.mode).toBe('extract')
-    expect(res.coverage.chunksTotal).toBe(3) // 3 seeded chunk rows
-    expect(res.coverage.chunksCovered).toBe(3)
-    expect(res.coverage.fullyChunked).toBe(true) // gates the "whole document" meter wording
+    expect(res.coverage!.mode).toBe('extract')
+    expect(res.coverage!.chunksTotal).toBe(3) // 3 seeded chunk rows
+    expect(res.coverage!.chunksCovered).toBe(3)
+    expect(res.coverage!.fullyChunked).toBe(true) // gates the "whole document" meter wording
   })
 
   it('coverage fullyChunked is FALSE for a legacy (not fully chunked) document', async () => {
     const db = freshDb()
     const id = seedDoc(db, CLEAN) // fully_chunked NULL
     const res = await bankStatementAnalysisHandler.run(ctxFor(db, { documentIds: [id] }, 'summary'))
-    expect(res.coverage.mode).toBe('extract')
-    expect(res.coverage.fullyChunked).toBe(false)
+    expect(res.coverage!.mode).toBe('extract')
+    expect(res.coverage!.fullyChunked).toBe(false)
   })
 
   it('citations are real SOURCE chunks (M2) — never the synthesised total', async () => {

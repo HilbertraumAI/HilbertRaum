@@ -516,6 +516,16 @@ export const en = {
     'I can only answer this accurately from the whole document, and this one isn’t fully indexed ' +
     'yet. Open the Documents screen and choose Re-index, then ask again.',
 
+  // Redaction-routing answer: an ACTION skill points the user at its own run button instead of
+  // producing a top-k Q&A. Deterministic + content-free (no model call, no document read); `{button}`
+  // is the SkillRunBar's own label so the wording matches the affordance the user sees.
+  'skills.redactionRouting.answer':
+    'To redact this document, click the **{button}** button just below the chat box, then choose ' +
+    'where to save the copy. It runs entirely on this device and masks clearly-formatted personal ' +
+    'data — e-mail addresses, phone numbers, IBANs, dates, and links — reading the whole document. ' +
+    'It’s a best-effort first pass, not a guarantee: it can’t catch names or unusual formats, so ' +
+    'review the saved copy before you share it.',
+
   // ---- Models (ModelsScreen.tsx) ----
   'models.title': 'AI Model',
   'models.lead':

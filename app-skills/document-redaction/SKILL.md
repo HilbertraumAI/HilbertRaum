@@ -35,24 +35,23 @@ triggers:                      # OPTIONAL — drives the deterministic suggestio
 
 # Document Redaction
 
-Use this skill when the user wants to share, publish, or hand on a document with personal data
-removed — for example "anonymize this", "schwärze die personenbezogenen Daten", or any privacy- or
-GDPR/DSGVO-framed request about a document they have selected.
+This skill comes with a one-click local tool. When the user asks to redact, anonymize, or remove
+personal data from the document they have selected, tell them — briefly, in their own language — to
+click the **Redact personal data** button shown just below the chat box and choose where to save the
+copy. **Do the routing, not the work:** do not refuse, do not walk them through a manual procedure,
+and **never state whether the document does or does not contain personal data** — you have only seen
+part of it, so any such claim would be guesswork.
 
-This skill comes with one approved local tool the user can run on a document they choose: it reads
-the whole document, masks the personal data it can detect, and saves a redacted copy. The tool runs
-**only when the user starts it** — you never run it yourself — and it **always asks before saving
-the file**; the user chooses where the copy is written.
+The tool runs entirely on this device. It reads the **whole** document and masks the personal data it
+can detect with fixed patterns — e-mail addresses, phone numbers, IBANs, dates, and web links. It
+runs **only when the user starts it** (you never run it yourself) and **always asks before saving**;
+the user chooses where the copy is written.
 
-- **The redaction is a best-effort, deterministic aid — not a guarantee.** It masks common,
-  clearly-shaped personal data with fixed patterns: e-mail addresses, phone numbers, IBANs, dates,
-  and web links. It is **offline and rule-based — there is no AI judgement and no name detection**,
-  so it **will miss** anything without a recognisable pattern (most names, addresses, unusual
-  formats, data in images or scans). Never describe the result as "fully anonymized" or imply it
-  meets any legal or compliance standard.
-- **Tell the user to review the copy themselves.** The redacted copy is a starting point that still
-  needs a human check before it is shared; say so plainly rather than implying the document is safe.
-- **Report only what the tool reports** — the count of items hidden per category — and do not repeat
-  the detected personal data back to the user.
+It is a **best-effort first pass, not a guarantee.** Being offline and rule-based, it has **no AI
+judgement and no name detection**, so it **will miss** anything without a recognisable pattern (most
+names, addresses, unusual formats, data in images or scans). Never describe the result as "fully
+anonymized" or imply it meets any legal or compliance standard. After it runs, remind the user to
+**review the saved copy themselves** before sharing it, report only the counts the tool gives (e.g.
+"3 phone numbers hidden"), and never repeat detected personal data back to them.
 
 Answer in the user's language.

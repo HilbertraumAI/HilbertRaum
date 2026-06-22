@@ -200,7 +200,9 @@ export function registerRagIpc(ctx: AppContext): void {
         // Exhaustiveness precondition (D45/R4): every in-scope doc must be FULLY chunked at turn time.
         // A legacy/partly-chunked doc cannot be analysed exhaustively, so we REFUSE — a fixed,
         // localized message + the existing Re-index affordance, no model call, no partial answer.
-        if (!allInScopeDocsFullyChunked(ctx.db, scope)) {
+        // A `routing` handler is EXEMPT: it reads no content (it only points the user at the skill's
+        // run affordance), so full chunking is irrelevant and the refusal must not fire.
+        if (analysisHandler.mode !== 'routing' && !allInScopeDocsFullyChunked(ctx.db, scope)) {
           const refusal = tMain('skills.analysis.refusePartial')
           return withChatStream(
             event,

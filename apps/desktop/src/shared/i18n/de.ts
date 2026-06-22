@@ -539,6 +539,17 @@ export const de: Record<keyof typeof en, string> = {
     'Das kann ich nur genau über das ganze Dokument beantworten, und dieses ist noch nicht ' +
     'vollständig indexiert. Öffne den Dokumente-Bildschirm, wähle „Neu indexieren" und frage dann erneut.',
 
+  // Antwort der Schwärzungs-Weiterleitung: eine Aktions-Skill verweist auf ihre eigene Schaltfläche
+  // statt eine Top-k-Antwort zu erzeugen. Deterministisch + inhaltsfrei (kein Modellaufruf, kein
+  // Dokumentzugriff); `{button}` ist die Beschriftung aus der SkillRunBar.
+  'skills.redactionRouting.answer':
+    'Um dieses Dokument zu schwärzen, klicke unten beim Chat auf die Schaltfläche **{button}** und ' +
+    'wähle anschließend, wo die Kopie gespeichert werden soll. Sie läuft vollständig auf diesem ' +
+    'Gerät und maskiert klar erkennbare personenbezogene Daten – E-Mail-Adressen, Telefonnummern, ' +
+    'IBANs, Datumsangaben und Links – und liest dabei das ganze Dokument. Es ist ein bestmöglicher ' +
+    'erster Durchlauf, keine Garantie: Namen oder ungewöhnliche Formate erkennt sie nicht – prüfe ' +
+    'die gespeicherte Kopie, bevor du sie teilst.',
+
   // ---- Models ----
   'models.title': 'KI-Modell',
   'models.lead':

@@ -59,15 +59,30 @@ export interface SkillAnalysisContext {
 export interface SkillAnalysisResult {
   /** Synthesised from the structured tool output (D47) — deterministic, localized Markdown. */
   answer: string
-  /** Real source chunks behind the figures (M2-safe) — never the synthesised total. */
+  /** Real source chunks behind the figures (M2-safe) — never the synthesised total. A `routing`
+   *  handler returns `[]`: it makes no document-grounded claim, so the renderer shows no coverage
+   *  badge (the meter renders only when an answer carries citations — Transcript.tsx). */
   citations: Citation[]
-  /** The honest breadth (D48) — `mode:'extract'`, `fullyChunked` gating the "whole document" wording. */
-  coverage: CoverageInfo
+  /** The honest breadth (D48) — `mode:'extract'`, `fullyChunked` gating the "whole document" wording.
+   *  Omitted by a `routing` handler (it reads no content, so it makes NO breadth claim). */
+  coverage?: CoverageInfo
 }
 
 export interface SkillAnalysisHandler {
-  /** Can this skill answer THIS question exhaustively over THIS scope? (cheap, pre-flight). */
+  /**
+   * The handler's posture (default `'exhaustive'`):
+   *   - `'exhaustive'` — reads the WHOLE document via read-only tools and synthesises a grounded
+   *     answer (bank-statement, invoice). The chat path enforces the fully-chunked precondition
+   *     (a legacy/partly-chunked doc is REFUSED, no partial answer).
+   *   - `'routing'` — reads NO content. It returns a short answer pointing the user at the skill's
+   *     own run affordance (an ACTION skill whose tool WRITES a file and must stay user-initiated,
+   *     e.g. document-redaction). The fully-chunked refusal does NOT apply (nothing is read), and
+   *     it returns no citations/coverage so no breadth badge is shown.
+   */
+  mode?: 'exhaustive' | 'routing'
+  /** Can this skill answer THIS question over THIS scope? (cheap, pre-flight). */
   applies(input: SkillAnalysisInput): boolean
-  /** Run the whole-document read-only tools and synthesise the grounded answer + real coverage. */
+  /** Run the whole-document read-only tools and synthesise the grounded answer + real coverage,
+   *  OR (for a `routing` handler) return the action-routing answer with no citations/coverage. */
   run(ctx: SkillAnalysisContext): Promise<SkillAnalysisResult>
 }

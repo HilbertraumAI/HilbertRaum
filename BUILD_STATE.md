@@ -6,6 +6,32 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-22 — **Skill finetuning Wave 1: document-redaction routing handler (test-found UX defect).** Testing "Can you anonymize the doc
+please?" with a document + the redaction skill selected surfaced two defects, both rooted in one design choice (D49: redaction kept the top-k
+relevance path): (1) the model wrote a **lecture/refusal** — reciting the SKILL.md caveats ("you never run it yourself", everything it won't
+catch) and inventing a manual procedure instead of pointing at the one-click run button — and even **speculated about the document's content**
+from the retrieved passages; (2) the coverage footer read **"Basiert auf den relevantesten Passagen — nicht auf dem ganzen Dokument"**, which
+is misleading because the `redact_document` tool reads the **whole** document. **As built (typecheck clean; 666 skills/rag/chat/whole-doc tests
+green, +10 new):**
+- **New `mode: 'exhaustive' | 'routing'` on `SkillAnalysisHandler`** (default `exhaustive`). A **`routing`** handler reads NO content, runs NO
+  tool, emits NO audit event. `SkillAnalysisResult.coverage` is now **optional** (omitted by routing). Architecture record: §19 **D49a**.
+- **New `analysis/redaction.ts`** — `document-redaction` now **registers** a routing handler (reversing D49's "never registers"). `applies()` =
+  redaction-shaped verbs (EN+DE: anonymize/redact/schwärzen/…) + ≥1 in-scope doc. `run()` returns a deterministic, localized answer naming the
+  **same** run button the SkillRunBar shows (`chat.skill.tool.redactDocument`), with **empty citations** → the renderer shows **no coverage
+  badge** (`CoverageMeter` renders only when an answer has citations — `Transcript.tsx:238`). No model call.
+- **`registerRagIpc`** skips the D45 fully-chunked **refusal** for a `routing` handler (nothing is read, so full chunking is irrelevant).
+- **SKILL.md body rewritten** so the **first paragraph** (the one the prompt builder guarantees to keep — `prompt.ts buildSkillFence`) is the
+  action-routing instruction ("click the **Redact personal data** button… never state whether the document does/doesn't contain personal
+  data"); honesty caveats demoted. This fixes the **fallback** path (an off-topic turn where the model still answers).
+- The write tool stays **user-initiated + confirm-gated** — routing points at it, never runs it. **New i18n:** `skills.redactionRouting.answer`
+  (EN+DE). **Tests:** new `skills-analysis-redaction.test.ts` (applies/run/registry/no-tool-run/no-coverage); bank+invoice tests updated for the
+  now-optional `coverage`.
+- **NEXT (Wave 2, user-approved direction = skill-aware whole-doc engine "A"):** the four Tier-1 **instruction** skills (meeting-protocol,
+  contract-brief, share-safe-review, deadline-obligation-finder) are **analysis** skills that want whole-document coverage but hit a structural
+  gap — the SKILL.md fence is honored ONLY on the top-k relevance engine; every whole-document engine (tree-summary, coverage-extract,
+  analysis handlers) ignores it. So they can be whole-document OR formatted-to-spec, never both (worst: meeting-protocol — minutes from top-k
+  miss decisions/actions, and "summarize meeting" can hijack to a generic tree-summary). See `docs/skill-whole-doc-engine-plan.md`._
+
 _2026-06-22 — **Image analysis survives navigation + content-free lifecycle logging (two test-found bugs).** Found while testing:
 (1) starting a picture analysis, navigating to another screen, and returning showed an idle screen — the running analysis was invisible
 (Chat already recovers its in-flight stream); (2) a started analysis left NO trace in the log. **As built (full suite green — 2087 passed /

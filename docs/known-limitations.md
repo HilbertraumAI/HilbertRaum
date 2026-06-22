@@ -274,8 +274,11 @@ password recovery — are documented in
   **refused** with a fixed message pointing at Documents → Re-index — no partial answer, no model call
   (D45) — rather than silently answering from a few passages (for accounting, a partial read is a wrong
   total). A tool skill answering an **off-topic** question, or over a multi-doc scope, keeps the
-  ordinary relevance path unchanged. `document-redaction` is an action skill and never registers a
-  handler, so it is never force-routed (D49).
+  ordinary relevance path unchanged. `document-redaction` is an action skill: it registers a
+  **`routing`** handler (not an exhaustive one — D49a, 2026-06-22), so a redaction-shaped request
+  returns a short answer pointing at its run button (no content read, no tool run, **no coverage
+  badge**) instead of a top-k Q&A that lectured and falsely claimed a relevance-limited reading; the
+  write tool stays user-initiated and confirm-gated.
 - **Strictly one job at a time (D26).** While a summary runs, chat is refused with a
   friendly message + a cancel option, and vice versa — the one local model serves one
   request. The R-T1 probe confirmed the pinned b9585 WOULD serve concurrent requests on

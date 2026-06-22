@@ -2333,8 +2333,28 @@ text in git history. Coverage half cross-linked from [`rag-design.md`](rag-desig
   message and the renderer shows the truth. Requirement "if we analysed the full document, show that"
   is inexpressible until the meter is data-driven.
 - **D49** — adoption is **per-skill**: `bank-statement` + `invoice` both register an analysis handler;
-  `document-redaction` does **not** (it is an action skill — it redacts a document — not an
-  analysis-question skill, so a plain question is never force-routed through it).
+  `document-redaction` does **not** register an *exhaustive* handler (it is an action skill — it
+  redacts a document — not an analysis-question skill, so a plain question is never force-routed
+  through a whole-document tool run).
+  - **D49a (amended 2026-06-22).** `document-redaction` now registers a **`routing` handler** instead
+    of nothing. The original "keep the relevance path" choice produced two real defects on an
+    "anonymize this" turn: the model wrote a **lecture/refusal** (reciting the SKILL.md caveats —
+    "you never run it yourself", everything it won't catch — and inventing a manual procedure)
+    instead of pointing at the one-click run affordance, and it even **speculated about the
+    document's content** from top-k passages; and the coverage badge read **"based on the most
+    relevant passages, NOT the whole document"** — misleading, since the tool reads the *whole*
+    document. The handler gains a `mode: 'exhaustive' | 'routing'` discriminator (default
+    `exhaustive`). A `routing` handler reads **no content**, runs **no tool**, emits **no audit
+    event**: on a redaction-shaped request (`applies()` matches the action verbs + ≥1 in-scope doc)
+    it returns a short, deterministic, localized answer naming the **same run button the SkillRunBar
+    shows** (`chat.skill.tool.redactDocument`), with **no citations and no coverage** (the meter
+    renders only for answers *with* citations — `Transcript.tsx` — so the misleading badge is gone).
+    The chat path skips the D45 fully-chunked refusal for a `routing` handler (nothing is read). The
+    SKILL.md body was rewritten so its **first paragraph** (the one the prompt builder guarantees to
+    keep) is the action-routing instruction, with the honesty caveats demoted — fixing the fallback
+    path when the model does answer (an off-topic turn). `SkillAnalysisResult.coverage` is now
+    optional. The write tool stays **user-initiated + confirm-gated** — routing points at it, never
+    runs it.
 
 **The seam (`main/services/skills/analysis/`).** A small registry keyed by skill `install_id` →
 `SkillAnalysisHandler` (`applies({question,scope,db}): boolean` + `run(ctx): Promise<SkillAnalysisResult>`),
