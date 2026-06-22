@@ -6,6 +6,19 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-22 — **Skill finetuning Wave 3 — real-model harness (autonomous stand-in for the GUI smoke test).** The vitest suite proves
+the Wave-3 LOGIC against the mock runtime; this proves real-model OUTPUT QUALITY without a GUI or workspace access. New
+**`tests/real-model/wave3.realmodel.test.ts`** drives the ACTUAL whole-doc / compare / tree code with a real local llama.cpp model
+from the portable drive: it builds the app's runtime via `createSelectingRuntimeFactory` (CPU rung, the dev `HILBERTRAUM_LLAMA_BIN`
+override → `D:/runtime/llama.cpp/win/llama-server.exe`) + a model from `D:/models/chat`, ingests inline fixtures with the MOCK embedder
+(the whole-doc/compare/tree paths read chunks in ORDER, not by embedding — only the CHAT model is real), and calls
+`generateGroundedAnswer({ wholeDocument | wholeDocumentCompare })` + `answerWholeDocFromTree`. **GATED** behind
+`HILBERTRAUM_REAL_MODEL=1` via `describe.runIf` — COLLECTED (FullSuiteGuard-safe) but skipped in the normal suite (no model spawn). Run:
+`HILBERTRAUM_REAL_MODEL=1 npx vitest run tests/real-model/wave3.realmodel.test.ts` (PowerShell: `$env:HILBERTRAUM_REAL_MODEL=1; …`).
+**Verified 2026-06-22 with qwen3.5-4b (CPU, ctx 8192), all 3 green in ~2.5 min:** Wave 2 minutes carried the END-of-transcript items
+(Prometheus→Q3, Dana→Friday) at `capped` coverage; the compare surfaced the LATE changes (Berlin→Frankfurt, conf 3→5y, liability 12→6m)
+proving both whole versions were read; the tree reduce returned `tree` coverage. No new dependency (no `cross-env`); fully offline._
+
 _2026-06-22 — **Skill finetuning Wave 3, Phase 4 (Follow-up B): 2-document whole-doc compare for `what-changed`.** Wave 2 left
 `what-changed` on the relevance/top-k path (it was single-doc). Now a compare-shaped request over EXACTLY TWO in-scope docs feeds
 BOTH documents whole (budget-aware) with the SKILL.md fence, so the compare is material-change analysis over full versions, not top-k.
