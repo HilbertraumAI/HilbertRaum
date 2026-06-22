@@ -884,11 +884,24 @@ async function embedChunks(
  * startup `shredStalePlaintext` crash sweep). Never writes to the DB; the plaintext
  * never leaves the main process except as extracted text over IPC.
  */
+/**
+ * Re-extraction options (PDF geometry-extraction plan §3.1/§3.3). Additive — the renderer preview,
+ * translate, and compare callers omit it and get byte-unchanged reading-order text. Only the
+ * bank-statement analysis seam sets `layout` (D58) to request geometry-aware row/column reconstruction.
+ */
+export interface ExtractPreviewOptions {
+  /** Reconstruct visual rows/columns from PDF word coordinates (bank-statement only, D58/D51). */
+  layout?: boolean
+  /** Page cap for the layout path (plan §3.1) — threaded only when `layout` is set. */
+  maxPages?: number
+}
+
 export async function extractDocumentPreview(
   db: Db,
   storeDir: string,
   documentId: string,
-  deps: Pick<IngestionDeps, 'cipher' | 'ocrEngine'> = {}
+  deps: Pick<IngestionDeps, 'cipher' | 'ocrEngine'> = {},
+  opts: ExtractPreviewOptions = {}
 ): Promise<DocumentPreview> {
   const row = getRow(db, documentId)
   if (!row) throw new Error(`Unknown document: ${documentId}`)
@@ -940,7 +953,11 @@ export async function extractDocumentPreview(
     // (one small image, the audio-preview trade-off inverted: cheap enough to redo).
     const parsed = await parser.parse(parseSource, {
       ocrEngine: deps.ocrEngine,
-      ocrPages: isPdfPath(row.title) ? getDocumentOcrPages(db, documentId) : null
+      ocrPages: isPdfPath(row.title) ? getDocumentOcrPages(db, documentId) : null,
+      // Geometry-aware layout reconstruction (plan §3.1, D51) — opt-in, bank-statement-only (D58).
+      // The page cap rides along ONLY in layout mode (per-page clustering across an uncapped page
+      // count is a perf amplifier, plan §3.1); the default preview path stays uncapped + byte-unchanged.
+      ...(opts.layout ? { layout: true, maxPages: opts.maxPages } : {})
     })
     return {
       id: row.id,

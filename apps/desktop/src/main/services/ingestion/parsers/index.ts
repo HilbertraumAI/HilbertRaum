@@ -64,6 +64,14 @@ export interface ParseContext {
    * audit M-3 — zip-bomb guard). Absent → no cap.
    */
   maxInflatedBytes?: number
+  /**
+   * Geometry-aware LAYOUT mode for the PDF parser (PDF geometry-extraction plan §3.1, D51). When set,
+   * `PdfParser.parse()` reconstructs visual rows/columns from word coordinates and emits clean,
+   * year-resolved `<date> <desc> <amount>` lines instead of pdf.js reading-order text — recovering a
+   * COLUMNAR bank statement the default mode scrambles. Opt-in and bank-statement-ONLY (D58): ingest,
+   * the renderer preview, and the other extractors never set it, so their text is byte-unchanged.
+   */
+  layout?: boolean
 }
 
 /** The contract every format adapter implements (spec §9.2). */

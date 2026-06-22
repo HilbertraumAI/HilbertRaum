@@ -138,7 +138,7 @@ export interface ToolRunDeps {
    * line-oriented extractors and the redaction copy (`run.ts` resolveDocumentReader). Tests may omit
    * it to exercise the legacy chunk-table reader against seeded chunks.
    */
-  readDocumentSegments?: (documentId: string) => Promise<DocumentChunkRead[]>
+  readDocumentSegments?: (documentId: string, opts?: { layout?: boolean }) => Promise<DocumentChunkRead[]>
 }
 
 /**
@@ -165,7 +165,9 @@ export function buildToolRunner(
           audit,
           signal,
           onProgress,
-          readDocumentSegments: deps.readDocumentSegments
+          readDocumentSegments: deps.readDocumentSegments,
+          // Geometry-aware layout reconstruction for the columnar statement (plan §3.1, D58 — bank only).
+          layout: true
         })
         return {
           ok: res.ok,

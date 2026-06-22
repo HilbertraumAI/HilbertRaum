@@ -300,7 +300,9 @@ export const bankStatementAnalysisHandler: SkillAnalysisHandler = {
       audit: ctx.audit,
       signal: ctx.signal,
       now: ctx.now,
-      readDocumentSegments: ctx.readDocumentSegments
+      readDocumentSegments: ctx.readDocumentSegments,
+      // Geometry-aware layout reconstruction for the columnar statement (plan §3.1, D58 — bank only).
+      layout: true
     }
 
     // Auto-run the READ-ONLY tools through the run seam (D46) — extract first, then the downstream

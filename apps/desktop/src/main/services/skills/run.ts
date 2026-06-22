@@ -52,7 +52,13 @@ export interface BankExtractionDeps {
    * stored `chunks` table collapses newlines and overlaps (`resolveDocumentReader`). Absent ⇒ the
    * legacy chunk-table reader (the integration tests that seed `chunks` directly).
    */
-  readDocumentSegments?: (documentId: string) => Promise<DocumentChunkRead[]>
+  readDocumentSegments?: (documentId: string, opts?: { layout?: boolean }) => Promise<DocumentChunkRead[]>
+  /**
+   * Request geometry-aware layout reconstruction from the segment reader (PDF geometry-extraction plan
+   * §3.1, D58 — bank-statement only). Threaded into `resolveDocumentReader`; the redaction/invoice
+   * seams leave it unset and get byte-unchanged reading-order text.
+   */
+  layout?: boolean
 }
 
 export interface BankExtractionResult {
@@ -103,12 +109,17 @@ export function buildReadDocumentChunks(db: Db, allowed: ReadonlySet<string>): S
 export async function resolveDocumentReader(
   db: Db,
   documentId: string,
-  deps: { readDocumentSegments?: (documentId: string) => Promise<DocumentChunkRead[]> }
+  deps: {
+    readDocumentSegments?: (documentId: string, opts?: { layout?: boolean }) => Promise<DocumentChunkRead[]>
+    layout?: boolean
+  }
 ): Promise<SkillToolContext['readDocumentChunks']> {
   if (!deps.readDocumentSegments) return buildReadDocumentChunks(db, new Set([documentId]))
   let segments: DocumentChunkRead[]
   try {
-    segments = await deps.readDocumentSegments(documentId)
+    // Layout reconstruction is requested only for the bank-statement skill (D58); other callers leave
+    // `deps.layout` unset and receive byte-unchanged reading-order segments.
+    segments = await deps.readDocumentSegments(documentId, { layout: deps.layout })
   } catch {
     // Re-extraction failed (the stored copy is gone, or encrypted with no cipher). Surface it
     // through the tool's OWN "could not be read" path: a reader that refuses the in-scope id, so

@@ -20,6 +20,7 @@ import { resolveTurnSkillFromRegistry } from '../services/skills/turn'
 import { getSkillAnalysisHandler } from '../services/skills/analysis'
 import { toSkillToolAudit } from '../services/skills/tool-runs'
 import { documentsDir, extractDocumentPreview } from '../services/ingestion'
+import { resolveIngestionLimits } from '../services/ingestion/limits'
 import { aggregateExtractions, SCAN_MARKER_TYPE } from '../services/analysis/extract'
 import { routeQuestion } from '../services/analysis/router'
 import { buildListingAnswer } from '../services/analysis/listing-answer'
@@ -117,11 +118,20 @@ export function registerRagIpc(ctx: AppContext): void {
   // table is retrieval windows (newlines collapsed, ~80-token overlap), which would give the
   // line-oriented extractors near-zero rows. Content stays main-side: only the tool ever sees it.
   const storeDir = documentsDir(ctx.paths.workspacePath)
-  const readDocumentSegments = async (documentId: string): Promise<DocumentChunkRead[]> => {
-    const preview = await extractDocumentPreview(ctx.db, storeDir, documentId, {
-      cipher: ctx.workspace.documentCipher(),
-      ocrEngine: ctx.ocrEngine
-    })
+  const readDocumentSegments = async (
+    documentId: string,
+    opts?: { layout?: boolean }
+  ): Promise<DocumentChunkRead[]> => {
+    // Geometry-aware layout reconstruction is requested only by the bank-statement handler (D58); the
+    // page cap rides along ONLY in that mode (plan §3.1 — per-page clustering across an uncapped page
+    // count is a DoS/perf amplifier). The default path is byte-unchanged reading-order text.
+    const preview = await extractDocumentPreview(
+      ctx.db,
+      storeDir,
+      documentId,
+      { cipher: ctx.workspace.documentCipher(), ocrEngine: ctx.ocrEngine },
+      opts?.layout ? { layout: true, maxPages: resolveIngestionLimits().pdfMaxPages } : {}
+    )
     return preview.segments.map((s, index) => ({ text: s.text, page: s.pageNumber, index }))
   }
 
