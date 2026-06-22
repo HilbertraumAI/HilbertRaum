@@ -14,10 +14,13 @@ override → `D:/runtime/llama.cpp/win/llama-server.exe`) + a model from `D:/mod
 (the whole-doc/compare/tree paths read chunks in ORDER, not by embedding — only the CHAT model is real), and calls
 `generateGroundedAnswer({ wholeDocument | wholeDocumentCompare })` + `answerWholeDocFromTree`. **GATED** behind
 `HILBERTRAUM_REAL_MODEL=1` via `describe.runIf` — COLLECTED (FullSuiteGuard-safe) but skipped in the normal suite (no model spawn). Run:
-`HILBERTRAUM_REAL_MODEL=1 npx vitest run tests/real-model/wave3.realmodel.test.ts` (PowerShell: `$env:HILBERTRAUM_REAL_MODEL=1; …`).
-**Verified 2026-06-22 with qwen3.5-4b (CPU, ctx 8192), all 3 green in ~2.5 min:** Wave 2 minutes carried the END-of-transcript items
-(Prometheus→Q3, Dana→Friday) at `capped` coverage; the compare surfaced the LATE changes (Berlin→Frankfurt, conf 3→5y, liability 12→6m)
-proving both whole versions were read; the tree reduce returned `tree` coverage. No new dependency (no `cross-env`); fully offline._
+`HILBERTRAUM_REAL_MODEL=1 npx vitest run tests/real-model/wave3.realmodel.test.ts` (just German: append `-t German`; PowerShell:
+`$env:HILBERTRAUM_REAL_MODEL=1; …`). Two describes (**English** + **German**) share one model load via a top-level `beforeAll`.
+**Verified 2026-06-22 with qwen3.5-4b (CPU, ctx 8192), all 6 green (EN+DE):** in BOTH languages the Wave 2 minutes carried the
+END-of-transcript items (Prometheus→Q3, Dana→Friday/Freitag) at `capped` coverage and a full sectioned format; the compare surfaced the
+LATE changes (Berlin→Frankfurt, conf 3→5y/Jahre, liability 12→6m/Monate) with `[S1]`+`[S2]` proving both whole versions were read; the
+tree reduce returned `tree` coverage. The German doc+question are answered in German even though the SKILL.md fence stays English
+(the system prompt's "answer in the document's language" holds). No new dependency (no `cross-env`); fully offline._
 
 _2026-06-22 — **Skill finetuning Wave 3, Phase 4 (Follow-up B): 2-document whole-doc compare for `what-changed`.** Wave 2 left
 `what-changed` on the relevance/top-k path (it was single-doc). Now a compare-shaped request over EXACTLY TWO in-scope docs feeds
