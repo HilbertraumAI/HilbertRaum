@@ -6,6 +6,21 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-23 — **PDF geometry-extraction — gold-set measurement harness landed + FIRST real measurement (Phase 31, D52/D57; branch
+`pdf-geometry-extraction`).** New LOCAL-ONLY, gitignored, gated harness `apps/desktop/tests/real-data/pdf-goldset.realdata.test.ts`
+(+README) runs real statements through the ACTUAL Stage-1 path (`PdfParser.parse({layout:true,maxPages})` → `bankStatementAnalysisHandler`)
+and prints AGGREGATE metrics only — ZERO model calls. Gated behind `HILBERTRAUM_PDF_GOLDSET=1` via `describe.runIf` (COLLECTED →
+FullSuiteGuard-safe, skipped in `npm test`; suite now 2177 passed / 37 skipped). Corpus = `$HILBERTRAUM_PDF_GOLDSET_DIR` else gitignored
+`tests/real-data/corpus/` (`<name>.pdf` + `<name>.expected.json`; `.gitignore` updated — real statements are user financial data, NEVER
+committed, D57). Recall + figure-exact-match are LOGGED (the D52 input); hallucinated-figure / partial-total-presented (D56) / model-calls
+are HARD-ASSERTED == 0. **First real datapoint:** the MOTIVATING sanitized HVB statement (Umsätze web export, pages 2–7, 45 columnar
+transactions — the exact shape that used to return ZERO) now extracts **45/45 rows = 100% recall, 0 model calls**, all D56 safety invariants
+0. Gate pass 0% is CORRECT for that file (a transactions-only excerpt with no printed opening/closing balance → honest D56 downgrade, no
+total). **NOT enough to close D52 yet:** one statement, and it only exercises the gate's DOWNGRADE path. Still needed before the D52 call:
+(a) breadth across banks (Sparkasse/ING/DKB + invoices) for recall confidence, and (b) ≥1 FULL statement WITH printed Alter/Neuer Kontostand
+(opening/closing) + those figures in its `expected.json` to exercise the gate PASS path and yield a real figure-exact-match number. Stage-1
+behavior UNCHANGED this session (measurement only)._
+
 _2026-06-23 — **PDF geometry-aware extraction — Stage 1 SHIPPED (Phase 31, D50–D58; branch `pdf-geometry-extraction`).** Fixes the
 real user report: a German HVB bank statement analysed with `app:bank-statement` returned ZERO transactions because the PDF parser
 DISCARDED the word coordinates pdf.js already fetches, so a columnar statement (date · description · amount, year in the page header)
