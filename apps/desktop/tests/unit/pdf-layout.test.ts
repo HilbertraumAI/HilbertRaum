@@ -125,7 +125,7 @@ describe('reconstructLine', () => {
 describe('reconstructPage (end-to-end on word boxes)', () => {
   it('rebuilds every transaction row as a clean parseable line, year from the header', () => {
     const words: LayoutWord[] = [
-      // Header band carries the year.
+      // Header band carries the year (preserved RAW — no date, so it stays a header line).
       word('Kontoauszug', 50, 800),
       word('2024', 200, 800),
       // Row 1
@@ -141,15 +141,31 @@ describe('reconstructPage (end-to-end on word boxes)', () => {
     ]
     const { text, year } = reconstructPage(words)
     expect(year).toBe(2024)
-    expect(text.split('\n')).toEqual([
-      '05.01.2024 Gehalt ACME 2.500,00 3.500,00',
-      '06.01.2024 Miete -900,00 2.600,00'
-    ])
-    // Every emitted lead date is one the UNCHANGED parseDate accepts.
-    for (const line of text.split('\n')) {
-      const lead = line.split(' ')[0]
-      expect(parseDate(lead)).not.toBeNull()
+    const lines = text.split('\n')
+    // The header survives as a raw line (needed for currency/balance/period context)…
+    expect(lines).toContain('Kontoauszug 2024')
+    // …and each transaction row is a clean, year-resolved, parseable line.
+    expect(lines).toContain('05.01.2024 Gehalt ACME 2.500,00 3.500,00')
+    expect(lines).toContain('06.01.2024 Miete -900,00 2.600,00')
+    // Every emitted TRANSACTION lead date is one the UNCHANGED parseDate accepts.
+    for (const line of ['05.01.2024 Gehalt ACME 2.500,00 3.500,00', '06.01.2024 Miete -900,00 2.600,00']) {
+      expect(parseDate(line.split(' ')[0])).not.toBeNull()
     }
+  })
+
+  it('preserves opening/closing balance label lines (no date) for the completeness gate', () => {
+    const words: LayoutWord[] = [
+      word('Anfangssaldo', 50, 720),
+      word('2.000,00', 420, 720),
+      word('05.01.', 50, 700),
+      word('Gehalt', 140, 700),
+      word('2.000,00', 420, 700),
+      word('Endsaldo', 50, 680),
+      word('4.000,00', 420, 680)
+    ]
+    const lines = reconstructPage(words, { fallbackYear: 2024 }).text.split('\n')
+    expect(lines).toContain('Anfangssaldo 2.000,00')
+    expect(lines).toContain('Endsaldo 4.000,00')
   })
 
   it('uses the document-level fallback year for a page whose header carries none', () => {
@@ -158,8 +174,12 @@ describe('reconstructPage (end-to-end on word boxes)', () => {
     expect(text).toBe('07.02.2023 Kaffee -3,50')
   })
 
-  it('drops bare-date rows when no year is resolvable anywhere (honesty)', () => {
+  it('emits a bare-date row RAW when no year is resolvable — extraction still drops it (honesty)', () => {
     const words: LayoutWord[] = [word('07.02.', 50, 700), word('Kaffee', 140, 700), word('-3,50', 420, 700)]
-    expect(reconstructPage(words).text).toBe('')
+    const { text } = reconstructPage(words)
+    // Preserved as raw text (no year was resolved, so it was NOT promoted to a year-resolved row)…
+    expect(text).toBe('07.02. Kaffee -3,50')
+    // …and its bare lead date is one parseDate REJECTS, so the bank extractor drops it, never guesses.
+    expect(parseDate(text.split(' ')[0])).toBeNull()
   })
 })

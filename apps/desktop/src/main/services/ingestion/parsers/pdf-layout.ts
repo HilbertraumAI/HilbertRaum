@@ -45,28 +45,6 @@ const MONEY_TOKEN_RE = /^[-+(]?\d[\d.,]*[.,]\d{2}\)?-?$/
 /** A standalone 4-digit calendar year (1900–2099) — the page-header year fallback. */
 const YEAR_TOKEN_RE = /^(19|20)\d{2}$/
 
-// A MINIMAL currency hint set (symbols + a few ISO codes). The AUTHORITATIVE detector is
-// `skills/tools/money.ts` `detectCurrency`; this is only used to keep a currency that is printed in a
-// dropped header (e.g. "Umsatz in EUR") visible in the reconstructed segment, since layout mode emits
-// only transaction rows and would otherwise lose a header-only currency and drop every row as
-// "no currency". Parsers must not depend on the skills layer, so a tiny set is duplicated here on
-// purpose; it never decides the figure, only preserves the hint.
-const CURRENCY_SYMBOLS = ['€', '$', '£', '¥']
-const CURRENCY_CODES: ReadonlySet<string> = new Set([
-  'EUR', 'USD', 'GBP', 'CHF', 'JPY', 'CAD', 'AUD', 'SEK', 'NOK', 'DKK', 'PLN', 'CZK', 'HUF'
-])
-
-/** The first currency symbol/code seen anywhere in the page's words, or null. */
-export function currencyHint(words: readonly LayoutWord[]): string | null {
-  for (const w of words) {
-    for (const sym of CURRENCY_SYMBOLS) if (w.str.includes(sym)) return sym
-    for (const tok of w.str.split(/\s+/)) {
-      if (CURRENCY_CODES.has(tok)) return tok
-    }
-  }
-  return null
-}
-
 type TokenClass = 'date' | 'money' | 'text'
 
 /** Classify one whitespace-delimited token. Date is tried first (with a plausibility check) so a
@@ -263,12 +241,19 @@ export function reconstructPage(
   const rows = clusterRows(words, tol)
   const lines: string[] = []
   for (const row of rows) {
-    const line = reconstructLine(row, year)
-    if (line) lines.push(line)
+    const tx = reconstructLine(row, year)
+    if (tx) {
+      lines.push(tx)
+      continue
+    }
+    // Not a transaction row — emit its RAW left-to-right text so the non-row content survives:
+    // statement headers, the currency code, and (critically for the §3.5 completeness gate) the
+    // opening/closing BALANCE labels, which carry no booking date and so are not transactions. These
+    // lines all lack a leading date, so the downstream `parseLine` drops them from extraction — they
+    // influence only currency detection and the balance gate, never the transaction rows. Visual rows
+    // are already grouped + ordered, so this is faithful page text, not the scrambled reading order.
+    const raw = rowTokens(row).join(' ').trim()
+    if (raw) lines.push(raw)
   }
-  // Preserve a header-only currency so the downstream `detectCurrency` over the segment still finds it
-  // (a currency line carries no date, so `parseLine` drops it — it influences only currency detection).
-  const hint = currencyHint(words)
-  if (hint && lines.length > 0 && !lines.some((l) => l.includes(hint))) lines.unshift(hint)
   return { text: lines.join('\n'), year }
 }
