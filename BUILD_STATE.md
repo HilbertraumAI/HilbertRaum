@@ -6,6 +6,43 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-23 — **PDF geometry-aware extraction — Stage 1 SHIPPED (Phase 31, D50–D58; branch `pdf-geometry-extraction`).** Fixes the
+real user report: a German HVB bank statement analysed with `app:bank-statement` returned ZERO transactions because the PDF parser
+DISCARDED the word coordinates pdf.js already fetches, so a columnar statement (date · description · amount, year in the page header)
+arrived as scrambled reading-order text and almost no row survived the line-oriented `parseLine`. **As built (typecheck + build clean;
+full suite 2177 passed / 36 skipped, +~40 tests):**
+- **New `ingestion/parsers/pdf-layout.ts`** — pure/offline geometry reconstruction: cluster words into visual rows by baseline `y`,
+  classify tokens (date / money / text), resolve the page-header YEAR and emit a full `DD.MM.YYYY` date so the SHARED `parseDate` is
+  **untouched** (§3.2 — invoice + redaction non-breaking guarantee), DROP the value-date column so it can't be misread as the amount,
+  and emit every visual row (transactions year-resolved; other rows raw so opening/closing-balance labels + currency survive). No new
+  dependency (D50).
+- **`ParseContext.layout`** + `PdfParser` layout mode (keeps the coordinates it used to discard; scan-detection re-keyed on RAW text so
+  an empty reconstruction is never mistaken for an image-only scan; page cap honored on the layout path).
+- **Bank-only wiring through the EXISTING re-parse seam (D51/D58):** `extractDocumentPreview` opts → `readDocumentSegments(id, {layout})`
+  → `resolveDocumentReader`/`BankExtractionDeps.layout` → the bank analysis handler + the doc-action runner set `layout:true`; the IPC
+  closure threads the page cap. **Redaction, invoice, ingest, the renderer preview, translate, and compare are byte-unchanged** (they
+  never set `layout`).
+- **Completeness gate (D56 — the cardinal safety property):** new `extractStatementBalances` (printed opening/closing balances, EN+DE
+  labels) + `isStatementComplete` (`opening + Σamounts == closing` within half a cent AND no per-row mismatch — the per-row chain alone is
+  necessary-not-sufficient). Persisted on `bank_statements` (additive nullable `opening_balance`/`closing_balance`). `buildBankAnswer`
+  presents a single-currency total ONLY when proven complete; otherwise it **downgrades** to an honest "couldn't confirm the whole
+  statement" message (new `skills.bankAnalysis.incompleteNoTotal`, EN+DE) — never a partial sum dressed up as a total. Mixed-currency
+  still reports no-single-total (safe; no total presented).
+- **DATA CONTRACT additions:** `ExtractTransactionsOutput.openingBalance?`/`closingBalance?` (+ schema); `bank_statements.opening_balance`/
+  `closing_balance` (REAL, nullable, CONTENT-CLASS — never logged/audited/exported); `readDocumentSegments` signature now
+  `(id, opts?:{layout?})`.
+- **Tests:** `pdf-layout.test.ts` (clustering, year→full-date, value-date drop, balance-line preservation); bank-statement tool unit tests
+  (`extractStatementBalances`, `isStatementComplete`); `pdf-bank-layout.test.ts` integration — a SYNTHETIC columnar PDF (new
+  `makeColumnarPdf` fixture builder, zero new deps, WinAnsi umlauts) proving text-mode loses every row while layout-mode recovers all
+  three + correct total + honest coverage + citations + **0 model calls**, plus a non-tying-balance fixture that MUST downgrade;
+  `resolveDocumentReader` seam test (layout threaded only when requested, D58); existing bank fixtures (handler + IPC) updated to carry
+  tying opening/closing balances where a total is asserted. **Docs:** plan header marked Stage-1-shipped (file KEPT — Stage 2 still open);
+  `known-limitations.md` updated.
+- **NEXT — Stage 2 is NOT built (deliberately, D52):** the §4 constrained local-LLM fallback (+ its D55 grammar/`json_schema` runtime
+  plumbing over `llama-server`) lands ONLY if Stage-1 deterministic recall on the **local-only** gold set (D57 — real statements, gitignored,
+  `PAID_*`-style manual harness; never committed) proves below ~90%. Measure first, then decide. The gold-set harness itself is not yet
+  written. Real German layouts beyond the synthetic fixture are UNVERIFIED until that harness runs._
+
 _2026-06-22 — **Skill finetuning Wave 3 — real-model harness (autonomous stand-in for the GUI smoke test).** The vitest suite proves
 the Wave-3 LOGIC against the mock runtime; this proves real-model OUTPUT QUALITY without a GUI or workspace access. New
 **`tests/real-model/wave3.realmodel.test.ts`** drives the ACTUAL whole-doc / compare / tree code with a real local llama.cpp model

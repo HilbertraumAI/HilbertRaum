@@ -292,6 +292,25 @@ password recovery — are documented in
   presents them as labelled blocks, instead of top-k. A tree-backed compare (the §20 map-reduce applied
   per oversized doc *inside* the compare) remains a documented follow-up — today an oversized compared
   doc is read capped, not tree-reduced.
+- **Bank-statement extraction reads PDF GEOMETRY (Stage 1; PDF geometry-extraction plan, Phase 31,
+  D50–D58).** A columnar PDF statement (date · description · amount, with the year in the page header)
+  used to arrive as scrambled reading-order text, so almost no transaction survived the line-oriented
+  parser (the user-reported HVB "zero transactions" failure). The bank-statement skill now re-parses
+  the PDF in a **layout mode** that rebuilds visual rows from pdf.js word coordinates and emits clean,
+  year-resolved `DD.MM.YYYY` rows — **deterministic, offline, zero model calls** (`parsers/pdf-layout.ts`).
+  Enabled for **bank-statement only** (D58 — invoice/redaction/preview keep byte-unchanged reading-order
+  text); `parseDate` is untouched (the year is resolved during reconstruction, §3.2). **Column
+  clustering is heuristic** (statements vary; an amount embedded in a description, or an unusual column
+  geometry, can still be mis-read), so a **completeness gate** (D56) guards every total: a single-currency
+  total is presented **only when the printed opening + Σamounts == closing balance ties out** (a clean
+  per-row running-balance chain is necessary but not sufficient). When completeness cannot be **proven**
+  — no printed opening/closing balance, a non-tying balance, or any per-row mismatch — the skill **does
+  not present a total**; it downgrades to an honest "couldn't confirm the whole statement" message
+  (EN+DE). The consequence: a real statement that prints no opening/closing balance gets the honest
+  downgrade rather than a total, by design (a partial read must never become a confident wrong total).
+  **Stage 2** (a grammar-constrained local-LLM fallback on the residual hard subset, D52/D55) is **not
+  built** — it lands only if the Stage-1 deterministic recall on the local-only gold set (D57) proves
+  insufficient.
 - **Strictly one job at a time (D26).** While a summary runs, chat is refused with a
   friendly message + a cancel option, and vice versa — the one local model serves one
   request. The R-T1 probe confirmed the pinned b9585 WOULD serve concurrent requests on

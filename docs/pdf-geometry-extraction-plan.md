@@ -1,5 +1,16 @@
 # PDF Geometry-Aware Extraction — plan (Phase 31)
 
+_Status: **STAGE 1 SHIPPED (2026-06-23) — Stage 2 still open.** Branch `pdf-geometry-extraction`.
+Stage 1 (deterministic geometry, §3 + the §3.5 completeness gate) is implemented, tested, and merged on
+this branch: `parsers/pdf-layout.ts` (row/column reconstruction, year→full-date emission, value-date
+drop), `ParseContext.layout` + `PdfParser` layout mode, the bank-only wiring through the existing
+re-parse seam (D58), opening/closing-balance extraction + the D56 no-partial-total gate (new EN+DE
+downgrade copy), and a synthetic-columnar-PDF integration suite (zero model calls). `parseDate` was NOT
+touched (§3.2). **Stage 2 (the §4 constrained-LLM fallback + its D55 runtime plumbing) is NOT built** —
+gated on the D52 measurement. This file therefore REMAINS a working paper for the open Stage-2 work;
+fold the whole thing into the architecture.md "Skills — design record" §8 record and delete it once
+Stage 2 is decided/shipped. Original status line below._
+
 _Status: **WORKING PAPER — not started (created 2026-06-22).** Branch `pdf-geometry-extraction`.
 Motivated by a real user report: a German HypoVereinsbank ("HVB") bank statement analysed with the
 `app:bank-statement` skill returned **zero transactions** ("Ich habe den ganzen Auszug gelesen, aber
