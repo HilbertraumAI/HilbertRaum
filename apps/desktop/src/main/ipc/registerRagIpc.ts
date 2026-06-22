@@ -256,6 +256,34 @@ export function registerRagIpc(ctx: AppContext): void {
           // to the relevance path rather than fail the turn.
         }
 
+        // `grounded-whole-doc-compare` (Follow-up B, what-changed): a compare-shaped request over
+        // EXACTLY TWO in-scope docs streams a model answer over BOTH documents read whole (budget
+        // split across them) with the fence applied; coverage is `capped` (truncated when either
+        // overflowed). `applies()` guaranteed exactly two in-scope docs; the fully-chunked refusal
+        // above already gated both.
+        if (analysisHandler.mode === 'grounded-whole-doc-compare') {
+          const documentIds = documentsInScope(ctx.db, scope).map((d) => d.id)
+          if (documentIds.length === 2) {
+            return withChatStream(
+              event,
+              conversationId,
+              'Document answer failed',
+              (signal, sendToken, _sendReasoning, sendCompaction) =>
+                generateGroundedAnswer(ctx.db, runtime, ctx.embedder, conversationId, text, settings, {
+                  signal,
+                  onCompactionStart: sendCompaction,
+                  scope,
+                  reranker: ctx.reranker,
+                  skill: turnSkill,
+                  wholeDocumentCompare: { documentIds },
+                  onToken: sendToken
+                }),
+              () => ctx.docTasks?.acquireChatSlot() ?? Promise.resolve(() => {})
+            )
+          }
+          // Defensive: applies() requires exactly two in-scope docs; otherwise fall through.
+        }
+
         // `exhaustive` / `routing`: auto-run the read-only whole-document tools (D46) and persist the
         // exhaustive answer with its honest extract/whole coverage (D48) + real citations, OR (routing)
         // return the action-routing answer. NO model call — deterministic, localized copy (D47). A

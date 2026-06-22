@@ -7,10 +7,12 @@ import {
   DEADLINE_OBLIGATION_INSTALL_ID,
   MEETING_PROTOCOL_INSTALL_ID,
   SHARE_SAFE_REVIEW_INSTALL_ID,
+  WHAT_CHANGED_INSTALL_ID,
   contractBriefAnalysisHandler,
   deadlineObligationAnalysisHandler,
   meetingProtocolAnalysisHandler,
-  shareSafeReviewAnalysisHandler
+  shareSafeReviewAnalysisHandler,
+  whatChangedAnalysisHandler
 } from './whole-doc-skills'
 
 // The analysis-handler seam barrel (full-doc-skills plan §3.1, Phase 2). Re-exports the registry +
@@ -42,10 +44,12 @@ export {
   DEADLINE_OBLIGATION_INSTALL_ID,
   MEETING_PROTOCOL_INSTALL_ID,
   SHARE_SAFE_REVIEW_INSTALL_ID,
+  WHAT_CHANGED_INSTALL_ID,
   contractBriefAnalysisHandler,
   deadlineObligationAnalysisHandler,
   meetingProtocolAnalysisHandler,
-  shareSafeReviewAnalysisHandler
+  shareSafeReviewAnalysisHandler,
+  whatChangedAnalysisHandler
 } from './whole-doc-skills'
 
 /** Register every app-owned analysis handler (called once at app init; the chat path consults it). */
@@ -58,9 +62,13 @@ export function registerBuiltinSkillAnalysisHandlers(): void {
   // The Tier-1 INSTRUCTION skills register `grounded-whole-doc` handlers (skill-whole-doc engine,
   // Wave 2): an analysis-shaped request over a single in-scope doc streams a model answer over the
   // WHOLE document with the SKILL.md fence applied; an off-topic/multi-doc turn keeps the relevance
-  // path. (`what-changed` stays on the existing `compare` engine — it is inherently multi-document.)
+  // path.
   registerSkillAnalysisHandler(MEETING_PROTOCOL_INSTALL_ID, meetingProtocolAnalysisHandler)
   registerSkillAnalysisHandler(CONTRACT_BRIEF_INSTALL_ID, contractBriefAnalysisHandler)
   registerSkillAnalysisHandler(SHARE_SAFE_REVIEW_INSTALL_ID, shareSafeReviewAnalysisHandler)
   registerSkillAnalysisHandler(DEADLINE_OBLIGATION_INSTALL_ID, deadlineObligationAnalysisHandler)
+  // `what-changed` registers a `grounded-whole-doc-compare` handler (Follow-up B): a compare-shaped
+  // request over EXACTLY TWO in-scope docs streams a model answer over BOTH documents read whole
+  // (budget split across the two) with the SKILL.md format applied; otherwise keeps the relevance path.
+  registerSkillAnalysisHandler(WHAT_CHANGED_INSTALL_ID, whatChangedAnalysisHandler)
 }

@@ -286,8 +286,12 @@ password recovery — are documented in
   document larger than the context budget that has a **ready deep index** is answered by a skill-fenced
   **map-reduce over its tree** instead of truncating (full coverage, `tree` badge — Follow-up A, §20);
   **without** a ready tree it is still read **from the beginning** with a "covers the beginning" badge,
-  never silently complete. A 2-document whole-doc compare for `what-changed` remains the documented
-  follow-up (B).
+  never silently complete. **`what-changed`** registers a **`grounded-whole-doc-compare`** handler
+  (Follow-up B): a compare-shaped request over **exactly two** in-scope docs reads BOTH versions whole
+  (budget split size-aware across them, `capped` coverage — `truncated` when either overflowed) and
+  presents them as labelled blocks, instead of top-k. A tree-backed compare (the §20 map-reduce applied
+  per oversized doc *inside* the compare) remains a documented follow-up — today an oversized compared
+  doc is read capped, not tree-reduced.
 - **Strictly one job at a time (D26).** While a summary runs, chat is refused with a
   friendly message + a cancel option, and vice versa — the one local model serves one
   request. The R-T1 probe confirmed the pinned b9585 WOULD serve concurrent requests on

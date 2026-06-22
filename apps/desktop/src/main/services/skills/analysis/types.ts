@@ -80,12 +80,17 @@ export interface SkillAnalysisHandler {
    *     enforces the same fully-chunked precondition, then streams a model answer over the whole
    *     document via `generateGroundedAnswer({ wholeDocument })` — NOT `run()` (which these handlers
    *     omit). `applies()` does the intent + single-in-scope-doc gating.
+   *   - `'grounded-whole-doc-compare'` — the 2-document sibling (what-changed): a compare-shaped
+   *     request over EXACTLY TWO in-scope, fully-chunked documents streams a model answer over BOTH
+   *     documents read whole (budget split across the two) with the SKILL.md format applied, via
+   *     `generateGroundedAnswer({ wholeDocumentCompare })`. Also omits `run()`; `applies()` gates the
+   *     intent + the exactly-two-in-scope-docs precondition.
    *   - `'routing'` — reads NO content. It returns a short answer pointing the user at the skill's
    *     own run affordance (an ACTION skill whose tool WRITES a file and must stay user-initiated,
    *     e.g. document-redaction). The fully-chunked refusal does NOT apply (nothing is read), and
    *     it returns no citations/coverage so no breadth badge is shown.
    */
-  mode?: 'exhaustive' | 'grounded-whole-doc' | 'routing'
+  mode?: 'exhaustive' | 'grounded-whole-doc' | 'grounded-whole-doc-compare' | 'routing'
   /** Can this skill answer THIS question over THIS scope? (cheap, pre-flight). */
   applies(input: SkillAnalysisInput): boolean
   /**

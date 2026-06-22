@@ -6,6 +6,24 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-22 — **Skill finetuning Wave 3, Phase 4 (Follow-up B): 2-document whole-doc compare for `what-changed`.** Wave 2 left
+`what-changed` on the relevance/top-k path (it was single-doc). Now a compare-shaped request over EXACTLY TWO in-scope docs feeds
+BOTH documents whole (budget-aware) with the SKILL.md fence, so the compare is material-change analysis over full versions, not top-k.
+**Budget split (user-confirmed = size-aware with redistribution):** each doc gets up to HALF the whole-doc budget; a smaller doc
+donates its unused half to the larger one — so two versions that jointly fit are both read WHOLE (the common case), two large versions
+each get ~half, and a large+small pair gives the large doc the slack. **As built (typecheck + build clean; full suite green, +12
+tests):** new handler mode **`grounded-whole-doc-compare`** + **`whatChangedAnalysisHandler`** (compare keywords EN+DE, `applies()` =
+exactly-two-in-scope-docs); registered for `app:what-changed`. `registerRagIpc` detects the mode (after the same D45 fully-chunked
+refusal, now gating BOTH docs) and calls `generateGroundedAnswer({ wholeDocumentCompare:{ documentIds } })`. New in `rag/index.ts`:
+**`splitCompareBudget`** (pure), **`retrieveCompareWholeDocuments`** (both docs read in order, **continuous `[Sn]` labels** across the
+two so a citation names its version — M2), **`buildCompareWholeDocPrompt`** (labelled "Document 1/2" blocks + the fence). Coverage is
+honest **`capped`** (`truncated` when EITHER doc overflowed its share); a 1-/3-doc scope keeps the relevance path byte-unchanged. §14
+ceiling + fence/guard bracketing unchanged. **Docs:** `architecture.md` §20 (compare record + Tests), `known-limitations.md` updated.
+**Tests:** `rag-whole-doc-compare.test.ts` (IPC: both whole docs in one labelled turn + capped coverage + cross-doc citations; refuse
+when a doc isn't fully chunked; single-doc keeps relevance); `skills-analysis-whole-doc.test.ts` extended (handler shape + applies +
+`splitCompareBudget` + `retrieveCompareWholeDocuments`). **NEXT: none outstanding from the Wave-3 brief — remaining follow-up is a
+tree-backed compare (apply Phase-3 map-reduce per oversized doc inside the 2-doc compare), documented in §20 but not yet built._
+
 _2026-06-22 — **Skill finetuning Wave 3, Phase 3 (Follow-up A): deep-index map-reduce for an over-budget whole-doc skill turn.**
 Wave 2 read an over-budget document from the BEGINNING and stamped the honest `capped`/"covers the beginning" badge — coverage
 stopped at the budget. This closes that for a document with a **ready deep-index tree**: instead of truncating, run the SAME map-reduce

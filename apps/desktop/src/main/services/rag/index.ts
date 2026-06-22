@@ -416,6 +416,91 @@ function sourceMeta(chunk: RetrievedChunk): string {
   return ''
 }
 
+/** A document's whole size in the SAME token unit as `retrieveWholeDocument` (persisted token_count
+ *  scaled by TOKENS_PER_WORD), so the compare budget can be split by real size. */
+function documentApproxTokenTotal(db: Db, documentId: string): number {
+  const rows = db
+    .prepare('SELECT text, token_count FROM chunks WHERE document_id = ?')
+    .all(documentId) as unknown as Array<{ text: string; token_count: number | null }>
+  let total = 0
+  for (const r of rows) total += Math.ceil((r.token_count ?? approxTokenCount(r.text)) * TOKENS_PER_WORD)
+  return total
+}
+
+/**
+ * Split a whole-document budget across two compared documents (Follow-up B). Size-aware with
+ * redistribution: each gets up to HALF, then a smaller document donates its unused half to the
+ * larger one. So two versions that JOINTLY fit are both read whole (the common what-changed case);
+ * when both are large each is guaranteed ~half; a large+small pair gives the large doc the slack.
+ * Pure + unit-tested. Returns `[budgetA, budgetB]`, each ≥ 1 (so each doc keeps its first chunk).
+ */
+export function splitCompareBudget(tokensA: number, tokensB: number, totalBudget: number): [number, number] {
+  const budget = Math.max(0, Math.floor(totalBudget))
+  const half = Math.floor(budget / 2)
+  let a = Math.min(Math.max(0, tokensA), half)
+  let b = Math.min(Math.max(0, tokensB), half)
+  let leftover = budget - a - b
+  if (leftover > 0) {
+    const giveA = Math.min(Math.max(0, tokensA) - a, leftover)
+    a += giveA
+    leftover -= giveA
+    const giveB = Math.min(Math.max(0, tokensB) - b, leftover)
+    b += giveB
+  }
+  return [Math.max(1, a), Math.max(1, b)]
+}
+
+/** The whole-document read for a 2-document compare (Follow-up B): both documents read IN ORDER,
+ *  the budget split by size, with continuous `[Sn]` labels across the two so citations stay unique. */
+export interface CompareWholeDocumentsResult {
+  /** Per-document groups (in scope order), for the labelled compare prompt. */
+  groups: Array<{ documentId: string; title: string; chunks: RetrievedChunk[] }>
+  /** All chunks (doc A then doc B), continuously labelled — the citation source of truth. */
+  chunks: RetrievedChunk[]
+  citations: Citation[]
+  /** True when EITHER document overflowed its budget share (honest capped/"beginning" coverage). */
+  truncated: boolean
+  chunksCovered: number
+  chunksTotal: number
+}
+
+export function retrieveCompareWholeDocuments(
+  db: Db,
+  documentIds: string[],
+  totalBudget: number
+): CompareWholeDocumentsResult {
+  const [idA, idB] = documentIds
+  const [budgetA, budgetB] = splitCompareBudget(
+    documentApproxTokenTotal(db, idA),
+    documentApproxTokenTotal(db, idB),
+    totalBudget
+  )
+  const titleOf = (id: string): string => {
+    const row = db.prepare('SELECT title FROM documents WHERE id = ?').get(id) as unknown as
+      | { title: string | null }
+      | undefined
+    return row?.title ?? 'Untitled'
+  }
+  const a = retrieveWholeDocument(db, idA, budgetA)
+  const b = retrieveWholeDocument(db, idB, budgetB)
+  // Continue [Sn] numbering across the SECOND document so labels are unique + ordered (M2: the
+  // citations are the source of truth, so a collision would mislabel which version a source is from).
+  const offset = a.chunks.length
+  const bChunks: RetrievedChunk[] = b.chunks.map((c, i) => ({ ...c, label: `S${offset + i + 1}` }))
+  const bCitations: Citation[] = b.citations.map((c, i) => ({ ...c, label: `S${offset + i + 1}` }))
+  return {
+    groups: [
+      { documentId: idA, title: titleOf(idA), chunks: a.chunks },
+      { documentId: idB, title: titleOf(idB), chunks: bChunks }
+    ],
+    chunks: [...a.chunks, ...bChunks],
+    citations: [...a.citations, ...bCitations],
+    truncated: a.truncated || b.truncated,
+    chunksCovered: a.chunksCovered + b.chunksCovered,
+    chunksTotal: a.chunksTotal + b.chunksTotal
+  }
+}
+
 /**
  * RT-2 — the STABLE grounding rules + preface, hoisted out of the per-turn USER message into
  * the cacheable SYSTEM prompt (`GROUNDED_SYSTEM_PROMPT`). Keeping them in the user turn meant
@@ -466,6 +551,36 @@ ${question}
 ${skillBlock}
 Document excerpts:
 ${excerpts}
+
+Answer:`
+}
+
+/**
+ * Build the grounded USER turn for a 2-document WHOLE-DOCUMENT compare (Follow-up B): the question,
+ * the optional skill fence, then the two documents as LABELLED blocks (so a same-titled pair of
+ * versions is still distinguishable), each carrying its `[Sn] File: …` excerpts in the spec §7.8
+ * format. The fence + its guard ride in this user turn exactly as `buildGroundedPrompt`; the stable
+ * grounding rules stay in `GROUNDED_SYSTEM_PROMPT`. Pure + unit-testable.
+ */
+export function buildCompareWholeDocPrompt(
+  question: string,
+  groups: Array<{ title: string; chunks: RetrievedChunk[] }>,
+  skillFence?: string | null
+): string {
+  const docs = groups
+    .map((g, i) => {
+      const excerpts = g.chunks
+        .map((c) => `[${c.label}] File: ${c.sourceTitle}${sourceMeta(c)}\n"${c.text}"`)
+        .join('\n\n')
+      return `Document ${i + 1} — "${g.title}":\n${excerpts}`
+    })
+    .join('\n\n')
+  const skillBlock = skillFence ? `\n${skillFence}\n` : ''
+  return `Question:
+${question}
+${skillBlock}
+Documents to compare:
+${docs}
 
 Answer:`
 }
@@ -548,6 +663,15 @@ export interface GroundedAnswerOptions {
    */
   wholeDocument?: { documentId: string }
   /**
+   * Skill-aware 2-document WHOLE-DOCUMENT compare (Follow-up B, what-changed). When set, BOTH named
+   * documents are read IN ORDER (not top-k), the whole-document budget is SPLIT across them
+   * (size-aware: each gets up to half, a smaller doc donates its unused half to the larger), the
+   * grounded turn presents them as two labelled documents with the SKILL.md fence, and the persisted
+   * coverage is `capped` (truncated when EITHER document overflowed its share). Set ONLY by a
+   * `grounded-whole-doc-compare` handler over its two in-scope, fully-chunked documents.
+   */
+  wholeDocumentCompare?: { documentIds: string[] }
+  /**
    * Fired exactly once if the context-compaction pre-pass starts a summarization for this turn.
    * Phase 1 only plumbs the callback; the `STREAM.compaction` UX channel is Phase 2.
    */
@@ -610,6 +734,9 @@ export async function generateGroundedAnswer(
   let chunks: RetrievedChunk[]
   let citations: Citation[]
   let coverage: CoverageInfo | undefined
+  // When set (Follow-up B), the grounded turn presents the two compared documents as labelled blocks
+  // (buildCompareWholeDocPrompt) instead of a single excerpt list.
+  let compareGroups: Array<{ title: string; chunks: RetrievedChunk[] }> | null = null
   if (opts.wholeDocument) {
     const budget = wholeDocumentBudgetTokens(contextTokens, question, opts.skill)
     const whole = retrieveWholeDocument(db, opts.wholeDocument.documentId, budget)
@@ -639,6 +766,21 @@ export async function generateGroundedAnswer(
       chunksTotal: whole.chunksTotal,
       truncated: whole.truncated
     }
+  } else if (opts.wholeDocumentCompare) {
+    // 2-document whole-doc compare (Follow-up B): read BOTH documents in order with the budget split
+    // across them (size-aware), present them as two labelled blocks + the fence, and stamp honest
+    // `capped` coverage (truncated when EITHER document overflowed its share).
+    const budget = wholeDocumentBudgetTokens(contextTokens, question, opts.skill)
+    const comp = retrieveCompareWholeDocuments(db, opts.wholeDocumentCompare.documentIds, budget)
+    chunks = comp.chunks
+    citations = comp.citations
+    compareGroups = comp.groups
+    coverage = {
+      mode: 'capped',
+      chunksCovered: comp.chunksCovered,
+      chunksTotal: comp.chunksTotal,
+      truncated: comp.truncated
+    }
   } else {
     const r = await retrieve(db, embedder, question, settings, scopeArg, opts.reranker, opts.signal)
     chunks = r.chunks
@@ -666,7 +808,9 @@ export async function generateGroundedAnswer(
   // Pre-size the skill fence (§11.3/A6) against the fence-less grounded turn so it never starves
   // the base preamble, the question, or the excerpts — only older history yields. The fence rides
   // in the grounded USER turn (buildGroundedPrompt). Stamp only when the fence actually fit.
-  const groundedNoFence = buildGroundedPrompt(question, chunks)
+  const groundedNoFence = compareGroups
+    ? buildCompareWholeDocPrompt(question, compareGroups)
+    : buildGroundedPrompt(question, chunks)
   // `contextTokens` was resolved above (the whole-document budget needs it up-front); it is the
   // REAL launched context window the runtime reports (§L0), not settings.contextTokens.
   // L2 (context compaction): summarize older raw turns into a cached checkpoint when the history
@@ -695,7 +839,11 @@ export async function generateGroundedAnswer(
     })
     skillFence = buildSkillFence({ title: opts.skill.title, body: opts.skill.body }, budget).text
   }
-  const grounded = skillFence ? buildGroundedPrompt(question, chunks, skillFence) : groundedNoFence
+  const grounded = skillFence
+    ? compareGroups
+      ? buildCompareWholeDocPrompt(question, compareGroups, skillFence)
+      : buildGroundedPrompt(question, chunks, skillFence)
+    : groundedNoFence
   // Trim older history to the model context window so the grounded turn (which carries the
   // retrieved-chunk block, up to settings.maxContextTokens) plus prior turns never overflow
   // and trigger an HTTP 400 from the runtime.

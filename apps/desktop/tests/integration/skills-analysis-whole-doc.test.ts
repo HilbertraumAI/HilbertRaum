@@ -9,17 +9,23 @@ import {
   DEADLINE_OBLIGATION_INSTALL_ID,
   MEETING_PROTOCOL_INSTALL_ID,
   SHARE_SAFE_REVIEW_INSTALL_ID,
+  WHAT_CHANGED_INSTALL_ID,
   contractBriefAnalysisHandler,
   deadlineObligationAnalysisHandler,
   meetingProtocolAnalysisHandler,
-  shareSafeReviewAnalysisHandler
+  shareSafeReviewAnalysisHandler,
+  whatChangedAnalysisHandler
 } from '../../src/main/services/skills/analysis/whole-doc-skills'
 import {
   clearSkillAnalysisHandlers,
   getSkillAnalysisHandler
 } from '../../src/main/services/skills/analysis/registry'
 import { registerBuiltinSkillAnalysisHandlers } from '../../src/main/services/skills/analysis'
-import { retrieveWholeDocument } from '../../src/main/services/rag'
+import {
+  retrieveWholeDocument,
+  retrieveCompareWholeDocuments,
+  splitCompareBudget
+} from '../../src/main/services/rag'
 
 // Skill-aware WHOLE-DOCUMENT handlers (skill-whole-doc engine, Wave 2). Two contracts pinned here:
 //   1. the per-skill `applies()` gate — analysis-shaped intent (EN+DE) over a SINGLE in-scope doc,
@@ -96,13 +102,86 @@ describe('whole-doc analysis handlers — applies() pre-flight', () => {
 })
 
 describe('analysis-handler registry — whole-doc skills', () => {
-  it('registerBuiltinSkillAnalysisHandlers wires all four whole-doc handlers', () => {
+  it('registerBuiltinSkillAnalysisHandlers wires all four whole-doc handlers + what-changed compare', () => {
     clearSkillAnalysisHandlers()
     registerBuiltinSkillAnalysisHandlers()
     expect(getSkillAnalysisHandler(MEETING_PROTOCOL_INSTALL_ID)).toBe(meetingProtocolAnalysisHandler)
     expect(getSkillAnalysisHandler(CONTRACT_BRIEF_INSTALL_ID)).toBe(contractBriefAnalysisHandler)
     expect(getSkillAnalysisHandler(SHARE_SAFE_REVIEW_INSTALL_ID)).toBe(shareSafeReviewAnalysisHandler)
     expect(getSkillAnalysisHandler(DEADLINE_OBLIGATION_INSTALL_ID)).toBe(deadlineObligationAnalysisHandler)
+    expect(getSkillAnalysisHandler(WHAT_CHANGED_INSTALL_ID)).toBe(whatChangedAnalysisHandler)
+  })
+})
+
+describe('what-changed compare handler (Follow-up B) — shape + applies()', () => {
+  it('is a grounded-whole-doc-compare handler with NO run() (chat path streams directly)', () => {
+    expect(whatChangedAnalysisHandler.mode).toBe('grounded-whole-doc-compare')
+    expect(whatChangedAnalysisHandler.run).toBeUndefined()
+  })
+
+  it('applies on a compare-shaped question (EN + DE) over EXACTLY two in-scope docs', () => {
+    const db = freshDb()
+    const a = seedDoc(db, ['a'])
+    const b = seedDoc(db, ['b'])
+    const scope = { documentIds: [a, b] }
+    expect(whatChangedAnalysisHandler.applies({ db, scope, question: 'what changed between these?' })).toBe(true)
+    expect(whatChangedAnalysisHandler.applies({ db, scope, question: 'was hat sich geändert?' })).toBe(true)
+  })
+
+  it('does NOT apply with only one in-scope doc, three docs, or an off-topic question', () => {
+    const db = freshDb()
+    const a = seedDoc(db, ['a'])
+    const b = seedDoc(db, ['b'])
+    const c = seedDoc(db, ['c'])
+    expect(whatChangedAnalysisHandler.applies({ db, scope: { documentIds: [a] }, question: 'what changed?' })).toBe(false)
+    expect(whatChangedAnalysisHandler.applies({ db, scope: { documentIds: [a, b, c] }, question: 'what changed?' })).toBe(false)
+    expect(whatChangedAnalysisHandler.applies({ db, scope: { documentIds: [a, b] }, question: 'what colour is the sky?' })).toBe(false)
+  })
+})
+
+describe('splitCompareBudget (Follow-up B) — size-aware with redistribution', () => {
+  it('reads both whole when they jointly fit (each gets its full size)', () => {
+    expect(splitCompareBudget(100, 100, 1000)).toEqual([100, 100])
+  })
+  it('splits evenly when both are large (each gets ~half)', () => {
+    expect(splitCompareBudget(1000, 1000, 400)).toEqual([200, 200])
+  })
+  it('donates a small doc’s unused half to the larger doc', () => {
+    // half=200; small doc takes 50, the large doc gets the 150 leftover on top of its 200.
+    const [a, b] = splitCompareBudget(1000, 50, 400)
+    expect(b).toBe(50)
+    expect(a).toBe(350)
+    expect(a + b).toBeLessThanOrEqual(400)
+  })
+  it('never returns below 1 (each doc keeps its first chunk)', () => {
+    expect(splitCompareBudget(0, 0, 0)).toEqual([1, 1])
+  })
+})
+
+describe('retrieveCompareWholeDocuments (Follow-up B)', () => {
+  it('reads BOTH docs in order with continuous [Sn] labels and combined coverage (not truncated)', () => {
+    const db = freshDb()
+    const a = seedDoc(db, ['a-one', 'a-two'])
+    const b = seedDoc(db, ['b-one', 'b-two', 'b-three'])
+    const res = retrieveCompareWholeDocuments(db, [a, b], 100_000)
+    // Continuous labels across the two documents (M2 — unique source labels).
+    expect(res.chunks.map((c) => c.label)).toEqual(['S1', 'S2', 'S3', 'S4', 'S5'])
+    expect(res.groups).toHaveLength(2)
+    expect(res.groups[0].chunks.map((c) => c.text)).toEqual(['a-one', 'a-two'])
+    expect(res.groups[1].chunks.map((c) => c.label)).toEqual(['S3', 'S4', 'S5'])
+    expect(res.chunksCovered).toBe(5)
+    expect(res.chunksTotal).toBe(5)
+    expect(res.truncated).toBe(false)
+    expect(res.citations.map((c) => c.label)).toEqual(['S1', 'S2', 'S3', 'S4', 'S5'])
+  })
+
+  it('reports truncated when EITHER document overflows its budget share', () => {
+    const db = freshDb()
+    const a = seedDoc(db, Array.from({ length: 20 }, (_v, i) => `doc a chunk number ${i} text`))
+    const b = seedDoc(db, ['b-one'])
+    const res = retrieveCompareWholeDocuments(db, [a, b], 12)
+    expect(res.truncated).toBe(true)
+    expect(res.chunksCovered).toBeLessThan(res.chunksTotal)
   })
 })
 

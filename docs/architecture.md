@@ -2443,9 +2443,8 @@ byte-unchanged: coverage stays `undefined` ⇒ persisted NULL ⇒ the relevance 
 `applies()` matches an analysis-shaped keyword set (EN+DE) over a **single** in-scope document. Because
 these skills are **explicitly selected**, the keyword sets include the bare domain nouns (e.g.
 `contract`/`vertrag`) — `includes` can't span "summarize **this** contract", so the noun is the robust
-trigger; an off-topic question or a multi-doc scope still keeps the relevance path. **`what-changed` is
-out of scope** — it is inherently multi-document and stays on the existing compare/relevance path;
-extending the whole-document engine to a 2-document compare is the documented follow-up.
+trigger; an off-topic question or a multi-doc scope still keeps the relevance path. **`what-changed`** is
+the 2-document sibling — see the compare record below (Follow-up B).
 
 **Large documents — deep-index map-reduce (Follow-up A, Wave 3, 2026-06-22).** An over-budget document
 no longer truncates to its beginning when a **ready deep-index tree** exists: `generateGroundedAnswer`
@@ -2464,11 +2463,31 @@ triggers a second capped pass. A document that **fits** the budget never enters 
 (`truncated:false`) — the small-doc path is byte-identical to Wave 2. The §14 ceiling is unchanged: pure
 DB tree/coverage reads + the chat runtime, no new DB/FS/net handle; the fence (with its guard line) keeps
 bracketing the untrusted body in every step's USER turn, the app-authored system prompt outside it.
-**Still open:** a 2-document whole-doc compare for `what-changed` (Follow-up B).
+**Still open** for the tree path: a tree-backed compare (applying this map-reduce per oversized document
+inside the 2-doc compare below) — today the compare reads both docs capped, not tree-reduced.
+
+**2-document whole-doc compare (Follow-up B, Wave 3, 2026-06-22).** `what-changed` registers a
+**`grounded-whole-doc-compare`** handler (`analysis/whole-doc-skills.ts`) whose `applies()` matches a
+compare-shaped keyword set (EN+DE) over **exactly two** in-scope documents. `registerRagIpc` detects the
+mode (after the same D45 fully-chunked refusal, which now gates **both** docs) and calls
+`generateGroundedAnswer({ wholeDocumentCompare:{ documentIds } })`: **`retrieveCompareWholeDocuments`**
+reads BOTH documents **in order** (not top-k), splitting the whole-document budget across them
+**size-aware** (**`splitCompareBudget`**: each gets up to half; a smaller doc donates its unused half to
+the larger, so two versions that jointly fit are both read whole — the common case — while two large
+versions each get ~half). The two documents ride the grounded turn as **labelled blocks**
+(**`buildCompareWholeDocPrompt`** — "Document 1 — …" / "Document 2 — …", so a same-titled version pair
+stays distinguishable) with the SKILL.md fence; `[Sn]` labels run **continuously across both** so a
+citation unambiguously names its version (M2). Coverage is honest **`capped`** — `truncated:true` when
+**either** doc overflowed its share. The relevance path stays byte-unchanged for a 1- or 3-doc scope
+(`applies()` false). The §14 ceiling + the fence/guard bracketing are unchanged.
 
 **Tests.** `rag-whole-doc-tree.test.ts` (the tree map-reduce: single-level → one fenced reduce + `tree`
 coverage + leaf citations + skill stamp; multi-level + small context → map-per-section then reduce with
-the fence at EVERY step; no-ready-tree → null + no model call).
+the fence at EVERY step; no-ready-tree → null + no model call). `rag-whole-doc-compare.test.ts` (IPC: the
+compare path streams a model answer with BOTH whole docs in one labelled turn + `capped` coverage +
+cross-document citations; the refuse path when a doc isn't fully chunked; a single-doc scope keeps the
+relevance path). `skills-analysis-whole-doc.test.ts` also pins the `what-changed` handler shape +
+`applies()` (compare-shaped over exactly two docs) + `splitCompareBudget` + `retrieveCompareWholeDocuments`.
 `skills-analysis-whole-doc.test.ts` (handler-level: `mode==='grounded-whole-doc'` + no
 `run()`, `applies()` matrix EN+DE / off-topic / multi-doc / no-doc, registry wiring, and
 `retrieveWholeDocument` order + truncation + always-keep-first-chunk); `rag-whole-doc-skill.test.ts`

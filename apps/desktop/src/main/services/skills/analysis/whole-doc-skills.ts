@@ -27,6 +27,7 @@ export const MEETING_PROTOCOL_INSTALL_ID = skillInstallId('app', 'meeting-protoc
 export const CONTRACT_BRIEF_INSTALL_ID = skillInstallId('app', 'contract-brief')
 export const SHARE_SAFE_REVIEW_INSTALL_ID = skillInstallId('app', 'share-safe-review')
 export const DEADLINE_OBLIGATION_INSTALL_ID = skillInstallId('app', 'deadline-obligation-finder')
+export const WHAT_CHANGED_INSTALL_ID = skillInstallId('app', 'what-changed')
 
 /** The indexed, answerable documents within a scope (mirrors invoice/bank `inScopeDocuments`). */
 function inScopeDocuments(db: Db, scope: RetrievalScope): Array<{ id: string }> {
@@ -46,6 +47,28 @@ function inScopeDocuments(db: Db, scope: RetrievalScope): Array<{ id: string }> 
 function singleInScopeDocument(db: Db, scope: RetrievalScope): { id: string } | null {
   const docs = inScopeDocuments(db, scope)
   return docs.length === 1 ? docs[0] : null
+}
+
+/** True when the scope holds EXACTLY TWO in-scope documents (what-changed compare — Follow-up B). */
+function exactlyTwoInScopeDocuments(db: Db, scope: RetrievalScope): boolean {
+  return inScopeDocuments(db, scope).length === 2
+}
+
+/** Build a `grounded-whole-doc-compare` handler: applies on a compare-shaped question (any of
+ *  `keywords`) over EXACTLY TWO in-scope documents. No `run()` — the chat path streams a model
+ *  answer over BOTH documents read whole (budget split across the two). */
+function makeCompareHandler(keywords: readonly string[]): SkillAnalysisHandler {
+  const isShaped = (question: string): boolean => {
+    const q = question.toLowerCase()
+    return keywords.some((k) => q.includes(k))
+  }
+  return {
+    mode: 'grounded-whole-doc-compare',
+    applies(input: SkillAnalysisInput): boolean {
+      if (!isShaped(input.question)) return false
+      return exactlyTwoInScopeDocuments(input.db, input.scope)
+    }
+  }
 }
 
 /** Build a `grounded-whole-doc` handler that applies on an analysis-shaped question (any of
@@ -104,4 +127,16 @@ export const deadlineObligationAnalysisHandler: SkillAnalysisHandler = makeWhole
   'action required', 'payment date', 'payment dates',
   'frist', 'fristen', 'fälligkeit', 'fälligkeiten', 'stichtag', 'kündigungsfrist', 'pflicht',
   'pflichten', 'verpflichtung', 'verpflichtungen', 'zahlungsfrist', 'bis wann', 'wiedervorlage'
+])
+
+// what-changed — material-change compare over BOTH whole document versions (EN + DE; Follow-up B).
+// Compare-shaped intent over EXACTLY TWO in-scope documents. Mirrors the SKILL.md triggers but as
+// `includes` substrings (the bilingual discipline: multi-word/domain terms, no bare ambiguous tokens).
+export const whatChangedAnalysisHandler: SkillAnalysisHandler = makeCompareHandler([
+  'what changed', 'what has changed', 'compare versions', 'compare documents', 'compare the two',
+  'version difference', 'differences between', 'difference between', 'changed between', 'old and new',
+  'redline', 'compare contract', 'compare these',
+  'was hat sich geändert', 'änderungen', 'unterschiede', 'unterschied zwischen', 'versionen vergleichen',
+  'dokumente vergleichen', 'alte version', 'neue version', 'gegenüberstellung', 'vertragsänderung',
+  'vergleiche', 'vergleich'
 ])
