@@ -6,7 +6,7 @@ Motivated by a real user report: a German HypoVereinsbank ("HVB") bank statement
 keine Buchungen zum Summieren gefunden"). Root-cause investigation (this session) traced the failure
 past the regex parser all the way to the PDF parser, which **discards the word coordinates it already
 fetches**. Decision numbering continues the repo series after the full-doc-skills wave (D44–D49 →
-**this plan D50–D57**). Per the CLAUDE.md doc-lifecycle rule this is a working paper: condense into a
+**this plan D50–D58**). Audited + corrected 2026-06-23 (two rounds, multi-persona). Per the CLAUDE.md doc-lifecycle rule this is a working paper: condense into a
 design record folded into [`architecture.md`](architecture.md) "Skills — design record" §8 (the
 bank/invoice tools) + a note in [`known-limitations.md`](known-limitations.md), then **delete this
 file** once implemented._
@@ -41,8 +41,9 @@ below:
 | D53 | Honesty for any LLM-emitted figure | Every LLM row must carry a `grounding_quote`; each `amount`/`date` is verified **verbatim** against the source page text (exact → numeric-token → fuzzy), then **balance-reconciled**. Any field that fails is **dropped, not guessed.** | Grammar makes output *parseable*, not *true*. Verbatim grounding + the existing running-balance reconciliation is the actual no-hallucination guarantee. Matches the §22-D1 drop-on-failure posture, now applied per field after the LLM pass. |
 | D54 | Empty-result UX | Distinguish **"couldn't read this statement's layout"** from **"genuinely no transactions"**; never present an invented or silently-empty total. Wire the new copy into the **existing** "could not be read" seam in [`resolveDocumentReader`](../apps/desktop/src/main/services/skills/run.ts#L93-L114), not a parallel flow. | Today a layout failure renders as an empty table on a statement full of bookings — looks broken/dishonest. Honest, actionable copy converts that into a real signal. |
 | D55 | Stage-2 prerequisite | Stage 2 needs **grammar-constrained decoding over our `llama-server` HTTP sidecar** (a GBNF/`json_schema` field on the `/v1/chat/completions` request) — **NOT** `node-llama-cpp`, which we do not use. Our runtime seam (`LlamaRuntime`/`sidecar.ts`) **does not expose a grammar/`response_format` path today**, so Stage 2 includes new runtime plumbing. Keep the grammar simple (CPU overhead). | The stack is a spawned `llama-server` binary over loopback, not an in-process library; constrained decoding must be plumbed through the request path that does not yet carry it. |
-| D56 | No partial totals (completeness gate) | Stage 1 must run a **completeness check before presenting any total**: reconcile the extracted row sum against the printed **opening→closing balance** (or detect row-count/running-balance gaps). If completeness cannot be **proven**, **downgrade to the D54 "couldn't fully read" message** — never sum a partial set and present it as the total. | Partial extraction (e.g. 17 of 20 rows) is MORE dangerous than today's empty result: it yields a confident WRONG total — exactly the harm the honesty rule forbids. The ~90% recall target (D52) explicitly tolerates missing rows, so the answer path must independently prove completeness, not assume it. |
+| D56 | No partial totals (completeness gate) | Stage 1 must run a **completeness check before presenting any total**, and the only true proof — `opening + Σamounts == closing` — needs a **statement-level opening/closing balance that we do NOT extract today**, so capturing it is explicit Stage-1 scope (new extraction + stored field). Per-row `reconcileBalances` is **necessary but not sufficient** (rows dropped past the last printed balance, or in a no-balance region, still leave a reconciling chain). When completeness cannot be **proven**, **downgrade to the D54 "couldn't fully read" message** — never sum a partial set and present it as the total. | Partial extraction (e.g. 17 of 20 rows) is MORE dangerous than today's empty result: it yields a confident WRONG total — the harm the honesty rule forbids. The skill's own example doc notes it currently does NOT check opening+movements==closing, so the proof must be built, not assumed. |
 | D57 | Evaluation corpus location | The real-statement gold set is **LOCAL-ONLY / gitignored**, run via a manual harness (the `PAID_*`-style smoke pattern). Only **aggregate metrics** are committed — never a statement, fixture, or excerpt. | Real bank statements are user financial data; committing them violates the CLAUDE.md "never commit user data" hard rule. |
+| D58 | Layout mode is bank-statement ONLY (Stage 1) | Enable the §3.1 layout mode for the **bank-statement** skill only. The **invoice** skill is label/line-scan based (not columnar), so reconstructed text could change its output — adopt it for invoice (if at all) only behind its own measurement. | `applyHeader`/`lastMoney` scan per line for labels + the last money token ([`invoice.ts`](../apps/desktop/src/main/services/skills/tools/invoice.ts#L160-L199)); column-reconstructed text shifts line composition → a regression risk with no proven benefit. |
 
 **Hard rules (inherited, unchanged):** no cloud, no telemetry, offline forever; never invent a
 figure (drop the ambiguous); no developer-absolute paths; Windows-first, macOS/Linux supported;
@@ -92,11 +93,14 @@ set, `PdfParser.parse()` returns **layout-preserved text** suitable for `extract
    superscripts).
 3. **Cluster into columns** by x-gap / x-distribution on the page (date · description · amount).
    Right-align detection for the amount column.
-4. **Propagate the page-header year** onto bare `DD.MM.` dates (scan the page's top band for a
-   `YYYY` or a date range; fall back to the statement period if present).
+4. **Propagate the page-header year** onto bare `DD.MM.` dates **during reconstruction** — resolve the
+   year (scan the page's top band for a `YYYY` or a date range; fall back to the statement period if
+   present) and **emit a full `DD.MM.YYYY` date into the row**. Resolving the year HERE (not in
+   `parseDate`) is what keeps the change non-breaking — see §3.2.
 5. **Merge multi-line descriptions** into the row whose y-band they fall in.
-6. **Emit** either reconstructed single-line rows (`<date> <desc> <amount>` in the shape `parseLine`
-   already expects) **or** a structured intermediate the parser consumes directly.
+6. **Emit** reconstructed single-line rows (`<date> <desc> <amount>` with the **year already resolved**)
+   in the shape `parseLine`/`parseDate` already accept, so the existing pure parser consumes them
+   unchanged.
 
 **Page cap:** layout mode must honor the same `ctx.maxPages` cap the ingest path applies (security
 audit M-2). The current preview/skill parse passes no cap
@@ -108,7 +112,7 @@ fallback for ruled/borderless tables. Defer unless Stage-1 JS clustering proves 
 adds a bundled binary (packaging cost) we'd rather avoid (consistent with D50's bias). If ever added,
 it must write only through the shredded-transient discipline (no plaintext outside the transient).
 
-### 3.2 Parser tolerance (NON-BREAKING; `parseDate` is shared)
+### 3.2 Parser tolerance (NON-BREAKING; `parseDate` stays untouched)
 
 `parseDate` is shared by **bank-statement, invoice** (`parseDateInText`,
 [`invoice.ts:155`](../apps/desktop/src/main/services/skills/tools/invoice.ts#L155)) **and redaction**
@@ -116,22 +120,29 @@ it must write only through the shredded-transient discipline (no plaintext outsi
 feature that masks dates). Relaxing it in place would silently change invoice date-picking and what
 redaction masks.
 
-- **Leave `parseDate`'s current behavior unchanged.** Add the `DD.MM.`/`DD.MM.YY` capability as a
-  **separate function or an opt-in param defaulting to today's behavior**, called only from the
-  layout-mode bank path with a year supplied by the caller (header propagation, §3.1.4) — never guess
-  a year from nothing (honesty). Two-digit years resolved against the statement period.
-- **Regression tests are mandatory:** assert invoice extraction and redaction masking are
-  byte-unchanged by this work (§6).
-- Keep `parseLine`/`extractTransactionRows` otherwise intact; they now receive clean rows.
+- **Preferred design: do NOT change `parseDate` at all.** Because §3.1.4 resolves the year *during
+  reconstruction* and emits a full `DD.MM.YYYY` date, the token reaching `parseDate` is already in a
+  form it accepts today. This is the strongest non-breaking guarantee — invoice and redaction are
+  untouched by construction.
+- If a later layout genuinely cannot resolve a year (no header, no period) the row is **dropped, not
+  guessed** (honesty) — `parseDate` is never asked to accept a bare `DD.MM.`.
+- **Regression tests still required (belt-and-braces):** assert invoice extraction and redaction
+  masking are byte-unchanged by this work (§6), proving the "no `parseDate` change" property holds.
+- Keep `parseLine`/`extractTransactionRows` intact; they receive clean, year-resolved rows.
 
 ### 3.3 Wiring
 
 The bank-statement analysis handler already extracts via `ctx.readDocumentSegments` →
-`extractDocumentPreview` → `PdfParser.parse()`. Wiring is: pass `layout: true` down that existing
-path for the bank/invoice skills on `.pdf` documents; everything else (non-PDF, OCR'd image-only
-PDFs that have no text layer → fall back to stored recognition, encrypted-with-no-cipher → the
-existing "could not be read" refusal) is **already handled** by `extractDocumentPreview` /
-`resolveDocumentReader`. **No change to the chat routing, the relevance path, or ingestion** (D51).
+`extractDocumentPreview` → `PdfParser.parse()`. Wiring is: pass `layout: true` (and the page cap,
+§3.1) down that existing path **for the bank-statement skill only** (D58 — invoice stays on the
+default text mode) on `.pdf` documents. This is small but real new plumbing: `readDocumentSegments`
+is currently `(documentId) => …` with no flag ([`run.ts:55`](../apps/desktop/src/main/services/skills/run.ts#L55)),
+and `extractDocumentPreview` accepts neither `layout` nor `maxPages` — so the flag threads through
+those two signatures into `ParseContext`. The error/fallback cases (non-PDF, OCR'd image-only PDFs →
+stored recognition, encrypted-with-no-cipher → the existing "could not be read" refusal) ARE already
+handled by `extractDocumentPreview` / `resolveDocumentReader` and need no change. **No change to the
+chat routing, the relevance path, ingestion, or the renderer/translate/compare preview callers**
+(they never set `layout`) (D51).
 
 ### 3.4 Stage-1 exit metric (gates D52)
 
@@ -147,14 +158,21 @@ Stage 1 is not done when it recovers *some* rows — it is done when it can **pr
 *all* of them, or honestly say it could not. Before [`buildBankAnswer`](../apps/desktop/src/main/services/skills/analysis/bank-statement.ts#L214)
 sums anything:
 
-1. **Reconcile against the printed opening→closing balance** when present: `opening + Σamounts ==
-   closing` (within `MONEY_EPS`). If it ties out, the set is provably complete → present the total.
-2. **Detect gaps** when a per-line running balance is present (a broken `balanceAfter[i-1] + amount ==
-   balanceAfter[i]` chain means a row is missing) — the existing `reconcileBalances` already computes
-   this; surface it as a completeness signal, not just a per-row flag.
-3. **When completeness cannot be proven** (no opening/closing balance, no per-line balance, or a
-   detected gap), **downgrade to the D54 "couldn't fully read N rows" message** — do not emit a total,
-   a category breakdown, or a net figure from an unverified-complete set.
+1. **Reconcile against the printed opening→closing balance** (the only true proof): `opening +
+   Σamounts == closing` (within `MONEY_EPS`). **This needs NEW extraction** — we do not capture a
+   statement-level opening/closing balance today (D56), so Stage 1 must extract + store it (e.g. from
+   the "opening/closing balance" lines the SKILL.md already references). If it ties out, the set is
+   provably complete → present the total.
+2. **Per-row running-balance check is necessary but NOT sufficient.** A broken `balanceAfter[i-1] +
+   amount == balanceAfter[i]` chain (the existing `reconcileBalances`) catches a *mismatch*, but a
+   reconciling chain does NOT prove completeness: rows dropped past the last printed balance, or in a
+   region with no printed balance, leave the chain intact. Treat a clean chain as a *prerequisite*,
+   never as the completeness proof.
+3. **When completeness cannot be proven** (no opening/closing balance to tie against, gaps detected,
+   or any region with no per-line balance and no opening/closing tie), **downgrade to the D54
+   "couldn't fully read N rows" message** — do not emit a total, a category breakdown, or a net figure
+   from an unverified-complete set. The gate is deliberately conservative: prove completeness or
+   degrade to honesty.
 
 This is the single most important safety property of the plan: a partial read must degrade to honesty,
 never to a confident wrong total.
@@ -196,16 +214,19 @@ so this step includes new runtime plumbing.
 
 ## 6. Tests + metrics (the per-phase ritual)
 
-- **Unit:** geometry clustering (rows-by-y, columns-by-x), header-year propagation, multi-line merge,
-  the new year-aware date parse, and the §3.5 completeness gate. Pin behaviour on a **synthetic
-  columnar** fixture (the current fixtures only test the already-clean single-line shape —
+- **Unit:** geometry clustering (rows-by-y, columns-by-x), header-year propagation **emitting a full
+  date** (proving `parseDate` is untouched — §3.2), multi-line merge, opening/closing-balance
+  extraction, and the §3.5 completeness gate (provably-complete → total; unprovable → downgrade). Pin
+  behaviour on a **synthetic columnar** fixture (the current fixtures only test the already-clean
+  single-line shape —
   [`skills-bank-statement-tool.test.ts:83-101`](../apps/desktop/tests/unit/skills-bank-statement-tool.test.ts#L83-L101)).
 - **Fixture mechanism (decide up front):** a real-HVB-style PDF with *positioned* text can't be
   hand-written. Generate a columnar PDF in-test with a devDependency (`pdfkit`/`pdf-lib`) or commit a
   tiny **synthetic** fixture. It MUST be synthetic — never a real statement (D57 / privacy).
 - **Regression (do-no-harm):** explicit tests that **invoice extraction and redaction masking are
-  byte-unchanged** by the `parseDate` work (§3.2), and that the relevance path stays byte-unchanged
-  for off-topic/multi-doc turns (R5).
+  byte-unchanged** (proving the no-`parseDate`-change property, §3.2, and that layout mode is NOT
+  enabled for invoice, D58), and that the relevance path stays byte-unchanged for off-topic/multi-doc
+  turns (R5).
 - **Integration:** the synthetic columnar PDF fixture through the `askDocuments` IPC → non-empty rows,
   correct totals, honest coverage, citations, 0 model calls (Stage 1); plus a partial-extraction
   fixture that MUST trigger the D56 downgrade (no total emitted).
@@ -225,8 +246,16 @@ so this step includes new runtime plumbing.
   fixture + the "partial-total-presented count = 0" metric.
 - **Hallucinated figures (cardinal risk):** mandatory verbatim grounding + balance reconciliation +
   drop-on-failure (D53). A number that isn't a verbatim substring of the source is never shown.
-- **Shared-`parseDate` regression:** changing date parsing could alter invoice picking + redaction
-  masking. Mitigated by a non-breaking additive change (§3.2) + invoice/redaction regression tests.
+- **Shared-`parseDate` regression:** date parsing feeds invoice + redaction. Mitigated by resolving
+  the year *in reconstruction* so `parseDate` is not changed at all (§3.2) + regression tests.
+- **Completeness proof depends on new extraction:** the opening/closing-balance tie (the only true
+  proof, D56) requires extracting a field we don't capture today. If a statement prints no
+  opening/closing balance and no per-line balance, completeness is *unprovable* → the gate downgrades
+  to honesty (no total). Acceptable by design, but means some real statements will get "couldn't fully
+  read" rather than a total until Stage 2 (or a richer balance heuristic) lands.
+- **Invoice scope (D58):** enabling layout mode for invoice could regress its label/line-scan
+  extraction. Mitigated by shipping layout mode for bank-statement only and measuring invoice
+  separately before any adoption.
 - **Grammar = false confidence:** valid JSON ≠ correct JSON; always pair with grounding (D53).
 - **Reformatting may not help a generic small model** (the LayIE-LLM counter-evidence): treat column
   reconstruction primarily as a *deterministic* win; only assume an LLM benefit after measuring on our
