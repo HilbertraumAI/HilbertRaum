@@ -6,6 +6,22 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-22 — **Skill finetuning Wave 3, Phase 1: attach-flow scope handoff fix (real-app smoke-test defect).** The Wave 2
+smoke test surfaced a real bug while reaching the whole-doc engine: unchecking Library on the 'new' composer, then attaching a
+document via the paper-clip, RE-CHECKED Library — so the turn stayed whole-Library, retrieval pulled an unrelated library doc
+(a Nolus-whitepaper chunk leaked into meeting minutes), `singleInScopeDocument` saw many docs, and `grounded-whole-doc` never
+fired (the relevance path ran, with the skill fence applied → the 8-section format WITHOUT whole-doc coverage). **Root cause:**
+`ChatScreen.attachFiles` created the new documents conversation via `createConversation({ mode: 'documents' })` — dropping the
+user's `pendingScope`, unlike `createConversationInMode` which carries it. The fresh conversation defaulted to the Library anchor.
+**As built (typecheck clean; ChatAttach renderer tests green, +1):** new `createDocsConversationForAttach()` helper mirrors
+`createConversationInMode`'s pending-scope handoff (passes `scope` + the single-project `collectionId`, then clears `pendingScope`);
+both new-conversation branches in `attachFiles` use it. **This also makes Wave 2 reachable from a paper-clip attachment with no
+file-naming:** with the empty-Library scope preserved, `resolveScope` unions the lone attachment into `documentIds` and drops the
+(empty) collection set → exactly one in-scope doc → whole-doc engine fires. Existing two attach assertions updated for the new call
+shape (`scope:null, collectionId:undefined` on the no-pending path — behaviour-preserving: main serializes null scope to NULL
+`scope_v2_json` = the prior Library default). **NEXT (Phase 2): strip the echoed `--- END LOCAL SKILL ---` fence delimiter from
+model output; then Follow-up A (deep-index map-reduce for oversized whole-doc) + B (2-doc whole-doc compare for what-changed)._
+
 _2026-06-22 — **Skill finetuning Wave 2: skill-aware whole-document engine for the Tier-1 instruction skills.** Closes the
 structural gap the Wave 1 audit found — the SKILL.md fence is applied on ONLY the top-k relevance engine, so the instruction skills
 (meeting-protocol, contract-brief, share-safe-review, deadline-obligation-finder) could be whole-document OR formatted-to-spec, never

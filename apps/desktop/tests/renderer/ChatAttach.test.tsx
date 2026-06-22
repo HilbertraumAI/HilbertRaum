@@ -100,7 +100,14 @@ describe('ChatScreen — chat attach / drag-drop intake (plan §11.2 / §13.5)',
     dropFile('invoice.pdf', '/tmp/invoice.pdf')
 
     // A documents conversation is created and committed BEFORE the import references it (N3).
-    await waitFor(() => expect(createConversation).toHaveBeenCalledWith({ mode: 'documents' }))
+    // With no pending narrowing the scope handoff passes null (the Library default is preserved).
+    await waitFor(() =>
+      expect(createConversation).toHaveBeenCalledWith({
+        mode: 'documents',
+        scope: null,
+        collectionId: undefined
+      })
+    )
     await waitFor(() =>
       expect(importDocuments).toHaveBeenCalledWith(['/tmp/invoice.pdf'], {
         destination: { kind: 'conversation', conversationId: 'c2' }
@@ -182,7 +189,13 @@ describe('ChatScreen — chat attach / drag-drop intake (plan §11.2 / §13.5)',
 
     dropFile('invoice.pdf', '/tmp/invoice.pdf')
 
-    await waitFor(() => expect(createConversation).toHaveBeenCalledWith({ mode: 'documents' }))
+    await waitFor(() =>
+      expect(createConversation).toHaveBeenCalledWith({
+        mode: 'documents',
+        scope: null,
+        collectionId: undefined
+      })
+    )
     await waitFor(() =>
       expect(importDocuments).toHaveBeenCalledWith(['/tmp/invoice.pdf'], {
         destination: { kind: 'conversation', conversationId: 'c2' }
@@ -190,6 +203,51 @@ describe('ChatScreen — chat attach / drag-drop intake (plan §11.2 / §13.5)',
     )
     // A toast explains the jump to a new document chat (the plain chat is preserved).
     expect(await screen.findByText(/started a new document chat for invoice\.pdf/i)).toBeInTheDocument()
+  })
+
+  it('carries the pending composite scope onto the documents conversation created for an attachment', async () => {
+    // The user narrowed scope on the 'new' composer (here: ask ONLY d0 — the real-world case is
+    // unchecking Library to ask just the file). Dropping a NEW file must NOT silently reset to the
+    // Library default; the new conversation must own the user's narrowing so a single-doc skill
+    // (whole-doc engine) can fire. Regression for the attach-flow scope handoff bug.
+    const created = conv({ id: 'c2', title: 'New chat', mode: 'documents' })
+    const createConversation = vi.fn(async () => created)
+    const importDocuments = vi.fn(async () => job)
+    stubApi({
+      listConversations: vi.fn(async () => []),
+      getRuntimeStatus: vi.fn(async () => runningStatus),
+      listMessages: vi.fn(async () => []),
+      listDocuments: vi.fn(async () => [docInfo('d0', 'lease.pdf')]),
+      createConversation,
+      importDocuments,
+      getImportJob: vi.fn(async () => ({ ...jobDone, done: false })),
+      listAttachments: vi.fn(async () => [])
+    })
+    render(
+      <ToastProvider>
+        <ChatScreen
+          onNavigate={() => {}}
+          initialMode="documents"
+          initialScopeDocumentIds={['d0']}
+        />
+      </ToastProvider>
+    )
+
+    dropFile('invoice.pdf', '/tmp/invoice.pdf')
+
+    // The pending narrowing ({ask only d0}) rides onto the created conversation — NOT dropped.
+    await waitFor(() =>
+      expect(createConversation).toHaveBeenCalledWith({
+        mode: 'documents',
+        scope: { collectionIds: [], documentIds: ['d0'] },
+        collectionId: undefined
+      })
+    )
+    await waitFor(() =>
+      expect(importDocuments).toHaveBeenCalledWith(['/tmp/invoice.pdf'], {
+        destination: { kind: 'conversation', conversationId: 'c2' }
+      })
+    )
   })
 
   it('shows linked attachments as a read-only "Files in this chat" line', async () => {

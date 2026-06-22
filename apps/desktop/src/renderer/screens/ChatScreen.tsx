@@ -486,6 +486,23 @@ export function ChatScreen({
     return conv
   }
 
+  // Create the documents conversation an attachment needs, carrying any pending composite scope
+  // the user set on the 'new' composer (e.g. Library unchecked to ask ONLY the attached file).
+  // Without this the attach flow silently resets to the Library default — the user's narrowing is
+  // lost and a single-doc skill (whole-doc engine) never fires. The handoff clears (the new
+  // conversation owns its scope), exactly like `createConversationInMode`. A single-project pending
+  // scope also becomes the creation anchor (plan §13.3/§13.4).
+  async function createDocsConversationForAttach(): Promise<Conversation> {
+    const scope = pendingScope
+    const collectionId =
+      scope && scope.collectionIds.length === 1 && scope.documentIds.length === 0
+        ? scope.collectionIds[0]
+        : undefined
+    const conv = await window.api.createConversation({ mode: 'documents', scope, collectionId })
+    if (scope) setPendingScope(null)
+    return conv
+  }
+
   async function ensureConversation(): Promise<string> {
     if (activeId) return activeId
     const conv = await createConversationInMode()
@@ -956,7 +973,7 @@ export function ChatScreen({
       if (active && active.mode === 'documents') {
         convId = active.id
       } else if (active && active.mode === 'chat' && messages.length > 0) {
-        const conv = await window.api.createConversation({ mode: 'documents' })
+        const conv = await createDocsConversationForAttach()
         convId = conv.id
         setMode('documents')
         setActiveId(conv.id)
@@ -965,7 +982,7 @@ export function ChatScreen({
         showToast(t('chat.attach.newDocChat', { name: fileNames[0] }))
       } else {
         // Empty (no conversation, or an empty plain chat): switch in place to documents.
-        const conv = await window.api.createConversation({ mode: 'documents' })
+        const conv = await createDocsConversationForAttach()
         convId = conv.id
         setMode('documents')
         setActiveId(conv.id)
