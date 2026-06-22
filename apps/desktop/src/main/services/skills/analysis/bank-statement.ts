@@ -14,6 +14,7 @@ import {
 } from '../run'
 import {
   categorizeRow,
+  isStatementComplete,
   reconcileBalances,
   summarizeCashflow,
   type CashflowSummary,
@@ -113,6 +114,17 @@ function loadStatementRows(db: Db, statementId: string): TransactionInput[] {
     if (r.sourcePage != null) t.sourcePage = r.sourcePage
     return t
   })
+}
+
+/** The persisted statement-level opening/closing balances for the completeness gate (§3.5, D56). */
+function loadStatementBalances(db: Db, statementId: string): { openingBalance?: number; closingBalance?: number } {
+  const row = db
+    .prepare('SELECT opening_balance AS opening, closing_balance AS closing FROM bank_statements WHERE id = ?')
+    .get(statementId) as { opening: number | null; closing: number | null } | undefined
+  const out: { openingBalance?: number; closingBalance?: number } = {}
+  if (row?.opening != null) out.openingBalance = row.opening
+  if (row?.closing != null) out.closingBalance = row.closing
+  return out
 }
 
 const MAX_CITATIONS = 12
@@ -218,9 +230,15 @@ export function buildBankAnswer(
     summary: CashflowSummary
     reconcile: ReconcileResult
     categories: CategoryTotal[] | null
+    /**
+     * The §3.5 / D56 completeness PROOF — `opening + Σamounts == closing`. A single-currency total is
+     * presented ONLY when this is true; otherwise the answer downgrades to an honest "couldn't confirm
+     * the whole statement" message and presents NO total/category/net (never a partial sum as the total).
+     */
+    complete: boolean
   }
 ): string {
-  const { rows, summary, reconcile, categories } = data
+  const { rows, summary, reconcile, categories, complete } = data
   if (rows.length === 0) return tr('skills.bankAnalysis.empty')
 
   const lines: string[] = [tr('skills.bankAnalysis.count', { count: rows.length })]
@@ -243,9 +261,13 @@ export function buildBankAnswer(
     }
   }
 
-  // Totals — only when there is a single shared currency (honesty: never imply a meaningless total).
   lines.push('')
-  if (summary.currency) {
+  if (!summary.currency) {
+    // Mixed currency: no single total is presented at all (honest, and NOT a partial-total risk),
+    // so this case is safe regardless of the completeness gate.
+    lines.push(tr('skills.bankAnalysis.noCurrency'))
+  } else if (complete) {
+    // Provably complete (opening + Σ == closing): present the single-currency totals.
     lines.push(
       tr('skills.bankAnalysis.totals', {
         inAmount: fmt(summary.totalIn),
@@ -267,11 +289,12 @@ export function buildBankAnswer(
         )
       }
     }
+    lines.push('', tr('skills.bankAnalysis.caveat'))
   } else {
-    lines.push(tr('skills.bankAnalysis.noCurrency'))
+    // Completeness UNPROVEN (D56): downgrade to honesty — never a partial sum dressed up as the total.
+    lines.push(tr('skills.bankAnalysis.incompleteNoTotal'))
   }
 
-  lines.push('', tr('skills.bankAnalysis.caveat'))
   return lines.join('\n')
 }
 
@@ -322,7 +345,18 @@ export const bankStatementAnalysisHandler: SkillAnalysisHandler = {
     const reconcile = reconcileBalances(rows)
     const categories = categoryShaped ? categoryTotals(rows) : null
 
-    const answer = buildBankAnswer(ctx.tr, { rows, summary, reconcile, categories })
+    // Completeness gate (§3.5, D56): the only true proof a total is whole is the statement's printed
+    // opening + Σamounts == closing. Load the persisted balances and prove it; an unproven statement
+    // downgrades to honesty in `buildBankAnswer` (no total presented), never a confident partial sum.
+    const balances = loadStatementBalances(db, extraction.statementId)
+    const complete = isStatementComplete({
+      rows,
+      openingBalance: balances.openingBalance,
+      closingBalance: balances.closingBalance,
+      reconcile
+    })
+
+    const answer = buildBankAnswer(ctx.tr, { rows, summary, reconcile, categories, complete })
     const citations = buildBankCitations(db, target.id, target.title, rows)
     const coverage = computeCoverage(db, target.id)
     return { answer, citations, coverage }

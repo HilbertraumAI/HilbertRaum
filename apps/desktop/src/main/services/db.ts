@@ -673,6 +673,12 @@ export function openDatabase(path: string): Db {
   ensureColumn(db, 'bank_transactions', 'category_id', 'category_id TEXT')
   ensureColumn(db, 'bank_transactions', 'reconciled', 'reconciled INTEGER')
   ensureColumn(db, 'bank_transactions', 'confidence', 'confidence REAL')
+  // Statement-level opening/closing balances (PDF geometry-extraction plan §3.5, D56). Additive +
+  // nullable: the completeness gate's only true proof is opening + Σamounts == closing, so these are
+  // captured + stored to gate any presented total. CONTENT-CLASS (printed figures): never
+  // logged/audited/exported. NULL = a statement that printed no opening/closing balance (gate downgrades).
+  ensureColumn(db, 'bank_statements', 'opening_balance', 'opening_balance REAL')
+  ensureColumn(db, 'bank_statements', 'closing_balance', 'closing_balance REAL')
   // Additive performance indexes (perf audit 2026-06-18, Wave P1 — DB-4/DB-6/DB-7). CREATE INDEX
   // IF NOT EXISTS is the same additive-migration idiom as the inline SCHEMA indexes; these live
   // here (after ensureColumn) because idx_bank_transactions_category indexes a migrated column.

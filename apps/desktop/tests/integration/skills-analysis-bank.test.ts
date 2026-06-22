@@ -78,7 +78,16 @@ function ctxFor(db: Db, scope: RetrievalScope, question: string): SkillAnalysisC
 }
 
 // A clean 2-row statement: Grocery -45.90 (out), Salary +2500.00 (in); the running balances reconcile.
+// NOTE: it prints NO opening/closing balance, so under the D56 completeness gate it cannot PROVE it
+// captured the whole statement → no total is presented (the downgrade). Used by the tests that don't
+// assert a total (applies/coverage/citations) and by the explicit "no balance → downgrade" gate test.
 const CLEAN = 'Statement EUR\n2026-01-02 Grocery -45,90 1.954,10\n2026-01-03 Salary 2.500,00 4.454,10'
+
+// The same two rows WITH the printed opening/closing balances that prove completeness under the gate
+// (opening 2000.00 + Σ 2454.10 == closing 4454.10) — required before any total is shown (§3.5, D56).
+const COMPLETE =
+  'Statement EUR\nOpening balance 2.000,00\n2026-01-02 Grocery -45,90 1.954,10\n' +
+  '2026-01-03 Salary 2.500,00 4.454,10\nClosing balance 4.454,10'
 
 describe('bank-statement analysis handler — applies() pre-flight (R2)', () => {
   it('applies on an analysis-shaped question over a single in-scope statement', () => {
@@ -118,7 +127,7 @@ describe('bank-statement analysis handler — applies() pre-flight (R2)', () => 
 describe('bank-statement analysis handler — run()', () => {
   it('exhaustive math: count + in/out/net totals computed from the extracted rows', async () => {
     const db = freshDb()
-    const id = seedDoc(db, CLEAN)
+    const id = seedDoc(db, COMPLETE)
     const ctx = ctxFor(db, { documentIds: [id] }, 'summarize the cashflow')
     const res = await bankStatementAnalysisHandler.run!(ctx)
 
@@ -134,14 +143,15 @@ describe('bank-statement analysis handler — run()', () => {
 
   it('figures are quoted, never invented — no fabricated number leaks into the answer', async () => {
     const db = freshDb()
-    const id = seedDoc(db, CLEAN)
+    const id = seedDoc(db, COMPLETE)
     const res = await bankStatementAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'totals?'))
-    // The only figures present are the rows' amounts + the three derived totals — nothing else.
+    // The only figures present are the three derived totals — nothing else (the opening/closing
+    // balances that proved completeness are NOT re-printed in the answer).
     const numbers = (res.answer.match(/\d+\.\d{2}/g) ?? []).sort()
     expect(numbers).toEqual(['2454.10', '2500.00', '45.90'].sort())
   })
 
-  it('surfaces unreconciled rows BEFORE the total (SKILL.md)', async () => {
+  it('surfaces unreconciled rows AND downgrades (a mismatch can never present a total — D56)', async () => {
     const db = freshDb()
     // Row 2's printed balance (200,00) cannot follow 100,00 after a −10,00 movement → a mismatch.
     const id = seedDoc(db, 'Statement EUR\n2026-01-02 Alpha -10,00 100,00\n2026-01-03 Beta -10,00 200,00')
@@ -149,9 +159,10 @@ describe('bank-statement analysis handler — run()', () => {
 
     const heading = tr('skills.bankAnalysis.unreconciledHeading')
     expect(res.answer).toContain(heading)
-    expect(res.answer).toContain('Beta') // the offending row is listed
-    // The unreconciled block precedes the totals line (which carries the localized "Net change").
-    expect(res.answer.indexOf(heading)).toBeLessThan(res.answer.indexOf('Net change'))
+    expect(res.answer).toContain('Beta') // the offending row is still listed (honest)
+    // A reconcile mismatch is a read error, so completeness is unproven → no total, the honest downgrade.
+    expect(res.answer).toContain(tr('skills.bankAnalysis.incompleteNoTotal'))
+    expect(res.answer).not.toContain('Net change')
   })
 
   it('mixed-currency statement reports NO single total (honesty)', async () => {
@@ -184,13 +195,47 @@ describe('bank-statement analysis handler — run()', () => {
 
   it('runs categorize only for a category-shaped question, and shows a per-category breakdown', async () => {
     const db = freshDb()
-    const id = seedDoc(db, CLEAN)
+    const id = seedDoc(db, COMPLETE)
     const ctx = ctxFor(db, { documentIds: [id] }, 'break down my spending by category')
     const res = await bankStatementAnalysisHandler.run!(ctx)
 
     expect(ctx.events.map((e) => e.meta?.toolName)).toContain('categorize_transactions')
     expect(res.answer).toContain(tr('skills.bankAnalysis.categoryHeading'))
     expect(res.answer).toContain('Income') // Salary → Income (built-in rule)
+  })
+
+  it('downgrades to honesty (NO total) when the statement prints no opening/closing balance (D56)', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, CLEAN) // reconciles per-row, but no opening/closing balance to PROVE completeness
+    const res = await bankStatementAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'what is the total?'))
+
+    expect(res.answer).toContain(tr('skills.bankAnalysis.count', { count: 2 }))
+    expect(res.answer).toContain(tr('skills.bankAnalysis.incompleteNoTotal'))
+    // A partial read must NEVER surface as a confident total/net.
+    expect(res.answer).not.toContain('Net change')
+    expect(res.answer).not.toContain('2454.10')
+  })
+
+  it('presents a total only once the opening + Σ == closing balance ties out (D56)', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, COMPLETE)
+    const res = await bankStatementAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'what is the total?'))
+    expect(res.answer).toContain('Net change')
+    expect(res.answer).toContain('2454.10')
+    expect(res.answer).not.toContain(tr('skills.bankAnalysis.incompleteNoTotal'))
+  })
+
+  it('downgrades when a printed closing balance does NOT tie out with the rows (D56)', async () => {
+    const db = freshDb()
+    // Opening 2000.00 + Σ 2454.10 = 4454.10, but the statement prints a closing of 9999.99 → no proof.
+    const id = seedDoc(
+      db,
+      'Statement EUR\nOpening balance 2.000,00\n2026-01-02 Grocery -45,90 1.954,10\n' +
+        '2026-01-03 Salary 2.500,00 4.454,10\nClosing balance 9.999,99'
+    )
+    const res = await bankStatementAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'total?'))
+    expect(res.answer).toContain(tr('skills.bankAnalysis.incompleteNoTotal'))
+    expect(res.answer).not.toContain('Net change')
   })
 
   it('coverage is extract with fullyChunked TRUE when the document is fully chunked', async () => {

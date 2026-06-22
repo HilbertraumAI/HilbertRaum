@@ -51,7 +51,10 @@ const EXTRACT_OUTPUT_SCHEMA: JsonSchema = {
   properties: {
     transactions: { type: 'array', items: TRANSACTION_ROW_SCHEMA, maxItems: MAX_TRANSACTIONS },
     // The detected statement currency, if any — a convenience for the orchestration seam (optional).
-    currency: { type: 'string', pattern: '^[A-Z]{3}$' }
+    currency: { type: 'string', pattern: '^[A-Z]{3}$' },
+    // Statement-level opening/closing balances for the completeness gate (§3.5, D56) — optional.
+    openingBalance: { type: 'number' },
+    closingBalance: { type: 'number' }
   }
 }
 
@@ -68,6 +71,10 @@ export interface ExtractedTransaction {
 export interface ExtractTransactionsOutput {
   transactions: ExtractedTransaction[]
   currency?: string
+  /** The statement's printed OPENING balance (Anfangssaldo / "balance brought forward"), if found. */
+  openingBalance?: number
+  /** The statement's printed CLOSING balance (Endsaldo / "balance carried forward"), if found. */
+  closingBalance?: number
 }
 
 // ---- Deterministic parsing helpers (the money/date primitives are shared via `./money`) ----
@@ -94,6 +101,87 @@ function parseLine(line: string, page: number | null, statementCurrency: string 
   }
   if (page != null) row.sourcePage = page
   return row
+}
+
+// ---- Statement-level opening/closing balance (PDF geometry-extraction plan §3.5, D56) ----
+//
+// The completeness gate's ONLY true proof is `opening + Σamounts == closing`, which needs a
+// statement-level opening/closing balance we did not capture before. These are printed on labelled
+// summary lines (NOT transaction rows — they carry no booking date, so `parseLine` ignores them). We
+// scan for the label, then read the LAST money token on that line (the figure trails the label, and a
+// date earlier on the line is skipped by taking the last token).
+
+/** Opening-balance label fragments (lowercased substrings), EN + DE for the de-AT target. */
+const OPENING_LABELS: readonly string[] = [
+  'opening balance', 'balance brought forward', 'previous balance', 'starting balance',
+  'alter kontostand', 'alter saldo', 'anfangssaldo', 'saldovortrag', 'kontostand alt', 'saldo alt'
+]
+
+/** Closing-balance label fragments (lowercased substrings), EN + DE. */
+const CLOSING_LABELS: readonly string[] = [
+  'closing balance', 'balance carried forward', 'new balance', 'ending balance', 'final balance',
+  'neuer kontostand', 'neuer saldo', 'endsaldo', 'schlusssaldo', 'kontostand neu', 'saldo neu'
+]
+
+/** The last money token on a line as a number, or null when the line carries no parseable figure. */
+function lastMoneyOnLine(line: string): number | null {
+  const matches = [...line.matchAll(MONEY_RE)]
+  if (matches.length === 0) return null
+  return parseAmount(matches[matches.length - 1][0])
+}
+
+/**
+ * Extract the statement-level opening/closing balances from the read text (pure, deterministic).
+ * Takes the FIRST labelled opening line and the LAST labelled closing line (a closing/"new balance"
+ * is often repeated in a footer summary — the last wins). Returns only what is confidently found; a
+ * missing balance stays undefined and the completeness gate (§3.5) then downgrades to honesty.
+ */
+export function extractStatementBalances(chunks: DocumentChunkRead[]): {
+  openingBalance?: number
+  closingBalance?: number
+} {
+  let opening: number | undefined
+  let closing: number | undefined
+  for (const chunk of chunks) {
+    for (const rawLine of chunk.text.split(/\r?\n/)) {
+      const line = rawLine.trim()
+      if (!line) continue
+      const lower = line.toLowerCase()
+      if (opening === undefined && OPENING_LABELS.some((l) => lower.includes(l))) {
+        const v = lastMoneyOnLine(line)
+        if (v !== null) opening = v
+      }
+      if (CLOSING_LABELS.some((l) => lower.includes(l))) {
+        const v = lastMoneyOnLine(line)
+        if (v !== null) closing = v // last labelled closing line wins
+      }
+    }
+  }
+  const out: { openingBalance?: number; closingBalance?: number } = {}
+  if (opening !== undefined) out.openingBalance = opening
+  if (closing !== undefined) out.closingBalance = closing
+  return out
+}
+
+/**
+ * The completeness PROOF (§3.5, D56): a statement is provably complete only when its printed opening
+ * and closing balances tie out against the extracted rows — `opening + Σamounts == closing` within
+ * half a cent — AND no per-row running balance contradicts (a mismatch is a read error). A clean
+ * per-row chain is NECESSARY but NOT sufficient (rows dropped past the last printed balance leave the
+ * chain intact), so it is never the proof on its own. When this returns false the caller MUST NOT
+ * present a total — it downgrades to honesty (never a partial sum dressed up as the total).
+ */
+export function isStatementComplete(args: {
+  rows: TransactionInput[]
+  openingBalance?: number
+  closingBalance?: number
+  reconcile: ReconcileResult
+}): boolean {
+  const { rows, openingBalance, closingBalance, reconcile } = args
+  if (openingBalance === undefined || closingBalance === undefined) return false
+  if (reconcile.rows.some((r) => r.status === 'mismatch')) return false
+  const sum = rows.reduce((acc, r) => acc + r.amount, 0)
+  return Math.abs(openingBalance + sum - closingBalance) < MONEY_EPS
 }
 
 /** Pure extractor over already-read chunks — emits only fully-valid rows (ambiguous lines dropped). */
@@ -148,9 +236,12 @@ export const extractTransactionsTool: SkillTool = {
     }
     const statementCurrency = detectCurrency(chunks.map((c) => c.text).join('\n'))
     const transactions = extractTransactionRows(chunks, statementCurrency)
+    const balances = extractStatementBalances(chunks)
     ctx.onProgress?.({ done: chunks.length, total: chunks.length })
     const output: ExtractTransactionsOutput = { transactions }
     if (statementCurrency) output.currency = statementCurrency
+    if (balances.openingBalance !== undefined) output.openingBalance = balances.openingBalance
+    if (balances.closingBalance !== undefined) output.closingBalance = balances.closingBalance
     return { ok: true, output }
   }
 }

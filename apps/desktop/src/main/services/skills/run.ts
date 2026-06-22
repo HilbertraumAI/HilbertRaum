@@ -205,9 +205,18 @@ export async function runBankExtraction(
     try {
       db.exec('BEGIN')
       db.prepare(
-        `INSERT INTO bank_statements (id, document_id, run_id, period_start, period_end, currency, created_at)
-         VALUES (?, ?, ?, NULL, NULL, ?, ?)`
-      ).run(statementId, args.documentId, runId, output.currency ?? null, completedAt)
+        `INSERT INTO bank_statements
+           (id, document_id, run_id, period_start, period_end, currency, opening_balance, closing_balance, created_at)
+         VALUES (?, ?, ?, NULL, NULL, ?, ?, ?, ?)`
+      ).run(
+        statementId,
+        args.documentId,
+        runId,
+        output.currency ?? null,
+        output.openingBalance ?? null,
+        output.closingBalance ?? null,
+        completedAt
+      )
       const insertTx = db.prepare(
         `INSERT INTO bank_transactions
           (id, statement_id, run_id, row_index, date, value_date, description, amount, currency, balance_after, source_page, created_at)

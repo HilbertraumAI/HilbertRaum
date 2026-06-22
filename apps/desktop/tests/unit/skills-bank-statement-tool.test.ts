@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest'
 import {
   extractTransactionsTool,
   extractTransactionRows,
+  extractStatementBalances,
+  isStatementComplete,
   parseAmount,
   parseDate,
   detectCurrency,
@@ -121,6 +123,52 @@ describe('extractTransactionRows', () => {
     const rows = extractTransactionRows([chunk(giant, 1)], 'EUR')
     expect(rows).toEqual([]) // nothing parses (no valid amount) — and importantly, fast
     expect(Date.now() - start).toBeLessThan(1000)
+  })
+})
+
+describe('extractStatementBalances + isStatementComplete (completeness gate — §3.5 / D56)', () => {
+  it('reads the printed opening and closing balances (EN + DE labels), last figure on the line', () => {
+    const en = chunk('Opening balance 2.000,00\n... rows ...\nClosing balance 4.454,10')
+    expect(extractStatementBalances([en])).toEqual({ openingBalance: 2000, closingBalance: 4454.1 })
+    const de = chunk('Alter Kontostand 2.000,00\nNeuer Kontostand 4.454,10')
+    expect(extractStatementBalances([de])).toEqual({ openingBalance: 2000, closingBalance: 4454.1 })
+  })
+
+  it('skips a date earlier on the balance line and reads the trailing figure', () => {
+    const c = chunk('Saldovortrag 01.01.2024 1.234,56')
+    expect(extractStatementBalances([c]).openingBalance).toBe(1234.56)
+  })
+
+  it('returns nothing when no balance label is present (gate then downgrades)', () => {
+    expect(extractStatementBalances([chunk('2026-01-02 Coffee -3,50 100,00')])).toEqual({})
+  })
+
+  it('is complete only when opening + Σamounts == closing within half a cent', () => {
+    const rows = [
+      { date: '2026-01-02', description: 'Grocery', amount: -45.9, currency: 'EUR' },
+      { date: '2026-01-03', description: 'Salary', amount: 2500, currency: 'EUR' }
+    ]
+    const reconcile = reconcileBalances(rows)
+    expect(
+      isStatementComplete({ rows, openingBalance: 2000, closingBalance: 4454.1, reconcile })
+    ).toBe(true)
+    // A closing balance that doesn't tie out → NOT complete (no proof).
+    expect(
+      isStatementComplete({ rows, openingBalance: 2000, closingBalance: 9999.99, reconcile })
+    ).toBe(false)
+    // Missing either balance → NOT complete (the per-row chain alone is never the proof).
+    expect(isStatementComplete({ rows, closingBalance: 4454.1, reconcile })).toBe(false)
+    expect(isStatementComplete({ rows, openingBalance: 2000, reconcile })).toBe(false)
+  })
+
+  it('a per-row balance MISMATCH can never be complete (a mismatch is a read error)', () => {
+    const rows = [
+      { date: '2026-01-02', description: 'Alpha', amount: -10, currency: 'EUR', balanceAfter: 100 },
+      { date: '2026-01-03', description: 'Beta', amount: -10, currency: 'EUR', balanceAfter: 200 } // can't follow 100−10
+    ]
+    const reconcile = reconcileBalances(rows)
+    // Even if some opening/closing pair were supplied, the contradicting chain forbids completeness.
+    expect(isStatementComplete({ rows, openingBalance: 110, closingBalance: 90, reconcile })).toBe(false)
   })
 })
 

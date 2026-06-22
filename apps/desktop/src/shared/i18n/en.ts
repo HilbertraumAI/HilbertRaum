@@ -477,6 +477,12 @@ export const en = {
     'Money in: **{inAmount} {currency}** · Money out: **{outAmount} {currency}** · Net change: **{netAmount} {currency}**.',
   'skills.bankAnalysis.noCurrency':
     'These transactions use more than one currency, so there is no single combined total — a total would have to be split per currency.',
+  // Completeness gate (§3.5, D56): I read N rows but cannot PROVE I captured the whole statement
+  // (no opening/closing balance that ties out), so I refuse to present a total that might be wrong.
+  'skills.bankAnalysis.incompleteNoTotal':
+    'I couldn’t confirm I captured the whole statement — its opening and closing balances don’t line up ' +
+    'with what I read. To avoid giving you a total that might be wrong, I won’t state a sum here; please ' +
+    'open the statement and check the figures yourself.',
   'skills.bankAnalysis.categoryHeading': 'By category:',
   'skills.bankAnalysis.categoryItem': '- {category}: {amount} {currency} ({count})',
   'skills.bankAnalysis.caveat':
