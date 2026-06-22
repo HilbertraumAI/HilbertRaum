@@ -6,6 +6,19 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-22 — **Skill finetuning Wave 3, Phase 2: strip echoed skill-fence framing from model answers.** The Wave 2 smoke test
+showed a model reproducing the fence's closing delimiter — a trailing `--- END LOCAL SKILL ---` — verbatim in its minutes. The skill
+fence brackets the untrusted SKILL.md body with fixed English framing + the guard line (§11.2/§14); the model copying a delimiter into
+the answer is cosmetic noise, never intended output. **As built (typecheck + build clean; full suite 2131 passed / 30 skipped, +4
+tests):** new pure `stripSkillFenceEcho(content)` in `skills/prompt.ts` removes any line whose trimmed form exactly equals an
+app-authored framing constant (`FENCE_BEGIN`/`FENCE_END`/`SCOPE_LINE`/`INSTRUCTIONS_LABEL`/`SKILL_GUARD_LINE`) — NOT the dynamic
+"Skill name: <title>" line. It is a **no-op when no framing line is present**, so non-skill answers and clean skill answers stay
+byte-identical; only a detected echo triggers cleanup (drop the lines, collapse the blank run a removed delimiter leaves, trim the
+ends). Wired right after `stripThinkBlocks` on BOTH model paths — plain chat (`chat.ts`) and grounded/whole-doc (`rag/index.ts`) — the
+same place reasoning is scrubbed. Tests: `skills-prompt.test.ts` (+4 — trailing delimiter, all framing lines, no-op byte-identity,
+title-line preserved). **NEXT: Follow-up A (deep-index map-reduce for oversized whole-doc) + B (2-doc whole-doc compare for
+what-changed)._
+
 _2026-06-22 — **Skill finetuning Wave 3, Phase 1: attach-flow scope handoff fix (real-app smoke-test defect).** The Wave 2
 smoke test surfaced a real bug while reaching the whole-doc engine: unchecking Library on the 'new' composer, then attaching a
 document via the paper-clip, RE-CHECKED Library — so the turn stayed whole-Library, retrieval pulled an unrelated library doc

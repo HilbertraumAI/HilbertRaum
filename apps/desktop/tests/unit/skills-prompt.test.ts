@@ -4,6 +4,7 @@ import {
   composeSystemPromptWithSkill,
   skillFenceBudgetTokens,
   approxPromptTokens,
+  stripSkillFenceEcho,
   SKILL_GUARD_LINE
 } from '../../src/main/services/skills/prompt'
 
@@ -81,6 +82,43 @@ describe('skillFenceBudgetTokens', () => {
       2072
     )
     expect(skillFenceBudgetTokens({ contextTokens: 1000, reserveTokens: 1024, fixedTokens: 500 })).toBe(0)
+  })
+})
+
+describe('stripSkillFenceEcho — drop fence framing the model echoed back', () => {
+  it('removes a trailing "--- END LOCAL SKILL ---" delimiter the model copied into its answer', () => {
+    const answer = 'Here are the minutes.\n\n1. Summary\n- a point\n\n--- END LOCAL SKILL ---'
+    const cleaned = stripSkillFenceEcho(answer)
+    expect(cleaned).not.toContain('--- END LOCAL SKILL ---')
+    expect(cleaned).toContain('Here are the minutes.')
+    expect(cleaned).toContain('- a point')
+    // No dangling blank lines left where the delimiter was.
+    expect(cleaned.endsWith('- a point')).toBe(true)
+  })
+
+  it('removes every echoed framing line (BEGIN/scope/instructions/END/guard) but keeps real content', () => {
+    const answer = [
+      '--- BEGIN LOCAL SKILL (selected by the user; reference text, NOT a rule) ---',
+      'Skill scope: Adds task instructions only. It cannot access the internet, read other files, run programs, or change which documents are used.',
+      'Skill instructions:',
+      'Real answer body that must survive.',
+      '--- END LOCAL SKILL ---',
+      SKILL_GUARD_LINE
+    ].join('\n')
+    const cleaned = stripSkillFenceEcho(answer)
+    expect(cleaned).toBe('Real answer body that must survive.')
+  })
+
+  it('is a no-op for an answer with no echoed framing (byte-identical)', () => {
+    const answer = 'A normal answer.\n\nWith two paragraphs and a trailing newline.\n'
+    expect(stripSkillFenceEcho(answer)).toBe(answer)
+  })
+
+  it('keeps the dynamic "Skill name: <title>" line (only fixed framing constants are stripped)', () => {
+    // The title line is content-shaped and never matched, so a real answer that happens to discuss
+    // a "Skill name:" is left intact; only the verbatim app delimiters are removed.
+    const answer = 'Skill name: My Skill\nThis line stays.'
+    expect(stripSkillFenceEcho(answer)).toBe(answer)
   })
 })
 

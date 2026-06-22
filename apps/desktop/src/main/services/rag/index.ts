@@ -34,7 +34,12 @@ import {
   type TurnSkill
 } from '../chat'
 import { ensureCompacted } from '../chat/compaction'
-import { approxPromptTokens, buildSkillFence, skillFenceBudgetTokens } from '../skills/prompt'
+import {
+  approxPromptTokens,
+  buildSkillFence,
+  skillFenceBudgetTokens,
+  stripSkillFenceEcho
+} from '../skills/prompt'
 import { getSettings } from '../settings'
 
 // RAG service (spec §7.8; pipeline design in rag-design §11). Turns a
@@ -692,6 +697,8 @@ export async function generateGroundedAnswer(
   }
   // Reasoning never reaches the DB — same defense-in-depth strip as plain chat.
   content = stripThinkBlocks(content)
+  // Drop any skill-fence framing the model echoed back (e.g. a trailing "--- END LOCAL SKILL ---").
+  content = stripSkillFenceEcho(content)
   // A stop before the first token produced nothing — persist nothing.
   if (content === '') return emptyAssistantMessage(conversationId)
   // Persist the assistant turn with the computed citations (source of truth = retrieval) and stamp

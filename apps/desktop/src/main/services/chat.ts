@@ -22,7 +22,8 @@ import {
   approxPromptTokens,
   buildSkillFence,
   composeSystemPromptWithSkill,
-  skillFenceBudgetTokens
+  skillFenceBudgetTokens,
+  stripSkillFenceEcho
 } from './skills/prompt'
 import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from './runtime'
 import { ensureCompacted } from './chat/compaction'
@@ -1059,6 +1060,8 @@ export async function generateAssistantMessage(
   // Reasoning never reaches the DB: the runtime already streams it separately,
   // and any inline think block that slipped into the answer is stripped here.
   content = stripThinkBlocks(content)
+  // Drop any skill-fence framing the model echoed back (e.g. a trailing "--- END LOCAL SKILL ---").
+  content = stripSkillFenceEcho(content)
   // Persist whatever was produced — on a stop, that is the partial text so far. A stop
   // BEFORE the first token produced nothing: persist nothing (a permanent empty
   // assistant bubble in the transcript otherwise) and return an unpersisted, empty
