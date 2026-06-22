@@ -223,41 +223,78 @@ export function registerRagIpc(ctx: AppContext): void {
             () => ctx.docTasks?.acquireChatSlot() ?? Promise.resolve(() => {})
           )
         }
-        // Auto-run the read-only whole-document tools (D46) and persist the exhaustive answer with its
-        // honest extract/whole coverage (D48) + real citations. NO model call — the answer is
-        // deterministic, localized copy synthesised from the structured tool output (D47).
-        return withChatStream(
-          event,
-          conversationId,
-          'Document analysis failed',
-          async (signal, sendToken): Promise<Message> => {
-            const result = await analysisHandler.run({
-              db: ctx.db,
-              question: text,
-              scope,
-              skillInstallId: turnSkill.installId,
+        // `grounded-whole-doc` (skill-whole-doc engine, Wave 2): an INSTRUCTION skill whose
+        // deliverable is the MODEL's answer over the WHOLE document, formatted to the SKILL.md body
+        // (minutes, contract brief, …). Stream a grounded answer where the context is the single
+        // in-scope document read IN ORDER (not top-k) with the fence applied; coverage is the honest
+        // `capped` mode ("covers the whole document" / "the beginning" when truncated). `applies()`
+        // guaranteed a single in-scope doc; the fully-chunked refusal above already gated it.
+        if (analysisHandler.mode === 'grounded-whole-doc') {
+          const target = documentsInScope(ctx.db, scope)[0]
+          if (target) {
+            const documentId = target.id
+            return withChatStream(
+              event,
               conversationId,
-              // The app's real ids/counts-only audit sink (the skills-run adapter — never invent one).
-              audit: toSkillToolAudit(ctx.audit),
-              // Thread the chat slot's abort signal so Cancel stops the auto-run.
-              signal,
-              tr: (key, params) => tMain(key, params),
-              // Faithful newline-preserving segments (not the overlap-collapsing chunks table).
-              readDocumentSegments
-            })
-            sendToken(result.answer)
-            return appendMessage(ctx.db, {
-              conversationId,
-              role: 'assistant',
-              content: result.answer,
-              citations: result.citations,
-              coverage: result.coverage,
-              skillId: turnSkill.installId,
-              autoFired: turnSkill.autoFired === true
-            })
-          },
-          () => ctx.docTasks?.acquireChatSlot() ?? Promise.resolve(() => {})
-        )
+              'Document answer failed',
+              (signal, sendToken, _sendReasoning, sendCompaction) =>
+                generateGroundedAnswer(ctx.db, runtime, ctx.embedder, conversationId, text, settings, {
+                  signal,
+                  onCompactionStart: sendCompaction,
+                  scope,
+                  reranker: ctx.reranker,
+                  // The turn's skill fence rides in the grounded USER turn; the whole document is the
+                  // context, so the assistant row carries the skill stamp + `capped` coverage.
+                  skill: turnSkill,
+                  wholeDocument: { documentId },
+                  onToken: sendToken
+                }),
+              () => ctx.docTasks?.acquireChatSlot() ?? Promise.resolve(() => {})
+            )
+          }
+          // Defensive: applies() requires a single in-scope doc, so this is unreachable; fall through
+          // to the relevance path rather than fail the turn.
+        }
+
+        // `exhaustive` / `routing`: auto-run the read-only whole-document tools (D46) and persist the
+        // exhaustive answer with its honest extract/whole coverage (D48) + real citations, OR (routing)
+        // return the action-routing answer. NO model call — deterministic, localized copy (D47). A
+        // `grounded-whole-doc` handler omits `run()` and returned above; the guard keeps types honest.
+        if (analysisHandler.run) {
+          const runHandler = analysisHandler.run.bind(analysisHandler)
+          return withChatStream(
+            event,
+            conversationId,
+            'Document analysis failed',
+            async (signal, sendToken): Promise<Message> => {
+              const result = await runHandler({
+                db: ctx.db,
+                question: text,
+                scope,
+                skillInstallId: turnSkill.installId,
+                conversationId,
+                // The app's real ids/counts-only audit sink (the skills-run adapter — never invent one).
+                audit: toSkillToolAudit(ctx.audit),
+                // Thread the chat slot's abort signal so Cancel stops the auto-run.
+                signal,
+                tr: (key, params) => tMain(key, params),
+                // Faithful newline-preserving segments (not the overlap-collapsing chunks table).
+                readDocumentSegments
+              })
+              sendToken(result.answer)
+              return appendMessage(ctx.db, {
+                conversationId,
+                role: 'assistant',
+                content: result.answer,
+                citations: result.citations,
+                coverage: result.coverage,
+                skillId: turnSkill.installId,
+                autoFired: turnSkill.autoFired === true
+              })
+            },
+            () => ctx.docTasks?.acquireChatSlot() ?? Promise.resolve(() => {})
+          )
+        }
       }
 
       // Task router (whole-document-analysis plan §4.4, Phase 3): a "list every X / how many"

@@ -120,7 +120,7 @@ describe('bank-statement analysis handler — run()', () => {
     const db = freshDb()
     const id = seedDoc(db, CLEAN)
     const ctx = ctxFor(db, { documentIds: [id] }, 'summarize the cashflow')
-    const res = await bankStatementAnalysisHandler.run(ctx)
+    const res = await bankStatementAnalysisHandler.run!(ctx)
 
     expect(res.answer).toContain(tr('skills.bankAnalysis.count', { count: 2 }))
     // Money in = 2500.00, money out = 45.90, net = 2454.10 — the rows' own printed figures, verbatim.
@@ -135,7 +135,7 @@ describe('bank-statement analysis handler — run()', () => {
   it('figures are quoted, never invented — no fabricated number leaks into the answer', async () => {
     const db = freshDb()
     const id = seedDoc(db, CLEAN)
-    const res = await bankStatementAnalysisHandler.run(ctxFor(db, { documentIds: [id] }, 'totals?'))
+    const res = await bankStatementAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'totals?'))
     // The only figures present are the rows' amounts + the three derived totals — nothing else.
     const numbers = (res.answer.match(/\d+\.\d{2}/g) ?? []).sort()
     expect(numbers).toEqual(['2454.10', '2500.00', '45.90'].sort())
@@ -145,7 +145,7 @@ describe('bank-statement analysis handler — run()', () => {
     const db = freshDb()
     // Row 2's printed balance (200,00) cannot follow 100,00 after a −10,00 movement → a mismatch.
     const id = seedDoc(db, 'Statement EUR\n2026-01-02 Alpha -10,00 100,00\n2026-01-03 Beta -10,00 200,00')
-    const res = await bankStatementAnalysisHandler.run(ctxFor(db, { documentIds: [id] }, 'do the balances reconcile?'))
+    const res = await bankStatementAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'do the balances reconcile?'))
 
     const heading = tr('skills.bankAnalysis.unreconciledHeading')
     expect(res.answer).toContain(heading)
@@ -157,7 +157,7 @@ describe('bank-statement analysis handler — run()', () => {
   it('mixed-currency statement reports NO single total (honesty)', async () => {
     const db = freshDb()
     const id = seedDoc(db, 'Statement\n2026-01-02 Coffee -3,50 EUR\n2026-01-03 Book -10,00 USD')
-    const res = await bankStatementAnalysisHandler.run(ctxFor(db, { documentIds: [id] }, 'what is the total?'))
+    const res = await bankStatementAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'what is the total?'))
 
     expect(res.answer).toContain(tr('skills.bankAnalysis.noCurrency'))
     expect(res.answer).not.toContain('Net change') // the totals line is suppressed
@@ -168,7 +168,7 @@ describe('bank-statement analysis handler — run()', () => {
     const db = freshDb()
     const id = seedDoc(db, CLEAN)
     const ctx = ctxFor(db, { documentIds: [id] }, 'summarize and reconcile')
-    await bankStatementAnalysisHandler.run(ctx)
+    await bankStatementAnalysisHandler.run!(ctx)
 
     const toolNames = ctx.events.map((e) => e.meta?.toolName)
     expect(toolNames).toContain('extract_transactions')
@@ -186,7 +186,7 @@ describe('bank-statement analysis handler — run()', () => {
     const db = freshDb()
     const id = seedDoc(db, CLEAN)
     const ctx = ctxFor(db, { documentIds: [id] }, 'break down my spending by category')
-    const res = await bankStatementAnalysisHandler.run(ctx)
+    const res = await bankStatementAnalysisHandler.run!(ctx)
 
     expect(ctx.events.map((e) => e.meta?.toolName)).toContain('categorize_transactions')
     expect(res.answer).toContain(tr('skills.bankAnalysis.categoryHeading'))
@@ -196,7 +196,7 @@ describe('bank-statement analysis handler — run()', () => {
   it('coverage is extract with fullyChunked TRUE when the document is fully chunked', async () => {
     const db = freshDb()
     const id = seedDoc(db, CLEAN, { fullyChunked: true })
-    const res = await bankStatementAnalysisHandler.run(ctxFor(db, { documentIds: [id] }, 'summary'))
+    const res = await bankStatementAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'summary'))
     expect(res.coverage!.mode).toBe('extract')
     expect(res.coverage!.chunksTotal).toBe(3) // 3 seeded chunk rows
     expect(res.coverage!.chunksCovered).toBe(3)
@@ -206,7 +206,7 @@ describe('bank-statement analysis handler — run()', () => {
   it('coverage fullyChunked is FALSE for a legacy (not fully chunked) document', async () => {
     const db = freshDb()
     const id = seedDoc(db, CLEAN) // fully_chunked NULL
-    const res = await bankStatementAnalysisHandler.run(ctxFor(db, { documentIds: [id] }, 'summary'))
+    const res = await bankStatementAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'summary'))
     expect(res.coverage!.mode).toBe('extract')
     expect(res.coverage!.fullyChunked).toBe(false)
   })
@@ -214,7 +214,7 @@ describe('bank-statement analysis handler — run()', () => {
   it('citations are real SOURCE chunks (M2) — never the synthesised total', async () => {
     const db = freshDb()
     const id = seedDoc(db, CLEAN)
-    const res = await bankStatementAnalysisHandler.run(ctxFor(db, { documentIds: [id] }, 'summarize'))
+    const res = await bankStatementAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'summarize'))
 
     expect(res.citations.length).toBeGreaterThan(0)
     res.citations.forEach((c, i) => expect(c.label).toBe(`S${i + 1}`))

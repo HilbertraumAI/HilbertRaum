@@ -278,7 +278,14 @@ password recovery — are documented in
   **`routing`** handler (not an exhaustive one — D49a, 2026-06-22), so a redaction-shaped request
   returns a short answer pointing at its run button (no content read, no tool run, **no coverage
   badge**) instead of a top-k Q&A that lectured and falsely claimed a relevance-limited reading; the
-  write tool stays user-initiated and confirm-gated.
+  write tool stays user-initiated and confirm-gated. The Tier-1 **instruction** skills
+  (meeting-protocol, contract-brief, share-safe-review, deadline-obligation-finder) register
+  **`grounded-whole-doc`** handlers (skill-whole-doc engine, Wave 2, §20): an analysis-shaped request
+  over a single in-scope, fully-chunked document streams a model answer over the **whole** document
+  (read in order, not top-k) with the SKILL.md format applied, stamping honest `capped` coverage. A
+  document larger than the context budget is read **from the beginning** with a "covers the beginning"
+  badge — never silently complete; the deep-index map-reduce pass for oversized documents, and a
+  2-document whole-doc compare for `what-changed`, are the documented follow-ups.
 - **Strictly one job at a time (D26).** While a summary runs, chat is refused with a
   friendly message + a cancel option, and vice versa — the one local model serves one
   request. The R-T1 probe confirmed the pinned b9585 WOULD serve concurrent requests on

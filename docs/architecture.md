@@ -2413,6 +2413,52 @@ quoted not invented, export never auto-run, coverage `fullyChunked` true/false, 
 `askDocuments`: exhaustive path with `coverage.mode==='extract'` + no model call, refuse path, relevance
 path byte-unchanged, single-locked-slot contract).
 
+### §20 Skill-aware whole-document analysis for instruction skills (2026-06-22, Wave 2)
+
+**The gap this closes.** §19 gave `kind:tool` skills a whole-document path, but the Tier-1
+**instruction** skills (meeting minutes, contract brief, share-safe review, deadlines) still answered
+from top-k relevance — because the SKILL.md fence is applied on **exactly one** engine, the relevance
+`generateGroundedAnswer` path. Every whole-document engine (the §19 handlers, `coverage-extract`,
+`tree-summary`) ignores the fence. So an instruction skill could be **whole-document OR
+formatted-to-its-spec, never both** — worst case meeting minutes built from ~5 retrieved passages miss
+decisions/action items, and "summarize meeting" could hijack to a generic tree-summary that ignores
+the 8-section format. (Folded from `docs/skill-whole-doc-engine-plan.md`, deleted at this phase; full
+text in git history. Continues the §19 audit recorded in BUILD_STATE 2026-06-22.)
+
+**The engine (`grounded-whole-doc`).** A third `SkillAnalysisHandler` `mode` (after §19's `exhaustive`
+and Wave 1's `routing`). Unlike `exhaustive` (deterministic, model-free, hardcoded TS) these stream a
+**model** answer, so they do NOT use `run()` (it is now optional and omitted). Instead
+`registerRagIpc` detects the mode and calls `generateGroundedAnswer({ wholeDocument: { documentId } })`:
+the grounded context is the single in-scope document read **in order** (`retrieveWholeDocument`, not
+top-k), capped to a whole-document token budget (`wholeDocumentBudgetTokens` = the real launched window
+− answer reserve − system prompt − question − the skill-fence allowance), with the SKILL.md fence
+riding in the grounded USER turn exactly as the relevance path. The persisted coverage is the honest
+**`capped`** mode — `truncated:false` ⇒ "covers the whole document"; `truncated:true` ⇒ "covers the
+beginning" (the meter wording already existed for the summary task). The §19 **fully-chunked refusal**
+(D45) still gates the turn (a not-fully-chunked doc is refused, no model call). The relevance path is
+byte-unchanged: coverage stays `undefined` ⇒ persisted NULL ⇒ the relevance badge.
+
+**Per-skill adoption (single-document; `analysis/whole-doc-skills.ts`).** `meeting-protocol`,
+`contract-brief`, `share-safe-review`, `deadline-obligation-finder` each register a handler whose
+`applies()` matches an analysis-shaped keyword set (EN+DE) over a **single** in-scope document. Because
+these skills are **explicitly selected**, the keyword sets include the bare domain nouns (e.g.
+`contract`/`vertrag`) — `includes` can't span "summarize **this** contract", so the noun is the robust
+trigger; an off-topic question or a multi-doc scope still keeps the relevance path. **`what-changed` is
+out of scope** — it is inherently multi-document and stays on the existing compare/relevance path;
+extending the whole-document engine to a 2-document compare is the documented follow-up.
+
+**Large documents (known limit).** Today an over-budget document is stuffed from the **beginning** with
+an honest `capped`/"covers the beginning" badge — never silently presented as complete. A map-reduce
+pass over the deep-index tree (true whole-document coverage for documents that don't fit, with the
+fence applied at each step) is the documented follow-up.
+
+**Tests.** `skills-analysis-whole-doc.test.ts` (handler-level: `mode==='grounded-whole-doc'` + no
+`run()`, `applies()` matrix EN+DE / off-topic / multi-doc / no-doc, registry wiring, and
+`retrieveWholeDocument` order + truncation + always-keep-first-chunk); `rag-whole-doc-skill.test.ts`
+(IPC-level over the real `askDocuments`: the model IS called with `coverage.mode==='capped'` +
+the fence + the whole transcript in the user turn, the refuse path with no model call, and an off-topic
+question keeping the relevance path with no `capped` coverage).
+
 ### §-anchor legend (historical plan citations)
 
 The wave's plan files were folded into this record (S2–S12 into §1–§12; **S13 into §18**) and

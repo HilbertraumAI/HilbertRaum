@@ -6,6 +6,29 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-22 — **Skill finetuning Wave 2: skill-aware whole-document engine for the Tier-1 instruction skills.** Closes the
+structural gap the Wave 1 audit found — the SKILL.md fence is applied on ONLY the top-k relevance engine, so the instruction skills
+(meeting-protocol, contract-brief, share-safe-review, deadline-obligation-finder) could be whole-document OR formatted-to-spec, never
+both (worst: minutes from ~5 passages miss decisions/actions). **As built (typecheck + build clean; full suite 2126 passed / 30
+skipped, +27 tests):**
+- **New `grounded-whole-doc` handler mode** (third after `exhaustive` + `routing`; `run()` is now optional — these handlers omit it).
+  `registerRagIpc` detects the mode and streams a MODEL answer via **`generateGroundedAnswer({ wholeDocument:{ documentId } })`**
+  instead of calling `run()`. The §19 D45 fully-chunked **refusal** still gates the turn (a not-fully-chunked doc → refuse, no model).
+- **New `retrieveWholeDocument(db, docId, budget)`** in `rag/index.ts` — loads a single document's chunks **in order** (not top-k),
+  capped to `wholeDocumentBudgetTokens` (real window − answer reserve − system − question − fence allowance), labelled `[S1]…[Sn]`,
+  with an honest `truncated` flag. `generateGroundedAnswer` now branches on `opts.wholeDocument`, applies the SKILL.md fence exactly as
+  the relevance path, and persists **`coverage:{ mode:'capped', truncated }`** → the existing meter wording ("covers the whole document"
+  / "covers the beginning"). Relevance path byte-unchanged (coverage stays NULL ⇒ relevance badge).
+- **New `analysis/whole-doc-skills.ts`** — the four handlers register `grounded-whole-doc` + `applies()` (analysis-shaped keywords EN+DE
+  over a SINGLE in-scope doc). Keyword sets include the bare domain nouns (e.g. `contract`/`vertrag`) since `includes` can't span
+  "summarize **this** contract" and the skills are explicitly selected. **`what-changed` stays on the compare/relevance path** (inherently
+  multi-document — out of Wave 2 scope).
+- **KNOWN LIMIT (documented):** an over-budget document is read from the **beginning** with the honest "covers the beginning" badge — never
+  silently complete. Deep-index map-reduce for oversized docs + a 2-doc whole-doc compare for `what-changed` are the follow-ups.
+- **Docs:** folded into `architecture.md` **§20** (plan `docs/skill-whole-doc-engine-plan.md` deleted); `known-limitations.md` updated.
+  **Tests:** `skills-analysis-whole-doc.test.ts` (handlers + `retrieveWholeDocument`), `rag-whole-doc-skill.test.ts` (IPC: model called +
+  capped coverage + fence + whole transcript in the user turn; refuse path; off-topic keeps relevance)._
+
 _2026-06-22 — **Skill finetuning Wave 1: document-redaction routing handler (test-found UX defect).** Testing "Can you anonymize the doc
 please?" with a document + the redaction skill selected surfaced two defects, both rooted in one design choice (D49: redaction kept the top-k
 relevance path): (1) the model wrote a **lecture/refusal** — reciting the SKILL.md caveats ("you never run it yourself", everything it won't
@@ -30,7 +53,7 @@ green, +10 new):**
   contract-brief, share-safe-review, deadline-obligation-finder) are **analysis** skills that want whole-document coverage but hit a structural
   gap — the SKILL.md fence is honored ONLY on the top-k relevance engine; every whole-document engine (tree-summary, coverage-extract,
   analysis handlers) ignores it. So they can be whole-document OR formatted-to-spec, never both (worst: meeting-protocol — minutes from top-k
-  miss decisions/actions, and "summarize meeting" can hijack to a generic tree-summary). See `docs/skill-whole-doc-engine-plan.md`._
+  miss decisions/actions, and "summarize meeting" can hijack to a generic tree-summary). **DONE in Wave 2 (above) — see `architecture.md` §20.**_
 
 _2026-06-22 — **Image analysis survives navigation + content-free lifecycle logging (two test-found bugs).** Found while testing:
 (1) starting a picture analysis, navigating to another screen, and returning showed an idle screen — the running analysis was invisible

@@ -71,18 +71,28 @@ export interface SkillAnalysisResult {
 export interface SkillAnalysisHandler {
   /**
    * The handler's posture (default `'exhaustive'`):
-   *   - `'exhaustive'` — reads the WHOLE document via read-only tools and synthesises a grounded
-   *     answer (bank-statement, invoice). The chat path enforces the fully-chunked precondition
-   *     (a legacy/partly-chunked doc is REFUSED, no partial answer).
+   *   - `'exhaustive'` — reads the WHOLE document via read-only tools and synthesises a grounded,
+   *     deterministic (model-free) answer (bank-statement, invoice). The chat path enforces the
+   *     fully-chunked precondition (a legacy/partly-chunked doc is REFUSED, no partial answer) and
+   *     then calls `run()`.
+   *   - `'grounded-whole-doc'` — an INSTRUCTION skill (minutes, contract brief, …) whose deliverable
+   *     is the MODEL's answer over the WHOLE document, formatted to the SKILL.md body. The chat path
+   *     enforces the same fully-chunked precondition, then streams a model answer over the whole
+   *     document via `generateGroundedAnswer({ wholeDocument })` — NOT `run()` (which these handlers
+   *     omit). `applies()` does the intent + single-in-scope-doc gating.
    *   - `'routing'` — reads NO content. It returns a short answer pointing the user at the skill's
    *     own run affordance (an ACTION skill whose tool WRITES a file and must stay user-initiated,
    *     e.g. document-redaction). The fully-chunked refusal does NOT apply (nothing is read), and
    *     it returns no citations/coverage so no breadth badge is shown.
    */
-  mode?: 'exhaustive' | 'routing'
+  mode?: 'exhaustive' | 'grounded-whole-doc' | 'routing'
   /** Can this skill answer THIS question over THIS scope? (cheap, pre-flight). */
   applies(input: SkillAnalysisInput): boolean
-  /** Run the whole-document read-only tools and synthesise the grounded answer + real coverage,
-   *  OR (for a `routing` handler) return the action-routing answer with no citations/coverage. */
-  run(ctx: SkillAnalysisContext): Promise<SkillAnalysisResult>
+  /**
+   * Run the whole-document read-only tools and synthesise the grounded answer + real coverage, OR
+   * (for a `routing` handler) return the action-routing answer with no citations/coverage. OMITTED
+   * by a `grounded-whole-doc` handler — the chat path streams the model answer directly and never
+   * calls this.
+   */
+  run?(ctx: SkillAnalysisContext): Promise<SkillAnalysisResult>
 }

@@ -1,6 +1,6 @@
 import type { Db } from '../db'
 import { t } from '../../../shared/i18n'
-import type { AppSettings, Citation, Message, RetrievalScope } from '../../../shared/types'
+import type { AppSettings, Citation, CoverageInfo, Message, RetrievalScope } from '../../../shared/types'
 import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../runtime'
 import { type Embedder, VectorIndex } from '../embeddings'
 import type { Reranker } from '../reranker'
@@ -334,6 +334,75 @@ function truncateSnippet(text: string): string {
   return trimmed.length <= SNIPPET_MAX_CHARS ? trimmed : trimmed.slice(0, SNIPPET_MAX_CHARS).trimEnd() + '…'
 }
 
+/** The whole-document read for a skill-aware analysis answer (skill-whole-doc engine, Wave 2). */
+export interface WholeDocumentResult {
+  chunks: RetrievedChunk[]
+  citations: Citation[]
+  /** Chunks included (== chunks.length); ≤ chunksTotal when the budget truncated the tail. */
+  chunksCovered: number
+  /** Total chunks in the document. */
+  chunksTotal: number
+  /** True when the document did not fit the budget and only its BEGINNING was included. */
+  truncated: boolean
+}
+
+/**
+ * Load a SINGLE document's chunks IN ORDER (not top-k retrieval) for a skill-aware whole-document
+ * answer (skill-whole-doc engine, Wave 2 — `architecture.md` §19/§20). Unlike `retrieve`, this does
+ * NO embedding/ranking: an analysis skill (minutes, contract brief, …) must see the WHOLE document,
+ * not the most-relevant passages. The chunks are taken from the start and capped to `budgetTokens`
+ * (the persisted per-chunk `token_count`, scaled by `TOKENS_PER_WORD`, like `retrieve`); when the
+ * document overflows the budget the TAIL is dropped and `truncated` is true so the caller can stamp
+ * the honest `capped`/"covers the beginning" coverage. Labels `[S1]…[Sn]` are assigned here, per
+ * query, and never stored (same contract as `retrieve`). The model-side fence/streaming/persist
+ * machinery is shared with the relevance path (`generateGroundedAnswer`).
+ *
+ * NOTE on large documents: this stuffs the document up to the context budget. A map-reduce pass over
+ * the deep-index tree (true whole-document coverage for documents that don't fit) is the documented
+ * follow-up; today an over-budget document is read from the beginning with an HONEST badge, never
+ * silently presented as complete.
+ */
+export function retrieveWholeDocument(
+  db: Db,
+  documentId: string,
+  budgetTokens: number
+): WholeDocumentResult {
+  const rows = db
+    .prepare(
+      'SELECT id, document_id, text, source_label, page_number, section_label, token_count ' +
+        'FROM chunks WHERE document_id = ? ORDER BY chunk_index'
+    )
+    .all(documentId) as unknown as ChunkRow[]
+  const chunksTotal = rows.length
+  const selected: Array<Omit<RetrievedChunk, 'label'>> = []
+  let usedTokens = 0
+  for (const row of rows) {
+    const tokens = Math.ceil((row.token_count ?? approxTokenCount(row.text)) * TOKENS_PER_WORD)
+    // Always include the first chunk (a single over-budget chunk must not yield "no context");
+    // after that, stop as soon as the next chunk would overflow the whole-document budget.
+    if (selected.length > 0 && usedTokens + tokens > budgetTokens) break
+    selected.push({
+      chunkId: row.id,
+      documentId: row.document_id,
+      text: row.text,
+      sourceTitle: row.source_label ?? 'Untitled',
+      pageNumber: row.page_number,
+      sectionLabel: row.section_label,
+      score: 0
+    })
+    usedTokens += tokens
+  }
+  const chunks: RetrievedChunk[] = selected.map((c, i) => ({ ...c, label: `S${i + 1}` }))
+  const citations: Citation[] = chunks.map((c) => ({
+    label: c.label,
+    sourceTitle: c.sourceTitle,
+    pageNumber: c.pageNumber,
+    section: c.sectionLabel,
+    snippet: truncateSnippet(c.text)
+  }))
+  return { chunks, citations, chunksCovered: chunks.length, chunksTotal, truncated: chunks.length < chunksTotal }
+}
+
 /** The `[Sn] File: X | Page: 4` / `| Section: Y` metadata line for a chunk (spec §7.8). */
 function sourceMeta(chunk: RetrievedChunk): string {
   if (chunk.pageNumber != null) return ` | Page: ${chunk.pageNumber}`
@@ -464,10 +533,43 @@ export interface GroundedAnswerOptions {
    */
   skill?: TurnSkill | null
   /**
+   * Skill-aware WHOLE-DOCUMENT answer (skill-whole-doc engine, Wave 2). When set, the grounded
+   * context is the named document read IN ORDER (not top-k retrieval), capped to the context
+   * budget, and the persisted coverage is `capped` ("covers the whole document" / "covers the
+   * beginning" when truncated) instead of `relevance`. Set ONLY by a `grounded-whole-doc` analysis
+   * handler over its single in-scope, fully-chunked document; the caller has already enforced those
+   * preconditions (the D45 fully-chunked refusal still gates this in `registerRagIpc`).
+   */
+  wholeDocument?: { documentId: string }
+  /**
    * Fired exactly once if the context-compaction pre-pass starts a summarization for this turn.
    * Phase 1 only plumbs the callback; the `STREAM.compaction` UX channel is Phase 2.
    */
   onCompactionStart?: () => void
+}
+
+/**
+ * Token budget for the whole-document chunk block (skill-whole-doc engine). The real launched
+ * context window minus the answer reserve, the grounded system prompt, the question scaffolding,
+ * and an allowance for the skill fence (the fence's precise placement/trim is still done downstream
+ * in `generateGroundedAnswer`). Never below a small floor so a tiny window still includes something.
+ */
+function wholeDocumentBudgetTokens(
+  contextTokens: number,
+  question: string,
+  skill: TurnSkill | null | undefined
+): number {
+  const fenceAllowance = skill
+    ? approxPromptTokens(buildSkillFence({ title: skill.title, body: skill.body }).text ?? '')
+    : 0
+  const questionScaffold = approxPromptTokens(question) + 64 // question + "Question:/Answer:" framing
+  const budget =
+    contextTokens -
+    CHAT_RESPONSE_RESERVE_TOKENS -
+    approxPromptTokens(GROUNDED_SYSTEM_PROMPT) -
+    questionScaffold -
+    fenceAllowance
+  return Math.max(512, budget)
 }
 
 /**
@@ -492,15 +594,32 @@ export async function generateGroundedAnswer(
   // A composite `scope` (plan §10.2) wins over the legacy doc-id scope. Both normalize
   // inside `retrieve`, so a bare doc-id array still works byte-for-byte.
   const scopeArg = opts.scope ?? opts.scopeDocumentIds
-  const { chunks, citations } = await retrieve(
-    db,
-    embedder,
-    question,
-    settings,
-    scopeArg,
-    opts.reranker,
-    opts.signal
-  )
+  // The REAL launched context window the runtime reports (§L0) — needed up-front for the
+  // whole-document budget, and reused below for fence sizing + compaction.
+  const contextTokens = effectiveContextWindow(runtime, getSettings(db))
+
+  // Skill-aware WHOLE-DOCUMENT answer (Wave 2): read the named document in order (capped to the
+  // context budget) instead of top-k retrieval, and stamp honest `capped` coverage. The relevance
+  // path is byte-unchanged (coverage stays undefined ⇒ persisted NULL ⇒ the relevance badge).
+  let chunks: RetrievedChunk[]
+  let citations: Citation[]
+  let coverage: CoverageInfo | undefined
+  if (opts.wholeDocument) {
+    const budget = wholeDocumentBudgetTokens(contextTokens, question, opts.skill)
+    const whole = retrieveWholeDocument(db, opts.wholeDocument.documentId, budget)
+    chunks = whole.chunks
+    citations = whole.citations
+    coverage = {
+      mode: 'capped',
+      chunksCovered: whole.chunksCovered,
+      chunksTotal: whole.chunksTotal,
+      truncated: whole.truncated
+    }
+  } else {
+    const r = await retrieve(db, embedder, question, settings, scopeArg, opts.reranker, opts.signal)
+    chunks = r.chunks
+    citations = r.citations
+  }
 
   if (chunks.length === 0) {
     // Distinguish "nothing relevant" from "the corpus is invisible to the active
@@ -524,9 +643,8 @@ export async function generateGroundedAnswer(
   // the base preamble, the question, or the excerpts — only older history yields. The fence rides
   // in the grounded USER turn (buildGroundedPrompt). Stamp only when the fence actually fit.
   const groundedNoFence = buildGroundedPrompt(question, chunks)
-  // Budget against the REAL launched context window the runtime reports (§L0), not
-  // settings.contextTokens (which can diverge from the model's actual --ctx-size).
-  const contextTokens = effectiveContextWindow(runtime, getSettings(db))
+  // `contextTokens` was resolved above (the whole-document budget needs it up-front); it is the
+  // REAL launched context window the runtime reports (§L0), not settings.contextTokens.
   // L2 (context compaction): summarize older raw turns into a cached checkpoint when the history
   // approaches the window, BEFORE assembly. The checkpoint is built from the stored raw turns, never
   // this grounded prompt (R-RAG). A no-op below threshold; any failure/abort falls back to L1 with no
@@ -583,6 +701,9 @@ export async function generateGroundedAnswer(
     role: 'assistant',
     content,
     citations,
+    // Whole-document answers stamp honest `capped` coverage (covers the whole document / the
+    // beginning when truncated); the relevance path leaves it undefined ⇒ NULL ⇒ relevance badge.
+    coverage,
     skillId: skillFence ? (opts.skill?.installId ?? null) : null,
     // Auto-fire provenance rides with the stamp (S13c) — only when the fence was placed (§22-A5).
     autoFired: skillFence ? opts.skill?.autoFired === true : false

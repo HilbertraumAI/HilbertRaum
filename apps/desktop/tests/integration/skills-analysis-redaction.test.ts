@@ -117,7 +117,7 @@ describe('redaction routing handler — run()', () => {
   it('returns the localized routing answer naming the run button, with NO citations/coverage', async () => {
     const db = freshDb()
     const id = seedDoc(db)
-    const res = await documentRedactionAnalysisHandler.run(ctxFor(db, { documentIds: [id] }, 'anonymize this'))
+    const res = await documentRedactionAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'anonymize this'))
 
     // Names the SkillRunBar's own button label, so the wording matches the affordance shown.
     expect(res.answer).toContain(tr('chat.skill.tool.redactDocument'))
@@ -130,7 +130,7 @@ describe('redaction routing handler — run()', () => {
   it('answers in the user’s language (German)', async () => {
     const db = freshDb()
     const id = seedDoc(db)
-    const res = await documentRedactionAnalysisHandler.run(ctxFor(db, { documentIds: [id] }, 'schwärzen', 'de'))
+    const res = await documentRedactionAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'schwärzen', 'de'))
     expect(res.answer).toContain(trDe('chat.skill.tool.redactDocument'))
     expect(res.answer).toContain('schwärzen')
   })
@@ -139,7 +139,7 @@ describe('redaction routing handler — run()', () => {
     const db = freshDb()
     const id = seedDoc(db)
     const ctx = ctxFor(db, { documentIds: [id] }, 'anonymize this')
-    await documentRedactionAnalysisHandler.run(ctx)
+    await documentRedactionAnalysisHandler.run!(ctx)
 
     expect(ctx.events).toEqual([])
     const runs = db.prepare('SELECT COUNT(*) AS n FROM skill_runs').get() as { n: number }

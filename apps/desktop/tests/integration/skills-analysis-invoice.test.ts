@@ -125,7 +125,7 @@ describe('invoice analysis handler — run()', () => {
   it('exhaustive figures: count + net/tax/gross read from the extracted invoice', async () => {
     const db = freshDb()
     const id = seedDoc(db, CLEAN)
-    const res = await invoiceAnalysisHandler.run(ctxFor(db, { documentIds: [id] }, 'what are the totals?'))
+    const res = await invoiceAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'what are the totals?'))
 
     expect(res.answer).toContain(tr('skills.invoiceAnalysis.count', { count: 2 }))
     expect(res.answer).toContain('120.00') // net
@@ -139,7 +139,7 @@ describe('invoice analysis handler — run()', () => {
   it('figures are quoted, never invented — only the invoice’s printed totals appear', async () => {
     const db = freshDb()
     const id = seedDoc(db, CLEAN)
-    const res = await invoiceAnalysisHandler.run(ctxFor(db, { documentIds: [id] }, 'gross amount?'))
+    const res = await invoiceAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'gross amount?'))
     const numbers = (res.answer.match(/\d+\.\d{2}/g) ?? []).sort()
     expect(numbers).toEqual(['120.00', '144.00', '24.00'].sort())
   })
@@ -149,7 +149,7 @@ describe('invoice analysis handler — run()', () => {
     // Gross 200,00 cannot equal net 120,00 + tax 24,00 → netPlusTaxIsGross mismatch.
     const text = CLEAN.replace('Gross total 144,00 EUR', 'Gross total 200,00 EUR')
     const id = seedDoc(db, text)
-    const res = await invoiceAnalysisHandler.run(ctxFor(db, { documentIds: [id] }, 'do the totals reconcile?'))
+    const res = await invoiceAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'do the totals reconcile?'))
 
     const heading = tr('skills.invoiceAnalysis.unreconciledHeading')
     expect(res.answer).toContain(heading)
@@ -163,7 +163,7 @@ describe('invoice analysis handler — run()', () => {
     const db = freshDb()
     const id = seedDoc(db, CLEAN)
     const ctx = ctxFor(db, { documentIds: [id] }, 'check the totals')
-    await invoiceAnalysisHandler.run(ctx)
+    await invoiceAnalysisHandler.run!(ctx)
 
     const toolNames = ctx.events.map((e) => e.meta?.toolName)
     expect(toolNames).toContain('extract_invoice')
@@ -177,7 +177,7 @@ describe('invoice analysis handler — run()', () => {
   it('coverage is extract with fullyChunked TRUE when the document is fully chunked', async () => {
     const db = freshDb()
     const id = seedDoc(db, CLEAN, { fullyChunked: true })
-    const res = await invoiceAnalysisHandler.run(ctxFor(db, { documentIds: [id] }, 'totals?'))
+    const res = await invoiceAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'totals?'))
     expect(res.coverage!.mode).toBe('extract')
     expect(res.coverage!.chunksTotal).toBe(8) // 8 seeded chunk rows
     expect(res.coverage!.chunksCovered).toBe(8)
@@ -187,7 +187,7 @@ describe('invoice analysis handler — run()', () => {
   it('coverage fullyChunked is FALSE for a legacy (not fully chunked) document', async () => {
     const db = freshDb()
     const id = seedDoc(db, CLEAN) // fully_chunked NULL
-    const res = await invoiceAnalysisHandler.run(ctxFor(db, { documentIds: [id] }, 'totals?'))
+    const res = await invoiceAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'totals?'))
     expect(res.coverage!.mode).toBe('extract')
     expect(res.coverage!.fullyChunked).toBe(false)
   })
@@ -195,7 +195,7 @@ describe('invoice analysis handler — run()', () => {
   it('citations are real SOURCE chunks (M2) — labelled S1…Sn', async () => {
     const db = freshDb()
     const id = seedDoc(db, CLEAN)
-    const res = await invoiceAnalysisHandler.run(ctxFor(db, { documentIds: [id] }, 'totals?'))
+    const res = await invoiceAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'totals?'))
 
     expect(res.citations.length).toBeGreaterThan(0)
     res.citations.forEach((c, i) => expect(c.label).toBe(`S${i + 1}`))
