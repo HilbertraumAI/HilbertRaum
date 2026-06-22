@@ -283,9 +283,11 @@ password recovery — are documented in
   **`grounded-whole-doc`** handlers (skill-whole-doc engine, Wave 2, §20): an analysis-shaped request
   over a single in-scope, fully-chunked document streams a model answer over the **whole** document
   (read in order, not top-k) with the SKILL.md format applied, stamping honest `capped` coverage. A
-  document larger than the context budget is read **from the beginning** with a "covers the beginning"
-  badge — never silently complete; the deep-index map-reduce pass for oversized documents, and a
-  2-document whole-doc compare for `what-changed`, are the documented follow-ups.
+  document larger than the context budget that has a **ready deep index** is answered by a skill-fenced
+  **map-reduce over its tree** instead of truncating (full coverage, `tree` badge — Follow-up A, §20);
+  **without** a ready tree it is still read **from the beginning** with a "covers the beginning" badge,
+  never silently complete. A 2-document whole-doc compare for `what-changed` remains the documented
+  follow-up (B).
 - **Strictly one job at a time (D26).** While a summary runs, chat is refused with a
   friendly message + a cancel option, and vice versa — the one local model serves one
   request. The R-T1 probe confirmed the pinned b9585 WOULD serve concurrent requests on

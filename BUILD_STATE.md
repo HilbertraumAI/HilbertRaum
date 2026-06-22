@@ -6,6 +6,25 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-22 — **Skill finetuning Wave 3, Phase 3 (Follow-up A): deep-index map-reduce for an over-budget whole-doc skill turn.**
+Wave 2 read an over-budget document from the BEGINNING and stamped the honest `capped`/"covers the beginning" badge — coverage
+stopped at the budget. This closes that for a document with a **ready deep-index tree**: instead of truncating, run the SAME map-reduce
+the tree summary uses (`manager.summarizeFromTree`) over the precomputed node summaries with the SKILL.md fence applied at EVERY step,
+and stamp honest `tree` coverage. **As built (typecheck + build clean; full suite green, +3 tests):** new
+**`rag/whole-doc-tree.ts` → `answerWholeDocFromTree`**. `generateGroundedAnswer` detects `retrieveWholeDocument`'s `truncated` flag
+and hands off; the function reads the **deepest layer** (`nodeSummariesAtLevel(level 1)` = full leaf coverage) → `packIntoWindows` →
+a skill-fenced **MAP** per window (when >1) → a skill-fenced **streamed REDUCE** (when summaries fit one window the single fenced
+reduce IS the step). Coverage `{ mode:'tree', treeStatus:'ready', chunksCovered=reachableLeafChunkIds, chunksTotal, treeLevels,
+truncated:false }`; citations = **leaf chunks** (`documentLeafProvenance`, M2-safe). Returns **null** when no usable tree (no `ready`
+status / no node summaries) → caller keeps the byte-unchanged Wave 2 capped path; after a model call it always returns a Message
+(answer, or empty on Stop) so a cancel never triggers a second capped pass. A doc that FITS the budget never enters this branch
+(`truncated:false`) — small-doc path byte-identical to Wave 2. **Reuses** the existing tree/coverage/summary infra (no parallel one);
+§14 ceiling unchanged (pure DB reads + chat runtime); the fence+guard bracket the untrusted body in every step's USER turn, app
+system prompt outside. **Docs:** `architecture.md` §20 (record + Tests), `known-limitations.md` updated. **Tests:**
+`rag-whole-doc-tree.test.ts` (single-level → 1 fenced reduce + tree coverage + leaf citations + skill stamp; multi-level + small
+context → map-per-section then reduce with the fence at every step; no-ready-tree → null + no model call). **NEXT (Phase 4 / Follow-up
+B): 2-document whole-doc compare for `what-changed` — confirm the budget split across the two docs with the user before implementing._
+
 _2026-06-22 — **Skill finetuning Wave 3, Phase 2: strip echoed skill-fence framing from model answers.** The Wave 2 smoke test
 showed a model reproducing the fence's closing delimiter — a trailing `--- END LOCAL SKILL ---` — verbatim in its minutes. The skill
 fence brackets the untrusted SKILL.md body with fixed English framing + the guard line (§11.2/§14); the model copying a delimiter into

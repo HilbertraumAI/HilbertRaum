@@ -2447,12 +2447,29 @@ trigger; an off-topic question or a multi-doc scope still keeps the relevance pa
 out of scope** — it is inherently multi-document and stays on the existing compare/relevance path;
 extending the whole-document engine to a 2-document compare is the documented follow-up.
 
-**Large documents (known limit).** Today an over-budget document is stuffed from the **beginning** with
-an honest `capped`/"covers the beginning" badge — never silently presented as complete. A map-reduce
-pass over the deep-index tree (true whole-document coverage for documents that don't fit, with the
-fence applied at each step) is the documented follow-up.
+**Large documents — deep-index map-reduce (Follow-up A, Wave 3, 2026-06-22).** An over-budget document
+no longer truncates to its beginning when a **ready deep-index tree** exists: `generateGroundedAnswer`
+detects `retrieveWholeDocument`'s `truncated` flag and hands off to **`answerWholeDocFromTree`**
+(`rag/whole-doc-tree.ts`), which runs the SAME map-reduce the tree summary uses
+(`manager.summarizeFromTree`) over the precomputed node summaries — the **deepest layer** (`level 1` =
+full leaf coverage) read via `nodeSummariesAtLevel` — with the **SKILL.md fence applied at every step**
+(a skill-fenced MAP per `packIntoWindows` window when the summaries span >1 window, then a skill-fenced
+streamed REDUCE; when they fit one window the single fenced reduce IS the step). It stamps the honest
+**`tree`** coverage (`treeStatus:'ready'`, `chunksCovered = reachableLeafChunkIds`, `treeLevels`,
+`truncated:false`) and cites the **leaf chunks** (`documentLeafProvenance`, M2-safe — node summaries are
+never `[Sn]`). It returns **null** when there is no usable tree (no `ready` status / no node summaries),
+so the turn falls back to the byte-unchanged Wave 2 capped/"covers the beginning" path; once a model
+call has run it always returns a Message (the answer, or an empty one on Stop), so a cancel never
+triggers a second capped pass. A document that **fits** the budget never enters this branch
+(`truncated:false`) — the small-doc path is byte-identical to Wave 2. The §14 ceiling is unchanged: pure
+DB tree/coverage reads + the chat runtime, no new DB/FS/net handle; the fence (with its guard line) keeps
+bracketing the untrusted body in every step's USER turn, the app-authored system prompt outside it.
+**Still open:** a 2-document whole-doc compare for `what-changed` (Follow-up B).
 
-**Tests.** `skills-analysis-whole-doc.test.ts` (handler-level: `mode==='grounded-whole-doc'` + no
+**Tests.** `rag-whole-doc-tree.test.ts` (the tree map-reduce: single-level → one fenced reduce + `tree`
+coverage + leaf citations + skill stamp; multi-level + small context → map-per-section then reduce with
+the fence at EVERY step; no-ready-tree → null + no model call).
+`skills-analysis-whole-doc.test.ts` (handler-level: `mode==='grounded-whole-doc'` + no
 `run()`, `applies()` matrix EN+DE / off-topic / multi-doc / no-doc, registry wiring, and
 `retrieveWholeDocument` order + truncation + always-keep-first-chunk); `rag-whole-doc-skill.test.ts`
 (IPC-level over the real `askDocuments`: the model IS called with `coverage.mode==='capped'` +

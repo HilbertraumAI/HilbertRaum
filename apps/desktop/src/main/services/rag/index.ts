@@ -41,6 +41,7 @@ import {
   stripSkillFenceEcho
 } from '../skills/prompt'
 import { getSettings } from '../settings'
+import { answerWholeDocFromTree } from './whole-doc-tree'
 
 // RAG service (spec §7.8; pipeline design in rag-design §11). Turns a
 // question into a grounded, cited answer:
@@ -612,6 +613,24 @@ export async function generateGroundedAnswer(
   if (opts.wholeDocument) {
     const budget = wholeDocumentBudgetTokens(contextTokens, question, opts.skill)
     const whole = retrieveWholeDocument(db, opts.wholeDocument.documentId, budget)
+    // Over-budget document (Follow-up A): rather than truncate to the beginning, run a skill-fenced
+    // map-reduce over its READY deep-index tree (true whole-document coverage, `mode:'tree'`). Returns
+    // null when there is no usable tree — then fall through to the honest Wave 2 capped/"beginning"
+    // path below, byte-unchanged. A document that FITS the budget never enters here (truncated:false).
+    if (whole.truncated) {
+      const viaTree = await answerWholeDocFromTree({
+        db,
+        runtime,
+        conversationId,
+        documentId: opts.wholeDocument.documentId,
+        question,
+        skill: opts.skill,
+        contextTokens,
+        signal: opts.signal,
+        onToken: opts.onToken
+      })
+      if (viaTree) return viaTree
+    }
     chunks = whole.chunks
     citations = whole.citations
     coverage = {
