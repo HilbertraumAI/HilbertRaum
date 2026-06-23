@@ -111,17 +111,40 @@ function parseLine(line: string, page: number | null, statementCurrency: string 
 // scan for the label, then read the LAST money token on that line (the figure trails the label, and a
 // date earlier on the line is skipped by taking the last token).
 
+// `kontostand per <date>` is the Raiffeisen "Mein ELBA" balance-line label: the statement prints the
+// OPENING balance as `Kontostand per <period-start>` and the CLOSING balance as `Kontostand per
+// <period-end>`. Adding it to BOTH lists lets the "first opening / last closing" rule below read the
+// period-start line as the opening and the period-end line as the closing. NOT "Aktueller Kontostand"
+// (the top-of-document restatement of the closing value — it would corrupt the opening).
+const KONTOSTAND_PER = 'kontostand per'
+
 /** Opening-balance label fragments (lowercased substrings), EN + DE for the de-AT target. */
 const OPENING_LABELS: readonly string[] = [
   'opening balance', 'balance brought forward', 'previous balance', 'starting balance',
-  'alter kontostand', 'alter saldo', 'anfangssaldo', 'saldovortrag', 'kontostand alt', 'saldo alt'
+  'alter kontostand', 'alter saldo', 'anfangssaldo', 'saldovortrag', 'kontostand alt', 'saldo alt',
+  KONTOSTAND_PER
 ]
 
 /** Closing-balance label fragments (lowercased substrings), EN + DE. */
 const CLOSING_LABELS: readonly string[] = [
   'closing balance', 'balance carried forward', 'new balance', 'ending balance', 'final balance',
-  'neuer kontostand', 'neuer saldo', 'endsaldo', 'schlusssaldo', 'kontostand neu', 'saldo neu'
+  'neuer kontostand', 'neuer saldo', 'endsaldo', 'schlusssaldo', 'kontostand neu', 'saldo neu',
+  KONTOSTAND_PER
 ]
+
+/**
+ * A printed opening/closing BALANCE line is a statement SUMMARY, not a transaction — even when it
+ * carries a booking-column date and a figure (the Raiffeisen `Kontostand per 31.03.2026 35.037,04`
+ * shape, which the geometry column model cannot distinguish from a transaction because the date sits in
+ * the Datum column). Counting it as a transaction both inflates the row count and DOUBLE-COUNTS the
+ * opening/closing into Σamounts, breaking the completeness tie — so the extractor drops any line
+ * matching a balance label; `extractStatementBalances` still reads those same lines for the gate.
+ */
+const BALANCE_LABELS: readonly string[] = [...OPENING_LABELS, ...CLOSING_LABELS]
+
+function isBalanceLabelLine(lowerLine: string): boolean {
+  return BALANCE_LABELS.some((l) => lowerLine.includes(l))
+}
 
 /** The last money token on a line as a number, or null when the line carries no parseable figure. */
 function lastMoneyOnLine(line: string): number | null {
@@ -194,6 +217,9 @@ export function extractTransactionRows(
     for (const rawLine of chunk.text.split(/\r?\n/)) {
       const line = rawLine.trim()
       if (!line) continue
+      // A printed opening/closing balance line is a summary, not a transaction — skip it even though
+      // it may carry a booking-column date + figure (it is read by `extractStatementBalances` instead).
+      if (isBalanceLabelLine(line.toLowerCase())) continue
       const row = parseLine(line, chunk.page, statementCurrency)
       if (row) {
         rows.push(row)
