@@ -1922,7 +1922,11 @@ the seam writes it main-side to a **user-chosen path** via a save dialog, gated 
 confirm — the path + content never touch any log/audit (only "saved N rows" is surfaced), and free-text
 fields are neutralized against spreadsheet formula-injection (S12 fix). The bank `SKILL.md` is
 `kind:'tool'`, which makes its declared `allowedTools` effective (the SL-1 parser path keeps the list only
-for `kind:'tool'`) and uses the reconcile/validate body.
+for `kind:'tool'`) and uses the reconcile/validate body. **Geometry-aware PDF reading for columnar
+statements (Phase 31, D50–D58) + the opening/closing-balance completeness gate are recorded in §21**
+(the `pdf-layout.ts` layout mode + `extractStatementBalances`/`isStatementComplete` extend these same
+bank tools; in-code comments here citing `architecture.md "Skills — design record" §8` for the bank
+domain still resolve, the geometry specifics live in §21).
 
 **The invoice skill is the SECOND Tier-2 reference** (`app-skills/invoice/`, `id:'invoice'`), proving the
 gate generalizes to a second content-class domain with strong EN+DE coverage. It mirrors bank-statement
@@ -2495,6 +2499,122 @@ relevance path). `skills-analysis-whole-doc.test.ts` also pins the `what-changed
 the fence + the whole transcript in the user turn, the refuse path with no model call, and an off-topic
 question keeping the relevance path with no `capped` coverage).
 
+### §21 Geometry-aware PDF bank-statement extraction (Phase 31, 2026-06-23, D50–D58)
+
+_Folded from `docs/pdf-geometry-extraction-plan.md` (deleted at the Stage-1 closeout per the
+CLAUDE.md doc-lifecycle rule; the full working paper — every option, the Stage-2 design, the
+corroborating research — is in git history via `git log --follow` on that path). In-code comments
+cite the plan's anchors (`§3.1` row/column reconstruction, `§3.2` the non-breaking `parseDate`
+guarantee, `§3.5` the completeness gate, `D50`–`D58`); read them against this record (the legend below
+maps them). Branch `pdf-geometry-extraction`._
+
+**The gap this closes.** A real user analysed a German HypoVereinsbank statement with
+`app:bank-statement` and got **zero transactions**. Root cause was the PDF parser, not the regex
+tools: `parsers/pdf.ts` calls `page.getTextContent()` — whose items carry `transform` (x/y) +
+`width` — but keeps only `str`/`hasEOL` and concatenates in pdf.js *reading order*. A columnar
+statement (date · description · amount, year in the page header) therefore arrives as scrambled
+interleaved lines, so almost no row survives `parseLine` (which needs a full date token and the amount
+on one line), and bare `DD.MM.` per-row dates with the year only in the header are rejected by
+`parseDate`. The geometry needed to rebuild the columns was already fetched and thrown away.
+
+**Decisions (the ones that bind as built).**
+- **D50 — Hybrid, Node-native, no Python sidecar.** Deterministic geometry-first extraction; a
+  constrained local-LLM only as a *future* verified fallback. We already ship `pdfjs-dist` and the
+  coordinates are in the object we iterate — the gap is discarded data, not a missing ecosystem, so a
+  second runtime (pdfplumber/camelot) would buy column clustering we write in ~100 lines of TS at the
+  cost of bundle size / code-signing / a second binary to verify. **No new runtime dependency.**
+- **D51 — A layout MODE of the existing parser, reached through the existing re-parse seam** — not a
+  new standalone reader. A standalone reader taking "the original PDF path" cannot work in an encrypted
+  workspace (no plaintext path; the bytes exist only as a transient `extractDocumentPreview` decrypts
+  and shreds). Threading a `layout` flag through `ParseContext` → `PdfParser.parse()` reuses the
+  decrypt/OCR/shred/page-cap machinery and keeps the R5 relevance path unchanged.
+- **D52 — Stage 1 first; ship + measure; the LLM is gated.** Stage 2 (the constrained-LLM fallback)
+  lands ONLY if Stage-1 deterministic recall on the local-only gold set proves below ~90%. Measure
+  before building the expensive path. **Not yet closed** — see "Conditional future" below.
+- **D53/D55 — (Stage 2, not built).** Any future LLM row must carry a verbatim `grounding_quote`
+  verified against the source then balance-reconciled (drop-on-failure, never guess); it needs
+  grammar-constrained decoding plumbed through the `llama-server` HTTP sidecar (a `json_schema`/GBNF
+  request field the runtime seam does not expose today). Recorded for when D52 triggers it.
+- **D54/D56 — Honesty + the completeness gate (the cardinal safety property).** Never present an
+  invented or partial total. A partial read (17 of 20 rows) is *worse* than today's empty result — it
+  is a confident WRONG total. The only true proof a total is whole is the printed **opening + Σamounts
+  == closing**; capturing those statement-level balances was explicit Stage-1 scope (we did not store
+  them before). When completeness cannot be proven, downgrade to an honest "couldn't confirm the whole
+  statement" message — never a partial sum dressed up as the total.
+- **D57 — The gold set is LOCAL-ONLY / gitignored.** Real bank statements are user financial data
+  (CLAUDE.md "never commit user data"); only aggregate metrics are committed, and every *test* fixture
+  is synthetic (`makeColumnarPdf`), never a real statement or excerpt.
+- **D58 — Layout mode is bank-statement ONLY.** The invoice skill is label/line-scan based, so
+  column-reconstructed text could shift its line composition — adopt layout there (if ever) only behind
+  its own measurement. Redaction/preview/translate/compare/ingest never set `layout`.
+
+**Design as built (deterministic, offline, ZERO model calls).**
+- **`ingestion/parsers/pdf-layout.ts`** — pure geometry reconstruction. `clusterRows` groups
+  positioned words into visual rows by baseline y (tolerance band for jitter/superscripts), top-to-
+  bottom, each row left-to-right. `resolvePageYear` resolves the page year (first fully-printed
+  `DD.MM.YYYY`, else a header-band 4-digit token, else null → bare rows dropped unless the caller
+  supplies a document-level fallback year). `reconstructLine` emits one clean `<DD.MM.YYYY> <desc>
+  <amount> [<balance>]` per transaction row — the year resolved *during reconstruction* (§3.2: the
+  token reaching the SHARED `parseDate` is already a full date, so `parseDate` — used by invoice +
+  redaction — is **untouched by construction**). A row with no resolvable date / no amount / no
+  description is dropped, never invented.
+- **The booking-date COLUMN MODEL (`detectDatumColumn`/`inDatumColumn`, §3.1.3) — the precision fix
+  (2026-06-23).** The gold-set measurement found Stage 1 OVER-extracting the Raiffeisen "Mein ELBA"
+  statement (26 real rows → 43): its Valuta/value-date column prints on a SECOND baseline that aligns
+  with a row's second description line, and that continuation hides a foreign-currency reference amount
+  (`39,00 USD`); `reconstructLine` saw a date (the Valuta) + a money token (the FX) and emitted a
+  spurious transaction. `detectDatumColumn` clusters every date-token x into bands and picks the
+  **densest, leftmost** band (the booking column prints one date per row, so it is densest; density-
+  first guards against a stray header/period date further left defining a phantom column). A row
+  qualifies as a transaction ONLY when its lead date sits in that band; an out-of-column date (Valuta,
+  or a mid-line label date) is dropped — and the non-transaction RAW fallback (`rowText`) also drops
+  out-of-column dates so a Valuta line can't be re-extracted by the date-leading `parseLine`.
+- **The BALANCE-LABEL GUARD (`isBalanceLabelLine`, `bank-statement.ts`) — the other half of the fix.**
+  Raiffeisen prints opening/closing as `Kontostand per <date>` with the date IN the Datum column, so
+  geometry alone can't reject it. `'kontostand per'` is added to BOTH `OPENING_LABELS` and
+  `CLOSING_LABELS` (the existing "first opening / last closing" rule then reads opening `35.037,04`
+  from the period-start line and closing `30.647,07` from the period-end line; "Aktueller Kontostand"
+  deliberately excluded — it restates the closing at the top and would corrupt the opening), and
+  `extractTransactionRows` SKIPS any balance-label line so a summary is never counted as a transaction
+  (it is still read by `extractStatementBalances`). This stops the double-count that broke the tie.
+- **The completeness gate (D56).** New `extractStatementBalances` (printed opening/closing, EN+DE
+  labels incl. `balance brought/carried forward`, `opening/closing balance`, `Anfangs-/Endsaldo`,
+  `Kontostand per`) + `isStatementComplete` (`opening + Σ == closing` within `MONEY_EPS` AND no per-row
+  running-balance mismatch — a clean chain is necessary-not-sufficient). Persisted additively on
+  `bank_statements` (`opening_balance`/`closing_balance`, REAL, nullable, content-class — never
+  logged/audited/exported). `buildBankAnswer` presents a single-currency total ONLY when proven
+  complete; otherwise it downgrades to `skills.bankAnalysis.incompleteNoTotal` (EN+DE). Mixed-currency
+  reports no-single-total (safe).
+- **Wiring (D51/D58).** `readDocumentSegments(id, {layout})` → `extractDocumentPreview` (now accepting
+  `layout` + the `maxPages` cap, a DoS guard since per-page clustering is uncapped otherwise) →
+  `ParseContext.layout` → `PdfParser` layout mode (scan-detection re-keyed on RAW text so an empty
+  reconstruction is never mistaken for an image-only scan). The bank analysis handler sets
+  `layout:true`; every other caller is byte-unchanged.
+
+**Gold-set result (local-only corpus, D57; post-precision-fix, 2026-06-23).** Two statements — a
+sanitized HVB transactions-only excerpt and a full Raiffeisen "Mein ELBA" statement: micro recall
+**100% (71/71)**, gate pass **50% (1/2** — Raiffeisen presents the correct total; the HVB excerpt with
+no printed balances correctly downgrades**)**, figure-exact-match **100% (1/1)**, hallucinated /
+partial-total / model-calls all **0**.
+
+**Conditional future — Stage 2 is NOT built and NOT a planned next step.** It lands only if D52's
+breadth evidence (more banks/layouts — Sparkasse/ING/DKB + invoices) shows Stage-1 deterministic recall
+below ~90% on a layout the completeness gate can't honestly downgrade. Two statements is strong but
+narrow evidence; the corpus is too small to close D52, so Stage 1 is the shipped extractor for the
+verified layouts and Stage 2 remains deferred + unapproved.
+
+**Tests.** `tests/unit/pdf-layout.test.ts` (clustering, `toFullDate` year resolution proving
+`parseDate` is untouched, `detectDatumColumn` density/leftmost/tie, out-of-column-date rejection,
+value-date drop, balance-line preservation, fallback-year). `tests/integration/pdf-bank-layout.test.ts`
+(SYNTHETIC columnar PDFs via `makeColumnarPdf`: text-mode loses every row while layout-mode recovers
+them + the correct total + honest coverage + citations + 0 model calls; a non-tying balance MUST
+downgrade; the Raiffeisen Valuta/second-baseline + `Kontostand per` regression pins the column model;
+and the Phase-31 breadth set — English `Balance brought/carried forward` gate-pass, an English value-
+date second baseline rejected, an English running-balance-only downgrade, a multi-line wrapped
+description). `tests/real-data/pdf-goldset.realdata.test.ts` is the LOCAL-ONLY, gitignored, gated
+(`HILBERTRAUM_PDF_GOLDSET=1`) gold-set harness — aggregate metrics only, 0 model calls, skipped in
+`npm test`.
+
 ### §-anchor legend (historical plan citations)
 
 The wave's plan files were folded into this record (S2–S12 into §1–§12; **S13 into §18**) and
@@ -2525,6 +2645,10 @@ without churning ~150 comments. Read a historical `§N` as:
 | §22-M1 | Content-class rule — ids/counts only; no content in log/audit/IPC | §2 (the consolidated sentinel guard) |
 | §22-M2 | App-skill integrity by location, not signature (accepted residual) | §12 + security-model |
 | §22-M4 | v1 permissions are a display summary; nothing executes | §1 (DS6) |
+| `pdf-geometry-extraction-plan.md` §3.1 / §3.1.3 | Row/column reconstruction; the booking-date column model | §21 (`pdf-layout.ts`) |
+| `pdf-geometry-extraction-plan.md` §3.2 | The non-breaking `parseDate` guarantee (year resolved in reconstruction) | §21 |
+| `pdf-geometry-extraction-plan.md` §3.5 / D56 | The opening/closing-balance completeness gate (no partial totals) | §21 |
+| `pdf-geometry-extraction-plan.md` D50–D58 | Stage-1 architecture decisions (geometry-first; Stage 2 conditional) | §21 |
 
 
 ## Image understanding — design record (Phases V1–V5, §1–§10)

@@ -292,8 +292,8 @@ password recovery — are documented in
   presents them as labelled blocks, instead of top-k. A tree-backed compare (the §20 map-reduce applied
   per oversized doc *inside* the compare) remains a documented follow-up — today an oversized compared
   doc is read capped, not tree-reduced.
-- **Bank-statement extraction reads PDF GEOMETRY (Stage 1; PDF geometry-extraction plan, Phase 31,
-  D50–D58).** A columnar PDF statement (date · description · amount, with the year in the page header)
+- **Bank-statement extraction reads PDF GEOMETRY (Stage 1; architecture.md "Skills — design record"
+  §21, Phase 31, D50–D58).** A columnar PDF statement (date · description · amount, with the year in the page header)
   used to arrive as scrambled reading-order text, so almost no transaction survived the line-oriented
   parser (the user-reported HVB "zero transactions" failure). The bank-statement skill now re-parses
   the PDF in a **layout mode** that rebuilds visual rows from pdf.js word coordinates and emits clean,

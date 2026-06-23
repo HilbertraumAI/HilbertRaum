@@ -6,6 +6,28 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-23 — **PHASE 31 CLOSED — PDF geometry-aware bank-statement extraction (Stage 1) condensed into the design record;
+plan file deleted (doc-lifecycle); branch `pdf-geometry-extraction`, unmerged.** Stage 1 is the shipped extractor for the
+verified layouts; Stage 2 stays DEFERRED + unapproved (D52 not closed — the gold set is too narrow). **Done this session:**
+- **Synthetic BREADTH coverage (Task 1, D57 — synthetic only):** four new `makeColumnarPdf` fixtures in
+  `tests/integration/pdf-bank-layout.test.ts` for layouts the two German gold-set statements don't exercise — (a) ENGLISH
+  `Balance brought/carried forward` that ties out → the D56 gate PRESENTS the total in English; (b) an ENGLISH value-date
+  column on a SECOND baseline → `detectDatumColumn` (density-wins) rejects it, no spurious FX row; (c) an ENGLISH
+  running-balance-only statement with NO printed opening/closing → the honest gate DOWNGRADE (`incompleteNoTotal`); (d) a
+  multi-line wrapped description → the booking row still extracts cleanly (the text-only continuation makes no spurious row).
+  Full desktop suite **2190 passed / 37 skipped (+4)**; typecheck clean. `parseDate` untouched (§3.2); layout mode bank-only (D58).
+- **DOC-LIFECYCLE close (Task 2):** condensed `docs/pdf-geometry-extraction-plan.md` into **architecture.md "Skills — design
+  record" §21** (decisions D50–D58 + the facts they rest on + the design AS BUILT: the column model, the balance-label guard,
+  the completeness gate, the post-fix gold-set numbers, and Stage 2 framed as a CONDITIONAL future, not a planned step). Added a
+  §8 pointer to §21 and §-anchor legend rows mapping the plan's `§3.1/§3.2/§3.5 + D50–D58` (cited in code comments) to §21, so
+  those comments stay resolvable without churning them. **Deleted the plan file** (full original in git history).
+  `known-limitations.md` repointed at §21.
+- **Gold set RE-RUN (unchanged, local-only corpus already on this machine):** recall **100% (71/71)**, gate pass **50% (1/2)**,
+  figure-exact **100% (1/1)**, hallucinated/partial-total/model-calls all **0** — the breadth fixtures don't touch the corpus.
+- **NEXT:** the per-phase ritual is satisfied (tests green, docs + BUILD_STATE updated, commits on-branch). Merge prep only —
+  AWAITING approval to push / open the `pdf-geometry-extraction` → `master` PR. Stage 2 NOT to be built; D52 closes only on
+  breadth evidence (more banks/layouts) showing Stage-1 recall < ~90% on a layout the gate cannot honestly downgrade._
+
 _2026-06-23 — **PDF geometry-extraction — Stage-1 PRECISION FIX (column model + balance-label guard) closes the Raiffeisen
 over-extraction (Phase 31, D52/D56/D57; branch `pdf-geometry-extraction`).** The first gold-set measurement (entry below) found
 Stage 1 OVER-extracting the full Raiffeisen "Mein ELBA" statement to 43 rows so the D56 gate could not present a total, even though the
