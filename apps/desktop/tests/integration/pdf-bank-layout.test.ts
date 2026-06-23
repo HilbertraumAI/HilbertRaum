@@ -323,3 +323,180 @@ describe('PDF layout mode — Raiffeisen Valuta/second-baseline + Kontostand-per
     expect(res.answer).not.toContain('Net change')
   })
 })
+
+// ---------------------------------------------------------------------------------------------------
+// Synthetic BREADTH coverage (Phase 31, Task 1; D57 — synthetic only, never a real statement). The two
+// real gold-set statements are both German; these fixtures exercise layouts the code now claims to
+// handle but those two don't: ENGLISH opening/closing labels on the gate-PASS path, an ENGLISH
+// value-date column on a second baseline (the column-model rejection in English), the honest gate
+// DOWNGRADE for a running-balance-only statement with NO printed opening/closing (in English), and a
+// multi-line wrapped description row (the booking row must still extract cleanly). All `makeColumnarPdf`.
+describe('PDF layout mode — synthetic breadth (English labels, EN value-date, EN downgrade, wrapped desc)', () => {
+  // (a) English opening/closing labels that tie out → the gate PRESENTS the total, in English.
+  it('English Balance brought/carried forward that ties out → gate presents the total (EN)', async () => {
+    // English amounts use comma-thousands/dot-decimal (1,000.00) — parseAmount reads both locales.
+    const EC = { date: 50, desc: 160, amount: 420, balance: 500 }
+    const cells: PdfCell[] = []
+    // Header carries the year (bare per-row dates below) + the currency.
+    cells.push({ text: 'Account Statement 2023 - all amounts in USD', x: 50, y: 750 })
+    cells.push(
+      { text: 'Date', x: EC.date, y: 720 },
+      { text: 'Description', x: EC.desc, y: 720 },
+      { text: 'Amount', x: EC.amount, y: 720 },
+      { text: 'Balance', x: EC.balance, y: 720 }
+    )
+    // Opening label (no date → raw line, read only by the balance gate).
+    cells.push({ text: 'Balance brought forward', x: EC.desc, y: 700 }, { text: '1,000.00', x: EC.amount, y: 700 })
+    const rows = [
+      { d: '01.05.', desc: 'Payroll', amt: '2,000.00', bal: '3,000.00' },
+      { d: '02.05.', desc: 'Rent', amt: '-800.00', bal: '2,200.00' },
+      { d: '03.05.', desc: 'Card payment', amt: '-200.00', bal: '2,000.00' }
+    ]
+    let y = 680
+    for (const r of rows) {
+      cells.push(
+        { text: r.d, x: EC.date, y },
+        { text: r.desc, x: EC.desc, y },
+        { text: r.amt, x: EC.amount, y },
+        { text: r.bal, x: EC.balance, y }
+      )
+      y -= 20
+    }
+    // Closing label ties out: opening 1000 + Σ(2000−800−200=1000) == 2000.
+    cells.push({ text: 'Balance carried forward', x: EC.desc, y }, { text: '2,000.00', x: EC.amount, y })
+
+    const pdfPath = writePdf(cells)
+    const segments = await parseSegments(pdfPath, true)
+    const db = freshDb()
+    const docId = seedDoc(db, segments)
+    const res = await bankStatementAnalysisHandler.run!(ctxFor(db, docId, 'what is the total?', pdfPath))
+
+    expect(res.answer).toContain(tr('skills.bankAnalysis.count', { count: 3 }))
+    expect(res.answer).toContain('Net change') // the English totals line is presented
+    expect(res.answer).toContain('2000.00') // money in (Payroll)
+    expect(res.answer).toContain('1000.00') // money out (800 + 200) AND net (2000 − 1000)
+    expect(res.answer).toContain('USD')
+    expect(res.answer).not.toContain(tr('skills.bankAnalysis.incompleteNoTotal'))
+  })
+
+  // (b) An English value-date column on a SECOND baseline → detectDatumColumn rejects it: no spurious row.
+  it('English value-date on a second baseline → column model rejects it (no spurious FX row)', async () => {
+    const BC = { date: 50, value: 110, desc: 170, amount: 440, balance: 510 }
+    const cells: PdfCell[] = []
+    cells.push({ text: 'Monthly Statement 2024 - amounts in USD', x: 50, y: 760 })
+    cells.push(
+      { text: 'Date', x: BC.date, y: 740 },
+      { text: 'Value', x: BC.value, y: 740 },
+      { text: 'Description', x: BC.desc, y: 740 },
+      { text: 'Amount', x: BC.amount, y: 740 },
+      { text: 'Balance', x: BC.balance, y: 740 }
+    )
+    const rows = [
+      { d: '05.04.', desc: 'Salary', amt: '1,000.00', bal: '6,000.00', v: '07.04.', cont: 'Reference ePayment 39.00 GBP' },
+      { d: '12.04.', desc: 'Rent', amt: '-500.00', bal: '5,500.00', v: '14.04.', cont: 'Landlord ref 12.50 CHF' },
+      { d: '20.04.', desc: 'Groceries', amt: '-60.00', bal: '5,440.00', v: '22.04.', cont: 'Card auth 7.25 SEK' }
+    ]
+    let y = 720
+    for (const r of rows) {
+      // Booking baseline: booking date (Datum column, x=50) · description · amount · balance.
+      cells.push(
+        { text: r.d, x: BC.date, y },
+        { text: r.desc, x: BC.desc, y },
+        { text: r.amt, x: BC.amount, y },
+        { text: r.bal, x: BC.balance, y }
+      )
+      // Second baseline (12pt lower): ONLY the value-date (x=110, out of column) + an FX reference amount.
+      cells.push({ text: r.v, x: BC.value, y: y - 12 }, { text: r.cont, x: BC.desc, y: y - 12 })
+      y -= 30
+    }
+
+    const layoutRows = extractTransactionRows(await parseSegments(writePdf(cells), true), 'USD')
+    // Exactly the three booking rows — density (3 dates at x=50) makes x=50 the booking column, so the
+    // value-date column at x=110 cannot qualify the second-baseline rows.
+    expect(layoutRows).toHaveLength(3)
+    expect(layoutRows.map((r) => r.amount)).toEqual([1000, -500, -60])
+    expect(layoutRows.map((r) => r.date)).toEqual(['2024-04-05', '2024-04-12', '2024-04-20'])
+    // The foreign-currency reference amounts hidden in the continuation lines were NOT extracted.
+    for (const fx of [39, 12.5, 7.25, -39, -12.5, -7.25]) {
+      expect(layoutRows.map((r) => r.amount)).not.toContain(fx)
+    }
+  })
+
+  // (c) A running-balance-only statement with NO printed opening/closing → the honest gate DOWNGRADE (EN).
+  it('English running-balance-only (no opening/closing) → honest downgrade, no total', async () => {
+    const RC = { date: 50, desc: 160, amount: 420, balance: 500 }
+    const cells: PdfCell[] = []
+    cells.push({ text: 'Statement 2022 in GBP', x: 50, y: 750 })
+    cells.push(
+      { text: 'Date', x: RC.date, y: 720 },
+      { text: 'Description', x: RC.desc, y: 720 },
+      { text: 'Amount', x: RC.amount, y: 720 },
+      { text: 'Balance', x: RC.balance, y: 720 }
+    )
+    // Three real rows WITH running balances but NO Balance brought/carried forward lines anywhere.
+    const rows = [
+      { d: '01.06.', desc: 'Refund', amt: '150.00', bal: '1,150.00' },
+      { d: '02.06.', desc: 'Subscription', amt: '-9.99', bal: '1,140.01' },
+      { d: '03.06.', desc: 'Coffee shop', amt: '-4.50', bal: '1,135.51' }
+    ]
+    let y = 700
+    for (const r of rows) {
+      cells.push(
+        { text: r.d, x: RC.date, y },
+        { text: r.desc, x: RC.desc, y },
+        { text: r.amt, x: RC.amount, y },
+        { text: r.bal, x: RC.balance, y }
+      )
+      y -= 20
+    }
+
+    const pdfPath = writePdf(cells)
+    const segments = await parseSegments(pdfPath, true)
+    const db = freshDb()
+    const docId = seedDoc(db, segments)
+    const res = await bankStatementAnalysisHandler.run!(ctxFor(db, docId, 'what is the total spending?', pdfPath))
+
+    // The rows are read, but with no opening/closing balance to tie against, completeness is unprovable.
+    expect(res.answer).toContain(tr('skills.bankAnalysis.count', { count: 3 }))
+    expect(res.answer).toContain(tr('skills.bankAnalysis.incompleteNoTotal'))
+    expect(res.answer).not.toContain('Net change')
+  })
+
+  // (d) A multi-line wrapped description row → the booking row still extracts cleanly (the wrap is a
+  //     separate text-only visual row with no booking-column date/amount, so it is dropped, not a row).
+  it('multi-line wrapped description → the booking row still extracts cleanly', async () => {
+    const WC = { date: 50, desc: 160, amount: 420, balance: 500 }
+    const cells: PdfCell[] = []
+    cells.push({ text: 'Statement 2024 in EUR', x: 50, y: 750 })
+    cells.push(
+      { text: 'Date', x: WC.date, y: 720 },
+      { text: 'Description', x: WC.desc, y: 720 },
+      { text: 'Amount', x: WC.amount, y: 720 },
+      { text: 'Balance', x: WC.balance, y: 720 }
+    )
+    const rows = [
+      { d: '10.06.', desc: 'Direct Debit Insurance', amt: '-45.00', bal: '955.00', cont: 'Policy 12345 monthly premium' },
+      { d: '15.06.', desc: 'Transfer received', amt: '300.00', bal: '1,255.00', cont: 'Sender Mustermann GmbH order 778899' }
+    ]
+    let y = 700
+    for (const r of rows) {
+      cells.push(
+        { text: r.d, x: WC.date, y },
+        { text: r.desc, x: WC.desc, y },
+        { text: r.amt, x: WC.amount, y },
+        { text: r.bal, x: WC.balance, y }
+      )
+      // The wrapped second description line (10pt lower → its own visual row): TEXT only, no date, no
+      // money token (the integers 12345/778899 lack a decimal tail, so MONEY_RE never matches them).
+      cells.push({ text: r.cont, x: WC.desc, y: y - 10 })
+      y -= 26
+    }
+
+    const layoutRows = extractTransactionRows(await parseSegments(writePdf(cells), true), 'EUR')
+    // Exactly the two booking rows — the wrapped continuation lines produced no spurious rows.
+    expect(layoutRows).toHaveLength(2)
+    expect(layoutRows[0]).toMatchObject({ date: '2024-06-10', amount: -45, balanceAfter: 955 })
+    expect(layoutRows[1]).toMatchObject({ date: '2024-06-15', amount: 300 })
+    expect(layoutRows[0].description).toContain('Direct Debit Insurance')
+  })
+})
