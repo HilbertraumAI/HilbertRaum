@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   clusterRows,
+  detectDatumColumn,
   reconstructLine,
   reconstructPage,
   resolvePageYear,
@@ -92,7 +93,46 @@ describe('resolvePageYear', () => {
   })
 })
 
+describe('detectDatumColumn (the booking-date column model §3.1.3)', () => {
+  it('picks the densest, leftmost date column (booking column over Valuta)', () => {
+    // Two booking rows (date at x=50) and two Valuta-only continuation rows (date at x=110).
+    const rows = [
+      [word('05.04.', 50, 700)],
+      [word('07.04.', 110, 688)],
+      [word('12.04.', 50, 668)],
+      [word('14.04.', 110, 656)]
+    ]
+    expect(detectDatumColumn(rows)).toEqual({ min: 50, max: 50 })
+  })
+
+  it('a stray header date further left than the booking column does not steal the column (density wins)', () => {
+    const rows = [
+      [word('01.01.', 20, 800)], // a single stray date at the far left
+      [word('05.04.', 50, 700)],
+      [word('12.04.', 50, 680)],
+      [word('20.04.', 50, 660)]
+    ]
+    // Density (three booking dates at 50) beats the lone leftmost date at 20.
+    expect(detectDatumColumn(rows)).toEqual({ min: 50, max: 50 })
+  })
+
+  it('returns null when the page has no date tokens', () => {
+    expect(detectDatumColumn([[word('Kontostand', 50, 700)]])).toBeNull()
+  })
+})
+
 describe('reconstructLine', () => {
+  it('rejects a row whose only date is OUTSIDE the booking-date column (Valuta line)', () => {
+    // The Valuta date (x=110) is out of the Datum band {50}; the FX amount must not make it a row.
+    const row: LayoutWord[] = [word('07.04.', 110, 688), word('Zahlungsreferenz 39,00 USD', 170, 688)]
+    expect(reconstructLine(row, 2025, { min: 50, max: 50 })).toBeNull()
+  })
+
+  it('accepts a row whose lead date IS in the booking-date column', () => {
+    const row: LayoutWord[] = [word('05.04.', 50, 700), word('Gehalt', 170, 700), word('1.000,00', 440, 700)]
+    expect(reconstructLine(row, 2025, { min: 50, max: 50 })).toBe('05.04.2025 Gehalt 1.000,00')
+  })
+
   it('emits <full date> <description> <amount> <balance>; drops the value-date column', () => {
     // A real HVB-shaped row: booking date · value date · description · amount · running balance.
     const row: LayoutWord[] = [
@@ -166,6 +206,25 @@ describe('reconstructPage (end-to-end on word boxes)', () => {
     const lines = reconstructPage(words, { fallbackYear: 2024 }).text.split('\n')
     expect(lines).toContain('Anfangssaldo 2.000,00')
     expect(lines).toContain('Endsaldo 4.000,00')
+  })
+
+  it('drops a Valuta second-baseline row and strips its out-of-column date from the raw text', () => {
+    const words: LayoutWord[] = [
+      // Booking baseline (date in the Datum column at x=50).
+      word('05.04.', 50, 700),
+      word('Gehalt ACME', 170, 700),
+      word('1.000,00', 440, 700),
+      // Second baseline 12 pt lower: Valuta date (x=110, out of column) + an FX reference amount.
+      word('07.04.', 110, 688),
+      word('Zahlungsreferenz ePAYMENT 39,00 USD', 170, 688)
+    ]
+    const lines = reconstructPage(words, { fallbackYear: 2025 }).text.split('\n')
+    // The booking row is a clean transaction…
+    expect(lines).toContain('05.04.2025 Gehalt ACME 1.000,00')
+    // …and the continuation row survives as raw text WITHOUT its leading Valuta date, so the
+    // date-leading line parser can never re-extract it as a spurious transaction.
+    expect(lines).toContain('Zahlungsreferenz ePAYMENT 39,00 USD')
+    expect(lines.some((l) => /^\d{1,2}\.\d{1,2}\./.test(l) && l.includes('39,00'))).toBe(false)
   })
 
   it('uses the document-level fallback year for a page whose header carries none', () => {

@@ -6,6 +6,35 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-23 — **PDF geometry-extraction — Stage-1 PRECISION FIX (column model + balance-label guard) closes the Raiffeisen
+over-extraction (Phase 31, D52/D56/D57; branch `pdf-geometry-extraction`).** The first gold-set measurement (entry below) found
+Stage 1 OVER-extracting the full Raiffeisen "Mein ELBA" statement to 43 rows so the D56 gate could not present a total, even though the
+statement ties out. Root cause: `reconstructLine` classified tokens by regex with NO column model, so (a) the Valuta/value-date column —
+printed on a SECOND baseline aligned with a row's second description line, with a foreign-currency reference amount (`39,00 USD`) hidden in
+that line — was emitted as a spurious transaction, and (b) the `Kontostand per <date>` opening/closing lines were mis-read as transactions.
+**As built (typecheck + full suite green, 2186 passed / 37 skipped, +9 tests):**
+- **`pdf-layout.ts` booking-date column model** — `detectDatumColumn` clusters every date token's x into bands and picks the DENSEST,
+  leftmost (the booking column prints one date per row; density-first guards against a stray header/period date further left). `rowTokens`
+  now carries each token's x; `reconstructLine(row, year, datum)` qualifies a row ONLY when its lead date sits in that column — a Valuta or
+  mid-line date no longer makes a transaction. The non-transaction RAW fallback also DROPS out-of-column date tokens, so a Valuta line whose
+  leftmost token is a full value-date can't be RE-EXTRACTED by the date-leading `parseLine`. `parseDate` untouched (§3.2); `datum`
+  null/omitted keeps legacy behaviour for direct unit calls.
+- **`bank-statement.ts` balance-label guard** — `'kontostand per'` added to BOTH `OPENING_LABELS` and `CLOSING_LABELS` (the existing
+  first-opening/last-closing rule then reads opening `35.037,04` from the `per 31.03` line and closing `30.647,07` from the `per 23.06`
+  line; "Aktueller Kontostand" deliberately NOT added — it restates the closing at the top and would corrupt the opening). New
+  `isBalanceLabelLine` makes `extractTransactionRows` SKIP any balance-label line: in the real layout the `Kontostand per` date sits IN the
+  Datum column, so geometry alone can't reject it — but a balance line is a summary, never a transaction (it is still read by
+  `extractStatementBalances`). This stops the double-count that broke the tie.
+- **Synthetic regression (D57 — never a real statement):** `pdf-bank-layout.test.ts` extended with a Raiffeisen-shaped `makeColumnarPdf`
+  fixture (Valuta date on a second baseline + FX reference amount in the description; `Kontostand per` pseudo-rows with the date IN the Datum
+  column) — asserts exactly the real rows extract, balances are found, and the gate presents the correct total; plus a non-tying variant that
+  must still downgrade. `pdf-layout.test.ts` adds `detectDatumColumn` + out-of-column-date unit coverage.
+- **GOLD SET RE-RUN (local-only, the real HVB + Raiffeisen corpus already on this machine):** micro recall **123.9% → 100.0% (71/71)**,
+  macro 100%, full-recall 2/2, **gate pass 0% → 50% (1/2** — Raiffeisen now presents the total; the HVB excerpt with no printed balances
+  correctly downgrades**)**, **figure-exact-match 100% (1/1)**, hallucinated 0 / partial-total 0 / model-calls 0. **D52 NOT yet closed:** two
+  statements is strong but narrow evidence; still need breadth (Sparkasse/ING/DKB + invoices) before declaring Stage 1 sufficient and
+  condensing the plan into architecture.md §8. Stage 2 remains unbuilt and unapproved._
+
 _2026-06-23 — **PDF geometry-extraction — gold-set measurement harness landed + FIRST real measurement (Phase 31, D52/D57; branch
 `pdf-geometry-extraction`).** New LOCAL-ONLY, gitignored, gated harness `apps/desktop/tests/real-data/pdf-goldset.realdata.test.ts`
 (+README) runs real statements through the ACTUAL Stage-1 path (`PdfParser.parse({layout:true,maxPages})` → `bankStatementAnalysisHandler`)

@@ -299,9 +299,15 @@ password recovery — are documented in
   the PDF in a **layout mode** that rebuilds visual rows from pdf.js word coordinates and emits clean,
   year-resolved `DD.MM.YYYY` rows — **deterministic, offline, zero model calls** (`parsers/pdf-layout.ts`).
   Enabled for **bank-statement only** (D58 — invoice/redaction/preview keep byte-unchanged reading-order
-  text); `parseDate` is untouched (the year is resolved during reconstruction, §3.2). **Column
-  clustering is heuristic** (statements vary; an amount embedded in a description, or an unusual column
-  geometry, can still be mis-read), so a **completeness gate** (D56) guards every total: a single-currency
+  text); `parseDate` is untouched (the year is resolved during reconstruction, §3.2). A **booking-date
+  column model** (`detectDatumColumn`) keeps a row from being mis-read as a transaction unless its LEAD
+  date sits in the statement's leftmost, densest date column — so a value-date (Valuta) column printed
+  on a second baseline, with a foreign-currency reference amount hidden in its description, is no longer
+  emitted as a spurious row (the Raiffeisen "Mein ELBA" over-extraction the gold set surfaced). A line
+  matching an opening/closing **balance label** (incl. `Kontostand per <date>`) is treated as a summary
+  and never counted as a transaction even when it carries a booking-column date + figure (it is read
+  only by the completeness gate). **Column clustering is still heuristic** (statements vary; an unusual
+  column geometry can mis-read a row), so a **completeness gate** (D56) guards every total: a single-currency
   total is presented **only when the printed opening + Σamounts == closing balance ties out** (a clean
   per-row running-balance chain is necessary but not sufficient). When completeness cannot be **proven**
   — no printed opening/closing balance, a non-tying balance, or any per-row mismatch — the skill **does
@@ -310,7 +316,11 @@ password recovery — are documented in
   downgrade rather than a total, by design (a partial read must never become a confident wrong total).
   **Stage 2** (a grammar-constrained local-LLM fallback on the residual hard subset, D52/D55) is **not
   built** — it lands only if the Stage-1 deterministic recall on the local-only gold set (D57) proves
-  insufficient.
+  insufficient. On the current (small) gold set — a sanitized HVB transactions-only excerpt and a full
+  Raiffeisen "Mein ELBA" statement — Stage 1 reaches **100% transaction recall (71/71)** with **0
+  hallucinated/partial totals and 0 model calls**; the gate presents the correct total on the statement
+  that prints opening/closing balances and honestly downgrades the excerpt that does not. The corpus is
+  still too narrow to close D52; breadth across more banks/layouts is the remaining gate input.
 - **Strictly one job at a time (D26).** While a summary runs, chat is refused with a
   friendly message + a cancel option, and vice versa — the one local model serves one
   request. The R-T1 probe confirmed the pinned b9585 WOULD serve concurrent requests on
