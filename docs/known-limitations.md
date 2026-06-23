@@ -315,12 +315,15 @@ password recovery — are documented in
   (EN+DE). The consequence: a real statement that prints no opening/closing balance gets the honest
   downgrade rather than a total, by design (a partial read must never become a confident wrong total).
   **Stage 2** (a grammar-constrained local-LLM fallback on the residual hard subset, D52/D55) is **not
-  built** — it lands only if the Stage-1 deterministic recall on the local-only gold set (D57) proves
-  insufficient. On the current (small) gold set — a sanitized HVB transactions-only excerpt and a full
-  Raiffeisen "Mein ELBA" statement — Stage 1 reaches **100% transaction recall (71/71)** with **0
-  hallucinated/partial totals and 0 model calls**; the gate presents the correct total on the statement
-  that prints opening/closing balances and honestly downgrades the excerpt that does not. The corpus is
-  still too narrow to close D52; breadth across more banks/layouts is the remaining gate input.
+  built**, but is **expected to be needed eventually** — it lands only if the Stage-1 deterministic
+  recall on the local-only gold set (D57) proves insufficient. On the current (small) gold set — a
+  sanitized HVB transactions-only excerpt and a full Raiffeisen "Mein ELBA" statement — Stage 1 reaches
+  **100% transaction recall (71/71)** with **0 hallucinated/partial totals and 0 model calls**; the gate
+  presents the correct total on the statement that prints opening/closing balances and honestly
+  downgrades the excerpt that does not. The corpus is still too narrow to close D52; because real
+  layouts vary widely (no-printed-balance statements, ruled/borderless tables, scans), deterministic
+  geometry will likely miss some, so Stage 2 should be treated as a **probable future need** — broaden
+  the gold-set corpus across more banks/layouts to confirm and trigger it (it is gated, not abandoned).
 - **Strictly one job at a time (D26).** While a summary runs, chat is refused with a
   friendly message + a cancel option, and vice versa — the one local model serves one
   request. The R-T1 probe confirmed the pinned b9585 WOULD serve concurrent requests on

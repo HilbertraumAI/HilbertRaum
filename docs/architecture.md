@@ -2597,11 +2597,20 @@ sanitized HVB transactions-only excerpt and a full Raiffeisen "Mein ELBA" statem
 no printed balances correctly downgrades**)**, figure-exact-match **100% (1/1)**, hallucinated /
 partial-total / model-calls all **0**.
 
-**Conditional future — Stage 2 is NOT built and NOT a planned next step.** It lands only if D52's
-breadth evidence (more banks/layouts — Sparkasse/ING/DKB + invoices) shows Stage-1 deterministic recall
-below ~90% on a layout the completeness gate can't honestly downgrade. Two statements is strong but
-narrow evidence; the corpus is too small to close D52, so Stage 1 is the shipped extractor for the
-verified layouts and Stage 2 remains deferred + unapproved.
+**Conditional future — Stage 2 is NOT built, but is EXPECTED to be needed eventually.** It is not a
+*planned next step* (it lands only on evidence, per D52), but the expectation is that it **probably will
+be warranted** once the corpus broadens: today's gold set is just **two** statements, and real
+statement layouts vary wildly (no-printed-balance statements that the completeness gate can only
+downgrade, ruled/borderless tables, multi-column or rotated layouts, OCR'd scans). Deterministic
+geometry will almost certainly miss *some* of them, and those are exactly the residual hard subset
+Stage 2 exists to cover. So treat Stage 2 as a **probable future need, gated — not abandoned**: it
+lands only if D52's breadth evidence (more banks/layouts — Sparkasse/ING/DKB + invoices) shows Stage-1
+deterministic recall below ~90% on a layout the completeness gate can't honestly downgrade. The
+discipline is still measure-then-build (don't pay for the LLM path until a real layout proves Stage 1
+insufficient) and its D55 prerequisite (grammar-constrained decoding plumbed through `llama-server`)
+remains real work. Until then Stage 1 is the shipped extractor for the verified layouts; Stage 2
+remains deferred + unapproved, but the recommendation is to expect it and re-run the gold-set harness on
+a broader corpus to trigger it.
 
 **Tests.** `tests/unit/pdf-layout.test.ts` (clustering, `toFullDate` year resolution proving
 `parseDate` is untouched, `detectDatumColumn` density/leftmost/tie, out-of-column-date rejection,

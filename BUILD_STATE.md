@@ -25,8 +25,12 @@ verified layouts; Stage 2 stays DEFERRED + unapproved (D52 not closed — the go
 - **Gold set RE-RUN (unchanged, local-only corpus already on this machine):** recall **100% (71/71)**, gate pass **50% (1/2)**,
   figure-exact **100% (1/1)**, hallucinated/partial-total/model-calls all **0** — the breadth fixtures don't touch the corpus.
 - **NEXT:** the per-phase ritual is satisfied (tests green, docs + BUILD_STATE updated, commits on-branch). Merge prep only —
-  AWAITING approval to push / open the `pdf-geometry-extraction` → `master` PR. Stage 2 NOT to be built; D52 closes only on
-  breadth evidence (more banks/layouts) showing Stage-1 recall < ~90% on a layout the gate cannot honestly downgrade._
+  AWAITING approval to push / open the `pdf-geometry-extraction` → `master` PR. **Stage 2 is NOT built but is EXPECTED to be
+  needed eventually** (recorded in architecture.md §21 + known-limitations): the 2-statement gold set is too narrow, and real
+  layouts vary widely (no-printed-balance statements, ruled/borderless tables, scans) so deterministic geometry will likely
+  miss some — treat Stage 2 as a PROBABLE future need, gated not abandoned. Still measure-then-build: broaden the gold-set
+  corpus (more banks/layouts) and re-run the harness; Stage 2 lands once Stage-1 recall drops < ~90% on a layout the gate
+  cannot honestly downgrade (and carries the D55 grammar-decoding plumbing as real prerequisite work)._
 
 _2026-06-23 — **PDF geometry-extraction — Stage-1 PRECISION FIX (column model + balance-label guard) closes the Raiffeisen
 over-extraction (Phase 31, D52/D56/D57; branch `pdf-geometry-extraction`).** The first gold-set measurement (entry below) found
