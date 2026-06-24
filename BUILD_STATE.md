@@ -6,6 +6,25 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-24 — **Assistant Markdown renderer switched to Streamdown (streaming-aware) + KaTeX math.** Replaced
+`react-markdown` + `remark-gfm` with **Streamdown** (`@streamdown/math` + `katex`) in `Transcript.tsx`'s shared
+`AssistantMarkdown`. **Reverses the FE-1 "live answer is PLAIN TEXT" decision** (architecture.md §FE-1): the live bubble
+now streams Markdown — Streamdown block-memoizes (a flush re-parses only the final block, not the O(n²) whole buffer) and
+`parseIncompleteMarkdown` closes dangling `**bold**`/fences/links so partial syntax formats cleanly instead of flashing raw
+markers. The bubble became `.msg-content.md` (same prose CSS as a persisted turn); the `▋` caret stays a sibling. **Config
+choices:** rehype chain pared to `rehype-sanitize` only — `rehype-raw` dropped so model HTML stays LITERAL TEXT (no-injection
+posture unchanged: `<img onerror>`/`<script>` render as text, never as elements), `rehype-harden` dropped as redundant under
+the CSP (`img-src 'self' data:`) + the http(s)-only `a` override. App ships no Tailwind, so Streamdown's one non-semantic
+element (`**bold**` → styled `<span>`) is mapped back to `<strong>`; all other elements are already semantic and styled by
+existing `.md` CSS. KaTeX rides in via `plugins={{ math }}` (block `$$…$$` / `\(…\)`, NOT single `$`); fonts bundle as local
+assets (offline; `font-src 'self'`). **As built (typecheck + build clean; full suite green except 3 PRE-EXISTING
+platform failures — Windows path/binary + vision-status — that also fail on the clean tree):** `TranscriptMemo.test.tsx`
+rewritten to mock Streamdown and assert the live answer is now parsed (not plain text) while persisted turns still don't
+re-parse on flush; new `tests/unit/assistant-markdown.test.tsx` pins the security invariants (http(s) anchor, inert
+`javascript:`, no `<script>`); existing `AnswerThread`/`ChatHomeNav`/`DocumentSummary`/`TranscriptA11y` markdown tests pass
+unchanged. New RENDERER deps: `streamdown`, `@streamdown/math`, `katex` (pure-JS, bundled, offline; mermaid is code-split).
+`react-markdown` + `remark-gfm` removed._
+
 _2026-06-22 — **Skill finetuning Wave 3 — real-model harness (autonomous stand-in for the GUI smoke test).** The vitest suite proves
 the Wave-3 LOGIC against the mock runtime; this proves real-model OUTPUT QUALITY without a GUI or workspace access. New
 **`tests/real-model/wave3.realmodel.test.ts`** drives the ACTUAL whole-doc / compare / tree code with a real local llama.cpp model

@@ -143,11 +143,12 @@ noted below.
 - **FE-1 — streaming no longer re-parses the whole transcript.** Each persisted turn is a memoized
   `MessageBlock` (React.memo, keyed by message id) and `AssistantMarkdown` is itself `React.memo`'d
   (keyed by its text), so a ~40 ms `streamText` flush never re-parses a prior, unchanged message's
-  Markdown. **DECISION — the live answer streams as PLAIN TEXT** (`.msg-content`, `white-space:
-  pre-wrap`), not Markdown: re-parsing the growing buffer every flush was O(n²) over the reply
-  length. The full Markdown parse runs **once on completion**, when the turn re-renders from
-  `messages` as a `MessageBlock`. The only visible effect is that raw `**markers**` show literally
-  during the stream and snap to formatted on completion — accepted (audit-sanctioned). The visible
+  Markdown. **DECISION (revised) — the live answer streams as Markdown via Streamdown.** The original
+  O(n²)-per-flush worry that kept the live bubble as PLAIN TEXT is gone: Streamdown splits the buffer
+  into blocks and memoizes each, so a flush re-parses only the final block, and `parseIncompleteMarkdown`
+  closes dangling `**bold**`/`` `code` ``/fences/links mid-stream so partial syntax formats cleanly
+  instead of flashing raw markers. The live bubble is now `.msg-content.md` (same prose CSS as a
+  persisted turn) with the stream caret a sibling of the block. The visible
   text stays non-live (audit L7); `StreamAnnouncer` still announces sentence-by-sentence.
   `lastAssistantId` is `useMemo`'d (was a per-flush `[...messages].reverse().find`), and the
   scroll-to-bottom effect is gated on an `atBottomRef` so a flush only forces layout + scroll while
@@ -665,12 +666,16 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
   the renderer's streaming + stop path is exercised with zero model files. The real
   `LlamaRuntime` (Phase 10) swaps in behind the same `ModelRuntime` interface.
 - **Markdown rendering (post-MVP).** Assistant replies (persisted and streaming) render as
-  GitHub-flavored Markdown via `react-markdown` + `remark-gfm` — local models emit Markdown, and
-  raw `**asterisks**` read as broken output. react-markdown builds React elements (no
-  `innerHTML`); raw HTML in model output renders as literal text, so the strict CSP /
-  no-injection posture is unchanged. Links get `target="_blank"` so the main process's
-  window-open handler routes http(s) to the OS browser and denies everything else. **User turns
-  stay plain text** — they are not Markdown and must not be reinterpreted.
+  GitHub-flavored Markdown + KaTeX math via **Streamdown** (`@streamdown/math`), a streaming-aware
+  drop-in for react-markdown — local models emit Markdown, and raw `**asterisks**` read as broken
+  output. Streamdown builds React elements (no `innerHTML`). Its rehype chain is pared to
+  `rehype-sanitize` only (we drop `rehype-raw` so model HTML renders as literal text — the no-injection
+  posture is unchanged — and drop `rehype-harden` as redundant under the CSP + the link gate below).
+  The app ships no Tailwind, so Streamdown's one non-semantic element — `**bold**` as a styled
+  `<span>` — is mapped back to `<strong>`; every other element is already semantic and styled by the
+  existing `.md` CSS. Links are whitelisted to http(s) and get `target="_blank"` so the main process's
+  window-open handler routes them to the OS browser and denies everything else. **User turns stay
+  plain text** — they are not Markdown and must not be reinterpreted.
 - **Runtime requirement (decision).** `sendChatMessage` does **not** auto-start a runtime: a chat
   needs a started model (`RuntimeManager.start()`). With no active runtime the handler throws and
   the Chat screen shows a "start a model" empty state that links to Models (and polls
@@ -2740,7 +2745,7 @@ anchor as:
 The V1–V5 "ephemeral, nothing persists" posture was **intentionally lifted**: analyzed images are now
 saved to a local **history** (the user asked for parity with the documents/chat history), encrypted at
 rest exactly like the document cache. Markdown rendering of the answer was fixed in the same change
-(the `AnswerThread` answer now uses the shared `AssistantMarkdown` — `react-markdown` + `remark-gfm` —
+(the `AnswerThread` answer now uses the shared `AssistantMarkdown` — Streamdown (GFM + KaTeX) —
 instead of plain `pre-wrap` text).
 
 - **Data model** (`db.ts`): `image_sessions` (one per analyzed image — `title`, `stored_name`,

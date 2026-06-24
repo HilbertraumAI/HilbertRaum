@@ -1,18 +1,25 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeAll, afterEach, type Mock } from 'vitest'
 import { render, cleanup, screen } from '@testing-library/react'
-import Markdown from 'react-markdown'
+import { Streamdown } from 'streamdown'
 import { Transcript } from '../../src/renderer/chat/Transcript'
 import type { Message } from '../../src/shared/types'
 
-// Perf audit FE-1: a ~40 ms streaming flush must NOT re-parse the Markdown of prior, unchanged
-// messages, and the live answer must render as plain text (no per-flush Markdown parse of the
-// growing buffer). We mock react-markdown so each parse is a countable call.
+// Perf audit FE-1 (revisited): the live answer now renders Markdown via Streamdown (its block
+// memoization keeps the per-flush cost to the final block), but a ~40 ms streaming flush must STILL
+// NOT re-parse the Markdown of prior, unchanged messages. We mock Streamdown so each parse is a
+// countable call tagged by the text it received, and assert the persisted turn parses exactly once
+// across flushes while the live bubble is the thing that re-renders.
 
-vi.mock('react-markdown', () => ({ default: vi.fn(({ children }) => <div data-testid="md">{children}</div>) }))
-vi.mock('remark-gfm', () => ({ default: () => undefined }))
+vi.mock('streamdown', () => ({
+  Streamdown: vi.fn(({ children }) => <div data-testid="sd">{children}</div>),
+  // Module-load reads `.raw`/`.sanitize` off this; any truthy plugin values suffice for the mock.
+  defaultRehypePlugins: { raw: () => undefined, sanitize: () => undefined }
+}))
 
-const mdMock = Markdown as unknown as Mock
+const sdMock = Streamdown as unknown as Mock
+const persistedParses = (text: string): number =>
+  sdMock.mock.calls.filter((c) => (c[0] as { children?: unknown }).children === text).length
 
 function assistantMsg(content: string): Message {
   return { id: 'a1', conversationId: 'c1', role: 'assistant', content, createdAt: '2026-01-01T00:00:00Z' }
@@ -32,11 +39,11 @@ beforeAll(() => {
 
 afterEach(() => {
   cleanup()
-  mdMock.mockClear()
+  sdMock.mockClear()
 })
 
 describe('Transcript — streaming memoization (FE-1)', () => {
-  it('parses a persisted message once and renders the live answer as plain text (no Markdown parse)', () => {
+  it('renders the live answer as Markdown (Streamdown), and parses the persisted turn once', () => {
     const messages = [assistantMsg('**Hello** world')]
     render(
       <Transcript
@@ -52,11 +59,14 @@ describe('Transcript — streaming memoization (FE-1)', () => {
         actionsDisabled={false}
       />
     )
-    // Exactly ONE Markdown parse: the persisted assistant message. The live bubble is plain text,
-    // so its growing buffer is never handed to react-markdown.
-    expect(mdMock).toHaveBeenCalledTimes(1)
-    // The raw streaming markers show literally (plain text), proving it bypassed Markdown.
-    expect(screen.getByText(/partial \*\*answer\*\*/)).toBeInTheDocument()
+    // Two parses: the persisted assistant message AND the live bubble — the live answer now goes
+    // THROUGH Streamdown (Markdown), no longer rendered as raw plain text.
+    expect(persistedParses('**Hello** world')).toBe(1)
+    const liveParsed = sdMock.mock.calls.some((c) =>
+      String((c[0] as { children?: unknown }).children).includes('partial **answer**')
+    )
+    expect(liveParsed).toBe(true)
+    expect(screen.getAllByTestId('sd').length).toBe(2)
   })
 
   it('does not re-parse prior messages when only streamText changes (the per-flush hot path)', () => {
@@ -73,11 +83,11 @@ describe('Transcript — streaming memoization (FE-1)', () => {
       actionsDisabled: false
     }
     const { rerender } = render(<Transcript {...props} streamText="one" />)
-    expect(mdMock).toHaveBeenCalledTimes(1)
-    // A streaming flush: same messages array, new streamText. Prior message must not re-parse.
+    expect(persistedParses('**Hello** world')).toBe(1)
+    // A streaming flush: same messages array, new streamText. The persisted turn must not re-parse.
     rerender(<Transcript {...props} streamText="one two three" />)
-    expect(mdMock).toHaveBeenCalledTimes(1)
+    expect(persistedParses('**Hello** world')).toBe(1)
     rerender(<Transcript {...props} streamText="one two three four five" />)
-    expect(mdMock).toHaveBeenCalledTimes(1)
+    expect(persistedParses('**Hello** world')).toBe(1)
   })
 })
