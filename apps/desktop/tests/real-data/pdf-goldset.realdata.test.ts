@@ -277,6 +277,11 @@ describe.runIf(RUN)('PDF geometry-extraction — Stage-1 gold-set measurement (l
     const macroRecall =
       n > 0 ? results.reduce((a, r) => a + (r.trueRows > 0 ? Math.min(r.extractedRows / r.trueRows, 1) : 0), 0) / n : 0
     const perfectRecall = results.filter((r) => r.extractedRows >= r.trueRows).length
+    // Precision signal (audit M4): `perfectRecall` uses `>=` and macro caps each statement at 100%, so an
+    // OVER-extracted statement reads as "full recall" in both — only THIS line and micro-recall (>100%)
+    // surface the phantom rows the deferred money-column model will fix. A non-zero count is a precision
+    // issue, not a safety one (over-extraction breaks the completeness tie → the gate downgrades).
+    const overExtracted = results.filter((r) => r.extractedRows > r.trueRows).length
 
     const gatePass = results.filter((r) => r.totalPresented).length
     const gatePassRate = n > 0 ? gatePass / n : 0
@@ -306,6 +311,14 @@ describe.runIf(RUN)('PDF geometry-extraction — Stage-1 gold-set measurement (l
       return Math.abs(r.presentedNet - expectedNet) >= MONEY_EPS
     })
     const totalModelCalls = all.reduce((a, r) => a + r.modelCalls, 0)
+    // Hallucination invariant is ARMED only where a total was presented AND the expectation supplied
+    // ground-truth opening/closing to check the net against (audit M5): for any other statement the
+    // `hallucinated` predicate is vacuously false, so the "MUST be 0" guarantee is meaningful only over
+    // this many statements. Print the armed count so the guarantee can't be silently weakened by adding
+    // presented-total statements without ground-truth balances.
+    const hallucinationArmed = all.filter(
+      (r) => r.totalPresented && r.expectedOpening != null && r.expectedClosing != null
+    ).length
     // Image-only safety: a scanned statement must extract NOTHING and present NO total (a user who
     // blacks/scans a statement must never get a confident wrong total) — and never a model call.
     const scanLeak = scanned.filter((r) => r.extractedRows > 0 || r.totalPresented || r.modelCalls > 0)
@@ -318,13 +331,14 @@ describe.runIf(RUN)('PDF geometry-extraction — Stage-1 gold-set measurement (l
         `statements measured ......... ${n}  (text-layer; ${scanned.length} image-only scan(s) excluded)`,
         `transaction recall (micro) .. ${pct(microRecall)}  (${sumExtracted}/${sumTrue} rows)`,
         `transaction recall (macro) .. ${pct(macroRecall)}  (mean per-statement, capped at 100%)`,
-        `statements at full recall ... ${perfectRecall}/${n}`,
+        `statements at full recall ... ${perfectRecall}/${n}  (recall ≥ 100%; over-extraction counts here)`,
+        `over-extracted statements ... ${overExtracted}/${n}  (phantom rows — precision, not safety)`,
         `completeness-gate pass rate . ${pct(gatePassRate)}  (${gatePass}/${n} presented a total)`,
         `figure exact-match .......... ${
           withBalances.length > 0 ? `${pct(balanceExact / withBalances.length)} (${balanceExact}/${withBalances.length} with printed balances)` : 'n/a (no expected balances supplied)'
         }`,
         `image-only (scan) statements  ${scanned.length}   (0 rows each — OCR-scope, safe downgrade)`,
-        `hallucinated-figure count ... ${hallucinated.length}   (MUST be 0)`,
+        `hallucinated-figure count ... ${hallucinated.length}   (MUST be 0; armed over ${hallucinationArmed}/${gatePass} presented totals w/ ground-truth balances)`,
         `partial-total-presented ..... ${partialTotals.length}   (MUST be 0 — D56)`,
         `model calls (Stage 1) ....... ${totalModelCalls}   (MUST be 0)`,
         '=========================================================================\n'

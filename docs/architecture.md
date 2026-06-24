@@ -2600,20 +2600,29 @@ downgrade**)**; figure-exact-match **100% (1/1 with printed balances)**; halluci
 model-calls all **0**. The cardinal safety property holds across every statement: no total is ever
 presented from an incomplete or mis-counted set.
 
-**Two known Stage-1 boundaries the broader corpus surfaced (2026-06-24) — both SAFE, fixes scoped:**
+**Known Stage-1 boundaries (2026-06-24) — all SAFE (no wrong total is ever shown), fixes scoped:**
 - **Per-row running-balance OVER-extraction.** Some statements (the HVB "Umsätze" export) print a
   separate running-balance row BETWEEN transactions shaped `<date> <CUR> <balance>` with the date in the
   booking-date column. Geometry rebuilds it, and because its only non-date/non-money token is the bare
   currency code, `parseLine` reads that as the description and emits a phantom transaction (14 real rows
   → 28). It is **safe** — the running balance is not a labelled opening/closing, so the completeness gate
-  downgrades (no total), never a wrong one — but it inflates the row count (the micro-recall >100% above).
-  The proper fix is an **amount/Saldo money-column model** (the analogue of `detectDatumColumn` for money:
-  a row whose only money token sits in the Saldo/balance column, with none in the Betrag/amount column, is
-  a balance row, not a transaction). It is **deferred**, not built: a naive "drop a currency-only
-  description" guard was tried and **rejected** because a real transaction whose description wraps onto
-  other baselines reconstructs as the *same* `<date> <CUR> <amount>` shape (it silently dropped 8 genuine
-  HVB rows) — text alone cannot separate the two, only the money column can. Recorded as the next Stage-1
-  hardening step (or Stage-2 input).
+  downgrades (no total), never a wrong one; and on a statement that *also* prints opening/closing the
+  phantom balances inflate Σamounts so the `opening + Σ == closing` tie cannot hold → it likewise
+  downgrades (verified end-to-end, `pdf-bank-layout.test.ts` case (i)). The cost is precision/UX only: an
+  inflated row count (the micro-recall >100% above) and phantom citations, never a total. **A "money-column
+  model" (the analogue of `detectDatumColumn` for money) was the assumed fix, but the 2026-06-24 geometry
+  probe of the gold-set HVB "Umsätze" page showed it does NOT separate these rows: the running balance and
+  the transaction amount are RIGHT-aligned in ONE numeric column (measured left-edges ~493 for the balance
+  vs ~495–510 for the amount — every consecutive gap ≤ `DEFAULT_COLUMN_GAP`, so a band-cluster merges them
+  into a single band). So a phantom balance row and a genuine amount row are indistinguishable by token
+  class AND by column.** Text alone can't separate them either — a naive "drop a currency-only description"
+  guard was tried and **rejected** because a real transaction whose description wraps onto other baselines
+  reconstructs as the *same* `<date> <CUR> <amount>` shape (it silently dropped 8 genuine HVB rows). The
+  remaining honest fix is therefore **multi-baseline row association** (recognise the balance line as a
+  continuation/annotation of the transaction above it, not a row of its own) — strictly harder than a
+  column model — or Stage-2 input. **Deferred**, not built; the boundary is pinned by `pdf-layout.test.ts`
+  (the shared-column rationale) + `pdf-bank-layout.test.ts` case (i) (over-extraction × labelled balances →
+  downgrade, through real pdf.js).
 - **Image-only / "blacked-out" statements.** A user who blacks out or scans a statement can flatten it to
   a full-page IMAGE with no text layer. Stage 1 reads the text layer, so `PdfParser` raises the
   scan-detected error and nothing is extracted → the **safe** empty/downgrade (0 rows, no total, 0 model
@@ -2621,11 +2630,24 @@ presented from an incomplete or mis-counted set.
   job (§ "Scanned-PDF / photo OCR"), out of Stage-1 scope (plan §7). The gold-set harness detects the
   scan throw, excludes such statements from the recall/gate aggregates, and **safety-asserts** the empty
   outcome instead.
+- **Split-amount items (identified by the pre-merge audit, 2026-06-24; pinned by tests).** When a PDF
+  producer renders one amount as TWO adjacent text items (e.g. `2.000` + `,00`, a kerning/positioning gap
+  pdf.js surfaces as separate `TextItem`s), neither fragment classifies as money (`2.000` is text, `,00`
+  is text; note `1.234` even back-classifies as a *date*), so the row carries no amount and is **dropped**
+  — the real transaction silently vanishes (a recall loss). It is **safe**: an empty/incomplete extraction
+  makes the gate downgrade, never a wrong total. The scoped fix is an **x-adjacency money re-merge** (merge
+  neighbouring tokens whose concatenation parses as money and whose x-gap is sub-column), **deferred** with
+  the money-column model. Pinned by `pdf-layout.test.ts` (the split drops the row; the same amount as one
+  token reconstructs) + an end-to-end `pdf-bank-layout.test.ts` case (real pdf.js → safe downgrade). Two
+  related tuning-constant boundaries are pinned alongside it: `clusterRows` anchors a row on its FIRST
+  baseline (so >`DEFAULT_ROW_TOLERANCE`=3 pt of cumulative jitter splits a row and loses its amount), and a
+  Datum/Valuta pair closer than `DEFAULT_COLUMN_GAP`=12 pt MERGES into one band (a Valuta date can then
+  qualify a spurious row — same gate-safe over-extraction class as boundary 1).
 
 **Conditional future — Stage 2 is NOT built, but is EXPECTED to be needed eventually.** It is not a
 *planned next step* (it lands only on evidence, per D52), but the expectation is that it **probably will
-be warranted** once the corpus broadens: today's gold set is just **two** statements, and real
-statement layouts vary wildly (no-printed-balance statements that the completeness gate can only
+be warranted** once the corpus broadens: today's gold set is still narrow (**three** text statements +
+one image-only scan, D57), and real statement layouts vary wildly (no-printed-balance statements that the completeness gate can only
 downgrade, ruled/borderless tables, multi-column or rotated layouts, OCR'd scans). Deterministic
 geometry will almost certainly miss *some* of them, and those are exactly the residual hard subset
 Stage 2 exists to cover. So treat Stage 2 as a **probable future need, gated — not abandoned**: it
@@ -2645,9 +2667,17 @@ them + the correct total + honest coverage + citations + 0 model calls; a non-ty
 downgrade; the Raiffeisen Valuta/second-baseline + `Kontostand per` regression pins the column model;
 and the Phase-31 breadth set — English `Balance brought/carried forward` gate-pass, an English value-
 date second baseline rejected, an English running-balance-only downgrade, a multi-line wrapped
-description). `tests/real-data/pdf-goldset.realdata.test.ts` is the LOCAL-ONLY, gitignored, gated
-(`HILBERTRAUM_PDF_GOLDSET=1`) gold-set harness — aggregate metrics only, 0 model calls, skipped in
-`npm test`.
+description). **Adversarial geometry through real pdf.js (audit M3 CI-realism, 2026-06-24):** because
+every fixture above encodes *ideal* geometry (one TextItem per cell, identical per-row baselines, wide
+column gaps) a regression that only bites on a real, messy TextItem distribution could pass `npm test`;
+a dedicated `pdf-bank-layout.test.ts` describe block now drives the messiness through the REAL pdf.js
+path — sub-tolerance baseline jitter (still one row), over-tolerance jitter (amount splits off → row
+dropped → gate downgrades), a tight (<12 pt) Datum/Valuta gap (columns merge → over-extraction → safe
+downgrade), and the shared-column running-balance shape of boundary 1 (over-extraction × printed
+opening/closing → the tie breaks → downgrade, never a wrong total). The local-only gold set remains the
+real-*distribution* gate; these pin the documented boundaries in CI. `tests/real-data/pdf-goldset.realdata.test.ts`
+is the LOCAL-ONLY, gitignored, gated (`HILBERTRAUM_PDF_GOLDSET=1`) gold-set harness — aggregate metrics
+only, 0 model calls, skipped in `npm test`.
 
 ### §-anchor legend (historical plan citations)
 

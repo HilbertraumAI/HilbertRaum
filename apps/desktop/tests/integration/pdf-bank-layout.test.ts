@@ -499,4 +499,219 @@ describe('PDF layout mode — synthetic breadth (English labels, EN value-date, 
     expect(layoutRows[1]).toMatchObject({ date: '2024-06-15', amount: 300 })
     expect(layoutRows[0].description).toContain('Direct Debit Insurance')
   })
+
+  // (e) Split-amount boundary (audit M3): when a producer renders one amount as TWO adjacent text items
+  //     ("2.000" + ",00"), pdf.js returns them as separate fragments; neither classifies as money, so the
+  //     row carries no amount and is DROPPED. The real transaction vanishes (a recall loss the deferred
+  //     money-column re-merge will fix) — but it is NEVER mis-totalled: the gate sees an empty/incomplete
+  //     extraction and downgrades. This drives the boundary through the REAL pdf.js path, end to end.
+  it('a pdf.js-split amount drops the row end-to-end, and the gate stays safe (no wrong total)', async () => {
+    const SC = { date: 50, desc: 160, amount: 420, amount2: 452, balance: 520 }
+    function splitAmountCells(amountSplit: boolean): PdfCell[] {
+      const cells: PdfCell[] = []
+      cells.push({ text: 'Kontoauszug 2024 - alle Betraege in EUR', x: 50, y: 750 })
+      // Printed opening/closing that WOULD tie iff the +2.000,00 row were read: 1000 + 2000 == 3000.
+      cells.push({ text: 'Anfangssaldo', x: SC.date, y: 720 }, { text: '1.000,00', x: SC.amount, y: 720 })
+      cells.push({ text: '05.01.', x: SC.date, y: 700 }, { text: 'Gehalt ACME', x: SC.desc, y: 700 })
+      if (amountSplit) {
+        // The amount split across two adjacent items — the failure case.
+        cells.push({ text: '2.000', x: SC.amount, y: 700 }, { text: ',00', x: SC.amount2, y: 700 })
+      } else {
+        cells.push({ text: '2.000,00', x: SC.amount, y: 700 })
+      }
+      cells.push({ text: 'Endsaldo', x: SC.date, y: 680 }, { text: '3.000,00', x: SC.amount, y: 680 })
+      return cells
+    }
+
+    // Control: the WHOLE amount extracts one row and the gate presents the total (it ties out).
+    const wholeRows = extractTransactionRows(await parseSegments(writePdf(splitAmountCells(false)), true), 'EUR')
+    expect(wholeRows).toHaveLength(1)
+    expect(wholeRows[0]).toMatchObject({ date: '2024-01-05', amount: 2000 })
+
+    // Failure: the SPLIT amount yields NO transaction row (the fragments aren’t money) …
+    const splitRows = extractTransactionRows(await parseSegments(writePdf(splitAmountCells(true)), true), 'EUR')
+    expect(splitRows).toHaveLength(0)
+
+    // … and end-to-end the handler degrades safely: an empty extraction, never a confident total.
+    const pdfPath = writePdf(splitAmountCells(true))
+    const segments = await parseSegments(pdfPath, true)
+    const db = freshDb()
+    const docId = seedDoc(db, segments)
+    const res = await bankStatementAnalysisHandler.run!(ctxFor(db, docId, 'what is the total?', pdfPath))
+    expect(res.answer).not.toContain('Net change')
+    const safe =
+      res.answer.includes(tr('skills.bankAnalysis.empty')) ||
+      res.answer.includes(tr('skills.bankAnalysis.incompleteNoTotal'))
+    expect(safe).toBe(true)
+  })
+})
+
+// ---------------------------------------------------------------------------------------------------
+// Adversarial geometry through REAL pdf.js (audit M3, CI-realism). Every fixture ABOVE encodes IDEAL
+// geometry: each cell its own pdf.js TextItem, identical per-row baselines, wide (45–60 pt) column
+// gaps. Real pdf.js output is messier — baselines jitter, columns sit close, a right-aligned amount and
+// a per-row running balance share one numeric column — so a geometry regression that only bites on a
+// real TextItem distribution can pass `npm test` (M3's "a fixture can be green while a real statement
+// fails"). The local-only gold set is the real-distribution gate, but it runs off-CI; these fixtures
+// drive the SAME messiness through the real pdf.js path so the documented boundaries are pinned IN CI.
+// All are SYNTHETIC `makeColumnarPdf` — never a real statement (D57). None presents a wrong total: each
+// either reconstructs correctly or degrades to the honest gate downgrade (the cardinal D56 property).
+describe('PDF layout mode — adversarial geometry through real pdf.js (audit M3)', () => {
+  // (f) Sub-tolerance baseline JITTER: a real producer rarely emits a row's cells on a pixel-identical
+  //     baseline. As long as every cell stays within DEFAULT_ROW_TOLERANCE (3 pt) of the row's anchor,
+  //     clusterRows must still group them into one visual row and the transaction reconstructs cleanly.
+  it('sub-tolerance baseline jitter still clusters into one row (the common real case)', async () => {
+    const JC = { date: 50, desc: 160, amount: 420, balance: 500 }
+    const cells: PdfCell[] = [{ text: 'Kontoauszug 2024 in EUR', x: 50, y: 750 }]
+    // One row whose four cells jitter across a 3 pt span (700.0 … 702.5) — all within tolerance of the
+    // first (highest) baseline anchor, so they stay one row.
+    cells.push(
+      { text: '05.01.', x: JC.date, y: 702.5 },
+      { text: 'Gehalt ACME', x: JC.desc, y: 700.0 },
+      { text: '2.000,00', x: JC.amount, y: 701.2 },
+      { text: '3.000,00', x: JC.balance, y: 700.8 }
+    )
+    const rows = extractTransactionRows(await parseSegments(writePdf(cells), true), 'EUR')
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ date: '2024-01-05', amount: 2000, balanceAfter: 3000 })
+  })
+
+  // (g) OVER-tolerance baseline jitter: when the amount cell drifts past the 3 pt tolerance from the
+  //     date/description anchor, clusterRows splits it onto its OWN visual row. The booking row then has
+  //     a date + description but NO money token, so reconstructLine drops it — a silent recall loss. It
+  //     is NEVER mis-totalled: end-to-end the gate sees the missing row break the tie and downgrades.
+  it('over-tolerance baseline jitter splits the amount off → row dropped, gate stays safe', async () => {
+    const JC = { date: 50, desc: 160, amount: 420 }
+    const cells: PdfCell[] = [{ text: 'Kontoauszug 2024 in EUR', x: 50, y: 750 }]
+    // Printed opening/closing that WOULD tie iff the +2.000,00 row were read: 1000 + 2000 == 3000.
+    cells.push({ text: 'Anfangssaldo', x: JC.date, y: 720 }, { text: '1.000,00', x: JC.amount, y: 720 })
+    // Date + description on the anchor baseline; the amount 5 pt lower (Δ5 > tolerance 3) → its own row.
+    cells.push(
+      { text: '05.01.', x: JC.date, y: 700 },
+      { text: 'Gehalt ACME', x: JC.desc, y: 700 },
+      { text: '2.000,00', x: JC.amount, y: 695 }
+    )
+    cells.push({ text: 'Endsaldo', x: JC.date, y: 675 }, { text: '3.000,00', x: JC.amount, y: 675 })
+
+    // The booking row lost its amount → no transaction extracted.
+    const rows = extractTransactionRows(await parseSegments(writePdf(cells), true), 'EUR')
+    expect(rows).toHaveLength(0)
+    // End-to-end the handler degrades safely (empty/incomplete), never a confident total.
+    const pdfPath = writePdf(cells)
+    const segments = await parseSegments(pdfPath, true)
+    const db = freshDb()
+    const docId = seedDoc(db, segments)
+    const res = await bankStatementAnalysisHandler.run!(ctxFor(db, docId, 'what is the total?', pdfPath))
+    expect(res.answer).not.toContain('Net change')
+    const safe =
+      res.answer.includes(tr('skills.bankAnalysis.empty')) ||
+      res.answer.includes(tr('skills.bankAnalysis.incompleteNoTotal'))
+    expect(safe).toBe(true)
+  })
+
+  // (h) TIGHT column gap: when the Datum and Valuta columns sit < DEFAULT_COLUMN_GAP (12 pt) apart,
+  //     detectDatumColumn merges them into ONE band, so a Valuta-only second-baseline row (its date now
+  //     INSIDE the merged band) + an FX reference amount qualifies as a spurious transaction. This is the
+  //     unit-pinned boundary driven END-TO-END through real pdf.js: over-extraction occurs, but the gate
+  //     (no printed opening/closing here) downgrades — never a wrong total.
+  it('tight Datum/Valuta gap merges columns → over-extraction, but the gate downgrades (no total)', async () => {
+    const TC = { date: 50, valuta: 58, desc: 170, amount: 440 } // gap 8 < 12 → columns merge
+    const cells: PdfCell[] = [{ text: 'Kontoauszug 2024 in EUR', x: 50, y: 760 }]
+    const rows = [
+      { d: '05.04.', desc: 'Gehalt ACME', amt: '1.000,00', v: '07.04.', cont: 'FX-Referenz 39,00 USD' },
+      { d: '12.04.', desc: 'Miete', amt: '-500,00', v: '14.04.', cont: 'Referenz 12,50 CHF' }
+    ]
+    let y = 720
+    for (const r of rows) {
+      cells.push(
+        { text: r.d, x: TC.date, y },
+        { text: r.desc, x: TC.desc, y },
+        { text: r.amt, x: TC.amount, y }
+      )
+      // Second baseline: Valuta date (x=58, now INSIDE the merged band) + an FX reference amount.
+      cells.push({ text: r.v, x: TC.valuta, y: y - 14 }, { text: r.cont, x: TC.desc, y: y - 14 })
+      y -= 34
+    }
+
+    const layoutRows = extractTransactionRows(await parseSegments(writePdf(cells), true), 'EUR')
+    // The merged band lets each Valuta row through as a spurious FX transaction (2 real + 2 phantom).
+    expect(layoutRows.length).toBeGreaterThan(2)
+    // SAFETY: no printed opening/closing → the gate cannot prove completeness → honest downgrade.
+    const pdfPath = writePdf(cells)
+    const segments = await parseSegments(pdfPath, true)
+    const db = freshDb()
+    const docId = seedDoc(db, segments)
+    const res = await bankStatementAnalysisHandler.run!(ctxFor(db, docId, 'what is the total?', pdfPath))
+    expect(res.answer).not.toContain('Net change')
+    // The FX continuation amounts carry foreign currencies, so this downgrades via the mixed-currency
+    // path rather than the completeness gate — still a SAFE downgrade (no single total presented).
+    const safe =
+      res.answer.includes(tr('skills.bankAnalysis.incompleteNoTotal')) ||
+      res.answer.includes(tr('skills.bankAnalysis.noCurrency')) ||
+      res.answer.includes(tr('skills.bankAnalysis.empty'))
+    expect(safe).toBe(true)
+  })
+
+  // (i) SHARED-COLUMN running-balance over-extraction — the gold-set HVB "Umsätze" shape, the original
+  //     motivating report, reproduced synthetically. The layout prints, per transaction, a booking row
+  //     (`<date> <desc> <amount>`) AND a separate per-row running-balance row (`<date> EUR <balance>`),
+  //     where the amount and the balance are RIGHT-aligned in ONE numeric column (a larger balance
+  //     starts a few pt left of a smaller amount, gap < DEFAULT_COLUMN_GAP). Geometry rebuilds the
+  //     balance row, and parseLine reads the bare currency code as the description → a PHANTOM
+  //     transaction. So N real rows become 2N. This is the boundary the deferred "money-column model"
+  //     was meant to fix — but the amount and balance SHARE a column, so an x-band money-column model
+  //     cannot separate them (it would need multi-baseline association; see pdf-layout.test.ts).
+  //     CARDINAL SAFETY (audit HIGH stress case, end-to-end through real pdf.js): on a statement that
+  //     ALSO prints opening/closing balances, the phantom balances inflate Σamounts so the
+  //     `opening + Σ == closing` tie CANNOT hold → the gate downgrades. Over-extraction degrades a
+  //     would-be PASS into an honest downgrade, NEVER a wrong total.
+  it('shared-column running-balance rows over-extract, and labelled balances still downgrade (never a wrong total)', async () => {
+    const HC = { date: 50, desc: 160, cur: 468, amount: 500, balance: 496 } // amount/balance share a band
+    const cells: PdfCell[] = [{ text: 'Umsaetze 2024 in EUR', x: 50, y: 760 }]
+    // Printed opening/closing that WOULD tie iff ONLY the genuine rows counted: 1000 + (2000−800−200)=2000.
+    cells.push({ text: 'Anfangssaldo', x: HC.date, y: 740 }, { text: '1.000,00', x: HC.amount, y: 740 })
+    const rows = [
+      { d: '05.01.', desc: 'Gehalt ACME', amt: '2.000,00', bal: '3.000,00' },
+      { d: '06.01.', desc: 'Miete', amt: '-800,00', bal: '2.200,00' },
+      { d: '07.01.', desc: 'Kaffee', amt: '-200,00', bal: '2.000,00' }
+    ]
+    let y = 720
+    for (const r of rows) {
+      // Booking baseline: date · description · amount (x=500).
+      cells.push(
+        { text: r.d, x: HC.date, y },
+        { text: r.desc, x: HC.desc, y },
+        { text: r.amt, x: HC.amount, y }
+      )
+      // Per-row running-balance baseline (12 pt lower): same date · bare currency code · balance (x=496,
+      // within DEFAULT_COLUMN_GAP of the amount column → SAME band).
+      cells.push(
+        { text: r.d, x: HC.date, y: y - 12 },
+        { text: 'EUR', x: HC.cur, y: y - 12 },
+        { text: r.bal, x: HC.balance, y: y - 12 }
+      )
+      y -= 30
+    }
+    cells.push({ text: 'Endsaldo', x: HC.date, y }, { text: '2.000,00', x: HC.amount, y })
+
+    const layoutRows = extractTransactionRows(await parseSegments(writePdf(cells), true), 'EUR')
+    // OVER-extraction: the 3 genuine rows PLUS 3 phantom running-balance rows (count doubles).
+    expect(layoutRows).toHaveLength(6)
+    // The 3 phantom rows carry the bare currency code as their whole description and the balance figure
+    // as their "amount" — indistinguishable from a real amount row by token class + column.
+    const phantoms = layoutRows.filter((r) => r.description === 'EUR')
+    expect(phantoms.map((r) => r.amount)).toEqual([3000, 2200, 2000])
+    const genuine = layoutRows.filter((r) => r.description !== 'EUR')
+    expect(genuine.map((r) => r.amount)).toEqual([2000, -800, -200])
+
+    // CARDINAL SAFETY: opening/closing ARE printed and WOULD tie for the genuine rows alone (1000 + 1000
+    // == 2000), but the phantom balances blow up Σamounts → the tie breaks → honest downgrade, no total.
+    const pdfPath = writePdf(cells)
+    const segments = await parseSegments(pdfPath, true)
+    const db = freshDb()
+    const docId = seedDoc(db, segments)
+    const res = await bankStatementAnalysisHandler.run!(ctxFor(db, docId, 'what is the total?', pdfPath))
+    expect(res.answer).not.toContain('Net change')
+    expect(res.answer).toContain(tr('skills.bankAnalysis.incompleteNoTotal'))
+  })
 })

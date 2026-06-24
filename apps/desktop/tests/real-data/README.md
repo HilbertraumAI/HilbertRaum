@@ -12,6 +12,8 @@ Runs real German bank statements through the **actual Stage-1 path**
 metrics the **D52 Stage-2 decision** depends on:
 
 - **transaction recall** (extracted rows ÷ true rows, micro + macro),
+- **over-extracted statements** — a precision signal: micro-recall and "full recall" count over-extraction
+  as success, so this line is the one that surfaces phantom rows (precision, not a safety property),
 - **figure exact-match** (persisted opening/closing == printed),
 - **completeness-gate pass rate** (how often `opening + Σ == closing` proved out),
 - **hallucinated-figure count** — asserted **0**,

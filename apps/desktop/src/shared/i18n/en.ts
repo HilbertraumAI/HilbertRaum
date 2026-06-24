@@ -480,9 +480,9 @@ export const en = {
   // Completeness gate (§3.5, D56): I read N rows but cannot PROVE I captured the whole statement
   // (no opening/closing balance that ties out), so I refuse to present a total that might be wrong.
   'skills.bankAnalysis.incompleteNoTotal':
-    'I couldn’t confirm I captured the whole statement — its opening and closing balances don’t line up ' +
-    'with what I read. To avoid giving you a total that might be wrong, I won’t state a sum here; please ' +
-    'open the statement and check the figures yourself.',
+    'I couldn’t confirm I captured the whole statement — it has no opening and closing balance that ties ' +
+    'out against what I read. To avoid giving you a total that might be wrong, I won’t state a sum here; ' +
+    'please open the statement and check the figures yourself.',
   'skills.bankAnalysis.categoryHeading': 'By category:',
   'skills.bankAnalysis.categoryItem': '- {category}: {amount} {currency} ({count})',
   'skills.bankAnalysis.caveat':

@@ -505,9 +505,9 @@ export const de: Record<keyof typeof en, string> = {
   // Completeness gate (§3.5, D56): I read N rows but cannot PROVE I captured the whole statement
   // (no opening/closing balance that ties out), so I refuse to present a total that might be wrong.
   'skills.bankAnalysis.incompleteNoTotal':
-    'Ich kann nicht bestätigen, dass ich den ganzen Auszug erfasst habe — Anfangs- und Endsaldo gehen mit ' +
-    'dem Gelesenen nicht auf. Damit ich Ihnen keinen womöglich falschen Gesamtbetrag nenne, gebe ich hier ' +
-    'keine Summe an; bitte prüfen Sie die Zahlen im geöffneten Auszug selbst.',
+    'Ich kann nicht bestätigen, dass ich den ganzen Auszug erfasst habe — es gibt keinen Anfangs- und ' +
+    'Endsaldo, der mit dem Gelesenen aufgeht. Damit ich Ihnen keinen womöglich falschen Gesamtbetrag ' +
+    'nenne, gebe ich hier keine Summe an; bitte prüfen Sie die Zahlen im geöffneten Auszug selbst.',
   'skills.bankAnalysis.categoryHeading': 'Nach Kategorie:',
   'skills.bankAnalysis.categoryItem': '- {category}: {amount} {currency} ({count})',
   'skills.bankAnalysis.caveat':

@@ -316,23 +316,33 @@ password recovery — are documented in
   downgrade rather than a total, by design (a partial read must never become a confident wrong total).
   **Stage 2** (a grammar-constrained local-LLM fallback on the residual hard subset, D52/D55) is **not
   built**, but is **expected to be needed eventually** — it lands only if the Stage-1 deterministic
-  recall on the local-only gold set (D57) proves insufficient. On the current (small) gold set — a
-  sanitized HVB transactions-only excerpt and a full Raiffeisen "Mein ELBA" statement — Stage 1 reaches
-  **100% transaction recall (71/71)** with **0 hallucinated/partial totals and 0 model calls**; the gate
-  presents the correct total on the statement that prints opening/closing balances and honestly
-  downgrades the excerpt that does not. The corpus is still too narrow to close D52; because real
+  recall on the local-only gold set (D57) proves insufficient. On the current (small) gold set — three
+  text-layer statements (sanitized HVB excerpt, a full Raiffeisen "Mein ELBA", an HVB "Umsätze" page)
+  plus one image-only scan — Stage 1 records **0 hallucinated/partial totals and 0 model calls**, the
+  gate presents the correct total on the one statement that prints opening/closing balances and honestly
+  downgrades the rest, and the scan degrades safely (0 rows); the live recall/gate numbers are kept in
+  `architecture.md` §21, not duplicated here. The corpus is still too narrow to close D52; because real
   layouts vary widely (no-printed-balance statements, ruled/borderless tables, scans), deterministic
   geometry will likely miss some, so Stage 2 should be treated as a **probable future need** — broaden
   the gold-set corpus across more banks/layouts to confirm and trigger it (it is gated, not abandoned).
-  **Two boundaries the broader corpus surfaced (both SAFE — no wrong total is ever shown):** (1) a
+  **Known boundaries (all SAFE — no wrong total is ever shown):** (1) a
   statement that prints a **per-row running-balance** line shaped `<date> <currency> <balance>` (date in
   the booking column) is over-extracted — the balance row is mis-read as a phantom transaction, so the
-  row count inflates — but the completeness gate still downgrades (no labelled opening/closing to tie), so
-  no total is presented; the scoped fix is an amount/Saldo money-column model (deferred — a text-only
-  guard can't separate it from a real transaction whose description wrapped to another line). (2) An
+  row count inflates — but the completeness gate still downgrades (the phantom balances break the
+  opening + Σ == closing tie, or there is no labelled opening/closing to tie at all), so no total is
+  presented; the cost is precision/UX only. The assumed "money-column model" fix does **not** work here:
+  a 2026-06-24 geometry probe showed the running balance and the transaction amount are right-aligned in
+  one numeric column (they cannot be separated by x), and a text-only guard can't separate a phantom from
+  a real transaction whose description wrapped to another line either — so the honest fix is multi-baseline
+  row association (deferred, harder than a column model). (2) An
   **image-only / "blacked-out" or scanned** statement has no text layer, so geometry-aware extraction
   recovers nothing and returns the honest empty/downgrade (never a wrong total); reading it is the OCR
-  path's job, not Stage 1.
+  path's job, not Stage 1. (3) When a PDF producer renders one **amount as two split items** (`2.000` +
+  `,00`), neither fragment parses as money, so the row carries no amount and is dropped — the transaction
+  silently vanishes (a recall loss), still gate-safe (empty/incomplete ⇒ downgrade, never a wrong total);
+  the scoped fix is an x-adjacency money re-merge (deferred). The same `architecture.md` §21 entry pins the
+  two tuning-constant boundaries (a row whose baselines jitter past the 3-pt tolerance loses its amount; a
+  Datum/Valuta gap under 12 pt merges, allowing a spurious row).
 - **Strictly one job at a time (D26).** While a summary runs, chat is refused with a
   friendly message + a cancel option, and vice versa — the one local model serves one
   request. The R-T1 probe confirmed the pinned b9585 WOULD serve concurrent requests on

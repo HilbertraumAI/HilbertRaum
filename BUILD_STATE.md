@@ -6,6 +6,60 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-24 — **PDF geometry-extraction — M3 deferred-hardening addressed: CI-realism adversarial fixtures + shared-column
+finding (Phase 31; branch `pdf-geometry-extraction`, still unmerged/unpushed; NO production code changed).** The pre-merge
+audit's M3 had two parts: (1) a CI-realism gap (every committed geometry fixture encodes IDEAL pdf.js geometry, so a regression
+that only bites on a real TextItem distribution can pass `npm test`), and (2) two deferred code fixes (boundary-3 split-amount
+re-merge; boundary-1 over-extraction money-column model). **MEASURE-FIRST (D52) re-run + corpus geometry probe drove the call,
+user-confirmed:** the gold set reproduces EXACTLY (micro 116.5% / 99-85, macro 100%, gate 33% (1/3), figure-exact 1/1, all safety
+invariants 0; 1 image-only scan excluded). The boundary that actually OCCURS is boundary 1 (the HVB "Umsätze" page, 14→28) — but
+that statement prints NO opening/closing balances, so it downgrades regardless: over-extraction costs PRECISION/UX only (count +
+citations, L2), never a total or a gate pass. Boundary 3 (split amount) occurs in ZERO corpus statements (found by classifier
+probing, not in the wild). **Decisive new finding:** a geometry probe of the over-extracted page showed the assumed "money-column
+model" CANNOT fix boundary 1 — the per-row running balance and the transaction amount are RIGHT-aligned in ONE numeric column
+(measured left-edges ~493 balance vs ~495–510 amount; every consecutive gap ≤ `DEFAULT_COLUMN_GAP` → a band-cluster merges them),
+so a phantom balance row and a genuine amount row are indistinguishable by token class AND by column. The honest fix is
+multi-baseline row association (harder than a column model), or Stage-2 input. **Decision (AskUserQuestion):** NO deterministic
+code change (neither fix is justified by a recall/total loss); close the CI-realism gap with more adversarial SYNTHETIC fixtures;
+work against the current corpus (no more real statements available). **As built (no production code touched — tests + docs only):**
+- **Adversarial geometry through REAL pdf.js** — new `pdf-bank-layout.test.ts` describe block (`makeColumnarPdf`, D57-synthetic):
+  sub-tolerance baseline jitter (still one row), over-tolerance jitter (amount splits off → row dropped → gate downgrades),
+  tight (<12 pt) Datum/Valuta gap (columns merge → over-extraction → SAFE mixed-currency/incomplete downgrade), and the
+  shared-column running-balance shape of boundary 1 (over-extraction × printed opening/closing → tie breaks → downgrade, NEVER a
+  wrong total — the audit's HIGH-section stress case, now pinned end-to-end through real pdf.js, not just asserted).
+- **`pdf-layout.test.ts`** — a unit test pinning the shared-column rationale (the measured money-x set forms ONE band under the gap
+  rule; the phantom balance row reconstructs identically to a real amount row) so the "not a money-column model" reasoning can't rot.
+- **Docs:** `architecture.md` §21 boundary-1 rewritten (money-column model disproven → multi-baseline association; safe end-to-end
+  even with labelled balances) + Tests paragraph (the adversarial-geometry CI fixtures); `known-limitations.md` boundary-(1)
+  corrected. **Suite 2199 passed / 37 skipped (+5)**, typecheck clean, gold-set safety invariants still **0**, 0 model calls.
+- **Open follow-ups (NOT merge blockers, unchanged stance):** boundary 1 (multi-baseline association) + boundary 3 (x-adjacency
+  re-merge) stay deferred — gate-safe, documented, no measured total/recall loss to justify the risk; the local-only gold set
+  remains the real-DISTRIBUTION gate (keep broadening it). Merge prep unchanged — STILL AWAITING approval to push / open the PR._
+
+_2026-06-24 — **PDF geometry-extraction — FINAL pre-merge multi-persona audit DONE + cheap findings remediated
+(Phase 31; branch `pdf-geometry-extraction`, still unmerged/unpushed).** Five-persona audit written to
+`docs/pdf-geometry-audit-2026-06-24.md`. **Verdict: GO for merge** — no CRITICAL/HIGH; the cardinal
+data-integrity property was stress-verified (incl. the over-extraction × labelled-balance interaction:
+phantom balance amounts break the `opening+Σ==closing` tie → gate downgrades, never a wrong total). Privacy
+(D57: corpus gitignored/untracked/clean), D58 bank-only, and the `parseDate` non-breaking guarantee
+(`money.ts` absent from the whole diff) all confirmed. **Remediated this session (suite still 2190/37,
+typecheck clean, gold-set safety invariants still 0):** M1 (§21 self-contradiction "two"→"three+scan"
+statements), M2 (known-limitations stale "71/71" recall → current corpus + points live numbers at §21), M4
+(gold-set harness now prints an `over-extracted statements` PRECISION line + relabels "full recall"; over-
+extraction reads 1/3), M5 (hallucination invariant now prints "armed over K/N presented totals w/ ground-
+truth balances"), L1 (downgrade copy EN+DE no longer claims a balance MISMATCH when none was printed).
+**M3 partial hardening:** investigating the deepest follow-up found a genuine THIRD Stage-1 boundary — a
+pdf.js-**split amount** (`2.000` + `,00`) is never reassembled (no fragment is money; `1.234` even
+back-classifies as a date) → the row is dropped (silent recall loss, still gate-safe). Now PINNED by tests
+(`pdf-layout.test.ts` "Stage-1 geometry edge boundaries": split-amount drop + the `DEFAULT_ROW_TOLERANCE`=3
+first-baseline anchor + the `DEFAULT_COLUMN_GAP`=12 merge; end-to-end `pdf-bank-layout.test.ts` through real
+pdf.js) and DOCUMENTED as boundary (3) in §21 + known-limitations. The two tuning constants are now
+regression-locked (this closes audit L3). Suite **2194 passed / 37 skipped** (+4), typecheck clean, gold-set
+safety invariants still 0. **Open follow-ups (NOT merge blockers):** M3 RESIDUAL — real-PDF distributions are
+still covered only by the local-only gated gold set (keep broadening + re-running it), and the deferred
+x-adjacency money re-merge / money-column model; L2/L4 documented boundaries. Merge prep unchanged — STILL
+AWAITING approval to push / open the PR._
+
 _2026-06-24 — **PDF geometry-extraction — gold-set BREADTH (2 new real statements) + 2 safe boundaries found (Phase 31, D52/D57;
 branch `pdf-geometry-extraction`).** Two more real statements added to the local-only gitignored corpus (D57 — never committed):
 an HVB "Umsätze" page (text layer, 14 true rows) and an HVB statement the user **blacked out** to an image. Findings:

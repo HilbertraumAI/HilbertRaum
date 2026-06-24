@@ -6,6 +6,8 @@ import {
   reconstructPage,
   resolvePageYear,
   toFullDate,
+  DEFAULT_ROW_TOLERANCE,
+  DEFAULT_COLUMN_GAP,
   type LayoutWord
 } from '../../src/main/services/ingestion/parsers/pdf-layout'
 import { parseDate } from '../../src/main/services/skills/tools/money'
@@ -240,5 +242,104 @@ describe('reconstructPage (end-to-end on word boxes)', () => {
     expect(text).toBe('07.02. Kaffee -3,50')
     // …and its bare lead date is one parseDate REJECTS, so the bank extractor drops it, never guesses.
     expect(parseDate(text.split(' ')[0])).toBeNull()
+  })
+})
+
+// ---------------------------------------------------------------------------------------------------
+// Stage-1 geometry EDGE boundaries (audit 2026-06-24, M3). The committed PDF fixtures encode IDEAL
+// geometry (each cell its own pdf.js item, identical baselines, wide column gaps); these unit tests pin
+// the two load-bearing tuning constants AND the split-amount behaviour at their boundaries, so a real
+// statement that violates the idealizations has its (currently-safe) outcome documented, not silent. The
+// gold-set harness (local-only) is still the real-PDF gate; these pin the geometry CONTRACT against a
+// regression. None of these is a wrong total — see §21 "boundaries" + known-limitations.
+describe('Stage-1 geometry edge boundaries (audit M3)', () => {
+  it('clusterRows anchors on the cluster’s first y, so spread is from the TOP, not pairwise', () => {
+    // Two cells within tolerance of the row’s first (highest) baseline group; a cell that drifts past
+    // DEFAULT_ROW_TOLERANCE from that anchor splits — even if it is within tolerance of its neighbour.
+    const grouped = clusterRows(
+      [word('05.01.', 50, 700), word('Gehalt', 160, 702), word('1.000,00', 420, 699)],
+      DEFAULT_ROW_TOLERANCE
+    )
+    // y’s sorted desc = 702,700,699; anchor 702: 700 (Δ2 ≤ 3) joins, 699 (Δ3 ≤ 3) joins → one row.
+    expect(grouped).toHaveLength(1)
+    // A 4-pt drop from the anchor exceeds the 3-pt tolerance → the amount lands on its OWN visual row,
+    // so that transaction would lose its amount (the jitter failure real pdf.js baselines can cause).
+    const split = clusterRows(
+      [word('05.01.', 50, 702), word('Gehalt', 160, 702), word('1.000,00', 420, 698)],
+      DEFAULT_ROW_TOLERANCE
+    )
+    expect(split).toHaveLength(2)
+  })
+
+  it('detectDatumColumn MERGES a Datum/Valuta pair closer than the column gap (over-extraction risk)', () => {
+    // Datum x=50, Valuta x=58 → gap 8 < DEFAULT_COLUMN_GAP (12) → ONE band spanning both columns.
+    const tight = [
+      [word('05.04.', 50, 700)],
+      [word('07.04.', 58, 688)],
+      [word('12.04.', 50, 668)],
+      [word('14.04.', 58, 656)]
+    ]
+    expect(DEFAULT_COLUMN_GAP).toBe(12)
+    expect(detectDatumColumn(tight)).toEqual({ min: 50, max: 58 })
+    // Consequence: a Valuta-only second-baseline row (date at x=58, now INSIDE the merged band) + a money
+    // token qualifies as a transaction — a spurious row. SAFE via the completeness gate (it inflates the
+    // count / breaks the tie → downgrade, never a wrong total), but it is the boundary the gap guards.
+    const valutaRowInMergedBand = reconstructLine(
+      [word('07.04.', 58, 688), word('FX-Referenz', 170, 688), word('39,00', 440, 688)],
+      2025,
+      { min: 50, max: 58 }
+    )
+    expect(valutaRowInMergedBand).toBe('07.04.2025 FX-Referenz 39,00') // would be null with a clean gap
+    // A well-separated layout keeps the booking column narrow, so the same Valuta row is rejected.
+    const wide = [[word('05.04.', 50, 700)], [word('07.04.', 110, 688)], [word('12.04.', 50, 668)]]
+    expect(detectDatumColumn(wide)).toEqual({ min: 50, max: 50 })
+  })
+
+  it('a pdf.js-SPLIT amount is never reassembled → the row is dropped (recall loss, gate-safe)', () => {
+    // When a producer splits "2.000,00" into two adjacent items "2.000" + ",00" (a kerning/positioning
+    // gap pdf.js surfaces as two TextItems), neither fragment classifies as money — "2.000" is text and
+    // ",00" is text — so the row carries NO amount and reconstructLine drops it. The real transaction
+    // silently vanishes (a recall loss), but it is never mis-totalled. The fix (an x-adjacency money
+    // re-merge) is deferred with the money-column model.
+    const split = reconstructLine(
+      [word('05.01.', 50, 700), word('Gehalt', 160, 700), word('2.000', 420, 700), word(',00', 445, 700)],
+      2024,
+      { min: 50, max: 50 }
+    )
+    expect(split).toBeNull()
+    // The same row with the amount as ONE token reconstructs cleanly — proving the split is the cause.
+    const whole = reconstructLine(
+      [word('05.01.', 50, 700), word('Gehalt', 160, 700), word('2.000,00', 420, 700)],
+      2024,
+      { min: 50, max: 50 }
+    )
+    expect(whole).toBe('05.01.2024 Gehalt 2.000,00')
+  })
+
+  it('a running-balance figure shares the amount column → a money-column model cannot separate the phantom', () => {
+    // The gold-set HVB "Umsätze" over-extraction (boundary 1): each transaction prints a booking row
+    // (`<date> <desc> <amount>`) AND a per-row running-balance row (`<date> EUR <balance>`). On the real
+    // statement the amount and the balance are RIGHT-aligned in ONE numeric column — a larger balance
+    // starts a few points LEFT of a smaller amount, but the gap is < DEFAULT_COLUMN_GAP. So the analogue
+    // of detectDatumColumn for money (the deferred "money-column model") would cluster both x's into a
+    // SINGLE band and could NOT tell a phantom balance row from a genuine amount row by column. Pinned so
+    // the §21 rationale ("boundary 1 needs multi-baseline association, not a money-column model") can't
+    // silently rot. These are the MEASURED gold-set x's: ~493 is the running-balance column, ~495–510
+    // the (right-aligned) amount column. Every CONSECUTIVE gap is ≤ DEFAULT_COLUMN_GAP, so a band-cluster
+    // (the gap rule detectDatumColumn uses) merges the whole set into ONE band — balance and amount are
+    // not separable by column.
+    const moneyXs = [493, 495, 499, 505, 508, 510]
+    const sorted = [...moneyXs].sort((a, b) => a - b)
+    const maxConsecutiveGap = Math.max(...sorted.slice(1).map((x, i) => x - sorted[i]))
+    expect(maxConsecutiveGap).toBeLessThanOrEqual(DEFAULT_COLUMN_GAP)
+    // reconstructLine emits the running-balance row as a transaction: a date in the Datum column + the
+    // balance figure (a money token) + the bare currency code as the description. Nothing about its token
+    // classes or columns distinguishes it from a genuine amount row, so geometry alone over-extracts it.
+    const phantom = reconstructLine(
+      [word('07.02.', 50, 700), word('EUR', 470, 700), word('1.234,56', 493, 700)],
+      2024,
+      { min: 50, max: 50 }
+    )
+    expect(phantom).toBe('07.02.2024 EUR 1.234,56')
   })
 })
