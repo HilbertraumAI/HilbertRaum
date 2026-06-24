@@ -48,10 +48,20 @@ const INCOMPLETE = tr('skills.bankAnalysis.incompleteNoTotal')
 const NO_CURRENCY = tr('skills.bankAnalysis.noCurrency')
 const EMPTY = tr('skills.bankAnalysis.empty')
 
-/** Per-statement ground truth (gitignored `<name>.expected.json`). Only `trueRowCount` is required. */
+/** Per-statement ground truth (gitignored `<name>.expected.json`). Only `trueRowCount` is required
+ *  (omittable when `imageOnly` — a scan has no text-layer rows to recall). */
 interface Expectation {
   /** The true number of transaction rows printed on the statement (hand-counted). */
-  trueRowCount: number
+  trueRowCount?: number
+  /**
+   * The statement is an IMAGE-ONLY scan (no text layer) — e.g. a user "blacked out" / flattened it to
+   * an image. Stage 1 reads the text layer, so it recovers nothing and `PdfParser.parse` raises the
+   * scan-detected error. Marked statements are EXCLUDED from the recall/gate aggregates (recovering
+   * them is the OCR path's job, not geometry) and instead SAFETY-asserted: 0 rows, no total, 0 model
+   * calls — a user who blacks/scans a statement must never get a confident wrong total. The parse throw
+   * is auto-detected too, so this flag is belt-and-braces / documentation of intent.
+   */
+  imageOnly?: boolean
   /** ISO-4217 currency, if you want to assert it; Stage 1 detects it either way. */
   currency?: string
   /** The printed opening balance (Anfangssaldo / balance brought forward), if the statement prints one. */
@@ -77,6 +87,8 @@ interface PerStatement {
   expectedOpening: number | null
   expectedClosing: number | null
   modelCalls: number
+  /** Image-only scan (no text layer): excluded from recall/gate, safety-asserted instead. */
+  scanned: boolean
 }
 
 const MONEY_EPS = 0.005
@@ -137,8 +149,30 @@ function ctxFor(
 /** Run one statement through the real Stage-1 path and pull the metrics from the PERSISTED result. */
 async function measureOne(pdfPath: string, exp: Expectation): Promise<PerStatement> {
   const maxPages = exp.maxPages ?? 200
+  /** A scan / image-only statement: 0 rows, no total, 0 model calls (the safe outcome). */
+  const scannedResult = (): PerStatement => ({
+    trueRows: exp.trueRowCount ?? 0,
+    extractedRows: 0,
+    totalPresented: false,
+    presentedNet: null,
+    persistedOpening: null,
+    persistedClosing: null,
+    expectedOpening: exp.openingBalance ?? null,
+    expectedClosing: exp.closingBalance ?? null,
+    modelCalls: 0,
+    scanned: true
+  })
   const db = freshDb()
-  const segments = await parseSegments(pdfPath, true, maxPages)
+  let segments: DocumentChunkRead[]
+  try {
+    segments = await parseSegments(pdfPath, true, maxPages)
+  } catch {
+    // PdfParser raises the scan-detected error for an image-only PDF (no text layer) — the
+    // user-blacks-out/scans case. Stage 1 reads the text layer, so it recovers nothing; record it as
+    // a scanned statement (excluded from recall, safety-asserted below). NEVER a model call.
+    return scannedResult()
+  }
+  if (exp.imageOnly) return scannedResult() // declared image-only (belt-and-braces if any text slipped in)
   const docId = seedDoc(db, segments)
   const events: Array<{ type: AuditEventType; meta?: Record<string, unknown> }> = []
   const res = await bankStatementAnalysisHandler.run!(ctxFor(db, docId, pdfPath, maxPages, events))
@@ -177,7 +211,7 @@ async function measureOne(pdfPath: string, exp: Expectation): Promise<PerStateme
     !res.answer.includes(INCOMPLETE) && !res.answer.includes(NO_CURRENCY) && !res.answer.includes(EMPTY)
 
   return {
-    trueRows: exp.trueRowCount,
+    trueRows: exp.trueRowCount ?? 0,
     extractedRows,
     totalPresented,
     presentedNet: totalPresented ? Math.round(sumRow.s * 100) / 100 : null,
@@ -185,7 +219,8 @@ async function measureOne(pdfPath: string, exp: Expectation): Promise<PerStateme
     persistedClosing: stmt?.closing ?? null,
     expectedOpening: exp.openingBalance ?? null,
     expectedClosing: exp.closingBalance ?? null,
-    modelCalls
+    modelCalls,
+    scanned: false
   }
 }
 
@@ -225,8 +260,14 @@ describe.runIf(RUN)('PDF geometry-extraction — Stage-1 gold-set measurement (l
       return
     }
 
-    const results: PerStatement[] = []
-    for (const { pdf, exp } of corpus) results.push(await measureOne(pdf, exp))
+    const all: PerStatement[] = []
+    for (const { pdf, exp } of corpus) all.push(await measureOne(pdf, exp))
+
+    // Image-only scans (no text layer — the user-blacks-out/scans case) are EXCLUDED from the recall
+    // and gate aggregates: recovering them is the OCR path's job, not geometry, so folding them in would
+    // measure "no OCR here", not column quality. They are safety-asserted separately below.
+    const scanned = all.filter((r) => r.scanned)
+    const results = all.filter((r) => !r.scanned)
 
     // ---- Aggregate metrics (the ONLY thing safe to surface; never per-statement content) ----------
     const n = results.length
@@ -234,11 +275,11 @@ describe.runIf(RUN)('PDF geometry-extraction — Stage-1 gold-set measurement (l
     const sumExtracted = results.reduce((a, r) => a + r.extractedRows, 0)
     const microRecall = sumTrue > 0 ? sumExtracted / sumTrue : 0
     const macroRecall =
-      results.reduce((a, r) => a + (r.trueRows > 0 ? Math.min(r.extractedRows / r.trueRows, 1) : 0), 0) / n
+      n > 0 ? results.reduce((a, r) => a + (r.trueRows > 0 ? Math.min(r.extractedRows / r.trueRows, 1) : 0), 0) / n : 0
     const perfectRecall = results.filter((r) => r.extractedRows >= r.trueRows).length
 
     const gatePass = results.filter((r) => r.totalPresented).length
-    const gatePassRate = gatePass / n
+    const gatePassRate = n > 0 ? gatePass / n : 0
 
     // Figure exact-match: of statements whose expectation prints opening/closing, how many did Stage 1
     // persist EXACTLY (the verbatim figures the gate ties against).
@@ -251,27 +292,30 @@ describe.runIf(RUN)('PDF geometry-extraction — Stage-1 gold-set measurement (l
         Math.abs(r.persistedClosing - (r.expectedClosing as number)) < MONEY_EPS
     ).length
 
-    // ---- D56 cardinal safety invariants (these MUST hold on any data) -----------------------------
+    // ---- D56 cardinal safety invariants (these MUST hold on any data, scans INCLUDED) -------------
     // Partial-total-presented: a total was shown but we did NOT extract every true row (a confident
     // total from an incomplete set — exactly what D56 forbids).
-    const partialTotals = results.filter((r) => r.totalPresented && r.extractedRows < r.trueRows)
+    const partialTotals = all.filter((r) => r.totalPresented && r.extractedRows < r.trueRows)
     // Hallucinated figure: a total was shown whose net disagrees with the statement's true net
     // (closing − opening). For a deterministic Stage 1 this should be impossible (the gate proves
     // opening + Σ == closing), so a non-zero count is a real safety regression to investigate.
-    const hallucinated = results.filter((r) => {
+    const hallucinated = all.filter((r) => {
       if (!r.totalPresented || r.presentedNet == null) return false
       if (r.expectedOpening == null || r.expectedClosing == null) return false
       const expectedNet = r.expectedClosing - r.expectedOpening
       return Math.abs(r.presentedNet - expectedNet) >= MONEY_EPS
     })
-    const totalModelCalls = results.reduce((a, r) => a + r.modelCalls, 0)
+    const totalModelCalls = all.reduce((a, r) => a + r.modelCalls, 0)
+    // Image-only safety: a scanned statement must extract NOTHING and present NO total (a user who
+    // blacks/scans a statement must never get a confident wrong total) — and never a model call.
+    const scanLeak = scanned.filter((r) => r.extractedRows > 0 || r.totalPresented || r.modelCalls > 0)
 
     const pct = (x: number): string => `${(x * 100).toFixed(1)}%`
     // eslint-disable-next-line no-console
     console.log(
       [
         '\n================ PDF GOLD-SET — STAGE-1 AGGREGATE METRICS ================',
-        `statements measured ......... ${n}`,
+        `statements measured ......... ${n}  (text-layer; ${scanned.length} image-only scan(s) excluded)`,
         `transaction recall (micro) .. ${pct(microRecall)}  (${sumExtracted}/${sumTrue} rows)`,
         `transaction recall (macro) .. ${pct(macroRecall)}  (mean per-statement, capped at 100%)`,
         `statements at full recall ... ${perfectRecall}/${n}`,
@@ -279,6 +323,7 @@ describe.runIf(RUN)('PDF geometry-extraction — Stage-1 gold-set measurement (l
         `figure exact-match .......... ${
           withBalances.length > 0 ? `${pct(balanceExact / withBalances.length)} (${balanceExact}/${withBalances.length} with printed balances)` : 'n/a (no expected balances supplied)'
         }`,
+        `image-only (scan) statements  ${scanned.length}   (0 rows each — OCR-scope, safe downgrade)`,
         `hallucinated-figure count ... ${hallucinated.length}   (MUST be 0)`,
         `partial-total-presented ..... ${partialTotals.length}   (MUST be 0 — D56)`,
         `model calls (Stage 1) ....... ${totalModelCalls}   (MUST be 0)`,
@@ -292,6 +337,8 @@ describe.runIf(RUN)('PDF geometry-extraction — Stage-1 gold-set measurement (l
     // harm the gate exists to prevent. These are hard failures on ANY corpus.
     expect(partialTotals.length, 'a total presented from an incomplete extraction (D56 violation)').toBe(0)
     expect(hallucinated.length, 'a presented total whose net disagrees with the printed balances').toBe(0)
+    // Image-only / blacked statements must degrade safely: no rows, no total, no model call.
+    expect(scanLeak.length, 'an image-only/blacked statement leaked a row or a total').toBe(0)
     // Recall + exact-match are MEASURED, not asserted — they are the input to the D52 Stage-2 decision.
   }, 600_000)
 })

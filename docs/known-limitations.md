@@ -324,6 +324,15 @@ password recovery — are documented in
   layouts vary widely (no-printed-balance statements, ruled/borderless tables, scans), deterministic
   geometry will likely miss some, so Stage 2 should be treated as a **probable future need** — broaden
   the gold-set corpus across more banks/layouts to confirm and trigger it (it is gated, not abandoned).
+  **Two boundaries the broader corpus surfaced (both SAFE — no wrong total is ever shown):** (1) a
+  statement that prints a **per-row running-balance** line shaped `<date> <currency> <balance>` (date in
+  the booking column) is over-extracted — the balance row is mis-read as a phantom transaction, so the
+  row count inflates — but the completeness gate still downgrades (no labelled opening/closing to tie), so
+  no total is presented; the scoped fix is an amount/Saldo money-column model (deferred — a text-only
+  guard can't separate it from a real transaction whose description wrapped to another line). (2) An
+  **image-only / "blacked-out" or scanned** statement has no text layer, so geometry-aware extraction
+  recovers nothing and returns the honest empty/downgrade (never a wrong total); reading it is the OCR
+  path's job, not Stage 1.
 - **Strictly one job at a time (D26).** While a summary runs, chat is refused with a
   friendly message + a cancel option, and vice versa — the one local model serves one
   request. The R-T1 probe confirmed the pinned b9585 WOULD serve concurrent requests on

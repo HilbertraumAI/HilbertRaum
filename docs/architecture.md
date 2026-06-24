@@ -2591,11 +2591,36 @@ on one line), and bare `DD.MM.` per-row dates with the year only in the header a
   reconstruction is never mistaken for an image-only scan). The bank analysis handler sets
   `layout:true`; every other caller is byte-unchanged.
 
-**Gold-set result (local-only corpus, D57; post-precision-fix, 2026-06-23).** Two statements — a
-sanitized HVB transactions-only excerpt and a full Raiffeisen "Mein ELBA" statement: micro recall
-**100% (71/71)**, gate pass **50% (1/2** — Raiffeisen presents the correct total; the HVB excerpt with
-no printed balances correctly downgrades**)**, figure-exact-match **100% (1/1)**, hallucinated /
-partial-total / model-calls all **0**.
+**Gold-set result (local-only corpus, D57; 2026-06-24).** Three text-layer statements — a sanitized HVB
+transactions-only excerpt, a full Raiffeisen "Mein ELBA" statement, and an HVB "Umsätze" page — plus one
+image-only scan (below): micro recall **116.5% (99/85)** — >100% because the HVB "Umsätze" page is
+OVER-extracted (next paragraph); macro recall **100%**; gate pass **33% (1/3** — only Raiffeisen prints
+opening/closing balances and ties out; the other two have no statement-level balance and correctly
+downgrade**)**; figure-exact-match **100% (1/1 with printed balances)**; hallucinated / partial-total /
+model-calls all **0**. The cardinal safety property holds across every statement: no total is ever
+presented from an incomplete or mis-counted set.
+
+**Two known Stage-1 boundaries the broader corpus surfaced (2026-06-24) — both SAFE, fixes scoped:**
+- **Per-row running-balance OVER-extraction.** Some statements (the HVB "Umsätze" export) print a
+  separate running-balance row BETWEEN transactions shaped `<date> <CUR> <balance>` with the date in the
+  booking-date column. Geometry rebuilds it, and because its only non-date/non-money token is the bare
+  currency code, `parseLine` reads that as the description and emits a phantom transaction (14 real rows
+  → 28). It is **safe** — the running balance is not a labelled opening/closing, so the completeness gate
+  downgrades (no total), never a wrong one — but it inflates the row count (the micro-recall >100% above).
+  The proper fix is an **amount/Saldo money-column model** (the analogue of `detectDatumColumn` for money:
+  a row whose only money token sits in the Saldo/balance column, with none in the Betrag/amount column, is
+  a balance row, not a transaction). It is **deferred**, not built: a naive "drop a currency-only
+  description" guard was tried and **rejected** because a real transaction whose description wraps onto
+  other baselines reconstructs as the *same* `<date> <CUR> <amount>` shape (it silently dropped 8 genuine
+  HVB rows) — text alone cannot separate the two, only the money column can. Recorded as the next Stage-1
+  hardening step (or Stage-2 input).
+- **Image-only / "blacked-out" statements.** A user who blacks out or scans a statement can flatten it to
+  a full-page IMAGE with no text layer. Stage 1 reads the text layer, so `PdfParser` raises the
+  scan-detected error and nothing is extracted → the **safe** empty/downgrade (0 rows, no total, 0 model
+  calls — a blacked statement never yields a confident wrong total). Recovering it is the **OCR path's**
+  job (§ "Scanned-PDF / photo OCR"), out of Stage-1 scope (plan §7). The gold-set harness detects the
+  scan throw, excludes such statements from the recall/gate aggregates, and **safety-asserts** the empty
+  outcome instead.
 
 **Conditional future — Stage 2 is NOT built, but is EXPECTED to be needed eventually.** It is not a
 *planned next step* (it lands only on evidence, per D52), but the expectation is that it **probably will

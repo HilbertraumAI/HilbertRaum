@@ -50,9 +50,15 @@ Each `<name>.expected.json` is the hand-counted ground truth for `<name>.pdf`:
 }
 ```
 
-- `trueRowCount` — **required**: the number of transaction rows actually printed on the statement.
+- `trueRowCount` — **required** (except when `imageOnly`): the number of transaction rows actually
+  printed on the statement.
 - `openingBalance` / `closingBalance` — the **printed** balances. Supply them to measure figure
   exact-match and to exercise the completeness gate (without them the gate downgrades by design).
+- `imageOnly` — set `true` for an **image-only scan** (no text layer — e.g. a user blacked-out /
+  flattened the PDF to an image). Stage 1 reads the text layer, so it recovers nothing and the parser
+  raises a scan-detected error; such statements are **excluded from the recall/gate aggregates** (that's
+  the OCR path's job, not geometry) and instead **safety-asserted**: 0 rows, no total, 0 model calls.
+  `trueRowCount` may be omitted for these. Example: `{ "imageOnly": true, "currency": "EUR", "notes": "…" }`.
 - `currency`, `maxPages`, `notes` — optional. `notes` is never emitted in any output.
 
 ### Running

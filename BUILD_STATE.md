@@ -6,6 +6,28 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-24 — **PDF geometry-extraction — gold-set BREADTH (2 new real statements) + 2 safe boundaries found (Phase 31, D52/D57;
+branch `pdf-geometry-extraction`).** Two more real statements added to the local-only gitignored corpus (D57 — never committed):
+an HVB "Umsätze" page (text layer, 14 true rows) and an HVB statement the user **blacked out** to an image. Findings:
+- **Gold set now (3 text + 1 scan):** micro recall **116.5% (99/85)** — >100% by design (see over-extraction below); macro 100%;
+  gate pass **33% (1/3)**; figure-exact **100% (1/1)**; hallucinated/partial-total/model-calls all **0**; the 1 image-only scan
+  handled safely (0 rows). Cardinal safety property holds on every statement.
+- **Boundary 1 — per-row running-balance OVER-extraction (SAFE).** The HVB "Umsätze" page prints a balance row
+  `<date> <CUR> <balance>` (date in the booking column) between transactions; geometry rebuilds it and `parseLine` reads the bare
+  currency code as a description → a phantom transaction (14→28). SAFE: no labelled opening/closing → the D56 gate downgrades, no
+  total. Proper fix = an amount/Saldo **money-column model** (analogue of `detectDatumColumn`). **DEFERRED** — a naive
+  "drop currency-only description" guard was implemented then **REVERTED**: a real transaction whose description wraps to another
+  baseline reconstructs as the *same* `<date> <CUR> <amount>` shape and the guard silently dropped 8 genuine HVB rows. Recorded
+  as the next Stage-1 hardening step (or Stage-2 input). NO production code changed this session.
+- **Boundary 2 — image-only / blacked statements (SAFE).** The blacked HVB PDF is 5 full-page images, zero text layer; Stage 1
+  reads the text layer → `PdfParser` raises scan-detected → empty/downgrade (0 rows, no total, 0 model calls). OCR-path scope, not
+  geometry (plan §7). The gold-set harness now tolerates the scan throw, EXCLUDES image-only statements from the recall/gate
+  aggregates, and safety-asserts the empty outcome (`Expectation.imageOnly`; README schema updated).
+- **As built (committed, on-branch):** harness `pdf-goldset.realdata.test.ts` (imageOnly handling + scan-leak assertion) + README;
+  docs architecture.md §21 (gold-set numbers + the two boundaries + the deferred money-column fix) + known-limitations.md. Corpus
+  statements + their expected.json stay gitignored. Full desktop suite **2190 passed / 37 skipped** (unchanged — gated harness +
+  docs only); typecheck clean. Merge prep unchanged — STILL AWAITING approval to push / open the PR._
+
 _2026-06-23 — **PHASE 31 CLOSED — PDF geometry-aware bank-statement extraction (Stage 1) condensed into the design record;
 plan file deleted (doc-lifecycle); branch `pdf-geometry-extraction`, unmerged.** Stage 1 is the shipped extractor for the
 verified layouts; Stage 2 stays DEFERRED + unapproved (D52 not closed — the gold set is too narrow). **Done this session:**
