@@ -2607,8 +2607,11 @@ presented from an incomplete or mis-counted set.
   currency code, `parseLine` reads that as the description and emits a phantom transaction (14 real rows
   → 28). It is **safe** — the running balance is not a labelled opening/closing, so the completeness gate
   downgrades (no total), never a wrong one; and on a statement that *also* prints opening/closing the
-  phantom balances inflate Σamounts so the `opening + Σ == closing` tie cannot hold → it likewise
-  downgrades (verified end-to-end, `pdf-bank-layout.test.ts` case (i)). The cost is precision/UX only: an
+  phantom balances inflate Σamounts so the `opening + Σ == closing` tie does not hold → it likewise
+  downgrades (verified end-to-end, `pdf-bank-layout.test.ts` case (i)). (The tie surviving would require
+  the per-row running balances to sum to ~0 within `MONEY_EPS` — an oscillating-around-zero account no
+  real statement produces and none in the gold set approaches; not categorically impossible, but not a
+  reachable exposure, so the gate is treated as safe here.) The cost is precision/UX only: an
   inflated row count (the micro-recall >100% above) and phantom citations, never a total. **A "money-column
   model" (the analogue of `detectDatumColumn` for money) was the assumed fix, but the 2026-06-24 geometry
   probe of the gold-set HVB "Umsätze" page showed it does NOT separate these rows: the running balance and
