@@ -14,6 +14,7 @@ export { SegmentedControl, type SegmentedControlProps, type SegmentedOption } fr
 export { Switch, type SwitchProps } from './Switch'
 export { Chip, type ChipProps } from './Chip'
 export { EmptyState, type EmptyStateProps } from './EmptyState'
+export { FolderGrid, type FolderGridProps, type FolderCard } from './FolderGrid'
 export { Progress, type ProgressProps } from './Progress'
 export { CoverageMeter, TierMenu } from './CoverageMeter'
 export { Spinner } from './Spinner'

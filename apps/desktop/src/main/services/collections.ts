@@ -36,6 +36,7 @@ interface CollectionRow {
   created_at: string
   updated_at: string
   archived_at: string | null
+  parent_id: string | null
 }
 
 function rowToCollection(r: CollectionRow): Collection {
@@ -48,7 +49,8 @@ function rowToCollection(r: CollectionRow): Collection {
     color: r.color,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
-    archivedAt: r.archived_at
+    archivedAt: r.archived_at,
+    parentId: r.parent_id ?? null
   }
 }
 
@@ -83,11 +85,14 @@ export function getBuiltinCollection(db: Db, type: 'library' | 'temporary'): Col
 export interface CreateCollectionOptions {
   description?: string | null
   color?: string | null
+  /** Nest under this collection (a folder); null/absent = top level. Must reference an existing row. */
+  parentId?: string | null
 }
 
 /**
- * Create a user collection (a Project). Built-ins are seeded by the migration, never here,
- * so `type` is restricted to non-built-in kinds in v1 (only `'project'` is used).
+ * Create a user collection (a Project / folder). Built-ins are seeded by the migration, never here,
+ * so `type` is restricted to non-built-in kinds in v1 (only `'project'` is used). An optional
+ * `parentId` nests it under another collection (the folder tree); the parent must exist.
  */
 export function createCollection(
   db: Db,
@@ -97,6 +102,10 @@ export function createCollection(
 ): Collection {
   const trimmed = name.trim()
   if (!trimmed) throw new Error('Collection name must not be empty')
+  const parentId = opts.parentId ?? null
+  if (parentId !== null && !getCollection(db, parentId)) {
+    throw new Error(`Unknown parent collection: ${parentId}`)
+  }
   const now = nowIso()
   const coll: Collection = {
     id: randomUUID(),
@@ -107,12 +116,13 @@ export function createCollection(
     color: opts.color ?? null,
     createdAt: now,
     updatedAt: now,
-    archivedAt: null
+    archivedAt: null,
+    parentId
   }
   db.prepare(
-    `INSERT INTO collections (id, name, type, description, builtin, color, created_at, updated_at, archived_at, retention_policy_json)
-     VALUES (?, ?, ?, ?, 0, ?, ?, ?, NULL, NULL)`
-  ).run(coll.id, coll.name, coll.type, coll.description, coll.color, coll.createdAt, coll.updatedAt)
+    `INSERT INTO collections (id, name, type, description, builtin, color, created_at, updated_at, archived_at, retention_policy_json, parent_id)
+     VALUES (?, ?, ?, ?, 0, ?, ?, ?, NULL, NULL, ?)`
+  ).run(coll.id, coll.name, coll.type, coll.description, coll.color, coll.createdAt, coll.updatedAt, parentId)
   return coll
 }
 
@@ -158,7 +168,82 @@ export function deleteCollection(db: Db, id: string): void {
   const existing = getCollection(db, id)
   if (!existing) return
   if (existing.builtin) throw new Error('Built-in collections cannot be deleted')
+  // Re-parent any children up to this node's parent so a sub-tree is never orphaned (the
+  // parent_id has no FK cascade by design). Then delete; document_collections cascades away.
+  db.prepare('UPDATE collections SET parent_id = ? WHERE parent_id = ?').run(existing.parentId, id)
   db.prepare('DELETE FROM collections WHERE id = ?').run(id)
+}
+
+// ---- Collection tree (nested folders, plan §13.x) ----------------------------------
+
+/** Direct children of a collection (parentId null = the top-level roots), built-ins first then name. */
+export function childCollections(db: Db, parentId: string | null): Collection[] {
+  const rows = (
+    parentId === null
+      ? db.prepare('SELECT * FROM collections WHERE parent_id IS NULL ORDER BY builtin DESC, name ASC').all()
+      : db.prepare('SELECT * FROM collections WHERE parent_id = ? ORDER BY builtin DESC, name ASC').all(parentId)
+  ) as unknown as CollectionRow[]
+  return rows.map(rowToCollection)
+}
+
+/**
+ * Expand a set of collection ids to themselves PLUS all descendants (the recursive subtree). Used by
+ * `resolveScope` so scoping to a folder retrieves everything filed under it. Archived descendant
+ * collections (and their sub-trees) are skipped unless `includeArchived` — an archived project is
+ * dropped as a source, so the parent shouldn't pull it back in. Seeds are always returned.
+ */
+export function descendantCollectionIds(
+  db: Db,
+  ids: string[],
+  opts: { includeArchived?: boolean } = {}
+): string[] {
+  if (ids.length === 0) return []
+  const placeholders = ids.map(() => '?').join(', ')
+  const rows = db
+    .prepare(
+      `WITH RECURSIVE sub(id) AS (
+         SELECT id FROM collections WHERE id IN (${placeholders})
+         UNION
+         SELECT c.id FROM collections c JOIN sub ON c.parent_id = sub.id
+         WHERE (? = 1 OR c.archived_at IS NULL)
+       )
+       SELECT id FROM sub`
+    )
+    .all(...ids, opts.includeArchived ? 1 : 0) as unknown as Array<{ id: string }>
+  return rows.map((r) => r.id)
+}
+
+/** Root→node ancestor chain (inclusive) for breadcrumbs. Defensive against a corrupt cycle. */
+export function collectionBreadcrumb(db: Db, id: string): Collection[] {
+  const chain: Collection[] = []
+  const seen = new Set<string>()
+  let cur = getCollection(db, id)
+  while (cur && !seen.has(cur.id)) {
+    seen.add(cur.id)
+    chain.unshift(cur)
+    cur = cur.parentId ? getCollection(db, cur.parentId) : null
+  }
+  return chain
+}
+
+/**
+ * Re-parent a collection (move it in the folder tree). `newParentId` null = move to top level.
+ * Guards: the node must exist and not be a built-in; the destination must exist; and the move must
+ * not create a cycle (a node cannot become a descendant of itself). Returns the updated collection.
+ */
+export function moveCollection(db: Db, id: string, newParentId: string | null): Collection {
+  const existing = getCollection(db, id)
+  if (!existing) throw new Error(`Unknown collection: ${id}`)
+  if (existing.builtin) throw new Error('Built-in collections cannot be moved')
+  if (newParentId !== null) {
+    if (!getCollection(db, newParentId)) throw new Error(`Unknown parent collection: ${newParentId}`)
+    // Cycle guard: the new parent must not be the node itself or anywhere in its subtree.
+    const subtree = new Set(descendantCollectionIds(db, [id], { includeArchived: true }))
+    if (subtree.has(newParentId)) throw new Error('Cannot move a collection inside its own subtree')
+  }
+  const now = nowIso()
+  db.prepare('UPDATE collections SET parent_id = ?, updated_at = ? WHERE id = ?').run(newParentId, now, id)
+  return { ...existing, parentId: newParentId, updatedAt: now }
 }
 
 /**
@@ -476,6 +561,13 @@ export function resolveScope(db: Db, conversationId: string): RetrievalScope {
       const lib = getBuiltinCollection(db, 'library')
       if (lib) collectionIds = [lib.id]
     }
+  }
+
+  // Nested folders: scoping to a collection retrieves its whole subtree, so expand the selected
+  // collection ids to include every (non-archived, unless includeArchived) descendant before the
+  // membership filter runs. A flat (un-nested) corpus is a no-op (each id expands to just itself).
+  if (collectionIds.length > 0) {
+    collectionIds = descendantCollectionIds(db, collectionIds, { includeArchived })
   }
 
   // Rule 1: chat attachments are always unioned in (after the hasExplicitDocSelection flag

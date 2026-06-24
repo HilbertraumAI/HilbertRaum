@@ -24,6 +24,7 @@ import {
   listConversations,
   listMessages,
   maybeSetTitleFromFirstMessage,
+  moveConversationToCollection,
   searchMessages,
   setConversationCollection,
   setConversationDefaultSkill,
@@ -113,6 +114,17 @@ export function registerChatIpc(ctx: AppContext): void {
     IPC.setConversationCollection,
     (_e, conversationId: string, collectionId: string | null): Conversation =>
       setConversationCollection(ctx.db, conversationId, collectionId ?? null)
+  )
+
+  // "Move to folder" — file a chat into a project (or remove with null). Sets the anchor AND
+  // auto-scopes retrieval to the folder's documents in one atomic write (see chat.ts).
+  ipcMain.handle(
+    IPC.moveConversationToFolder,
+    (_e, conversationId: string, collectionId: string | null): Conversation => {
+      const conv = moveConversationToCollection(ctx.db, conversationId, collectionId ?? null)
+      log.info('Conversation moved to folder', { conversationId, collectionId: collectionId ?? null })
+      return conv
+    }
   )
 
   // Replace the "ask selected documents" scope (spec §10.4) — chip removal

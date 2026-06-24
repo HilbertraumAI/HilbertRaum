@@ -54,6 +54,7 @@ const AUDIT_TYPE_LABELS: Record<AuditEventType, MessageKey> = {
   collection_created: 'diag.audit.collection_created',
   collection_renamed: 'diag.audit.collection_renamed',
   collection_archived: 'diag.audit.collection_archived',
+  collection_moved: 'diag.audit.collection_moved',
   collection_deleted: 'diag.audit.collection_deleted',
   documents_added_to_collection: 'diag.audit.documents_added_to_collection',
   documents_removed_from_collection: 'diag.audit.documents_removed_from_collection',

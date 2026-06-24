@@ -1669,8 +1669,32 @@ conversation_documents(conversation_id, document_id, added_at)    -- C3 temp-att
   `source_relative_path` / `source_folder_label` (folder-import display metadata),
   `pending_destination_json` (M1), `expires_at` (reserved for Phase-E.2 retention, NULL in v1).
   **`last_used_at` is deferred** (L2 — it would add a hot-path write per cited doc).
-- Additive `conversations` columns: `collection_id` (the legacy single-project creation anchor) +
+- Additive `conversations` columns: `collection_id` (the single-project **folder** anchor) +
   `scope_v2_json` (the D1 composite `DocumentScope`).
+- **Conversation folders (unified with document projects).** A folder *is* a `collections` row of
+  `type='project'` — the same project shown on the Documents screen; chats and documents live in one
+  project. The chat sidebar's row `⋯` → **Move to folder** files a conversation via
+  `moveConversationToCollection` (chat.ts, `chat:moveToFolder`), which sets `collection_id` AND
+  auto-scopes retrieval (`scope_v2_json = { collectionIds:[folder], documentIds:[] }`) in one atomic
+  UPDATE; removing (null) clears both. Anchor (grouping) and scope (retrieval) can later diverge if the
+  user re-picks scope via the popover; that's intended — grouping follows the folder, retrieval follows
+  the last explicit choice.
+- **Two sidebar views (Recent / By Project), a per-list toggle** (`listView`: `'recent' | 'byProject'`, localStorage
+  `hilbertraum.chat.listView`, default **Recent**). **Recent** is the existing flat, date-grouped
+  timeline — folder-agnostic, but each row now wears its folder's name as a meta tag (`folder` icon) so
+  you can see where a chat lives without leaving the timeline. **By Project** is the browser: a card grid
+  of folders (the generic `FolderGrid` component, `components/FolderGrid.tsx`) — one card per live
+  project **including empty ones**, a catch-all "Other / Library" card for folder-less chats, and a
+  dashed **+ New folder** card (`onCreateFolder`). Opening a card drills in: a back header + the
+  folder's name + per-folder **New chat here** (`onNewInFolder` → a documents-mode chat anchored+scoped
+  to the folder) and **Files** (`onOpenFolderFiles` → `navigate('documents:project:<id>')`, the
+  `documents:project:*` virtual target opens the Documents screen filtered to that project) + the
+  folder's date-grouped chats. Grouping is no longer automatic: the timeline stays the default and
+  folders are an opt-in browse mode.
+- **`FolderGrid` is shared with the Documents screen.** The same card grid renders on the Documents
+  "All" view (`DocumentsScreen.tsx`), so files are also browsable by folder; opening a card filters the
+  list to that project (`setSection`), the dashed card opens the New-project modal. One generic folder
+  view, two surfaces.
 - **Migration** (idempotent, inside `openDatabase`): create tables → `ensureColumn`s → seed **one**
   Library + **one** Temporary built-in (canonical English name stored; UI localizes by `type`) →
   **backfill Library membership** for every `status='indexed'` doc that has no membership **and

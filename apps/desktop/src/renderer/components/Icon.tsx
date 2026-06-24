@@ -14,6 +14,7 @@ export type IconName =
   | 'home'
   | 'chat'
   | 'file'
+  | 'folder'
   | 'image'
   | 'brain'
   | 'settings'
@@ -79,6 +80,15 @@ const GLYPHS: Record<IconName, Glyph> = {
         <path d="M8.75 12.5h6.5" />
         <path d="M8.75 16h4.75" />
       </g>
+    )
+  },
+
+  // Folder (Lucide idiom): the universal container glyph for projects/folders — a tab on the
+  // top-left, distinct from `file`. 24-grid, 1.65 round stroke like the rest of the set; tracks
+  // currentColor so it stays calm and low-chroma.
+  folder: {
+    body: (
+      <path d="M4 20h16a2 2 0 0 0 2-2V8.5a2 2 0 0 0-2-2h-7.6a2 2 0 0 1-1.5-.68l-.9-1.04A2 2 0 0 0 8.5 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2Z" />
     )
   },
 

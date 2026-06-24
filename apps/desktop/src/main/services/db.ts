@@ -629,6 +629,11 @@ export function openDatabase(path: string): Db {
   ensureColumn(db, 'documents', 'expires_at', 'expires_at TEXT')
   ensureColumn(db, 'conversations', 'collection_id', 'collection_id TEXT')
   ensureColumn(db, 'conversations', 'scope_v2_json', 'scope_v2_json TEXT')
+  // Nested collections / folders: a self-referential parent (NULL = top level). Plain TEXT (no FK via
+  // ALTER, matching the additive-column convention) — the collections service validates the parent,
+  // guards cycles, and re-parents children on delete; scoping to a node expands to its whole subtree.
+  ensureColumn(db, 'collections', 'parent_id', 'parent_id TEXT')
+  db.exec('CREATE INDEX IF NOT EXISTS idx_collections_parent ON collections(parent_id)')
   // Whole-document analysis (plan §3.2). All nullable (the ensureColumn DDL grammar forbids
   // DEFAULT/NOT NULL, so NULL is the sentinel, coalesced in code).
   //   tree_status   — NULL | 'pending' | 'building' | 'ready' | 'stale' | 'failed'

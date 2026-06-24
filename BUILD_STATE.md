@@ -6,6 +6,75 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-25 — **Nested collections (folder hierarchy) + anchor auto-sync — DATA LAYER (waves 1–2 of the approved plan; UI wave pending).**
+Two things, plan-approved (decisions: auto-sync anchor, multi-membership, nest collections — NOT a separate VFS — recursive
+subtree scope, arbitrary depth). **Wave 1 (desync fix):** `setScope` (chat.ts) now reconciles the `collection_id` folder anchor
+from the new scope via `deriveProjectAnchor` (lone whole live project → that id; mixed/specific-doc/built-in/archived/empty →
+null) in one UPDATE, so By-Project grouping always follows the scope — the popover can no longer leave a chat grouped under a
+stale folder. ChatScreen already refreshes conversations after `setConversationScope`. **Wave 2 (nesting):** additive
+`collections.parent_id` (plain TEXT, no FK — service enforces integrity) + `idx_collections_parent` (db.ts ensureColumn).
+`collections.ts` gains tree ops: `createCollection({parentId})`, `childCollections`, `moveCollection` (cycle-guarded via
+`descendantCollectionIds`, built-ins immovable), `collectionBreadcrumb`, `descendantCollectionIds` (WITH RECURSIVE; prunes
+archived branches unless includeArchived), and `deleteCollection` now **re-parents children** to the deleted node's parent (no
+orphaned sub-trees). **Recursive scope:** `resolveScope` expands selected `collectionIds` to their whole subtree before the
+membership filter, so scoping to a parent retrieves everything filed under it (flat corpora are a no-op). `buildScopeFilter`
+(retrieval-scope.ts) is unchanged (pure). `Collection.parentId` added to the type + `rowToCollection`; IPC/preload gain
+`collections:children/move/breadcrumb` and `createCollection` carries `parentId`; new `collection_moved` audit event (+ i18n).
+**As built (typecheck + build clean; full suite green except the 3 known pre-existing platform failures):** new
+`tests/unit/collections-tree.test.ts` (nest/list/breadcrumb; move cycle+built-in guards; delete re-parents; descendant subtree +
+archived pruning; a grandchild-only doc is retrieved when scoping to the ancestor, not a sibling) and `conversation-folder.test.ts`
+extended (setScope anchor reconcile: single project ↔ anchor; mixed/built-in/archived → unfiled). **NEXT: wave 3 UI** — Documents
+rail as a collapsible tree, FolderGrid nested drill-in (breadcrumb, create/rename/move/delete under current), ScopePopover tree
+picker (subtree scope). No UI yet ⇒ nesting is reachable only via API/tests so far._
+
+_2026-06-25 — **Conversation folders, part 3 — generic FolderGrid card view (chat folder browser + Documents).** Per user
+steer: the folder/"project" view should look like a grid of folder cards, made generic and reused on the files screen. New
+**`components/FolderGrid.tsx`** — presentational responsive card grid (folder glyph box + name label + optional count; `onOpen`,
+optional dashed `onNew` card). **Chat Folders view** rewritten from the list-of-sections to a `FolderGrid` overview with
+**drill-in**: opening a card sets `openFolderId` → a back header (folder name + New chat here / Files) + that folder's
+date-grouped chats; an "Other / Library" card collects unfiled chats; a "+ New folder" card creates an EMPTY folder
+(`onCreateFolder`; ChatScreen `folderModal` generalized to `conv: Conversation | null` so it can create-without-moving).
+**Documents screen** renders the SAME `FolderGrid` on the "All" view (`section.kind === 'all'`) — files browsable by folder;
+opening a card filters to that project (`setSection`), the dashed card opens the New-project modal (reuses existing
+`docs.section.projects` / `docs.project.create` keys). **New `folder` icon** already added in part 2. i18n
+`chat.folder.back`/`empty` (en+de). CSS: `.folder-grid`/`.folder-card*` + chat drill-in header. **As built (typecheck clean):**
+ConversationList tests extended (Folders overview shows a card per project incl. empty; drilling a card reveals its chats + a
+Back control); existing suite green except the 3 known pre-existing platform failures. Run full suite + build before commit._
+
+_2026-06-25 — **Conversation folders, part 2 — two-view sidebar (Recent / Folders) + per-folder actions + folder icon.** Builds
+on the 2026-06-24 folders work per user steer: don't force folder navigation — keep the chronological list as default and make
+folders an opt-in browse view. **ConversationList** gains a `listView` toggle (SegmentedControl; localStorage
+`hilbertraum.chat.listView`, default **recent**). **Recent** = the existing flat date-grouped timeline, now with each row showing
+its folder's name as a meta tag (new `folder` icon) so the folder-agnostic list still shows where a chat lives. **Folders** =
+`groupByProject` browser (one collapsible section per live project incl. EMPTY ones), each project header carrying **New chat
+here** + **Files**. This **reverts the 2026-06-24 auto-grouping** (groupByProject no longer auto-replaces the timeline — it's
+gated behind the toggle). **New chat here** → `onNewInFolder` creates a documents-mode chat anchored+scoped to the folder.
+**Files** → `onOpenFolderFiles` → `navigate('documents:project:<id>')`: NEW `documents:project:*` virtual target in
+navigation.ts (`NavResolution.documentsProjectId`), captured in App.tsx and passed to DocumentsScreen's new `initialProjectId`
+prop (seeds + syncs the section rail to that project) — the unified docs+chats workspace deep-link. **New `folder` icon** added
+to Icon.tsx (Lucide-style, 24-grid 1.65 stroke). i18n `chat.list.view*` + `chat.folder.newChatHere`/`files` (en+de). CSS for the
+view toggle + folder-section header actions. **As built (typecheck clean):** ConversationList test updated (Recent default tags
+rows; Folders view shows empty-folder sections), navigation test extended for `documents:project:<id>` (incl. empty-id
+degradation). Run full suite + build before commit._
+
+_2026-06-24 — **Conversation folders — file chats into projects (unified with document projects).** Users can now organize
+chats into folders. A folder IS a `collections` row of `type='project'` (the SAME project shown on the Documents screen —
+chats + docs share one project; decision: unified). Most plumbing already existed (`conversations.collection_id` anchor,
+`groupByProject`, collection CRUD IPC); this wires it to the surface. **New:** `moveConversationToCollection(db, convId,
+collectionId)` (chat.ts) sets `collection_id` AND auto-scopes retrieval (`scope_v2_json = { collectionIds:[folder],
+documentIds:[] }`) in one atomic UPDATE — null clears both; exposed as `chat:moveToFolder` IPC +
+`window.api.moveConversationToFolder`. **Renderer:** ConversationList row `⋯` gains a "Move to folder" submenu (folders +
+**New folder…** + **Remove from folder**); `groupByProject` now activates whenever ≥1 live project exists and renders a section
+for EVERY live project **including empty ones** (so a just-created folder is visible/droppable), else falls back to date
+grouping (unchanged folder-free UX). ChatScreen adds `onMoveConversation`/`onNewFolderFor` + a name-prompt Modal (mirrors the
+Documents project modal), refreshing conversations+collections after. **Decisions (user-confirmed):** unified folders = projects;
+ONE folder per conversation (reuse the single `collection_id` anchor, no join table); filing a chat AUTO-SCOPES it to the
+folder's docs (overridable later via the scope popover — anchor drives grouping, scope drives retrieval, may diverge by design).
+i18n keys `chat.folder.*` added (en+de). **As built (typecheck clean; full suite green except the 3 known pre-existing platform
+failures):** new `tests/unit/conversation-folder.test.ts` (move sets/clears both columns), extended `chat-ipc.test.ts`
+(`chat:moveToFolder` round-trip + auto-scope), new `tests/renderer/ConversationList.test.tsx` (groupByProject surfaces empty
+folders, activates with zero anchored chats, routes archived/dangling anchors to Other). No schema change, no new dependency._
+
 _2026-06-24 — **Assistant Markdown renderer switched to Streamdown (streaming-aware) + KaTeX math.** Replaced
 `react-markdown` + `remark-gfm` with **Streamdown** (`@streamdown/math` + `katex`) in `Transcript.tsx`'s shared
 `AssistantMarkdown`. **Reverses the FE-1 "live answer is PLAIN TEXT" decision** (architecture.md §FE-1): the live bubble

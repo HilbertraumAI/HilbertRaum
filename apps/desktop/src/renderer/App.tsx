@@ -61,6 +61,9 @@ function AppShell(): JSX.Element {
   // "Ask selected documents" handoff: the Documents screen's selection,
   // applied to the next documents conversation the Chat screen creates.
   const [chatScope, setChatScope] = useState<string[] | null>(null)
+  // Which project the Documents screen opens filtered to, set by a `documents:project:<id>`
+  // deep-link (the chat folder browser's "Files" action). Null ⇒ the default "All" section.
+  const [documentsProjectId, setDocumentsProjectId] = useState<string | null>(null)
   // The workspace lifecycle gate. Null = still loading; not 'unlocked' = show
   // the create-password / unlock gate before the normal app shell.
   const [workspace, setWorkspace] = useState<WorkspaceStateInfo | null>(null)
@@ -130,6 +133,9 @@ function AppShell(): JSX.Element {
       setChatScope(null)
     }
     if (next.settingsTab) setSettingsTab(next.settingsTab)
+    // Carry (or clear) the Documents project filter so a `documents:project:<id>` deep-link
+    // lands on that folder and any other navigation to Documents resets to "All".
+    if (next.screen === 'documents') setDocumentsProjectId(next.documentsProjectId ?? null)
     setScreen(next.screen)
   }
 
@@ -262,7 +268,9 @@ function AppShell(): JSX.Element {
             initialScopeDocumentIds={chatScope}
           />
         )}
-        {screen === 'documents' && <DocumentsScreen onAskSelected={askSelectedDocuments} />}
+        {screen === 'documents' && (
+          <DocumentsScreen onAskSelected={askSelectedDocuments} initialProjectId={documentsProjectId} />
+        )}
         {screen === 'images' && <ImagesScreen onNavigate={navigate} />}
         {screen === 'models' && <ModelsScreen />}
         {screen === 'skills' && <SkillsScreen />}

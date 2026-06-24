@@ -7,7 +7,7 @@ import {
   type Conversation,
   type ConversationSearchResult
 } from '@shared/types'
-import { Button, ConfirmDialog, Icon } from '../components'
+import { Button, ConfirmDialog, FolderGrid, Icon, SegmentedControl, type FolderCard } from '../components'
 import { useT, type I18n } from '../i18n'
 import { localizeServerCopy } from '../lib/displayMap'
 import type { MessageKey } from '@shared/i18n'
@@ -24,6 +24,20 @@ const SEARCH_DEBOUNCE_MS = 150
 
 /** Snippets shown per matching conversation (more hits exist; the best ones lead). */
 const SNIPPETS_PER_RESULT = 2
+
+/** The two ways to browse the same conversations: the recency timeline (default) or the folder
+ *  browser. A UI preference (not user data) → localStorage, outside the encrypted workspace. */
+/** Synthetic card id for the "Other / Library" catch-all (folder-less chats) in the folder browser. */
+const OTHER_FOLDER = '__other__'
+export const CONV_LIST_VIEW_KEY = 'hilbertraum.chat.listView'
+export type ConvListView = 'recent' | 'byProject'
+function readListView(): ConvListView {
+  try {
+    return localStorage.getItem(CONV_LIST_VIEW_KEY) === 'byProject' ? 'byProject' : 'recent'
+  } catch {
+    return 'recent'
+  }
+}
 
 /**
  * Split a snippet on the SEARCH_MARK_* markers from FTS5's snippet() into plain and
@@ -95,27 +109,26 @@ export interface ProjectSection {
 }
 
 /**
- * Group conversations by their creation-anchor project (plan §13.4). A `collection_id` that
- * references a missing or archived project (or no anchor at all) lands in "Other / Library".
- * Returns null when NO conversation is anchored to a live project — the caller then falls
- * back to plain date grouping (the common, project-free case; keeps the existing UX intact).
+ * Group conversations by their creation-anchor project (plan §13.4 — the "folders" feature). Every
+ * live (non-archived) project becomes a section — INCLUDING empty ones, so a folder you just created
+ * is visible and droppable into before it holds any chats. A `collection_id` that references a
+ * missing or archived project (or no anchor) lands in the "Other / Library" catch-all. Returns null
+ * only when NO live project exists — the caller then falls back to plain date grouping (the common,
+ * folder-free case; keeps the existing UX intact). Exported for tests.
  */
 export function groupByProject(
   conversations: Conversation[],
   collections: Collection[]
 ): ProjectSection[] | null {
-  const liveProjects = new Map(
-    collections.filter((c) => c.type === 'project' && c.archivedAt == null).map((c) => [c.id, c])
-  )
-  const anchored = conversations.some((c) => c.collectionId != null && liveProjects.has(c.collectionId))
-  if (!anchored) return null
-  const byProject = new Map<string, Conversation[]>()
+  const live = collections.filter((c) => c.type === 'project' && c.archivedAt == null)
+  if (live.length === 0) return null
+  const liveProjects = new Map(live.map((c) => [c.id, c]))
+  // Seed every live project (even empty) so its folder section always renders.
+  const byProject = new Map<string, Conversation[]>(live.map((c) => [c.id, []]))
   const other: Conversation[] = []
   for (const c of conversations) {
     if (c.collectionId != null && liveProjects.has(c.collectionId)) {
-      const list = byProject.get(c.collectionId) ?? []
-      list.push(c)
-      byProject.set(c.collectionId, list)
+      byProject.get(c.collectionId)!.push(c)
     } else {
       other.push(c)
     }
@@ -140,6 +153,16 @@ interface Props {
   onNew: () => void
   /** Called after the user confirms deletion. */
   onDelete: (c: Conversation) => void
+  /** File a conversation into a folder/project, or remove it (collectionId = null). */
+  onMove?: (c: Conversation, collectionId: string | null) => void
+  /** Create a new folder and move this conversation into it (parent prompts for the name). */
+  onNewFolder?: (c: Conversation) => void
+  /** Create a new (empty) folder from the folder browser's "+ New folder" card. */
+  onCreateFolder?: () => void
+  /** Start a new conversation already filed into a folder (the folder browser's "New chat here"). */
+  onNewInFolder?: (collectionId: string) => void
+  /** Open the Documents screen filtered to a folder's files (the folder browser's "Files" link). */
+  onOpenFolderFiles?: (collectionId: string) => void
   onCollapse: () => void
 }
 
@@ -155,10 +178,28 @@ export const ConversationList = memo(function ConversationList({
   onSelect,
   onNew,
   onDelete,
+  onMove,
+  onNewFolder,
+  onCreateFolder,
+  onNewInFolder,
+  onOpenFolderFiles,
   onCollapse
 }: Props): JSX.Element {
   const { t, tCount } = useT()
   const [pendingDelete, setPendingDelete] = useState<Conversation | null>(null)
+  // Recency timeline (default) vs folder browser — two views of the same conversations.
+  const [listView, setListView] = useState<ConvListView>(readListView)
+  // Folder browser drill-in: null = the folder-card overview; otherwise the opened folder's id
+  // (or OTHER_FOLDER for the unfiled/Library catch-all).
+  const [openFolderId, setOpenFolderId] = useState<string | null>(null)
+  const changeListView = useCallback((v: ConvListView): void => {
+    setListView(v)
+    try {
+      localStorage.setItem(CONV_LIST_VIEW_KEY, v)
+    } catch {
+      /* private mode — keep the in-memory choice */
+    }
+  }, [])
   // One controlled menu so right-click (context menu) can open the same "⋯" menu.
   const [menuOpenId, setMenuOpenId] = useState<string | null>(null)
   // Search: a non-empty query swaps the column to results. `results` is null
@@ -205,7 +246,14 @@ export const ConversationList = memo(function ConversationList({
   }, [])
   const handleRequestDelete = useCallback((c: Conversation): void => setPendingDelete(c), [])
 
-  // One conversation row (title + doc-meta + the ⋯ menu). Shared by date and project groups.
+  // Live (non-archived) projects = the folders a chat can be filed into, shown in the row's
+  // "Move to folder" submenu. Empty when the user has no projects (submenu shows just "New folder…").
+  const folders = collections.filter((c) => c.type === 'project' && c.archivedAt == null)
+  const folderNameById = new Map(folders.map((f) => [f.id, f.name]))
+
+  // One conversation row (title + doc-meta + the ⋯ menu). Shared by date and project groups. In the
+  // Recent (timeline) view a row also wears its folder's name as a meta tag, since the recency list
+  // is folder-agnostic; in the Folders view that's redundant (the section header names the folder).
   const renderRow = (c: Conversation): JSX.Element => (
     <ConvRow
       key={c.id}
@@ -213,15 +261,21 @@ export const ConversationList = memo(function ConversationList({
       active={c.id === activeId}
       streaming={streaming}
       menuOpen={menuOpenId === c.id}
+      folders={folders}
+      folderName={
+        listView === 'recent' && c.collectionId != null ? folderNameById.get(c.collectionId) : undefined
+      }
       onMenuOpenChange={handleMenuOpenChange}
       onSelect={onSelect}
       onRequestDelete={handleRequestDelete}
+      onMove={onMove}
+      onNewFolder={onNewFolder}
       t={t}
     />
   )
 
   // Date-grouped rows (Today / Yesterday / …) — the existing grouping, reused inside each
-  // project section when project grouping is active.
+  // project section in the Folders view.
   const renderDateGroups = (convs: Conversation[]): JSX.Element[] =>
     groupConversations(convs).map((group) => (
       <div key={group.labelKey} className="chat-conv-group" role="group" aria-label={t(group.labelKey)}>
@@ -230,9 +284,75 @@ export const ConversationList = memo(function ConversationList({
       </div>
     ))
 
-  // Project sections when any conversation is anchored to a live project (plan §13.4/N8),
-  // else null ⇒ plain date grouping (the common project-free case, unchanged UX).
-  const projectSections = groupByProject(conversations, collections)
+  // The folder browser: a card grid of folders (the "project view"). Opening a card drills into that
+  // folder — a back header + per-folder "New chat here"/"Files" actions + its date-grouped chats. A
+  // catch-all OTHER_FOLDER card collects folder-less chats; a "+ New folder" card creates one.
+  const isUnfiled = (c: Conversation): boolean => c.collectionId == null || !folderNameById.has(c.collectionId)
+  const renderFolderBrowser = (): JSX.Element => {
+    if (openFolderId == null) {
+      const counts = new Map<string, number>()
+      for (const c of conversations) {
+        if (c.collectionId != null && folderNameById.has(c.collectionId)) {
+          counts.set(c.collectionId, (counts.get(c.collectionId) ?? 0) + 1)
+        }
+      }
+      const cards: FolderCard[] = folders.map((f) => ({ id: f.id, name: f.name, count: counts.get(f.id) ?? 0 }))
+      const unfiled = conversations.filter(isUnfiled).length
+      if (unfiled > 0) cards.push({ id: OTHER_FOLDER, name: t('chat.list.otherGroup'), count: unfiled })
+      return (
+        <FolderGrid
+          folders={cards}
+          ariaLabel={t('chat.list.viewByProject')}
+          onOpen={setOpenFolderId}
+          onNew={onCreateFolder}
+          newLabel={t('chat.folder.new')}
+        />
+      )
+    }
+    const project = folders.find((f) => f.id === openFolderId)
+    const convs =
+      openFolderId === OTHER_FOLDER ? conversations.filter(isUnfiled) : conversations.filter((c) => c.collectionId === openFolderId)
+    return (
+      <div className="chat-folder-open">
+        <div className="chat-folder-open-head">
+          <button
+            type="button"
+            className="chat-folder-back"
+            aria-label={t('chat.folder.back')}
+            title={t('chat.folder.back')}
+            onClick={() => setOpenFolderId(null)}
+          >
+            ‹
+          </button>
+          <span className="chat-folder-open-name">{project ? project.name : t('chat.list.otherGroup')}</span>
+          {project && (
+            <span className="chat-proj-group-actions">
+              <button
+                type="button"
+                className="chat-proj-action"
+                disabled={streaming}
+                title={t('chat.folder.newChatHere')}
+                aria-label={t('chat.folder.newChatHere')}
+                onClick={() => onNewInFolder?.(project.id)}
+              >
+                +
+              </button>
+              <button
+                type="button"
+                className="chat-proj-action"
+                title={t('chat.folder.files')}
+                aria-label={t('chat.folder.files')}
+                onClick={() => onOpenFolderFiles?.(project.id)}
+              >
+                <Icon name="file" className="chat-proj-action-icon" />
+              </button>
+            </span>
+          )}
+        </div>
+        {convs.length === 0 ? <p className="hint">{t('chat.folder.empty')}</p> : renderDateGroups(convs)}
+      </div>
+    )
+  }
 
   return (
     <aside className="chat-sidebar" aria-label={t('chat.list.aria')}>
@@ -262,6 +382,19 @@ export const ConversationList = memo(function ConversationList({
           if (e.key === 'Escape') setQuery('')
         }}
       />
+      {!searching && (
+        <div className="chat-list-view">
+          <SegmentedControl
+            ariaLabel={t('chat.list.viewAria')}
+            value={listView}
+            onChange={changeListView}
+            options={[
+              { value: 'recent', label: t('chat.list.viewRecent') },
+              { value: 'byProject', label: t('chat.list.viewByProject') }
+            ]}
+          />
+        </div>
+      )}
       {searching && (
         <div
           className="chat-conv-list"
@@ -306,21 +439,7 @@ export const ConversationList = memo(function ConversationList({
       {!searching && (
         <div className="chat-conv-list">
           {conversations.length === 0 && <p className="hint">{t('chat.list.empty')}</p>}
-          {projectSections
-            ? projectSections.map((section) => (
-                <div
-                  key={section.project?.id ?? '__other__'}
-                  className="chat-proj-group"
-                  role="group"
-                  aria-label={section.project ? section.project.name : t('chat.list.otherGroup')}
-                >
-                  <div className="chat-proj-group-label">
-                    {section.project ? section.project.name : t('chat.list.otherGroup')}
-                  </div>
-                  {renderDateGroups(section.conversations)}
-                </div>
-              ))
-            : renderDateGroups(conversations)}
+          {listView === 'byProject' ? renderFolderBrowser() : renderDateGroups(conversations)}
         </div>
       )}
       <ConfirmDialog
@@ -350,18 +469,28 @@ const ConvRow = memo(function ConvRow({
   active,
   streaming,
   menuOpen,
+  folders,
+  folderName,
   onMenuOpenChange,
   onSelect,
   onRequestDelete,
+  onMove,
+  onNewFolder,
   t
 }: {
   c: Conversation
   active: boolean
   streaming: boolean
   menuOpen: boolean
+  /** Live projects the chat can be filed into (drives the "Move to folder" submenu). */
+  folders: Collection[]
+  /** The chat's folder name, shown as a meta tag in the Recent view (undefined ⇒ no tag). */
+  folderName?: string
   onMenuOpenChange: (id: string, open: boolean) => void
   onSelect: (c: Conversation) => void
   onRequestDelete: (c: Conversation) => void
+  onMove?: (c: Conversation, collectionId: string | null) => void
+  onNewFolder?: (c: Conversation) => void
   t: I18n['t']
 }): JSX.Element {
   return (
@@ -390,6 +519,13 @@ const ConvRow = memo(function ConvRow({
             <Icon name="file" className="chat-conv-meta-icon" /> {t('chat.list.docMeta')}
           </span>
         )}
+        {/* Recent view only: name the chat's folder so the folder-agnostic timeline still shows
+            where each chat lives (the Folders view groups by it, so it's omitted there). */}
+        {folderName && (
+          <span className="chat-conv-meta">
+            <Icon name="folder" className="chat-conv-meta-icon" /> {folderName}
+          </span>
+        )}
       </button>
       <DropdownMenu.Root open={menuOpen} onOpenChange={(open) => onMenuOpenChange(c.id, open)}>
         <DropdownMenu.Trigger asChild>
@@ -404,6 +540,46 @@ const ConvRow = memo(function ConvRow({
         </DropdownMenu.Trigger>
         <DropdownMenu.Portal>
           <DropdownMenu.Content className="menu" align="start" sideOffset={4}>
+            {onMove && (
+              <>
+                <DropdownMenu.Sub>
+                  <DropdownMenu.SubTrigger className="menu-item">
+                    {t('chat.folder.move')}
+                  </DropdownMenu.SubTrigger>
+                  <DropdownMenu.Portal>
+                    <DropdownMenu.SubContent className="menu" sideOffset={2} alignOffset={-4}>
+                      {folders.map((f) => (
+                        <DropdownMenu.Item
+                          key={f.id}
+                          className="menu-item"
+                          disabled={f.id === c.collectionId}
+                          onSelect={() => onMove(c, f.id)}
+                        >
+                          {f.name}
+                        </DropdownMenu.Item>
+                      ))}
+                      {onNewFolder && (
+                        <>
+                          {folders.length > 0 && <DropdownMenu.Separator className="menu-sep" />}
+                          <DropdownMenu.Item className="menu-item" onSelect={() => onNewFolder(c)}>
+                            {t('chat.folder.new')}
+                          </DropdownMenu.Item>
+                        </>
+                      )}
+                      {c.collectionId != null && (
+                        <>
+                          <DropdownMenu.Separator className="menu-sep" />
+                          <DropdownMenu.Item className="menu-item" onSelect={() => onMove(c, null)}>
+                            {t('chat.folder.remove')}
+                          </DropdownMenu.Item>
+                        </>
+                      )}
+                    </DropdownMenu.SubContent>
+                  </DropdownMenu.Portal>
+                </DropdownMenu.Sub>
+                <DropdownMenu.Separator className="menu-sep" />
+              </>
+            )}
             <DropdownMenu.Item className="menu-item danger" onSelect={() => onRequestDelete(c)}>
               {t('chat.delete.menuItem')}
             </DropdownMenu.Item>

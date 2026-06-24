@@ -45,6 +45,8 @@ export const IPC = {
   setConversationScope: 'chat:setScope',
   /** Persist a conversation's creation-anchor project (`collection_id`, plan §13.4). */
   setConversationCollection: 'chat:setCollection',
+  /** Move a conversation into a folder/project — sets anchor + auto-scopes retrieval. */
+  moveConversationToFolder: 'chat:moveToFolder',
   /** A conversation's temporary chat attachments (`conversation_documents`, plan C3/§16). */
   listAttachments: 'chat:listAttachments',
   /** Save a conversation transcript to a user-chosen file (spec §7.6). */
@@ -187,6 +189,12 @@ export const IPC = {
   setCollectionArchived: 'collections:setArchived',
   /** Delete a project: 'membershipOnly' (keep docs) or 'withDocuments' (delete project-only docs — C2). */
   deleteCollection: 'collections:delete',
+  /** Direct children of a collection in the folder tree (parentId null = top-level roots). */
+  childCollections: 'collections:children',
+  /** Re-parent a collection in the folder tree (newParentId null = top level; cycle-guarded). */
+  moveCollection: 'collections:move',
+  /** Root→node ancestor chain of a collection, for breadcrumbs. */
+  collectionBreadcrumb: 'collections:breadcrumb',
   // Skills (instruction packages; skills plan §16). Handlers in registerSkillsIpc.ts; all
   // DB-backed handlers requireUnlocked and resolve validation MAIN-side. Audit metadata is
   // ids/counts only (§22-M1).

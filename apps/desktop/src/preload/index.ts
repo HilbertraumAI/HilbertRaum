@@ -222,6 +222,12 @@ const api = {
     collectionId: string | null
   ): Promise<Conversation> =>
     ipcRenderer.invoke(IPC.setConversationCollection, conversationId, collectionId),
+  /** Move a conversation into a folder/project (null removes) — anchors + auto-scopes retrieval. */
+  moveConversationToFolder: (
+    conversationId: string,
+    collectionId: string | null
+  ): Promise<Conversation> =>
+    ipcRenderer.invoke(IPC.moveConversationToFolder, conversationId, collectionId),
   /** The conversation's temporary chat attachments (plan C3 — for the "Files in this chat"
    *  footer affordance). Only indexed+linked docs; a still-processing one shows as pending. */
   listAttachments: (conversationId: string): Promise<DocumentInfo[]> =>
@@ -384,10 +390,10 @@ const api = {
   // ---- Document organization — collections (projects + built-ins, plan §16) ----
   /** All collections (built-ins first, then projects by name). */
   listCollections: (): Promise<Collection[]> => ipcRenderer.invoke(IPC.listCollections),
-  /** Create a project. */
+  /** Create a project. Optional `parentId` nests it under another collection (the folder tree). */
   createCollection: (
     name: string,
-    opts?: { description?: string | null; color?: string | null }
+    opts?: { description?: string | null; color?: string | null; parentId?: string | null }
   ): Promise<Collection> => ipcRenderer.invoke(IPC.createCollection, name, opts),
   /** Rename a collection. */
   renameCollection: (id: string, name: string): Promise<Collection> =>
@@ -398,6 +404,15 @@ const api = {
   /** Delete a project — 'membershipOnly' keeps docs; 'withDocuments' deletes project-only docs (C2). */
   deleteCollection: (id: string, mode: 'membershipOnly' | 'withDocuments'): Promise<void> =>
     ipcRenderer.invoke(IPC.deleteCollection, id, mode),
+  /** Direct children of a collection in the folder tree (parentId null = top-level roots). */
+  childCollections: (parentId: string | null): Promise<Collection[]> =>
+    ipcRenderer.invoke(IPC.childCollections, parentId),
+  /** Re-parent a collection in the folder tree (newParentId null = top level; cycle-guarded). */
+  moveCollection: (id: string, newParentId: string | null): Promise<Collection> =>
+    ipcRenderer.invoke(IPC.moveCollection, id, newParentId),
+  /** Root→node ancestor chain of a collection, for breadcrumbs. */
+  collectionBreadcrumb: (id: string): Promise<Collection[]> =>
+    ipcRenderer.invoke(IPC.collectionBreadcrumb, id),
 
   // Skills (instruction packages; skills plan §16).
   /** All installed skills (app first, then by title). */

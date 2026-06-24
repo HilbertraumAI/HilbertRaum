@@ -14,7 +14,7 @@ import {
   type DocumentScope,
   type Message
 } from '../../shared/types'
-import { parseDocumentScope } from './collections'
+import { getCollection, parseDocumentScope } from './collections'
 import { buildFtsMatchQuery } from './fts'
 import { approxTokenCount } from './ingestion/chunker'
 import { getSettings } from './settings'
@@ -341,11 +341,26 @@ export function createConversation(db: Db, opts: CreateConversationOptions = {})
 }
 
 /**
+ * The folder a scope "is in" for By-Project grouping: the lone collection id when the scope is
+ * EXACTLY one whole live project (one collectionId, no specific documents), else null. Keeps the
+ * `collection_id` anchor a pure function of the scope so the two can never desync — a scope spanning
+ * several sources, specific docs, a built-in (Library/Temporary), or an archived/missing project all
+ * resolve to "unfiled" (null).
+ */
+function deriveProjectAnchor(db: Db, scope: DocumentScope | null): string | null {
+  if (!scope || scope.collectionIds.length !== 1 || scope.documentIds.length > 0) return null
+  const coll = getCollection(db, scope.collectionIds[0])
+  return coll && coll.type === 'project' && coll.archivedAt == null ? coll.id : null
+}
+
+/**
  * Persist a conversation's composite source scope (document-organization plan §8.3/D1) to
  * `scope_v2_json`. Null clears it (back to the legacy/Library interpretation); an empty
  * `DocumentScope` persists as the explicit "All documents" choice. Does NOT touch the
- * legacy `scope_json` (temp attachments never ride it — H4/C3). Returns the updated
- * conversation.
+ * legacy `scope_json` (temp attachments never ride it — H4/C3). Also reconciles the `collection_id`
+ * folder anchor from the new scope (`deriveProjectAnchor`) so the By-Project grouping always follows
+ * the scope — fixing the desync where changing scope left a chat grouped under a stale folder.
+ * Returns the updated conversation.
  */
 export function setScope(
   db: Db,
@@ -354,11 +369,13 @@ export function setScope(
 ): Conversation {
   const conv = getConversation(db, conversationId)
   if (!conv) throw new Error(`Unknown conversation: ${conversationId}`)
-  db.prepare('UPDATE conversations SET scope_v2_json = ? WHERE id = ?').run(
+  const collectionId = deriveProjectAnchor(db, scope)
+  db.prepare('UPDATE conversations SET scope_v2_json = ?, collection_id = ? WHERE id = ?').run(
     serializeDocumentScope(scope),
+    collectionId,
     conversationId
   )
-  return { ...conv, scope }
+  return { ...conv, scope, collectionId }
 }
 
 /**
@@ -378,6 +395,35 @@ export function setConversationCollection(
     conversationId
   )
   return { ...conv, collectionId }
+}
+
+/**
+ * File a conversation into a folder (= a document project) — the "Move to folder" action.
+ * Sets BOTH the creation anchor (`collection_id`, drives sidebar grouping) AND the retrieval
+ * scope (`scope_v2_json`) in one statement so the two never diverge mid-move:
+ *   • to folder F → anchor = F and scope = { collectionIds:[F], documentIds:[] }, so the chat
+ *     defaults to retrieving F's documents (the user can still override later via the scope
+ *     popover — that rewrites scope_v2_json but leaves the anchor, which is intended: grouping
+ *     follows the folder, retrieval follows the last explicit choice).
+ *   • remove (collectionId = null) → anchor cleared and scope cleared (back to Library/all docs).
+ * A single UPDATE is atomic, so no transaction wrapper is needed. Returns the updated conversation.
+ */
+export function moveConversationToCollection(
+  db: Db,
+  conversationId: string,
+  collectionId: string | null
+): Conversation {
+  const conv = getConversation(db, conversationId)
+  if (!conv) throw new Error(`Unknown conversation: ${conversationId}`)
+  const scope: DocumentScope | null = collectionId
+    ? { collectionIds: [collectionId], documentIds: [] }
+    : null
+  db.prepare('UPDATE conversations SET collection_id = ?, scope_v2_json = ? WHERE id = ?').run(
+    collectionId,
+    serializeDocumentScope(scope),
+    conversationId
+  )
+  return { ...conv, collectionId, scope }
 }
 
 /**

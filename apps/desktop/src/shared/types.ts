@@ -1335,6 +1335,9 @@ export interface Collection {
   updatedAt: string
   /** Project-level archive timestamp (null = active). A scope-target change, not a global exclusion. */
   archivedAt: string | null
+  /** Parent collection id for nesting (null = top level). Built-ins are always roots. Scoping to a
+   *  collection retrieves its whole subtree (this node + all descendants). */
+  parentId: string | null
 }
 
 /**
@@ -1777,6 +1780,7 @@ export type AuditEventType =
   | 'collection_created'
   | 'collection_renamed'
   | 'collection_archived'
+  | 'collection_moved'
   | 'collection_deleted'
   | 'documents_added_to_collection'
   | 'documents_removed_from_collection'

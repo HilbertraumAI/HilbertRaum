@@ -21,9 +21,18 @@ export interface NavResolution {
   settingsTab?: SettingsTab
   /** Set when the target picks the Chat screen's composer mode. */
   chatMode?: 'chat' | 'documents'
+  /** Set by `documents:project:<id>` — opens Documents filtered to that project (folder). */
+  documentsProjectId?: string
 }
 
 export function resolveNavTarget(target: string): NavResolution {
+  // Virtual target: open the Documents screen filtered to a specific project (the folder browser's
+  // "Files" deep-link). Parsed before the exact-match table since it carries an id suffix.
+  const PROJECT_PREFIX = 'documents:project:'
+  if (target.startsWith(PROJECT_PREFIX)) {
+    const id = target.slice(PROJECT_PREFIX.length)
+    return id ? { screen: 'documents', documentsProjectId: id } : { screen: 'documents' }
+  }
   switch (target) {
     case 'ask-documents':
       return { screen: 'chat', chatMode: 'documents' }

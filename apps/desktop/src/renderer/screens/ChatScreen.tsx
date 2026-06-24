@@ -27,7 +27,7 @@ import { skillTitleResolver } from '../lib/skillI18n'
 import { friendlyIpcError } from '../lib/errors'
 import { RUNTIME_POLL_MS, STREAM_RECOVER_POLL_MS } from '../lib/polling'
 import { useT } from '../i18n'
-import { Button, Chip, EmptyState, ErrorBanner, SegmentedControl, Spinner, useToast } from '../components'
+import { Button, Chip, EmptyState, ErrorBanner, Modal, SegmentedControl, Spinner, useToast } from '../components'
 import { Composer, ContextMeter, ConversationList, DepthMenu, ScopePopover, SkillPicker, SkillRunBar, Transcript } from '../chat'
 import type { MessageKey } from '@shared/i18n'
 
@@ -161,6 +161,9 @@ export function ChatScreen({
   // Collections (Library + projects) — drives the multi-select source picker + footer union
   // (document-organization plan §13). Best-effort: a failed load leaves the picker docs-only.
   const [collections, setCollections] = useState<Collection[]>([])
+  // "New folder…" prompt — from a conversation's Move submenu (conv set ⇒ also file that chat into
+  // the new folder) or the folder browser's "+ New folder" card (conv null ⇒ just create it).
+  const [folderModal, setFolderModal] = useState<{ conv: Conversation | null; name: string } | null>(null)
   // Voice dictation: availability-driven — the composer mic renders only
   // when a transcriber is selected (whisper binary + weights on the drive). Best-effort
   // like `docs`: a failed status read just hides the mic.
@@ -271,6 +274,10 @@ export function ChatScreen({
 
   const refreshConversations = useCallback(async (): Promise<void> => {
     setConversations(await window.api.listConversations())
+  }, [])
+
+  const refreshCollections = useCallback(async (): Promise<void> => {
+    setCollections((await window.api.listCollections?.()) ?? [])
   }, [])
 
   const checkRuntime = useCallback(async (): Promise<void> => {
@@ -553,6 +560,11 @@ export function ChatScreen({
   const handleSelectConversation = useEventCallback(onSelectConversation)
   const handleNewChat = useEventCallback(onNewChat)
   const handleDeleteConversation = useEventCallback(onDeleteConversation)
+  const handleMoveConversation = useEventCallback(onMoveConversation)
+  const handleNewFolder = useEventCallback(onNewFolderFor)
+  const handleCreateFolder = useEventCallback(onCreateFolderStandalone)
+  const handleNewInFolder = useEventCallback(onNewInFolder)
+  const handleOpenFolderFiles = useEventCallback(onOpenFolderFiles)
   const handleCollapseList = useEventCallback(collapseList)
   const fillComposerStable = useEventCallback(fillComposer)
 
@@ -861,6 +873,72 @@ export function ChatScreen({
     }
   }
 
+  // File a conversation into a folder/project (collectionId), or remove it (null). The main side
+  // also auto-scopes retrieval to the folder's documents (chat.ts moveConversationToCollection);
+  // refreshing the list re-reads the updated anchor + scope so the active chat's scope chip follows.
+  async function onMoveConversation(c: Conversation, collectionId: string | null): Promise<void> {
+    if (busyStreaming) return
+    try {
+      await window.api.moveConversationToFolder(c.id, collectionId)
+      await refreshConversations()
+    } catch (e) {
+      setError(friendlyIpcError(e))
+    }
+  }
+
+  // "New folder…" from a chat's Move submenu: open the name prompt; onSaveFolder creates the
+  // project and files this conversation into it.
+  function onNewFolderFor(c: Conversation): void {
+    if (busyStreaming) return
+    setFolderModal({ conv: c, name: '' })
+  }
+
+  // "+ New folder" from the folder browser card — create an empty folder (no conversation to file).
+  function onCreateFolderStandalone(): void {
+    setFolderModal({ conv: null, name: '' })
+  }
+
+  async function onSaveFolder(): Promise<void> {
+    const m = folderModal
+    if (!m) return
+    const name = m.name.trim()
+    if (!name) return
+    setFolderModal(null)
+    try {
+      const created = await window.api.createCollection(name)
+      // From the Move submenu we also file the chat into the new folder; the browser card just creates it.
+      if (m.conv) await window.api.moveConversationToFolder(m.conv.id, created.id)
+      await Promise.all([refreshCollections(), refreshConversations()])
+    } catch (e) {
+      setError(friendlyIpcError(e))
+    }
+  }
+
+  // Folder browser "New chat here": a fresh documents-mode conversation already anchored to the
+  // folder and scoped to its documents (the same shape `moveConversationToCollection` produces).
+  async function onNewInFolder(collectionId: string): Promise<void> {
+    if (busyStreaming) return
+    try {
+      const conv = await window.api.createConversation({
+        mode: 'documents',
+        collectionId,
+        scope: { collectionIds: [collectionId], documentIds: [] }
+      })
+      await refreshConversations()
+      setMode('documents')
+      setActiveId(conv.id)
+      setMessages([])
+    } catch (e) {
+      setError(friendlyIpcError(e))
+    }
+  }
+
+  // Folder browser "Files": jump to the Documents screen filtered to this project (unified model —
+  // the project holds both the chats grouped here and the documents shown there).
+  function onOpenFolderFiles(collectionId: string): void {
+    onNavigate(`documents:project:${collectionId}`)
+  }
+
   // Switching mode starts a fresh composition: if the active conversation is in a
   // different mode, deselect it so the next send creates a conversation in the new mode.
   function onSelectMode(next: Mode): void {
@@ -1083,6 +1161,11 @@ export function ChatScreen({
           onSelect={handleSelectConversation}
           onNew={handleNewChat}
           onDelete={handleDeleteConversation}
+          onMove={handleMoveConversation}
+          onNewFolder={handleNewFolder}
+          onCreateFolder={handleCreateFolder}
+          onNewInFolder={handleNewInFolder}
+          onOpenFolderFiles={handleOpenFolderFiles}
           onCollapse={handleCollapseList}
         />
       )}
@@ -1276,6 +1359,36 @@ export function ChatScreen({
           }
         />
       </section>
+      {/* "New folder…" prompt (from a conversation's Move submenu): create the project + file the
+          chat into it. Mirrors the Documents-screen project modal (single shared collections table). */}
+      {folderModal && (
+        <Modal
+          open
+          title={t('chat.folder.newTitle')}
+          ariaLabel={t('chat.folder.newTitle')}
+          onClose={() => setFolderModal(null)}
+          t={t}
+        >
+          <input
+            type="text"
+            className="text-input"
+            autoFocus
+            value={folderModal.name}
+            aria-label={t('chat.folder.nameAria')}
+            placeholder={t('chat.folder.namePlaceholder')}
+            onChange={(e) => setFolderModal({ ...folderModal, name: e.target.value })}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') void onSaveFolder()
+            }}
+          />
+          <div className="actions" style={{ marginTop: 12 }}>
+            <Button variant="primary" disabled={!folderModal.name.trim()} onClick={() => void onSaveFolder()}>
+              {t('chat.folder.create')}
+            </Button>
+            <Button onClick={() => setFolderModal(null)}>{t('docs.cancel')}</Button>
+          </div>
+        </Modal>
+      )}
     </div>
   )
 }

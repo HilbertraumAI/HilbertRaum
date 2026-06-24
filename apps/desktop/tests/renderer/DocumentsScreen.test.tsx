@@ -44,6 +44,7 @@ function coll(over: Partial<Collection>): Collection {
     createdAt: '2026-01-01T00:00:00Z',
     updatedAt: '2026-01-01T00:00:00Z',
     archivedAt: null,
+    parentId: null,
     ...over
   }
 }
@@ -64,16 +65,18 @@ describe('DocumentsScreen — organization', () => {
       ])
     })
     render(<DocumentsScreen />)
-    // Rail sections are present.
+    // Rail sections are present. (The project name now also appears on the new "All" folder-card
+    // grid, so scope the rail-specific assertions to the rail <nav> to stay unambiguous.)
     expect(await screen.findByRole('button', { name: 'Library' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Tax 2025' })).toBeInTheDocument()
+    const rail = screen.getByRole('navigation')
+    expect(within(rail).getByRole('button', { name: 'Tax 2025' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Generated' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Archived' })).toBeInTheDocument()
     // Both docs show under "All documents" (default section).
     expect(screen.getByText('policy.pdf')).toBeInTheDocument()
     expect(screen.getByText('return.pdf')).toBeInTheDocument()
-    // Selecting the project filters to its member.
-    await user.click(screen.getByRole('button', { name: 'Tax 2025' }))
+    // Selecting the project (from the rail) filters to its member.
+    await user.click(within(rail).getByRole('button', { name: 'Tax 2025' }))
     expect(screen.getByText('return.pdf')).toBeInTheDocument()
     expect(screen.queryByText('policy.pdf')).not.toBeInTheDocument()
   })

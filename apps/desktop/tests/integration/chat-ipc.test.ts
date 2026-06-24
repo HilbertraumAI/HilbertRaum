@@ -22,7 +22,8 @@ import { inFlightStreams } from '../../src/main/ipc/inflight'
 import { IPC, STREAM } from '../../src/shared/ipc'
 import { openDatabase, type Db } from '../../src/main/services/db'
 import { createConversation, listConversations, listMessages, appendMessage } from '../../src/main/services/chat'
-import { linkConversationDocument } from '../../src/main/services/collections'
+import { createCollection, linkConversationDocument } from '../../src/main/services/collections'
+import type { Conversation } from '../../src/shared/types'
 import { createMockEmbedder } from '../../src/main/services/embeddings/mock'
 import type { ModelRuntime, RuntimeChatOptions, ChatMessage } from '../../src/main/services/runtime'
 import type { AppContext } from '../../src/main/services/context'
@@ -84,6 +85,21 @@ describe('registerChatIpc', () => {
     registerChatIpc(makeCtx(db, runtime))
     await expect(invoke(handlers, IPC.sendChatMessage, conv.id, '   ')).rejects.toThrow(/empty message/)
     await expect(invoke(handlers, IPC.sendChatMessage, 'nope', 'hi')).rejects.toThrow(/Unknown conversation/)
+  })
+
+  it('moveToFolder files a conversation into a project and auto-scopes retrieval (null removes)', async () => {
+    const db = freshDb()
+    const project = createCollection(db, 'Project X')
+    const conv = createConversation(db, {})
+    registerChatIpc(makeCtx(db, null))
+
+    const { result } = await invoke(handlers, IPC.moveConversationToFolder, conv.id, project.id)
+    expect((result as Conversation).collectionId).toBe(project.id)
+    expect((result as Conversation).scope).toEqual({ collectionIds: [project.id], documentIds: [] })
+
+    const { result: removed } = await invoke(handlers, IPC.moveConversationToFolder, conv.id, null)
+    expect((removed as Conversation).collectionId).toBeNull()
+    expect((removed as Conversation).scope).toBeNull()
   })
 
   it('streams tokens over the per-conversation channel and resolves with the persisted reply', async () => {

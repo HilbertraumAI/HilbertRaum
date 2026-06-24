@@ -59,6 +59,15 @@ describe('resolveNavTarget — virtual targets + legacy aliases', () => {
     expect(resolveNavTarget('ask-documents')).toEqual({ screen: 'chat', chatMode: 'documents' })
     expect(resolveNavTarget('no-such-screen')).toEqual({ screen: 'home' })
   })
+
+  it('opens Documents filtered to a project for documents:project:<id> (chat folder "Files")', () => {
+    expect(resolveNavTarget('documents:project:abc-123')).toEqual({
+      screen: 'documents',
+      documentsProjectId: 'abc-123'
+    })
+    // A missing id degrades to the plain Documents screen, not a broken filter.
+    expect(resolveNavTarget('documents:project:')).toEqual({ screen: 'documents' })
+  })
 })
 
 // ---- App shell -------------------------------------------------------------------

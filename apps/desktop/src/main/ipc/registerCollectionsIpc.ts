@@ -3,10 +3,13 @@ import { IPC } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
 import type { Collection } from '../../shared/types'
 import {
+  childCollections,
+  collectionBreadcrumb,
   createCollection,
   deleteCollection,
   getCollection,
   listCollections,
+  moveCollection,
   projectOnlyDocumentIds,
   renameCollection,
   setCollectionArchived
@@ -38,17 +41,40 @@ export function registerCollectionsIpc(ctx: AppContext): void {
 
   ipcMain.handle(
     IPC.createCollection,
-    (_e, name: string, opts?: { description?: string | null; color?: string | null }): Collection => {
+    (
+      _e,
+      name: string,
+      opts?: { description?: string | null; color?: string | null; parentId?: string | null }
+    ): Collection => {
       requireUnlocked()
       const coll = createCollection(ctx.db, name, 'project', {
         description: opts?.description ?? null,
-        color: opts?.color ?? null
+        color: opts?.color ?? null,
+        parentId: opts?.parentId ?? null
       })
       // Privacy: id + type only — never the name.
       ctx.audit?.('collection_created', 'Project created', { collectionId: coll.id, type: coll.type })
       return coll
     }
   )
+
+  // Folder-tree reads/writes (nested collections). Names are never audited (content-ish).
+  ipcMain.handle(IPC.childCollections, (_e, parentId: string | null): Collection[] => {
+    requireUnlocked()
+    return childCollections(ctx.db, parentId ?? null)
+  })
+
+  ipcMain.handle(IPC.collectionBreadcrumb, (_e, id: string): Collection[] => {
+    requireUnlocked()
+    return collectionBreadcrumb(ctx.db, id)
+  })
+
+  ipcMain.handle(IPC.moveCollection, (_e, id: string, newParentId: string | null): Collection => {
+    requireUnlocked()
+    const coll = moveCollection(ctx.db, id, newParentId ?? null)
+    ctx.audit?.('collection_moved', 'Project moved in folder tree', { collectionId: coll.id, type: coll.type })
+    return coll
+  })
 
   ipcMain.handle(IPC.renameCollection, (_e, id: string, name: string): Collection => {
     requireUnlocked()

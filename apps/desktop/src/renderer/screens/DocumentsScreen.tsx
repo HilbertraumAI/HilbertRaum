@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import type { ReactNode } from 'react'
-import { Badge, Banner, Button, Chip, ConfirmDialog, CoverageMeter, EmptyState, ErrorBanner, Icon, Modal, Progress, Spinner, TierMenu, useToast, type BadgeTone } from '../components'
+import { Badge, Banner, Button, Chip, ConfirmDialog, CoverageMeter, EmptyState, ErrorBanner, FolderGrid, Icon, Modal, Progress, Spinner, TierMenu, useToast, type BadgeTone } from '../components'
 import { SourcesDisclosure } from '../chat/SourcesDisclosure'
 import { AssistantMarkdown } from '../chat'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
@@ -171,6 +171,8 @@ type DocSection =
 interface Props {
   /** "Ask these documents" (spec §10.4): open Chat scoped to the selection. */
   onAskSelected?: (documentIds: string[]) => void
+  /** Open filtered to this project (the chat folder browser's "Files" deep-link); null ⇒ "All". */
+  initialProjectId?: string | null
 }
 
 /**
@@ -206,7 +208,7 @@ export const RAIL_COLLAPSED_KEY = 'hilbertraum.docs.railCollapsed'
 /** Remembered open/closed state of the Views "More" disclosure (rare diagnostic views). */
 export const VIEWS_MORE_KEY = 'hilbertraum.docs.viewsMoreOpen'
 
-export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
+export function DocumentsScreen({ onAskSelected, initialProjectId }: Props = {}): JSX.Element {
   const { t, tCount, lang } = useT()
   const [docs, setDocs] = useState<DocumentInfo[] | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
@@ -231,9 +233,17 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
   const [ocrAvailable, setOcrAvailable] = useState(false)
   // "Ask these documents" selection (indexed documents only).
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set())
-  // Document-organization (plan §12): the section rail selection + the collections list.
+  // Document-organization (plan §12): the section rail selection + the collections list. A
+  // `documents:project:<id>` deep-link (chat folder browser "Files") opens straight to that project.
   const [collections, setCollections] = useState<Collection[]>([])
-  const [section, setSection] = useState<DocSection>({ kind: 'all' })
+  const [section, setSection] = useState<DocSection>(
+    initialProjectId ? { kind: 'project', id: initialProjectId } : { kind: 'all' }
+  )
+  // Re-sync when the deep-link target changes while the screen is already mounted (navigating
+  // Documents→Documents doesn't remount). Only react to a concrete project id.
+  useEffect(() => {
+    if (initialProjectId) setSection({ kind: 'project', id: initialProjectId })
+  }, [initialProjectId])
   // Sub-nav (section rail) collapse, remembered across sessions (localStorage — a UI
   // preference, NOT user data, so it may live outside the encrypted workspace). Mirrors the
   // chat ConversationList collapse pattern (§11.6). Collapsed ⇒ the list takes the full width.
@@ -873,6 +883,19 @@ export function DocumentsScreen({ onAskSelected }: Props = {}): JSX.Element {
             </Button>
           )}
         </div>
+      )}
+
+      {/* Folder browser (the generic FolderGrid, shared with the chat sidebar): on the "All" view,
+          projects appear as folder cards so files can be browsed by folder. Opening a card filters
+          to that project; the dashed card creates a new folder (same modal as the rail's New project). */}
+      {section.kind === 'all' && (
+        <FolderGrid
+          folders={activeProjects.map((p) => ({ id: p.id, name: p.name }))}
+          ariaLabel={t('docs.section.projects')}
+          onOpen={(id) => setSection({ kind: 'project', id })}
+          onNew={() => setProjectModal({ mode: 'create', name: '' })}
+          newLabel={t('docs.project.create')}
+        />
       )}
 
       {/* Selection toolbar (Task 6): a single non-stacking sticky bar for the multi-document
