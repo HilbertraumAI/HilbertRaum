@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { Fragment, useState } from 'react'
 import * as Popover from '@radix-ui/react-popover'
 import type { Collection, DocumentInfo, DocumentScope } from '@shared/types'
 import { Button, Chip, Icon } from '../components'
@@ -88,6 +88,12 @@ export function ScopePopover({
   // Pickable sources: Library + non-archived projects (archived projects drop out — C1).
   const library = collections.find((c) => c.type === 'library')
   const projects = collections.filter((c) => c.type === 'project' && c.archivedAt == null)
+  // Projects nest (folder tree): show them collapsed so a deep hierarchy doesn't flood the picker.
+  // Ticking a folder scopes to its whole subtree (resolveScope expands), so picking a parent is
+  // enough for everything under it. Expand a node to tick a specific child instead.
+  const [expanded, setExpanded] = useState<Set<string>>(new Set())
+  const childProjectsOf = (parentId: string | null): Collection[] =>
+    projects.filter((p) => (p.parentId ?? null) === parentId)
 
   // Truthful footer copy (guidelines §7): with no indexed documents AND no chat attachments
   // the affordance becomes a direct "Add documents" jump, not a scope picker. (Attachments —
@@ -113,6 +119,49 @@ export function ScopePopover({
   }
 
   const addableDocs = indexed.filter((d) => !docIds.includes(d.id))
+
+  function toggleExpand(id: string): void {
+    setExpanded((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  const renderScopeNode = (p: Collection, depth: number): JSX.Element => {
+    const kids = childProjectsOf(p.id)
+    const open = expanded.has(p.id)
+    return (
+      <Fragment key={p.id}>
+        <div className="scope-source-tree-row" style={{ paddingLeft: depth * 16 }}>
+          {kids.length > 0 ? (
+            <button
+              type="button"
+              className="scope-tree-twisty"
+              aria-expanded={open}
+              aria-label={open ? t('docs.folders.collapse') : t('docs.folders.expand')}
+              onClick={() => toggleExpand(p.id)}
+            >
+              {open ? '▾' : '▸'}
+            </button>
+          ) : (
+            <span className="scope-tree-twisty-spacer" aria-hidden="true" />
+          )}
+          <label className="scope-source-row">
+            <input
+              type="checkbox"
+              checked={collIds.includes(p.id)}
+              disabled={disabled}
+              onChange={() => toggleCollection(p.id)}
+            />
+            <span className="scope-source-name">{p.name}</span>
+          </label>
+        </div>
+        {open && kids.map((k) => renderScopeNode(k, depth + 1))}
+      </Fragment>
+    )
+  }
   const label = scopeFooterLabel(scope, collections, t, tCount)
   // Chat attachments (live + pending) are always included; surfaced as a quiet count
   // alongside the composed sources (plan §13.1), never as removable selection chips.
@@ -150,17 +199,7 @@ export function ScopePopover({
             {projects.length === 0 && (
               <p className="popover-line popover-line-add hint">{t('chat.scope.noProjects')}</p>
             )}
-            {projects.map((p) => (
-              <label className="scope-source-row" key={p.id}>
-                <input
-                  type="checkbox"
-                  checked={collIds.includes(p.id)}
-                  disabled={disabled}
-                  onChange={() => toggleCollection(p.id)}
-                />
-                <span className="scope-source-name">{p.name}</span>
-              </label>
-            ))}
+            {childProjectsOf(null).map((p) => renderScopeNode(p, 0))}
           </div>
 
           {/* Specific documents — the explicit-doc branch of the union (and the only way to

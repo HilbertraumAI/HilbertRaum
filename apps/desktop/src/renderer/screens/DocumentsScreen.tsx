@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import type { ReactNode } from 'react'
 import { Badge, Banner, Button, Chip, ConfirmDialog, CoverageMeter, EmptyState, ErrorBanner, FolderGrid, Icon, Modal, Progress, Spinner, TierMenu, useToast, type BadgeTone } from '../components'
 import { SourcesDisclosure } from '../chat/SourcesDisclosure'
@@ -263,6 +263,8 @@ export function DocumentsScreen({ onAskSelected, initialProjectId }: Props = {})
     parentId?: string | null
   } | null>(null)
   const [deleteProject, setDeleteProject] = useState<Collection | null>(null)
+  // "Move folder" picker: the project being re-parented in the folder tree.
+  const [moveModal, setMoveModal] = useState<{ project: Collection } | null>(null)
   // The per-row / bulk "add to project" picker target (documentIds being filed).
   const [addToProjectFor, setAddToProjectFor] = useState<string[] | null>(null)
   // M-U6: re-index-all is multi-minute CPU work — gate it behind a ConfirmDialog and
@@ -613,6 +615,18 @@ export function DocumentsScreen({ onAskSelected, initialProjectId }: Props = {})
   const collectionById = useMemo(() => new Map(activeProjects.map((c) => [c.id, c])), [activeProjects])
   const childFoldersOf = (parentId: string | null): Collection[] =>
     activeProjects.filter((c) => (c.parentId ?? null) === parentId).sort((a, b) => a.name.localeCompare(b.name))
+  const descendantIdsOf = (id: string): string[] => {
+    const out = [id]
+    const walk = (pid: string): void => {
+      for (const c of activeProjects)
+        if (c.parentId === pid) {
+          out.push(c.id)
+          walk(c.id)
+        }
+    }
+    walk(id)
+    return out
+  }
   const breadcrumbOf = (id: string): Collection[] => {
     const chain: Collection[] = []
     const seen = new Set<string>()
@@ -690,6 +704,13 @@ export function DocumentsScreen({ onAskSelected, initialProjectId }: Props = {})
         await window.api.renameCollection(m.id, name)
       }
     })
+  }
+
+  async function onMoveProjectTo(newParentId: string | null): Promise<void> {
+    const m = moveModal
+    if (!m) return
+    setMoveModal(null)
+    await runOrg('project', () => window.api.moveCollection(m.project.id, newParentId))
   }
 
   async function onArchiveProject(p: Collection): Promise<void> {
@@ -849,9 +870,11 @@ export function DocumentsScreen({ onAskSelected, initialProjectId }: Props = {})
             rareCounts={rareCounts}
             busy={busy !== null}
             onCollapse={() => setRailCollapsedPersistent(true)}
-            onNewProject={() => setProjectModal({ mode: 'create', name: '' })}
+            onNewProject={() => setProjectModal({ mode: 'create', name: '', parentId: null })}
+            onNewSubfolder={(p) => setProjectModal({ mode: 'create', name: '', parentId: p.id })}
             onRenameProject={(p) => setProjectModal({ mode: 'rename', id: p.id, name: p.name })}
             onArchiveProject={(p) => void onArchiveProject(p)}
+            onMoveProject={(p) => setMoveModal({ project: p })}
             onDeleteProject={(p) => setDeleteProject(p)}
             t={t}
           />
@@ -1381,6 +1404,51 @@ export function DocumentsScreen({ onAskSelected, initialProjectId }: Props = {})
         </Modal>
       )}
 
+      {/* Move a folder in the tree — pick a new parent (or top level). Excludes the folder itself and
+          its own descendants (the service rejects a cycle anyway; we just don't offer them). */}
+      {moveModal &&
+        (() => {
+          const moving = moveModal.project
+          const forbidden = new Set(descendantIdsOf(moving.id))
+          const destinations = activeProjects.filter((c) => !forbidden.has(c.id))
+          return (
+            <Modal
+              open
+              title={t('docs.project.moveTitle', { name: moving.name })}
+              ariaLabel={t('docs.project.moveTitle', { name: moving.name })}
+              onClose={() => setMoveModal(null)}
+              t={t}
+            >
+              <div className="docs-move-list" role="listbox" aria-label={t('docs.project.moveTitle', { name: moving.name })}>
+                <button
+                  type="button"
+                  className="docs-move-option"
+                  disabled={moving.parentId == null}
+                  onClick={() => void onMoveProjectTo(null)}
+                >
+                  {t('docs.folders.root')}
+                </button>
+                {destinations.map((d) => (
+                  <button
+                    type="button"
+                    key={d.id}
+                    className="docs-move-option"
+                    disabled={d.id === moving.parentId}
+                    onClick={() => void onMoveProjectTo(d.id)}
+                  >
+                    {breadcrumbOf(d.id)
+                      .map((c) => c.name)
+                      .join(' › ')}
+                  </button>
+                ))}
+              </div>
+              <div className="actions" style={{ marginTop: 12 }}>
+                <Button onClick={() => setMoveModal(null)}>{t('docs.cancel')}</Button>
+              </div>
+            </Modal>
+          )
+        })()}
+
       {/* Delete a project — two modes (plan §12.3/C2). */}
       {deleteProject && (
         <Modal
@@ -1562,8 +1630,10 @@ function SectionRail({
   busy,
   onCollapse,
   onNewProject,
+  onNewSubfolder,
   onRenameProject,
   onArchiveProject,
+  onMoveProject,
   onDeleteProject,
   t
 }: {
@@ -1577,8 +1647,10 @@ function SectionRail({
   busy: boolean
   onCollapse: () => void
   onNewProject: () => void
+  onNewSubfolder: (p: Collection) => void
   onRenameProject: (p: Collection) => void
   onArchiveProject: (p: Collection) => void
+  onMoveProject: (p: Collection) => void
   onDeleteProject: (p: Collection) => void
   t: I18n['t']
 }): JSX.Element {
@@ -1604,6 +1676,80 @@ function SectionRail({
   }
   const is = (s: DocSection): boolean =>
     section.kind === s.kind && (s.kind !== 'project' || (s as { id: string }).id === (section as { id: string }).id)
+  // Folder tree: expand/collapse state (in-memory) + child lookup off the flat active list. The
+  // active project section now nests — only top-level projects show until expanded.
+  const [expanded, setExpanded] = useState<Set<string>>(new Set())
+  const toggleExpand = (id: string): void =>
+    setExpanded((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  const childProjectsOf = (parentId: string | null): Collection[] =>
+    activeProjects.filter((p) => (p.parentId ?? null) === parentId)
+
+  const renderProjectNode = (p: Collection, depth: number): JSX.Element => {
+    const kids = childProjectsOf(p.id)
+    const open = expanded.has(p.id)
+    return (
+      <Fragment key={p.id}>
+        <div
+          className={`docs-rail-project ${is({ kind: 'project', id: p.id }) ? 'active' : ''}`}
+          style={{ paddingLeft: depth * 14 }}
+        >
+          {kids.length > 0 ? (
+            <button
+              type="button"
+              className="docs-rail-twisty"
+              aria-expanded={open}
+              aria-label={open ? t('docs.folders.collapse') : t('docs.folders.expand')}
+              onClick={() => toggleExpand(p.id)}
+            >
+              {open ? '▾' : '▸'}
+            </button>
+          ) : (
+            <span className="docs-rail-twisty-spacer" aria-hidden="true" />
+          )}
+          <button
+            type="button"
+            className="docs-rail-item docs-rail-project-name"
+            aria-current={is({ kind: 'project', id: p.id }) ? 'true' : undefined}
+            onClick={() => onSelect({ kind: 'project', id: p.id })}
+          >
+            {p.name}
+          </button>
+          <DropdownMenu.Root>
+            <DropdownMenu.Trigger asChild>
+              <button type="button" className="docs-rail-project-menu" disabled={busy} aria-label={t('docs.project.options')}>
+                ⋯
+              </button>
+            </DropdownMenu.Trigger>
+            <DropdownMenu.Portal>
+              <DropdownMenu.Content className="menu" align="start" sideOffset={4}>
+                <DropdownMenu.Item className="menu-item" onSelect={() => onNewSubfolder(p)}>
+                  {t('docs.project.newSubfolder')}
+                </DropdownMenu.Item>
+                <DropdownMenu.Item className="menu-item" onSelect={() => onRenameProject(p)}>
+                  {t('docs.project.rename')}
+                </DropdownMenu.Item>
+                <DropdownMenu.Item className="menu-item" onSelect={() => onMoveProject(p)}>
+                  {t('docs.project.move')}
+                </DropdownMenu.Item>
+                <DropdownMenu.Item className="menu-item" onSelect={() => onArchiveProject(p)}>
+                  {t('docs.project.archive')}
+                </DropdownMenu.Item>
+                <DropdownMenu.Item className="menu-item danger" onSelect={() => onDeleteProject(p)}>
+                  {t('docs.project.delete')}
+                </DropdownMenu.Item>
+              </DropdownMenu.Content>
+            </DropdownMenu.Portal>
+          </DropdownMenu.Root>
+        </div>
+        {open && kids.map((k) => renderProjectNode(k, depth + 1))}
+      </Fragment>
+    )
+  }
   const railBtn = (s: DocSection, label: string): JSX.Element => (
     <button
       type="button"
@@ -1658,38 +1804,7 @@ function SectionRail({
           </button>
         </div>
         {activeProjects.length === 0 && <p className="docs-rail-empty hint">{t('docs.section.noProjects')}</p>}
-        {activeProjects.map((p) => (
-          <div key={p.id} className={`docs-rail-project ${is({ kind: 'project', id: p.id }) ? 'active' : ''}`}>
-            <button
-              type="button"
-              className="docs-rail-item docs-rail-project-name"
-              aria-current={is({ kind: 'project', id: p.id }) ? 'true' : undefined}
-              onClick={() => onSelect({ kind: 'project', id: p.id })}
-            >
-              {p.name}
-            </button>
-            <DropdownMenu.Root>
-              <DropdownMenu.Trigger asChild>
-                <button type="button" className="docs-rail-project-menu" disabled={busy} aria-label={t('docs.project.options')}>
-                  ⋯
-                </button>
-              </DropdownMenu.Trigger>
-              <DropdownMenu.Portal>
-                <DropdownMenu.Content className="menu" align="start" sideOffset={4}>
-                  <DropdownMenu.Item className="menu-item" onSelect={() => onRenameProject(p)}>
-                    {t('docs.project.rename')}
-                  </DropdownMenu.Item>
-                  <DropdownMenu.Item className="menu-item" onSelect={() => onArchiveProject(p)}>
-                    {t('docs.project.archive')}
-                  </DropdownMenu.Item>
-                  <DropdownMenu.Item className="menu-item danger" onSelect={() => onDeleteProject(p)}>
-                    {t('docs.project.delete')}
-                  </DropdownMenu.Item>
-                </DropdownMenu.Content>
-              </DropdownMenu.Portal>
-            </DropdownMenu.Root>
-          </div>
-        ))}
+        {childProjectsOf(null).map((p) => renderProjectNode(p, 0))}
         {archivedProjects.map((p) => (
           <div key={p.id} className="docs-rail-project archived">
             <button

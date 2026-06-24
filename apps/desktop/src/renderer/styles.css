@@ -1320,6 +1320,24 @@ code, pre, kbd { font-family: var(--font-mono); }
 .scope-source-name { color: var(--text); }
 .scope-source-hint { color: var(--text-muted); font-size: 11px; }
 .scope-specific-toggle { background: none; border: none; cursor: pointer; text-align: left; }
+/* Scope picker folder tree — twisty + indent */
+.scope-source-tree-row { display: flex; align-items: center; gap: 2px; }
+.scope-source-tree-row .scope-source-row { flex: 1; min-width: 0; }
+.scope-tree-twisty { flex: 0 0 auto; width: 16px; height: 22px; padding: 0; border: none; background: none; color: var(--text-muted); cursor: pointer; font-size: 10px; }
+.scope-tree-twisty:hover { color: var(--text); }
+.scope-tree-twisty-spacer { flex: 0 0 auto; width: 16px; }
+
+/* Rail folder tree — twisty + indent */
+.docs-rail-twisty { flex: 0 0 auto; width: 16px; height: 20px; padding: 0; border: none; background: none; color: var(--text-muted); cursor: pointer; font-size: 10px; line-height: 20px; text-align: center; }
+.docs-rail-twisty:hover { color: var(--text); }
+.docs-rail-twisty-spacer { flex: 0 0 auto; width: 16px; }
+
+/* Move-folder picker */
+.docs-move-list { display: flex; flex-direction: column; gap: 2px; max-height: 320px; overflow: auto; }
+.docs-move-option { text-align: left; padding: 7px 10px; border: none; border-radius: 6px; background: none; color: var(--text); cursor: pointer; font-size: 13px; }
+.docs-move-option:hover:not(:disabled) { background: var(--surface-hover, rgba(127,127,127,0.12)); }
+.docs-move-option:disabled { color: var(--text-muted); cursor: default; }
+
 /* Documents folder breadcrumb (nested collections) */
 .docs-folder-trail { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; padding: 4px 10px 2px; font-size: 12px; }
 .docs-crumb-item { display: inline-flex; align-items: center; gap: 2px; }

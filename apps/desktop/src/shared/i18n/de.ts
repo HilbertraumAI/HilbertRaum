@@ -1410,6 +1410,11 @@ export const de: Record<keyof typeof en, string> = {
   'docs.section.projects': 'Projekte',
   'docs.folders.root': 'Alle Ordner',
   'docs.folders.breadcrumbAria': 'Ordnerpfad',
+  'docs.folders.expand': 'Ordner aufklappen',
+  'docs.folders.collapse': 'Ordner zuklappen',
+  'docs.project.newSubfolder': 'Neuer Unterordner',
+  'docs.project.move': 'Verschieben nach…',
+  'docs.project.moveTitle': '„{name}“ verschieben nach…',
   // Gruppenüberschrift über den System-Ablagen (Bibliothek / Temporär / Erstellt / Archiviert), §11.6.
   'docs.section.locations': 'Speicherorte',
   'docs.section.temporary': 'Temporär',

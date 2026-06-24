@@ -1337,6 +1337,11 @@ export const en = {
   'docs.section.projects': 'Projects',
   'docs.folders.root': 'All folders',
   'docs.folders.breadcrumbAria': 'Folder path',
+  'docs.folders.expand': 'Expand folder',
+  'docs.folders.collapse': 'Collapse folder',
+  'docs.project.newSubfolder': 'New sub-folder',
+  'docs.project.move': 'Move to…',
+  'docs.project.moveTitle': 'Move “{name}” to…',
   // Group header over the system buckets (Library / Temporary / Generated / Archived), §11.6.
   'docs.section.locations': 'Locations',
   'docs.section.temporary': 'Temporary',
