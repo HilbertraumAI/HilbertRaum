@@ -6,6 +6,19 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-25 — **Nested collections — UI wave 3: Documents nested folder browser.** Makes the wave-2 hierarchy usable. The
+Documents "All"/project view now drives the generic `FolderGrid` as a **nested browser computed entirely off the loaded
+`collections`** (no extra IPC): "All" shows TOP-LEVEL folders; a project shows its SUB-folders + a clickable **breadcrumb**
+(`breadcrumbOf`) to climb back up; opening a card drills in (`setSection({kind:'project', id})`); the dashed **+ New folder** card
+creates UNDER the current node (`projectModal.parentId` → `createCollection(name, { parentId })`). The doc list below shows docs
+filed DIRECTLY in the node (retrieval still spans the whole subtree — a deliberate view/scope distinction). Folder
+rename/archive/delete stay on the existing section rail. i18n `docs.folders.root`/`breadcrumbAria` (en+de) + breadcrumb CSS.
+**As built (typecheck + build clean; suite green except the 3 known pre-existing platform failures):** DocumentsScreen test
+extended (a project shows its sub-folder card + "Folder path" breadcrumb and drills into the child; create now asserts the
+`{parentId}` arg). **DEFERRED (clearly-scoped follow-up):** the section RAIL is still FLAT (sub-folders also appear at top level
+there) — making it a collapsible tree is pending; ScopePopover is still a flat collection list (a tree picker is pending); and
+"move folder" (re-parent) has the service+IPC (`moveCollection`) but no UI yet. Nesting create/browse is fully usable now._
+
 _2026-06-25 — **Nested collections (folder hierarchy) + anchor auto-sync — DATA LAYER (waves 1–2 of the approved plan; UI wave pending).**
 Two things, plan-approved (decisions: auto-sync anchor, multi-membership, nest collections — NOT a separate VFS — recursive
 subtree scope, arbitrary depth). **Wave 1 (desync fix):** `setScope` (chat.ts) now reconciles the `collection_id` folder anchor

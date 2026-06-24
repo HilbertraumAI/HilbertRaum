@@ -255,7 +255,13 @@ export function DocumentsScreen({ onAskSelected, initialProjectId }: Props = {})
     }
   })
   // Project management dialogs.
-  const [projectModal, setProjectModal] = useState<{ mode: 'create' | 'rename'; id?: string; name: string } | null>(null)
+  const [projectModal, setProjectModal] = useState<{
+    mode: 'create' | 'rename'
+    id?: string
+    name: string
+    /** When creating, nest the new folder under this collection (null/absent = top level). */
+    parentId?: string | null
+  } | null>(null)
   const [deleteProject, setDeleteProject] = useState<Collection | null>(null)
   // The per-row / bulk "add to project" picker target (documentIds being filed).
   const [addToProjectFor, setAddToProjectFor] = useState<string[] | null>(null)
@@ -602,6 +608,23 @@ export function DocumentsScreen({ onAskSelected, initialProjectId }: Props = {})
     }
   }, [collections])
 
+  // Folder tree (nested collections) — computed off the already-loaded `collections`, so browsing
+  // the hierarchy needs no extra IPC. Active sub-folders of a node, and a node's root→here breadcrumb.
+  const collectionById = useMemo(() => new Map(activeProjects.map((c) => [c.id, c])), [activeProjects])
+  const childFoldersOf = (parentId: string | null): Collection[] =>
+    activeProjects.filter((c) => (c.parentId ?? null) === parentId).sort((a, b) => a.name.localeCompare(b.name))
+  const breadcrumbOf = (id: string): Collection[] => {
+    const chain: Collection[] = []
+    const seen = new Set<string>()
+    let cur: Collection | undefined = collectionById.get(id)
+    while (cur && !seen.has(cur.id)) {
+      seen.add(cur.id)
+      chain.unshift(cur)
+      cur = cur.parentId ? collectionById.get(cur.parentId) : undefined
+    }
+    return chain
+  }
+
   // Source lookup for the generated-staleness derivation (plan §15.3) — pure, off the
   // already-listed fields; no extra read, no hot-path write.
   const sourcesById = useMemo(() => new Map((docs ?? []).map((d) => [d.id, d])), [docs])
@@ -661,7 +684,7 @@ export function DocumentsScreen({ onAskSelected, initialProjectId }: Props = {})
     setProjectModal(null)
     await runOrg('project', async () => {
       if (m.mode === 'create') {
-        const created = await window.api.createCollection(name)
+        const created = await window.api.createCollection(name, { parentId: m.parentId ?? null })
         setSection({ kind: 'project', id: created.id })
       } else if (m.id) {
         await window.api.renameCollection(m.id, name)
@@ -885,18 +908,58 @@ export function DocumentsScreen({ onAskSelected, initialProjectId }: Props = {})
         </div>
       )}
 
-      {/* Folder browser (the generic FolderGrid, shared with the chat sidebar): on the "All" view,
-          projects appear as folder cards so files can be browsed by folder. Opening a card filters
-          to that project; the dashed card creates a new folder (same modal as the rail's New project). */}
-      {section.kind === 'all' && (
-        <FolderGrid
-          folders={activeProjects.map((p) => ({ id: p.id, name: p.name }))}
-          ariaLabel={t('docs.section.projects')}
-          onOpen={(id) => setSection({ kind: 'project', id })}
-          onNew={() => setProjectModal({ mode: 'create', name: '' })}
-          newLabel={t('docs.project.create')}
-        />
-      )}
+      {/* Nested folder browser (the generic FolderGrid, shared with the chat sidebar). On "All" the
+          cards are the TOP-LEVEL folders; on a project the cards are its SUB-folders, with a breadcrumb
+          to climb back up. Opening a card drills into that folder (its docs + its sub-folders); the
+          dashed card creates a new folder UNDER the current one. Folder rename/archive/delete stay on
+          the section rail. The list below shows docs filed DIRECTLY here (retrieval still spans the
+          whole subtree). */}
+      {(section.kind === 'all' || section.kind === 'project') &&
+        (() => {
+          const here = section.kind === 'project' ? section.id : null
+          const trail = here ? breadcrumbOf(here) : []
+          const children = childFoldersOf(here)
+          return (
+            <div className="docs-folders">
+              {trail.length > 0 && (
+                <nav className="docs-folder-trail" aria-label={t('docs.folders.breadcrumbAria')}>
+                  <button type="button" className="docs-crumb" onClick={() => setSection({ kind: 'all' })}>
+                    {t('docs.folders.root')}
+                  </button>
+                  {trail.map((c, i) => (
+                    <span key={c.id} className="docs-crumb-item">
+                      <span className="docs-crumb-sep" aria-hidden="true">
+                        ›
+                      </span>
+                      {i < trail.length - 1 ? (
+                        <button
+                          type="button"
+                          className="docs-crumb"
+                          onClick={() => setSection({ kind: 'project', id: c.id })}
+                        >
+                          {c.name}
+                        </button>
+                      ) : (
+                        <span className="docs-crumb current" aria-current="page">
+                          {c.name}
+                        </span>
+                      )}
+                    </span>
+                  ))}
+                </nav>
+              )}
+              {(children.length > 0 || section.kind === 'all') && (
+                <FolderGrid
+                  folders={children.map((c) => ({ id: c.id, name: c.name }))}
+                  ariaLabel={t('docs.section.projects')}
+                  onOpen={(id) => setSection({ kind: 'project', id })}
+                  onNew={() => setProjectModal({ mode: 'create', name: '', parentId: here })}
+                  newLabel={t('docs.project.create')}
+                />
+              )}
+            </div>
+          )
+        })()}
 
       {/* Selection toolbar (Task 6): a single non-stacking sticky bar for the multi-document
           operations — keeps them out of every row so the per-row set stays minimal. */}

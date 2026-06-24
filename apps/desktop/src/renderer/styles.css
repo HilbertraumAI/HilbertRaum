@@ -1320,6 +1320,14 @@ code, pre, kbd { font-family: var(--font-mono); }
 .scope-source-name { color: var(--text); }
 .scope-source-hint { color: var(--text-muted); font-size: 11px; }
 .scope-specific-toggle { background: none; border: none; cursor: pointer; text-align: left; }
+/* Documents folder breadcrumb (nested collections) */
+.docs-folder-trail { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; padding: 4px 10px 2px; font-size: 12px; }
+.docs-crumb-item { display: inline-flex; align-items: center; gap: 2px; }
+.docs-crumb { border: none; background: none; padding: 2px 4px; border-radius: 5px; color: var(--text-muted); cursor: pointer; font-size: 12px; }
+.docs-crumb:hover { background: var(--surface-hover, rgba(127,127,127,0.12)); color: var(--text); }
+.docs-crumb.current { color: var(--text); font-weight: 600; padding: 2px 4px; }
+.docs-crumb-sep { color: var(--text-muted); }
+
 /* Generic folder browser — a responsive grid of folder cards (reused by chat + Documents) */
 .folder-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); gap: 10px; padding: 8px 10px 12px; }
 .folder-card { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 4px; border: none; background: none; cursor: pointer; color: var(--text); }

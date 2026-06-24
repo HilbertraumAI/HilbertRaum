@@ -81,6 +81,30 @@ describe('DocumentsScreen — organization', () => {
     expect(screen.queryByText('policy.pdf')).not.toBeInTheDocument()
   })
 
+  it('browses nested folders: a project shows its sub-folders + breadcrumb, and drills in', async () => {
+    const user = userEvent.setup()
+    const library = coll({ id: 'lib', name: 'Library', type: 'library', builtin: true })
+    const parent = coll({ id: 'p', name: 'Parent' })
+    const child = coll({ id: 'ch', name: 'Child', parentId: 'p' })
+    stubApi({
+      listCollections: vi.fn(async () => [library, parent, child]),
+      listDocuments: vi.fn(async () => [doc({ id: 'd', title: 'f.pdf' })])
+    })
+    render(<DocumentsScreen />)
+    await screen.findByRole('button', { name: 'Library' }) // rail rendered
+    const rail = screen.getByRole('navigation') // only the rail exists on the "All" view
+    await user.click(within(rail).getByRole('button', { name: 'Parent' }))
+    // Inside Parent: a breadcrumb + the Child sub-folder card (scope to the folder grid; the rail
+    // also lists Child flat).
+    expect(await screen.findByRole('navigation', { name: 'Folder path' })).toBeInTheDocument()
+    const grid = screen.getByRole('group', { name: 'Projects' })
+    await user.click(within(grid).getByRole('button', { name: 'Child' }))
+    // Drilled into Child — the breadcrumb now ends on Child (current crumb).
+    await waitFor(() =>
+      expect(screen.getByRole('navigation', { name: 'Folder path' }).textContent).toContain('Child')
+    )
+  })
+
   it('creates a project from the rail "+" and selects it', async () => {
     const user = userEvent.setup()
     const library = coll({ id: 'lib', name: 'Library', type: 'library', builtin: true })
@@ -95,7 +119,7 @@ describe('DocumentsScreen — organization', () => {
     await user.click(await screen.findByRole('button', { name: 'New project' }))
     await user.type(await screen.findByLabelText('Project name'), 'Lawsuit')
     await user.click(screen.getByRole('button', { name: 'Create' }))
-    await waitFor(() => expect(createCollection).toHaveBeenCalledWith('Lawsuit'))
+    await waitFor(() => expect(createCollection).toHaveBeenCalledWith('Lawsuit', { parentId: null }))
   })
 
   it('shows collection chips on a document row', async () => {

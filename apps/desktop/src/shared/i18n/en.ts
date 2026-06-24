@@ -1335,6 +1335,8 @@ export const en = {
   'docs.section.heading': 'Sections',
   'docs.section.library': 'Library',
   'docs.section.projects': 'Projects',
+  'docs.folders.root': 'All folders',
+  'docs.folders.breadcrumbAria': 'Folder path',
   // Group header over the system buckets (Library / Temporary / Generated / Archived), §11.6.
   'docs.section.locations': 'Locations',
   'docs.section.temporary': 'Temporary',

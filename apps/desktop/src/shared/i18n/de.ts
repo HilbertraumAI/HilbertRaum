@@ -1408,6 +1408,8 @@ export const de: Record<keyof typeof en, string> = {
   'docs.section.heading': 'Bereiche',
   'docs.section.library': 'Bibliothek',
   'docs.section.projects': 'Projekte',
+  'docs.folders.root': 'Alle Ordner',
+  'docs.folders.breadcrumbAria': 'Ordnerpfad',
   // Gruppenüberschrift über den System-Ablagen (Bibliothek / Temporär / Erstellt / Archiviert), §11.6.
   'docs.section.locations': 'Speicherorte',
   'docs.section.temporary': 'Temporär',
