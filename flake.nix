@@ -21,10 +21,14 @@
           ];
         in {
           default = pkgs.mkShell {
-            packages = [ pkgs.nodejs_22 ]
+            packages = [ pkgs.nodejs_22 pkgs.llama-cpp pkgs.whisper-cpp ]
               ++ pkgs.lib.optionals pkgs.stdenv.isLinux electronLibs;
 
+
             shellHook = ''
+              export HILBERTRAUM_LLAMA_BIN="${pkgs.llama-cpp}/bin/llama-server"
+              export HILBERTRAUM_WHISPER_BIN="${pkgs.whisper-cpp}/bin/whisper-cli"
+
               ${pkgs.lib.optionalString pkgs.stdenv.isLinux ''
                 export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath electronLibs}:$LD_LIBRARY_PATH"
               ''}
@@ -35,6 +39,7 @@
               alias hr-check='npm run typecheck'
               alias hr-package='npm run package'
               echo "HilbertRaum dev shell — node $(node -v)"
+              echo "engines: $(command -v llama-server) | $(command -v whisper-cli)"
               echo "aliases: hr-install hr-dev hr-build hr-test hr-check hr-package"
             '';
           };
