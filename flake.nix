@@ -15,7 +15,7 @@
           electronLibs = with pkgs; [
             glib nss nspr atk at-spi2-atk at-spi2-core cups dbus gtk3
             pango cairo gdk-pixbuf expat libxkbcommon mesa libgbm libdrm
-            alsa-lib systemd
+            libglvnd alsa-lib systemd
             libx11 libxcomposite libxdamage libxext libxfixes libxrandr
             libxcb libxcursor libxi libxrender libxtst libxscrnsaver
           ];
