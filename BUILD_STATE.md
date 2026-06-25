@@ -6,6 +6,23 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-25 — **Nested collections — UI wave 3b + design polish + screenshot-verify skill.** Completes the deferred nested-folder
+UI and adds a reusable screenshot harness. **Rail tree:** the Documents section rail renders projects as a collapsible tree
+(twisty + indent; top-level until expanded) — `renderProjectNode` recursion in `SectionRail`. **Move folder:** folder ⋯ gains
+"New sub-folder" + "Move to…" (a destination picker excluding the folder's own subtree; calls `moveCollection`). **Scope picker
+tree:** `ScopePopover` shows projects as a collapsible tree — ticking a folder scopes to its whole subtree (recursive), so deep
+nesting no longer floods the picker. **Chat By-Project now respects nesting** (design fix found via screenshot): the overview shows
+only TOP-LEVEL folders; drilling into a folder shows its SUB-folders (more cards) + its chats, back climbs one level — previously
+nested folders showed flat. **Card polish:** denser/smaller FolderGrid cards (7/5 aspect, 78px min, 24px icon) so the narrow chat
+sidebar fits ~2 columns. **NEW `screenshot-verify` skill** (`.claude/skills/screenshot-verify/`): renders real renderer
+components with real tokens.css/styles.css + a Proxy mock `window.api`, builds via `vite.preview.config.ts` →
+`src/renderer/preview/`, and screenshots with the installed Electron's `capturePage()` (`scripts/screenshot.mjs`,
+`npm run screenshot`) — no Playwright, no GUI/workspace/model. Run inside `nix develop` (GL libs) + `xvfb-run`. Gotchas baked in:
+`--no-sandbox` must be a real CLI flag, no top-level `await app.whenReady()` (ESM deadlock), no-op `window-all-closed`. Captured
+`documents.png` + `chat-byproject.png` and refined the design from them. **As built (typecheck + build clean; suite green except
+the 3 known pre-existing platform failures):** DocumentsScreen + ConversationList tests still green. The preview harness is
+dev-only (separate vite config; never bundled into the shipped app)._
+
 _2026-06-25 — **Nested collections — UI wave 3: Documents nested folder browser.** Makes the wave-2 hierarchy usable. The
 Documents "All"/project view now drives the generic `FolderGrid` as a **nested browser computed entirely off the loaded
 `collections`** (no extra IPC): "All" shows TOP-LEVEL folders; a project shows its SUB-folders + a clickable **breadcrumb**

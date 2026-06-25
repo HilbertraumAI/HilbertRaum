@@ -284,19 +284,30 @@ export const ConversationList = memo(function ConversationList({
       </div>
     ))
 
-  // The folder browser: a card grid of folders (the "project view"). Opening a card drills into that
-  // folder — a back header + per-folder "New chat here"/"Files" actions + its date-grouped chats. A
-  // catch-all OTHER_FOLDER card collects folder-less chats; a "+ New folder" card creates one.
+  // The folder browser: a card grid that respects the folder TREE. The overview shows top-level
+  // folders; opening one drills in — a back header (up one level) + per-folder "New chat here"/"Files"
+  // actions + its SUB-folders (more cards) + its date-grouped chats. A catch-all OTHER_FOLDER card
+  // collects folder-less chats; a "+ New folder" card creates one.
   const isUnfiled = (c: Conversation): boolean => c.collectionId == null || !folderNameById.has(c.collectionId)
-  const renderFolderBrowser = (): JSX.Element => {
-    if (openFolderId == null) {
-      const counts = new Map<string, number>()
-      for (const c of conversations) {
-        if (c.collectionId != null && folderNameById.has(c.collectionId)) {
-          counts.set(c.collectionId, (counts.get(c.collectionId) ?? 0) + 1)
-        }
+  const childFoldersOf = (parentId: string | null): Collection[] =>
+    folders.filter((f) => (f.parentId ?? null) === parentId)
+  const folderById = (id: string): Collection | undefined => folders.find((f) => f.id === id)
+  const chatCounts = (): Map<string, number> => {
+    const counts = new Map<string, number>()
+    for (const c of conversations) {
+      if (c.collectionId != null && folderNameById.has(c.collectionId)) {
+        counts.set(c.collectionId, (counts.get(c.collectionId) ?? 0) + 1)
       }
-      const cards: FolderCard[] = folders.map((f) => ({ id: f.id, name: f.name, count: counts.get(f.id) ?? 0 }))
+    }
+    return counts
+  }
+  const folderCards = (list: Collection[], counts: Map<string, number>): FolderCard[] =>
+    list.map((f) => ({ id: f.id, name: f.name, count: counts.get(f.id) ?? 0 }))
+
+  const renderFolderBrowser = (): JSX.Element => {
+    const counts = chatCounts()
+    if (openFolderId == null) {
+      const cards = folderCards(childFoldersOf(null), counts)
       const unfiled = conversations.filter(isUnfiled).length
       if (unfiled > 0) cards.push({ id: OTHER_FOLDER, name: t('chat.list.otherGroup'), count: unfiled })
       return (
@@ -309,9 +320,12 @@ export const ConversationList = memo(function ConversationList({
         />
       )
     }
-    const project = folders.find((f) => f.id === openFolderId)
-    const convs =
-      openFolderId === OTHER_FOLDER ? conversations.filter(isUnfiled) : conversations.filter((c) => c.collectionId === openFolderId)
+    const isOther = openFolderId === OTHER_FOLDER
+    const project = isOther ? undefined : folderById(openFolderId)
+    const convs = isOther
+      ? conversations.filter(isUnfiled)
+      : conversations.filter((c) => c.collectionId === openFolderId)
+    const subFolders = isOther ? [] : childFoldersOf(openFolderId)
     return (
       <div className="chat-folder-open">
         <div className="chat-folder-open-head">
@@ -320,7 +334,7 @@ export const ConversationList = memo(function ConversationList({
             className="chat-folder-back"
             aria-label={t('chat.folder.back')}
             title={t('chat.folder.back')}
-            onClick={() => setOpenFolderId(null)}
+            onClick={() => setOpenFolderId(project?.parentId ?? null)}
           >
             ‹
           </button>
@@ -349,7 +363,16 @@ export const ConversationList = memo(function ConversationList({
             </span>
           )}
         </div>
-        {convs.length === 0 ? <p className="hint">{t('chat.folder.empty')}</p> : renderDateGroups(convs)}
+        {subFolders.length > 0 && (
+          <FolderGrid
+            folders={folderCards(subFolders, counts)}
+            ariaLabel={t('chat.list.viewByProject')}
+            onOpen={setOpenFolderId}
+          />
+        )}
+        {convs.length === 0
+          ? subFolders.length === 0 && <p className="hint">{t('chat.folder.empty')}</p>
+          : renderDateGroups(convs)}
       </div>
     )
   }
