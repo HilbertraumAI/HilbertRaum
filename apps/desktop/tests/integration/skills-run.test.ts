@@ -6,13 +6,14 @@ import { randomUUID } from 'node:crypto'
 import { openDatabase, type Db } from '../../src/main/services/db'
 import { createConversation, exportTranscript, appendMessage } from '../../src/main/services/chat'
 import {
+  resolveDocumentReader,
   runBankExtraction,
   runBalanceValidation,
   runCategorization,
   runCashflowSummary,
   runCsvExport
 } from '../../src/main/services/skills/run'
-import type { AuditEventType } from '../../src/shared/types'
+import type { AuditEventType, DocumentChunkRead } from '../../src/shared/types'
 
 // architecture.md "Skills — design record" §8 (S11a) — the app-orchestrated run seam end-to-end on a real DB:
 // build the narrow context → run extract_transactions through the gate → persist. Proves the
@@ -46,6 +47,28 @@ function capturingAudit(): { audit: (t: AuditEventType, m?: Record<string, unkno
   const events: unknown[] = []
   return { audit: (type, meta) => events.push({ type, meta }), events }
 }
+
+describe('resolveDocumentReader — layout flag is threaded only when requested (D58)', () => {
+  it('requests layout reconstruction ONLY when deps.layout is set (bank-statement), else text mode', async () => {
+    const db = freshDb()
+    const seen: Array<{ layout?: boolean } | undefined> = []
+    const readDocumentSegments = async (
+      _id: string,
+      opts?: { layout?: boolean }
+    ): Promise<DocumentChunkRead[]> => {
+      seen.push(opts)
+      return [{ text: '2026-01-02 Coffee -3,50 100,00', page: 1, index: 0 }]
+    }
+
+    // Bank-statement path sets layout:true → the segment reader is asked for geometry reconstruction.
+    await resolveDocumentReader(db, 'doc', { readDocumentSegments, layout: true })
+    expect(seen.at(-1)).toEqual({ layout: true })
+
+    // Redaction/invoice paths leave layout unset → text mode (byte-unchanged), never layout:true.
+    await resolveDocumentReader(db, 'doc', { readDocumentSegments })
+    expect(seen.at(-1)).toEqual({ layout: undefined })
+  })
+})
 
 describe('runBankExtraction (S11a)', () => {
   it('migration creates skill_runs + bank data tables (incl. the S11c additive tables/columns)', () => {

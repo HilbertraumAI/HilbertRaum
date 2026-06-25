@@ -4,7 +4,15 @@ import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/re
 import userEvent from '@testing-library/user-event'
 import { ChatScreen } from '../../src/renderer/screens/ChatScreen'
 import { ToastProvider } from '../../src/renderer/components'
-import type { Conversation, DocumentInfo, ImportJob, ImportJobStatus, Message, RuntimeStatus } from '../../src/shared/types'
+import type {
+  Conversation,
+  DocumentInfo,
+  ImportJob,
+  ImportJobStatus,
+  Message,
+  RuntimeStatus,
+  SkillInfo
+} from '../../src/shared/types'
 import { stubApi } from '../helpers/renderer'
 
 // Phase C renderer tests: the net-new chat attach / drag-drop intake (plan §11.2 H1),
@@ -52,6 +60,31 @@ function docInfo(id: string, title: string): DocumentInfo {
 
 const job: ImportJob = { jobId: 'j1', documentIds: ['d1'] }
 const jobDone: ImportJobStatus = { jobId: 'j1', total: 1, completed: 1, failed: 0, done: true }
+
+/** A minimal enabled, available skill so the composer footer renders the skill picker. */
+function skill(over: Partial<SkillInfo> = {}): SkillInfo {
+  return {
+    installId: 'app:bank-statement',
+    id: 'bank-statement',
+    title: 'Bank statement helper',
+    description: 'Explains a bank statement in plain language.',
+    version: '1.0.0',
+    kind: 'instruction',
+    author: 'You',
+    language: 'en',
+    source: 'app',
+    trustedLevel: 'app',
+    enabled: true,
+    warningAck: true,
+    unavailable: false,
+    permissions: { documents: 'selected_only', network: 'denied', filesystem: 'skill_resources_only' },
+    permissionSummary: 'can read the documents you pick for a turn.',
+    duplicateId: false,
+    installedAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z',
+    ...over
+  }
+}
 
 /** Fire a native-style file drop (Electron exposes `File.path`) on the chat surface. */
 function dropFile(name: string, path: string): void {
@@ -122,6 +155,57 @@ describe('ChatScreen — chat attach / drag-drop intake (plan §11.2 / §13.5)',
     await userEvent.click(await screen.findByRole('button', { name: /files? in this chat/i }))
     const processing = await screen.findAllByText(/processing invoice\.pdf/i)
     expect(processing.length).toBeGreaterThanOrEqual(2)
+  })
+
+  it('carries a skill picked on the new composer onto the documents conversation an attachment creates', async () => {
+    // Regression: selecting a skill and THEN uploading a document used to reset the skill to none —
+    // attachFiles created/switched to a new conversation without carrying the 'new' composer's pick
+    // (unlike ensureConversation). The pick must ride onto the created conversation.
+    const user = userEvent.setup()
+    const created = conv({ id: 'c2', title: 'New chat', mode: 'documents' })
+    const createConversation = vi.fn(async () => created)
+    const importDocuments = vi.fn(async () => job)
+    const setConversationDefaultSkill = vi.fn(async () => {})
+    stubApi({
+      listConversations: vi.fn(async () => []),
+      getRuntimeStatus: vi.fn(async () => runningStatus),
+      listMessages: vi.fn(async () => []),
+      listDocuments: vi.fn(async () => []),
+      listSkills: vi.fn(async () => [skill()]),
+      suggestSkills: vi.fn(async () => []),
+      listRunnableTools: vi.fn(async () => []),
+      createConversation,
+      importDocuments,
+      setConversationDefaultSkill,
+      getImportJob: vi.fn(async () => ({ ...jobDone, done: false })),
+      listAttachments: vi.fn(async () => [])
+    })
+    render(
+      <ToastProvider>
+        <ChatScreen onNavigate={() => {}} />
+      </ToastProvider>
+    )
+    await screen.findByText(/start chatting/i).catch(() => undefined)
+
+    // Pick the skill on the still-"new" composer (no conversation yet → not persisted, only staged).
+    await user.click(await screen.findByRole('button', { name: /^skill:/i }))
+    await user.click(await screen.findByRole('menuitemradio', { name: /bank statement helper/i }))
+    expect(screen.getByRole('button', { name: /^skill:/i })).toHaveTextContent('Bank statement helper')
+    expect(setConversationDefaultSkill).not.toHaveBeenCalled() // nothing to persist onto yet
+
+    dropFile('invoice.pdf', '/tmp/invoice.pdf')
+
+    // The created documents conversation inherits the pick: persisted as its sticky default…
+    await waitFor(() =>
+      expect(setConversationDefaultSkill).toHaveBeenCalledWith('c2', 'app:bank-statement')
+    )
+    await waitFor(() =>
+      expect(importDocuments).toHaveBeenCalledWith(['/tmp/invoice.pdf'], {
+        destination: { kind: 'conversation', conversationId: 'c2' }
+      })
+    )
+    // …and the picker still shows the skill — it was NOT reset by the upload.
+    expect(screen.getByRole('button', { name: /^skill:/i })).toHaveTextContent('Bank statement helper')
   })
 
   it('converts a pending attachment to a live "Files in this chat" entry once indexed (N4)', async () => {

@@ -44,6 +44,23 @@ const TRANSACTION_ROW_SCHEMA: JsonSchema = {
 /** A hard cap so a pathological document can never produce an unbounded array (the gate also validates). */
 export const MAX_TRANSACTIONS = 10000
 
+/**
+ * The deterministic bank-statement extractor version (A9, Phase 31–33 follow-up). Stamped onto every
+ * `bank_statements` row (`run.ts` `runBankExtraction`) and compared on reuse: a statement whose stored
+ * `extractor_version` is NULL (legacy) or LESS than this is STALE — the analysis read-back + the
+ * categorize doctask re-extract it (replacing the rows) rather than keep serving figures a since-fixed
+ * parser bug mis-signed or whose payee it lost.
+ *
+ * BUMP THIS by one whenever a change alters the extractor's OUTPUT for the same input — in EITHER the
+ * line parser here (`extractTransactions`/`parseLine`/`applySignMarker`) OR the geometry reconstruction
+ * (`pdf-layout.ts` `reconstructPage`). A pure refactor that cannot change any output does NOT need a bump.
+ *
+ * History (each entry = the output-affecting work that warranted the value):
+ *   1 — baseline: Phase 32 multi-baseline payee recovery + currency-token class + A3 sign-column fold,
+ *       and the Phase 31–33 review's sign-handling correctness fixes (the current parser as built).
+ */
+export const BANK_EXTRACTOR_VERSION = 1
+
 const EXTRACT_OUTPUT_SCHEMA: JsonSchema = {
   type: 'object',
   additionalProperties: false,
@@ -51,7 +68,10 @@ const EXTRACT_OUTPUT_SCHEMA: JsonSchema = {
   properties: {
     transactions: { type: 'array', items: TRANSACTION_ROW_SCHEMA, maxItems: MAX_TRANSACTIONS },
     // The detected statement currency, if any — a convenience for the orchestration seam (optional).
-    currency: { type: 'string', pattern: '^[A-Z]{3}$' }
+    currency: { type: 'string', pattern: '^[A-Z]{3}$' },
+    // Statement-level opening/closing balances for the completeness gate (§3.5, D56) — optional.
+    openingBalance: { type: 'number' },
+    closingBalance: { type: 'number' }
   }
 }
 
@@ -68,6 +88,10 @@ export interface ExtractedTransaction {
 export interface ExtractTransactionsOutput {
   transactions: ExtractedTransaction[]
   currency?: string
+  /** The statement's printed OPENING balance (Anfangssaldo / "balance brought forward"), if found. */
+  openingBalance?: number
+  /** The statement's printed CLOSING balance (Endsaldo / "balance carried forward"), if found. */
+  closingBalance?: number
 }
 
 // ---- Deterministic parsing helpers (the money/date primitives are shared via `./money`) ----
@@ -96,6 +120,145 @@ function parseLine(line: string, page: number | null, statementCurrency: string 
   return row
 }
 
+// ---- Statement-level opening/closing balance (PDF geometry-extraction plan §3.5, D56) ----
+//
+// The completeness gate's ONLY true proof is `opening + Σamounts == closing`, which needs a
+// statement-level opening/closing balance we did not capture before. These are printed on labelled
+// summary lines (NOT transaction rows — they carry no booking date, so `parseLine` ignores them). We
+// scan for the label, then read the LAST money token on that line (the figure trails the label, and a
+// date earlier on the line is skipped by taking the last token).
+
+// `kontostand per <date>` is the Raiffeisen "Mein ELBA" balance-line label: the statement prints the
+// OPENING balance as `Kontostand per <period-start>` and the CLOSING balance as `Kontostand per
+// <period-end>`. Adding it to BOTH lists lets the "first opening / last closing" rule below read the
+// period-start line as the opening and the period-end line as the closing. NOT "Aktueller Kontostand"
+// (the top-of-document restatement of the closing value — it would corrupt the opening).
+const KONTOSTAND_PER = 'kontostand per'
+
+/** Opening-balance label fragments (lowercased substrings), EN + DE for the de-AT target. */
+const OPENING_LABELS: readonly string[] = [
+  'opening balance', 'balance brought forward', 'previous balance', 'starting balance',
+  'alter kontostand', 'alter saldo', 'anfangssaldo', 'saldovortrag', 'kontostand alt', 'saldo alt',
+  KONTOSTAND_PER
+]
+
+/** Closing-balance label fragments (lowercased substrings), EN + DE. */
+const CLOSING_LABELS: readonly string[] = [
+  'closing balance', 'balance carried forward', 'new balance', 'ending balance', 'final balance',
+  'neuer kontostand', 'neuer saldo', 'endsaldo', 'schlusssaldo', 'kontostand neu', 'saldo neu',
+  KONTOSTAND_PER
+]
+
+/**
+ * A printed opening/closing BALANCE line is a statement SUMMARY, not a transaction — even when it
+ * carries a booking-column date and a figure (the Raiffeisen `Kontostand per 31.03.2026 35.037,04`
+ * shape, which the geometry column model cannot distinguish from a transaction because the date sits in
+ * the Datum column). Counting it as a transaction both inflates the row count and DOUBLE-COUNTS the
+ * opening/closing into Σamounts, breaking the completeness tie — so the extractor drops any line
+ * matching a balance label; `extractStatementBalances` still reads those same lines for the gate.
+ */
+const BALANCE_LABELS: readonly string[] = [...OPENING_LABELS, ...CLOSING_LABELS]
+
+function isBalanceLabelLine(lowerLine: string): boolean {
+  return BALANCE_LABELS.some((l) => lowerLine.includes(l))
+}
+
+/** The last money token on a line as a number, or null when the line carries no parseable figure. */
+function lastMoneyOnLine(line: string): number | null {
+  const matches = [...line.matchAll(MONEY_RE)]
+  if (matches.length === 0) return null
+  return parseAmount(matches[matches.length - 1][0])
+}
+
+/**
+ * Extract the statement-level opening/closing balances from the read text (pure, deterministic).
+ * Takes the FIRST labelled opening line and the LAST labelled closing line (a closing/"new balance"
+ * is often repeated in a footer summary — the last wins). Returns only what is confidently found; a
+ * missing balance stays undefined and the completeness gate (§3.5) then downgrades to honesty.
+ */
+export function extractStatementBalances(chunks: DocumentChunkRead[]): {
+  openingBalance?: number
+  closingBalance?: number
+} {
+  let opening: number | undefined
+  let closing: number | undefined
+  for (const chunk of chunks) {
+    for (const rawLine of chunk.text.split(/\r?\n/)) {
+      const line = rawLine.trim()
+      if (!line) continue
+      const lower = line.toLowerCase()
+      if (opening === undefined && OPENING_LABELS.some((l) => lower.includes(l))) {
+        const v = lastMoneyOnLine(line)
+        if (v !== null) opening = v
+      }
+      if (CLOSING_LABELS.some((l) => lower.includes(l))) {
+        const v = lastMoneyOnLine(line)
+        if (v !== null) closing = v // last labelled closing line wins
+      }
+    }
+  }
+  const out: { openingBalance?: number; closingBalance?: number } = {}
+  if (opening !== undefined) out.openingBalance = opening
+  if (closing !== undefined) out.closingBalance = closing
+  return out
+}
+
+/**
+ * The refined §3.5 / D56 completeness assessment — THREE outcomes, not a boolean, because the absence
+ * of a printed balance and a CONTRADICTED printed balance deserve different answers (the original gate
+ * conflated them, refusing a perfectly honest sum on a balance-less "Umsätze" listing):
+ *
+ *  - `'complete'`     — the statement PRINTS opening + closing and they tie out against the rows
+ *                       (`opening + Σamounts == closing` within half a cent) AND no per-row running
+ *                       balance contradicts. The total is provably the WHOLE statement → present it.
+ *  - `'contradicted'` — the document makes a balance CLAIM the rows refute: a per-row running balance
+ *                       mismatches (a read error), OR a printed opening+closing pair that does NOT tie
+ *                       out. The read is suspect → refuse a total (a mis-read/partial sum could
+ *                       masquerade as the whole — the cardinal D56 harm).
+ *  - `'unverified'`   — NO opening+closing pair to tie against AND no per-row mismatch. The document
+ *                       never CLAIMS a statement total, so it cannot be CONTRADICTED; an honestly
+ *                       LABELLED sum over "the rows I read" is correct and useful (NOT a partial sum
+ *                       dressed up as the statement total). The caller presents figures WITH a caveat.
+ *
+ * A clean per-row chain is NECESSARY-not-sufficient for `'complete'` (rows dropped past the last
+ * printed balance leave the chain intact), so it is never the proof on its own — `'complete'` still
+ * requires the printed opening+closing tie.
+ */
+export type CompletenessStatus = 'complete' | 'unverified' | 'contradicted'
+
+export function assessCompleteness(args: {
+  rows: TransactionInput[]
+  openingBalance?: number
+  closingBalance?: number
+  reconcile: ReconcileResult
+}): CompletenessStatus {
+  const { rows, openingBalance, closingBalance, reconcile } = args
+  // A per-row running balance that contradicts is a read error — suspect regardless of summary balances.
+  if (reconcile.rows.some((r) => r.status === 'mismatch')) return 'contradicted'
+  // No statement-level opening+closing pair to tie against: nothing claimed → nothing contradicted.
+  if (openingBalance === undefined || closingBalance === undefined) return 'unverified'
+  // Both balances printed: they MUST tie out, else the document's own claim is contradicted.
+  const sum = rows.reduce((acc, r) => acc + r.amount, 0)
+  return Math.abs(openingBalance + sum - closingBalance) < MONEY_EPS ? 'complete' : 'contradicted'
+}
+
+/**
+ * The boolean "provably WHOLE" predicate — `assessCompleteness(...) === 'complete'`. Retained because
+ * the gate's hardest property (a clean chain is necessary-not-sufficient; a printed-but-contradicted
+ * balance is never complete) is pinned by name in the unit tests, and a `'complete'` total is the only
+ * one presented as the verified statement total. When this returns false the caller MUST NOT present a
+ * total AS the statement total — it either honestly downgrades (`'contradicted'`) or presents a clearly
+ * labelled sum of the rows read (`'unverified'`); see `buildBankAnswer`.
+ */
+export function isStatementComplete(args: {
+  rows: TransactionInput[]
+  openingBalance?: number
+  closingBalance?: number
+  reconcile: ReconcileResult
+}): boolean {
+  return assessCompleteness(args) === 'complete'
+}
+
 /** Pure extractor over already-read chunks — emits only fully-valid rows (ambiguous lines dropped). */
 export function extractTransactionRows(
   chunks: DocumentChunkRead[],
@@ -106,6 +269,9 @@ export function extractTransactionRows(
     for (const rawLine of chunk.text.split(/\r?\n/)) {
       const line = rawLine.trim()
       if (!line) continue
+      // A printed opening/closing balance line is a summary, not a transaction — skip it even though
+      // it may carry a booking-column date + figure (it is read by `extractStatementBalances` instead).
+      if (isBalanceLabelLine(line.toLowerCase())) continue
       const row = parseLine(line, chunk.page, statementCurrency)
       if (row) {
         rows.push(row)
@@ -148,9 +314,12 @@ export const extractTransactionsTool: SkillTool = {
     }
     const statementCurrency = detectCurrency(chunks.map((c) => c.text).join('\n'))
     const transactions = extractTransactionRows(chunks, statementCurrency)
+    const balances = extractStatementBalances(chunks)
     ctx.onProgress?.({ done: chunks.length, total: chunks.length })
     const output: ExtractTransactionsOutput = { transactions }
     if (statementCurrency) output.currency = statementCurrency
+    if (balances.openingBalance !== undefined) output.openingBalance = balances.openingBalance
+    if (balances.closingBalance !== undefined) output.closingBalance = balances.closingBalance
     return { ok: true, output }
   }
 }

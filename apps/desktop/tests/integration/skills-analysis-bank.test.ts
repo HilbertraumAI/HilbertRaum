@@ -78,7 +78,16 @@ function ctxFor(db: Db, scope: RetrievalScope, question: string): SkillAnalysisC
 }
 
 // A clean 2-row statement: Grocery -45.90 (out), Salary +2500.00 (in); the running balances reconcile.
+// NOTE: it prints NO opening/closing balance, so under the D56 completeness gate it cannot PROVE it
+// captured the whole statement → no total is presented (the downgrade). Used by the tests that don't
+// assert a total (applies/coverage/citations) and by the explicit "no balance → downgrade" gate test.
 const CLEAN = 'Statement EUR\n2026-01-02 Grocery -45,90 1.954,10\n2026-01-03 Salary 2.500,00 4.454,10'
+
+// The same two rows WITH the printed opening/closing balances that prove completeness under the gate
+// (opening 2000.00 + Σ 2454.10 == closing 4454.10) — required before any total is shown (§3.5, D56).
+const COMPLETE =
+  'Statement EUR\nOpening balance 2.000,00\n2026-01-02 Grocery -45,90 1.954,10\n' +
+  '2026-01-03 Salary 2.500,00 4.454,10\nClosing balance 4.454,10'
 
 describe('bank-statement analysis handler — applies() pre-flight (R2)', () => {
   it('applies on an analysis-shaped question over a single in-scope statement', () => {
@@ -118,7 +127,7 @@ describe('bank-statement analysis handler — applies() pre-flight (R2)', () => 
 describe('bank-statement analysis handler — run()', () => {
   it('exhaustive math: count + in/out/net totals computed from the extracted rows', async () => {
     const db = freshDb()
-    const id = seedDoc(db, CLEAN)
+    const id = seedDoc(db, COMPLETE)
     const ctx = ctxFor(db, { documentIds: [id] }, 'summarize the cashflow')
     const res = await bankStatementAnalysisHandler.run!(ctx)
 
@@ -134,14 +143,16 @@ describe('bank-statement analysis handler — run()', () => {
 
   it('figures are quoted, never invented — no fabricated number leaks into the answer', async () => {
     const db = freshDb()
-    const id = seedDoc(db, CLEAN)
+    const id = seedDoc(db, COMPLETE)
     const res = await bankStatementAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'totals?'))
-    // The only figures present are the rows' amounts + the three derived totals — nothing else.
-    const numbers = (res.answer.match(/\d+\.\d{2}/g) ?? []).sort()
+    // The only DISTINCT figures present are the three derived totals (the transaction listing re-prints
+    // the two row amounts 45.90 / 2500.00, which are a SUBSET of those — no new number is invented; the
+    // opening/closing balances that proved completeness are NOT re-printed).
+    const numbers = [...new Set(res.answer.match(/\d+\.\d{2}/g) ?? [])].sort()
     expect(numbers).toEqual(['2454.10', '2500.00', '45.90'].sort())
   })
 
-  it('surfaces unreconciled rows BEFORE the total (SKILL.md)', async () => {
+  it('surfaces unreconciled rows AND downgrades (a mismatch can never present a total — D56)', async () => {
     const db = freshDb()
     // Row 2's printed balance (200,00) cannot follow 100,00 after a −10,00 movement → a mismatch.
     const id = seedDoc(db, 'Statement EUR\n2026-01-02 Alpha -10,00 100,00\n2026-01-03 Beta -10,00 200,00')
@@ -149,9 +160,12 @@ describe('bank-statement analysis handler — run()', () => {
 
     const heading = tr('skills.bankAnalysis.unreconciledHeading')
     expect(res.answer).toContain(heading)
-    expect(res.answer).toContain('Beta') // the offending row is listed
-    // The unreconciled block precedes the totals line (which carries the localized "Net change").
-    expect(res.answer.indexOf(heading)).toBeLessThan(res.answer.indexOf('Net change'))
+    expect(res.answer).toContain('Beta') // the offending row is still listed (honest)
+    // A reconcile mismatch is a read error, so completeness is unproven → no total, the honest downgrade.
+    expect(res.answer).toContain(tr('skills.bankAnalysis.incompleteNoTotal'))
+    expect(res.answer).not.toContain('Net change')
+    // The transaction listing still appears even on the refusal — the user can SEE the rows that were read.
+    expect(res.answer).toContain(tr('skills.bankAnalysis.transactionsHeading'))
   })
 
   it('mixed-currency statement reports NO single total (honesty)', async () => {
@@ -184,13 +198,193 @@ describe('bank-statement analysis handler — run()', () => {
 
   it('runs categorize only for a category-shaped question, and shows a per-category breakdown', async () => {
     const db = freshDb()
-    const id = seedDoc(db, CLEAN)
+    const id = seedDoc(db, COMPLETE)
     const ctx = ctxFor(db, { documentIds: [id] }, 'break down my spending by category')
     const res = await bankStatementAnalysisHandler.run!(ctx)
 
     expect(ctx.events.map((e) => e.meta?.toolName)).toContain('categorize_transactions')
     expect(res.answer).toContain(tr('skills.bankAnalysis.categoryHeading'))
     expect(res.answer).toContain('Income') // Salary → Income (built-in rule)
+    // Deterministic rule pass only — NOT labelled model-assisted.
+    expect(res.answer).not.toContain(tr('skills.bankAnalysis.categoryAssisted'))
+  })
+
+  it('reads PERSISTED categories (Phase 33) and labels a model-assigned breakdown model-assisted', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, COMPLETE)
+    // First call extracts + deterministically categorizes the statement (creates the statement).
+    await bankStatementAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'break down spending by category'))
+    const stmt = db
+      .prepare('SELECT id FROM bank_statements WHERE document_id = ? ORDER BY created_at DESC LIMIT 1')
+      .get(id) as { id: string }
+
+    // Simulate the LLM categorizer doctask having assigned a RICHER category (outside the rule set).
+    const now = new Date().toISOString()
+    const catId = randomUUID()
+    db.prepare('INSERT INTO bank_categories (id, name, builtin, created_at) VALUES (?, ?, 1, ?)').run(
+      catId,
+      'Groceries',
+      now
+    )
+    db.prepare(
+      `UPDATE bank_transactions SET category_id = ?
+       WHERE id = (SELECT id FROM bank_transactions WHERE statement_id = ? ORDER BY row_index LIMIT 1)`
+    ).run(catId, stmt.id)
+
+    // The second call REUSES the same statement, so it reads the persisted categories — including the
+    // model-assigned "Groceries" — and labels the breakdown model-assisted (it never re-extracts/overwrites).
+    const res = await bankStatementAnalysisHandler.run!(
+      ctxFor(db, { documentIds: [id] }, 'break down spending by category')
+    )
+    expect(res.answer).toContain('Groceries')
+    expect(res.answer).toContain(tr('skills.bankAnalysis.categoryAssisted'))
+    // No duplicate statement was created (re-extraction is suppressed when one exists).
+    const count = db.prepare('SELECT COUNT(*) AS n FROM bank_statements WHERE document_id = ?').get(id) as {
+      n: number
+    }
+    expect(count.n).toBe(1)
+  })
+
+  it('re-extracts and REPLACES a statement produced by an outdated extractor (A9 staleness)', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, COMPLETE)
+    // First run extracts → a statement stamped with the current extractor version.
+    await bankStatementAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'total?'))
+    const before = db
+      .prepare('SELECT id, extractor_version AS v FROM bank_statements WHERE document_id = ?')
+      .get(id) as { id: string; v: number }
+    expect(before.v).toBeGreaterThanOrEqual(1)
+
+    // Simulate it having been produced by an OLDER parser: blank the version, and tamper a row figure so
+    // we can prove the rows are actually re-read (a reuse would keep the bogus 99999).
+    db.prepare('UPDATE bank_statements SET extractor_version = NULL WHERE id = ?').run(before.id)
+    db.prepare('UPDATE bank_transactions SET amount = 99999 WHERE statement_id = ?').run(before.id)
+
+    // The second run sees the stale statement → re-extracts, REPLACING it (no duplicate accumulation).
+    const res = await bankStatementAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'total?'))
+
+    const stmts = db
+      .prepare('SELECT id, extractor_version AS v FROM bank_statements WHERE document_id = ?')
+      .all(id) as Array<{ id: string; v: number }>
+    expect(stmts.length).toBe(1) // the stale one was deleted, not left alongside a fresh copy
+    expect(stmts[0].id).not.toBe(before.id) // a fresh statement replaced it
+    expect(stmts[0].v).toBeGreaterThanOrEqual(1) // re-stamped at the current version (no longer stale)
+    // The tampered figure is gone; the answer reflects the correctly re-extracted rows.
+    expect(res.answer).not.toContain('99999')
+    expect(res.answer).toContain('2454.10')
+  })
+
+  it('REUSES a fresh (current-version) statement — no re-extraction, no duplicate (A9)', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, COMPLETE)
+    await bankStatementAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'total?'))
+    const first = db
+      .prepare('SELECT id FROM bank_statements WHERE document_id = ?')
+      .get(id) as { id: string }
+    // The second run reuses the same statement (it is at the current version → not stale).
+    await bankStatementAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'total?'))
+    const stmts = db
+      .prepare('SELECT id FROM bank_statements WHERE document_id = ?')
+      .all(id) as Array<{ id: string }>
+    expect(stmts.length).toBe(1)
+    expect(stmts[0].id).toBe(first.id) // same statement, not re-extracted
+  })
+
+  it('localizes the category DISPLAY labels (DE) while persisting canonical English identifiers', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, COMPLETE)
+    const deTr = (key: MessageKey, params?: MessageParams): string => t('de', key, params)
+    const deCtx = { ...ctxFor(db, { documentIds: [id] }, 'break down spending by category'), tr: deTr }
+    const res = await bankStatementAnalysisHandler.run!(deCtx)
+
+    // Salary → Income (rule), shown with the German label; the canonical identifier persists in English.
+    expect(res.answer).toContain('Einkommen')
+    expect(res.answer).not.toContain('- Income:')
+    const persisted = db
+      .prepare(
+        `SELECT c.name AS name FROM bank_transactions t JOIN bank_categories c ON c.id = t.category_id
+         WHERE c.name = 'Income' LIMIT 1`
+      )
+      .get() as { name: string } | undefined
+    expect(persisted?.name).toBe('Income')
+  })
+
+  it('presents a clearly-LABELLED sum when no opening/closing balance is printed (D56 unverified case)', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, CLEAN) // reconciles per-row, no opening/closing balance — nothing CONTRADICTS the read
+    const res = await bankStatementAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'what is the total?'))
+
+    // The document never CLAIMS a statement total, so a sum over "the rows I read" is honest + useful —
+    // presented WITH the unverified caveat, NOT the refusal (the refusal is now case (B) only).
+    expect(res.answer).toContain(tr('skills.bankAnalysis.count', { count: 2 }))
+    expect(res.answer).toContain('Net change')
+    expect(res.answer).toContain('2454.10')
+    expect(res.answer).toContain(tr('skills.bankAnalysis.unverifiedCaveat', { count: 2 }))
+    // It must NOT be dressed up as a verified statement total (no proven-whole caveat, no refusal).
+    expect(res.answer).not.toContain(tr('skills.bankAnalysis.incompleteNoTotal'))
+    expect(res.answer).not.toContain(tr('skills.bankAnalysis.caveat'))
+  })
+
+  // Regression for the reported HVB online "Umsätze" bug: a transaction listing with NO printed
+  // opening/closing balance and many EUR rows. It must produce totals + a per-category breakdown + a
+  // bounded listing (the user could SEE the rows), all under the unverified caveat — never the refusal.
+  it('no-balance "Umsätze" listing: totals + categories + bounded listing under the unverified caveat', async () => {
+    const db = freshDb()
+    const id = seedDoc(
+      db,
+      'Umsätze EUR\n' +
+        '2026-03-01 Gehalt ACME 2.500,00\n' +
+        '2026-03-02 Miete -800,00\n' +
+        '2026-03-03 Supermarkt -45,90\n' +
+        '2026-03-04 Gebühr Kontofuehrung -3,50\n' +
+        '2026-03-05 Überweisung Max -100,00\n' +
+        '2026-03-06 Tankstelle -60,00\n' +
+        '2026-03-07 Restaurant -32,00\n' +
+        '2026-03-08 Apotheke -18,75\n' +
+        '2026-03-09 Zinsen 1,20\n' +
+        '2026-03-10 Bargeld ATM -200,00\n' +
+        '2026-03-11 Kino -25,00\n' +
+        '2026-03-12 Abo Streaming -9,99'
+    )
+    const res = await bankStatementAnalysisHandler.run!(
+      ctxFor(db, { documentIds: [id] }, 'Summiere die Ausgaben je Kategorie')
+    )
+
+    // 12 rows read, a presented total, and the per-category breakdown the question asked for.
+    expect(res.answer).toContain(tr('skills.bankAnalysis.count', { count: 12 }))
+    expect(res.answer).toContain('Net change')
+    expect(res.answer).toContain(tr('skills.bankAnalysis.categoryHeading'))
+    expect(res.answer).toContain('Income') // Gehalt → Income (built-in rule)
+    expect(res.answer).toContain('Fees') // Gebühr → Fees
+    // The honest, labelled caveat — NOT the refusal (this is the user's exact case, now fixed).
+    expect(res.answer).toContain(tr('skills.bankAnalysis.unverifiedCaveat', { count: 12 }))
+    expect(res.answer).not.toContain(tr('skills.bankAnalysis.incompleteNoTotal'))
+    // The bounded listing surfaces the first rows and notes the remainder (12 − 10 = 2 more).
+    expect(res.answer).toContain(tr('skills.bankAnalysis.transactionsHeading'))
+    expect(res.answer).toContain('Gehalt ACME')
+    expect(res.answer).toContain(tr('skills.bankAnalysis.transactionsMore', { count: 2 }))
+  })
+
+  it('presents a total only once the opening + Σ == closing balance ties out (D56)', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, COMPLETE)
+    const res = await bankStatementAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'what is the total?'))
+    expect(res.answer).toContain('Net change')
+    expect(res.answer).toContain('2454.10')
+    expect(res.answer).not.toContain(tr('skills.bankAnalysis.incompleteNoTotal'))
+  })
+
+  it('downgrades when a printed closing balance does NOT tie out with the rows (D56)', async () => {
+    const db = freshDb()
+    // Opening 2000.00 + Σ 2454.10 = 4454.10, but the statement prints a closing of 9999.99 → no proof.
+    const id = seedDoc(
+      db,
+      'Statement EUR\nOpening balance 2.000,00\n2026-01-02 Grocery -45,90 1.954,10\n' +
+        '2026-01-03 Salary 2.500,00 4.454,10\nClosing balance 9.999,99'
+    )
+    const res = await bankStatementAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'total?'))
+    expect(res.answer).toContain(tr('skills.bankAnalysis.incompleteNoTotal'))
+    expect(res.answer).not.toContain('Net change')
   })
 
   it('coverage is extract with fullyChunked TRUE when the document is fully chunked', async () => {

@@ -30,6 +30,68 @@ export function makePdf(text: string): Buffer {
   return Buffer.from(pdf, 'latin1')
 }
 
+/** One positioned text run on a synthetic columnar page. */
+export interface PdfCell {
+  text: string
+  /** Text-space x of the run's left edge (PDF points; origin bottom-left). */
+  x: number
+  /** Text-space y of the baseline (PDF points; HIGHER is further up the page). */
+  y: number
+}
+
+/**
+ * Build a minimal valid single-page PDF whose text is POSITIONED cell-by-cell (one `Td`/`Tj` per
+ * cell). This is the synthetic COLUMNAR fixture the PDF geometry-extraction tests need: pdf.js returns
+ * each cell with its `transform` x/y, so the layout reconstructor can rebuild the visual rows. Latin-1
+ * + `/WinAnsiEncoding` so German umlauts (ü/ö/ä/ß) round-trip; never use a real bank statement (D57).
+ */
+export function makeColumnarPdf(cells: PdfCell[], fontSize = 10): Buffer {
+  let content = ''
+  for (const c of cells) {
+    const esc = c.text.replace(/([()\\])/g, '\\$1')
+    content += `BT /F1 ${fontSize} Tf ${c.x} ${c.y} Td (${esc}) Tj ET\n`
+  }
+  const stream = Buffer.from(content, 'latin1')
+  const objs: Buffer[] = []
+  objs[1] = Buffer.from('<< /Type /Catalog /Pages 2 0 R >>', 'latin1')
+  objs[2] = Buffer.from('<< /Type /Pages /Kids [3 0 R] /Count 1 >>', 'latin1')
+  objs[3] = Buffer.from(
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] ' +
+      '/Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>',
+    'latin1'
+  )
+  objs[4] = Buffer.concat([
+    Buffer.from(`<< /Length ${stream.length} >>\nstream\n`, 'latin1'),
+    stream,
+    Buffer.from('\nendstream', 'latin1')
+  ])
+  objs[5] = Buffer.from(
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>',
+    'latin1'
+  )
+
+  const parts: Buffer[] = []
+  let pos = 0
+  const push = (b: Buffer): void => {
+    parts.push(b)
+    pos += b.length
+  }
+  push(Buffer.from('%PDF-1.4\n%\xE2\xE3\xCF\xD3\n', 'latin1'))
+  const offsets: number[] = []
+  for (let i = 1; i <= 5; i++) {
+    offsets[i] = pos
+    push(Buffer.from(`${i} 0 obj\n`, 'latin1'))
+    push(objs[i])
+    push(Buffer.from('\nendobj\n', 'latin1'))
+  }
+  const xrefPos = pos
+  let xref = 'xref\n0 6\n0000000000 65535 f \n'
+  for (let i = 1; i <= 5; i++) xref += String(offsets[i]).padStart(10, '0') + ' 00000 n \n'
+  push(Buffer.from(xref, 'latin1'))
+  push(Buffer.from(`trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n${xrefPos}\n%%EOF`, 'latin1'))
+  return Buffer.concat(parts)
+}
+
 // ---- Scanned-PDF detection fixtures (Phase 38 step 0) ------------------------------
 //
 // A REAL (tiny, 1.1 kB) JPEG so the image-only PDFs are honest fixtures: pdfjs parses

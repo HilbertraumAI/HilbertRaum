@@ -292,6 +292,79 @@ password recovery — are documented in
   presents them as labelled blocks, instead of top-k. A tree-backed compare (the §20 map-reduce applied
   per oversized doc *inside* the compare) remains a documented follow-up — today an oversized compared
   doc is read capped, not tree-reduced.
+- **Bank-statement extraction reads PDF GEOMETRY (Stage 1; architecture.md "Skills — design record"
+  §21, Phase 31, D50–D58).** A columnar PDF statement (date · description · amount, with the year in the page header)
+  used to arrive as scrambled reading-order text, so almost no transaction survived the line-oriented
+  parser (the user-reported HVB "zero transactions" failure). The bank-statement skill now re-parses
+  the PDF in a **layout mode** that rebuilds visual rows from pdf.js word coordinates and emits clean,
+  year-resolved `DD.MM.YYYY` rows — **deterministic, offline, zero model calls** (`parsers/pdf-layout.ts`).
+  Enabled for **bank-statement only** (D58 — invoice/redaction/preview keep byte-unchanged reading-order
+  text); `parseDate` is untouched (the year is resolved during reconstruction, §3.2). A **booking-date
+  column model** (`detectDatumColumn`) keeps a row from being mis-read as a transaction unless its LEAD
+  date sits in the statement's leftmost, densest date column — so a value-date (Valuta) column printed
+  on a second baseline, with a foreign-currency reference amount hidden in its description, is no longer
+  emitted as a spurious row (the Raiffeisen "Mein ELBA" over-extraction the gold set surfaced). A line
+  matching an opening/closing **balance label** (incl. `Kontostand per <date>`) is treated as a summary
+  and never counted as a transaction even when it carries a booking-column date + figure (it is read
+  only by the completeness gate). **Column clustering is still heuristic** (statements vary; an unusual
+  column geometry can mis-read a row), so a **completeness gate** (D56, refined by **D56-R** 2026-06-25)
+  classifies every answer into one of three outcomes. A **VERIFIED statement total** is presented **only
+  when the printed opening + Σamounts == closing balance ties out** (a clean per-row running-balance chain
+  is necessary but not sufficient) — `complete`. When the document makes a balance CLAIM the rows refute
+  — a non-tying printed opening/closing, or any per-row balance mismatch — the skill **refuses a total**
+  and downgrades to an honest "couldn't confirm the whole statement" message (EN+DE) — `contradicted`.
+  But when the statement prints **no opening/closing balance at all and nothing contradicts the read**
+  (e.g. an online "Umsätze" transaction listing), the skill now presents the figures under an explicit
+  caveat — *"a sum of the N rows I read, not a verified statement total"* — rather than refusing a
+  perfectly honest number — `unverified`. The cardinal property is unchanged: a number a user could
+  mistake for THE statement total never comes from an incomplete read; a clearly-labelled sum of the rows
+  shown is not such a number. A bounded transaction listing trails every non-empty answer so the user can
+  see the rows that were read. (Before D56-R the no-balance case was refused outright — the over-cautious
+  behaviour the bug report flagged.)
+  **Stage 2** (a grammar-constrained local-LLM fallback on the residual hard subset, D52/D55) is **not
+  built**, but is **expected to be needed eventually** — it lands only if the Stage-1 deterministic
+  recall on the local-only gold set (D57) proves insufficient. On the current (small) gold set — three
+  text-layer statements (sanitized HVB excerpt, a full Raiffeisen "Mein ELBA", an HVB "Umsätze" page)
+  plus one image-only scan — Stage 1 records **0 hallucinated/partial totals and 0 model calls**, the
+  gate presents the correct VERIFIED total on the one statement that prints opening/closing balances; the
+  two balance-less statements now present `unverified` labelled sums (under D56-R; before the refinement
+  they were refused), and the scan degrades safely (0 rows); the live recall/gate numbers are kept in
+  `architecture.md` §21, not duplicated here (re-measure locally to refresh them under the refined gate). The corpus is still too narrow to close D52; because real
+  layouts vary widely (no-printed-balance statements, ruled/borderless tables, scans), deterministic
+  geometry will likely miss some, so Stage 2 should be treated as a **probable future need** — broaden
+  the gold-set corpus across more banks/layouts to confirm and trigger it (it is gated, not abandoned).
+  **Known boundaries (all SAFE — no wrong total is ever shown):** (1) **[RESOLVED 2026-06-25 for the
+  `<date> <currency> <balance>` shape.]** A statement that prints a **per-row running-balance** line shaped
+  `<date> <currency> <balance>` (date in the booking column) used to be over-extracted — the balance row
+  was mis-read as a phantom transaction. The **currency-token class** now keeps the bare currency code out
+  of the description, so the phantom row's description is empty and it is dropped, while a genuine row
+  whose payee wrapped onto a continuation baseline is rescued by **multi-baseline row association** (the
+  same HVB "Umsätze" fix that recovers lost payees, strips the per-row `EUR`, and folds a separate
+  debit/credit sign cell into the amount). The 2026-06-24 finding still holds — the balance and amount are
+  right-aligned in one numeric column, so a "money-column model" could not have separated them; the
+  token-class + association fix did. **Residual (safe):** a genuine **no-payee** row whose booking line is
+  a bare `<date> <currency> <amount>` with no continuation below is indistinguishable from a phantom and is
+  also dropped — a recall loss, never a wrong total. (2) An
+  **image-only / "blacked-out" or scanned** statement has no text layer, so geometry-aware extraction
+  recovers nothing and returns the honest empty/downgrade (never a wrong total); reading it is the OCR
+  path's job, not Stage 1. (3) When a PDF producer renders one **amount as two split items** (`2.000` +
+  `,00`), neither fragment parses as money, so the row carries no amount and is dropped — the transaction
+  silently vanishes (a recall loss). When the statement prints opening/closing, the dropped row breaks the
+  tie → `contradicted` → no total; on a balance-LESS statement, D56-R presents an `unverified` sum
+  under-counted by the dropped row (honest per its caveat, no longer a refusal). The scoped fix is an
+  x-adjacency money re-merge (deferred). The same `architecture.md` §21 entry pins the
+  two tuning-constant boundaries (a row whose baselines jitter past the 3-pt tolerance loses its amount; a
+  Datum/Valuta gap under 12 pt merges, allowing a spurious row).
+- **Bank-statement categories are model-assisted, not verified (Phase 33).** The per-category breakdown
+  is assigned by a local LLM constrained to a **fixed category set** (it can never invent a label; any
+  uncertain/unparseable output drops to `Uncategorized`), so a category may be **wrong** — but a mislabel
+  only shifts the breakdown, never the **verified statement total** or the **D56 completeness gate** (which
+  read the signed amounts, not the labels). The breakdown is shown with an explicit "model-assisted" note.
+  With **no model loaded** it degrades to the deterministic rule pass (a smaller, coarser category set).
+  Categorization runs in the **doctask lane** (D26 — one job at a time), so it cannot run while chat
+  streams. Categories are grouped on a **canonical English identifier** (stable across UI locale — the
+  enum and the model-assisted detection key on it), but the breakdown **display labels are localized**
+  (EN + DE); a future user-defined category with no catalog entry falls back to its raw name.
 - **Strictly one job at a time (D26).** While a summary runs, chat is refused with a
   friendly message + a cancel option, and vice versa — the one local model serves one
   request. The R-T1 probe confirmed the pinned b9585 WOULD serve concurrent requests on

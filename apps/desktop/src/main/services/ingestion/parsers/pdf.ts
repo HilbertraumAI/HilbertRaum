@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises'
 import { t } from '../../../../shared/i18n'
 import { log } from '../../logging'
 import type { DocumentParser, ExtractedSegment, ParseContext, ParsedDocument } from './index'
+import { reconstructPage, type LayoutWord } from './pdf-layout'
 
 // PDF parser (spec R3). Uses pdfjs-dist's *legacy* build, which runs in plain Node
 // with no Web Worker and no DOM. Each page becomes one segment
@@ -39,11 +40,27 @@ export const PDF_TEXT_PAGE_MIN_CHARS = 25
 interface TextItemLike {
   str?: unknown
   hasEOL?: unknown
+  /** pdf.js text-space transform `[a,b,c,d,e,f]`; `e`=x (index 4), `f`=y (index 5). Layout mode only. */
+  transform?: unknown
+  /** pdf.js advance width of the fragment. Layout mode only. */
+  width?: unknown
 }
 
 function itemText(item: TextItemLike): { str: string; eol: boolean } | null {
   if (typeof item.str !== 'string') return null // skip marked-content / non-text items
   return { str: item.str, eol: item.hasEOL === true }
+}
+
+/** Lift a pdf.js text item into a positioned {@link LayoutWord} for geometry reconstruction, or null. */
+function itemWord(item: TextItemLike): LayoutWord | null {
+  if (typeof item.str !== 'string' || item.str === '') return null
+  const tf = item.transform
+  if (!Array.isArray(tf) || tf.length < 6) return null
+  const x = tf[4]
+  const y = tf[5]
+  if (typeof x !== 'number' || typeof y !== 'number') return null
+  const w = typeof item.width === 'number' ? item.width : 0
+  return { str: item.str, x, y, w }
 }
 
 export const PdfParser: DocumentParser = {
@@ -53,10 +70,18 @@ export const PdfParser: DocumentParser = {
   async parse(filePath: string, ctx?: ParseContext): Promise<ParsedDocument> {
     const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs')
     const data = new Uint8Array(await readFile(filePath))
-    const loadingTask = pdfjs.getDocument({ data })
+    // `verbosity: 0` (VerbosityLevel.ERRORS) silences pdf.js's font-program WARNINGS — e.g. the
+    // `Warning: TT: undefined function: 21` flood a malformed embedded TrueType hint program emits on
+    // every page. They are pdf.js worker noise, not our code, and carry no diagnostic value here; real
+    // ERRORS still surface. Offline-safe (a verbosity flag, no network/telemetry).
+    const loadingTask = pdfjs.getDocument({ data, verbosity: 0 })
     const doc = await loadingTask.promise
 
     const segments: ExtractedSegment[] = []
+    // Scan detection (below) must judge an image-only PDF from its RAW text-layer, INDEPENDENTLY of
+    // layout reconstruction: a text page that yields no transaction rows in layout mode is still a
+    // text page, not a scan. So track the raw text-bearing pages separately from the emitted segments.
+    let rawTextPageCount = 0
     let numPages = 0
     try {
       numPages = doc.numPages
@@ -71,18 +96,43 @@ export const PdfParser: DocumentParser = {
           pageCap: lastPage
         })
       }
+      // Layout mode (plan §3.1, D51): carry the document-level year forward across pages — a
+      // multi-page statement usually prints the year only in the page-1 header, so later pages whose
+      // own header has none still resolve their bare DD.MM. dates.
+      let fallbackYear: number | null = null
       for (let pageNumber = 1; pageNumber <= lastPage; pageNumber++) {
         const page = await doc.getPage(pageNumber)
         const content = await page.getTextContent()
-        let text = ''
-        for (const raw of content.items) {
-          const item = itemText(raw as TextItemLike)
-          if (!item) continue
-          text += item.str
-          text += item.eol ? '\n' : ' '
+
+        // Reading-order raw text — always computed; drives scan detection (and is the segment text in
+        // the default mode).
+        let raw = ''
+        for (const item of content.items) {
+          const t = itemText(item as TextItemLike)
+          if (!t) continue
+          raw += t.str
+          raw += t.eol ? '\n' : ' '
         }
-        const trimmed = text.trim()
-        if (trimmed.length > 0) segments.push({ text: trimmed, pageNumber })
+        const rawTrimmed = raw.trim()
+        if (rawTrimmed.length >= PDF_TEXT_PAGE_MIN_CHARS) rawTextPageCount++
+
+        if (ctx?.layout) {
+          // Geometry reconstruction (plan §3.1): rebuild visual rows from the word coordinates pdf.js
+          // already carries. Emit the reconstructed transaction lines; an empty result is honest (no
+          // rows recovered) and never a scan — `rawTextPageCount` above guards that distinction.
+          const words: LayoutWord[] = []
+          for (const item of content.items) {
+            const w = itemWord(item as TextItemLike)
+            if (w) words.push(w)
+          }
+          const { text, year } = reconstructPage(words, { fallbackYear })
+          if (year != null) fallbackYear = year
+          const trimmed = text.trim()
+          if (trimmed.length > 0) segments.push({ text: trimmed, pageNumber })
+          continue
+        }
+
+        if (rawTrimmed.length > 0) segments.push({ text: rawTrimmed, pageNumber })
       }
     } finally {
       // Release pdfjs transport/worker resources promptly.
@@ -91,9 +141,9 @@ export const PdfParser: DocumentParser = {
 
     // Scan detection: NO page reaches the text threshold ⇒ image-only (or
     // empty) PDF. A hybrid PDF (some real text pages, some scanned) is NOT detected —
-    // its text pages index normally.
-    const textPages = segments.filter((s) => s.text.length >= PDF_TEXT_PAGE_MIN_CHARS)
-    if (numPages > 0 && textPages.length === 0) {
+    // its text pages index normally. Judged on RAW text (above), so a layout-mode page that
+    // recovered no transaction rows is not mistaken for a scan.
+    if (numPages > 0 && rawTextPageCount === 0) {
       // Stored recognition available (the OCR task ran) → one segment per recognized
       // page; page citations work unchanged (ExtractedSegment.pageNumber).
       const ocrPages = ctx?.ocrPages

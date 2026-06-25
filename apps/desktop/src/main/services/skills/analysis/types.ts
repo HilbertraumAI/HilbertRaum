@@ -50,9 +50,10 @@ export interface SkillAnalysisContext {
   /**
    * The verbatim content reach the run seam needs: a document's ordered, newline-preserving parser
    * segments (the IPC injects `extractDocumentPreview`). Absent ⇒ the run seam's legacy chunk-table
-   * reader (the unit tests that seed `chunks` directly).
+   * reader (the unit tests that seed `chunks` directly). The optional `layout` flag (plan §3.1/D58)
+   * asks for geometry-aware row/column reconstruction — set ONLY by the bank-statement handler.
    */
-  readDocumentSegments?: (documentId: string) => Promise<DocumentChunkRead[]>
+  readDocumentSegments?: (documentId: string, opts?: { layout?: boolean }) => Promise<DocumentChunkRead[]>
 }
 
 /** The grounded result a handler returns (plan §3.1): synthesised answer + real citations + coverage. */

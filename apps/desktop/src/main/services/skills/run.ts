@@ -3,6 +3,7 @@ import type { Db } from '../db'
 import type { DocumentChunkRead, SkillToolAudit, SkillToolContext } from '../../../shared/types'
 import { getRegisteredTool, runSkillTool } from './tool-registry'
 import {
+  BANK_EXTRACTOR_VERSION,
   BUILTIN_CATEGORIES,
   BUILTIN_CATEGORY_RULES,
   type CashflowSummary,
@@ -11,6 +12,7 @@ import {
   type ReconcileResult,
   type TransactionInput
 } from './tools/bank-statement'
+import { CATEGORIZER_CATEGORIES } from './categorizer'
 import type { RedactDocumentOutput } from './tools/redaction'
 
 // The app-orchestrated run seam (architecture.md "Skills — design record" §8, Phase S11a). This is the exact
@@ -52,7 +54,23 @@ export interface BankExtractionDeps {
    * stored `chunks` table collapses newlines and overlaps (`resolveDocumentReader`). Absent ⇒ the
    * legacy chunk-table reader (the integration tests that seed `chunks` directly).
    */
-  readDocumentSegments?: (documentId: string) => Promise<DocumentChunkRead[]>
+  readDocumentSegments?: (documentId: string, opts?: { layout?: boolean }) => Promise<DocumentChunkRead[]>
+  /**
+   * Request geometry-aware layout reconstruction from the segment reader (PDF geometry-extraction plan
+   * §3.1, D58 — bank-statement only). Threaded into `resolveDocumentReader`; the redaction/invoice
+   * seams leave it unset and get byte-unchanged reading-order text.
+   */
+  layout?: boolean
+  /**
+   * Re-extraction (A9): when set, DELETE every prior `bank_statements` row (and its transactions /
+   * corrections) for the document inside the persist transaction BEFORE inserting the fresh one. The
+   * reuse paths pass it when the latest statement is STALE (`isBankStatementStale`) so a since-fixed
+   * parser bug's rows are replaced — and so re-extraction never accumulates duplicate statements. The
+   * persisted categories on the old rows are intentionally NOT carried over (the rows changed precisely
+   * because the parser changed them — the honest move is to recompute, which the breakdown's
+   * deterministic pass / the next categorize run does). Unset (the default) = the additive behaviour.
+   */
+  replaceExisting?: boolean
 }
 
 export interface BankExtractionResult {
@@ -103,12 +121,17 @@ export function buildReadDocumentChunks(db: Db, allowed: ReadonlySet<string>): S
 export async function resolveDocumentReader(
   db: Db,
   documentId: string,
-  deps: { readDocumentSegments?: (documentId: string) => Promise<DocumentChunkRead[]> }
+  deps: {
+    readDocumentSegments?: (documentId: string, opts?: { layout?: boolean }) => Promise<DocumentChunkRead[]>
+    layout?: boolean
+  }
 ): Promise<SkillToolContext['readDocumentChunks']> {
   if (!deps.readDocumentSegments) return buildReadDocumentChunks(db, new Set([documentId]))
   let segments: DocumentChunkRead[]
   try {
-    segments = await deps.readDocumentSegments(documentId)
+    // Layout reconstruction is requested only for the bank-statement skill (D58); other callers leave
+    // `deps.layout` unset and receive byte-unchanged reading-order segments.
+    segments = await deps.readDocumentSegments(documentId, { layout: deps.layout })
   } catch {
     // Re-extraction failed (the stored copy is gone, or encrypted with no cipher). Surface it
     // through the tool's OWN "could not be read" path: a reader that refuses the in-scope id, so
@@ -193,10 +216,24 @@ export async function runBankExtraction(
     const completedAt = now()
     try {
       db.exec('BEGIN')
+      // Re-extraction (A9): replace the document's prior (stale) statements in the SAME transaction, so
+      // a re-extract never accumulates duplicates and the swap is atomic (a failure rolls back to the old).
+      if (deps.replaceExisting) deleteBankStatementsForDocument(db, args.documentId)
       db.prepare(
-        `INSERT INTO bank_statements (id, document_id, run_id, period_start, period_end, currency, created_at)
-         VALUES (?, ?, ?, NULL, NULL, ?, ?)`
-      ).run(statementId, args.documentId, runId, output.currency ?? null, completedAt)
+        `INSERT INTO bank_statements
+           (id, document_id, run_id, period_start, period_end, currency, opening_balance, closing_balance,
+            extractor_version, created_at)
+         VALUES (?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?)`
+      ).run(
+        statementId,
+        args.documentId,
+        runId,
+        output.currency ?? null,
+        output.openingBalance ?? null,
+        output.closingBalance ?? null,
+        BANK_EXTRACTOR_VERSION,
+        completedAt
+      )
       const insertTx = db.prepare(
         `INSERT INTO bank_transactions
           (id, statement_id, run_id, row_index, date, value_date, description, amount, currency, balance_after, source_page, created_at)
@@ -292,14 +329,55 @@ export interface StatementToolResult {
   error?: string
 }
 
-/** The newest statement for a document (the deterministic run target), or null if none extracted. */
-function latestStatement(db: Db, documentId: string): { id: string } | null {
+/**
+ * The newest statement id for a document, or null if none has been extracted. The single source of
+ * truth for "the latest statement" across the three call sites — the run seam (here), the `categorize`
+ * doctask (`doctasks/manager.ts`) and the analysis read-back (`analysis/bank-statement.ts`). The
+ * `created_at DESC, id DESC` tie-break is LOAD-BEARING: it decides which statement gets categorized vs.
+ * read back, so all three MUST resolve the SAME row — hence one shared helper, not three copies.
+ */
+export function latestBankStatementId(db: Db, documentId: string): string | null {
   const row = db
     .prepare(
       `SELECT id FROM bank_statements WHERE document_id = ? ORDER BY created_at DESC, id DESC LIMIT 1`
     )
     .get(documentId) as { id: string } | undefined
-  return row ?? null
+  return row?.id ?? null
+}
+
+/**
+ * Whether a statement was produced by an OUTDATED extractor (A9). True when its `extractor_version` is
+ * NULL (extracted before versioning / by an older parser) or LESS than the current
+ * `BANK_EXTRACTOR_VERSION` — i.e. a since-fixed parser bug may have mis-signed an amount or lost a payee
+ * in these rows. The reuse paths (analysis read-back + categorize doctask) re-extract a stale statement
+ * (with `replaceExisting`) instead of serving its rows. A statement at the current version is fresh.
+ */
+export function isBankStatementStale(db: Db, statementId: string): boolean {
+  const row = db
+    .prepare('SELECT extractor_version AS v FROM bank_statements WHERE id = ?')
+    .get(statementId) as { v: number | null } | undefined
+  if (!row) return false // unknown id — nothing to re-extract (callers handle the missing case)
+  return row.v == null || row.v < BANK_EXTRACTOR_VERSION
+}
+
+/**
+ * Delete every `bank_statements` row for a document plus its dependent rows (transactions, and any
+ * corrections on them) in FK order — the "replace" half of a re-extraction (A9). Runs inside the
+ * caller's transaction. `bank_corrections` carries no writes yet (schema-only), but is cleared
+ * defensively so a future correction can never be orphaned onto a deleted transaction.
+ */
+function deleteBankStatementsForDocument(db: Db, documentId: string): void {
+  db.prepare(
+    `DELETE FROM bank_corrections WHERE transaction_id IN (
+       SELECT t.id FROM bank_transactions t
+       JOIN bank_statements s ON s.id = t.statement_id
+       WHERE s.document_id = ?)`
+  ).run(documentId)
+  db.prepare(
+    `DELETE FROM bank_transactions WHERE statement_id IN (
+       SELECT id FROM bank_statements WHERE document_id = ?)`
+  ).run(documentId)
+  db.prepare('DELETE FROM bank_statements WHERE document_id = ?').run(documentId)
 }
 
 /** Load a statement's transactions in stable row order (null columns omitted, not passed as null). */
@@ -383,15 +461,15 @@ async function prepareStatementRun(
       return { failed: { ok: false, runId, errorCode: 'unavailable', error: msg } }
     }
 
-    const statement = latestStatement(db, args.documentId)
-    if (!statement) {
+    const statementId = latestBankStatementId(db, args.documentId)
+    if (!statementId) {
       // Honest, friendly: the downstream tools need an extraction first (no figure invented).
       const msg = 'Read the statement first, then run this tool.'
       finishRun(db, runId, 'failed', now(), null, msg)
       return { failed: { ok: false, runId, errorCode: 'needsExtraction', error: msg } }
     }
 
-    const transactions = loadTransactions(db, statement.id)
+    const transactions = loadTransactions(db, statementId)
     const signal = deps.signal ?? new AbortController().signal
     const ctx: SkillToolContext = {
       documentIds,
@@ -413,7 +491,7 @@ async function prepareStatementRun(
       return { failed: { ok: false, runId, cancelled, error: result.error } }
     }
     return {
-      prepared: { runId, statementId: statement.id, transactions, output: result.output, completedAt: now() }
+      prepared: { runId, statementId, transactions, output: result.output, completedAt: now() }
     }
   } catch {
     console.error('[skills] statement run failed unexpectedly')
@@ -473,8 +551,14 @@ export async function runBalanceValidation(
   return { ok: true, runId, count: mismatchCount, resultKind }
 }
 
-/** Get (seeding once) the built-in `bank_categories` ids by name, plus seed the rules they use. */
-function ensureBuiltinCategories(db: Db, now: string): Map<string, string> {
+/**
+ * Get (seeding once) the built-in `bank_categories` ids by name, plus seed the rules they use.
+ * The seeded NAMES are the union of the deterministic-rule categories (`BUILTIN_CATEGORIES`) and the
+ * richer LLM-categorizer taxonomy (`CATEGORIZER_CATEGORIES`, Phase 33), so a model-assigned category
+ * (e.g. "Groceries") always maps to a seeded row. Only the deterministic categories carry RULES.
+ * Exported so the `'categorize'` doctask (the LLM categorizer's lane) reuses the exact same seed.
+ */
+export function ensureBuiltinCategories(db: Db, now: string): Map<string, string> {
   const existing = db.prepare('SELECT id, name FROM bank_categories WHERE builtin = 1').all() as Array<{
     id: string
     name: string
@@ -483,7 +567,7 @@ function ensureBuiltinCategories(db: Db, now: string): Map<string, string> {
   const insertCat = db.prepare(
     'INSERT INTO bank_categories (id, name, builtin, created_at) VALUES (?, ?, 1, ?)'
   )
-  for (const name of BUILTIN_CATEGORIES) {
+  for (const name of [...new Set([...BUILTIN_CATEGORIES, ...CATEGORIZER_CATEGORIES])]) {
     if (!byName.has(name)) {
       const id = randomUUID()
       insertCat.run(id, name, now)

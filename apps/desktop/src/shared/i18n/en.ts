@@ -172,6 +172,9 @@ export const en = {
   'chat.skill.tool.validateInvoiceTotals': 'Check totals',
   'chat.skill.tool.exportInvoiceCsv': 'Export to CSV',
   'chat.skill.tool.redactDocument': 'Redact personal data',
+  // The breakdown question routed into the transcript after a categorize run (Phase 33, Q3) — it must
+  // be both analysis- and category-shaped so the bank analysis handler answers it (0 model calls).
+  'chat.skill.categorize.breakdownQuestion': 'Break down my spending by category.',
   'chat.skill.run.running.one': 'Running: {tool} on {count} document…',
   'chat.skill.run.running.other': 'Running: {tool} on {count} documents…',
   'chat.skill.run.cancel': 'Cancel',
@@ -280,6 +283,8 @@ export const en = {
   'docs.task.treeBusyTitle': 'A deep index is being built for the whole document',
   'docs.task.extractBusyTitle':
     'The whole document is being scanned so it can answer "list every…" questions',
+  'docs.task.categorizeBusy': 'Categorizing transactions…',
+  'docs.task.categorizeBusyTitle': 'The statement’s transactions are being categorized',
   'docs.error.noSupported': 'No supported documents were found in that selection.',
   'docs.removedDocFallback': 'a removed document',
   // Provenance lines render around inline <b>title</b> elements.
@@ -477,11 +482,52 @@ export const en = {
     'Money in: **{inAmount} {currency}** · Money out: **{outAmount} {currency}** · Net change: **{netAmount} {currency}**.',
   'skills.bankAnalysis.noCurrency':
     'These transactions use more than one currency, so there is no single combined total — a total would have to be split per currency.',
+  // Completeness gate (§3.5, D56) — the CONTRADICTED case: the document makes a balance CLAIM the rows
+  // refute (a per-row balance mismatches, or a printed opening+closing pair that doesn't tie out). The
+  // read is suspect, so I refuse a total that might be a mis-read/partial sum dressed up as the whole.
+  'skills.bankAnalysis.incompleteNoTotal':
+    'I couldn’t confirm I captured the whole statement — its printed balances don’t add up against the ' +
+    'transactions I read, so the figures may be mis-read or incomplete. To avoid giving you a total that ' +
+    'might be wrong, I won’t state a sum here; please open the statement and check the figures yourself.',
   'skills.bankAnalysis.categoryHeading': 'By category:',
   'skills.bankAnalysis.categoryItem': '- {category}: {amount} {currency} ({count})',
+  'skills.bankAnalysis.categoryAssisted':
+    '_Categories are model-assisted — a label may be off, but the totals above are unchanged._',
+  // Localized DISPLAY labels for the fixed category set (Phase 33). The PERSISTED identifier stays the
+  // canonical English name (the enum / model-assisted detection key on it); only the breakdown display
+  // is localized. An unknown name (e.g. a future user category) falls back to its raw identifier.
+  'skills.bankCategory.Groceries': 'Groceries',
+  'skills.bankCategory.Dining': 'Dining',
+  'skills.bankCategory.Transport': 'Transport',
+  'skills.bankCategory.Utilities': 'Utilities',
+  'skills.bankCategory.Rent': 'Rent',
+  'skills.bankCategory.Insurance': 'Insurance',
+  'skills.bankCategory.Subscriptions': 'Subscriptions',
+  'skills.bankCategory.Health': 'Health',
+  'skills.bankCategory.Shopping': 'Shopping',
+  'skills.bankCategory.Income': 'Income',
+  'skills.bankCategory.Transfer': 'Transfer',
+  'skills.bankCategory.Fees': 'Fees',
+  'skills.bankCategory.Cash': 'Cash',
+  'skills.bankCategory.Tax': 'Tax',
+  'skills.bankCategory.Spending': 'Spending',
+  'skills.bankCategory.Uncategorized': 'Uncategorized',
   'skills.bankAnalysis.caveat':
     'These figures are the statement’s own printed amounts, read across the whole document — ' +
     'nothing here is added up from prose or invented.',
+  // Completeness gate (§3.5, D56) — the UNVERIFIED case: the statement prints NO opening/closing balance
+  // to confirm I read every row, but nothing CONTRADICTS what I read either. So I give a clearly LABELLED
+  // sum of the rows read — NOT a verified statement total — rather than refuse a perfectly honest figure.
+  'skills.bankAnalysis.unverifiedCaveat':
+    'These figures are a sum of the **{count}** transactions I read across the whole document. The ' +
+    'statement prints no opening or closing balance, so I can’t confirm those are every transaction — ' +
+    'treat them as a sum of the rows shown, not a verified statement total. Nothing here is added up ' +
+    'from prose or invented.',
+  // A bounded transaction listing so "show me the transactions" is answerable (figures pass through verbatim).
+  'skills.bankAnalysis.transactionsHeading': 'Transactions:',
+  'skills.bankAnalysis.transactionItem': '- {date} · {description} · {amount} {currency}',
+  'skills.bankAnalysis.transactionsMore':
+    '… and **{count}** more — ask me to export the statement as CSV to see every row.',
 
   // ---- Invoice analysis answer (full-doc-skills plan §3.1, Phase 4 / D49) ----
   // The deterministic, whole-document answer the invoice analysis handler synthesises from the

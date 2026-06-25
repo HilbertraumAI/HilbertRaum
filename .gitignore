@@ -22,6 +22,10 @@ models/
 
 # User data / workspace — stays local, never committed
 workspace/
+# Local-only real-data gold sets (PDF geometry-extraction D57): real bank statements + their
+# hand-counted expectations. NEVER commit — only the harness + README under tests/real-data/ are
+# tracked, and the harness prints aggregate metrics only.
+apps/desktop/tests/real-data/corpus/
 *.sqlite
 *.sqlite-journal
 *.sqlite-wal

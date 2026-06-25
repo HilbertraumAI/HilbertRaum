@@ -238,7 +238,23 @@ export class LlamaRuntime implements ModelRuntime {
       // prefill, not one per turn. Loopback-only, no telemetry — purely a local compute hint.
       cache_prompt: true,
       ...(maxTokens != null ? { max_tokens: maxTokens } : {}),
-      ...(temperature != null ? { temperature } : {})
+      ...(temperature != null ? { temperature } : {}),
+      // Grammar-constrained decoding (D55): constrain the output to a JSON Schema. llama-server's
+      // OpenAI-compatible endpoint compiles it to a GBNF grammar so the model can only emit a JSON
+      // value matching the schema — the load-bearing guarantee the bank categorizer relies on (a
+      // category outside the fixed enum is unrepresentable). Omitted ⇒ unconstrained free text.
+      ...(options?.responseSchema
+        ? {
+            response_format: {
+              type: 'json_schema',
+              json_schema: {
+                name: options.responseSchemaName ?? 'response',
+                schema: options.responseSchema,
+                strict: true
+              }
+            }
+          }
+        : {})
     })
 
     const res = await this.server.fetch('/v1/chat/completions', {

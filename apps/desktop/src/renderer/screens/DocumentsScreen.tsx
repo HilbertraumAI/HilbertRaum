@@ -104,7 +104,8 @@ const TASK_BUSY_LABEL: Record<DocTaskKind, MessageKey> = {
   compare: 'docs.task.compareBusy',
   ocr: 'docs.task.ocrBusy',
   tree: 'docs.task.treeBusy',
-  extract: 'docs.task.extractBusy'
+  extract: 'docs.task.extractBusy',
+  categorize: 'docs.task.categorizeBusy'
 }
 const TASK_BUSY_TITLE: Record<DocTaskKind, MessageKey> = {
   summary: 'docs.task.summaryBusyTitle',
@@ -112,7 +113,8 @@ const TASK_BUSY_TITLE: Record<DocTaskKind, MessageKey> = {
   compare: 'docs.task.compareBusyTitle',
   ocr: 'docs.task.ocrBusyTitle',
   tree: 'docs.task.treeBusyTitle',
-  extract: 'docs.task.extractBusyTitle'
+  extract: 'docs.task.extractBusyTitle',
+  categorize: 'docs.task.categorizeBusyTitle'
 }
 
 /**

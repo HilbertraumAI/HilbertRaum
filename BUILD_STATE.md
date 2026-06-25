@@ -6,6 +6,457 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-25 — **Phase 33 verification — live categorizer smoke (real model) + gold-set re-measure on the real HVB file
+(branch `pdf-geometry-extraction`).** Two manual confirmations the CI suite structurally can't cover:
+- **Categorizer live smoke** — new gated harness `tests/manual/categorizer-smoke.test.ts` (`HILBERTRAUM_CATEGORIZER_SMOKE=<root>`,
+  optional `HILBERTRAUM_CATEGORIZER_MODEL=<path>` to skip a bad auto-pick). Ran the SHIPPING `categorizeTransactions` over 26
+  synthetic transactions against a real chat GGUF (qwen3.5-4b-ud-q4kxl): **off-set categories = 0** (the json_schema enum held
+  through the real llama-server — the D55 path CI never exercises, since the mock ignores `responseSchema`), the nonsense row →
+  `Uncategorized` (in-set), batching crossed the 20-row boundary (2 model calls), **26/26 plausible-label agreement**, ~36s.
+- **Gold-set re-measure (the pending Phase-32 item, now DONE for this file)** — assembled an off-repo corpus
+  (`D:\pdf-goldset`, gitignored, D57) from the real HVB online "Umsätze" listing (Jan–Mar 2025, 45 rows, no printed balances —
+  the exact file behind the Phase-32 bug) with a hand-counted `expected.json` (trueRowCount 45). `HILBERTRAUM_PDF_GOLDSET=1`
+  result: **recall 100% (45/45)**, **over-extracted 0/1** (the boundary-1 `<date> <CUR> <balance>` phantom rows are GONE —
+  A1/A2/A3 hold on the REAL encoding, not just synthetic fixtures), D56-R **unverified** labelled-sum path, **hallucinated /
+  partial-total / model-calls all 0**. Recorded in `architecture.md` §21 (local-re-measurement note). The broader 3-text+1-scan
+  aggregate still awaits a re-measure where that corpus lives. **Phase 33 is now fully verified; STILL AWAITING approval to push.**_
+
+_2026-06-25 — **A9 stale-statement re-extraction IMPLEMENTED (Phase 31–33 follow-up #3; branch `pdf-geometry-extraction`,
+still unmerged/unpushed).** The scoped fix recommended below, approved + built. A bank statement extracted under an OLD
+parser no longer keeps serving stale (mis-signed / lost-payee) rows after a parser fix — the reuse paths now re-extract a
+stale statement, replacing it. Suite **2231 passed / 37 skipped (+3)**, typecheck clean. **As built:**
+- **Version stamp.** `BANK_EXTRACTOR_VERSION` (currently `1`) in `skills/tools/bank-statement.ts` + an additive nullable
+  `bank_statements.extractor_version INTEGER` (`db.ts` `ensureColumn`). `runBankExtraction` stamps it on every insert.
+  **Bump it whenever the line parser OR `pdf-layout.ts` reconstruction changes output for the same input** (history list
+  is in the constant's doc comment; a pure refactor needs no bump).
+- **Staleness gate.** `isBankStatementStale(db, statementId)` (exported from `run.ts`) = stored version is NULL (legacy /
+  older parser) OR `<` current. Both reuse paths now re-extract when missing OR stale: the analysis read-back
+  (`analysis/bank-statement.ts`) and the `categorize` doctask (`doctasks/manager.ts`).
+- **Replace, not duplicate.** A re-extract passes `replaceExisting: true` → `runBankExtraction` DELETEs the document's prior
+  statements (+ transactions + corrections, FK order) in the SAME persist transaction before inserting the fresh one — so
+  re-extraction is atomic (a failure rolls back to the old) and never accumulates duplicate statements.
+- **Categories recomputed, not carried.** The stale rows' persisted categories go with the replaced statement (the rows
+  changed precisely because the parser changed them — content-key re-matching would mismatch exactly those rows). The
+  breakdown's deterministic pass shows a breakdown immediately; model categorization re-runs on the next Kategorisieren /
+  auto-offer. This is the honest behaviour, and keeps the analysis handler 0-model-calls.
+- **Why it matters.** The sharpest silent-stale risk is the no-opening/closing "Umsätze" case: a mis-signed total degrades
+  to `unverified` and is PRESENTED as a labelled sum, never caught by the D56 gate. A fresh (current-version) statement is
+  still reused (no duplicate, categories preserved) — verified by a new test.
+- **Tests (+3):** `skills-analysis-bank.test.ts` — stale statement re-extracted+REPLACED (one statement remains, fresh id,
+  tampered figure gone), and a fresh statement REUSED (same id, no duplicate). `doctasks-categorize.test.ts` — a stale
+  seeded statement is re-extracted+replaced then the corrected rows categorized; the `seedStatement` helper now stamps the
+  current version (so a deliberately-fresh seed isn't treated as stale). Docs: `architecture.md` §22 (read-back bullet
+  rewritten + new A9 bullet + Tests line). **STILL AWAITING approval to push / open the PR.**_
+
+_2026-06-25 — **Code-review CLEANUP (Phase 31–33 follow-up #2; branch `pdf-geometry-extraction`, still unmerged/unpushed).**
+The three contained, behaviour-neutral cleanups from the review's open list, plus an investigated recommendation for the
+deeper A9 item (NOT yet implemented — awaiting decision). Suite unchanged **2228 passed / 37 skipped**, typecheck clean.
+- **One `latestBankStatementId` helper (de-dup ×3).** The `SELECT id … ORDER BY created_at DESC, id DESC LIMIT 1` query
+  was copied in three places; the `created_at DESC, id DESC` tie-break is LOAD-BEARING (it decides which statement gets
+  categorized vs. read back, so all three MUST resolve the SAME row). Extracted as one exported helper in `skills/run.ts`
+  and called from all three: the run seam (`run.ts` `prepareStatementRun`), the `categorize` doctask (`doctasks/manager.ts`
+  — its private copy deleted), and the analysis read-back (`analysis/bank-statement.ts` — its local copy deleted). Picked
+  `run.ts` over `tools/bank-statement.ts` because the latter is deliberately DB-handle-free ("pure main-side TS, no DB/FS").
+- **One JOINed row+category read (alignment now structural).** `analysis/bank-statement.ts` queried `bank_transactions`
+  TWICE with the same `ORDER BY row_index` (`loadStatementRows` + `loadPersistedCategories`) and relied on the two arrays
+  lining up BY CONVENTION. Collapsed into `loadStatementRowsWithCategories` (one LEFT JOIN `bank_categories`) returning
+  `RowWithCategory[]` — each row carries its own persisted category, so `categoryTotals` no longer index-matches two
+  arrays. `modelAssisted` reads `paired.map(p => p.category)`; the deterministic-seed re-load reloads the paired array.
+- **DocTask poll loop — DECISION: keep, documented (don't refactor).** `tool-runs.ts` `runCategorizeViaDocTask` keeps its
+  60 ms status poll rather than adding an awaitable completion-promise + progress-callback channel to `DocTaskManager`.
+  Rationale (in the code comment): the channel's full value (no copied loop) needs BOTH a terminal-state promise AND a
+  per-tick progress callback — a completion-only promise wouldn't remove the loop (progress still mirrored). Wiring both
+  touches the delicate lifecycle/abort paths (3 terminal transitions, the queued-cancel branch, the arbiter-park unwind)
+  for the ONE current consumer. Revisit when a SECOND doctask-backed skill-run button would copy the loop.
+- **A9 (stale statement reuse) — INVESTIGATED, recommendation below, NOT implemented (awaiting decision).** Today every
+  `runBankExtraction` INSERTs a fresh `bank_statements` row (never deletes), and the analysis handler + categorize doctask
+  REUSE the newest (`latestBankStatementId`) — so a document extracted under an OLD parser keeps serving stale (mis-signed
+  / lost-payee) rows after a parser fix, until a manual re-extract (which today also duplicates the statement and orphans
+  the persisted categories — the reason reuse is intentional). The no-opening/closing "Umsätze" case is the real risk: a
+  mis-signed total degrades to `unverified` and is PRESENTED as a labelled sum, i.e. silently wrong, never caught by the
+  D56 gate. **Recommendation: WORTH IT, scoped** — (1) add an additive nullable `bank_statements.extractor_version INTEGER`
+  + a single `BANK_EXTRACTOR_VERSION` constant in the extractor module, stamped on insert (precedent: the `content_hash`/
+  "type-set version" cache keys in `db.ts`/`tree-build.ts`); (2) in the reuse path, when the latest statement's version is
+  NULL/`< current`, treat it as stale and re-extract (deterministic, 0 model calls — fits the existing "extract when none
+  exists" branch), REPLACING the stale statement (delete prior statements+rows for the doc, which also stops duplicate
+  accumulation); (3) do NOT content-key re-match the old categories onto the new rows — the rows changed precisely because
+  the fix changed them, so the honest move is to recompute (the deterministic rule pass already runs for the breakdown;
+  model categorization waits for the next Kategorisieren / auto-offer). Cost ≈ 1 column + 1 constant + a staleness branch +
+  a delete-prior + tests; the fragile part (category preservation) is deliberately out. **Open question for the user:** is
+  silent post-parser-fix staleness worth the manual-version-bump discipline, or is "do nothing + document the limitation"
+  acceptable given parser changes are rare for end users? Awaiting the call before coding.
+- **User action items recorded (local-only, NOT attempted here):** (5) re-run the gold-set harness `HILBERTRAUM_PDF_GOLDSET=1`
+  on the real HVB file to confirm A3 sign handling + refresh the stale §21 numbers (measured under the old boolean gate);
+  (6) D57 — confirm the exact HVB sign encoding (separate sign cell vs glued trailing minus) on the real statement. Both
+  need real financial data → local only. **STILL AWAITING approval to push / open the PR.**_
+
+_2026-06-25 — **Code-review fixes (Phase 31–33 follow-up; branch `pdf-geometry-extraction`, still unmerged/unpushed).**
+A high-effort review of the 6 unpushed commits surfaced correctness bugs; the contained ones are now fixed (suite
+**2228 passed / 37 skipped (+4)**, typecheck clean):
+- **PDF sign handling (`pdf-layout.ts`).** (S3) A standalone `+`/`-`/`S`/`H` marker beside the running-BALANCE column
+  no longer flips the AMOUNT: the fold now requires the marker to be at/right of the amount AND NEAREST the amount
+  column (not a later money column). (S2) A non-folded sign token is KEPT as description text (never silently dropped)
+  in reading order; only the amount's own sign cell is spliced out. (S4) `applySignMarker` now strips ALL leading/trailing
+  sign decorations (`+`/`-`/`(`/`)`), so a doubly-decorated token (`(1.234,56)-`, both accepted by `MONEY_TOKEN_RE`)
+  never leaves a stray `)`/`-`. New unit tests pin the balance-column-sign guard + the far-dash-as-text behaviour.
+- **Categorizer prefilter word boundaries (`categorizer.ts`, P10).** `prefilterCategory` now matches on Unicode word
+  boundaries, so a coincidental substring (`fee`⊂`coffee`, `atm`⊂`atmos`, `lohn`⊂`mühlohn`) no longer makes a confident
+  WRONG skip-the-model match. (`categorizeRow`, the deterministic fallback, is unchanged.)
+- **Model-assisted signal persisted (A8).** `runCategorize` now writes `bank_statements.categorized_by_model` (new
+  additive column) = 1 whenever the LLM was consulted; the analysis read-back labels the breakdown from that
+  authoritative flag (heuristic "category outside the rule set" kept only as a back-compat fallback for pre-flag
+  statements). Fixes the false-negative where a model run that emitted only in-rule-set labels (Income/Transfer/Fees/Cash)
+  showed NO "model-assisted" note.
+- **Routed-breakdown routing (`ChatScreen.tsx`, C1/C2).** After a categorize run completes, the breakdown question is
+  routed into the conversation that STARTED the run (captured in a ref) — never whatever conversation is active when the
+  module-level run finishes — and under the RUN's own `skillInstallId` (not the current picker), so it can never land in
+  the wrong transcript or bypass the 0-model-call bank handler. If the user navigated away it defers (surfaces on return).
+- **Auto-offer dedup + zero-row guard (`tool-runs.ts`/`manager.ts`, P11).** The post-extract auto-offer enqueues a
+  `'categorize'` doctask only when rows were extracted (`transactionCount > 0`) AND none is already pending for the doc
+  (new `DocTaskManager.hasPendingKind`), so a re-run extract (or extract + a manual categorize) no longer queues a
+  duplicate that redoes the model work and overwrites the first's labels.
+- **Deliberately NOT changed (documented tradeoffs / out of scope):** an empty-description dated+amount row is still
+  dropped (the intended phantom-balance kill — raw-emitting it would reintroduce phantoms); a continuation baseline with
+  ANY money token is still rejected wholesale (absorbing the figure would put it BEFORE the real amount and the line
+  parser would mis-read it — a verified regression, so the strict rule stays); a standalone `CHF`/`$` in a description is
+  still the currency class; the latest-statement reuse has no parser-version invalidation (intentional: avoids duplicates
+  + preserves persisted categories) — flagged as a future stamp if it bites. **STILL AWAITING approval to push / open the PR.**_
+
+_2026-06-25 — **Phase 33 DONE — bank-statement LLM categorizer + the `'categorize'` doctask + the routed-breakdown UX
+(branch `pdf-geometry-extraction`, still unmerged/unpushed).** Builds on the Phase-32 payee recovery (usable text to
+categorize) + the D55 grammar-decoding plumbing (below). **A category is NOT a figure** — a mislabel only shifts the
+per-category breakdown, never the verified statement total or the D56 gate — so the categorizer is defensible under the
+honesty posture with NO `grounding_quote`/figure-verification; the constraints that hold are offline-only + fixed-set +
+grammar-constrained + drop-to-`Uncategorized` + a "model-assisted" label + deterministic degrade. **As built:**
+- **`services/skills/categorizer.ts`** — a fixed EN taxonomy (`CATEGORIZER_CATEGORIES`: Groceries/Dining/Transport/
+  Utilities/Rent/Insurance/Subscriptions/Health/Shopping/Income/Transfer/Fees/Cash/Tax/Uncategorized; DE glosses in the
+  prompt only). Confident description-rule matches (Fees/Income/Transfer/Cash) are a PRE-FILTER that skips the model; the
+  rest go to the model in batches of 20 under a `json_schema` whose category field is an ENUM of the set (so the model can
+  never emit an off-list label — the D55 `responseSchema`). Off-list/out-of-range/missing → `Uncategorized`; a whole batch
+  drops on a parse failure. No runtime ⇒ the deterministic rule pass. Pure/MockRuntime-testable.
+- **`'categorize'` DocTaskKind** (`doctasks/manager.ts` + `shared/types.ts`) — the ONE model-OPTIONAL kind (skips
+  `startDocTask`'s runtime gate; null runtime ⇒ deterministic). `runCategorize` loads the latest statement, AUTO-EXTRACTS
+  first when none exists (fixes the (D) `needsExtraction` ordering failure), runs the categorizer with progress+cancel, and
+  persists `category_id` ATOMICALLY (reuses the now-exported `ensureBuiltinCategories`, which seeds the union of the rule
+  set + the LLM taxonomy). Chosen as a doctask (not a skill-run model call) for the D26 chat↔task exclusion — verified the
+  `SkillRunController`/`ModelSlotArbiter` are SEPARATE lanes that wouldn't stop two concurrent `chatStream` calls.
+- **Button wiring — wrap the doctask in the skill-run shell (Q1).** The "Kategorisieren" button keeps its
+  `SkillRunController` UX: `tool-runs.ts` `runCategorizeViaDocTask` ENQUEUES the doctask and mirrors progress/cancel; the
+  model call runs in the doctask lane (D26-safe). `ctx.docTasks` is threaded from `registerSkillsIpc`. Without a doctask lane
+  (tests/headless) it falls back to the deterministic `runCategorization` seam.
+- **Auto-offer after extraction (Q2).** A successful `extract_transactions` BUTTON run best-effort enqueues a `'categorize'`
+  doctask in the background (D26-safe, model-optional). The chat analysis path is unaffected (it never goes through that runner).
+- **Analysis read-back stays 0-model-calls + routed feedback (Q3).** `analysis/bank-statement.ts` now REUSES the latest
+  statement (re-extraction is deterministic → would only duplicate AND discard the doctask's persisted categories) and
+  `categoryTotals` reads the PERSISTED category (LEFT JOIN `bank_categories`), else `categorizeRow`; it runs the deterministic
+  rule pass only when nothing is categorized yet (never overwriting model categories). `modelAssisted` (a persisted category
+  OUTSIDE the deterministic rule set — the honest schema-free signal) drives a "model-assisted" note. After a categorize run
+  completes, `ChatScreen` ROUTES the standard breakdown question into the transcript, so the model-assisted breakdown appears
+  as a normal chat answer (still 0 model calls in the handler).
+- **i18n:** new DE/EN keys (`docs.task.categorizeBusy`/`Title`, `skills.bankAnalysis.categoryAssisted`,
+  `chat.skill.categorize.breakdownQuestion`, the 16 `skills.bankCategory.*` display labels) — parity test green.
+- **Localized category DISPLAY labels (follow-up):** the persisted identifier + the enum stay canonical
+  English (so persistence + the model-assisted signal are locale-stable); only the breakdown display is
+  localized via `skills.bankCategory.*` → `categoryLabel` (EN + DE). An unknown name (future user category)
+  falls back to its raw identifier. Test: `skills-analysis-bank.test.ts` (DE shows "Einkommen", "Income"
+  still persisted).
+- **Tests:** `skills-categorizer.test.ts` (9), `doctasks-categorize.test.ts` (3 — model path, deterministic fallback,
+  auto-extract-then-categorize), `skills-analysis-bank.test.ts` (+1 — persisted model categories surface + the label, no
+  duplicate statement). Full suite **2224 passed / 37 skipped (+13)**, typecheck clean, production build green.
+- **Honesty posture intact:** the D56 gate's three outcomes are untouched (the categorizer never feeds a figure); a
+  model-assigned category is always labelled model-assisted; drop-on-failure to `Uncategorized`; never an off-set label.
+- **Known v1 limitations (documented):** auto-offer fires only on the extract BUTTON, not the chat-question path
+  (the chat path shows a deterministic breakdown). **STILL AWAITING approval to push / open the PR.** Per-phase ritual
+  satisfied (tests + docs `architecture.md` §22 + `known-limitations.md` + this entry). **ALSO still pending (local-only):**
+  run the gold-set harness on the real HVB file (`HILBERTRAUM_PDF_GOLDSET=1`) to confirm A3 sign handling + re-measure §21._
+
+_2026-06-25 — **Runtime: grammar-constrained decoding plumbed through the chat seam (D55 prerequisite) — the foundation for the
+bank LLM categorizer (Phase 33 prep; branch `pdf-geometry-extraction`).** `RuntimeChatOptions` gains an optional `responseSchema`
+(+ `responseSchemaName`); `LlamaRuntime.chatStream` maps it to llama-server's OpenAI-compatible `response_format: { type:
+'json_schema', json_schema: { … strict:true } }`, so a completion is GUARANTEED to be JSON matching the schema (the model cannot
+emit an off-schema token). Additive + optional (the mock runtime ignores it; every existing caller is byte-unchanged) — typecheck
+clean, suite unaffected. This discharges the D55 "grammar-constrained decoding plumbed through the sidecar" prerequisite the bank LLM
+categorizer (user-chosen, grammar-constrained `json_schema`) needs, and that a future Stage-2 extraction would reuse.
+**REFINED PLAN for the categorizer (a concrete finding from mapping D26):** the model-slot `ModelSlotArbiter` only mediates chat ↔ a
+YIELDING build; the chat↔task mutual exclusion (D26) lives in the `DocTaskManager` (chat checks `hasActiveTask()`, tasks check
+`isChatStreaming()`), and the skill-run `SkillRunController` is a SEPARATE one-at-a-time lane neither chat nor doctasks observe. So a
+model call bolted onto `runCategorization` would NOT be D26-safe (two concurrent `chatStream` calls possible). **Therefore the LLM
+categorizer must be a new `DocTaskManager` kind** (`'categorize'`) — the only lane with chat↔task exclusion, plus progress/cancel +
+`getRuntime()` for free — triggered by the existing "Kategorisieren" button (its `startSkillRun` path enqueues the doctask when a
+model is available; falls back to the deterministic rule pass when none is). Remaining build (Phase 33): the categorizer module
+(richer EN+DE category set + the json_schema-constrained batched prompt + drop-to-Uncategorized parse), the `'categorize'` doctask
+kind + renderer status wiring, the analysis handler reading PERSISTED `category_id` (LEFT JOIN `bank_categories`) with the rule
+fallback, the (D) button feedback + `needsExtraction` auto-extract, tests, docs. A category is NOT a figure (a mislabel never moves
+the verified total or the D56 gate), so no grounding_quote is needed — only offline + fixed-set + drop-on-failure + a "model-assisted"
+label. STILL AWAITING approval to push / open the PR._
+
+_2026-06-25 — **Bank-statement HVB "Umsätze" extraction FIXED — multi-baseline payee recovery + currency-token class +
+sign-column fold + pdf.js log-noise silence (Phase 32; branch `pdf-geometry-extraction`, still unmerged/unpushed).** A real HVB
+online "Umsätze" export (45 EUR rows, no printed opening/closing) surfaced three deterministic Stage-1 parsing failures the gold
+set's German statements never exercised, plus a UX/log issue. **Diagnoses (all reproduced with a synthetic multi-baseline fixture,
+D57 — never the real statement; confirmed line-for-line against the user's pasted symptoms):** (1) PAYEES LOST — HVB prints
+payee/purpose on CONTINUATION baselines below the booking row; they orphaned onto dateless rows that `parseLine` drops, so the
+description collapsed to the booking-line fragment. (2) the per-row currency code `EUR` was classed as text and polluted the
+description (`… EUR`). (3) a debit's sign sits in a SEPARATE cell, so a Lastschrift read POSITIVE (`3,99` not `-3,99`). **Fixes
+(deterministic, offline, 0 model calls — the D52-gated Stage-1-vs-Stage-2 call resolved as "deterministic-deeper now; Stage 2 stays
+deferred", user-confirmed):**
+- **A1 multi-baseline row association** (`pdf-layout.ts` `reconstructPage`, now stateful): a booking row opens a transaction; a
+  following dateless, money-LESS text row is a continuation whose payee text is appended to the description (bounded by
+  `MAX_CONTINUATION_ROWS`=4); flush on the next booking row / non-continuation row / page end.
+- **A2 currency-token class**: a standalone ISO code/symbol is its own token class, kept out of the description and re-emitted ONCE
+  after the amount (the line parser still detects currency). **This also resolves the boundary-1 over-extraction**: a phantom
+  `<date> EUR <balance>` running-balance row now has an EMPTY description → dropped, while a genuine wrapped-payee row is rescued by
+  A1 — exactly the objection §21 raised against a bare currency-only-description guard, now answered (A1 makes A2 safe).
+- **A3 sign-column fold**: a standalone `+`/`-` or Soll/Haben `S`/`H` marker in the money-column zone (`SIGN_ZONE_SLACK`) folds into
+  the amount's sign; a dash FAR from the amount is dropped but never read as a sign (conservative — can't flip a total). **Caveat
+  (D57):** the exact HVB sign encoding (separate cell vs a glued trailing minus pdf.js splits) still needs confirmation on the real
+  statement via the local gold-set harness; until then an unusual sign layout degrades to the honest gate, never a wrong total.
+- **E pdf.js log noise**: `getDocument({ verbosity: 0 })` silences the `Warning: TT: undefined function: 21` font-program flood
+  (pdf.js worker noise; real errors still surface; offline-safe).
+**Tests:** `pdf-layout.test.ts` — repurposed the phantom-balance case (now DROPPED, not reconstructed) + new `HVB multi-baseline
+recovery` block (currency strip, sign-column fold, conservative far-dash no-fold, association + phantom-drop). `pdf-bank-layout.test.ts`
+— case (i) repurposed (phantom dropped, genuine rows tie out → verified total presented) + new case (j) (payees recovered from
+continuation baselines, `EUR` stripped, Lastschrift negative → honest `unverified` sum), end-to-end through real pdf.js. Full suite
+**2211 passed / 37 skipped (+5)**, typecheck clean, production build green. Docs: `architecture.md` §21 (multi-baseline-recovery
+design bullet + boundary-1 rewritten as substantially RESOLVED + Tests paragraph) + `known-limitations.md` boundary (1).
+- **Open follow-ups (this work's REMAINING scope, NOT done here):** (B/C) the **LLM categorizer** (user-chosen for richer German
+  categories — a category is not a figure, so it is defensible under the honesty posture; needs the local-LLM/constrained-decoding
+  infra, its own phase + design pass); (D) the **tool-button** feedback + the `needsExtraction`-when-clicked-before-extract ordering
+  failure (`SkillRunBar`/`run.ts` `prepareStatementRun`); the A3 sign-encoding **local-harness verification** (D57). Merge prep
+  unchanged — STILL AWAITING approval to push / open the PR._
+
+_2026-06-25 — **Composer bugfix — a skill picked on the 'new' composer is no longer RESET when you upload a document
+(branch `pdf-geometry-extraction`, still unmerged/unpushed).** Reported: select a skill, then attach/drop a document → the
+skill silently reverts to "No skill" and must be re-picked. **Root cause (renderer, `ChatScreen.tsx`):** `attachFiles`
+creates a new documents conversation and switches `activeId` to it WITHOUT carrying the selected skill, unlike
+`ensureConversation` (which re-keys `skillByConv['new']`→the new id and persists the sticky default, skills plan §10.1). After
+the switch, `depthKey` flips `'new'`→`conv.id`, `skillFor(conv.id)` finds nothing in `skillByConv[conv.id]` and the brand-new
+conv's `activeSkillId` is null → the picker shows none. **Fix:** new `carrySkillToConversation(convId, skillId)` helper
+(mirrors the ensureConversation carry); `attachFiles` captures `currentSkillId` BEFORE switching and calls it on both
+new-conversation branches (empty-composer attach AND in-progress-plain-chat→new-docs-chat). A null pick needs no carry.
+**Test:** new `ChatAttach.test.tsx` regression — pick a skill on the 'new' composer, drop a file, assert
+`setConversationDefaultSkill('c2', 'app:bank-statement')` fires and the picker still shows the skill (fails without the fix).
+Full suite **2206 passed / 37 skipped**, typecheck clean._
+
+_2026-06-25 — **Bank-statement completeness gate REFINED — D56-R: the no-balance "Umsätze" case now answers instead of
+refusing (Phase 31; branch `pdf-geometry-extraction`, still unmerged/unpushed).** Fixes the reported bug: a user opened an HVB
+online "Umsätze" listing (45 EUR rows, NO printed opening/closing balance) and asked "Summiere die Ausgaben je Kategorie" — and
+ALWAYS got the honest-refusal message with no total, no categories, and no way to see the rows. **Root cause (confirmed, not
+re-derived):** `isStatementComplete` returned a single boolean that collapsed two very different cases — "no balance printed at
+all" and "a printed balance the rows refute" — into one refusal; `buildBankAnswer` then emitted `incompleteNoTotal` for both.
+**Policy refinement (D56-R, user-specified):** the gate is now THREE outcomes via the new `assessCompleteness`:
+- **`complete`** — printed opening+Σ==closing ties out (+ no per-row mismatch) → present the **VERIFIED** total + proven-whole
+  `caveat` (unchanged behaviour).
+- **`contradicted`** — a printed balance the rows refute (per-row mismatch, OR opening+Σ ≠ closing) → keep the honest **refusal**
+  (`incompleteNoTotal`, reworded to "printed balances don't add up"): a suspect read must never surface a number.
+- **`unverified`** — NO opening/closing to tie against AND nothing contradicting → present the SAME totals + categories under a
+  NEW `unverifiedCaveat` ("a sum of the N rows I read, **not** a verified statement total"). This is the user's case — an
+  honestly-LABELLED sum is correct and useful; refusing it was over-cautious.
+The cardinal D56 property is preserved exactly: a number a user could mistake for THE statement total never comes from an
+incomplete read; a clearly-labelled "sum of the rows shown" is not such a number. **Plus** a bounded transaction listing (first
+10 + "ask to export CSV", new `transactionsHeading`/`transactionItem`/`transactionsMore`) now trails EVERY non-empty answer
+(incl. the refusal + mixed-currency branches), so "show me the transactions" is answerable. **As built:**
+- `tools/bank-statement.ts`: `assessCompleteness` (+ `CompletenessStatus`); `isStatementComplete` retained as its boolean
+  `=== 'complete'` projection (unit tests pin the gate by that name). `analysis/bank-statement.ts`: `buildBankAnswer` takes
+  `status` not `complete`, renders the three outcomes + the listing. i18n: 4 new keys in BOTH `de.ts`+`en.ts` (parity test green).
+- **Honesty tradeoff to KNOW (documented in `architecture.md` §21 + `known-limitations.md`):** for a balance-LESS statement that
+  silently OVER-extracts (the deferred boundary-1 phantom running-balance rows) or UNDER-extracts (boundary-3 split amount),
+  D56-R now presents an `unverified` labelled sum that is inflated/under-counted, where the OLD gate refused outright. It is
+  honest per its caveat + the visible listing, but it is no longer a refusal — the maintainer's accepted tradeoff (eliminating
+  the inflation itself is the still-deferred extraction fix). When the statement DOES print opening/closing, those boundaries
+  still break the tie → `contradicted` → refusal (unchanged).
+- **Tests:** `skills-analysis-bank.test.ts` — the no-balance `CLEAN` test repurposed (now expects the unverified total+caveat),
+  a new HVB-shaped 12-row no-balance regression (totals+categories+listing+"2 more"), refusal-case listing pinned; `pdf-bank-
+  layout.test.ts` case (c) repurposed (unverified sum, not refusal); `skills-bank-statement-tool.test.ts` — new
+  `assessCompleteness` three-outcome block. Gold-set harness (`pdf-goldset.realdata.test.ts`, local-only/off-CI) refined to
+  split VERIFIED vs UNVERIFIED totals; the cardinal `partialTotals`/`hallucinated` invariants now guard VERIFIED totals only
+  (re-measure locally to refresh the §21 numbers). **Affected suites green, typecheck clean.**
+- **Open:** the §21 gold-set numbers are stale (measured under the boolean gate) — flagged for a local re-measure; merge prep
+  unchanged — STILL AWAITING approval to push / open the PR._
+
+_2026-06-24 — **PDF geometry-extraction — M3 deferred-hardening addressed: CI-realism adversarial fixtures + shared-column
+finding (Phase 31; branch `pdf-geometry-extraction`, still unmerged/unpushed; NO production code changed).** The pre-merge
+audit's M3 had two parts: (1) a CI-realism gap (every committed geometry fixture encodes IDEAL pdf.js geometry, so a regression
+that only bites on a real TextItem distribution can pass `npm test`), and (2) two deferred code fixes (boundary-3 split-amount
+re-merge; boundary-1 over-extraction money-column model). **MEASURE-FIRST (D52) re-run + corpus geometry probe drove the call,
+user-confirmed:** the gold set reproduces EXACTLY (micro 116.5% / 99-85, macro 100%, gate 33% (1/3), figure-exact 1/1, all safety
+invariants 0; 1 image-only scan excluded). The boundary that actually OCCURS is boundary 1 (the HVB "Umsätze" page, 14→28) — but
+that statement prints NO opening/closing balances, so it downgrades regardless: over-extraction costs PRECISION/UX only (count +
+citations, L2), never a total or a gate pass. Boundary 3 (split amount) occurs in ZERO corpus statements (found by classifier
+probing, not in the wild). **Decisive new finding:** a geometry probe of the over-extracted page showed the assumed "money-column
+model" CANNOT fix boundary 1 — the per-row running balance and the transaction amount are RIGHT-aligned in ONE numeric column
+(measured left-edges ~493 balance vs ~495–510 amount; every consecutive gap ≤ `DEFAULT_COLUMN_GAP` → a band-cluster merges them),
+so a phantom balance row and a genuine amount row are indistinguishable by token class AND by column. The honest fix is
+multi-baseline row association (harder than a column model), or Stage-2 input. **Decision (AskUserQuestion):** NO deterministic
+code change (neither fix is justified by a recall/total loss); close the CI-realism gap with more adversarial SYNTHETIC fixtures;
+work against the current corpus (no more real statements available). **As built (no production code touched — tests + docs only):**
+- **Adversarial geometry through REAL pdf.js** — new `pdf-bank-layout.test.ts` describe block (`makeColumnarPdf`, D57-synthetic):
+  sub-tolerance baseline jitter (still one row), over-tolerance jitter (amount splits off → row dropped → gate downgrades),
+  tight (<12 pt) Datum/Valuta gap (columns merge → over-extraction → SAFE mixed-currency/incomplete downgrade), and the
+  shared-column running-balance shape of boundary 1 (over-extraction × printed opening/closing → tie breaks → downgrade, NEVER a
+  wrong total — the audit's HIGH-section stress case, now pinned end-to-end through real pdf.js, not just asserted).
+- **`pdf-layout.test.ts`** — a unit test pinning the shared-column rationale (the measured money-x set forms ONE band under the gap
+  rule; the phantom balance row reconstructs identically to a real amount row) so the "not a money-column model" reasoning can't rot.
+- **Docs:** `architecture.md` §21 boundary-1 rewritten (money-column model disproven → multi-baseline association; safe end-to-end
+  even with labelled balances) + Tests paragraph (the adversarial-geometry CI fixtures); `known-limitations.md` boundary-(1)
+  corrected. **Suite 2199 passed / 37 skipped (+5)**, typecheck clean, gold-set safety invariants still **0**, 0 model calls.
+- **Open follow-ups (NOT merge blockers, unchanged stance):** boundary 1 (multi-baseline association) + boundary 3 (x-adjacency
+  re-merge) stay deferred — gate-safe, documented, no measured total/recall loss to justify the risk; the local-only gold set
+  remains the real-DISTRIBUTION gate (keep broadening it). Merge prep unchanged — STILL AWAITING approval to push / open the PR._
+
+_2026-06-24 — **PDF geometry-extraction — FINAL pre-merge multi-persona audit DONE + cheap findings remediated
+(Phase 31; branch `pdf-geometry-extraction`, still unmerged/unpushed).** Five-persona audit written to
+`docs/pdf-geometry-audit-2026-06-24.md`. **Verdict: GO for merge** — no CRITICAL/HIGH; the cardinal
+data-integrity property was stress-verified (incl. the over-extraction × labelled-balance interaction:
+phantom balance amounts break the `opening+Σ==closing` tie → gate downgrades, never a wrong total). Privacy
+(D57: corpus gitignored/untracked/clean), D58 bank-only, and the `parseDate` non-breaking guarantee
+(`money.ts` absent from the whole diff) all confirmed. **Remediated this session (suite still 2190/37,
+typecheck clean, gold-set safety invariants still 0):** M1 (§21 self-contradiction "two"→"three+scan"
+statements), M2 (known-limitations stale "71/71" recall → current corpus + points live numbers at §21), M4
+(gold-set harness now prints an `over-extracted statements` PRECISION line + relabels "full recall"; over-
+extraction reads 1/3), M5 (hallucination invariant now prints "armed over K/N presented totals w/ ground-
+truth balances"), L1 (downgrade copy EN+DE no longer claims a balance MISMATCH when none was printed).
+**M3 partial hardening:** investigating the deepest follow-up found a genuine THIRD Stage-1 boundary — a
+pdf.js-**split amount** (`2.000` + `,00`) is never reassembled (no fragment is money; `1.234` even
+back-classifies as a date) → the row is dropped (silent recall loss, still gate-safe). Now PINNED by tests
+(`pdf-layout.test.ts` "Stage-1 geometry edge boundaries": split-amount drop + the `DEFAULT_ROW_TOLERANCE`=3
+first-baseline anchor + the `DEFAULT_COLUMN_GAP`=12 merge; end-to-end `pdf-bank-layout.test.ts` through real
+pdf.js) and DOCUMENTED as boundary (3) in §21 + known-limitations. The two tuning constants are now
+regression-locked (this closes audit L3). Suite **2194 passed / 37 skipped** (+4), typecheck clean, gold-set
+safety invariants still 0. **Open follow-ups (NOT merge blockers):** M3 RESIDUAL — real-PDF distributions are
+still covered only by the local-only gated gold set (keep broadening + re-running it), and the deferred
+x-adjacency money re-merge / money-column model; L2/L4 documented boundaries. Merge prep unchanged — STILL
+AWAITING approval to push / open the PR._
+
+_2026-06-24 — **PDF geometry-extraction — gold-set BREADTH (2 new real statements) + 2 safe boundaries found (Phase 31, D52/D57;
+branch `pdf-geometry-extraction`).** Two more real statements added to the local-only gitignored corpus (D57 — never committed):
+an HVB "Umsätze" page (text layer, 14 true rows) and an HVB statement the user **blacked out** to an image. Findings:
+- **Gold set now (3 text + 1 scan):** micro recall **116.5% (99/85)** — >100% by design (see over-extraction below); macro 100%;
+  gate pass **33% (1/3)**; figure-exact **100% (1/1)**; hallucinated/partial-total/model-calls all **0**; the 1 image-only scan
+  handled safely (0 rows). Cardinal safety property holds on every statement.
+- **Boundary 1 — per-row running-balance OVER-extraction (SAFE).** The HVB "Umsätze" page prints a balance row
+  `<date> <CUR> <balance>` (date in the booking column) between transactions; geometry rebuilds it and `parseLine` reads the bare
+  currency code as a description → a phantom transaction (14→28). SAFE: no labelled opening/closing → the D56 gate downgrades, no
+  total. Proper fix = an amount/Saldo **money-column model** (analogue of `detectDatumColumn`). **DEFERRED** — a naive
+  "drop currency-only description" guard was implemented then **REVERTED**: a real transaction whose description wraps to another
+  baseline reconstructs as the *same* `<date> <CUR> <amount>` shape and the guard silently dropped 8 genuine HVB rows. Recorded
+  as the next Stage-1 hardening step (or Stage-2 input). NO production code changed this session.
+- **Boundary 2 — image-only / blacked statements (SAFE).** The blacked HVB PDF is 5 full-page images, zero text layer; Stage 1
+  reads the text layer → `PdfParser` raises scan-detected → empty/downgrade (0 rows, no total, 0 model calls). OCR-path scope, not
+  geometry (plan §7). The gold-set harness now tolerates the scan throw, EXCLUDES image-only statements from the recall/gate
+  aggregates, and safety-asserts the empty outcome (`Expectation.imageOnly`; README schema updated).
+- **As built (committed, on-branch):** harness `pdf-goldset.realdata.test.ts` (imageOnly handling + scan-leak assertion) + README;
+  docs architecture.md §21 (gold-set numbers + the two boundaries + the deferred money-column fix) + known-limitations.md. Corpus
+  statements + their expected.json stay gitignored. Full desktop suite **2190 passed / 37 skipped** (unchanged — gated harness +
+  docs only); typecheck clean. Merge prep unchanged — STILL AWAITING approval to push / open the PR._
+
+_2026-06-23 — **PHASE 31 CLOSED — PDF geometry-aware bank-statement extraction (Stage 1) condensed into the design record;
+plan file deleted (doc-lifecycle); branch `pdf-geometry-extraction`, unmerged.** Stage 1 is the shipped extractor for the
+verified layouts; Stage 2 stays DEFERRED + unapproved (D52 not closed — the gold set is too narrow). **Done this session:**
+- **Synthetic BREADTH coverage (Task 1, D57 — synthetic only):** four new `makeColumnarPdf` fixtures in
+  `tests/integration/pdf-bank-layout.test.ts` for layouts the two German gold-set statements don't exercise — (a) ENGLISH
+  `Balance brought/carried forward` that ties out → the D56 gate PRESENTS the total in English; (b) an ENGLISH value-date
+  column on a SECOND baseline → `detectDatumColumn` (density-wins) rejects it, no spurious FX row; (c) an ENGLISH
+  running-balance-only statement with NO printed opening/closing → the honest gate DOWNGRADE (`incompleteNoTotal`); (d) a
+  multi-line wrapped description → the booking row still extracts cleanly (the text-only continuation makes no spurious row).
+  Full desktop suite **2190 passed / 37 skipped (+4)**; typecheck clean. `parseDate` untouched (§3.2); layout mode bank-only (D58).
+- **DOC-LIFECYCLE close (Task 2):** condensed `docs/pdf-geometry-extraction-plan.md` into **architecture.md "Skills — design
+  record" §21** (decisions D50–D58 + the facts they rest on + the design AS BUILT: the column model, the balance-label guard,
+  the completeness gate, the post-fix gold-set numbers, and Stage 2 framed as a CONDITIONAL future, not a planned step). Added a
+  §8 pointer to §21 and §-anchor legend rows mapping the plan's `§3.1/§3.2/§3.5 + D50–D58` (cited in code comments) to §21, so
+  those comments stay resolvable without churning them. **Deleted the plan file** (full original in git history).
+  `known-limitations.md` repointed at §21.
+- **Gold set RE-RUN (unchanged, local-only corpus already on this machine):** recall **100% (71/71)**, gate pass **50% (1/2)**,
+  figure-exact **100% (1/1)**, hallucinated/partial-total/model-calls all **0** — the breadth fixtures don't touch the corpus.
+- **NEXT:** the per-phase ritual is satisfied (tests green, docs + BUILD_STATE updated, commits on-branch). Merge prep only —
+  AWAITING approval to push / open the `pdf-geometry-extraction` → `master` PR. **Stage 2 is NOT built but is EXPECTED to be
+  needed eventually** (recorded in architecture.md §21 + known-limitations): the 2-statement gold set is too narrow, and real
+  layouts vary widely (no-printed-balance statements, ruled/borderless tables, scans) so deterministic geometry will likely
+  miss some — treat Stage 2 as a PROBABLE future need, gated not abandoned. Still measure-then-build: broaden the gold-set
+  corpus (more banks/layouts) and re-run the harness; Stage 2 lands once Stage-1 recall drops < ~90% on a layout the gate
+  cannot honestly downgrade (and carries the D55 grammar-decoding plumbing as real prerequisite work)._
+
+_2026-06-23 — **PDF geometry-extraction — Stage-1 PRECISION FIX (column model + balance-label guard) closes the Raiffeisen
+over-extraction (Phase 31, D52/D56/D57; branch `pdf-geometry-extraction`).** The first gold-set measurement (entry below) found
+Stage 1 OVER-extracting the full Raiffeisen "Mein ELBA" statement to 43 rows so the D56 gate could not present a total, even though the
+statement ties out. Root cause: `reconstructLine` classified tokens by regex with NO column model, so (a) the Valuta/value-date column —
+printed on a SECOND baseline aligned with a row's second description line, with a foreign-currency reference amount (`39,00 USD`) hidden in
+that line — was emitted as a spurious transaction, and (b) the `Kontostand per <date>` opening/closing lines were mis-read as transactions.
+**As built (typecheck + full suite green, 2186 passed / 37 skipped, +9 tests):**
+- **`pdf-layout.ts` booking-date column model** — `detectDatumColumn` clusters every date token's x into bands and picks the DENSEST,
+  leftmost (the booking column prints one date per row; density-first guards against a stray header/period date further left). `rowTokens`
+  now carries each token's x; `reconstructLine(row, year, datum)` qualifies a row ONLY when its lead date sits in that column — a Valuta or
+  mid-line date no longer makes a transaction. The non-transaction RAW fallback also DROPS out-of-column date tokens, so a Valuta line whose
+  leftmost token is a full value-date can't be RE-EXTRACTED by the date-leading `parseLine`. `parseDate` untouched (§3.2); `datum`
+  null/omitted keeps legacy behaviour for direct unit calls.
+- **`bank-statement.ts` balance-label guard** — `'kontostand per'` added to BOTH `OPENING_LABELS` and `CLOSING_LABELS` (the existing
+  first-opening/last-closing rule then reads opening `35.037,04` from the `per 31.03` line and closing `30.647,07` from the `per 23.06`
+  line; "Aktueller Kontostand" deliberately NOT added — it restates the closing at the top and would corrupt the opening). New
+  `isBalanceLabelLine` makes `extractTransactionRows` SKIP any balance-label line: in the real layout the `Kontostand per` date sits IN the
+  Datum column, so geometry alone can't reject it — but a balance line is a summary, never a transaction (it is still read by
+  `extractStatementBalances`). This stops the double-count that broke the tie.
+- **Synthetic regression (D57 — never a real statement):** `pdf-bank-layout.test.ts` extended with a Raiffeisen-shaped `makeColumnarPdf`
+  fixture (Valuta date on a second baseline + FX reference amount in the description; `Kontostand per` pseudo-rows with the date IN the Datum
+  column) — asserts exactly the real rows extract, balances are found, and the gate presents the correct total; plus a non-tying variant that
+  must still downgrade. `pdf-layout.test.ts` adds `detectDatumColumn` + out-of-column-date unit coverage.
+- **GOLD SET RE-RUN (local-only, the real HVB + Raiffeisen corpus already on this machine):** micro recall **123.9% → 100.0% (71/71)**,
+  macro 100%, full-recall 2/2, **gate pass 0% → 50% (1/2** — Raiffeisen now presents the total; the HVB excerpt with no printed balances
+  correctly downgrades**)**, **figure-exact-match 100% (1/1)**, hallucinated 0 / partial-total 0 / model-calls 0. **D52 NOT yet closed:** two
+  statements is strong but narrow evidence; still need breadth (Sparkasse/ING/DKB + invoices) before declaring Stage 1 sufficient and
+  condensing the plan into architecture.md §8. Stage 2 remains unbuilt and unapproved._
+
+_2026-06-23 — **PDF geometry-extraction — gold-set measurement harness landed + FIRST real measurement (Phase 31, D52/D57; branch
+`pdf-geometry-extraction`).** New LOCAL-ONLY, gitignored, gated harness `apps/desktop/tests/real-data/pdf-goldset.realdata.test.ts`
+(+README) runs real statements through the ACTUAL Stage-1 path (`PdfParser.parse({layout:true,maxPages})` → `bankStatementAnalysisHandler`)
+and prints AGGREGATE metrics only — ZERO model calls. Gated behind `HILBERTRAUM_PDF_GOLDSET=1` via `describe.runIf` (COLLECTED →
+FullSuiteGuard-safe, skipped in `npm test`; suite now 2177 passed / 37 skipped). Corpus = `$HILBERTRAUM_PDF_GOLDSET_DIR` else gitignored
+`tests/real-data/corpus/` (`<name>.pdf` + `<name>.expected.json`; `.gitignore` updated — real statements are user financial data, NEVER
+committed, D57). Recall + figure-exact-match are LOGGED (the D52 input); hallucinated-figure / partial-total-presented (D56) / model-calls
+are HARD-ASSERTED == 0. **First real datapoint:** the MOTIVATING sanitized HVB statement (Umsätze web export, pages 2–7, 45 columnar
+transactions — the exact shape that used to return ZERO) now extracts **45/45 rows = 100% recall, 0 model calls**, all D56 safety invariants
+0. Gate pass 0% is CORRECT for that file (a transactions-only excerpt with no printed opening/closing balance → honest D56 downgrade, no
+total). **NOT enough to close D52 yet:** one statement, and it only exercises the gate's DOWNGRADE path. Still needed before the D52 call:
+(a) breadth across banks (Sparkasse/ING/DKB + invoices) for recall confidence, and (b) ≥1 FULL statement WITH printed Alter/Neuer Kontostand
+(opening/closing) + those figures in its `expected.json` to exercise the gate PASS path and yield a real figure-exact-match number. Stage-1
+behavior UNCHANGED this session (measurement only)._
+
+_2026-06-23 — **PDF geometry-aware extraction — Stage 1 SHIPPED (Phase 31, D50–D58; branch `pdf-geometry-extraction`).** Fixes the
+real user report: a German HVB bank statement analysed with `app:bank-statement` returned ZERO transactions because the PDF parser
+DISCARDED the word coordinates pdf.js already fetches, so a columnar statement (date · description · amount, year in the page header)
+arrived as scrambled reading-order text and almost no row survived the line-oriented `parseLine`. **As built (typecheck + build clean;
+full suite 2177 passed / 36 skipped, +~40 tests):**
+- **New `ingestion/parsers/pdf-layout.ts`** — pure/offline geometry reconstruction: cluster words into visual rows by baseline `y`,
+  classify tokens (date / money / text), resolve the page-header YEAR and emit a full `DD.MM.YYYY` date so the SHARED `parseDate` is
+  **untouched** (§3.2 — invoice + redaction non-breaking guarantee), DROP the value-date column so it can't be misread as the amount,
+  and emit every visual row (transactions year-resolved; other rows raw so opening/closing-balance labels + currency survive). No new
+  dependency (D50).
+- **`ParseContext.layout`** + `PdfParser` layout mode (keeps the coordinates it used to discard; scan-detection re-keyed on RAW text so
+  an empty reconstruction is never mistaken for an image-only scan; page cap honored on the layout path).
+- **Bank-only wiring through the EXISTING re-parse seam (D51/D58):** `extractDocumentPreview` opts → `readDocumentSegments(id, {layout})`
+  → `resolveDocumentReader`/`BankExtractionDeps.layout` → the bank analysis handler + the doc-action runner set `layout:true`; the IPC
+  closure threads the page cap. **Redaction, invoice, ingest, the renderer preview, translate, and compare are byte-unchanged** (they
+  never set `layout`).
+- **Completeness gate (D56 — the cardinal safety property):** new `extractStatementBalances` (printed opening/closing balances, EN+DE
+  labels) + `isStatementComplete` (`opening + Σamounts == closing` within half a cent AND no per-row mismatch — the per-row chain alone is
+  necessary-not-sufficient). Persisted on `bank_statements` (additive nullable `opening_balance`/`closing_balance`). `buildBankAnswer`
+  presents a single-currency total ONLY when proven complete; otherwise it **downgrades** to an honest "couldn't confirm the whole
+  statement" message (new `skills.bankAnalysis.incompleteNoTotal`, EN+DE) — never a partial sum dressed up as a total. Mixed-currency
+  still reports no-single-total (safe; no total presented).
+- **DATA CONTRACT additions:** `ExtractTransactionsOutput.openingBalance?`/`closingBalance?` (+ schema); `bank_statements.opening_balance`/
+  `closing_balance` (REAL, nullable, CONTENT-CLASS — never logged/audited/exported); `readDocumentSegments` signature now
+  `(id, opts?:{layout?})`.
+- **Tests:** `pdf-layout.test.ts` (clustering, year→full-date, value-date drop, balance-line preservation); bank-statement tool unit tests
+  (`extractStatementBalances`, `isStatementComplete`); `pdf-bank-layout.test.ts` integration — a SYNTHETIC columnar PDF (new
+  `makeColumnarPdf` fixture builder, zero new deps, WinAnsi umlauts) proving text-mode loses every row while layout-mode recovers all
+  three + correct total + honest coverage + citations + **0 model calls**, plus a non-tying-balance fixture that MUST downgrade;
+  `resolveDocumentReader` seam test (layout threaded only when requested, D58); existing bank fixtures (handler + IPC) updated to carry
+  tying opening/closing balances where a total is asserted. **Docs:** plan header marked Stage-1-shipped (file KEPT — Stage 2 still open);
+  `known-limitations.md` updated.
+- **NEXT — Stage 2 is NOT built (deliberately, D52):** the §4 constrained local-LLM fallback (+ its D55 grammar/`json_schema` runtime
+  plumbing over `llama-server`) lands ONLY if Stage-1 deterministic recall on the **local-only** gold set (D57 — real statements, gitignored,
+  `PAID_*`-style manual harness; never committed) proves below ~90%. Measure first, then decide. The gold-set harness itself is not yet
+  written. Real German layouts beyond the synthetic fixture are UNVERIFIED until that harness runs._
+
 _2026-06-22 — **Skill finetuning Wave 3 — real-model harness (autonomous stand-in for the GUI smoke test).** The vitest suite proves
 the Wave-3 LOGIC against the mock runtime; this proves real-model OUTPUT QUALITY without a GUI or workspace access. New
 **`tests/real-model/wave3.realmodel.test.ts`** drives the ACTUAL whole-doc / compare / tree code with a real local llama.cpp model

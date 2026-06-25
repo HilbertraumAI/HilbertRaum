@@ -609,6 +609,16 @@ export function ChatScreen({
     if (activeId) void window.api.setConversationDefaultSkill?.(activeId, installId)
   }
 
+  // Carry the skill the user currently sees selected onto a conversation created on the fly (the
+  // attach flow), so adding a document never silently RESETS the pick. Mirrors the 'new'→id carry in
+  // ensureConversation (skills plan §10.1): re-key the session override AND persist the sticky default.
+  // A null pick needs no carry — a brand-new conversation already defaults to none.
+  function carrySkillToConversation(convId: string, skillId: string | null): void {
+    if (!skillId) return
+    void window.api.setConversationDefaultSkill?.(convId, skillId)
+    setSkillByConv((prev) => ({ ...prev, [convId]: skillId }))
+  }
+
   // Recompute the deterministic suggestion when the picker OPENS (skills plan §10.2/S8) — the offer
   // rides the picker the user already opened (no canvas chip). The draft question is scored
   // main-side and never logged; scope is resolved there from the conversation id.
@@ -651,9 +661,15 @@ export function ChatScreen({
     // `activeId` (null → created id).
   }, [currentSkillId, activeId])
 
+  // The conversation a categorize run was started in (C1): the routed breakdown below must land in THIS
+  // conversation, never whatever conversation happens to be active when the (module-level, app-wide) run
+  // finishes — switching conversations mid-run would otherwise inject the answer into the wrong transcript.
+  const categorizeRunConvRef = useRef<string | null>(null)
+
   // Start a tool run from the calm transcript affordance (DS4 — a USER action, never the model).
   function onRunTool(toolName: string, confirmed: boolean): void {
     if (!currentSkillId || !activeId) return
+    if (toolName === 'categorize_transactions') categorizeRunConvRef.current = activeId
     setError(null)
     void startSkillRun({ skillInstallId: currentSkillId, toolName, conversationId: activeId, confirmed })
       .then((outcome) => {
@@ -663,6 +679,34 @@ export function ChatScreen({
       })
       .catch((e) => setError(friendlyIpcError(e)))
   }
+
+  // (D) Routed feedback (Phase 33, Q3): when a categorize run finishes, surface the result as a real
+  // chat answer — route the model-assisted per-category breakdown into the transcript by asking the
+  // standard breakdown question, which the 0-model-call bank analysis handler answers from the
+  // persisted categories the doctask just wrote (reusing the latest statement). Fires ONCE per run,
+  // documents-mode only, and never while another stream is in flight.
+  const handledCategorizeRunRef = useRef<string | null>(null)
+  useEffect(() => {
+    const run = activeSkillRun
+    if (!run || run.toolName !== 'categorize_transactions' || run.state !== 'done') return
+    if (handledCategorizeRunRef.current === run.runHandle) return
+    if (mode !== 'documents' || !activeId || busyStreaming) return
+    // Only route into the conversation that STARTED the run (C1). If the user navigated to another
+    // conversation, skip — without marking it handled — so the answer surfaces when they return, and is
+    // never injected into the wrong transcript. (Fallback to activeId only when the origin is unknown,
+    // e.g. after a screen remount lost the ref.)
+    const targetConv = categorizeRunConvRef.current ?? activeId
+    if (targetConv !== activeId) return
+    handledCategorizeRunRef.current = run.runHandle
+    acknowledgeSkillRun() // drop the content-free run row; the routed answer replaces it
+    const question = t('chat.skill.categorize.breakdownQuestion')
+    setMessages((prev) => [...prev, optimisticUser(targetConv, question)])
+    // Route under the skill the RUN used (C2) — never `currentSkillId`, which is whatever the picker
+    // shows now; a null/non-bank pick would bypass the 0-model-call bank analysis handler.
+    void stream(targetConv, question, false, depthFor(targetConv), run.skillInstallId)
+    // Keyed on the run + mode/conv/streaming-gate; the other closures are stable for this effect.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSkillRun, mode, activeId, busyStreaming])
 
   async function stream(
     convId: string,
@@ -968,6 +1012,9 @@ export function ChatScreen({
     setError(null)
     const fileNames = paths.map(fileBaseName)
     const active = activeId ? conversations.find((c) => c.id === activeId) : undefined
+    // The skill the user currently sees selected — captured BEFORE we switch conversations so a docs
+    // conversation created here inherits it instead of resetting to none (attach-flow reset bug).
+    const carrySkill = currentSkillId
     try {
       let convId: string
       if (active && active.mode === 'documents') {
@@ -975,6 +1022,7 @@ export function ChatScreen({
       } else if (active && active.mode === 'chat' && messages.length > 0) {
         const conv = await createDocsConversationForAttach()
         convId = conv.id
+        carrySkillToConversation(conv.id, carrySkill)
         setMode('documents')
         setActiveId(conv.id)
         setMessages([])
@@ -984,6 +1032,7 @@ export function ChatScreen({
         // Empty (no conversation, or an empty plain chat): switch in place to documents.
         const conv = await createDocsConversationForAttach()
         convId = conv.id
+        carrySkillToConversation(conv.id, carrySkill)
         setMode('documents')
         setActiveId(conv.id)
         setMessages([])

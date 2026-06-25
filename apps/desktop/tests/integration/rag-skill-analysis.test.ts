@@ -40,7 +40,11 @@ const handlers = ipcState.handlers as unknown as IpcHandlers
 const BANK_INSTALL_ID = 'app:bank-statement'
 
 // A clean 2-row statement: Grocery −45,90 (out), Salary +2.500,00 (in); the running balances reconcile.
-const CLEAN = 'Statement EUR\n2026-01-02 Grocery -45,90 1.954,10\n2026-01-03 Salary 2.500,00 4.454,10'
+// The printed opening/closing balances (2000.00 + Σ 2454.10 == 4454.10) PROVE completeness so the D56
+// gate presents a total (without them the gate honestly downgrades — see skills-analysis-bank.test.ts).
+const CLEAN =
+  'Statement EUR\nOpening balance 2.000,00\n2026-01-02 Grocery -45,90 1.954,10\n' +
+  '2026-01-03 Salary 2.500,00 4.454,10\nClosing balance 4.454,10'
 
 function writeBankSkill(appSkillsDir: string): void {
   const d = join(appSkillsDir, 'bank-statement')

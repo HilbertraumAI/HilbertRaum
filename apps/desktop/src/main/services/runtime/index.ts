@@ -1,4 +1,4 @@
-import type { ChatDepthMode, RuntimeStatus } from '../../../shared/types'
+import type { ChatDepthMode, JsonSchema, RuntimeStatus } from '../../../shared/types'
 
 // Runtime manager (spec §7.5). Defines the swappable ModelRuntime interface so the
 // mock runtime and the real llama.cpp sidecar are interchangeable behind the same
@@ -28,6 +28,16 @@ export interface RuntimeChatOptions {
    * part of the yielded content and is never persisted (architecture.md "Chat & streaming").
    */
   onReasoning?: (delta: string) => void
+  /**
+   * Grammar-constrained decoding (D55): when set, the runtime constrains the model's output to
+   * this JSON Schema via llama-server's OpenAI-compatible `response_format: { type: 'json_schema' }`,
+   * so the completion is GUARANTEED to be JSON matching the schema (the model cannot emit an
+   * off-schema token). The bank-statement LLM categorizer is the first consumer — it constrains the
+   * reply to a fixed category enum so a category is never invented. Loopback-only, offline; the mock
+   * runtime ignores it. `responseSchemaName` is the schema's label llama-server echoes (cosmetic).
+   */
+  responseSchema?: JsonSchema
+  responseSchemaName?: string
 }
 
 export interface RuntimeStartOptions {
