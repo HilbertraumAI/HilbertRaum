@@ -6,6 +6,21 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-25 — **Phase 33 verification — live categorizer smoke (real model) + gold-set re-measure on the real HVB file
+(branch `pdf-geometry-extraction`).** Two manual confirmations the CI suite structurally can't cover:
+- **Categorizer live smoke** — new gated harness `tests/manual/categorizer-smoke.test.ts` (`HILBERTRAUM_CATEGORIZER_SMOKE=<root>`,
+  optional `HILBERTRAUM_CATEGORIZER_MODEL=<path>` to skip a bad auto-pick). Ran the SHIPPING `categorizeTransactions` over 26
+  synthetic transactions against a real chat GGUF (qwen3.5-4b-ud-q4kxl): **off-set categories = 0** (the json_schema enum held
+  through the real llama-server — the D55 path CI never exercises, since the mock ignores `responseSchema`), the nonsense row →
+  `Uncategorized` (in-set), batching crossed the 20-row boundary (2 model calls), **26/26 plausible-label agreement**, ~36s.
+- **Gold-set re-measure (the pending Phase-32 item, now DONE for this file)** — assembled an off-repo corpus
+  (`D:\pdf-goldset`, gitignored, D57) from the real HVB online "Umsätze" listing (Jan–Mar 2025, 45 rows, no printed balances —
+  the exact file behind the Phase-32 bug) with a hand-counted `expected.json` (trueRowCount 45). `HILBERTRAUM_PDF_GOLDSET=1`
+  result: **recall 100% (45/45)**, **over-extracted 0/1** (the boundary-1 `<date> <CUR> <balance>` phantom rows are GONE —
+  A1/A2/A3 hold on the REAL encoding, not just synthetic fixtures), D56-R **unverified** labelled-sum path, **hallucinated /
+  partial-total / model-calls all 0**. Recorded in `architecture.md` §21 (local-re-measurement note). The broader 3-text+1-scan
+  aggregate still awaits a re-measure where that corpus lives. **Phase 33 is now fully verified; STILL AWAITING approval to push.**_
+
 _2026-06-25 — **A9 stale-statement re-extraction IMPLEMENTED (Phase 31–33 follow-up #3; branch `pdf-geometry-extraction`,
 still unmerged/unpushed).** The scoped fix recommended below, approved + built. A bank statement extracted under an OLD
 parser no longer keeps serving stale (mis-signed / lost-payee) rows after a parser fix — the reuse paths now re-extract a

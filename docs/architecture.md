@@ -2652,6 +2652,16 @@ sum** instead of refusing — so the harness reports the same one VERIFIED total
 presented *as the verified statement total* from an incomplete or mis-counted set. The corpus must be
 re-measured locally (`HILBERTRAUM_PDF_GOLDSET=1`) to refresh these figures under the refined harness.
 
+**Local re-measurement (2026-06-25, post-Phase-32, refined harness).** The full real HVB online
+"Umsätze" listing (Jan–Mar 2025, 45 transaction rows, NO printed opening/closing — the exact file behind
+the Phase-32 bug) was re-measured on its own: **transaction recall 100% (45/45)**, **over-extracted 0/1**
+(the old `<date> <CUR> <balance>` phantom rows are GONE — the A2 currency-token class + A1 multi-baseline
+recovery hold on the real encoding, not just the synthetic fixtures), the D56-R **`unverified` labelled
+sum** path (no printed balances), and **hallucinated / partial-total / model-calls all 0**. This confirms
+A1/A2/A3 on the real layout and that the boundary-1 over-extraction is resolved in the wild. (Only this
+one statement is present on the current machine; the broader 3-text + 1-scan aggregate above still awaits
+a re-measure where that corpus lives.)
+
 **Known Stage-1 boundaries (2026-06-24, boundary 1 substantially RESOLVED 2026-06-25) — all SAFE (no
 wrong total is ever shown), residual fixes scoped:**
 - **Per-row running-balance OVER-extraction — RESOLVED for the `<date> <CUR> <balance>` shape (A1+A2),
