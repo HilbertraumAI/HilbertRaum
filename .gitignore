@@ -64,3 +64,4 @@ signing.env
 .env.*
 .DS_Store
 Thumbs.db
+apps/desktop/screenshots/
