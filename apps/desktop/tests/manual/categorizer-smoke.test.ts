@@ -30,14 +30,23 @@ import type { TransactionInput } from '../../src/main/services/skills/tools/bank
 // provisioned drive root (the HILBERTRAUM_TRANSLATION_SMOKE shape — dev box: F:\paid-gpu-smoke-drive):
 //
 //   HILBERTRAUM_CATEGORIZER_SMOKE=<root> npx vitest run tests/manual/categorizer-smoke.test.ts
+//
+// By default it auto-picks the SMALLEST GGUF under <root>/models/chat. To target a SPECIFIC model
+// (e.g. when the smallest is a truncated/partial download), set HILBERTRAUM_CATEGORIZER_MODEL to its
+// absolute path:
+//
+//   HILBERTRAUM_CATEGORIZER_MODEL=D:\models\chat\good-model.gguf  (alongside the _SMOKE root)
 
 const ROOT = process.env.HILBERTRAUM_CATEGORIZER_SMOKE?.trim() ?? ''
+const MODEL_OVERRIDE = process.env.HILBERTRAUM_CATEGORIZER_MODEL?.trim() ?? ''
 const enabled = ROOT.length > 0 && existsSync(ROOT)
 
 const PATIENT_MS = 240_000
 const CTX = 4096
 
-function smallestChatModel(root: string): string | null {
+/** The explicit model override when given (and present), else the smallest GGUF under models/chat. */
+function pickChatModel(root: string): string | null {
+  if (MODEL_OVERRIDE.length > 0) return existsSync(MODEL_OVERRIDE) ? MODEL_OVERRIDE : null
   const dir = join(root, 'models', 'chat')
   if (!existsSync(dir)) return null
   const ggufs = readdirSync(dir)
@@ -91,9 +100,14 @@ describe.skipIf(!enabled)('categorizer smoke: real grammar-constrained enum over
     { timeout: 1_200_000 },
     async () => {
       const binPath = resolveLlamaServerPath(ROOT, process.platform, {})
-      const modelPath = smallestChatModel(ROOT)
+      const modelPath = pickChatModel(ROOT)
       expect(binPath, 'llama-server binary on the drive').toBeTruthy()
-      expect(modelPath, 'a chat GGUF under models/chat').toBeTruthy()
+      expect(
+        modelPath,
+        MODEL_OVERRIDE
+          ? `HILBERTRAUM_CATEGORIZER_MODEL points at an existing file (${MODEL_OVERRIDE})`
+          : 'a chat GGUF under models/chat'
+      ).toBeTruthy()
 
       const runtime = createLlamaRuntime(
         { modelId: 'categorizer-smoke', modelPath: modelPath!, contextTokens: CTX },
