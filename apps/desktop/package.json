@@ -14,7 +14,9 @@
     "test:watch": "vitest",
     "gen:icons": "node scripts/generate-icons.mjs",
     "package": "electron-vite build && electron-builder",
-    "package:win": "electron-vite build && electron-builder --win portable"
+    "package:win": "electron-vite build && electron-builder --win portable",
+    "preview:build": "vite build --config vite.preview.config.ts",
+    "screenshot": "npm run preview:build && ELECTRON_DISABLE_SANDBOX=1 xvfb-run -a electron --no-sandbox scripts/screenshot.mjs"
   },
   "engines": {
     "node": ">=22.5"
