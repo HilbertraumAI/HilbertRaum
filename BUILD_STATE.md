@@ -6,6 +6,42 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-25 — **Bank-statement completeness gate REFINED — D56-R: the no-balance "Umsätze" case now answers instead of
+refusing (Phase 31; branch `pdf-geometry-extraction`, still unmerged/unpushed).** Fixes the reported bug: a user opened an HVB
+online "Umsätze" listing (45 EUR rows, NO printed opening/closing balance) and asked "Summiere die Ausgaben je Kategorie" — and
+ALWAYS got the honest-refusal message with no total, no categories, and no way to see the rows. **Root cause (confirmed, not
+re-derived):** `isStatementComplete` returned a single boolean that collapsed two very different cases — "no balance printed at
+all" and "a printed balance the rows refute" — into one refusal; `buildBankAnswer` then emitted `incompleteNoTotal` for both.
+**Policy refinement (D56-R, user-specified):** the gate is now THREE outcomes via the new `assessCompleteness`:
+- **`complete`** — printed opening+Σ==closing ties out (+ no per-row mismatch) → present the **VERIFIED** total + proven-whole
+  `caveat` (unchanged behaviour).
+- **`contradicted`** — a printed balance the rows refute (per-row mismatch, OR opening+Σ ≠ closing) → keep the honest **refusal**
+  (`incompleteNoTotal`, reworded to "printed balances don't add up"): a suspect read must never surface a number.
+- **`unverified`** — NO opening/closing to tie against AND nothing contradicting → present the SAME totals + categories under a
+  NEW `unverifiedCaveat` ("a sum of the N rows I read, **not** a verified statement total"). This is the user's case — an
+  honestly-LABELLED sum is correct and useful; refusing it was over-cautious.
+The cardinal D56 property is preserved exactly: a number a user could mistake for THE statement total never comes from an
+incomplete read; a clearly-labelled "sum of the rows shown" is not such a number. **Plus** a bounded transaction listing (first
+10 + "ask to export CSV", new `transactionsHeading`/`transactionItem`/`transactionsMore`) now trails EVERY non-empty answer
+(incl. the refusal + mixed-currency branches), so "show me the transactions" is answerable. **As built:**
+- `tools/bank-statement.ts`: `assessCompleteness` (+ `CompletenessStatus`); `isStatementComplete` retained as its boolean
+  `=== 'complete'` projection (unit tests pin the gate by that name). `analysis/bank-statement.ts`: `buildBankAnswer` takes
+  `status` not `complete`, renders the three outcomes + the listing. i18n: 4 new keys in BOTH `de.ts`+`en.ts` (parity test green).
+- **Honesty tradeoff to KNOW (documented in `architecture.md` §21 + `known-limitations.md`):** for a balance-LESS statement that
+  silently OVER-extracts (the deferred boundary-1 phantom running-balance rows) or UNDER-extracts (boundary-3 split amount),
+  D56-R now presents an `unverified` labelled sum that is inflated/under-counted, where the OLD gate refused outright. It is
+  honest per its caveat + the visible listing, but it is no longer a refusal — the maintainer's accepted tradeoff (eliminating
+  the inflation itself is the still-deferred extraction fix). When the statement DOES print opening/closing, those boundaries
+  still break the tie → `contradicted` → refusal (unchanged).
+- **Tests:** `skills-analysis-bank.test.ts` — the no-balance `CLEAN` test repurposed (now expects the unverified total+caveat),
+  a new HVB-shaped 12-row no-balance regression (totals+categories+listing+"2 more"), refusal-case listing pinned; `pdf-bank-
+  layout.test.ts` case (c) repurposed (unverified sum, not refusal); `skills-bank-statement-tool.test.ts` — new
+  `assessCompleteness` three-outcome block. Gold-set harness (`pdf-goldset.realdata.test.ts`, local-only/off-CI) refined to
+  split VERIFIED vs UNVERIFIED totals; the cardinal `partialTotals`/`hallucinated` invariants now guard VERIFIED totals only
+  (re-measure locally to refresh the §21 numbers). **Affected suites green, typecheck clean.**
+- **Open:** the §21 gold-set numbers are stale (measured under the boolean gate) — flagged for a local re-measure; merge prep
+  unchanged — STILL AWAITING approval to push / open the PR._
+
 _2026-06-24 — **PDF geometry-extraction — M3 deferred-hardening addressed: CI-realism adversarial fixtures + shared-column
 finding (Phase 31; branch `pdf-geometry-extraction`, still unmerged/unpushed; NO production code changed).** The pre-merge
 audit's M3 had two parts: (1) a CI-realism gap (every committed geometry fixture encodes IDEAL pdf.js geometry, so a regression

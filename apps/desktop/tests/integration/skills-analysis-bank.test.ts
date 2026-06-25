@@ -145,9 +145,10 @@ describe('bank-statement analysis handler — run()', () => {
     const db = freshDb()
     const id = seedDoc(db, COMPLETE)
     const res = await bankStatementAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'totals?'))
-    // The only figures present are the three derived totals — nothing else (the opening/closing
-    // balances that proved completeness are NOT re-printed in the answer).
-    const numbers = (res.answer.match(/\d+\.\d{2}/g) ?? []).sort()
+    // The only DISTINCT figures present are the three derived totals (the transaction listing re-prints
+    // the two row amounts 45.90 / 2500.00, which are a SUBSET of those — no new number is invented; the
+    // opening/closing balances that proved completeness are NOT re-printed).
+    const numbers = [...new Set(res.answer.match(/\d+\.\d{2}/g) ?? [])].sort()
     expect(numbers).toEqual(['2454.10', '2500.00', '45.90'].sort())
   })
 
@@ -163,6 +164,8 @@ describe('bank-statement analysis handler — run()', () => {
     // A reconcile mismatch is a read error, so completeness is unproven → no total, the honest downgrade.
     expect(res.answer).toContain(tr('skills.bankAnalysis.incompleteNoTotal'))
     expect(res.answer).not.toContain('Net change')
+    // The transaction listing still appears even on the refusal — the user can SEE the rows that were read.
+    expect(res.answer).toContain(tr('skills.bankAnalysis.transactionsHeading'))
   })
 
   it('mixed-currency statement reports NO single total (honesty)', async () => {
@@ -204,16 +207,60 @@ describe('bank-statement analysis handler — run()', () => {
     expect(res.answer).toContain('Income') // Salary → Income (built-in rule)
   })
 
-  it('downgrades to honesty (NO total) when the statement prints no opening/closing balance (D56)', async () => {
+  it('presents a clearly-LABELLED sum when no opening/closing balance is printed (D56 unverified case)', async () => {
     const db = freshDb()
-    const id = seedDoc(db, CLEAN) // reconciles per-row, but no opening/closing balance to PROVE completeness
+    const id = seedDoc(db, CLEAN) // reconciles per-row, no opening/closing balance — nothing CONTRADICTS the read
     const res = await bankStatementAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'what is the total?'))
 
+    // The document never CLAIMS a statement total, so a sum over "the rows I read" is honest + useful —
+    // presented WITH the unverified caveat, NOT the refusal (the refusal is now case (B) only).
     expect(res.answer).toContain(tr('skills.bankAnalysis.count', { count: 2 }))
-    expect(res.answer).toContain(tr('skills.bankAnalysis.incompleteNoTotal'))
-    // A partial read must NEVER surface as a confident total/net.
-    expect(res.answer).not.toContain('Net change')
-    expect(res.answer).not.toContain('2454.10')
+    expect(res.answer).toContain('Net change')
+    expect(res.answer).toContain('2454.10')
+    expect(res.answer).toContain(tr('skills.bankAnalysis.unverifiedCaveat', { count: 2 }))
+    // It must NOT be dressed up as a verified statement total (no proven-whole caveat, no refusal).
+    expect(res.answer).not.toContain(tr('skills.bankAnalysis.incompleteNoTotal'))
+    expect(res.answer).not.toContain(tr('skills.bankAnalysis.caveat'))
+  })
+
+  // Regression for the reported HVB online "Umsätze" bug: a transaction listing with NO printed
+  // opening/closing balance and many EUR rows. It must produce totals + a per-category breakdown + a
+  // bounded listing (the user could SEE the rows), all under the unverified caveat — never the refusal.
+  it('no-balance "Umsätze" listing: totals + categories + bounded listing under the unverified caveat', async () => {
+    const db = freshDb()
+    const id = seedDoc(
+      db,
+      'Umsätze EUR\n' +
+        '2026-03-01 Gehalt ACME 2.500,00\n' +
+        '2026-03-02 Miete -800,00\n' +
+        '2026-03-03 Supermarkt -45,90\n' +
+        '2026-03-04 Gebühr Kontofuehrung -3,50\n' +
+        '2026-03-05 Überweisung Max -100,00\n' +
+        '2026-03-06 Tankstelle -60,00\n' +
+        '2026-03-07 Restaurant -32,00\n' +
+        '2026-03-08 Apotheke -18,75\n' +
+        '2026-03-09 Zinsen 1,20\n' +
+        '2026-03-10 Bargeld ATM -200,00\n' +
+        '2026-03-11 Kino -25,00\n' +
+        '2026-03-12 Abo Streaming -9,99'
+    )
+    const res = await bankStatementAnalysisHandler.run!(
+      ctxFor(db, { documentIds: [id] }, 'Summiere die Ausgaben je Kategorie')
+    )
+
+    // 12 rows read, a presented total, and the per-category breakdown the question asked for.
+    expect(res.answer).toContain(tr('skills.bankAnalysis.count', { count: 12 }))
+    expect(res.answer).toContain('Net change')
+    expect(res.answer).toContain(tr('skills.bankAnalysis.categoryHeading'))
+    expect(res.answer).toContain('Income') // Gehalt → Income (built-in rule)
+    expect(res.answer).toContain('Fees') // Gebühr → Fees
+    // The honest, labelled caveat — NOT the refusal (this is the user's exact case, now fixed).
+    expect(res.answer).toContain(tr('skills.bankAnalysis.unverifiedCaveat', { count: 12 }))
+    expect(res.answer).not.toContain(tr('skills.bankAnalysis.incompleteNoTotal'))
+    // The bounded listing surfaces the first rows and notes the remainder (12 − 10 = 2 more).
+    expect(res.answer).toContain(tr('skills.bankAnalysis.transactionsHeading'))
+    expect(res.answer).toContain('Gehalt ACME')
+    expect(res.answer).toContain(tr('skills.bankAnalysis.transactionsMore', { count: 2 }))
   })
 
   it('presents a total only once the opening + Σ == closing balance ties out (D56)', async () => {

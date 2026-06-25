@@ -477,17 +477,31 @@ export const en = {
     'Money in: **{inAmount} {currency}** · Money out: **{outAmount} {currency}** · Net change: **{netAmount} {currency}**.',
   'skills.bankAnalysis.noCurrency':
     'These transactions use more than one currency, so there is no single combined total — a total would have to be split per currency.',
-  // Completeness gate (§3.5, D56): I read N rows but cannot PROVE I captured the whole statement
-  // (no opening/closing balance that ties out), so I refuse to present a total that might be wrong.
+  // Completeness gate (§3.5, D56) — the CONTRADICTED case: the document makes a balance CLAIM the rows
+  // refute (a per-row balance mismatches, or a printed opening+closing pair that doesn't tie out). The
+  // read is suspect, so I refuse a total that might be a mis-read/partial sum dressed up as the whole.
   'skills.bankAnalysis.incompleteNoTotal':
-    'I couldn’t confirm I captured the whole statement — it has no opening and closing balance that ties ' +
-    'out against what I read. To avoid giving you a total that might be wrong, I won’t state a sum here; ' +
-    'please open the statement and check the figures yourself.',
+    'I couldn’t confirm I captured the whole statement — its printed balances don’t add up against the ' +
+    'transactions I read, so the figures may be mis-read or incomplete. To avoid giving you a total that ' +
+    'might be wrong, I won’t state a sum here; please open the statement and check the figures yourself.',
   'skills.bankAnalysis.categoryHeading': 'By category:',
   'skills.bankAnalysis.categoryItem': '- {category}: {amount} {currency} ({count})',
   'skills.bankAnalysis.caveat':
     'These figures are the statement’s own printed amounts, read across the whole document — ' +
     'nothing here is added up from prose or invented.',
+  // Completeness gate (§3.5, D56) — the UNVERIFIED case: the statement prints NO opening/closing balance
+  // to confirm I read every row, but nothing CONTRADICTS what I read either. So I give a clearly LABELLED
+  // sum of the rows read — NOT a verified statement total — rather than refuse a perfectly honest figure.
+  'skills.bankAnalysis.unverifiedCaveat':
+    'These figures are a sum of the **{count}** transactions I read across the whole document. The ' +
+    'statement prints no opening or closing balance, so I can’t confirm those are every transaction — ' +
+    'treat them as a sum of the rows shown, not a verified statement total. Nothing here is added up ' +
+    'from prose or invented.',
+  // A bounded transaction listing so "show me the transactions" is answerable (figures pass through verbatim).
+  'skills.bankAnalysis.transactionsHeading': 'Transactions:',
+  'skills.bankAnalysis.transactionItem': '- {date} · {description} · {amount} {currency}',
+  'skills.bankAnalysis.transactionsMore':
+    '… and **{count}** more — ask me to export the statement as CSV to see every row.',
 
   // ---- Invoice analysis answer (full-doc-skills plan §3.1, Phase 4 / D49) ----
   // The deterministic, whole-document answer the invoice analysis handler synthesises from the

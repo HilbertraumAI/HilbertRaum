@@ -2536,11 +2536,22 @@ on one line), and bare `DD.MM.` per-row dates with the year only in the header a
   grammar-constrained decoding plumbed through the `llama-server` HTTP sidecar (a `json_schema`/GBNF
   request field the runtime seam does not expose today). Recorded for when D52 triggers it.
 - **D54/D56 — Honesty + the completeness gate (the cardinal safety property).** Never present an
-  invented or partial total. A partial read (17 of 20 rows) is *worse* than today's empty result — it
-  is a confident WRONG total. The only true proof a total is whole is the printed **opening + Σamounts
-  == closing**; capturing those statement-level balances was explicit Stage-1 scope (we did not store
-  them before). When completeness cannot be proven, downgrade to an honest "couldn't confirm the whole
-  statement" message — never a partial sum dressed up as the total.
+  invented total, nor a partial/mis-read total *dressed up as the statement total*. A confident WRONG
+  total (17 of 20 rows presented AS the whole) is *worse* than today's empty result. The only true proof
+  a total is whole is the printed **opening + Σamounts == closing**; capturing those statement-level
+  balances was explicit Stage-1 scope (we did not store them before).
+  - **D56-R (refinement, 2026-06-25) — three outcomes, not a boolean.** The original boolean gate
+    refused a total whenever *either* balance was absent, which conflated two very different cases and
+    wrongly refused a perfectly honest sum on a balance-less "Umsätze" listing (the reported bug).
+    `assessCompleteness` now returns **`complete`** (printed opening+closing tie out → present the
+    VERIFIED total), **`contradicted`** (a printed balance the rows refute — a per-row mismatch, or
+    opening+Σ ≠ closing → keep the honest refusal: a suspect read must never surface a number), or
+    **`unverified`** (NO opening/closing to tie against AND nothing contradicting → present the figures
+    under an explicit caveat: *"a sum of the N rows I read, not a verified statement total"*). The
+    cardinal property is preserved exactly — it forbids a number the user could mistake for THE
+    statement total from coming out of an incomplete read; a clearly-labelled "sum of the rows shown"
+    is not such a number. A bounded transaction listing now trails every non-empty answer so the user
+    can SEE the rows that were read.
 - **D57 — The gold set is LOCAL-ONLY / gitignored.** Real bank statements are user financial data
   (CLAUDE.md "never commit user data"); only aggregate metrics are committed, and every *test* fixture
   is synthetic (`makeColumnarPdf`), never a real statement or excerpt.
@@ -2577,42 +2588,56 @@ on one line), and bare `DD.MM.` per-row dates with the year only in the header a
   deliberately excluded — it restates the closing at the top and would corrupt the opening), and
   `extractTransactionRows` SKIPS any balance-label line so a summary is never counted as a transaction
   (it is still read by `extractStatementBalances`). This stops the double-count that broke the tie.
-- **The completeness gate (D56).** New `extractStatementBalances` (printed opening/closing, EN+DE
-  labels incl. `balance brought/carried forward`, `opening/closing balance`, `Anfangs-/Endsaldo`,
-  `Kontostand per`) + `isStatementComplete` (`opening + Σ == closing` within `MONEY_EPS` AND no per-row
-  running-balance mismatch — a clean chain is necessary-not-sufficient). Persisted additively on
+- **The completeness gate (D56 + the D56-R refinement).** New `extractStatementBalances` (printed
+  opening/closing, EN+DE labels incl. `balance brought/carried forward`, `opening/closing balance`,
+  `Anfangs-/Endsaldo`, `Kontostand per`) feeds `assessCompleteness`, the three-outcome classifier
+  (`complete` / `contradicted` / `unverified`); `isStatementComplete` is retained as its boolean
+  `=== 'complete'` projection (the unit tests pin the gate by that name). Balances persist additively on
   `bank_statements` (`opening_balance`/`closing_balance`, REAL, nullable, content-class — never
-  logged/audited/exported). `buildBankAnswer` presents a single-currency total ONLY when proven
-  complete; otherwise it downgrades to `skills.bankAnalysis.incompleteNoTotal` (EN+DE). Mixed-currency
-  reports no-single-total (safe).
+  logged/audited/exported). `buildBankAnswer` renders each outcome: `complete` → VERIFIED total + the
+  proven-whole `caveat`; `unverified` → the SAME single-currency totals + categories under
+  `unverifiedCaveat` (a labelled sum of the rows read — the no-balance "Umsätze" case, the reported
+  bug); `contradicted` → `skills.bankAnalysis.incompleteNoTotal` (the honest refusal). Mixed-currency
+  reports no-single-total (safe) regardless of outcome. A bounded transaction listing
+  (`transactionsHeading`/`transactionItem`/`transactionsMore`, first 10 + "ask to export CSV") trails
+  every non-empty answer. All strings are EN+DE.
 - **Wiring (D51/D58).** `readDocumentSegments(id, {layout})` → `extractDocumentPreview` (now accepting
   `layout` + the `maxPages` cap, a DoS guard since per-page clustering is uncapped otherwise) →
   `ParseContext.layout` → `PdfParser` layout mode (scan-detection re-keyed on RAW text so an empty
   reconstruction is never mistaken for an image-only scan). The bank analysis handler sets
   `layout:true`; every other caller is byte-unchanged.
 
-**Gold-set result (local-only corpus, D57; 2026-06-24).** Three text-layer statements — a sanitized HVB
-transactions-only excerpt, a full Raiffeisen "Mein ELBA" statement, and an HVB "Umsätze" page — plus one
-image-only scan (below): micro recall **116.5% (99/85)** — >100% because the HVB "Umsätze" page is
-OVER-extracted (next paragraph); macro recall **100%**; gate pass **33% (1/3** — only Raiffeisen prints
-opening/closing balances and ties out; the other two have no statement-level balance and correctly
-downgrade**)**; figure-exact-match **100% (1/1 with printed balances)**; hallucinated / partial-total /
-model-calls all **0**. The cardinal safety property holds across every statement: no total is ever
-presented from an incomplete or mis-counted set.
+**Gold-set result (local-only corpus, D57; 2026-06-24, measured under the original boolean gate).** Three
+text-layer statements — a sanitized HVB transactions-only excerpt, a full Raiffeisen "Mein ELBA"
+statement, and an HVB "Umsätze" page — plus one image-only scan (below): micro recall **116.5% (99/85)** —
+>100% because the HVB "Umsätze" page is OVER-extracted (next paragraph); macro recall **100%**;
+figure-exact-match **100% (1/1 with printed balances)**; hallucinated / partial-total / model-calls all
+**0**. Under the original gate, gate pass was **33% (1/3)** because the two balance-less statements
+refused a total. **Under the D56-R refinement (2026-06-25) those two now present an `unverified` labelled
+sum** instead of refusing — so the harness reports the same one VERIFIED total (Raiffeisen) plus two
+`unverified` labelled sums, and the cardinal invariant is re-stated accordingly: no number is ever
+presented *as the verified statement total* from an incomplete or mis-counted set. The corpus must be
+re-measured locally (`HILBERTRAUM_PDF_GOLDSET=1`) to refresh these figures under the refined harness.
 
 **Known Stage-1 boundaries (2026-06-24) — all SAFE (no wrong total is ever shown), fixes scoped:**
 - **Per-row running-balance OVER-extraction.** Some statements (the HVB "Umsätze" export) print a
   separate running-balance row BETWEEN transactions shaped `<date> <CUR> <balance>` with the date in the
   booking-date column. Geometry rebuilds it, and because its only non-date/non-money token is the bare
   currency code, `parseLine` reads that as the description and emits a phantom transaction (14 real rows
-  → 28). It is **safe** — the running balance is not a labelled opening/closing, so the completeness gate
-  downgrades (no total), never a wrong one; and on a statement that *also* prints opening/closing the
-  phantom balances inflate Σamounts so the `opening + Σ == closing` tie does not hold → it likewise
-  downgrades (verified end-to-end, `pdf-bank-layout.test.ts` case (i)). (The tie surviving would require
-  the per-row running balances to sum to ~0 within `MONEY_EPS` — an oscillating-around-zero account no
-  real statement produces and none in the gold set approaches; not categorically impossible, but not a
-  reachable exposure, so the gate is treated as safe here.) The cost is precision/UX only: an
-  inflated row count (the micro-recall >100% above) and phantom citations, never a total. **A "money-column
+  → 28). **Safety under D56-R is more nuanced than under the original gate.** On a statement that *also*
+  prints opening/closing, the phantom balances inflate Σamounts so the `opening + Σ == closing` tie does
+  not hold → `contradicted` → the honest refusal, never a wrong total (verified end-to-end,
+  `pdf-bank-layout.test.ts` case (i); the tie surviving would require the per-row balances to sum to ~0
+  within `MONEY_EPS` — an oscillating-around-zero account no real statement produces). **But on a
+  balance-LESS over-extracted statement (the reported HVB "Umsätze" online export), D56-R now classifies
+  `unverified` and presents an `unverifiedCaveat`-labelled sum that INCLUDES the phantom rows — i.e. an
+  inflated sum.** This is the accepted D56-R tradeoff: the figure is explicitly labelled *"a sum of the
+  rows I read, not a verified statement total"*, so it is not a confident wrong *statement total*, but it
+  is no longer a refusal — a user who does not read the caveat could over-read it. The honest boundary is
+  the caveat plus the transaction listing (the user can SEE the phantom `… EUR … balance` rows and judge),
+  not the absence of a number; eliminating the inflation itself is the deferred extraction fix below. The
+  cost when balances ARE printed is precision/UX only: an inflated row count (the micro-recall >100%
+  above) and phantom citations, never a total. **A "money-column
   model" (the analogue of `detectDatumColumn` for money) was the assumed fix, but the 2026-06-24 geometry
   probe of the gold-set HVB "Umsätze" page showed it does NOT separate these rows: the running balance and
   the transaction amount are RIGHT-aligned in ONE numeric column (measured left-edges ~493 for the balance
@@ -2637,8 +2662,11 @@ presented from an incomplete or mis-counted set.
   producer renders one amount as TWO adjacent text items (e.g. `2.000` + `,00`, a kerning/positioning gap
   pdf.js surfaces as separate `TextItem`s), neither fragment classifies as money (`2.000` is text, `,00`
   is text; note `1.234` even back-classifies as a *date*), so the row carries no amount and is **dropped**
-  — the real transaction silently vanishes (a recall loss). It is **safe**: an empty/incomplete extraction
-  makes the gate downgrade, never a wrong total. The scoped fix is an **x-adjacency money re-merge** (merge
+  — the real transaction silently vanishes (a recall loss). It is **safe in the original sense** when the
+  statement prints opening/closing (the missing row breaks the `opening + Σ == closing` tie → `contradicted`
+  → refusal, the pinned test path); on a balance-LESS statement, D56-R presents an `unverified` labelled
+  sum that is silently UNDER-counted by the dropped row — honest per its caveat ("a sum of the rows I read"),
+  but no longer a refusal (same D56-R tradeoff as boundary 1). The scoped fix is an **x-adjacency money re-merge** (merge
   neighbouring tokens whose concatenation parses as money and whose x-gap is sub-column), **deferred** with
   the money-column model. Pinned by `pdf-layout.test.ts` (the split drops the row; the same amount as one
   token reconstructs) + an end-to-end `pdf-bank-layout.test.ts` case (real pdf.js → safe downgrade). Two

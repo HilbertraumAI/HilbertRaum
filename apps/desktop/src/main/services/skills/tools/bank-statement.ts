@@ -187,12 +187,51 @@ export function extractStatementBalances(chunks: DocumentChunkRead[]): {
 }
 
 /**
- * The completeness PROOF (§3.5, D56): a statement is provably complete only when its printed opening
- * and closing balances tie out against the extracted rows — `opening + Σamounts == closing` within
- * half a cent — AND no per-row running balance contradicts (a mismatch is a read error). A clean
- * per-row chain is NECESSARY but NOT sufficient (rows dropped past the last printed balance leave the
- * chain intact), so it is never the proof on its own. When this returns false the caller MUST NOT
- * present a total — it downgrades to honesty (never a partial sum dressed up as the total).
+ * The refined §3.5 / D56 completeness assessment — THREE outcomes, not a boolean, because the absence
+ * of a printed balance and a CONTRADICTED printed balance deserve different answers (the original gate
+ * conflated them, refusing a perfectly honest sum on a balance-less "Umsätze" listing):
+ *
+ *  - `'complete'`     — the statement PRINTS opening + closing and they tie out against the rows
+ *                       (`opening + Σamounts == closing` within half a cent) AND no per-row running
+ *                       balance contradicts. The total is provably the WHOLE statement → present it.
+ *  - `'contradicted'` — the document makes a balance CLAIM the rows refute: a per-row running balance
+ *                       mismatches (a read error), OR a printed opening+closing pair that does NOT tie
+ *                       out. The read is suspect → refuse a total (a mis-read/partial sum could
+ *                       masquerade as the whole — the cardinal D56 harm).
+ *  - `'unverified'`   — NO opening+closing pair to tie against AND no per-row mismatch. The document
+ *                       never CLAIMS a statement total, so it cannot be CONTRADICTED; an honestly
+ *                       LABELLED sum over "the rows I read" is correct and useful (NOT a partial sum
+ *                       dressed up as the statement total). The caller presents figures WITH a caveat.
+ *
+ * A clean per-row chain is NECESSARY-not-sufficient for `'complete'` (rows dropped past the last
+ * printed balance leave the chain intact), so it is never the proof on its own — `'complete'` still
+ * requires the printed opening+closing tie.
+ */
+export type CompletenessStatus = 'complete' | 'unverified' | 'contradicted'
+
+export function assessCompleteness(args: {
+  rows: TransactionInput[]
+  openingBalance?: number
+  closingBalance?: number
+  reconcile: ReconcileResult
+}): CompletenessStatus {
+  const { rows, openingBalance, closingBalance, reconcile } = args
+  // A per-row running balance that contradicts is a read error — suspect regardless of summary balances.
+  if (reconcile.rows.some((r) => r.status === 'mismatch')) return 'contradicted'
+  // No statement-level opening+closing pair to tie against: nothing claimed → nothing contradicted.
+  if (openingBalance === undefined || closingBalance === undefined) return 'unverified'
+  // Both balances printed: they MUST tie out, else the document's own claim is contradicted.
+  const sum = rows.reduce((acc, r) => acc + r.amount, 0)
+  return Math.abs(openingBalance + sum - closingBalance) < MONEY_EPS ? 'complete' : 'contradicted'
+}
+
+/**
+ * The boolean "provably WHOLE" predicate — `assessCompleteness(...) === 'complete'`. Retained because
+ * the gate's hardest property (a clean chain is necessary-not-sufficient; a printed-but-contradicted
+ * balance is never complete) is pinned by name in the unit tests, and a `'complete'` total is the only
+ * one presented as the verified statement total. When this returns false the caller MUST NOT present a
+ * total AS the statement total — it either honestly downgrades (`'contradicted'`) or presents a clearly
+ * labelled sum of the rows read (`'unverified'`); see `buildBankAnswer`.
  */
 export function isStatementComplete(args: {
   rows: TransactionInput[]
@@ -200,11 +239,7 @@ export function isStatementComplete(args: {
   closingBalance?: number
   reconcile: ReconcileResult
 }): boolean {
-  const { rows, openingBalance, closingBalance, reconcile } = args
-  if (openingBalance === undefined || closingBalance === undefined) return false
-  if (reconcile.rows.some((r) => r.status === 'mismatch')) return false
-  const sum = rows.reduce((acc, r) => acc + r.amount, 0)
-  return Math.abs(openingBalance + sum - closingBalance) < MONEY_EPS
+  return assessCompleteness(args) === 'complete'
 }
 
 /** Pure extractor over already-read chunks — emits only fully-valid rows (ambiguous lines dropped). */

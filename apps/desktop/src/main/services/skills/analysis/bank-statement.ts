@@ -13,11 +13,12 @@ import {
   type BankExtractionDeps
 } from '../run'
 import {
+  assessCompleteness,
   categorizeRow,
-  isStatementComplete,
   reconcileBalances,
   summarizeCashflow,
   type CashflowSummary,
+  type CompletenessStatus,
   type ReconcileResult,
   type TransactionInput
 } from '../tools/bank-statement'
@@ -218,10 +219,14 @@ function categoryTotals(rows: TransactionInput[]): CategoryTotal[] {
   })
 }
 
+/** Bound the inline transaction listing so a many-row statement can't flood the answer (CSV exports all). */
+const MAX_LISTED_TRANSACTIONS = 10
+
 /**
  * Build the deterministic, localized answer (Markdown, 0 model calls) — the precedent is
  * `analysis/listing-answer.ts`. Unreconciled rows lead (SKILL.md "before presenting a total"); the
- * totals only print when every row shares one currency (mixed ⇒ an honest "no single total").
+ * totals only print when every row shares one currency (mixed ⇒ an honest "no single total"). A bounded
+ * transaction listing always trails so "show me the transactions" is answerable in every non-empty case.
  */
 export function buildBankAnswer(
   tr: Tr,
@@ -231,14 +236,19 @@ export function buildBankAnswer(
     reconcile: ReconcileResult
     categories: CategoryTotal[] | null
     /**
-     * The §3.5 / D56 completeness PROOF — `opening + Σamounts == closing`. A single-currency total is
-     * presented ONLY when this is true; otherwise the answer downgrades to an honest "couldn't confirm
-     * the whole statement" message and presents NO total/category/net (never a partial sum as the total).
+     * The refined §3.5 / D56 completeness STATUS (three outcomes — see `assessCompleteness`):
+     *  - `'complete'`     — printed opening + Σ == closing: present the VERIFIED statement total + the
+     *                       proven-whole caveat.
+     *  - `'unverified'`   — no opening/closing to tie against AND nothing contradicting: present the same
+     *                       figures but with the UNVERIFIED caveat (a clearly-labelled sum of the rows
+     *                       read, NOT a verified statement total) — honest, and the user's no-balance case.
+     *  - `'contradicted'` — a printed balance the rows refute (mismatch, or opening+Σ != closing): keep
+     *                       the honest refusal (never a mis-read/partial sum dressed up as the total).
      */
-    complete: boolean
+    status: CompletenessStatus
   }
 ): string {
-  const { rows, summary, reconcile, categories, complete } = data
+  const { rows, summary, reconcile, categories, status } = data
   if (rows.length === 0) return tr('skills.bankAnalysis.empty')
 
   const lines: string[] = [tr('skills.bankAnalysis.count', { count: rows.length })]
@@ -264,10 +274,16 @@ export function buildBankAnswer(
   lines.push('')
   if (!summary.currency) {
     // Mixed currency: no single total is presented at all (honest, and NOT a partial-total risk),
-    // so this case is safe regardless of the completeness gate.
+    // so this case is safe regardless of the completeness status.
     lines.push(tr('skills.bankAnalysis.noCurrency'))
-  } else if (complete) {
-    // Provably complete (opening + Σ == closing): present the single-currency totals.
+  } else if (status === 'contradicted') {
+    // (B) The document's own balance claim is refuted by the rows: downgrade to honesty (D56) — never a
+    // mis-read/partial sum dressed up as the total.
+    lines.push(tr('skills.bankAnalysis.incompleteNoTotal'))
+  } else {
+    // (A) 'complete' (proven whole) OR 'unverified' (no balance to confirm, nothing contradicting):
+    // present the single-currency totals + categories. The CAVEAT distinguishes the two — a verified
+    // statement total vs an honestly-labelled sum of the rows read.
     lines.push(
       tr('skills.bankAnalysis.totals', {
         inAmount: fmt(summary.totalIn),
@@ -289,10 +305,29 @@ export function buildBankAnswer(
         )
       }
     }
-    lines.push('', tr('skills.bankAnalysis.caveat'))
-  } else {
-    // Completeness UNPROVEN (D56): downgrade to honesty — never a partial sum dressed up as the total.
-    lines.push(tr('skills.bankAnalysis.incompleteNoTotal'))
+    lines.push(
+      '',
+      status === 'complete'
+        ? tr('skills.bankAnalysis.caveat')
+        : tr('skills.bankAnalysis.unverifiedCaveat', { count: rows.length })
+    )
+  }
+
+  // A bounded transaction listing so "show me the transactions" is answerable in EVERY non-empty case
+  // (including the refusal + mixed-currency branches) — it is just what was read, always honest.
+  lines.push('', tr('skills.bankAnalysis.transactionsHeading'))
+  for (const row of rows.slice(0, MAX_LISTED_TRANSACTIONS)) {
+    lines.push(
+      tr('skills.bankAnalysis.transactionItem', {
+        date: row.date,
+        description: row.description,
+        amount: fmt(row.amount),
+        currency: row.currency
+      })
+    )
+  }
+  if (rows.length > MAX_LISTED_TRANSACTIONS) {
+    lines.push(tr('skills.bankAnalysis.transactionsMore', { count: rows.length - MAX_LISTED_TRANSACTIONS }))
   }
 
   return lines.join('\n')
@@ -345,18 +380,20 @@ export const bankStatementAnalysisHandler: SkillAnalysisHandler = {
     const reconcile = reconcileBalances(rows)
     const categories = categoryShaped ? categoryTotals(rows) : null
 
-    // Completeness gate (§3.5, D56): the only true proof a total is whole is the statement's printed
-    // opening + Σamounts == closing. Load the persisted balances and prove it; an unproven statement
-    // downgrades to honesty in `buildBankAnswer` (no total presented), never a confident partial sum.
+    // Completeness assessment (§3.5, D56): the only true proof a total is WHOLE is the statement's
+    // printed opening + Σamounts == closing. Load the persisted balances and classify into one of three
+    // outcomes — `complete` (proven), `contradicted` (a printed balance the rows refute → refuse), or
+    // `unverified` (no balance to tie against, nothing contradicting → present a clearly-labelled sum of
+    // the rows read, the no-balance "Umsätze" case). `buildBankAnswer` renders each honestly.
     const balances = loadStatementBalances(db, extraction.statementId)
-    const complete = isStatementComplete({
+    const status = assessCompleteness({
       rows,
       openingBalance: balances.openingBalance,
       closingBalance: balances.closingBalance,
       reconcile
     })
 
-    const answer = buildBankAnswer(ctx.tr, { rows, summary, reconcile, categories, complete })
+    const answer = buildBankAnswer(ctx.tr, { rows, summary, reconcile, categories, status })
     const citations = buildBankCitations(db, target.id, target.title, rows)
     const coverage = computeCoverage(db, target.id)
     return { answer, citations, coverage }

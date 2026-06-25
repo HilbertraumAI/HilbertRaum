@@ -41,12 +41,18 @@ const RUN = process.env.HILBERTRAUM_PDF_GOLDSET === '1'
 const CORPUS_DIR = process.env.HILBERTRAUM_PDF_GOLDSET_DIR ?? join(__dirname, 'corpus')
 const tr = (key: MessageKey, params?: MessageParams): string => t('en', key, params)
 
-// The user-facing strings the D56 gate emits when it does NOT present a single-currency total. A
-// presented total is the ABSENCE of all three (a real total was shown) — this mirrors the exact
-// branches in `buildBankAnswer`, so "gate passed" here means what the user actually sees.
+// The user-facing strings the D56 gate emits when it does NOT present any single-currency figure. A
+// figure was shown iff NONE of these three appear — this mirrors the exact branches in `buildBankAnswer`.
 const INCOMPLETE = tr('skills.bankAnalysis.incompleteNoTotal')
 const NO_CURRENCY = tr('skills.bankAnalysis.noCurrency')
 const EMPTY = tr('skills.bankAnalysis.empty')
+// The D56 REFINEMENT: a presented figure is either a VERIFIED statement total (the gate proved
+// opening + Σ == closing) or a clearly-LABELLED UNVERIFIED sum of the rows read (no balance to confirm
+// completeness, nothing contradicting). The count-independent fragment of the unverified caveat tells
+// the two apart — only a VERIFIED total carries the cardinal "no partial/hallucinated total" guarantee
+// (an unverified sum is explicitly NOT a statement total, so it may honestly come from an over/under-
+// extracted set; the honesty lives in the caveat, not in refusing the number).
+const UNVERIFIED_MARK = 'not a verified statement total'
 
 /** Per-statement ground truth (gitignored `<name>.expected.json`). Only `trueRowCount` is required
  *  (omittable when `imageOnly` — a scan has no text-layer rows to recall). */
@@ -77,9 +83,13 @@ interface Expectation {
 interface PerStatement {
   trueRows: number
   extractedRows: number
-  /** A real single-currency total was presented (the gate proved completeness). */
+  /** Any single-currency figure was presented (a VERIFIED total OR an UNVERIFIED labelled sum). */
   totalPresented: boolean
-  /** The presented net (Σ amounts) when a total was shown, else null. */
+  /** A VERIFIED statement total was presented (the gate PROVED opening + Σ == closing). */
+  verifiedTotal: boolean
+  /** A clearly-LABELLED UNVERIFIED sum was presented (no balance to confirm completeness — D56 refinement). */
+  unverifiedTotal: boolean
+  /** The presented net (Σ amounts) when any figure was shown, else null. */
   presentedNet: number | null
   /** The persisted opening/closing the gate tied against (from `bank_statements`). */
   persistedOpening: number | null
@@ -154,6 +164,8 @@ async function measureOne(pdfPath: string, exp: Expectation): Promise<PerStateme
     trueRows: exp.trueRowCount ?? 0,
     extractedRows: 0,
     totalPresented: false,
+    verifiedTotal: false,
+    unverifiedTotal: false,
     presentedNet: null,
     persistedOpening: null,
     persistedClosing: null,
@@ -209,11 +221,16 @@ async function measureOne(pdfPath: string, exp: Expectation): Promise<PerStateme
 
   const totalPresented =
     !res.answer.includes(INCOMPLETE) && !res.answer.includes(NO_CURRENCY) && !res.answer.includes(EMPTY)
+  // A presented figure is VERIFIED only when it does NOT carry the unverified caveat (D56 refinement).
+  const unverifiedTotal = totalPresented && res.answer.includes(UNVERIFIED_MARK)
+  const verifiedTotal = totalPresented && !unverifiedTotal
 
   return {
     trueRows: exp.trueRowCount ?? 0,
     extractedRows,
     totalPresented,
+    verifiedTotal,
+    unverifiedTotal,
     presentedNet: totalPresented ? Math.round(sumRow.s * 100) / 100 : null,
     persistedOpening: stmt?.opening ?? null,
     persistedClosing: stmt?.closing ?? null,
@@ -283,8 +300,12 @@ describe.runIf(RUN)('PDF geometry-extraction — Stage-1 gold-set measurement (l
     // issue, not a safety one (over-extraction breaks the completeness tie → the gate downgrades).
     const overExtracted = results.filter((r) => r.extractedRows > r.trueRows).length
 
-    const gatePass = results.filter((r) => r.totalPresented).length
+    // "Gate pass" = a VERIFIED total (the gate proved opening + Σ == closing). UNVERIFIED labelled sums
+    // (no printed balance, nothing contradicting — the D56 refinement) are counted separately: they are
+    // a legitimate presented figure, but NOT a completeness proof.
+    const gatePass = results.filter((r) => r.verifiedTotal).length
     const gatePassRate = n > 0 ? gatePass / n : 0
+    const unverifiedPresented = results.filter((r) => r.unverifiedTotal).length
 
     // Figure exact-match: of statements whose expectation prints opening/closing, how many did Stage 1
     // persist EXACTLY (the verbatim figures the gate ties against).
@@ -298,26 +319,32 @@ describe.runIf(RUN)('PDF geometry-extraction — Stage-1 gold-set measurement (l
     ).length
 
     // ---- D56 cardinal safety invariants (these MUST hold on any data, scans INCLUDED) -------------
-    // Partial-total-presented: a total was shown but we did NOT extract every true row (a confident
-    // total from an incomplete set — exactly what D56 forbids).
-    const partialTotals = all.filter((r) => r.totalPresented && r.extractedRows < r.trueRows)
-    // Hallucinated figure: a total was shown whose net disagrees with the statement's true net
+    // The guarantee applies to VERIFIED totals — the figure presented AS the whole statement total. An
+    // UNVERIFIED labelled sum is explicitly "a sum of the rows read, NOT a verified statement total"
+    // (D56 refinement), so it is allowed to come from an over/under-extracted set; the honesty is in the
+    // caveat, not in refusing the number. Guarding `verifiedTotal` keeps the cardinal property exactly:
+    // a number the user could mistake for THE statement total must never come from an incomplete read.
+    //
+    // Partial-total-presented: a VERIFIED total was shown but we did NOT extract every true row (a
+    // confident whole-claiming total from an incomplete set — exactly what D56 forbids).
+    const partialTotals = all.filter((r) => r.verifiedTotal && r.extractedRows < r.trueRows)
+    // Hallucinated figure: a VERIFIED total whose net disagrees with the statement's true net
     // (closing − opening). For a deterministic Stage 1 this should be impossible (the gate proves
     // opening + Σ == closing), so a non-zero count is a real safety regression to investigate.
     const hallucinated = all.filter((r) => {
-      if (!r.totalPresented || r.presentedNet == null) return false
+      if (!r.verifiedTotal || r.presentedNet == null) return false
       if (r.expectedOpening == null || r.expectedClosing == null) return false
       const expectedNet = r.expectedClosing - r.expectedOpening
       return Math.abs(r.presentedNet - expectedNet) >= MONEY_EPS
     })
     const totalModelCalls = all.reduce((a, r) => a + r.modelCalls, 0)
-    // Hallucination invariant is ARMED only where a total was presented AND the expectation supplied
-    // ground-truth opening/closing to check the net against (audit M5): for any other statement the
-    // `hallucinated` predicate is vacuously false, so the "MUST be 0" guarantee is meaningful only over
-    // this many statements. Print the armed count so the guarantee can't be silently weakened by adding
-    // presented-total statements without ground-truth balances.
+    // Hallucination invariant is ARMED only where a VERIFIED total was presented AND the expectation
+    // supplied ground-truth opening/closing to check the net against (audit M5): for any other statement
+    // the `hallucinated` predicate is vacuously false, so the "MUST be 0" guarantee is meaningful only
+    // over this many statements. Print the armed count so the guarantee can't be silently weakened by
+    // adding presented-total statements without ground-truth balances.
     const hallucinationArmed = all.filter(
-      (r) => r.totalPresented && r.expectedOpening != null && r.expectedClosing != null
+      (r) => r.verifiedTotal && r.expectedOpening != null && r.expectedClosing != null
     ).length
     // Image-only safety: a scanned statement must extract NOTHING and present NO total (a user who
     // blacks/scans a statement must never get a confident wrong total) — and never a model call.
@@ -333,7 +360,8 @@ describe.runIf(RUN)('PDF geometry-extraction — Stage-1 gold-set measurement (l
         `transaction recall (macro) .. ${pct(macroRecall)}  (mean per-statement, capped at 100%)`,
         `statements at full recall ... ${perfectRecall}/${n}  (recall ≥ 100%; over-extraction counts here)`,
         `over-extracted statements ... ${overExtracted}/${n}  (phantom rows — precision, not safety)`,
-        `completeness-gate pass rate . ${pct(gatePassRate)}  (${gatePass}/${n} presented a total)`,
+        `completeness-gate pass rate . ${pct(gatePassRate)}  (${gatePass}/${n} VERIFIED total: opening+Σ==closing)`,
+        `unverified labelled sums ... ${unverifiedPresented}/${n}  (no printed balance, nothing contradicting — D56)`,
         `figure exact-match .......... ${
           withBalances.length > 0 ? `${pct(balanceExact / withBalances.length)} (${balanceExact}/${withBalances.length} with printed balances)` : 'n/a (no expected balances supplied)'
         }`,

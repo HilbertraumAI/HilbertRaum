@@ -422,8 +422,10 @@ describe('PDF layout mode — synthetic breadth (English labels, EN value-date, 
     }
   })
 
-  // (c) A running-balance-only statement with NO printed opening/closing → the honest gate DOWNGRADE (EN).
-  it('English running-balance-only (no opening/closing) → honest downgrade, no total', async () => {
+  // (c) A running-balance-only statement with NO printed opening/closing → the UNVERIFIED case (D56
+  //     refinement): nothing contradicts the clean per-row chain, but there is no statement-level balance
+  //     to confirm completeness, so a clearly-LABELLED sum of the rows read is presented (not the refusal).
+  it('English running-balance-only (no opening/closing) → labelled sum under the unverified caveat', async () => {
     const RC = { date: 50, desc: 160, amount: 420, balance: 500 }
     const cells: PdfCell[] = []
     cells.push({ text: 'Statement 2022 in GBP', x: 50, y: 750 })
@@ -456,10 +458,13 @@ describe('PDF layout mode — synthetic breadth (English labels, EN value-date, 
     const docId = seedDoc(db, segments)
     const res = await bankStatementAnalysisHandler.run!(ctxFor(db, docId, 'what is the total spending?', pdfPath))
 
-    // The rows are read, but with no opening/closing balance to tie against, completeness is unprovable.
+    // The rows are read; with no opening/closing balance to tie against, completeness is unverifiable —
+    // but nothing CONTRADICTS the read, so the figures are presented under the honest unverified caveat.
     expect(res.answer).toContain(tr('skills.bankAnalysis.count', { count: 3 }))
-    expect(res.answer).toContain(tr('skills.bankAnalysis.incompleteNoTotal'))
-    expect(res.answer).not.toContain('Net change')
+    expect(res.answer).toContain('Net change')
+    expect(res.answer).toContain(tr('skills.bankAnalysis.unverifiedCaveat', { count: 3 }))
+    // It is NOT dressed up as a verified statement total, and it is NOT the refusal.
+    expect(res.answer).not.toContain(tr('skills.bankAnalysis.incompleteNoTotal'))
   })
 
   // (d) A multi-line wrapped description row → the booking row still extracts cleanly (the wrap is a

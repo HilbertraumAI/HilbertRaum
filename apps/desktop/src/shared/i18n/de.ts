@@ -502,17 +502,32 @@ export const de: Record<keyof typeof en, string> = {
     'Eingänge: **{inAmount} {currency}** · Ausgänge: **{outAmount} {currency}** · Saldoänderung: **{netAmount} {currency}**.',
   'skills.bankAnalysis.noCurrency':
     'Diese Buchungen verwenden mehr als eine Währung, daher gibt es keinen einzelnen Gesamtbetrag — eine Summe müsste je Währung getrennt werden.',
-  // Completeness gate (§3.5, D56): I read N rows but cannot PROVE I captured the whole statement
-  // (no opening/closing balance that ties out), so I refuse to present a total that might be wrong.
+  // Completeness gate (§3.5, D56) — der WIDERSPRUCH-Fall: Der Auszug macht eine Saldo-AUSSAGE, die den
+  // gelesenen Buchungen widerspricht (ein Zeilensaldo passt nicht, oder gedruckter Anfangs-/Endsaldo geht
+  // nicht auf). Die Lesung ist fragwürdig, daher verweigere ich eine womöglich falsche/unvollständige Summe.
   'skills.bankAnalysis.incompleteNoTotal':
-    'Ich kann nicht bestätigen, dass ich den ganzen Auszug erfasst habe — es gibt keinen Anfangs- und ' +
-    'Endsaldo, der mit dem Gelesenen aufgeht. Damit ich Ihnen keinen womöglich falschen Gesamtbetrag ' +
-    'nenne, gebe ich hier keine Summe an; bitte prüfen Sie die Zahlen im geöffneten Auszug selbst.',
+    'Ich kann nicht bestätigen, dass ich den ganzen Auszug erfasst habe — die gedruckten Salden gehen mit ' +
+    'den gelesenen Buchungen nicht auf, daher könnten die Zahlen falsch gelesen oder unvollständig sein. ' +
+    'Damit ich Ihnen keinen womöglich falschen Gesamtbetrag nenne, gebe ich hier keine Summe an; bitte ' +
+    'prüfen Sie die Zahlen im geöffneten Auszug selbst.',
   'skills.bankAnalysis.categoryHeading': 'Nach Kategorie:',
   'skills.bankAnalysis.categoryItem': '- {category}: {amount} {currency} ({count})',
   'skills.bankAnalysis.caveat':
     'Diese Zahlen sind die im Auszug gedruckten Beträge, gelesen über das ganze Dokument — ' +
     'nichts davon wird aus Fließtext zusammengerechnet oder erfunden.',
+  // Completeness gate (§3.5, D56) — der UNGEPRÜFTE Fall: Der Auszug druckt KEINEN Anfangs-/Endsaldo, der
+  // bestätigt, dass ich jede Zeile erfasst habe, aber es WIDERSPRICHT dem Gelesenen auch nichts. Also gebe
+  // ich eine klar GEKENNZEICHNETE Summe der gelesenen Zeilen an — keinen geprüften Auszugssaldo.
+  'skills.bankAnalysis.unverifiedCaveat':
+    'Diese Zahlen sind die Summe der **{count}** Buchungen, die ich über das ganze Dokument gelesen habe. ' +
+    'Der Auszug enthält keinen Anfangs- und Endsaldo, daher kann ich nicht bestätigen, dass das alle ' +
+    'Buchungen sind — verstehen Sie sie als Summe der angezeigten Zeilen, nicht als geprüften Auszugssaldo. ' +
+    'Nichts davon wird aus Fließtext zusammengerechnet oder erfunden.',
+  // Eine begrenzte Buchungsliste, damit „zeig mir die Buchungen“ beantwortbar ist (Beträge unverändert).
+  'skills.bankAnalysis.transactionsHeading': 'Buchungen:',
+  'skills.bankAnalysis.transactionItem': '- {date} · {description} · {amount} {currency}',
+  'skills.bankAnalysis.transactionsMore':
+    '… und **{count}** weitere — bitten Sie mich, den Auszug als CSV zu exportieren, um alle Zeilen zu sehen.',
 
   // ---- Rechnungsauswertung (full-doc-skills Plan §3.1, Phase 4 / D49) ----
   // Die deterministische Antwort über das ganze Dokument, die der Analyse-Handler aus der

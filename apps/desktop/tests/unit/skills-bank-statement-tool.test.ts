@@ -3,6 +3,7 @@ import {
   extractTransactionsTool,
   extractTransactionRows,
   extractStatementBalances,
+  assessCompleteness,
   isStatementComplete,
   parseAmount,
   parseDate,
@@ -169,6 +170,51 @@ describe('extractStatementBalances + isStatementComplete (completeness gate — 
     const reconcile = reconcileBalances(rows)
     // Even if some opening/closing pair were supplied, the contradicting chain forbids completeness.
     expect(isStatementComplete({ rows, openingBalance: 110, closingBalance: 90, reconcile })).toBe(false)
+  })
+})
+
+describe('assessCompleteness — the three-outcome refinement (§3.5 / D56)', () => {
+  const ROWS: TransactionInput[] = [
+    { date: '2026-01-02', description: 'Grocery', amount: -45.9, currency: 'EUR' },
+    { date: '2026-01-03', description: 'Salary', amount: 2500, currency: 'EUR' }
+  ]
+
+  it("'complete' only when printed opening + Σ == closing AND no per-row mismatch", () => {
+    const reconcile = reconcileBalances(ROWS)
+    expect(assessCompleteness({ rows: ROWS, openingBalance: 2000, closingBalance: 4454.1, reconcile })).toBe('complete')
+  })
+
+  it("'unverified' when NO opening/closing balance is printed and nothing contradicts (the no-balance case)", () => {
+    // The reported HVB "Umsätze" shape: rows read cleanly, no statement-level balance to tie against.
+    const reconcile = reconcileBalances(ROWS)
+    expect(assessCompleteness({ rows: ROWS, reconcile })).toBe('unverified')
+    // A single printed balance (only opening, or only closing) cannot form a tie either → still unverified.
+    expect(assessCompleteness({ rows: ROWS, openingBalance: 2000, reconcile })).toBe('unverified')
+    expect(assessCompleteness({ rows: ROWS, closingBalance: 4454.1, reconcile })).toBe('unverified')
+  })
+
+  it("'contradicted' when a printed opening+closing pair does NOT tie out (a suspect read)", () => {
+    const reconcile = reconcileBalances(ROWS)
+    expect(assessCompleteness({ rows: ROWS, openingBalance: 2000, closingBalance: 9999.99, reconcile })).toBe(
+      'contradicted'
+    )
+  })
+
+  it("'contradicted' on a per-row balance mismatch, regardless of (or absent) summary balances", () => {
+    const rows: TransactionInput[] = [
+      { date: '2026-01-02', description: 'Alpha', amount: -10, currency: 'EUR', balanceAfter: 100 },
+      { date: '2026-01-03', description: 'Beta', amount: -10, currency: 'EUR', balanceAfter: 200 } // can't follow 100−10
+    ]
+    const reconcile = reconcileBalances(rows)
+    // A mismatch is a read error → suspect even when NO opening/closing is printed (never 'unverified').
+    expect(assessCompleteness({ rows, reconcile })).toBe('contradicted')
+    expect(assessCompleteness({ rows, openingBalance: 110, closingBalance: 90, reconcile })).toBe('contradicted')
+  })
+
+  it('isStatementComplete is exactly the boolean projection of the complete status', () => {
+    const reconcile = reconcileBalances(ROWS)
+    expect(isStatementComplete({ rows: ROWS, openingBalance: 2000, closingBalance: 4454.1, reconcile })).toBe(true)
+    expect(isStatementComplete({ rows: ROWS, reconcile })).toBe(false) // unverified ⇒ not 'complete'
   })
 })
 

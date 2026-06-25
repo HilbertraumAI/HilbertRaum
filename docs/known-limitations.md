@@ -307,30 +307,40 @@ password recovery — are documented in
   matching an opening/closing **balance label** (incl. `Kontostand per <date>`) is treated as a summary
   and never counted as a transaction even when it carries a booking-column date + figure (it is read
   only by the completeness gate). **Column clustering is still heuristic** (statements vary; an unusual
-  column geometry can mis-read a row), so a **completeness gate** (D56) guards every total: a single-currency
-  total is presented **only when the printed opening + Σamounts == closing balance ties out** (a clean
-  per-row running-balance chain is necessary but not sufficient). When completeness cannot be **proven**
-  — no printed opening/closing balance, a non-tying balance, or any per-row mismatch — the skill **does
-  not present a total**; it downgrades to an honest "couldn't confirm the whole statement" message
-  (EN+DE). The consequence: a real statement that prints no opening/closing balance gets the honest
-  downgrade rather than a total, by design (a partial read must never become a confident wrong total).
+  column geometry can mis-read a row), so a **completeness gate** (D56, refined by **D56-R** 2026-06-25)
+  classifies every answer into one of three outcomes. A **VERIFIED statement total** is presented **only
+  when the printed opening + Σamounts == closing balance ties out** (a clean per-row running-balance chain
+  is necessary but not sufficient) — `complete`. When the document makes a balance CLAIM the rows refute
+  — a non-tying printed opening/closing, or any per-row balance mismatch — the skill **refuses a total**
+  and downgrades to an honest "couldn't confirm the whole statement" message (EN+DE) — `contradicted`.
+  But when the statement prints **no opening/closing balance at all and nothing contradicts the read**
+  (e.g. an online "Umsätze" transaction listing), the skill now presents the figures under an explicit
+  caveat — *"a sum of the N rows I read, not a verified statement total"* — rather than refusing a
+  perfectly honest number — `unverified`. The cardinal property is unchanged: a number a user could
+  mistake for THE statement total never comes from an incomplete read; a clearly-labelled sum of the rows
+  shown is not such a number. A bounded transaction listing trails every non-empty answer so the user can
+  see the rows that were read. (Before D56-R the no-balance case was refused outright — the over-cautious
+  behaviour the bug report flagged.)
   **Stage 2** (a grammar-constrained local-LLM fallback on the residual hard subset, D52/D55) is **not
   built**, but is **expected to be needed eventually** — it lands only if the Stage-1 deterministic
   recall on the local-only gold set (D57) proves insufficient. On the current (small) gold set — three
   text-layer statements (sanitized HVB excerpt, a full Raiffeisen "Mein ELBA", an HVB "Umsätze" page)
   plus one image-only scan — Stage 1 records **0 hallucinated/partial totals and 0 model calls**, the
-  gate presents the correct total on the one statement that prints opening/closing balances and honestly
-  downgrades the rest, and the scan degrades safely (0 rows); the live recall/gate numbers are kept in
-  `architecture.md` §21, not duplicated here. The corpus is still too narrow to close D52; because real
+  gate presents the correct VERIFIED total on the one statement that prints opening/closing balances; the
+  two balance-less statements now present `unverified` labelled sums (under D56-R; before the refinement
+  they were refused), and the scan degrades safely (0 rows); the live recall/gate numbers are kept in
+  `architecture.md` §21, not duplicated here (re-measure locally to refresh them under the refined gate). The corpus is still too narrow to close D52; because real
   layouts vary widely (no-printed-balance statements, ruled/borderless tables, scans), deterministic
   geometry will likely miss some, so Stage 2 should be treated as a **probable future need** — broaden
   the gold-set corpus across more banks/layouts to confirm and trigger it (it is gated, not abandoned).
   **Known boundaries (all SAFE — no wrong total is ever shown):** (1) a
   statement that prints a **per-row running-balance** line shaped `<date> <currency> <balance>` (date in
   the booking column) is over-extracted — the balance row is mis-read as a phantom transaction, so the
-  row count inflates — but the completeness gate still downgrades (the phantom balances break the
-  opening + Σ == closing tie, or there is no labelled opening/closing to tie at all), so no total is
-  presented; the cost is precision/UX only. The assumed "money-column model" fix does **not** work here:
+  row count inflates. When the statement ALSO prints opening/closing, the phantom balances break the
+  opening + Σ == closing tie → `contradicted` → no total (safe as before). **But on a balance-LESS
+  over-extracted statement, D56-R presents an `unverified` labelled sum that includes the phantom rows
+  (an inflated sum)** — honest per its caveat ("not a verified statement total") and visible in the
+  transaction listing, but no longer a refusal; eliminating the inflation is the deferred extraction fix. The assumed "money-column model" fix does **not** work here:
   a 2026-06-24 geometry probe showed the running balance and the transaction amount are right-aligned in
   one numeric column (they cannot be separated by x), and a text-only guard can't separate a phantom from
   a real transaction whose description wrapped to another line either — so the honest fix is multi-baseline
@@ -339,8 +349,10 @@ password recovery — are documented in
   recovers nothing and returns the honest empty/downgrade (never a wrong total); reading it is the OCR
   path's job, not Stage 1. (3) When a PDF producer renders one **amount as two split items** (`2.000` +
   `,00`), neither fragment parses as money, so the row carries no amount and is dropped — the transaction
-  silently vanishes (a recall loss), still gate-safe (empty/incomplete ⇒ downgrade, never a wrong total);
-  the scoped fix is an x-adjacency money re-merge (deferred). The same `architecture.md` §21 entry pins the
+  silently vanishes (a recall loss). When the statement prints opening/closing, the dropped row breaks the
+  tie → `contradicted` → no total; on a balance-LESS statement, D56-R presents an `unverified` sum
+  under-counted by the dropped row (honest per its caveat, no longer a refusal). The scoped fix is an
+  x-adjacency money re-merge (deferred). The same `architecture.md` §21 entry pins the
   two tuning-constant boundaries (a row whose baselines jitter past the 3-pt tolerance loses its amount; a
   Datum/Valuta gap under 12 pt merges, allowing a spurious row).
 - **Strictly one job at a time (D26).** While a summary runs, chat is refused with a

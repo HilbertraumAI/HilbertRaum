@@ -15,12 +15,16 @@ metrics the **D52 Stage-2 decision** depends on:
 - **over-extracted statements** — a precision signal: micro-recall and "full recall" count over-extraction
   as success, so this line is the one that surfaces phantom rows (precision, not a safety property),
 - **figure exact-match** (persisted opening/closing == printed),
-- **completeness-gate pass rate** (how often `opening + Σ == closing` proved out),
-- **hallucinated-figure count** — asserted **0**,
-- **partial-total-presented count** — asserted **0** (the D56 cardinal property).
+- **completeness-gate pass rate** — how often a **VERIFIED** total (`opening + Σ == closing`) was shown,
+- **unverified labelled sums** — statements with no printed balance and nothing contradicting, where
+  the skill presents a caveated *"sum of the rows read, not a verified statement total"* (D56-R refinement),
+- **hallucinated-figure count** — asserted **0** (over VERIFIED totals),
+- **partial-total-presented count** — asserted **0** (the D56 cardinal property, over VERIFIED totals).
 
 Recall + exact-match are *measured and logged* (the input to D52); the two D56 safety invariants and
-"0 model calls" are *hard-asserted* (they must hold on any data).
+"0 model calls" are *hard-asserted* (they must hold on any data). The cardinal invariants guard
+**verified** totals — an unverified labelled sum is explicitly not a statement total, so it may honestly
+come from an over/under-extracted set (the honesty is in the caveat).
 
 ### Corpus layout
 
