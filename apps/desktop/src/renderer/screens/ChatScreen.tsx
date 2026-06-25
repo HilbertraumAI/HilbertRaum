@@ -609,6 +609,16 @@ export function ChatScreen({
     if (activeId) void window.api.setConversationDefaultSkill?.(activeId, installId)
   }
 
+  // Carry the skill the user currently sees selected onto a conversation created on the fly (the
+  // attach flow), so adding a document never silently RESETS the pick. Mirrors the 'new'→id carry in
+  // ensureConversation (skills plan §10.1): re-key the session override AND persist the sticky default.
+  // A null pick needs no carry — a brand-new conversation already defaults to none.
+  function carrySkillToConversation(convId: string, skillId: string | null): void {
+    if (!skillId) return
+    void window.api.setConversationDefaultSkill?.(convId, skillId)
+    setSkillByConv((prev) => ({ ...prev, [convId]: skillId }))
+  }
+
   // Recompute the deterministic suggestion when the picker OPENS (skills plan §10.2/S8) — the offer
   // rides the picker the user already opened (no canvas chip). The draft question is scored
   // main-side and never logged; scope is resolved there from the conversation id.
@@ -968,6 +978,9 @@ export function ChatScreen({
     setError(null)
     const fileNames = paths.map(fileBaseName)
     const active = activeId ? conversations.find((c) => c.id === activeId) : undefined
+    // The skill the user currently sees selected — captured BEFORE we switch conversations so a docs
+    // conversation created here inherits it instead of resetting to none (attach-flow reset bug).
+    const carrySkill = currentSkillId
     try {
       let convId: string
       if (active && active.mode === 'documents') {
@@ -975,6 +988,7 @@ export function ChatScreen({
       } else if (active && active.mode === 'chat' && messages.length > 0) {
         const conv = await createDocsConversationForAttach()
         convId = conv.id
+        carrySkillToConversation(conv.id, carrySkill)
         setMode('documents')
         setActiveId(conv.id)
         setMessages([])
@@ -984,6 +998,7 @@ export function ChatScreen({
         // Empty (no conversation, or an empty plain chat): switch in place to documents.
         const conv = await createDocsConversationForAttach()
         convId = conv.id
+        carrySkillToConversation(conv.id, carrySkill)
         setMode('documents')
         setActiveId(conv.id)
         setMessages([])

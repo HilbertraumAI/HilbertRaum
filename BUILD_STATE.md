@@ -6,6 +6,19 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-25 — **Composer bugfix — a skill picked on the 'new' composer is no longer RESET when you upload a document
+(branch `pdf-geometry-extraction`, still unmerged/unpushed).** Reported: select a skill, then attach/drop a document → the
+skill silently reverts to "No skill" and must be re-picked. **Root cause (renderer, `ChatScreen.tsx`):** `attachFiles`
+creates a new documents conversation and switches `activeId` to it WITHOUT carrying the selected skill, unlike
+`ensureConversation` (which re-keys `skillByConv['new']`→the new id and persists the sticky default, skills plan §10.1). After
+the switch, `depthKey` flips `'new'`→`conv.id`, `skillFor(conv.id)` finds nothing in `skillByConv[conv.id]` and the brand-new
+conv's `activeSkillId` is null → the picker shows none. **Fix:** new `carrySkillToConversation(convId, skillId)` helper
+(mirrors the ensureConversation carry); `attachFiles` captures `currentSkillId` BEFORE switching and calls it on both
+new-conversation branches (empty-composer attach AND in-progress-plain-chat→new-docs-chat). A null pick needs no carry.
+**Test:** new `ChatAttach.test.tsx` regression — pick a skill on the 'new' composer, drop a file, assert
+`setConversationDefaultSkill('c2', 'app:bank-statement')` fires and the picker still shows the skill (fails without the fix).
+Full suite **2206 passed / 37 skipped**, typecheck clean._
+
 _2026-06-25 — **Bank-statement completeness gate REFINED — D56-R: the no-balance "Umsätze" case now answers instead of
 refusing (Phase 31; branch `pdf-geometry-extraction`, still unmerged/unpushed).** Fixes the reported bug: a user opened an HVB
 online "Umsätze" listing (45 EUR rows, NO printed opening/closing balance) and asked "Summiere die Ausgaben je Kategorie" — and
