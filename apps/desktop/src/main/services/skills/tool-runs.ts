@@ -154,6 +154,14 @@ export interface ToolRunDeps {
  * the skill-run shell (Phase 33). The model call happens INSIDE the doctask (D26-safe); this only polls
  * its status, forwards Cancel, and maps the terminal state to a content-free outcome. The categorized
  * row count rides in the doctask's progress total.
+ *
+ * Decision (Phase 31–33 follow-up): kept as a 60 ms poll rather than adding an awaitable
+ * completion-promise + progress-callback channel to `DocTaskManager`. The full value of such a channel
+ * (no copied poll loop) needs BOTH a terminal-state promise AND a per-tick progress callback — a
+ * completion-only promise wouldn't remove this loop because progress still has to be mirrored. Wiring
+ * both means touching the delicate lifecycle/abort paths (the three terminal transitions, the
+ * queued-cancel branch, the arbiter-park unwind) for the ONE current consumer. Not worth that risk yet;
+ * revisit when a SECOND doctask-backed skill-run button arrives and would copy this loop.
  */
 async function runCategorizeViaDocTask(
   docTasks: DocTaskManager,

@@ -313,14 +313,20 @@ export interface StatementToolResult {
   error?: string
 }
 
-/** The newest statement for a document (the deterministic run target), or null if none extracted. */
-function latestStatement(db: Db, documentId: string): { id: string } | null {
+/**
+ * The newest statement id for a document, or null if none has been extracted. The single source of
+ * truth for "the latest statement" across the three call sites — the run seam (here), the `categorize`
+ * doctask (`doctasks/manager.ts`) and the analysis read-back (`analysis/bank-statement.ts`). The
+ * `created_at DESC, id DESC` tie-break is LOAD-BEARING: it decides which statement gets categorized vs.
+ * read back, so all three MUST resolve the SAME row — hence one shared helper, not three copies.
+ */
+export function latestBankStatementId(db: Db, documentId: string): string | null {
   const row = db
     .prepare(
       `SELECT id FROM bank_statements WHERE document_id = ? ORDER BY created_at DESC, id DESC LIMIT 1`
     )
     .get(documentId) as { id: string } | undefined
-  return row ?? null
+  return row?.id ?? null
 }
 
 /** Load a statement's transactions in stable row order (null columns omitted, not passed as null). */
@@ -404,15 +410,15 @@ async function prepareStatementRun(
       return { failed: { ok: false, runId, errorCode: 'unavailable', error: msg } }
     }
 
-    const statement = latestStatement(db, args.documentId)
-    if (!statement) {
+    const statementId = latestBankStatementId(db, args.documentId)
+    if (!statementId) {
       // Honest, friendly: the downstream tools need an extraction first (no figure invented).
       const msg = 'Read the statement first, then run this tool.'
       finishRun(db, runId, 'failed', now(), null, msg)
       return { failed: { ok: false, runId, errorCode: 'needsExtraction', error: msg } }
     }
 
-    const transactions = loadTransactions(db, statement.id)
+    const transactions = loadTransactions(db, statementId)
     const signal = deps.signal ?? new AbortController().signal
     const ctx: SkillToolContext = {
       documentIds,
@@ -434,7 +440,7 @@ async function prepareStatementRun(
       return { failed: { ok: false, runId, cancelled, error: result.error } }
     }
     return {
-      prepared: { runId, statementId: statement.id, transactions, output: result.output, completedAt: now() }
+      prepared: { runId, statementId, transactions, output: result.output, completedAt: now() }
     }
   } catch {
     console.error('[skills] statement run failed unexpectedly')

@@ -5,6 +5,7 @@ import { buildScopeFilter } from '../../retrieval-scope'
 import { documentChunkCount } from '../../analysis/coverage'
 import { skillInstallId } from '../registry'
 import {
+  latestBankStatementId,
   runBalanceValidation,
   runBankExtraction,
   runCashflowSummary,
@@ -87,13 +88,30 @@ function singleInScopeDocument(db: Db, scope: RetrievalScope): { id: string; tit
   return docs.length === 1 ? docs[0] : null
 }
 
-/** Load a statement's rows as the pure tools' input (nulls omitted, not passed — reconcile relies on it). */
-function loadStatementRows(db: Db, statementId: string): TransactionInput[] {
+/** A statement row paired with its PERSISTED category name — the two are read in one query so their
+ *  alignment is STRUCTURAL (each row carries its own category), never an index match across two arrays. */
+interface RowWithCategory {
+  row: TransactionInput
+  /** The persisted category name (LLM doctask or rule pass), or null when the row is unassigned. */
+  category: string | null
+}
+
+/**
+ * Load a statement's rows AND their persisted categories in ONE LEFT-JOINed query (Phase 31–33
+ * follow-up). The pure tools' input (`TransactionInput`, nulls omitted — reconcile relies on it) and
+ * the per-row category travel together, so `categoryTotals` reads each row's own category instead of
+ * indexing two separately-ordered arrays in lockstep. A null category falls back to the on-the-fly
+ * `categorizeRow` at read time (no persistence required to answer).
+ */
+function loadStatementRowsWithCategories(db: Db, statementId: string): RowWithCategory[] {
   const rows = db
     .prepare(
-      `SELECT date, value_date AS valueDate, description, amount, currency,
-              balance_after AS balanceAfter, source_page AS sourcePage
-       FROM bank_transactions WHERE statement_id = ? ORDER BY row_index`
+      `SELECT t.date, t.value_date AS valueDate, t.description, t.amount, t.currency,
+              t.balance_after AS balanceAfter, t.source_page AS sourcePage,
+              c.name AS categoryName
+       FROM bank_transactions t
+       LEFT JOIN bank_categories c ON c.id = t.category_id
+       WHERE t.statement_id = ? ORDER BY t.row_index`
     )
     .all(statementId) as Array<{
     date: string
@@ -103,6 +121,7 @@ function loadStatementRows(db: Db, statementId: string): TransactionInput[] {
     currency: string
     balanceAfter: number | null
     sourcePage: number | null
+    categoryName: string | null
   }>
   return rows.map((r) => {
     const t: TransactionInput = {
@@ -114,34 +133,8 @@ function loadStatementRows(db: Db, statementId: string): TransactionInput[] {
     if (r.valueDate != null) t.valueDate = r.valueDate
     if (r.balanceAfter != null) t.balanceAfter = r.balanceAfter
     if (r.sourcePage != null) t.sourcePage = r.sourcePage
-    return t
+    return { row: t, category: r.categoryName ?? null }
   })
-}
-
-/**
- * The PERSISTED category name per row (Phase 33), LEFT JOINed so an UNassigned row reads null. Aligned
- * to `row_index` order (same as `loadStatementRows`), so `categoryTotals` can index the two in lockstep.
- * A non-null name is whatever the categorizer (LLM doctask) or the deterministic rule pass wrote; a
- * null falls back to the on-the-fly `categorizeRow` at read time (no persistence required to answer).
- */
-function loadPersistedCategories(db: Db, statementId: string): (string | null)[] {
-  const rows = db
-    .prepare(
-      `SELECT c.name AS name
-       FROM bank_transactions t
-       LEFT JOIN bank_categories c ON c.id = t.category_id
-       WHERE t.statement_id = ? ORDER BY t.row_index`
-    )
-    .all(statementId) as Array<{ name: string | null }>
-  return rows.map((r) => r.name ?? null)
-}
-
-/** The newest statement id for a document, or null when none has been extracted yet. */
-function latestStatementId(db: Db, documentId: string): string | null {
-  const row = db
-    .prepare('SELECT id FROM bank_statements WHERE document_id = ? ORDER BY created_at DESC, id DESC LIMIT 1')
-    .get(documentId) as { id: string } | undefined
-  return row?.id ?? null
 }
 
 // The categories the DETERMINISTIC rule pass can produce (`categorizeRow`). Used only as a BACK-COMPAT
@@ -263,16 +256,16 @@ interface CategoryTotal {
 }
 
 /**
- * Aggregate signed amounts per category, document order preserved. The category is the PERSISTED one
- * (`persisted[i]`, written by the LLM categorizer doctask or the deterministic rule pass) when present,
- * else computed on the fly via `categorizeRow` — so a breakdown is answerable even before any categorize
- * run. `persisted` is aligned to `rows` by row index (`loadPersistedCategories`).
+ * Aggregate signed amounts per category, document order preserved. The category is each row's PERSISTED
+ * one (written by the LLM categorizer doctask or the deterministic rule pass) when present, else computed
+ * on the fly via `categorizeRow` — so a breakdown is answerable even before any categorize run. Each
+ * `RowWithCategory` carries its own category (one JOINed read), so no cross-array index alignment.
  */
-function categoryTotals(rows: TransactionInput[], persisted: readonly (string | null)[] | null): CategoryTotal[] {
+function categoryTotals(paired: readonly RowWithCategory[]): CategoryTotal[] {
   const order: string[] = []
   const byCat = new Map<string, CategoryTotal>()
-  rows.forEach((row, i) => {
-    const category = persisted?.[i] ?? categorizeRow(row)
+  for (const { row, category: persisted } of paired) {
+    const category = persisted ?? categorizeRow(row)
     let entry = byCat.get(category)
     if (!entry) {
       entry = { category, amount: 0, count: 0 }
@@ -281,7 +274,7 @@ function categoryTotals(rows: TransactionInput[], persisted: readonly (string | 
     }
     entry.amount += row.amount
     entry.count += 1
-  })
+  }
   return order.map((c) => {
     const e = byCat.get(c)!
     return { category: c, amount: Math.round(e.amount * 100) / 100, count: e.count }
@@ -445,7 +438,7 @@ export const bankStatementAnalysisHandler: SkillAnalysisHandler = {
     // Auto-run the READ-ONLY tools through the run seam (D46). REUSE the latest extracted statement when
     // one exists (extraction is deterministic, so re-extracting would only create a duplicate AND discard
     // any persisted categories from a prior `categorize` doctask) — extract only when none exists yet.
-    let statementId = latestStatementId(db, target.id)
+    let statementId = latestBankStatementId(db, target.id)
     if (!statementId) {
       const extraction = await runBankExtraction(db, args, deps)
       if (!extraction.ok || !extraction.statementId) {
@@ -457,7 +450,9 @@ export const bankStatementAnalysisHandler: SkillAnalysisHandler = {
     await runBalanceValidation(db, args, deps)
 
     // Figures come from the PERSISTED rows via the PURE tool functions (the seams surface only counts).
-    const rows = loadStatementRows(db, statementId)
+    // Rows + persisted categories arrive together (one JOINed read) so the breakdown alignment is structural.
+    let paired = loadStatementRowsWithCategories(db, statementId)
+    const rows = paired.map((p) => p.row)
     const summary = summarizeCashflow(rows)
     const reconcile = reconcileBalances(rows)
 
@@ -471,13 +466,15 @@ export const bankStatementAnalysisHandler: SkillAnalysisHandler = {
     let categories: CategoryTotal[] | null = null
     let modelAssisted = false
     if (categoryShaped) {
-      let persisted = loadPersistedCategories(db, statementId)
-      if (!persisted.some((c) => c != null)) {
+      if (!paired.some((p) => p.category != null)) {
         await runCategorization(db, args, deps) // deterministic seed when nothing is categorized yet
-        persisted = loadPersistedCategories(db, statementId)
+        paired = loadStatementRowsWithCategories(db, statementId)
       }
-      categories = categoryTotals(rows, persisted)
-      modelAssisted = isModelAssisted(loadCategorizedByModel(db, statementId), persisted)
+      categories = categoryTotals(paired)
+      modelAssisted = isModelAssisted(
+        loadCategorizedByModel(db, statementId),
+        paired.map((p) => p.category)
+      )
     }
 
     // Completeness assessment (§3.5, D56): the only true proof a total is WHOLE is the statement's

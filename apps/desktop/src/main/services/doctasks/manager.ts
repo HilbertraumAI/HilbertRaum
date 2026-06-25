@@ -17,7 +17,7 @@ import type {
   TranslationTargetLang
 } from '../../../shared/types'
 import type { ChatMessage, ModelRuntime } from '../runtime'
-import { runBankExtraction, ensureBuiltinCategories } from '../skills/run'
+import { runBankExtraction, ensureBuiltinCategories, latestBankStatementId } from '../skills/run'
 import { categorizeTransactions } from '../skills/categorizer'
 import { skillInstallId } from '../skills/registry'
 import type { TransactionInput } from '../skills/tools/bank-statement'
@@ -1546,7 +1546,7 @@ export class DocTaskManager {
     const nowIso = new Date().toISOString()
 
     // (1) The latest statement, auto-extracting first when the user clicked categorize before extract.
-    let statementId = this.latestBankStatementId(db, documentId)
+    let statementId = latestBankStatementId(db, documentId)
     if (!statementId) {
       const audit: SkillToolAudit = (type, meta) => this.deps.audit?.(type, type, meta)
       const ingestion = this.deps.getIngestionDeps()
@@ -1624,14 +1624,6 @@ export class DocTaskManager {
       throw err
     }
     return documentId
-  }
-
-  /** The newest statement id for a document (the deterministic categorize target), or null if none. */
-  private latestBankStatementId(db: Db, documentId: string): string | null {
-    const row = db
-      .prepare('SELECT id FROM bank_statements WHERE document_id = ? ORDER BY created_at DESC, id DESC LIMIT 1')
-      .get(documentId) as { id: string } | undefined
-    return row?.id ?? null
   }
 
   /**

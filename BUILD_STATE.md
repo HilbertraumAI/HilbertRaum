@@ -6,6 +6,48 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-25 — **Code-review CLEANUP (Phase 31–33 follow-up #2; branch `pdf-geometry-extraction`, still unmerged/unpushed).**
+The three contained, behaviour-neutral cleanups from the review's open list, plus an investigated recommendation for the
+deeper A9 item (NOT yet implemented — awaiting decision). Suite unchanged **2228 passed / 37 skipped**, typecheck clean.
+- **One `latestBankStatementId` helper (de-dup ×3).** The `SELECT id … ORDER BY created_at DESC, id DESC LIMIT 1` query
+  was copied in three places; the `created_at DESC, id DESC` tie-break is LOAD-BEARING (it decides which statement gets
+  categorized vs. read back, so all three MUST resolve the SAME row). Extracted as one exported helper in `skills/run.ts`
+  and called from all three: the run seam (`run.ts` `prepareStatementRun`), the `categorize` doctask (`doctasks/manager.ts`
+  — its private copy deleted), and the analysis read-back (`analysis/bank-statement.ts` — its local copy deleted). Picked
+  `run.ts` over `tools/bank-statement.ts` because the latter is deliberately DB-handle-free ("pure main-side TS, no DB/FS").
+- **One JOINed row+category read (alignment now structural).** `analysis/bank-statement.ts` queried `bank_transactions`
+  TWICE with the same `ORDER BY row_index` (`loadStatementRows` + `loadPersistedCategories`) and relied on the two arrays
+  lining up BY CONVENTION. Collapsed into `loadStatementRowsWithCategories` (one LEFT JOIN `bank_categories`) returning
+  `RowWithCategory[]` — each row carries its own persisted category, so `categoryTotals` no longer index-matches two
+  arrays. `modelAssisted` reads `paired.map(p => p.category)`; the deterministic-seed re-load reloads the paired array.
+- **DocTask poll loop — DECISION: keep, documented (don't refactor).** `tool-runs.ts` `runCategorizeViaDocTask` keeps its
+  60 ms status poll rather than adding an awaitable completion-promise + progress-callback channel to `DocTaskManager`.
+  Rationale (in the code comment): the channel's full value (no copied loop) needs BOTH a terminal-state promise AND a
+  per-tick progress callback — a completion-only promise wouldn't remove the loop (progress still mirrored). Wiring both
+  touches the delicate lifecycle/abort paths (3 terminal transitions, the queued-cancel branch, the arbiter-park unwind)
+  for the ONE current consumer. Revisit when a SECOND doctask-backed skill-run button would copy the loop.
+- **A9 (stale statement reuse) — INVESTIGATED, recommendation below, NOT implemented (awaiting decision).** Today every
+  `runBankExtraction` INSERTs a fresh `bank_statements` row (never deletes), and the analysis handler + categorize doctask
+  REUSE the newest (`latestBankStatementId`) — so a document extracted under an OLD parser keeps serving stale (mis-signed
+  / lost-payee) rows after a parser fix, until a manual re-extract (which today also duplicates the statement and orphans
+  the persisted categories — the reason reuse is intentional). The no-opening/closing "Umsätze" case is the real risk: a
+  mis-signed total degrades to `unverified` and is PRESENTED as a labelled sum, i.e. silently wrong, never caught by the
+  D56 gate. **Recommendation: WORTH IT, scoped** — (1) add an additive nullable `bank_statements.extractor_version INTEGER`
+  + a single `BANK_EXTRACTOR_VERSION` constant in the extractor module, stamped on insert (precedent: the `content_hash`/
+  "type-set version" cache keys in `db.ts`/`tree-build.ts`); (2) in the reuse path, when the latest statement's version is
+  NULL/`< current`, treat it as stale and re-extract (deterministic, 0 model calls — fits the existing "extract when none
+  exists" branch), REPLACING the stale statement (delete prior statements+rows for the doc, which also stops duplicate
+  accumulation); (3) do NOT content-key re-match the old categories onto the new rows — the rows changed precisely because
+  the fix changed them, so the honest move is to recompute (the deterministic rule pass already runs for the breakdown;
+  model categorization waits for the next Kategorisieren / auto-offer). Cost ≈ 1 column + 1 constant + a staleness branch +
+  a delete-prior + tests; the fragile part (category preservation) is deliberately out. **Open question for the user:** is
+  silent post-parser-fix staleness worth the manual-version-bump discipline, or is "do nothing + document the limitation"
+  acceptable given parser changes are rare for end users? Awaiting the call before coding.
+- **User action items recorded (local-only, NOT attempted here):** (5) re-run the gold-set harness `HILBERTRAUM_PDF_GOLDSET=1`
+  on the real HVB file to confirm A3 sign handling + refresh the stale §21 numbers (measured under the old boolean gate);
+  (6) D57 — confirm the exact HVB sign encoding (separate sign cell vs glued trailing minus) on the real statement. Both
+  need real financial data → local only. **STILL AWAITING approval to push / open the PR.**_
+
 _2026-06-25 — **Code-review fixes (Phase 31–33 follow-up; branch `pdf-geometry-extraction`, still unmerged/unpushed).**
 A high-effort review of the 6 unpushed commits surfaced correctness bugs; the contained ones are now fixed (suite
 **2228 passed / 37 skipped (+4)**, typecheck clean):
