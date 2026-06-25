@@ -230,6 +230,18 @@ function fmt(n: number): string {
   return n.toFixed(2)
 }
 
+/**
+ * The localized DISPLAY label for a category (Phase 33). The PERSISTED identifier stays the canonical
+ * English name (the enum / model-assisted detection key on it); this only localizes the breakdown
+ * display. An unknown name (e.g. a future user-defined category) falls back to its raw identifier.
+ */
+function categoryLabel(tr: Tr, category: string): string {
+  const key = `skills.bankCategory.${category}` as MessageKey
+  const label = tr(key)
+  // A missing key returns the key itself (the i18n contract) — fall back to the raw identifier then.
+  return label === key ? category : label
+}
+
 interface CategoryTotal {
   category: string
   amount: number
@@ -347,7 +359,7 @@ export function buildBankAnswer(
       for (const c of categories) {
         lines.push(
           tr('skills.bankAnalysis.categoryItem', {
-            category: c.category,
+            category: categoryLabel(tr, c.category),
             amount: fmt(c.amount),
             currency: summary.currency,
             count: c.count

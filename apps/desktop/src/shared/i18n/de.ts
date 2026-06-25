@@ -518,6 +518,25 @@ export const de: Record<keyof typeof en, string> = {
   'skills.bankAnalysis.categoryItem': '- {category}: {amount} {currency} ({count})',
   'skills.bankAnalysis.categoryAssisted':
     '_Die Kategorien sind modellgestützt — eine Zuordnung kann falsch sein, die Summen oben bleiben davon unberührt._',
+  // Lokalisierte ANZEIGE-Labels für die feste Kategorienmenge (Phase 33). Der GESPEICHERTE Bezeichner
+  // bleibt der kanonische englische Name (Enum / Modell-gestützt-Erkennung hängen daran); nur die
+  // Anzeige der Aufschlüsselung wird übersetzt. Ein unbekannter Name fällt auf den Bezeichner zurück.
+  'skills.bankCategory.Groceries': 'Lebensmittel',
+  'skills.bankCategory.Dining': 'Restaurants',
+  'skills.bankCategory.Transport': 'Transport',
+  'skills.bankCategory.Utilities': 'Nebenkosten',
+  'skills.bankCategory.Rent': 'Miete',
+  'skills.bankCategory.Insurance': 'Versicherung',
+  'skills.bankCategory.Subscriptions': 'Abonnements',
+  'skills.bankCategory.Health': 'Gesundheit',
+  'skills.bankCategory.Shopping': 'Einkäufe',
+  'skills.bankCategory.Income': 'Einkommen',
+  'skills.bankCategory.Transfer': 'Überweisung',
+  'skills.bankCategory.Fees': 'Gebühren',
+  'skills.bankCategory.Cash': 'Bargeld',
+  'skills.bankCategory.Tax': 'Steuern',
+  'skills.bankCategory.Spending': 'Ausgaben',
+  'skills.bankCategory.Uncategorized': 'Nicht kategorisiert',
   'skills.bankAnalysis.caveat':
     'Diese Zahlen sind die im Auszug gedruckten Beträge, gelesen über das ganze Dokument — ' +
     'nichts davon wird aus Fließtext zusammengerechnet oder erfunden.',

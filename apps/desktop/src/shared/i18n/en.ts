@@ -493,6 +493,25 @@ export const en = {
   'skills.bankAnalysis.categoryItem': '- {category}: {amount} {currency} ({count})',
   'skills.bankAnalysis.categoryAssisted':
     '_Categories are model-assisted — a label may be off, but the totals above are unchanged._',
+  // Localized DISPLAY labels for the fixed category set (Phase 33). The PERSISTED identifier stays the
+  // canonical English name (the enum / model-assisted detection key on it); only the breakdown display
+  // is localized. An unknown name (e.g. a future user category) falls back to its raw identifier.
+  'skills.bankCategory.Groceries': 'Groceries',
+  'skills.bankCategory.Dining': 'Dining',
+  'skills.bankCategory.Transport': 'Transport',
+  'skills.bankCategory.Utilities': 'Utilities',
+  'skills.bankCategory.Rent': 'Rent',
+  'skills.bankCategory.Insurance': 'Insurance',
+  'skills.bankCategory.Subscriptions': 'Subscriptions',
+  'skills.bankCategory.Health': 'Health',
+  'skills.bankCategory.Shopping': 'Shopping',
+  'skills.bankCategory.Income': 'Income',
+  'skills.bankCategory.Transfer': 'Transfer',
+  'skills.bankCategory.Fees': 'Fees',
+  'skills.bankCategory.Cash': 'Cash',
+  'skills.bankCategory.Tax': 'Tax',
+  'skills.bankCategory.Spending': 'Spending',
+  'skills.bankCategory.Uncategorized': 'Uncategorized',
   'skills.bankAnalysis.caveat':
     'These figures are the statement’s own printed amounts, read across the whole document — ' +
     'nothing here is added up from prose or invented.',

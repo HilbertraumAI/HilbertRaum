@@ -2793,6 +2793,10 @@ figure verification is needed. The constraints that DO hold:
 - **Model-assisted label.** A breakdown is labelled model-assisted whenever a persisted category lies
   OUTSIDE the deterministic rule set (the honest, schema-free signal — a deterministic fallback writes
   only rule-set names, so it is never mislabelled). `categorizer.ts` + `analysis/bank-statement.ts`.
+- **Localized display, canonical-English identity.** The PERSISTED category (`bank_categories.name`) and
+  the enum stay canonical English (so the schema, persistence, and the model-assisted signal are
+  locale-stable); the breakdown DISPLAY label is localized (EN + DE, `skills.bankCategory.*` →
+  `categoryLabel`). An unknown name (a future user category) falls back to its raw identifier.
 
 **Decisions as built:**
 - **D26 — the categorizer is a `DocTaskManager` kind (`'categorize'`), NOT a model call on the skill-run

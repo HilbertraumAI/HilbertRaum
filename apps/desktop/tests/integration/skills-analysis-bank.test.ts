@@ -245,6 +245,25 @@ describe('bank-statement analysis handler — run()', () => {
     expect(count.n).toBe(1)
   })
 
+  it('localizes the category DISPLAY labels (DE) while persisting canonical English identifiers', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, COMPLETE)
+    const deTr = (key: MessageKey, params?: MessageParams): string => t('de', key, params)
+    const deCtx = { ...ctxFor(db, { documentIds: [id] }, 'break down spending by category'), tr: deTr }
+    const res = await bankStatementAnalysisHandler.run!(deCtx)
+
+    // Salary → Income (rule), shown with the German label; the canonical identifier persists in English.
+    expect(res.answer).toContain('Einkommen')
+    expect(res.answer).not.toContain('- Income:')
+    const persisted = db
+      .prepare(
+        `SELECT c.name AS name FROM bank_transactions t JOIN bank_categories c ON c.id = t.category_id
+         WHERE c.name = 'Income' LIMIT 1`
+      )
+      .get() as { name: string } | undefined
+    expect(persisted?.name).toBe('Income')
+  })
+
   it('presents a clearly-LABELLED sum when no opening/closing balance is printed (D56 unverified case)', async () => {
     const db = freshDb()
     const id = seedDoc(db, CLEAN) // reconciles per-row, no opening/closing balance — nothing CONTRADICTS the read

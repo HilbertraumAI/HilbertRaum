@@ -38,14 +38,19 @@ grammar-constrained + drop-to-`Uncategorized` + a "model-assisted" label + deter
   completes, `ChatScreen` ROUTES the standard breakdown question into the transcript, so the model-assisted breakdown appears
   as a normal chat answer (still 0 model calls in the handler).
 - **i18n:** new DE/EN keys (`docs.task.categorizeBusy`/`Title`, `skills.bankAnalysis.categoryAssisted`,
-  `chat.skill.categorize.breakdownQuestion`) — parity test green.
+  `chat.skill.categorize.breakdownQuestion`, the 16 `skills.bankCategory.*` display labels) — parity test green.
+- **Localized category DISPLAY labels (follow-up):** the persisted identifier + the enum stay canonical
+  English (so persistence + the model-assisted signal are locale-stable); only the breakdown display is
+  localized via `skills.bankCategory.*` → `categoryLabel` (EN + DE). An unknown name (future user category)
+  falls back to its raw identifier. Test: `skills-analysis-bank.test.ts` (DE shows "Einkommen", "Income"
+  still persisted).
 - **Tests:** `skills-categorizer.test.ts` (9), `doctasks-categorize.test.ts` (3 — model path, deterministic fallback,
   auto-extract-then-categorize), `skills-analysis-bank.test.ts` (+1 — persisted model categories surface + the label, no
   duplicate statement). Full suite **2224 passed / 37 skipped (+13)**, typecheck clean, production build green.
 - **Honesty posture intact:** the D56 gate's three outcomes are untouched (the categorizer never feeds a figure); a
   model-assigned category is always labelled model-assisted; drop-on-failure to `Uncategorized`; never an off-set label.
-- **Known v1 limitations (documented):** category labels are English-keyed (DE glosses guide the model only); auto-offer fires
-  only on the extract BUTTON, not the chat-question path. **STILL AWAITING approval to push / open the PR.** Per-phase ritual
+- **Known v1 limitations (documented):** auto-offer fires only on the extract BUTTON, not the chat-question path
+  (the chat path shows a deterministic breakdown). **STILL AWAITING approval to push / open the PR.** Per-phase ritual
   satisfied (tests + docs `architecture.md` §22 + `known-limitations.md` + this entry). **ALSO still pending (local-only):**
   run the gold-set harness on the real HVB file (`HILBERTRAUM_PDF_GOLDSET=1`) to confirm A3 sign handling + re-measure §21._
 

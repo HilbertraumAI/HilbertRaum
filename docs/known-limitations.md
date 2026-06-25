@@ -362,8 +362,9 @@ password recovery — are documented in
   read the signed amounts, not the labels). The breakdown is shown with an explicit "model-assisted" note.
   With **no model loaded** it degrades to the deterministic rule pass (a smaller, coarser category set).
   Categorization runs in the **doctask lane** (D26 — one job at a time), so it cannot run while chat
-  streams. The grouping is **English-keyed** (canonical category names; DE glosses guide the model only) —
-  a German user sees English category labels in v1.
+  streams. Categories are grouped on a **canonical English identifier** (stable across UI locale — the
+  enum and the model-assisted detection key on it), but the breakdown **display labels are localized**
+  (EN + DE); a future user-defined category with no catalog entry falls back to its raw name.
 - **Strictly one job at a time (D26).** While a summary runs, chat is refused with a
   friendly message + a cancel option, and vice versa — the one local model serves one
   request. The R-T1 probe confirmed the pinned b9585 WOULD serve concurrent requests on
