@@ -673,8 +673,10 @@ Security-relevant items: **(S1)** the import-preview clamp/`manifest.json`-confl
 echo the raw frontmatter value — closing the one §22-M1 gap where attacker text could ride the
 `SkillPreview` IPC payload into the UI (the structural *errors* were already clean); **(S2)** the
 `filenamePatterns` residual above is now actively bounded — the parser caps each entry's length (≤200)
-and count (≤64) and `selector.globToRegExp` refuses a glob with >10 `*` wildcards, so the
-bounded-RegExp claim no longer rests on input being benign. The B1/B2 cancel-semantics and I1/I2
+and count (≤64) and the glob is matched by a **linear, non-backtracking two-pointer matcher**
+(`selector.globMatches`), so backtracking is structurally impossible regardless of input. (S12
+originally compiled the glob to a bounded RegExp with a >10-`*` wildcard cap; **vuln-scan 2026-06-21
+replaced that compile with the linear matcher** — see the parsing-DoS section below.) The B1/B2 cancel-semantics and I1/I2
 localization fixes added no content to any log/audit and no new capability.
 
 > **§-anchor note.** This section cites the original skills-plan's section numbers (`§12`, `§14`,

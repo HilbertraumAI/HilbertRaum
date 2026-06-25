@@ -6,6 +6,30 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-26 — **Skills & Tools audit — Phase 1 (Documentation truth-up; D-1 / D-2 / §16 / A-1) — DOCS ONLY, no source change
+(branch `skills-tools-audit-2026-06-26`).** First remediation phase off the multi-persona Skills & Tools audit
+(`docs/skills-tools-audit-2026-06-26.md`, §13 plan). Made the design docs match the shipped code; `npm test` unchanged at
+**2231 passed / 38 skipped** (nothing under `src/` touched). **As built:**
+- **D-1 — bundled-skill count is EIGHT, not nine.** Disk truth (`ls app-skills/*/SKILL.md`) = `bank-statement`, `invoice`,
+  `document-redaction` (3 Tier-2) + `meeting-protocol`, `contract-brief`, `deadline-obligation-finder`, `what-changed`,
+  `share-safe-review` (5 Tier-1) = **8**. The "nine" was a propagated miscount (4 new + 4 existing = 8); **no ninth skill was
+  ever intended or committed** — count left at the real 8 (per the audit's "don't invent a ninth" guard). Fixed `architecture.md`
+  DS17 ("Nine"→"Eight"; the "3 Tier-2 + the rest Tier-1" listing already summed to 8), `drive-layout.md` ("nine today"→"eight
+  today"), and the two Professional-Documents-wave lines here ("four to nine"→"four to eight"). `README.md` already listed the 8
+  correctly (no count word) — left as is.
+- **D-2 — glob matcher is the linear `globMatches`, not the deleted `globToRegExp`.** The `>10 '*' wildcards refused` RegExp cap
+  was removed at vuln-scan 2026-06-21 and replaced by a linear, non-backtracking two-pointer matcher (`selector.globMatches`, no
+  wildcard cap). Rewrote the stale mentions in `architecture.md` §12 + §13 S2, `security-model.md` (the S2 follow-up para), and the
+  S12-audit summary here; each now describes the linear matcher and records the removal as history. `known-limitations.md` (~L106)
+  was already correct and was used as the reference wording. No surviving `globToRegExp` mention describes a live mechanism.
+- **§16 localized count.** `architecture.md` §16 said "all four app skills" carry `localized.de`; all **eight** now do (verified
+  `grep -l 'localized:' app-skills/*/SKILL.md` → 8) — updated to note the four Professional Documents skills extended it.
+- **A-1 note.** Added one sentence to `architecture.md` §19: on the **exhaustive** analysis path the SKILL.md honesty posture is
+  **code-enforced** in `buildBankAnswer`/`buildInvoiceAnswer`, not body-driven (the body shapes only the off-topic relevance
+  fallback) — body⇔TS must be kept in step; a parity test is the Phase-10 follow-up.
+- **Audit doc.** §3 D-1/D-2 rows + the Phase-1 index row flipped to ✅ fixed (Phase 1). **Next:** Phase 2 (categorization
+  correctness C-1/C-2/L-1/L-2) — the first code-touching phase._
+
 _2026-06-25 — **Phase 33 verification — live categorizer smoke (real model) + gold-set re-measure on the real HVB file
 (branch `pdf-geometry-extraction`).** Two manual confirmations the CI suite structurally can't cover:
 - **Categorizer live smoke** — new gated harness `tests/manual/categorizer-smoke.test.ts` (`HILBERTRAUM_CATEGORIZER_SMOKE=<root>`,
@@ -629,7 +653,7 @@ auto`) like the composer + transcript — it was flush-left against the full `ch
 Build clean._
 
 _2026-06-21 — **Professional Documents skills wave — Meeting Minutes upgrade + four new Tier-1 instruction skills (SKILLS-ONLY,
-no runtime/schema/tool/network change).** The bundled `app-skills/` set grew from four to **nine**, all honest, calm, document-grounded
+no runtime/schema/tool/network change).** The bundled `app-skills/` set grew from four to **eight** (four new + the four existing), all honest, calm, document-grounded
 workflows with bilingual (EN+DE) triggers and German `localized.de` display metadata. **As built (suite green — 2083 passed / 30 skipped,
 +19 tests; typecheck clean):**
 - **`meeting-protocol` upgraded in place → titled *Meeting Minutes* (id UNCHANGED for backward compat; version 1.0.0 → 1.1.0).**
@@ -658,7 +682,7 @@ workflows with bilingual (EN+DE) triggers and German `localized.de` display meta
   skill on the REAL selector, redaction request still → `document-redaction`, neutral/ambiguous inputs fire nothing. Existing
   `skills-meeting-protocol` / `skills-suggest` / `skill-triggers` (eval gate) stay green.
 - **Docs:** `user-guide.md` §9 gained a "Professional Documents" subsection; `architecture.md` DS17 + `drive-layout.md` skills note now
-  say nine bundled skills; `README.md` tree comment updated. **Caveat/follow-up:** these are SUGGEST-only (no `autoFire` opt-in — only
+  say eight bundled skills; `README.md` tree comment updated. **Caveat/follow-up:** these are SUGGEST-only (no `autoFire` opt-in — only
   `document-redaction` declares it); the auto-fire eval corpus + `APP_SKILL_IDS` still cover only the original four, so the new skills'
   suggestion precision is asserted by the new targeted tests, not the synthetic corpus sweep._
 
@@ -2284,8 +2308,9 @@ failure/import string; the seam/controller stay i18n-free; EN/DE parity is compi
 (`de: Record<keyof typeof en, string>` — the audit's "parity is convention-only" finding was wrong).
 **Security:** **S1** — clamp/`manifest.json`-conflict **notes** no longer echo the raw frontmatter value
 (closes the one §22-M1 gap where attacker text rode the `SkillPreview` IPC payload into the UI); **S2** —
-`filenamePatterns` ReDoS bounded (parser caps length ≤200 / count ≤64; `selector.globToRegExp` refuses
->10 wildcards). **Docs:** **D1** removed the non-existent `skill_selected` audit event from §11; a new
+`filenamePatterns` ReDoS bounded (parser caps length ≤200 / count ≤64; the glob is matched by the
+linear, non-backtracking `selector.globMatches` — vuln-scan 2026-06-21 replaced the original
+`globToRegExp` + >10-wildcard cap). **Docs:** **D1** removed the non-existent `skill_selected` audit event from §11; a new
 **§-anchor legend** in the design record makes the ~130 historical `skills plan §N` citations + the kept
 docs' `§9.5/§13/§14/§22-*` references resolvable (the fold had only retargeted the filename-style cites);
 the stale S1 plan snapshot below is marked **superseded** (revoked DS11 + never-built DS13). New/updated

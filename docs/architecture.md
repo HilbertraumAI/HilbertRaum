@@ -1796,7 +1796,7 @@ provisioning…", "Skill tool ceiling (Tier-2)"), the **drive layout** in
   per-conversation default (`conversations.active_skill_id`); the per-message glyph marks the answer it
   shaped. Auto-fire is deferred to **S13**, gated on an evaluation harness.
 - **DS17** — app skills are committed to the repo (`app-skills/`, text only) and copied by
-  `prepare-drive` — never network-fetched. **Nine** bundled app skills now ship. Three are **Tier-2**
+  `prepare-drive` — never network-fetched. **Eight** bundled app skills now ship. Three are **Tier-2**
   tool references — **`bank-statement`** (the first, `kind: tool`, app-orchestrated tools through the
   §7 gate), **`invoice`** (the second Tier-2, proving the gate generalizes to a second content class),
   and **`document-redaction`** (read-transform-export). The rest are **Tier-1 instruction** skills
@@ -2020,8 +2020,9 @@ export boundary), and the scattered S10/S11 sentinel tests were consolidated int
 tool runs, the CSV export, the IPC `SkillRunState`) **plus a console spy**. Accepted LOW residuals
 (documented in [`known-limitations.md`](known-limitations.md)): prompt text-injection is contained by the
 **structural ceiling**, not by escaping the fence delimiter; a user skill's `triggers.filenamePatterns`
-compile to a bounded RegExp run only on a user action (and, post-S12, the entry length/count are capped
-at parse time + the selector refuses a wildcard-heavy glob — see §13 S2). **Deferred:** S13 auto-fire
+are matched against a title only on a user action by a **linear, non-backtracking two-pointer matcher**
+(`selector.globMatches`), and the entry length/count are capped at parse time (vuln-scan 2026-06-21
+replaced the original glob→RegExp compile entirely — see §13 S2). **Deferred:** S13 auto-fire
 (gated on an evaluation harness); native model tool-calling (stays a future option behind the same gate);
 the app-skill integrity residual (by location, not signature — same as the engine binary, §22-M2).
 **History:** the wave shipped S2–S12 (2026-06-17); the original plans: `git show <S12^>:docs/skills-plan.md`
@@ -2049,8 +2050,12 @@ behind the unchanged §14 ceiling (no new capability, still offline, audit still
   where attacker text could ride the `SkillPreview` IPC payload into the UI (notes share the path with
   the already-clean structural errors).
 - **S2 — ReDoS guard on `filenamePatterns`.** Two layers: the parser caps each trigger entry's length
-  (≤200) and count (≤64), and `selector.globToRegExp` refuses a glob with >10 `*` wildcards (treated as
-  a non-match) so a `*a*a…`-style pattern can never hang the synchronous main-side scoring.
+  (≤200) and count (≤64), and the glob is matched against a title by a **linear, non-backtracking
+  two-pointer matcher** (`selector.globMatches`) so a `*?*?…`-style pattern can never hang the
+  synchronous main-side scoring. (S12 originally compiled the glob to a bounded RegExp with a >10-`*`
+  wildcard cap; **vuln-scan 2026-06-21 replaced that with the linear matcher** because the cap counted
+  only `*` — a `*?*?…` pattern with ≤10 stars still compiled to a degree-10 backtracking RegExp — see
+  [`known-limitations.md`](known-limitations.md).)
 - **B3 — `summarize_cashflow` self-consistency.** `net` is derived from the rounded `totalIn`/`totalOut`
   so the three reported figures always satisfy `net === totalIn − totalOut`.
 - **B4 — no stranded `started` run.** `runBankExtraction` and `prepareStatementRun` now wrap everything
@@ -2165,9 +2170,12 @@ and still answers in German, D-L6):
   cards + detail modal, and the per-message **glyph** in `Transcript` (an installId→localized-title
   resolver threaded from `ChatScreen`, built from the full skills list so a now-disabled stamped skill
   still localizes, with a stamped-title fallback). Every pick falls back to the canonical text.
-- **Bundled skills.** All four app skills (`bank-statement`, `invoice`, `document-redaction`,
-  `meeting-protocol`) gained a `localized.de` title + description. (The triggers were already bilingual,
-  which is why German questions already fired the suggestion — only the visible text was English.)
+- **Bundled skills.** The four app skills shipping at the time (`bank-statement`, `invoice`,
+  `document-redaction`, `meeting-protocol`) gained a `localized.de` title + description; the four
+  **Professional Documents** skills added 2026-06-21 (`contract-brief`, `deadline-obligation-finder`,
+  `what-changed`, `share-safe-review`) carry it too, so **all eight bundled skills** are now
+  German-localized. (The triggers were already bilingual, which is why German questions already fired
+  the suggestion — only the visible text was English.)
 
 Display-only by design: nothing here threads locale into `resolveTurnSkill`/the prompt, so the gate +
 ceiling are unchanged and the injected body is byte-identical regardless of UI language.
@@ -2397,7 +2405,11 @@ avoided per §1's DS17 caution). `run()` auto-runs the read-only tools through t
 rows** via the **pure** tool functions (the seams surface only counts). The answer is deterministic,
 localized Markdown honouring the SKILL.md honesty posture (quote printed figures; surface flagged rows
 **before** the headline; never invent), with real `[Sn]` source-chunk citations (M2-safe, never the
-synthesised total).
+synthesised total). On this **exhaustive** path the honesty posture is **code-enforced, not
+body-driven**: `buildBankAnswer`/`buildInvoiceAnswer` (`analysis/bank-statement.ts`,
+`analysis/invoice.ts`) reimplement those rules directly in TS, so editing the SKILL.md body changes
+only the off-topic relevance fallback (where the body rides the fence) — the body and the TS must
+therefore be kept in step (a SKILL.md-⇔-TS parity test is a tracked follow-up).
 
 - **`bank-statement`** (`analysis/bank-statement.ts`): `extract_transactions` →
   `summarize_cashflow` + `validate_statement_balances` (+ `categorize_transactions` only when the

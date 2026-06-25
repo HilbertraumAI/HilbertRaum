@@ -176,8 +176,8 @@ persona section below.
 
 | # | Severity | Area | Finding | Where |
 |---|----------|------|---------|-------|
-| D-1 | MEDIUM | Docs | Docs claim **"nine" bundled app skills**; only **eight** exist on disk | architecture.md DS17, BUILD_STATE, drive-layout.md, README |
-| D-2 | MEDIUM | Docs/Security | Docs still describe the **deleted `globToRegExp` ">10 wildcards" ReDoS cap**; code now uses a linear `globMatches` | architecture.md §12/§13, security-model.md, BUILD_STATE |
+| D-1 | MEDIUM | Docs | ✅ **fixed (Phase 1)** — Docs claimed **"nine" bundled app skills**; only **eight** exist on disk | architecture.md DS17, BUILD_STATE, drive-layout.md, README |
+| D-2 | MEDIUM | Docs/Security | ✅ **fixed (Phase 1)** — Docs still described the **deleted `globToRegExp` ">10 wildcards" ReDoS cap**; code now uses a linear `globMatches` | architecture.md §12/§13, security-model.md, BUILD_STATE |
 | C-1 | MEDIUM | Correctness | `categorizeRow` uses raw `desc.includes()` (so `fee ⊂ coffee` mis-files as *Fees*); the LLM path fixed this with `wordIncludes` but the deterministic path did not | `tools/bank-statement.ts:493` vs `categorizer.ts:136` |
 | C-2 | MEDIUM | Consistency | **Two categorize engines** (deterministic rules vs LLM doctask) give different results for the *same* document depending on entry point (chat breakdown vs button vs auto-offer) | `analysis/bank-statement.ts:475`, `tool-runs.ts:259`, `categorizer.ts` |
 | P-1 | MEDIUM | Performance | Analysis handlers **run each read-only tool through the seam and then recompute the same pure function**; rows are re-loaded from DB 3–4× per question | `analysis/bank-statement.ts:454-499`, `analysis/invoice.ts:282-290`, `run.ts` |
@@ -539,7 +539,7 @@ tests, and the docs to touch.
 
 | Phase | Title | Findings | Risk | Code? |
 |-------|-------|----------|------|-------|
-| 1 | Documentation truth-up | D-1, D-2, §16 count, A-1 note | P1 | docs only |
+| 1 | Documentation truth-up ✅ **fixed (Phase 1)** | D-1, D-2, §16 count, A-1 note | P1 | docs only |
 | 2 | Categorization correctness & consistency | C-1, C-2, L-1, L-2 | P1–P2 | yes |
 | 3 | Bank completeness-gate numerics | C-3, C-4 | P2 | yes (version bump) |
 | 4 | Analysis-handler performance | P-1, P-2 | P2 | yes |

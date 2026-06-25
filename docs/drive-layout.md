@@ -78,7 +78,7 @@ PRIVATE_AI_DRIVE/
 ```
 
 > **Skills on a commercial drive (S3 lays the dirs; S9 provisions + asserts).** `app-skills/` carries
-> the bundled product skills (nine today: `bank-statement`, `invoice`, `document-redaction` — all
+> the bundled product skills (eight today: `bank-statement`, `invoice`, `document-redaction` — all
 > Tier-2 `kind:'tool'` — plus the Tier-1 instruction skills `meeting-protocol` (Meeting Minutes),
 > `contract-brief`, `deadline-obligation-finder`, `what-changed`, and `share-safe-review`), **copied wholesale from
 > the committed repo `app-skills/` tree by `prepare-drive`**, the same copy step as `model-manifests/`
