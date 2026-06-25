@@ -5,6 +5,7 @@ import { buildScopeFilter } from '../../retrieval-scope'
 import { documentChunkCount } from '../../analysis/coverage'
 import { skillInstallId } from '../registry'
 import {
+  isBankStatementStale,
   latestBankStatementId,
   runBalanceValidation,
   runBankExtraction,
@@ -436,11 +437,15 @@ export const bankStatementAnalysisHandler: SkillAnalysisHandler = {
     }
 
     // Auto-run the READ-ONLY tools through the run seam (D46). REUSE the latest extracted statement when
-    // one exists (extraction is deterministic, so re-extracting would only create a duplicate AND discard
-    // any persisted categories from a prior `categorize` doctask) — extract only when none exists yet.
+    // one exists and is FRESH (extraction is deterministic, so reusing avoids a duplicate AND preserves
+    // any persisted categories from a prior `categorize` doctask). Re-extract only when NONE exists yet,
+    // OR when the latest was produced by an outdated extractor (A9 — `isBankStatementStale`): a since-fixed
+    // parser bug must not keep serving mis-signed / lost-payee rows. A re-extract REPLACES the stale
+    // statement (`replaceExisting`) — the old per-row categories go with it (the rows changed; the
+    // breakdown's deterministic pass / the next categorize run recomputes them honestly).
     let statementId = latestBankStatementId(db, target.id)
-    if (!statementId) {
-      const extraction = await runBankExtraction(db, args, deps)
+    if (!statementId || isBankStatementStale(db, statementId)) {
+      const extraction = await runBankExtraction(db, args, { ...deps, replaceExisting: true })
       if (!extraction.ok || !extraction.statementId) {
         return { answer: ctx.tr('skills.bankAnalysis.couldNotRead'), citations: [], coverage: computeCoverage(db, target.id) }
       }

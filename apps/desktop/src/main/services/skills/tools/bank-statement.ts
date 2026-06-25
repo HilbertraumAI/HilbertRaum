@@ -44,6 +44,23 @@ const TRANSACTION_ROW_SCHEMA: JsonSchema = {
 /** A hard cap so a pathological document can never produce an unbounded array (the gate also validates). */
 export const MAX_TRANSACTIONS = 10000
 
+/**
+ * The deterministic bank-statement extractor version (A9, Phase 31–33 follow-up). Stamped onto every
+ * `bank_statements` row (`run.ts` `runBankExtraction`) and compared on reuse: a statement whose stored
+ * `extractor_version` is NULL (legacy) or LESS than this is STALE — the analysis read-back + the
+ * categorize doctask re-extract it (replacing the rows) rather than keep serving figures a since-fixed
+ * parser bug mis-signed or whose payee it lost.
+ *
+ * BUMP THIS by one whenever a change alters the extractor's OUTPUT for the same input — in EITHER the
+ * line parser here (`extractTransactions`/`parseLine`/`applySignMarker`) OR the geometry reconstruction
+ * (`pdf-layout.ts` `reconstructPage`). A pure refactor that cannot change any output does NOT need a bump.
+ *
+ * History (each entry = the output-affecting work that warranted the value):
+ *   1 — baseline: Phase 32 multi-baseline payee recovery + currency-token class + A3 sign-column fold,
+ *       and the Phase 31–33 review's sign-handling correctness fixes (the current parser as built).
+ */
+export const BANK_EXTRACTOR_VERSION = 1
+
 const EXTRACT_OUTPUT_SCHEMA: JsonSchema = {
   type: 'object',
   additionalProperties: false,

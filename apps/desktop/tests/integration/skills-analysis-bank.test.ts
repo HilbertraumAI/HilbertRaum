@@ -245,6 +245,51 @@ describe('bank-statement analysis handler — run()', () => {
     expect(count.n).toBe(1)
   })
 
+  it('re-extracts and REPLACES a statement produced by an outdated extractor (A9 staleness)', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, COMPLETE)
+    // First run extracts → a statement stamped with the current extractor version.
+    await bankStatementAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'total?'))
+    const before = db
+      .prepare('SELECT id, extractor_version AS v FROM bank_statements WHERE document_id = ?')
+      .get(id) as { id: string; v: number }
+    expect(before.v).toBeGreaterThanOrEqual(1)
+
+    // Simulate it having been produced by an OLDER parser: blank the version, and tamper a row figure so
+    // we can prove the rows are actually re-read (a reuse would keep the bogus 99999).
+    db.prepare('UPDATE bank_statements SET extractor_version = NULL WHERE id = ?').run(before.id)
+    db.prepare('UPDATE bank_transactions SET amount = 99999 WHERE statement_id = ?').run(before.id)
+
+    // The second run sees the stale statement → re-extracts, REPLACING it (no duplicate accumulation).
+    const res = await bankStatementAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'total?'))
+
+    const stmts = db
+      .prepare('SELECT id, extractor_version AS v FROM bank_statements WHERE document_id = ?')
+      .all(id) as Array<{ id: string; v: number }>
+    expect(stmts.length).toBe(1) // the stale one was deleted, not left alongside a fresh copy
+    expect(stmts[0].id).not.toBe(before.id) // a fresh statement replaced it
+    expect(stmts[0].v).toBeGreaterThanOrEqual(1) // re-stamped at the current version (no longer stale)
+    // The tampered figure is gone; the answer reflects the correctly re-extracted rows.
+    expect(res.answer).not.toContain('99999')
+    expect(res.answer).toContain('2454.10')
+  })
+
+  it('REUSES a fresh (current-version) statement — no re-extraction, no duplicate (A9)', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, COMPLETE)
+    await bankStatementAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'total?'))
+    const first = db
+      .prepare('SELECT id FROM bank_statements WHERE document_id = ?')
+      .get(id) as { id: string }
+    // The second run reuses the same statement (it is at the current version → not stale).
+    await bankStatementAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'total?'))
+    const stmts = db
+      .prepare('SELECT id FROM bank_statements WHERE document_id = ?')
+      .all(id) as Array<{ id: string }>
+    expect(stmts.length).toBe(1)
+    expect(stmts[0].id).toBe(first.id) // same statement, not re-extracted
+  })
+
   it('localizes the category DISPLAY labels (DE) while persisting canonical English identifiers', async () => {
     const db = freshDb()
     const id = seedDoc(db, COMPLETE)

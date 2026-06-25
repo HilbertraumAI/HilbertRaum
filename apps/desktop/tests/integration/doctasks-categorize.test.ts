@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { openDatabase, type Db } from '../../src/main/services/db'
 import { createQueuedDocument, documentsDir, processDocument } from '../../src/main/services/ingestion'
+import { BANK_EXTRACTOR_VERSION } from '../../src/main/services/skills/tools/bank-statement'
 import { DocTaskManager, type DocTaskDeps } from '../../src/main/services/doctasks'
 import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../../src/main/services/runtime'
 
@@ -33,14 +34,15 @@ async function importText(content: string, name = 'statement.txt'): Promise<stri
   return info.id
 }
 
-/** Seed a bank_statements row + transactions directly (skips the auto-extract path). */
+/** Seed a bank_statements row + transactions directly (skips the auto-extract path). Stamped with the
+ *  CURRENT extractor version so the doctask treats it as fresh (not stale → no A9 re-extraction). */
 function seedStatement(documentId: string, rows: Array<{ desc: string; amount: number }>): string {
   const stmtId = randomUUID()
   const now = new Date().toISOString()
   db.prepare(
-    `INSERT INTO bank_statements (id, document_id, run_id, period_start, period_end, currency, opening_balance, closing_balance, created_at)
-     VALUES (?, ?, NULL, NULL, NULL, 'EUR', NULL, NULL, ?)`
-  ).run(stmtId, documentId, now)
+    `INSERT INTO bank_statements (id, document_id, run_id, period_start, period_end, currency, opening_balance, closing_balance, extractor_version, created_at)
+     VALUES (?, ?, NULL, NULL, NULL, 'EUR', NULL, NULL, ?, ?)`
+  ).run(stmtId, documentId, BANK_EXTRACTOR_VERSION, now)
   const ins = db.prepare(
     `INSERT INTO bank_transactions (id, statement_id, run_id, row_index, date, value_date, description, amount, currency, balance_after, source_page, created_at)
      VALUES (?, ?, NULL, ?, '2026-03-01', NULL, ?, ?, 'EUR', NULL, NULL, ?)`
@@ -167,6 +169,40 @@ describe('categorize doctask — no runtime (deterministic fallback)', () => {
     expect(persistedCategories(stmtId)).toEqual(['Income', 'Spending'])
     // No runtime → deterministic pass → NOT model-assisted (the flag is 0, never null on a completed run).
     expect(categorizedByModel(stmtId)).toBe(0)
+  })
+})
+
+describe('categorize doctask — A9 staleness re-extraction', () => {
+  it('re-extracts (replacing) a statement from an outdated extractor, then categorizes the fresh rows', async () => {
+    // A bank-statement-shaped doc with real rows, plus a pre-existing STALE statement (NULL version)
+    // whose single row is bogus — the doctask must re-extract (replace) and categorize the corrected rows.
+    const docId = await importText('Umsätze EUR\n2026-03-01 Gehalt ACME 2.500,00\n2026-03-02 Gebühr -3,50')
+    const staleId = randomUUID()
+    const now = new Date().toISOString()
+    db.prepare(
+      `INSERT INTO bank_statements (id, document_id, run_id, period_start, period_end, currency, opening_balance, closing_balance, extractor_version, created_at)
+       VALUES (?, ?, NULL, NULL, NULL, 'EUR', NULL, NULL, NULL, ?)`
+    ).run(staleId, docId, now)
+    db.prepare(
+      `INSERT INTO bank_transactions (id, statement_id, run_id, row_index, date, value_date, description, amount, currency, balance_after, source_page, created_at)
+       VALUES (?, ?, NULL, 0, '2026-03-01', NULL, 'BOGUS STALE ROW', 1, 'EUR', NULL, NULL, ?)`
+    ).run(randomUUID(), staleId, now)
+
+    const mgr = makeManager(null) // deterministic — the point is the re-extraction
+    const { jobId } = mgr.startDocTask({ kind: 'categorize', documentIds: [docId] })
+    const status = await waitTerminal(mgr, jobId)
+    expect(status.state).toBe('done')
+
+    // The stale statement was REPLACED: exactly one remains, a fresh id at the current version.
+    const stmts = db
+      .prepare('SELECT id, extractor_version AS v FROM bank_statements WHERE document_id = ?')
+      .all(docId) as Array<{ id: string; v: number }>
+    expect(stmts.length).toBe(1)
+    expect(stmts[0].id).not.toBe(staleId)
+    expect(stmts[0].v).toBe(BANK_EXTRACTOR_VERSION)
+    // The bogus row is gone; the two re-extracted rows are categorized (Gehalt → Income, Gebühr → Fees).
+    const cats = persistedCategories(stmts[0].id)
+    expect(cats).toEqual(['Income', 'Fees'])
   })
 })
 

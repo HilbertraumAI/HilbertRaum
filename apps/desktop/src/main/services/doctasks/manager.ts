@@ -17,7 +17,12 @@ import type {
   TranslationTargetLang
 } from '../../../shared/types'
 import type { ChatMessage, ModelRuntime } from '../runtime'
-import { runBankExtraction, ensureBuiltinCategories, latestBankStatementId } from '../skills/run'
+import {
+  runBankExtraction,
+  ensureBuiltinCategories,
+  latestBankStatementId,
+  isBankStatementStale
+} from '../skills/run'
 import { categorizeTransactions } from '../skills/categorizer'
 import { skillInstallId } from '../skills/registry'
 import type { TransactionInput } from '../skills/tools/bank-statement'
@@ -1545,9 +1550,12 @@ export class DocTaskManager {
     const db = this.deps.getDb()
     const nowIso = new Date().toISOString()
 
-    // (1) The latest statement, auto-extracting first when the user clicked categorize before extract.
+    // (1) The latest statement. Auto-extract first when the user clicked categorize before extract, OR
+    // when the latest was produced by an outdated extractor (A9 — `isBankStatementStale`): categorizing
+    // rows a since-fixed parser bug mis-signed / lost a payee on is wasted work, so re-extract (replacing
+    // the stale statement) and categorize the corrected rows.
     let statementId = latestBankStatementId(db, documentId)
-    if (!statementId) {
+    if (!statementId || isBankStatementStale(db, statementId)) {
       const audit: SkillToolAudit = (type, meta) => this.deps.audit?.(type, type, meta)
       const ingestion = this.deps.getIngestionDeps()
       const storeDir = this.deps.getStoreDir()
@@ -1567,7 +1575,7 @@ export class DocTaskManager {
       const ext = await runBankExtraction(
         db,
         { skillInstallId: skillInstallId('app', 'bank-statement'), conversationId: null, documentId },
-        { audit, signal, readDocumentSegments, layout: true }
+        { audit, signal, readDocumentSegments, layout: true, replaceExisting: true }
       )
       if (signal.aborted) throw new DOMException('Document task cancelled', 'AbortError')
       if (!ext.ok || !ext.statementId) throw new Error(tMain('main.task.documentNotReady'))

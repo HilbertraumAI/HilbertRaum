@@ -6,6 +6,33 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-25 — **A9 stale-statement re-extraction IMPLEMENTED (Phase 31–33 follow-up #3; branch `pdf-geometry-extraction`,
+still unmerged/unpushed).** The scoped fix recommended below, approved + built. A bank statement extracted under an OLD
+parser no longer keeps serving stale (mis-signed / lost-payee) rows after a parser fix — the reuse paths now re-extract a
+stale statement, replacing it. Suite **2231 passed / 37 skipped (+3)**, typecheck clean. **As built:**
+- **Version stamp.** `BANK_EXTRACTOR_VERSION` (currently `1`) in `skills/tools/bank-statement.ts` + an additive nullable
+  `bank_statements.extractor_version INTEGER` (`db.ts` `ensureColumn`). `runBankExtraction` stamps it on every insert.
+  **Bump it whenever the line parser OR `pdf-layout.ts` reconstruction changes output for the same input** (history list
+  is in the constant's doc comment; a pure refactor needs no bump).
+- **Staleness gate.** `isBankStatementStale(db, statementId)` (exported from `run.ts`) = stored version is NULL (legacy /
+  older parser) OR `<` current. Both reuse paths now re-extract when missing OR stale: the analysis read-back
+  (`analysis/bank-statement.ts`) and the `categorize` doctask (`doctasks/manager.ts`).
+- **Replace, not duplicate.** A re-extract passes `replaceExisting: true` → `runBankExtraction` DELETEs the document's prior
+  statements (+ transactions + corrections, FK order) in the SAME persist transaction before inserting the fresh one — so
+  re-extraction is atomic (a failure rolls back to the old) and never accumulates duplicate statements.
+- **Categories recomputed, not carried.** The stale rows' persisted categories go with the replaced statement (the rows
+  changed precisely because the parser changed them — content-key re-matching would mismatch exactly those rows). The
+  breakdown's deterministic pass shows a breakdown immediately; model categorization re-runs on the next Kategorisieren /
+  auto-offer. This is the honest behaviour, and keeps the analysis handler 0-model-calls.
+- **Why it matters.** The sharpest silent-stale risk is the no-opening/closing "Umsätze" case: a mis-signed total degrades
+  to `unverified` and is PRESENTED as a labelled sum, never caught by the D56 gate. A fresh (current-version) statement is
+  still reused (no duplicate, categories preserved) — verified by a new test.
+- **Tests (+3):** `skills-analysis-bank.test.ts` — stale statement re-extracted+REPLACED (one statement remains, fresh id,
+  tampered figure gone), and a fresh statement REUSED (same id, no duplicate). `doctasks-categorize.test.ts` — a stale
+  seeded statement is re-extracted+replaced then the corrected rows categorized; the `seedStatement` helper now stamps the
+  current version (so a deliberately-fresh seed isn't treated as stale). Docs: `architecture.md` §22 (read-back bullet
+  rewritten + new A9 bullet + Tests line). **STILL AWAITING approval to push / open the PR.**_
+
 _2026-06-25 — **Code-review CLEANUP (Phase 31–33 follow-up #2; branch `pdf-geometry-extraction`, still unmerged/unpushed).**
 The three contained, behaviour-neutral cleanups from the review's open list, plus an investigated recommendation for the
 deeper A9 item (NOT yet implemented — awaiting decision). Suite unchanged **2228 passed / 37 skipped**, typecheck clean.

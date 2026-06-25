@@ -3,6 +3,7 @@ import type { Db } from '../db'
 import type { DocumentChunkRead, SkillToolAudit, SkillToolContext } from '../../../shared/types'
 import { getRegisteredTool, runSkillTool } from './tool-registry'
 import {
+  BANK_EXTRACTOR_VERSION,
   BUILTIN_CATEGORIES,
   BUILTIN_CATEGORY_RULES,
   type CashflowSummary,
@@ -60,6 +61,16 @@ export interface BankExtractionDeps {
    * seams leave it unset and get byte-unchanged reading-order text.
    */
   layout?: boolean
+  /**
+   * Re-extraction (A9): when set, DELETE every prior `bank_statements` row (and its transactions /
+   * corrections) for the document inside the persist transaction BEFORE inserting the fresh one. The
+   * reuse paths pass it when the latest statement is STALE (`isBankStatementStale`) so a since-fixed
+   * parser bug's rows are replaced — and so re-extraction never accumulates duplicate statements. The
+   * persisted categories on the old rows are intentionally NOT carried over (the rows changed precisely
+   * because the parser changed them — the honest move is to recompute, which the breakdown's
+   * deterministic pass / the next categorize run does). Unset (the default) = the additive behaviour.
+   */
+  replaceExisting?: boolean
 }
 
 export interface BankExtractionResult {
@@ -205,10 +216,14 @@ export async function runBankExtraction(
     const completedAt = now()
     try {
       db.exec('BEGIN')
+      // Re-extraction (A9): replace the document's prior (stale) statements in the SAME transaction, so
+      // a re-extract never accumulates duplicates and the swap is atomic (a failure rolls back to the old).
+      if (deps.replaceExisting) deleteBankStatementsForDocument(db, args.documentId)
       db.prepare(
         `INSERT INTO bank_statements
-           (id, document_id, run_id, period_start, period_end, currency, opening_balance, closing_balance, created_at)
-         VALUES (?, ?, ?, NULL, NULL, ?, ?, ?, ?)`
+           (id, document_id, run_id, period_start, period_end, currency, opening_balance, closing_balance,
+            extractor_version, created_at)
+         VALUES (?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?)`
       ).run(
         statementId,
         args.documentId,
@@ -216,6 +231,7 @@ export async function runBankExtraction(
         output.currency ?? null,
         output.openingBalance ?? null,
         output.closingBalance ?? null,
+        BANK_EXTRACTOR_VERSION,
         completedAt
       )
       const insertTx = db.prepare(
@@ -327,6 +343,41 @@ export function latestBankStatementId(db: Db, documentId: string): string | null
     )
     .get(documentId) as { id: string } | undefined
   return row?.id ?? null
+}
+
+/**
+ * Whether a statement was produced by an OUTDATED extractor (A9). True when its `extractor_version` is
+ * NULL (extracted before versioning / by an older parser) or LESS than the current
+ * `BANK_EXTRACTOR_VERSION` — i.e. a since-fixed parser bug may have mis-signed an amount or lost a payee
+ * in these rows. The reuse paths (analysis read-back + categorize doctask) re-extract a stale statement
+ * (with `replaceExisting`) instead of serving its rows. A statement at the current version is fresh.
+ */
+export function isBankStatementStale(db: Db, statementId: string): boolean {
+  const row = db
+    .prepare('SELECT extractor_version AS v FROM bank_statements WHERE id = ?')
+    .get(statementId) as { v: number | null } | undefined
+  if (!row) return false // unknown id — nothing to re-extract (callers handle the missing case)
+  return row.v == null || row.v < BANK_EXTRACTOR_VERSION
+}
+
+/**
+ * Delete every `bank_statements` row for a document plus its dependent rows (transactions, and any
+ * corrections on them) in FK order — the "replace" half of a re-extraction (A9). Runs inside the
+ * caller's transaction. `bank_corrections` carries no writes yet (schema-only), but is cleared
+ * defensively so a future correction can never be orphaned onto a deleted transaction.
+ */
+function deleteBankStatementsForDocument(db: Db, documentId: string): void {
+  db.prepare(
+    `DELETE FROM bank_corrections WHERE transaction_id IN (
+       SELECT t.id FROM bank_transactions t
+       JOIN bank_statements s ON s.id = t.statement_id
+       WHERE s.document_id = ?)`
+  ).run(documentId)
+  db.prepare(
+    `DELETE FROM bank_transactions WHERE statement_id IN (
+       SELECT id FROM bank_statements WHERE document_id = ?)`
+  ).run(documentId)
+  db.prepare('DELETE FROM bank_statements WHERE document_id = ?').run(documentId)
 }
 
 /** Load a statement's transactions in stable row order (null columns omitted, not passed as null). */

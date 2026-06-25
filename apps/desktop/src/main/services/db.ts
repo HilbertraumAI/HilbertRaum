@@ -685,6 +685,13 @@ export function openDatabase(path: string): Db {
   // outside the rule set" heuristic, which false-negatives when the model only emits in-rule-set labels
   // (Income/Transfer/Fees/Cash). CONTENT-CLASS adjacent (a derived flag): never logged/audited/exported.
   ensureColumn(db, 'bank_statements', 'categorized_by_model', 'categorized_by_model INTEGER')
+  // The deterministic extractor version that produced this statement (A9, Phase 31–33 follow-up).
+  // Additive + nullable: NULL = extracted before versioning (or by an older parser) → STALE, so the
+  // analysis read-back + categorize doctask RE-EXTRACT (replacing the stale rows) instead of serving
+  // figures a since-fixed parser bug mis-signed / lost a payee on. Stamped with `BANK_EXTRACTOR_VERSION`
+  // on every extraction; bumped whenever the line parser OR the geometry reconstruction changes output.
+  // CONTENT-CLASS adjacent (a provenance int): never logged/audited/exported.
+  ensureColumn(db, 'bank_statements', 'extractor_version', 'extractor_version INTEGER')
   // Additive performance indexes (perf audit 2026-06-18, Wave P1 — DB-4/DB-6/DB-7). CREATE INDEX
   // IF NOT EXISTS is the same additive-migration idiom as the inline SCHEMA indexes; these live
   // here (after ensureColumn) because idx_bank_transactions_category indexes a migrated column.

@@ -2825,17 +2825,33 @@ figure verification is needed. The constraints that DO hold:
 - **Auto-offer after extraction (Q2).** A successful `extract_transactions` BUTTON run best-effort
   enqueues a `'categorize'` doctask in the background (D26-safe, model-optional) — categories are ready
   by the time the user asks. The chat analysis path is unaffected (it never goes through that runner).
-- **Read-back stays 0-model-calls (Q3 routed feedback).** `analysis/bank-statement.ts` now REUSES the
-  latest statement (re-extraction is deterministic, so it would only duplicate AND discard the doctask's
-  persisted categories) and `categoryTotals` reads the PERSISTED category (LEFT JOIN `bank_categories`),
-  else `categorizeRow`. The model call happens ONLY in the doctask. After a categorize run completes the
-  renderer ROUTES the standard breakdown question into the transcript, so the model-assisted breakdown
-  appears as a normal chat answer (`ChatScreen` → the analysis handler, still 0 model calls).
+- **Read-back stays 0-model-calls (Q3 routed feedback).** `analysis/bank-statement.ts` REUSES the latest
+  statement when it is FRESH (re-extraction is deterministic, so reuse avoids a duplicate AND preserves the
+  doctask's persisted categories); a single LEFT-JOINed read (`loadStatementRowsWithCategories`) returns
+  each row paired with its PERSISTED category (else `categorizeRow`), so the breakdown alignment is
+  structural. The model call happens ONLY in the doctask. After a categorize run completes the renderer
+  ROUTES the standard breakdown question into the transcript, so the model-assisted breakdown appears as a
+  normal chat answer (`ChatScreen` → the analysis handler, still 0 model calls).
+- **Stale-statement re-extraction (A9; Phase 31–33 follow-up).** Reuse is gated on FRESHNESS:
+  `bank_statements.extractor_version` is stamped with `BANK_EXTRACTOR_VERSION` (in `tools/bank-statement.ts`)
+  on every extraction; a statement whose stored version is NULL (legacy) or `<` current is STALE
+  (`isBankStatementStale`). Both reuse paths — the analysis read-back AND the `categorize` doctask —
+  re-extract a stale statement with `replaceExisting`, which DELETES the document's prior statements (+ their
+  transactions/corrections, FK order) in the SAME persist transaction before inserting the fresh one. So a
+  since-fixed parser bug never keeps serving mis-signed / lost-payee rows (the silent-stale risk is sharpest
+  for no-balance "Umsätze" statements, which present an `unverified` sum the D56 gate can't catch), and
+  re-extraction never accumulates duplicates. The old per-row categories go with the replaced statement
+  (the rows changed because the parser changed them — recompute is the honest move, done by the breakdown's
+  deterministic pass / the next categorize run); model categorization re-runs on the next Kategorisieren /
+  auto-offer. The single shared `latestBankStatementId` helper (`run.ts`) keeps the load-bearing
+  `created_at DESC, id DESC` tie-break identical across all three call sites. **Bump `BANK_EXTRACTOR_VERSION`
+  whenever the line parser OR `pdf-layout.ts` reconstruction changes output for the same input.**
 
 **Tests:** `skills-categorizer.test.ts` (taxonomy/enum, prefilter, model path, off-list/out-of-range
 drop, unparseable-batch drop, batching, no-runtime fallback); `doctasks-categorize.test.ts` (model path
-persists, deterministic fallback persists, auto-extract-then-categorize); `skills-analysis-bank.test.ts`
-(persisted model categories surface + the model-assisted label; no duplicate statement on re-ask).
+persists, deterministic fallback persists, auto-extract-then-categorize, A9 stale-statement re-extract +
+replace); `skills-analysis-bank.test.ts` (persisted model categories surface + the model-assisted label;
+no duplicate statement on re-ask; A9 stale statement re-extracted+replaced, fresh statement reused).
 
 
 ## Image understanding — design record (Phases V1–V5, §1–§10)
