@@ -6,6 +6,41 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-25 — **Bank-statement HVB "Umsätze" extraction FIXED — multi-baseline payee recovery + currency-token class +
+sign-column fold + pdf.js log-noise silence (Phase 32; branch `pdf-geometry-extraction`, still unmerged/unpushed).** A real HVB
+online "Umsätze" export (45 EUR rows, no printed opening/closing) surfaced three deterministic Stage-1 parsing failures the gold
+set's German statements never exercised, plus a UX/log issue. **Diagnoses (all reproduced with a synthetic multi-baseline fixture,
+D57 — never the real statement; confirmed line-for-line against the user's pasted symptoms):** (1) PAYEES LOST — HVB prints
+payee/purpose on CONTINUATION baselines below the booking row; they orphaned onto dateless rows that `parseLine` drops, so the
+description collapsed to the booking-line fragment. (2) the per-row currency code `EUR` was classed as text and polluted the
+description (`… EUR`). (3) a debit's sign sits in a SEPARATE cell, so a Lastschrift read POSITIVE (`3,99` not `-3,99`). **Fixes
+(deterministic, offline, 0 model calls — the D52-gated Stage-1-vs-Stage-2 call resolved as "deterministic-deeper now; Stage 2 stays
+deferred", user-confirmed):**
+- **A1 multi-baseline row association** (`pdf-layout.ts` `reconstructPage`, now stateful): a booking row opens a transaction; a
+  following dateless, money-LESS text row is a continuation whose payee text is appended to the description (bounded by
+  `MAX_CONTINUATION_ROWS`=4); flush on the next booking row / non-continuation row / page end.
+- **A2 currency-token class**: a standalone ISO code/symbol is its own token class, kept out of the description and re-emitted ONCE
+  after the amount (the line parser still detects currency). **This also resolves the boundary-1 over-extraction**: a phantom
+  `<date> EUR <balance>` running-balance row now has an EMPTY description → dropped, while a genuine wrapped-payee row is rescued by
+  A1 — exactly the objection §21 raised against a bare currency-only-description guard, now answered (A1 makes A2 safe).
+- **A3 sign-column fold**: a standalone `+`/`-` or Soll/Haben `S`/`H` marker in the money-column zone (`SIGN_ZONE_SLACK`) folds into
+  the amount's sign; a dash FAR from the amount is dropped but never read as a sign (conservative — can't flip a total). **Caveat
+  (D57):** the exact HVB sign encoding (separate cell vs a glued trailing minus pdf.js splits) still needs confirmation on the real
+  statement via the local gold-set harness; until then an unusual sign layout degrades to the honest gate, never a wrong total.
+- **E pdf.js log noise**: `getDocument({ verbosity: 0 })` silences the `Warning: TT: undefined function: 21` font-program flood
+  (pdf.js worker noise; real errors still surface; offline-safe).
+**Tests:** `pdf-layout.test.ts` — repurposed the phantom-balance case (now DROPPED, not reconstructed) + new `HVB multi-baseline
+recovery` block (currency strip, sign-column fold, conservative far-dash no-fold, association + phantom-drop). `pdf-bank-layout.test.ts`
+— case (i) repurposed (phantom dropped, genuine rows tie out → verified total presented) + new case (j) (payees recovered from
+continuation baselines, `EUR` stripped, Lastschrift negative → honest `unverified` sum), end-to-end through real pdf.js. Full suite
+**2211 passed / 37 skipped (+5)**, typecheck clean, production build green. Docs: `architecture.md` §21 (multi-baseline-recovery
+design bullet + boundary-1 rewritten as substantially RESOLVED + Tests paragraph) + `known-limitations.md` boundary (1).
+- **Open follow-ups (this work's REMAINING scope, NOT done here):** (B/C) the **LLM categorizer** (user-chosen for richer German
+  categories — a category is not a figure, so it is defensible under the honesty posture; needs the local-LLM/constrained-decoding
+  infra, its own phase + design pass); (D) the **tool-button** feedback + the `needsExtraction`-when-clicked-before-extract ordering
+  failure (`SkillRunBar`/`run.ts` `prepareStatementRun`); the A3 sign-encoding **local-harness verification** (D57). Merge prep
+  unchanged — STILL AWAITING approval to push / open the PR._
+
 _2026-06-25 — **Composer bugfix — a skill picked on the 'new' composer is no longer RESET when you upload a document
 (branch `pdf-geometry-extraction`, still unmerged/unpushed).** Reported: select a skill, then attach/drop a document → the
 skill silently reverts to "No skill" and must be re-picked. **Root cause (renderer, `ChatScreen.tsx`):** `attachFiles`

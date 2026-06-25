@@ -45,10 +45,41 @@ const MONEY_TOKEN_RE = /^[-+(]?\d[\d.,]*[.,]\d{2}\)?-?$/
 /** A standalone 4-digit calendar year (1900–2099) — the page-header year fallback. */
 const YEAR_TOKEN_RE = /^(19|20)\d{2}$/
 
-type TokenClass = 'date' | 'money' | 'text'
+/**
+ * A standalone per-row CURRENCY token: an ISO-4217 code (the de-AT/EU set the shared `money.ts`
+ * allowlist accepts) or a known symbol. HVB's online "Umsätze" export prints the currency code as its
+ * own cell on every booking row (`<date> <type> EUR <amount>`); classifying it as TEXT lets it pollute
+ * the reconstructed description (the reported `… EUR` symptom). A dedicated class keeps it OUT of the
+ * description — `reconstructLine` re-emits a single currency code at the END of the line (after the
+ * amount) so the line parser's currency detection still sees it without reading it as the payee. The
+ * set is duplicated (not imported) so this ingestion-layer module keeps its zero-dependency stance —
+ * importing the skills-layer `money.ts` would be a wrong-direction layer dependency. */
+const CURRENCY_TOKEN_RE = /^(?:EUR|USD|GBP|CHF|JPY|CAD|AUD|NZD|SEK|NOK|DKK|PLN|CZK|HUF|[€$£¥])$/
+
+/** Symbol → ISO code so a re-emitted currency is always a 3-letter code the line parser allowlists. */
+const CURRENCY_SYMBOL: Readonly<Record<string, string>> = { '€': 'EUR', $: 'USD', '£': 'GBP', '¥': 'JPY' }
+
+/**
+ * A standalone debit/credit SIGN marker printed in its OWN cell: a bare `+`/`-`, or the German Soll/Haben
+ * single-letter code `S` (Soll = debit = negative) / `H` (Haben = credit = positive). Some statements
+ * (HVB "Umsätze") carry the amount's sign in a separate sign column rather than gluing it to the figure,
+ * and pdf.js then surfaces it as its own token; left as text it is lost and a debit reads as positive
+ * (the reported `3,99` Lastschrift shown as income). `reconstructLine` folds such a marker into the
+ * amount's sign ONLY when it sits in the money column zone (so a stray dash inside a description is never
+ * mistaken for a sign). NOTE: the EXACT HVB encoding (sign column vs glued trailing minus) must be
+ * confirmed on the real statement via the local gold-set harness (D57) — this handles the sign-column
+ * case safely without guessing at a mid-line dash. */
+const SIGN_TOKEN_RE = /^(?:[-+]|[SH])$/
+
+/** How close (points) a standalone sign marker must sit to the amount column to count as the amount's
+ *  sign — wide enough for a trailing sign cell, narrow enough to never grab a dash mid-description. */
+const SIGN_ZONE_SLACK = 40
+
+type TokenClass = 'date' | 'money' | 'currency' | 'sign' | 'text'
 
 /** Classify one whitespace-delimited token. Date is tried first (with a plausibility check) so a
- *  value-date column never masquerades as the amount; only then money, else free text. */
+ *  value-date column never masquerades as the amount; then money; then a standalone currency code /
+ *  sign marker (kept out of the description); else free text. */
 function classifyToken(token: string): TokenClass {
   const dm = DATE_TOKEN_RE.exec(token)
   if (dm) {
@@ -57,7 +88,17 @@ function classifyToken(token: string): TokenClass {
     if (month >= 1 && month <= 12 && day >= 1 && day <= 31) return 'date'
   }
   if (MONEY_TOKEN_RE.test(token)) return 'money'
+  if (CURRENCY_TOKEN_RE.test(token)) return 'currency'
+  if (SIGN_TOKEN_RE.test(token)) return 'sign'
   return 'text'
+}
+
+/** Re-apply a sign marker to a money token: strip any existing sign decoration to the bare magnitude,
+ *  then prefix `-` for a debit marker (`-`/`S`) or leave positive for a credit marker (`+`/`H`). */
+function applySignMarker(moneyToken: string, marker: string): string {
+  const debit = marker === '-' || marker === 'S'
+  const bare = moneyToken.replace(/^[-+(]/, '').replace(/[)\-]\s*$/, '').trim()
+  return debit ? `-${bare}` : bare
 }
 
 function pad2(n: number): string {
@@ -248,12 +289,54 @@ export function reconstructLine(
   year: number | null,
   datum?: DatumColumn | null
 ): string | null {
+  const parsed = parseTransactionRow(row, year, datum)
+  if (!parsed) return null
+  return formatTransaction(parsed.date, parsed.description, parsed.money, parsed.currency)
+}
+
+/** The structured parts of one booking row — `reconstructLine` formats it; `reconstructPage` carries it
+ *  while it appends continuation-baseline description text (§3.1, multi-baseline association). */
+interface TransactionParse {
+  date: string
+  /** Free-text description tokens (currency/sign/date/money already separated out). */
+  description: string[]
+  /** Money tokens in column order, with the amount's sign already folded in. */
+  money: string[]
+  /** The per-row currency code (re-emitted at the line's end), or null when none was printed on the row. */
+  currency: string | null
+}
+
+/** Join a transaction's parts into the `<DD.MM.YYYY> <description> <amount> [<balance>] [<CUR>]` line the
+ *  line parser accepts. The currency trails the figures so it is never read as the payee or the amount;
+ *  a row whose description is empty (a bare `<date> <CUR> <balance>` running-balance row, or a no-payee
+ *  row) returns null — dropped, never invented. */
+function formatTransaction(date: string, description: string[], money: string[], currency: string | null): string | null {
+  const desc = description.join(' ').trim()
+  if (!desc) return null
+  const cur = currency ? ` ${currency}` : ''
+  return `${date} ${desc} ${money.join(' ')}${cur}`
+}
+
+/**
+ * Parse one visual row into its booking-transaction parts, or null when it is not a booking row (no
+ * lead date in the Datum column, or no amount). Separates the per-row currency code and a standalone
+ * debit/credit sign marker out of the description: the currency is carried for re-emission at the line's
+ * end (kept out of the payee text), and a sign marker in the money column zone is folded into the
+ * amount's sign (a debit printed with its sign in a separate column is no longer read as positive).
+ */
+function parseTransactionRow(
+  row: readonly LayoutWord[],
+  year: number | null,
+  datum?: DatumColumn | null
+): TransactionParse | null {
   const tokens = rowTokens(row)
   if (tokens.length === 0) return null
 
   let leadDate: string | null = null
   const description: string[] = []
-  const money: string[] = []
+  const money: PositionedToken[] = []
+  const signs: PositionedToken[] = []
+  let currency: string | null = null
   for (const tok of tokens) {
     const cls = classifyToken(tok.str)
     if (cls === 'date') {
@@ -268,7 +351,16 @@ export function reconstructLine(
       continue
     }
     if (cls === 'money') {
-      money.push(tok.str)
+      money.push(tok)
+      continue
+    }
+    if (cls === 'currency') {
+      // Keep the FIRST per-row currency code (re-emitted after the amount); never in the description.
+      if (currency === null) currency = CURRENCY_SYMBOL[tok.str] ?? tok.str
+      continue
+    }
+    if (cls === 'sign') {
+      signs.push(tok) // a separate debit/credit marker — folded into the amount below, never described
       continue
     }
     description.push(tok.str)
@@ -276,9 +368,40 @@ export function reconstructLine(
 
   if (leadDate === null) return null // not a dated transaction row
   if (money.length === 0) return null // no amount → not a transaction (header/section line)
-  const desc = description.join(' ').trim()
-  if (!desc) return null // no description → drop (parseLine requires one)
-  return `${leadDate} ${desc} ${money.join(' ')}`
+
+  const moneyStrs = money.map((m) => m.str)
+  // Fold a standalone sign marker into the amount's sign ONLY when it sits in the money column zone, so
+  // a dash inside a description never flips the sign (the conservative half of the A3 sign fix).
+  const minMoneyX = Math.min(...money.map((m) => m.x))
+  const signMarker = signs.find((s) => s.x >= minMoneyX - SIGN_ZONE_SLACK)
+  if (signMarker) moneyStrs[0] = applySignMarker(moneyStrs[0], signMarker.str)
+
+  return { date: leadDate, description, money: moneyStrs, currency }
+}
+
+/**
+ * The free-text tokens of a CONTINUATION baseline (a payee/purpose line that wraps below a booking row),
+ * or null when the row is not a pure continuation. A continuation carries NO money token (that excludes
+ * a printed balance label and a foreign-currency reference line — both are summaries/annotations, not the
+ * payee) and NO booking-column date (that would make it its own transaction). Out-of-column dates
+ * (a Valuta date), the currency code, and a sign marker are dropped; the remaining free text is the
+ * payee/purpose the booking row's own baseline did not carry (the multi-baseline association §3.1).
+ */
+function continuationText(row: readonly LayoutWord[], datum?: DatumColumn | null): string[] | null {
+  const tokens = rowTokens(row)
+  if (tokens.length === 0) return null
+  const text: string[] = []
+  for (const tok of tokens) {
+    const cls = classifyToken(tok.str)
+    if (cls === 'money') return null // a figure ⇒ a balance/FX line, not a pure payee continuation
+    if (cls === 'date') {
+      if (inDatumColumn(tok.x, datum)) return null // an in-column date ⇒ a (failed) booking row, not a continuation
+      continue // an out-of-column Valuta date is dropped
+    }
+    if (cls === 'currency' || cls === 'sign') continue
+    text.push(tok.str)
+  }
+  return text.length > 0 ? text : null
 }
 
 /**
@@ -317,6 +440,11 @@ export function resolvePageYear(words: readonly LayoutWord[]): number | null {
 /** Default baseline tolerance (PDF points) for grouping words into one visual row. */
 export const DEFAULT_ROW_TOLERANCE = 3
 
+/** How many continuation baselines a single booking row may absorb (§3.1 multi-baseline association).
+ *  A bound so a mis-fired column model (or a footer note below the last row) cannot make one transaction
+ *  swallow an unbounded run of text — past it, a dateless text row is emitted raw instead. */
+export const MAX_CONTINUATION_ROWS = 4
+
 export interface ReconstructOptions {
   /** Baseline y tolerance (points) for row clustering. Defaults to {@link DEFAULT_ROW_TOLERANCE}. */
   yTolerance?: number
@@ -354,21 +482,53 @@ export function reconstructPage(
   // reject a row whose only date is a Valuta column or a mid-line label date (§3.1.3).
   const datum = detectDatumColumn(rows, opts.columnGap ?? DEFAULT_COLUMN_GAP)
   const lines: string[] = []
+
+  // Multi-baseline row association (§3.1): a booking row OPENS a transaction; the payee/purpose that
+  // HVB-style layouts print on continuation baselines below it (dateless, money-less text rows) is
+  // appended to that transaction's description, so the row keeps its real description instead of just
+  // the booking-line fragment (the reported `… EUR` / lost-payee symptom). The pending transaction is
+  // flushed when the next booking row opens, a non-continuation row intervenes, or the page ends.
+  let pending: { parse: TransactionParse; continuation: string[]; absorbed: number } | null = null
+  const flush = (): void => {
+    if (!pending) return
+    const line = formatTransaction(
+      pending.parse.date,
+      [...pending.parse.description, ...pending.continuation],
+      pending.parse.money,
+      pending.parse.currency
+    )
+    // A null line means the merged description is still empty — a bare `<date> <CUR> <balance>`
+    // running-balance row with NO payee continuation below it. Dropped (honest recall loss, gate-safe):
+    // the combination of the currency-token class (empty booking description) AND association (no payee
+    // followed) is exactly what distinguishes a phantom balance row from a real row whose payee wrapped.
+    if (line) lines.push(line)
+    pending = null
+  }
+
   for (const row of rows) {
-    const tx = reconstructLine(row, year, datum)
-    if (tx) {
-      lines.push(tx)
+    const parse = parseTransactionRow(row, year, datum)
+    if (parse) {
+      flush()
+      pending = { parse, continuation: [], absorbed: 0 }
       continue
     }
-    // Not a transaction row — emit its RAW left-to-right text so the non-row content survives:
-    // statement headers, the currency code, and (critically for the §3.5 completeness gate) the
-    // opening/closing BALANCE labels (e.g. `Kontostand per 31.03.2026 35.037,04` — a mid-line date,
-    // not a booking-date column entry, so not a transaction). Such lines lack a booking-column lead
-    // date, so the downstream `parseLine` drops them from extraction — they influence only currency
-    // detection and the balance gate, never the transaction rows. Visual rows are already grouped +
-    // ordered, so this is faithful page text, not the scrambled reading order.
+    const cont = continuationText(row, datum)
+    if (pending && cont && pending.absorbed < MAX_CONTINUATION_ROWS) {
+      pending.continuation.push(...cont)
+      pending.absorbed++
+      continue
+    }
+    // Not a transaction and not a continuation of one — flush any pending transaction, then emit this
+    // row's RAW left-to-right text so non-row content survives: statement headers, the currency code,
+    // and (critically for the §3.5 completeness gate) the opening/closing BALANCE labels (e.g.
+    // `Kontostand per 31.03.2026 35.037,04` — a mid-line date, not a booking-date column entry, so not a
+    // transaction). Such lines lack a booking-column lead date, so the downstream `parseLine` drops them
+    // from extraction — they influence only currency detection and the balance gate, never the
+    // transaction rows. Visual rows are already grouped + ordered, so this is faithful page text.
+    flush()
     const raw = rowText(row, datum)
     if (raw) lines.push(raw)
   }
+  flush()
   return { text: lines.join('\n'), year }
 }

@@ -316,30 +316,96 @@ describe('Stage-1 geometry edge boundaries (audit M3)', () => {
     expect(whole).toBe('05.01.2024 Gehalt 2.000,00')
   })
 
-  it('a running-balance figure shares the amount column → a money-column model cannot separate the phantom', () => {
-    // The gold-set HVB "Umsätze" over-extraction (boundary 1): each transaction prints a booking row
-    // (`<date> <desc> <amount>`) AND a per-row running-balance row (`<date> EUR <balance>`). On the real
-    // statement the amount and the balance are RIGHT-aligned in ONE numeric column — a larger balance
-    // starts a few points LEFT of a smaller amount, but the gap is < DEFAULT_COLUMN_GAP. So the analogue
-    // of detectDatumColumn for money (the deferred "money-column model") would cluster both x's into a
-    // SINGLE band and could NOT tell a phantom balance row from a genuine amount row by column. Pinned so
-    // the §21 rationale ("boundary 1 needs multi-baseline association, not a money-column model") can't
-    // silently rot. These are the MEASURED gold-set x's: ~493 is the running-balance column, ~495–510
-    // the (right-aligned) amount column. Every CONSECUTIVE gap is ≤ DEFAULT_COLUMN_GAP, so a band-cluster
-    // (the gap rule detectDatumColumn uses) merges the whole set into ONE band — balance and amount are
-    // not separable by column.
+  it('a bare <date> <CUR> <balance> running-balance row is DROPPED (currency-class kills the phantom)', () => {
+    // The gold-set HVB "Umsätze" over-extraction (former boundary 1): each transaction prints a booking
+    // row (`<date> <desc> <amount>`) AND a per-row running-balance row (`<date> EUR <balance>`), and the
+    // amount and balance share ONE right-aligned numeric column so a "money-column model" can't separate
+    // them (these MEASURED gold-set x's all fall inside one DEFAULT_COLUMN_GAP band). The fix is NOT a
+    // money-column model: the per-row CURRENCY token is now its own class, so the balance row's ONLY
+    // non-date/non-money token (the bare `EUR`) no longer becomes a description → the row has an EMPTY
+    // description → reconstructLine drops it. A genuine row whose payee wrapped to another baseline is
+    // RESCUED by multi-baseline association (next test), so the two are now distinguishable.
     const moneyXs = [493, 495, 499, 505, 508, 510]
     const sorted = [...moneyXs].sort((a, b) => a - b)
     const maxConsecutiveGap = Math.max(...sorted.slice(1).map((x, i) => x - sorted[i]))
-    expect(maxConsecutiveGap).toBeLessThanOrEqual(DEFAULT_COLUMN_GAP)
-    // reconstructLine emits the running-balance row as a transaction: a date in the Datum column + the
-    // balance figure (a money token) + the bare currency code as the description. Nothing about its token
-    // classes or columns distinguishes it from a genuine amount row, so geometry alone over-extracts it.
+    expect(maxConsecutiveGap).toBeLessThanOrEqual(DEFAULT_COLUMN_GAP) // amount & balance share one band
     const phantom = reconstructLine(
       [word('07.02.', 50, 700), word('EUR', 470, 700), word('1.234,56', 493, 700)],
       2024,
       { min: 50, max: 50 }
     )
-    expect(phantom).toBe('07.02.2024 EUR 1.234,56')
+    expect(phantom).toBeNull() // dropped: the bare currency code is no longer a description
+  })
+})
+
+// ---------------------------------------------------------------------------------------------------
+// HVB "Umsätze" multi-baseline recovery (D56-R follow-up, 2026-06-25). The online "Umsätze" export
+// prints each transaction across MULTIPLE baselines: a booking baseline (`<date> <type> <CUR> <amount>`,
+// the sign sometimes in a separate cell) and continuation baselines below it carrying the payee/purpose.
+// Before this fix reconstructLine emitted only the booking-line fragment (`… EUR …`, payee lost, sign
+// unreliable) and the payee rows were orphaned/dropped. These pin: the currency token kept out of the
+// description (A2), the payee continuation merged in (A1), and a sign-column marker folded into the
+// amount (A3). SYNTHETIC (positioned word boxes), never a real statement (D57).
+describe('HVB multi-baseline recovery (A1 association + A2 currency + A3 sign)', () => {
+  it('strips a per-row currency code out of the description and re-emits it after the amount (A2)', () => {
+    const line = reconstructLine(
+      [word('29.01.', 50, 700), word('SEPA-GUTSCHRIFT', 140, 700), word('EUR', 300, 700), word('34,39', 490, 700)],
+      2025,
+      { min: 50, max: 50 }
+    )
+    // "EUR" is no longer part of the description; it trails the amount where parseLine reads it as currency.
+    expect(line).toBe('29.01.2025 SEPA-GUTSCHRIFT 34,39 EUR')
+  })
+
+  it('folds a separate sign-column marker into the amount (A3: a Soll/debit reads negative)', () => {
+    // The booking baseline carries the figure unsigned plus a standalone "-" in the amount/sign column.
+    const debit = reconstructLine(
+      [word('14.01.', 50, 700), word('LASTSCHRIFT', 140, 700), word('3,99', 490, 700), word('-', 512, 700)],
+      2025,
+      { min: 50, max: 50 }
+    )
+    expect(debit).toBe('14.01.2025 LASTSCHRIFT -3,99')
+    // A German Soll/Haben "H" in the sign column marks a credit (stays positive); "S" marks a debit.
+    const credit = reconstructLine(
+      [word('29.01.', 50, 680), word('GUTSCHRIFT', 140, 680), word('34,39', 490, 680), word('H', 512, 680)],
+      2025,
+      { min: 50, max: 50 }
+    )
+    expect(credit).toBe('29.01.2025 GUTSCHRIFT 34,39')
+  })
+
+  it('does NOT treat a dash far from the money column as a sign (a description dash stays positive)', () => {
+    // A "-" at x=200 (in the description zone, far left of the amount at 490) is dropped from the
+    // description but NEVER folded into the amount — guessing the sign there would risk a wrong total.
+    const line = reconstructLine(
+      [word('14.01.', 50, 700), word('LASTSCHRIFT', 140, 700), word('-', 200, 700), word('3,99', 490, 700)],
+      2025,
+      { min: 50, max: 50 }
+    )
+    expect(line).toBe('14.01.2025 LASTSCHRIFT 3,99') // positive: the far dash is not read as a sign
+  })
+
+  it('merges payee/purpose continuation baselines into the booking row, and drops the phantom balance row', () => {
+    const words: LayoutWord[] = [
+      word('Kontoumsaetze', 50, 800),
+      word('2025', 300, 800),
+      // Transaction: booking baseline (type + currency + amount + sign), then two payee continuations.
+      word('14.01.', 50, 700),
+      word('LASTSCHRIFT', 140, 700),
+      word('EUR', 300, 700),
+      word('3,99', 490, 700),
+      word('-', 512, 700),
+      word('Telekom Deutschland GmbH', 140, 688), // continuation 1: payee (no date, no money)
+      word('Mandatsref 9988', 140, 676), // continuation 2: purpose
+      // A bare per-row running-balance row (date + currency + balance, NO payee below it).
+      word('14.01.', 50, 664),
+      word('EUR', 300, 664),
+      word('1.234,56', 490, 664)
+    ]
+    const lines = reconstructPage(words).text.split('\n')
+    // The payee + purpose are merged into the booking line; "EUR" trails; the debit reads negative.
+    expect(lines).toContain('14.01.2025 LASTSCHRIFT Telekom Deutschland GmbH Mandatsref 9988 -3,99 EUR')
+    // The phantom balance row (no payee continuation) is dropped — never a transaction line.
+    expect(lines.some((l) => l.includes('1.234,56'))).toBe(false)
   })
 })

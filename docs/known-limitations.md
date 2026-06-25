@@ -333,18 +333,18 @@ password recovery — are documented in
   layouts vary widely (no-printed-balance statements, ruled/borderless tables, scans), deterministic
   geometry will likely miss some, so Stage 2 should be treated as a **probable future need** — broaden
   the gold-set corpus across more banks/layouts to confirm and trigger it (it is gated, not abandoned).
-  **Known boundaries (all SAFE — no wrong total is ever shown):** (1) a
-  statement that prints a **per-row running-balance** line shaped `<date> <currency> <balance>` (date in
-  the booking column) is over-extracted — the balance row is mis-read as a phantom transaction, so the
-  row count inflates. When the statement ALSO prints opening/closing, the phantom balances break the
-  opening + Σ == closing tie → `contradicted` → no total (safe as before). **But on a balance-LESS
-  over-extracted statement, D56-R presents an `unverified` labelled sum that includes the phantom rows
-  (an inflated sum)** — honest per its caveat ("not a verified statement total") and visible in the
-  transaction listing, but no longer a refusal; eliminating the inflation is the deferred extraction fix. The assumed "money-column model" fix does **not** work here:
-  a 2026-06-24 geometry probe showed the running balance and the transaction amount are right-aligned in
-  one numeric column (they cannot be separated by x), and a text-only guard can't separate a phantom from
-  a real transaction whose description wrapped to another line either — so the honest fix is multi-baseline
-  row association (deferred, harder than a column model). (2) An
+  **Known boundaries (all SAFE — no wrong total is ever shown):** (1) **[RESOLVED 2026-06-25 for the
+  `<date> <currency> <balance>` shape.]** A statement that prints a **per-row running-balance** line shaped
+  `<date> <currency> <balance>` (date in the booking column) used to be over-extracted — the balance row
+  was mis-read as a phantom transaction. The **currency-token class** now keeps the bare currency code out
+  of the description, so the phantom row's description is empty and it is dropped, while a genuine row
+  whose payee wrapped onto a continuation baseline is rescued by **multi-baseline row association** (the
+  same HVB "Umsätze" fix that recovers lost payees, strips the per-row `EUR`, and folds a separate
+  debit/credit sign cell into the amount). The 2026-06-24 finding still holds — the balance and amount are
+  right-aligned in one numeric column, so a "money-column model" could not have separated them; the
+  token-class + association fix did. **Residual (safe):** a genuine **no-payee** row whose booking line is
+  a bare `<date> <currency> <amount>` with no continuation below is indistinguishable from a phantom and is
+  also dropped — a recall loss, never a wrong total. (2) An
   **image-only / "blacked-out" or scanned** statement has no text layer, so geometry-aware extraction
   recovers nothing and returns the honest empty/downgrade (never a wrong total); reading it is the OCR
   path's job, not Stage 1. (3) When a PDF producer renders one **amount as two split items** (`2.000` +

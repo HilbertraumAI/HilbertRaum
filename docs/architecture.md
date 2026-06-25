@@ -2605,7 +2605,37 @@ on one line), and bare `DD.MM.` per-row dates with the year only in the header a
   `layout` + the `maxPages` cap, a DoS guard since per-page clustering is uncapped otherwise) →
   `ParseContext.layout` → `PdfParser` layout mode (scan-detection re-keyed on RAW text so an empty
   reconstruction is never mistaken for an image-only scan). The bank analysis handler sets
-  `layout:true`; every other caller is byte-unchanged.
+  `layout:true`; every other caller is byte-unchanged. `getDocument` is called with `verbosity:0`
+  (VerbosityLevel.ERRORS) so pdf.js's font-program WARNINGS — e.g. the `Warning: TT: undefined function:
+  21` flood from a malformed embedded TrueType hint program — no longer spam the log; real errors still
+  surface (a verbosity flag, offline-safe).
+
+- **HVB "Umsätze" multi-baseline recovery (2026-06-25, the D56-R follow-up — `pdf-layout.ts`).** A real
+  HVB online "Umsätze" export exposed three Stage-1 parsing failures the gold set's German statements did
+  not: the payee/purpose prints on CONTINUATION baselines below the booking row, the per-row currency
+  code `EUR` polluted the description, and a debit's sign sat in a separate cell so a Lastschrift read
+  POSITIVE. Three deterministic, offline fixes (zero model calls):
+  - **(A1) Multi-baseline row association.** `reconstructPage` is now stateful: a booking row OPENS a
+    transaction; a following dateless, money-LESS text row is a CONTINUATION whose payee/purpose text is
+    appended to that transaction's description (bounded by `MAX_CONTINUATION_ROWS`=4); the transaction
+    flushes on the next booking row, an intervening non-continuation row, or page end. This is the
+    deferred "multi-baseline association" the over-extraction boundary called for — payees survive instead
+    of being orphaned onto dropped dateless rows.
+  - **(A2) Currency-token class.** A standalone ISO code / symbol is its own token class (kept out of the
+    description); `reconstructLine` re-emits ONE currency code AFTER the amount, where the line parser
+    still detects it. This **also resolves the boundary-1 over-extraction**: a phantom `<date> EUR
+    <balance>` running-balance row now has an EMPTY description → dropped, while a genuine row whose payee
+    wrapped is rescued by A1. The §21 objection to a bare "drop a currency-only description" guard (it
+    silently dropped 8 genuine wrapped rows) no longer applies — A1 is what makes A2 safe: the genuine
+    row's payee continuation makes its description non-empty; the phantom's does not.
+  - **(A3) Sign-column fold.** A standalone `+`/`-` or Soll/Haben `S`/`H` marker in the money column zone
+    (`SIGN_ZONE_SLACK`) is folded into the amount's sign (`S`/`-` → debit/negative, `H`/`+` →
+    credit/positive). Conservative by design: a dash FAR from the amount (a description dash) is dropped
+    from the text but NEVER read as a sign, so it can't flip a total. **Caveat (D57):** the EXACT HVB sign
+    encoding (separate cell vs a glued trailing minus pdf.js splits) must be confirmed on the real
+    statement via the local gold-set harness; A3 handles the sign-column case without guessing at a
+    mid-line dash. Until confirmed, an unusual sign layout still degrades to the honest gate
+    (`contradicted` when balances are printed; an `unverified` labelled sum when they are not).
 
 **Gold-set result (local-only corpus, D57; 2026-06-24, measured under the original boolean gate).** Three
 text-layer statements — a sanitized HVB transactions-only excerpt, a full Raiffeisen "Mein ELBA"
@@ -2619,38 +2649,26 @@ sum** instead of refusing — so the harness reports the same one VERIFIED total
 presented *as the verified statement total* from an incomplete or mis-counted set. The corpus must be
 re-measured locally (`HILBERTRAUM_PDF_GOLDSET=1`) to refresh these figures under the refined harness.
 
-**Known Stage-1 boundaries (2026-06-24) — all SAFE (no wrong total is ever shown), fixes scoped:**
-- **Per-row running-balance OVER-extraction.** Some statements (the HVB "Umsätze" export) print a
-  separate running-balance row BETWEEN transactions shaped `<date> <CUR> <balance>` with the date in the
-  booking-date column. Geometry rebuilds it, and because its only non-date/non-money token is the bare
-  currency code, `parseLine` reads that as the description and emits a phantom transaction (14 real rows
-  → 28). **Safety under D56-R is more nuanced than under the original gate.** On a statement that *also*
-  prints opening/closing, the phantom balances inflate Σamounts so the `opening + Σ == closing` tie does
-  not hold → `contradicted` → the honest refusal, never a wrong total (verified end-to-end,
-  `pdf-bank-layout.test.ts` case (i); the tie surviving would require the per-row balances to sum to ~0
-  within `MONEY_EPS` — an oscillating-around-zero account no real statement produces). **But on a
-  balance-LESS over-extracted statement (the reported HVB "Umsätze" online export), D56-R now classifies
-  `unverified` and presents an `unverifiedCaveat`-labelled sum that INCLUDES the phantom rows — i.e. an
-  inflated sum.** This is the accepted D56-R tradeoff: the figure is explicitly labelled *"a sum of the
-  rows I read, not a verified statement total"*, so it is not a confident wrong *statement total*, but it
-  is no longer a refusal — a user who does not read the caveat could over-read it. The honest boundary is
-  the caveat plus the transaction listing (the user can SEE the phantom `… EUR … balance` rows and judge),
-  not the absence of a number; eliminating the inflation itself is the deferred extraction fix below. The
-  cost when balances ARE printed is precision/UX only: an inflated row count (the micro-recall >100%
-  above) and phantom citations, never a total. **A "money-column
-  model" (the analogue of `detectDatumColumn` for money) was the assumed fix, but the 2026-06-24 geometry
-  probe of the gold-set HVB "Umsätze" page showed it does NOT separate these rows: the running balance and
-  the transaction amount are RIGHT-aligned in ONE numeric column (measured left-edges ~493 for the balance
-  vs ~495–510 for the amount — every consecutive gap ≤ `DEFAULT_COLUMN_GAP`, so a band-cluster merges them
-  into a single band). So a phantom balance row and a genuine amount row are indistinguishable by token
-  class AND by column.** Text alone can't separate them either — a naive "drop a currency-only description"
-  guard was tried and **rejected** because a real transaction whose description wraps onto other baselines
-  reconstructs as the *same* `<date> <CUR> <amount>` shape (it silently dropped 8 genuine HVB rows). The
-  remaining honest fix is therefore **multi-baseline row association** (recognise the balance line as a
-  continuation/annotation of the transaction above it, not a row of its own) — strictly harder than a
-  column model — or Stage-2 input. **Deferred**, not built; the boundary is pinned by `pdf-layout.test.ts`
-  (the shared-column rationale) + `pdf-bank-layout.test.ts` case (i) (over-extraction × labelled balances →
-  downgrade, through real pdf.js).
+**Known Stage-1 boundaries (2026-06-24, boundary 1 substantially RESOLVED 2026-06-25) — all SAFE (no
+wrong total is ever shown), residual fixes scoped:**
+- **Per-row running-balance OVER-extraction — RESOLVED for the `<date> <CUR> <balance>` shape (A1+A2),
+  2026-06-25.** Some statements (the HVB "Umsätze" export) print a separate running-balance row BETWEEN
+  transactions shaped `<date> <CUR> <balance>` with the date in the booking-date column. Geometry rebuilt
+  it, and because its only non-date/non-money token was the bare currency code, `parseLine` read that as
+  the description and emitted a phantom transaction (14 real rows → 28). The **currency-token class (A2)**
+  now keeps the bare `EUR` out of the description, so the phantom row's description is EMPTY → dropped,
+  while a genuine row whose payee wrapped onto a continuation baseline is RESCUED by **multi-baseline
+  association (A1)** (its description is non-empty). The earlier objection — that a naive "drop a
+  currency-only description" guard silently dropped 8 genuine wrapped rows — is exactly what A1 fixes, so
+  A2 is now safe. Pinned end-to-end through real pdf.js (`pdf-bank-layout.test.ts` case (i): phantom rows
+  dropped, the genuine rows tie out → the gate now PRESENTS the verified total; case (j): payees recovered
+  from continuation baselines). The 2026-06-24 geometry probe still holds — the balance and amount are
+  right-aligned in ONE numeric column, so an x-band "money-column model" could NOT have separated them;
+  the token-class + association fix did. **Residual (safe, gate-guarded):** a genuine NO-payee row whose
+  booking line is a bare `<date> <CUR> <amount>` with no continuation below is indistinguishable from a
+  phantom and is also dropped — a recall loss, never a wrong total (the gate downgrades). A statement that
+  carries the running balance INLINE on the booking row (`<date> <desc> <amount> <balance>`) was never
+  this boundary and is unaffected.
 - **Image-only / "blacked-out" statements.** A user who blacks out or scans a statement can flatten it to
   a full-page IMAGE with no text layer. Stage 1 reads the text layer, so `PdfParser` raises the
   scan-detected error and nothing is extracted → the **safe** empty/downgrade (0 rows, no total, 0 model
@@ -2704,9 +2722,13 @@ column gaps) a regression that only bites on a real, messy TextItem distribution
 a dedicated `pdf-bank-layout.test.ts` describe block now drives the messiness through the REAL pdf.js
 path — sub-tolerance baseline jitter (still one row), over-tolerance jitter (amount splits off → row
 dropped → gate downgrades), a tight (<12 pt) Datum/Valuta gap (columns merge → over-extraction → safe
-downgrade), and the shared-column running-balance shape of boundary 1 (over-extraction × printed
-opening/closing → the tie breaks → downgrade, never a wrong total). The local-only gold set remains the
-real-*distribution* gate; these pin the documented boundaries in CI. `tests/real-data/pdf-goldset.realdata.test.ts`
+downgrade), the shared-column running-balance shape of former boundary 1 (case (i): the phantom rows are
+now DROPPED by A2 and the genuine rows tie out → the gate presents the verified total), and the HVB
+"Umsätze" multi-baseline recovery (case (j): payees merged from continuation baselines, `EUR` stripped, a
+Lastschrift signed negative → the honest `unverified` labelled sum). `pdf-layout.test.ts` adds the
+`HVB multi-baseline recovery` block (currency strip, sign-column fold, the conservative far-dash
+no-fold, association + phantom-drop). The local-only gold set remains the real-*distribution* gate; these
+pin the documented boundaries + the recovery in CI. `tests/real-data/pdf-goldset.realdata.test.ts`
 is the LOCAL-ONLY, gitignored, gated (`HILBERTRAUM_PDF_GOLDSET=1`) gold-set harness — aggregate metrics
 only, 0 model calls, skipped in `npm test`.
 

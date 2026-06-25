@@ -657,23 +657,21 @@ describe('PDF layout mode — adversarial geometry through real pdf.js (audit M3
     expect(safe).toBe(true)
   })
 
-  // (i) SHARED-COLUMN running-balance over-extraction — the gold-set HVB "Umsätze" shape, the original
-  //     motivating report, reproduced synthetically. The layout prints, per transaction, a booking row
+  // (i) SHARED-COLUMN running-balance rows — the gold-set HVB "Umsätze" shape, the original motivating
+  //     report, reproduced synthetically. The layout prints, per transaction, a booking row
   //     (`<date> <desc> <amount>`) AND a separate per-row running-balance row (`<date> EUR <balance>`),
-  //     where the amount and the balance are RIGHT-aligned in ONE numeric column (a larger balance
-  //     starts a few pt left of a smaller amount, gap < DEFAULT_COLUMN_GAP). Geometry rebuilds the
-  //     balance row, and parseLine reads the bare currency code as the description → a PHANTOM
-  //     transaction. So N real rows become 2N. This is the boundary the deferred "money-column model"
-  //     was meant to fix — but the amount and balance SHARE a column, so an x-band money-column model
-  //     cannot separate them (it would need multi-baseline association; see pdf-layout.test.ts).
-  //     CARDINAL SAFETY (audit HIGH stress case, end-to-end through real pdf.js): on a statement that
-  //     ALSO prints opening/closing balances, the phantom balances inflate Σamounts so the
-  //     `opening + Σ == closing` tie CANNOT hold → the gate downgrades. Over-extraction degrades a
-  //     would-be PASS into an honest downgrade, NEVER a wrong total.
-  it('shared-column running-balance rows over-extract, and labelled balances still downgrade (never a wrong total)', async () => {
+  //     where the amount and balance are RIGHT-aligned in ONE numeric column (gap < DEFAULT_COLUMN_GAP),
+  //     so no x-band "money-column model" could separate them. Geometry USED to rebuild the balance row
+  //     and read the bare currency code as a description → a PHANTOM transaction (N rows → 2N). FIXED by
+  //     the currency-token class (A2): the balance row's only non-date/non-money token (`EUR`) is no
+  //     longer a description, so the row's description is EMPTY and it is dropped — while a genuine row
+  //     whose payee wrapped is rescued by multi-baseline association (case (j)). So the phantom rows are
+  //     gone AND, because the surviving genuine rows now tie out (1000 + (2000−800−200) == 2000), the
+  //     completeness gate PRESENTS the verified total. End-to-end through real pdf.js.
+  it('shared-column running-balance rows are dropped (no phantom) and the genuine rows tie out → total presented', async () => {
     const HC = { date: 50, desc: 160, cur: 468, amount: 500, balance: 496 } // amount/balance share a band
     const cells: PdfCell[] = [{ text: 'Umsaetze 2024 in EUR', x: 50, y: 760 }]
-    // Printed opening/closing that WOULD tie iff ONLY the genuine rows counted: 1000 + (2000−800−200)=2000.
+    // Printed opening/closing that tie iff ONLY the genuine rows count: 1000 + (2000−800−200) == 2000.
     cells.push({ text: 'Anfangssaldo', x: HC.date, y: 740 }, { text: '1.000,00', x: HC.amount, y: 740 })
     const rows = [
       { d: '05.01.', desc: 'Gehalt ACME', amt: '2.000,00', bal: '3.000,00' },
@@ -700,23 +698,70 @@ describe('PDF layout mode — adversarial geometry through real pdf.js (audit M3
     cells.push({ text: 'Endsaldo', x: HC.date, y }, { text: '2.000,00', x: HC.amount, y })
 
     const layoutRows = extractTransactionRows(await parseSegments(writePdf(cells), true), 'EUR')
-    // OVER-extraction: the 3 genuine rows PLUS 3 phantom running-balance rows (count doubles).
-    expect(layoutRows).toHaveLength(6)
-    // The 3 phantom rows carry the bare currency code as their whole description and the balance figure
-    // as their "amount" — indistinguishable from a real amount row by token class + column.
-    const phantoms = layoutRows.filter((r) => r.description === 'EUR')
-    expect(phantoms.map((r) => r.amount)).toEqual([3000, 2200, 2000])
-    const genuine = layoutRows.filter((r) => r.description !== 'EUR')
-    expect(genuine.map((r) => r.amount)).toEqual([2000, -800, -200])
+    // No over-extraction: exactly the 3 genuine rows; the bare-currency balance rows are dropped.
+    expect(layoutRows).toHaveLength(3)
+    expect(layoutRows.some((r) => r.description === 'EUR')).toBe(false)
+    expect(layoutRows.map((r) => r.amount)).toEqual([2000, -800, -200])
 
-    // CARDINAL SAFETY: opening/closing ARE printed and WOULD tie for the genuine rows alone (1000 + 1000
-    // == 2000), but the phantom balances blow up Σamounts → the tie breaks → honest downgrade, no total.
+    // The surviving genuine rows tie out against the printed opening/closing → the gate presents the total.
     const pdfPath = writePdf(cells)
     const segments = await parseSegments(pdfPath, true)
     const db = freshDb()
     const docId = seedDoc(db, segments)
     const res = await bankStatementAnalysisHandler.run!(ctxFor(db, docId, 'what is the total?', pdfPath))
-    expect(res.answer).not.toContain('Net change')
-    expect(res.answer).toContain(tr('skills.bankAnalysis.incompleteNoTotal'))
+    expect(res.answer).toContain(tr('skills.bankAnalysis.count', { count: 3 }))
+    expect(res.answer).toContain('Net change')
+    expect(res.answer).not.toContain(tr('skills.bankAnalysis.incompleteNoTotal'))
+  })
+
+  // (j) HVB "Umsätze" MULTI-BASELINE recovery, end-to-end through real pdf.js — the reported failure.
+  //     Each transaction prints a booking baseline (`<date> <type> <CUR> <amount>`, the debit sign in a
+  //     separate cell) and a payee/purpose continuation baseline below it. Geometry USED to emit only the
+  //     booking fragment (`… EUR …`, payee lost, the Lastschrift shown POSITIVE). Now: the currency code
+  //     is kept out of the description (A2), the payee continuation is merged in (A1), and the sign-column
+  //     marker is folded into the amount (A3) — so a debit reads negative. No printed opening/closing →
+  //     the honest `unverified` labelled sum (D56-R). SYNTHETIC (`makeColumnarPdf`), never real (D57).
+  it('recovers payees from continuation baselines, strips EUR, and signs a Lastschrift negative', async () => {
+    const UC = { date: 50, type: 140, cur: 300, amount: 470, sign: 512, desc: 140 }
+    const cells: PdfCell[] = [{ text: 'Kontoumsaetze 2025 - alle Betraege in EUR', x: 50, y: 760 }]
+    const rows = [
+      { d: '14.01.', type: 'LASTSCHRIFT', amt: '3,99', sign: '-', payee: 'Telekom Deutschland GmbH' },
+      { d: '20.01.', type: 'KARTENZAHLUNG', amt: '19,15', sign: '-', payee: 'REWE SAGT DANKE 1234' },
+      { d: '29.01.', type: 'SEPA-GUTSCHRIFT', amt: '34,39', sign: 'H', payee: 'Arbeitgeber AG Lohn Gehalt' }
+    ]
+    let y = 720
+    for (const r of rows) {
+      // Booking baseline: booking date · type · currency code · amount · sign cell.
+      cells.push(
+        { text: r.d, x: UC.date, y },
+        { text: r.type, x: UC.type, y },
+        { text: 'EUR', x: UC.cur, y },
+        { text: r.amt, x: UC.amount, y },
+        { text: r.sign, x: UC.sign, y }
+      )
+      // Continuation baseline (12 pt lower): the payee/purpose (no date, no money token).
+      cells.push({ text: r.payee, x: UC.desc, y: y - 12 })
+      y -= 30
+    }
+
+    const layoutRows = extractTransactionRows(await parseSegments(writePdf(cells), true), 'EUR')
+    expect(layoutRows).toHaveLength(3)
+    // Payees recovered, "EUR" gone from the description, the two Lastschriften negative, the credit positive.
+    expect(layoutRows[0]).toMatchObject({ date: '2025-01-14', amount: -3.99, currency: 'EUR' })
+    expect(layoutRows[0].description).toContain('Telekom Deutschland GmbH')
+    expect(layoutRows[0].description).not.toContain('EUR')
+    expect(layoutRows[1]).toMatchObject({ date: '2025-01-20', amount: -19.15 })
+    expect(layoutRows[1].description).toContain('REWE')
+    expect(layoutRows[2]).toMatchObject({ date: '2025-01-29', amount: 34.39 })
+    expect(layoutRows[2].description).toContain('Arbeitgeber')
+
+    // No printed opening/closing → the honest unverified labelled sum (not a refusal, not a verified total).
+    const pdfPath = writePdf(cells)
+    const segments = await parseSegments(pdfPath, true)
+    const db = freshDb()
+    const docId = seedDoc(db, segments)
+    const res = await bankStatementAnalysisHandler.run!(ctxFor(db, docId, 'summarize spending by category', pdfPath))
+    expect(res.answer).toContain(tr('skills.bankAnalysis.count', { count: 3 }))
+    expect(res.answer).toContain(tr('skills.bankAnalysis.unverifiedCaveat', { count: 3 }))
   })
 })

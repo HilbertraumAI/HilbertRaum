@@ -70,7 +70,11 @@ export const PdfParser: DocumentParser = {
   async parse(filePath: string, ctx?: ParseContext): Promise<ParsedDocument> {
     const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs')
     const data = new Uint8Array(await readFile(filePath))
-    const loadingTask = pdfjs.getDocument({ data })
+    // `verbosity: 0` (VerbosityLevel.ERRORS) silences pdf.js's font-program WARNINGS — e.g. the
+    // `Warning: TT: undefined function: 21` flood a malformed embedded TrueType hint program emits on
+    // every page. They are pdf.js worker noise, not our code, and carry no diagnostic value here; real
+    // ERRORS still surface. Offline-safe (a verbosity flag, no network/telemetry).
+    const loadingTask = pdfjs.getDocument({ data, verbosity: 0 })
     const doc = await loadingTask.promise
 
     const segments: ExtractedSegment[] = []
