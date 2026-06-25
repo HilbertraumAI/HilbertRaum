@@ -375,14 +375,33 @@ describe('HVB multi-baseline recovery (A1 association + A2 currency + A3 sign)',
   })
 
   it('does NOT treat a dash far from the money column as a sign (a description dash stays positive)', () => {
-    // A "-" at x=200 (in the description zone, far left of the amount at 490) is dropped from the
-    // description but NEVER folded into the amount — guessing the sign there would risk a wrong total.
+    // A "-" at x=200 (in the description zone, far left of the amount at 490) is NEVER folded into the
+    // amount — guessing the sign there would risk a wrong total. It stays as description text (a
+    // non-folded sign marker is content, not silently dropped), and the amount stays positive.
     const line = reconstructLine(
       [word('14.01.', 50, 700), word('LASTSCHRIFT', 140, 700), word('-', 200, 700), word('3,99', 490, 700)],
       2025,
       { min: 50, max: 50 }
     )
-    expect(line).toBe('14.01.2025 LASTSCHRIFT 3,99') // positive: the far dash is not read as a sign
+    expect(line).toBe('14.01.2025 LASTSCHRIFT - 3,99') // positive: the far dash is not read as a sign
+  })
+
+  it('does NOT let a sign printed beside the running BALANCE flip the amount (S3 — separate columns)', () => {
+    // A row with both an amount (x=490) and a running balance (x=620), plus a "-" sitting by the
+    // BALANCE column (x=632). The marker is nearer the balance than the amount, so it must NOT negate
+    // the amount — it would invert a credit into a debit and corrupt the (unverified) total.
+    const line = reconstructLine(
+      [
+        word('14.01.', 50, 700),
+        word('GUTSCHRIFT', 140, 700),
+        word('34,39', 490, 700),
+        word('1.234,56', 620, 700),
+        word('-', 632, 700)
+      ],
+      2025,
+      { min: 50, max: 50 }
+    )
+    expect(line).toBe('14.01.2025 GUTSCHRIFT - 34,39 1.234,56') // amount stays positive; the dash is text
   })
 
   it('merges payee/purpose continuation baselines into the booking row, and drops the phantom balance row', () => {

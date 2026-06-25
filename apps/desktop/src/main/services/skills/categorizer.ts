@@ -127,14 +127,37 @@ export function buildBatchPrompt(rows: TransactionInput[]): string {
 }
 
 /**
- * Confident PRE-FILTER: a deterministic description-substring rule match (Fees/Income/Transfer/Cash)
- * skips the model entirely (it is already unambiguous and in the taxonomy). The amount-sign fallback
- * is NOT confident, so those rows still go to the model. Returns the category or null (→ ask the model).
+ * A WORD-bounded substring test (case-folded): the needle must be flanked by a non-letter/digit (or a
+ * string edge) on both sides. `\b` is ASCII-only and would mishandle the German keywords (`gebühr`,
+ * `überweisung`), so the boundary is checked against the Unicode letter/number classes. This stops the
+ * prefilter from a confident WRONG skip-the-model match on a coincidental substring (`fee` ⊂ `coffee`,
+ * `atm` ⊂ `atmos`, `lohn` ⊂ `mühlohn`).
+ */
+function wordIncludes(haystack: string, needle: string): boolean {
+  const isLetterDigit = (c: string): boolean => c !== '' && /[\p{L}\p{N}]/u.test(c)
+  for (let i = haystack.indexOf(needle); i >= 0; i = haystack.indexOf(needle, i + 1)) {
+    const before = i === 0 ? '' : haystack[i - 1]
+    const after = i + needle.length >= haystack.length ? '' : haystack[i + needle.length]
+    if (!isLetterDigit(before) && !isLetterDigit(after)) return true
+  }
+  return false
+}
+
+/**
+ * Confident PRE-FILTER: a deterministic, WORD-bounded description rule match (Fees/Income/Transfer/Cash)
+ * skips the model entirely (it is already unambiguous and in the taxonomy). Word-bounded (not a raw
+ * substring) so a coincidental match (`fee` inside `coffee`) never wrongly skips the model. The
+ * amount-sign fallback is NOT confident, so those rows still go to the model. Returns the category or
+ * null (→ ask the model).
  */
 export function prefilterCategory(row: TransactionInput): string | null {
   const desc = row.description.toLowerCase()
   for (const rule of BUILTIN_CATEGORY_RULES) {
-    if (rule.matchKind === 'description-substring' && desc.includes(rule.pattern) && CATEGORY_SET.has(rule.category)) {
+    if (
+      rule.matchKind === 'description-substring' &&
+      wordIncludes(desc, rule.pattern) &&
+      CATEGORY_SET.has(rule.category)
+    ) {
       return rule.category
     }
   }

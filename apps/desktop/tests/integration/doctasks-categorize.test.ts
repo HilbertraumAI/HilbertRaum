@@ -108,6 +108,14 @@ function persistedCategories(statementId: string): Array<string | null> {
   ).map((r) => r.name ?? null)
 }
 
+/** The persisted model-assisted flag for a statement (Phase 33 / A8): 1 = LLM consulted, 0 = deterministic. */
+function categorizedByModel(statementId: string): number | null {
+  const row = db
+    .prepare('SELECT categorized_by_model AS flag FROM bank_statements WHERE id = ?')
+    .get(statementId) as { flag: number | null } | undefined
+  return row?.flag ?? null
+}
+
 describe('categorize doctask — model path', () => {
   it('persists model-assigned categories (incl. the richer taxonomy)', async () => {
     const docId = await importText('Umsätze EUR\nplaceholder')
@@ -122,6 +130,25 @@ describe('categorize doctask — model path', () => {
 
     expect(status.state).toBe('done')
     expect(persistedCategories(stmtId)).toEqual(['Fees', 'Groceries', 'Shopping'])
+    // The model was consulted → the authoritative model-assisted flag is persisted (Phase 33 / A8).
+    expect(categorizedByModel(stmtId)).toBe(1)
+  })
+
+  it('records model-assisted even when every model label happens to be in the rule set (A8)', async () => {
+    // The model assigns ONLY rule-set categories (Income/Transfer) — the old name-based heuristic would
+    // miss this and label the breakdown deterministic. The persisted flag is the truthful signal.
+    const docId = await importText('Umsätze EUR\nplaceholder')
+    const stmtId = seedStatement(docId, [
+      { desc: 'Acme Werk', amount: 2500 }, // model → Income (in the rule set, but model-assigned)
+      { desc: 'Max Mustermann', amount: -100 } // model → Transfer (also in the rule set)
+    ])
+    const mgr = makeManager(scriptedRuntime((d) => (d.includes('Acme') ? 'Income' : 'Transfer')))
+    const { jobId } = mgr.startDocTask({ kind: 'categorize', documentIds: [docId] })
+    const status = await waitTerminal(mgr, jobId)
+
+    expect(status.state).toBe('done')
+    expect(persistedCategories(stmtId)).toEqual(['Income', 'Transfer'])
+    expect(categorizedByModel(stmtId)).toBe(1) // model was involved, despite only in-set labels
   })
 })
 
@@ -138,6 +165,8 @@ describe('categorize doctask — no runtime (deterministic fallback)', () => {
 
     expect(status.state).toBe('done')
     expect(persistedCategories(stmtId)).toEqual(['Income', 'Spending'])
+    // No runtime → deterministic pass → NOT model-assisted (the flag is 0, never null on a completed run).
+    expect(categorizedByModel(stmtId)).toBe(0)
   })
 })
 

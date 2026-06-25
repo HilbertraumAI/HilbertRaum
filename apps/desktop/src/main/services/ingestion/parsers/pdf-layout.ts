@@ -93,11 +93,13 @@ function classifyToken(token: string): TokenClass {
   return 'text'
 }
 
-/** Re-apply a sign marker to a money token: strip any existing sign decoration to the bare magnitude,
- *  then prefix `-` for a debit marker (`-`/`S`) or leave positive for a credit marker (`+`/`H`). */
+/** Re-apply a sign marker to a money token: strip ALL existing sign decoration to the bare magnitude,
+ *  then prefix `-` for a debit marker (`-`/`S`) or leave positive for a credit marker (`+`/`H`). Strips
+ *  one-or-more leading `+`/`-`/`(` and trailing `)`/`+`/`-` so a doubly-decorated token (e.g.
+ *  `(1.234,56)-`, both accepted by `MONEY_TOKEN_RE`) never leaves a stray `)` or `-` behind. */
 function applySignMarker(moneyToken: string, marker: string): string {
   const debit = marker === '-' || marker === 'S'
-  const bare = moneyToken.replace(/^[-+(]/, '').replace(/[)\-]\s*$/, '').trim()
+  const bare = moneyToken.replace(/^[+\-(]+/, '').replace(/[)+\-]+$/, '').trim()
   return debit ? `-${bare}` : bare
 }
 
@@ -335,7 +337,7 @@ function parseTransactionRow(
   let leadDate: string | null = null
   const description: string[] = []
   const money: PositionedToken[] = []
-  const signs: PositionedToken[] = []
+  const signs: Array<{ x: number; descIndex: number }> = []
   let currency: string | null = null
   for (const tok of tokens) {
     const cls = classifyToken(tok.str)
@@ -360,7 +362,11 @@ function parseTransactionRow(
       continue
     }
     if (cls === 'sign') {
-      signs.push(tok) // a separate debit/credit marker — folded into the amount below, never described
+      // Provisionally keep the marker in the description in reading order; it is spliced back out below
+      // ONLY if it proves to be the amount column's own sign cell. A real `-`/`S`/`H` token in the payee
+      // text is then never silently lost, and a far/mid-description marker never flips the amount.
+      signs.push({ x: tok.x, descIndex: description.length })
+      description.push(tok.str)
       continue
     }
     description.push(tok.str)
@@ -370,11 +376,21 @@ function parseTransactionRow(
   if (money.length === 0) return null // no amount → not a transaction (header/section line)
 
   const moneyStrs = money.map((m) => m.str)
-  // Fold a standalone sign marker into the amount's sign ONLY when it sits in the money column zone, so
-  // a dash inside a description never flips the sign (the conservative half of the A3 sign fix).
-  const minMoneyX = Math.min(...money.map((m) => m.x))
-  const signMarker = signs.find((s) => s.x >= minMoneyX - SIGN_ZONE_SLACK)
-  if (signMarker) moneyStrs[0] = applySignMarker(moneyStrs[0], signMarker.str)
+  // Fold a standalone sign marker into the AMOUNT's sign ONLY when it is the amount column's own sign
+  // cell: at/right of the amount (a dash mid-description sits left of it) AND nearer the amount than any
+  // later money column (so a `+`/`-`/`S`/`H` printed beside the running BALANCE never flips the amount —
+  // the conservative A3 fix). The folded marker is spliced out of the description; any other sign token
+  // stays as text.
+  const amountX = Math.min(...money.map((m) => m.x))
+  const fold = signs.find((s) => {
+    if (s.x < amountX - SIGN_ZONE_SLACK) return false
+    const nearest = money.reduce((best, m) => (Math.abs(m.x - s.x) < Math.abs(best.x - s.x) ? m : best))
+    return nearest.x === amountX
+  })
+  if (fold) {
+    moneyStrs[0] = applySignMarker(moneyStrs[0], description[fold.descIndex])
+    description.splice(fold.descIndex, 1)
+  }
 
   return { date: leadDate, description, money: moneyStrs, currency }
 }
@@ -383,9 +399,10 @@ function parseTransactionRow(
  * The free-text tokens of a CONTINUATION baseline (a payee/purpose line that wraps below a booking row),
  * or null when the row is not a pure continuation. A continuation carries NO money token (that excludes
  * a printed balance label and a foreign-currency reference line — both are summaries/annotations, not the
- * payee) and NO booking-column date (that would make it its own transaction). Out-of-column dates
- * (a Valuta date), the currency code, and a sign marker are dropped; the remaining free text is the
- * payee/purpose the booking row's own baseline did not carry (the multi-baseline association §3.1).
+ * payee; and absorbing a stray figure would put it BEFORE the real amount in the merged line, where the
+ * line parser would mis-read it as the amount) and NO booking-column date (that would make it its own
+ * transaction). Out-of-column dates (a Valuta date), the currency code, and a sign marker are dropped;
+ * the remaining free text is the payee/purpose the booking row's own baseline did not carry (§3.1).
  */
 function continuationText(row: readonly LayoutWord[], datum?: DatumColumn | null): string[] | null {
   const tokens = rowTokens(row)

@@ -144,14 +144,28 @@ function latestStatementId(db: Db, documentId: string): string | null {
   return row?.id ?? null
 }
 
-// The categories the DETERMINISTIC rule pass can produce (`categorizeRow`). A persisted category OUTSIDE
-// this set could only have come from the LLM categorizer (the richer Groceries/Dining/… taxonomy), so it
-// is the honest, schema-free signal that the breakdown is MODEL-ASSISTED. The reverse never misfires: a
-// deterministic fallback (no model loaded) writes only these names, so it is never labelled model-assisted.
+// The categories the DETERMINISTIC rule pass can produce (`categorizeRow`). Used only as a BACK-COMPAT
+// fallback for statements categorized before the authoritative `categorized_by_model` flag existed: a
+// persisted category outside this set could only have come from the LLM categorizer's richer taxonomy.
 const DETERMINISTIC_CATEGORY_SET: ReadonlySet<string> = new Set(BUILTIN_CATEGORIES)
 
-/** True when any persisted category lies outside the deterministic rule set ⇒ the LLM was involved. */
-function isModelAssisted(persisted: readonly (string | null)[]): boolean {
+/**
+ * Whether the breakdown is MODEL-ASSISTED. Prefers the authoritative persisted flag the categorizer
+ * doctask wrote (`bank_statements.categorized_by_model` — true whenever the LLM was consulted, even when
+ * every label it emitted happens to be in the rule set, which the old name-based heuristic missed). For
+ * a statement categorized before that flag existed (NULL), falls back to "any persisted category lies
+ * outside the deterministic rule set". A statement seeded only by the read-time deterministic pass has a
+ * NULL flag and only rule-set names → correctly NOT model-assisted.
+ */
+function loadCategorizedByModel(db: Db, statementId: string): boolean | null {
+  const row = db
+    .prepare('SELECT categorized_by_model AS flag FROM bank_statements WHERE id = ?')
+    .get(statementId) as { flag: number | null } | undefined
+  return row?.flag == null ? null : row.flag === 1
+}
+
+function isModelAssisted(flag: boolean | null, persisted: readonly (string | null)[]): boolean {
+  if (flag != null) return flag
   return persisted.some((c) => c != null && !DETERMINISTIC_CATEGORY_SET.has(c))
 }
 
@@ -463,7 +477,7 @@ export const bankStatementAnalysisHandler: SkillAnalysisHandler = {
         persisted = loadPersistedCategories(db, statementId)
       }
       categories = categoryTotals(rows, persisted)
-      modelAssisted = isModelAssisted(persisted)
+      modelAssisted = isModelAssisted(loadCategorizedByModel(db, statementId), persisted)
     }
 
     // Completeness assessment (§3.5, D56): the only true proof a total is WHOLE is the statement's

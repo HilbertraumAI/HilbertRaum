@@ -6,6 +6,38 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-25 — **Code-review fixes (Phase 31–33 follow-up; branch `pdf-geometry-extraction`, still unmerged/unpushed).**
+A high-effort review of the 6 unpushed commits surfaced correctness bugs; the contained ones are now fixed (suite
+**2228 passed / 37 skipped (+4)**, typecheck clean):
+- **PDF sign handling (`pdf-layout.ts`).** (S3) A standalone `+`/`-`/`S`/`H` marker beside the running-BALANCE column
+  no longer flips the AMOUNT: the fold now requires the marker to be at/right of the amount AND NEAREST the amount
+  column (not a later money column). (S2) A non-folded sign token is KEPT as description text (never silently dropped)
+  in reading order; only the amount's own sign cell is spliced out. (S4) `applySignMarker` now strips ALL leading/trailing
+  sign decorations (`+`/`-`/`(`/`)`), so a doubly-decorated token (`(1.234,56)-`, both accepted by `MONEY_TOKEN_RE`)
+  never leaves a stray `)`/`-`. New unit tests pin the balance-column-sign guard + the far-dash-as-text behaviour.
+- **Categorizer prefilter word boundaries (`categorizer.ts`, P10).** `prefilterCategory` now matches on Unicode word
+  boundaries, so a coincidental substring (`fee`⊂`coffee`, `atm`⊂`atmos`, `lohn`⊂`mühlohn`) no longer makes a confident
+  WRONG skip-the-model match. (`categorizeRow`, the deterministic fallback, is unchanged.)
+- **Model-assisted signal persisted (A8).** `runCategorize` now writes `bank_statements.categorized_by_model` (new
+  additive column) = 1 whenever the LLM was consulted; the analysis read-back labels the breakdown from that
+  authoritative flag (heuristic "category outside the rule set" kept only as a back-compat fallback for pre-flag
+  statements). Fixes the false-negative where a model run that emitted only in-rule-set labels (Income/Transfer/Fees/Cash)
+  showed NO "model-assisted" note.
+- **Routed-breakdown routing (`ChatScreen.tsx`, C1/C2).** After a categorize run completes, the breakdown question is
+  routed into the conversation that STARTED the run (captured in a ref) — never whatever conversation is active when the
+  module-level run finishes — and under the RUN's own `skillInstallId` (not the current picker), so it can never land in
+  the wrong transcript or bypass the 0-model-call bank handler. If the user navigated away it defers (surfaces on return).
+- **Auto-offer dedup + zero-row guard (`tool-runs.ts`/`manager.ts`, P11).** The post-extract auto-offer enqueues a
+  `'categorize'` doctask only when rows were extracted (`transactionCount > 0`) AND none is already pending for the doc
+  (new `DocTaskManager.hasPendingKind`), so a re-run extract (or extract + a manual categorize) no longer queues a
+  duplicate that redoes the model work and overwrites the first's labels.
+- **Deliberately NOT changed (documented tradeoffs / out of scope):** an empty-description dated+amount row is still
+  dropped (the intended phantom-balance kill — raw-emitting it would reintroduce phantoms); a continuation baseline with
+  ANY money token is still rejected wholesale (absorbing the figure would put it BEFORE the real amount and the line
+  parser would mis-read it — a verified regression, so the strict rule stays); a standalone `CHF`/`$` in a description is
+  still the currency class; the latest-statement reuse has no parser-version invalidation (intentional: avoids duplicates
+  + preserves persisted categories) — flagged as a future stamp if it bites. **STILL AWAITING approval to push / open the PR.**_
+
 _2026-06-25 — **Phase 33 DONE — bank-statement LLM categorizer + the `'categorize'` doctask + the routed-breakdown UX
 (branch `pdf-geometry-extraction`, still unmerged/unpushed).** Builds on the Phase-32 payee recovery (usable text to
 categorize) + the D55 grammar-decoding plumbing (below). **A category is NOT a figure** — a mislabel only shifts the

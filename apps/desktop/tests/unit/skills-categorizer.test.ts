@@ -77,6 +77,14 @@ describe('categorizer — prefilter', () => {
   it('an unmatched description returns null (→ ask the model)', () => {
     expect(prefilterCategory(row('REWE Markt', -45.9))).toBeNull()
   })
+  it('matches on WORD boundaries, not raw substrings (a coincidental match never skips the model)', () => {
+    // 'fee' ⊂ 'coffee', 'atm' ⊂ 'atmos', 'lohn' ⊂ 'mühlohn' must NOT prefilter — they go to the model.
+    expect(prefilterCategory(row('Coffee Fellows', -4.2))).toBeNull()
+    expect(prefilterCategory(row('ATMOS Sportswear', -89))).toBeNull()
+    expect(prefilterCategory(row('Baeckerei Muehlohn', -3.1))).toBeNull()
+    // A real keyword as its own word still matches (boundary, not equality).
+    expect(prefilterCategory(row('Monatliche Gebühr Konto', -3.5))).toBe('Fees')
+  })
 })
 
 describe('categorizeTransactions — model path', () => {

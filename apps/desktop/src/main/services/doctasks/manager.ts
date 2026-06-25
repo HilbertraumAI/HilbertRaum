@@ -457,6 +457,17 @@ export class DocTaskManager {
     return ids.some((id) => this.tasks.get(id)?.status.documentIds.includes(documentId) ?? false)
   }
 
+  /** True when a running OR queued task of `kind` already targets `documentId` — the dedup guard the
+   *  `extract` auto-offer uses so a re-run extract (or extract + a manual categorize) never enqueues a
+   *  second `categorize` over the same statement (duplicate model work, overwriting the first's labels). */
+  hasPendingKind(documentId: string, kind: DocTaskKind): boolean {
+    const ids = [...(this.runningId ? [this.runningId] : []), ...this.queue]
+    return ids.some((id) => {
+      const t = this.tasks.get(id)
+      return t != null && t.status.kind === kind && t.status.documentIds.includes(documentId)
+    })
+  }
+
   /** Run the next queued task; tasks serialize among themselves. */
   private pump(): void {
     if (this.runningId) return
@@ -1576,7 +1587,7 @@ export class DocTaskManager {
       amount: r.amount,
       currency: r.currency
     }))
-    const { assignments } = await categorizeTransactions(rows, {
+    const { assignments, modelAssisted } = await categorizeTransactions(rows, {
       runtime,
       signal,
       onProgress: (done, total) => {
@@ -1586,8 +1597,10 @@ export class DocTaskManager {
     })
     if (signal.aborted) throw new DOMException('Document task cancelled', 'AbortError')
 
-    // (3) Persist atomically — seed the categories (union of rule + LLM taxonomy) and update each row;
-    // a failure ROLLBACKs so no partial categorization survives (no-partial-persist).
+    // (3) Persist atomically — seed the categories (union of rule + LLM taxonomy), update each row, and
+    // record whether the LLM was consulted (the authoritative model-assisted signal the read-back labels
+    // the breakdown by — never re-derived from the category names). A failure ROLLBACKs so no partial
+    // categorization survives (no-partial-persist).
     try {
       db.exec('BEGIN')
       const byName = ensureBuiltinCategories(db, nowIso)
@@ -1597,6 +1610,10 @@ export class DocTaskManager {
         const catId = byName.get(a.category)
         if (tx && catId) upd.run(catId, tx.id)
       }
+      db.prepare('UPDATE bank_statements SET categorized_by_model = ? WHERE id = ?').run(
+        modelAssisted ? 1 : 0,
+        statementId
+      )
       db.exec('COMMIT')
     } catch (err) {
       try {

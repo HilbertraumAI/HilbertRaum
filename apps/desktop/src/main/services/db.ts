@@ -679,6 +679,12 @@ export function openDatabase(path: string): Db {
   // logged/audited/exported. NULL = a statement that printed no opening/closing balance (gate downgrades).
   ensureColumn(db, 'bank_statements', 'opening_balance', 'opening_balance REAL')
   ensureColumn(db, 'bank_statements', 'closing_balance', 'closing_balance REAL')
+  // Whether the categorizer doctask consulted the LLM for this statement (Phase 33). Additive +
+  // nullable: NULL/0 = deterministic rule pass (or not categorized), 1 = the model was involved, so the
+  // breakdown is labelled "model-assisted". The authoritative signal — replaces the lossy "any category
+  // outside the rule set" heuristic, which false-negatives when the model only emits in-rule-set labels
+  // (Income/Transfer/Fees/Cash). CONTENT-CLASS adjacent (a derived flag): never logged/audited/exported.
+  ensureColumn(db, 'bank_statements', 'categorized_by_model', 'categorized_by_model INTEGER')
   // Additive performance indexes (perf audit 2026-06-18, Wave P1 — DB-4/DB-6/DB-7). CREATE INDEX
   // IF NOT EXISTS is the same additive-migration idiom as the inline SCHEMA indexes; these live
   // here (after ensureColumn) because idx_bank_transactions_category indexes a migrated column.

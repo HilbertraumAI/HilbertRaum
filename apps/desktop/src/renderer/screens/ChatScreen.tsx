@@ -661,9 +661,15 @@ export function ChatScreen({
     // `activeId` (null → created id).
   }, [currentSkillId, activeId])
 
+  // The conversation a categorize run was started in (C1): the routed breakdown below must land in THIS
+  // conversation, never whatever conversation happens to be active when the (module-level, app-wide) run
+  // finishes — switching conversations mid-run would otherwise inject the answer into the wrong transcript.
+  const categorizeRunConvRef = useRef<string | null>(null)
+
   // Start a tool run from the calm transcript affordance (DS4 — a USER action, never the model).
   function onRunTool(toolName: string, confirmed: boolean): void {
     if (!currentSkillId || !activeId) return
+    if (toolName === 'categorize_transactions') categorizeRunConvRef.current = activeId
     setError(null)
     void startSkillRun({ skillInstallId: currentSkillId, toolName, conversationId: activeId, confirmed })
       .then((outcome) => {
@@ -685,11 +691,19 @@ export function ChatScreen({
     if (!run || run.toolName !== 'categorize_transactions' || run.state !== 'done') return
     if (handledCategorizeRunRef.current === run.runHandle) return
     if (mode !== 'documents' || !activeId || busyStreaming) return
+    // Only route into the conversation that STARTED the run (C1). If the user navigated to another
+    // conversation, skip — without marking it handled — so the answer surfaces when they return, and is
+    // never injected into the wrong transcript. (Fallback to activeId only when the origin is unknown,
+    // e.g. after a screen remount lost the ref.)
+    const targetConv = categorizeRunConvRef.current ?? activeId
+    if (targetConv !== activeId) return
     handledCategorizeRunRef.current = run.runHandle
     acknowledgeSkillRun() // drop the content-free run row; the routed answer replaces it
     const question = t('chat.skill.categorize.breakdownQuestion')
-    setMessages((prev) => [...prev, optimisticUser(activeId, question)])
-    void stream(activeId, question, false, depthFor(activeId), currentSkillId)
+    setMessages((prev) => [...prev, optimisticUser(targetConv, question)])
+    // Route under the skill the RUN used (C2) — never `currentSkillId`, which is whatever the picker
+    // shows now; a null/non-bank pick would bypass the 0-model-call bank analysis handler.
+    void stream(targetConv, question, false, depthFor(targetConv), run.skillInstallId)
     // Keyed on the run + mode/conv/streaming-gate; the other closures are stable for this effect.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeSkillRun, mode, activeId, busyStreaming])

@@ -213,14 +213,19 @@ export function buildToolRunner(
           // Geometry-aware layout reconstruction for the columnar statement (plan §3.1, D58 — bank only).
           layout: true
         })
-        // Auto-offer (Phase 33, Q2): once a statement is extracted, kick off categorization in the
-        // background doctask lane (D26-safe, model-optional). Best-effort — a refused start (chat
-        // streaming) or no doctask lane just means the user categorizes manually later.
-        if (res.ok && deps.docTasks) {
-          try {
-            deps.docTasks.startDocTask({ kind: 'categorize', documentIds: [args.documentId] })
-          } catch {
-            /* best-effort auto-offer */
+        // Auto-offer (Phase 33, Q2): once a statement with rows is extracted, kick off categorization in
+        // the background doctask lane (D26-safe, model-optional). Best-effort. Guards: only when rows were
+        // actually extracted (a 0-row extract has nothing to categorize), and only when no categorize is
+        // already queued/running for this document (so a re-run extract — or extract + a manual categorize
+        // — never enqueues a duplicate that redoes the model work and overwrites the first's labels).
+        if (res.ok && (res.transactionCount ?? 0) > 0 && deps.docTasks) {
+          const docTasks = deps.docTasks
+          if (!docTasks.hasPendingKind(args.documentId, 'categorize')) {
+            try {
+              docTasks.startDocTask({ kind: 'categorize', documentIds: [args.documentId] })
+            } catch {
+              /* best-effort auto-offer */
+            }
           }
         }
         return {

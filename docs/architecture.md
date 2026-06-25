@@ -2628,10 +2628,13 @@ on one line), and bare `DD.MM.` per-row dates with the year only in the header a
     wrapped is rescued by A1. The §21 objection to a bare "drop a currency-only description" guard (it
     silently dropped 8 genuine wrapped rows) no longer applies — A1 is what makes A2 safe: the genuine
     row's payee continuation makes its description non-empty; the phantom's does not.
-  - **(A3) Sign-column fold.** A standalone `+`/`-` or Soll/Haben `S`/`H` marker in the money column zone
-    (`SIGN_ZONE_SLACK`) is folded into the amount's sign (`S`/`-` → debit/negative, `H`/`+` →
-    credit/positive). Conservative by design: a dash FAR from the amount (a description dash) is dropped
-    from the text but NEVER read as a sign, so it can't flip a total. **Caveat (D57):** the EXACT HVB sign
+  - **(A3) Sign-column fold.** A standalone `+`/`-` or Soll/Haben `S`/`H` marker is folded into the
+    amount's sign (`S`/`-` → debit/negative, `H`/`+` → credit/positive) ONLY when it is the AMOUNT
+    column's own sign cell: at/right of the amount (within `SIGN_ZONE_SLACK`) AND nearer the amount than
+    any later money column — so a marker printed beside the running BALANCE never flips the amount
+    (review fix S3). Conservative by design: a dash FAR from the amount (a description dash) is NEVER read
+    as a sign (so it can't flip a total) and a non-folded sign token is kept as description text rather
+    than silently dropped (S2). **Caveat (D57):** the EXACT HVB sign
     encoding (separate cell vs a glued trailing minus pdf.js splits) must be confirmed on the real
     statement via the local gold-set harness; A3 handles the sign-column case without guessing at a
     mid-line dash. Until confirmed, an unusual sign layout still degrades to the honest gate
@@ -2789,10 +2792,15 @@ figure verification is needed. The constraints that DO hold:
   `responseSchema`) exercises exactly this path in CI.
 - **Model-OPTIONAL.** With no model loaded the module degrades to the deterministic rule pass
   (`categorizeRow`). Confident description-rule matches (Fees/Income/Transfer/Cash) are a PRE-FILTER that
-  skips the model; the rest go to the model in batches of `CATEGORIZER_BATCH_SIZE` (=20).
-- **Model-assisted label.** A breakdown is labelled model-assisted whenever a persisted category lies
-  OUTSIDE the deterministic rule set (the honest, schema-free signal — a deterministic fallback writes
-  only rule-set names, so it is never mislabelled). `categorizer.ts` + `analysis/bank-statement.ts`.
+  skips the model; the rest go to the model in batches of `CATEGORIZER_BATCH_SIZE` (=20). The pre-filter
+  matches on Unicode WORD boundaries (review fix P10), so a coincidental substring (`fee`⊂`coffee`) never
+  makes a confident wrong skip-the-model match.
+- **Model-assisted label.** The breakdown is labelled model-assisted from the authoritative persisted flag
+  `bank_statements.categorized_by_model` (=1 whenever the LLM was consulted), written by the categorizer
+  doctask (review fix A8). The earlier "any persisted category OUTSIDE the deterministic rule set" heuristic
+  is kept ONLY as a back-compat fallback for statements categorized before the flag existed — on its own it
+  false-negatives when the model emits only in-rule-set labels (Income/Transfer/Fees/Cash).
+  `categorizer.ts` + `doctasks/manager.ts` + `analysis/bank-statement.ts`.
 - **Localized display, canonical-English identity.** The PERSISTED category (`bank_categories.name`) and
   the enum stay canonical English (so the schema, persistence, and the model-assisted signal are
   locale-stable); the breakdown DISPLAY label is localized (EN + DE, `skills.bankCategory.*` →
