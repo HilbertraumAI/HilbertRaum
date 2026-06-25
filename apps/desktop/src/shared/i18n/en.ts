@@ -172,6 +172,9 @@ export const en = {
   'chat.skill.tool.validateInvoiceTotals': 'Check totals',
   'chat.skill.tool.exportInvoiceCsv': 'Export to CSV',
   'chat.skill.tool.redactDocument': 'Redact personal data',
+  // The breakdown question routed into the transcript after a categorize run (Phase 33, Q3) — it must
+  // be both analysis- and category-shaped so the bank analysis handler answers it (0 model calls).
+  'chat.skill.categorize.breakdownQuestion': 'Break down my spending by category.',
   'chat.skill.run.running.one': 'Running: {tool} on {count} document…',
   'chat.skill.run.running.other': 'Running: {tool} on {count} documents…',
   'chat.skill.run.cancel': 'Cancel',
@@ -280,6 +283,8 @@ export const en = {
   'docs.task.treeBusyTitle': 'A deep index is being built for the whole document',
   'docs.task.extractBusyTitle':
     'The whole document is being scanned so it can answer "list every…" questions',
+  'docs.task.categorizeBusy': 'Categorizing transactions…',
+  'docs.task.categorizeBusyTitle': 'The statement’s transactions are being categorized',
   'docs.error.noSupported': 'No supported documents were found in that selection.',
   'docs.removedDocFallback': 'a removed document',
   // Provenance lines render around inline <b>title</b> elements.
@@ -486,6 +491,8 @@ export const en = {
     'might be wrong, I won’t state a sum here; please open the statement and check the figures yourself.',
   'skills.bankAnalysis.categoryHeading': 'By category:',
   'skills.bankAnalysis.categoryItem': '- {category}: {amount} {currency} ({count})',
+  'skills.bankAnalysis.categoryAssisted':
+    '_Categories are model-assisted — a label may be off, but the totals above are unchanged._',
   'skills.bankAnalysis.caveat':
     'These figures are the statement’s own printed amounts, read across the whole document — ' +
     'nothing here is added up from prose or invented.',

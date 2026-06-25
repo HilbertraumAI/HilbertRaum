@@ -320,7 +320,8 @@ export function registerSkillsIpc(ctx: AppContext): void {
       toolName,
       { skillInstallId, conversationId, documentId: docIds[0], confirmed: req?.confirmed },
       runAudit,
-      { saveTextFile, readDocumentSegments }
+      // `docTasks` routes `categorize_transactions` into the doctask lane (D26 exclusion, Phase 33).
+      { saveTextFile, readDocumentSegments, docTasks: ctx.docTasks }
     )
     if (!runner) return { started: false, error: tMain('main.skills.run.unavailable') }
     try {

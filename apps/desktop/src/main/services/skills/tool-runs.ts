@@ -15,7 +15,8 @@ import {
   runDocumentRedaction
 } from './run'
 import { runInvoiceCsvExport, runInvoiceExtraction, runInvoiceTotalsValidation } from './invoice-run'
-import type { ToolRunner } from './run-controller'
+import type { ToolRunner, ToolRunOutcome } from './run-controller'
+import type { DocTaskManager } from '../doctasks/manager'
 
 // The app-orchestrated tool-run DISPATCH (skills plan §6/§12.2, Phase S11b). This is the ONE place
 // that maps a registry tool name to its persistence seam (`run.ts`) and so is allowed to know bank
@@ -139,6 +140,49 @@ export interface ToolRunDeps {
    * it to exercise the legacy chunk-table reader against seeded chunks.
    */
   readDocumentSegments?: (documentId: string, opts?: { layout?: boolean }) => Promise<DocumentChunkRead[]>
+  /**
+   * The document-task manager (Phase 33). When present, `categorize_transactions` runs in the DOCTASK
+   * lane — the only lane with the chat↔task one-job-at-a-time exclusion (D26), so the LLM categorizer's
+   * `chatStream` can never race a chat answer on the one llama-server. The skill-run shell just mirrors
+   * the doctask's progress/cancel into the run bar. Absent (tests/headless) ⇒ the deterministic seam.
+   */
+  docTasks?: DocTaskManager
+}
+
+/**
+ * Run `categorize_transactions` by enqueuing a `'categorize'` doctask and MIRRORING its lifecycle into
+ * the skill-run shell (Phase 33). The model call happens INSIDE the doctask (D26-safe); this only polls
+ * its status, forwards Cancel, and maps the terminal state to a content-free outcome. The categorized
+ * row count rides in the doctask's progress total.
+ */
+async function runCategorizeViaDocTask(
+  docTasks: DocTaskManager,
+  documentId: string,
+  signal: AbortSignal,
+  onProgress: (p: { done: number; total: number }) => void
+): Promise<ToolRunOutcome> {
+  let jobId: string
+  try {
+    jobId = docTasks.startDocTask({ kind: 'categorize', documentIds: [documentId] }).jobId
+  } catch (e) {
+    // A friendly guard (chat streaming / document not ready) — surface it as a failed run.
+    return { ok: false, error: e instanceof Error ? e.message : undefined }
+  }
+  const onAbort = (): void => docTasks.cancelDocTask(jobId)
+  if (signal.aborted) docTasks.cancelDocTask(jobId)
+  else signal.addEventListener('abort', onAbort)
+  try {
+    for (;;) {
+      const status = docTasks.getDocTask(jobId)
+      onProgress({ done: status.progress.stepsDone, total: status.progress.stepsTotal })
+      if (status.state === 'done') return { ok: true, transactionCount: status.progress.stepsTotal }
+      if (status.state === 'cancelled') return { ok: false, cancelled: true }
+      if (status.state === 'failed') return { ok: false, error: status.error ?? undefined }
+      await new Promise((r) => setTimeout(r, 60))
+    }
+  } finally {
+    signal.removeEventListener('abort', onAbort)
+  }
 }
 
 /**
@@ -169,6 +213,16 @@ export function buildToolRunner(
           // Geometry-aware layout reconstruction for the columnar statement (plan §3.1, D58 — bank only).
           layout: true
         })
+        // Auto-offer (Phase 33, Q2): once a statement is extracted, kick off categorization in the
+        // background doctask lane (D26-safe, model-optional). Best-effort — a refused start (chat
+        // streaming) or no doctask lane just means the user categorizes manually later.
+        if (res.ok && deps.docTasks) {
+          try {
+            deps.docTasks.startDocTask({ kind: 'categorize', documentIds: [args.documentId] })
+          } catch {
+            /* best-effort auto-offer */
+          }
+        }
         return {
           ok: res.ok,
           transactionCount: res.transactionCount,
@@ -190,6 +244,13 @@ export function buildToolRunner(
         }
       }
     case 'categorize_transactions':
+      // The LLM categorizer runs in the doctask lane (D26 exclusion) when available; the skill-run
+      // shell just mirrors its status. Without a doctask lane (tests/headless) fall back to the
+      // deterministic seam directly.
+      if (deps.docTasks) {
+        const docTasks = deps.docTasks
+        return ({ signal, onProgress }) => runCategorizeViaDocTask(docTasks, args.documentId, signal, onProgress)
+      }
       return async ({ signal, onProgress }) => {
         const res = await runCategorization(db, seamArgs, { audit, signal, onProgress })
         return { ok: res.ok, transactionCount: res.count, cancelled: res.cancelled, errorCode: res.errorCode, error: res.error }

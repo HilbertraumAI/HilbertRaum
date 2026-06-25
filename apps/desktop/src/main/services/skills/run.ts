@@ -11,6 +11,7 @@ import {
   type ReconcileResult,
   type TransactionInput
 } from './tools/bank-statement'
+import { CATEGORIZER_CATEGORIES } from './categorizer'
 import type { RedactDocumentOutput } from './tools/redaction'
 
 // The app-orchestrated run seam (architecture.md "Skills — design record" §8, Phase S11a). This is the exact
@@ -493,8 +494,14 @@ export async function runBalanceValidation(
   return { ok: true, runId, count: mismatchCount, resultKind }
 }
 
-/** Get (seeding once) the built-in `bank_categories` ids by name, plus seed the rules they use. */
-function ensureBuiltinCategories(db: Db, now: string): Map<string, string> {
+/**
+ * Get (seeding once) the built-in `bank_categories` ids by name, plus seed the rules they use.
+ * The seeded NAMES are the union of the deterministic-rule categories (`BUILTIN_CATEGORIES`) and the
+ * richer LLM-categorizer taxonomy (`CATEGORIZER_CATEGORIES`, Phase 33), so a model-assigned category
+ * (e.g. "Groceries") always maps to a seeded row. Only the deterministic categories carry RULES.
+ * Exported so the `'categorize'` doctask (the LLM categorizer's lane) reuses the exact same seed.
+ */
+export function ensureBuiltinCategories(db: Db, now: string): Map<string, string> {
   const existing = db.prepare('SELECT id, name FROM bank_categories WHERE builtin = 1').all() as Array<{
     id: string
     name: string
@@ -503,7 +510,7 @@ function ensureBuiltinCategories(db: Db, now: string): Map<string, string> {
   const insertCat = db.prepare(
     'INSERT INTO bank_categories (id, name, builtin, created_at) VALUES (?, ?, 1, ?)'
   )
-  for (const name of BUILTIN_CATEGORIES) {
+  for (const name of [...new Set([...BUILTIN_CATEGORIES, ...CATEGORIZER_CATEGORIES])]) {
     if (!byName.has(name)) {
       const id = randomUUID()
       insertCat.run(id, name, now)

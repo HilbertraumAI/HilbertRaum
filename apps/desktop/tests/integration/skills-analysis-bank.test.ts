@@ -205,6 +205,44 @@ describe('bank-statement analysis handler — run()', () => {
     expect(ctx.events.map((e) => e.meta?.toolName)).toContain('categorize_transactions')
     expect(res.answer).toContain(tr('skills.bankAnalysis.categoryHeading'))
     expect(res.answer).toContain('Income') // Salary → Income (built-in rule)
+    // Deterministic rule pass only — NOT labelled model-assisted.
+    expect(res.answer).not.toContain(tr('skills.bankAnalysis.categoryAssisted'))
+  })
+
+  it('reads PERSISTED categories (Phase 33) and labels a model-assigned breakdown model-assisted', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, COMPLETE)
+    // First call extracts + deterministically categorizes the statement (creates the statement).
+    await bankStatementAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'break down spending by category'))
+    const stmt = db
+      .prepare('SELECT id FROM bank_statements WHERE document_id = ? ORDER BY created_at DESC LIMIT 1')
+      .get(id) as { id: string }
+
+    // Simulate the LLM categorizer doctask having assigned a RICHER category (outside the rule set).
+    const now = new Date().toISOString()
+    const catId = randomUUID()
+    db.prepare('INSERT INTO bank_categories (id, name, builtin, created_at) VALUES (?, ?, 1, ?)').run(
+      catId,
+      'Groceries',
+      now
+    )
+    db.prepare(
+      `UPDATE bank_transactions SET category_id = ?
+       WHERE id = (SELECT id FROM bank_transactions WHERE statement_id = ? ORDER BY row_index LIMIT 1)`
+    ).run(catId, stmt.id)
+
+    // The second call REUSES the same statement, so it reads the persisted categories — including the
+    // model-assigned "Groceries" — and labels the breakdown model-assisted (it never re-extracts/overwrites).
+    const res = await bankStatementAnalysisHandler.run!(
+      ctxFor(db, { documentIds: [id] }, 'break down spending by category')
+    )
+    expect(res.answer).toContain('Groceries')
+    expect(res.answer).toContain(tr('skills.bankAnalysis.categoryAssisted'))
+    // No duplicate statement was created (re-extraction is suppressed when one exists).
+    const count = db.prepare('SELECT COUNT(*) AS n FROM bank_statements WHERE document_id = ?').get(id) as {
+      n: number
+    }
+    expect(count.n).toBe(1)
   })
 
   it('presents a clearly-LABELLED sum when no opening/closing balance is printed (D56 unverified case)', async () => {

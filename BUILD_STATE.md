@@ -6,6 +6,49 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-25 — **Phase 33 DONE — bank-statement LLM categorizer + the `'categorize'` doctask + the routed-breakdown UX
+(branch `pdf-geometry-extraction`, still unmerged/unpushed).** Builds on the Phase-32 payee recovery (usable text to
+categorize) + the D55 grammar-decoding plumbing (below). **A category is NOT a figure** — a mislabel only shifts the
+per-category breakdown, never the verified statement total or the D56 gate — so the categorizer is defensible under the
+honesty posture with NO `grounding_quote`/figure-verification; the constraints that hold are offline-only + fixed-set +
+grammar-constrained + drop-to-`Uncategorized` + a "model-assisted" label + deterministic degrade. **As built:**
+- **`services/skills/categorizer.ts`** — a fixed EN taxonomy (`CATEGORIZER_CATEGORIES`: Groceries/Dining/Transport/
+  Utilities/Rent/Insurance/Subscriptions/Health/Shopping/Income/Transfer/Fees/Cash/Tax/Uncategorized; DE glosses in the
+  prompt only). Confident description-rule matches (Fees/Income/Transfer/Cash) are a PRE-FILTER that skips the model; the
+  rest go to the model in batches of 20 under a `json_schema` whose category field is an ENUM of the set (so the model can
+  never emit an off-list label — the D55 `responseSchema`). Off-list/out-of-range/missing → `Uncategorized`; a whole batch
+  drops on a parse failure. No runtime ⇒ the deterministic rule pass. Pure/MockRuntime-testable.
+- **`'categorize'` DocTaskKind** (`doctasks/manager.ts` + `shared/types.ts`) — the ONE model-OPTIONAL kind (skips
+  `startDocTask`'s runtime gate; null runtime ⇒ deterministic). `runCategorize` loads the latest statement, AUTO-EXTRACTS
+  first when none exists (fixes the (D) `needsExtraction` ordering failure), runs the categorizer with progress+cancel, and
+  persists `category_id` ATOMICALLY (reuses the now-exported `ensureBuiltinCategories`, which seeds the union of the rule
+  set + the LLM taxonomy). Chosen as a doctask (not a skill-run model call) for the D26 chat↔task exclusion — verified the
+  `SkillRunController`/`ModelSlotArbiter` are SEPARATE lanes that wouldn't stop two concurrent `chatStream` calls.
+- **Button wiring — wrap the doctask in the skill-run shell (Q1).** The "Kategorisieren" button keeps its
+  `SkillRunController` UX: `tool-runs.ts` `runCategorizeViaDocTask` ENQUEUES the doctask and mirrors progress/cancel; the
+  model call runs in the doctask lane (D26-safe). `ctx.docTasks` is threaded from `registerSkillsIpc`. Without a doctask lane
+  (tests/headless) it falls back to the deterministic `runCategorization` seam.
+- **Auto-offer after extraction (Q2).** A successful `extract_transactions` BUTTON run best-effort enqueues a `'categorize'`
+  doctask in the background (D26-safe, model-optional). The chat analysis path is unaffected (it never goes through that runner).
+- **Analysis read-back stays 0-model-calls + routed feedback (Q3).** `analysis/bank-statement.ts` now REUSES the latest
+  statement (re-extraction is deterministic → would only duplicate AND discard the doctask's persisted categories) and
+  `categoryTotals` reads the PERSISTED category (LEFT JOIN `bank_categories`), else `categorizeRow`; it runs the deterministic
+  rule pass only when nothing is categorized yet (never overwriting model categories). `modelAssisted` (a persisted category
+  OUTSIDE the deterministic rule set — the honest schema-free signal) drives a "model-assisted" note. After a categorize run
+  completes, `ChatScreen` ROUTES the standard breakdown question into the transcript, so the model-assisted breakdown appears
+  as a normal chat answer (still 0 model calls in the handler).
+- **i18n:** new DE/EN keys (`docs.task.categorizeBusy`/`Title`, `skills.bankAnalysis.categoryAssisted`,
+  `chat.skill.categorize.breakdownQuestion`) — parity test green.
+- **Tests:** `skills-categorizer.test.ts` (9), `doctasks-categorize.test.ts` (3 — model path, deterministic fallback,
+  auto-extract-then-categorize), `skills-analysis-bank.test.ts` (+1 — persisted model categories surface + the label, no
+  duplicate statement). Full suite **2224 passed / 37 skipped (+13)**, typecheck clean, production build green.
+- **Honesty posture intact:** the D56 gate's three outcomes are untouched (the categorizer never feeds a figure); a
+  model-assigned category is always labelled model-assisted; drop-on-failure to `Uncategorized`; never an off-set label.
+- **Known v1 limitations (documented):** category labels are English-keyed (DE glosses guide the model only); auto-offer fires
+  only on the extract BUTTON, not the chat-question path. **STILL AWAITING approval to push / open the PR.** Per-phase ritual
+  satisfied (tests + docs `architecture.md` §22 + `known-limitations.md` + this entry). **ALSO still pending (local-only):**
+  run the gold-set harness on the real HVB file (`HILBERTRAUM_PDF_GOLDSET=1`) to confirm A3 sign handling + re-measure §21._
+
 _2026-06-25 — **Runtime: grammar-constrained decoding plumbed through the chat seam (D55 prerequisite) — the foundation for the
 bank LLM categorizer (Phase 33 prep; branch `pdf-geometry-extraction`).** `RuntimeChatOptions` gains an optional `responseSchema`
 (+ `responseSchemaName`); `LlamaRuntime.chatStream` maps it to llama-server's OpenAI-compatible `response_format: { type:

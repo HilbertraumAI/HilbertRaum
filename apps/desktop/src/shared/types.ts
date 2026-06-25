@@ -760,8 +760,11 @@ export interface ConversationSearchResult {
  * (queue, cancel, polling IPC). `tree` (deep-index summary tree) and `extract` (the
  * per-chunk structured-extract pass, Phase 3) are the whole-document-analysis YIELDING
  * background jobs — they cede the model slot to chat between units and resume in-session;
- * the other kinds run to completion and refuse chat while active. */
-export type DocTaskKind = 'summary' | 'translation' | 'compare' | 'ocr' | 'tree' | 'extract'
+ * the other kinds run to completion and refuse chat while active. `categorize` (Phase 33)
+ * is the bank-statement LLM categorizer: it runs in the task lane purely for the chat↔task
+ * one-job-at-a-time exclusion (D26), and is the ONE kind that does NOT require a runtime —
+ * with no model loaded it degrades to the deterministic rule pass (services/skills/categorizer.ts). */
+export type DocTaskKind = 'summary' | 'translation' | 'compare' | 'ocr' | 'tree' | 'extract' | 'categorize'
 
 /**
  * Translation targets, v1: the two eval-set languages only. A free-text language

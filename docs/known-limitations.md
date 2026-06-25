@@ -355,6 +355,15 @@ password recovery — are documented in
   x-adjacency money re-merge (deferred). The same `architecture.md` §21 entry pins the
   two tuning-constant boundaries (a row whose baselines jitter past the 3-pt tolerance loses its amount; a
   Datum/Valuta gap under 12 pt merges, allowing a spurious row).
+- **Bank-statement categories are model-assisted, not verified (Phase 33).** The per-category breakdown
+  is assigned by a local LLM constrained to a **fixed category set** (it can never invent a label; any
+  uncertain/unparseable output drops to `Uncategorized`), so a category may be **wrong** — but a mislabel
+  only shifts the breakdown, never the **verified statement total** or the **D56 completeness gate** (which
+  read the signed amounts, not the labels). The breakdown is shown with an explicit "model-assisted" note.
+  With **no model loaded** it degrades to the deterministic rule pass (a smaller, coarser category set).
+  Categorization runs in the **doctask lane** (D26 — one job at a time), so it cannot run while chat
+  streams. The grouping is **English-keyed** (canonical category names; DE glosses guide the model only) —
+  a German user sees English category labels in v1.
 - **Strictly one job at a time (D26).** While a summary runs, chat is refused with a
   friendly message + a cancel option, and vice versa — the one local model serves one
   request. The R-T1 probe confirmed the pinned b9585 WOULD serve concurrent requests on

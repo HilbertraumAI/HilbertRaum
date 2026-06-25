@@ -9,12 +9,18 @@ import type {
   CoverageTier,
   DocTaskKind,
   DocTaskStatus,
+  DocumentChunkRead,
   DocumentSummary,
   GeneratedProvenance,
+  SkillToolAudit,
   StartDocTaskRequest,
   TranslationTargetLang
 } from '../../../shared/types'
 import type { ChatMessage, ModelRuntime } from '../runtime'
+import { runBankExtraction, ensureBuiltinCategories } from '../skills/run'
+import { categorizeTransactions } from '../skills/categorizer'
+import { skillInstallId } from '../skills/registry'
+import type { TransactionInput } from '../skills/tools/bank-statement'
 import { isExceedContextError } from '../runtime/llama'
 import { approxTokenCount, truncateToApproxTokens } from '../ingestion/chunker'
 import {
@@ -300,7 +306,8 @@ export class DocTaskManager {
       kind !== 'compare' &&
       kind !== 'ocr' &&
       kind !== 'tree' &&
-      kind !== 'extract'
+      kind !== 'extract' &&
+      kind !== 'categorize'
     ) {
       throw new Error(tMain('main.task.unknownKind'))
     }
@@ -326,12 +333,14 @@ export class DocTaskManager {
       throw new Error(tMain('main.task.refusedChatStreaming'))
     }
     // OCR runs the local recognition engine, not the chat model — it needs the
-    // vendored language files instead of a running runtime.
+    // vendored language files instead of a running runtime. `categorize` (Phase 33) is the one
+    // model-OPTIONAL kind: with no runtime it degrades to the deterministic rule pass, so it must
+    // be allowed to start regardless — the runtime is read (possibly null) at run time.
     if (kind === 'ocr') {
       if (!this.deps.getOcrEngine?.()) {
         throw new Error(tMain('main.task.needsOcr'))
       }
-    } else if (!this.deps.getRuntime()) {
+    } else if (kind !== 'categorize' && !this.deps.getRuntime()) {
       throw new Error(tMain('main.noModelRunning'))
     }
     // Compare runs over exactly TWO (distinct) documents; summary/translation/ocr over one.
@@ -482,6 +491,10 @@ export class DocTaskManager {
       if (kind === 'ocr') {
         // OCR uses the recognition engine, not the chat runtime.
         resultId = await this.runOcr(task)
+      } else if (kind === 'categorize') {
+        // The bank-statement LLM categorizer (Phase 33) — model-OPTIONAL: a null runtime degrades to
+        // the deterministic rule pass inside runCategorize (so it never fails for "no model").
+        resultId = await this.runCategorize(task, this.deps.getRuntime())
       } else {
         // Re-check at dequeue time: the runtime may have been stopped while queued.
         const runtime = this.deps.getRuntime()
@@ -1502,6 +1515,106 @@ export class DocTaskManager {
       shredFile(tempPath)
       release()
     }
+  }
+
+  /**
+   * The bank-statement LLM categorizer task (Phase 33; architecture.md §21). It lives in the doctask
+   * lane PURELY for the chat↔task one-job-at-a-time exclusion (D26) — the `SkillRunController` and the
+   * `ModelSlotArbiter` are separate lanes that wouldn't stop two `chatStream` calls hitting the one
+   * llama-server at once. Steps: (1) locate the latest statement for the document and AUTO-EXTRACT it
+   * first when none exists (fixes the (D) "categorize before extract" ordering failure); (2) run the
+   * categorizer over the rows (`runtime` null ⇒ deterministic rule pass — model-OPTIONAL); (3) persist
+   * `bank_transactions.category_id` ATOMICALLY (no partial annotations survive a failure). A category is
+   * not a figure, so this never touches the verified total or the D56 gate — only the breakdown. The
+   * source document id is the resultRef. Aborts propagate (a cancel lands in `cancelled`, nothing partial).
+   */
+  private async runCategorize(task: InternalTask, runtime: ModelRuntime | null): Promise<string> {
+    const documentId = task.status.documentIds[0]
+    const signal = task.controller.signal
+    const db = this.deps.getDb()
+    const nowIso = new Date().toISOString()
+
+    // (1) The latest statement, auto-extracting first when the user clicked categorize before extract.
+    let statementId = this.latestBankStatementId(db, documentId)
+    if (!statementId) {
+      const audit: SkillToolAudit = (type, meta) => this.deps.audit?.(type, type, meta)
+      const ingestion = this.deps.getIngestionDeps()
+      const storeDir = this.deps.getStoreDir()
+      const readDocumentSegments = async (
+        id: string,
+        opts?: { layout?: boolean }
+      ): Promise<DocumentChunkRead[]> => {
+        const preview = await extractDocumentPreview(
+          db,
+          storeDir,
+          id,
+          { cipher: ingestion.cipher, ocrEngine: this.deps.getOcrEngine?.() ?? ingestion.ocrEngine },
+          { layout: opts?.layout }
+        )
+        return preview.segments.map((s, index) => ({ text: s.text, page: s.pageNumber, index }))
+      }
+      const ext = await runBankExtraction(
+        db,
+        { skillInstallId: skillInstallId('app', 'bank-statement'), conversationId: null, documentId },
+        { audit, signal, readDocumentSegments, layout: true }
+      )
+      if (signal.aborted) throw new DOMException('Document task cancelled', 'AbortError')
+      if (!ext.ok || !ext.statementId) throw new Error(tMain('main.task.documentNotReady'))
+      statementId = ext.statementId
+    }
+
+    // (2) Load the rows (with ids, in stable order) and categorize them.
+    const loaded = db
+      .prepare(
+        `SELECT id, date, description, amount, currency
+         FROM bank_transactions WHERE statement_id = ? ORDER BY row_index`
+      )
+      .all(statementId) as Array<{ id: string; date: string; description: string; amount: number; currency: string }>
+    const rows: TransactionInput[] = loaded.map((r) => ({
+      date: r.date,
+      description: r.description,
+      amount: r.amount,
+      currency: r.currency
+    }))
+    const { assignments } = await categorizeTransactions(rows, {
+      runtime,
+      signal,
+      onProgress: (done, total) => {
+        task.status.progress.stepsDone = done
+        task.status.progress.stepsTotal = total
+      }
+    })
+    if (signal.aborted) throw new DOMException('Document task cancelled', 'AbortError')
+
+    // (3) Persist atomically — seed the categories (union of rule + LLM taxonomy) and update each row;
+    // a failure ROLLBACKs so no partial categorization survives (no-partial-persist).
+    try {
+      db.exec('BEGIN')
+      const byName = ensureBuiltinCategories(db, nowIso)
+      const upd = db.prepare('UPDATE bank_transactions SET category_id = ? WHERE id = ?')
+      for (const a of assignments) {
+        const tx = loaded[a.index]
+        const catId = byName.get(a.category)
+        if (tx && catId) upd.run(catId, tx.id)
+      }
+      db.exec('COMMIT')
+    } catch (err) {
+      try {
+        db.exec('ROLLBACK')
+      } catch {
+        /* keep the original failure */
+      }
+      throw err
+    }
+    return documentId
+  }
+
+  /** The newest statement id for a document (the deterministic categorize target), or null if none. */
+  private latestBankStatementId(db: Db, documentId: string): string | null {
+    const row = db
+      .prepare('SELECT id FROM bank_statements WHERE document_id = ? ORDER BY created_at DESC, id DESC LIMIT 1')
+      .get(documentId) as { id: string } | undefined
+    return row?.id ?? null
   }
 
   /**

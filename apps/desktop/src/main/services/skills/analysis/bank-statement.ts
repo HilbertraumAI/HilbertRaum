@@ -13,6 +13,7 @@ import {
   type BankExtractionDeps
 } from '../run'
 import {
+  BUILTIN_CATEGORIES,
   assessCompleteness,
   categorizeRow,
   reconcileBalances,
@@ -117,6 +118,43 @@ function loadStatementRows(db: Db, statementId: string): TransactionInput[] {
   })
 }
 
+/**
+ * The PERSISTED category name per row (Phase 33), LEFT JOINed so an UNassigned row reads null. Aligned
+ * to `row_index` order (same as `loadStatementRows`), so `categoryTotals` can index the two in lockstep.
+ * A non-null name is whatever the categorizer (LLM doctask) or the deterministic rule pass wrote; a
+ * null falls back to the on-the-fly `categorizeRow` at read time (no persistence required to answer).
+ */
+function loadPersistedCategories(db: Db, statementId: string): (string | null)[] {
+  const rows = db
+    .prepare(
+      `SELECT c.name AS name
+       FROM bank_transactions t
+       LEFT JOIN bank_categories c ON c.id = t.category_id
+       WHERE t.statement_id = ? ORDER BY t.row_index`
+    )
+    .all(statementId) as Array<{ name: string | null }>
+  return rows.map((r) => r.name ?? null)
+}
+
+/** The newest statement id for a document, or null when none has been extracted yet. */
+function latestStatementId(db: Db, documentId: string): string | null {
+  const row = db
+    .prepare('SELECT id FROM bank_statements WHERE document_id = ? ORDER BY created_at DESC, id DESC LIMIT 1')
+    .get(documentId) as { id: string } | undefined
+  return row?.id ?? null
+}
+
+// The categories the DETERMINISTIC rule pass can produce (`categorizeRow`). A persisted category OUTSIDE
+// this set could only have come from the LLM categorizer (the richer Groceries/Dining/… taxonomy), so it
+// is the honest, schema-free signal that the breakdown is MODEL-ASSISTED. The reverse never misfires: a
+// deterministic fallback (no model loaded) writes only these names, so it is never labelled model-assisted.
+const DETERMINISTIC_CATEGORY_SET: ReadonlySet<string> = new Set(BUILTIN_CATEGORIES)
+
+/** True when any persisted category lies outside the deterministic rule set ⇒ the LLM was involved. */
+function isModelAssisted(persisted: readonly (string | null)[]): boolean {
+  return persisted.some((c) => c != null && !DETERMINISTIC_CATEGORY_SET.has(c))
+}
+
 /** The persisted statement-level opening/closing balances for the completeness gate (§3.5, D56). */
 function loadStatementBalances(db: Db, statementId: string): { openingBalance?: number; closingBalance?: number } {
   const row = db
@@ -198,12 +236,17 @@ interface CategoryTotal {
   count: number
 }
 
-/** Aggregate signed amounts per deterministic category (pure `categorizeRow`), document order preserved. */
-function categoryTotals(rows: TransactionInput[]): CategoryTotal[] {
+/**
+ * Aggregate signed amounts per category, document order preserved. The category is the PERSISTED one
+ * (`persisted[i]`, written by the LLM categorizer doctask or the deterministic rule pass) when present,
+ * else computed on the fly via `categorizeRow` — so a breakdown is answerable even before any categorize
+ * run. `persisted` is aligned to `rows` by row index (`loadPersistedCategories`).
+ */
+function categoryTotals(rows: TransactionInput[], persisted: readonly (string | null)[] | null): CategoryTotal[] {
   const order: string[] = []
   const byCat = new Map<string, CategoryTotal>()
-  for (const row of rows) {
-    const category = categorizeRow(row)
+  rows.forEach((row, i) => {
+    const category = persisted?.[i] ?? categorizeRow(row)
     let entry = byCat.get(category)
     if (!entry) {
       entry = { category, amount: 0, count: 0 }
@@ -212,7 +255,7 @@ function categoryTotals(rows: TransactionInput[]): CategoryTotal[] {
     }
     entry.amount += row.amount
     entry.count += 1
-  }
+  })
   return order.map((c) => {
     const e = byCat.get(c)!
     return { category: c, amount: Math.round(e.amount * 100) / 100, count: e.count }
@@ -246,9 +289,16 @@ export function buildBankAnswer(
      *                       the honest refusal (never a mis-read/partial sum dressed up as the total).
      */
     status: CompletenessStatus
+    /**
+     * True when the per-category breakdown was produced with the LLM categorizer (Phase 33). It adds a
+     * "model-assisted" note so a model-assigned category is never mistaken for a verified figure — a
+     * category is not a figure (it never moves the total or the D56 gate). False for the deterministic
+     * rule pass / on-the-fly `categorizeRow`. Only meaningful when `categories` is non-null.
+     */
+    modelAssisted?: boolean
   }
 ): string {
-  const { rows, summary, reconcile, categories, status } = data
+  const { rows, summary, reconcile, categories, status, modelAssisted } = data
   if (rows.length === 0) return tr('skills.bankAnalysis.empty')
 
   const lines: string[] = [tr('skills.bankAnalysis.count', { count: rows.length })]
@@ -304,6 +354,9 @@ export function buildBankAnswer(
           })
         )
       }
+      // A model-assigned category is NOT a verified figure — note it so the breakdown is read honestly
+      // (the verified total + the D56 gate are untouched by a mislabel). Only when the LLM was involved.
+      if (modelAssisted) lines.push(tr('skills.bankAnalysis.categoryAssisted'))
     }
     lines.push(
       '',
@@ -363,29 +416,50 @@ export const bankStatementAnalysisHandler: SkillAnalysisHandler = {
       layout: true
     }
 
-    // Auto-run the READ-ONLY tools through the run seam (D46) — extract first, then the downstream
-    // read-only seams for their lifecycle + persistence. Export is excluded by construction.
-    const extraction = await runBankExtraction(db, args, deps)
-    if (!extraction.ok || !extraction.statementId) {
-      return { answer: ctx.tr('skills.bankAnalysis.couldNotRead'), citations: [], coverage: computeCoverage(db, target.id) }
+    // Auto-run the READ-ONLY tools through the run seam (D46). REUSE the latest extracted statement when
+    // one exists (extraction is deterministic, so re-extracting would only create a duplicate AND discard
+    // any persisted categories from a prior `categorize` doctask) — extract only when none exists yet.
+    let statementId = latestStatementId(db, target.id)
+    if (!statementId) {
+      const extraction = await runBankExtraction(db, args, deps)
+      if (!extraction.ok || !extraction.statementId) {
+        return { answer: ctx.tr('skills.bankAnalysis.couldNotRead'), citations: [], coverage: computeCoverage(db, target.id) }
+      }
+      statementId = extraction.statementId
     }
     await runCashflowSummary(db, args, deps)
     await runBalanceValidation(db, args, deps)
-    const categoryShaped = isCategoryShaped(ctx.question)
-    if (categoryShaped) await runCategorization(db, args, deps)
 
     // Figures come from the PERSISTED rows via the PURE tool functions (the seams surface only counts).
-    const rows = loadStatementRows(db, extraction.statementId)
+    const rows = loadStatementRows(db, statementId)
     const summary = summarizeCashflow(rows)
     const reconcile = reconcileBalances(rows)
-    const categories = categoryShaped ? categoryTotals(rows) : null
+
+    // Per-category breakdown (only for a category-shaped question). It reads the PERSISTED categories
+    // (the LLM categorizer doctask, or a prior rule pass) — `categorize` is the ONLY model call and it
+    // happens in the doctask lane, NEVER here (this handler stays 0-model-calls). When nothing has been
+    // categorized yet, run the DETERMINISTIC rule pass once (0 model calls) so a breakdown still shows;
+    // model-assigned categories (if present) are never overwritten by it. `modelAssisted` (a persisted
+    // category outside the deterministic set) drives the honest "model-assisted" note.
+    const categoryShaped = isCategoryShaped(ctx.question)
+    let categories: CategoryTotal[] | null = null
+    let modelAssisted = false
+    if (categoryShaped) {
+      let persisted = loadPersistedCategories(db, statementId)
+      if (!persisted.some((c) => c != null)) {
+        await runCategorization(db, args, deps) // deterministic seed when nothing is categorized yet
+        persisted = loadPersistedCategories(db, statementId)
+      }
+      categories = categoryTotals(rows, persisted)
+      modelAssisted = isModelAssisted(persisted)
+    }
 
     // Completeness assessment (§3.5, D56): the only true proof a total is WHOLE is the statement's
     // printed opening + Σamounts == closing. Load the persisted balances and classify into one of three
     // outcomes — `complete` (proven), `contradicted` (a printed balance the rows refute → refuse), or
     // `unverified` (no balance to tie against, nothing contradicting → present a clearly-labelled sum of
     // the rows read, the no-balance "Umsätze" case). `buildBankAnswer` renders each honestly.
-    const balances = loadStatementBalances(db, extraction.statementId)
+    const balances = loadStatementBalances(db, statementId)
     const status = assessCompleteness({
       rows,
       openingBalance: balances.openingBalance,
@@ -393,7 +467,7 @@ export const bankStatementAnalysisHandler: SkillAnalysisHandler = {
       reconcile
     })
 
-    const answer = buildBankAnswer(ctx.tr, { rows, summary, reconcile, categories, status })
+    const answer = buildBankAnswer(ctx.tr, { rows, summary, reconcile, categories, status, modelAssisted })
     const citations = buildBankCitations(db, target.id, target.title, rows)
     const coverage = computeCoverage(db, target.id)
     return { answer, citations, coverage }

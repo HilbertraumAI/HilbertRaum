@@ -674,6 +674,26 @@ export function ChatScreen({
       .catch((e) => setError(friendlyIpcError(e)))
   }
 
+  // (D) Routed feedback (Phase 33, Q3): when a categorize run finishes, surface the result as a real
+  // chat answer — route the model-assisted per-category breakdown into the transcript by asking the
+  // standard breakdown question, which the 0-model-call bank analysis handler answers from the
+  // persisted categories the doctask just wrote (reusing the latest statement). Fires ONCE per run,
+  // documents-mode only, and never while another stream is in flight.
+  const handledCategorizeRunRef = useRef<string | null>(null)
+  useEffect(() => {
+    const run = activeSkillRun
+    if (!run || run.toolName !== 'categorize_transactions' || run.state !== 'done') return
+    if (handledCategorizeRunRef.current === run.runHandle) return
+    if (mode !== 'documents' || !activeId || busyStreaming) return
+    handledCategorizeRunRef.current = run.runHandle
+    acknowledgeSkillRun() // drop the content-free run row; the routed answer replaces it
+    const question = t('chat.skill.categorize.breakdownQuestion')
+    setMessages((prev) => [...prev, optimisticUser(activeId, question)])
+    void stream(activeId, question, false, depthFor(activeId), currentSkillId)
+    // Keyed on the run + mode/conv/streaming-gate; the other closures are stable for this effect.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSkillRun, mode, activeId, busyStreaming])
+
   async function stream(
     convId: string,
     content: string,

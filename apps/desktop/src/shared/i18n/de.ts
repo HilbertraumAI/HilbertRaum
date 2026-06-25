@@ -190,6 +190,8 @@ export const de: Record<keyof typeof en, string> = {
   'chat.skill.tool.validateInvoiceTotals': 'Beträge prüfen',
   'chat.skill.tool.exportInvoiceCsv': 'Als CSV exportieren',
   'chat.skill.tool.redactDocument': 'Personenbezogene Daten schwärzen',
+  // Die nach einem Kategorisieren-Lauf in den Verlauf eingespielte Aufschlüsselungsfrage (Phase 33, Q3).
+  'chat.skill.categorize.breakdownQuestion': 'Schlüssle meine Ausgaben nach Kategorie auf.',
   'chat.skill.run.running.one': 'Läuft: {tool} für {count} Dokument…',
   'chat.skill.run.running.other': 'Läuft: {tool} für {count} Dokumente…',
   'chat.skill.run.cancel': 'Abbrechen',
@@ -302,6 +304,8 @@ export const de: Record<keyof typeof en, string> = {
   'docs.task.treeBusyTitle': 'Für das ganze Dokument wird ein Tiefenindex erstellt',
   'docs.task.extractBusyTitle':
     'Das ganze Dokument wird durchsucht, damit es „Liste alle…"-Fragen beantworten kann',
+  'docs.task.categorizeBusy': 'Kategorisiert Umsätze…',
+  'docs.task.categorizeBusyTitle': 'Die Umsätze des Kontoauszugs werden kategorisiert',
   'docs.error.noSupported': 'In dieser Auswahl wurden keine unterstützten Dokumente gefunden.',
   'docs.removedDocFallback': 'einem entfernten Dokument',
   'docs.provenance.compareBefore': 'Vergleich von ',
@@ -512,6 +516,8 @@ export const de: Record<keyof typeof en, string> = {
     'prüfen Sie die Zahlen im geöffneten Auszug selbst.',
   'skills.bankAnalysis.categoryHeading': 'Nach Kategorie:',
   'skills.bankAnalysis.categoryItem': '- {category}: {amount} {currency} ({count})',
+  'skills.bankAnalysis.categoryAssisted':
+    '_Die Kategorien sind modellgestützt — eine Zuordnung kann falsch sein, die Summen oben bleiben davon unberührt._',
   'skills.bankAnalysis.caveat':
     'Diese Zahlen sind die im Auszug gedruckten Beträge, gelesen über das ganze Dokument — ' +
     'nichts davon wird aus Fließtext zusammengerechnet oder erfunden.',

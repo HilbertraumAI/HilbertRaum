@@ -2768,6 +2768,64 @@ without churning ~150 comments. Read a historical `§N` as:
 | `pdf-geometry-extraction-plan.md` D50–D58 | Stage-1 architecture decisions (geometry-first; Stage 2 conditional) | §21 |
 
 
+### §22 Bank-statement LLM categorizer (Phase 33, 2026-06-25, D55/D26)
+
+The deterministic Stage-1 extractor finally recovers real payees/descriptions (§21 multi-baseline
+recovery), so there is usable text to **categorize**. Categorization is the FIRST place a local LLM
+assigns meaning to bank data in this app — defensible under the honesty posture for one structural
+reason: **a category is not a figure.** A mislabel only shifts the per-category breakdown; it never
+moves the **verified statement total** or the **D56 completeness gate** (which read the signed amounts,
+never the labels). So — unlike a future Stage-2 figure extraction (D53/D55 `grounding_quote`) — no
+figure verification is needed. The constraints that DO hold:
+
+- **Offline only.** A local llama.cpp sidecar, never a hosted API (CLAUDE.md §0).
+- **Fixed set, grammar-constrained.** The reply is constrained to a `json_schema` whose category field
+  is an **enum** of a fixed EN taxonomy (`CATEGORIZER_CATEGORIES`: Groceries/Dining/Transport/Utilities/
+  Rent/Insurance/Subscriptions/Health/Shopping/Income/Transfer/Fees/Cash/Tax/Uncategorized) — the model
+  cannot emit an off-list label (the D55 plumbing: `RuntimeChatOptions.responseSchema` →
+  llama-server `response_format:{type:'json_schema',strict:true}`). DE glosses ride in the prompt only.
+- **Drop-to-`Uncategorized`.** Any invalid / out-of-range / unparseable output drops to `Uncategorized`
+  (a whole batch drops on a parse failure). Never an invented category. The mock runtime (which ignores
+  `responseSchema`) exercises exactly this path in CI.
+- **Model-OPTIONAL.** With no model loaded the module degrades to the deterministic rule pass
+  (`categorizeRow`). Confident description-rule matches (Fees/Income/Transfer/Cash) are a PRE-FILTER that
+  skips the model; the rest go to the model in batches of `CATEGORIZER_BATCH_SIZE` (=20).
+- **Model-assisted label.** A breakdown is labelled model-assisted whenever a persisted category lies
+  OUTSIDE the deterministic rule set (the honest, schema-free signal — a deterministic fallback writes
+  only rule-set names, so it is never mislabelled). `categorizer.ts` + `analysis/bank-statement.ts`.
+
+**Decisions as built:**
+- **D26 — the categorizer is a `DocTaskManager` kind (`'categorize'`), NOT a model call on the skill-run
+  seam.** The `ModelSlotArbiter` only mediates chat ↔ a *yielding* build; the chat↔task one-job-at-a-time
+  exclusion (D26) lives in the `DocTaskManager` (chat checks `hasActiveTask()`, tasks check
+  `isChatStreaming()`); the skill-run `SkillRunController` is a SEPARATE lane neither observes. A model
+  call on `runCategorization` could let two `chatStream` calls hit the one llama-server at once. The
+  doctask lane gives D26 exclusion + progress + cancel + `getRuntime()` for free. `'categorize'` is the
+  one **model-OPTIONAL** kind (it skips `startDocTask`'s runtime gate; a null runtime ⇒ deterministic).
+- **Button wiring — wrap the doctask in the skill-run shell.** The existing "Kategorisieren" button keeps
+  its `SkillRunController` UX: the `categorize_transactions` runner ENQUEUES a `'categorize'` doctask and
+  MIRRORS its progress/cancel into the run bar (`tool-runs.ts` `runCategorizeViaDocTask`). The real job —
+  and the model call — runs in the doctask lane, so D26 holds; the shell is a thin status mirror.
+- **Auto-extract (the (D) ordering fix).** `runCategorize` AUTO-EXTRACTS the statement first when none
+  exists (the "categorize before extract" `needsExtraction` failure is gone). Persistence of
+  `category_id` is atomic (BEGIN/COMMIT, no partial annotations survive); the categories are seeded by
+  the SHARED `ensureBuiltinCategories` (now the union of the rule set + the LLM taxonomy).
+- **Auto-offer after extraction (Q2).** A successful `extract_transactions` BUTTON run best-effort
+  enqueues a `'categorize'` doctask in the background (D26-safe, model-optional) — categories are ready
+  by the time the user asks. The chat analysis path is unaffected (it never goes through that runner).
+- **Read-back stays 0-model-calls (Q3 routed feedback).** `analysis/bank-statement.ts` now REUSES the
+  latest statement (re-extraction is deterministic, so it would only duplicate AND discard the doctask's
+  persisted categories) and `categoryTotals` reads the PERSISTED category (LEFT JOIN `bank_categories`),
+  else `categorizeRow`. The model call happens ONLY in the doctask. After a categorize run completes the
+  renderer ROUTES the standard breakdown question into the transcript, so the model-assisted breakdown
+  appears as a normal chat answer (`ChatScreen` → the analysis handler, still 0 model calls).
+
+**Tests:** `skills-categorizer.test.ts` (taxonomy/enum, prefilter, model path, off-list/out-of-range
+drop, unparseable-batch drop, batching, no-runtime fallback); `doctasks-categorize.test.ts` (model path
+persists, deterministic fallback persists, auto-extract-then-categorize); `skills-analysis-bank.test.ts`
+(persisted model categories surface + the model-assisted label; no duplicate statement on re-ask).
+
+
 ## Image understanding — design record (Phases V1–V5, §1–§10)
 
 _Formerly `docs/image-understanding-plan.md` (folded in here at the Phase-V5 closeout,
