@@ -6,6 +6,26 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-25 — **Runtime: grammar-constrained decoding plumbed through the chat seam (D55 prerequisite) — the foundation for the
+bank LLM categorizer (Phase 33 prep; branch `pdf-geometry-extraction`).** `RuntimeChatOptions` gains an optional `responseSchema`
+(+ `responseSchemaName`); `LlamaRuntime.chatStream` maps it to llama-server's OpenAI-compatible `response_format: { type:
+'json_schema', json_schema: { … strict:true } }`, so a completion is GUARANTEED to be JSON matching the schema (the model cannot
+emit an off-schema token). Additive + optional (the mock runtime ignores it; every existing caller is byte-unchanged) — typecheck
+clean, suite unaffected. This discharges the D55 "grammar-constrained decoding plumbed through the sidecar" prerequisite the bank LLM
+categorizer (user-chosen, grammar-constrained `json_schema`) needs, and that a future Stage-2 extraction would reuse.
+**REFINED PLAN for the categorizer (a concrete finding from mapping D26):** the model-slot `ModelSlotArbiter` only mediates chat ↔ a
+YIELDING build; the chat↔task mutual exclusion (D26) lives in the `DocTaskManager` (chat checks `hasActiveTask()`, tasks check
+`isChatStreaming()`), and the skill-run `SkillRunController` is a SEPARATE one-at-a-time lane neither chat nor doctasks observe. So a
+model call bolted onto `runCategorization` would NOT be D26-safe (two concurrent `chatStream` calls possible). **Therefore the LLM
+categorizer must be a new `DocTaskManager` kind** (`'categorize'`) — the only lane with chat↔task exclusion, plus progress/cancel +
+`getRuntime()` for free — triggered by the existing "Kategorisieren" button (its `startSkillRun` path enqueues the doctask when a
+model is available; falls back to the deterministic rule pass when none is). Remaining build (Phase 33): the categorizer module
+(richer EN+DE category set + the json_schema-constrained batched prompt + drop-to-Uncategorized parse), the `'categorize'` doctask
+kind + renderer status wiring, the analysis handler reading PERSISTED `category_id` (LEFT JOIN `bank_categories`) with the rule
+fallback, the (D) button feedback + `needsExtraction` auto-extract, tests, docs. A category is NOT a figure (a mislabel never moves
+the verified total or the D56 gate), so no grounding_quote is needed — only offline + fixed-set + drop-on-failure + a "model-assisted"
+label. STILL AWAITING approval to push / open the PR._
+
 _2026-06-25 — **Bank-statement HVB "Umsätze" extraction FIXED — multi-baseline payee recovery + currency-token class +
 sign-column fold + pdf.js log-noise silence (Phase 32; branch `pdf-geometry-extraction`, still unmerged/unpushed).** A real HVB
 online "Umsätze" export (45 EUR rows, no printed opening/closing) surfaced three deterministic Stage-1 parsing failures the gold
