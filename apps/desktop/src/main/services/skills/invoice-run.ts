@@ -3,6 +3,7 @@ import type { Db } from '../db'
 import type { DocumentChunkRead, SkillToolAudit, SkillToolContext } from '../../../shared/types'
 import { getRegisteredTool, runSkillTool } from './tool-registry'
 import { finishRun, resolveDocumentReader } from './run'
+import { withDocumentLock } from './doc-lock'
 import type {
   ExtractInvoiceOutput,
   InvoiceInput,
@@ -89,8 +90,20 @@ export interface InvoiceToolResult {
 /**
  * Run `extract_invoice` on one selected document through the gate and persist the structured invoice.
  * Returns ids/counts only — never the extracted content (which lives only in the invoice_* tables).
+ *
+ * Serialized per document (audit PC-1): the whole extract+persist holds the per-document lock so a
+ * concurrent run on the SAME document (any lane) cannot interleave (re-entrant when the analysis lane
+ * already holds it; unrelated documents stay concurrent).
  */
 export async function runInvoiceExtraction(
+  db: Db,
+  args: InvoiceRunArgs,
+  deps: InvoiceRunDeps
+): Promise<InvoiceExtractionResult> {
+  return withDocumentLock(args.documentId, () => runInvoiceExtractionInner(db, args, deps))
+}
+
+async function runInvoiceExtractionInner(
   db: Db,
   args: InvoiceRunArgs,
   deps: InvoiceRunDeps
@@ -384,6 +397,19 @@ function persistFailure(db: Db, runId: string, now: () => string): InvoiceToolRe
  * that DON'T reconcile; `resultKind` distinguishes a clean pass from "nothing could be checked".
  */
 export async function runInvoiceTotalsValidation(
+  db: Db,
+  args: InvoiceRunArgs,
+  deps: InvoiceRunDeps,
+  preloadedInvoice?: InvoiceInput
+): Promise<InvoiceToolResult> {
+  // Serialized per document (audit PC-1): the `totals_reconciled` persist must not run against an
+  // invoice a concurrent re-extract is replacing. Re-entrant when the analysis lane already holds it.
+  return withDocumentLock(args.documentId, () =>
+    runInvoiceTotalsValidationInner(db, args, deps, preloadedInvoice)
+  )
+}
+
+async function runInvoiceTotalsValidationInner(
   db: Db,
   args: InvoiceRunArgs,
   deps: InvoiceRunDeps,

@@ -13,6 +13,7 @@ import {
   type TransactionInput
 } from './tools/bank-statement'
 import { CATEGORIZER_CATEGORIES } from './categorizer'
+import { withDocumentLock } from './doc-lock'
 import type { RedactDocumentOutput } from './tools/redaction'
 
 // The app-orchestrated run seam (architecture.md "Skills — design record" §8, Phase S11a). This is the exact
@@ -160,8 +161,20 @@ export function finishRun(
 /**
  * Run `extract_transactions` on one selected document through the gate and persist the result.
  * Returns ids/counts only — never the extracted content (which lives only in the bank data tables).
+ *
+ * Serialized per document (audit PC-1): the whole run — including the `replaceExisting` DELETE+INSERT —
+ * holds the per-document lock so a concurrent run/categorize on the SAME statement (any lane) cannot
+ * race the delete (re-entrant when a lane already holds it; unrelated documents stay concurrent).
  */
 export async function runBankExtraction(
+  db: Db,
+  args: BankExtractionArgs,
+  deps: BankExtractionDeps
+): Promise<BankExtractionResult> {
+  return withDocumentLock(args.documentId, () => runBankExtractionInner(db, args, deps))
+}
+
+async function runBankExtractionInner(
   db: Db,
   args: BankExtractionArgs,
   deps: BankExtractionDeps
@@ -545,6 +558,17 @@ export async function runBalanceValidation(
   deps: BankExtractionDeps,
   preloaded?: LoadedTransaction[]
 ): Promise<StatementToolResult> {
+  // Serialized per document (audit PC-1): the `reconciled` persist must not run against a statement a
+  // concurrent re-extract is deleting. Re-entrant when the analysis lane already holds the doc lock.
+  return withDocumentLock(args.documentId, () => runBalanceValidationInner(db, args, deps, preloaded))
+}
+
+async function runBalanceValidationInner(
+  db: Db,
+  args: BankExtractionArgs,
+  deps: BankExtractionDeps,
+  preloaded?: LoadedTransaction[]
+): Promise<StatementToolResult> {
   const now = deps.now ?? (() => new Date().toISOString())
   const prep = await prepareStatementRun(db, VALIDATE_TOOL_NAME, args, deps, undefined, preloaded)
   if ('failed' in prep) return prep.failed
@@ -618,6 +642,17 @@ export function ensureBuiltinCategories(db: Db, now: string): Map<string, string
  * is the number of rows categorized.
  */
 export async function runCategorization(
+  db: Db,
+  args: BankExtractionArgs,
+  deps: BankExtractionDeps,
+  preloaded?: LoadedTransaction[]
+): Promise<StatementToolResult> {
+  // Serialized per document (audit PC-1): the `category_id` persist must not run against a statement a
+  // concurrent re-extract is deleting. Re-entrant when the analysis lane already holds the doc lock.
+  return withDocumentLock(args.documentId, () => runCategorizationInner(db, args, deps, preloaded))
+}
+
+async function runCategorizationInner(
   db: Db,
   args: BankExtractionArgs,
   deps: BankExtractionDeps,

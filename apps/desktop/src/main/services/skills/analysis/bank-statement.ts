@@ -15,6 +15,7 @@ import {
   type BankExtractionDeps,
   type LoadedTransaction
 } from '../run'
+import { withDocumentLock } from '../doc-lock'
 import {
   BUILTIN_CATEGORIES,
   assessCompleteness,
@@ -444,90 +445,97 @@ export const bankStatementAnalysisHandler: SkillAnalysisHandler = {
       return { answer: ctx.tr('skills.bankAnalysis.couldNotRead'), citations: [], coverage: computeCoverage(db, '') }
     }
 
-    const args: BankExtractionArgs = {
-      skillInstallId: ctx.skillInstallId,
-      conversationId: ctx.conversationId ?? null,
-      documentId: target.id
-    }
-    const deps: BankExtractionDeps = {
-      audit: ctx.audit,
-      signal: ctx.signal,
-      now: ctx.now,
-      readDocumentSegments: ctx.readDocumentSegments,
-      // Geometry-aware layout reconstruction for the columnar statement (plan §3.1, D58 — bank only).
-      layout: true
-    }
-
-    // Auto-run the READ-ONLY tools through the run seam (D46). REUSE the latest extracted statement when
-    // one exists and is FRESH (extraction is deterministic, so reusing avoids a duplicate AND preserves
-    // any persisted categories from a prior `categorize` doctask). Re-extract only when NONE exists yet,
-    // OR when the latest was produced by an outdated extractor (A9 — `isBankStatementStale`): a since-fixed
-    // parser bug must not keep serving mis-signed / lost-payee rows. A re-extract REPLACES the stale
-    // statement (`replaceExisting`) — the old per-row categories go with it (the rows changed; the
-    // breakdown's deterministic pass / the next categorize run recomputes them honestly).
-    let statementId = latestBankStatementId(db, target.id)
-    if (!statementId || isBankStatementStale(db, statementId)) {
-      const extraction = await runBankExtraction(db, args, { ...deps, replaceExisting: true })
-      if (!extraction.ok || !extraction.statementId) {
-        return { answer: ctx.tr('skills.bankAnalysis.couldNotRead'), citations: [], coverage: computeCoverage(db, target.id) }
+    // Serialize the WHOLE read→extract→validate→categorize→read-back sequence per document (audit
+    // PC-1): the individual seams self-lock, but only one outer lock spanning the sequence keeps a
+    // re-extract from ANOTHER lane (a button run / a categorize doctask) from deleting the statement
+    // BETWEEN two of this handler's own steps. Re-entrant — the inner seam locks become no-ops while
+    // this hold is in effect; unrelated documents still answer concurrently.
+    return withDocumentLock(target.id, async () => {
+      const args: BankExtractionArgs = {
+        skillInstallId: ctx.skillInstallId,
+        conversationId: ctx.conversationId ?? null,
+        documentId: target.id
       }
-      statementId = extraction.statementId
-    }
-
-    // Load the rows + persisted categories ONCE (the single `bank_transactions` read — audit P-1), then
-    // hand the SAME rows to the downstream seams as `preloaded` so they don't each re-query. The seams
-    // keep their `skill_runs` lifecycle + ids/counts audit (unchanged), and now RETURN their validated
-    // figures (`output`) for in-process reuse — so the handler reuses them instead of recomputing the
-    // same pure function (audit P-1/P-2). A seam that failed returns no `output`; fall back to a pure
-    // recompute over the loaded rows then, preserving the prior byte-identical answer in every case.
-    let paired = loadStatementRowsWithCategories(db, statementId)
-    const rows = paired.map((p) => p.row)
-    const loaded = toLoadedTransactions(paired)
-    const summaryResult = await runCashflowSummary(db, args, deps, loaded)
-    const validateResult = await runBalanceValidation(db, args, deps, loaded)
-    const summary = (summaryResult.output as CashflowSummary | undefined) ?? summarizeCashflow(rows)
-    const reconcile = (validateResult.output as ReconcileResult | undefined) ?? reconcileBalances(rows)
-
-    // Per-category breakdown (only for a category-shaped question). It reads the PERSISTED categories
-    // (the LLM categorizer doctask, or a prior rule pass) — `categorize` is the ONLY model call and it
-    // happens in the doctask lane, NEVER here (this handler stays 0-model-calls). When nothing has been
-    // categorized yet, run the DETERMINISTIC rule pass once (0 model calls) so a breakdown still shows;
-    // model-assigned categories (if present) are never overwritten by it. `modelAssisted` (a persisted
-    // category outside the deterministic set) drives the honest "model-assisted" note.
-    const categoryShaped = isCategoryShaped(ctx.question)
-    let categories: CategoryTotal[] | null = null
-    let modelAssisted = false
-    if (categoryShaped) {
-      if (!paired.some((p) => p.category != null)) {
-        // Deterministic seed when nothing is categorized yet — reuse the single load (audit P-1); the
-        // reload afterwards is the one extra `bank_transactions` read the category path needs (to pick
-        // up the freshly persisted `category_id`).
-        await runCategorization(db, args, deps, loaded)
-        paired = loadStatementRowsWithCategories(db, statementId)
+      const deps: BankExtractionDeps = {
+        audit: ctx.audit,
+        signal: ctx.signal,
+        now: ctx.now,
+        readDocumentSegments: ctx.readDocumentSegments,
+        // Geometry-aware layout reconstruction for the columnar statement (plan §3.1, D58 — bank only).
+        layout: true
       }
-      categories = categoryTotals(paired)
-      modelAssisted = isModelAssisted(
-        loadCategorizedByModel(db, statementId),
-        paired.map((p) => p.category)
-      )
-    }
 
-    // Completeness assessment (§3.5, D56): the only true proof a total is WHOLE is the statement's
-    // printed opening + Σamounts == closing. Load the persisted balances and classify into one of three
-    // outcomes — `complete` (proven), `contradicted` (a printed balance the rows refute → refuse), or
-    // `unverified` (no balance to tie against, nothing contradicting → present a clearly-labelled sum of
-    // the rows read, the no-balance "Umsätze" case). `buildBankAnswer` renders each honestly.
-    const balances = loadStatementBalances(db, statementId)
-    const status = assessCompleteness({
-      rows,
-      openingBalance: balances.openingBalance,
-      closingBalance: balances.closingBalance,
-      reconcile
+      // Auto-run the READ-ONLY tools through the run seam (D46). REUSE the latest extracted statement when
+      // one exists and is FRESH (extraction is deterministic, so reusing avoids a duplicate AND preserves
+      // any persisted categories from a prior `categorize` doctask). Re-extract only when NONE exists yet,
+      // OR when the latest was produced by an outdated extractor (A9 — `isBankStatementStale`): a since-fixed
+      // parser bug must not keep serving mis-signed / lost-payee rows. A re-extract REPLACES the stale
+      // statement (`replaceExisting`) — the old per-row categories go with it (the rows changed; the
+      // breakdown's deterministic pass / the next categorize run recomputes them honestly).
+      let statementId = latestBankStatementId(db, target.id)
+      if (!statementId || isBankStatementStale(db, statementId)) {
+        const extraction = await runBankExtraction(db, args, { ...deps, replaceExisting: true })
+        if (!extraction.ok || !extraction.statementId) {
+          return { answer: ctx.tr('skills.bankAnalysis.couldNotRead'), citations: [], coverage: computeCoverage(db, target.id) }
+        }
+        statementId = extraction.statementId
+      }
+
+      // Load the rows + persisted categories ONCE (the single `bank_transactions` read — audit P-1), then
+      // hand the SAME rows to the downstream seams as `preloaded` so they don't each re-query. The seams
+      // keep their `skill_runs` lifecycle + ids/counts audit (unchanged), and now RETURN their validated
+      // figures (`output`) for in-process reuse — so the handler reuses them instead of recomputing the
+      // same pure function (audit P-1/P-2). A seam that failed returns no `output`; fall back to a pure
+      // recompute over the loaded rows then, preserving the prior byte-identical answer in every case.
+      let paired = loadStatementRowsWithCategories(db, statementId)
+      const rows = paired.map((p) => p.row)
+      const loaded = toLoadedTransactions(paired)
+      const summaryResult = await runCashflowSummary(db, args, deps, loaded)
+      const validateResult = await runBalanceValidation(db, args, deps, loaded)
+      const summary = (summaryResult.output as CashflowSummary | undefined) ?? summarizeCashflow(rows)
+      const reconcile = (validateResult.output as ReconcileResult | undefined) ?? reconcileBalances(rows)
+
+      // Per-category breakdown (only for a category-shaped question). It reads the PERSISTED categories
+      // (the LLM categorizer doctask, or a prior rule pass) — `categorize` is the ONLY model call and it
+      // happens in the doctask lane, NEVER here (this handler stays 0-model-calls). When nothing has been
+      // categorized yet, run the DETERMINISTIC rule pass once (0 model calls) so a breakdown still shows;
+      // model-assigned categories (if present) are never overwritten by it. `modelAssisted` (a persisted
+      // category outside the deterministic set) drives the honest "model-assisted" note.
+      const categoryShaped = isCategoryShaped(ctx.question)
+      let categories: CategoryTotal[] | null = null
+      let modelAssisted = false
+      if (categoryShaped) {
+        if (!paired.some((p) => p.category != null)) {
+          // Deterministic seed when nothing is categorized yet — reuse the single load (audit P-1); the
+          // reload afterwards is the one extra `bank_transactions` read the category path needs (to pick
+          // up the freshly persisted `category_id`).
+          await runCategorization(db, args, deps, loaded)
+          paired = loadStatementRowsWithCategories(db, statementId)
+        }
+        categories = categoryTotals(paired)
+        modelAssisted = isModelAssisted(
+          loadCategorizedByModel(db, statementId),
+          paired.map((p) => p.category)
+        )
+      }
+
+      // Completeness assessment (§3.5, D56): the only true proof a total is WHOLE is the statement's
+      // printed opening + Σamounts == closing. Load the persisted balances and classify into one of three
+      // outcomes — `complete` (proven), `contradicted` (a printed balance the rows refute → refuse), or
+      // `unverified` (no balance to tie against, nothing contradicting → present a clearly-labelled sum of
+      // the rows read, the no-balance "Umsätze" case). `buildBankAnswer` renders each honestly.
+      const balances = loadStatementBalances(db, statementId)
+      const status = assessCompleteness({
+        rows,
+        openingBalance: balances.openingBalance,
+        closingBalance: balances.closingBalance,
+        reconcile
+      })
+
+      const answer = buildBankAnswer(ctx.tr, { rows, summary, reconcile, categories, status, modelAssisted })
+      const citations = buildBankCitations(db, target.id, target.title, rows)
+      const coverage = computeCoverage(db, target.id)
+      return { answer, citations, coverage }
     })
-
-    const answer = buildBankAnswer(ctx.tr, { rows, summary, reconcile, categories, status, modelAssisted })
-    const citations = buildBankCitations(db, target.id, target.title, rows)
-    const coverage = computeCoverage(db, target.id)
-    return { answer, citations, coverage }
   }
 }

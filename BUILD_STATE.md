@@ -6,6 +6,53 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-26 — **Skills & Tools audit — Phase 9 (Cross-lane write safety; PC-1) — MAIN-SIDE CONCURRENCY-
+CORRECTNESS PHASE, no renderer surface (branch `skills-tools-audit-2026-06-26`).** Suite **2270 passed /
+38 skipped (+3)**, typecheck clean, build OK. **The fix:** three INDEPENDENT execution lanes can touch the
+bank/invoice tables — **Lane A** chat analysis auto-run, **Lane B** the `SkillRunController` button run,
+**Lane C** the `DocTaskManager` categorize — and had **NO cross-lane lock**, so a chat re-extract
+(`replaceExisting` DELETE) could race a button run / categorize on the SAME statement. The main process is
+single-threaded, so this was NOT an OS data race but **cooperative interleaving across `await` points**
+(one lane parked at an await while another runs its DELETE+INSERT) → "statement vanished mid-read",
+orphaned rows, a nondeterministic final state. A new lightweight **per-document async mutex** now
+serializes every write-capable section by `documentId`. **§2.3 update:** "Lane A and Lane B are mutually
+unaware" → now **serialized by a per-document lock** (`withDocumentLock`); unrelated documents still run
+fully concurrently. **As built (implementer's picks):**
+- **`skills/doc-lock.ts` (new) — `withDocumentLock(documentId, fn)`**: the classic serialize-by-key
+  `Map<documentId, Promise>` chain (await the prior tail — settled success OR failure — run `fn`, release
+  + prune the map entry when the chain drains, all in a `finally`), made **re-entrant within one async
+  call chain** via a built-in `AsyncLocalStorage<Set<string>>` (no new dependency). Re-entrancy is the
+  deadlock-avoider: a lane wraps its WHOLE sequence AND calls self-locking seams inside.
+- **Where it's applied:** the WRITE seams **self-lock** (thin wrappers, bodies unchanged) —
+  `runBankExtraction` (incl. the `replaceExisting` DELETE+INSERT), `runBalanceValidation`,
+  `runCategorization`, `runInvoiceExtraction`, `runInvoiceTotalsValidation` → **Lane B** is covered with
+  ZERO dispatch edits + a future caller can't forget. The two MULTI-step lanes additionally wrap their
+  whole sequence in ONE outer `withDocumentLock`: **Lane A** the bank + invoice analysis handlers,
+  **Lane C** `runCategorize` (the inner self-locks become re-entrant no-ops) — needed because per-seam
+  locking alone would let a re-extract slip BETWEEN a lane's own steps. READ-only/export paths
+  (`runCashflowSummary`, the CSV exports, `runDocumentRedaction`) are deliberately NOT locked.
+- **DELETE+INSERT atomicity:** the re-extract is already one `BEGIN…COMMIT` — the mutex serializes
+  *lanes*, that txn keeps a *single* re-extract atomic; **no new DB transaction was added.**
+- **No deadlock:** the doc lock is finer than `acquireChatSlot`/`ModelSlotArbiter`, `finally`-released;
+  the chat lane takes the chat slot FIRST then the doc lock, and Lanes B/C never take the chat slot — no
+  party holds the doc lock while waiting on the chat slot ⇒ no cycle.
+- **Posture (load-bearing):** NO new DB/FS/net capability (in-memory map in the one main process; the
+  workspace DB is single-writer anyway); no schema change, no IPC change; audit payload still
+  `{skillId, toolName, documentCount}`; the key is an **id** (never content); nothing new is logged.
+- **Tests (+3, `tests/integration/skills-concurrency.test.ts`):** (1) a re-extract + a categorize on the
+  SAME document serialize — gate-audit order `[A:started, A:done, B:started, B:done]`, deterministic
+  final state (one statement, categorize landed on the NEW one — no vanished-mid-read/orphans), lock map
+  drains to 0; (2) two DIFFERENT docs run concurrently (both reach the barrier — a global lock would
+  hang); (3) `withDocumentLock` re-entrancy (nested same-doc acquire does not deadlock). Verified test (1)
+  FAILS with the lock neutered (has teeth). Privacy sentinel-grep + all skills/doctask tests stay green.
+- **Docs:** `architecture.md` §9 (the per-document serialization design record), §13 (the PC-1 follow-up
+  ledger entry), §22 (the D26 lanes note now records the cross-lane DB-write serialization); audit doc §3
+  PC-1 row + the Phase-9 index row flipped to ✅ fixed (Phase 9) + the §2.3 diagram note + the Phase-9
+  "As built" picks.
+- **Eyeball:** none — a main-side concurrency phase with no UI surface (R-2 unaffected).
+  **Next:** Phase 10 (X-1/X-2/A-1 — cleanup & contract parity: one `documentsInScope` helper; decide
+  `count_selected_documents` (keep-as-canary vs remove); a SKILL.md ⇔ TS deterministic-answer parity test)._
+
 _2026-06-26 — **Skills & Tools audit — Phase 8 (Zip importer DoS hardening; S-1, S-2) — MAIN-SIDE
 SECURITY/PARSING PHASE (branch `skills-tools-audit-2026-06-26`).** Suite **2267 passed / 38 skipped (+3)**,
 typecheck clean, build OK. Two low-effort hardening fixes to the net-new `.skill.zip` reader

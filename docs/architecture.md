@@ -2031,6 +2031,32 @@ silently starts the LLM categorizer; after a successful rows>0 extract the resul
 (`runTargetId`, the sibling of `runTargetName`) — see §22. The model pass is user-initiated; the run
 state stays content-free (no documentId in `SkillRunState`).
 
+**Cross-lane write safety — per-document serialization (audit PC-1, Phase 9).** Three INDEPENDENT
+execution lanes can touch the same bank/invoice tables (§22 / the audit §2.3): **Lane A** the chat
+analysis auto-run, **Lane B** this `SkillRunController` button run, **Lane C** the `DocTaskManager`
+categorize. The main process is single-threaded, so the hazard is not an OS data race but **cooperative
+interleaving across `await` points** — one lane parked at an await (e.g. re-reading the stored document)
+while another runs its DELETE+INSERT on the SAME statement (the cardinal case: a chat re-extract
+`replaceExisting` DELETE racing a button/categorize run → "statement vanished mid-read", orphaned rows,
+a nondeterministic final state). A lightweight in-process **per-document async mutex**
+(`services/skills/doc-lock.ts` `withDocumentLock(documentId, fn)` — a `Map<documentId, Promise>` chain,
+**re-entrant** within one async call chain via `AsyncLocalStorage`) now serializes every **write-capable**
+section by `documentId`: the write seams (`runBankExtraction` incl. its `replaceExisting` DELETE+INSERT,
+`runBalanceValidation`, `runCategorization`, `runInvoiceExtraction`, `runInvoiceTotalsValidation`)
+**self-lock**, and the two MULTI-step lanes wrap their WHOLE sequence in one outer `withDocumentLock`
+(the analysis handlers' extract→validate→categorize, and `runCategorize`'s extract→categorize-persist),
+so a re-extract from another lane cannot slip BETWEEN a lane's own steps (the inner self-locks are
+re-entrant no-ops under the outer hold). Read-only/export paths (`summarize_cashflow`, the CSV exports,
+`redact_document`) need not lock. **Posture:** NO new DB/FS/net capability (an in-memory map in the one
+main process; the workspace DB is single-writer anyway), no schema change, no IPC change, the audit
+payload still `{skillId, toolName, documentCount}`; the key is a document **id** (never content) and
+nothing new is logged. The DELETE+INSERT re-extract is already one `BEGIN…COMMIT` — the mutex serializes
+*lanes*, that txn keeps a *single* re-extract atomic (no new transaction was added). **Granularity:**
+per document — unrelated documents still run fully concurrently. **No deadlock:** the doc lock is finer
+than `DocTaskManager.acquireChatSlot()` / the `ModelSlotArbiter` and is always released in a `finally`;
+the analysis lane acquires the chat slot FIRST and only then the doc lock, and Lanes B/C never acquire
+the chat slot — so no party ever holds the doc lock while waiting on the chat slot (no cycle).
+
 ### §10 Data model (additive `db.ts`)
 
 `skills` (the registry index, keyed by `install_id`) + nullable `conversations.active_skill_id` /
@@ -2116,6 +2142,16 @@ behind the unchanged §14 ceiling (no new capability, still offline, audit still
   same-id user skill was enabled): it keeps the highest-precedence one (trust app > user → version →
   recency) and disables the rest. The enable IPC + import already enforced this on their paths; reconcile
   was the gap.
+- **PC-1 — cross-lane write safety (skills-tools-audit-2026-06-26, Phase 9).** The three lanes that touch
+  the bank/invoice tables (Lane A chat analysis, Lane B `SkillRunController`, Lane C `DocTaskManager`
+  categorize) had **no cross-lane lock**, so a chat re-extract `replaceExisting` DELETE could race a
+  button run / a categorize on the SAME statement (cooperative interleaving across `await` points, not an
+  OS data race — the main process is single-threaded). A per-document async mutex
+  (`services/skills/doc-lock.ts` `withDocumentLock`, a re-entrant `Map<documentId, Promise>` chain) now
+  serializes every write-capable section by `documentId`: the write seams self-lock and the two
+  multi-step lanes wrap their whole sequence (re-entrant inner locks). In-memory, per-document (unrelated
+  docs stay concurrent), no new capability/schema/IPC, finer than `acquireChatSlot` and `finally`-released
+  (no deadlock). Full record in §9.
 
 ### §14 Content-reach + compatibility audit fixes (2026-06-17b)
 
@@ -2917,10 +2953,15 @@ figure verification is needed. The constraints that DO hold:
 - **D26 — the categorizer is a `DocTaskManager` kind (`'categorize'`), NOT a model call on the skill-run
   seam.** The `ModelSlotArbiter` only mediates chat ↔ a *yielding* build; the chat↔task one-job-at-a-time
   exclusion (D26) lives in the `DocTaskManager` (chat checks `hasActiveTask()`, tasks check
-  `isChatStreaming()`); the skill-run `SkillRunController` is a SEPARATE lane neither observes. A model
-  call on `runCategorization` could let two `chatStream` calls hit the one llama-server at once. The
-  doctask lane gives D26 exclusion + progress + cancel + `getRuntime()` for free. `'categorize'` is the
-  one **model-OPTIONAL** kind (it skips `startDocTask`'s runtime gate; a null runtime ⇒ deterministic).
+  `isChatStreaming()`); the skill-run `SkillRunController` is a SEPARATE lane that does not observe the
+  D26 *model-slot* exclusion. A model call on `runCategorization` could let two `chatStream` calls hit
+  the one llama-server at once. The doctask lane gives D26 exclusion + progress + cancel + `getRuntime()`
+  for free. `'categorize'` is the one **model-OPTIONAL** kind (it skips `startDocTask`'s runtime gate; a
+  null runtime ⇒ deterministic). **DB-write safety across these lanes (audit PC-1, Phase 9): the lanes
+  were mutually unaware of each other's WRITES — now every write-capable section is serialized PER
+  DOCUMENT by `withDocumentLock` (`services/skills/doc-lock.ts`), so a chat re-extract DELETE can no
+  longer race a button run / a categorize on the same statement (see §9). That doc lock is independent of
+  and finer than the D26 model-slot exclusion — it guards table writes, not the llama-server.**
 - **Button wiring — wrap the doctask in the skill-run shell.** The existing "Kategorisieren" button keeps
   its `SkillRunController` UX: the `categorize_transactions` runner ENQUEUES a `'categorize'` doctask and
   MIRRORS its progress/cancel into the run bar (`tool-runs.ts` `runCategorizeViaDocTask`). The real job —

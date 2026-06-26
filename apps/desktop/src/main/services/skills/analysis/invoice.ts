@@ -10,6 +10,7 @@ import {
   type InvoiceRunArgs,
   type InvoiceRunDeps
 } from '../invoice-run'
+import { withDocumentLock } from '../doc-lock'
 import {
   validateInvoiceTotals,
   type InvoiceInput,
@@ -264,37 +265,43 @@ export const invoiceAnalysisHandler: SkillAnalysisHandler = {
       return { answer: ctx.tr('skills.invoiceAnalysis.couldNotRead'), citations: [], coverage: computeCoverage(db, '') }
     }
 
-    const args: InvoiceRunArgs = {
-      skillInstallId: ctx.skillInstallId,
-      conversationId: ctx.conversationId ?? null,
-      documentId: target.id
-    }
-    const deps: InvoiceRunDeps = {
-      audit: ctx.audit,
-      signal: ctx.signal,
-      now: ctx.now,
-      readDocumentSegments: ctx.readDocumentSegments
-    }
+    // Serialize the WHOLE extract→validate→read-back sequence per document (audit PC-1): the seams
+    // self-lock, but one outer lock spanning the sequence keeps a re-extract from ANOTHER lane from
+    // replacing the invoice BETWEEN this handler's own steps. Re-entrant (inner locks become no-ops);
+    // unrelated documents still answer concurrently.
+    return withDocumentLock(target.id, async () => {
+      const args: InvoiceRunArgs = {
+        skillInstallId: ctx.skillInstallId,
+        conversationId: ctx.conversationId ?? null,
+        documentId: target.id
+      }
+      const deps: InvoiceRunDeps = {
+        audit: ctx.audit,
+        signal: ctx.signal,
+        now: ctx.now,
+        readDocumentSegments: ctx.readDocumentSegments
+      }
 
-    // Auto-run the READ-ONLY tools through the run seam (D46) — extract first, then validate the totals
-    // for its lifecycle + the persisted `totals_reconciled` flag. Export is excluded by construction
-    // (`runInvoiceCsvExport` is never imported).
-    const extraction = await runInvoiceExtraction(db, args, deps)
-    if (!extraction.ok || !extraction.invoiceId) {
-      return { answer: ctx.tr('skills.invoiceAnalysis.couldNotRead'), citations: [], coverage: computeCoverage(db, target.id) }
-    }
+      // Auto-run the READ-ONLY tools through the run seam (D46) — extract first, then validate the totals
+      // for its lifecycle + the persisted `totals_reconciled` flag. Export is excluded by construction
+      // (`runInvoiceCsvExport` is never imported).
+      const extraction = await runInvoiceExtraction(db, args, deps)
+      if (!extraction.ok || !extraction.invoiceId) {
+        return { answer: ctx.tr('skills.invoiceAnalysis.couldNotRead'), citations: [], coverage: computeCoverage(db, target.id) }
+      }
 
-    // Reconstruct the invoice ONCE from the persisted rows (the single invoice read — audit P-1), hand
-    // it to the validation seam as `preloaded` so it doesn't re-load, and REUSE its validated output
-    // instead of recomputing the same pure function (the seam keeps its lifecycle + ids/counts audit).
-    // A failed seam returns no `output`; fall back to a pure recompute, preserving the prior answer.
-    const invoice = loadInvoice(db, extraction.invoiceId)
-    const validateResult = await runInvoiceTotalsValidation(db, args, deps, invoice)
-    const validation = validateResult.output ?? validateInvoiceTotals(invoice)
+      // Reconstruct the invoice ONCE from the persisted rows (the single invoice read — audit P-1), hand
+      // it to the validation seam as `preloaded` so it doesn't re-load, and REUSE its validated output
+      // instead of recomputing the same pure function (the seam keeps its lifecycle + ids/counts audit).
+      // A failed seam returns no `output`; fall back to a pure recompute, preserving the prior answer.
+      const invoice = loadInvoice(db, extraction.invoiceId)
+      const validateResult = await runInvoiceTotalsValidation(db, args, deps, invoice)
+      const validation = validateResult.output ?? validateInvoiceTotals(invoice)
 
-    const answer = buildInvoiceAnswer(ctx.tr, { invoice, validation })
-    const citations = buildInvoiceCitations(db, target.id, target.title)
-    const coverage = computeCoverage(db, target.id)
-    return { answer, citations, coverage }
+      const answer = buildInvoiceAnswer(ctx.tr, { invoice, validation })
+      const citations = buildInvoiceCitations(db, target.id, target.title)
+      const coverage = computeCoverage(db, target.id)
+      return { answer, citations, coverage }
+    })
   }
 }

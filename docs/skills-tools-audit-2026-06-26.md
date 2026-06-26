@@ -148,6 +148,9 @@ sequenceDiagram
                          │   the LLM categorizer runs here (D26-safe)     │
                          └───────────────────────────────────────────────┘
    Lane A and Lane B are mutually unaware → see Finding P/C-1 (concurrency).
+   ✅ Phase 9: every WRITE-capable section is now serialized PER DOCUMENT by `withDocumentLock`
+      (`skills/doc-lock.ts`) — the lanes no longer race the bank/invoice tables (unrelated docs
+      still run concurrently). See Finding PC-1 and Phase 9.
 ```
 
 ### 2.4 Skill lifecycle (import → use → delete)
@@ -184,7 +187,7 @@ persona section below.
 | P-2 | MEDIUM | Performance | ✅ **fixed (Phase 4)** — kept the `summarize_cashflow` run (its audit trio stays — approach A, not B) but it no longer re-reads the rows: it reuses the handler's single `preloaded` load, and its `CashflowSummary` is reused rather than recomputed | `run.ts` `runCashflowSummary`, `analysis/bank-statement.ts` |
 | U-1 | MEDIUM | UX/Correctness | ✅ **fixed (Phase 5, Minimal)** — `listRunnableTools` now returns the in-scope target **ids** alongside the tools; the renderer maps ids→**names** from its own loaded list (no title crosses the IPC), shows the single doc's name or a **Radix chooser** when >1, and passes the chosen `documentId` to `startSkillRun`, which **validates** it is in the resolved scope (else `documentOutOfScope`). `documentCount` stays the honest **1**. Redaction routing answer is count-honest (`answerMulti`) | `registerSkillsIpc.ts` `listRunnableTools`/`startSkillRun`, `SkillRunBar.tsx`, `ChatScreen.tsx`, `analysis/redaction.ts` |
 | U-2 | MEDIUM | UX/Surprise | ✅ **fixed (Phase 6, explicit offer)** — the silent background-categorize enqueue is **removed** from the extract runner; after a successful rows>0 extract the run-bar **result row** offers a one-tap **"Categorize transactions"** follow-up (user-initiated), targeting the SAME document via a renderer-remembered id (`runTargetId`). The audit/run state stay content-free; the deterministic 0-model chat breakdown is unchanged | `tool-runs.ts` `buildToolRunner` extract case, `SkillRunBar.tsx`, `ChatScreen.tsx` |
-| PC-1 | MEDIUM | Concurrency | Lane A (chat analysis auto-run) and Lane B (`SkillRunController`) are mutually unaware; a chat re-extract (`replaceExisting` DELETE) can race a button run on the same statement | §2.3; `run.ts:221`, `run-controller.ts` |
+| PC-1 | MEDIUM | Concurrency | ✅ **fixed (Phase 9)** — a per-document async mutex (`skills/doc-lock.ts` `withDocumentLock`, a re-entrant `Map<documentId, Promise>` chain) now serializes every WRITE-capable section across all three lanes (A chat analysis, B `SkillRunController`, C `DocTaskManager` categorize): the write seams self-lock, and the two multi-step lanes (analysis handlers + `runCategorize`) wrap their whole sequence. A chat re-extract DELETE can no longer race a button run / categorize on the same statement. In-memory, per-document (unrelated docs still concurrent), no new capability/schema/IPC, `finally`-released + finer than `acquireChatSlot` (no deadlock) | `skills/doc-lock.ts`, `run.ts`, `invoice-run.ts`, `analysis/bank-statement.ts`, `analysis/invoice.ts`, `doctasks/manager.ts` |
 | S-1 | MEDIUM | Security (DoS) | ✅ **fixed (Phase 8)** — `inflateEntry` now rejects any member whose central-directory **`compressedSize` exceeds `maxFileBytes`** *before* slicing/inflating (for both STORE and DEFLATE), bounding the synchronous inflate **input**, not only its `maxOutputLength` output. Reuses `fileTooLarge`. Proven by a spy that `inflateRawSync` is never reached (with a positive control) | `installer.ts` `inflateEntry` |
 | U-3 | LOW→MED | UX | ✅ **fixed (Phase 7, inline closed-trigger label)** — `ChatScreen` now recomputes the deterministic offer **proactively as the draft changes** (debounced ~400 ms, only when no skill is picked) and `SkillPicker` mirrors it as a quiet, named **"Suggested: &lt;skill&gt;" hint on the CLOSED trigger** (`chat.skill.suggestedHint`); one tap selects it. Still inert until tapped — no canvas chip, no settings key, never auto-applied (§22-D3); an explicit "None" sets a per-draft `suggestionDismissed` flag so it never re-nags. `suggestSkills` still logs nothing (privacy test green) | `ChatScreen.tsx` `refreshSuggestion`/suggest effect, `SkillPicker.tsx` closed hint |
 | A-1 | LOW→MED | Architecture | For tool skills the **SKILL.md body is inert on the primary answer path** — the deterministic answer format is reimplemented in TS (`buildBankAnswer`/`buildInvoiceAnswer`); editing the body only affects the off-topic relevance fallback | `analysis/bank-statement.ts:294`, `analysis/invoice.ts:201` |
@@ -547,7 +550,7 @@ tests, and the docs to touch.
 | 6 | Make auto-categorize explicit ✅ **fixed (Phase 6)** | U-2 | P2 | yes (DECISION) |
 | 7 | Suggestion discoverability ✅ **fixed (Phase 7)** | U-3 | P2 | yes |
 | 8 | Zip importer DoS hardening ✅ **fixed (Phase 8)** | S-1, S-2 | P2 | yes |
-| 9 | Cross-lane write safety | PC-1 | P3 | yes |
+| 9 | Cross-lane write safety ✅ **fixed (Phase 9)** | PC-1 | P3 | yes |
 | 10 | Cleanup & contract parity | X-1, X-2, A-1 test | P3 | yes |
 | 11 | Test backfill & residuals | T-1, R-1, R-2 | P3 | tests/docs |
 
@@ -1014,6 +1017,50 @@ lock); this audit's PC-1 row. **Note:** this can be combined with Phase 4 in one
 `run.ts`) if capacity allows.
 
 **Commit.** `fix(skills): serialize bank/invoice writes per document across run lanes (audit PC-1)`
+
+**As built (Phase 9 — the implementer's picks recorded).**
+- **The primitive — `skills/doc-lock.ts` (new file, not inline).** `withDocumentLock(documentId, fn)`
+  is the classic serialize-by-key chain: a `Map<documentId, Promise>` whose entry is the tail of the
+  pending chain; a new acquire awaits the prior tail (settled success OR failure, so a thrown
+  predecessor advances the chain rather than wedging it), runs `fn`, then releases and PRUNES the map
+  entry when no later caller chained on (so the map stays bounded by *currently pending* docs, not by
+  all docs ever locked — a `activeDocumentLockCount()` test asserts it drains to 0). Chosen as a tiny
+  dedicated module (the audit's suggested option) because three subsystems import it.
+- **Re-entrancy via `AsyncLocalStorage` (the deadlock-avoidance pick).** A lane wraps its WHOLE
+  multi-step sequence in one `withDocumentLock` AND the seams it calls self-lock — without re-entrancy
+  the inner acquire would await the lane's own outer hold forever. An `AsyncLocalStorage<Set<string>>`
+  records the ids the current async call chain already holds; a nested acquire of a held id runs INLINE.
+  (`AsyncLocalStorage` is a built-in `node:async_hooks` primitive — NO new dependency/capability.)
+- **Where the lock is applied (which seams lock).** WRITE seams **self-lock** (thin wrappers, bodies
+  unchanged): `runBankExtraction` (incl. its `replaceExisting` DELETE+INSERT), `runBalanceValidation`,
+  `runCategorization`, `runInvoiceExtraction`, `runInvoiceTotalsValidation` — so **Lane B** (the
+  `tool-runs.ts` dispatch) is covered with ZERO dispatch edits and a future caller can't forget. The two
+  MULTI-step lanes additionally wrap their whole sequence in one outer `withDocumentLock`: **Lane A** the
+  bank + invoice analysis handlers (extract→validate→categorize→read-back), **Lane C** `runCategorize`
+  (extract→categorize-persist) — required because per-seam locking alone would let a re-extract from
+  another lane slip BETWEEN a lane's own steps. READ-only / export paths are deliberately **not** locked
+  (`runCashflowSummary`, the CSV exports, `runDocumentRedaction`) — the audit's "reads need not lock".
+- **DELETE+INSERT atomicity — relied on the existing transaction, added none.** The `replaceExisting`
+  DELETE + the fresh INSERT are already inside one `BEGIN…COMMIT` (`run.ts`); the mutex serializes the
+  *lanes*, that txn keeps a *single* re-extract atomic. No new DB transaction was introduced.
+- **Deadlock argument (rule d).** The doc lock is finer than `DocTaskManager.acquireChatSlot()` /
+  `ModelSlotArbiter` and is always released in a `finally`. The chat-analysis lane acquires the chat
+  slot FIRST (in the chat IPC) and only THEN the doc lock; Lanes B/C never acquire the chat slot — so no
+  party ever holds the doc lock while waiting on the chat slot. No cycle ⇒ no deadlock.
+- **Posture held.** NO new DB/FS/net capability (an in-memory map in the one main process; the workspace
+  DB is single-writer anyway); no schema change, no IPC change; the audit payload stays
+  `{skillId, toolName, documentCount}`; the key is a document **id** (never content) and nothing new is
+  logged.
+- **Tests (+3, `tests/integration/skills-concurrency.test.ts`).** (1) A re-extract (Lane A,
+  `replaceExisting`) parked at a controllable segment-read barrier while holding the doc lock, then a
+  categorize (Lane B) on the SAME document: the gate-audit order proves the categorize ran AFTER the
+  re-extract (`[A:started, A:done, B:started, B:done]`), the final state is deterministic (exactly one
+  statement, the categorize landed on the NEW statement — no "vanished mid-read", no orphan rows), and
+  the lock map drains to 0. (2) Two DIFFERENT documents both reach their barrier at once (the
+  `Promise.all` would hang if a global lock serialized them) → unrelated work stays concurrent. (3)
+  `withDocumentLock` is re-entrant within one async chain (a nested same-doc acquire does not deadlock).
+  Verified the suite (1) FAILS with the lock neutered — it has teeth. All existing skills/doctask tests
+  + the `skills-ipc.test.ts` privacy sentinel-grep stay green (suite 2270 / 38 skipped).
 
 ---
 
