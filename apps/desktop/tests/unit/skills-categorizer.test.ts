@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../../src/main/services/runtime'
 import {
   CATEGORIZER_CATEGORIES,
+  CATEGORIZER_BATCH_SIZE,
   buildBatchPrompt,
   batchOutputSchema,
   categorizeTransactions,
@@ -205,6 +206,57 @@ describe('categorizeTransactions — model path', () => {
     expect(calls).toHaveLength(2)
     expect(assignments).toHaveLength(25)
     expect(assignments.every((a) => a.category === 'Shopping')).toBe(true)
+  })
+})
+
+// The exact batch boundary + empty input (audit T-1). The 25-row test above BRACKETS the boundary but
+// does not NAIL the off-by-one: exactly CATEGORIZER_BATCH_SIZE rows must stay ONE call, and the empty
+// case must not call the model at all. `Shop N` never prefilters (no Fees/Income/Transfer/Cash keyword),
+// so every row is genuinely model-bound — the call count IS the batch count.
+describe('categorizeTransactions — batch boundary & empty input (audit T-1)', () => {
+  it('exactly 20 model-bound rows → ONE call; 21 → two (pins the off-by-one at the boundary)', async () => {
+    expect(CATEGORIZER_BATCH_SIZE).toBe(20) // the boundary the two counts below bracket
+
+    const callsAt: Array<{ messages: ChatMessage[]; options?: RuntimeChatOptions }> = []
+    const runtimeAt = scriptedRuntime(validReplyFor(() => 'Shopping'), callsAt)
+    const rowsAt = Array.from({ length: 20 }, (_, i) => row(`Shop ${i}`, -i - 1))
+    const at = await categorizeTransactions(rowsAt, { runtime: runtimeAt, signal: new AbortController().signal })
+    expect(callsAt).toHaveLength(1) // a full batch is NOT split — a batch-size off-by-one would make this 2
+    expect(at.assignments).toHaveLength(20)
+    expect(at.assignments.every((a) => a.category === 'Shopping')).toBe(true)
+
+    const callsPast: Array<{ messages: ChatMessage[]; options?: RuntimeChatOptions }> = []
+    const runtimePast = scriptedRuntime(validReplyFor(() => 'Shopping'), callsPast)
+    const rowsPast = Array.from({ length: 21 }, (_, i) => row(`Shop ${i}`, -i - 1))
+    await categorizeTransactions(rowsPast, { runtime: runtimePast, signal: new AbortController().signal })
+    expect(callsPast).toHaveLength(2) // one past the boundary spills into a second batch
+  })
+
+  it('a single model-bound row is exactly one model call', async () => {
+    const calls: Array<{ messages: ChatMessage[]; options?: RuntimeChatOptions }> = []
+    const runtime = scriptedRuntime(validReplyFor(() => 'Shopping'), calls)
+    const { assignments } = await categorizeTransactions([row('Shop 0', -1)], {
+      runtime,
+      signal: new AbortController().signal
+    })
+    expect(calls).toHaveLength(1)
+    expect(assignments).toEqual([{ index: 0, category: 'Shopping' }])
+  })
+
+  it('an empty input makes NO model call and returns an empty result (modelAssisted false)', async () => {
+    const calls: Array<{ messages: ChatMessage[]; options?: RuntimeChatOptions }> = []
+    // The reply throws if reached — but `calls` is appended BEFORE the reply runs, so an empty `calls`
+    // proves chatStream was never entered. The empty-input guard returns before any batch loop.
+    const runtime = scriptedRuntime(() => {
+      throw new Error('the model must not be consulted for an empty input')
+    }, calls)
+    const { assignments, modelAssisted } = await categorizeTransactions([], {
+      runtime,
+      signal: new AbortController().signal
+    })
+    expect(assignments).toEqual([])
+    expect(modelAssisted).toBe(false) // dropping the rows>0 guard would flip this to true (teeth)
+    expect(calls).toHaveLength(0)
   })
 })
 

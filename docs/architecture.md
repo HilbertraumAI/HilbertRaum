@@ -2926,6 +2926,7 @@ without churning ~150 comments. Read a historical `§N` as:
 | `pdf-geometry-extraction-plan.md` §3.2 | The non-breaking `parseDate` guarantee (year resolved in reconstruction) | §21 |
 | `pdf-geometry-extraction-plan.md` §3.5 / D56 | The opening/closing-balance completeness gate (no partial totals) | §21 |
 | `pdf-geometry-extraction-plan.md` D50–D58 | Stage-1 architecture decisions (geometry-first; Stage 2 conditional) | §21 |
+| `skills-tools-audit-2026-06-26` D-1…T-1 / C-* / P-* / U-* / S-* / PC-1 / X-* / A-1 / R-1 / R-2 | Skills & Tools audit findings (7 personas, 11 phases, no CRITICAL/HIGH) | §23 close-out ledger → the per-finding § noted there |
 
 
 ### §22 Bank-statement LLM categorizer (Phase 33, 2026-06-25, D55/D26)
@@ -3046,7 +3047,10 @@ figure verification is needed. The constraints that DO hold:
 **Tests:** `skills-categorizer.test.ts` (taxonomy/enum, prefilter, model path, off-list/out-of-range
 drop, unparseable-batch drop, batching, no-runtime fallback; **Phase 2:** `categorizeRow` agrees with the
 prefilter on coincidental substrings, L-1 truncation-retry-then-succeed + retry-once-then-drop, L-2
-char-cap drop); `skills-bank-statement-tool.test.ts` (**Phase 2:** `categorizeRow` word-boundary matching —
+char-cap drop; **Phase 11 (audit T-1):** an empty input makes NO model call and returns an empty result
+(`modelAssisted:false`), and the EXACT batch boundary — exactly `CATEGORIZER_BATCH_SIZE`(20) model-bound
+rows is ONE call, 21 is two, a 1-row batch is one — pinning the off-by-one the 25-row batching test only
+brackets); `skills-bank-statement-tool.test.ts` (**Phase 2:** `categorizeRow` word-boundary matching —
 `coffee`≠Fees, compound `Kontoführungsgebühr`→Spending; **Phase 3:** the cent-exact many-row drift case
 stays `complete` (C-3), the `Kontostand per` dated pair maps opening/closing and a lone line is closing-only
 → `unverified` (C-4), `BANK_EXTRACTOR_VERSION === 2`); `skills-run.test.ts` (**Phase 3:** a v1 statement is
@@ -3060,6 +3064,64 @@ absent for a 0-row / non-extract / non-done run); `skills-analysis-bank.test.ts`
 surface + the model-assisted label; **Phase 2:** the rule-based note when `modelAssisted` is false, absent
 when model-assisted; no duplicate statement on re-ask; A9 stale statement re-extracted+replaced, fresh
 statement reused).
+
+### §23 Skills & Tools audit (2026-06-26) — remediation close-out
+
+A **seven-persona** audit (architecture, security/privacy, performance, LLM/prompt, UX, docs, testing)
+swept the whole Skills & Tools surface — selection → the Tier-2 gate → the run seam → the bank / invoice /
+redaction tools → the LLM categorizer → the `.skill.zip` installer. **No CRITICAL / HIGH.** All **11
+remediation phases are landed** on branch `skills-tools-audit-2026-06-26`. The standalone report
+(`docs/skills-tools-audit-2026-06-26.md`) was **deleted** under the CLAUDE.md doc-lifecycle rule once
+fully implemented — its design records were folded into the §§ below as each phase shipped, and the full
+original report stays **recoverable in git history** (the parent of the Phase-11 close-out commit,
+`bd2acdb`), mirroring the 2026-06-13 audit closeout. This ledger is the durable index — read a code
+comment's `audit <ID>` citation through it:
+
+| Finding(s) | Phase | Disposition (one line) | Record |
+|---|---|---|---|
+| D-1, D-2 | 1 | docs truth-up: eight bundled skills; the linear `globMatches` matcher (no dead `globToRegExp` cap) | §12/§13; DS17 |
+| C-1, C-2, L-1, L-2 | 2 | shared word-boundary `wordIncludes`; rule-based breakdown labels itself; retry-once + char-cap on a batch | §8/§22 |
+| C-3, C-4 | 3 | cent-exact completeness sum; `Kontostand per` date disambiguation (`BANK_EXTRACTOR_VERSION` → 2) | §21 |
+| P-1, P-2 | 4 | load the rows ONCE; the seams return their validated output for in-process reuse | §8/§19 |
+| U-1 | 5 | multi-doc target ids ride the IPC, render-side maps ids→names; the chosen id is validated main-side | §9/§19 |
+| U-2 | 6 | a read-only extract no longer auto-runs the model; an explicit one-tap "Categorize" follow-up instead | §9/§22 (D26) |
+| U-3 | 7 | a quiet inline "Suggested: …" hint on the closed picker for a high-confidence offer | §6 |
+| S-1, S-2 | 8 | bound the inflate INPUT; re-validate + reject a duplicate stripped path | §4; security-model |
+| PC-1 | 9 | per-document `withDocumentLock` serializes the three write lanes (no cross-lane race) | §9/§13/§22 |
+| X-1, X-2, A-1 | 10 | one `documentsInScope` helper; `count_selected_documents` kept as a test-only canary; a SKILL.md⇔TS parity test | §7/§19 |
+| T-1, R-1, R-2 | 11 | test backfill + the two residuals (below) | this section |
+
+**Phase 11 (T-1 / R-1 / R-2) — as built:**
+
+- **T-1 — backfilled only the genuinely-missing edges (no padding).** Two categorizer edges were ADDED to
+  `skills-categorizer.test.ts`: an **empty input** makes NO model call and returns an empty result
+  (`modelAssisted:false`), and the **exact batch boundary** — exactly `CATEGORIZER_BATCH_SIZE`(20)
+  model-bound rows is ONE model call, 21 is two, a 1-row batch is one — pinning the off-by-one the prior
+  25-row "batches of 20" test only *brackets*. **Teeth-verified** (a transient batch-step off-by-one made
+  the boundary test fail; reverted). The other clustered T-1 gaps were verified **already covered** by the
+  earlier phases' own tests and were **NOT re-added**: cross-lane concurrency PC-1
+  (`skills-concurrency.test.ts`, Phase 9), multi-doc `docIds[0]`/chooser + the no-title `SkillRunState`
+  privacy sentinel + the U-2 no-auto-categorize behaviour (`skills-tool-run-ipc.test.ts`, Phases 5/6), the
+  whole-batch-drop / retry-once / char-cap / 25-rows⇒2-calls categorizer cases (`skills-categorizer.test.ts`,
+  Phase 2), and the C-3/C-4 completeness numerics (`skills-bank-statement-tool.test.ts`, Phase 3).
+- **R-1 — auto-fire corpus is intentionally narrow (no rows invented).** `document-redaction` is STILL the
+  ONLY app skill opting into `triggers.autoFire`, and the eval gate already covers it: the harness's
+  `APP_SKILL_IDS` and the 33-turn `tests/fixtures/skill-triggers/corpus.json` (four `document-redaction`
+  turns among them) drive the S13b gate (`fired-wrong == 0` AND `precision ≥ 0.95`). Per the plan's
+  explicit fallback, since NO new skill opts in, no corpus rows were added — the corpus is deliberately
+  scoped to the auto-fire surface and the eval gate is unchanged. (See §18 for the auto-fire contract.)
+- **R-2 — run-surface eyeball deferred (re-affirmed, surfaced for opt-in).** The live `SkillRunBar`
+  Playwright walk (`walk-skills-runbar.mjs`, recipe in `docs/design-review/skills-s12/README.md`) needs a
+  GUI session a test harness cannot drive; every visual state stays unit-covered by `SkillRunBar.test.tsx`
+  (offer / running / result / confirm-modal, EN+DE). The honest deferral (the documented default since
+  Phase 5) is re-affirmed — no fake captures; the owner may run the capture on a GUI machine and commit the
+  PNGs.
+
+**Posture held across all 11 phases (load-bearing):** offline / no telemetry; the **content class** (skill
+bodies, the draft question, extracted figures, redacted text, document text **and** titles/filenames) is
+never logged / audited / echoed — only ids/counts cross the IPC/audit boundary; the audit payload stays
+`{skillId, toolName, documentCount}`; schema changes are additive; the Tier-2 gate gained **no new
+DB/FS/net capability**; i18n parity is compile-enforced (LLM prompts stay English).
 
 
 ## Image understanding — design record (Phases V1–V5, §1–§10)

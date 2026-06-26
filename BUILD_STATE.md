@@ -6,6 +6,62 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-26 — **Skills & Tools audit — Phase 11 (FINAL: Test backfill & residuals; T-1, R-1, R-2) —
+TESTS/DOCS PHASE, no renderer surface, no new capability (branch `skills-tools-audit-2026-06-26`). ALL 11
+PHASES REMEDIATED — audit complete.** Suite **2282 passed / 38 skipped (+3)**, typecheck clean, build OK.
+A P3 tests/docs phase: it backfills the test gaps the audit clustered under T-1 (adding ONLY the genuinely
+missing edges, verifying the rest already-covered — no padding) and resolves the two documented residuals.
+The tool gate, the IPC payload (`{skillId, toolName, documentCount}`), and every schema are unchanged.
+**As built (implementer's picks):**
+- **T-1 — added only the genuinely-missing categorizer edges (`skills-categorizer.test.ts`, +3).** An
+  **empty input** makes NO model call and returns an empty result (`modelAssisted:false`), and the **exact
+  batch boundary** — exactly `CATEGORIZER_BATCH_SIZE`(20) model-bound rows is ONE call, 21 is two, a 1-row
+  batch is one — pinning the off-by-one the prior 25-row "batches of 20" test only *brackets*. `Shop N`
+  descriptions never prefilter, so the call count IS the batch count. **Teeth-verified:** a transient
+  batch-step off-by-one (`+= SIZE-1`) made the 20⇒1 assertion fail ("expected length 1, got 2"); reverted.
+- **T-1 — the other clustered gaps were verified ALREADY COVERED and deliberately NOT re-added** (the
+  judgement call the plan left to the implementer; recorded so the suite isn't padded): cross-lane
+  concurrency PC-1 (`skills-concurrency.test.ts`, Phase 9 — 3 cases incl. teeth); multi-doc `docIds[0]` +
+  the Radix chooser + the no-title `SkillRunState` privacy sentinel ("never leaks a document TITLE …") +
+  the U-2 no-auto-categorize behaviour (`skills-tool-run-ipc.test.ts`, Phases 5/6); the whole-batch-drop /
+  retry-once / char-cap / 25-rows⇒2-calls categorizer cases (`skills-categorizer.test.ts`, Phase 2); the
+  C-3/C-4 completeness numerics — cent-exact many-row drift + `Kontostand per` dated/lone-line
+  (`skills-bank-statement-tool.test.ts`, Phase 3). The `skills-privacy-guard.test.ts` /
+  `skills-ipc.test.ts` sentinel greps and all skills/doctask tests stay green.
+- **R-1 — auto-fire corpus is intentionally narrow (no rows invented).** Confirmed by grep that
+  `document-redaction` is STILL the ONLY app skill opting into `triggers.autoFire`. The eval gate already
+  covers it: `APP_SKILL_IDS` + the 33-turn `tests/fixtures/skill-triggers/corpus.json` (four
+  `document-redaction` turns) feed the S13b gate (`fired-wrong == 0` AND `precision ≥ 0.95`). Per the
+  plan's explicit fallback, since NO new skill opts in, **no corpus rows were added** — the corpus is
+  deliberately scoped to the auto-fire surface; the eval gate is unchanged.
+- **R-2 — run-surface eyeball deferred (re-affirmed; surfaced for opt-in).** The live `SkillRunBar`
+  Playwright walk (`walk-skills-runbar.mjs`, recipe in `docs/design-review/skills-s12/README.md` — the
+  script itself is not yet written; only `walk-skills-composer.mjs` exists) needs a GUI session a test
+  harness can't drive. Every visual state stays unit-covered by `SkillRunBar.test.tsx`. **Default =
+  re-affirm the honest deferral (no fake captures), the documented default since Phase 5.** OWNER OPT-IN:
+  if you want the PNGs, run the recipe on a GUI machine (the Electron eyeball driver recipe is in memory)
+  and commit them.
+- **Doc-lifecycle close-out (CLAUDE.md rule — the genuine decision this phase made).** The audit's design
+  records were already folded into `architecture.md` §7/§9/§19/§22 (+§4/§6/§8/§12/§13/§18/§21 and
+  `security-model.md`) as each phase shipped, so the standalone plan is fully implemented. **Decision:
+  DELETED `docs/skills-tools-audit-2026-06-26.md`** (mirroring the 2026-06-13 audit closeout) and condensed
+  the remaining live status into a new **`architecture.md` §23 "Skills & Tools audit (2026-06-26) —
+  remediation close-out"**: a per-finding ledger (every finding → phase → disposition → the § its record
+  lives in), the Phase-11 "as built" picks, the all-11-remediated note, and the held-posture paragraph;
+  plus a §-anchor-legend row so a code comment's `audit <ID>` citation still resolves. **Why the §3/§13
+  row-flips landed in §23, not in the audit file:** editing then deleting the file in the SAME commit would
+  record the flips nowhere (the deletion diff shows HEAD's un-flipped rows) — so the fixed-status + picks
+  live durably in §23 instead. The full original report stays **recoverable in git history at `bd2acdb`**
+  (the parent of this close-out commit). Kept-as-SSOT was rejected: not "cited as a unit" (code cites
+  individual finding IDs, which §23 resolves), and the rule defaults to delete.
+- **Posture (load-bearing):** no network/telemetry; the content class (skill bodies, draft question,
+  figures, redacted text, document text AND titles/filenames) is never logged/audited/echoed — the audit
+  payload stays `{skillId, toolName, documentCount}`; no schema/IPC change; the tool gate adds no new
+  DB/FS/net capability; i18n parity compile-enforced (no new keys this phase — tests/docs only).
+- **Eyeball:** none — a tests/docs phase with no UI surface (R-2 is the run-surface eyeball, deferred above).
+  **Next: NONE — the Skills & Tools audit is fully remediated (all 11 phases). Branch
+  `skills-tools-audit-2026-06-26` is several commits ahead of origin and intentionally unpushed.**_
+
 _2026-06-26 — **Skills & Tools audit — Phase 10 (Cleanup & contract parity; X-1, X-2, A-1 test) — MAIN-SIDE
 REFACTOR-AND-TEST PHASE, no renderer surface, no new capability (branch `skills-tools-audit-2026-06-26`).**
 Suite **2279 passed / 38 skipped (+9)**, typecheck clean, build OK. A P3 phase that removes a drift
