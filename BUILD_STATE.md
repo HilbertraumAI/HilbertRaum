@@ -6,6 +6,45 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-26 — **Skills & Tools audit — Phase 4 (Analysis-handler performance; P-1 / P-2) — PERF PHASE, answer
+text byte-identical (branch `skills-tools-audit-2026-06-26`).** Suite **2246 passed / 38 skipped (+4)**, typecheck
+clean, build OK. No answer text or persisted figure changed (the rendered strings + the gold figures stay
+byte-identical — the existing answer-text/audit-trio assertions pass UNCHANGED). Content-class boundary held:
+the new structured `output`s (`CashflowSummary`/`ReconcileResult`/`InvoiceTotalsResult`) are figures = content and
+stay **in-handler**; they are NEVER mapped into `ToolRunOutcome`/IPC (the run-bar dispatch `tool-runs.ts` still
+maps counts only). Audit payload unchanged (`{skillId, toolName, documentCount}`); the tool gate gained NO new
+DB/FS/net capability; no schema change; no new i18n keys. **DECISION = approach A** (recommended default — not
+surfaced; it was clearly right). **As built:**
+- **P-1 — single row load + seam-output reuse.** The bank handler ran each read-only tool through the seam
+  (`runCashflowSummary` → reload, `runBalanceValidation` → reload) and **then recomputed** the same pure
+  function over a THIRD reload (`loadStatementRowsWithCategories`) → **3 `bank_transactions` reads + 2 redundant
+  recomputes** per non-category question (invoice: 2 `invoice_line_items` reads). Now the handler loads the rows
+  **once** (`loadStatementRowsWithCategories`, extended to also carry `id`/`row_index`) and hands them to the
+  downstream seams as a new optional `preloaded` arg (`prepareStatementRun`/`prepareInvoiceRun` skip their own
+  `loadTransactions`/`loadInvoice` when supplied). The seams now **return their validated `output`** for
+  in-process reuse; the handler reuses it instead of recomputing (pure-recompute fallback if a seam failed →
+  byte-identical even on failure). **Result: one `bank_transactions` read (was 3); one `invoice_line_items` read
+  (was 2)** — asserted by a `db.prepare` query-count spy matching `FROM bank_transactions`/`FROM
+  invoice_line_items` (UPDATEs excluded, so the reconciled/category persists aren't counted).
+- **P-2 — the audit-only summary no longer re-reads.** `runCashflowSummary` persists nothing, so in the analysis
+  path its reload+recompute were pure overhead. KEPT the run (approach A, not B) so its `skill_run_*` trio still
+  fires — the existing `skills-analysis-bank` "NEVER auto-runs export" test asserts THREE runs incl. summarize,
+  and `skills-analysis-invoice` asserts TWO; both pass unchanged. The overhead is removed by REUSE: summarize
+  now reuses the handler's single `preloaded` load and its `CashflowSummary` is reused, not recomputed.
+- **Why A over B.** B drops the `summarize_cashflow` run → its audit trio disappears (an observable audit change
+  the tests encode). A keeps the `skill_runs` lifecycle + ids/counts audit **unchanged** and still hits the
+  "one read" acceptance by threading the single load into the seams. The category path keeps its one extra read
+  (the reload AFTER `runCategorization` persists `category_id`) — the "one read" target is the base path.
+- **Tests (+4).** `skills-run.test.ts` (+2): summarize/validate surface `output` deep-equal to
+  `summarizeCashflow`/`reconcileBalances` over the rows; passing `preloaded` → **0** `bank_transactions` reads in
+  the seams, same `output` as the self-loading path, and validate still persists `reconciled` `[null,1]` against
+  the preloaded ids. `skills-analysis-bank.test.ts` (+1): a non-category question issues exactly **1**
+  `bank_transactions` read (was 3). `skills-analysis-invoice.test.ts` (+1): exactly **1** `invoice_line_items`
+  read (was 2). **Docs:** `architecture.md` §19 (single-load + seam-output-reuse paragraph) + §8 (the `preloaded`
+  / `output` clause); audit doc §3 P-1/P-2 rows + the Phase-4 index row flipped to ✅ fixed (Phase 4), the
+  DECISION recorded as approach A. **Next:** Phase 5 (U-1 — tool-run document targeting for multi-doc scope:
+  surface/choose the target WITHOUT threading the document title into the content-free `SkillRunState`/IPC)._
+
 _2026-06-26 — **Skills & Tools audit — Phase 3 (Bank completeness-gate numerics; C-3 / C-4) — VERSION-BUMP PHASE
 (branch `skills-tools-audit-2026-06-26`).** Suite **2242 passed / 38 skipped (+5)**, typecheck clean, build OK.
 Content-class boundary unchanged (audit stays `{skillId, toolName, documentCount}`; the tool gate gained NO new

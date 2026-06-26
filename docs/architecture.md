@@ -1917,6 +1917,10 @@ content, not surfaced in v1), and `export_transactions_csv` (confirm-gated `expo
 and persists atomically (ROLLBACK ⇒ no partial rows). The four downstream tools operate on the
 **already-extracted** rows — the seam loads the **latest statement** for the in-scope document and passes
 them as **structured input**, so the tools stay pure and the §7 ceiling is unchanged (no new accessor).
+*(Phase-4 perf, audit P-1: the read-only downstream seams take an optional `preloaded` rows arg — the
+analysis handler loads the rows once and supplies it, so the seam skips its own load — and return their
+validated structured `output` for in-process reuse by that handler; both are no-ops for the run-bar/IPC
+path, which passes no rows and maps counts only. See §19.)*
 **The CSV export is the first FS-write from a skill tool:** the pure tool only *produces* the CSV string;
 the seam writes it main-side to a **user-chosen path** via a save dialog, gated on the `export-file`
 confirm — the path + content never touch any log/audit (only "saved N rows" is surfaced), and free-text
@@ -2405,7 +2409,20 @@ skipped and the relevance + coverage-extract paths run **byte-unchanged** (R5).
 multi-doc keeps relevance) **and** an analysis-shaped keyword set (EN+DE, substring-ambiguous tokens
 avoided per §1's DS17 caution). `run()` auto-runs the read-only tools through the run seam for their
 `skill_runs` lifecycle + ids/counts audit, then computes the answer's **figures from the persisted
-rows** via the **pure** tool functions (the seams surface only counts). The answer is deterministic,
+rows** via the **pure** tool functions. **Single row load + seam-output reuse (Phase-4 perf, audit
+P-1/P-2):** the handler loads the statement rows **once** — `loadStatementRowsWithCategories` is now the
+sole `bank_transactions` read on the non-category path — and hands them to the downstream seams as a new
+optional `preloaded` arg (`prepareStatementRun`/`prepareInvoiceRun` skip their own load when it is
+supplied). The read-only seams (`summarize_cashflow`, `validate_statement_balances`,
+`validate_invoice_totals`) now **return their validated structured `output`** (`CashflowSummary` /
+`ReconcileResult` / `InvoiceTotalsResult`) for **in-process** reuse, so the handler reuses it instead of
+recomputing the same pure function over a re-queried row set (a pure recompute is the fallback if a seam
+failed). These outputs are figures (content) and stay **in-handler** — they are never mapped into
+`ToolRunOutcome`/IPC (the run-bar dispatch in `tool-runs.ts` still maps counts only). The `skill_runs`
+lifecycle + ids/counts audit are **unchanged** (the `summarize_cashflow` run + its `skill_run_*` trio
+still fire — approach A, not the "drop the summary run" alternative B). Net: a non-category bank question
+issues **one** `bank_transactions` read (was three: two seam loads + the handler load); an invoice
+question **one** `invoice_line_items` read (was two). The answer is deterministic,
 localized Markdown honouring the SKILL.md honesty posture (quote printed figures; surface flagged rows
 **before** the headline; never invent), with real `[Sn]` source-chunk citations (M2-safe, never the
 synthesised total). On this **exhaustive** path the honesty posture is **code-enforced, not

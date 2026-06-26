@@ -12,7 +12,8 @@ import {
   runCashflowSummary,
   runCategorization,
   type BankExtractionArgs,
-  type BankExtractionDeps
+  type BankExtractionDeps,
+  type LoadedTransaction
 } from '../run'
 import {
   BUILTIN_CATEGORIES,
@@ -90,8 +91,12 @@ function singleInScopeDocument(db: Db, scope: RetrievalScope): { id: string; tit
 }
 
 /** A statement row paired with its PERSISTED category name — the two are read in one query so their
- *  alignment is STRUCTURAL (each row carries its own category), never an index match across two arrays. */
+ *  alignment is STRUCTURAL (each row carries its own category), never an index match across two arrays.
+ *  Carries the row's `id`/`rowIndex` too so the handler can hand the SAME single load to the downstream
+ *  seams as `preloaded` (audit P-1) — they persist against `id`, in `rowIndex` order. */
 interface RowWithCategory {
+  id: string
+  rowIndex: number
   row: TransactionInput
   /** The persisted category name (LLM doctask or rule pass), or null when the row is unassigned. */
   category: string | null
@@ -102,19 +107,24 @@ interface RowWithCategory {
  * follow-up). The pure tools' input (`TransactionInput`, nulls omitted — reconcile relies on it) and
  * the per-row category travel together, so `categoryTotals` reads each row's own category instead of
  * indexing two separately-ordered arrays in lockstep. A null category falls back to the on-the-fly
- * `categorizeRow` at read time (no persistence required to answer).
+ * `categorizeRow` at read time (no persistence required to answer). This is the handler's SINGLE
+ * `bank_transactions` read (audit P-1): it also carries `id`/`rowIndex` so the rows can be fed to the
+ * downstream seams (`runCashflowSummary`/`runBalanceValidation`/`runCategorization`) as `preloaded`,
+ * sparing each seam its own re-query.
  */
 function loadStatementRowsWithCategories(db: Db, statementId: string): RowWithCategory[] {
   const rows = db
     .prepare(
-      `SELECT t.date, t.value_date AS valueDate, t.description, t.amount, t.currency,
-              t.balance_after AS balanceAfter, t.source_page AS sourcePage,
+      `SELECT t.id AS id, t.row_index AS rowIndex, t.date, t.value_date AS valueDate, t.description,
+              t.amount, t.currency, t.balance_after AS balanceAfter, t.source_page AS sourcePage,
               c.name AS categoryName
        FROM bank_transactions t
        LEFT JOIN bank_categories c ON c.id = t.category_id
        WHERE t.statement_id = ? ORDER BY t.row_index`
     )
     .all(statementId) as Array<{
+    id: string
+    rowIndex: number
     date: string
     valueDate: string | null
     description: string
@@ -134,8 +144,15 @@ function loadStatementRowsWithCategories(db: Db, statementId: string): RowWithCa
     if (r.valueDate != null) t.valueDate = r.valueDate
     if (r.balanceAfter != null) t.balanceAfter = r.balanceAfter
     if (r.sourcePage != null) t.sourcePage = r.sourcePage
-    return { row: t, category: r.categoryName ?? null }
+    return { id: r.id, rowIndex: r.rowIndex, row: t, category: r.categoryName ?? null }
   })
+}
+
+/** Project the single row load into the `LoadedTransaction` shape the downstream seams persist against
+ *  (id + rowIndex + the tool input fields, in row order) — so the seams reuse these instead of
+ *  re-querying `bank_transactions` (audit P-1). */
+function toLoadedTransactions(paired: readonly RowWithCategory[]): LoadedTransaction[] {
+  return paired.map((p) => ({ id: p.id, rowIndex: p.rowIndex, ...p.row }))
 }
 
 // The categories the DETERMINISTIC rule pass can produce (`categorizeRow`). Used only as a BACK-COMPAT
@@ -456,15 +473,20 @@ export const bankStatementAnalysisHandler: SkillAnalysisHandler = {
       }
       statementId = extraction.statementId
     }
-    await runCashflowSummary(db, args, deps)
-    await runBalanceValidation(db, args, deps)
 
-    // Figures come from the PERSISTED rows via the PURE tool functions (the seams surface only counts).
-    // Rows + persisted categories arrive together (one JOINed read) so the breakdown alignment is structural.
+    // Load the rows + persisted categories ONCE (the single `bank_transactions` read — audit P-1), then
+    // hand the SAME rows to the downstream seams as `preloaded` so they don't each re-query. The seams
+    // keep their `skill_runs` lifecycle + ids/counts audit (unchanged), and now RETURN their validated
+    // figures (`output`) for in-process reuse — so the handler reuses them instead of recomputing the
+    // same pure function (audit P-1/P-2). A seam that failed returns no `output`; fall back to a pure
+    // recompute over the loaded rows then, preserving the prior byte-identical answer in every case.
     let paired = loadStatementRowsWithCategories(db, statementId)
     const rows = paired.map((p) => p.row)
-    const summary = summarizeCashflow(rows)
-    const reconcile = reconcileBalances(rows)
+    const loaded = toLoadedTransactions(paired)
+    const summaryResult = await runCashflowSummary(db, args, deps, loaded)
+    const validateResult = await runBalanceValidation(db, args, deps, loaded)
+    const summary = (summaryResult.output as CashflowSummary | undefined) ?? summarizeCashflow(rows)
+    const reconcile = (validateResult.output as ReconcileResult | undefined) ?? reconcileBalances(rows)
 
     // Per-category breakdown (only for a category-shaped question). It reads the PERSISTED categories
     // (the LLM categorizer doctask, or a prior rule pass) — `categorize` is the ONLY model call and it
@@ -477,7 +499,10 @@ export const bankStatementAnalysisHandler: SkillAnalysisHandler = {
     let modelAssisted = false
     if (categoryShaped) {
       if (!paired.some((p) => p.category != null)) {
-        await runCategorization(db, args, deps) // deterministic seed when nothing is categorized yet
+        // Deterministic seed when nothing is categorized yet — reuse the single load (audit P-1); the
+        // reload afterwards is the one extra `bank_transactions` read the category path needs (to pick
+        // up the freshly persisted `category_id`).
+        await runCategorization(db, args, deps, loaded)
         paired = loadStatementRowsWithCategories(db, statementId)
       }
       categories = categoryTotals(paired)

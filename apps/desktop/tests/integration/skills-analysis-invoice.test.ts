@@ -73,6 +73,23 @@ function ctxFor(db: Db, scope: RetrievalScope, question: string): SkillAnalysisC
   }
 }
 
+/** Count the `db.prepare` calls whose SQL matches `pattern` while `fn` runs (audit P-1 query-count). */
+async function countPrepares(db: Db, pattern: RegExp, fn: () => Promise<void>): Promise<number> {
+  const real = db.prepare.bind(db)
+  let count = 0
+  const target = db as unknown as { prepare: Db['prepare'] }
+  target.prepare = ((sql: string) => {
+    if (pattern.test(sql)) count++
+    return real(sql)
+  }) as Db['prepare']
+  try {
+    await fn()
+  } finally {
+    target.prepare = real
+  }
+  return count
+}
+
 // A clean invoice: 2 line items (100,00 + 20,00 = 120,00 net), 20% VAT (24,00), gross 144,00 — all
 // three reconciliation checks pass.
 const CLEAN = [
@@ -134,6 +151,17 @@ describe('invoice analysis handler — run()', () => {
     expect(res.answer).toContain('EUR')
     // A clean invoice reconciles, so there is NO "check these totals first" block.
     expect(res.answer).not.toContain(tr('skills.invoiceAnalysis.unreconciledHeading'))
+  })
+
+  it('issues ONE invoice line-items read per analysis question (audit P-1): the validate seam reuses the single load', async () => {
+    const db = freshDb()
+    const id = seedDoc(db, CLEAN)
+    const reads = await countPrepares(db, /FROM invoice_line_items\b/i, async () => {
+      await invoiceAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'what are the totals?'))
+    })
+    // Was TWO before Phase 4 (the validate seam's loadInvoice + the handler's own loadInvoice); now the
+    // handler loads the invoice once and hands it to the validate seam as `preloaded` (no re-query).
+    expect(reads).toBe(1)
   })
 
   it('figures are quoted, never invented — only the invoice’s printed totals appear', async () => {

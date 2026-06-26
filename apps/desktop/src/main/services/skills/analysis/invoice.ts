@@ -283,11 +283,14 @@ export const invoiceAnalysisHandler: SkillAnalysisHandler = {
     if (!extraction.ok || !extraction.invoiceId) {
       return { answer: ctx.tr('skills.invoiceAnalysis.couldNotRead'), citations: [], coverage: computeCoverage(db, target.id) }
     }
-    await runInvoiceTotalsValidation(db, args, deps)
 
-    // Figures come from the PERSISTED invoice via the PURE tool function (the seam surfaces only counts).
+    // Reconstruct the invoice ONCE from the persisted rows (the single invoice read — audit P-1), hand
+    // it to the validation seam as `preloaded` so it doesn't re-load, and REUSE its validated output
+    // instead of recomputing the same pure function (the seam keeps its lifecycle + ids/counts audit).
+    // A failed seam returns no `output`; fall back to a pure recompute, preserving the prior answer.
     const invoice = loadInvoice(db, extraction.invoiceId)
-    const validation = validateInvoiceTotals(invoice)
+    const validateResult = await runInvoiceTotalsValidation(db, args, deps, invoice)
+    const validation = validateResult.output ?? validateInvoiceTotals(invoice)
 
     const answer = buildInvoiceAnswer(ctx.tr, { invoice, validation })
     const citations = buildInvoiceCitations(db, target.id, target.title)

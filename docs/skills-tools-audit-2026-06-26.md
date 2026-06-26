@@ -180,8 +180,8 @@ persona section below.
 | D-2 | MEDIUM | Docs/Security | ✅ **fixed (Phase 1)** — Docs still described the **deleted `globToRegExp` ">10 wildcards" ReDoS cap**; code now uses a linear `globMatches` | architecture.md §12/§13, security-model.md, BUILD_STATE |
 | C-1 | MEDIUM | Correctness | ✅ **fixed (Phase 2)** — `categorizeRow` used raw `desc.includes()` (so `fee ⊂ coffee` mis-files as *Fees*); now shares the word-boundary `wordIncludes` (moved to `tools/money.ts`) with the LLM `prefilterCategory`, so both paths agree | `tools/bank-statement.ts` `categorizeRow`, `tools/money.ts` `wordIncludes` |
 | C-2 | MEDIUM | Consistency | ✅ **fixed (Phase 2, option A)** — **Two categorize engines** gave divergent results by entry point; the deterministic chat breakdown now **labels itself rule-based** (`categoryRuleBased`, points at the Categorize button), preserving the 0-model-call chat contract | `analysis/bank-statement.ts` `buildBankAnswer`, en/de `categoryRuleBased` |
-| P-1 | MEDIUM | Performance | Analysis handlers **run each read-only tool through the seam and then recompute the same pure function**; rows are re-loaded from DB 3–4× per question | `analysis/bank-statement.ts:454-499`, `analysis/invoice.ts:282-290`, `run.ts` |
-| P-2 | MEDIUM | Performance | `runCashflowSummary` **persists nothing** — in the analysis path its run row + audit + row-reload are pure overhead (the handler recomputes `summarizeCashflow`) | `run.ts:630-651`, `analysis/bank-statement.ts:454` |
+| P-1 | MEDIUM | Performance | ✅ **fixed (Phase 4, approach A)** — the handler now loads the rows **once** (with ids) and hands them to the downstream seams as `preloaded`; the seams **return their validated `output`** for in-process reuse instead of the handler recomputing. A non-category bank question now issues **one** `FROM bank_transactions` read (was three); invoice likewise **one** `invoice_line_items` read (was two). `skill_runs` lifecycle + ids/counts audit unchanged | `analysis/bank-statement.ts`, `analysis/invoice.ts`, `run.ts`, `invoice-run.ts` |
+| P-2 | MEDIUM | Performance | ✅ **fixed (Phase 4)** — kept the `summarize_cashflow` run (its audit trio stays — approach A, not B) but it no longer re-reads the rows: it reuses the handler's single `preloaded` load, and its `CashflowSummary` is reused rather than recomputed | `run.ts` `runCashflowSummary`, `analysis/bank-statement.ts` |
 | U-1 | MEDIUM | UX/Correctness | Multi-document scope: tools **silently act on `docIds[0]`**, `documentCount` is **hardcoded to 1**, and there is **no document picker** in the run bar | `registerSkillsIpc.ts:314-328` |
 | U-2 | MEDIUM | UX/Surprise | Clicking the read-only **"Extract transactions"** button **silently starts a background LLM categorize** (Phase 33 auto-offer), invisible in the run bar | `tool-runs.ts:229-238` |
 | PC-1 | MEDIUM | Concurrency | Lane A (chat analysis auto-run) and Lane B (`SkillRunController`) are mutually unaware; a chat re-extract (`replaceExisting` DELETE) can race a button run on the same statement | §2.3; `run.ts:221`, `run-controller.ts` |
@@ -542,7 +542,7 @@ tests, and the docs to touch.
 | 1 | Documentation truth-up ✅ **fixed (Phase 1)** | D-1, D-2, §16 count, A-1 note | P1 | docs only |
 | 2 | Categorization correctness & consistency ✅ **fixed (Phase 2)** | C-1, C-2, L-1, L-2 | P1–P2 | yes |
 | 3 | Bank completeness-gate numerics ✅ **fixed (Phase 3)** | C-3, C-4 | P2 | yes (version bump) |
-| 4 | Analysis-handler performance | P-1, P-2 | P2 | yes |
+| 4 | Analysis-handler performance ✅ **fixed (Phase 4)** | P-1, P-2 | P2 | yes |
 | 5 | Tool-run document targeting (multi-doc) | U-1 | P2 | yes |
 | 6 | Make auto-categorize explicit | U-2 | P2 | yes (DECISION) |
 | 7 | Suggestion discoverability | U-3 | P2 | yes |
@@ -731,6 +731,15 @@ gates, **persists nothing**) → `runBalanceValidation` (reloads rows, persists 
   grep; if nothing does, consider whether the summary tool needs a run seam at all.)
 - Either way: **load the statement rows once** in the handler and pass them to `summarizeCashflow` /
   `reconcileBalances` / `categoryTotals` rather than re-querying.
+- **✅ DECIDED (Phase 4): approach A.** Approach A alone (return `output`) reuses the computation but, as
+  written, each seam still re-queries — it would NOT reach "one read". So A was implemented **with the
+  handler's single load threaded into the seams as a new optional `preloaded` arg** (`prepareStatementRun`
+  / `prepareInvoiceRun` skip their own load when it is supplied): the handler loads once, the seams persist
+  + audit as before AND return their validated `output`, and the handler reuses it (with a pure-recompute
+  fallback if a seam failed). Chose A over B because B drops `summarize_cashflow`'s `skill_run_*` trio — an
+  observable audit change the existing tests assert (`skills-analysis-bank` "NEVER auto-runs export" expects
+  three runs incl. summarize); A keeps the lifecycle + audit **unchanged**. P-2's overhead is removed by the
+  reuse (no re-read, no recompute), not by removing the run.
 
 **Acceptance.** A bank question issues **one** `SELECT … bank_transactions` (assert via a query-count spy or
 by structure), `summarize_cashflow` is not run for audit-only effect, and the answer text is **byte-identical**
