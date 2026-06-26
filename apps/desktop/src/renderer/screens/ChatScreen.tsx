@@ -690,6 +690,10 @@ export function ChatScreen({
   // The name of the document the ACTIVE run targets — remembered renderer-side when the run is
   // launched (the run state carries only ids/counts, never the title). Drives the busy/result row.
   const [runTargetName, setRunTargetName] = useState<string | null>(null)
+  // The id of that same target, remembered alongside the name (U-2). The run state is content-free,
+  // so this is how the post-extract "Categorize transactions" offer targets the SAME document the
+  // extract ran on — the id rides back through `onRunTool('categorize_transactions', …, id)`.
+  const [runTargetId, setRunTargetId] = useState<string | null>(null)
 
   // The conversation a categorize run was started in (C1): the routed breakdown below must land in THIS
   // conversation, never whatever conversation happens to be active when the (module-level, app-wide) run
@@ -703,8 +707,10 @@ export function ChatScreen({
     if (!currentSkillId || !activeId) return
     if (toolName === 'categorize_transactions') categorizeRunConvRef.current = activeId
     const targetId = documentId ?? scopeDocIds[0]
-    // Remember the target NAME for the busy/result row (resolved renderer-side; never from the IPC).
+    // Remember the target NAME + ID for the busy/result row (resolved renderer-side; never from the
+    // IPC). The id powers the U-2 post-extract categorize offer (same-document targeting).
     setRunTargetName(targetId ? docNameForId(targetId) : null)
+    setRunTargetId(targetId ?? null)
     setError(null)
     void startSkillRun({ skillInstallId: currentSkillId, toolName, conversationId: activeId, documentId, confirmed })
       .then((outcome) => {
@@ -1292,6 +1298,7 @@ export function ChatScreen({
           runnableTools={runnableTools}
           targetDocuments={targetDocuments}
           runningDocumentName={runTargetName}
+          runningDocumentId={runTargetId}
           onRun={onRunTool}
           onCancel={() => void cancelActiveSkillRun()}
           onDismiss={acknowledgeSkillRun}

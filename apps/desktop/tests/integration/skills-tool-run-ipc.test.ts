@@ -28,6 +28,8 @@ vi.mock('electron', () => ({
 }))
 
 import { registerSkillsIpc } from '../../src/main/ipc/registerSkillsIpc'
+import { buildToolRunner, resolveInScopeDocumentIds, toSkillToolAudit } from '../../src/main/services/skills/tool-runs'
+import type { DocTaskManager } from '../../src/main/services/doctasks'
 import { IPC } from '../../src/shared/ipc'
 import { openDatabase, type Db } from '../../src/main/services/db'
 import { seedSettings } from '../../src/main/services/settings'
@@ -420,6 +422,42 @@ describe('skills tool-run IPC — multi-document targeting (U-1)', () => {
     const final = await runTool(skillInstallId, conversationId, 'extract_transactions')
     const { result: stateRaw } = await invoke(handlers, IPC.getSkillRun, final.runHandle)
     expect(JSON.stringify(stateRaw)).not.toContain(TITLE_SENTINEL)
+  })
+})
+
+// U-2 — a read-only "Extract transactions" click must NOT silently start the LLM categorizer in the
+// background. The Phase-33 auto-offer that enqueued a `categorize` doctask on extract is removed; the
+// categorize is now an explicit one-tap follow-up on the run-bar result row (SkillRunBar.test.tsx).
+describe('skills tool-run IPC — extract does not auto-categorize (U-2)', () => {
+  const STATEMENT = 'Statement EUR\n2026-01-02 Grocery -45,90 1.954,10\n2026-01-03 Salary 2.500,00 4.454,10'
+
+  it('an extract with rows enqueues NO categorize doctask (the model pass is user-initiated)', async () => {
+    const { db, skillInstallId, conversationId } = makeHarness(STATEMENT)
+    const docId = resolveInScopeDocumentIds(db, conversationId)[0]
+    // A docTasks spy that records every enqueue. The old auto-offer would have started a 'categorize'
+    // here (synchronously, inside the runner) whenever rows>0 and no categorize was already pending —
+    // so this spy would catch a regression. The runner is exercised directly: the CI IPC ctx wires no
+    // doctask lane, so the auto-offer could only be observed through the dispatch with one supplied.
+    const enqueued: Array<{ kind: string }> = []
+    const docTasks = {
+      startDocTask: (req: { kind: string }) => {
+        enqueued.push(req)
+        return { jobId: 'job-1' }
+      },
+      hasPendingKind: () => false
+    } as unknown as DocTaskManager
+    const runner = buildToolRunner(
+      db,
+      'extract_transactions',
+      { skillInstallId, conversationId, documentId: docId },
+      toSkillToolAudit(),
+      { docTasks, readDocumentSegments: async () => [{ text: STATEMENT, page: 1, index: 0 }] }
+    )!
+    const outcome = await runner({ signal: new AbortController().signal, onProgress: () => {} })
+    expect(outcome.ok).toBe(true)
+    expect(outcome.transactionCount).toBe(2) // rows WERE extracted (the old auto-offer's rows>0 guard would have fired)
+    // …yet the LLM categorizer was never started on its own — nothing reached the doctask lane.
+    expect(enqueued).toHaveLength(0)
   })
 })
 

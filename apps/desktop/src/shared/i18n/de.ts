@@ -235,6 +235,9 @@ export const de: Record<keyof typeof en, string> = {
   'chat.skill.run.error.persistFailed': 'Das konnte nicht gespeichert werden. Es wurde nichts geändert.',
   'chat.skill.run.error.exportWriteFailed': 'Die Datei konnte nicht gespeichert werden. Es wurde nichts geändert.',
   'chat.skill.run.cancelled': 'Gestoppt. Es wurde nichts gespeichert.',
+  // U-2: die Ein-Klick-Folgeaktion in der Ergebniszeile nach dem Extrahieren. Die KI-Kategorisierung
+  // wird hier vom Nutzer ausgelöst, nicht still im Hintergrund. Inhaltsfrei (benennt eine Aktion).
+  'chat.skill.run.categorizeOffer': 'Transaktionen kategorisieren',
   'chat.skill.run.dismiss': 'Schließen',
   'chat.skill.confirm.title': 'Dieses Tool ausführen?',
   'chat.skill.confirm.body': 'Dabei wird aus den Dokumenten auf diesem Laufwerk eine Datei erstellt oder exportiert.',

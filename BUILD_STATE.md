@@ -6,6 +6,54 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-26 — **Skills & Tools audit — Phase 6 (Make the auto-categorize-on-extract explicit; U-2) —
+RENDERER + MAIN UX/PRIVACY-POSTURE PHASE (branch `skills-tools-audit-2026-06-26`).** Suite **2260 passed /
+38 skipped (+5)**, typecheck clean, build OK. **DECISION = (a) explicit follow-up offer** (the recommended
+default; surfaced to the user before building, who confirmed (a)). **Calm/no-surprises posture (load-bearing):**
+a deterministic, advertised **read-only** "Extract transactions" click must NOT silently start an LLM pass the
+user didn't ask for — so the Phase-33 background auto-enqueue is **removed** and the categorize becomes a
+**user-initiated** one-tap offer. Content-class boundary held: the audit payload stays `{skillId, toolName,
+documentCount}`; the run state/IPC remain ids/counts-only (NO documentId in `SkillRunState`); the tool gate
+gained NO new DB/FS/net capability; schema unchanged; LLM prompts stay English, the one new user key is EN+DE.
+**As built:**
+- **U-2 — delete the hidden enqueue.** The `extract_transactions` runner (`tool-runs.ts` `buildToolRunner`)
+  used to best-effort `startDocTask({kind:'categorize'})` in the background (D26 lane, invisible in the run
+  bar) once rows were extracted. That block is **gone**; the runner now just returns the extract outcome.
+- **U-2 — the explicit offer.** After a successful **rows>0** extract, `SkillRunBar`'s **RESULT** row renders
+  a one-tap **"Categorize transactions"** button beside Dismiss (gated `state==='done' &&
+  toolName==='extract_transactions' && transactionCount>0`); tapping it calls the existing
+  `onRun('categorize_transactions', false, documentId)` → `runCategorizeViaDocTask` (D26 lane unchanged). It
+  is absent for a 0-row / non-extract / non-done run.
+- **Same-document targeting (Phase-5 interaction).** The run state is deliberately content-free, so the offer
+  can't read its target from it. `ChatScreen` remembers the launched **id** renderer-side (`runTargetId`,
+  mirroring the Phase-5 `runTargetName`) and passes it to `SkillRunBar` as `runningDocumentId`; the offer rides
+  that id back through `onRunTool`, so the categorize runs on the **same document** the extract did. A lost id
+  (null, e.g. after a remount) ⇒ `undefined` ⇒ main's first-in-scope default. The offer copy stays content-free.
+- **Opt-in paths preserved.** The deterministic **0-model-call** chat breakdown still works with NO prior
+  categorize, and the existing "(D) routed feedback" effect still surfaces the per-category breakdown after any
+  categorize run completes — removing the auto-enqueue did not touch either.
+- **i18n (EN+DE, parity compile-enforced).** One new key: `chat.skill.run.categorizeOffer` ("Categorize
+  transactions" / "Transaktionen kategorisieren"). The dev machine boots de-AT so the German renders live.
+- **Tests (+5).** `SkillRunBar.test.tsx` (+3): the result-row offer renders after a rows>0 extract and fires
+  `('categorize_transactions', false, 'd1')`; a lost id falls back to `undefined`; the offer is ABSENT for a
+  0-row / categorize-done / extract_invoice-done / failed / cancelled run. `skills-tool-run-ipc.test.ts` (+1):
+  an extract with rows enqueues **NO** `categorize` doctask (a `startDocTask` spy on the dispatch records
+  zero). `doctasks-categorize.test.ts` (+1): with a fully-functional REAL doctask lane available, an extract
+  leaves the lane **untouched** and the rows **uncategorized** (`category_id` all null) until an explicit
+  categorize.
+- **Residual.** `DocTaskManager.hasPendingKind` (the auto-offer's dedup guard) is now **unused** — left in
+  place, noted for the Phase-10/X-2 cleanup (removing it is out of U-2's scope).
+- **Docs:** `architecture.md` §9 (the run-UI result-row offer + `runTargetId`) and §22 (the Phase-33 "auto-offer
+  after extraction" bullet rewritten to the explicit offer; the C-2/A9 "auto-offer" mentions reworded; Tests
+  line gains the Phase-6 cases); audit doc §3 U-2 row + the Phase-6 index row flipped to ✅ fixed (Phase 6), the
+  (a) DECISION recorded in the Phase-6 prose.
+- **Eyeball:** the live run-surface pixel walk of the new offer was **deferred** (the `%TEMP%\paid-eyeball`
+  harness is gone, and this is the same run surface the audit already records as an honest eyeball-deferral,
+  **R-2**). Confidence rests on the renderer tests (offer renders/fires with the right id + the absent-cases
+  matrix) + reusing the existing `.skill-run-bar` result-row affordance (the offer is a plain `Button`, no
+  net-new CSS). **Next:** Phase 7 (U-3 — surface the deterministic skill suggestion on the CLOSED picker so a
+  user who never opens it still sees the nudge; renderer phase, `ChatScreen`/`SkillPicker`)._
+
 _2026-06-26 — **Skills & Tools audit — Phase 5 (Tool-run document targeting for multi-doc scope; U-1) —
 RENDERER + UX PHASE (branch `skills-tools-audit-2026-06-26`).** Suite **2255 passed / 38 skipped (+9)**,
 typecheck clean, build OK. **DECISION = Minimal** (the recommended default; the Fuller "loop over N docs"

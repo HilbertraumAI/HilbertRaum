@@ -10,7 +10,9 @@ import { Button, ConfirmDialog, Spinner } from '../components'
 //   1. OFFER — when the active skill has wired tools in scope: a small "Extract transactions" button,
 //      preceded by the TARGET document chooser (U-1) when more than one document is in scope.
 //   2. RUNNING — "Running: <tool> on <document>…" + Cancel (the doc-task busy-row precedent).
-//   3. RESULT — "Extracted N transactions." / friendly failure / "Stopped." + Dismiss.
+//   3. RESULT — "Extracted N transactions." / friendly failure / "Stopped." + Dismiss. After a
+//      successful rows>0 extract it also offers a one-tap "Categorize transactions" follow-up (U-2):
+//      the LLM categorize is USER-initiated here, not silently auto-enqueued on extract.
 // A write/export tool (S11c) is confirm-gated: clicking it raises the ConfirmDialog (the
 // model-download / lock-now precedent) before the run starts. Read-only tools run straight away.
 //
@@ -75,6 +77,11 @@ export interface SkillRunBarProps {
   /** The name of the document the ACTIVE run targets (ChatScreen remembers what it launched), or
    *  null/undefined ⇒ the busy/result row falls back to the legacy "on N documents" count label. */
   runningDocumentName?: string | null
+  /** The id of the document the ACTIVE run targets (remembered renderer-side, like the name — the run
+   *  state is content-free). Passed back through `onRun` when the user taps the post-extract categorize
+   *  offer (U-2), so the categorize runs on the SAME document the extract did. Null ⇒ main defaults to
+   *  the first in-scope document. */
+  runningDocumentId?: string | null
   /** Start a tool: `confirmed=true` once the user accepted the write/export modal; `documentId` is the
    *  chosen in-scope target (undefined ⇒ main targets the first in-scope document). */
   onRun: (toolName: string, confirmed: boolean, documentId?: string) => void
@@ -147,6 +154,7 @@ export function SkillRunBar({
   runnableTools,
   targetDocuments,
   runningDocumentName,
+  runningDocumentId,
   onRun,
   onCancel,
   onDismiss,
@@ -230,9 +238,26 @@ export function SkillRunBar({
         : run.state === 'cancelled'
           ? t('chat.skill.run.cancelled')
           : failureMessage(run)
+    // U-2: after a successful extract that produced rows, offer the LLM categorize as a one-tap,
+    // USER-initiated action (it is NO LONGER auto-enqueued in the background on extract). Targets the
+    // SAME document the extract ran on — its id is remembered renderer-side (the run state is
+    // content-free); a lost id (null, e.g. after a remount) falls back to main's first-in-scope default.
+    const offerCategorize =
+      run.state === 'done' &&
+      run.toolName === 'extract_transactions' &&
+      (run.transactionCount ?? 0) > 0
     return (
       <div className="skill-run-bar" role="status" aria-live="polite">
         <span className="skill-run-status">{message}</span>
+        {offerCategorize && (
+          <Button
+            size="sm"
+            disabled={disabled}
+            onClick={() => onRun('categorize_transactions', false, runningDocumentId ?? undefined)}
+          >
+            {t('chat.skill.run.categorizeOffer')}
+          </Button>
+        )}
         <Button size="sm" onClick={onDismiss}>
           {t('chat.skill.run.dismiss')}
         </Button>

@@ -2011,6 +2011,11 @@ single-doc tool), not "all N". The busy/result row names the running target from
 name (resolved at launch from the same list), falling back to the legacy count label when unknown (e.g.
 after a remount). The redaction **routing** answer is likewise count-honest: with scope > 1 it uses
 `skills.redactionRouting.answerMulti` ("pick which document on the button"), still content-free.
+**Post-extract categorize is an explicit offer (audit U-2, Phase 6):** a read-only extract no longer
+silently starts the LLM categorizer; after a successful rows>0 extract the result row offers a one-tap
+**"Categorize transactions"** follow-up that targets the SAME document via a renderer-remembered id
+(`runTargetId`, the sibling of `runTargetName`) — see §22. The model pass is user-initiated; the run
+state stays content-free (no documentId in `SkillRunState`).
 
 ### §10 Data model (additive `db.ts`)
 
@@ -2910,9 +2915,21 @@ figure verification is needed. The constraints that DO hold:
   exists (the "categorize before extract" `needsExtraction` failure is gone). Persistence of
   `category_id` is atomic (BEGIN/COMMIT, no partial annotations survive); the categories are seeded by
   the SHARED `ensureBuiltinCategories` (now the union of the rule set + the LLM taxonomy).
-- **Auto-offer after extraction (Q2).** A successful `extract_transactions` BUTTON run best-effort
-  enqueues a `'categorize'` doctask in the background (D26-safe, model-optional) — categories are ready
-  by the time the user asks. The chat analysis path is unaffected (it never goes through that runner).
+- **Explicit categorize offer after extraction (Q2; audit U-2, Phase 6; DECISION = explicit offer).**
+  A read-only `extract_transactions` BUTTON click does NOT start the LLM categorizer on its own. The
+  earlier Phase-33 behaviour silently enqueued a background `'categorize'` doctask here — invisible in
+  the run bar (it lived in the doctask lane), a **no-surprises violation** for a calm, privacy-posture
+  app (a deterministic, advertised read-only action triggering an un-asked model pass). Now, after a
+  successful rows>0 extract, the run-bar **result row** offers a one-tap **"Categorize transactions"**
+  follow-up; the model invocation is **user-initiated**. The offer targets the SAME document the extract
+  ran on: its id is remembered **renderer-side** (`ChatScreen` `runTargetId`, mirroring the Phase-5
+  `runTargetName`) and rides back through the existing `onRunTool('categorize_transactions', false,
+  documentId)` → `runCategorizeViaDocTask` path (D26 lane unchanged). The offer copy is content-free
+  (`chat.skill.run.categorizeOffer`, EN+DE); the run state / IPC stay ids/counts-only (no documentId in
+  `SkillRunState`). The audit payload is unchanged (`{skillId, toolName, documentCount}`) — and because
+  the categorize is no longer auto-fired, an extract click no longer emits a categorize run's audit trio
+  unless the user taps the follow-up. The chat analysis path is unaffected (it never went through that
+  runner), and the deterministic 0-model chat breakdown still works with NO prior categorize.
 - **Read-back stays 0-model-calls (Q3 routed feedback).** `analysis/bank-statement.ts` REUSES the latest
   statement when it is FRESH (re-extraction is deterministic, so reuse avoids a duplicate AND preserves the
   doctask's persisted categories); a single LEFT-JOINed read (`loadStatementRowsWithCategories`) returns
@@ -2923,7 +2940,8 @@ figure verification is needed. The constraints that DO hold:
 - **Consistent breakdown framing (audit C-2, Phase 2; DECISION = option A).** Two engines categorize the
   same statement by entry point: the chat breakdown runs the **deterministic** rule pass when nothing is
   categorized yet (0 model calls — keeping THIS path 0-model is the load-bearing invariant), while the
-  "Categorize" button + the auto-offer use the **LLM** doctask's richer taxonomy. Rather than pull a model
+  "Categorize" button + the post-extract categorize offer (Q2/U-2) use the **LLM** doctask's richer
+  taxonomy. Rather than pull a model
   call onto the chat path (option B — bigger blast radius, crosses into the doctask lane), the chat answer
   now **labels** the rule-based breakdown honestly: when `modelAssisted === false` it appends
   `skills.bankAnalysis.categoryRuleBased` ("a quick rule-based grouping … run the Categorize button for a
@@ -2939,8 +2957,8 @@ figure verification is needed. The constraints that DO hold:
   for no-balance "Umsätze" statements, which present an `unverified` sum the D56 gate can't catch), and
   re-extraction never accumulates duplicates. The old per-row categories go with the replaced statement
   (the rows changed because the parser changed them — recompute is the honest move, done by the breakdown's
-  deterministic pass / the next categorize run); model categorization re-runs on the next Kategorisieren /
-  auto-offer. The single shared `latestBankStatementId` helper (`run.ts`) keeps the load-bearing
+  deterministic pass / the next categorize run); model categorization re-runs on the next Kategorisieren
+  click / the post-extract categorize offer. The single shared `latestBankStatementId` helper (`run.ts`) keeps the load-bearing
   `created_at DESC, id DESC` tie-break identical across all three call sites. **Bump `BANK_EXTRACTOR_VERSION`
   whenever the line parser OR `pdf-layout.ts` reconstruction changes output for the same input.** It is now
   at **2** (1 → 2 at audit C-4, 2026-06-26: the `Kontostand per` date disambiguation changes the persisted
@@ -2955,9 +2973,14 @@ stays `complete` (C-3), the `Kontostand per` dated pair maps opening/closing and
 → `unverified` (C-4), `BANK_EXTRACTOR_VERSION === 2`); `skills-run.test.ts` (**Phase 3:** a v1 statement is
 detected stale at v2, a freshly-stamped one is not); `doctasks-categorize.test.ts` (model path
 persists, deterministic fallback persists, auto-extract-then-categorize, A9 stale-statement re-extract +
-replace); `skills-analysis-bank.test.ts` (persisted model categories surface + the model-assisted label;
-**Phase 2:** the rule-based note when `modelAssisted` is false, absent when model-assisted;
-no duplicate statement on re-ask; A9 stale statement re-extracted+replaced, fresh statement reused).
+replace; **Phase 6:** an extract run leaves the doctask lane untouched and the rows uncategorized — no
+hidden model run); `skills-tool-run-ipc.test.ts` (**Phase 6:** an extract with rows enqueues NO
+`categorize` doctask — U-2); `SkillRunBar.test.tsx` (**Phase 6:** the result-row "Categorize transactions"
+offer renders only after a successful rows>0 extract and fires the categorize path with the remembered id;
+absent for a 0-row / non-extract / non-done run); `skills-analysis-bank.test.ts` (persisted model categories
+surface + the model-assisted label; **Phase 2:** the rule-based note when `modelAssisted` is false, absent
+when model-assisted; no duplicate statement on re-ask; A9 stale statement re-extracted+replaced, fresh
+statement reused).
 
 
 ## Image understanding — design record (Phases V1–V5, §1–§10)

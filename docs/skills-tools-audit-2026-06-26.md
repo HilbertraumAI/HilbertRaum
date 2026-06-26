@@ -183,7 +183,7 @@ persona section below.
 | P-1 | MEDIUM | Performance | ✅ **fixed (Phase 4, approach A)** — the handler now loads the rows **once** (with ids) and hands them to the downstream seams as `preloaded`; the seams **return their validated `output`** for in-process reuse instead of the handler recomputing. A non-category bank question now issues **one** `FROM bank_transactions` read (was three); invoice likewise **one** `invoice_line_items` read (was two). `skill_runs` lifecycle + ids/counts audit unchanged | `analysis/bank-statement.ts`, `analysis/invoice.ts`, `run.ts`, `invoice-run.ts` |
 | P-2 | MEDIUM | Performance | ✅ **fixed (Phase 4)** — kept the `summarize_cashflow` run (its audit trio stays — approach A, not B) but it no longer re-reads the rows: it reuses the handler's single `preloaded` load, and its `CashflowSummary` is reused rather than recomputed | `run.ts` `runCashflowSummary`, `analysis/bank-statement.ts` |
 | U-1 | MEDIUM | UX/Correctness | ✅ **fixed (Phase 5, Minimal)** — `listRunnableTools` now returns the in-scope target **ids** alongside the tools; the renderer maps ids→**names** from its own loaded list (no title crosses the IPC), shows the single doc's name or a **Radix chooser** when >1, and passes the chosen `documentId` to `startSkillRun`, which **validates** it is in the resolved scope (else `documentOutOfScope`). `documentCount` stays the honest **1**. Redaction routing answer is count-honest (`answerMulti`) | `registerSkillsIpc.ts` `listRunnableTools`/`startSkillRun`, `SkillRunBar.tsx`, `ChatScreen.tsx`, `analysis/redaction.ts` |
-| U-2 | MEDIUM | UX/Surprise | Clicking the read-only **"Extract transactions"** button **silently starts a background LLM categorize** (Phase 33 auto-offer), invisible in the run bar | `tool-runs.ts:229-238` |
+| U-2 | MEDIUM | UX/Surprise | ✅ **fixed (Phase 6, explicit offer)** — the silent background-categorize enqueue is **removed** from the extract runner; after a successful rows>0 extract the run-bar **result row** offers a one-tap **"Categorize transactions"** follow-up (user-initiated), targeting the SAME document via a renderer-remembered id (`runTargetId`). The audit/run state stay content-free; the deterministic 0-model chat breakdown is unchanged | `tool-runs.ts` `buildToolRunner` extract case, `SkillRunBar.tsx`, `ChatScreen.tsx` |
 | PC-1 | MEDIUM | Concurrency | Lane A (chat analysis auto-run) and Lane B (`SkillRunController`) are mutually unaware; a chat re-extract (`replaceExisting` DELETE) can race a button run on the same statement | §2.3; `run.ts:221`, `run-controller.ts` |
 | S-1 | MEDIUM | Security (DoS) | Zip importer slices/inflates a member using the **central-directory `compressedSize`** (≤ total cap, ~8 MiB) before any per-file bound; a crafted member stalls the main thread | `installer.ts:208-242` |
 | U-3 | LOW→MED | UX | The one-tap **suggestion is only computed/shown *inside* the picker on open** — a user who never opens it never sees the nudge | `ChatScreen.tsx:625`, `SkillPicker.tsx:55` |
@@ -544,7 +544,7 @@ tests, and the docs to touch.
 | 3 | Bank completeness-gate numerics ✅ **fixed (Phase 3)** | C-3, C-4 | P2 | yes (version bump) |
 | 4 | Analysis-handler performance ✅ **fixed (Phase 4)** | P-1, P-2 | P2 | yes |
 | 5 | Tool-run document targeting (multi-doc) ✅ **fixed (Phase 5)** | U-1 | P2 | yes |
-| 6 | Make auto-categorize explicit | U-2 | P2 | yes (DECISION) |
+| 6 | Make auto-categorize explicit ✅ **fixed (Phase 6)** | U-2 | P2 | yes (DECISION) |
 | 7 | Suggestion discoverability | U-3 | P2 | yes |
 | 8 | Zip importer DoS hardening | S-1, S-2 | P2 | yes |
 | 9 | Cross-lane write safety | PC-1 | P3 | yes |
@@ -825,6 +825,20 @@ at [`:229-238`](../apps/desktop/src/main/services/skills/tool-runs.ts#L229)),
 - **(b) Keep auto-run but make it visible.** Keep the enqueue, but surface the background categorize in a
   task/run surface (a visible busy indicator) so the user knows the model is working, and document it.
 - Either way: keep the existing dedup guard (`hasPendingKind`) and the D26 lane.
+- **✅ DECIDED (Phase 6): option (a) — explicit follow-up offer.** Deleted the silent
+  `if (res.ok && rows>0 && deps.docTasks) startDocTask('categorize')` block from the `extract_transactions`
+  runner (`buildToolRunner`). After a successful rows>0 extract the run-bar **result row** now offers a
+  one-tap **"Categorize transactions"** action (`SkillRunBar.tsx` RESULT branch) — the model pass is
+  **user-initiated**, matching the calm/no-surprises posture; chosen over (b) because (b) keeps an un-asked
+  model run. **Same-document targeting (Phase-5 interaction):** the run state is deliberately content-free
+  (no documentId), so `ChatScreen` remembers the launched id renderer-side (`runTargetId`, mirroring the
+  Phase-5 `runTargetName`) and passes it back through the existing `onRunTool('categorize_transactions',
+  false, documentId)` → `runCategorizeViaDocTask` path (D26 lane unchanged); the offer copy
+  (`chat.skill.run.categorizeOffer`, EN+DE) is content-free. The existing dedup guard `hasPendingKind`
+  becomes **unused** (its only caller was the deleted auto-offer) — left in place on `DocTaskManager` as a
+  small residual for the Phase-10/X-2 cleanup, not removed here (out of scope). The deterministic
+  0-model-call chat breakdown still works with NO prior categorize, and the "(D) routed feedback" effect
+  still surfaces the per-category breakdown after a categorize run completes (the opt-in path is preserved).
 
 **Steps (for option a).** Delete the `if (res.ok && rows>0 && deps.docTasks) startDocTask('categorize')`
 block in the extract runner; add a result-row affordance that calls the existing categorize run path on

@@ -212,6 +212,9 @@ export const en = {
   'chat.skill.run.error.persistFailed': 'This couldn’t be saved. Nothing was changed.',
   'chat.skill.run.error.exportWriteFailed': 'The file couldn’t be saved. Nothing was changed.',
   'chat.skill.run.cancelled': 'Stopped. Nothing was saved.',
+  // U-2: the one-tap follow-up on the extract RESULT row. The LLM categorize is user-initiated here,
+  // not silently auto-run on extract. Content-free (names a tool action, never a document).
+  'chat.skill.run.categorizeOffer': 'Categorize transactions',
   'chat.skill.run.dismiss': 'Dismiss',
   'chat.skill.confirm.title': 'Run this tool?',
   'chat.skill.confirm.body': 'This creates or exports a file from the documents on this drive.',
