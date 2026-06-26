@@ -154,6 +154,9 @@ export const en = {
   'chat.skill.trigger': 'Skill: {label}',
   'chat.skill.none': 'No skill',
   'chat.skill.suggested': 'Suggested: {title} — use it?',
+  // U-3: the same deterministic offer surfaced on the CLOSED picker trigger so a user who never
+  // opens it still sees the nudge. Quiet, named, one tap selects it — never auto-applied (§22-D3).
+  'chat.skill.suggestedHint': 'Suggested: {title}',
   'chat.skill.used': 'Skill: {title}',
   'chat.skill.usedTitle': 'This answer was shaped by the skill “{title}”.',
   // S13c (D3) — an AUTO-FIRED turn: visible (the glyph reads "Answered with …") + reversible (the

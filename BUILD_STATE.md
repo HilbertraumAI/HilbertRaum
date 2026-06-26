@@ -6,6 +6,50 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-26 — **Skills & Tools audit — Phase 7 (Suggestion discoverability; U-3) — RENDERER /
+COMPOSER-FOOTER UX PHASE (branch `skills-tools-audit-2026-06-26`).** Suite **2264 passed / 38 skipped
+(+4)**, typecheck clean, build OK. **AFFORDANCE DECISION = inline "Suggested: <skill>" label on the
+CLOSED trigger** (the recommended quiet default; surfaced to the owner like Phases 5/6, who confirmed
+it over the alternative — a bare discoverability dot that opens the picker for a two-tap apply, declined
+as less discoverable and not one-tap). **Calm/privacy posture (load-bearing):** the suggestion stays an
+**OFFER the user taps, never auto-applied** — no modal, no canvas chip, no settings key (§22-D3 spirit
+intact); the draft is **content**, scored by the EXISTING deterministic `suggestSkills` IPC (no model,
+no network) which **logs nothing** — Phase 7 introduces **no new logging/audit of the draft** and **no
+new settings key / schema change**. The one new user key is EN+DE. **As built:**
+- **U-3 — proactive recompute.** `ChatScreen` previously computed the offer **only** on picker-open
+  (`onSkillPickerOpenChange`), so a user who never opened "Skill: none ▾" never saw a real deterministic
+  asset. It now also recomputes **as the draft changes** — a new **debounced ~400 ms** effect (mirroring
+  the attachment-poll/stream-flush `useRef<setTimeout>` precedent), **only when no skill is picked**,
+  via `suggestSkills(conversationId, draft)`. The open-time refresh is kept. Both callers route through
+  one **defensive** helper `refreshSuggestion` (`Promise.resolve(...)?.[0]` + optional chaining) so a
+  stubbed/absent IPC can never throw inside the timer (this also fixed an unhandled-rejection the first
+  full-suite run surfaced in `ChatAttach`/`ChatHomeNav`, where the IPC stub returns `undefined`).
+- **U-3 — the closed-trigger hint.** `SkillPicker` gained a `suggestionDismissed?` prop and renders the
+  offer as a quiet, named **`.skill-suggest-hint` footer button** placed right after the trigger (a
+  fragment sibling, OUTSIDE the dropdown, so one tap **selects** the skill and never opens the menu). It
+  shows **only when `value == null && !suggestionDismissed`**; the in-picker pinned offer is unchanged.
+- **Dismissal/precedence (the care point).** `currentSkillId === null` can't distinguish an EXPLICIT
+  "None" pick from a never-set default, so a renderer-side **per-draft `suggestionDismissed`** flag is
+  set on `selectSkill(null)` and reset on **send** (`onSend` `setInput('')`) and on **conversation
+  change** (`[activeId]` effect) — a declined offer never re-nags and never carries across conversations.
+- **i18n (EN+DE, parity compile-enforced).** One new key: `chat.skill.suggestedHint` ("Suggested:
+  {title}" / "Vorschlag: {title}"). The dev machine boots de-AT so the German renders live.
+- **Tests (+4, `SkillChat.test.tsx`).** New "closed-trigger suggestion hint (U-3)" block: the hint
+  renders WITHOUT opening + fires `onChange('user:bank')` on one tap (inert until tapped); is ABSENT
+  when a skill is already selected (even with a valid offer for a different skill); is ABSENT when
+  `suggestionDismissed`; CLEARS once a skill is picked. The existing pin-on-top / hide-when-active cases
+  + the `suggestSkills` privacy test stay green (main-side untouched).
+- **Docs:** `architecture.md` §6 (the "only inside the composer picker" line rewritten to add the
+  proactive recompute + the closed-trigger hint, keeping the no-canvas-chip/no-settings-key/inert/never-
+  auto-applied invariants explicit); audit doc §3 U-3 row + the Phase-7 index row flipped to ✅ fixed
+  (Phase 7), the inline-label affordance recorded in the Phase-7 prose.
+- **Eyeball:** the live composer-footer pixel walk of the closed-trigger hint was **deferred** (the
+  `%TEMP%\paid-eyeball` harness is gone — the documented **R-2** deferral, as in Phases 5/6). Confidence
+  rests on the renderer tests (hint renders/fires/clears with the right gating) + reusing the proven
+  `.footer-menu-btn` affordance (only net-new style is the `.skill-suggest-hint` accent tint). **Next:**
+  Phase 8 (S-1 + S-2 — zip importer DoS hardening: reject `compressedSize > maxFileBytes` before
+  inflating a member; detect duplicate stripped `relPath` collisions and re-validate the stripped path)._
+
 _2026-06-26 — **Skills & Tools audit — Phase 6 (Make the auto-categorize-on-extract explicit; U-2) —
 RENDERER + MAIN UX/PRIVACY-POSTURE PHASE (branch `skills-tools-audit-2026-06-26`).** Suite **2260 passed /
 38 skipped (+5)**, typecheck clean, build OK. **DECISION = (a) explicit follow-up offer** (the recommended

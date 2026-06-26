@@ -172,6 +172,7 @@ export const de: Record<keyof typeof en, string> = {
   'chat.skill.trigger': 'Skill: {label}',
   'chat.skill.none': 'Kein Skill',
   'chat.skill.suggested': 'Vorschlag: {title} – nutzen?',
+  'chat.skill.suggestedHint': 'Vorschlag: {title}',
   'chat.skill.used': 'Skill: {title}',
   'chat.skill.usedTitle': 'Diese Antwort wurde vom Skill „{title}“ geprägt.',
   // S13c (D3) – eine automatisch angewandte Antwort: sichtbar („Beantwortet mit …“) + umkehrbar

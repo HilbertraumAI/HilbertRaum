@@ -1881,10 +1881,17 @@ globs (supporting) — fully **deterministic, no model, no network**, with a fix
 document signal never fires). `services/skills/suggest.ts` resolves the conversation's scope
 **main-side from the conversationId** (§22-C4), gathers the signals, and returns at most **one** offer
 over `suggestSkills(conversationId, question?)`. The question is content: scored but **never logged**.
-The offer is surfaced **only inside the composer picker** (no canvas chip, no settings key) and is
-**inert until tapped**. **Auto-fire (S13)** is the opt-in extension of this same scorer that *does*
-apply a skill without a tap, behind a separate higher threshold + an opt-in + a per-turn undo — see
-**§18**.
+The offer is surfaced **in the composer picker** — pinned atop the menu when it is open, and (U-3)
+mirrored as a quiet, named **hint on the CLOSED trigger** (`chat.skill.suggestedHint`, a
+`.skill-suggest-hint` footer affordance) so a user who never opens "Skill: none ▾" still sees the
+nudge. `ChatScreen` recomputes the offer **proactively as the draft changes** (debounced ~400 ms via
+the same defensive `suggestSkills` call, only when no skill is picked) on top of the open-time refresh.
+Both surfaces keep the same invariants: **no canvas chip, no settings key, inert until tapped, never
+auto-applied** (§22-D3). The closed hint shows **only while no skill is selected and the offer was not
+declined** — an explicit "None" pick sets a renderer-side per-draft `suggestionDismissed` flag (reset
+on send / conversation change) so it never re-nags; one tap selects the skill. **Auto-fire (S13)** is
+the opt-in extension of this same scorer that *does* apply a skill without a tap, behind a separate
+higher threshold + an opt-in + a per-turn undo — see **§18**.
 
 ### §7 Tier-2 tool gate (S10)
 

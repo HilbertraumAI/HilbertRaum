@@ -186,7 +186,7 @@ persona section below.
 | U-2 | MEDIUM | UX/Surprise | ✅ **fixed (Phase 6, explicit offer)** — the silent background-categorize enqueue is **removed** from the extract runner; after a successful rows>0 extract the run-bar **result row** offers a one-tap **"Categorize transactions"** follow-up (user-initiated), targeting the SAME document via a renderer-remembered id (`runTargetId`). The audit/run state stay content-free; the deterministic 0-model chat breakdown is unchanged | `tool-runs.ts` `buildToolRunner` extract case, `SkillRunBar.tsx`, `ChatScreen.tsx` |
 | PC-1 | MEDIUM | Concurrency | Lane A (chat analysis auto-run) and Lane B (`SkillRunController`) are mutually unaware; a chat re-extract (`replaceExisting` DELETE) can race a button run on the same statement | §2.3; `run.ts:221`, `run-controller.ts` |
 | S-1 | MEDIUM | Security (DoS) | Zip importer slices/inflates a member using the **central-directory `compressedSize`** (≤ total cap, ~8 MiB) before any per-file bound; a crafted member stalls the main thread | `installer.ts:208-242` |
-| U-3 | LOW→MED | UX | The one-tap **suggestion is only computed/shown *inside* the picker on open** — a user who never opens it never sees the nudge | `ChatScreen.tsx:625`, `SkillPicker.tsx:55` |
+| U-3 | LOW→MED | UX | ✅ **fixed (Phase 7, inline closed-trigger label)** — `ChatScreen` now recomputes the deterministic offer **proactively as the draft changes** (debounced ~400 ms, only when no skill is picked) and `SkillPicker` mirrors it as a quiet, named **"Suggested: &lt;skill&gt;" hint on the CLOSED trigger** (`chat.skill.suggestedHint`); one tap selects it. Still inert until tapped — no canvas chip, no settings key, never auto-applied (§22-D3); an explicit "None" sets a per-draft `suggestionDismissed` flag so it never re-nags. `suggestSkills` still logs nothing (privacy test green) | `ChatScreen.tsx` `refreshSuggestion`/suggest effect, `SkillPicker.tsx` closed hint |
 | A-1 | LOW→MED | Architecture | For tool skills the **SKILL.md body is inert on the primary answer path** — the deterministic answer format is reimplemented in TS (`buildBankAnswer`/`buildInvoiceAnswer`); editing the body only affects the off-topic relevance fallback | `analysis/bank-statement.ts:294`, `analysis/invoice.ts:201` |
 | S-2 | LOW→MED | Security | Zip stager: two members can **strip to the same `relPath`** (last-writer-wins overwrite); the stripped path is not re-validated | `installer.ts:279-339` |
 | L-1 | LOW | LLM | ✅ **fixed (Phase 2)** — Categorizer dropped a whole 20-row batch on any parse failure; now `batchMaxTokens` is length-aware AND an unparseable reply is retried once before the (honest) drop | `categorizer.ts` `batchMaxTokens`/`categorizeBatch` |
@@ -545,7 +545,7 @@ tests, and the docs to touch.
 | 4 | Analysis-handler performance ✅ **fixed (Phase 4)** | P-1, P-2 | P2 | yes |
 | 5 | Tool-run document targeting (multi-doc) ✅ **fixed (Phase 5)** | U-1 | P2 | yes |
 | 6 | Make auto-categorize explicit ✅ **fixed (Phase 6)** | U-2 | P2 | yes (DECISION) |
-| 7 | Suggestion discoverability | U-3 | P2 | yes |
+| 7 | Suggestion discoverability ✅ **fixed (Phase 7)** | U-3 | P2 | yes |
 | 8 | Zip importer DoS hardening | S-1, S-2 | P2 | yes |
 | 9 | Cross-lane write safety | PC-1 | P3 | yes |
 | 10 | Cleanup & contract parity | X-1, X-2, A-1 test | P3 | yes |
@@ -854,7 +854,37 @@ categorize button/flow unchanged.
 
 ---
 
-### Phase 7 — Suggestion discoverability (U-3)
+### Phase 7 — Suggestion discoverability (U-3) ✅ **fixed (Phase 7)**
+
+**Affordance chosen (surfaced to the owner, like Phases 5/6): the inline "Suggested: &lt;skill&gt;"
+label** on the closed trigger (the recommended quiet default; the alternative — a bare discoverability
+dot that opens the picker for a two-tap apply — was declined as less discoverable and not one-tap). A
+quiet accent-tinted `.skill-suggest-hint` footer button rides right after "Skill: none ▾"; one tap
+**selects** the skill (it sits outside the dropdown, so it never opens the menu). Calm posture held:
+no modal, no canvas chip, no settings key, never auto-applied (§22-D3) — still an offer the user taps.
+
+**As built.**
+- **Proactive recompute.** `ChatScreen` scores the draft for the offer **as it changes** (a new
+  debounced ~400 ms effect, mirroring the attachment-poll/stream-flush timer precedent) **only when no
+  skill is picked**, via the existing deterministic `suggestSkills(conversationId, draft)` IPC (no
+  model, no network; the draft is content — scored main-side, **never logged**). The open-time refresh
+  in `onSkillPickerOpenChange` is kept. Both now route through one defensive helper `refreshSuggestion`
+  (`Promise.resolve` + optional chaining) so a stubbed/absent IPC can never throw inside the timer.
+- **Closed-trigger hint.** `SkillPicker` gained a `suggestionDismissed?` prop and renders the offer as
+  a closed-trigger button **only when `value == null && !suggestionDismissed`** (the in-picker pinned
+  offer is unchanged). New i18n key `chat.skill.suggestedHint` ("Suggested: {title}" / "Vorschlag:
+  {title}", EN+DE parity).
+- **Dismissal/precedence (the care point).** `currentSkillId === null` can't tell an explicit "None"
+  from a never-set default, so a renderer-side **per-draft `suggestionDismissed`** flag is set on an
+  explicit "None" pick (`selectSkill(null)`) and reset on **send** (`onSend`'s `setInput('')`) and on
+  **conversation change** — so a declined offer never re-nags and never carries across conversations.
+- **Tests (+4, `SkillChat.test.tsx`).** The closed hint renders without opening + selects on one tap;
+  is absent when a skill is already selected (even for a different valid offer); is absent when
+  `suggestionDismissed`; clears once a skill is picked. The existing pin-on-top / hide-when-active
+  cases stay green, and the `suggestSkills` privacy test is untouched (main-side unchanged).
+- **Eyeball.** Deferred (the `%TEMP%\paid-eyeball` harness is gone — the documented **R-2**
+  deferral, as in Phases 5/6); confidence rests on the renderer tests + reusing the proven
+  `.footer-menu-btn` affordance (only net-new style is the `.skill-suggest-hint` accent tint).
 
 **Goal.** Make the deterministic one-tap suggestion visible **without opening the picker** (still never
 auto-applied).

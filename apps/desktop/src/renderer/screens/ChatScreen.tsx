@@ -152,8 +152,14 @@ export function ChatScreen({
   /** Per-conversation skill selection this session ('new' = no conversation yet). A key present
    *  here overrides the conversation's persisted `activeSkillId`; null = explicitly no skill. */
   const [skillByConv, setSkillByConv] = useState<Record<string, string | null>>({})
-  /** The deterministic one-tap suggestion for the open picker (skills plan §10.2/S8), or null. */
+  /** The deterministic one-tap suggestion for the picker (skills plan §10.2/S8), or null. Now
+   *  recomputed proactively as the draft changes (U-3) so it can ride the CLOSED trigger too. */
   const [skillSuggestion, setSkillSuggestion] = useState<SkillSuggestion | null>(null)
+  /** U-3: the user explicitly declined the suggestion for this draft (picked "None"). Suppresses the
+   *  CLOSED-trigger hint so it never re-nags; reset when the turn is sent or the conversation changes.
+   *  A renderer-only flag — `currentSkillId === null` alone can't tell an explicit "None" from a
+   *  never-set default, and nothing about a declined offer crosses the IPC (it is purely UI state). */
+  const [suggestionDismissed, setSuggestionDismissed] = useState(false)
   const [error, setError] = useState<string | null>(null)
   // Imported documents — drives the scope popover's titles and the empty-state nudge.
   // Best-effort: a failed load just hides both affordances.
@@ -604,6 +610,10 @@ export function ChatScreen({
   function selectSkill(installId: string | null): void {
     if (busyStreaming) return
     setSkillByConv((prev) => ({ ...prev, [depthKey]: installId }))
+    // U-3: an explicit "None" pick DECLINES the current suggestion — remember it so the quiet
+    // closed-trigger hint does not re-nag for this draft. Any real pick clears the flag (the hint
+    // is gated on "no skill picked" anyway, but this keeps the next "None" an honest fresh decline).
+    setSuggestionDismissed(installId == null)
     // Persist the sticky default the moment a conversation exists; a still-"new" pick is persisted
     // when the conversation is created on send (ensureConversation).
     if (activeId) void window.api.setConversationDefaultSkill?.(activeId, installId)
@@ -619,16 +629,49 @@ export function ChatScreen({
     setSkillByConv((prev) => ({ ...prev, [convId]: skillId }))
   }
 
-  // Recompute the deterministic suggestion when the picker OPENS (skills plan §10.2/S8) — the offer
-  // rides the picker the user already opened (no canvas chip). The draft question is scored
-  // main-side and never logged; scope is resolved there from the conversation id.
-  function onSkillPickerOpenChange(open: boolean): void {
-    if (!open) return
-    void window.api
-      .suggestSkills?.(activeId ?? '', input)
-      .then((s) => setSkillSuggestion(s[0] ?? null))
+  // Score the current draft for the one-tap suggestion (deterministic, main-side, never logged) and
+  // store the single best offer (or null). `Promise.resolve` + optional chaining keep it inert when
+  // the IPC is absent or a test stub returns nothing — it never throws inside the debounce timer.
+  function refreshSuggestion(convId: string, draft: string): void {
+    void Promise.resolve(window.api.suggestSkills?.(convId, draft))
+      .then((s) => setSkillSuggestion(s?.[0] ?? null))
       .catch(() => setSkillSuggestion(null))
   }
+
+  // Recompute the deterministic suggestion when the picker OPENS (skills plan §10.2/S8) — a refresh
+  // that keeps the in-picker pinned offer current. The draft question is scored main-side and never
+  // logged; scope is resolved there from the conversation id.
+  function onSkillPickerOpenChange(open: boolean): void {
+    if (!open) return
+    refreshSuggestion(activeId ?? '', input)
+  }
+
+  // U-3: recompute the suggestion PROACTIVELY as the draft changes (debounced ~400 ms, mirroring the
+  // attachment-poll/stream-flush timer precedent) so a high-confidence offer can ride the CLOSED
+  // trigger — a user who never opens "Skill: none ▾" still sees the nudge. Deterministic
+  // `suggestSkills` IPC (no model, no network); the draft is CONTENT — scored main-side, never
+  // logged. Only when no skill is already picked (an explicit pick owns the turn); cleared otherwise.
+  const suggestTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => {
+    if (currentSkillId) {
+      setSkillSuggestion(null)
+      return
+    }
+    const convId = activeId ?? ''
+    const draft = input
+    if (suggestTimer.current != null) clearTimeout(suggestTimer.current)
+    suggestTimer.current = setTimeout(() => refreshSuggestion(convId, draft), 400)
+    return () => {
+      if (suggestTimer.current != null) clearTimeout(suggestTimer.current)
+    }
+  }, [input, currentSkillId, activeId])
+
+  // U-3: a declined offer is per-draft — reset the dismissal when the conversation changes so a fresh
+  // conversation starts from a clean slate (the per-send reset rides `onSend`'s `setInput('')` →
+  // recompute). Never carries a decline across conversations.
+  useEffect(() => {
+    setSuggestionDismissed(false)
+  }, [activeId])
 
   // ---- Tier-2 tool runs (skills plan §12.2/§15, S11b) ------------------------------------------
   // The single active run survives screen unmounts (the doc-task store precedent), polled main-side.
@@ -848,6 +891,8 @@ export function ChatScreen({
     const text = input.trim()
     if (!text || busyStreaming) return
     setInput('')
+    // U-3: a fresh turn deserves a fresh suggestion — a decline was scoped to the just-sent draft.
+    setSuggestionDismissed(false)
     try {
       // The 'new'-composer depth selection sticks to the conversation that gets created.
       const depth = depthFor(depthKey)
@@ -1355,6 +1400,7 @@ export function ChatScreen({
                   disabled={busyStreaming}
                   suggestion={skillSuggestion}
                   onOpenChange={onSkillPickerOpenChange}
+                  suggestionDismissed={suggestionDismissed}
                 />
               )}
               {/* Context-window usage meter (§5.1): pushed to the right of the footer's quiet
