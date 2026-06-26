@@ -190,14 +190,14 @@ persona section below.
 | PC-1 | MEDIUM | Concurrency | ✅ **fixed (Phase 9)** — a per-document async mutex (`skills/doc-lock.ts` `withDocumentLock`, a re-entrant `Map<documentId, Promise>` chain) now serializes every WRITE-capable section across all three lanes (A chat analysis, B `SkillRunController`, C `DocTaskManager` categorize): the write seams self-lock, and the two multi-step lanes (analysis handlers + `runCategorize`) wrap their whole sequence. A chat re-extract DELETE can no longer race a button run / categorize on the same statement. In-memory, per-document (unrelated docs still concurrent), no new capability/schema/IPC, `finally`-released + finer than `acquireChatSlot` (no deadlock) | `skills/doc-lock.ts`, `run.ts`, `invoice-run.ts`, `analysis/bank-statement.ts`, `analysis/invoice.ts`, `doctasks/manager.ts` |
 | S-1 | MEDIUM | Security (DoS) | ✅ **fixed (Phase 8)** — `inflateEntry` now rejects any member whose central-directory **`compressedSize` exceeds `maxFileBytes`** *before* slicing/inflating (for both STORE and DEFLATE), bounding the synchronous inflate **input**, not only its `maxOutputLength` output. Reuses `fileTooLarge`. Proven by a spy that `inflateRawSync` is never reached (with a positive control) | `installer.ts` `inflateEntry` |
 | U-3 | LOW→MED | UX | ✅ **fixed (Phase 7, inline closed-trigger label)** — `ChatScreen` now recomputes the deterministic offer **proactively as the draft changes** (debounced ~400 ms, only when no skill is picked) and `SkillPicker` mirrors it as a quiet, named **"Suggested: &lt;skill&gt;" hint on the CLOSED trigger** (`chat.skill.suggestedHint`); one tap selects it. Still inert until tapped — no canvas chip, no settings key, never auto-applied (§22-D3); an explicit "None" sets a per-draft `suggestionDismissed` flag so it never re-nags. `suggestSkills` still logs nothing (privacy test green) | `ChatScreen.tsx` `refreshSuggestion`/suggest effect, `SkillPicker.tsx` closed hint |
-| A-1 | LOW→MED | Architecture | For tool skills the **SKILL.md body is inert on the primary answer path** — the deterministic answer format is reimplemented in TS (`buildBankAnswer`/`buildInvoiceAnswer`); editing the body only affects the off-topic relevance fallback | `analysis/bank-statement.ts:294`, `analysis/invoice.ts:201` |
+| A-1 | LOW→MED | Architecture | ✅ **fixed (Phase 10, parity test)** — the SKILL.md body stays inert on the exhaustive path (the answer is deterministic TS), but a new `skills-skillmd-parity.test.ts` now PINS the contract both ways: for bank + invoice it asserts the SKILL.md still states each honesty bullet AND that `buildBankAnswer`/`buildInvoiceAnswer` still emit the matching honest branch for a constructed unreconciled / contradicted / mixed-currency / missing-figure case — a drift in EITHER the body or the TS fails (teeth-verified). architecture.md §19 note updated | `tests/integration/skills-skillmd-parity.test.ts`, `analysis/bank-statement.ts buildBankAnswer`, `analysis/invoice.ts buildInvoiceAnswer` |
 | S-2 | LOW→MED | Security | ✅ **fixed (Phase 8)** — `stageZip` now **re-asserts `safeRelPath` on the stripped path** and **rejects a colliding `relPath`** (a `Set` of seen paths) with a new content-free `duplicatePath` code, so a later duplicate can't last-writer-wins shadow a preview-validated `SKILL.md`. EOCD-first-match recorded as an accepted residual in `security-model.md` | `installer.ts` `stageZip`, `SKILL_IMPORT_ERRORS.duplicatePath`, `SkillsTab.tsx`, en/de |
 | L-1 | LOW | LLM | ✅ **fixed (Phase 2)** — Categorizer dropped a whole 20-row batch on any parse failure; now `batchMaxTokens` is length-aware AND an unparseable reply is retried once before the (honest) drop | `categorizer.ts` `batchMaxTokens`/`categorizeBatch` |
 | L-2 | LOW | Robustness | ✅ **fixed (Phase 2)** — `categorizeBatch` accumulated model output **unbounded**; the streamed reply is now bounded by a char cap (`batchMaxTokens * 8`) and the batch is dropped past it | `categorizer.ts` `streamBatchReply` |
 | C-3 | LOW | Correctness | ✅ **fixed (Phase 3)** — `assessCompleteness` now sums the `opening + Σ == closing` tie in INTEGER CENTS (`Math.round(amount*100)`), an exact compare; float drift can no longer flip a tying statement to `contradicted`. Read-time only (no version bump) | `tools/bank-statement.ts` `assessCompleteness`, `money.ts` `MONEY_EPS` |
 | C-4 | LOW | Correctness | ✅ **fixed (Phase 3)** — `KONTOSTAND_PER` removed from both label lists; `extractStatementBalances` disambiguates by DATE (earliest=opening / latest=closing; a lone line = closing-only → `unverified`, not `contradicted`). Changes persisted balances → `BANK_EXTRACTOR_VERSION` bumped 1→2 | `tools/bank-statement.ts` `extractStatementBalances`, `KONTOSTAND_PER`, `BANK_EXTRACTOR_VERSION` |
-| X-1 | LOW | Consistency | **Three near-duplicate scope→docs queries** with subtly different predicates (`resolveInScopeDocumentIds` omits the `EXISTS chunks` check the analysis handlers require) | `tool-runs.ts:69`, `scope-signals.ts:11`, `analysis/*.ts inScopeDocuments` |
-| X-2 | LOW | Cleanup | `count_selected_documents` reference tool is still registered but never wired/declared (only the gate test uses it) | `tool-registry.ts:187-217` |
+| X-1 | LOW | Consistency | ✅ **fixed (Phase 10)** — the FIVE hand-copied scope→docs queries (`resolveInScopeDocumentIds`, `inScopeDocSignals`, three analysis-handler `inScopeDocuments`) now route through ONE `documentsInScope(db, scope, { requireChunks })` helper (`scope-documents.ts`). The predicate is chosen deliberately per call site: the analysis handlers require chunks (they read them); the run + suggest paths don't (the run re-extracts from the stored copy; suggest is keyword/MIME signal). Logs-nothing + title-stays-main-side + the run path's deterministic ordering are preserved | `scope-documents.ts`, `tool-runs.ts`, `scope-signals.ts`, `analysis/{bank-statement,invoice,whole-doc-skills}.ts` |
+| X-2 | LOW | Cleanup | ✅ **fixed (Phase 10, keep-as-canary)** — `count_selected_documents` is KEPT deliberately as the gate's **test-only canary**: registered but no skill declares it and it is intentionally **not wired** to a `run.ts` dispatch seam (`buildToolRunner` returns `null`), so it exposes no live capability. Documented at the registry entry + architecture.md §7; pinned in BOTH directions by tests (registered ⇒ `skills-tool-registry.test.ts`; not-wired ⇒ `skills-tool-run-ipc.test.ts`) | `tool-registry.ts` `countSelectedDocumentsTool`/`REGISTRY` |
 | R-1 | LOW | Residual | Auto-fire ships but only `document-redaction` opts in; the eval corpus (33 turns) covers only the **original four** skills | architecture.md §18, BUILD_STATE |
 | R-2 | LOW | Residual | The live **run-surface Playwright eyeball was never captured** (honest deferral, documented) | `docs/design-review/skills-s12/README.md` |
 | T-1 | LOW | Testing | No test covers cross-lane concurrency (PC-1), multi-doc `docIds[0]` (U-1), the auto-offer side-effect (U-2), or the categorizer whole-batch-drop/0-row edge cases | tests map §6 |
@@ -551,7 +551,7 @@ tests, and the docs to touch.
 | 7 | Suggestion discoverability ✅ **fixed (Phase 7)** | U-3 | P2 | yes |
 | 8 | Zip importer DoS hardening ✅ **fixed (Phase 8)** | S-1, S-2 | P2 | yes |
 | 9 | Cross-lane write safety ✅ **fixed (Phase 9)** | PC-1 | P3 | yes |
-| 10 | Cleanup & contract parity | X-1, X-2, A-1 test | P3 | yes |
+| 10 | Cleanup & contract parity ✅ **fixed (Phase 10)** | X-1, X-2, A-1 test | P3 | yes |
 | 11 | Test backfill & residuals | T-1, R-1, R-2 | P3 | tests/docs |
 
 ---
@@ -1064,7 +1064,7 @@ lock); this audit's PC-1 row. **Note:** this can be combined with Phase 4 in one
 
 ---
 
-### Phase 10 — Cleanup & contract parity (X-1, X-2, A-1 test)
+### Phase 10 — Cleanup & contract parity (X-1, X-2, A-1 test) ✅ **fixed (Phase 10)**
 
 **Goal.** Remove drift surfaces and pin the SKILL.md ⇔ deterministic-answer contract.
 
@@ -1093,6 +1093,50 @@ the parity test guards the exhaustive-answer contract. `npm test` green.
 **Docs.** architecture.md §7/§19; this audit's X-1/X-2/A-1 rows.
 
 **Commit.** `refactor(skills): unify scope-in-document query, resolve canary tool, pin SKILL.md parity (audit X-1/X-2/A-1)`
+
+**As built (Phase 10 — the implementer's picks recorded).** Suite **2279 passed / 38 skipped (+9)**,
+typecheck clean, build OK. A P3 main-side refactor-and-test phase — **no renderer surface, no new
+capability**; the tool gate, the IPC payload (`{skillId, toolName, documentCount}`), and every schema are
+unchanged.
+- **X-1 — ONE helper, return shape = rows of `{id, title, mimeType}` (option A).** New
+  `services/skills/scope-documents.ts` exports `documentsInScope(db, scope, { requireChunks })` — the
+  single definition of "indexed documents in a resolved scope," built ONCE (the shared scope filter +
+  `status='indexed'` + the optional `EXISTS chunks` predicate + a deterministic `ORDER BY created_at,
+  id`). It returns rows and **callers project** (ids-only / titles+MIME / id+title), rather than an
+  ids-core + a signals wrapper — fewer moving parts for five callers with three projections. **All five
+  sites routed through it:** `resolveInScopeDocumentIds` (`tool-runs.ts`, `requireChunks:false` + `.map(id)`,
+  ordering preserved → `[0]` stays the default run target), `inScopeDocSignals` (`scope-signals.ts`,
+  `false` + projects title/MIME main-side — logs-nothing/title-stays-main-side intact), and the three
+  analysis handlers' `singleInScopeDocument`/`exactlyTwoInScopeDocuments` (`bank-statement.ts`,
+  `invoice.ts`, `whole-doc-skills.ts`, `true`). **Predicate chosen deliberately:** the chat-analysis
+  handlers read the stored `chunks`, so an indexed-but-unchunked doc is not answerable there
+  (`requireChunks:true`); the **run** path re-extracts faithfully from the stored copy and the
+  **suggest/auto-fire** path is keyword/MIME signal only, so both count an `indexed` doc even before it is
+  chunked (`false`) — the pre-existing two-predicate split is now intentional + documented, not accidental
+  drift. **Out of scope by design:** the RAG router's own `registerRagIpc.documentsInScope` (same
+  predicate, a different layer) is left as a deliberate sibling — the audit's X-1 named the five skills-
+  subsystem copies, not the RAG router.
+- **X-2 — KEEP `count_selected_documents` as the documented canary** (the recommended default — removing
+  it churns the gate tests for zero behaviour gain). It is registered but **not wired** to a `run.ts`
+  dispatch seam (`buildToolRunner` returns `null`), so it exposes no live capability. Made explicit at the
+  registry entry's doc-comment + the `REGISTRY` line + architecture.md §7, and pinned with **teeth in both
+  directions**: `skills-tool-registry.test.ts` asserts it is registered (drop it ⇒ the listing test fails);
+  a **new** `skills-tool-run-ipc.test.ts` case asserts `buildToolRunner(... 'count_selected_documents' ...)`
+  returns `null` (wire it up as a live capability ⇒ this fails).
+- **A-1 — parity test (`tests/integration/skills-skillmd-parity.test.ts`, +8).** Pins the SKILL.md ⇔
+  TS contract for both tool skills, **both directions**: (a) the SKILL.md body still states each honesty
+  bullet (unreconciled-before-total, reconcile-or-say-so, never-invent) via stable substrings; (b)
+  `buildBankAnswer`/`buildInvoiceAnswer` still emit the matching honest branch for a constructed case —
+  bank: unreconciled-heading-BEFORE-totals (single-currency mismatch, `status:'complete'`), contradicted ⇒
+  `incompleteNoTotal` and NO totals line, mixed-currency ⇒ `noCurrency`; invoice: failed-check-BEFORE-
+  totals, an absent gross is never fabricated, no-totals ⇒ `noTotals`. Expected copy is derived via `tr()`
+  so re-wording flows through equally (the parity asserted is body↔branch, not wording). **Teeth verified:**
+  a transient drift to the SKILL.md body AND to the `contradicted` branch each failed the test; reverted.
+- **Posture (load-bearing).** No network/telemetry; the content class (skill bodies, draft question,
+  figures, document text AND titles/filenames) is never logged/audited — `documentsInScope` logs nothing
+  and titles never cross IPC from it; the audit payload stays `{skillId, toolName, documentCount}`; the
+  tool gate adds no new DB/FS/net capability; i18n parity compile-enforced (no new keys this phase).
+- **Eyeball:** none — a main-side refactor + tests with no UI surface (R-2 unaffected).
 
 ---
 

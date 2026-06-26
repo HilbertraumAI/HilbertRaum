@@ -338,6 +338,23 @@ describe('skills tool-run IPC (S11b)', () => {
     expect((result as StartSkillRunResult).started).toBe(false)
   })
 
+  it('keeps count_selected_documents as a registry-only canary: registered but NOT wired to a run seam (X-2)', () => {
+    // X-2 decision (audit 2026-06-26): the reference tool is kept as the gate's test-only canary. It is
+    // registered (the gate tests run it end-to-end) but deliberately exposes NO live capability — it has
+    // no dispatch case in `buildToolRunner`. This test gives that decision teeth in BOTH directions: if
+    // the tool were dropped from the registry the listing test breaks; if it were ever wired to a run
+    // seam (turning it into a live capability) this assertion breaks.
+    const { db, skillInstallId, conversationId } = makeHarness('EUR\n2026-01-02 Grocery -45,90')
+    const documentId = resolveInScopeDocumentIds(db, conversationId)[0]
+    const runner = buildToolRunner(
+      db,
+      'count_selected_documents',
+      { skillInstallId, conversationId, documentId },
+      toSkillToolAudit()
+    )
+    expect(runner).toBeNull()
+  })
+
   it('logs nothing: a secret in a transaction never reaches the audit (ids/counts only)', async () => {
     const { db, skillInstallId, conversationId } = makeHarness(`EUR\n2026-01-02 ${SENTINEL} -12,00`)
     const { result: startRaw } = await invoke(handlers, IPC.startSkillRun, {

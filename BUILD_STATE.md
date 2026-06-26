@@ -6,6 +6,49 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-26 — **Skills & Tools audit — Phase 10 (Cleanup & contract parity; X-1, X-2, A-1 test) — MAIN-SIDE
+REFACTOR-AND-TEST PHASE, no renderer surface, no new capability (branch `skills-tools-audit-2026-06-26`).**
+Suite **2279 passed / 38 skipped (+9)**, typecheck clean, build OK. A P3 phase that removes a drift
+surface and pins a contract; the tool gate, the IPC payload (`{skillId, toolName, documentCount}`), and
+every schema are unchanged. **As built (implementer's picks):**
+- **X-1 — ONE scope→documents helper.** New `services/skills/scope-documents.ts` exports
+  `documentsInScope(db, scope, { requireChunks })` — the single definition of "indexed documents in a
+  resolved scope," built once (shared scope filter + `status='indexed'` + optional `EXISTS chunks` +
+  deterministic `ORDER BY created_at, id`). **Return shape = rows of `{id, title, mimeType}`, callers
+  project** (the chosen pick over an ids-core + signals-wrapper — simpler for five callers with three
+  projections). **All FIVE prior copies routed through it:** `resolveInScopeDocumentIds` (`tool-runs.ts`,
+  `requireChunks:false`, ordering preserved → `[0]` stays the default run target), `inScopeDocSignals`
+  (`scope-signals.ts`, `false`, projects title/MIME main-side — logs-nothing + title-stays-main-side
+  intact), and the three analysis handlers (`bank-statement.ts`, `invoice.ts`, `whole-doc-skills.ts`,
+  `true`). **Predicate chosen deliberately:** the chat-analysis handlers read the stored `chunks`
+  (`true`); the run path re-extracts from the stored copy and the suggest/auto-fire path is keyword/MIME
+  signal only (`false`) — the two-predicate split is now intentional + documented, not accidental drift.
+  The RAG router's own `registerRagIpc.documentsInScope` (different layer) is left as a deliberate sibling
+  (the audit's X-1 named the five skills-subsystem copies).
+- **X-2 — KEEP `count_selected_documents` as the documented test-only canary** (the recommended default;
+  removing it churns the gate tests for zero behaviour gain). Registered but **not wired** to a `run.ts`
+  dispatch seam (`buildToolRunner` returns `null`) ⇒ no live capability. Documented at the registry entry
+  + `REGISTRY` line + architecture.md §7; pinned with teeth BOTH ways — `skills-tool-registry.test.ts`
+  asserts it is registered (drop it ⇒ fail); a new `skills-tool-run-ipc.test.ts` case asserts
+  `buildToolRunner` returns `null` for it (wire it up ⇒ fail).
+- **A-1 — SKILL.md ⇔ TS parity test (`tests/integration/skills-skillmd-parity.test.ts`, +8).** The
+  SKILL.md body is inert on the exhaustive answer path (the answer is deterministic TS), so the test pins
+  the contract BOTH directions for bank + invoice: the body still states each honesty bullet AND
+  `buildBankAnswer`/`buildInvoiceAnswer` still emit the matching honest branch for a constructed
+  unreconciled / contradicted / mixed-currency / missing-figure case. Expected copy derived via `tr()` (so
+  re-wording flows through equally — parity is body↔branch, not wording). **Teeth verified:** a transient
+  drift to the body AND to the `contradicted` branch each failed the test; reverted.
+- **Posture (load-bearing):** no network/telemetry; the content class (skill bodies, draft question,
+  figures, document text AND titles/filenames) is never logged/audited — `documentsInScope` logs nothing
+  and titles never cross IPC from it; audit payload still `{skillId, toolName, documentCount}`; the tool
+  gate adds no new DB/FS/net capability; i18n parity compile-enforced (no new keys this phase).
+- **Docs:** architecture.md §7 (the X-2 canary note) + §19 (the X-1 shared-helper paragraph + the A-1
+  body-inert-but-parity-pinned note + the Tests list); audit doc §3 X-1/X-2/A-1 rows + the Phase-10 index
+  row flipped to ✅ fixed (Phase 10) + the Phase-10 "As built" prose.
+- **Eyeball:** none — a main-side refactor + tests with no UI surface (R-2 unaffected).
+  **Next:** Phase 11 (final): T-1 test backfill (the gaps not closed by earlier phases) + the R-1
+  (auto-fire corpus) / R-2 (run-surface eyeball) residuals — close or explicitly re-affirm in BUILD_STATE._
+
 _2026-06-26 — **Skills & Tools audit — Phase 9 (Cross-lane write safety; PC-1) — MAIN-SIDE CONCURRENCY-
 CORRECTNESS PHASE, no renderer surface (branch `skills-tools-audit-2026-06-26`).** Suite **2270 passed /
 38 skipped (+3)**, typecheck clean, build OK. **The fix:** three INDEPENDENT execution lanes can touch the

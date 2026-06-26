@@ -1914,6 +1914,12 @@ shape; (3) refuse a write/export tool lacking `confirmed:true`; (4) run inside a
 (6) bracket with ids/counts-only audit (`skill_run_started`/`done`/`failed` = `{skillId, toolName,
 documentCount}`). S10 shipped the gate with one harmless reference tool (`count_selected_documents`).
 The full ceiling rationale is in [`security-model.md`](security-model.md) "Skill tool ceiling (Tier-2)".
+*(Audit X-2, Phase 10: `count_selected_documents` is **kept deliberately as the gate's test-only
+canary** — registered, but no bundled skill declares it and it is intentionally **not wired to a
+`run.ts` dispatch seam** (`tool-runs.ts buildToolRunner` returns `null` for it), so it is registry-only
+and exposes no live capability. It is the minimal reference the gate tests exercise end-to-end. Both
+halves are pinned: `skills-tool-registry.test.ts` asserts it is registered; `skills-tool-run-ipc.test.ts`
+asserts `buildToolRunner` returns `null` for it — so removing it OR wiring it up both fail a test.)*
 
 ### §8 Bank-statement tools + the run seam (S11)
 
@@ -2501,7 +2507,11 @@ synthesised total). On this **exhaustive** path the honesty posture is **code-en
 body-driven**: `buildBankAnswer`/`buildInvoiceAnswer` (`analysis/bank-statement.ts`,
 `analysis/invoice.ts`) reimplement those rules directly in TS, so editing the SKILL.md body changes
 only the off-topic relevance fallback (where the body rides the fence) — the body and the TS must
-therefore be kept in step (a SKILL.md-⇔-TS parity test is a tracked follow-up).
+therefore be kept in step. **Audit A-1 (Phase 10) pins that step with a parity test**
+(`skills-skillmd-parity.test.ts`): for both skills it asserts the SKILL.md body still states each
+honesty bullet (unreconciled-before-total, reconcile-or-say-so, never-invent) **and** that the answer
+builder still produces the matching honest branch for a constructed unreconciled / contradicted /
+mixed-currency / missing-figure case — so a drift in **either** the body or the TS now fails a test.
 
 - **`bank-statement`** (`analysis/bank-statement.ts`): `extract_transactions` →
   `summarize_cashflow` + `validate_statement_balances` (+ `categorize_transactions` only when the
@@ -2518,9 +2528,23 @@ therefore be kept in step (a SKILL.md-⇔-TS parity test is a tracked follow-up)
   source chunks (still real chunks, M2-safe). i18n: `skills.invoiceAnalysis.*` (EN+DE parity), reusing
   the shared `coverage.extract.*` meter + `skills.analysis.refusePartial` refuse copy.
 
+**Scope resolution (audit X-1, Phase 10).** Each handler's `applies()`/`run()` resolve the in-scope
+documents through the **one shared** `documentsInScope(db, scope, { requireChunks })` helper
+(`services/skills/scope-documents.ts`) — the single definition of "indexed documents in a resolved
+scope," replacing five hand-copied queries. The analysis handlers pass `requireChunks: true` (they read
+the stored `chunks`, so an indexed-but-unchunked document is not answerable here); the **run path**
+(`resolveInScopeDocumentIds`) and the **suggest/auto-fire path** (`inScopeDocSignals`) pass `false` (the
+run re-extracts faithfully from the stored copy; the suggestion is keyword/MIME signal only). The helper
+logs nothing and stays main-side — a `title` is content-adjacent and never crosses IPC from it — and its
+deterministic `ORDER BY created_at, id` keeps `resolveInScopeDocumentIds[0]` the stable default run
+target (U-1/U-2). *(The RAG router keeps its own `registerRagIpc.documentsInScope` — same predicate, a
+deliberate sibling in a different layer, outside the skills subsystem this helper unifies.)*
+
 **Tests.** `skills-analysis-bank.test.ts` + `skills-analysis-invoice.test.ts` (handler-level:
 `applies()` pre-flight, exhaustive math from rows, flagged check surfaced before the headline, figures
 quoted not invented, export never auto-run, coverage `fullyChunked` true/false, real source citations);
+`skills-skillmd-parity.test.ts` (audit A-1: the SKILL.md honesty bullets ⇔ the
+`buildBankAnswer`/`buildInvoiceAnswer` honest branches, both directions);
 `rag-skill-analysis.test.ts` + `rag-skill-analysis-invoice.test.ts` (IPC-level over the real
 `askDocuments`: exhaustive path with `coverage.mode==='extract'` + no model call, refuse path, relevance
 path byte-unchanged, single-locked-slot contract).

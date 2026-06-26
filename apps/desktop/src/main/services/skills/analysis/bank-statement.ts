@@ -1,7 +1,7 @@
 import type { Db } from '../../db'
 import type { Citation, CoverageInfo, RetrievalScope } from '../../../../shared/types'
 import type { MessageKey, MessageParams } from '../../../../shared/i18n'
-import { buildScopeFilter } from '../../retrieval-scope'
+import { documentsInScope } from '../scope-documents'
 import { documentChunkCount } from '../../analysis/coverage'
 import { skillInstallId } from '../registry'
 import {
@@ -71,24 +71,12 @@ function isCategoryShaped(question: string): boolean {
   return CATEGORY_KEYWORDS.some((k) => q.includes(k))
 }
 
-/** The indexed, answerable documents within a scope (mirrors registerRagIpc.documentsInScope). */
-function inScopeDocuments(db: Db, scope: RetrievalScope): Array<{ id: string; title: string }> {
-  const filter = buildScopeFilter(scope, 'd.id')
-  const where = filter ? ` AND ${filter.sql}` : ''
-  const params = filter ? filter.params : []
-  return db
-    .prepare(
-      `SELECT d.id AS id, d.title AS title FROM documents d
-       WHERE d.status = 'indexed'
-         AND EXISTS (SELECT 1 FROM chunks c WHERE c.document_id = d.id)${where}`
-    )
-    .all(...params) as Array<{ id: string; title: string }>
-}
-
-/** The single in-scope document, or null when the scope is not exactly one document (R2). */
+/** The single in-scope ANSWERABLE document, or null when the scope is not exactly one (R2). The chat
+ *  analysis path reads the stored `chunks`, so it requires them (`requireChunks: true`) — an indexed
+ *  but unchunked document is runnable via the button but not answerable here (X-1, the shared helper). */
 function singleInScopeDocument(db: Db, scope: RetrievalScope): { id: string; title: string } | null {
-  const docs = inScopeDocuments(db, scope)
-  return docs.length === 1 ? docs[0] : null
+  const docs = documentsInScope(db, scope, { requireChunks: true })
+  return docs.length === 1 ? { id: docs[0].id, title: docs[0].title } : null
 }
 
 /** A statement row paired with its PERSISTED category name — the two are read in one query so their

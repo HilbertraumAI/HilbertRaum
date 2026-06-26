@@ -3,7 +3,7 @@ import type { AuditRecorder } from '../audit'
 import type { AuditEventType, DocumentChunkRead, RunnableTool, SkillToolAudit } from '../../../shared/types'
 import type { SkillRecord } from './registry'
 import { resolveScope } from '../collections'
-import { buildScopeFilter } from '../retrieval-scope'
+import { documentsInScope } from './scope-documents'
 import { getRegisteredTool, resolveEffectiveTools, toolRequiresConfirmation } from './tool-registry'
 import { skillNeedsNewerApp } from '../../../shared/skill-manifest'
 import {
@@ -74,16 +74,10 @@ export function resolveInScopeDocumentIds(db: Db, conversationId: string): strin
   } catch {
     return []
   }
-  const filter = buildScopeFilter(scope, 'd.id')
-  const where = filter ? ` AND ${filter.sql}` : ''
-  const params = filter ? filter.params : []
-  const rows = db
-    .prepare(
-      `SELECT d.id AS id FROM documents d
-       WHERE d.status = 'indexed'${where} ORDER BY d.created_at, d.id`
-    )
-    .all(...params) as Array<{ id: string }>
-  return rows.map((r) => r.id)
+  // The RUN path takes `requireChunks: false`: a button run re-extracts FAITHFULLY from the stored copy,
+  // so an `indexed` document is runnable even before it is chunked (X-1). The shared helper's
+  // deterministic `ORDER BY created_at, id` is what makes `[0]` the stable default run target (U-1/U-2).
+  return documentsInScope(db, scope, { requireChunks: false }).map((d) => d.id)
 }
 
 /**
