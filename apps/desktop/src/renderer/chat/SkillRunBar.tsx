@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import type { CountMessageKey, MessageKey } from '@shared/i18n'
 import type { RunnableTool, SkillRunState } from '@shared/types'
 import { useT } from '../i18n'
@@ -6,13 +7,25 @@ import { Button, ConfirmDialog, Spinner } from '../components'
 
 // The calm Tier-2 tool-run affordance in the chat surface (skills plan §12.2/§15, S11b). Three
 // quiet states in one place, all content-free (ids/counts only):
-//   1. OFFER — when the active skill has wired tools in scope: a small "Extract transactions" button.
-//   2. RUNNING — "Running: <tool> on <N> documents…" + Cancel (the doc-task busy-row precedent).
+//   1. OFFER — when the active skill has wired tools in scope: a small "Extract transactions" button,
+//      preceded by the TARGET document chooser (U-1) when more than one document is in scope.
+//   2. RUNNING — "Running: <tool> on <document>…" + Cancel (the doc-task busy-row precedent).
 //   3. RESULT — "Extracted N transactions." / friendly failure / "Stopped." + Dismiss.
 // A write/export tool (S11c) is confirm-gated: clicking it raises the ConfirmDialog (the
 // model-download / lock-now precedent) before the run starts. Read-only tools run straight away.
 //
+// U-1 privacy: the run's target document is identified by ID only across the IPC; the NAME shown
+// here is resolved by ChatScreen from its own loaded document list and passed in as a prop, so a
+// document title never enters `SkillRunState`/`startSkillRun`. The chosen `documentId` (also an id)
+// flows back through `onRun`; main re-validates it against the resolved scope.
+//
 // Pure + props-driven (the SkillPicker pattern): ChatScreen owns the store wiring; this only renders.
+
+/** A run target the renderer offers: a content-free document id + its renderer-resolved display name. */
+export interface SkillRunTarget {
+  id: string
+  name: string
+}
 
 // Tool name → display-label catalog key. A small label map (not logic) keeps copy in the catalogs
 // and the rest of the bar generic; an unmapped tool falls back to its raw name.
@@ -53,8 +66,18 @@ export interface SkillRunBarProps {
   run: SkillRunState | null
   /** Wired tools offered for the active skill in scope (empty hides the offer). */
   runnableTools: RunnableTool[]
-  /** Start a tool (confirmed=true once the user accepted the write/export confirm modal). */
-  onRun: (toolName: string, confirmed: boolean) => void
+  /**
+   * The in-scope target documents (U-1), in main's resolution order ([0] = default). Exactly one ⇒
+   * its name is shown (no choice); more than one ⇒ a chooser. Each carries an id + a renderer-resolved
+   * NAME (never an IPC-sourced title). Empty/undefined ⇒ the legacy count label (no name shown).
+   */
+  targetDocuments?: SkillRunTarget[]
+  /** The name of the document the ACTIVE run targets (ChatScreen remembers what it launched), or
+   *  null/undefined ⇒ the busy/result row falls back to the legacy "on N documents" count label. */
+  runningDocumentName?: string | null
+  /** Start a tool: `confirmed=true` once the user accepted the write/export modal; `documentId` is the
+   *  chosen in-scope target (undefined ⇒ main targets the first in-scope document). */
+  onRun: (toolName: string, confirmed: boolean, documentId?: string) => void
   onCancel: () => void
   /** Dismiss a finished (terminal) run's result row. */
   onDismiss: () => void
@@ -62,9 +85,68 @@ export interface SkillRunBarProps {
   disabled?: boolean
 }
 
+/**
+ * The target-document chooser (U-1) — a quiet Radix dropdown matching the composer-footer menus
+ * (DepthMenu/ScopePopover). With a single target it shows the name, disabled (no choice to make);
+ * with several it opens a radio list. Names are renderer-resolved; only the chosen ID leaves here.
+ */
+function TargetMenu({
+  targets,
+  selectedId,
+  onSelect,
+  disabled
+}: {
+  targets: SkillRunTarget[]
+  selectedId: string
+  onSelect: (id: string) => void
+  disabled?: boolean
+}): JSX.Element {
+  const { t } = useT()
+  const selected = targets.find((d) => d.id === selectedId) ?? targets[0]
+  const single = targets.length <= 1
+  return (
+    <DropdownMenu.Root>
+      <DropdownMenu.Trigger asChild>
+        <button
+          type="button"
+          className="footer-menu-btn skill-run-target"
+          disabled={disabled || single}
+          aria-label={t('chat.skill.run.chooseDocument')}
+        >
+          <span className="skill-run-target-name">{selected?.name}</span>
+          {!single && (
+            <>
+              {' '}
+              <span aria-hidden="true">▾</span>
+            </>
+          )}
+        </button>
+      </DropdownMenu.Trigger>
+      {!single && (
+        <DropdownMenu.Portal>
+          <DropdownMenu.Content className="menu" align="start" sideOffset={6}>
+            <DropdownMenu.RadioGroup value={selected?.id} onValueChange={onSelect}>
+              {targets.map((d) => (
+                <DropdownMenu.RadioItem key={d.id} value={d.id} className="menu-item menu-radio">
+                  <span className="menu-radio-mark" aria-hidden="true">
+                    <DropdownMenu.ItemIndicator>●</DropdownMenu.ItemIndicator>
+                  </span>
+                  <span>{d.name}</span>
+                </DropdownMenu.RadioItem>
+              ))}
+            </DropdownMenu.RadioGroup>
+          </DropdownMenu.Content>
+        </DropdownMenu.Portal>
+      )}
+    </DropdownMenu.Root>
+  )
+}
+
 export function SkillRunBar({
   run,
   runnableTools,
+  targetDocuments,
+  runningDocumentName,
   onRun,
   onCancel,
   onDismiss,
@@ -72,11 +154,23 @@ export function SkillRunBar({
 }: SkillRunBarProps): JSX.Element | null {
   const { t, tCount } = useT()
   const [confirmTool, setConfirmTool] = useState<RunnableTool | null>(null)
+  // The user's chosen target. Defaults to (and clamps back to) the first in-scope document, so a
+  // scope change never leaves a stale selection pointing outside the offered set.
+  const targets = targetDocuments ?? []
+  const [chosenId, setChosenId] = useState<string | null>(null)
+  const selectedId = targets.find((d) => d.id === chosenId)?.id ?? targets[0]?.id ?? ''
 
   const toolLabel = (name: string): string => {
     const key = TOOL_LABEL_KEY[name]
     return key ? t(key) : name
   }
+
+  // The busy/result "what document" line. Prefers the renderer-resolved target NAME (U-1); falls back
+  // to the legacy count label when the name is unknown (e.g. after a screen remount lost it).
+  const runningLine = (state: SkillRunState): string =>
+    runningDocumentName
+      ? t('chat.skill.run.runningOn', { tool: toolLabel(state.toolName), document: runningDocumentName })
+      : tCount('chat.skill.run.running', state.documentCount, { tool: toolLabel(state.toolName) })
 
   // The calm "done" line per tool (content-free — a count and/or a pass/fail discriminator only).
   const doneMessage = (state: SkillRunState): string => {
@@ -107,9 +201,11 @@ export function SkillRunBar({
     return t(key ?? 'chat.skill.run.failedGeneric')
   }
 
+  const runTool = (tool: RunnableTool): void => onRun(tool.name, false, selectedId || undefined)
+
   const onClickTool = (tool: RunnableTool): void => {
     if (tool.requiresConfirmation) setConfirmTool(tool)
-    else onRun(tool.name, false)
+    else runTool(tool)
   }
 
   // --- RUNNING ---
@@ -117,8 +213,7 @@ export function SkillRunBar({
     return (
       <div className="skill-run-bar" role="status" aria-live="polite">
         <span className="skill-run-status">
-          <Spinner />{' '}
-          {tCount('chat.skill.run.running', run.documentCount, { tool: toolLabel(run.toolName) })}
+          <Spinner /> {runningLine(run)}
         </span>
         <Button size="sm" onClick={onCancel}>
           {t('chat.skill.run.cancel')}
@@ -149,6 +244,9 @@ export function SkillRunBar({
   if (runnableTools.length === 0) return null
   return (
     <div className="skill-run-bar">
+      {targets.length > 0 && (
+        <TargetMenu targets={targets} selectedId={selectedId} onSelect={setChosenId} disabled={disabled} />
+      )}
       {runnableTools.map((tool) => (
         <Button key={tool.name} size="sm" disabled={disabled} onClick={() => onClickTool(tool)}>
           {toolLabel(tool.name)}
@@ -159,7 +257,7 @@ export function SkillRunBar({
         title={t('chat.skill.confirm.title')}
         confirmLabel={t('chat.skill.confirm.ok')}
         onConfirm={() => {
-          if (confirmTool) onRun(confirmTool.name, true)
+          if (confirmTool) onRun(confirmTool.name, true, selectedId || undefined)
           setConfirmTool(null)
         }}
         onCancel={() => setConfirmTool(null)}

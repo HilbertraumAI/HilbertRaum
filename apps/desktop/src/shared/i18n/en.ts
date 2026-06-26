@@ -177,6 +177,13 @@ export const en = {
   'chat.skill.categorize.breakdownQuestion': 'Break down my spending by category.',
   'chat.skill.run.running.one': 'Running: {tool} on {count} document…',
   'chat.skill.run.running.other': 'Running: {tool} on {count} documents…',
+  // U-1: the busy row naming the target document (the renderer resolves `{document}` from its own
+  // loaded document list — the title never crosses the run-state IPC). Used when the name is known;
+  // it falls back to the count form above otherwise.
+  'chat.skill.run.runningOn': 'Running: {tool} on {document}…',
+  // U-1: the run-bar target chooser (a >1-doc scope) + the single-doc name affordance.
+  'chat.skill.run.chooseDocument': 'Choose target document',
+  'chat.skill.run.thisDocument': 'this document',
   'chat.skill.run.cancel': 'Cancel',
   'chat.skill.run.done.one': 'Extracted {count} transaction.',
   'chat.skill.run.done.other': 'Extracted {count} transactions.',
@@ -577,6 +584,16 @@ export const en = {
     'data — e-mail addresses, phone numbers, IBANs, dates, and links — reading the whole document. ' +
     'It’s a best-effort first pass, not a guarantee: it can’t catch names or unusual formats, so ' +
     'review the saved copy before you share it.',
+  // U-1: the same routing answer when MORE THAN ONE document is in scope. The tool redacts one
+  // document at a time, so the copy is honest about that and points at the run button's own target
+  // chooser — content-free (the count drives the wording; no document title appears here).
+  'skills.redactionRouting.answerMulti':
+    'To redact a document, click the **{button}** button just below the chat box and pick which ' +
+    'document to redact, then choose where to save the copy. It works on one document at a time, ' +
+    'runs entirely on this device, and masks clearly-formatted personal data — e-mail addresses, ' +
+    'phone numbers, IBANs, dates, and links — reading the whole document. It’s a best-effort first ' +
+    'pass, not a guarantee: it can’t catch names or unusual formats, so review the saved copy ' +
+    'before you share it.',
 
   // ---- Models (ModelsScreen.tsx) ----
   'models.title': 'AI Model',
@@ -1366,6 +1383,9 @@ export const en = {
   'main.skills.run.unavailable': "This skill's tool isn't available right now.",
   'main.skills.run.noDocument': 'Add a document to this chat first, then try again.',
   'main.skills.run.busy': 'A skill is already working. Let it finish or cancel it first.',
+  // U-1: a renderer-supplied target id that is not in the freshly-resolved in-scope set (a defensive
+  // backstop — the renderer only ever offers in-scope ids). Friendly + content-free.
+  'main.skills.run.documentOutOfScope': "That document isn't in this chat's documents. Pick one of them and try again.",
 
   // ---- Document organization — Documents screen sections + actions (plan §12) ----
   // German copy in de.ts reviewed in the D-L7 pass (2026-06-14).

@@ -28,7 +28,7 @@ import { friendlyIpcError } from '../lib/errors'
 import { RUNTIME_POLL_MS, STREAM_RECOVER_POLL_MS } from '../lib/polling'
 import { useT } from '../i18n'
 import { Button, Chip, EmptyState, ErrorBanner, SegmentedControl, Spinner, useToast } from '../components'
-import { Composer, ContextMeter, ConversationList, DepthMenu, ScopePopover, SkillPicker, SkillRunBar, Transcript } from '../chat'
+import { Composer, ContextMeter, ConversationList, DepthMenu, ScopePopover, SkillPicker, SkillRunBar, Transcript, type SkillRunTarget } from '../chat'
 import type { MessageKey } from '@shared/i18n'
 
 // Chat screen (spec §7.6 / §7.8; layout per design-guidelines §3). The
@@ -637,19 +637,29 @@ export function ChatScreen({
   // reserves Tier-2 tools AND there is an in-scope document. Main resolves the scope (§22-C4); the
   // renderer stays bank-free (it renders whatever descriptors come back).
   const [runnableTools, setRunnableTools] = useState<RunnableTool[]>([])
+  // U-1: the in-scope target document ids main resolved (ids only — content-free). The names are
+  // mapped renderer-side from the loaded document list (`docs`/`attachments`), so a title never
+  // enters the run state/IPC. `[0]` is the default target.
+  const [scopeDocIds, setScopeDocIds] = useState<string[]>([])
   useEffect(() => {
     if (!currentSkillId || !activeId || !window.api.listRunnableTools) {
       setRunnableTools([])
+      setScopeDocIds([])
       return
     }
     let live = true
     void window.api
       .listRunnableTools(currentSkillId, activeId)
-      .then((tools) => {
-        if (live) setRunnableTools(tools)
+      .then((res) => {
+        if (!live) return
+        setRunnableTools(res?.tools ?? [])
+        setScopeDocIds(res?.documentIds ?? [])
       })
       .catch(() => {
-        if (live) setRunnableTools([])
+        if (live) {
+          setRunnableTools([])
+          setScopeDocIds([])
+        }
       })
     return () => {
       live = false
@@ -661,17 +671,42 @@ export function ChatScreen({
     // `activeId` (null → created id).
   }, [currentSkillId, activeId])
 
+  // U-1: resolve an in-scope target id to its DISPLAY NAME from the renderer's own loaded documents
+  // (Library docs + this chat's attachments). The title is read here, renderer-side — it never comes
+  // from the run state/IPC. An unknown id (not yet loaded) falls back to a generic, content-free label.
+  const docNameForId = useCallback(
+    (id: string): string => {
+      const found = docs.find((d) => d.id === id) ?? attachments.find((d) => d.id === id)
+      return found?.title ?? t('chat.skill.run.thisDocument')
+    },
+    [docs, attachments, t]
+  )
+  // The in-scope target documents offered in the run bar (id + renderer-resolved name), in main's
+  // resolution order. Exactly one ⇒ the name is shown; more than one ⇒ the chooser appears.
+  const targetDocuments = useMemo<SkillRunTarget[]>(
+    () => scopeDocIds.map((id) => ({ id, name: docNameForId(id) })),
+    [scopeDocIds, docNameForId]
+  )
+  // The name of the document the ACTIVE run targets — remembered renderer-side when the run is
+  // launched (the run state carries only ids/counts, never the title). Drives the busy/result row.
+  const [runTargetName, setRunTargetName] = useState<string | null>(null)
+
   // The conversation a categorize run was started in (C1): the routed breakdown below must land in THIS
   // conversation, never whatever conversation happens to be active when the (module-level, app-wide) run
   // finishes — switching conversations mid-run would otherwise inject the answer into the wrong transcript.
   const categorizeRunConvRef = useRef<string | null>(null)
 
-  // Start a tool run from the calm transcript affordance (DS4 — a USER action, never the model).
-  function onRunTool(toolName: string, confirmed: boolean): void {
+  // Start a tool run from the calm transcript affordance (DS4 — a USER action, never the model). The
+  // chosen `documentId` (U-1) is an in-scope id the renderer offered; main re-validates it against the
+  // resolved scope. Defaults to the first in-scope document when none was chosen.
+  function onRunTool(toolName: string, confirmed: boolean, documentId?: string): void {
     if (!currentSkillId || !activeId) return
     if (toolName === 'categorize_transactions') categorizeRunConvRef.current = activeId
+    const targetId = documentId ?? scopeDocIds[0]
+    // Remember the target NAME for the busy/result row (resolved renderer-side; never from the IPC).
+    setRunTargetName(targetId ? docNameForId(targetId) : null)
     setError(null)
-    void startSkillRun({ skillInstallId: currentSkillId, toolName, conversationId: activeId, confirmed })
+    void startSkillRun({ skillInstallId: currentSkillId, toolName, conversationId: activeId, documentId, confirmed })
       .then((outcome) => {
         // `needsConfirmation` is handled inside SkillRunBar (it raises the modal before calling with
         // confirmed:true); reaching it here would mean a write tool slipped the modal — surface it.
@@ -1255,6 +1290,8 @@ export function ChatScreen({
         <SkillRunBar
           run={activeSkillRun}
           runnableTools={runnableTools}
+          targetDocuments={targetDocuments}
+          runningDocumentName={runTargetName}
           onRun={onRunTool}
           onCancel={() => void cancelActiveSkillRun()}
           onDismiss={acknowledgeSkillRun}

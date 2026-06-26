@@ -182,7 +182,7 @@ persona section below.
 | C-2 | MEDIUM | Consistency | ✅ **fixed (Phase 2, option A)** — **Two categorize engines** gave divergent results by entry point; the deterministic chat breakdown now **labels itself rule-based** (`categoryRuleBased`, points at the Categorize button), preserving the 0-model-call chat contract | `analysis/bank-statement.ts` `buildBankAnswer`, en/de `categoryRuleBased` |
 | P-1 | MEDIUM | Performance | ✅ **fixed (Phase 4, approach A)** — the handler now loads the rows **once** (with ids) and hands them to the downstream seams as `preloaded`; the seams **return their validated `output`** for in-process reuse instead of the handler recomputing. A non-category bank question now issues **one** `FROM bank_transactions` read (was three); invoice likewise **one** `invoice_line_items` read (was two). `skill_runs` lifecycle + ids/counts audit unchanged | `analysis/bank-statement.ts`, `analysis/invoice.ts`, `run.ts`, `invoice-run.ts` |
 | P-2 | MEDIUM | Performance | ✅ **fixed (Phase 4)** — kept the `summarize_cashflow` run (its audit trio stays — approach A, not B) but it no longer re-reads the rows: it reuses the handler's single `preloaded` load, and its `CashflowSummary` is reused rather than recomputed | `run.ts` `runCashflowSummary`, `analysis/bank-statement.ts` |
-| U-1 | MEDIUM | UX/Correctness | Multi-document scope: tools **silently act on `docIds[0]`**, `documentCount` is **hardcoded to 1**, and there is **no document picker** in the run bar | `registerSkillsIpc.ts:314-328` |
+| U-1 | MEDIUM | UX/Correctness | ✅ **fixed (Phase 5, Minimal)** — `listRunnableTools` now returns the in-scope target **ids** alongside the tools; the renderer maps ids→**names** from its own loaded list (no title crosses the IPC), shows the single doc's name or a **Radix chooser** when >1, and passes the chosen `documentId` to `startSkillRun`, which **validates** it is in the resolved scope (else `documentOutOfScope`). `documentCount` stays the honest **1**. Redaction routing answer is count-honest (`answerMulti`) | `registerSkillsIpc.ts` `listRunnableTools`/`startSkillRun`, `SkillRunBar.tsx`, `ChatScreen.tsx`, `analysis/redaction.ts` |
 | U-2 | MEDIUM | UX/Surprise | Clicking the read-only **"Extract transactions"** button **silently starts a background LLM categorize** (Phase 33 auto-offer), invisible in the run bar | `tool-runs.ts:229-238` |
 | PC-1 | MEDIUM | Concurrency | Lane A (chat analysis auto-run) and Lane B (`SkillRunController`) are mutually unaware; a chat re-extract (`replaceExisting` DELETE) can race a button run on the same statement | §2.3; `run.ts:221`, `run-controller.ts` |
 | S-1 | MEDIUM | Security (DoS) | Zip importer slices/inflates a member using the **central-directory `compressedSize`** (≤ total cap, ~8 MiB) before any per-file bound; a crafted member stalls the main thread | `installer.ts:208-242` |
@@ -543,7 +543,7 @@ tests, and the docs to touch.
 | 2 | Categorization correctness & consistency ✅ **fixed (Phase 2)** | C-1, C-2, L-1, L-2 | P1–P2 | yes |
 | 3 | Bank completeness-gate numerics ✅ **fixed (Phase 3)** | C-3, C-4 | P2 | yes (version bump) |
 | 4 | Analysis-handler performance ✅ **fixed (Phase 4)** | P-1, P-2 | P2 | yes |
-| 5 | Tool-run document targeting (multi-doc) | U-1 | P2 | yes |
+| 5 | Tool-run document targeting (multi-doc) ✅ **fixed (Phase 5)** | U-1 | P2 | yes |
 | 6 | Make auto-categorize explicit | U-2 | P2 | yes (DECISION) |
 | 7 | Suggestion discoverability | U-3 | P2 | yes |
 | 8 | Zip importer DoS hardening | S-1, S-2 | P2 | yes |
@@ -780,6 +780,16 @@ target name **renderer-side** from the conversation's already-loaded document li
      optional `documentId` to `StartSkillRunRequest`; main validates it is in the resolved in-scope set,
      else refuses — never trust a renderer-supplied id beyond the scope filter).
    - **Fuller (later):** real multi-document runs (loop the tool over N docs). Larger; out of scope here.
+   - **✅ DECIDED (Phase 5): Minimal.** Kept the single-doc tools; surfaced/chose the target without
+     widening the run model. `listRunnableTools` now returns `RunnableToolSet = { tools, documentIds }`
+     (the in-scope ids — content-free, in main's resolution order); the renderer maps ids→**names** from
+     its own loaded document list, so a **title never enters `SkillRunState`/the `skills:*` IPC** (the
+     load-bearing privacy constraint). `StartSkillRunRequest` gained an optional `documentId` that
+     `startSkillRun` **re-validates** against the freshly-resolved scope (refusing an out-of-scope id with
+     `documentOutOfScope` — never trusting a renderer id past the scope filter); the tool gate gained NO
+     new DB/FS/net capability and `documentCount` stays the honest **1**. **Chooser UX = a Radix dropdown**
+     (the DepthMenu/ScopePopover pattern) — surfaced to the user as a UX decision; single-doc shows the
+     name with the chooser disabled. The redaction routing answer is count-honest (`answerMulti`).
 2. **Honest count.** Set `documentCount` to the **actual** target count (1 for the single-doc tools) — it is
    already 1, so this is mostly about not implying "all N". Keep it content-free.
 3. **Renderer target label.** In `SkillRunBar`/`ChatScreen`, render the target document **name** from the

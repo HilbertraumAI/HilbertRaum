@@ -1995,6 +1995,23 @@ renders `validate_statement_balances` from a content-free `resultKind` discrimin
 'unreconciled' | 'unchecked') — the controller/IPC stay bank-free (the discriminator is an opaque
 string; the bank meaning lives only in the renderer's copy map).
 
+**Run-UI target document for a multi-doc scope (audit U-1).** The v1 tools are single-document, but a
+conversation's scope can hold several indexed documents. Rather than silently acting on `docIds[0]`
+with an opaque "1 document" label, the run UI surfaces — and lets the user choose — the target:
+`listRunnableTools` returns `RunnableToolSet = { tools, documentIds }`, where `documentIds` is the
+in-scope indexed ids **in main's resolution order** (`[0]` = the default target). The renderer maps
+those **ids → NAMES from its own already-loaded document list** (`docs`/`attachments` in `ChatScreen`),
+so a document **title/filename never crosses the IPC** (the §6 content-adjacent posture): `SkillRunState`
+and the `skills:*` channels stay ids/counts only. With exactly one in-scope doc the `SkillRunBar` shows
+its name (a disabled chooser); with **more than one** it shows a small Radix dropdown (the DepthMenu
+pattern) and passes the chosen `documentId` to `startSkillRun`. That id is **UNTRUSTED**: `startSkillRun`
+re-resolves the in-scope set and **refuses** an id not in it (`main.skills.run.documentOutOfScope`) —
+never trusting a renderer-supplied id past the scope filter; `documentCount` stays the honest **1** (a
+single-doc tool), not "all N". The busy/result row names the running target from a renderer-remembered
+name (resolved at launch from the same list), falling back to the legacy count label when unknown (e.g.
+after a remount). The redaction **routing** answer is likewise count-honest: with scope > 1 it uses
+`skills.redactionRouting.answerMulti` ("pick which document on the button"), still content-free.
+
 ### §10 Data model (additive `db.ts`)
 
 `skills` (the registry index, keyed by `install_id`) + nullable `conversations.active_skill_id` /

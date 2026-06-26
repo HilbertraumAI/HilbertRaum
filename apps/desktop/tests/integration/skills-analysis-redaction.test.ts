@@ -135,6 +135,18 @@ describe('redaction routing handler — run()', () => {
     expect(res.answer).toContain('schwärzen')
   })
 
+  it('is count-honest over a MULTI-document scope (U-1): tells the user to pick which document', async () => {
+    const db = freshDb()
+    const a = seedDoc(db)
+    const b = seedDoc(db)
+    const res = await documentRedactionAnalysisHandler.run!(ctxFor(db, { documentIds: [a, b] }, 'redact these'))
+    // The single-doc tool targets one document, so the multi-doc copy is used (and it differs from
+    // the single-doc answer) — still naming the button, still content-free (no titles in the copy).
+    expect(res.answer).toBe(tr('skills.redactionRouting.answerMulti', { button: tr('chat.skill.tool.redactDocument') }))
+    expect(res.answer).not.toBe(tr('skills.redactionRouting.answer', { button: tr('chat.skill.tool.redactDocument') }))
+    expect(res.citations).toEqual([])
+  })
+
   it('runs NO tool and emits NO audit event (the write tool stays user-initiated)', async () => {
     const db = freshDb()
     const id = seedDoc(db)

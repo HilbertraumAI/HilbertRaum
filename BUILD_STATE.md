@@ -6,6 +6,51 @@
 > It carries: current status, decisions, shared data contracts, next actions, open issues.
 
 
+_2026-06-26 — **Skills & Tools audit — Phase 5 (Tool-run document targeting for multi-doc scope; U-1) —
+RENDERER + UX PHASE (branch `skills-tools-audit-2026-06-26`).** Suite **2255 passed / 38 skipped (+9)**,
+typecheck clean, build OK. **DECISION = Minimal** (the recommended default; the Fuller "loop over N docs"
+run model stays out of scope). The **chooser UX (Radix dropdown, the DepthMenu/ScopePopover pattern)** was
+surfaced to the user as a UX decision; single-doc shows the name with the chooser disabled. **Privacy note
+(load-bearing):** the document **title/filename never enters `SkillRunState` / `startSkillRun` /
+`getSkillRun`** — the renderer resolves the target NAME from its own already-loaded document list
+(`docs`/`attachments` in `ChatScreen`); only **ids/counts** cross the IPC (the §6 posture). **As built:**
+- **U-1 — surface/choose the target.** `listRunnableTools` now returns `RunnableToolSet = { tools,
+  documentIds }` (the in-scope indexed ids, **content-free**, in main's `resolveInScopeDocumentIds` order —
+  `[0]` = default target). `SkillRunBar` shows the single doc's name (a disabled Radix trigger) or, when
+  **>1**, a Radix dropdown chooser (`menuitemradio` list, the DepthMenu pattern); the chosen id flows back
+  through `onRun(tool, confirmed, documentId)`. The busy/result row names the running target from a
+  renderer-remembered name (resolved at launch), falling back to the legacy count label when unknown (e.g.
+  after a remount). The audit payload is **unchanged** (`{skillId, toolName, documentCount}`); `documentCount`
+  stays the honest **1**; the tool gate gained NO new DB/FS/net capability.
+- **Untrusted documentId.** `StartSkillRunRequest` gained an optional `documentId`; `startSkillRun`
+  **re-resolves** the in-scope set and **refuses** an id not in it (`main.skills.run.documentOutOfScope`) —
+  never trusting a renderer-supplied id past the scope filter. Omitted ⇒ the first in-scope doc (single-doc
+  default, unchanged). No schema change (no `SkillRunState`/DB field added; the id is a request-only input).
+- **Redaction routing.** The `routing` handler is now count-aware: scope > 1 ⇒ `skills.redactionRouting.answerMulti`
+  ("pick which document on the **Redact** button"), still content-free (the count drives the wording; no title).
+- **i18n (EN+DE, parity compile-enforced).** New keys: `chat.skill.run.runningOn` (busy row naming the doc),
+  `chat.skill.run.chooseDocument` (chooser aria-label), `chat.skill.run.thisDocument` (unknown-id fallback),
+  `main.skills.run.documentOutOfScope` (the refusal), `skills.redactionRouting.answerMulti`. LLM prompts stay
+  English; the dev machine boots de-AT so the German copy renders live.
+- **Tests (+9).** `skills-tool-run-ipc.test.ts` (+5): `documentIds` rides along + resolution order; default =
+  first doc; a chosen `documentId` targets the SECOND doc (distinct count proves it); an out-of-scope id is
+  **REFUSED**; and a sentinel document **TITLE** never appears in `listRunnableTools`/the run state (no-title
+  assertion). `SkillRunBar.test.tsx` (+3): single-doc name shown + its id passed; multi-doc chooser selects
+  the second doc's id; busy row names the target. `skills-analysis-redaction.test.ts` (+1): multi-doc routing
+  uses `answerMulti`. The existing skill-import **content-class sentinel-grep** (`skills-ipc.test.ts`) still
+  passes unchanged. (The existing `listRunnableTools` assertions were updated to the new `{tools,documentIds}`
+  shape; the `ChatAttach` renderer stub returns the new shape.)
+- **Docs:** `architecture.md` §9 (the run-UI target paragraph — renderer-side name resolution + the optional
+  validated `documentId`); audit doc §3 U-1 row + the Phase-5 index row flipped to ✅ fixed (Phase 5), the
+  Minimal decision recorded in the Phase-5 prose.
+- **Eyeball:** the live run-surface pixel walk was **deferred** (the `%TEMP%\paid-eyeball` harness is gone, and
+  a from-scratch walk needs a fully-seeded multi-doc INDEXED workspace + an enabled tool skill + a documents
+  conversation — the same surface the audit already records as an honest eyeball-deferral, **R-2**). Confidence
+  rests on the renderer tests (chooser select / single-doc name / busy-row naming) + the chooser reusing the
+  proven `DepthMenu` Radix pattern and the existing `.footer-menu-btn`/`.menu` CSS (only net-new style is the
+  `.skill-run-target` max-width/ellipsis). **Next:** Phase 6 (U-2 — make the post-extract auto-categorize an
+  explicit offer, not a hidden background LLM run; a DECISION phase)._
+
 _2026-06-26 — **Skills & Tools audit — Phase 4 (Analysis-handler performance; P-1 / P-2) — PERF PHASE, answer
 text byte-identical (branch `skills-tools-audit-2026-06-26`).** Suite **2246 passed / 38 skipped (+4)**, typecheck
 clean, build OK. No answer text or persisted figure changed (the rendered strings + the gold figures stay

@@ -45,7 +45,7 @@ describe('SkillRunBar (S11b)', () => {
       withI18n(<SkillRunBar run={null} runnableTools={[readOnly]} onRun={onRun} onCancel={vi.fn()} onDismiss={vi.fn()} />)
     )
     await user.click(screen.getByRole('button', { name: 'Extract transactions' }))
-    expect(onRun).toHaveBeenCalledWith('extract_transactions', false)
+    expect(onRun).toHaveBeenCalledWith('extract_transactions', false, undefined)
   })
 
   it('OFFER: a write/export tool raises the confirm modal and runs only on confirm', async () => {
@@ -59,7 +59,7 @@ describe('SkillRunBar (S11b)', () => {
     expect(screen.getByText('Run this tool?')).toBeInTheDocument()
     expect(onRun).not.toHaveBeenCalled()
     await user.click(screen.getByRole('button', { name: 'Run' }))
-    expect(onRun).toHaveBeenCalledWith('synthetic_write', true)
+    expect(onRun).toHaveBeenCalledWith('synthetic_write', true, undefined)
   })
 
   it('RUNNING: shows the busy row and Cancel fires onCancel', async () => {
@@ -162,5 +162,73 @@ describe('SkillRunBar (S11b)', () => {
       withI18n(<SkillRunBar run={v('unchecked')} runnableTools={[]} onRun={vi.fn()} onCancel={vi.fn()} onDismiss={vi.fn()} />)
     )
     expect(screen.getByText(/No running balance/)).toBeInTheDocument()
+  })
+
+  // U-1 — the target-document affordance: a single in-scope doc shows its name; >1 offers a chooser;
+  // the chosen id (never a title) rides back through onRun; the busy row names the running target.
+  it('OFFER (single in-scope doc): shows the name and passes its id to onRun', async () => {
+    const onRun = vi.fn()
+    const user = userEvent.setup()
+    render(
+      withI18n(
+        <SkillRunBar
+          run={null}
+          runnableTools={[readOnly]}
+          targetDocuments={[{ id: 'd1', name: 'invoice_2024.pdf' }]}
+          onRun={onRun}
+          onCancel={vi.fn()}
+          onDismiss={vi.fn()}
+        />
+      )
+    )
+    // The single target's name is shown (the chooser trigger is disabled — no choice to make).
+    expect(screen.getByText('invoice_2024.pdf')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /choose target document/i })).toBeDisabled()
+    await user.click(screen.getByRole('button', { name: 'Extract transactions' }))
+    expect(onRun).toHaveBeenCalledWith('extract_transactions', false, 'd1')
+  })
+
+  it('OFFER (multi-doc): choosing a different document passes THAT id to onRun', async () => {
+    const onRun = vi.fn()
+    const user = userEvent.setup()
+    render(
+      withI18n(
+        <SkillRunBar
+          run={null}
+          runnableTools={[readOnly]}
+          targetDocuments={[
+            { id: 'd1', name: 'first.pdf' },
+            { id: 'd2', name: 'second.pdf' }
+          ]}
+          onRun={onRun}
+          onCancel={vi.fn()}
+          onDismiss={vi.fn()}
+        />
+      )
+    )
+    // Defaults to the first document; clicking the tool without choosing uses it.
+    const chooser = screen.getByRole('button', { name: /choose target document/i })
+    expect(chooser).toBeEnabled()
+    // Open the chooser and pick the second document.
+    await user.click(chooser)
+    await user.click(await screen.findByRole('menuitemradio', { name: /second\.pdf/i }))
+    await user.click(screen.getByRole('button', { name: 'Extract transactions' }))
+    expect(onRun).toHaveBeenCalledWith('extract_transactions', false, 'd2')
+  })
+
+  it('RUNNING: the busy row names the target document when known', () => {
+    render(
+      withI18n(
+        <SkillRunBar
+          run={run()}
+          runnableTools={[]}
+          runningDocumentName="invoice_2024.pdf"
+          onRun={vi.fn()}
+          onCancel={vi.fn()}
+          onDismiss={vi.fn()}
+        />
+      )
+    )
+    expect(screen.getByText('Running: Extract transactions on invoice_2024.pdf…')).toBeInTheDocument()
   })
 })

@@ -4,7 +4,7 @@ import { IPC } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
 import type {
   DocumentChunkRead,
-  RunnableTool,
+  RunnableToolSet,
   SkillInfo,
   SkillPreview,
   SkillRunState,
@@ -271,22 +271,26 @@ export function registerSkillsIpc(ctx: AppContext): void {
   // requireUnlocked + LOGS NOTHING content-bearing — the conversation/document scope is content
   // (§22-C4), resolved MAIN-side here; only the run's ids/counts reach the renderer + the audit.
 
-  // The wired, runnable tools for a skill in a conversation's scope (empty when none apply — e.g. no
-  // in-scope documents, or the skill reserves no tools). Drives the calm transcript run affordance.
+  // The wired, runnable tools for a skill in a conversation's scope, PLUS the in-scope target
+  // document ids (U-1) — empty when none apply (no in-scope documents, or the skill reserves no
+  // tools). Drives the calm transcript run affordance + its target name/chooser. The ids are
+  // content-free (the §6 ids/counts posture); the renderer maps them to NAMES from its own loaded
+  // document list, so a title never crosses this boundary.
   ipcMain.handle(
     IPC.listRunnableTools,
-    (_e, skillInstallId: string, conversationId: string): RunnableTool[] => {
+    (_e, skillInstallId: string, conversationId: string): RunnableToolSet => {
       requireUnlocked()
-      if (typeof skillInstallId !== 'string' || skillInstallId.length === 0) return []
+      const empty: RunnableToolSet = { tools: [], documentIds: [] }
+      if (typeof skillInstallId !== 'string' || skillInstallId.length === 0) return empty
       ctx.skills!.list() // lazy post-unlock reconcile so a just-enabled skill is considered
       const skill = ctx.skills!.get(skillInstallId)
-      if (!skill || skill.unavailableAt != null || !skill.enabled) return []
+      if (!skill || skill.unavailableAt != null || !skill.enabled) return empty
       // §6.5/M1 gate at the use-site (airtight): an enabled-but-incompatible skill offers no tools.
-      if (runnableToolNames(skill, appVersion).length === 0) return []
+      if (runnableToolNames(skill, appVersion).length === 0) return empty
       // Only offer when there is at least one indexed document in scope to run against.
       const docIds = resolveInScopeDocumentIds(ctx.db, typeof conversationId === 'string' ? conversationId : '')
-      if (docIds.length === 0) return []
-      return runnableToolsForSkill(skill, appVersion)
+      if (docIds.length === 0) return empty
+      return { tools: runnableToolsForSkill(skill, appVersion), documentIds: docIds }
     }
   )
 
@@ -310,15 +314,24 @@ export function registerSkillsIpc(ctx: AppContext): void {
     if (toolRunNeedsConfirmation(toolName) && req?.confirmed !== true) {
       return { started: false, needsConfirmation: true }
     }
-    // The v1 tools are single-document (plan §8): run on the first in-scope indexed document.
+    // The v1 tools are single-document (plan §8). Resolve the in-scope set MAIN-side; the run
+    // targets the first by default, or the renderer's chosen `documentId` when it is in that set.
     const docIds = resolveInScopeDocumentIds(ctx.db, conversationId)
     if (docIds.length === 0) {
       return { started: false, error: tMain('main.skills.run.noDocument') }
     }
+    // U-1: a renderer-supplied target id is UNTRUSTED — accept it ONLY when it is in the freshly
+    // resolved in-scope set, never trusting a renderer id past the scope filter. An out-of-scope id
+    // is refused (a defensive backstop — the renderer only ever offers ids from `documentIds`).
+    const requestedId = typeof req?.documentId === 'string' ? req.documentId : ''
+    if (requestedId && !docIds.includes(requestedId)) {
+      return { started: false, error: tMain('main.skills.run.documentOutOfScope') }
+    }
+    const targetId = requestedId || docIds[0]
     const runner = buildToolRunner(
       ctx.db,
       toolName,
-      { skillInstallId, conversationId, documentId: docIds[0], confirmed: req?.confirmed },
+      { skillInstallId, conversationId, documentId: targetId, confirmed: req?.confirmed },
       runAudit,
       // `docTasks` routes `categorize_transactions` into the doctask lane (D26 exclusion, Phase 33).
       { saveTextFile, readDocumentSegments, docTasks: ctx.docTasks }

@@ -1688,6 +1688,21 @@ export interface RunnableTool {
 }
 
 /**
+ * What `listRunnableTools` returns: the wired tools PLUS the in-scope target document IDS the run
+ * would act on (skills audit U-1). The ids are content-free (the §6 ids/counts posture allows them
+ * over IPC) and listed in main's resolution order — `documentIds[0]` is the default target a run
+ * uses when the renderer passes none. Document TITLES/FILENAMES are content-adjacent and NEVER cross
+ * this boundary: the renderer maps these ids to NAMES from its own already-loaded document list, so
+ * it can surface/choose the target without a title ever entering the IPC payload or the run state.
+ */
+export interface RunnableToolSet {
+  /** Wired, runnable tools for the active skill in this conversation's scope (empty hides the offer). */
+  tools: RunnableTool[]
+  /** In-scope, indexed document ids in main's resolution order ([0] = the default single-doc target). */
+  documentIds: string[]
+}
+
+/**
  * Start an app-orchestrated tool run from a USER action (skills plan §6/§16, DS4, S11b). The model
  * never emits this — a transcript/composer affordance does. The document scope is resolved MAIN-side
  * from `conversationId` (§22-C4); the renderer never assembles document ids.
@@ -1699,6 +1714,13 @@ export interface StartSkillRunRequest {
   toolName: string
   /** The conversation whose scope provides the target document(s). */
   conversationId: string
+  /**
+   * The chosen target document id for a multi-document scope (skills audit U-1). A content-free id
+   * the renderer picks from `RunnableToolSet.documentIds`. UNTRUSTED: main re-resolves the in-scope
+   * set and REFUSES an id not in it (never trusting a renderer id past the scope filter). Omitted ⇒
+   * main targets the first in-scope document (the single-doc default, unchanged).
+   */
+  documentId?: string
   /** True once the user confirmed a write/export tool; read-only tools ignore it. */
   confirmed?: boolean
 }

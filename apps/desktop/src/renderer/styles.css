@@ -843,6 +843,9 @@ code, pre, kbd { font-family: var(--font-mono); }
   color: var(--text-muted);
 }
 .skill-run-status { display: inline-flex; align-items: center; gap: 8px; }
+/* U-1 target-document chooser: a quiet footer-style trigger; long filenames truncate, never wrap. */
+.skill-run-target { max-width: 16rem; }
+.skill-run-target-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* Markdown-rendered assistant replies: markdown supplies its own block spacing, so
    pre-wrap (which would double every blank line) is turned off. The image-understanding
